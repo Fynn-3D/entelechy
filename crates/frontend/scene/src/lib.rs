@@ -407,18 +407,38 @@ struct Level {
 }
 
 /// Whether a placed graph and its placer agree: every input wired, and
-/// every input or param given is declared.
+/// every input or param given is declared. A refusal names the node that
+/// places the graph, the name nearest one it lacks, and those it has.
 fn check_placement(
     placement: &Placement,
     externals: &[String],
     params: &[GraphParam],
-    path: &Path,
 ) -> Result<(), DocumentError> {
+    let node = placement.prefix.trim_end_matches('.');
+    let lacks = |what: &str, name: &str, names: Vec<&str>| {
+        let listed = if names.is_empty() {
+            "none".to_owned()
+        } else {
+            names
+                .iter()
+                .map(|name| format!("`{name}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        error(
+            Span::default(),
+            format!(
+                "sub-graph `{node}` has no {what} `{name}`{}; its {what}s are {listed}",
+                orla_language::suggestion(orla_language::nearest(name, names.iter().copied()))
+            ),
+        )
+    };
     for input in placement.inputs.keys() {
         if !externals.contains(input) {
-            return Err(error(
-                Span::default(),
-                format!("sub-graph `{}` has no input `{input}`", path.display()),
+            return Err(lacks(
+                "input",
+                input,
+                externals.iter().map(String::as_str).collect(),
             ));
         }
     }
@@ -426,18 +446,16 @@ fn check_placement(
         if !placement.inputs.contains_key(external) {
             return Err(error(
                 Span::default(),
-                format!(
-                    "sub-graph `{}` input `{external}` must be wired where it is placed",
-                    path.display()
-                ),
+                format!("sub-graph `{node}` input `{external}` must be wired where it is placed"),
             ));
         }
     }
     for param in placement.params.keys() {
         if !params.iter().any(|p| &p.name == param) {
-            return Err(error(
-                Span::default(),
-                format!("sub-graph `{}` has no param `{param}`", path.display()),
+            return Err(lacks(
+                "param",
+                param,
+                params.iter().map(|p| p.name.as_str()).collect(),
             ));
         }
     }
@@ -1088,7 +1106,12 @@ impl Lowering<'_, '_> {
                 &resolved,
                 Some(&placed),
             )
-            .map_err(|e| error(sub_path.span, format!("{}:{e}", sub_path.value)));
+            .map_err(|e| {
+                // `path:line:col: why` where the fault is placed in it,
+                // else `path: why`.
+                let gap = if e.span.is_placed() { "" } else { " " };
+                error(sub_path.span, format!("{}:{gap}{e}", sub_path.value))
+            });
         self.stack.pop();
         (self.aliases, self.structs, self.functions) = outer;
         let level = level?;
@@ -1125,7 +1148,7 @@ impl Lowering<'_, '_> {
             self.out.graph.params = params.clone();
         }
         if let Some(placement) = placement {
-            check_placement(placement, &externals, &params, path)?;
+            check_placement(placement, &externals, &params)?;
         }
         let place = Place {
             prefix,
@@ -1799,6 +1822,29 @@ output result <- a.result;
             orla_compiler::compile_kernel(&lowered.inline[0].kernel, Some(&lowered.inline[0].id))
                 .unwrap();
         assert_eq!(compiled.manifest.params[0].default, Value::Float(0.9));
+    }
+
+    /// A param a placement gives that the graph lacks is refused naming
+    /// the graph as written and the node placing it, with the nearest
+    /// param, and never a path the graph was not found at.
+    #[test]
+    fn a_placement_lacking_a_param_names_the_node_and_the_nearest() {
+        let placed = "input source: Image;
+            param strength: Float = 1.0;
+            node map: image.tonemap@1 { source <- source; exposure = strength; }
+            output result <- map.result;";
+        let root = orla_language::parse_document(
+            "node scene: image.gradient@1 { domain = vec2(8, 8); }
+             node look: graph \"fx.orlapkg/graphs/look.osn\" { source <- scene.result; strenght = 0.5; }
+             output result <- look.result;",
+        )
+        .unwrap();
+        let mut loader = |_: &Path| -> Result<String, String> { Ok(placed.to_owned()) };
+        let error = load(&root, "", "main", Path::new("app"), &mut loader).unwrap_err();
+        assert_eq!(
+            error.message,
+            "fx.orlapkg/graphs/look.osn: sub-graph `look` has no param `strenght`; did you mean `strength`?; its params are `strength`"
+        );
     }
 
     #[test]

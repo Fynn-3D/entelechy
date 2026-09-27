@@ -72,14 +72,16 @@ pub(crate) fn in_a_package(store: &dyn Store, path: &Path) -> bool {
 /// Resolves a path through a package name
 /// (`picture.orlapkg/graphs/x.osn`) to the existing file inside it.
 fn in_package(store: &dyn Store, path: &Path) -> Option<PathBuf> {
-    let mut parts = path.components();
     let mut rest = PathBuf::new();
-    // The last `.orlapkg` part names the package; the rest is inside.
+    // The last `.orlapkg` part names the package, the path up to it where
+    // it lies; the rest is inside.
     let mut name: Option<PathBuf> = None;
-    for part in parts.by_ref() {
+    let mut before = PathBuf::new();
+    for part in path.components() {
         let piece = Path::new(part.as_os_str());
+        before.push(piece);
         if piece.extension().is_some_and(|ext| ext == "orlapkg") {
-            name = Some(piece.to_path_buf());
+            name = Some(before.clone());
             rest = PathBuf::new();
         } else if name.is_some() {
             rest.push(piece);

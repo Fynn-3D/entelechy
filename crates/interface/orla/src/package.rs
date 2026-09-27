@@ -116,7 +116,8 @@ pub fn unpack(file: &Path, dir: &Path) -> Result<usize, String> {
 }
 
 /// A package's id, needs, and counts of Kernel files, graph presets and
-/// other files.
+/// other files, once its manifest's Kernels compile and its presets read,
+/// each checked as `orla check` checks it.
 pub fn describe(dir: &Path) -> Result<String, String> {
     let declared = package_manifest(&orla_session::Disk::default(), &dir.join("package.osn"))?;
     let files = files_of(dir)?;
@@ -132,6 +133,28 @@ pub fn describe(dir: &Path) -> Result<String, String> {
         })
         .count();
     let others = files.len() - kernels - graphs - 1;
+    let store = orla_session::Disk::with_packages(orla_session::environment_packages());
+    let checked = std::iter::once(dir.join("package.osn")).chain(
+        files
+            .iter()
+            .filter(|f| {
+                f.extension().is_some_and(|e| e == "osn")
+                    && f.file_name().is_some_and(|n| n != "package.osn")
+            })
+            .map(|f| dir.join(f)),
+    );
+    let problems: Vec<String> = checked
+        .flat_map(|path| orla_session::check_document(&store, &path, false).lines)
+        .filter(|(problem, _)| *problem)
+        .map(|(_, line)| line)
+        .collect();
+    if !problems.is_empty() {
+        return Err(format!(
+            "{}\n{} problem(s) found",
+            problems.join("\n"),
+            problems.len()
+        ));
+    }
     Ok(format!(
         "package {} (needs language {}, ir {}): {kernels} kernel file(s), {graphs} graph preset(s), {others} other file(s)",
         declared.id.value, declared.language, declared.ir

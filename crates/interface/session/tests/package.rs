@@ -124,6 +124,8 @@ fn a_package_is_what_its_layout_says() {
                     .find(|c| c.kind == Kind::Preset)
                     .unwrap_or_else(|| panic!("no preset in {capabilities:?}"));
                 assert_eq!(preset.name, "tally.orlapkg/graphs/quad.osn");
+                // It requires what the Kernels it places require.
+                assert_eq!(preset.requires, ["field.read", "field.write"]);
             }
             // The docs are what search answers.
             "docs" => {

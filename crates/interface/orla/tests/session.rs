@@ -1247,6 +1247,43 @@ fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "{stdout}");
     assert!(stdout.contains("graph `preset` with 3 node(s)"), "{stdout}");
+    // Where the command runs finds no package: from the directory that
+    // holds it, without ORLA_PACKAGES, the name is not found either.
+    let output = Command::new(orla)
+        .arg("check")
+        .arg("elsewhere/scene.osn")
+        .current_dir(&dir)
+        .env_remove("ORLA_PACKAGES")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!output.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("elsewhere/unpacked.orlapkg: No such file"),
+        "{stdout}"
+    );
+    // `package` checks what the package holds: a Kernel that does not
+    // compile is a problem.
+    let broken = dir.join("broken.orlapkg");
+    std::fs::create_dir_all(broken.join("kernels")).unwrap();
+    std::fs::write(
+        broken.join("package.osn"),
+        "package broken@1 { language = 1; ir = 1; }\nuse \"kernels/\";\n",
+    )
+    .unwrap();
+    std::fs::write(
+        broken.join("kernels/k.orla"),
+        "kernel broken.k@1 { requires { field.write; } output result: Rows<Int>; compute { return nope; } }\n",
+    )
+    .unwrap();
+    let output = Command::new(orla)
+        .arg("package")
+        .arg(&broken)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("`nope` is not defined"), "{stderr}");
 
     // A package needing a newer language is refused with both versions.
     let manifest = unpacked.join("package.osn");

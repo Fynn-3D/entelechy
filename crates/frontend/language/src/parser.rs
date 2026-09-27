@@ -630,11 +630,29 @@ impl Parser {
                     merge = Some(MergeDecl { a, b, body, span });
                 }
                 _ => {
+                    let items = KERNEL_ITEMS
+                        .iter()
+                        .filter(|item| inline || **item != "domain")
+                        .map(|item| format!("`{item}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    // A port wired as a node's member, inside a Kernel
+                    // written in place, where its input carries it.
+                    let wired = inline
+                        && matches!(
+                            self.tokens.get(self.position + 1).map(|t| &t.token),
+                            Some(Token::Punct(p)) if *p == "<-" || *p == "<~"
+                        );
+                    let hint = if wired {
+                        format!(
+                            "; a Kernel written in place wires an input where it declares it: `input {keyword}: T <- node.port;` or `input {keyword}: T <~ node.port from initial;`"
+                        )
+                    } else {
+                        String::new()
+                    };
                     return Err(ParseError {
                         span,
-                        message: format!(
-                            "expected `requires`, `input`, `param`, `output`, `memory`, `struct`, `type`, `fn`, `compute`, `scan`, `scatter`, `prefix`, or `merge`, found `{keyword}`"
-                        ),
+                        message: format!("expected one of {items}, found `{keyword}`{hint}"),
                     });
                 }
             }
@@ -2062,6 +2080,13 @@ impl Parser {
 /// function.
 const STARTS_AN_EXPRESSION: [&str; 5] = ["let", "return", "if", "match", "loop"];
 
+/// What a Kernel's body holds, each item begun by its word; `domain`
+/// only in a Kernel written in place.
+const KERNEL_ITEMS: [&str; 15] = [
+    "requires", "budget", "domain", "input", "param", "output", "memory", "struct", "type", "fn",
+    "compute", "scan", "scatter", "prefix", "merge",
+];
+
 /// The words the language keeps for itself: no name may be one.
 pub const RESERVED: [&str; 25] = [
     "let", "return", "if", "else", "match", "loop", "with", "until", "break", "kernel", "struct",
@@ -2079,6 +2104,32 @@ fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A word a Kernel's body does not begin an item with is refused with
+    /// every word it does, and each of those is taken as one.
+    #[test]
+    fn a_kernel_item_the_body_lacks_is_refused_naming_every_one_it_takes() {
+        let inline = "node n: kernel { zzq <- a.result; compute { return 1; } }\n";
+        let error = parse_document(inline).unwrap_err();
+        for item in KERNEL_ITEMS {
+            assert!(error.message.contains(&format!("`{item}`")), "{error}");
+        }
+        assert!(
+            error.message.contains("input zzq: T <- node.port;"),
+            "{error}"
+        );
+        let library = parse_document("kernel t.k@1 { zzq; compute { return 1; } }").unwrap_err();
+        assert!(!library.message.contains("`domain`"), "{library}");
+        assert!(!library.message.contains("wires an input"), "{library}");
+        for item in KERNEL_ITEMS {
+            let body = format!("node n: kernel {{ {item} }}\n");
+            let taken = parse_document(&body).unwrap_err();
+            assert!(
+                !taken.message.contains("expected one of"),
+                "`{item}` is not taken as an item: {taken}"
+            );
+        }
+    }
 
     /// A return on some paths only, inside an `if` of statements, is
     /// refused where it is written, not read as a value on the others.

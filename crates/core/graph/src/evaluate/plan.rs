@@ -274,8 +274,14 @@ impl Evaluator {
             }
             if let Some(domain) = planned {
                 domains.insert(groups[position].node.id.clone(), domain);
-                // The plan reports what an expression resolved to.
-                if matches!(groups[position].node.domain, Some(DomainSpec::Expr(_))) {
+                // The plan reports what an expression resolved to; a
+                // scatter's planned domain is its target's extent, not
+                // the elements it runs, so its expression stays.
+                let scatters = matches!(
+                    groups[position].version.manifest().mode,
+                    orla_ir::Mode::Scatter { .. }
+                );
+                if !scatters && matches!(groups[position].node.domain, Some(DomainSpec::Expr(_))) {
                     groups[position].node.domain = Some(DomainSpec::Literal(domain));
                 }
             }

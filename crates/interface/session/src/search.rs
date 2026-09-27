@@ -70,7 +70,8 @@ pub struct Capability {
     pub params: Vec<Port>,
     /// Its outputs.
     pub outputs: Vec<Port>,
-    /// The capabilities a Kernel requires.
+    /// The capabilities a Kernel requires; a preset's, those of the
+    /// Kernels it places that its package or its own document writes.
     pub requires: Vec<String>,
     /// Whether this session grants every one of them.
     pub granted: bool,
@@ -240,8 +241,8 @@ fn in_package(
     let reach_package = format!("use \"{}\";", written(dir));
     let mut out = Vec::new();
     // Every Kernel a package's manifest uses, by id, with its ports as
-    // written; what its presets' outputs are traced to.
-    let mut kernels: Vec<(String, Vec<Port>)> = Vec::new();
+    // written and what it requires; what its presets are traced to.
+    let mut kernels: Vec<(String, Vec<Port>, Vec<String>)> = Vec::new();
     for file in package_files(store, dir).unwrap_or_default() {
         let Ok(text) = store.read_text(&file) else {
             continue;
@@ -259,7 +260,7 @@ fn in_package(
             };
             let requires: Vec<String> = kernel.requires.iter().map(|r| r.value.clone()).collect();
             let outputs = ports(&kernel.outputs);
-            kernels.push((id.value.clone(), outputs.clone()));
+            kernels.push((id.value.clone(), outputs.clone(), requires.clone()));
             out.push(Capability {
                 kind: Kind::Kernel,
                 name: id.value.clone(),
@@ -300,9 +301,26 @@ fn in_package(
             let orla_language::NodeKind::Reference(id) = &decl.kind else {
                 return None;
             };
-            let (_, outputs) = kernels.iter().find(|(k, _)| *k == id.value)?;
+            let (_, outputs, _) = kernels.iter().find(|(k, _, _)| *k == id.value)?;
             outputs.iter().find(|p| p.name == source.name)?.ty.clone()
         };
+        let mut requires: Vec<String> = document
+            .nodes
+            .iter()
+            .flat_map(|node| match &node.kind {
+                orla_language::NodeKind::Reference(id) => kernels
+                    .iter()
+                    .find(|(k, _, _)| *k == id.value)
+                    .map(|(_, _, requires)| requires.clone())
+                    .unwrap_or_default(),
+                orla_language::NodeKind::Inline(kernel) => {
+                    kernel.requires.iter().map(|r| r.value.clone()).collect()
+                }
+                _ => Vec::new(),
+            })
+            .collect();
+        requires.sort();
+        requires.dedup();
         let path_text = written(&path);
         out.push(Capability {
             kind: Kind::Preset,
@@ -326,8 +344,8 @@ fn in_package(
                 .iter()
                 .map(|(name, source)| port(name, node_output(source), &text))
                 .collect(),
-            requires: Vec::new(),
-            granted: true,
+            granted: requires.iter().all(|r| grants(r)),
+            requires,
             published: false,
         });
     }
