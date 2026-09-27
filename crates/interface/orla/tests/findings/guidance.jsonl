@@ -16,3 +16,4 @@
 {"finding": "a snapshot to a file without leave to write said which flag to run with, not that it can be held in the answer", "send": {"op": "snapshot", "to": "kept.json"}, "expect": {"ok": false, "tries": "corrects"}}
 {"send": {"op": "compose", "text": "{scene}\nnode broken: kernel { requires { field.write; } domain = 4; output result: Rows<Int>; compute { return 1 / (element() - element()); } }\noutput also <- broken.result;\n"}}
 {"finding": "a failed evaluation names the node it failed at, as the envelope says an error may", "send": {"op": "evaluate", "time": 0.0}, "expect": {"ok": false, "at": {"/error/node": "broken"}}}
+{"finding": "a Kernel named in `name` was answered with a `try` that dropped it, which was refused again", "send": {"op": "kernel", "name": "life.step@1"}, "expect": {"ok": false, "says": ["did you mean `kernel`"], "tries": "corrects"}}

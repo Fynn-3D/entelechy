@@ -737,9 +737,30 @@ pub(crate) fn check(request: &Json) -> Result<(), Json> {
         if key == "op" || key == "id" || takes.contains(&key.as_str()) {
             continue;
         }
-        let near = orla_language::nearest(key, takes.iter().copied());
+        // The field it was meant as: the one named nearest, or else the
+        // only field the request lacks that would hold its value, one the
+        // operation needs before one it may take.
+        let value = &object[key];
+        let holds: Vec<&Field> = op
+            .fields
+            .iter()
+            .filter(|field| !object.contains_key(field.name))
+            .filter(|field| field.ty.check(value, field.name).is_ok())
+            .collect();
+        let needed: Vec<&Field> = holds
+            .iter()
+            .copied()
+            .filter(|field| field.required)
+            .collect();
+        let only = match (needed.as_slice(), holds.as_slice()) {
+            ([one], _) | ([], [one]) => Some(one.name),
+            _ => None,
+        };
+        let similar = orla_language::nearest(key, takes.iter().copied());
+        let near = similar.or(only);
         // The request with the field named as the operation takes it, or
-        // without it.
+        // without it; offered only when the operation would take it, and
+        // otherwise `help` for the operation.
         let mut fixed = object.clone();
         fixed.remove("id");
         if let Some(value) = fixed.remove(key)
@@ -747,6 +768,12 @@ pub(crate) fn check(request: &Json) -> Result<(), Json> {
         {
             fixed.insert(near.to_owned(), value);
         }
+        let fixed = Json::Object(fixed);
+        let next = if check(&fixed).is_ok() {
+            fixed
+        } else {
+            crate::wire::ask_help(op.name)
+        };
         return Err(crate::wire::tried(
             json!({
                 "message": format!(
@@ -756,9 +783,9 @@ pub(crate) fn check(request: &Json) -> Result<(), Json> {
                     orla_language::suggestion(near)
                 ),
                 "fields": takes,
-                "similar": near.into_iter().collect::<Vec<_>>(),
+                "similar": similar.into_iter().collect::<Vec<_>>(),
             }),
-            [Json::Object(fixed)],
+            [next],
         ));
     }
     if let Some(missing) = op
@@ -840,4 +867,37 @@ pub fn table() -> String {
         ));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every `try` a misnamed field is answered with is a request the
+    /// operation takes.
+    #[test]
+    fn a_misnamed_field_is_corrected_to_a_request_the_operation_takes() {
+        for op in operations() {
+            for value in [json!("image.blur@1"), json!(3), json!({ "x": 1 })] {
+                for key in ["name", "zzq"] {
+                    let request = json!({ "op": op.name, key: value });
+                    if check(&request).is_ok() {
+                        continue;
+                    }
+                    let refused = check(&request).unwrap_err();
+                    for next in refused["try"].as_array().into_iter().flatten() {
+                        assert!(
+                            check(next).is_ok(),
+                            "{request} tries {next}, which is refused"
+                        );
+                    }
+                }
+            }
+        }
+        let refused = check(&json!({ "op": "kernel", "name": "image.blur@1" })).unwrap_err();
+        assert_eq!(
+            refused["try"],
+            json!([{ "op": "kernel", "kernel": "image.blur@1" }])
+        );
+    }
 }
