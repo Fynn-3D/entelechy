@@ -44,6 +44,16 @@ marked `?` may be left out. Every field is held to its type before its
 operation reads it: a request with a field of the wrong type, one its
 operation does not take, or without one it needs, is refused with the
 fields it takes, the `field` at fault and the type `expected`.
+
+A refusal whose next step is known carries it in `try`: the requests to
+send, in order, as they are. They correct the request (a near name in
+place of an unknown one, a field renamed or left out, a count within
+bounds), enable it (`pin` and `evaluate` before a `read` of a node with
+no value yet), or answer what the caller needs (`help` for an operation
+whose fields were wrong, the inline form whose example is the smallest
+scene when none is loaded, `document` for a `compose` against a changed
+version). A `try` is a valid request of the table and never `quit`; it
+widens no authority, which the protocol never grants.
 `{"op": "help", "name": <op>}` answers an operation's request as JSON
 Schema in `schema`.
 

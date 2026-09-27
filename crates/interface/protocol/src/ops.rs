@@ -729,37 +729,55 @@ pub(crate) fn check(request: &Json) -> Result<(), Json> {
             continue;
         }
         let near = orla_language::nearest(key, takes.iter().copied());
-        return Err(json!({
-            "message": format!(
-                "`{}` takes {}; `{key}` is not one of them{}",
-                op.name,
-                listed(),
-                orla_language::suggestion(near)
-            ),
-            "fields": takes,
-            "similar": near.into_iter().collect::<Vec<_>>(),
-        }));
+        // The request with the field named as the operation takes it, or
+        // without it.
+        let mut fixed = object.clone();
+        fixed.remove("id");
+        if let Some(value) = fixed.remove(key)
+            && let Some(near) = near
+        {
+            fixed.insert(near.to_owned(), value);
+        }
+        return Err(crate::wire::tried(
+            json!({
+                "message": format!(
+                    "`{}` takes {}; `{key}` is not one of them{}",
+                    op.name,
+                    listed(),
+                    orla_language::suggestion(near)
+                ),
+                "fields": takes,
+                "similar": near.into_iter().collect::<Vec<_>>(),
+            }),
+            [Json::Object(fixed)],
+        ));
     }
     if let Some(missing) = op
         .fields
         .iter()
         .find(|field| field.required && !object.contains_key(field.name))
     {
-        return Err(json!({
-            "message": format!("`{}` needs `{}` ({}); it takes {}", op.name, missing.name, missing.doc, listed()),
-            "fields": takes,
-        }));
+        return Err(crate::wire::tried(
+            json!({
+                "message": format!("`{}` needs `{}` ({}); it takes {}", op.name, missing.name, missing.doc, listed()),
+                "fields": takes,
+            }),
+            [crate::wire::ask_help(op.name)],
+        ));
     }
     for field in &op.fields {
         if let Some(value) = object.get(field.name)
             && let Err(why) = field.ty.check(value, field.name)
         {
-            return Err(json!({
-                "message": format!("`{}`: {why}", op.name),
-                "fields": takes,
-                "field": field.name,
-                "expected": field.ty.describe(),
-            }));
+            return Err(crate::wire::tried(
+                json!({
+                    "message": format!("`{}`: {why}", op.name),
+                    "fields": takes,
+                    "field": field.name,
+                    "expected": field.ty.describe(),
+                }),
+                [crate::wire::ask_help(op.name)],
+            ));
         }
     }
     Ok(())

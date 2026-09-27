@@ -8,10 +8,17 @@
 //! - `"finding"`: what an agent met, as a sentence;
 //! - `"send"`: the request; `{scene}` in a string is the example's scene
 //!   text, as copied;
-//! - `"expect"`: `ok` (answered, or refused), `at` (a JSON pointer into the
+//! - `"expect"`: `tries`, every request of the refusal's `try` answered,
+//!   as it is `"corrects"` (the request corrected), `"enables"` (what the
+//!   request needs first: sent again, it then passes) or `"informs"` (what
+//!   the caller needs to know); `ok` (answered, or
+//!   refused), `at` (a JSON pointer into the
 //!   answer and the value there), `has` (pointers to something not null
 //!   and not empty), `lacks` (pointers to nothing), `says` and `not`
 //!   (text the answer, or a string in it, holds or does not).
+//!
+//! Every refusal's `try`, held to an expectation or not, names operations
+//! of the table and never `quit`.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -65,36 +72,72 @@ fn filled(value: &Json, scene: &str) -> Json {
     }
 }
 
-/// Each request answered by one `orla serve` of `scene`, in order;
-/// `installed`, the packages it finds by name.
-fn talk(scene: &Path, installed: Option<&Path>, requests: &[Json]) -> Vec<Json> {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_orla"));
-    if let Some(dir) = installed {
-        command.env("ORLA_PACKAGES", dir);
+/// One `orla serve` of a scene, asked a request at a time.
+struct Served {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    lines: std::io::Lines<BufReader<std::process::ChildStdout>>,
+}
+
+impl Served {
+    /// `scene` served; `installed`, the packages it finds by name.
+    fn new(scene: &Path, installed: Option<&Path>) -> Self {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_orla"));
+        if let Some(dir) = installed {
+            command.env("ORLA_PACKAGES", dir);
+        }
+        let mut child = command
+            .arg("serve")
+            .arg(scene)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        Self {
+            child,
+            stdin,
+            lines,
+        }
     }
-    let mut child = command
-        .arg("serve")
-        .arg(scene)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let mut stdin = child.stdin.take().unwrap();
-    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
-    let mut answers = Vec::new();
-    for request in requests {
-        writeln!(stdin, "{request}").unwrap();
-        stdin.flush().unwrap();
-        let line = lines
+
+    /// The answer to `request`.
+    fn ask(&mut self, request: &Json) -> Json {
+        writeln!(self.stdin, "{request}").unwrap();
+        self.stdin.flush().unwrap();
+        let line = self
+            .lines
             .next()
             .unwrap_or_else(|| panic!("`orla serve` answered nothing to {request}"))
             .unwrap();
-        answers.push(serde_json::from_str(&line).unwrap());
+        serde_json::from_str(&line).unwrap()
     }
-    drop(stdin);
-    child.wait().unwrap();
-    answers
+}
+
+impl Drop for Served {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// What a refusal's `try` falls short of: every request it names is an
+/// operation of the table, not `quit` (a `try` widens no authority and
+/// ends nothing).
+fn untried(answer: &Json) -> Vec<String> {
+    let ops = orla_protocol::ops::names();
+    answer
+        .pointer("/error/try")
+        .and_then(Json::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|next| {
+            let op = next["op"].as_str().unwrap_or_default();
+            (!ops.contains(&op) || op == "quit").then(|| format!("`try` sends {next}"))
+        })
+        .collect()
 }
 
 /// What `answer` falls short of in `expect`, one line each.
@@ -219,26 +262,42 @@ fn what_agents_found_wanting_stays_fixed() {
                 serde_json::from_str(line).unwrap_or_else(|e| panic!("{name}: {e}: {line}"))
             })
             .collect();
-        let requests: Vec<Json> = steps
-            .iter()
-            .enumerate()
-            .map(|(id, step)| {
-                let mut request = filled(&step["send"], &scene);
-                request["id"] = Json::from(id);
-                request
-            })
-            .collect();
         let packages = std::env::temp_dir()
             .join(format!("orla-findings-{name}-{}", std::process::id()))
             .join("packages");
         let installed = head["installed"].as_bool() == Some(true);
-        let answers = talk(&copied, installed.then_some(packages.as_path()), &requests);
-        for (step, answer) in steps.iter().zip(&answers) {
-            let Some(expect) = step.get("expect") else {
-                continue;
-            };
-            held += 1;
-            let short = wanting(answer, expect);
+        let mut served = Served::new(&copied, installed.then_some(packages.as_path()));
+        for (id, step) in steps.iter().enumerate() {
+            let mut request = filled(&step["send"], &scene);
+            request["id"] = Json::from(id);
+            let answer = served.ask(&request);
+            let mut short = untried(&answer);
+            if let Some(expect) = step.get("expect") {
+                held += 1;
+                short.extend(wanting(&answer, expect));
+                // Followed, a `try` is answered; one that repairs lets the
+                // request pass sent again.
+                if let Some(tries) = expect.get("tries").and_then(Json::as_str) {
+                    let next = answer.pointer("/error/try").and_then(Json::as_array);
+                    match next {
+                        None => short.push("no `try`".to_owned()),
+                        Some(next) => {
+                            for request in next {
+                                let followed = served.ask(request);
+                                if followed.get("ok").is_none() {
+                                    short.push(format!("`try` {request} was refused: {followed}"));
+                                }
+                            }
+                            if tries == "enables" {
+                                let again = served.ask(&request);
+                                if again.get("ok").is_none() {
+                                    short.push(format!("sent again after its `try`: {again}"));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             if !short.is_empty() {
                 wrong.push(format!(
                     "{name}: {}\n  {}\n  answer: {}",
@@ -248,6 +307,7 @@ fn what_agents_found_wanting_stays_fixed() {
                 ));
             }
         }
+        drop(served);
         let _ = std::fs::remove_dir_all(
             std::env::temp_dir().join(format!("orla-findings-{name}-{}", std::process::id())),
         );

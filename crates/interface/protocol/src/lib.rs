@@ -103,9 +103,11 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
     if RUNS_THE_SCENE.contains(&request.op())
         && let Some(why) = session.why_no_scene()
     {
-        return Err(wire::failure(format!(
-            "no scene is loaded: {why}; `compose` one"
-        )));
+        // The inline form's example is the smallest whole scene.
+        return Err(wire::tried(
+            wire::failure(format!("no scene is loaded: {why}; `compose` one")),
+            [wire::ask_help("inline")],
+        ));
     }
     match request.op() {
         "status" => inspect::status(session),
@@ -135,14 +137,33 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         "pin" => fields::pin(session, &request),
         "unpin" => fields::unpin(session, &request),
         "quit" => Ok(json!({ "bye": true })),
-        other => Err(json!({
-            "message": format!(
-                "unknown op `{other}`; the operations are {}{}",
-                ops::names().join(", "),
-                orla_language::did_you_mean(other, ops::names())
-            ),
-            "operations": ops::names(),
-        })),
+        other => {
+            let near = orla_language::nearest(other, ops::names());
+            // The request under the operation meant, where the table takes
+            // it as written; else what that operation takes.
+            let next = match near {
+                Some(near) => {
+                    let meant = wire::again(request.json(), &[("op", json!(near))], &[]);
+                    if ops::check(&meant).is_ok() {
+                        meant
+                    } else {
+                        wire::ask_help(near)
+                    }
+                }
+                None => json!({ "op": "help" }),
+            };
+            Err(wire::tried(
+                json!({
+                    "message": format!(
+                        "unknown op `{other}`; the operations are {}{}",
+                        ops::names().join(", "),
+                        orla_language::suggestion(near)
+                    ),
+                    "operations": ops::names(),
+                }),
+                [next],
+            ))
+        }
     }
 }
 

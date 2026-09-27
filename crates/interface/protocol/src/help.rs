@@ -243,14 +243,22 @@ pub fn index() -> Json {
 pub fn section(name: &str) -> Result<Json, Json> {
     if !SECTIONS.iter().any(|(section, ..)| *section == name) {
         let names = SECTIONS.map(|(section, ..)| section);
-        return Err(json!({
-            "message": format!(
-                "no section `{name}`; the sections are {}{}",
-                names.join(", "),
-                orla_language::did_you_mean(name, names)
-            ),
-            "sections": names,
-        }));
+        let near = orla_language::nearest(name, names);
+        let next = near.map_or_else(
+            || json!({ "op": "help" }),
+            |near| json!({ "op": "help", "section": near }),
+        );
+        return Err(crate::wire::tried(
+            json!({
+                "message": format!(
+                    "no section `{name}`; the sections are {}{}",
+                    names.join(", "),
+                    orla_language::suggestion(near)
+                ),
+                "sections": names,
+            }),
+            [next],
+        ));
     }
     let items: Vec<Json> = items()
         .into_iter()
@@ -304,13 +312,17 @@ pub fn named(name: &str) -> Result<Json, Json> {
         names.sort_unstable();
         names.dedup();
         let near = orla_language::nearest(name, names.iter().copied());
-        return Err(json!({
-            "message": format!(
-                "nothing named `{name}`; `help` lists the sections{}",
-                orla_language::suggestion(near)
-            ),
-            "similar": near.into_iter().collect::<Vec<_>>(),
-        }));
+        let next = near.map_or_else(|| json!({ "op": "help" }), crate::wire::ask_help);
+        return Err(crate::wire::tried(
+            json!({
+                "message": format!(
+                    "nothing named `{name}`; `help` lists the sections{}",
+                    orla_language::suggestion(near)
+                ),
+                "similar": near.into_iter().collect::<Vec<_>>(),
+            }),
+            [next],
+        ));
     }
     Ok(json!({ "name": name, "found": found }))
 }
