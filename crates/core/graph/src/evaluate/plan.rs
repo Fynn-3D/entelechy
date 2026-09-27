@@ -85,8 +85,9 @@ impl Evaluator {
             .map(|(position, group)| (group.node.id.clone(), position))
             .collect();
         for position in 0..groups.len() {
-            // Planned domain of this group, for the equality check.
-            let planned = self.planned_domain(
+            // The elements this group runs over and the extent its
+            // readers see, where known before execution.
+            let Planned { runs, extent } = self.planned(
                 graph,
                 &nodes,
                 &groups[position],
@@ -176,7 +177,7 @@ impl Evaluator {
                 // extent; when that input is the producer, the extents
                 // match and the producer's expression moves onto the
                 // fused node under the fused port names.
-                let carried = match (producer_domain, planned) {
+                let carried = match (producer_domain, runs) {
                     (Some(a), Some(b)) if a == b => None,
                     (None, None)
                         if consumer.node.domain.is_none()
@@ -262,7 +263,7 @@ impl Evaluator {
                 group.node.inputs = inputs;
                 group.node.params = params;
                 if group.node.domain.is_none() {
-                    group.node.domain = match (planned, carried) {
+                    group.node.domain = match (runs, carried) {
                         (Some(domain), _) => Some(DomainSpec::Literal(domain)),
                         (None, Some(expr)) => {
                             Some(DomainSpec::Expr(expr.renamed(&prefix, &producer_params)))
@@ -272,18 +273,14 @@ impl Evaluator {
                 }
                 absorbed_into.insert(producer_id, position);
             }
-            if let Some(domain) = planned {
-                domains.insert(groups[position].node.id.clone(), domain);
-                // The plan reports what an expression resolved to; a
-                // scatter's planned domain is its target's extent, not
-                // the elements it runs, so its expression stays.
-                let scatters = matches!(
-                    groups[position].version.manifest().mode,
-                    orla_ir::Mode::Scatter { .. }
-                );
-                if !scatters && matches!(groups[position].node.domain, Some(DomainSpec::Expr(_))) {
-                    groups[position].node.domain = Some(DomainSpec::Literal(domain));
-                }
+            if let Some(extent) = extent {
+                domains.insert(groups[position].node.id.clone(), extent);
+            }
+            // The plan reports what an expression resolved to.
+            if let Some(runs) = runs
+                && matches!(groups[position].node.domain, Some(DomainSpec::Expr(_)))
+            {
+                groups[position].node.domain = Some(DomainSpec::Literal(runs));
             }
         }
         let executing: Vec<Group> = groups
@@ -498,10 +495,13 @@ impl Evaluator {
         }
     }
 
-    /// The domain a group will execute over, when it can be known before
-    /// execution: explicit, or the size of its first bound image.
+    /// What a group runs over and the extent its outputs have, each where
+    /// it can be known before execution: it runs over its `domain`, or
+    /// its first input's extent (a reduction over one row, as
+    /// [`Evaluator::bind`] binds it), and its outputs' extent is
+    /// where [`orla_kernel::extent`] says its mode takes it from.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn planned_domain(
+    pub(super) fn planned(
         &self,
         graph: &Graph,
         nodes: &BTreeMap<&NodeId, usize>,
@@ -511,11 +511,8 @@ impl Evaluator {
         domains: &BTreeMap<NodeId, Domain>,
         overrides: &BTreeMap<String, Value>,
         context: &Context,
-    ) -> Option<Domain> {
+    ) -> Planned {
         let manifest = group.version.manifest();
-        if manifest.mode == orla_ir::Mode::Reduce {
-            return Some(Domain::Rows(1));
-        }
         let size = |handle: Handle| runtime.host().domain(handle).ok();
         let plain = |source: &Source| match source {
             Source::External(name) => externals.get(name).and_then(|h| size(*h)),
@@ -552,10 +549,38 @@ impl Evaluator {
                 .or_else(|| of_source(initial)),
             Binding::Previous { .. } => None,
         };
-        if let orla_ir::Mode::Scatter { base, .. } = manifest.mode {
-            let target = manifest.inputs.get(base as usize)?;
-            return of_binding(group.node.inputs.get(&target.name)?);
-        }
+        let input = |at: usize| {
+            manifest
+                .inputs
+                .get(at)
+                .and_then(|port| group.node.inputs.get(&port.name))
+                .and_then(of_binding)
+        };
+        let runs = if manifest.mode == orla_ir::Mode::Reduce {
+            Some(Domain::Rows(1))
+        } else {
+            self.planned_runs(graph, group, &of_binding, overrides, context)
+                .or_else(|| group.node.domain.is_none().then(|| input(0)).flatten())
+        };
+        let extent = match orla_kernel::extent(manifest.mode) {
+            orla_kernel::Extent::Invocation => runs,
+            orla_kernel::Extent::OneRow => Some(Domain::Rows(1)),
+            orla_kernel::Extent::Input(at) => input(at),
+        };
+        Planned { runs, extent }
+    }
+
+    /// The domain a group's `domain` resolves to before execution; `None`
+    /// without one, or when it reads a Field's value.
+    fn planned_runs(
+        &self,
+        graph: &Graph,
+        group: &Group,
+        of_binding: &dyn Fn(&Binding) -> Option<Domain>,
+        overrides: &BTreeMap<String, Value>,
+        context: &Context,
+    ) -> Option<Domain> {
+        let manifest = group.version.manifest();
         match &group.node.domain {
             Some(DomainSpec::Literal(domain)) => Some(*domain),
             Some(DomainSpec::Expr(expr)) => {
@@ -577,12 +602,17 @@ impl Evaluator {
                 expr.resolve(&port, &param, &window_context(context), &|_, _| None)
                     .ok()
             }
-            None => {
-                let first = manifest.inputs.first()?;
-                of_binding(group.node.inputs.get(&first.name)?)
-            }
+            None => None,
         }
     }
+}
+
+/// What the plan knows of a group before execution.
+pub(super) struct Planned {
+    /// The elements it runs over.
+    pub runs: Option<Domain>,
+    /// The extent its outputs have, which its readers see.
+    pub extent: Option<Domain>,
 }
 
 /// The id a fused group executes under: `fused.<node>@1` with the node

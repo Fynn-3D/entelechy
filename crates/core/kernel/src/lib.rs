@@ -25,7 +25,7 @@ pub use orla_abi::{
 };
 pub use orla_abi::{DEFAULT_WORK, MAX_WORK, encoding};
 pub use orla_ir::{KernelId, Manifest, Validated};
-pub use orla_rules::{Backend, Check, ExecutionError, NativeOp, Prepared};
+pub use orla_rules::{Backend, Check, ExecutionError, Extent, NativeOp, Prepared, extent};
 
 pub mod clock;
 mod later;

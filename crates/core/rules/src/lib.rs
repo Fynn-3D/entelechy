@@ -309,17 +309,37 @@ pub fn check_scatter(
     Ok(scope.size(invocation.inputs[base])?)
 }
 
-/// The domain a module's outputs have, by mode: a map's and a scan's are
-/// the invocation's, a reduction's one row, a prefix's its first input's
-/// extent, a scatter's its target's. Known before the run, so its
-/// storage can be reserved.
-pub fn output_domain(mode: Mode, domain: Domain, inputs: &[Domain]) -> Domain {
-    let input = |at: usize| inputs.get(at).copied().unwrap_or(domain);
+/// Where a module's outputs take their domain from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Extent {
+    /// The invocation's domain: the elements the entry runs over.
+    Invocation,
+    /// One row.
+    OneRow,
+    /// The extent of the input at this index.
+    Input(usize),
+}
+
+/// Where a module's outputs take their domain from, by mode: a map's and
+/// a scan's the invocation's, a reduction's one row, a prefix's its first
+/// input's extent, a scatter's its target's. The invocation's domain is
+/// the elements the entry runs over; an output's is what its readers see.
+pub fn extent(mode: Mode) -> Extent {
     match mode {
-        Mode::Map | Mode::Scan => domain,
-        Mode::Reduce => Domain::Rows(1),
-        Mode::Prefix { .. } => input(0),
-        Mode::Scatter { base, .. } => input(base as usize),
+        Mode::Map | Mode::Scan => Extent::Invocation,
+        Mode::Reduce => Extent::OneRow,
+        Mode::Prefix { .. } => Extent::Input(0),
+        Mode::Scatter { base, .. } => Extent::Input(base as usize),
+    }
+}
+
+/// The domain a module's outputs have ([`extent`]). Known before the run,
+/// so its storage can be reserved.
+pub fn output_domain(mode: Mode, domain: Domain, inputs: &[Domain]) -> Domain {
+    match extent(mode) {
+        Extent::Invocation => domain,
+        Extent::OneRow => Domain::Rows(1),
+        Extent::Input(at) => inputs.get(at).copied().unwrap_or(domain),
     }
 }
 
