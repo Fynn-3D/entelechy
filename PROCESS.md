@@ -103,6 +103,12 @@ combined result. Never take one side blindly.
 Releases use semantic versioning, are tagged within release authorization, and
 document intentional compatibility changes. A commit is not a release.
 
+Cargo never removes an artifact whose fingerprint changed: every version
+bump, and every `-p` set that unifies features differently, leaves a copy
+of each binary with its debug info. After a release, `cargo clean` the
+working target directory and remove the directories the release was built
+in.
+
 ## Verification
 
 A commit on a branch is verified by the tests of the crates it touches,
