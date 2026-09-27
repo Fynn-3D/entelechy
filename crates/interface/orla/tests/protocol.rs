@@ -837,11 +837,40 @@ fn help_answers_an_index_a_section_or_a_name() {
         .iter()
         .map(|section| section["section"].as_str().unwrap())
         .collect();
+    // Under the creation surfaces, then the doors.
     assert_eq!(
         sections,
-        ["builtins", "types", "kernel", "scene", "replay", "protocol"]
+        [
+            "types",
+            "builtins",
+            "kernel",
+            "scene",
+            "authority",
+            "protocol",
+            "replay"
+        ]
     );
-    assert!(index["sections"][0]["count"].as_u64().unwrap() > 50);
+    assert!(index["sections"][1]["count"].as_u64().unwrap() > 50);
+    let under: Vec<&str> = index["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|section| section["under"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        under,
+        [
+            "language",
+            "language",
+            "language",
+            "graph",
+            "capabilities",
+            "doors",
+            "doors"
+        ]
+    );
+    assert_eq!(index["workflow"][0]["step"], "understand");
+    assert_eq!(index["workflow"][1]["ops"][0], "search");
     assert!(index["versions"]["language"].is_u64());
     let builtins = responses[1]["ok"]["items"].as_array().unwrap();
     assert!(builtins.iter().any(|item| item["name"] == "put"));

@@ -358,17 +358,22 @@ History is bounded and holds changes, never whole worlds.
 ## Help
 
 Orla describes itself, from the tables its parts enforce: the builtins
-and the forms from the compiler, the replay forms from the replayer, the
-operations from the table above. An agent asks in three steps, each
-answer small:
+and the forms from the compiler, what each capability grants from the
+ABI, the replay forms from the replayer, the operations from the table
+above. The sections stand under the creation surfaces (`language`,
+`graph`, `capabilities`) and the `doors` that reach them. An agent asks
+in three steps, each answer small:
 
-- `{"op": "help"}`: the index. Its `sections` (`builtins`, `types`,
-  `kernel`, `scene`, `replay`, `protocol`), how many items each holds, and the
-  `versions` the answer holds for.
+- `{"op": "help"}`: the index. What the sections stand `under`, the
+  `sections` (`types`, `builtins`, `kernel`, `scene`, `authority`,
+  `protocol`, `replay`) with how many items each holds, the `workflow` an
+  agent works in (each step and its operations), and the `versions` the
+  answer holds for.
 - `{"op": "help", "section": "replay"}`: each item's `name` and one `line`.
 - `{"op": "help", "name": "window"}`: every item of that name in full, in
   `found`, each with its `section`: a builtin's signatures, `requires` and
-  whether only an entry may call it; a form's shape; a replay step's
+  whether only an entry may call it; what a capability grants and the
+  builtins that need it; a form's shape; a replay step's
   shape and examples; an operation's fields with their types and whether
   each is needed.
 

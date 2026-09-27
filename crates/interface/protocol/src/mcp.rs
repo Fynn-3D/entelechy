@@ -11,8 +11,14 @@ use crate::ops;
 /// The MCP versions this server speaks, newest first.
 const VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
-/// What the server tells an agent it has just met.
-const INSTRUCTIONS: &str = "Orla is a runtime where Kernels (`.orla`) compute and scenes (`.osn`) compose them into a running world; this session serves one scene. Call `help` with no arguments first: it answers an index of everything Orla answers, and `help` with `section` or `name` goes further. Call `search` before writing a Kernel: it finds the Kernels and preset graphs that already exist. `read` shows a picture as a picture and answers any other Field as a summary, its numbers with `from` and `count`. Changes are checked before they replace anything; a refused one leaves the world as it was. `publish` changes the running world only; `compose` rewrites the scene's document on disk (the file `status` names), so serve a copy of a scene you mean to keep.";
+/// What the server tells an agent it has just met: what Orla is, and the
+/// loop it works in ([`crate::workflow`]), step by step.
+fn instructions() -> String {
+    format!(
+        "Orla is a runtime where Kernels (`.orla`) compute and scenes (`.osn`) compose them into a running world; this session serves one scene. Work in its loop: {} `help` with no arguments answers an index of everything Orla answers; `help` with `section` or `name` goes further.",
+        crate::workflow::text()
+    )
+}
 
 /// What one line from the client comes to.
 pub enum Step {
@@ -81,7 +87,7 @@ pub fn step(line: &str) -> Step {
                     "protocolVersion": version,
                     "capabilities": { "tools": { "listChanged": false } },
                     "serverInfo": { "name": "orla", "version": env!("CARGO_PKG_VERSION") },
-                    "instructions": INSTRUCTIONS,
+                    "instructions": instructions(),
                 }),
             ))
         }

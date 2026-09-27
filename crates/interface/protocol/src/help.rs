@@ -1,28 +1,58 @@
-//! What Orla answers about itself, gathered from where each part is kept:
-//! the builtins and the forms from the compiler, what a `domain` may call
-//! from the scene's lowering, the replay forms from the replayer, the
-//! operations from [`crate::ops`]. An index first, then a
-//! section's one line an item, then one name in full.
+//! What Orla answers about itself, gathered from where each part is kept
+//! and laid out as the architecture gives AI to create: the creation
+//! surfaces (the Kernel Language, the Graph API, the Capability API) and
+//! the doors that reach them. The builtins and the forms come from the
+//! compiler, what a `domain` may call from the scene's lowering, what a
+//! capability grants from the ABI, the replay forms from the replayer, the
+//! operations from [`crate::ops`], the loop an agent works in from
+//! [`crate::workflow`]. An index first, then a section's one line an item,
+//! then one name in full.
 
 use serde_json::{Value as Json, json};
 
 use orla_compiler::help::{Builtin, Form};
+use orla_kernel::Capability;
 use orla_session::replay;
 
-/// The sections, each with what it holds.
-const SECTIONS: [(&str, &str); 6] = [
-    ("builtins", "what a Kernel may call"),
-    ("types", "the types a port, a param or a value has"),
+/// What the sections stand under: the creation surfaces, then the doors.
+/// The Capability API is what the world grants (the `authority` section)
+/// and what it already knows (the Kernels and preset graphs `search`
+/// finds).
+pub const UNDER: [(&str, &str); 4] = [
+    ("language", "what a Kernel may write"),
+    ("graph", "how a scene composes Kernels into a running world"),
+    (
+        "capabilities",
+        "what the world grants a Kernel, and what it already knows (`search`)",
+    ),
+    ("doors", "how an agent reaches the surfaces"),
+];
+
+/// The sections, each under a surface or the doors, with what it holds.
+const SECTIONS: [(&str, &str, &str); 7] = [
+    (
+        "types",
+        "language",
+        "the types a port, a param or a value has",
+    ),
+    ("builtins", "language", "what a Kernel may call"),
     (
         "kernel",
+        "language",
         "how a Kernel is written: its declarations and expressions",
     ),
     (
         "scene",
+        "graph",
         "how a scene is written: nodes, bindings, inputs and packages",
     ),
-    ("replay", "the lines of a replay test"),
-    ("protocol", "the operations a session answers"),
+    (
+        "authority",
+        "capabilities",
+        "the capabilities a Kernel declares in `requires`, each what it grants",
+    ),
+    ("protocol", "doors", "the operations a session answers"),
+    ("replay", "doors", "the lines of a replay test"),
 ];
 
 fn builtin_json(builtin: &Builtin) -> Json {
@@ -32,7 +62,7 @@ fn builtin_json(builtin: &Builtin) -> Json {
         "kind": builtin.kind,
         "signatures": builtin.signatures,
         "doc": builtin.doc,
-        "requires": builtin.requires,
+        "requires": builtin.requires.map(Capability::name),
         "entry_only": builtin.entry_only,
     })
 }
@@ -66,6 +96,19 @@ fn replay_json(form: &replay::Form) -> Json {
     })
 }
 
+fn authority_json(capability: Capability, builtins: &[Builtin]) -> Json {
+    json!({
+        "section": "authority",
+        "name": capability.name(),
+        "doc": capability.doc(),
+        "required_by": builtins
+            .iter()
+            .filter(|b| b.requires == Some(capability))
+            .map(|b| b.name)
+            .collect::<Vec<_>>(),
+    })
+}
+
 fn op_json(op: &crate::ops::Operation) -> Json {
     let mut entry = op.json();
     entry["section"] = json!("protocol");
@@ -75,10 +118,13 @@ fn op_json(op: &crate::ops::Operation) -> Json {
 
 /// Every item of every section, in full.
 fn items() -> Vec<Json> {
-    let mut out: Vec<Json> = orla_compiler::help::builtins()
-        .iter()
-        .map(builtin_json)
-        .collect();
+    let builtins = orla_compiler::help::builtins();
+    let mut out: Vec<Json> = builtins.iter().map(builtin_json).collect();
+    out.extend(
+        Capability::ALL
+            .iter()
+            .map(|capability| authority_json(*capability, &builtins)),
+    );
     out.extend(orla_compiler::help::forms().iter().map(form_json));
     out.extend(orla_scene::domain::functions().iter().map(|f| {
         json!({
@@ -95,31 +141,43 @@ fn items() -> Vec<Json> {
     out
 }
 
-/// The index: the sections, how many items each holds, the versions an
-/// answer is good for, and how to ask further.
+/// The index: what the sections stand under, the sections and how many
+/// items each holds, the loop an agent works in, the versions an answer is
+/// good for, and how to ask further.
 pub fn index() -> Json {
     let all = items();
+    let under: Vec<Json> = UNDER
+        .iter()
+        .map(|(name, about)| json!({ "name": name, "about": about }))
+        .collect();
     let sections: Vec<Json> = SECTIONS
         .iter()
-        .map(|(name, about)| {
+        .map(|(name, under, about)| {
             json!({
                 "section": name,
+                "under": under,
                 "about": about,
                 "count": all.iter().filter(|item| item["section"] == *name).count(),
             })
         })
         .collect();
+    let workflow: Vec<Json> = crate::workflow::WORKFLOW
+        .iter()
+        .map(|step| json!({ "step": step.name, "about": step.about, "ops": step.ops }))
+        .collect();
     json!({
+        "under": under,
         "sections": sections,
+        "workflow": workflow,
         "versions": crate::inspect::versions(),
-        "ask": "`help` with `section` for one line an item, with `name` for one item in full; the answer holds while `versions` does. `search` finds the capabilities that exist: Kernels and preset graphs, by words, types and capability",
+        "ask": "`help` with `section` for one line an item, with `name` for one item in full; the answer holds while `versions` does. `search` finds what the world already knows: Kernels and preset graphs, by words, types and capability",
     })
 }
 
 /// One section: each item's name and one line.
 pub fn section(name: &str) -> Result<Json, Json> {
-    if !SECTIONS.iter().any(|(section, _)| *section == name) {
-        let names = SECTIONS.map(|(section, _)| section);
+    if !SECTIONS.iter().any(|(section, ..)| *section == name) {
+        let names = SECTIONS.map(|(section, ..)| section);
         return Err(json!({
             "message": format!(
                 "no section `{name}`; the sections are {}{}",

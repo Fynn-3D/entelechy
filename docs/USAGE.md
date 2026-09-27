@@ -35,8 +35,8 @@ alone and says why.
 ## What Orla answers about itself
 
 ```sh
-orla help              # the sections and how many items each holds
-orla help builtins     # one line an item: builtins, types, kernel, scene, replay, protocol, commands
+orla help              # the sections under each surface and door, and the loop an agent works in
+orla help builtins     # one line an item: types, builtins, kernel, scene, authority, protocol, replay, commands
 orla help smoothstep   # one name in full: a builtin's signatures and capability
 orla help window       # every item of a name: the builtin, the replay step, the operation
 orla help publish --json

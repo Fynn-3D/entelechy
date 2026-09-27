@@ -27,6 +27,7 @@ mod run;
 mod transport;
 pub mod websocket;
 mod wire;
+pub mod workflow;
 
 use serde_json::{Value as Json, json};
 

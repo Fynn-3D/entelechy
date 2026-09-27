@@ -3,7 +3,7 @@
 //! come from the IR's table and typing rules; the other builtins are the
 //! ones the lowering dispatches.
 
-use orla_ir::{Intrinsic, Type};
+use orla_ir::{Capability, Intrinsic, Type};
 
 /// One builtin as `help` shows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -18,7 +18,7 @@ pub struct Builtin {
     /// One sentence.
     pub doc: &'static str,
     /// The capability a Kernel must declare to call it, if any.
-    pub requires: Option<&'static str>,
+    pub requires: Option<Capability>,
     /// Whether only the entry (`compute`, `scan`, `scatter`) may call it.
     pub entry_only: bool,
 }
@@ -65,7 +65,7 @@ fn fixed(
     kind: &'static str,
     signatures: &[&str],
     doc: &'static str,
-    requires: Option<&'static str>,
+    requires: Option<Capability>,
     entry_only: bool,
 ) -> Builtin {
     Builtin {
@@ -133,39 +133,39 @@ pub fn builtins() -> Vec<Builtin> {
         fixed("refract", "math", &["refract(incident: Vec2, normal: Vec2, eta: Float) -> Vec2", "refract(incident: Vec3, normal: Vec3, eta: Float) -> Vec3", "refract(incident: Vec4, normal: Vec4, eta: Float) -> Vec4"],
             "incident bent through a surface with unit normal normal by the ratio of indices eta; the zero vector past total internal reflection.", None, false),
         fixed("at", "field", &["at(field: Rows<T>, index: Int) -> T", "at(field: Grid<T>, at: Vec2) -> T", "at(field: Grid<T>, at: IVec2) -> T", "at(field: Volume<T>, at: Vec3) -> T", "at(field: Volume<T>, at: IVec3) -> T"],
-            "The element at an address: the index, or the coordinates floored, clamped into the Field (NaN as zero). A memory reads as the steps have left it, and as it was bound in a scan's initial value.", Some("field.read"), false),
+            "The element at an address: the index, or the coordinates floored, clamped into the Field (NaN as zero). A memory reads as the steps have left it, and as it was bound in a scan's initial value.", Some(Capability::FieldRead), false),
         fixed("fetch", "field", &["fetch(field: Rows<T>, index: Int) -> T", "fetch(field: Grid<T>, at: Vec2) -> T", "fetch(field: Grid<T>, at: IVec2) -> T", "fetch(field: Volume<T>, at: Vec3) -> T", "fetch(field: Volume<T>, at: IVec3) -> T"],
-            "Another name for at.", Some("field.read"), false),
+            "Another name for at.", Some(Capability::FieldRead), false),
         fixed("at_linear", "field", &["at_linear(field: Rows<T>, position: Float) -> T", "at_linear(field: Grid<T>, position: Vec2) -> T", "at_linear(field: Volume<T>, position: Vec3) -> T"],
-            "The neighbouring elements blended by the fractional position (element centres at .5), T of floats only; clamped at the edges.", Some("field.read"), false),
+            "The neighbouring elements blended by the fractional position (element centres at .5), T of floats only; clamped at the edges.", Some(Capability::FieldRead), false),
         fixed("sample", "field", &["sample(field: Rows<T>) -> T", "sample(field: Grid<T>) -> T", "sample(field: Volume<T>) -> T"],
-            "The input's element at this element's own coordinates, clamped into the input.", Some("field.read"), true),
+            "The input's element at this element's own coordinates, clamped into the input.", Some(Capability::FieldRead), true),
         fixed("count", "field", &["count(field: Rows<T>) -> Int", "count(field: Grid<T>) -> Int", "count(field: Volume<T>) -> Int"],
-            "How many elements the Field has.", Some("field.read"), false),
+            "How many elements the Field has.", Some(Capability::FieldRead), false),
         fixed("size", "field", &["size(field: Grid<T>) -> Vec2", "size(field: Volume<T>) -> Vec3"],
-            "The Field's extent along each axis.", Some("field.read"), false),
+            "The Field's extent along each axis.", Some(Capability::FieldRead), false),
         fixed("isize", "field", &["isize(field: Rows<T>) -> Int", "isize(field: Grid<T>) -> IVec2", "isize(field: Volume<T>) -> IVec3"],
-            "The Field's extent along each axis, as integers.", Some("field.read"), false),
+            "The Field's extent along each axis, as integers.", Some(Capability::FieldRead), false),
         fixed("put", "memory", &["put(memory: Rows<T>, index: Int, value: T) -> T", "put(memory: Grid<T>, at: Vec2, value: T) -> T", "put(memory: Grid<T>, at: IVec2, value: T) -> T", "put(memory: Volume<T>, at: Vec3, value: T) -> T", "put(memory: Volume<T>, at: IVec3, value: T) -> T"],
-            "Writes an element of a memory port in step order (scan only; from the entry or a function with the memory as a parameter); an address outside is dropped, never clamped. Yields the value written.", Some("field.write"), false),
+            "Writes an element of a memory port in step order (scan only; from the entry or a function with the memory as a parameter); an address outside is dropped, never clamped. Yields the value written.", Some(Capability::FieldWrite), false),
         fixed("emit", "scatter", &["emit(pair: P) -> P"],
-            "Gives a scatter one more pair, a struct of an address into its target and a value of its element, as it returns one: an element's pairs are the ones it emits, in order, then the one it returns, and an address outside the target is dropped. Scatter only, from its body, under `min`, `max`, or a `sum` of integers, whose answer is the same in any order.", Some("field.write"), true),
+            "Gives a scatter one more pair, a struct of an address into its target and a value of its element, as it returns one: an element's pairs are the ones it emits, in order, then the one it returns, and an address outside the target is dropped. Scatter only, from its body, under `min`, `max`, or a `sum` of integers, whose answer is the same in any order.", Some(Capability::FieldWrite), true),
         fixed("element", "context", &["element() -> Int"], "This element's index over rows; a scan's step.", None, true),
         fixed("coord", "context", &["coord() -> Vec2", "coord() -> Vec3"], "This element's column and row (and layer) over a grid or a volume, whole numbers from 0 with row 0 at the top; the element's centre is coord() + 0.5. Rows have element().", None, true),
         fixed("icoord", "context", &["icoord() -> IVec2", "icoord() -> IVec3"], "This element's coordinates as integers, for arithmetic on cells.", None, true),
         fixed("domain", "context", &["domain() -> Int", "domain() -> Vec2", "domain() -> Vec3"], "The output's extent in its shape.", None, true),
         fixed("idomain", "context", &["idomain() -> Int", "idomain() -> IVec2", "idomain() -> IVec3"], "The output's extent as integers.", None, true),
         fixed("index", "context", &["index() -> Int"], "The iteration of the innermost loop, or a scan's step outside every loop.", None, false),
-        fixed("time", "context", &["time() -> Float"], "The session's time in seconds.", Some("time.read"), false),
-        fixed("rate", "context", &["rate() -> Float"], "The sound device's samples per second, zero without one.", Some("time.read"), false),
-        fixed("window", "context", &["window() -> Vec2"], "The window's size in physical pixels, zero by zero without one; a node's domain may take it.", Some("input.read"), false),
-        fixed("scale", "context", &["scale() -> Float"], "The window's physical pixels per logical pixel, one without a window.", Some("input.read"), false),
-        fixed("pointer", "context", &["pointer() -> Vec2"], "The pointer in the output's pixels from its top left; a player maps its window's into them.", Some("input.read"), false),
-        fixed("pointer_down", "context", &["pointer_down() -> Bool"], "Whether the left button is held.", Some("input.read"), false),
-        fixed("button", "context", &["button(n: Int) -> Bool"], "Whether button n is held: 0 left, 1 right, 2 middle of a pointer; a pad's from 8 (south, east, west, north, shoulders, thumbs, start, select).", Some("input.read"), false),
-        fixed("stick", "context", &["stick(n: Int) -> Vec2"], "A pad's axis pair: 0 the left stick, 1 the right, 2 the two triggers (x left, y right). Sticks run -1 to 1 with y away from the person, triggers 0 to 1; all zero without a pad.", Some("input.read"), false),
-        fixed("wheel", "context", &["wheel() -> Vec2"], "What the wheel scrolled since the last evaluation, in lines: x sideways, y positive away.", Some("input.read"), false),
-        fixed("key", "context", &["key(code: Int) -> Bool"], "Whether the key with this code is held: letters and digits by uppercase ASCII, arrows 37 to 40, space 32, enter 13, shift 16, escape 27.", Some("input.read"), false),
+        fixed("time", "context", &["time() -> Float"], "The session's time in seconds.", Some(Capability::TimeRead), false),
+        fixed("rate", "context", &["rate() -> Float"], "The sound device's samples per second, zero without one.", Some(Capability::TimeRead), false),
+        fixed("window", "context", &["window() -> Vec2"], "The window's size in physical pixels, zero by zero without one; a node's domain may take it.", Some(Capability::InputRead), false),
+        fixed("scale", "context", &["scale() -> Float"], "The window's physical pixels per logical pixel, one without a window.", Some(Capability::InputRead), false),
+        fixed("pointer", "context", &["pointer() -> Vec2"], "The pointer in the output's pixels from its top left; a player maps its window's into them.", Some(Capability::InputRead), false),
+        fixed("pointer_down", "context", &["pointer_down() -> Bool"], "Whether the left button is held.", Some(Capability::InputRead), false),
+        fixed("button", "context", &["button(n: Int) -> Bool"], "Whether button n is held: 0 left, 1 right, 2 middle of a pointer; a pad's from 8 (south, east, west, north, shoulders, thumbs, start, select).", Some(Capability::InputRead), false),
+        fixed("stick", "context", &["stick(n: Int) -> Vec2"], "A pad's axis pair: 0 the left stick, 1 the right, 2 the two triggers (x left, y right). Sticks run -1 to 1 with y away from the person, triggers 0 to 1; all zero without a pad.", Some(Capability::InputRead), false),
+        fixed("wheel", "context", &["wheel() -> Vec2"], "What the wheel scrolled since the last evaluation, in lines: x sideways, y positive away.", Some(Capability::InputRead), false),
+        fixed("key", "context", &["key(code: Int) -> Bool"], "Whether the key with this code is held: letters and digits by uppercase ASCII, arrows 37 to 40, space 32, enter 13, shift 16, escape 27.", Some(Capability::InputRead), false),
         fixed("vec2", "construction", &["vec2(x: Float, y: Float) -> Vec2", "vec2(x: Int, y: Int) -> Vec2"], "A vector from components, Float or Int (widened), in order; v.xy, v.yx and the like are swizzles.", None, false),
         fixed("vec3", "construction", &["vec3(x: Float, y: Float, z: Float) -> Vec3", "vec3(x: Int, y: Int, z: Int) -> Vec3", "vec3(xy: Vec2, z: Float) -> Vec3", "vec3(x: Float, yz: Vec2) -> Vec3"], "A vector from components, Float, Int (widened) or shorter vectors, in order; v.xyz, v.zyx and the like are swizzles.", None, false),
         fixed("vec4", "construction", &["vec4(x: Float, y: Float, z: Float, w: Float) -> Vec4", "vec4(x: Int, y: Int, z: Int, w: Int) -> Vec4", "vec4(xyz: Vec3, w: Float) -> Vec4", "vec4(xy: Vec2, zw: Vec2) -> Vec4", "vec4(xy: Vec2, z: Float, w: Float) -> Vec4", "vec4(x: Float, yzw: Vec3) -> Vec4"], "A vector from components, Float, Int (widened) or shorter vectors, in order; v.xyz, v.wzyx, c.rgb and the like are swizzles.", None, false),

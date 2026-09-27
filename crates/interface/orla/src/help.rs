@@ -34,6 +34,7 @@ pub fn answer(asked: Option<&str>) -> Result<Json, Json> {
             if let Some(sections) = index["sections"].as_array_mut() {
                 sections.push(json!({
                     "section": COMMANDS,
+                    "under": "doors",
                     "about": "the orla command line",
                     "count": all.len(),
                 }));
@@ -97,12 +98,34 @@ pub fn text(answer: &Json) -> String {
             versions["ir"],
             versions["package"]
         ));
-        for section in sections {
+        // The sections under each surface, then under the doors.
+        for under in answer["under"].as_array().into_iter().flatten() {
+            let name = under["name"].as_str().unwrap_or_default();
             out.push_str(&format!(
-                "  {:<10} {:>4}  {}\n",
-                section["section"].as_str().unwrap_or_default(),
-                section["count"],
-                section["about"].as_str().unwrap_or_default()
+                "{name}: {}\n",
+                under["about"].as_str().unwrap_or_default()
+            ));
+            for section in sections.iter().filter(|s| s["under"] == name) {
+                out.push_str(&format!(
+                    "  {:<10} {:>4}  {}\n",
+                    section["section"].as_str().unwrap_or_default(),
+                    section["count"],
+                    section["about"].as_str().unwrap_or_default()
+                ));
+            }
+        }
+        out.push_str("the loop:\n");
+        for step in answer["workflow"].as_array().into_iter().flatten() {
+            let ops: Vec<&str> = step["ops"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Json::as_str)
+                .collect();
+            out.push_str(&format!(
+                "  {:<10} {}\n",
+                step["step"].as_str().unwrap_or_default(),
+                ops.join(", ")
             ));
         }
         out.push_str(answer["ask"].as_str().unwrap_or_default());
@@ -196,6 +219,18 @@ fn item_text(item: &Json) -> String {
                 ));
             }
             out.push_str(&format!("Answers {}.\n", text("answer")));
+        }
+        "authority" => {
+            out.push_str(&format!("{} (authority)\n{}\n", text("name"), text("doc")));
+            let by: Vec<&str> = item["required_by"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Json::as_str)
+                .collect();
+            if !by.is_empty() {
+                out.push_str(&format!("Needed to call {}.\n", by.join(", ")));
+            }
         }
         COMMANDS => {
             out.push_str(&format!(

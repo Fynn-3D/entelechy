@@ -17,16 +17,17 @@ pub use orla_host::{
     Domain, Encoding, FieldData, Handle, Host, HostError, Image, Pixel, Scalar, Schema, Shape,
 };
 
-/// A named authority a Kernel may declare and be granted.
+/// A named authority a Kernel may declare and be granted; what each
+/// grants is [`Capability::doc`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Capability {
-    /// Read elements and extents of input Fields, images included.
+    /// `field.read`.
     FieldRead,
-    /// Create and write output Fields, images included.
+    /// `field.write`.
     FieldWrite,
-    /// Read the session clock.
+    /// `time.read`.
     TimeRead,
-    /// Read pointer and key state, and the window's pixel size and scale.
+    /// `input.read`.
     InputRead,
 }
 
@@ -46,6 +47,21 @@ impl Capability {
             Self::FieldWrite => "field.write",
             Self::TimeRead => "time.read",
             Self::InputRead => "input.read",
+        }
+    }
+
+    /// What it grants, one sentence: the part of the world a Kernel that
+    /// declares it may touch.
+    pub fn doc(self) -> &'static str {
+        match self {
+            Self::FieldRead => {
+                "Read the elements and extents of the Fields bound to its inputs, images included."
+            }
+            Self::FieldWrite => "Create and write its output Fields, images included.",
+            Self::TimeRead => "Read the session clock and the sound rate.",
+            Self::InputRead => {
+                "Read the pointer, buttons, keys, pad and wheel, and the window's pixel size and scale."
+            }
         }
     }
 }
