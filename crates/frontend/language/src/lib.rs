@@ -56,7 +56,7 @@ use std::fmt;
 use std::ops::Range;
 
 pub use orla_abi::names::{did_you_mean, edit_distance, nearest, suggestion};
-pub use parser::{outline, parse, parse_document, parse_literal};
+pub use parser::{RESERVED, outline, parse, parse_document, parse_literal};
 
 /// The version of the Kernel language and the document format.
 pub const LANGUAGE_VERSION: u32 = 1;

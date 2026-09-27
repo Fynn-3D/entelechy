@@ -201,6 +201,14 @@ fn items() -> Vec<Json> {
             .map(|capability| authority_json(*capability, &builtins)),
     );
     out.extend(orla_compiler::help::forms().iter().map(form_json));
+    // The parser's own table of the words no name may be.
+    out.push(json!({
+        "section": "kernel",
+        "name": "reserved",
+        "kind": "document",
+        "shape": orla_language::RESERVED.join(" "),
+        "doc": "The words the language keeps for itself: a Kernel, node, port, param, function, struct or binding may not be named one.",
+    }));
     out.extend(orla_scene::domain::functions().iter().map(|f| {
         json!({
             "section": "scene",

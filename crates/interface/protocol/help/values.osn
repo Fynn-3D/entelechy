@@ -1,7 +1,7 @@
 //! Values a Kernel computes with: names bound by `let`, choices by `if`
 //! and `match`, truth by `&&`, `||` and `!`, arrays, a struct of its own,
 //! and a function over any type.
-//! shows: let, if, and, match, array, struct, type, fn, element, float, Rows, Float, Int
+//! shows: let, if, and, match, array, struct, type, fn, element, float, Rows, Float, Int, reserved
 struct Step { at: Float; size: Int; }
 type Values = Rows<Float>;
 

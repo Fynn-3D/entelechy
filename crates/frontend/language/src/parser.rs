@@ -2062,7 +2062,8 @@ impl Parser {
 /// function.
 const STARTS_AN_EXPRESSION: [&str; 5] = ["let", "return", "if", "match", "loop"];
 
-const RESERVED: [&str; 25] = [
+/// The words the language keeps for itself: no name may be one.
+pub const RESERVED: [&str; 25] = [
     "let", "return", "if", "else", "match", "loop", "with", "until", "break", "kernel", "struct",
     "type", "node", "use", "from", "input", "output", "memory", "graph", "merge", "scan",
     "scatter", "prefix", "migrate", "package",

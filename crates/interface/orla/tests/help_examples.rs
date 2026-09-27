@@ -51,6 +51,8 @@ fn written(text: &str, section: &str, name: &str) -> bool {
     };
     match (section, name) {
         ("kernel", "and") => text.contains("&&"),
+        // The reserved words are shown by the ones an example writes.
+        ("kernel", "reserved") => orla_language::RESERVED.iter().any(|w| word(w)),
         ("kernel", "array") => text.contains("; 4]") || text.contains("[1.0"),
         ("kernel", "struct") => text.contains("struct "),
         ("kernel", "each") => text.contains("[each "),
