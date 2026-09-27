@@ -1029,19 +1029,21 @@ output result <- tally.result;
         stdout.starts_with("tally (tally.step@1), step 5"),
         "{stdout}"
     );
+    // The first evaluation's step 5: `ram` as the evaluation begins it,
+    // all zeros, which step 1 set to 1 at cell 1.
     for line in [
         "  cell: Int = 1",
-        "  v: Int = 4",
-        "  product: Int = 400 (0x190)",
+        "  v: Int = 2",
+        "  product: Int = 200 (0xC8)",
         "  none: Int = - (not run)",
-        "  big: Int = 400 (0x190)",
+        "  big: Int = 200 (0xC8)",
         "  low: Int = 1",
         "  high: Int = - (not run)",
         "  kind: Int = 1",
         "  call bump<ram> #1",
-        "    doubled: Int = 8",
-        "    -> result: Int = 8",
-        "  -> result: Int = 21 (0x15)",
+        "    doubled: Int = 4",
+        "    -> result: Int = 4",
+        "  -> result: Int = 11",
     ] {
         assert!(stdout.contains(line), "{line:?} in {stdout}");
     }

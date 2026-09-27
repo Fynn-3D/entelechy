@@ -924,7 +924,7 @@ fn trace(args: &[String]) -> Result<(), String> {
     } else {
         format!("element ({}, {})", traced.at[0], traced.at[1])
     };
-    println!("{node} ({kernel}), {place}, as the evaluation after time {time} runs it");
+    println!("{node} ({kernel}), {place}, as the evaluation at time {time} runs it");
     for value in &traced.bindings {
         let shown = if value.ran {
             orla_protocol::words_text(module, value.ty, &value.words)

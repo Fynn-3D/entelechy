@@ -951,23 +951,38 @@ impl Session {
         for source in &pinned {
             self.evaluator.pin(source.clone());
         }
-        let traced = self
-            .evaluate(context)
-            .map_err(|error| error.to_string())
-            .and_then(|_| {
-                let graph = self.scene.graph().ok_or("no scene is loaded")?;
-                observe::trace_element(
-                    graph,
-                    &self.evaluator,
-                    &mut self.runtime,
-                    self.inputs.handles(),
-                    self.scene.params(),
-                    self.kernels.unoptimized(&target.kernel),
-                    (&target, &version),
-                    context,
-                    at,
-                )
-            });
+        // A trial: the node's sources are computed from the state last
+        // committed, and nothing is committed, written or recorded.
+        self.inputs.select_frames(
+            self.scene.store().as_ref(),
+            self.runtime.host_mut(),
+            context.time,
+        );
+        self.repin();
+        let tried = match self.scene.graph() {
+            Some(graph) => self.evaluator.evaluate_trial(
+                graph,
+                &mut self.runtime,
+                self.inputs.handles(),
+                context,
+                self.scene.params(),
+            ),
+            None => Err(no_scene()),
+        };
+        let traced = tried.map_err(|error| error.to_string()).and_then(|_| {
+            let graph = self.scene.graph().ok_or("no scene is loaded")?;
+            observe::trace_element(
+                graph,
+                &self.evaluator,
+                &mut self.runtime,
+                self.inputs.handles(),
+                self.scene.params(),
+                self.kernels.unoptimized(&target.kernel),
+                (&target, &version),
+                context,
+                at,
+            )
+        });
         for source in pinned {
             self.evaluator.unpin(&source);
         }

@@ -380,7 +380,6 @@ impl Scene {
         let mut declarations = String::new();
         match declarations_for(self.store.as_ref(), &base, &document.uses) {
             Ok((structs, types, functions)) => {
-                declarations = declarations_key(&structs, &types, &functions);
                 self.structs = structs.iter().chain(&document.structs).cloned().collect();
                 self.types = types.iter().chain(&document.types).cloned().collect();
                 self.functions = functions
@@ -388,6 +387,9 @@ impl Scene {
                     .chain(&document.functions)
                     .cloned()
                     .collect();
+                // What its Kernels inherit, its own declarations included:
+                // a function it changes recompiles the Kernels that call it.
+                declarations = declarations_key(&self.structs, &self.types, &self.functions);
                 document.inherit(&structs, &types, &functions);
             }
             Err(error) => events.push(Event::Rejected {
@@ -454,8 +456,15 @@ impl Scene {
                     .read_text(&path)
                     .ok()
                     .and_then(|text| orla_language::parse_document(&text).ok())
-                    .and_then(|doc| declarations_for(self.store.as_ref(), &dir, &doc.uses).ok())
-                    .map(|(s, t, f)| declarations_key(&s, &t, &f))
+                    .and_then(|doc| {
+                        let (s, t, f) =
+                            declarations_for(self.store.as_ref(), &dir, &doc.uses).ok()?;
+                        // Its own declarations beside what it uses.
+                        let s: Vec<_> = s.into_iter().chain(doc.structs).collect();
+                        let t: Vec<_> = t.into_iter().chain(doc.types).collect();
+                        let f: Vec<_> = f.into_iter().chain(doc.functions).collect();
+                        Some(declarations_key(&s, &t, &f))
+                    })
                     .unwrap_or_default()
             };
             let staged = kernels.stage_document(

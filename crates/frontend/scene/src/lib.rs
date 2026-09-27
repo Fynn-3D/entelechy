@@ -1434,9 +1434,15 @@ impl Lowering<'_, '_> {
             }
         }
         // A document with nodes, or with nothing at all, is a scene; one
-        // of Kernels alone shows nothing.
-        let a_scene =
-            !document.nodes.is_empty() || (document.kernels.is_empty() && document.uses.is_empty());
+        // of declarations alone (Kernels, functions, structs, types, uses,
+        // a manifest) is a library and shows nothing.
+        let a_scene = !document.nodes.is_empty()
+            || (document.kernels.is_empty()
+                && document.uses.is_empty()
+                && document.functions.is_empty()
+                && document.structs.is_empty()
+                && document.types.is_empty()
+                && document.package.is_none());
         if placement.is_none() && declared_outputs.is_empty() && a_scene {
             return Err(error(
                 Span::default(),
@@ -1884,10 +1890,15 @@ output result <- a.result;
                 "{error}"
             );
         }
-        // A document of Kernels alone is not a scene.
-        assert!(
-            parse("kernel t.k@1 { output result: Image; compute { return vec4(0.0); } }").is_ok()
-        );
+        // A document of declarations alone is a library, not a scene.
+        for library in [
+            "kernel t.k@1 { output result: Image; compute { return vec4(0.0); } }",
+            "fn twice(x: Float) -> Float { return x * 2.0; }",
+            "struct P { x: Float; }",
+            "type Cells = Grid<Int>;",
+        ] {
+            assert!(parse(library).is_ok(), "{library}");
+        }
     }
 
     #[test]

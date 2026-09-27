@@ -355,6 +355,24 @@ impl Evaluator {
         self.evaluate_with(graph, runtime, externals, context, params, None)
     }
 
+    /// Evaluates as [`Evaluator::evaluate`] does and commits nothing: `<~`
+    /// readers keep the state last committed, and the results stay cached
+    /// for reading; runs off the frame are not started.
+    pub fn evaluate_trial(
+        &mut self,
+        graph: &Graph,
+        runtime: &mut Runtime,
+        externals: &BTreeMap<String, Handle>,
+        context: &Context,
+        params: &BTreeMap<String, Value>,
+    ) -> Result<Report, EvaluateError> {
+        self.recover(runtime);
+        self.trial = true;
+        let tried = self.evaluate_with(graph, runtime, externals, context, params, None);
+        self.trial = false;
+        tried
+    }
+
     /// Evaluates only what `demand` needs: the demanded nodes, what they
     /// read through `<-`, every `<~` source, and any output never
     /// produced. Everything else keeps its last value.

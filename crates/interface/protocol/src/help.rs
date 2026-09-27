@@ -322,6 +322,8 @@ pub fn named(name: &str) -> Result<Json, Json> {
     let example = examples()
         .into_iter()
         .find(|example| example.shows().contains(&name));
+    // A scene shown once, on the first item it proves.
+    let mut shown = false;
     let found: Vec<Json> = all
         .iter()
         .filter(|item| item["name"] == name)
@@ -331,8 +333,9 @@ pub fn named(name: &str) -> Result<Json, Json> {
                 item["section"].as_str(),
                 Some("types" | "builtins" | "kernel" | "scene" | "authority")
             );
-            if let (true, Some(example)) = (proved, &example) {
+            if let (true, false, Some(example)) = (proved, shown, &example) {
                 item["example"] = json!({ "file": example.file, "text": example.text });
+                shown = true;
             }
             if item["section"] == "protocol"
                 && let Some(scenario) = scenarios().into_iter().find(|s| s["op"] == name)
