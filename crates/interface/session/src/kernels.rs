@@ -427,6 +427,21 @@ impl Kernels {
         let mut items = Vec::new();
         let mut failed = false;
         for Defined { id, text, kernel } in defined {
+            // A graph placed more than once defines its Kernels once.
+            match kernels.get(&id) {
+                Some(seen) if *seen == text => continue,
+                Some(_) => {
+                    events.push(Event::Rejected {
+                        path: path.to_path_buf(),
+                        error: Diagnostic::new(format!(
+                            "{id} is defined twice, differently; kernel ids are unique"
+                        )),
+                    });
+                    failed = true;
+                    continue;
+                }
+                None => {}
+            }
             asts.insert(id.clone(), kernel.clone());
             if let Some(owner) = self.owners.get(&id)
                 && owner != path

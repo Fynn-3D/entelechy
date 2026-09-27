@@ -79,3 +79,47 @@ fn a_placed_graphs_output_is_named_as_its_placing_graph_names_it() {
     assert!(dir.join("quad.field").exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A graph whose Kernel is written in place, placed twice and placed
+/// `times` over, defines that Kernel once.
+#[test]
+fn a_graph_placed_more_than_once_defines_its_inline_kernel_once() {
+    let dir = std::env::temp_dir().join(format!("orla-placed-twice-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("inc.osn"),
+        "input value: Rows<Float>;
+node plus: kernel {
+    requires { field.read; field.write; }
+    input v: Rows<Float> <- value;
+    output result: Rows<Float>;
+    compute { return sample(v) + 1.0; }
+}
+output result <- plus.result;
+",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.osn"),
+        "node seed: Rows<Float> { domain = 2; value = 1.0; }
+node a: graph \"inc.osn\" { value <- seed.result; }
+node b: graph \"inc.osn\" { value <- a.result; }
+node c: graph \"inc.osn\" { times = 2; carry value <- result; value <- b.result; }
+output result <- c.result;
+",
+    )
+    .unwrap();
+    let mut session = Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    let events = session.sync();
+    assert!(session.graph().is_some(), "{events:?}");
+    session.evaluate(&Context::default()).unwrap();
+    let output = session.output(None).unwrap();
+    let words = session.field(output).unwrap().values().into_owned();
+    assert_eq!(
+        f32::from_bits(words[0]),
+        5.0,
+        "four placements, each adding one"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

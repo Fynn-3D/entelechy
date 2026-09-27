@@ -492,6 +492,14 @@ impl Place<'_> {
     }
 
     /// A value before any override.
+    /// The default the document declares for its param `name`.
+    fn declared(&self, name: &str) -> Option<Value> {
+        self.params
+            .iter()
+            .find(|p| p.name == name)
+            .map(|p| p.default.clone())
+    }
+
     fn default_of(&self, value: &ParamValue) -> Value {
         match value {
             ParamValue::Literal(v) => v.clone(),
@@ -1247,13 +1255,17 @@ impl Lowering<'_, '_> {
                         domain = Some(domain_spec(expr)?);
                     }
                     // Param defaults that name a graph param become node
-                    // values; the compiled Kernel keeps a literal default.
+                    // values; the compiled Kernel keeps a literal default,
+                    // the graph param's as declared, so its text is the
+                    // same wherever the graph is placed.
                     let mut compiled = (**kernel).clone();
                     let mut edits = Vec::new();
                     for param in &mut compiled.params {
-                        if let ExprKind::Name(_) = &param.default.kind {
+                        if let ExprKind::Name(written) = &param.default.kind {
                             let value = place.value(&param.default)?;
-                            let literal = place.default_of(&value);
+                            let literal = place
+                                .declared(written)
+                                .unwrap_or_else(|| place.default_of(&value));
                             edits.push((param.default_range.clone(), literal.to_string()));
                             param.default = literal_expr(literal, param.default.span);
                             node_params.insert(param.name.value.clone(), value);
