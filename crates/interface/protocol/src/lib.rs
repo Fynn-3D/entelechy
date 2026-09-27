@@ -382,7 +382,8 @@ mod tests {
     }
 
     /// What a document renders between `<!-- rendered: <what> -->` and
-    /// `<!-- end -->`: the loop an agent works in, or a canonical example
+    /// `<!-- end -->`: the loop an agent works in, the wire, the whole
+    /// reference `help` answers with `full`, or a canonical example
     /// (`help/<file>`) as a code block of its language.
     fn rendering(what: &str) -> Option<String> {
         if what == "workflow" {
@@ -390,6 +391,9 @@ mod tests {
         }
         if what == "wire" {
             return Some(crate::envelope::table());
+        }
+        if what == "reference" {
+            return Some(crate::help::reference());
         }
         let file = what.strip_prefix("help/")?;
         let example = crate::help::examples()

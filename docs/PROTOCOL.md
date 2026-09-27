@@ -426,7 +426,8 @@ in three steps, each answer small:
   answer holds for.
 - `{"op": "help", "full": true}`: all of it at once, `reference`, one
   Markdown text of every item and every canonical example, for an agent
-  to read once before it starts.
+  to read once before it starts; [REFERENCE](REFERENCE.md) is the same
+  text.
 - `{"op": "help", "section": "replay"}`: each item's `name` and one `line`.
 - `{"op": "help", "name": "window"}`: every item of that name in full, in
   `found`, each with its `section`: a builtin's signatures, `requires` and

@@ -2,6 +2,9 @@
 
 **Answers:** how a Kernel and a scene are written.
 
+Every type, builtin, rule and canonical example, at once:
+[REFERENCE](REFERENCE.md).
+
 Two file roles share one grammar, one lexer, and one literal syntax.
 
 - **`.orla` is a Kernel library.** It holds `kernel` items and the

@@ -160,6 +160,7 @@ in the browser on WebAssembly and WebGPU.
 | --- | --- |
 | The architecture and its boundaries | [CORE-ARCHITECTURE](CORE-ARCHITECTURE.md), [ARCHITECTURE-PLAN](ARCHITECTURE-PLAN.md) |
 | Why one resource | [Typed Fields](docs/TYPED-FIELD-ARCHITECTURE.md) |
+| Everything a Kernel, a scene and an agent may write, at once | [Reference](docs/REFERENCE.md) |
 | How a Kernel or a scene is written | [Documents](docs/DOCUMENTS.md) |
 | What an agent sends | [Protocol](docs/PROTOCOL.md) |
 | Which command does what | [Usage](docs/USAGE.md) |
