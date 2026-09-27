@@ -459,7 +459,7 @@ pub fn forms() -> Vec<Form> {
         form(
             "node",
             "graph",
-            "node name: kernel.id@1 { port <- source.result; param = 2; domain = vec2(w, h); }",
+            "node name: fx.glow@1 { port <- source.result; param = 2; domain = vec2(w, h); }",
             "A node runs a Kernel: its inputs wired at the consumer, its parameters set, its extent explicit or the first input's.",
         ),
         form(
@@ -477,7 +477,7 @@ pub fn forms() -> Vec<Form> {
         form(
             "graph",
             "graph",
-            "node name: graph \"other.osn\" { input <- src; param = 2; }",
+            "node name: graph \"other.osn\" { source <- src; param = 2; }",
             "Another document placed as a node: its nodes join under `name.`, its inputs take the wiring, its outputs are read as `name.output`.",
         ),
         form(

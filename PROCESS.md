@@ -42,6 +42,12 @@ version*. When the language's surface grows, record it with
 syntax grows, add a document to `crates/frontend/scene/tests/surface/`
 and record it with `ORLA_BLESS=1 cargo test -p orla-scene --test surface`.
 
+What an agent trial finds wanting is recorded, once fixed, as data in
+`crates/interface/orla/tests/findings/`: the request, and what its answer
+must hold. A fix follows the rule's existing owner, and changes every
+place that consumes it, the bridges and documents included; the findings
+already recorded hold it to not breaking what was fixed before.
+
 ## Comments and documents
 
 A comment or a document states present facts: what a thing is, who owns

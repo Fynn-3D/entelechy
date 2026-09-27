@@ -713,7 +713,7 @@ form fill
 form fn
   fn name(a: Float) -> Float { ... }   fn name<T>(a: T) -> T { ... }
 form graph
-  node name: graph "other.osn" { input <- src; param = 2; }
+  node name: graph "other.osn" { source <- src; param = 2; }
 form if
   if condition { a } else { b }   if condition { return a; }
 form inline
@@ -733,7 +733,7 @@ form memory
 form merge
   compute { ... } merge(a, b) { ... }
 form node
-  node name: kernel.id@1 { port <- source.result; param = 2; domain = vec2(w, h); }
+  node name: fx.glow@1 { port <- source.result; param = 2; domain = vec2(w, h); }
 form output
   output result: Grid<Vec4>;   output shown <- node.port;   output kept <- node.port to "saves/n.field";
 form package
