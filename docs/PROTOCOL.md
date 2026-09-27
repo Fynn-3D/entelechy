@@ -84,9 +84,6 @@ through:
 | `retire` | `kernel`?: string | retired |
 | `param` | `name`: string, `value`: value | name, value, events; a node's own value is refused, and changes by `compose` |
 | `evaluate` | `nodes`?: [string], `settle`?: bool, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | executed, reused, committed, outputs |
-| `advance` | `frames`: integer, `fps`?: number, `until`?: {target: string, below?: number, above?: number, equals?: number}, `save`?: {node.port: string}, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | frames, stopped, target, value, saved, millis, report |
-| `bench` | `frames`?: integer, `fps`?: number, `repeat`?: integer, `nodes`?: bool, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | backend, frames, repeat, best_ms, median_ms, nodes, ran |
-| `window` | `size`?: [w, h] \| null, `scale`?: number | the window |
 | `read` | `output`?: string, `node`?: string, `port`?: string, `format`?: "png" \| "rgba32f" \| "ppm" \| "summary" \| "words" \| "field", `from`?: integer, `count`?: integer | a picture: width, height, format, data (base64). Any other Field: shape, extent, count, schema, and its summary (each number's min, max, sum, mean, how many were not zero, and how many were not finite), or `values` from `from` (a number, or a list for an element of several), or format and data (base64) |
 | `write` | `node`: string, `port`?: string, `data`: string, `format`?: "words" \| "field" | the state replaced |
 | `snapshot` | `to`?: string | the world's revision and frame (the frames committed since it), every Kernel with its generation and source, every port's committed state; or the file written |
@@ -233,10 +230,10 @@ same way (a `Double` as the number that reads back as it, a `Long` past
 absent), `pointer`, `down`, `buttons` (held, by number: 0 left, 1
 right, 2 middle), `wheel` (scrolled since the last evaluation), `keys`,
 `window` (`[w, h]` in pixels) and `scale` (one when absent). An
-evaluation naming no window sees the session's, set by the `window` op
-(`size` as `[w, h]`, `scale`; `size` null for none) or `orla serve
---window <w>x<h>[@<scale>]`, and none otherwise. Inside the Player the
-window is the person's and these two are ignored.
+evaluation naming no window sees the one `orla serve --window
+<w>x<h>[@<scale>]` gave, and none otherwise. Inside the Player the
+window is the person's and these two are ignored. Many frames are many
+evaluations, each at its own `time`.
 
 - `nodes`: evaluate only those nodes, what they read, the state (which
   must advance), and any output never produced; the rest keeps its last
@@ -258,34 +255,6 @@ An evaluation's report carries:
 
 A failed evaluation names its `node` when the failure is one node's; a
 failed migration names its `port` and `migration` too.
-
-`advance` runs `frames` (1 to 100000) at `fps` (60 by default) from
-`time`, with the rest of `evaluate`'s context held and `async` nodes
-settled after each frame.
-
-- `until`, `{target, below | above | equals}`, stops when the value says
-  so; `target` is `node.port[index].field` (a struct field by name, a
-  vector component by letter), as a replay writes it; the value is a
-  Float, Int or Bool.
-- `save`, an object of `node.port` to a file path (relative to the
-  scene), writes those outputs when the run stops, by `run --save`'s
-  rules, only into a `--allow file.write` directory; a path outside one
-  is refused before any frame runs.
-- Only what `until` and `save` name is materialized; with neither, the
-  whole scene runs.
-- The answer: `frames` (how many ran), `stopped` (`"frames"` or
-  `"until"`), `target`, `value` (last seen), `saved`, `millis`, and
-  `report` (the last frame's). A failure says `frame`.
-
-`bench` runs `frames` (30 by default) at `fps` (60), `repeat` times (3),
-and reports the least, as `orla bench` does; `frames` times `repeat` is
-at most 100000. The first frame is discarded. With `nodes: true`, one
-more run times every node, the device waited for after each; a node
-placed several times is one line. The answer: `backend`, `frames`,
-`repeat`, `best_ms`, `median_ms`, `nodes` (each `{node, ms, backend,
-routed, uploaded, downloaded}`, costliest first), and `ran`, false when
-the scene does not change with the clock and every node was reused after
-the first frame. The clock advances as in `advance`.
 
 `trace` runs one element of a node on the interpreter, compiled without
 the optimizer so calls and `let`s are the source's. It takes `node`, and

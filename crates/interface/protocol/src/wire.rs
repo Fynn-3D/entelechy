@@ -8,7 +8,7 @@ use serde_json::{Value as Json, json};
 
 use orla_session::{Event, Session};
 
-/// The context an `evaluate`, `advance` or `trace` request describes:
+/// The context an `evaluate`, `trace` or `restore` request describes:
 /// time, rate, pointer, buttons, wheel, sticks, keys, and the window.
 pub fn context_of(session: &Session, request: &Json) -> Context {
     let number_at = |list: &Vec<Json>, index: usize| {

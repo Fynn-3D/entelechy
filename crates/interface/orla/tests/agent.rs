@@ -393,15 +393,13 @@ fn an_agent_changes_what_a_running_state_carries_and_keeps_it() {
         .collect();
     assert_eq!(names, ["count"], "{result}");
 
-    // Run until the count passes four.
-    let target = format!("{node}.result[0].{}", names[0]);
-    let ran = agent
-        .ask(
-            "advance",
-            json!({ "frames": 100, "until": { "target": target, "above": 4 } }),
-        )
-        .unwrap();
-    assert_eq!(ran["stopped"], "until", "{ran}");
+    // Run frame by frame until the count passes four.
+    for _ in 0..100 {
+        agent.ask("evaluate", json!({ "time": 0.0 })).unwrap();
+        if agent.state(&node).1[0] > 4 {
+            break;
+        }
+    }
     let (layout, words) = agent.state(&node);
     assert_eq!((layout.as_str(), words.as_slice()), ("i", &[5][..]));
 
@@ -488,7 +486,9 @@ fn an_agent_changes_what_a_running_state_carries_and_keeps_it() {
     // The count went on from where it was, and carries its double.
     let (layout, words) = agent.state(&node);
     assert_eq!((layout.as_str(), words.as_slice()), ("i,i", &[6, 12][..]));
-    agent.ask("advance", json!({ "frames": 3 })).unwrap();
+    for _ in 0..3 {
+        agent.ask("evaluate", json!({ "time": 0.0 })).unwrap();
+    }
     let (_, words) = agent.state(&node);
     assert_eq!(words, [9, 18]);
     let _ = std::fs::remove_dir_all(scene.parent().unwrap());

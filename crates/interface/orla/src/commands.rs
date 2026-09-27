@@ -438,7 +438,7 @@ line on stdout, and on every connection to --listen, where a client's
 quit ends only its connection. A browser's page connects from this
 machine or from a file; a page elsewhere only from an origin
 --allow-origin names (`https://host:port`). --window is what evaluations that name
-no window see (the protocol's `window` op changes it). See
+no window see. See
 docs/PROTOCOL.md.",
             flags: with(
                 vec![

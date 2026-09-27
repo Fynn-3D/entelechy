@@ -171,20 +171,6 @@ impl Ty {
     }
 }
 
-/// `advance`'s `until`: a value to watch and a bound on it.
-fn until() -> Ty {
-    Ty::Record(vec![
-        needs(
-            "target",
-            Ty::Str,
-            "the value watched: `node.port[i]`, or `.field` of it",
-        ),
-        may("below", Ty::Num, "stop once it is below this"),
-        may("above", Ty::Num, "stop once it is above this"),
-        may("equals", Ty::Num, "stop once it equals this"),
-    ])
-}
-
 /// One of `compose`'s `edits`: a statement by its kind and name, or a
 /// node's member, and its new text.
 fn edit() -> Ty {
@@ -446,53 +432,6 @@ pub fn operations() -> Vec<Operation> {
                 ),
             ]),
             "executed, reused, committed, outputs",
-        ),
-        op(
-            "advance",
-            "Runs many frames, until a count or a value says to stop.",
-            with_context(vec![
-                needs("frames", Ty::Int, "the most frames to run"),
-                may(
-                    "fps",
-                    Ty::Num,
-                    "the clock's frames a second; 60 when not given",
-                ),
-                may(
-                    "until",
-                    until(),
-                    "stops when `node.port[i]`, or `.field` of it, passes the bound",
-                ),
-                may(
-                    "save",
-                    Ty::Map("node.port", Box::new(Ty::Str)),
-                    "files written after the last frame, where `--allow file.write` allows",
-                ),
-            ]),
-            "frames, stopped, target, value, saved, millis, report",
-        ),
-        op(
-            "bench",
-            "Times the scene's frames.",
-            with_context(vec![
-                may("frames", Ty::Int, "frames a run; 30 when not given"),
-                may("fps", Ty::Num, "the clock's frames a second"),
-                may("repeat", Ty::Int, "runs, the least kept; 3 when not given"),
-                may("nodes", Ty::Bool, "time every node too"),
-            ]),
-            "backend, frames, repeat, best_ms, median_ms, nodes, ran",
-        ),
-        op(
-            "window",
-            "Sets the window a headless session reports to evaluations that name none.",
-            vec![
-                may(
-                    "size",
-                    Ty::Either(vec![Ty::Numbers(&["w", "h"]), Ty::Null]),
-                    "in pixels; null for none",
-                ),
-                may("scale", Ty::Num, "the scale factor; 1 when not given"),
-            ],
-            "the window",
         ),
         op(
             "read",

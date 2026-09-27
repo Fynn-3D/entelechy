@@ -696,28 +696,22 @@ output result <- fill.result;
         &dir.join("window.osn"),
         &[
             json!({ "id": 1, "op": "evaluate", "time": 0.0 }),
-            json!({ "id": 2, "op": "window", "size": [8, 4], "scale": 2 }),
-            json!({ "id": 3, "op": "evaluate", "time": 0.1 }),
-            json!({ "id": 4, "op": "read", "format": "rgba32f" }),
-            json!({ "id": 5, "op": "evaluate", "time": 0.2, "window": [6, 3] }),
-            json!({ "id": 6, "op": "window", "size": null }),
-            json!({ "id": 7, "op": "evaluate", "time": 0.3 }),
-            json!({ "id": 8, "op": "window", "size": [0, 4] }),
+            json!({ "id": 2, "op": "evaluate", "time": 0.1, "window": [8, 4], "scale": 2 }),
+            json!({ "id": 3, "op": "read", "format": "rgba32f" }),
+            json!({ "id": 4, "op": "evaluate", "time": 0.2, "window": [6, 3] }),
+            json!({ "id": 5, "op": "evaluate", "time": 0.3 }),
         ],
     );
-    assert!(
-        responses[0]["error"]["message"]
+    let no_window = |at: usize| {
+        responses[at]["error"]["message"]
             .as_str()
-            .unwrap()
-            .contains("no window"),
-        "{}",
-        responses[0]
-    );
-    assert_eq!(responses[1]["ok"]["window"], json!([8.0, 4.0]));
-    assert_eq!(responses[2]["ok"]["outputs"][0]["width"], 8);
-    assert_eq!(responses[2]["ok"]["outputs"][0]["height"], 4);
+            .is_some_and(|m| m.contains("no window"))
+    };
+    assert!(no_window(0), "{}", responses[0]);
+    assert_eq!(responses[1]["ok"]["outputs"][0]["width"], 8);
+    assert_eq!(responses[1]["ok"]["outputs"][0]["height"], 4);
     let bytes = {
-        let data = responses[3]["ok"]["data"].as_str().unwrap();
+        let data = responses[2]["ok"]["data"].as_str().unwrap();
         orla_formats::base64::unbase64(data).unwrap()
     };
     let first = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
@@ -727,22 +721,9 @@ output result <- fill.result;
         (0.08, 2.0),
         "window() and scale() reach the Kernel"
     );
-    // A request's window wins over the session's; without one, the scene
-    // cannot be sized again.
-    assert_eq!(responses[4]["ok"]["outputs"][0]["width"], 6);
-    assert_eq!(responses[5]["ok"]["window"], Json::Null);
-    assert!(
-        responses[6]["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("no window")
-    );
-    assert!(
-        responses[7]["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("at least one")
-    );
+    // Each evaluation names its window; one that names none has none.
+    assert_eq!(responses[3]["ok"]["outputs"][0]["width"], 6);
+    assert!(no_window(4), "{}", responses[4]);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -868,7 +849,7 @@ fn help_answers_the_reference_or_a_name() {
         .iter()
         .map(|item| item["section"].as_str().unwrap())
         .collect();
-    assert_eq!(window, ["builtins", "scene", "protocol", "replay"]);
+    assert_eq!(window, ["builtins", "scene", "replay"]);
     let publish = &responses[5]["ok"]["found"][0];
     assert_eq!(publish["fields"][0]["name"], "source");
     assert_eq!(publish["fields"][0]["required"], true);
@@ -1127,146 +1108,6 @@ fn an_agent_changes_a_running_states_layout_and_the_state_is_carried_over() {
     assert_eq!(ok(17)["bye"], true);
 }
 
-/// `advance` also saves what was asked, and reports.
-#[test]
-fn advance_runs_many_frames_and_stops_when_a_value_says_to() {
-    let dir = std::env::temp_dir().join(format!("orla-protocol-advance-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("scene.osn"),
-        "node zero: Rows<Int> { domain = 1; }\n\
-         node tally: kernel {\n\
-             requires { field.read; field.write; }\n\
-             input previous: Rows<Int> <~ tally.result from zero.result;\n\
-             output result: Rows<Int>;\n\
-             domain = 1;\n\
-             compute { return at(previous, 0) + 1; }\n\
-         }\n\
-         node view: kernel {\n\
-             requires { field.read; field.write; }\n\
-             input count: Rows<Int> <- tally.result;\n\
-             output result: Image;\n\
-             domain = vec2(4, 4);\n\
-             compute { let c = float(at(count, 0)) / 255.0; return vec4(c, c, c, 1.0); }\n\
-         }\n\
-         output result <- view.result;\n\
-         output count <- tally.result;\n",
-    )
-    .unwrap();
-    let kept = dir.join("count.field");
-    let allow = format!("file.write={}", dir.display());
-    let responses = talk_with(
-        &dir.join("scene.osn"),
-        &["--allow", &allow],
-        &[
-            json!({ "id": 1, "op": "advance", "frames": 500,
-                    "until": { "target": "tally.result[0]", "above": 41.5 },
-                    "save": { "tally.result": "count.field" } }),
-            json!({ "id": 2, "op": "advance", "frames": 3 }),
-            json!({ "id": 3, "op": "advance", "frames": 0 }),
-            json!({ "id": 4, "op": "advance", "frames": 2,
-                    "until": { "target": "tally.result[0]", "over": 9 } }),
-        ],
-    );
-    let run = &responses[0]["ok"];
-    assert_eq!(run["stopped"], "until");
-    assert_eq!(run["frames"], 42, "one frame per count: {run}");
-    assert_eq!(run["value"], 42.0);
-    assert_eq!(run["target"], "tally.result[0]");
-    assert!(run["millis"].as_f64().unwrap() > 0.0);
-    // Only what the run watched is materialized; the picture does not run.
-    let executed = run["report"]["executed"].as_array().unwrap();
-    assert!(executed.iter().any(|node| node == "tally"), "{run}");
-    assert!(!executed.iter().any(|node| node == "view"), "{run}");
-    let saved = run["saved"].as_array().unwrap();
-    assert_eq!(saved.len(), 1);
-    assert!(kept.exists(), "{saved:?}");
-    assert!(std::fs::read(&kept).unwrap().len() > 8);
-    // Without `until`, it runs the given count, and the whole scene runs.
-    let plain = &responses[1]["ok"];
-    assert_eq!(plain["stopped"], "frames");
-    assert_eq!(plain["frames"], 3);
-    assert!(plain["value"].is_null());
-    assert!(
-        plain["report"]["executed"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|node| node == "view")
-    );
-    assert!(
-        responses[2]["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("frames"),
-        "{:?}",
-        responses[2]
-    );
-    assert!(
-        responses[3]["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("`over` is none of its fields"),
-        "{:?}",
-        responses[3]
-    );
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// `bench` reports the least of several runs and each node's cost; the
-/// clock advances as under `advance`.
-#[test]
-fn an_agent_can_measure_the_scene_it_is_holding() {
-    let dir = scratch_in("-measure");
-    let responses = talk(
-        &dir.join("scene.osn"),
-        &[
-            json!({ "id": 1, "op": "bench", "frames": 4, "repeat": 2, "nodes": true }),
-            json!({ "id": 2, "op": "bench", "frames": 0 }),
-            json!({ "id": 3, "op": "bench", "frames": 100000, "repeat": 4 }),
-            // A product that overflows 64 bits is too many.
-            json!({ "id": 4, "op": "bench", "frames": 1001u64, "repeat": 17_285_760_180_958_600_815u64 }),
-            json!({ "id": 5, "op": "quit" }),
-        ],
-    );
-    let measured = &responses[0]["ok"];
-    assert_eq!(measured["frames"], 4, "{}", responses[0]);
-    assert_eq!(measured["repeat"], 2);
-    assert_eq!(measured["ran"], true);
-    assert!(measured["best_ms"].as_f64().unwrap() > 0.0);
-    assert!(measured["median_ms"].as_f64().unwrap() >= measured["best_ms"].as_f64().unwrap());
-    let nodes = measured["nodes"].as_array().unwrap();
-    assert_eq!(nodes.len(), 2, "{measured}");
-    assert!(nodes[0]["ms"].as_f64().unwrap() >= nodes[1]["ms"].as_f64().unwrap());
-
-    assert!(
-        responses[1]["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("whole number"),
-        "{}",
-        responses[1]
-    );
-    assert!(
-        responses[2]["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("at most"),
-        "{}",
-        responses[2]
-    );
-    assert!(
-        responses[3]["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("at most"),
-        "{}",
-        responses[3]
-    );
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 /// `pin` refuses a name that is not a node.
 #[test]
 fn a_name_that_is_not_a_node_is_refused_by_the_op_that_takes_it() {
@@ -1341,48 +1182,6 @@ fn a_matrix_or_a_struct_parameter_crosses_the_protocol_as_arrays() {
     let style = params.iter().find(|p| p["name"] == "style").unwrap();
     assert_eq!(style["type"], "Style");
     assert_eq!(style["value"][2], json!(2.0));
-}
-
-/// Outside the allowance, nothing is written and nothing runs.
-#[test]
-fn advance_saves_only_where_writes_are_allowed() {
-    let dir = scratch_in("-save-allowed");
-    let saves = dir.join("saves");
-    std::fs::create_dir_all(&saves).unwrap();
-    let outside = dir.join("outside.field");
-    let inside = saves.join("cells.field");
-    let escape = saves.join("../outside.field");
-    let request = |id: u32, path: &Path| {
-        json!({ "id": id, "op": "advance", "frames": 1,
-                "save": { "life.result": path.display().to_string() } })
-    };
-    let closed = talk(&dir.join("scene.osn"), &[request(1, &inside)]);
-    let why = closed[0]["error"]["message"].as_str().unwrap_or_default();
-    assert!(why.contains("--allow file.write"), "{}", closed[0]);
-    assert!(!inside.exists());
-
-    let allow = format!("file.write={}", saves.display());
-    let open = talk_with(
-        &dir.join("scene.osn"),
-        &["--allow", &allow],
-        &[
-            request(1, &outside),
-            request(2, &escape),
-            request(3, &inside),
-        ],
-    );
-    for refused in &open[..2] {
-        let why = refused["error"]["message"].as_str().unwrap_or_default();
-        assert!(why.contains("outside every directory"), "{refused}");
-    }
-    assert!(!outside.exists());
-    assert_eq!(
-        open[2]["ok"]["saved"].as_array().unwrap().len(),
-        1,
-        "{}",
-        open[2]
-    );
-    assert!(inside.exists());
 }
 
 /// A text that would be rejected never reaches the disk; with `expect`, a
@@ -2377,16 +2176,19 @@ output b <- b.result;
     let responses = talk(
         &scene,
         &[
-            json!({ "id": 1, "op": "advance", "frames": 3 }),
-            json!({ "id": 2, "op": "reset", "node": "a" }),
+            // Three frames, each an evaluation.
+            json!({ "id": 1, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 2, "op": "evaluate", "time": 0.0 }),
             json!({ "id": 3, "op": "evaluate", "time": 0.0 }),
-            json!({ "id": 4, "op": "read", "node": "a" , "format": "words" }),
-            json!({ "id": 5, "op": "read", "node": "b" , "format": "words" }),
-            json!({ "id": 6, "op": "reset", "node": "seed" }),
-            json!({ "id": 7, "op": "reset", "port": "result" }),
-            json!({ "id": 8, "op": "reset", "node": "a", "port": 3 }),
-            json!({ "id": 9, "op": "reset" }),
-            json!({ "id": 10, "op": "history" }),
+            json!({ "id": 4, "op": "reset", "node": "a" }),
+            json!({ "id": 5, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 6, "op": "read", "node": "a" , "format": "words" }),
+            json!({ "id": 7, "op": "read", "node": "b" , "format": "words" }),
+            json!({ "id": 8, "op": "reset", "node": "seed" }),
+            json!({ "id": 9, "op": "reset", "port": "result" }),
+            json!({ "id": 10, "op": "reset", "node": "a", "port": 3 }),
+            json!({ "id": 11, "op": "reset" }),
+            json!({ "id": 12, "op": "history" }),
         ],
     );
     let ok = |i: usize| -> &Json {
@@ -2399,23 +2201,23 @@ output b <- b.result;
             .unwrap_or_else(|| panic!("{}", responses[i]))
     };
     assert_eq!(
-        ok(1),
+        ok(3),
         &json!({ "reset": true, "node": "a", "port": "result" })
     );
     let value = |i: usize| {
         let bytes = orla_formats::base64::unbase64(ok(i)["data"].as_str().unwrap()).unwrap();
         f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
     };
-    assert_eq!((value(3), value(4)), (1.0, 4.0), "a again, b on");
-    assert!(failed(5).contains("is not state"), "{}", failed(5));
-    assert!(failed(6).contains("name the node"), "{}", failed(6));
+    assert_eq!((value(5), value(6)), (1.0, 4.0), "a again, b on");
+    assert!(failed(7).contains("is not state"), "{}", failed(7));
+    assert!(failed(8).contains("name the node"), "{}", failed(8));
     assert!(
-        failed(7).contains("`port` is string, not 3"),
+        failed(9).contains("`port` is string, not 3"),
         "{}",
-        failed(7)
+        failed(9)
     );
-    assert_eq!(ok(8), &json!({ "reset": true }));
-    let changes = ok(9)["changes"].as_array().unwrap();
+    assert_eq!(ok(10), &json!({ "reset": true }));
+    let changes = ok(11)["changes"].as_array().unwrap();
     let resets: Vec<&Json> = changes.iter().filter(|c| c["kind"] == "reset").collect();
     assert_eq!(
         resets.len(),

@@ -74,7 +74,7 @@ pub fn respond_line(session: &mut Session, line: &str) -> (String, bool) {
 }
 
 /// The operations that run or read the scene.
-const RUNS_THE_SCENE: [&str; 6] = ["evaluate", "advance", "bench", "read", "write", "trace"];
+const RUNS_THE_SCENE: [&str; 4] = ["evaluate", "read", "write", "trace"];
 
 /// Handles one request by the function for the operation it names.
 pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
@@ -105,10 +105,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         "retire" => create::retire(session, &request),
         "param" => create::param(session, &request),
         "evaluate" => run::evaluate(session, &request),
-        "advance" => run::advance(session, &request),
-        "bench" => run::bench(session, &request),
         "reset" => run::reset(session, &request),
-        "window" => run::window(session, &request),
         "read" => fields::read(session, &request),
         "snapshot" => fields::snapshot(session, &request),
         "restore" => fields::restore(session, &request),
@@ -249,8 +246,8 @@ mod tests {
                 .contains("`keys[1]` is integer")
         );
         assert!(
-            refused(json!({ "op": "advance", "frames": 2, "until": { "target": 3 } }))
-                .contains("`until.target` is string")
+            refused(json!({ "op": "compose", "edits": [{ "node": 3, "text": null }] }))
+                .contains("`edits[0].node` is string")
         );
         // The type is the operation's to take further: a wrong one never
         // reaches it.

@@ -275,10 +275,9 @@ fn a_live_session_survives_mutated_scenes_and_requests() {
     let mut rng = Rng::new(0x5e55);
     let mut failures = Vec::new();
     let ops = [
-        "status", "kernels", "graph", "document", "evaluate", "read", "advance", "trace", "help",
-        "compose", "publish", "prepare", "retire", "param", "write", "reset", "sync", "nonsense",
+        "status", "kernels", "graph", "document", "evaluate", "read", "trace", "help", "compose",
+        "publish", "prepare", "retire", "param", "write", "reset", "sync", "nonsense",
     ];
-    // `bench` is excluded: its runs are long by design in a debug build.
     for case in 0..count() / 3 {
         let which = rng.below(scenes.len() as u64) as usize;
         let base = &scenes[which];

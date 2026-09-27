@@ -503,9 +503,9 @@ when none is named (`best`: the GPU, else the JIT, else the interpreter,
 the ones passed over said), every command's session flags
 (`SessionOptions`, `graph` too), and what checking a document finds
 (`check_document`, through the store). Each interface drives its own
-frames (a replay at its written times, a window at its clock, `advance`
-at a rate until a value says stop, `render` at a fixed rate); what a
-frame is, `Session::evaluate`, is one.
+frames (a replay at its written times, a window at its clock, an agent
+at the times it sends, `render` at a fixed rate); what a frame is,
+`Session::evaluate`, is one.
 
 **Why.** ARCHITECTURE-PLAN §34: interfaces are many, and "all of them
 operate on the same underlying Runtime". A display, keys and a sound
