@@ -277,6 +277,85 @@ pub fn index() -> Json {
     })
 }
 
+/// Everything help answers as one Markdown text, for an agent to read
+/// once: the loop, then each section under its surface or door, an item a
+/// line or two, then every canonical example whole, each once.
+pub fn reference() -> String {
+    let all = items();
+    let text = |item: &Json, key: &str| item[key].as_str().unwrap_or_default().to_owned();
+    let mut out = String::from(
+        "# Orla\n\nKernels (`.orla`) compute; scenes (`.osn`) compose them into a running world.\n\n## The loop\n\n",
+    );
+    for step in &crate::workflow::WORKFLOW {
+        let ops: Vec<String> = step.ops.iter().map(|op| format!("`{op}`")).collect();
+        out.push_str(&format!(
+            "- {} ({}): {}\n",
+            step.name,
+            ops.join(", "),
+            step.about
+        ));
+    }
+    for (under, about) in UNDER {
+        out.push_str(&format!("\n## {under}: {about}\n"));
+        for (section, _, what) in SECTIONS.iter().filter(|(_, u, _)| *u == under) {
+            out.push_str(&format!("\n### {section}: {what}\n\n"));
+            for item in all.iter().filter(|item| item["section"] == *section) {
+                let name = text(item, "name");
+                let line = match *section {
+                    "builtins" => {
+                        let signatures: Vec<&str> = item["signatures"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Json::as_str)
+                            .collect();
+                        let needs = item["requires"]
+                            .as_str()
+                            .map(|c| format!(" Needs `{c}`."))
+                            .unwrap_or_default();
+                        format!("`{}` {}{needs}", signatures.join("`; `"), text(item, "doc"))
+                    }
+                    "protocol" => {
+                        let fields: Vec<String> = item["fields"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .map(|f| {
+                                format!(
+                                    "`{}`{}: {}",
+                                    f["name"].as_str().unwrap_or_default(),
+                                    if f["required"] == true { "" } else { "?" },
+                                    f["type"].as_str().unwrap_or_default()
+                                )
+                            })
+                            .collect();
+                        format!(
+                            "`{name}` {{{}}} {} Answers {}.",
+                            fields.join(", "),
+                            text(item, "summary"),
+                            text(item, "answer")
+                        )
+                    }
+                    "authority" => format!("`{name}` {}", text(item, "doc")),
+                    _ => format!("`{}` {}", text(item, "shape"), text(item, "doc")),
+                };
+                out.push_str(&format!("- **{name}**: {line}\n"));
+            }
+        }
+    }
+    out.push_str(
+        "\n## Examples\n\nWhole scenes the tests load and run; each says what it shows.\n",
+    );
+    for example in examples() {
+        let language = example.file.rsplit('.').next().unwrap_or_default();
+        out.push_str(&format!(
+            "\n### {}\n\n```{language}\n{}```\n",
+            example.file, example.text
+        ));
+    }
+    out
+}
+
 /// One section: each item's name and one line.
 pub fn section(name: &str) -> Result<Json, Json> {
     if !SECTIONS.iter().any(|(section, ..)| *section == name) {

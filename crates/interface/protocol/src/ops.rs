@@ -627,16 +627,21 @@ pub fn operations() -> Vec<Operation> {
         ),
         op(
             "help",
-            "What Orla answers: this index, a section, or one item by name.",
+            "What Orla answers: this index, a section, one item by name, or with `full` everything at once.",
             vec![
                 may("section", Ty::Str, "a section the index names"),
+                may(
+                    "full",
+                    Ty::Bool,
+                    "the whole reference in one answer, every item and every canonical example: the fastest start",
+                ),
                 may(
                     "name",
                     Ty::Str,
                     "one builtin, form, operation or replay step",
                 ),
             ],
-            "the index; a section's items; or one item in full. An unknown name is an error with `similar`",
+            "the index; a section's items; one item in full; or with `full`, `reference`, the whole of it as one Markdown text. An unknown name is an error with `similar`",
         ),
         op(
             "search",

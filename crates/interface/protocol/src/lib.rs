@@ -477,4 +477,38 @@ mod tests {
             );
         }
     }
+
+    /// The whole reference holds every item of every section, and every
+    /// canonical example, and stays small enough to read at once.
+    #[test]
+    fn the_reference_holds_everything_once() {
+        let reference = crate::help::reference();
+        let index = crate::help::index();
+        for section in index["sections"].as_array().unwrap() {
+            let name = section["section"].as_str().unwrap();
+            let items = crate::help::section(name).unwrap();
+            for item in items["items"].as_array().unwrap() {
+                let item = item["name"].as_str().unwrap();
+                assert!(
+                    reference.contains(&format!("**{item}**")),
+                    "{name} `{item}` is not in the reference"
+                );
+            }
+        }
+        for example in crate::help::examples() {
+            assert_eq!(
+                reference
+                    .matches(&format!("### {}\n", example.file))
+                    .count(),
+                1,
+                "{} is in the reference once",
+                example.file
+            );
+        }
+        assert!(
+            reference.len() < 128 * 1024,
+            "the reference is {} bytes, past what an agent reads at once",
+            reference.len()
+        );
+    }
 }

@@ -40,6 +40,7 @@ orla help builtins     # one line an item: types, builtins, kernel, scene, autho
 orla help smoothstep   # one name in full: a builtin's signatures and capability
 orla help window       # every item of a name: the builtin, the replay step, the operation
 orla help publish --json
+orla help --full       # everything at once: every item and every canonical example
 ```
 
 Every answer comes from the table the part it describes enforces: the

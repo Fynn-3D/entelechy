@@ -15,7 +15,7 @@ const VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 /// loop it works in ([`crate::workflow`]), step by step.
 fn instructions() -> String {
     format!(
-        "Orla is a runtime where Kernels (`.orla`) compute and scenes (`.osn`) compose them into a running world; this session serves one scene. Work in its loop: {} `help` with no arguments answers an index of everything Orla answers; `help` with `section` or `name` goes further.",
+        "Orla is a runtime where Kernels (`.orla`) compute and scenes (`.osn`) compose them into a running world; this session serves one scene. The fastest start: `help` with `full: true` answers the whole reference, every builtin, form, capability and operation with every canonical example, in one answer to read once. Work in its loop: {} `help` with no arguments answers an index; with `section` or `name`, one part.",
         crate::workflow::text()
     )
 }

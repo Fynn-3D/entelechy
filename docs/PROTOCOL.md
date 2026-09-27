@@ -124,7 +124,7 @@ Schema in `schema`.
 | `snapshot` | `to`?: string | the world's revision and frame (the frames committed since it), every Kernel with its generation and source, every port's committed state; or the file written |
 | `restore` | `snapshot`?: object, `from`?: string, `laws`: "current" \| "snapshot", `structure`?: "current" \| "snapshot", `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | revision, frame, report |
 | `reset` | `node`?: string, `port`?: string | what was reset |
-| `help` | `section`?: string, `name`?: string | the index; a section's items; or one item in full. An unknown name is an error with `similar` |
+| `help` | `section`?: string, `full`?: bool, `name`?: string | the index; a section's items; one item in full; or with `full`, `reference`, the whole of it as one Markdown text. An unknown name is an error with `similar` |
 | `search` | `text`?: string, `takes`?: string, `gives`?: string, `requires`?: string, `limit`?: integer | capabilities, nearest first, each with kind, name, doc, package, reach (the line a scene writes to use it: an installed package by its name, any other path relative to `base`), inputs, params, outputs (name, type, doc), requires, granted, published; base, the scene document's directory; count, how many matched |
 | `trace` | `node`: string, `at`?: [x, y] \| [x, y, z], `element`?: integer, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | kernel, at, bindings, results, calls |
 | `pin` | `node`: string | pinned |
@@ -424,6 +424,9 @@ in three steps, each answer small:
   holds, the `workflow` an
   agent works in (each step and its operations), and the `versions` the
   answer holds for.
+- `{"op": "help", "full": true}`: all of it at once, `reference`, one
+  Markdown text of every item and every canonical example, for an agent
+  to read once before it starts.
 - `{"op": "help", "section": "replay"}`: each item's `name` and one `line`.
 - `{"op": "help", "name": "window"}`: every item of that name in full, in
   `found`, each with its `section`: a builtin's signatures, `requires` and

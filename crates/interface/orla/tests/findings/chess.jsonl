@@ -5,3 +5,4 @@
 {"send": {"op": "evaluate", "time": 0.1}}
 {"finding": "a function its document declares changed, and the Kernels that call it ran the old one, silently", "send": {"op": "read", "node": "k", "from": 3, "count": 1}, "expect": {"at": {"/ok/values/0": 30}}}
 {"finding": "help answered the same long example once for each item of a name", "send": {"op": "help", "name": "vec2"}, "expect": {"has": ["/ok/found/0/example"], "lacks": ["/ok/found/1/example"]}}
+{"finding": "an agent that read the documents wrote a working scene in one go, while one that asked help item by item took many round trips: help had no whole reference", "send": {"op": "help", "full": true}, "expect": {"has": ["/ok/reference"], "says": ["## Examples", "### scene.osn", "**scatter**", "**restore**"]}}

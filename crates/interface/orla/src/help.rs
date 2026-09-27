@@ -85,6 +85,20 @@ pub fn answer(asked: Option<&str>) -> Result<Json, Json> {
     }
 }
 
+/// The whole reference ([`orla_protocol::help::reference`]) with the
+/// command line's commands beside the protocol's doors.
+pub fn full() -> String {
+    let mut out = orla_protocol::help::reference();
+    out.push_str("\n## commands: the orla command line\n\n");
+    for command in commands::commands() {
+        out.push_str(&format!(
+            "- **{}**: `orla {} {}` {}\n",
+            command.name, command.name, command.args, command.summary
+        ));
+    }
+    out
+}
+
 /// The answer as a person reads it.
 pub fn text(answer: &Json) -> String {
     let mut out = String::new();
