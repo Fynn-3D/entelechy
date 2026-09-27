@@ -171,7 +171,7 @@ pub fn encode(
     match extension {
         "field" => Ok(crate::file::encode_data(data)),
         "ppm" => {
-            if !data.schema().is_pixel() || domain.shape() != Shape::Grid {
+            if !data.schema().is_picture(domain) {
                 return unfit("not a grid of pixels");
             }
             let Ok(image) = data.to_image() else {

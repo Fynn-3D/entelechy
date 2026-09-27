@@ -1,7 +1,7 @@
 //! Operations on a node's Fields: read, write committed state, trace one
 //! element, and pin for reading.
 
-use orla_kernel::{Number, Shape};
+use orla_kernel::Number;
 use serde_json::{Value as Json, json};
 
 use orla_formats::base64::{base64, unbase64};
@@ -158,8 +158,7 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
         "count": domain.count(),
         "schema": schema.to_string(),
     });
-    // A picture is a Grid of pixels; a row of Vec4s is numbers.
-    let picture = schema.is_pixel() && domain.shape() == Shape::Grid;
+    let picture = schema.is_picture(domain);
     let format = request.get("format").and_then(Json::as_str);
     let from = request.get("from").and_then(Json::as_u64);
     let count = request.get("count").and_then(Json::as_u64);

@@ -263,6 +263,13 @@ impl Schema {
         self.scalars.len() == 4 && self.scalars.iter().all(|s| *s == Scalar::Float)
     }
 
+    /// Whether a Field of this layout over `domain` is a picture: a Grid
+    /// of pixels. The one rule for what is shown, read and written as an
+    /// image; a row or a volume of pixels is not one.
+    pub fn is_picture(&self, domain: Domain) -> bool {
+        self.is_pixel() && domain.shape() == Shape::Grid
+    }
+
     /// The layout for a diagnostic ("four floats kept as unorm8"); `Display`
     /// writes the spelling files and the wire carry.
     pub fn describe(&self) -> String {
@@ -1337,6 +1344,17 @@ impl Host {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A picture is a Grid of pixels; a row or a volume of them is not,
+    /// nor a Grid of anything else.
+    #[test]
+    fn a_picture_is_a_grid_of_pixels() {
+        let pixel = Schema::pixel();
+        assert!(pixel.is_picture(Domain::Grid(4, 4)));
+        assert!(!pixel.is_picture(Domain::Rows(16)));
+        assert!(!pixel.is_picture(Domain::Volume(4, 4, 4)));
+        assert!(!Schema::new(vec![Scalar::Float]).is_picture(Domain::Grid(4, 4)));
+    }
 
     /// Released words are reused, and the pile is bounded to a handful of
     /// buffers and an eighth of the budget.

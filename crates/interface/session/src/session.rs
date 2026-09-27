@@ -948,20 +948,24 @@ impl Session {
         self.runtime.host().data(handle).map_err(SessionError::Host)
     }
 
-    /// The output of `report` every interface shows: the first grid of
-    /// pixels one deep.
+    /// The output of `report` every interface shows: the first picture
+    /// ([`orla_kernel::Schema::is_picture`]).
     pub fn picture_of(&self, report: &orla_graph::Report) -> Option<Handle> {
-        let host = self.runtime.host();
         report
             .outputs
             .iter()
             .map(|(_, handle)| *handle)
-            .find(|handle| {
-                host.schema(*handle).is_ok_and(|s| s.is_pixel())
-                    && host
-                        .domain(*handle)
-                        .is_ok_and(|d| d.shape() == orla_kernel::Shape::Grid && d.depth() == 1)
-            })
+            .find(|handle| self.is_picture(*handle))
+    }
+
+    /// Whether the Field `handle` is a picture
+    /// ([`orla_kernel::Schema::is_picture`]).
+    pub fn is_picture(&self, handle: Handle) -> bool {
+        let host = self.runtime.host();
+        match (host.schema(handle), host.domain(handle)) {
+            (Ok(schema), Ok(domain)) => schema.is_picture(domain),
+            _ => false,
+        }
     }
 
     /// The Field of the scene output `name` (the first when `None`) as
