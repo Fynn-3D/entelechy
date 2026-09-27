@@ -32,10 +32,14 @@ Verified surface, as of `main`:
 
 ## Next
 
-`refactor/soul-reference` holds a batch not yet merged: Orla's syntax
-and API are one reference rendered from the tables the implementation
-executes (`orla help`, the protocol's `help`, `docs/REFERENCE.md`), and
-agents learn from it and `examples/`; the protocol's doors are its own
-lines and the bridges, and neither MCP nor `search` stands beside them. It also holds the runtime fixes agents writing
-demos found (`crates/interface/orla/tests/findings/`). It merges on the
-user's word; a release is cut once a whole batch is done and accepted.
+`refactor/compose-soul` (over `refactor/soul-reference` and
+`feat/self-teaching`) holds a batch not yet merged. Orla's syntax and API
+are one reference rendered from the tables the implementation executes
+(`orla help`, the protocol's `help`, `docs/REFERENCE.md`), and agents
+learn from it and `examples/`. The protocol's doors are its own lines and
+the bridges. Its 23 operations are primitives: a client composes many
+frames, measurements and searches from them. The graph's plan asks the
+rules where an output's extent comes from, and every example runs the
+same fused and not (`crates/interface/orla/tests/fusion.rs`). It merges
+on the user's word; a release is cut once a whole batch is done and
+accepted.
