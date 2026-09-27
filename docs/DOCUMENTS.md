@@ -14,7 +14,34 @@ Two file roles share one grammar, one lexer, and one literal syntax.
 Both use `//` comments, `;`-terminated statements, and `{ }` blocks.
 Diagnostics are `file:line:column: message`. The exact language is
 defined by [the frontend](../crates/frontend/language/src/lib.rs) and its
-tests; `orla help <name>` shows any builtin's or form's signatures.
+tests; `orla help <name>` shows any builtin's or form's signatures, and
+the canonical example that shows it.
+
+The smallest whole scene, one Kernel written in place and the picture it
+draws:
+
+<!-- rendered: help/scene.osn -->
+```osn
+//! The smallest whole scene: one Kernel, written in place, draws a
+//! picture over a domain, and the scene shows it.
+//! shows: inline, requires, output, compute, Image, coord, vec4, vec2
+node picture: kernel {
+    requires { field.write; }
+    domain = vec2(64, 48);
+    output result: Image;
+    compute {
+        let uv = (coord() + 0.5) / vec2(64.0, 48.0);
+        return vec4(uv.x, uv.y, 0.5, 1.0);
+    }
+}
+
+output result <- picture.result;
+```
+<!-- end -->
+
+Every builtin, type and form is shown by one of the canonical examples in
+[`help/`](../crates/interface/protocol/help/), whole scenes the tests load
+and run. The fragments below explain; those examples are the programs.
 
 ### Docs
 

@@ -65,6 +65,21 @@ pub fn text() -> String {
         .join(" ")
 }
 
+/// The loop as a Markdown table, as the documents render it.
+pub fn table() -> String {
+    let mut out = String::from("| Step | Operations | For |\n| --- | --- | --- |\n");
+    for step in &WORKFLOW {
+        let ops: Vec<String> = step.ops.iter().map(|op| format!("`{op}`")).collect();
+        out.push_str(&format!(
+            "| {} | {} | {} |\n",
+            step.name,
+            ops.join(", "),
+            step.about
+        ));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::WORKFLOW;

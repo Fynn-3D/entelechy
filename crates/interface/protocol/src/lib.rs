@@ -396,4 +396,98 @@ mod tests {
         assert!(plain["line"].is_null());
         assert_eq!(plain["message"], "3:4 is a ratio");
     }
+
+    /// What a document renders between `<!-- rendered: <what> -->` and
+    /// `<!-- end -->`: the loop an agent works in, or a canonical example
+    /// (`help/<file>`) as a code block of its language.
+    fn rendering(what: &str) -> Option<String> {
+        if what == "workflow" {
+            return Some(crate::workflow::table());
+        }
+        let file = what.strip_prefix("help/")?;
+        let example = crate::help::examples()
+            .into_iter()
+            .find(|example| example.file == file)?;
+        let language = file.rsplit('.').next().unwrap_or_default();
+        Some(format!("```{language}\n{}```\n", example.text))
+    }
+
+    /// The documents render what they show of Orla from where it is kept:
+    /// every rendered region is its rendering, and every code block of
+    /// Orla's own languages (`orla`, `osn`) is inside one, so a document
+    /// holds no second copy of a program. `ORLA_BLESS=1` writes the
+    /// regions again.
+    #[test]
+    fn the_documents_render_what_they_show() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let mut files = vec![root.join("README.md")];
+        for entry in std::fs::read_dir(root.join("docs")).unwrap().flatten() {
+            if entry.path().extension().is_some_and(|ext| ext == "md") {
+                files.push(entry.path());
+            }
+        }
+        let bless = std::env::var_os("ORLA_BLESS").is_some();
+        let mut wrong = Vec::new();
+        let mut regions = 0;
+        for path in files {
+            let text = std::fs::read_to_string(&path).unwrap();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            // Each region, replaced by its rendering.
+            let mut out = String::new();
+            let mut rest = text.as_str();
+            let mut inside: Vec<(usize, usize)> = Vec::new();
+            while let Some(at) = rest.find("<!-- rendered: ") {
+                let open_end = at + rest[at..].find("-->").expect("a marker closes") + 3;
+                let what = rest[at + 15..open_end - 3].trim().to_owned();
+                let body_start = open_end + 1;
+                let close = body_start
+                    + rest[body_start..]
+                        .find("<!-- end -->")
+                        .unwrap_or_else(|| panic!("{name}: `{what}` has no `<!-- end -->`"));
+                out.push_str(&rest[..body_start]);
+                let start = text.len() - rest.len() + body_start;
+                inside.push((start, text.len() - rest.len() + close));
+                match rendering(&what) {
+                    Some(rendered) => {
+                        if rest[body_start..close] != rendered {
+                            wrong.push(format!("{name}: `{what}` is not its rendering"));
+                        }
+                        out.push_str(&rendered);
+                    }
+                    None => {
+                        wrong.push(format!("{name}: nothing renders `{what}`"));
+                        out.push_str(&rest[body_start..close]);
+                    }
+                }
+                regions += 1;
+                rest = &rest[close..];
+            }
+            out.push_str(rest);
+            // A code block of Orla's languages stands inside a region.
+            let mut offset = 0;
+            for line in text.split_inclusive('\n') {
+                let fence = line.trim_end();
+                if (fence == "```orla" || fence == "```osn")
+                    && !inside.iter().any(|(a, b)| offset >= *a && offset < *b)
+                {
+                    wrong.push(format!(
+                        "{name}: a `{}` block is written by hand; render it from `help/`",
+                        &fence[3..]
+                    ));
+                }
+                offset += line.len();
+            }
+            if bless && out != text {
+                std::fs::write(&path, out).unwrap();
+            }
+        }
+        assert!(regions > 0, "no document renders anything");
+        if !bless {
+            assert!(
+                wrong.is_empty(),
+                "{}\nwrite the regions again with ORLA_BLESS=1 cargo test -p orla-protocol",
+                wrong.join("\n")
+            );
+        }
+    }
 }

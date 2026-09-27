@@ -21,16 +21,20 @@ Every operation, its fields and its answer are in
 [Operations](#operations); an unknown operation is an error listing
 every one in `operations`.
 
-The loop an agent runs:
+The loop an agent works in, each step with the operations that serve it
+(`help`'s index answers the same):
 
-```text
-inspect   status, kernels, kernel, graph, document
-propose   prepare (diagnostics, nothing published)
-publish   publish with expect = "absent" | "any" | <generation>
-compose   compose with expect = <version>, text or edits (checks, then rewrites the scene document and syncs), param
-observe   evaluate, read (a picture as PNG; any other Field as a summary, or numbers from `from`)
-repair    the same operations again; retire; reset
-```
+<!-- rendered: workflow -->
+| Step | Operations | For |
+| --- | --- | --- |
+| understand | `help`, `status`, `kernels`, `kernel`, `graph`, `document` | what Orla is, and what this session holds and runs |
+| search | `search` | what the world already knows, before writing anew |
+| generate | `prepare` | a Kernel written, compiled and checked, publishing nothing |
+| compose | `publish`, `retire`, `compose`, `sync`, `param`, `write` | the world changed: a law published or retired, the scene rewritten on disk, a param or a state set; a refused change leaves it as it was |
+| run | `evaluate`, `advance`, `window`, `reset` | frames evaluated, one or many, under a clock and inputs |
+| observe | `read`, `trace`, `bench`, `history`, `pin`, `unpin` | what was computed and why: a picture seen, a Field summed up, an element traced, the history of changes |
+| improve | `snapshot`, `restore` | a world kept and returned to, to try a change and undo it |
+<!-- end -->
 
 ## Operations
 

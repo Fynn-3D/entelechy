@@ -43,10 +43,11 @@ orla help publish --json
 ```
 
 Every answer comes from the table the part it describes enforces: the
-compiler's builtins and forms, the replayer's forms, the protocol's
-operations, the command line's commands. The protocol's `help` answers
-the same, without `commands`; the language is in
-[DOCUMENTS](DOCUMENTS.md).
+compiler's builtins and forms, what each capability grants from the ABI,
+the replayer's forms, the protocol's operations, the command line's
+commands. A name answers with the canonical example or scenario that
+proves it, which the tests run. The protocol's `help` answers the same,
+without `commands`; the language is in [DOCUMENTS](DOCUMENTS.md).
 
 ## Find what exists
 

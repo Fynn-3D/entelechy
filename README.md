@@ -92,14 +92,17 @@ bin/orla serve examples/life/scene.osn
 ← {"id":2,"error":{"line":1,"column":152,"message":"`nope` is not defined"}}
 ```
 
-| Step | Operations |
-| --- | --- |
-| Inspect | `status`, `kernels`, `kernel`, `graph`, `document`, `help` |
-| Propose | `prepare`: diagnostics, nothing published |
-| Publish | `publish` against an expected generation |
-| Compose | `compose` the scene by text or by named edits, `param` |
-| Observe | `evaluate`, `read`, `trace`, `bench` |
-| Keep and return | `snapshot`, `restore`, `history` |
+<!-- rendered: workflow -->
+| Step | Operations | For |
+| --- | --- | --- |
+| understand | `help`, `status`, `kernels`, `kernel`, `graph`, `document` | what Orla is, and what this session holds and runs |
+| search | `search` | what the world already knows, before writing anew |
+| generate | `prepare` | a Kernel written, compiled and checked, publishing nothing |
+| compose | `publish`, `retire`, `compose`, `sync`, `param`, `write` | the world changed: a law published or retired, the scene rewritten on disk, a param or a state set; a refused change leaves it as it was |
+| run | `evaluate`, `advance`, `window`, `reset` | frames evaluated, one or many, under a clock and inputs |
+| observe | `read`, `trace`, `bench`, `history`, `pin`, `unpin` | what was computed and why: a picture seen, a Field summed up, an element traced, the history of changes |
+| improve | `snapshot`, `restore` | a world kept and returned to, to try a change and undo it |
+<!-- end -->
 
 What an agent can rely on:
 

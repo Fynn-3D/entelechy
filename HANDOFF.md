@@ -32,16 +32,16 @@ Verified surface, as of `main`:
 
 ## Next
 
-The next batch is the user's choice. Found wanting by the MCP trials and
-not taken up, none of them misleading or blocking:
+`feat/self-teaching` holds a batch not yet merged: what Orla says of
+itself is laid out by the creation surfaces and the doors, proved by
+canonical examples and scenarios the tests run, guided by `try`, and
+rendered into the documents (`docs/DECISIONS.md`, *Orla describes
+itself*). Next is its acceptance: a fresh agent against a release copy
+over MCP only, what it finds wanting fixed into
+`crates/interface/orla/tests/findings/`. It merges on the user's word;
+a release is cut once a whole batch is done and accepted.
 
-- `search` answers every capability with its whole doc; a broad word
-  fills a page.
-- `help` shows each form as one line; no whole worked scene.
-- `read` of a one-element output answers its summary; `from` gives the
-  value.
-
-An agent trial runs a fresh agent against a release copy over MCP only;
-what it finds wanting and is fixed goes into
-`crates/interface/orla/tests/findings/`. A release is cut once a whole
-batch is done and accepted, on the user's word, never per fix.
+Found wanting by earlier trials and not taken up, none misleading or
+blocking: `search` answers every capability with its whole doc, a broad
+word filling a page; `read` of a one-element output answers its
+summary, `from` giving the value.
