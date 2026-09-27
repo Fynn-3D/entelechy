@@ -106,16 +106,9 @@ pub(crate) fn advance(session: &mut Session, request: &Request) -> Result<Json, 
         .and_then(Json::as_u64)
         .ok_or_else(|| failure("`advance` takes `frames`, a whole number of at least 1"))?;
     if frames == 0 || frames > MAX_ADVANCE {
-        return Err(crate::wire::tried(
-            failure(format!(
-                "`frames` is 1 to {MAX_ADVANCE}; a longer run is several `advance` requests"
-            )),
-            [crate::wire::again(
-                request.json(),
-                &[("frames", json!(frames.clamp(1, MAX_ADVANCE)))],
-                &[],
-            )],
-        ));
+        return Err(failure(format!(
+            "`frames` is 1 to {MAX_ADVANCE}; a longer run is several `advance` requests"
+        )));
     }
     let fps = request.get("fps").and_then(Json::as_f64).unwrap_or(60.0);
     if fps <= 0.0 {

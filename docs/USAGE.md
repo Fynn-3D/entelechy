@@ -32,23 +32,21 @@ Kernel over the window), `sound` (a voice with a drawing of it) or
 Player is open; a Kernel that does not compile leaves the running one
 alone and says why.
 
-## What Orla answers about itself
+## Syntax and API
 
 ```sh
-orla help              # the sections under each surface and door, and the loop an agent works in
-orla help builtins     # one line an item: types, builtins, kernel, scene, authority, protocol, replay, commands
+orla help              # every layer's syntax and API, and the commands
 orla help smoothstep   # one name in full: a builtin's signatures and capability
-orla help window       # every item of a name: the builtin, the replay step, the operation
+orla help window       # every item of a name: the builtin, the replay line, the operation
 orla help publish --json
-orla help --full       # everything at once: every item and every canonical example
 ```
 
-Every answer comes from the table the part it describes enforces: the
+Every answer comes from the table the part it describes executes: the
 compiler's builtins and forms, what each capability grants from the ABI,
-the replayer's forms, the protocol's operations, the command line's
-commands. A name answers with the canonical example or scenario that
-proves it, which the tests run. The protocol's `help` answers the same,
-without `commands`; the language is in [DOCUMENTS](DOCUMENTS.md).
+the replayer's lines, the protocol's operations, the command line's
+commands. The protocol's `help` answers the same, without `commands`
+([REFERENCE](REFERENCE.md)); the language is in
+[DOCUMENTS](DOCUMENTS.md), whole programs in `examples/`.
 
 ## Find what exists
 
@@ -359,13 +357,6 @@ back bit for bit.
 
 ```sh
 orla serve examples/life/scene.osn
-orla serve examples/life/scene.osn --mcp     # the same session as an MCP server
-```
-
-An MCP client runs Orla as a server command:
-
-```json
-{ "mcpServers": { "orla": { "command": "/path/to/bin/orla", "args": ["serve", "/path/to/scene.osn", "--mcp"] } } }
 ```
 
 Agents drive a session with JSON lines on stdin and stdout;

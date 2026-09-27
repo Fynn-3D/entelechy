@@ -9,33 +9,28 @@ use orla_formats::ppm;
 use orla_session::Session;
 
 use crate::request::Request;
-use crate::wire::{again, context_of, failure, trace_json, tried};
+use crate::wire::{context_of, failure, trace_json};
 
 /// Refuses a name that is not a node of the loaded scene, naming the near
-/// miss where there is one, and trying `request` with it.
-fn known_node(session: &Session, node: &str, request: &Json) -> Result<(), Json> {
+/// miss where there is one.
+fn known_node(session: &Session, node: &str) -> Result<(), Json> {
     let Some(graph) = session.graph() else {
         return Err(failure("no scene is loaded"));
     };
     if graph.nodes.iter().any(|n| n.id.0 == node) {
         return Ok(());
     }
-    Err(unknown_node(graph, node, request))
+    Err(unknown_node(graph, node))
 }
 
-/// `node` is not a node of `graph`: the near miss named, and `request`
-/// tried with it.
-fn unknown_node(graph: &orla_graph::Graph, node: &str, request: &Json) -> Json {
+/// `node` is not a node of `graph`: the near miss named.
+fn unknown_node(graph: &orla_graph::Graph, node: &str) -> Json {
     let known: Vec<&str> = graph.nodes.iter().map(|n| n.id.0.as_str()).collect();
     let near = orla_language::nearest(node, known.iter().copied());
-    let next = near.map(|near| again(request, &[("node", json!(near))], &[]));
-    tried(
-        failure(format!(
-            "`{node}` is not a node of this scene{}",
-            orla_language::suggestion(near)
-        )),
-        next,
-    )
+    failure(format!(
+        "`{node}` is not a node of this scene{}",
+        orla_language::suggestion(near)
+    ))
 }
 
 /// Runs one element of a node on the interpreter, every binding shown.
@@ -61,7 +56,7 @@ pub(crate) fn trace(session: &mut Session, request: &Request) -> Result<Json, Js
             ));
         }
     };
-    known_node(session, &node, request.json())?;
+    known_node(session, &node)?;
     let context = context_of(session, request.json());
     let id = orla_graph::NodeId(node.clone());
     let (trace, kernel) = session.trace(&id, at, &context).map_err(failure)?;
@@ -141,21 +136,15 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
             .ok_or_else(|| {
                 // An unknown node name is reported before the pin hint.
                 if !graph.nodes.iter().any(|n| n.id.0 == node) {
-                    return unknown_node(graph, node, request.json());
+                    return unknown_node(graph, node);
                 }
                 // Folded into its reader, it keeps a value only pinned;
                 // otherwise evaluating gives it one.
                 let id = orla_graph::NodeId(node.to_owned());
                 let why = failure(session.why_no_value(&id, port));
                 match session.fused_into(&id) {
-                    Some(_) => tried(
-                        why,
-                        [
-                            json!({ "op": "pin", "node": node }),
-                            json!({ "op": "evaluate" }),
-                        ],
-                    ),
-                    None => tried(why, [json!({ "op": "evaluate" })]),
+                    Some(_) => why,
+                    None => why,
                 }
             })?
     } else {
@@ -192,7 +181,6 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
             handle,
             described,
             (from.unwrap_or(0), count.unwrap_or(1)),
-            request.json(),
         );
     }
     let format = format.unwrap_or(if picture { "png" } else { "summary" });
@@ -230,15 +218,12 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
                 "data": base64(&bytes),
             }))
         }
-        other => Err(tried(
-            failure(format!(
-                "`{other}` is a picture's encoding, and this Field is {} {} {}: read its `summary`, numbers with `from` and `count`, or `words` or `field`",
-                domain.shape(),
-                domain.count(),
-                schema
-            )),
-            [again(request.json(), &[], &["format"])],
-        )),
+        other => Err(failure(format!(
+            "`{other}` is a picture's encoding, and this Field is {} {} {}: read its `summary`, numbers with `from` and `count`, or `words` or `field`",
+            domain.shape(),
+            domain.count(),
+            schema
+        ))),
     }
 }
 
@@ -263,28 +248,17 @@ fn values(
     handle: orla_kernel::Handle,
     described: Json,
     (from, count): (u64, u64),
-    request: &Json,
 ) -> Result<Json, Json> {
     let total = described["count"].as_u64().unwrap_or(0);
     if count == 0 || count > MOST_VALUES {
-        return Err(tried(
-            failure(format!(
-                "`count` is 1 to {MOST_VALUES}; read more in parts, or the whole Field as `words` or `field`"
-            )),
-            [again(
-                request,
-                &[("count", json!(count.clamp(1, MOST_VALUES)))],
-                &[],
-            )],
-        ));
+        return Err(failure(format!(
+            "`count` is 1 to {MOST_VALUES}; read more in parts, or the whole Field as `words` or `field`"
+        )));
     }
     if from >= total {
-        return Err(tried(
-            failure(format!(
-                "`from` {from} is past the Field's {total} elements"
-            )),
-            [again(request, &[("from", json!(0))], &[])],
-        ));
+        return Err(failure(format!(
+            "`from` {from} is past the Field's {total} elements"
+        )));
     }
     let data = session.field(handle).map_err(|e| failure(e.to_string()))?;
     let schema = data.schema().clone();
@@ -371,7 +345,7 @@ fn summary(
 /// Keeps a node materialized so `read` can see it.
 pub(crate) fn pin(session: &mut Session, request: &Request) -> Result<Json, Json> {
     let node = request.text("node")?;
-    known_node(session, &node, request.json())?;
+    known_node(session, &node)?;
     session.pin(orla_graph::NodeId(node.clone()));
     Ok(json!({ "pinned": node }))
 }
@@ -379,7 +353,7 @@ pub(crate) fn pin(session: &mut Session, request: &Request) -> Result<Json, Json
 /// Lets a node be fused away again.
 pub(crate) fn unpin(session: &mut Session, request: &Request) -> Result<Json, Json> {
     let node = request.text("node")?;
-    known_node(session, &node, request.json())?;
+    known_node(session, &node)?;
     session.unpin(&orla_graph::NodeId(node.clone()));
     Ok(json!({ "unpinned": node }))
 }
@@ -445,10 +419,7 @@ pub(crate) fn snapshot(session: &mut Session, request: &Request) -> Result<Json,
         .write_file(&path, json.to_string().as_bytes())
         .map_err(|why| {
             // Held in the answer instead, it goes back to `restore` whole.
-            tried(
-                failure(format!("cannot write the snapshot: {why}")),
-                [again(request.json(), &[], &["to"])],
-            )
+            failure(format!("cannot write the snapshot: {why}"))
         })?;
     Ok(json!({
         "path": target.display().to_string(),

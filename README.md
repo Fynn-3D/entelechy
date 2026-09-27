@@ -70,7 +70,7 @@ unpack it, and run `bin/orla` from its directory:
 bin/orla new hello                                  # a scene that runs: Kernel, scene, test
 bin/orla player hello/scene.osn                     # open it in a window; edit the Kernel live
 bin/orla run examples/grayscale/scene.osn --out gray.png
-bin/orla help                                       # everything a Kernel may call
+bin/orla help                                       # the syntax and API of every layer
 ```
 
 From the source (Rust 1.93 or later), `cargo build --release` puts the
@@ -92,17 +92,9 @@ bin/orla serve examples/life/scene.osn
 ← {"id":2,"error":{"line":1,"column":152,"message":"`nope` is not defined"}}
 ```
 
-<!-- rendered: workflow -->
-| Step | Operations | For |
-| --- | --- | --- |
-| understand | `help`, `status`, `kernels`, `kernel`, `graph`, `document` | what Orla is, and what this session holds and runs |
-| search | `search` | what the world already knows, before writing anew |
-| generate | `prepare` | a Kernel written, compiled and checked, publishing nothing |
-| compose | `publish`, `retire`, `compose`, `sync`, `param`, `write` | the world changed: a law published or retired, the scene rewritten on disk, a param or a state set; a refused change leaves it as it was |
-| run | `evaluate`, `advance`, `window`, `reset` | frames evaluated, one or many, under a clock and inputs |
-| observe | `read`, `trace`, `bench`, `history`, `pin`, `unpin` | what was computed and why: a picture seen, a Field summed up, an element traced, the history of changes |
-| improve | `snapshot`, `restore` | a world kept and returned to, to try a change and undo it |
-<!-- end -->
+`bin/orla help` prints the syntax and API of every layer: the types, the builtins, how a
+Kernel and a scene are written, the capabilities, packages, the protocol and replay tests
+([the same text](docs/REFERENCE.md)). Whole programs are in [`examples/`](examples/README.md).
 
 What an agent can rely on:
 
@@ -115,9 +107,7 @@ What an agent can rely on:
 - **The world is observable.** Any port can be read, any element traced through its Kernel, any node
   timed; a run is a replay, and a replay is a test.
 
-An MCP client uses the same session as tools: `bin/orla serve <scene.osn> --mcp` is its server
-command, each operation but `quit` a tool with its request's schema. The operations, fields and answers are in
-[the protocol](docs/PROTOCOL.md). Bridges speak the same
+The operations, fields and answers are in [the protocol](docs/PROTOCOL.md). Bridges speak the same
 protocol from [Blender](bridges/blender/README.md), [Godot](bridges/godot/README.md),
 [a web page](bridges/web/README.md) and [C](bridges/c/README.md).
 

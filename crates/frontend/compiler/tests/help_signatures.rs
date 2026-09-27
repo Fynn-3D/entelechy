@@ -1,9 +1,9 @@
 //! Every signature help shows is one the compiler takes: a builtin called
 //! with a value of each parameter's type gives its result's type, in a
 //! Kernel that declares only what help says it needs, and one that leaves
-//! that out is refused naming it. A signature over
-//! Fields or a generic element, or one that holds only inside a form, is
-//! proved by the canonical examples.
+//! that out is refused naming it. A signature over Fields or a generic
+//! element, or one that holds only inside a form, is held by the
+//! compiler's own tests.
 
 use orla_compiler::{compile, help};
 
@@ -51,8 +51,8 @@ fn parts(signature: &str) -> (&str, Vec<&str>, &str) {
     (name, types, result)
 }
 
-/// Builtins whose signatures hold only inside a form, proved by the
-/// canonical examples: `index` inside a loop, an `each` or a `scan`.
+/// Builtins whose signatures hold only inside a form: `index` inside a
+/// loop, an `each` or a `scan`.
 const ELSEWHERE: [&str; 1] = ["index"];
 
 #[test]

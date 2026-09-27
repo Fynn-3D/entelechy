@@ -584,54 +584,34 @@ The layers are held beside it, in [`layers.rs`](../crates/interface/orla/tests/l
 
 ## Orla describes itself, from the tables it enforces
 
-What Orla says of itself has one owner, the table its implementation
-executes, and each thing it says is proved where it becomes real. The
-sections stand as the architecture gives AI to create: the creation
-surfaces (the Kernel Language: types, builtins, forms; the Graph API:
-the scene's forms and what a `domain` may call; the Capability API, which
-is what the world grants, the ABI's capabilities, and what it already
-knows, the Kernels and preset graphs `search` finds in what packages
-hold) and the doors that
-reach them (the protocol and its envelope, what a request and an answer
-carry and the doors they cross, MCP among them; replay; the command
-line). The loop an agent works in (understand, search, generate,
-compose, run, observe, improve) is its own table over the operations,
-and the MCP instructions and the documents are written from it.
+Orla's syntax and API are one reference, layer by layer: the types, the
+builtins and the forms of the Kernel language; the scene's forms and
+what a `domain` may call; the capabilities and what each grants; a
+package's parts; the protocol's operations and its wire; the replay
+lines; the command line. Each part is rendered from the table the
+implementation executes, so it cannot say what the implementation does
+not do. `help` answers all of it, or one name in full;
+`docs/REFERENCE.md` is the same text. Whole programs are the examples.
 
-An item is proved at the deepest layer where it becomes real: a builtin's
-every signature of values and the capability it needs are compiled; every
-item of the language, the graph and the authority is shown by a
-canonical example, a whole scene the tests load and run; every operation
-by a scenario the tests send. `help` answers an item with the example
-that proves it. A refusal whose next step is known says it as requests
-to send (`try`), which correct the request, enable it or answer what the
-caller needs; a `try` is an operation of the table and widens no
-authority. Documents render what they show of Orla (a table, a
-canonical example) and hold no hand-written program; what they write by
-hand explains.
-
-`help` answers in three steps, an index, a section, a name in full;
 `search` answers the capabilities that exist, by words, types and
 capability, with the line a scene writes to reach each. Search is
 deterministic and holds no model: understanding what is wanted is the
 agent's.
 
-**Why.** An agent composes what exists before it writes anew, and can
-only rely on a description the implementation cannot drift from, and a
-sentence that nothing runs drifts. A doc lives in the source it
+**Why.** A description the implementation cannot drift from is one
+rendered from what it executes. An agent learns a language fastest from
+one dense reference and whole programs; anything built beyond that to
+teach it costs more than it saves. A doc lives in the source it
 describes, so it travels with a Kernel through publish and snapshot; the
 IR stays computation alone.
 
-**Where.** [`ops`](../crates/interface/protocol/src/ops.rs),
-[`workflow`](../crates/interface/protocol/src/workflow.rs),
-[`help`](../crates/interface/protocol/src/help.rs) and its
-[canonical examples](../crates/interface/protocol/help/),
+**Where.** [`help`](../crates/interface/protocol/src/help.rs),
+[`ops`](../crates/interface/protocol/src/ops.rs),
+[`envelope`](../crates/interface/protocol/src/envelope.rs),
 [`Capability::doc`](../crates/core/abi/src/lib.rs),
 [`replay::forms`](../crates/interface/session/src/replay.rs),
 [`commands`](../crates/interface/orla/src/commands.rs),
 [`search`](../crates/interface/session/src/search.rs),
 [`doc`](../crates/frontend/language/src/doc.rs); held by
-[the signatures compiled](../crates/frontend/compiler/tests/help_signatures.rs),
-[the examples and scenarios run](../crates/interface/orla/tests/help_examples.rs),
-[what agents found wanting](../crates/interface/orla/tests/findings/), and
-the documents' rendered regions.
+[the signatures compiled](../crates/frontend/compiler/tests/help_signatures.rs)
+and [the forms parsed](../crates/frontend/compiler/tests/help_examples.rs).

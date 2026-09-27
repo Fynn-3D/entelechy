@@ -8,18 +8,12 @@
 //! - `"finding"`: what an agent met, as a sentence;
 //! - `"send"`: the request; `{scene}` in a string is the example's scene
 //!   text, as copied;
-//! - `"expect"`: `tries`, every request of the refusal's `try` answered,
-//!   as it is `"corrects"` (the request corrected), `"enables"` (what the
-//!   request needs first: sent again, it then passes) or `"informs"` (what
-//!   the caller needs to know); `ok` (answered, or
-//!   refused), `at` (a JSON pointer into the
+//! - `"expect"`: `ok` (answered, or refused), `at` (a JSON pointer into the
 //!   answer and the value there), `has` (pointers to something not null
 //!   and not empty), `lacks` (pointers to nothing), `says` and `not`
 //!   (text the answer, or a string in it, holds or does not).
 //!
-//! Every answer carries only what the envelope names, and every refusal's
-//! `try`, held to an expectation or not, names operations of the table and
-//! never `quit`.
+//! Every answer carries only what the envelope names.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -158,23 +152,6 @@ fn unenveloped(answer: &Json) -> Vec<String> {
     out
 }
 
-/// What a refusal's `try` falls short of: every request it names is an
-/// operation of the table, not `quit` (a `try` widens no authority and
-/// ends nothing).
-fn untried(answer: &Json) -> Vec<String> {
-    let ops = orla_protocol::ops::names();
-    answer
-        .pointer("/error/try")
-        .and_then(Json::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|next| {
-            let op = next["op"].as_str().unwrap_or_default();
-            (!ops.contains(&op) || op == "quit").then(|| format!("`try` sends {next}"))
-        })
-        .collect()
-}
-
 /// What `answer` falls short of in `expect`, one line each.
 fn wanting(answer: &Json, expect: &Json) -> Vec<String> {
     fn strings(value: &Json, out: &mut String) {
@@ -306,33 +283,10 @@ fn what_agents_found_wanting_stays_fixed() {
             let mut request = filled(&step["send"], &scene);
             request["id"] = Json::from(id);
             let answer = served.ask(&request);
-            let mut short = untried(&answer);
-            short.extend(unenveloped(&answer));
+            let mut short = unenveloped(&answer);
             if let Some(expect) = step.get("expect") {
                 held += 1;
                 short.extend(wanting(&answer, expect));
-                // Followed, a `try` is answered; one that repairs lets the
-                // request pass sent again.
-                if let Some(tries) = expect.get("tries").and_then(Json::as_str) {
-                    let next = answer.pointer("/error/try").and_then(Json::as_array);
-                    match next {
-                        None => short.push("no `try`".to_owned()),
-                        Some(next) => {
-                            for request in next {
-                                let followed = served.ask(request);
-                                if followed.get("ok").is_none() {
-                                    short.push(format!("`try` {request} was refused: {followed}"));
-                                }
-                            }
-                            if tries == "enables" {
-                                let again = served.ask(&request);
-                                if again.get("ok").is_none() {
-                                    short.push(format!("sent again after its `try`: {again}"));
-                                }
-                            }
-                        }
-                    }
-                }
             }
             if !short.is_empty() {
                 wrong.push(format!(

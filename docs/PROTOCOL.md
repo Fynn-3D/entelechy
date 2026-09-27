@@ -21,21 +21,6 @@ Every operation, its fields and its answer are in
 [Operations](#operations); an unknown operation is an error listing
 every one in `operations`.
 
-The loop an agent works in, each step with the operations that serve it
-(`help`'s index answers the same):
-
-<!-- rendered: workflow -->
-| Step | Operations | For |
-| --- | --- | --- |
-| understand | `help`, `status`, `kernels`, `kernel`, `graph`, `document` | what Orla is, and what this session holds and runs |
-| search | `search` | what the world already knows, before writing anew |
-| generate | `prepare` | a Kernel written, compiled and checked, publishing nothing |
-| compose | `publish`, `retire`, `compose`, `sync`, `param`, `write` | the world changed: a law published or retired, the scene rewritten on disk, a param or a state set; a refused change leaves it as it was |
-| run | `evaluate`, `advance`, `window`, `reset` | frames evaluated, one or many, under a clock and inputs |
-| observe | `read`, `trace`, `bench`, `history`, `pin`, `unpin` | what was computed and why: a picture seen, a Field summed up, an element traced, the history of changes |
-| improve | `snapshot`, `restore` | a world kept and returned to, to try a change and undo it |
-<!-- end -->
-
 ## Operations
 
 A request is one JSON object a line, with an `op` and an optional `id`
@@ -50,7 +35,7 @@ operation does not take, or without one it needs, is refused with the
 fields it takes, the `field` at fault and the type `expected`.
 
 What a request and an answer carry, and the doors a session is reached
-through (`help`'s `wire` section answers the same):
+through:
 
 <!-- rendered: wire -->
 | part | in | type | says |
@@ -63,13 +48,11 @@ through (`help`'s `wire` section answers the same):
 | `message` | error | string | Why, one or more sentences for a person or an agent to read. |
 | `line` | error | integer | Where in the text the request carried the fault is, from 1. |
 | `column` | error | integer | Where on that line, from 1. |
-| `try` | error | [object] | The requests to send next, in order, as they are: the request corrected, what it needs first, or what the caller needs to know; never one that widens authority. |
 | `similar` | error | [string] | The names nearest an unknown one. |
 | `fields` | error | [string] | The fields the operation takes. |
 | `field` | error | string | The field at fault. |
 | `expected` | error | string | The type that field is. |
 | `operations` | error | [string] | Every operation, for an unknown one. |
-| `sections` | error | [string] | Every help section, for an unknown one. |
 | `version` | error | string | The scene document's version as it stands, for a compose refused. |
 | `path` | error | string | The scene document a refused compose would have written. |
 | `written` | error | bool | Whether a compose wrote its document: false when refused. |
@@ -84,22 +67,7 @@ through (`help`'s `wire` section answers the same):
 | stdin | `orla serve <scene.osn>` | Request lines on standard input, answer lines on standard output; `quit` ends the process. |
 | socket | `orla serve <scene.osn> --listen <host:port>` | The same lines over each TCP connection to the address; `quit` ends the connection. |
 | websocket | `orla serve <scene.osn> --listen <host:port>` | The same lines as WebSocket text messages to the same address, one request a message. |
-| mcp | `orla serve <scene.osn> --mcp` | MCP over standard input and output: each operation but `quit` a tool whose input schema is its request's, a tool call's arguments its fields, the answer's `ok` or `error` the tool's result; the client ends the session by closing standard input. |
 <!-- end -->
-
-A refusal whose next step is known carries it in `try`: the requests to
-send, in order, as they are. They correct the request (a near name in
-place of an unknown one, a field renamed or left out, a count within
-bounds), enable it (`pin` and `evaluate` before a `read` of a node with
-no value yet), or answer what the caller needs (`help` for an operation
-whose fields were wrong, the inline form whose example is the smallest
-scene when none is loaded, `document` for a `compose` against a changed
-version). A `try` is a valid request of the table and never `quit`; it
-widens no authority, which the protocol never grants. Over MCP a `try`
-request is a tool call: its `op` names the tool, the rest are its
-arguments.
-`{"op": "help", "name": <op>}` answers an operation's request as JSON
-Schema in `schema`.
 
 | op | fields | answer |
 | --- | --- | --- |
@@ -119,12 +87,12 @@ Schema in `schema`.
 | `advance` | `frames`: integer, `fps`?: number, `until`?: {target: string, below?: number, above?: number, equals?: number}, `save`?: {node.port: string}, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | frames, stopped, target, value, saved, millis, report |
 | `bench` | `frames`?: integer, `fps`?: number, `repeat`?: integer, `nodes`?: bool, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | backend, frames, repeat, best_ms, median_ms, nodes, ran |
 | `window` | `size`?: [w, h] \| null, `scale`?: number | the window |
-| `read` | `output`?: string, `node`?: string, `port`?: string, `format`?: "png" \| "rgba32f" \| "ppm" \| "summary" \| "words" \| "field", `from`?: integer, `count`?: integer | a picture: width, height, format, data (base64; over MCP the picture itself). Any other Field: shape, extent, count, schema, and its summary (each number's min, max, sum, mean, how many were not zero, and how many were not finite), or `values` from `from` (a number, or a list for an element of several), or format and data (base64) |
+| `read` | `output`?: string, `node`?: string, `port`?: string, `format`?: "png" \| "rgba32f" \| "ppm" \| "summary" \| "words" \| "field", `from`?: integer, `count`?: integer | a picture: width, height, format, data (base64). Any other Field: shape, extent, count, schema, and its summary (each number's min, max, sum, mean, how many were not zero, and how many were not finite), or `values` from `from` (a number, or a list for an element of several), or format and data (base64) |
 | `write` | `node`: string, `port`?: string, `data`: string, `format`?: "words" \| "field" | the state replaced |
 | `snapshot` | `to`?: string | the world's revision and frame (the frames committed since it), every Kernel with its generation and source, every port's committed state; or the file written |
 | `restore` | `snapshot`?: object, `from`?: string, `laws`: "current" \| "snapshot", `structure`?: "current" \| "snapshot", `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | revision, frame, report |
 | `reset` | `node`?: string, `port`?: string | what was reset |
-| `help` | `section`?: string, `full`?: bool, `name`?: string | the index; a section's items; one item in full; or with `full`, `reference`, the whole of it as one Markdown text. An unknown name is an error with `similar` |
+| `help` | `name`?: string | `reference`, the whole of it as one Markdown text, and `versions`; or with `name`, every item of that name in full. An unknown name is an error with `similar` |
 | `search` | `text`?: string, `takes`?: string, `gives`?: string, `requires`?: string, `limit`?: integer | capabilities, nearest first, each with kind, name, doc, package, reach (the line a scene writes to use it: an installed package by its name, any other path relative to `base`), inputs, params, outputs (name, type, doc), requires, granted, published; base, the scene document's directory; count, how many matched |
 | `trace` | `node`: string, `at`?: [x, y] \| [x, y, z], `element`?: integer, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | kernel, at, bindings, results, calls |
 | `pin` | `node`: string | pinned |
@@ -137,14 +105,6 @@ Schema in `schema`.
   --serve <scene.osn>`: requests arrive while the window runs, `evaluate`
   answers with the next window frame under the person's pointer and
   keys, and `read` returns the frame the window shows.
-- **MCP.** `orla serve <scene.osn> --mcp` speaks MCP on standard input
-  and output: JSON-RPC 2.0, a message a line. `initialize` says what Orla
-  is and to ask `help` first; `tools/list` names every operation but
-  `quit` as a tool whose input schema is its request's; `tools/call` is
-  the operation's request, answered as any other, its answer the tool's
-  result (as text, and as `structuredContent` when it is an object), a
-  refusal an error result that says why. An MCP client runs it as its
-  server command.
 - **Socket.** `--listen <host:port>` (`127.0.0.1:7788`; port 0 for any
   free port, named on stderr as `listening on ...`) accepts connections
   carrying the same lines, one response per request in order. Every
@@ -347,7 +307,7 @@ backend, or null).
 ## State
 
 `read` answers what it is asked, and without asking, how the Field
-looks: a picture as a PNG (over MCP, an image the agent sees), any other
+looks: a picture as a PNG, any other
 Field as its summary, each number's least, most, sum and mean over
 every element, and how many were not zero. `from` and `count` answer up to 4096 elements as numbers, an
 element of several as a list in order. The whole Field comes when a
@@ -411,35 +371,24 @@ History is bounded and holds changes, never whole worlds.
 
 ## Help
 
-Orla describes itself, from the tables its parts enforce: the builtins
-and the forms from the compiler, what each capability grants from the
-ABI, the replay forms from the replayer, the operations from the table
-above. The sections stand under the creation surfaces (`language`,
-`graph`, `capabilities`) and the `doors` that reach them. An agent asks
-in three steps, each answer small:
+`help` answers Orla's syntax and API, layer by layer, gathered from the
+tables the implementation executes: the types, the builtins and the
+forms from the compiler, the reserved words from the parser, what each
+capability grants from the ABI, a package's parts from the session, the
+operations and the wire above, the replay lines from the replayer.
 
-- `{"op": "help"}`: the index. What the sections stand `under`, the
-  `sections` (`types`, `builtins`, `kernel`, `scene`, `authority`,
-  `packages`, `protocol`, `wire`, `replay`) with how many items each
-  holds, the `workflow` an
-  agent works in (each step and its operations), and the `versions` the
-  answer holds for.
-- `{"op": "help", "full": true}`: all of it at once, `reference`, one
-  Markdown text of every item and every canonical example, for an agent
-  to read once before it starts; [REFERENCE](REFERENCE.md) is the same
-  text.
-- `{"op": "help", "section": "replay"}`: each item's `name` and one `line`.
+- `{"op": "help"}`: `reference`, all of it as one Markdown text
+  ([REFERENCE](REFERENCE.md) is the same text), and the `versions` it
+  holds for.
 - `{"op": "help", "name": "window"}`: every item of that name in full, in
   `found`, each with its `section`: a builtin's signatures, `requires` and
   whether only an entry may call it; what a capability grants and the
-  builtins that need it; a form's shape; a replay step's
-  shape and examples; an operation's fields with their types and whether
-  each is needed. An item of the language, the graph or the authority
-  carries the smallest canonical `example` that shows it, a whole scene
-  the tests load and run; an operation carries its scenario, the requests
-  that set it up and the one that shows it, which the tests send.
+  builtins that need it; a form's shape; a replay line's shape and
+  examples; an operation's fields with their types and whether each is
+  needed.
 
-An unknown section or name is an error naming the near one in `similar`.
+An unknown name is an error naming the near one in `similar`. Whole
+programs are in `examples/`.
 
 ## Search
 

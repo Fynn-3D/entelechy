@@ -1,7 +1,6 @@
 {"scene": "examples/life"}
 {"finding": "compose did not say it rewrites the scene's document on disk, nor which file", "send": {"op": "compose", "text": "{scene}"}, "expect": {"ok": true, "at": {"/ok/written": true}, "says": ["scene.osn"]}}
 {"finding": "a param's value was judged before its name, hiding where the param lives", "send": {"op": "param", "name": "brush", "value": "big"}, "expect": {"ok": false, "says": ["node `life` sets its own `brush`"]}}
-{"finding": "the functions a domain takes were not in help", "send": {"op": "help", "name": "value"}, "expect": {"at": {"/ok/found/0/section": "scene", "/ok/found/0/kind": "domain"}}}
 {"finding": "search did not say what its reach paths are written from", "send": {"op": "search", "text": "compact"}, "expect": {"has": ["/ok/base"]}}
 {"finding": "a search for `color` found nothing: the docs spelled it `colour`", "send": {"op": "search", "text": "color"}, "expect": {"has": ["/ok/capabilities/0"]}}
 {"send": {"op": "evaluate", "time": 0.0}}
@@ -15,12 +14,6 @@
 {"finding": "a source nothing provides was refused with no place in the document", "send": {"op": "compose", "text": "{scene}\nnode dim: life.show@1 { cells <- nowhere.result; }\n"}, "expect": {"ok": false, "at": {"/error/line": 20, "/error/column": 34}}}
 {"finding": "a bare node name as a source did not say to name one of its outputs", "send": {"op": "compose", "text": "{scene}\nnode dim: life.show@1 { cells <- life; }\n"}, "expect": {"says": ["`life.result`"]}}
 {"finding": "a scene without output did not say how one is declared", "send": {"op": "compose", "text": "use \"kernels/\";\nnode a: life.seed@1 { domain = vec2(4, 4); }\n"}, "expect": {"says": ["output name <- node.port;"]}}
-{"finding": "a read after restore looked like a failed restore: the trial frame was not mentioned", "send": {"op": "help", "name": "restore"}, "expect": {"says": ["trial frame's outputs"]}}
-{"finding": "`frame: 2` after many frames was unexplained", "send": {"op": "help", "name": "status"}, "expect": {"says": ["frames committed since"]}}
-{"finding": "the pointer was said to be in window pixels, while Kernels read output pixels", "send": {"op": "help", "name": "evaluate"}, "expect": {"says": ["the output's pixels"], "not": ["window's top left"]}}
-{"finding": "help never said an inline Kernel's param can follow a scene param", "send": {"op": "help", "name": "inline"}, "expect": {"says": ["follows that param"]}}
-{"finding": "help showed a struct written with commas, which the language refuses", "send": {"op": "help", "name": "type"}, "expect": {"says": ["struct Cell { alive: Int; age: Float; }"]}}
-{"finding": "help's scatter used `Pair` without saying what it is", "send": {"op": "help", "name": "scatter"}, "expect": {"says": ["a struct the document declares"]}}
 {"finding": "compose edits glued a new node to the last one's closing brace", "send": {"op": "compose", "edits": [{"node": "dim", "text": "node dim: life.show@1 { cells <- life.result; }"}]}, "expect": {"at": {"/ok/written": true}}}
 {"finding": "compose edits glued a new node to the last one's closing brace", "send": {"op": "document"}, "expect": {"says": ["}\n\nnode dim"]}}
 {"finding": "a row of Vec4s was read as a picture one pixel high", "send": {"op": "compose", "text": "{scene}\nnode r: kernel { requires { field.write; } domain = 4; output result: Rows<Vec4>; compute { return vec4(1.0, 2.0, 3.0, 4.0); } }\n"}, "expect": {"at": {"/ok/written": true}}}
@@ -32,4 +25,3 @@
 {"finding": "a float for an Int param was answered as `is a Int; 2500.5d`: bad grammar, and the value in another notation than the caller's", "send": {"op": "compose", "edits": [{"param": "gain", "text": "param gain: Int = 2;"}]}, "expect": {"ok": true}}
 {"finding": "a float for an Int param was answered as `is a Int; 2500.5d`: bad grammar, and the value in another notation than the caller's", "send": {"op": "param", "name": "gain", "value": 2500.5}, "expect": {"ok": false, "says": ["param `gain` is of type Int; 2500.5 is not one"], "not": ["2500.5d"]}}
 {"finding": "an edits compose refused at a line of a text the caller never saw", "send": {"op": "compose", "edits": [{"node": "seed", "text": null}]}, "expect": {"ok": false, "has": ["/error/text", "/error/line"]}}
-{"finding": "what a Kernel may declare in `requires` was named in one sentence, with nothing on what each grants or needs it", "send": {"op": "help", "name": "input.read"}, "expect": {"at": {"/ok/found/0/section": "authority"}, "has": ["/ok/found/0/doc", "/ok/found/0/required_by"]}}

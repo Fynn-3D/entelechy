@@ -2,7 +2,7 @@
 //! JSON object a line, an answer one line back. What each carries, and
 //! the doors a session is reached through, are the table [`PARTS`] and
 //! [`DOORS`]; [`parse_request`] reads the one and [`envelope`] writes the
-//! other, and `help`'s `wire` section answers them.
+//! other; `help` answers them.
 
 use serde_json::{Value as Json, json};
 
@@ -36,7 +36,7 @@ const fn part(
 
 /// Every part of the envelope: what a request carries beside its
 /// operation's fields, what an answer carries, and what an error may.
-pub const PARTS: [Part; 23] = [
+pub const PARTS: [Part; 21] = [
     part(
         "op",
         "request",
@@ -81,12 +81,6 @@ pub const PARTS: [Part; 23] = [
     ),
     part("column", "error", "integer", "Where on that line, from 1."),
     part(
-        "try",
-        "error",
-        "[object]",
-        "The requests to send next, in order, as they are: the request corrected, what it needs first, or what the caller needs to know; never one that widens authority.",
-    ),
-    part(
         "similar",
         "error",
         "[string]",
@@ -105,12 +99,6 @@ pub const PARTS: [Part; 23] = [
         "error",
         "[string]",
         "Every operation, for an unknown one.",
-    ),
-    part(
-        "sections",
-        "error",
-        "[string]",
-        "Every help section, for an unknown one.",
     ),
     part(
         "version",
@@ -173,7 +161,7 @@ pub struct Door {
 }
 
 /// Every door of a served session; all answer the same operations.
-pub const DOORS: [Door; 4] = [
+pub const DOORS: [Door; 3] = [
     Door {
         name: "stdin",
         opened: "orla serve <scene.osn>",
@@ -188,11 +176,6 @@ pub const DOORS: [Door; 4] = [
         name: "websocket",
         opened: "orla serve <scene.osn> --listen <host:port>",
         doc: "The same lines as WebSocket text messages to the same address, one request a message.",
-    },
-    Door {
-        name: "mcp",
-        opened: "orla serve <scene.osn> --mcp",
-        doc: "MCP over standard input and output: each operation but `quit` a tool whose input schema is its request's, a tool call's arguments its fields, the answer's `ok` or `error` the tool's result; the client ends the session by closing standard input.",
     },
 ];
 

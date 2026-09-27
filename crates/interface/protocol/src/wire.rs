@@ -250,37 +250,6 @@ pub(crate) fn failure(message: impl Into<String>) -> Json {
     json!({ "message": message.into() })
 }
 
-/// `refused` with `try`: the requests, in order, that are a valid next
-/// step from it, repairing what it names or asking what it needs. They
-/// are operations of [`crate::ops`] and widen no authority: the protocol
-/// grants none.
-pub(crate) fn tried(mut refused: Json, next: impl IntoIterator<Item = Json>) -> Json {
-    let next: Vec<Json> = next.into_iter().collect();
-    if !next.is_empty() {
-        refused["try"] = Json::Array(next);
-    }
-    refused
-}
-
-/// `request` sent again with `set` in place of what it had, and without
-/// `without` or its `id`, as a `try`.
-pub(crate) fn again(request: &Json, set: &[(&str, Json)], without: &[&str]) -> Json {
-    let mut next = request.as_object().cloned().unwrap_or_default();
-    next.remove("id");
-    for field in without {
-        next.remove(*field);
-    }
-    for (field, value) in set {
-        next.insert((*field).to_owned(), value.clone());
-    }
-    Json::Object(next)
-}
-
-/// `help` for `name`, as a `try`.
-pub(crate) fn ask_help(name: &str) -> Json {
-    json!({ "op": "help", "name": name })
-}
-
 /// A failed evaluation as data: the message, its node if any, for a
 /// failed state migration the port and migration Kernel, and a run's
 /// `frame`.

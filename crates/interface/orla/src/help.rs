@@ -1,6 +1,6 @@
 //! `orla help`: the protocol's `help` ([`orla_protocol::help`]) with the
-//! command line's own section beside it, as text or, with `--json`, as the
-//! protocol answers.
+//! command line's own commands beside it, as text or, with `--json`, as
+//! the protocol answers.
 
 use serde_json::{Value as Json, json};
 
@@ -24,69 +24,32 @@ fn command_json(command: &commands::Command) -> Json {
     })
 }
 
-/// The answer to `orla help [<section> | <name>]`: the index, a section
-/// (the protocol's or `commands`), or every item of a name.
-pub fn answer(asked: Option<&str>) -> Result<Json, Json> {
+/// Every item named `name`, the protocol's and the commands'.
+pub fn answer(name: &str) -> Result<Json, Json> {
     let all = commands::commands();
-    match asked {
-        None => {
-            let mut index = orla_protocol::help::index();
-            if let Some(sections) = index["sections"].as_array_mut() {
-                sections.push(json!({
-                    "section": COMMANDS,
-                    "under": "doors",
-                    "about": "the orla command line",
-                    "count": all.len(),
-                }));
-            }
-            index["ask"] = json!(
-                "`orla help <section>` for one line an item, `orla help <name>` for one item in full, `--json` for the protocol's answer"
-            );
-            Ok(index)
+    let mut found: Vec<Json> = match orla_protocol::help::named(name) {
+        Ok(named) => named["found"].as_array().cloned().unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+    found.extend(all.iter().filter(|c| c.name == name).map(command_json));
+    if found.is_empty() {
+        // The protocol's refusal names the near miss among its own.
+        let mut refusal = orla_protocol::help::named(name).unwrap_err();
+        if refusal["similar"].as_array().is_none_or(Vec::is_empty) {
+            let near = orla_language::nearest(name, all.iter().map(|c| c.name));
+            refusal["similar"] = json!(near.into_iter().collect::<Vec<_>>());
+            refusal["message"] = json!(format!(
+                "nothing named `{name}`{}",
+                orla_language::suggestion(near)
+            ));
         }
-        Some(COMMANDS) => Ok(json!({
-            "section": COMMANDS,
-            "items": all.iter().map(|c| json!({ "name": c.name, "line": c.summary })).collect::<Vec<_>>(),
-        })),
-        Some(name) => {
-            // A section's name may also name items (`replay`, the command
-            // and the section): the answer is both.
-            if let Ok(mut section) = orla_protocol::help::section(name) {
-                let found: Vec<Json> = all
-                    .iter()
-                    .filter(|c| c.name == name)
-                    .map(command_json)
-                    .collect();
-                if !found.is_empty() {
-                    section["found"] = json!(found);
-                }
-                return Ok(section);
-            }
-            let mut found: Vec<Json> = match orla_protocol::help::named(name) {
-                Ok(named) => named["found"].as_array().cloned().unwrap_or_default(),
-                Err(_) => Vec::new(),
-            };
-            found.extend(all.iter().filter(|c| c.name == name).map(command_json));
-            if found.is_empty() {
-                // The protocol's refusal names the near miss among its own.
-                let mut refusal = orla_protocol::help::named(name).unwrap_err();
-                if refusal["similar"].as_array().is_none_or(Vec::is_empty) {
-                    let near = orla_language::nearest(name, all.iter().map(|c| c.name));
-                    refusal["similar"] = json!(near.into_iter().collect::<Vec<_>>());
-                    refusal["message"] = json!(format!(
-                        "nothing named `{name}`; `orla help` lists the sections{}",
-                        orla_language::suggestion(near)
-                    ));
-                }
-                return Err(refusal);
-            }
-            Ok(json!({ "name": name, "found": found }))
-        }
+        return Err(refusal);
     }
+    Ok(json!({ "name": name, "found": found }))
 }
 
 /// The whole reference ([`orla_protocol::help::reference`]) with the
-/// command line's commands beside the protocol's doors.
+/// command line's commands.
 pub fn full() -> String {
     let mut out = orla_protocol::help::reference();
     out.push_str("\n## commands: the orla command line\n\n");
@@ -99,114 +62,14 @@ pub fn full() -> String {
     out
 }
 
-/// The answer as a person reads it.
+/// The items found, as a person reads them.
 pub fn text(answer: &Json) -> String {
     let mut out = String::new();
-    if let Some(sections) = answer["sections"].as_array() {
-        let versions = &answer["versions"];
-        out.push_str(&format!(
-            "orla {} (api {}, language {}, ir {}, package {})\n",
-            versions["orla"].as_str().unwrap_or_default(),
-            versions["api"],
-            versions["language"],
-            versions["ir"],
-            versions["package"]
-        ));
-        // The sections under each surface, then under the doors.
-        for under in answer["under"].as_array().into_iter().flatten() {
-            let name = under["name"].as_str().unwrap_or_default();
-            out.push_str(&format!(
-                "{name}: {}\n",
-                under["about"].as_str().unwrap_or_default()
-            ));
-            for section in sections.iter().filter(|s| s["under"] == name) {
-                out.push_str(&format!(
-                    "  {:<10} {:>4}  {}\n",
-                    section["section"].as_str().unwrap_or_default(),
-                    section["count"],
-                    section["about"].as_str().unwrap_or_default()
-                ));
-            }
+    for (index, item) in answer["found"].as_array().into_iter().flatten().enumerate() {
+        if index > 0 {
+            out.push('\n');
         }
-        out.push_str("the loop:\n");
-        for step in answer["workflow"].as_array().into_iter().flatten() {
-            let ops: Vec<&str> = step["ops"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Json::as_str)
-                .collect();
-            out.push_str(&format!(
-                "  {:<10} {}\n",
-                step["step"].as_str().unwrap_or_default(),
-                ops.join(", ")
-            ));
-        }
-        out.push_str(answer["ask"].as_str().unwrap_or_default());
-        out.push('\n');
-    } else if answer["items"].is_array() {
-        out.push_str(&items_text(answer));
-        if let Some(found) = answer["found"].as_array() {
-            for item in found {
-                out.push('\n');
-                out.push_str(&item_text(item));
-            }
-        }
-    } else if let Some(found) = answer["found"].as_array() {
-        for (index, item) in found.iter().enumerate() {
-            if index > 0 {
-                out.push('\n');
-            }
-            out.push_str(&item_text(item));
-        }
-    }
-    out
-}
-
-/// A section's items, one line each.
-fn items_text(answer: &Json) -> String {
-    let mut out = String::new();
-    if let Some(items) = answer["items"].as_array() {
-        let width = items
-            .iter()
-            .filter_map(|item| item["name"].as_str())
-            .map(str::len)
-            .max()
-            .unwrap_or(0);
-        for item in items {
-            out.push_str(&format!(
-                "  {:<width$}  {}\n",
-                item["name"].as_str().unwrap_or_default(),
-                item["line"].as_str().unwrap_or_default()
-            ));
-        }
-    }
-    out
-}
-
-fn item_text(item: &Json) -> String {
-    let mut out = item_body(item);
-    let Some(example) = item.get("example") else {
-        return out;
-    };
-    if let Some(send) = example.get("send") {
-        // An operation's scenario: what sets it up, then the request.
-        out.push_str(&format!(
-            "e.g. on help/{}:\n",
-            example["scene"].as_str().unwrap_or("scene.osn")
-        ));
-        for request in example["setup"].as_array().into_iter().flatten() {
-            out.push_str(&format!("  {request}\n"));
-        }
-        out.push_str(&format!("  {send}\n"));
-    } else {
-        out.push_str(&format!(
-            "Shown in {}:\n",
-            example["file"].as_str().unwrap_or_default()
-        ));
-        for line in example["text"].as_str().unwrap_or_default().lines() {
-            out.push_str(&format!("  {line}\n"));
-        }
+        out.push_str(&item_body(item));
     }
     out
 }

@@ -207,21 +207,14 @@ pub(crate) fn versions() -> Json {
     })
 }
 
-/// The index, a section, or the items named; see [`crate::help`].
+/// The whole reference, or the items named; see [`crate::help`].
 pub(crate) fn help(request: &Request) -> Result<Json, Json> {
-    if request.get("full").and_then(Json::as_bool) == Some(true) {
-        return Ok(json!({
+    match request.get("name").and_then(Json::as_str) {
+        Some(name) => crate::help::named(name),
+        None => Ok(json!({
             "reference": crate::help::reference(),
             "versions": versions(),
-        }));
-    }
-    match (
-        request.get("section").and_then(Json::as_str),
-        request.get("name").and_then(Json::as_str),
-    ) {
-        (_, Some(name)) => crate::help::named(name),
-        (Some(section), None) => crate::help::section(section),
-        (None, None) => Ok(crate::help::index()),
+        })),
     }
 }
 

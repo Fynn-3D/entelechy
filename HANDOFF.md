@@ -32,16 +32,13 @@ Verified surface, as of `main`:
 
 ## Next
 
-`feat/self-teaching` holds a batch not yet merged: what Orla says of
-itself is laid out by the creation surfaces and the doors, proved by
-canonical examples and scenarios the tests run, guided by `try`, and
-rendered into the documents (`docs/DECISIONS.md`, *Orla describes
-itself*). Next is its acceptance: a fresh agent against a release copy
-over MCP only, what it finds wanting fixed into
-`crates/interface/orla/tests/findings/`. It merges on the user's word;
-a release is cut once a whole batch is done and accepted.
+`refactor/soul-reference` holds a batch not yet merged: Orla's syntax
+and API are one reference rendered from the tables the implementation
+executes (`orla help`, the protocol's `help`, `docs/REFERENCE.md`), and
+agents learn from it and `examples/`; the protocol's doors are its own
+lines and the bridges. It also holds the runtime fixes agents writing
+demos found (`crates/interface/orla/tests/findings/`). It merges on the
+user's word; a release is cut once a whole batch is done and accepted.
 
-Found wanting by earlier trials and not taken up, none misleading or
-blocking: `search` answers every capability with its whole doc, a broad
-word filling a page; `read` of a one-element output answers its
-summary, `from` giving the value.
+`search` answers every capability with its whole doc, a broad word
+filling a page.

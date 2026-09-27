@@ -1,19 +1,4 @@
 {"scene": "examples/life"}
 {"send": {"op": "evaluate", "time": 0.0}}
-{"finding": "a misnamed field was refused with only the fields it takes", "send": {"op": "read", "nod": "life"}, "expect": {"ok": false, "tries": "corrects"}}
-{"finding": "a request without a field it needs said what it needs, not how to ask", "send": {"op": "write", "node": "life"}, "expect": {"ok": false, "tries": "informs"}}
-{"finding": "a field of the wrong type said the type, not where to learn the operation", "send": {"op": "evaluate", "time": "0"}, "expect": {"ok": false, "tries": "informs"}}
-{"finding": "a misspelled operation named the near one but gave nothing to send", "send": {"op": "evalute", "time": 0.0}, "expect": {"ok": false, "tries": "corrects"}}
-{"finding": "a misspelled node named the near one but gave nothing to send", "send": {"op": "read", "node": "lif"}, "expect": {"ok": false, "tries": "corrects"}}
-{"finding": "a picture's encoding asked of numbers was refused with no request to send", "send": {"op": "read", "node": "life", "format": "png"}, "expect": {"ok": false, "tries": "corrects"}}
-{"finding": "too many elements asked at once was refused with no request to send", "send": {"op": "read", "node": "life", "count": 5000}, "expect": {"ok": false, "tries": "corrects"}}
-{"finding": "elements asked past the end were refused with no request to send", "send": {"op": "read", "node": "life", "from": 999999}, "expect": {"ok": false, "tries": "corrects"}}
-{"finding": "a misspelled help name named the near one but gave nothing to send", "send": {"op": "help", "name": "smoothstp"}, "expect": {"ok": false, "tries": "corrects"}}
-{"finding": "a misspelled help section named the near one but gave nothing to send", "send": {"op": "help", "section": "builtin"}, "expect": {"ok": false, "tries": "corrects"}}
-{"finding": "a stale compose gave the version, not the document to compose against", "send": {"op": "compose", "text": "{scene}", "expect": "0000000000000000"}, "expect": {"ok": false, "tries": "informs"}}
-{"finding": "too many frames asked at once was refused with no request to send", "send": {"op": "advance", "frames": 0}, "expect": {"ok": false, "tries": "corrects"}}
-{"finding": "a misspelled node to trace named the near one but gave nothing to send", "send": {"op": "trace", "node": "lif", "at": [1, 1]}, "expect": {"ok": false, "tries": "corrects"}}
-{"finding": "a snapshot to a file without leave to write said which flag to run with, not that it can be held in the answer", "send": {"op": "snapshot", "to": "kept.json"}, "expect": {"ok": false, "tries": "corrects"}}
 {"send": {"op": "compose", "text": "{scene}\nnode broken: kernel { requires { field.write; } domain = 4; output result: Rows<Int>; compute { return 1 / (element() - element()); } }\noutput also <- broken.result;\n"}}
 {"finding": "a failed evaluation names the node it failed at, as the envelope says an error may", "send": {"op": "evaluate", "time": 0.0}, "expect": {"ok": false, "at": {"/error/node": "broken"}}}
-{"finding": "a Kernel named in `name` was answered with a `try` that dropped it, which was refused again", "send": {"op": "kernel", "name": "life.step@1"}, "expect": {"ok": false, "says": ["did you mean `kernel`"], "tries": "corrects"}}

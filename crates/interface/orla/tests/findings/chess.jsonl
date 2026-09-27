@@ -4,7 +4,3 @@
 {"send": {"op": "compose", "edits": [{"fn": "score", "text": "fn score(i: Int) -> Int { return i * 10; }"}]}, "expect": {"ok": true}}
 {"send": {"op": "evaluate", "time": 0.1}}
 {"finding": "a function its document declares changed, and the Kernels that call it ran the old one, silently", "send": {"op": "read", "node": "k", "from": 3, "count": 1}, "expect": {"at": {"/ok/values/0": 30}}}
-{"finding": "help answered the same long example once for each item of a name", "send": {"op": "help", "name": "vec2"}, "expect": {"has": ["/ok/found/0/example"], "lacks": ["/ok/found/1/example"]}}
-{"finding": "an agent that read the documents wrote a working scene in one go, while one that asked help item by item took many round trips: help had no whole reference", "send": {"op": "help", "full": true}, "expect": {"has": ["/ok/reference"], "says": ["## Examples", "### scene.osn", "**scatter**", "**restore**"]}}
-{"finding": "an agent named a node `from`, and neither help nor the whole reference listed the words a name may not be", "send": {"op": "help", "name": "reserved"}, "expect": {"has": ["/ok/found/0/shape"], "says": ["from", "package"]}}
-{"finding": "the whole reference lacked the reserved words", "send": {"op": "help", "full": true}, "expect": {"says": ["**reserved**", "scatter prefix migrate"]}}

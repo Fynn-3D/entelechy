@@ -27,7 +27,6 @@ mod run;
 mod transport;
 pub mod websocket;
 mod wire;
-pub mod workflow;
 
 use serde_json::{Value as Json, json};
 
@@ -87,10 +86,9 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         && let Some(why) = session.why_no_scene()
     {
         // The inline form's example is the smallest whole scene.
-        return Err(wire::tried(
-            wire::failure(format!("no scene is loaded: {why}; `compose` one")),
-            [wire::ask_help("inline")],
-        ));
+        return Err(wire::failure(format!(
+            "no scene is loaded: {why}; `compose` one"
+        )));
     }
     match request.op() {
         "status" => inspect::status(session),
@@ -122,30 +120,14 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         "quit" => Ok(json!({ "bye": true })),
         other => {
             let near = orla_language::nearest(other, ops::names());
-            // The request under the operation meant, where the table takes
-            // it as written; else what that operation takes.
-            let next = match near {
-                Some(near) => {
-                    let meant = wire::again(request.json(), &[("op", json!(near))], &[]);
-                    if ops::check(&meant).is_ok() {
-                        meant
-                    } else {
-                        wire::ask_help(near)
-                    }
-                }
-                None => json!({ "op": "help" }),
-            };
-            Err(wire::tried(
-                json!({
-                    "message": format!(
-                        "unknown op `{other}`; the operations are {}{}",
-                        ops::names().join(", "),
-                        orla_language::suggestion(near)
-                    ),
-                    "operations": ops::names(),
-                }),
-                [next],
-            ))
+            Err(json!({
+                "message": format!(
+                    "unknown op `{other}`; the operations are {}{}",
+                    ops::names().join(", "),
+                    orla_language::suggestion(near)
+                ),
+                "operations": ops::names(),
+            }))
         }
     }
 }
@@ -352,32 +334,17 @@ mod tests {
     }
 
     /// What a document renders between `<!-- rendered: <what> -->` and
-    /// `<!-- end -->`: the loop an agent works in, the wire, the whole
-    /// reference `help` answers with `full`, or a canonical example
-    /// (`help/<file>`) as a code block of its language.
+    /// `<!-- end -->`: the wire, or the whole reference.
     fn rendering(what: &str) -> Option<String> {
-        if what == "workflow" {
-            return Some(crate::workflow::table());
+        match what {
+            "wire" => Some(crate::envelope::table()),
+            "reference" => Some(crate::help::reference()),
+            _ => None,
         }
-        if what == "wire" {
-            return Some(crate::envelope::table());
-        }
-        if what == "reference" {
-            return Some(crate::help::reference());
-        }
-        let file = what.strip_prefix("help/")?;
-        let example = crate::help::examples()
-            .into_iter()
-            .find(|example| example.file == file)?;
-        let language = file.rsplit('.').next().unwrap_or_default();
-        Some(format!("```{language}\n{}```\n", example.text))
     }
 
-    /// The documents render what they show of Orla from where it is kept:
-    /// every rendered region is its rendering, and every code block of
-    /// Orla's own languages (`orla`, `osn`) is inside one, so a document
-    /// holds no second copy of a program. `ORLA_BLESS=1` writes the
-    /// regions again.
+    /// Every rendered region of the documents is its rendering;
+    /// `ORLA_BLESS=1` writes the regions again.
     #[test]
     fn the_documents_render_what_they_show() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -396,7 +363,6 @@ mod tests {
             // Each region, replaced by its rendering.
             let mut out = String::new();
             let mut rest = text.as_str();
-            let mut inside: Vec<(usize, usize)> = Vec::new();
             while let Some(at) = rest.find("<!-- rendered: ") {
                 let open_end = at + rest[at..].find("-->").expect("a marker closes") + 3;
                 let what = rest[at + 15..open_end - 3].trim().to_owned();
@@ -406,8 +372,6 @@ mod tests {
                         .find("<!-- end -->")
                         .unwrap_or_else(|| panic!("{name}: `{what}` has no `<!-- end -->`"));
                 out.push_str(&rest[..body_start]);
-                let start = text.len() - rest.len() + body_start;
-                inside.push((start, text.len() - rest.len() + close));
                 match rendering(&what) {
                     Some(rendered) => {
                         if rest[body_start..close] != rendered {
@@ -424,20 +388,6 @@ mod tests {
                 rest = &rest[close..];
             }
             out.push_str(rest);
-            // A code block of Orla's languages stands inside a region.
-            let mut offset = 0;
-            for line in text.split_inclusive('\n') {
-                let fence = line.trim_end();
-                if (fence == "```orla" || fence == "```osn")
-                    && !inside.iter().any(|(a, b)| offset >= *a && offset < *b)
-                {
-                    wrong.push(format!(
-                        "{name}: a `{}` block is written by hand; render it from `help/`",
-                        &fence[3..]
-                    ));
-                }
-                offset += line.len();
-            }
             if bless && out != text {
                 std::fs::write(&path, out).unwrap();
             }
@@ -450,39 +400,5 @@ mod tests {
                 wrong.join("\n")
             );
         }
-    }
-
-    /// The whole reference holds every item of every section, and every
-    /// canonical example, and stays small enough to read at once.
-    #[test]
-    fn the_reference_holds_everything_once() {
-        let reference = crate::help::reference();
-        let index = crate::help::index();
-        for section in index["sections"].as_array().unwrap() {
-            let name = section["section"].as_str().unwrap();
-            let items = crate::help::section(name).unwrap();
-            for item in items["items"].as_array().unwrap() {
-                let item = item["name"].as_str().unwrap();
-                assert!(
-                    reference.contains(&format!("**{item}**")),
-                    "{name} `{item}` is not in the reference"
-                );
-            }
-        }
-        for example in crate::help::examples() {
-            assert_eq!(
-                reference
-                    .matches(&format!("### {}\n", example.file))
-                    .count(),
-                1,
-                "{} is in the reference once",
-                example.file
-            );
-        }
-        assert!(
-            reference.len() < 128 * 1024,
-            "the reference is {} bytes, past what an agent reads at once",
-            reference.len()
-        );
     }
 }

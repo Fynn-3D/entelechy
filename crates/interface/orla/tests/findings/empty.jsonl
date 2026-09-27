@@ -1,7 +1,6 @@
 {"scene": "examples/life", "text": ""}
 {"finding": "an empty scene's refusal went to stderr only: status looked like a loaded scene of no nodes", "send": {"op": "status"}, "expect": {"at": {"/ok/loaded": false}, "says": ["the scene declares no output"]}}
 {"finding": "evaluate with no scene answered `output refers to unknown source <no scene>`", "send": {"op": "evaluate", "time": 0.0}, "expect": {"ok": false, "says": ["no scene is loaded", "`compose` one"], "not": ["<no scene>"]}}
-{"finding": "with no scene, running it said to compose one, not what one looks like", "send": {"op": "evaluate", "time": 0.0}, "expect": {"ok": false, "tries": "informs"}}
 {"finding": "a refusal of the document as a whole was placed at 0:0", "send": {"op": "status"}, "expect": {"not": ["0:0"]}}
 {"send": {"op": "compose", "text": "use \"kernels/\";\nnode seed: life.seed@1 { domain = vec2(8, 8); }\nnode show: life.show@1 { cells <- seed.result; }\noutput result <- show.result;\n"}, "expect": {"ok": true}}
 {"finding": "a loaded scene says so", "send": {"op": "status"}, "expect": {"at": {"/ok/loaded": true, "/ok/refused": null}}}

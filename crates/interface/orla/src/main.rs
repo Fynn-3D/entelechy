@@ -829,13 +829,12 @@ fn search(args: &[String]) -> Result<(), String> {
 }
 
 fn help(args: &[String]) -> Result<(), String> {
-    if args.iter().any(|arg| arg == "--full") {
+    let json = args.iter().any(|arg| arg == "--json");
+    let Some(name) = args.iter().find(|arg| *arg != "--json") else {
         print!("{}", orla::help::full());
         return Ok(());
-    }
-    let json = args.iter().any(|arg| arg == "--json");
-    let asked = args.iter().find(|arg| *arg != "--json").map(String::as_str);
-    match orla::help::answer(asked) {
+    };
+    match orla::help::answer(name) {
         Ok(answer) if json => {
             println!("{answer}");
             Ok(())

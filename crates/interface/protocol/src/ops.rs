@@ -586,21 +586,13 @@ pub fn operations() -> Vec<Operation> {
         ),
         op(
             "help",
-            "What Orla answers: this index, a section, one item by name, or with `full` everything at once.",
-            vec![
-                may("section", Ty::Str, "a section the index names"),
-                may(
-                    "full",
-                    Ty::Bool,
-                    "the whole reference in one answer, every item and every canonical example: the fastest start",
-                ),
-                may(
-                    "name",
-                    Ty::Str,
-                    "one builtin, form, operation or replay step",
-                ),
-            ],
-            "the index; a section's items; one item in full; or with `full`, `reference`, the whole of it as one Markdown text. An unknown name is an error with `similar`",
+            "Orla's syntax and API, layer by layer: all of it, or one name in full.",
+            vec![may(
+                "name",
+                Ty::Str,
+                "one builtin, form, capability, operation or replay step",
+            )],
+            "`reference`, the whole of it as one Markdown text, and `versions`; or with `name`, every item of that name in full. An unknown name is an error with `similar`",
         ),
         op(
             "search",
@@ -696,83 +688,38 @@ pub(crate) fn check(request: &Json) -> Result<(), Json> {
         if key == "op" || key == "id" || takes.contains(&key.as_str()) {
             continue;
         }
-        // The field it was meant as: the one named nearest, or else the
-        // only field the request lacks that would hold its value, one the
-        // operation needs before one it may take.
-        let value = &object[key];
-        let holds: Vec<&Field> = op
-            .fields
-            .iter()
-            .filter(|field| !object.contains_key(field.name))
-            .filter(|field| field.ty.check(value, field.name).is_ok())
-            .collect();
-        let needed: Vec<&Field> = holds
-            .iter()
-            .copied()
-            .filter(|field| field.required)
-            .collect();
-        let only = match (needed.as_slice(), holds.as_slice()) {
-            ([one], _) | ([], [one]) => Some(one.name),
-            _ => None,
-        };
         let similar = orla_language::nearest(key, takes.iter().copied());
-        let near = similar.or(only);
-        // The request with the field named as the operation takes it, or
-        // without it; offered only when the operation would take it, and
-        // otherwise `help` for the operation.
-        let mut fixed = object.clone();
-        fixed.remove("id");
-        if let Some(value) = fixed.remove(key)
-            && let Some(near) = near
-        {
-            fixed.insert(near.to_owned(), value);
-        }
-        let fixed = Json::Object(fixed);
-        let next = if check(&fixed).is_ok() {
-            fixed
-        } else {
-            crate::wire::ask_help(op.name)
-        };
-        return Err(crate::wire::tried(
-            json!({
-                "message": format!(
-                    "`{}` takes {}; `{key}` is not one of them{}",
-                    op.name,
-                    listed(),
-                    orla_language::suggestion(near)
-                ),
-                "fields": takes,
-                "similar": similar.into_iter().collect::<Vec<_>>(),
-            }),
-            [next],
-        ));
+        return Err(json!({
+            "message": format!(
+                "`{}` takes {}; `{key}` is not one of them{}",
+                op.name,
+                listed(),
+                orla_language::suggestion(similar)
+            ),
+            "fields": takes,
+            "similar": similar.into_iter().collect::<Vec<_>>(),
+        }));
     }
     if let Some(missing) = op
         .fields
         .iter()
         .find(|field| field.required && !object.contains_key(field.name))
     {
-        return Err(crate::wire::tried(
-            json!({
-                "message": format!("`{}` needs `{}` ({}); it takes {}", op.name, missing.name, missing.doc, listed()),
-                "fields": takes,
-            }),
-            [crate::wire::ask_help(op.name)],
-        ));
+        return Err(json!({
+            "message": format!("`{}` needs `{}` ({}); it takes {}", op.name, missing.name, missing.doc, listed()),
+            "fields": takes,
+        }));
     }
     for field in &op.fields {
         if let Some(value) = object.get(field.name)
             && let Err(why) = field.ty.check(value, field.name)
         {
-            return Err(crate::wire::tried(
-                json!({
-                    "message": format!("`{}`: {why}", op.name),
-                    "fields": takes,
-                    "field": field.name,
-                    "expected": field.ty.describe(),
-                }),
-                [crate::wire::ask_help(op.name)],
-            ));
+            return Err(json!({
+                "message": format!("`{}`: {why}", op.name),
+                "fields": takes,
+                "field": field.name,
+                "expected": field.ty.describe(),
+            }));
         }
     }
     Ok(())
@@ -820,37 +767,4 @@ pub fn table() -> String {
         ));
     }
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Every `try` a misnamed field is answered with is a request the
-    /// operation takes.
-    #[test]
-    fn a_misnamed_field_is_corrected_to_a_request_the_operation_takes() {
-        for op in operations() {
-            for value in [json!("image.blur@1"), json!(3), json!({ "x": 1 })] {
-                for key in ["name", "zzq"] {
-                    let request = json!({ "op": op.name, key: value });
-                    if check(&request).is_ok() {
-                        continue;
-                    }
-                    let refused = check(&request).unwrap_err();
-                    for next in refused["try"].as_array().into_iter().flatten() {
-                        assert!(
-                            check(next).is_ok(),
-                            "{request} tries {next}, which is refused"
-                        );
-                    }
-                }
-            }
-        }
-        let refused = check(&json!({ "op": "kernel", "name": "image.blur@1" })).unwrap_err();
-        assert_eq!(
-            refused["try"],
-            json!([{ "op": "kernel", "kernel": "image.blur@1" }])
-        );
-    }
 }

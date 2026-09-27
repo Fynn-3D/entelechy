@@ -327,20 +327,15 @@ which `orla` does not check.",
         },
         Command {
             name: "help",
-            args: "[<section> | <name> | --full]",
-            summary: "What Orla answers: the index, a section, one item in full, or everything at once.",
+            args: "[<name>]",
+            summary: "Orla's syntax and API, layer by layer: all of it, or one name in full.",
             doc: "\
-With nothing, the sections under each surface and door and how many items
-each holds, and the loop an agent works in; with a section, each item's one
-line; with a name, every item of that name in full: a builtin's
-signatures and capability, a form's shape, a replay step, a protocol
-operation's fields, a command's flags. --json answers as the protocol's
-`help` does. --full prints the whole reference, every item and every
-canonical example, to read once.",
-            flags: vec![
-                switch("--json", "answer as the protocol's `help` does"),
-                switch("--full", "the whole reference at once"),
-            ],
+With nothing, the whole reference: every type, builtin, form, capability,
+package part, protocol operation, wire part, replay line and command.
+With a name, every item of that name in full: a builtin's signatures and
+capability, a form's shape, a protocol operation's fields, a command's
+flags. --json answers as the protocol's `help` does.",
+            flags: vec![switch("--json", "answer as the protocol's `help` does")],
             passes: false,
         },
         Command {

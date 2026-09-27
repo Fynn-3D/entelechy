@@ -1,2 +1,0 @@
-{"scene": "examples/ant"}
-{"finding": "a misspelled param named the near one but gave nothing to send", "send": {"op": "param", "name": "sped", "value": 100}, "expect": {"ok": false, "tries": "corrects"}}

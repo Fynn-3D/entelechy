@@ -44,7 +44,7 @@ pub(crate) fn compose_with(
             ));
             refused["version"] = json!(current);
             // The document as it stands, to compose against.
-            return Err(crate::wire::tried(refused, [json!({ "op": "document" })]));
+            return Err(refused);
         }
     }
     let text = match (request.get("text"), request.get("edits")) {
@@ -276,18 +276,7 @@ pub(crate) fn param(session: &mut Session, request: &Request) -> Result<Json, Js
     let name = request.text("name")?;
     // The name is judged before the value, so a value for a param that
     // lives elsewhere is answered with where it lives.
-    // A name near a declared one is tried in its place.
-    let ty = session.param_type(&name).map_err(|why| {
-        let declared = session
-            .graph()
-            .map(|g| g.params.iter().map(|p| p.name.clone()).collect::<Vec<_>>())
-            .unwrap_or_default();
-        let near = orla_language::nearest(&name, declared.iter().map(String::as_str));
-        crate::wire::tried(
-            failure(why),
-            near.map(|near| crate::wire::again(request.json(), &[("name", json!(near))], &[])),
-        )
-    })?;
+    let ty = session.param_type(&name).map_err(failure)?;
     let given = value_from_json(request.field("value")?).map_err(|mut refused| {
         if let (Some(ty), Some(message)) = (&ty, refused["message"].as_str()) {
             refused["message"] = json!(format!("param `{name}` is of type {ty}; {message}"));
