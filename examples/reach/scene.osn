@@ -4,7 +4,7 @@
 // the palette, so the chain below the shoulder follows it and the clip
 // still bends the elbow.
 use "kernels/";
-use "../../packages/skin.orlapkg/kernels/skin.orla";
+use "../../packages/skin.orlapkg";
 
 input mesh: Rows<Point> = "../skin/assets/arm.vertices.field";
 input faces: Triangles = "../skin/assets/arm.triangles.field";

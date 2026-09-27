@@ -2,7 +2,7 @@
 // bits in font.orla, and this scene saves them as the file every scene
 // that draws text names.
 //   orla run examples/text/bake.osn --save font=packages/text.orlapkg/font.png
-use "../../packages/text.orlapkg/kernels/font.orla";
+use "../../packages/text.orlapkg";
 
 node font: text.font@1 { domain = vec2(96, 48); }
 

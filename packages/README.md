@@ -1,9 +1,13 @@
 # Packages
 
-What several scenes share is a package, not an example: a directory
-with a `package.osn` naming it and the least language and IR it needs,
-a `kernels/` directory it `use`s, and `graphs/` presets a scene places
-as nodes. `orla pack` carries one as a single `.orlapkg` file and
+A package is a capability with a stable interface, meant to be reused:
+a directory with a `package.osn` naming it and the least language and IR
+it needs, a `kernels/` directory it `use`s, and `graphs/` presets a
+scene places as nodes. A scene, an example or another package uses it
+whole, `use "…/name.orlapkg";`, never a file inside it, so the
+manifest's versions hold; a preset in `graphs/` and a file it ships
+(`font.png`) are reached by their path inside it. Every package is used
+by an example, whose replay tests it. `orla pack` carries one as a single `.orlapkg` file and
 `orla unpack` opens it again; `orla package <dir>` prints what one
 holds.
 

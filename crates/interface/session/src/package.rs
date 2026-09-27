@@ -25,7 +25,7 @@ pub const LAYOUT: [Part; 6] = [
     Part {
         name: "kernels",
         shape: "use \"kernels/\";   (in the manifest)",
-        doc: "The documents the manifest uses, inside the directory, are the package's Kernels; a scene that uses the package publishes every one of them.",
+        doc: "The documents the manifest uses, inside the directory, are the package's Kernels; a scene that uses the package publishes every one of them. A document outside the package uses it whole, never a file inside it, so the manifest's versions hold.",
     },
     Part {
         name: "graphs",

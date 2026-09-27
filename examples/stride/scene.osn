@@ -6,7 +6,7 @@
 // through `<~`, so the body moves on through the world instead of being
 // dragged back each time the clip loops.
 use "kernels/";
-use "../../packages/skin.orlapkg/kernels/skin.orla";
+use "../../packages/skin.orlapkg";
 
 input mesh: Rows<Point> = "../skin/assets/arm.vertices.field";
 input faces: Triangles = "../skin/assets/arm.triangles.field";

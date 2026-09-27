@@ -48,6 +48,37 @@ pub(crate) fn expand_use(
     }
 }
 
+/// Refuses a `use` from a document in `base` of a file inside a package
+/// the document is not in: a package is used whole, through its manifest,
+/// whose versions it is held to. A package's own documents use its files.
+fn used_through_its_manifest(store: &dyn Store, base: &Path, path: &Path) -> Result<(), String> {
+    // Where a path lies, through a package's name when it is spelled so.
+    let located = |path: &Path| {
+        let path = resolve_package(store, path);
+        let path = match store.exists(&path) {
+            true => path,
+            false => in_package(store, &path).unwrap_or(path),
+        };
+        store.canonical(&path).unwrap_or(path)
+    };
+    let (base, path) = (located(base), located(path));
+    let canonical = |p: &Path| store.canonical(p).unwrap_or_else(|_| p.to_path_buf());
+    let Some(package) = path.ancestors().skip(1).find(|dir| {
+        dir.extension().is_some_and(|ext| ext == "orlapkg")
+            && store.is_file(&dir.join("package.osn"))
+    }) else {
+        return Ok(());
+    };
+    if base.starts_with(canonical(package)) {
+        return Ok(());
+    }
+    let name = package.file_name().unwrap_or_default().to_string_lossy();
+    Err(format!(
+        "`{}` is inside the package {name}; use the package whole, `use \".../{name}\";`, which its manifest is held to",
+        path.display()
+    ))
+}
+
 /// A document's text: the file at `path`, else, for a path through a
 /// package's name, the file inside that package.
 pub fn read_document(store: &dyn Store, path: &Path) -> Result<String, String> {
@@ -195,6 +226,7 @@ pub fn used_documents(
     ) -> Result<(), String> {
         for item in uses {
             let path = base.join(&item.path.value);
+            used_through_its_manifest(store, base, &path)?;
             for file in expand_use(store, &path, item.path.value.ends_with('/'))? {
                 let key = store.canonical(&file).unwrap_or_else(|_| file.clone());
                 if !visited.insert(key) {
@@ -258,6 +290,7 @@ pub fn declarations_within(
     ) -> Result<(), String> {
         for item in uses {
             let path = base.join(&item.path.value);
+            used_through_its_manifest(store, base, &path)?;
             for file in expand_use(store, &path, item.path.value.ends_with('/'))? {
                 let key = store.canonical(&file).unwrap_or_else(|_| file.clone());
                 if let Some(at) = stack.iter().position(|open| *open == key) {

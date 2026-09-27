@@ -7,7 +7,7 @@
 // vertex is bound to, the joints, and one clip per action. The Host
 // watches them, so re-importing changes the running window.
 use "kernels/";
-use "../../packages/skin.orlapkg/kernels/skin.orla";
+use "../../packages/skin.orlapkg";
 
 input mesh: Rows<Point> = "assets/arm.vertices.field";
 input faces: Triangles = "assets/arm.triangles.field";

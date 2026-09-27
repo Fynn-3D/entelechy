@@ -4,7 +4,7 @@
 // the palette alone — the joint's matrix in the skin's space is its
 // palette row undone by its inverse bind — so the check does not share
 // the arithmetic it checks.
-use "../../../packages/skin.orlapkg/kernels/skin.orla";
+use "../../../packages/skin.orlapkg";
 
 input skeleton: Skeleton = "../../skin/assets/arm.skeleton.field";
 input curl: Clip = "../../skin/assets/arm.curl.clip.field";

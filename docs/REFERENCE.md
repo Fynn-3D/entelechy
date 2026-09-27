@@ -203,7 +203,7 @@ Kernels (`.orla`) compute; scenes (`.osn`) compose them into a running world. Wh
 ## packages: what a package holds and how a scene reaches one
 
 - **manifest**: `name.orlapkg/package.osn: package name@1 { language = 1; ir = 1; }` What the directory is called, and the least language and IR it needs: one this Orla does not have refuses the package, naming both.
-- **kernels**: `use "kernels/";   (in the manifest)` The documents the manifest uses, inside the directory, are the package's Kernels; a scene that uses the package publishes every one of them.
+- **kernels**: `use "kernels/";   (in the manifest)` The documents the manifest uses, inside the directory, are the package's Kernels; a scene that uses the package publishes every one of them. A document outside the package uses it whole, never a file inside it, so the manifest's versions hold.
 - **graphs**: `name.orlapkg/graphs/*.osn` Preset graphs, placed with `node n: graph "name.orlapkg/graphs/g.osn" { ... }`.
 - **docs**: `//! at the top of a manifest or a preset;   /// above a Kernel, a port or a param` What each part is for, in its source; `kernel` and `kernels` answer a published Kernel's.
 - **assets**: `name.orlapkg/font.png` Any other file in the directory, which a scene's `input` reads; a package's files are readable wherever reads are held.

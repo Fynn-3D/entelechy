@@ -5,9 +5,11 @@ Each example is a directory with a `scene.osn` entry, usually a
 directory of `.replay` scripts and their fixture scenes, and a
 `README.md` saying what it shows and how to run it.
 
-What several scenes share is a package in
-[`packages/`](../packages/README.md), used by path or, with
-`ORLA_PACKAGES` set, by name.
+An example is a whole program; a reusable capability it draws on is a
+package in [`packages/`](../packages/README.md), used whole by path
+(`use "../../packages/skin.orlapkg";`) or, with `ORLA_PACKAGES` set, by
+name. An example uses packages and nothing uses an example. Small
+helpers stay in the example, so one directory reads whole.
 
 ```sh
 orla run examples/<example>/scene.osn --out output.ppm --watch

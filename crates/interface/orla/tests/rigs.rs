@@ -74,7 +74,7 @@ fn the_importer_writes_what_the_package_reads() {
     std::fs::write(
         &scene,
         format!(
-            "use \"{root}/packages/skin.orlapkg/kernels/skin.orla\";\n\
+            "use \"{root}/packages/skin.orlapkg\";\n\
              input mesh: Rows<Point> = \"arm.vertices.field\";\n\
              input weights: Rows<Bound> = \"arm.weights.field\";\n\
              input skeleton: Skeleton = \"arm.skeleton.field\";\n\

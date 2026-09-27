@@ -106,9 +106,21 @@ fn a_package_is_what_its_layout_says() {
                 );
                 let _ = std::fs::remove_dir_all(&newer);
             }
-            // The Kernels its manifest uses are published.
+            // The Kernels its manifest uses are published; a scene
+            // outside it uses the package whole, never a file inside.
             "kernels" => {
                 assert!(loaded, "{events:?}");
+                let mut inside = served(
+                    &dir,
+                    "tally.orlapkg/kernels/tally.orla",
+                    "../packages/tally.orlapkg/dot.ppm",
+                );
+                let refused = inside.sync();
+                assert!(inside.graph().is_none(), "{refused:?}");
+                assert!(
+                    format!("{refused:?}").contains("use the package whole"),
+                    "{refused:?}"
+                );
                 assert!(
                     session
                         .runtime()

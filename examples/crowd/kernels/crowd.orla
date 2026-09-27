@@ -1,6 +1,6 @@
 // A field of arms out of one rig: where each stands, when each is in
 // its clip, and which bone follows which action.
-use "../../../packages/skin.orlapkg/kernels/skin.orla";
+use "../../../packages/skin.orlapkg";
 
 struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }
 struct Tri { a: Int; b: Int; c: Int; }

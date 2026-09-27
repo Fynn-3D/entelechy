@@ -279,7 +279,7 @@ fn a_rig_pushed_from_blender_poses_as_its_gltf_does() {
             &scene,
             format!(
                 "use \"{root}/examples/skin/kernels/\";\n\
-                 use \"{root}/packages/skin.orlapkg/kernels/skin.orla\";\n\
+                 use \"{root}/packages/skin.orlapkg\";\n\
                  input mesh: Rows<Point> = \"{stem}.vertices.field\";\n\
                  input faces: Triangles = \"{stem}.triangles.field\";\n\
                  input weights: Rows<Bound> = \"{stem}.weights.field\";\n\
