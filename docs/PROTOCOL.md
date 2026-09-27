@@ -375,7 +375,10 @@ in three steps, each answer small:
   whether only an entry may call it; what a capability grants and the
   builtins that need it; a form's shape; a replay step's
   shape and examples; an operation's fields with their types and whether
-  each is needed.
+  each is needed. An item of the language, the graph or the authority
+  carries the smallest canonical `example` that shows it, a whole scene
+  the tests load and run; an operation carries its scenario, the requests
+  that set it up and the one that shows it, which the tests send.
 
 An unknown section or name is an error naming the near one in `similar`.
 

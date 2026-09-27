@@ -1,0 +1,26 @@
+//! What a Kernel reads of the world around it, each with the capability
+//! that grants it: the clock and the sound rate (`time.read`), and the
+//! window, the pointer, buttons, keys, pad and wheel (`input.read`).
+//! shows: time, rate, window, scale, pointer, pointer_down, button, stick, wheel, key, domain, idomain, field.read, field.write, time.read, input.read
+node world: kernel {
+    requires { field.write; time.read; input.read; }
+    domain = vec2(8, 8);
+    output result: Grid<Float>;
+    compute {
+        let clock = time() + rate() * 0.0;
+        let screen = window().x * scale() + domain().x + float(idomain().y);
+        let hand = pointer().x + if pointer_down() || button(1) { 1.0 } else { 0.0 };
+        let pad = stick(0).x + wheel().y + if key(32) { 1.0 } else { 0.0 };
+        return clock + screen * 0.0 + hand + pad;
+    }
+}
+
+node read: kernel {
+    requires { field.read; field.write; }
+    input world: Grid<Float> <- world.result;
+    domain = 4;
+    output result: Rows<Float>;
+    compute { return at(world, vec2(0.0, 0.0)); }
+}
+
+output result <- read.result;

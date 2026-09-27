@@ -1,0 +1,7 @@
+/// Each value doubled.
+kernel tally.twice@1 {
+    requires { field.read; field.write; }
+    input values: Rows<Float>;
+    output result: Rows<Float>;
+    compute { return sample(values) * 2.0; }
+}

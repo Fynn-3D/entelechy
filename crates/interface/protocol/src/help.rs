@@ -28,6 +28,71 @@ pub const UNDER: [(&str, &str); 4] = [
     ("doors", "how an agent reaches the surfaces"),
 ];
 
+/// A canonical example: a whole scene the tests load and run, the help
+/// items it shows (its `//! shows:` line), and its text. What help shows of
+/// the language, the graph and the authority is proved by these.
+pub struct Example {
+    /// Its file, in `help/` beside this crate's sources.
+    pub file: &'static str,
+    /// Its text.
+    pub text: &'static str,
+}
+
+impl Example {
+    /// Whether it is a package's manifest, which a scene uses rather than
+    /// runs.
+    pub fn is_package(&self) -> bool {
+        self.text.lines().any(|line| line.starts_with("package "))
+    }
+
+    /// The help items it shows.
+    pub fn shows(&self) -> Vec<&'static str> {
+        self.text
+            .lines()
+            .find_map(|line| line.strip_prefix("//! shows:"))
+            .map(|names| names.split(',').map(str::trim).collect())
+            .unwrap_or_default()
+    }
+}
+
+/// The canonical examples, smallest first.
+pub fn examples() -> Vec<Example> {
+    macro_rules! example {
+        ($file:literal) => {
+            Example {
+                file: $file,
+                text: include_str!(concat!("../help/", $file)),
+            }
+        };
+    }
+    let mut all = vec![
+        example!("scene.osn"),
+        example!("values.osn"),
+        example!("types.osn"),
+        example!("math.osn"),
+        example!("loops.osn"),
+        example!("fields.osn"),
+        example!("modes.osn"),
+        example!("graph.osn"),
+        example!("context.osn"),
+        example!("tally.orlapkg/package.osn"),
+    ];
+    all.sort_by_key(|example| example.text.len());
+    all
+}
+
+/// Each operation's scenario, as a test sends it: the scene it runs on
+/// (`help/scene.osn` when not given), the requests that set it up, and the
+/// request that shows the operation. A `"$n"` in a request stands for the
+/// answer to set-up request `n`.
+pub fn scenarios() -> Vec<Json> {
+    include_str!("../help/protocol.jsonl")
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("help/protocol.jsonl holds JSON lines"))
+        .collect()
+}
+
 /// The sections, each under a surface or the doors, with what it holds.
 const SECTIONS: [(&str, &str, &str); 7] = [
     (
@@ -207,10 +272,29 @@ pub fn section(name: &str) -> Result<Json, Json> {
 /// replay step and an operation at once (`window`, `reset`).
 pub fn named(name: &str) -> Result<Json, Json> {
     let all = items();
+    // Each item with the smallest canonical example that shows it.
+    let example = examples()
+        .into_iter()
+        .find(|example| example.shows().contains(&name));
     let found: Vec<Json> = all
         .iter()
         .filter(|item| item["name"] == name)
         .cloned()
+        .map(|mut item| {
+            let proved = matches!(
+                item["section"].as_str(),
+                Some("types" | "builtins" | "kernel" | "scene" | "authority")
+            );
+            if let (true, Some(example)) = (proved, &example) {
+                item["example"] = json!({ "file": example.file, "text": example.text });
+            }
+            if item["section"] == "protocol"
+                && let Some(scenario) = scenarios().into_iter().find(|s| s["op"] == name)
+            {
+                item["example"] = scenario;
+            }
+            item
+        })
         .collect();
     if found.is_empty() {
         let mut names: Vec<&str> = all

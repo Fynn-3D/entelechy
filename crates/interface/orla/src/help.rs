@@ -171,6 +171,33 @@ fn items_text(answer: &Json) -> String {
 }
 
 fn item_text(item: &Json) -> String {
+    let mut out = item_body(item);
+    let Some(example) = item.get("example") else {
+        return out;
+    };
+    if let Some(send) = example.get("send") {
+        // An operation's scenario: what sets it up, then the request.
+        out.push_str(&format!(
+            "e.g. on help/{}:\n",
+            example["scene"].as_str().unwrap_or("scene.osn")
+        ));
+        for request in example["setup"].as_array().into_iter().flatten() {
+            out.push_str(&format!("  {request}\n"));
+        }
+        out.push_str(&format!("  {send}\n"));
+    } else {
+        out.push_str(&format!(
+            "Shown in {}:\n",
+            example["file"].as_str().unwrap_or_default()
+        ));
+        for line in example["text"].as_str().unwrap_or_default().lines() {
+            out.push_str(&format!("  {line}\n"));
+        }
+    }
+    out
+}
+
+fn item_body(item: &Json) -> String {
     let text = |key: &str| item[key].as_str().unwrap_or_default().to_owned();
     let mut out = String::new();
     match item["section"].as_str().unwrap_or_default() {

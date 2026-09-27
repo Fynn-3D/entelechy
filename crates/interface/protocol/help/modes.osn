@@ -1,0 +1,69 @@
+//! How a Kernel runs over its domain: a map (`compute`) gives each element
+//! alone; `merge` folds a map's elements into one; a `scan` walks them in
+//! order, carrying a value and owning `memory` it may `put` into; a
+//! `prefix` folds each element with every one before it; a `scatter`
+//! combines values into a target at addresses, one per element or several
+//! by `emit`; a fold that must give one answer in any order sums
+//! integers.
+//! shows: compute, merge, scan, memory, put, prefix, scatter, emit
+node ones: Rows<Float> { domain = 8; value = 1.0; }
+node zeros: Rows<Float> { domain = 4; value = 0.0; }
+node counts: Rows<Int> { domain = 8; value = 1; }
+node empty: Rows<Int> { domain = 4; value = 0; }
+
+node total: kernel {
+    requires { field.read; field.write; }
+    input values: Rows<Float> <- ones.result;
+    output result: Rows<Float>;
+    compute { return sample(values); }
+    merge(a, b) { return a + b; }
+}
+
+kernel modes.walk@1 {
+    requires { field.read; field.write; }
+    input steps: Rows<Float>;
+    memory trail: Rows<Float>;
+    output result: Rows<Float>;
+    scan with y = 0.0 {
+        let next = y + sample(steps);
+        put(trail, element() % 4, next);
+        return next;
+    }
+}
+
+node walked: modes.walk@1 {
+    steps <- ones.result;
+    trail <~ walked.trail from zeros.result;
+}
+
+node running: kernel {
+    requires { field.read; field.write; }
+    input values: Rows<Int> <- counts.result;
+    output result: Rows<Int>;
+    prefix with sum { return sample(values); }
+}
+
+node binned: kernel {
+    requires { field.read; field.write; }
+    input bins: Rows<Int> <- empty.result;
+    domain = 8;
+    output result: Rows<Int>;
+    struct Add { at: Int; value: Int; }
+    scatter into bins with sum {
+        emit(Add { at: 0, value: 2 });
+        return Add { at: element() % 4, value: 1 };
+    }
+}
+
+node summed: kernel {
+    requires { field.read; field.write; }
+    input a: Rows<Float> <- total.result;
+    input b: Rows<Float> <- walked.result;
+    input c: Rows<Int> <- running.result;
+    input d: Rows<Int> <- binned.result;
+    domain = 4;
+    output result: Rows<Float>;
+    compute { return at(a, 0) + at(b, element()) + float(at(c, element()) + at(d, element())); }
+}
+
+output result <- summed.result;

@@ -1,0 +1,50 @@
+//! Every type a value, a port or a param has: scalars, vectors and
+//! matrices of 32 and 64 bits, and the Fields that hold them, a picture's
+//! element kept narrow with `as`.
+//! shows: Float, Int, Bool, Double, Long, Vec2, Vec3, Vec4, IVec2, IVec3, LVec2, LVec3, DVec2, DVec3, DVec4, Mat2, Mat3, Mat4, DMat2, DMat3, DMat4, Rows, Grid, Volume, as, ivec2, ivec3, lvec2, lvec3, dvec2, dvec3, dvec4, mat2, mat3, mat4, dmat2, dmat3, dmat4, double, long, vec3, icoord
+struct Every {
+    f: Float; n: Int; yes: Bool; d: Double; l: Long;
+    v2: Vec2; v3: Vec3; v4: Vec4; cell: IVec2; cube: IVec3; wide: LVec2; wider: LVec3;
+    dv2: DVec2; dv3: DVec3; dv4: DVec4;
+    m2: Mat2; m3: Mat3; m4: Mat4; dm2: DMat2; dm3: DMat3; dm4: DMat4;
+}
+
+node narrow: kernel {
+    requires { field.write; }
+    domain = vec2(4, 4);
+    output result: Grid<Vec4 as unorm8>;
+    compute {
+        let d = double(0.5);
+        let l = long(3);
+        let cell = icoord() + ivec2(0, 0);
+        let e = Every {
+            f: 0.5, n: 3, yes: true, d: d, l: l,
+            v2: vec2(0.5, 0.5), v3: vec3(0.5, 0.5, 0.5), v4: vec4(0.5, 0.5, 0.5, 1.0),
+            cell: cell, cube: ivec3(cell.x, cell.y, 3), wide: lvec2(l, l), wider: lvec3(l, l, l),
+            dv2: dvec2(d, d), dv3: dvec3(d, d, d), dv4: dvec4(d, d, d, d),
+            m2: mat2(1.0), m3: mat3(1.0), m4: mat4(1.0), dm2: dmat2(d), dm3: dmat3(d), dm4: dmat4(d),
+        };
+        let v4 = e.m4 * vec4(e.m2 * e.v2, (e.m3 * e.v3).z, 1.0);
+        let exact = float((e.dm2 * e.dv2).x + (e.dm3 * e.dv3).y + (e.dm4 * e.dv4).z);
+        let count = float(e.wide.x + e.wider.z) + float(e.cube.z + e.n);
+        return if e.yes { vec4(v4.x, exact * e.f, count / 16.0, 1.0) } else { e.v4 };
+    }
+}
+
+node deep: kernel {
+    requires { field.write; }
+    domain = vec3(2, 2, 2);
+    output result: Volume<Float>;
+    compute { return coord().z; }
+}
+
+node row: kernel {
+    requires { field.read; field.write; }
+    input layers: Volume<Float> <- deep.result;
+    domain = 4;
+    output result: Rows<Float>;
+    compute { return at(layers, vec3(0.0, 0.0, 1.0)); }
+}
+
+output shown <- narrow.result;
+output layers <- row.result;

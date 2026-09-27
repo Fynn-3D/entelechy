@@ -1,0 +1,30 @@
+//! Values a Kernel computes with: names bound by `let`, choices by `if`
+//! and `match`, truth by `&&`, `||` and `!`, arrays, a struct of its own,
+//! and a function over any type.
+//! shows: let, if, and, match, array, struct, type, fn, element, float, Rows, Float, Int
+struct Step { at: Float; size: Int; }
+type Values = Rows<Float>;
+
+fn twice<T>(v: T) -> T { return v + v; }
+
+node values: kernel {
+    requires { field.write; }
+    domain = 8;
+    output result: Values;
+    compute {
+        let i = element();
+        let step = Step { at: float(i), size: 1 };
+        let wider = Step { ..step, size: 3 };
+        let { at, size: width } = wider;
+        let even = i % 2 == 0;
+        let small = i < 4 && !(i == 0 || i == 1);
+        let tier = match i { 0 => 0.0, 1 | 2 => 1.0, 3..6 => 2.0, 6..=7 => 3.0, _ => 4.0 };
+        let table = [1.0, 2.0, 4.0];
+        let zeros = [0.0; 4];
+        let pick = if even { table[1] } else { zeros[0] };
+        if small { return twice(at) + tier; }
+        return pick + float(width);
+    }
+}
+
+output result <- values.result;

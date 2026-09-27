@@ -1,0 +1,7 @@
+/// One step of a count: the value it is given, plus one.
+kernel steps.inc@1 {
+    requires { field.read; field.write; }
+    input value: Rows<Float>;
+    output result: Rows<Float>;
+    compute { return sample(value) + 1.0; }
+}

@@ -1,0 +1,4 @@
+//! A package of one Kernel, as the graph example reaches it by its path.
+//! shows: package
+package tally@1 { language = 1; ir = 1; }
+use "kernels/";

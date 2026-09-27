@@ -1,0 +1,53 @@
+//! A scene composed of what other documents hold: Kernels a file and a
+//! package define (`use`), a graph placed as a node, one placed several
+//! times with its output carried from each to the next, a node that runs
+//! off the frame, and domains sized by what came before.
+//! shows: use, graph, times, async, vec2, vec3, count, size, value, window, scale, max, min, floor, ceil
+use "step.orla";
+use "tally.orlapkg";
+
+param levels: Int = 3;
+
+node seed: Rows<Float> { domain = 4; value = 1.0; }
+node doubled: tally.twice@1 { values <- seed.result; }
+node placed: graph "placed.osn" { value <- doubled.result; by = 2.0; }
+node counted: graph "placed.osn" {
+    times = levels;
+    carry value <- result;
+    value <- seed.result;
+}
+node slow: steps.inc@1 { value <- counted.result; async = true; }
+
+node screen: Grid<Float> { domain = max(floor(window() * scale() / 8.0), vec2(1, 1)); }
+node cube: Volume<Float> { domain = vec3(2, 2, 2); }
+
+node sized: kernel {
+    requires { field.read; field.write; }
+    input values: Rows<Float> <- seed.result;
+    domain = max(count(values), min(4, floor(value(values) * 2.0)));
+    output result: Rows<Float>;
+    compute { return sample(values); }
+}
+
+node plane: kernel {
+    requires { field.read; field.write; }
+    input g: Grid<Float> <- screen.result;
+    domain = ceil(size(g) / 2.0);
+    output result: Grid<Float>;
+    compute { return 1.0; }
+}
+
+node shown: kernel {
+    requires { field.read; field.write; }
+    input a: Rows<Float> <- placed.result;
+    input b: Rows<Float> <- slow.result;
+    input c: Grid<Float> <- plane.result;
+    input s: Rows<Float> <- sized.result;
+    input d: Volume<Float> <- cube.result;
+    input e: Grid<Float> <- screen.result;
+    domain = 4;
+    output result: Rows<Float>;
+    compute { return sample(a) + at(b, element()) + float(count(c) + count(d) + count(e) + count(s)); }
+}
+
+output result <- shown.result;
