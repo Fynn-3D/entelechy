@@ -10,6 +10,8 @@
 {"finding": "a Field's numbers took decoding bytes by hand", "send": {"op": "read", "node": "life", "from": 0, "count": 2}, "expect": {"has": ["/ok/values/1"]}}
 {"finding": "a picture came as numbers, not as something to look at", "send": {"op": "read"}, "expect": {"at": {"/ok/format": "png"}}}
 {"finding": "a refused compose was answered as a success, unlike a refused publish", "send": {"op": "compose", "text": "{scene}\nnode broken: {"}, "expect": {"ok": false, "at": {"/error/written": false}}}
+{"finding": "history said it answers the attempts refused, but a refused compose was not among them", "send": {"op": "compose", "text": "node broken: {"}, "expect": {"ok": false}}
+{"finding": "history said it answers the attempts refused, but a refused compose was not among them", "send": {"op": "history"}, "expect": {"says": ["expected a kernel id"]}}
 {"finding": "a source nothing provides was refused with no place in the document", "send": {"op": "compose", "text": "{scene}\nnode dim: life.show@1 { cells <- nowhere.result; }\n"}, "expect": {"ok": false, "at": {"/error/line": 20, "/error/column": 34}}}
 {"finding": "a bare node name as a source did not say to name one of its outputs", "send": {"op": "compose", "text": "{scene}\nnode dim: life.show@1 { cells <- life; }\n"}, "expect": {"says": ["`life.result`"]}}
 {"finding": "a scene without output did not say how one is declared", "send": {"op": "compose", "text": "use \"kernels/\";\nnode a: life.seed@1 { domain = vec2(4, 4); }\n"}, "expect": {"says": ["output name <- node.port;"]}}

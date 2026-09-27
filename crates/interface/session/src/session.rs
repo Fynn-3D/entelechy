@@ -418,9 +418,17 @@ impl Session {
 
     /// Replaces the scene document with `text`, whole, once
     /// [`Session::check_scene`] accepts it; a refusal leaves the document
-    /// as it is. The outer error is the store's; the inner, the refusal.
-    pub fn write_scene(&self, text: &str) -> Result<Result<(), crate::Diagnostic>, SessionError> {
+    /// as it is and is recorded as an attempt
+    /// ([`Session::attempts_since`]). The outer error is the store's; the
+    /// inner, the refusal.
+    pub fn write_scene(
+        &mut self,
+        text: &str,
+    ) -> Result<Result<(), crate::Diagnostic>, SessionError> {
         if let Err(why) = self.check_scene(text) {
+            let subject = self.scene.root().display().to_string();
+            self.history
+                .refused(subject, why.to_string(), Some(text), self.origin.clone());
             return Ok(Err(why));
         }
         let root = self.scene.root();
