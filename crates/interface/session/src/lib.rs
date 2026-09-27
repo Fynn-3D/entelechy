@@ -309,7 +309,7 @@ impl From<&orla_compiler::CompileError> for Diagnostic {
     fn from(error: &orla_compiler::CompileError) -> Self {
         match error {
             orla_compiler::CompileError::Parse(error) => error.into(),
-            orla_compiler::CompileError::Semantic { span, message } => {
+            orla_compiler::CompileError::Semantic { span, message, .. } => {
                 Self::at(*span, message.clone())
             }
             other => Self::new(other.to_string()),

@@ -44,6 +44,7 @@ fn semantic(span: Span, message: impl Into<String>) -> CompileError {
     CompileError::Semantic {
         span,
         message: message.into(),
+        function: None,
     }
 }
 
@@ -423,6 +424,17 @@ struct Shared<'a> {
 /// Lowers a function body. `fields` binds a template's Field parameters
 /// to input ports; `name` names the result.
 fn lower_function(
+    shared: &Shared<'_>,
+    declaration: &FnDecl,
+    fields: Vec<(String, u32)>,
+    generics: Vec<(String, Type)>,
+    name: &str,
+) -> Result<(Function, Vec<(Capability, String)>), CompileError> {
+    lower_function_body(shared, declaration, fields, generics, name)
+        .map_err(|error| error.in_function(&declaration.name.value))
+}
+
+fn lower_function_body(
     shared: &Shared<'_>,
     declaration: &FnDecl,
     fields: Vec<(String, u32)>,
@@ -1031,7 +1043,14 @@ impl<'a> Builder<'a> {
                 )
                 .map_err(|error| match (error, generics.is_empty()) {
                     // An error in a generic body names the instance.
-                    (CompileError::Semantic { span, message }, false) => {
+                    (
+                        CompileError::Semantic {
+                            span,
+                            message,
+                            function,
+                        },
+                        false,
+                    ) => {
                         let bound = generics
                             .iter()
                             .map(|(parameter, ty)| {
@@ -1042,6 +1061,7 @@ impl<'a> Builder<'a> {
                         CompileError::Semantic {
                             span,
                             message: format!("{message} (in `{name}` with {bound})"),
+                            function,
                         }
                     }
                     (error, _) => error,

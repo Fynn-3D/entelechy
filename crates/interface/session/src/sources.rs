@@ -430,6 +430,35 @@ fn missing_name(message: &str) -> Option<String> {
     (says && !name.is_empty()).then(|| name.to_owned())
 }
 
+/// The document an error of a Kernel in `document` is written in:
+/// `document`, or, for one in the body of a function `document` does not
+/// declare but uses, the used document that declares it.
+pub(crate) fn written_in(
+    store: &dyn Store,
+    document: &Path,
+    error: &orla_compiler::CompileError,
+) -> PathBuf {
+    let Some(function) = error.function() else {
+        return document.to_path_buf();
+    };
+    let Some(parsed) = store
+        .read_text(document)
+        .ok()
+        .and_then(|text| orla_language::parse_document(&text).ok())
+    else {
+        return document.to_path_buf();
+    };
+    if parsed.functions.iter().any(|f| f.name.value == function) {
+        return document.to_path_buf();
+    }
+    let base = document.parent().unwrap_or_else(|| Path::new("."));
+    let used = used_documents(store, base, &parsed.uses).unwrap_or_default();
+    match declared_in(store, function, &used) {
+        Some((path, "fn")) => path,
+        _ => document.to_path_buf(),
+    }
+}
+
 /// The first file in `search` declaring `name`, and its kind.
 fn declared_in(
     store: &dyn Store,

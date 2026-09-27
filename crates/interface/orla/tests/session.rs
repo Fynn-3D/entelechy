@@ -2706,3 +2706,47 @@ fn a_refused_scene_edit_leaves_the_scene_running() {
     assert_eq!(after.outputs.len(), before.outputs.len());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A fault in a function a library declares is one problem, in the
+/// library, however many Kernels meet it: its own Kernels, and a scene's
+/// Kernel written in place that inherits the function.
+#[test]
+fn a_fault_in_a_shared_function_is_reported_once_where_it_is_written() {
+    let orla = env!("CARGO_BIN_EXE_orla");
+    let dir = std::env::temp_dir().join(format!("orla-shared-fault-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("kernels")).unwrap();
+    let kernel = |name: &str| {
+        format!(
+            "kernel d.{name}@1 {{ requires {{ field.write; }} output result: Rows<Float>; compute {{ return 1.0; }} }}\n"
+        )
+    };
+    std::fs::write(
+        dir.join("kernels/lib.orla"),
+        format!(
+            "fn broken(t: Float) -> Float {{ return t * nope; }}\n{}{}{}",
+            kernel("a"),
+            kernel("b"),
+            kernel("c")
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.osn"),
+        "use \"kernels/lib.orla\";\nnode a: d.a@1 { domain = 2; }\nnode v: kernel {\n    requires { field.write; }\n    domain = 2;\n    output result: Rows<Float>;\n    compute { return 5.0; }\n}\noutput result <- v.result;\n",
+    )
+    .unwrap();
+    let output = Command::new(orla)
+        .arg("check")
+        .arg(dir.join("scene.osn"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let faults: Vec<&str> = stdout
+        .lines()
+        .filter(|line| line.contains("`nope` is not defined"))
+        .collect();
+    assert_eq!(faults.len(), 1, "{stdout}");
+    assert!(faults[0].contains("lib.orla:1:"), "{stdout}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

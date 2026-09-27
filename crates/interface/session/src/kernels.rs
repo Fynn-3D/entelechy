@@ -470,10 +470,15 @@ impl Kernels {
             let module = match orla_compiler::compile_kernel(&kernel, Some(&id)) {
                 Ok(module) => module,
                 Err(error) => {
-                    events.push(Event::Rejected {
-                        path: path.to_path_buf(),
+                    // One fault in one place is reported once, in the
+                    // document it is written in.
+                    let rejected = Event::Rejected {
+                        path: crate::sources::written_in(store, path, &error),
                         error: self.located(store, (&error).into(), path, root),
-                    });
+                    };
+                    if !events.contains(&rejected) {
+                        events.push(rejected);
+                    }
                     failed = true;
                     continue;
                 }

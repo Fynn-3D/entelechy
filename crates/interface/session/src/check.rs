@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use crate::sources::written_in;
 use crate::{Store, declarations_for, declarations_within, read_document, used_documents};
 
 /// What checking a document found: the lines to report, in order.
@@ -26,7 +27,14 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
     let file = path.display().to_string();
     let file = file.as_str();
     macro_rules! say {
-        (problem, $($arg:tt)*) => { checked.lines.push((true, format!($($arg)*))) };
+        // One fault in one place is one problem, however many Kernels
+        // meet it.
+        (problem, $($arg:tt)*) => {{
+            let line = format!($($arg)*);
+            if !checked.lines.iter().any(|(problem, had)| *problem && *had == line) {
+                checked.lines.push((true, line));
+            }
+        }};
         (note, $($arg:tt)*) => { checked.lines.push((false, format!($($arg)*))) };
     }
     let text = match store.read_text(path) {
@@ -96,7 +104,8 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                 }
             }
             Err(error) => {
-                say!(problem, "{file}:{error}");
+                let at = written_in(store, path, &error);
+                say!(problem, "{}:{error}", at.display());
             }
         }
     }
@@ -133,7 +142,8 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                             }
                         }
                         Err(error) => {
-                            say!(problem, "{}:{error}", path.display());
+                            let at = written_in(store, path, &error);
+                            say!(problem, "{}:{error}", at.display());
                         }
                     }
                 }

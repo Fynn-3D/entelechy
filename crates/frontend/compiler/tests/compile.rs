@@ -21,7 +21,7 @@ kernel image.grayscale@1 {
 
 fn semantic(source: &str) -> (Span, String) {
     match compile(source).unwrap_err() {
-        CompileError::Semantic { span, message } => (span, message),
+        CompileError::Semantic { span, message, .. } => (span, message),
         other => panic!("expected a semantic error, got {other}"),
     }
 }
@@ -825,7 +825,7 @@ fn matrices_are_built_from_columns_multiplied_and_checked() {
     );
     let (_, message) = match module {
         Ok(_) => panic!("a Bool times a Vec3 must be refused"),
-        Err(CompileError::Semantic { span, message }) => (span, message),
+        Err(CompileError::Semantic { span, message, .. }) => (span, message),
         Err(other) => panic!("{other}"),
     };
     assert_eq!(message, "cannot apply `*` to Bool and Vec3");

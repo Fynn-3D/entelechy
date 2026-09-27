@@ -23,6 +23,9 @@ pub enum CompileError {
         span: Span,
         /// What is wrong.
         message: String,
+        /// The function whose body it is in, when it is in one: a function
+        /// may be declared in another document than the Kernel's.
+        function: Option<String>,
     },
     /// The produced IR failed validation: a compiler bug.
     Validation(orla_ir::ValidationError),
@@ -43,9 +46,37 @@ impl fmt::Display for CompileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Parse(error) => write!(f, "{error}"),
-            Self::Semantic { span, message } if span.is_placed() => write!(f, "{span}: {message}"),
+            Self::Semantic { span, message, .. } if span.is_placed() => {
+                write!(f, "{span}: {message}")
+            }
             Self::Semantic { message, .. } => f.write_str(message),
             Self::Validation(error) => write!(f, "invalid IR: {error}"),
+        }
+    }
+}
+
+impl CompileError {
+    /// The function whose body the error is in, when it is in one.
+    pub fn function(&self) -> Option<&str> {
+        match self {
+            Self::Semantic { function, .. } => function.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The error, placed in `name`'s body unless an inner body holds it.
+    pub(crate) fn in_function(self, name: &str) -> Self {
+        match self {
+            Self::Semantic {
+                span,
+                message,
+                function: None,
+            } => Self::Semantic {
+                span,
+                message,
+                function: Some(name.to_owned()),
+            },
+            other => other,
         }
     }
 }
