@@ -758,6 +758,12 @@ fn fusion_absorbs_sole_pointwise_producers_and_changes_no_pixel() {
         "only the fused group and blocks are materialized"
     );
     assert!(fused.cached(&NodeId("gray".into()), "result").is_none());
+    assert_eq!(
+        fused.fused_into(&NodeId("gray".into())),
+        Some(&NodeId("inv".into())),
+        "gray runs folded into its reader"
+    );
+    assert_eq!(fused.fused_into(&NodeId("blocks".into())), None);
     assert!(
         runtime.kernel(&"fused.inv@1".parse().unwrap()).is_none(),
         "fused versions are not registered"

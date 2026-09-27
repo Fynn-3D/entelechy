@@ -57,7 +57,9 @@ no value yet), or answer what the caller needs (`help` for an operation
 whose fields were wrong, the inline form whose example is the smallest
 scene when none is loaded, `document` for a `compose` against a changed
 version). A `try` is a valid request of the table and never `quit`; it
-widens no authority, which the protocol never grants.
+widens no authority, which the protocol never grants. Over MCP a `try`
+request is a tool call: its `op` names the tool, the rest are its
+arguments.
 `{"op": "help", "name": <op>}` answers an operation's request as JSON
 Schema in `schema`.
 

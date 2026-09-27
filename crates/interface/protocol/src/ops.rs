@@ -286,7 +286,11 @@ fn context() -> Vec<Field> {
             Ty::Numbers(&["x", "y"]),
             "the pointer in the output's pixels from its top left, as a Kernel's `pointer()` reads it",
         ),
-        may("down", Ty::Bool, "whether the pointer is pressed"),
+        may(
+            "down",
+            Ty::Bool,
+            "whether the pointer is pressed, what `pointer_down()` reads",
+        ),
         may(
             "buttons",
             Ty::List(Box::new(Ty::Int)),

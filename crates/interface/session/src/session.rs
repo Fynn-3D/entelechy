@@ -623,6 +623,20 @@ impl Session {
         self.evaluator.cached(&node, &port)
     }
 
+    /// The node `node` runs fused into, if any
+    /// ([`orla_graph::Evaluator::fused_into`]).
+    pub fn fused_into(&self, node: &orla_graph::NodeId) -> Option<orla_graph::NodeId> {
+        let (node, _) = self.producer(node, "result");
+        self.evaluator.fused_into(&node).cloned()
+    }
+
+    /// Why `node`'s `port` has no value to read: not a node, placed as
+    /// several, folded into its reader, or not run since it was placed.
+    pub fn why_no_value(&self, node: &orla_graph::NodeId, port: &str) -> String {
+        let (node, port) = self.producer(node, port);
+        observe::why_no_value(self.scene.graph(), &self.evaluator, &node, &port)
+    }
+
     /// Waits for every `async` node's run and takes it in; see
     /// [`orla_graph::Evaluator::settle`].
     pub fn settle(&mut self) -> Result<Vec<orla_graph::NodeId>, EvaluateError> {

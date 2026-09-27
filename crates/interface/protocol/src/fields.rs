@@ -143,15 +143,20 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
                 if !graph.nodes.iter().any(|n| n.id.0 == node) {
                     return unknown_node(graph, node, request.json());
                 }
-                tried(
-                    failure(format!(
-                        "node `{node}` has no materialized `{port}`; pin it and evaluate again"
-                    )),
-                    [
-                        json!({ "op": "pin", "node": node }),
-                        json!({ "op": "evaluate" }),
-                    ],
-                )
+                // Folded into its reader, it keeps a value only pinned;
+                // otherwise evaluating gives it one.
+                let id = orla_graph::NodeId(node.to_owned());
+                let why = failure(session.why_no_value(&id, port));
+                match session.fused_into(&id) {
+                    Some(_) => tried(
+                        why,
+                        [
+                            json!({ "op": "pin", "node": node }),
+                            json!({ "op": "evaluate" }),
+                        ],
+                    ),
+                    None => tried(why, [json!({ "op": "evaluate" })]),
+                }
             })?
     } else {
         let name = request.get("output").and_then(Json::as_str);
@@ -434,7 +439,13 @@ pub(crate) fn snapshot(session: &mut Session, request: &Request) -> Result<Json,
     // Written whole, only where the session's grants allow.
     let target = session
         .write_file(&path, json.to_string().as_bytes())
-        .map_err(|why| failure(format!("cannot write the snapshot: {why}")))?;
+        .map_err(|why| {
+            // Held in the answer instead, it goes back to `restore` whole.
+            tried(
+                failure(format!("cannot write the snapshot: {why}")),
+                [again(request.json(), &[], &["to"])],
+            )
+        })?;
     Ok(json!({
         "path": target.display().to_string(),
         "revision": snapshot.revision,

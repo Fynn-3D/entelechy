@@ -13,3 +13,4 @@
 {"finding": "a stale compose gave the version, not the document to compose against", "send": {"op": "compose", "text": "{scene}", "expect": "0000000000000000"}, "expect": {"ok": false, "tries": "informs"}}
 {"finding": "too many frames asked at once was refused with no request to send", "send": {"op": "advance", "frames": 0}, "expect": {"ok": false, "tries": "corrects"}}
 {"finding": "a misspelled node to trace named the near one but gave nothing to send", "send": {"op": "trace", "node": "lif", "at": [1, 1]}, "expect": {"ok": false, "tries": "corrects"}}
+{"finding": "a snapshot to a file without leave to write said which flag to run with, not that it can be held in the answer", "send": {"op": "snapshot", "to": "kept.json"}, "expect": {"ok": false, "tries": "corrects"}}

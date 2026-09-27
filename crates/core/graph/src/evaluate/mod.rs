@@ -233,9 +233,20 @@ impl Evaluator {
         self.pinned.insert(node);
     }
 
-    /// Lets a node be absorbed again.
+    /// The nodes kept materialized.
     pub fn pins(&self) -> &BTreeSet<NodeId> {
         &self.pinned
+    }
+
+    /// The node `node` runs fused into, when the plan has folded it into
+    /// its reader: it then keeps no output of its own until pinned.
+    pub fn fused_into(&self, node: &NodeId) -> Option<&NodeId> {
+        self.fused
+            .iter()
+            .find(|(consumer, fused)| {
+                *consumer != node && fused.parts.iter().any(|(part, _)| part == node)
+            })
+            .map(|(consumer, _)| consumer)
     }
 
     /// Lets fusion have `node` back.

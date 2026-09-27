@@ -749,10 +749,10 @@ pub unsafe extern "C" fn orla_node(
     let port = unsafe { text(port) }.unwrap_or("result").to_owned();
     guarded(&mut session, |s| {
         s.clear();
-        let Some(handle) = s.session.cached(&orla_graph::NodeId(node.clone()), &port) else {
-            return s.fail(format!(
-                "node `{node}` has no materialized `{port}`; pin it and evaluate again"
-            ));
+        let id = orla_graph::NodeId(node.clone());
+        let Some(handle) = s.session.cached(&id, &port) else {
+            let why = s.session.why_no_value(&id, &port);
+            return s.fail(why);
         };
         match s.field(handle, field) {
             Ok(()) => 0,

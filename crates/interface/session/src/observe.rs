@@ -53,9 +53,15 @@ pub fn parse_target(text: &str) -> Result<(String, String, u32, Vec<String>), St
     Ok((node.0, port, index, path))
 }
 
-/// Why a node's output has no value to save: the name is a placed
-/// graph or repeated node, no node, or unevaluated.
-fn why_not_saved(graph: Option<&Graph>, node: &NodeId, port: &str) -> String {
+/// Why a node's output has no value: the name is a placed graph or
+/// repeated node, no node, a node folded into its reader, or one that has
+/// not run since it was placed.
+pub(crate) fn why_no_value(
+    graph: Option<&Graph>,
+    evaluator: &Evaluator,
+    node: &NodeId,
+    port: &str,
+) -> String {
     let Some(graph) = graph else {
         return format!("`{node}.{port}` has no value; no scene is loaded");
     };
@@ -78,7 +84,14 @@ fn why_not_saved(graph: Option<&Graph>, node: &NodeId, port: &str) -> String {
         }
         return format!("`{node}` is not a node of this scene");
     }
-    format!("`{node}.{port}` has no value; pin it and evaluate")
+    match evaluator.fused_into(node) {
+        Some(reader) => format!(
+            "node `{node}` runs fused into `{reader}` and keeps no `{port}` of its own; pin it and evaluate again"
+        ),
+        None => format!(
+            "node `{node}` has no `{port}` yet: it has not run since it was placed; evaluate"
+        ),
+    }
 }
 
 /// Writes a node's output as a file; see [`crate::Session::save`].
@@ -98,7 +111,7 @@ pub(crate) fn save(
         .unwrap_or_else(|| (node.clone(), port.to_owned()));
     let (node, port) = (&node, port.as_str());
     let Some(handle) = evaluator.cached(node, port) else {
-        return Err(why_not_saved(graph, node, port));
+        return Err(why_no_value(graph, evaluator, node, port));
     };
     write(store, runtime, handle, path).map_err(|why| match why {
         Written::Unfit(what) => format!("`{node}.{port}` is {what}; save it as .field"),
