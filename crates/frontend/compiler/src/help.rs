@@ -547,6 +547,48 @@ pub fn similar(name: &str) -> Vec<&'static str> {
 mod tests {
     use super::*;
 
+    /// Every name the call lowering dispatches on is one of the tables
+    /// [`crate::lower::callable`] is built from, so a builtin added as a
+    /// dispatch arm is one help must list.
+    #[test]
+    fn every_dispatched_name_is_in_a_table() {
+        let source = include_str!("lower/builtins.rs");
+        let callable = crate::lower::callable();
+        let mut wrong = Vec::new();
+        let mut seen = 0;
+        for line in source.lines() {
+            let arm = line.trim_start().trim_start_matches('|').trim_start();
+            if !arm.starts_with('"') || !arm.contains("=>") {
+                continue;
+            }
+            let names = arm.split("=>").next().unwrap_or_default();
+            for name in names.split('|').map(|n| n.trim().trim_matches('"')) {
+                seen += 1;
+                if !name.is_empty() && !callable.contains(&name) {
+                    wrong.push(name.to_owned());
+                }
+            }
+        }
+        assert!(seen > 40, "the dispatch arms were not found ({seen})");
+        assert!(wrong.is_empty(), "dispatched but in no table: {wrong:?}");
+    }
+
+    /// Help lists what a call resolves to, no more and no less: a builtin
+    /// the compiler takes and help leaves out, or one help lists and the
+    /// compiler does not take, is named.
+    #[test]
+    fn help_lists_every_builtin_a_call_resolves_to() {
+        let listed: std::collections::BTreeSet<&str> = builtins().iter().map(|b| b.name).collect();
+        let callable: std::collections::BTreeSet<&str> =
+            crate::lower::callable().into_iter().collect();
+        let unlisted: Vec<_> = callable.difference(&listed).collect();
+        let unknown: Vec<_> = listed.difference(&callable).collect();
+        assert!(
+            unlisted.is_empty() && unknown.is_empty(),
+            "the compiler takes {unlisted:?} that help leaves out; help lists {unknown:?} it does not take"
+        );
+    }
+
     #[test]
     fn every_builtin_and_form_has_one_name_and_one_sentence() {
         let mut names: Vec<&str> = builtins().iter().map(|b| b.name).collect();

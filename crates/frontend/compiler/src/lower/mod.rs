@@ -13,6 +13,24 @@ use orla_language::{Block, Expr, ExprKind, FnDecl, Kernel, Span, Spanned};
 use crate::CompileError;
 
 mod builtins;
+
+/// Every builtin name a call resolves to, by the tables that resolve it:
+/// the Field, memory, context and construction builtins, the ones composed
+/// from other operations, the formulas, and the IR's intrinsics; what
+/// help's list is held to.
+#[cfg(test)]
+pub(crate) fn callable() -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = declare::RESERVED_BUILTINS
+        .iter()
+        .chain(builtins::COMPOSED.iter())
+        .chain(builtins::FORMULAS.iter())
+        .copied()
+        .chain(orla_ir::Intrinsic::ALL.iter().map(|(_, name)| *name))
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
 mod composite;
 mod declare;
 mod expr;

@@ -12,6 +12,20 @@ use crate::CompileError;
 
 use super::{Builder, semantic};
 
+/// The builtins composed from other operations, typed by their arguments;
+/// see [`Builder::composed`].
+pub(super) const COMPOSED: [&str; 9] = [
+    "saturate",
+    "distance",
+    "radians",
+    "degrees",
+    "inversesqrt",
+    "mod",
+    "isnan",
+    "isinf",
+    "refract",
+];
+
 /// The builtins lowered as formulas; see [`composite`](super::composite).
 pub(super) const FORMULAS: [&str; 8] = [
     "dot",
@@ -640,18 +654,7 @@ impl Builder<'_> {
                 {
                     return self.instantiate(template, args, span);
                 }
-                if matches!(
-                    name,
-                    "saturate"
-                        | "distance"
-                        | "radians"
-                        | "degrees"
-                        | "inversesqrt"
-                        | "mod"
-                        | "isnan"
-                        | "isinf"
-                        | "refract"
-                ) {
+                if COMPOSED.contains(&name) {
                     return self.composed(name, args, span);
                 }
                 if FORMULAS.contains(&name) {

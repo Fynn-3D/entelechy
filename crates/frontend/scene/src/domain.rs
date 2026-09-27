@@ -203,6 +203,35 @@ mod tests {
 
     /// Every function's example is a domain, and a call to any other name
     /// is refused naming them.
+    /// Every name the domain's calls dispatch on is a function of the
+    /// table help answers ([`functions`]).
+    #[test]
+    fn every_dispatched_function_is_in_the_table() {
+        let source = include_str!("domain.rs");
+        let code = source.split("#[cfg(test)]").next().unwrap_or_default();
+        let listed: Vec<&str> = functions().iter().map(|f| f.name).collect();
+        let mut seen = 0;
+        let mut wrong = Vec::new();
+        for line in code.lines() {
+            let arm = line.trim_start().trim_start_matches('|').trim_start();
+            if !arm.starts_with('"') || !arm.contains("=>") {
+                continue;
+            }
+            for name in arm.split("=>").next().unwrap_or_default().split('|') {
+                let name = name.trim().trim_matches('"');
+                seen += 1;
+                if !listed.contains(&name) {
+                    wrong.push(name.to_owned());
+                }
+            }
+        }
+        assert!(seen >= 10, "the dispatch arms were not found ({seen})");
+        assert!(
+            wrong.is_empty(),
+            "dispatched but not in the table: {wrong:?}"
+        );
+    }
+
     #[test]
     fn every_function_is_one_a_domain_takes() {
         for function in functions() {
