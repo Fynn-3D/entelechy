@@ -391,7 +391,7 @@ pub fn operations() -> Vec<Operation> {
                     "`absent` for a new Kernel, a generation `kernels` answered, or `any`; `any` when not given",
                 ),
             ],
-            "id, generation; and when nodes running it start state, `keeps` (those `node.port`s, which keep what they committed) and `reset` (the requests that start them from the new law)",
+            "id, generation; and when it computes a `<~` port's initial source, `keeps` (those `node.port`s, which keep what they committed) and `reset` (the requests that start them from the new law)",
         ),
         op(
             "retire",

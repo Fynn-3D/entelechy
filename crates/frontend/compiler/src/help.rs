@@ -340,7 +340,7 @@ pub fn forms() -> Vec<Form> {
             "output",
             "kernel",
             "output result: Grid<Vec4>;   output shown <- node.port;   output kept <- node.port to \"saves/n.field\";",
-            "In a Kernel, a Field it writes, an element per element of its domain (a map may write several); in a scene, a named result: the first picture is what it shows, the first row of one or two Floats (mono, stereo) what it plays, a block each frame, and one written `to` a file is saved after each evaluation that changed it, where allowed.",
+            "In a Kernel, a Field it writes, an element per element of its domain (a map may write several); in a scene, a named result: the first picture is what it shows, the first row of one or two Floats (mono, stereo) what it plays, a block each frame joined to the last (`rate()` over the frame rate samples keeps it in time), and one written `to` a file is saved after each evaluation that changed it, where allowed.",
         ),
         form(
             "type",
@@ -490,7 +490,7 @@ pub fn forms() -> Vec<Form> {
             "previous",
             "graph",
             "port <~ node.output from initial [migrate id@v];",
-            "State: the port reads what the last evaluation committed, the initial source before the first, and a migration carries it when a republished Kernel changes its layout.",
+            "State: the port reads what the last evaluation committed, the initial source before the first, and a migration carries it when a republished Kernel changes its layout; the Kernels reading the port are republished for the new layout with it.",
         ),
         form(
             "times",

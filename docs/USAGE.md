@@ -290,7 +290,7 @@ file. `orla help replay` lists the same forms:
 | `reset [<node.port>]` | forgets every node's committed state, or one port's | `reset`, `reset step.result` |
 | `param <name> <literal>` | sets a graph parameter | `param exposure 1.5` |
 | `expect <x> <y> = <r> <g> <b> [<tolerance>]` | the picture's color at x y from its top left, each channel 0 to 1 as the Kernel wrote it; tolerance 0.01 when not given | `expect 11 10 = 1.0 1.0 1.0`, `expect 11 10 = 1.0 1.0 1.0 0.05` |
-| `expect <node.port[i][.field]> = <value>... [<tolerance>]` | an element of a node's output, or a field of it: ints and bools exactly, floats and vectors within the tolerance | `expect step.result[0].score = 1` |
+| `expect <node.port[i][.field]> = <value>... [<tolerance>]` | an element of a node's output, or a field of it (a struct's element is compared a field at a time): ints and bools exactly, floats and vectors within the tolerance; `i` counts along the Field, x fastest, then y, then z | `expect step.result[0].score = 1` |
 | `expect <node.port[i][.field]> < \| <= \| > \| >= <number>...` | every component of it past a bound | `expect fall.result[0].speed > 2.5` |
 | `expect count <node.port> = <n>` | how many elements a node's output holds | `expect count ground.result = 6889` |
 | `expect placed <node> main \| ordered` | where a node runs: the session's main backend, or ordered work off it; a session with one backend reads both as main | `expect placed ring main`, `expect placed filter ordered` |
