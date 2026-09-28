@@ -209,8 +209,11 @@ pub struct Evaluator {
     /// when one changes.
     declined: BTreeMap<NodeId, Vec<(NodeId, Generation)>>,
     pending: BTreeMap<NodeId, Pending>,
-    /// The last plan and what it was made from.
-    last_plan: Option<(plan::PlanKey, Vec<Group>)>,
+    /// The last graph planned and its order. A plan is kept for this
+    /// graph only: a changed graph forgets it.
+    shape: Option<(Graph, Arc<Vec<usize>>)>,
+    /// The last plan and what it was made from, besides the graph.
+    last_plan: Option<(plan::PlanKey, Arc<Vec<Group>>)>,
     running: BTreeMap<NodeId, Running>,
     /// State an evaluation replaced before its nodes ran (a migration, a
     /// restart), held until the commit or put back on failure.
@@ -340,7 +343,7 @@ impl Evaluator {
         externals: &BTreeMap<String, Handle>,
         overrides: &BTreeMap<String, Value>,
     ) -> Result<Vec<PlanEntry>, EvaluateError> {
-        let order = graph.order()?;
+        let order = self.order_of(graph)?;
         let groups = self.plan(
             graph,
             &order,
@@ -350,12 +353,12 @@ impl Evaluator {
             &Context::default(),
         )?;
         Ok(groups
-            .into_iter()
+            .iter()
             .map(|group| PlanEntry {
                 node: group.node.id.clone(),
                 kernel: group.version.id().clone(),
-                absorbed: group.absorbed,
-                inputs: group.node.inputs,
+                absorbed: group.absorbed.clone(),
+                inputs: group.node.inputs.clone(),
                 domain: group.node.domain.as_ref().and_then(DomainSpec::literal),
             })
             .collect())
@@ -485,7 +488,7 @@ impl Evaluator {
         // written into a copy of the graph only when one is in use.
         let substituted = substitute_fallbacks(graph, externals);
         let graph = substituted.as_ref().unwrap_or(graph);
-        let order = graph.order()?;
+        let order = self.order_of(graph)?;
         self.prune(graph, runtime);
         let landed = self.land(runtime)?;
         let needed = demand.map(|demand| self.needed(graph, demand));
@@ -516,7 +519,7 @@ impl Evaluator {
             let mut checks: Vec<(NodeId, Vec<Box<dyn orla_kernel::Check>>)> = Vec::new();
             runtime.take_checks();
             let mut pending = Vec::new();
-            for group in &groups {
+            for group in groups.iter() {
                 let node = &group.node;
                 if needed
                     .as_ref()

@@ -5,8 +5,25 @@
 use super::*;
 
 impl Evaluator {
+    /// The order `graph` runs in, kept while the graph is the one before.
+    /// A changed graph forgets the plan made for the one before, so a plan
+    /// is reused only for the graph it was made from.
+    pub(super) fn order_of(&mut self, graph: &Graph) -> Result<Arc<Vec<usize>>, GraphError> {
+        if let Some((known, order)) = &self.shape
+            && known == graph
+        {
+            return Ok(Arc::clone(order));
+        }
+        self.shape = None;
+        self.last_plan = None;
+        let order = Arc::new(graph.order()?);
+        self.shape = Some((graph.clone(), Arc::clone(&order)));
+        Ok(order)
+    }
+
     /// Decides what executes: every node as its own group, then producers
     /// folded into their sole pointwise consumers when fusion is on.
+    /// `order` is [`Evaluator::order_of`] this graph.
     pub(super) fn plan(
         &mut self,
         graph: &Graph,
@@ -15,8 +32,8 @@ impl Evaluator {
         externals: &BTreeMap<String, Handle>,
         overrides: &BTreeMap<String, Value>,
         context: &Context,
-    ) -> Result<Vec<Group>, EvaluateError> {
-        let mut groups: Vec<Group> = Vec::with_capacity(order.len());
+    ) -> Result<Arc<Vec<Group>>, EvaluateError> {
+        let mut versions = Vec::with_capacity(order.len());
         for index in order {
             let node = &graph.nodes[*index];
             let version = runtime.kernel(&node.kernel).ok_or_else(|| {
@@ -34,21 +51,66 @@ impl Evaluator {
                     near,
                 }
             })?;
-            let parts = vec![(node.id.clone(), version.generation())];
-            groups.push(Group {
-                node: node.clone(),
-                version,
-                parts,
-                absorbed: Vec::new(),
-                repeat: 1,
-                chain: None,
-                fused: None,
-            });
+            versions.push(version);
         }
+        let nodes = graph.index();
+        // What each node runs over and the extent it gives, in order: a
+        // producer's extent is known before its readers are planned.
+        let mut domains: BTreeMap<NodeId, Domain> = BTreeMap::new();
+        let mut plans = Vec::with_capacity(order.len());
+        for (index, version) in order.iter().zip(&versions) {
+            let node = &graph.nodes[*index];
+            let planned = self.planned(
+                graph, &nodes, node, version, runtime, externals, &domains, overrides, context,
+            );
+            if let Some(extent) = planned.extent {
+                domains.insert(node.id.clone(), extent);
+            }
+            plans.push(planned);
+        }
+        // The same graph, laws, extents, pins and fusion make the same
+        // plan: the last one is reused, and fusion is decided once, not
+        // each frame. The graph is the one the last plan was made from
+        // ([`Evaluator::order_of`]); the rest is compared here.
+        let parts: Vec<(Generation, Planned)> = versions
+            .iter()
+            .zip(&plans)
+            .map(|(version, planned)| (version.generation(), planned.clone()))
+            .collect();
+        if let Some((last, executing)) = &self.last_plan
+            && last.fusion == self.fusion
+            && last.parts == parts
+            && last.pinned == self.pinned
+        {
+            return Ok(Arc::clone(executing));
+        }
+        let key = PlanKey {
+            parts,
+            pinned: self.pinned.clone(),
+            fusion: self.fusion,
+        };
+        let mut groups: Vec<Group> = order
+            .iter()
+            .zip(versions)
+            .map(|(index, version)| {
+                let node = &graph.nodes[*index];
+                Group {
+                    node: node.clone(),
+                    parts: vec![(node.id.clone(), version.generation())],
+                    version,
+                    absorbed: Vec::new(),
+                    repeat: 1,
+                    chain: None,
+                    fused: None,
+                }
+            })
+            .collect();
         if !self.fusion {
             self.fused.clear();
             self.forget_pending(runtime, |_| false);
-            return Ok(groups);
+            let executing = Arc::new(groups);
+            self.last_plan = Some((key, Arc::clone(&executing)));
+            return Ok(executing);
         }
         // How many readers each output has: bindings and graph outputs.
         let mut readers: BTreeMap<(NodeId, String), usize> = BTreeMap::new();
@@ -75,8 +137,6 @@ impl Evaluator {
         for (_, source) in &graph.outputs {
             count(source);
         }
-        let nodes = graph.index();
-        let mut domains: BTreeMap<NodeId, Domain> = BTreeMap::new();
         let mut absorbed_into: BTreeMap<NodeId, usize> = BTreeMap::new();
         // Each group's position by node; groups are only rewired here,
         // so positions hold.
@@ -85,40 +145,6 @@ impl Evaluator {
             .enumerate()
             .map(|(position, group)| (group.node.id.clone(), position))
             .collect();
-        // What each group runs over and the extent it gives, in order: a
-        // producer's extent is known before its readers are planned.
-        let mut plans = Vec::with_capacity(groups.len());
-        for group in &groups {
-            let planned = self.planned(
-                graph, &nodes, group, runtime, externals, &domains, overrides, context,
-            );
-            if let Some(extent) = planned.extent {
-                domains.insert(group.node.id.clone(), extent);
-            }
-            plans.push(planned);
-        }
-        // The same graph, laws, extents and pins make the same plan: the
-        // last one is reused, and fusion is decided once, not each frame.
-        let key = PlanKey {
-            graph: graph.clone(),
-            parts: groups
-                .iter()
-                .zip(&plans)
-                .map(|(group, planned)| {
-                    (
-                        group.node.id.clone(),
-                        group.version.generation(),
-                        planned.clone(),
-                    )
-                })
-                .collect(),
-            pinned: self.pinned.clone(),
-        };
-        if let Some((last, executing)) = &self.last_plan
-            && *last == key
-        {
-            return Ok(executing.clone());
-        }
         let originals = groups.clone();
         for position in 0..groups.len() {
             // The elements this group runs over and the extent its
@@ -371,11 +397,8 @@ impl Evaluator {
             .collect();
         self.fused.retain(|node, _| kept.contains(node));
         self.forget_pending(runtime, |node| kept.contains(node));
-        if settled {
-            self.last_plan = Some((key, executing.clone()));
-        } else {
-            self.last_plan = None;
-        }
+        let executing = Arc::new(executing);
+        self.last_plan = settled.then(|| (key, Arc::clone(&executing)));
         Ok(executing)
     }
 
@@ -591,14 +614,15 @@ impl Evaluator {
         &self,
         graph: &Graph,
         nodes: &BTreeMap<&NodeId, usize>,
-        group: &Group,
+        node: &Node,
+        version: &KernelVersion,
         runtime: &Runtime,
         externals: &BTreeMap<String, Handle>,
         domains: &BTreeMap<NodeId, Domain>,
         overrides: &BTreeMap<String, Value>,
         context: &Context,
     ) -> Planned {
-        let manifest = group.version.manifest();
+        let manifest = version.manifest();
         let size = |handle: Handle| runtime.host().domain(handle).ok();
         let plain = |source: &Source| match source {
             Source::External(name) => externals.get(name).and_then(|h| size(*h)),
@@ -639,14 +663,14 @@ impl Evaluator {
             manifest
                 .inputs
                 .get(at)
-                .and_then(|port| group.node.inputs.get(&port.name))
+                .and_then(|port| node.inputs.get(&port.name))
                 .and_then(of_binding)
         };
         let runs = if manifest.mode == orla_ir::Mode::Reduce {
             Some(Domain::Rows(1))
         } else {
-            self.planned_runs(graph, group, &of_binding, overrides, context)
-                .or_else(|| group.node.domain.is_none().then(|| input(0)).flatten())
+            self.planned_runs(graph, node, version, &of_binding, overrides, context)
+                .or_else(|| node.domain.is_none().then(|| input(0)).flatten())
         };
         let extent = match orla_kernel::extent(manifest.mode) {
             orla_kernel::Extent::Invocation => runs,
@@ -661,23 +685,24 @@ impl Evaluator {
     fn planned_runs(
         &self,
         graph: &Graph,
-        group: &Group,
+        node: &Node,
+        version: &KernelVersion,
         of_binding: &dyn Fn(&Binding) -> Option<Domain>,
         overrides: &BTreeMap<String, Value>,
         context: &Context,
     ) -> Option<Domain> {
-        let manifest = group.version.manifest();
-        match &group.node.domain {
+        let manifest = version.manifest();
+        match &node.domain {
             Some(DomainSpec::Literal(domain)) => Some(*domain),
             Some(DomainSpec::Expr(expr)) => {
-                let port = |name: &str| group.node.inputs.get(name).and_then(of_binding);
+                let port = |name: &str| node.inputs.get(name).and_then(of_binding);
                 let param = |name: &str| {
                     let manifest_default = manifest
                         .params
                         .iter()
                         .find(|p| p.name == name)
                         .map(|p| p.default.clone());
-                    match group.node.params.get(name) {
+                    match node.params.get(name) {
                         Some(ParamValue::Literal(value)) => Some(value.clone()),
                         Some(ParamValue::Graph(name)) => graph_param(graph, name, overrides),
                         None => manifest_default.or_else(|| graph_param(graph, name, overrides)),
@@ -693,13 +718,12 @@ impl Evaluator {
     }
 }
 
-/// What a plan was made from: the graph, each node's law and planned
-/// extents, and the pins.
-#[derive(Clone, PartialEq)]
+/// What a plan was made from besides the graph: each node's law and
+/// planned extents in order, the pins, and whether fusion is on.
 pub(super) struct PlanKey {
-    graph: Graph,
-    parts: Vec<(NodeId, Generation, Planned)>,
+    parts: Vec<(Generation, Planned)>,
     pinned: BTreeSet<NodeId>,
+    fusion: bool,
 }
 
 /// What the plan knows of a group before execution.

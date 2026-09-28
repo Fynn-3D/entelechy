@@ -2463,3 +2463,49 @@ fn a_fused_chain_is_one_version_run_by_its_last_node() {
         }
     }
 }
+
+#[test]
+fn a_plan_follows_fusion_turned_off_and_on() {
+    let graph = orla_scene::parse(DOCUMENT).unwrap();
+    let mut runtime = runtime();
+    let mut evaluator = Evaluator::new();
+    let summary = |evaluator: &mut Evaluator, runtime: &mut Runtime| {
+        evaluator
+            .plan_summary(&graph, runtime, &BTreeMap::new(), &BTreeMap::new())
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.node)
+            .collect::<Vec<_>>()
+    };
+    for _ in 0..2 {
+        evaluator.set_fusion(true);
+        assert_eq!(summary(&mut evaluator, &mut runtime), ids(&["final"]));
+        assert_eq!(summary(&mut evaluator, &mut runtime), ids(&["final"]));
+        evaluator.set_fusion(false);
+        assert_eq!(
+            summary(&mut evaluator, &mut runtime),
+            ids(&["source", "gray", "final"])
+        );
+    }
+}
+
+#[test]
+fn a_changed_graph_is_planned_anew_and_the_first_again() {
+    let first = orla_scene::parse(DOCUMENT).unwrap();
+    // `gray` is also read as an output, so it is not fused away.
+    let second = orla_scene::parse(&format!("{DOCUMENT}output shade <- gray.result;\n")).unwrap();
+    let mut runtime = runtime();
+    let mut evaluator = Evaluator::new();
+    let mut summary = |graph: &orla_graph::Graph| {
+        evaluator
+            .plan_summary(graph, &mut runtime, &BTreeMap::new(), &BTreeMap::new())
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.node)
+            .collect::<Vec<_>>()
+    };
+    for _ in 0..2 {
+        assert_eq!(summary(&first), ids(&["final"]));
+        assert_eq!(summary(&second), ids(&["gray", "final"]));
+    }
+}
