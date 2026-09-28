@@ -422,8 +422,8 @@ impl Backend for GpuBackend {
     }
 
     /// A map run several times over its own output in one command buffer: the
-    /// uniforms written once, two buffers taking turns between times, one pass
-    /// per time. It saves a command buffer and a submission per time.
+    /// uniforms written once, two buffers taking turns between times, the
+    /// times in one pass. It saves a command buffer and a submission per time.
     fn execute_repeated(
         &self,
         prepared: &dyn Prepared,

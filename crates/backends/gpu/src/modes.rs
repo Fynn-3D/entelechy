@@ -4,8 +4,8 @@
 use super::*;
 
 impl GpuBackend {
-    /// The whole of a repeated run: staged once, then a pass a time
-    /// into one command buffer, two buffers taking turns.
+    /// The whole of a repeated run: staged once, then its times in one
+    /// pass of one command buffer, two buffers taking turns.
     pub(crate) fn repeated(
         &self,
         prepared: &dyn Prepared,
@@ -65,12 +65,16 @@ impl GpuBackend {
         let (groups_x, groups_y, groups_z, _) = wgsl::dispatch(domain);
         // Two buffers take turns: what a time wrote the next reads, and what it
         // read is free for the time after. The Field the run was given is only
-        // read, by the pass already recorded.
-        let mut reads = output_buffer.clone();
-        let mut writes = spare;
-        for _ in 1..repeat {
-            input_buffers[chain] = reads.clone();
-            let written = writes.clone();
+        // read, by the pass already recorded. So there are two bindings, one
+        // for each turn.
+        let turns: Vec<(wgpu::BindGroup, wgpu::Buffer)> = [
+            (output_buffer.clone(), spare.clone()),
+            (spare.clone(), output_buffer.clone()),
+        ]
+        .into_iter()
+        .take((repeat as usize).saturating_sub(1).min(2))
+        .map(|(reads, written)| {
+            input_buffers[chain] = reads;
             let mut entries = vec![
                 wgpu::BindGroupEntry {
                     binding: wgsl::CONTEXT_BINDING,
@@ -96,20 +100,36 @@ impl GpuBackend {
                 layout: &pipeline.layout,
                 entries: &entries,
             });
-            // A time that stores by atomic or starts from a cleared buffer.
-            if wgsl::output_shares_words(module, 0) {
-                encoder.clear_buffer(&written, 0, None);
+            (group, written)
+        })
+        .collect();
+        let times = repeat.saturating_sub(1) as usize;
+        let describe = wgpu::ComputePassDescriptor {
+            label: Some("orla repeat"),
+            timestamp_writes: None,
+        };
+        if wgsl::output_shares_words(module, 0) {
+            // A time that stores by atomic starts from a cleared buffer, so
+            // each time is its own pass after its clear.
+            for time in 0..times {
+                let (group, written) = &turns[time % 2];
+                encoder.clear_buffer(written, 0, None);
+                let mut pass = encoder.begin_compute_pass(&describe);
+                pass.set_pipeline(&pipeline.pipeline);
+                pass.set_bind_group(0, group, &[]);
+                pass.dispatch_workgroups(groups_x, groups_y, groups_z);
             }
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("orla repeat"),
-                timestamp_writes: None,
-            });
+        } else {
+            // Dispatches in one pass run in order, each seeing what the one
+            // before wrote.
+            let mut pass = encoder.begin_compute_pass(&describe);
             pass.set_pipeline(&pipeline.pipeline);
-            pass.set_bind_group(0, &group, &[]);
-            pass.dispatch_workgroups(groups_x, groups_y, groups_z);
-            drop(pass);
-            std::mem::swap(&mut reads, &mut writes);
+            for time in 0..times {
+                pass.set_bind_group(0, &turns[time % 2].0, &[]);
+                pass.dispatch_workgroups(groups_x, groups_y, groups_z);
+            }
         }
+        let last = if times % 2 == 1 { spare } else { output_buffer };
         self.queue.submit(Some(encoder.finish()));
         let _ = self.device.poll(wgpu::PollType::Poll);
         if let Some(error) = self.wait.block_on(scope_guard.pop()) {
@@ -120,7 +140,7 @@ impl GpuBackend {
             scope,
             module,
             domain,
-            reads,
+            last,
             Vec::new(),
             Vec::new(),
             Some(self.spare.clone()),

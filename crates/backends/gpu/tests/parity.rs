@@ -1729,6 +1729,88 @@ fn on_both_inputs(
     (cpu_words, gpu_words)
 }
 
+/// A map run several times over its own output on the device, in one
+/// command buffer, is the interpreter's runs one after another: whole
+/// words and words its elements share, an odd and an even count.
+#[test]
+fn repeated_runs_are_the_interpreters_runs_in_turn() {
+    let Some(gpu) = gpu() else { return };
+    for kept in ["Float", "Float as f16"] {
+        let module = compile(&format!(
+            "kernel test.step@1 {{ requires {{ field.read; field.write; }}
+             input prev: Rows<{kept}>; output result: Rows<{kept}>;
+             compute {{ return sample(prev) * 0.5 + at_linear(prev, 3.7) + 1.0; }} }}"
+        ))
+        .unwrap_or_else(|error| panic!("{error}"));
+        let schema = module.manifest.inputs[0].ty.schema.clone();
+        let count = 1000u32;
+        let start: Vec<f32> = (0..count).map(|i| (i % 17) as f32 * 0.25).collect();
+        for repeat in 1..=4u32 {
+            let mut host = Host::new(1 << 24);
+            let mut seed = || {
+                let data = orla_abi::FieldData::new(schema.clone(), Domain::Rows(count)).unwrap();
+                let handle = host.adopt(data).unwrap();
+                host.write_values(
+                    handle,
+                    &start.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                )
+                .unwrap();
+                handle
+            };
+            let first = seed();
+            let second = seed();
+            let invocation = |input| orla_abi::Invocation {
+                inputs: vec![input],
+                params: vec![],
+                domain: Domain::Rows(count),
+                context: orla_abi::Context::default(),
+            };
+            let mut last = first;
+            for _ in 0..repeat {
+                let mut scope = Scope::new(&mut host, all());
+                last = CpuBackend
+                    .execute(&module, &invocation(last), &mut scope)
+                    .unwrap()[0];
+            }
+            let cpu = host.data(last).unwrap().values().into_owned();
+            let prepared =
+                Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
+            let mut scope = Scope::new(&mut host, all());
+            let answered = Backend::execute_repeated(
+                &gpu,
+                prepared.as_ref(),
+                &module,
+                &invocation(second),
+                &mut scope,
+                repeat,
+                (0, 0),
+            );
+            let out = match answered {
+                Some(outputs) => outputs.unwrap_or_else(|error| panic!("{error}"))[0],
+                None => {
+                    assert_eq!(repeat, 1, "{kept}: the device declined {repeat} times");
+                    continue;
+                }
+            };
+            let byte_len = schema.storage_words(count as usize) * 4;
+            let device = host.resident(out).unwrap().expect("resident");
+            let bytes = Backend::download(&gpu, device, byte_len).unwrap();
+            let words = bytes
+                .chunks_exact(4)
+                .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect();
+            host.materialize(out, words).unwrap();
+            let gpu_values = host.data(out).unwrap().values().into_owned();
+            let far = cpu
+                .iter()
+                .zip(&gpu_values)
+                .filter(|(a, b)| (f32::from_bits(**a) - f32::from_bits(**b)).abs() > 1e-3)
+                .count();
+            assert_eq!(far, 0, "{kept}, {repeat} times");
+        }
+    }
+}
+
 /// An extent past 2^24, which a float cannot hold exactly, is every
 /// element and the whole count, size and domain on the device.
 #[test]
