@@ -13,7 +13,7 @@ use orla_kernel::{Runtime, Value};
 use crate::kernels::{Batch, Change, Defined, Kernels};
 use crate::sources::{
     declarations_for, declarations_key, declarations_within, expand_use, functions_checked,
-    is_library, named_id, read_document,
+    is_library, named_id, read_document, used_documents,
 };
 use crate::store::{Stamp, Store};
 use crate::{Diagnostic, Event};
@@ -31,6 +31,9 @@ pub(crate) struct Scene {
     /// Placed sub-graph documents and their loaded stamps; a change to
     /// any rebuilds the graph.
     sub_graphs: BTreeMap<PathBuf, Option<Stamp>>,
+    /// Each library read, with the documents it uses at the stamps it was
+    /// read with; a change to any reads it again.
+    depends: BTreeMap<PathBuf, Vec<(PathBuf, Option<Stamp>)>>,
     /// Shared declarations from `use`s and the root's top level; a
     /// Kernel published through the protocol inherits them.
     structs: Vec<orla_language::StructDecl>,
@@ -93,6 +96,7 @@ impl Scene {
             stamp: None,
             uses: Vec::new(),
             sub_graphs: BTreeMap::new(),
+            depends: BTreeMap::new(),
             structs: Vec::new(),
             types: Vec::new(),
             functions: Vec::new(),
@@ -666,10 +670,16 @@ impl Scene {
         }
         for path in wanted {
             let current = self.store.stamp(&path);
-            if kernels.read_at(&path, current) {
+            // Read again when it changed, or any document it uses did.
+            let used_unchanged = self.depends.get(&path).is_none_or(|used| {
+                used.iter()
+                    .all(|(used, stamp)| self.store.stamp(used) == *stamp)
+            });
+            if kernels.read_at(&path, current) && used_unchanged {
                 continue;
             }
             changed = true;
+            self.depends.remove(&path);
             let text = match self.store.read_text(&path) {
                 Ok(text) => text,
                 Err(error) => {
@@ -711,6 +721,15 @@ impl Scene {
             let declarations =
                 match declarations_within(self.store.as_ref(), Some(&path), &dir, &document.uses) {
                     Ok((structs, types, functions)) => {
+                        let used = used_documents(self.store.as_ref(), &dir, &document.uses)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|used| {
+                                let stamp = self.store.stamp(&used);
+                                (used, stamp)
+                            })
+                            .collect();
+                        self.depends.insert(path.clone(), used);
                         if let Err(error) = functions_checked(
                             self.store.as_ref(),
                             &path,
@@ -724,8 +743,27 @@ impl Scene {
                             kernels.mark_read(path, current);
                             continue;
                         }
+                        // Its own declarations beside what it uses: a
+                        // function it changes recompiles its Kernels.
+                        let key = declarations_key(
+                            &structs
+                                .iter()
+                                .chain(&document.structs)
+                                .cloned()
+                                .collect::<Vec<_>>(),
+                            &types
+                                .iter()
+                                .chain(&document.types)
+                                .cloned()
+                                .collect::<Vec<_>>(),
+                            &functions
+                                .iter()
+                                .chain(&document.functions)
+                                .cloned()
+                                .collect::<Vec<_>>(),
+                        );
                         document.inherit(&structs, &types, &functions);
-                        declarations_key(&structs, &types, &functions)
+                        key
                     }
                     Err(error) => {
                         events.push(Event::Rejected {

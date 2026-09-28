@@ -365,3 +365,51 @@ fn a_claimed_scene_superseded_on_disk_is_the_documents() {
         orla_session::Origin::Document(PathBuf::from("/s/scene.osn"))
     );
 }
+
+/// A library's Kernels recompile when a function it declares changes, and
+/// when a function of a library it uses changes; the Kernels that call
+/// the changed function run its new body.
+#[test]
+fn a_changed_function_republishes_the_kernels_that_call_it() {
+    let files = Arc::new(Memory::default());
+    let base = |gain: &str| format!("fn gain(x: Float) -> Float {{ return x * {gain}; }}\n");
+    let mid = "use \"base.orla\";\n\
+               fn twice(x: Float) -> Float { return x * 2.0; }\n\
+               kernel l.own@1 { requires { field.write; } output result: Rows<Float>; compute { return twice(1.0); } }\n\
+               kernel l.used@1 { requires { field.write; } output result: Rows<Float>; compute { return gain(1.0); } }\n";
+    put(&files, "base.orla", &base("3.0"));
+    put(&files, "mid.orla", mid);
+    put(
+        &files,
+        "scene.osn",
+        "use \"mid.orla\";\nnode a: l.own@1 { domain = 1; }\nnode b: l.used@1 { domain = 1; }\noutput a <- a.result;\noutput b <- b.result;\n",
+    );
+    let mut session = open(
+        &files,
+        orla_session::Session::runtime_for("cpu", Default::default()).unwrap(),
+    );
+    session.sync();
+    let value = |session: &mut Session, node: &str| {
+        let report = session.evaluate(&Context::default()).unwrap();
+        let handle = report
+            .outputs
+            .iter()
+            .find(|(name, _)| name == node)
+            .map(|(_, h)| *h)
+            .unwrap();
+        f32::from_bits(session.field(handle).unwrap().values()[0])
+    };
+    assert_eq!((value(&mut session, "a"), value(&mut session, "b")), (2.0, 3.0));
+
+    // Its own function changes.
+    let before = generation(&session, "l.own@1");
+    put(&files, "mid.orla", &mid.replace("x * 2.0", "x * 7.0"));
+    session.sync();
+    assert!(generation(&session, "l.own@1") > before);
+    assert_eq!(value(&mut session, "a"), 7.0);
+
+    // A function of the library it uses changes.
+    put(&files, "base.orla", &base("5.0"));
+    session.sync();
+    assert_eq!(value(&mut session, "b"), 5.0);
+}
