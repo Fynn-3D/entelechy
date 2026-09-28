@@ -32,20 +32,28 @@ Verified surface, as of `main`:
 
 ## Next
 
-`main` holds, since `v0.0.2-alpha.3`, a batch of scaling and hot-reload
-fixes, verified and not yet pushed or released: a Kernel lowers only the
-functions it calls and republishes only when its IR changes; a changed
-function in a library republishes the Kernels of every document that
-uses it; a fused chain is prepared once and a plan is reused while its
-inputs hold; a document is parsed once per stamp; a sub-graph placed
-many times is read once; `IVec4`. It is released once the user accepts
-the batch; the release notes name what changed for a caller (none of
-these changes a contract).
+`main` holds, since `v0.0.2-alpha.3`, scaling, hot-reload and runtime
+performance work, verified and not yet pushed or released. A Kernel
+lowers only the functions it calls and republishes only when its IR
+changes; a changed library function republishes every Kernel that uses
+it; an `if` or `match` on a literal compiles to the block it takes. A
+fused chain is prepared once; a plan is reused, uncopied, while its
+graph and inputs hold; a sub-graph placed many times is read once; a
+document is parsed once per stamp and a `use` expanded again only when a
+directory or manifest it read changed. The
+JIT reads a grid or volume at a float address inline and blends linear
+reads in place; the GPU runs a repeated map's times in one pass and fills
+whole workgroups over rows. Two faults are fixed: an extent past 2^24
+elements on the GPU, and an `async` Kernel run on a backend other than
+the one it was prepared on. `IVec4` is new. It is released once the user
+accepts the batch; the release notes name what changed for a caller
+(none of these changes a contract).
 
 Measured on a 53-Kernel game (21 documents, 318 functions): `check`
-0.6 s, first frame 4 s on the JIT (Cranelift compiling each Kernel), a
-change to one shared function 0.6 s. Two costs stay super-linear and are
-left until a real project meets them: a `use` chain hundreds of
-libraries deep walks its closure once per library, and a document of
-thousands of Kernels and structs builds each Kernel's struct table
-whole.
+0.3 s, a first frame 1.8 s on the JIT, an idle sync 0.23 ms. Left by
+choice, each measured as a small gain for new complexity: a thread pool
+for the JIT (a broad gain, but one scene slowed by thread scheduling),
+preparing a document's Kernels in parallel (7%), one GPU submission a
+frame (5 to 20%, every upload made an encoder copy). Two costs stay
+super-linear until a real project meets them: a `use` chain hundreds of
+libraries deep, and a document of thousands of Kernels and structs.
