@@ -1142,33 +1142,6 @@ unsafe fn copy_in(view: &View, index: usize, value: *const u32) {
     }
 }
 
-fn clamp_axis(value: f32, limit: u32) -> u32 {
-    if value.is_nan() {
-        0
-    } else {
-        value.floor().clamp(0.0, (limit - 1) as f32) as u32
-    }
-}
-
-/// `at` on a grid or volume: floored, clamped, NaN as zero.
-unsafe extern "C" fn orla_jit_read(
-    ctx: *const Ctx,
-    input: u32,
-    x: f32,
-    y: f32,
-    z: f32,
-    out: *mut u32,
-) {
-    let view = unsafe { view(ctx, input) };
-    let (cx, cy, cz) = (
-        clamp_axis(x, view.width),
-        clamp_axis(y, view.height),
-        clamp_axis(z, view.depth),
-    );
-    let index = ((cz * view.height + cy) * view.width + cx) as usize;
-    unsafe { copy_out(view, index, out) };
-}
-
 /// `at` on rows: the index clamped into range.
 unsafe extern "C" fn orla_jit_read_rows(ctx: *const Ctx, input: u32, i: i32, out: *mut u32) {
     let view = unsafe { view(ctx, input) };
@@ -1440,7 +1413,6 @@ extern "C" fn orla_jit_half(h: u32) -> u32 {
 /// The helpers by symbol name, for the JIT to import.
 pub(crate) fn symbols() -> Vec<(&'static str, *const u8)> {
     vec![
-        ("orla_jit_read", orla_jit_read as *const u8),
         ("orla_jit_read_rows", orla_jit_read_rows as *const u8),
         ("orla_jit_sample", orla_jit_sample as *const u8),
         ("orla_jit_linear", orla_jit_linear as *const u8),

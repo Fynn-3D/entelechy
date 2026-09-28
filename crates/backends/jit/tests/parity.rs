@@ -142,6 +142,46 @@ fn the_vocabulary_matches_the_interpreter_bit_for_bit() {
     }
 }
 
+/// A float address floors and clamps each axis into the Field, NaN as
+/// zero: an element, a part, a grid and a volume, at the edges.
+#[test]
+fn float_addresses_clamp_as_the_interpreters_do() {
+    let source = "kernel test.edges@1 { requires { field.read; field.write; } input cells: Grid<Cell>; input cube: Volume<Int>; output result: Rows<Int>;
+        struct Cell { a: Float; b: Int; }
+        fn edge(k: Int, zero: Float) -> Float {
+            return match k % 12 { 0 => zero / zero, 1 => -1.0 / zero, 2 => 1.0 / zero, 3 => -zero, 4 => -0.5, 5 => 0.0, 6 => 0.99, 7 => 4.0, 8 => 4.5, 9 => 1000000000000000000000000000000.0, 10 => -1000000000000000000000000000000.0, _ => 2.5 };
+        }
+        compute {
+            let i = element();
+            let zero = float(i) - float(i);
+            let x = edge(i, zero);
+            let y = edge(i / 12, zero);
+            let z = edge(i / 144, zero);
+            let whole = at(cells, vec2(x, y));
+            return whole.b + at(cells, vec2(y, x)).b * 100 + int(whole.a) * 10000 + at(cube, vec3(x, y, z)) * 1000000;
+        } }";
+    let cell = orla_abi::Schema::new(vec![orla_abi::Scalar::Float, orla_abi::Scalar::Int]);
+    let cells: Vec<u32> = (0..20)
+        .flat_map(|i| [((i % 7) as f32).to_bits(), i as u32])
+        .collect();
+    let cube: Vec<u32> = (0..18).map(|i| i as u32 + 1).collect();
+    let (cpu, jit) = both(
+        source,
+        &[
+            (cell, Domain::Grid(5, 4), cells),
+            (
+                orla_abi::Schema::new(vec![orla_abi::Scalar::Int]),
+                Domain::Volume(3, 3, 2),
+                cube,
+            ),
+        ],
+        vec![],
+        Domain::Rows(12 * 12 * 12),
+        Context::default(),
+    );
+    assert_eq!(cpu, jit);
+}
+
 #[test]
 fn integer_failures_are_reported_at_their_element() {
     let source = "kernel test.div@1 { requires { field.write; } param d: Int = 1; output result: Rows<Int>; compute { let i = element(); return (100 / (d - i)) + (if i == 5 { 2147483647 + i } else { 0 }); } }";

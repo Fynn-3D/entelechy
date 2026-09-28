@@ -35,7 +35,6 @@ const OVERRUN: i64 = failure::OVERRUN as i64;
 
 /// The imported helpers, by function id.
 struct Imports {
-    read: FuncId,
     linear: FuncId,
     key: FuncId,
     button: FuncId,
@@ -113,7 +112,7 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
             .map_err(|error| error.to_string())
     };
     let (f, i) = (types::F32, types::I32);
-    let read_sig = sig(&[ptr, i, f, f, f, ptr], &[]);
+    let linear_sig = sig(&[ptr, i, f, f, f, ptr], &[]);
     let key_sig = sig(&[ptr, i], &[i]);
     let put_sig = sig(&[ptr, i, f, f, f, ptr], &[]);
     let put_rows_sig = sig(&[ptr, i, i, ptr], &[]);
@@ -123,8 +122,7 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
     let unary64_sig = sig(&[types::F64], &[types::F64]);
     let binary64_sig = sig(&[types::F64, types::F64], &[types::F64]);
     let imports = Imports {
-        read: declare(&mut jit, "orla_jit_read", &read_sig)?,
-        linear: declare(&mut jit, "orla_jit_linear", &read_sig)?,
+        linear: declare(&mut jit, "orla_jit_linear", &linear_sig)?,
         key: declare(&mut jit, "orla_jit_key", &key_sig)?,
         button: declare(&mut jit, "orla_jit_button", &key_sig)?,
         put: declare(&mut jit, "orla_jit_put", &put_sig)?,
@@ -374,7 +372,6 @@ struct Fx<'a, 'b> {
     /// The entry's coordinates and output pointer.
     coords: Option<(Value, Value, Value, Value)>,
     calls: Vec<FuncRef>,
-    read: FuncRef,
     linear: FuncRef,
     key: FuncRef,
     button: FuncRef,
@@ -431,7 +428,6 @@ impl<'a, 'b> Fx<'a, 'b> {
         let import = |jit: &mut JITModule, b: &mut FunctionBuilder<'b>, id: FuncId| {
             jit.declare_func_in_func(id, b.func)
         };
-        let read = import(jit, &mut b, imports.read);
         let linear = import(jit, &mut b, imports.linear);
         let key = import(jit, &mut b, imports.key);
         let button = import(jit, &mut b, imports.button);
@@ -483,7 +479,6 @@ impl<'a, 'b> Fx<'a, 'b> {
             ctx,
             coords: None,
             calls,
-            read,
             linear,
             key,
             button,
@@ -1351,6 +1346,49 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.b.ins().iadd(scaled, cx)
     }
 
+    /// A float address into a grid or volume, each axis floored and
+    /// clamped into the Field, NaN as zero: `clamp_axis` inline.
+    fn float_index(&mut self, input: u32, x: Value, y: Value, z: Value) -> Value {
+        let view = self.view(input);
+        let extent =
+            |fx: &mut Self, offset: i32| fx.b.ins().load(types::I32, fx.settled, view, offset);
+        let width = extent(self, offsets::VIEW_WIDTH);
+        let height = extent(self, offsets::VIEW_HEIGHT);
+        let depth = extent(self, offsets::VIEW_DEPTH);
+        let axis = |fx: &mut Self, v: Value, limit: Value| {
+            let zero = fx.f32c(0.0);
+            let nan = fx.is_nan(v);
+            let v = fx.b.ins().select(nan, zero, v);
+            let floored = fx.b.ins().floor(v);
+            let low = fx.b.ins().fmax(floored, zero);
+            let last = fx.b.ins().iadd_imm(limit, -1);
+            let last = fx.b.ins().fcvt_from_uint(types::F32, last);
+            let clamped = fx.b.ins().fmin(low, last);
+            fx.b.ins().fcvt_to_uint_sat(types::I32, clamped)
+        };
+        let cx = axis(self, x, width);
+        let cy = axis(self, y, height);
+        let cz = axis(self, z, depth);
+        let layer = self.b.ins().imul(cz, height);
+        let row = self.b.ins().iadd(layer, cy);
+        let scaled = self.b.ins().imul(row, width);
+        self.b.ins().iadd(scaled, cx)
+    }
+
+    /// The element `at` reads at `address`: an `Int` over rows, a `Vec2`
+    /// or `Vec3` over a grid or volume.
+    fn address_index(&mut self, input: u32, address: &orla_ir::ValueId) -> Value {
+        let words = self.words(address);
+        match self.ty(address) {
+            Type::Int => self.rows_index(input, words[0]),
+            Type::Vec2 => {
+                let zero = self.f32c(0.0);
+                self.float_index(input, words[0], words[1], zero)
+            }
+            _ => self.float_index(input, words[0], words[1], words[2]),
+        }
+    }
+
     /// An `Int` address into a Field, clamped to its elements: what `at`
     /// reads over rows.
     fn rows_index(&mut self, input: u32, address: Value) -> Value {
@@ -1939,30 +1977,9 @@ impl<'a, 'b> Fx<'a, 'b> {
                 self.element_words(*input, index, ty, &tys)
             }
             Op::At(input, address) => {
-                let words = self.words(address);
-                let out = self.scratch_addr();
-                let index = self.i32c(*input as i64);
-                match self.ty(address) {
-                    Type::Int => {
-                        let at = self.rows_index(*input, words[0]);
-                        let tys = word_types(self.module, ty);
-                        return self.element_words(*input, at, ty, &tys);
-                    }
-                    Type::Vec2 => {
-                        let zero = self.f32c(0.0);
-                        self.b
-                            .ins()
-                            .call(self.read, &[self.ctx, index, words[0], words[1], zero, out]);
-                    }
-                    _ => {
-                        self.b.ins().call(
-                            self.read,
-                            &[self.ctx, index, words[0], words[1], words[2], out],
-                        );
-                    }
-                }
+                let at = self.address_index(*input, address);
                 let tys = word_types(self.module, ty);
-                self.load_scratch(&tys)
+                self.element_words(*input, at, ty, &tys)
             }
             Op::Part { input, at, path } => {
                 let tys = word_types(self.module, ty);
@@ -1986,35 +2003,9 @@ impl<'a, 'b> Fx<'a, 'b> {
                     let index = self.sample_index(*input, x, y, z);
                     return self.part_words(*input, index, within, ty, &tys);
                 };
-                let address = self.words(at);
-                if matches!(self.ty(at), Type::Int) {
-                    let within = self.part_offset(*input, path, byte_size(&tys) as usize / 4, unit);
-                    let index = self.rows_index(*input, address[0]);
-                    return self.part_words(*input, index, within, ty, &tys);
-                }
-                // Over a grid or volume the helper reads the whole element
-                // (the Host resolves the address), then the part is taken.
-                let out = self.scratch_addr();
-                let index = self.i32c(*input as i64);
-                match self.ty(at) {
-                    Type::Vec2 => {
-                        let zero = self.f32c(0.0);
-                        self.b.ins().call(
-                            self.read,
-                            &[self.ctx, index, address[0], address[1], zero, out],
-                        );
-                    }
-                    _ => {
-                        self.b.ins().call(
-                            self.read,
-                            &[self.ctx, index, address[0], address[1], address[2], out],
-                        );
-                    }
-                }
-                let within = self.part_offset(*input, path, byte_size(&tys) as usize / 4, 4);
-                let bytes = self.b.ins().uextend(self.ptr, within);
-                let base = self.b.ins().iadd(out, bytes);
-                self.loads(&tys, self.flags, base, 0)
+                let within = self.part_offset(*input, path, byte_size(&tys) as usize / 4, unit);
+                let index = self.address_index(*input, at);
+                self.part_words(*input, index, within, ty, &tys)
             }
             Op::AtLinear(input, position) => {
                 let words = self.words(position);
