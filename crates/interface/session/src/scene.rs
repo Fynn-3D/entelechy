@@ -12,7 +12,7 @@ use orla_kernel::{Runtime, Value};
 
 use crate::kernels::{Batch, Change, Defined, Kernels};
 use crate::sources::{
-    declarations_for, declarations_key, declarations_within, expand_use, functions_checked,
+    Expanded, declarations_for, declarations_key, declarations_within, functions_checked,
     is_library, named_id, read_document, used_documents,
 };
 use crate::store::{Stamp, Store};
@@ -53,6 +53,9 @@ pub(crate) struct Scene {
     /// Whether a newer read superseded a staged scene
     /// ([`Scene::take_superseded`]).
     superseded: bool,
+    /// What the libraries' `use`s last reached, kept while nothing it
+    /// looked at changed.
+    expanded: Option<Expanded>,
 }
 
 /// The running scene, kept to be put back whole ([`Scene::put_back`]).
@@ -106,6 +109,7 @@ impl Scene {
             params: BTreeMap::new(),
             staged: None,
             superseded: false,
+            expanded: None,
         }
     }
 
@@ -649,14 +653,19 @@ impl Scene {
         events: &mut Vec<Event>,
     ) -> bool {
         let mut changed = false;
-        let mut wanted: Vec<PathBuf> = Vec::new();
-        for (path, trailing_slash) in &self.uses {
-            wanted
-                .extend(expand_use(self.store.as_ref(), path, *trailing_slash).unwrap_or_default());
-        }
-        for path in &self.extra_uses {
-            wanted.extend(expand_use(self.store.as_ref(), path, false).unwrap_or_default());
-        }
+        let uses: Vec<(PathBuf, bool)> = self
+            .uses
+            .iter()
+            .cloned()
+            .chain(self.extra_uses.iter().map(|path| (path.clone(), false)))
+            .collect();
+        let store = self.store.as_ref();
+        let expanded = match self.expanded.take() {
+            Some(expanded) if expanded.holds(store, &uses) => expanded,
+            _ => Expanded::of(store, uses),
+        };
+        let mut wanted = expanded.files.clone();
+        self.expanded = Some(expanded);
         wanted.retain(|path| *path != self.root && !self.places(path));
         wanted.sort();
         wanted.dedup();

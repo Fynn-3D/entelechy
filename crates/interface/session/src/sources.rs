@@ -4,15 +4,127 @@
 //! inherited declarations, and where a missing name is declared.
 //! Stateless; reads through the given store.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use orla_kernel::KernelId;
 use orla_language::{Document, Kernel};
 
-use crate::store::Store;
+use crate::store::{Kind, Parsed, Stamp, Store};
 
 /// The format of an `.orlapkg` archive and of a package's manifest.
 pub const PACKAGE_VERSION: u32 = 1;
+
+/// What a document's `use`s reach, and the stamp of everything the
+/// expansion looked at: each directory it listed or looked in, and each
+/// file it read. While none of them changed, neither did what it reached.
+#[derive(Debug)]
+pub(crate) struct Expanded {
+    uses: Vec<(PathBuf, bool)>,
+    /// The files reached, in the order of the `use`s.
+    pub files: Vec<PathBuf>,
+    watched: Vec<(PathBuf, Option<Stamp>)>,
+}
+
+impl Expanded {
+    /// Every file `uses` reach (a `use` that reaches nothing gives
+    /// nothing), noting what the expansion looked at.
+    pub(crate) fn of(store: &dyn Store, uses: Vec<(PathBuf, bool)>) -> Self {
+        let watching = Watching {
+            store,
+            seen: Mutex::new(BTreeSet::new()),
+        };
+        let files = uses
+            .iter()
+            .flat_map(|(path, trailing_slash)| {
+                expand_use(&watching, path, *trailing_slash).unwrap_or_default()
+            })
+            .collect();
+        let watched = watching
+            .seen
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .into_iter()
+            .map(|path| {
+                let stamp = store.stamp(&path);
+                (path, stamp)
+            })
+            .collect();
+        Self {
+            uses,
+            files,
+            watched,
+        }
+    }
+
+    /// Whether expanding `uses` again would give the same files: the
+    /// same `use`s, and a store that stamps directories stamping what the
+    /// expansion looked at as it did then.
+    pub(crate) fn holds(&self, store: &dyn Store, uses: &[(PathBuf, bool)]) -> bool {
+        store.stamps_directories()
+            && self.uses == uses
+            && self
+                .watched
+                .iter()
+                .all(|(path, stamp)| store.stamp(path) == *stamp)
+    }
+}
+
+/// A store that notes what is looked at through it: a directory listed,
+/// the directory a path is looked for in, a file read.
+struct Watching<'a> {
+    store: &'a dyn Store,
+    seen: Mutex<BTreeSet<PathBuf>>,
+}
+
+impl Watching<'_> {
+    fn note(&self, path: &Path) {
+        self.seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(path.to_path_buf());
+    }
+
+    fn note_parent(&self, path: &Path) {
+        self.note(path.parent().unwrap_or(Path::new("")));
+    }
+}
+
+impl Store for Watching<'_> {
+    fn read(&self, path: &Path) -> std::io::Result<Vec<u8>> {
+        self.note(path);
+        self.store.read(path)
+    }
+    fn write(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        self.store.write(path, bytes)
+    }
+    fn kind(&self, path: &Path) -> Option<Kind> {
+        self.note_parent(path);
+        self.store.kind(path)
+    }
+    fn list(&self, dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+        self.note(dir);
+        self.store.list(dir)
+    }
+    fn stamp(&self, path: &Path) -> Option<Stamp> {
+        self.note(path);
+        self.store.stamp(path)
+    }
+    fn canonical(&self, path: &Path) -> std::io::Result<PathBuf> {
+        self.note_parent(path);
+        self.store.canonical(path)
+    }
+    fn whole(&self, path: &Path) -> PathBuf {
+        self.store.whole(path)
+    }
+    fn packages(&self) -> &[PathBuf] {
+        self.store.packages()
+    }
+    fn parsed(&self) -> Option<&Parsed> {
+        self.store.parsed()
+    }
+}
 
 /// A `use` target's files: a file; each `.orla` directly in a
 /// directory; or a package (a directory with `package.osn`, beside the

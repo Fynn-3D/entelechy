@@ -54,6 +54,11 @@ pub trait Store: Send + Sync {
     fn parsed(&self) -> Option<&Parsed> {
         None
     }
+    /// Whether a directory's stamp changes whenever what it holds does
+    /// (an entry added, removed or renamed).
+    fn stamps_directories(&self) -> bool {
+        false
+    }
 }
 
 /// Documents parsed once per stamp: a document read again unchanged is
@@ -163,6 +168,11 @@ impl Disk {
 impl Store for Disk {
     fn packages(&self) -> &[PathBuf] {
         &self.packages
+    }
+
+    /// A directory's modification time changes with its entries.
+    fn stamps_directories(&self) -> bool {
+        true
     }
 
     fn parsed(&self) -> Option<&Parsed> {
