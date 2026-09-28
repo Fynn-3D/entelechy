@@ -1218,8 +1218,15 @@ unsafe extern "C" fn orla_jit_linear(
             continue;
         }
         let (cx, cy, cz) = corner;
-        unsafe { copy_out(view, (cz * height + cy) * width + cx, element.as_mut_ptr()) };
-        for (slot, word) in sums.iter_mut().zip(element.iter()) {
+        let index = (cz * height + cy) * width + cx;
+        // Words kept whole are read in place; narrow ones are widened first.
+        let words: &[u32] = if view.schema.is_null() {
+            unsafe { std::slice::from_raw_parts(view.words.add(index * stride), stride) }
+        } else {
+            unsafe { copy_out(view, index, element.as_mut_ptr()) };
+            element
+        };
+        for (slot, word) in sums.iter_mut().zip(words) {
             *slot += f32::from_bits(*word) * weight;
         }
     }
