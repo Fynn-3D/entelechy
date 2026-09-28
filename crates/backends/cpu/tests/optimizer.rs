@@ -243,3 +243,56 @@ fn a_memory_the_steps_write_is_read_whole() {
     );
     assert!(entry.iter().any(|op| matches!(op, Op::At(..))), "{module}");
 }
+
+/// A `match` or an `if` on a literal is the block it takes, as for a
+/// table written `each` with a `match` on its index: the other blocks are
+/// gone, a failure only they would have raised is gone with them, and one
+/// the taken block raises is still its element's.
+#[test]
+fn a_branch_on_a_literal_is_the_block_it_takes() {
+    let branches = |body: &[Instruction]| {
+        ops(body)
+            .into_iter()
+            .filter(|op| matches!(op, Op::Match { .. } | Op::If { .. }))
+            .count()
+    };
+    let run = |module: &orla_ir::Validated| -> Result<Vec<u32>, String> {
+        let mut host = Host::new(1 << 20);
+        let invocation = Invocation {
+            inputs: vec![],
+            params: vec![],
+            domain: orla_abi::Domain::Rows(8),
+            context: Default::default(),
+        };
+        let mut scope = Scope::new(&mut host, all());
+        let out = CpuBackend
+            .execute(module, &invocation, &mut scope)
+            .map_err(|e| e.to_string())?[0];
+        Ok(host.data(out).unwrap().storage().to_vec())
+    };
+    let table = "kernel test.table@1 { requires { field.write; } output result: Rows<Int>;
+        compute {
+            let t = [each 6 { match index() { 1 => 10, 2 | 3 => 20 + index(), 5 => 7 / (index() - 5), _ => index() * 3 } }];
+            let pick = if 2 > 1 { t[1] } else { 1 / 0 };
+            return t[element() % 5] + pick + element();
+        } }";
+    let plain = compile_unoptimized(table).unwrap();
+    let module = compile(table).unwrap_or_else(|error| panic!("{error}"));
+    assert!(
+        branches(&plain.entry.body) > 0,
+        "the lowering writes the branches"
+    );
+    assert_eq!(branches(&module.entry.body), 0, "{module}");
+    // Arm 5 divides by zero: it is taken, so both fail, at the same element.
+    let (a, b) = (run(&plain), run(&module));
+    assert!(a.is_err(), "{a:?}");
+    assert_eq!(a, b);
+    // Without the failing arm taken, the same words.
+    let kept = table.replace("each 6", "each 5");
+    let (a, b) = (
+        run(&compile_unoptimized(&kept).unwrap()),
+        run(&compile(&kept).unwrap()),
+    );
+    assert!(a.is_ok(), "{a:?}");
+    assert_eq!(a, b);
+}

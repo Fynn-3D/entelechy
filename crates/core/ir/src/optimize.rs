@@ -5,6 +5,7 @@
 //!   vector rebuilt from its own components in order is the vector;
 //! - an operation on literals folds where the backends' arithmetic gives
 //!   one value and no failure;
+//! - an `if` or a `match` on a literal is the block it takes;
 //! - a pure operation repeated on the same operands in one block or an
 //!   enclosing one is computed once (a memory read and a writing call are
 //!   impure);
@@ -1095,6 +1096,14 @@ impl Simplify<'_> {
         let mut out = Vec::with_capacity(instructions.len());
         for instruction in instructions {
             let ty = instruction.ty;
+            // A branch on a literal is the block it takes, which joins
+            // this one: only that block would have run.
+            if let Some(taken) = self.taken(&instruction.op) {
+                let taken = self.nested(taken);
+                out.extend(taken.body);
+                self.alias.insert(instruction.id.0, taken.result.0);
+                continue;
+            }
             if let Op::If {
                 condition,
                 then,
@@ -1196,6 +1205,39 @@ impl Simplify<'_> {
         }
         self.scopes.pop();
         out
+    }
+
+    /// The block an `if` or a `match` takes when what it tests is a
+    /// literal.
+    fn taken<'op>(&self, op: &'op Op) -> Option<&'op Block> {
+        let literal = |id: &ValueId| match self.defs.get(&self.map(*id).0) {
+            Some((_, Some(Op::Const(value)))) => Some(value.clone()),
+            _ => None,
+        };
+        match op {
+            Op::If {
+                condition,
+                then,
+                otherwise,
+            } => match literal(condition)? {
+                Value::Bool(true) => Some(then),
+                Value::Bool(false) => Some(otherwise),
+                _ => None,
+            },
+            Op::Match {
+                scrutinee,
+                arms,
+                otherwise,
+            } => match literal(scrutinee)? {
+                Value::Int(value) => Some(
+                    arms.iter()
+                        .find(|(values, _)| values.contains(&value))
+                        .map_or(otherwise, |(_, block)| block),
+                ),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     fn nested(&mut self, block: &Block) -> Block {
