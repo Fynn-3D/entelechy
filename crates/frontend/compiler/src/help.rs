@@ -171,6 +171,7 @@ pub fn builtins() -> Vec<Builtin> {
         fixed("vec4", "construction", &["vec4(x: Float, y: Float, z: Float, w: Float) -> Vec4", "vec4(x: Int, y: Int, z: Int, w: Int) -> Vec4", "vec4(xyz: Vec3, w: Float) -> Vec4", "vec4(xy: Vec2, zw: Vec2) -> Vec4", "vec4(xy: Vec2, z: Float, w: Float) -> Vec4", "vec4(x: Float, yzw: Vec3) -> Vec4"], "A vector from components, Float, Int (widened) or shorter vectors, in order; v.xyz, v.wzyx, c.rgb and the like are swizzles.", None, false),
         fixed("ivec2", "construction", &["ivec2(x: Int, y: Int) -> IVec2"], "An integer vector from components: a cell, an offset; at and put take one as an address; v.yx and the like are swizzles.", None, false),
         fixed("ivec3", "construction", &["ivec3(x: Int, y: Int, z: Int) -> IVec3", "ivec3(xy: IVec2, z: Int) -> IVec3", "ivec3(x: Int, yz: IVec2) -> IVec3"], "An integer vector from components or a shorter integer vector: a cell, an offset; at and put take one as an address.", None, false),
+        fixed("ivec4", "construction", &["ivec4(x: Int, y: Int, z: Int, w: Int) -> IVec4", "ivec4(xyz: IVec3, w: Int) -> IVec4", "ivec4(xy: IVec2, zw: IVec2) -> IVec4"], "An integer vector from components or shorter integer vectors, in order; v.wzyx and the like are swizzles.", None, false),
         fixed("mat2", "construction", &["mat2(c0: Vec2, c1: Vec2) -> Mat2", "mat2(diagonal: Float) -> Mat2"], "A matrix from its columns, or with one value down the diagonal and zeros elsewhere; m[i] is a column, m * v applies it.", None, false),
         fixed("mat3", "construction", &["mat3(c0: Vec3, c1: Vec3, c2: Vec3) -> Mat3", "mat3(diagonal: Float) -> Mat3"], "A matrix from its columns, or with one value down the diagonal and zeros elsewhere; m[i] is a column, m * v applies it.", None, false),
         fixed("mat4", "construction", &["mat4(c0: Vec4, c1: Vec4, c2: Vec4, c3: Vec4) -> Mat4", "mat4(diagonal: Float) -> Mat4"], "A matrix from its columns, or with one value down the diagonal and zeros elsewhere; m[i] is a column, m * v applies it.", None, false),
@@ -281,6 +282,7 @@ pub fn forms() -> Vec<Form> {
             "Integers in two or three components: a cell, an offset, an address for at and put.",
         ),
         form("IVec3", "type", "IVec3", "Three integers; see IVec2."),
+        form("IVec4", "type", "IVec4", "Four integers; see IVec2."),
         form(
             "Mat2",
             "type",

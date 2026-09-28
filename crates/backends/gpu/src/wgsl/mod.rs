@@ -417,6 +417,7 @@ fn literal(value: &Value) -> String {
         }
         Value::IVec2(v) => format!("vec2<i32>({})", ints(v)),
         Value::IVec3(v) => format!("vec3<i32>({})", ints(v)),
+        Value::IVec4(v) => format!("vec4<i32>({})", ints(v)),
         Value::Mat2(v) => format!("mat2x2<f32>({})", floats(v)),
         Value::Mat3(v) => format!("mat3x3<f32>({})", floats(v)),
         Value::Mat4(v) => format!("mat4x4<f32>({})", floats(v)),

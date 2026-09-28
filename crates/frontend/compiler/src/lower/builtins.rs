@@ -450,14 +450,15 @@ impl Builder<'_> {
                 }
                 Ok(self.emit(Type::Int, Op::Index))
             }
-            "vec2" | "vec3" | "vec4" | "ivec2" | "ivec3" | "dvec2" | "dvec3" | "dvec4"
-            | "lvec2" | "lvec3" => {
+            "vec2" | "vec3" | "vec4" | "ivec2" | "ivec3" | "ivec4" | "dvec2" | "dvec3"
+            | "dvec4" | "lvec2" | "lvec3" => {
                 let (kind, wanted) = match name {
                     "vec2" => (Type::Float, 2),
                     "vec3" => (Type::Float, 3),
                     "vec4" => (Type::Float, 4),
                     "ivec2" => (Type::Int, 2),
                     "ivec3" => (Type::Int, 3),
+                    "ivec4" => (Type::Int, 4),
                     "dvec2" => (Type::Double, 2),
                     "dvec3" => (Type::Double, 3),
                     "dvec4" => (Type::Double, 4),

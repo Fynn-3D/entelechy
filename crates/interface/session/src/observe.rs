@@ -23,6 +23,7 @@ fn component_of(ty: orla_ir::Type, name: &str) -> Option<(usize, orla_ir::Type)>
         Type::Vec4 => (4, Type::Float),
         Type::IVec2 => (2, Type::Int),
         Type::IVec3 => (3, Type::Int),
+        Type::IVec4 => (4, Type::Int),
         _ => return None,
     };
     let at = ["xyzw", "rgba"]

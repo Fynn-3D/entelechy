@@ -190,6 +190,8 @@ impl Type {
     pub const IVec2: Type = Type::Vector(Scalar::Int, 2);
     /// Three integers: a volume coordinate.
     pub const IVec3: Type = Type::Vector(Scalar::Int, 3);
+    /// Four integers.
+    pub const IVec4: Type = Type::Vector(Scalar::Int, 4);
     /// Two doubles.
     pub const DVec2: Type = Type::Vector(Scalar::Double, 2);
     /// Three doubles.
@@ -214,7 +216,7 @@ impl Type {
     pub const DMat4: Type = Type::Matrix(Scalar::Double, 4);
 
     /// Every named type with its spelling.
-    pub const NAMED: [(Self, &'static str); 21] = [
+    pub const NAMED: [(Self, &'static str); 22] = [
         (Self::Float, "Float"),
         (Self::Int, "Int"),
         (Self::Bool, "Bool"),
@@ -223,6 +225,7 @@ impl Type {
         (Self::Vec4, "Vec4"),
         (Self::IVec2, "IVec2"),
         (Self::IVec3, "IVec3"),
+        (Self::IVec4, "IVec4"),
         (Self::Mat2, "Mat2"),
         (Self::Mat3, "Mat3"),
         (Self::Mat4, "Mat4"),
@@ -315,7 +318,7 @@ impl Type {
         };
         match (kind, n) {
             (_, 1) => Some(scalar),
-            (Scalar::Float | Scalar::Double, 2..=4) | (Scalar::Int | Scalar::Long, 2..=3) => {
+            (Scalar::Float | Scalar::Double | Scalar::Int, 2..=4) | (Scalar::Long, 2..=3) => {
                 Some(Self::Vector(kind, n))
             }
             _ => None,
@@ -444,6 +447,8 @@ pub enum Value {
     IVec2([i32; 2]),
     /// A three-component integer vector.
     IVec3([i32; 3]),
+    /// A four-component integer vector.
+    IVec4([i32; 4]),
     /// A 2x2 matrix, column by column.
     Mat2([f32; 4]),
     /// A 3x3 matrix, column by column.
@@ -578,6 +583,7 @@ impl Value {
             Self::Vec4(_) => Type::Vec4,
             Self::IVec2(_) => Type::IVec2,
             Self::IVec3(_) => Type::IVec3,
+            Self::IVec4(_) => Type::IVec4,
             Self::Mat2(_) => Type::Mat2,
             Self::Mat3(_) => Type::Mat3,
             Self::Mat4(_) => Type::Mat4,
@@ -624,6 +630,7 @@ impl Value {
             Self::Mat4(v) => floats(out, v),
             Self::IVec2(v) => ints(out, v),
             Self::IVec3(v) => ints(out, v),
+            Self::IVec4(v) => ints(out, v),
             Self::DVec2(v) => doubles(out, v),
             Self::DVec3(v) => doubles(out, v),
             Self::DVec4(v) => doubles(out, v),
@@ -699,6 +706,7 @@ impl Value {
             Self::Vec4(_) => Self::Vec4(lanes!(4, 0.0, float)),
             Self::IVec2(_) => Self::IVec2(lanes!(2, 0, int)),
             Self::IVec3(_) => Self::IVec3(lanes!(3, 0, int)),
+            Self::IVec4(_) => Self::IVec4(lanes!(4, 0, int)),
             Self::Mat2(_) => Self::Mat2(lanes!(4, 0.0, float)),
             Self::Mat3(_) => Self::Mat3(lanes!(9, 0.0, float)),
             Self::Mat4(_) => Self::Mat4(lanes!(16, 0.0, float)),
@@ -765,6 +773,7 @@ impl fmt::Display for Value {
             Self::Vec4(v) => list(f, "vec4", numbers(v)),
             Self::IVec2(v) => list(f, "ivec2", numbers(v)),
             Self::IVec3(v) => list(f, "ivec3", numbers(v)),
+            Self::IVec4(v) => list(f, "ivec4", numbers(v)),
             Self::Mat2(v) => list(f, "mat2", columns(v, 2, "vec")),
             Self::Mat3(v) => list(f, "mat3", columns(v, 3, "vec")),
             Self::Mat4(v) => list(f, "mat4", columns(v, 4, "vec")),

@@ -425,6 +425,7 @@ pub fn value_json(value: &Value) -> Json {
         Value::Vec4(v) => floats_json(v),
         Value::IVec2(v) => json!(v),
         Value::IVec3(v) => json!(v),
+        Value::IVec4(v) => json!(v),
         Value::Mat2(v) => columns(v, 2),
         Value::Mat3(v) => columns(v, 3),
         Value::Mat4(v) => columns(v, 4),

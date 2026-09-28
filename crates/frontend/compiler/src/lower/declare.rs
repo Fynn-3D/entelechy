@@ -218,6 +218,7 @@ fn negated(value: &Value) -> Option<Value> {
         Value::Vec4(v) => Value::Vec4(floats(v)),
         Value::IVec2(v) => Value::IVec2(ints(v)?),
         Value::IVec3(v) => Value::IVec3(ints(v)?),
+        Value::IVec4(v) => Value::IVec4(ints(v)?),
         Value::Mat2(v) => Value::Mat2(floats(v)),
         Value::Mat3(v) => Value::Mat3(floats(v)),
         Value::Mat4(v) => Value::Mat4(floats(v)),
@@ -263,6 +264,7 @@ fn constructed(name: &str, args: &[Value]) -> Option<Value> {
         "vec4" => (Scalar::Float, 4, false),
         "ivec2" => (Scalar::Int, 2, false),
         "ivec3" => (Scalar::Int, 3, false),
+        "ivec4" => (Scalar::Int, 4, false),
         "dvec2" => (Scalar::Double, 2, false),
         "dvec3" => (Scalar::Double, 3, false),
         "dvec4" => (Scalar::Double, 4, false),
@@ -338,7 +340,7 @@ fn column_matrix(kind: Type, n: usize) -> Option<Type> {
 /// The builtins a function cannot be named after: the Field, memory,
 /// context and construction ones, whose forms the language owns. A
 /// function named after a math builtin stands for it in its document.
-pub(super) const RESERVED_BUILTINS: [&str; 45] = [
+pub(super) const RESERVED_BUILTINS: [&str; 46] = [
     "put",
     "emit",
     "sample",
@@ -369,6 +371,7 @@ pub(super) const RESERVED_BUILTINS: [&str; 45] = [
     "vec4",
     "ivec2",
     "ivec3",
+    "ivec4",
     "mat2",
     "mat3",
     "mat4",

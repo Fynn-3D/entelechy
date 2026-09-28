@@ -65,6 +65,11 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
             "Out { f: float(bits), i: bits + wrapped + (m >>> 29) + (sub_wrap(0x80000000, i) >>> 30), b: (bits & 1) == 1, v: vec3(0.0, 0.0, 0.0) }",
         ),
         (
+            "four-integer vectors",
+            "let q = ivec4(ivec2(i, -i), 3, n) * 2 + ivec4(1, 1, 1, 1); let c = clamp(abs(q - ivec4(5, 5, 5, 5)), 0, 9); let r = int(vec4(x, x * 2.0, -x, 0.5) * 3.0); let s = q.wzyx + ivec3(i, 1, 2).xyzz;",
+            "Out { f: float(s.x + r.y) + float(c).w, i: min(q, s).z + max(c, 1).x + sign(r).z + r.x, b: q == q.xyzw && s != ivec4(0, 0, 0, 0), v: vec3(float(c).xyz) }",
+        ),
+        (
             "comparisons and logic",
             "let a = x > 1.0 && !(i == 3) || x <= 0.2; let b = (i != 4) == (x >= 0.5);",
             "Out { f: 0.0, i: int(a) + int(b) * 2, b: a != b, v: vec3(0.0, 0.0, 0.0) }",

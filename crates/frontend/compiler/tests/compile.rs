@@ -999,10 +999,15 @@ fn vectors_build_from_vectors_swizzle_and_functions_may_take_a_math_builtins_nam
     );
     let (_, message) = semantic(&format!("{head}return v.xyw.x; }} }}"));
     assert_eq!(message, "Vec3 has no component `.w`");
-    let (_, message) = semantic(&format!("{head}return float(ivec3(1, 2, 3).xyzz.x); }} }}"));
+    // Four integers are an IVec4; four longs are no type.
+    compile(&format!(
+        "{head}return float(ivec3(1, 2, 3).xyzz.w + ivec4(ivec2(i, 1), 2, 3).w); }} }}"
+    ))
+    .unwrap_or_else(|e| panic!("{e}"));
+    let (_, message) = semantic(&format!("{head}return float(lvec3(1, 2, 3).xyzz.x); }} }}"));
     assert_eq!(
         message,
-        "`.xyzz` would be an integer vector of four, which there is none"
+        "`.xyzz` would be a vector of four Longs, which there is none"
     );
     let (_, message) = semantic(&format!("{head}return ivec2(1.5, v).x; }} }}"));
     assert_eq!(

@@ -216,7 +216,7 @@ impl Builder<'_> {
                         return Err(semantic(
                             expr.span,
                             format!(
-                                "`.{member}` would be an integer vector of four, which there is none"
+                                "`.{member}` would be a vector of four {lane}s, which there is none"
                             ),
                         ));
                     }

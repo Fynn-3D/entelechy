@@ -181,6 +181,7 @@ pub fn template(ty: Type, structs: &[StructDef]) -> Value {
         Type::Vec4 => Value::Vec4([0.0; 4]),
         Type::IVec2 => Value::IVec2([0; 2]),
         Type::IVec3 => Value::IVec3([0; 3]),
+        Type::IVec4 => Value::IVec4([0; 4]),
         Type::Mat2 => Value::Mat2([0.0; 4]),
         Type::Mat3 => Value::Mat3([0.0; 9]),
         Type::Mat4 => Value::Mat4([0.0; 16]),

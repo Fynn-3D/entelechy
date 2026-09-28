@@ -630,6 +630,7 @@ impl Emitter<'_> {
                 (Type::Bool, _) => format!("{}({list})", wgsl_type(ty)),
                 (_, Type::IVec2) => format!("to_int2({list})"),
                 (_, Type::IVec3) => format!("to_int3({list})"),
+                (_, Type::IVec4) => format!("to_int4({list})"),
                 _ => format!("to_int({list})"),
             },
             Intrinsic::Pow => format!("pow({}, {})", v(&args[0]), splat(&args[1], ty)),

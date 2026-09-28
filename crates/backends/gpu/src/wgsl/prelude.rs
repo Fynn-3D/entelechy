@@ -48,7 +48,7 @@ fn urem_checked(a: u32, b: u32) -> u32 {
 
 /// Checked arithmetic componentwise over an `n`-lane integer vector.
 pub(crate) fn checked_vector_helpers(n: u8) -> String {
-    let letters = ["x", "y", "z"];
+    let letters = ["x", "y", "z", "w"];
     let mut out = String::new();
     for op in ["add", "sub", "mul", "div", "rem"] {
         let parts = letters
@@ -398,6 +398,9 @@ fn to_int2(v: vec2<f32>) -> vec2<i32> {{
 }}
 fn to_int3(v: vec3<f32>) -> vec3<i32> {{
     return vec3<i32>(to_int(v.x), to_int(v.y), to_int(v.z));
+}}
+fn to_int4(v: vec4<f32>) -> vec4<i32> {{
+    return vec4<i32>(to_int(v.x), to_int(v.y), to_int(v.z), to_int(v.w));
 }}"
     );
     // This invocation's element (set by `main`), its failure flag and
@@ -490,6 +493,7 @@ fn settle_left() {{
         out.push_str(CHECKED_HELPERS);
         out.push_str(&checked_vector_helpers(2));
         out.push_str(&checked_vector_helpers(3));
+        out.push_str(&checked_vector_helpers(4));
     } else {
         out.push_str("fn fail(code: u32) {}\n");
     }
