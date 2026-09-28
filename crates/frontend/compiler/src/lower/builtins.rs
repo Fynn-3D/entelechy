@@ -620,16 +620,15 @@ impl Builder<'_> {
             _ => {
                 // The document's functions first: one may stand for a
                 // math builtin of its name.
-                let found = {
+                let found = self.function_index(name)?.map(|index| {
                     let functions = self.shared.functions.borrow();
-                    functions.iter().position(|(f, _)| f == name).map(|index| {
-                        (
-                            index,
-                            functions[index].1.args.clone(),
-                            functions[index].1.result_type(),
-                        )
-                    })
-                };
+                    let function = &functions[index as usize].1;
+                    (
+                        index as usize,
+                        function.args.clone(),
+                        function.result_type(),
+                    )
+                });
                 if let Some((index, expected, ret)) = found {
                     self.arity(name, args, expected.len(), span)?;
                     let mut ids = Vec::with_capacity(args.len());
@@ -651,7 +650,11 @@ impl Builder<'_> {
                     self.called(index as u32, span)?;
                     return Ok(self.emit(ret, Op::Call(index as u32, ids)));
                 }
-                if let Some(template) = self.shared.templates.iter().find(|t| t.name.value == name)
+                if let Some((_, template)) = self
+                    .shared
+                    .templates
+                    .iter()
+                    .find(|(position, t)| t.name.value == name && self.sees(*position))
                 {
                     return self.instantiate(template, args, span);
                 }

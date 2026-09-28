@@ -1194,7 +1194,7 @@ impl Parser {
             generics,
             args,
             ret,
-            body,
+            body: std::sync::Arc::new(body),
         })
     }
 

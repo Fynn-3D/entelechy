@@ -555,8 +555,9 @@ pub struct FnDecl {
     pub args: Vec<(Spanned<String>, Spanned<String>)>,
     /// Return type name as written.
     pub ret: Spanned<String>,
-    /// Body.
-    pub body: Block,
+    /// Body, shared: every Kernel that inherits the function holds the
+    /// one body.
+    pub body: std::sync::Arc<Block>,
 }
 
 /// How deep an expression or block may nest, counting enclosing nodes and

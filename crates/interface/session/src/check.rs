@@ -69,6 +69,12 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         };
     let mut document = document;
     if let Ok((structs, types, functions)) = declarations_for(store, base, &document.uses) {
+        if let Err(error) =
+            orla_compiler::check_functions(&document, (&structs, &types, &functions))
+        {
+            let at = written_in(store, path, &error);
+            say!(problem, "{}:{error}", at.display());
+        }
         document.inherit(&structs, &types, &functions);
     }
     let mut kernels: Vec<(Option<orla_ir::KernelId>, &orla_language::Kernel)> = document
@@ -127,6 +133,13 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                 let dir = path.parent().unwrap_or_else(|| Path::new("."));
                 match declarations_within(store, Some(path), dir, &used_document.uses) {
                     Ok((structs, types, functions)) => {
+                        if let Err(error) = orla_compiler::check_functions(
+                            &used_document,
+                            (&structs, &types, &functions),
+                        ) {
+                            let at = written_in(store, path, &error);
+                            say!(problem, "{}:{error}", at.display());
+                        }
                         used_document.inherit(&structs, &types, &functions)
                     }
                     Err(error) => {

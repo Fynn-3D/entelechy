@@ -459,6 +459,28 @@ pub(crate) fn written_in(
     }
 }
 
+/// Checks the functions `document`, at `path`, declares, against it and
+/// `inherited`, once; a fault is placed in the document it is written in.
+pub(crate) fn functions_checked(
+    store: &dyn Store,
+    path: &Path,
+    document: &Document,
+    inherited: (
+        &[orla_language::StructDecl],
+        &[orla_language::TypeAlias],
+        &[orla_language::FnDecl],
+    ),
+) -> Result<(), crate::Diagnostic> {
+    orla_compiler::check_functions(document, inherited).map_err(|error| {
+        let at = written_in(store, path, &error);
+        if at == path {
+            crate::Diagnostic::from(&error)
+        } else {
+            crate::Diagnostic::new(format!("{}:{error}", at.display()))
+        }
+    })
+}
+
 /// The first file in `search` declaring `name`, and its kind.
 fn declared_in(
     store: &dyn Store,

@@ -1459,8 +1459,9 @@ fn emit_belongs_to_a_scatter_whose_rule_ignores_order() {
     assert!(error.contains("two fields"), "{error}");
 }
 
-/// Optimized, a module keeps only what its entry reaches, even beside a
-/// helper returning a `Long`.
+/// A module holds only what its entry reaches, even beside a helper
+/// returning a `Long`: a function lowers where it is first called,
+/// optimized or not.
 #[test]
 fn a_helper_the_kernel_never_calls_is_not_in_its_module() {
     let module = compile(
@@ -1487,9 +1488,10 @@ fn a_helper_the_kernel_never_calls_is_not_in_its_module() {
     )
     .unwrap();
     assert!(
-        unoptimized.holds(Type::Long),
-        "the unoptimized module is the document's"
+        !unoptimized.holds(Type::Long),
+        "a helper never called is never lowered"
     );
+    assert!(unoptimized.functions.is_empty(), "{unoptimized}");
 }
 
 /// `[each ...]` copies multiply when nested: the count is checked before
@@ -1555,4 +1557,41 @@ fn a_written_division_with_a_remainder_is_no_float() {
     ] {
         compile(&kernel(body)).unwrap_or_else(|e| panic!("{body}: {e}"));
     }
+}
+
+/// A function sees only those above it, however a Kernel's calls order
+/// their lowering: `b`, lowered first for the Kernel, stays below `a`.
+#[test]
+fn a_function_sees_only_those_above_it_whatever_is_lowered_first() {
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; }
+         fn a(x: Float) -> Float { return b(x); }
+         fn b(x: Float) -> Float { return x; }
+         output result: Rows<Float>;
+         compute { return b(1.0) + a(1.0); } }",
+    );
+    assert!(
+        message.contains("`b` is defined below this one"),
+        "{message}"
+    );
+}
+
+/// A document's functions are checked once, called or not.
+#[test]
+fn a_documents_functions_are_checked_called_or_not() {
+    let document = orla_language::parse_document(
+        "fn fine(x: Float) -> Float { return x; }
+fn broken(x: Float) -> Float { return x * nope; }",
+    )
+    .unwrap();
+    let error = orla_compiler::check_functions(&document, (&[], &[], &[])).unwrap_err();
+    assert_eq!(error.function(), Some("broken"), "{error}");
+    assert!(
+        error.to_string().contains("`nope` is not defined"),
+        "{error}"
+    );
+    let fine =
+        orla_language::parse_document("fn fine(x: Float) -> Float { return x * rate(); }").unwrap();
+    orla_compiler::check_functions(&fine, (&[], &[], &[]))
+        .unwrap_or_else(|e| panic!("a capability is its callers': {e}"));
 }

@@ -111,8 +111,46 @@ pub fn compile_kernel(
 ) -> Result<Validated, CompileError> {
     // Every pass below walks the tree or the IR by recursion.
     orla_language::on_a_deep_stack(|| {
-        let module = lower::lower(kernel, id)?;
+        let module = lower::lower(kernel, id, &[])?;
         Ok(orla_ir::validate(orla_ir::optimize(module))?)
+    })
+}
+
+/// Checks the functions a document declares, each lowered once whether a
+/// Kernel calls it or not, against what the document declares and
+/// `inherited`, the structs, types and functions of the documents it
+/// uses. A Kernel lowers only the functions it calls; this is where the
+/// others are held to the language. A function's capabilities are its
+/// callers' to hold, so none is refused here.
+pub fn check_functions(
+    document: &orla_language::Document,
+    inherited: (
+        &[orla_language::StructDecl],
+        &[orla_language::TypeAlias],
+        &[orla_language::FnDecl],
+    ),
+) -> Result<(), CompileError> {
+    if document.functions.is_empty() {
+        return Ok(());
+    }
+    orla_language::on_a_deep_stack(|| {
+        let mut kernel = orla_language::parse(
+            "kernel orla.functions@1 { requires { field.read; field.write; time.read; input.read; } output result: Rows<Float>; compute { return 0.0; } }",
+        )?;
+        let (structs, types, functions) = inherited;
+        kernel.structs = structs.iter().chain(&document.structs).cloned().collect();
+        kernel.types = types.iter().chain(&document.types).cloned().collect();
+        kernel.functions = functions
+            .iter()
+            .chain(&document.functions)
+            .cloned()
+            .collect();
+        let own: Vec<String> = document
+            .functions
+            .iter()
+            .map(|f| f.name.value.clone())
+            .collect();
+        lower::lower(&kernel, None, &own).map(drop)
     })
 }
 
@@ -123,7 +161,7 @@ pub fn compile_kernel_unoptimized(
     id: Option<&orla_ir::KernelId>,
 ) -> Result<Validated, CompileError> {
     orla_language::on_a_deep_stack(|| {
-        let module = lower::lower(kernel, id)?;
+        let module = lower::lower(kernel, id, &[])?;
         Ok(orla_ir::validate(module)?)
     })
 }
@@ -133,7 +171,7 @@ pub fn compile_kernel_unoptimized(
 pub fn compile_unoptimized(source: &str) -> Result<Validated, CompileError> {
     orla_language::on_a_deep_stack(|| {
         let kernel = orla_language::parse(source)?;
-        let module = lower::lower(&kernel, None)?;
+        let module = lower::lower(&kernel, None, &[])?;
         Ok(orla_ir::validate(module)?)
     })
 }

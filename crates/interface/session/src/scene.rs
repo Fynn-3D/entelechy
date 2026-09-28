@@ -12,8 +12,8 @@ use orla_kernel::{Runtime, Value};
 
 use crate::kernels::{Batch, Change, Defined, Kernels};
 use crate::sources::{
-    declarations_for, declarations_key, declarations_within, expand_use, is_library, named_id,
-    read_document,
+    declarations_for, declarations_key, declarations_within, expand_use, functions_checked,
+    is_library, named_id, read_document,
 };
 use crate::store::{Stamp, Store};
 use crate::{Diagnostic, Event};
@@ -301,6 +301,12 @@ impl Scene {
         let (structs, types, functions) =
             declarations_for(self.store.as_ref(), &self.base(), &document.uses)
                 .map_err(Diagnostic::new)?;
+        functions_checked(
+            self.store.as_ref(),
+            &self.root,
+            &document,
+            (&structs, &types, &functions),
+        )?;
         document.inherit(&structs, &types, &functions);
         let root_key = PathBuf::from(self.document_name());
         let inline = lowered
@@ -380,6 +386,15 @@ impl Scene {
         let mut declarations = String::new();
         match declarations_for(self.store.as_ref(), &base, &document.uses) {
             Ok((structs, types, functions)) => {
+                if let Err(error) = functions_checked(
+                    self.store.as_ref(),
+                    &root,
+                    &document,
+                    (&structs, &types, &functions),
+                ) {
+                    events.push(Event::SceneRejected(error));
+                    return;
+                }
                 self.structs = structs.iter().chain(&document.structs).cloned().collect();
                 self.types = types.iter().chain(&document.types).cloned().collect();
                 self.functions = functions
@@ -696,6 +711,19 @@ impl Scene {
             let declarations =
                 match declarations_within(self.store.as_ref(), Some(&path), &dir, &document.uses) {
                     Ok((structs, types, functions)) => {
+                        if let Err(error) = functions_checked(
+                            self.store.as_ref(),
+                            &path,
+                            &document,
+                            (&structs, &types, &functions),
+                        ) {
+                            events.push(Event::Rejected {
+                                path: path.clone(),
+                                error,
+                            });
+                            kernels.mark_read(path, current);
+                            continue;
+                        }
                         document.inherit(&structs, &types, &functions);
                         declarations_key(&structs, &types, &functions)
                     }

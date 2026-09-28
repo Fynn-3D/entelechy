@@ -190,20 +190,30 @@ fn outputs_record(manifest: &Manifest, structs: &Structs) -> Option<u32> {
     Some((table.len() - 1) as u32)
 }
 
-pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, CompileError> {
+/// Lowers `kernel`. Each function lowers where it is first called, so a
+/// Kernel lowers only the functions it reaches; `checked` names functions
+/// lowered whether called or not, which is how a document's own functions
+/// are checked once.
+pub(crate) fn lower(
+    kernel: &Kernel,
+    id: Option<&KernelId>,
+    checked: &[String],
+) -> Result<Module, CompileError> {
     let structs = structs(kernel)?;
     let aliases = aliases(kernel, &structs)?;
     let manifest = manifest(kernel, id, &structs, &aliases)?;
     let record = outputs_record(&manifest, &structs);
     // A function with a Field parameter is a template, instantiated per
-    // port binding; the others lower in order, so a function calls only
-    // what is defined above it.
+    // port binding; the others lower where first called. A function sees
+    // only those defined above it.
     let shared = Shared {
         manifest: &manifest,
         structs: &structs,
         aliases: &aliases,
         functions: RefCell::new(Vec::new()),
         templates: Vec::new(),
+        plain: Vec::new(),
+        lowered: RefCell::new(BTreeMap::new()),
         instances: RefCell::new(BTreeMap::new()),
         instantiating: RefCell::new(Vec::new()),
         needs: RefCell::new(BTreeMap::new()),
@@ -215,7 +225,8 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
         record,
     };
     let mut shared = shared;
-    for declaration in &kernel.functions {
+    let mut seen = BTreeSet::new();
+    for (position, declaration) in kernel.functions.iter().enumerate() {
         if RESERVED_BUILTINS.contains(&declaration.name.value.as_str()) {
             return Err(semantic(
                 declaration.name.span,
@@ -225,16 +236,7 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
                 ),
             ));
         }
-        let taken = shared
-            .functions
-            .borrow()
-            .iter()
-            .any(|(name, _)| *name == declaration.name.value)
-            || shared
-                .templates
-                .iter()
-                .any(|t| t.name.value == declaration.name.value);
-        if taken {
+        if !seen.insert(declaration.name.value.as_str()) {
             return Err(semantic(
                 declaration.name.span,
                 format!("function `{}` is defined twice", declaration.name.value),
@@ -252,22 +254,16 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
             }
         }
         if has_field || !declaration.generics.is_empty() {
-            shared.templates.push(declaration);
-            continue;
+            shared.templates.push((position, declaration));
+        } else {
+            shared.plain.push((position, declaration));
         }
-        let (function, needs) = lower_function(
-            &shared,
-            declaration,
-            Vec::new(),
-            Vec::new(),
-            &declaration.name.value,
-        )?;
-        let mut functions = shared.functions.borrow_mut();
-        shared
-            .needs
-            .borrow_mut()
-            .insert(functions.len() as u32, needs);
-        functions.push((declaration.name.value.clone(), function));
+    }
+    {
+        let checking = Builder::new(&shared, false, "", Vec::new());
+        for name in checked {
+            checking.function_index(name)?;
+        }
     }
     let expected = match manifest.outputs.first() {
         Some(port) => port.element(),
@@ -404,7 +400,14 @@ struct Shared<'a> {
     structs: &'a Structs,
     aliases: &'a [(String, PortType)],
     functions: RefCell<Vec<(String, Function)>>,
-    templates: Vec<&'a FnDecl>,
+    /// Functions with a Field or type parameter, by their position among
+    /// the Kernel's functions.
+    templates: Vec<(usize, &'a FnDecl)>,
+    /// The other functions, by position; each lowers where first called.
+    plain: Vec<(usize, &'a FnDecl)>,
+    /// Each plain function lowered so far, by position, to its index in
+    /// `functions`.
+    lowered: RefCell<BTreeMap<usize, u32>>,
     /// Instantiated templates by binding, to function index.
     instances: RefCell<BTreeMap<Instance, u32>>,
     /// Templates being instantiated; a template calling itself is refused.
@@ -429,8 +432,9 @@ fn lower_function(
     fields: Vec<(String, u32)>,
     generics: Vec<(String, Type)>,
     name: &str,
+    above: Option<usize>,
 ) -> Result<(Function, Vec<(Capability, String)>), CompileError> {
-    lower_function_body(shared, declaration, fields, generics, name)
+    lower_function_body(shared, declaration, fields, generics, name, above)
         .map_err(|error| error.in_function(&declaration.name.value))
 }
 
@@ -440,6 +444,7 @@ fn lower_function_body(
     fields: Vec<(String, u32)>,
     generics: Vec<(String, Type)>,
     name: &str,
+    above: Option<usize>,
 ) -> Result<(Function, Vec<(Capability, String)>), CompileError> {
     let structs = shared.structs;
     let bound = |ty: &Spanned<String>| -> Option<Type> {
@@ -450,6 +455,7 @@ fn lower_function_body(
     };
     let mut builder = Builder::new(shared, false, name, fields);
     builder.needs = Some(RefCell::new(Vec::new()));
+    builder.above = above;
     for (name, ty) in &declaration.args {
         if builder.fields.iter().any(|(field, _)| field == &name.value) {
             continue;
@@ -536,6 +542,9 @@ struct Builder<'a> {
     /// In a function's body, what it needs, each capability with the
     /// builtin that needs it; a Kernel's own code needs its `requires`.
     needs: Option<RefCell<Vec<(Capability, String)>>>,
+    /// In a plain function's body, its position: it sees only the
+    /// functions above it.
+    above: Option<usize>,
     name: String,
     args: Vec<(String, Type)>,
     /// Field parameters bound to input ports, for a template's instance.
@@ -577,6 +586,7 @@ impl<'a> Builder<'a> {
             shared,
             is_entry,
             needs: None,
+            above: None,
             name: name.to_owned(),
             args: Vec::new(),
             fields,
@@ -1040,6 +1050,7 @@ impl<'a> Builder<'a> {
                     fields,
                     generics.clone(),
                     &format!("{name}<{bound}>"),
+                    None,
                 )
                 .map_err(|error| match (error, generics.is_empty()) {
                     // An error in a generic body names the instance.
@@ -1166,6 +1177,44 @@ impl<'a> Builder<'a> {
                 format!("`{name}` needs `{capability}`; add it to `requires`"),
             ))
         }
+    }
+
+    /// Whether the function at `position` is visible here: all of them in
+    /// a Kernel's own code, those above in a function's body.
+    fn sees(&self, position: usize) -> bool {
+        self.above.is_none_or(|above| position < above)
+    }
+
+    /// The index in `functions` of the plain function `name` visible here,
+    /// lowered on its first call.
+    fn function_index(&self, name: &str) -> Result<Option<u32>, CompileError> {
+        let Some(&(position, declaration)) = self
+            .shared
+            .plain
+            .iter()
+            .find(|(position, d)| d.name.value == name && self.sees(*position))
+        else {
+            return Ok(None);
+        };
+        if let Some(index) = self.shared.lowered.borrow().get(&position) {
+            return Ok(Some(*index));
+        }
+        let (function, needs) = lower_function(
+            self.shared,
+            declaration,
+            Vec::new(),
+            Vec::new(),
+            name,
+            Some(position),
+        )?;
+        let index = {
+            let mut functions = self.shared.functions.borrow_mut();
+            functions.push((name.to_owned(), function));
+            (functions.len() - 1) as u32
+        };
+        self.shared.needs.borrow_mut().insert(index, needs);
+        self.shared.lowered.borrow_mut().insert(position, index);
+        Ok(Some(index))
     }
 
     /// A call to the function at `index`: what it needs is the caller's
