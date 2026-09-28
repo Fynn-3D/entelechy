@@ -168,7 +168,7 @@ struct Player {
     /// The GPU presenter, when the backend is the GPU and the surface is
     /// configured; it shows frames without readback.
     presenter: Option<Presenter>,
-    last_frame: Vec<[f32; 4]>,
+    last_frame: Option<orla_kernel::Image>,
     last_size: (u32, u32),
     /// Protocol requests arriving from stdin or a socket, when serving.
     requests: Option<Receiver<orla_protocol::Incoming>>,
@@ -330,8 +330,7 @@ impl Player {
         let downloaded = match self.session.picture(output) {
             Ok(image) => {
                 self.last_size = (image.width(), image.height());
-                self.last_frame.clear();
-                self.last_frame.extend_from_slice(image.pixels());
+                self.last_frame = Some(image);
                 true
             }
             Err(_) => false,
@@ -394,7 +393,7 @@ impl Player {
     /// Draws the last downloaded picture and the frame line over it;
     /// returns where it landed.
     fn blit(&mut self) -> Option<Placement> {
-        if self.presenter.is_some() && self.last_frame.is_empty() {
+        if self.presenter.is_some() && self.last_frame.is_none() {
             return None;
         }
         let (Some(window), Some(surface)) = (&self.window, &mut self.surface) else {
@@ -412,8 +411,12 @@ impl Player {
         let Ok(mut buffer) = surface.buffer_mut() else {
             return None;
         };
+        let pixels = self
+            .last_frame
+            .as_ref()
+            .map_or(&[][..], orla_kernel::Image::pixels);
         let placement = play::present(
-            &self.last_frame,
+            pixels,
             self.last_size.0,
             self.last_size.1,
             size.width,
@@ -605,7 +608,7 @@ fn main() -> ExitCode {
         surface: None,
         display,
         presenter: None,
-        last_frame: Vec::new(),
+        last_frame: None,
         last_size: (0, 0),
         requests: None,
         answers: orla_protocol::Answers::new(),
