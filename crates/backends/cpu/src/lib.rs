@@ -637,9 +637,7 @@ fn compute_pairs(
     let width = domain.width() as usize;
     let height = domain.height();
     let element_count = width * height as usize * domain.depth() as usize;
-    let threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
+    let threads = orla_rules::cores()
         .min(element_count.max(1))
         .min(element_count.div_ceil(PARALLEL_THRESHOLD))
         .max(1);
@@ -706,9 +704,7 @@ fn compute(program: &eval::Program<'_>, strides: &[usize]) -> Result<Vec<u32>, E
     let mut results = vec![0u32; rows * row_words];
     let element_count = width * rows;
     // Split by elements: a `Rows` domain is a single row.
-    let threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
+    let threads = orla_rules::cores()
         .min(element_count.max(1))
         .min(element_count.div_ceil(PARALLEL_THRESHOLD))
         .max(1);

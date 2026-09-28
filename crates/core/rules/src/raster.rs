@@ -264,9 +264,7 @@ pub fn rasterize_masked(
     // Bands of rows, one to a thread. Each pixel is drawn by one thread
     // taking the triangles in row order, so the surface is the same bit
     // for bit for any thread count.
-    let threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
+    let threads = crate::cores()
         .min(height as usize)
         .min(many.div_ceil(BAND_TRIANGLES))
         .max(1);
@@ -399,11 +397,7 @@ fn set_up(vertices: &[u32], triangles: &[u32], width: u32, height: u32) -> Vec<V
         })
     };
     let count = triangles.len() / TRIANGLE_WORDS;
-    let threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .min(count.div_ceil(SETUP_TRIANGLES))
-        .max(1);
+    let threads = crate::cores().min(count.div_ceil(SETUP_TRIANGLES)).max(1);
     let per_thread = count.div_ceil(threads).max(1);
     let set_up_run = |first: usize, words: &[u32]| -> Vec<Drawn> {
         words

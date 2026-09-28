@@ -343,6 +343,12 @@ pub fn output_domain(mode: Mode, domain: Domain, inputs: &[Domain]) -> Domain {
     }
 }
 
+/// The threads this machine runs at once, asked of the system once.
+pub fn cores() -> usize {
+    static CORES: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *CORES.get_or_init(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
+}
+
 /// Words an address into a domain takes in a scatter's pair.
 pub fn address_words(domain: Domain) -> usize {
     domain.shape().dims() as usize

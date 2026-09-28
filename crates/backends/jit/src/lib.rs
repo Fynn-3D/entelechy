@@ -423,9 +423,7 @@ fn compute_emitting(
 /// How many threads `items` pieces of work are worth: every core, but
 /// no fewer than `PARALLEL_THRESHOLD` pieces a thread.
 fn workers(items: usize) -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
+    orla_rules::cores()
         .min(items.div_ceil(PARALLEL_THRESHOLD))
         .max(1)
 }
@@ -447,9 +445,7 @@ fn compute_into(
     let rows = height as usize * domain.depth() as usize;
     let element_count = width * rows;
     // Split by elements: a `Rows` domain is one long row.
-    let threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
+    let threads = orla_rules::cores()
         .min(element_count.max(1))
         .min(element_count.div_ceil(PARALLEL_THRESHOLD))
         .max(1);
