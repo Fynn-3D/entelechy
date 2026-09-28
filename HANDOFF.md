@@ -32,14 +32,20 @@ Verified surface, as of `main`:
 
 ## Next
 
-`refactor/compose-soul` (over `refactor/soul-reference` and
-`feat/self-teaching`) holds a batch not yet merged. Orla's syntax and API
-are one reference rendered from the tables the implementation executes
-(`orla help`, the protocol's `help`, `docs/REFERENCE.md`), and agents
-learn from it and `examples/`. The protocol's doors are its own lines and
-the bridges. Its 23 operations are primitives: a client composes many
-frames, measurements and searches from them. The graph's plan asks the
-rules where an output's extent comes from, and every example runs the
-same fused and not (`crates/interface/orla/tests/fusion.rs`). It merges
-on the user's word; a release is cut once a whole batch is done and
-accepted.
+`main` holds, since `v0.0.2-alpha.3`, a batch of scaling and hot-reload
+fixes, verified and not yet pushed or released: a Kernel lowers only the
+functions it calls and republishes only when its IR changes; a changed
+function in a library republishes the Kernels of every document that
+uses it; a fused chain is prepared once and a plan is reused while its
+inputs hold; a document is parsed once per stamp; a sub-graph placed
+many times is read once; `IVec4`. It is released once the user accepts
+the batch; the release notes name what changed for a caller (none of
+these changes a contract).
+
+Measured on a 53-Kernel game (21 documents, 318 functions): `check`
+0.6 s, first frame 4 s on the JIT (Cranelift compiling each Kernel), a
+change to one shared function 0.6 s. Two costs stay super-linear and are
+left until a real project meets them: a `use` chain hundreds of
+libraries deep walks its closure once per library, and a document of
+thousands of Kernels and structs builds each Kernel's struct table
+whole.
