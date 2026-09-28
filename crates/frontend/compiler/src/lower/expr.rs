@@ -330,9 +330,10 @@ impl Builder<'_> {
             ExprKind::Call(name, args) => self.call(name, args, expr.span),
             ExprKind::Struct { name, base, fields } => {
                 let index = self
-                    .structs()
-                    .iter()
-                    .position(|def| def.name == name.value)
+                    .shared
+                    .structs
+                    .find(&name.value)
+                    .map(|index| index as usize)
                     .ok_or_else(|| {
                         let structs = self.structs();
                         let known: Vec<&str> =

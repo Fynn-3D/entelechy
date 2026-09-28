@@ -2,7 +2,6 @@
 //! ports and layouts, parameters and defaults, the execution mode; and
 //! the names reserved from functions.
 
-use std::cell::RefCell;
 use std::str::FromStr;
 
 use orla_ir::{
@@ -21,13 +20,9 @@ pub(super) fn structs(kernel: &Kernel) -> Result<Structs, CompileError> {
 
 /// The struct table the declarations make, in order.
 pub(super) fn struct_table(decls: &[orla_language::StructDecl]) -> Result<Structs, CompileError> {
-    let structs: Structs = RefCell::new(Vec::new());
+    let structs = Structs::default();
     for decl in decls {
-        if structs
-            .borrow()
-            .iter()
-            .any(|def| def.name == decl.name.value)
-        {
+        if structs.find(&decl.name.value).is_some() {
             return Err(semantic(
                 decl.name.span,
                 format!("struct `{}` is defined twice", decl.name.value),

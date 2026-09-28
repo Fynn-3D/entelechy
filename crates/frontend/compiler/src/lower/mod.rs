@@ -60,7 +60,41 @@ fn parse_type(name: &Spanned<String>) -> Result<Type, CompileError> {
 
 /// The struct table while a Kernel lowers: declared structs, then every
 /// array type met, `[T; N]` interned once by element and count.
-type Structs = RefCell<Vec<StructDef>>;
+/// The struct table while a Kernel lowers, with its names indexed: a
+/// struct is looked up by name in constant time. The table only grows,
+/// so the index catches up with what was appended when it is asked.
+#[derive(Default)]
+struct Structs {
+    table: RefCell<Vec<StructDef>>,
+    index: RefCell<std::collections::HashMap<String, u32>>,
+    indexed: std::cell::Cell<usize>,
+}
+
+impl std::ops::Deref for Structs {
+    type Target = RefCell<Vec<StructDef>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.table
+    }
+}
+
+impl Structs {
+    /// The table, the index let go.
+    fn into_inner(self) -> Vec<StructDef> {
+        self.table.into_inner()
+    }
+
+    /// The struct named `name`, the first of the name.
+    fn find(&self, name: &str) -> Option<u32> {
+        let table = self.table.borrow();
+        let mut index = self.index.borrow_mut();
+        for at in self.indexed.get()..table.len() {
+            index.entry(table[at].name.clone()).or_insert(at as u32);
+        }
+        self.indexed.set(table.len());
+        index.get(name).copied()
+    }
+}
 
 /// Resolves a type name: a plain type, a struct, or `[Type; N]`
 /// (interned).
@@ -96,12 +130,8 @@ fn resolve_type(name: &Spanned<String>, structs: &Structs) -> Result<Type, Compi
         })?;
         return array_type(structs, element, count, name.span);
     }
-    let found = structs
-        .borrow()
-        .iter()
-        .position(|def| def.name == name.value);
-    if let Some(index) = found {
-        return Ok(Type::Struct(index as u32));
+    if let Some(index) = structs.find(&name.value) {
+        return Ok(Type::Struct(index));
     }
     parse_type(name)
 }
@@ -769,8 +799,8 @@ impl<'a> Builder<'a> {
     /// made once per value type.
     pub(super) fn pair_type(&self, value: Type) -> Type {
         let name = format!("({}, stopped)", self.describe(value));
-        if let Some(index) = self.structs().iter().position(|def| def.name == name) {
-            return Type::Struct(index as u32);
+        if let Some(index) = self.shared.structs.find(&name) {
+            return Type::Struct(index);
         }
         let mut table = self.shared.structs.borrow_mut();
         table.push(StructDef::record(
