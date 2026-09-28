@@ -663,7 +663,9 @@ impl Scene {
         let stale: Vec<PathBuf> = kernels
             .documents()
             .into_iter()
-            .filter(|path| *path != self.root && !wanted.contains(path) && !self.places(path))
+            .filter(|path| {
+                *path != self.root && wanted.binary_search(path).is_err() && !self.places(path)
+            })
             .collect();
         for path in stale {
             kernels.retire_document(&path, runtime, events);

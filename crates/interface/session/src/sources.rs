@@ -52,6 +52,14 @@ pub(crate) fn expand_use(
 /// the document is not in: a package is used whole, through its manifest,
 /// whose versions it is held to. A package's own documents use its files.
 fn used_through_its_manifest(store: &dyn Store, base: &Path, path: &Path) -> Result<(), String> {
+    // Only a path through a package's name reaches inside one.
+    if !path.components().any(|part| {
+        Path::new(part.as_os_str())
+            .extension()
+            .is_some_and(|ext| ext == "orlapkg")
+    }) {
+        return Ok(());
+    }
     // Where a path lies, through a package's name when it is spelled so.
     let located = |path: &Path| {
         let path = resolve_package(store, path);
@@ -232,11 +240,7 @@ pub fn used_documents(
                 if !visited.insert(key) {
                     continue;
                 }
-                let text = store
-                    .read_text(&file)
-                    .map_err(|e| format!("{}: {e}", file.display()))?;
-                let document = orla_language::parse_document(&text)
-                    .map_err(|e| format!("{}:{e}", file.display()))?;
+                let document = store.document(&file)?;
                 let dir = file
                     .parent()
                     .unwrap_or_else(|| Path::new("."))
@@ -269,6 +273,14 @@ pub fn declarations_for(
     declarations_within(store, None, base, uses)
 }
 
+/// Where each gathered declaration is, by name.
+#[derive(Default)]
+struct Named {
+    structs: std::collections::HashMap<String, usize>,
+    types: std::collections::HashMap<String, usize>,
+    functions: std::collections::HashMap<String, usize>,
+}
+
 /// As [`declarations_for`], for a document at `origin`, so a `use`
 /// back to it reports as a cycle.
 pub fn declarations_within(
@@ -287,6 +299,7 @@ pub fn declarations_within(
         structs: &mut Vec<(orla_language::StructDecl, PathBuf)>,
         types: &mut Vec<(orla_language::TypeAlias, PathBuf)>,
         functions: &mut Vec<(orla_language::FnDecl, PathBuf)>,
+        named: &mut Named,
     ) -> Result<(), String> {
         for item in uses {
             let path = base.join(&item.path.value);
@@ -316,11 +329,7 @@ pub fn declarations_within(
                     continue;
                 }
                 stack.push(key);
-                let text = store
-                    .read_text(&file)
-                    .map_err(|e| format!("{}: {e}", file.display()))?;
-                let document = orla_language::parse_document(&text)
-                    .map_err(|e| format!("{}:{e}", file.display()))?;
+                let document = store.document(&file)?;
                 let dir = file
                     .parent()
                     .unwrap_or_else(|| Path::new("."))
@@ -334,14 +343,16 @@ pub fn declarations_within(
                     structs,
                     types,
                     functions,
+                    named,
                 );
                 stack.pop();
                 nested?;
                 for decl in &document.functions {
                     // A function name is declared in one file only.
-                    if let Some((_, other)) = functions
-                        .iter()
-                        .find(|(f, _)| f.name.value == decl.name.value)
+                    if let Some((_, other)) = named
+                        .functions
+                        .get(&decl.name.value)
+                        .map(|at| &functions[*at])
                     {
                         return Err(format!(
                             "fn `{}` is declared by both {} and {}",
@@ -350,13 +361,13 @@ pub fn declarations_within(
                             file.display()
                         ));
                     }
+                    named
+                        .functions
+                        .insert(decl.name.value.clone(), functions.len());
                     functions.push((decl.clone(), file.clone()));
                 }
                 for decl in &document.structs {
-                    match structs
-                        .iter()
-                        .find(|(s, _)| s.name.value == decl.name.value)
-                    {
+                    match named.structs.get(&decl.name.value).map(|at| &structs[*at]) {
                         // Same fields in the same order: one declaration.
                         Some((same, _))
                             if same
@@ -375,11 +386,14 @@ pub fn declarations_within(
                                 file.display()
                             ));
                         }
-                        None => structs.push((decl.clone(), file.clone())),
+                        None => {
+                            named.structs.insert(decl.name.value.clone(), structs.len());
+                            structs.push((decl.clone(), file.clone()));
+                        }
                     }
                 }
                 for decl in &document.types {
-                    match types.iter().find(|(t, _)| t.name.value == decl.name.value) {
+                    match named.types.get(&decl.name.value).map(|at| &types[*at]) {
                         Some((same, _)) if same.target.value == decl.target.value => {}
                         Some((_, other)) => {
                             return Err(format!(
@@ -389,7 +403,10 @@ pub fn declarations_within(
                                 file.display()
                             ));
                         }
-                        None => types.push((decl.clone(), file.clone())),
+                        None => {
+                            named.types.insert(decl.name.value.clone(), types.len());
+                            types.push((decl.clone(), file.clone()));
+                        }
                     }
                 }
             }
@@ -410,6 +427,7 @@ pub fn declarations_within(
         &mut structs,
         &mut types,
         &mut functions,
+        &mut Named::default(),
     )?;
     Ok((
         structs.into_iter().map(|(s, _)| s).collect(),
@@ -441,11 +459,7 @@ pub(crate) fn written_in(
     let Some(function) = error.function() else {
         return document.to_path_buf();
     };
-    let Some(parsed) = store
-        .read_text(document)
-        .ok()
-        .and_then(|text| orla_language::parse_document(&text).ok())
-    else {
+    let Ok(parsed) = store.document(document) else {
         return document.to_path_buf();
     };
     if parsed.functions.iter().any(|f| f.name.value == function) {
@@ -488,10 +502,7 @@ fn declared_in(
     search: &[PathBuf],
 ) -> Option<(PathBuf, &'static str)> {
     for path in search {
-        let Ok(text) = store.read_text(path) else {
-            continue;
-        };
-        let Ok(document) = orla_language::parse_document(&text) else {
+        let Ok(document) = store.document(path) else {
             continue;
         };
         let kinds = [
@@ -578,9 +589,8 @@ pub(crate) fn located(
     // Search known documents and `.orla` files beside this document,
     // the scene and each known one, excluding what this already uses.
     let used: Vec<PathBuf> = store
-        .read_text(document)
+        .document(document)
         .ok()
-        .and_then(|text| orla_language::parse_document(&text).ok())
         .map(|parsed| {
             used_documents(
                 store,

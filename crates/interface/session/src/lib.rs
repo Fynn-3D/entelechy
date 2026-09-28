@@ -46,7 +46,7 @@ pub use history::{Attempt, Change, Origin, Record};
 pub use options::{SessionOptions, environment_packages};
 /// How a device is waited for: blocking, or giving a page turns.
 pub use orla_gpu::Wait;
-pub use store::{Disk, Memory, Store};
+pub use store::{Disk, Memory, Parsed, Store};
 
 /// The world at one moment, taken for its caller to keep
 /// ([`Session::snapshot`]).

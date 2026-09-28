@@ -50,9 +50,54 @@ pub trait Store: Send + Sync {
     fn packages(&self) -> &[PathBuf] {
         &[]
     }
+    /// Where the store keeps documents it has parsed, if it keeps them.
+    fn parsed(&self) -> Option<&Parsed> {
+        None
+    }
 }
 
+/// Documents parsed once per stamp: a document read again unchanged is
+/// not parsed again.
+#[derive(Clone, Debug, Default)]
+pub struct Parsed(std::sync::Arc<Mutex<BTreeMap<PathBuf, ParsedAt>>>);
+
+/// A document as parsed, and the stamp of the text it was parsed from.
+type ParsedAt = (Stamp, std::sync::Arc<orla_language::Document>);
+
 impl dyn Store + '_ {
+    /// The document at `path`, parsed; an error names the path. A store
+    /// that keeps parsed documents parses a file once per stamp.
+    pub fn document(&self, path: &Path) -> Result<std::sync::Arc<orla_language::Document>, String> {
+        let stamp = self.stamp(path);
+        if let (Some(parsed), Some(stamp)) = (self.parsed(), stamp)
+            && let Some((seen, document)) = parsed
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(path)
+            && *seen == stamp
+        {
+            return Ok(std::sync::Arc::clone(document));
+        }
+        let text = self
+            .read_text(path)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let document = std::sync::Arc::new(
+            orla_language::parse_document(&text).map_err(|e| format!("{}:{e}", path.display()))?,
+        );
+        if let (Some(parsed), Some(stamp)) = (self.parsed(), stamp) {
+            parsed
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(
+                    path.to_path_buf(),
+                    (stamp, std::sync::Arc::clone(&document)),
+                );
+        }
+        Ok(document)
+    }
+
     /// The file's text.
     pub fn read_text(&self, path: &Path) -> io::Result<String> {
         String::from_utf8(self.read(path)?)
@@ -102,18 +147,26 @@ fn folded(path: &Path) -> PathBuf {
 #[derive(Clone, Debug, Default)]
 pub struct Disk {
     packages: Vec<PathBuf>,
+    parsed: Parsed,
 }
 
 impl Disk {
     /// The file system, finding packages by name in `packages`.
     pub fn with_packages(packages: Vec<PathBuf>) -> Self {
-        Self { packages }
+        Self {
+            packages,
+            parsed: Parsed::default(),
+        }
     }
 }
 
 impl Store for Disk {
     fn packages(&self) -> &[PathBuf] {
         &self.packages
+    }
+
+    fn parsed(&self) -> Option<&Parsed> {
+        Some(&self.parsed)
     }
 
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
@@ -186,6 +239,7 @@ impl Store for Disk {
 #[derive(Debug, Default)]
 pub struct Memory {
     held: Mutex<Held>,
+    parsed: Parsed,
 }
 
 /// The files, each with the number of the write that made it (its stamp).
@@ -209,6 +263,10 @@ impl Memory {
 }
 
 impl Store for Memory {
+    fn parsed(&self) -> Option<&Parsed> {
+        Some(&self.parsed)
+    }
+
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
         self.held()
             .files
@@ -319,5 +377,65 @@ mod tests {
         let before = store.stamp(Path::new("scene/main.osn"));
         memory.put(Path::new("scene/main.osn"), b"b".to_vec());
         assert_ne!(store.stamp(Path::new("scene/main.osn")), before);
+    }
+}
+
+#[cfg(test)]
+mod parsed_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Files held in memory, counting how often each is read.
+    #[derive(Default)]
+    struct Counting {
+        files: Memory,
+        reads: AtomicUsize,
+        parsed: Parsed,
+    }
+
+    impl Store for Counting {
+        fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+            self.files.read(path)
+        }
+        fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+            self.files.write(path, bytes)
+        }
+        fn kind(&self, path: &Path) -> Option<Kind> {
+            self.files.kind(path)
+        }
+        fn list(&self, dir: &Path) -> io::Result<Vec<PathBuf>> {
+            self.files.list(dir)
+        }
+        fn stamp(&self, path: &Path) -> Option<Stamp> {
+            self.files.stamp(path)
+        }
+        fn canonical(&self, path: &Path) -> io::Result<PathBuf> {
+            self.files.canonical(path)
+        }
+        fn whole(&self, path: &Path) -> PathBuf {
+            self.files.whole(path)
+        }
+        fn parsed(&self) -> Option<&Parsed> {
+            Some(&self.parsed)
+        }
+    }
+
+    /// A document is parsed once while its file is unchanged, and again
+    /// once it changes.
+    #[test]
+    fn a_document_is_parsed_once_per_stamp() {
+        let store = Counting::default();
+        let path = Path::new("/s/lib.orla");
+        store.files.put(path, b"fn f(x: Float) -> Float { return x; }".to_vec());
+        let store: &dyn Store = &store;
+        let first = store.document(path).unwrap();
+        let again = store.document(path).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&first, &again));
+        store
+            .write(path, b"fn g(x: Float) -> Float { return x; }")
+            .unwrap();
+        let changed = store.document(path).unwrap();
+        assert_eq!(changed.functions[0].name.value, "g");
     }
 }
