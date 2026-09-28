@@ -1201,6 +1201,36 @@ fn a_step_reads_what_the_step_before_wrote_even_when_it_reads_first() {
 }
 
 #[test]
+fn rows_of_every_length_are_every_element() {
+    // Rows fill whole workgroups in strips: each count about a workgroup's
+    // and a strip's edge computes each element once.
+    let Some(gpu) = gpu() else { return };
+    let source = "kernel test.each@1 { requires { field.write; } output result: Rows<Float>; compute { return float(element()) * 2.0 + 1.0; } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let prepared = Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
+    for count in [1u32, 7, 8, 63, 64, 65, 511, 512, 513, 4095, 4097, 100_003] {
+        let mut host = Host::new(1 << 24);
+        let invocation = orla_abi::Invocation {
+            inputs: vec![],
+            params: vec![],
+            domain: Domain::Rows(count),
+            context: orla_abi::Context::default(),
+        };
+        let mut scope = Scope::new(&mut host, all());
+        let out =
+            Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
+        let device = host.resident(out).unwrap().expect("resident");
+        let bytes = Backend::download(&gpu, device, count as usize * 4).unwrap();
+        let wrong = bytes
+            .chunks_exact(4)
+            .enumerate()
+            .filter(|(i, c)| f32::from_le_bytes([c[0], c[1], c[2], c[3]]) != *i as f32 * 2.0 + 1.0)
+            .count();
+        assert_eq!(wrong, 0, "{count} rows");
+    }
+}
+
+#[test]
 fn long_rows_are_dispatched_as_a_grid() {
     // More elements than 65,535 workgroups of eight: the dispatch folds
     // them and every element is computed.
