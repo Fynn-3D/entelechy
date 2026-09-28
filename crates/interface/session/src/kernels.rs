@@ -418,11 +418,8 @@ impl Kernels {
             }
         }
         let before = self.documents.remove(path).unwrap_or_default();
-        let previous = if before.declarations == declarations {
-            before.kernels.clone()
-        } else {
-            BTreeMap::new()
-        };
+        let previous = before.kernels.clone();
+        let same_declarations = before.declarations == declarations;
         let leaving: Vec<KernelId> = before
             .kernels
             .keys()
@@ -464,7 +461,8 @@ impl Kernels {
                 continue;
             }
             kernels.insert(id.clone(), text.clone());
-            if previous.get(&id) == Some(&text) && runtime.kernel(&id).is_some() {
+            let same_text = previous.get(&id) == Some(&text);
+            if same_text && same_declarations && runtime.kernel(&id).is_some() {
                 continue;
             }
             let module = match orla_compiler::compile_kernel(&kernel, Some(&id)) {
@@ -483,6 +481,15 @@ impl Kernels {
                     continue;
                 }
             };
+            // Its text the same and its IR too: what changed around it
+            // does not reach it, and it is not prepared again.
+            if same_text
+                && runtime
+                    .kernel(&id)
+                    .is_some_and(|running| running.module() == Some(&module))
+            {
+                continue;
+            }
             let prep = match runtime.kernel(&id) {
                 // A running Kernel's replacement prepares in the background.
                 Some(running) => {

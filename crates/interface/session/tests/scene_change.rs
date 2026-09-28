@@ -416,3 +416,46 @@ fn a_changed_function_republishes_the_kernels_that_call_it() {
     session.sync();
     assert_eq!(value(&mut session, "b"), 5.0);
 }
+
+/// A changed function republishes only the Kernels whose IR it changes: a
+/// Kernel that does not reach it keeps its version, and a change to a
+/// Kernel's own text, its doc included, republishes it.
+#[test]
+fn a_changed_function_republishes_only_the_kernels_it_reaches() {
+    let files = Arc::new(Memory::default());
+    let lib = |gain: &str, doc: &str| {
+        format!(
+            "fn gain(x: Float) -> Float {{ return x * {gain}; }}\n\
+             /// {doc}\n\
+             kernel l.calls@1 {{ requires {{ field.write; }} output result: Rows<Float>; compute {{ return gain(1.0); }} }}\n\
+             kernel l.apart@1 {{ requires {{ field.write; }} output result: Rows<Float>; compute {{ return 4.0; }} }}\n"
+        )
+    };
+    put(&files, "lib.orla", &lib("2.0", "Calls."));
+    put(
+        &files,
+        "scene.osn",
+        "use \"lib.orla\";\nnode a: l.calls@1 { domain = 1; }\nnode b: l.apart@1 { domain = 1; }\noutput a <- a.result;\noutput b <- b.result;\n",
+    );
+    let mut session = open(
+        &files,
+        orla_session::Session::runtime_for("cpu", Default::default()).unwrap(),
+    );
+    session.sync();
+    let (calls, apart) = (
+        generation(&session, "l.calls@1"),
+        generation(&session, "l.apart@1"),
+    );
+
+    put(&files, "lib.orla", &lib("3.0", "Calls."));
+    session.sync();
+    assert!(generation(&session, "l.calls@1") > calls);
+    assert_eq!(generation(&session, "l.apart@1"), apart);
+
+    // Its doc is its text.
+    let calls = generation(&session, "l.calls@1");
+    put(&files, "lib.orla", &lib("3.0", "Calls gain."));
+    session.sync();
+    assert!(generation(&session, "l.calls@1") > calls);
+    assert_eq!(generation(&session, "l.apart@1"), apart);
+}
