@@ -70,7 +70,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     if (gid.x != 0u) {{
         return;
     }}
-    let n = u32(ctx[0].x);
+    let n = bitcast<u32>(ctx[0].x);
     var carried: {} = init();
     for (var i: u32 = 0u; i < n; i = i + 1u) {{
         storageBarrier();
@@ -120,10 +120,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             "
 @compute @workgroup_size({WORKGROUP}, {WORKGROUP}, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {{
-    let w = u32(ctx[0].x);
-    let h = u32(ctx[0].y);
-    let d = u32(ctx[1].z);
-    let fold = u32(ctx[5].y);
+    let w = bitcast<u32>(ctx[0].x);
+    let h = bitcast<u32>(ctx[0].y);
+    let d = bitcast<u32>(ctx[1].z);
+    let fold = bitcast<u32>(ctx[5].y);
     var x = gid.x;
     var y = gid.y;
     if (fold != 0u) {{
@@ -153,10 +153,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation
         "
 @compute @workgroup_size({WORKGROUP}, {WORKGROUP}, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
-    let w = u32(ctx[0].x);
-    let h = u32(ctx[0].y);
-    let d = u32(ctx[1].z);
-    let fold = u32(ctx[5].y);
+    let w = bitcast<u32>(ctx[0].x);
+    let h = bitcast<u32>(ctx[0].y);
+    let d = bitcast<u32>(ctx[1].z);
+    let fold = bitcast<u32>(ctx[5].y);
     var x = gid.x;
     var y = gid.y;
     if (fold != 0u) {{

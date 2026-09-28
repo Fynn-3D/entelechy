@@ -1729,6 +1729,32 @@ fn on_both_inputs(
     (cpu_words, gpu_words)
 }
 
+/// An extent past 2^24, which a float cannot hold exactly, is every
+/// element and the whole count, size and domain on the device.
+#[test]
+fn extents_past_a_floats_integers_match() {
+    let Some(gpu) = gpu() else { return };
+    let count = (1u32 << 24) + 1;
+    let mut host = Host::new(1 << 27);
+    let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+    let flags = host
+        .adopt(
+            orla_abi::FieldData::from_storage(schema, Domain::Rows(count), vec![0; count as usize])
+                .unwrap(),
+        )
+        .unwrap();
+    let module = compile(
+        "kernel test.far@1 { requires { field.read; field.write; } input flags: Rows<Int>;
+         output result: Rows<Int>;
+         compute { return count(flags) + size(flags) - domain() - element() + sample(flags); } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let (cpu, gpu_words) =
+        on_both_inputs(&gpu, &mut host, &module, vec![flags], Domain::Rows(count));
+    assert_eq!(cpu[count as usize - 1], 1);
+    assert!(cpu == gpu_words, "the device differs from the interpreter");
+}
+
 /// Past 65,535 workgroups of 64 in one dimension, a scatter, a prefix and
 /// a reduction fold their dispatch into rows.
 #[test]

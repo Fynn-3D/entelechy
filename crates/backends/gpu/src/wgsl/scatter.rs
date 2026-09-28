@@ -22,7 +22,9 @@ fn target_count(module: &Module) -> String {
         return "0u".to_owned();
     };
     let slot = CONTEXT_HEAD + base as usize;
-    format!("(u32(ctx[{slot}].x) * u32(ctx[{slot}].y) * u32(ctx[{slot}].z))")
+    format!(
+        "(bitcast<u32>(ctx[{slot}].x) * bitcast<u32>(ctx[{slot}].y) * bitcast<u32>(ctx[{slot}].z))"
+    )
 }
 
 /// The pass setting a whole sum's high words to the sign of each base
@@ -333,21 +335,21 @@ pub(crate) fn scatter_address(module: &Module, exit: &str) -> String {
         // `row`, since the pass's `i` is the source index.
         Shape::Rows => format!(
             "let row = {address};
-    if (row < 0i || row >= i32(ctx[{slot}].x)) {{ {exit} }}
+    if (row < 0i || row >= i32(bitcast<u32>(ctx[{slot}].x))) {{ {exit} }}
     let at = u32(row);"
         ),
         Shape::Grid => format!(
             "let x = floor({address}.x);
     let y = floor({address}.y);
-    if (!(x >= 0.0 && x < ctx[{slot}].x && y >= 0.0 && y < ctx[{slot}].y)) {{ {exit} }}
-    let at = u32(y) * u32(ctx[{slot}].x) + u32(x);"
+    if (!(x >= 0.0 && x < f32(bitcast<u32>(ctx[{slot}].x)) && y >= 0.0 && y < f32(bitcast<u32>(ctx[{slot}].y)))) {{ {exit} }}
+    let at = u32(y) * bitcast<u32>(ctx[{slot}].x) + u32(x);"
         ),
         Shape::Volume => format!(
             "let x = floor({address}.x);
     let y = floor({address}.y);
     let z = floor({address}.z);
-    if (!(x >= 0.0 && x < ctx[{slot}].x && y >= 0.0 && y < ctx[{slot}].y && z >= 0.0 && z < ctx[{slot}].z)) {{ {exit} }}
-    let at = (u32(z) * u32(ctx[{slot}].y) + u32(y)) * u32(ctx[{slot}].x) + u32(x);"
+    if (!(x >= 0.0 && x < f32(bitcast<u32>(ctx[{slot}].x)) && y >= 0.0 && y < f32(bitcast<u32>(ctx[{slot}].y)) && z >= 0.0 && z < f32(bitcast<u32>(ctx[{slot}].z)))) {{ {exit} }}
+    let at = (u32(z) * bitcast<u32>(ctx[{slot}].y) + u32(y)) * bitcast<u32>(ctx[{slot}].x) + u32(x);"
         ),
     }
 }
@@ -376,7 +378,7 @@ pub fn emit_scatter_parallel(module: &Module) -> String {
         "
 @compute @workgroup_size({SCATTER_WORKGROUP}, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
-    let n = u32(ctx[0].x) * u32(ctx[0].y) * u32(ctx[1].z);
+    let n = bitcast<u32>(ctx[0].x) * bitcast<u32>(ctx[0].y) * bitcast<u32>(ctx[1].z);
     let i = gid.x + gid.y * {SCATTER_SPAN}u;
     if (i >= n) {{
         return;
@@ -565,7 +567,7 @@ pub fn emit_scatter_gather(module: &Module) -> String {
         "
 @compute @workgroup_size({SCATTER_WORKGROUP}, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
-    let count = u32(ctx[{slot}].x) * u32(ctx[{slot}].y) * u32(ctx[{slot}].z);
+    let count = bitcast<u32>(ctx[{slot}].x) * bitcast<u32>(ctx[{slot}].y) * bitcast<u32>(ctx[{slot}].z);
     let e = gid.x + gid.y * {SCATTER_SPAN}u;
     if (e >= count) {{
         return;
@@ -630,7 +632,7 @@ pub fn emit_scatter_keys(module: &Module, from_base: bool) -> String {
         "
 @compute @workgroup_size({SCATTER_WORKGROUP}, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
-    let count = u32(ctx[{slot}].x) * u32(ctx[{slot}].y) * u32(ctx[{slot}].z);
+    let count = bitcast<u32>(ctx[{slot}].x) * bitcast<u32>(ctx[{slot}].y) * bitcast<u32>(ctx[{slot}].z);
     let e = gid.x + gid.y * {SCATTER_SPAN}u;
     if (e >= count) {{
         return;
@@ -655,7 +657,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     if (i >= sort.x) {{
         return;
     }}
-    let n = u32(ctx[0].x) * u32(ctx[0].y) * u32(ctx[1].z);
+    let n = bitcast<u32>(ctx[0].x) * bitcast<u32>(ctx[0].y) * bitcast<u32>(ctx[1].z);
     order[i] = i;
     if (i >= n) {{
         keys[i] = 0xffffffffu;
@@ -781,7 +783,7 @@ pub fn emit_scatter_fold(module: &Module) -> String {
         "
 @compute @workgroup_size({SCATTER_WORKGROUP}, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
-    let count = u32(ctx[{slot}].x) * u32(ctx[{slot}].y) * u32(ctx[{slot}].z);
+    let count = bitcast<u32>(ctx[{slot}].x) * bitcast<u32>(ctx[{slot}].y) * bitcast<u32>(ctx[{slot}].z);
     let e = gid.x + gid.y * {SCATTER_SPAN}u;
     if (e >= count) {{
         return;

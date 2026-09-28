@@ -241,16 +241,17 @@ impl GpuBackend {
         timing: Option<&wgpu::QuerySet>,
     ) -> Result<Staged, ExecutionError> {
         let element_count = domain.count();
-        // Context head (see `wgsl::CONTEXT_HEAD`), then one [w, h, d, 0] per input.
+        // Context head (see `wgsl::CONTEXT_HEAD`), then one [w, h, d, 0] per
+        // input; extents and the fold are the bits of `u32`s.
         let input = &invocation.context.input;
         let mut context = vec![
-            domain.width() as f32,
-            domain.height() as f32,
+            f32::from_bits(domain.width()),
+            f32::from_bits(domain.height()),
             invocation.context.time,
             input.button_bits() as f32,
             input.pointer[0],
             input.pointer[1],
-            domain.depth() as f32,
+            f32::from_bits(domain.depth()),
             invocation.context.rate,
         ];
         context.extend(input.key_words().iter().map(|word| f32::from_bits(*word)));
@@ -259,7 +260,7 @@ impl GpuBackend {
         let (groups_x, groups_y, groups_z, fold) = wgsl::dispatch(domain);
         // The third word is a one the shader compiler cannot see through
         // (`wgsl::OPAQUE_ONE`); the fourth is spare.
-        context.extend_from_slice(&[invocation.context.scale, fold as f32, 1.0, 0.0]);
+        context.extend_from_slice(&[invocation.context.scale, f32::from_bits(fold), 1.0, 0.0]);
         // The pad: two sticks in one vec4, the triggers in the next.
         let sticks = input.sticks;
         context.extend_from_slice(&[sticks[0][0], sticks[0][1], sticks[1][0], sticks[1][1]]);
@@ -274,9 +275,9 @@ impl GpuBackend {
         for (index, handle) in invocation.inputs.iter().enumerate() {
             let extent = scope.size(*handle)?;
             context.extend_from_slice(&[
-                extent.width() as f32,
-                extent.height() as f32,
-                extent.depth() as f32,
+                f32::from_bits(extent.width()),
+                f32::from_bits(extent.height()),
+                f32::from_bits(extent.depth()),
                 0.0,
             ]);
             let bound = self.bind_input(scope, *handle, index)?;

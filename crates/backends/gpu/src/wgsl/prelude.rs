@@ -534,14 +534,14 @@ fn settle_left() {{
             Shape::Rows => writeln!(
                 out,
                 "fn index_in{index}(i: i32) -> u32 {{
-    return u32(clamp(i, 0i, i32(ctx[{slot}].x) - 1i));
+    return u32(clamp(i, 0i, i32(bitcast<u32>(ctx[{slot}].x)) - 1i));
 }}"
             ),
             Shape::Grid => writeln!(
                 out,
                 "fn index_in{index}(c: vec2<f32>) -> u32 {{
-    let w = ctx[{slot}].x;
-    let h = ctx[{slot}].y;
+    let w = f32(bitcast<u32>(ctx[{slot}].x));
+    let h = f32(bitcast<u32>(ctx[{slot}].y));
     let x = clamp(select(floor(c.x), 0.0, c.x != c.x), 0.0, w - 1.0);
     let y = clamp(select(floor(c.y), 0.0, c.y != c.y), 0.0, h - 1.0);
     return u32(y) * u32(w) + u32(x);
@@ -550,9 +550,9 @@ fn settle_left() {{
             Shape::Volume => writeln!(
                 out,
                 "fn index_in{index}(c: vec3<f32>) -> u32 {{
-    let w = ctx[{slot}].x;
-    let h = ctx[{slot}].y;
-    let d = ctx[{slot}].z;
+    let w = f32(bitcast<u32>(ctx[{slot}].x));
+    let h = f32(bitcast<u32>(ctx[{slot}].y));
+    let d = f32(bitcast<u32>(ctx[{slot}].z));
     let x = clamp(select(floor(c.x), 0.0, c.x != c.x), 0.0, w - 1.0);
     let y = clamp(select(floor(c.y), 0.0, c.y != c.y), 0.0, h - 1.0);
     let z = clamp(select(floor(c.z), 0.0, c.z != c.z), 0.0, d - 1.0);
@@ -749,14 +749,14 @@ pub(crate) fn emit_memory_writer(
     let _ = match port.shape() {
         Shape::Rows => writeln!(
             out,
-            "fn inside_in{index}(i: i32) -> bool {{ return i >= 0i && i < i32(ctx[{slot}].x); }}"
+            "fn inside_in{index}(i: i32) -> bool {{ return i >= 0i && i < i32(bitcast<u32>(ctx[{slot}].x)); }}"
         ),
         Shape::Grid => writeln!(
             out,
             "fn inside_in{index}(c: vec2<f32>) -> bool {{
     let x = floor(c.x);
     let y = floor(c.y);
-    return x >= 0.0 && x < ctx[{slot}].x && y >= 0.0 && y < ctx[{slot}].y;
+    return x >= 0.0 && x < f32(bitcast<u32>(ctx[{slot}].x)) && y >= 0.0 && y < f32(bitcast<u32>(ctx[{slot}].y));
 }}"
         ),
         Shape::Volume => writeln!(
@@ -765,7 +765,7 @@ pub(crate) fn emit_memory_writer(
     let x = floor(c.x);
     let y = floor(c.y);
     let z = floor(c.z);
-    return x >= 0.0 && x < ctx[{slot}].x && y >= 0.0 && y < ctx[{slot}].y && z >= 0.0 && z < ctx[{slot}].z;
+    return x >= 0.0 && x < f32(bitcast<u32>(ctx[{slot}].x)) && y >= 0.0 && y < f32(bitcast<u32>(ctx[{slot}].y)) && z >= 0.0 && z < f32(bitcast<u32>(ctx[{slot}].z));
 }}"
         ),
     };
@@ -789,7 +789,7 @@ pub(crate) fn emit_linear(out: &mut String, module: &Module, index: usize, port:
             let _ = writeln!(
                 out,
                 "fn linear_in{index}(c: f32) -> {ty} {{
-    let w = ctx[{slot}].x;
+    let w = f32(bitcast<u32>(ctx[{slot}].x));
     let h = 1.0;
     let t = select(c - 0.5, -1.0, c != c);
     let lower = clamp(floor(t), 0.0, w - 1.0);
@@ -808,8 +808,8 @@ pub(crate) fn emit_linear(out: &mut String, module: &Module, index: usize, port:
             let _ = writeln!(
                 out,
                 "fn linear_in{index}(c: vec2<f32>) -> {ty} {{
-    let w = ctx[{slot}].x;
-    let h = ctx[{slot}].y;
+    let w = f32(bitcast<u32>(ctx[{slot}].x));
+    let h = f32(bitcast<u32>(ctx[{slot}].y));
     let t = select(c - vec2<f32>(0.5, 0.5), vec2<f32>(-1.0, -1.0), c != c);
     let lower = clamp(floor(t), vec2<f32>(0.0, 0.0), vec2<f32>(w - 1.0, h - 1.0));
     let upper = min(lower + vec2<f32>(1.0, 1.0), vec2<f32>(w - 1.0, h - 1.0));
@@ -828,9 +828,9 @@ pub(crate) fn emit_linear(out: &mut String, module: &Module, index: usize, port:
             let _ = writeln!(
                 out,
                 "fn linear_in{index}(c: vec3<f32>) -> {ty} {{
-    let w = ctx[{slot}].x;
-    let h = ctx[{slot}].y;
-    let d = ctx[{slot}].z;
+    let w = f32(bitcast<u32>(ctx[{slot}].x));
+    let h = f32(bitcast<u32>(ctx[{slot}].y));
+    let d = f32(bitcast<u32>(ctx[{slot}].z));
     let t = select(c - vec3<f32>(0.5, 0.5, 0.5), vec3<f32>(-1.0, -1.0, -1.0), c != c);
     let lower = clamp(floor(t), vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(w - 1.0, h - 1.0, d - 1.0));
     let upper = min(lower + vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(w - 1.0, h - 1.0, d - 1.0));

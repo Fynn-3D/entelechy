@@ -268,7 +268,8 @@ pub const WORKGROUP: u32 = 8;
 /// bits, `[wheel.x, wheel.y, window.x, window.y]`, and `[scale, fold, 0,
 /// 0]`, where `fold` is the elements per unit of `gid.y` for a long
 /// `Rows` domain dispatched as a grid (else zero). Each input then has
-/// `[width, height, depth, 0]`.
+/// `[width, height, depth, 0]`. Extents, the fold and the key bits are
+/// the bits of `u32`s, read with `bitcast`, so every extent is exact.
 pub const CONTEXT_HEAD: usize = 8;
 
 /// The context word holding 1, which the shader compiler cannot fold.

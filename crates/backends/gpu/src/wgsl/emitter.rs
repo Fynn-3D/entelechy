@@ -509,9 +509,9 @@ impl Emitter<'_> {
                 _ => "coord.xy".to_owned(),
             },
             Op::Domain => match self.output_shape() {
-                Shape::Rows => "i32(ctx[0].x)".to_owned(),
-                Shape::Grid => "ctx[0].xy".to_owned(),
-                Shape::Volume => "vec3<f32>(ctx[0].xy, ctx[1].z)".to_owned(),
+                Shape::Rows => "i32(bitcast<u32>(ctx[0].x))".to_owned(),
+                Shape::Grid => "vec2<f32>(bitcast<vec2<u32>>(ctx[0].xy))".to_owned(),
+                Shape::Volume => "vec3<f32>(vec2<f32>(bitcast<vec2<u32>>(ctx[0].xy)), f32(bitcast<u32>(ctx[1].z)))".to_owned(),
             },
             Op::Time => "ctx[0].z".to_owned(),
             Op::Rate => "ctx[1].w".to_owned(),
@@ -526,14 +526,14 @@ impl Emitter<'_> {
             Op::Element => "i32(element)".to_owned(),
             Op::Count(input) => {
                 let slot = CONTEXT_HEAD as u32 + input;
-                format!("i32(ctx[{slot}].x * ctx[{slot}].y * ctx[{slot}].z)")
+                format!("i32(bitcast<u32>(ctx[{slot}].x) * bitcast<u32>(ctx[{slot}].y) * bitcast<u32>(ctx[{slot}].z))")
             }
             Op::Size(input) => {
                 let slot = CONTEXT_HEAD as u32 + input;
                 match self.input_shape(*input) {
-                    Shape::Rows => format!("i32(ctx[{slot}].x)"),
-                    Shape::Grid => format!("ctx[{slot}].xy"),
-                    Shape::Volume => format!("ctx[{slot}].xyz"),
+                    Shape::Rows => format!("i32(bitcast<u32>(ctx[{slot}].x))"),
+                    Shape::Grid => format!("vec2<f32>(bitcast<vec2<u32>>(ctx[{slot}].xy))"),
+                    Shape::Volume => format!("vec3<f32>(bitcast<vec3<u32>>(ctx[{slot}].xyz))"),
                 }
             }
             Op::Sample(input) => {
