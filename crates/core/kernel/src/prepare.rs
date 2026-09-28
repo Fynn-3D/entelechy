@@ -10,7 +10,7 @@ use std::thread::JoinHandle;
 use orla_ir::Validated;
 use orla_rules::Backend;
 
-use crate::{Candidate, PrepareError, Ticket, goes_ordered, prepare_on};
+use crate::{Candidate, PrepareError, Ticket, prepare_on};
 
 /// A module handed to the worker.
 struct Job {
@@ -56,11 +56,8 @@ impl Preparer {
             .stack_size(256 << 20)
             .spawn(move || {
                 for job in inbox {
-                    let chosen = match &ordered {
-                        Some(ordered) if goes_ordered(backend.as_ref(), &job.module) => ordered,
-                        _ => &backend,
-                    };
-                    let result = prepare_on(chosen.as_ref(), job.module, job.source);
+                    let result =
+                        prepare_on(backend.as_ref(), ordered.as_deref(), job.module, job.source);
                     if outbox
                         .send(Done {
                             ticket: job.ticket,

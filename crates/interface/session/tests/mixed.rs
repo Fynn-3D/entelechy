@@ -158,20 +158,23 @@ fn what_the_main_backend_declines_goes_to_the_ordered_one_and_says_why() {
         placement.routed.as_deref(),
         Some("not on main: it holds a Double")
     );
-    runtime
-        .execute(
-            &wide,
-            &Invocation {
-                inputs: vec![],
-                params: vec![],
-                domain: Domain::Rows(3),
-                context: Default::default(),
-            },
-        )
-        .unwrap();
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(3),
+        context: Default::default(),
+    };
+    runtime.execute(&wide, &invocation).unwrap();
+    // A run off the frame goes where the version was prepared too.
+    let run = runtime.execute_later(&wide, &invocation).unwrap();
+    runtime.wait_run(run).unwrap();
     assert_eq!(
         log.lock().unwrap().clone(),
-        ["ordered prepares t.wide@1", "ordered executes t.wide@1"]
+        [
+            "ordered prepares t.wide@1",
+            "ordered executes t.wide@1",
+            "ordered executes t.wide@1"
+        ]
     );
 }
 

@@ -130,7 +130,7 @@ impl Runtime {
             inputs,
             ..invocation.clone()
         };
-        let backend = self.shared_backend_for(module);
+        let backend = self.shared_backend_for(version);
         let granted = self.scope_grants(version);
         let version = Arc::clone(version);
         let work = move || {
@@ -252,10 +252,11 @@ impl Runtime {
         }
     }
 
-    /// The backend a module executes on, shared with a thread.
-    fn shared_backend_for(&self, module: &Validated) -> Arc<dyn Backend> {
+    /// The backend a version executes on, the one it was prepared on,
+    /// shared with a thread.
+    fn shared_backend_for(&self, version: &KernelVersion) -> Arc<dyn Backend> {
         match &self.ordered {
-            Some(ordered) if module.manifest.mode == orla_ir::Mode::Scan => Arc::clone(ordered),
+            Some(ordered) if version.routed().is_some() => Arc::clone(ordered),
             _ => Arc::clone(&self.backend),
         }
     }

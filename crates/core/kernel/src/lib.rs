@@ -53,6 +53,9 @@ enum Body {
         /// ([`orla_ir::account`]).
         run: Box<Validated>,
         prepared: Box<dyn Prepared>,
+        /// Why the main backend left it to the ordered one, decided when it
+        /// was prepared; `None` when it runs on the main backend.
+        routed: Option<String>,
     },
     Native(NativeOp),
 }
@@ -108,6 +111,15 @@ impl KernelVersion {
     pub fn source(&self) -> &str {
         &self.source
     }
+
+    /// Why the main backend left this version to the ordered one, when it
+    /// did.
+    pub(crate) fn routed(&self) -> Option<&str> {
+        match &self.body {
+            Body::Kernel { routed, .. } => routed.as_deref(),
+            Body::Native(_) => None,
+        }
+    }
 }
 
 /// A compiled, validated, backend-prepared Kernel not yet published.
@@ -117,6 +129,8 @@ pub struct Candidate {
     run: Validated,
     source: String,
     prepared: Box<dyn Prepared>,
+    /// Why the main backend left it to the ordered one, if it did.
+    routed: Option<String>,
 }
 
 impl fmt::Debug for Candidate {
@@ -265,11 +279,20 @@ impl fmt::Display for Ticket {
     }
 }
 
+/// Prepares a module on `main`, or on `ordered` when there is one and
+/// `main` declines the module; the candidate keeps `main`'s reason, so
+/// where it runs is decided once.
 fn prepare_on(
-    backend: &dyn Backend,
+    main: &dyn Backend,
+    ordered: Option<&dyn Backend>,
     module: Validated,
     source: String,
 ) -> Result<Candidate, PrepareError> {
+    let routed = ordered.and_then(|_| main.declines(&module));
+    let backend = match ordered {
+        Some(ordered) if routed.is_some() => ordered,
+        _ => main,
+    };
     // Work accounting is one rule in the IR, shared by every backend.
     let run = orla_ir::account(&module).map_err(|e| PrepareError::Accounting(e.to_string()))?;
     // A backend panic is reported as a rejection; the candidate is
@@ -289,6 +312,7 @@ fn prepare_on(
         run,
         source,
         prepared,
+        routed,
     })
 }
 
@@ -410,7 +434,12 @@ impl Runtime {
             return ticket;
         }
         if let Some((module, source)) = self.preparer.send(ticket, module, source) {
-            let result = prepare_on(self.backend_for(&module), module, source);
+            let result = prepare_on(
+                self.backend.as_ref(),
+                self.ordered.as_deref(),
+                module,
+                source,
+            );
             self.preparer.finish(ticket, result);
         }
         ticket
@@ -448,6 +477,7 @@ impl Runtime {
                 module: Box::new(candidate.module),
                 run: Box::new(candidate.run),
                 prepared: candidate.prepared,
+                routed: candidate.routed,
             },
         })
     }
@@ -542,7 +572,12 @@ impl Runtime {
         source: &str,
     ) -> Result<Candidate, PrepareError> {
         self.granted(&module)?;
-        prepare_on(self.backend_for(&module), module, source.to_owned())
+        prepare_on(
+            self.backend.as_ref(),
+            self.ordered.as_deref(),
+            module,
+            source.to_owned(),
+        )
     }
 
     /// Sets the capabilities a Kernel may be given, by whoever runs the
@@ -586,21 +621,6 @@ impl Runtime {
             .collect()
     }
 
-    /// The backend a module is prepared and executed on: the ordered one for
-    /// a scan or what the main one does not take, else the main one.
-    fn backend_for(&self, module: &Validated) -> &dyn Backend {
-        match &self.ordered {
-            Some(ordered) if goes_ordered(self.backend.as_ref(), module) => ordered.as_ref(),
-            _ => self.backend.as_ref(),
-        }
-    }
-
-    /// Whether a module runs on the ordered backend: one exists and the
-    /// module is a scan or declined by the main backend.
-    fn routed(&self, module: &Validated) -> bool {
-        self.ordered.is_some() && goes_ordered(self.backend.as_ref(), module)
-    }
-
     /// The device's own time for the last execution, when the backend
     /// measured it (a GPU under a profile); else `None`.
     pub fn last_measured(&self) -> Option<std::time::Duration> {
@@ -621,26 +641,15 @@ impl Runtime {
     /// Where a version executes and, off the main backend, why: shown beside
     /// each node in a report.
     pub fn placement(&self, version: &KernelVersion) -> Placement {
-        let Some(module) = version.module() else {
-            return Placement {
+        match (version.routed(), &self.ordered) {
+            (Some(why), Some(ordered)) => Placement {
+                backend: ordered.name(),
+                routed: Some(format!("not on {}: {why}", self.backend.name())),
+            },
+            _ => Placement {
                 backend: self.backend.name(),
                 routed: None,
-            };
-        };
-        if !self.routed(module) {
-            return Placement {
-                backend: self.backend.name(),
-                routed: None,
-            };
-        }
-        let why = format!(
-            "not on {}: {}",
-            self.backend.name(),
-            self.backend.declines(module).unwrap_or_default()
-        );
-        Placement {
-            backend: self.backend_for(module).name(),
-            routed: Some(why),
+            },
         }
     }
 
@@ -761,6 +770,7 @@ impl Runtime {
                 module: Box::new(candidate.module),
                 run: Box::new(candidate.run),
                 prepared: candidate.prepared,
+                routed: candidate.routed,
             },
         });
         self.kernels.insert(id, Arc::clone(&version));
@@ -817,12 +827,8 @@ impl Runtime {
         chain: (usize, usize),
     ) -> Result<Vec<Handle>, ExecutionError> {
         // A backend that runs every time itself keeps the Fields between.
-        if let Body::Kernel {
-            module,
-            run,
-            prepared,
-        } = &version.body
-            && !self.routed(module)
+        if let Body::Kernel { run, prepared, .. } = &version.body
+            && version.routed().is_none()
         {
             let granted = self.scope_grants(version);
             let backend = Arc::clone(&self.backend);
@@ -880,13 +886,13 @@ impl Runtime {
         // answers `None`.
         self.telemetry.last_measured = None;
         match &version.body {
-            Body::Kernel {
-                module,
-                run,
-                prepared,
-            } => {
-                let ordered = self.routed(module);
-                if ordered {
+            Body::Kernel { run, prepared, .. } => {
+                let ordered = self
+                    .ordered
+                    .as_ref()
+                    .filter(|_| version.routed().is_some())
+                    .map(Arc::clone);
+                if ordered.is_some() {
                     // The ordered backend reads Host memory, so resident
                     // Fields come back first.
                     for handle in &invocation.inputs {
@@ -894,11 +900,7 @@ impl Runtime {
                         self.telemetry.moved.downloaded += brought;
                     }
                 }
-                let backend = if ordered {
-                    Arc::clone(self.ordered.as_ref().expect("checked"))
-                } else {
-                    Arc::clone(&self.backend)
-                };
+                let backend = ordered.unwrap_or_else(|| Arc::clone(&self.backend));
                 let before = backend.uploaded();
                 let outputs = {
                     let mut scope = Scope::new(&mut self.host, granted);
@@ -948,11 +950,6 @@ pub(crate) fn held_to(
         manifest.id,
         manifest.outputs.len()
     )))
-}
-
-/// Whether a module belongs on the ordered backend: `main` declines it.
-fn goes_ordered(main: &dyn Backend, module: &Validated) -> bool {
-    main.declines(module).is_some()
 }
 
 /// Where a version executes: the backend's name, and why it is not the
