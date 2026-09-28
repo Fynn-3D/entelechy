@@ -149,6 +149,7 @@ struct Running {
 
 /// One executing unit: a node, a node with producers inlined, or a run
 /// of the same node placed several times over its own output.
+#[derive(Clone)]
 struct Group {
     node: Node,
     version: Arc<KernelVersion>,
@@ -159,6 +160,24 @@ struct Group {
     repeat: u32,
     /// The `carry port <- output` pair a repeated run feeds itself by.
     chain: Option<(usize, usize)>,
+    /// While the plan is made, the fused module of the producers inlined
+    /// so far; prepared once the group is known to execute.
+    fused: Option<Arc<orla_ir::Validated>>,
+}
+
+impl Group {
+    /// The manifest of what the group computes: its fused module's, else
+    /// its version's.
+    fn manifest(&self) -> &orla_kernel::Manifest {
+        self.fused
+            .as_ref()
+            .map_or_else(|| self.version.manifest(), |module| &module.manifest)
+    }
+
+    /// The IR of what the group computes, when it has one.
+    fn module(&self) -> Option<&orla_ir::Validated> {
+        self.fused.as_deref().or_else(|| self.version.module())
+    }
 }
 
 /// One executing unit as the planner sees it, for inspection.
@@ -190,6 +209,8 @@ pub struct Evaluator {
     /// when one changes.
     declined: BTreeMap<NodeId, Vec<(NodeId, Generation)>>,
     pending: BTreeMap<NodeId, Pending>,
+    /// The last plan and what it was made from.
+    last_plan: Option<(plan::PlanKey, Vec<Group>)>,
     running: BTreeMap<NodeId, Running>,
     /// State an evaluation replaced before its nodes ran (a migration, a
     /// restart), held until the commit or put back on failure.

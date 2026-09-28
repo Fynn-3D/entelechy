@@ -42,6 +42,7 @@ impl Evaluator {
                 absorbed: Vec::new(),
                 repeat: 1,
                 chain: None,
+                fused: None,
             });
         }
         if !self.fusion {
@@ -84,19 +85,45 @@ impl Evaluator {
             .enumerate()
             .map(|(position, group)| (group.node.id.clone(), position))
             .collect();
+        // What each group runs over and the extent it gives, in order: a
+        // producer's extent is known before its readers are planned.
+        let mut plans = Vec::with_capacity(groups.len());
+        for group in &groups {
+            let planned = self.planned(
+                graph, &nodes, group, runtime, externals, &domains, overrides, context,
+            );
+            if let Some(extent) = planned.extent {
+                domains.insert(group.node.id.clone(), extent);
+            }
+            plans.push(planned);
+        }
+        // The same graph, laws, extents and pins make the same plan: the
+        // last one is reused, and fusion is decided once, not each frame.
+        let key = PlanKey {
+            graph: graph.clone(),
+            parts: groups
+                .iter()
+                .zip(&plans)
+                .map(|(group, planned)| {
+                    (
+                        group.node.id.clone(),
+                        group.version.generation(),
+                        planned.clone(),
+                    )
+                })
+                .collect(),
+            pinned: self.pinned.clone(),
+        };
+        if let Some((last, executing)) = &self.last_plan
+            && *last == key
+        {
+            return Ok(executing.clone());
+        }
+        let originals = groups.clone();
         for position in 0..groups.len() {
             // The elements this group runs over and the extent its
             // readers see, where known before execution.
-            let Planned { runs, extent } = self.planned(
-                graph,
-                &nodes,
-                &groups[position],
-                runtime,
-                externals,
-                &domains,
-                overrides,
-                context,
-            );
+            let Planned { runs, extent } = plans[position].clone();
             // Each binding names a producer to try; one fed through
             // several ports is tried once, with all of them.
             let bindings: Vec<Binding> = groups[position].node.inputs.values().cloned().collect();
@@ -124,8 +151,8 @@ impl Evaluator {
                 // Every port of this consumer the producer feeds, as
                 // (port, consumer input, producer output). The producer
                 // fuses only when these are all its readers.
-                let consumer_manifest = consumer.version.manifest();
-                let producer_manifest = groups[producer_position].version.manifest();
+                let consumer_manifest = consumer.manifest();
+                let producer_manifest = groups[producer_position].manifest();
                 let mut links: Vec<(String, u32, u32)> = Vec::new();
                 for (name, bound) in &consumer.node.inputs {
                     let Binding::Now(Source::Node { node, port: from }) = bound else {
@@ -197,10 +224,9 @@ impl Evaluator {
                 };
                 // Only IR maps fuse: native operations have no IR, and a
                 // reduction is not one element per consumer element.
-                let (Some(consumer_module), Some(producer_module)) = (
-                    consumer.version.module(),
-                    groups[producer_position].version.module(),
-                ) else {
+                let (Some(consumer_module), Some(producer_module)) =
+                    (consumer.module(), groups[producer_position].module())
+                else {
                     continue;
                 };
                 if consumer_module.manifest.mode != orla_ir::Mode::Map
@@ -218,18 +244,28 @@ impl Evaluator {
                 let mut parts = consumer.parts.clone();
                 parts.extend(producer.parts.iter().cloned());
                 let pairs: Vec<(u32, u32)> = links.iter().map(|link| (link.1, link.2)).collect();
-                let fuse = || {
-                    orla_ir::fuse_outputs(
-                        consumer_module,
-                        &pairs,
-                        producer_module,
-                        &producer.node.id.0,
-                    )
-                };
-                let Some(version) =
-                    self.fused_version(runtime, &consumer.node.id, parts.clone(), fuse)?
-                else {
+                // The IR fuses here; only a group that executes is
+                // prepared, once the plan is made.
+                if self.declined.get(&consumer.node.id) == Some(&parts) {
                     continue;
+                }
+                let module = match orla_ir::fuse_outputs(
+                    consumer_module,
+                    &pairs,
+                    producer_module,
+                    &producer.node.id.0,
+                ) {
+                    Ok(module) => Arc::new(module),
+                    Err(error) if error.declines => {
+                        self.declined.insert(consumer.node.id.clone(), parts);
+                        continue;
+                    }
+                    Err(error) => {
+                        return Err(EvaluateError::Fusion {
+                            node: consumer.node.id.clone(),
+                            message: error.to_string(),
+                        });
+                    }
                 };
                 // Rewire: the fused input disappears; the producer's inputs
                 // and params join under `producer/name`.
@@ -247,7 +283,6 @@ impl Evaluator {
                     params.insert(format!("{prefix}/{name}"), value.clone());
                 }
                 let producer_params: Vec<String> = producer
-                    .version
                     .manifest()
                     .params
                     .iter()
@@ -257,7 +292,7 @@ impl Evaluator {
                 absorbed.push(producer_id.clone());
                 absorbed.extend(producer.absorbed.iter().cloned());
                 let group = &mut groups[position];
-                group.version = version;
+                group.fused = Some(module);
                 group.parts = parts;
                 group.absorbed = absorbed;
                 group.node.inputs = inputs;
@@ -272,6 +307,8 @@ impl Evaluator {
                     };
                 }
                 absorbed_into.insert(producer_id, position);
+                // What the producer fused is inside the consumer's now.
+                groups[producer_position].fused = None;
             }
             if let Some(extent) = extent {
                 domains.insert(groups[position].node.id.clone(), extent);
@@ -283,16 +320,62 @@ impl Evaluator {
                 groups[position].node.domain = Some(DomainSpec::Literal(runs));
             }
         }
-        let executing: Vec<Group> = groups
-            .into_iter()
-            .filter(|group| !absorbed_into.contains_key(&group.node.id))
+        // Each fused group executing is prepared now; one still being
+        // prepared runs unfused this frame, its members as they were.
+        let owners: Vec<usize> = (0..originals.len())
+            .map(|mut position| {
+                while let Some(next) = absorbed_into.get(&originals[position].node.id) {
+                    position = *next;
+                }
+                position
+            })
+            .collect();
+        let owner = |position: usize| owners[position];
+        let mut settled = true;
+        let mut unfused = BTreeSet::new();
+        for (position, group) in groups.iter_mut().enumerate() {
+            if owner(position) != position {
+                continue;
+            }
+            let Some(module) = group.fused.take() else {
+                continue;
+            };
+            let id = group.node.id.clone();
+            let parts = group.parts.clone();
+            match self.fused_version(runtime, &id, parts, || Ok((*module).clone()))? {
+                Some(version) => group.version = version,
+                None => {
+                    settled = false;
+                    unfused.insert(position);
+                }
+            }
+        }
+        let mut groups: Vec<Option<Group>> = groups.into_iter().map(Some).collect();
+        let executing: Vec<Group> = (0..groups.len())
+            .filter_map(|position| {
+                let at = owner(position);
+                if unfused.contains(&at) {
+                    Some(originals[position].clone())
+                } else if at == position {
+                    groups[position].take()
+                } else {
+                    None
+                }
+            })
             .collect();
         let executing = self.repeated(executing, &readers);
-        // Keep every group's version while its node is in the graph; a
-        // chain is planned from its head each time.
-        let present: BTreeSet<&NodeId> = graph.nodes.iter().map(|node| &node.id).collect();
-        self.fused.retain(|node, _| present.contains(node));
-        self.forget_pending(runtime, |node| present.contains(node));
+        // Only the fused versions this plan runs are kept.
+        let kept: BTreeSet<NodeId> = (0..groups.len())
+            .filter(|position| owner(*position) == *position)
+            .map(|position| originals[position].node.id.clone())
+            .collect();
+        self.fused.retain(|node, _| kept.contains(node));
+        self.forget_pending(runtime, |node| kept.contains(node));
+        if settled {
+            self.last_plan = Some((key, executing.clone()));
+        } else {
+            self.last_plan = None;
+        }
         Ok(executing)
     }
 
@@ -314,15 +397,17 @@ impl Evaluator {
                 out.push(group);
                 continue;
             };
+            // The run so far is taken whole, not copied, so joining N
+            // nodes costs N.
             let previous = out.pop().expect("a group to join");
-            let mut absorbed = previous.absorbed.clone();
-            absorbed.push(previous.node.id.clone());
-            absorbed.extend(group.absorbed.iter().cloned());
-            let mut parts = previous.parts.clone();
-            parts.extend(group.parts.iter().cloned());
+            let mut absorbed = previous.absorbed;
+            absorbed.push(previous.node.id);
+            absorbed.extend(group.absorbed);
+            let mut parts = previous.parts;
+            parts.extend(group.parts);
             // The run takes the first node's inputs and the last's name.
-            let mut node = group.node.clone();
-            node.inputs = previous.node.inputs.clone();
+            let mut node = group.node;
+            node.inputs = previous.node.inputs;
             out.push(Group {
                 node,
                 version: group.version,
@@ -330,6 +415,7 @@ impl Evaluator {
                 absorbed,
                 repeat: previous.repeat + 1,
                 chain: Some((input, output)),
+                fused: None,
             });
         }
         out
@@ -607,7 +693,17 @@ impl Evaluator {
     }
 }
 
+/// What a plan was made from: the graph, each node's law and planned
+/// extents, and the pins.
+#[derive(Clone, PartialEq)]
+pub(super) struct PlanKey {
+    graph: Graph,
+    parts: Vec<(NodeId, Generation, Planned)>,
+    pinned: BTreeSet<NodeId>,
+}
+
 /// What the plan knows of a group before execution.
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct Planned {
     /// The elements it runs over.
     pub runs: Option<Domain>,

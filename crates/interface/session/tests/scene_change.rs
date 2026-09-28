@@ -399,7 +399,10 @@ fn a_changed_function_republishes_the_kernels_that_call_it() {
             .unwrap();
         f32::from_bits(session.field(handle).unwrap().values()[0])
     };
-    assert_eq!((value(&mut session, "a"), value(&mut session, "b")), (2.0, 3.0));
+    assert_eq!(
+        (value(&mut session, "a"), value(&mut session, "b")),
+        (2.0, 3.0)
+    );
 
     // Its own function changes.
     let before = generation(&session, "l.own@1");

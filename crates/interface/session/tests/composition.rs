@@ -2427,3 +2427,39 @@ fn a_reset_lets_go_of_the_runs_that_began_from_the_state_it_forgot() {
     evaluator.clear(&mut runtime);
     assert_eq!(runtime.host().live(), 0);
 }
+
+/// A chain of pointwise nodes fuses into its last node and only that one
+/// fused version is prepared and kept: every node answers that it runs
+/// in the last, and the plan is reused from frame to frame.
+#[test]
+fn a_fused_chain_is_one_version_run_by_its_last_node() {
+    let mut runtime = runtime();
+    let mut text = String::from("node n00: image.gradient@1 { domain = vec2(6, 4); }\n");
+    for i in 1..32 {
+        text.push_str(&format!(
+            "node n{i:02}: image.invert@1 {{ source <- n{:02}.result; }}\n",
+            i - 1
+        ));
+    }
+    text.push_str("output result <- n31.result;\n");
+    let graph = orla_scene::parse(&text).unwrap();
+    let mut evaluator = Evaluator::new();
+    for _ in 0..3 {
+        evaluator
+            .evaluate(
+                &graph,
+                &mut runtime,
+                &BTreeMap::new(),
+                &Context::default(),
+                &BTreeMap::new(),
+            )
+            .unwrap();
+        for i in 1..31 {
+            assert_eq!(
+                evaluator.fused_into(&NodeId(format!("n{i:02}"))),
+                Some(&NodeId("n31".into())),
+                "n{i:02}"
+            );
+        }
+    }
+}
