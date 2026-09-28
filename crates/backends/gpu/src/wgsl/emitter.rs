@@ -34,7 +34,10 @@ pub(crate) fn emit_function(
         let ret = function.result_type();
         let _ = writeln!(out, "fn {name}({args}) -> {} {{", wgsl_type(ret));
     }
+    let mut types = std::collections::HashMap::new();
+    types_in(&function.body, &mut types);
     let mut emitter = Emitter {
+        types,
         out,
         module,
         function,
@@ -94,6 +97,18 @@ pub(crate) struct Emitter<'a> {
     packed: &'a [usize],
     /// Ids of enclosing loop instructions, innermost last.
     loops: Vec<ValueId>,
+    /// Every value's type by id, gathered once.
+    types: std::collections::HashMap<u32, Type>,
+}
+
+/// Every value `body` defines, with its type, in nested blocks too.
+fn types_in(body: &[orla_ir::Instruction], out: &mut std::collections::HashMap<u32, Type>) {
+    for instruction in body {
+        out.insert(instruction.id.0, instruction.ty);
+        for block in instruction.op.blocks() {
+            types_in(&block.body, out);
+        }
+    }
 }
 
 impl Emitter<'_> {
@@ -728,7 +743,7 @@ impl Emitter<'_> {
     }
 
     fn type_of(&self, id: ValueId) -> Type {
-        self.function.type_of(id).unwrap_or(Type::Float)
+        self.types.get(&id.0).copied().unwrap_or(Type::Float)
     }
 }
 

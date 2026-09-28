@@ -52,20 +52,25 @@ pub fn optimize(module: Module) -> Module {
     };
     // Functions precede their callers, so a written-out call is already
     // optimized.
+    // Whether each is short enough to write out, judged once, as it is
+    // optimized.
     let mut functions: Vec<Function> = Vec::with_capacity(module.functions.len());
+    let mut inlinable: Vec<bool> = Vec::with_capacity(module.functions.len());
     for function in &module.functions {
-        let flattened = inline_calls(function, &functions, &module.structs);
-        functions.push(ctx.function(&flattened));
+        let flattened = inline_calls(function, &functions, &inlinable);
+        let optimized = ctx.function(&flattened);
+        inlinable.push(writes_out(&optimized, &module.structs));
+        functions.push(optimized);
     }
-    let entry = ctx.function(&inline_calls(&module.entry, &functions, &module.structs));
+    let entry = ctx.function(&inline_calls(&module.entry, &functions, &inlinable));
     let merge = module
         .merge
         .as_ref()
-        .map(|f| ctx.function(&inline_calls(f, &functions, &module.structs)));
+        .map(|f| ctx.function(&inline_calls(f, &functions, &inlinable)));
     let init = module
         .init
         .as_ref()
-        .map(|f| ctx.function(&inline_calls(f, &functions, &module.structs)));
+        .map(|f| ctx.function(&inline_calls(f, &functions, &inlinable)));
     prune(Module {
         manifest: module.manifest,
         structs: module.structs,
@@ -179,29 +184,29 @@ fn highest(body: &[Instruction]) -> u32 {
 /// `function` with its calls to short functions written out: callee
 /// values take fresh ids, `Arg(i)` reads become the call's operands, and
 /// the return value takes the call's place.
-fn inline_calls(function: &Function, functions: &[Function], structs: &[StructDef]) -> Function {
-    let inlinable: Vec<bool> = functions
+/// Whether a call to `callee` is written out where it is made: it gives
+/// one value and is short, or takes a wide argument and is not long.
+fn writes_out(callee: &Function, structs: &[StructDef]) -> bool {
+    if callee.results.len() != 1 {
+        return false;
+    }
+    let size = size(&callee.body);
+    let widest = callee
+        .args
         .iter()
-        .map(|callee| {
-            if callee.results.len() != 1 {
-                return false;
-            }
-            let size = size(&callee.body);
-            let widest = callee
-                .args
-                .iter()
-                .map(|ty| crate::words(structs, *ty))
-                .max()
-                .unwrap_or(0);
-            size <= INLINE_LIMIT || (widest >= BIG_ARG_WORDS && size <= INLINE_BIG_LIMIT)
-        })
-        .collect();
+        .map(|ty| crate::words(structs, *ty))
+        .max()
+        .unwrap_or(0);
+    size <= INLINE_LIMIT || (widest >= BIG_ARG_WORDS && size <= INLINE_BIG_LIMIT)
+}
+
+fn inline_calls(function: &Function, functions: &[Function], inlinable: &[bool]) -> Function {
     if !inlinable.iter().any(|yes| *yes) {
         return function.clone();
     }
     let mut pass = Inline {
         functions,
-        inlinable: &inlinable,
+        inlinable,
         alias: HashMap::new(),
         next: highest(&function.body) + 1,
     };
@@ -1019,7 +1024,10 @@ struct Simplify<'a> {
     /// A value that is another value, by id.
     alias: HashMap<u32, u32>,
     /// What each kept value is, for the rewrites that look at it.
-    defs: HashMap<u32, (Type, Op)>,
+    /// Each value's type, and its operation when a rewrite reads it (a
+    /// literal, a construction, an extraction); a nested block's
+    /// operation is not copied.
+    defs: HashMap<u32, (Type, Option<Op>)>,
     /// The values available for sharing, one table per open block.
     scopes: Vec<HashMap<String, u32>>,
 }
@@ -1094,7 +1102,7 @@ impl Simplify<'_> {
             } = &instruction.op
             {
                 let op = self.folded_if(*condition, then, otherwise, &mut out);
-                self.defs.insert(instruction.id.0, (ty, op.clone()));
+                self.defs.insert(instruction.id.0, (ty, read_later(&op)));
                 out.push(Instruction {
                     id: instruction.id,
                     ty,
@@ -1144,7 +1152,7 @@ impl Simplify<'_> {
             };
             // A part straight out of its construction is that part.
             if let Op::Extract(source, k) = &op
-                && let Some((_, Op::Construct(parts))) = self.defs.get(&source.0)
+                && let Some((_, Some(Op::Construct(parts)))) = self.defs.get(&source.0)
                 && let Some(part) = parts.get(*k as usize)
                 && self
                     .defs
@@ -1179,7 +1187,7 @@ impl Simplify<'_> {
             {
                 scope.insert(key, instruction.id.0);
             }
-            self.defs.insert(instruction.id.0, (ty, op.clone()));
+            self.defs.insert(instruction.id.0, (ty, read_later(&op)));
             out.push(Instruction {
                 id: instruction.id,
                 ty,
@@ -1201,7 +1209,7 @@ impl Simplify<'_> {
     /// The vector, matrix, array or struct these parts are all of, in
     /// order, if any.
     fn rebuilt(&self, parts: &[ValueId], ty: Type) -> Option<u32> {
-        let (Op::Extract(first, 0), _) = (&self.defs.get(&parts[0].0)?.1, ()) else {
+        let (Some(Op::Extract(first, 0)), _) = (&self.defs.get(&parts[0].0)?.1, ()) else {
             return None;
         };
         let whole = first.0;
@@ -1220,7 +1228,7 @@ impl Simplify<'_> {
             return None;
         }
         let all = parts.iter().enumerate().all(|(k, part)| {
-            matches!(self.defs.get(&part.0), Some((_, Op::Extract(source, at))) if source.0 == whole && *at as usize == k)
+            matches!(self.defs.get(&part.0), Some((_, Some(Op::Extract(source, at)))) if source.0 == whole && *at as usize == k)
         });
         all.then_some(whole)
     }
@@ -1350,7 +1358,7 @@ impl Simplify<'_> {
             return Some(value.clone());
         }
         match self.defs.get(&id.0) {
-            Some((_, Op::Const(value))) => Some(value.clone()),
+            Some((_, Some(Op::Const(value)))) => Some(value.clone()),
             _ => None,
         }
     }
@@ -1364,7 +1372,7 @@ impl Simplify<'_> {
             return None;
         }
         let literal = |id: &ValueId| match self.defs.get(&id.0) {
-            Some((_, Op::Const(value))) => Some(value.clone()),
+            Some((_, Some(Op::Const(value)))) => Some(value.clone()),
             _ => None,
         };
         match op {
@@ -1675,4 +1683,10 @@ impl Renumber {
             result: self.map(block.result),
         }
     }
+}
+
+/// The operation a later rewrite may read: a literal, a construction or an
+/// extraction, which hold no block.
+fn read_later(op: &Op) -> Option<Op> {
+    matches!(op, Op::Const(_) | Op::Construct(_) | Op::Extract(..)).then(|| op.clone())
 }

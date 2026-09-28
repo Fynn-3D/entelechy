@@ -427,7 +427,9 @@ mod parsed_tests {
     fn a_document_is_parsed_once_per_stamp() {
         let store = Counting::default();
         let path = Path::new("/s/lib.orla");
-        store.files.put(path, b"fn f(x: Float) -> Float { return x; }".to_vec());
+        store
+            .files
+            .put(path, b"fn f(x: Float) -> Float { return x; }".to_vec());
         let store: &dyn Store = &store;
         let first = store.document(path).unwrap();
         let again = store.document(path).unwrap();
