@@ -164,6 +164,9 @@ const I64_EXTEND_I32_S: u8 = 0xac;
 const I64_EXTEND_I32_U: u8 = 0xad;
 const F32_CONVERT_I32_S: u8 = 0xb2;
 const F32_CONVERT_I32_U: u8 = 0xb3;
+const F32_FLOOR: u8 = 0x8e;
+const F32_MIN: u8 = 0x96;
+const F32_MAX: u8 = 0x97;
 const F32_REINTERPRET_I32: u8 = 0xbe;
 const I32_REINTERPRET_F32: u8 = 0xbc;
 
@@ -1018,6 +1021,51 @@ impl<'a> Fx<'a> {
         self.smin(floored, last)
     }
 
+    /// A float address into a grid or volume, each axis floored and
+    /// clamped into the Field, NaN as zero: the native code's rule.
+    fn float_index(&mut self, input: u32, x: W, y: W, z: W) -> W {
+        let view = self.view(input);
+        let width = self.load(Val::I32, view, offsets::VIEW_WIDTH as u32);
+        let height = self.load(Val::I32, view, offsets::VIEW_HEIGHT as u32);
+        let depth = self.load(Val::I32, view, offsets::VIEW_DEPTH as u32);
+        let axis = |fx: &mut Self, v: W, limit: W| {
+            let zero = fx.f32c(0.0);
+            let nan = fx.is_nan(v);
+            let v = fx.select(nan, zero, v);
+            let floored = fx.un(v, F32_FLOOR, Val::F32);
+            let low = fx.bin(floored, zero, F32_MAX, Val::F32);
+            let last = fx.add_imm(limit, -1);
+            let last = fx.u32_to_f32(last);
+            let clamped = fx.bin(low, last, F32_MIN, Val::F32);
+            // i32.trunc_sat_f32_u
+            fx.get(clamped);
+            fx.byte(0xfc);
+            fx.uleb(1);
+            fx.take(Val::I32)
+        };
+        let cx = axis(self, x, width);
+        let cy = axis(self, y, height);
+        let cz = axis(self, z, depth);
+        let layer = self.bin(cz, height, I32_MUL, Val::I32);
+        let row = self.bin(layer, cy, I32_ADD, Val::I32);
+        let scaled = self.bin(row, width, I32_MUL, Val::I32);
+        self.bin(scaled, cx, I32_ADD, Val::I32)
+    }
+
+    /// The element `at` reads at `address`: an `Int` over rows, a `Vec2`
+    /// or `Vec3` over a grid or volume.
+    fn address_index(&mut self, input: u32, address: &orla_ir::ValueId) -> W {
+        let words = self.words(address);
+        match self.ty(address) {
+            Type::Int => self.rows_index(input, words[0]),
+            Type::Vec2 => {
+                let zero = self.f32c(0.0);
+                self.float_index(input, words[0], words[1], zero)
+            }
+            _ => self.float_index(input, words[0], words[1], words[2]),
+        }
+    }
+
     /// Reads an element through the Host's helper into the scratch.
     fn read_into_scratch(&mut self, helper: &'static str, input: u32, x: W, y: W, z: W) -> W {
         let out = self.scratch_addr();
@@ -1318,28 +1366,9 @@ impl<'a> Fx<'a> {
                 self.element_words(*input, index, ty, &tys)
             }
             Op::At(input, address) => {
-                let words = self.words(address);
+                let at = self.address_index(*input, address);
                 let tys = word_types(self.module, ty);
-                match self.ty(address) {
-                    Type::Int => {
-                        let at = self.rows_index(*input, words[0]);
-                        return self.element_words(*input, at, ty, &tys);
-                    }
-                    Type::Vec2 => {
-                        let zero = self.f32c(0.0);
-                        self.read_into_scratch("orla_jit_read", *input, words[0], words[1], zero);
-                    }
-                    _ => {
-                        self.read_into_scratch(
-                            "orla_jit_read",
-                            *input,
-                            words[0],
-                            words[1],
-                            words[2],
-                        );
-                    }
-                }
-                self.load_scratch(&tys)
+                self.element_words(*input, at, ty, &tys)
             }
             Op::Part { input, at, path } => {
                 let tys = word_types(self.module, ty);
@@ -1354,34 +1383,9 @@ impl<'a> Fx<'a> {
                     let index = self.sample_index(*input, x, y, z);
                     return self.part_words(*input, index, within, ty, &tys);
                 };
-                let address = self.words(at);
-                if matches!(self.ty(at), Type::Int) {
-                    let within = self.part_offset(*input, path, byte_size(&tys) as usize / 4, unit);
-                    let index = self.rows_index(*input, address[0]);
-                    return self.part_words(*input, index, within, ty, &tys);
-                }
-                let out = match self.ty(at) {
-                    Type::Vec2 => {
-                        let zero = self.f32c(0.0);
-                        self.read_into_scratch(
-                            "orla_jit_read",
-                            *input,
-                            address[0],
-                            address[1],
-                            zero,
-                        )
-                    }
-                    _ => self.read_into_scratch(
-                        "orla_jit_read",
-                        *input,
-                        address[0],
-                        address[1],
-                        address[2],
-                    ),
-                };
-                let within = self.part_offset(*input, path, byte_size(&tys) as usize / 4, 4);
-                let base = self.bin(out, within, I32_ADD, Val::I32);
-                self.loads(&tys, base, 0)
+                let within = self.part_offset(*input, path, byte_size(&tys) as usize / 4, unit);
+                let index = self.address_index(*input, at);
+                self.part_words(*input, index, within, ty, &tys)
             }
             Op::AtLinear(input, position) => {
                 let words = self.words(position);
