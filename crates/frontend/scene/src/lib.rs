@@ -322,6 +322,19 @@ struct Lowering<'a, 'b> {
     functions: Vec<orla_language::FnDecl>,
     /// Nodes `times` has placed so far, every level together.
     placed: usize,
+    /// Each sub-graph document placed so far, read, parsed and declared
+    /// once however often it is placed.
+    read: BTreeMap<PathBuf, std::rc::Rc<Read>>,
+}
+
+/// A sub-graph document as a placement uses it: its text, its parse with
+/// what it inherits, and the declarations its level sees.
+struct Read {
+    text: String,
+    document: Document,
+    aliases: Vec<orla_language::TypeAlias>,
+    structs: Vec<orla_language::StructDecl>,
+    functions: Vec<orla_language::FnDecl>,
 }
 
 /// The most nodes `times` places in one scene, every level together,
@@ -378,6 +391,7 @@ fn lower(
             .collect(),
         stack: Vec::new(),
         placed: 0,
+        read: BTreeMap::new(),
     };
     let level = lowering.level(document, text, name, base, &PathBuf::from(name), None)?;
     lowering.out.graph.externals = level.externals;
@@ -1046,43 +1060,41 @@ impl Lowering<'_, '_> {
                 format!("sub-graph `{}` places itself", sub_path.value),
             ));
         }
-        let text = (self.loader)(&resolved).map_err(|message| {
-            error(
-                sub_path.span,
-                format!("cannot load `{}`: {message}", sub_path.value),
-            )
-        })?;
-        let mut sub_document = orla_language::parse_document(&text)
-            .map_err(|e| error(sub_path.span, format!("{}:{e}", sub_path.value)))?;
-        let sub_base = resolved.parent().unwrap_or_else(|| Path::new("."));
-        let (structs, types, functions) = (self.declare)(sub_base, &sub_document.uses)
-            .map_err(|m| error(sub_path.span, format!("{}: {m}", sub_path.value)))?;
-        sub_document.inherit(&structs, &types, &functions);
+        let read = match self.read.get(&resolved) {
+            Some(read) => std::rc::Rc::clone(read),
+            None => {
+                let text = (self.loader)(&resolved).map_err(|message| {
+                    error(
+                        sub_path.span,
+                        format!("cannot load `{}`: {message}", sub_path.value),
+                    )
+                })?;
+                let mut document = orla_language::parse_document(&text)
+                    .map_err(|e| error(sub_path.span, format!("{}:{e}", sub_path.value)))?;
+                let sub_base = resolved.parent().unwrap_or_else(|| Path::new("."));
+                let (structs, types, functions) = (self.declare)(sub_base, &document.uses)
+                    .map_err(|m| error(sub_path.span, format!("{}: {m}", sub_path.value)))?;
+                document.inherit(&structs, &types, &functions);
+                let read = std::rc::Rc::new(Read {
+                    aliases: types.iter().chain(&document.types).cloned().collect(),
+                    structs: structs.iter().chain(&document.structs).cloned().collect(),
+                    functions: functions
+                        .iter()
+                        .chain(&document.functions)
+                        .cloned()
+                        .collect(),
+                    text,
+                    document,
+                });
+                self.read
+                    .insert(resolved.clone(), std::rc::Rc::clone(&read));
+                read
+            }
+        };
         let outer = (
-            std::mem::replace(
-                &mut self.aliases,
-                types
-                    .iter()
-                    .chain(&sub_document.types)
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            ),
-            std::mem::replace(
-                &mut self.structs,
-                structs
-                    .iter()
-                    .chain(&sub_document.structs)
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            ),
-            std::mem::replace(
-                &mut self.functions,
-                functions
-                    .iter()
-                    .chain(&sub_document.functions)
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            ),
+            std::mem::replace(&mut self.aliases, read.aliases.clone()),
+            std::mem::replace(&mut self.structs, read.structs.clone()),
+            std::mem::replace(&mut self.functions, read.functions.clone()),
         );
         let sub_name = resolved
             .file_stem()
@@ -1099,8 +1111,8 @@ impl Lowering<'_, '_> {
         };
         let level = self
             .level(
-                &sub_document,
-                &text,
+                &read.document,
+                &read.text,
                 &sub_name,
                 &sub_base,
                 &resolved,
@@ -1845,6 +1857,37 @@ output result <- a.result;
             error.message,
             "fx.orlapkg/graphs/look.osn: sub-graph `look` has no param `strenght`; did you mean `strength`?; its params are `strength`"
         );
+    }
+
+    /// A sub-graph placed many times is read once: each placement is its
+    /// own nodes, from the one document.
+    #[test]
+    fn a_sub_graph_placed_many_times_is_read_once() {
+        let display = "input source: Image;
+            node map: image.tonemap@1 { source <- source; }
+            output result <- map.result;";
+        let root = orla_language::parse_document(
+            "node scene: image.gradient@1 { domain = vec2(8, 8); }
+             node a: graph \"d.osn\" { source <- scene.result; }
+             node b: graph \"d.osn\" { source <- a.result; }
+             node c: graph \"d.osn\" { source <- b.result; }
+             output result <- c.result;",
+        )
+        .unwrap();
+        let mut reads = 0;
+        let mut loader = |_: &Path| -> Result<String, String> {
+            reads += 1;
+            Ok(display.to_owned())
+        };
+        let lowered = load(&root, "", "main", Path::new("root"), &mut loader).unwrap();
+        let ids: Vec<&str> = lowered
+            .graph
+            .nodes
+            .iter()
+            .map(|n| n.id.0.as_str())
+            .collect();
+        assert_eq!(ids, ["scene", "a.map", "b.map", "c.map"]);
+        assert_eq!(reads, 1);
     }
 
     #[test]
