@@ -200,14 +200,14 @@ impl Store for Disk {
             Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
             _ => {}
         }
-        let mut file = std::fs::OpenOptions::new()
+        std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&beside)?;
-        std::io::Write::write_all(&mut file, bytes).inspect_err(|_| {
-            let _ = std::fs::remove_file(&beside);
-        })?;
-        drop(file);
+            .open(&beside)
+            .and_then(|mut file| std::io::Write::write_all(&mut file, bytes))
+            .inspect_err(|_| {
+                let _ = std::fs::remove_file(&beside);
+            })?;
         std::fs::rename(&beside, path).inspect_err(|_| {
             let _ = std::fs::remove_file(&beside);
         })
