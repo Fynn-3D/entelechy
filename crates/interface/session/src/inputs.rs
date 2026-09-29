@@ -59,72 +59,9 @@ pub(crate) struct Inputs {
     texts: BTreeMap<String, String>,
     /// Frame selection failures, reported by the next sync.
     frame_events: Vec<Event>,
-    /// Whether reads are held to [`Inputs::readable`] (an agent composes
-    /// the scene).
-    restricted: bool,
-    /// Resolved directories the person allowed reads from.
-    allowed: Vec<PathBuf>,
-    /// Resolved directories the scene names
-    /// ([`crate::scene::Scene::read_from`]). Where reads are held, these
-    /// are fixed at the opened scene's first load: an agent composing
-    /// the scene cannot grant itself reads by what it writes.
-    beside: Vec<PathBuf>,
-    /// Whether `beside` is fixed.
-    settled: bool,
-    /// Whether a sync has read the scene, fixing whether reads are held.
-    synced: bool,
 }
 
 impl Inputs {
-    /// Holds reads to the documents' directories and those
-    /// [`Inputs::allow_reads`] allowed. Callable only before the first
-    /// sync, so the readable set is the first-loaded scene's directories.
-    pub(crate) fn restrict_reads(&mut self) -> Result<(), String> {
-        if self.synced && !self.restricted {
-            return Err("reads are held from before the scene is first read, or not at all".into());
-        }
-        self.restricted = true;
-        Ok(())
-    }
-
-    /// Allows files in `dir` and under it to be read into inputs.
-    pub(crate) fn allow_reads(&mut self, store: &dyn Store, dir: &Path) -> Result<(), String> {
-        let resolved = store
-            .canonical(dir)
-            .map_err(|e| format!("cannot allow reads from {}: {e}", dir.display()))?;
-        if !store.is_dir(&resolved) {
-            return Err(format!(
-                "cannot allow reads from {}: not a directory",
-                dir.display()
-            ));
-        }
-        self.allowed.push(resolved);
-        Ok(())
-    }
-
-    /// Whether `path` may be read: after resolving `..` and links, it is
-    /// inside a package, a scene directory or an allowed directory.
-    pub(crate) fn readable(&self, store: &dyn Store, path: &Path) -> Result<(), String> {
-        // The opened scene's first load reads freely; later reads are held.
-        if !self.restricted || !self.settled {
-            return Ok(());
-        }
-        let target = crate::writes::resolve(store, path)?;
-        if crate::sources::in_a_package(store, &target)
-            || self
-                .beside
-                .iter()
-                .chain(&self.allowed)
-                .any(|dir| target.starts_with(dir))
-        {
-            return Ok(());
-        }
-        Err(format!(
-            "{} is outside the directories the scene's documents are in or use, every package, and every directory allowed with `--allow file.read`",
-            target.display()
-        ))
-    }
-
     /// The Field each input holds, by name.
     pub(crate) fn handles(&self) -> &BTreeMap<String, Handle> {
         &self.handles
@@ -158,20 +95,12 @@ impl Inputs {
         store: &dyn Store,
         graph: Option<&Graph>,
         files: &orla_scene::Files,
-        read_from: &[PathBuf],
+        readable: &dyn Fn(&Path) -> Result<(), String>,
         host: &mut Host,
         events: &mut Vec<Event>,
     ) {
-        if !(self.restricted && self.settled) {
-            self.beside = read_from
-                .iter()
-                .filter_map(|dir| store.canonical(dir).ok())
-                .collect();
-            self.settled = self.restricted;
-            self.synced = true;
-        }
-        self.sync_assets(store, graph, files, host, events);
-        self.sync_sequences(store, files, host, events);
+        self.sync_assets(store, graph, files, readable, host, events);
+        self.sync_sequences(store, files, readable, host, events);
         self.sync_texts(graph, host, events);
     }
 
@@ -186,6 +115,7 @@ impl Inputs {
         store: &dyn Store,
         graph: Option<&Graph>,
         files: &orla_scene::Files,
+        readable: &dyn Fn(&Path) -> Result<(), String>,
         host: &mut Host,
         events: &mut Vec<Event>,
     ) {
@@ -223,7 +153,7 @@ impl Inputs {
                 },
             );
             // Checked at read time, so a refusal reports once per change.
-            if let Err(why) = self.readable(store, &path) {
+            if let Err(why) = readable(&path) {
                 self.forget(host, &name);
                 events.push(Event::Rejected {
                     path,
@@ -284,6 +214,7 @@ impl Inputs {
         &mut self,
         store: &dyn Store,
         files: &orla_scene::Files,
+        readable: &dyn Fn(&Path) -> Result<(), String>,
         host: &mut Host,
         events: &mut Vec<Event>,
     ) {
@@ -299,10 +230,7 @@ impl Inputs {
             self.forget(host, &name);
         }
         for (name, dir, ty, rate) in wanted {
-            let files = match self
-                .readable(store, &dir)
-                .and_then(|()| frame_files(store, &dir))
-            {
+            let files = match readable(&dir).and_then(|()| frame_files(store, &dir)) {
                 Ok(files) => files,
                 Err(error) => {
                     if self.sequences.remove(&name).is_some() {

@@ -127,7 +127,7 @@ impl dyn Store + '_ {
 
 /// `path` with its `.` and `..` folded away; a `..` past the start is
 /// kept.
-fn folded(path: &Path) -> PathBuf {
+pub(crate) fn folded(path: &Path) -> PathBuf {
     let mut plain = PathBuf::new();
     for component in path.components() {
         match component {

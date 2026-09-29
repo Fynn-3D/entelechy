@@ -29,6 +29,7 @@ mod observe;
 mod options;
 pub mod package;
 pub mod play;
+mod reads;
 pub mod replay;
 mod scene;
 mod session;

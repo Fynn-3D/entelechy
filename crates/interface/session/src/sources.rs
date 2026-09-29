@@ -211,15 +211,6 @@ pub fn read_document(store: &dyn Store, path: &Path) -> Result<String, String> {
     }
 }
 
-/// Whether `path` is a package or inside one (it or an ancestor a
-/// `*.orlapkg` holding `package.osn`). Packages are readable by any user.
-pub(crate) fn in_a_package(store: &dyn Store, path: &Path) -> bool {
-    path.ancestors().any(|dir| {
-        dir.extension().is_some_and(|ext| ext == "orlapkg")
-            && store.is_file(&dir.join("package.osn"))
-    })
-}
-
 /// Resolves a path through a package name
 /// (`picture.orlapkg/graphs/x.osn`) to the existing file inside it.
 fn in_package(store: &dyn Store, path: &Path) -> Option<PathBuf> {

@@ -126,11 +126,13 @@ through:
 ## Authority
 
 - **Reads.** A served scene reads beside the documents of the scene as it
-  first loaded (the scene, the graphs it places, what it uses), in every
-  package, and in directories given with `--allow file.read=<dir>`. A
-  composed document does not widen that; a file elsewhere is a
-  `rejected` event naming it, and a `use` or `graph` naming one refuses
-  the scene before any of it is read.
+  first loaded (the scene, the graphs it places, what it uses), in the
+  directories packages are found in by name, and in directories given
+  with `--allow file.read=<dir>`, judged where a path lands after its
+  links and `..`. Every read the session makes is held to that, however
+  deep the document that names the file. A composed document does not
+  widen it; a file elsewhere is a `rejected` event naming it, and a `use`
+  or `graph` naming one refuses the scene before any of it is read.
 - **Writes** take `--allow file.write=<dir>`. Neither is ever granted
   over the wire ([decision](DECISIONS.md)).
 - **Grants.** `status` answers `grants`, the capabilities a Kernel may be

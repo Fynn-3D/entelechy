@@ -22,6 +22,8 @@ pub struct Session {
     scene: scene::Scene,
     kernels: kernels::Kernels,
     inputs: inputs::Inputs,
+    /// What the session may read; its store reads only there.
+    reads: Arc<std::sync::Mutex<crate::reads::Reads>>,
     writes: writes::Writes,
     runtime: Runtime,
     evaluator: Evaluator,
@@ -88,10 +90,13 @@ impl Session {
         library: Option<&Path>,
         runtime: Runtime,
     ) -> Self {
+        let reads = Arc::new(std::sync::Mutex::new(crate::reads::Reads::default()));
+        let store: Arc<dyn Store> = Arc::new(crate::reads::Held::new(store, Arc::clone(&reads)));
         Self {
             scene: scene::Scene::new(store, scene, library),
             kernels: kernels::Kernels::default(),
             inputs: inputs::Inputs::default(),
+            reads,
             writes: writes::Writes::default(),
             runtime,
             evaluator: Evaluator::new(),
@@ -309,16 +314,16 @@ impl Session {
     pub fn sync(&mut self) -> Vec<Event> {
         let mut events = Vec::new();
         let store = Arc::clone(self.scene.store());
-        let inputs = &self.inputs;
-        let readable = |path: &Path| inputs.readable(store.as_ref(), path);
+        let reads = Arc::clone(&self.reads);
+        let readable = |path: &Path| crate::reads::lock(&reads).check(store.as_ref(), path);
         self.scene
             .sync(&mut self.kernels, &mut self.runtime, &mut events, &readable);
-        let documents = self.scene.read_from();
+        crate::reads::lock(&reads).settle(store.as_ref(), &self.scene.read_from());
         self.inputs.sync(
-            self.scene.store().as_ref(),
+            store.as_ref(),
             self.scene.graph(),
             self.scene.files(),
-            &documents,
+            &readable,
             self.runtime.host_mut(),
             &mut events,
         );
@@ -342,13 +347,13 @@ impl Session {
     /// (`serve`, `--serve`, `orla_request`). Refused after the first
     /// sync; the directories are fixed as the scene first loads.
     pub fn restrict_reads(&mut self) -> Result<(), String> {
-        self.inputs.restrict_reads()
+        crate::reads::lock(&self.reads).restrict()
     }
 
     /// Allows the scene's inputs to be read from files in `dir` and under
     /// it, where reads are restricted ([`Session::restrict_reads`]).
     pub fn allow_reads(&mut self, dir: &Path) -> Result<(), String> {
-        self.inputs.allow_reads(self.scene.store().as_ref(), dir)
+        crate::reads::lock(&self.reads).allow(self.store(), dir)
     }
 
     /// Allows a write to the one file `path`, named by the person running
@@ -381,9 +386,10 @@ impl Session {
 
     /// Whether `path` may be read on the session's behalf: anywhere,
     /// unless reads are restricted ([`Session::restrict_reads`]), and then
-    /// where the scene's documents are, in a package, or where allowed.
+    /// where the scene's documents are or use, in a package directory, or
+    /// where allowed.
     pub fn allowed_read(&self, path: &Path) -> Result<(), String> {
-        self.inputs.readable(self.scene.store().as_ref(), path)
+        crate::reads::lock(&self.reads).check(self.store(), path)
     }
 
     /// Where a write to `path` lands, if inside an allowed directory

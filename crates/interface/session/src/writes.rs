@@ -182,26 +182,27 @@ fn encode(
     })
 }
 
-/// `path` made whole and folded, its longest existing prefix resolved
-/// through links.
+/// Where `path` leads: its longest existing prefix resolved as the store
+/// follows it, links and `..` included, and the rest, which does not
+/// exist and so holds no link, folded onto it.
 pub(crate) fn resolve(store: &dyn Store, path: &Path) -> Result<PathBuf, String> {
-    let plain = store.whole(path);
-    let mut existing = plain.as_path();
-    let mut rest = Vec::new();
-    while !store.exists(existing) {
-        let Some(parent) = existing.parent() else {
-            break;
-        };
-        rest.push(existing.file_name().map(PathBuf::from).unwrap_or_default());
-        existing = parent;
-    }
-    let mut resolved = store
-        .canonical(existing)
+    let parts: Vec<std::path::Component> = path.components().collect();
+    let mut split = parts.len();
+    let existing = loop {
+        let prefix: PathBuf = parts[..split].iter().collect();
+        if split == 0 {
+            break store.whole(&prefix);
+        }
+        if store.exists(&prefix) {
+            break prefix;
+        }
+        split -= 1;
+    };
+    let resolved = store
+        .canonical(&existing)
         .map_err(|e| format!("{}: {e}", existing.display()))?;
-    for part in rest.iter().rev() {
-        resolved.push(part);
-    }
-    Ok(resolved)
+    let rest: PathBuf = parts[split..].iter().collect();
+    Ok(crate::store::folded(&resolved.join(rest)))
 }
 
 fn digest(bytes: &[u8]) -> u64 {
