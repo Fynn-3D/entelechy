@@ -19,7 +19,7 @@ use std::str::FromStr;
 
 pub use account::account;
 pub use fuse::{FuseError, InputUse, fuse, fuse_outputs, input_use, samples_only};
-pub use optimize::optimize;
+pub use optimize::{optimize, renumbered};
 pub use orla_abi::{
     Capabilities, Capability, Encoding, Number, PortType, Scalar, Schema, Shape, ShapeIndex, Type,
     Value,

@@ -2,8 +2,9 @@ scene ../scene.osn
 
 # Four paths a frame through three bounces, eight frames: the sum in the
 # accumulator counts 32 samples, and the picture is their mean. The CPU
-# and the JIT trace the same paths word for word; the GPU's differ in
-# the last place, so the pixels carry a tolerance.
+# and the JIT trace the same paths word for word; a device rounds some
+# of them otherwise, which thirty-two samples carry to the second place,
+# so the pixels carry a tolerance.
 param samples 4
 window 96 72
 frame 0.0000
@@ -16,10 +17,10 @@ frame 0.1000
 frame 0.1167
 expect sample.result[0] = 8.90064 11.08979 15.72408 32.0 0.005   # the sum in one pixel
 expect sample.result[0].a = 32.0                 # and the count it rode in on
-expect 48 20 = 0.491 0.528 0.591 0.01      # the sky above the lamp
-expect 24 52 = 0.457 0.308 0.326 0.01      # the red ball
-expect 70 55 = 0.404 0.448 0.526 0.01      # the steel ball
-expect 10 10 = 0.496 0.534 0.598 0.01      # a corner of the sky
+expect 48 20 = 0.491 0.528 0.591 0.02      # the sky above the lamp
+expect 24 52 = 0.457 0.308 0.326 0.02      # the red ball
+expect 70 55 = 0.404 0.448 0.526 0.02      # the steel ball
+expect 10 10 = 0.496 0.534 0.598 0.02      # a corner of the sky
 
 # Dragging the pointer moves the camera, and the sum starts over: one
 # frame after the drag the count is back to this frame's samples alone.

@@ -28,7 +28,8 @@ The drawing uses the SVG this reads:
 The replay pins, on all three backends, the colour the SVG's rules give
 at eight points (worked out by hand, not read back), the wheel's zoom
 about the pointer and a drag. `tiled.replay` holds the tiled drawing to
-the plain `vector.draw@1` word for word through four looks, and
+the plain `vector.draw` word for word through four looks, as it
+holds where every Kernel rounds alike, and
 `many.replay` draws a drawing made by Kernels: 66,048 squares and a disc
 of 66,000 segments, more than one loop counts.
 

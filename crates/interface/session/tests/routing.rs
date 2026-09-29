@@ -332,3 +332,251 @@ fn a_run_placed_by_its_size_changes_no_output_of_any_example() {
     assert!(placed > 0, "no run left the main backend by its size");
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// `module` rounded as another device might: every float `a * b + c` fused
+/// into one `fma`, rounded once, and every `a / b` of floats taken as
+/// `a * (1 / b)`, rounded twice, as a device's compiler may choose in one
+/// Kernel and not in another; `fused` counts what changed.
+fn contracted(module: &Validated, fused: &std::sync::atomic::AtomicUsize) -> Validated {
+    use orla_ir::{BinaryOp, Instruction, Intrinsic, Op, Type, ValueId};
+    use std::collections::HashMap;
+    fn float(ty: Type) -> bool {
+        matches!(ty, Type::Float | Type::Vec2 | Type::Vec3 | Type::Vec4)
+    }
+    fn typed(body: &[Instruction], types: &mut HashMap<ValueId, Type>) {
+        for instruction in body {
+            types.insert(instruction.id, instruction.ty);
+            for block in instruction.op.blocks() {
+                typed(&block.body, types);
+            }
+        }
+    }
+    fn products(body: &[Instruction], found: &mut HashMap<ValueId, (ValueId, ValueId)>) {
+        for instruction in body {
+            if let Op::Binary(BinaryOp::Mul, a, b) = instruction.op
+                && float(instruction.ty)
+            {
+                found.insert(instruction.id, (a, b));
+            }
+            for block in instruction.op.blocks() {
+                products(&block.body, found);
+            }
+        }
+    }
+    fn fuse(
+        body: &mut [Instruction],
+        products: &HashMap<ValueId, (ValueId, ValueId)>,
+        types: &HashMap<ValueId, Type>,
+        fused: &std::sync::atomic::AtomicUsize,
+    ) {
+        for instruction in body.iter_mut() {
+            if let Op::Binary(BinaryOp::Add, x, y) = instruction.op
+                && float(instruction.ty)
+            {
+                let ty = instruction.ty;
+                let same = |v: &ValueId| types.get(v) == Some(&ty);
+                let pick = |p: ValueId, other: ValueId| {
+                    products
+                        .get(&p)
+                        .filter(|(a, b)| same(a) && same(b) && same(&other))
+                        .map(|(a, b)| (*a, *b, other))
+                };
+                if let Some((a, b, c)) = pick(x, y).or_else(|| pick(y, x)) {
+                    instruction.op = Op::Intrinsic(Intrinsic::Fma, vec![a, b, c]);
+                    fused.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            for block in instruction.op.blocks_mut() {
+                fuse(&mut block.body, products, types, fused);
+            }
+        }
+    }
+    fn reciprocal(
+        body: &mut Vec<Instruction>,
+        next: &mut u32,
+        fused: &std::sync::atomic::AtomicUsize,
+    ) {
+        let mut out = Vec::with_capacity(body.len());
+        for mut instruction in body.drain(..) {
+            for block in instruction.op.blocks_mut() {
+                reciprocal(&mut block.body, next, fused);
+            }
+            if let Op::Binary(BinaryOp::Div, a, b) = instruction.op
+                && instruction.ty == Type::Float
+            {
+                let one = ValueId(*next);
+                let inverse = ValueId(*next - 1);
+                *next -= 2;
+                out.push(Instruction {
+                    id: one,
+                    ty: Type::Float,
+                    op: Op::Const(orla_abi::Value::Float(1.0)),
+                });
+                out.push(Instruction {
+                    id: inverse,
+                    ty: Type::Float,
+                    op: Op::Binary(BinaryOp::Div, one, b),
+                });
+                instruction.op = Op::Binary(BinaryOp::Mul, a, inverse);
+                fused.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            out.push(instruction);
+        }
+        *body = out;
+    }
+    fn empty() -> orla_ir::Function {
+        orla_ir::Function {
+            name: String::new(),
+            args: Vec::new(),
+            body: Vec::new(),
+            results: Vec::new(),
+            bindings: Vec::new(),
+        }
+    }
+    let mut module = module.clone().into_module();
+    let functions = module
+        .functions
+        .iter_mut()
+        .chain(std::iter::once(&mut module.entry))
+        .chain(module.merge.iter_mut())
+        .chain(module.init.iter_mut());
+    for function in functions {
+        let mut types = HashMap::new();
+        typed(&function.body, &mut types);
+        let mut found = HashMap::new();
+        products(&function.body, &mut found);
+        fuse(&mut function.body, &found, &types, fused);
+        // New values take numbers from the top, and the function is numbered
+        // again as a module is.
+        let mut next = u32::MAX;
+        reciprocal(&mut function.body, &mut next, fused);
+        *function = orla_ir::renumbered(std::mem::replace(function, empty()));
+    }
+    orla_ir::validate(module).expect("a fused module is valid")
+}
+
+/// The JIT, with the Kernels whose id's bytes sum to `half` modulo 2
+/// prepared contracted.
+struct Contracting {
+    inner: orla_jit::JitBackend,
+    half: u32,
+    fused: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Backend for Contracting {
+    fn name(&self) -> &'static str {
+        "contracting"
+    }
+    fn declines(&self, module: &Validated) -> Option<String> {
+        self.inner.declines(module)
+    }
+    fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
+        let id = module.manifest.id.to_string();
+        if id.bytes().map(u32::from).sum::<u32>() % 2 == self.half {
+            self.inner.prepare(&contracted(module, &self.fused))
+        } else {
+            self.inner.prepare(module)
+        }
+    }
+    fn execute(
+        &self,
+        prepared: &dyn Prepared,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+    ) -> Result<Vec<Handle>, ExecutionError> {
+        self.inner.execute(prepared, module, invocation, scope)
+    }
+    fn execute_checked(
+        &self,
+        prepared: &dyn Prepared,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+    ) -> Result<Checked, ExecutionError> {
+        self.inner
+            .execute_checked(prepared, module, invocation, scope)
+    }
+    fn execute_native(
+        &self,
+        op: NativeOp,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+    ) -> Result<Vec<Handle>, ExecutionError> {
+        self.inner.execute_native(op, invocation, scope)
+    }
+}
+
+/// The checks that hold one of a package's forms to another word for word,
+/// by replay and node: two forms computed apart agree to the bit only
+/// where every Kernel rounds alike, so rounding them apart is no test of
+/// them.
+const ALIKE: [(&str, &str); 3] = [
+    ("vector/tests/tiled.replay", "differ"),
+    ("mesh/tests/cutout.replay", "split"),
+    ("mesh/tests/degenerate.replay", "split"),
+];
+
+/// Rounding that differs from Kernel to Kernel breaks no example: half the
+/// Kernels, by a sum of their ids, have every float `a * b + c` fused into
+/// one `fma`, and every replay's expectations still hold. A replay allows
+/// what a device's rounding changes, so what fails here is a decision two
+/// Kernels must agree on and each makes for itself: it is made in one
+/// ([why](../../../../docs/DECISIONS.md)).
+#[test]
+fn rounding_that_differs_from_kernel_to_kernel_breaks_no_example() {
+    let paths = replays();
+    let fused = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let failures = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| {
+                loop {
+                    let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(path) = paths.get(at) else { break };
+                    let text = std::fs::read_to_string(path).unwrap();
+                    let replay = replay::parse(&text, path.parent().unwrap()).unwrap();
+                    for half in [0, 1] {
+                        let limits = orla_session::Limits::default();
+                        let mut runtime = orla_kernel::Runtime::with_backend(
+                            limits.words,
+                            Box::new(Contracting {
+                                inner: orla_jit::JitBackend::new().unwrap(),
+                                half,
+                                fused: Arc::clone(&fused),
+                            }),
+                        );
+                        runtime.host_mut().set_work(limits.work);
+                        let found = match replay::run(&replay, runtime) {
+                            Ok(outcome) => outcome
+                                .failures
+                                .into_iter()
+                                .filter(|failure| {
+                                    !ALIKE.iter().any(|(file, node)| {
+                                        path.ends_with(file)
+                                            && failure.contains(&format!(" {node}.result"))
+                                    })
+                                })
+                                .map(|failure| {
+                                    format!("{} (half {half}): {failure}", path.display())
+                                })
+                                .collect(),
+                            Err(error) => {
+                                vec![format!("{} (half {half}): {error}", path.display())]
+                            }
+                        };
+                        failures.lock().unwrap().extend(found);
+                    }
+                }
+            });
+        }
+    });
+    let failures = failures.into_inner().unwrap();
+    assert!(
+        fused.load(std::sync::atomic::Ordering::Relaxed) > 0,
+        "nothing was fused"
+    );
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

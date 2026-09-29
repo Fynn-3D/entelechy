@@ -23,7 +23,8 @@
 // tile keeps the segments that reach the tile and, a row at a time, the
 // winding of those wholly past it to the right. A segment that could
 // change a pixel's winding or its smoothing is always among them, so the
-// two forms draw the same words. Shapes and segments are walked in
+// two forms draw the same words where every Kernel rounds alike, as on
+// the interpreter and the JIT. Shapes and segments are walked in
 // chunks, a chunk whose box misses passed over whole, and every loop
 // over shapes or segments is two deep, so neither count is bounded by
 // one loop's.

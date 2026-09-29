@@ -1627,8 +1627,10 @@ fn fold_intrinsic(intrinsic: Intrinsic, args: &[Value]) -> Option<Value> {
     }
 }
 
-/// A function numbered again in pre-order, its operands following.
-pub(crate) fn renumbered(function: Function) -> Function {
+/// A function numbered again in pre-order, its operands following, as
+/// [`validate`](crate::validate) asks: for a pass that adds instructions or
+/// takes them away.
+pub fn renumbered(function: Function) -> Function {
     let mut renumber = Renumber {
         ids: BTreeMap::new(),
         next: 0,

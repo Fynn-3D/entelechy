@@ -168,7 +168,8 @@ nearest fragment in `[0, 1)`, the earlier triangle on a tie, with
 attributes interpolated by `1 / w`; with a cutout, a fragment whose alpha
 in the mask at its own uv is below the cutout is not drawn. The `tiled`
 presets cut a box larger than a tile across a pool of invocations, for
-scenes of large triangles; the surface is the same to the bit. A
+scenes of large triangles; the surface is the same to the bit where
+every Kernel rounds alike, as on the interpreter and the JIT. A
 triangle with two corners at one point is skipped by that test alone.
 Each triangle's box is found once, and every step reads it.
 
