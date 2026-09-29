@@ -30,3 +30,12 @@ param center vec2(300.0, 60.0)
 param zoom 1000000000.0
 frame 0.4
 expect differ.result[0] = 0
+
+# A zoom of none or less is the least zoom there is, the same to every
+# Kernel.
+param zoom 0.0
+frame 0.5
+expect differ.result[0] = 0
+param zoom -1.0
+frame 0.6
+expect differ.result[0] = 0

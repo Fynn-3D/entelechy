@@ -57,6 +57,14 @@ struct Stop { offset: Float; color: Vec4; }
 // zoom over fitting the whole drawing.
 struct Look { center: Vec2; zoom: Float; }
 
+// Pixels to a unit of the drawing through a look: the whole drawing
+// fitted, times the zoom; a zoom of none or less, or a drawing of no
+// size, the least there is, so every Kernel sees one frame.
+fn fitted(size: Vec2, eye: Look, res: Vec2) -> Float {
+    let fit = min(res.x / size.x, res.y / size.y) * eye.zoom;
+    return if fit > 0.000000000000000000000000000001 { fit } else { 0.000000000000000000000000000001 };
+}
+
 // The tiles a shape's box reaches, inclusive; none when `x1 < x0`.
 struct Reach { x0: Int; y0: Int; x1: Int; y1: Int; }
 
@@ -159,7 +167,7 @@ kernel vector.frame@1 {
         let wide = int(res.x);
         let size = at(view, 0);
         let eye = at(look, 0);
-        let pixel = 1.0 / (min(res.x / size.x, res.y / size.y) * eye.zoom);
+        let pixel = 1.0 / fitted(size, eye, res);
         let i = element();
         if i < wide { return eye.center.x + (float(i) + 0.5 - res.x * 0.5) * pixel; }
         if i < wide + int(res.y) { return eye.center.y + (float(i - wide) + 0.5 - res.y * 0.5) * pixel; }
@@ -225,10 +233,8 @@ fn tile_rows(res: Vec2) -> Int { return int(ceil(res.y / tile())); }
 
 // Where the drawing's point `q` is on the canvas, in pixels.
 fn on_canvas(q: Vec2, view: Rows<Vec2>, look: Rows<Look>, res: Vec2) -> Vec2 {
-    let size = at(view, 0);
     let eye = at(look, 0);
-    let fit = min(res.x / size.x, res.y / size.y) * eye.zoom;
-    return (q - eye.center) * fit + res * 0.5;
+    return (q - eye.center) * fitted(at(view, 0), eye, res) + res * 0.5;
 }
 
 /// Each shape's reach: the tiles its box, grown by two pixels, touches on
