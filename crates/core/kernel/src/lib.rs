@@ -27,6 +27,12 @@ pub use orla_abi::{DEFAULT_WORK, MAX_WORK, encoding};
 pub use orla_ir::{KernelId, Manifest, Validated};
 pub use orla_rules::{Backend, Check, ExecutionError, Extent, NativeOp, Prepared, extent};
 
+/// The operations a run may take, by its elements times its Kernel's
+/// typical work, and go to the ordered backend when the main one is a
+/// device: about what a device's dispatch costs in time, spent on the
+/// processor instead.
+pub const DEFAULT_SMALL: u64 = 400_000;
+
 pub mod clock;
 mod later;
 mod prepare;
@@ -56,6 +62,12 @@ enum Body {
         /// Why the main backend left it to the ordered one, decided when it
         /// was prepared; `None` when it runs on the main backend.
         routed: Option<String>,
+        /// The operations one element takes as a rule
+        /// ([`Validated::typical_work`]), for sizing a run.
+        typical: u64,
+        /// The module prepared on the ordered backend, the first time a run
+        /// small enough goes there; `None` when that backend refuses it.
+        on_ordered: std::sync::OnceLock<Option<Box<dyn Prepared>>>,
     },
     Native(NativeOp),
 }
@@ -153,6 +165,24 @@ impl Candidate {
     /// The validated IR.
     pub fn module(&self) -> &Validated {
         &self.module
+    }
+
+    /// The version made of it, as `id` at `generation`.
+    fn into_version(self, id: KernelId, generation: Generation) -> KernelVersion {
+        KernelVersion {
+            id,
+            generation,
+            manifest: self.module.manifest.clone(),
+            source: self.source,
+            body: Body::Kernel {
+                typical: self.run.typical_work(),
+                module: Box::new(self.module),
+                run: Box::new(self.run),
+                prepared: self.prepared,
+                routed: self.routed,
+                on_ordered: std::sync::OnceLock::new(),
+            },
+        }
     }
 }
 
@@ -316,6 +346,17 @@ fn prepare_on(
     })
 }
 
+/// `run` prepared on `backend`, or `None` where it declines or fails it: a
+/// run small enough for the ordered backend then stays on the main one.
+fn prepared_quietly(backend: &dyn Backend, run: &Validated) -> Option<Box<dyn Prepared>> {
+    if backend.declines(run).is_some() {
+        return None;
+    }
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.prepare(run)))
+        .ok()?
+        .ok()
+}
+
 /// What executions answer besides their outputs, kept until taken: bytes
 /// moved between Host and device, the device's time for the last
 /// execution, and checks of unwaited device runs.
@@ -361,6 +402,18 @@ pub struct Runtime {
     /// [`Runtime::set_grants`]. A Kernel is prepared only when its
     /// requirements are granted, and runs with exactly those.
     grants: Capabilities,
+    /// The most operations a run may take, by its elements and its
+    /// Kernel's typical work, and go to the ordered backend: a device's
+    /// dispatch costs more than a small run takes on the processor. Zero
+    /// keeps every run on the main backend.
+    small: u64,
+    /// Fields the main backend made in this evaluation: a small run that
+    /// reads one stays on the main backend, as bringing it back would wait
+    /// for the device's work before it. A Field made before, state or an
+    /// input, comes back once while the device has little else to do.
+    fresh: std::collections::HashSet<Handle>,
+    /// Where the last execution ran, and why when off the main backend.
+    last_placement: Option<Placement>,
 }
 
 impl Runtime {
@@ -386,6 +439,9 @@ impl Runtime {
             telemetry: Telemetry::default(),
             runs: later::Runs::new(),
             grants: Capability::ALL.into_iter().collect(),
+            small: DEFAULT_SMALL,
+            fresh: std::collections::HashSet::new(),
+            last_placement: None,
         };
         // Native operations are published at generation zero, so graphs
         // bind to them like any Kernel.
@@ -468,18 +524,7 @@ impl Runtime {
     pub fn detach(&mut self, candidate: Candidate, id: KernelId) -> Arc<KernelVersion> {
         let generation = Generation(self.next_generation);
         self.next_generation += 1;
-        Arc::new(KernelVersion {
-            id,
-            generation,
-            manifest: candidate.module.manifest.clone(),
-            source: candidate.source,
-            body: Body::Kernel {
-                module: Box::new(candidate.module),
-                run: Box::new(candidate.run),
-                prepared: candidate.prepared,
-                routed: candidate.routed,
-            },
-        })
+        Arc::new(candidate.into_version(id, generation))
     }
 
     /// Name of the backend executing Kernels.
@@ -518,6 +563,10 @@ impl Runtime {
     /// Brings a resident Field's words into Host memory and answers the
     /// bytes moved.
     fn bring_home(&mut self, handle: Handle) -> Result<u64, ExecutionError> {
+        // Words kept in memory beside the device's need no trip.
+        if self.host.data(handle).is_ok() {
+            return Ok(0);
+        }
         let Some(device) = self
             .host
             .resident(handle)
@@ -653,6 +702,49 @@ impl Runtime {
         }
     }
 
+    /// Sets the most operations a run may take and go to the ordered
+    /// backend (see [`DEFAULT_SMALL`]); zero keeps every run on the main one.
+    pub fn set_small(&mut self, operations: u64) {
+        self.small = operations;
+    }
+
+    /// Starts an evaluation: no Field is yet the main backend's own of it.
+    pub fn begin_evaluation(&mut self) {
+        self.fresh.clear();
+    }
+
+    /// Where the last execution ran, and why when off the main backend.
+    pub fn last_placement(&self) -> Option<&Placement> {
+        self.last_placement.as_ref()
+    }
+
+    /// Why a run of a Kernel the main backend takes goes to the ordered one
+    /// by its size, or `None`: its elements times its typical work are at
+    /// most `small`, and it reads no Field the main backend made in this
+    /// evaluation. The choice reads the run and nothing of time.
+    fn sized_off(&self, run: &Validated, typical: u64, invocation: &Invocation) -> Option<String> {
+        if self.small == 0 || self.ordered.is_none() || !self.backend.has_device() {
+            return None;
+        }
+        if invocation
+            .inputs
+            .iter()
+            .any(|input| self.fresh.contains(input))
+        {
+            return None;
+        }
+        let elements = match run.manifest.mode {
+            orla_ir::Mode::Reduce | orla_ir::Mode::Prefix { .. } => invocation
+                .inputs
+                .first()
+                .and_then(|input| self.host.domain(*input).ok())
+                .map_or(0, |domain| domain.count()),
+            _ => invocation.domain.count(),
+        } as u64;
+        let work = elements.saturating_mul(typical);
+        (work <= self.small).then(|| format!("small: {elements} elements, about {work} operations"))
+    }
+
     /// The checks executions answered since the last call, in run order.
     /// Device runs are not waited for; a check reports failure when waited
     /// on. A caller that commits only after waiting on every check matches
@@ -761,18 +853,7 @@ impl Runtime {
         let id = candidate.id().clone();
         let generation = Generation(self.next_generation);
         self.next_generation += 1;
-        let version = Arc::new(KernelVersion {
-            id: id.clone(),
-            generation,
-            manifest: candidate.module.manifest.clone(),
-            source: candidate.source,
-            body: Body::Kernel {
-                module: Box::new(candidate.module),
-                run: Box::new(candidate.run),
-                prepared: candidate.prepared,
-                routed: candidate.routed,
-            },
-        });
+        let version = Arc::new(candidate.into_version(id.clone(), generation));
         self.kernels.insert(id, Arc::clone(&version));
         version
     }
@@ -827,8 +908,14 @@ impl Runtime {
         chain: (usize, usize),
     ) -> Result<Vec<Handle>, ExecutionError> {
         // A backend that runs every time itself keeps the Fields between.
-        if let Body::Kernel { run, prepared, .. } = &version.body
+        if let Body::Kernel {
+            run,
+            prepared,
+            typical,
+            ..
+        } = &version.body
             && version.routed().is_none()
+            && self.sized_off(run, *typical, invocation).is_none()
         {
             let granted = self.scope_grants(version);
             let backend = Arc::clone(&self.backend);
@@ -847,7 +934,13 @@ impl Runtime {
             self.telemetry.carried(backend.as_ref(), before);
             if let Some(outputs) = answered {
                 self.telemetry.measured(backend.as_ref());
-                return held_to(version.manifest(), &mut self.host, outputs);
+                self.last_placement = Some(Placement {
+                    backend: backend.name(),
+                    routed: None,
+                });
+                let outputs = held_to(version.manifest(), &mut self.host, outputs)?;
+                self.fresh.extend(outputs.iter().copied());
+                return Ok(outputs);
             }
         }
         let (input, output) = chain;
@@ -886,13 +979,33 @@ impl Runtime {
         // answers `None`.
         self.telemetry.last_measured = None;
         match &version.body {
-            Body::Kernel { run, prepared, .. } => {
-                let ordered = self
-                    .ordered
-                    .as_ref()
-                    .filter(|_| version.routed().is_some())
-                    .map(Arc::clone);
-                if ordered.is_some() {
+            Body::Kernel {
+                run,
+                prepared,
+                typical,
+                on_ordered,
+                ..
+            } => {
+                // The ordered backend, when the main one left the Kernel to
+                // it or the run is small enough; the main one otherwise.
+                let sized = match version.routed() {
+                    Some(_) => None,
+                    None => self.sized_off(run, *typical, invocation),
+                };
+                let off: Option<(Arc<dyn Backend>, &dyn Prepared, String)> =
+                    match (&self.ordered, version.routed(), sized) {
+                        (Some(ordered), Some(why), _) => Some((
+                            Arc::clone(ordered),
+                            prepared.as_ref(),
+                            format!("not on {}: {why}", self.backend.name()),
+                        )),
+                        (Some(ordered), None, Some(why)) => on_ordered
+                            .get_or_init(|| prepared_quietly(ordered.as_ref(), run))
+                            .as_deref()
+                            .map(|on| (Arc::clone(ordered), on, why)),
+                        _ => None,
+                    };
+                if off.is_some() {
                     // The ordered backend reads Host memory, so resident
                     // Fields come back first.
                     for handle in &invocation.inputs {
@@ -900,11 +1013,31 @@ impl Runtime {
                         self.telemetry.moved.downloaded += brought;
                     }
                 }
-                let backend = ordered.unwrap_or_else(|| Arc::clone(&self.backend));
+                let (backend, prepared, placement) = match off {
+                    Some((backend, on, why)) => {
+                        let name = backend.name();
+                        (
+                            backend,
+                            on,
+                            Placement {
+                                backend: name,
+                                routed: Some(why),
+                            },
+                        )
+                    }
+                    None => (
+                        Arc::clone(&self.backend),
+                        prepared.as_ref(),
+                        Placement {
+                            backend: self.backend.name(),
+                            routed: None,
+                        },
+                    ),
+                };
                 let before = backend.uploaded();
                 let outputs = {
                     let mut scope = Scope::new(&mut self.host, granted);
-                    backend.execute_checked(prepared.as_ref(), run, invocation, &mut scope)
+                    backend.execute_checked(prepared, run, invocation, &mut scope)
                 };
                 self.telemetry.carried(backend.as_ref(), before);
                 self.telemetry.measured(backend.as_ref());
@@ -912,9 +1045,19 @@ impl Runtime {
                     self.telemetry.checks.extend(check);
                     outputs
                 });
-                held_to(version.manifest(), &mut self.host, outputs)
+                let main = placement.routed.is_none();
+                self.last_placement = Some(placement);
+                let outputs = held_to(version.manifest(), &mut self.host, outputs)?;
+                if main {
+                    self.fresh.extend(outputs.iter().copied());
+                }
+                Ok(outputs)
             }
             Body::Native(op) => {
+                self.last_placement = Some(Placement {
+                    backend: self.backend.name(),
+                    routed: None,
+                });
                 let backend = Arc::clone(&self.backend);
                 let before = backend.uploaded();
                 let outputs = {
@@ -923,7 +1066,9 @@ impl Runtime {
                 };
                 self.telemetry.carried(backend.as_ref(), before);
                 self.telemetry.measured(backend.as_ref());
-                held_to(version.manifest(), &mut self.host, outputs)
+                let outputs = held_to(version.manifest(), &mut self.host, outputs)?;
+                self.fresh.extend(outputs.iter().copied());
+                Ok(outputs)
             }
         }
     }

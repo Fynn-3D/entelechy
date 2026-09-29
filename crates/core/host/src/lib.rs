@@ -817,11 +817,14 @@ enum Storage {
     Free,
     /// Words in Host memory.
     Data(FieldData),
-    /// Words on a device, held by an object its backend understands.
+    /// Words on a device, held by an object its backend understands, and
+    /// in Host memory too when they were uploaded from it: a Field is a
+    /// value, so the two never differ.
     Resident {
         schema: Schema,
         domain: Domain,
         device: Box<dyn Any + Send + Sync>,
+        kept: Option<FieldData>,
     },
 }
 
@@ -984,6 +987,7 @@ impl Host {
                 schema,
                 domain,
                 device,
+                kept: None,
             },
         )
     }
@@ -1085,17 +1089,28 @@ impl Host {
     }
 
     /// Borrows the data behind a handle; fails with [`HostError::Resident`]
-    /// when its words are on a device.
+    /// when its words are on a device only.
     pub fn data(&self, handle: Handle) -> Result<&FieldData, HostError> {
         match &self.slot(handle)?.storage {
-            Storage::Data(data) => Ok(data),
+            Storage::Data(data)
+            | Storage::Resident {
+                kept: Some(data), ..
+            } => Ok(data),
             Storage::Resident { .. } => Err(HostError::Resident(handle)),
             Storage::Free => Err(HostError::InvalidHandle(handle)),
         }
     }
 
     fn data_mut(&mut self, handle: Handle) -> Result<&mut FieldData, HostError> {
-        match &mut self.slot_mut(handle)?.storage {
+        let slot = self.slot_mut(handle)?;
+        // Words changed in memory are no longer the device's: the device
+        // copy goes.
+        if let Storage::Resident { kept, .. } = &mut slot.storage
+            && let Some(data) = kept.take()
+        {
+            slot.storage = Storage::Data(data);
+        }
+        match &mut slot.storage {
             Storage::Data(data) => Ok(data),
             Storage::Resident { .. } => Err(HostError::Resident(handle)),
             Storage::Free => Err(HostError::InvalidHandle(handle)),
@@ -1186,8 +1201,8 @@ impl Host {
         })
     }
 
-    /// Moves a Field's words onto a device: the Host drops its copy and keeps
-    /// `device`. Layout, extent and identity stay.
+    /// Gives a Field's words a copy on a device, `device`, which the Host
+    /// keeps beside its own. Layout, extent and identity stay.
     pub fn make_resident(
         &mut self,
         handle: Handle,
@@ -1196,10 +1211,16 @@ impl Host {
         let slot = self.slot_mut(handle)?;
         let (schema, domain) = slot.describe().expect("live slot");
         let schema = schema.clone();
+        let kept = match std::mem::replace(&mut slot.storage, Storage::Free) {
+            Storage::Data(data) => Some(data),
+            Storage::Resident { kept, .. } => kept,
+            Storage::Free => None,
+        };
         slot.storage = Storage::Resident {
             schema,
             domain,
             device,
+            kept,
         };
         Ok(())
     }
@@ -1209,8 +1230,8 @@ impl Host {
     pub fn materialize(&mut self, handle: Handle, words: Vec<u32>) -> Result<(), HostError> {
         let slot = self.slot_mut(handle)?;
         let (schema, domain) = match &slot.storage {
+            Storage::Resident { kept: Some(_), .. } | Storage::Data(_) => return Ok(()),
             Storage::Resident { schema, domain, .. } => (schema.clone(), *domain),
-            Storage::Data(_) => return Ok(()),
             Storage::Free => return Err(HostError::InvalidHandle(handle)),
         };
         slot.storage = Storage::Data(FieldData::from_storage(schema, domain, words)?);
@@ -1225,7 +1246,11 @@ impl Host {
         self.used_words -= charge;
         self.free.push(handle.index);
         // The words go to the spare pile for the next Field of that size.
-        if let Storage::Data(data) = storage {
+        if let Storage::Data(data)
+        | Storage::Resident {
+            kept: Some(data), ..
+        } = storage
+        {
             self.keep_spare(data.storage);
         }
         Ok(())
@@ -1445,27 +1470,40 @@ mod tests {
     }
 
     #[test]
-    fn resident_fields_keep_identity_extent_and_budget_but_hide_words() {
+    fn resident_fields_keep_identity_extent_and_budget_and_hide_words_made_on_a_device() {
         let mut host = Host::new(32);
         let image = host.create_image(2, 2).unwrap();
         host.write_pixel(image, 0, 0, [1.0; 4]).unwrap();
+        // Uploaded, a Field keeps its words in memory beside the device's.
         host.make_resident(image, Box::new(42u32)).unwrap();
         assert_eq!(host.domain(image).unwrap(), Domain::Grid(2, 2));
         assert_eq!(host.resident_count(), 1);
         assert_eq!(host.used_words(), 16);
-        assert_eq!(
-            host.read_pixel(image, 0, 0),
-            Err(HostError::Resident(image))
-        );
-        assert_eq!(host.image(image).unwrap_err(), HostError::Resident(image));
+        assert_eq!(host.read_pixel(image, 0, 0).unwrap(), [1.0; 4]);
         let device = host.resident(image).unwrap().unwrap();
         assert_eq!(device.downcast_ref::<u32>(), Some(&42));
+        // What memory holds needs nothing from the device.
         host.materialize(image, vec![0.5f32.to_bits(); 16]).unwrap();
-        assert_eq!(host.read_pixel(image, 1, 1).unwrap(), [0.5; 4]);
+        assert_eq!(host.read_pixel(image, 1, 1).unwrap(), [0.0; 4]);
+        // Words written in memory are no longer the device's.
+        host.write_pixel(image, 1, 1, [0.25; 4]).unwrap();
         assert!(host.resident(image).unwrap().is_none());
+        // A Field made on a device has no words in memory until brought back.
         let resident = host
             .adopt_resident(Schema::pixel(), Domain::Grid(2, 2), Box::new(7u8))
             .unwrap();
+        assert_eq!(
+            host.read_pixel(resident, 0, 0),
+            Err(HostError::Resident(resident))
+        );
+        assert_eq!(
+            host.image(resident).unwrap_err(),
+            HostError::Resident(resident)
+        );
+        host.materialize(resident, vec![0.5f32.to_bits(); 16])
+            .unwrap();
+        assert_eq!(host.read_pixel(resident, 1, 1).unwrap(), [0.5; 4]);
+        assert!(host.resident(resident).unwrap().is_none());
         assert_eq!(host.live(), 2);
         host.release(resident).unwrap();
         host.release(image).unwrap();
@@ -1490,11 +1528,10 @@ mod tests {
             host.element(rows, 4).unwrap_err(),
             HostError::ElementOutOfBounds { index: 4, count: 4 }
         );
+        let kept = host.data(rows).unwrap().storage().to_vec();
         host.make_resident(rows, Box::new(1u8)).unwrap();
         assert_eq!(host.schema(rows).unwrap(), &schema);
-        assert_eq!(host.data(rows).unwrap_err(), HostError::Resident(rows));
-        host.materialize(rows, words.clone()).unwrap();
-        assert_eq!(host.data(rows).unwrap().storage(), &words[..]);
+        assert_eq!(host.data(rows).unwrap().storage(), &kept[..]);
 
         let volume = host
             .create(Schema::new(vec![Scalar::Float]), Domain::Volume(2, 2, 3))

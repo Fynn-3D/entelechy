@@ -1198,7 +1198,7 @@ impl<'a> Scope<'a> {
         Ok(self.host.resident(field)?)
     }
 
-    /// Moves an input's words onto the device, replacing the Host copy.
+    /// Gives an input's words a copy on the device, beside the Host's.
     /// Requires `field.read`.
     pub fn make_resident(
         &mut self,

@@ -2205,6 +2205,7 @@ output result <- w.result;",
             let limits = orla_session::Limits {
                 words: 1 << 22,
                 work,
+                small: 0,
             };
             for backend in ["cpu", "jit", "gpu"] {
                 let Ok(runtime) = Session::runtime_for(backend, limits) else {
@@ -2253,6 +2254,7 @@ output result <- b.result;";
                 let limits = orla_session::Limits {
                     words: 1 << 22,
                     work,
+                    small: 0,
                 };
                 let Ok(runtime) = Session::runtime_for(backend, limits) else {
                     continue;

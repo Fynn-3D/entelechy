@@ -94,8 +94,11 @@ Evaluates a `.osn` scene once. Flags:
 - `--no-fusion` runs every node on its own.
 - `--memory <MB>` is the Fields the Host may hold at once (2048 by
   default); `--work <M>` the million loop iterations one run of a Kernel
-  may take (4000 by default). `render`, `replay`, `serve`, `graph`,
-  `trace` and `bench` take both.
+  may take (4000 by default); `--small <operations>` the operations a run
+  may take, by its elements and its Kernel's typical work, and go to the
+  JIT rather than the device (400000 by default; `0` keeps every run on
+  the device, [why](DECISIONS.md#a-small-run-goes-to-the-processor-a-device-is-for-many-elements)).
+  `render`, `replay`, `serve`, `graph`, `trace` and `bench` take all three.
 - `--allow file.write=<dir>` lets outputs written `to` a file
   (`output kept <- tally.result to "saves/tally.field";`) land in that
   directory; without it the session says what was not written.
@@ -238,8 +241,8 @@ orla player examples/material-ball/scene.osn
 Opens a scene in a window and keeps it live, watching files as `--watch`
 does; a changed Kernel compiles on a worker thread and swaps in when
 ready, so a republish never stalls a frame. It takes `run`'s
-`--library`, `--input`, `--backend`, `--memory`, `--work`, `--allow` and
-`--grant`, and:
+`--library`, `--input`, `--backend`, `--memory`, `--work`, `--small`,
+`--allow` and `--grant`, and:
 
 - `--scale <n>` sets the initial magnification; `--window <w>x<h>` the
   initial logical size.

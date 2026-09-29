@@ -518,6 +518,7 @@ impl Evaluator {
             // status, checked before anything commits.
             let mut checks: Vec<(NodeId, Vec<Box<dyn orla_kernel::Check>>)> = Vec::new();
             runtime.take_checks();
+            runtime.begin_evaluation();
             let mut pending = Vec::new();
             for group in groups.iter() {
                 let node = &group.node;
@@ -582,7 +583,6 @@ impl Evaluator {
                 if let Some(running) = self.running.remove(&node.id) {
                     runtime.discard_run(running.run);
                 }
-                let placement = runtime.placement(&group.version);
                 runtime.take_moved();
                 let started = orla_kernel::clock::now();
                 let outputs = match group.chain {
@@ -602,6 +602,11 @@ impl Evaluator {
                     .unwrap_or_else(|| orla_kernel::clock::since(started));
                 timings.push((node.id.clone(), took));
                 checks.push((node.id.clone(), runtime.take_checks()));
+                // Where it ran, which a run's size may decide.
+                let placement = runtime
+                    .last_placement()
+                    .cloned()
+                    .unwrap_or_else(|| runtime.placement(&group.version));
                 let moved = runtime.take_moved();
                 placements.push(Placed {
                     node: node.id.clone(),

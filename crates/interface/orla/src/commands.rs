@@ -73,6 +73,11 @@ pub fn limit_flags() -> Vec<Flag> {
             "<M>",
             "Million loop iterations one run of a Kernel may take (4000 by default).",
         ),
+        valued(
+            "--small",
+            "<operations>",
+            "Operations a run may take, by its elements and its Kernel's typical work, and go to the processor rather than the device (400000 by default; 0 keeps every run on the device).",
+        ),
     ]
 }
 

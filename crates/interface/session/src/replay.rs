@@ -753,8 +753,24 @@ impl Replayer {
             }
             Step::ExpectPlaced { node, routed, line } => {
                 outcome.checks += 1;
+                // Where it ran in the last frame, which a run's size may
+                // decide; where it is prepared to run when it has not run.
+                let ran = last.as_ref().and_then(|report| {
+                    report
+                        .placements
+                        .iter()
+                        .find(|placed| placed.node.0 == *node)
+                        .map(|placed| orla_kernel::Placement {
+                            backend: placed.backend,
+                            routed: placed.routed.clone(),
+                        })
+                });
                 let placements = session.placements();
-                let Some((_, placement)) = placements.iter().find(|(id, _)| id == node) else {
+                let prepared = placements
+                    .iter()
+                    .find(|(id, _)| id == node)
+                    .map(|(_, placement)| placement.clone());
+                let Some(placement) = ran.or(prepared) else {
                     return Err(format!(
                         "line {line}: no node `{node}` with a published Kernel"
                     ));

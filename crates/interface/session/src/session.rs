@@ -145,6 +145,7 @@ impl Session {
             match Self::backend_runtime(name, limits.words, wait) {
                 Ok((mut runtime, display)) => {
                     runtime.host_mut().set_work(limits.work);
+                    runtime.set_small(limits.small);
                     return Ok(crate::Built {
                         runtime,
                         display,

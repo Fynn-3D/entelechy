@@ -1421,6 +1421,50 @@ fn block_work(instructions: &[Instruction], functions: &[u64]) -> u64 {
     })
 }
 
+/// The iterations [`Module::typical_work`] counts for a loop whose count
+/// is read at run time or that may stop early.
+pub const TYPICAL_OPEN_LOOP: u32 = 4;
+
+fn typical_block(instructions: &[Instruction], functions: &[u64]) -> u64 {
+    instructions.iter().fold(0u64, |sum, instruction| {
+        let work = match &instruction.op {
+            Op::Loop {
+                count,
+                bound,
+                until,
+                body,
+                ..
+            } => {
+                let inner = typical_block(&body.body, functions).saturating_add(
+                    until
+                        .as_ref()
+                        .map_or(0, |b| typical_block(&b.body, functions)),
+                );
+                let runs = if bound.is_some() || until.is_some() {
+                    (*count).min(TYPICAL_OPEN_LOOP)
+                } else {
+                    *count
+                };
+                u64::from(runs).saturating_mul(inner.saturating_add(1))
+            }
+            Op::If {
+                then, otherwise, ..
+            } => {
+                typical_block(&then.body, functions).max(typical_block(&otherwise.body, functions))
+            }
+            Op::Match {
+                arms, otherwise, ..
+            } => arms
+                .iter()
+                .map(|(_, block)| typical_block(&block.body, functions))
+                .fold(typical_block(&otherwise.body, functions), u64::max),
+            Op::Call(index, _) => functions.get(*index as usize).copied().unwrap_or(0),
+            _ => 0,
+        };
+        sum.saturating_add(work).saturating_add(1)
+    })
+}
+
 /// The most iterations one run of a loop, nested ones included, may take
 /// while its work is checked only at its end. A loop that can run more
 /// also checks at the start of each iteration, so an element runs at most
@@ -1468,6 +1512,27 @@ impl Module {
             .map(|function| block_work(&function.body, &per_function))
             .max()
             .unwrap_or(0)
+    }
+
+    /// The operations one element takes as a rule, at least one: each
+    /// instruction one; a loop of a written count runs its body that many
+    /// times, one whose count is read at run time, or that may stop early,
+    /// [`TYPICAL_OPEN_LOOP`] times at most; the longer branch arm; a call
+    /// what its function takes. An estimate of size, for choosing where a
+    /// run goes, never a bound.
+    pub fn typical_work(&self) -> u64 {
+        let mut per_function: Vec<u64> = Vec::with_capacity(self.functions.len());
+        for function in &self.functions {
+            let work = typical_block(&function.body, &per_function);
+            per_function.push(work);
+        }
+        std::iter::once(&self.entry)
+            .chain(&self.merge)
+            .chain(&self.init)
+            .map(|function| typical_block(&function.body, &per_function))
+            .max()
+            .unwrap_or(0)
+            .max(1)
     }
 
     /// Whether [`account()`] has placed the module's work checks.

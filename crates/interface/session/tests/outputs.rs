@@ -33,7 +33,13 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 fn open(dir: &Path, backend: &str) -> Option<Session> {
-    let runtime = Session::runtime_for(backend, Limits::default()).ok()?;
+    // Every run on the backend named, however small: what is held where is
+    // what these tests ask.
+    let limits = Limits {
+        small: 0,
+        ..Limits::default()
+    };
+    let runtime = Session::runtime_for(backend, limits).ok()?;
     let mut session = Session::open_with(&dir.join("scene.osn"), None, runtime);
     let events = session.sync_settled();
     assert!(session.graph().is_some(), "{events:?}");

@@ -205,14 +205,19 @@ pub fn budget_of_megabytes(megabytes: usize) -> usize {
 }
 
 /// What a session's Host may hold and spend: Field words held at once
-/// (`--memory`), and loop iterations one Kernel run may take across all
-/// its elements (`--work`).
+/// (`--memory`), loop iterations one Kernel run may take across all its
+/// elements (`--work`), and the operations a run may take and go to the
+/// processor when the main backend is a device (`--small`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limits {
     /// Words the Host may hold at once.
     pub words: usize,
     /// Loop iterations one run may take.
     pub work: u64,
+    /// Operations a run may take, by its elements and its Kernel's
+    /// typical work, and go to the ordered backend; zero keeps every run
+    /// on the main one.
+    pub small: u64,
 }
 
 impl Default for Limits {
@@ -220,18 +225,20 @@ impl Default for Limits {
         Self {
             words: DEFAULT_BUDGET_WORDS,
             work: orla_kernel::DEFAULT_WORK,
+            small: orla_kernel::DEFAULT_SMALL,
         }
     }
 }
 
 impl Limits {
-    /// Whether `flag` sets a limit: `--memory` or `--work`.
+    /// Whether `flag` sets a limit: `--memory`, `--work` or `--small`.
     pub fn takes(flag: &str) -> bool {
-        matches!(flag, "--memory" | "--work")
+        matches!(flag, "--memory" | "--work" | "--small")
     }
 
     /// Sets the limit `flag` names from its value: `--memory <MB>` in
-    /// whole mebibytes, `--work <M>` in millions of iterations.
+    /// whole mebibytes, `--work <M>` in millions of iterations, `--small
+    /// <operations>` in operations, zero allowed.
     pub fn read(&mut self, flag: &str, text: &str) -> Result<(), String> {
         let whole = |unit: &str| -> Result<u64, String> {
             text.parse::<u64>().ok().filter(|n| *n > 0).ok_or_else(|| {
@@ -249,6 +256,11 @@ impl Limits {
                     ));
                 }
                 self.work = millions * 1_000_000;
+            }
+            "--small" => {
+                self.small = text.parse::<u64>().map_err(|_| {
+                    format!("--small takes a whole number of operations, found `{text}`")
+                })?;
             }
             _ => return Err(format!("{flag} sets no limit")),
         }

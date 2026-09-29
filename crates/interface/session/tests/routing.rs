@@ -20,11 +20,13 @@ use orla_session::replay::{self, Replayer};
 /// A backend that knows its own prepared state, as a device backend does:
 /// it marks what it prepares with its name and refuses to run what
 /// another backend prepared. It may decline half the Kernels, those whose
-/// id's bytes sum to `half` modulo 2.
+/// id's bytes sum to `half` modulo 2, and may say it is a device, so a
+/// run small enough leaves it.
 struct Owned {
     name: &'static str,
     inner: Box<dyn Backend>,
     half: Option<u32>,
+    device: bool,
 }
 
 /// Prepared state marked with the backend that prepared it.
@@ -71,6 +73,9 @@ impl Backend for Owned {
     }
     fn uploaded(&self) -> u64 {
         self.inner.uploaded()
+    }
+    fn has_device(&self) -> bool {
+        self.device
     }
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
         let inner = self.inner.prepare(module)?;
@@ -147,25 +152,41 @@ fn replays() -> Vec<PathBuf> {
     out
 }
 
-/// A session over the replay's scene: on the JIT, or on the JIT with the
-/// half `half` names left to the interpreter.
-fn opened(replay: &replay::Replay, half: Option<u32>) -> Session {
+/// How a session leaves Kernels to the interpreter: the half a sum of
+/// their ids names, or every run small enough, the JIT saying it is a
+/// device.
+#[derive(Clone, Copy)]
+enum Split {
+    Half(u32),
+    Sized,
+}
+
+/// A session over the replay's scene: on the JIT, or on the JIT with what
+/// `split` names left to the interpreter.
+fn opened(replay: &replay::Replay, split: Option<Split>) -> Session {
     let limits = orla_session::Limits::default();
-    let runtime = if let Some(half) = half {
+    let runtime = if let Some(split) = split {
+        let (half, device) = match split {
+            Split::Half(half) => (Some(half), false),
+            Split::Sized => (None, true),
+        };
         let mut runtime = orla_kernel::Runtime::with_backends(
             limits.words,
             Box::new(Owned {
                 name: "main",
                 inner: Box::new(orla_jit::JitBackend::new().unwrap()),
-                half: Some(half),
+                half,
+                device,
             }),
             Some(Box::new(Owned {
                 name: "ordered",
                 inner: Box::new(orla_cpu::CpuBackend),
                 half: None,
+                device: false,
             })),
         );
         runtime.host_mut().set_work(limits.work);
+        runtime.set_small(limits.small);
         runtime
     } else {
         Session::runtime_for("jit", limits).unwrap()
@@ -192,17 +213,17 @@ fn outputs(session: &mut Session, report: &orla_graph::Report) -> Vec<(String, V
         .collect()
 }
 
-/// What `path`'s replay found different with the half `half` names left
-/// to the interpreter, how many frames it compared, and how many Kernels
-/// ran routed.
-fn compared(path: &Path, half: u32) -> (Vec<String>, usize, usize) {
+/// What `path`'s replay found different with what `split` names left to
+/// the interpreter, how many frames it compared, and how many Kernels ran
+/// routed, or, split by size, how many runs left the main backend.
+fn compared(path: &Path, split: Split) -> (Vec<String>, usize, usize) {
     let mut wrong = Vec::new();
     let mut frames = 0;
     let text = std::fs::read_to_string(path).unwrap();
     let replay = replay::parse(&text, path.parent().unwrap()).unwrap();
     let mut whole = opened(&replay, None);
-    let mut halved = opened(&replay, Some(half));
-    let routed = halved
+    let mut halved = opened(&replay, Some(split));
+    let mut routed = halved
         .runtime()
         .kernels()
         .filter(|version| halved.runtime().placement(version).routed.is_some())
@@ -229,6 +250,13 @@ fn compared(path: &Path, half: u32) -> (Vec<String>, usize, usize) {
             }
         };
         frames += 1;
+        if let Split::Sized = split {
+            routed += y
+                .placements
+                .iter()
+                .filter(|placed| placed.routed.is_some())
+                .count();
+        }
         let (p, q) = (outputs(&mut whole, &x), outputs(&mut halved, &y));
         for ((name, a), (_, b)) in p.iter().zip(&q) {
             if a != b {
@@ -259,7 +287,7 @@ fn where_a_kernel_runs_changes_no_output_of_any_example() {
                     let Some(path) = paths.get(at) else { break };
                     // Each half of the Kernels routed in one of two runs.
                     for half in [0, 1] {
-                        let found = compared(path, half);
+                        let found = compared(path, Split::Half(half));
                         results.lock().unwrap().push(found);
                     }
                 }
@@ -272,5 +300,35 @@ fn where_a_kernel_runs_changes_no_output_of_any_example() {
     let wrong: Vec<String> = results.into_iter().flat_map(|(wrong, ..)| wrong).collect();
     assert!(frames > 0, "no frame was compared");
     assert!(routed > 0, "no Kernel ran routed");
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// A run small enough goes to the ordered backend, which prepares the
+/// Kernel for itself the first time; every output of every example is the
+/// same words as on the JIT alone.
+#[test]
+fn a_run_placed_by_its_size_changes_no_output_of_any_example() {
+    let paths = replays();
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let results = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| {
+                loop {
+                    let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(path) = paths.get(at) else { break };
+                    let found = compared(path, Split::Sized);
+                    results.lock().unwrap().push(found);
+                }
+            });
+        }
+    });
+    let results = results.into_inner().unwrap();
+    let frames: usize = results.iter().map(|(_, frames, _)| frames).sum();
+    let placed: usize = results.iter().map(|(_, _, placed)| placed).sum();
+    let wrong: Vec<String> = results.into_iter().flat_map(|(wrong, ..)| wrong).collect();
+    assert!(frames > 0, "no frame was compared");
+    assert!(placed > 0, "no run left the main backend by its size");
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }

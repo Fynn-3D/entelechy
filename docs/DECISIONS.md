@@ -225,6 +225,41 @@ a bounce, friction on a slope and a kinematic platform to their
 closed forms, and [`many.replay`](../examples/physics/tests/many.replay)
 the grid's pairs to every pair asked, on all three backends.
 
+## A small run goes to the processor; a device is for many elements
+
+When the main backend is a device and the JIT runs beside it, each run of
+a Kernel goes to the one its size suits: to the JIT when its elements
+times its Kernel's typical work (`Validated::typical_work`, an estimate
+of operations per element from the IR) are at most `--small`, 400,000 by
+default; to the device otherwise. A Kernel the device declines always
+runs on the JIT. A small run that reads a Field the device made in this
+evaluation stays on the device, since bringing it back would wait for
+the device's work before it; a Field made before, state or an input,
+comes back once. A Field uploaded from memory keeps its words in memory
+beside the device's copy, as a Field is a value, so neither side sends
+it back again. The report says where each run went and why; `--small 0`
+keeps every run on the device.
+
+**Why.** A device's dispatch costs about the same whatever it does:
+80 microseconds on the machine it was measured on, where a chain of two
+hundred small runs takes 15.6 ms on the device and 0.73 ms on the JIT,
+and a step of sixty-seven rigid bodies 10.6 ms against 0.57 ms. Submitting
+them together, or in one pass, costs the same: the time is the dependent
+dispatches themselves. A device earns its cost over many elements, so
+where a run goes follows its size, not whether it draws or computes. The
+choice reads the run's elements and the Kernel, never a clock, so a
+replay places every run the same way each time. A run may round its
+last bits differently on the two, so a decision two Kernels share is
+made in one (see *The rasterizer is a package*).
+
+**Where.** `Runtime::execute` in [`orla-kernel`](../crates/core/kernel/src/lib.rs),
+the estimate in [`orla-ir`](../crates/core/ir/src/lib.rs), the kept
+words in [`orla-host`](../crates/core/host/src/lib.rs);
+[`routing.rs`](../crates/interface/session/tests/routing.rs) holds every
+example's outputs to the JIT's alone with small runs placed off a main
+backend, and the verify recipe replays every example on the device with
+`--small 0` as well.
+
 ## A Kernel's effects are data the Host carries out after a commit
 
 A Kernel never writes a file. A scene declares that an output is also

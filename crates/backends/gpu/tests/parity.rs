@@ -1563,6 +1563,9 @@ fn a_node_off_the_device_says_what_its_trip_carried() {
     };
     let mut runtime =
         orla_kernel::Runtime::with_backends(1 << 20, Box::new(gpu), Some(Box::new(CpuBackend)));
+    // Only what the device declines leaves it, however small: its trips are
+    // what this test asks.
+    runtime.set_small(0);
     let mut publish = |source: &str| {
         let module = compile(source).unwrap();
         let candidate = runtime.prepare_module(module, source).unwrap();

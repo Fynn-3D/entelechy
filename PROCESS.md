@@ -148,6 +148,10 @@ replays() {
     printf '%s\n' examples/*/tests/*.replay |
       xargs -P 4 -n 1 ./target/release/orla replay --backend "$b" || return 1
   done
+  # The device runs every Kernel itself too, nothing left to the processor
+  # by its size.
+  printf '%s\n' examples/*/tests/*.replay |
+    xargs -P 4 -n 1 ./target/release/orla replay --backend gpu --small 0
 }
 wasi() {
   cargo build --release -p orla --target wasm32-wasip1 &&
