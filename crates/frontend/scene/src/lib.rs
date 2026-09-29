@@ -419,6 +419,24 @@ fn lower(
     lowering.out.graph.outputs = level.outputs;
     lowering.out.graph.fallbacks = level.fallbacks;
     lowering.out.files.writes = level.writes;
+    // A requirement the parameters as given break is refused as the
+    // document loads; one that reads the window waits for an evaluation,
+    // which checks every one again.
+    let graph = &lowering.out.graph;
+    let param = |name: &str| {
+        overrides.get(name).cloned().or_else(|| {
+            graph
+                .params
+                .iter()
+                .find(|p| p.name == name)
+                .map(|p| p.default.clone())
+        })
+    };
+    for requirement in graph.requirements.iter().filter(|r| !r.reads_context()) {
+        requirement
+            .check(&param, &|_| None)
+            .map_err(|e| error(Span::default(), format!("requirement {}", e.message)))?;
+    }
     Ok(lowering.out)
 }
 
@@ -2022,7 +2040,7 @@ output result <- a.result;
             "param wide: Int = 100;
              require positive: wide > 0;
              node a: graph \"grid.osn\" { columns = wide; }
-             node b: graph \"grid.osn\" { bits = 3; }
+             node b: graph \"grid.osn\" { bits = 7; }
              output result <- a.result;",
         )
         .unwrap();
@@ -2039,7 +2057,7 @@ output result <- a.result;
             [
                 "positive: wide > 0",
                 "a.cells: wide * 2 <= 1 << 12",
-                "b.cells: 64 * 2 <= 1 << 3"
+                "b.cells: 64 * 2 <= 1 << 7"
             ]
         );
         assert!(
@@ -2050,13 +2068,29 @@ output result <- a.result;
                 .ends_with(":3:21")
         );
         // What holds and what does not, with the root's param as given.
-        let param = |name: &str| (name == "wide").then_some(Value::Int(100));
+        let param = |wide: i32| move |name: &str| (name == "wide").then_some(Value::Int(wide));
         let none = |_: &str| None;
-        assert!(lowered.graph.requirements[1].check(&param, &none).is_ok());
-        let failed = lowered.graph.requirements[2]
-            .check(&param, &none)
+        assert!(
+            lowered.graph.requirements[1]
+                .check(&param(100), &none)
+                .is_ok()
+        );
+        let failed = lowered.graph.requirements[1]
+            .check(&param(3000), &none)
             .unwrap_err();
-        assert!(failed.message.contains("here 128 <= 8"), "{failed}");
+        assert!(
+            failed
+                .message
+                .contains("here 6000 <= 4096, with wide = 3000"),
+            "{failed}"
+        );
+        // Broken by the params as given, the document is refused as it loads.
+        let broken = orla_language::parse_document(
+            "node b: graph \"grid.osn\" { bits = 3; } output result <- b.result;",
+        )
+        .unwrap();
+        let refused = load(&broken, "", "main", Path::new("root"), &mut loader).unwrap_err();
+        assert!(refused.message.contains("here 128 <= 8"), "{refused}");
         // A root graph's requirement prints and reads back.
         let graph = parse(
             "param wide: Int = 4;\nrequire cells: wide * wide <= 1 << 5;\nnode n: t.k@1 { domain = wide; }\noutput result <- n.result;\n",

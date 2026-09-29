@@ -516,7 +516,7 @@ pub fn forms() -> Vec<Form> {
             "require",
             "graph",
             "require cells: columns * rows <= 1 << bits;",
-            "What the scene's parameters must hold to run: two counts over its params, numbers, `window()` and `scale()`, compared. It is checked before every evaluation; one that does not hold stops it before anything runs and says what each side came to. A placed graph's come with it, under its node's name.",
+            "What the scene's parameters must hold to run: two counts over its params, numbers, `window()` and `scale()`, compared. It is checked as the scene loads (`check` and `compose` refuse one the given params break) and before every evaluation, which stops before anything runs; each says what the sides came to. A placed graph's come with it, under its node's name.",
         ),
         form(
             "use",

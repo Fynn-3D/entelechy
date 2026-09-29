@@ -2947,8 +2947,9 @@ output result <- o.result;
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A requirement the parameters break stops the evaluation before
-/// anything runs, and says what it came to; as given, the scene runs.
+/// A requirement the parameters break is refused as the scene loads, and
+/// stops an evaluation before anything runs when a param set later breaks
+/// it; each says what it came to. As given, the scene runs.
 #[test]
 fn a_requirement_the_parameters_break_stops_the_evaluation() {
     let dir = std::env::temp_dir().join(format!("orla-require-{}", std::process::id()));
@@ -2993,5 +2994,20 @@ output result <- n.result;
         "{said}"
     );
     assert!(said.contains(":3:9)"), "{said}");
+    // Set while the scene runs, the evaluation after refuses it.
+    let replay = dir.join("scene.replay");
+    std::fs::write(&replay, "scene scene.osn\nframe 0\nparam bits 5\nframe 1\n").unwrap();
+    let replayed = Command::new(env!("CARGO_BIN_EXE_orla"))
+        .arg("replay")
+        .arg(&replay)
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&replayed.stdout);
+    assert!(!replayed.status.success());
+    assert!(
+        said.contains("frame at 1: the graph's requirement `keys`"),
+        "{said}{}",
+        String::from_utf8_lossy(&replayed.stderr)
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

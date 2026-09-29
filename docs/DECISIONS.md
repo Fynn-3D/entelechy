@@ -706,9 +706,10 @@ and [the forms parsed](../crates/frontend/compiler/tests/help_examples.rs).
 `require name: a <= b;` is a scene's statement of what its parameters
 must hold to run: two counts, written as a `domain` writes them, from
 the graph's params, numbers, `window()` and `scale()`, compared. It is
-checked before every evaluation with the parameters as they stand, and
-one that fails stops the evaluation before any node runs, naming the
-requirement, where it is written and what each side came to. A placed
+checked as the document loads, with the parameters as given, and before
+every evaluation with the parameters as they stand; one that fails
+refuses the document or stops the evaluation before any node runs,
+naming the requirement, where it is written and what each side came to. A placed
 graph's requirements come with it, reading what the parent passed. The
 physics package requires its grid's cells to fit the bits its sort
 orders; the sort requires 1 to 31 bits.

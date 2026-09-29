@@ -728,10 +728,13 @@ be keywords.
 13. `require name: a <= b;` is what a graph's parameters must hold for
     it to run: two counts, as a `domain` writes them from the graph's
     parameters, numbers, `window()` and `scale()`, compared with `<`,
-    `<=`, `>`, `>=`, `==` or `!=`. It is checked before every
-    evaluation, with the parameters as the caller set them; one that
-    does not hold stops the evaluation before anything runs, naming the
-    requirement, where it is written, and what each side came to. A
+    `<=`, `>`, `>=`, `==` or `!=`. It is checked as the document loads
+    (so `check` and a `compose` refuse one broken by the parameters as
+    given; one that reads the window waits for an evaluation), and
+    before every evaluation with the parameters as the caller set them;
+    one that does not hold stops the evaluation before anything runs.
+    Each names the requirement, where it is written, and what each side
+    came to. A
     placed graph's requirements come with it, named under the node that
     places it, reading what the parent passed. `require cells: columns *
     rows <= 1 << bits;` is how the physics package says its sort holds

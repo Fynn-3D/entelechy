@@ -722,6 +722,21 @@ impl Requirement {
         }
     }
 
+    /// Whether it reads the window or its scale, which only an
+    /// evaluation knows.
+    pub fn reads_context(&self) -> bool {
+        fn reads(expr: &DomainExpr) -> bool {
+            match expr {
+                DomainExpr::Context(_) => true,
+                DomainExpr::Vector(parts) | DomainExpr::Call(_, parts) => parts.iter().any(reads),
+                DomainExpr::Neg(inner) => reads(inner),
+                DomainExpr::Binary(_, a, b) => reads(a) || reads(b),
+                _ => false,
+            }
+        }
+        reads(&self.left) || reads(&self.right)
+    }
+
     /// Whether it holds under `param` and `context`; the error says what
     /// each side came to and the parameters it read.
     pub fn check(
