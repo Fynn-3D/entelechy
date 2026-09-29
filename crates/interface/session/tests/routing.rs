@@ -391,3 +391,34 @@ fn rounding_that_differs_from_kernel_to_kernel_breaks_no_example() {
     let failures = failures.into_inner().unwrap();
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// The physics step's pair finding is small work: its loops that count
+/// rounds of the loop limit run once, so on a device its runs go to the
+/// processor and the step does not follow them onto the device.
+#[test]
+fn the_physics_steps_small_runs_leave_the_device() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../examples/physics/tests/physics.replay");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let replay = replay::parse(&text, path.parent().unwrap()).unwrap();
+    let mut session = opened(&replay, Some(Split::Sized));
+    let mut player = Replayer::start(&replay, &mut session);
+    let frame = player.next_frame(&mut session).unwrap().unwrap();
+    let report = session.evaluate(&frame.context).unwrap();
+    // Each step of the frame's, `world/1.pair_counts` and on.
+    for node in [".pair_counts", ".pairs", ".collide"] {
+        let runs: Vec<_> = report
+            .placements
+            .iter()
+            .filter(|placed| placed.node.0.ends_with(node))
+            .collect();
+        assert!(!runs.is_empty(), "{node} ran");
+        for placed in runs {
+            assert!(
+                placed.routed.is_some(),
+                "{} stayed on the device",
+                placed.node
+            );
+        }
+    }
+}

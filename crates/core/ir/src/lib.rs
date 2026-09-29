@@ -1426,6 +1426,39 @@ fn block_work(instructions: &[Instruction], functions: &[u64]) -> u64 {
 pub const TYPICAL_OPEN_LOOP: u32 = 4;
 
 fn typical_block(instructions: &[Instruction], functions: &[u64]) -> u64 {
+    let mut defined = std::collections::HashMap::new();
+    defining(instructions, &mut defined);
+    typical_in(instructions, functions, &defined)
+}
+
+/// Every value's defining operation, nested blocks included.
+fn defining<'a>(
+    instructions: &'a [Instruction],
+    out: &mut std::collections::HashMap<ValueId, &'a Op>,
+) {
+    for instruction in instructions {
+        out.insert(instruction.id, &instruction.op);
+        for block in instruction.op.blocks() {
+            defining(&block.body, out);
+        }
+    }
+}
+
+/// Whether a loop's count is a number of rounds of the loop limit, a
+/// count divided by [`MAX_LOOP_COUNT`] or more (`(n + 65535) / 65536`):
+/// one round for any count one loop can take.
+fn counts_rounds(bound: ValueId, defined: &std::collections::HashMap<ValueId, &Op>) -> bool {
+    let Some(Op::Binary(BinaryOp::Div, _, by)) = defined.get(&bound) else {
+        return false;
+    };
+    matches!(defined.get(by), Some(Op::Const(Value::Int(limit))) if i64::from(*limit) >= i64::from(MAX_LOOP_COUNT))
+}
+
+fn typical_in(
+    instructions: &[Instruction],
+    functions: &[u64],
+    defined: &std::collections::HashMap<ValueId, &Op>,
+) -> u64 {
     instructions.iter().fold(0u64, |sum, instruction| {
         let work = match &instruction.op {
             Op::Loop {
@@ -1435,12 +1468,14 @@ fn typical_block(instructions: &[Instruction], functions: &[u64]) -> u64 {
                 body,
                 ..
             } => {
-                let inner = typical_block(&body.body, functions).saturating_add(
+                let inner = typical_in(&body.body, functions, defined).saturating_add(
                     until
                         .as_ref()
-                        .map_or(0, |b| typical_block(&b.body, functions)),
+                        .map_or(0, |b| typical_in(&b.body, functions, defined)),
                 );
-                let runs = if bound.is_some() || until.is_some() {
+                let runs = if bound.is_some_and(|bound| counts_rounds(bound, defined)) {
+                    1
+                } else if bound.is_some() || until.is_some() {
                     (*count).min(TYPICAL_OPEN_LOOP)
                 } else {
                     *count
@@ -1449,15 +1484,17 @@ fn typical_block(instructions: &[Instruction], functions: &[u64]) -> u64 {
             }
             Op::If {
                 then, otherwise, ..
-            } => {
-                typical_block(&then.body, functions).max(typical_block(&otherwise.body, functions))
-            }
+            } => typical_in(&then.body, functions, defined).max(typical_in(
+                &otherwise.body,
+                functions,
+                defined,
+            )),
             Op::Match {
                 arms, otherwise, ..
             } => arms
                 .iter()
-                .map(|(_, block)| typical_block(&block.body, functions))
-                .fold(typical_block(&otherwise.body, functions), u64::max),
+                .map(|(_, block)| typical_in(&block.body, functions, defined))
+                .fold(typical_in(&otherwise.body, functions, defined), u64::max),
             Op::Call(index, _) => functions.get(*index as usize).copied().unwrap_or(0),
             _ => 0,
         };
@@ -1517,7 +1554,8 @@ impl Module {
     /// The operations one element takes as a rule, at least one: each
     /// instruction one; a loop of a written count runs its body that many
     /// times, one whose count is read at run time, or that may stop early,
-    /// [`TYPICAL_OPEN_LOOP`] times at most; the longer branch arm; a call
+    /// [`TYPICAL_OPEN_LOOP`] times at most, and one counting rounds of the
+    /// loop limit once; the longer branch arm; a call
     /// what its function takes. An estimate of size, for choosing where a
     /// run goes, never a bound.
     pub fn typical_work(&self) -> u64 {
