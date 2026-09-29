@@ -85,3 +85,25 @@ fn orla_alone_prints_every_command() {
         );
     }
 }
+
+/// A file `--out` or `--save` names in no format Orla writes is refused
+/// as the command is read, before any scene runs, naming the formats.
+#[test]
+fn an_output_in_no_written_format_is_refused_before_the_scene_runs() {
+    for args in [
+        ["run", "no-such-scene.osn", "--out", "/dev/null"],
+        ["run", "no-such-scene.osn", "--save", "x.result=notes.txt"],
+    ] {
+        let output = orla(&args);
+        assert!(!output.status.success());
+        let text = stderr(&output);
+        assert!(
+            text.contains("names no format Orla writes") && text.contains(".png"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("no-such-scene"),
+            "the scene was read: {text}"
+        );
+    }
+}

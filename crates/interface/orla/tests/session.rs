@@ -446,7 +446,7 @@ fn run_writes_only_the_files_named_each_as_its_name_says() {
     let (ok, stderr) = run(&["--out", "frame.txt"]);
     assert!(!ok);
     assert!(
-        stderr.contains("cannot write") && stderr.contains("use .field, .png"),
+        stderr.contains("names no format Orla writes") && stderr.contains("use .field, .png"),
         "{stderr}"
     );
     assert_eq!(files(&dir), ["frame.png", "frame.ppm", "saved.png"]);

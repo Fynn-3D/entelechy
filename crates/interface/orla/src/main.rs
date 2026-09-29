@@ -157,7 +157,9 @@ fn parse_save(binding: &str) -> Result<(String, String, PathBuf), String> {
     let (node, port) = orla_graph::split_port(target)
         .map(|(node, port)| (node.0, port))
         .unwrap_or_else(|| (target.to_owned(), "result".to_owned()));
-    Ok((node, port, PathBuf::from(path)))
+    let path = PathBuf::from(path);
+    orla_formats::writable(&path).map_err(|why| format!("--save: {why}"))?;
+    Ok((node, port, path))
 }
 
 fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
@@ -277,7 +279,11 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
         let mut value = |flag: &str| iter.next().ok_or_else(|| format!("{flag} needs a value"));
         match arg.as_str() {
             "--window" => options.window = Some(orla_session::parse_window(&value("--window")?)?),
-            "--out" => options.out = Some(PathBuf::from(value("--out")?)),
+            "--out" => {
+                let out = PathBuf::from(value("--out")?);
+                orla_formats::writable(&out).map_err(|why| format!("--out: {why}"))?;
+                options.out = Some(out);
+            }
             "--watch" => options.watch = true,
             "--profile" => options.profile = true,
             "--save" => options.saves.push(parse_save(&value("--save")?)?),

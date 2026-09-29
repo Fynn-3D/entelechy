@@ -32,6 +32,21 @@ pub const DEFAULT_RATE: u32 = 48_000;
 /// The quarter notes a minute a MIDI file is written at by default.
 pub const DEFAULT_BEATS: f32 = 120.0;
 
+/// The extensions [`encode`] writes.
+pub const WRITTEN: [&str; 7] = ["field", "png", "ppm", "pgm", "wav", "mid", "midi"];
+
+/// Whether [`encode`] writes a file of `path`'s extension; the error says
+/// which extensions it writes.
+pub fn writable(path: &Path) -> Result<(), String> {
+    if WRITTEN.contains(&extension(path).as_str()) {
+        return Ok(());
+    }
+    Err(format!(
+        "{} names no format Orla writes; {KNOWN}",
+        path.display()
+    ))
+}
+
 /// A file's extension, lowercased; empty when it has none.
 pub fn extension(path: &Path) -> String {
     path.extension()

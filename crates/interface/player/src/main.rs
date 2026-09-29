@@ -550,6 +550,10 @@ impl ApplicationHandler for Player {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        println!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
     let options = match parse(&args) {
         Ok(options) => options,
         Err(message) => {
