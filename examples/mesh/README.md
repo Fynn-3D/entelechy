@@ -17,6 +17,10 @@ for bit on the interpreter and the JIT; on the GPU it is the device's
 rasterizer, and edge pixels may differ. `tests/near.replay` pins the
 rasterizer's edge contract: a triangle with a corner at `w <= 0` is
 skipped whole, and so is a triangle whose three corners are one vertex.
+`tests/degenerate.replay` holds that a triangle with two corners at one
+point draws nothing, and that the tiled forms draw what the one-pass forms
+draw, on every backend: each triangle's box is found once and every step
+reads it, so no step can round it differently from another.
 
 ```sh
 orla player examples/mesh/scene.osn --backend gpu

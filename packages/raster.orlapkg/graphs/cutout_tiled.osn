@@ -24,28 +24,28 @@ param pool: Int = 4096;
 // fragment gives.
 node empty: Grid<Long> { domain = vec2(width, height); value = 9223372036854775807l; }
 
+// Each triangle's box, found once: every step below reads it.
+node boxes: raster.boxes@1 { triangles <- triangles; vertices <- vertices; canvas <- empty.result; }
+
 // Triangles of a tile or less cover their own box; larger ones are cut
 // into tiles, counted, ranked by a prefix, and covered a tile to an
 // invocation, starting from the keys the small ones left.
-node cover: raster.cover_cutout@2 {
+node cover: raster.cover_cutout@3 {
     triangles <- triangles;
     vertices <- vertices;
+    boxes <- boxes.result;
     mask <- mask;
     keys <- empty.result;
     cutout = cutout;
     tile = tile;
 }
-node tiles: raster.tiles@1 {
-    triangles <- triangles;
-    vertices <- vertices;
-    canvas <- empty.result;
-    tile = tile;
-}
+node tiles: raster.tiles@2 { boxes <- boxes.result; tile = tile; }
 node offsets: raster.offsets@1 { counts <- tiles.result; }
 node total: raster.total@1 { offsets <- offsets.result; domain = 1; }
-node covered: raster.cover_cutout_tiles@1 {
+node covered: raster.cover_cutout_tiles@2 {
     triangles <- triangles;
     vertices <- vertices;
+    boxes <- boxes.result;
     counts <- tiles.result;
     offsets <- offsets.result;
     total <- total.result;

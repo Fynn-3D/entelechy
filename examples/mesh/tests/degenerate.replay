@@ -1,0 +1,10 @@
+scene degenerate.osn
+window 320 240
+
+# Triangles whose last two corners are one point draw nothing in any of
+# the package's forms, and nothing fails; the ordinary ones among them
+# draw the same surface tiled and in one pass, to the bit.
+frame 0.0
+expect flat.result[0] = 0
+expect split.result[0] = 0
+expect drawn.result[0] > 50000
