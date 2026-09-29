@@ -126,18 +126,45 @@ impl Builder<'_> {
                         // Two widths of one kind meet through a conversion.
                         let widths = [a.scalar(), b.scalar()];
                         let hint = self.truncated_hint(&[left, right]);
-                        let hint = if !hint.is_empty() {
-                            hint
-                        } else if widths.contains(&Some(Type::Float))
-                            && widths.contains(&Some(Type::Double))
-                        {
-                            "; a float and a double meet through `double(..)` or `float(..)`"
-                        } else if widths.contains(&Some(Type::Int))
-                            && widths.contains(&Some(Type::Long))
-                        {
-                            "; an int and a long meet through `long(..)` or `int(..)`"
-                        } else {
-                            ""
+                        // Two kinds of number meet through a conversion,
+                        // each named by its own.
+                        let named = |ty: Option<Type>| match ty {
+                            Some(Type::Float) => Some(("a float", "float")),
+                            Some(Type::Int) => Some(("an int", "int")),
+                            Some(Type::Double) => Some(("a double", "double")),
+                            Some(Type::Long) => Some(("a long", "long")),
+                            _ => None,
+                        };
+                        // A vector keeps its kind; the scalar beside it
+                        // converts.
+                        let vector = |ty: Type| ty.scalar() != Some(ty);
+                        let hint = match (named(widths[0]), named(widths[1])) {
+                            _ if !hint.is_empty() => hint.to_owned(),
+                            (Some((x, to_x)), Some((y, to_y))) if x != y => {
+                                match (vector(a), vector(b)) {
+                                    (true, false) => format!("; convert the {to_y}: `{to_x}(..)`"),
+                                    (false, true) => format!("; convert the {to_x}: `{to_y}(..)`"),
+                                    // Two vectors: the wider one's builder
+                                    // takes the other.
+                                    (true, true) => {
+                                        let rank = |ty: Type| match ty.scalar() {
+                                            Some(Type::Double) => 3,
+                                            Some(Type::Float) => 2,
+                                            Some(Type::Long) => 1,
+                                            _ => 0,
+                                        };
+                                        let (wide, narrow) = if rank(a) >= rank(b) { (a, b) } else { (b, a) };
+                                        format!(
+                                            "; convert the {narrow}: `{}(..)`",
+                                            wide.to_string().to_lowercase()
+                                        )
+                                    }
+                                    _ => format!(
+                                        "; {x} and {y} meet through a conversion: `{to_x}(..)` the {to_y}, or `{to_y}(..)` the {to_x}"
+                                    ),
+                                }
+                            }
+                            _ => String::new(),
                         };
                         semantic(
                             expr.span,

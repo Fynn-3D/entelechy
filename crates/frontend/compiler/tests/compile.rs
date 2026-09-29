@@ -855,6 +855,32 @@ fn arrays_are_typed_built_indexed_and_checked() {
 }
 
 #[test]
+fn two_kinds_of_number_are_refused_with_the_conversion_that_joins_them() {
+    let kernel = |body: &str| {
+        format!(
+            "kernel t.k@1 {{ requires {{ field.write; }} output r: Rows<Float>; compute {{ {body} }} }}"
+        )
+    };
+    for (body, says) in [
+        (
+            "let x = 1.0; return x + element();",
+            "cannot apply `+` to Float and Int; a float and an int meet through a conversion: `float(..)` the int, or `int(..)` the float",
+        ),
+        (
+            "return float(1.0d + element());",
+            "cannot apply `+` to Double and Int; a double and an int meet through a conversion: `double(..)` the int, or `int(..)` the double",
+        ),
+        (
+            "return (vec2(1.0, 2.0) * element()).x;",
+            "cannot apply `*` to Vec2 and Int; convert the int: `float(..)`",
+        ),
+    ] {
+        let (_, message) = semantic(&kernel(body));
+        assert_eq!(message, says, "{body}");
+    }
+}
+
+#[test]
 fn a_number_written_past_the_largest_float_that_stays_a_float_is_refused() {
     let kernel = |ty: &str, body: &str| {
         format!(
@@ -1009,7 +1035,10 @@ fn integer_vectors_address_fields_without_conversions_in_the_source() {
     let (_, message) = semantic(&format!(
         "{head}let c = ivec2(1, 2) + vec2(1.0, 2.0); return 0.0; }} }}"
     ));
-    assert_eq!(message, "cannot apply `+` to IVec2 and Vec2");
+    assert_eq!(
+        message,
+        "cannot apply `+` to IVec2 and Vec2; convert the IVec2: `vec2(..)`"
+    );
     let (_, message) = semantic(&format!(
         "{head}let c = ivec2(1, 2) + ivec3(1, 2, 3); return 0.0; }} }}"
     ));
