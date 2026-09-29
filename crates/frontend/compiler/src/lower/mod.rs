@@ -432,7 +432,7 @@ pub(crate) fn lower(
                 ),
             ));
         }
-        builder.finish(split.unwrap_or_else(|| vec![result]))
+        builder.finish(split.unwrap_or_else(|| vec![result]))?
     };
     let merge = match &kernel.merge {
         None => None,
@@ -459,7 +459,7 @@ pub(crate) fn lower(
                     ),
                 ));
             }
-            Some(builder.finish(vec![result]))
+            Some(builder.finish(vec![result])?)
         }
     };
     let init = match &kernel.carry {
@@ -479,7 +479,7 @@ pub(crate) fn lower(
                     ),
                 ));
             }
-            Some(builder.finish(vec![result]))
+            Some(builder.finish(vec![result])?)
         }
     };
     let Shared { functions, .. } = shared;
@@ -614,7 +614,7 @@ fn lower_function_body(
         .take()
         .map(RefCell::into_inner)
         .unwrap_or_default();
-    Ok((builder.finish(vec![result]), needs))
+    Ok((builder.finish(vec![result])?, needs))
 }
 
 /// A template instance: its name, the input ports bound to its Field
@@ -677,6 +677,9 @@ struct Builder<'a> {
     /// Written integers a division truncated (`1 / 2`); a float or
     /// double refuses them.
     truncated: BTreeSet<u32>,
+    /// Written numbers past the largest `Float`, where each is written;
+    /// one still a `Float` when the function is finished is refused.
+    too_large: std::collections::HashMap<u32, Span>,
 }
 
 impl<'a> Builder<'a> {
@@ -701,6 +704,7 @@ impl<'a> Builder<'a> {
             literals: std::collections::HashMap::new(),
             aggregates: BTreeSet::new(),
             truncated: BTreeSet::new(),
+            too_large: std::collections::HashMap::new(),
         }
     }
 
@@ -720,15 +724,44 @@ impl<'a> Builder<'a> {
         self.emit(kind, Op::Intrinsic(intrinsic, vec![id]))
     }
 
-    fn finish(mut self, results: Vec<ValueId>) -> Function {
+    fn finish(mut self, results: Vec<ValueId>) -> Result<Function, CompileError> {
+        // A written number past the largest `Float` that stayed one.
+        let mut large: Vec<(u32, Span)> = self
+            .too_large
+            .iter()
+            .map(|(id, span)| (*id, *span))
+            .collect();
+        large.sort_by_key(|(_, span)| (span.line, span.column));
+        for (id, _) in large {
+            self.refuse_large(ValueId(id))?;
+        }
         let body = self.buffers.pop().unwrap_or_default();
-        Function {
+        Ok(Function {
             name: self.name,
             args: self.args.into_iter().map(|(_, ty)| ty).collect(),
             body,
             results,
             bindings: self.bindings,
+        })
+    }
+
+    /// Refuses a written number past the largest `Float` that is a
+    /// `Float`.
+    fn refuse_large(&self, id: ValueId) -> Result<(), CompileError> {
+        let (Some(span), Some(orla_ir::Number::Double(written))) =
+            (self.too_large.get(&id.0), self.literals.get(&id.0))
+        else {
+            return Ok(());
+        };
+        if self.types[id.0 as usize] != Type::Float {
+            return Ok(());
         }
+        Err(semantic(
+            *span,
+            format!(
+                "`{written:e}` is past the largest `Float`; write it as a `Double`, `{written:e}d`"
+            ),
+        ))
     }
 
     /// Reserves the next value id; `place` emits into it.
@@ -957,6 +990,7 @@ impl<'a> Builder<'a> {
                 }
                 let id = self.value(value)?;
                 // A name fixes a number's width: every use sees one value.
+                self.refuse_large(id)?;
                 self.literals.remove(&id.0);
                 self.aggregates.remove(&id.0);
                 self.truncated.remove(&id.0);

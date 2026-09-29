@@ -265,7 +265,10 @@ alone takes the width it meets as a whole (given to a `DVec3` or `[Double;
 2]`, beside one in an operation, among `if` branches or array elements).
 With no width named, a written float is a `Float` and a written integer
 an `Int`; `0.1d` and `8l` name it. A `let` keeps the width it was named
-with.
+with. A written number past the largest `Float` that comes to be one
+(`return 1e39;` into a `Float`, `1e20 * 1e20`) is refused, saying to
+write it as a `Double`; one past the largest `Double` is refused as it
+is read.
 
 Each 64-bit scalar is two words, low first, in a Field, a parameter and
 the protocol (an element of `Rows<DVec3>` is six words). Doubles take

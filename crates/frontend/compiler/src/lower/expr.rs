@@ -13,7 +13,11 @@ impl Builder<'_> {
     /// Lowers an expression that must produce a plain value (not an image).
     pub(super) fn value(&mut self, expr: &Expr) -> Result<ValueId, CompileError> {
         match &expr.kind {
-            ExprKind::Float(value) => Ok(self.written(orla_ir::Number::Double(*value))),
+            ExprKind::Float(value) => {
+                let id = self.written(orla_ir::Number::Double(*value));
+                self.mark_large(id, expr.span);
+                Ok(id)
+            }
             ExprKind::Int(value) => Ok(self.written(orla_ir::Number::Long(*value))),
             ExprKind::Double(value) => {
                 Ok(self.emit(Type::Double, Op::Const(Value::Double(*value))))
@@ -101,6 +105,7 @@ impl Builder<'_> {
                 let right = self.value(right)?;
                 // Written numbers meet as their exact values.
                 if let Some(folded) = self.fold_written(op, left, right) {
+                    self.mark_large(folded, expr.span);
                     return Ok(folded);
                 }
                 // What was written, for a refusal to name.
@@ -1045,6 +1050,7 @@ impl Builder<'_> {
         if op == UnaryOp::Neg
             && let Some(negated) = self.negate_written(inner)
         {
+            self.mark_large(negated, span);
             return Ok(negated);
         }
         let ty = self.ty(inner);

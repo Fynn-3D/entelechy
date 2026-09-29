@@ -855,6 +855,37 @@ fn arrays_are_typed_built_indexed_and_checked() {
 }
 
 #[test]
+fn a_number_written_past_the_largest_float_that_stays_a_float_is_refused() {
+    let kernel = |ty: &str, body: &str| {
+        format!(
+            "kernel t.k@1 {{ requires {{ field.write; }} output r: Rows<{ty}>; compute {{ {body} }} }}"
+        )
+    };
+    for body in [
+        "return 1e39;",
+        "return 1e20 * 1e20;",
+        "return -1e39;",
+        "let x = 1e39; return x;",
+        "let v = vec2(1e39, 1.0); return v.x;",
+    ] {
+        let (_, message) = semantic(&kernel("Float", body));
+        assert!(
+            message.contains("past the largest `Float`"),
+            "{body}: {message}"
+        );
+    }
+    // A Double takes it, and a fold that comes back within a Float is one.
+    for (ty, body) in [
+        ("Double", "return 1e39;"),
+        ("Double", "return 1e20 * 1e20;"),
+        ("Float", "return 1e39 * 1e-10;"),
+        ("Float", "return float(element()) + 3e38;"),
+    ] {
+        assert!(compile(&kernel(ty, body)).is_ok(), "{ty}: {body}");
+    }
+}
+
+#[test]
 fn matrices_are_built_from_columns_multiplied_and_checked() {
     let module = compile(
         "kernel t.k@1 { requires { field.write; }

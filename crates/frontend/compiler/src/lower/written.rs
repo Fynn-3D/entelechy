@@ -25,6 +25,17 @@ impl Builder<'_> {
         id
     }
 
+    /// Marks a written number past the largest `Float` as written at
+    /// `span`, once; the operands a fold consumed are no longer.
+    pub(super) fn mark_large(&mut self, id: ValueId, span: orla_language::Span) {
+        if let Some(orla_ir::Number::Double(v)) = self.literals.get(&id.0)
+            && v.is_finite()
+            && (*v as f32).is_infinite()
+        {
+            self.too_large.entry(id.0).or_insert(span);
+        }
+    }
+
     /// Whether a value is unnamed written numbers all the way down.
     pub(super) fn is_written(&self, id: ValueId) -> bool {
         self.literals.contains_key(&id.0) || self.aggregates.contains(&id.0)
@@ -35,6 +46,8 @@ impl Builder<'_> {
     /// integer arithmetic to run.
     pub(super) fn fold_written(&mut self, op: BinaryOp, a: ValueId, b: ValueId) -> Option<ValueId> {
         let (x, y) = (*self.literals.get(&a.0)?, *self.literals.get(&b.0)?);
+        self.too_large.remove(&a.0);
+        self.too_large.remove(&b.0);
         let truncated = self.truncated.contains(&a.0) || self.truncated.contains(&b.0);
         let number = match (x, y) {
             (Number::Long(x), Number::Long(y)) => {
@@ -98,6 +111,7 @@ impl Builder<'_> {
             Number::Double(v) => Number::Double(-v),
             _ => return None,
         };
+        self.too_large.remove(&a.0);
         Some(self.written(number))
     }
 

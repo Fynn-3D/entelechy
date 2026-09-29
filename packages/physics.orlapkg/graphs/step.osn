@@ -14,7 +14,10 @@
 //! outside it is entered in the edge cells. `bits` is enough for
 //! `columns * rows`, which the graph requires. `substeps` are the passes a step takes, more for a
 //! pile many bodies deep that lands at once; `hertz` is how stiff a
-//! contact is, higher for a deep pile to sink into itself less.
+//! contact is, higher for a deep pile to sink into itself less. A step
+//! finds contacts where the bodies are at its start, so a box turning
+//! much of a turn in one step (150 radians a second at 30 m/s) may pass
+//! through a thin wall a corner swings across.
 use "../kernels/physics.orla";
 
 input bodies: Rows<Body>;
