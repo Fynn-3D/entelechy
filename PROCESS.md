@@ -116,20 +116,31 @@ formatted and linted, and by its own regression test, seen to fail
 without the change. A branch is verified by all of this once, before it
 merges, and compared [against main](#against-main); a failure is fixed on the branch and the whole run repeated. Run
 it in the background: each step is timed into `target/verify.log`, which
-`tail -f` shows as it goes, and the first step that fails stops the run with
-its output there.
+`tail -f` shows as it goes, with its output in `target/verify-<step>.out`.
+Steps that need nothing of one another run at once; the first to fail stops
+the run after the steps beside it, its output in the log.
 
 ```sh
 log=target/verify.log; : > "$log"
 step() {
-  name=$1; shift; start=$SECONDS
-  if "$@" > target/verify.out 2>&1; then
+  local name=$1; shift; local start=$SECONDS
+  if "$@" > "target/verify-$name.out" 2>&1; then
     printf '%-14s %4d s\n' "$name" $((SECONDS - start)) >> "$log"
   else
     printf '%-14s %4d s  FAILED\n' "$name" $((SECONDS - start)) >> "$log"
-    tail -40 target/verify.out >> "$log"; return 1
+    tail -40 "target/verify-$name.out" >> "$log"; return 1
   fi
 }
+# Steps that need nothing of one another, at once, each a function of its
+# name; the run goes on when all of them passed.
+together() {
+  for name in "$@"; do step "$name" "$name" & done
+  wait
+  ! grep -q FAILED "$log"
+}
+# The bridges wait on the programs they drive, so they run beside the rest.
+tests() { cargo test --workspace -- --skip bridge --skip blender; }
+bridges() { cargo test -p orla --test bridges; }
 # Replays are independent: several at once, each backend in turn; WASI has
 # no threads, so each replay there is one core, and eight run at once.
 replays() {
@@ -138,19 +149,41 @@ replays() {
       xargs -P 4 -n 1 ./target/release/orla replay --backend "$b" || return 1
   done
 }
-wasi_replays() {
+wasi() {
+  cargo build --release -p orla --target wasm32-wasip1 &&
   printf '%s\n' examples/*/tests/*.replay |
     xargs -P 8 -n 1 wasmtime run --dir . target/wasm32-wasip1/release/orla.wasm replay --backend cpu
+}
+# See Against main. Main's build is kept between runs, so an unchanged
+# main builds in seconds.
+against_main() {
+  local out=target/against-main
+  rm -rf "$out/main" "$out/branch" "$out/tree"; git worktree prune
+  mkdir -p "$out/main" "$out/branch"
+  git worktree add -f "$out/tree" main &&
+  CARGO_TARGET_DIR="$out/target" cargo build --release -p orla --manifest-path "$out/tree/Cargo.toml" || return 1
+  for scene in examples/*/scene.osn; do
+    local example=$(basename "$(dirname "$scene")")
+    for side in main branch; do
+      local orla=./target/release/orla; [ "$side" = main ] && orla="$out/target/release/orla"
+      local at="$out/$side/$example"
+      "$orla" check "$scene" > "$at.check" 2>&1
+      "$orla" graph "$scene" > "$at.graph" 2>&1
+      "$orla" run "$scene" --backend cpu --window 64x48 --out "$at.ppm" > "$at.run" 2>&1
+      [ -f "$at.ppm" ] && md5 -q "$at.ppm" > "$at.picture" && rm "$at.ppm"
+    done
+  done
+  git worktree remove --force "$out/tree"
+  diff -r -I 'evaluated in' "$out/main" "$out/branch"
 }
 step fmt cargo fmt --all &&
 step clippy cargo clippy --workspace --all-targets -- -D warnings &&
 step clippy-wasm cargo clippy -p orla-jit -p orla-ffi --features orla-jit/wasm-host --target wasm32-unknown-unknown -- -D warnings &&
 step clippy-page cargo clippy -p orla-gpu -p orla-session --target wasm32-unknown-unknown -- -D warnings &&
-step test cargo test --workspace &&
+step test-build cargo test --workspace --no-run &&
+together tests bridges &&
 step release cargo build --release &&
-step replays replays &&
-step wasi-build cargo build --release -p orla --target wasm32-wasip1 &&
-step wasi-replays wasi_replays &&
+together replays wasi against_main &&
 echo passed >> "$log"
 ```
 
@@ -171,25 +204,9 @@ branch merges, every example is also run by `main`'s build and by the
 branch's, and what each says is compared: its `check`, its `graph` (the
 plan), and its picture. Every difference is one the branch means, and its
 commit says so; any other is a fault to find before the merge.
-
-```sh
-out=target/against-main; rm -rf "$out"; mkdir -p "$out/main" "$out/branch"
-git worktree add -f "$out/tree" main &&
-CARGO_TARGET_DIR="$out/target" cargo build --release -p orla --manifest-path "$out/tree/Cargo.toml" &&
-for scene in examples/*/scene.osn; do
-  name=$(basename "$(dirname "$scene")")
-  for side in main branch; do
-    orla=./target/release/orla; [ "$side" = main ] && orla="$out/target/release/orla"
-    at="$out/$side/$name"
-    "$orla" check "$scene" > "$at.check" 2>&1
-    "$orla" graph "$scene" > "$at.graph" 2>&1
-    "$orla" run "$scene" --backend cpu --window 64x48 --out "$at.ppm" > "$at.run" 2>&1
-    [ -f "$at.ppm" ] && md5 -q "$at.ppm" > "$at.picture" && rm "$at.ppm"
-  done
-done
-git worktree remove --force "$out/tree"
-diff -r -I 'evaluated in' "$out/main" "$out/branch"
-```
+The `against_main` step of the verification does it, in
+`target/against-main`: `main` checked out beside the branch and built into a
+target directory kept between runs, and every difference printed.
 
 ## Handoff
 
