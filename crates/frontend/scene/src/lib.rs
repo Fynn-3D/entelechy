@@ -335,7 +335,7 @@ struct Lowering<'a, 'b> {
     aliases: Vec<orla_language::TypeAlias>,
     structs: Vec<orla_language::StructDecl>,
     functions: Vec<orla_language::FnDecl>,
-    /// Nodes `times` has placed so far, every level together.
+    /// Nodes placed so far, every level together.
     placed: usize,
     /// Each sub-graph document placed so far, read, parsed and declared
     /// once however often it is placed.
@@ -352,8 +352,8 @@ struct Read {
     functions: Vec<orla_language::FnDecl>,
 }
 
-/// The most nodes `times` places in one scene, every level together,
-/// bounding the loader's memory.
+/// The most nodes one scene places, every level of `times` and sub-graph
+/// placement together, bounding the loader's memory and work.
 pub const MAX_PLACED: usize = 1 << 16;
 
 /// A place in a document, as the `file:line:column` of Kernel
@@ -792,8 +792,14 @@ impl Lowering<'_, '_> {
                     ));
                 }
             };
-            self.placed = self.placed.saturating_add(count);
-            if self.placed > MAX_PLACED {
+            // Refused before its copies are made, with the nodes placed
+            // and those expanded so far; each is counted as it is placed.
+            if self
+                .placed
+                .saturating_add(nodes.len())
+                .saturating_add(count)
+                > MAX_PLACED
+            {
                 return Err(error(
                     times_name.span,
                     format!(
@@ -1223,6 +1229,13 @@ impl Lowering<'_, '_> {
         let (nodes, declared_outputs) =
             self.expand_times(document, placement, &params, &mut fallback_refs)?;
         for decl in &nodes {
+            self.placed += 1;
+            if self.placed > MAX_PLACED {
+                return Err(error(
+                    decl.name.span,
+                    format!("the scene places more than {MAX_PLACED} nodes, every level together"),
+                ));
+            }
             let id = NodeId(format!("{prefix}{}", decl.name.value));
             let mut inputs = BTreeMap::new();
             let mut node_params = BTreeMap::new();
@@ -2305,6 +2318,37 @@ output raw <- first.result to bytes \"raw.bin\";";
         );
         let together = parse("node s: t.z@1 { domain = 1; }\nnode a: t.i@1 { times = 40000; previous <- s.result; }\nnode b: t.i@1 { times = 40000; previous <- s.result; }\noutput result <- b.result;").unwrap_err();
         assert!(together.message.contains("places more than"), "{together}");
+    }
+
+    #[test]
+    fn placements_nested_in_placements_are_counted_together() {
+        // Each document places the one before it twice: 2^18 nodes from
+        // nineteen small files.
+        let mut files: BTreeMap<PathBuf, String> = BTreeMap::new();
+        files.insert(
+            PathBuf::from("g0.osn"),
+            "input x: Rows<Int>;\nnode n: t.i@1 { previous <- x; }\noutput result <- n.result;\n"
+                .into(),
+        );
+        for k in 1..=18 {
+            files.insert(
+                PathBuf::from(format!("g{k}.osn")),
+                format!(
+                    "input x: Rows<Int>;\nnode a: graph \"g{j}.osn\" {{ x <- x; }}\nnode b: graph \"g{j}.osn\" {{ x <- a.result; }}\noutput result <- b.result;\n",
+                    j = k - 1
+                ),
+            );
+        }
+        let text = "node s: t.z@1 { domain = 1; }\nnode top: graph \"g18.osn\" { x <- s.result; }\noutput result <- top.result;\n";
+        let document = orla_language::parse_document(text).unwrap();
+        let mut loader = |path: &Path| {
+            files
+                .get(path)
+                .cloned()
+                .ok_or_else(|| format!("{} is missing", path.display()))
+        };
+        let refused = load(&document, text, "scene", Path::new(""), &mut loader).unwrap_err();
+        assert!(refused.message.contains("places more than"), "{refused}");
     }
 
     /// The Graph computes structure, never values: a node's values and
