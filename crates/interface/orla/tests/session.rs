@@ -2359,7 +2359,7 @@ output result <- w.result;",
     }
 }
 
-/// A domain is charged before any allocation: past the budget or 32-bit
+/// A domain is charged before any allocation: past the budget or `Int`
 /// indices, the node fails with why and the session goes on.
 #[test]
 fn a_domain_past_the_budget_fails_the_node_not_the_process() {
@@ -2372,12 +2372,12 @@ fn a_domain_past_the_budget_fails_the_node_not_the_process() {
         (
             "domain = vec3(4194304, 2097152, 2097152);",
             "Volume<Int>",
-            "holds more than 4294967295 elements",
+            "holds more than 2147483647 elements",
         ),
         (
             "domain = vec2(4294967295, 4294967295);",
             "Grid<Int>",
-            "holds more than 4294967295 elements",
+            "holds more than 2147483647 elements",
         ),
     ];
     let dir = scratch("huge-domain");

@@ -484,9 +484,9 @@ impl fmt::Display for Domain {
     }
 }
 
-/// The most elements one Field holds: elements are found by a 32-bit
-/// index everywhere past the Host.
-pub const MAX_ELEMENTS: usize = u32::MAX as usize;
+/// The most elements one Field holds: every element's index is an `Int`,
+/// as `element()` gives it, on every backend.
+pub const MAX_ELEMENTS: usize = i32::MAX as usize;
 
 /// The words of memory `schema` over `domain` takes, when the domain is
 /// allowed: not empty, at most [`MAX_ELEMENTS`]. Allocates nothing.
@@ -1546,20 +1546,21 @@ mod tests {
     }
 
     /// A domain is refused for its cost before allocation: past the budget,
-    /// past 32-bit indices, past `usize` overflow.
+    /// past `Int` indices, past `usize` overflow.
     #[test]
     fn a_domain_is_refused_before_it_is_allocated() {
         let mut host = Host::new(1 << 20);
         let int = Schema::new(vec![Scalar::Int]);
-        // Four billion words: refused, not tried.
+        // Two billion words: refused, not tried.
         assert_eq!(
-            host.create(int.clone(), Domain::Rows(u32::MAX)),
+            host.create(int.clone(), Domain::Rows(i32::MAX as u32)),
             Err(HostError::BudgetExceeded {
-                requested: u32::MAX as usize,
+                requested: i32::MAX as usize,
                 available: 1 << 20
             })
         );
         for huge in [
+            Domain::Rows(1 << 31),
             Domain::Grid(u32::MAX, u32::MAX),
             Domain::Volume(1 << 22, 1 << 21, 1 << 21),
             Domain::Volume(u32::MAX, u32::MAX, u32::MAX),
