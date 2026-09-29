@@ -166,7 +166,9 @@ nearest fragment in `[0, 1)`, the earlier triangle on a tie, with
 attributes interpolated by `1 / w`; with a cutout, a fragment whose alpha
 in the mask at its own uv is below the cutout is not drawn. The `tiled`
 presets cut a box larger than a tile across a pool of invocations, for
-scenes of large triangles; the surface is the same to the bit.
+scenes of large triangles; the surface is the same to the bit. A
+triangle with two corners at one point is skipped by that test alone.
+Each triangle's box is found once, and every step reads it.
 
 **Why.** As Kernels, rasterization is typed, traced, hot-reloaded, the
 same on every backend, and changeable by an author. The native path is
@@ -174,7 +176,10 @@ an acceleration of the package, not a second definition: on the
 interpreter and the JIT it is exact to the rule, on a GPU it is the
 device's rasterizer, approximate at edges. The Graph does not know that
 a placed graph and a native operation are one computation, so the scene
-chooses.
+chooses. A device may compute one expression to different last bits in
+two Kernels, as its compiler fuses a multiply into an add where it
+chooses, so a decision two Kernels must share is made in one: were a
+box found twice, the tiles counted from one would be cut from another.
 
 **Where.** The package and its presets; every example places it.
 [`ten_million.osn`](../examples/mesh/tests/ten_million.osn) is the scale
@@ -182,7 +187,9 @@ scene. On the interpreter and the JIT the fast path is
 `orla_rules::raster`, held bit for bit to the rule by a test that writes
 the rule plainly. `examples/mesh/tests/edges.replay` pins the package's
 surface at edge pixels on all three backends and `native.replay` the fast
-path's inside them; `cutout.replay` holds the package's cutout to
+path's inside them; `degenerate.replay` holds that a triangle with two
+corners at one point draws nothing and the tiled presets draw what the
+one-pass ones do, on all three; `cutout.replay` holds the package's cutout to
 `native.rasterize@2` on all three, and a session test holds them equal to
 the bit on the interpreter and the JIT.
 
