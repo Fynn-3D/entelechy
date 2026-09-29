@@ -837,6 +837,21 @@ fn arrays_are_typed_built_indexed_and_checked() {
         message,
         "a [Int; 2] default must be a literal of that type; `0` is not"
     );
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } param p: Float = 1e39; output r: Rows<Float>; compute { return p; } }",
+    );
+    assert_eq!(
+        message,
+        "`1e39` is past the largest `Float`; write it as a `Double`, `1e39d`"
+    );
+    let module = compile(
+        "kernel t.k@1 { requires { field.write; } param p: Double = 1e39; output r: Rows<Double>; compute { return p; } }",
+    )
+    .unwrap();
+    assert_eq!(
+        module.manifest.params[0].default,
+        orla_ir::Value::Double(1e39)
+    );
 }
 
 #[test]

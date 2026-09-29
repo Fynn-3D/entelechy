@@ -243,11 +243,16 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Lexeme>, ParseError> {
             if written.is_some() {
                 advance(1, &mut index, &mut byte);
             }
-            let float = |text: &str| {
-                text.parse::<f64>().map_err(|_| ParseError {
+            let float = |text: &str| match text.parse::<f64>() {
+                Ok(value) if value.is_finite() => Ok(value),
+                Ok(_) => Err(ParseError {
+                    span,
+                    message: format!("`{text}` is past the largest `Double`"),
+                }),
+                Err(_) => Err(ParseError {
                     span,
                     message: format!("`{text}` is not a valid float literal"),
-                })
+                }),
             };
             let integer = |text: &str| {
                 text.parse::<i64>().map_err(|_| ParseError {
@@ -323,5 +328,12 @@ mod tests {
         assert_eq!((error.span.line, error.span.column), (1, 6));
         let error = tokenize("\"ab\\\nc\"").unwrap_err();
         assert!(error.message.ends_with("not the line's end"), "{error}");
+    }
+
+    #[test]
+    fn a_float_past_the_largest_double_is_refused() {
+        let error = tokenize("1e400").unwrap_err();
+        assert!(error.message.contains("past the largest"), "{error}");
+        assert!(tokenize("1e308").is_ok());
     }
 }

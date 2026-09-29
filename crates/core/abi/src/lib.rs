@@ -541,7 +541,8 @@ impl Number {
 
     /// This given value as one of `kind`, when it converts: an integer to
     /// either float or a wider integer, a float to the other width, a
-    /// long to an `Int` that holds it. Kernel arithmetic is separate.
+    /// long to an `Int` that holds it, a double to a `Float` that holds its
+    /// size. Kernel arithmetic is separate.
     pub fn as_kind(self, kind: Scalar) -> Option<Number> {
         Some(match (self, kind) {
             (Self::Float(v), Scalar::Float) => Self::Float(v),
@@ -551,7 +552,13 @@ impl Number {
                 Self::Double(v.to_string().parse().unwrap_or(f64::from(v)))
             }
             (Self::Double(v), Scalar::Double) => Self::Double(v),
-            (Self::Double(v), Scalar::Float) => Self::Float(v as f32),
+            (Self::Double(v), Scalar::Float) => {
+                let narrow = v as f32;
+                if narrow.is_infinite() && v.is_finite() {
+                    return None;
+                }
+                Self::Float(narrow)
+            }
             (Self::Int(v), Scalar::Int) => Self::Int(v),
             (Self::Int(v), Scalar::Float) => Self::Float(v as f32),
             (Self::Int(v), Scalar::Double) => Self::Double(f64::from(v)),

@@ -144,6 +144,9 @@ fn literal_with(
     };
     match &expr.kind {
         ExprKind::Float(value) if exact => Ok(Value::Double(*value)),
+        ExprKind::Float(value) if (*value as f32).is_infinite() => Err(fail(format!(
+            "`{value:e}` is past the largest `Float`; write it as a `Double`, `{value:e}d`"
+        ))),
         ExprKind::Float(value) => Ok(Value::Float(*value as f32)),
         ExprKind::Int(value) => Ok(integer(*value)),
         ExprKind::Double(value) => Ok(Value::Double(*value)),
@@ -980,7 +983,11 @@ pub(super) fn constant(
     };
     let value = literal_exact(expr, &fields_of)?;
     orla_ir::value_as(&value, ty, structs).ok_or_else(|| {
-        let value = literal_in(expr, &fields_of).unwrap_or(value);
+        // A literal past its width says so.
+        let value = match literal_in(expr, &fields_of) {
+            Ok(written) => written,
+            Err(past) => return past,
+        };
         semantic(expr.span, {
             let name = describe(ty, structs);
             let article = if name.starts_with(['A', 'E', 'I', 'O', 'U']) {
