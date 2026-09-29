@@ -2,7 +2,8 @@
 //! `crates/<layer>/<crate>`, depends only in the directions AGENTS.md
 //! allows, and takes an external dependency only where AGENTS.md names
 //! one. Tests depend in the same directions; a backend's tests may also
-//! reach the compiler, the interpreter and the conformance matrix.
+//! reach the compiler, the interpreter and the conformance matrix. No
+//! crate reaches itself, its tests counted.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -259,6 +260,58 @@ fn every_crate_is_tested_down_its_layers() {
         "layers crossed by tests:\n{}",
         wrong.join("\n")
     );
+}
+
+/// No crate reaches itself through what it and its tests depend on.
+/// Cargo refuses a cycle of dependencies, not one a test closes, and the
+/// layers let crates of one layer depend on each other.
+#[test]
+fn no_crate_reaches_itself_through_its_dependencies_and_tests() {
+    let crates = crates();
+    let next = |name: &str| -> Vec<&str> {
+        let krate = &crates[name];
+        let mut next: Vec<&str> = krate
+            .inside
+            .iter()
+            .chain(&krate.tests)
+            .map(String::as_str)
+            .filter(|dependency| crates.contains_key(*dependency))
+            .collect();
+        next.sort_unstable();
+        next.dedup();
+        next
+    };
+    // Depth first; a crate met again on the path it is on closes a cycle.
+    fn walk<'a>(
+        name: &'a str,
+        next: &dyn Fn(&str) -> Vec<&'a str>,
+        path: &mut Vec<&'a str>,
+        done: &mut std::collections::BTreeSet<&'a str>,
+    ) -> Option<String> {
+        if let Some(at) = path.iter().position(|on| *on == name) {
+            let mut cycle = path[at..].to_vec();
+            cycle.push(name);
+            return Some(cycle.join(" -> "));
+        }
+        if !done.insert(name) {
+            return None;
+        }
+        path.push(name);
+        for dependency in next(name) {
+            if let Some(cycle) = walk(dependency, next, path, done) {
+                return Some(cycle);
+            }
+        }
+        path.pop();
+        None
+    }
+    let mut done = std::collections::BTreeSet::new();
+    for name in crates.keys() {
+        let mut path = Vec::new();
+        if let Some(cycle) = walk(name, &next, &mut path, &mut done) {
+            panic!("a cycle of dependencies: {cycle}");
+        }
+    }
 }
 
 #[test]
