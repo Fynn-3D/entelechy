@@ -33,7 +33,7 @@ Verified surface, as of `main`:
 ## Next
 
 `main` holds, since `v0.0.2-alpha.3`, scaling, hot-reload and runtime
-performance work, verified and not yet pushed or released. A Kernel
+performance work. A Kernel
 lowers only the functions it calls and republishes only when its IR
 changes; a changed library function republishes every Kernel that uses
 it; an `if` or `match` on a literal compiles to the block it takes. A
@@ -60,8 +60,8 @@ connection is read no further while 64 of its answers wait; a narrow
 Field read through the C ABI stays until the next evaluate, request or
 close; a file is written new at its working name.
 
-It is released once the user accepts the batch. The release notes name
-what changed for a caller:
+It is released as `v0.0.2-rc.1`, a pre-release; `v0.0.2` follows once
+the user accepts it. The release notes name what changed for a caller:
 - A served scene reads beside its first-loaded documents and input
   files, in the package directories and where `--allow file.read` says;
   a package elsewhere is no longer readable for being one.
