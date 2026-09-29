@@ -120,8 +120,10 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Lexeme>, ParseError> {
                         Some('"') => '"',
                         Some('\\') => '\\',
                         other => {
-                            let what =
-                                other.map_or("the line's end".to_owned(), |c| format!("`\\{c}`"));
+                            let what = match other {
+                                None | Some('\n' | '\r') => "the line's end".to_owned(),
+                                Some(c) => format!("`\\{c}`"),
+                            };
                             return Err(ParseError {
                                 span: at,
                                 message: format!(
@@ -319,5 +321,7 @@ mod tests {
         let error = tokenize(r#"  "C:\data""#).unwrap_err();
         assert!(error.message.contains("not `\\d`"), "{error}");
         assert_eq!((error.span.line, error.span.column), (1, 6));
+        let error = tokenize("\"ab\\\nc\"").unwrap_err();
+        assert!(error.message.ends_with("not the line's end"), "{error}");
     }
 }
