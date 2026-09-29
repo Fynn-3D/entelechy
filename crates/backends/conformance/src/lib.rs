@@ -1642,3 +1642,69 @@ pub fn sum_cases() -> Vec<(Case, Summed)> {
         ),
     ]
 }
+
+impl Case {
+    /// The words a Host needs to run this case on the interpreter and a
+    /// backend beside it: its inputs and outputs, twice over, and never
+    /// less than the matrix's usual room.
+    pub fn room(&self) -> usize {
+        let inputs: usize = self.inputs.iter().map(|(_, _, words)| words.len()).sum();
+        (1 << 22).max(4 * (inputs + 4 * self.domain.count()))
+    }
+}
+
+/// Extents past 2^24, which a 32-bit float cannot hold whole, under every
+/// mode: each element, count, size and domain exact, as the interpreter
+/// gives them. Each case reads a Field of ones as long as its domain.
+pub fn large_cases() -> Vec<Case> {
+    let rows = (1u32 << 24) + 1;
+    let ints = Schema::new(vec![Scalar::Int]);
+    let ones = |domain: Domain| (ints.clone(), domain, vec![1u32; domain.count()]);
+    let case = |name: &str, source: &str, inputs, domain| Case {
+        name: format!("{name} past 2^24"),
+        source: source.to_owned(),
+        inputs,
+        params: Vec::new(),
+        domain,
+        context: Context::default(),
+    };
+    let side = 4097;
+    vec![
+        case(
+            "map over rows",
+            "kernel large.map@1 { requires { field.read; field.write; } input ones: Rows<Int>; output result: Rows<Int>;
+                compute { return count(ones) + size(ones) - domain() - element() + sample(ones) + at(ones, element() + 1); } }",
+            vec![ones(Domain::Rows(rows))],
+            Domain::Rows(rows),
+        ),
+        case(
+            "map over a grid",
+            "kernel large.grid@1 { requires { field.read; field.write; } input ones: Grid<Int>; output result: Grid<Int>;
+                compute { let s = isize(ones); let c = icoord(); return s.x * s.y - count(ones) + c.y * s.x + c.x + sample(ones); } }",
+            vec![ones(Domain::Grid(side, side))],
+            Domain::Grid(side, side),
+        ),
+        case(
+            "reduce",
+            "kernel large.reduce@1 { requires { field.read; field.write; } input ones: Rows<Int>; output result: Rows<Int>;
+                compute { return element() + sample(ones) + count(ones); } merge(a, b) { return max(a, b); } }",
+            vec![ones(Domain::Rows(rows))],
+            Domain::Rows(1),
+        ),
+        case(
+            "prefix",
+            "kernel large.prefix@1 { requires { field.read; field.write; } input ones: Rows<Int>; output result: Rows<Int>;
+                prefix with sum { return sample(ones); } }",
+            vec![ones(Domain::Rows(rows))],
+            Domain::Rows(rows),
+        ),
+        case(
+            "scatter",
+            "kernel large.scatter@1 { requires { field.read; field.write; } input ones: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>;
+                struct Put { slot: Int; value: Int; }
+                scatter into slots with max { return Put { slot: element() % 4, value: element() + sample(ones) }; } }",
+            vec![ones(Domain::Rows(rows)), ones(Domain::Rows(4))],
+            Domain::Rows(rows),
+        ),
+    ]
+}

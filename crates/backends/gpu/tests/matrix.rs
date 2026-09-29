@@ -59,7 +59,7 @@ fn differences(gpu: &GpuBackend, cases: &[orla_conformance::Case]) -> Vec<String
                 continue;
             }
         };
-        let mut host = Host::new(1 << 22);
+        let mut host = Host::new(case.room());
         let handles: Vec<_> = case
             .inputs
             .iter()
@@ -291,4 +291,22 @@ fn summed(
         }
         None => Ok(host.data(outputs[0]).unwrap().values().into_owned()),
     }
+}
+
+/// Extents past 2^24, which a float cannot hold whole, under every mode:
+/// each element, count, size and domain as the interpreter gives them.
+#[test]
+fn extents_past_a_floats_integers_match_the_interpreter() {
+    let Some(gpu) = GpuBackend::new().ok() else {
+        return;
+    };
+    let cases = orla_conformance::large_cases();
+    let failures = differences(&gpu, &cases);
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases differ:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
 }

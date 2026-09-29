@@ -78,7 +78,7 @@ fn differences(cases: &[orla_conformance::Case]) -> Vec<String> {
                 continue;
             }
         };
-        let mut host = Host::new(1 << 22);
+        let mut host = Host::new(case.room());
         let handles: Vec<_> = case
             .inputs
             .iter()
@@ -188,4 +188,19 @@ fn summed(
         .map_err(orla_rules::ExecutionError::Device)?;
     let outputs = backend.execute(prepared.as_ref(), &module, &invocation, &mut scope)?;
     Ok(scope.values(outputs[0])?.into_owned())
+}
+
+/// Extents past 2^24, which a float cannot hold whole, under every mode:
+/// each element, count, size and domain as the interpreter gives them.
+#[test]
+fn extents_past_a_floats_integers_match_the_interpreter() {
+    let cases = orla_conformance::large_cases();
+    let failures = differences(&cases);
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases differ:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
 }
