@@ -513,6 +513,12 @@ pub fn forms() -> Vec<Form> {
             "The node runs off the frame: the evaluation starts it on a thread and goes on, its readers taking the last output until the run lands.",
         ),
         form(
+            "require",
+            "graph",
+            "require cells: columns * rows <= 1 << bits;",
+            "What the scene's parameters must hold to run: two counts over its params, numbers, `window()` and `scale()`, compared. It is checked before every evaluation; one that does not hold stops it before anything runs and says what each side came to. A placed graph's come with it, under its node's name.",
+        ),
+        form(
             "use",
             "document",
             "use \"kernels/\";   use \"name.orlapkg\";",

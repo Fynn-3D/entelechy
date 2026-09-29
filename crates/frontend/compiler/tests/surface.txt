@@ -766,6 +766,8 @@ form prefix
   prefix with sum { return value; }
 form previous
   port <~ node.output from initial [migrate id@v];
+form require
+  require cells: columns * rows <= 1 << bits;
 form requires
   requires { field.read; field.write; time.read; input.read; }
 form scan

@@ -26,7 +26,8 @@ use orla_language::{
 };
 
 use orla_graph::{
-    Binding, DomainExpr, DomainSpec, Graph, GraphParam, Node, NodeId, ParamValue, Source,
+    Binding, DomainExpr, DomainSpec, Graph, GraphParam, Node, NodeId, ParamValue, Requirement,
+    Source,
 };
 
 /// The port type an alias stands for, following aliases to the end.
@@ -386,6 +387,7 @@ fn lower(
                 externals: Vec::new(),
                 texts: Vec::new(),
                 params: Vec::new(),
+                requirements: Vec::new(),
                 times_params: Vec::new(),
                 nodes: Vec::new(),
                 outputs: Vec::new(),
@@ -574,14 +576,51 @@ impl Place<'_> {
             if node_params.contains_key(name) {
                 return None;
             }
-            let declared = self.params.iter().find(|p| p.name == name)?;
-            match placement.params.get(name) {
-                Some(ParamValue::Graph(root)) => Some(DomainExpr::Name(root.clone())),
-                Some(ParamValue::Literal(value)) => number(value),
-                None => number(&declared.default),
-            }
+            self.passed(placement, name)
         };
         spec_of(expr.with_names(&given), Span::default()).map(Some)
+    }
+
+    /// What the placing graph passes for the placed graph's param `name`
+    /// in a count: its own param, the value it gave, or the default.
+    fn passed(&self, placement: &Placement, name: &str) -> Option<DomainExpr> {
+        let declared = self.params.iter().find(|p| p.name == name)?;
+        match placement.params.get(name) {
+            Some(ParamValue::Graph(root)) => Some(DomainExpr::Name(root.clone())),
+            Some(ParamValue::Literal(value)) => number(value),
+            None => number(&declared.default),
+        }
+    }
+
+    /// A requirement in the flattened graph: named with the prefix, each
+    /// param what the parent passed. Every name it reads is a param of
+    /// this graph.
+    fn requirement(&self, decl: &orla_language::RequireDecl) -> Result<Requirement, DocumentError> {
+        let requirement = domain::requirement(decl)?;
+        let unknown = std::cell::RefCell::new(None);
+        let _ = requirement.with_names(&|name| {
+            if !self.params.iter().any(|p| p.name == name) {
+                unknown.borrow_mut().get_or_insert_with(|| name.to_owned());
+            }
+            None
+        });
+        if let Some(name) = unknown.into_inner() {
+            return Err(error(
+                decl.condition.span,
+                format!(
+                    "`require {}` names `{name}`, which is not a param of this graph",
+                    decl.name.value
+                ),
+            ));
+        }
+        let requirement = match self.placement {
+            Some(placement) => requirement.with_names(&|name| self.passed(placement, name)),
+            None => requirement,
+        };
+        Ok(Requirement {
+            name: format!("{}{}", self.prefix, requirement.name),
+            ..requirement
+        })
     }
 
     /// A source in the flattened graph: a node's name prefixed, a
@@ -1217,6 +1256,13 @@ impl Lowering<'_, '_> {
                 .map(|node| node.name.value.clone())
                 .collect(),
         };
+        for decl in &document.requires {
+            let requirement = place.requirement(decl)?;
+            self.out.graph.requirements.push(Requirement {
+                at: Some(written_at(path, decl.name.span)),
+                ..requirement
+            });
+        }
         let mut aliases: BTreeMap<String, Vec<(String, Source)>> = BTreeMap::new();
         let first_node = self.out.graph.nodes.len();
         // Each file input's fallback while the file is absent, renamed
@@ -1966,6 +2012,80 @@ output result <- a.result;
     }
 
     #[test]
+    fn requirements_flatten_named_with_their_place_reading_what_the_parent_passed() {
+        let grid = "param columns: Int = 64;
+            param bits: Int = 12;
+            require cells: columns * 2 <= 1 << bits;
+            node n: t.k@1 { domain = columns; }
+            output result <- n.result;";
+        let root = orla_language::parse_document(
+            "param wide: Int = 100;
+             require positive: wide > 0;
+             node a: graph \"grid.osn\" { columns = wide; }
+             node b: graph \"grid.osn\" { bits = 3; }
+             output result <- a.result;",
+        )
+        .unwrap();
+        let mut loader = |_: &Path| -> Result<String, String> { Ok(grid.to_owned()) };
+        let lowered = load(&root, "", "main", Path::new("root"), &mut loader).unwrap();
+        let written: Vec<String> = lowered
+            .graph
+            .requirements
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(
+            written,
+            [
+                "positive: wide > 0",
+                "a.cells: wide * 2 <= 1 << 12",
+                "b.cells: 64 * 2 <= 1 << 3"
+            ]
+        );
+        assert!(
+            lowered.graph.requirements[2]
+                .at
+                .as_deref()
+                .unwrap()
+                .ends_with(":3:21")
+        );
+        // What holds and what does not, with the root's param as given.
+        let param = |name: &str| (name == "wide").then_some(Value::Int(100));
+        let none = |_: &str| None;
+        assert!(lowered.graph.requirements[1].check(&param, &none).is_ok());
+        let failed = lowered.graph.requirements[2]
+            .check(&param, &none)
+            .unwrap_err();
+        assert!(failed.message.contains("here 128 <= 8"), "{failed}");
+        // A root graph's requirement prints and reads back.
+        let graph = parse(
+            "param wide: Int = 4;\nrequire cells: wide * wide <= 1 << 5;\nnode n: t.k@1 { domain = wide; }\noutput result <- n.result;\n",
+        )
+        .unwrap();
+        assert!(print(&graph).contains("require cells: wide * wide <= 1 << 5;"));
+        assert_eq!(parse(&print(&graph)).unwrap(), graph);
+        // A name not a param, a port, or no comparison is refused.
+        for (text, says) in [
+            (
+                "param a: Int = 1; require r: a <= b; node n: t.k@1 { domain = 1; } output o <- n.result;",
+                "`b`, which is not a param",
+            ),
+            (
+                "param a: Int = 1; require r: count(x) <= a; node n: t.k@1 { domain = 1; } output o <- n.result;",
+                "a node's ports",
+            ),
+            (
+                "param a: Int = 1; require r: a + 1; node n: t.k@1 { domain = 1; } output o <- n.result;",
+                "compares with",
+            ),
+        ] {
+            let document = orla_language::parse_document(text).unwrap();
+            let error = load(&document, text, "main", Path::new("root"), &mut loader).unwrap_err();
+            assert!(error.message.contains(says), "{error}");
+        }
+    }
+
+    #[test]
     fn sub_graphs_flatten_with_prefixed_nodes_wired_inputs_and_passed_params() {
         let display = "use \"lib/\";
             input source: Image;
@@ -2409,6 +2529,9 @@ impl std::fmt::Display for Printed<'_> {
                 param.ty,
                 literal_text(&param.default)
             )?;
+        }
+        for requirement in &self.0.requirements {
+            writeln!(f, "require {requirement};")?;
         }
         for node in &self.0.nodes {
             writeln!(f)?;

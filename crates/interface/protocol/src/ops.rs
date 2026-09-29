@@ -179,6 +179,7 @@ fn edit() -> Ty {
         named("node", "a node, by name"),
         named("output", "an output, by name"),
         named("param", "a param, by name"),
+        named("require", "a requirement, by name"),
         named("input", "an input, by name"),
         named("kernel", "a Kernel, by id"),
         named("struct", "a struct, by name"),

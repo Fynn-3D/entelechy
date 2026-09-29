@@ -124,6 +124,8 @@ pub enum EvaluateError {
         /// The failure.
         message: String,
     },
+    /// A requirement of the graph does not hold; nothing ran.
+    Requirement(String),
     /// The Host rejected a resource operation.
     Host(HostError),
 }
@@ -147,7 +149,7 @@ impl EvaluateError {
             | Self::ReduceDomain(node)
             | Self::PortKind { node, .. }
             | Self::Migration { node, .. } => Some(node),
-            Self::Graph(_) | Self::Host(_) => None,
+            Self::Graph(_) | Self::Requirement(_) | Self::Host(_) => None,
         }
     }
 }
@@ -156,6 +158,7 @@ impl fmt::Display for EvaluateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Graph(error) => write!(f, "{error}"),
+            Self::Requirement(message) => write!(f, "the graph's requirement {message}"),
             Self::UnknownKernel { node, kernel, near } => write!(
                 f,
                 "node `{node}` binds `{kernel}`, which is not published{}",

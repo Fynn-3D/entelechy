@@ -2946,3 +2946,52 @@ output result <- o.result;
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A requirement the parameters break stops the evaluation before
+/// anything runs, and says what it came to; as given, the scene runs.
+#[test]
+fn a_requirement_the_parameters_break_stops_the_evaluation() {
+    let dir = std::env::temp_dir().join(format!("orla-require-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let scene = dir.join("scene.osn");
+    std::fs::write(
+        &scene,
+        "param cells: Int = 64;
+param bits: Int = 6;
+require keys: cells <= 1 << bits;
+node n: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    compute { return element(); }
+    domain = 1;
+}
+output result <- n.result;
+",
+    )
+    .unwrap();
+    let run = |extra: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_orla"))
+            .arg("run")
+            .arg(&scene)
+            .args(extra)
+            .output()
+            .unwrap()
+    };
+    let ran = run(&[]);
+    assert!(
+        ran.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    let broken = run(&["--param", "bits=5"]);
+    let said = String::from_utf8_lossy(&broken.stderr);
+    assert!(!broken.status.success());
+    assert!(
+        said.contains("requirement `keys`")
+            && said.contains("here 64 <= 32, with cells = 64, bits = 5"),
+        "{said}"
+    );
+    assert!(said.contains(":3:9)"), "{said}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

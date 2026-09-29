@@ -591,6 +591,7 @@ use "../shared/tonemap.orla";         // one library file
 
 input photo: Image;                   // supplied by the caller
 param amount: Float = 1.0;            // a graph parameter, overridable by the caller
+require gentle: amount <= 4;          // what the parameters must hold to run
 
 node gray: image.grayscale@1 {        // reference a published Kernel
     source <- photo;                  // wire: this evaluation's value
@@ -658,7 +659,7 @@ be keywords.
    input's extent. The extent may be an expression of: `size(port)` (the
    bound extent, as a count, pair or triple), `count(port)`,
    `value(port)` and `value(port, i)`, the node's and the graph's
-   parameters by name, numbers, `vec2`/`vec3`, `+ - * /`, `max`, `min`,
+   parameters by name, numbers, `vec2`/`vec3`, `+ - * / <<`, `max`, `min`,
    `floor`, `ceil`, `window()` (pixels) and `scale()`. It resolves when
    the node binds; its sides must come out positive and whole. Counts
    are exact whole numbers, and one too large is an error, never
@@ -724,6 +725,17 @@ be keywords.
     frame; one run goes at a time; inputs are copied when it starts. It
     is never fused. A replay's `settle`, and `evaluate` with `settle:
     true` over the protocol, wait for every run to land.
+13. `require name: a <= b;` is what a graph's parameters must hold for
+    it to run: two counts, as a `domain` writes them from the graph's
+    parameters, numbers, `window()` and `scale()`, compared with `<`,
+    `<=`, `>`, `>=`, `==` or `!=`. It is checked before every
+    evaluation, with the parameters as the caller set them; one that
+    does not hold stops the evaluation before anything runs, naming the
+    requirement, where it is written, and what each side came to. A
+    placed graph's requirements come with it, named under the node that
+    places it, reading what the parent passed. `require cells: columns *
+    rows <= 1 << bits;` is how the physics package says its sort holds
+    every cell ([why](DECISIONS.md#a-graph-says-what-its-parameters-must-hold)).
 
 ### Packages
 

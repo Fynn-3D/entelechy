@@ -11,7 +11,7 @@
 mod domain;
 mod evaluate;
 
-pub use domain::{DomainError, DomainExpr, DomainOp, DomainSpec};
+pub use domain::{Compare, DomainError, DomainExpr, DomainOp, DomainSpec, Requirement};
 pub use evaluate::{EvaluateError, Evaluator, Placed, PlanEntry, Report};
 pub use orla_abi::{Context, Domain, InputState, Value};
 pub use orla_ir::KernelId;
@@ -167,6 +167,8 @@ pub struct Graph {
     pub texts: Vec<(String, String)>,
     /// Parameters the caller may override.
     pub params: Vec<GraphParam>,
+    /// What its parameters must hold, checked before each evaluation.
+    pub requirements: Vec<Requirement>,
     /// Parameters that size the graph (a node's `times`); changing one
     /// lowers the document again.
     pub times_params: Vec<String>,

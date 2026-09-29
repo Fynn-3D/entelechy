@@ -267,8 +267,9 @@ fn order(kind: StatementKind) -> u8 {
         StatementKind::Kernel => 5,
         StatementKind::Input => 6,
         StatementKind::Param => 7,
-        StatementKind::Node => 8,
-        StatementKind::Output => 9,
+        StatementKind::Require => 8,
+        StatementKind::Node => 9,
+        StatementKind::Output => 10,
     }
 }
 

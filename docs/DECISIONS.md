@@ -700,3 +700,32 @@ IR stays computation alone.
 [`doc`](../crates/frontend/language/src/doc.rs); held by
 [the signatures compiled](../crates/frontend/compiler/tests/help_signatures.rs)
 and [the forms parsed](../crates/frontend/compiler/tests/help_examples.rs).
+
+## A graph says what its parameters must hold
+
+`require name: a <= b;` is a scene's statement of what its parameters
+must hold to run: two counts, written as a `domain` writes them, from
+the graph's params, numbers, `window()` and `scale()`, compared. It is
+checked before every evaluation with the parameters as they stand, and
+one that fails stops the evaluation before any node runs, naming the
+requirement, where it is written and what each side came to. A placed
+graph's requirements come with it, reading what the parent passed. The
+physics package requires its grid's cells to fit the bits its sort
+orders; the sort requires 1 to 31 bits.
+
+**Why.** A package's preset is a composition, and what breaks one is a
+relation between its parameters (`columns * rows` against `bits`) that
+no single Kernel sees whole and none can refuse: a Kernel has no way to
+fail but a fault, and a fault in the middle of a frame names the wrong
+thing. The relation belongs to the graph that states the parameters. It
+reads counts and yields a verdict, so the graph still computes
+structure, never values, and it is checked where the params are known,
+once per evaluation, on the Host and on no backend.
+
+**Where.** [`Requirement`](../crates/core/graph/src/domain.rs), checked
+at the start of an evaluation in
+[`evaluate`](../crates/core/graph/src/evaluate/mod.rs); lowered and
+flattened in [`scene`](../crates/frontend/scene/src/lib.rs) (test
+`requirements_flatten_named_with_their_place_reading_what_the_parent_passed`),
+and held end to end by `a_requirement_the_parameters_break_stops_the_evaluation`
+in [the session tests](../crates/interface/orla/tests/session.rs).

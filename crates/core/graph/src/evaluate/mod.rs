@@ -489,6 +489,15 @@ impl Evaluator {
         // written into a copy of the graph only when one is in use.
         let substituted = substitute_fallbacks(graph, externals);
         let graph = substituted.as_ref().unwrap_or(graph);
+        // What the parameters must hold, before anything runs.
+        for requirement in &graph.requirements {
+            requirement
+                .check(
+                    &|name| graph_param(graph, name, params),
+                    &window_context(context),
+                )
+                .map_err(|error| EvaluateError::Requirement(error.message))?;
+        }
         let order = self.order_of(graph)?;
         self.prune(graph, runtime);
         let landed = self.land(runtime)?;

@@ -1,8 +1,8 @@
 //! A node's written `domain`, accepted into the Graph's [`DomainExpr`]:
 //! the subset of the expression language a domain may use.
 
-use orla_graph::{DomainExpr, DomainOp};
-use orla_language::{BinaryOp, Expr, ExprKind};
+use orla_graph::{Compare, DomainExpr, DomainOp, Requirement};
+use orla_language::{BinaryOp, Expr, ExprKind, RequireDecl};
 
 use crate::DocumentError;
 
@@ -20,7 +20,7 @@ pub struct Function {
 }
 
 /// Every function a `domain` may call; a domain is also numbers,
-/// parameters by name, and `+ - * /`.
+/// parameters by name, and `+ - * / <<`.
 pub fn functions() -> Vec<Function> {
     let f = |name, shape, doc, example| Function {
         name,
@@ -110,8 +110,11 @@ pub fn domain_expr(expr: &Expr) -> Result<DomainExpr, DocumentError> {
                 BinaryOp::Sub => DomainOp::Sub,
                 BinaryOp::Mul => DomainOp::Mul,
                 BinaryOp::Div => DomainOp::Div,
+                BinaryOp::Shl => DomainOp::Shl,
                 _ => {
-                    return Err(fail("`domain` uses only `+`, `-`, `*`, and `/`".to_owned()));
+                    return Err(fail(
+                        "`domain` uses only `+`, `-`, `*`, `/` and `<<`".to_owned(),
+                    ));
                 }
             };
             DomainExpr::Binary(op, Box::new(domain_expr(a)?), Box::new(domain_expr(b)?))
@@ -195,6 +198,69 @@ pub fn domain_expr(expr: &Expr) -> Result<DomainExpr, DocumentError> {
             ));
         }
     })
+}
+
+/// A written `require` accepted: two counts compared, over numbers, the
+/// graph's parameters, `window()` and `scale()`; a node's ports it has
+/// none of.
+pub fn requirement(decl: &RequireDecl) -> Result<Requirement, DocumentError> {
+    let fail = |message: String| DocumentError {
+        span: decl.condition.span,
+        message,
+    };
+    let ExprKind::Binary(op, left, right) = &decl.condition.kind else {
+        return Err(fail(format!(
+            "`require {}` compares two counts: `a <= b`, `a == b` and the like",
+            decl.name.value
+        )));
+    };
+    let compare = match op {
+        BinaryOp::Less => Compare::Less,
+        BinaryOp::LessEqual => Compare::AtMost,
+        BinaryOp::Greater => Compare::Greater,
+        BinaryOp::GreaterEqual => Compare::AtLeast,
+        BinaryOp::Equal => Compare::Equal,
+        BinaryOp::NotEqual => Compare::Unequal,
+        _ => {
+            return Err(fail(format!(
+                "`require {}` compares with `<`, `<=`, `>`, `>=`, `==` or `!=`; a second requirement says a second thing",
+                decl.name.value
+            )));
+        }
+    };
+    let side = |expr: &Expr| -> Result<DomainExpr, DocumentError> {
+        let side = domain_expr(expr)?;
+        if reads_a_port(&side) {
+            return Err(DocumentError {
+                span: expr.span,
+                message: format!(
+                    "`require {}` reads the graph's parameters and the window; a node's ports are the node's",
+                    decl.name.value
+                ),
+            });
+        }
+        Ok(side)
+    };
+    Ok(Requirement {
+        name: decl.name.value.clone(),
+        left: side(left)?,
+        compare,
+        right: side(right)?,
+        at: None,
+    })
+}
+
+fn reads_a_port(expr: &DomainExpr) -> bool {
+    match expr {
+        DomainExpr::Count(_) | DomainExpr::Size(_) | DomainExpr::Value(..) => true,
+        DomainExpr::Vector(parts) | DomainExpr::Call(_, parts) => parts.iter().any(reads_a_port),
+        DomainExpr::Neg(inner) => reads_a_port(inner),
+        DomainExpr::Binary(_, a, b) => reads_a_port(a) || reads_a_port(b),
+        DomainExpr::Int(_)
+        | DomainExpr::Float(_)
+        | DomainExpr::Name(_)
+        | DomainExpr::Context(_) => false,
+    }
 }
 
 #[cfg(test)]

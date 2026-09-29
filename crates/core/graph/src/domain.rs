@@ -1,7 +1,7 @@
 //! A node's `domain`: a literal extent, or an expression over the node's
 //! inputs, parameters and context, resolved when the node binds.
 //!
-//! Terms: numbers, `vec2`, `vec3`, `+ - * /`, negation, `count(port)`,
+//! Terms: numbers, `vec2`, `vec3`, `+ - * / <<`, negation, `count(port)`,
 //! `size(port)`, `value(port)`, `value(port, i)`, `window()`, `scale()`,
 //! `max`, `min`, `floor`, `ceil`, and parameter names.
 //!
@@ -58,6 +58,8 @@ pub enum DomainOp {
     Mul,
     /// `/`
     Div,
+    /// `<<`, of whole numbers.
+    Shl,
 }
 
 impl DomainOp {
@@ -67,6 +69,7 @@ impl DomainOp {
             Self::Sub => "-",
             Self::Mul => "*",
             Self::Div => "/",
+            Self::Shl => "<<",
         }
     }
 }
@@ -425,6 +428,16 @@ impl Number {
                 message: "`domain` divides by zero".to_owned(),
             });
         }
+        if op == DomainOp::Shl {
+            return match (self, other) {
+                (Self::Whole(a), Self::Whole(b)) if (0..=62).contains(&b) => {
+                    a.checked_mul(1 << b).map(Self::Whole).ok_or_else(overflow)
+                }
+                _ => Err(DomainError {
+                    message: format!("`{self} << {other}`: `<<` shifts a whole number by 0 to 62"),
+                }),
+            };
+        }
         Ok(match (self, other) {
             (Self::Whole(a), Self::Whole(b))
                 if op == DomainOp::Div && a.checked_rem(b).is_some_and(|r| r != 0) =>
@@ -437,6 +450,7 @@ impl Number {
                     DomainOp::Sub => a.checked_sub(b),
                     DomainOp::Mul => a.checked_mul(b),
                     DomainOp::Div => a.checked_div(b),
+                    DomainOp::Shl => unreachable!("shifted above"),
                 }
                 .ok_or_else(overflow)?,
             ),
@@ -447,6 +461,7 @@ impl Number {
                     DomainOp::Sub => a - b,
                     DomainOp::Mul => a * b,
                     DomainOp::Div => a / b,
+                    DomainOp::Shl => unreachable!("shifted above"),
                 })
             }
         })
@@ -616,5 +631,184 @@ impl fmt::Display for Parenthesized<'_> {
             DomainExpr::Binary(..) => write!(f, "({})", self.0),
             other => write!(f, "{other}"),
         }
+    }
+}
+
+/// How a requirement compares its two sides.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Compare {
+    /// `<`
+    Less,
+    /// `<=`
+    AtMost,
+    /// `>`
+    Greater,
+    /// `>=`
+    AtLeast,
+    /// `==`
+    Equal,
+    /// `!=`
+    Unequal,
+}
+
+impl Compare {
+    /// How it is written.
+    pub fn symbol(self) -> &'static str {
+        match self {
+            Self::Less => "<",
+            Self::AtMost => "<=",
+            Self::Greater => ">",
+            Self::AtLeast => ">=",
+            Self::Equal => "==",
+            Self::Unequal => "!=",
+        }
+    }
+
+    fn holds(self, a: Number, b: Number) -> bool {
+        let order = match (a, b) {
+            (Number::Whole(a), Number::Whole(b)) => a.partial_cmp(&b),
+            (a, b) => a.exact().partial_cmp(&b.exact()),
+        };
+        let Some(order) = order else {
+            return self == Self::Unequal;
+        };
+        match self {
+            Self::Less => order.is_lt(),
+            Self::AtMost => order.is_le(),
+            Self::Greater => order.is_gt(),
+            Self::AtLeast => order.is_ge(),
+            Self::Equal => order.is_eq(),
+            Self::Unequal => order.is_ne(),
+        }
+    }
+}
+
+/// What a graph's parameters must hold for it to run, `require name: a
+/// <= b;`: two counts over its parameters and the window, compared, and
+/// checked before each evaluation.
+#[derive(Clone, Debug)]
+pub struct Requirement {
+    /// Its name; a placed graph's is prefixed as its nodes are.
+    pub name: String,
+    /// The left side.
+    pub left: DomainExpr,
+    /// The comparison.
+    pub compare: Compare,
+    /// The right side.
+    pub right: DomainExpr,
+    /// Where it was written, `file:line:column`, for diagnostics.
+    pub at: Option<String>,
+}
+
+/// Equality ignores `at`, as a node's does.
+impl PartialEq for Requirement {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.left == other.left
+            && self.compare == other.compare
+            && self.right == other.right
+    }
+}
+
+impl Requirement {
+    /// Every name `given` answers for replaced, as [`DomainExpr::with_names`].
+    pub fn with_names(&self, given: &dyn Fn(&str) -> Option<DomainExpr>) -> Self {
+        Self {
+            name: self.name.clone(),
+            left: self.left.with_names(given),
+            compare: self.compare,
+            right: self.right.with_names(given),
+            at: self.at.clone(),
+        }
+    }
+
+    /// Whether it holds under `param` and `context`; the error says what
+    /// each side came to and the parameters it read.
+    pub fn check(
+        &self,
+        param: &dyn Fn(&str) -> Option<Value>,
+        context: &dyn Fn(&str) -> Option<Value>,
+    ) -> Result<(), DomainError> {
+        let inputs = Inputs {
+            port: &|_| None,
+            param,
+            context,
+            element: &|_, _| None,
+        };
+        let side = |expr: &DomainExpr| -> Result<Number, DomainError> {
+            match expr.size(&inputs)? {
+                Size::One(n) => Ok(n),
+                other => Err(DomainError {
+                    message: format!("`{}` compares numbers; `{expr}` is {other}", self.name),
+                }),
+            }
+        };
+        let (a, b) = (side(&self.left)?, side(&self.right)?);
+        if self.compare.holds(a, b) {
+            return Ok(());
+        }
+        let mut names = Vec::new();
+        self.left.collect_names(&mut names);
+        self.right.collect_names(&mut names);
+        let read: Vec<String> = names
+            .iter()
+            .filter_map(|name| param(name).map(|value| format!("{name} = {value}")))
+            .collect();
+        let with = if read.is_empty() {
+            String::new()
+        } else {
+            format!(", with {}", read.join(", "))
+        };
+        let at = self
+            .at
+            .as_ref()
+            .map(|at| format!(" ({at})"))
+            .unwrap_or_default();
+        Err(DomainError {
+            message: format!(
+                "`{}`{at} does not hold: {} {} {}, here {a} {} {b}{with}",
+                self.name,
+                self.left,
+                self.compare.symbol(),
+                self.right,
+                self.compare.symbol()
+            ),
+        })
+    }
+}
+
+impl DomainExpr {
+    fn collect_names(&self, out: &mut Vec<String>) {
+        match self {
+            Self::Name(name) => {
+                if !out.contains(name) {
+                    out.push(name.clone());
+                }
+            }
+            Self::Vector(parts) | Self::Call(_, parts) => {
+                for part in parts {
+                    part.collect_names(out);
+                }
+            }
+            Self::Neg(inner) => inner.collect_names(out),
+            Self::Binary(_, a, b) => {
+                a.collect_names(out);
+                b.collect_names(out);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl fmt::Display for Requirement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}: {} {} {}",
+            self.name,
+            self.left,
+            self.compare.symbol(),
+            self.right
+        )
     }
 }

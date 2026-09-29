@@ -12,7 +12,7 @@
 //! `columns` by `rows` cells of side `cell` from `origin` should cover
 //! where the bodies are, a cell about the size of a common body; one
 //! outside it is entered in the edge cells. `bits` is enough for
-//! `columns * rows`. `substeps` are the passes a step takes, more for a
+//! `columns * rows`, which the graph requires. `substeps` are the passes a step takes, more for a
 //! pile many bodies deep that lands at once; `hertz` is how stiff a
 //! contact is, higher for a deep pile to sink into itself less.
 use "../kernels/physics.orla";
@@ -33,6 +33,9 @@ param cell: Float = 1.0;
 param columns: Int = 64;
 param rows: Int = 64;
 param bits: Int = 12;
+
+// Every cell is a key the sort orders.
+require cells: columns * rows <= 1 << bits;
 
 // Each body entered in the cells its box covers, the entries sorted by
 // cell, and where each cell's run of them ends.

@@ -95,6 +95,8 @@ pub struct Document {
     /// Graph parameters: `param name: Type = default;`, overridable by a
     /// parent graph or the caller.
     pub params: Vec<ParamDecl>,
+    /// What the graph's parameters must hold: `require name: a <= b;`.
+    pub requires: Vec<RequireDecl>,
     /// Named results: `output name <- source;`.
     pub outputs: Vec<(Spanned<String>, SourceRef)>,
     /// Outputs also written to a file: `output name <- source to "file";`.
@@ -144,6 +146,8 @@ pub enum StatementKind {
     Input,
     /// `param name: Type = value;`
     Param,
+    /// `require name: condition;`
+    Require,
     /// `output name <- source ...;`
     Output,
     /// `node name: ...`
@@ -162,6 +166,7 @@ impl StatementKind {
             Self::Kernel => "kernel",
             Self::Input => "input",
             Self::Param => "param",
+            Self::Require => "require",
             Self::Output => "output",
             Self::Node => "node",
         }
@@ -549,6 +554,16 @@ pub struct FramesDecl {
     pub dir: Spanned<String>,
     /// Frames a second.
     pub rate: u32,
+}
+
+/// `require name: condition;`: a comparison of counts over the graph's
+/// parameters and the window, which must hold for the graph to run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RequireDecl {
+    /// Its name.
+    pub name: Spanned<String>,
+    /// The comparison as written.
+    pub condition: Expr,
 }
 
 /// `param name: Type = default;`

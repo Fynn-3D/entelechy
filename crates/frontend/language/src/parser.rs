@@ -4,8 +4,8 @@ use crate::lexer::{Lexeme, Token, tokenize};
 use crate::{
     BinaryOp, BindingDecl, Block, CarryDecl, Document, Expr, ExprKind, FnDecl, FramesDecl, Kernel,
     MatchArm, MergeDecl, NodeBlock, NodeDecl, NodeKind, NodeMember, NodeMemberAt, Outline,
-    PackageDecl, ParamDecl, ParseError, PortDecl, PrefixDecl, ScatterDecl, SourceRef, Span,
-    Spanned, Statement, StatementKind, StructDecl, TypeAlias, Use, WriteDecl,
+    PackageDecl, ParamDecl, ParseError, PortDecl, PrefixDecl, RequireDecl, ScatterDecl, SourceRef,
+    Span, Spanned, Statement, StatementKind, StructDecl, TypeAlias, Use, WriteDecl,
 };
 
 /// Parses a document: `use`, `kernel`, `input`, `output`, and `node` items.
@@ -39,6 +39,7 @@ fn read_document(source: &str) -> Result<(Document, Outline), ParseError> {
         kernels: Vec::new(),
         inputs: Vec::new(),
         params: Vec::new(),
+        requires: Vec::new(),
         outputs: Vec::new(),
         writes: Vec::new(),
         nodes: Vec::new(),
@@ -102,6 +103,15 @@ fn read_document(source: &str) -> Result<(Document, Outline), ParseError> {
                 document.params.push(parser.param()?);
                 StatementKind::Param
             }
+            Token::Ident(word) if word == "require" => {
+                parser.next();
+                let name = parser.ident("a requirement's name")?;
+                parser.expect_punct(":")?;
+                let condition = parser.expr()?;
+                parser.expect_punct(";")?;
+                document.requires.push(RequireDecl { name, condition });
+                StatementKind::Require
+            }
             Token::Ident(word) if word == "output" => {
                 parser.next();
                 let name = parser.ident("an output name")?;
@@ -140,7 +150,7 @@ fn read_document(source: &str) -> Result<(Document, Outline), ParseError> {
             }
             _ => {
                 return Err(parser.unexpected(
-                    "`use`, `struct`, `type`, `fn`, `kernel`, `input`, `param`, `output`, or `node`",
+                    "`use`, `struct`, `type`, `fn`, `kernel`, `input`, `param`, `require`, `output`, or `node`",
                 ));
             }
         };
@@ -157,6 +167,7 @@ fn read_document(source: &str) -> Result<(Document, Outline), ParseError> {
                 .map(|id| id.value.clone()),
             StatementKind::Input => document.inputs.last().map(|d| d.name.value.clone()),
             StatementKind::Param => document.params.last().map(|d| d.name.value.clone()),
+            StatementKind::Require => document.requires.last().map(|d| d.name.value.clone()),
             StatementKind::Output => document.outputs.last().map(|(name, _)| name.value.clone()),
             StatementKind::Node => document.nodes.last().map(|d| d.name.value.clone()),
         };

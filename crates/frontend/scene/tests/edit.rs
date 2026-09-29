@@ -308,3 +308,33 @@ fn a_fragment_ending_in_a_comment_ends_its_line_before_what_followed() {
     .unwrap();
     assert_eq!(edited, "param a: Float = 3.0; // three\n");
 }
+
+#[test]
+fn a_requirement_is_added_after_the_params_and_replaced_by_name() {
+    let edited = edit(
+        SCENE,
+        &[statement(
+            StatementKind::Require,
+            "small",
+            "require small: size <= 64;",
+        )],
+    )
+    .unwrap();
+    assert_eq!(
+        edited,
+        SCENE.replace(
+            "param size: Int = 13;\n",
+            "param size: Int = 13;\n\nrequire small: size <= 64;\n"
+        )
+    );
+    let again = edit(
+        &edited,
+        &[statement(
+            StatementKind::Require,
+            "small",
+            "require small: size <= 32;",
+        )],
+    )
+    .unwrap();
+    assert!(again.contains("require small: size <= 32;\n"), "{again}");
+}

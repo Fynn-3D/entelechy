@@ -94,15 +94,16 @@ pub(crate) fn compose_with(
 }
 
 /// `edits` as the scene takes them: each object names its target by kind
-/// (`node`, `output`, `param`, `input`, `kernel`, `struct`, `type`, `fn`,
-/// `use`), optionally a node's `member`, and `text`, the whole statement
+/// (`node`, `output`, `param`, `require`, `input`, `kernel`, `struct`,
+/// `type`, `fn`, `use`), optionally a node's `member`, and `text`, the whole statement
 /// or member, or null to remove it.
 fn edits_from_json(edits: &Json) -> Result<Vec<orla_scene::edit::Edit>, Json> {
     use orla_scene::edit::{Edit, StatementKind, Target};
-    const KINDS: [(&str, StatementKind); 9] = [
+    const KINDS: [(&str, StatementKind); 10] = [
         ("node", StatementKind::Node),
         ("output", StatementKind::Output),
         ("param", StatementKind::Param),
+        ("require", StatementKind::Require),
         ("input", StatementKind::Input),
         ("kernel", StatementKind::Kernel),
         ("struct", StatementKind::Struct),
@@ -129,7 +130,7 @@ fn edits_from_json(edits: &Json) -> Result<Vec<orla_scene::edit::Edit>, Json> {
                 .collect();
             let [(kind, name)] = named.as_slice() else {
                 return Err(bad(
-                    "an edit names one thing: `node`, `output`, `param`, `input`, `kernel`, `struct`, `type`, `fn`, or `use`, and its name".into(),
+                    "an edit names one thing: `node`, `output`, `param`, `require`, `input`, `kernel`, `struct`, `type`, `fn`, or `use`, and its name".into(),
                 ));
             };
             if name.is_empty() {
