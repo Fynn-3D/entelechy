@@ -647,6 +647,7 @@ fn serve(args: &[String]) -> Result<(), String> {
 fn replay(args: &[String]) -> Result<(), String> {
     let mut backend = "jit".to_string();
     let mut limits = orla_session::Limits::default();
+    let mut apart = false;
     let mut files = Vec::new();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -657,6 +658,7 @@ fn replay(args: &[String]) -> Result<(), String> {
                     .cloned()
                     .ok_or_else(|| "--backend needs a value".to_string())?;
             }
+            "--round-apart" => apart = true,
             flag if orla_session::Limits::takes(flag) => {
                 let text = iter.next().ok_or_else(|| format!("{flag} needs a value"))?;
                 limits.read(flag, text)?;
@@ -674,11 +676,16 @@ fn replay(args: &[String]) -> Result<(), String> {
         let base = file.parent().unwrap_or_else(|| Path::new("."));
         let replay = orla::replay::parse(&text, base)
             .map_err(|error| format!("{}: {error}", file.display()))?;
-        let runtime = Session::runtime_for(&backend, limits)?;
         let store = std::sync::Arc::new(orla_session::Disk::with_packages(
             orla_session::environment_packages(),
         ));
-        match orla::replay::run_in(&replay, store, runtime) {
+        let ran = if apart {
+            rounded_apart(&replay, &store, &backend, limits)
+        } else {
+            let runtime = Session::runtime_for(&backend, limits)?;
+            orla::replay::run_in(&replay, store, runtime)
+        };
+        match ran {
             Ok(outcome) if outcome.failures.is_empty() => {
                 println!(
                     "{}: ok ({} frames, {} checks)",
@@ -1028,4 +1035,28 @@ fn evaluate_and_export(
             false
         }
     }
+}
+
+/// A replay run once for each way of choosing the Kernels that round apart
+/// ([`orla_session::apart`]), its failures named by the way that found them.
+fn rounded_apart(
+    replay: &orla::replay::Replay,
+    store: &std::sync::Arc<orla_session::Disk>,
+    backend: &str,
+    limits: orla_session::Limits,
+) -> Result<orla::replay::Outcome, String> {
+    let mut all = orla::replay::Outcome::default();
+    for split in 0..orla_session::apart::SPLITS {
+        let runtime = Session::runtime_apart(backend, limits, split)?;
+        let outcome = orla::replay::run_in(replay, store.clone(), runtime)?;
+        all.frames += outcome.frames;
+        all.checks += outcome.checks;
+        all.failures.extend(
+            outcome
+                .failures
+                .into_iter()
+                .map(|failure| format!("rounded apart, way {}: {failure}", split + 1)),
+        );
+    }
+    Ok(all)
 }

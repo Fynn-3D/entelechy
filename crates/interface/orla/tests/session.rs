@@ -2752,3 +2752,58 @@ fn a_fault_in_a_shared_function_is_reported_once_where_it_is_written() {
     assert!(faults[0].contains("lib.orla:1:"), "{stdout}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A value computed in two Kernels, the second holding it equal to the
+/// first's, passes a replay and fails it rounded apart: the decision is
+/// made twice.
+#[test]
+fn a_value_two_kernels_each_compute_fails_a_replay_rounded_apart() {
+    let dir = std::env::temp_dir().join(format!("orla-apart-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("twice.osn"),
+        "node first: kernel {
+    requires { field.write; }
+    output result: Rows<Float>;
+    compute { let x = 0.1 + float(element()) * 0.013; return x * 0.7 + 0.3; }
+    domain = 4096;
+}
+node second: kernel {
+    requires { field.read; field.write; }
+    input first: Rows<Float> <- first.result;
+    output result: Rows<Int>;
+    compute { let x = 0.1 + float(element()) * 0.013; return if x * 0.7 + 0.3 == sample(first) { 0 } else { 1 }; }
+    merge(a, b) { return a + b; }
+}
+output differ <- second.result;
+",
+    )
+    .unwrap();
+    let replay = dir.join("twice.replay");
+    std::fs::write(
+        &replay,
+        "scene twice.osn\nframe 0\nexpect second.result[0] = 0\n",
+    )
+    .unwrap();
+    let orla = env!("CARGO_BIN_EXE_orla");
+    let plain = Command::new(orla)
+        .arg("replay")
+        .arg(&replay)
+        .output()
+        .unwrap();
+    assert!(
+        plain.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plain.stdout)
+    );
+    let apart = Command::new(orla)
+        .args(["replay", "--round-apart"])
+        .arg(&replay)
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&apart.stdout);
+    assert!(!apart.status.success(), "{said}");
+    assert!(said.contains("rounded apart, way"), "{said}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

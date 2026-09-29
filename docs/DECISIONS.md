@@ -183,6 +183,8 @@ chooses. A device may compute one expression to different last bits in
 two Kernels, as its compiler fuses a multiply into an add where it
 chooses, so a decision two Kernels must share is made in one: were a
 box found twice, the tiles counted from one would be cut from another.
+`orla replay --round-apart` finds one made twice, by rounding some
+Kernels as another device might.
 
 **Where.** The package and its presets; every example places it.
 [`ten_million.osn`](../examples/mesh/tests/ten_million.osn) is the scale

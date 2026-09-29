@@ -20,6 +20,7 @@
 
 #![warn(missing_docs)]
 
+pub mod apart;
 pub mod bench;
 mod check;
 pub mod history;

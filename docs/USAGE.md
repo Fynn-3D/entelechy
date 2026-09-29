@@ -305,6 +305,18 @@ In the Player, a replay drives the scene at
 its own times, prints what it observed at the end, and leaves the window
 to the person.
 
+`orla replay --round-apart` runs each replay three ways, some of its
+Kernels rounding as another device might (a multiply fused into an add,
+a division taken by the reciprocal), chosen by their ids; each way
+parts other Kernels. A replay allows what a device's rounding changes
+in a picture, so what fails is a value two Kernels each compute and must
+hold equal: compute it in one and read it in the other
+([why](DECISIONS.md#the-rasterizer-is-a-package-the-native-one-is-its-fast-path)).
+An expectation that holds two forms of one computation to each other
+word for word, as `examples/vector/tests/tiled.replay` holds the tiled
+drawing to the plain one, fails rounded apart as it should: the two
+agree to the bit only where every Kernel rounds alike.
+
 ## Import and export
 
 ```sh
