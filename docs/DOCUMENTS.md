@@ -141,7 +141,8 @@ Inside `compute`, a body is `let` bindings and a result.
 - **Bits.** `& | ^` and `<< >> >>>` on `Int`s (count modulo 32, `>>`
   arithmetic, `>>>` logical), binding between comparison and arithmetic
   as in Rust. `0xFF` is hexadecimal, its 32 bits as written; more than
-  eight digits, or an `l`, make a `Long`.
+  eight digits, or an `l`, make a `Long`. A float may carry an exponent,
+  `1e30` or `2.5e-3`, and a `Double` its `d` after it (`3e2d`).
 - **Logic.** `&&` and `||` short-circuit: `n != 0 && x / n > 1` does not
   divide when `n` is zero. `==` and `!=` compare scalars and whole
   vectors; `<` and the rest compare scalars.

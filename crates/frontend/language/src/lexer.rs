@@ -175,6 +175,19 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Lexeme>, ParseError> {
                     advance(1, &mut index, &mut byte);
                 }
             }
+            // An exponent, `1e30` or `2.5E-3`, makes a float.
+            let signed = matches!(chars.get(index + 1), Some('+' | '-'));
+            if matches!(chars.get(index), Some('e' | 'E'))
+                && chars
+                    .get(index + 1 + usize::from(signed))
+                    .is_some_and(|c| c.is_ascii_digit())
+            {
+                is_float = true;
+                advance(1 + usize::from(signed), &mut index, &mut byte);
+                while index < chars.len() && chars[index].is_ascii_digit() {
+                    advance(1, &mut index, &mut byte);
+                }
+            }
             let text = &source[start..byte];
             let written = suffix(index, &['d', 'l']);
             if written.is_some() {

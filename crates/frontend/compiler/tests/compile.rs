@@ -137,6 +137,39 @@ fn parameter_defaults_are_constants_of_the_declared_type() {
     assert!(message.contains("expected a literal"), "{message}");
 }
 
+/// A float may be written with an exponent: a `Float`, a `Double` with
+/// `d`, never a `Long`.
+#[test]
+fn a_float_is_written_with_an_exponent() {
+    let module = compile(
+        "kernel t.k@1 { requires { field.write; } param a: Float = 1e30; param b: Float = 2.5e-3; param c: Float = 4E+2; param d: Double = 3e2d; param e: Float = 7.0; output r: Rows<Float>; compute { return a + b + c + float(d) + e; } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let defaults: Vec<_> = module
+        .manifest
+        .params
+        .iter()
+        .map(|p| p.default.clone())
+        .collect();
+    assert_eq!(
+        defaults,
+        [
+            orla_ir::Value::Float(1e30),
+            orla_ir::Value::Float(2.5e-3),
+            orla_ir::Value::Float(400.0),
+            orla_ir::Value::Double(300.0),
+            orla_ir::Value::Float(7.0),
+        ]
+    );
+    // A `Long` is a whole number, however written.
+    let refused = compile(
+        "kernel t.k@1 { requires { field.write; } param a: Long = 1e5l; output r: Rows<Float>; compute { return 1.0; } }",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(refused.contains("a `Long` is a whole number"), "{refused}");
+}
+
 #[test]
 fn time_and_vec3_are_typed_and_gated() {
     let (_, message) = semantic(

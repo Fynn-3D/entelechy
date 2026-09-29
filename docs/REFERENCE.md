@@ -9,7 +9,7 @@ Kernels (`.orla`) compute; scenes (`.osn`) compose them into a running world. Wh
 - **Grid**: `Grid<T>` A grid of elements, coord() the column and row of one; size(f) and at(f, vec2) read it.
 - **Volume**: `Volume<T>` A volume of elements, coord() the column, row and layer of one.
 - **Image**: `Image` Grid<Vec4>: a picture, each channel a Float from 0 to 1, the first output that is one is what a scene shows.
-- **Float**: `Float` A 32-bit float; written 1.0, never 1.
+- **Float**: `Float` A 32-bit float; written 1.0 or 2.5e-3, never 1.
 - **Int**: `Int` A 32-bit integer; an overflow fails the element, add_wrap and its kin wrap.
 - **Bool**: `Bool` true or false.
 - **Double**: `Double` A 64-bit float; a literal is taken exact.

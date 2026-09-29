@@ -246,7 +246,7 @@ pub fn forms() -> Vec<Form> {
             "Float",
             "type",
             "Float",
-            "A 32-bit float; written 1.0, never 1.",
+            "A 32-bit float; written 1.0 or 2.5e-3, never 1.",
         ),
         form(
             "Int",
