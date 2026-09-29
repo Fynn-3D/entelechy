@@ -1684,6 +1684,21 @@ pub fn large_cases() -> Vec<Case> {
             vec![ones(Domain::Grid(side, side))],
             Domain::Grid(side, side),
         ),
+        // A float address far past a wide grid's edge reads its last
+        // element: the clamp is an integer's, not a float's, whose
+        // `width - 1` rounds up to the width past 2^24.
+        {
+            let width = (1u32 << 25) + 4096;
+            let floats = Schema::new(vec![Scalar::Float]);
+            let places: Vec<u32> = (0..width).map(|i| (i as f32).to_bits()).collect();
+            case(
+                "a float address past a grid's edge",
+                "kernel large.edge@1 { requires { field.read; field.write; } input g: Grid<Float>; output result: Rows<Float>;
+                    compute { let x = 1.0e10 + float(element()); return at(g, vec2(x, 0.0)) + at_linear(g, vec2(x, 0.5)) + at(g, vec2(float(element()) * 1.0e7, 0.0)); } }",
+                vec![(floats, Domain::Grid(width, 1), places)],
+                Domain::Rows(8),
+            )
+        },
         case(
             "reduce",
             "kernel large.reduce@1 { requires { field.read; field.write; } input ones: Rows<Int>; output result: Rows<Int>;

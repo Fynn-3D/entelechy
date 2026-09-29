@@ -165,8 +165,6 @@ const I64_EXTEND_I32_U: u8 = 0xad;
 const F32_CONVERT_I32_S: u8 = 0xb2;
 const F32_CONVERT_I32_U: u8 = 0xb3;
 const F32_FLOOR: u8 = 0x8e;
-const F32_MIN: u8 = 0x96;
-const F32_MAX: u8 = 0x97;
 const F32_REINTERPRET_I32: u8 = 0xbe;
 const I32_REINTERPRET_F32: u8 = 0xbc;
 
@@ -1033,15 +1031,14 @@ impl<'a> Fx<'a> {
             let nan = fx.is_nan(v);
             let v = fx.select(nan, zero, v);
             let floored = fx.un(v, F32_FLOOR, Val::F32);
-            let low = fx.bin(floored, zero, F32_MAX, Val::F32);
-            let last = fx.add_imm(limit, -1);
-            let last = fx.u32_to_f32(last);
-            let clamped = fx.bin(low, last, F32_MIN, Val::F32);
-            // i32.trunc_sat_f32_u
-            fx.get(clamped);
+            // i32.trunc_sat_f32_u: below zero is zero, past the largest the
+            // largest; then clamped as an integer.
+            fx.get(floored);
             fx.byte(0xfc);
             fx.uleb(1);
-            fx.take(Val::I32)
+            let whole = fx.take(Val::I32);
+            let last = fx.add_imm(limit, -1);
+            fx.umin(whole, last)
         };
         let cx = axis(self, x, width);
         let cy = axis(self, y, height);

@@ -1176,11 +1176,7 @@ unsafe extern "C" fn orla_jit_linear(
 ) {
     let view = unsafe { view(ctx, input) };
     let axis = |v: f32, limit: u32| -> (usize, usize, f32) {
-        let t = if v.is_nan() { 0.0 } else { v - 0.5 };
-        let lower = t.floor().clamp(0.0, (limit - 1) as f32);
-        let upper = (lower + 1.0).min((limit - 1) as f32);
-        let weight = (t - t.floor()).clamp(0.0, 1.0);
-        let weight = if t < 0.0 { 0.0 } else { weight };
+        let (lower, upper, weight) = orla_rules::linear_axis(v, limit);
         (lower as usize, upper as usize, weight)
     };
     let (x0, x1, fx) = axis(x, view.width);

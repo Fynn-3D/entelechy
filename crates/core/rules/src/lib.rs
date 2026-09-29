@@ -354,6 +354,29 @@ pub fn address_words(domain: Domain) -> usize {
     domain.shape().dims() as usize
 }
 
+/// The element one axis of a float address picks: floored, NaN as zero,
+/// and clamped into `0..limit` as an integer, so no rounding of `limit`
+/// to a float moves it past the last element.
+pub fn clamp_axis(value: f32, limit: u32) -> u32 {
+    let floored = if value.is_nan() { 0.0 } else { value.floor() };
+    // `as` saturates: below zero is zero, past the largest is the largest.
+    (floored as u32).min(limit.saturating_sub(1))
+}
+
+/// One axis of a linear read at `value`: element centres sit at
+/// half-integers, so the position less a half gives the lower neighbour,
+/// the upper one, each clamped as [`clamp_axis`] clamps, and the upper
+/// one's weight, none before the first element.
+pub fn linear_axis(value: f32, limit: u32) -> (u32, u32, f32) {
+    let t = if value.is_nan() { 0.0 } else { value - 0.5 };
+    let last = limit.saturating_sub(1);
+    let lower = (t.floor() as u32).min(last);
+    let upper = lower.saturating_add(1).min(last);
+    let weight = (t - t.floor()).clamp(0.0, 1.0);
+    let weight = if t < 0.0 { 0.0 } else { weight };
+    (lower, upper, weight)
+}
+
 /// The linear index a scattered address names, or `None` when it falls
 /// outside the target (NaN included): the write is dropped, never clamped.
 pub fn scatter_index(domain: Domain, address: &[u32]) -> Option<usize> {

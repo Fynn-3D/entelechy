@@ -527,8 +527,9 @@ fn settle_left() {{
 }}",
             wgsl_type(element)
         );
-        // The linear index of an address, each axis floored and clamped
-        // into the input's extent (NaN counts as zero).
+        // The linear index of an address, each axis floored (NaN counts as
+        // zero) and clamped into the input's extent as an integer: `u32()`
+        // saturates, and `min` keeps the last element.
         let slot = CONTEXT_HEAD + index;
         let _ = match port.shape() {
             Shape::Rows => writeln!(
@@ -540,23 +541,23 @@ fn settle_left() {{
             Shape::Grid => writeln!(
                 out,
                 "fn index_in{index}(c: vec2<f32>) -> u32 {{
-    let w = f32(bitcast<u32>(ctx[{slot}].x));
-    let h = f32(bitcast<u32>(ctx[{slot}].y));
-    let x = clamp(select(floor(c.x), 0.0, c.x != c.x), 0.0, w - 1.0);
-    let y = clamp(select(floor(c.y), 0.0, c.y != c.y), 0.0, h - 1.0);
-    return u32(y) * u32(w) + u32(x);
+    let w = bitcast<u32>(ctx[{slot}].x);
+    let h = bitcast<u32>(ctx[{slot}].y);
+    let x = min(u32(select(floor(c.x), 0.0, c.x != c.x)), w - 1u);
+    let y = min(u32(select(floor(c.y), 0.0, c.y != c.y)), h - 1u);
+    return y * w + x;
 }}"
             ),
             Shape::Volume => writeln!(
                 out,
                 "fn index_in{index}(c: vec3<f32>) -> u32 {{
-    let w = f32(bitcast<u32>(ctx[{slot}].x));
-    let h = f32(bitcast<u32>(ctx[{slot}].y));
-    let d = f32(bitcast<u32>(ctx[{slot}].z));
-    let x = clamp(select(floor(c.x), 0.0, c.x != c.x), 0.0, w - 1.0);
-    let y = clamp(select(floor(c.y), 0.0, c.y != c.y), 0.0, h - 1.0);
-    let z = clamp(select(floor(c.z), 0.0, c.z != c.z), 0.0, d - 1.0);
-    return (u32(z) * u32(h) + u32(y)) * u32(w) + u32(x);
+    let w = bitcast<u32>(ctx[{slot}].x);
+    let h = bitcast<u32>(ctx[{slot}].y);
+    let d = bitcast<u32>(ctx[{slot}].z);
+    let x = min(u32(select(floor(c.x), 0.0, c.x != c.x)), w - 1u);
+    let y = min(u32(select(floor(c.y), 0.0, c.y != c.y)), h - 1u);
+    let z = min(u32(select(floor(c.z), 0.0, c.z != c.z)), d - 1u);
+    return (z * h + y) * w + x;
 }}"
             ),
         };
@@ -789,32 +790,28 @@ pub(crate) fn emit_linear(out: &mut String, module: &Module, index: usize, port:
             let _ = writeln!(
                 out,
                 "fn linear_in{index}(c: f32) -> {ty} {{
-    let w = f32(bitcast<u32>(ctx[{slot}].x));
-    let h = 1.0;
+    let w = bitcast<u32>(ctx[{slot}].x);
+    let h = 1u;
     let t = select(c - 0.5, -1.0, c != c);
-    let lower = clamp(floor(t), 0.0, w - 1.0);
-    let upper = min(lower + 1.0, w - 1.0);
+    let lower = min(u32(floor(t)), w - 1u);
+    let upper = min(lower + 1u, w - 1u);
     let f = select(clamp(t - floor(t), 0.0, 1.0), 0.0, t < 0.0);
     return {};
 }}",
-                mix(
-                    load("u32(lower)", "0u", "0u"),
-                    load("u32(upper)", "0u", "0u"),
-                    "f"
-                )
+                mix(load("lower", "0u", "0u"), load("upper", "0u", "0u"), "f")
             );
         }
         Shape::Grid => {
             let _ = writeln!(
                 out,
                 "fn linear_in{index}(c: vec2<f32>) -> {ty} {{
-    let w = f32(bitcast<u32>(ctx[{slot}].x));
-    let h = f32(bitcast<u32>(ctx[{slot}].y));
+    let w = bitcast<u32>(ctx[{slot}].x);
+    let h = bitcast<u32>(ctx[{slot}].y);
     let t = select(c - vec2<f32>(0.5, 0.5), vec2<f32>(-1.0, -1.0), c != c);
-    let lower = clamp(floor(t), vec2<f32>(0.0, 0.0), vec2<f32>(w - 1.0, h - 1.0));
-    let upper = min(lower + vec2<f32>(1.0, 1.0), vec2<f32>(w - 1.0, h - 1.0));
+    let lower = min(vec2<u32>(floor(t)), vec2<u32>(w - 1u, h - 1u));
+    let upper = min(lower + vec2<u32>(1u, 1u), vec2<u32>(w - 1u, h - 1u));
     let f = select(clamp(t - floor(t), vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0)), vec2<f32>(0.0, 0.0), t < vec2<f32>(0.0, 0.0));
-    let x0 = u32(lower.x); let x1 = u32(upper.x); let y0 = u32(lower.y); let y1 = u32(upper.y);
+    let x0 = lower.x; let x1 = upper.x; let y0 = lower.y; let y1 = upper.y;
     let top = {};
     let bottom = {};
     return {};
@@ -828,14 +825,14 @@ pub(crate) fn emit_linear(out: &mut String, module: &Module, index: usize, port:
             let _ = writeln!(
                 out,
                 "fn linear_in{index}(c: vec3<f32>) -> {ty} {{
-    let w = f32(bitcast<u32>(ctx[{slot}].x));
-    let h = f32(bitcast<u32>(ctx[{slot}].y));
-    let d = f32(bitcast<u32>(ctx[{slot}].z));
+    let w = bitcast<u32>(ctx[{slot}].x);
+    let h = bitcast<u32>(ctx[{slot}].y);
+    let d = bitcast<u32>(ctx[{slot}].z);
     let t = select(c - vec3<f32>(0.5, 0.5, 0.5), vec3<f32>(-1.0, -1.0, -1.0), c != c);
-    let lower = clamp(floor(t), vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(w - 1.0, h - 1.0, d - 1.0));
-    let upper = min(lower + vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(w - 1.0, h - 1.0, d - 1.0));
+    let lower = min(vec3<u32>(floor(t)), vec3<u32>(w - 1u, h - 1u, d - 1u));
+    let upper = min(lower + vec3<u32>(1u, 1u, 1u), vec3<u32>(w - 1u, h - 1u, d - 1u));
     let f = select(clamp(t - floor(t), vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0)), vec3<f32>(0.0, 0.0, 0.0), t < vec3<f32>(0.0, 0.0, 0.0));
-    let x0 = u32(lower.x); let x1 = u32(upper.x); let y0 = u32(lower.y); let y1 = u32(upper.y); let z0 = u32(lower.z); let z1 = u32(upper.z);
+    let x0 = lower.x; let x1 = upper.x; let y0 = lower.y; let y1 = upper.y; let z0 = lower.z; let z1 = upper.z;
     let near_top = {};
     let near_bottom = {};
     let far_top = {};

@@ -1346,8 +1346,9 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.b.ins().iadd(scaled, cx)
     }
 
-    /// A float address into a grid or volume, each axis floored and
-    /// clamped into the Field, NaN as zero: `clamp_axis` inline.
+    /// A float address into a grid or volume, each axis floored, NaN as
+    /// zero, and clamped into the Field as an integer: `orla_rules::clamp_axis`
+    /// inline.
     fn float_index(&mut self, input: u32, x: Value, y: Value, z: Value) -> Value {
         let view = self.view(input);
         let extent =
@@ -1360,11 +1361,10 @@ impl<'a, 'b> Fx<'a, 'b> {
             let nan = fx.is_nan(v);
             let v = fx.b.ins().select(nan, zero, v);
             let floored = fx.b.ins().floor(v);
-            let low = fx.b.ins().fmax(floored, zero);
+            // Saturating: below zero is zero, past the largest the largest.
+            let whole = fx.b.ins().fcvt_to_uint_sat(types::I32, floored);
             let last = fx.b.ins().iadd_imm(limit, -1);
-            let last = fx.b.ins().fcvt_from_uint(types::F32, last);
-            let clamped = fx.b.ins().fmin(low, last);
-            fx.b.ins().fcvt_to_uint_sat(types::I32, clamped)
+            fx.b.ins().umin(whole, last)
         };
         let cx = axis(self, x, width);
         let cy = axis(self, y, height);

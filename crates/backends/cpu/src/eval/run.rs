@@ -1068,11 +1068,7 @@ impl<'p, 's> Machine<'p, 's> {
                 // a half splits into the lower neighbour and a weight,
                 // each axis clamped at the edges.
                 let axis = |v: f32, limit: u32| -> (usize, usize, f32) {
-                    let t = if v.is_nan() { 0.0 } else { v - 0.5 };
-                    let lower = t.floor().clamp(0.0, (limit - 1) as f32);
-                    let upper = (lower + 1.0).min((limit - 1) as f32);
-                    let weight = (t - t.floor()).clamp(0.0, 1.0);
-                    let weight = if t < 0.0 { 0.0 } else { weight };
+                    let (lower, upper, weight) = orla_rules::linear_axis(v, limit);
                     (lower as usize, upper as usize, weight)
                 };
                 let (x0, x1, fx) = axis(address[0], domain.width());
@@ -1171,17 +1167,10 @@ pub(super) fn read_address(stack: &[u32], at: usize, kind: Address, rest: f32) -
 
 /// Each axis floored and clamped into range (NaN counts as zero).
 pub(super) fn clamp_address(domain: Domain, address: [f32; 3]) -> [u32; 3] {
-    let clamp = |value: f32, limit: u32| -> u32 {
-        if value.is_nan() {
-            0
-        } else {
-            value.floor().clamp(0.0, (limit - 1) as f32) as u32
-        }
-    };
     [
-        clamp(address[0], domain.width()),
-        clamp(address[1], domain.height()),
-        clamp(address[2], domain.depth()),
+        orla_rules::clamp_axis(address[0], domain.width()),
+        orla_rules::clamp_axis(address[1], domain.height()),
+        orla_rules::clamp_axis(address[2], domain.depth()),
     ]
 }
 
