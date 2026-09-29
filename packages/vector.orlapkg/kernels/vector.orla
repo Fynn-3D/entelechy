@@ -552,8 +552,10 @@ kernel vector.backdrop@1 {
                 if past(min(on.x, on.z), w.tx) {
                     let seg = at(segments, g);
                     let turn = if seg.w > seg.y { 1 } else { -1 };
-                    let low = clamp(int(floor(min(on.y, on.w))) - 1 - top, 0, rows);
-                    let high = clamp(int(ceil(max(on.y, on.w))) + 1 - top, 0, rows);
+                    // The rows it crosses, taken in the tile's before they are
+                    // whole numbers, so a segment far off the canvas is none.
+                    let low = int(clamp(floor(min(on.y, on.w)) - 1.0 - float(top), 0.0, float(rows)));
+                    let high = int(clamp(ceil(max(on.y, on.w)) + 1.0 - float(top), 0.0, float(rows)));
                     loop high - low with k2 = 0 {
                         let row = low + index();
                         let y = at(frame, int(size(canvas).x) + top + row);

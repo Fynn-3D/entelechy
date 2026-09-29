@@ -22,3 +22,11 @@ param center vec2(250.0, 200.0)
 param zoom 3.7
 frame 0.3
 expect differ.result[0] = 0
+
+# Zoomed until the drawing's edges lie past what a whole number holds:
+# the rows a segment crosses are only the tile's, so it still draws.
+window 400 300
+param center vec2(300.0, 60.0)
+param zoom 1000000000.0
+frame 0.4
+expect differ.result[0] = 0
