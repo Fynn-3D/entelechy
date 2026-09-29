@@ -45,9 +45,32 @@ JIT reads a grid or volume at a float address inline and blends linear
 reads in place; the GPU runs a repeated map's times in one pass and fills
 whole workgroups over rows. Two faults are fixed: an extent past 2^24
 elements on the GPU, and an `async` Kernel run on a backend other than
-the one it was prepared on. `IVec4` is new. It is released once the user
-accepts the batch; the release notes name what changed for a caller
-(none of these changes a contract).
+the one it was prepared on. `IVec4` is new.
+
+The language writes a float with an exponent (`1e30`, `2.5e-3`, `3e2d`)
+and names Ints with enums (`type Mode = enum { Idle, Walk = 10 };`), a
+scene writing a variant where it writes a number. The runtime holds to
+its own rules on every path an agent or a file reaches: a JIT frame is
+bounded (a module past it is left to the interpreter, or refused where
+the JIT is alone) and a float address clamps in integers; every held
+read is judged where its path lands, at the store; a value's type is
+bounded in size and depth; a file decodes only what it holds, within
+the Host's room; every placed node counts against the scene's bound; a
+connection is read no further while 64 of its answers wait; a narrow
+Field read through the C ABI stays until the next evaluate, request or
+close; a file is written new at its working name.
+
+It is released once the user accepts the batch. The release notes name
+what changed for a caller:
+- A served scene reads beside its first-loaded documents and input
+  files, in the package directories and where `--allow file.read` says;
+  a package elsewhere is no longer readable for being one.
+- A page opened from a file connects only with `--allow-origin null`.
+- A value holds at most 65536 words and structs and nests at most 64
+  deep; a Field holds at most `i32::MAX` elements.
+- The interpreter and the JIT charge a narrow output the words it is
+  computed in; a module whose values may pass the JIT's stack does not
+  run on a JIT-only session.
 
 Measured on a 53-Kernel game (21 documents, 318 functions): `check`
 0.3 s, a first frame 1.8 s on the JIT, an idle sync 0.23 ms. Left by
