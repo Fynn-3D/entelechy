@@ -187,7 +187,7 @@ impl Builder<'_> {
                 // An enum's variant, `Phase.Walk`, is its `Int`.
                 if let ExprKind::Name(name) = &inner.kind
                     && !self.binds(name)
-                    && self.shared.structs.variants(name).is_some()
+                    && self.shared.structs.is_enum(name)
                 {
                     let value = super::variant_of(self.shared.structs, name, member, expr.span)?;
                     return Ok(self.emit(Type::Int, Op::Const(Value::Int(value))));

@@ -29,19 +29,19 @@ pub(super) fn structs(kernel: &Kernel) -> Result<Structs, CompileError> {
                 format!("`{name}` is already a type name"),
             ));
         }
-        if structs.variants(name).is_some() {
+        if structs.is_enum(name) {
             return Err(semantic(
                 decl.name.span,
                 format!("type `{name}` is defined twice"),
             ));
         }
-        structs.enums.borrow_mut().push((
+        structs.declare_enum(
             name.clone(),
             variants
                 .into_iter()
                 .map(|(variant, number)| (variant.to_owned(), number))
                 .collect(),
-        ));
+        );
     }
     struct_table_in(structs, &kernel.structs)
 }
@@ -57,7 +57,7 @@ fn struct_table_in(
     decls: &[orla_language::StructDecl],
 ) -> Result<Structs, CompileError> {
     for decl in decls {
-        if structs.variants(&decl.name.value).is_some() {
+        if structs.is_enum(&decl.name.value) {
             return Err(semantic(
                 decl.name.span,
                 format!("`{}` is already an enum", decl.name.value),
@@ -574,7 +574,7 @@ pub(super) fn aliases(
         if decl.variants().is_some() {
             continue;
         }
-        if structs.variants(name).is_some() {
+        if structs.is_enum(name) {
             return Err(semantic(
                 decl.name.span,
                 format!("type `{name}` is defined twice"),

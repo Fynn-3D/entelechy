@@ -909,6 +909,32 @@ fn a_value_converted_to_its_own_kind_is_itself_and_a_written_one_takes_that_widt
 }
 
 #[test]
+fn calls_nested_past_the_limit_are_refused_not_a_crash() {
+    // `f<n>` calls `f<n-1>`, down to `f0`.
+    let chain = |n: usize| {
+        let mut source = String::from(
+            "kernel t.k@1 { requires { field.write; } output r: Rows<Float>;\nfn f0(x: Float) -> Float { return x + 1.0; }\n",
+        );
+        for i in 1..n {
+            source.push_str(&format!(
+                "fn f{i}(x: Float) -> Float {{ return f{}(x) * 0.5; }}\n",
+                i - 1
+            ));
+        }
+        source.push_str(&format!("compute {{ return f{}(0.0); }} }}", n - 1));
+        source
+    };
+    assert!(compile(&chain(orla_language::MAX_NESTING)).is_ok());
+    for n in [orla_language::MAX_NESTING + 1, 30000] {
+        let (_, message) = semantic(&chain(n));
+        assert!(
+            message.contains("calls nest more than 256 deep"),
+            "{n}: {message}"
+        );
+    }
+}
+
+#[test]
 fn a_number_written_past_the_largest_float_that_stays_a_float_is_refused() {
     let kernel = |ty: &str, body: &str| {
         format!(

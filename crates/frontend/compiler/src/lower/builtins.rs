@@ -654,8 +654,8 @@ impl Builder<'_> {
                 if let Some((_, template)) = self
                     .shared
                     .templates
-                    .iter()
-                    .find(|(position, t)| t.name.value == name && self.sees(*position))
+                    .get(name)
+                    .filter(|(position, _)| self.sees(*position))
                 {
                     return self.instantiate(template, args, span);
                 }

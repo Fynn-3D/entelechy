@@ -81,6 +81,8 @@ struct Structs {
     /// The declared enums, each with its variants in order and the `Int`
     /// each is.
     enums: RefCell<Vec<(String, Variants)>>,
+    /// Each enum's variants by name, for a variant found without a walk.
+    numbers: RefCell<std::collections::HashMap<String, std::collections::HashMap<String, i32>>>,
 }
 
 impl std::ops::Deref for Structs {
@@ -95,6 +97,23 @@ impl Structs {
     /// The table, the index let go.
     fn into_inner(self) -> Vec<StructDef> {
         self.table.into_inner()
+    }
+
+    /// Declares the enum `name` with its variants in order.
+    fn declare_enum(&self, name: String, variants: Variants) {
+        self.numbers.borrow_mut().insert(
+            name.clone(),
+            variants
+                .iter()
+                .map(|(variant, number)| (variant.clone(), *number))
+                .collect(),
+        );
+        self.enums.borrow_mut().push((name, variants));
+    }
+
+    /// Whether an enum named `name` is declared.
+    fn is_enum(&self, name: &str) -> bool {
+        self.numbers.borrow().contains_key(name)
     }
 
     /// The variants of the enum named `name`, when one is declared.
@@ -125,10 +144,22 @@ fn variant_of(
     variant: &str,
     span: Span,
 ) -> Result<i32, CompileError> {
-    let variants = structs
-        .variants(name)
-        .ok_or_else(|| semantic(span, format!("`{name}` is not an enum")))?;
-    variant_in(&variants, name, variant, span)
+    let found = structs
+        .numbers
+        .borrow()
+        .get(name)
+        .map(|numbers| numbers.get(variant).copied());
+    match found {
+        None => Err(semantic(span, format!("`{name}` is not an enum"))),
+        Some(Some(number)) => Ok(number),
+        // A variant it lacks: the error names the nearest.
+        Some(None) => variant_in(
+            &structs.variants(name).unwrap_or_default(),
+            name,
+            variant,
+            span,
+        ),
+    }
 }
 
 /// The `Int` the variant `variant` of the enum `name`, whose variants are
@@ -192,7 +223,7 @@ fn resolve_type(name: &Spanned<String>, structs: &Structs) -> Result<Type, Compi
         return array_type(structs, element, count, name.span);
     }
     // An enum's value is the `Int` of its variant's position.
-    if structs.variants(&name.value).is_some() {
+    if structs.is_enum(&name.value) {
         return Ok(Type::Int);
     }
     if let Some(index) = structs.find(&name.value) {
@@ -321,8 +352,9 @@ pub(crate) fn lower(
         structs: &structs,
         aliases: &aliases,
         functions: RefCell::new(Vec::new()),
-        templates: Vec::new(),
-        plain: Vec::new(),
+        templates: std::collections::HashMap::new(),
+        plain: std::collections::HashMap::new(),
+        calls: std::cell::Cell::new(0),
         lowered: RefCell::new(BTreeMap::new()),
         instances: RefCell::new(BTreeMap::new()),
         instantiating: RefCell::new(Vec::new()),
@@ -364,9 +396,13 @@ pub(crate) fn lower(
             }
         }
         if has_field || !declaration.generics.is_empty() {
-            shared.templates.push((position, declaration));
+            shared
+                .templates
+                .insert(declaration.name.value.as_str(), (position, declaration));
         } else {
-            shared.plain.push((position, declaration));
+            shared
+                .plain
+                .insert(declaration.name.value.as_str(), (position, declaration));
         }
     }
     {
@@ -512,9 +548,14 @@ struct Shared<'a> {
     functions: RefCell<Vec<(String, Function)>>,
     /// Functions with a Field or type parameter, by their position among
     /// the Kernel's functions.
-    templates: Vec<(usize, &'a FnDecl)>,
-    /// The other functions, by position; each lowers where first called.
-    plain: Vec<(usize, &'a FnDecl)>,
+    templates: std::collections::HashMap<&'a str, (usize, &'a FnDecl)>,
+    /// The other functions by name, with their position; each lowers
+    /// where first called.
+    plain: std::collections::HashMap<&'a str, (usize, &'a FnDecl)>,
+    /// How deep the function being lowered is called, at most
+    /// [`orla_language::MAX_NESTING`], so a chain of calls cannot exhaust
+    /// the compiling thread's stack.
+    calls: std::cell::Cell<usize>,
     /// Each plain function lowered so far, by position, to its index in
     /// `functions`.
     lowered: RefCell<BTreeMap<usize, u32>>,
@@ -544,8 +585,23 @@ fn lower_function(
     name: &str,
     above: Option<usize>,
 ) -> Result<(Function, Vec<(Capability, String)>), CompileError> {
-    lower_function_body(shared, declaration, fields, generics, name, above)
-        .map_err(|error| error.in_function(&declaration.name.value))
+    // A function lowers where first called, inside its caller's lowering.
+    let depth = shared.calls.get() + 1;
+    if depth > orla_language::MAX_NESTING {
+        return Err(semantic(
+            declaration.name.span,
+            format!(
+                "calls nest more than {} deep to reach `{}`; a chain of calls that long is a loop",
+                orla_language::MAX_NESTING,
+                declaration.name.value
+            ),
+        ));
+    }
+    shared.calls.set(depth);
+    let lowered = lower_function_body(shared, declaration, fields, generics, name, above)
+        .map_err(|error| error.in_function(&declaration.name.value));
+    shared.calls.set(depth - 1);
+    lowered
 }
 
 fn lower_function_body(
@@ -1349,8 +1405,8 @@ impl<'a> Builder<'a> {
         let Some(&(position, declaration)) = self
             .shared
             .plain
-            .iter()
-            .find(|(position, d)| d.name.value == name && self.sees(*position))
+            .get(name)
+            .filter(|(position, _)| self.sees(*position))
         else {
             return Ok(None);
         };
