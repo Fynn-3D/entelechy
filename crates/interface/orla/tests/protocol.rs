@@ -683,6 +683,69 @@ fn a_peer_claiming_an_endless_request_is_refused_and_the_server_lives() {
 }
 
 #[test]
+fn a_peer_that_never_reads_its_answers_is_held_back_and_others_are_served() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpStream;
+    let dir = scratch_in("-unread");
+    let mut child = Server(
+        Command::new(env!("CARGO_BIN_EXE_orla"))
+            .arg("serve")
+            .arg(dir.join("scene.osn"))
+            .args(["--listen", "127.0.0.1:0"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let stderr = BufReader::new(child.0.stderr.take().unwrap());
+    let port = stderr
+        .lines()
+        .map_while(Result::ok)
+        .find_map(|line| {
+            line.strip_prefix("listening on 127.0.0.1:")
+                .map(str::to_owned)
+        })
+        .expect("the server names its port");
+    // 32 MB of requests, sent as fast as they are taken, none of their
+    // answers read.
+    let request = format!("{}\n", json!({ "id": 1, "op": "nonsense" }));
+    let all = request.repeat((32 << 20) / request.len());
+    let mut greedy = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+    greedy.set_nonblocking(true).unwrap();
+    let mut sent = 0;
+    let mut still = std::time::Instant::now();
+    while sent < all.len() && still.elapsed() < std::time::Duration::from_secs(2) {
+        match greedy.write(&all.as_bytes()[sent..]) {
+            Ok(n) => {
+                sent += n;
+                still = std::time::Instant::now();
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => panic!("{error}"),
+        }
+    }
+    assert!(sent < all.len(), "all {sent} bytes were taken");
+    // Another peer is answered meanwhile.
+    let stream = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+    let mut writer = stream.try_clone().unwrap();
+    let mut reader = BufReader::new(stream);
+    writeln!(writer, "{}", json!({ "id": 2, "op": "status" })).unwrap();
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    let status: Json = serde_json::from_str(&line).unwrap();
+    assert_eq!(status["ok"]["nodes"], 3, "{status}");
+    drop(greedy);
+    let mut stdin = child.0.stdin.take().unwrap();
+    writeln!(stdin, "{}", json!({ "id": 3, "op": "quit" })).unwrap();
+    drop(stdin);
+    assert!(child.0.wait().unwrap().success());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_headless_session_takes_a_window_for_window_shaped_scenes() {
     let dir = scratch_in("-window");
     std::fs::write(

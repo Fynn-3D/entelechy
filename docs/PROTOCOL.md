@@ -121,7 +121,9 @@ through:
   Fields in place.
 - A socket request (a line or a WebSocket message) is at most 256 MiB; a
   longer one is answered with an error and its connection closed; the
-  session serves the rest.
+  session serves the rest. A connection is read no further while 64 of
+  its answers wait to be written, so a peer that does not read its
+  answers holds back only itself.
 
 ## Authority
 

@@ -166,6 +166,56 @@ fn refuse_http(mut stream: std::net::TcpStream) {
     let _ = stream.shutdown(std::net::Shutdown::Both);
 }
 
+/// The most answers one connection may be owed, made or not, and not yet
+/// written back.
+const MAX_OWED: usize = 64;
+
+/// Answers a connection is owed and has not been sent. Its reader takes
+/// no further request while [`MAX_OWED`] are, so a client that sends and
+/// never reads holds at most that many answers, and the session serves
+/// everyone else meanwhile.
+#[derive(Default)]
+struct Owed {
+    /// How many, and whether the writer has stopped.
+    state: std::sync::Mutex<(usize, bool)>,
+    changed: std::sync::Condvar,
+}
+
+impl Owed {
+    fn state(&self) -> std::sync::MutexGuard<'_, (usize, bool)> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Owes one more answer, once there is room; false once the writer
+    /// has stopped.
+    fn owe(&self) -> bool {
+        let mut state = self.state();
+        while state.0 >= MAX_OWED && !state.1 {
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+        state.0 += 1;
+        !state.1
+    }
+
+    /// One answer written.
+    fn paid(&self) {
+        let mut state = self.state();
+        state.0 = state.0.saturating_sub(1);
+        self.changed.notify_all();
+    }
+
+    /// The writer stopped: nothing more is owed.
+    fn stopped(&self) {
+        self.state().1 = true;
+        self.changed.notify_all();
+    }
+}
+
 /// Tells a connection why what it sent is refused, then closes it.
 fn refuse(reply: &std::sync::mpsc::Sender<String>, error: &std::io::Error) {
     let refusal = crate::envelope(
@@ -182,6 +232,8 @@ fn serve_lines(stream: std::net::TcpStream, sink: std::sync::mpsc::Sender<Incomi
         return;
     };
     let (reply, answers) = std::sync::mpsc::channel::<String>();
+    let owed = std::sync::Arc::new(Owed::default());
+    let paying = owed.clone();
     std::thread::spawn(move || {
         for line in answers {
             // An empty line, sent after a quit's answer, closes the
@@ -193,7 +245,9 @@ fn serve_lines(stream: std::net::TcpStream, sink: std::sync::mpsc::Sender<Incomi
             {
                 break;
             }
+            paying.paid();
         }
+        paying.stopped();
         let _ = writer.shutdown(std::net::Shutdown::Both);
     });
     let mut reader = std::io::BufReader::new(stream);
@@ -223,7 +277,7 @@ fn serve_lines(stream: std::net::TcpStream, sink: std::sync::mpsc::Sender<Incomi
             local: false,
             from: from.clone(),
         };
-        if sink.send(incoming).is_err() {
+        if !owed.owe() || sink.send(incoming).is_err() {
             break;
         }
     }
@@ -258,6 +312,8 @@ fn serve_websocket(
     }
     let (reply, answers) = std::sync::mpsc::channel::<String>();
     let framer = writer.clone();
+    let owed = std::sync::Arc::new(Owed::default());
+    let paying = owed.clone();
     std::thread::spawn(move || {
         for line in answers {
             let mut guard = framer
@@ -272,7 +328,9 @@ fn serve_websocket(
                 let _ = guard.shutdown(std::net::Shutdown::Both);
                 break;
             }
+            paying.paid();
         }
+        paying.stopped();
     });
     loop {
         match websocket::read_message(&mut reader) {
@@ -286,7 +344,7 @@ fn serve_websocket(
                     local: false,
                     from: from.clone(),
                 };
-                if sink.send(incoming).is_err() {
+                if !owed.owe() || sink.send(incoming).is_err() {
                     break;
                 }
             }
