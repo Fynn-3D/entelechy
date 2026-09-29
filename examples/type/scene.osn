@@ -6,10 +6,10 @@
 //   orla import NotoSansSC-Regular.otf --out assets --chars "宿主是世界，内核是法则，图是结构，智能是创造者。"
 use "../../packages/font.orlapkg";
 
-input latin: Rows<Glyph> = "assets/NotoSans-Regular.glyphs.field";
+input latin: Rows<Letterform> = "assets/NotoSans-Regular.glyphs.field";
 input latin_outlines: Rows<Vec4> = "assets/NotoSans-Regular.segments.field";
 input latin_metrics: Rows<Metrics> = "assets/NotoSans-Regular.metrics.field";
-input chinese: Rows<Glyph> = "assets/NotoSansSC-Regular.glyphs.field";
+input chinese: Rows<Letterform> = "assets/NotoSansSC-Regular.glyphs.field";
 input chinese_outlines: Rows<Vec4> = "assets/NotoSansSC-Regular.segments.field";
 input chinese_metrics: Rows<Metrics> = "assets/NotoSansSC-Regular.metrics.field";
 

@@ -45,6 +45,12 @@ use "picture.orlapkg";
   that puts each kept index where its rank says — and what comes back
   sizes and steers whatever does the work. Frustum culling, live
   particles, the lights that reach a tile: the shape is the same.
+  `graphs/runs.osn` is the same rank for lists: each of a row of owners
+  counts its entries, and the preset gives where each owner's run ends,
+  how many entries there are and the row of -1 a scatter fills, walking
+  what it counted; `owner` finds an entry's owner, `rounds` and
+  `round_of` walk more than one loop counts. The vector, physics and font
+  packages build their lists with it.
 - **sort** — the permutation that orders a row of integer keys, stable,
   one pass a bit: a `prefix with sum` for the rank and a scatter for the
   placement. What moves is the permutation, never the elements, so a

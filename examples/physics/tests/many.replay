@@ -5,7 +5,7 @@ scene many.osn
 # the box.
 frame 0
 expect every.result[0] = 167
-expect world.pair_total.result[0] = 167
+expect world.pair_lists.entries.result[0] = 167
 frame 1
 frame 2
 frame 3

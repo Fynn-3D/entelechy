@@ -11,7 +11,7 @@
 use "../kernels/font.orla";
 
 input codes: Rows<Int>;
-input glyphs: Rows<Glyph>;
+input glyphs: Rows<Letterform>;
 input outlines: Rows<Vec4>;
 input metrics: Rows<Metrics>;
 input under: Image;
@@ -40,16 +40,15 @@ node layout: font.layout@1 {
 
 // The glyphs placed, as a drawing in pixels.
 node counts: font.counts@1 { placed <- layout.result; glyphs <- glyphs; }
-node ends: font.ends@1 { counts <- counts.result; }
-node total: font.total@1 { ends <- ends.result; domain = 1; }
-node shapes: font.shapes@1 { placed <- layout.result; glyphs <- glyphs; counts <- counts.result; ends <- ends.result; color = color; }
+node lists: graph "../../compact.orlapkg/graphs/runs.osn" { counts <- counts.result; }
+node shapes: font.shapes@1 { placed <- layout.result; glyphs <- glyphs; counts <- counts.result; ends <- lists.ends; color = color; }
 node segments: font.segments@1 {
-    total <- total.result;
+    total <- lists.entries;
     placed <- layout.result;
     glyphs <- glyphs;
     outlines <- outlines;
     counts <- counts.result;
-    ends <- ends.result;
+    ends <- lists.ends;
     domain = value(total);
 }
 node stops: font.no_stops@1 { domain = 1; }

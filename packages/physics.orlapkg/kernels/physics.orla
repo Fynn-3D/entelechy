@@ -29,6 +29,10 @@
 //
 // Units are the scene's; the defaults suit metres and seconds.
 
+// Lists are runs of the `compact` package; an entry finds its owner by
+// its `owner`.
+use "../../compact.orlapkg";
+
 struct Body {
     position: Vec2;
     angle: Float;
@@ -56,13 +60,12 @@ struct Bounds { lo: Vec2; hi: Vec2; first: IVec2; last: IVec2; }
 
 // Two bodies that may touch, the first the lower index.
 struct Pair { a: Int; b: Int; }
-struct Placed { at: Int; value: Pair; }
 struct Counted { at: Int; value: Int; }
 
 // Where two bodies touch, held by each: the point in each one's own
 // frame, the separation when found, the speed they closed at along the
 // normal then, and the normal and friction impulses it last pushed with.
-struct Point {
+struct Contact {
     anchor_a: Vec2;
     anchor_b: Vec2;
     base: Float;
@@ -79,8 +82,8 @@ struct Manifold {
     count: Int;
     sensor: Int;
     normal: Vec2;
-    p1: Point;
-    p2: Point;
+    p1: Contact;
+    p2: Contact;
     friction: Float;
     restitution: Float;
     push_a: Vec3;
@@ -148,9 +151,6 @@ fn unturn(v: Vec2, angle: Float) -> Vec2 {
 fn wedge(a: Vec2, b: Vec2) -> Float { return a.x * b.y - a.y * b.x; }
 fn swirl(w: Float, r: Vec2) -> Vec2 { return vec2(-w * r.y, w * r.x); }
 
-fn round_of(n: Int, r: Int) -> Int { return clamp(n - r * 65536, 0, 65536); }
-fn rounds(n: Int) -> Int { return (n + 65535) / 65536; }
-
 // How far a body reaches from its centre.
 fn extent(b: Body) -> Float { return if b.shape == 0 { b.size.x } else { length(b.size) }; }
 
@@ -200,32 +200,6 @@ kernel physics.spans@1 {
         let b = sample(bounds);
         return (b.last.x - b.first.x + 1) * (b.last.y - b.first.y + 1);
     }
-}
-
-/// Where each list ends: an inclusive prefix of the counts.
-kernel physics.ends@1 {
-    requires { field.read; field.write; }
-    input counts: Rows<Int>;
-    output result: Rows<Int>;
-    prefix with sum { return sample(counts); }
-}
-
-/// How many entries the lists hold together, which sizes the next nodes;
-/// at least one, so the lists are never empty.
-kernel physics.total@1 {
-    requires { field.read; field.write; }
-    input ends: Rows<Int>;
-    output result: Rows<Int>;
-    compute { return max(at(ends, count(ends) - 1), 1); }
-}
-
-// The list an entry is in: the first whose end is past it, by bisection.
-fn owner(e: Int, ends: Rows<Int>) -> Int {
-    let found = loop 32 with r = ivec2(0, count(ends)) until r.x >= r.y {
-        let mid = (r.x + r.y) / 2;
-        if at(ends, mid) > e { ivec2(r.x, mid) } else { ivec2(mid + 1, r.y) }
-    };
-    return found.x;
 }
 
 /// The body each entry is.
@@ -381,6 +355,7 @@ kernel physics.pairs@1 {
     input slots: Rows<Pair>;
     param columns: Int = 64;
     output result: Rows<Pair>;
+    struct Placed { at: Int; value: Pair; }
     scatter into slots with max {
         let j = element();
         let room = at(counts, j);
@@ -448,21 +423,21 @@ fn box_circle(a: Body, b: Body) -> Touch {
 
 // A segment clipped to the side of a line: the points of it behind, then
 // where it crosses.
-struct Clip { v0: Vec2; v1: Vec2; n: Int; }
+struct Clipped { v0: Vec2; v1: Vec2; n: Int; }
 
-fn clip(v0: Vec2, v1: Vec2, normal: Vec2, offset: Float) -> Clip {
+fn clip(v0: Vec2, v1: Vec2, normal: Vec2, offset: Float) -> Clipped {
     let d0 = dot(normal, v0) - offset;
     let d1 = dot(normal, v1) - offset;
-    if d0 <= 0.0 && d1 <= 0.0 { return Clip { v0: v0, v1: v1, n: 2 }; }
+    if d0 <= 0.0 && d1 <= 0.0 { return Clipped { v0: v0, v1: v1, n: 2 }; }
     let crossing = v0 + (v1 - v0) * (d0 / (d0 - d1));
-    if d0 <= 0.0 { return Clip { v0: v0, v1: crossing, n: 2 }; }
-    if d1 <= 0.0 { return Clip { v0: v1, v1: crossing, n: 2 }; }
-    return Clip { v0: v0, v1: v1, n: 0 };
+    if d0 <= 0.0 { return Clipped { v0: v0, v1: crossing, n: 2 }; }
+    if d1 <= 0.0 { return Clipped { v0: v1, v1: crossing, n: 2 }; }
+    return Clipped { v0: v0, v1: v1, n: 0 };
 }
 
 // The edge of a box, of half extents `h` at `p` with axes `x` and `y`,
 // whose face most opposes `normal`.
-fn incident(h: Vec2, p: Vec2, x: Vec2, y: Vec2, normal: Vec2) -> Clip {
+fn incident(h: Vec2, p: Vec2, x: Vec2, y: Vec2, normal: Vec2) -> Clipped {
     let n = -vec2(dot(x, normal), dot(y, normal));
     let along = abs(n.x) > abs(n.y);
     let c0 = if along {
@@ -475,7 +450,7 @@ fn incident(h: Vec2, p: Vec2, x: Vec2, y: Vec2, normal: Vec2) -> Clip {
     } else {
         if n.y >= 0.0 { vec2(-h.x, h.y) } else { vec2(h.x, -h.y) }
     };
-    return Clip { v0: p + x * c0.x + y * c0.y, v1: p + x * c1.x + y * c1.y, n: 2 };
+    return Clipped { v0: p + x * c0.x + y * c0.y, v1: p + x * c1.x + y * c1.y, n: 2 };
 }
 
 // Two boxes: the axis they are least apart along, preferring a face of
@@ -552,11 +527,11 @@ fn touch(a: Body, b: Body, margin: Float) -> Touch {
 }
 
 // A point held by both bodies where they touch.
-fn holding(a: Body, b: Body, c: Vec2, s: Float, n: Vec2) -> Point {
+fn holding(a: Body, b: Body, c: Vec2, s: Float, n: Vec2) -> Contact {
     let ra = c - a.position;
     let rb = c - b.position;
     let dv = b.velocity + swirl(b.spin, rb) - a.velocity - swirl(a.spin, ra);
-    return Point {
+    return Contact {
         anchor_a: unturn(ra, a.angle),
         anchor_b: unturn(rb, b.angle),
         base: s,
@@ -584,13 +559,13 @@ fn last_of(held: Rows<Manifold>, a: Int, b: Int) -> Int {
 // one point is always its one point, which rolls; a box's is the point
 // nearest it, when that one is within `near` on the first body. Neither
 // is carried where the normal has turned.
-fn carried(p: Point, last: Manifold, n: Vec2, near: Float, round: Bool) -> Point {
+fn carried(p: Contact, last: Manifold, n: Vec2, near: Float, round: Bool) -> Contact {
     if last.count == 0 || dot(last.normal, n) < 0.95 { return p; }
-    if round { return Point { ..p, normal: last.p1.normal, tangent: last.p1.tangent }; }
+    if round { return Contact { ..p, normal: last.p1.normal, tangent: last.p1.tangent }; }
     let d1 = length(last.p1.anchor_a - p.anchor_a);
     let d2 = if last.count > 1 { length(last.p2.anchor_a - p.anchor_a) } else { 1000000000.0 };
-    if d1 <= d2 && d1 < near { return Point { ..p, normal: last.p1.normal, tangent: last.p1.tangent }; }
-    if d2 < near { return Point { ..p, normal: last.p2.normal, tangent: last.p2.tangent }; }
+    if d1 <= d2 && d1 < near { return Contact { ..p, normal: last.p1.normal, tangent: last.p1.tangent }; }
+    if d2 < near { return Contact { ..p, normal: last.p2.normal, tangent: last.p2.tangent }; }
     return p;
 }
 
@@ -721,9 +696,9 @@ fn softness(h: Float, hertz: Float, ratio: Float) -> Vec3 {
 }
 
 // A point's state and the copies after its normal impulse.
-struct Solved { point: Point; both: Both; }
+struct Solved { point: Contact; both: Both; }
 
-fn solve_normal(pt: Point, both: Both, a: Body, b: Body, n: Vec2, h: Float, relax: Bool, soft: Vec3, speed: Float) -> Solved {
+fn solve_normal(pt: Contact, both: Both, a: Body, b: Body, n: Vec2, h: Float, relax: Bool, soft: Vec3, speed: Float) -> Solved {
     let ra = turn(pt.anchor_a, a.angle);
     let rb = turn(pt.anchor_b, b.angle);
     let s = dot((b.position + rb) - (a.position + ra), n) + pt.base;
@@ -734,22 +709,22 @@ fn solve_normal(pt: Point, both: Both, a: Body, b: Body, n: Vec2, h: Float, rela
     let vn = dot(closing(both, ra, rb), n);
     let impulse = -inverse_along(both, ra, rb, n) * mass_scale * (vn + bias) - impulse_scale * unsplit(both, ra, rb, n) * pt.normal;
     let total = max(pt.normal + impulse, 0.0);
-    return Solved { point: Point { ..pt, normal: total }, both: apply(both, n * (total - pt.normal), ra, rb) };
+    return Solved { point: Contact { ..pt, normal: total }, both: apply(both, n * (total - pt.normal), ra, rb) };
 }
 
-fn solve_tangent(pt: Point, both: Both, a: Body, b: Body, n: Vec2, friction: Float) -> Solved {
+fn solve_tangent(pt: Contact, both: Both, a: Body, b: Body, n: Vec2, friction: Float) -> Solved {
     let ra = turn(pt.anchor_a, a.angle);
     let rb = turn(pt.anchor_b, b.angle);
     let t = vec2(n.y, -n.x);
     let vt = dot(closing(both, ra, rb), t);
     let most = friction * pt.normal;
     let total = clamp(pt.tangent - inverse_along(both, ra, rb, t) * vt, -most, most);
-    return Solved { point: Point { ..pt, tangent: total }, both: apply(both, t * (total - pt.tangent), ra, rb) };
+    return Solved { point: Contact { ..pt, tangent: total }, both: apply(both, t * (total - pt.tangent), ra, rb) };
 }
 
 // The copies pushed `by` times the impulses a point holds: once to warm
 // a substep, once less to take back a warm no substep follows.
-fn warm(pt: Point, both: Both, a: Body, b: Body, n: Vec2, by: Float) -> Both {
+fn warm(pt: Contact, both: Both, a: Body, b: Body, n: Vec2, by: Float) -> Both {
     let ra = turn(pt.anchor_a, a.angle);
     let rb = turn(pt.anchor_b, b.angle);
     return apply(both, (n * pt.normal + vec2(n.y, -n.x) * pt.tangent) * by, ra, rb);
@@ -761,13 +736,13 @@ fn warmed(m: Manifold, both: Both, a: Body, b: Body, by: Float) -> Both {
     return if m.count > 1 { warm(m.p2, one, a, b, m.normal, by) } else { one };
 }
 
-fn bounce(pt: Point, both: Both, a: Body, b: Body, n: Vec2, e: Float, threshold: Float) -> Solved {
+fn bounce(pt: Contact, both: Both, a: Body, b: Body, n: Vec2, e: Float, threshold: Float) -> Solved {
     let ra = turn(pt.anchor_a, a.angle);
     let rb = turn(pt.anchor_b, b.angle);
     if pt.approach > -threshold || pt.normal == 0.0 { return Solved { point: pt, both: both }; }
     let vn = dot(closing(both, ra, rb), n);
     let total = max(pt.normal - inverse_along(both, ra, rb, n) * (vn + e * pt.approach), 0.0);
-    return Solved { point: Point { ..pt, normal: total }, both: apply(both, n * (total - pt.normal), ra, rb) };
+    return Solved { point: Contact { ..pt, normal: total }, both: apply(both, n * (total - pt.normal), ra, rb) };
 }
 
 // What a manifold's copies became, as the push its bodies take: the
@@ -988,7 +963,7 @@ kernel physics.no_contacts@1 {
     requires { field.read; field.write; }
     output result: Rows<Manifold>;
     compute {
-        let none = Point { anchor_a: vec2(0.0, 0.0), anchor_b: vec2(0.0, 0.0), base: 0.0, approach: 0.0, normal: 0.0, tangent: 0.0 };
+        let none = Contact { anchor_a: vec2(0.0, 0.0), anchor_b: vec2(0.0, 0.0), base: 0.0, approach: 0.0, normal: 0.0, tangent: 0.0 };
         return Manifold {
             a: -1, b: -1, count: 0, sensor: 0, normal: vec2(0.0, 1.0), p1: none, p2: none,
             friction: 0.0, restitution: 0.0, push_a: vec3(0.0, 0.0, 0.0), push_b: vec3(0.0, 0.0, 0.0),

@@ -41,20 +41,19 @@ node bounds: physics.bounds@1 {
     dt = dt; margin = margin; origin = origin; cell = cell; columns = columns; rows = rows;
 }
 node spans: physics.spans@1 { bounds <- bounds.result; }
-node span_ends: physics.ends@1 { counts <- spans.result; }
-node span_total: physics.total@1 { ends <- span_ends.result; domain = 1; }
-node owners: physics.owners@1 { total <- span_total.result; ends <- span_ends.result; domain = value(total); }
+node span_lists: graph "../../compact.orlapkg/graphs/runs.osn" { counts <- spans.result; }
+node owners: physics.owners@1 { total <- span_lists.entries; ends <- span_lists.ends; domain = value(total); }
 node cells: physics.cells@1 {
     owners <- owners.result;
     spans <- spans.result;
-    ends <- span_ends.result;
+    ends <- span_lists.ends;
     bounds <- bounds.result;
     columns = columns;
 }
 node order: graph "../../sort.orlapkg/graphs/sort.osn" { keys <- cells.result; bits = bits; }
 node no_cells: physics.no_cells@1 { columns = columns; rows = rows; domain = columns * rows; }
 node cell_counts: physics.cell_counts@1 { keys <- cells.result; zeros <- no_cells.result; }
-node cell_ends: physics.ends@1 { counts <- cell_counts.result; }
+node cell_ends: compact.ends@1 { counts <- cell_counts.result; }
 node no_entries: physics.no_entries@1 { order <- order.result; }
 node places: physics.places@1 { order <- order.result; zeros <- no_entries.result; }
 
@@ -63,7 +62,7 @@ node places: physics.places@1 { order <- order.result; zeros <- no_entries.resul
 node pair_counts: physics.pair_counts@1 {
     bodies <- bodies;
     spans <- spans.result;
-    span_ends <- span_ends.result;
+    span_ends <- span_lists.ends;
     order <- order.result;
     places <- places.result;
     keys <- cells.result;
@@ -73,15 +72,14 @@ node pair_counts: physics.pair_counts@1 {
     bounds <- bounds.result;
     columns = columns;
 }
-node pair_ends: physics.ends@1 { counts <- pair_counts.result; }
-node pair_total: physics.total@1 { ends <- pair_ends.result; domain = 1; }
-node no_pairs: physics.no_pairs@1 { total <- pair_total.result; domain = value(total); }
+node pair_lists: graph "../../compact.orlapkg/graphs/runs.osn" { counts <- pair_counts.result; }
+node no_pairs: physics.no_pairs@1 { total <- pair_lists.entries; domain = value(total); }
 node pairs: physics.pairs@1 {
     bodies <- bodies;
     counts <- pair_counts.result;
-    ends <- pair_ends.result;
+    ends <- pair_lists.ends;
     spans <- spans.result;
-    span_ends <- span_ends.result;
+    span_ends <- span_lists.ends;
     order <- order.result;
     places <- places.result;
     keys <- cells.result;

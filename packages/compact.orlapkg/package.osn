@@ -9,6 +9,10 @@
 //! element where its rank says. The row keeps its length; what is past
 //! the count is `NONE`, and nothing reads it because the count sizes
 //! whatever runs next.
+//!
+//! Runs are the same rank for lists: each of a row of owners counts its
+//! entries, and `graphs/runs.osn` lays every owner's entries in one row,
+//! owner after owner, for a scatter to fill.
 package compact@1 { language = 1; ir = 1; }
 
 use "kernels/";

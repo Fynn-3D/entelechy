@@ -6,7 +6,7 @@
 //!
 //! Three files are written:
 //!
-//! - `<stem>.glyphs.field`: `Rows<Glyph>` in order of code, the layout
+//! - `<stem>.glyphs.field`: `Rows<Letterform>` in order of code, the layout
 //!   [`glyph_schema`] gives; the first, of code -1, is the font's glyph for
 //!   a character it lacks;
 //! - `<stem>.segments.field`: `Rows<Vec4>`, a segment `a.x, a.y, b.x, b.y`;
@@ -55,7 +55,7 @@ pub struct Imported {
 /// The three Fields of a font.
 #[derive(Debug)]
 pub struct Fields {
-    /// `Rows<Glyph>`, in order of code.
+    /// `Rows<Letterform>`, in order of code.
     pub glyphs: FieldData,
     /// `Rows<Vec4>`, the segments.
     pub segments: FieldData,

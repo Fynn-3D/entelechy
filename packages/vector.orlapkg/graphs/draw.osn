@@ -36,16 +36,14 @@ node tile_counts: vector.tile_counts@1 {
     tiles <- tiles.result;
     domain = count(tiles);
 }
-node tile_ends: vector.ends@1 { counts <- tile_counts.result; }
-node tile_total: vector.total@1 { ends <- tile_ends.result; domain = 1; }
-node tile_blank: vector.blank@1 { total <- tile_total.result; domain = value(total); }
+node tile_lists: graph "../../compact.orlapkg/graphs/runs.osn" { counts <- tile_counts.result; }
 node tile_shapes: vector.tile_fill@1 {
     reach <- reach.result;
     chunks <- shape_chunks.result;
     counts <- tile_counts.result;
-    ends <- tile_ends.result;
+    ends <- tile_lists.ends;
     tiles <- tiles.result;
-    slots <- tile_blank.result;
+    slots <- tile_lists.slots;
     domain = count(tiles);
 }
 
@@ -55,14 +53,13 @@ node segment_chunks: vector.segment_chunks@1 { placed <- placed.result; domain =
 
 // Each cell's units, a chunk of its shape's segments to each; the
 // segments each unit gives its cell; the cells' lists of them.
-node units: vector.units@1 { total <- tile_total.result; tile_shapes <- tile_shapes.result; shapes <- shapes; domain = value(total); }
-node unit_ends: vector.ends@1 { counts <- units.result; }
-node unit_total: vector.total@1 { ends <- unit_ends.result; domain = 1; }
+node units: vector.units@1 { total <- tile_lists.entries; tile_shapes <- tile_shapes.result; shapes <- shapes; domain = value(total); }
+node unit_lists: graph "../../compact.orlapkg/graphs/runs.osn" { counts <- units.result; }
 node kept: vector.kept@1 {
-    total <- unit_total.result;
+    total <- unit_lists.entries;
     units <- units.result;
-    unit_ends <- unit_ends.result;
-    tile_ends <- tile_ends.result;
+    unit_ends <- unit_lists.ends;
+    tile_ends <- tile_lists.ends;
     tile_shapes <- tile_shapes.result;
     tiles <- tiles.result;
     shapes <- shapes;
@@ -70,32 +67,30 @@ node kept: vector.kept@1 {
     chunks <- segment_chunks.result;
     domain = value(total);
 }
-node kept_ends: vector.ends@1 { counts <- kept.result; }
-node kept_total: vector.total@1 { ends <- kept_ends.result; domain = 1; }
-node kept_blank: vector.blank@1 { total <- kept_total.result; domain = value(total); }
+node kept_lists: graph "../../compact.orlapkg/graphs/runs.osn" { counts <- kept.result; }
 node cell_segments: vector.keep@1 {
-    total <- unit_total.result;
+    total <- unit_lists.entries;
     kept <- kept.result;
-    kept_ends <- kept_ends.result;
+    kept_ends <- kept_lists.ends;
     units <- units.result;
-    unit_ends <- unit_ends.result;
-    tile_ends <- tile_ends.result;
+    unit_ends <- unit_lists.ends;
+    tile_ends <- tile_lists.ends;
     tile_shapes <- tile_shapes.result;
     tiles <- tiles.result;
     shapes <- shapes;
     placed <- placed.result;
     chunks <- segment_chunks.result;
-    slots <- kept_blank.result;
+    slots <- kept_lists.slots;
     domain = value(total);
 }
 
 // Each cell's backdrop, a row of its tile at a time.
-node backdrop_zeros: vector.zeros@1 { total <- tile_total.result; domain = value(total) * 16; }
+node backdrop_zeros: vector.zeros@1 { total <- tile_lists.entries; domain = value(total) * 16; }
 node backdrop: vector.backdrop@1 {
-    total <- unit_total.result;
+    total <- unit_lists.entries;
     units <- units.result;
-    unit_ends <- unit_ends.result;
-    tile_ends <- tile_ends.result;
+    unit_ends <- unit_lists.ends;
+    tile_ends <- tile_lists.ends;
     tile_shapes <- tile_shapes.result;
     tiles <- tiles.result;
     shapes <- shapes;
@@ -114,12 +109,12 @@ node drawn: vector.draw_tiled@1 {
     stops <- stops;
     frame <- frame.result;
     tile_counts <- tile_counts.result;
-    tile_ends <- tile_ends.result;
+    tile_ends <- tile_lists.ends;
     tile_shapes <- tile_shapes.result;
     units <- units.result;
-    unit_ends <- unit_ends.result;
+    unit_ends <- unit_lists.ends;
     kept <- kept.result;
-    kept_ends <- kept_ends.result;
+    kept_ends <- kept_lists.ends;
     cell_segments <- cell_segments.result;
     backdrop <- backdrop.result;
     background = background;

@@ -28,6 +28,10 @@
 // over shapes or segments is two deep, so neither count is bounded by
 // one loop's.
 
+// Lists are runs of the `compact` package; an entry finds its owner by
+// its `owner`.
+use "../../compact.orlapkg";
+
 // A shape as `orla import` writes it, `<stem>.shapes.field`.
 struct Shape {
     color: Vec4;
@@ -136,10 +140,6 @@ fn laid(below: Vec4, s: Shape, stops: Rows<Stop>, p: Vec2, pixel: Float, hit: Ve
     let a = c.w * cover;
     return vec4(below.x * (1.0 - a) + c.x * a, below.y * (1.0 - a) + c.y * a, below.z * (1.0 - a) + c.z * a, below.w * (1.0 - a) + a);
 }
-
-// How many of 65536 a two-deep loop over `n` runs in its round `r`.
-fn round_of(n: Int, r: Int) -> Int { return clamp(n - r * 65536, 0, 65536); }
-fn rounds(n: Int) -> Int { return (n + 65535) / 65536; }
 
 /// Where the look puts each pixel's centre in the drawing, and a pixel's
 /// size there: the x of each of `across`'s columns, then the y of each of
@@ -313,31 +313,6 @@ kernel vector.tile_counts@1 {
     }
 }
 
-/// Where each list ends: an inclusive prefix of the counts.
-kernel vector.ends@1 {
-    requires { field.read; field.write; }
-    input counts: Rows<Int>;
-    output result: Rows<Int>;
-    prefix with sum { return sample(counts); }
-}
-
-/// How many entries the lists hold together, which sizes the next nodes;
-/// at least one, so the lists are never empty.
-kernel vector.total@1 {
-    requires { field.read; field.write; }
-    input ends: Rows<Int>;
-    output result: Rows<Int>;
-    compute { return max(at(ends, count(ends) - 1), 1); }
-}
-
-/// A list's blank slots, each read as no entry.
-kernel vector.blank@1 {
-    requires { field.read; field.write; }
-    input total: Rows<Int>;
-    output result: Rows<Int>;
-    compute { return -1; }
-}
-
 /// Each tile's shapes, in their order, into its part of the list: the
 /// walk `vector.tile_counts@1` counts, stopped at its count.
 kernel vector.tile_fill@1 {
@@ -387,15 +362,6 @@ kernel vector.tile_fill@1 {
 // neither cross a ray from the tile nor come within a pixel of it. The
 // winding is a sum of whole turns and the nearest segment a least, so the
 // order a cell's segments are asked in changes no word.
-
-// The list an entry is in: the first whose end is past it, by bisection.
-fn owner(e: Int, ends: Rows<Int>) -> Int {
-    let found = loop 32 with r = ivec2(0, count(ends)) until r.x >= r.y {
-        let mid = (r.x + r.y) / 2;
-        if at(ends, mid) > e { ivec2(r.x, mid) } else { ivec2(mid + 1, r.y) }
-    };
-    return found.x;
-}
 
 // Whether a span of the canvas reaches a tile's rows, or its columns, a
 // pixel over their edges, and whether one lies wholly past its columns.
