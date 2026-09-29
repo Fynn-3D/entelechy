@@ -72,8 +72,43 @@ pub fn encode_data(data: &FieldData) -> Vec<u8> {
     encode(data.schema(), data.domain(), data.storage())
 }
 
+/// The words a Field file's elements take, from its first bytes: what a
+/// reader checks against its room before it reads the rest.
+pub fn words(start: &[u8]) -> Result<usize, FileError> {
+    let (schema, domain, _) = header(start)?;
+    Ok(domain
+        .count()
+        .saturating_mul(schema.element_bytes())
+        .div_ceil(4))
+}
+
+/// The most bytes a Field file's header takes.
+pub const HEADER_BYTES: usize = 256;
+
 /// Decodes a Field file.
 pub fn decode(bytes: &[u8]) -> Result<FieldData, FileError> {
+    let (schema, domain, start) = header(bytes)?;
+    let body = &bytes[start..];
+    let expected = domain.count().saturating_mul(schema.element_bytes());
+    if body.len() != expected {
+        return Err(FileError::Length {
+            expected,
+            found: body.len(),
+        });
+    }
+    let storage = body
+        .chunks(4)
+        .map(|w| {
+            let mut word = [0u8; 4];
+            word[..w.len()].copy_from_slice(w);
+            u32::from_le_bytes(word)
+        })
+        .collect();
+    FieldData::from_storage(schema, domain, storage).map_err(FileError::Host)
+}
+
+/// A Field file's layout and extent, and where its elements start.
+fn header(bytes: &[u8]) -> Result<(Schema, Domain, usize), FileError> {
     let header_end = |from: usize| -> Result<usize, FileError> {
         bytes[from..]
             .iter()
@@ -113,29 +148,27 @@ pub fn decode(bytes: &[u8]) -> Result<FieldData, FileError> {
     } else {
         return Err(FileError::Header(format!("`{shape}` is not a shape")));
     };
-    let body = &bytes[second + 1..];
-    let expected = domain.count().saturating_mul(schema.element_bytes());
-    if body.len() != expected {
-        return Err(FileError::Length {
-            expected,
-            found: body.len(),
-        });
-    }
-    let storage = body
-        .chunks(4)
-        .map(|w| {
-            let mut word = [0u8; 4];
-            word[..w.len()].copy_from_slice(w);
-            u32::from_le_bytes(word)
-        })
-        .collect();
-    FieldData::from_storage(schema, domain, storage).map_err(FileError::Host)
+    Ok((schema, domain, second + 1))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::Scalar;
+
+    #[test]
+    fn the_words_a_field_takes_are_read_from_its_header_alone() {
+        let schema = Schema::new(vec![Scalar::Float; 2])
+            .with_encoding(orla_host::Encoding::Unorm8)
+            .unwrap();
+        let bytes = encode(&schema, Domain::Rows(3), &[0, 0]);
+        // Six bytes of elements are two words, known from the header.
+        assert_eq!(words(&bytes[..bytes.len() - 6]).unwrap(), 2);
+        let big = format!("{MAGIC}\nRows 1000000000 1 1 f\n");
+        assert_eq!(words(big.as_bytes()).unwrap(), 1_000_000_000);
+        let refused = crate::fits(big.as_bytes(), std::path::Path::new("a.field"), 1 << 20);
+        assert!(refused.unwrap_err().contains("requested 1000000000 words"));
+    }
 
     #[test]
     fn a_field_round_trips_through_its_file() {

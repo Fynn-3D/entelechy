@@ -32,6 +32,13 @@ enum Seen {
 pub trait Store: Send + Sync {
     /// The file's bytes.
     fn read(&self, path: &Path) -> io::Result<Vec<u8>>;
+    /// The file's first `bytes` bytes, or all of it when shorter: what
+    /// its header says, before the rest is read.
+    fn read_start(&self, path: &Path, bytes: usize) -> io::Result<Vec<u8>> {
+        let mut all = self.read(path)?;
+        all.truncate(bytes);
+        Ok(all)
+    }
     /// Replaces the file atomically, making the directories it needs.
     fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()>;
     /// What is at `path`, if anything.
@@ -181,6 +188,15 @@ impl Store for Disk {
 
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
         std::fs::read(path)
+    }
+
+    fn read_start(&self, path: &Path, bytes: usize) -> io::Result<Vec<u8>> {
+        use std::io::Read;
+        let mut start = Vec::with_capacity(bytes);
+        std::fs::File::open(path)?
+            .take(bytes as u64)
+            .read_to_end(&mut start)?;
+        Ok(start)
     }
 
     fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -360,6 +376,21 @@ impl Store for Memory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_files_start_is_read_alone() {
+        let dir = std::env::temp_dir().join(format!("orla-store-start-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("f.txt");
+        std::fs::write(&file, "0123456789").unwrap();
+        assert_eq!(Disk::default().read_start(&file, 4).unwrap(), b"0123");
+        assert_eq!(
+            Disk::default().read_start(&file, 64).unwrap(),
+            b"0123456789"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[cfg(unix)]
     #[test]

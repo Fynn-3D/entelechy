@@ -87,6 +87,24 @@ pub fn read(path: &Path, want: Option<&str>) -> Result<(FieldData, String), Stri
     decode(&bytes, path, want, usize::MAX)
 }
 
+/// Whether the Field in a file `start` begins holds `words` words at
+/// most, where its first bytes say ([`file::HEADER_BYTES`] of a `.field`);
+/// a reader asks before it reads the rest.
+pub fn fits(start: &[u8], path: &Path, words: usize) -> Result<(), String> {
+    if extension(path) != "field" {
+        return Ok(());
+    }
+    let needed = crate::file::words(start).map_err(|e| e.to_string())?;
+    if needed > words {
+        return Err(orla_host::HostError::BudgetExceeded {
+            requested: needed,
+            available: words,
+        }
+        .to_string());
+    }
+    Ok(())
+}
+
 /// [`read`] on bytes already read; `path`'s extension names the format.
 /// A compressed picture that would hold more than `words` words is
 /// refused before it is inflated.
@@ -107,6 +125,7 @@ pub fn decode(
     };
     match extension(path).as_str() {
         "field" => {
+            fits(bytes, path, words)?;
             let data = crate::file::decode(bytes).map_err(|e| e.to_string())?;
             let detail = describe(&data);
             Ok((data, detail))

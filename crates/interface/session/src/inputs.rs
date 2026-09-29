@@ -51,6 +51,16 @@ fn room(host: &Host) -> usize {
     host.budget_words().saturating_sub(host.used_words())
 }
 
+/// A file's bytes, when the Field its header describes fits in `room`
+/// words: one too large is refused before its body is read.
+fn read_within(store: &dyn Store, path: &Path, room: usize) -> Result<Vec<u8>, String> {
+    let start = store
+        .read_start(path, orla_formats::file::HEADER_BYTES)
+        .map_err(|e| e.to_string())?;
+    orla_formats::fits(&start, path, room)?;
+    store.read(path).map_err(|e| e.to_string())
+}
+
 /// The inputs of a scene and the Fields they hold.
 #[derive(Default)]
 pub(crate) struct Inputs {
@@ -166,7 +176,7 @@ impl Inputs {
                 });
                 continue;
             }
-            let read = store.read(&path).map_err(|e| e.to_string());
+            let read = read_within(store, &path, room(host));
             let read = read.and_then(|found| match bytes {
                 true => orla_formats::decode_bytes(&found),
                 false => orla_formats::decode(&found, &path, Some(&ty), room(host)),
@@ -302,9 +312,7 @@ impl Inputs {
             }
             let path = sequence.files[index].clone();
             let ty = sequence.ty.clone();
-            let loaded = store
-                .read(&path)
-                .map_err(|e| e.to_string())
+            let loaded = read_within(store, &path, room(host))
                 .and_then(|found| orla_formats::decode(&found, &path, Some(&ty), room(host)))
                 .and_then(|(data, _)| {
                     let data = kept_as(data, &ty)?;

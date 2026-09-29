@@ -96,6 +96,10 @@ impl Store for Watching<'_> {
         self.note(path);
         self.store.read(path)
     }
+    fn read_start(&self, path: &Path, bytes: usize) -> std::io::Result<Vec<u8>> {
+        self.note(path);
+        self.store.read_start(path, bytes)
+    }
     fn write(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         self.store.write(path, bytes)
     }
