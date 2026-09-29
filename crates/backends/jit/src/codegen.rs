@@ -356,6 +356,12 @@ struct Fx<'a, 'b> {
     /// Where an array's words were stored to be indexed, and the block
     /// that stored them; later indexes in that block reuse the store.
     spilled: HashMap<u32, (Block, Value)>,
+    /// The values the function indexes at a computed place, by id.
+    indexed: std::collections::HashSet<u32>,
+    /// Where each indexed value made by an instruction was stored, once,
+    /// where it is made: its definition is above every index of it, so
+    /// every index reads the one store, a loop's too.
+    stored: HashMap<u32, Value>,
     /// The tables defined so far, by the id of the array they hold.
     tables: HashMap<u32, cranelift_codegen::ir::GlobalValue>,
     /// The words of every value, by id.
@@ -470,6 +476,8 @@ impl<'a, 'b> Fx<'a, 'b> {
             constants: HashMap::new(),
             pointers: HashMap::new(),
             spilled: HashMap::new(),
+            indexed: std::collections::HashSet::new(),
+            stored: HashMap::new(),
             tables: HashMap::new(),
             values: Vec::new(),
             types: Vec::new(),
@@ -657,6 +665,7 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.name = function.name.clone();
         self.values = vec![Vec::new(); slots];
         self.types = vec![Type::Float; slots];
+        self.indexed = indexed(&function.body);
         let block = self.b.current_block().expect("entry block");
         let params: Vec<Value> = self.b.block_params(block).to_vec();
         self.begin_count();
@@ -821,7 +830,31 @@ impl<'a, 'b> Fx<'a, 'b> {
             let words = self.instruction(instruction);
             self.values[instruction.id.0 as usize] = words;
             self.note_constant(instruction);
+            let id = instruction.id.0;
+            if self.indexed.contains(&id)
+                && !self.pointers.contains_key(&id)
+                && !(self.constants.contains_key(&id) && matches!(instruction.ty, Type::Struct(_)))
+            {
+                let address = self.store_words(instruction.id);
+                self.stored.insert(id, address);
+            }
         }
+    }
+
+    /// A value's words stored in a stack slot of their own, and its
+    /// address.
+    fn store_words(&mut self, id: orla_ir::ValueId) -> Value {
+        let words = self.words(&id);
+        let types = word_types(self.module, self.ty(&id));
+        let slot = self.b.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            byte_size(&types).max(4) as u32,
+            3,
+        ));
+        for (word, at) in words.iter().zip(byte_offsets(&types)) {
+            self.b.ins().stack_store(*word, slot, at as i32);
+        }
+        self.b.ins().stack_addr(self.ptr, slot, 0)
     }
 
     /// Records a value's words when known at compile time: a literal, or
@@ -1544,6 +1577,8 @@ impl<'a, 'b> Fx<'a, 'b> {
                     && matches!(self.ty(array), Type::Struct(_))
                 {
                     (self.table(array.0), self.flags.with_readonly())
+                } else if let Some(address) = self.stored.get(&array.0).copied() {
+                    (address, self.flags)
                 } else if let Some((block, address)) = self.spilled.get(&array.0).copied()
                     && Some(block) == self.b.current_block()
                 {
@@ -1551,17 +1586,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                     // stored it reuses the slot.
                     (address, self.flags)
                 } else {
-                    let words = self.words(array);
-                    let array_types = word_types(self.module, self.ty(array));
-                    let slot = self.b.create_sized_stack_slot(StackSlotData::new(
-                        StackSlotKind::ExplicitSlot,
-                        byte_size(&array_types).max(4) as u32,
-                        3,
-                    ));
-                    for (word, at) in words.iter().zip(byte_offsets(&array_types)) {
-                        self.b.ins().stack_store(*word, slot, at as i32);
-                    }
-                    let address = self.b.ins().stack_addr(self.ptr, slot, 0);
+                    let address = self.store_words(*array);
                     if let Some(block) = self.b.current_block() {
                         self.spilled.insert(array.0, (block, address));
                     }
@@ -2384,4 +2409,21 @@ fn instruction_reads_wide(fx: &Fx<'_, '_>, op: &Op) -> bool {
         Op::Extract(source, _) => holds_wide(fx.module, fx.ty(source)),
         _ => false,
     }
+}
+
+/// The values `body` indexes at a computed place, nested blocks included.
+fn indexed(body: &[Instruction]) -> std::collections::HashSet<u32> {
+    fn walk(body: &[Instruction], out: &mut std::collections::HashSet<u32>) {
+        for instruction in body {
+            if let Op::Subscript(array, _) = instruction.op {
+                out.insert(array.0);
+            }
+            for block in instruction.op.blocks() {
+                walk(&block.body, out);
+            }
+        }
+    }
+    let mut out = std::collections::HashSet::new();
+    walk(body, &mut out);
+    out
 }
