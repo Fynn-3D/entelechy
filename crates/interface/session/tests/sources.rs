@@ -109,3 +109,82 @@ fn a_used_directory_gains_and_loses_files_between_syncs() {
     assert!(published(&session, "a"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Files handed in, counting the stamps asked of each path.
+struct Counting {
+    files: orla_session::Memory,
+    stamps: std::sync::Mutex<std::collections::BTreeMap<PathBuf, usize>>,
+}
+
+impl orla_session::Store for Counting {
+    fn read(&self, path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+        self.files.read(path)
+    }
+    fn write(&self, path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+        self.files.write(path, bytes)
+    }
+    fn kind(&self, path: &std::path::Path) -> Option<orla_session::store::Kind> {
+        self.files.kind(path)
+    }
+    fn list(&self, dir: &std::path::Path) -> std::io::Result<Vec<PathBuf>> {
+        self.files.list(dir)
+    }
+    fn stamp(&self, path: &std::path::Path) -> Option<orla_session::store::Stamp> {
+        *self
+            .stamps
+            .lock()
+            .unwrap()
+            .entry(path.to_path_buf())
+            .or_default() += 1;
+        self.files.stamp(path)
+    }
+    fn canonical(&self, path: &std::path::Path) -> std::io::Result<PathBuf> {
+        self.files.canonical(path)
+    }
+    fn whole(&self, path: &std::path::Path) -> PathBuf {
+        self.files.whole(path)
+    }
+}
+
+/// An idle sync asks each document's stamp once, however many documents
+/// use it: libraries each using every one before them cost as many stamps
+/// as there are libraries, not as there are uses.
+#[test]
+fn an_idle_sync_stamps_each_document_once() {
+    let files = orla_session::Memory::default();
+    let put =
+        |name: &str, text: String| files.put(&PathBuf::from("/s").join(name), text.into_bytes());
+    for i in 0..6 {
+        let uses: String = (0..i).map(|j| format!("use \"l{j}.orla\";\n")).collect();
+        put(
+            &format!("lib/l{i}.orla"),
+            format!(
+                "{uses}kernel lib.k{i}@1 {{ requires {{ field.write; }} output result: Rows<Float>; compute {{ return {i}.0; }} }}\n"
+            ),
+        );
+    }
+    put(
+        "scene.osn",
+        "use \"lib/\";\nnode n: lib.k5@1 { domain = 1; }\noutput result <- n.result;\n".into(),
+    );
+    let store = std::sync::Arc::new(Counting {
+        files,
+        stamps: Default::default(),
+    });
+    let runtime =
+        orla_session::Session::runtime_for("cpu", orla_session::Limits::default()).unwrap();
+    let mut session = orla_session::Session::open_in(
+        std::sync::Arc::clone(&store) as std::sync::Arc<dyn orla_session::Store>,
+        std::path::Path::new("/s/scene.osn"),
+        None,
+        runtime,
+    );
+    session.sync();
+    store.stamps.lock().unwrap().clear();
+    let events = session.sync();
+    assert!(events.is_empty(), "{events:?}");
+    let stamps = store.stamps.lock().unwrap();
+    // At most once for the libraries, and once more for the one the scene
+    // itself uses.
+    assert!(stamps.values().all(|count| *count <= 2), "{stamps:?}");
+}

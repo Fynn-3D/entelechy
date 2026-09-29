@@ -679,13 +679,23 @@ impl Scene {
         for path in stale {
             kernels.retire_document(&path, runtime, events);
         }
+        // Each document's stamp, read once this sync however many
+        // documents use it; the paths are whole, so their bytes name them.
+        let store = Arc::clone(&self.store);
+        let mut stamps: std::collections::HashMap<std::ffi::OsString, Option<Stamp>> =
+            std::collections::HashMap::new();
+        let mut stamp_of = |path: &Path| {
+            *stamps
+                .entry(path.as_os_str().to_owned())
+                .or_insert_with(|| store.stamp(path))
+        };
         for path in wanted {
-            let current = self.store.stamp(&path);
+            let current = stamp_of(&path);
             // Read again when it changed, or any document it uses did.
-            let used_unchanged = self.depends.get(&path).is_none_or(|used| {
-                used.iter()
-                    .all(|(used, stamp)| self.store.stamp(used) == *stamp)
-            });
+            let used_unchanged = self
+                .depends
+                .get(&path)
+                .is_none_or(|used| used.iter().all(|(used, stamp)| stamp_of(used) == *stamp));
             if kernels.read_at(&path, current) && used_unchanged {
                 continue;
             }
