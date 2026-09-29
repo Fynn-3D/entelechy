@@ -98,6 +98,8 @@ Evaluates a `.osn` scene once. Flags:
   may take, by its elements and its Kernel's typical work, and go to the
   JIT rather than the device (400000 by default; `0` keeps every run on
   the device, [why](DECISIONS.md#a-small-run-goes-to-the-processor-a-device-is-for-many-elements)).
+  A small run rounds as the JIT does, so two forms of one computation a
+  replay holds equal to the bit are held with `--small 0` on a GPU.
   `render`, `replay`, `serve`, `graph`, `trace` and `bench` take all three.
 - `--allow file.write=<dir>` lets outputs written `to` a file
   (`output kept <- tally.result to "saves/tally.field";`) land in that
@@ -314,8 +316,10 @@ hold equal: compute it in one and read it in the other
 ([why](DECISIONS.md#the-rasterizer-is-a-package-the-native-one-is-its-fast-path)).
 An expectation that holds two forms of one computation to each other
 word for word, as `examples/vector/tests/tiled.replay` holds the tiled
-drawing to the plain one, fails rounded apart as it should: the two
-agree to the bit only where every Kernel rounds alike.
+drawing to the plain one and `examples/mesh/tests/cutout.replay` and
+`degenerate.replay` the tiled surface to the one-pass one, fails rounded
+apart as it should: the two agree to the bit only where every Kernel
+rounds alike.
 
 ## Import and export
 
