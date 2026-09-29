@@ -194,7 +194,20 @@ impl Store for Disk {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
         let beside = parent.join(format!(".{name}.writing"));
-        std::fs::write(&beside, bytes)?;
+        // Whatever lies at the working name, a link included, is removed,
+        // and the file is made new there, never written through a link.
+        match std::fs::remove_file(&beside) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+            _ => {}
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&beside)?;
+        std::io::Write::write_all(&mut file, bytes).inspect_err(|_| {
+            let _ = std::fs::remove_file(&beside);
+        })?;
+        drop(file);
         std::fs::rename(&beside, path).inspect_err(|_| {
             let _ = std::fs::remove_file(&beside);
         })
@@ -347,6 +360,26 @@ impl Store for Memory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_at_the_working_name_is_not_written_through() {
+        let dir = std::env::temp_dir().join(format!("orla-store-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let elsewhere = dir.join("elsewhere.txt");
+        std::fs::write(&elsewhere, "kept").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, dir.join(".out.txt.writing")).unwrap();
+        Disk::default()
+            .write(&dir.join("out.txt"), b"written")
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), "kept");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("out.txt")).unwrap(),
+            "written"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn two_spellings_fold_to_one_name() {
