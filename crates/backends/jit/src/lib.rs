@@ -588,15 +588,7 @@ fn run(
             }
         };
     }
-    // The Fields are asked for first, so a domain past the budget is
-    // refused before any work.
-    let fields: Vec<_> = module
-        .manifest
-        .outputs
-        .iter()
-        .map(|port| (&port.ty.schema, domain))
-        .collect();
-    scope.can_hold(&fields)?;
+    orla_rules::outputs_fit_words(module, domain, scope)?;
     let results = compute(entry, &shared, domain, stride)?;
     shared.run.outcome()?;
     let mut outputs = Vec::with_capacity(module.manifest.outputs.len());

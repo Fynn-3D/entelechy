@@ -90,14 +90,7 @@ impl CpuBackend {
                 combine,
             );
         }
-        // The Host's budget is asked before any words are computed.
-        let fields: Vec<_> = module
-            .manifest
-            .outputs
-            .iter()
-            .map(|port| (&port.ty.schema, invocation.domain))
-            .collect();
-        scope.can_hold(&fields)?;
+        orla_rules::outputs_fit_words(module, invocation.domain, scope)?;
         let program = eval::Program::with(code, module, invocation, scope, invocation.domain)?;
         let results = compute(&program, &strides)?;
         program.outcome()?;

@@ -1020,3 +1020,31 @@ fn values_past_the_stack_are_left_to_the_interpreter() {
     }
     assert!(jit.declines(&module).is_some());
 }
+
+#[test]
+fn a_narrow_output_is_charged_the_words_it_is_computed_in() {
+    // 4096 bytes kept, 4096 words computed: a budget of 2048 words holds
+    // the one and not the other, so the run is refused before it starts.
+    let source = "kernel test.bytes@1 { requires { field.write; } output result: Rows<Int as u8>;
+        compute { return element() % 256; } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(4096),
+        context: Context::default(),
+    };
+    let jit = JitBackend::new().unwrap();
+    let prepared = jit.prepare(&module).unwrap();
+    for backend in ["cpu", "jit"] {
+        let mut host = Host::new(2048);
+        let mut scope = Scope::new(&mut host, all());
+        let ran = match backend {
+            "cpu" => CpuBackend.execute(&module, &invocation, &mut scope),
+            _ => jit.execute(prepared.as_ref(), &module, &invocation, &mut scope),
+        };
+        let error = ran.expect_err(backend).to_string();
+        assert!(error.contains("budget"), "{backend}: {error}");
+        assert_eq!(host.used_words(), 0, "{backend}");
+    }
+}

@@ -665,6 +665,24 @@ pub fn double_order_key(bits: u64) -> i64 {
     }
 }
 
+/// Asks the scope for room for what a run on the Host holds while it
+/// computes: each output's elements in whole words, before a narrow
+/// output is packed. Asked before any words are computed.
+pub fn outputs_fit_words(
+    module: &Validated,
+    domain: Domain,
+    scope: &Scope<'_>,
+) -> Result<(), ExecutionError> {
+    let wide: Vec<orla_abi::Schema> = module
+        .manifest
+        .outputs
+        .iter()
+        .map(|port| orla_abi::Schema::new(port.ty.schema.scalars().to_vec()))
+        .collect();
+    let fields: Vec<_> = wide.iter().map(|schema| (schema, domain)).collect();
+    Ok(scope.can_hold(&fields)?)
+}
+
 /// Checks that an invocation matches the manifest: input and parameter
 /// counts, each input's shape and element layout, parameter types, and a
 /// non-empty domain. Every backend applies it, so reading an input by its
