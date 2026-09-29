@@ -18,8 +18,8 @@ pub(crate) struct Reads {
     restricted: bool,
     /// Resolved directories the person allowed reads from.
     allowed: Vec<PathBuf>,
-    /// Resolved directories the scene names
-    /// ([`crate::scene::Scene::read_from`]) and the package directories.
+    /// Resolved directories the scene's documents are in or use, those of
+    /// the files its inputs read, and the package directories.
     /// Where reads are held, these are fixed at the opened scene's first
     /// load: an agent composing the scene cannot grant itself reads by
     /// what it writes.
@@ -57,8 +57,9 @@ impl Reads {
         Ok(())
     }
 
-    /// Takes the directories the scene's documents are in or use, once a
-    /// sync has read it; where reads are held, only the first time.
+    /// Takes the directories the scene's documents are in or use and its
+    /// inputs read from, once a sync has read it; where reads are held,
+    /// only the first time.
     pub(crate) fn settle(&mut self, store: &dyn Store, read_from: &[PathBuf]) {
         if self.restricted && self.settled {
             return;
@@ -73,8 +74,8 @@ impl Reads {
     }
 
     /// Whether `path` may be read: where it resolves to is inside a
-    /// directory the scene's documents are in or use, a package
-    /// directory, or an allowed directory.
+    /// directory the first-loaded scene's documents are in or use or its
+    /// inputs read from, a package directory, or an allowed directory.
     pub(crate) fn check(&self, store: &dyn Store, path: &Path) -> Result<(), String> {
         // The opened scene's first load reads freely; later reads are held.
         if !self.restricted || !self.settled {
@@ -90,7 +91,7 @@ impl Reads {
             return Ok(());
         }
         Err(format!(
-            "{} is outside the directories the scene's documents are in or use, every package directory, and every directory allowed with `--allow file.read`",
+            "{} is outside the directories the scene's documents are in or use or its inputs read from, every package directory, and every directory allowed with `--allow file.read`",
             target.display()
         ))
     }

@@ -318,7 +318,21 @@ impl Session {
         let readable = |path: &Path| crate::reads::lock(&reads).check(store.as_ref(), path);
         self.scene
             .sync(&mut self.kernels, &mut self.runtime, &mut events, &readable);
-        crate::reads::lock(&reads).settle(store.as_ref(), &self.scene.read_from());
+        // The first-loaded scene's own documents and input files.
+        let files = self.scene.files();
+        let read_from: Vec<std::path::PathBuf> = self
+            .scene
+            .read_from()
+            .into_iter()
+            .chain(
+                files
+                    .assets
+                    .iter()
+                    .filter_map(|asset| asset.path.parent().map(Path::to_path_buf)),
+            )
+            .chain(files.sequences.iter().map(|(_, dir, ..)| dir.clone()))
+            .collect();
+        crate::reads::lock(&reads).settle(store.as_ref(), &read_from);
         self.inputs.sync(
             store.as_ref(),
             self.scene.graph(),

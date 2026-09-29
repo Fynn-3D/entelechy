@@ -143,3 +143,20 @@ fn a_write_through_a_link_and_dot_dot_is_judged_where_it_lands() {
     assert!(!dir.join("outside/x.txt").exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn the_first_scenes_own_inputs_stay_readable() {
+    let dir = built("own");
+    std::fs::write(
+        dir.join("app/scene.osn"),
+        format!("{SCENE}input pic: Image = \"../outside/secret.ppm\";\n"),
+    )
+    .unwrap();
+    let runtime = Session::runtime_for("cpu", orla_session::Limits::default()).unwrap();
+    let store = Arc::new(orla_session::Disk::default());
+    let mut session = Session::open_in(store, &dir.join("app/scene.osn"), None, runtime);
+    session.restrict_reads().unwrap();
+    let events = session.sync();
+    assert!(loaded(&events, "pic"), "{events:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -988,13 +988,13 @@ fn an_input_of_the_wrong_layout_is_refused_by_every_backend() {
 
 #[test]
 fn values_past_the_stack_are_left_to_the_interpreter() {
-    // Megabytes of array values: a frame that large steps past a
-    // thread's guard page, so the JIT refuses the module and the
-    // interpreter, holding values on the heap, runs it.
+    // A value of 240 KiB, which a frame holds more than once: past the
+    // stack the compiled code may take, so the JIT refuses the module
+    // and the interpreter, holding values on the heap, runs it.
     let source = "kernel test.deep@1 { requires { field.write; } output result: Rows<Int>;
         compute {
-            let a = [[element(); 4096]; 160];
-            return a[element() % 160][3];
+            let a = [[element(); 4096]; 15];
+            return a[element() % 15][3];
         } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let jit = JitBackend::new().unwrap();
