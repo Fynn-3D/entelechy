@@ -279,3 +279,32 @@ fn an_edit_that_does_not_say_what_it_names_is_refused() {
     let error = edit(inline, &[member("k", "domain", Some("domain = 4;"))]).unwrap_err();
     assert!(error.message.contains("replace the node whole"), "{error}");
 }
+
+#[test]
+fn a_fragment_ending_in_a_comment_ends_its_line_before_what_followed() {
+    let text = "param a: Float = 1.0; param b: Float = 2.0;\nnode k: t.c@1 { domain = 4; }\nnode e: t.c@1 {}\n";
+    let edited = edit(
+        text,
+        &[
+            statement(StatementKind::Param, "a", "param a: Float = 3.0; // three"),
+            member("k", "from", Some("from = 5.0; // five")),
+            member("e", "from", Some("from = 6.0; // six")),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        edited,
+        "param a: Float = 3.0; // three\nparam b: Float = 2.0;\nnode k: t.c@1 { domain = 4; from = 5.0; // five\n}\nnode e: t.c@1 { from = 6.0; // six\n}\n"
+    );
+    // Where nothing follows on the line, the comment stays on it.
+    let edited = edit(
+        "param a: Float = 1.0;\n",
+        &[statement(
+            StatementKind::Param,
+            "a",
+            "param a: Float = 3.0; // three",
+        )],
+    )
+    .unwrap();
+    assert_eq!(edited, "param a: Float = 3.0; // three\n");
+}

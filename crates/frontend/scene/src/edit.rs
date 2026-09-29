@@ -87,10 +87,10 @@ fn apply(text: &str, edit: &Edit) -> Result<String, String> {
             let at = find(&outline, *kind, name)?;
             Ok(match (at, fragment) {
                 (Some(statement), Some(fragment)) => {
-                    splice(text, statement.range.clone(), fragment)
+                    replace(text, statement.range.clone(), fragment)
                 }
                 (Some(statement), None) => remove(text, statement.range.clone(), true),
-                (None, Some(fragment)) => add_statement(text, &outline, *kind, fragment),
+                (None, Some((fragment, _))) => add_statement(text, &outline, *kind, fragment),
                 (None, None) => {
                     return Err(format!("there is no {} to remove", edit.target));
                 }
@@ -111,7 +111,7 @@ fn apply(text: &str, edit: &Edit) -> Result<String, String> {
                 return Err(format!("node `{node}` has more than one `{member}`"));
             }
             Ok(match (at, fragment) {
-                (Some(at), Some(fragment)) => splice(text, at.range.clone(), fragment),
+                (Some(at), Some(fragment)) => replace(text, at.range.clone(), fragment),
                 (Some(at), None) => remove(text, at.range.clone(), false),
                 (None, Some(fragment)) => add_member(text, block, fragment),
                 (None, None) => {
@@ -123,15 +123,17 @@ fn apply(text: &str, edit: &Edit) -> Result<String, String> {
 }
 
 /// The fragment, trimmed, when it is exactly one statement or member
-/// declaring what `target` names.
-fn declares<'a>(fragment: &'a str, target: &Target) -> Result<&'a str, String> {
+/// declaring what `target` names, and whether it ends in a comment.
+fn declares<'a>(fragment: &'a str, target: &Target) -> Result<(&'a str, bool), String> {
     let fragment = fragment.trim();
     match target {
         Target::Statement { kind, name } => {
             let outline = outline(fragment)
                 .map_err(|e| format!("the text for {target} does not parse: {e}"))?;
             match outline.statements.as_slice() {
-                [one] if one.kind == *kind && &one.name == name => Ok(fragment),
+                [one] if one.kind == *kind && &one.name == name => {
+                    Ok((fragment, !fragment[one.range.end..].trim().is_empty()))
+                }
                 [one] => Err(format!(
                     "the text for {target} declares {} `{}`; an edit changes the statement it names: to rename it, remove it (`text`: null) and add the new one in another edit",
                     one.kind.keyword(),
@@ -153,7 +155,10 @@ fn declares<'a>(fragment: &'a str, target: &Target) -> Result<&'a str, String> {
                 _ => None,
             };
             match members {
-                Some([one]) if &one.name == member => Ok(fragment),
+                Some([one]) if &one.name == member => {
+                    let rest = &probe[one.range.end..probe.len() - 1];
+                    Ok((fragment, !rest.trim().is_empty()))
+                }
                 Some([one]) => Err(format!(
                     "the text for {target} sets `{}`; an edit changes the member it names: to rename `{member}`, remove it (`text`: null) and add `{}` in another edit",
                     one.name, one.name
@@ -182,6 +187,30 @@ fn find<'a>(
         ));
     }
     Ok(at)
+}
+
+/// `range` replaced by a fragment, which, ending in a comment, ends its
+/// line before what followed `range` there.
+fn replace(text: &str, range: Range<usize>, (fragment, comment): (&str, bool)) -> String {
+    let (with, end) = ended(text, range.start, range.end, fragment, comment);
+    splice(text, range.start..end, &with)
+}
+
+/// `fragment` put in at `start` before what is at `end`, and where what
+/// follows it then begins: ending in a comment with more on the line
+/// after `end`, a new line indented as the line at `start` follows it,
+/// and the spaces after `end` go.
+fn ended(text: &str, start: usize, end: usize, fragment: &str, comment: bool) -> (String, usize) {
+    if !comment || text[end..line_end(text, end)].trim().is_empty() {
+        return (fragment.to_owned(), end);
+    }
+    let line = text[..start].rfind('\n').map_or(0, |i| i + 1);
+    let indent: String = text[line..]
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .collect();
+    let spaces = text[end..].len() - text[end..].trim_start_matches([' ', '\t']).len();
+    (format!("{fragment}\n{indent}"), end + spaces)
 }
 
 fn splice(text: &str, range: Range<usize>, with: &str) -> String {
@@ -290,14 +319,18 @@ fn add_statement(text: &str, outline: &Outline, kind: StatementKind, fragment: &
 /// Adds a member at the end of a node's block, laid out as the block is:
 /// on the block's line when the members share it, else on its own line
 /// indented as the last member.
-fn add_member(text: &str, block: &orla_language::NodeBlock, fragment: &str) -> String {
+fn add_member(
+    text: &str,
+    block: &orla_language::NodeBlock,
+    (fragment, comment): (&str, bool),
+) -> String {
     let same_line = |a: usize, b: usize| !text[a..b].contains('\n');
     match block.members.last() {
-        Some(last) if same_line(block.open, last.range.start) => splice(
-            text,
-            last.range.end..last.range.end,
-            &format!(" {fragment}"),
-        ),
+        Some(last) if same_line(block.open, last.range.start) => {
+            let at = last.range.end;
+            let (with, end) = ended(text, at, at, fragment, comment);
+            splice(text, at..end, &format!(" {with}"))
+        }
         Some(last) => {
             let line = text[..last.range.start].rfind('\n').map_or(0, |i| i + 1);
             let indent = &text[line..last.range.start];
@@ -305,7 +338,13 @@ fn add_member(text: &str, block: &orla_language::NodeBlock, fragment: &str) -> S
             splice(text, at..at, &format!("\n{indent}{fragment}"))
         }
         None if same_line(block.open, block.close) => {
-            splice(text, block.open + 1..block.close, &format!(" {fragment} "))
+            let (with, _) = ended(text, block.open, block.close, fragment, comment);
+            let gap = if with.ends_with(char::is_whitespace) {
+                ""
+            } else {
+                " "
+            };
+            splice(text, block.open + 1..block.close, &format!(" {with}{gap}"))
         }
         None => {
             let line = text[..block.close].rfind('\n').map_or(0, |i| i + 1);
