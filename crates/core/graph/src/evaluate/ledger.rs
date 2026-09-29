@@ -247,6 +247,8 @@ fn forget(counts: &mut BTreeMap<Handle, usize>, handles: impl Iterator<Item = Ha
 pub(super) struct Room<'a> {
     pub(super) at: usize,
     pub(super) running: &'a NodeId,
+    /// The group each node runs in.
+    pub(super) runs_at: &'a BTreeMap<NodeId, usize>,
     pub(super) last_read: &'a BTreeMap<NodeId, usize>,
     pub(super) readers: &'a BTreeMap<NodeId, Vec<NodeId>>,
     pub(super) held: &'a BTreeSet<NodeId>,
@@ -255,8 +257,10 @@ pub(super) struct Room<'a> {
 impl Evaluator {
     /// Lets go of cached outputs no later run of this frame reads, to make
     /// room in the Host: those read last before the group running, and
-    /// those of nodes downstream of one run this frame (`ran`), which run
-    /// again when reached, and the running node's own, which it replaces.
+    /// those of nodes still to be reached downstream of one run this frame
+    /// (`ran`), which run again when reached, and the running node's own,
+    /// which it replaces. A node passed without running, reused or an
+    /// `async` node's last output, is read as it is.
     /// What `held` names stays. Answers how many nodes
     /// let go; a later frame that asks for one runs its node again.
     pub(super) fn make_room<'n>(
@@ -281,7 +285,8 @@ impl Evaluator {
             .cached_nodes()
             .filter(|id| {
                 !room.held.contains(*id)
-                    && (stale.contains(*id)
+                    && ((stale.contains(*id)
+                        && room.runs_at.get(*id).is_some_and(|runs| *runs > room.at))
                         || *id == room.running
                         || room.last_read.get(*id).is_some_and(|read| *read < room.at))
             })

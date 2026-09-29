@@ -2879,3 +2879,70 @@ output out <- last.result;
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Room made while an `async` node's last output is read on the frame
+/// keeps that output: a node passed without running is read as it is.
+#[test]
+fn room_made_keeps_an_async_nodes_last_output_the_frame_reads() {
+    let dir = std::env::temp_dir().join(format!("orla-room-async-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("plus.orla"),
+        "kernel a.plus@1 {
+    requires { field.read; field.write; }
+    input a: Rows<Float>;
+    output result: Rows<Float>;
+    compute { return sample(a) + 1.0; }
+}
+",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.osn"),
+        "use \"plus.orla\";
+node x: kernel {
+    requires { field.write; time.read; }
+    output result: Rows<Float>;
+    domain = 16384;
+    compute { return time(); }
+}
+node p: a.plus@1 { a <- x.result; async = true; }
+node r: kernel {
+    requires { field.read; field.write; time.read; }
+    input a: Rows<Float> <- p.result;
+    output result: Rows<Float>;
+    domain = 110000;
+    compute { return at(a, 0) + time(); }
+}
+node o: kernel {
+    requires { field.read; field.write; }
+    input a: Rows<Float> <- r.result;
+    input b: Rows<Float> <- p.result;
+    output result: Rows<Float>;
+    domain = 1;
+    compute { return at(a, 0) + at(b, 0) * 0.0; }
+}
+output result <- o.result;
+",
+    )
+    .unwrap();
+    let replay = dir.join("scene.replay");
+    std::fs::write(
+        &replay,
+        "scene scene.osn\nframe 0.0\nexpect o.result[0] = 1.0\nframe 1.0\nframe 2.0\n",
+    )
+    .unwrap();
+    let ran = Command::new(env!("CARGO_BIN_EXE_orla"))
+        .args(["replay", "--memory", "1"])
+        .arg(&replay)
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&ran.stdout);
+    assert!(
+        ran.status.success(),
+        "{said}{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

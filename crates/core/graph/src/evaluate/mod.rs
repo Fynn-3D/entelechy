@@ -526,7 +526,9 @@ impl Evaluator {
             // state's sources and the pinned.
             let mut last_read: BTreeMap<NodeId, usize> = BTreeMap::new();
             let mut readers: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+            let mut runs_at: BTreeMap<NodeId, usize> = BTreeMap::new();
             for (at, group) in groups.iter().enumerate() {
+                runs_at.insert(group.node.id.clone(), at);
                 for binding in group.node.inputs.values() {
                     if let Binding::Now(Source::Node { node, .. }) = binding {
                         last_read.insert(node.clone(), at);
@@ -619,6 +621,7 @@ impl Evaluator {
                                 Room {
                                     at,
                                     running: &node.id,
+                                    runs_at: &runs_at,
                                     last_read: &last_read,
                                     readers: &readers,
                                     held: &held,
