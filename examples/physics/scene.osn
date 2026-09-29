@@ -28,6 +28,9 @@ node world: graph "../../packages/physics.orlapkg/graphs/step.osn" {
     columns = 36;
     rows = 24;
     bits = 10;
+    // A pyramid eight high settles in four; the package's eight are for
+    // piles many bodies deep landing at once.
+    substeps = 4;
 }
 
 node no_felt: physics.no_counts@1 { bodies <- world.result; }
@@ -35,8 +38,10 @@ node felt: world.felt@1 { contacts <- world.contacts; zeros <- no_felt.result; d
 node aim: world.aim@1 { domain = 1; }
 node hits: physics.ray@1 { rays <- aim.result; bodies <- world.result; }
 
+node marks: world.marks@1 { bodies <- world.result; }
 node view: world.view@1 {
     bodies <- world.result;
+    marks <- marks.result;
     felt <- felt.result;
     rays <- aim.result;
     hits <- hits.result;

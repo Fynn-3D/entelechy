@@ -11,10 +11,11 @@
 //   to its second and up to two points, each held by both bodies where
 //   they touch, with the separation then. Points up to a margin apart
 //   are kept, so a body closing on another is stopped where it touches.
-// - Solves the manifolds over substeps. Each substep adds gravity, pushes
-//   again with the impulses the manifolds last held, solves each
-//   manifold against its own copy of its bodies, moves the bodies, and
-//   solves once more without pushing apart. A manifold pushes a body
+// - Solves the manifolds over substeps. Each substep adds gravity, solves
+//   each manifold against its own copy of its bodies, moves the bodies,
+//   and solves once more without pushing apart; then the impulses the
+//   manifolds hold push again, to warm the next substep, as the step's
+//   first is warmed by the impulses they start from. A manifold pushes a body
 //   with its mass split among the manifolds touching it, and the pushes
 //   on a body are summed, so every manifold is solved at once and the
 //   sum settles where solving them one by one would.
@@ -753,10 +754,18 @@ fn solve_tangent(pt: Point, both: Both, a: Body, b: Body, n: Vec2, friction: Flo
     return Solved { point: Point { ..pt, tangent: total }, both: apply(both, t * (total - pt.tangent), ra, rb) };
 }
 
-fn warm(pt: Point, both: Both, a: Body, b: Body, n: Vec2) -> Both {
+// The copies pushed `by` times the impulses a point holds: once to warm
+// a substep, once less to take back a warm no substep follows.
+fn warm(pt: Point, both: Both, a: Body, b: Body, n: Vec2, by: Float) -> Both {
     let ra = turn(pt.anchor_a, a.angle);
     let rb = turn(pt.anchor_b, b.angle);
-    return apply(both, n * pt.normal + vec2(n.y, -n.x) * pt.tangent, ra, rb);
+    return apply(both, (n * pt.normal + vec2(n.y, -n.x) * pt.tangent) * by, ra, rb);
+}
+
+// A manifold's copies warmed `by` times its impulses.
+fn warmed(m: Manifold, both: Both, a: Body, b: Body, by: Float) -> Both {
+    let one = warm(m.p1, both, a, b, m.normal, by);
+    return if m.count > 1 { warm(m.p2, one, a, b, m.normal, by) } else { one };
 }
 
 fn bounce(pt: Point, both: Both, a: Body, b: Body, n: Vec2, e: Float, threshold: Float) -> Solved {
@@ -798,14 +807,14 @@ kernel physics.warm@1 {
         let a = at(bodies, m.a);
         let b = at(bodies, m.b);
         let start = Both { a: copy_of(a, shared, m.a), b: copy_of(b, shared, m.b) };
-        let one = warm(m.p1, start, a, b, m.normal);
-        let both = if m.count > 1 { warm(m.p2, one, a, b, m.normal) } else { one };
-        return settled(m, both, a, b);
+        return settled(m, warmed(m, start, a, b, 1.0), a, b);
     }
 }
 
 /// Each manifold solved against its copies of its bodies: the normal
-/// impulses, pushing apart what overlaps unless `relax`, then friction.
+/// impulses, pushing apart what overlaps unless `relax`, then friction;
+/// with `ahead`, the impulses it then holds pushed again for the next
+/// substep.
 kernel physics.solve@1 {
     requires { field.read; field.write; }
     input manifolds: Rows<Manifold>;
@@ -814,6 +823,7 @@ kernel physics.solve@1 {
     param dt: Float = 0.0166667;
     param substeps: Int = 8;
     param relax: Bool = false;
+    param ahead: Bool = false;
     param hertz: Float = 30.0;
     param ratio: Float = 10.0;
     param speed: Float = 3.0;
@@ -830,12 +840,14 @@ kernel physics.solve@1 {
         let n2 = if m.count > 1 { solve_normal(m.p2, n1.both, a, b, m.normal, h, relax, soft, speed) } else { Solved { point: m.p2, both: n1.both } };
         let t1 = solve_tangent(n1.point, n2.both, a, b, m.normal, m.friction);
         let t2 = if m.count > 1 { solve_tangent(n2.point, t1.both, a, b, m.normal, m.friction) } else { Solved { point: n2.point, both: t1.both } };
-        return settled(Manifold { ..m, p1: t1.point, p2: t2.point }, t2.both, a, b);
+        let solved = Manifold { ..m, p1: t1.point, p2: t2.point };
+        return settled(solved, if ahead { warmed(solved, t2.both, a, b, 1.0) } else { t2.both }, a, b);
     }
 }
 
-/// Each manifold's bounce: the points that closed faster than
-/// `threshold` and push, given back the restitution of what they closed at.
+/// Each manifold's bounce: the warm for a substep that does not come
+/// taken back, and the points that closed faster than `threshold` and
+/// push given back the restitution of what they closed at.
 kernel physics.bounce@1 {
     requires { field.read; field.write; }
     input manifolds: Rows<Manifold>;
@@ -845,10 +857,12 @@ kernel physics.bounce@1 {
     output result: Rows<Manifold>;
     compute {
         let m = sample(manifolds);
-        if !solid(m) || m.restitution == 0.0 { return nothing(m); }
+        if !solid(m) { return nothing(m); }
         let a = at(bodies, m.a);
         let b = at(bodies, m.b);
-        let start = Both { a: copy_of(a, shared, m.a), b: copy_of(b, shared, m.b) };
+        // The last substep warmed a substep that does not come.
+        let start = warmed(m, Both { a: copy_of(a, shared, m.a), b: copy_of(b, shared, m.b) }, a, b, -1.0);
+        if m.restitution == 0.0 { return settled(m, start, a, b); }
         let one = bounce(m.p1, start, a, b, m.normal, m.restitution, threshold);
         let two = if m.count > 1 { bounce(m.p2, one.both, a, b, m.normal, m.restitution, threshold) } else { Solved { point: m.p2, both: one.both } };
         return settled(Manifold { ..m, p1: one.point, p2: two.point }, two.both, a, b);

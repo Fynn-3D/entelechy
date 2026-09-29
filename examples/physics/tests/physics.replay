@@ -3,7 +3,8 @@ window 680 400
 param steps 10
 
 # Five seconds, ten steps a frame: the pyramid stands, its top where
-# it was set, and balls that rolled down the ramp lie on the sensor.
+# it was set and its corner, which the balls roll into, flat on the
+# ground; balls that rolled down the ramp lie on the sensor.
 frame 1
 frame 2
 frame 3
@@ -36,7 +37,9 @@ frame 29
 frame 30
 expect dropped.result[40].position = 9.0 7.5 0.05
 expect dropped.result[40].angle = 0.0 0.01
-expect dropped.result[5].position = 5.5 0.5 0.02
+expect dropped.result[5].position.y = 0.5 0.01
+expect dropped.result[5].position.x = 5.5 0.05
+expect dropped.result[5].angle = 0.0 0.01
 expect felt.result[4] >= 1
 
 # The ray toward the pointer on the pyramid stops at one of its boxes.

@@ -145,9 +145,19 @@ fn to_segment(p: Vec2, a: Vec2, b: Vec2) -> Float {
     return length(p - (a + ab * t));
 }
 
+/// Each body's centre and reach, the little a pixel reads of it to pass
+/// it by.
+kernel world.marks@1 {
+    requires { field.read; field.write; }
+    input bodies: Rows<Body>;
+    output result: Rows<Vec4>;
+    compute { let b = sample(bodies); return vec4(b.position.x, b.position.y, extent(b), 0.0); }
+}
+
 kernel world.view@1 {
     requires { field.read; field.write; }
     input bodies: Rows<Body>;
+    input marks: Rows<Vec4>;
     input felt: Rows<Int>;
     input rays: Rows<Ray>;
     input hits: Rows<Hit>;
@@ -159,20 +169,24 @@ kernel world.view@1 {
         let sky = mix(vec3(0.95, 0.96, 0.98), vec3(0.78, 0.85, 0.93), clamp(p.y / 20.0, 0.0, 1.0));
         let n = count(bodies);
         let painted = loop n with c = sky {
-            let b = at(bodies, index());
-            let d = if length(p - b.position) > extent(b) + u { u + 1.0 } else { outside(b, p) };
-            if d > u { c } else {
-                let cover = clamp(0.5 - d / u, 0.0, 1.0);
-                let lit = at(felt, index()) > 0;
-                let fill = if b.sensor != 0 {
-                    mix(c, if lit { vec3(0.3, 0.85, 0.4) } else { vec3(0.55, 0.8, 0.6) }, if lit { 0.55 } else { 0.25 })
-                } else {
-                    let base = hue(index(), b);
-                    let rim = clamp(-d / (2.5 * u), 0.0, 1.0);
-                    let glow = if lit { vec3(0.2, 0.25, 0.0) } else { vec3(0.0, 0.0, 0.0) };
-                    mix(base * 0.55, base, rim) + glow
-                };
-                mix(c, fill, cover)
+            let mark = at(marks, index());
+            let far = abs(p - vec2(mark.x, mark.y)) - vec2(mark.z + u, mark.z + u);
+            if max(far.x, far.y) > 0.0 { c } else {
+                let b = at(bodies, index());
+                let d = outside(b, p);
+                if d > u { c } else {
+                    let cover = clamp(0.5 - d / u, 0.0, 1.0);
+                    let lit = at(felt, index()) > 0;
+                    let fill = if b.sensor != 0 {
+                        mix(c, if lit { vec3(0.3, 0.85, 0.4) } else { vec3(0.55, 0.8, 0.6) }, if lit { 0.55 } else { 0.25 })
+                    } else {
+                        let base = hue(index(), b);
+                        let rim = clamp(-d / (2.5 * u), 0.0, 1.0);
+                        let glow = if lit { vec3(0.2, 0.25, 0.0) } else { vec3(0.0, 0.0, 0.0) };
+                        mix(base * 0.55, base, rim) + glow
+                    };
+                    mix(c, fill, cover)
+                }
             }
         };
         let ray = at(rays, 0);

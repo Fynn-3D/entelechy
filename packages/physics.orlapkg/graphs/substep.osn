@@ -1,6 +1,6 @@
-//! One substep of `step.osn`: gravity, the manifolds' held impulses
-//! pushed again, the manifolds solved, the bodies moved, and the
-//! manifolds solved once more without pushing apart.
+//! One substep of `step.osn`: gravity, the manifolds solved, the bodies
+//! moved, and the manifolds solved once more without pushing apart, the
+//! impulses they then hold pushed again to warm the next substep.
 use "../kernels/physics.orla";
 
 input bodies: Rows<Body>;
@@ -17,18 +17,14 @@ param speed: Float = 3.0;
 
 node fall: physics.fall@1 { bodies <- bodies; dt = dt; substeps = substeps; gravity = gravity; damping = damping; }
 
-node warm: physics.warm@1 { manifolds <- manifolds; bodies <- fall.result; shared <- shared; }
-node warm_pushes: physics.pushes@1 { manifolds <- warm.result; zeros <- zeros; domain = 2 * count(manifolds); }
-node warmed: physics.push@1 { bodies <- fall.result; pushes <- warm_pushes.result; }
-
 node solve: physics.solve@1 {
-    manifolds <- warm.result;
-    bodies <- warmed.result;
+    manifolds <- manifolds;
+    bodies <- fall.result;
     shared <- shared;
     dt = dt; substeps = substeps; hertz = hertz; ratio = ratio; speed = speed;
 }
 node solve_pushes: physics.pushes@1 { manifolds <- solve.result; zeros <- zeros; domain = 2 * count(manifolds); }
-node solved: physics.push@1 { bodies <- warmed.result; pushes <- solve_pushes.result; }
+node solved: physics.push@1 { bodies <- fall.result; pushes <- solve_pushes.result; }
 
 node move: physics.move@1 { bodies <- solved.result; dt = dt; substeps = substeps; }
 
@@ -36,7 +32,7 @@ node relax: physics.solve@1 {
     manifolds <- solve.result;
     bodies <- move.result;
     shared <- shared;
-    dt = dt; substeps = substeps; relax = true; hertz = hertz; ratio = ratio; speed = speed;
+    dt = dt; substeps = substeps; relax = true; ahead = true; hertz = hertz; ratio = ratio; speed = speed;
 }
 node relax_pushes: physics.pushes@1 { manifolds <- relax.result; zeros <- zeros; domain = 2 * count(manifolds); }
 node relaxed: physics.push@1 { bodies <- move.result; pushes <- relax_pushes.result; }

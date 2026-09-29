@@ -96,11 +96,17 @@ node no_counts: physics.no_counts@1 { bodies <- bodies; }
 node shared: physics.shared@1 { manifolds <- collide.result; zeros <- no_counts.result; domain = 2 * count(manifolds); }
 node no_pushes: physics.no_pushes@1 { bodies <- bodies; }
 
+// The first substep warmed with the impulses the manifolds start from;
+// each substep warms the next.
+node warm: physics.warm@1 { manifolds <- collide.result; bodies <- bodies; shared <- shared.result; }
+node warm_pushes: physics.pushes@1 { manifolds <- warm.result; zeros <- no_pushes.result; domain = 2 * count(manifolds); }
+node warmed: physics.push@1 { bodies <- bodies; pushes <- warm_pushes.result; }
+
 node sub: graph "substep.osn" {
     times = substeps;
     carry bodies <- moved;
     carry manifolds <- held;
-    bodies <- bodies;
+    bodies <- warmed.result;
     manifolds <- collide.result;
     shared <- shared.result;
     zeros <- no_pushes.result;
