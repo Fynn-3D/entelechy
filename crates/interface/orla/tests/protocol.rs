@@ -1470,7 +1470,8 @@ fn a_page_elsewhere_can_neither_open_a_socket_nor_post_requests() {
         answer(upgrade("http://localhost.evil.example")),
         "HTTP/1.1 403"
     );
-    assert_eq!(answer(upgrade("null")), "HTTP/1.1 101");
+    // A sandboxed frame on any site says `null`, as a file page does.
+    assert_eq!(answer(upgrade("null")), "HTTP/1.1 403");
     assert_eq!(answer(upgrade("http://localhost:5173")), "HTTP/1.1 101");
     assert_eq!(answer(upgrade("https://studio.example")), "HTTP/1.1 101");
     let compose = json!({ "id": 1, "op": "compose", "text": "node broken: {" }).to_string();

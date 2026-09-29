@@ -227,12 +227,14 @@ it allowed; nothing over the wire widens it.
 
 - Whether reads are held is decided when the session opens, before its
   scene is first read. Readable are the directories of the scene as it
-  first loads (the root, the graphs it places, what it uses), packages,
-  and `--allow file.read`. A program allows more with `orla_allow`.
+  first loads (the root, the graphs it places, what it uses, the files its
+  inputs read), the directories packages are found in, and `--allow
+  file.read`, judged where a path lands after its links. A program allows more with `orla_allow`.
 - An agent's `save` and a scene's `to` land only where `--allow
   file.write` says.
-- A page opens the socket only from this machine, from a file, or from an
-  origin `--allow-origin` names; an HTTP request that is not a WebSocket
+- A page opens the socket only from this machine or from an origin
+  `--allow-origin` names; a page from a file says `null`, as a sandboxed
+  frame on any site does, so it is named too; an HTTP request that is not a WebSocket
   upgrade is answered and closed.
 - A package is a published capability, read by anyone as `use` reads
   it.

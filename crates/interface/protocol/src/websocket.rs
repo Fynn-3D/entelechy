@@ -51,9 +51,10 @@ pub enum Message {
 
 /// The web pages whose scripts a socket answers, judged by `Origin`, so a
 /// visited site cannot drive the session. Admitted: a non-browser client
-/// (no `Origin`), a page opened from a file (`null`, as `bridges/web`
-/// runs), a page served from this machine (`localhost`, `127.0.0.1`,
-/// `[::1]`, any port), and origins named with `--allow-origin`.
+/// (no `Origin`), a page served from this machine (`localhost`,
+/// `127.0.0.1`, `[::1]`, any port), and origins named with
+/// `--allow-origin`. A page opened from a file says `null`, as does a
+/// sandboxed frame on any site, so `null` is admitted only when named.
 #[derive(Clone, Debug, Default)]
 pub struct Origins {
     named: Vec<String>,
@@ -76,7 +77,7 @@ impl Origins {
             return true;
         };
         let origin = origin.trim().trim_end_matches('/').to_ascii_lowercase();
-        if origin == "null" || self.named.contains(&origin) {
+        if self.named.contains(&origin) {
             return true;
         }
         let Some(rest) = origin
@@ -447,14 +448,16 @@ mod tests {
         );
     }
 
-    /// Remote pages are refused; local pages, file pages, non-browser
-    /// clients and named origins are admitted.
+    /// Remote pages are refused; local pages, non-browser clients and
+    /// named origins are admitted; `null`, which a sandboxed frame on any
+    /// site says, only when named.
     #[test]
     fn a_page_elsewhere_is_refused_and_a_local_one_admitted() {
+        assert!(!Origins::default().admits(Some("null")));
+        assert!(Origins::with(vec!["null".into()]).admits(Some("null")));
         let origins = Origins::with(vec!["https://studio.example".into()]);
         for admitted in [
             None,
-            Some("null"),
             Some("http://localhost:8000"),
             Some("http://127.0.0.1"),
             Some("https://[::1]:9000"),

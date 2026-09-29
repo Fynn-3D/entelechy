@@ -54,8 +54,8 @@ usage:
       window, and on every connection to --listen <host:port>: an agent's
       publish, compose, and param land in the frame a person watches, and
       its evaluate observes that person's input. A browser's page connects
-      from this machine or from a file; a page elsewhere only from an
-      origin --allow-origin <origin> names.";
+      from this machine; a page elsewhere only from an origin
+      --allow-origin <origin> names (`null` for a page opened from a file).";
 
 /// The window `window()` reads before one opens, when none was asked for.
 const DEFAULT_WINDOW: (u32, u32) = (960, 540);

@@ -7,7 +7,7 @@ Nothing in the Rust workspace depends on it, and it knows nothing about
 how Orla is built.
 
 ```sh
-orla player examples/voxel/scene.osn --serve --listen 127.0.0.1:7788
+orla player examples/voxel/scene.osn --serve --listen 127.0.0.1:7788 --allow-origin null
 open bridges/web/index.html      # or any browser, straight from the file
 ```
 

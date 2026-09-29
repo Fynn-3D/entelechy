@@ -349,8 +349,8 @@ orla serve examples/life/scene.osn
 Agents drive a session with JSON lines on stdin and stdout;
 `--listen <host:port>` also serves every connection there, and a
 connection that opens with HTTP is upgraded to a WebSocket. A page
-connects from this machine or a file, or from an origin
-`--allow-origin` names. `--window` is the window evaluations see unless
+connects from this machine, or from an origin `--allow-origin` names
+(`null` for a page opened from a file). `--window` is the window evaluations see unless
 they name one. `orla-player --serve` serves the same protocol from the
 window a person is watching. The operations are in
 [PROTOCOL](PROTOCOL.md).

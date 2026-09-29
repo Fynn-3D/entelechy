@@ -436,8 +436,8 @@ changed since, which is how a change is shown to cost nothing.",
 Serve the creation protocol: JSON requests on stdin, one response per
 line on stdout, and on every connection to --listen, where a client's
 quit ends only its connection. A browser's page connects from this
-machine or from a file; a page elsewhere only from an origin
---allow-origin names (`https://host:port`). --window is what evaluations that name
+machine; a page elsewhere only from an origin --allow-origin names
+(`https://host:port`, or `null` for a page opened from a file). --window is what evaluations that name
 no window see. See
 docs/PROTOCOL.md.",
             flags: with(

@@ -111,9 +111,10 @@ through:
   is answered 426, saying what it reached; any other HTTP request is
   answered 400 and closed. The upgrade is refused (403) except from a
   page served from this machine (`localhost`, `127.0.0.1`, `[::1]`), a
-  page opened from a file (`null`), a client that is not a browser, or an
-  origin named by `--allow-origin <origin>` (`https://host:port` as a
-  browser writes it).
+  client that is not a browser, or an origin named by `--allow-origin
+  <origin>` (`https://host:port` as a browser writes it). A page opened
+  from a file says `null`, as a sandboxed frame on any site does, so it
+  connects only with `--allow-origin null`.
 - **In process.** `orla_request` in
   [`orla.h`](../crates/interface/ffi/include/orla.h) (`include/orla.h` in a
   release) takes one line and
