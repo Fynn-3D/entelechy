@@ -1049,8 +1049,9 @@ fn rounded_apart(
     for split in 0..orla_session::apart::SPLITS {
         let runtime = Session::runtime_apart(backend, limits, split)?;
         let outcome = orla::replay::run_in(replay, store.clone(), runtime)?;
-        all.frames += outcome.frames;
-        all.checks += outcome.checks;
+        // Every way runs the same frames and checks.
+        all.frames = outcome.frames;
+        all.checks = outcome.checks;
         all.failures.extend(
             outcome
                 .failures
