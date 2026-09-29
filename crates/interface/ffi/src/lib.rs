@@ -120,8 +120,10 @@ struct Held {
     report: CString,
     response: CString,
     schema: CString,
-    /// A narrow Field's words widened to the header's 32-bit words.
-    widened: Vec<u32>,
+    /// Each narrow Field read since the last evaluate or request, its
+    /// words widened to the header's 32-bit words; each stays until then,
+    /// as a wide Field's words in place do.
+    widened: std::collections::BTreeMap<Handle, Vec<u32>>,
     /// The GPU device as a canvas reaches it, on a GPU backend.
     #[cfg_attr(
         not(all(target_arch = "wasm32", target_os = "unknown")),
@@ -270,8 +272,10 @@ impl Held {
         let words = if schema.is_wide() {
             data.storage().as_ptr()
         } else {
-            self.widened = data.values().into_owned();
-            self.widened.as_ptr()
+            self.widened
+                .entry(handle)
+                .or_insert_with(|| data.values().into_owned())
+                .as_ptr()
         };
         let values = orla_abi::Schema::new(schema.scalars().to_vec());
         self.schema = c_string(&values.to_string());
@@ -467,7 +471,7 @@ fn opened(
                 report: CString::default(),
                 response: CString::default(),
                 schema: CString::default(),
-                widened: Vec::new(),
+                widened: std::collections::BTreeMap::new(),
                 display,
                 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
                 presenter: None,
@@ -623,6 +627,7 @@ pub unsafe extern "C" fn orla_evaluate(
     let input = unsafe { input.as_ref() }.copied().unwrap_or_default();
     guarded(&mut session, |s| {
         s.clear();
+        s.widened.clear();
         s.session.sync();
         // The window: the input's, else the session's, else none.
         let (window, scale) = if input.window[0] > 0.0 && input.window[1] > 0.0 {
@@ -797,6 +802,7 @@ pub unsafe extern "C" fn orla_request(
     let line = unsafe { text(line) }.unwrap_or("").to_owned();
     guarded(&mut session, |s| {
         s.clear();
+        s.widened.clear();
         // Its changes are recorded with origin `orla_request`, as `stdin`
         // or `socket 3` are for a served session.
         let before = s
@@ -842,5 +848,53 @@ mod tests {
         let answer = unsafe { CStr::from_ptr(orla_request(session, status.as_ptr())) };
         assert!(answer.to_string_lossy().contains("\"ok\""));
         unsafe { orla_close(session) };
+    }
+
+    /// A narrow Field's widened words stay until the next evaluate, as
+    /// the header says, however many other Fields are read meanwhile.
+    #[test]
+    fn widened_words_outlive_other_reads() {
+        let dir = std::env::temp_dir().join(format!("orla-ffi-widened-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let node = |name: &str, value: i32| {
+            format!(
+                "node {name}: kernel {{ requires {{ field.write; }} output result: Rows<Int as u8>; domain = 4096; compute {{ return {value}; }} }}\n"
+            )
+        };
+        let text = format!(
+            "{}{}output a <- a.result;\noutput b <- b.result;\n",
+            node("a", 1),
+            node("b", 2)
+        );
+        std::fs::write(dir.join("scene.osn"), text).unwrap();
+        let scene = CString::new(dir.join("scene.osn").to_str().unwrap()).unwrap();
+        let cpu = CString::new("cpu").unwrap();
+        let session = unsafe { orla_open(scene.as_ptr(), cpu.as_ptr(), std::ptr::null()) };
+        assert!(!session.is_null());
+        assert_eq!(unsafe { orla_evaluate(session, std::ptr::null()) }, 0);
+        let empty = || OrlaField {
+            words: std::ptr::null(),
+            width: 0,
+            height: 0,
+            depth: 0,
+            count: 0,
+            stride: 0,
+            shape: 0,
+            pixels: 0,
+            schema: std::ptr::null(),
+        };
+        let (name_a, name_b) = (CString::new("a").unwrap(), CString::new("b").unwrap());
+        let mut a = empty();
+        assert_eq!(unsafe { orla_output(session, name_a.as_ptr(), &mut a) }, 0);
+        for _ in 0..4 {
+            let mut b = empty();
+            assert_eq!(unsafe { orla_output(session, name_b.as_ptr(), &mut b) }, 0);
+        }
+        // Read through the pointer the first call gave.
+        let words = unsafe { std::slice::from_raw_parts(a.words, a.count as usize) };
+        assert!(words.iter().all(|word| *word == 1), "{:?}", &words[..8]);
+        unsafe { orla_close(session) };
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
