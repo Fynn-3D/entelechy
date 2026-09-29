@@ -6,11 +6,11 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use orla_import::{audio, gltf, midi, svg};
+use orla_import::{audio, font, gltf, midi, svg};
 
 const USAGE: &str = "\
 usage:
-  orla-import <file> [--out <dir>] [--rate <fps>]
+  orla-import <file> [--out <dir>] [--rate <fps>] [--chars <text>]
       A model (.gltf, .glb) becomes <stem>.vertices.field, <stem>.triangles.field
       and, when it has one in PNG, <stem>.albedo.png. A model with a skin also
       becomes <stem>.weights.field and <stem>.skeleton.field, and one
@@ -20,8 +20,11 @@ usage:
       .midi) becomes <stem>.notes.field, a row a note with its seconds, its key,
       how hard it was struck and its channel; a drawing (.svg) becomes
       <stem>.segments.field, <stem>.shapes.field, <stem>.stops.field and
-      <stem>.view.field, which the `vector` package draws. Files go to --out,
-      the source's directory by default.";
+      <stem>.view.field, which the `vector` package draws; a font (.ttf, .otf)
+      becomes <stem>.glyphs.field, <stem>.segments.field and
+      <stem>.metrics.field, the glyphs of --chars or of every character it
+      maps, which the `font` package lays out. Files go to --out, the
+      source's directory by default.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -43,6 +46,7 @@ fn import(args: &[String]) -> Result<(), String> {
     let mut source = None;
     let mut out = None;
     let mut rate = 30.0f32;
+    let mut chars = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -55,6 +59,7 @@ fn import(args: &[String]) -> Result<(), String> {
                     .filter(|v| *v > 0.0 && v.is_finite())
                     .ok_or_else(|| format!("--rate takes frames a second, found `{text}`"))?;
             }
+            "--chars" => chars = Some(iter.next().ok_or("--chars needs the characters")?.clone()),
             other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
             other => {
                 if source.replace(PathBuf::from(other)).is_some() {
@@ -179,9 +184,28 @@ fn import(args: &[String]) -> Result<(), String> {
                 println!("note: {note}");
             }
         }
+        "ttf" | "otf" => {
+            let imported = font::import(&source, &out, chars.as_deref())?;
+            for file in &imported.files {
+                println!("wrote {}", file.display());
+            }
+            println!(
+                "{} glyph(s) of {} segment(s)",
+                imported.glyphs, imported.segments
+            );
+            if !imported.missing.is_empty() {
+                println!(
+                    "note: the font lacks {}",
+                    imported.missing.iter().collect::<String>()
+                );
+            }
+            for note in &imported.notes {
+                println!("note: {note}");
+            }
+        }
         other => {
             return Err(format!(
-                "`.{other}` is not a format import knows; models are .gltf/.glb, sounds .mp3/.ogg/.flac/.m4a/.aac/.mka/.wav, scores .mid, drawings .svg"
+                "`.{other}` is not a format import knows; models are .gltf/.glb, sounds .mp3/.ogg/.flac/.m4a/.aac/.mka/.wav, scores .mid, drawings .svg, fonts .ttf/.otf"
             ));
         }
     }

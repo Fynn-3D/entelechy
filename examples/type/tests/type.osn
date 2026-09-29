@@ -1,0 +1,40 @@
+// Large type to test by: "Iol" in the Latin font and "。" in the Chinese
+// one, 200 pixels an em, in black on white; and a character the Latin
+// font lacks.
+use "../../../packages/font.orlapkg";
+
+input latin: Rows<Glyph> = "../assets/NotoSans-Regular.glyphs.field";
+input latin_outlines: Rows<Vec4> = "../assets/NotoSans-Regular.segments.field";
+input latin_metrics: Rows<Metrics> = "../assets/NotoSans-Regular.metrics.field";
+input chinese: Rows<Glyph> = "../assets/NotoSansSC-Regular.glyphs.field";
+input chinese_outlines: Rows<Vec4> = "../assets/NotoSansSC-Regular.segments.field";
+input chinese_metrics: Rows<Metrics> = "../assets/NotoSansSC-Regular.metrics.field";
+input word: Rows<Int> = text "Iol";
+input stop: Rows<Int> = text "。";
+input lacking: Rows<Int> = text "中a";
+
+node paper: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = window();
+    compute { return vec4(1.0, 1.0, 1.0, 1.0); }
+}
+node latin_type: graph "../../../packages/font.orlapkg/graphs/text.osn" {
+    codes <- word; glyphs <- latin; outlines <- latin_outlines; metrics <- latin_metrics;
+    under <- paper.result;
+    origin = vec2(20.0, 220.0); size = 200.0;
+}
+node chinese_type: graph "../../../packages/font.orlapkg/graphs/text.osn" {
+    codes <- stop; glyphs <- chinese; outlines <- chinese_outlines; metrics <- chinese_metrics;
+    under <- latin_type.picture;
+    origin = vec2(380.0, 220.0); size = 200.0;
+}
+
+// A character the Latin font lacks, laid out by itself.
+node lack: graph "../../../packages/font.orlapkg/graphs/text.osn" {
+    codes <- lacking; glyphs <- latin; outlines <- latin_outlines; metrics <- latin_metrics;
+    under <- paper.result;
+    origin = vec2(0.0, 100.0); size = 100.0;
+}
+
+output picture <- chinese_type.picture;

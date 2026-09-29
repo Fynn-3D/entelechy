@@ -87,6 +87,12 @@ use "picture.orlapkg";
   ([why](../docs/DECISIONS.md)).
 - **pixelfx** — a coarse pixel grid and a four-color palette, and the
   NES look made of both as a preset. The example of what a package is.
+- **font** — type from a TrueType or OpenType font `orla import` read:
+  a row of character codes laid out in lines, each character its font's
+  glyph at its own advance, turned into the shapes and segments the
+  `vector` package draws, so text is as sharp at any size as any
+  drawing. `graphs/text.osn` draws a row of codes over a picture;
+  `font.join@1` joins rows into lines. Used by the `type` example.
 - **physics** — rigid circles and boxes in the plane that fall, collide,
   rest, slide and bounce. `graphs/step.osn` is one step of a world of
   `Body` rows: pairs found through a grid of cells sorted by the `sort`

@@ -1,0 +1,6 @@
+//! The font package: type from a font `orla import` read, laid out in
+//! lines and drawn by the `vector` package, sharp at any size.
+//! `graphs/text.osn` draws a row of character codes over a picture.
+package font@1 { language = 1; ir = 1; }
+
+use "kernels/";

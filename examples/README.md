@@ -43,6 +43,7 @@ orla run examples/<example>/scene.osn --out output.ppm --watch
 - [culled](culled/README.md): ten million triangles, of which a frame places the chunks it sees through the compact package.
 - [surface](surface/README.md): a blob meshed from a `Volume<Int>` every frame, the cells compacted and counted.
 - [text](text/README.md): rows of glyphs drawn through a font atlas baked by `run --save`.
+- [type](type/README.md): a Latin and a Chinese font imported by `orla-import`, laid out by the font package and drawn sharp by the vector package.
 - [vector](vector/README.md): an SVG imported by `orla-import` and drawn sharp at any size by the vector package; drag and zoom.
 - [showcase](showcase/README.md): a signed-distance gamepad under physically based shading, with a toolbar in logical pixels.
 

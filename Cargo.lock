@@ -1852,6 +1852,7 @@ dependencies = [
  "orla-host",
  "serde_json",
  "symphonia",
+ "ttf-parser",
  "usvg",
 ]
 

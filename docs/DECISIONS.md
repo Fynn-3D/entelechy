@@ -108,7 +108,8 @@ format goes one of three ways:
   What the bytes mean (a level, a ROM, Markdown) is the Kernel's.
 - **Converted outside the runtime** by `orla-import` and `orla-export`, or
   by a bridge: glTF, MP3 and other lossy sounds, SVG as the segments and
-  shapes a Kernel fills, and documents such as a PDF or a slide deck, as
+  shapes a Kernel fills, TrueType and OpenType fonts as the glyphs'
+  outlines in the same segments, and documents such as a PDF or a slide deck, as
   the pictures and text they hold.
 
 A format is read live when it decodes to a numerical Field, needs no

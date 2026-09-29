@@ -310,6 +310,7 @@ orla import examples/skin/source/arm.glb --out examples/skin/assets
 orla import song.ogg --out assets   # writes assets/song.wav
 orla import examples/score/song.mid --out examples/score/assets
 orla import examples/vector/source/garden.svg --out examples/vector/assets
+orla import font.ttf --out assets --chars "Hello, world."
 ```
 
 `orla-import` writes what a scene takes as inputs, into `--out <dir>`
@@ -333,6 +334,13 @@ orla import examples/vector/source/garden.svg --out examples/vector/assets
   `<stem>.stops.field` and `<stem>.view.field` (the document's size).
   Text, images, patterns, clip paths, masks and filters are reported and
   left out.
+- TrueType or OpenType: what the [`font` package](../packages/font.orlapkg)
+  lays out, as three Fields: `<stem>.glyphs.field` (a row a character in
+  order of code, its advance in the font's units, its segments and box;
+  first the glyph for a character the font lacks), `<stem>.segments.field`
+  (the outlines in ems, y up) and `<stem>.metrics.field`. `--chars` names
+  the characters to import, every one the font maps by default. Kerning,
+  ligatures and shaping are left out.
 
 ```sh
 orla export crate.vertices.field crate.triangles.field crate.albedo.png --out crate.glb
