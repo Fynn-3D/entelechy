@@ -165,7 +165,9 @@ Inside `compute`, a body is `let` bindings and a result.
   `Int`s: a variant is the number written after it, else one past the
   variant before it, the first 0 (`Mode.Guard` is 11), and no two are one
   number. `Mode.Walk` is its `Int`; `Mode` is a type a value, a field, a
-  port's element and a parameter may have, and it is an `Int` there. A
+  port's element and a parameter may have, and it is an `Int` there; a
+  scene writes a variant where it writes a number, a node's param or its
+  own. A
   `match` naming variants names them all or ends with `_`. A variant whose
   number is kept, in a memory or a file, is written with it, so a variant
   written before it does not move it.

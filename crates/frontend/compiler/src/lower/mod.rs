@@ -10,7 +10,7 @@ use orla_ir::{
 };
 use orla_language::{Block, Expr, ExprKind, FnDecl, Kernel, Span, Spanned};
 
-use crate::CompileError;
+use crate::{CompileError, Variants};
 
 mod builtins;
 
@@ -38,7 +38,7 @@ mod matrix;
 mod written;
 
 use declare::{RESERVED_BUILTINS, aliases, manifest, port_type, structs};
-pub(crate) use declare::{literal, literal_exact, literal_in, literal_of_type};
+pub(crate) use declare::{literal, literal_exact, literal_in, literal_of_type, with_variants};
 
 fn semantic(span: Span, message: impl Into<String>) -> CompileError {
     CompileError::Semantic {
@@ -57,9 +57,6 @@ fn parse_type(name: &Spanned<String>) -> Result<Type, CompileError> {
         )
     })
 }
-
-/// An enum's variants in order, each with the `Int` it is.
-type Variants = Vec<(String, i32)>;
 
 /// The struct table while a Kernel lowers: declared structs, then every
 /// array type met, `[T; N]` interned once by element and count.
@@ -121,6 +118,17 @@ fn variant_of(
     let variants = structs
         .variants(name)
         .ok_or_else(|| semantic(span, format!("`{name}` is not an enum")))?;
+    variant_in(&variants, name, variant, span)
+}
+
+/// The `Int` the variant `variant` of the enum `name`, whose variants are
+/// `variants`, is.
+fn variant_in(
+    variants: &[(String, i32)],
+    name: &str,
+    variant: &str,
+    span: Span,
+) -> Result<i32, CompileError> {
     variants
         .iter()
         .find(|(declared, _)| declared == variant)

@@ -354,7 +354,7 @@ pub fn forms() -> Vec<Form> {
             "enum",
             "kernel",
             "type Mode = enum { Idle, Walk, Attack = 10, Guard };   Mode.Walk   match m { Mode.Idle => a, Mode.Walk | Mode.Attack | Mode.Guard => b }",
-            "Named Ints: a variant is the number written after it, else one past the variant before it, the first 0, so `Mode.Guard` is 11; no two are one number. `Mode` is a type a value, a field, a port's element and a parameter may have. A variant whose number is kept in state, a memory or a file, is written with its number, so no variant written before it moves it.",
+            "Named Ints: a variant is the number written after it, else one past the variant before it, the first 0, so `Mode.Guard` is 11; no two are one number. `Mode` is a type a value, a field, a port's element and a parameter may have, and a scene writes a variant where it writes a number. A variant whose number is kept in state, a memory or a file, is written with its number, so no variant written before it moves it.",
         ),
         form(
             "let",

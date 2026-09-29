@@ -899,7 +899,7 @@ pub(super) fn manifest(
             // Any Kernel value type crosses as its words.
             let ty = resolve_type(&decl.ty, structs)?;
             let default = constant(
-                &with_variants(&decl.default, structs)?,
+                &with_variants(&decl.default, &|name| structs.variants(name))?,
                 ty,
                 &structs.borrow(),
             )?;
@@ -994,36 +994,44 @@ pub(super) fn constant(
 }
 
 /// `expr` with each enum variant it names (`Phase.Walk`) written as its
-/// `Int`, as a parameter's default takes it.
-fn with_variants(expr: &Expr, structs: &Structs) -> Result<Expr, CompileError> {
+/// `Int`, as a literal takes it; `variants_of` gives an enum's variants by
+/// its name.
+pub(crate) fn with_variants(
+    expr: &Expr,
+    variants_of: &dyn Fn(&str) -> Option<crate::Variants>,
+) -> Result<Expr, CompileError> {
     let each = |exprs: &[Expr]| -> Result<Vec<Expr>, CompileError> {
         exprs
             .iter()
-            .map(|expr| with_variants(expr, structs))
+            .map(|expr| with_variants(expr, variants_of))
             .collect()
     };
     let kind = match &expr.kind {
         ExprKind::Member(base, variant) => match &base.kind {
-            ExprKind::Name(name) if structs.variants(name).is_some() => ExprKind::Int(i64::from(
-                super::variant_of(structs, name, variant, expr.span)?,
-            )),
+            ExprKind::Name(name) => match variants_of(name) {
+                Some(variants) => ExprKind::Int(i64::from(super::variant_in(
+                    &variants, name, variant, expr.span,
+                )?)),
+                None => expr.kind.clone(),
+            },
             _ => expr.kind.clone(),
         },
-        ExprKind::Neg(inner) => ExprKind::Neg(Box::new(with_variants(inner, structs)?)),
+        ExprKind::Neg(inner) => ExprKind::Neg(Box::new(with_variants(inner, variants_of)?)),
         ExprKind::Array(elements) => ExprKind::Array(each(elements)?),
-        ExprKind::Repeat(element, count) => {
-            ExprKind::Repeat(Box::new(with_variants(element, structs)?), count.clone())
-        }
+        ExprKind::Repeat(element, count) => ExprKind::Repeat(
+            Box::new(with_variants(element, variants_of)?),
+            count.clone(),
+        ),
         ExprKind::Call(name, args) => ExprKind::Call(name.clone(), each(args)?),
         ExprKind::Struct { name, base, fields } => ExprKind::Struct {
             name: name.clone(),
             base: match base {
-                Some(base) => Some(Box::new(with_variants(base, structs)?)),
+                Some(base) => Some(Box::new(with_variants(base, variants_of)?)),
                 None => None,
             },
             fields: fields
                 .iter()
-                .map(|(field, value)| Ok((field.clone(), with_variants(value, structs)?)))
+                .map(|(field, value)| Ok((field.clone(), with_variants(value, variants_of)?)))
                 .collect::<Result<_, CompileError>>()?,
         },
         other => other.clone(),

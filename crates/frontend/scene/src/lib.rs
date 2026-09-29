@@ -34,6 +34,8 @@ fn resolved(ty: &str, aliases: &[orla_language::TypeAlias]) -> String {
     let mut ty = ty.to_owned();
     for _ in 0..8 {
         match aliases.iter().find(|alias| alias.name.value == ty) {
+            // An enum is an `Int`.
+            Some(alias) if alias.variants().is_some() => return "Int".to_owned(),
             Some(alias) => ty = alias.target.value.clone(),
             None => break,
         }
@@ -256,6 +258,19 @@ fn error(span: Span, message: impl Into<String>) -> DocumentError {
     DocumentError {
         span,
         message: message.into(),
+    }
+}
+
+/// A compiler's error as the document's: where the compiler placed it, else
+/// at `span`, said once.
+fn compiled(span: Span, e: orla_compiler::CompileError) -> DocumentError {
+    match e {
+        orla_compiler::CompileError::Semantic {
+            span: placed,
+            message,
+            ..
+        } if placed.is_placed() => error(placed, message),
+        other => error(span, other.to_string()),
     }
 }
 
@@ -495,8 +510,8 @@ struct Place<'a> {
     placement: Option<&'a Placement>,
     /// The params the document declares.
     params: &'a [GraphParam],
-    /// The structs a literal may build.
-    known: Vec<(String, Vec<String>)>,
+    /// The structs a literal may build and the enums it may name.
+    known: Known,
     /// The nodes the document declares, by name.
     nodes: Vec<String>,
 }
@@ -649,6 +664,28 @@ impl Place<'_> {
 }
 
 impl Lowering<'_, '_> {
+    /// What a literal of this document may name: the structs, own and
+    /// used, and the enums.
+    fn known(&self) -> Known {
+        Known {
+            structs: self.known_structs(),
+            enums: self
+                .aliases
+                .iter()
+                .filter_map(|alias| {
+                    let variants = alias.variants()?;
+                    Some((
+                        alias.name.value.clone(),
+                        variants
+                            .into_iter()
+                            .map(|(variant, number)| (variant.to_owned(), number))
+                            .collect(),
+                    ))
+                })
+                .collect(),
+        }
+    }
+
     /// The structs, own and used, a literal of this document may name,
     /// with their fields in order.
     fn known_structs(&self) -> Vec<(String, Vec<String>)> {
@@ -744,7 +781,7 @@ impl Lowering<'_, '_> {
                         }
                     }
                 }
-                _ => literal(expr, &self.known_structs())?,
+                _ => literal(expr, &self.known())?,
             };
             let count = match value {
                 Value::Int(n) if n >= 0 => n as usize,
@@ -1022,8 +1059,9 @@ impl Lowering<'_, '_> {
                 value: resolved(&decl.ty.value, &self.aliases),
                 span: decl.ty.span,
             };
-            let default = orla_compiler::literal_of_type(&decl.default, &ty, &self.structs)
-                .map_err(|e| error(decl.default.span, e.to_string()))?;
+            let default = self.known().with_variants(&decl.default)?;
+            let default = orla_compiler::literal_of_type(&default, &ty, &self.structs)
+                .map_err(|e| compiled(decl.default.span, e))?;
             if params
                 .iter()
                 .any(|p: &GraphParam| p.name == decl.name.value)
@@ -1166,7 +1204,7 @@ impl Lowering<'_, '_> {
             prefix,
             placement,
             params: &params,
-            known: self.known_structs(),
+            known: self.known(),
             nodes: document
                 .nodes
                 .iter()
@@ -1558,17 +1596,41 @@ impl Lowering<'_, '_> {
     }
 }
 
-/// A literal as a scene writes it: any value a Kernel can hold, or a
-/// struct literal of one of `known`. A number is kept exact (a written
-/// float as a `Double`); the Kernel's param gives its width.
-fn literal(expr: &Expr, known: &[(String, Vec<String>)]) -> Result<Value, DocumentError> {
+/// What a literal of a document may name: its structs, each with its
+/// fields in order, and its enums, each with its variants' numbers.
+#[derive(Clone, Debug, Default)]
+struct Known {
+    structs: Vec<(String, Vec<String>)>,
+    enums: Vec<(String, Vec<(String, i32)>)>,
+}
+
+impl Known {
+    /// `expr` with the variants it names written as their `Int`s.
+    fn with_variants(&self, expr: &Expr) -> Result<Expr, DocumentError> {
+        let variants_of = |name: &str| {
+            self.enums
+                .iter()
+                .find(|(declared, _)| declared == name)
+                .map(|(_, variants)| variants.clone())
+        };
+        orla_compiler::with_variants(expr, &variants_of).map_err(|e| compiled(expr.span, e))
+    }
+}
+
+/// A literal as a scene writes it: any value a Kernel can hold, a struct
+/// literal of one of `known`, or a variant of one of its enums. A number
+/// is kept exact (a written float as a `Double`); the Kernel's param gives
+/// its width.
+fn literal(expr: &Expr, known: &Known) -> Result<Value, DocumentError> {
+    let expr = known.with_variants(expr)?;
     let fields_of = |name: &str| {
         known
+            .structs
             .iter()
             .find(|(struct_name, _)| struct_name == name)
             .map(|(_, fields)| fields.clone())
     };
-    orla_compiler::literal_exact(expr, &fields_of).map_err(|e| error(expr.span, e.to_string()))
+    orla_compiler::literal_exact(&expr, &fields_of).map_err(|e| compiled(expr.span, e))
 }
 
 /// A value's own literal as an expression, for rewriting param defaults.
@@ -2343,5 +2405,42 @@ pub fn literal_text(value: &Value) -> String {
                 .join(", ")
         ),
         other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod enum_tests {
+    use super::*;
+
+    /// A scene writes an enum's variant where it writes a number: a node's
+    /// param and a param of its own, read as the variant's `Int`.
+    #[test]
+    fn a_scene_names_an_enums_variants() {
+        let graph = parse(
+            "type Mode = enum { Idle, Walk = 5, Run };
+param opening: Mode = Mode.Run;
+node a: t.move@1 { domain = 1; mode = Mode.Walk; }
+node b: t.move@1 { domain = 1; mode = opening; }
+output result <- a.result;
+",
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(graph.params[0].default, Value::Int(6));
+        assert_eq!(graph.params[0].ty, "Int");
+        assert_eq!(
+            graph.nodes[0].params["mode"],
+            ParamValue::Literal(Value::Int(5))
+        );
+        assert_eq!(
+            graph.nodes[1].params["mode"],
+            ParamValue::Graph("opening".into())
+        );
+        let error = parse(
+            "type Mode = enum { Idle, Walk };\nnode a: t.move@1 { domain = 1; mode = Mode.Wlak; }\noutput result <- a.result;\n",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("did you mean `Walk`"), "{error}");
+        // Said once, where the variant is written.
+        assert!(!error.message.contains("2:"), "{error}");
     }
 }

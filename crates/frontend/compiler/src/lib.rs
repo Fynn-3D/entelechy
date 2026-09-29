@@ -211,3 +211,16 @@ pub fn literal_in(
 ) -> Result<orla_ir::Value, CompileError> {
     lower::literal_in(expr, fields_of)
 }
+
+/// An enum's variants in order, each with the `Int` it is.
+pub type Variants = Vec<(String, i32)>;
+
+/// `expr` with each enum variant it names (`Mode.Walk`) written as its
+/// `Int`, for a literal outside a Kernel (a scene's); `variants_of` gives
+/// an enum's variants, each with its number, by the enum's name.
+pub fn with_variants(
+    expr: &orla_language::Expr,
+    variants_of: &dyn Fn(&str) -> Option<Variants>,
+) -> Result<orla_language::Expr, CompileError> {
+    lower::with_variants(expr, variants_of)
+}
