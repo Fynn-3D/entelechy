@@ -1,0 +1,47 @@
+// A ball of restitution one half dropped on the ground, two boxes on a
+// slope of 0.35 radians, one holding by friction, one of little friction
+// sliding down, and a box riding a kinematic platform.
+use "../../../packages/physics.orlapkg";
+
+param steps: Int = 10;
+
+fn on_slope(along: Float, friction: Float) -> Body {
+    let a = 0.35;
+    let slope = vec2(5.0, 2.0);
+    let t = vec2(cos(a), sin(a));
+    let n = vec2(-t.y, t.x);
+    return Body { ..box(slope + t * along + n * (0.25 + 0.4), vec2(0.4, 0.4), a, 1.0), friction: friction };
+}
+
+node start: kernel {
+    requires { field.read; field.write; }
+    output result: Rows<Body>;
+    compute {
+        let i = element();
+        if i == 0 { return box(vec2(0.0, -0.5), vec2(20.0, 0.5), 0.0, 0.0); }
+        if i == 1 { return Body { ..circle(vec2(-8.0, 5.0), 0.5, 1.0), restitution: 0.5 }; }
+        if i == 2 { return Body { ..box(vec2(5.0, 2.0), vec2(4.0, 0.25), 0.35, 0.0), friction: 1.0 }; }
+        if i == 3 { return on_slope(2.5, 1.0); }
+        if i == 4 { return on_slope(-0.5, 0.01); }
+        if i == 5 { return Body { ..box(vec2(-4.0, 3.0), vec2(1.5, 0.2), 0.0, 0.0), velocity: vec2(1.0, 0.0), friction: 1.0 }; }
+        return Body { ..box(vec2(-4.0, 3.5), vec2(0.3, 0.3), 0.0, 1.0), friction: 1.0 };
+    }
+    domain = 7;
+}
+
+node none: physics.no_contacts@1 { domain = 1; }
+node world: graph "../../../packages/physics.orlapkg/graphs/step.osn" {
+    times = steps;
+    carry bodies <- result;
+    carry held <- contacts;
+    bodies <~ world.result from start.result;
+    held <~ world.contacts from none.result;
+}
+node now: kernel {
+    requires { field.read; field.write; }
+    input bodies: Rows<Body> <- world.result;
+    output result: Rows<Body>;
+    compute { return sample(bodies); }
+}
+
+output bodies <- now.result;

@@ -1,0 +1,54 @@
+scene ../scene.osn
+window 680 400
+param steps 10
+
+# Five seconds, ten steps a frame: the pyramid stands, its top where
+# it was set, and balls that rolled down the ramp lie on the sensor.
+frame 1
+frame 2
+frame 3
+frame 4
+frame 5
+frame 6
+frame 7
+frame 8
+frame 9
+frame 10
+frame 11
+frame 12
+frame 13
+frame 14
+frame 15
+frame 16
+frame 17
+frame 18
+frame 19
+frame 20
+frame 21
+frame 22
+frame 23
+frame 24
+frame 25
+frame 26
+frame 27
+frame 28
+frame 29
+frame 30
+expect dropped.result[40].position = 9.0 7.5 0.05
+expect dropped.result[40].angle = 0.0 0.01
+expect dropped.result[5].position = 5.5 0.5 0.02
+expect felt.result[4] >= 1
+
+# The ray toward the pointer on the pyramid stops at one of its boxes.
+pointer 520 310
+frame 31
+expect hits.result[0].body >= 5
+expect hits.result[0].body <= 40
+
+# A click drops a ball where the pointer is, and it falls.
+pointer 340 100 down
+frame 32
+expect dropped.result[51].position = 0.0 14.5 0.001
+pointer 340 100 up
+frame 33
+expect dropped.result[51].position.y < 14.45

@@ -51,6 +51,7 @@ orla run examples/<example>/scene.osn --out output.ppm --watch
 - [particles](particles/README.md): `Rows<Particle>` advanced by a map and splatted by a scatter.
 - [million](million/README.md): a million bodies stepped by a map and drawn by a scatter.
 - [neighbours](neighbours/README.md): sixty-five thousand bodies finding neighbours through a grid built by scatter `sum` and `prefix with sum`.
+- [physics](physics/README.md): boxes and balls that fall, stack, slide and bounce, stepped by the physics package; a sensor, a ray, a click drops a ball.
 - [fluid](fluid/README.md): smoke by Navier-Stokes, the pressure solve one Jacobi Kernel placed with `times`.
 - [collapse](collapse/README.md): wave function collapse on a `Grid<Int>` of tile bitmasks.
 - [learn](learn/README.md): a 2-16-1 network trained by gradient descent, the gradient a scatter.

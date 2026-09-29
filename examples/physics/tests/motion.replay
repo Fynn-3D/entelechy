@@ -1,0 +1,34 @@
+scene motion.osn
+
+# Ten steps a frame. After a second: the ball fell 4.5, struck the
+# ground at 9.49 and left it at half that, slowed since by gravity; the
+# box of friction one holds on the slope of 0.35 radians where it was
+# set, above the other; the box of friction one hundredth, a tenth with
+# the slope's, slides down it at 10 (sin 0.35 - 0.1 cos 0.35) a second
+# each second; the platform moves a unit a second and carries the box on
+# it along, which fell behind by 1 / (2 * 10) while friction brought it
+# up to speed.
+frame 1
+frame 2
+frame 3
+frame 4
+frame 5
+frame 6
+expect now.result[5].position = -3.0 3.0 0.0001
+expect now.result[6].velocity = 1.0 0.0 0.01
+expect now.result[1].velocity = 0.0 4.23 0.1
+expect now.result[3].position = 7.126 3.468 0.01
+expect now.result[3].velocity = 0.0 0.0 0.01
+expect now.result[4].velocity = -2.338 -0.853 0.02
+
+frame 7
+frame 8
+frame 9
+frame 10
+frame 11
+frame 12
+expect now.result[3].position = 7.126 3.468 0.01
+expect now.result[1].position > -8.1 0.49
+expect now.result[5].position = -2.0 3.0 0.0001
+expect now.result[6].position = -2.05 3.5 0.01
+expect now.result[6].velocity = 1.0 0.0 0.01

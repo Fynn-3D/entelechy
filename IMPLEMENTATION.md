@@ -60,6 +60,8 @@ Packages built from existing modes, with no engine feature of their own.
 | [Text](packages/text.orlapkg/kernels/text.orla) | `Rows<Glyph>`, a `Grid<Float>` atlas | [text replay](examples/text/tests/text.replay) |
 | [Skinning](packages/skin.orlapkg/kernels/skin.orla), [rig contract](docs/RIGS.md) | maps over rows, `<~` | [rig tests](crates/interface/orla/tests/rigs.rs); [skin](examples/skin/tests/skin.replay), [crowd](examples/crowd/tests/crowd.replay), [reach](examples/reach/tests/reach.replay), [elbow](examples/reach/tests/elbow.replay), [stride](examples/stride/tests/stride.replay) replays |
 | [Rasterization](packages/raster.orlapkg/kernels/raster.orla) | scatter `min` of `Long` keys with `emit` | [edges](examples/mesh/tests/edges.replay) and [cutout](examples/mesh/tests/cutout.replay) replays on three backends, [session test](crates/interface/orla/tests/session.rs); [ten million triangles](examples/mesh/tests/ten_million.osn) for `bench` |
+| [Vector drawing](packages/vector.orlapkg/kernels/vector.orla) | `prefix with sum`, scatter `max` with `emit`, `value(port)` | [vector replays](examples/vector/tests/) on three backends |
+| [Rigid bodies](packages/physics.orlapkg/kernels/physics.orla), [decision](docs/DECISIONS.md#contacts-are-solved-all-at-once-each-against-its-own-share-of-a-body) | the sort package, scatter `sum` of pushes, `times` with two `carry`s, `<~` | [physics replays](examples/physics/tests/) on three backends |
 
 ## Where each contract is enforced
 

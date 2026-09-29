@@ -87,6 +87,14 @@ use "picture.orlapkg";
   ([why](../docs/DECISIONS.md)).
 - **pixelfx** — a coarse pixel grid and a four-color palette, and the
   NES look made of both as a preset. The example of what a package is.
+- **physics** — rigid circles and boxes in the plane that fall, collide,
+  rest, slide and bounce. `graphs/step.osn` is one step of a world of
+  `Body` rows: pairs found through a grid of cells sorted by the `sort`
+  package, manifolds of up to two points, every contact solved at once
+  over substeps against its share of each body, and bounces; a world is
+  given its last step's contacts, which the next starts from. Static,
+  kinematic and sensor bodies, collision layers, and `physics.ray@1`
+  for what a ray meets. Used by the `physics` example.
 - **vector** — drawings filled pixel by pixel: the segments and shapes
   `orla import` reads from SVG, drawn through a look (a middle point and a
   zoom) with nonzero or even-odd fills, colours and linear or radial

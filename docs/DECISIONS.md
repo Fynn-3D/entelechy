@@ -194,6 +194,36 @@ one-pass ones do, on all three; `cutout.replay` holds the package's cutout to
 `native.rasterize@2` on all three, and a session test holds them equal to
 the bit on the interpreter and the JIT.
 
+## Contacts are solved all at once, each against its own share of a body
+
+The physics package steps rigid bodies with every contact manifold
+solved in one pass: each solves against a copy of its two bodies whose
+mass is split among the manifolds that push them, and the pushes on a
+body are summed. A step runs substeps of gravity, the held impulses
+pushed again, a solve, a move and a solve without pushing apart; each
+manifold starts from the impulses the same pair held in the last step.
+A contact is a spring of the bodies' own masses, so how far a pile
+sinks into itself does not depend on how many manifolds share a body.
+
+**Why.** Solving contacts one after another, as a sequential solver
+does, needs an order that a pass over every manifold does not have;
+colouring them into independent sets costs a pass a colour, each a
+dispatch. Solved at once with split masses, a pass converges where the
+one-by-one order would, its answer is independent of order (a float
+sum of pushes is folded in source order), and the same on every
+backend. Its cost is convergence: a pile many bodies deep that lands at
+once needs more passes, which is why a step takes eight substeps, and
+carrying the impulses from step to step is what lets a resting stack
+stand still.
+
+**Where.** [`physics.orla`](../packages/physics.orlapkg/kernels/physics.orla)
+and its [step](../packages/physics.orlapkg/graphs/step.osn);
+[`rest.replay`](../examples/physics/tests/rest.replay) holds a column
+of boxes still for seconds, [`motion.replay`](../examples/physics/tests/motion.replay)
+a bounce, friction on a slope and a kinematic platform to their
+closed forms, and [`many.replay`](../examples/physics/tests/many.replay)
+the grid's pairs to every pair asked, on all three backends.
+
 ## A Kernel's effects are data the Host carries out after a commit
 
 A Kernel never writes a file. A scene declares that an output is also

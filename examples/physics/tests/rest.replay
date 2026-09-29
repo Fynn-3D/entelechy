@@ -1,0 +1,45 @@
+scene rest.osn
+
+# A step a sixtieth of a second, ten a frame. After a second a ball
+# dropped on the ground rests on it, a column of five boxes stands
+# straight, a box on the ground stays where it was set.
+frame 1
+frame 2
+frame 3
+frame 4
+frame 5
+frame 6
+expect now.result[1].position = -5.0 0.5 0.005
+expect now.result[1].velocity = 0.0 0.0 0.01
+expect now.result[2].position = 0.0 0.5 0.01
+expect now.result[4].position = 0.0 2.5 0.02
+expect now.result[6].position = 0.0 4.5 0.02
+expect now.result[6].angle = 0.0 0.002
+expect now.result[7].position = 6.0 0.5 0.005
+
+# Two seconds on it is as it was.
+frame 7
+frame 8
+frame 9
+frame 10
+frame 11
+frame 12
+frame 13
+frame 14
+frame 15
+frame 16
+frame 17
+frame 18
+expect now.result[6].position = 0.0 4.5 0.02
+expect now.result[6].angle = 0.0 0.002
+expect now.result[6].velocity = 0.0 0.0 0.01
+expect now.result[2].angle = 0.0 0.002
+
+# A ray down onto the ball meets its top, one down onto the column meets
+# the top box's.
+expect hits.result[0].body = 1
+expect hits.result[0].point = -5.0 1.0 0.005
+expect hits.result[0].normal = 0.0 1.0 0.001
+expect hits.result[1].body = 6
+expect hits.result[1].point = 0.2 5.0 0.02
+expect hits.result[1].normal = 0.0 1.0 0.005
