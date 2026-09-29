@@ -2199,11 +2199,13 @@ const KERNEL_ITEMS: [&str; 15] = [
     "compute", "scan", "scatter", "prefix", "merge",
 ];
 
-/// The words the language keeps for itself: no name may be one.
-pub const RESERVED: [&str; 25] = [
-    "let", "return", "if", "else", "match", "loop", "with", "until", "break", "kernel", "struct",
-    "type", "node", "use", "from", "input", "output", "memory", "graph", "merge", "scan",
-    "scatter", "prefix", "migrate", "package",
+/// The words the language keeps for itself: each begins a statement or an
+/// expression, or goes between the parts of one, so no name may be one.
+/// The words that begin a document's or a Kernel's items (`kernel`,
+/// `input`, `type`, `from` and the rest) begin nothing where a name stands,
+/// so a name may be any of them.
+pub const RESERVED: [&str; 9] = [
+    "let", "return", "if", "else", "match", "loop", "with", "until", "break",
 ];
 
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
@@ -2243,6 +2245,30 @@ mod tests {
         }
     }
 
+    /// The words that begin items name things anywhere else: a node, a port,
+    /// a binding, a function, its arguments and a struct's fields.
+    #[test]
+    fn the_words_that_begin_items_name_things_anywhere_else() {
+        let document = "struct Edge { from: Int; type: Int; }
+            fn merge(input: Int, output: Int) -> Int { return input + output; }
+            node from: kernel {
+                requires { field.read; field.write; }
+                input graph: Rows<Int> <~ from.result from start.result;
+                output result: Rows<Int>;
+                compute {
+                    let type = sample(graph);
+                    let edge = Edge { from: type, type: 2 };
+                    return merge(edge.from, edge.type);
+                }
+            }
+            output package <- from.result;";
+        parse_document(document).unwrap();
+        for word in RESERVED {
+            let refused = parse_document(&format!("fn f({word}: Int) -> Int {{ return 1; }}"));
+            assert!(refused.is_err(), "`{word}` named an argument");
+        }
+    }
+
     /// A return on some paths only, inside an `if` of statements, is
     /// refused where it is written, not read as a value on the others.
     #[test]
@@ -2255,11 +2281,11 @@ mod tests {
             error.message.contains("returns on some paths only"),
             "{error}"
         );
-        let reserved = parse_document("fn f(from: Int) -> Int { return 1; }").unwrap_err();
+        let reserved = parse_document("fn f(until: Int) -> Int { return 1; }").unwrap_err();
         assert!(
             reserved
                 .message
-                .contains("`from` is a word the language keeps"),
+                .contains("`until` is a word the language keeps"),
             "{reserved}"
         );
         for written in [

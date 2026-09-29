@@ -83,9 +83,39 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Lexeme>, ParseError> {
             continue;
         }
         if c == '"' {
+            let opening = index;
             advance(1, &mut index, &mut byte);
-            let text_start = index;
+            // A string on one line; `\n`, `\t`, `\"` and `\\` write a new
+            // line, a tab, a quote and a backslash in it.
+            let mut text = String::new();
             while index < chars.len() && chars[index] != '"' && chars[index] != '\n' {
+                if chars[index] == '\\' {
+                    // One line: the escape is as far along it as from the quote.
+                    let at = Span {
+                        line: span.line,
+                        column: span.column + (index - opening) as u32,
+                    };
+                    let written = match chars.get(index + 1) {
+                        Some('n') => '\n',
+                        Some('t') => '\t',
+                        Some('"') => '"',
+                        Some('\\') => '\\',
+                        other => {
+                            let what =
+                                other.map_or("the line's end".to_owned(), |c| format!("`\\{c}`"));
+                            return Err(ParseError {
+                                span: at,
+                                message: format!(
+                                    "a string writes a new line, a tab, a quote or a backslash as `\\n`, `\\t`, `\\\"` or `\\\\`, not {what}"
+                                ),
+                            });
+                        }
+                    };
+                    text.push(written);
+                    advance(2, &mut index, &mut byte);
+                    continue;
+                }
+                text.push(chars[index]);
                 advance(1, &mut index, &mut byte);
             }
             if chars.get(index) != Some(&'"') {
@@ -94,7 +124,6 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Lexeme>, ParseError> {
                     message: "string literal is not closed".into(),
                 });
             }
-            let text: String = chars[text_start..index].iter().collect();
             advance(1, &mut index, &mut byte);
             tokens.push(Lexeme {
                 token: Token::Str(text),
@@ -255,4 +284,18 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Lexeme>, ParseError> {
         end: byte,
     });
     Ok(tokens)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_string_writes_a_new_line_a_tab_a_quote_and_a_backslash() {
+        let lexed = tokenize(r#""a\nb\tc\"d\\e""#).unwrap();
+        assert_eq!(lexed[0].token, Token::Str("a\nb\tc\"d\\e".into()));
+        let error = tokenize(r#"  "C:\data""#).unwrap_err();
+        assert!(error.message.contains("not `\\d`"), "{error}");
+        assert_eq!((error.span.line, error.span.column), (1, 6));
+    }
 }

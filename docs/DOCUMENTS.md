@@ -401,7 +401,9 @@ changes:
   channel}`, ticks and tempo read as seconds; `.field`, any Field, the
   Host's format. `run --save` and the protocol's `read` write all of them.
 - `input title: Rows<Int> = text "ORLA";`: the characters' codes, updated
-  when the document's text changes.
+  when the document's text changes. A string writes a new line, a tab, a
+  quote and a backslash as `\n`, `\t`, `\"` and `\\`, so one string may
+  hold several lines of text.
 - `input level: Rows<Int> = bytes "level.bin";`: a file's bytes, one per
   element, 0 to 255 (`examples/level`).
 - `input clip: Image = frames "clip/" at 30;`: a directory's files in

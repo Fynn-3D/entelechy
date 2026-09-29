@@ -1,11 +1,10 @@
 scene ../scene.osn
 window 800 460
 
-# Four lines joined by new lines: 18, 18, 23 and 18 characters and three
-# breaks between them.
+# Four lines of one string, a `\n` between each: 18, 18, 23 and 18
+# characters and three breaks.
 frame 0
-expect count four.result = 80
-expect four.result[18] = 10
+expect count lines.layout.result = 80
 expect lines.layout.result[18].glyph = -1
 
 # Each line starts again at x 46, the font's line below the one before:

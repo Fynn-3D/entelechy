@@ -14,10 +14,7 @@ input chinese_outlines: Rows<Vec4> = "assets/NotoSansSC-Regular.segments.field";
 input chinese_metrics: Rows<Metrics> = "assets/NotoSansSC-Regular.metrics.field";
 
 input title: Rows<Int> = text "Orla";
-input host: Rows<Int> = text "Host is the world.";
-input kernel_: Rows<Int> = text "Kernel is the law.";
-input graph_: Rows<Int> = text "Graph is the structure.";
-input ai: Rows<Int> = text "AI is the creator.";
+input soul: Rows<Int> = text "Host is the world.\nKernel is the law.\nGraph is the structure.\nAI is the creator.";
 input motto: Rows<Int> = text "宿主是世界，内核是法则，图是结构，智能是创造者。";
 
 node paper: kernel {
@@ -30,17 +27,13 @@ node paper: kernel {
     }
 }
 
-node two: font.join@1 { first <- host; second <- kernel_; domain = count(first) + count(second) + 1; }
-node three: font.join@1 { first <- two.result; second <- graph_; domain = count(first) + count(second) + 1; }
-node four: font.join@1 { first <- three.result; second <- ai; domain = count(first) + count(second) + 1; }
-
 node titled: graph "../../packages/font.orlapkg/graphs/text.osn" {
     codes <- title; glyphs <- latin; outlines <- latin_outlines; metrics <- latin_metrics;
     under <- paper.result;
     origin = vec2(40.0, 130.0); size = 128.0; color = vec4(0.12, 0.14, 0.2, 1.0);
 }
 node lines: graph "../../packages/font.orlapkg/graphs/text.osn" {
-    codes <- four.result; glyphs <- latin; outlines <- latin_outlines; metrics <- latin_metrics;
+    codes <- soul; glyphs <- latin; outlines <- latin_outlines; metrics <- latin_metrics;
     under <- titled.picture;
     origin = vec2(46.0, 200.0); size = 28.0; color = vec4(0.25, 0.27, 0.32, 1.0);
 }

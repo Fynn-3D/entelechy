@@ -118,7 +118,7 @@ fn items() -> Vec<Json> {
         "name": "reserved",
         "kind": "document",
         "shape": orla_language::RESERVED.join(" "),
-        "doc": "The words the language keeps for itself: a Kernel, node, port, param, function, struct or binding may not be named one.",
+        "doc": "The words the language keeps for itself, each beginning a statement or an expression or going between its parts: a Kernel, node, port, param, function, struct or binding may not be named one. The words that begin items (`kernel`, `input`, `type`, `from` and the rest) name things anywhere else.",
     }));
     out.extend(orla_scene::domain::functions().iter().map(|f| {
         json!({
