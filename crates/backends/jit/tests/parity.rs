@@ -736,6 +736,60 @@ fn a_target_cut_into_parts_sees_its_pairs_in_order() {
     assert_eq!(cpu.to_string(), got.to_string());
 }
 
+/// A reduction's and a prefix's values held in Host memory count against
+/// the budget, the same on both.
+#[test]
+fn values_a_reduction_holds_past_the_hosts_room_fail_the_run_on_both() {
+    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+    for (source, runs) in [
+        (
+            "kernel test.total@1 { requires { field.read; field.write; } input keys: Rows<Int>; output result: Rows<Int>; compute { return sample(keys); } merge(a, b) { return a + b; } }",
+            1,
+        ),
+        (
+            "kernel test.ranks@1 { requires { field.read; field.write; } input keys: Rows<Int>; output result: Rows<Int>; prefix with sum { return sample(keys); } }",
+            1000,
+        ),
+    ] {
+        let module = compile(source).unwrap();
+        let run = |budget: usize, backend: &dyn Backend| {
+            let mut host = Host::new(budget);
+            let keys = host
+                .adopt(
+                    orla_abi::FieldData::from_storage(
+                        ints.clone(),
+                        Domain::Rows(1000),
+                        vec![1; 1000],
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            let invocation = Invocation {
+                inputs: vec![keys],
+                params: vec![],
+                domain: Domain::Rows(runs),
+                context: Context::default(),
+            };
+            let prepared = backend.prepare(&module).unwrap();
+            let mut scope = Scope::new(&mut host, all());
+            backend
+                .execute(prepared.as_ref(), &module, &invocation, &mut scope)
+                .map(|out| host.data(out[0]).unwrap().storage().to_vec())
+        };
+        let jit = JitBackend::new().unwrap();
+        // A thousand keys, and room for a thousand more words: not the
+        // values a reduction holds, nor a prefix's with its output.
+        for backend in [&CpuBackend as &dyn Backend, &jit] {
+            let error = run(2000, backend).unwrap_err();
+            assert!(
+                matches!(error, orla_rules::ExecutionError::OverRoom { .. }),
+                "{source}: {error}"
+            );
+        }
+        assert_eq!(run(8000, &CpuBackend).unwrap(), run(8000, &jit).unwrap());
+    }
+}
+
 /// A scatter's pairs held in Host memory count against the budget.
 #[test]
 fn pairs_past_the_hosts_room_fail_the_run_on_both() {

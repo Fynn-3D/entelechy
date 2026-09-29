@@ -632,8 +632,15 @@ fn run_reduce(
     let shared = shared(module, invocation, scope, domain)?;
     let port = &module.manifest.outputs[0];
     let stride = port.ty.schema.value_words();
+    let count = domain.count();
+    if !shared
+        .held
+        .take(orla_rules::held_values(true, count, stride))
+    {
+        return Err(shared.held.over());
+    }
     let mut level = compute(entry, &shared, domain, stride)?;
-    let mut count = domain.count();
+    let mut count = count;
     // The tree is fixed, level by level; a level's pairs are split among
     // workers, and the reported failure is the earliest pair's.
     while count > 1 {
@@ -713,6 +720,12 @@ fn run_prefix(
     let port = &module.manifest.outputs[0];
     let stride = port.ty.schema.value_words();
     let shared = shared(module, invocation, scope, domain)?;
+    if !shared
+        .held
+        .take(orla_rules::held_values(false, domain.count(), stride))
+    {
+        return Err(shared.held.over());
+    }
     let mut values = compute(entry, &shared, domain, stride)?;
     shared.run.outcome()?;
     drop(shared);

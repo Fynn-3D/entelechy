@@ -105,8 +105,9 @@ pub enum ExecutionError {
         /// The iterations the run could take.
         work: u64,
     },
-    /// A scatter's pairs, held in Host memory while applied, passed the
-    /// room the Host had when the run began.
+    /// What a run held in Host memory beyond its Fields (a scatter's
+    /// pairs, a reduction's partial values) passed the room the Host had
+    /// when the run began.
     OverRoom {
         /// The words the Host had room for.
         room: usize,
@@ -194,8 +195,18 @@ impl Run {
     }
 }
 
+/// The words a reduction or a prefix over `count` elements of `stride`
+/// words holds at once, every backend alike: every element's value, and
+/// for a reduction the level above it, half as many, for a prefix the
+/// output it then fills, as many.
+pub fn held_values(reduction: bool, count: usize, stride: usize) -> usize {
+    let also = if reduction { count.div_ceil(2) } else { count };
+    count.saturating_add(also).saturating_mul(stride)
+}
+
 /// The Host words a run holds beyond its Fields (a scatter's pairs while
-/// applied), against the room the Host had when the run began
+/// applied, a reduction's or a prefix's values), against the room the
+/// Host had when the run began
 /// ([`orla_abi::Scope::room`]). Shared by every thread of the run.
 pub struct Held {
     words: std::sync::atomic::AtomicUsize,
@@ -225,7 +236,7 @@ impl Held {
         true
     }
 
-    /// The failure of a run whose pairs passed the room.
+    /// The failure of a run whose held words passed the room.
     pub fn over(&self) -> ExecutionError {
         ExecutionError::OverRoom { room: self.room }
     }
@@ -269,7 +280,7 @@ impl fmt::Display for ExecutionError {
             ),
             Self::OverRoom { room } => write!(
                 f,
-                "the scatter's pairs needed more than the {room} words the Host had room for; a larger Host budget holds them, or fewer pairs fit"
+                "the run held more than the {room} words the Host had room for (a scatter's pairs, a reduction's values); a larger Host budget holds them"
             ),
         }
     }

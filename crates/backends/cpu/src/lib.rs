@@ -156,6 +156,10 @@ fn reduce(
     stride: usize,
 ) -> Result<Vec<Handle>, ExecutionError> {
     let domain = scope.size(invocation.inputs[0])?;
+    let held = orla_rules::Held::new(scope.room());
+    if !held.take(orla_rules::held_values(true, domain.count(), stride)) {
+        return Err(held.over());
+    }
     let program = eval::Program::with(code.clone(), module, invocation, scope, domain)?;
     let mut level = compute(&program, &[stride])?;
     let mut machine = eval::Machine::new(&program);
@@ -201,6 +205,10 @@ fn prefix(
     combine: Combine,
 ) -> Result<Vec<Handle>, ExecutionError> {
     let domain = scope.size(invocation.inputs[0])?;
+    let held = orla_rules::Held::new(scope.room());
+    if !held.take(orla_rules::held_values(false, domain.count(), stride)) {
+        return Err(held.over());
+    }
     let program = eval::Program::with(code.clone(), module, invocation, scope, domain)?;
     let mut values = compute(&program, &[stride])?;
     program.outcome()?;
