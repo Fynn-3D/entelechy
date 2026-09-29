@@ -11,7 +11,7 @@ in `assets/`:
 - its size.
 
 `graphs/draw.osn` fills each pixel from them, tiled: a pixel asks only
-the shapes near its tile and their segments near its row. The scene's
+the shapes near its tile and their segments near the tile. The scene's
 `eye` Kernel keeps where the eye is from frame to frame: a drag moves the
 drawing, and the wheel zooms about the pointer.
 

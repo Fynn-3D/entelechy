@@ -92,7 +92,7 @@ use "picture.orlapkg";
   zoom) with nonzero or even-odd fills, colours and linear or radial
   gradients, each edge smoothed over a pixel. `graphs/draw.osn` draws it
   tiled: each pixel asks only the shapes whose boxes reach its tile and
-  the segments that reach its band of tiles, word for word what the plain
-  `vector.draw@1` draws, so a drawing of many thousand shapes draws in
-  time. `graphs/drawing.osn` draws one whole, fitted to the window. Used
-  by the `vector` example.
+  their segments that reach the tile, over the winding of those past it,
+  word for word what the plain `vector.draw@1` draws, so a drawing of
+  many thousand shapes draws in time. `graphs/drawing.osn` draws one
+  whole, fitted to the window. Used by the `vector` example.

@@ -18,14 +18,15 @@
 //
 // `vector.draw@1` is the rule written plainly: every pixel asks every
 // shape and every segment. The tiled form (`graphs/draw.osn`) asks the
-// same questions of fewer: the canvas is cut into tiles of 16
-// pixels, each tile keeps the shapes whose boxes reach it, and each shape
-// keeps, for each band of tiles it spans, the segments that reach the
-// band's rows. A segment that could change a pixel's winding or its
-// smoothing is always among them, so the two forms draw the same words.
-// Both lists are found by walking shapes and segments in chunks, a chunk
-// whose reach misses passed over whole, and every loop over shapes or
-// segments is two deep, so neither count is bounded by one loop's.
+// same questions of fewer: the canvas is cut into tiles of 16 pixels,
+// each tile keeps the shapes whose boxes reach it, and each shape in a
+// tile keeps the segments that reach the tile and, a row at a time, the
+// winding of those wholly past it to the right. A segment that could
+// change a pixel's winding or its smoothing is always among them, so the
+// two forms draw the same words. Shapes and segments are walked in
+// chunks, a chunk whose box misses passed over whole, and every loop
+// over shapes or segments is two deep, so neither count is bounded by
+// one loop's.
 
 // A shape as `orla import` writes it, `<stem>.shapes.field`.
 struct Shape {
@@ -194,7 +195,7 @@ kernel vector.draw@1 {
 
 // ---- the tiled form
 
-// Pixels a tile is wide and high; a band is a row of tiles.
+// Pixels a tile is wide and high.
 fn tile() -> Float { return 16.0; }
 fn tile_columns(res: Vec2) -> Int { return int(ceil(res.x / tile())); }
 fn tile_rows(res: Vec2) -> Int { return int(ceil(res.y / tile())); }
@@ -238,7 +239,7 @@ fn holds(r: Reach, tx: Int, ty: Int) -> Bool {
 }
 
 // Shapes and segments are asked in chunks of this many, in order: a
-// chunk whose reach misses a tile or a band is passed over whole.
+// chunk whose box misses a tile is passed over whole.
 fn chunk() -> Int { return 256; }
 
 /// What each chunk of shapes reaches together.
@@ -288,14 +289,6 @@ kernel vector.tile_counts@1 {
             }
         };
     }
-}
-
-/// How many bands each shape spans.
-kernel vector.spans@1 {
-    requires { field.read; field.write; }
-    input reach: Rows<Reach>;
-    output result: Rows<Int>;
-    compute { let r = sample(reach); return if r.x1 < r.x0 { 0 } else { r.y1 - r.y0 + 1 }; }
 }
 
 /// Where each list ends: an inclusive prefix of the counts.
@@ -361,25 +354,40 @@ kernel vector.tile_fill@1 {
     }
 }
 
-// The shape and band a band slot is: the first shape whose spans end
-// past it, by bisection.
-fn band_of(slot: Int, spans: Rows<Int>, span_ends: Rows<Int>, reach: Rows<Reach>) -> IVec2 {
-    let found = loop 32 with r = ivec2(0, count(span_ends)) until r.x >= r.y {
+// ---- cells
+
+// A cell is a shape in a tile: an entry of the tiles' shape lists. Its
+// shape's segments are walked a chunk to a unit, so no walk is longer
+// than a chunk. Of a unit's segments, those that reach the tile, a pixel
+// over its edges, are the cell's own and asked by each pixel; those that
+// reach its rows wholly to its right cross each row's rays to the right,
+// so their turns are summed once a row as the cell's backdrop; the rest
+// neither cross a ray from the tile nor come within a pixel of it. The
+// winding is a sum of whole turns and the nearest segment a least, so the
+// order a cell's segments are asked in changes no word.
+
+// The list an entry is in: the first whose end is past it, by bisection.
+fn owner(e: Int, ends: Rows<Int>) -> Int {
+    let found = loop 32 with r = ivec2(0, count(ends)) until r.x >= r.y {
         let mid = (r.x + r.y) / 2;
-        if at(span_ends, mid) > slot { ivec2(r.x, mid) } else { ivec2(mid + 1, r.y) }
+        if at(ends, mid) > e { ivec2(r.x, mid) } else { ivec2(mid + 1, r.y) }
     };
-    let s = found.x;
-    let first = at(span_ends, s) - at(spans, s);
-    return ivec2(s, at(reach, s).y0 + slot - first);
+    return found.x;
 }
 
-// Whether rows from `lo` to `hi` on the canvas reach a band's rows, a
-// pixel over its edges.
-fn in_band(lo: Float, hi: Float, band: Int) -> Bool {
-    return hi >= float(band) * tile() - 1.0 && lo <= float(band + 1) * tile() + 1.0;
+// Whether a span of the canvas reaches a tile's rows, or its columns, a
+// pixel over their edges, and whether one lies wholly past its columns.
+fn in_rows(lo: Float, hi: Float, ty: Int) -> Bool {
+    return hi >= float(ty) * tile() - 1.0 && lo <= float(ty + 1) * tile() + 1.0;
 }
-fn segment_in_band(seg: Vec4, band: Int) -> Bool {
-    return in_band(min(seg.y, seg.w), max(seg.y, seg.w), band);
+fn in_columns(lo: Float, hi: Float, tx: Int) -> Bool {
+    return hi >= float(tx) * tile() - 1.0 && lo <= float(tx + 1) * tile() + 1.0;
+}
+fn past(lo: Float, tx: Int) -> Bool { return lo > float(tx + 1) * tile() + 1.0; }
+
+// Whether a segment on the canvas is a cell's own.
+fn own(on: Vec4, tx: Int, ty: Int) -> Bool {
+    return in_rows(min(on.y, on.w), max(on.y, on.w), ty) && in_columns(min(on.x, on.z), max(on.x, on.z), tx);
 }
 
 /// Each segment on the canvas, as its shape's box is.
@@ -399,18 +407,21 @@ kernel vector.placed@1 {
     }
 }
 
-/// The rows each chunk of segments spans on the canvas, least and most.
+/// The box each chunk of segments spans on the canvas: least x and y,
+/// most x and y.
 kernel vector.segment_chunks@1 {
     requires { field.read; field.write; }
     input placed: Rows<Vec4>;
-    output result: Rows<Vec2>;
+    output result: Rows<Vec4>;
     compute {
         let n = count(placed);
         let first = element() * chunk();
-        return loop chunk() with u = vec2(1000000000.0, -1000000000.0) {
+        return loop chunk() with u = vec4(1000000000.0, 1000000000.0, -1000000000.0, -1000000000.0) {
             let g = first + index();
             let s = at(placed, g);
-            if g >= n { u } else { vec2(min(u.x, min(s.y, s.w)), max(u.y, max(s.y, s.w))) }
+            if g >= n { u } else {
+                vec4(min(u.x, min(s.x, s.z)), min(u.y, min(s.y, s.w)), max(u.z, max(s.x, s.z)), max(u.w, max(s.y, s.w)))
+            }
         };
     }
 }
@@ -421,86 +432,156 @@ fn chunks_of(s: Shape) -> IVec2 {
     return ivec2(c0, if s.count > 0 { (s.first + s.count - 1) / chunk() - c0 + 1 } else { 0 });
 }
 
-// Whether segment `g`, in a chunk that reaches the band, is one of the
-// shape's that reaches it.
-fn kept(s: Shape, placed: Rows<Vec4>, g: Int, band: Int) -> Bool {
-    return g >= s.first && g < s.first + s.count && segment_in_band(at(placed, g), band);
+// The shape's segments in chunk `c`: the first, and how many.
+fn part_of(s: Shape, c: Int) -> IVec2 {
+    let lo = max(s.first, c * chunk());
+    return ivec2(lo, min(s.first + s.count, (c + 1) * chunk()) - lo);
 }
 
-/// How many of its shape's segments reach each band slot's rows.
-kernel vector.band_counts@1 {
+/// How many units each cell is: its shape's chunks.
+kernel vector.units@1 {
     requires { field.read; field.write; }
     input total: Rows<Int>;
+    input tile_shapes: Rows<Int>;
     input shapes: Rows<Shape>;
-    input placed: Rows<Vec4>;
-    input chunks: Rows<Vec2>;
-    input reach: Rows<Reach>;
-    input spans: Rows<Int>;
-    input span_ends: Rows<Int>;
     output result: Rows<Int>;
     compute {
-        let b = band_of(element(), spans, span_ends, reach);
-        let s = at(shapes, b.x);
-        let cs = chunks_of(s);
-        return loop rounds(cs.y) with total = 0 {
-            let r = index();
-            loop round_of(cs.y, r) with k = total {
-                let c = cs.x + r * 65536 + index();
-                let rows = at(chunks, c);
-                if !in_band(rows.x, rows.y, b.y) { k } else {
-                    loop chunk() with k2 = k {
-                        if kept(s, placed, c * chunk() + index(), b.y) { k2 + 1 } else { k2 }
-                    }
-                }
-            }
+        let si = at(tile_shapes, element());
+        return if si < 0 { 0 } else { chunks_of(at(shapes, si)).y };
+    }
+}
+
+// What a unit is: its cell, its tile, and the shape's segments it walks.
+struct Unit { cell: Int; tx: Int; ty: Int; chunk: Int; first: Int; count: Int; }
+
+fn unit_of(u: Int, units: Rows<Int>, unit_ends: Rows<Int>, tile_ends: Rows<Int>, tile_shapes: Rows<Int>, tiles: Grid<Int>, shapes: Rows<Shape>) -> Unit {
+    let e = owner(u, unit_ends);
+    let t = owner(e, tile_ends);
+    let columns = int(size(tiles).x);
+    let s = at(shapes, max(at(tile_shapes, e), 0));
+    let c = chunks_of(s).x + u - (at(unit_ends, e) - at(units, e));
+    let part = part_of(s, c);
+    return Unit { cell: e, tx: t % columns, ty: t / columns, chunk: c, first: part.x, count: part.y };
+}
+
+/// How many of its segments each unit gives its cell.
+kernel vector.kept@1 {
+    requires { field.read; field.write; }
+    input total: Rows<Int>;
+    input units: Rows<Int>;
+    input unit_ends: Rows<Int>;
+    input tile_ends: Rows<Int>;
+    input tile_shapes: Rows<Int>;
+    input tiles: Grid<Int>;
+    input shapes: Rows<Shape>;
+    input placed: Rows<Vec4>;
+    input chunks: Rows<Vec4>;
+    output result: Rows<Int>;
+    compute {
+        let w = unit_of(element(), units, unit_ends, tile_ends, tile_shapes, tiles, shapes);
+        let box = at(chunks, w.chunk);
+        if !in_rows(box.y, box.w, w.ty) || !in_columns(box.x, box.z, w.tx) { return 0; }
+        return loop w.count with k = 0 {
+            if own(at(placed, w.first + index()), w.tx, w.ty) { k + 1 } else { k }
         };
     }
 }
 
-/// Each band slot's segments, in their order, into its part of the list:
-/// the walk `vector.band_counts@1` counts, stopped at its count.
-kernel vector.band_fill@1 {
+/// Each unit's segments, in their order, into its part of the cells'
+/// list: the walk `vector.kept@1` counts.
+kernel vector.keep@1 {
     requires { field.read; field.write; }
-    input counts: Rows<Int>;
-    input ends: Rows<Int>;
+    input total: Rows<Int>;
+    input kept: Rows<Int>;
+    input kept_ends: Rows<Int>;
+    input units: Rows<Int>;
+    input unit_ends: Rows<Int>;
+    input tile_ends: Rows<Int>;
+    input tile_shapes: Rows<Int>;
+    input tiles: Grid<Int>;
     input shapes: Rows<Shape>;
     input placed: Rows<Vec4>;
-    input chunks: Rows<Vec2>;
-    input reach: Rows<Reach>;
-    input spans: Rows<Int>;
-    input span_ends: Rows<Int>;
+    input chunks: Rows<Vec4>;
     input slots: Rows<Int>;
     output result: Rows<Int>;
     scatter into slots with max {
-        let slot = element();
-        let room = at(counts, slot);
-        let start = at(ends, slot) - room;
-        let b = band_of(slot, spans, span_ends, reach);
-        let s = at(shapes, b.x);
-        let cs = chunks_of(s);
-        loop rounds(cs.y) with k = 0 {
-            let r = index();
-            loop round_of(cs.y, r) with k1 = k {
-                let c = cs.x + r * 65536 + index();
-                let rows = at(chunks, c);
-                if !in_band(rows.x, rows.y, b.y) { k1 } else {
-                    loop chunk() with k2 = k1 {
-                        let g = c * chunk() + index();
-                        if k2 < room && kept(s, placed, g, b.y) {
-                            emit(Slot { at: start + k2, value: g });
-                            k2 + 1
-                        } else { k2 }
-                    }
-                }
-            }
-        };
+        let u = element();
+        let room = at(kept, u);
+        let start = at(kept_ends, u) - room;
+        let w = unit_of(u, units, unit_ends, tile_ends, tile_shapes, tiles, shapes);
+        if room > 0 {
+            loop w.count with k = 0 {
+                let g = w.first + index();
+                if k < room && own(at(placed, g), w.tx, w.ty) {
+                    emit(Slot { at: start + k, value: g });
+                    k + 1
+                } else { k }
+            };
+        }
         return Slot { at: -1, value: 0 };
     }
 }
 
+/// A list of zeros, a row of each cell's tile to each.
+kernel vector.zeros@1 {
+    requires { field.read; field.write; }
+    input total: Rows<Int>;
+    output result: Rows<Int>;
+    compute { return 0; }
+}
+
+/// Each cell's backdrop, a row of its tile to an element. Each of a
+/// unit's segments wholly past the tile adds its turn to the rows it may
+/// cross, a pixel over its ends, each crossing tested at the row's point
+/// in the drawing as `crossed` tests it.
+kernel vector.backdrop@1 {
+    requires { field.read; field.write; }
+    input total: Rows<Int>;
+    input units: Rows<Int>;
+    input unit_ends: Rows<Int>;
+    input tile_ends: Rows<Int>;
+    input tile_shapes: Rows<Int>;
+    input tiles: Grid<Int>;
+    input shapes: Rows<Shape>;
+    input placed: Rows<Vec4>;
+    input chunks: Rows<Vec4>;
+    input segments: Rows<Vec4>;
+    input view: Rows<Vec2>;
+    input look: Rows<Look>;
+    input canvas: Grid<Int>;
+    input zeros: Rows<Int>;
+    output result: Rows<Int>;
+    scatter into zeros with sum {
+        let w = unit_of(element(), units, unit_ends, tile_ends, tile_shapes, tiles, shapes);
+        let box = at(chunks, w.chunk);
+        let rows = int(tile());
+        let top = w.ty * rows;
+        if in_rows(box.y, box.w, w.ty) && box.z > float(w.tx + 1) * tile() + 1.0 {
+            loop w.count with k = 0 {
+                let g = w.first + index();
+                let on = at(placed, g);
+                if past(min(on.x, on.z), w.tx) {
+                    let seg = at(segments, g);
+                    let turn = if seg.w > seg.y { 1 } else { -1 };
+                    let low = clamp(int(floor(min(on.y, on.w))) - 1 - top, 0, rows);
+                    let high = clamp(int(ceil(max(on.y, on.w))) + 1 - top, 0, rows);
+                    loop high - low with k2 = 0 {
+                        let row = low + index();
+                        let y = seen(view, look, size(canvas), vec2(float(w.tx * rows), float(top + row))).y;
+                        if (seg.y <= y) != (seg.w <= y) { emit(Slot { at: w.cell * rows + row, value: turn }); }
+                        k2
+                    };
+                }
+                k
+            };
+        }
+        return Slot { at: -1, value: 0 };
+    }
+}
 
 /// The drawing, each pixel asking only its tile's shapes and, of each,
-/// the segments of its band: the same words `vector.draw@1` draws.
+/// the cell's own segments over its row's backdrop: the same words
+/// `vector.draw@1` draws.
 kernel vector.draw_tiled@1 {
     requires { field.read; field.write; }
     input shapes: Rows<Shape>;
@@ -508,15 +589,15 @@ kernel vector.draw_tiled@1 {
     input stops: Rows<Stop>;
     input view: Rows<Vec2>;
     input look: Rows<Look>;
-    input reach: Rows<Reach>;
     input tile_counts: Rows<Int>;
     input tile_ends: Rows<Int>;
     input tile_shapes: Rows<Int>;
-    input spans: Rows<Int>;
-    input span_ends: Rows<Int>;
-    input band_counts: Rows<Int>;
-    input band_ends: Rows<Int>;
-    input band_segments: Rows<Int>;
+    input units: Rows<Int>;
+    input unit_ends: Rows<Int>;
+    input kept: Rows<Int>;
+    input kept_ends: Rows<Int>;
+    input cell_segments: Rows<Int>;
+    input backdrop: Rows<Int>;
     param background: Vec4 = vec4(1.0, 1.0, 1.0, 1.0);
     output result: Image;
     compute {
@@ -524,24 +605,29 @@ kernel vector.draw_tiled@1 {
         let v = seen(view, look, res, coord());
         let p = vec2(v.x, v.y);
         let pixel = v.z;
+        let rows = int(tile());
         let tx = int(coord().x / tile());
         let ty = int(coord().y / tile());
+        let row = int(coord().y) - ty * rows;
         let t = ty * tile_columns(res) + tx;
         let n = at(tile_counts, t);
         let first = at(tile_ends, t) - n;
         return loop rounds(n) with over = background {
             let r = index();
             loop round_of(n, r) with below = over {
-                let si = at(tile_shapes, first + r * 65536 + index());
+                let e = first + r * 65536 + index();
+                let si = at(tile_shapes, e);
                 let s = at(shapes, max(si, 0));
                 if si < 0 || !near(s, p, pixel) { below } else {
-                    let slot = at(span_ends, si) - at(spans, si) + ty - at(reach, si).y0;
-                    let m = at(band_counts, slot);
-                    let begin = at(band_ends, slot) - m;
-                    let hit = loop rounds(m) with w = vec2(0.0, 1000000000.0) {
+                    // The cell's segments: from its first unit's to its last's.
+                    let last = at(unit_ends, e) - 1;
+                    let u0 = last + 1 - at(units, e);
+                    let begin = at(kept_ends, u0) - at(kept, u0);
+                    let m = if last >= u0 { at(kept_ends, last) - begin } else { 0 };
+                    let hit = loop rounds(m) with w = vec2(float(at(backdrop, e * rows + row)), 1000000000.0) {
                         let q = index();
                         loop round_of(m, q) with w2 = w {
-                            let g = at(band_segments, begin + q * 65536 + index());
+                            let g = at(cell_segments, begin + q * 65536 + index());
                             if g < 0 { w2 } else { crossed(w2, at(segments, g), p) }
                         }
                     };
