@@ -249,7 +249,9 @@ with the same Field rules (clamped reads, dropped writes).
 `DMat2`..`DMat4`. `dvec3(..)`, `lvec2(..)`, `dmat4(..)` build as their
 32-bit kin do, widening numbers of any kind and shorter vectors.
 `double(x)` and `long(x)` convert; `float(x)` and `int(x)` convert back
-(a long to an int keeps its low 32 bits). A `Double` never meets a
+(a long to an int keeps its low 32 bits). Each gives a value already of
+its kind as it is, and fixes a written number at that width
+(`float(0.1)` is a `Float` beside a `Double`). A `Double` never meets a
 `Float`, nor a `Long` an `Int`, without a conversion; `x + f` of the two
 is refused, saying which to write.
 

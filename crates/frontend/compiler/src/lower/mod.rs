@@ -40,6 +40,16 @@ mod written;
 use declare::{RESERVED_BUILTINS, aliases, manifest, port_type, structs};
 pub(crate) use declare::{literal, literal_exact, literal_in, literal_of_type, with_variants};
 
+/// A name with its article: "an Int", "a Float", "a u8".
+fn a(name: &str) -> String {
+    let article = if name.starts_with(['A', 'E', 'I', 'O', 'a', 'e', 'i', 'o']) {
+        "an"
+    } else {
+        "a"
+    };
+    format!("{article} {name}")
+}
+
 fn semantic(span: Span, message: impl Into<String>) -> CompileError {
     CompileError::Semantic {
         span,
@@ -425,9 +435,9 @@ pub(crate) fn lower(
             return Err(semantic(
                 kernel.compute.result.span,
                 format!(
-                    "output `{}` needs a {} per element, but the body gives {}",
+                    "output `{}` needs {} per element, but the body gives {}",
                     manifest.outputs[0].name,
-                    describe(expected, &structs.borrow()),
+                    a(&describe(expected, &structs.borrow())),
                     describe(actual, &structs.borrow())
                 ),
             ));
@@ -453,8 +463,8 @@ pub(crate) fn lower(
                 return Err(semantic(
                     decl.body.result.span,
                     format!(
-                        "`merge` must give a {} like `compute`, but the body gives {}",
-                        describe(expected, &structs.borrow()),
+                        "`merge` must give {} like `compute`, but the body gives {}",
+                        a(&describe(expected, &structs.borrow())),
                         describe(actual, &structs.borrow())
                     ),
                 ));
@@ -473,8 +483,8 @@ pub(crate) fn lower(
                 return Err(semantic(
                     carry.init.span,
                     format!(
-                        "`scan` carries a {} like its output, but the initial value is {}",
-                        describe(expected, &structs.borrow()),
+                        "`scan` carries {} like its output, but the initial value is {}",
+                        a(&describe(expected, &structs.borrow())),
                         describe(actual, &structs.borrow())
                     ),
                 ));
@@ -745,6 +755,16 @@ impl<'a> Builder<'a> {
         })
     }
 
+    /// Fixes a written value's width as it stands: it is no longer
+    /// retyped by what it meets.
+    fn fix_width(&mut self, id: ValueId) -> Result<(), CompileError> {
+        self.refuse_large(id)?;
+        self.literals.remove(&id.0);
+        self.aggregates.remove(&id.0);
+        self.truncated.remove(&id.0);
+        Ok(())
+    }
+
     /// Refuses a written number past the largest `Float` that is a
     /// `Float`.
     fn refuse_large(&self, id: ValueId) -> Result<(), CompileError> {
@@ -990,10 +1010,7 @@ impl<'a> Builder<'a> {
                 }
                 let id = self.value(value)?;
                 // A name fixes a number's width: every use sees one value.
-                self.refuse_large(id)?;
-                self.literals.remove(&id.0);
-                self.aggregates.remove(&id.0);
-                self.truncated.remove(&id.0);
+                self.fix_width(id)?;
                 if name.value != "_" {
                     self.bindings.push((id, name.value.clone()));
                 }

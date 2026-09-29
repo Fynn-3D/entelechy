@@ -881,6 +881,34 @@ fn two_kinds_of_number_are_refused_with_the_conversion_that_joins_them() {
 }
 
 #[test]
+fn a_value_converted_to_its_own_kind_is_itself_and_a_written_one_takes_that_width() {
+    let kernel = |ty: &str, body: &str| {
+        format!(
+            "kernel t.k@1 {{ requires {{ field.write; }} output r: Rows<{ty}>; compute {{ {body} }} }}"
+        )
+    };
+    for (ty, body) in [
+        ("Int", "return int(element());"),
+        ("Int", "return int(1);"),
+        ("Float", "return float(1.5);"),
+        ("Double", "return double(1.5d);"),
+        ("Long", "return long(1l);"),
+        ("Float", "return float(vec2(1.0, 2.0)).x;"),
+    ] {
+        assert!(compile(&kernel(ty, body)).is_ok(), "{ty}: {body}");
+    }
+    // `float(0.1)` is a Float, which a Double meets only through a conversion.
+    let (_, message) = semantic(&kernel("Double", "return float(0.1) + 1.0d;"));
+    assert!(
+        message.contains("cannot apply `+` to Float and Double"),
+        "{message}"
+    );
+    // A type named in a message takes its article.
+    let (_, message) = semantic(&kernel("IVec2", "return 1.5;"));
+    assert!(message.contains("needs an IVec2 per element"), "{message}");
+}
+
+#[test]
 fn a_number_written_past_the_largest_float_that_stays_a_float_is_refused() {
     let kernel = |ty: &str, body: &str| {
         format!(

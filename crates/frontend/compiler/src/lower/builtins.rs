@@ -199,8 +199,8 @@ impl Builder<'_> {
                     return Err(semantic(
                         args[1].span,
                         format!(
-                            "`put` addresses `{port_name}`, a {}, with {}; it takes {}",
-                            port_ty.shape,
+                            "`put` addresses `{port_name}`, {}, with {}; it takes {}",
+                            super::a(&port_ty.shape.to_string()),
                             self.describe(self.ty(address)),
                             self.describe(expected)
                         ),
@@ -684,6 +684,21 @@ impl Builder<'_> {
                         .collect::<Result<Vec<_>, _>>()?;
                     self.adapt_all(&mut ids);
                     let types = ids.iter().map(|id| self.ty(*id)).collect::<Vec<_>>();
+                    // A value converted to its own kind is itself, a
+                    // written number's width fixed as a `let` fixes it.
+                    let kind = match intrinsic {
+                        Intrinsic::ToFloat => Some(Type::Float),
+                        Intrinsic::ToInt => Some(Type::Int),
+                        Intrinsic::ToDouble => Some(Type::Double),
+                        Intrinsic::ToLong => Some(Type::Long),
+                        _ => None,
+                    };
+                    if let (Some(kind), [id], [ty]) = (kind, ids.as_slice(), types.as_slice())
+                        && ty.scalar() == Some(kind)
+                    {
+                        self.fix_width(*id)?;
+                        return Ok(*id);
+                    }
                     let ty = intrinsic.result_type(&types).ok_or_else(|| {
                         let list = types
                             .iter()

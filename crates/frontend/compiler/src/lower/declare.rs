@@ -989,13 +989,8 @@ pub(super) fn constant(
             Err(past) => return past,
         };
         semantic(expr.span, {
-            let name = describe(ty, structs);
-            let article = if name.starts_with(['A', 'E', 'I', 'O', 'U']) {
-                "an"
-            } else {
-                "a"
-            };
-            format!("{article} {name} default must be a literal of that type; `{value}` is not")
+            let name = super::a(&describe(ty, structs));
+            format!("{name} default must be a literal of that type; `{value}` is not")
         })
     })
 }

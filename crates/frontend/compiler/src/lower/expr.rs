@@ -470,8 +470,8 @@ impl Builder<'_> {
                     let why = match manifest.outputs.len() {
                         0 | 1 => "this Kernel has one output, and gives its value".to_owned(),
                         _ => format!(
-                            "several outputs are a map's, and this Kernel is a {}",
-                            manifest.mode.name()
+                            "several outputs are a map's, and this Kernel is {}",
+                            super::a(manifest.mode.name())
                         ),
                     };
                     return Err(semantic(
@@ -505,9 +505,9 @@ impl Builder<'_> {
                         return Err(semantic(
                             value.span,
                             format!(
-                                "output `{}` needs a {} per element, found {}",
+                                "output `{}` needs {} per element, found {}",
                                 field.value,
-                                self.describe(expected),
+                                super::a(&self.describe(expected)),
                                 self.describe(self.ty(id))
                             ),
                         ));
