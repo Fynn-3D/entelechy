@@ -241,3 +241,55 @@ fn forget(counts: &mut BTreeMap<Handle, usize>, handles: impl Iterator<Item = Ha
         }
     }
 }
+
+/// Where a frame is, for making room: the group running, where each node's
+/// outputs are last read, who reads each, and what is never let go.
+pub(super) struct Room<'a> {
+    pub(super) at: usize,
+    pub(super) running: &'a NodeId,
+    pub(super) last_read: &'a BTreeMap<NodeId, usize>,
+    pub(super) readers: &'a BTreeMap<NodeId, Vec<NodeId>>,
+    pub(super) held: &'a BTreeSet<NodeId>,
+}
+
+impl Evaluator {
+    /// Lets go of cached outputs no later run of this frame reads, to make
+    /// room in the Host: those read last before the group running, and
+    /// those of nodes downstream of one run this frame (`ran`), which run
+    /// again when reached, and the running node's own, which it replaces.
+    /// What `held` names stays. Answers how many nodes
+    /// let go; a later frame that asks for one runs its node again.
+    pub(super) fn make_room<'n>(
+        &mut self,
+        room: Room<'_>,
+        ran: impl Iterator<Item = &'n NodeId>,
+        runtime: &mut Runtime,
+    ) -> usize {
+        let mut ran: BTreeSet<NodeId> = ran.cloned().collect();
+        ran.insert(room.running.clone());
+        let mut stale: BTreeSet<NodeId> = BTreeSet::new();
+        let mut frontier: Vec<NodeId> = ran.iter().cloned().collect();
+        while let Some(id) = frontier.pop() {
+            for reader in room.readers.get(&id).into_iter().flatten() {
+                if !ran.contains(reader) && stale.insert(reader.clone()) {
+                    frontier.push(reader.clone());
+                }
+            }
+        }
+        let done: Vec<NodeId> = self
+            .ledger
+            .cached_nodes()
+            .filter(|id| {
+                !room.held.contains(*id)
+                    && (stale.contains(*id)
+                        || *id == room.running
+                        || room.last_read.get(*id).is_some_and(|read| *read < room.at))
+            })
+            .cloned()
+            .collect();
+        for id in &done {
+            self.drop_cache(id, runtime);
+        }
+        done.len()
+    }
+}

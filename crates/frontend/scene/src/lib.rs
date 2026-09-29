@@ -2391,7 +2391,11 @@ impl std::fmt::Display for Printed<'_> {
         writeln!(f, "// {}", self.0.name)?;
         for external in &self.0.externals {
             match self.0.texts.iter().find(|(name, _)| name == external) {
-                Some((_, text)) => writeln!(f, "input {external}: Rows<Int> = text \"{text}\";")?,
+                Some((_, text)) => writeln!(
+                    f,
+                    "input {external}: Rows<Int> = text {};",
+                    orla_language::quoted(text)
+                )?,
                 None => writeln!(f, "input {external}: Image;")?,
             }
         }

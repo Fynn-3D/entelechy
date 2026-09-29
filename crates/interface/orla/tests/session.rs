@@ -2807,3 +2807,75 @@ output differ <- second.result;
     assert!(said.contains("rounded apart, way"), "{said}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A chain of runs that together hold more than the Host has room for
+/// runs to its end: the outputs the frame has done with are let go to make
+/// room, and what an expectation reads is kept.
+#[test]
+fn a_chain_longer_than_the_host_holds_lets_go_of_what_it_is_done_with() {
+    let dir = std::env::temp_dir().join(format!("orla-room-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("link.osn"),
+        "input x: Rows<Float>;
+node up: kernel {
+    requires { field.read; field.write; }
+    input x: Rows<Float> <- x;
+    output result: Rows<Float>;
+    compute { return at(x, element() + 1) * 0.0 + at(x, element()) + 1.0; }
+}
+node on: kernel {
+    requires { field.read; field.write; }
+    input x: Rows<Float> <- up.result;
+    output result: Rows<Float>;
+    compute { return at(x, element() - 1) * 0.0 + at(x, element()); }
+}
+output result <- on.result;
+",
+    )
+    .unwrap();
+    // Forty links of a hundred thousand floats, sixteen megabytes, in a
+    // Host of four.
+    std::fs::write(
+        dir.join("chain.osn"),
+        "node seed: kernel {
+    requires { field.write; }
+    output result: Rows<Float>;
+    compute { return float(element()); }
+    domain = 100000;
+}
+node chain: graph \"link.osn\" {
+    times = 40;
+    carry x <- result;
+    x <- seed.result;
+}
+node last: kernel {
+    requires { field.read; field.write; }
+    input x: Rows<Float> <- chain.result;
+    output result: Rows<Float>;
+    compute { return sample(x); }
+}
+output out <- last.result;
+",
+    )
+    .unwrap();
+    let replay = dir.join("chain.replay");
+    std::fs::write(
+        &replay,
+        "scene chain.osn\nframe 0\nexpect last.result[5] = 45.0\nexpect seed.result[5] = 5.0\nframe 1\nexpect last.result[5] = 45.0\n",
+    )
+    .unwrap();
+    let ran = Command::new(env!("CARGO_BIN_EXE_orla"))
+        .args(["replay", "--memory", "4"])
+        .arg(&replay)
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&ran.stdout);
+    assert!(
+        ran.status.success(),
+        "{said}{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

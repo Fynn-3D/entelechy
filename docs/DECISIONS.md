@@ -87,6 +87,14 @@ pair where it is emitted holds no list, so which backend a run fits on
 is the machine's property, as for any allocation; what a run computes is
 not. A run past the room with a failing element may be named for either.
 
+A run the Host has no room for, for a Field or for its pairs, runs once
+more after the evaluation lets go of the cached outputs no later run of
+the frame reads: those read last before it, and those downstream of a
+node run this frame, which run again when reached. The scene's outputs,
+the state's sources and the pinned stay. A frame of many steps holds
+what its next steps read, not every step it took; a later frame that
+asks for an output let go runs its node again.
+
 **Why.** The Host owns memory as it owns work. An element that emits in
 a loop holds as much as its work bound lets it, and that bound is on
 iterations, not memory; a published Kernel must not take the machine's
@@ -94,7 +102,9 @@ memory by asking.
 
 **Where.** [`Scope::room`](../crates/core/abi/src/lib.rs); `OverRoom` in
 [`orla_rules`](../crates/core/rules/src/lib.rs), held by the JIT's
-[parity tests](../crates/backends/jit/tests/parity.rs).
+[parity tests](../crates/backends/jit/tests/parity.rs). Letting go is
+`Evaluator::make_room` in [the evaluator](../crates/core/graph/src/evaluate/ledger.rs),
+held by [a chain longer than the Host holds](../crates/interface/orla/tests/session.rs).
 
 ## A few formats are read live; the rest are bytes or converted
 

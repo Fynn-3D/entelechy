@@ -50,6 +50,7 @@
 
 pub mod doc;
 mod lexer;
+pub use lexer::quoted;
 mod parser;
 
 use std::fmt;

@@ -49,6 +49,25 @@ const PUNCTS: [&str; 37] = [
 ];
 const SINGLE_EXTRA: [&str; 1] = ["!"];
 
+/// `text` written as a string a document reads back as `text`: in quotes,
+/// a new line, a tab, a quote and a backslash written as `\n`, `\t`, `\"`
+/// and `\\`.
+pub fn quoted(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+    out
+}
+
 pub(crate) fn tokenize(source: &str) -> Result<Vec<Lexeme>, ParseError> {
     let chars: Vec<char> = source.chars().collect();
     let mut tokens = Vec::new();
@@ -292,6 +311,9 @@ mod tests {
 
     #[test]
     fn a_string_writes_a_new_line_a_tab_a_quote_and_a_backslash() {
+        let written = "a\nb\tc\"d\\e";
+        let read = tokenize(&quoted(written)).unwrap();
+        assert_eq!(read[0].token, Token::Str(written.into()));
         let lexed = tokenize(r#""a\nb\tc\"d\\e""#).unwrap();
         assert_eq!(lexed[0].token, Token::Str("a\nb\tc\"d\\e".into()));
         let error = tokenize(r#"  "C:\data""#).unwrap_err();

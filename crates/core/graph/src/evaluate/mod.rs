@@ -32,6 +32,7 @@ mod plan;
 mod state;
 
 pub use error::EvaluateError;
+use ledger::Room;
 use plan::{graph_param, suggest};
 
 /// What one evaluation did.
@@ -520,7 +521,24 @@ impl Evaluator {
             runtime.take_checks();
             runtime.begin_evaluation();
             let mut pending = Vec::new();
-            for group in groups.iter() {
+            // Where each node's outputs are last read on this frame, for
+            // making room; what is never let go: the scene's outputs, the
+            // state's sources and the pinned.
+            let mut last_read: BTreeMap<NodeId, usize> = BTreeMap::new();
+            let mut readers: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+            for (at, group) in groups.iter().enumerate() {
+                for binding in group.node.inputs.values() {
+                    if let Binding::Now(Source::Node { node, .. }) = binding {
+                        last_read.insert(node.clone(), at);
+                        readers
+                            .entry(node.clone())
+                            .or_default()
+                            .push(group.node.id.clone());
+                    }
+                }
+            }
+            let held = held_nodes(graph, &self.pinned);
+            for (at, group) in groups.iter().enumerate() {
                 let node = &group.node;
                 if needed
                     .as_ref()
@@ -585,11 +603,33 @@ impl Evaluator {
                 }
                 runtime.take_moved();
                 let started = orla_kernel::clock::now();
-                let outputs = match group.chain {
+                let run = |runtime: &mut Runtime| match group.chain {
                     Some(chain) => {
                         runtime.execute_repeated(&group.version, &invocation, group.repeat, chain)
                     }
                     None => runtime.execute(&group.version, &invocation),
+                };
+                // A run the Host has no room for runs again once the outputs
+                // this frame has done with are let go; they are made again
+                // when a later frame asks.
+                let outputs = match run(runtime) {
+                    Err(error)
+                        if short_of_room(&error)
+                            && self.make_room(
+                                Room {
+                                    at,
+                                    running: &node.id,
+                                    last_read: &last_read,
+                                    readers: &readers,
+                                    held: &held,
+                                },
+                                executed.iter(),
+                                runtime,
+                            ) > 0 =>
+                    {
+                        run(runtime)
+                    }
+                    ran => ran,
                 }
                 .map_err(|error| EvaluateError::Execution {
                     node: node.id.clone(),
@@ -811,4 +851,42 @@ fn substitute_fallbacks(graph: &Graph, externals: &BTreeMap<String, Handle>) -> 
         swap(source);
     }
     Some(graph)
+}
+
+/// The nodes whose outputs are never let go to make room: the scene's
+/// outputs, the sources and first values of its state, and the pinned.
+fn held_nodes(graph: &Graph, pinned: &BTreeSet<NodeId>) -> BTreeSet<NodeId> {
+    let mut held = pinned.clone();
+    for (_, source) in &graph.outputs {
+        if let Source::Node { node, .. } = source {
+            held.insert(node.clone());
+        }
+    }
+    for node in &graph.nodes {
+        for binding in node.inputs.values() {
+            if let Binding::Previous {
+                source, initial, ..
+            } = binding
+            {
+                for source in [source, initial] {
+                    if let Source::Node { node, .. } = source {
+                        held.insert(node.clone());
+                    }
+                }
+            }
+        }
+    }
+    held
+}
+
+/// Whether a run failed for want of room in the Host, which letting go of
+/// what the frame is done with may give it.
+fn short_of_room(error: &orla_kernel::ExecutionError) -> bool {
+    matches!(
+        error,
+        orla_kernel::ExecutionError::OverRoom { .. }
+            | orla_kernel::ExecutionError::Abi(orla_abi::AbiError::Host(
+                orla_abi::HostError::BudgetExceeded { .. }
+            ))
+    )
 }
