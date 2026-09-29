@@ -1044,7 +1044,10 @@ fn an_agent_creates_a_capability_while_the_scene_runs() {
     // The first proposal is refused at the expression: a Float `&` an Int
     // on line 9.
     let error = &responses[5]["error"];
-    assert_eq!(error["message"], "cannot apply `&` to Float and Int");
+    assert_eq!(
+        error["message"],
+        "cannot apply `&` to Float and Int; convert: `int(..)` the float"
+    );
     assert_eq!(
         (error["line"].as_u64(), error["column"].as_u64()),
         (Some(9), Some(20))

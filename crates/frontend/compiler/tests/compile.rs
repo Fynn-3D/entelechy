@@ -864,15 +864,15 @@ fn two_kinds_of_number_are_refused_with_the_conversion_that_joins_them() {
     for (body, says) in [
         (
             "let x = 1.0; return x + element();",
-            "cannot apply `+` to Float and Int; a float and an int meet through a conversion: `float(..)` the int, or `int(..)` the float",
+            "cannot apply `+` to Float and Int; they meet through a conversion: `float(..)` the int, or `int(..)` the float",
         ),
         (
             "return float(1.0d + element());",
-            "cannot apply `+` to Double and Int; a double and an int meet through a conversion: `double(..)` the int, or `int(..)` the double",
+            "cannot apply `+` to Double and Int; they meet through a conversion: `double(..)` the int, or `int(..)` the double",
         ),
         (
             "return (vec2(1.0, 2.0) * element()).x;",
-            "cannot apply `*` to Vec2 and Int; convert the int: `float(..)`",
+            "cannot apply `*` to Vec2 and Int; convert: `float(..)` the int",
         ),
     ] {
         let (_, message) = semantic(&kernel(body));
@@ -1065,7 +1065,7 @@ fn integer_vectors_address_fields_without_conversions_in_the_source() {
     ));
     assert_eq!(
         message,
-        "cannot apply `+` to IVec2 and Vec2; convert the IVec2: `vec2(..)`"
+        "cannot apply `+` to IVec2 and Vec2; they meet through a conversion: `int(..)` the Vec2, or `float(..)` the IVec2"
     );
     let (_, message) = semantic(&format!(
         "{head}let c = ivec2(1, 2) + ivec3(1, 2, 3); return 0.0; }} }}"

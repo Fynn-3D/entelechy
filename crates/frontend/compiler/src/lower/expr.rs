@@ -126,41 +126,51 @@ impl Builder<'_> {
                         // Two widths of one kind meet through a conversion.
                         let widths = [a.scalar(), b.scalar()];
                         let hint = self.truncated_hint(&[left, right]);
-                        // Two kinds of number meet through a conversion,
-                        // each named by its own.
-                        let named = |ty: Option<Type>| match ty {
-                            Some(Type::Float) => Some(("a float", "float")),
-                            Some(Type::Int) => Some(("an int", "int")),
-                            Some(Type::Double) => Some(("a double", "double")),
-                            Some(Type::Long) => Some(("a long", "long")),
+                        // Two kinds of number meet through a conversion:
+                        // each that makes the operation hold is named, a
+                        // scalar beside a vector converting alone.
+                        let convert = |ty: Option<Type>| match ty {
+                            Some(Type::Float) => Some("float"),
+                            Some(Type::Int) => Some("int"),
+                            Some(Type::Double) => Some("double"),
+                            Some(Type::Long) => Some("long"),
                             _ => None,
                         };
-                        // A vector keeps its kind; the scalar beside it
-                        // converts.
                         let vector = |ty: Type| ty.scalar() != Some(ty);
-                        let hint = match (named(widths[0]), named(widths[1])) {
+                        let called = |ty: Type| match convert(Some(ty)) {
+                            Some(name) => name.to_owned(),
+                            None => ty.to_string(),
+                        };
+                        // `from` converted to `kind`, where `op` then holds.
+                        let joins = |from: Type, other: Type, kind: Type, first: bool| {
+                            let to = from.with_scalar(kind)?;
+                            let (x, y) = if first { (to, other) } else { (other, to) };
+                            op.result_type(x, y)?;
+                            Some(format!(
+                                "`{}(..)` the {}",
+                                convert(Some(kind))?,
+                                called(from)
+                            ))
+                        };
+                        let hint = match (widths[0], widths[1]) {
                             _ if !hint.is_empty() => hint.to_owned(),
-                            (Some((x, to_x)), Some((y, to_y))) if x != y => {
-                                match (vector(a), vector(b)) {
-                                    (true, false) => format!("; convert the {to_y}: `{to_x}(..)`"),
-                                    (false, true) => format!("; convert the {to_x}: `{to_y}(..)`"),
-                                    // Two vectors: the wider one's builder
-                                    // takes the other.
-                                    (true, true) => {
-                                        let rank = |ty: Type| match ty.scalar() {
-                                            Some(Type::Double) => 3,
-                                            Some(Type::Float) => 2,
-                                            Some(Type::Long) => 1,
-                                            _ => 0,
-                                        };
-                                        let (wide, narrow) = if rank(a) >= rank(b) { (a, b) } else { (b, a) };
-                                        format!(
-                                            "; convert the {narrow}: `{}(..)`",
-                                            wide.to_string().to_lowercase()
-                                        )
-                                    }
-                                    _ => format!(
-                                        "; {x} and {y} meet through a conversion: `{to_x}(..)` the {to_y}, or `{to_y}(..)` the {to_x}"
+                            (Some(x), Some(y))
+                                if x != y
+                                    && convert(Some(x)).is_some()
+                                    && convert(Some(y)).is_some() =>
+                            {
+                                let mut ways = Vec::new();
+                                if !vector(b) || vector(a) {
+                                    ways.extend(joins(b, a, x, false));
+                                }
+                                if !vector(a) || vector(b) {
+                                    ways.extend(joins(a, b, y, true));
+                                }
+                                match ways.as_slice() {
+                                    [] => String::new(),
+                                    [one] => format!("; convert: {one}"),
+                                    [one, other, ..] => format!(
+                                        "; they meet through a conversion: {one}, or {other}"
                                     ),
                                 }
                             }
