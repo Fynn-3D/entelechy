@@ -320,13 +320,16 @@ kernel physics.pair_counts@1 {
         let j = element();
         let n = at(spans, j);
         let e0 = at(span_ends, j) - n;
-        return loop n with total = 0 {
-            let run = before(e0 + index(), places, keys, cell_ends, cell_counts);
-            loop rounds(run.z) with t1 = total {
-                let r = index();
-                loop round_of(run.z, r) with t2 = t1 {
-                    let i = at(owners, at(order, run.y + r * 65536 + index()));
-                    if paired(i, j, run.x, bodies, bounds, columns) { t2 + 1 } else { t2 }
+        return loop rounds(n) with t0 = 0 {
+            let q = index();
+            loop round_of(n, q) with total = t0 {
+                let run = before(e0 + q * 65536 + index(), places, keys, cell_ends, cell_counts);
+                loop rounds(run.z) with t1 = total {
+                    let r = index();
+                    loop round_of(run.z, r) with t2 = t1 {
+                        let i = at(owners, at(order, run.y + r * 65536 + index()));
+                        if paired(i, j, run.x, bodies, bounds, columns) { t2 + 1 } else { t2 }
+                    }
                 }
             }
         };
@@ -368,16 +371,19 @@ kernel physics.pairs@1 {
         let n = at(spans, j);
         let e0 = at(span_ends, j) - n;
         if room > 0 {
-            loop n with total = 0 {
-                let run = before(e0 + index(), places, keys, cell_ends, cell_counts);
-                loop rounds(run.z) with t1 = total {
-                    let r = index();
-                    loop round_of(run.z, r) with t2 = t1 {
-                        let i = at(owners, at(order, run.y + r * 65536 + index()));
-                        if t2 < room && paired(i, j, run.x, bodies, bounds, columns) {
-                            emit(Placed { at: start + t2, value: Pair { a: i, b: j } });
-                            t2 + 1
-                        } else { t2 }
+            loop rounds(n) with t0 = 0 {
+                let q = index();
+                loop round_of(n, q) with total = t0 {
+                    let run = before(e0 + q * 65536 + index(), places, keys, cell_ends, cell_counts);
+                    loop rounds(run.z) with t1 = total {
+                        let r = index();
+                        loop round_of(run.z, r) with t2 = t1 {
+                            let i = at(owners, at(order, run.y + r * 65536 + index()));
+                            if t2 < room && paired(i, j, run.x, bodies, bounds, columns) {
+                                emit(Placed { at: start + t2, value: Pair { a: i, b: j } });
+                                t2 + 1
+                            } else { t2 }
+                        }
                     }
                 }
             };
