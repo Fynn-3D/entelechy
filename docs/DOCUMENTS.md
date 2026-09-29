@@ -197,7 +197,8 @@ array. `[each N { body }]` builds one element by element, unrolled, with
 `index()` its position (a loop inside has its own `index()`):
 `[each 32 { unit(w, x, index()) }]`, or `[each 4 { if index() == k { v }
 else { a[index()] } }]` for `a` with element `k` replaced. An array has
-1 to 4096 elements, laid out in order.
+1 to 4096 elements, laid out in order. A value of any type holds at most
+65536 words and structs, and structs and arrays nest at most 64 deep.
 
 ### Parameters
 

@@ -367,6 +367,7 @@ fn error(location: &str, message: impl Into<String>) -> ValidationError {
 }
 
 fn validate_structs(structs: &[StructDef]) -> Result<(), ValidationError> {
+    let mut known = Vec::with_capacity(structs.len());
     for (index, def) in structs.iter().enumerate() {
         if let Some(element) = def.element {
             let count = def.fields.len();
@@ -420,6 +421,15 @@ fn validate_structs(structs: &[StructDef]) -> Result<(), ValidationError> {
                 format!("struct `{}` has more than {} fields", def.name, u8::MAX),
             ));
         }
+        // Each earlier struct measured once, so no walk repeats.
+        let measured = crate::measure_struct(def, &|ty| match ty {
+            Type::Struct(inner) => known[inner as usize],
+            other => (other.words().unwrap_or(1), 0),
+        });
+        if let Some(why) = crate::too_large(measured) {
+            return Err(error("structs", format!("struct `{}`: {why}", def.name)));
+        }
+        known.push(measured);
     }
     Ok(())
 }
@@ -1305,7 +1315,7 @@ fn validate_function(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{KernelId, Scalar};
+    use crate::{Field, KernelId, Scalar};
 
     fn manifest(requires: &[Capability]) -> Manifest {
         Manifest {
@@ -1349,6 +1359,38 @@ mod tests {
             merge: None,
             init: None,
         }
+    }
+
+    #[test]
+    fn a_type_past_the_value_bounds_is_refused() {
+        // 17 arrays of 4096 words hold more than a value may.
+        let mut wide = sample_module(&[Capability::FieldWrite]);
+        wide.structs = vec![
+            StructDef::array(Type::Int, "Int", 4096),
+            StructDef::array(Type::Struct(0), "[Int; 4096]", 17),
+        ];
+        let message = validate(wide).unwrap_err().message;
+        assert!(message.contains("at most 65536"), "{message}");
+        // A chain of structs each holding the one before, past the depth.
+        let mut deep = sample_module(&[Capability::FieldWrite]);
+        deep.structs = (0..=crate::MAX_TYPE_DEPTH as u32)
+            .map(|k| {
+                let ty = if k == 0 {
+                    Type::Int
+                } else {
+                    Type::Struct(k - 1)
+                };
+                StructDef::record(
+                    format!("S{k}"),
+                    vec![Field {
+                        name: "a".into(),
+                        ty,
+                    }],
+                )
+            })
+            .collect();
+        let message = validate(deep).unwrap_err().message;
+        assert!(message.contains("nests at most"), "{message}");
     }
 
     #[test]

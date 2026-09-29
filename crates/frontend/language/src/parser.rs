@@ -809,7 +809,10 @@ impl Parser {
             return self.ident("a type");
         }
         let span = self.next().1;
-        let element = self.type_name()?;
+        let element = self.nested(|p| {
+            p.deeper()?;
+            p.type_name()
+        })?;
         self.expect_punct(";")?;
         let count = match self.next() {
             (Token::Int(count), _) if count > 0 => count as u32,
@@ -2711,6 +2714,17 @@ mod document_tests {
         assert!(error.message.contains("statements too"), "{error}");
         let error = kernel("if element() > 0 { let y = 2; }").unwrap_err();
         assert!(error.message.contains("must end with"), "{error}");
+    }
+
+    #[test]
+    fn a_type_nested_past_the_limit_is_an_error() {
+        let deep = crate::MAX_NESTING + 1;
+        let ty = format!("{}Int{}", "[".repeat(deep), "; 1]".repeat(deep));
+        let error = parse(&format!(
+            "kernel t.k@1 {{ requires {{ field.write; }} param p: {ty} = 0; output result: Rows<Int>; compute {{ return 0; }} }}"
+        ))
+        .unwrap_err();
+        assert!(error.message.contains("deep"), "{error}");
     }
 
     #[test]

@@ -92,9 +92,9 @@ fn struct_table_in(
                 ty,
             });
         }
-        structs
-            .borrow_mut()
-            .push(StructDef::record(decl.name.value.clone(), fields));
+        let def = StructDef::record(decl.name.value.clone(), fields);
+        super::fits(&structs.borrow(), &def, decl.name.span)?;
+        structs.borrow_mut().push(def);
     }
     Ok(structs)
 }

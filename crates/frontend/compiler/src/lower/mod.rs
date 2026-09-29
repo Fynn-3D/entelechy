@@ -222,9 +222,24 @@ fn array_type(
         return Ok(Type::Struct(index as u32));
     }
     let name = describe(element, &structs.borrow());
+    let def = StructDef::array(element, &name, count);
+    fits(&structs.borrow(), &def, span)?;
     let mut table = structs.borrow_mut();
-    table.push(StructDef::array(element, &name, count));
+    table.push(def);
     Ok(Type::Struct((table.len() - 1) as u32))
+}
+
+/// Whether a value of the struct `def`, over the types in `table`, is
+/// within the bounds every value is.
+pub(crate) fn fits(table: &[StructDef], def: &StructDef, span: Span) -> Result<(), CompileError> {
+    let measured = orla_ir::measure_struct(def, &|ty| orla_ir::measure(table, ty));
+    match orla_ir::too_large(measured) {
+        Some(why) => Err(semantic(
+            span,
+            format!("`{}` is too large: {why}", def.name),
+        )),
+        None => Ok(()),
+    }
 }
 
 /// What `[index]` takes from a type, and how many: an array's element, a

@@ -900,6 +900,53 @@ pub struct StructDef {
 /// Largest element count an array type may declare.
 pub const MAX_ARRAY_COUNT: u32 = 4096;
 
+/// The most parts a value may hold: its words and the structs and arrays
+/// around them. Every walk over a value's type is bounded by it.
+pub const MAX_VALUE_PARTS: usize = 1 << 16;
+
+/// The deepest structs and arrays may nest in a type.
+pub const MAX_TYPE_DEPTH: usize = 64;
+
+/// The parts a value of `ty` holds and how deep its structs nest, each
+/// struct in `structs` it reaches within [`MAX_VALUE_PARTS`] and
+/// [`MAX_TYPE_DEPTH`].
+pub fn measure(structs: &[StructDef], ty: Type) -> (usize, usize) {
+    match ty {
+        Type::Struct(index) => {
+            measure_struct(&structs[index as usize], &|field| measure(structs, field))
+        }
+        other => (other.words().unwrap_or(1), 0),
+    }
+}
+
+/// A struct's parts and depth, from what `field` measures its fields'
+/// types at; an array's elements are measured once.
+pub fn measure_struct(def: &StructDef, field: &dyn Fn(Type) -> (usize, usize)) -> (usize, usize) {
+    if let Some(element) = def.element {
+        let (parts, depth) = field(element);
+        return (
+            parts.saturating_mul(def.fields.len()).saturating_add(1),
+            depth + 1,
+        );
+    }
+    def.fields.iter().fold((1, 1), |(parts, depth), each| {
+        let (more, deep) = field(each.ty);
+        (parts.saturating_add(more), depth.max(deep + 1))
+    })
+}
+
+/// Why a value of `ty` may not be: it holds past [`MAX_VALUE_PARTS`] or
+/// nests past [`MAX_TYPE_DEPTH`].
+pub fn too_large((parts, depth): (usize, usize)) -> Option<String> {
+    if parts > MAX_VALUE_PARTS {
+        return Some(format!(
+            "a value of it holds {parts} words and structs; a value holds at most {MAX_VALUE_PARTS}"
+        ));
+    }
+    (depth > MAX_TYPE_DEPTH)
+        .then(|| format!("it nests {depth} deep; a type nests at most {MAX_TYPE_DEPTH}"))
+}
+
 /// Words a value of this type takes in the flat layout the Host, backends
 /// and IR share: a struct's fields end to end, a matrix's columns.
 pub fn words(structs: &[StructDef], ty: Type) -> usize {

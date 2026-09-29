@@ -1720,3 +1720,30 @@ fn a_variant_is_its_written_number_or_one_past_the_last() {
     .to_string();
     assert!(said.contains("`A` is named twice"), "{said}");
 }
+
+#[test]
+fn a_type_past_the_value_bounds_is_refused() {
+    let head = "kernel t.k@1 { requires { field.write; } output r: Rows<Int>; compute {";
+    let (_, message) = semantic(&format!(
+        "{head} let a = [[element(); 4096]; 17]; return a[1][2]; }} }}"
+    ));
+    assert!(message.contains("is too large"), "{message}");
+    let chain: String = (1..=orla_ir::MAX_TYPE_DEPTH)
+        .map(|k| format!("struct S{k} {{ a: S{}; }}\n", k - 1))
+        .collect();
+    let (_, message) = semantic(&format!(
+        "kernel t.k@1 {{ requires {{ field.write; }} output r: Rows<Int>; struct S0 {{ a: Int; }}\n{chain} compute {{ return 0; }} }}"
+    ));
+    assert!(message.contains("nests at most"), "{message}");
+    let deep = orla_language::MAX_NESTING + 1;
+    let ty = format!("{}Int{}", "[".repeat(deep), "; 1]".repeat(deep));
+    let refused = compile(&format!(
+        "kernel t.k@1 {{ requires {{ field.write; }} param p: {ty} = 0; output r: Rows<Int>; compute {{ return 0; }} }}"
+    ));
+    assert!(
+        refused
+            .as_ref()
+            .is_err_and(|error| error.to_string().contains("more than")),
+        "{refused:?}"
+    );
+}
