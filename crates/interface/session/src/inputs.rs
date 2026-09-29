@@ -46,6 +46,11 @@ fn frame_files(store: &dyn Store, dir: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(files)
 }
 
+/// The words the Host has room for, which a decoded file may take.
+fn room(host: &Host) -> usize {
+    host.budget_words().saturating_sub(host.used_words())
+}
+
 /// The inputs of a scene and the Fields they hold.
 #[derive(Default)]
 pub(crate) struct Inputs {
@@ -164,7 +169,7 @@ impl Inputs {
             let read = store.read(&path).map_err(|e| e.to_string());
             let read = read.and_then(|found| match bytes {
                 true => orla_formats::decode_bytes(&found),
-                false => orla_formats::decode(&found, &path, Some(&ty)),
+                false => orla_formats::decode(&found, &path, Some(&ty), room(host)),
             });
             let read = read.and_then(|(data, detail)| {
                 let data = kept_as(data, &ty)?;
@@ -300,7 +305,7 @@ impl Inputs {
             let loaded = store
                 .read(&path)
                 .map_err(|e| e.to_string())
-                .and_then(|found| orla_formats::decode(&found, &path, Some(&ty)))
+                .and_then(|found| orla_formats::decode(&found, &path, Some(&ty), room(host)))
                 .and_then(|(data, _)| {
                     let data = kept_as(data, &ty)?;
                     host.adopt(data).map_err(|e| e.to_string())

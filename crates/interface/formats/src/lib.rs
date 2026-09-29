@@ -69,14 +69,17 @@ pub fn decode_bytes(bytes: &[u8]) -> Result<(FieldData, String), String> {
 /// [`midi::Note`]. Returns the Field and a line describing it.
 pub fn read(path: &Path, want: Option<&str>) -> Result<(FieldData, String), String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    decode(&bytes, path, want)
+    decode(&bytes, path, want, usize::MAX)
 }
 
 /// [`read`] on bytes already read; `path`'s extension names the format.
+/// A compressed picture that would hold more than `words` words is
+/// refused before it is inflated.
 pub fn decode(
     bytes: &[u8],
     path: &Path,
     want: Option<&str>,
+    words: usize,
 ) -> Result<(FieldData, String), String> {
     let gray = want.is_some_and(|ty| without_encoding(ty) == "Grid<Float>");
     let describe = |data: &FieldData| {
@@ -94,7 +97,7 @@ pub fn decode(
             Ok((data, detail))
         }
         "png" => {
-            let data = png::decode_field(bytes, gray).map_err(|e| e.to_string())?;
+            let data = png::decode_field(bytes, gray, words).map_err(|e| e.to_string())?;
             let detail = describe(&data);
             Ok((data, detail))
         }

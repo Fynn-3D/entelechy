@@ -62,6 +62,12 @@ pub fn crc32(bytes: &[u8]) -> u32 {
 
 /// Decodes a PNG to samples.
 pub fn decode(bytes: &[u8]) -> Result<Decoded, PngError> {
+    decode_within(bytes, usize::MAX)
+}
+
+/// [`decode`], refusing a picture of more than `most` pixels before its
+/// data is inflated.
+pub fn decode_within(bytes: &[u8], most: usize) -> Result<Decoded, PngError> {
     let format = |message: &str| PngError::Format(message.to_owned());
     if bytes.len() < 8 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" {
         return Err(format("missing signature"));
@@ -120,11 +126,18 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, PngError> {
     if !matches!(depth, 1 | 2 | 4 | 8 | 16) || (depth < 8 && !matches!(color, 0 | 3)) {
         return Err(format("bit depth"));
     }
-    let raw = unzlib(&data).map_err(PngError::Inflate)?;
+    let pixels = (width as usize).saturating_mul(height as usize);
+    if pixels > most {
+        return Err(PngError::Format(format!(
+            "{width}x{height} pixels, past the room for {most}"
+        )));
+    }
     let bits_per_pixel = channels * depth as usize;
     let stride = (width as usize * bits_per_pixel).div_ceil(8);
     let bpp = bits_per_pixel.div_ceil(8);
-    if raw.len() != (stride + 1) * height as usize {
+    let expected = (stride + 1) * height as usize;
+    let raw = unzlib(&data, expected).map_err(PngError::Inflate)?;
+    if raw.len() != expected {
         return Err(format("image data length"));
     }
     let mut rows = vec![0u8; stride * height as usize];
@@ -214,9 +227,9 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, PngError> {
 }
 
 /// Decodes a PNG as a grid of pixels (`gray` false) or a `Grid<Float>` of
-/// its luminance or gray samples (`gray` true).
-pub fn decode_field(bytes: &[u8], gray: bool) -> Result<FieldData, PngError> {
-    let decoded = decode(bytes)?;
+/// its luminance or gray samples (`gray` true), of at most `words` words.
+pub fn decode_field(bytes: &[u8], gray: bool, words: usize) -> Result<FieldData, PngError> {
+    let decoded = decode_within(bytes, words / if gray { 1 } else { 4 })?;
     let domain = Domain::Grid(decoded.width, decoded.height);
     let pixels = decoded.samples.chunks_exact(decoded.channels);
     if gray {
@@ -285,6 +298,65 @@ mod tests {
     mod vectors {
         include!("../tests/vectors.rs");
     }
+
+    /// A 1x1 gray PNG whose data inflates to `copies` times 258 zeros: one
+    /// zero, then copies of the last 258 bytes, 13 bits each.
+    fn bomb(copies: usize) -> Vec<u8> {
+        let mut bits: Vec<bool> = Vec::new();
+        let mut put = |value: u32, count: u32, reversed: bool| {
+            for k in 0..count {
+                let bit = if reversed { count - 1 - k } else { k };
+                bits.push(value >> bit & 1 == 1);
+            }
+        };
+        put(1, 1, false); // the last block
+        put(1, 2, false); // fixed codes
+        put(0x30, 8, true); // literal 0
+        for _ in 0..copies {
+            put(0xC5, 8, true); // length 258
+            put(0, 5, true); // distance 1
+        }
+        put(0, 7, true); // end of block
+        let mut stream = vec![0x78, 0x01];
+        stream.extend(bits.chunks(8).map(|byte| {
+            byte.iter()
+                .enumerate()
+                .fold(0u8, |acc, (k, bit)| acc | (u8::from(*bit) << k))
+        }));
+        stream.extend([0, 0, 0, 0]);
+        let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut chunk = |kind: &[u8], body: &[u8]| {
+            out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+            let start = out.len();
+            out.extend_from_slice(kind);
+            out.extend_from_slice(body);
+            let crc = crc32(&out[start..]);
+            out.extend_from_slice(&crc.to_be_bytes());
+        };
+        chunk(b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 0, 0, 0, 0]);
+        chunk(b"IDAT", &stream);
+        chunk(b"IEND", &[]);
+        out
+    }
+
+    #[test]
+    fn data_past_the_pictures_size_stops_inflating() {
+        // 100 MB of zeros behind a 1x1 picture: inflating stops past the
+        // two bytes the picture holds.
+        let error = decode(&bomb(400_000)).err().unwrap().to_string();
+        assert!(error.contains("more than the 2 byte(s)"), "{error}");
+    }
+
+    #[test]
+    fn a_picture_past_the_room_is_refused_before_it_inflates() {
+        let mut big = bomb(1);
+        // 65536x65536 pixels, the header's crc made again.
+        big[16..24].copy_from_slice(&[0, 1, 0, 0, 0, 1, 0, 0]);
+        let crc = crc32(&big[12..29]);
+        big[29..33].copy_from_slice(&crc.to_be_bytes());
+        let error = decode_field(&big, true, 1 << 20).unwrap_err().to_string();
+        assert!(error.contains("past the room"), "{error}");
+    }
     use vectors::*;
 
     #[test]
@@ -311,10 +383,10 @@ mod tests {
 
     #[test]
     fn fields_come_out_as_asked_and_encoded_files_decode() {
-        let pixels = decode_field(GRAY_SUB, false).unwrap();
+        let pixels = decode_field(GRAY_SUB, false, usize::MAX).unwrap();
         assert!(pixels.schema().is_pixel());
         assert_eq!(f32::from_bits(pixels.storage()[4]), 15.0 / 255.0);
-        let gray = decode_field(RGB16X16, true).unwrap();
+        let gray = decode_field(RGB16X16, true, usize::MAX).unwrap();
         assert_eq!(gray.schema().value_words(), 1);
         let picture = vec![[1.0, 0.5, 0.0, 1.0], [0.0, 0.0, 1.0, 0.5]];
         let decoded = decode(&encode(2, 1, &picture)).unwrap();

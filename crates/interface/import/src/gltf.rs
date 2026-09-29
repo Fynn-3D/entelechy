@@ -241,12 +241,13 @@ impl Model {
             5125 | 5126 => 4,
             other => return Err(format!("accessor {index} has component type {other}")),
         };
-        let Some(view_index) = accessor["bufferView"].as_u64() else {
-            return Ok((vec![0.0; count * components], components));
-        };
+        let view_index = accessor["bufferView"].as_u64().ok_or_else(|| {
+            format!("accessor {index} has no bufferView: its elements are not in the file")
+        })?;
         let (data, stride) = self.view(view_index as usize)?;
         let start = accessor["byteOffset"].as_u64().unwrap_or(0) as usize;
         let stride = stride.unwrap_or(size * components);
+        within(index, data, start, count, stride, size * components)?;
         let mut out = Vec::with_capacity(count * components);
         for element in 0..count {
             for k in 0..components {
@@ -303,6 +304,7 @@ impl Model {
         let (data, stride) = self.view(view_index as usize)?;
         let start = accessor["byteOffset"].as_u64().unwrap_or(0) as usize;
         let stride = stride.unwrap_or(size);
+        within(index, data, start, count, stride, size)?;
         (0..count)
             .map(|element| {
                 let at = start + element * stride;
@@ -1025,6 +1027,35 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
     })
 }
 
+/// Whether accessor `index`'s `count` elements of `element` bytes, each
+/// `stride` from the last and the first at `start`, lie in `data`: a
+/// file holds every element it declares, so none is made from nothing.
+fn within(
+    index: usize,
+    data: &[u8],
+    start: usize,
+    count: usize,
+    stride: usize,
+    element: usize,
+) -> Result<(), String> {
+    if stride < element {
+        return Err(format!(
+            "accessor {index}'s elements are {stride} byte(s) apart and {element} long"
+        ));
+    }
+    let end = match count.checked_sub(1) {
+        None => Some(start),
+        Some(last) => last
+            .checked_mul(stride)
+            .and_then(|at| at.checked_add(start))
+            .and_then(|at| at.checked_add(element)),
+    };
+    match end {
+        Some(end) if end <= data.len() => Ok(()),
+        _ => Err(format!("accessor {index} runs past its view")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1228,6 +1259,36 @@ mod tests {
         let middle = pose(15, 1);
         let eighth = std::f32::consts::FRAC_PI_8;
         assert!((middle[3] - eighth.sin()).abs() < 1e-3, "{middle:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_accessor_holds_only_the_elements_in_the_file() {
+        let dir = std::env::temp_dir().join(format!("orla-gltf-count-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let quad = quad_gltf();
+        // A count past the data, a count with no data, and elements
+        // read again and again from one place: each an error, none made.
+        for (from, to) in [
+            (
+                r#""count":4,"type":"VEC3""#,
+                r#""count":1099511627776,"type":"VEC3""#,
+            ),
+            (
+                r#"{"bufferView":0,"componentType":5126,"count":4,"type":"VEC3"}"#,
+                r#"{"componentType":5126,"count":1099511627776,"type":"VEC3"}"#,
+            ),
+            (
+                r#""byteOffset":0,"byteLength":48}"#,
+                r#""byteOffset":0,"byteLength":48,"byteStride":0}"#,
+            ),
+        ] {
+            assert!(quad.contains(from), "{from}");
+            std::fs::write(dir.join("quad.gltf"), quad.replace(from, to)).unwrap();
+            let imported = import(&dir.join("quad.gltf"), &dir.join("out"), 30.0);
+            assert!(imported.is_err(), "{to}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

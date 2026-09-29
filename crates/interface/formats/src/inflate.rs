@@ -124,8 +124,9 @@ const DIST_EXTRA: [u8; 30] = [
     13,
 ];
 
-/// Decodes a raw DEFLATE stream.
-pub fn inflate(bytes: &[u8]) -> Result<Vec<u8>, InflateError> {
+/// Decodes a raw DEFLATE stream of at most `most` bytes; a longer one is
+/// an error before it is held.
+pub fn inflate(bytes: &[u8], most: usize) -> Result<Vec<u8>, InflateError> {
     let mut bits = Bits {
         bytes,
         position: 0,
@@ -150,6 +151,7 @@ pub fn inflate(bytes: &[u8]) -> Result<Vec<u8>, InflateError> {
                 let data = bytes
                     .get(start..start + len)
                     .ok_or_else(|| InflateError::Format("stored block ends early".into()))?;
+                room(&out, len, most)?;
                 out.extend_from_slice(data);
                 bits.position = start + len;
             }
@@ -161,7 +163,7 @@ pub fn inflate(bytes: &[u8]) -> Result<Vec<u8>, InflateError> {
                 lengths[280..].fill(8);
                 let literals = Huffman::new(&lengths)?;
                 let distances = Huffman::new(&[5u8; 30])?;
-                block(&mut bits, &mut out, &literals, &distances)?;
+                block(&mut bits, &mut out, &literals, &distances, most)?;
             }
             2 => {
                 let hlit = bits.bits(5)? as usize + 257;
@@ -198,7 +200,7 @@ pub fn inflate(bytes: &[u8]) -> Result<Vec<u8>, InflateError> {
                 }
                 let literals = Huffman::new(&lengths[..hlit])?;
                 let distances = Huffman::new(&lengths[hlit..])?;
-                block(&mut bits, &mut out, &literals, &distances)?;
+                block(&mut bits, &mut out, &literals, &distances, most)?;
             }
             _ => return Err(InflateError::Format("block type 3".into())),
         }
@@ -213,11 +215,15 @@ fn block(
     out: &mut Vec<u8>,
     literals: &Huffman,
     distances: &Huffman,
+    most: usize,
 ) -> Result<(), InflateError> {
     loop {
         let symbol = literals.decode(bits)? as usize;
         match symbol {
-            0..=255 => out.push(symbol as u8),
+            0..=255 => {
+                room(out, 1, most)?;
+                out.push(symbol as u8);
+            }
             256 => return Ok(()),
             257..=285 => {
                 let index = symbol - 257;
@@ -232,6 +238,7 @@ fn block(
                 if distance > out.len() {
                     return Err(InflateError::Format("distance before the start".into()));
                 }
+                room(out, length, most)?;
                 let start = out.len() - distance;
                 for k in 0..length {
                     let byte = out[start + k];
@@ -241,6 +248,16 @@ fn block(
             _ => return Err(InflateError::Format("literal code".into())),
         }
     }
+}
+
+/// Whether `more` bytes fit after `out` within `most`.
+fn room(out: &[u8], more: usize, most: usize) -> Result<(), InflateError> {
+    if out.len().saturating_add(more) > most {
+        return Err(InflateError::Format(format!(
+            "the stream holds more than the {most} byte(s) it may"
+        )));
+    }
+    Ok(())
 }
 
 /// Adler-32 of `bytes`.
@@ -257,8 +274,8 @@ pub fn adler32(bytes: &[u8]) -> u32 {
     (b << 16) | a
 }
 
-/// Decodes a zlib stream and checks its trailer.
-pub fn unzlib(bytes: &[u8]) -> Result<Vec<u8>, InflateError> {
+/// Decodes a zlib stream of at most `most` bytes and checks its trailer.
+pub fn unzlib(bytes: &[u8], most: usize) -> Result<Vec<u8>, InflateError> {
     if bytes.len() < 6 {
         return Err(InflateError::Format("too short for zlib".into()));
     }
@@ -268,7 +285,7 @@ pub fn unzlib(bytes: &[u8]) -> Result<Vec<u8>, InflateError> {
     if bytes[1] & 0x20 != 0 {
         return Err(InflateError::Format("preset dictionary".into()));
     }
-    let out = inflate(&bytes[2..bytes.len() - 4])?;
+    let out = inflate(&bytes[2..bytes.len() - 4], most)?;
     let trailer = u32::from_be_bytes([
         bytes[bytes.len() - 4],
         bytes[bytes.len() - 3],
@@ -311,9 +328,15 @@ mod tests {
 
     #[test]
     fn inflates_stored_fixed_and_dynamic_blocks() {
-        assert_eq!(unzlib(ZLIB_STORED).unwrap(), b"stored bytes here");
-        assert_eq!(unzlib(ZLIB_FIXED).unwrap(), b"abcabcabcabcabcabc");
-        let text = unzlib(ZLIB_TEXT).unwrap();
+        assert_eq!(
+            unzlib(ZLIB_STORED, usize::MAX).unwrap(),
+            b"stored bytes here"
+        );
+        assert_eq!(
+            unzlib(ZLIB_FIXED, usize::MAX).unwrap(),
+            b"abcabcabcabcabcabc"
+        );
+        let text = unzlib(ZLIB_TEXT, usize::MAX).unwrap();
         assert_eq!(text.len(), 2016);
         assert!(text.starts_with(b"the quick brown fox"));
         assert_eq!(
@@ -323,13 +346,16 @@ mod tests {
         let mut broken = ZLIB_TEXT.to_vec();
         let last = broken.len() - 1;
         broken[last] ^= 1;
-        assert!(matches!(unzlib(&broken), Err(InflateError::Checksum)));
+        assert!(matches!(
+            unzlib(&broken, usize::MAX),
+            Err(InflateError::Checksum)
+        ));
     }
 
     #[test]
     fn stored_streams_round_trip() {
         let data: Vec<u8> = (0..70000u32).map(|i| (i * 7) as u8).collect();
-        assert_eq!(unzlib(&zlib_stored(&data)).unwrap(), data);
-        assert_eq!(unzlib(&zlib_stored(b"")).unwrap(), b"");
+        assert_eq!(unzlib(&zlib_stored(&data), usize::MAX).unwrap(), data);
+        assert_eq!(unzlib(&zlib_stored(b""), usize::MAX).unwrap(), b"");
     }
 }
