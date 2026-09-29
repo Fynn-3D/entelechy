@@ -184,7 +184,8 @@ by their path, `title.advances`, so a scene that places one does not read
 back from it), the published Kernels with
 their generations, and the plan: the groups that execute, in order, with
 the producers each absorbed. Fusion inlines a pointwise producer into its
-only reader over the same domain; `--no-fusion` turns it off.
+only reader over the same domain, at most 64 nodes to a group, so a long
+chain fuses into several; `--no-fusion` turns it off.
 
 ## Measure a scene
 

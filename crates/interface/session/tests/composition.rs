@@ -875,6 +875,56 @@ fn outputs_state_sources_and_shared_producers_stay_materialized() {
 }
 
 #[test]
+fn a_long_pointwise_chain_fuses_into_groups_of_bounded_size() {
+    let mut runtime = runtime();
+    // A gradient and 199 inversions: 200 pointwise nodes in a line.
+    let mut scene = String::from("node n0: image.gradient@1 { domain = vec2(4, 2); }\n");
+    for i in 1..200 {
+        scene.push_str(&format!(
+            "node n{i}: image.invert@1 {{ source <- n{}.result; }}\n",
+            i - 1
+        ));
+    }
+    scene.push_str("output result <- n199.result;\n");
+    let graph = orla_scene::parse(&scene).unwrap();
+    let mut plain = Evaluator::new();
+    plain.set_fusion(false);
+    let reference = plain
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    let expected = pixels(&runtime, reference.output);
+    plain.clear(&mut runtime);
+    let mut fused = Evaluator::new();
+    let report = fused
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert_eq!(pixels(&runtime, report.output), expected, "bit-identical");
+    // 200 nodes in groups of at most 64: four groups, none larger.
+    assert_eq!(report.executed.len(), 4, "{:?}", report.executed);
+    assert!(
+        report.fused.iter().all(|(_, absorbed)| absorbed.len() < 64),
+        "{:?}",
+        report
+            .fused
+            .iter()
+            .map(|(_, a)| a.len())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn fusion_prepares_on_the_worker_and_never_changes_a_pixel() {
     let mut runtime = runtime();
     runtime.set_background(true);

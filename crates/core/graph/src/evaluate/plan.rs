@@ -4,6 +4,9 @@
 
 use super::*;
 
+/// The most nodes one fused group holds.
+pub(super) const MAX_FUSED: usize = 64;
+
 impl Evaluator {
     /// The order `graph` runs in, kept while the graph is the one before.
     /// A changed graph forgets the plan made for the one before, so a plan
@@ -267,6 +270,11 @@ impl Evaluator {
                     continue;
                 }
                 let producer = &groups[producer_position];
+                // A fused group holds a bounded number of nodes, so a long
+                // chain fuses into several, each compiled in bounded time.
+                if consumer.parts.len() + producer.parts.len() > MAX_FUSED {
+                    continue;
+                }
                 let mut parts = consumer.parts.clone();
                 parts.extend(producer.parts.iter().cloned());
                 let pairs: Vec<(u32, u32)> = links.iter().map(|link| (link.1, link.2)).collect();
@@ -302,11 +310,11 @@ impl Evaluator {
                     inputs.remove(linked);
                 }
                 for (name, binding) in &producer.node.inputs {
-                    inputs.insert(format!("{prefix}/{name}"), binding.clone());
+                    inputs.insert(orla_ir::fused_name(&prefix, name), binding.clone());
                 }
                 let mut params = consumer.node.params.clone();
                 for (name, value) in &producer.node.params {
-                    params.insert(format!("{prefix}/{name}"), value.clone());
+                    params.insert(orla_ir::fused_name(&prefix, name), value.clone());
                 }
                 let producer_params: Vec<String> = producer
                     .manifest()

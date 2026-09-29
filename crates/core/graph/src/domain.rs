@@ -152,9 +152,10 @@ impl DomainExpr {
     }
 
     /// The expression on a fused node: ports and this Kernel's parameter
-    /// names under `prefix/name`; graph parameter names stay.
+    /// names as [`orla_ir::fused_name`] qualifies them; graph parameter
+    /// names stay.
     pub fn renamed(&self, prefix: &str, params: &[String]) -> Self {
-        let rename = |name: &String| format!("{prefix}/{name}");
+        let rename = |name: &String| orla_ir::fused_name(prefix, name);
         let inner = |parts: &[Self]| -> Vec<Self> {
             parts
                 .iter()

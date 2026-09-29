@@ -102,6 +102,18 @@ pub fn samples_only(module: &Module, input: u32) -> bool {
     use_.sampled && !use_.addressed
 }
 
+/// A name the producer brings into a fused Kernel: `prefix/name`, or the
+/// name as it is when an earlier fusion already qualified it with its own
+/// node's (no written name holds a `/`), so names stay short however long
+/// a chain fuses and stay unique, each qualified once by its node.
+pub fn fused_name(prefix: &str, name: &str) -> String {
+    if name.contains('/') {
+        name.to_owned()
+    } else {
+        format!("{prefix}/{name}")
+    }
+}
+
 /// Fuses `producer` into `consumer` at the consumer's `input`, which reads
 /// the producer's first output: [`fuse_outputs`] with one link.
 pub fn fuse(
@@ -117,7 +129,7 @@ pub fn fuse(
 /// consumer input to a producer output; every sample of that input becomes
 /// the producer's value for it. Unread producer outputs are computed and
 /// dropped. The fused manifest keeps the consumer's other inputs and params,
-/// then the producer's, renamed `prefix/name`.
+/// then the producer's, renamed by [`fused_name`].
 pub fn fuse_outputs(
     consumer: &Module,
     links: &[(u32, u32)],
@@ -188,7 +200,7 @@ pub fn fuse_outputs(
     let kept_inputs = (consumer_manifest.inputs.len() - removed.len()) as u32;
     let consumer_params = consumer_manifest.params.len() as u32;
     let consumer_functions = consumer.functions.len() as u32;
-    let rename = |name: &str| format!("{prefix}/{name}");
+    let rename = |name: &str| fused_name(prefix, name);
 
     // The producer's structs join the consumer's table once each, so a
     // spliced element carries the consumer's own struct and types match.
