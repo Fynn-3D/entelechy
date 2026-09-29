@@ -142,6 +142,14 @@ impl Builder<'_> {
                 Ok(self.emit(ty, Op::Binary(op, left, right)))
             }
             ExprKind::Member(inner, member) => {
+                // An enum's variant, `Phase.Walk`, is its `Int`.
+                if let ExprKind::Name(name) = &inner.kind
+                    && !self.binds(name)
+                    && self.shared.structs.variants(name).is_some()
+                {
+                    let value = super::variant_of(self.shared.structs, name, member, expr.span)?;
+                    return Ok(self.emit(Type::Int, Op::Const(Value::Int(value))));
+                }
                 let inner = self.value(inner)?;
                 let ty = self.ty(inner);
                 if let Type::Struct(index) = ty {
@@ -546,19 +554,10 @@ impl Builder<'_> {
                     ));
                 }
                 let id = self.reserve(Type::Int);
-                let mut seen: std::collections::BTreeMap<i32, Span> =
-                    std::collections::BTreeMap::new();
+                let (arms, otherwise) = self.arms(arms, otherwise.as_deref(), expr.span)?;
                 let mut blocks = Vec::with_capacity(arms.len());
-                for arm in arms {
-                    for value in &arm.values {
-                        if seen.insert(value.value, value.span).is_some() {
-                            return Err(semantic(
-                                value.span,
-                                format!("`match` already has an arm for {}", value.value),
-                            ));
-                        }
-                    }
-                    blocks.push(self.nested(&arm.body)?);
+                for (_, body) in &arms {
+                    blocks.push(self.nested(body)?);
                 }
                 let mut otherwise_block = self.nested(otherwise)?;
                 {
@@ -571,13 +570,13 @@ impl Builder<'_> {
                 }
                 let mut lowered = Vec::with_capacity(arms.len());
                 let mut ty: Option<(Type, Span)> = None;
-                for (arm, block) in arms.iter().zip(blocks) {
+                for ((values, body), block) in arms.into_iter().zip(blocks) {
                     let arm_ty = self.ty(block.result);
                     if let Some((first, _)) = ty
                         && first != arm_ty
                     {
                         return Err(semantic(
-                            arm.body.result.span,
+                            body.result.span,
                             format!(
                                 "`match` arms give {} and {}; they must agree",
                                 self.describe(first),
@@ -585,8 +584,8 @@ impl Builder<'_> {
                             ),
                         ));
                     }
-                    ty = Some((arm_ty, arm.body.result.span));
-                    lowered.push((arm.values.iter().map(|v| v.value).collect(), block));
+                    ty = Some((arm_ty, body.result.span));
+                    lowered.push((values, block));
                 }
                 let otherwise_ty = self.ty(otherwise_block.result);
                 if let Some((first, _)) = ty
@@ -890,20 +889,11 @@ impl Builder<'_> {
                     ));
                 }
                 let id = self.reserve(pair);
-                let mut seen: std::collections::BTreeMap<i32, Span> =
-                    std::collections::BTreeMap::new();
+                let (arms, otherwise) = self.arms(arms, otherwise.as_deref(), expr.span)?;
                 let mut lowered = Vec::with_capacity(arms.len());
-                for arm in arms {
-                    for value in &arm.values {
-                        if seen.insert(value.value, value.span).is_some() {
-                            return Err(semantic(
-                                value.span,
-                                format!("`match` already has an arm for {}", value.value),
-                            ));
-                        }
-                    }
-                    let block = self.nested_with_break(&arm.body, carried, pair)?;
-                    lowered.push((arm.values.iter().map(|v| v.value).collect(), block));
+                for (values, body) in arms {
+                    let block = self.nested_with_break(body, carried, pair)?;
+                    lowered.push((values, block));
                 }
                 let otherwise_block = self.nested_with_break(otherwise, carried, pair)?;
                 Ok(self.place(
@@ -932,6 +922,93 @@ impl Builder<'_> {
                 Ok(self.emit(pair, Op::Construct(vec![id, running])))
             }
         }
+    }
+
+    /// A `match`'s arms, each with the values it takes, and the block a
+    /// value no arm takes runs: the `_` arm, or, where the arms name every
+    /// variant of one enum, the last arm, which takes the values that are
+    /// no variant too. A value taken twice, and a variant left out, are
+    /// refused.
+    #[allow(clippy::type_complexity)]
+    fn arms<'m>(
+        &self,
+        arms: &'m [orla_language::MatchArm],
+        otherwise: Option<&'m Block>,
+        span: Span,
+    ) -> Result<(Vec<(Vec<i32>, &'m Block)>, &'m Block), CompileError> {
+        let mut seen = std::collections::BTreeSet::new();
+        // The enum the arms name.
+        let mut named: Option<&str> = None;
+        let mut resolved = Vec::with_capacity(arms.len());
+        for arm in arms {
+            let mut values: Vec<(i32, Span, String)> = arm
+                .values
+                .iter()
+                .map(|value| (value.value, value.span, value.value.to_string()))
+                .collect();
+            for (name, variant) in &arm.variants {
+                if let Some(first) = named
+                    && first != name.value
+                {
+                    return Err(semantic(
+                        name.span,
+                        format!(
+                            "a `match` names the variants of one enum, and these are of `{first}` and `{}`",
+                            name.value
+                        ),
+                    ));
+                }
+                named = Some(&name.value);
+                let value = super::variant_of(
+                    self.shared.structs,
+                    &name.value,
+                    &variant.value,
+                    variant.span,
+                )?;
+                values.push((
+                    value,
+                    variant.span,
+                    format!("{}.{}", name.value, variant.value),
+                ));
+            }
+            for (value, span, written) in &values {
+                if !seen.insert(*value) {
+                    return Err(semantic(
+                        *span,
+                        format!("`match` already has an arm for {written}"),
+                    ));
+                }
+            }
+            resolved.push((
+                values.into_iter().map(|(value, ..)| value).collect(),
+                &arm.body,
+            ));
+        }
+        if let Some(otherwise) = otherwise {
+            return Ok((resolved, otherwise));
+        }
+        let name = named.expect("the parser keeps a `_` arm where no arm names a variant");
+        let variants = self
+            .shared
+            .structs
+            .variants(name)
+            .expect("its variants were found above");
+        let missing: Vec<String> = variants
+            .iter()
+            .filter(|(_, number)| !seen.contains(number))
+            .map(|(variant, _)| format!("`{name}.{variant}`"))
+            .collect();
+        if !missing.is_empty() {
+            return Err(semantic(
+                span,
+                format!(
+                    "this `match` leaves out {}; name every variant, or end with `_ => ...`",
+                    missing.join(", ")
+                ),
+            ));
+        }
+        let (_, last) = resolved.pop().expect("a `match` has an arm");
+        Ok((resolved, last))
     }
 
     /// A constant truth-value block: the settled arm of `&&` or `||`.
@@ -989,7 +1066,9 @@ fn breaks(block: &Block) -> bool {
             } => breaks(then) || breaks(otherwise),
             ExprKind::Match {
                 arms, otherwise, ..
-            } => arms.iter().any(|arm| breaks(&arm.body)) || breaks(otherwise),
+            } => {
+                arms.iter().any(|arm| breaks(&arm.body)) || otherwise.as_deref().is_some_and(breaks)
+            }
             _ => false,
         }
     }

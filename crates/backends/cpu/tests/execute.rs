@@ -1304,3 +1304,41 @@ fn summed(
     let outputs = backend.execute(prepared.as_ref(), &module, &invocation, &mut scope)?;
     Ok(scope.values(outputs[0])?.into_owned())
 }
+
+/// An enum's variants are the `Int`s of their positions; a `match` naming
+/// every variant gives a value that is none of them its last arm.
+#[test]
+fn enums_name_ints_and_a_full_match_ends_in_its_last_arm() {
+    let module = compile(
+        "kernel test.moods@1 { requires { field.write; } output result: Rows<Int>;
+            type Mood = enum { Calm, Wary, Angry };
+            struct Tag { mood: Mood; weight: Int; }
+            param start: Mood = Mood.Wary;
+            fn louder(m: Mood) -> Mood { return match m { Mood.Calm => Mood.Wary, Mood.Wary | Mood.Angry => Mood.Angry }; }
+            compute {
+                let m = element();
+                let named = match m { Mood.Calm => 10, Mood.Wary => 20, Mood.Angry => 30 };
+                let tag = Tag { mood: louder(m), weight: start };
+                return named + tag.mood * 100 + tag.weight * 1000;
+            } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(module.manifest.params[0].default, Value::Int(1));
+    let mut host = Host::new(64);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![Value::Int(1)],
+        domain: Domain::Rows(5),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let out = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    let words = host.data(out).unwrap().storage().to_vec();
+    // Elements 3 and 4 are no variant: each `match` takes its last arm.
+    assert_eq!(
+        words,
+        [1110, 1220, 1230, 1230, 1230].map(|word: i32| word as u32)
+    );
+}

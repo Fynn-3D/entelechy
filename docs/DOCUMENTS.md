@@ -156,9 +156,19 @@ Inside `compute`, a body is `let` bindings and a result.
   would return on some paths and go on past the arm on others: join the
   conditions, `if a && b { return x; }`, or give the inner `if` an `else`.
 - **`match`.** `match i { 0 => a, 1 | 2 => { let x = ..; x }, 8..16 => c,
-  16..=31 => d, _ => b }` on an `Int`. The `_` arm is required and last;
+  16..=31 => d, _ => b }` on an `Int`. The `_` arm comes last;
   a range `..` stops before its end, `..=` takes it, at most 256 values;
-  no value in two arms; every arm the same type.
+  no value in two arms; every arm the same type. Arms that name every
+  variant of an enum need no `_`; a value that is no variant takes the
+  last arm.
+- **Enums.** `type Mode = enum { Idle, Walk, Attack = 10, Guard };` names
+  `Int`s: a variant is the number written after it, else one past the
+  variant before it, the first 0 (`Mode.Guard` is 11), and no two are one
+  number. `Mode.Walk` is its `Int`; `Mode` is a type a value, a field, a
+  port's element and a parameter may have, and it is an `Int` there. A
+  `match` naming variants names them all or ends with `_`. A variant whose
+  number is kept, in a memory or a file, is written with it, so a variant
+  written before it does not move it.
 - **`loop`.** `loop n with x = init until done { next }` is an
   expression. A nested loop reads its enclosing loops' carried values,
   and a scan's step its own, by name. The count is a literal (its bound)

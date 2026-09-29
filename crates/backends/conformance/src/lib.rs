@@ -100,6 +100,13 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
             "Out { f: a * 2.0 + vx + vy, i: tally, b: on, v: vec3(c.a, float(c.b), 0.0) }",
         ),
         (
+            // An enum's variants are its `Int`s; a `match` naming every
+            // variant gives a value that is none of them its last arm.
+            "enums",
+            "let m = if i % 5 == 4 { 9 } else { i % 3 }; let named = match m { Mood.Calm => 10, Mood.Wary | Mood.Angry => 20 + m }; let stepped = next(next(m)); let tagged = Tag { mood: Mood.Angry, n: i };",
+            "Out { f: float(named), i: named + stepped * 100 + start * 1000 + tagged.mood, b: m == Mood.Angry, v: vec3(0.0, 0.0, 0.0) }",
+        ),
+        (
             "if chain",
             "let g = if x < 1.0 { 1 } else if x < 3.0 { let mid = i * 2; mid } else { 3 };",
             "Out { f: if g == 1 { x } else { -x }, i: g, b: g == 3, v: vec3(0.0, 0.0, 0.0) }",
@@ -313,6 +320,10 @@ const HEAD: &str = "requires { field.read; field.write; input.read; time.read; }
     fn twice<T>(value: T) -> T { return value + value; }
     fn pick<T>(a: T, b: T, first: Bool) -> T { return if first { a } else { b }; }
     fn width<T>(value: T) -> Int { let doubled = twice(value); return int(doubled == twice(value)); }
+    type Mood = enum { Calm, Wary, Angry };
+    struct Tag { mood: Mood; n: Int; }
+    param start: Mood = Mood.Wary;
+    fn next(m: Mood) -> Mood { return match m { Mood.Calm => Mood.Wary, Mood.Wary => Mood.Angry, Mood.Angry => Mood.Calm }; }
 ";
 
 const ENV: &str =
@@ -510,6 +521,8 @@ fn params() -> Vec<Value> {
             Value::Int(8),
             Value::Int(1),
         ]),
+        // `start`, a `Mood`: `Angry`, not the default.
+        Value::Int(2),
     ]
 }
 

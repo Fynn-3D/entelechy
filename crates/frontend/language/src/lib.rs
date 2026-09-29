@@ -484,6 +484,25 @@ pub struct TypeAlias {
     pub target: Spanned<String>,
 }
 
+impl TypeAlias {
+    /// The variants an `enum` names, in order, each with its number;
+    /// `None` for a port type.
+    pub fn variants(&self) -> Option<Vec<(&str, i32)>> {
+        let inner = self
+            .target
+            .value
+            .strip_prefix("enum {")?
+            .strip_suffix('}')?;
+        inner
+            .split(',')
+            .map(|variant| {
+                let (name, number) = variant.split_once('=')?;
+                Some((name.trim(), number.trim().parse().ok()?))
+            })
+            .collect()
+    }
+}
+
 /// `struct Name { field: Type; ... }`
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StructDecl {
@@ -727,14 +746,16 @@ pub enum ExprKind {
         /// Block taken otherwise.
         otherwise: Box<Block>,
     },
-    /// `match value { 1 => a, 2 | 3 => { ... }, _ => b }` on an `Int`.
+    /// `match value { 1 => a, 2 | 3 => { ... }, _ => b }` on an `Int`, or
+    /// `match phase { Phase.Idle => a, Phase.Walk => b }` naming an enum's
+    /// variants.
     Match {
         /// The `Int` matched.
         scrutinee: Box<Expr>,
         /// The arms in order, each with the values it takes.
         arms: Vec<MatchArm>,
-        /// The `_` arm.
-        otherwise: Box<Block>,
+        /// The `_` arm; none where every arm names variants.
+        otherwise: Option<Box<Block>>,
     },
     /// `break expr;` in a loop body: the loop ends after this iteration
     /// with that value.
@@ -759,6 +780,8 @@ pub enum ExprKind {
 pub struct MatchArm {
     /// The `Int` values, as written, `1 | 2 | 3`.
     pub values: Vec<Spanned<i32>>,
+    /// The variants named, `Phase.Idle | Phase.Walk`, as enum and variant.
+    pub variants: Vec<(Spanned<String>, Spanned<String>)>,
     /// The arm's block: `{ lets; value }`, or a bare expression.
     pub body: Block,
 }

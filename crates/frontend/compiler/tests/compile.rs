@@ -1633,3 +1633,90 @@ fn broken(x: Float) -> Float { return x * nope; }",
     orla_compiler::check_functions(&fine, (&[], &[], &[]))
         .unwrap_or_else(|e| panic!("a capability is its callers': {e}"));
 }
+
+/// An enum names `Int`s: a type a value, a field, a port's element and a
+/// parameter may have, declared once for every Kernel of a document; a
+/// `match` naming its variants names every one or ends with `_`.
+#[test]
+fn an_enum_names_its_variants_and_a_match_names_them_all() {
+    let source = "type Mood = enum { Calm, Wary, Angry };
+        struct Tag { mood: Mood; }
+        kernel t.first@1 { requires { field.write; } param start: Mood = Mood.Angry; output r: Rows<Mood>; compute { return start; } }
+        kernel t.second@1 { requires { field.read; field.write; } input moods: Rows<Mood>; output r: Rows<Int>;
+            compute { let tag = Tag { mood: sample(moods) }; return match tag.mood { Mood.Calm => 1, Mood.Wary => 2, Mood.Angry => 3 }; } }";
+    let document = orla_language::parse_document(source).unwrap();
+    for kernel in &document.kernels {
+        orla_compiler::compile_kernel(kernel, None).unwrap_or_else(|error| panic!("{error}"));
+    }
+    let first = orla_compiler::compile_kernel(&document.kernels[0], None).unwrap();
+    assert_eq!(first.manifest.params[0].default, orla_ir::Value::Int(2));
+    assert_eq!(first.manifest.outputs[0].element(), Type::Int);
+
+    let kernel = |body: &str| {
+        format!(
+            "kernel t.k@1 {{ requires {{ field.write; }} type Mood = enum {{ Calm, Wary, Angry }}; type Hue = enum {{ Red, Blue }}; output r: Rows<Int>; compute {{ let m = element(); {body} }} }}"
+        )
+    };
+    let refused = |body: &str| compile(&kernel(body)).unwrap_err().to_string();
+    let said = refused("return match m { Mood.Calm => 1, Mood.Angry => 3 };");
+    assert!(said.contains("leaves out `Mood.Wary`"), "{said}");
+    let said = refused("return Mood.Wery;");
+    assert!(
+        said.contains("no variant `Wery`") && said.contains("Wary"),
+        "{said}"
+    );
+    let said = refused("return match m { Mood.Calm => 1, Hue.Red => 2, _ => 0 };");
+    assert!(said.contains("one enum"), "{said}");
+    let said = refused("return match m { Mood.Calm | Mood.Calm => 1, _ => 0 };");
+    assert!(said.contains("already has an arm for Mood.Calm"), "{said}");
+    // Arms naming numbers still end with `_`.
+    let said = refused("return match m { 0 => 1, 1 => 2 };");
+    assert!(said.contains("`_ => ...`"), "{said}");
+    // With `_`, a match may name some variants and numbers beside them.
+    compile(&kernel(
+        "return match m { Mood.Calm => 1, 7 => 2, _ => 0 };",
+    ))
+    .unwrap_or_else(|error| panic!("{error}"));
+    let said = compile("kernel t.k@1 { requires { field.write; } type Mood = enum { Calm, calm }; output r: Rows<Int>; compute { return 0; } }")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        said.contains("must start with an uppercase letter"),
+        "{said}"
+    );
+    let said = compile("kernel t.k@1 { requires { field.write; } type Mood = enum { Calm }; struct Mood { a: Int; } output r: Rows<Int>; compute { return 0; } }")
+        .unwrap_err()
+        .to_string();
+    assert!(said.contains("already an enum"), "{said}");
+}
+
+/// A variant is the number written after it, else one past the variant
+/// before it, the first 0; two variants are never one number.
+#[test]
+fn a_variant_is_its_written_number_or_one_past_the_last() {
+    let module = compile(
+        "kernel t.k@1 { requires { field.write; } type Mode = enum { Idle, Walk, Attack = 10, Guard }; type Level = enum { Low = -1, Mid, High };
+            param a: Mode = Mode.Walk; param b: Mode = Mode.Guard; param c: Level = Level.Mid; param d: Level = Level.Low;
+            output r: Rows<Int>; compute { return match element() { Mode.Idle => a, Mode.Walk => b, Mode.Attack | Mode.Guard => c + d }; } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let defaults: Vec<_> = module
+        .manifest
+        .params
+        .iter()
+        .map(|p| p.default.clone())
+        .collect();
+    assert_eq!(defaults, [1, 11, 0, -1].map(orla_ir::Value::Int).to_vec());
+    let said = compile(
+        "kernel t.k@1 { requires { field.write; } type Mode = enum { A = 1, B = 0, C }; output r: Rows<Int>; compute { return 0; } }",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(said.contains("`C` is 1, as `A` is"), "{said}");
+    let said = compile(
+        "kernel t.k@1 { requires { field.write; } type Mode = enum { A, B, A = 5 }; output r: Rows<Int>; compute { return 0; } }",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(said.contains("`A` is named twice"), "{said}");
+}

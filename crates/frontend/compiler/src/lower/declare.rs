@@ -14,14 +14,55 @@ use crate::CompileError;
 
 use super::{Structs, describe, resolve_type, semantic};
 
+/// The Kernel's declared types: its enums, then its structs, whose fields
+/// may hold an enum.
 pub(super) fn structs(kernel: &Kernel) -> Result<Structs, CompileError> {
-    struct_table(&kernel.structs)
+    let structs = Structs::default();
+    for decl in &kernel.types {
+        let Some(variants) = decl.variants() else {
+            continue;
+        };
+        let name = &decl.name.value;
+        if name == "Image" || Type::from_str(name).is_ok() {
+            return Err(semantic(
+                decl.name.span,
+                format!("`{name}` is already a type name"),
+            ));
+        }
+        if structs.variants(name).is_some() {
+            return Err(semantic(
+                decl.name.span,
+                format!("type `{name}` is defined twice"),
+            ));
+        }
+        structs.enums.borrow_mut().push((
+            name.clone(),
+            variants
+                .into_iter()
+                .map(|(variant, number)| (variant.to_owned(), number))
+                .collect(),
+        ));
+    }
+    struct_table_in(structs, &kernel.structs)
 }
 
 /// The struct table the declarations make, in order.
 pub(super) fn struct_table(decls: &[orla_language::StructDecl]) -> Result<Structs, CompileError> {
-    let structs = Structs::default();
+    struct_table_in(Structs::default(), decls)
+}
+
+/// `structs` with the declared structs appended, in order.
+fn struct_table_in(
+    structs: Structs,
+    decls: &[orla_language::StructDecl],
+) -> Result<Structs, CompileError> {
     for decl in decls {
+        if structs.variants(&decl.name.value).is_some() {
+            return Err(semantic(
+                decl.name.span,
+                format!("`{}` is already an enum", decl.name.value),
+            ));
+        }
         if structs.find(&decl.name.value).is_some() {
             return Err(semantic(
                 decl.name.span,
@@ -526,6 +567,16 @@ pub(super) fn aliases(
     let mut aliases: Vec<(String, PortType)> = Vec::new();
     for decl in &kernel.types {
         let name = &decl.name.value;
+        // An enum is a value's type, among the structs.
+        if decl.variants().is_some() {
+            continue;
+        }
+        if structs.variants(name).is_some() {
+            return Err(semantic(
+                decl.name.span,
+                format!("type `{name}` is defined twice"),
+            ));
+        }
         if name == "Image"
             || Type::from_str(name).is_ok()
             || structs.borrow().iter().any(|s| &s.name == name)
@@ -847,7 +898,11 @@ pub(super) fn manifest(
         .map(|decl| {
             // Any Kernel value type crosses as its words.
             let ty = resolve_type(&decl.ty, structs)?;
-            let default = constant(&decl.default, ty, &structs.borrow())?;
+            let default = constant(
+                &with_variants(&decl.default, structs)?,
+                ty,
+                &structs.borrow(),
+            )?;
             Ok::<_, CompileError>(Param {
                 name: decl.name.value.clone(),
                 ty,
@@ -935,5 +990,46 @@ pub(super) fn constant(
             };
             format!("{article} {name} default must be a literal of that type; `{value}` is not")
         })
+    })
+}
+
+/// `expr` with each enum variant it names (`Phase.Walk`) written as its
+/// `Int`, as a parameter's default takes it.
+fn with_variants(expr: &Expr, structs: &Structs) -> Result<Expr, CompileError> {
+    let each = |exprs: &[Expr]| -> Result<Vec<Expr>, CompileError> {
+        exprs
+            .iter()
+            .map(|expr| with_variants(expr, structs))
+            .collect()
+    };
+    let kind = match &expr.kind {
+        ExprKind::Member(base, variant) => match &base.kind {
+            ExprKind::Name(name) if structs.variants(name).is_some() => ExprKind::Int(i64::from(
+                super::variant_of(structs, name, variant, expr.span)?,
+            )),
+            _ => expr.kind.clone(),
+        },
+        ExprKind::Neg(inner) => ExprKind::Neg(Box::new(with_variants(inner, structs)?)),
+        ExprKind::Array(elements) => ExprKind::Array(each(elements)?),
+        ExprKind::Repeat(element, count) => {
+            ExprKind::Repeat(Box::new(with_variants(element, structs)?), count.clone())
+        }
+        ExprKind::Call(name, args) => ExprKind::Call(name.clone(), each(args)?),
+        ExprKind::Struct { name, base, fields } => ExprKind::Struct {
+            name: name.clone(),
+            base: match base {
+                Some(base) => Some(Box::new(with_variants(base, structs)?)),
+                None => None,
+            },
+            fields: fields
+                .iter()
+                .map(|(field, value)| Ok((field.clone(), with_variants(value, structs)?)))
+                .collect::<Result<_, CompileError>>()?,
+        },
+        other => other.clone(),
+    };
+    Ok(Expr {
+        kind,
+        span: expr.span,
     })
 }

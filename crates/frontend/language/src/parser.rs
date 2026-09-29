@@ -697,9 +697,85 @@ impl Parser {
             });
         }
         self.expect_punct("=")?;
-        let target = self.port_type()?;
+        let target = if self.is_keyword("enum") {
+            self.enum_variants()?
+        } else {
+            self.port_type()?
+        };
         self.expect_punct(";")?;
         Ok(TypeAlias { name, target })
+    }
+
+    /// `enum { Idle, Walk, Attack }`: named values, kept as the text
+    /// `enum { Idle, Walk, Attack }`. Each variant is a name starting with
+    /// an uppercase letter, named once.
+    fn enum_variants(&mut self) -> Result<Spanned<String>, ParseError> {
+        let span = self.span();
+        self.next();
+        self.expect_punct("{")?;
+        let mut variants: Vec<(String, i32)> = Vec::new();
+        while !self.is_punct("}") {
+            let variant = self.ident("a variant's name")?;
+            if !variant.value.starts_with(|c: char| c.is_ascii_uppercase()) {
+                return Err(ParseError {
+                    span: variant.span,
+                    message: format!(
+                        "variant `{}` must start with an uppercase letter",
+                        variant.value
+                    ),
+                });
+            }
+            if variants.iter().any(|(name, _)| *name == variant.value) {
+                return Err(ParseError {
+                    span: variant.span,
+                    message: format!("variant `{}` is named twice", variant.value),
+                });
+            }
+            // Its number as written, else one past the variant before it.
+            let (number, at) = if self.eat_punct("=") {
+                self.arm_value()?
+            } else {
+                let after = match variants.last() {
+                    Some((_, before)) => before.checked_add(1).ok_or_else(|| ParseError {
+                        span: variant.span,
+                        message: format!(
+                            "variant `{}` would be one past the largest Int; write its number",
+                            variant.value
+                        ),
+                    })?,
+                    None => 0,
+                };
+                (after, variant.span)
+            };
+            if let Some((other, _)) = variants.iter().find(|(_, taken)| *taken == number) {
+                return Err(ParseError {
+                    span: at,
+                    message: format!(
+                        "variant `{}` is {number}, as `{other}` is; each variant is its own number",
+                        variant.value
+                    ),
+                });
+            }
+            variants.push((variant.value, number));
+            if !self.eat_punct(",") && !self.is_punct("}") {
+                return Err(self.unexpected("`,` between variants"));
+            }
+        }
+        self.next();
+        if variants.is_empty() {
+            return Err(ParseError {
+                span,
+                message: "an enum names at least one variant".into(),
+            });
+        }
+        let written: Vec<String> = variants
+            .iter()
+            .map(|(name, number)| format!("{name} = {number}"))
+            .collect();
+        Ok(Spanned {
+            value: format!("enum {{ {} }}", written.join(", ")),
+            span,
+        })
     }
 
     /// A port type as written (`Name`, `Name<Element>`) or a value type
@@ -1291,6 +1367,23 @@ impl Parser {
         Ok(())
     }
 
+    /// Whether a `match` arm names an enum's variant next: `Phase.Walk`.
+    fn is_variant(&self) -> bool {
+        matches!(self.peek(), Token::Ident(name) if name != "_")
+            && self
+                .tokens
+                .get(self.position + 1)
+                .is_some_and(|next| next.token == Token::Punct("."))
+    }
+
+    /// An enum's variant as a `match` arm names it: `Phase.Walk`.
+    fn variant(&mut self) -> Result<(Spanned<String>, Spanned<String>), ParseError> {
+        let name = self.ident("an enum's name")?;
+        self.expect_punct(".")?;
+        let variant = self.ident("a variant's name")?;
+        Ok((name, variant))
+    }
+
     /// An integer as a `match` arm writes it, `7` or `-1`.
     fn arm_value(&mut self) -> Result<(i32, Span), ParseError> {
         let negative = self.eat_punct("-");
@@ -1306,7 +1399,7 @@ impl Parser {
             (token, span) => Err(ParseError {
                 span,
                 message: format!(
-                    "a `match` arm takes integer values, a range of them, or `_`, found {}",
+                    "a `match` arm takes integer values, a range of them, an enum's variants (`Phase.Walk`), or `_`, found {}",
                     token.describe()
                 ),
             }),
@@ -1872,30 +1965,46 @@ impl Parser {
                         let body = self.arm_body()?;
                         self.eat_punct(",");
                         self.expect_punct("}")?;
-                        break body;
+                        break Some(Box::new(body));
                     }
                     let mut values = Vec::new();
+                    let mut variants = Vec::new();
                     loop {
-                        self.arm_values(&mut values)?;
+                        if self.is_variant() {
+                            variants.push(self.variant()?);
+                        } else {
+                            self.arm_values(&mut values)?;
+                        }
                         if !self.eat_punct("|") {
                             break;
                         }
                     }
                     self.expect_punct("=>")?;
                     let body = self.arm_body()?;
-                    arms.push(MatchArm { values, body });
+                    arms.push(MatchArm {
+                        values,
+                        variants,
+                        body,
+                    });
                     if !self.eat_punct(",") && !self.is_punct("}") {
                         return Err(self.unexpected("`,` between `match` arms"));
                     }
                     if self.is_punct("}") {
-                        return Err(self.error("a `match` ends with a `_ => ...` arm"));
+                        // Arms naming only variants may name them all.
+                        if arms.iter().all(|arm| arm.values.is_empty()) {
+                            self.next();
+                            break None;
+                        }
+                        return Err(self.error(
+                            "a `match` ends with a `_ => ...` arm, unless its arms name an enum's variants",
+                        ));
                     }
                 };
                 Ok(Expr {
                     kind: ExprKind::Match {
                         scrutinee: Box::new(scrutinee),
                         arms,
-                        otherwise: Box::new(otherwise),
+                        otherwise,
                     },
                     span,
                 })
@@ -2270,7 +2379,11 @@ kernel image.grayscale@1 {
             [1, -2]
         );
         assert_eq!(arms[1].body.lets.len(), 1);
-        assert!(otherwise.lets.is_empty());
+        assert!(
+            otherwise
+                .as_ref()
+                .is_some_and(|block| block.lets.is_empty())
+        );
         let error =
             parse("kernel t.k@1 { compute { return match 1 { 0 => 1, 2 => 3 }; } }").unwrap_err();
         assert!(error.message.contains("`_ => ...`"), "{}", error.message);

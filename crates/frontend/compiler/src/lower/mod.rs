@@ -58,6 +58,9 @@ fn parse_type(name: &Spanned<String>) -> Result<Type, CompileError> {
     })
 }
 
+/// An enum's variants in order, each with the `Int` it is.
+type Variants = Vec<(String, i32)>;
+
 /// The struct table while a Kernel lowers: declared structs, then every
 /// array type met, `[T; N]` interned once by element and count.
 /// The struct table while a Kernel lowers, with its names indexed: a
@@ -68,6 +71,9 @@ struct Structs {
     table: RefCell<Vec<StructDef>>,
     index: RefCell<std::collections::HashMap<String, u32>>,
     indexed: std::cell::Cell<usize>,
+    /// The declared enums, each with its variants in order and the `Int`
+    /// each is.
+    enums: RefCell<Vec<(String, Variants)>>,
 }
 
 impl std::ops::Deref for Structs {
@@ -84,6 +90,15 @@ impl Structs {
         self.table.into_inner()
     }
 
+    /// The variants of the enum named `name`, when one is declared.
+    fn variants(&self, name: &str) -> Option<Variants> {
+        self.enums
+            .borrow()
+            .iter()
+            .find(|(declared, _)| declared == name)
+            .map(|(_, variants)| variants.clone())
+    }
+
     /// The struct named `name`, the first of the name.
     fn find(&self, name: &str) -> Option<u32> {
         let table = self.table.borrow();
@@ -94,6 +109,34 @@ impl Structs {
         self.indexed.set(table.len());
         index.get(name).copied()
     }
+}
+
+/// The `Int` an enum's variant is.
+fn variant_of(
+    structs: &Structs,
+    name: &str,
+    variant: &str,
+    span: Span,
+) -> Result<i32, CompileError> {
+    let variants = structs
+        .variants(name)
+        .ok_or_else(|| semantic(span, format!("`{name}` is not an enum")))?;
+    variants
+        .iter()
+        .find(|(declared, _)| declared == variant)
+        .map(|(_, number)| *number)
+        .ok_or_else(|| {
+            semantic(
+                span,
+                format!(
+                    "`{name}` has no variant `{variant}`{}",
+                    orla_language::did_you_mean(
+                        variant,
+                        variants.iter().map(|(declared, _)| declared.as_str())
+                    )
+                ),
+            )
+        })
 }
 
 /// Resolves a type name: a plain type, a struct, or `[Type; N]`
@@ -129,6 +172,10 @@ fn resolve_type(name: &Spanned<String>, structs: &Structs) -> Result<Type, Compi
             )
         })?;
         return array_type(structs, element, count, name.span);
+    }
+    // An enum's value is the `Int` of its variant's position.
+    if structs.variants(&name.value).is_some() {
+        return Ok(Type::Int);
     }
     if let Some(index) = structs.find(&name.value) {
         return Ok(Type::Struct(index));
@@ -905,6 +952,13 @@ impl<'a> Builder<'a> {
         self.bound.pop();
         self.locals.truncate(start);
         lowered
+    }
+
+    /// Whether `name` is bound here: a local, an argument or a parameter.
+    fn binds(&self, name: &str) -> bool {
+        self.locals.iter().any(|(local, _)| local == name)
+            || self.args.iter().any(|(arg, _)| arg == name)
+            || self.manifest.params.iter().any(|param| param.name == name)
     }
 
     fn name(&mut self, name: &str, span: Span) -> Result<ValueId, CompileError> {

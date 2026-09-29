@@ -726,6 +726,8 @@ form compute
   compute { return value; }
 form each
   [each n { body }]
+form enum
+  type Mode = enum { Idle, Walk, Attack = 10, Guard };   Mode.Walk   match m { Mode.Idle => a, Mode.Walk | Mode.Attack | Mode.Guard => b }
 form fill
   node zeros: Rows<Float> { domain = 65; value = 0.5; }
 form fn

@@ -348,7 +348,13 @@ pub fn forms() -> Vec<Form> {
             "type",
             "kernel",
             "type Cells = Grid<Int>;   struct Cell { alive: Int; age: Float; }",
-            "A name for a port type, or a struct of named fields, shared by the Kernels of a document.",
+            "A name for a port type, an enum, or a struct of named fields, shared by the Kernels of a document.",
+        ),
+        form(
+            "enum",
+            "kernel",
+            "type Mode = enum { Idle, Walk, Attack = 10, Guard };   Mode.Walk   match m { Mode.Idle => a, Mode.Walk | Mode.Attack | Mode.Guard => b }",
+            "Named Ints: a variant is the number written after it, else one past the variant before it, the first 0, so `Mode.Guard` is 11; no two are one number. `Mode` is a type a value, a field, a port's element and a parameter may have. A variant whose number is kept in state, a memory or a file, is written with its number, so no variant written before it moves it.",
         ),
         form(
             "let",
@@ -378,7 +384,7 @@ pub fn forms() -> Vec<Form> {
             "match",
             "expression",
             "match i { 0 => a, 1 | 2 => b, 8..16 => c, 16..=31 => d, _ => e }",
-            "On an Int: the arm whose values hold it, else the `_` arm, which comes last and is required; the GPU runs it as a switch. A range is the values it holds, `..` stopping before its end and `..=` taking it, at most 256 to an arm.",
+            "On an Int: the arm whose values hold it, else the `_` arm, which comes last; arms naming every variant of an enum need none, and a value that is no variant takes the last arm. The GPU runs it as a switch. A range is the values it holds, `..` stopping before its end and `..=` taking it, at most 256 to an arm.",
         ),
         form(
             "loop",
