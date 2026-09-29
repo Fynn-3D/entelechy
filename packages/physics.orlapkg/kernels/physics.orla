@@ -49,8 +49,10 @@ struct Body {
     sensor: Int;
 }
 
-// A box on the plane: least and most corners.
-struct Bounds { lo: Vec2; hi: Vec2; }
+// A box on the plane, least and most corners, and the first and last
+// cells of the grid it covers, found once so every Kernel that asks where
+// a body is in the grid reads one answer wherever it runs.
+struct Bounds { lo: Vec2; hi: Vec2; first: IVec2; last: IVec2; }
 
 // Two bodies that may touch, the first the lower index.
 struct Pair { a: Int; b: Int; }
@@ -166,6 +168,10 @@ kernel physics.bounds@1 {
     input bodies: Rows<Body>;
     param dt: Float = 0.0166667;
     param margin: Float = 0.02;
+    param origin: Vec2 = vec2(0.0, 0.0);
+    param cell: Float = 1.0;
+    param columns: Int = 64;
+    param rows: Int = 64;
     output result: Rows<Bounds>;
     compute {
         let b = sample(bodies);
@@ -173,7 +179,9 @@ kernel physics.bounds@1 {
         let s = abs(sin(b.angle));
         let e = if b.shape == 0 { b.size } else { vec2(c * b.size.x + s * b.size.y, s * b.size.x + c * b.size.y) };
         let grow = margin + sweep(b, dt);
-        return Bounds { lo: b.position - e - vec2(grow, grow), hi: b.position + e + vec2(grow, grow) };
+        let lo = b.position - e - vec2(grow, grow);
+        let hi = b.position + e + vec2(grow, grow);
+        return Bounds { lo: lo, hi: hi, first: cell_at(lo, origin, cell, columns, rows), last: cell_at(hi, origin, cell, columns, rows) };
     }
 }
 
@@ -187,16 +195,10 @@ fn cell_at(p: Vec2, origin: Vec2, cell: Float, columns: Int, rows: Int) -> IVec2
 kernel physics.spans@1 {
     requires { field.read; field.write; }
     input bounds: Rows<Bounds>;
-    param origin: Vec2 = vec2(0.0, 0.0);
-    param cell: Float = 1.0;
-    param columns: Int = 64;
-    param rows: Int = 64;
     output result: Rows<Int>;
     compute {
         let b = sample(bounds);
-        let lo = cell_at(b.lo, origin, cell, columns, rows);
-        let hi = cell_at(b.hi, origin, cell, columns, rows);
-        return (hi.x - lo.x + 1) * (hi.y - lo.y + 1);
+        return (b.last.x - b.first.x + 1) * (b.last.y - b.first.y + 1);
     }
 }
 
@@ -242,16 +244,13 @@ kernel physics.cells@1 {
     input spans: Rows<Int>;
     input ends: Rows<Int>;
     input bounds: Rows<Bounds>;
-    param origin: Vec2 = vec2(0.0, 0.0);
-    param cell: Float = 1.0;
     param columns: Int = 64;
-    param rows: Int = 64;
     output result: Rows<Int>;
     compute {
         let i = sample(owners);
         let b = at(bounds, i);
-        let lo = cell_at(b.lo, origin, cell, columns, rows);
-        let hi = cell_at(b.hi, origin, cell, columns, rows);
+        let lo = b.first;
+        let hi = b.last;
         let local = element() - (at(ends, i) - at(spans, i));
         let wide = hi.x - lo.x + 1;
         return (lo.y + local / wide) * columns + lo.x + local % wide;
@@ -285,11 +284,11 @@ fn meets(a: Body, b: Body) -> Bool {
 
 // Whether bodies `i` and `j`, both entered in cell `c`, are a pair taken
 // there: they meet, their boxes overlap, and the overlap begins in `c`.
-fn paired(i: Int, j: Int, c: Int, bodies: Rows<Body>, bounds: Rows<Bounds>, origin: Vec2, cell: Float, columns: Int, rows: Int) -> Bool {
+fn paired(i: Int, j: Int, c: Int, bodies: Rows<Body>, bounds: Rows<Bounds>, columns: Int) -> Bool {
     let a = at(bounds, i);
     let b = at(bounds, j);
     if a.hi.x < b.lo.x || b.hi.x < a.lo.x || a.hi.y < b.lo.y || b.hi.y < a.lo.y { return false; }
-    let begins = cell_at(max(a.lo, b.lo), origin, cell, columns, rows);
+    let begins = ivec2(max(a.first.x, b.first.x), max(a.first.y, b.first.y));
     return begins.y * columns + begins.x == c && meets(at(bodies, i), at(bodies, j));
 }
 
@@ -336,10 +335,7 @@ kernel physics.pair_counts@1 {
     input cell_counts: Rows<Int>;
     input cell_ends: Rows<Int>;
     input bounds: Rows<Bounds>;
-    param origin: Vec2 = vec2(0.0, 0.0);
-    param cell: Float = 1.0;
     param columns: Int = 64;
-    param rows: Int = 64;
     output result: Rows<Int>;
     compute {
         let j = element();
@@ -351,7 +347,7 @@ kernel physics.pair_counts@1 {
                 let r = index();
                 loop round_of(run.z, r) with t2 = t1 {
                     let i = at(owners, at(order, run.y + r * 65536 + index()));
-                    if paired(i, j, run.x, bodies, bounds, origin, cell, columns, rows) { t2 + 1 } else { t2 }
+                    if paired(i, j, run.x, bodies, bounds, columns) { t2 + 1 } else { t2 }
                 }
             }
         };
@@ -383,10 +379,7 @@ kernel physics.pairs@1 {
     input cell_ends: Rows<Int>;
     input bounds: Rows<Bounds>;
     input slots: Rows<Pair>;
-    param origin: Vec2 = vec2(0.0, 0.0);
-    param cell: Float = 1.0;
     param columns: Int = 64;
-    param rows: Int = 64;
     output result: Rows<Pair>;
     scatter into slots with max {
         let j = element();
@@ -401,7 +394,7 @@ kernel physics.pairs@1 {
                     let r = index();
                     loop round_of(run.z, r) with t2 = t1 {
                         let i = at(owners, at(order, run.y + r * 65536 + index()));
-                        if t2 < room && paired(i, j, run.x, bodies, bounds, origin, cell, columns, rows) {
+                        if t2 < room && paired(i, j, run.x, bodies, bounds, columns) {
                             emit(Placed { at: start + t2, value: Pair { a: i, b: j } });
                             t2 + 1
                         } else { t2 }

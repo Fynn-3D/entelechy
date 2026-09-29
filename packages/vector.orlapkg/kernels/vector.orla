@@ -141,14 +141,37 @@ fn laid(below: Vec4, s: Shape, stops: Rows<Stop>, p: Vec2, pixel: Float, hit: Ve
 fn round_of(n: Int, r: Int) -> Int { return clamp(n - r * 65536, 0, 65536); }
 fn rounds(n: Int) -> Int { return (n + 65535) / 65536; }
 
-// The look: the drawing's point at the pixel's centre, and a pixel's
-// size in the drawing's units.
-fn seen(view: Rows<Vec2>, look: Rows<Look>, res: Vec2, pixel_at: Vec2) -> Vec3 {
-    let size = at(view, 0);
-    let eye = at(look, 0);
-    let pixel = 1.0 / (min(res.x / size.x, res.y / size.y) * eye.zoom);
-    let p = eye.center + (pixel_at + vec2(0.5, 0.5) - res * 0.5) * pixel;
-    return vec3(p.x, p.y, pixel);
+/// Where the look puts each pixel's centre in the drawing, and a pixel's
+/// size there: the x of each of `across`'s columns, then the y of each of
+/// `down`'s rows, then the size; `domain = count(across) + count(down) +
+/// 1`. Every Kernel that asks where a pixel is reads it here, so they
+/// agree to the bit wherever each runs.
+kernel vector.frame@1 {
+    requires { field.read; field.write; }
+    input across: Grid<Int>;
+    input down: Grid<Int>;
+    input view: Rows<Vec2>;
+    input look: Rows<Look>;
+    output result: Rows<Float>;
+    compute {
+        let res = vec2(size(across).x, size(down).y);
+        let wide = int(res.x);
+        let size = at(view, 0);
+        let eye = at(look, 0);
+        let pixel = 1.0 / (min(res.x / size.x, res.y / size.y) * eye.zoom);
+        let i = element();
+        if i < wide { return eye.center.x + (float(i) + 0.5 - res.x * 0.5) * pixel; }
+        if i < wide + int(res.y) { return eye.center.y + (float(i - wide) + 0.5 - res.y * 0.5) * pixel; }
+        return pixel;
+    }
+}
+
+// A pixel's centre in the drawing and a pixel's size, from the frame of a
+// canvas `wide` pixels across.
+fn seen(frame: Rows<Float>, wide: Int, pixel_at: Vec2) -> Vec3 {
+    let x = at(frame, int(pixel_at.x));
+    let y = at(frame, wide + int(pixel_at.y));
+    return vec3(x, y, at(frame, count(frame) - 1));
 }
 
 /// A look at the whole drawing: its middle, fitted to the picture.
@@ -159,19 +182,18 @@ kernel vector.whole@1 {
     compute { return Look { center: at(view, 0) * 0.5, zoom: 1.0 }; }
 }
 
-/// The drawing over `background`, through `look`, at the node's domain:
+/// The drawing over `background`, through `frame`, at the node's domain:
 /// every pixel asks every shape and segment.
 kernel vector.draw@1 {
     requires { field.read; field.write; }
     input shapes: Rows<Shape>;
     input segments: Rows<Vec4>;
     input stops: Rows<Stop>;
-    input view: Rows<Vec2>;
-    input look: Rows<Look>;
+    input frame: Rows<Float>;
     param background: Vec4 = vec4(1.0, 1.0, 1.0, 1.0);
     output result: Image;
     compute {
-        let v = seen(view, look, domain(), coord());
+        let v = seen(frame, int(domain().x), coord());
         let p = vec2(v.x, v.y);
         let pixel = v.z;
         let n = count(shapes);
@@ -533,7 +555,8 @@ kernel vector.zeros@1 {
 /// Each cell's backdrop, a row of its tile to an element. Each of a
 /// unit's segments wholly past the tile adds its turn to the rows it may
 /// cross, a pixel over its ends, each crossing tested at the row's point
-/// in the drawing as `crossed` tests it.
+/// in the drawing, read from the frame the drawing reads, as `crossed`
+/// tests it.
 kernel vector.backdrop@1 {
     requires { field.read; field.write; }
     input total: Rows<Int>;
@@ -546,8 +569,7 @@ kernel vector.backdrop@1 {
     input placed: Rows<Vec4>;
     input chunks: Rows<Vec4>;
     input segments: Rows<Vec4>;
-    input view: Rows<Vec2>;
-    input look: Rows<Look>;
+    input frame: Rows<Float>;
     input canvas: Grid<Int>;
     input zeros: Rows<Int>;
     output result: Rows<Int>;
@@ -567,7 +589,7 @@ kernel vector.backdrop@1 {
                     let high = clamp(int(ceil(max(on.y, on.w))) + 1 - top, 0, rows);
                     loop high - low with k2 = 0 {
                         let row = low + index();
-                        let y = seen(view, look, size(canvas), vec2(float(w.tx * rows), float(top + row))).y;
+                        let y = at(frame, int(size(canvas).x) + top + row);
                         if (seg.y <= y) != (seg.w <= y) { emit(Slot { at: w.cell * rows + row, value: turn }); }
                         k2
                     };
@@ -587,8 +609,7 @@ kernel vector.draw_tiled@1 {
     input shapes: Rows<Shape>;
     input segments: Rows<Vec4>;
     input stops: Rows<Stop>;
-    input view: Rows<Vec2>;
-    input look: Rows<Look>;
+    input frame: Rows<Float>;
     input tile_counts: Rows<Int>;
     input tile_ends: Rows<Int>;
     input tile_shapes: Rows<Int>;
@@ -602,7 +623,7 @@ kernel vector.draw_tiled@1 {
     output result: Image;
     compute {
         let res = domain();
-        let v = seen(view, look, res, coord());
+        let v = seen(frame, int(res.x), coord());
         let p = vec2(v.x, v.y);
         let pixel = v.z;
         let rows = int(tile());

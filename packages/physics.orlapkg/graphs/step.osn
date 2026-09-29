@@ -36,8 +36,11 @@ param bits: Int = 12;
 
 // Each body entered in the cells its box covers, the entries sorted by
 // cell, and where each cell's run of them ends.
-node bounds: physics.bounds@1 { bodies <- bodies; dt = dt; margin = margin; }
-node spans: physics.spans@1 { bounds <- bounds.result; origin = origin; cell = cell; columns = columns; rows = rows; }
+node bounds: physics.bounds@1 {
+    bodies <- bodies;
+    dt = dt; margin = margin; origin = origin; cell = cell; columns = columns; rows = rows;
+}
+node spans: physics.spans@1 { bounds <- bounds.result; }
 node span_ends: physics.ends@1 { counts <- spans.result; }
 node span_total: physics.total@1 { ends <- span_ends.result; domain = 1; }
 node owners: physics.owners@1 { total <- span_total.result; ends <- span_ends.result; domain = value(total); }
@@ -46,7 +49,7 @@ node cells: physics.cells@1 {
     spans <- spans.result;
     ends <- span_ends.result;
     bounds <- bounds.result;
-    origin = origin; cell = cell; columns = columns; rows = rows;
+    columns = columns;
 }
 node order: graph "../../sort.orlapkg/graphs/sort.osn" { keys <- cells.result; bits = bits; }
 node no_cells: physics.no_cells@1 { columns = columns; rows = rows; domain = columns * rows; }
@@ -68,7 +71,7 @@ node pair_counts: physics.pair_counts@1 {
     cell_counts <- cell_counts.result;
     cell_ends <- cell_ends.result;
     bounds <- bounds.result;
-    origin = origin; cell = cell; columns = columns; rows = rows;
+    columns = columns;
 }
 node pair_ends: physics.ends@1 { counts <- pair_counts.result; }
 node pair_total: physics.total@1 { ends <- pair_ends.result; domain = 1; }
@@ -87,7 +90,7 @@ node pairs: physics.pairs@1 {
     cell_ends <- cell_ends.result;
     bounds <- bounds.result;
     slots <- no_pairs.result;
-    origin = origin; cell = cell; columns = columns; rows = rows;
+    columns = columns;
 }
 
 // Each pair's manifold, and how many push each body.

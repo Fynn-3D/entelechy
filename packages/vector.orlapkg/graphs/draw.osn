@@ -18,6 +18,14 @@ param background: Vec4 = vec4(1.0, 1.0, 1.0, 1.0);
 node canvas: Grid<Int> { domain = window(); }
 node tiles: Grid<Int> { domain = ceil(window() / 16); }
 
+// Where each pixel is in the drawing, found once for every node that asks.
+node across: Grid<Int> { domain = floor(window() * vec2(1, 0) + vec2(0, 1)); }
+node down: Grid<Int> { domain = floor(window() * vec2(0, 1) + vec2(1, 0)); }
+node frame: vector.frame@1 {
+    across <- across.result; down <- down.result; view <- view; look <- look;
+    domain = count(across) + count(down) + 1;
+}
+
 // The tiles each shape's box reaches, and the shapes each tile keeps,
 // in their order: the cells.
 node reach: vector.reach@1 { shapes <- shapes; view <- view; look <- look; canvas <- canvas.result; }
@@ -94,8 +102,7 @@ node backdrop: vector.backdrop@1 {
     placed <- placed.result;
     chunks <- segment_chunks.result;
     segments <- segments;
-    view <- view;
-    look <- look;
+    frame <- frame.result;
     canvas <- canvas.result;
     zeros <- backdrop_zeros.result;
     domain = value(total);
@@ -105,8 +112,7 @@ node drawn: vector.draw_tiled@1 {
     shapes <- shapes;
     segments <- segments;
     stops <- stops;
-    view <- view;
-    look <- look;
+    frame <- frame.result;
     tile_counts <- tile_counts.result;
     tile_ends <- tile_ends.result;
     tile_shapes <- tile_shapes.result;
