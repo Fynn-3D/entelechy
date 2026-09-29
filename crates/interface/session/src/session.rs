@@ -751,9 +751,20 @@ impl Session {
         self.evaluator.has_running()
     }
 
+    /// Waits for the device to finish the last evaluation's work before
+    /// the next is submitted: one frame is in flight at most, so a caller
+    /// evaluating faster than the device (an agent, a replay) holds one
+    /// frame's device memory, not every frame it has queued.
+    fn one_frame_in_flight(&self) {
+        if self.runtime.has_device() {
+            self.runtime.settle_device();
+        }
+    }
+
     /// Evaluates the current graph under `context`. Unchanged nodes are
     /// reused; state commits only when the whole evaluation succeeds.
     pub fn evaluate(&mut self, context: &Context) -> Result<Report, EvaluateError> {
+        self.one_frame_in_flight();
         self.inputs.select_frames(
             self.scene.store().as_ref(),
             self.runtime.host_mut(),
@@ -786,6 +797,7 @@ impl Session {
         context: &Context,
         demand: &std::collections::BTreeSet<orla_graph::NodeId>,
     ) -> Result<Report, EvaluateError> {
+        self.one_frame_in_flight();
         self.inputs.select_frames(
             self.scene.store().as_ref(),
             self.runtime.host_mut(),
