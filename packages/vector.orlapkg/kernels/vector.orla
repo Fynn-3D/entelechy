@@ -1,0 +1,143 @@
+// Drawing as Kernels: the shapes `orla import` writes from an SVG,
+// filled pixel by pixel. The rule, at a pixel's centre:
+//
+// - The shapes are drawn in their order, each over what is beneath it.
+// - A shape covers the centre by its winding number: a ray to the right
+//   crosses its segments, one upward adding one and one downward taking
+//   one away. Under the nonzero rule (0) a winding other than zero is
+//   inside; under even-odd (1) an odd one.
+// - Its edge is smoothed over a pixel: a centre half a pixel inside its
+//   nearest segment is covered whole, half a pixel outside not at all.
+// - Its paint is a colour (0), or a linear (1) or radial (2) gradient read
+//   in the gradient's own space, its stops blended in order and spread by
+//   padding (0), reflecting (1) or repeating (2).
+//
+// A drawing is looked at through a `Look`: the point of the drawing at
+// the middle of the picture and how many times larger than fitting the
+// drawing to the picture it is shown.
+
+// A shape as `orla import` writes it, `<stem>.shapes.field`.
+struct Shape {
+    color: Vec4;
+    first: Int;
+    count: Int;
+    rule: Int;
+    paint: Int;
+    lo: Vec2;
+    hi: Vec2;
+    gradient: Vec4;
+    inverse: Vec4;
+    shift: Vec2;
+    stops: Int;
+    stop_count: Int;
+    spread: Int;
+}
+
+// A gradient's stop, `<stem>.stops.field`: where it is, its colour.
+struct Stop { offset: Float; color: Vec4; }
+
+// Where the picture looks: the drawing's point at its middle, and the
+// zoom over fitting the whole drawing.
+struct Look { center: Vec2; zoom: Float; }
+
+// The distance from `p` to the segment from `a` to `b`.
+fn to_segment(p: Vec2, a: Vec2, b: Vec2) -> Float {
+    let ab = b - a;
+    let t = clamp(dot(p - a, ab) / max(dot(ab, ab), 0.0000001), 0.0, 1.0);
+    return length(p - (a + ab * t));
+}
+
+// Where a gradient is at `t`, spread past its ends.
+fn spread_by(t: Float, spread: Int) -> Float {
+    if spread == 1 { return 1.0 - abs(fract(t * 0.5) * 2.0 - 1.0); }
+    if spread == 2 { return fract(t); }
+    return clamp(t, 0.0, 1.0);
+}
+
+// A gradient's colour at `t`: the stops about it blended.
+fn stops_at(stops: Rows<Stop>, first: Int, n: Int, t: Float) -> Vec4 {
+    let start = at(stops, first);
+    let found = loop n with pick = vec4(start.color.x, start.color.y, start.color.z, start.color.w) {
+        let s = at(stops, first + index());
+        let before = at(stops, first + max(index() - 1, 0));
+        let span = s.offset - before.offset;
+        if t >= s.offset {
+            s.color
+        } else {
+            if index() > 0 && t > before.offset {
+                let k = if span > 0.0 { (t - before.offset) / span } else { 1.0 };
+                break mix(before.color, s.color, k);
+            }
+            break pick;
+        }
+    };
+    return found;
+}
+
+// A shape's paint at the drawing's point `p`.
+fn paint_at(shape: Shape, stops: Rows<Stop>, p: Vec2) -> Vec4 {
+    if shape.paint == 0 { return shape.color; }
+    let m = shape.inverse;
+    let q = vec2(m.x * p.x + m.z * p.y + shape.shift.x, m.y * p.x + m.w * p.y + shape.shift.y);
+    let g = shape.gradient;
+    let t = if shape.paint == 1 {
+        let d = vec2(g.z - g.x, g.w - g.y);
+        dot(q - vec2(g.x, g.y), d) / max(dot(d, d), 0.0000001)
+    } else {
+        length(q - vec2(g.x, g.y)) / max(g.z, 0.0000001)
+    };
+    let c = stops_at(stops, shape.stops, shape.stop_count, spread_by(t, shape.spread));
+    return vec4(c.x, c.y, c.z, c.w * shape.color.w);
+}
+
+/// A look at the whole drawing: its middle, fitted to the picture.
+kernel vector.whole@1 {
+    requires { field.read; field.write; }
+    input view: Rows<Vec2>;
+    output result: Rows<Look>;
+    compute { return Look { center: at(view, 0) * 0.5, zoom: 1.0 }; }
+}
+
+/// The drawing over `background`, through `look`, at the node's domain.
+kernel vector.draw@1 {
+    requires { field.read; field.write; }
+    input shapes: Rows<Shape>;
+    input segments: Rows<Vec4>;
+    input stops: Rows<Stop>;
+    input view: Rows<Vec2>;
+    input look: Rows<Look>;
+    param background: Vec4 = vec4(1.0, 1.0, 1.0, 1.0);
+    output result: Image;
+    compute {
+        let size = at(view, 0);
+        let eye = at(look, 0);
+        let res = domain();
+        // Pixels a unit of the drawing takes.
+        let fit = min(res.x / size.x, res.y / size.y) * eye.zoom;
+        let pixel = 1.0 / fit;
+        let p = eye.center + (coord() + vec2(0.5, 0.5) - res * 0.5) * pixel;
+        let drawn = loop count(shapes) with below = background {
+            let s = at(shapes, index());
+            let near = p.x >= s.lo.x - pixel && p.x <= s.hi.x + pixel && p.y >= s.lo.y - pixel && p.y <= s.hi.y + pixel;
+            if !near { below } else {
+                let hit = loop s.count with w = vec2(0.0, 1000000000.0) {
+                    let seg = at(segments, s.first + index());
+                    let a = vec2(seg.x, seg.y);
+                    let b = vec2(seg.z, seg.w);
+                    let crosses = (a.y <= p.y) != (b.y <= p.y);
+                    let x = a.x + (p.y - a.y) * (b.x - a.x) / (b.y - a.y);
+                    let turn = if crosses && x > p.x { if b.y > a.y { 1.0 } else { -1.0 } } else { 0.0 };
+                    vec2(w.x + turn, min(w.y, to_segment(p, a, b)))
+                };
+                let winding = int(hit.x);
+                let inside = if s.rule == 0 { winding != 0 } else { winding % 2 != 0 };
+                let signed = if inside { hit.y } else { -hit.y };
+                let cover = clamp(0.5 + signed / pixel, 0.0, 1.0);
+                let c = paint_at(s, stops, p);
+                let a = c.w * cover;
+                vec4(below.x * (1.0 - a) + c.x * a, below.y * (1.0 - a) + c.y * a, below.z * (1.0 - a) + c.z * a, below.w * (1.0 - a) + a)
+            }
+        };
+        return drawn;
+    }
+}

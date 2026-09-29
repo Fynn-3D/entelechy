@@ -1,0 +1,26 @@
+//! A drawing, whole and fitted to the window, over `background`. Its
+//! Fields are what `orla import drawing.svg` writes:
+//!
+//!   node picture: graph "../../packages/vector.orlapkg/graphs/drawing.osn" {
+//!       shapes <- shapes; segments <- segments; stops <- stops; view <- view;
+//!   }
+use "../kernels/vector.orla";
+
+input shapes: Rows<Shape>;
+input segments: Rows<Vec4>;
+input stops: Rows<Stop>;
+input view: Rows<Vec2>;
+param background: Vec4 = vec4(1.0, 1.0, 1.0, 1.0);
+
+node look: vector.whole@1 { view <- view; }
+node drawn: vector.draw@1 {
+    shapes <- shapes;
+    segments <- segments;
+    stops <- stops;
+    view <- view;
+    look <- look.result;
+    background = background;
+    domain = window();
+}
+
+output picture <- drawn.result;

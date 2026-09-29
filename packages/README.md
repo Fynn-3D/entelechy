@@ -87,3 +87,8 @@ use "picture.orlapkg";
   ([why](../docs/DECISIONS.md)).
 - **pixelfx** — a coarse pixel grid and a four-color palette, and the
   NES look made of both as a preset. The example of what a package is.
+- **vector** — drawings filled pixel by pixel: the segments and shapes
+  `orla import` reads from SVG, drawn through a look (a middle point and a
+  zoom) with nonzero or even-odd fills, colours and linear or radial
+  gradients, each edge smoothed over a pixel. `graphs/drawing.osn` draws
+  one whole, fitted to the window. Used by the `vector` example.

@@ -1,0 +1,60 @@
+// A drawing read from SVG and drawn by the vector package at any size:
+// drag to move it, the wheel to zoom about the pointer.
+//
+//   orla import source/garden.svg --out assets
+use "../../packages/vector.orlapkg";
+
+input shapes: Rows<Shape> = "assets/garden.shapes.field";
+input segments: Rows<Vec4> = "assets/garden.segments.field";
+input stops: Rows<Stop> = "assets/garden.stops.field";
+input view: Rows<Vec2> = "assets/garden.view.field";
+
+// Where the eye is, and the pointer as the last frame saw it.
+struct Eye { center: Vec2; zoom: Float; pointer: Vec2; down: Bool; }
+
+node start: kernel {
+    requires { field.read; field.write; }
+    input view: Rows<Vec2> <- view;
+    output result: Rows<Eye>;
+    compute { return Eye { center: at(view, 0) * 0.5, zoom: 1.0, pointer: vec2(0.0, 0.0), down: false }; }
+}
+
+// A drag moves the drawing with the pointer; the wheel zooms, keeping the
+// point under the pointer where it is.
+node eye: kernel {
+    requires { field.read; field.write; input.read; }
+    input previous: Rows<Eye> <~ eye.result from start.result;
+    input view: Rows<Vec2> <- view;
+    output result: Rows<Eye>;
+    compute {
+        let e = sample(previous);
+        let size = at(view, 0);
+        let res = max(window(), vec2(1.0, 1.0));
+        let p = pointer();
+        let down = pointer_down();
+        let pixel = 1.0 / (min(res.x / size.x, res.y / size.y) * e.zoom);
+        let dragged = if down && e.down { e.center - (p - e.pointer) * pixel } else { e.center };
+        let zoom = clamp(e.zoom * exp(wheel().y * 0.15), 0.25, 400.0);
+        let under = dragged + (p - res * 0.5) * pixel;
+        let after = 1.0 / (min(res.x / size.x, res.y / size.y) * zoom);
+        return Eye { center: under - (p - res * 0.5) * after, zoom: zoom, pointer: p, down: down };
+    }
+}
+
+node look: kernel {
+    requires { field.read; field.write; }
+    input eye: Rows<Eye> <- eye.result;
+    output result: Rows<Look>;
+    compute { let e = sample(eye); return Look { center: e.center, zoom: e.zoom }; }
+}
+
+node drawn: vector.draw@1 {
+    shapes <- shapes;
+    segments <- segments;
+    stops <- stops;
+    view <- view;
+    look <- look.result;
+    domain = window();
+}
+
+output picture <- drawn.result;

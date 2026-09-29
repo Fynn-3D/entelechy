@@ -107,8 +107,9 @@ format goes one of three ways:
 - **Bytes to a Kernel**: `input level: Rows<Int> = bytes "level.bin";`.
   What the bytes mean (a level, a ROM, Markdown) is the Kernel's.
 - **Converted outside the runtime** by `orla-import` and `orla-export`, or
-  by a bridge: glTF, MP3 and other lossy sounds, and documents such as a
-  PDF or a slide deck, as the pictures and text they hold.
+  by a bridge: glTF, MP3 and other lossy sounds, SVG as the segments and
+  shapes a Kernel fills, and documents such as a PDF or a slide deck, as
+  the pictures and text they hold.
 
 A format is read live when it decodes to a numerical Field, needs no
 dependency outside the workspace, and is worth editing while a scene runs.

@@ -309,6 +309,7 @@ orla import examples/model/source/crate.glb --out examples/model/assets
 orla import examples/skin/source/arm.glb --out examples/skin/assets
 orla import song.ogg --out assets   # writes assets/song.wav
 orla import examples/score/song.mid --out examples/score/assets
+orla import examples/vector/source/garden.svg --out examples/vector/assets
 ```
 
 `orla-import` writes what a scene takes as inputs, into `--out <dir>`
@@ -325,6 +326,13 @@ orla import examples/score/song.mid --out examples/score/assets
   rate, one or two channels.
 - Standard MIDI: `<stem>.notes.field`, a row a note (start and length in
   seconds, key, velocity 0 to 1, channel).
+- SVG: what the [`vector` package](../packages/vector.orlapkg) draws, as four
+  Fields: `<stem>.segments.field` (each path's curves cut into segments,
+  a stroke as the outline it paints), `<stem>.shapes.field` (colour or
+  linear or radial gradient, fill rule, box, in paint order),
+  `<stem>.stops.field` and `<stem>.view.field` (the document's size).
+  Text, images, patterns, clip paths, masks and filters are reported and
+  left out.
 
 ```sh
 orla export crate.vertices.field crate.triangles.field crate.albedo.png --out crate.glb

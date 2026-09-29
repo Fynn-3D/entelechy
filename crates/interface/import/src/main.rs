@@ -1,11 +1,12 @@
 //! `orla-import`: outside files as the Host's files, outside the
 //! runtime. A model becomes vertex and triangle rows and a PNG; a
-//! compressed sound a WAV; a score a notes Field.
+//! compressed sound a WAV; a score a notes Field; a drawing the segments
+//! and shapes the `vector` package draws.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use orla_import::{audio, gltf, midi};
+use orla_import::{audio, gltf, midi, svg};
 
 const USAGE: &str = "\
 usage:
@@ -17,8 +18,10 @@ usage:
       (30 by default), which the `skin` package poses a mesh from; a sound (.mp3, .ogg, .flac,
       .m4a, .aac, .mka, .wav) becomes <stem>.wav at its own rate; a score (.mid,
       .midi) becomes <stem>.notes.field, a row a note with its seconds, its key,
-      how hard it was struck and its channel. Files go to --out, the source's
-      directory by default.";
+      how hard it was struck and its channel; a drawing (.svg) becomes
+      <stem>.segments.field, <stem>.shapes.field, <stem>.stops.field and
+      <stem>.view.field, which the `vector` package draws. Files go to --out,
+      the source's directory by default.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -163,9 +166,22 @@ fn import(args: &[String]) -> Result<(), String> {
                 imported.rate
             );
         }
+        "svg" => {
+            let imported = svg::import(&source, &out)?;
+            for file in &imported.files {
+                println!("wrote {}", file.display());
+            }
+            println!(
+                "{} shape(s) of {} segment(s), {} by {} units",
+                imported.shapes, imported.segments, imported.size.0, imported.size.1
+            );
+            for note in &imported.notes {
+                println!("note: {note}");
+            }
+        }
         other => {
             return Err(format!(
-                "`.{other}` is not a format import knows; models are .gltf/.glb, sounds .mp3/.ogg/.flac/.m4a/.aac/.mka/.wav"
+                "`.{other}` is not a format import knows; models are .gltf/.glb, sounds .mp3/.ogg/.flac/.m4a/.aac/.mka/.wav, scores .mid, drawings .svg"
             ));
         }
     }

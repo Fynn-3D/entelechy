@@ -1,0 +1,33 @@
+scene ../scene.osn
+window 400 300
+
+# At its own size the drawing lands a unit to a pixel. Each colour is
+# the one the SVG's rules give, worked out by hand: the sky's gradient
+# between its stops, the sun's heart, the ring of light over the sky and
+# the hole the even-odd rule leaves in it, the hills, a petal's gradient
+# in its own box, the flower's heart.
+frame 0.0
+expect 10 10 = 0.2057 0.3151 0.5424 0.01
+expect 300 120 = 1.0 0.9647 0.8471 0.02
+expect 300 59 = 0.5961 0.5901 0.6013 0.01
+expect 300 70 = 0.4175 0.4126 0.5043 0.01
+expect 10 290 = 0.2471 0.3529 0.2275 0.005
+expect 390 215 = 0.4196 0.498 0.3529 0.005
+expect 120 140 = 0.8094 0.2981 0.4824 0.02
+expect 120 170 = 1.0 0.8275 0.302 0.005
+
+# The wheel zooms about the pointer: the flower's heart stays under it.
+pointer 120 170
+wheel 0 5
+frame 0.1
+expect eye.result[0].zoom > 2.0
+expect 120 170 = 1.0 0.8275 0.302 0.005
+
+# A drag carries the drawing with the pointer.
+pointer 200 150 down
+frame 0.2
+pointer 250 150 down
+frame 0.3
+pointer 250 150 up
+frame 0.4
+expect 170 170 = 1.0 0.8275 0.302 0.005
