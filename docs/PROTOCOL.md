@@ -77,7 +77,7 @@ through:
 | `graph` |  | inputs, params, nodes, outputs |
 | `document` | `version`?: string | path, text, and version, which `compose`'s `expect` names |
 | `history` | `since`?: integer | revision, frame (the frames committed since that revision), the changes after `since` and the attempts refused since, each with its origin |
-| `compose` | `text`?: string, `edits`?: [{node?: string, output?: string, param?: string, input?: string, kernel?: string, struct?: string, type?: string, fn?: string, use?: string, member?: string, text: string \| null}], `expect`?: string | events, version, path (the document), written |
+| `compose` | `text`?: string, `edits`?: [{node?: string, output?: string, param?: string, require?: string, input?: string, kernel?: string, struct?: string, type?: string, fn?: string, use?: string, member?: string, text: string \| null}], `expect`?: string | events, version, path (the document), written |
 | `sync` |  | events |
 | `prepare` | `source`: string | id, manifest; or an error at a line and column |
 | `publish` | `source`: string, `expect`?: "absent" \| "any" \| integer | id, generation; and when it computes a `<~` port's initial source, `keeps` (those `node.port`s, which keep what they committed) and `reset` (the requests that start them from the new law) |
