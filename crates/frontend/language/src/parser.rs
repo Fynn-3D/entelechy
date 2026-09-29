@@ -383,25 +383,6 @@ impl Parser {
         }
     }
 
-    /// A name, a keyword included unless it starts an expression.
-    fn name_not_starting_an_expression(
-        &mut self,
-        what: &str,
-    ) -> Result<Spanned<String>, ParseError> {
-        match self.peek() {
-            Token::Ident(name) if STARTS_AN_EXPRESSION.contains(&name.as_str()) => {
-                let name = name.clone();
-                Err(ParseError {
-                    span: self.span(),
-                    message: format!(
-                        "`{name}` begins an expression, so it cannot be {what}; any other word can, keywords included"
-                    ),
-                })
-            }
-            _ => self.raw_ident(what),
-        }
-    }
-
     fn keyword(&mut self, keyword: &str) -> Result<Span, ParseError> {
         if self.is_keyword(keyword) {
             Ok(self.next().1)
@@ -1237,7 +1218,7 @@ impl Parser {
     fn function(&mut self) -> Result<FnDecl, ParseError> {
         // Any word except one starting an expression names a function,
         // so `scatter(n, seed)` reads as a call anywhere.
-        let name = self.name_not_starting_an_expression("a function name")?;
+        let name = self.ident("a function name")?;
         // Type parameters; each call's types lower their own instance.
         let mut generics = Vec::new();
         if self.eat_punct("<") {
@@ -2045,32 +2026,6 @@ impl Parser {
                     span,
                 })
             }
-            // A keyword may name a declared function: `scatter(n, seed)`.
-            Token::Ident(name)
-                if RESERVED.contains(&name.as_str())
-                    && !STARTS_AN_EXPRESSION.contains(&name.as_str())
-                    && matches!(
-                        self.tokens.get(self.position + 1).map(|l| &l.token),
-                        Some(Token::Punct("("))
-                    ) =>
-            {
-                let (Token::Ident(name), span) = self.next() else {
-                    unreachable!()
-                };
-                self.expect_punct("(")?;
-                let mut args = Vec::new();
-                while !self.is_punct(")") {
-                    args.push(self.expr()?);
-                    if !self.eat_punct(",") {
-                        break;
-                    }
-                }
-                self.expect_punct(")")?;
-                Ok(Expr {
-                    kind: ExprKind::Call(name, args),
-                    span,
-                })
-            }
             Token::Ident(name) if RESERVED.contains(&name.as_str()) => {
                 Err(self.unexpected("an expression"))
             }
@@ -2187,10 +2142,6 @@ impl Parser {
         }
     }
 }
-
-/// The keywords an expression may begin with; these alone cannot name a
-/// function.
-const STARTS_AN_EXPRESSION: [&str; 5] = ["let", "return", "if", "match", "loop"];
 
 /// What a Kernel's body holds, each item begun by its word; `domain`
 /// only in a Kernel written in place.
@@ -2579,7 +2530,7 @@ kernel image.grayscale@1 {
         )
         .unwrap();
         assert!(matches!(kernel.compute.lets[0].1.kind, ExprKind::If { .. }));
-        // A keyword not starting an expression names a function.
+        // A word that begins items names a function; a reserved word none.
         let kernel = parse(
             "kernel t.k@1 { fn scatter(a: Float) -> Float { return a * 2.0; } fn merge(a: Float) -> Float { return a + 1.0; } compute { return scatter(merge(1.0)); } }",
         )
@@ -2590,7 +2541,12 @@ kernel image.grayscale@1 {
             "kernel t.k@1 { fn loop(a: Float) -> Float { return a; } compute { return 0.0; } }",
         )
         .unwrap_err();
-        assert!(error.message.contains("begins an expression"), "{error}");
+        assert!(error.message.contains("keeps for itself"), "{error}");
+        let error = parse(
+            "kernel t.k@1 { fn until(a: Bool) -> Bool { return a; } compute { return 0.0; } }",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("keeps for itself"), "{error}");
         // A count that is not a literal is an expression, read once.
         let kernel =
             parse("kernel t.k@1 { param n: Int = 4; compute { return loop n * 2 with x = 1.0 { x + 1.0 }; } }")
