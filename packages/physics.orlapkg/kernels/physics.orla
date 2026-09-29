@@ -15,8 +15,10 @@
 //   each manifold against its own copy of its bodies, moves the bodies,
 //   and solves once more without pushing apart; then the impulses the
 //   manifolds hold push again, to warm the next substep, as the step's
-//   first is warmed by the impulses they start from. A manifold pushes a body
-//   with its mass split among the manifolds touching it, and the pushes
+//   first is warmed by the impulses they start from. The last warm,
+//   which no substep follows, is taken back in a pass of its own. A
+//   manifold pushes a body with its mass split among the manifolds
+//   touching it, and the pushes
 //   on a body are summed, so every manifold is solved at once and the
 //   sum settles where solving them one by one would.
 // - Bounces what closed faster than `threshold`, by the larger
@@ -762,12 +764,16 @@ fn nothing(m: Manifold) -> Manifold {
 // The step's substep, from the node's params.
 fn substep(dt: Float, substeps: Int) -> Float { return dt / float(max(substeps, 1)); }
 
-/// Each manifold's push with the impulses it holds, as a substep starts.
+/// Each manifold's push with `by` times the impulses it holds: once to
+/// warm a step's first substep, once less to take back the warm its last
+/// substep gave a substep that does not come. A pass of its own, so every
+/// body is pushed by every manifold before the next pass reads it.
 kernel physics.warm@1 {
     requires { field.read; field.write; }
     input manifolds: Rows<Manifold>;
     input bodies: Rows<Body>;
     input shared: Rows<Int>;
+    param by: Float = 1.0;
     output result: Rows<Manifold>;
     compute {
         let m = sample(manifolds);
@@ -775,7 +781,7 @@ kernel physics.warm@1 {
         let a = at(bodies, m.a);
         let b = at(bodies, m.b);
         let start = Both { a: copy_of(a, shared, m.a), b: copy_of(b, shared, m.b) };
-        return settled(m, warmed(m, start, a, b, 1.0), a, b);
+        return settled(m, warmed(m, start, a, b, by), a, b);
     }
 }
 
@@ -813,9 +819,8 @@ kernel physics.solve@1 {
     }
 }
 
-/// Each manifold's bounce: the warm for a substep that does not come
-/// taken back, and the points that closed faster than `threshold` and
-/// push given back the restitution of what they closed at.
+/// Each manifold's bounce: the points that closed faster than `threshold`
+/// and push, given back the restitution of what they closed at.
 kernel physics.bounce@1 {
     requires { field.read; field.write; }
     input manifolds: Rows<Manifold>;
@@ -828,9 +833,8 @@ kernel physics.bounce@1 {
         if !solid(m) { return nothing(m); }
         let a = at(bodies, m.a);
         let b = at(bodies, m.b);
-        // The last substep warmed a substep that does not come.
-        let start = warmed(m, Both { a: copy_of(a, shared, m.a), b: copy_of(b, shared, m.b) }, a, b, -1.0);
-        if m.restitution == 0.0 { return settled(m, start, a, b); }
+        if m.restitution == 0.0 { return nothing(m); }
+        let start = Both { a: copy_of(a, shared, m.a), b: copy_of(b, shared, m.b) };
         let one = bounce(m.p1, start, a, b, m.normal, m.restitution, threshold);
         let two = if m.count > 1 { bounce(m.p2, one.both, a, b, m.normal, m.restitution, threshold) } else { Solved { point: m.p2, both: one.both } };
         return settled(Manifold { ..m, p1: one.point, p2: two.point }, two.both, a, b);

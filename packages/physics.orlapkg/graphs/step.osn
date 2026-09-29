@@ -115,9 +115,15 @@ node sub: graph "substep.osn" {
     hertz = hertz; ratio = ratio; speed = speed;
 }
 
-node bounce: physics.bounce@1 { manifolds <- sub.held; bodies <- sub.moved; shared <- shared.result; threshold = threshold; }
+// The last substep warmed a substep that does not come: taken back, every
+// manifold's at once, before the bounce reads the bodies.
+node cool: physics.warm@1 { manifolds <- sub.held; bodies <- sub.moved; shared <- shared.result; by = -1.0; }
+node cool_pushes: physics.pushes@1 { manifolds <- cool.result; zeros <- no_pushes.result; domain = 2 * count(manifolds); }
+node cooled: physics.push@1 { bodies <- sub.moved; pushes <- cool_pushes.result; }
+
+node bounce: physics.bounce@1 { manifolds <- sub.held; bodies <- cooled.result; shared <- shared.result; threshold = threshold; }
 node bounce_pushes: physics.pushes@1 { manifolds <- bounce.result; zeros <- no_pushes.result; domain = 2 * count(manifolds); }
-node bounced: physics.push@1 { bodies <- sub.moved; pushes <- bounce_pushes.result; }
+node bounced: physics.push@1 { bodies <- cooled.result; pushes <- bounce_pushes.result; }
 
 output result <- bounced.result;
 output contacts <- bounce.result;

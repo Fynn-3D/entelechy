@@ -23,6 +23,9 @@ The replays, on all three backends:
 - `many.replay`: the pairs the grid finds among four hundred circles
   are every pair asked one by one, and none gets out of the box they are
   poured into.
+- `pile.replay`: three hundred circles poured into a narrow box settle
+  some twenty deep in four substeps, none pushed out, none overlapping
+  another by a tenth of a unit.
 - `physics.replay`: the pyramid stands, the sensor is touched, the ray
   stops on the pyramid, and a click drops a ball that falls.
 

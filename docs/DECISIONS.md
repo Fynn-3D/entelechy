@@ -235,8 +235,13 @@ and its [step](../packages/physics.orlapkg/graphs/step.osn);
 [`rest.replay`](../examples/physics/tests/rest.replay) holds a column
 of boxes still for seconds, [`motion.replay`](../examples/physics/tests/motion.replay)
 a bounce, friction on a slope and a kinematic platform to their
-closed forms, and [`many.replay`](../examples/physics/tests/many.replay)
-the grid's pairs to every pair asked, on all three backends.
+closed forms, [`many.replay`](../examples/physics/tests/many.replay)
+the grid's pairs to every pair asked, and [`pile.replay`](../examples/physics/tests/pile.replay)
+a pile some twenty deep settled in four substeps, none pushed out, on
+all three backends. A pass that pushes every body reads bodies every
+manifold has pushed: a warm is taken back in a pass of its own, not in
+the bounce's, whose copies would each see their own share taken back and
+none of the others'.
 
 ## A small run goes to the processor; a device is for many elements
 
