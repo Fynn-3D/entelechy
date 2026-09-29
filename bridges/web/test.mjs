@@ -31,10 +31,12 @@ const chrome = option(
     : "google-chrome",
 );
 
-/// Starts `orla serve` on a free port and resolves with the port.
+/// Starts `orla serve` on a free port and resolves with the port. It
+/// admits a page opened from a file, as the README says to.
 function serve(scene, backend) {
   return new Promise((resolvePort, reject) => {
-    const child = spawn(orla, ["serve", join(root, scene), "--backend", backend, "--listen", "127.0.0.1:0"], {
+    const listen = ["--listen", "127.0.0.1:0", "--allow-origin", "null"];
+    const child = spawn(orla, ["serve", join(root, scene), "--backend", backend, ...listen], {
       stdio: ["pipe", "ignore", "pipe"],
     });
     let text = "";

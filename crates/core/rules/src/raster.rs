@@ -513,7 +513,7 @@ mod tests {
         let invocation = Invocation {
             inputs: vec![vertices, triangles],
             params: vec![],
-            domain: Domain::Grid(65535, 65535),
+            domain: Domain::Grid(40000, 40000),
             context: Context::default(),
         };
         let all: Capabilities = Capability::ALL.into_iter().collect();
