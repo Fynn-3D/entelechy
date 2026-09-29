@@ -126,7 +126,23 @@ pub fn read(bytes: &[u8], chars: Option<&str>) -> Result<(Fields, Imported), Str
     let mut glyphs: Vec<u32> = Vec::new();
     let mut segments: Vec<u32> = Vec::new();
     let mut first = 0usize;
+    // Characters the font draws with one glyph share its segments.
+    let mut drawn: std::collections::HashMap<u16, [u32; 6]> = std::collections::HashMap::new();
     for &(code, id) in &entries {
+        let advance = i32::from(face.glyph_hor_advance(id).unwrap_or(0));
+        if let Some(&[at, count, lo_x, lo_y, hi_x, hi_y]) = drawn.get(&id.0) {
+            glyphs.extend([
+                code as u32,
+                advance as u32,
+                at,
+                count,
+                lo_x,
+                lo_y,
+                hi_x,
+                hi_y,
+            ]);
+            continue;
+        }
         let mut outline = Outline {
             em,
             tolerance: TOLERANCE,
@@ -149,9 +165,11 @@ pub fn read(bytes: &[u8], chars: Option<&str>) -> Result<(Fields, Imported), Str
             segments.extend(s.iter().map(|v| v.to_bits()));
         }
         let count = outline.segments.len();
-        let advance = i32::from(face.glyph_hor_advance(id).unwrap_or(0));
-        glyphs.extend([code as u32, advance as u32, first as u32, count as u32]);
-        glyphs.extend([lo[0], lo[1], hi[0], hi[1]].map(f32::to_bits));
+        let [lo_x, lo_y, hi_x, hi_y] = [lo[0], lo[1], hi[0], hi[1]].map(f32::to_bits);
+        let row = [first as u32, count as u32, lo_x, lo_y, hi_x, hi_y];
+        drawn.insert(id.0, row);
+        glyphs.extend([code as u32, advance as u32]);
+        glyphs.extend(row);
         first += count;
     }
     if segments.is_empty() {
