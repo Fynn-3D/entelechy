@@ -526,7 +526,19 @@ impl Parser {
                 }
                 "param" => {
                     self.next();
-                    params.push(self.param()?);
+                    let param = self.param()?;
+                    // A node sets these itself; a parameter so named could
+                    // not be set.
+                    if matches!(param.name.value.as_str(), "domain" | "async") {
+                        return Err(ParseError {
+                            span: param.name.span,
+                            message: format!(
+                                "a node sets `{}` itself, so no parameter is named it",
+                                param.name.value
+                            ),
+                        });
+                    }
+                    params.push(param);
                 }
                 "fn" => {
                     self.next();
@@ -873,7 +885,13 @@ impl Parser {
         // Any word names a node, a keyword too.
         let name = self.raw_ident("a node name")?;
         self.expect_punct(":")?;
-        if self.is_keyword("kernel") {
+        // `kernel` and `graph` begin a node's kind; followed by `.` they
+        // begin a Kernel's id.
+        let dotted = matches!(
+            self.tokens.get(self.position + 1).map(|l| &l.token),
+            Some(Token::Punct("."))
+        );
+        if self.is_keyword("kernel") && !dotted {
             let kernel = self.kernel(true)?;
             return Ok(NodeDecl {
                 name,
@@ -897,7 +915,7 @@ impl Parser {
                 members,
             });
         }
-        if self.is_keyword("graph") {
+        if self.is_keyword("graph") && !dotted {
             self.next();
             let (token, span) = self.next();
             let Token::Str(path) = token else {
@@ -1216,8 +1234,8 @@ impl Parser {
     }
 
     fn function(&mut self) -> Result<FnDecl, ParseError> {
-        // Any word except one starting an expression names a function,
-        // so `scatter(n, seed)` reads as a call anywhere.
+        // Any word but a reserved one names a function, so `scatter(n,
+        // seed)` reads as a call anywhere.
         let name = self.ident("a function name")?;
         // Type parameters; each call's types lower their own instance.
         let mut generics = Vec::new();
@@ -2625,6 +2643,31 @@ mod document_tests {
         assert_eq!(names, vec!["scan", "input"]);
         let error = parse_document("node scan kernel { }").unwrap_err();
         assert!(error.message.contains("`:`"), "{error}");
+        // `kernel` and `graph` followed by `.` begin a Kernel's id.
+        let document = parse_document(
+            "node a: graph.one@1 { domain = 1; } node b: kernel.two@1 { domain = 1; }",
+        )
+        .unwrap();
+        let ids: Vec<String> = document
+            .nodes
+            .iter()
+            .map(|n| match &n.kind {
+                NodeKind::Reference(id) => id.value.clone(),
+                _ => panic!("a reference"),
+            })
+            .collect();
+        assert_eq!(ids, vec!["graph.one@1", "kernel.two@1"]);
+    }
+
+    #[test]
+    fn no_kernel_parameter_is_named_what_a_node_sets_itself() {
+        for name in ["domain", "async"] {
+            let error = parse(&format!(
+                "kernel t.k@1 {{ param {name}: Int = 1; compute {{ return 0; }} }}"
+            ))
+            .unwrap_err();
+            assert!(error.message.contains("a node sets"), "{error}");
+        }
     }
 
     #[test]
