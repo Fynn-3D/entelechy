@@ -202,3 +202,42 @@ fn a_field_that_does_not_fit_a_format_says_what_it_is_not() {
     );
     assert!(orla_formats::encode(&rows, "wav", Some(8000)).is_ok());
 }
+
+#[test]
+fn a_header_longer_than_the_file_is_an_error() {
+    // A header chunk that says it runs 4 GB, in a 14-byte file.
+    let mut file = b"MThd".to_vec();
+    file.extend(u32::MAX.to_be_bytes());
+    file.extend([0, 0, 0, 1, 0, 0x60]);
+    let error = read::read(&file).unwrap_err();
+    assert!(error.contains("past the end"), "{error}");
+}
+
+#[test]
+fn many_notes_on_one_key_read_in_linear_time() {
+    // Strikes of one key all sounding at once, then as many releases:
+    // each release ends the earliest strike.
+    let count = 400_000u32;
+    let mut events = Vec::new();
+    for _ in 0..count {
+        events.extend([0, 0x90, 60, 100]);
+    }
+    for _ in 0..count {
+        events.extend([1, 0x80, 60, 0]);
+    }
+    events.extend([0, 0xFF, 0x2F, 0]);
+    let mut file = b"MThd".to_vec();
+    file.extend(6u32.to_be_bytes());
+    file.extend([0, 0, 0, 1, 0, 0x60]);
+    file.extend(b"MTrk");
+    file.extend((events.len() as u32).to_be_bytes());
+    file.extend(events);
+    let started = std::time::Instant::now();
+    let song = read::read(&file).unwrap();
+    assert_eq!(song.notes.len(), count as usize);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+}

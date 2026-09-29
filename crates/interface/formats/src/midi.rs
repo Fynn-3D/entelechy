@@ -3,6 +3,8 @@
 //! Kernel plays a score against `time()`. Encoding writes one track of
 //! strikes and releases at the caller's tempo.
 
+use std::collections::VecDeque;
+
 use orla_host::{Domain, FieldData, Scalar, Schema};
 
 /// One note, as a scene reads it:
@@ -143,12 +145,14 @@ struct Sounding {
 /// Reads a standard MIDI file, notes in seconds by the tempo map.
 pub fn read(bytes: &[u8]) -> Result<Song, String> {
     let mut at = 0usize;
-    let (kind, length) = chunk(bytes, &mut at)?;
-    if kind != *b"MThd" || length < 6 {
-        return Err("not a MIDI file: it does not begin with a header chunk".into());
+    let not_midi = || "not a MIDI file: it does not begin with a header chunk".to_owned();
+    if !bytes.starts_with(b"MThd") {
+        return Err(not_midi());
     }
-    let header = &bytes[at..at + length];
-    at += length;
+    let (_, header) = chunk(bytes, &mut at)?;
+    if header.len() < 6 {
+        return Err(not_midi());
+    }
     let format = u16::from_be_bytes([header[0], header[1]]);
     let tracks = u16::from_be_bytes([header[2], header[3]]) as usize;
     let division = i16::from_be_bytes([header[4], header[5]]);
@@ -164,22 +168,16 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
     let mut events: Vec<(u64, usize, Event)> = Vec::new();
     let mut read_tracks = 0usize;
     while at < bytes.len() {
-        let (kind, length) = chunk(bytes, &mut at)?;
-        let end = at + length;
-        if end > bytes.len() {
-            return Err("a track runs past the end of the file".into());
-        }
+        let (kind, body) = chunk(bytes, &mut at)?;
         if kind != *b"MTrk" {
-            at = end;
             left_out.push(format!(
                 "a `{}` chunk, which is not a track",
                 String::from_utf8_lossy(&kind)
             ));
             continue;
         }
-        track(&bytes[at..end], read_tracks, &mut events, &mut left_out)?;
+        track(body, read_tracks, &mut events, &mut left_out)?;
         read_tracks += 1;
-        at = end;
     }
     if read_tracks != tracks {
         left_out.push(format!(
@@ -194,8 +192,10 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
     let seconds = |tick: u64, tick_of_change: u64, seconds_at: f64, micros: f64| -> f64 {
         seconds_at + (tick - tick_of_change) as f64 * micros / (per_quarter as f64 * 1_000_000.0)
     };
-    let mut sounding: std::collections::HashMap<(i32, i32), Vec<Sounding>> =
-        std::collections::HashMap::new();
+    // Each key's sounding notes, the earliest first; keys in order, so
+    // what is never released is found in one order.
+    let mut sounding: std::collections::BTreeMap<(i32, i32), VecDeque<Sounding>> =
+        std::collections::BTreeMap::new();
     let mut notes: Vec<Note> = Vec::new();
     for (tick, _, event) in events {
         // The tick's second at the tempo in force; a note keeps its own
@@ -214,18 +214,17 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
             } => sounding
                 .entry((channel, pitch))
                 .or_default()
-                .push(Sounding {
+                .push_back(Sounding {
                     start: at,
                     velocity,
                 }),
             Event::Off { channel, pitch } => {
-                let Some(open) = sounding.get_mut(&(channel, pitch)) else {
+                let Some(began) = sounding
+                    .get_mut(&(channel, pitch))
+                    .and_then(VecDeque::pop_front)
+                else {
                     continue;
                 };
-                if open.is_empty() {
-                    continue;
-                }
-                let began = open.remove(0);
                 notes.push(Note {
                     start: began.start as f32,
                     duration: (at - began.start).max(0.0) as f32,
@@ -236,7 +235,7 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
             }
         }
     }
-    let still_sounding: usize = sounding.values().map(Vec::len).sum();
+    let still_sounding: usize = sounding.values().map(VecDeque::len).sum();
     if still_sounding > 0 {
         left_out.push(format!(
             "{still_sounding} note(s) never released, which end where the song does"
@@ -298,19 +297,20 @@ impl Event {
 }
 
 /// A chunk's kind and the length of what follows it.
-fn chunk(bytes: &[u8], at: &mut usize) -> Result<([u8; 4], usize), String> {
-    if *at + 8 > bytes.len() {
+fn chunk<'b>(bytes: &'b [u8], at: &mut usize) -> Result<([u8; 4], &'b [u8]), String> {
+    let Some(head) = bytes.get(*at..).and_then(|rest| rest.get(..8)) else {
         return Err("a chunk header runs past the end of the file".into());
-    }
-    let kind = [bytes[*at], bytes[*at + 1], bytes[*at + 2], bytes[*at + 3]];
-    let length = u32::from_be_bytes([
-        bytes[*at + 4],
-        bytes[*at + 5],
-        bytes[*at + 6],
-        bytes[*at + 7],
-    ]) as usize;
-    *at += 8;
-    Ok((kind, length))
+    };
+    let kind = [head[0], head[1], head[2], head[3]];
+    let length = u32::from_be_bytes([head[4], head[5], head[6], head[7]]) as usize;
+    let Some(body) = bytes[*at + 8..].get(..length) else {
+        return Err(format!(
+            "a `{}` chunk runs past the end of the file",
+            String::from_utf8_lossy(&kind)
+        ));
+    };
+    *at += 8 + length;
+    Ok((kind, body))
 }
 
 /// Reads a variable-length quantity.
