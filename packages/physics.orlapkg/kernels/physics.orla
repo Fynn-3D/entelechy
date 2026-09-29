@@ -152,6 +152,9 @@ fn unturn(v: Vec2, angle: Float) -> Vec2 {
 // The plane's cross product, and a spin crossed with an arm.
 fn wedge(a: Vec2, b: Vec2) -> Float { return a.x * b.y - a.y * b.x; }
 fn swirl(w: Float, r: Vec2) -> Vec2 { return vec2(-w * r.y, w * r.x); }
+// The angle a point a body holds turns with: a box's own; none for a
+// circle, whose point of contact stays where it touches as it rolls.
+fn arm_angle(b: Body) -> Float { return if b.shape == 0 { 0.0 } else { b.angle }; }
 
 // How far a body reaches from its centre.
 fn extent(b: Body) -> Float { return if b.shape == 0 { b.size.x } else { length(b.size) }; }
@@ -534,8 +537,8 @@ fn holding(a: Body, b: Body, c: Vec2, s: Float, n: Vec2) -> Contact {
     let rb = c - b.position;
     let dv = b.velocity + swirl(b.spin, rb) - a.velocity - swirl(a.spin, ra);
     return Contact {
-        anchor_a: unturn(ra, a.angle),
-        anchor_b: unturn(rb, b.angle),
+        anchor_a: unturn(ra, arm_angle(a)),
+        anchor_b: unturn(rb, arm_angle(b)),
         base: s,
         approach: dot(dv, n),
         normal: 0.0,
@@ -701,8 +704,8 @@ fn softness(h: Float, hertz: Float, ratio: Float) -> Vec3 {
 struct Solved { point: Contact; both: Both; }
 
 fn solve_normal(pt: Contact, both: Both, a: Body, b: Body, n: Vec2, h: Float, relax: Bool, soft: Vec3, speed: Float) -> Solved {
-    let ra = turn(pt.anchor_a, a.angle);
-    let rb = turn(pt.anchor_b, b.angle);
+    let ra = turn(pt.anchor_a, arm_angle(a));
+    let rb = turn(pt.anchor_b, arm_angle(b));
     let s = dot((b.position + rb) - (a.position + ra), n) + pt.base;
     let closing_ahead = s > 0.0;
     let bias = if closing_ahead { s / h } else { if relax { 0.0 } else { max(soft.x * s, -speed) } };
@@ -715,8 +718,8 @@ fn solve_normal(pt: Contact, both: Both, a: Body, b: Body, n: Vec2, h: Float, re
 }
 
 fn solve_tangent(pt: Contact, both: Both, a: Body, b: Body, n: Vec2, friction: Float) -> Solved {
-    let ra = turn(pt.anchor_a, a.angle);
-    let rb = turn(pt.anchor_b, b.angle);
+    let ra = turn(pt.anchor_a, arm_angle(a));
+    let rb = turn(pt.anchor_b, arm_angle(b));
     let t = vec2(n.y, -n.x);
     let vt = dot(closing(both, ra, rb), t);
     let most = friction * pt.normal;
@@ -727,8 +730,8 @@ fn solve_tangent(pt: Contact, both: Both, a: Body, b: Body, n: Vec2, friction: F
 // The copies pushed `by` times the impulses a point holds: once to warm
 // a substep, once less to take back a warm no substep follows.
 fn warm(pt: Contact, both: Both, a: Body, b: Body, n: Vec2, by: Float) -> Both {
-    let ra = turn(pt.anchor_a, a.angle);
-    let rb = turn(pt.anchor_b, b.angle);
+    let ra = turn(pt.anchor_a, arm_angle(a));
+    let rb = turn(pt.anchor_b, arm_angle(b));
     return apply(both, (n * pt.normal + vec2(n.y, -n.x) * pt.tangent) * by, ra, rb);
 }
 
@@ -739,8 +742,8 @@ fn warmed(m: Manifold, both: Both, a: Body, b: Body, by: Float) -> Both {
 }
 
 fn bounce(pt: Contact, both: Both, a: Body, b: Body, n: Vec2, e: Float, threshold: Float) -> Solved {
-    let ra = turn(pt.anchor_a, a.angle);
-    let rb = turn(pt.anchor_b, b.angle);
+    let ra = turn(pt.anchor_a, arm_angle(a));
+    let rb = turn(pt.anchor_b, arm_angle(b));
     if pt.approach > -threshold || pt.normal == 0.0 { return Solved { point: pt, both: both }; }
     let vn = dot(closing(both, ra, rb), n);
     let total = max(pt.normal - inverse_along(both, ra, rb, n) * (vn + e * pt.approach), 0.0);
