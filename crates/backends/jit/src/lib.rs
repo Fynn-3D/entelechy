@@ -14,6 +14,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod codegen;
 mod failure;
+mod frame;
 mod layout;
 #[cfg(target_arch = "wasm32")]
 mod wasm;
@@ -203,8 +204,15 @@ impl Backend for JitBackend {
         "jit"
     }
 
+    fn declines(&self, module: &Validated) -> Option<String> {
+        frame::refusal(module)
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
+        if let Some(reason) = frame::refusal(module) {
+            return Err(reason);
+        }
         let code = codegen::compile(module, self.isa.clone())?;
         Ok(Box::new(Compiled {
             module: Some(code.module),
@@ -216,6 +224,9 @@ impl Backend for JitBackend {
 
     #[cfg(target_arch = "wasm32")]
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
+        if let Some(reason) = frame::refusal(module) {
+            return Err(reason);
+        }
         Ok(Box::new(wasm::compile(module)?))
     }
 

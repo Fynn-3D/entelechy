@@ -985,3 +985,38 @@ fn an_input_of_the_wrong_layout_is_refused_by_every_backend() {
         assert!(error.to_string().contains(said), "{error}");
     }
 }
+
+#[test]
+fn values_past_the_stack_are_left_to_the_interpreter() {
+    // Megabytes of array values: a frame that large steps past a
+    // thread's guard page, so the JIT refuses the module and the
+    // interpreter, holding values on the heap, runs it.
+    let source = "kernel test.deep@1 { requires { field.write; } output result: Rows<Int>;
+        compute {
+            let a = [[element(); 4096]; 160];
+            return a[element() % 160][3];
+        } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let jit = JitBackend::new().unwrap();
+    let mut host = Host::new(1 << 22);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(4),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, all());
+    let cpu = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    assert_eq!(host.data(cpu).unwrap().storage(), [0, 1, 2, 3]);
+    match jit.prepare(&module) {
+        Err(reason) => assert!(reason.contains("stack"), "{reason}"),
+        Ok(prepared) => {
+            let mut scope = Scope::new(&mut host, all());
+            let out = jit.execute(prepared.as_ref(), &module, &invocation, &mut scope);
+            panic!("the JIT ran the module: {:?}", out.map(|_| ()));
+        }
+    }
+    assert!(jit.declines(&module).is_some());
+}
