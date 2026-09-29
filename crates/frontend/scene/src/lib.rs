@@ -2377,8 +2377,10 @@ output raw <- first.result to bytes \"raw.bin\";";
     }
 }
 
-/// A graph written as a scene document that lowers back to the same
-/// graph; a file input is written as a caller-supplied image.
+/// A graph written as a scene document. One that places no graph lowers
+/// back to the same graph; a placed graph's nodes are named by their path
+/// (`title.advances`), which shows the plan and does not read back. A
+/// file input is written as a caller-supplied image.
 pub fn print(graph: &Graph) -> String {
     Printed(graph).to_string()
 }
