@@ -1,0 +1,95 @@
+//! A drawing through `look` at the window's size, tiled: the canvas is
+//! cut into tiles of 16 pixels, each keeps the shapes whose boxes reach
+//! it, each shape the segments that reach each band of tiles it spans,
+//! and each pixel asks only those. It draws the words `vector.draw@1`
+//! draws, at the cost of a few passes over shapes and segments, so a
+//! large drawing (a map, a page of type) draws in time; a drawing of a
+//! few shapes draws as fast plainly.
+use "../kernels/vector.orla";
+
+input shapes: Rows<Shape>;
+input segments: Rows<Vec4>;
+input stops: Rows<Stop>;
+input view: Rows<Vec2>;
+input look: Rows<Look>;
+param background: Vec4 = vec4(1.0, 1.0, 1.0, 1.0);
+
+// The canvas, which only gives its size, and its tiles.
+node canvas: Grid<Int> { domain = window(); }
+node tiles: Grid<Int> { domain = ceil(window() / 16); }
+
+// The tiles each shape's box reaches, and the shapes each tile keeps,
+// in their order.
+node reach: vector.reach@1 { shapes <- shapes; view <- view; look <- look; canvas <- canvas.result; }
+node shape_chunks: vector.shape_chunks@1 { reach <- reach.result; domain = ceil(count(reach) / 256); }
+node tile_counts: vector.tile_counts@1 {
+    reach <- reach.result;
+    chunks <- shape_chunks.result;
+    tiles <- tiles.result;
+    domain = count(tiles);
+}
+node tile_ends: vector.ends@1 { counts <- tile_counts.result; }
+node tile_total: vector.total@1 { ends <- tile_ends.result; domain = 1; }
+node tile_blank: vector.blank@1 { total <- tile_total.result; domain = value(total); }
+node tile_shapes: vector.tile_fill@1 {
+    reach <- reach.result;
+    chunks <- shape_chunks.result;
+    counts <- tile_counts.result;
+    ends <- tile_ends.result;
+    tiles <- tiles.result;
+    slots <- tile_blank.result;
+    domain = count(tiles);
+}
+
+// A slot for each band of tiles each shape spans, and the segments of
+// the shape each slot keeps, in their order.
+node spans: vector.spans@1 { reach <- reach.result; }
+node span_ends: vector.ends@1 { counts <- spans.result; }
+node span_total: vector.total@1 { ends <- span_ends.result; domain = 1; }
+node placed: vector.placed@1 { segments <- segments; view <- view; look <- look; canvas <- canvas.result; }
+node segment_chunks: vector.segment_chunks@1 { placed <- placed.result; domain = ceil(count(placed) / 256); }
+node band_counts: vector.band_counts@1 {
+    total <- span_total.result;
+    shapes <- shapes;
+    placed <- placed.result;
+    chunks <- segment_chunks.result;
+    reach <- reach.result;
+    spans <- spans.result;
+    span_ends <- span_ends.result;
+    domain = value(total);
+}
+node band_ends: vector.ends@1 { counts <- band_counts.result; }
+node band_total: vector.total@1 { ends <- band_ends.result; domain = 1; }
+node band_blank: vector.blank@1 { total <- band_total.result; domain = value(total); }
+node band_segments: vector.band_fill@1 {
+    counts <- band_counts.result;
+    ends <- band_ends.result;
+    shapes <- shapes;
+    placed <- placed.result;
+    chunks <- segment_chunks.result;
+    reach <- reach.result;
+    spans <- spans.result;
+    span_ends <- span_ends.result;
+    slots <- band_blank.result;
+}
+
+node drawn: vector.draw_tiled@1 {
+    shapes <- shapes;
+    segments <- segments;
+    stops <- stops;
+    view <- view;
+    look <- look;
+    reach <- reach.result;
+    tile_counts <- tile_counts.result;
+    tile_ends <- tile_ends.result;
+    tile_shapes <- tile_shapes.result;
+    spans <- spans.result;
+    span_ends <- span_ends.result;
+    band_counts <- band_counts.result;
+    band_ends <- band_ends.result;
+    band_segments <- band_segments.result;
+    background = background;
+    domain = window();
+}
+
+output picture <- drawn.result;

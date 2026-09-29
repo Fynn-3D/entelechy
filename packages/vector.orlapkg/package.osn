@@ -1,7 +1,9 @@
 //! The vector package: drawings `orla import` reads from SVG, filled
-//! pixel by pixel on every backend alike. `vector.draw@1` draws the shapes
-//! through a look; `graphs/drawing.osn` draws one whole, fitted to the
-//! window.
+//! pixel by pixel on every backend alike. `graphs/draw.osn` draws the
+//! shapes through a look, tiled, so each pixel asks only the shapes and
+//! segments near it; `vector.draw@1` is the same rule asked of every
+//! shape, the reference the tiled form is tested against.
+//! `graphs/drawing.osn` draws one whole, fitted to the window.
 package vector@1 { language = 1; ir = 1; }
 
 use "kernels/";

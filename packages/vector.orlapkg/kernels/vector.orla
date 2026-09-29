@@ -15,6 +15,17 @@
 // A drawing is looked at through a `Look`: the point of the drawing at
 // the middle of the picture and how many times larger than fitting the
 // drawing to the picture it is shown.
+//
+// `vector.draw@1` is the rule written plainly: every pixel asks every
+// shape and every segment. The tiled form (`graphs/draw.osn`) asks the
+// same questions of fewer: the canvas is cut into tiles of 16
+// pixels, each tile keeps the shapes whose boxes reach it, and each shape
+// keeps, for each band of tiles it spans, the segments that reach the
+// band's rows. A segment that could change a pixel's winding or its
+// smoothing is always among them, so the two forms draw the same words.
+// Both lists are found by walking shapes and segments in chunks, a chunk
+// whose reach misses passed over whole, and every loop over shapes or
+// segments is two deep, so neither count is bounded by one loop's.
 
 // A shape as `orla import` writes it, `<stem>.shapes.field`.
 struct Shape {
@@ -39,6 +50,14 @@ struct Stop { offset: Float; color: Vec4; }
 // Where the picture looks: the drawing's point at its middle, and the
 // zoom over fitting the whole drawing.
 struct Look { center: Vec2; zoom: Float; }
+
+// The tiles a shape's box reaches, inclusive; none when `x1 < x0`.
+struct Reach { x0: Int; y0: Int; x1: Int; y1: Int; }
+
+// An index written into a list at a slot.
+struct Slot { at: Int; value: Int; }
+
+// ---- the rule
 
 // The distance from `p` to the segment from `a` to `b`.
 fn to_segment(p: Vec2, a: Vec2, b: Vec2) -> Float {
@@ -90,6 +109,47 @@ fn paint_at(shape: Shape, stops: Rows<Stop>, p: Vec2) -> Vec4 {
     return vec4(c.x, c.y, c.z, c.w * shape.color.w);
 }
 
+// One segment's part in a pixel: its crossing of the ray to the right
+// and its distance, gathered into `w` (winding, nearest).
+fn crossed(w: Vec2, seg: Vec4, p: Vec2) -> Vec2 {
+    let a = vec2(seg.x, seg.y);
+    let b = vec2(seg.z, seg.w);
+    let crosses = (a.y <= p.y) != (b.y <= p.y);
+    let x = a.x + (p.y - a.y) * (b.x - a.x) / (b.y - a.y);
+    let turn = if crosses && x > p.x { if b.y > a.y { 1.0 } else { -1.0 } } else { 0.0 };
+    return vec2(w.x + turn, min(w.y, to_segment(p, a, b)));
+}
+
+// Whether a shape's box, grown by a pixel, holds `p`.
+fn near(s: Shape, p: Vec2, pixel: Float) -> Bool {
+    return p.x >= s.lo.x - pixel && p.x <= s.hi.x + pixel && p.y >= s.lo.y - pixel && p.y <= s.hi.y + pixel;
+}
+
+// A shape laid over `below`, given its winding and nearest segment.
+fn laid(below: Vec4, s: Shape, stops: Rows<Stop>, p: Vec2, pixel: Float, hit: Vec2) -> Vec4 {
+    let winding = int(hit.x);
+    let inside = if s.rule == 0 { winding != 0 } else { winding % 2 != 0 };
+    let signed = if inside { hit.y } else { -hit.y };
+    let cover = clamp(0.5 + signed / pixel, 0.0, 1.0);
+    let c = paint_at(s, stops, p);
+    let a = c.w * cover;
+    return vec4(below.x * (1.0 - a) + c.x * a, below.y * (1.0 - a) + c.y * a, below.z * (1.0 - a) + c.z * a, below.w * (1.0 - a) + a);
+}
+
+// How many of 65536 a two-deep loop over `n` runs in its round `r`.
+fn round_of(n: Int, r: Int) -> Int { return clamp(n - r * 65536, 0, 65536); }
+fn rounds(n: Int) -> Int { return (n + 65535) / 65536; }
+
+// The look: the drawing's point at the pixel's centre, and a pixel's
+// size in the drawing's units.
+fn seen(view: Rows<Vec2>, look: Rows<Look>, res: Vec2, pixel_at: Vec2) -> Vec3 {
+    let size = at(view, 0);
+    let eye = at(look, 0);
+    let pixel = 1.0 / (min(res.x / size.x, res.y / size.y) * eye.zoom);
+    let p = eye.center + (pixel_at + vec2(0.5, 0.5) - res * 0.5) * pixel;
+    return vec3(p.x, p.y, pixel);
+}
+
 /// A look at the whole drawing: its middle, fitted to the picture.
 kernel vector.whole@1 {
     requires { field.read; field.write; }
@@ -98,7 +158,8 @@ kernel vector.whole@1 {
     compute { return Look { center: at(view, 0) * 0.5, zoom: 1.0 }; }
 }
 
-/// The drawing over `background`, through `look`, at the node's domain.
+/// The drawing over `background`, through `look`, at the node's domain:
+/// every pixel asks every shape and segment.
 kernel vector.draw@1 {
     requires { field.read; field.write; }
     input shapes: Rows<Shape>;
@@ -109,35 +170,384 @@ kernel vector.draw@1 {
     param background: Vec4 = vec4(1.0, 1.0, 1.0, 1.0);
     output result: Image;
     compute {
-        let size = at(view, 0);
-        let eye = at(look, 0);
-        let res = domain();
-        // Pixels a unit of the drawing takes.
-        let fit = min(res.x / size.x, res.y / size.y) * eye.zoom;
-        let pixel = 1.0 / fit;
-        let p = eye.center + (coord() + vec2(0.5, 0.5) - res * 0.5) * pixel;
-        let drawn = loop count(shapes) with below = background {
-            let s = at(shapes, index());
-            let near = p.x >= s.lo.x - pixel && p.x <= s.hi.x + pixel && p.y >= s.lo.y - pixel && p.y <= s.hi.y + pixel;
-            if !near { below } else {
-                let hit = loop s.count with w = vec2(0.0, 1000000000.0) {
-                    let seg = at(segments, s.first + index());
-                    let a = vec2(seg.x, seg.y);
-                    let b = vec2(seg.z, seg.w);
-                    let crosses = (a.y <= p.y) != (b.y <= p.y);
-                    let x = a.x + (p.y - a.y) * (b.x - a.x) / (b.y - a.y);
-                    let turn = if crosses && x > p.x { if b.y > a.y { 1.0 } else { -1.0 } } else { 0.0 };
-                    vec2(w.x + turn, min(w.y, to_segment(p, a, b)))
-                };
-                let winding = int(hit.x);
-                let inside = if s.rule == 0 { winding != 0 } else { winding % 2 != 0 };
-                let signed = if inside { hit.y } else { -hit.y };
-                let cover = clamp(0.5 + signed / pixel, 0.0, 1.0);
-                let c = paint_at(s, stops, p);
-                let a = c.w * cover;
-                vec4(below.x * (1.0 - a) + c.x * a, below.y * (1.0 - a) + c.y * a, below.z * (1.0 - a) + c.z * a, below.w * (1.0 - a) + a)
+        let v = seen(view, look, domain(), coord());
+        let p = vec2(v.x, v.y);
+        let pixel = v.z;
+        let n = count(shapes);
+        return loop rounds(n) with over = background {
+            let r = index();
+            loop round_of(n, r) with below = over {
+                let s = at(shapes, r * 65536 + index());
+                if !near(s, p, pixel) { below } else {
+                    let hit = loop rounds(s.count) with w = vec2(0.0, 1000000000.0) {
+                        let q = index();
+                        loop round_of(s.count, q) with w2 = w {
+                            crossed(w2, at(segments, s.first + q * 65536 + index()), p)
+                        }
+                    };
+                    laid(below, s, stops, p, pixel, hit)
+                }
             }
         };
-        return drawn;
+    }
+}
+
+// ---- the tiled form
+
+// Pixels a tile is wide and high; a band is a row of tiles.
+fn tile() -> Float { return 16.0; }
+fn tile_columns(res: Vec2) -> Int { return int(ceil(res.x / tile())); }
+fn tile_rows(res: Vec2) -> Int { return int(ceil(res.y / tile())); }
+
+// Where the drawing's point `q` is on the canvas, in pixels.
+fn on_canvas(q: Vec2, view: Rows<Vec2>, look: Rows<Look>, res: Vec2) -> Vec2 {
+    let size = at(view, 0);
+    let eye = at(look, 0);
+    let fit = min(res.x / size.x, res.y / size.y) * eye.zoom;
+    return (q - eye.center) * fit + res * 0.5;
+}
+
+/// Each shape's reach: the tiles its box, grown by two pixels, touches on
+/// the canvas.
+kernel vector.reach@1 {
+    requires { field.read; field.write; }
+    input shapes: Rows<Shape>;
+    input view: Rows<Vec2>;
+    input look: Rows<Look>;
+    input canvas: Grid<Int>;
+    output result: Rows<Reach>;
+    compute {
+        let s = sample(shapes);
+        let res = size(canvas);
+        let lo = on_canvas(s.lo, view, look, res) - vec2(2.0, 2.0);
+        let hi = on_canvas(s.hi, view, look, res) + vec2(2.0, 2.0);
+        let none = Reach { x0: 0, y0: 0, x1: -1, y1: -1 };
+        if hi.x < 0.0 || hi.y < 0.0 || lo.x > res.x || lo.y > res.y { return none; }
+        return Reach {
+            x0: int(floor(max(lo.x, 0.0) / tile())),
+            y0: int(floor(max(lo.y, 0.0) / tile())),
+            x1: min(int(floor(min(hi.x, res.x) / tile())), tile_columns(res) - 1),
+            y1: min(int(floor(min(hi.y, res.y) / tile())), tile_rows(res) - 1),
+        };
+    }
+}
+
+// Whether a reach holds a tile.
+fn holds(r: Reach, tx: Int, ty: Int) -> Bool {
+    return tx >= r.x0 && tx <= r.x1 && ty >= r.y0 && ty <= r.y1;
+}
+
+// Shapes and segments are asked in chunks of this many, in order: a
+// chunk whose reach misses a tile or a band is passed over whole.
+fn chunk() -> Int { return 256; }
+
+/// What each chunk of shapes reaches together.
+kernel vector.shape_chunks@1 {
+    requires { field.read; field.write; }
+    input reach: Rows<Reach>;
+    output result: Rows<Reach>;
+    compute {
+        let n = count(reach);
+        let first = element() * chunk();
+        return loop chunk() with u = Reach { x0: 1073741824, y0: 1073741824, x1: -1, y1: -1 } {
+            let s = first + index();
+            let r = at(reach, s);
+            if s >= n || r.x1 < r.x0 { u } else {
+                Reach { x0: min(u.x0, r.x0), y0: min(u.y0, r.y0), x1: max(u.x1, r.x1), y1: max(u.y1, r.y1) }
+            }
+        };
+    }
+}
+
+// Whether shape `s`, in a chunk that reaches the tile, is one to keep.
+fn keeps(reach: Rows<Reach>, s: Int, tx: Int, ty: Int) -> Bool {
+    return s < count(reach) && holds(at(reach, s), tx, ty);
+}
+
+/// How many shapes reach each tile.
+kernel vector.tile_counts@1 {
+    requires { field.read; field.write; }
+    input reach: Rows<Reach>;
+    input chunks: Rows<Reach>;
+    input tiles: Grid<Int>;
+    output result: Rows<Int>;
+    compute {
+        let columns = int(size(tiles).x);
+        let tx = element() % columns;
+        let ty = element() / columns;
+        let n = count(chunks);
+        return loop rounds(n) with total = 0 {
+            let r = index();
+            loop round_of(n, r) with k = total {
+                let c = r * 65536 + index();
+                if !holds(at(chunks, c), tx, ty) { k } else {
+                    loop chunk() with k2 = k {
+                        if keeps(reach, c * chunk() + index(), tx, ty) { k2 + 1 } else { k2 }
+                    }
+                }
+            }
+        };
+    }
+}
+
+/// How many bands each shape spans.
+kernel vector.spans@1 {
+    requires { field.read; field.write; }
+    input reach: Rows<Reach>;
+    output result: Rows<Int>;
+    compute { let r = sample(reach); return if r.x1 < r.x0 { 0 } else { r.y1 - r.y0 + 1 }; }
+}
+
+/// Where each list ends: an inclusive prefix of the counts.
+kernel vector.ends@1 {
+    requires { field.read; field.write; }
+    input counts: Rows<Int>;
+    output result: Rows<Int>;
+    prefix with sum { return sample(counts); }
+}
+
+/// How many entries the lists hold together, which sizes the next nodes;
+/// at least one, so the lists are never empty.
+kernel vector.total@1 {
+    requires { field.read; field.write; }
+    input ends: Rows<Int>;
+    output result: Rows<Int>;
+    compute { return max(at(ends, count(ends) - 1), 1); }
+}
+
+/// A list's blank slots, each read as no entry.
+kernel vector.blank@1 {
+    requires { field.read; field.write; }
+    input total: Rows<Int>;
+    output result: Rows<Int>;
+    compute { return -1; }
+}
+
+/// Each tile's shapes, in their order, into its part of the list: the
+/// walk `vector.tile_counts@1` counts, stopped at its count.
+kernel vector.tile_fill@1 {
+    requires { field.read; field.write; }
+    input reach: Rows<Reach>;
+    input chunks: Rows<Reach>;
+    input counts: Rows<Int>;
+    input ends: Rows<Int>;
+    input tiles: Grid<Int>;
+    input slots: Rows<Int>;
+    output result: Rows<Int>;
+    scatter into slots with max {
+        let columns = int(size(tiles).x);
+        let t = element();
+        let tx = t % columns;
+        let ty = t / columns;
+        let room = at(counts, t);
+        let start = at(ends, t) - room;
+        let n = count(chunks);
+        loop rounds(n) with k = 0 {
+            let r = index();
+            loop round_of(n, r) with k1 = k {
+                let c = r * 65536 + index();
+                if !holds(at(chunks, c), tx, ty) { k1 } else {
+                    loop chunk() with k2 = k1 {
+                        let s = c * chunk() + index();
+                        if k2 < room && keeps(reach, s, tx, ty) {
+                            emit(Slot { at: start + k2, value: s });
+                            k2 + 1
+                        } else { k2 }
+                    }
+                }
+            }
+        };
+        return Slot { at: -1, value: 0 };
+    }
+}
+
+// The shape and band a band slot is: the first shape whose spans end
+// past it, by bisection.
+fn band_of(slot: Int, spans: Rows<Int>, span_ends: Rows<Int>, reach: Rows<Reach>) -> IVec2 {
+    let found = loop 32 with r = ivec2(0, count(span_ends)) until r.x >= r.y {
+        let mid = (r.x + r.y) / 2;
+        if at(span_ends, mid) > slot { ivec2(r.x, mid) } else { ivec2(mid + 1, r.y) }
+    };
+    let s = found.x;
+    let first = at(span_ends, s) - at(spans, s);
+    return ivec2(s, at(reach, s).y0 + slot - first);
+}
+
+// Whether rows from `lo` to `hi` on the canvas reach a band's rows, a
+// pixel over its edges.
+fn in_band(lo: Float, hi: Float, band: Int) -> Bool {
+    return hi >= float(band) * tile() - 1.0 && lo <= float(band + 1) * tile() + 1.0;
+}
+fn segment_in_band(seg: Vec4, band: Int) -> Bool {
+    return in_band(min(seg.y, seg.w), max(seg.y, seg.w), band);
+}
+
+/// Each segment on the canvas, as its shape's box is.
+kernel vector.placed@1 {
+    requires { field.read; field.write; }
+    input segments: Rows<Vec4>;
+    input view: Rows<Vec2>;
+    input look: Rows<Look>;
+    input canvas: Grid<Int>;
+    output result: Rows<Vec4>;
+    compute {
+        let s = sample(segments);
+        let res = size(canvas);
+        let a = on_canvas(vec2(s.x, s.y), view, look, res);
+        let b = on_canvas(vec2(s.z, s.w), view, look, res);
+        return vec4(a.x, a.y, b.x, b.y);
+    }
+}
+
+/// The rows each chunk of segments spans on the canvas, least and most.
+kernel vector.segment_chunks@1 {
+    requires { field.read; field.write; }
+    input placed: Rows<Vec4>;
+    output result: Rows<Vec2>;
+    compute {
+        let n = count(placed);
+        let first = element() * chunk();
+        return loop chunk() with u = vec2(1000000000.0, -1000000000.0) {
+            let g = first + index();
+            let s = at(placed, g);
+            if g >= n { u } else { vec2(min(u.x, min(s.y, s.w)), max(u.y, max(s.y, s.w))) }
+        };
+    }
+}
+
+// The chunks of segments a shape's lie in: the first, and how many.
+fn chunks_of(s: Shape) -> IVec2 {
+    let c0 = s.first / chunk();
+    return ivec2(c0, if s.count > 0 { (s.first + s.count - 1) / chunk() - c0 + 1 } else { 0 });
+}
+
+// Whether segment `g`, in a chunk that reaches the band, is one of the
+// shape's that reaches it.
+fn kept(s: Shape, placed: Rows<Vec4>, g: Int, band: Int) -> Bool {
+    return g >= s.first && g < s.first + s.count && segment_in_band(at(placed, g), band);
+}
+
+/// How many of its shape's segments reach each band slot's rows.
+kernel vector.band_counts@1 {
+    requires { field.read; field.write; }
+    input total: Rows<Int>;
+    input shapes: Rows<Shape>;
+    input placed: Rows<Vec4>;
+    input chunks: Rows<Vec2>;
+    input reach: Rows<Reach>;
+    input spans: Rows<Int>;
+    input span_ends: Rows<Int>;
+    output result: Rows<Int>;
+    compute {
+        let b = band_of(element(), spans, span_ends, reach);
+        let s = at(shapes, b.x);
+        let cs = chunks_of(s);
+        return loop rounds(cs.y) with total = 0 {
+            let r = index();
+            loop round_of(cs.y, r) with k = total {
+                let c = cs.x + r * 65536 + index();
+                let rows = at(chunks, c);
+                if !in_band(rows.x, rows.y, b.y) { k } else {
+                    loop chunk() with k2 = k {
+                        if kept(s, placed, c * chunk() + index(), b.y) { k2 + 1 } else { k2 }
+                    }
+                }
+            }
+        };
+    }
+}
+
+/// Each band slot's segments, in their order, into its part of the list:
+/// the walk `vector.band_counts@1` counts, stopped at its count.
+kernel vector.band_fill@1 {
+    requires { field.read; field.write; }
+    input counts: Rows<Int>;
+    input ends: Rows<Int>;
+    input shapes: Rows<Shape>;
+    input placed: Rows<Vec4>;
+    input chunks: Rows<Vec2>;
+    input reach: Rows<Reach>;
+    input spans: Rows<Int>;
+    input span_ends: Rows<Int>;
+    input slots: Rows<Int>;
+    output result: Rows<Int>;
+    scatter into slots with max {
+        let slot = element();
+        let room = at(counts, slot);
+        let start = at(ends, slot) - room;
+        let b = band_of(slot, spans, span_ends, reach);
+        let s = at(shapes, b.x);
+        let cs = chunks_of(s);
+        loop rounds(cs.y) with k = 0 {
+            let r = index();
+            loop round_of(cs.y, r) with k1 = k {
+                let c = cs.x + r * 65536 + index();
+                let rows = at(chunks, c);
+                if !in_band(rows.x, rows.y, b.y) { k1 } else {
+                    loop chunk() with k2 = k1 {
+                        let g = c * chunk() + index();
+                        if k2 < room && kept(s, placed, g, b.y) {
+                            emit(Slot { at: start + k2, value: g });
+                            k2 + 1
+                        } else { k2 }
+                    }
+                }
+            }
+        };
+        return Slot { at: -1, value: 0 };
+    }
+}
+
+
+/// The drawing, each pixel asking only its tile's shapes and, of each,
+/// the segments of its band: the same words `vector.draw@1` draws.
+kernel vector.draw_tiled@1 {
+    requires { field.read; field.write; }
+    input shapes: Rows<Shape>;
+    input segments: Rows<Vec4>;
+    input stops: Rows<Stop>;
+    input view: Rows<Vec2>;
+    input look: Rows<Look>;
+    input reach: Rows<Reach>;
+    input tile_counts: Rows<Int>;
+    input tile_ends: Rows<Int>;
+    input tile_shapes: Rows<Int>;
+    input spans: Rows<Int>;
+    input span_ends: Rows<Int>;
+    input band_counts: Rows<Int>;
+    input band_ends: Rows<Int>;
+    input band_segments: Rows<Int>;
+    param background: Vec4 = vec4(1.0, 1.0, 1.0, 1.0);
+    output result: Image;
+    compute {
+        let res = domain();
+        let v = seen(view, look, res, coord());
+        let p = vec2(v.x, v.y);
+        let pixel = v.z;
+        let tx = int(coord().x / tile());
+        let ty = int(coord().y / tile());
+        let t = ty * tile_columns(res) + tx;
+        let n = at(tile_counts, t);
+        let first = at(tile_ends, t) - n;
+        return loop rounds(n) with over = background {
+            let r = index();
+            loop round_of(n, r) with below = over {
+                let si = at(tile_shapes, first + r * 65536 + index());
+                let s = at(shapes, max(si, 0));
+                if si < 0 || !near(s, p, pixel) { below } else {
+                    let slot = at(span_ends, si) - at(spans, si) + ty - at(reach, si).y0;
+                    let m = at(band_counts, slot);
+                    let begin = at(band_ends, slot) - m;
+                    let hit = loop rounds(m) with w = vec2(0.0, 1000000000.0) {
+                        let q = index();
+                        loop round_of(m, q) with w2 = w {
+                            let g = at(band_segments, begin + q * 65536 + index());
+                            if g < 0 { w2 } else { crossed(w2, at(segments, g), p) }
+                        }
+                    };
+                    laid(below, s, stops, p, pixel, hit)
+                }
+            }
+        };
     }
 }

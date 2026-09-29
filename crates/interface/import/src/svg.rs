@@ -19,12 +19,6 @@ use std::path::{Path, PathBuf};
 use orla_host::{Domain, FieldData, Scalar, Schema};
 use usvg::tiny_skia_path::{self, PathSegment, Point, Transform};
 
-/// The most shapes, and the most segments in one shape, the drawing
-/// Kernel's loops take.
-pub const MAX_SHAPES: usize = 65_536;
-/// See [`MAX_SHAPES`].
-pub const MAX_SEGMENTS_PER_SHAPE: usize = 65_536;
-
 /// How finely curves are cut: the largest distance, in parts of the
 /// document's diagonal, a segment may stray from its curve.
 const TOLERANCE: f32 = 1.0 / 8192.0;
@@ -151,12 +145,6 @@ pub fn read(bytes: &[u8]) -> Result<(Fields, Imported), String> {
     }
     if drawing.shapes.is_empty() {
         return Err("the document draws no filled or stroked path".into());
-    }
-    if drawing.shapes.len() > MAX_SHAPES {
-        return Err(format!(
-            "the document draws {} shapes; the vector package draws at most {MAX_SHAPES}",
-            drawing.shapes.len()
-        ));
     }
     let mut segments: Vec<u32> = Vec::new();
     let mut shapes: Vec<u32> = Vec::new();
@@ -288,12 +276,6 @@ fn shape(path: &usvg::Path, opacity: f32, drawing: &mut Drawing) {
     for (data, paint, alpha, rule) in order.into_iter().flatten() {
         let segments = flatten(&data, transform, drawing.tolerance);
         if segments.is_empty() {
-            continue;
-        }
-        if segments.len() > MAX_SEGMENTS_PER_SHAPE {
-            drawing.note(format!(
-                "a shape of more than {MAX_SEGMENTS_PER_SHAPE} segments is left out"
-            ));
             continue;
         }
         let alpha = alpha * opacity;

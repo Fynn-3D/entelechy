@@ -90,5 +90,9 @@ use "picture.orlapkg";
 - **vector** — drawings filled pixel by pixel: the segments and shapes
   `orla import` reads from SVG, drawn through a look (a middle point and a
   zoom) with nonzero or even-odd fills, colours and linear or radial
-  gradients, each edge smoothed over a pixel. `graphs/drawing.osn` draws
-  one whole, fitted to the window. Used by the `vector` example.
+  gradients, each edge smoothed over a pixel. `graphs/draw.osn` draws it
+  tiled: each pixel asks only the shapes whose boxes reach its tile and
+  the segments that reach its band of tiles, word for word what the plain
+  `vector.draw@1` draws, so a drawing of many thousand shapes draws in
+  time. `graphs/drawing.osn` draws one whole, fitted to the window. Used
+  by the `vector` example.

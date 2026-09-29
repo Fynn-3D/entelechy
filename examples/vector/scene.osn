@@ -48,13 +48,12 @@ node look: kernel {
     compute { let e = sample(eye); return Look { center: e.center, zoom: e.zoom }; }
 }
 
-node drawn: vector.draw@1 {
+node drawn: graph "../../packages/vector.orlapkg/graphs/draw.osn" {
     shapes <- shapes;
     segments <- segments;
     stops <- stops;
     view <- view;
     look <- look.result;
-    domain = window();
 }
 
-output picture <- drawn.result;
+output picture <- drawn.picture;

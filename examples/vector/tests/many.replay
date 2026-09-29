@@ -1,0 +1,19 @@
+scene many.osn
+window 64 48
+
+# Zoomed until a pixel is about a quarter of a unit: the last square, the
+# 66048th shape, is blue at the window's middle and the gap before it
+# the background.
+param center vec2(1022.0, 1030.0)
+param zoom 86.0
+frame 0.0
+expect 32 24 = 0.0 0.0 1.0
+expect 24 24 = 1.0 1.0 1.0
+expect 16 24 = 1.0 0.0 0.0
+
+# The disc's middle: the ray from just above it crosses its first
+# segment, from just below its last, the 66000th.
+param center vec2(512.0, 516.0)
+frame 0.1
+expect 32 23 = 0.0 1.0 0.0
+expect 32 24 = 0.0 1.0 0.0

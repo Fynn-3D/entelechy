@@ -13,14 +13,13 @@ input view: Rows<Vec2>;
 param background: Vec4 = vec4(1.0, 1.0, 1.0, 1.0);
 
 node look: vector.whole@1 { view <- view; }
-node drawn: vector.draw@1 {
+node drawn: graph "draw.osn" {
     shapes <- shapes;
     segments <- segments;
     stops <- stops;
     view <- view;
     look <- look.result;
     background = background;
-    domain = window();
 }
 
-output picture <- drawn.result;
+output picture <- drawn.picture;
