@@ -3482,3 +3482,85 @@ output result <- n.result;
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A recording goes where `--out` says: a `.wav` file takes the sound
+/// alone, with no picture written; a replay records the frames its steps
+/// evaluate, into a directory or a `.wav` file, one replay at a time.
+#[test]
+fn a_render_and_a_replay_record_where_out_says() {
+    let orla = env!("CARGO_BIN_EXE_orla");
+    let dir = std::env::temp_dir().join(format!("orla-record-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("scene.osn"),
+        "node tone: kernel { requires { field.write; time.read; } output result: Rows<Vec2>; domain = 800;
+    compute { let t = time() + float(element()) / 48000.0; let v = sin(t * 1382.3) * 0.4; return vec2(v, v * 0.5); } }
+node scope: kernel { requires { field.read; field.write; time.read; } input block: Rows<Vec2> <- tone.result; output result: Image; domain = vec2(32, 24);
+    compute { return vec4(fract(time()), 0.0, 0.0, 1.0); } }
+output view <- scope.result;
+output sound <- tone.result;
+",
+    )
+    .unwrap();
+    let blocks = |path: &std::path::Path| {
+        orla_formats::wav::decode(&std::fs::read(path).unwrap())
+            .unwrap()
+            .field
+            .domain()
+            .count()
+            / 800
+    };
+    let run = |args: &[&str]| {
+        let output = Command::new(orla)
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        (
+            output.status.success(),
+            String::from_utf8_lossy(&output.stderr).into_owned()
+                + &String::from_utf8_lossy(&output.stdout),
+        )
+    };
+
+    // The sound alone.
+    let (ok, said) = run(&["render", "scene.osn", "--frames", "4", "--out", "tone.wav"]);
+    assert!(ok, "{said}");
+    assert_eq!(blocks(&dir.join("tone.wav")), 4);
+    assert!(!dir.join("frames").exists(), "{said}");
+    assert!(!said.contains("picture"), "{said}");
+
+    // A replay's frames, into a directory: a picture and a block each.
+    std::fs::write(
+        dir.join("play.replay"),
+        "scene scene.osn\nframe 0.0 to 0.2 every 0.1\nexpect count tone.result = 800\n",
+    )
+    .unwrap();
+    let (ok, said) = run(&["replay", "play.replay", "--out", "played"]);
+    assert!(ok, "{said}");
+    assert!(said.contains("ok (3 frames, 1 checks)"), "{said}");
+    for index in 0..3 {
+        let bytes = std::fs::read(orla::render::picture_path(&dir.join("played"), index)).unwrap();
+        assert_eq!(orla_formats::png::decode(&bytes).unwrap().width, 32);
+    }
+    assert!(!dir.join("played/0003.png").exists());
+    assert_eq!(
+        blocks(&dir.join("played").join(orla::render::SOUND_NAME)),
+        3
+    );
+
+    // Or the sound alone.
+    let (ok, said) = run(&["replay", "play.replay", "--out", "played.wav"]);
+    assert!(ok, "{said}");
+    assert_eq!(blocks(&dir.join("played.wav")), 3);
+
+    // One replay at a time.
+    let (ok, said) = run(&["replay", "play.replay", "play.replay", "--out", "both"]);
+    assert!(!ok);
+    assert!(
+        said.contains("--out records one run of one replay"),
+        "{said}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

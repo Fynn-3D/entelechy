@@ -127,14 +127,16 @@ orla player examples/data/parts/save/scene.osn --allow file.write=examples/data/
 ```sh
 orla render examples/sound/scene.osn --window 640x400 --frames 300 --out /tmp/sound
 ffmpeg -framerate 60 -i /tmp/sound/%04d.png -i /tmp/sound/sound.wav -pix_fmt yuv420p /tmp/sound.mp4
+orla render examples/sound/scene.osn --frames 600 --out /tmp/sound.wav
 ```
 
 `orla render <scene.osn> --frames <n>` steps the scene at `--rate` (60
-by default) and writes each frame's picture as `<dir>/0000.png`, ... and
-the sound, block after block, as `<dir>/sound.wav` at `--sound-rate`
-(48000 by default, what Kernels read as `rate()`); `--out <dir>` is
-`frames` by default. The picture and sound are the outputs the Player
-would choose. The clock is the frame count over the rate and `async`
+by default) and records each frame. `--out` names where: a directory
+(`frames` by default) holds each frame's picture as `<dir>/0000.png`,
+... and the sound, block after block, as `<dir>/sound.wav`; a `.wav`
+file holds the sound alone. The sound is written at `--sound-rate`
+(48000 by default, what Kernels read as `rate()`). The picture and
+sound are the outputs the Player would choose. The clock is the frame count over the rate and `async`
 runs are waited for after every frame, so a render is the same every
 time. The other flags are `run`'s; `--save` writes after the last frame,
 which keeps a state trained or settled over many frames as a file a
@@ -332,6 +334,12 @@ drawing to the plain one, would fail rounded apart as it should: the two
 agree to the bit only where every Kernel rounds alike. Such a replay says
 `alike`, and `--round-apart` leaves it out, saying so.
 `--no-fusion` runs every node on its own.
+
+`orla replay <file> --out <dir | file.wav>` records the frames the replay
+evaluates as `render` records its own: each frame's picture and the
+sound, block after block, or the sound alone. `rate()` reads zero in a
+replay, as without a device; the WAV is written at `--sound-rate`
+(48000 by default), one block for each frame the replay evaluates.
 
 ## Import and export
 

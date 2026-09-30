@@ -631,6 +631,22 @@ pub fn run_fused(
     runtime: Runtime,
     fusion: bool,
 ) -> Result<Outcome, String> {
+    run_each(replay, store, runtime, fusion, None)
+}
+
+/// What a replay run hands each frame it evaluates, once evaluated: the
+/// session and the frame's report. A run that hands its frames on
+/// evaluates the scene's outputs every frame.
+pub type Each<'a> = dyn FnMut(&mut Session, &Report) -> Result<(), String> + 'a;
+
+/// [`run_fused`], handing each evaluated frame to `each`.
+pub fn run_each(
+    replay: &Replay,
+    store: std::sync::Arc<dyn crate::Store>,
+    runtime: Runtime,
+    fusion: bool,
+    mut each: Option<&mut Each<'_>>,
+) -> Result<Outcome, String> {
     let mut session = Session::open_in(store, &replay.scene, replay.kernels.as_deref(), runtime);
     session.set_fusion(fusion);
     let mut rejected = Vec::new();
@@ -644,9 +660,17 @@ pub fn run_fused(
     }
     let mut replayer = Replayer::start(replay, &mut session);
     while let Some(frame) = replayer.next_frame(&mut session)? {
+        let at = frame.context.time;
+        let mut demand = frame.demand;
+        if each.is_some() {
+            demand.extend(replayer.producers.iter().cloned());
+        }
         let report = session
-            .evaluate_for(&frame.context, &frame.demand)
-            .map_err(|error| format!("frame at {}: {error}", frame.context.time))?;
+            .evaluate_for(&frame.context, &demand)
+            .map_err(|error| format!("frame at {at}: {error}"))?;
+        if let Some(each) = &mut each {
+            each(&mut session, &report).map_err(|error| format!("frame at {at}: {error}"))?;
+        }
         replayer.evaluated(report);
     }
     Ok(replayer.outcome)

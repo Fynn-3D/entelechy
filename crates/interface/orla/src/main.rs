@@ -232,23 +232,13 @@ fn render(args: &[String]) -> Result<(), String> {
             eprintln!("frame {}/{total}", index + 1);
         }
     })?;
-    let out = options.render.out.display();
-    if let Some((width, height)) = summary.size {
-        eprintln!(
-            "rendered {} picture(s) of {width}x{height} to {out}/0000.png ... in {:?}",
-            summary.pictures,
-            started.elapsed()
-        );
-    }
-    if summary.channels > 0 {
-        eprintln!(
-            "rendered {:.2} s of sound ({} channel(s) at {} Hz) to {out}/{}",
-            summary.sound_frames as f64 / options.render.sound_rate as f64,
-            summary.channels,
-            options.render.sound_rate,
-            orla::render::SOUND_NAME
-        );
-    }
+    recorded(
+        "rendered",
+        &orla::render::Target::of(&options.render.out),
+        &summary,
+        options.render.sound_rate,
+        started,
+    );
     report_events(&session.sync());
     for (node, port, path) in &options.saves {
         session
@@ -644,15 +634,56 @@ fn serve(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Says what a recording wrote, and where.
+fn recorded(
+    what: &str,
+    target: &orla::render::Target,
+    summary: &orla::render::Summary,
+    sound_rate: u32,
+    started: Instant,
+) {
+    if let (orla::render::Target::Directory(dir), Some((width, height))) = (target, summary.size) {
+        eprintln!(
+            "{what} {} picture(s) of {width}x{height} to {}/0000.png ... in {:?}",
+            summary.pictures,
+            dir.display(),
+            started.elapsed()
+        );
+    }
+    if summary.channels > 0 {
+        eprintln!(
+            "{what} {:.2} s of sound ({} channel(s) at {sound_rate} Hz) to {}",
+            summary.sound_frames as f64 / f64::from(sound_rate),
+            summary.channels,
+            target.sound_path().display()
+        );
+    }
+}
+
 fn replay(args: &[String]) -> Result<(), String> {
     let mut backend = "jit".to_string();
     let mut limits = orla_session::Limits::default();
     let mut apart = false;
     let mut fusion = true;
     let mut files = Vec::new();
+    let mut out: Option<PathBuf> = None;
+    let mut sound_rate = 48_000u32;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
+            "--out" => {
+                out = Some(PathBuf::from(
+                    iter.next()
+                        .ok_or_else(|| "--out needs a value".to_string())?,
+                ));
+            }
+            "--sound-rate" => {
+                sound_rate = iter
+                    .next()
+                    .and_then(|text| text.parse::<u32>().ok())
+                    .filter(|n| *n > 0)
+                    .ok_or_else(|| "--sound-rate needs a positive whole number".to_string())?;
+            }
             "--backend" => {
                 backend = iter
                     .next()
@@ -672,6 +703,9 @@ fn replay(args: &[String]) -> Result<(), String> {
     if files.is_empty() {
         return Err("replay needs at least one .replay file".into());
     }
+    if out.is_some() && (files.len() > 1 || apart) {
+        return Err("--out records one run of one replay".into());
+    }
     let mut failed = 0;
     for file in &files {
         let text = std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
@@ -690,6 +724,18 @@ fn replay(args: &[String]) -> Result<(), String> {
         }
         let ran = if apart {
             rounded_apart(&replay, &store, &backend, limits, fusion)
+        } else if let Some(out) = &out {
+            let runtime = Session::runtime_for(&backend, limits)?;
+            let target = orla::render::Target::of(out);
+            let mut recorder = orla::render::Recorder::new(target.clone(), sound_rate)?;
+            let started = Instant::now();
+            let mut each = |session: &mut Session, report: &orla_graph::Report| {
+                recorder.frame(session, report)
+            };
+            let ran = orla::replay::run_each(&replay, store, runtime, fusion, Some(&mut each));
+            let summary = recorder.finish()?;
+            recorded("recorded", &target, &summary, sound_rate, started);
+            ran
         } else {
             let runtime = Session::runtime_for(&backend, limits)?;
             orla::replay::run_fused(&replay, store, runtime, fusion)
