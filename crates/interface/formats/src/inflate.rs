@@ -1,5 +1,5 @@
 //! DEFLATE (RFC 1951) and zlib (RFC 1950) decoding, bit by bit through
-//! canonical Huffman tables, and a stored-block zlib encoder, for PNG.
+//! canonical Huffman tables; `deflate` encodes.
 
 use std::fmt;
 
@@ -298,24 +298,6 @@ pub fn unzlib(bytes: &[u8], most: usize) -> Result<Vec<u8>, InflateError> {
     Ok(out)
 }
 
-/// Wraps bytes as a zlib stream of stored (uncompressed) blocks.
-pub fn zlib_stored(bytes: &[u8]) -> Vec<u8> {
-    let mut out = vec![0x78, 0x01];
-    let mut chunks = bytes.chunks(65535).peekable();
-    if chunks.peek().is_none() {
-        out.extend_from_slice(&[1, 0, 0, 0xff, 0xff]);
-    }
-    while let Some(chunk) = chunks.next() {
-        out.push(if chunks.peek().is_none() { 1 } else { 0 });
-        let len = chunk.len() as u16;
-        out.extend_from_slice(&len.to_le_bytes());
-        out.extend_from_slice(&(!len).to_le_bytes());
-        out.extend_from_slice(chunk);
-    }
-    out.extend_from_slice(&adler32(bytes).to_be_bytes());
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -350,12 +332,5 @@ mod tests {
             unzlib(&broken, usize::MAX),
             Err(InflateError::Checksum)
         ));
-    }
-
-    #[test]
-    fn stored_streams_round_trip() {
-        let data: Vec<u8> = (0..70000u32).map(|i| (i * 7) as u8).collect();
-        assert_eq!(unzlib(&zlib_stored(&data), usize::MAX).unwrap(), data);
-        assert_eq!(unzlib(&zlib_stored(b""), usize::MAX).unwrap(), b"");
     }
 }

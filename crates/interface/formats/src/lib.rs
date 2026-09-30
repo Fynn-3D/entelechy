@@ -11,6 +11,7 @@
 #![warn(missing_docs)]
 
 pub mod base64;
+pub mod deflate;
 pub mod file;
 pub mod inflate;
 pub mod midi;

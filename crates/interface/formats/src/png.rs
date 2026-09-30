@@ -6,7 +6,8 @@ use std::fmt;
 
 use orla_host::{Domain, FieldData, HostError, Scalar, Schema};
 
-use crate::inflate::{InflateError, unzlib, zlib_stored};
+use crate::deflate::zlib;
+use crate::inflate::{InflateError, unzlib};
 
 /// Why bytes are not a PNG the Host can take.
 #[derive(Debug)]
@@ -258,18 +259,59 @@ pub fn decode_field(bytes: &[u8], gray: bool, words: usize) -> Result<FieldData,
     }
 }
 
-/// Encodes RGBA pixels (`0..=1`) as an uncompressed 8-bit PNG.
-pub fn encode(width: u32, height: u32, pixels: &[[f32; 4]]) -> Vec<u8> {
-    let mut raw = Vec::with_capacity((width as usize * 4 + 1) * height as usize);
-    for row in pixels.chunks(width as usize) {
-        raw.push(0);
-        for pixel in row {
-            raw.extend(
-                pixel
-                    .iter()
-                    .map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8),
+/// Byte i of a row as PNG's filter `kind` (0 none, 1 sub, 2 up, 3
+/// average, 4 Paeth) writes it, against the row above, four bytes a pixel.
+fn filtered(kind: u8, row: &[u8], above: &[u8], i: usize) -> u8 {
+    let (a, b, c) = if i >= 4 {
+        (row[i - 4], above[i], above[i - 4])
+    } else {
+        (0, above[i], 0)
+    };
+    let predicted = match kind {
+        0 => 0,
+        1 => a,
+        2 => b,
+        3 => ((a as u16 + b as u16) / 2) as u8,
+        _ => {
+            let p = a as i16 + b as i16 - c as i16;
+            let (pa, pb, pc) = (
+                (p - a as i16).abs(),
+                (p - b as i16).abs(),
+                (p - c as i16).abs(),
             );
+            if pa <= pb && pa <= pc {
+                a
+            } else if pb <= pc {
+                b
+            } else {
+                c
+            }
         }
+    };
+    row[i].wrapping_sub(predicted)
+}
+
+/// Encodes RGBA pixels (`0..=1`) as a compressed 8-bit PNG: each row
+/// filtered as whichever of PNG's filters leaves it the smallest bytes
+/// (their sum as signed values), then deflated.
+pub fn encode(width: u32, height: u32, pixels: &[[f32; 4]]) -> Vec<u8> {
+    let stride = width as usize * 4;
+    let mut raw = Vec::with_capacity((stride + 1) * height as usize);
+    let mut above = vec![0u8; stride];
+    for row in pixels.chunks(width as usize) {
+        let bytes: Vec<u8> = row
+            .iter()
+            .flat_map(|pixel| pixel.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
+            .collect();
+        let cost = |kind: u8| -> u64 {
+            (0..stride)
+                .map(|i| (filtered(kind, &bytes, &above, i) as i8).unsigned_abs() as u64)
+                .sum()
+        };
+        let kind = (0..5u8).min_by_key(|&kind| cost(kind)).unwrap_or(0);
+        raw.push(kind);
+        raw.extend((0..stride).map(|i| filtered(kind, &bytes, &above, i)));
+        above = bytes;
     }
     let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
     let mut chunk = |kind: &[u8], body: &[u8]| {
@@ -285,7 +327,7 @@ pub fn encode(width: u32, height: u32, pixels: &[[f32; 4]]) -> Vec<u8> {
     ihdr.extend_from_slice(&height.to_be_bytes());
     ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
     chunk(b"IHDR", &ihdr);
-    chunk(b"IDAT", &zlib_stored(&raw));
+    chunk(b"IDAT", &zlib(&raw));
     chunk(b"IEND", &[]);
     out
 }
