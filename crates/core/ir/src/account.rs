@@ -5,7 +5,9 @@
 //! stop. Placement is decided here; a backend implements only what a spend
 //! and a look do.
 
-use crate::optimize::renumbered;
+use std::collections::BTreeMap;
+
+use crate::optimize::renumbered_from;
 use crate::{
     BinaryOp, Block, Function, Instruction, Module, Op, Type, Validated, ValueId, loop_looks,
     validate,
@@ -15,12 +17,48 @@ use crate::{
 /// yet accounted; otherwise unchanged. The result is validated again, and a
 /// broken rewrite is an error for the caller to report.
 pub fn account(module: &Validated) -> Result<Validated, crate::ValidationError> {
+    account_renumbered(module).map(|(module, _)| module)
+}
+
+/// Which value of the module [`account`] was given each value of the
+/// accounted one was: the accounting renumbers every function.
+#[derive(Clone, Debug, Default)]
+pub struct Renumbering {
+    /// The entry's values, accounted id to given id; empty when the
+    /// module was not rewritten.
+    pub entry: BTreeMap<ValueId, ValueId>,
+    /// Each function's, by its index.
+    pub functions: Vec<BTreeMap<ValueId, ValueId>>,
+    /// Whether the module was rewritten.
+    pub rewritten: bool,
+}
+
+impl Renumbering {
+    /// The given id of the entry's (`None`) or a function's value `id`;
+    /// `None` for a value the accounting added.
+    pub fn given(&self, function: Option<usize>, id: ValueId) -> Option<ValueId> {
+        if !self.rewritten {
+            return Some(id);
+        }
+        let ids = match function {
+            None => &self.entry,
+            Some(index) => self.functions.get(index)?,
+        };
+        ids.get(&id).copied()
+    }
+}
+
+/// [`account`], and which given value each accounted one was.
+pub fn account_renumbered(
+    module: &Validated,
+) -> Result<(Validated, Renumbering), crate::ValidationError> {
     if !module.counts_work() || module.accounted() {
-        return Ok(module.clone());
+        return Ok((module.clone(), Renumbering::default()));
     }
     let functions = module.functions_work();
     let rewrite = |function: &Function, element: bool| {
-        let mut next = function.slot_count() as u32;
+        let given = function.slot_count() as u32;
+        let mut next = given;
         let mut body = block(&function.body, &functions, &mut next);
         if element {
             body.push(Instruction {
@@ -29,24 +67,44 @@ pub fn account(module: &Validated) -> Result<Validated, crate::ValidationError> 
                 op: Op::Look,
             });
         }
-        renumbered(Function {
+        let (function, ids) = renumbered_from(Function {
             body,
             ..function.clone()
-        })
+        });
+        // Accounted id to given id, for the values that were given.
+        let back = ids
+            .into_iter()
+            .filter(|(old, _)| *old < given)
+            .map(|(old, new)| (ValueId(new), ValueId(old)))
+            .collect::<BTreeMap<_, _>>();
+        (function, back)
+    };
+    let functions_renumbered: Vec<(Function, BTreeMap<ValueId, ValueId>)> = module
+        .functions
+        .iter()
+        .map(|function| rewrite(function, false))
+        .collect();
+    let (entry, entry_ids) = rewrite(&module.entry, true);
+    let renumbering = Renumbering {
+        entry: entry_ids,
+        functions: functions_renumbered
+            .iter()
+            .map(|(_, ids)| ids.clone())
+            .collect(),
+        rewritten: true,
     };
     let accounted = Module {
         manifest: module.manifest.clone(),
         structs: module.structs.clone(),
-        functions: module
-            .functions
-            .iter()
-            .map(|function| rewrite(function, false))
+        functions: functions_renumbered
+            .into_iter()
+            .map(|(function, _)| function)
             .collect(),
-        entry: rewrite(&module.entry, true),
-        merge: module.merge.as_ref().map(|merge| rewrite(merge, true)),
-        init: module.init.as_ref().map(|init| rewrite(init, true)),
+        entry,
+        merge: module.merge.as_ref().map(|merge| rewrite(merge, true).0),
+        init: module.init.as_ref().map(|init| rewrite(init, true).0),
     };
-    validate(accounted)
+    Ok((validate(accounted)?, renumbering))
 }
 
 /// The instructions with every loop followed by its spend and a look at

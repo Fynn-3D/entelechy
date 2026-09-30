@@ -12,7 +12,8 @@ use orla_kernel::{Backend, Context, Expect, Handle, KernelId, Runtime, Value};
 
 use crate::store::Store;
 use crate::{
-    Event, Limits, Publishing, SessionError, Trace, inputs, kernels, observe, scene, writes,
+    Event, Limits, Publishing, SessionError, SourcePlace, Traced, inputs, kernels, observe, scene,
+    writes,
 };
 
 mod time;
@@ -997,15 +998,17 @@ impl Session {
     }
 
     /// Runs one element of `node`'s Kernel on the interpreter and returns
-    /// every binding: element `at` of a map, step `at[0]` of a scan. The
-    /// scene is evaluated first under `context` with the node's sources
-    /// pinned; the trace commits nothing and removes the pins it added.
+    /// every binding: element `at` of a map, step `at[0]` of a scan. What
+    /// the node reads is evaluated first under `context` with its sources
+    /// pinned, the node itself not run, so a node that fails is traced up
+    /// to its failure. The trace commits nothing and removes the pins it
+    /// added.
     pub fn trace(
         &mut self,
         node: &orla_graph::NodeId,
         at: [u32; 3],
         context: &Context,
-    ) -> Result<(Trace, KernelId), String> {
+    ) -> Result<Traced, String> {
         let (target, version) = observe::trace_target(self.scene.graph(), &self.runtime, node)?;
         // Pin the node's sources for this evaluation so they have Fields.
         let pinned: Vec<orla_graph::NodeId> = observe::trace_sources(&target)
@@ -1023,16 +1026,19 @@ impl Session {
             context.time,
         );
         self.repin();
+        let readers = std::collections::BTreeSet::from([target.id.clone()]);
         let tried = match self.scene.graph() {
-            Some(graph) => self.evaluator.evaluate_trial(
+            Some(graph) => self.evaluator.evaluate_trial_reading(
                 graph,
                 &mut self.runtime,
                 self.inputs.handles(),
                 context,
                 self.scene.params(),
+                &readers,
             ),
             None => Err(no_scene()),
         };
+        let written = self.kernels.unoptimized(&target.kernel);
         let traced = tried.map_err(|error| error.to_string()).and_then(|_| {
             let graph = self.scene.graph().ok_or("no scene is loaded")?;
             observe::trace_element(
@@ -1041,7 +1047,7 @@ impl Session {
                 &mut self.runtime,
                 self.inputs.handles(),
                 self.scene.params(),
-                self.kernels.unoptimized(&target.kernel),
+                written.as_ref().map(|written| &written.module),
                 (&target, &version),
                 context,
                 at,
@@ -1050,7 +1056,37 @@ impl Session {
         for source in pinned {
             self.evaluator.unpin(&source);
         }
-        traced.map(|trace| (trace, target.kernel.clone()))
+        traced.map(|trace| Traced {
+            place: trace
+                .fault
+                .as_ref()
+                .zip(written.as_ref())
+                .and_then(|(fault, written)| written.place_of(fault)),
+            trace,
+            kernel: target.kernel.clone(),
+        })
+    }
+
+    /// Where in its source an evaluation's failure at one element is
+    /// written, found by tracing that element again; `None` for any other
+    /// failure, or when the trace does not fail there (a group of fused
+    /// nodes failing in one it absorbed) or no document owns the Kernel.
+    pub fn failure_place(
+        &mut self,
+        error: &EvaluateError,
+        context: &Context,
+    ) -> Option<SourcePlace> {
+        let EvaluateError::Execution { node, error } = error else {
+            return None;
+        };
+        let (x, y) = match error {
+            orla_kernel::ExecutionError::Arithmetic { x, y, .. }
+            | orla_kernel::ExecutionError::Exhausted { x, y, .. } => (*x, *y),
+            _ => return None,
+        };
+        // A volume's row counts its layers through: past the first layer
+        // the element is outside `[x, y, 0]` and nothing is placed.
+        self.trace(node, [x, y, 0], context).ok()?.place
     }
 
     /// One element field of a node's output: its type and words. Named

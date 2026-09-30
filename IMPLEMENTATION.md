@@ -211,8 +211,11 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   row-major order is reported ([compile](crates/backends/cpu/src/eval/compile.rs),
   [execute](crates/backends/cpu/tests/execute.rs)).
 - Async runs are adopted when they land ([later](crates/core/kernel/src/later.rs)).
-- `trace` runs one element of the unoptimized Kernel
-  ([trace](crates/backends/cpu/src/lib.rs)).
+- `trace` runs one element of the unoptimized Kernel up to its failure,
+  which the compiler's value places put in the source
+  ([trace](crates/backends/cpu/src/lib.rs),
+  [places](crates/frontend/compiler/src/lib.rs),
+  [test](crates/interface/orla/tests/session.rs)).
 - The optimizer rewrites exactly and moves nothing that can fail
   ([optimize](crates/core/ir/src/optimize.rs), [test](crates/backends/cpu/tests/optimizer.rs)).
 - A platform without threads, links, native code or a clock does the same

@@ -234,7 +234,7 @@ Kernels (`.orla`) compute; scenes (`.osn`) compose them into a running world. Wh
 - **restore**: `restore` {`snapshot`?: object, `from`?: string, `laws`: "current" | "snapshot", `structure`?: "current" | "snapshot", `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number} Puts a snapshot's world back, after a trial frame that commits nothing: the state is the snapshot's, which the next frame reads; until then `read` shows the trial frame's outputs. Answers revision, frame, report.
 - **reset**: `reset` {`node`?: string, `port`?: string} Forgets committed state; `<~` readers start from their initial sources. Answers what was reset.
 - **help**: `help` {`name`?: string} Orla's syntax and API, layer by layer: all of it, or one name in full. Answers `reference`, the whole of it as one Markdown text, and `versions`; or with `name`, every item of that name in full. An unknown name is an error with `similar`.
-- **trace**: `trace` {`node`: string, `at`?: [x, y] | [x, y, z], `element`?: integer, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number} Runs one element of a node's Kernel and shows every step of it. Answers kernel, at, bindings, results, calls.
+- **trace**: `trace` {`node`: string, `at`?: [x, y] | [x, y, z], `element`?: integer, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number} Runs one element of a node's Kernel and shows every step of it. Answers kernel, at, bindings, results, calls, and when the element failed, fault: its message, the function it failed in with that function's bindings, and the operation's path, line and column.
 - **pin**: `pin` {`node`: string} Keeps a node materialized so `read` can see it. Answers pinned.
 - **unpin**: `unpin` {`node`: string} Lets fusion have a pinned node back. Answers unpinned.
 - **quit**: `quit` {} Ends the connection, or on standard input the process. Answers bye.
@@ -247,7 +247,7 @@ Kernels (`.orla`) compute; scenes (`.osn`) compose them into a running world. Wh
 - **ok**: `answer: `ok`: object` What the operation answered, as its entry in the protocol section says.
 - **error**: `answer: `error`: object` Why the request was refused, and what acts on it as data; the world is as it was.
 - **message**: `error: `message`: string` Why, one or more sentences for a person or an agent to read.
-- **line**: `error: `line`: integer` Where in the text the request carried the fault is, from 1.
+- **line**: `error: `line`: integer` Where the fault is, from 1: in the text the request carried, or in `path`.
 - **column**: `error: `column`: integer` Where on that line, from 1.
 - **similar**: `error: `similar`: [string]` The names nearest an unknown one.
 - **fields**: `error: `fields`: [string]` The fields the operation takes.
@@ -255,7 +255,7 @@ Kernels (`.orla`) compute; scenes (`.osn`) compose them into a running world. Wh
 - **expected**: `error: `expected`: string` The type that field is.
 - **operations**: `error: `operations`: [string]` Every operation, for an unknown one.
 - **version**: `error: `version`: string` The scene document's version as it stands, for a compose refused.
-- **path**: `error: `path`: string` The scene document a refused compose would have written.
+- **path**: `error: `path`: string` The scene document a refused compose would have written, or the document a failed element's operation is written in.
 - **written**: `error: `written`: bool` Whether a compose wrote its document: false when refused.
 - **text**: `error: `text`: string` The document an `edits` compose made, which `line` counts in.
 - **node**: `error: `node`: string` The node an evaluation failed at.

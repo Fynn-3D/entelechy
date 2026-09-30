@@ -12,6 +12,14 @@ use super::{Builder, Local, semantic, subscript_element};
 impl Builder<'_> {
     /// Lowers an expression that must produce a plain value (not an image).
     pub(super) fn value(&mut self, expr: &Expr) -> Result<ValueId, CompileError> {
+        let id = self.value_here(expr)?;
+        // Where the value is written, the first expression that makes it.
+        self.places.entry(id).or_insert(expr.span);
+        Ok(id)
+    }
+
+    /// [`Builder::value`], its place unrecorded.
+    fn value_here(&mut self, expr: &Expr) -> Result<ValueId, CompileError> {
         match &expr.kind {
             ExprKind::Float(value) => {
                 let id = self.written(orla_ir::Number::Double(*value));

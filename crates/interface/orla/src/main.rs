@@ -808,7 +808,11 @@ fn trace(args: &[String]) -> Result<(), String> {
         ..Context::default()
     };
     let id = orla_graph::NodeId(node.clone());
-    let (traced, kernel) = session.trace(&id, at, &context)?;
+    let orla_session::Traced {
+        trace: traced,
+        kernel,
+        place: written_at,
+    } = session.trace(&id, at, &context)?;
     let version = session
         .runtime()
         .kernel(&kernel)
@@ -867,6 +871,18 @@ fn trace(args: &[String]) -> Result<(), String> {
     }
     for value in &traced.results {
         show(value, "  ", "-> ");
+    }
+    if let Some(fault) = &traced.fault {
+        println!("  failed: {}", fault.message);
+        if let Some(place) = &written_at {
+            println!("  at {place}");
+        }
+        if let Some(function) = &fault.function {
+            println!("  in `{function}`, as it failed");
+            for value in &fault.bindings {
+                show(value, "    ", "");
+            }
+        }
     }
     Ok(())
 }
@@ -1041,6 +1057,10 @@ fn evaluate_and_export(
                 .map(|at| format!("{at}: "))
                 .unwrap_or_default();
             eprintln!("{at}evaluation failed: {error}; last output is kept");
+            // Where in the Kernel an element failed, traced again.
+            if let Some(place) = session.failure_place(&error, &context) {
+                eprintln!("  the failing operation is written at {place}");
+            }
             false
         }
     }

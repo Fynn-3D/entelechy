@@ -268,6 +268,63 @@ pub struct Trace {
     /// The entry's results: the outputs' elements (a scan's next carried
     /// value, a scatter's pair, a reduction's element before the fold).
     pub results: Vec<TraceValue>,
+    /// Where the element failed, when it did: the bindings above hold
+    /// what ran before it, and none after.
+    pub fault: Option<TraceFault>,
+}
+
+/// Where a traced element failed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TraceFault {
+    /// What went wrong, as the run reports it.
+    pub message: String,
+    /// The function it failed in, `None` the entry.
+    pub function: Option<String>,
+    /// The failing value in that function.
+    pub value: Option<orla_ir::ValueId>,
+    /// In the entry, the value it failed under: the failing one, or the
+    /// call it failed in.
+    pub entry_value: Option<orla_ir::ValueId>,
+    /// That function's bindings as the failure left them, when it failed
+    /// in a function.
+    pub bindings: Vec<TraceValue>,
+}
+
+/// The first value of `function` an operation that can fail wrote at
+/// frame word `word`, by `locs` (each value's word and width).
+fn value_written_at(
+    function: &orla_ir::Function,
+    locs: &[(usize, usize)],
+    word: usize,
+) -> Option<orla_ir::ValueId> {
+    fn walk(
+        body: &[orla_ir::Instruction],
+        locs: &[(usize, usize)],
+        word: usize,
+        any: bool,
+    ) -> Option<orla_ir::ValueId> {
+        for instruction in body {
+            let (at, n) = locs[instruction.id.0 as usize];
+            let fails = matches!(
+                instruction.op,
+                orla_ir::Op::Binary(..)
+                    | orla_ir::Op::Unary(..)
+                    | orla_ir::Op::Intrinsic(..)
+                    | orla_ir::Op::Call(..)
+                    | orla_ir::Op::Loop { .. }
+            );
+            if (any || fails) && n > 0 && at == word {
+                return Some(instruction.id);
+            }
+            for block in instruction.op.blocks() {
+                if let Some(found) = walk(&block.body, locs, word, any) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+    walk(&function.body, locs, word, false).or_else(|| walk(&function.body, locs, word, true))
 }
 
 /// One call the traced element made, as it returned.
@@ -291,15 +348,20 @@ pub const CALL_RECORDS: usize = eval::CALL_RECORDS;
 fn ran_values(
     entry: &orla_ir::Function,
     value: &dyn Fn(orla_ir::ValueId) -> Vec<u32>,
+    failed: Option<orla_ir::ValueId>,
 ) -> Vec<bool> {
-    fn walk(
-        instructions: &[orla_ir::Instruction],
-        live: bool,
-        value: &dyn Fn(orla_ir::ValueId) -> Vec<u32>,
-        ran: &mut [bool],
-    ) {
+    struct Walk<'a> {
+        value: &'a dyn Fn(orla_ir::ValueId) -> Vec<u32>,
+        failed: Option<orla_ir::ValueId>,
+        stopped: bool,
+    }
+    fn walk(instructions: &[orla_ir::Instruction], live: bool, w: &mut Walk<'_>, ran: &mut [bool]) {
         for instruction in instructions {
+            // The failing value did not come to be, nor anything after it.
+            w.stopped |= w.failed == Some(instruction.id);
+            let live = live && !w.stopped;
             ran[instruction.id.0 as usize] = live;
+            let value = w.value;
             match &instruction.op {
                 orla_ir::Op::If {
                     condition,
@@ -307,8 +369,8 @@ fn ran_values(
                     otherwise,
                 } => {
                     let chosen = live && value(*condition)[0] != 0;
-                    walk(&then.body, chosen, value, ran);
-                    walk(&otherwise.body, live && !chosen, value, ran);
+                    walk(&then.body, chosen, w, ran);
+                    walk(&otherwise.body, live && !chosen, w, ran);
                 }
                 orla_ir::Op::Match {
                     scrutinee,
@@ -320,22 +382,27 @@ fn ran_values(
                     for (values, block) in arms {
                         let chosen = live && !taken && values.contains(&matched);
                         taken |= chosen;
-                        walk(&block.body, chosen, value, ran);
+                        walk(&block.body, chosen, w, ran);
                     }
-                    walk(&otherwise.body, live && !taken, value, ran);
+                    walk(&otherwise.body, live && !taken, w, ran);
                 }
                 orla_ir::Op::Loop { until, body, .. } => {
                     if let Some(until) = until {
-                        walk(&until.body, live, value, ran);
+                        walk(&until.body, live, w, ran);
                     }
-                    walk(&body.body, live, value, ran);
+                    walk(&body.body, live, w, ran);
                 }
                 _ => {}
             }
         }
     }
     let mut ran = vec![false; entry.slot_count()];
-    walk(&entry.body, true, value, &mut ran);
+    let mut w = Walk {
+        value,
+        failed,
+        stopped: false,
+    };
+    walk(&entry.body, true, &mut w, &mut ran);
     ran
 }
 
@@ -346,8 +413,9 @@ fn values_of(
     value: &dyn Fn(orla_ir::ValueId) -> Vec<u32>,
     result: &dyn Fn(usize) -> Vec<u32>,
     result_names: Vec<String>,
+    failed: Option<orla_ir::ValueId>,
 ) -> (Vec<TraceValue>, Vec<TraceValue>) {
-    let ran = ran_values(function, value);
+    let ran = ran_values(function, value, failed);
     let bindings = function
         .bindings
         .iter()
@@ -367,7 +435,7 @@ fn values_of(
             name,
             ty: function.type_of(*id).unwrap_or(Type::Float),
             words: result(index),
-            ran: true,
+            ran: failed.is_none(),
         })
         .collect();
     (bindings, results)
@@ -421,6 +489,7 @@ pub fn trace(
         _ => words,
     };
     let mut out = vec![0u32; stride];
+    let mut ran = Ok(());
     if mode == Mode::Scan {
         let mut carried = vec![0u32; stride];
         machine.run_init_words(&mut carried)?;
@@ -428,14 +497,24 @@ pub fn trace(
             if step == at[0] {
                 machine.clear_entry_frame();
                 machine.record_calls();
+                ran = machine.run_scan_step(step, &carried, &mut out);
+            } else {
+                machine.run_scan_step(step, &carried, &mut out)?;
             }
-            machine.run_scan_step(step, &carried, &mut out)?;
             carried.copy_from_slice(&out);
         }
     } else {
         machine.record_calls();
-        machine.run_entry_words(at, &mut out)?;
+        ran = machine.run_entry_words(at, &mut out);
     }
+    // An element's own failure is traced up to it; any other stops here.
+    let failed = match ran {
+        Ok(()) => None,
+        Err(error @ (ExecutionError::Arithmetic { .. } | ExecutionError::Exhausted { .. })) => {
+            Some(error.to_string())
+        }
+        Err(error) => return Err(error),
+    };
     let entry = &module.entry;
     let names: Vec<String> =
         if mode == Mode::Map && module.manifest.outputs.len() == entry.results.len() {
@@ -448,11 +527,50 @@ pub fn trace(
         } else {
             entry.results.iter().map(|_| "result".to_owned()).collect()
         };
+    // The failing value: in the entry, or in the innermost function, and
+    // then the entry's call it failed under.
+    let mut fault = None;
+    let mut entry_failed = None;
+    if let Some(message) = failed {
+        let failure = machine.failure();
+        let entry_locs = machine.locs(None);
+        let (function, value, bindings) = match &failure {
+            Some(f) if f.function.is_some() => {
+                let index = f.function.unwrap();
+                let function = &module.functions[index];
+                let value = value_written_at(function, &machine.locs(Some(index)), f.word);
+                let (bindings, _) = values_of(
+                    function,
+                    &|id| machine.function_value(index, &f.frame, id),
+                    &|index_| machine.function_result(index, &f.frame, index_),
+                    Vec::new(),
+                    value,
+                );
+                entry_failed = f
+                    .entry_word
+                    .and_then(|word| value_written_at(entry, &entry_locs, word));
+                (Some(function.name.clone()), value, bindings)
+            }
+            Some(f) => {
+                entry_failed = value_written_at(entry, &entry_locs, f.word);
+                (None, entry_failed, Vec::new())
+            }
+            None => (None, None, Vec::new()),
+        };
+        fault = Some(TraceFault {
+            message,
+            function,
+            value,
+            entry_value: entry_failed,
+            bindings,
+        });
+    }
     let (bindings, results) = values_of(
         entry,
         &|id| machine.entry_value(id),
         &|index| machine.entry_result(index),
         names,
+        entry_failed,
     );
     let (records, calls_truncated) = machine.take_calls();
     let calls = records
@@ -468,6 +586,7 @@ pub fn trace(
                     .iter()
                     .map(|_| "result".to_owned())
                     .collect(),
+                None,
             );
             TraceCall {
                 function: function.name.clone(),
@@ -486,6 +605,7 @@ pub fn trace(
         calls,
         calls_truncated,
         results,
+        fault,
     })
 }
 

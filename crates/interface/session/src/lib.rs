@@ -110,7 +110,43 @@ pub use sources::{
 
 /// What `trace` returns: the reference interpreter's record of one
 /// element, re-exported so interfaces read it here.
-pub use orla_cpu::{CALL_RECORDS, Trace, TraceValue};
+pub use orla_cpu::{CALL_RECORDS, Trace, TraceFault, TraceValue};
+
+/// Where in its document a Kernel's failure is written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourcePlace {
+    /// The document.
+    pub path: PathBuf,
+    /// Its line, 1-based.
+    pub line: u32,
+    /// Its column in characters, 1-based.
+    pub column: u32,
+    /// The function it is in, `None` the Kernel's body.
+    pub function: Option<String>,
+}
+
+impl fmt::Display for SourcePlace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}:{}", self.path.display(), self.line, self.column)?;
+        if let Some(function) = &self.function {
+            write!(f, ", in `{function}`")?;
+        }
+        Ok(())
+    }
+}
+
+/// A traced element: the trace, the Kernel it ran, and where its failure,
+/// if any, is written.
+#[derive(Clone, Debug)]
+pub struct Traced {
+    /// What the interpreter recorded.
+    pub trace: Trace,
+    /// The node's Kernel.
+    pub kernel: KernelId,
+    /// Where the element's failure is written, when it failed and a
+    /// document owns the Kernel.
+    pub place: Option<SourcePlace>,
+}
 
 /// What the person running a session allows its scene beyond its own
 /// directory. Only a command line grants it; the scene never does.

@@ -59,7 +59,11 @@ pub(crate) fn trace(session: &mut Session, request: &Request) -> Result<Json, Js
     known_node(session, &node)?;
     let context = context_of(session, request.json());
     let id = orla_graph::NodeId(node.clone());
-    let (trace, kernel) = session.trace(&id, at, &context).map_err(failure)?;
+    let orla_session::Traced {
+        trace,
+        kernel,
+        place,
+    } = session.trace(&id, at, &context).map_err(failure)?;
     let version = session
         .runtime()
         .kernel(&kernel)
@@ -67,7 +71,7 @@ pub(crate) fn trace(session: &mut Session, request: &Request) -> Result<Json, Js
     let module = version
         .module()
         .ok_or_else(|| failure("a native operation has no trace"))?;
-    Ok(trace_json(module, &node, &kernel, &trace))
+    Ok(trace_json(module, &node, &kernel, &trace, place.as_ref()))
 }
 
 /// Replaces a node's committed state.

@@ -622,13 +622,49 @@ impl Kernels {
         }
     }
 
-    /// The Kernel's source compiled unoptimized; `None` when no document
+    /// The Kernel's source compiled unoptimized, where each value is
+    /// written, and the document it is written in; `None` when no document
     /// owns it or it fails to compile alone.
-    pub(crate) fn unoptimized(&self, id: &KernelId) -> Option<orla_kernel::Validated> {
-        let kernel = self
+    pub(crate) fn unoptimized(&self, id: &KernelId) -> Option<Written> {
+        let (path, kernel) = self
             .documents
-            .values()
-            .find_map(|state| state.asts.get(id))?;
-        orla_compiler::compile_kernel_unoptimized(kernel, Some(id)).ok()
+            .iter()
+            .find_map(|(path, state)| state.asts.get(id).map(|kernel| (path, kernel)))?;
+        let (module, places) = orla_compiler::compile_kernel_unoptimized(kernel, Some(id)).ok()?;
+        Some(Written {
+            module,
+            places,
+            path: path.clone(),
+        })
+    }
+}
+
+/// A Kernel as its document writes it: unoptimized, with where each value
+/// is written.
+pub(crate) struct Written {
+    pub(crate) module: orla_kernel::Validated,
+    pub(crate) places: orla_compiler::SourcePlaces,
+    pub(crate) path: PathBuf,
+}
+
+impl Written {
+    /// Where the failure a trace found is written: its value in the
+    /// function it failed in (`None` the entry).
+    pub(crate) fn place_of(&self, fault: &orla_cpu::TraceFault) -> Option<crate::SourcePlace> {
+        let value = fault.value?;
+        let places = match &fault.function {
+            None => &self.places.entry,
+            Some(name) => {
+                let index = self.module.functions.iter().position(|f| &f.name == name)?;
+                self.places.functions.get(index)?
+            }
+        };
+        let span = places.get(&value)?;
+        span.is_placed().then(|| crate::SourcePlace {
+            path: self.path.clone(),
+            line: span.line,
+            column: span.column,
+            function: fault.function.clone(),
+        })
     }
 }

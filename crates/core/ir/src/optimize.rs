@@ -1631,12 +1631,17 @@ fn fold_intrinsic(intrinsic: Intrinsic, args: &[Value]) -> Option<Value> {
 /// [`validate`](crate::validate) asks: for a pass that adds instructions or
 /// takes them away.
 pub fn renumbered(function: Function) -> Function {
+    renumbered_from(function).0
+}
+
+/// [`renumbered`], and each kept instruction's old id with its new one.
+pub(crate) fn renumbered_from(function: Function) -> (Function, BTreeMap<u32, u32>) {
     let mut renumber = Renumber {
         ids: BTreeMap::new(),
         next: 0,
     };
     let body = renumber.block(&function.body);
-    Function {
+    let function = Function {
         name: function.name,
         args: function.args,
         body,
@@ -1650,7 +1655,8 @@ pub fn renumbered(function: Function) -> Function {
             .into_iter()
             .map(|(id, name)| (renumber.map(id), name))
             .collect(),
-    }
+    };
+    (function, renumber.ids)
 }
 
 /// Pre-order numbering of the kept instructions.

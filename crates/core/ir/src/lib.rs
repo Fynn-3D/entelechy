@@ -17,7 +17,7 @@ mod validate;
 use std::fmt;
 use std::str::FromStr;
 
-pub use account::account;
+pub use account::{Renumbering, account, account_renumbered};
 pub use fuse::{FuseError, InputUse, fuse, fuse_outputs, fused_name, input_use, samples_only};
 pub use optimize::{optimize, renumbered};
 pub use orla_abi::{

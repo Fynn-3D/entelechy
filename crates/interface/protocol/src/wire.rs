@@ -223,19 +223,21 @@ pub fn words_text(module: &Validated, ty: Type, words: &[u32]) -> String {
 }
 
 /// The JSON form of a trace: the node, its Kernel, the element, every
-/// binding and every result with its type and value.
+/// binding and every result with its type and value, and where the
+/// element failed when it did.
 pub fn trace_json(
     module: &Validated,
     node: &str,
     kernel: &KernelId,
     trace: &orla_session::Trace,
+    place: Option<&orla_session::SourcePlace>,
 ) -> Json {
     let values = |list: &[orla_session::TraceValue]| {
         list.iter()
             .map(|value| json!({ "name": value.name, "type": type_name(module, value.ty), "value": words_json(module, value.ty, &value.words), "ran": value.ran }))
             .collect::<Vec<_>>()
     };
-    json!({
+    let mut json = json!({
         "node": node,
         "kernel": kernel.to_string(),
         "at": trace.at,
@@ -243,7 +245,26 @@ pub fn trace_json(
         "calls": trace.calls.iter().map(|call| json!({ "function": call.function, "bindings": values(&call.bindings), "results": values(&call.results) })).collect::<Vec<_>>(),
         "calls_truncated": trace.calls_truncated,
         "results": values(&trace.results),
-    })
+    });
+    if let Some(fault) = &trace.fault {
+        let mut failed = failure(fault.message.clone());
+        if let Some(function) = &fault.function {
+            failed["function"] = json!(function);
+            failed["bindings"] = json!(values(&fault.bindings));
+        }
+        if let Some(place) = place {
+            place_json(&mut failed, place);
+        }
+        json["fault"] = failed;
+    }
+    json
+}
+
+/// Adds where a failure is written: `path`, `line`, `column`.
+pub(crate) fn place_json(json: &mut Json, place: &orla_session::SourcePlace) {
+    json["path"] = json!(place.path.display().to_string());
+    json["line"] = json!(place.line);
+    json["column"] = json!(place.column);
 }
 
 pub(crate) fn failure(message: impl Into<String>) -> Json {

@@ -962,6 +962,65 @@ fn a_trace_shows_one_element_of_a_node_and_reports_carry_timings() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A failed element comes with where its operation is written, in the
+/// error of an evaluation and in the trace of the failing node.
+#[test]
+fn a_failed_element_is_placed_in_its_document() {
+    let dir = std::env::temp_dir().join(format!("orla-protocol-fault-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let scene = dir.join("scene.osn");
+    std::fs::write(
+        &scene,
+        "node k: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    fn grow(x: Int) -> Int { let big = x * 1000000; return big * 1000; }
+    compute { let v = grow(element() + 1); return v; }
+    domain = 8;
+}
+output result <- k.result;
+",
+    )
+    .unwrap();
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "evaluate" }),
+            json!({ "id": 2, "op": "trace", "node": "k", "element": 2 }),
+        ],
+    );
+    let error = &responses[0]["error"];
+    assert_eq!(error["node"], "k", "{error}");
+    assert_eq!(
+        (error["line"].clone(), error["column"].clone()),
+        (json!(4), json!(60))
+    );
+    assert!(
+        error["path"].as_str().unwrap().ends_with("scene.osn"),
+        "{error}"
+    );
+    let fault = &responses[1]["ok"]["fault"];
+    assert!(
+        fault["message"].as_str().unwrap().contains("overflow"),
+        "{fault}"
+    );
+    assert_eq!(fault["function"], "grow");
+    assert_eq!(
+        (fault["line"].clone(), fault["column"].clone()),
+        (json!(4), json!(60))
+    );
+    assert!(
+        fault["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["name"] == "big" && b["value"] == 3_000_000 && b["ran"] == true),
+        "{fault}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `help` answers the whole reference, every section of it, or every item
 /// of a name in full.
 #[test]

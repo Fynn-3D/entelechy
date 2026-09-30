@@ -6,7 +6,7 @@ use serde_json::{Value as Json, json};
 use orla_session::Session;
 
 use crate::request::Request;
-use crate::wire::{context_of, evaluation_error, failure, report_json};
+use crate::wire::{context_of, evaluation_error, failure, place_json, report_json};
 
 /// Evaluates the scene once.
 pub(crate) fn evaluate(session: &mut Session, request: &Request) -> Result<Json, Json> {
@@ -24,8 +24,15 @@ pub(crate) fn evaluate(session: &mut Session, request: &Request) -> Result<Json,
             session.evaluate_for(&context, &demand)
         }
         None => session.evaluate(&context),
-    }
-    .map_err(|e| evaluation_error(&e, None))?;
+    };
+    let report = report.map_err(|e| {
+        let mut json = evaluation_error(&e, None);
+        // Where in the Kernel an element failed, traced again.
+        if let Some(place) = session.failure_place(&e, &context) {
+            place_json(&mut json, &place);
+        }
+        json
+    })?;
     Ok(report_json(session, &report))
 }
 

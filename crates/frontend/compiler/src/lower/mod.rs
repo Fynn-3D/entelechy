@@ -340,6 +340,15 @@ pub(crate) fn lower(
     id: Option<&KernelId>,
     checked: &[String],
 ) -> Result<Module, CompileError> {
+    lower_placed(kernel, id, checked).map(|(module, _)| module)
+}
+
+/// [`lower`], and where each value of it is written.
+pub(crate) fn lower_placed(
+    kernel: &Kernel,
+    id: Option<&KernelId>,
+    checked: &[String],
+) -> Result<(Module, crate::SourcePlaces), CompileError> {
     let structs = structs(kernel)?;
     let aliases = aliases(kernel, &structs)?;
     let manifest = manifest(kernel, id, &structs, &aliases)?;
@@ -355,6 +364,8 @@ pub(crate) fn lower(
         templates: std::collections::HashMap::new(),
         plain: std::collections::HashMap::new(),
         calls: std::cell::Cell::new(0),
+        places: RefCell::new(Vec::new()),
+        last_places: RefCell::new(crate::Places::new()),
         lowered: RefCell::new(BTreeMap::new()),
         instances: RefCell::new(BTreeMap::new()),
         instantiating: RefCell::new(Vec::new()),
@@ -420,6 +431,7 @@ pub(crate) fn lower(
             ));
         }
     };
+    let mut places = crate::SourcePlaces::default();
     let entry = {
         let mut builder = Builder::new(&shared, true, "compute", Vec::new());
         if let Some(carry) = &kernel.carry {
@@ -478,6 +490,7 @@ pub(crate) fn lower(
                 ),
             ));
         }
+        places.entry = std::mem::take(&mut builder.places);
         builder.finish(split.unwrap_or_else(|| vec![result]))?
     };
     let merge = match &kernel.merge {
@@ -505,6 +518,7 @@ pub(crate) fn lower(
                     ),
                 ));
             }
+            places.others.push(std::mem::take(&mut builder.places));
             Some(builder.finish(vec![result])?)
         }
     };
@@ -525,19 +539,28 @@ pub(crate) fn lower(
                     ),
                 ));
             }
+            places.others.push(std::mem::take(&mut builder.places));
             Some(builder.finish(vec![result])?)
         }
     };
-    let Shared { functions, .. } = shared;
-    let functions: Vec<Function> = functions.into_inner().into_iter().map(|(_, f)| f).collect();
-    Ok(Module {
-        manifest,
-        structs: structs.into_inner(),
+    let Shared {
         functions,
-        entry,
-        merge,
-        init,
-    })
+        places: function_places,
+        ..
+    } = shared;
+    places.functions = function_places.into_inner();
+    let functions: Vec<Function> = functions.into_inner().into_iter().map(|(_, f)| f).collect();
+    Ok((
+        Module {
+            manifest,
+            structs: structs.into_inner(),
+            functions,
+            entry,
+            merge,
+            init,
+        },
+        places,
+    ))
 }
 
 /// What every block of a Kernel resolves names against.
@@ -556,6 +579,10 @@ struct Shared<'a> {
     /// [`orla_language::MAX_NESTING`], so a chain of calls cannot exhaust
     /// the compiling thread's stack.
     calls: std::cell::Cell<usize>,
+    /// Each function's places, by its index in `functions`.
+    places: RefCell<Vec<crate::Places>>,
+    /// The places of the function lowered last, until it is added.
+    last_places: RefCell<crate::Places>,
     /// Each plain function lowered so far, by position, to its index in
     /// `functions`.
     lowered: RefCell<BTreeMap<usize, u32>>,
@@ -680,6 +707,10 @@ fn lower_function_body(
         .take()
         .map(RefCell::into_inner)
         .unwrap_or_default();
+    // The function's places, taken by whoever adds it to `functions`.
+    shared
+        .last_places
+        .replace(std::mem::take(&mut builder.places));
     Ok((builder.finish(vec![result])?, needs))
 }
 
@@ -746,6 +777,8 @@ struct Builder<'a> {
     /// Written numbers past the largest `Float`, where each is written;
     /// one still a `Float` when the function is finished is refused.
     too_large: std::collections::HashMap<u32, Span>,
+    /// Where each value is written in the source.
+    places: crate::Places,
 }
 
 impl<'a> Builder<'a> {
@@ -771,6 +804,7 @@ impl<'a> Builder<'a> {
             aggregates: BTreeSet::new(),
             truncated: BTreeSet::new(),
             too_large: std::collections::HashMap::new(),
+            places: crate::Places::new(),
         }
     }
 
@@ -1296,6 +1330,10 @@ impl<'a> Builder<'a> {
                 let index = {
                     let mut functions = self.shared.functions.borrow_mut();
                     functions.push((format!("{name}<{bound}>"), instance));
+                    self.shared
+                        .places
+                        .borrow_mut()
+                        .push(self.shared.last_places.take());
                     (functions.len() - 1) as u32
                 };
                 self.shared.needs.borrow_mut().insert(index, needs);
@@ -1424,6 +1462,10 @@ impl<'a> Builder<'a> {
         let index = {
             let mut functions = self.shared.functions.borrow_mut();
             functions.push((name.to_owned(), function));
+            self.shared
+                .places
+                .borrow_mut()
+                .push(self.shared.last_places.take());
             (functions.len() - 1) as u32
         };
         self.shared.needs.borrow_mut().insert(index, needs);

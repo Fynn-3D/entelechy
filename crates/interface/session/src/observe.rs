@@ -245,7 +245,7 @@ pub(crate) fn trace_element(
     runtime: &mut Runtime,
     inputs: &BTreeMap<String, Handle>,
     params: &BTreeMap<String, Value>,
-    written: Option<Validated>,
+    written: Option<&Validated>,
     (target, version): (&Node, &Arc<KernelVersion>),
     context: &Context,
     at: [u32; 3],
@@ -259,11 +259,10 @@ pub(crate) fn trace_element(
             .map_err(|error| error.to_string())?;
     }
     // Unoptimized, so the trace keeps the source's calls and `let`s.
-    let module = written
-        .as_ref()
-        .unwrap_or_else(|| version.module().expect("a traced Kernel has a module"));
+    let module = written.unwrap_or_else(|| version.module().expect("a traced Kernel has a module"));
     // Work-accounted, as a backend runs it.
-    let module = orla_ir::account(module).map_err(|error| error.to_string())?;
+    let (module, renumbering) =
+        orla_ir::account_renumbered(module).map_err(|error| error.to_string())?;
     // Only the required capabilities the session grants.
     let granted: orla_kernel::Capabilities = module
         .manifest
@@ -272,7 +271,22 @@ pub(crate) fn trace_element(
         .filter(|capability| runtime.grants().contains(*capability))
         .collect();
     let mut scope = orla_kernel::Scope::new(runtime.host_mut(), granted);
-    orla_cpu::trace(&module, &invocation, &mut scope, at).map_err(|error| error.to_string())
+    let mut trace =
+        orla_cpu::trace(&module, &invocation, &mut scope, at).map_err(|error| error.to_string())?;
+    // A failure names its values as the written module numbers them.
+    if let Some(fault) = &mut trace.fault {
+        let function = fault
+            .function
+            .as_ref()
+            .and_then(|name| module.functions.iter().position(|f| &f.name == name));
+        fault.value = fault
+            .value
+            .and_then(|value| renumbering.given(function, value));
+        fault.entry_value = fault
+            .entry_value
+            .and_then(|value| renumbering.given(None, value));
+    }
+    Ok(trace)
 }
 
 /// One element field of a node's output; see

@@ -194,6 +194,55 @@ fn integer_failures_name_the_pixel() {
 }
 
 #[test]
+fn a_trace_stops_where_its_element_fails_and_names_the_value() {
+    // A trace runs the Kernel as written, its functions called.
+    let module = orla_compiler::compile_unoptimized(
+        "kernel test.grow@1 { requires { field.write; } output result: Rows<Int>; \
+         fn grow(x: Int) -> Int { let big = x * 1000000; let bigger = big * 1000; return bigger; } \
+         compute { let i = element(); let v = grow(i + 1); let w = v + 1; return w; } }",
+    )
+    .unwrap();
+    let mut host = Host::new(64);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(8),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let named = |values: &[orla_cpu::TraceValue], name: &str| {
+        values.iter().find(|v| v.name == name).cloned().unwrap()
+    };
+
+    // Element 0 holds: nothing failed.
+    let clean = orla_cpu::trace(&module, &invocation, &mut scope, [0, 0, 0]).unwrap();
+    assert!(clean.fault.is_none());
+
+    // Element 2 overflows in `grow`: what ran before it is there, and
+    // the call and what follows it did not come to be.
+    let trace = orla_cpu::trace(&module, &invocation, &mut scope, [2, 0, 0]).unwrap();
+    let fault = trace.fault.expect("element 2 overflows");
+    assert!(fault.message.contains("overflow"), "{}", fault.message);
+    assert_eq!(fault.function.as_deref(), Some("grow"));
+    let value = fault.value.expect("the failing value is found");
+    let grow = module.functions.iter().find(|f| f.name == "grow").unwrap();
+    assert!(
+        grow.bindings
+            .iter()
+            .all(|(id, name)| *id != value || name == "bigger")
+    );
+    let big = named(&fault.bindings, "big");
+    assert!(big.ran);
+    assert_eq!(big.words, vec![3_000_000]);
+    assert!(!named(&fault.bindings, "bigger").ran);
+    assert!(named(&trace.bindings, "i").ran);
+    assert!(!named(&trace.bindings, "v").ran);
+    assert!(!named(&trace.bindings, "w").ran);
+    assert!(trace.results.iter().all(|r| !r.ran));
+    assert_eq!(host.live(), 0);
+}
+
+#[test]
 fn vector_intrinsics_and_time_follow_their_contracts() {
     let module = compile(
         "kernel test.vectors@1 { requires { field.write; time.read; } param light: Vec3 = vec3(0.0, 3.0, 4.0); output result: Image; compute { let n = normalize(light); let d = dot(n, vec3(0.0, 0.0, 1.0)); let r = reflect(vec3(0.0, 0.0, -1.0), vec3(0.0, 0.0, 1.0)); let s = step(0.5, vec3(0.2, 0.5, 0.9)); let c = cross(vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0)); return vec4(d, r.z * s.y + s.x, c.z * time(), length(light) + pow(2.0, 3.0) + smoothstep(0.0, 1.0, 0.5)); } }",

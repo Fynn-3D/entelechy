@@ -35,6 +35,23 @@ pub use error::EvaluateError;
 use ledger::Room;
 use plan::{graph_param, suggest};
 
+/// Which nodes an evaluation runs.
+#[derive(Clone, Copy)]
+enum Demand<'a> {
+    /// Every node.
+    Every,
+    /// These, what they read, state producers and outputs never produced.
+    For(&'a BTreeSet<NodeId>),
+    /// Only what these read, for a trial reporting no output.
+    Read(&'a BTreeSet<NodeId>),
+}
+
+/// The report of an evaluation that reports one: every one but a
+/// [`Demand::Read`].
+fn reported(report: Option<Report>) -> Result<Report, EvaluateError> {
+    report.ok_or(EvaluateError::Graph(GraphError::NoOutput))
+}
+
 /// What one evaluation did.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Report {
@@ -377,7 +394,8 @@ impl Evaluator {
         params: &BTreeMap<String, Value>,
     ) -> Result<Report, EvaluateError> {
         self.recover(runtime);
-        self.evaluate_with(graph, runtime, externals, context, params, None)
+        self.evaluate_with(graph, runtime, externals, context, params, Demand::Every)
+            .and_then(reported)
     }
 
     /// Evaluates as [`Evaluator::evaluate`] does and commits nothing: `<~`
@@ -393,7 +411,38 @@ impl Evaluator {
     ) -> Result<Report, EvaluateError> {
         self.recover(runtime);
         self.trial = true;
-        let tried = self.evaluate_with(graph, runtime, externals, context, params, None);
+        let tried = self
+            .evaluate_with(graph, runtime, externals, context, params, Demand::Every)
+            .and_then(reported);
+        self.trial = false;
+        tried
+    }
+
+    /// A trial of only what `readers` read: the nodes they read through
+    /// `<-`, and the initial sources of their `<~` reads, not the readers
+    /// themselves. Nothing is committed and no output is reported; the
+    /// results stay cached for reading.
+    pub fn evaluate_trial_reading(
+        &mut self,
+        graph: &Graph,
+        runtime: &mut Runtime,
+        externals: &BTreeMap<String, Handle>,
+        context: &Context,
+        params: &BTreeMap<String, Value>,
+        readers: &BTreeSet<NodeId>,
+    ) -> Result<(), EvaluateError> {
+        self.recover(runtime);
+        self.trial = true;
+        let tried = self
+            .evaluate_with(
+                graph,
+                runtime,
+                externals,
+                context,
+                params,
+                Demand::Read(readers),
+            )
+            .map(|_| ());
         self.trial = false;
         tried
     }
@@ -411,7 +460,15 @@ impl Evaluator {
         demand: &BTreeSet<NodeId>,
     ) -> Result<Report, EvaluateError> {
         self.recover(runtime);
-        self.evaluate_with(graph, runtime, externals, context, params, Some(demand))
+        self.evaluate_with(
+            graph,
+            runtime,
+            externals,
+            context,
+            params,
+            Demand::For(demand),
+        )
+        .and_then(reported)
     }
 
     /// The unfused invocation `node` would execute with now, resolved as
@@ -433,9 +490,35 @@ impl Evaluator {
     }
 
     /// The nodes an evaluation under `demand` must run: see
-    /// [`Evaluator::evaluate_for`].
-    fn needed(&self, graph: &Graph, demand: &BTreeSet<NodeId>) -> BTreeSet<NodeId> {
+    /// [`Evaluator::evaluate_for`] and [`Evaluator::evaluate_trial_reading`];
+    /// `None` every node.
+    fn needed(&self, graph: &Graph, demand: Demand<'_>) -> Option<BTreeSet<NodeId>> {
         let at = graph.index();
+        let demand = match demand {
+            Demand::Every => return None,
+            Demand::For(demand) => demand,
+            Demand::Read(readers) => {
+                let mut needed = BTreeSet::new();
+                let mut frontier: Vec<NodeId> = readers.iter().cloned().collect();
+                while let Some(id) = frontier.pop() {
+                    let Some(node) = at.get(&id).map(|at| &graph.nodes[*at]) else {
+                        continue;
+                    };
+                    for binding in node.inputs.values() {
+                        let read = match binding {
+                            Binding::Now(source) => source,
+                            Binding::Previous { initial, .. } => initial,
+                        };
+                        if let Source::Node { node: producer, .. } = read
+                            && needed.insert(producer.clone())
+                        {
+                            frontier.push(producer.clone());
+                        }
+                    }
+                }
+                return Some(needed);
+            }
+        };
         let mut needed: BTreeSet<NodeId> = demand.clone();
         // State: its producer must run, and its initial source is read
         // until the first commit.
@@ -473,9 +556,11 @@ impl Evaluator {
                 }
             }
         }
-        needed
+        Some(needed)
     }
 
+    /// Evaluates what `demand` asks; the report is `None` only for a
+    /// [`Demand::Read`].
     fn evaluate_with(
         &mut self,
         graph: &Graph,
@@ -483,8 +568,8 @@ impl Evaluator {
         externals: &BTreeMap<String, Handle>,
         context: &Context,
         params: &BTreeMap<String, Value>,
-        demand: Option<&BTreeSet<NodeId>>,
-    ) -> Result<Report, EvaluateError> {
+        demand: Demand<'_>,
+    ) -> Result<Option<Report>, EvaluateError> {
         // An external the caller supplies nothing for reads its fallback,
         // written into a copy of the graph only when one is in use.
         let substituted = substitute_fallbacks(graph, externals);
@@ -501,12 +586,12 @@ impl Evaluator {
         let order = self.order_of(graph)?;
         self.prune(graph, runtime);
         let landed = self.land(runtime)?;
-        let needed = demand.map(|demand| self.needed(graph, demand));
+        let needed = self.needed(graph, demand);
         let groups = self.plan(graph, &order, runtime, externals, params, context)?;
         let (migrated, reset) = self.reconcile_state(&groups, runtime, context)?;
         // From here to the commit, a failure leaves state as it was: a
         // migration's replaced state is put back.
-        let evaluated = (|| -> Result<Report, EvaluateError> {
+        let evaluated = (|| -> Result<Option<Report>, EvaluateError> {
             // Absorbed nodes release their cached outputs.
             let absorbed: BTreeSet<&NodeId> =
                 groups.iter().flat_map(|g| g.absorbed.iter()).collect();
@@ -670,6 +755,10 @@ impl Evaluator {
                 self.store(&node.id, key, outputs, output_names, runtime);
                 executed.push(node.id.clone());
             }
+            if matches!(demand, Demand::Read(_)) {
+                self.wait_for_checks(checks, runtime)?;
+                return Ok(None);
+            }
             let mut outputs = Vec::with_capacity(graph.outputs.len());
             for (name, source) in &graph.outputs {
                 let handle = match source {
@@ -712,7 +801,7 @@ impl Evaluator {
             } else {
                 self.commit(graph, runtime)?
             };
-            Ok(Report {
+            Ok(Some(Report {
                 output,
                 executed,
                 timings,
@@ -725,7 +814,7 @@ impl Evaluator {
                 reset,
                 pending,
                 landed,
-            })
+            }))
         })();
         match evaluated {
             Ok(report) => {

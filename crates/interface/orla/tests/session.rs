@@ -999,6 +999,100 @@ output result <- count.result;
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A node whose element fails is traced up to its failure, and the
+/// failure is placed where it is written, through a function call and
+/// the loop accounting that renumbers the Kernel.
+#[test]
+fn a_failing_element_is_traced_to_where_it_is_written() {
+    let dir = scratch("trace-fault");
+    let scene = dir.join("fault.osn");
+    std::fs::write(
+        &scene,
+        "node k: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    budget 10;
+    fn grow(x: Int) -> Int {
+        let big = x * 1000000;
+        return big * 1000;
+    }
+    compute {
+        let i = element();
+        let steps = loop 20 with t = 0 until t > 3 { t + 1 };
+        let v = grow(i + steps - 3);
+        let w = v + 1;
+        return w;
+    }
+    domain = 8;
+}
+output result <- k.result;
+",
+    )
+    .unwrap();
+    let mut session = Session::open(&scene, None, 1 << 20);
+    session.sync();
+    let context = Context::default();
+    let node = orla_graph::NodeId("k".into());
+    let error = session.evaluate(&context).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("at element (2, 0): integer overflow"),
+        "{error}"
+    );
+    let place = session.failure_place(&error, &context).expect("placed");
+    assert_eq!((place.line, place.column), (7, 16), "{place}");
+    assert_eq!(place.function.as_deref(), Some("grow"));
+    assert_eq!(place.path, scene);
+
+    // The node itself fails, and its element is still traced.
+    let traced = session.trace(&node, [2, 0, 0], &context).unwrap();
+    let fault = traced.trace.fault.expect("element 2 fails");
+    assert_eq!(fault.function.as_deref(), Some("grow"));
+    let value = |values: &[orla_session::TraceValue], name: &str| {
+        values.iter().find(|v| v.name == name).cloned().unwrap()
+    };
+    assert_eq!(value(&fault.bindings, "big").words, vec![3_000_000]);
+    assert!(value(&traced.trace.bindings, "steps").ran);
+    assert!(!value(&traced.trace.bindings, "v").ran);
+    assert!(!value(&traced.trace.bindings, "w").ran);
+    assert_eq!(traced.place, Some(place));
+    // An element that holds has no failure.
+    let clean = session.trace(&node, [1, 0, 0], &context).unwrap();
+    assert!(clean.trace.fault.is_none() && clean.place.is_none());
+
+    // The command line says the same.
+    let orla = env!("CARGO_BIN_EXE_orla");
+    let output = Command::new(orla)
+        .args(["trace", "--node", "k", "--element", "2"])
+        .arg(&scene)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}");
+    for line in [
+        "  v: Int = - (not run)",
+        "  failed: at element (2, 0): integer overflow",
+        ":7:16, in `grow`",
+        "    big: Int = 3000000",
+    ] {
+        assert!(stdout.contains(line), "{line:?} in {stdout}");
+    }
+    let output = Command::new(orla)
+        .args(["run", "--backend", "cpu"])
+        .arg(&scene)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains("the failing operation is written at")
+            && stderr.contains(":7:16, in `grow`"),
+        "{stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn the_binary_traces_one_step_of_a_scan_and_profiles_a_run() {
     let orla = env!("CARGO_BIN_EXE_orla");

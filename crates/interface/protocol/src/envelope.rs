@@ -77,7 +77,7 @@ pub const PARTS: [Part; 21] = [
         "line",
         "error",
         "integer",
-        "Where in the text the request carried the fault is, from 1.",
+        "Where the fault is, from 1: in the text the request carried, or in `path`.",
     ),
     part("column", "error", "integer", "Where on that line, from 1."),
     part(
@@ -110,7 +110,7 @@ pub const PARTS: [Part; 21] = [
         "path",
         "error",
         "string",
-        "The scene document a refused compose would have written.",
+        "The scene document a refused compose would have written, or the document a failed element's operation is written in.",
     ),
     part(
         "written",

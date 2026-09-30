@@ -147,16 +147,20 @@ orla trace examples/thumb/scene.osn --node machine --element 9352 --window 128x1
 orla trace examples/life/scene.osn --node life --at 3 4
 ```
 
-Evaluates the scene once (at `--time`, zero by default, under `--param`
-and `--window`), then runs one element of the node's Kernel on the
-interpreter: `--at x y [z]` of a map, or step `--element i` of a scan,
+Evaluates what the node reads (at `--time`, zero by default, under
+`--param` and `--window`), then runs one element of the node's Kernel on
+the interpreter: `--at x y [z]` of a map, or step `--element i` of a scan,
 with the steps before it run first. It prints every `let` of the entry
 in source order with its type and value, then the result, then each call
 the element made (the first 256) with its own `let`s. A `let` in a branch
 not taken reads `- (not run)`; a `let` in a loop shows its last
 iteration. The Kernel is compiled without the optimizer, so every call
-and `let` is present. The trace is of the evaluation after the one just
-run, and commits nothing. The protocol's `trace` is the same as JSON.
+and `let` is present. The trace is of the evaluation after the one last
+committed, and commits nothing. An element that fails is traced up to
+the failure: what follows it reads `- (not run)`, then `failed:` gives
+why, where the operation is written (`file:line:column`), and the `let`s
+of the function it failed in. `run` names that place under a failed
+evaluation too. The protocol's `trace` is the same as JSON.
 
 ## Packages and versions
 

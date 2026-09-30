@@ -154,15 +154,33 @@ pub fn check_functions(
     })
 }
 
+/// Where each value of a Kernel's function is written in its document.
+pub type Places = std::collections::HashMap<orla_ir::ValueId, orla_language::Span>;
+
+/// Where the values of an unoptimized module are written: its entry, its
+/// `merge` or `init`, and each function by its index. Kept beside the
+/// IR, never in it, so where a Kernel is written changes nothing it
+/// computes.
+#[derive(Clone, Debug, Default)]
+pub struct SourcePlaces {
+    /// The entry's values.
+    pub entry: Places,
+    /// A reduction's `merge` or a scan's `init`.
+    pub others: Vec<Places>,
+    /// Each function's values, by its index in the module.
+    pub functions: Vec<Places>,
+}
+
 /// [`compile_kernel`] without optimization: the IR a trace walks, with
-/// its calls and the source's own `let`s.
+/// its calls and the source's own `let`s, and where each value is
+/// written.
 pub fn compile_kernel_unoptimized(
     kernel: &orla_language::Kernel,
     id: Option<&orla_ir::KernelId>,
-) -> Result<Validated, CompileError> {
+) -> Result<(Validated, SourcePlaces), CompileError> {
     orla_language::on_a_deep_stack(|| {
-        let module = lower::lower(kernel, id, &[])?;
-        Ok(orla_ir::validate(module)?)
+        let (module, places) = lower::lower_placed(kernel, id, &[])?;
+        Ok((orla_ir::validate(module)?, places))
     })
 }
 

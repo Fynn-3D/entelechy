@@ -55,6 +55,26 @@ pub(crate) struct Machine<'p, 's> {
     pub(super) left: u64,
     pub(super) at: [u32; 3],
     pub(super) scratch: Vec<f32>,
+    /// The stack word the failing instruction was writing, when a run
+    /// failed at one.
+    pub(super) failed_at: std::cell::Cell<Option<usize>>,
+    /// Where the element failed: the function (`None` the entry), the
+    /// frame word the failing instruction wrote, and that frame's words.
+    pub(crate) fault: Option<Fault>,
+}
+
+/// Where an element's run failed, for a trace to name.
+#[derive(Clone, Debug)]
+pub(crate) struct Fault {
+    /// The function it failed in; `None` the entry.
+    pub function: Option<usize>,
+    /// The frame word the failing instruction wrote.
+    pub word: usize,
+    /// The frame's words as the failure left them.
+    pub frame: Vec<u32>,
+    /// In the entry's frame, the word of the call it failed under, when
+    /// it failed in a function.
+    pub entry_word: Option<usize>,
 }
 
 pub(super) fn f(word: u32) -> f32 {
@@ -107,6 +127,8 @@ impl<'p, 's> Machine<'p, 's> {
             left: 0,
             at: [0; 3],
             scratch: Vec::new(),
+            failed_at: std::cell::Cell::new(None),
+            fault: None,
         }
     }
 
@@ -131,6 +153,8 @@ impl<'p, 's> Machine<'p, 's> {
         let entry = &program.code.entry;
         self.at = at;
         self.loops.clear();
+        self.failed_at.set(None);
+        self.fault = None;
         self.begin(entry.frame)?;
         self.run(&entry.code, 0)?;
         let mut cursor = 0;
@@ -156,6 +180,8 @@ impl<'p, 's> Machine<'p, 's> {
         self.at = [index, 0, 0];
         self.loops.clear();
         self.loops.push(index as i32);
+        self.failed_at.set(None);
+        self.fault = None;
         self.begin(entry.frame)?;
         self.stack[..program.code.carry].copy_from_slice(carried);
         self.run(&entry.code, 0)?;
@@ -237,6 +263,32 @@ impl<'p, 's> Machine<'p, 's> {
     }
 
     /// Zeros the entry's frame, so a traced step shows only its own values.
+    /// Where the last element failed, when it failed at an instruction:
+    /// the function (`None` the entry), the word the instruction wrote in
+    /// that function's frame, the frame's words, and, when in a function,
+    /// the word of the entry's call it failed under.
+    pub(crate) fn failure(&self) -> Option<Fault> {
+        match &self.fault {
+            Some(fault) => Some(fault.clone()),
+            None => self.failed_at.get().map(|word| Fault {
+                function: None,
+                word,
+                frame: Vec::new(),
+                entry_word: None,
+            }),
+        }
+    }
+
+    /// The frame word each value of the entry (`None`) or of `function`
+    /// is kept at.
+    pub(crate) fn locs(&self, function: Option<usize>) -> Vec<(usize, usize)> {
+        let code = match function {
+            None => &self.program.code.entry,
+            Some(f) => &self.program.code.functions[f],
+        };
+        code.locs.iter().map(|loc| (loc.at, loc.n)).collect()
+    }
+
     pub(crate) fn clear_entry_frame(&mut self) {
         let frame = self.program.code.entry.frame;
         if self.stack.len() < frame {
@@ -335,7 +387,19 @@ impl<'p, 's> Machine<'p, 's> {
         }
     }
 
-    fn arithmetic(&self, error: ArithmeticError) -> ExecutionError {
+    /// A loop an element ran past its budget in, the innermost that
+    /// looked, named by the word its value is at.
+    fn past_budget(&self, error: ExecutionError, word: usize) -> ExecutionError {
+        if matches!(error, ExecutionError::Exhausted { .. }) && self.failed_at.get().is_none() {
+            self.failed_at.set(Some(word));
+        }
+        error
+    }
+
+    fn arithmetic(&self, word: usize, error: ArithmeticError) -> ExecutionError {
+        if self.failed_at.get().is_none() {
+            self.failed_at.set(Some(word));
+        }
         let [x, y, z] = self.at;
         ExecutionError::Arithmetic {
             x,
@@ -478,7 +542,7 @@ impl<'p, 's> Machine<'p, 's> {
                         BinaryOp::Ushr => Ok((a as u64).wrapping_shr(b as u32) as i64),
                         _ => unreachable!("compiled from an arithmetic operator"),
                     };
-                    let v = result.map_err(|e| self.arithmetic(e))?;
+                    let v = result.map_err(|e| self.arithmetic(fp + dst, e))?;
                     put_wide(&mut self.stack, fp + dst + 2 * i, v as u64);
                 }
             }
@@ -487,7 +551,7 @@ impl<'p, 's> Machine<'p, 's> {
                     let v = l(&self.stack, fp + src + 2 * i)
                         .checked_neg()
                         .ok_or(ArithmeticError::Overflow)
-                        .map_err(|e| self.arithmetic(e))?;
+                        .map_err(|e| self.arithmetic(fp + dst, e))?;
                     put_wide(&mut self.stack, fp + dst + 2 * i, v as u64);
                 }
             }
@@ -597,7 +661,7 @@ impl<'p, 's> Machine<'p, 's> {
                     let v = (self.stack[fp + src + i] as i32)
                         .checked_neg()
                         .ok_or(ArithmeticError::Overflow)
-                        .map_err(|e| self.arithmetic(e))?;
+                        .map_err(|e| self.arithmetic(fp + dst, e))?;
                     self.stack[fp + dst + i] = v as u32;
                 }
             }
@@ -671,7 +735,7 @@ impl<'p, 's> Machine<'p, 's> {
                         BinaryOp::Ushr => Ok((a as u32).wrapping_shr(b as u32) as i32),
                         _ => unreachable!("compiled from an arithmetic operator"),
                     };
-                    let v = result.map_err(|e| self.arithmetic(e))?;
+                    let v = result.map_err(|e| self.arithmetic(fp + dst, e))?;
                     self.stack[fp + dst + i] = v as u32;
                 }
             }
@@ -762,7 +826,8 @@ impl<'p, 's> Machine<'p, 's> {
                 }
             }
             Instr::IMap2Checked { f: op, dst, a, b } => {
-                let v = op(s[fp + a] as i32, s[fp + b] as i32).map_err(|e| self.arithmetic(e))?;
+                let v = op(s[fp + a] as i32, s[fp + b] as i32)
+                    .map_err(|e| self.arithmetic(fp + dst, e))?;
                 self.stack[fp + dst] = v as u32;
             }
             Instr::IMap2 {
@@ -872,13 +937,15 @@ impl<'p, 's> Machine<'p, 's> {
                 for index in 0..times {
                     *self.loops.last_mut().expect("loop is open") = index as i32;
                     if let Some((until, done)) = until {
-                        self.run(until, fp)?;
+                        self.run(until, fp)
+                            .map_err(|error| self.past_budget(error, fp + carried))?;
                         if self.stack[fp + done] != 0 {
                             ran = index;
                             break;
                         }
                     }
-                    self.run(body, fp)?;
+                    self.run(body, fp)
+                        .map_err(|error| self.past_budget(error, fp + carried))?;
                     self.stack
                         .copy_within(fp + body_result..fp + body_result + n, fp + carried);
                 }
@@ -903,7 +970,26 @@ impl<'p, 's> Machine<'p, 's> {
                     s.copy_within(fp + arg.at..fp + arg.at + arg.n, base + param.at);
                 }
                 self.sp = base + callee.frame;
-                self.run(&callee.code, base)?;
+                if let Err(error) = self.run(&callee.code, base) {
+                    // The innermost function the failure is in names it;
+                    // the entry's call it failed under is kept too.
+                    if let Some(word) = self.failed_at.get() {
+                        if self.fault.is_none() && word >= base {
+                            self.fault = Some(Fault {
+                                function: Some(*function),
+                                word: word - base,
+                                frame: self.stack[base..base + callee.frame].to_vec(),
+                                entry_word: None,
+                            });
+                        }
+                        if fp == 0
+                            && let Some(fault) = &mut self.fault
+                        {
+                            fault.entry_word = Some(*dst);
+                        }
+                    }
+                    return Err(error);
+                }
                 if let Some(records) = &mut self.calls {
                     if records.len() < CALL_RECORDS {
                         records.push(CallRecord {

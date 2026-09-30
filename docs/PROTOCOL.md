@@ -46,7 +46,7 @@ through:
 | `ok` | answer | object | What the operation answered, as its entry in the protocol section says. |
 | `error` | answer | object | Why the request was refused, and what acts on it as data; the world is as it was. |
 | `message` | error | string | Why, one or more sentences for a person or an agent to read. |
-| `line` | error | integer | Where in the text the request carried the fault is, from 1. |
+| `line` | error | integer | Where the fault is, from 1: in the text the request carried, or in `path`. |
 | `column` | error | integer | Where on that line, from 1. |
 | `similar` | error | [string] | The names nearest an unknown one. |
 | `fields` | error | [string] | The fields the operation takes. |
@@ -54,7 +54,7 @@ through:
 | `expected` | error | string | The type that field is. |
 | `operations` | error | [string] | Every operation, for an unknown one. |
 | `version` | error | string | The scene document's version as it stands, for a compose refused. |
-| `path` | error | string | The scene document a refused compose would have written. |
+| `path` | error | string | The scene document a refused compose would have written, or the document a failed element's operation is written in. |
 | `written` | error | bool | Whether a compose wrote its document: false when refused. |
 | `text` | error | string | The document an `edits` compose made, which `line` counts in. |
 | `node` | error | string | The node an evaluation failed at. |
@@ -90,7 +90,7 @@ through:
 | `restore` | `snapshot`?: object, `from`?: string, `laws`: "current" \| "snapshot", `structure`?: "current" \| "snapshot", `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | revision, frame, report |
 | `reset` | `node`?: string, `port`?: string | what was reset |
 | `help` | `name`?: string | `reference`, the whole of it as one Markdown text, and `versions`; or with `name`, every item of that name in full. An unknown name is an error with `similar` |
-| `trace` | `node`: string, `at`?: [x, y] \| [x, y, z], `element`?: integer, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | kernel, at, bindings, results, calls |
+| `trace` | `node`: string, `at`?: [x, y] \| [x, y, z], `element`?: integer, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | kernel, at, bindings, results, calls, and when the element failed, fault: its message, the function it failed in with that function's bindings, and the operation's path, line and column |
 | `pin` | `node`: string | pinned |
 | `unpin` | `node`: string | unpinned |
 | `quit` |  | bye |
@@ -260,19 +260,25 @@ An evaluation's report carries:
 - `landed`, those whose run landed before this evaluation's nodes ran.
 
 A failed evaluation names its `node` when the failure is one node's; a
-failed migration names its `port` and `migration` too.
+failed migration names its `port` and `migration` too. An element that
+failed (integer arithmetic, a loop budget) is traced again: when the
+trace finds the failing operation and a document writes the Kernel, its
+`path`, `line` and `column` come with the error.
 
 `trace` runs one element of a node on the interpreter, compiled without
 the optimizer so calls and `let`s are the source's. It takes `node`, and
 `at` (`[x, y, z]`, a map element) or `element` (a scan step), with
-`evaluate`'s context fields. The scene is evaluated first under that
-context, the node's sources pinned; the trace is of the evaluation that
-would follow (its `<~` inputs the state just committed), and commits
-nothing. The answer: `kernel`, `at`, `bindings` and `results` (each a
+`evaluate`'s context fields. What the node reads is evaluated first
+under that context, its sources pinned and the node itself not run; the
+trace is of the evaluation that would follow (its `<~` inputs the state
+last committed), and commits nothing. The answer: `kernel`, `at`, `bindings` and `results` (each a
 list of `{name, type, value, ran}`, a struct as an object by field,
 `ran` false for a `let` in a branch not taken), and `calls` (each
 `{function, bindings, results}` in return order; `calls_truncated` past
-256).
+256). An element that fails is traced up to its failure: what ran before
+it is there, the rest `ran` false, and `fault` says why (`message`), the
+`function` it failed in with that function's `bindings` as it failed,
+and where the operation is written (`path`, `line`, `column`).
 
 A `graph` answer shows a `<~` binding's migration as `migrate`, a node's
 `async`, and each node's `backend` and `routed` (why not the main

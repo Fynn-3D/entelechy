@@ -549,7 +549,7 @@ pub fn operations() -> Vec<Operation> {
                 ),
                 may("element", Ty::Int, "the element in rows, or a scan's step"),
             ]),
-            "kernel, at, bindings, results, calls",
+            "kernel, at, bindings, results, calls, and when the element failed, fault: its message, the function it failed in with that function's bindings, and the operation's path, line and column",
         ),
         op(
             "pin",
