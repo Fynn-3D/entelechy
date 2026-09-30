@@ -379,7 +379,9 @@ orla export song.notes.field --out song.mid --beats 100
 
 `orla-export` writes Host files as other software's formats: vertex,
 triangle and PNG as a GLB (with a rig's rows, a skin and its animations,
-`--rate` 30 by default); rows of one or two floats as a WAV (`--rate` 48000
+`--rate` 30 by default; `--filter nearest` samples the PNG texel by texel,
+as pixel art wants, where `linear` blends; `--joints a,b,...` names the
+joints in the skeleton's order); rows of one or two floats as a WAV (`--rate` 48000
 by default); a grid of pixels or floats as a PNG; rows of notes as MIDI
 (`--beats` a minute, 120 by default). What `orla-import` read is written
 back bit for bit.

@@ -21,6 +21,38 @@ pub struct Rig<'a> {
     pub clips: Vec<(String, &'a FieldData, f32)>,
 }
 
+/// How a GLB's texture is sampled.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Filter {
+    /// Blended between texels, with mipmaps.
+    #[default]
+    Linear,
+    /// The nearest texel, no mipmaps: flat colors stay flat, as pixel
+    /// art and palette textures want.
+    Nearest,
+}
+
+impl Filter {
+    /// The glTF sampler's magnification and minification filters.
+    fn codes(self) -> (u32, u32) {
+        match self {
+            Self::Linear => (9729, 9987),
+            Self::Nearest => (9728, 9728),
+        }
+    }
+}
+
+/// What a GLB carries beyond the rows: how its texture is sampled, and
+/// its joints' names in skeleton order (`joint0`, `joint1`, ... when
+/// none are given).
+#[derive(Clone, Debug, Default)]
+pub struct Options {
+    /// The texture's sampling.
+    pub filter: Filter,
+    /// One name a skeleton row, or none.
+    pub joints: Vec<String>,
+}
+
 /// The inverse of an affine column-major matrix.
 fn affine_inverse(m: &[f32; 16]) -> [f32; 16] {
     let a = [[m[0], m[4], m[8]], [m[1], m[5], m[9]], [m[2], m[6], m[10]]];
@@ -141,7 +173,14 @@ pub fn write_glb(
     texture: Option<&[u8]>,
     name: &str,
 ) -> Result<Vec<u8>, String> {
-    write_rig(vertices, triangles, texture, None, name)
+    write_rig(
+        vertices,
+        triangles,
+        texture,
+        None,
+        name,
+        &Options::default(),
+    )
 }
 
 /// The same, with a skin and one animation per clip.
@@ -151,6 +190,7 @@ pub fn write_rig(
     texture: Option<&[u8]>,
     rig: Option<&Rig<'_>>,
     name: &str,
+    options: &Options,
 ) -> Result<Vec<u8>, String> {
     if vertices.schema().value_words() != 8 || vertices.domain().shape() != orla_host::Shape::Rows {
         return Err("vertices must be rows of {position: Vec3, normal: Vec3, uv: Vec2}".into());
@@ -283,8 +323,13 @@ pub fn write_rig(
                 .filter(|(_, up)| **up == index as i32)
                 .map(|(child, _)| child + 1)
                 .collect();
+            let joint_name = options
+                .joints
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| format!("joint{index}"));
             let mut node = json!({
-                "name": format!("joint{index}"),
+                "name": joint_name,
                 "translation": at,
                 "rotation": turn,
                 "scale": grow,
@@ -430,8 +475,9 @@ pub fn write_rig(
     }
     if let Some(texture_view) = texture_view {
         document["images"] = json!([{ "bufferView": texture_view, "mimeType": "image/png" }]);
+        let (mag, min) = options.filter.codes();
         document["samplers"] =
-            json!([{ "magFilter": 9729, "minFilter": 9987, "wrapS": 10497, "wrapT": 10497 }]);
+            json!([{ "magFilter": mag, "minFilter": min, "wrapS": 10497, "wrapT": 10497 }]);
         document["textures"] = json!([{ "source": 0, "sampler": 0 }]);
         document["materials"] = json!([{
             "name": name,
@@ -464,11 +510,21 @@ pub fn export(
     texture: Option<&Path>,
     out: &Path,
 ) -> Result<(), String> {
-    export_rig(vertices, triangles, texture, &[], &[], 30.0, out)
+    export_rig(
+        vertices,
+        triangles,
+        texture,
+        &[],
+        &[],
+        30.0,
+        out,
+        &Options::default(),
+    )
 }
 
 /// The same, with `weights`, `skeleton` and clip files, each clip named
-/// by its file name before `.clip.field`.
+/// by its file name before `.clip.field`, and `options`.
+#[allow(clippy::too_many_arguments)]
 pub fn export_rig(
     vertices: &Path,
     triangles: &Path,
@@ -477,6 +533,7 @@ pub fn export_rig(
     clips: &[&Path],
     rate: f32,
     out: &Path,
+    options: &Options,
 ) -> Result<(), String> {
     let read = |path: &Path| -> Result<FieldData, String> {
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -530,12 +587,29 @@ pub fn export_rig(
             );
         }
     };
+    if !options.joints.is_empty() {
+        let joints = rig.as_ref().map_or(0, |rig| rig.skeleton.domain().count());
+        if options.joints.len() != joints {
+            return Err(format!(
+                "{} joint name(s) for a skeleton of {joints} joint(s): name each, in its row's order",
+                options.joints.len()
+            ));
+        }
+        if let Some(blank) = options
+            .joints
+            .iter()
+            .position(|name| name.trim().is_empty())
+        {
+            return Err(format!("joint {blank} has no name"));
+        }
+    }
     let glb = write_rig(
         &read(vertices)?,
         &read(triangles)?,
         png.as_deref(),
         rig.as_ref(),
         name,
+        options,
     )?;
     std::fs::write(out, glb).map_err(|e| format!("{}: {e}", out.display()))
 }

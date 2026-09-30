@@ -12,11 +12,16 @@ use orla_host::{FieldData, Shape};
 const USAGE: &str = "\
 usage:
   orla-export <file>... --out <target> [--rate <hz>] [--beats <n>]
+              [--filter linear|nearest] [--joints <name>,<name>,...]
       To .glb: a vertices .field (rows of position, normal, uv), a triangles
       .field (rows of three ints), and a .png for the base color if you have
       .field and, when it has one, a PNG; a rig's weights, skeleton and clip
       .fields beside them write a skin and an animation apiece, --rate naming
       the frames a second the clips were sampled at (30 by default).
+      --filter says how the PNG is sampled: linear (blended, with mipmaps,
+      the default) or nearest (flat texels, for pixel art and palettes).
+      --joints names the skeleton's joints in its rows' order, one name a
+      row; without it they are joint0, joint1 and on.
       To .wav: a .field of one or two floats per row; --rate says its
       frames per second, 48000 by default (ffmpeg makes an MP3 or OGG of the
       WAV). To .png: a .field grid of pixels or floats, or a .ppm or .pgm.
@@ -53,6 +58,7 @@ fn export(args: &[String]) -> Result<String, String> {
     let mut out: Option<PathBuf> = None;
     let mut rate: Option<u32> = None;
     let mut beats: Option<u32> = None;
+    let mut options = gltf::Options::default();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -72,6 +78,24 @@ fn export(args: &[String]) -> Result<String, String> {
                         .parse()
                         .map_err(|_| "--beats needs a whole number")?,
                 )
+            }
+            "--filter" => {
+                options.filter = match iter.next().map(String::as_str) {
+                    Some("linear") => gltf::Filter::Linear,
+                    Some("nearest") => gltf::Filter::Nearest,
+                    Some(other) => {
+                        return Err(format!("--filter is linear or nearest, not `{other}`"));
+                    }
+                    None => return Err("--filter needs linear or nearest".into()),
+                }
+            }
+            "--joints" => {
+                options.joints = iter
+                    .next()
+                    .ok_or("--joints needs names, split by commas")?
+                    .split(',')
+                    .map(|name| name.trim().to_owned())
+                    .collect();
             }
             other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
             other => inputs.push(PathBuf::from(other)),
@@ -139,6 +163,7 @@ fn export(args: &[String]) -> Result<String, String> {
                 // 30 frames a second unless given, as `orla import`.
                 rate.unwrap_or(30) as f32,
                 &out,
+                &options,
             )?;
             let extra = if rig_paths.is_empty() {
                 String::new()
@@ -152,6 +177,9 @@ fn export(args: &[String]) -> Result<String, String> {
             Ok(format!("wrote {}{extra}", out.display()))
         }
         format @ ("wav" | "mid" | "midi" | "png") => {
+            if options.filter != gltf::Filter::Linear || !options.joints.is_empty() {
+                return Err("--filter and --joints are for a .glb".into());
+            }
             let [input] = inputs.as_slice() else {
                 return Err(format!("a .{format} comes from one file"));
             };

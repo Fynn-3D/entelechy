@@ -80,6 +80,12 @@ round-trip bit for bit, the clips to a quaternion's rounding; Blender
 opens it with its bones, vertex groups and actions. The rows are told
 apart by layout, so no flag says which file is which.
 
+The rows hold no names. A joint is `joint0`, `joint1` and on in the GLB
+unless `--joints` names them, one name a skeleton row in its order; a
+count that is not the skeleton's is refused. Names are the GLB's, and the
+rows it came from are the same whatever they are called.
+
 ```sh
 orla-export examples/skin/assets/arm.*.field --out arm.glb --rate 30
+orla-export examples/skin/assets/arm.*.field --out arm.glb --rate 30 --joints shoulder,elbow
 ```

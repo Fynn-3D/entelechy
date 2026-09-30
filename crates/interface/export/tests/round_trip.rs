@@ -238,6 +238,7 @@ fn a_rig_leaves_as_glb_and_comes_back_posing_the_same() {
         &[&path("swing.clip"), &path("curl.clip")],
         30.0,
         &out,
+        &orla_export::gltf::Options::default(),
     )
     .unwrap();
     let back = dir.join("back");
@@ -276,4 +277,102 @@ fn a_rig_leaves_as_glb_and_comes_back_posing_the_same() {
         assert!(worst < 1e-5, "{name} drifted by {worst}");
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A GLB's JSON chunk.
+fn document(glb: &Path) -> serde_json::Value {
+    let bytes = std::fs::read(glb).unwrap();
+    let length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    serde_json::from_slice(&bytes[20..20 + length]).unwrap()
+}
+
+/// The texture is sampled as asked: blended with mipmaps by default,
+/// the nearest texel for flat colors.
+#[test]
+fn a_texture_is_sampled_linear_or_nearest_as_asked() {
+    let dir = scratch("filter");
+    cube(&dir);
+    let texture = dir.join("crate.albedo.png");
+    let sampler = |filter: orla_export::gltf::Filter, name: &str| {
+        let out = dir.join(name);
+        orla_export::gltf::export_rig(
+            &dir.join("crate.vertices.field"),
+            &dir.join("crate.triangles.field"),
+            Some(&texture),
+            &[],
+            &[],
+            30.0,
+            &out,
+            &orla_export::gltf::Options {
+                filter,
+                joints: Vec::new(),
+            },
+        )
+        .unwrap();
+        document(&out)["samplers"][0].clone()
+    };
+    let linear = sampler(orla_export::gltf::Filter::Linear, "linear.glb");
+    assert_eq!(
+        (linear["magFilter"].as_u64(), linear["minFilter"].as_u64()),
+        (Some(9729), Some(9987))
+    );
+    let nearest = sampler(orla_export::gltf::Filter::Nearest, "nearest.glb");
+    assert_eq!(
+        (nearest["magFilter"].as_u64(), nearest["minFilter"].as_u64()),
+        (Some(9728), Some(9728))
+    );
+}
+
+/// Joints take the names given, one a skeleton row; a count that is not
+/// the skeleton's is refused, and a rig comes back the same whatever its
+/// joints are called.
+#[test]
+fn joints_take_the_names_given_in_skeleton_order() {
+    let dir = scratch("joints");
+    let assets = dir.join("assets");
+    std::fs::create_dir_all(&assets).unwrap();
+    arm(&assets);
+    let path = |name: &str| assets.join(format!("arm.{name}.field"));
+    let export = |joints: &[&str], out: &Path| {
+        orla_export::gltf::export_rig(
+            &path("vertices"),
+            &path("triangles"),
+            None,
+            &[&path("weights"), &path("skeleton")],
+            &[&path("swing.clip")],
+            30.0,
+            out,
+            &orla_export::gltf::Options {
+                filter: orla_export::gltf::Filter::Linear,
+                joints: joints.iter().map(|name| (*name).to_owned()).collect(),
+            },
+        )
+    };
+    let out = dir.join("arm.glb");
+    export(&["shoulder", "elbow"], &out).unwrap();
+    let nodes = document(&out)["nodes"].clone();
+    let names: Vec<&str> = nodes
+        .as_array()
+        .unwrap()
+        .iter()
+        .skip(1)
+        .map(|node| node["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["shoulder", "elbow"]);
+    let refused = export(&["shoulder"], &dir.join("short.glb")).unwrap_err();
+    assert!(
+        refused.contains("1 joint name(s) for a skeleton of 2"),
+        "{refused}"
+    );
+    let blank = export(&["shoulder", " "], &dir.join("blank.glb")).unwrap_err();
+    assert!(blank.contains("joint 1 has no name"), "{blank}");
+    let imported = orla_import::gltf::import(&out, &dir.join("back"), 30.0).unwrap();
+    assert_eq!(imported.joints, 2);
+    for name in ["weights", "skeleton"] {
+        assert_eq!(
+            std::fs::read(path(name)).unwrap(),
+            std::fs::read(dir.join("back").join(format!("arm.{name}.field"))).unwrap(),
+            "{name} survived the named round trip bit for bit"
+        );
+    }
 }
