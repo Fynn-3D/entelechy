@@ -114,7 +114,8 @@ impl Scene {
     }
 
     /// The directories the scene reads: the root's, its placed graphs',
-    /// each used directory, and each used file's parent.
+    /// each used directory, each used file's parent, and the parent of
+    /// every document those use in turn.
     pub(crate) fn read_from(&self) -> Vec<PathBuf> {
         let beside = |path: &Path| {
             path.parent()
@@ -134,9 +135,15 @@ impl Scene {
                     beside(path)
                 }
             });
+        let reached = self
+            .depends
+            .values()
+            .flatten()
+            .map(|(path, _)| beside(path));
         std::iter::once(beside(&self.root))
             .chain(self.sub_graphs.keys().map(|path| beside(path)))
             .chain(used)
+            .chain(reached)
             .collect()
     }
 

@@ -1738,6 +1738,46 @@ fn a_served_scene_reads_beside_its_documents_or_where_allowed() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A served scene reads where the documents it uses use documents in
+/// turn, in another directory, on every sync: a param changed later
+/// reads them again.
+#[test]
+fn a_served_scene_reads_where_its_documents_use_documents() {
+    let base = std::env::temp_dir().join(format!("orla-protocol-reach-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let (dir, library) = (base.join("scene"), base.join("library"));
+    std::fs::create_dir_all(dir.join("kernels")).unwrap();
+    std::fs::create_dir_all(&library).unwrap();
+    std::fs::write(
+        library.join("twice.orla"),
+        "fn twice(x: Int) -> Int { return x * 2; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("kernels/k.orla"),
+        "use \"../../library/twice.orla\";\nkernel t.k@1 { requires { field.write; } param n: Int = 1; output result: Rows<Int>; compute { return twice(n); } }\n",
+    )
+    .unwrap();
+    let scene = dir.join("scene.osn");
+    std::fs::write(
+        &scene,
+        "use \"kernels/\";\nparam n: Int = 1;\nnode k: t.k@1 { n = n; domain = 1; }\noutput result <- k.result;\n",
+    )
+    .unwrap();
+    let answers = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "param", "name": "n", "value": 4 }),
+            json!({ "id": 2, "op": "evaluate" }),
+            json!({ "id": 3, "op": "read", "output": "result", "from": 0 }),
+        ],
+    );
+    let events = answers[0]["ok"]["events"].to_string();
+    assert!(!events.contains("outside the directories"), "{events}");
+    assert_eq!(answers[2]["ok"]["values"], json!([8]), "{:?}", answers[2]);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// Once the scene is read, holding its reads is refused.
 #[test]
 fn reads_are_held_from_the_start_or_not_at_all() {
