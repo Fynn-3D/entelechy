@@ -39,12 +39,25 @@ node aim: world.aim@1 { domain = 1; }
 node hits: physics.ray@1 { rays <- aim.result; bodies <- world.result; }
 
 node marks: world.marks@1 { bodies <- world.result; }
+// The bodies each tile of the picture walks.
+node tiles: world.tiles@1 { domain = 1; }
+node reach: world.reach@1 { tiles <- tiles.result; marks <- marks.result; domain = value(tiles); }
+node lists: graph "../../packages/compact.orlapkg/graphs/runs.osn" { counts <- reach.result; }
+node binned: world.binned@1 {
+    counts <- reach.result;
+    ends <- lists.ends;
+    marks <- marks.result;
+    slots <- lists.slots;
+}
 node view: world.view@1 {
     bodies <- world.result;
     marks <- marks.result;
     felt <- felt.result;
     rays <- aim.result;
     hits <- hits.result;
+    counts <- reach.result;
+    ends <- lists.ends;
+    lists <- binned.result;
     domain = window();
 }
 

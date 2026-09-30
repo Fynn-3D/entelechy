@@ -10,7 +10,10 @@ click drops a heavy ball where the pointer is.
 The world is rows of `Body`, carried from frame to frame through `<~`
 with the contacts of the last step, which the next one starts from. The
 scene's own Kernels in `kernels/world.orla` make the bodies, drop the
-pointer's balls into slots kept apart until used, and draw.
+pointer's balls into slots kept apart until used, and draw: the picture
+is cut into tiles, each listing the bodies that reach it with the
+`compact` package's runs, so a pixel walks its tile's few bodies and a
+larger window costs its pixels, not its pixels times every body.
 `--param steps` steps more than one sixtieth of a second a frame.
 
 The replays, on all three backends:

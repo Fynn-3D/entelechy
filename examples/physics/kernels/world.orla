@@ -154,6 +154,79 @@ kernel world.marks@1 {
     compute { let b = sample(bodies); return vec4(b.position.x, b.position.y, extent(b), 0.0); }
 }
 
+// The picture is drawn a tile of `tile()` pixels at a time, each tile
+// walking only the bodies whose box reaches a pixel of it, in body order,
+// so a pixel paints what it would walking every body.
+fn tile() -> Float { return 32.0; }
+fn tile_columns(res: Vec2) -> Int { return int(ceil(res.x / tile())); }
+fn tile_rows(res: Vec2) -> Int { return int(ceil(res.y / tile())); }
+
+// The world box of tile `t`'s pixel centres in a `res` window, least
+// and most corners, a pixel wider on every side than a pixel's own test
+// and grown by the pixel's reach, so a body a pixel of it paints reaches
+// the box.
+fn tile_box(t: Int, res: Vec2) -> Vec4 {
+    let columns = tile_columns(res);
+    let first = vec2(float(t % columns), float(t / columns)) * tile() + vec2(0.5, 0.5);
+    let last = min(first + vec2(tile() - 1.0, tile() - 1.0), res - vec2(0.5, 0.5));
+    let a = world_at(first, res);
+    let b = world_at(last, res);
+    let grown = vec2(3.0, 3.0) * unit(res);
+    let lo = min(a, b) - grown;
+    let hi = max(a, b) + grown;
+    return vec4(lo.x, lo.y, hi.x, hi.y);
+}
+
+// Whether the box of mark `m` reaches a tile's box.
+fn reaches(m: Vec4, box: Vec4) -> Bool {
+    return m.x + m.z >= box.x && m.x - m.z <= box.z && m.y + m.z >= box.y && m.y - m.z <= box.w;
+}
+
+/// How many tiles the window is cut into, as a row of one a `domain`
+/// reads.
+kernel world.tiles@1 {
+    requires { field.write; input.read; }
+    output result: Rows<Int>;
+    compute { let res = window(); return tile_columns(res) * tile_rows(res); }
+}
+
+/// How many bodies reach each tile.
+kernel world.reach@1 {
+    requires { field.read; field.write; input.read; }
+    input tiles: Rows<Int>;
+    input marks: Rows<Vec4>;
+    output result: Rows<Int>;
+    compute {
+        let box = tile_box(element(), window());
+        return loop count(marks) with n = 0 {
+            if reaches(at(marks, index()), box) { n + 1 } else { n }
+        };
+    }
+}
+
+/// Each tile's bodies, in body order, in its run of the lists.
+kernel world.binned@1 {
+    requires { field.read; field.write; input.read; }
+    input counts: Rows<Int>;
+    input ends: Rows<Int>;
+    input marks: Rows<Vec4>;
+    input slots: Rows<Int>;
+    output result: Rows<Int>;
+    struct Placed { at: Int; value: Int; }
+    scatter into slots with max {
+        let t = element();
+        let box = tile_box(t, window());
+        let start = at(ends, t) - sample(counts);
+        loop count(marks) with k = 0 {
+            if reaches(at(marks, index()), box) {
+                emit(Placed { at: start + k, value: index() });
+                k + 1
+            } else { k }
+        };
+        return Placed { at: -1, value: -1 };
+    }
+}
+
 kernel world.view@1 {
     requires { field.read; field.write; }
     input bodies: Rows<Body>;
@@ -161,26 +234,33 @@ kernel world.view@1 {
     input felt: Rows<Int>;
     input rays: Rows<Ray>;
     input hits: Rows<Hit>;
+    input counts: Rows<Int>;
+    input ends: Rows<Int>;
+    input lists: Rows<Int>;
     output result: Image;
     compute {
         let res = domain();
         let u = unit(res);
         let p = world_at(coord() + vec2(0.5, 0.5), res);
         let sky = mix(vec3(0.95, 0.96, 0.98), vec3(0.78, 0.85, 0.93), clamp(p.y / 20.0, 0.0, 1.0));
-        let n = count(bodies);
+        let cell = floor(coord() / tile());
+        let t = int(cell.y) * tile_columns(res) + int(cell.x);
+        let n = at(counts, t);
+        let start = at(ends, t) - n;
         let painted = loop n with c = sky {
-            let mark = at(marks, index());
+            let i = at(lists, start + index());
+            let mark = at(marks, i);
             let far = abs(p - vec2(mark.x, mark.y)) - vec2(mark.z + u, mark.z + u);
             if max(far.x, far.y) > 0.0 { c } else {
-                let b = at(bodies, index());
+                let b = at(bodies, i);
                 let d = outside(b, p);
                 if d > u { c } else {
                     let cover = clamp(0.5 - d / u, 0.0, 1.0);
-                    let lit = at(felt, index()) > 0;
+                    let lit = at(felt, i) > 0;
                     let fill = if b.sensor != 0 {
                         mix(c, if lit { vec3(0.3, 0.85, 0.4) } else { vec3(0.55, 0.8, 0.6) }, if lit { 0.55 } else { 0.25 })
                     } else {
-                        let base = hue(index(), b);
+                        let base = hue(i, b);
                         let rim = clamp(-d / (2.5 * u), 0.0, 1.0);
                         let glow = if lit { vec3(0.2, 0.25, 0.0) } else { vec3(0.0, 0.0, 0.0) };
                         mix(base * 0.55, base, rim) + glow
