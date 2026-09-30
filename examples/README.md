@@ -50,10 +50,9 @@ orla run examples/<example>/scene.osn --out output.ppm --watch
 
 ## Sound
 
-- [audio](audio/README.md): a synthesizer as rows, filtered by a `scan`, mixed to stereo and drawn as a scope.
 - [strings](strings/README.md): six plucked strings, each a delay line in a `memory`.
+- [sound](sound/README.md): sound written as Kernels, heard and seen: a synthesizer's rows filtered by a `scan` and drawn as a scope, beside a voice and its spectrum, the two mixed into one output.
 - [sampler](sampler/README.md): a drum WAV, baked by a Kernel, played and resampled with `at_linear`.
-- [spectrum](spectrum/README.md): a voice and its spectrum, the loudest bars named.
 - [score](score/README.md): a MIDI file imported, played and drawn as a piano roll, exported back as MIDI.
 
 ## Rigs

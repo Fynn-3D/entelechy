@@ -125,8 +125,8 @@ orla player examples/data/parts/save/scene.osn --allow file.write=examples/data/
 ## Render frames
 
 ```sh
-orla render examples/audio/scene.osn --frames 300 --out /tmp/audio
-ffmpeg -framerate 60 -i /tmp/audio/%04d.png -i /tmp/audio/sound.wav -pix_fmt yuv420p /tmp/audio.mp4
+orla render examples/sound/scene.osn --window 640x400 --frames 300 --out /tmp/sound
+ffmpeg -framerate 60 -i /tmp/sound/%04d.png -i /tmp/sound/sound.wav -pix_fmt yuv420p /tmp/sound.mp4
 ```
 
 `orla render <scene.osn> --frames <n>` steps the scene at `--rate` (60
