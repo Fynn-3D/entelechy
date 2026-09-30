@@ -309,7 +309,7 @@ substitutes for its input when the evaluation starts
 ([evaluator](../crates/core/graph/src/evaluate/mod.rs)). Held by
 [the session's write tests](../crates/interface/session/tests/writes.rs),
 [the lowering's](../crates/frontend/scene/src/lib.rs) and
-[`examples/save`](../examples/save/README.md).
+[`examples/data`](../examples/data/README.md).
 
 ## What a served scene reaches is what the person running it gave
 

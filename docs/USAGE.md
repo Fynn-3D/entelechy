@@ -119,7 +119,7 @@ Evaluates a `.osn` scene once. Flags:
 nodes were still running and which landed.
 
 ```sh
-orla player examples/save/scene.osn --allow file.write=examples/save/saves
+orla player examples/data/parts/save/scene.osn --allow file.write=examples/data/parts/save/saves
 ```
 
 ## Render frames

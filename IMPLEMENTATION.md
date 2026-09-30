@@ -31,7 +31,7 @@ directions: a test needing a higher crate lives in that crate's tests.
 | Orla IR | [ir](crates/core/ir/src/lib.rs), [validation](crates/core/ir/src/validate.rs), [display](crates/core/ir/src/display.rs), [fusion](crates/core/ir/src/fuse.rs), [optimizer](crates/core/ir/src/optimize.rs) | [fusion bit-identity](crates/backends/cpu/tests/fusion.rs) |
 | Kernel language | [language](crates/frontend/language/src/lib.rs), [parser](crates/frontend/language/src/parser.rs), [lexer](crates/frontend/language/src/lexer.rs) | parser tests in place |
 | Compiler | [compiler](crates/frontend/compiler/src/lib.rs), [lowering](crates/frontend/compiler/src/lower/), [help](crates/frontend/compiler/src/help.rs) | [compile tests](crates/frontend/compiler/tests/compile.rs), [surface at its version](crates/frontend/compiler/tests/surface.rs), [help written as the language takes it](crates/frontend/compiler/tests/help_examples.rs), [every signature and its capability compiled](crates/frontend/compiler/tests/help_signatures.rs) |
-| File writes | [writes](crates/interface/session/src/writes.rs); `else` fallback in the [evaluator](crates/core/graph/src/evaluate/mod.rs) | [session](crates/interface/session/tests/writes.rs), [lowering](crates/frontend/scene/src/lib.rs), [save replay](examples/save/tests/tally.replay) |
+| File writes | [writes](crates/interface/session/src/writes.rs); `else` fallback in the [evaluator](crates/core/graph/src/evaluate/mod.rs) | [session](crates/interface/session/tests/writes.rs), [lowering](crates/frontend/scene/src/lib.rs), [save replay](examples/data/tests/save.replay) |
 | Shared rules | [rules](crates/core/rules/src/lib.rs), [`Backend`](crates/core/rules/src/backend.rs), [reduce tree](crates/core/rules/src/reduce.rs), [rasterizer](crates/core/rules/src/raster.rs) | every backend's parity test |
 | Reference backend | [cpu](crates/backends/cpu/src/lib.rs), [word code](crates/backends/cpu/src/eval/) | [execution](crates/backends/cpu/tests/execute.rs), [optimizer](crates/backends/cpu/tests/optimizer.rs) |
 | JIT backend | [jit](crates/backends/jit/src/lib.rs), [Cranelift emission](crates/backends/jit/src/codegen.rs), [WebAssembly emission](crates/backends/jit/src/wasm) | [parity](crates/backends/jit/tests/parity.rs), [matrix](crates/backends/jit/tests/matrix.rs), [as WebAssembly in node](crates/interface/orla/tests/wasm.rs) |
@@ -55,7 +55,7 @@ Packages built from existing modes, with no engine feature of their own.
 | Library | Built from | Evidence |
 | --- | --- | --- |
 | [Stream compaction](packages/compact.orlapkg/kernels/compact.orla) | `prefix with sum`, reduce, scatter, `value(port)` | [culled replay](examples/culled/tests/culled.replay) |
-| [Radix sort](packages/sort.orlapkg/kernels/sort.orla) | prefix and scatter | [sort replay](examples/sort/tests/sort.replay) |
+| [Radix sort](packages/sort.orlapkg/kernels/sort.orla) | prefix and scatter | [neighbours replay](examples/neighbours/tests/neighbours.replay) |
 | [Mip levels](packages/picture.orlapkg/graphs/mip.osn) | `times`, `carry`, the rasterizer's `uv` | [mipmap replay](examples/mipmap/tests/ground.replay) |
 | [Text](packages/text.orlapkg/kernels/text.orla) | `Rows<Glyph>`, a `Grid<Float>` atlas | [text replay](examples/text/tests/text.replay) |
 | [Skinning](packages/skin.orlapkg/kernels/skin.orla), [rig contract](docs/RIGS.md) | maps over rows, `<~` | [rig tests](crates/interface/orla/tests/rigs.rs); [skin](examples/skin/tests/skin.replay), [crowd](examples/crowd/tests/crowd.replay), [reach](examples/reach/tests/reach.replay), [elbow](examples/reach/tests/elbow.replay), [stride](examples/stride/tests/stride.replay) replays |
@@ -77,14 +77,14 @@ Packages built from existing modes, with no engine feature of their own.
   by [`adapt`](crates/frontend/compiler/src/lower/mod.rs), an outside value
   by `Number::as_kind` ([abi](crates/core/abi/src/lib.rs)). Held by
   [values against Rust's](crates/backends/cpu/tests/wide.rs), the matrix,
-  and the [precision example](examples/precision/README.md).
+  and the [precision part](examples/data/README.md).
 - Narrow storage (`as unorm8`): one rule in the Host
   ([encoding](crates/core/host/src/encoding.rs)), called by the interpreter,
   emitted by the JIT and the GPU; only a map or scan writes one, and a
   narrow link is not fused ([validator](crates/core/ir/src/validate.rs),
   [planner](crates/core/graph/src/evaluate/plan.rs)); `values()` are a
   Kernel's words, `storage()` the Field's bytes. Held by the matrix's
-  `narrow` rows and the [packed example](examples/packed/README.md).
+  `narrow` rows and the [packed part](examples/data/README.md).
 - Residency: the Host owns every Field; words return from the device only
   at observation, through `Runtime::image`
   ([runtime](crates/core/kernel/src/lib.rs), [parity](crates/backends/gpu/tests/parity.rs)).
@@ -147,7 +147,7 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   ([`Param`, `value_as`](crates/core/ir/src/lib.rs), [`Value`](crates/core/abi/src/lib.rs),
   [`set_param`](crates/interface/session/src/scene.rs),
   [bind](crates/core/graph/src/evaluate/bind.rs),
-  [GPU slots](crates/backends/gpu/src/wgsl/storage.rs); [cube](examples/cube/README.md)).
+  [GPU slots](crates/backends/gpu/src/wgsl/storage.rs); [cube](examples/image/README.md)).
 
 ### Domain
 

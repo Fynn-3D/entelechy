@@ -283,7 +283,7 @@ zero divisor fail as for `Int`), bit operators, shifts (count modulo
 has 64-bit integers, and in a scatter whose target is all `Long`s under
 `min` or `max` where it also has 64-bit atomics; it never computes a
 `Double`. A GPU session runs such a node on the JIT
-([`examples/precision`](../examples/precision/README.md)).
+([`examples/data`](../examples/data/README.md)).
 
 ### Builtins
 
@@ -415,7 +415,7 @@ changes:
   name order (same formats), frame `floor(time * rate)` wrapping at the
   end, brought in each evaluation; listed again on sync.
 - `input saved: Rows<Tally> = "saves/tally.field" else fresh.result;`
-  reads `fresh.result` until the file exists (`examples/save`).
+  reads `fresh.result` until the file exists (`examples/data/parts/save`).
 
 ### Execution modes
 

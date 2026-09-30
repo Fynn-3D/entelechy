@@ -19,20 +19,13 @@ orla run examples/<example>/scene.osn --out output.ppm --watch
 
 - [grayscale](grayscale/README.md): a gradient through grayscale and pixelate Kernels; the first proof.
 - [life](life/README.md): Conway's Life on a `Grid<Cell>` through a feedback binding, painted with the pointer.
-- [exposure](exposure/README.md): a `merge` reduction meters a frame's luma; a map tone-maps by it.
-- [sort](sort/README.md): sorting as two bounded-loop map Kernels, rank then gather.
-- [blur](blur/README.md): a two-pass Gaussian from a weight table and a `Mat3` emboss, with mirror addressing.
-- [marching](marching/README.md): marching squares from a case table, no `if` chain.
-- [cube](cube/README.md): a cube ray-marched through its inverse model matrix, edges projected by `perspective * model`.
 - [ant](ant/README.md): Langton's ant as a `scan` over a grid memory.
-- [scroll](scroll/README.md): a tile scrolled three ways; the replay pins the seam of `at_linear` through `mod`.
-- [precision](precision/README.md): a part half a million metres out, in `Double`, `Float` and `Long`.
-- [packed](packed/README.md): every Field as narrow as it holds (`as unorm8`, 16-bit, half floats).
+- [modes](modes/README.md): how a Kernel runs, in five parts: a `merge` reduction meters a frame, two maps sort, one Kernel writes three outputs by name, a scatter splats particles, and a machine steps off the frame with `async`.
+- [image](image/README.md): pictures from arrays, matrices, volumes and samplers, in five parts: a Gaussian from a weight table and a `Mat3` emboss, a cube through its model matrix, marching squares from a case table, a `Volume<Float>` cloud, and a tile scrolled through `mod`.
+- [data](data/README.md): how Fields hold what they hold, in four parts: every Field as narrow as it holds, a part half a million metres out in `Double` and `Long`, a `Grid<Tile>` flooded a step a frame, and a tally written to a file and read back.
 
 ## Rendering
 
-- [deferred](deferred/README.md): one Kernel writes color, normal and depth by name; lighting and outline are fused passes over them.
-- [volume](volume/README.md): a `Volume<Float>` of cloud density ray-marched into an image.
 - [path](path/README.md): a progressive path tracer; samples and bounces are graph parameters, the running sum is state.
 - [mesh](mesh/README.md): a torus subdivided, projected, rasterized by the raster package and shaded; `native.rasterize@1` is the fast path.
 - [model](model/README.md): a GLB crate imported by `orla-import`, rasterized and textured with `at_linear`.
@@ -47,7 +40,6 @@ orla run examples/<example>/scene.osn --out output.ppm --watch
 
 ## Simulation and learning
 
-- [particles](particles/README.md): `Rows<Particle>` advanced by a map and splatted by a scatter.
 - [million](million/README.md): a million bodies stepped by a map and drawn by a scatter.
 - [neighbours](neighbours/README.md): sixty-five thousand bodies finding neighbours through a grid built by scatter `sum` and `prefix with sum`.
 - [physics](physics/README.md): boxes and balls that fall, stack, slide and bounce, stepped by the physics package; a sensor, a ray, a click drops a ball.
@@ -76,15 +68,12 @@ orla run examples/<example>/scene.osn --out output.ppm --watch
 - [snake](snake/README.md): a game in five Kernels; the replay plays it through.
 - [blocks](blocks/README.md): falling blocks, pieces as a bit-mask table; the replay clears a line.
 - [slg](slg/README.md): a tactics game with a turn machine and movement ranges as a sub-graph placed three times.
-- [tiles](tiles/README.md): a `Grid<Tile>` flooded a step a frame, drawn through a watched atlas.
 - [voxel](voxel/README.md): a voxel editor over a `Volume<Int>` with undo and a toolbar.
 - [chip8](chip8/README.md): a CHIP-8 interpreter as a `scan` over RAM, registers and screen.
 - [thumb](thumb/README.md): an ARM7TDMI Thumb core as a `scan`, running a program that paints a framebuffer.
-- [async](async/README.md): the Thumb machine as an `async` node; the replay's `settle` waits for a step.
 
 ## Agents, packages and files
 
 - [package](package/README.md): a scene using `pixelfx.orlapkg` and its preset; what `orla pack` carries.
 - [level](level/README.md): a binary level format read by a Kernel from `bytes`.
 - [clip](clip/README.md): an input read frame by frame from a directory with `frames`.
-- [save](save/README.md): a tally written to a file through `--allow file.write` and read back on start.
