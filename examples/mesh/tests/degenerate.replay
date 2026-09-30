@@ -1,4 +1,5 @@
 scene degenerate.osn
+alike
 window 320 240
 
 # Triangles whose last two corners are one point draw nothing in any of

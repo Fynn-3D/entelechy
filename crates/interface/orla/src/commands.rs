@@ -367,6 +367,10 @@ and the package format, each its own.",
                 switch(
                     "--round-apart",
                     "Runs each replay three ways, some Kernels rounding as another device might; what fails is a value two Kernels each compute and must hold equal.",
+                ),
+                switch(
+                    "--no-fusion",
+                    "Runs pointwise producers apart from their consumers.",
                 )],
                 limit_flags(),
             ),

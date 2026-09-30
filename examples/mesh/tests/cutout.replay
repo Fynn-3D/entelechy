@@ -1,4 +1,5 @@
 scene cutout.osn
+alike
 window 320 240
 
 # The torus through a checker mask, half its texels clear. The package's

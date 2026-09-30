@@ -453,50 +453,24 @@ fn run_writes_only_the_files_named_each_as_its_name_says() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A replay that holds says ok with what it ran; one that does not says
+/// which line failed and what it found.
 #[test]
-fn every_example_replay_passes_and_failures_are_reported() {
+fn a_replay_says_ok_or_what_failed() {
     let orla = env!("CARGO_BIN_EXE_orla");
-    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples");
-    let mut replays = Vec::new();
-    for example in std::fs::read_dir(&examples).unwrap().flatten() {
-        let tests = example.path().join("tests");
-        let Ok(entries) = std::fs::read_dir(&tests) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            if entry.path().extension().is_some_and(|ext| ext == "replay") {
-                replays.push(entry.path());
-            }
-        }
-    }
-    assert!(!replays.is_empty(), "examples ship replay tests");
-    let output = Command::new(orla)
-        .arg("replay")
-        .args(&replays)
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        output.status.success(),
-        "{stdout}{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(stdout.contains("blinker.replay: ok"), "{stdout}");
-    let output = Command::new(orla)
-        .arg("replay")
-        .args(["--backend", "jit"])
-        .args(&replays)
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        output.status.success(),
-        "{stdout}{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(stdout.contains("voxel.replay: ok"), "{stdout}");
-
     let dir = scratch("replay");
+    std::fs::write(dir.join("right.replay"), "scene scene.osn\nframe 0.0\n").unwrap();
+    let output = Command::new(orla)
+        .arg("replay")
+        .arg(dir.join("right.replay"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("right.replay: ok (1 frames, 0 checks)"),
+        "{stdout}"
+    );
     std::fs::write(
         dir.join("wrong.replay"),
         "scene scene.osn\nframe 0.0\nexpect 0 0 = 9.0 9.0 9.0\n",
@@ -511,26 +485,6 @@ fn every_example_replay_passes_and_failures_are_reported() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("line 3: pixel (0, 0) is"), "{stdout}");
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn every_example_document_checks() {
-    let orla = env!("CARGO_BIN_EXE_orla");
-    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples");
-    let mut documents = Vec::new();
-    for example in std::fs::read_dir(&examples).unwrap().flatten() {
-        let scene = example.path().join("scene.osn");
-        if scene.exists() {
-            documents.push(scene);
-        }
-    }
-    let output = Command::new(orla)
-        .arg("check")
-        .args(&documents)
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(output.status.success(), "{stdout}");
 }
 
 #[test]

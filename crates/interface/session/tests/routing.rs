@@ -1,7 +1,7 @@
-//! Where a Kernel runs changes nothing it computes: every example's
-//! replay, played on the JIT and on a main backend that leaves half the
-//! Kernels to the interpreter, gives every output of the scene the same
-//! words at every frame, each half left over in one of two runs. Each
+//! Where a Kernel runs changes nothing it computes: a scene of every kind
+//! of work, played on the JIT and on a main backend that leaves half the
+//! Kernels to the interpreter, gives every output the same words at
+//! every frame, each half left over in one of two runs. Each
 //! backend refuses to run what the other prepared, as a device does, so a
 //! Kernel prepared in one place and run in another, on the frame, off it
 //! or repeated, fails its example.
@@ -137,19 +137,87 @@ impl Backend for Owned {
     }
 }
 
-fn replays() -> Vec<PathBuf> {
-    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples");
-    let mut out = Vec::new();
-    for example in std::fs::read_dir(&examples).unwrap().flatten() {
-        let tests = example.path().join("tests");
-        for entry in std::fs::read_dir(tests).into_iter().flatten().flatten() {
-            if entry.path().extension().is_some_and(|ext| ext == "replay") {
-                out.push(entry.path());
-            }
-        }
+/// The Kernels of [`SCENE`].
+const KERNELS: &str = r#"kernel k.seed@1 { requires { field.write; time.read; } output result: Rows<Float>; compute { return float(element()) * 0.25 + time(); } }
+kernel k.step@1 { requires { field.read; field.write; } input x: Rows<Float>; output result: Rows<Float>; compute { return sample(x) * 0.9 + 0.1; } }
+kernel k.total@1 { requires { field.read; field.write; } input x: Rows<Float>; output result: Rows<Float>; compute { return sample(x); } merge(a, b) { return a + b; } }
+kernel k.counts@1 { requires { field.read; field.write; } input x: Rows<Float>; output result: Rows<Int>; compute { return int(sample(x)) % 4; } }
+kernel k.ends@1 { requires { field.read; field.write; } input counts: Rows<Int>; output result: Rows<Int>; prefix with sum { return sample(counts); } }
+kernel k.zeros@1 { requires { field.write; } output result: Rows<Int>; compute { return 0; } }
+kernel k.spread@1 {
+    requires { field.read; field.write; }
+    input counts: Rows<Int>;
+    input slots: Rows<Int>;
+    output result: Rows<Int>;
+    struct Hit { at: Int; value: Int; }
+    scatter into slots with sum {
+        let n = sample(counts);
+        loop n with k = 0 { emit(Hit { at: (element() + k) % 16, value: 1 }); k + 1 };
+        return Hit { at: element() % 16, value: n };
     }
-    out.sort();
-    out
+}
+kernel k.walk@1 { requires { field.read; field.write; } input x: Rows<Float>; output result: Rows<Float>; scan with acc = 0.0 { return acc * 0.5 + sample(x); } }
+kernel k.rounds@1 {
+    requires { field.read; field.write; }
+    input ends: Rows<Int>;
+    output result: Rows<Int>;
+    compute {
+        let n = at(ends, element());
+        return loop (n + 65535) / 65536 with t = 0 { t + loop clamp(n - index() * 65536, 0, 65536) with u = 0 { u + 1 } };
+    }
+}
+kernel k.shift@1 { requires { field.read; field.write; } input x: Rows<Float>; output result: Rows<Float>; compute { return at(x, (element() + 1) % count(x)) * 0.5 + sample(x) * 0.5; } }
+"#;
+
+/// Every kind of work: maps fused into one, a map repeated with a carry,
+/// a reduction, a prefix, a scatter that emits, a scan, a walk in rounds
+/// of the loop limit, and a run off the frame.
+const SCENE: &str = r#"// A scene of every kind of work: maps fused into one, a map repeated
+// with a carry, a reduction, a prefix, a scatter that emits, a scan, a
+// walk in rounds of the loop limit, and a run off the frame.
+use "kinds.orla";
+node seed: k.seed@1 { domain = 64; }
+node steps: k.step@1 { times = 6; x <- seed.result; carry x <- result; }
+node a: k.step@1 { x <- steps.result; }
+node b: k.step@1 { x <- a.result; }
+node total: k.total@1 { x <- b.result; }
+node counts: k.counts@1 { x <- b.result; }
+node ends: k.ends@1 { counts <- counts.result; }
+node zeros: k.zeros@1 { domain = 16; }
+node spread: k.spread@1 { counts <- counts.result; slots <- zeros.result; }
+node walk: k.walk@1 { x <- b.result; }
+node rounds: k.rounds@1 { ends <- ends.result; }
+node turned: k.shift@1 { times = 5; x <- b.result; carry x <- result; }
+node later: k.step@1 { x <- walk.result; async = true; }
+output total <- total.result;
+output ends <- ends.result;
+output spread <- spread.result;
+output walk <- walk.result;
+output rounds <- rounds.result;
+output later <- later.result;
+output turned <- turned.result;
+"#;
+
+/// Its frames, some settling the run off the frame.
+const REPLAY: &str = r#"scene kinds.osn
+frame 0.0
+frame 0.5
+settle
+frame 1.0
+frame 1.5
+settle
+frame 2.0
+expect count spread.result = 16
+"#;
+
+/// [`REPLAY`] written beside its scene, in a directory of its own.
+fn replays() -> Vec<PathBuf> {
+    let dir = std::env::temp_dir().join(format!("orla-routing-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("kinds.orla"), KERNELS).unwrap();
+    std::fs::write(dir.join("kinds.osn"), SCENE).unwrap();
+    std::fs::write(dir.join("kinds.replay"), REPLAY).unwrap();
+    vec![dir.join("kinds.replay")]
 }
 
 /// How a session leaves Kernels to the interpreter: the half a sum of
@@ -274,7 +342,7 @@ fn compared(path: &Path, split: Split) -> (Vec<String>, usize, usize) {
 }
 
 #[test]
-fn where_a_kernel_runs_changes_no_output_of_any_example() {
+fn where_a_kernel_runs_changes_no_output() {
     let paths = replays();
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
     let next = std::sync::atomic::AtomicUsize::new(0);
@@ -304,10 +372,10 @@ fn where_a_kernel_runs_changes_no_output_of_any_example() {
 }
 
 /// A run small enough goes to the ordered backend, which prepares the
-/// Kernel for itself the first time; every output of every example is the
-/// same words as on the JIT alone.
+/// Kernel for itself the first time; every output is the same words as
+/// on the JIT alone.
 #[test]
-fn a_run_placed_by_its_size_changes_no_output_of_any_example() {
+fn a_run_placed_by_its_size_changes_no_output() {
     let paths = replays();
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
     let next = std::sync::atomic::AtomicUsize::new(0);
@@ -331,94 +399,4 @@ fn a_run_placed_by_its_size_changes_no_output_of_any_example() {
     assert!(frames > 0, "no frame was compared");
     assert!(placed > 0, "no run left the main backend by its size");
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
-}
-
-/// The checks that hold one of a package's forms to another word for word,
-/// by replay and node: two forms computed apart agree to the bit only
-/// where every Kernel rounds alike, so rounding them apart is no test of
-/// them.
-const ALIKE: [(&str, &str); 3] = [
-    ("vector/tests/tiled.replay", "differ"),
-    ("mesh/tests/cutout.replay", "split"),
-    ("mesh/tests/degenerate.replay", "split"),
-];
-
-/// Rounding that differs from Kernel to Kernel breaks no example: each
-/// replay, run every way [`orla_session::apart`] chooses Kernels to round
-/// apart, still holds. A replay allows what a device's rounding changes,
-/// so what fails here is a decision two Kernels must agree on and each
-/// makes for itself: it is made in one.
-#[test]
-fn rounding_that_differs_from_kernel_to_kernel_breaks_no_example() {
-    let paths = replays();
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
-    let next = std::sync::atomic::AtomicUsize::new(0);
-    let failures = std::sync::Mutex::new(Vec::new());
-    std::thread::scope(|scope| {
-        for _ in 0..threads {
-            scope.spawn(|| {
-                loop {
-                    let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let Some(path) = paths.get(at) else { break };
-                    let text = std::fs::read_to_string(path).unwrap();
-                    let replay = replay::parse(&text, path.parent().unwrap()).unwrap();
-                    for way in 0..orla_session::apart::SPLITS {
-                        let runtime =
-                            Session::runtime_apart("jit", orla_session::Limits::default(), way)
-                                .unwrap();
-                        let found = match replay::run(&replay, runtime) {
-                            Ok(outcome) => outcome
-                                .failures
-                                .into_iter()
-                                .filter(|failure| {
-                                    !ALIKE.iter().any(|(file, node)| {
-                                        path.ends_with(file)
-                                            && failure.contains(&format!(" {node}.result"))
-                                    })
-                                })
-                                .map(|failure| format!("{} (way {way}): {failure}", path.display()))
-                                .collect(),
-                            Err(error) => {
-                                vec![format!("{} (way {way}): {error}", path.display())]
-                            }
-                        };
-                        failures.lock().unwrap().extend(found);
-                    }
-                }
-            });
-        }
-    });
-    let failures = failures.into_inner().unwrap();
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
-/// The physics step's pair finding is small work: its loops that count
-/// rounds of the loop limit run once, so on a device its runs go to the
-/// processor and the step does not follow them onto the device.
-#[test]
-fn the_physics_steps_small_runs_leave_the_device() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../examples/physics/tests/physics.replay");
-    let text = std::fs::read_to_string(&path).unwrap();
-    let replay = replay::parse(&text, path.parent().unwrap()).unwrap();
-    let mut session = opened(&replay, Some(Split::Sized));
-    let mut player = Replayer::start(&replay, &mut session);
-    let frame = player.next_frame(&mut session).unwrap().unwrap();
-    let report = session.evaluate(&frame.context).unwrap();
-    // Each step of the frame's, `world/1.pair_counts` and on.
-    for node in [".pair_counts", ".pairs", ".collide"] {
-        let runs: Vec<_> = report
-            .placements
-            .iter()
-            .filter(|placed| placed.node.0.ends_with(node))
-            .collect();
-        assert!(!runs.is_empty(), "{node} ran");
-        for placed in runs {
-            assert!(
-                placed.routed.is_some(),
-                "{} stayed on the device",
-                placed.node
-            );
-        }
-    }
 }

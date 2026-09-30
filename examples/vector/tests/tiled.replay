@@ -1,4 +1,5 @@
 scene tiled.osn
+alike
 window 400 300
 
 # The tiled drawing is the plain one word for word, whole, zoomed into

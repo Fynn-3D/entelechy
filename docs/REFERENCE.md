@@ -270,6 +270,7 @@ Kernels (`.orla`) compute; scenes (`.osn`) compose them into a running world. Wh
 
 - **scene**: `scene <path>` the scene to test, relative to the replay file; required
 - **library**: `library <path>` Kernels beyond the scene's `use`
+- **alike**: `alike` its checks hold two forms of one computation equal word for word, which they are only where every Kernel rounds alike, so `--round-apart` leaves the replay out
 - **frame**: `frame <seconds>` evaluates one frame at this session time
 - **settle**: `settle` waits for every `async` run to land
 - **pointer**: `pointer [<x> <y>] [down | up]` moves the pointer, in the output's pixels from its top left (what `pointer()` reads), and presses or releases it

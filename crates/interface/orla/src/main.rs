@@ -648,6 +648,7 @@ fn replay(args: &[String]) -> Result<(), String> {
     let mut backend = "jit".to_string();
     let mut limits = orla_session::Limits::default();
     let mut apart = false;
+    let mut fusion = true;
     let mut files = Vec::new();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -659,6 +660,7 @@ fn replay(args: &[String]) -> Result<(), String> {
                     .ok_or_else(|| "--backend needs a value".to_string())?;
             }
             "--round-apart" => apart = true,
+            "--no-fusion" => fusion = false,
             flag if orla_session::Limits::takes(flag) => {
                 let text = iter.next().ok_or_else(|| format!("{flag} needs a value"))?;
                 limits.read(flag, text)?;
@@ -679,11 +681,18 @@ fn replay(args: &[String]) -> Result<(), String> {
         let store = std::sync::Arc::new(orla_session::Disk::with_packages(
             orla_session::environment_packages(),
         ));
+        if apart && replay.alike {
+            println!(
+                "{}: left out rounded apart: it holds two forms alike",
+                file.display()
+            );
+            continue;
+        }
         let ran = if apart {
-            rounded_apart(&replay, &store, &backend, limits)
+            rounded_apart(&replay, &store, &backend, limits, fusion)
         } else {
             let runtime = Session::runtime_for(&backend, limits)?;
-            orla::replay::run_in(&replay, store, runtime)
+            orla::replay::run_fused(&replay, store, runtime, fusion)
         };
         match ran {
             Ok(outcome) if outcome.failures.is_empty() => {
@@ -1044,11 +1053,12 @@ fn rounded_apart(
     store: &std::sync::Arc<orla_session::Disk>,
     backend: &str,
     limits: orla_session::Limits,
+    fusion: bool,
 ) -> Result<orla::replay::Outcome, String> {
     let mut all = orla::replay::Outcome::default();
     for split in 0..orla_session::apart::SPLITS {
         let runtime = Session::runtime_apart(backend, limits, split)?;
-        let outcome = orla::replay::run_in(replay, store.clone(), runtime)?;
+        let outcome = orla::replay::run_fused(replay, store.clone(), runtime, fusion)?;
         // Every way runs the same frames and checks.
         all.frames = outcome.frames;
         all.checks = outcome.checks;

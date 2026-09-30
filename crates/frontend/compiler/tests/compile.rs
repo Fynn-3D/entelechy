@@ -934,6 +934,27 @@ fn calls_nested_past_the_limit_are_refused_not_a_crash() {
     }
 }
 
+/// A loop counting rounds of the loop limit, `(n + 65535) / 65536`, runs
+/// once for any count one loop can take, and is estimated so: a walk in
+/// rounds is typical work as the plain walk is, not four times it.
+#[test]
+fn a_walk_in_rounds_of_the_loop_limit_is_estimated_as_one_round() {
+    let kernel = |walk: &str| {
+        compile(&format!(
+            "kernel t.k@1 {{ requires {{ field.read; field.write; }} input ends: Rows<Int>; output r: Rows<Int>; compute {{ let n = at(ends, element()); return {walk}; }} }}"
+        ))
+        .unwrap()
+        .typical_work()
+    };
+    let plain = kernel("loop n with u = 0 { u + 1 }");
+    let rounds = kernel(
+        "loop (n + 65535) / 65536 with t = 0 { t + loop clamp(n - index() * 65536, 0, 65536) with u = 0 { u + 1 } }",
+    );
+    let nested = kernel("loop n with t = 0 { t + loop n with u = 0 { u + 1 } }");
+    assert!(rounds < nested, "{rounds} {nested}");
+    assert!(rounds <= plain * 2, "{rounds} {plain}");
+}
+
 #[test]
 fn a_number_written_past_the_largest_float_that_stays_a_float_is_refused() {
     let kernel = |ty: &str, body: &str| {

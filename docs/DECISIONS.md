@@ -273,10 +273,10 @@ made in one (see *The rasterizer is a package*).
 **Where.** `Runtime::execute` in [`orla-kernel`](../crates/core/kernel/src/lib.rs),
 the estimate in [`orla-ir`](../crates/core/ir/src/lib.rs), the kept
 words in [`orla-host`](../crates/core/host/src/lib.rs);
-[`routing.rs`](../crates/interface/session/tests/routing.rs) holds every
-example's outputs to the JIT's alone with small runs placed off a main
-backend, and the verify recipe replays every example on the device with
-`--small 0` as well.
+[`routing.rs`](../crates/interface/session/tests/routing.rs) holds a
+scene of every kind of work to the JIT's alone with small runs placed
+off a main backend, and the verify recipe replays every example on the
+device with and without `--small 0`.
 
 ## A Kernel's effects are data the Host carries out after a commit
 
@@ -730,3 +730,22 @@ flattened in [`scene`](../crates/frontend/scene/src/lib.rs) (test
 `requirements_flatten_named_with_their_place_reading_what_the_parent_passed`),
 and held end to end by `a_requirement_the_parameters_break_stops_the_evaluation`
 in [the session tests](../crates/interface/orla/tests/session.rs).
+
+## The framework is tested by its own scenes, a demo by its replays
+
+Rust tests hold the framework: the language, the IR, the runtime, the
+backends and the session, each with scenes written in the test. None
+reads, lists or names a file under `examples/` or `packages/`. A demo or
+a package holds itself: its replays, run by the release `orla replay` on
+every backend, with nothing left to the processor by its size, with
+nothing fused, and rounded apart. A replay whose checks hold two forms
+equal word for word says `alike`, and rounding apart leaves it out.
+
+**Why.** A demo is written in `.orla` and `.osn`, and its author needs
+no Rust to validate it. Rust tests that walk the demos tie the framework
+to them: every demo added makes the framework's tests slower, and every
+exception a demo needs lands in Rust. Replays in the release build hold
+every demo in seconds, and a new one joins by being written.
+
+**Where.** The recipe's `replays` step in [PROCESS](../PROCESS.md); the
+`alike` line in [`replay`](../crates/interface/session/src/replay.rs).

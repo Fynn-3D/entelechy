@@ -2,7 +2,6 @@
 //! for the last one's device work before it submits its own, so a caller
 //! evaluating faster than the device holds one frame's device memory.
 
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use orla_abi::{Handle, Invocation, Scope};
@@ -56,8 +55,27 @@ fn each_evaluation_waits_for_the_last_ones_device_work_first() {
     );
     // Every run on the device, however small.
     runtime.set_small(0);
-    let scene =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/life/tests/blinker.osn");
+    let dir = std::env::temp_dir().join(format!("orla-in-flight-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let scene = dir.join("scene.osn");
+    std::fs::write(
+        &scene,
+        "node seed: kernel {
+    requires { field.write; }
+    output result: Rows<Float>;
+    compute { return float(element()); }
+    domain = 64;
+}
+node count: kernel {
+    requires { field.read; field.write; time.read; }
+    input previous: Rows<Float> <~ count.result from seed.result;
+    output result: Rows<Float>;
+    compute { return sample(previous) + time(); }
+}
+output result <- count.result;
+",
+    )
+    .unwrap();
     let mut session = Session::open_in(
         Arc::new(orla_session::Disk::default()),
         &scene,
@@ -77,4 +95,5 @@ fn each_evaluation_waits_for_the_last_ones_device_work_first() {
         assert_eq!(log.first(), Some(&"settle"), "frame {frame}: {log:?}");
         assert!(log.contains(&"run"), "frame {frame}: {log:?}");
     }
+    let _ = std::fs::remove_dir_all(&dir);
 }

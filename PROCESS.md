@@ -151,7 +151,14 @@ replays() {
   # The device runs every Kernel itself too, nothing left to the processor
   # by its size.
   printf '%s\n' examples/*/tests/*.replay |
-    xargs -P 4 -n 1 ./target/release/orla replay --backend gpu --small 0
+    xargs -P 4 -n 1 ./target/release/orla replay --backend gpu --small 0 || return 1
+  # Every node on its own, fusing nothing, holds as fused does.
+  printf '%s\n' examples/*/tests/*.replay |
+    xargs -P 4 -n 1 ./target/release/orla replay --backend jit --no-fusion || return 1
+  # Kernels rounding apart, as another device's might, break no replay;
+  # one whose checks hold two forms alike says so and is left out.
+  printf '%s\n' examples/*/tests/*.replay |
+    xargs -P 4 -n 1 ./target/release/orla replay --backend jit --round-apart
 }
 wasi() {
   cargo build --release -p orla --target wasm32-wasip1 &&

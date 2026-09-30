@@ -287,6 +287,7 @@ file. `orla help replay` lists the same forms:
 | --- | --- | --- |
 | `scene <path>` | the scene to test, relative to the replay file; required | `scene ../scene.osn` |
 | `library <path>` | Kernels beyond the scene's `use` | `library ../kernels/` |
+| `alike` | its checks hold two forms of one computation equal word for word, which they are only where every Kernel rounds alike, so `--round-apart` leaves the replay out | `alike` |
 | `frame <seconds>` | evaluates one frame at this session time | `frame 0.0` |
 | `settle` | waits for every `async` run to land | `settle` |
 | `pointer [<x> <y>] [down \| up]` | moves the pointer, in the output's pixels from its top left (what `pointer()` reads), and presses or releases it | `pointer 20 20 down`, `pointer up` |
@@ -319,10 +320,10 @@ hold equal: compute it in one and read it in the other
 ([why](DECISIONS.md#the-rasterizer-is-a-package-the-native-one-is-its-fast-path)).
 An expectation that holds two forms of one computation to each other
 word for word, as `examples/vector/tests/tiled.replay` holds the tiled
-drawing to the plain one and `examples/mesh/tests/cutout.replay` and
-`degenerate.replay` the tiled surface to the one-pass one, fails rounded
-apart as it should: the two agree to the bit only where every Kernel
-rounds alike.
+drawing to the plain one, would fail rounded apart as it should: the two
+agree to the bit only where every Kernel rounds alike. Such a replay says
+`alike`, and `--round-apart` leaves it out, saying so.
+`--no-fusion` runs every node on its own.
 
 ## Import and export
 

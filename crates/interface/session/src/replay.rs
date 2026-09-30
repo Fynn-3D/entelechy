@@ -46,6 +46,12 @@ pub fn forms() -> Vec<Form> {
             &["library ../kernels/"],
         ),
         form(
+            "alike",
+            "alike",
+            "its checks hold two forms of one computation equal word for word, which they are only where every Kernel rounds alike, so `--round-apart` leaves the replay out",
+            &["alike"],
+        ),
+        form(
             "frame",
             "frame <seconds>",
             "evaluates one frame at this session time",
@@ -283,6 +289,9 @@ pub struct Replay {
     pub kernels: Option<PathBuf>,
     /// Steps in order.
     pub steps: Vec<Step>,
+    /// Whether its checks hold two forms of one computation equal word
+    /// for word: `--round-apart` leaves it out.
+    pub alike: bool,
 }
 
 /// A replay file does not parse.
@@ -307,6 +316,7 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
     let mut scene = None;
     let mut kernels = None;
     let mut steps = Vec::new();
+    let mut alike = false;
     for (index, raw) in text.lines().enumerate() {
         let line = index as u32 + 1;
         let error = |message: String| ReplayError { line, message };
@@ -324,6 +334,7 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
             ["library" | "kernels", path] => kernels = Some(base.join(path)),
             ["frame", time] => steps.push(Step::Frame(number(time, "time")?)),
             ["settle"] => steps.push(Step::Settle),
+            ["alike"] => alike = true,
             ["pointer", state @ ("down" | "up")] => steps.push(Step::Pointer {
                 position: None,
                 down: *state == "down",
@@ -502,6 +513,7 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
         })?,
         kernels,
         steps,
+        alike,
     })
 }
 
@@ -528,7 +540,18 @@ pub fn run_in(
     store: std::sync::Arc<dyn crate::Store>,
     runtime: Runtime,
 ) -> Result<Outcome, String> {
+    run_fused(replay, store, runtime, true)
+}
+
+/// [`run_in`], fusing pointwise producers into their consumers or not.
+pub fn run_fused(
+    replay: &Replay,
+    store: std::sync::Arc<dyn crate::Store>,
+    runtime: Runtime,
+    fusion: bool,
+) -> Result<Outcome, String> {
     let mut session = Session::open_in(store, &replay.scene, replay.kernels.as_deref(), runtime);
+    session.set_fusion(fusion);
     let mut rejected = Vec::new();
     for event in session.sync() {
         if let crate::Event::Rejected { .. } | crate::Event::SceneRejected(_) = &event {

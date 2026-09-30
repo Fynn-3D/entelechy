@@ -1,34 +1,10 @@
-//! The GPU held to the interpreter on Kernels from scenes: the examples'
-//! Kernels, and graphs keeping state on the device. These need the scene
-//! language and the runtime together, held by the session layer.
+//! The GPU held to the interpreter on graphs keeping state on the
+//! device. These need the scene language and the runtime together, held
+//! by the session layer.
 
-use std::path::Path;
-
-use orla_abi::{Capabilities, Capability, Context, Domain, Host, Invocation, Scope, Value};
-use orla_compiler::compile;
-use orla_cpu::CpuBackend;
+use orla_abi::{Context, Value};
 use orla_gpu::GpuBackend;
 use orla_rules::Backend;
-
-/// Downloads a resident GPU output into Host memory as pixels.
-fn materialized(gpu: &GpuBackend, host: &mut Host, handle: orla_abi::Handle) -> Vec<[f32; 4]> {
-    let byte_len = host
-        .schema(handle)
-        .unwrap()
-        .storage_words(host.domain(handle).unwrap().count())
-        * 4;
-    let device = host
-        .resident(handle)
-        .unwrap()
-        .expect("gpu outputs are resident");
-    let bytes = Backend::download(gpu, device, byte_len).unwrap();
-    let words: Vec<u32> = bytes
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
-    host.materialize(handle, words).unwrap();
-    host.image(handle).unwrap().pixels().to_vec()
-}
 
 fn gpu() -> Option<GpuBackend> {
     match GpuBackend::new() {
@@ -40,94 +16,6 @@ fn gpu() -> Option<GpuBackend> {
     }
 }
 
-fn all() -> Capabilities {
-    Capability::ALL.into_iter().collect()
-}
-
-/// Runs a Kernel on both backends and returns (cpu, gpu) pixels.
-fn both(
-    gpu: &GpuBackend,
-    source: &str,
-    inputs: &[Vec<[f32; 4]>],
-    input_size: (u32, u32),
-    params: Vec<Value>,
-    domain: Domain,
-) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
-    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
-    both_module(gpu, &module, inputs, input_size, params, domain)
-}
-
-fn both_module(
-    gpu: &GpuBackend,
-    module: &orla_compiler::Validated,
-    inputs: &[Vec<[f32; 4]>],
-    input_size: (u32, u32),
-    params: Vec<Value>,
-    domain: Domain,
-) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
-    let mut host = Host::new(1 << 24);
-    let handles: Vec<_> = inputs
-        .iter()
-        .map(|pixels| {
-            host.adopt_image(
-                orla_abi::Image::from_pixels(input_size.0, input_size.1, pixels.clone()).unwrap(),
-            )
-            .unwrap()
-        })
-        .collect();
-    let invocation = Invocation {
-        inputs: handles,
-        params,
-        domain,
-        context: Context {
-            time: 1.25,
-            ..Context::default()
-        },
-    };
-    let mut scope = Scope::new(&mut host, all());
-    let cpu_out = CpuBackend.execute(module, &invocation, &mut scope).unwrap()[0];
-    let prepared = gpu
-        .prepare(module)
-        .unwrap_or_else(|error| panic!("prepare failed: {error}"));
-    let mut scope = Scope::new(&mut host, all());
-    let gpu_out = Backend::execute(gpu, prepared.as_ref(), module, &invocation, &mut scope)
-        .unwrap_or_else(|error| panic!("gpu execution failed: {error}"))[0];
-    (
-        host.image(cpu_out).unwrap().pixels().to_vec(),
-        materialized(gpu, &mut host, gpu_out),
-    )
-}
-
-/// The inline Kernel a `.osn` document carries in the named node.
-fn inline_kernel(path: &Path, node: &str) -> orla_compiler::Validated {
-    let text = std::fs::read_to_string(path).unwrap();
-    let document = orla_language::parse_document(&text).unwrap_or_else(|error| panic!("{error}"));
-    let decl = document
-        .nodes
-        .iter()
-        .find(|decl| decl.name.value == node)
-        .unwrap_or_else(|| panic!("node `{node}` in {}", path.display()));
-    let orla_language::NodeKind::Inline(kernel) = &decl.kind else {
-        panic!("node `{node}` is not inline");
-    };
-    orla_compiler::compile_kernel(kernel, None).unwrap_or_else(|error| panic!("{error}"))
-}
-
-/// Fraction of pixels whose components differ by more than `tolerance`.
-fn mismatch(cpu: &[[f32; 4]], gpu: &[[f32; 4]], tolerance: f32) -> f32 {
-    assert_eq!(cpu.len(), gpu.len());
-    let bad = cpu
-        .iter()
-        .zip(gpu)
-        .filter(|(a, b)| {
-            a.iter()
-                .zip(*b)
-                .any(|(x, y)| (x - y).abs() > tolerance || x.is_nan() != y.is_nan())
-        })
-        .count();
-    bad as f32 / cpu.len() as f32
-}
-
 /// Compiles and publishes a Kernel as a session does: compiling is the
 /// caller's step, the runtime takes validated IR.
 fn load(
@@ -136,44 +24,6 @@ fn load(
 ) -> std::sync::Arc<orla_kernel::KernelVersion> {
     let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
     runtime.load(module, source).unwrap()
-}
-
-#[test]
-fn the_examples_match_within_tolerance() {
-    let Some(gpu) = gpu() else { return };
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples");
-    let ball = inline_kernel(&root.join("material-ball/scene.osn"), "ball");
-    let (cpu, gpu_pixels) = both_module(
-        &gpu,
-        &ball,
-        &[],
-        (1, 1),
-        vec![
-            Value::Vec3([0.86, 0.32, 0.18]),
-            Value::Float(0.35),
-            Value::Float(0.0),
-            Value::Vec3([1.0, 0.96, 0.9]),
-            Value::Float(0.7),
-        ],
-        Domain::Grid(120, 100),
-    );
-    let fraction = mismatch(&cpu, &gpu_pixels, 2e-3);
-    assert!(
-        fraction < 0.01,
-        "material ball differs on {fraction} of pixels"
-    );
-
-    let march = std::fs::read_to_string(root.join("raymarch/kernels/march.orla")).unwrap();
-    let (cpu, gpu_pixels) = both(
-        &gpu,
-        &march,
-        &[],
-        (1, 1),
-        vec![Value::Float(0.35), Value::Int(96)],
-        Domain::Grid(100, 65),
-    );
-    let fraction = mismatch(&cpu, &gpu_pixels, 2e-2);
-    assert!(fraction < 0.03, "ray march differs on {fraction} of pixels");
 }
 
 #[test]
