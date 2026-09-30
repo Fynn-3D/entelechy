@@ -1778,6 +1778,93 @@ fn a_served_scene_reads_where_its_documents_use_documents() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A served scene whose used library uses a package reads that package
+/// again when the library changes: the package's manifest lies where the
+/// library's reach goes, and the changed library is taken while the scene
+/// is served.
+#[test]
+fn a_served_scene_takes_a_changed_library_that_uses_a_package() {
+    use std::io::{BufRead, Write};
+    let base = std::env::temp_dir().join(format!(
+        "orla-protocol-package-reach-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let (dir, library, package) = (
+        base.join("scene"),
+        base.join("library"),
+        base.join("three.orlapkg"),
+    );
+    std::fs::create_dir_all(dir.join("kernels")).unwrap();
+    std::fs::create_dir_all(&library).unwrap();
+    std::fs::create_dir_all(package.join("kernels")).unwrap();
+    std::fs::write(
+        package.join("package.osn"),
+        "package three@1 { language = 1; ir = 1; }\nuse \"kernels/\";\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package.join("kernels/three.orla"),
+        "fn three() -> Int { return 3; }\n",
+    )
+    .unwrap();
+    let twice = |times: i32| {
+        format!(
+            "use \"../three.orlapkg\";\nfn twice(x: Int) -> Int {{ return x * {times} + three() - 3; }}\n"
+        )
+    };
+    std::fs::write(library.join("twice.orla"), twice(2)).unwrap();
+    std::fs::write(
+        dir.join("kernels/k.orla"),
+        "use \"../../library/twice.orla\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Int>; compute { return twice(4); } }\n",
+    )
+    .unwrap();
+    let scene = dir.join("scene.osn");
+    std::fs::write(
+        &scene,
+        "use \"kernels/\";\nnode k: t.k@1 { domain = 1; }\noutput result <- k.result;\n",
+    )
+    .unwrap();
+    let mut server = Command::new(env!("CARGO_BIN_EXE_orla"))
+        .args(["serve"])
+        .arg(&scene)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut input = server.stdin.take().unwrap();
+    let mut output = std::io::BufReader::new(server.stdout.take().unwrap());
+    let mut ask = |request: Json| -> Json {
+        writeln!(input, "{request}").unwrap();
+        let mut line = String::new();
+        output.read_line(&mut line).unwrap();
+        serde_json::from_str(&line).unwrap()
+    };
+    let value = |ask: &mut dyn FnMut(Json) -> Json| {
+        ask(json!({ "op": "evaluate" }));
+        ask(json!({ "op": "read", "output": "result", "from": 0 }))["ok"]["values"].clone()
+    };
+    assert_eq!(value(&mut ask), json!([8]));
+    std::fs::write(library.join("twice.orla"), twice(3)).unwrap();
+    // The changed library is prepared off the serving thread, then taken.
+    let mut events = String::new();
+    let mut taken = json!(null);
+    for _ in 0..100 {
+        events.push_str(&ask(json!({ "op": "sync" }))["ok"]["events"].to_string());
+        taken = value(&mut ask);
+        if taken == json!([12]) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(!events.contains("outside the directories"), "{events}");
+    assert_eq!(taken, json!([12]), "{events}");
+    drop(input);
+    let _ = server.wait();
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// Once the scene is read, holding its reads is refused.
 #[test]
 fn reads_are_held_from_the_start_or_not_at_all() {

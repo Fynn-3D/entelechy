@@ -187,13 +187,10 @@ fn used_through_its_manifest(store: &dyn Store, base: &Path, path: &Path) -> Res
     };
     let (base, path) = (located(base), located(path));
     let canonical = |p: &Path| store.canonical(p).unwrap_or_else(|_| p.to_path_buf());
-    let Some(package) = path.ancestors().skip(1).find(|dir| {
-        dir.extension().is_some_and(|ext| ext == "orlapkg")
-            && store.is_file(&dir.join("package.osn"))
-    }) else {
+    let Some(package) = package_holding(store, &path) else {
         return Ok(());
     };
-    if base.starts_with(canonical(package)) {
+    if base.starts_with(canonical(&package)) {
         return Ok(());
     }
     let name = package.file_name().unwrap_or_default().to_string_lossy();
@@ -201,6 +198,18 @@ fn used_through_its_manifest(store: &dyn Store, base: &Path, path: &Path) -> Res
         "`{}` is inside the package {name}; use the package whole, `use \".../{name}\";`, which its manifest is held to",
         path.display()
     ))
+}
+
+/// The package `path` lies inside: the nearest directory above it named
+/// `*.orlapkg` that holds a manifest.
+pub(crate) fn package_holding(store: &dyn Store, path: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .skip(1)
+        .find(|dir| {
+            dir.extension().is_some_and(|ext| ext == "orlapkg")
+                && store.is_file(&dir.join("package.osn"))
+        })
+        .map(Path::to_path_buf)
 }
 
 /// A document's text: the file at `path`, else, for a path through a
