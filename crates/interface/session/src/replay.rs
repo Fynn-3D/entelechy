@@ -53,9 +53,9 @@ pub fn forms() -> Vec<Form> {
         ),
         form(
             "frame",
-            "frame <seconds>",
-            "evaluates one frame at this session time",
-            &["frame 0.0"],
+            "frame <seconds> [to <seconds> every <seconds>]",
+            "evaluates one frame at this session time; with `to` and `every`, a frame at each step from the first time to the last, both included",
+            &["frame 0.0", "frame 0.1 to 2.0 every 0.1"],
         ),
         form(
             "settle",
@@ -311,6 +311,9 @@ impl fmt::Display for ReplayError {
 
 impl std::error::Error for ReplayError {}
 
+/// The most frames one `frame ... to ... every` line evaluates.
+const MAX_FRAMES: u64 = 1 << 20;
+
 /// Parses replay text; relative paths resolve against `base`.
 pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
     let mut scene = None;
@@ -333,6 +336,31 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
             ["scene", path] => scene = Some(base.join(path)),
             ["library" | "kernels", path] => kernels = Some(base.join(path)),
             ["frame", time] => steps.push(Step::Frame(number(time, "time")?)),
+            ["frame", from, "to", last, "every", step] => {
+                let wide = |text: &str, what: &str| {
+                    text.parse::<f64>()
+                        .map_err(|_| error(format!("{what} `{text}` is not a number")))
+                };
+                let (from, last, step) = (
+                    wide(from, "time")?,
+                    wide(last, "time")?,
+                    wide(step, "step")?,
+                );
+                let forward = step > 0.0 && last >= from && last.is_finite();
+                if !forward {
+                    return Err(error(format!(
+                        "frames run forward: `every` must be above 0 and `to` at or after the first time, not {from} to {last} every {step}"
+                    )));
+                }
+                // Each time from the first, so steps never drift.
+                let count = ((last - from) / step + 1e-3).floor() as u64 + 1;
+                if count > MAX_FRAMES {
+                    return Err(error(format!(
+                        "{count} frames in one line; a line holds at most {MAX_FRAMES}"
+                    )));
+                }
+                steps.extend((0..count).map(|i| Step::Frame((from + i as f64 * step) as f32)));
+            }
             ["settle"] => steps.push(Step::Settle),
             ["alike"] => alike = true,
             ["pointer", state @ ("down" | "up")] => steps.push(Step::Pointer {
@@ -1055,6 +1083,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A range of frames is a frame at each step, both ends included, each
+    /// time counted from the first; a range that runs backward is refused.
+    #[test]
+    fn a_range_of_frames_is_a_frame_at_each_step() {
+        let replay = parse("scene s.osn\nframe 0.1 to 1.0 every 0.1\n", Path::new(".")).unwrap();
+        let times: Vec<f32> = replay
+            .steps
+            .iter()
+            .map(|step| match step {
+                Step::Frame(time) => *time,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        let written: Vec<f32> = (1..=10).map(|i| (i as f64 / 10.0) as f32).collect();
+        assert_eq!(times, written);
+        let error = parse("scene s.osn\nframe 1 to 0 every 0.1\n", Path::new(".")).unwrap_err();
+        assert!(
+            error.message.contains("frames run forward"),
+            "{}",
+            error.message
+        );
+        let error = parse("scene s.osn\nframe 0 to 1 every 0\n", Path::new(".")).unwrap_err();
+        assert!(
+            error.message.contains("frames run forward"),
+            "{}",
+            error.message
+        );
     }
 
     /// A line no form reads names the steps, or how its keyword is written.
