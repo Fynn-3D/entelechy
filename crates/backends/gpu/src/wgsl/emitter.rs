@@ -519,6 +519,7 @@ impl Emitter<'_> {
             Op::PointerDown => "button_down(0)".to_owned(),
             Op::Button(code) => format!("button_down({})", v(code)),
             Op::Wheel => "ctx[4].xy".to_owned(),
+            Op::Pads => "i32(ctx[7].z)".to_owned(),
             Op::Stick(which) => format!("stick_at({})", v(which)),
             Op::Window => "ctx[4].zw".to_owned(),
             Op::Scale => "ctx[5].x".to_owned(),

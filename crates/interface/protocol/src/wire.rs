@@ -9,7 +9,8 @@ use serde_json::{Value as Json, json};
 use orla_session::{Event, Session};
 
 /// The context an `evaluate`, `trace` or `restore` request describes:
-/// time, rate, pointer, buttons, wheel, sticks, keys, and the window.
+/// time, rate, pointer, buttons, wheel, sticks, pads, keys, and the
+/// window.
 pub fn context_of(session: &Session, request: &Json) -> Context {
     let number_at = |list: &Vec<Json>, index: usize| {
         list.get(index).and_then(Json::as_f64).unwrap_or(0.0) as f32
@@ -59,6 +60,11 @@ pub fn context_of(session: &Session, request: &Json) -> Context {
             }
         }
     }
+    context.input.pads = request
+        .get("pads")
+        .and_then(Json::as_u64)
+        .unwrap_or(0)
+        .min(u32::MAX as u64) as u32;
     if let Some(keys) = request.get("keys").and_then(Json::as_array) {
         for key in keys.iter().filter_map(Json::as_i64) {
             context.input.set_key(key as i32, true);

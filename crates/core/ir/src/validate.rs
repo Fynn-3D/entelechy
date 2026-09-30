@@ -1006,6 +1006,10 @@ impl<'a> Checker<'a> {
                 self.require(Capability::InputRead, position)?;
                 Type::Vec2
             }
+            Op::Pads => {
+                self.require(Capability::InputRead, position)?;
+                Type::Int
+            }
             Op::Window => {
                 self.require(Capability::InputRead, position)?;
                 Type::Vec2

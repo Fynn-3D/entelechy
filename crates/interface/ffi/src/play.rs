@@ -169,6 +169,18 @@ pub unsafe extern "C" fn orla_play_axis(
     0
 }
 
+/// How many pads are connected, what `pads()` reads; a negative count
+/// is none.
+///
+/// # Safety
+/// `session` is a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn orla_play_pads(session: *mut OrlaSession, count: c_int) {
+    if let Some(mut s) = unsafe { enter(session) } {
+        s.play.pads_connected(count.max(0) as u32);
+    }
+}
+
 /// One frame played on a `width` by `height` pixel window at `scale`, the
 /// sound device at `rate` (zero without one). 0 shown, 1 waiting, -1
 /// failed.

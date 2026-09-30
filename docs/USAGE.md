@@ -268,7 +268,8 @@ frame, and paces evaluation while it plays. The window's size and scale
 reach Kernels declaring `input.read` as `window()` and `scale()`, with
 the pointer and keys. A gamepad is keys: the D-pad and left stick are the
 arrows (37 to 40), South is Z, East is X, Start is Enter, Select is
-Escape.
+Escape; its sticks, triggers and buttons are `stick()` and `button()`,
+and `pads()` is how many are connected.
 
 Keys: Tab cycles the preview through the nodes and back to the output;
 F5 resets Graph state; F10 shows a line of frame data (frame interval
@@ -298,6 +299,7 @@ file. `orla help replay` lists the same forms:
 | `pointer [<x> <y>] [down \| up]` | moves the pointer, in the output's pixels from its top left (what `pointer()` reads), and presses or releases it | `pointer 20 20 down`, `pointer up` |
 | `button <name> down \| up` | left, right, middle, or a pad's south, east, west, north, l1, r1, l3, r3, start, select | `button right down`, `button south up` |
 | `stick left \| right \| triggers <x> <y>` | a pad's axis pair | `stick left 0.5 -1` |
+| `pads <count>` | how many pads are connected from here on, what `pads()` reads | `pads 1` |
 | `wheel <x> <y>` | the scroll for the next frame only | `wheel 0 -1` |
 | `window <w> <h> [<scale>]` | the window in pixels, for `window()`, and its scale factor; one when not given | `window 240 135`, `window 240 135 0.25` |
 | `key <code> down \| up` | a key by the browser's code: letters and digits by uppercase ASCII, space 32, enter 13, arrows 37 to 40 | `key 67 down` |

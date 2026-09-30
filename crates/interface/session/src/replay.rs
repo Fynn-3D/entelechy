@@ -82,6 +82,12 @@ pub fn forms() -> Vec<Form> {
             &["stick left 0.5 -1"],
         ),
         form(
+            "pads",
+            "pads <count>",
+            "how many pads are connected from here on, what `pads()` reads",
+            &["pads 1"],
+        ),
+        form(
             "wheel",
             "wheel <x> <y>",
             "the scroll for the next frame only",
@@ -203,6 +209,8 @@ pub enum Step {
         /// Its two values.
         at: [f32; 2],
     },
+    /// How many pads are connected from here on.
+    Pads(u32),
     /// The window's size in pixels and its scale factor from here on.
     Window {
         /// Width and height in pixels.
@@ -404,6 +412,11 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
                 down: *state == "down",
             }),
             ["wheel", x, y] => steps.push(Step::Wheel([number(x, "x")?, number(y, "y")?])),
+            ["pads", count] => {
+                steps.push(Step::Pads(count.parse::<u32>().map_err(|_| {
+                    error(format!("pads `{count}` is not a count of pads"))
+                })?))
+            }
             ["stick", which, x, y] => steps.push(Step::Stick {
                 which: match *which {
                     "left" => 0,
@@ -747,6 +760,7 @@ impl Replayer {
                 }
             }
             Step::Wheel(delta) => input.wheel = *delta,
+            Step::Pads(count) => input.pads = *count,
             Step::Reset => session.reset_state(),
             Step::ResetPort { node, port } => {
                 session
@@ -1036,7 +1050,7 @@ mod tests {
             .collect();
         let replay = parse(&lines.join("\n"), Path::new(".")).unwrap();
         assert!(replay.kernels.is_some(), "`library` is a form");
-        let mut seen = [false; 15];
+        let mut seen = [false; 16];
         for step in &replay.steps {
             seen[match step {
                 Step::Frame(_) => 0,
@@ -1054,6 +1068,7 @@ mod tests {
                 Step::ExpectCount { .. } => 12,
                 Step::ExpectPlaced { .. } => 13,
                 Step::Expect { .. } => 14,
+                Step::Pads(_) => 15,
             }] = true;
         }
         assert!(

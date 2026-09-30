@@ -612,6 +612,7 @@ impl<'a> Renumber<'a> {
             | Op::Pointer
             | Op::PointerDown
             | Op::Wheel
+            | Op::Pads
             | Op::Window
             | Op::Scale
             | Op::Element

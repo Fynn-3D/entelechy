@@ -199,10 +199,13 @@ class OrlaPlayer {
     fit();
   }
 
-  /// Hands the pads' buttons and axes to the play, where they changed.
+  /// Hands the pads' buttons and axes to the play, where they changed,
+  /// and how many are connected.
   pollPads() {
+    let connected = 0;
     for (const pad of navigator.getGamepads ? navigator.getGamepads() : []) {
       if (!pad || pad.mapping !== "standard") continue;
+      connected += 1;
       const last = this.pads.get(pad.index) || { buttons: [], axes: [] };
       const axis = (name, value, at) => {
         if (last.axes[at] !== value) {
@@ -227,6 +230,7 @@ class OrlaPlayer {
         axes: [pad.axes[0] ?? 0, -(pad.axes[1] ?? 0), pad.axes[2] ?? 0, -(pad.axes[3] ?? 0), pad.buttons[6]?.value ?? 0, pad.buttons[7]?.value ?? 0],
       });
     }
+    this.x.orla_play_pads(this.session, connected);
   }
 
   /// What the play said, to the page's console and to whoever listens.

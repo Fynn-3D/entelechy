@@ -1308,6 +1308,7 @@ impl<'a> Fx<'a> {
                 self.ctx_load(Val::F32, offsets::WHEEL),
                 self.ctx_load(Val::F32, offsets::WHEEL + 4),
             ],
+            Op::Pads => vec![self.ctx_load(Val::I32, offsets::PADS)],
             Op::Window => vec![
                 self.ctx_load(Val::F32, offsets::WINDOW),
                 self.ctx_load(Val::F32, offsets::WINDOW + 4),

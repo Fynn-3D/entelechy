@@ -129,6 +129,8 @@ int orla_play_pad(OrlaSession *session, const char *name, int down);
  * stick's up positive, -1 to 1), "left_trigger", "right_trigger" (0 to
  * 1). -1 for another. */
 int orla_play_axis(OrlaSession *session, const char *name, float value);
+/* How many pads are connected, what pads() reads. */
+void orla_play_pads(OrlaSession *session, int count);
 /* One frame on a window of `width` by `height` pixels at `scale`, the
  * sound device at `rate` (zero without one). Returns 0 with a frame to
  * show (the report in orla_report()), 1 when a replay's next frame has

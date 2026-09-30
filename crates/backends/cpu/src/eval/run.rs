@@ -1062,6 +1062,7 @@ impl<'p, 's> Machine<'p, 's> {
                 s[fp + dst] = x.to_bits();
                 s[fp + dst + 1] = y.to_bits();
             }
+            Instr::Pads { dst } => s[fp + dst] = program.context.input.pads,
             Instr::Wheel { dst } => {
                 let [x, y] = program.context.input.wheel;
                 s[fp + dst] = x.to_bits();

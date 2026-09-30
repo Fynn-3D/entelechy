@@ -23,6 +23,7 @@ pub(crate) fn callable() -> Vec<&'static str> {
     let mut names: Vec<&'static str> = declare::RESERVED_BUILTINS
         .iter()
         .chain(builtins::COMPOSED.iter())
+        .chain(builtins::YIELDING.iter())
         .chain(builtins::FORMULAS.iter())
         .copied()
         .chain(orla_ir::Intrinsic::ALL.iter().map(|(_, name)| *name))

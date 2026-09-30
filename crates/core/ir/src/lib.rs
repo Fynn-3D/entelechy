@@ -1190,6 +1190,8 @@ pub enum Op {
     /// What the wheel scrolled since the last evaluation, as `Vec2`.
     /// Context: `input.read`.
     Wheel,
+    /// How many pads are connected, as `Int`. Context: `input.read`.
+    Pads,
     /// A pad's axis pair by number as `Vec2`: 0 left stick, 1 right, 2 the
     /// triggers. Sticks run `-1..1` (`y` away from the person), triggers
     /// `0..1`; zero without a pad. Context: `input.read`.

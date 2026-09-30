@@ -253,6 +253,11 @@ fn context() -> Vec<Field> {
             "a pad's left stick, right stick and triggers, up to three pairs",
         ),
         may(
+            "pads",
+            Ty::Int,
+            "how many pads are connected, what `pads()` reads",
+        ),
+        may(
             "keys",
             Ty::List(Box::new(Ty::Int)),
             "keys held, by the browser's codes",

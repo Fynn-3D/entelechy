@@ -67,6 +67,8 @@ pub struct Ctx {
     wheel: [f32; 2],
     /// A pad's axis pairs: the left stick, the right, the triggers.
     sticks: [[f32; 2]; 3],
+    /// How many pads are connected.
+    pads: u32,
     window: [f32; 2],
     scale: f32,
     buttons: u32,
@@ -376,6 +378,7 @@ fn shared(
         pointer: input.pointer,
         wheel: input.wheel,
         sticks: input.sticks,
+        pads: input.pads,
         window: invocation.context.window,
         scale: invocation.context.scale,
         buttons: input.button_bits(),
@@ -469,6 +472,7 @@ fn compute_into(
         pointer: t.pointer,
         wheel: t.wheel,
         sticks: t.sticks,
+        pads: t.pads,
         window: t.window,
         scale: t.scale,
         buttons: t.buttons,
@@ -1485,6 +1489,7 @@ pub(crate) mod offsets {
     pub const POINTER: i32 = std::mem::offset_of!(Ctx, pointer) as i32;
     pub const WHEEL: i32 = std::mem::offset_of!(Ctx, wheel) as i32;
     pub const STICKS: i32 = std::mem::offset_of!(Ctx, sticks) as i32;
+    pub const PADS: i32 = std::mem::offset_of!(Ctx, pads) as i32;
     pub const WINDOW: i32 = std::mem::offset_of!(Ctx, window) as i32;
     pub const SCALE: i32 = std::mem::offset_of!(Ctx, scale) as i32;
     pub const WIDTH: i32 = std::mem::offset_of!(Ctx, width) as i32;

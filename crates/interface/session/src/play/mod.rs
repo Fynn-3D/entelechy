@@ -361,6 +361,11 @@ impl Play {
         self.pad.axis(&mut self.input, axis, value);
     }
 
+    /// How many pads are connected, what `pads()` reads.
+    pub fn pads_connected(&mut self, count: u32) {
+        self.input.pads = count;
+    }
+
     /// Records the opened sound device's description.
     pub fn sound_opened(&mut self, description: impl Into<String>) {
         self.sound = Some(description.into());

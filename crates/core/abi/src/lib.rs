@@ -888,6 +888,8 @@ pub struct InputState {
     /// A pad's axes in `-1..1`: left stick, right stick, and the triggers
     /// as one pair (`x` left, `y` right, in `0..1`). Zero without a pad.
     pub sticks: [[f32; 2]; 3],
+    /// How many pads are connected.
+    pub pads: u32,
     /// A pad's buttons as bits, the lowest being [`pad::SOUTH`].
     pad_buttons: u32,
     keys: [u32; 8],
@@ -1011,6 +1013,7 @@ impl InputState {
             feed(pair[1].to_bits());
         }
         feed(self.pad_buttons);
+        feed(self.pads);
         for word in self.keys {
             feed(word);
         }

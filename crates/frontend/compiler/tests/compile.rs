@@ -1206,6 +1206,27 @@ fn vectors_build_from_vectors_swizzle_and_functions_may_take_a_math_builtins_nam
     );
 }
 
+/// `pads()` reads how many pads are connected, behind `input.read`; a
+/// document's own function named `pads` stands for it, so a source that
+/// declared one keeps it.
+#[test]
+fn pads_is_a_builtin_a_function_may_stand_for() {
+    let module = compile(
+        "kernel t.k@1 { requires { field.write; input.read; } output r: Rows<Int>; compute { return pads(); } }",
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    assert!(module.to_string().contains("context pads"), "{module}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output r: Rows<Int>; compute { return pads(); } }",
+    );
+    assert!(message.contains("input.read"), "{message}");
+    let own = compile(
+        "kernel t.k@1 { requires { field.write; } output r: Rows<Int>; fn pads() -> Int { return 3; } compute { return pads(); } }",
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    assert!(!own.to_string().contains("context pads"), "{own}");
+}
+
 #[test]
 fn a_manifest_says_what_its_ports_hold_by_name() {
     let module = compile(

@@ -1923,6 +1923,11 @@ impl<'a, 'b> Fx<'a, 'b> {
                     .ins()
                     .load(types::F32, self.settled, self.ctx, offsets::WHEEL + 4),
             ],
+            Op::Pads => vec![
+                self.b
+                    .ins()
+                    .load(types::I32, self.settled, self.ctx, offsets::PADS),
+            ],
             Op::Window => vec![
                 self.b
                     .ins()

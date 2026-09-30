@@ -12,6 +12,11 @@ use crate::CompileError;
 
 use super::{Builder, semantic};
 
+/// Builtins a document's function of the same name stands for: those the
+/// language gained after sources could already name a function so, which
+/// keep their own.
+pub(super) const YIELDING: [&str; 1] = ["pads"];
+
 /// The builtins composed from other operations, typed by their arguments;
 /// see [`Builder::composed`].
 pub(super) const COMPOSED: [&str; 9] = [
@@ -658,6 +663,11 @@ impl Builder<'_> {
                     .filter(|(position, _)| self.sees(*position))
                 {
                     return self.instantiate(template, args, span);
+                }
+                if YIELDING.contains(&name) {
+                    self.require(name, Capability::InputRead, span)?;
+                    self.arity(name, args, 0, span)?;
+                    return Ok(self.emit(Type::Int, Op::Pads));
                 }
                 if COMPOSED.contains(&name) {
                     return self.composed(name, args, span);

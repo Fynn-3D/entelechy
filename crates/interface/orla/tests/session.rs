@@ -761,6 +761,34 @@ output result <- view.result;
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A replay says how many pads are connected, and a Kernel reads it.
+#[test]
+fn a_replay_connects_pads_a_kernel_counts() {
+    let dir = scratch("pads");
+    std::fs::write(
+        dir.join("pads.osn"),
+        "node k: kernel { requires { field.write; input.read; } output result: Rows<Int>; compute { return pads(); } domain = 1; }\noutput result <- k.result;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("pads.replay"),
+        "scene pads.osn\nframe 0.0\nexpect k.result[0] = 0\npads 2\nframe 0.1\nexpect k.result[0] = 2\npads 0\nframe 0.2\nexpect k.result[0] = 0\n",
+    )
+    .unwrap();
+    let orla = env!("CARGO_BIN_EXE_orla");
+    for backend in ["cpu", "jit", "gpu"] {
+        let output = Command::new(orla)
+            .args(["replay", "--backend", backend])
+            .arg(dir.join("pads.replay"))
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{backend}: {stdout}{stderr}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Two libraries each keep a helper of one name; a document using both
 /// calls each library's functions, and each reaches its own helper. A
 /// document's own function of a used one's name is its own, and the

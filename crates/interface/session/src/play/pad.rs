@@ -11,7 +11,8 @@
 //!
 //! Analog values are in the context: `stick(0)` left, `stick(1)` right,
 //! `stick(2)` the triggers; pad buttons are `button(8)` upwards (south,
-//! east, west, north, shoulders, thumbs, start, select). The device
+//! east, west, north, shoulders, thumbs, start, select); `pads()` is how
+//! many are connected. The device
 //! names the pad's controls; this module gives them meaning.
 
 use orla_kernel::{InputState, pad};

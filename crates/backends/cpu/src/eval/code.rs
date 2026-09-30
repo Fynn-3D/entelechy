@@ -436,6 +436,10 @@ pub(super) enum Instr {
     Wheel {
         dst: usize,
     },
+    /// `dst` = how many pads are connected.
+    Pads {
+        dst: usize,
+    },
     Window {
         dst: usize,
     },

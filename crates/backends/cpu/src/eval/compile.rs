@@ -909,6 +909,9 @@ impl FunctionCompiler<'_> {
             Op::Wheel => Instr::Wheel {
                 dst: define(self).at,
             },
+            Op::Pads => Instr::Pads {
+                dst: define(self).at,
+            },
             Op::Window => Instr::Window {
                 dst: define(self).at,
             },
