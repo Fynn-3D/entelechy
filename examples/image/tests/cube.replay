@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../parts/cube/scene.osn
 
 # At time zero the cube is only tilted, so the picture is symmetric
 # about its middle column: the front face is in shade, the top face is

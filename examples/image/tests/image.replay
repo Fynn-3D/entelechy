@@ -1,0 +1,19 @@
+scene ../scene.osn
+
+# At 640 by 400 each panel is 213 by 200 pixels, the part's picture
+# scaled whole into it less a 6 pixel margin and centred. Each check
+# reads a pixel of a part's picture where its own replay pins the color.
+window 640 400
+frame 0.0
+expect 56 65 = 0.949 0.749 0.2 0.02         # blur: the disc at the top edge
+expect 157 75 = 0.498 0.498 0.498 0.02      # blur: the emboss, flat mid grey
+expect 320 62 = 0.52 0.66 0.19 0.03         # cube: the top face, lit
+expect 232 37 = 0.06 0.07 0.1 0.01          # cube: the ground
+expect 533 100 = 0.251 0.451 0.6 0.03       # marching: inside the contour
+expect 443 35 = 0.071 0.078 0.122 0.02      # marching: outside it
+expect 12 231 = 0.37 0.56 0.90 0.03         # volume: the sky in a corner
+expect 106 300 = 0.75 0.8 0.87 0.2          # volume: the cloud in the middle
+expect 319 258 = 0.118 0.153 0.31 0.02      # scroll: nearest texels either side
+expect 320 258 = 0.729 0.647 0.529 0.02     # of the tile's edge
+expect 560 300 = 0.03 0.03 0.04 0.01        # the sixth panel, empty
+expect 213 100 = 0.03 0.03 0.04 0.01        # the margin between panels

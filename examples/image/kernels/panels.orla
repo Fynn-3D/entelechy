@@ -1,0 +1,45 @@
+// Five pictures laid out as a grid of panels, three across and two
+// down; each is scaled whole into its panel, centred, nearest texel.
+
+/// The panel a picture of extent `s` takes in a cell of extent `cell`:
+/// where its top left sits and how many pixels one of its texels spans.
+fn fit(cell: Vec2, s: Vec2, margin: Float) -> Vec3 {
+    let k = min((cell.x - 2.0 * margin) / s.x, (cell.y - 2.0 * margin) / s.y);
+    let origin = (cell - s * k) * 0.5;
+    return vec3(origin, k);
+}
+
+kernel panels.grid@1 {
+    requires { field.read; field.write; }
+    input blur: Image;
+    input cube: Image;
+    input marching: Image;
+    input volume: Image;
+    input scroll: Image;
+    param margin: Float = 6.0;
+    param ground: Vec3 = vec3(0.03, 0.03, 0.04);
+    output result: Image;
+    compute {
+        let n = domain();
+        let cell = n / vec2(3.0, 2.0);
+        let p = coord() + 0.5;
+        let col = min(floor(p.x / cell.x), 2.0);
+        let row = min(floor(p.y / cell.y), 1.0);
+        let panel = int(row) * 3 + int(col);
+        let local = p - vec2(col, row) * cell;
+        let s = if panel == 0 { size(blur) }
+            else if panel == 1 { size(cube) }
+            else if panel == 2 { size(marching) }
+            else if panel == 3 { size(volume) }
+            else { size(scroll) };
+        let f = fit(cell, s, margin);
+        let q = (local - f.xy) / f.z;
+        let inside = panel < 5 && q.x >= 0.0 && q.y >= 0.0 && q.x < s.x && q.y < s.y;
+        let color = if panel == 0 { at(blur, q) }
+            else if panel == 1 { at(cube, q) }
+            else if panel == 2 { at(marching, q) }
+            else if panel == 3 { at(volume, q) }
+            else { at(scroll, q) };
+        return if inside { color } else { vec4(ground, 1.0) };
+    }
+}

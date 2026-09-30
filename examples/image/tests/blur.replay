@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../parts/blur/scene.osn
 
 # The disc against the top edge stays its own color in the top row:
 # the reads past the edge fold back into the disc. Its lower edge blurs
