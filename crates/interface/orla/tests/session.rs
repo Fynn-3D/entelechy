@@ -712,7 +712,7 @@ fn libraries_share_declarations_through_use_and_refuse_conflicts() {
 }
 
 #[test]
-fn functions_are_shared_through_use_and_conflicts_are_refused() {
+fn functions_are_shared_through_use_and_scoped_by_document() {
     let dir = scratch("functions");
     std::fs::write(
         dir.join("kernels/math.orla"),
@@ -732,30 +732,88 @@ output result <- view.result;
     )
     .unwrap();
     let orla = env!("CARGO_BIN_EXE_orla");
-    let output = Command::new(orla)
-        .arg("check")
-        .arg(dir.join("scene.osn"))
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(output.status.success(), "{stdout}");
-    // The same name from a second file is a conflict naming both files.
+    let check = |scene: &str| {
+        let output = Command::new(orla)
+            .arg("check")
+            .arg(dir.join(scene))
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        (output.status.success(), stdout)
+    };
+    let (ok, stdout) = check("scene.osn");
+    assert!(ok, "{stdout}");
+    // A second file declaring the name: the scene's own call reaches
+    // neither, and the refusal names both files.
     std::fs::write(
         dir.join("kernels/more.orla"),
         "fn twice(x: Float) -> Float { return x + x; }\n",
     )
     .unwrap();
+    let (ok, stdout) = check("scene.osn");
+    assert!(!ok, "{stdout}");
+    assert!(
+        stdout.contains("fn `twice` is declared by")
+            && stdout.contains("math.orla")
+            && stdout.contains("more.orla"),
+        "{stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Two libraries each keep a helper of one name; a document using both
+/// calls each library's functions, and each reaches its own helper. A
+/// document's own function of a used one's name is its own, and the
+/// used function keeps calling the one it sees.
+#[test]
+fn each_document_calls_the_functions_it_sees() {
+    let dir = scratch("scoped");
+    let lib = dir.join("lib");
+    std::fs::create_dir_all(&lib).unwrap();
+    std::fs::write(
+        lib.join("a.orla"),
+        "fn helper(x: Float) -> Float { return x * 2.0; }\nfn by_a(x: Float) -> Float { return helper(x); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        lib.join("b.orla"),
+        "fn helper(x: Float) -> Float { return x + 10.0; }\nfn by_b(x: Float) -> Float { return helper(x); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        lib.join("c.orla"),
+        "use \"a.orla\";
+fn helper(x: Float) -> Float { return x * 3.0; }
+kernel t.own@1 { requires { field.write; } output result: Rows<Float>; compute { return helper(1.0) + by_a(1.0) * 10.0; } }
+",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scoped.osn"),
+        "use \"lib/a.orla\";
+use \"lib/b.orla\";
+use \"lib/c.orla\";
+node both: kernel { requires { field.write; } output result: Rows<Float>; compute { return by_a(1.0) + by_b(1.0) * 100.0; } domain = 1; }
+node own: t.own@1 { domain = 1; }
+output both <- both.result;
+output own <- own.result;
+",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scoped.replay"),
+        "scene scoped.osn\nframe 0.0\nexpect both.result[0] = 1102.0\nexpect own.result[0] = 23.0\n",
+    )
+    .unwrap();
+    let orla = env!("CARGO_BIN_EXE_orla");
     let output = Command::new(orla)
-        .arg("check")
-        .arg(dir.join("scene.osn"))
+        .arg("replay")
+        .arg(dir.join("scoped.replay"))
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!output.status.success(), "{stdout}");
-    assert!(
-        stdout.contains("fn `twice` is declared by both") && stdout.contains("more.orla"),
-        "{stdout}"
-    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stdout}{stderr}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1090,6 +1148,78 @@ output result <- k.result;
             && stderr.contains(":7:16, in `grow`"),
         "{stderr}"
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A failure in a function a used document declares is placed in that
+/// document, and so is one in a function another used document also
+/// names.
+#[test]
+fn a_failure_in_a_used_function_is_placed_in_its_document() {
+    let dir = scratch("trace-used");
+    let lib = dir.join("lib");
+    std::fs::create_dir_all(&lib).unwrap();
+    std::fs::write(
+        lib.join("a.orla"),
+        "fn grow(x: Int) -> Int {\n    let big = x * 1000000;\n    return big * 1000;\n}\nfn by_a(x: Int) -> Int { return grow(x); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        lib.join("b.orla"),
+        "fn grow(x: Int) -> Int { return x; }\nfn by_b(x: Int) -> Int { return grow(x); }\n",
+    )
+    .unwrap();
+    let scene = dir.join("used.osn");
+    let write = |call: &str| {
+        std::fs::write(
+            &scene,
+            format!(
+                "use \"lib/a.orla\";\n{}node k: kernel {{ requires {{ field.write; }} output result: Rows<Int>; compute {{ return {call}(element()) + by_a(0); }} domain = 4; }}\noutput result <- k.result;\n",
+                if call == "by_b" { "use \"lib/b.orla\";\n" } else { "" }
+            ),
+        )
+        .unwrap();
+    };
+    for call in ["by_a", "by_b"] {
+        write(call);
+        let mut session = Session::open(&scene, None, 1 << 20);
+        session.sync();
+        let context = Context::default();
+        let error = session.evaluate(&context);
+        if call == "by_b" {
+            // b's `grow` passes its element through: nothing fails.
+            assert!(error.is_ok(), "{error:?}");
+            continue;
+        }
+        let error = error.unwrap_err();
+        let place = session.failure_place(&error, &context).expect("placed");
+        assert_eq!(
+            place.path,
+            lib.join("a.orla").canonicalize().unwrap(),
+            "{place}"
+        );
+        assert_eq!((place.line, place.column), (3, 12), "{place}");
+        assert_eq!(place.function.as_deref(), Some("grow"));
+    }
+    // With both libraries used, a's `grow` is renamed in the scene's
+    // reach and still placed as a's `grow`.
+    std::fs::write(
+        &scene,
+        "use \"lib/a.orla\";\nuse \"lib/b.orla\";\nnode k: kernel { requires { field.write; } output result: Rows<Int>; compute { return by_a(element()) + by_b(1); } domain = 4; }\noutput result <- k.result;\n",
+    )
+    .unwrap();
+    let mut session = Session::open(&scene, None, 1 << 20);
+    session.sync();
+    let context = Context::default();
+    let error = session.evaluate(&context).unwrap_err();
+    let place = session.failure_place(&error, &context).expect("placed");
+    assert_eq!(
+        place.path,
+        lib.join("a.orla").canonicalize().unwrap(),
+        "{place}"
+    );
+    assert_eq!((place.line, place.column), (3, 12), "{place}");
+    assert_eq!(place.function.as_deref(), Some("grow"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

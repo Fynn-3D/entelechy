@@ -103,12 +103,13 @@ impl From<ParseError> for DocumentError {
 /// Reads the text of a document at a resolved path.
 pub type Loader<'a> = dyn FnMut(&Path) -> Result<String, String> + 'a;
 
-/// Resolves a document's `use` items, given its directory, to the
-/// structs and type aliases every Kernel of the document sees. The
-/// caller reads the files.
+/// Resolves a document's `use` items, given its directory and its own
+/// functions, to the structs, type aliases and functions every Kernel of
+/// the document sees. The caller reads the files.
 pub type Declare<'a> = dyn FnMut(
         &Path,
         &[orla_language::Use],
+        &[orla_language::FnDecl],
     ) -> Result<
         (
             Vec<orla_language::StructDecl>,
@@ -373,8 +374,8 @@ fn lower(
     overrides: &BTreeMap<String, Value>,
 ) -> Result<Lowered, DocumentError> {
     let mut document = document.clone();
-    let (structs, types, functions) =
-        declare(base, &document.uses).map_err(|message| error(Span::default(), message))?;
+    let (structs, types, functions) = declare(base, &document.uses, &document.functions)
+        .map_err(|message| error(Span::default(), message))?;
     document.inherit(&structs, &types, &functions);
     let document = &document;
     let mut lowering = Lowering {
@@ -1173,8 +1174,9 @@ impl Lowering<'_, '_> {
                 let mut document = orla_language::parse_document(&text)
                     .map_err(|e| error(sub_path.span, format!("{}:{e}", sub_path.value)))?;
                 let sub_base = resolved.parent().unwrap_or_else(|| Path::new("."));
-                let (structs, types, functions) = (self.declare)(sub_base, &document.uses)
-                    .map_err(|m| error(sub_path.span, format!("{}: {m}", sub_path.value)))?;
+                let (structs, types, functions) =
+                    (self.declare)(sub_base, &document.uses, &document.functions)
+                        .map_err(|m| error(sub_path.span, format!("{}: {m}", sub_path.value)))?;
                 document.inherit(&structs, &types, &functions);
                 let read = std::rc::Rc::new(Read {
                     aliases: types.iter().chain(&document.types).cloned().collect(),
@@ -1728,7 +1730,7 @@ pub fn parse(text: &str) -> Result<Graph, DocumentError> {
             path.display()
         ))
     };
-    let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new(), Vec::new())));
+    let mut none: Box<Declare<'_>> = Box::new(|_, _, _| Ok((Vec::new(), Vec::new(), Vec::new())));
     let lowered = lower(
         &document,
         text,
@@ -1768,7 +1770,7 @@ pub fn from_document(
             path.display()
         ))
     };
-    let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new(), Vec::new())));
+    let mut none: Box<Declare<'_>> = Box::new(|_, _, _| Ok((Vec::new(), Vec::new(), Vec::new())));
     lower(
         document,
         "",
@@ -1791,7 +1793,7 @@ pub fn load(
     base: &std::path::Path,
     loader: &mut Loader<'_>,
 ) -> Result<Lowered, DocumentError> {
-    let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new(), Vec::new())));
+    let mut none: Box<Declare<'_>> = Box::new(|_, _, _| Ok((Vec::new(), Vec::new(), Vec::new())));
     lower(
         document,
         text,
@@ -2285,7 +2287,8 @@ output result <- show.result;
         );
         // The caller's value sizes the graph; one time keeps the plain name.
         let document = orla_language::parse_document(REPEATED).unwrap();
-        let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new(), Vec::new())));
+        let mut none: Box<Declare<'_>> =
+            Box::new(|_, _, _| Ok((Vec::new(), Vec::new(), Vec::new())));
         let mut loader: Box<Loader<'_>> = Box::new(|_| Err("no files".into()));
         let overrides = BTreeMap::from([("level".to_owned(), Value::Int(4))]);
         let lowered = load_with_params(

@@ -37,6 +37,7 @@ fn one_declaration_written_in_two_files_is_one() {
         &orla_session::Disk::default(),
         &dir,
         &uses("use \"a.orla\";\nuse \"b.orla\";"),
+        &[],
     )
     .unwrap();
     assert_eq!(structs.len(), 1);
@@ -56,6 +57,7 @@ fn two_declarations_of_one_name_are_refused() {
         &orla_session::Disk::default(),
         &dir,
         &uses("use \"a.orla\";\nuse \"b.orla\";"),
+        &[],
     )
     .unwrap_err();
     assert!(error.contains("declared differently"), "{error}");

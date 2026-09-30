@@ -52,6 +52,7 @@ pub mod doc;
 mod lexer;
 pub use lexer::quoted;
 mod parser;
+mod rename;
 
 use std::fmt;
 use std::ops::Range;

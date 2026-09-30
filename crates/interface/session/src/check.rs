@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::sources::written_in;
+use crate::sources::{located, written_in};
 use crate::{Store, declarations_for, declarations_within, read_document, used_documents};
 
 /// What checking a document found: the lines to report, in order.
@@ -57,8 +57,9 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         .unwrap_or("scene");
     let base = path.parent().unwrap_or_else(|| Path::new("."));
     let mut loader = |path: &Path| read_document(store, path);
-    let mut declare =
-        |base: &Path, uses: &[orla_language::Use]| declarations_for(store, base, uses);
+    let mut declare = |base: &Path, uses: &[orla_language::Use], own: &[orla_language::FnDecl]| {
+        declarations_for(store, base, uses, own)
+    };
     let lowered =
         match orla_scene::load_with(&document, &text, name, base, &mut loader, &mut declare) {
             Ok(lowered) => lowered,
@@ -68,7 +69,9 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
             }
         };
     let mut document = document;
-    if let Ok((structs, types, functions)) = declarations_for(store, base, &document.uses) {
+    if let Ok((structs, types, functions)) =
+        declarations_for(store, base, &document.uses, &document.functions)
+    {
         if let Err(error) =
             orla_compiler::check_functions(&document, (&structs, &types, &functions))
         {
@@ -111,10 +114,12 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
             }
             Err(error) => {
                 let at = written_in(store, path, &error);
-                say!(problem, "{}:{error}", at.display());
+                let said = located(store, crate::Diagnostic::from(&error), path, path, &[]);
+                say!(problem, "{}:{said}", at.display());
             }
         }
     }
+    let root = path;
     // The used documents, each with its own declarations.
     match used_documents(store, base, &document.uses) {
         Ok(used) => {
@@ -131,7 +136,13 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                     continue; // reported by `used_documents`
                 };
                 let dir = path.parent().unwrap_or_else(|| Path::new("."));
-                match declarations_within(store, Some(path), dir, &used_document.uses) {
+                match declarations_within(
+                    store,
+                    Some(path),
+                    dir,
+                    &used_document.uses,
+                    &used_document.functions,
+                ) {
                     Ok((structs, types, functions)) => {
                         if let Err(error) = orla_compiler::check_functions(
                             &used_document,
@@ -156,7 +167,9 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                         }
                         Err(error) => {
                             let at = written_in(store, path, &error);
-                            say!(problem, "{}:{error}", at.display());
+                            let said =
+                                located(store, crate::Diagnostic::from(&error), path, root, &[]);
+                            say!(problem, "{}:{said}", at.display());
                         }
                     }
                 }

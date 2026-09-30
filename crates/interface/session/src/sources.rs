@@ -370,14 +370,19 @@ pub fn used_documents(
 }
 
 /// The declarations a document's `use` items bring in, recursively. An
-/// identical declaration reached twice is one; conflicting ones are
-/// refused.
+/// identical struct or type reached twice is one; conflicting ones are
+/// refused. Functions are scoped by document: a call reaches the
+/// function its own document declares, or else the one function of that
+/// name in the documents it uses. `own` are the functions of the document
+/// that uses; a function it sees by a name keeps the name, and any other
+/// of that name is renamed `name@path` (see [`scoped`]).
 pub fn declarations_for(
     store: &dyn Store,
     base: &Path,
     uses: &[orla_language::Use],
+    own: &[orla_language::FnDecl],
 ) -> Result<Declarations, String> {
-    declarations_within(store, None, base, uses)
+    declarations_within(store, None, base, uses, own)
 }
 
 /// Where each gathered declaration is, by name.
@@ -385,7 +390,14 @@ pub fn declarations_for(
 struct Named {
     structs: std::collections::HashMap<String, usize>,
     types: std::collections::HashMap<String, usize>,
-    functions: std::collections::HashMap<String, usize>,
+}
+
+/// What a walk of the `use` items gathers: each document's functions,
+/// dependencies first, and the documents each one uses directly.
+#[derive(Default)]
+struct Reach {
+    functions: Vec<(orla_language::FnDecl, PathBuf)>,
+    uses: std::collections::HashMap<PathBuf, Vec<PathBuf>>,
 }
 
 /// As [`declarations_for`], for a document at `origin`, so a `use`
@@ -395,7 +407,9 @@ pub fn declarations_within(
     origin: Option<&Path>,
     base: &Path,
     uses: &[orla_language::Use],
+    own: &[orla_language::FnDecl],
 ) -> Result<Declarations, String> {
+    /// The documents `uses` names directly, after walking each one.
     #[allow(clippy::too_many_arguments)]
     fn gather(
         store: &dyn Store,
@@ -405,9 +419,10 @@ pub fn declarations_within(
         stack: &mut Vec<PathBuf>,
         structs: &mut Vec<(orla_language::StructDecl, PathBuf)>,
         types: &mut Vec<(orla_language::TypeAlias, PathBuf)>,
-        functions: &mut Vec<(orla_language::FnDecl, PathBuf)>,
+        reach: &mut Reach,
         named: &mut Named,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<PathBuf>, String> {
+        let mut direct = Vec::new();
         for item in uses {
             let path = base.join(&item.path.value);
             used_through_its_manifest(store, base, &path)?;
@@ -432,6 +447,9 @@ pub fn declarations_within(
                         "{cycle}; what two documents share belongs in a third they both use"
                     ));
                 }
+                if !direct.contains(&file) {
+                    direct.push(file.clone());
+                }
                 if !visited.insert(key.clone()) {
                     continue;
                 }
@@ -449,29 +467,13 @@ pub fn declarations_within(
                     stack,
                     structs,
                     types,
-                    functions,
+                    reach,
                     named,
                 );
                 stack.pop();
-                nested?;
+                reach.uses.insert(file.clone(), nested?);
                 for decl in &document.functions {
-                    // A function name is declared in one file only.
-                    if let Some((_, other)) = named
-                        .functions
-                        .get(&decl.name.value)
-                        .map(|at| &functions[*at])
-                    {
-                        return Err(format!(
-                            "fn `{}` is declared by both {} and {}",
-                            decl.name.value,
-                            other.display(),
-                            file.display()
-                        ));
-                    }
-                    named
-                        .functions
-                        .insert(decl.name.value.clone(), functions.len());
-                    functions.push((decl.clone(), file.clone()));
+                    reach.functions.push((decl.clone(), file.clone()));
                 }
                 for decl in &document.structs {
                     match named.structs.get(&decl.name.value).map(|at| &structs[*at]) {
@@ -518,14 +520,14 @@ pub fn declarations_within(
                 }
             }
         }
-        Ok(())
+        Ok(direct)
     }
     let mut visited = std::collections::BTreeSet::new();
     let mut stack: Vec<PathBuf> = origin
         .map(|path| vec![store.canonical(path).unwrap_or_else(|_| path.to_path_buf())])
         .unwrap_or_default();
-    let (mut structs, mut types, mut functions) = (Vec::new(), Vec::new(), Vec::new());
-    gather(
+    let (mut structs, mut types, mut reach) = (Vec::new(), Vec::new(), Reach::default());
+    let direct = gather(
         store,
         base,
         uses,
@@ -533,14 +535,131 @@ pub fn declarations_within(
         &mut stack,
         &mut structs,
         &mut types,
-        &mut functions,
+        &mut reach,
         &mut Named::default(),
     )?;
     Ok((
         structs.into_iter().map(|(s, _)| s).collect(),
         types.into_iter().map(|(t, _)| t).collect(),
-        functions.into_iter().map(|(f, _)| f).collect(),
+        scoped(&reach, &direct, own)?,
     ))
+}
+
+/// The name a function of `file` takes where another function of the
+/// document that uses holds its own name.
+pub(crate) fn scoped_name(name: &str, file: &Path) -> String {
+    format!("{name}@{}", file.display())
+}
+
+/// The file a `name@path` function name was renamed from, and its name.
+pub(crate) fn unscoped(name: &str) -> Option<(&str, &Path)> {
+    name.split_once('@')
+        .map(|(name, path)| (name, Path::new(path)))
+}
+
+/// The gathered functions, each under one name in the using document's
+/// reach. Each document sees its own functions and those of every
+/// document it reaches through `use`; a name two of those declare is
+/// the document's own, or else ambiguous. The using document's view
+/// keeps plain names: each function it sees by name keeps that name,
+/// every other is renamed `name@path`, and each body's calls follow its
+/// own document's view.
+fn scoped(
+    reach: &Reach,
+    direct: &[PathBuf],
+    own: &[orla_language::FnDecl],
+) -> Result<Vec<orla_language::FnDecl>, String> {
+    use std::collections::{BTreeSet, HashMap};
+    // Which documents declare each name.
+    let mut declaring: HashMap<&str, Vec<&Path>> = HashMap::new();
+    for (decl, file) in &reach.functions {
+        let files = declaring.entry(decl.name.value.as_str()).or_default();
+        if !files.contains(&file.as_path()) {
+            files.push(file);
+        }
+    }
+    // Nothing declared twice and nothing the user shadows: every name is
+    // plain, as written.
+    let clashing = |name: &str| {
+        declaring.get(name).is_some_and(|files| files.len() > 1)
+            || own.iter().any(|f| f.name.value == name)
+    };
+    if !reach
+        .functions
+        .iter()
+        .any(|(decl, _)| clashing(&decl.name.value))
+    {
+        return Ok(reach
+            .functions
+            .iter()
+            .map(|(decl, _)| decl.clone())
+            .collect());
+    }
+    // Each document's reach: what it uses, recursively.
+    fn closure<'a>(
+        from: &'a [PathBuf],
+        uses: &'a HashMap<PathBuf, Vec<PathBuf>>,
+        out: &mut BTreeSet<&'a Path>,
+    ) {
+        for file in from {
+            if out.insert(file) {
+                closure(uses.get(file).map_or(&[][..], Vec::as_slice), uses, out);
+            }
+        }
+    }
+    let mut top = BTreeSet::new();
+    closure(direct, &reach.uses, &mut top);
+    // The document a name reaches from `reached`: one declaring it.
+    let resolve = |name: &str, reached: &BTreeSet<&Path>| -> Option<&Path> {
+        let files: Vec<&Path> = declaring
+            .get(name)?
+            .iter()
+            .copied()
+            .filter(|file| reached.contains(file))
+            .collect();
+        (files.len() == 1).then(|| files[0])
+    };
+    let seen_by_user = |name: &str, file: &Path| {
+        !own.iter().any(|f| f.name.value == name) && resolve(name, &top) == Some(file)
+    };
+    let internal = |name: &str, file: &Path| {
+        if seen_by_user(name, file) {
+            name.to_owned()
+        } else {
+            scoped_name(name, file)
+        }
+    };
+    let mut reaches: HashMap<&Path, BTreeSet<&Path>> = HashMap::new();
+    let mut out = Vec::with_capacity(reach.functions.len());
+    for (decl, file) in &reach.functions {
+        let reached = reaches.entry(file.as_path()).or_insert_with(|| {
+            let mut reached = BTreeSet::new();
+            closure(
+                reach.uses.get(file).map_or(&[][..], Vec::as_slice),
+                &reach.uses,
+                &mut reached,
+            );
+            reached
+        });
+        let reached = &*reached;
+        let declares = |name: &str| {
+            reach
+                .functions
+                .iter()
+                .any(|(d, f)| f == file && d.name.value == name)
+        };
+        let rename = |name: &str| -> Option<String> {
+            let target = if declares(name) {
+                file.as_path()
+            } else {
+                resolve(name, reached)?
+            };
+            let renamed = internal(name, target);
+            (renamed != name).then_some(renamed)
+        };
+        out.push(decl.renamed(internal(&decl.name.value, file), &rename));
+    }
+    Ok(out)
 }
 
 /// The backticked name a diagnostic reports as not a builtin, struct
@@ -563,9 +682,21 @@ pub(crate) fn written_in(
     document: &Path,
     error: &orla_compiler::CompileError,
 ) -> PathBuf {
-    let Some(function) = error.function() else {
-        return document.to_path_buf();
-    };
+    match error.function() {
+        Some(function) => function_written_in(store, document, function),
+        None => document.to_path_buf(),
+    }
+}
+
+/// The document a function a Kernel of `document` calls is written in:
+/// `document` for its own, or the used document that declares it. An
+/// instance of a function taking a Field is named for its function,
+/// `name<binding>`.
+pub(crate) fn function_written_in(store: &dyn Store, document: &Path, function: &str) -> PathBuf {
+    let function = function.split('<').next().unwrap_or(function);
+    if let Some((_, path)) = unscoped(function) {
+        return path.to_path_buf();
+    }
     let Ok(parsed) = store.document(document) else {
         return document.to_path_buf();
     };
@@ -707,6 +838,31 @@ pub(crate) fn located(
             .unwrap_or_default()
         })
         .unwrap_or_default();
+    // Two documents this one uses each declare the name: a call reaches
+    // neither.
+    let declaring: Vec<&PathBuf> = used
+        .iter()
+        .filter(|path| {
+            store
+                .document(path)
+                .is_ok_and(|parsed| parsed.functions.iter().any(|f| f.name.value == name))
+        })
+        .collect();
+    if declaring.len() > 1 {
+        let base = document.parent().unwrap_or_else(|| Path::new("."));
+        let names: Vec<String> = declaring
+            .iter()
+            .map(|path| relative_to(store, path, base))
+            .collect();
+        return crate::Diagnostic {
+            message: format!(
+                "{}; fn `{name}` is declared by {}, which this document uses, and a call reaches one function by its name: declare `{name}` in this document, or rename one of them",
+                error.message,
+                names.join(" and ")
+            ),
+            at: error.at,
+        };
+    }
     let mut search: Vec<PathBuf> = Vec::new();
     let siblings = |dir: &Path, search: &mut Vec<PathBuf>| {
         if let Ok(entries) = store.list(dir) {

@@ -650,21 +650,32 @@ pub(crate) struct Written {
 impl Written {
     /// Where the failure a trace found is written: its value in the
     /// function it failed in (`None` the entry).
-    pub(crate) fn place_of(&self, fault: &crate::TraceFault) -> Option<crate::SourcePlace> {
+    pub(crate) fn place_of(
+        &self,
+        store: &dyn crate::store::Store,
+        fault: &crate::TraceFault,
+    ) -> Option<crate::SourcePlace> {
         let value = fault.value?;
-        let places = match &fault.function {
-            None => &self.places.entry,
+        let (places, path) = match &fault.function {
+            None => (&self.places.entry, self.path.clone()),
             Some(name) => {
                 let index = self.module.functions.iter().position(|f| &f.name == name)?;
-                self.places.functions.get(index)?
+                (
+                    self.places.functions.get(index)?,
+                    crate::sources::function_written_in(store, &self.path, name),
+                )
             }
         };
         let span = places.get(&value)?;
         span.is_placed().then(|| crate::SourcePlace {
-            path: self.path.clone(),
+            path,
             line: span.line,
             column: span.column,
-            function: fault.function.clone(),
+            function: fault.function.as_deref().map(|name| {
+                crate::sources::unscoped(name)
+                    .map_or(name, |(name, _)| name)
+                    .to_owned()
+            }),
         })
     }
 }
