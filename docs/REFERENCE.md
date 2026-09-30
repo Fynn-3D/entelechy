@@ -288,4 +288,5 @@ Kernels (`.orla`) compute; scenes (`.osn`) compose them into a running world. Wh
 - **expect**: `expect <node.port[i][.field]> < | <= | > | >= <number>...` every component of it past a bound
 - **expect**: `expect count <node.port> = <n>` how many elements a node's output holds
 - **expect**: `expect placed <node> main | ordered` where a node runs: the session's main backend, or ordered work off it; a session with one backend reads both as main
+- **show**: `show <node.port[i][.field]>` prints an element of a node's output after the last frame, or a field of it, a struct field by field; it checks nothing, and the run reports what it shows
 <!-- end -->

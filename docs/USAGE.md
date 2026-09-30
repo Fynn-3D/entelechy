@@ -310,6 +310,7 @@ file. `orla help replay` lists the same forms:
 | `expect <node.port[i][.field]> < \| <= \| > \| >= <number>...` | every component of it past a bound | `expect fall.result[0].speed > 2.5` |
 | `expect count <node.port> = <n>` | how many elements a node's output holds | `expect count ground.result = 6889` |
 | `expect placed <node> main \| ordered` | where a node runs: the session's main backend, or ordered work off it; a session with one backend reads both as main | `expect placed ring main`, `expect placed filter ordered` |
+| `show <node.port[i][.field]>` | prints an element of a node's output after the last frame, or a field of it, a struct field by field; it checks nothing, and the run reports what it shows | `show step.result[0]`, `show step.result[0].score` |
 
 Nodes an expectation names are pinned before the first frame, so fusion
 keeps them; a frame evaluates only what its expectations need.

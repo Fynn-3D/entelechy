@@ -289,16 +289,22 @@ pub(crate) fn trace_element(
     Ok(trace)
 }
 
-/// One element field of a node's output; see
-/// [`crate::Session::element_field`].
-pub(crate) fn element_field(
+/// Where a field of a node's output element is: its type, the word it
+/// starts at in the element, how many words it is, and the struct table
+/// its Kernel names its fields by.
+struct Located {
+    ty: orla_ir::Type,
+    offset: usize,
+    words: usize,
+    structs: Vec<orla_ir::StructDef>,
+}
+
+fn locate(
     graph: Option<&Graph>,
-    evaluator: &Evaluator,
-    runtime: &mut Runtime,
+    runtime: &Runtime,
     (node, port): (&NodeId, &str),
-    index: u32,
     path: &[String],
-) -> Result<(orla_ir::Type, Vec<u32>), String> {
+) -> Result<Located, String> {
     use orla_ir::Type;
     let kernel = graph
         .and_then(|graph| graph.nodes.iter().find(|n| &n.id == node))
@@ -347,6 +353,26 @@ pub(crate) fn element_field(
         }
         ty = found.ok_or_else(|| format!("struct `{}` has no field `{field}`", def.name))?;
     }
+    let words = words_of(ty);
+    Ok(Located {
+        ty,
+        offset,
+        words,
+        structs,
+    })
+}
+
+/// One element field of a node's output; see
+/// [`crate::Session::element_field`].
+pub(crate) fn element_field(
+    graph: Option<&Graph>,
+    evaluator: &Evaluator,
+    runtime: &mut Runtime,
+    (node, port): (&NodeId, &str),
+    index: u32,
+    path: &[String],
+) -> Result<(orla_ir::Type, Vec<u32>), String> {
+    let at = locate(graph, runtime, (node, port), path)?;
     let handle = evaluator
         .cached(node, port)
         .ok_or_else(|| "the node has no materialized output; is it wired?".to_string())?;
@@ -355,7 +381,27 @@ pub(crate) fn element_field(
         .host()
         .element(handle, index)
         .map_err(|e| e.to_string())?;
-    Ok((ty, element[offset..offset + words_of(ty)].to_vec()))
+    Ok((at.ty, element[at.offset..at.offset + at.words].to_vec()))
+}
+
+/// The fields of a struct a path names in a node's output element, in
+/// order; none for a value that is not a struct. See
+/// [`crate::Session::element_fields`].
+pub(crate) fn element_fields(
+    graph: Option<&Graph>,
+    runtime: &Runtime,
+    (node, port): (&NodeId, &str),
+    path: &[String],
+) -> Result<Vec<String>, String> {
+    let at = locate(graph, runtime, (node, port), path)?;
+    Ok(match at.ty {
+        orla_ir::Type::Struct(id) => at
+            .structs
+            .get(id as usize)
+            .map(|def| def.fields.iter().map(|f| f.name.clone()).collect())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    })
 }
 
 /// One pixel of a cached image; see [`crate::Session::read_pixel`].

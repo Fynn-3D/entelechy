@@ -547,19 +547,22 @@ impl Play {
             }
             Ok(None) => {
                 let outcome = &replayer.outcome;
-                let said = if outcome.failures.is_empty() {
+                let head = if outcome.failures.is_empty() {
                     format!(
                         "replay: ok ({} frames, {} checks)",
                         outcome.frames, outcome.checks
                     )
                 } else {
                     format!(
-                        "replay: {} of {} checks failed\n  {}",
+                        "replay: {} of {} checks failed",
                         outcome.failures.len(),
-                        outcome.checks,
-                        outcome.failures.join("\n  ")
+                        outcome.checks
                     )
                 };
+                let said = std::iter::once(head)
+                    .chain(outcome.lines())
+                    .collect::<Vec<_>>()
+                    .join("\n  ");
                 self.said.push(format!("{said}; the scene is yours"));
                 self.replaying = None;
                 Replayed::Not

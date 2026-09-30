@@ -702,6 +702,9 @@ fn replay(args: &[String]) -> Result<(), String> {
                     outcome.frames,
                     outcome.checks
                 );
+                for line in outcome.lines() {
+                    println!("  {line}");
+                }
             }
             Ok(outcome) => {
                 failed += 1;
@@ -711,8 +714,8 @@ fn replay(args: &[String]) -> Result<(), String> {
                     outcome.failures.len(),
                     outcome.checks
                 );
-                for failure in &outcome.failures {
-                    println!("  {failure}");
+                for line in outcome.lines() {
+                    println!("  {line}");
                 }
             }
             Err(error) => {
@@ -1079,9 +1082,10 @@ fn rounded_apart(
     for split in 0..orla_session::apart::SPLITS {
         let runtime = Session::runtime_apart(backend, limits, split)?;
         let outcome = orla::replay::run_fused(replay, store.clone(), runtime, fusion)?;
-        // Every way runs the same frames and checks.
+        // Every way runs the same frames, checks and shows.
         all.frames = outcome.frames;
         all.checks = outcome.checks;
+        all.shown = outcome.shown;
         all.failures.extend(
             outcome
                 .failures

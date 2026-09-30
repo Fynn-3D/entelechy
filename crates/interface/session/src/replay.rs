@@ -150,6 +150,12 @@ pub fn forms() -> Vec<Form> {
             "where a node runs: the session's main backend, or ordered work off it; a session with one backend reads both as main",
             &["expect placed ring main", "expect placed filter ordered"],
         ),
+        form(
+            "show",
+            "show <node.port[i][.field]>",
+            "prints an element of a node's output after the last frame, or a field of it, a struct field by field; it checks nothing, and the run reports what it shows",
+            &["show step.result[0]", "show step.result[0].score"],
+        ),
     ]
 }
 
@@ -249,6 +255,20 @@ pub enum Step {
         /// Expected components as written.
         values: Vec<String>,
         /// Line number, for messages.
+        line: u32,
+    },
+    /// Print an element of a node's output after the last frame, or a
+    /// field of it.
+    Show {
+        /// The node.
+        node: String,
+        /// Its output port.
+        port: String,
+        /// Element index.
+        index: u32,
+        /// Struct fields, outermost first; empty for the element itself.
+        path: Vec<String>,
+        /// Line number, for the report.
         line: u32,
     },
     /// Check how many elements a node's output holds after the last
@@ -490,6 +510,16 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
                     line,
                 });
             }
+            ["show", target] if target.contains('[') => {
+                let (node, port, index, path) = crate::parse_target(target).map_err(error)?;
+                steps.push(Step::Show {
+                    node,
+                    port,
+                    index,
+                    path,
+                    line,
+                });
+            }
             ["expect", target, sign, values @ ..]
                 if target.contains('[') && !values.is_empty() && Compare::read(sign).is_some() =>
             {
@@ -567,6 +597,16 @@ pub struct Outcome {
     pub checks: usize,
     /// Expectations that failed, as messages.
     pub failures: Vec<String>,
+    /// What `show` steps printed, in order.
+    pub shown: Vec<String>,
+}
+
+impl Outcome {
+    /// The report of a run: the shown values, then the failures, each a
+    /// line under the replay's own.
+    pub fn lines(&self) -> Vec<String> {
+        self.shown.iter().chain(&self.failures).cloned().collect()
+    }
 }
 
 /// Runs a replay on a fresh session over `runtime`, each frame
@@ -646,7 +686,9 @@ impl Replayer {
             .steps
             .iter()
             .filter_map(|step| match step {
-                Step::ExpectElement { node, port, .. } | Step::ExpectCount { node, port, .. } => {
+                Step::ExpectElement { node, port, .. }
+                | Step::ExpectCount { node, port, .. }
+                | Step::Show { node, port, .. } => {
                     Some(session.producer(&orla_graph::NodeId(node.clone()), port).0)
                 }
                 _ => None,
@@ -796,6 +838,26 @@ impl Replayer {
                     Err(message) => return Err(format!("line {line}: {target}: {message}")),
                 }
             }
+            Step::Show {
+                node,
+                port,
+                index,
+                path,
+                line,
+            } => {
+                if last.is_none() {
+                    return Err(format!("line {line}: show before any frame"));
+                }
+                let target = format!(
+                    "{node}.{port}[{index}]{}",
+                    path.iter().map(|p| format!(".{p}")).collect::<String>()
+                );
+                let value = shown(session, node, port, *index, path)
+                    .map_err(|message| format!("line {line}: {target}: {message}"))?;
+                outcome
+                    .shown
+                    .push(format!("line {line}: {target} is {value}"));
+            }
             Step::ExpectCount {
                 node,
                 port,
@@ -937,6 +999,48 @@ impl Compare {
     }
 }
 
+/// A number as a replay writes it.
+fn written(n: &orla_ir::Number) -> String {
+    use orla_ir::Number;
+    match n {
+        Number::Float(v) => format!("{v}"),
+        Number::Double(v) => format!("{v}"),
+        Number::Int(v) => v.to_string(),
+        Number::Long(v) => v.to_string(),
+        Number::Bool(v) => v.to_string(),
+    }
+}
+
+/// An element field of a node's output as `show` prints it: its numbers,
+/// or a struct's fields in braces, each named.
+fn shown(
+    session: &mut Session,
+    node: &str,
+    port: &str,
+    index: u32,
+    path: &[String],
+) -> Result<String, String> {
+    let node_id = orla_graph::NodeId(node.to_owned());
+    let (ty, words) = session.element_field(&node_id, port, index, path)?;
+    if matches!(ty, orla_ir::Type::Struct(_)) {
+        let fields = session.element_fields(&node_id, port, path)?;
+        let mut parts = Vec::with_capacity(fields.len());
+        for field in fields {
+            let mut deeper = path.to_vec();
+            deeper.push(field.clone());
+            parts.push(format!(
+                "{field}: {}",
+                shown(session, node, port, index, &deeper)?
+            ));
+        }
+        return Ok(format!("{{ {} }}", parts.join(", ")));
+    }
+    let numbers = orla_ir::template(ty, &[])
+        .rebuilt(&mut words.iter().copied())
+        .numbers();
+    Ok(numbers.iter().map(written).collect::<Vec<_>>().join(" "))
+}
+
 /// Compares one element field of a node's output with the written values:
 /// `Ok(None)` matched, `Ok(Some(text))` the mismatch, `Err` unreadable.
 fn check_element(
@@ -984,16 +1088,7 @@ fn check_element(
             ));
         }
     };
-    let actual: Vec<String> = numbers
-        .iter()
-        .map(|n| match n {
-            Number::Float(v) => format!("{v}"),
-            Number::Double(v) => format!("{v}"),
-            Number::Int(v) => v.to_string(),
-            Number::Long(v) => v.to_string(),
-            Number::Bool(v) => v.to_string(),
-        })
-        .collect();
+    let actual: Vec<String> = numbers.iter().map(written).collect();
     let near = |expected: &str, v: f64| {
         expected.parse::<f64>().is_ok_and(|e| match compare {
             Compare::Equal => (e - v).abs() <= tolerance,
@@ -1050,7 +1145,7 @@ mod tests {
             .collect();
         let replay = parse(&lines.join("\n"), Path::new(".")).unwrap();
         assert!(replay.kernels.is_some(), "`library` is a form");
-        let mut seen = [false; 16];
+        let mut seen = [false; 17];
         for step in &replay.steps {
             seen[match step {
                 Step::Frame(_) => 0,
@@ -1069,6 +1164,7 @@ mod tests {
                 Step::ExpectPlaced { .. } => 13,
                 Step::Expect { .. } => 14,
                 Step::Pads(_) => 15,
+                Step::Show { .. } => 16,
             }] = true;
         }
         assert!(

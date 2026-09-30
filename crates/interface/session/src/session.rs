@@ -1109,6 +1109,18 @@ impl Session {
         )
     }
 
+    /// The fields of the struct `path` names in `node.port`'s element, in
+    /// order; none for a value that is not a struct.
+    pub fn element_fields(
+        &mut self,
+        node: &orla_graph::NodeId,
+        port: &str,
+        path: &[String],
+    ) -> Result<Vec<String>, String> {
+        let (node, port) = self.producer(node, port);
+        observe::element_fields(self.scene.graph(), &self.runtime, (&node, &port), path)
+    }
+
     /// Writes a Field to a file in the format its extension names, as
     /// [`Session::save`] does. Only where [`Session::allowed_write`]
     /// allows, whoever asks.
