@@ -63,6 +63,8 @@ Packages built from existing modes, with no engine feature of their own.
 | [Vector drawing](packages/vector.orlapkg/kernels/vector.orla) | `prefix with sum`, scatter `max` with `emit`, `value(port)` | [vector replays](examples/vector/tests/) on three backends |
 | [Rigid bodies](packages/physics.orlapkg/kernels/physics.orla), [decision](docs/DECISIONS.md#contacts-are-solved-all-at-once-each-against-its-own-share-of-a-body) | the sort package, scatter `sum` of pushes, `times` with two `carry`s, `<~` | [physics replays](examples/physics/tests/) on three backends |
 | [Type](packages/font.orlapkg/kernels/font.orla) | prefix `sum` and `max`, the vector package | [importer tests](crates/interface/import/src/font.rs), [type replays](examples/type/tests/) on three backends |
+| [Noise](packages/noise.orlapkg/kernels/noise.orla) | functions over `Int` bits (`mul_wrap`, `>>>`) | [noise replay](examples/nebula/tests/noise.replay) on three backends |
+| [Film finish](packages/film.orlapkg/graphs/finish.osn) | maps over grids, `size(port)` domains, the picture and noise packages | [nebula replay](examples/nebula/tests/nebula.replay) on three backends |
 
 ## Where each contract is enforced
 

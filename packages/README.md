@@ -93,6 +93,28 @@ use "picture.orlapkg";
   ([why](../docs/DECISIONS.md)).
 - **pixelfx** — a coarse pixel grid and a four-color palette, and the
   NES look made of both as a preset. The example of what a package is.
+- **noise** — randomness a Kernel can repeat, as functions and no
+  Kernels:
+  - hashes of whole numbers by integer arithmetic, the same bits on
+    every backend;
+  - value and gradient noise; fbm and ridged sums of them;
+  - Worley's cells;
+  - curl noise, a swirl with no sources and no sinks, for pushing smoke
+    about.
+  
+  Used by the `nebula` example, whose replay holds the hashes to their
+  bits on three backends.
+- **film** — the finish of a picture of light brighter than white that
+  keeps each pixel's depth in w:
+  - the colours of heat (`blackbody`) and of the wheel (`hue`);
+  - a glow round what is past white (`graphs/bloom.osn`);
+  - depth of field, sharp at a focus the scene gives as a row each frame;
+  - the grade: exposure, ACES (the picture package's), colour fringing
+    toward the edges, darkened corners, and grain from the noise
+    package's hash.
+  
+  `graphs/finish.osn` places all of it as a scene's last node. Used by
+  the `nebula` example.
 - **font** — type from a TrueType or OpenType font `orla import` read:
   a row of character codes laid out in lines, each character its font's
   glyph at its own advance, turned into the shapes and segments the

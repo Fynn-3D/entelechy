@@ -1,0 +1,8 @@
+//! The noise package: randomness a Kernel can repeat, as functions and no
+//! Kernels. Hashes of whole numbers, the same bits on every backend;
+//! value and gradient noise in two and three dimensions; fractal sums of
+//! them (fbm) and their ridged kin; Worley's cells; and curl noise, a
+//! swirl that neither gathers nor spreads, for pushing smoke about.
+package noise@1 { language = 1; ir = 1; }
+
+use "kernels/";

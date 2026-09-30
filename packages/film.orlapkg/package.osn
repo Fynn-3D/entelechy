@@ -1,0 +1,10 @@
+//! The film package: the finish a lens and film give a picture of light
+//! brighter than white. The colours of heat and of the wheel; a glow
+//! round what is past white (bloom); depth of field, sharp at a focus a
+//! scene gives each frame and softer in front and behind; and the grade:
+//! exposure, ACES tone (the picture package's), colour fringing toward
+//! the edges, darkened corners and grain (the noise package's hash). `graphs/bloom.osn` is the glow
+//! and `graphs/finish.osn` all of it, usually a scene's last node.
+package film@1 { language = 1; ir = 1; }
+
+use "kernels/";
