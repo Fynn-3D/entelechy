@@ -60,17 +60,22 @@ connection is read no further while 64 of its answers wait; a narrow
 Field read through the C ABI stays until the next evaluate, request or
 close; a file is written new at its working name.
 
-It is released as `v0.0.2-rc.1`, a pre-release; `v0.0.2` follows once
-the user accepts it. The release notes name what changed for a caller:
-- A served scene reads beside its first-loaded documents and input
-  files, in the package directories and where `--allow file.read` says;
-  a package elsewhere is no longer readable for being one.
-- A page opened from a file connects only with `--allow-origin null`.
-- A value holds at most 65536 words and structs and nests at most 64
-  deep; a Field holds at most `i32::MAX` elements.
-- The interpreter and the JIT charge a narrow output the words it is
-  computed in; a module whose values may pass the JIT's stack does not
-  run on a JIT-only session.
+It is released as `v0.0.2-rc.2`, a pre-release; `v0.0.2` follows once
+the user accepts it. The release notes name what changed for a caller
+since `v0.0.2-rc.1`:
+- New: the physics, font and vector packages; `orla import` reads SVG
+  and TrueType; a small run on a device session goes to the JIT
+  (`--small`); a scene says what its parameters must hold (`require`).
+- The single-feature examples are parts of four works, `data`, `modes`,
+  `image` and `sound`; `migrate`, `scanline`, `material-ball` and
+  `raymarch` are gone.
+- A written float past its type's largest is refused, not infinity; a
+  Kernel param is not named `domain` or `async`; no function takes a
+  reserved word's name; calls nest at most 256 deep.
+- An evaluation waits for the last one's device work before it submits
+  its own; a reduction's and a prefix's values count against
+  `--memory`; a fused group holds at most 64 nodes.
+- A replay may say `alike`; `orla replay` takes `--no-fusion`.
 
 Measured on a 53-Kernel game (21 documents, 318 functions): `check`
 0.3 s, a first frame 1.8 s on the JIT, an idle sync 0.23 ms. Left by
