@@ -16,6 +16,13 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
 }
 
+/// A file this test keeps beside it, in `tests/data`.
+fn data(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/data")
+        .join(name)
+}
+
 /// A tool at one of its usual paths, if this machine has it.
 fn tool(paths: &[&str]) -> Option<PathBuf> {
     paths
@@ -177,7 +184,7 @@ fn the_blender_bridge_passes_its_own_test() {
     let mut session = Command::new(env!("CARGO_BIN_EXE_orla"))
         .current_dir(root())
         .arg("serve")
-        .arg("examples/mesh/scene.osn")
+        .arg(data("torus/scene.osn"))
         .args(["--listen", "127.0.0.1:0"])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -278,8 +285,7 @@ fn a_rig_pushed_from_blender_poses_as_its_gltf_does() {
         std::fs::write(
             &scene,
             format!(
-                "use \"{root}/examples/skin/kernels/\";\n\
-                 use \"{root}/packages/skin.orlapkg\";\n\
+                "use \"{kernels}\";\n\
                  input mesh: Rows<Point> = \"{stem}.vertices.field\";\n\
                  input faces: Triangles = \"{stem}.triangles.field\";\n\
                  input weights: Rows<Bound> = \"{stem}.weights.field\";\n\
@@ -287,17 +293,18 @@ fn a_rig_pushed_from_blender_poses_as_its_gltf_does() {
                  input swing: Clip = \"{stem}.swing.clip.field\";\n\
                  node clock: kernel {{ requires {{ field.write; }} param at: Float = 0.35; \
                  output result: Rows<Float>; domain = 1; compute {{ return at; }} }}\n\
-                 node poses: skin.sample@1 {{ skeleton <- skeleton; clip <- swing; \
-                 at <- clock.result; rate = 24.0; }}\n\
-                 node palette: skin.palette@1 {{ poses <- poses.result; skeleton <- skeleton; }}\n\
-                 node posed: skin.apply@1 {{ mesh <- mesh; weights <- weights; \
-                 palette <- palette.result; skeleton <- skeleton; }}\n\
-                 node project: arm.project@1 {{ mesh <- posed.result; spin = 0.0; }}\n\
+                 node poses: pose.sample@1 {{ skeleton <- skeleton; clip <- swing; \
+                 at <- clock.result; rate = 24.0; domain = count(skeleton); }}\n\
+                 node palette: pose.palette@1 {{ poses <- poses.result; skeleton <- skeleton; \
+                 domain = count(skeleton); }}\n\
+                 node posed: pose.apply@1 {{ mesh <- mesh; weights <- weights; \
+                 palette <- palette.result; }}\n\
+                 node project: pose.project@1 {{ mesh <- posed.result; }}\n\
                  node raster: native.rasterize@1 {{ vertices <- project.result; \
                  triangles <- faces; domain = vec2(200, 120); }}\n\
-                 node view: arm.shade@1 {{ surface <- raster.surface; domain = vec2(200, 120); }}\n\
+                 node view: pose.shade@1 {{ surface <- raster.surface; domain = vec2(200, 120); }}\n\
                  output result <- view.result;\n",
-                root = root().canonicalize().unwrap().display(),
+                kernels = data("pose/pose.orla").display(),
             ),
         )
         .unwrap();
@@ -390,7 +397,9 @@ fn a_rig_orla_wrote_opens_in_blender() {
     let dir = std::env::temp_dir().join(format!("orla-rig-out-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let assets = root().join("examples/skin/assets");
+    let assets = dir.join("assets");
+    std::fs::create_dir_all(&assets).unwrap();
+    arm(&assets);
     let glb = dir.join("arm.glb");
     let rows: Vec<PathBuf> = [
         "vertices",
@@ -427,7 +436,97 @@ fn a_rig_orla_wrote_opens_in_blender() {
     passed(
         command,
         "the rig Orla wrote",
-        "opened: 1734 vertices, 2 bones",
+        "opened: 72 vertices, 2 bones",
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Writes rows of `layout` as a `.field` file: the header, then each
+/// value as a little-endian word, an `i` as an `Int` and an `f` as a
+/// `Float`.
+fn rows(path: &Path, layout: &str, values: &[f32]) {
+    let scalars: Vec<&str> = layout.split(',').collect();
+    let mut bytes = format!(
+        "ORLAFIELD 1\nRows {} 1 1 {layout}\n",
+        values.len() / scalars.len()
+    )
+    .into_bytes();
+    for (scalar, value) in scalars.iter().cycle().zip(values) {
+        let word = if *scalar == "i" {
+            *value as i32 as u32
+        } else {
+            value.to_bits()
+        };
+        bytes.extend(word.to_le_bytes());
+    }
+    std::fs::write(path, bytes).unwrap();
+}
+
+/// A two-joint arm as the five kinds of rig row, in `dir` as `arm.*`: a
+/// square tube two units tall, four sides of nine rings of two vertices,
+/// the lower half bound to the root, the upper to the joint at its
+/// middle, the band between blended; and two clips of 33 frames, a swing
+/// of the root and a curl of the joint.
+fn arm(dir: &Path) {
+    let mut vertices = Vec::new();
+    let mut weights = Vec::new();
+    let mut triangles = Vec::new();
+    let rings = 9;
+    let corners = [(-0.2f32, -0.2f32), (0.2, -0.2), (0.2, 0.2), (-0.2, 0.2)];
+    for side in 0..4 {
+        let (a, b) = (corners[side], corners[(side + 1) % 4]);
+        // Outward, one of the axes: the side's middle over its distance.
+        let normal = [(a.0 + b.0) / 0.4, 0.0, (a.1 + b.1) / 0.4];
+        for ring in 0..rings {
+            let y = ring as f32 * 0.25;
+            let t = ((y - 0.75) / 0.5).clamp(0.0, 1.0);
+            for (u, (x, z)) in [a, b].into_iter().enumerate() {
+                vertices.extend([x, y, z]);
+                vertices.extend(normal);
+                vertices.extend([u as f32, y / 2.0]);
+                weights.extend([0.0, 1.0, 0.0, 0.0, 1.0 - t, t, 0.0, 0.0]);
+            }
+            if ring + 1 < rings {
+                let at = ((side * rings + ring) * 2) as f32;
+                triangles.extend([at, at + 1.0, at + 3.0, at, at + 3.0, at + 2.0]);
+            }
+        }
+    }
+    let moved = |y: f32| {
+        [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, y, 0.0, 1.0,
+        ]
+    };
+    let mut skeleton = vec![-1.0];
+    skeleton.extend(moved(0.0));
+    skeleton.push(0.0);
+    skeleton.extend(moved(-1.0));
+    let clip = |joint: usize| {
+        let mut rows = Vec::new();
+        for frame in 0..33 {
+            for this in 0..2 {
+                let angle = if this == joint {
+                    0.6 * (frame as f32 / 32.0 * std::f32::consts::TAU).sin()
+                } else {
+                    0.0
+                };
+                rows.extend([0.0, this as f32, 0.0]);
+                rows.extend([0.0, 0.0, (angle / 2.0).sin(), (angle / 2.0).cos()]);
+                rows.extend([1.0, 1.0, 1.0]);
+            }
+        }
+        rows
+    };
+    let path = |name: &str| dir.join(format!("arm.{name}.field"));
+    rows(&path("vertices"), "f,f,f,f,f,f,f,f", &vertices);
+    rows(&path("triangles"), "i,i,i", &triangles);
+    rows(&path("weights"), "i,i,i,i,f,f,f,f", &weights);
+    rows(
+        &path("skeleton"),
+        "i,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f",
+        &skeleton,
+    );
+    let pose = "f,f,f,f,f,f,f,f,f,f";
+    rows(&path("swing.clip"), pose, &clip(0));
+    rows(&path("curl.clip"), pose, &clip(1));
 }

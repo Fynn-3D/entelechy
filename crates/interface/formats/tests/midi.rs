@@ -164,12 +164,30 @@ fn what_is_not_a_midi_file_says_so() {
 
 #[test]
 fn a_score_read_live_is_the_score_imported() {
-    // `examples/score` holds the file and its imported rows: a scene
-    // naming the `.mid` reads the same rows.
-    let score = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/score");
-    let (live, detail) = orla_formats::read(&score.join("song.mid"), None).unwrap();
-    let (imported, _) = orla_formats::read(&score.join("assets/song.notes.field"), None).unwrap();
-    assert_eq!(live, imported, "{detail}");
+    // A scene naming the `.mid` reads the same rows as the `.field` the
+    // file imports to.
+    let tempo = track(&[(0, vec![0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20])]);
+    let notes = track(&[
+        (0, vec![0x90, 60, 100]),
+        (480, vec![0x80, 60, 0]),
+        (0, vec![0x91, 64, 80]),
+        (0, vec![67, 70]),
+        (240, vec![0x81, 64, 0]),
+        (240, vec![0x81, 67, 0]),
+    ]);
+    let bytes = file(480, &[tempo, notes]);
+    let dir = std::env::temp_dir().join(format!("orla-midi-score-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let song = dir.join("song.mid");
+    std::fs::write(&song, &bytes).unwrap();
+    let imported = dir.join("song.notes.field");
+    let rows = read::field(&read::read(&bytes).unwrap()).unwrap();
+    std::fs::write(&imported, orla_formats::file::encode_data(&rows)).unwrap();
+    let (live, detail) = orla_formats::read(&song, None).unwrap();
+    let (from_file, _) = orla_formats::read(&imported, None).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    assert_eq!(live, from_file, "{detail}");
+    assert_eq!(live.domain(), orla_host::Domain::Rows(3));
     // Written out again, it reads back as the same rows.
     let written = orla_formats::encode(&live, "mid", None).unwrap();
     let again = orla_formats::midi::field(&read::read(&written).unwrap()).unwrap();

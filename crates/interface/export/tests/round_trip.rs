@@ -9,10 +9,146 @@ fn scratch(name: &str) -> std::path::PathBuf {
     dir
 }
 
+/// Writes rows of `layout` as a `.field` file at `path`.
+fn rows(path: &Path, layout: &str, values: &[f32]) {
+    let schema: orla_host::Schema = layout.parse().unwrap();
+    let width = layout.split(',').count();
+    let words: Vec<u32> = layout
+        .split(',')
+        .cycle()
+        .zip(values)
+        .map(|(scalar, v)| {
+            if scalar == "i" {
+                *v as i32 as u32
+            } else {
+                v.to_bits()
+            }
+        })
+        .collect();
+    let domain = orla_host::Domain::Rows((values.len() / width) as u32);
+    std::fs::write(path, orla_formats::file::encode(&schema, domain, &words)).unwrap();
+}
+
+/// A unit cube, four vertices a face so each keeps its face's normal,
+/// and a checker to paint it: `crate.vertices.field`,
+/// `crate.triangles.field` and `crate.albedo.png` in `dir`.
+fn cube(dir: &Path) {
+    let mut vertices = Vec::new();
+    let mut triangles = Vec::new();
+    for axis in 0..3 {
+        for side in [-1.0f32, 1.0] {
+            let mut normal = [0.0f32; 3];
+            normal[axis] = side;
+            let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+            let base = (vertices.len() / 8) as f32;
+            for (a, b) in [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)] {
+                let mut position = [normal[0] * 0.5, normal[1] * 0.5, normal[2] * 0.5];
+                position[u] = a;
+                position[v] = b;
+                vertices.extend(position);
+                vertices.extend(normal);
+                vertices.extend([a + 0.5, b + 0.5]);
+            }
+            triangles.extend([base, base + 1.0, base + 2.0, base, base + 2.0, base + 3.0]);
+        }
+    }
+    rows(
+        &dir.join("crate.vertices.field"),
+        "f,f,f,f,f,f,f,f",
+        &vertices,
+    );
+    rows(&dir.join("crate.triangles.field"), "i,i,i", &triangles);
+    let checker: Vec<[f32; 4]> = (0..16)
+        .map(|i| {
+            let dark = (i % 4 + i / 4) % 2 == 0;
+            if dark {
+                [0.3, 0.2, 0.1, 1.0]
+            } else {
+                [0.8, 0.6, 0.3, 1.0]
+            }
+        })
+        .collect();
+    std::fs::write(
+        dir.join("crate.albedo.png"),
+        orla_formats::png::encode(4, 4, &checker),
+    )
+    .unwrap();
+}
+
+/// A two-joint arm as the five kinds of rig row, in `dir` as `arm.*`: a
+/// square tube two units tall, the lower half bound to the root, the
+/// upper to the joint at its middle, the band between blended; and two
+/// clips of 33 frames, a swing of the root and a curl of the joint.
+fn arm(dir: &Path) {
+    let mut vertices = Vec::new();
+    let mut weights = Vec::new();
+    let mut triangles = Vec::new();
+    let rings = 9;
+    let corners = [(-0.2f32, -0.2f32), (0.2, -0.2), (0.2, 0.2), (-0.2, 0.2)];
+    for side in 0..4 {
+        let (a, b) = (corners[side], corners[(side + 1) % 4]);
+        // Outward, one of the axes: the side's middle over its distance.
+        let normal = [(a.0 + b.0) / 0.4, 0.0, (a.1 + b.1) / 0.4];
+        for ring in 0..rings {
+            let y = ring as f32 * 0.25;
+            let t = ((y - 0.75) / 0.5).clamp(0.0, 1.0);
+            for (u, (x, z)) in [a, b].into_iter().enumerate() {
+                vertices.extend([x, y, z]);
+                vertices.extend(normal);
+                vertices.extend([u as f32, y / 2.0]);
+                weights.extend([0.0, 1.0, 0.0, 0.0, 1.0 - t, t, 0.0, 0.0]);
+            }
+            if ring + 1 < rings {
+                let at = ((side * rings + ring) * 2) as f32;
+                triangles.extend([at, at + 1.0, at + 3.0, at, at + 3.0, at + 2.0]);
+            }
+        }
+    }
+    let identity = |y: f32| {
+        [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, y, 0.0, 1.0,
+        ]
+    };
+    let mut skeleton = vec![-1.0];
+    skeleton.extend(identity(0.0));
+    skeleton.push(0.0);
+    skeleton.extend(identity(-1.0));
+    let clip = |joint: usize| {
+        let mut rows = Vec::new();
+        for frame in 0..33 {
+            for this in 0..2 {
+                let angle = if this == joint {
+                    0.6 * (frame as f32 / 32.0 * std::f32::consts::TAU).sin()
+                } else {
+                    0.0
+                };
+                rows.extend([0.0, this as f32, 0.0]);
+                rows.extend([0.0, 0.0, (angle / 2.0).sin(), (angle / 2.0).cos()]);
+                rows.extend([1.0, 1.0, 1.0]);
+            }
+        }
+        rows
+    };
+    let path = |name: &str| dir.join(format!("arm.{name}.field"));
+    rows(&path("vertices"), "f,f,f,f,f,f,f,f", &vertices);
+    rows(&path("triangles"), "i,i,i", &triangles);
+    rows(&path("weights"), "i,i,i,i,f,f,f,f", &weights);
+    rows(
+        &path("skeleton"),
+        "i,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f",
+        &skeleton,
+    );
+    let pose = "f,f,f,f,f,f,f,f,f,f";
+    rows(&path("swing.clip"), pose, &clip(0));
+    rows(&path("curl.clip"), pose, &clip(1));
+}
+
 #[test]
 fn the_crate_leaves_as_glb_and_comes_back_the_same() {
     let dir = scratch("glb");
-    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/model/assets");
+    let assets = dir.join("assets");
+    std::fs::create_dir_all(&assets).unwrap();
+    cube(&assets);
     let out = dir.join("crate.glb");
     orla_export::gltf::export(
         &assets.join("crate.vertices.field"),
@@ -89,7 +225,9 @@ fn a_tone_leaves_as_wav_and_decodes_back() {
 #[test]
 fn a_rig_leaves_as_glb_and_comes_back_posing_the_same() {
     let dir = scratch("rig");
-    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/skin/assets");
+    let assets = dir.join("assets");
+    std::fs::create_dir_all(&assets).unwrap();
+    arm(&assets);
     let out = dir.join("arm.glb");
     let path = |name: &str| assets.join(format!("arm.{name}.field"));
     orla_export::gltf::export_rig(

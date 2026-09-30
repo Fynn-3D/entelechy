@@ -1,10 +1,7 @@
 //! The `.field` file is a contract other programs keep: the bridges, the
 //! importer and exporter, `run --save` and scene inputs. Its bytes are
-//! pinned both ways for every scalar and a spread of narrow encodings,
-//! and every file in this repository reads. Breaking either takes a new
-//! `ORLAFIELD` version.
-
-use std::path::Path;
+//! pinned both ways for every scalar and a spread of narrow encodings.
+//! Breaking them takes a new `ORLAFIELD` version.
 
 use orla_formats::file::{decode, encode_data};
 use orla_host::{Domain, Encoding, FieldData, Schema};
@@ -132,24 +129,4 @@ fn every_encoding_a_file_may_name_is_spelled_as_it_was() {
             .unwrap_or_else(|e| panic!("`{letter}` no longer reads: {e}"));
         assert_eq!(schema.to_string(), letter);
     }
-}
-
-#[test]
-fn every_file_a_past_orla_wrote_still_reads() {
-    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples");
-    let mut found = 0;
-    let mut dirs = vec![examples];
-    while let Some(dir) = dirs.pop() {
-        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                dirs.push(path);
-            } else if path.extension().is_some_and(|ext| ext == "field") {
-                let bytes = std::fs::read(&path).unwrap();
-                decode(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-                found += 1;
-            }
-        }
-    }
-    assert!(found >= 10, "found only {found} files");
 }

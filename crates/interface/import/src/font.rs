@@ -298,10 +298,174 @@ impl ttf_parser::OutlineBuilder for Outline {
 mod tests {
     use super::*;
 
+    /// A point of a TrueType outline: x, y, and whether it is on the curve.
+    type Point = (i16, i16, bool);
+
+    /// A simple glyph from its contours, coordinates as deltas of `i16`.
+    fn glyph(contours: &[&[Point]]) -> Vec<u8> {
+        let points: Vec<Point> = contours.iter().flat_map(|c| c.iter().copied()).collect();
+        if points.is_empty() {
+            return Vec::new();
+        }
+        let mut out = (contours.len() as i16).to_be_bytes().to_vec();
+        let lo = |f: fn(&Point) -> i16| points.iter().map(f).min().unwrap();
+        let hi = |f: fn(&Point) -> i16| points.iter().map(f).max().unwrap();
+        for bound in [lo(|p| p.0), lo(|p| p.1), hi(|p| p.0), hi(|p| p.1)] {
+            out.extend(bound.to_be_bytes());
+        }
+        let mut end = 0u16;
+        for contour in contours {
+            end += contour.len() as u16;
+            out.extend((end - 1).to_be_bytes());
+        }
+        out.extend(0u16.to_be_bytes()); // no instructions
+        out.extend(points.iter().map(|p| u8::from(p.2)));
+        for axis in [|p: &Point| p.0, |p: &Point| p.1] {
+            let mut last = 0i16;
+            for p in &points {
+                out.extend((axis(p) - last).to_be_bytes());
+                last = axis(p);
+            }
+        }
+        out
+    }
+
+    /// A TrueType font built from the format's tables, 1000 units an em:
+    /// a box for a missing character, a space, `I`, `l`, and an `o` of
+    /// two loops of quadratic curves that dips just below the baseline.
     fn latin() -> Vec<u8> {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../examples/type/source/NotoSans-Regular.ttf");
-        std::fs::read(path).unwrap()
+        let bar = |x0: i16, x1: i16, top: i16| {
+            glyph(&[&[
+                (x0, 0, true),
+                (x0, top, true),
+                (x1, top, true),
+                (x1, 0, true),
+            ]])
+        };
+        // A loop about (300, 260): on the curve at its extremes, the
+        // corners of its box between.
+        let ring = |r: i16| -> Vec<Point> {
+            let (x, y) = (300, 260);
+            vec![
+                (x + r, y, true),
+                (x + r, y + r, false),
+                (x, y + r, true),
+                (x - r, y + r, false),
+                (x - r, y, true),
+                (x - r, y - r, false),
+                (x, y - r, true),
+                (x + r, y - r, false),
+            ]
+        };
+        let mut inner = ring(170);
+        inner.reverse();
+        // (advance, outline), in glyph order.
+        let glyphs = [
+            (500u16, bar(100, 400, 700)),
+            (260, Vec::new()),
+            (300, bar(100, 200, 714)),
+            (290, bar(100, 190, 760)),
+            (600, glyph(&[&ring(270), &inner])),
+        ];
+        let cmap_groups: [(u32, u32); 4] = [
+            (' ' as u32, 1),
+            ('I' as u32, 2),
+            ('l' as u32, 3),
+            ('o' as u32, 4),
+        ];
+
+        let be16 = |v: u16| v.to_be_bytes();
+        let mut glyf = Vec::new();
+        let mut loca = Vec::new();
+        let mut hmtx = Vec::new();
+        for (advance, outline) in &glyphs {
+            loca.extend((glyf.len() as u32).to_be_bytes());
+            glyf.extend(outline);
+            while !glyf.len().is_multiple_of(4) {
+                glyf.push(0);
+            }
+            hmtx.extend(be16(*advance));
+            hmtx.extend(0i16.to_be_bytes());
+        }
+        loca.extend((glyf.len() as u32).to_be_bytes());
+        let count = glyphs.len() as u16;
+
+        let mut head = Vec::new();
+        head.extend(0x0001_0000u32.to_be_bytes()); // version 1.0
+        head.extend(0x0001_0000u32.to_be_bytes()); // revision
+        head.extend(0u32.to_be_bytes()); // checksum adjustment
+        head.extend(0x5F0F_3CF5u32.to_be_bytes()); // magic
+        head.extend(be16(0)); // flags
+        head.extend(be16(1000)); // units an em
+        head.extend([0; 16]); // created, modified
+        for bound in [0i16, -10, 570, 760] {
+            head.extend(bound.to_be_bytes());
+        }
+        head.extend(be16(0)); // style
+        head.extend(be16(8)); // smallest readable size
+        head.extend(2i16.to_be_bytes()); // direction
+        head.extend(1i16.to_be_bytes()); // long offsets in `loca`
+        head.extend(0i16.to_be_bytes()); // glyph data format
+
+        let mut hhea = Vec::new();
+        hhea.extend(0x0001_0000u32.to_be_bytes());
+        for v in [800i16, -200, 90] {
+            hhea.extend(v.to_be_bytes()); // ascent, descent, gap
+        }
+        hhea.extend(be16(600)); // widest advance
+        hhea.extend([0; 22]); // bearings, extent, caret, reserved, format
+        hhea.extend(be16(count)); // advances in `hmtx`
+
+        let mut maxp = 0x0000_5000u32.to_be_bytes().to_vec();
+        maxp.extend(be16(count));
+
+        // One subtable, Windows full Unicode, format 12: ranges of codes.
+        let mut cmap = Vec::new();
+        cmap.extend(be16(0));
+        cmap.extend(be16(1));
+        cmap.extend(be16(3));
+        cmap.extend(be16(10));
+        cmap.extend(12u32.to_be_bytes());
+        cmap.extend(be16(12));
+        cmap.extend(be16(0));
+        cmap.extend((16 + 12 * cmap_groups.len() as u32).to_be_bytes());
+        cmap.extend(0u32.to_be_bytes()); // language
+        cmap.extend((cmap_groups.len() as u32).to_be_bytes());
+        for (code, id) in cmap_groups {
+            for v in [code, code, id] {
+                cmap.extend(v.to_be_bytes());
+            }
+        }
+
+        // The table directory, sorted by tag, then the tables.
+        let tables: [(&[u8; 4], Vec<u8>); 7] = [
+            (b"cmap", cmap),
+            (b"glyf", glyf),
+            (b"head", head),
+            (b"hhea", hhea),
+            (b"hmtx", hmtx),
+            (b"loca", loca),
+            (b"maxp", maxp),
+        ];
+        let mut font = 0x0001_0000u32.to_be_bytes().to_vec();
+        for v in [7u16, 64, 2, 48] {
+            font.extend(be16(v)); // tables, search range, selector, shift
+        }
+        let mut offset = 12 + 16 * tables.len();
+        for (tag, table) in &tables {
+            font.extend(*tag);
+            font.extend(0u32.to_be_bytes()); // checksum
+            font.extend((offset as u32).to_be_bytes());
+            font.extend((table.len() as u32).to_be_bytes());
+            offset += table.len().div_ceil(4) * 4;
+        }
+        for (_, table) in &tables {
+            font.extend(table);
+            while !font.len().is_multiple_of(4) {
+                font.push(0);
+            }
+        }
+        font
     }
 
     fn words(data: &FieldData) -> Vec<u32> {
@@ -351,7 +515,7 @@ mod tests {
 
     #[test]
     fn a_character_the_font_lacks_is_named() {
-        let (_, imported) = read(&latin(), Some("a中")).unwrap();
+        let (_, imported) = read(&latin(), Some("o中")).unwrap();
         assert_eq!(imported.missing, vec!['中']);
         assert_eq!(imported.glyphs, 1);
     }

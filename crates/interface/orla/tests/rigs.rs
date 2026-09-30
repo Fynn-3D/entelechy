@@ -8,33 +8,10 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{RIG_ROWS, rows_keep_the_contract, schema_of};
+use common::{rows_keep_the_contract, schema_of};
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
-}
-
-/// The example's shipped rows, written by the importer and read by the
-/// package in its replay, have the contract's layouts.
-#[test]
-fn the_shipped_rig_keeps_the_contract() {
-    let assets = root().join("examples/skin/assets");
-    let found = rows_keep_the_contract(&assets);
-    let kinds: Vec<&str> = RIG_ROWS.iter().map(|(kind, _)| *kind).collect();
-    for kind in kinds {
-        assert!(
-            found.iter().any(|(found, _)| found == kind),
-            "the example ships no {kind}: {found:?}"
-        );
-    }
-    assert_eq!(
-        found
-            .iter()
-            .filter(|(kind, _)| kind == "clip.field")
-            .count(),
-        2,
-        "one clip an action"
-    );
 }
 
 /// Fresh `orla import` output keeps the contract's layouts, and a scene

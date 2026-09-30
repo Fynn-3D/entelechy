@@ -1,0 +1,140 @@
+// A rig's rows posed and drawn: a clip sampled at one moment, each
+// joint's transform composed up its parents and through its inverse
+// bind, the mesh moved by its four weighted joints, then projected and
+// shaded. The rows are the ones docs/RIGS.md names.
+struct Joint { parent: Int; bind: Mat4; }
+struct Pose { at: Vec3; turn: Vec4; grow: Vec3; }
+struct Bound { joints: [Int; 4]; weights: Vec4; }
+struct Point { position: Vec3; normal: Vec3; uv: Vec2; }
+struct Walk { matrix: Mat4; joint: Int; }
+struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }
+struct Tri { a: Int; b: Int; c: Int; }
+struct Surface { depth: Float; normal: Vec3; uv: Vec2; id: Int; }
+type Skeleton = Rows<Joint>;
+type Clip = Rows<Pose>;
+type Triangles = Rows<Tri>;
+
+// Scale, then turn by the quaternion (x y z w), then move.
+fn posing(p: Pose) -> Mat4 {
+    let x = p.turn.x; let y = p.turn.y; let z = p.turn.z; let w = p.turn.w;
+    return mat4(
+        vec4(1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + z * w), 2.0 * (x * z - y * w), 0.0) * p.grow.x,
+        vec4(2.0 * (x * y - z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z + x * w), 0.0) * p.grow.y,
+        vec4(2.0 * (x * z + y * w), 2.0 * (y * z - x * w), 1.0 - 2.0 * (x * x + y * y), 0.0) * p.grow.z,
+        vec4(p.at.x, p.at.y, p.at.z, 1.0));
+}
+
+// `t` of the way between two poses, the shorter way round.
+fn mixing(a: Pose, b: Pose, t: Float) -> Pose {
+    let same = if dot(a.turn, b.turn) < 0.0 { vec4(0.0, 0.0, 0.0, 0.0) - b.turn } else { b.turn };
+    return Pose {
+        at: mix(a.at, b.at, t),
+        turn: normalize(a.turn * (1.0 - t) + same * t),
+        grow: mix(a.grow, b.grow, t),
+    };
+}
+
+/// Every joint's local pose at `at` seconds into a looping clip.
+kernel pose.sample@1 {
+    requires { field.read; field.write; }
+    input skeleton: Skeleton;
+    input clip: Clip;
+    input at: Rows<Float>;
+    param rate: Float = 30.0;
+    output result: Rows<Pose>;
+    compute {
+        let joints = count(skeleton);
+        let frames = count(clip) / joints;
+        let moment = at(at, 0) * rate;
+        let held = moment - float(frames) * floor(moment / float(frames));
+        let first = int(floor(held));
+        let next = (first + 1) % frames;
+        let joint = element();
+        return mixing(at(clip, first * joints + joint), at(clip, next * joints + joint),
+                      held - floor(held));
+    }
+}
+
+/// Each joint's pose composed up its parents, through its inverse bind.
+kernel pose.palette@1 {
+    requires { field.read; field.write; }
+    input poses: Rows<Pose>;
+    input skeleton: Skeleton;
+    output result: Rows<Mat4>;
+    compute {
+        let mine = element();
+        let walked = loop 64 with w = Walk { matrix: posing(sample(poses)), joint: mine }
+            until at(skeleton, w.joint).parent < 0 {
+            let up = at(skeleton, w.joint).parent;
+            Walk { matrix: posing(at(poses, up)) * w.matrix, joint: up }
+        };
+        return walked.matrix * at(skeleton, mine).bind;
+    }
+}
+
+/// The mesh moved by its four weighted joints.
+kernel pose.apply@1 {
+    requires { field.read; field.write; }
+    input mesh: Rows<Point>;
+    input weights: Rows<Bound>;
+    input palette: Rows<Mat4>;
+    output result: Rows<Point>;
+    compute {
+        let v = sample(mesh);
+        let b = sample(weights);
+        let m = at(palette, b.joints[0]) * b.weights.x
+              + at(palette, b.joints[1]) * b.weights.y
+              + at(palette, b.joints[2]) * b.weights.z
+              + at(palette, b.joints[3]) * b.weights.w;
+        let moved = m * vec4(v.position.x, v.position.y, v.position.z, 1.0);
+        let turned = m * vec4(v.normal.x, v.normal.y, v.normal.z, 0.0);
+        return Point {
+            position: vec3(moved.x, moved.y, moved.z),
+            normal: normalize(vec3(turned.x, turned.y, turned.z)),
+            uv: v.uv,
+        };
+    }
+}
+
+/// Seen side on from four units away, looking at `focus`.
+kernel pose.project@1 {
+    requires { field.read; field.write; }
+    input mesh: Rows<Point>;
+    param aspect: Float = 1.6667;
+    param focus: Vec3 = vec3(0.0, 0.35, -0.9);
+    output result: Rows<Vertex>;
+    compute {
+        let v = sample(mesh);
+        let q = v.position - focus;
+        // A quarter turn about y, then a slight tilt about x.
+        let side = vec3(q.z, q.y, 0.0 - q.x);
+        let n0 = vec3(v.normal.z, v.normal.y, 0.0 - v.normal.x);
+        let c = cos(0.25);
+        let s = sin(0.25);
+        let p = vec3(side.x, side.y * c - side.z * s, side.y * s + side.z * c);
+        let n = vec3(n0.x, n0.y * c - n0.z * s, n0.y * s + n0.z * c);
+        let view = vec3(p.x, p.y, p.z - 4.0);
+        let f = 2.1445;
+        let near = 0.1;
+        let far = 20.0;
+        return Vertex {
+            clip: vec4(view.x * f / aspect, view.y * f,
+                       view.z * far / (near - far) + near * far / (near - far), 0.0 - view.z),
+            normal: n,
+            uv: v.uv,
+        };
+    }
+}
+
+/// Lambert where the mesh landed, a flat sky elsewhere.
+kernel pose.shade@1 {
+    requires { field.read; field.write; }
+    input surface: Grid<Surface>;
+    output result: Image;
+    compute {
+        let s = sample(surface);
+        let lit = max(dot(normalize(s.normal), normalize(vec3(0.4, 0.8, 0.5))), 0.0);
+        let body = vec3(0.72, 0.58, 0.44) * (0.25 + 0.75 * lit);
+        return vec4(if s.id < 0 { vec3(0.08, 0.1, 0.14) } else { body }, 1.0);
+    }
+}
