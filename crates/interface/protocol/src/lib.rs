@@ -134,6 +134,23 @@ mod tests {
     use crate::wire::diagnostic_json;
     use orla_kernel::Value;
 
+    /// A picture of 8 by 8 texels, the whole scene a request is put to.
+    const SCENE: &str = "node gradient: kernel { requires { field.write; } output result: Image; domain = vec2(8, 8); compute { return vec4(coord().x / 8.0, coord().y / 8.0, 0.5, 1.0); } }\noutput result <- gradient.result;\n";
+
+    /// A session over [`SCENE`], written into a directory of its own.
+    fn session(name: &str) -> (std::path::PathBuf, Session) {
+        let dir = std::env::temp_dir().join(format!("orla-protocol-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("scene.osn"), SCENE).unwrap();
+        let session = Session::open(
+            &dir.join("scene.osn"),
+            None,
+            orla_session::DEFAULT_BUDGET_WORDS,
+        );
+        (dir, session)
+    }
+
     /// `docs/PROTOCOL.md`'s table is the operations' rendering, and every
     /// operation is answered; `ORLA_BLESS=1` writes the table again.
     #[test]
@@ -158,9 +175,7 @@ mod tests {
                 );
             }
         }
-        let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../examples/grayscale/scene.osn");
-        let mut session = Session::open(&scene, None, orla_session::DEFAULT_BUDGET_WORDS);
+        let (dir, mut session) = session("table");
         session.sync();
         for op in ops::names() {
             // A bare request may lack a field; its name is still known.
@@ -173,15 +188,14 @@ mod tests {
         }
         let error = handle(&mut session, &json!({ "op": "compile" })).unwrap_err();
         assert_eq!(error["operations"], json!(ops::names()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A field an operation does not take, or a missing one it needs, is
     /// refused with the fields it takes; the near miss is named.
     #[test]
     fn a_request_is_held_to_its_operations_fields() {
-        let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../examples/grayscale/scene.osn");
-        let mut session = Session::open(&scene, None, orla_session::DEFAULT_BUDGET_WORDS);
+        let (dir, mut session) = session("fields");
         session.sync();
         let error = handle(&mut session, &json!({ "op": "publish", "sorce": "x" })).unwrap_err();
         assert_eq!(error["fields"], json!(["source", "expect"]), "{error}");
@@ -203,24 +217,22 @@ mod tests {
             "{error}"
         );
         assert!(handle(&mut session, &json!({ "op": "status", "id": 7 })).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn an_unknown_name_in_help_lists_the_similar_ones_as_data() {
-        let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../examples/grayscale/scene.osn");
-        let mut session = Session::open(&scene, None, orla_session::DEFAULT_BUDGET_WORDS);
+        let (dir, mut session) = session("help");
         let error = handle(&mut session, &json!({ "op": "help", "name": "clmap" })).unwrap_err();
         assert_eq!(error["similar"][0], "clamp", "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A field of the wrong type is refused before its operation reads it,
     /// naming the type it is; nested values are named by where they are.
     #[test]
     fn a_field_is_held_to_its_type() {
-        let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../examples/grayscale/scene.osn");
-        let mut session = Session::open(&scene, None, orla_session::DEFAULT_BUDGET_WORDS);
+        let (dir, mut session) = session("types");
         session.sync();
         let mut refused = |request: Json| {
             let error = handle(&mut session, &request).unwrap_err();
@@ -258,6 +270,7 @@ mod tests {
             )
             .is_ok()
         );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A float answers as the decimal written for it.

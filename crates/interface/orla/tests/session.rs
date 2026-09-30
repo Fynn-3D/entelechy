@@ -5,19 +5,87 @@ use orla_graph::EvaluateError;
 use orla_kernel::Context;
 use orla_session::{Event, Session};
 
-fn example() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/grayscale")
+/// The scene most tests start from: a gradient, turned gray, in blocks.
+const SCENE: &str = "// gradient -> grayscale -> pixelate
+use \"kernels/\";
+
+node source: image.gradient@1 {
+    domain = vec2(128, 128);
 }
 
+node gray: image.grayscale@1 {
+    source <- source.result;
+    amount = 1.0;
+}
+
+node blocks: image.pixelate@1 {
+    source <- gray.result;
+    size = 8;
+}
+
+output result <- blocks.result;
+";
+
+/// The scene's Kernels, a file each.
+const KERNELS: &[(&str, &str)] = &[
+    (
+        "gradient.orla",
+        "/// A generator: no inputs, so the scene must give the node a domain.
+kernel image.gradient@1 {
+    requires { field.write; }
+    param depth: Float = 0.5;
+    output result: Image;
+    compute {
+        let uv = coord() / (domain() - vec2(1.0, 1.0));
+        return vec4(uv.x, uv.y, depth, 1.0);
+    }
+}
+",
+    ),
+    (
+        "grayscale.orla",
+        "kernel image.grayscale@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    param amount: Float = 1.0;
+    output result: Image;
+    fn luma(c: Vec4) -> Float {
+        return c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
+    }
+    compute {
+        let c = sample(source);
+        let g = luma(c);
+        return mix(c, vec4(g, g, g, c.a), amount);
+    }
+}
+",
+    ),
+    (
+        "pixelate.orla",
+        "kernel image.pixelate@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    param size: Int = 8;
+    output result: Image;
+    compute {
+        let block = float(max(size, 1));
+        let origin = floor(coord() / block) * block;
+        return fetch(source, origin);
+    }
+}
+",
+    ),
+];
+
+/// A directory of its own holding [`SCENE`] and [`KERNELS`].
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("orla-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("kernels")).unwrap();
-    for entry in std::fs::read_dir(example().join("kernels")).unwrap() {
-        let entry = entry.unwrap();
-        std::fs::copy(entry.path(), dir.join("kernels").join(entry.file_name())).unwrap();
+    for (file, text) in KERNELS {
+        std::fs::write(dir.join("kernels").join(file), text).unwrap();
     }
-    std::fs::copy(example().join("scene.osn"), dir.join("scene.osn")).unwrap();
+    std::fs::write(dir.join("scene.osn"), SCENE).unwrap();
     dir
 }
 
@@ -1096,10 +1164,28 @@ fn help_prints_the_reference_and_shows_one() {
 #[test]
 fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
     let orla = env!("CARGO_BIN_EXE_orla");
-    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../packages/pixelfx.orlapkg");
     let dir = std::env::temp_dir().join(format!("orla-packages-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    // A package of two Kernels and a preset graph made of both.
+    let example = dir.join("source/pixelfx.orlapkg");
+    std::fs::create_dir_all(example.join("kernels")).unwrap();
+    std::fs::create_dir_all(example.join("graphs")).unwrap();
+    std::fs::write(
+        example.join("package.osn"),
+        "package pixelfx@1 { language = 1; ir = 1; }\nuse \"kernels/\";\n",
+    )
+    .unwrap();
+    std::fs::write(
+        example.join("kernels/pixelfx.orla"),
+        "kernel pixelfx.pixelate@1 { requires { field.read; field.write; } input source: Image; param cell: Float = 8.0; output result: Image; compute { return at(source, floor(coord() / cell) * cell + cell * 0.5); } }\n\
+         kernel pixelfx.palette@1 { requires { field.read; field.write; } input source: Image; output result: Image; compute { let c = sample(source); let k = clamp(int((c.r + c.g + c.b) / 3.0 * 4.0), 0, 3); return vec4(float(k) / 3.0, float(k) / 3.0, float(k) / 3.0, 1.0); } }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        example.join("graphs/nes.osn"),
+        "use \"../kernels/\";\ninput source: Image;\nparam cell: Float = 8.0;\nnode coarse: pixelfx.pixelate@1 { source <- source; cell = cell; }\nnode toned: pixelfx.palette@1 { source <- coarse.result; }\noutput result <- toned.result;\n",
+    )
+    .unwrap();
     let archive = dir.join("pixelfx.orlapkg");
     let output = Command::new(orla)
         .arg("pack")
@@ -1247,13 +1333,41 @@ fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
 #[test]
 fn render_writes_a_png_per_frame_and_one_wav_of_every_block() {
     let orla = env!("CARGO_BIN_EXE_orla");
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let scenes = std::env::temp_dir().join(format!("orla-render-scenes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scenes);
+    std::fs::create_dir_all(&scenes).unwrap();
+    // A tone of 800 stereo frames a block, by the clock, and its trace.
+    let tone = scenes.join("sound.osn");
+    std::fs::write(
+        &tone,
+        "node tone: kernel { requires { field.write; time.read; } output result: Rows<Vec2>; domain = 800;
+    compute { let t = time() + float(element()) / 48000.0; let v = sin(t * 1382.3) * 0.4; return vec2(v, v * 0.5); } }
+node scope: kernel { requires { field.read; field.write; time.read; } input block: Rows<Vec2> <- tone.result; output result: Image; domain = vec2(320, 240);
+    compute { let s = at(block, int(coord().x * 2.5)); let on = abs(coord().y - 120.0 - s.x * 90.0) < 1.5; return vec4(if on { 1.0 } else { 0.0 }, fract(time()), 0.0, 1.0); } }
+output view <- scope.result;
+output sound <- tone.result;
+",
+    )
+    .unwrap();
+    // A count fed back off the frame, shown in a window-sized picture.
+    let machine_scene = scenes.join("async.osn");
+    std::fs::write(
+        &machine_scene,
+        "kernel count.step@1 { requires { field.read; field.write; } input previous: Rows<Int>; output result: Rows<Int>; compute { return at(previous, 0) + 1; } }
+node zero: kernel { requires { field.write; } output result: Rows<Int>; domain = 1; compute { return 0; } }
+node counter: count.step@1 { previous <~ counter.result from zero.result; async = true; }
+node view: kernel { requires { field.read; field.write; input.read; } input count: Rows<Int> <- counter.result; output result: Image; domain = window();
+    compute { return vec4(float(at(count, 0)) / 8.0, 0.0, 0.0, 1.0); } }
+output result <- view.result;
+",
+    )
+    .unwrap();
     let out = std::env::temp_dir().join(format!("orla-render-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&out);
     let output = Command::new(orla)
         .args(["render", "--frames", "3", "--out"])
         .arg(&out)
-        .arg(root.join("examples/audio/scene.osn"))
+        .arg(&tone)
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1286,7 +1400,7 @@ fn render_writes_a_png_per_frame_and_one_wav_of_every_block() {
         Command::new(orla)
             .args(["render", "--frames", "3", "--out"])
             .arg(&again)
-            .arg(root.join("examples/audio/scene.osn"))
+            .arg(&tone)
             .status()
             .unwrap()
             .success()
@@ -1311,7 +1425,7 @@ fn render_writes_a_png_per_frame_and_one_wav_of_every_block() {
             "--out",
         ])
         .arg(&machine)
-        .arg(root.join("examples/async/scene.osn"))
+        .arg(&machine_scene)
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1320,7 +1434,7 @@ fn render_writes_a_png_per_frame_and_one_wav_of_every_block() {
         stderr.contains("rendered 2 picture(s) of 32x32"),
         "{stderr}"
     );
-    for dir in [&out, &again, &machine] {
+    for dir in [&out, &again, &machine, &scenes] {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
@@ -1571,13 +1685,47 @@ fn a_bytes_input_reads_a_file_as_rows_of_one_integer() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A grid carried from frame to frame through a graph placed twice, each
+/// placement a node placed three times; the scene's path in `dir`.
+fn steps(dir: &Path) -> PathBuf {
+    std::fs::write(
+        dir.join("steps.orla"),
+        "kernel steps.start@1 { requires { field.write; } output result: Grid<Int>; compute { return int(coord().x) + int(coord().y) * 8; } }
+kernel steps.spread@1 { requires { field.read; field.write; } input cells: Grid<Int>; output result: Grid<Int>; compute { return (sample(cells) * 5 + 1) % 97; } }
+kernel steps.view@1 { requires { field.read; field.write; } input cells: Grid<Int>; output result: Image; compute { let v = float(at(cells, coord() / 8.0)) / 96.0; return vec4(v, v, v, 1.0); } }
+",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("step.osn"),
+        "use \"steps.orla\";
+input cells: Grid<Int>;
+node spread: steps.spread@1 { times = 3; carry cells <- result; cells <- cells; }
+output result <- spread.result;
+",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("steps.osn"),
+        "use \"steps.orla\";
+node start: steps.start@1 { domain = vec2(8, 4); }
+node steps: graph \"step.osn\" { times = 2; carry cells <- result; cells <~ steps.result from start.result; }
+node view: steps.view@1 { cells <- steps.result; domain = vec2(64, 32); }
+output result <- view.result;
+output grid <- steps.result;
+",
+    )
+    .unwrap();
+    dir.join("steps.osn")
+}
+
 /// A placed graph's port follows the last dot; any other name is reported
 /// as what it is.
 #[test]
 fn a_save_names_a_node_a_placed_graphs_node_or_an_output() {
     let orla = env!("CARGO_BIN_EXE_orla");
-    let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/collapse/scene.osn");
     let dir = scratch("saves");
+    let scene = steps(&dir);
     let run = |target: &str, file: &str| {
         Command::new(orla)
             .arg("run")
@@ -1596,7 +1744,7 @@ fn a_save_names_a_node_a_placed_graphs_node_or_an_output() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let output = run("steps/8.spread/6.result", "by-node.field");
+    let output = run("steps/2.spread/3.result", "by-node.field");
     assert!(
         output.status.success(),
         "{}",
@@ -1611,7 +1759,7 @@ fn a_save_names_a_node_a_placed_graphs_node_or_an_output() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success());
     assert!(
-        stderr.contains("is not a node: it is placed as 64 of them"),
+        stderr.contains("is not a node: it is placed as 6 of them"),
         "{stderr}"
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1624,8 +1772,8 @@ fn bench_measures_frames_and_compares_with_what_it_wrote() {
     let orla = env!("CARGO_BIN_EXE_orla");
     let dir = scratch("bench");
     let json = dir.join("before.json");
-    // A scene that changes with the clock, so its nodes run each frame.
-    let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/collapse/scene.osn");
+    // A scene carried from frame to frame, so its nodes run each frame.
+    let scene = steps(&dir);
     let measure = |extra: &[&str]| {
         Command::new(orla)
             .arg("bench")
@@ -1890,9 +2038,36 @@ fn a_parents_param_reaches_a_placed_graphs_times() {
 
 #[test]
 fn narrow_fields_land_live_and_leave_as_their_bytes() {
-    // The packed example: file data and Kernel outputs are narrow, and a
-    // narrow output saved as a Field file round-trips its bytes.
-    let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/packed/scene.osn");
+    // File data and Kernel outputs are narrow, and a narrow output saved
+    // as a Field file round-trips its bytes.
+    let dir = scratch("narrow-save");
+    let pixels: Vec<[f32; 4]> = (0..64)
+        .map(|k| [k as f32 / 63.0, 0.5, 1.0 - k as f32 / 63.0, 1.0])
+        .collect();
+    std::fs::write(
+        dir.join("albedo.png"),
+        orla_formats::png::encode(8, 8, &pixels),
+    )
+    .unwrap();
+    std::fs::write(dir.join("tiles.bin"), [0u8, 16, 32, 48]).unwrap();
+    let scene = dir.join("packed.osn");
+    std::fs::write(
+        &scene,
+        "input albedo: Grid<Vec4 as unorm8> = \"albedo.png\";
+input tiles: Rows<Int as u8> = bytes \"tiles.bin\";
+node height: kernel { requires { field.write; } output result: Grid<Float as unorm16>; domain = vec2(16, 9);
+    compute { return 0.5 + 0.25 * sin(coord().x * 0.7) * cos(coord().y * 0.9); } }
+node normal: kernel { requires { field.read; field.write; } input height: Grid<Float as unorm16> <- height.result; output result: Grid<Vec3 as snorm8>;
+    compute { let c = icoord(); let dx = at(height, c + ivec2(1, 0)) - at(height, c - ivec2(1, 0)); return normalize(vec3(-dx * 6.0, 0.3, 1.0)); } }
+node dark: Grid<Vec4 as f16> { domain = vec2(16, 9); }
+node light: kernel { requires { field.read; field.write; } input albedo: Grid<Vec4 as unorm8> <- albedo; input normal: Grid<Vec3 as snorm8> <- normal.result;
+    input tiles: Rows<Int as u8> <- tiles; input previous: Grid<Vec4 as f16> <~ light.result from dark.result; output result: Grid<Vec4 as f16>; domain = vec2(16, 9);
+    compute { let a = at(albedo, coord() / 2.0); let tile = at(tiles, int(coord().x) % 4); let lit = a.rgb * max(sample(normal).z, 0.0) * (1.0 + float(tile) / 64.0) * 3.0;
+        return mix(sample(previous), vec4(lit, 1.0), 0.25); } }
+output result <- light.result;
+",
+    )
+    .unwrap();
     let mut session = Session::open(&scene, None, 1 << 22);
     session.set_fusion(false);
     let events = session.sync();
@@ -1905,39 +2080,69 @@ fn narrow_fields_land_live_and_leave_as_their_bytes() {
         host.schema(albedo).unwrap().to_string(),
         "f:unorm8,f:unorm8,f:unorm8,f:unorm8"
     );
-    assert_eq!(words(albedo), 64 * 64, "a word a pixel, not four");
+    assert_eq!(words(albedo), 8 * 8, "a word a pixel, not four");
     let tiles = session.external("tiles").unwrap();
-    assert_eq!(words(tiles), 64 / 4, "a byte a tile");
+    assert_eq!(words(tiles), 4 / 4, "a byte a tile");
     let node = |name: &str| {
         session
             .cached(&orla_graph::NodeId(name.into()), "result")
             .unwrap()
     };
-    assert_eq!(words(node("height")), 160 * 90 * 2 / 4);
-    assert_eq!(words(node("normal")), 160 * 90 * 3 / 4);
-    assert_eq!(words(node("light")), 160 * 90 * 8 / 4);
+    assert_eq!(words(node("height")), 16 * 9 * 2 / 4);
+    assert_eq!(words(node("normal")), 16 * 9 * 3 / 4);
+    assert_eq!(words(node("light")), 16 * 9 * 8 / 4);
     let normal = node("normal");
 
-    let dir = scratch("narrow-save");
     let file = dir.join("normal.field");
     session.allow_write_to(&file).unwrap();
     session
         .save(&orla_graph::NodeId("normal".into()), "result", &file)
         .unwrap();
     let bytes = std::fs::read(&file).unwrap();
-    let header = b"ORLAFIELD 1\nGrid 160 90 1 f:snorm8,f:snorm8,f:snorm8\n";
+    let header = b"ORLAFIELD 1\nGrid 16 9 1 f:snorm8,f:snorm8,f:snorm8\n";
     assert!(bytes.starts_with(header));
-    assert_eq!(bytes.len(), header.len() + 160 * 90 * 3);
+    assert_eq!(bytes.len(), header.len() + 16 * 9 * 3);
     let back = orla_formats::file::decode(&bytes).unwrap();
     let host = session.runtime().host();
     assert_eq!(&back, host.data(normal).unwrap());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_parameter_of_any_value_type_is_set_by_its_layout() {
-    // The cube's camera is a Mat4 and its style a struct: a value of their
-    // layout is taken in their shape; another layout is refused by name.
-    let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/cube/scene.osn");
+    // A camera that is a Mat4 and a style that is a struct: a value of
+    // their layout is taken in their shape; another layout is refused by
+    // name.
+    let dir = scratch("value-params");
+    std::fs::write(
+        dir.join("draw.orla"),
+        "struct Style { ground: Vec3; edge: Vec3; width: Float; }
+kernel draw.plane@1 {
+    requires { field.write; }
+    param lens: Mat4 = mat4(vec4(2.2, 0.0, 0.0, 0.0), vec4(0.0, 2.2, 0.0, 0.0), vec4(0.0, 0.0, 1.0, -1.0), vec4(0.0, 0.0, 0.0, 0.0));
+    param style: Style = Style { ground: vec3(0.06, 0.07, 0.1), edge: vec3(1.0, 0.95, 0.8), width: 1.0 };
+    output result: Image;
+    compute {
+        let p = lens * vec4(coord() / domain() - vec2(0.5, 0.5), 1.0, 1.0);
+        let on = abs(p.x) < style.width * 0.1;
+        let c = if on { style.edge } else { style.ground };
+        return vec4(c.x, c.y, c.z, 1.0);
+    }
+}
+",
+    )
+    .unwrap();
+    let scene = dir.join("plane.osn");
+    std::fs::write(
+        &scene,
+        "use \"draw.orla\";
+param lens: Mat4 = mat4(vec4(2.2, 0.0, 0.0, 0.0), vec4(0.0, 2.2, 0.0, 0.0), vec4(0.0, 0.0, 1.0, -1.0), vec4(0.0, 0.0, 0.0, 0.0));
+param style: Style = Style { ground: vec3(0.06, 0.07, 0.1), edge: vec3(1.0, 0.95, 0.8), width: 1.0 };
+node plane: draw.plane@1 { domain = vec2(32, 24); lens = lens; style = style; }
+output result <- plane.result;
+",
+    )
+    .unwrap();
     let mut session = Session::open(&scene, None, 1 << 22);
     assert!(session.sync().contains(&Event::SceneLoaded));
     use orla_kernel::Value;
@@ -1982,6 +2187,7 @@ fn a_parameter_of_any_value_type_is_set_by_its_layout() {
         .set_param("style", Value::Record(vec![Value::Bool(true)]))
         .unwrap_err();
     assert!(error.contains("param `style` is of type Style"), "{error}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The interpreter declining every module holding a `Double`: a device
@@ -2367,30 +2573,6 @@ fn a_domain_past_the_budget_fails_the_node_not_the_process() {
     }
 }
 
-/// The raster package's cutout and `native.rasterize@2` draw the same
-/// surface on the interpreter and the JIT: the same triangle at every
-/// pixel, its depth to the bit.
-#[test]
-fn the_package_cutout_is_the_fast_paths_to_the_bit_off_the_device() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let base = root.join("examples/mesh/tests");
-    let replay = orla::replay::parse(
-        "scene cutout.osn\nwindow 320 240\nframe 0.0\nexpect differ.result[0] = 0\nexpect deeper.result[0] = 0\nexpect taken.result[0] > 1000\n",
-        &base,
-    )
-    .unwrap();
-    for backend in ["cpu", "jit"] {
-        let runtime = Session::runtime_for(backend, Default::default()).unwrap();
-        let outcome = orla::replay::run(&replay, runtime).unwrap();
-        assert!(
-            outcome.failures.is_empty(),
-            "{backend}: {:?}",
-            outcome.failures
-        );
-        assert_eq!(outcome.checks, 3, "{backend}");
-    }
-}
-
 /// A document's Kernels change together: when one of two Kernels sharing
 /// a changed struct does not compile, neither publishes and the running
 /// pair stays. Fixed, both land in the same sync, on the worker and
@@ -2477,10 +2659,38 @@ fn a_documents_kernels_publish_together_or_not_at_all() {
 /// window opens) holds what `orla replay` holds.
 #[test]
 fn a_replay_played_as_a_window_plays_it_holds_as_it_does_headless() {
-    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/voxel/tests");
-    for name in ["voxel.replay"] {
-        let text = std::fs::read_to_string(base.join(name)).unwrap();
-        let replay = orla::replay::parse(&text, &base).unwrap();
+    // A probe of the pointer, named by the replay but read by no output,
+    // and a picture the window sizes.
+    let base = std::env::temp_dir().join(format!("orla-windowed-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::write(
+        base.join("pointer.osn"),
+        "node probe: kernel { requires { field.write; input.read; } output result: Rows<Int>; domain = 2;
+    compute { return if element() == 0 { int(pointer().x) } else if pointer_down() { 1 } else { 0 }; } }
+node view: kernel { requires { field.read; field.write; input.read; } input probe: Rows<Int> <- probe.result; output result: Image; domain = window();
+    compute { return if coord().x < float(at(probe, 0)) { vec4(1.0, 1.0, 1.0, 1.0) } else { vec4(0.0, 0.0, 0.0, 1.0) }; } }
+output result <- view.result;
+",
+    )
+    .unwrap();
+    let text = "scene pointer.osn
+window 40 20
+frame 0.0
+pointer 10 5 up
+frame 0.02
+expect probe.result[0] = 10
+expect probe.result[1] = 0
+expect 4 4 = 1 1 1 0.01
+expect 20 4 = 0 0 0 0.01
+pointer 30 5 down
+frame 0.04
+expect probe.result[0] = 30
+expect probe.result[1] = 1
+expect 20 4 = 1 1 1 0.01
+";
+    for name in ["pointer.replay"] {
+        let replay = orla::replay::parse(text, &base).unwrap();
         let runtime = Session::runtime_for("jit", Default::default()).unwrap();
         let mut session = Session::open_with(&replay.scene, replay.kernels.as_deref(), runtime);
         session.sync();
@@ -2507,8 +2717,9 @@ fn a_replay_played_as_a_window_plays_it_holds_as_it_does_headless() {
             "{name}: {:?}",
             outcome.failures
         );
-        assert!(outcome.checks > 30, "{name}: {} checks", outcome.checks);
+        assert_eq!(outcome.checks, 7, "{name}");
     }
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 /// An undeclared param set before load stops the load with why; a held

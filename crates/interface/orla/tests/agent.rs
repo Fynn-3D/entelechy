@@ -170,27 +170,86 @@ kernel agent.invert@1 {
 }
 ";
 
-/// A copy of an example the agent may rewrite.
-fn scene(example: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("orla-agent-{example}-{}", std::process::id()));
+/// A gradient, turned gray, in blocks of eight texels.
+const GRAYSCALE: &[(&str, &str)] = &[
+    (
+        "scene.osn",
+        "use \"kernels/\";\n\
+         node source: image.gradient@1 { domain = vec2(32, 32); }\n\
+         node gray: image.grayscale@1 { source <- source.result; amount = 1.0; }\n\
+         node blocks: image.pixelate@1 { source <- gray.result; size = 8; }\n\
+         output result <- blocks.result;\n",
+    ),
+    (
+        "kernels/image.orla",
+        "kernel image.gradient@1 {\n\
+         \x20   requires { field.write; }\n\
+         \x20   output result: Image;\n\
+         \x20   compute { let uv = coord() / (domain() - vec2(1.0, 1.0)); return vec4(uv.x, uv.y, 0.5, 1.0); }\n\
+         }\n\
+         kernel image.grayscale@1 {\n\
+         \x20   requires { field.read; field.write; }\n\
+         \x20   input source: Image;\n\
+         \x20   param amount: Float = 1.0;\n\
+         \x20   output result: Image;\n\
+         \x20   compute { let c = sample(source); let g = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722; return mix(c, vec4(g, g, g, c.a), amount); }\n\
+         }\n\
+         kernel image.pixelate@1 {\n\
+         \x20   requires { field.read; field.write; }\n\
+         \x20   input source: Image;\n\
+         \x20   param size: Int = 8;\n\
+         \x20   output result: Image;\n\
+         \x20   compute { let block = float(max(size, 1)); return fetch(source, floor(coord() / block) * block); }\n\
+         }\n",
+    ),
+];
+
+/// A tally counting evaluations, its state fed back through the graph.
+const TALLY: &[(&str, &str)] = &[
+    (
+        "scene.osn",
+        "use \"kernels/\";\n\
+         node seed: tally.zero@1 { domain = 1; }\n\
+         node count: tally.step@1 { previous <~ count.result from seed.result; }\n\
+         output result <- count.result;\n",
+    ),
+    (
+        "kernels/tally.orla",
+        "struct Tally { count: Int; }\n\
+         \n\
+         kernel tally.zero@1 {\n\
+         \x20   requires { field.write; }\n\
+         \x20   output result: Rows<Tally>;\n\
+         \x20   compute { return Tally { count: 0 }; }\n\
+         }\n\
+         \n\
+         kernel tally.step@1 {\n\
+         \x20   requires { field.read; field.write; }\n\
+         \x20   input previous: Rows<Tally>;\n\
+         \x20   output result: Rows<Tally>;\n\
+         \x20   compute {\n\
+         \x20       let t = sample(previous);\n\
+         \x20       return Tally { count: t.count + 1 };\n\
+         \x20   }\n\
+         }\n",
+    ),
+];
+
+/// `files` written into a directory of their own, for the agent to
+/// rewrite; the path of its scene.
+fn scene(name: &str, files: &[(&str, &str)]) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("orla-agent-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let example = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../examples")
-        .join(example);
     std::fs::create_dir_all(dir.join("kernels")).unwrap();
-    for entry in std::fs::read_dir(example.join("kernels"))
-        .unwrap()
-        .flatten()
-    {
-        std::fs::copy(entry.path(), dir.join("kernels").join(entry.file_name())).unwrap();
+    for (path, text) in files {
+        std::fs::write(dir.join(path), text).unwrap();
     }
-    std::fs::copy(example.join("scene.osn"), dir.join("scene.osn")).unwrap();
     dir.join("scene.osn")
 }
 
 #[test]
 fn an_agent_repairs_publishes_composes_and_meets_its_goal() {
-    let scene = scene("grayscale");
+    let scene = scene("grayscale", GRAYSCALE);
     let mut agent = Agent::start(&scene);
 
     // The versions it speaks, and what the scene shows.
@@ -343,7 +402,7 @@ fn widen(fields: &[(String, String)], generation: &str) -> String {
 
 #[test]
 fn an_agent_changes_what_a_running_state_carries_and_keeps_it() {
-    let scene = scene("migrate");
+    let scene = scene("migrate", TALLY);
     let mut agent = Agent::start(&scene);
 
     // The state: a node whose port reads what it committed before.
