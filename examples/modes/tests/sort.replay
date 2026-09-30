@@ -1,4 +1,4 @@
-scene sort.osn
+scene ../parts/sort/scene.osn
 
 # The lower half shows the sorted values as bars: heights rise from left
 # to right, and the color runs from blue (small) to yellow (large). A

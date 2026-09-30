@@ -1,0 +1,43 @@
+// Five pictures of any size in one window: a grid of three columns and
+// two rows, each picture fitted whole into its cell and centred, the
+// sixth cell left empty.
+
+/// The pixel of `picture` under a point of a cell, fitted by its aspect:
+/// `inside` is false in the margin the fit leaves.
+struct Fit { at: Vec2; inside: Bool; }
+
+fn fit(p: Vec2, cell: Vec2, extent: Vec2) -> Fit {
+    let s = min(cell.x / extent.x, cell.y / extent.y);
+    let shown = extent * s;
+    let q = (p - (cell - shown) * 0.5) / s;
+    let inside = q.x >= 0.0 && q.y >= 0.0 && q.x < extent.x && q.y < extent.y;
+    return Fit { at: floor(q), inside: inside };
+}
+
+kernel modes.panels@1 {
+    requires { field.read; field.write; }
+    input reduction: Image;
+    input maps: Image;
+    input outputs: Image;
+    input scatter: Image;
+    input off_frame: Image;
+    param gap: Float = 4.0;
+    output result: Image;
+
+    compute {
+        let cell = domain() / vec2(3.0, 2.0);
+        let c = coord() + vec2(0.5, 0.5);
+        let column = floor(c.x / cell.x);
+        let row = floor(c.y / cell.y);
+        let k = int(row * 3.0 + column);
+        // The cell less a gap on every side, so the panels stand apart.
+        let inner = cell - vec2(gap, gap) * 2.0;
+        let p = c - vec2(column, row) * cell - vec2(gap, gap);
+        let background = vec4(0.02, 0.02, 0.03, 1.0);
+        let e = if k == 0 { size(reduction) } else if k == 1 { size(maps) } else if k == 2 { size(outputs) } else if k == 3 { size(scatter) } else { size(off_frame) };
+        let f = fit(p, inner, vec2(float(e.x), float(e.y)));
+        let a = f.at;
+        let color = if k == 0 { at(reduction, a) } else if k == 1 { at(maps, a) } else if k == 2 { at(outputs, a) } else if k == 3 { at(scatter, a) } else { at(off_frame, a) };
+        return if f.inside && k < 5 { vec4(color.rgb, 1.0) } else { background };
+    }
+}

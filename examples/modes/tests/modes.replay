@@ -1,0 +1,38 @@
+scene ../scene.osn
+
+# The whole: each part placed as a sub-graph, its nodes named under the
+# node that places it, its picture in a panel of a 640 by 400 window.
+window 640 400
+frame 0.0
+
+# The reduction folded every pixel of its 320 by 240 frame into one
+# element; its panel shows the sun's core tone-mapped to about 0.8.
+expect reduction.measure.result[0].count = 76800
+expect 106 72 = 0.792 0.785 0.759 0.03
+
+# The maps sorted the lower bars: a bar halfway along, lit, and the dark
+# over the upper, unsorted bars.
+expect 320 170 = 0.6 0.651 0.6 0.06
+expect 320 60 = 0.059 0.071 0.102 0.03
+
+# Several outputs: the G-buffer's sky at the far plane, the blue sphere lit.
+expect outputs.gbuffer.depth[3200] = 100.0
+expect 530 90 = 0.169 0.338 0.478 0.03
+
+# The scatter: all 256 particles start in one cell, whose glow is far
+# brighter than one.
+expect count scatter.step.result = 256
+expect 106 299 = 34.4 32.74 23.35 0.5
+
+# Off the frame: the first step ran on the frame and its RAM is in the
+# panel; the sixth cell is empty.
+expect off_frame.machine.ram[1020] = 53
+expect 320 300 = 0.204 0.689 0.796 0.03
+expect 530 300 = 0.02 0.02 0.03
+
+# The second step runs on its own thread inside the whole as in the part.
+frame 0.25
+expect off_frame.machine.ram[1020] = 53
+settle
+frame 0.5
+expect off_frame.machine.ram[1020] = 106

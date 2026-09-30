@@ -1,4 +1,4 @@
-scene settle.osn
+scene particles.osn
 
 # The particle starts at the centre and moves less than a pixel in the
 # first step, so the scatter puts its tint in canvas cell (16, 16) and

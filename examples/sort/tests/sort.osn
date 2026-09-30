@@ -1,9 +1,0 @@
-// The scene at time 0.
-use "../kernels/";
-
-node values: sort.values@1 { domain = 160; }
-node rank: sort.rank@1 { values <- values.result; }
-node sorted: sort.gather@1 { values <- values.result; ranks <- rank.result; }
-node view: sort.bars@1 { before <- values.result; after <- sorted.result; domain = vec2(320, 240); }
-
-output result <- view.result;

@@ -1,6 +1,6 @@
 // One particle (element 0 starts moving straight right) under strong
 // gravity, so its path is predictable; the canvas forgets every frame.
-use "../kernels/";
+use "../parts/particles/kernels/";
 
 node seed: particles.seed@1 {
     domain = 1;

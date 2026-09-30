@@ -1,4 +1,4 @@
-scene exposure.osn
+scene ../parts/exposure/scene.osn
 
 # At time 0 the sun sits at the top centre. Auto-exposure pulls the frame
 # to a mean luma of 0.3 before the roll-off, so the sun's core tone-maps

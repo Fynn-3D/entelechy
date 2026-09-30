@@ -4,7 +4,7 @@
 // sweeps a hand over it by the frame's time, so the picture moves while
 // the machine runs. The first step is on the frame, so `view` has RAM
 // to show.
-use "../thumb/kernels/";
+use "kernels/";
 
 param speed: Int = 500000;         // instructions per step, on the thread
 

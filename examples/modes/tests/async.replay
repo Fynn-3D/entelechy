@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../parts/async/scene.osn
 
 # The machine's step is half a million instructions of the Thumb program,
 # which counts its passes into RAM at 0x0FF0 (word 1020). The first step
