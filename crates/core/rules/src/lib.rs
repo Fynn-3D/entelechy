@@ -77,6 +77,16 @@ pub enum ExecutionError {
         /// The invocation's shape.
         actual: Shape,
     },
+    /// A scatter's domain is not its first input's shape, which
+    /// `element()`, `coord()` and `domain()` read.
+    ScatterDomain {
+        /// The first input's name.
+        input: String,
+        /// Its shape.
+        expected: Shape,
+        /// The invocation's shape.
+        actual: Shape,
+    },
     /// A Host call was denied or rejected.
     Abi(AbiError),
     /// The backend device failed; the message is backend specific.
@@ -267,6 +277,14 @@ impl fmt::Display for ExecutionError {
             Self::DomainShape { expected, actual } => {
                 write!(f, "output is a {expected} but the domain is a {actual}")
             }
+            Self::ScatterDomain {
+                input,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "a scatter runs over its first input's shape: `{input}` is a {expected} but the domain is a {actual}; give it a {expected} domain, or declare an input of {actual} first"
+            ),
             Self::Abi(error) => write!(f, "{error}"),
             Self::Device(message) => write!(f, "device failed: {message}"),
             Self::Arithmetic { x, y, error } => write!(f, "at element ({x}, {y}): {error}"),
@@ -761,7 +779,8 @@ pub fn check_invocation(
     if let (Mode::Scatter { .. }, Some(first)) = (manifest.mode, manifest.inputs.first())
         && first.ty.shape != invocation.domain.shape()
     {
-        return Err(ExecutionError::DomainShape {
+        return Err(ExecutionError::ScatterDomain {
+            input: first.name.clone(),
             expected: first.ty.shape,
             actual: invocation.domain.shape(),
         });

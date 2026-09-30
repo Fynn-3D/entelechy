@@ -462,7 +462,7 @@ pub fn forms() -> Vec<Form> {
             "scatter",
             "kernel",
             "scatter into target with sum { return Pair { at: address, value: v }; }",
-            "The scatter mode: the body runs once per element of the node's domain and gives a struct the document declares, of two fields, an address into the target and a value of its element (`struct Pair { at: Int; value: Float; }`); the value is combined into the target at the address with `sum`, `min`, `max` or `last`, in element order.",
+            "The scatter mode: the body runs once per element of the node's domain, which has its first input's shape (`element()` and `coord()` read it), and gives a struct the document declares, of two fields, an address into the target and a value of its element (`struct Pair { at: Int; value: Float; }`); the value is combined into the target at the address with `sum`, `min`, `max` or `last`, in element order.",
         ),
         form(
             "memory",

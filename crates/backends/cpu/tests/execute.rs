@@ -1294,10 +1294,13 @@ fn a_scatter_over_rows_refuses_a_grid_domain() {
     let error = CpuBackend
         .execute(&module, &invocation(Domain::Grid(4, 3)), &mut scope)
         .unwrap_err();
+    // The refusal names the input whose shape the domain must have, not
+    // the output, which is the target's.
     assert!(
-        matches!(error, ExecutionError::DomainShape { .. }),
+        matches!(&error, ExecutionError::ScatterDomain { input, .. } if input == "slots"),
         "{error}"
     );
+    assert!(error.to_string().contains("`slots` is a Rows"), "{error}");
     // Over rows: seven elements.
     let output = CpuBackend
         .execute(&module, &invocation(Domain::Rows(7)), &mut scope)
