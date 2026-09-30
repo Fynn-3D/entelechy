@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../parts/spectrum/scene.osn
 
 # 220 hertz with a second and a third partial: the loudest bin is the
 # second (110 + 2 x 55 = 220), and the bins at 440 and 660 carry the
@@ -6,21 +6,21 @@ scene ../scene.osn
 # same Kernel reads a block of any size.
 window 320 200
 frame 0.0
-expect peak.result[0].bin = 2
-expect hertz.result[0] = 220.0 0.001
-expect bins.result[2] = 0.14590 0.0005          # the pitch
-expect bins.result[6] = 0.06118 0.0005          # its second partial
+expect spectrum.peak.result[0].bin = 2
+expect spectrum.hertz.result[0] = 220.0 0.001
+expect spectrum.bins.result[2] = 0.14590 0.0005 # the pitch
+expect spectrum.bins.result[6] = 0.06118 0.0005 # its second partial
 expect 20 100 = 0.070 0.085 0.125 0.01          # the background, above the bars
 expect 300 40 = 0.058 0.070 0.104 0.01
 
 # Half a second on, the voice has moved through its wobble and the
 # pitch is still the loudest thing in it.
 frame 0.5
-expect peak.result[0].bin = 2
+expect spectrum.peak.result[0].bin = 2
 
 # A scene param changes the pitch, and the bin that stands out moves
 # with it: 440 is bin six.
 param pitch 440.0
 frame 1.0
-expect peak.result[0].bin = 6
-expect hertz.result[0] = 440.0 0.001
+expect spectrum.peak.result[0].bin = 6
+expect spectrum.hertz.result[0] = 440.0 0.001

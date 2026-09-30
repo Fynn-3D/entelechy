@@ -1,0 +1,20 @@
+scene ../scene.osn
+
+# The whole: one block of 800 stereo frames, the synth's voice with the
+# spectrum's a fifth above it, and the two pictures side by side.
+window 640 400
+frame 0.0
+expect count mix.result = 800
+expect count synth.mix.result = 800
+expect count spectrum.voice.result = 800
+expect synth.mix.result[400] = -0.2251 -0.2251 0.001 # the synth, in both channels
+expect spectrum.voice.result[400] = -0.2481 0.001 # the fifth above it
+expect mix.result[400] = -0.2297 -0.2297 0.001  # 0.8 x (-0.2251 + 0.25 x -0.2481)
+expect spectrum.peak.result[0].bin = 4          # 110 + 4 x 55 = 330
+expect spectrum.hertz.result[0] = 330.0 0.001
+
+expect 5 5 = 0.05 0.06 0.09                     # the scope's background
+expect 319 200 = 0.0 0.0 0.0                    # the seam
+expect 320 200 = 0.0 0.0 0.0
+expect 620 30 = 0.02 0.02 0.04                  # the spectrum's readout band
+expect 350 390 = 1.0 0.82 0.35                  # the loudest bar, lit

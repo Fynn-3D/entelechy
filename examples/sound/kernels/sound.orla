@@ -1,0 +1,45 @@
+// The two parts as one work: their sounds mixed into one stereo block,
+// their pictures side by side in one window.
+
+type Stereo = Rows<Vec2>;
+type Mono = Rows<Float>;
+
+/// The synth's stereo block with the spectrum's voice laid into the
+/// middle of both channels. The blocks are of one length; the mono voice
+/// is read at the same frame.
+kernel sound.mix@1 {
+    requires { field.read; field.write; }
+    input stereo: Stereo;
+    input mono: Mono;
+    param gain: Float = 0.8;
+    param balance: Float = 0.5;       // how much of the mono voice goes in
+    output result: Stereo;
+    compute {
+        let s = sample(stereo);
+        let m = at(mono, element()) * balance * 0.5;
+        return vec2(s.x + m, s.y + m) * gain;
+    }
+}
+
+/// Two pictures side by side, each stretched over its half of the
+/// domain, with a dark seam between them.
+kernel sound.side@1 {
+    requires { field.read; field.write; }
+    input left: Image;
+    input right: Image;
+    output result: Image;
+    compute {
+        let d = domain();
+        let c = coord();
+        let half = floor(d.x * 0.5);
+        let seam = abs(c.x + 0.5 - half) < 1.0;
+        let color = if seam {
+            vec4(0.0, 0.0, 0.0, 1.0)
+        } else if c.x < half {
+            at(left, (c + vec2(0.5, 0.5)) / vec2(half, d.y) * size(left))
+        } else {
+            at(right, (c - vec2(half, 0.0) + vec2(0.5, 0.5)) / vec2(d.x - half, d.y) * size(right))
+        };
+        return color;
+    }
+}
