@@ -650,7 +650,7 @@ pub(crate) struct Written {
 impl Written {
     /// Where the failure a trace found is written: its value in the
     /// function it failed in (`None` the entry).
-    pub(crate) fn place_of(&self, fault: &orla_cpu::TraceFault) -> Option<crate::SourcePlace> {
+    pub(crate) fn place_of(&self, fault: &crate::TraceFault) -> Option<crate::SourcePlace> {
         let value = fault.value?;
         let places = match &fault.function {
             None => &self.places.entry,
