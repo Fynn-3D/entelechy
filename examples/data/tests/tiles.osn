@@ -1,7 +1,7 @@
 // An 8x6 map at 16 pixels per tile; the spring is the top-left tile.
-use "../kernels/";
+use "../parts/tiles/kernels/";
 
-input atlas: Image = "../assets/atlas.png";
+input atlas: Image = "../parts/tiles/assets/atlas.png";
 
 node map: tiles.generate@1 { domain = vec2(8, 6); source = vec2(0.0, 0.0); }
 node flood: tiles.flood@1 { previous <~ flood.result from map.result; }

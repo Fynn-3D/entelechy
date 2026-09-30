@@ -1,8 +1,0 @@
-// Bakes the atlas the render reads: the sprites are arithmetic in
-// tiles.atlas, and this scene saves them as the file the main scene uses.
-//   orla run examples/tiles/bake.osn --save atlas=examples/tiles/assets/atlas.png
-use "kernels/";
-
-node atlas: tiles.atlas@1 { domain = vec2(64, 16); }
-
-output result <- atlas.result;

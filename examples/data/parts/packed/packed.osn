@@ -1,7 +1,9 @@
+// Every Field as narrow as it holds. The picture and the tile map come
+// from whoever places this graph: `scene.osn` reads them from files.
 use "kernels/";
 
-input albedo: Grid<Vec4 as unorm8> = "albedo.png";
-input tiles: Rows<Int as u8> = bytes "tiles.bin";
+input albedo: Grid<Vec4 as unorm8>;
+input tiles: Rows<Int as u8>;
 
 param turn: Float = 0.0;
 

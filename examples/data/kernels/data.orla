@@ -1,0 +1,40 @@
+// The four parts' pictures in one window: a two by two grid of panels,
+// each picture as large as its panel holds without changing its shape,
+// read pixel by pixel so every panel shows exactly what its part wrote.
+
+/// The picture's pixel under `local`, a point in a panel `extent` wide,
+/// or the background where the picture does not reach.
+fn fit(picture: Image, local: Vec2, extent: Vec2) -> Vec4 {
+    let whole = size(picture);
+    let scale = min(extent.x / whole.x, extent.y / whole.y);
+    let shown = whole * scale;
+    let at_picture = (local - (extent - shown) * 0.5) / scale;
+    let inside = at_picture.x >= 0.0 && at_picture.y >= 0.0 && at_picture.x < whole.x && at_picture.y < whole.y;
+    return if inside { at(picture, floor(at_picture)) } else { vec4(0.03, 0.03, 0.04, 1.0) };
+}
+
+/// Packed top left, precision top right, tiles bottom left, save bottom
+/// right, a border of `gap` pixels around each.
+kernel data.panels@1 {
+    requires { field.read; field.write; }
+    input packed: Image;
+    input precision: Image;
+    input tiles: Image;
+    input save: Image;
+    param gap: Float = 8.0;
+    output result: Image;
+    compute {
+        let half = floor(domain() * 0.5);
+        let c = coord();
+        let right = c.x >= half.x;
+        let lower = c.y >= half.y;
+        let corner = vec2(if right { half.x } else { 0.0 }, if lower { half.y } else { 0.0 });
+        let local = c - corner - vec2(gap, gap);
+        let extent = half - vec2(gap * 2.0, gap * 2.0);
+        return if local.x < 0.0 || local.y < 0.0 || local.x >= extent.x || local.y >= extent.y { vec4(0.03, 0.03, 0.04, 1.0) }
+            else if !right && !lower { fit(packed, local, extent) }
+            else if right && !lower { fit(precision, local, extent) }
+            else if !right { fit(tiles, local, extent) }
+            else { fit(save, local, extent) };
+    }
+}

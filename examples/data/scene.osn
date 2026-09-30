@@ -1,0 +1,28 @@
+// Data and precision: each part's graph placed as a node, their pictures
+// drawn side by side in one window. A placed graph reads no files, so
+// the files the parts' own scenes read are read here and wired in.
+use "kernels/";
+use "parts/save/kernels/";
+
+input albedo: Grid<Vec4 as unorm8> = "parts/packed/albedo.png";
+input tile_numbers: Rows<Int as u8> = bytes "parts/packed/tiles.bin";
+input atlas: Image = "parts/tiles/assets/atlas.png";
+
+// The save part counts from nothing here, and writes nothing: a placed
+// graph's outputs are wired, never written.
+node fresh: save.fresh@1 { domain = 1; }
+
+node packed: graph "parts/packed/packed.osn" { albedo <- albedo; tiles <- tile_numbers; }
+node precision: graph "parts/precision/scene.osn" { }
+node tiles: graph "parts/tiles/tiles.osn" { atlas <- atlas; }
+node save: graph "parts/save/save.osn" { saved <- fresh.result; }
+
+node panels: data.panels@1 {
+    packed <- packed.result;
+    precision <- precision.result;
+    tiles <- tiles.result;
+    save <- save.picture;
+    domain = window();
+}
+
+output result <- panels.result;

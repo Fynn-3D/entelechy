@@ -1,0 +1,13 @@
+// The save part on its own. Whenever the count changes it is written to
+// `saves/tally.field`, and when the scene starts again it is read back
+// from there; with no file yet, the count starts from nothing. Writing
+// needs `--allow file.write=examples/data/parts/save/saves`.
+use "kernels/";
+
+input saved: Rows<Tally> = "saves/tally.field" else fresh.result;
+
+node fresh: save.fresh@1 { domain = 1; }
+node save: graph "save.osn" { saved <- saved; }
+
+output picture <- save.picture;
+output kept <- save.kept to "saves/tally.field";

@@ -1,8 +1,8 @@
-// generate -> flood (fed back) -> render, with the atlas read from a file
-// the Host watches: edit assets/atlas.png and the tiles change.
+// generate -> flood (fed back) -> render. The atlas comes from whoever
+// places this graph: `scene.osn` reads it from a file the Host watches.
 use "kernels/";
 
-input atlas: Image = "assets/atlas.png";
+input atlas: Image;
 
 node map: tiles.generate@1 {
     domain = vec2(20, 15);

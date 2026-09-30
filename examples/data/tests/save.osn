@@ -1,0 +1,12 @@
+// The save part as `parts/save/scene.osn` places it, saving where
+// nothing ever is: a replay allows no writes, so the tally always starts
+// from nothing.
+use "../parts/save/kernels/";
+
+input saved: Rows<Tally> = "never.field" else fresh.result;
+
+node fresh: save.fresh@1 { domain = 1; }
+node save: graph "../parts/save/save.osn" { saved <- saved; }
+
+output picture <- save.picture;
+output kept <- save.kept to "never.field";

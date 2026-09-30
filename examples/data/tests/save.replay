@@ -1,4 +1,4 @@
-scene tally.osn
+scene save.osn
 
 # Cells are 16 pixels, ten to a row; cell n's centre is (16n + 8, 8).
 # Nothing saved: the tally starts empty.

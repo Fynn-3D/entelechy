@@ -1,6 +1,0 @@
-use "kernels/";
-
-// `run --save picture.result=examples/packed/albedo.png` writes the
-// picture the scene reads.
-node picture: packed.albedo@1 { domain = vec2(64, 64); }
-output result <- picture.result;
