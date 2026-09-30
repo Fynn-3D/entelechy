@@ -103,13 +103,13 @@ impl From<ParseError> for DocumentError {
 /// Reads the text of a document at a resolved path.
 pub type Loader<'a> = dyn FnMut(&Path) -> Result<String, String> + 'a;
 
-/// Resolves a document's `use` items, given its directory and its own
-/// functions, to the structs, type aliases and functions every Kernel of
-/// the document sees. The caller reads the files.
+/// Resolves a document's `use` items, given its directory and what it
+/// declares itself, to the structs, type aliases and functions every
+/// Kernel of the document sees. The caller reads the files.
 pub type Declare<'a> = dyn FnMut(
         &Path,
         &[orla_language::Use],
-        &[orla_language::FnDecl],
+        orla_language::Own<'_>,
     ) -> Result<
         (
             Vec<orla_language::StructDecl>,
@@ -374,8 +374,9 @@ fn lower(
     overrides: &BTreeMap<String, Value>,
 ) -> Result<Lowered, DocumentError> {
     let mut document = document.clone();
-    let (structs, types, functions) = declare(base, &document.uses, &document.functions)
-        .map_err(|message| error(Span::default(), message))?;
+    let (structs, types, functions) =
+        declare(base, &document.uses, orla_language::Own::of(&document))
+            .map_err(|message| error(Span::default(), message))?;
     document.inherit(&structs, &types, &functions);
     let document = &document;
     let mut lowering = Lowering {
@@ -1175,7 +1176,7 @@ impl Lowering<'_, '_> {
                     .map_err(|e| error(sub_path.span, format!("{}:{e}", sub_path.value)))?;
                 let sub_base = resolved.parent().unwrap_or_else(|| Path::new("."));
                 let (structs, types, functions) =
-                    (self.declare)(sub_base, &document.uses, &document.functions)
+                    (self.declare)(sub_base, &document.uses, orla_language::Own::of(&document))
                         .map_err(|m| error(sub_path.span, format!("{}: {m}", sub_path.value)))?;
                 document.inherit(&structs, &types, &functions);
                 let read = std::rc::Rc::new(Read {

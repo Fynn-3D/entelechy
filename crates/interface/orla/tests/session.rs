@@ -668,7 +668,7 @@ fn a_background_republish_keeps_the_running_kernel_until_the_worker_is_done() {
 }
 
 #[test]
-fn libraries_share_declarations_through_use_and_refuse_conflicts() {
+fn libraries_share_declarations_through_use_and_keep_their_own() {
     let dir = std::env::temp_dir().join(format!("orla-shared-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("lib")).unwrap();
@@ -695,19 +695,30 @@ fn libraries_share_declarations_through_use_and_refuse_conflicts() {
     let pixel = session.read_pixel(report.output, 3, 0).unwrap();
     assert_eq!(pixel, [0.75, 1.0, 0.0, 1.0]);
 
-    // A second declaration of the struct with other fields is refused.
+    // A second library declares its own `Cell`: each document keeps its
+    // own, and the scene, which names `Cell` only through `Board`, runs
+    // as it did.
     std::fs::write(
         dir.join("lib/other.orla"),
         "struct Cell { kind: Int; }\nkernel t.other@1 { requires { field.write; } output result: Rows<Cell>; compute { return Cell { kind: 0 }; } }\n",
     )
     .unwrap();
     let events = session.sync();
-    assert!(
-        events
-            .iter()
-            .any(|e| e.to_string().contains("declared differently")),
-        "{events:?}"
-    );
+    assert_eq!(rejected(&events), Vec::<String>::new(), "{events:?}");
+    let report = session.evaluate(&Context::default()).unwrap();
+    let pixel = session.read_pixel(report.output, 3, 0).unwrap();
+    assert_eq!(pixel, [0.75, 1.0, 0.0, 1.0]);
+
+    // A Kernel of the scene that names `Cell` itself reaches two, and is
+    // refused, naming both.
+    std::fs::write(
+        dir.join("scene.osn"),
+        "use \"lib/\";\nnode seed: t.seed@1 { domain = vec2(4, 2); }\nnode show: kernel { requires { field.read; field.write; } input board: Rows<Cell> <- seed.result; output result: Image; compute { let c = sample(board); return vec4(float(c.kind), 0.0, 0.0, 1.0); } }\noutput result <- show.result;\n",
+    )
+    .unwrap();
+    let events = session.sync();
+    let refused = rejected(&events).join("\n");
+    assert!(refused.contains("`Cell` is declared by"), "{refused}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

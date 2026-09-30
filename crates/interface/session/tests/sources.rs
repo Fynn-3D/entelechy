@@ -1,6 +1,6 @@
 //! Declarations shared through `use`: one declaration reached from two
-//! files is one, wherever written; two different ones of a name are
-//! refused.
+//! files is one, wherever written; two different ones of a name are each
+//! their own document's, and a document reaching both refuses the name.
 
 use std::path::PathBuf;
 
@@ -20,6 +20,12 @@ fn uses(text: &str) -> Vec<orla_language::Use> {
     orla_language::parse_document(text).unwrap().uses
 }
 
+const NOTHING: orla_language::Own<'static> = orla_language::Own {
+    functions: &[],
+    structs: &[],
+    types: &[],
+};
+
 #[test]
 fn one_declaration_written_in_two_files_is_one() {
     let dir = scratch(
@@ -37,30 +43,95 @@ fn one_declaration_written_in_two_files_is_one() {
         &orla_session::Disk::default(),
         &dir,
         &uses("use \"a.orla\";\nuse \"b.orla\";"),
-        &[],
+        NOTHING,
     )
     .unwrap();
     assert_eq!(structs.len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Two libraries each declare `Surface` their own way: each keeps its
+/// own, and what uses both sees each under its document's name.
 #[test]
-fn two_declarations_of_one_name_are_refused() {
+fn two_declarations_of_one_name_are_each_their_documents() {
     let dir = scratch(
         "different",
         &[
+            (
+                "a.orla",
+                "struct Surface { depth: Float; id: Int; }\ntype Surfaces = Rows<Surface>;\nfn deep(s: Surface) -> Float { return s.depth; }\n",
+            ),
+            ("b.orla", "struct Surface { depth: Float; }\n"),
+        ],
+    );
+    let (structs, types, functions) = declarations_for(
+        &orla_session::Disk::default(),
+        &dir,
+        &uses("use \"a.orla\";\nuse \"b.orla\";"),
+        NOTHING,
+    )
+    .unwrap();
+    let a = format!(
+        "Surface@{}",
+        dir.canonicalize().unwrap().join("a.orla").display()
+    );
+    let b = format!(
+        "Surface@{}",
+        dir.canonicalize().unwrap().join("b.orla").display()
+    );
+    let names: Vec<&str> = structs.iter().map(|d| d.name.value.as_str()).collect();
+    assert_eq!(names, [a.as_str(), b.as_str()]);
+    assert_eq!(types[0].target.value, format!("Rows<{a}>"));
+    assert_eq!(functions[0].args[0].1.value, a);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A document that uses both and names `Surface` is refused, naming
+/// both; one that declares `Surface` itself has its own.
+#[test]
+fn a_name_two_used_documents_declare_is_refused_where_named() {
+    let dir = scratch(
+        "named",
+        &[
             ("a.orla", "struct Surface { depth: Float; id: Int; }\n"),
             ("b.orla", "struct Surface { depth: Float; }\n"),
+            (
+                "c.orla",
+                "use \"a.orla\";\nuse \"b.orla\";\nfn flat(s: Surface) -> Float { return s.depth; }\n",
+            ),
         ],
     );
     let error = declarations_for(
         &orla_session::Disk::default(),
         &dir,
-        &uses("use \"a.orla\";\nuse \"b.orla\";"),
-        &[],
+        &uses("use \"c.orla\";"),
+        NOTHING,
     )
     .unwrap_err();
-    assert!(error.contains("declared differently"), "{error}");
+    assert!(
+        error.contains("`Surface` is declared differently by"),
+        "{error}"
+    );
+    assert!(
+        error.contains("a.orla") && error.contains("b.orla"),
+        "{error}"
+    );
+
+    let own = orla_language::parse_document("struct Surface { id: Int; }\n").unwrap();
+    let (structs, _, _) = declarations_for(
+        &orla_session::Disk::default(),
+        &dir,
+        &uses("use \"a.orla\";"),
+        orla_language::Own::of(&own),
+    )
+    .unwrap();
+    assert_eq!(
+        structs[0].name.value,
+        format!(
+            "Surface@{}",
+            dir.canonicalize().unwrap().join("a.orla").display()
+        )
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

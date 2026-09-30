@@ -57,7 +57,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         .unwrap_or("scene");
     let base = path.parent().unwrap_or_else(|| Path::new("."));
     let mut loader = |path: &Path| read_document(store, path);
-    let mut declare = |base: &Path, uses: &[orla_language::Use], own: &[orla_language::FnDecl]| {
+    let mut declare = |base: &Path, uses: &[orla_language::Use], own: orla_language::Own<'_>| {
         declarations_for(store, base, uses, own)
     };
     let lowered =
@@ -69,9 +69,12 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
             }
         };
     let mut document = document;
-    if let Ok((structs, types, functions)) =
-        declarations_for(store, base, &document.uses, &document.functions)
-    {
+    if let Ok((structs, types, functions)) = declarations_for(
+        store,
+        base,
+        &document.uses,
+        orla_language::Own::of(&document),
+    ) {
         if let Err(error) =
             orla_compiler::check_functions(&document, (&structs, &types, &functions))
         {
@@ -141,7 +144,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                     Some(path),
                     dir,
                     &used_document.uses,
-                    &used_document.functions,
+                    orla_language::Own::of(&used_document),
                 ) {
                     Ok((structs, types, functions)) => {
                         if let Err(error) = orla_compiler::check_functions(

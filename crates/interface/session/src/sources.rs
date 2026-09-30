@@ -378,34 +378,95 @@ pub fn used_documents(
     Ok(out)
 }
 
-/// The declarations a document's `use` items bring in, recursively. An
-/// identical struct or type reached twice is one; conflicting ones are
-/// refused. Functions are scoped by document: a call reaches the
-/// function its own document declares, or else the one function of that
-/// name in the documents it uses. `own` are the functions of the document
-/// that uses; a function it sees by a name keeps the name, and any other
-/// of that name is renamed `name@path` (see [`scoped`]).
+/// The declarations a document's `use` items bring in, recursively.
+/// Functions, structs and types are scoped by document: a name reaches
+/// what its own document declares, or else the one declaration of that
+/// name in the documents it uses (an identical struct or type declared
+/// by several is one). `own` is what the document that uses declares
+/// itself; each declaration it sees by a name keeps the name, and any
+/// other of that name is renamed `name@path` (see [`scoped`] and
+/// [`scoped_types`]), each gathered declaration naming what its own
+/// document sees.
 pub fn declarations_for(
     store: &dyn Store,
     base: &Path,
     uses: &[orla_language::Use],
-    own: &[orla_language::FnDecl],
+    own: orla_language::Own<'_>,
 ) -> Result<Declarations, String> {
     declarations_within(store, None, base, uses, own)
 }
 
-/// Where each gathered declaration is, by name.
-#[derive(Default)]
-struct Named {
-    structs: std::collections::HashMap<String, usize>,
-    types: std::collections::HashMap<String, usize>,
+/// A struct or a type a document declares.
+#[derive(Clone)]
+enum Declared {
+    Struct(orla_language::StructDecl),
+    Type(orla_language::TypeAlias),
+}
+
+impl Declared {
+    fn name(&self) -> &str {
+        match self {
+            Declared::Struct(d) => &d.name.value,
+            Declared::Type(d) => &d.name.value,
+        }
+    }
+
+    /// Whether `other` declares the same: a struct with the same fields in
+    /// the same order, or a type of the same target.
+    fn same(&self, other: &Declared) -> bool {
+        match (self, other) {
+            (Declared::Struct(a), Declared::Struct(b)) => a
+                .fields
+                .iter()
+                .map(|(name, ty)| (&name.value, &ty.value))
+                .eq(b.fields.iter().map(|(name, ty)| (&name.value, &ty.value))),
+            (Declared::Type(a), Declared::Type(b)) => a.target.value == b.target.value,
+            _ => false,
+        }
+    }
+
+    /// This declaration named `name`, each struct or type named in it that
+    /// `rename` maps written by the new name.
+    fn renamed(&self, name: String, rename: &dyn Fn(&str) -> Option<String>) -> Declared {
+        let retype = |ty: &orla_language::Spanned<String>| orla_language::Spanned {
+            value: orla_language::renamed_type(&ty.value, rename),
+            span: ty.span,
+        };
+        match self {
+            Declared::Struct(d) => Declared::Struct(orla_language::StructDecl {
+                name: orla_language::Spanned {
+                    value: name,
+                    span: d.name.span,
+                },
+                fields: d
+                    .fields
+                    .iter()
+                    .map(|(field, ty)| (field.clone(), retype(ty)))
+                    .collect(),
+            }),
+            // An enum's variants name no type.
+            Declared::Type(d) => Declared::Type(orla_language::TypeAlias {
+                name: orla_language::Spanned {
+                    value: name,
+                    span: d.name.span,
+                },
+                target: if d.variants().is_some() {
+                    d.target.clone()
+                } else {
+                    retype(&d.target)
+                },
+            }),
+        }
+    }
 }
 
 /// What a walk of the `use` items gathers: each document's functions,
-/// dependencies first, and the documents each one uses directly.
+/// dependencies first; each distinct struct or type, with every document
+/// that declares it; and the documents each one uses directly.
 #[derive(Default)]
 struct Reach {
     functions: Vec<(orla_language::FnDecl, PathBuf)>,
+    declared: Vec<(Declared, Vec<PathBuf>)>,
     uses: std::collections::HashMap<PathBuf, Vec<PathBuf>>,
 }
 
@@ -416,20 +477,16 @@ pub fn declarations_within(
     origin: Option<&Path>,
     base: &Path,
     uses: &[orla_language::Use],
-    own: &[orla_language::FnDecl],
+    own: orla_language::Own<'_>,
 ) -> Result<Declarations, String> {
     /// The documents `uses` names directly, after walking each one.
-    #[allow(clippy::too_many_arguments)]
     fn gather(
         store: &dyn Store,
         base: &Path,
         uses: &[orla_language::Use],
         visited: &mut std::collections::BTreeSet<PathBuf>,
         stack: &mut Vec<PathBuf>,
-        structs: &mut Vec<(orla_language::StructDecl, PathBuf)>,
-        types: &mut Vec<(orla_language::TypeAlias, PathBuf)>,
         reach: &mut Reach,
-        named: &mut Named,
     ) -> Result<Vec<PathBuf>, String> {
         let mut direct = Vec::new();
         for item in uses {
@@ -468,63 +525,29 @@ pub fn declarations_within(
                     .parent()
                     .unwrap_or_else(|| Path::new("."))
                     .to_path_buf();
-                let nested = gather(
-                    store,
-                    &dir,
-                    &document.uses,
-                    visited,
-                    stack,
-                    structs,
-                    types,
-                    reach,
-                    named,
-                );
+                let nested = gather(store, &dir, &document.uses, visited, stack, reach);
                 stack.pop();
                 reach.uses.insert(file.clone(), nested?);
                 for decl in &document.functions {
                     reach.functions.push((decl.clone(), file.clone()));
                 }
-                for decl in &document.structs {
-                    match named.structs.get(&decl.name.value).map(|at| &structs[*at]) {
-                        // Same fields in the same order: one declaration.
-                        Some((same, _))
-                            if same
-                                .fields
-                                .iter()
-                                .map(|(name, ty)| (&name.value, &ty.value))
-                                .eq(decl
-                                    .fields
-                                    .iter()
-                                    .map(|(name, ty)| (&name.value, &ty.value))) => {}
-                        Some((_, other)) => {
-                            return Err(format!(
-                                "struct `{}` is declared differently by {} and {}",
-                                decl.name.value,
-                                other.display(),
-                                file.display()
-                            ));
+                let declared = document
+                    .structs
+                    .iter()
+                    .map(|d| Declared::Struct(d.clone()))
+                    .chain(document.types.iter().map(|d| Declared::Type(d.clone())));
+                for decl in declared {
+                    match reach
+                        .declared
+                        .iter_mut()
+                        .find(|(d, _)| d.name() == decl.name() && d.same(&decl))
+                    {
+                        Some((_, files)) => {
+                            if !files.contains(&file) {
+                                files.push(file.clone());
+                            }
                         }
-                        None => {
-                            named.structs.insert(decl.name.value.clone(), structs.len());
-                            structs.push((decl.clone(), file.clone()));
-                        }
-                    }
-                }
-                for decl in &document.types {
-                    match named.types.get(&decl.name.value).map(|at| &types[*at]) {
-                        Some((same, _)) if same.target.value == decl.target.value => {}
-                        Some((_, other)) => {
-                            return Err(format!(
-                                "type `{}` is declared differently by {} and {}",
-                                decl.name.value,
-                                other.display(),
-                                file.display()
-                            ));
-                        }
-                        None => {
-                            named.types.insert(decl.name.value.clone(), types.len());
-                            types.push((decl.clone(), file.clone()));
-                        }
+                        None => reach.declared.push((decl, vec![file.clone()])),
                     }
                 }
             }
@@ -535,23 +558,167 @@ pub fn declarations_within(
     let mut stack: Vec<PathBuf> = origin
         .map(|path| vec![store.canonical(path).unwrap_or_else(|_| path.to_path_buf())])
         .unwrap_or_default();
-    let (mut structs, mut types, mut reach) = (Vec::new(), Vec::new(), Reach::default());
-    let direct = gather(
-        store,
-        base,
-        uses,
-        &mut visited,
-        &mut stack,
-        &mut structs,
-        &mut types,
-        &mut reach,
-        &mut Named::default(),
-    )?;
-    Ok((
-        structs.into_iter().map(|(s, _)| s).collect(),
-        types.into_iter().map(|(t, _)| t).collect(),
-        scoped(&reach, &direct, own)?,
-    ))
+    let mut reach = Reach::default();
+    let direct = gather(store, base, uses, &mut visited, &mut stack, &mut reach)?;
+    let (structs, types) = scoped_types(&mut reach, &direct, own)?;
+    Ok((structs, types, scoped(&reach, &direct, own.functions)?))
+}
+
+/// The documents `from` reaches through `use`, recursively.
+fn closure<'a>(
+    from: &'a [PathBuf],
+    uses: &'a std::collections::HashMap<PathBuf, Vec<PathBuf>>,
+    out: &mut std::collections::BTreeSet<&'a Path>,
+) {
+    for file in from {
+        if out.insert(file) {
+            closure(uses.get(file).map_or(&[][..], Vec::as_slice), uses, out);
+        }
+    }
+}
+
+/// The gathered structs and types, each under one name in the using
+/// document's reach, as [`scoped`] names functions: a name two distinct
+/// declarations share, or one the using document declares itself, is
+/// the using document's own, or else the one it reaches; every other
+/// declaration of it is renamed `name@path`. Each gathered declaration,
+/// and each gathered function, then names the structs and types its own
+/// document sees. A name a document reaches two declarations of, and
+/// declares neither, is refused where that document names it.
+fn scoped_types(
+    reach: &mut Reach,
+    direct: &[PathBuf],
+    own: orla_language::Own<'_>,
+) -> Result<
+    (
+        Vec<orla_language::StructDecl>,
+        Vec<orla_language::TypeAlias>,
+    ),
+    String,
+> {
+    use std::collections::{BTreeSet, HashMap};
+    let named = |name: &str| {
+        reach
+            .declared
+            .iter()
+            .filter(|(d, _)| d.name() == name)
+            .count()
+    };
+    let clashing = |name: &str| named(name) > 1 || own.declares_type(name);
+    let split = |declared: Vec<Declared>| {
+        let mut structs = Vec::new();
+        let mut types = Vec::new();
+        for decl in declared {
+            match decl {
+                Declared::Struct(d) => structs.push(d),
+                Declared::Type(d) => types.push(d),
+            }
+        }
+        (structs, types)
+    };
+    // Nothing declared twice and nothing the using document declares:
+    // every name is plain, as written.
+    if !reach.declared.iter().any(|(d, _)| clashing(d.name())) {
+        return Ok(split(
+            reach.declared.iter().map(|(d, _)| d.clone()).collect(),
+        ));
+    }
+    let mut top = BTreeSet::new();
+    closure(direct, &reach.uses, &mut top);
+    let reached_from = |file: &Path| {
+        let mut reached = BTreeSet::new();
+        closure(
+            reach.uses.get(file).map_or(&[][..], Vec::as_slice),
+            &reach.uses,
+            &mut reached,
+        );
+        reached
+    };
+    let declared = &reach.declared;
+    // The declarations of `name` a set of documents reaches.
+    let reaching = |name: &str, reached: &BTreeSet<&Path>| -> Vec<usize> {
+        (0..declared.len())
+            .filter(|&i| {
+                declared[i].0.name() == name
+                    && declared[i]
+                        .1
+                        .iter()
+                        .any(|file| reached.contains(file.as_path()))
+            })
+            .collect()
+    };
+    let plain = |i: usize| {
+        let name = declared[i].0.name();
+        !own.declares_type(name) && reaching(name, &top) == [i]
+    };
+    let out_name = |i: usize| {
+        let name = declared[i].0.name();
+        if plain(i) {
+            name.to_owned()
+        } else {
+            scoped_name(name, &declared[i].1[0])
+        }
+    };
+    // How a document names what it sees: the declaration it makes itself,
+    // or the one it reaches; two it reaches and neither its own is refused.
+    let mut refused: Option<String> = None;
+    let mut reaches: HashMap<PathBuf, BTreeSet<&Path>> = HashMap::new();
+    let mut view = |file: &Path, name: &str, refused: &mut Option<String>| -> Option<String> {
+        if !clashing(name) {
+            return None;
+        }
+        let target = match (0..declared.len())
+            .find(|&i| declared[i].0.name() == name && declared[i].1.iter().any(|f| f == file))
+        {
+            Some(i) => i,
+            None => {
+                let reached = reaches
+                    .entry(file.to_path_buf())
+                    .or_insert_with(|| reached_from(file));
+                let found = reaching(name, reached);
+                match found.as_slice() {
+                    [] => return None,
+                    [one] => *one,
+                    many => {
+                        let files: Vec<String> = many
+                            .iter()
+                            .map(|&i| declared[i].1[0].display().to_string())
+                            .collect();
+                        refused.get_or_insert_with(|| {
+                            format!(
+                                "`{name}` is declared differently by {}, which {} uses: declare `{name}` in it, or rename one of them",
+                                files.join(" and "),
+                                file.display()
+                            )
+                        });
+                        return None;
+                    }
+                }
+            }
+        };
+        let renamed = out_name(target);
+        (renamed != name).then_some(renamed)
+    };
+    let mut out = Vec::with_capacity(declared.len());
+    for (i, (decl, files)) in declared.iter().enumerate() {
+        let names = std::cell::RefCell::new(|name: &str| view(&files[0], name, &mut refused));
+        let rename = |name: &str| (names.borrow_mut())(name);
+        out.push(decl.renamed(out_name(i), &rename));
+    }
+    let functions: Vec<(orla_language::FnDecl, PathBuf)> = reach
+        .functions
+        .iter()
+        .map(|(decl, file)| {
+            let names = std::cell::RefCell::new(|name: &str| view(file, name, &mut refused));
+            let rename = |name: &str| (names.borrow_mut())(name);
+            (decl.retyped(&rename), file.clone())
+        })
+        .collect();
+    if let Some(refused) = refused {
+        return Err(refused);
+    }
+    reach.functions = functions;
+    Ok(split(out))
 }
 
 /// The name a function of `file` takes where another function of the
@@ -605,17 +772,6 @@ fn scoped(
             .collect());
     }
     // Each document's reach: what it uses, recursively.
-    fn closure<'a>(
-        from: &'a [PathBuf],
-        uses: &'a HashMap<PathBuf, Vec<PathBuf>>,
-        out: &mut BTreeSet<&'a Path>,
-    ) {
-        for file in from {
-            if out.insert(file) {
-                closure(uses.get(file).map_or(&[][..], Vec::as_slice), uses, out);
-            }
-        }
-    }
     let mut top = BTreeSet::new();
     closure(direct, &reach.uses, &mut top);
     // The document a name reaches from `reached`: one declaring it.
@@ -672,9 +828,13 @@ fn scoped(
 }
 
 /// The backticked name a diagnostic reports as not a builtin, struct
-/// or type.
+/// or type, or as an unknown type.
 fn missing_name(message: &str) -> Option<String> {
     let rest = message.rsplit(": ").next().unwrap_or(message);
+    if let Some(unknown) = rest.strip_prefix("unknown type `") {
+        let name = unknown.split('`').next()?;
+        return (!name.is_empty()).then(|| name.to_owned());
+    }
     let name = rest.strip_prefix('`')?.split('`').next()?;
     let says = rest.contains("is not a builtin")
         || rest.contains("is not a struct")
@@ -847,16 +1007,32 @@ pub(crate) fn located(
             .unwrap_or_default()
         })
         .unwrap_or_default();
-    // Two documents this one uses each declare the name: a call reaches
-    // neither.
+    // Two documents this one uses each declare the name: it reaches
+    // neither. A struct or type declared alike by both is one.
+    let kind = |parsed: &Document| {
+        if parsed.functions.iter().any(|f| f.name.value == name) {
+            Some("fn")
+        } else if parsed.structs.iter().any(|d| d.name.value == name) {
+            Some("struct")
+        } else if parsed.types.iter().any(|d| d.name.value == name) {
+            Some("type")
+        } else {
+            None
+        }
+    };
     let declaring: Vec<&PathBuf> = used
         .iter()
         .filter(|path| {
             store
                 .document(path)
-                .is_ok_and(|parsed| parsed.functions.iter().any(|f| f.name.value == name))
+                .is_ok_and(|parsed| kind(&parsed).is_some())
         })
         .collect();
+    let what = declaring
+        .first()
+        .and_then(|path| store.document(path).ok())
+        .and_then(|parsed| kind(&parsed))
+        .unwrap_or("fn");
     if declaring.len() > 1 {
         let base = document.parent().unwrap_or_else(|| Path::new("."));
         let names: Vec<String> = declaring
@@ -865,7 +1041,7 @@ pub(crate) fn located(
             .collect();
         return crate::Diagnostic {
             message: format!(
-                "{}; fn `{name}` is declared by {}, which this document uses, and a call reaches one function by its name: declare `{name}` in this document, or rename one of them",
+                "{}; {what} `{name}` is declared by {}, which this document uses, and a name reaches one declaration: declare `{name}` in this document, or rename one of them",
                 error.message,
                 names.join(" and ")
             ),

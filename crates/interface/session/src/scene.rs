@@ -273,7 +273,7 @@ impl Scene {
         let store = self.store.as_ref();
         let mut loader = |path: &Path| read_document(store, path);
         let mut declare =
-            |base: &Path, uses: &[orla_language::Use], own: &[orla_language::FnDecl]| {
+            |base: &Path, uses: &[orla_language::Use], own: orla_language::Own<'_>| {
                 declarations_for(store, base, uses, own)
             };
         let lowered = orla_scene::load_with_params(
@@ -318,7 +318,7 @@ impl Scene {
             self.store.as_ref(),
             &self.base(),
             &document.uses,
-            &document.functions,
+            orla_language::Own::of(&document),
         )
         .map_err(Diagnostic::new)?;
         functions_checked(
@@ -408,7 +408,7 @@ impl Scene {
             self.store.as_ref(),
             &base,
             &document.uses,
-            &document.functions,
+            orla_language::Own::of(&document),
         ) {
             Ok((structs, types, functions)) => {
                 if let Err(error) = functions_checked(
@@ -497,9 +497,13 @@ impl Scene {
                     .ok()
                     .and_then(|text| orla_language::parse_document(&text).ok())
                     .and_then(|doc| {
-                        let (s, t, f) =
-                            declarations_for(self.store.as_ref(), &dir, &doc.uses, &doc.functions)
-                                .ok()?;
+                        let (s, t, f) = declarations_for(
+                            self.store.as_ref(),
+                            &dir,
+                            &doc.uses,
+                            orla_language::Own::of(&doc),
+                        )
+                        .ok()?;
                         // Its own declarations beside what it uses.
                         let s: Vec<_> = s.into_iter().chain(doc.structs).collect();
                         let t: Vec<_> = t.into_iter().chain(doc.types).collect();
@@ -762,7 +766,7 @@ impl Scene {
                 Some(&path),
                 &dir,
                 &document.uses,
-                &document.functions,
+                orla_language::Own::of(&document),
             ) {
                 Ok((structs, types, functions)) => {
                     let used = used_documents(self.store.as_ref(), &dir, &document.uses)
@@ -885,7 +889,7 @@ impl Scene {
                 self.store.as_ref(),
                 base,
                 &document.uses,
-                &document.functions,
+                orla_language::Own::of(&document),
             )
             .map_err(Diagnostic::new)?
         };

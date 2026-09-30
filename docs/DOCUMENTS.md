@@ -373,14 +373,15 @@ A struct, `type` or `fn` at the top of a document is shared by every
 Kernel in it and in every document that `use`s it. A `.orla` file may
 `use` other `.orla` files or directories: their top-level declarations,
 and what they use, come before the file's own. A scene's `use` brings
-them to its inline Kernels. The same struct or `type` reached twice is
-one; two different declarations of one name are refused, naming both
-files. A function is scoped by its document: a call reaches the
-document's own function of that name, or else the one function of that
-name in the documents it reaches through `use`, so two libraries may
-each keep a helper of one name. A call two used documents both answer
-is refused, naming both. Two documents that `use` each other are refused
-by name. A name a Kernel
+them to its inline Kernels. A function, a struct and a `type` are
+scoped by their document: a name reaches the document's own declaration
+of it, or else the one declaration of it in the documents it reaches
+through `use`, so two libraries may each keep a helper or a struct of
+one name, and an application may name its own as a package it uses
+does. The same struct or `type` declared alike in two documents is one.
+A name two used documents answer differently is refused where it is
+named, naming both. Two documents that `use` each other are refused by
+name. A name a Kernel
 cannot find is looked for beside it and beside the scene, and the
 diagnostic names the declaring document and the `use` to add.
 

@@ -59,6 +59,7 @@ use std::ops::Range;
 
 pub use orla_abi::names::{did_you_mean, edit_distance, nearest, suggestion};
 pub use parser::{RESERVED, outline, parse, parse_document, parse_literal};
+pub use rename::renamed_type;
 
 /// The version of the Kernel language and the document format.
 pub const LANGUAGE_VERSION: u32 = 1;
@@ -269,6 +270,35 @@ impl Document {
                 prepend(kernel);
             }
         }
+    }
+}
+
+/// What a document declares itself, which a name it uses reaches before
+/// any used document's declaration of the name.
+#[derive(Clone, Copy, Debug)]
+pub struct Own<'a> {
+    /// Its functions.
+    pub functions: &'a [FnDecl],
+    /// Its structs.
+    pub structs: &'a [StructDecl],
+    /// Its types.
+    pub types: &'a [TypeAlias],
+}
+
+impl<'a> Own<'a> {
+    /// What `document` declares itself.
+    pub fn of(document: &'a Document) -> Self {
+        Self {
+            functions: &document.functions,
+            structs: &document.structs,
+            types: &document.types,
+        }
+    }
+
+    /// Whether it declares a struct or a type named `name`.
+    pub fn declares_type(&self, name: &str) -> bool {
+        self.structs.iter().any(|d| d.name.value == name)
+            || self.types.iter().any(|d| d.name.value == name)
     }
 }
 

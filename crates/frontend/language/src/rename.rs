@@ -1,16 +1,32 @@
-//! A function's calls renamed: how a document's functions keep calling
-//! the functions they see when another document in the same reach
-//! declares the same name.
+//! Names renamed: how a document's functions keep calling the functions
+//! they see, and naming the structs and types they see, when another
+//! document in the same reach declares the same name.
 
 use crate::{Block, Expr, ExprKind, FnDecl, MatchArm, Spanned};
+
+/// What a rename maps: a function's name when it is called, or a struct's
+/// or type's name wherever a type is named.
+#[derive(Clone, Copy)]
+struct Renames<'a> {
+    call: &'a dyn Fn(&str) -> Option<String>,
+    ty: &'a dyn Fn(&str) -> Option<String>,
+}
+
+fn keep(_: &str) -> Option<String> {
+    None
+}
 
 impl FnDecl {
     /// This function named `name`, each call in its body to a name
     /// `rename` maps called by the new name instead. The body is shared
     /// when nothing in it changes.
     pub fn renamed(&self, name: String, rename: &dyn Fn(&str) -> Option<String>) -> FnDecl {
-        let body = if block_calls(&self.body, rename) {
-            std::sync::Arc::new(block(&self.body, rename))
+        let renames = Renames {
+            call: rename,
+            ty: &keep,
+        };
+        let body = if block_names(&self.body, renames) {
+            std::sync::Arc::new(block(&self.body, renames))
         } else {
             self.body.clone()
         };
@@ -23,32 +39,92 @@ impl FnDecl {
             ..self.clone()
         }
     }
+
+    /// This function with each struct or type name `rename` maps, in its
+    /// signature and its body (a struct built, an enum's variant), named
+    /// by the new name instead. The body is shared when nothing in it
+    /// changes.
+    pub fn retyped(&self, rename: &dyn Fn(&str) -> Option<String>) -> FnDecl {
+        let renames = Renames {
+            call: &keep,
+            ty: rename,
+        };
+        let body = if block_names(&self.body, renames) {
+            std::sync::Arc::new(block(&self.body, renames))
+        } else {
+            self.body.clone()
+        };
+        let retype = |ty: &Spanned<String>| Spanned {
+            value: renamed_type(&ty.value, rename),
+            span: ty.span,
+        };
+        FnDecl {
+            args: self
+                .args
+                .iter()
+                .map(|(name, ty)| (name.clone(), retype(ty)))
+                .collect(),
+            ret: retype(&self.ret),
+            body,
+            ..self.clone()
+        }
+    }
 }
 
-/// Whether a block calls any name `rename` maps.
-fn block_calls(block: &Block, rename: &dyn Fn(&str) -> Option<String>) -> bool {
+/// A type as written, `Rows<Ray>` or `[Ray; 4]`, with each name in it
+/// that `rename` maps written by the new name instead.
+pub fn renamed_type(ty: &str, rename: &dyn Fn(&str) -> Option<String>) -> String {
+    let mut out = String::with_capacity(ty.len());
+    let mut word = String::new();
+    let flush = |word: &mut String, out: &mut String| {
+        if !word.is_empty() {
+            match rename(word) {
+                Some(new) => out.push_str(&new),
+                None => out.push_str(word),
+            }
+            word.clear();
+        }
+    };
+    for c in ty.chars() {
+        if c.is_alphanumeric() || c == '_' {
+            word.push(c);
+        } else {
+            flush(&mut word, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut word, &mut out);
+    out
+}
+
+/// Whether a block names anything `renames` maps: a call, a struct built,
+/// or an enum named.
+fn block_names(block: &Block, renames: Renames<'_>) -> bool {
     let mut found = false;
-    visit_block(block, &mut |name| found |= rename(name).is_some());
+    visit_block(block, &mut |name, called| {
+        let rename = if called { renames.call } else { renames.ty };
+        found |= rename(name).is_some();
+    });
     found
 }
 
-fn visit_block(block: &Block, seen: &mut dyn FnMut(&str)) {
+fn visit_block(block: &Block, seen: &mut dyn FnMut(&str, bool)) {
     for (_, value) in &block.lets {
         visit(value, seen);
     }
     visit(&block.result, seen);
 }
 
-fn visit(expr: &Expr, seen: &mut dyn FnMut(&str)) {
+fn visit(expr: &Expr, seen: &mut dyn FnMut(&str, bool)) {
     match &expr.kind {
         ExprKind::Float(_)
         | ExprKind::Int(_)
         | ExprKind::Double(_)
         | ExprKind::Long(_)
-        | ExprKind::Bool(_)
-        | ExprKind::Name(_) => {}
+        | ExprKind::Bool(_) => {}
+        ExprKind::Name(name) => seen(name, false),
         ExprKind::Call(name, args) => {
-            seen(name);
+            seen(name, true);
             args.iter().for_each(|arg| visit(arg, seen));
         }
         ExprKind::Member(inner, _)
@@ -62,7 +138,8 @@ fn visit(expr: &Expr, seen: &mut dyn FnMut(&str)) {
             visit(array, seen);
             visit(index, seen);
         }
-        ExprKind::Struct { base, fields, .. } => {
+        ExprKind::Struct { name, base, fields } => {
+            seen(&name.value, false);
             if let Some(base) = base {
                 visit(base, seen);
             }
@@ -106,7 +183,7 @@ fn visit(expr: &Expr, seen: &mut dyn FnMut(&str)) {
     }
 }
 
-fn block(block_: &Block, rename: &dyn Fn(&str) -> Option<String>) -> Block {
+fn block(block_: &Block, rename: Renames<'_>) -> Block {
     Block {
         lets: block_
             .lets
@@ -117,14 +194,14 @@ fn block(block_: &Block, rename: &dyn Fn(&str) -> Option<String>) -> Block {
     }
 }
 
-fn boxed(inner: &Expr, rename: &dyn Fn(&str) -> Option<String>) -> Box<Expr> {
+fn boxed(inner: &Expr, rename: Renames<'_>) -> Box<Expr> {
     Box::new(expr(inner, rename))
 }
 
-fn expr(e: &Expr, rename: &dyn Fn(&str) -> Option<String>) -> Expr {
+fn expr(e: &Expr, rename: Renames<'_>) -> Expr {
     let kind = match &e.kind {
         ExprKind::Call(name, args) => ExprKind::Call(
-            rename(name).unwrap_or_else(|| name.clone()),
+            (rename.call)(name).unwrap_or_else(|| name.clone()),
             args.iter().map(|arg| expr(arg, rename)).collect(),
         ),
         ExprKind::Member(inner, field) => ExprKind::Member(boxed(inner, rename), field.clone()),
@@ -139,7 +216,10 @@ fn expr(e: &Expr, rename: &dyn Fn(&str) -> Option<String>) -> Expr {
         }
         ExprKind::Binary(op, a, b) => ExprKind::Binary(*op, boxed(a, rename), boxed(b, rename)),
         ExprKind::Struct { name, base, fields } => ExprKind::Struct {
-            name: name.clone(),
+            name: Spanned {
+                value: (rename.ty)(&name.value).unwrap_or_else(|| name.value.clone()),
+                span: name.span,
+            },
             base: base.as_ref().map(|base| boxed(base, rename)),
             fields: fields
                 .iter()
@@ -195,8 +275,9 @@ fn expr(e: &Expr, rename: &dyn Fn(&str) -> Option<String>) -> Expr {
         | ExprKind::Int(_)
         | ExprKind::Double(_)
         | ExprKind::Long(_)
-        | ExprKind::Bool(_)
-        | ExprKind::Name(_) => e.kind.clone(),
+        | ExprKind::Bool(_) => e.kind.clone(),
+        // A name a rename maps is an enum's, as in `Mat.Air`.
+        ExprKind::Name(name) => ExprKind::Name((rename.ty)(name).unwrap_or_else(|| name.clone())),
     };
     Expr { kind, span: e.span }
 }
