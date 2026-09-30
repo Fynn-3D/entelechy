@@ -18,7 +18,6 @@ orla run examples/<example>/scene.osn --out output.ppm --watch
 ## Language and execution modes
 
 - [grayscale](grayscale/README.md): a gradient through grayscale and pixelate Kernels; the first proof.
-- [material-ball](material-ball/README.md): a lit, tone-mapped sphere, both Kernels inline in one file.
 - [life](life/README.md): Conway's Life on a `Grid<Cell>` through a feedback binding, painted with the pointer.
 - [exposure](exposure/README.md): a `merge` reduction meters a frame's luma; a map tone-maps by it.
 - [sort](sort/README.md): sorting as two bounded-loop map Kernels, rank then gather.
@@ -33,7 +32,6 @@ orla run examples/<example>/scene.osn --out output.ppm --watch
 ## Rendering
 
 - [deferred](deferred/README.md): one Kernel writes color, normal and depth by name; lighting and outline are fused passes over them.
-- [raymarch](raymarch/README.md): a signed-distance scene, tone-mapped by a shared sub-graph with `exposure` as a graph parameter.
 - [volume](volume/README.md): a `Volume<Float>` of cloud density ray-marched into an image.
 - [path](path/README.md): a progressive path tracer; samples and bounces are graph parameters, the running sum is state.
 - [mesh](mesh/README.md): a torus subdivided, projected, rasterized by the raster package and shaded; `native.rasterize@1` is the fast path.
@@ -86,8 +84,6 @@ orla run examples/<example>/scene.osn --out output.ppm --watch
 
 ## Agents, packages and files
 
-- [scanline](scanline/README.md): an agent's recorded session: refused, repaired, published and composed; a test replays it.
-- [migrate](migrate/README.md): an agent changes a running tally's shape and migrates its state.
 - [package](package/README.md): a scene using `pixelfx.orlapkg` and its preset; what `orla pack` carries.
 - [level](level/README.md): a binary level format read by a Kernel from `bytes`.
 - [clip](clip/README.md): an input read frame by frame from a directory with `frames`.

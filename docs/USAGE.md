@@ -208,7 +208,7 @@ measurement ([PROTOCOL](PROTOCOL.md)).
 ## Backends
 
 ```sh
-orla run examples/raymarch/scene.osn --backend gpu --out march.ppm
+orla run examples/showcase/scene.osn --backend gpu --out showcase.ppm
 ```
 
 `run`, `render`, `replay`, `serve`, `trace` and the Player take
@@ -240,7 +240,7 @@ retires.
 ## Player
 
 ```sh
-orla player examples/material-ball/scene.osn
+orla player examples/life/scene.osn
 ```
 
 Opens a scene in a window and keeps it live, watching files as `--watch`

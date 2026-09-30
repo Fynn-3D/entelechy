@@ -1,0 +1,10 @@
+scene ../scene.osn
+
+# The gradient in gray, in blocks of eight: a block's pixels are one
+# gray, the next block's another, lighter toward the far corner.
+frame 0.0
+expect 0 0 = 0.036 0.036 0.036 0.002
+expect 7 7 = 0.036 0.036 0.036 0.002
+expect 8 0 = 0.049 0.049 0.049 0.002
+expect 64 64 = 0.504 0.504 0.504 0.002
+expect 127 127 = 0.913 0.913 0.913 0.002

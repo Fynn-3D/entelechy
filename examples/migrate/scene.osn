@@ -1,8 +1,0 @@
-// A tally counting evaluations, its state fed back through the graph.
-// An agent changes what the tally carries while it runs: see agent.jsonl.
-use "kernels/";
-
-node seed: tally.zero@1 { domain = 1; }
-node count: tally.step@1 { previous <~ count.result from seed.result; }
-
-output result <- count.result;
