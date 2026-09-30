@@ -158,7 +158,15 @@ replays() {
   # Kernels rounding apart, as another device's might, break no replay;
   # one whose checks hold two forms alike says so and is left out.
   printf '%s\n' examples/*/tests/*.replay |
-    xargs -P 4 -n 1 ./target/release/orla replay --backend jit --round-apart
+    xargs -P 4 -n 1 ./target/release/orla replay --backend jit --round-apart || return 1
+  # Every package used in one scene beside every other: none declares a
+  # name another does, as a scene reaches them all in one namespace.
+  local together=target/packages-together
+  mkdir -p "$together"
+  { for package in packages/*.orlapkg; do echo "use \"../../$package\";"; done
+    echo 'node start: Rows<Int> { domain = 3; value = 1; }'
+    echo 'output result <- start.result;'; } > "$together/scene.osn"
+  ./target/release/orla check "$together/scene.osn"
 }
 wasi() {
   cargo build --release -p orla --target wasm32-wasip1 &&

@@ -1,2 +1,2 @@
-{"scene": "examples/life"}
+{"scene": "scenes/life"}
 {"finding": "a node that had not run yet was said to need a pin", "send": {"op": "read", "node": "show"}, "expect": {"ok": false, "says": ["has not run since it was placed"], "not": ["pin it"]}}

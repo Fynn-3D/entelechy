@@ -1,4 +1,4 @@
-{"scene": "examples/life"}
+{"scene": "scenes/life"}
 {"send": {"op": "evaluate", "time": 0.0}}
 {"finding": "a new law for what starts a state changed nothing on screen, and nothing said the state keeps what it committed until reset", "send": {"op": "publish", "source": "kernel life.seed@1 { requires { field.write; } param noise: Float = 0.3; param blinker: Vec2 = vec2(10.0, 10.0); output result: Cells; compute { return Cell { alive: true, age: 0 }; } }"}, "expect": {"ok": true, "at": {"/ok/keeps/0": "life.previous", "/ok/reset/0/op": "reset", "/ok/reset/0/node": "life"}}}
 {"finding": "a Kernel's source called functions and built structs its document declares, which `kernel` did not show", "send": {"op": "kernel", "kernel": "life.step@1"}, "expect": {"has": ["/ok/document"], "says": ["struct Cell"]}}

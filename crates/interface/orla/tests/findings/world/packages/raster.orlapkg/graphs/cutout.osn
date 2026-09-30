@@ -1,0 +1,44 @@
+//! The raster preset with a cutout: as `raster.osn`, except that a
+//! fragment whose alpha in `mask` at its own uv is below `cutout` is not
+//! drawn, so what is behind it shows — leaves, fences, hair. Place it with
+//!   node raster: graph "../../packages/raster.orlapkg/graphs/cutout.osn" {
+//!       vertices <- project.result;
+//!       triangles <- faces.result;
+//!       mask <- leaves;
+//!       cutout = 0.5;
+//!   }
+//! and read `raster.surface` where `native.rasterize@2` gave `surface`.
+use "../kernels/raster.orla";
+
+input vertices: Rows<Corner>;
+input triangles: Rows<Face>;
+input mask: Image;
+param cutout: Float = 0.5;
+param width: Int = 320;
+param height: Int = 240;
+
+// What a pixel holds before anything is drawn on it: the key no
+// fragment gives.
+node empty: Grid<Long> { domain = vec2(width, height); value = 9223372036854775807l; }
+
+// Each triangle's box, found once: every step below reads it.
+node boxes: raster.boxes@1 { triangles <- triangles; vertices <- vertices; canvas <- empty.result; }
+
+// Every triangle covers its own box, one invocation each: the fastest
+// for meshes of small triangles. `tiled` forms of this preset cut a
+// large triangle across many.
+node cover: raster.cover_cutout@3 {
+    triangles <- triangles;
+    vertices <- vertices;
+    boxes <- boxes.result;
+    mask <- mask;
+    keys <- empty.result;
+    cutout = cutout;
+}
+node resolved: raster.resolve@2 {
+    keys <- cover.result;
+    triangles <- triangles;
+    vertices <- vertices;
+}
+
+output surface <- resolved.result;

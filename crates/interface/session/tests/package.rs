@@ -167,38 +167,3 @@ fn a_package_is_what_its_layout_says() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
-
-/// Every package the repository keeps is used in one scene beside every
-/// other: none declares a function, struct or type another declares, as a
-/// scene reaches them all in one namespace.
-#[test]
-fn every_package_is_used_beside_every_other() {
-    let packages = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../packages");
-    let mut names: Vec<String> = std::fs::read_dir(&packages)
-        .unwrap()
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            name.ends_with(".orlapkg").then_some(name)
-        })
-        .collect();
-    names.sort();
-    assert!(names.len() > 1, "{names:?}");
-    let dir = std::env::temp_dir().join(format!("orla-package-all-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let mut text: String = names
-        .iter()
-        .map(|name| format!("use \"{name}\";\n"))
-        .collect();
-    text.push_str(
-        "node start: Rows<Int> { domain = 3; value = 1; }\noutput result <- start.result;\n",
-    );
-    std::fs::write(dir.join("scene.osn"), text).unwrap();
-    let store = Arc::new(orla_session::Disk::with_packages(vec![packages]));
-    let runtime = Session::runtime_for("cpu", orla_session::Limits::default()).unwrap();
-    let mut session = Session::open_in(store, &dir.join("scene.osn"), None, runtime);
-    let events = session.sync_settled();
-    assert!(session.graph().is_some(), "{events:?}");
-    let _ = std::fs::remove_dir_all(&dir);
-}

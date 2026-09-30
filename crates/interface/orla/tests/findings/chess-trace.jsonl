@@ -1,4 +1,4 @@
-{"scene": "examples/life"}
+{"scene": "scenes/life"}
 {"send": {"op": "evaluate", "time": 0.0}}
 {"finding": "before a trace", "send": {"op": "status"}, "expect": {"at": {"/ok/frame": 1}}}
 {"send": {"op": "trace", "node": "life", "at": [5, 5], "pointer": [5, 5], "down": true}, "expect": {"ok": true}}

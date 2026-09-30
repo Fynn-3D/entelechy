@@ -1,0 +1,222 @@
+// A world of chunks, of which a frame places the ones it can see.
+//
+// Nothing here is a renderer: the Kernels decide, and the graph is sized
+// by what they decided. `world.visible` writes one flag per chunk, the
+// compact package turns those into the kept chunk indices and how many,
+// and every node that builds geometry is `domain = value(count) *
+// <per chunk>`. A chunk nobody can see is not skipped — it is never
+// placed.
+struct Camera { x: Float; z: Float; heading: Float; height: Float; }
+struct Point { position: Vec3; normal: Vec3; uv: Vec2; }
+struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }
+struct Tri { a: Int; b: Int; c: Int; }
+struct Surface { depth: Float; normal: Vec3; uv: Vec2; id: Int; }
+
+// The height of the world at a point, the one function the ground and
+// the camera both read.
+fn ground_at(x: Float, z: Float) -> Float {
+    // Down to a wavelength of about a dozen vertices, so the mesh a
+    // chunk carries is a mesh that shows: a world of ten million
+    // triangles none of which you could see would prove nothing.
+    return sin(x * 5.0) * cos(z * 4.0) * 0.06
+        + sin(x * 13.0 + z * 9.0) * 0.018
+        + sin(x * 31.0 - z * 27.0) * 0.005
+        + sin(x * 173.0 + z * 149.0) * 0.0016
+        + sin(x * 491.0 - z * 443.0) * 0.00045;
+}
+
+kernel world.start@1 {
+    requires { field.write; }
+    output result: Rows<Camera>;
+    // The middle of the world, whatever size it is, so the same scene
+    // starts somewhere sensible at any `cols`.
+    compute { return Camera { x: 0.0, z: 0.0, heading: 0.0, height: 0.0 }; }
+}
+
+/// The camera walks forward and turns, wrapping in the world's square.
+/// A hand on it steers: the left stick, or the arrow keys, which is what
+/// the Player presses the stick as. With no hand it sweeps on its own,
+/// so the scene runs and replays without one.
+kernel world.fly@1 {
+    requires { field.read; field.write; time.read; input.read; }
+    input previous: Rows<Camera>;
+    param speed: Float = 0.004;
+    param turn: Float = 0.035;
+    param cols: Int = 64;
+    param cell: Float = 0.03125;
+    output result: Rows<Camera>;
+
+    fn held(code: Int) -> Float {
+        return if key(code) { 1.0 } else { 0.0 };
+    }
+
+    compute {
+        let span = float(cols) * cell;
+        let half = span * 0.5;
+        let was = at(previous, 0);
+        let pad = stick(0);
+        let keys = vec2(held(39) - held(37), held(38) - held(40));
+        let drive = if abs(pad.x) + abs(pad.y) > 0.01 { pad } else { keys };
+        let driven = abs(drive.x) + abs(drive.y) > 0.01;
+        // Steered, the heading is carried and the stick turns it; left
+        // alone, it sweeps, which is what the replay pins.
+        let heading = if driven { was.heading + drive.x * turn } else { sin(time() * 0.23) * 0.9 };
+        let step = if driven { speed * drive.y } else { speed };
+        let x = was.x + sin(heading) * step;
+        let z = was.z + cos(heading) * step;
+        let wrapped_x = x - span * floor((x + half) / span);
+        let wrapped_z = z - span * floor((z + half) / span);
+        return Camera {
+            x: wrapped_x,
+            z: wrapped_z,
+            heading: heading,
+            height: ground_at(wrapped_x, wrapped_z) + 0.12,
+        };
+    }
+}
+
+/// One flag per chunk: is any of it in front of the eye and inside the
+/// two side planes? A sphere around the chunk, which is what a cull test
+/// is before anyone makes it clever.
+kernel world.visible@1 {
+    requires { field.read; field.write; }
+    input camera: Rows<Camera>;
+    param cols: Int = 64;
+    param cell: Float = 0.03125;
+    param reach: Float = 0.9;
+    /// The tangent of the half angle the eye sees sideways, which must
+    /// cover the projection's or the cull cuts inside the picture:
+    /// `aspect / f`, and a little over.
+    param spread: Float = 1.55;
+    /// `false` keeps every chunk: the same scene with the culling turned
+    /// off, so the two pictures can be compared and must be the same.
+    param culling: Bool = true;
+    output result: Rows<Int>;
+
+    compute {
+        if !culling { return 1; }
+        let cam = at(camera, 0);
+        let half = float(cols) * cell * 0.5;
+        let i = element();
+        let cx = (float(i % cols) + 0.5) * cell - half;
+        let cz = (float(i / cols) + 0.5) * cell - half;
+        let radius = cell * 0.75;
+        let forward = vec2(sin(cam.heading), cos(cam.heading));
+        let right = vec2(cos(cam.heading), 0.0 - sin(cam.heading));
+        let away = vec2(cx - cam.x, cz - cam.z);
+        let ahead = dot(away, forward);
+        let aside = abs(dot(away, right));
+        return if ahead > 0.0 - radius && ahead < reach + radius
+            && aside < ahead * spread + radius * 1.5 { 1 } else { 0 };
+    }
+}
+
+/// The vertices of the kept chunks, one element per vertex of one of
+/// them: `domain = max(value(count), 1) * side * side;`.
+kernel world.ground@1 {
+    requires { field.read; field.write; }
+    input kept: Rows<Int>;
+    /// How many chunks were kept. The Kernel does not read it: the
+    /// node's `domain` does, with `value(count)`, and a domain reads a
+    /// port the Kernel declares.
+    input count: Rows<Int>;
+    param cols: Int = 64;
+    param cell: Float = 0.03125;
+    param side: Int = 36;
+    output result: Rows<Point>;
+
+    compute {
+        let per = side * side;
+        let half = float(cols) * cell * 0.5;
+        let i = element();
+        let chunk = at(kept, i / per);
+        let local = i % per;
+        let step = cell / float(side - 1);
+        let x = float(chunk % cols) * cell - half + float(local % side) * step;
+        let z = float(chunk / cols) * cell - half + float(local / side) * step;
+        let e = 0.0005;
+        let h = ground_at(x, z);
+        let n = normalize(vec3(
+            ground_at(x - e, z) - ground_at(x + e, z),
+            2.0 * e,
+            ground_at(x, z - e) - ground_at(x, z + e)));
+        return Point { position: vec3(x, h, z), normal: n, uv: vec2(x, z) };
+    }
+}
+
+/// Two triangles per cell of every kept chunk, indexing that chunk's own
+/// block of vertices. The seams do not crack: neighbouring chunks share
+/// the edge's coordinates, so they compute the same height.
+kernel world.faces@1 {
+    requires { field.read; field.write; }
+    /// How many chunks were kept. The Kernel does not read it: the
+    /// node's `domain` does, with `value(count)`, and a domain reads a
+    /// port the Kernel declares. Which chunks they are does not matter
+    /// here — a triangle indexes its own chunk's block of vertices, and
+    /// the block is the same wherever the chunk was.
+    input count: Rows<Int>;
+    param side: Int = 36;
+    output result: Rows<Tri>;
+
+    compute {
+        let per_chunk = 2 * (side - 1) * (side - 1);
+        let t = element();
+        let base = (t / per_chunk) * side * side;
+        let within = t % per_chunk;
+        let cell = within / 2;
+        let x = cell % (side - 1);
+        let z = cell / (side - 1);
+        let a = base + z * side + x;
+        return if within % 2 == 0 { Tri { a: a, b: a + side, c: a + 1 } }
+            else { Tri { a: a + 1, b: a + side, c: a + side + 1 } };
+    }
+}
+
+kernel world.project@1 {
+    requires { field.read; field.write; }
+    input mesh: Rows<Point>;
+    input camera: Rows<Camera>;
+    param aspect: Float = 1.7778;
+    output result: Rows<Vertex>;
+
+    compute {
+        let cam = at(camera, 0);
+        let v = sample(mesh);
+        let away = vec2(v.position.x - cam.x, v.position.z - cam.z);
+        let forward = vec2(sin(cam.heading), cos(cam.heading));
+        let right = vec2(cos(cam.heading), 0.0 - sin(cam.heading));
+        let view = vec3(dot(away, right), v.position.y - cam.height, dot(away, forward));
+        let f = 1.2;
+        let near = 0.02;
+        let far = 2.0;
+        return Vertex {
+            clip: vec4(view.x * f / aspect, view.y * f,
+                       view.z * far / (far - near) - near * far / (far - near), view.z),
+            normal: v.normal,
+            uv: v.uv,
+        };
+    }
+}
+
+/// The surface lit, and faded out at the reach the cull test used, so
+/// the edge of what was placed is where the world ends rather than a
+/// line of nothing. The distance is the real one: a rasterized surface
+/// carries the world position in its `uv`, and a depth buffer's number
+/// is not a distance.
+kernel world.shade@1 {
+    requires { field.read; field.write; }
+    input surface: Grid<Surface>;
+    input camera: Rows<Camera>;
+    param reach: Float = 0.9;
+    output result: Image;
+
+    compute {
+        let s = sample(surface);
+        let cam = at(camera, 0);
+        let sky = mix(vec3(0.50, 0.62, 0.78), vec3(0.14, 0.20, 0.34), coord().y / domain().y);
+        let lit = max(dot(normalize(s.normal), normalize(vec3(0.4, 0.75, 0.5))), 0.0);
+        let away = clamp(length(s.uv - vec2(cam.x, cam.z)) / reach, 0.0, 1.0);
+        let ground = mix(vec3(0.30, 0.40, 0.24) * (0.25 + 0.75 * lit), sky, away * away * away);
+        return vec4(if s.id < 0 { sky } else { ground }, 1.0);
+    }
+}

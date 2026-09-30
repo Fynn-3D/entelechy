@@ -1,0 +1,24 @@
+//! Filters a row, stream compaction: flags in (non-zero keeps an
+//! element), the kept elements' indices gathered to the front and their
+//! count out. Place it with
+//!   node kept: graph "compact.orlapkg/graphs/compact.osn" {
+//!       flags <- visible.result;
+//!   }
+//! and size what does the work with
+//!   domain = value(count) * per_thing;
+//! reading `kept.indices` to know which thing each element belongs to.
+use "../kernels/compact.orla";
+
+input flags: Rows<Int>;
+
+node blank: compact.blank@1 { flags <- flags; }
+node offsets: compact.offsets@1 { flags <- flags; }
+node gathered: compact.gather@1 {
+    flags <- flags;
+    offsets <- offsets.result;
+    slots <- blank.result;
+}
+node total: compact.total@1 { flags <- flags; }
+
+output indices <- gathered.result;
+output count <- total.result;

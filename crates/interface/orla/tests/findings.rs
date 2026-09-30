@@ -1,8 +1,9 @@
 //! What agents found wrong stays fixed. Each file in `findings/` is a
-//! session over a copy of an example: its first line names the example
-//! (`{"scene": "examples/life"}`, with `"installed": true` when the copied
-//! packages are the ones installed, and `"text"` to start from that text
-//! in its place), and every other line sends a request
+//! session over a copy of a scene of `findings/world`, the tests' own:
+//! its first line names the scene (`{"scene": "scenes/life"}`, with
+//! `"installed": true` when the copied packages are the ones installed,
+//! and `"text"` to start from that text in its place), and every other
+//! line sends a request
 //! and may hold its answer to what was found wanting:
 //!
 //! - `"finding"`: what an agent met, as a sentence;
@@ -21,13 +22,14 @@ use std::process::{Command, Stdio};
 
 use serde_json::Value as Json;
 
+/// The scenes and packages the findings run over, the tests' own.
 fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/findings/world")
 }
 
-/// A copy of `example` (its scene and Kernels) at the place it has in the
-/// repository, beside a copy of the packages, in a directory of its own;
-/// the copied scene's path.
+/// A copy of the scene `example` (its scene and Kernels) at the place it
+/// has in the world, beside a copy of the packages, in a directory of its
+/// own; the copied scene's path.
 fn copy(example: &str, name: &str) -> PathBuf {
     fn tree(from: &Path, to: &Path) {
         std::fs::create_dir_all(to).unwrap();
@@ -246,7 +248,7 @@ fn wanting(answer: &Json, expect: &Json) -> Vec<String> {
 #[test]
 fn what_agents_found_wanting_stays_fixed() {
     let mut files: Vec<PathBuf> =
-        std::fs::read_dir(root().join("crates/interface/orla/tests/findings"))
+        std::fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/findings"))
             .unwrap()
             .flatten()
             .map(|entry| entry.path())

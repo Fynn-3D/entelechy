@@ -1,4 +1,4 @@
-{"scene": "examples/life", "text": ""}
+{"scene": "scenes/life", "text": ""}
 {"finding": "an empty scene's refusal went to stderr only: status looked like a loaded scene of no nodes", "send": {"op": "status"}, "expect": {"at": {"/ok/loaded": false}, "says": ["the scene declares no output"]}}
 {"finding": "evaluate with no scene answered `output refers to unknown source <no scene>`", "send": {"op": "evaluate", "time": 0.0}, "expect": {"ok": false, "says": ["no scene is loaded", "`compose` one"], "not": ["<no scene>"]}}
 {"finding": "a refusal of the document as a whole was placed at 0:0", "send": {"op": "status"}, "expect": {"not": ["0:0"]}}

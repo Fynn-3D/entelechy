@@ -1,4 +1,4 @@
-{"scene": "examples/life", "text": "fn score(i: Int) -> Int { return i * 2; }\nnode k: kernel { requires { field.write; } domain = 4; output result: Rows<Int>; compute { return score(element()); } }\noutput result <- k.result;\n"}
+{"scene": "scenes/life", "text": "fn score(i: Int) -> Int { return i * 2; }\nnode k: kernel { requires { field.write; } domain = 4; output result: Rows<Int>; compute { return score(element()); } }\noutput result <- k.result;\n"}
 {"send": {"op": "evaluate", "time": 0.0}}
 {"finding": "before a function its document declares changes", "send": {"op": "read", "node": "k", "from": 3, "count": 1}, "expect": {"at": {"/ok/values/0": 6}}}
 {"send": {"op": "compose", "edits": [{"fn": "score", "text": "fn score(i: Int) -> Int { return i * 10; }"}]}, "expect": {"ok": true}}
