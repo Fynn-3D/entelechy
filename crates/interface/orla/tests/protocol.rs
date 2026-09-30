@@ -4,19 +4,104 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Value as Json, json};
 
-/// A copy of the Life example in its own directory, one per `name`.
+/// Conway's Life: a seed, a step fed back to itself, a picture of it.
+const LIFE_SCENE: &str = r#"// seed -> life (fed back to itself) -> show
+use "kernels/";
+
+node seed: life.seed@1 {
+    domain = vec2(160, 120);
+    noise = 0.3;
+}
+
+node life: life.step@1 {
+    previous <~ life.result from seed.result;
+    brush = 2.0;
+}
+
+node show: life.show@1 {
+    cells <- life.result;
+}
+
+output result <- show.result;
+"#;
+
+/// The cells are a Grid<Cell>, not an image; only `show` makes pixels.
+const LIFE_KERNELS: &str = r#"struct Cell { alive: Bool; age: Int; }
+type Cells = Grid<Cell>;
+
+/// Initial cells: a blinker at a fixed spot plus deterministic noise.
+kernel life.seed@1 {
+    requires { field.write; }
+    param noise: Float = 0.3;
+    param blinker: Vec2 = vec2(10.0, 10.0);
+    output result: Cells;
+
+    fn hash(p: Vec2) -> Float {
+        // Sin-free so the CPU and GPU agree on every cell.
+        let q = fract(p * vec2(0.1031, 0.1030));
+        let d = dot(q, vec2(q.y, q.x) + vec2(33.33, 33.33));
+        let r = q + vec2(d, d);
+        return fract((r.x + r.y) * (r.x - r.y + 1.0));
+    }
+
+    compute {
+        let c = coord();
+        let in_blinker = c.y == blinker.y && c.x >= blinker.x && c.x <= blinker.x + 2.0;
+        let alive = in_blinker || hash(c) < noise;
+        return Cell { alive: alive, age: 0 };
+    }
+}
+
+/// One generation. `previous` is this node's own output from the last frame.
+/// Hold the pointer to paint live cells; hold C to clear.
+kernel life.step@1 {
+    requires { field.read; field.write; input.read; }
+    input previous: Cells;
+    param brush: Float = 2.0;
+    output result: Cells;
+
+    fn alive_at(x: Float, y: Float) -> Int {
+        return if at(previous, vec2(x, y)).alive { 1 } else { 0 };
+    }
+
+    compute {
+        let c = coord();
+        let me = sample(previous);
+        let n = alive_at(c.x - 1.0, c.y - 1.0) + alive_at(c.x, c.y - 1.0) + alive_at(c.x + 1.0, c.y - 1.0)
+              + alive_at(c.x - 1.0, c.y) + alive_at(c.x + 1.0, c.y)
+              + alive_at(c.x - 1.0, c.y + 1.0) + alive_at(c.x, c.y + 1.0) + alive_at(c.x + 1.0, c.y + 1.0);
+        let survives = me.alive && (n == 2 || n == 3);
+        let born = !me.alive && n == 3;
+        let painted = pointer_down() && length(c - pointer()) <= brush;
+        let alive = (survives || born || painted) && !key(67);
+        let age = if alive { min(me.age + 1, 60) } else { 0 };
+        return Cell { alive: alive, age: age };
+    }
+}
+
+/// Colors cells by age: fresh cells glow, old cells settle.
+kernel life.show@1 {
+    requires { field.read; field.write; }
+    input cells: Cells;
+    output result: Image;
+    compute {
+        let cell = sample(cells);
+        let dead = vec3(0.07, 0.09, 0.14);
+        let fresh = vec3(1.0, 0.85, 0.45);
+        let old = vec3(0.55, 0.75, 0.95);
+        let color = if cell.alive { mix(fresh, old, clamp(float(cell.age) / 20.0, 0.0, 1.0)) } else { dead };
+        return vec4(color.x, color.y, color.z, 1.0);
+    }
+}
+"#;
+
+/// The Life scene in its own directory, one per `name`.
 fn scratch_in(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("orla-protocol{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/life");
     std::fs::create_dir_all(dir.join("kernels")).unwrap();
-    for entry in std::fs::read_dir(example.join("kernels"))
-        .unwrap()
-        .flatten()
-    {
-        std::fs::copy(entry.path(), dir.join("kernels").join(entry.file_name())).unwrap();
-    }
-    std::fs::copy(example.join("scene.osn"), dir.join("scene.osn")).unwrap();
+    std::fs::write(dir.join("kernels/life.orla"), LIFE_KERNELS).unwrap();
+    std::fs::write(dir.join("scene.osn"), LIFE_SCENE).unwrap();
     dir
 }
 
@@ -790,9 +875,31 @@ output result <- fill.result;
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A machine's step, with a struct binding and a branch it does not take,
+/// and a window-sized picture.
+const MACHINE_SCENE: &str = "node machine: kernel t.step@1 {
+    requires { field.write; }
+    output result: Rows<Int>;
+    struct Draw { row: Int; hit: Int; }
+    domain = 2;
+    compute {
+        let pc = 512 + element() * 2;
+        let drawn = Draw { row: pc, hit: 1 };
+        let next = if pc < 0 { let back = pc - 1; back } else { drawn.row + drawn.hit };
+        return next;
+    }
+}
+node view: kernel { requires { field.write; input.read; } output result: Image; domain = window(); compute { return vec4(0.5, 0.25, 0.0, 1.0); } }
+output result <- view.result;
+";
+
 #[test]
 fn a_trace_shows_one_element_of_a_node_and_reports_carry_timings() {
-    let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/chip8/scene.osn");
+    let dir = std::env::temp_dir().join(format!("orla-protocol-trace-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let scene = dir.join("scene.osn");
+    std::fs::write(&scene, MACHINE_SCENE).unwrap();
     let responses = talk(
         &scene,
         &[
@@ -813,7 +920,7 @@ fn a_trace_shows_one_element_of_a_node_and_reports_carry_timings() {
         "{timings:?}"
     );
     let trace = &responses[1]["ok"];
-    assert_eq!(trace["kernel"], "chip8.step@1");
+    assert_eq!(trace["kernel"], "t.step@1");
     assert_eq!(trace["at"], json!([0, 0, 0]));
     let bindings = trace["bindings"].as_array().unwrap();
     let pc = bindings.iter().find(|b| b["name"] == "pc").unwrap();
@@ -852,6 +959,7 @@ fn a_trace_shows_one_element_of_a_node_and_reports_carry_timings() {
             .contains("element")
     );
     assert!(responses[5]["error"].is_object(), "{}", responses[5]);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// `help` answers the whole reference, every section of it, or every item
@@ -1001,27 +1109,67 @@ fn read_shows_a_picture_and_sums_up_any_other_field() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Replays the scanline example's `agent.jsonl`, each step held to the
-/// example's README.
+/// A picture whose every pixel differs from its neighbours, so an effect
+/// on it can be measured.
+const PICTURE_KERNEL: &str = "kernel picture.draw@1 {
+    requires { field.write; }
+    output result: Image;
+    compute {
+        let c = coord() + 0.5;
+        let u = c / domain();
+        return vec4(0.9 * u.x, 0.55 * u.y, 0.25 + 0.5 * u.x * u.y, 1.0);
+    }
+}
+";
+
+/// The scene the agent starts from, or the one it composes with its
+/// effect at `strength`.
+fn picture_scene(strength: Option<&str>) -> String {
+    match strength {
+        None => "use \"kernels/\";\nnode picture: picture.draw@1 { domain = vec2(8, 6); }\noutput result <- picture.result;\n".to_owned(),
+        Some(strength) => format!(
+            "use \"kernels/\";\nnode picture: picture.draw@1 {{ domain = vec2(8, 6); }}\nnode scan: scanline.effect@1 {{ source <- picture.result; strength = {strength}; }}\noutput result <- scan.result;\n"
+        ),
+    }
+}
+
+/// The agent's effect, its odd rows chosen by `dark`.
+fn scanline_effect(dark: &str) -> String {
+    format!(
+        "// Scanlines: every other row of the picture darkened by `strength`.\nkernel scanline.effect@1 {{\n    requires {{ field.read; field.write; }}\n    input source: Image;\n    param strength: Float = 0.5;\n    output result: Image;\n    compute {{\n        let c = sample(source);\n        let dark = {dark};\n        return if dark {{ vec4(c.rgb * (1.0 - strength), c.a) }} else {{ c }};\n    }}\n}}\n"
+    )
+}
+
+/// An agent reads a running scene, has a Kernel refused, repairs it,
+/// publishes it and composes it into the scene, and reads the effect.
 #[test]
 fn an_agent_creates_a_capability_while_the_scene_runs() {
-    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/scanline");
     let dir = std::env::temp_dir().join(format!("orla-protocol-agent-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("kernels")).unwrap();
-    std::fs::copy(
-        example.join("kernels/picture.orla"),
-        dir.join("kernels/picture.orla"),
-    )
-    .unwrap();
-    std::fs::copy(example.join("scene.osn"), dir.join("scene.osn")).unwrap();
-    let script = std::fs::read_to_string(example.join("agent.jsonl")).unwrap();
-    let requests: Vec<Json> = script
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
-    assert_eq!(requests.len(), 18);
+    std::fs::write(dir.join("kernels/picture.orla"), PICTURE_KERNEL).unwrap();
+    std::fs::write(dir.join("scene.osn"), picture_scene(None)).unwrap();
+    let effect = scanline_effect("icoord().y % 2 == 1");
+    let requests = vec![
+        json!({ "id": 1, "op": "status" }),
+        json!({ "id": 2, "op": "kernels" }),
+        json!({ "id": 3, "op": "help", "name": "coord" }),
+        json!({ "id": 4, "op": "evaluate", "time": 0.0 }),
+        json!({ "id": 5, "op": "read", "format": "rgba32f" }),
+        json!({ "id": 6, "op": "prepare", "source": scanline_effect("coord().y & 1 == 1") }),
+        json!({ "id": 7, "op": "help", "name": "icoord" }),
+        json!({ "id": 8, "op": "prepare", "source": effect }),
+        json!({ "id": 9, "op": "publish", "source": effect, "expect": "absent" }),
+        json!({ "id": 10, "op": "document" }),
+        json!({ "id": 11, "op": "compose", "text": picture_scene(Some("0.5")) }),
+        json!({ "id": 12, "op": "evaluate", "time": 0.0 }),
+        json!({ "id": 13, "op": "read", "format": "rgba32f" }),
+        json!({ "id": 14, "op": "compose", "text": picture_scene(Some("0.8")) }),
+        json!({ "id": 15, "op": "evaluate", "time": 0.0 }),
+        json!({ "id": 16, "op": "read", "format": "rgba32f" }),
+        json!({ "id": 17, "op": "kernel", "kernel": "scanline.effect@1" }),
+        json!({ "id": 18, "op": "quit" }),
+    ];
     let responses = talk(&dir.join("scene.osn"), &requests);
     let ok = |index: usize| -> &Json {
         assert!(
@@ -1082,7 +1230,7 @@ fn an_agent_creates_a_capability_while_the_scene_runs() {
     let (w, h, before) = pixels(4);
     let (_, _, half) = pixels(12);
     let (_, _, strong) = pixels(15);
-    assert_eq!((w, h), (160, 120));
+    assert_eq!((w, h), (8, 6));
     for y in 0..h {
         for x in 0..w {
             for k in 0..3 {
@@ -1107,28 +1255,101 @@ fn an_agent_creates_a_capability_while_the_scene_runs() {
             .contains("icoord().y % 2 == 1")
     );
     assert_eq!(ok(17)["bye"], true);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The migrate example's `agent.jsonl`: with a migration the tally goes
-/// on; without one, the old layout returns and the tally restarts.
+/// A tally: one row of state that counts the evaluations.
+const TALLY_KERNELS: &str = "struct Tally { count: Int; }
+
+kernel tally.zero@1 {
+    requires { field.write; }
+    output result: Rows<Tally>;
+    compute { return Tally { count: 0 }; }
+}
+
+kernel tally.step@1 {
+    requires { field.read; field.write; }
+    input previous: Rows<Tally>;
+    output result: Rows<Tally>;
+    compute {
+        let t = sample(previous);
+        return Tally { count: t.count + 1 };
+    }
+}
+";
+
+/// The tally's scene, its state carried by `migrate` when given.
+fn tally_scene(migrate: &str) -> String {
+    format!(
+        "use \"kernels/\";\n\nnode seed: tally.zero@1 {{ domain = 1; }}\nnode count: tally.step@1 {{ previous <~ count.result from seed.result{migrate}; }}\n\noutput result <- count.result;\n"
+    )
+}
+
+/// With a migration the tally goes on; without one, the old layout
+/// returns and the tally restarts.
 #[test]
 fn an_agent_changes_a_running_states_layout_and_the_state_is_carried_over() {
-    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/migrate");
     let dir = std::env::temp_dir().join(format!("orla-protocol-migrate-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("kernels")).unwrap();
-    std::fs::copy(
-        example.join("kernels/tally.orla"),
-        dir.join("kernels/tally.orla"),
-    )
-    .unwrap();
-    std::fs::copy(example.join("scene.osn"), dir.join("scene.osn")).unwrap();
-    let requests: Vec<Json> = std::fs::read_to_string(example.join("agent.jsonl"))
-        .unwrap()
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
+    std::fs::write(dir.join("kernels/tally.orla"), TALLY_KERNELS).unwrap();
+    std::fs::write(dir.join("scene.osn"), tally_scene("")).unwrap();
+    let upgrade = "kernel tally.upgrade@1 {
+    requires { field.read; field.write; }
+    struct Old { count: Int; }
+    struct Tally { count: Int; doubled: Int; }
+    input old: Rows<Old>;
+    output result: Rows<Tally>;
+    compute {
+        let o = sample(old);
+        return Tally { count: o.count, doubled: o.count * 2 };
+    }
+}
+";
+    let doubled = "kernel tally.step@1 {
+    requires { field.read; field.write; }
+    struct Tally { count: Int; doubled: Int; }
+    input previous: Rows<Tally>;
+    output result: Rows<Tally>;
+    compute {
+        let t = sample(previous);
+        return Tally { count: t.count + 1, doubled: (t.count + 1) * 2 };
+    }
+}
+";
+    let single = "kernel tally.step@1 {
+    requires { field.read; field.write; }
+    struct Tally { count: Int; }
+    input previous: Rows<Tally>;
+    output result: Rows<Tally>;
+    compute {
+        let t = sample(previous);
+        return Tally { count: t.count + 1 };
+    }
+}
+";
+    let read = |id: u32| json!({ "id": id, "op": "read", "node": "count", "format": "words" });
+    let evaluate = |id: u32, time: f64| json!({ "id": id, "op": "evaluate", "time": time });
+    let requests = vec![
+        json!({ "id": 1, "op": "status" }),
+        evaluate(2, 0.0),
+        evaluate(3, 0.1),
+        evaluate(4, 0.2),
+        read(5),
+        json!({ "id": 6, "op": "publish", "source": upgrade, "expect": "absent" }),
+        json!({ "id": 7, "op": "publish", "source": doubled, "expect": "any" }),
+        json!({ "id": 8, "op": "document" }),
+        json!({ "id": 9, "op": "compose", "text": tally_scene(" migrate tally.upgrade@1") }),
+        evaluate(10, 0.3),
+        read(11),
+        evaluate(12, 0.4),
+        read(13),
+        json!({ "id": 14, "op": "compose", "text": tally_scene("") }),
+        json!({ "id": 15, "op": "publish", "source": single, "expect": "any" }),
+        evaluate(16, 0.5),
+        read(17),
+        json!({ "id": 18, "op": "quit" }),
+    ];
     let responses = talk(&dir.join("scene.osn"), &requests);
     let ok = |index: usize| -> &Json {
         assert!(
@@ -1172,12 +1393,33 @@ fn an_agent_changes_a_running_states_layout_and_the_state_is_carried_over() {
     );
     assert_eq!(state(16), vec![1]);
     assert_eq!(ok(17)["bye"], true);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `pin` refuses a name that is not a node.
+/// `pin` refuses a name that is not a node, a placed graph's nodes named
+/// by their place.
 #[test]
 fn a_name_that_is_not_a_node_is_refused_by_the_op_that_takes_it() {
-    let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/mesh/scene.osn");
+    let dir = std::env::temp_dir().join(format!("orla-protocol-names-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("level.osn"),
+        "input mesh: Rows<Int>;
+node vertices: kernel { requires { field.read; field.write; } input mesh: Rows<Int> <- mesh; output result: Rows<Int>; domain = count(mesh) * 2; compute { return at(mesh, element() / 2); } }
+output vertices <- vertices.result;
+",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.osn"),
+        "node torus: kernel { requires { field.write; } output result: Rows<Int>; domain = 3; compute { return element(); } }
+node subdivided: graph \"level.osn\" { mesh <- torus.result; }
+output result <- subdivided.vertices;
+",
+    )
+    .unwrap();
+    let scene = dir.join("scene.osn");
     let responses = talk(
         &scene,
         &[
@@ -1211,13 +1453,44 @@ fn a_name_that_is_not_a_node_is_refused_by_the_op_that_takes_it() {
     assert!(message(3).contains("not a node"), "{}", message(3));
     assert!(message(5).contains("not a node"), "{}", message(5));
     assert!(responses[6]["ok"].is_object(), "{:?}", responses[6]);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_matrix_or_a_struct_parameter_crosses_the_protocol_as_arrays() {
     // A JSON value takes the shape of the parameter it is given to, or is
     // refused with that shape.
-    let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/cube/scene.osn");
+    let dir = std::env::temp_dir().join(format!("orla-protocol-shapes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("draw.orla"),
+        "struct Style { ground: Vec3; edge: Vec3; width: Float; }
+kernel t.draw@1 {
+    requires { field.write; }
+    param lens: Mat4 = mat4(vec4(2.2, 0.0, 0.0, 0.0), vec4(0.0, 2.2, 0.0, 0.0), vec4(0.0, 0.0, 1.0, -1.0), vec4(0.0, 0.0, 0.0, 0.0));
+    param style: Style = Style { ground: vec3(0.06, 0.07, 0.1), edge: vec3(1.0, 0.95, 0.8), width: 1.0 };
+    output result: Image;
+    compute {
+        let p = lens * vec4(coord().x, coord().y, 1.0, 1.0);
+        let color = if p.x > style.width { style.edge } else { style.ground };
+        return vec4(color, 1.0);
+    }
+}
+",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.osn"),
+        "use \"draw.orla\";
+param lens: Mat4 = mat4(vec4(2.2, 0.0, 0.0, 0.0), vec4(0.0, 2.2, 0.0, 0.0), vec4(0.0, 0.0, 1.0, -1.0), vec4(0.0, 0.0, 0.0, 0.0));
+param style: Style = Style { ground: vec3(0.06, 0.07, 0.1), edge: vec3(1.0, 0.95, 0.8), width: 1.0 };
+node draw: t.draw@1 { domain = vec2(4, 4); lens = lens; style = style; }
+output result <- draw.result;
+",
+    )
+    .unwrap();
+    let scene = dir.join("scene.osn");
     let replies = talk(
         &scene,
         &[
@@ -1248,6 +1521,7 @@ fn a_matrix_or_a_struct_parameter_crosses_the_protocol_as_arrays() {
     let style = params.iter().find(|p| p["name"] == "style").unwrap();
     assert_eq!(style["type"], "Style");
     assert_eq!(style["value"][2], json!(2.0));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A text that would be rejected never reaches the disk; with `expect`, a

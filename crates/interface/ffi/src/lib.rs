@@ -824,13 +824,15 @@ mod tests {
     /// is, and the session serves again once the first leaves.
     #[test]
     fn a_call_while_another_is_inside_is_refused() {
-        let scene = CString::new(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../examples/text/scene.osn")
-                .to_str()
-                .unwrap(),
+        let dir = std::env::temp_dir().join(format!("orla-ffi-inside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("scene.osn"),
+            "node fill: kernel { requires { field.write; } output result: Image; domain = vec2(4, 4); compute { return vec4(0.5, 0.5, 0.5, 1.0); } }\noutput result <- fill.result;\n",
         )
         .unwrap();
+        let scene = CString::new(dir.join("scene.osn").to_str().unwrap()).unwrap();
         let cpu = CString::new("cpu").unwrap();
         let session = unsafe { orla_open(scene.as_ptr(), cpu.as_ptr(), std::ptr::null()) };
         assert!(!session.is_null());
@@ -848,6 +850,7 @@ mod tests {
         let answer = unsafe { CStr::from_ptr(orla_request(session, status.as_ptr())) };
         assert!(answer.to_string_lossy().contains("\"ok\""));
         unsafe { orla_close(session) };
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A narrow Field's widened words stay until the next evaluate, as

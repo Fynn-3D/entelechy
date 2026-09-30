@@ -2,7 +2,7 @@
 //! a Field in place, a protocol request, a node's rows, the errors.
 
 use std::ffi::{CStr, CString};
-use std::path::Path;
+use std::path::PathBuf;
 
 use orla_ffi::{OrlaField, OrlaInput};
 
@@ -10,11 +10,50 @@ fn c(text: &str) -> CString {
     CString::new(text).unwrap()
 }
 
-fn example(name: &str) -> CString {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../examples")
-        .join(name);
-    c(path.to_str().unwrap())
+/// A background, the printable codes as a node's rows (fused into their
+/// reader unless pinned), and a mark drawn over the background at (8, 4)
+/// to (12, 8).
+const PICTURE: &str = "node back: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = vec2(24, 16);
+    compute { return vec4(0.09, 0.1, 0.13, 1.0); }
+}
+node codes: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    domain = 95;
+    compute { return 32 + element(); }
+}
+node glyphs: kernel {
+    requires { field.read; field.write; }
+    input codes: Rows<Int> <- codes.result;
+    output result: Rows<Int>;
+    compute { return sample(codes) - 32; }
+}
+node shown: kernel {
+    requires { field.read; field.write; }
+    input under: Image <- back.result;
+    input glyphs: Rows<Int> <- glyphs.result;
+    output result: Image;
+    compute {
+        let c = icoord();
+        let mark = c.x >= 8 && c.x < 12 && c.y >= 4 && c.y < 8 && at(glyphs, 0) == 0;
+        return if mark { vec4(1.0, 0.85, 0.45, 1.0) } else { sample(under) };
+    }
+}
+output result <- shown.result;
+";
+
+/// A directory of its own for `name`, holding `scene` as `scene.osn`;
+/// the directory and the scene's path.
+fn scene_in(name: &str, scene: &str) -> (PathBuf, CString) {
+    let dir = std::env::temp_dir().join(format!("orla-ffi-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("scene.osn");
+    std::fs::write(&path, scene).unwrap();
+    (dir, c(path.to_str().unwrap()))
 }
 
 unsafe fn str_of(pointer: *const std::ffi::c_char) -> String {
@@ -46,7 +85,7 @@ fn a_scene_opens_evaluates_and_its_fields_read_in_place() {
         unsafe { str_of(orla_ffi::orla_version()) },
         env!("CARGO_PKG_VERSION")
     );
-    let scene = example("text/scene.osn");
+    let (dir, scene) = scene_in("fields", PICTURE);
     let session =
         unsafe { orla_ffi::orla_open(scene.as_ptr(), c("cpu").as_ptr(), std::ptr::null()) };
     assert!(!session.is_null(), "{}", unsafe {
@@ -60,8 +99,8 @@ fn a_scene_opens_evaluates_and_its_fields_read_in_place() {
     );
     let report = unsafe { str_of(orla_ffi::orla_report(session)) };
     assert!(report.contains("\"outputs\""), "{report}");
-    // The picture as the replay pins it: 192 by 88, the title's O at (8, 6)
-    // at double size, read from the Host's words.
+    // The picture, 24 by 16, the mark over the background, read from the
+    // Host's words.
     let mut field = OrlaField {
         words: std::ptr::null(),
         width: 0,
@@ -85,7 +124,7 @@ fn a_scene_opens_evaluates_and_its_fields_read_in_place() {
             field.shape,
             field.count
         ),
-        (192, 88, 4, 1, 192 * 88)
+        (24, 16, 4, 1, 24 * 16)
     );
     assert_eq!(unsafe { str_of(field.schema) }, "f,f,f,f");
     assert!(
@@ -135,7 +174,7 @@ fn a_scene_opens_evaluates_and_its_fields_read_in_place() {
         pixel(&field, 12, 12)
     );
     assert!(near(pixel(&field, 10, 6), [1.0, 0.85, 0.45]));
-    // A node's rows: the specimen's character codes, pinned and read as
+    // A node's rows: the printable codes, pinned and read as
     // ints.
     assert_eq!(
         unsafe { orla_ffi::orla_node(session, c("codes").as_ptr(), std::ptr::null(), &mut field) },
@@ -165,17 +204,18 @@ fn a_scene_opens_evaluates_and_its_fields_read_in_place() {
     let response = unsafe { str_of(orla_ffi::orla_request(session, c("not json").as_ptr())) };
     assert!(response.contains("\"error\""), "{response}");
     unsafe { orla_ffi::orla_close(session) };
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_scene_that_does_not_exist_or_a_backend_that_does_not_is_refused() {
-    let missing = example("nowhere/scene.osn");
+    let (dir, scene) = scene_in("refused", PICTURE);
+    let missing = c(dir.join("nowhere/scene.osn").to_str().unwrap());
     let session =
         unsafe { orla_ffi::orla_open(missing.as_ptr(), std::ptr::null(), std::ptr::null()) };
     assert!(session.is_null());
     let reason = unsafe { str_of(orla_ffi::orla_open_error()) };
     assert!(!reason.is_empty(), "a reason is given");
-    let scene = example("text/scene.osn");
     let session =
         unsafe { orla_ffi::orla_open(scene.as_ptr(), c("abacus").as_ptr(), std::ptr::null()) };
     assert!(session.is_null());
@@ -190,13 +230,40 @@ fn a_scene_that_does_not_exist_or_a_backend_that_does_not_is_refused() {
         ""
     );
     unsafe { orla_ffi::orla_close(std::ptr::null_mut()) };
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn the_input_reaches_the_kernels() {
-    // The voxel editor: the pointer at the replay's spot finds the tree,
-    // the left button places a voxel; the window is the input's.
-    let scene = example("voxel/scene.osn");
+    // An editor: `state` holds the pointer, the left button places a cell
+    // of `world` under it; the picture is the window's.
+    let (dir, scene) = scene_in(
+        "input",
+        "use \"k.orla\";
+node empty: Rows<Int> { domain = 32400; value = 0; }
+node state: t.state@1 { domain = 2; }
+node world: t.world@1 { previous <~ world.result from empty.result; }
+node view: t.view@1 { world <- world.result; domain = window(); }
+output result <- view.result;
+",
+    );
+    std::fs::write(
+        dir.join("k.orla"),
+        "kernel t.state@1 { requires { field.write; input.read; } output result: Rows<Float>; compute { let p = pointer(); return if element() == 0 { p.x } else { p.y }; } }
+kernel t.world@1 {
+    requires { field.read; field.write; input.read; }
+    input previous: Rows<Int>;
+    output result: Rows<Int>;
+    compute {
+        let p = pointer();
+        let here = int(p.y) * 240 + int(p.x) == element();
+        return if pointer_down() && here { 1 } else { sample(previous) };
+    }
+}
+kernel t.view@1 { requires { field.read; field.write; } input world: Rows<Int>; output result: Image; compute { let c = icoord(); let v = float(at(world, c.y * 240 + c.x)); return vec4(v, v, v, 1.0); } }
+",
+    )
+    .unwrap();
     let session =
         unsafe { orla_ffi::orla_open(scene.as_ptr(), c("jit").as_ptr(), std::ptr::null()) };
     assert!(!session.is_null(), "{}", unsafe {
@@ -240,10 +307,9 @@ fn the_input_reaches_the_kernels() {
     let state =
         unsafe { std::slice::from_raw_parts(field.words, (field.count * field.stride) as usize) };
     assert_eq!(
-        (f32::from_bits(state[6]), f32::from_bits(state[7])),
+        (f32::from_bits(state[0]), f32::from_bits(state[1])),
         (120.0, 78.0)
     );
-    assert_eq!(state[18], 1, "the pointer finds a voxel");
     input.buttons = 1;
     input.time = 0.1;
     assert_eq!(unsafe { orla_ffi::orla_evaluate(session, &input) }, 0);
@@ -256,8 +322,10 @@ fn the_input_reaches_the_kernels() {
     );
     let world =
         unsafe { std::slice::from_raw_parts(field.words, (field.count * field.stride) as usize) };
-    assert_eq!(world[62811], 1, "a click places a voxel");
+    assert_eq!(world[78 * 240 + 120], 1, "a click places a cell");
+    assert_eq!(world.iter().sum::<u32>(), 1, "and only that one");
     unsafe { orla_ffi::orla_close(session) };
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A JSON string literal of `text`.
@@ -358,7 +426,7 @@ fn a_scene_opens_on_files_handed_in_and_reads_them_again() {
 /// and asking to present says so.
 #[test]
 fn presenting_is_for_a_page() {
-    let scene = example("text/scene.osn");
+    let (dir, scene) = scene_in("present", PICTURE);
     let session =
         unsafe { orla_ffi::orla_open(scene.as_ptr(), c("cpu").as_ptr(), std::ptr::null()) };
     assert!(!session.is_null());
@@ -372,6 +440,7 @@ fn presenting_is_for_a_page() {
     let why = unsafe { str_of(orla_ffi::orla_error(session)) };
     assert!(why.contains("orla_output"), "{why}");
     unsafe { orla_ffi::orla_close(session) };
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Play through the C ABI on a host without a GPU: a replay handed in as
@@ -379,17 +448,49 @@ fn presenting_is_for_a_page() {
 /// with the frame-data line once F10 asks.
 #[test]
 fn a_host_plays_a_replay_through_the_play() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/ant");
+    // A count fed back frame to frame and a picture of it, and a replay
+    // of two frames checking both.
+    let documents = [
+        (
+            "scene.osn",
+            "use \"kernels/\";
+node zero: Rows<Int> { domain = 1; value = 0; }
+node count: t.count@1 { last <~ count.result from zero.result; domain = 1; }
+node view: t.view@1 { count <- count.result; domain = vec2(8, 4); }
+output result <- view.result;
+",
+        ),
+        (
+            "kernels/count.orla",
+            "kernel t.count@1 { requires { field.read; field.write; } input last: Rows<Int>; output result: Rows<Int>; compute { return sample(last) + 1; } }
+kernel t.view@1 { requires { field.read; field.write; } input count: Rows<Int>; output result: Image; compute { return vec4(float(at(count, 0)) / 4.0, 0.5, 0.25, 1.0); } }
+",
+        ),
+        (
+            "tests/count.replay",
+            "scene ../scene.osn
+frame 0.0
+expect count.result[0] = 1
+expect 1 1 = 0.25 0.5 0.25 0.02
+frame 0.05
+expect count.result[0] = 2
+expect 1 1 = 0.5 0.5 0.25 0.02
+",
+        ),
+    ];
     let files = orla_ffi::orla_files();
-    for relative in ["scene.osn", "kernels/ant.orla", "tests/ant.replay"] {
-        let bytes = std::fs::read(root.join(relative)).unwrap();
-        let path = c(&format!("ant/{relative}"));
+    for (relative, text) in documents {
+        let path = c(&format!("count/{relative}"));
         let put =
-            unsafe { orla_ffi::orla_files_put(files, path.as_ptr(), bytes.as_ptr(), bytes.len()) };
+            unsafe { orla_ffi::orla_files_put(files, path.as_ptr(), text.as_ptr(), text.len()) };
         assert_eq!(put, 0);
     }
     let session = unsafe {
-        orla_ffi::orla_open_replay(files, c("ant/tests/ant.replay").as_ptr(), c("cpu").as_ptr())
+        orla_ffi::orla_open_replay(
+            files,
+            c("count/tests/count.replay").as_ptr(),
+            c("cpu").as_ptr(),
+        )
     };
     assert!(!session.is_null(), "{}", unsafe {
         str_of(orla_ffi::orla_open_error())
@@ -410,7 +511,7 @@ fn a_host_plays_a_replay_through_the_play() {
         }
         frames += 1;
     }
-    assert!(said.contains("replay: ok (2 frames, 14 checks)"), "{said}");
+    assert!(said.contains("replay: ok (2 frames, 4 checks)"), "{said}");
     // F10, and a CPU frame drawn with its line.
     assert_eq!(
         unsafe { orla_ffi::orla_play_key(session, c("F10").as_ptr(), 1) },
@@ -445,7 +546,7 @@ fn a_host_plays_a_replay_through_the_play() {
 /// A change through `orla_request` is recorded as the protocol's.
 #[test]
 fn a_request_through_the_abi_is_recorded_as_the_protocols() {
-    let scene = example("text/scene.osn");
+    let (dir, scene) = scene_in("recorded", PICTURE);
     let session =
         unsafe { orla_ffi::orla_open(scene.as_ptr(), c("cpu").as_ptr(), std::ptr::null()) };
     assert!(!session.is_null());
@@ -460,6 +561,7 @@ fn a_request_through_the_abi_is_recorded_as_the_protocols() {
         "{history}"
     );
     unsafe { orla_ffi::orla_close(session) };
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// `orla_request` requests are an agent's: a composed scene reads only its

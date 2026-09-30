@@ -197,10 +197,18 @@ fn a_failure_is_said_once() {
 /// reported and the person has the scene.
 #[test]
 fn a_replay_plays_to_its_end_and_says_what_it_saw() {
-    let replay_path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/ant/tests/ant.replay");
-    let text = std::fs::read_to_string(&replay_path).unwrap();
-    let replay = orla_session::replay::parse(&text, replay_path.parent().unwrap()).unwrap();
+    let dir = scratch("replay");
+    // The count goes on from frame to frame; the picture's red is its
+    // hundredth.
+    let text = "scene scene.osn
+frame 0.0
+expect count.result[0] = 1
+expect 0 0 = 0.01 0 0 0.001
+frame 0.05
+expect count.result[0] = 2
+expect 0 0 = 0.02 0 0 0.001
+";
+    let replay = orla_session::replay::parse(text, &dir).unwrap();
     let mut session = Session::open(&replay.scene, replay.kernels.as_deref(), 1 << 22);
     session.sync();
     let mut play = Play::new(racing);
@@ -216,9 +224,10 @@ fn a_replay_plays_to_its_end_and_says_what_it_saw() {
     assert!(!play.replaying(), "the replay ended");
     assert!(
         said.iter()
-            .any(|line| line.starts_with("replay: ok (2 frames, 14 checks)")),
+            .any(|line| line.starts_with("replay: ok (2 frames, 4 checks)")),
         "{said:?}"
     );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A press shorter than a frame is seen by the next frame and released
