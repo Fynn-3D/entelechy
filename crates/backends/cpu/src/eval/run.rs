@@ -31,6 +31,11 @@ pub(crate) struct Machine<'p, 's> {
     pub(super) calls: Option<Vec<CallRecord>>,
     /// Whether more calls happened than were recorded.
     pub(super) calls_truncated: bool,
+    /// While tracing, the iterations each loop ran in all, by the function
+    /// it is in (`None` the entry) and the word of its spend.
+    spent: Option<std::collections::BTreeMap<(Option<usize>, usize), u64>>,
+    /// While tracing, the functions called and not yet returned.
+    within: Vec<usize>,
     /// The memories' working copies, one per memory input; the outputs
     /// at the end.
     pub(super) memories: Vec<Option<Vec<u32>>>,
@@ -115,6 +120,8 @@ impl<'p, 's> Machine<'p, 's> {
             program,
             calls: None,
             calls_truncated: false,
+            spent: None,
+            within: Vec::new(),
             memories,
             emitted: Vec::new(),
             held: None,
@@ -237,6 +244,19 @@ impl<'p, 's> Machine<'p, 's> {
     pub(crate) fn record_calls(&mut self) {
         self.calls = Some(Vec::new());
         self.calls_truncated = false;
+        self.spent = Some(Default::default());
+        self.within.clear();
+    }
+
+    /// The loop that ran the most iterations in all while tracing: the
+    /// function it is in (`None` the entry) and the word of its spend.
+    pub(crate) fn most_spent(&self) -> Option<(Option<usize>, usize)> {
+        let spent = self.spent.as_ref()?;
+        let most = spent.values().copied().max()?;
+        spent
+            .iter()
+            .find(|(_, n)| **n == most)
+            .map(|(place, _)| *place)
     }
 
     /// The calls recorded, and whether any went unrecorded.
@@ -970,7 +990,14 @@ impl<'p, 's> Machine<'p, 's> {
                     s.copy_within(fp + arg.at..fp + arg.at + arg.n, base + param.at);
                 }
                 self.sp = base + callee.frame;
-                if let Err(error) = self.run(&callee.code, base) {
+                if self.spent.is_some() {
+                    self.within.push(*function);
+                }
+                let ran = self.run(&callee.code, base);
+                if self.spent.is_some() {
+                    self.within.pop();
+                }
+                if let Err(error) = ran {
                     // The innermost function the failure is in names it;
                     // the entry's call it failed under is kept too.
                     if let Some(word) = self.failed_at.get() {
@@ -1095,6 +1122,11 @@ impl<'p, 's> Machine<'p, 's> {
             Instr::Spend { dst } => {
                 self.work = self.work.saturating_add(self.ran);
                 self.stack[fp + dst] = self.ran;
+                if let Some(spent) = &mut self.spent {
+                    *spent
+                        .entry((self.within.last().copied(), *dst))
+                        .or_default() += u64::from(self.ran);
+                }
             }
             Instr::Look { dst } => {
                 // A failing look returns; a continuing element has not

@@ -1093,6 +1093,49 @@ output result <- k.result;
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An element found past its budget as it ends is placed at the loop
+/// that ran the most iterations in all, here one inside a function.
+#[test]
+fn an_element_past_its_budget_is_placed_at_its_busiest_loop() {
+    let dir = scratch("trace-budget");
+    let scene = dir.join("budget.osn");
+    std::fs::write(
+        &scene,
+        "node k: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    budget 100;
+    fn spin(t: Int) -> Int {
+        return loop 30 with u = t { (u ^ index()) & 1023 };
+    }
+    compute {
+        let small = loop 5 with a = element() { (a ^ 5) & 255 };
+        let total = loop 4 with t = small { spin(t) };
+        return total;
+    }
+    domain = 2;
+}
+output result <- k.result;
+",
+    )
+    .unwrap();
+    let mut session = Session::open(&scene, None, 1 << 20);
+    session.sync();
+    let context = Context::default();
+    let error = session.evaluate(&context).unwrap_err();
+    assert!(error.to_string().contains("loop iterations"), "{error}");
+    let place = session.failure_place(&error, &context).expect("placed");
+    assert_eq!((place.line, place.column), (6, 16), "{place}");
+    assert_eq!(place.function.as_deref(), Some("spin"));
+    // The element ran to its end: every `let` holds its value.
+    let traced = session
+        .trace(&orla_graph::NodeId("k".into()), [0, 0, 0], &context)
+        .unwrap();
+    assert!(traced.trace.bindings.iter().all(|value| value.ran));
+    assert_eq!(traced.place, Some(place));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn the_binary_traces_one_step_of_a_scan_and_profiles_a_run() {
     let orla = env!("CARGO_BIN_EXE_orla");

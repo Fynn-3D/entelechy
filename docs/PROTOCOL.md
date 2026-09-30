@@ -262,8 +262,9 @@ An evaluation's report carries:
 A failed evaluation names its `node` when the failure is one node's; a
 failed migration names its `port` and `migration` too. An element that
 failed (integer arithmetic, a loop budget) is traced again: when the
-trace finds the failing operation and a document writes the Kernel, its
-`path`, `line` and `column` come with the error.
+trace finds the failing operation (for a budget, the loop that ran the
+most iterations) and a document writes the Kernel, its `path`, `line`
+and `column` come with the error.
 
 `trace` runs one element of a node on the interpreter, compiled without
 the optimizer so calls and `let`s are the source's. It takes `node`, and

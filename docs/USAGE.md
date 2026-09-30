@@ -159,7 +159,8 @@ and `let` is present. The trace is of the evaluation after the one last
 committed, and commits nothing. An element that fails is traced up to
 the failure: what follows it reads `- (not run)`, then `failed:` gives
 why, where the operation is written (`file:line:column`), and the `let`s
-of the function it failed in. `run` names that place under a failed
+of the function it failed in. An element found past its budget as it
+ends is placed at the loop that ran the most iterations in all. `run` names that place under a failed
 evaluation too. The protocol's `trace` is the same as JSON.
 
 ## Packages and versions

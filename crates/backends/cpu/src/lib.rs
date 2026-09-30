@@ -290,6 +290,29 @@ pub struct TraceFault {
     pub bindings: Vec<TraceValue>,
 }
 
+/// The loop whose spend `function` wrote at frame word `word`.
+fn loop_spent_at(
+    function: &orla_ir::Function,
+    locs: &[(usize, usize)],
+    word: usize,
+) -> Option<orla_ir::ValueId> {
+    fn walk(
+        body: &[orla_ir::Instruction],
+        locs: &[(usize, usize)],
+        word: usize,
+    ) -> Option<orla_ir::ValueId> {
+        body.iter().find_map(|instruction| match instruction.op {
+            orla_ir::Op::Spend(looped) if locs[instruction.id.0 as usize].0 == word => Some(looped),
+            _ => instruction
+                .op
+                .blocks()
+                .into_iter()
+                .find_map(|block| walk(&block.body, locs, word)),
+        })
+    }
+    walk(&function.body, locs, word)
+}
+
 /// The first value of `function` an operation that can fail wrote at
 /// frame word `word`, by `locs` (each value's word and width).
 fn value_written_at(
@@ -511,7 +534,8 @@ pub fn trace(
     let failed = match ran {
         Ok(()) => None,
         Err(error @ (ExecutionError::Arithmetic { .. } | ExecutionError::Exhausted { .. })) => {
-            Some(error.to_string())
+            let exhausted = matches!(error, ExecutionError::Exhausted { .. });
+            Some((error.to_string(), exhausted))
         }
         Err(error) => return Err(error),
     };
@@ -531,7 +555,7 @@ pub fn trace(
     // then the entry's call it failed under.
     let mut fault = None;
     let mut entry_failed = None;
-    if let Some(message) = failed {
+    if let Some((message, exhausted)) = failed {
         let failure = machine.failure();
         let entry_locs = machine.locs(None);
         let (function, value, bindings) = match &failure {
@@ -555,6 +579,19 @@ pub fn trace(
                 entry_failed = value_written_at(entry, &entry_locs, f.word);
                 (None, entry_failed, Vec::new())
             }
+            // An element past its budget as it ends is named by the loop
+            // that ran the most iterations; everything it wrote ran.
+            None if exhausted => match machine.most_spent() {
+                Some((index, word)) => {
+                    let function = index.map_or(entry, |index| &module.functions[index]);
+                    (
+                        index.map(|_| function.name.clone()),
+                        loop_spent_at(function, &machine.locs(index), word),
+                        Vec::new(),
+                    )
+                }
+                None => (None, None, Vec::new()),
+            },
             None => (None, None, Vec::new()),
         };
         fault = Some(TraceFault {
