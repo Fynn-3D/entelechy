@@ -578,7 +578,7 @@ fn main() -> ExitCode {
     eprintln!(
         "gamepad: {}",
         match &gamepad {
-            Some(pad) if pad.connected() => "connected, mapped to arrows, Z, X, Enter",
+            Some(pad) if pad.connected() > 0 => "connected, mapped to arrows, Z, X, Enter",
             Some(_) => "none connected; a pad plugged in later maps to arrows, Z, X, Enter",
             None => "unavailable",
         }

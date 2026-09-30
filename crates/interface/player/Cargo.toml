@@ -23,7 +23,8 @@ orla-graph = { path = "../../core/graph" }
 winit = "0.30.13"
 softbuffer = "0.4"
 cpal = "0.18"
-gilrs = "0.11"
+# The inverted axes in `gamepad.rs` are read from this version's database.
+gilrs = "=0.11.2"
 serde_json = "1"
 
 [lints]
