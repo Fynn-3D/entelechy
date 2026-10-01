@@ -20,3 +20,11 @@ expect spread.result[1] < 0.0001
 expect spread.result[1] > -0.0001
 expect spread.result[2] < 0.0001
 expect spread.result[2] > -0.0001
+
+# Whole numbers from hashes, 0 to 5, as an unsigned high word gives them:
+# never below zero, the hashes with their top bit set (2, 3, 7) included.
+expect pick.result[0] = 0
+expect pick.result[1] = 2
+expect pick.result[2] = 3
+expect pick.result[3] = 5
+expect pick.result[7] = 4

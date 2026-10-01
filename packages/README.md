@@ -121,7 +121,8 @@ use "image.orlapkg";
 - **noise** — randomness a Kernel can repeat, as functions and no
   Kernels:
   - hashes of whole numbers by integer arithmetic, the same bits on
-    every backend;
+    every backend, read as a number from 0 to 1 (`unit_of`) or a whole
+    number below `n` (`below_of`, never negative as `h % n` can be);
   - value and gradient noise; fbm and ridged sums of them;
   - Worley's cells;
   - curl noise, a swirl with no sources and no sinks, for pushing smoke

@@ -3,5 +3,12 @@ use "../kernels/";
 
 node probe: nebula.probe@1 { domain = 4; }
 node spread: nebula.spread@1 { domain = 4; }
+// Whole numbers from hashes, six of them: 0 to 5, never below.
+node pick: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    domain = 8;
+    compute { return below_of(hash_int(element(), 5), 6); }
+}
 
 output result <- probe.result;

@@ -28,6 +28,11 @@ fn hash_int3(x: Int, y: Int, z: Int, seed: Int) -> Int {
 /// A hash as a number from 0 up to 1: its top 24 bits.
 fn unit_of(h: Int) -> Float { return float(h >>> 8) / 16777216.0; }
 
+/// A hash as a whole number from 0 below `n` (at least 1): the high word
+/// of the hash, read as unsigned, times `n`. Never below zero, as `h % n`
+/// is for a hash with its top bit set, and drawn from its high bits.
+fn below_of(h: Int, n: Int) -> Int { return umulhi(h, max(n, 1)); }
+
 /// A random number from 0 up to 1 for a whole number, a grid cell of a
 /// plane, or a cell of space.
 fn hash1(x: Int, seed: Int) -> Float { return unit_of(hash_int(x, seed)); }
