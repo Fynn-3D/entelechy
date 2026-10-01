@@ -62,7 +62,10 @@ use "image.orlapkg";
   holds each operation to an answer worked by hand on three backends;
   `nebula`, `mipmap` and `package` use its looks and sampling.
 - **text** — a 5 by 7 font baked into `font.png`, the layout that turns
-  a string into glyph rows, and the Kernels that draw them. A scene
+  a string into glyph rows, and the Kernels that draw them. `write.orla`
+  draws from a Kernel's own code, pixel by pixel: a character, a run of
+  codes (a word of a `text` input), a number, and the lengths a message
+  is put together with. A scene
   binds the font beside using the package:
   `input font: Grid<Float> = "../../packages/text.orlapkg/font.png";`
 - **compact** — a row of flags in, the kept indices and their count

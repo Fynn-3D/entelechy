@@ -24,9 +24,12 @@ probe ─ digits ─ layout ─┘        (font.png feeds every draw)
 
 The replay pins pixels of the title, the specimen, and the readout
 before and after the pointer moves.
+`tests/write.replay` pins what a Kernel draws with `write.orla`'s
+functions: two codes of a `text` input, a negative number, a character
+at twice the size, and the lengths a message is put together with.
 
 ```sh
 orla run examples/text/bake.osn --save font=packages/text.orlapkg/font.png
 orla player examples/text/scene.osn --scale 4
-orla replay examples/text/tests/text.replay
+orla replay examples/text/tests/text.replay examples/text/tests/write.replay
 ```

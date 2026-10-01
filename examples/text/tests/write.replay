@@ -1,0 +1,34 @@
+scene write.osn
+
+# H's top row is its two outer columns, its fourth all five.
+frame 0.0
+expect drawn.result[0] = 1.0
+expect drawn.result[1] = 0.0
+expect drawn.result[4] = 1.0
+expect drawn.result[146] = 1.0
+
+# -42 on the row below: the minus is only its fourth row; the 4's top is
+# its fourth column (9, 8); the 2's top its middle three (13, 8), its
+# last row all five (12, 14); nothing past its three characters.
+expect drawn.result[384] = 0.0
+expect drawn.result[528] = 1.0
+expect drawn.result[393] = 1.0
+expect drawn.result[390] = 0.0
+expect drawn.result[397] = 1.0
+expect drawn.result[396] = 0.0
+expect drawn.result[684] = 1.0
+expect drawn.result[547] = 0.0
+
+# The H at twice the size: a texel is two pixels.
+expect drawn.result[32] = 1.0
+expect drawn.result[33] = 1.0
+expect drawn.result[34] = 0.0
+expect drawn.result[40] = 1.0
+
+# "HP  " is two codes before its spaces; -42 is three characters, its
+# second a 4; 0 is one; 1907's fourth is a 7.
+expect counted.result[0] = 2
+expect counted.result[1] = 3
+expect counted.result[2] = 52
+expect counted.result[3] = 1
+expect counted.result[4] = 55
