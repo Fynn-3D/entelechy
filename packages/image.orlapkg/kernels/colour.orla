@@ -36,8 +36,14 @@ fn hsv_to_rgb(c: Vec3) -> Vec3 {
     return mix(vec3(1.0, 1.0, 1.0), pure, c.y) * c.z;
 }
 
-/// A cube root that keeps the sign.
-fn cbrt(v: Float) -> Float { return sign(v) * pow(abs(v), 1.0 / 3.0); }
+/// A cube root that keeps the sign: `pow`'s answer, which a device may
+/// give a few units off, made exact by one step of Newton's method.
+fn cbrt(v: Float) -> Float {
+    let a = abs(v);
+    let y = pow(a, 1.0 / 3.0);
+    let exact = if y > 0.0 { y - (y * y * y - a) / (3.0 * y * y) } else { 0.0 };
+    return sign(v) * exact;
+}
 
 /// Linear light to Oklab (Ottosson): lightness, then the green-red and
 /// blue-yellow axes; equal steps in it look equal. And back.
