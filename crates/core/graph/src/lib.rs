@@ -182,6 +182,9 @@ pub struct Graph {
     /// Each placed graph's outputs, by the id it was placed under, each
     /// wired to the node that gives it.
     pub placed: Vec<(String, Vec<(String, Source)>)>,
+    /// Each node placed `times = N` (N at least one), by its name, to the
+    /// node of its last time, `name/N`, which `name.port` means.
+    pub repeated: Vec<(String, NodeId)>,
 }
 
 /// Structural problems with a graph.
@@ -253,12 +256,18 @@ impl std::error::Error for GraphError {}
 
 impl Graph {
     /// The node and port that produce what `node.port` names: a node's
-    /// own port; a placed graph's output (`kept.count`), by the node inside
-    /// it that gives it; or the graph's own output named `node`, as
-    /// `node.result`. `None` when the name is none of these.
+    /// own port; a repeated node's last time's (`grow.result` is
+    /// `grow/12.result`); a placed graph's output (`kept.count`), by the
+    /// node inside it that gives it; or the graph's own output named
+    /// `node`, as `node.result`. `None` when the name is none of these.
     pub fn producer(&self, node: &NodeId, port: &str) -> Option<(NodeId, String)> {
         if self.node(node).is_some() {
             return Some((node.clone(), port.to_owned()));
+        }
+        // The last time may itself be a placed graph, whose output the
+        // node inside it gives.
+        if let Some((_, last)) = self.repeated.iter().find(|(name, _)| *name == node.0) {
+            return self.producer(last, port);
         }
         let wired = |source: &Source| match source {
             Source::Node { node, port } => Some((node.clone(), port.clone())),

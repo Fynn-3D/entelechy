@@ -718,7 +718,8 @@ be keywords.
 10. `times = N;` on a Kernel node or placed graph stands for `name/1` to
     `name/N`, each wired as written; `carry port <- output;` feeds the
     port from the previous time's output from the second time on.
-    `name.port` means the last time's. `N = 0` places nothing: a carried
+    `name.port` means the last time's, in the scene and wherever a port is
+    named: a replay, a read, a save, a pin. `N = 0` places nothing: a carried
     output is then what its port is first bound to, while an output no
     carry names, or a carry started by `<~`, has no value and is refused
     where read. `N` is a literal or a graph param; a param that sizes the

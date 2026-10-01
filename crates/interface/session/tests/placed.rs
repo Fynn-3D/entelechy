@@ -123,3 +123,69 @@ output result <- c.result;
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A node placed `times = N` is named, wherever a node's port is, as the
+/// scene names it: `name.port` is its last time's, a placed graph's
+/// output through the node inside it.
+#[test]
+fn a_repeated_nodes_name_is_its_last_time() {
+    let dir = std::env::temp_dir().join(format!("orla-repeated-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("k.orla"), KERNELS).unwrap();
+    std::fs::write(dir.join("quad.osn"), PRESET).unwrap();
+    std::fs::write(
+        dir.join("scene.osn"),
+        "use \"k.orla\";
+node start: t.start@1 { domain = 3; }
+node grow: t.twice@1 { times = 3; carry counts <- result; counts <- start.result; }
+node r: graph \"quad.osn\" { times = 2; carry counts <- quad; counts <- start.result; }
+output shown <- grow.result;
+",
+    )
+    .unwrap();
+    let replay = "scene scene.osn
+frame 0
+expect grow.result[2] = 24
+expect r.quad[0] = 16
+expect count grow.result = 3
+";
+    let parsed = orla_session::replay::parse(replay, &dir).unwrap();
+    let runtime = Session::runtime_for("cpu", orla_session::Limits::default()).unwrap();
+    let outcome = orla_session::replay::run(&parsed, runtime).unwrap();
+    assert_eq!(
+        (outcome.checks, outcome.failures.len()),
+        (3, 0),
+        "{outcome:?}"
+    );
+
+    let mut session = Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    session.pin(orla_graph::NodeId("r".into()));
+    session.sync();
+    session.allow_writes(&dir).unwrap();
+    session.evaluate(&Context::default()).unwrap();
+    assert_eq!(
+        session
+            .producer(&orla_graph::NodeId("grow".into()), "result")
+            .0,
+        orla_graph::NodeId("grow/3".into())
+    );
+    assert_eq!(
+        session.producer(&orla_graph::NodeId("r".into()), "quad").0,
+        orla_graph::NodeId("r/2.again".into())
+    );
+    assert!(
+        session
+            .cached(&orla_graph::NodeId("r".into()), "quad")
+            .is_some()
+    );
+    session
+        .save(
+            &orla_graph::NodeId("grow".into()),
+            "result",
+            &dir.join("grow.field"),
+        )
+        .unwrap();
+    assert!(dir.join("grow.field").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}

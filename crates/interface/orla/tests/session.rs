@@ -2025,8 +2025,8 @@ output grid <- steps.result;
     dir.join("steps.osn")
 }
 
-/// A placed graph's port follows the last dot; any other name is reported
-/// as what it is.
+/// A placed graph's port follows the last dot, and a repeated node's name
+/// is its last time's; any other name is reported as what it is.
 #[test]
 fn a_save_names_a_node_a_placed_graphs_node_or_an_output() {
     let orla = env!("CARGO_BIN_EXE_orla");
@@ -2061,11 +2061,24 @@ fn a_save_names_a_node_a_placed_graphs_node_or_an_output() {
         std::fs::read(dir.join("by-output.field")).unwrap(),
         std::fs::read(dir.join("by-node.field")).unwrap()
     );
-    let output = run("steps.result", "nothing.field");
+    // A repeated node's name is its last time's, as the scene's own
+    // `output grid <- steps.result;` means it.
+    let output = run("steps.result", "by-name.field");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read(dir.join("by-output.field")).unwrap(),
+        std::fs::read(dir.join("by-name.field")).unwrap()
+    );
+    // A placed graph's port that is none of its outputs names nothing.
+    let output = run("steps/2.cells", "nothing.field");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success());
     assert!(
-        stderr.contains("is not a node: it is placed as 6 of them"),
+        stderr.contains("is not a node: it is placed as"),
         "{stderr}"
     );
     let _ = std::fs::remove_dir_all(&dir);

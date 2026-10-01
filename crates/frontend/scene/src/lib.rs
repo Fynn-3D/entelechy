@@ -310,6 +310,7 @@ fn spec_of(domain: DomainExpr, span: Span) -> Result<DomainSpec, DocumentError> 
 type Expanded = (
     Vec<NodeDecl>,
     Vec<(orla_language::Spanned<String>, SourceRef)>,
+    BTreeMap<String, String>,
 );
 
 /// What a placed sub-graph receives from its parent.
@@ -395,6 +396,7 @@ fn lower(
                 outputs: Vec::new(),
                 fallbacks: Vec::new(),
                 placed: Vec::new(),
+                repeated: Vec::new(),
             },
             files: Files::default(),
             inline: Vec::new(),
@@ -1023,7 +1025,7 @@ impl Lowering<'_, '_> {
         for reference in fallbacks {
             rename(reference)?;
         }
-        Ok((nodes, outputs))
+        Ok((nodes, outputs, renames))
     }
 
     /// The inputs the document declares: every name, and those the
@@ -1293,8 +1295,14 @@ impl Lowering<'_, '_> {
             .iter()
             .filter_map(|input| input.otherwise.clone())
             .collect();
-        let (nodes, declared_outputs) =
+        let (nodes, declared_outputs, repeated) =
             self.expand_times(document, placement, &params, &mut fallback_refs)?;
+        // A repeated node's name stays readable as its last time's.
+        self.out.graph.repeated.extend(
+            repeated
+                .into_iter()
+                .map(|(name, last)| (format!("{prefix}{name}"), NodeId(format!("{prefix}{last}")))),
+        );
         for decl in &nodes {
             self.placed += 1;
             if self.placed > MAX_PLACED {

@@ -54,8 +54,8 @@ pub fn parse_target(text: &str) -> Result<(String, String, u32, Vec<String>), St
     Ok((node.0, port, index, path))
 }
 
-/// Why a node's output has no value: the name is a placed graph or
-/// repeated node, no node, a node folded into its reader, or one that has
+/// Why a node's output has no value: the name is a placed graph without
+/// that output, no node, a node folded into its reader, or one that has
 /// not run since it was placed.
 pub(crate) fn why_no_value(
     graph: Option<&Graph>,
