@@ -1111,7 +1111,7 @@ fn read_shows_a_picture_and_sums_up_any_other_field() {
     // A row of Vec4s is numbers, not a picture one pixel high.
     let original = std::fs::read_to_string(&scene).unwrap();
     let rows = format!(
-        "{original}\nnode r: kernel {{ requires {{ field.write; }} domain = 4; output result: Rows<Vec4>; compute {{ return vec4(1.0, 2.0, 3.0, 4.0); }} }}\n"
+        "{original}\nnode r: kernel {{ requires {{ field.write; }} domain = 4; output result: Rows<Vec4>; compute {{ return vec4(1.0, 2.0, 3.0, 4.0); }} }}\nstruct Mark {{ pos: Vec2; hp: Int; }}\nnode m: kernel {{ requires {{ field.write; }} domain = 2; output result: Rows<Mark>; compute {{ return Mark {{ pos: vec2(1.0, 2.0), hp: 3 }}; }} }}\n"
     );
     let row = talk(
         &scene,
@@ -1120,12 +1120,24 @@ fn read_shows_a_picture_and_sums_up_any_other_field() {
             json!({ "id": 2, "op": "pin", "node": "r" }),
             json!({ "id": 3, "op": "evaluate", "time": 0.0 }),
             json!({ "id": 4, "op": "read", "node": "r" }),
+            json!({ "id": 5, "op": "pin", "node": "m" }),
+            json!({ "id": 6, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 7, "op": "read", "node": "m", "from": 0, "count": 1 }),
         ],
     );
     let answers = row;
     let row = &answers[3]["ok"];
     assert_eq!(row["format"], "summary", "{answers:?}");
     assert_eq!(row["summary"][3]["max"], 4.0, "{row}");
+    // Each number of an element is named, in the order the values come.
+    assert_eq!(row["fields"], json!(["x", "y", "z", "w"]), "{row}");
+    let mark = &answers[6]["ok"];
+    assert_eq!(
+        mark["fields"],
+        json!(["pos.x", "pos.y", "hp"]),
+        "{answers:?}"
+    );
+    assert_eq!(mark["values"], json!([[1.0, 2.0, 3]]), "{mark}");
     let picture = &responses[1]["ok"];
     assert_eq!(picture["format"], "png");
     assert_eq!(
@@ -1154,6 +1166,7 @@ fn read_shows_a_picture_and_sums_up_any_other_field() {
             .all(|cell| cell[0].is_boolean() && cell[1].is_i64()),
         "a Cell is its alive and its age: {values:?}"
     );
+    assert_eq!(responses[3]["ok"]["fields"], json!(["alive", "age"]));
     for (at, words) in [
         (4, "1 to 4096"),
         (5, "a picture's encoding"),

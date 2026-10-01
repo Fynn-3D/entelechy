@@ -404,6 +404,18 @@ pub(crate) fn element_fields(
     })
 }
 
+/// The name of each number in an element of a node's output, in the
+/// order a read gives them; see [`crate::Session::element_names`].
+pub(crate) fn element_names(
+    graph: Option<&Graph>,
+    runtime: &Runtime,
+    (node, port): (&NodeId, &str),
+) -> Result<Vec<String>, String> {
+    let at = locate(graph, runtime, (node, port), &[])?;
+    orla_ir::number_names(at.ty, &at.structs)
+        .ok_or_else(|| format!("`{node}.{port}` holds a struct its Kernel does not describe"))
+}
+
 /// One pixel of a cached image; see [`crate::Session::read_pixel`].
 pub(crate) fn read_pixel(
     runtime: &mut Runtime,

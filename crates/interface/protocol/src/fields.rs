@@ -164,12 +164,37 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
                 .clone(),
         )
     };
-    let described = json!({
+    let mut described = json!({
         "shape": domain.shape().to_string(),
         "extent": [domain.width(), domain.height(), domain.depth()],
         "count": domain.count(),
         "schema": schema.to_string(),
     });
+    // An element of several numbers names each, in the order they come.
+    let named = match request.get("node").and_then(Json::as_str) {
+        Some(node) => (
+            node.to_owned(),
+            request
+                .get("port")
+                .and_then(Json::as_str)
+                .unwrap_or("result")
+                .to_owned(),
+        ),
+        None => (
+            request
+                .get("output")
+                .and_then(Json::as_str)
+                .map(str::to_owned)
+                .or_else(|| graph_output(session))
+                .unwrap_or_default(),
+            "result".to_owned(),
+        ),
+    };
+    if let Ok(names) = session.element_names(&orla_graph::NodeId(named.0), &named.1)
+        && names.len() > 1
+    {
+        described["fields"] = json!(names);
+    }
     let picture = schema.is_picture(domain);
     let format = request.get("format").and_then(Json::as_str);
     let from = request.get("from").and_then(Json::as_u64);
@@ -582,4 +607,12 @@ fn snapshot_from(json: &Json) -> Result<orla_session::Snapshot, Json> {
         states,
         scene,
     })
+}
+
+/// The name of the scene's first output, which a read naming none reads.
+fn graph_output(session: &Session) -> Option<String> {
+    session
+        .graph()?
+        .primary_output()
+        .map(|(name, _)| name.clone())
 }

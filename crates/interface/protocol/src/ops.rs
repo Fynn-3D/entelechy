@@ -466,7 +466,7 @@ pub fn operations() -> Vec<Operation> {
                     "how many elements from `from` to answer as numbers, at most 4096; 1 when not given",
                 ),
             ],
-            "a picture: width, height, format, data (base64). Any other Field: shape, extent, count, schema, and its summary (each number's min, max, sum, mean, how many were not zero, and how many were not finite), or `values` from `from` (a number, or a list for an element of several), or format and data (base64)",
+            "a picture: width, height, format, data (base64). Any other Field: shape, extent, count, schema, `fields` (each number's name in an element of several, `hp`, `pos.x`), and its summary (each number's min, max, sum, mean, how many were not zero, and how many were not finite), or `values` from `from` (a number, or a list for an element of several), or format and data (base64)",
         ),
         op(
             "write",

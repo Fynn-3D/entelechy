@@ -1109,6 +1109,18 @@ impl Session {
         )
     }
 
+    /// The name of each number in an element of what `node.port` names,
+    /// in the order a read gives them: `hp`, `pos.x`; one number alone
+    /// is `""`.
+    pub fn element_names(
+        &self,
+        node: &orla_graph::NodeId,
+        port: &str,
+    ) -> Result<Vec<String>, String> {
+        let (node, port) = self.producer(node, port);
+        observe::element_names(self.scene.graph(), &self.runtime, (&node, &port))
+    }
+
     /// The fields of the struct `path` names in `node.port`'s element, in
     /// order; none for a value that is not a struct.
     pub fn element_fields(

@@ -159,6 +159,45 @@ pub fn schema_of(ty: Type, structs: &[StructDef]) -> Option<Schema> {
     Some(Schema::new(scalars))
 }
 
+/// The name of each number an element of type `ty` holds, in the order
+/// [`schema_of`] lays them out: a struct's fields by name, nested ones
+/// joined by a dot; a vector's lanes `x` to `w`; a matrix's numbered from
+/// 0; a value of one number unnamed (`""`). `None` for unknown structs.
+pub fn number_names(ty: Type, structs: &[StructDef]) -> Option<Vec<String>> {
+    fn joined(name: &str, part: &str) -> String {
+        if name.is_empty() {
+            part.to_owned()
+        } else {
+            format!("{name}.{part}")
+        }
+    }
+    fn push(ty: Type, structs: &[StructDef], name: &str, out: &mut Vec<String>) -> Option<()> {
+        match ty {
+            Type::Struct(index) => {
+                for field in &structs.get(index as usize)?.fields {
+                    push(field.ty, structs, &joined(name, &field.name), out)?;
+                }
+            }
+            other => {
+                let (_, lanes) = other.shape()?;
+                match lanes {
+                    1 => out.push(name.to_owned()),
+                    2..=4 => out.extend(
+                        ["x", "y", "z", "w"][..usize::from(lanes)]
+                            .iter()
+                            .map(|lane| joined(name, lane)),
+                    ),
+                    _ => out.extend((0..lanes).map(|i| joined(name, &i.to_string()))),
+                }
+            }
+        }
+        Some(())
+    }
+    let mut names = Vec::new();
+    push(ty, structs, "", &mut names)?;
+    Some(names)
+}
+
 /// A named parameter of any value type, with a default value.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Param {
