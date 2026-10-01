@@ -261,3 +261,34 @@ fn an_idle_sync_stamps_each_document_once() {
     // itself uses.
     assert!(stamps.values().all(|count| *count <= 2), "{stamps:?}");
 }
+
+/// A scene's struct may hold an enum a used document declares beside the
+/// scene's own params: a param's default is read with the structs in
+/// reach, their fields through the aliases in reach.
+#[test]
+fn a_scene_struct_holds_a_used_enum_beside_its_params() {
+    let dir = scratch(
+        "enum-beside-param",
+        &[
+            ("lib.orla", "type Mode = enum { Idle, Walk };\n"),
+            (
+                "scene.osn",
+                "use \"lib.orla\";\nparam speed: Float = 1.0;\nstruct Pose { mode: Mode; modes: [Mode; 2]; }\nnode n: kernel { requires { field.write; } output result: Rows<Pose>; domain = 1; compute { return Pose { mode: Mode.Walk, modes: [Mode.Idle, Mode.Walk] }; } }\noutput result <- n.result;\n",
+            ),
+        ],
+    );
+    let mut session = orla_session::Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    let events = session.sync();
+    assert!(session.graph().is_some(), "{events:?}");
+    session.evaluate(&orla_kernel::Context::default()).unwrap();
+    let (_, words) = session
+        .element_field(
+            &orla_graph::NodeId("n".into()),
+            "result",
+            0,
+            &["mode".into()],
+        )
+        .unwrap();
+    assert_eq!(words, vec![1]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

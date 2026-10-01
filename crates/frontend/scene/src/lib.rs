@@ -1116,6 +1116,43 @@ impl Lowering<'_, '_> {
         })
     }
 
+    /// The structs in reach, their fields' types read through the
+    /// aliases in reach, as the compiler reads a literal of them: an enum a
+    /// used document declares is an `Int` there too.
+    fn resolved_structs(&self) -> Vec<orla_language::StructDecl> {
+        let field_type = |ty: &str| match ty
+            .strip_prefix('[')
+            .and_then(|inner| inner.strip_suffix(']'))
+        {
+            Some(array) => match array.split_once(';') {
+                Some((element, count)) => {
+                    format!("[{};{count}]", resolved(element.trim(), &self.aliases))
+                }
+                None => ty.to_owned(),
+            },
+            None => resolved(ty, &self.aliases),
+        };
+        self.structs
+            .iter()
+            .map(|decl| orla_language::StructDecl {
+                fields: decl
+                    .fields
+                    .iter()
+                    .map(|(name, ty)| {
+                        (
+                            name.clone(),
+                            orla_language::Spanned {
+                                value: field_type(&ty.value),
+                                span: ty.span,
+                            },
+                        )
+                    })
+                    .collect(),
+                ..decl.clone()
+            })
+            .collect()
+    }
+
     /// The params the document declares, each read in its own type.
     fn params(&self, document: &Document) -> Result<Vec<GraphParam>, DocumentError> {
         let mut params = Vec::new();
@@ -1127,7 +1164,7 @@ impl Lowering<'_, '_> {
                 span: decl.ty.span,
             };
             let default = self.known().with_variants(&decl.default)?;
-            let default = orla_compiler::literal_of_type(&default, &ty, &self.structs)
+            let default = orla_compiler::literal_of_type(&default, &ty, &self.resolved_structs())
                 .map_err(|e| compiled(decl.default.span, e))?;
             if params
                 .iter()
