@@ -88,13 +88,14 @@ kernel nebula.probe@1 {
 }
 
 /// How much curl noise spreads or gathers at a few points: its
-/// divergence, taken across a small step; none, up to rounding.
+/// divergence, taken across the step the curl itself takes, so the
+/// differences cancel; none, up to rounding.
 kernel nebula.spread@1 {
     requires { field.write; }
     output result: Rows<Float>;
     compute {
         let p = vec3(float(element()) * 0.93 + 0.31, 1.7, float(element()) * 0.41 - 2.2);
-        let e = 0.01;
+        let e = 0.1;
         return (curl3(p + vec3(e, 0.0, 0.0), 9).x - curl3(p - vec3(e, 0.0, 0.0), 9).x
               + curl3(p + vec3(0.0, e, 0.0), 9).y - curl3(p - vec3(0.0, e, 0.0), 9).y
               + curl3(p + vec3(0.0, 0.0, e), 9).z - curl3(p - vec3(0.0, 0.0, e), 9).z) / (2.0 * e);

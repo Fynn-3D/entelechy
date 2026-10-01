@@ -14,10 +14,16 @@ fn scramble(v: Int) -> Int {
     return d ^ (d >>> 16);
 }
 
-/// A hash of one, two or three whole numbers and a seed.
-fn hash_int(x: Int, seed: Int) -> Int { return scramble(x ^ scramble(seed)); }
-fn hash_int2(x: Int, y: Int, seed: Int) -> Int { return scramble(x ^ scramble(y ^ scramble(seed))); }
-fn hash_int3(x: Int, y: Int, z: Int, seed: Int) -> Int { return scramble(x ^ scramble(y ^ scramble(z ^ scramble(seed)))); }
+/// A hash of one, two or three whole numbers and a seed: each number
+/// multiplied by its own odd constant, so no two share a direction, and
+/// the sum of their bits stirred once.
+fn hash_int(x: Int, seed: Int) -> Int { return scramble(x ^ mul_wrap(seed, 0x9e3779b9)); }
+fn hash_int2(x: Int, y: Int, seed: Int) -> Int {
+    return scramble(mul_wrap(x, 0x8da6b343) ^ mul_wrap(y, 0xd8163841) ^ mul_wrap(seed, 0x9e3779b9));
+}
+fn hash_int3(x: Int, y: Int, z: Int, seed: Int) -> Int {
+    return scramble(mul_wrap(x, 0x8da6b343) ^ mul_wrap(y, 0xd8163841) ^ mul_wrap(z, 0xcb1ab31f) ^ mul_wrap(seed, 0x9e3779b9));
+}
 
 /// A hash as a number from 0 up to 1: its top 24 bits.
 fn unit_of(h: Int) -> Float { return float(h >>> 8) / 16777216.0; }

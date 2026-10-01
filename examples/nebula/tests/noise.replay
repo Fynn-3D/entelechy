@@ -3,18 +3,20 @@ scene noise.osn
 # The noise package: a hash of whole numbers is the same bits on every
 # backend; value noise stays within -1 and 1 and gradient noise near
 # them; a Worley distance is never more than a cell's diagonal; and curl
-# noise neither gathers nor spreads, its divergence near zero where the
-# curl itself is near one.
+# noise neither gathers nor spreads, its divergence across the curl's
+# own step zero up to rounding.
 frame 0.0
-expect probe.result[0].x = 0.30336142 0.0000001
-expect probe.result[1].x = 0.02667594 0.0000001
-expect probe.result[2].x = 0.29048818 0.0000001
-expect probe.result[0] = 0.30336142 0.73087466 0.2376147 0.45522088 0.0001
-expect probe.result[2] = 0.29048818 -0.69700044 0.42402613 0.72550184 0.0001
+expect probe.result[0].x = 0.0077651143 0.0000001
+expect probe.result[1].x = 0.5820252 0.0000001
+expect probe.result[2].x = 0.10791439 0.0000001
+expect probe.result[0] = 0.0077651143 0.3442049 0.29118812 0.38863346 0.0001
+expect probe.result[2] = 0.10791439 -0.53633076 -0.42905104 0.5868549 0.0001
 expect probe.result[3].y > -1.0
 expect probe.result[3].y < 1.0
 expect probe.result[3].w < 1.8
-expect spread.result[0] < 0.1
-expect spread.result[0] > -0.1
-expect spread.result[2] < 0.1
-expect spread.result[2] > -0.1
+expect spread.result[0] < 0.0001
+expect spread.result[0] > -0.0001
+expect spread.result[1] < 0.0001
+expect spread.result[1] > -0.0001
+expect spread.result[2] < 0.0001
+expect spread.result[2] > -0.0001
