@@ -374,11 +374,12 @@ Kernel in it and in every document that `use`s it. A `.orla` file may
 `use` other `.orla` files or directories: their top-level declarations,
 and what they use, come before the file's own. A scene's `use` brings
 them to its inline Kernels. A function, a struct and a `type` are
-scoped by their document: a name reaches the document's own declaration
-of it, or else the one declaration of it in the documents it reaches
-through `use`, so two libraries may each keep a helper or a struct of
-one name, and an application may name its own as a package it uses
-does. The same struct or `type` declared alike in two documents is one.
+scoped by their document: a name reaches the Kernel's own declaration
+of it, then the document's own, or else the one declaration of it in
+the documents it reaches through `use`, so two libraries may each keep
+a helper or a struct of one name, and an application or a Kernel may
+name its own as a package it uses does, the package's code still
+reaching the package's. The same struct or `type` declared alike in two documents is one.
 A name two used documents answer differently is refused where it is
 named, naming both. Two documents that `use` each other are refused by
 name. A name a Kernel

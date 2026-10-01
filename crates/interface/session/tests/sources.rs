@@ -292,3 +292,33 @@ fn a_scene_struct_holds_a_used_enum_beside_its_params() {
     assert_eq!(words, vec![1]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A Kernel's own function, struct and type are the innermost scope:
+/// its code reaches its own, and a used library's code keeps reaching
+/// the library's own of the same names.
+#[test]
+fn a_kernels_own_declarations_shadow_a_used_librarys() {
+    let dir = scratch(
+        "kernel-own",
+        &[
+            (
+                "lib.orla",
+                "struct Pair { a: Int; b: Int; }\ntype Mode = enum { Idle, Walk };\nfn over(a: Int, b: Int) -> Int { return a + b; }\nfn total(x: Int) -> Int { let p = Pair { a: x, b: x * 2 }; return over(p.a, p.b) + Mode.Walk; }\n",
+            ),
+            (
+                "scene.osn",
+                "use \"lib.orla\";\nnode n: kernel { requires { field.write; } output result: Rows<Int>; domain = 1;\n    struct Pair { left: Int; right: Int; }\n    type Mode = enum { Off = 10, On = 20 };\n    fn over(a: Int, b: Int) -> Int { return a * b; }\n    compute { let p = Pair { left: 1, right: Mode.On }; return over(3, 4) + p.left + p.right + total(5); } }\noutput result <- n.result;\n",
+            ),
+        ],
+    );
+    let mut session = orla_session::Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    let events = session.sync();
+    assert!(session.graph().is_some(), "{events:?}");
+    session.evaluate(&orla_kernel::Context::default()).unwrap();
+    // Its own: 3 * 4, and 1 + 20; the library's: 5 + 10, and 1.
+    let (_, words) = session
+        .element_field(&orla_graph::NodeId("n".into()), "result", 0, &[])
+        .unwrap();
+    assert_eq!(words, vec![12 + 21 + 16]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

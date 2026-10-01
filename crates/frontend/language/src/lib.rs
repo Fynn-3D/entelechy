@@ -251,14 +251,76 @@ impl Document {
         if structs.is_empty() && types.is_empty() && functions.is_empty() {
             return;
         }
+        // A Kernel's own function, struct or type is the innermost scope:
+        // the shared one of its name is renamed out of its way, and the
+        // shared declarations that name it follow it, so a library keeps
+        // calling and naming its own.
         let prepend = |kernel: &mut Kernel| {
-            let mut all = structs.to_vec();
+            let own_fns: Vec<String> = kernel
+                .functions
+                .iter()
+                .map(|f| f.name.value.clone())
+                .collect();
+            let own_types: Vec<String> = kernel
+                .structs
+                .iter()
+                .map(|s| s.name.value.clone())
+                .chain(kernel.types.iter().map(|t| t.name.value.clone()))
+                .collect();
+            let call = |name: &str| {
+                own_fns
+                    .iter()
+                    .any(|own| own == name)
+                    .then(|| format!("{name}@shared"))
+            };
+            let ty = |name: &str| {
+                own_types
+                    .iter()
+                    .any(|own| own == name)
+                    .then(|| format!("{name}@shared"))
+            };
+            let spanned = |old: &Spanned<String>, value: String| Spanned {
+                value,
+                span: old.span,
+            };
+            let mut all: Vec<StructDecl> = structs
+                .iter()
+                .map(|decl| StructDecl {
+                    name: spanned(
+                        &decl.name,
+                        ty(&decl.name.value).unwrap_or_else(|| decl.name.value.clone()),
+                    ),
+                    fields: decl
+                        .fields
+                        .iter()
+                        .map(|(name, t)| (name.clone(), spanned(t, renamed_type(&t.value, &ty))))
+                        .collect(),
+                })
+                .collect();
             all.append(&mut kernel.structs);
             kernel.structs = all;
-            let mut aliases = types.to_vec();
+            let mut aliases: Vec<TypeAlias> = types
+                .iter()
+                .map(|alias| TypeAlias {
+                    name: spanned(
+                        &alias.name,
+                        ty(&alias.name.value).unwrap_or_else(|| alias.name.value.clone()),
+                    ),
+                    target: spanned(&alias.target, renamed_type(&alias.target.value, &ty)),
+                })
+                .collect();
             aliases.append(&mut kernel.types);
             kernel.types = aliases;
-            let mut shared = functions.to_vec();
+            let mut shared: Vec<FnDecl> = functions
+                .iter()
+                .map(|f| {
+                    f.renamed(
+                        call(&f.name.value).unwrap_or_else(|| f.name.value.clone()),
+                        &call,
+                    )
+                    .retyped(&ty)
+                })
+                .collect();
             shared.append(&mut kernel.functions);
             kernel.functions = shared;
         };
