@@ -626,7 +626,7 @@ impl Builder<'_> {
             _ => {
                 // The document's functions first: one may stand for a
                 // math builtin of its name.
-                let found = self.function_index(name)?.map(|index| {
+                let found = self.function_index(name, span)?.map(|index| {
                     let functions = self.shared.functions.borrow();
                     let function = &functions[index as usize].1;
                     (
@@ -656,12 +656,7 @@ impl Builder<'_> {
                     self.called(index as u32, span)?;
                     return Ok(self.emit(ret, Op::Call(index as u32, ids)));
                 }
-                if let Some((_, template)) = self
-                    .shared
-                    .templates
-                    .get(name)
-                    .filter(|(position, _)| self.sees(*position))
-                {
+                if let Some((_, template)) = self.shared.templates.get(name) {
                     return self.instantiate(template, args, span);
                 }
                 if YIELDING.contains(&name) {
@@ -719,27 +714,15 @@ impl Builder<'_> {
                     })?;
                     return Ok(self.emit(ty, Op::Intrinsic(intrinsic, ids)));
                 }
-                // A Kernel has no stack: a function calls only those
-                // above it. Self-calls and calls below get their own
-                // diagnostics.
-                if self.name.split('<').next() == Some(name) {
-                    return Err(semantic(
-                        span,
-                        format!(
-                            "`{name}` calls itself, and a Kernel has no stack to call into; a `loop` with the work as its carried value is the form"
-                        ),
-                    ));
-                }
-                if self.shared.declared.iter().any(|f| f == name) {
-                    return Err(semantic(
-                        span,
-                        format!(
-                            "`{name}` is defined below this one; a function calls only what is defined above it, so no two can call each other"
-                        ),
-                    ));
-                }
                 // The Kernel's functions, then every builtin via `help`.
-                let declared: Vec<&str> = self.shared.declared.iter().map(String::as_str).collect();
+                let mut declared: Vec<&str> = self
+                    .shared
+                    .plain
+                    .keys()
+                    .chain(self.shared.templates.keys())
+                    .copied()
+                    .collect();
+                declared.sort_unstable();
                 let near = orla_language::nearest(name, declared)
                     .map(str::to_owned)
                     .or_else(|| {
@@ -749,7 +732,7 @@ impl Builder<'_> {
                 Err(semantic(
                     span,
                     format!(
-                        "`{name}` is not a builtin, intrinsic, or function defined above or in a document this one uses{suggestion}"
+                        "`{name}` is not a builtin, intrinsic, or function of this document or one it uses{suggestion}"
                     ),
                 ))
             }

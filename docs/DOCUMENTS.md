@@ -387,8 +387,9 @@ diagnostic names the declaring document and the `use` to add.
 
 - A function's name is any word but `let`, `return`, `if`, `match`,
   `loop`; `fn scatter(...)` is a function.
-- A function calls only what is declared above it, so it never recurses;
-  repetition is a `loop` carrying the work.
+- Functions call one another in any order; no chain of calls comes back
+  to a function, so none recurses, and a cycle is refused naming it
+  ([decision](DECISIONS.md)). Repetition is a `loop` carrying the work.
 - A short function is inlined at compile time; a trace still shows the
   call.
 - A function may take a Field: `fn cast(voxels: Volume<Int>, eye: Vec3)

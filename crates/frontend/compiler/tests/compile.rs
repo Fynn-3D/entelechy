@@ -94,9 +94,9 @@ fn diagnostics_name_the_problem_and_the_position() {
     );
 
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.write; } output r: Image; fn f(x: Float) -> Float { return g(x); } fn g(x: Float) -> Float { return x; } compute { return vec4(f(1.0), 0.0, 0.0, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; } output r: Image; fn f(x: Float) -> Float { return g(x); } fn g(x: Float) -> Float { return f(x); } compute { return vec4(f(1.0), 0.0, 0.0, 1.0); } }",
     );
-    assert!(message.contains("defined above"), "{message}");
+    assert!(message.contains("f -> g -> f"), "{message}");
 
     let (_, message) = semantic(
         "kernel t.k@1 { requires { file.write; } output r: Image; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }",
@@ -1248,7 +1248,7 @@ fn a_manifest_says_what_its_ports_hold_by_name() {
 }
 
 #[test]
-fn a_function_calls_only_what_is_defined_above_it() {
+fn no_chain_of_calls_reaches_back_to_a_function() {
     let (_, message) = semantic(
         "kernel t.k@1 { requires { field.write; } output result: Rows<Int>; fn fact(n: Int) -> Int { return if n <= 1 { 1 } else { n * fact(n - 1) }; } compute { return fact(element()); } }",
     );
@@ -1256,10 +1256,24 @@ fn a_function_calls_only_what_is_defined_above_it() {
         message.contains("calls itself") && message.contains("no stack"),
         "{message}"
     );
-    let (_, message) = semantic(
+    // In any order: `a` calls `b`, written below it.
+    compile(
         "kernel t.k@1 { requires { field.write; } output result: Rows<Int>; fn a(n: Int) -> Int { return b(n); } fn b(n: Int) -> Int { return n; } compute { return a(element()); } }",
+    )
+    .expect("a function calls one written below it");
+    // A cycle of three, named whole where it closes.
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Int>; fn a(n: Int) -> Int { return b(n); } fn b(n: Int) -> Int { return c(n); } fn c(n: Int) -> Int { return a(n); } compute { return a(element()); } }",
     );
-    assert!(message.contains("defined below this one"), "{message}");
+    assert!(
+        message.contains("a -> b -> c -> a") && message.contains("no stack"),
+        "{message}"
+    );
+    // Through a template: `twice` calls `step`, which calls `twice`.
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Float>; fn twice<T>(v: T) -> T { return step(v); } fn step(v: Float) -> Float { return twice(v); } compute { return twice(1.0); } }",
+    );
+    assert!(message.contains("twice -> step -> twice"), "{message}");
     let (_, message) = semantic(
         "kernel t.k@1 { requires { field.write; } output result: Rows<Int>; compute { return nowhere(element()); } }",
     );
@@ -1768,21 +1782,19 @@ fn a_written_division_with_a_remainder_is_no_float() {
     }
 }
 
-/// A function sees only those above it, however a Kernel's calls order
-/// their lowering: `b`, lowered first for the Kernel, stays below `a`.
+/// Functions call each other in any order, however a Kernel's calls
+/// order their lowering: `b`, lowered first for the Kernel, is the one
+/// `a` calls.
 #[test]
-fn a_function_sees_only_those_above_it_whatever_is_lowered_first() {
-    let (_, message) = semantic(
+fn functions_call_each_other_in_any_order_whatever_is_lowered_first() {
+    compile(
         "kernel t.k@1 { requires { field.write; }
-         fn a(x: Float) -> Float { return b(x); }
-         fn b(x: Float) -> Float { return x; }
+         fn a(x: Float) -> Float { return b(x) * 2.0; }
+         fn b(x: Float) -> Float { return x + 1.0; }
          output result: Rows<Float>;
          compute { return b(1.0) + a(1.0); } }",
-    );
-    assert!(
-        message.contains("`b` is defined below this one"),
-        "{message}"
-    );
+    )
+    .expect("a calls b, written below it");
 }
 
 /// A document's functions are checked once, called or not.

@@ -74,6 +74,33 @@ makes a failure the same on every backend and machine.
 `an_element_past_its_budget_fails_alike_on_every_backend` and
 `a_run_past_the_hosts_work_fails_alike_on_every_backend`.
 
+## A function never reaches itself; its place in the document is free
+
+A Kernel's functions may call one another whatever order they are
+written in, within a document and across the documents it uses. No
+chain of calls may come back to a function it has left: `fact` calling
+`fact`, or `a` calling `b` calling `a`, is refused where the chain
+closes, naming the chain whole (`a -> b -> a`). Repetition is a `loop`
+carrying the work.
+
+**Why.** A Kernel has no stack. WGSL forbids recursion; the WebAssembly
+JIT keeps what a stack would hold in slots its prepared Kernel owns; a
+short function is inlined; and an element's work is bounded by its loops
+alone. Refusing a cycle protects exactly that, where a rule of position
+(a function calls only those above it) refused orders with no cycle and
+made a document's order a thing to arrange: a caller written first, or a
+helper added at the end by an edit, was refused for being where it was.
+A function still reaches only its own document's declarations and those
+of the documents it uses, never a document that uses it.
+
+**Where.** `refuse_cycle` and `Shared::lowering` in the compiler's
+[`lower`](../crates/frontend/compiler/src/lower/mod.rs): a function is
+lowered where first called, with the functions being lowered on a stack,
+and a call to one on it is the cycle. The IR keeps its own order,
+callees before callers ([`Function`](../crates/core/ir/src/lib.rs)).
+Tests `no_chain_of_calls_reaches_back_to_a_function` and
+`functions_call_each_other_in_any_order_whatever_is_lowered_first`.
+
 ## What a run holds in Host memory counts against the Host's budget
 
 A scatter's pairs (the one each element returns and every one it

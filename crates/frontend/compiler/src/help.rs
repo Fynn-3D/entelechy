@@ -421,7 +421,7 @@ pub fn forms() -> Vec<Form> {
             "fn",
             "kernel",
             "fn name(a: Float) -> Float { ... }   fn name<T>(a: T) -> T { ... }",
-            "A function of the document or the Kernel; a call reaches the document's own, or else the one a document it uses declares; it calls only what is declared above it, and so never itself, and may take a Field parameter. A `<T>` names a type parameter, bound by the type of the argument written for it, and one instance is compiled per set of types a call gives it.",
+            "A function of the document or the Kernel; a call reaches the document's own, or else the one a document it uses declares; it calls others in any order, but no chain of calls comes back to it, and it may take a Field parameter. A `<T>` names a type parameter, bound by the type of the argument written for it, and one instance is compiled per set of types a call gives it.",
         ),
         form(
             "kernel",
