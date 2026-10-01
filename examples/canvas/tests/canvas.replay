@@ -1,0 +1,66 @@
+scene known.osn
+
+# Colour: HSV of (0.25, 0.5, 0.75); the HSV and Oklab round trips land
+# where they started; white's luminance is one; sRGB's transfer undoes
+# itself, and a stored half is 0.214 of the light.
+frame 0.0
+expect colour.result[0] = 0.5833333 0.6666667 0.75 0.0 0.00001
+expect colour.result[1].x < 0.00001
+expect colour.result[1].y < 0.0001
+expect colour.result[1].z = 1.0 0.00001
+expect colour.result[2] = 0.25 0.5 0.75 0.21404114 0.00001
+
+# Blending (0.5 grey over 0.25, 0.5, 0.75): multiply halves, screen
+# lifts, overlay keeps a middle grey's base; half opacity is half way.
+expect multiply.result[0] = 0.125 0.25 0.375 1.0 0.00001
+expect screen.result[0] = 0.625 0.75 0.875 1.0 0.00001
+expect overlay.result[0] = 0.25 0.5 0.75 1.0 0.00001
+expect half.result[0] = 0.375 0.5 0.625 1.0 0.00001
+
+# Filters: a blur leaves one colour as it is and spreads a dot by
+# Gaussian weights (0.399 each way at the centre); a shrink takes the
+# mean; a one at the centre convolves to the source, a box to the mean
+# of a ramp, which is its middle; bicubic enlarging keeps a ramp
+# straight; one colour has no edges.
+expect flat_blur.result[100] = 0.3 0.6 0.9 1.0 0.00001
+expect dot_blur.result[40].x = 0.15925 0.0001
+expect dot_blur.result[39].x = 0.0965846 0.00001
+expect dot_blur.result[41].x = 0.0965846 0.00001
+expect shrunk.result[0] = 0.0714286 0.0714286 0.5 1.0 0.00001
+expect same.result[27] = 0.4285714 0.4285714 0.5 1.0 0.00001
+expect mean.result[27] = 0.4285714 0.4285714 0.5 1.0 0.00001
+expect bigger.result[119].x = 0.4642857 0.00001
+expect flat_edges.result[100].x = 0.0 0.00001
+
+# Dilation by two grows the dot into a disc (2, 1 away in, 2, 2 out);
+# erosion by one, a 3 by 3, wears the disc to a cross: the corner a step
+# from the dot reaches past the disc.
+expect grown.result[58].x = 1.0
+expect grown.result[60].x = 0.0
+expect worn.result[31].x = 1.0
+expect worn.result[30].x = 0.0
+
+# Tone: a stop doubles; no saturation is grey; a whole turn of hue is
+# none; levels from 0.2 to 0.8; a straight curve and the neutral LUT
+# change nothing.
+expect brighter.result[0] = 0.6 1.2 1.8 1.0 0.0001
+expect greyed.result[0] = 0.5511478 0.5511478 0.5511478 1.0 0.00001
+expect turned.result[0] = 0.3 0.6 0.9 1.0 0.0001
+expect levelled.result[0] = 0.1666667 0.6666667 1.0 1.0 0.00001
+expect curved.result[0] = 0.3 0.6 0.9 1.0 0.00001
+expect looked_up.result[0] = 0.3 0.6 0.9 1.0 0.00001
+
+# Equalization of two greys, half the pixels each: 32 in the 0.2 bin.
+# A pixel goes to the share darker than it, read a fifth of the way
+# through its bin for 0.2 (0.1: a fifth of the half) and four fifths for
+# 0.8 (0.9).
+expect even.counts[51] = 32
+expect even.result[0].x = 0.1 0.00001
+expect even.result[7].x = 0.9 0.00001
+
+# Distance from the dot: half a pixel inside it; 3.5 four pixels
+# across; the diagonal, root 18 less a half.
+expect field.result[40] = -0.5 0.00001
+expect field.result[44] = 3.5 0.00001
+expect field.result[70] = 3.7426407 0.00001
+expect field.result[80] = 5.1568542 0.00001

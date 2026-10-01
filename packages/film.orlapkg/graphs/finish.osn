@@ -14,11 +14,10 @@ param over: Float = 0.8;
 param grain: Float = 0.03;
 
 node glow: graph "bloom.osn" { source <- source; over = over; }
-node small: film.bright@1 { source <- source; over = 0.0; domain = ceil(size(source) / 3); }
-node soft_x: film.blur@1 { source <- small.result; axis = vec2(1.0, 0.0); reach = 1.2; }
-node soft_y: film.blur@1 { source <- soft_x.result; axis = vec2(0.0, 1.0); reach = 1.2; }
+node small: canvas.shrink@1 { source <- source; domain = ceil(size(source) / 3); }
+node soft: graph "../../canvas.orlapkg/graphs/blur.osn" { source <- small.result; sigma = 2.15; }
 node grade: film.grade@1 {
-    source <- source; soft <- soft_y.result; near_glow <- glow.near; far_glow <- glow.far; focus <- focus;
+    source <- source; soft <- soft.result; near_glow <- glow.near; far_glow <- glow.far; focus <- focus;
     exposure = exposure; grain = grain; domain = window();
 }
 

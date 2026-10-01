@@ -104,10 +104,28 @@ use "picture.orlapkg";
   
   Used by the `nebula` example, whose replay holds the hashes to their
   bits on three backends.
+- **canvas** — Orla's image processing, over `Image`s in linear light:
+  - colour: luminance, sRGB's transfer, HSV and Oklab, as functions, and
+    `canvas.encode` / `canvas.decode` for a window or a file;
+  - blending: the common modes (multiply, screen, overlay, soft light
+    and others), and compositing one picture over another;
+  - filters: Gaussian blur (`graphs/blur.osn`), a box shrink, any
+    convolution, unsharp sharpening (`graphs/sharpen.osn`), Sobel
+    edges, dilation and erosion, bicubic resizing;
+  - tone: exposure, contrast, saturation and hue in Oklab; levels;
+    curves; 3D LUTs, and the neutral LUT a grade is baked into;
+  - histograms: counting by scatter, the cumulative count by prefix,
+    equalization (`graphs/equalize.osn`);
+  - distance: the signed distance from every pixel to a shape, by jump
+    flooding (`graphs/distance.osn`).
+
+  Used by the `canvas` example, whose replay holds each to an answer
+  worked by hand on three backends.
 - **film** — the finish of a picture of light brighter than white that
   keeps each pixel's depth in w:
   - the colours of heat (`blackbody`) and of the wheel (`hue`);
-  - a glow round what is past white (`graphs/bloom.osn`);
+  - a glow round what is past white (`graphs/bloom.osn`), blurred by the
+    canvas package;
   - depth of field, sharp at a focus the scene gives as a row each frame;
   - the grade: exposure, ACES (the picture package's), colour fringing
     toward the edges, darkened corners, and grain from the noise

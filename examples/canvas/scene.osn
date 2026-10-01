@@ -1,0 +1,31 @@
+// The darkroom: a raw photograph developed with the canvas package. Its
+// histogram is spread, its colour graded, its detail sharpened; a mark's
+// signed distance draws a neon outline screened over it; the corners
+// are darkened; and the light is encoded for the window. `view` shows a
+// stage: 0 the raw photograph, 1 equalized, 2 graded, 3 sharpened, 4
+// with the neon, 5 finished.
+use "kernels/";
+use "../../packages/canvas.orlapkg";
+
+param view: Int = 5;
+
+node photo: darkroom.photo@1 { domain = window(); }
+node even: graph "../../packages/canvas.orlapkg/graphs/equalize.osn" { source <- photo.result; amount = 0.35; }
+node graded: canvas.adjust@1 { source <- even.result; exposure = -0.1; contrast = 1.3; saturation = 1.35; hue = -0.02; }
+node crisp: graph "../../packages/canvas.orlapkg/graphs/sharpen.osn" { source <- graded.result; sigma = 1.5; amount = 0.7; }
+
+node mark: darkroom.mark@1 { domain = window(); }
+node outline: graph "../../packages/canvas.orlapkg/graphs/distance.osn" { mask <- mark.result; }
+node neon: darkroom.neon@1 { distance <- outline.result; domain = window(); }
+node lit: canvas.blend@1 { base <- crisp.result; top <- neon.result; mode = Blend.Screen; }
+
+node corners: darkroom.vignette@1 { domain = window(); }
+node shaded: canvas.blend@1 { base <- lit.result; top <- corners.result; mode = Blend.Multiply; }
+
+node stage: darkroom.pick@1 {
+    a <- photo.result; b <- even.result; c <- graded.result; d <- crisp.result; e <- lit.result; f <- shaded.result;
+    view = view;
+}
+node shown: canvas.encode@1 { source <- stage.result; }
+
+output result <- shown.result;

@@ -1,0 +1,12 @@
+//! One jump-flooding pass and the step after it. `flood.osn` places this
+//! `passes` times.
+use "../kernels/distance.orla";
+
+input seeds: Image;
+input step: Rows<Int>;
+
+node pass: canvas.flood@1 { seeds <- seeds; step <- step; }
+node next: canvas.next_step@1 { step <- step; domain = 1; }
+
+output result <- pass.result;
+output step <- next.result;

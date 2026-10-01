@@ -1,0 +1,17 @@
+//! The signed distance from every pixel to a shape, in pixels, negative
+//! inside: the shape is where `mask` is on (see `canvas.seeds`). Place it
+//! with
+//!   node field: graph "canvas.orlapkg/graphs/distance.osn" { mask <- shape.result; }
+use "../kernels/distance.orla";
+
+input mask: Image;
+param threshold: Float = 0.5;
+param passes: Int = 11;
+
+node shape: canvas.seeds@1 { mask <- mask; threshold = threshold; inside = true; }
+node space: canvas.seeds@1 { mask <- mask; threshold = threshold; inside = false; }
+node to_shape: graph "flood.osn" { seeds <- shape.result; passes = passes; }
+node to_space: graph "flood.osn" { seeds <- space.result; passes = passes; }
+node signed: canvas.distance@1 { inside <- to_shape.result; outside <- to_space.result; }
+
+output result <- signed.result;

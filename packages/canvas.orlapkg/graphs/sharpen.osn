@@ -1,0 +1,13 @@
+//! Unsharp masking as a sub-graph: the source pushed away from its blur
+//! of `sigma` pixels by `amount`. Place it with
+//!   node crisp: graph "canvas.orlapkg/graphs/sharpen.osn" { source <- x.result; amount = 0.8; }
+use "../kernels/filter.orla";
+
+input source: Image;
+param sigma: Float = 1.5;
+param amount: Float = 0.6;
+
+node soft: graph "blur.osn" { source <- source; sigma = sigma; }
+node crisp: canvas.sharpen@1 { source <- source; blurred <- soft.result; amount = amount; }
+
+output result <- crisp.result;

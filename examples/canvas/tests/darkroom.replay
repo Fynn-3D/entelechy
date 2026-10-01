@@ -1,0 +1,12 @@
+scene ../scene.osn
+
+# The darkroom at 160 by 90: the finished picture fills the window and
+# is opaque; the mark's centre is well inside it and a corner far
+# outside; the histogram has its 256 bins.
+window 160 90
+frame 0.0 to 0.1 every 0.05
+expect count shown.result = 14400
+expect shown.result[7280].w = 1.0 0.00001
+expect outline.signed.result[5168] < -3.0
+expect outline.signed.result[14240] > 20.0
+expect count even.counts.result = 256

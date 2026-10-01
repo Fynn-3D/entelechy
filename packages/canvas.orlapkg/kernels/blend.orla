@@ -1,0 +1,51 @@
+// Blending: how a colour laid over another combines with it, by the
+// modes painting programs share (as the W3C's compositing spec defines
+// them, on values 0 to 1), and compositing one picture over another.
+use "colour.orla";
+
+type Blend = enum { Normal, Multiply, Screen, Overlay, SoftLight, Add, Difference, Darken, Lighten };
+
+/// One channel of `top` laid over `base` by `mode`.
+fn blend_channel(mode: Blend, base: Float, top: Float) -> Float {
+    return match mode {
+        Blend.Normal => top,
+        Blend.Multiply => base * top,
+        Blend.Screen => base + top - base * top,
+        Blend.Overlay => if base <= 0.5 { 2.0 * base * top } else { 1.0 - 2.0 * (1.0 - base) * (1.0 - top) },
+        Blend.SoftLight => if top <= 0.5 {
+            base - (1.0 - 2.0 * top) * base * (1.0 - base)
+        } else {
+            let d = if base <= 0.25 { ((16.0 * base - 12.0) * base + 4.0) * base } else { sqrt(base) };
+            base + (2.0 * top - 1.0) * (d - base)
+        },
+        Blend.Add => base + top,
+        Blend.Difference => abs(base - top),
+        Blend.Darken => min(base, top),
+        Blend.Lighten => max(base, top),
+    };
+}
+
+/// `top` laid over `base` by `mode`, channel by channel.
+fn blend(mode: Blend, base: Vec3, top: Vec3) -> Vec3 {
+    return vec3(blend_channel(mode, base.x, top.x), blend_channel(mode, base.y, top.y), blend_channel(mode, base.z, top.z));
+}
+
+/// `top` composited over `base`: blended by `mode` where `top` covers
+/// it (its alpha times `opacity`), and the alphas joined as one sheet
+/// over another. `top` is stretched over `base` whatever its size.
+kernel canvas.blend@1 {
+    requires { field.read; field.write; }
+    input base: Image;
+    input top: Image;
+    param mode: Blend = Blend.Normal;
+    param opacity: Float = 1.0;
+    output result: Image;
+    compute {
+        let b = sample(base);
+        let uv = (coord() + vec2(0.5, 0.5)) / domain();
+        let t = at_linear(top, uv * size(top));
+        let cover = clamp(t.w * opacity, 0.0, 1.0);
+        let c = mix(b.xyz, blend(mode, b.xyz, t.xyz), cover);
+        return vec4(c.x, c.y, c.z, cover + b.w * (1.0 - cover));
+    }
+}

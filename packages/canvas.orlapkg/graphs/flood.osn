@@ -1,0 +1,20 @@
+//! Jump flooding as a sub-graph: every pixel given the nearest of
+//! `seeds` (from `canvas.seeds`). `passes` covers a picture whose longer
+//! side is up to 2^(passes - 1) pixels, with one pass at a step of one
+//! to spare. Place it with
+//!   node near: graph "canvas.orlapkg/graphs/flood.osn" { seeds <- s.result; passes = 11; }
+use "../kernels/distance.orla";
+
+input seeds: Image;
+param passes: Int = 11;
+
+node first: canvas.first_step@1 { source <- seeds; domain = 1; }
+node flooded: graph "flood_pass.osn" {
+    times = passes;
+    carry seeds <- result;
+    carry step <- step;
+    seeds <- seeds;
+    step <- first.result;
+}
+
+output result <- flooded.result;

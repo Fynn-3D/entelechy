@@ -3,6 +3,7 @@
 // shows is.
 use "../../picture.orlapkg";
 use "../../noise.orlapkg";
+use "../../canvas.orlapkg";
 
 /// The picture smaller, each pixel the mean of four samples: all its
 /// light (`over` 0), or only what is past `over`. w, the depth, is kept.
@@ -19,24 +20,6 @@ kernel film.bright@1 {
                + at_linear(source, p + vec2(q.x, 0.0 - q.y)) + at_linear(source, p - vec2(q.x, 0.0 - q.y))) * 0.25;
         let light = max(vec3(c.x, c.y, c.z) - vec3(over, over, over), vec3(0.0, 0.0, 0.0));
         return vec4(light.x, light.y, light.z, c.w);
-    }
-}
-
-/// A Gaussian blur along `axis`, nine taps `reach` pixels apart.
-kernel film.blur@1 {
-    requires { field.read; field.write; }
-    input source: Grid<Vec4>;
-    param axis: Vec2 = vec2(1.0, 0.0);
-    param reach: Float = 1.5;
-    output result: Grid<Vec4>;
-    compute {
-        let scale = size(source) / domain();
-        let p = (coord() + vec2(0.5, 0.5)) * scale;
-        let weights = [0.227, 0.194, 0.121, 0.054, 0.016];
-        return loop 9 with sum = vec4(0.0, 0.0, 0.0, 0.0) {
-            let k = index() - 4;
-            sum + at_linear(source, p + axis * (float(k) * reach)) * weights[abs(k)]
-        };
     }
 }
 
