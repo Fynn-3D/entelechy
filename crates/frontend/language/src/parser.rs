@@ -647,9 +647,16 @@ impl Parser {
                             self.tokens.get(self.position + 1).map(|t| &t.token),
                             Some(Token::Punct(p)) if *p == "<-" || *p == "<~"
                         );
+                    // A node's own member, which a node placing a named
+                    // Kernel takes and one written in place cannot.
+                    let placing = inline && matches!(keyword.as_str(), "times" | "carry" | "async");
                     let hint = if wired {
                         format!(
                             "; a Kernel written in place wires an input where it declares it: `input {keyword}: T <- node.port;` or `input {keyword}: T <~ node.port from initial;`"
+                        )
+                    } else if placing {
+                        format!(
+                            "; `{keyword}` belongs to a node placing a named Kernel: declare it in the document, `kernel name.step@1 {{ ... }}`, and place it, `node n: name.step@1 {{ times = 12; carry port <- result; }}`"
                         )
                     } else {
                         String::new()
@@ -2223,6 +2230,25 @@ mod tests {
                 "`{item}` is not taken as an item: {taken}"
             );
         }
+    }
+
+    /// A node's own member written inside a Kernel written in place is
+    /// refused saying where it belongs: on a node placing a named Kernel.
+    #[test]
+    fn a_nodes_member_inside_a_kernel_written_in_place_says_where_it_belongs() {
+        for member in ["times = 3;", "carry s <- result;", "async = true;"] {
+            let inline = format!("node n: kernel {{ {member} compute {{ return 1; }} }}\n");
+            let error = parse_document(&inline).unwrap_err();
+            assert!(
+                error
+                    .message
+                    .contains("belongs to a node placing a named Kernel"),
+                "{member}: {error}"
+            );
+        }
+        let library =
+            parse_document("kernel t.k@1 { times = 3; compute { return 1; } }").unwrap_err();
+        assert!(!library.message.contains("belongs to a node"), "{library}");
     }
 
     /// The words that begin items name things anywhere else: a node, a port,
