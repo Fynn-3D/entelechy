@@ -552,8 +552,8 @@ impl Evaluator {
                     runtime.discard(superseded.ticket);
                 }
                 // A declined fusion (a Field the port cannot take, a
-                // budgeted Kernel) runs unfused; any other refusal is an
-                // engine error.
+                // budgeted Kernel) runs unfused, as does one the backend
+                // refuses below; any other refusal is an engine error.
                 let module = match fuse() {
                     Ok(module) => module,
                     Err(error) if error.declines => {
@@ -585,7 +585,17 @@ impl Evaluator {
             return Ok(None);
         };
         self.pending.remove(consumer);
-        let candidate = result.map_err(|error: PrepareError| fusion(error.to_string()))?;
+        let candidate = match result {
+            Ok(candidate) => candidate,
+            // The backend took each member alone but refuses the group (a
+            // processor's stack, a device's limits): it runs unfused, as a
+            // fusion the IR declines does.
+            Err(PrepareError::Backend(_)) => {
+                self.declined.insert(consumer.clone(), parts);
+                return Ok(None);
+            }
+            Err(error) => return Err(fusion(error.to_string())),
+        };
         let version = runtime.detach(candidate, fused_id(consumer));
         self.fused.insert(
             consumer.clone(),

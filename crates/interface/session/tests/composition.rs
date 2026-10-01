@@ -824,6 +824,105 @@ fn fusion_absorbs_sole_pointwise_producers_and_changes_no_pixel() {
     assert_eq!(runtime.host().live(), 0);
 }
 
+/// How many instructions a module holds, nested blocks included.
+fn instructions(module: &orla_ir::Module) -> usize {
+    fn walk(body: &[orla_ir::Instruction]) -> usize {
+        body.iter()
+            .map(|instruction| {
+                1 + instruction
+                    .op
+                    .blocks()
+                    .iter()
+                    .map(|block| walk(&block.body))
+                    .sum::<usize>()
+            })
+            .sum()
+    }
+    module
+        .functions
+        .iter()
+        .chain(Some(&module.entry))
+        .map(|function| walk(&function.body))
+        .sum()
+}
+
+/// A backend that refuses a module past a size, as a processor refuses a
+/// module whose values pass its stack: it takes each Kernel alone, but
+/// not a fused group of them.
+struct Bounded {
+    most: usize,
+}
+
+impl orla_kernel::Backend for Bounded {
+    fn name(&self) -> &'static str {
+        "bounded"
+    }
+    fn prepare(
+        &self,
+        module: &orla_ir::Validated,
+    ) -> Result<Box<dyn orla_kernel::Prepared>, String> {
+        let size = instructions(module);
+        if size > self.most {
+            return Err(format!("its {size} instructions pass {}", self.most));
+        }
+        orla_kernel::Backend::prepare(&orla_cpu::CpuBackend, module)
+    }
+    fn execute(
+        &self,
+        prepared: &dyn orla_kernel::Prepared,
+        module: &orla_ir::Validated,
+        invocation: &orla_abi::Invocation,
+        scope: &mut orla_abi::Scope<'_>,
+    ) -> Result<Vec<orla_abi::Handle>, ExecutionError> {
+        orla_kernel::Backend::execute(&orla_cpu::CpuBackend, prepared, module, invocation, scope)
+    }
+}
+
+#[test]
+fn a_fused_group_the_backend_refuses_runs_unfused() {
+    // The backend takes the largest of the three alone, and no more.
+    let most = [GRADIENT, GRAYSCALE, INVERT]
+        .iter()
+        .map(|source| instructions(&orla_compiler::compile(source).unwrap()))
+        .max()
+        .unwrap();
+    let mut runtime = orla_kernel::Runtime::with_backend(1024, Box::new(Bounded { most }));
+    for source in [GRADIENT, GRAYSCALE, INVERT] {
+        load(&mut runtime, source);
+    }
+    let graph = orla_scene::parse(DOCUMENT).unwrap();
+    let mut plain = Evaluator::new();
+    plain.set_fusion(false);
+    let reference = plain
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    let expected = pixels(&runtime, reference.output);
+    plain.clear(&mut runtime);
+
+    // Each member was taken alone, so the group the backend refuses runs
+    // as its members, frame after frame, and gives the same picture.
+    let mut evaluator = Evaluator::new();
+    for _ in 0..3 {
+        let report = evaluator
+            .evaluate(
+                &graph,
+                &mut runtime,
+                &BTreeMap::new(),
+                &at(0.0),
+                &BTreeMap::new(),
+            )
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert!(report.fused.is_empty(), "{:?}", report.fused);
+        assert_eq!(pixels(&runtime, report.output), expected);
+    }
+}
+
 #[test]
 fn outputs_state_sources_and_shared_producers_stay_materialized() {
     let mut runtime = runtime();
