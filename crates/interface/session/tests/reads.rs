@@ -90,6 +90,29 @@ fn a_package_made_outside_is_not_read() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A package used by path from outside is refused, saying how to use
+/// it: by name, its directory in `ORLA_PACKAGES`.
+#[test]
+fn a_package_outside_is_refused_naming_the_way_in() {
+    let dir = built("package-use");
+    let mut session = served(&dir);
+    let package = dir.join("outside/made.orlapkg");
+    std::fs::create_dir_all(package.join("kernels")).unwrap();
+    std::fs::write(
+        package.join("package.osn"),
+        "package made@1 { language = 1; ir = 1; }\nuse \"kernels/\";\n",
+    )
+    .unwrap();
+    std::fs::write(package.join("kernels/far.orla"), FAR).unwrap();
+    let events = composed(&mut session, "use \"../outside/made.orlapkg\";\n");
+    let said = events.iter().any(|event| {
+        matches!(event, Event::SceneRejected(why)
+            if why.message.contains("`use \"made.orlapkg\";`") && why.message.contains("ORLA_PACKAGES"))
+    });
+    assert!(said, "{events:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[cfg(unix)]
 #[test]
 fn a_link_and_dot_dot_are_judged_where_they_land() {

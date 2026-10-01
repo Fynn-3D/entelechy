@@ -56,6 +56,8 @@ pub(crate) struct Scene {
     /// What the libraries' `use`s last reached, kept while nothing it
     /// looked at changed.
     expanded: Option<Expanded>,
+    /// What the last refused read of the root said, while no scene runs.
+    refusal: Option<Vec<Event>>,
 }
 
 /// The running scene, kept to be put back whole ([`Scene::put_back`]).
@@ -110,6 +112,7 @@ impl Scene {
             staged: None,
             superseded: false,
             expanded: None,
+            refusal: None,
         }
     }
 
@@ -347,7 +350,35 @@ impl Scene {
         Ok(())
     }
 
+    /// Reads the root when it or what it reaches changed. With no scene
+    /// running it reads the root every sync, so a library fixed under an
+    /// unchanged root is found; a read of the same root refused for the
+    /// same reasons says nothing it has not said.
     fn sync_root(
+        &mut self,
+        kernels: &mut Kernels,
+        runtime: &mut Runtime,
+        events: &mut Vec<Event>,
+        readable: &dyn Fn(&Path) -> Result<(), String>,
+    ) {
+        let from = events.len();
+        let unchanged = self.stamp.is_some() && self.store.stamp(&self.root) == self.stamp;
+        self.read_root(kernels, runtime, events, readable);
+        let refused = events[from..]
+            .iter()
+            .any(|event| matches!(event, Event::SceneRejected(_)));
+        if !refused || self.graph.is_some() || self.staged.is_some() {
+            self.refusal = None;
+            return;
+        }
+        if unchanged && self.refusal.as_deref() == Some(&events[from..]) {
+            events.truncate(from);
+            return;
+        }
+        self.refusal = Some(events[from..].to_vec());
+    }
+
+    fn read_root(
         &mut self,
         kernels: &mut Kernels,
         runtime: &mut Runtime,

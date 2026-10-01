@@ -90,8 +90,21 @@ impl Reads {
         {
             return Ok(());
         }
+        // A package reached by path from elsewhere is one to name.
+        let package = target.ancestors().find_map(|dir| {
+            let name = dir.file_name()?.to_str()?;
+            name.ends_with(".orlapkg")
+                .then(|| (name.to_owned(), dir.parent()))
+        });
+        let hint = match package {
+            Some((name, Some(parent))) => format!(
+                "; a package elsewhere is used by name, `use \"{name}\";`, with its directory in `ORLA_PACKAGES` ({})",
+                parent.display()
+            ),
+            _ => String::new(),
+        };
         Err(format!(
-            "{} is outside the directories the scene's documents are in or use or its inputs read from, every package directory, and every directory allowed with `--allow file.read`",
+            "{} is outside the directories the scene's documents are in or use or its inputs read from, every package directory, and every directory allowed with `--allow file.read`{hint}",
             target.display()
         ))
     }

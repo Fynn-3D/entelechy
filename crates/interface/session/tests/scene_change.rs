@@ -459,3 +459,80 @@ fn a_changed_function_republishes_only_the_kernels_it_reaches() {
     assert!(generation(&session, "l.calls@1") > calls);
     assert_eq!(generation(&session, "l.apart@1"), apart);
 }
+
+fn refusals(events: &[Event]) -> usize {
+    events
+        .iter()
+        .filter(|e| matches!(e, Event::SceneRejected(_)))
+        .count()
+}
+
+/// With no scene running, an unchanged root refused for the same reasons
+/// is said once, however many syncs read it again; a change says again.
+#[test]
+fn an_unchanged_refusal_is_said_once() {
+    let files = Arc::new(Memory::default());
+    put(&files, "scene.osn", "");
+    let mut session = open(
+        &files,
+        orla_session::Session::runtime_for("cpu", Default::default()).unwrap(),
+    );
+    assert_eq!(refusals(&session.sync()), 1);
+    assert_eq!(refusals(&session.sync()), 0);
+    assert_eq!(refusals(&session.sync()), 0);
+
+    // Written again, still empty: a change, said again.
+    put(&files, "scene.osn", "// nothing yet\n");
+    assert_eq!(refusals(&session.sync()), 1);
+    assert_eq!(refusals(&session.sync()), 0);
+
+    put(&files, "scene.osn", &root("result"));
+    put(&files, "sub.osn", &sub("return sample(source);"));
+    session.sync();
+    assert!(session.graph().is_some());
+}
+
+/// A graph that appears under an unchanged root is found: the root is
+/// read again every sync while it is refused, only not said again.
+#[test]
+fn a_graph_appearing_under_a_refused_root_loads_it() {
+    let files = Arc::new(Memory::default());
+    put(&files, "scene.osn", &root("result"));
+    let mut session = open(
+        &files,
+        orla_session::Session::runtime_for("cpu", Default::default()).unwrap(),
+    );
+    let first = session.sync();
+    assert_eq!(refusals(&first), 1, "{first:?}");
+    let again = session.sync();
+    assert_eq!(refusals(&again), 0, "{again:?}");
+    assert!(session.graph().is_none());
+
+    put(&files, "sub.osn", &sub("return sample(source);"));
+    let found = session.sync();
+    assert!(session.graph().is_some(), "{found:?}");
+}
+
+/// A library refused while the scene runs is said when it is read, not
+/// every sync after.
+#[test]
+fn a_refused_library_is_said_once() {
+    let files = Arc::new(Memory::default());
+    put(
+        &files,
+        "scene.osn",
+        "use \"lib.orla\";\nnode n: kernel { requires { field.write; } output result: Image; domain = vec2(2, 2); compute { return vec4(1.0, 1.0, 1.0, 1.0); } }\noutput result <- n.result;\n",
+    );
+    put(
+        &files,
+        "lib.orla",
+        "fn tint() -> Vec4 { return nothing; }\n",
+    );
+    let mut session = open(
+        &files,
+        orla_session::Session::runtime_for("cpu", Default::default()).unwrap(),
+    );
+    session.sync();
+    let again = session.sync();
+    assert!(again.is_empty(), "{again:?}");
+}
