@@ -56,16 +56,16 @@ Packages built from existing modes, with no engine feature of their own.
 | --- | --- | --- |
 | [Stream compaction](packages/compact.orlapkg/kernels/compact.orla) | `prefix with sum`, reduce, scatter, `value(port)` | [culled replay](examples/culled/tests/culled.replay) |
 | [Radix sort](packages/sort.orlapkg/kernels/sort.orla) | prefix and scatter | [neighbours replay](examples/neighbours/tests/neighbours.replay) |
-| [Mip levels](packages/picture.orlapkg/graphs/mip.osn) | `times`, `carry`, the rasterizer's `uv` | [mipmap replay](examples/mipmap/tests/ground.replay) |
+| [Mip levels](packages/image.orlapkg/graphs/mip.osn) | `times`, `carry`, the rasterizer's `uv` | [mipmap replay](examples/mipmap/tests/ground.replay) |
 | [Text](packages/text.orlapkg/kernels/text.orla) | `Rows<Glyph>`, a `Grid<Float>` atlas | [text replay](examples/text/tests/text.replay) |
 | [Skinning](packages/skin.orlapkg/kernels/skin.orla), [rig contract](docs/RIGS.md) | maps over rows, `<~` | [rig tests](crates/interface/orla/tests/rigs.rs); [skin](examples/skin/tests/skin.replay), [crowd](examples/crowd/tests/crowd.replay), [reach](examples/reach/tests/reach.replay), [elbow](examples/reach/tests/elbow.replay), [stride](examples/stride/tests/stride.replay) replays |
 | [Rasterization](packages/raster.orlapkg/kernels/raster.orla) | scatter `min` of `Long` keys with `emit` | [edges](examples/mesh/tests/edges.replay) and [cutout](examples/mesh/tests/cutout.replay) replays on three backends, [session test](crates/interface/orla/tests/session.rs); [ten million triangles](examples/mesh/tests/ten_million.osn) for `bench` |
 | [Vector drawing](packages/vector.orlapkg/kernels/vector.orla) | `prefix with sum`, scatter `max` with `emit`, `value(port)` | [vector replays](examples/vector/tests/) on three backends |
 | [Rigid bodies](packages/physics.orlapkg/kernels/physics.orla), [decision](docs/DECISIONS.md#contacts-are-solved-all-at-once-each-against-its-own-share-of-a-body) | the sort package, scatter `sum` of pushes, `times` with two `carry`s, `<~` | [physics replays](examples/physics/tests/) on three backends |
 | [Type](packages/font.orlapkg/kernels/font.orla) | prefix `sum` and `max`, the vector package | [importer tests](crates/interface/import/src/font.rs), [type replays](examples/type/tests/) on three backends |
-| [Canvas](packages/canvas.orlapkg/package.osn) | maps, scatter `sum` and prefix `sum` (histograms), `times` with a carried step (jump flooding) | [canvas replay](examples/canvas/tests/canvas.replay) on three backends |
+| [Image](packages/image.orlapkg/package.osn) | maps, scatter `sum` and prefix `sum` (histograms), `times` with a carried step (jump flooding) | [image replay](examples/darkroom/tests/image.replay) on three backends |
 | [Noise](packages/noise.orlapkg/kernels/noise.orla) | functions over `Int` bits (`mul_wrap`, `>>>`) | [noise replay](examples/nebula/tests/noise.replay) on three backends |
-| [Film finish](packages/film.orlapkg/graphs/finish.osn) | maps over grids, `size(port)` domains, the picture, noise and canvas packages | [nebula replay](examples/nebula/tests/nebula.replay) on three backends |
+| [Camera finish](packages/image.orlapkg/graphs/finish.osn) | maps over grids, `size(port)` domains, the noise package | [nebula replay](examples/nebula/tests/nebula.replay) on three backends |
 
 ## Where each contract is enforced
 

@@ -1,7 +1,7 @@
 // A picture through a package's preset: `use` of the package brings its
 // Kernels (its manifest's versions checked), and its `nes` graph is
 // placed as a node by path.
-use "../../packages/pixelfx.orlapkg";
+use "../../packages/image.orlapkg";
 
 param cell: Float = 8.0;
 
@@ -17,7 +17,7 @@ node picture: kernel {
     }
 }
 
-node nes: graph "../../packages/pixelfx.orlapkg/graphs/nes.osn" {
+node nes: graph "../../packages/image.orlapkg/graphs/nes.osn" {
     source <- picture.result;
     cell = cell;
 }

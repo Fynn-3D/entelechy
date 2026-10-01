@@ -37,8 +37,8 @@ orla run examples/<example>/scene.osn --out output.ppm --watch
 - [type](type/README.md): a Latin and a Chinese font imported by `orla-import`, laid out by the font package and drawn sharp by the vector package.
 - [vector](vector/README.md): an SVG imported by `orla-import` and drawn sharp at any size by the vector package; drag and zoom.
 - [showcase](showcase/README.md): a signed-distance gamepad under physically based shading, with a toolbar in logical pixels.
-- [canvas](canvas/README.md): a darkroom developing a raw photograph with the canvas package: equalized, graded, sharpened, and a neon outline drawn from a signed distance field.
-- [nebula](nebula/README.md): a drift through a nebula made by the noise package, finished by the film package: glow, depth of field, tone and grain.
+- [darkroom](darkroom/README.md): a raw photograph developed with the image package: equalized, graded, sharpened, and a neon outline drawn from a signed distance field.
+- [nebula](nebula/README.md): a drift through a nebula made by the noise package, finished by the image package's camera look: glow, depth of field, tone and grain.
 
 ## Simulation and learning
 
@@ -75,6 +75,6 @@ orla run examples/<example>/scene.osn --out output.ppm --watch
 
 ## Agents, packages and files
 
-- [package](package/README.md): a scene using `pixelfx.orlapkg` and its preset; what `orla pack` carries.
+- [package](package/README.md): a scene using `image.orlapkg` and its preset; what `orla pack` carries.
 - [level](level/README.md): a binary level format read by a Kernel from `bytes`.
 - [clip](clip/README.md): an input read frame by frame from a directory with `frames`.

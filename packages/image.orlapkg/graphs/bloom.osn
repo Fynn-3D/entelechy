@@ -1,0 +1,16 @@
+//! The glow round what is past white, as a sub-graph: `near` a quarter
+//! of the picture's size, `far` a twelfth and wider. Place it with
+//!   node glow: graph "image.orlapkg/graphs/bloom.osn" { source <- x.result; }
+use "../kernels/film.orla";
+
+input source: Grid<Vec4>;
+param over: Float = 0.8;
+
+node bright: image.bright@1 { source <- source; over = over; domain = ceil(size(source) / 4); }
+node near_x: image.blur@1 { source <- bright.result; axis = vec2(1.0, 0.0); sigma = 2.7; }
+node near_y: image.blur@1 { source <- near_x.result; axis = vec2(0.0, 1.0); sigma = 2.7; }
+node far_x: image.blur@1 { source <- near_y.result; axis = vec2(1.0, 0.0); sigma = 1.2; domain = ceil(size(source) / 12); }
+node far_y: image.blur@1 { source <- far_x.result; axis = vec2(0.0, 1.0); sigma = 1.2; }
+
+output near <- near_y.result;
+output far <- far_y.result;

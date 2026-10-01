@@ -1,0 +1,112 @@
+// The darkroom: a photograph made of noise, in linear light and a little
+// flat, as a raw picture is, and the few Kernels the scene needs beside
+// the canvas package's: a mark to draw an outline round, the neon that
+// outline glows with, a vignette, and a switch between the stages.
+use "../../../packages/noise.orlapkg";
+use "../../../packages/image.orlapkg";
+
+/// The sky and hills seen at `p` (x across in heights, y down), `y` the
+/// height down the picture; `horizon` where the lake begins.
+fn land(p: Vec2, y: Float, horizon: Float, t: Float) -> Vec3 {
+    let up = clamp((horizon - y) / horizon, 0.0, 1.0);
+    let sky = mix(vec3(0.5, 0.33, 0.26), vec3(0.08, 0.11, 0.24), up);
+    let sun_at = vec2(1.15, 0.5);
+    let d = length(p - sun_at);
+    let sun = vec3(1.0, 0.72, 0.42) * (exp(0.0 - d * d / 0.0009) * 5.0 + exp(0.0 - d / 0.12) * 0.3);
+    let cloud = smoothstep(0.05, 0.5, fbm2(vec2(p.x * 2.5 + t * 0.02, p.y * 8.0), 5, 7)) * up;
+    let air = mix(sky + sun, vec3(0.42, 0.3, 0.28), cloud * 0.7);
+    let ridge = horizon - 0.04 - 0.12 * (fbm2(vec2(p.x * 2.2, 0.5), 4, 3) * 0.5 + 0.5);
+    let near = horizon - 0.01 - 0.05 * (fbm2(vec2(p.x * 4.0, 2.5), 4, 5) * 0.5 + 0.5);
+    let far_hill = mix(air, vec3(0.16, 0.12, 0.16), 0.75);
+    let near_hill = vec3(0.05, 0.06, 0.04) + vec3(0.25, 0.15, 0.08) * smoothstep(0.02, 0.0, y - near);
+    return if y > near { near_hill } else if y > ridge { far_hill } else { air };
+}
+
+/// The photograph: a dusk over hills and a lake that mirrors them,
+/// rippling; the clouds drift.
+kernel darkroom.photo@1 {
+    requires { field.write; time.read; }
+    output result: Image;
+    compute {
+        let t = time();
+        let uv = (coord() + vec2(0.5, 0.5)) / domain();
+        let aspect = domain().x / domain().y;
+        let p = vec2(uv.x * aspect, uv.y);
+        let horizon = 0.66;
+        let c = if uv.y < horizon { land(p, uv.y, horizon, t) } else {
+            let y = 2.0 * horizon - uv.y;
+            let ripple = value2(vec2(p.x * 40.0, (uv.y - horizon) * 300.0 - t * 2.0), 11) * 0.006 * (uv.y - horizon) * 10.0;
+            land(vec2(p.x + ripple, y), y, horizon, t) * 0.55
+        };
+        // A raw picture: flat, its blacks lifted.
+        let flat = c * 0.7 + vec3(0.02, 0.02, 0.025);
+        return vec4(flat.x, flat.y, flat.z, 1.0);
+    }
+}
+
+/// A mark: a five-petalled flower turning slowly, white on black.
+kernel darkroom.mark@1 {
+    requires { field.write; time.read; }
+    output result: Image;
+    compute {
+        let uv = (coord() + vec2(0.5, 0.5)) / domain();
+        let q = vec2((uv.x - 0.3) * domain().x / domain().y, uv.y - 0.36);
+        let angle = atan2(q.y, q.x) + time() * 0.3;
+        let on = length(q) < 0.13 * (0.78 + 0.22 * cos(5.0 * angle));
+        let v = if on { 1.0 } else { 0.0 };
+        return vec4(v, v, v, 1.0);
+    }
+}
+
+/// The neon round the mark's edge, from its signed distance (in pixels
+/// of the field): a thin magenta line and a wide cyan glow; alpha is
+/// how much shows.
+kernel darkroom.neon@1 {
+    requires { field.read; field.write; time.read; }
+    input distance: Grid<Float>;
+    output result: Image;
+    compute {
+        let uv = (coord() + vec2(0.5, 0.5)) / domain();
+        let d = at_linear(distance, uv * size(distance));
+        let line = exp(0.0 - d * d / 2.0);
+        let glow = exp(0.0 - abs(d) / 14.0) * 0.45;
+        let c = vec3(1.0, 0.12, 0.65) * line * 0.9 + vec3(0.15, 0.85, 1.0) * glow * 0.8;
+        return vec4(c.x, c.y, c.z, clamp(line + glow, 0.0, 1.0));
+    }
+}
+
+/// Darkened corners, to multiply a picture by.
+kernel darkroom.vignette@1 {
+    requires { field.write; }
+    param strength: Float = 0.9;
+    output result: Image;
+    compute {
+        let d = (coord() + vec2(0.5, 0.5)) / domain() - vec2(0.5, 0.5);
+        let v = clamp(1.0 - strength * dot(d, d) * 2.0, 0.0, 1.0);
+        return vec4(v, v, v, 1.0);
+    }
+}
+
+/// One stage of six, by `view` (0 the photograph to 5 the last).
+kernel darkroom.pick@1 {
+    requires { field.read; field.write; }
+    input a: Image;
+    input b: Image;
+    input c: Image;
+    input d: Image;
+    input e: Image;
+    input f: Image;
+    param view: Int = 5;
+    output result: Image;
+    compute {
+        let uv = (coord() + vec2(0.5, 0.5)) / domain();
+        return match view {
+            0 => at_linear(a, uv * size(a)),
+            1 => at_linear(b, uv * size(b)),
+            2 => at_linear(c, uv * size(c)),
+            3 => at_linear(d, uv * size(d)),
+            4 => at_linear(e, uv * size(e)),
+            _ => at_linear(f, uv * size(f)),
+        };
+    }
+}

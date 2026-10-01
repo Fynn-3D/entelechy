@@ -14,8 +14,8 @@ holds.
 A scene reaches a package by path:
 
 ```text
-use "../../packages/picture.orlapkg";
-node display: graph "../../packages/picture.orlapkg/graphs/display.osn" { ... }
+use "../../packages/image.orlapkg";
+node display: graph "../../packages/image.orlapkg/graphs/display.osn" { ... }
 ```
 
 or by name, when `ORLA_PACKAGES` lists the directory it is in:
@@ -25,15 +25,39 @@ ORLA_PACKAGES=/path/to/orla/packages orla run scene.osn
 ```
 
 ```text
-use "picture.orlapkg";
+use "image.orlapkg";
 ```
 
-- **picture** — what a scene does to pictures that are not its subject.
-  `wrap.orla` blends four texels found through `mod`, which `at_linear`
-  cannot do at a Field's edge; `tonemap.orla` and `graphs/display.osn`
-  are usually a scene's last node; `mip.orla` and `graphs/mip.osn` are
-  the strip of halvings and the reads that pick a level, for a surface
-  running away from the eye.
+- **image** — what Orla does to pictures, over `Image`s in linear light:
+  - colour: luminance, sRGB's transfer, HSV and Oklab, the colours of
+    heat (`blackbody`) and of the wheel (`hue`), as functions, and
+    `image.encode` / `image.decode` for a window or a file;
+  - blending: the common modes (multiply, screen, overlay, soft light
+    and others), and compositing one picture over another;
+  - filters: Gaussian blur (`graphs/blur.osn`), a box shrink, any
+    convolution, unsharp sharpening (`graphs/sharpen.osn`), Sobel
+    edges, dilation and erosion, bicubic resizing;
+  - tone: exposure, contrast, saturation and hue in Oklab; levels;
+    curves; 3D LUTs, and the neutral LUT a grade is baked into; ACES;
+  - histograms: counting by scatter, the cumulative count by prefix,
+    equalization (`graphs/equalize.osn`);
+  - distance: the signed distance from every pixel to a shape, by jump
+    flooding (`graphs/distance.osn`);
+  - sampling: four texels blended through `mod` for a tile, which
+    `at_linear` cannot do at a Field's edge (`wrap.orla`), and the strip
+    of mip levels with the reads that pick one, for a surface running
+    away from the eye (`graphs/mip.osn`);
+  - looks a scene places last: `graphs/display.osn` (tone and gamma);
+    `graphs/finish.osn`, a camera's, over a picture that keeps each
+    pixel's depth in w: a glow round what is past white
+    (`graphs/bloom.osn`), depth of field at a focus the scene gives as
+    a row each frame, ACES, colour fringing, darkened corners and grain
+    from the noise package's hash; `graphs/nes.osn`, coarse pixels held
+    to four colours.
+
+  The `darkroom` example develops a photograph with it, and its replay
+  holds each operation to an answer worked by hand on three backends;
+  `nebula`, `mipmap` and `package` use its looks and sampling.
 - **text** — a 5 by 7 font baked into `font.png`, the layout that turns
   a string into glyph rows, and the Kernels that draw them. A scene
   binds the font beside using the package:
@@ -91,8 +115,6 @@ use "picture.orlapkg";
   place is the fast path, bit for bit the same on the interpreter and
   the JIT and the device's approximate rasterizer on a GPU
   ([why](../docs/DECISIONS.md)).
-- **pixelfx** — a coarse pixel grid and a four-color palette, and the
-  NES look made of both as a preset. The example of what a package is.
 - **noise** — randomness a Kernel can repeat, as functions and no
   Kernels:
   - hashes of whole numbers by integer arithmetic, the same bits on
@@ -104,35 +126,6 @@ use "picture.orlapkg";
   
   Used by the `nebula` example, whose replay holds the hashes to their
   bits on three backends.
-- **canvas** — Orla's image processing, over `Image`s in linear light:
-  - colour: luminance, sRGB's transfer, HSV and Oklab, as functions, and
-    `canvas.encode` / `canvas.decode` for a window or a file;
-  - blending: the common modes (multiply, screen, overlay, soft light
-    and others), and compositing one picture over another;
-  - filters: Gaussian blur (`graphs/blur.osn`), a box shrink, any
-    convolution, unsharp sharpening (`graphs/sharpen.osn`), Sobel
-    edges, dilation and erosion, bicubic resizing;
-  - tone: exposure, contrast, saturation and hue in Oklab; levels;
-    curves; 3D LUTs, and the neutral LUT a grade is baked into;
-  - histograms: counting by scatter, the cumulative count by prefix,
-    equalization (`graphs/equalize.osn`);
-  - distance: the signed distance from every pixel to a shape, by jump
-    flooding (`graphs/distance.osn`).
-
-  Used by the `canvas` example, whose replay holds each to an answer
-  worked by hand on three backends.
-- **film** — the finish of a picture of light brighter than white that
-  keeps each pixel's depth in w:
-  - the colours of heat (`blackbody`) and of the wheel (`hue`);
-  - a glow round what is past white (`graphs/bloom.osn`), blurred by the
-    canvas package;
-  - depth of field, sharp at a focus the scene gives as a row each frame;
-  - the grade: exposure, ACES (the picture package's), colour fringing
-    toward the edges, darkened corners, and grain from the noise
-    package's hash.
-  
-  `graphs/finish.osn` places all of it as a scene's last node. Used by
-  the `nebula` example.
 - **font** — type from a TrueType or OpenType font `orla import` read:
   a row of character codes laid out in lines, each character its font's
   glyph at its own advance, turned into the shapes and segments the

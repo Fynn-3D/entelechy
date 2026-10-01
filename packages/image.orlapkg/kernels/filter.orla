@@ -1,0 +1,160 @@
+// Filters: each output pixel from the source pixels round it. A Kernel
+// that reads its source at another size maps the source over its own
+// domain, so one that writes fewer pixels than it reads also shrinks.
+use "colour.orla";
+
+/// A running weighted sum.
+struct Weighed { sum: Vec4; weight: Float; }
+
+/// A Gaussian blur along `axis` (one pass of the two a blur takes,
+/// `graphs/blur.osn`): `sigma` measured in the output's pixels, taps one
+/// output pixel apart out to three sigmas.
+kernel image.blur@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    param axis: Vec2 = vec2(1.0, 0.0);
+    param sigma: Float = 2.0;
+    output result: Image;
+    compute {
+        let scale = size(source) / domain();
+        let p = (coord() + vec2(0.5, 0.5)) * scale;
+        let reach = int(ceil(3.0 * sigma));
+        let spread = 2.0 * max(sigma, 0.0001) * max(sigma, 0.0001);
+        let total = loop 2 * reach + 1 with w = Weighed { sum: vec4(0.0, 0.0, 0.0, 0.0), weight: 0.0 } {
+            let k = float(index() - reach);
+            let g = exp(0.0 - k * k / spread);
+            Weighed { sum: w.sum + at_linear(source, p + axis * scale * k) * g, weight: w.weight + g }
+        };
+        return total.sum / total.weight;
+    }
+}
+
+/// The source smaller: each output pixel the mean of the source pixels
+/// it covers (a box filter, exact at whole ratios).
+kernel image.shrink@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    output result: Image;
+    compute {
+        let scale = size(source) / domain();
+        let n = ivec2(int(ceil(scale.x)), int(ceil(scale.y)));
+        let corner = coord() * scale;
+        let step = scale / vec2(float(n.x), float(n.y));
+        let sum = loop n.x * n.y with s = vec4(0.0, 0.0, 0.0, 0.0) {
+            let i = index();
+            s + at_linear(source, corner + step * (vec2(float(i % n.x), float(i / n.x)) + vec2(0.5, 0.5)))
+        };
+        return sum / float(n.x * n.y);
+    }
+}
+
+/// Any convolution: `weights` holds n by n numbers, row by row, centred
+/// on the pixel (n odd). The weights are used as given, not normalized.
+kernel image.convolve@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    input weights: Rows<Float>;
+    output result: Image;
+    compute {
+        let n = int(sqrt(float(count(weights))) + 0.5);
+        let half = n / 2;
+        let c = coord();
+        return loop n * n with s = vec4(0.0, 0.0, 0.0, 0.0) {
+            let i = index();
+            s + at(source, c + vec2(float(i % n - half), float(i / n - half))) * at(weights, i)
+        };
+    }
+}
+
+/// Unsharp masking: the source pushed away from its blurred copy by
+/// `amount`; alpha kept. `graphs/sharpen.osn` places it with its blur.
+kernel image.sharpen@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    input blurred: Image;
+    param amount: Float = 0.6;
+    output result: Image;
+    compute {
+        let s = sample(source);
+        let uv = (coord() + vec2(0.5, 0.5)) / domain();
+        let b = at_linear(blurred, uv * size(blurred));
+        let c = s.xyz + (s.xyz - b.xyz) * amount;
+        return vec4(c.x, c.y, c.z, s.w);
+    }
+}
+
+/// The Sobel gradient of the source's luminance at `c`: how fast it
+/// grows along x and along y.
+fn sobel(source: Image, c: Vec2) -> Vec2 {
+    let a = luminance(at(source, c + vec2(-1.0, -1.0)).xyz);
+    let b = luminance(at(source, c + vec2(0.0, -1.0)).xyz);
+    let d = luminance(at(source, c + vec2(1.0, -1.0)).xyz);
+    let e = luminance(at(source, c + vec2(-1.0, 0.0)).xyz);
+    let f = luminance(at(source, c + vec2(1.0, 0.0)).xyz);
+    let g = luminance(at(source, c + vec2(-1.0, 1.0)).xyz);
+    let h = luminance(at(source, c + vec2(0.0, 1.0)).xyz);
+    let k = luminance(at(source, c + vec2(1.0, 1.0)).xyz);
+    return vec2((d + 2.0 * f + k) - (a + 2.0 * e + g), (g + 2.0 * h + k) - (a + 2.0 * b + d));
+}
+
+/// Edges: the strength of the Sobel gradient, grey, opaque.
+kernel image.edges@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    output result: Image;
+    compute {
+        let m = length(sobel(source, coord()));
+        return vec4(m, m, m, 1.0);
+    }
+}
+
+type Morph = enum { Dilate, Erode };
+
+/// Dilation (each channel the greatest within `radius` pixels, a disc)
+/// or erosion (the least): bright shapes grown or worn away.
+kernel image.morph@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    param radius: Int = 1;
+    param mode: Morph = Morph.Dilate;
+    output result: Image;
+    compute {
+        let c = coord();
+        let side = 2 * radius + 1;
+        let reach = float(radius) + 0.5;
+        return loop side * side with s = sample(source) {
+            let o = vec2(float(index() % side - radius), float(index() / side - radius));
+            let v = at(source, c + o);
+            if length(o) > reach { s } else if mode == Morph.Dilate { max(s, v) } else { min(s, v) }
+        };
+    }
+}
+
+/// Catmull-Rom's weights for the four taps round a fraction `t`.
+fn cubic_weights(t: Float) -> Vec4 {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    return vec4(-0.5 * t3 + t2 - 0.5 * t, 1.5 * t3 - 2.5 * t2 + 1.0, -1.5 * t3 + 2.0 * t2 + 0.5 * t, 0.5 * t3 - 0.5 * t2);
+}
+
+/// The source at the node's `domain`, by bicubic (Catmull-Rom)
+/// interpolation: sharper than `at_linear` when enlarging. For halving
+/// and beyond, `image.shrink`.
+kernel image.resize@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    output result: Image;
+    compute {
+        let p = (coord() + vec2(0.5, 0.5)) * size(source) / domain() - vec2(0.5, 0.5);
+        let base = floor(p);
+        let wx = cubic_weights(p.x - base.x);
+        let wy = cubic_weights(p.y - base.y);
+        return loop 16 with s = vec4(0.0, 0.0, 0.0, 0.0) {
+            let i = index() % 4;
+            let j = index() / 4;
+            let w = (if i == 0 { wx.x } else if i == 1 { wx.y } else if i == 2 { wx.z } else { wx.w })
+                  * (if j == 0 { wy.x } else if j == 1 { wy.y } else if j == 2 { wy.z } else { wy.w });
+            s + at(source, base + vec2(float(i - 1), float(j - 1))) * w
+        };
+    }
+}

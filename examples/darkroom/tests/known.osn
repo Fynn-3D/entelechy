@@ -1,0 +1,107 @@
+// The image package on small pictures whose answers are known, for
+// image.replay.
+use "../../../packages/image.orlapkg";
+
+// A ramp: red grows across, green down, blue a half; 8 by 8.
+node ramp: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = vec2(8, 8);
+    compute { let c = coord(); return vec4(c.x / 7.0, c.y / 7.0, 0.5, 1.0); }
+}
+// One colour everywhere, 16 by 16.
+node flat: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = vec2(16, 16);
+    compute { return vec4(0.3, 0.6, 0.9, 1.0); }
+}
+// A white pixel at (4, 4) on black, 9 by 9.
+node dot: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = vec2(9, 9);
+    compute {
+        let c = icoord();
+        return if c.x == 4 && c.y == 4 { vec4(1.0, 1.0, 1.0, 1.0) } else { vec4(0.0, 0.0, 0.0, 1.0) };
+    }
+}
+// Two greys, 0.2 in the left half and 0.8 in the right, 8 by 8.
+node halves: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = vec2(8, 8);
+    compute { let g = if coord().x < 4.0 { 0.2 } else { 0.8 }; return vec4(g, g, g, 1.0); }
+}
+node one: kernel {
+    requires { field.write; }
+    output result: Rows<Float>;
+    domain = 9;
+    compute { return if element() == 4 { 1.0 } else { 0.0 }; }
+}
+node box: kernel {
+    requires { field.write; }
+    output result: Rows<Float>;
+    domain = 9;
+    compute { return 1.0 / 9.0; }
+}
+node straight: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 2;
+    compute { let v = float(element()); return vec4(v, v, v, v); }
+}
+// The colour functions: HSV of (0.25, 0.5, 0.75); how far its HSV and
+// Oklab round trips land from it; the luminance of white.
+node colour: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 3;
+    compute {
+        let c = vec3(0.25, 0.5, 0.75);
+        let h = rgb_to_hsv(c);
+        return if element() == 0 { vec4(h.x, h.y, h.z, 0.0) }
+            else if element() == 1 { vec4(length(hsv_to_rgb(h) - c), length(oklab_to_linear(linear_to_oklab(c)) - c), luminance(vec3(1.0, 1.0, 1.0)), 0.0) }
+            else { let s = linear_to_srgb(srgb_to_linear(c)); vec4(s.x, s.y, s.z, srgb_decode(0.5)) };
+    }
+}
+node base: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = vec2(2, 2);
+    compute { return vec4(0.25, 0.5, 0.75, 1.0); }
+}
+node grey: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = vec2(2, 2);
+    compute { return vec4(0.5, 0.5, 0.5, 1.0); }
+}
+
+node multiply: image.blend@1 { base <- base.result; top <- grey.result; mode = Blend.Multiply; }
+node screen: image.blend@1 { base <- base.result; top <- grey.result; mode = Blend.Screen; }
+node overlay: image.blend@1 { base <- base.result; top <- grey.result; mode = Blend.Overlay; }
+node half: image.blend@1 { base <- base.result; top <- grey.result; opacity = 0.5; }
+
+node flat_blur: graph "../../../packages/image.orlapkg/graphs/blur.osn" { source <- flat.result; sigma = 1.0; }
+node dot_blur: graph "../../../packages/image.orlapkg/graphs/blur.osn" { source <- dot.result; sigma = 1.0; }
+node shrunk: image.shrink@1 { source <- ramp.result; domain = vec2(4, 4); }
+node same: image.convolve@1 { source <- ramp.result; weights <- one.result; }
+node mean: image.convolve@1 { source <- ramp.result; weights <- box.result; }
+node bigger: image.resize@1 { source <- ramp.result; domain = vec2(16, 16); }
+node flat_edges: image.edges@1 { source <- flat.result; }
+node grown: image.morph@1 { source <- dot.result; radius = 2; }
+node worn: image.morph@1 { source <- grown.result; radius = 1; mode = Morph.Erode; }
+
+node brighter: image.adjust@1 { source <- flat.result; exposure = 1.0; }
+node greyed: image.adjust@1 { source <- flat.result; saturation = 0.0; }
+node turned: image.adjust@1 { source <- flat.result; hue = 1.0; }
+node levelled: image.levels@1 { source <- flat.result; black = 0.2; white = 0.8; }
+node curved: image.curve@1 { source <- flat.result; curve <- straight.result; }
+node neutral: image.neutral@1 { n = 17; domain = vec2(289, 17); }
+node looked_up: image.lut@1 { source <- flat.result; lut <- neutral.result; }
+
+node even: graph "../../../packages/image.orlapkg/graphs/equalize.osn" { source <- halves.result; }
+node field: graph "../../../packages/image.orlapkg/graphs/distance.osn" { mask <- dot.result; passes = 5; }
+
+output result <- even.result;

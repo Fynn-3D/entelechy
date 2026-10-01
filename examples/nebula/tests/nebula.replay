@@ -1,6 +1,6 @@
 scene ../scene.osn
 
-# The nebula through the film package's finish: the picture fills the
+# The nebula through the image package's finish: the picture fills the
 # window, the rays below it carry their depth (where the cloud grew half
 # opaque, 30 m, or the night, 200 m), and the lens gives the finish its
 # focus.

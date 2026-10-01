@@ -225,7 +225,7 @@ pub fn read_document(store: &dyn Store, path: &Path) -> Result<String, String> {
 }
 
 /// Resolves a path through a package name
-/// (`picture.orlapkg/graphs/x.osn`) to the existing file inside it.
+/// (`image.orlapkg/graphs/x.osn`) to the existing file inside it.
 fn in_package(store: &dyn Store, path: &Path) -> Option<PathBuf> {
     let mut rest = PathBuf::new();
     // The last `.orlapkg` part names the package, the path up to it where

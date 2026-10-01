@@ -757,13 +757,13 @@ A package is a directory, `name.orlapkg/`, with a manifest `package.osn`
 at its root:
 
 ```text
-package pixelfx@1 { language = 1; ir = 1; }   // its id, and the least language and IR it needs
+package image@1 { language = 1; ir = 1; }     // its id, and the least language and IR it needs
 use "kernels/";                                // its Kernels, as any document uses them
 ```
 
 It holds its Kernel files, its graph presets (`.osn` placed by path,
-`node nes: graph "pixelfx.orlapkg/graphs/nes.osn" { ... }`), and assets
-a scene reads by path. `use "pixelfx.orlapkg";` brings its Kernels and
+`node nes: graph "image.orlapkg/graphs/nes.osn" { ... }`), and assets
+a scene reads by path. `use "image.orlapkg";` brings its Kernels and
 declarations in, as if the scene used what the manifest uses, when the
 manifest's versions are no newer than this Orla's (`orla version` prints
 `orla.api`, `orla.language`, `orla.ir`, `orla.package`). A `use` naming

@@ -3,9 +3,9 @@
 // its colour turns round the wheel with another; stars are the cells of
 // a hash, the hottest white and the coolest red. The camera drifts
 // forward through it. The picture is light with, in w, how far away what
-// each pixel shows is, for the film package's finish.
+// each pixel shows is, for the image package's finish.
 use "../../../packages/noise.orlapkg";
-use "../../../packages/film.orlapkg";
+use "../../../packages/image.orlapkg";
 
 /// How thick the cloud is at `p`, 0 upward.
 fn cloud(p: Vec3) -> Float {

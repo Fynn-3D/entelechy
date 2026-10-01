@@ -1,0 +1,10 @@
+//! The NES look: the picture pixelated, then held to four colors.
+use "../kernels/";
+
+input source: Image;
+param cell: Float = 8.0;
+
+node coarse: image.pixelate@1 { source <- source; cell = cell; }
+node toned: image.palette@1 { source <- coarse.result; }
+
+output result <- toned.result;
