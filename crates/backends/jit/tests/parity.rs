@@ -1065,7 +1065,12 @@ fn values_past_the_stack_are_left_to_the_interpreter() {
         .unwrap()[0];
     assert_eq!(host.data(cpu).unwrap().storage(), [0, 1, 2, 3]);
     match jit.prepare(&module) {
-        Err(reason) => assert!(reason.contains("stack"), "{reason}"),
+        // The refusal names where the stack goes: the function, and the
+        // type whose values take the most of it.
+        Err(reason) => assert!(
+            reason.contains("stack") && reason.contains("values of `[[Int; 4096]; 15]`"),
+            "{reason}"
+        ),
         Ok(prepared) => {
             let mut scope = Scope::new(&mut host, all());
             let out = jit.execute(prepared.as_ref(), &module, &invocation, &mut scope);
