@@ -33,13 +33,16 @@ use "image.orlapkg";
     heat (`blackbody`) and of the wheel (`hue`), as functions, and
     `image.encode` / `image.decode` for a window or a file;
   - blending: the common modes (multiply, screen, overlay, soft light
-    and others), and compositing one picture over another;
+    and others), and compositing one picture over another as the W3C
+    spec does, on sRGB's stored values as painting programs blend or on
+    light itself;
   - filters: Gaussian blur (`graphs/blur.osn`), a box shrink, any
     convolution, unsharp sharpening (`graphs/sharpen.osn`), Sobel
     edges, dilation and erosion, bicubic resizing;
   - tone: exposure, contrast, saturation and hue in Oklab; levels;
     curves; 3D LUTs, and the neutral LUT a grade is baked into; ACES;
-  - histograms: counting by scatter, the cumulative count by prefix,
+  - histograms by Oklab lightness, so equal bins are equal steps to the
+    eye: counting by scatter, the cumulative count by prefix,
     equalization (`graphs/equalize.osn`);
   - distance: the signed distance from every pixel to a shape, by jump
     flooding (`graphs/distance.osn`);

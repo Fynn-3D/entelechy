@@ -30,22 +30,37 @@ fn blend(mode: Blend, base: Vec3, top: Vec3) -> Vec3 {
     return vec3(blend_channel(mode, base.x, top.x), blend_channel(mode, base.y, top.y), blend_channel(mode, base.z, top.z));
 }
 
-/// `top` composited over `base`: blended by `mode` where `top` covers
-/// it (its alpha times `opacity`), and the alphas joined as one sheet
-/// over another. `top` is stretched over `base` whatever its size.
+type Space = enum { Encoded, Linear };
+
+/// `top` composited over `base`, as the W3C's compositing spec does it:
+/// where `top` covers (its alpha times `opacity`), its colour is
+/// blended with `base`'s by `mode`, as much as `base` is there; then
+/// laid over `base`, the alphas joined as one sheet over another, the
+/// colour weighed by both. `space` is where the arithmetic is done: on
+/// sRGB's stored values (`Encoded`), as painting programs blend and
+/// the modes are defined, or on light itself (`Linear`). `top` is
+/// stretched over `base` whatever its size.
 kernel image.blend@1 {
     requires { field.read; field.write; }
     input base: Image;
     input top: Image;
     param mode: Blend = Blend.Normal;
     param opacity: Float = 1.0;
+    param space: Space = Space.Encoded;
     output result: Image;
     compute {
         let b = sample(base);
         let uv = (coord() + vec2(0.5, 0.5)) / domain();
         let t = at_linear(top, uv * size(top));
-        let cover = clamp(t.w * opacity, 0.0, 1.0);
-        let c = mix(b.xyz, blend(mode, b.xyz, t.xyz), cover);
-        return vec4(c.x, c.y, c.z, cover + b.w * (1.0 - cover));
+        let encoded = space == Space.Encoded;
+        let cb = if encoded { linear_to_srgb(max(b.xyz, vec3(0.0, 0.0, 0.0))) } else { b.xyz };
+        let cs = if encoded { linear_to_srgb(max(t.xyz, vec3(0.0, 0.0, 0.0))) } else { t.xyz };
+        let a_base = clamp(b.w, 0.0, 1.0);
+        let a_top = clamp(t.w * opacity, 0.0, 1.0);
+        let mixed = cs * (1.0 - a_base) + blend(mode, cb, cs) * a_base;
+        let alpha = a_top + a_base * (1.0 - a_top);
+        let joined = (mixed * a_top + cb * (a_base * (1.0 - a_top))) / max(alpha, 0.000001);
+        let c = if encoded { srgb_to_linear(joined) } else { joined };
+        return vec4(c.x, c.y, c.z, alpha);
     }
 }

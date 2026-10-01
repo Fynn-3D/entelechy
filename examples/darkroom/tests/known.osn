@@ -78,10 +78,20 @@ node grey: kernel {
     compute { return vec4(0.5, 0.5, 0.5, 1.0); }
 }
 
-node multiply: image.blend@1 { base <- base.result; top <- grey.result; mode = Blend.Multiply; }
-node screen: image.blend@1 { base <- base.result; top <- grey.result; mode = Blend.Screen; }
-node overlay: image.blend@1 { base <- base.result; top <- grey.result; mode = Blend.Overlay; }
-node half: image.blend@1 { base <- base.result; top <- grey.result; opacity = 0.5; }
+// A base half there, for compositing over what does not cover.
+node thin: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = vec2(2, 2);
+    compute { return vec4(0.25, 0.5, 0.75, 0.5); }
+}
+
+node multiply: image.blend@1 { base <- base.result; top <- grey.result; mode = Blend.Multiply; space = Space.Linear; }
+node screen: image.blend@1 { base <- base.result; top <- grey.result; mode = Blend.Screen; space = Space.Linear; }
+node overlay: image.blend@1 { base <- base.result; top <- grey.result; mode = Blend.Overlay; space = Space.Linear; }
+node half: image.blend@1 { base <- base.result; top <- grey.result; opacity = 0.5; space = Space.Linear; }
+node multiply_encoded: image.blend@1 { base <- base.result; top <- grey.result; mode = Blend.Multiply; }
+node over_thin: image.blend@1 { base <- thin.result; top <- grey.result; opacity = 0.5; space = Space.Linear; }
 
 node flat_blur: graph "../../../packages/image.orlapkg/graphs/blur.osn" { source <- flat.result; sigma = 1.0; }
 node dot_blur: graph "../../../packages/image.orlapkg/graphs/blur.osn" { source <- dot.result; sigma = 1.0; }

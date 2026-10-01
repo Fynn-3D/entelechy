@@ -10,12 +10,19 @@ expect colour.result[1].y < 0.0001
 expect colour.result[1].z = 1.0 0.00001
 expect colour.result[2] = 0.25 0.5 0.75 0.21404114 0.00001
 
-# Blending (0.5 grey over 0.25, 0.5, 0.75): multiply halves, screen
-# lifts, overlay keeps a middle grey's base; half opacity is half way.
+# Blending (0.5 grey over 0.25, 0.5, 0.75), on light itself: multiply
+# halves, screen lifts, overlay keeps a middle grey's base; half opacity
+# is half way.
 expect multiply.result[0] = 0.125 0.25 0.375 1.0 0.00001
 expect screen.result[0] = 0.625 0.75 0.875 1.0 0.00001
 expect overlay.result[0] = 0.25 0.5 0.75 1.0 0.00001
 expect half.result[0] = 0.375 0.5 0.625 1.0 0.00001
+
+# Encoded, as painting programs blend: multiply on sRGB's stored values,
+# decoded again. Over a base half there, half a grey is weighed by both
+# alphas, and the alphas join to three quarters.
+expect multiply_encoded.result[0] = 0.1293629 0.2537159 0.3771142 1.0 0.00001
+expect over_thin.result[0] = 0.4166667 0.5 0.5833333 0.75 0.00001
 
 # Filters: a blur leaves one colour as it is and spreads a dot by
 # Gaussian weights (0.399 each way at the centre); a shrink takes the
@@ -50,13 +57,13 @@ expect levelled.result[0] = 0.1666667 0.6666667 1.0 1.0 0.00001
 expect curved.result[0] = 0.3 0.6 0.9 1.0 0.00001
 expect looked_up.result[0] = 0.3 0.6 0.9 1.0 0.00001
 
-# Equalization of two greys, half the pixels each: 32 in the 0.2 bin.
-# A pixel goes to the share darker than it, read a fifth of the way
-# through its bin for 0.2 (0.1: a fifth of the half) and four fifths for
-# 0.8 (0.9).
-expect even.counts[51] = 32
-expect even.result[0].x = 0.1 0.00001
-expect even.result[7].x = 0.9 0.00001
+# Equalization of two greys, half the pixels each, by Oklab lightness
+# (a grey's is its cube root): 32 in the bin of 0.2. A pixel's
+# lightness goes to the share darker than it, read through its bin:
+# 0.355 for 0.2 and 0.825 for 0.8, its light the cube of the ratio.
+expect even.counts[149] = 32
+expect even.result[0].x = 0.0446837 0.00001
+expect even.result[7].x = 0.5608505 0.00001
 
 # Distance from the dot: half a pixel inside it; 3.5 four pixels
 # across; the diagonal, root 18 less a half.
