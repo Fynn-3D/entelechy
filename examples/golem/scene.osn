@@ -1,0 +1,27 @@
+// A golem walking in place: a body of voxel shapes baked at rest once,
+// a skeleton and a walk in the skin package's rows, its palette turned
+// back to rest, and the body posed into voxels every frame, seen by the
+// voxel package's view.
+use "../../packages/voxel.orlapkg";
+use "../../packages/skin.orlapkg";
+use "kernels/";
+
+param yaw: Float = 0.5;
+
+node shapes: golem.body@1 { domain = 11; }
+node rest: voxel.shapes@1 { shapes <- shapes.result; domain = vec3(40, 44, 40); }
+node skeleton: golem.skeleton@1 { domain = 6; }
+node walk: golem.walk@1 { domain = 6; }
+node palette: skin.palette@1 { poses <- walk.result; skeleton <- skeleton.result; }
+node unposing: voxel.unposing@1 { palette <- palette.result; }
+node body: voxel.posed@1 { rest <- rest.result; unposing <- unposing.result; grain = 0.05; domain = vec3(48, 48, 48); }
+node colors: golem.palette@1 { domain = 5; }
+node view: graph "../../packages/voxel.orlapkg/graphs/view.osn" {
+    volume <- body.result;
+    colors <- colors.result;
+    yaw = yaw;
+    pitch = 0.2;
+    distance = 1.05;
+}
+
+output result <- view.result;

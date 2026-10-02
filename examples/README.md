@@ -65,6 +65,7 @@ orla run examples/<example>/scene.osn --out output.ppm --watch
 - [crowd](crowd/README.md): sixty-four arms from one rig, each at its own moment of the clip.
 - [reach](reach/README.md): a shoulder aimed by `skin.aim@1` while the elbow plays the clip.
 - [stride](stride/README.md): root motion by `skin.stride@1` and `skin.travel@1`, carried through `<~`.
+- [golem](golem/README.md): a body of voxel shapes baked at rest, walked by the `skin` package's rows and posed into voxels by the `voxel` package.
 
 ## Games, tools and machines
 

@@ -1,0 +1,77 @@
+// A stone golem of six joints, its body made at rest of voxel shapes,
+// its skeleton and walk the skin package's rows, posed into voxels by
+// the voxel package. A voxel is 5 cm; the skin's units are meters.
+use "../../../packages/voxel.orlapkg";
+use "../../../packages/skin.orlapkg";
+
+fn grain() -> Float { return 0.05; }
+
+/// Where each joint turns at rest, in meters, and its parent: the hips
+/// (the root, the body moves with them), the head, the right and left
+/// arms, the right and left legs.
+fn pivot(j: Int) -> Vec3 {
+    return match j {
+        0 => vec3(0.0, 1.0, 0.0), 1 => vec3(0.0, 1.6, 0.0), 2 => vec3(-0.5, 1.45, 0.0), 3 => vec3(0.5, 1.45, 0.0),
+        4 => vec3(-0.2, 0.95, 0.0), _ => vec3(0.2, 0.95, 0.0)
+    };
+}
+fn parent(j: Int) -> Int { return if j == 0 { -1 } else { 0 }; }
+
+/// The skeleton: each joint's parent and inverse bind, the move that
+/// takes its pivot to the origin.
+kernel golem.skeleton@1 {
+    requires { field.write; }
+    output result: Skeleton;
+    compute {
+        let j = element();
+        return Joint { parent: parent(j), bind: posing(Pose { at: pivot(j) * -1.0, turn: vec4(0.0, 0.0, 0.0, 1.0), grow: vec3(1.0, 1.0, 1.0) }) };
+    }
+}
+
+/// A walk in place, a stride a second: the legs swing about x, the arms
+/// against them, the hips bob and the head nods.
+kernel golem.walk@1 {
+    requires { field.write; time.read; }
+    output result: Rows<Pose>;
+    compute {
+        let j = element();
+        let s = sin(time() * 6.2832);
+        let swing = match j { 1 => 0.08 * s, 2 => 0.6 * s, 3 => -0.6 * s, 4 => -0.5 * s, 5 => 0.5 * s, _ => 0.0 };
+        let bob = if j == 0 { vec3(0.0, 0.03 * abs(s), 0.0) } else { vec3(0.0, 0.0, 0.0) };
+        let at = if j == 0 { pivot(0) + bob } else { pivot(j) - pivot(parent(j)) };
+        return Pose { at: at, turn: turn_about(vec3(1.0, 0.0, 0.0), swing), grow: vec3(1.0, 1.0, 1.0) };
+    }
+}
+
+/// Looks: 1 stone, 2 dark stone, 3 glowing eyes, 4 moss.
+kernel golem.palette@1 {
+    requires { field.write; }
+    output result: Rows<Vec3>;
+    compute { return match element() { 1 => vec3(0.56, 0.54, 0.5), 2 => vec3(0.36, 0.35, 0.34), 3 => vec3(1.0, 0.8, 0.3), _ => vec3(0.3, 0.5, 0.22) }; }
+}
+
+/// A place in meters as a cell's middle of the rest body's box of 40 by
+/// 44 by 40 voxels, its floor's middle at the origin.
+fn cell(m: Vec3) -> Vec3 { return m / grain() + vec3(20.0, 0.0, 20.0); }
+
+/// The golem at rest, each shape painting its look and the joint it
+/// moves with.
+kernel golem.body@1 {
+    requires { field.write; }
+    output result: Rows<VoxelShape>;
+    compute {
+        return match element() {
+            0 => voxel_cuboid(cell(vec3(0.0, 1.3, 0.0)), vec3(8.0, 7.0, 5.0), 2.0, voxel_body(1, 0)),
+            1 => voxel_sphere(cell(vec3(-0.3, 1.62, 0.0)), 3.5, voxel_body(4, 0)),
+            2 => voxel_cuboid(cell(vec3(0.0, 1.8, 0.0)), vec3(5.0, 4.0, 5.0), 1.5, voxel_body(2, 1)),
+            3 => voxel_sphere(cell(vec3(-0.1, 1.83, 0.24)), 1.2, voxel_body(3, 1)),
+            4 => voxel_sphere(cell(vec3(0.1, 1.83, 0.24)), 1.2, voxel_body(3, 1)),
+            5 => voxel_capsule(cell(vec3(-0.58, 1.45, 0.0)), cell(vec3(-0.58, 0.8, 0.0)), 3.0, voxel_body(1, 2)),
+            6 => voxel_capsule(cell(vec3(0.58, 1.45, 0.0)), cell(vec3(0.58, 0.8, 0.0)), 3.0, voxel_body(1, 3)),
+            7 => voxel_capsule(cell(vec3(-0.2, 0.9, 0.0)), cell(vec3(-0.2, 0.15, 0.0)), 3.5, voxel_body(2, 4)),
+            8 => voxel_capsule(cell(vec3(0.2, 0.9, 0.0)), cell(vec3(0.2, 0.15, 0.0)), 3.5, voxel_body(2, 5)),
+            9 => voxel_cuboid(cell(vec3(-0.2, 0.1, 0.06)), vec3(3.5, 2.0, 5.0), 1.0, voxel_body(2, 4)),
+            _ => voxel_cuboid(cell(vec3(0.2, 0.1, 0.06)), vec3(3.5, 2.0, 5.0), 1.0, voxel_body(2, 5))
+        };
+    }
+}

@@ -319,3 +319,58 @@ kernel voxel.view@1 {
         return vec4(seen.x, seen.y, seen.z, 1.0);
     }
 }
+
+// ---------------------------------------------------------------- bodies
+
+/// A body's number at rest: the look its voxel shows (below 65536) and
+/// the joint it moves with. A body at rest is a volume of these, baked
+/// once (`voxel.shapes@1` paints them as any number), and posed; it is
+/// not drawn itself.
+fn voxel_body(look: Int, joint: Int) -> Int { return look + joint * 65536; }
+fn voxel_look(number: Int) -> Int { return number % 65536; }
+fn voxel_joint(number: Int) -> Int { return number / 65536; }
+
+/// What a posed body shows at `p`, in its box's voxels (its floor's
+/// middle at the origin), each voxel `grain` skin units wide: the body at
+/// rest `rest` (its floor's middle at the skin's origin), `p` carried back
+/// to rest by each of the `joints` rows of `unposing` from `first` on, in
+/// order, and taken where the voxel it lands in moves with that joint;
+/// the look of the first so found, 0 none.
+fn voxel_posed(rest: Voxels, unposing: Rows<Mat4>, first: Int, joints: Int, grain: Float, p: Vec3) -> Int {
+    let n = size(rest);
+    let at_rest = vec3(n.x * 0.5, 0.0, n.z * 0.5);
+    let m = p * grain;
+    return loop joints with found = 0 until found != 0 {
+        let j = index();
+        let q = (at(unposing, first + j) * vec4(m.x, m.y, m.z, 1.0)).xyz / grain + at_rest;
+        let v = if voxel_within(floor(q), n) { at(rest, q) } else { 0 };
+        if v != 0 && voxel_joint(v) == j { voxel_look(v) } else { 0 }
+    };
+}
+
+/// Each joint's matrix from a pose back to rest: the inverse of the
+/// matrix that carries a point at rest into the pose, which is what the
+/// skin package's `skin.palette@1` gives.
+kernel voxel.unposing@1 {
+    requires { field.read; field.write; }
+    input palette: Rows<Mat4>;
+    output result: Rows<Mat4>;
+    compute { return inverse(sample(palette)); }
+}
+
+/// A body posed into a box of voxels the size of its `domain`, its
+/// floor's middle where the rest body's is: as `voxel_posed`, every row
+/// of `unposing` a joint.
+kernel voxel.posed@1 {
+    requires { field.read; field.write; }
+    input rest: Voxels;
+    input unposing: Rows<Mat4>;
+    param grain: Float = 1.0;
+    output result: Voxels;
+    compute {
+        let c = icoord();
+        let n = domain();
+        let p = vec3(float(c.x) + 0.5 - n.x * 0.5, float(c.y) + 0.5, float(c.z) + 0.5 - n.z * 0.5);
+        return voxel_posed(rest, unposing, 0, count(unposing), grain, p);
+    }
+}

@@ -9,7 +9,10 @@
 //! capsules): `voxel.shapes@1` bakes a volume of them and
 //! `voxel.paint@1` paints them over one, fed back a world edited a frame
 //! at a time; `voxel.view@1`, and `graphs/view.osn` at the window's
-//! size, shows a volume by day.
+//! size, shows a volume by day. A body is a volume at rest whose voxels
+//! say the joint they move with; `voxel.posed@1` poses it by each
+//! joint's matrix back to rest, which `voxel.unposing@1` makes of the
+//! skin package's palette.
 package voxel@1 { language = 1; ir = 1; }
 
 use "kernels/";

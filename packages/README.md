@@ -145,8 +145,13 @@ its interface is held to.
   painted over one (`voxel.paint@1`), which fed back is a world edited a
   frame at a time; a volume seen by day at the window's size
   (`graphs/view.osn`), with the camera and box a Kernel picks through
-  (`voxel_view_camera`, `voxel_view_box`, `voxel_cell`). Used by
-  `examples/crypt` and `examples/sculpt`.
+  (`voxel_view_camera`, `voxel_view_box`, `voxel_cell`); bodies, a
+  volume at rest whose voxels carry a look and the joint they move with
+  (`voxel_body`), posed into a box by carrying each voxel back to rest
+  through each joint's matrix (`voxel_posed`, `voxel.posed@1`), the
+  matrices the `skin` package's palette turned back
+  (`voxel.unposing@1`). Used by `examples/crypt`, `examples/sculpt` and
+  `examples/golem`.
 - **noise** — randomness a Kernel can repeat, as functions and no
   Kernels:
   - hashes of whole numbers by integer arithmetic, the same bits on

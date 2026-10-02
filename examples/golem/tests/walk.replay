@@ -1,0 +1,18 @@
+scene ../scene.osn
+
+# The posed box is 48 voxels a side, voxel (x, y, z) at index
+# x + 48 * y + 2304 * z, its floor's middle at (24, 0, 24). At rest the
+# right foot (look 2, dark stone) fills voxel (20, 2, 25); a quarter of a
+# second on the right leg has swung half a radian forward about the hip,
+# 0.95 m up, and the hips have risen 3 cm: the foot has left that voxel
+# and fills (20, 5, 33), 0.46 m ahead and 0.26 m up.
+window 160 120
+frame 0.0
+expect body.result[57716] = 2
+expect body.result[76292] = 0
+expect 80 80 = 0.380 0.399 0.433 0.03         # the legs, together
+frame 0.25
+expect body.result[57716] = 0
+expect body.result[76292] = 2
+expect 80 80 = 0.78 0.84 0.92 0.01            # the sky between the legs
+expect 88 80 = 0.329 0.355 0.395 0.03
