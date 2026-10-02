@@ -22,6 +22,8 @@ use crate::{Diagnostic, Event};
 pub(crate) struct Scene {
     store: Arc<dyn Store>,
     root: PathBuf,
+    /// The unpublished bindings last said, so each is said once.
+    unpublished_said: Vec<String>,
     /// Libraries the caller adds to the document's uses.
     extra_uses: Vec<PathBuf>,
     /// The root's stamp at its last lowering; `None` lowers it again.
@@ -112,6 +114,7 @@ impl Scene {
             staged: None,
             superseded: false,
             expanded: None,
+            unpublished_said: Vec::new(),
             refusal: None,
         }
     }
@@ -626,6 +629,38 @@ impl Scene {
                 let graph = staged.graph;
                 self.params
                     .retain(|name, _| graph.params.iter().any(|p| &p.name == name));
+                // A node bound to a Kernel a document the scene reaches
+                // only through another writes: said now, with how to use
+                // it, before an evaluation finds it missing.
+                let own: Vec<orla_ir::KernelId> = std::iter::once(self.root.clone())
+                    .chain(self.sub_graphs.keys().cloned())
+                    .flat_map(|path| kernels.ids_of(&path))
+                    .collect();
+                let said: Vec<String> = crate::sources::unpublished(
+                    self.store.as_ref(),
+                    &self.root,
+                    &graph,
+                    &self.uses,
+                    &own,
+                )
+                .into_iter()
+                .filter_map(|(node, kernel, why)| {
+                    Some(format!(
+                        "node `{node}` binds `{kernel}`, which the scene does not publish; {}",
+                        why?
+                    ))
+                })
+                .collect();
+                for message in said
+                    .iter()
+                    .filter(|message| !self.unpublished_said.contains(message))
+                {
+                    events.push(Event::Rejected {
+                        path: self.root.clone(),
+                        error: Diagnostic::new(message.clone()),
+                    });
+                }
+                self.unpublished_said = said;
                 self.graph = Some(graph);
                 self.text = Some(staged.text);
                 self.files = staged.files;

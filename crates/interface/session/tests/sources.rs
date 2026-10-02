@@ -586,3 +586,94 @@ fn a_name_is_one_package() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A call meeting a used document's function of a builtin's name, not
+/// fitting it, says the function hides the builtin and where it is
+/// declared.
+#[test]
+fn a_function_hiding_a_builtin_is_placed() {
+    let dir = scratch(
+        "hiding-builtin",
+        &[
+            ("lib.orla", "fn dot(a: Int) -> Int { return a; }\n"),
+            (
+                "k.orla",
+                "use \"lib.orla\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return dot(vec2(1.0, 0.0), vec2(1.0, 0.0)); } }\n",
+            ),
+            (
+                "scene.osn",
+                "use \"k.orla\";\nnode n: t.k@1 { domain = 1; }\noutput result <- n.result;\n",
+            ),
+        ],
+    );
+    let mut session = orla_session::Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    let said = format!("{:?}", session.sync());
+    assert!(
+        said.contains("hides the builtin `dot`, declared in lib.orla"),
+        "{said}"
+    );
+    let checked =
+        orla_session::check_document(&orla_session::Disk::default(), &dir.join("k.orla"), false);
+    assert!(
+        checked
+            .lines
+            .iter()
+            .any(|(problem, line)| *problem && line.contains("declared in lib.orla")),
+        "{checked:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A node bound to a Kernel written in a document the scene reaches only
+/// through another is said, once, with the `use` that publishes it; the
+/// check says the same.
+#[test]
+fn a_kernel_reached_only_through_another_document_is_said_with_its_use() {
+    let dir = scratch("unpublished", &[]);
+    std::fs::create_dir_all(dir.join("kernels")).unwrap();
+    for (file, text) in [
+        (
+            "kernels/atlas.orla",
+            "use \"palettes.orla\";\nkernel t.atlas@1 { requires { field.write; } output result: Rows<Int>; compute { return twice(1); } }\n",
+        ),
+        (
+            "kernels/palettes.orla",
+            "fn twice(x: Int) -> Int { return 2 * x; }\nkernel t.greens@1 { requires { field.write; } output result: Rows<Int>; compute { return 4; } }\n",
+        ),
+        (
+            "scene.osn",
+            "use \"kernels/atlas.orla\";\nnode a: t.atlas@1 { domain = 1; }\nnode g: t.greens@1 { domain = 1; }\noutput result <- g.result;\n",
+        ),
+    ] {
+        std::fs::write(dir.join(file), text).unwrap();
+    }
+    let wants = "`t.greens@1` is written in kernels/palettes.orla, which the scene reaches only through kernels/atlas.orla";
+    let mut session = orla_session::Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    let first = format!("{:?}{:?}", session.sync(), session.sync());
+    assert_eq!(first.matches(wants).count(), 1, "{first}");
+    assert!(
+        first.contains("wants `use \\\"kernels/palettes.orla\\\";`"),
+        "{first}"
+    );
+    let checked = orla_session::check_document(
+        &orla_session::Disk::default(),
+        &dir.join("scene.osn"),
+        false,
+    );
+    assert!(
+        checked
+            .lines
+            .iter()
+            .any(|(problem, line)| *problem && line.contains(wants)),
+        "{checked:?}"
+    );
+    // Used itself, it is published, and nothing is said.
+    std::fs::write(dir.join("scene.osn"), "use \"kernels/atlas.orla\";\nuse \"kernels/palettes.orla\";\nnode a: t.atlas@1 { domain = 1; }\nnode g: t.greens@1 { domain = 1; }\noutput result <- g.result;\n").unwrap();
+    let checked = orla_session::check_document(
+        &orla_session::Disk::default(),
+        &dir.join("scene.osn"),
+        false,
+    );
+    assert_eq!(checked.problems(), 0, "{checked:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

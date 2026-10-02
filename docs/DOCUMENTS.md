@@ -786,7 +786,11 @@ Kernel reached by two paths is one file and one owner.
 ### Loading
 
 The session parses the graph, publishes its inline Kernels, follows its
-`use` items, packages included, and rebuilds the Graph model. A changed
+`use` items, packages included, and rebuilds the Graph model. It
+publishes the Kernels of the documents the scene's `use` items name; of
+a document those use in turn it reaches the declarations only, so a node
+bound to a Kernel written there is said at load, and by `orla check`,
+with the `use` that publishes it. A changed
 document republishes only the Kernels whose text changed; a rejected
 replacement keeps the running version; a Kernel that leaves its document
 retires.

@@ -735,7 +735,7 @@ fn peek(f: Image, c: Vec2) -> Vec4 { return at(f, c); }
     std::fs::write(
         dir.join("scene.osn"),
         "use \"kernels/\";
-node seed: life.seed@1 { domain = vec2(8, 8); }
+node seed: image.gradient@1 { domain = vec2(8, 8); }
 node view: kernel { requires { field.read; field.write; } input cells: Image <- seed.result; output result: Image;
     compute { let c = peek(cells, coord()); return vec4(twice(c.r), c.g, c.b, 1.0); } }
 output result <- view.result;

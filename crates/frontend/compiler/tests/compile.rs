@@ -1962,3 +1962,25 @@ fn a_fault_names_the_declaration_that_holds_it() {
     .unwrap_err();
     assert_eq!(error.declaration(), None, "{error}");
 }
+
+/// A function of a builtin's name stands for it; a call that fits the
+/// builtin and not the function says the function hides the builtin.
+#[test]
+fn a_call_to_a_function_hiding_a_builtin_says_so() {
+    let error = compile(
+        "kernel t.k@1 { requires { field.write; } fn dot(a: Int) -> Int { return a; } output result: Rows<Float>; compute { return dot(vec2(1.0, 0.0), vec2(1.0, 0.0)); } }",
+    )
+    .unwrap_err();
+    let said = error.to_string();
+    assert!(
+        said.contains("`dot` takes 1 argument(s), found 2"),
+        "{said}"
+    );
+    assert!(said.contains("hides the builtin `dot`"), "{said}");
+    // A function no builtin is named for says nothing of one.
+    let error = compile(
+        "kernel t.k@1 { requires { field.write; } fn twice(a: Int) -> Int { return a * 2; } output result: Rows<Int>; compute { return twice(1, 2); } }",
+    )
+    .unwrap_err();
+    assert!(!error.to_string().contains("hides"), "{error}");
+}

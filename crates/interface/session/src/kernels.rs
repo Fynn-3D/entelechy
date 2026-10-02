@@ -122,6 +122,14 @@ impl Kernels {
         self.owners = kept.owners;
     }
 
+    /// The Kernels document `path` has published.
+    pub(crate) fn ids_of(&self, path: &Path) -> Vec<KernelId> {
+        self.documents
+            .get(path)
+            .map(|state| state.kernels.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
     /// Every document that has published, or tried to.
     pub(crate) fn documents(&self) -> Vec<PathBuf> {
         self.documents.keys().cloned().collect()

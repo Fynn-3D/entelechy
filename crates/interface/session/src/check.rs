@@ -189,6 +189,33 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
             say!(problem, "{file}: {error}");
         }
     }
+    // Each node's Kernel published by the scene, as a session publishes
+    // it: its own, its inline ones, those of the documents it uses.
+    let own: Vec<orla_ir::KernelId> = document
+        .kernels
+        .iter()
+        .filter_map(|kernel| crate::sources::named_id(kernel).ok())
+        .chain(lowered.inline.iter().map(|inline| inline.id.clone()))
+        .collect();
+    for (node, kernel, why) in
+        crate::sources::unpublished(store, path, &lowered.graph, &lowered.uses, &own)
+    {
+        let at = lowered
+            .graph
+            .node(&node)
+            .and_then(|n| n.at.clone())
+            .unwrap_or_else(|| file.to_owned());
+        match why {
+            Some(why) => say!(
+                problem,
+                "{at}: node `{node}` binds `{kernel}`, which the scene does not publish; {why}"
+            ),
+            None => say!(
+                problem,
+                "{at}: node `{node}` binds `{kernel}`, which nothing the scene uses publishes"
+            ),
+        }
+    }
     if !document.nodes.is_empty() {
         match lowered.graph.order() {
             Ok(order) => say!(

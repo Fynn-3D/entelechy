@@ -927,6 +927,24 @@ fn scoped(
     Ok(out)
 }
 
+/// `path` as a document beside `document` names it: from `document`'s
+/// directory when it lies under it, whole otherwise.
+fn shown_from(store: &dyn Store, document: &Path, path: &Path) -> String {
+    let base = document.parent().unwrap_or_else(|| Path::new("."));
+    let base = store.canonical(base).unwrap_or_else(|_| base.to_path_buf());
+    let path = store.canonical(path).unwrap_or_else(|_| path.to_path_buf());
+    path.strip_prefix(&base)
+        .unwrap_or(&path)
+        .display()
+        .to_string()
+}
+
+/// The function a diagnostic says hides the builtin of its name.
+fn hidden_builtin(message: &str) -> Option<&str> {
+    let rest = message.split("which hides the builtin `").nth(1)?;
+    rest.split('`').next().filter(|name| !name.is_empty())
+}
+
 /// The backticked name a diagnostic reports as not a builtin, struct
 /// or type, or as an unknown type.
 fn missing_name(message: &str) -> Option<String> {
@@ -1119,6 +1137,15 @@ pub(crate) fn located(
     root: &Path,
     known: &[PathBuf],
 ) -> crate::Diagnostic {
+    // A function hiding a builtin: the document that declares it.
+    if let Some(name) = hidden_builtin(&error.message) {
+        let path = declaration_written_in(store, document, None, name);
+        let shown = shown_from(store, document, &path);
+        return crate::Diagnostic {
+            message: format!("{}, declared in {shown}", error.message),
+            ..error
+        };
+    }
     let Some(name) = missing_name(&error.message) else {
         return error;
     };
@@ -1218,4 +1245,57 @@ pub(crate) fn located(
         ),
         at: error.at,
     }
+}
+
+/// The nodes of `graph` binding a Kernel nothing the scene publishes: not
+/// its own (`own`, its document's and its inline ones), not a native
+/// operation, not one a document its `use`s name writes. Each comes with
+/// why, when a document the scene reaches through another writes it: a
+/// scene publishes the Kernels of the documents it uses itself, and
+/// reaches only the declarations of what those use.
+pub(crate) fn unpublished(
+    store: &dyn Store,
+    root: &Path,
+    graph: &orla_graph::Graph,
+    uses: &[(PathBuf, bool)],
+    own: &[KernelId],
+) -> Vec<(orla_graph::NodeId, KernelId, Option<String>)> {
+    let files = Expanded::of(store, uses.to_vec()).files;
+    let writes = |path: &Path, id: &KernelId| {
+        store.document(path).is_ok_and(|parsed| {
+            parsed
+                .kernels
+                .iter()
+                .any(|k| named_id(k).ok().as_ref() == Some(id))
+        })
+    };
+    let shown = |path: &Path| shown_from(store, root, path);
+    graph
+        .nodes
+        .iter()
+        .filter(|node| !node.kernel.name().starts_with("native."))
+        .filter(|node| !own.contains(&node.kernel))
+        .filter(|node| !files.iter().any(|file| writes(file, &node.kernel)))
+        .map(|node| {
+            let through = files.iter().find_map(|file| {
+                let parsed = store.document(file).ok()?;
+                let dir = file.parent().unwrap_or_else(|| Path::new("."));
+                used_documents(store, dir, &parsed.uses)
+                    .ok()?
+                    .into_iter()
+                    .find(|reached| writes(reached, &node.kernel))
+                    .map(|reached| (reached, file.clone()))
+            });
+            let why = through.map(|(reached, via)| {
+                format!(
+                    "`{}` is written in {}, which the scene reaches only through {}: a scene publishes the Kernels of the documents it uses itself, so it wants `use \"{}\";`",
+                    node.kernel,
+                    shown(&reached),
+                    shown(&via),
+                    shown(&reached)
+                )
+            });
+            (node.id.clone(), node.kernel.clone(), why)
+        })
+        .collect()
 }

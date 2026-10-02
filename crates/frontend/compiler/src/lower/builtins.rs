@@ -636,20 +636,38 @@ impl Builder<'_> {
                     )
                 });
                 if let Some((index, expected, ret)) = found {
-                    self.arity(name, args, expected.len(), span)?;
+                    // A function of a builtin's name stands for it here: a
+                    // call that fits the builtin and not the function says
+                    // which it met.
+                    let hiding = |error: CompileError| match error {
+                        CompileError::Semantic {
+                            span,
+                            message,
+                            declaration,
+                        } if crate::help::builtin(name).is_some() => CompileError::Semantic {
+                            span,
+                            message: format!(
+                                "{message}; this `{name}` is a function the document reaches, which hides the builtin `{name}`"
+                            ),
+                            declaration,
+                        },
+                        other => other,
+                    };
+                    self.arity(name, args, expected.len(), span)
+                        .map_err(hiding)?;
                     let mut ids = Vec::with_capacity(args.len());
                     for (arg, expected) in args.iter().zip(expected) {
                         let id = self.value(arg)?;
                         let id = self.adapt(id, expected);
                         if self.ty(id) != expected {
-                            return Err(semantic(
+                            return Err(hiding(semantic(
                                 arg.span,
                                 format!(
                                     "`{name}` expects {} here, found {}",
                                     self.describe(expected),
                                     self.describe(self.ty(id))
                                 ),
-                            ));
+                            )));
                         }
                         ids.push(id);
                     }
