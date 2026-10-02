@@ -7,7 +7,7 @@ use "../kernels/tonemap.orla";
 input source: Image;
 param exposure: Float = 1.0;
 
-node map: image.tonemap@1 {
+node map: image.tonemap@2 {
     source <- source;
     exposure = exposure;
 }

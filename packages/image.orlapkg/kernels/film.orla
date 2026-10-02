@@ -56,10 +56,11 @@ fn film_grain(px: Vec2, time: Float, amount: Float) -> Float {
 /// The finished picture: depth of field between the sharp picture and
 /// its soft copy, by how far each pixel's depth is from `focus` (the
 /// first row); the glow added, `near` and `far` of each; then exposure,
-/// ACES, colour fringing toward the edges (`fringe`), darkened corners
-/// (`vignette`) and grain (`grain`), new every frame. Each step is a
-/// function a Kernel of another look composes as it chooses.
-kernel image.grade@1 {
+/// ACES, sRGB's transfer, colour fringing toward the edges (`fringe`),
+/// darkened corners (`vignette`) and grain (`grain`), new every frame.
+/// Each step is a function a Kernel of another look composes as it
+/// chooses.
+kernel image.grade@2 {
     requires { field.read; field.write; time.read; }
     input source: Grid<Vec4>;
     input soft: Grid<Vec4>;
@@ -81,7 +82,7 @@ kernel image.grade@1 {
         let seen = mix(fringed(source, uv, fringe), vec3(blurred.x, blurred.y, blurred.z), defocus(here.w, at(focus, 0), depth));
         let bloom = at_linear(near_glow, uv * size(near_glow)) * near + at_linear(far_glow, uv * size(far_glow)) * far;
         let toned = aces((seen + vec3(bloom.x, bloom.y, bloom.z)) * exposure);
-        let shown = pow(toned, vec3(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2)) * vignetted(uv, vignette);
+        let shown = linear_to_srgb(toned) * vignetted(uv, vignette);
         let g = film_grain(coord(), time(), grain);
         return vec4(shown.x + g, shown.y + g, shown.z + g, 1.0);
     }

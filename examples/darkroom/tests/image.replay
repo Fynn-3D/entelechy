@@ -80,3 +80,8 @@ expect nearest.result[0] = 0.0 0.0 0.0 1.0 0.00001
 expect ramped.result[0] = 1.0 0.0 0.0 1.0 0.00001
 expect nearest.result[7] = 1.0 0.0 0.0 1.0 0.00001
 expect ramped.result[7] = 1.0 1.0 1.0 1.0 0.00001
+
+# Tone mapping: (0.3, 0.6, 0.9) through ACES's curve to (0.4385, 0.6733,
+# 0.7805), then sRGB's transfer, as `image.encode` encodes: a gamma of
+# 2.2 would give 0.687 0.835 0.894.
+expect mapped.result[0] = 0.69329 0.83968 0.89652 1.0 0.0001

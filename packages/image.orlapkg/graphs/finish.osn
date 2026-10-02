@@ -16,7 +16,7 @@ param grain: Float = 0.03;
 node glow: graph "bloom.osn" { source <- source; over = over; }
 node small: image.shrink@1 { source <- source; domain = ceil(size(source) / 3); }
 node soft: graph "blur.osn" { source <- small.result; sigma = 2.15; }
-node grade: image.grade@1 {
+node grade: image.grade@2 {
     source <- source; soft <- soft.result; near_glow <- glow.near; far_glow <- glow.far; focus <- focus;
     exposure = exposure; grain = grain; domain = window();
 }

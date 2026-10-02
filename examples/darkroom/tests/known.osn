@@ -118,6 +118,7 @@ node three: kernel {
     domain = 3;
     compute { return match element() { 0 => vec3(0.0, 0.0, 0.0), 1 => vec3(1.0, 0.0, 0.0), _ => vec3(1.0, 1.0, 1.0) }; }
 }
+node mapped: image.tonemap@2 { source <- flat.result; }
 node nearest: image.palette@2 { source <- ramp.result; colors <- three.result; }
 node ramped: image.ramp@1 { source <- ramp.result; colors <- three.result; }
 
