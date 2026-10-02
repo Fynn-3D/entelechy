@@ -1,0 +1,35 @@
+// Sheets: frames of a picture laid in cells of one size, left to right
+// and then down, as a game keeps its sprites and tiles.
+
+/// A place in a sheet: the frame it is in and its pixel within the frame.
+struct SheetPlace { frame: Int; at: IVec2; }
+
+/// The cell of frame `k` in a sheet `columns` cells across.
+fn sheet_cell(k: Int, columns: Int) -> IVec2 { return ivec2(k % columns, k / columns); }
+
+/// The texel of a sheet of cells of `cell` pixels that pixel `p` of frame
+/// `k` is.
+fn sheet_texel(k: Int, columns: Int, cell: IVec2, p: IVec2) -> IVec2 {
+    let c = sheet_cell(k, columns);
+    return ivec2(c.x * cell.x + p.x, c.y * cell.y + p.y);
+}
+
+/// Which frame texel `t` of a sheet is in, and where in it: what a
+/// Kernel drawing a whole sheet asks of each texel.
+fn sheet_place(t: IVec2, columns: Int, cell: IVec2) -> SheetPlace {
+    let c = ivec2(t.x / cell.x, t.y / cell.y);
+    return SheetPlace { frame: c.y * columns + c.x, at: ivec2(t.x - c.x * cell.x, t.y - c.y * cell.y) };
+}
+
+/// Pixel `p` of frame `k` of `sheet`.
+fn sheet_pixel(sheet: Image, k: Int, columns: Int, cell: IVec2, p: IVec2) -> Vec4 {
+    return at(sheet, sheet_texel(k, columns, cell, p));
+}
+
+/// The frame of an animation of `frames` frames at `fps` frames a second
+/// that shows `seconds` after it starts: round again (`loops`) or held
+/// at its last.
+fn frame_at(seconds: Float, fps: Float, frames: Int, loops: Bool) -> Int {
+    let k = int(floor(max(seconds, 0.0) * fps));
+    return if loops { k % max(frames, 1) } else { min(k, frames - 1) };
+}

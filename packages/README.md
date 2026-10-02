@@ -68,7 +68,13 @@ its interface is held to.
     to the colours a scene gives;
   - palettes a scene gives as rows: each pixel the nearest colour in
     Oklab (`image.palette@2`), or the colour its lightness falls to,
-    rows from dark to light (`image.ramp@1`).
+    rows from dark to light (`image.ramp@1`), or dithered between the
+    two nearest by a Bayer matrix (`image.dither@1`);
+  - pixel art: sheets of frames in cells, the cell of a frame and the
+    frame and pixel of a texel (`sheet_cell`, `sheet_texel`,
+    `sheet_place`, `sheet_pixel`), the frame an animation shows at a
+    moment (`frame_at`); a line round what is drawn
+    (`image.outline@1`) and the shadow it casts (`image.shadow@1`).
 
   The `darkroom` example develops a photograph with it, and its replay
   holds each operation to an answer worked by hand on three backends;
