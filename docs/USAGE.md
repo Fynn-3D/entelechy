@@ -190,10 +190,11 @@ Prints the flattened graph in canonical form (a placed graph's nodes named
 by their path, `title.advances`, so a scene that places one does not read
 back from it), the published Kernels with
 their generations, and the plan: the groups that execute, in order, with
-the producers each absorbed, and under each node what it reads of
-state: whether it holds state (a port reads it `<~`), the nodes holding
-state it reads `<-`, as this evaluation made them, and those it reads
-`<~`, as the last evaluation committed them. Fusion inlines a pointwise producer into its
+the producers each absorbed. The nodes holding state (a port reads them
+`<~`) are named first, in the order they advance, and under each the
+nodes holding state it reads `<-`, as this evaluation made them, and
+those it reads `<~`, as the last evaluation committed them; a node
+holding none reads what is newest, as a picture of it does. Fusion inlines a pointwise producer into its
 only reader over the same domain, at most 64 nodes to a group, so a long
 chain fuses into several; `--no-fusion` turns it off. A group a
 backend takes Kernel by Kernel but refuses fused (the JIT's stack, a

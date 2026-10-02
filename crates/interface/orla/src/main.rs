@@ -530,6 +530,19 @@ fn graph(args: &[String]) -> Result<(), String> {
     match session.plan() {
         Ok(plan) => {
             println!("// plan: {} group(s)", plan.len());
+            // The nodes holding state, in the order they advance.
+            let stateful: Vec<String> = plan
+                .iter()
+                .flat_map(|entry| std::iter::once(&entry.node).chain(&entry.absorbed))
+                .filter(|node| graph.reads(node).is_some_and(|reads| reads.holds_state))
+                .map(ToString::to_string)
+                .collect();
+            if !stateful.is_empty() {
+                println!(
+                    "// state, in the order it advances: {}",
+                    stateful.join(" -> ")
+                );
+            }
             for entry in &plan {
                 let absorbed = if entry.absorbed.is_empty() {
                     String::new()
@@ -546,10 +559,12 @@ fn graph(args: &[String]) -> Result<(), String> {
                 };
                 let domain = entry.domain.map(|d| format!(" {d}")).unwrap_or_default();
                 println!("//   {}{absorbed}: {}{domain}", entry.node, entry.kernel);
-                // What each node of the group reads of state: what this
-                // evaluation made, or what the last committed.
+                // What each node of the group holding state reads of
+                // state: what this evaluation made, or what the last
+                // committed. A node holding none reads what is newest, as
+                // a picture of it does.
                 for node in std::iter::once(&entry.node).chain(&entry.absorbed) {
-                    let Some(reads) = graph.reads(node) else {
+                    let Some(reads) = graph.reads(node).filter(|reads| reads.holds_state) else {
                         continue;
                     };
                     let names = |nodes: &[orla_graph::NodeId]| {
@@ -559,10 +574,7 @@ fn graph(args: &[String]) -> Result<(), String> {
                             .collect::<Vec<_>>()
                             .join(", ")
                     };
-                    let mut said = Vec::new();
-                    if reads.holds_state {
-                        said.push("holds state".to_owned());
-                    }
+                    let mut said = vec!["holds state".to_owned()];
                     if !reads.new_state.is_empty() {
                         said.push(format!(
                             "reads the new state of {}",
@@ -575,9 +587,7 @@ fn graph(args: &[String]) -> Result<(), String> {
                             names(&reads.committed)
                         ));
                     }
-                    if !said.is_empty() {
-                        println!("//     {node}: {}", said.join("; "));
-                    }
+                    println!("//     {node}: {}", said.join("; "));
                 }
             }
             Ok(())
