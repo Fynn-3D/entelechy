@@ -29,7 +29,7 @@ directions: a test needing a higher crate lives in that crate's tests.
 | Host Core | [host](crates/core/host/src/lib.rs) | handles, budgets, bounds; `.field` in [orla-formats](crates/interface/formats/src/file.rs), [its bytes pinned](crates/interface/formats/tests/field_file.rs) |
 | Capability ABI | [abi](crates/core/abi/src/lib.rs), [names](crates/core/abi/src/names.rs) | [capability set pinned to `ABI_VERSION`](crates/core/abi/tests/contract.rs) |
 | Orla IR | [ir](crates/core/ir/src/lib.rs), [validation](crates/core/ir/src/validate.rs), [display](crates/core/ir/src/display.rs), [fusion](crates/core/ir/src/fuse.rs), [optimizer](crates/core/ir/src/optimize.rs) | [fusion bit-identity](crates/backends/cpu/tests/fusion.rs) |
-| Kernel language | [language](crates/frontend/language/src/lib.rs), [parser](crates/frontend/language/src/parser.rs), [lexer](crates/frontend/language/src/lexer.rs) | parser tests in place |
+| Kernel language | [language](crates/frontend/language/src/lib.rs), [parser](crates/frontend/language/src/parser.rs), [lexer](crates/frontend/language/src/lexer.rs), [scope](crates/frontend/language/src/scope.rs) | parser tests in place |
 | Compiler | [compiler](crates/frontend/compiler/src/lib.rs), [lowering](crates/frontend/compiler/src/lower/), [help](crates/frontend/compiler/src/help.rs) | [compile tests](crates/frontend/compiler/tests/compile.rs), [surface at its version](crates/frontend/compiler/tests/surface.rs), [help written as the language takes it](crates/frontend/compiler/tests/help_examples.rs), [every signature and its capability compiled](crates/frontend/compiler/tests/help_signatures.rs) |
 | File writes | [writes](crates/interface/session/src/writes.rs); `else` fallback in the [evaluator](crates/core/graph/src/evaluate/mod.rs) | [session](crates/interface/session/tests/writes.rs), [lowering](crates/frontend/scene/src/lib.rs), [save replay](examples/data/tests/save.replay) |
 | Shared rules | [rules](crates/core/rules/src/lib.rs), [`Backend`](crates/core/rules/src/backend.rs), [reduce tree](crates/core/rules/src/reduce.rs), [rasterizer](crates/core/rules/src/raster.rs) | every backend's parity test |
@@ -144,8 +144,9 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   mismatch, else restarts the port ([an agent changing it](crates/interface/orla/tests/protocol.rs)).
 - `times = N` expands into `name/1..N` in [scene lowering](crates/frontend/scene/src/lib.rs).
 - `evaluate_for` runs only what the named nodes need.
-- `use` across files, cycles and duplicate names
-  ([sources](crates/interface/session/src/sources.rs), [session test](crates/interface/orla/tests/session.rs)).
+- `use` across files and cycles ([sources](crates/interface/session/src/sources.rs));
+  the names each document sees, shadowing and duplicate names
+  ([scope](crates/frontend/language/src/scope.rs), [session test](crates/interface/orla/tests/session.rs)).
 - Parameters of any value type, checked by layout
   ([`Param`, `value_as`](crates/core/ir/src/lib.rs), [`Value`](crates/core/abi/src/lib.rs),
   [`set_param`](crates/interface/session/src/scene.rs),

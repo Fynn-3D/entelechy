@@ -61,7 +61,7 @@ use std::ops::Range;
 pub use orla_abi::names::{did_you_mean, edit_distance, nearest, suggestion};
 pub use parser::{RESERVED, outline, parse, parse_document, parse_literal};
 pub use rename::renamed_type;
-pub use scope::{Declarations, Source, scope, scoped_name};
+pub use scope::{Declarations, Source, scope};
 
 /// The version of the Kernel language and the document format.
 pub const LANGUAGE_VERSION: u32 = 1;

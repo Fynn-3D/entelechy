@@ -38,7 +38,7 @@ pub struct Source<'a> {
 
 /// The name a declaration of the source written `source` takes where
 /// another holds its own name.
-pub fn scoped_name(name: &str, source: &str) -> String {
+fn scoped_name(name: &str, source: &str) -> String {
     format!("{name}@{source}")
 }
 

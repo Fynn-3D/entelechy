@@ -799,6 +799,32 @@ costs a few characters a public name.
 
 **Where.** `package_manifest` and `one_package_of_its_name` in
 [`sources.rs`](../crates/interface/session/src/sources.rs), with
-`resolve_package` for the search beside a package; the `scoped`
-renaming there; the recipe's check of every package in one scene in
-[PROCESS](../PROCESS.md).
+`resolve_package` for the search beside a package; the scoping of names
+in [`scope.rs`](../crates/frontend/language/src/scope.rs); the recipe's
+check of every package in one scene in [PROCESS](../PROCESS.md).
+
+## Sources belong to the loader; names belong to the language
+
+The loader finds documents: it resolves a `use` to files and packages,
+refuses cycles and two packages of one name, and hands the language the
+documents it reached and which uses which. The language decides every
+name: a Kernel sees its own declarations, then its document's, then what
+its document's `use` items bring in, one declaration a name (alike ones
+are one), and the builtins, which a function of a builtin's name hides
+in its own document only. A declaration a Kernel inherits carries where
+it was written and the name it was written with, so a fault is placed
+and said by looking them up, never by taking a name apart.
+
+**Why.** The rules of names were split between the session, which
+renamed across documents, and the language, which renamed within a
+Kernel, each writing what the other needed into the names themselves.
+The seams between them were where alike declarations were merged twice,
+where a fault was placed in the wrong file, and where a library's
+function changed what a builtin meant in the documents that used it. One
+owner of names, and origins as data, leave nothing to take apart.
+
+**Where.** [`scope.rs`](../crates/frontend/language/src/scope.rs):
+`document_scope`, `scope` and `resolve`; `Origin` and `Held` in
+[the language](../crates/frontend/language/src/lib.rs); the walk of the
+`use` items, `declarations_within`, in
+[`sources.rs`](../crates/interface/session/src/sources.rs).
