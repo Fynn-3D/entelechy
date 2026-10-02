@@ -909,10 +909,9 @@ fn scoped(
         });
         let reached = &*reached;
         let declares = |name: &str| {
-            reach
-                .functions
-                .iter()
-                .any(|(d, f)| f == file && d.name.value == name)
+            declaring
+                .get(name)
+                .is_some_and(|files| files.contains(&file.as_path()))
         };
         let rename = |name: &str| -> Option<String> {
             let target = if declares(name) {
