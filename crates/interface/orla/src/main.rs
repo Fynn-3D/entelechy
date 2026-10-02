@@ -518,8 +518,9 @@ fn graph(args: &[String]) -> Result<(), String> {
     }
     let graph = session
         .graph()
-        .ok_or_else(|| "the scene did not load".to_string())?;
-    print!("{}", orla_scene::print(graph));
+        .ok_or_else(|| "the scene did not load".to_string())?
+        .clone();
+    print!("{}", orla_scene::print(&graph));
     let kernels: Vec<String> = session
         .runtime()
         .kernels()
@@ -545,6 +546,39 @@ fn graph(args: &[String]) -> Result<(), String> {
                 };
                 let domain = entry.domain.map(|d| format!(" {d}")).unwrap_or_default();
                 println!("//   {}{absorbed}: {}{domain}", entry.node, entry.kernel);
+                // What each node of the group reads of state: what this
+                // evaluation made, or what the last committed.
+                for node in std::iter::once(&entry.node).chain(&entry.absorbed) {
+                    let Some(reads) = graph.reads(node) else {
+                        continue;
+                    };
+                    let names = |nodes: &[orla_graph::NodeId]| {
+                        nodes
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
+                    let mut said = Vec::new();
+                    if reads.holds_state {
+                        said.push("holds state".to_owned());
+                    }
+                    if !reads.new_state.is_empty() {
+                        said.push(format!(
+                            "reads the new state of {}",
+                            names(&reads.new_state)
+                        ));
+                    }
+                    if !reads.committed.is_empty() {
+                        said.push(format!(
+                            "reads the last committed {}",
+                            names(&reads.committed)
+                        ));
+                    }
+                    if !said.is_empty() {
+                        println!("//     {node}: {}", said.join("; "));
+                    }
+                }
             }
             Ok(())
         }

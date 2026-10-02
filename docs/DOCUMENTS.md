@@ -657,6 +657,17 @@ be keywords.
    reads changed; one that gives what it gave last, word for word, is
    unchanged to what reads it, so a cheap node that settles spares a
    costly one after it, and state at a fixed point does not advance.
+
+   State spread over several nodes advances in one order. A node a port
+   reads `<~` holds state; another that reads it `<-` sees its new
+   state, the one this evaluation made before it, and one that reads it
+   `<~` its state as the last evaluation left it. So a moment the nodes
+   must agree on, a battle beginning, is decided by one node, and the
+   others take it from that node's new state `<-` and do not decide it
+   again from what they read `<~`; a node that steps first reads the
+   others `<~`, and those after it read it `<-`. `orla graph` says under
+   each node of its plan which nodes' new state and which committed
+   state it reads.
 2. A source is a graph input by name or `node.port`. Inputs and nodes
    share one namespace. A graph may declare several outputs; which
    device takes which is decided by structure (a grid of pixels for the

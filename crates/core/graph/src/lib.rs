@@ -155,6 +155,18 @@ impl PartialEq for Node {
     }
 }
 
+/// What a node reads across evaluations: see [`Graph::reads`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Reads {
+    /// A port reads the node `<~`: what it gives is state, kept from one
+    /// evaluation to the next.
+    pub holds_state: bool,
+    /// Nodes holding state it reads `<-`: as this evaluation made them.
+    pub new_state: Vec<NodeId>,
+    /// Nodes it reads `<~`: as the last evaluation committed them.
+    pub committed: Vec<NodeId>,
+}
+
 /// A graph document.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Graph {
@@ -309,6 +321,47 @@ impl Graph {
             .iter()
             .find(|(name, _)| name == external)
             .map(|(_, source)| source)
+    }
+
+    /// What node `id` reads across evaluations: whether it holds state
+    /// (a port reads it `<~`, as the last evaluation committed it), the
+    /// nodes holding state it reads `<-` (their new state, made earlier in
+    /// this evaluation), and the nodes it reads `<~` (as the last
+    /// evaluation committed them). `None` for no such node.
+    pub fn reads(&self, id: &NodeId) -> Option<Reads> {
+        let node = self.node(id)?;
+        let holds = |n: &NodeId| {
+            self.nodes.iter().any(|other| {
+                other.inputs.values().any(|binding| {
+                    matches!(binding, Binding::Previous { source: Source::Node { node, .. }, .. } if node == n)
+                })
+            })
+        };
+        let mut reads = Reads {
+            holds_state: holds(id),
+            ..Reads::default()
+        };
+        for binding in node.inputs.values() {
+            match binding {
+                Binding::Now(Source::Node { node: from, .. }) if from != id && holds(from) => {
+                    if !reads.new_state.contains(from) {
+                        reads.new_state.push(from.clone());
+                    }
+                }
+                Binding::Previous {
+                    source: Source::Node { node: from, .. },
+                    ..
+                } if from != id => {
+                    if !reads.committed.contains(from) {
+                        reads.committed.push(from.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        reads.new_state.sort();
+        reads.committed.sort();
+        Some(reads)
     }
 
     /// Checks names and dependencies and returns node indices in an order

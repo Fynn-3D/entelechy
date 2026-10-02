@@ -2755,3 +2755,34 @@ fn a_changed_graph_is_planned_anew_and_the_first_again() {
         assert_eq!(summary(&second), ids(&["gray", "final"]));
     }
 }
+
+/// What each node reads across evaluations: a node a port reads `<~`
+/// holds state; another reading it `<-` reads its new state, made earlier
+/// in the evaluation, one reading it `<~` its state as committed.
+#[test]
+fn a_graph_says_what_each_node_reads_of_state() {
+    let graph = orla_scene::parse(
+        "node begin: t.begin@1 { domain = 1; }
+node world: t.world@1 { previous <~ world.result from begin.result; fight <~ fight.result from begin.result; }
+node fight: t.fight@1 { previous <~ fight.result from begin.result; world <- world.result; }
+node field: t.field@1 { fight <- fight.result; world <- world.result; begin <- begin.result; }
+output result <- field.result;",
+    )
+    .unwrap();
+    let reads = |id: &str| graph.reads(&orla_graph::NodeId(id.into())).unwrap();
+    let names =
+        |nodes: &[orla_graph::NodeId]| nodes.iter().map(ToString::to_string).collect::<Vec<_>>();
+    assert!(!reads("begin").holds_state);
+    let world = reads("world");
+    assert!(world.holds_state);
+    assert_eq!(names(&world.committed), ["fight"]);
+    assert!(world.new_state.is_empty());
+    let fight = reads("fight");
+    assert!(fight.holds_state);
+    assert_eq!(names(&fight.new_state), ["world"]);
+    // Reading what holds no state is no reading of state.
+    let field = reads("field");
+    assert!(!field.holds_state);
+    assert_eq!(names(&field.new_state), ["fight", "world"]);
+    assert!(field.committed.is_empty());
+}
