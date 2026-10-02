@@ -62,7 +62,9 @@ its interface is held to.
     pixel's depth in w: a glow round what is past white
     (`graphs/bloom.osn`), depth of field at a focus the scene gives as
     a row each frame, ACES, colour fringing, darkened corners and grain
-    from the noise package's hash; `graphs/nes.osn`, coarse pixels held
+    from the noise package's hash, each step a function another look
+    composes (`fringed`, `defocus`, `vignetted`, `film_grain`);
+    `graphs/nes.osn`, coarse pixels held
     to the colours a scene gives;
   - palettes a scene gives as rows: each pixel the nearest colour in
     Oklab (`image.palette@2`), or the colour its lightness falls to,

@@ -23,11 +23,42 @@ kernel image.bright@1 {
     }
 }
 
+/// A lens's colour fringe at `uv` (0 to 1 across the picture): red read
+/// `fringe` of the picture's width outward from the middle, blue as far
+/// inward, green where it is, so the split grows toward the edges.
+fn fringed(source: Grid<Vec4>, uv: Vec2, fringe: Float) -> Vec3 {
+    let fs = size(source);
+    let off = (uv - vec2(0.5, 0.5)) * fringe * fs.x;
+    return vec3(at_linear(source, uv * fs + off).x, at_linear(source, uv * fs).y, at_linear(source, uv * fs - off).z);
+}
+
+/// How far out of focus a pixel `distance` away is, for a lens focused
+/// at `focus`: its share of the soft copy, from none within an eighth of
+/// the focus to 0.6, `strength` how fast it grows.
+fn defocus(distance: Float, focus: Float, strength: Float) -> Float {
+    let focused = max(focus, 0.0001);
+    return clamp(abs(distance - focused) / focused * strength - 0.12, 0.0, 0.6);
+}
+
+/// The share of light a lens keeps at `uv`, darker toward the corners by
+/// `amount`.
+fn vignetted(uv: Vec2, amount: Float) -> Float {
+    let d = uv - vec2(0.5, 0.5);
+    return 1.0 - amount * dot(d, d);
+}
+
+/// Film grain at pixel `px`: a number from -`amount` / 2 to `amount` / 2,
+/// new each sixtieth of a second of `time`.
+fn film_grain(px: Vec2, time: Float, amount: Float) -> Float {
+    return (unit_of(hash_int3(int(px.x), int(px.y), int(time * 60.0), 71)) - 0.5) * amount;
+}
+
 /// The finished picture: depth of field between the sharp picture and
 /// its soft copy, by how far each pixel's depth is from `focus` (the
-/// first row); the glow added; then exposure, ACES, colour fringing
-/// toward the edges (`fringe`), darkened corners (`vignette`) and grain
-/// (`grain`), new every frame.
+/// first row); the glow added, `near` and `far` of each; then exposure,
+/// ACES, colour fringing toward the edges (`fringe`), darkened corners
+/// (`vignette`) and grain (`grain`), new every frame. Each step is a
+/// function a Kernel of another look composes as it chooses.
 kernel image.grade@1 {
     requires { field.read; field.write; time.read; }
     input source: Grid<Vec4>;
@@ -40,23 +71,18 @@ kernel image.grade@1 {
     param fringe: Float = 0.003;
     param vignette: Float = 1.1;
     param grain: Float = 0.03;
+    param near: Float = 0.55;
+    param far: Float = 0.45;
     output result: Image;
     compute {
         let uv = (coord() + vec2(0.5, 0.5)) / domain();
-        let fs = size(source);
-        let off = (uv - vec2(0.5, 0.5)) * fringe * fs.x;
-        let sharp = vec3(at_linear(source, uv * fs + off).x, at_linear(source, uv * fs).y, at_linear(source, uv * fs - off).z);
-        let here = at_linear(source, uv * fs);
+        let here = at_linear(source, uv * size(source));
         let blurred = at_linear(soft, uv * size(soft));
-        let focused = max(at(focus, 0), 0.0001);
-        let blur = clamp(abs(here.w - focused) / focused * depth - 0.12, 0.0, 0.6);
-        let seen = mix(sharp, vec3(blurred.x, blurred.y, blurred.z), blur);
-        let bloom = at_linear(near_glow, uv * size(near_glow)) * 0.55 + at_linear(far_glow, uv * size(far_glow)) * 0.45;
+        let seen = mix(fringed(source, uv, fringe), vec3(blurred.x, blurred.y, blurred.z), defocus(here.w, at(focus, 0), depth));
+        let bloom = at_linear(near_glow, uv * size(near_glow)) * near + at_linear(far_glow, uv * size(far_glow)) * far;
         let toned = aces((seen + vec3(bloom.x, bloom.y, bloom.z)) * exposure);
-        let d = uv - vec2(0.5, 0.5);
-        let shown = pow(toned, vec3(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2)) * (1.0 - vignette * dot(d, d));
-        let frame = int(time() * 60.0);
-        let g = (unit_of(hash_int3(int(coord().x), int(coord().y), frame, 71)) - 0.5) * grain;
+        let shown = pow(toned, vec3(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2)) * vignetted(uv, vignette);
+        let g = film_grain(coord(), time(), grain);
         return vec4(shown.x + g, shown.y + g, shown.z + g, 1.0);
     }
 }
