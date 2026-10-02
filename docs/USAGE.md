@@ -192,7 +192,12 @@ back from it), the published Kernels with
 their generations, and the plan: the groups that execute, in order, with
 the producers each absorbed. Fusion inlines a pointwise producer into its
 only reader over the same domain, at most 64 nodes to a group, so a long
-chain fuses into several; `--no-fusion` turns it off.
+chain fuses into several; `--no-fusion` turns it off. A group a
+backend takes Kernel by Kernel but refuses fused (the JIT's stack, a
+device's limits) runs apart until one of its Kernels changes, and is
+said once with the backend's reason: by `run` and `render`, under a
+replay's line, in the Player, beside `bench`'s numbers, and in a
+protocol report's `refused`.
 
 ## Measure a scene
 

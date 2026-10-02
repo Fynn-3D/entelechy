@@ -257,7 +257,10 @@ An evaluation's report carries:
 - `reset`, `{node, port, reason}` for every such port restarted from its
   initial source;
 - `pending`, the `async` nodes whose run is going on;
-- `landed`, those whose run landed before this evaluation's nodes ran.
+- `landed`, those whose run landed before this evaluation's nodes ran;
+- `refused`, `{node, members, reason}` for every group the backend took
+  Kernel by Kernel but refused fused, said once: its members run apart
+  until one of their Kernels changes.
 
 A failed evaluation names its `node` when the failure is one node's; a
 failed migration names its `port` and `migration` too. An element that

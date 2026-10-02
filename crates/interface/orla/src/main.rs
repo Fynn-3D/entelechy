@@ -1051,6 +1051,9 @@ fn evaluate_and_export(
             for (node, port, reason) in &report.reset {
                 eprintln!("state of `{node}.{port}` restarted from its initial value: {reason}");
             }
+            for refused in &report.refused {
+                eprintln!("{refused}");
+            }
             let names = |nodes: &[orla_graph::NodeId]| {
                 nodes
                     .iter()
@@ -1132,6 +1135,7 @@ fn rounded_apart(
         all.frames = outcome.frames;
         all.checks = outcome.checks;
         all.shown = outcome.shown;
+        all.refused = outcome.refused;
         all.failures.extend(
             outcome
                 .failures

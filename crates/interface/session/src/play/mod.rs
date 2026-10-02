@@ -398,6 +398,10 @@ impl Play {
                     && let Some((replayer, _)) = &mut self.replaying
                 {
                     replayer.evaluated(report.clone());
+                } else {
+                    // A replay says its refusals with its outcome.
+                    self.said
+                        .extend(report.refused.iter().map(ToString::to_string));
                 }
                 let evaluated = (self.clock)() - started;
                 let picture = self

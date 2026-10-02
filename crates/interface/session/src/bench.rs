@@ -72,6 +72,8 @@ pub struct Measured {
     /// Milliseconds one empty node measurement costs, already subtracted
     /// from every node time.
     pub floor: f64,
+    /// Groups the backend refused to run fused, which ran apart.
+    pub refused: Vec<String>,
 }
 
 /// Measures every backend the options name.
@@ -129,9 +131,10 @@ pub fn measure(
         ..base
     };
     // The warm-up frame compiles and allocates, unmeasured.
-    session
+    let warm = session
         .evaluate(&context(0))
         .map_err(|e| format!("{backend}: {e}"))?;
+    let mut refused: Vec<String> = warm.refused.iter().map(ToString::to_string).collect();
     let mut runs: Vec<f64> = Vec::new();
     let mut frame = 1;
     let mut ran = false;
@@ -142,6 +145,7 @@ pub fn measure(
                 .evaluate(&context(frame))
                 .map_err(|e| format!("{backend}: {e}"))?;
             ran |= !report.executed.is_empty();
+            refused.extend(report.refused.iter().map(ToString::to_string));
             frame += 1;
             // Settle the device inside the measurement, as a Player's
             // present does, so a GPU frame counts its work.
@@ -168,6 +172,7 @@ pub fn measure(
         ran,
         device_clock: run.device_clock,
         floor: run.floor,
+        refused,
     })
 }
 
@@ -335,6 +340,11 @@ pub fn table(options: &Options, measured: &[Measured], before: Option<&[Measured
             entry.backend, entry.best, entry.median, against
         ));
     }
+    for entry in measured {
+        for refused in &entry.refused {
+            out.push_str(&format!("\n{}: {refused}\n", entry.backend));
+        }
+    }
     if measured.iter().any(|entry| !entry.ran) {
         out.push_str(
             "\nnothing ran after the first frame: this scene does not change with the clock, so what is measured is the finding of that out\n",
@@ -487,6 +497,7 @@ pub fn read(path: &Path) -> Result<Vec<Measured>, String> {
             ran: true,
             device_clock: false,
             floor: 0.0,
+            refused: Vec::new(),
         });
     }
     if measured.is_empty() {

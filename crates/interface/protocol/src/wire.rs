@@ -96,6 +96,7 @@ pub fn report_json(session: &Session, report: &orla_graph::Report) -> Json {
         "reset": report.reset.iter().map(|(node, port, reason)| json!({ "node": node.to_string(), "port": port, "reason": reason })).collect::<Vec<_>>(),
         "pending": report.pending.iter().map(ToString::to_string).collect::<Vec<_>>(),
         "landed": report.landed.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "refused": report.refused.iter().map(|refused| json!({ "node": refused.node.to_string(), "members": refused.members.iter().map(ToString::to_string).collect::<Vec<_>>(), "reason": refused.reason })).collect::<Vec<_>>(),
     })
 }
 

@@ -906,9 +906,12 @@ fn a_fused_group_the_backend_refuses_runs_unfused() {
     plain.clear(&mut runtime);
 
     // Each member was taken alone, so the group the backend refuses runs
-    // as its members, frame after frame, and gives the same picture.
+    // as its members, frame after frame, and gives the same picture; the
+    // refusal of each group the planner tries (the whole, then smaller
+    // ones) is reported once, naming the group and the backend's reason.
     let mut evaluator = Evaluator::new();
-    for _ in 0..3 {
+    let mut refused = Vec::new();
+    for _ in 0..6 {
         let report = evaluator
             .evaluate(
                 &graph,
@@ -920,7 +923,28 @@ fn a_fused_group_the_backend_refuses_runs_unfused() {
             .unwrap_or_else(|error| panic!("{error}"));
         assert!(report.fused.is_empty(), "{:?}", report.fused);
         assert_eq!(pixels(&runtime, report.output), expected);
+        refused.extend(report.refused);
     }
+    assert!(!refused.is_empty());
+    for (k, group) in refused.iter().enumerate() {
+        assert!(
+            group.members.len() > 1 && group.members.contains(&group.node),
+            "{group:?}"
+        );
+        assert!(group.reason.contains("instructions"), "{group}");
+        assert!(group.to_string().contains("run apart"), "{group}");
+        assert!(!refused[..k].contains(group), "said twice: {group}");
+    }
+    let later = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &at(0.0),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert!(later.refused.is_empty(), "{:?}", later.refused);
 }
 
 #[test]

@@ -599,13 +599,20 @@ pub struct Outcome {
     pub failures: Vec<String>,
     /// What `show` steps printed, in order.
     pub shown: Vec<String>,
+    /// Groups the backend refused to run fused, each said once.
+    pub refused: Vec<String>,
 }
 
 impl Outcome {
-    /// The report of a run: the shown values, then the failures, each a
-    /// line under the replay's own.
+    /// The report of a run: the groups refused fused, the shown values,
+    /// then the failures, each a line under the replay's own.
     pub fn lines(&self) -> Vec<String> {
-        self.shown.iter().chain(&self.failures).cloned().collect()
+        self.refused
+            .iter()
+            .chain(&self.shown)
+            .chain(&self.failures)
+            .cloned()
+            .collect()
     }
 }
 
@@ -796,6 +803,9 @@ impl Replayer {
     /// Takes the report of the frame [`Replayer::next_frame`] handed back.
     pub fn evaluated(&mut self, report: Report) {
         self.outcome.frames += 1;
+        self.outcome
+            .refused
+            .extend(report.refused.iter().map(ToString::to_string));
         self.last = Some(report);
     }
 

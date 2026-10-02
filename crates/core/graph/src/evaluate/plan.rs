@@ -590,7 +590,12 @@ impl Evaluator {
             // The backend took each member alone but refuses the group (a
             // processor's stack, a device's limits): it runs unfused, as a
             // fusion the IR declines does.
-            Err(PrepareError::Backend(_)) => {
+            Err(PrepareError::Backend(reason)) => {
+                self.refused.push(Refused {
+                    node: consumer.clone(),
+                    members: parts.iter().map(|(node, _)| node.clone()).collect(),
+                    reason,
+                });
                 self.declined.insert(consumer.clone(), parts);
                 return Ok(None);
             }

@@ -84,6 +84,37 @@ pub struct Report {
     pub pending: Vec<NodeId>,
     /// `async` nodes whose run landed before this evaluation's nodes ran.
     pub landed: Vec<NodeId>,
+    /// Groups a backend refused to run fused, found since the last
+    /// report: they run apart until one of their Kernels changes.
+    pub refused: Vec<Refused>,
+}
+
+/// A group a backend took Kernel by Kernel but refused fused: the node
+/// it would have run as, the nodes in it, and the backend's reason.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refused {
+    /// The node the group would have run as.
+    pub node: NodeId,
+    /// The group's nodes, the node it would have run as first.
+    pub members: Vec<NodeId>,
+    /// The backend's reason.
+    pub reason: String,
+}
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let members = self
+            .members
+            .iter()
+            .map(|node| format!("`{node}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        write!(
+            f,
+            "fusing {members} into `{}` was refused by the backend, so they run apart until one of their Kernels changes: {}",
+            self.node, self.reason
+        )
+    }
 }
 
 /// Where one node ran; see [`Report::placements`].
@@ -226,6 +257,8 @@ pub struct Evaluator {
     /// Groups fusion declined, by consumer, at their generations; retried
     /// when one changes.
     declined: BTreeMap<NodeId, Vec<(NodeId, Generation)>>,
+    /// Groups a backend refused fused, kept until a report carries them.
+    refused: Vec<Refused>,
     pending: BTreeMap<NodeId, Pending>,
     /// The last graph planned and its order. A plan is kept for this
     /// graph only: a changed graph forgets it.
@@ -814,6 +847,7 @@ impl Evaluator {
                 reset,
                 pending,
                 landed,
+                refused: std::mem::take(&mut self.refused),
             }))
         })();
         match evaluated {
