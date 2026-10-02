@@ -1,0 +1,40 @@
+scene ../scene.osn
+
+# A 160 by 90 window. The pointer at (100, 45) points at the stone hill,
+# voxel (45, 12, 30), whose index in the 64 by 32 by 64 volume is
+# 45 + 12 * 64 + 30 * 64 * 32 = 62253.
+window 160 90
+frame 0.0
+pointer 100 45 up
+frame 0.02
+expect brush.result[0].r = -1
+expect world.result[62253] = 3
+expect 100 45 = 0.70 0.70 0.72 0.03
+
+# Held down, the left button digs a ball of 2.5 voxels where the pointer
+# points, deeper each frame as the brush picks against the world as last
+# drawn; the hill's pixel looks into a shaded pit.
+pointer 100 45 down
+frame 0.04
+expect brush.result[0].r = 2.5
+expect brush.result[0].id = 0
+expect brush.result[0].a = 45.5 12.5 30.5
+expect world.result[62253] = 0
+frame 0.06
+frame 0.08
+pointer 100 45 up
+frame 0.1
+expect brush.result[0].r = -1
+expect 100 45 = 0.35 0.38 0.45 0.03
+
+# The right button raises earth on the grass pointed at: the pixel turns
+# from grass to earth.
+pointer 60 70 up
+frame 0.12
+expect 60 70 = 0.51 0.74 0.41 0.03
+button right down
+frame 0.14
+expect brush.result[0].id = 2
+button right up
+frame 0.16
+expect 60 70 = 0.65 0.51 0.39 0.03

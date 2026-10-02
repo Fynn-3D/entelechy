@@ -5,8 +5,11 @@
 //! its frame, so a still world and the bodies moving in it are drawn
 //! alike; what a ray meets is lit by the sky and a sun, or by lights that
 //! fade with distance, kept to a few steps as pixel art keeps them, and
-//! fades into fog or the dark. There are no Kernels here, only the
-//! arithmetic they share.
+//! fades into fog or the dark. Shapes are data (spheres, cuboids,
+//! capsules): `voxel.shapes@1` bakes a volume of them and
+//! `voxel.paint@1` paints them over one, fed back a world edited a frame
+//! at a time; `voxel.view@1`, and `graphs/view.osn` at the window's
+//! size, shows a volume by day.
 package voxel@1 { language = 1; ir = 1; }
 
 use "kernels/";

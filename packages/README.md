@@ -139,8 +139,14 @@ its interface is held to.
   (`voxel_light`, `voxel_flicker`), light kept to a few steps
   (`voxel_stepped`), haze and the dark (`voxel_haze`, `voxel_dark`); a
   camera going round a point, its rays and its projection
-  (`voxel_orbit`, `voxel_ray`, `voxel_project`). Used by
-  `examples/crypt`.
+  (`voxel_orbit`, `voxel_ray`, `voxel_project`); shapes as data, a
+  sphere, a rounded cuboid or a capsule each painting a number or
+  carving (`VoxelShape`), baked into a volume (`voxel.shapes@1`) or
+  painted over one (`voxel.paint@1`), which fed back is a world edited a
+  frame at a time; a volume seen by day at the window's size
+  (`graphs/view.osn`), with the camera and box a Kernel picks through
+  (`voxel_view_camera`, `voxel_view_box`, `voxel_cell`). Used by
+  `examples/crypt` and `examples/sculpt`.
 - **noise** — randomness a Kernel can repeat, as functions and no
   Kernels:
   - hashes of whole numbers by integer arithmetic, the same bits on

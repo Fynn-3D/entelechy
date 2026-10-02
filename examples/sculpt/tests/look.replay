@@ -1,0 +1,12 @@
+scene ../scene.osn
+
+# The voxel package's view of the island at 160 by 90: the sky above,
+# the pond's water, grass in the sun and, two pixels up, in a tree's
+# shadow, lit by the sky alone and cooler.
+window 160 90
+frame 0.0
+expect 5 5 = 0.78 0.84 0.92 0.01
+expect 54 49 = 0.40 0.586 0.76 0.03
+expect 64 38 = 0.541 0.749 0.469 0.03
+expect 64 36 = 0.347 0.462 0.381 0.03
+expect 100 45 = 0.70 0.70 0.72 0.03
