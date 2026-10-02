@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::sources::{located, written_in};
+use crate::sources::{held, located, said, written_in};
 use crate::{Store, declarations_for, declarations_within, read_document, used_documents};
 
 /// What checking a document found: the lines to report, in order.
@@ -78,8 +78,9 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         if let Err(error) =
             orla_compiler::check_functions(&document, (&structs, &types, &functions))
         {
-            let at = written_in(store, path, None, &error);
-            say!(problem, "{}:{error}", at.display());
+            let held = held((&structs, &types, &functions));
+            let at = written_in(path, held, &error);
+            say!(problem, "{}:{}", at.display(), said(held, &error));
         }
         document.inherit(&structs, &types, &functions);
     }
@@ -116,8 +117,9 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                 }
             }
             Err(error) => {
-                let at = written_in(store, path, Some(&kernel.range), &error);
-                let said = located(store, crate::Diagnostic::from(&error), path, path, &[]);
+                let held = orla_language::Held::of(kernel);
+                let at = written_in(path, held, &error);
+                let said = located(store, said(held, &error), path, path, &[]);
                 say!(problem, "{}:{said}", at.display());
             }
         }
@@ -162,8 +164,9 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                             &used_document,
                             (&structs, &types, &functions),
                         ) {
-                            let at = written_in(store, path, None, &error);
-                            say!(problem, "{}:{error}", at.display());
+                            let held = held((&structs, &types, &functions));
+                            let at = written_in(path, held, &error);
+                            say!(problem, "{}:{}", at.display(), said(held, &error));
                         }
                         used_document.inherit(&structs, &types, &functions)
                     }
@@ -185,9 +188,9 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                             }
                         }
                         Err(error) => {
-                            let at = written_in(store, path, Some(&kernel.range), &error);
-                            let said =
-                                located(store, crate::Diagnostic::from(&error), path, root, &[]);
+                            let held = orla_language::Held::of(kernel);
+                            let at = written_in(path, held, &error);
+                            let said = located(store, said(held, &error), path, root, &[]);
                             say!(problem, "{}:{said}", at.display());
                         }
                     }

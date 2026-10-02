@@ -12,7 +12,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::{FnDecl, Own, Spanned, StructDecl, TypeAlias, renamed_type};
+use crate::{FnDecl, Origin, Own, Spanned, StructDecl, TypeAlias, renamed_type};
 
 /// What a document's `use` items bring in: structs, type aliases,
 /// functions.
@@ -98,6 +98,7 @@ impl Declared {
         };
         match self {
             Declared::Struct(d) => Declared::Struct(StructDecl {
+                origin: d.origin.clone(),
                 name: Spanned {
                     value: name,
                     span: d.name.span,
@@ -110,6 +111,7 @@ impl Declared {
             }),
             // An enum's variants name no type.
             Declared::Type(d) => Declared::Type(TypeAlias {
+                origin: d.origin.clone(),
                 name: Spanned {
                     value: name,
                     span: d.name.span,
@@ -136,14 +138,38 @@ impl Reach {
         let mut functions = Vec::new();
         let mut declared: Vec<(Declared, Vec<usize>)> = Vec::new();
         for (file, source) in sources.iter().enumerate() {
+            // Each declaration knows where it was written, and as what.
+            let document: std::sync::Arc<str> = source.name.as_str().into();
+            let origin = |name: &Spanned<String>| {
+                Some(Origin {
+                    document: document.clone(),
+                    name: name.value.clone(),
+                })
+            };
             for decl in source.functions {
-                functions.push((decl.clone(), file));
+                functions.push((
+                    FnDecl {
+                        origin: origin(&decl.name),
+                        ..decl.clone()
+                    },
+                    file,
+                ));
             }
             let mine = source
                 .structs
                 .iter()
-                .map(|d| Declared::Struct(d.clone()))
-                .chain(source.types.iter().map(|d| Declared::Type(d.clone())));
+                .map(|d| {
+                    Declared::Struct(StructDecl {
+                        origin: origin(&d.name),
+                        ..d.clone()
+                    })
+                })
+                .chain(source.types.iter().map(|d| {
+                    Declared::Type(TypeAlias {
+                        origin: origin(&d.name),
+                        ..d.clone()
+                    })
+                }));
             for decl in mine {
                 match declared
                     .iter_mut()

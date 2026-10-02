@@ -355,12 +355,7 @@ impl Scene {
             orla_language::Own::of(&document),
         )
         .map_err(Diagnostic::new)?;
-        functions_checked(
-            self.store.as_ref(),
-            &self.root,
-            &document,
-            (&structs, &types, &functions),
-        )?;
+        functions_checked(&self.root, &document, (&structs, &types, &functions))?;
         document.inherit(&structs, &types, &functions);
         let root_key = PathBuf::from(self.document_name());
         let inline = lowered
@@ -473,12 +468,9 @@ impl Scene {
             orla_language::Own::of(&document),
         ) {
             Ok((structs, types, functions)) => {
-                if let Err(error) = functions_checked(
-                    self.store.as_ref(),
-                    &root,
-                    &document,
-                    (&structs, &types, &functions),
-                ) {
+                if let Err(error) =
+                    functions_checked(&root, &document, (&structs, &types, &functions))
+                {
                     events.push(Event::SceneRejected(error));
                     return;
                 }
@@ -840,12 +832,9 @@ impl Scene {
                         })
                         .collect();
                     self.depends.insert(path.clone(), used);
-                    if let Err(error) = functions_checked(
-                        self.store.as_ref(),
-                        &path,
-                        &document,
-                        (&structs, &types, &functions),
-                    ) {
+                    if let Err(error) =
+                        functions_checked(&path, &document, (&structs, &types, &functions))
+                    {
                         events.push(Event::Rejected {
                             path: path.clone(),
                             error,

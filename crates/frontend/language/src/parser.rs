@@ -714,7 +714,11 @@ impl Parser {
             self.port_type()?
         };
         self.expect_punct(";")?;
-        Ok(TypeAlias { name, target })
+        Ok(TypeAlias {
+            name,
+            target,
+            origin: None,
+        })
     }
 
     /// `enum { Idle, Walk, Attack }`: named values, kept as the text
@@ -865,7 +869,11 @@ impl Parser {
             fields.push((field, ty));
         }
         self.expect_punct("}")?;
-        Ok(StructDecl { name, fields })
+        Ok(StructDecl {
+            name,
+            fields,
+            origin: None,
+        })
     }
 
     /// `Name { ..base, field: expr, ... }` after the name was consumed.
@@ -1291,6 +1299,7 @@ impl Parser {
             args,
             ret,
             body: std::sync::Arc::new(body),
+            origin: None,
         })
     }
 

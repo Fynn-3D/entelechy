@@ -295,6 +295,7 @@ impl Document {
             let mut all: Vec<StructDecl> = structs
                 .iter()
                 .map(|decl| StructDecl {
+                    origin: decl.origin.clone(),
                     name: spanned(
                         &decl.name,
                         ty(&decl.name.value).unwrap_or_else(|| decl.name.value.clone()),
@@ -311,6 +312,7 @@ impl Document {
             let mut aliases: Vec<TypeAlias> = types
                 .iter()
                 .map(|alias| TypeAlias {
+                    origin: alias.origin.clone(),
                     name: spanned(
                         &alias.name,
                         ty(&alias.name.value).unwrap_or_else(|| alias.name.value.clone()),
@@ -341,6 +343,74 @@ impl Document {
                 prepend(kernel);
             }
         }
+    }
+}
+
+/// The declarations a Kernel holds, by the names it knows them by: its
+/// own, its document's, and those it inherits, each of these knowing
+/// where it was written.
+#[derive(Clone, Copy, Debug)]
+pub struct Held<'a> {
+    /// Its functions.
+    pub functions: &'a [FnDecl],
+    /// Its structs.
+    pub structs: &'a [StructDecl],
+    /// Its types.
+    pub types: &'a [TypeAlias],
+}
+
+impl<'a> Held<'a> {
+    /// What `kernel` holds.
+    pub fn of(kernel: &'a Kernel) -> Self {
+        Self {
+            functions: &kernel.functions,
+            structs: &kernel.structs,
+            types: &kernel.types,
+        }
+    }
+
+    /// Where the declaration the Kernel knows as `name` was written, when
+    /// another document than the Kernel's; an instance of a function taking
+    /// a Field is named for its function, `name<binding>`.
+    pub fn origin_of(&self, name: &str) -> Option<&'a Origin> {
+        let name = name.split('<').next().unwrap_or(name);
+        self.functions
+            .iter()
+            .find(|d| d.name.value == name)
+            .map(|d| &d.origin)
+            .or_else(|| {
+                self.structs
+                    .iter()
+                    .find(|d| d.name.value == name)
+                    .map(|d| &d.origin)
+            })
+            .or_else(|| {
+                self.types
+                    .iter()
+                    .find(|d| d.name.value == name)
+                    .map(|d| &d.origin)
+            })
+            .and_then(Option::as_ref)
+    }
+
+    /// `text` with each name the Kernel knows an inherited declaration by
+    /// written as that declaration was written.
+    pub fn written(&self, text: &str) -> String {
+        let renamed = self
+            .functions
+            .iter()
+            .map(|d| (&d.name.value, &d.origin))
+            .chain(self.structs.iter().map(|d| (&d.name.value, &d.origin)))
+            .chain(self.types.iter().map(|d| (&d.name.value, &d.origin)))
+            .filter_map(|(name, origin)| Some((name, &origin.as_ref()?.name)))
+            .filter(|(name, written)| name != written);
+        let mut out = text.to_owned();
+        for (name, written) in renamed {
+            for end in ['`', '<'] {
+                out = out.replace(&format!("`{name}{end}"), &format!("`{written}{end}"));
+            }
+        }
+        out
     }
 }
 
@@ -590,6 +660,19 @@ pub struct TypeAlias {
     pub name: Spanned<String>,
     /// The port type it stands for, as written, e.g. `Grid<Tile>`.
     pub target: Spanned<String>,
+    /// Where it was written, when another document than the Kernel's.
+    pub origin: Option<Origin>,
+}
+
+/// Where a declaration a Kernel inherits was written: the document, as the
+/// loader names it, and the name it was written with, which the Kernel may
+/// know it by under another.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Origin {
+    /// The document it is written in.
+    pub document: std::sync::Arc<str>,
+    /// The name it is written with.
+    pub name: String,
 }
 
 impl TypeAlias {
@@ -618,6 +701,8 @@ pub struct StructDecl {
     pub name: Spanned<String>,
     /// Fields as `(name, type)`; an array type is written `[Type; N]`.
     pub fields: Vec<(Spanned<String>, Spanned<String>)>,
+    /// Where it was written, when another document than the Kernel's.
+    pub origin: Option<Origin>,
 }
 
 /// `input name: Type;` or `output name: Type;`, with wiring on inline
@@ -695,6 +780,8 @@ pub struct FnDecl {
     /// Body, shared: every Kernel that inherits the function holds the
     /// one body.
     pub body: std::sync::Arc<Block>,
+    /// Where it was written, when another document than the Kernel's.
+    pub origin: Option<Origin>,
 }
 
 /// How deep an expression or block may nest, counting enclosing nodes and

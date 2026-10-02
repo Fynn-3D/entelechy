@@ -561,12 +561,6 @@ pub fn declarations_within(
     })
 }
 
-/// The file a `name@path` function name was renamed from, and its name.
-pub(crate) fn unscoped(name: &str) -> Option<(&str, &Path)> {
-    name.split_once('@')
-        .map(|(name, path)| (name, Path::new(path)))
-}
-
 /// `path` as a document beside `document` names it: from `document`'s
 /// directory when it lies under it, whole otherwise.
 fn shown_from(store: &dyn Store, document: &Path, path: &Path) -> String {
@@ -612,76 +606,54 @@ fn missing_name(message: &str) -> Option<String> {
     (says && !name.is_empty()).then(|| name.to_owned())
 }
 
-/// The document an error of a Kernel in `document` is written in:
-/// `document`, or, for one in a declaration the Kernel inherits from a
-/// used document, the used document that declares it. `kernel` is the
-/// byte range of the Kernel compiled, when one is: a declaration of its
-/// own keeps its name, and the inherited one of that name is renamed out
-/// of its way.
+/// The document an error of a Kernel of `document` is written in: the
+/// one a declaration the Kernel inherits was written in, when the error is
+/// in one, else `document`. `held` is what the Kernel holds.
 pub(crate) fn written_in(
-    store: &dyn Store,
     document: &Path,
-    kernel: Option<&std::ops::Range<usize>>,
+    held: orla_language::Held<'_>,
     error: &orla_compiler::CompileError,
 ) -> PathBuf {
-    match error.declaration() {
-        Some(name) => declaration_written_in(store, document, kernel, name),
-        None => document.to_path_buf(),
+    error
+        .declaration()
+        .and_then(|name| held.origin_of(name))
+        .map_or_else(
+            || document.to_path_buf(),
+            |origin| PathBuf::from(&*origin.document),
+        )
+}
+
+/// What an error of a Kernel says, each name the Kernel knows an
+/// inherited declaration by written as that declaration was written.
+pub(crate) fn said(
+    held: orla_language::Held<'_>,
+    error: &orla_compiler::CompileError,
+) -> crate::Diagnostic {
+    let d = crate::Diagnostic::from(error);
+    crate::Diagnostic {
+        message: held.written(&d.message),
+        ..d
     }
 }
 
-/// The document a declaration a Kernel of `document` names is written
-/// in: `document` for its own, or the used document that declares it.
-/// The name is the one the Kernel knows it by: `name@path` for one a
-/// clash renamed, `name@shared` for an inherited one the Kernel's own
-/// shadows, `name<binding>` for an instance of a function taking a
-/// Field.
-pub(crate) fn declaration_written_in(
-    store: &dyn Store,
-    document: &Path,
-    kernel: Option<&std::ops::Range<usize>>,
-    name: &str,
-) -> PathBuf {
-    let name = name.split('<').next().unwrap_or(name);
-    let (name, shared) = match name.strip_suffix("@shared") {
-        Some(name) => (name, true),
-        None => (name, false),
-    };
-    if let Some((_, path)) = unscoped(name) {
-        return path.to_path_buf();
-    }
-    let Ok(parsed) = store.document(document) else {
-        return document.to_path_buf();
-    };
-    let declares = |functions: &[orla_language::FnDecl],
-                    structs: &[orla_language::StructDecl],
-                    types: &[orla_language::TypeAlias]| {
-        functions.iter().any(|d| d.name.value == name)
-            || structs.iter().any(|d| d.name.value == name)
-            || types.iter().any(|d| d.name.value == name)
-    };
-    let own_kernel = || {
-        parsed
-            .kernels
-            .iter()
-            .filter(|k| Some(&k.range) == kernel)
-            .any(|k| declares(&k.functions, &k.structs, &k.types))
-    };
-    if declares(&parsed.functions, &parsed.structs, &parsed.types) || (!shared && own_kernel()) {
-        return document.to_path_buf();
-    }
-    let base = document.parent().unwrap_or_else(|| Path::new("."));
-    let used = used_documents(store, base, &parsed.uses).unwrap_or_default();
-    match declared_in(store, name, &used) {
-        Some((path, _)) => path,
-        None => document.to_path_buf(),
+/// What the declarations `inherited` and a document's own hold.
+pub(crate) fn held<'a>(
+    inherited: (
+        &'a [orla_language::StructDecl],
+        &'a [orla_language::TypeAlias],
+        &'a [orla_language::FnDecl],
+    ),
+) -> orla_language::Held<'a> {
+    orla_language::Held {
+        structs: inherited.0,
+        types: inherited.1,
+        functions: inherited.2,
     }
 }
 
 /// Checks the functions `document`, at `path`, declares, against it and
 /// `inherited`, once; a fault is placed in the document it is written in.
 pub(crate) fn functions_checked(
-    store: &dyn Store,
     path: &Path,
     document: &Document,
     inherited: (
@@ -691,11 +663,12 @@ pub(crate) fn functions_checked(
     ),
 ) -> Result<(), crate::Diagnostic> {
     orla_compiler::check_functions(document, inherited).map_err(|error| {
-        let at = written_in(store, path, None, &error);
+        let at = written_in(path, held(inherited), &error);
+        let d = said(held(inherited), &error);
         if at == path {
-            crate::Diagnostic::from(&error)
+            d
         } else {
-            crate::Diagnostic::new(format!("{}:{error}", at.display()))
+            crate::Diagnostic::new(format!("{}:{d}", at.display()))
         }
     })
 }
@@ -789,9 +762,9 @@ pub(crate) fn located(
     known: &[PathBuf],
 ) -> crate::Diagnostic {
     // A function hiding a builtin: the document that declares it.
-    if let Some(name) = hidden_builtin(&error.message) {
-        let path = declaration_written_in(store, document, None, name);
-        let shown = shown_from(store, document, &path);
+    // A builtin is hidden only in the document of the function hiding it.
+    if hidden_builtin(&error.message).is_some() {
+        let shown = shown_from(store, document, document);
         return crate::Diagnostic {
             message: format!("{}, declared in {shown}", error.message),
             ..error

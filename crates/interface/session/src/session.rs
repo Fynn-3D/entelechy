@@ -1061,7 +1061,7 @@ impl Session {
                 .fault
                 .as_ref()
                 .zip(written.as_ref())
-                .and_then(|(fault, written)| written.place_of(self.store(), fault)),
+                .and_then(|(fault, written)| written.place_of(fault)),
             trace,
             kernel: target.kernel.clone(),
         })

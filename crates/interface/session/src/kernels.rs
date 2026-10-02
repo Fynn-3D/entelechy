@@ -479,8 +479,17 @@ impl Kernels {
                     // One fault in one place is reported once, in the
                     // document it is written in.
                     let rejected = Event::Rejected {
-                        path: crate::sources::written_in(store, path, Some(&kernel.range), &error),
-                        error: self.located(store, (&error).into(), path, root),
+                        path: crate::sources::written_in(
+                            path,
+                            orla_language::Held::of(&kernel),
+                            &error,
+                        ),
+                        error: self.located(
+                            store,
+                            crate::sources::said(orla_language::Held::of(&kernel), &error),
+                            path,
+                            root,
+                        ),
                     };
                     if !events.contains(&rejected) {
                         events.push(rejected);
@@ -643,7 +652,7 @@ impl Kernels {
             module,
             places,
             path: path.clone(),
-            range: kernel.range.clone(),
+            kernel: kernel.clone(),
         })
     }
 }
@@ -654,18 +663,14 @@ pub(crate) struct Written {
     pub(crate) module: orla_kernel::Validated,
     pub(crate) places: orla_compiler::SourcePlaces,
     pub(crate) path: PathBuf,
-    /// The Kernel's byte range in its document.
-    pub(crate) range: std::ops::Range<usize>,
+    /// The Kernel, what it holds knowing where each was written.
+    pub(crate) kernel: orla_language::Kernel,
 }
 
 impl Written {
     /// Where the failure a trace found is written: its value in the
     /// function it failed in (`None` the entry).
-    pub(crate) fn place_of(
-        &self,
-        store: &dyn crate::store::Store,
-        fault: &crate::TraceFault,
-    ) -> Option<crate::SourcePlace> {
+    pub(crate) fn place_of(&self, fault: &crate::TraceFault) -> Option<crate::SourcePlace> {
         let value = fault.value?;
         let (places, path) = match &fault.function {
             None => (&self.places.entry, self.path.clone()),
@@ -673,12 +678,12 @@ impl Written {
                 let index = self.module.functions.iter().position(|f| &f.name == name)?;
                 (
                     self.places.functions.get(index)?,
-                    crate::sources::declaration_written_in(
-                        store,
-                        &self.path,
-                        Some(&self.range),
-                        name,
-                    ),
+                    orla_language::Held::of(&self.kernel)
+                        .origin_of(name)
+                        .map_or_else(
+                            || self.path.clone(),
+                            |origin| PathBuf::from(&*origin.document),
+                        ),
                 )
             }
         };
@@ -688,9 +693,9 @@ impl Written {
             line: span.line,
             column: span.column,
             function: fault.function.as_deref().map(|name| {
-                crate::sources::unscoped(name)
-                    .map_or(name, |(name, _)| name)
-                    .to_owned()
+                orla_language::Held::of(&self.kernel)
+                    .origin_of(name)
+                    .map_or_else(|| name.to_owned(), |origin| origin.name.clone())
             }),
         })
     }

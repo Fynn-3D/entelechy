@@ -736,3 +736,50 @@ fn check_compiles_the_kernels_a_scene_publishes() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A fault says the names as they were written: an inherited function the
+/// Kernel's own of its name moves out of the way is still called by its
+/// own name in what a fault in it says, and the fault is placed where it
+/// is written.
+#[test]
+fn a_fault_says_names_as_they_were_written() {
+    let dir = scratch(
+        "written-names",
+        &[
+            (
+                "lib.orla",
+                "fn twice(x: Int) -> Int { return x * 2; }\nfn four() -> Int { return twice(1, 2); }\n",
+            ),
+            (
+                "k.orla",
+                "use \"lib.orla\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Int>;\n    fn twice(x: Int) -> Int { return x + x; }\n    compute { return twice(1) + four(); } }\n",
+            ),
+            (
+                "scene.osn",
+                "use \"k.orla\";\nnode n: t.k@1 { domain = 1; }\noutput result <- n.result;\n",
+            ),
+        ],
+    );
+    let mut session = orla_session::Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    let faults: Vec<_> = session
+        .sync()
+        .into_iter()
+        .filter_map(|event| match event {
+            orla_session::Event::Rejected { path, error }
+                if error.to_string().contains("argument") =>
+            {
+                Some((path, error.to_string()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(!faults.is_empty());
+    for (path, said) in faults {
+        assert_eq!(path.file_name().unwrap(), "lib.orla", "{said}");
+        assert!(
+            said.contains("`twice` takes 1 argument(s), found 2") && !said.contains('@'),
+            "{said}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
