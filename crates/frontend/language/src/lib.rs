@@ -261,11 +261,18 @@ impl Document {
                 .iter()
                 .map(|f| f.name.value.clone())
                 .collect();
+            // Only a name the shared declarations hold too is renamed:
+            // one the using document declares alike is not passed, and the
+            // shared functions name the Kernel's own.
             let own_types: Vec<String> = kernel
                 .structs
                 .iter()
                 .map(|s| s.name.value.clone())
                 .chain(kernel.types.iter().map(|t| t.name.value.clone()))
+                .filter(|name| {
+                    structs.iter().any(|d| &d.name.value == name)
+                        || types.iter().any(|d| &d.name.value == name)
+                })
                 .collect();
             let call = |name: &str| {
                 own_fns

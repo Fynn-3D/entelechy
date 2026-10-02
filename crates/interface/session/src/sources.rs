@@ -581,7 +581,9 @@ fn closure<'a>(
 /// document's reach, as [`scoped`] names functions: a name two distinct
 /// declarations share, or one the using document declares itself, is
 /// the using document's own, or else the one it reaches; every other
-/// declaration of it is renamed `name@path`. Each gathered declaration,
+/// declaration of it is renamed `name@path`; the using document's own
+/// declaration alike to the one it reaches is that one, and no clash.
+/// Each gathered declaration,
 /// and each gathered function, then names the structs and types its own
 /// document sees. A name a document reaches two declarations of, and
 /// declares neither, is refused where that document names it.
@@ -604,7 +606,32 @@ fn scoped_types(
             .filter(|(d, _)| d.name() == name)
             .count()
     };
-    let clashing = |name: &str| named(name) > 1 || own.declares_type(name);
+    // What the using document declares itself of a name, if anything: a
+    // declaration alike to the one it reaches is that one.
+    let own_decl = |name: &str| -> Option<Declared> {
+        own.structs
+            .iter()
+            .find(|d| d.name.value == name)
+            .map(|d| Declared::Struct(d.clone()))
+            .or_else(|| {
+                own.types
+                    .iter()
+                    .find(|d| d.name.value == name)
+                    .map(|d| Declared::Type(d.clone()))
+            })
+    };
+    let own_differs = |name: &str| {
+        own_decl(name).is_some_and(|mine| {
+            reach
+                .declared
+                .iter()
+                .any(|(d, _)| d.name() == name && !d.same(&mine))
+        })
+    };
+    let clashing = |name: &str| named(name) > 1 || own_differs(name);
+    // A reached declaration the using document makes alike itself is its
+    // own, and is not gathered again.
+    let own_alike = |d: &Declared| own_decl(d.name()).is_some_and(|mine| d.same(&mine));
     let split = |declared: Vec<Declared>| {
         let mut structs = Vec::new();
         let mut types = Vec::new();
@@ -620,7 +647,12 @@ fn scoped_types(
     // every name is plain, as written.
     if !reach.declared.iter().any(|(d, _)| clashing(d.name())) {
         return Ok(split(
-            reach.declared.iter().map(|(d, _)| d.clone()).collect(),
+            reach
+                .declared
+                .iter()
+                .filter(|(d, _)| !own_alike(d))
+                .map(|(d, _)| d.clone())
+                .collect(),
         ));
     }
     let mut top = BTreeSet::new();
@@ -649,7 +681,7 @@ fn scoped_types(
     };
     let plain = |i: usize| {
         let name = declared[i].0.name();
-        !own.declares_type(name) && reaching(name, &top) == [i]
+        !own_differs(name) && reaching(name, &top) == [i]
     };
     let out_name = |i: usize| {
         let name = declared[i].0.name();
@@ -701,6 +733,9 @@ fn scoped_types(
     };
     let mut out = Vec::with_capacity(declared.len());
     for (i, (decl, files)) in declared.iter().enumerate() {
+        if own_alike(decl) {
+            continue;
+        }
         let names = std::cell::RefCell::new(|name: &str| view(&files[0], name, &mut refused));
         let rename = |name: &str| (names.borrow_mut())(name);
         out.push(decl.renamed(out_name(i), &rename));

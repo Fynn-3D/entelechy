@@ -135,6 +135,31 @@ fn a_name_two_used_documents_declare_is_refused_where_named() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A declaration the using document makes alike itself is its own and
+/// the used one's: it is not gathered again, and the used document's
+/// functions name it as written.
+#[test]
+fn a_declaration_made_alike_by_the_user_is_one() {
+    let dir = scratch(
+        "alike",
+        &[(
+            "a.orla",
+            "type Cells = Volume<Int>;\nfn corner(v: Cells) -> Int { return at(v, ivec3(0, 0, 0)); }\n",
+        )],
+    );
+    let own = orla_language::parse_document("type Cells = Volume<Int>;\n").unwrap();
+    let (_, types, functions) = declarations_for(
+        &orla_session::Disk::default(),
+        &dir,
+        &uses("use \"a.orla\";"),
+        orla_language::Own::of(&own),
+    )
+    .unwrap();
+    assert!(types.is_empty(), "{types:?}");
+    assert_eq!(functions[0].args[0].1.value, "Cells");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A file added to a directory a scene uses is published by the next
 /// sync, and one taken away is retired.
 #[test]
