@@ -180,32 +180,7 @@ fn read_document(source: &str) -> Result<(Document, Outline), ParseError> {
             block,
         });
     }
-    // Document declarations come first in every Kernel: one layout each.
-    if !document.structs.is_empty() || !document.types.is_empty() || !document.functions.is_empty()
-    {
-        let shared = document.structs.clone();
-        let shared_types = document.types.clone();
-        let shared_functions = document.functions.clone();
-        let prepend = |kernel: &mut Kernel| {
-            let mut structs = shared.clone();
-            structs.append(&mut kernel.structs);
-            kernel.structs = structs;
-            let mut types = shared_types.clone();
-            types.append(&mut kernel.types);
-            kernel.types = types;
-            let mut functions = shared_functions.clone();
-            functions.append(&mut kernel.functions);
-            kernel.functions = functions;
-        };
-        for kernel in &mut document.kernels {
-            prepend(kernel);
-        }
-        for node in &mut document.nodes {
-            if let NodeKind::Inline(kernel) = &mut node.kind {
-                prepend(kernel);
-            }
-        }
-    }
+    crate::scope::document_scope(&mut document);
     Ok((document, outline))
 }
 

@@ -12,7 +12,9 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::{FnDecl, Origin, Own, Spanned, StructDecl, TypeAlias, renamed_type};
+use crate::{
+    Document, FnDecl, Kernel, NodeKind, Origin, Own, Spanned, StructDecl, TypeAlias, renamed_type,
+};
 
 /// What a document's `use` items bring in: structs, type aliases,
 /// functions.
@@ -460,4 +462,134 @@ fn scoped(
         out.push(decl.renamed(internal(&decl.name.value, file), &rename));
     }
     Ok(out)
+}
+/// A document's own declarations, put in front of each of its Kernels'
+/// own: every Kernel of a document sees what its document declares, with
+/// one layout. The parser gives each Kernel so.
+pub(crate) fn document_scope(document: &mut Document) {
+    if document.structs.is_empty() && document.types.is_empty() && document.functions.is_empty() {
+        return;
+    }
+    let shared = document.structs.clone();
+    let shared_types = document.types.clone();
+    let shared_functions = document.functions.clone();
+    let prepend = |kernel: &mut Kernel| {
+        let mut structs = shared.clone();
+        structs.append(&mut kernel.structs);
+        kernel.structs = structs;
+        let mut types = shared_types.clone();
+        types.append(&mut kernel.types);
+        kernel.types = types;
+        let mut functions = shared_functions.clone();
+        functions.append(&mut kernel.functions);
+        kernel.functions = functions;
+    };
+    for kernel in &mut document.kernels {
+        prepend(kernel);
+    }
+    for node in &mut document.nodes {
+        if let NodeKind::Inline(kernel) = &mut node.kind {
+            prepend(kernel);
+        }
+    }
+}
+
+/// The declarations `used` (what a document's `use` items bring in, as
+/// [`scope`] names them) put in front of every Kernel's own and its
+/// document's, so a shared struct or type has one layout everywhere. A
+/// Kernel's own function, struct or type is the innermost scope: the
+/// shared one of its name is renamed out of its way, and the shared
+/// declarations that name it follow it, so a library keeps calling and
+/// naming its own.
+pub(crate) fn resolve(document: &mut Document, used: (&[StructDecl], &[TypeAlias], &[FnDecl])) {
+    let (structs, types, functions) = used;
+    if structs.is_empty() && types.is_empty() && functions.is_empty() {
+        return;
+    }
+    let prepend = |kernel: &mut Kernel| {
+        let own_fns: Vec<String> = kernel
+            .functions
+            .iter()
+            .map(|f| f.name.value.clone())
+            .collect();
+        // Only a name the shared declarations hold too is renamed:
+        // one the using document declares alike is not passed, and the
+        // shared functions name the Kernel's own.
+        let own_types: Vec<String> = kernel
+            .structs
+            .iter()
+            .map(|s| s.name.value.clone())
+            .chain(kernel.types.iter().map(|t| t.name.value.clone()))
+            .filter(|name| {
+                structs.iter().any(|d| &d.name.value == name)
+                    || types.iter().any(|d| &d.name.value == name)
+            })
+            .collect();
+        let call = |name: &str| {
+            own_fns
+                .iter()
+                .any(|own| own == name)
+                .then(|| format!("{name}@shared"))
+        };
+        let ty = |name: &str| {
+            own_types
+                .iter()
+                .any(|own| own == name)
+                .then(|| format!("{name}@shared"))
+        };
+        let spanned = |old: &Spanned<String>, value: String| Spanned {
+            value,
+            span: old.span,
+        };
+        let mut all: Vec<StructDecl> = structs
+            .iter()
+            .map(|decl| StructDecl {
+                origin: decl.origin.clone(),
+                name: spanned(
+                    &decl.name,
+                    ty(&decl.name.value).unwrap_or_else(|| decl.name.value.clone()),
+                ),
+                fields: decl
+                    .fields
+                    .iter()
+                    .map(|(name, t)| (name.clone(), spanned(t, renamed_type(&t.value, &ty))))
+                    .collect(),
+            })
+            .collect();
+        all.append(&mut kernel.structs);
+        kernel.structs = all;
+        let mut aliases: Vec<TypeAlias> = types
+            .iter()
+            .map(|alias| TypeAlias {
+                origin: alias.origin.clone(),
+                name: spanned(
+                    &alias.name,
+                    ty(&alias.name.value).unwrap_or_else(|| alias.name.value.clone()),
+                ),
+                target: spanned(&alias.target, renamed_type(&alias.target.value, &ty)),
+            })
+            .collect();
+        aliases.append(&mut kernel.types);
+        kernel.types = aliases;
+        let mut shared: Vec<FnDecl> = functions
+            .iter()
+            .map(|f| {
+                f.renamed(
+                    call(&f.name.value).unwrap_or_else(|| f.name.value.clone()),
+                    &call,
+                )
+                .retyped(&ty)
+            })
+            .collect();
+        shared.append(&mut kernel.functions);
+        kernel.functions = shared;
+    };
+    for kernel in &mut document.kernels {
+        prepend(kernel);
+    }
+    for node in &mut document.nodes {
+        if let NodeKind::Inline(kernel) = &mut node.kind {
+            prepend(kernel);
+        }
+    }
 }

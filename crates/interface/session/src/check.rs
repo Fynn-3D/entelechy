@@ -82,7 +82,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
             let at = written_in(path, held, &error);
             say!(problem, "{}:{}", at.display(), said(held, &error));
         }
-        document.inherit(&structs, &types, &functions);
+        document.resolve((&structs, &types, &functions));
     }
     let mut kernels: Vec<(Option<orla_ir::KernelId>, &orla_language::Kernel)> = document
         .kernels
@@ -168,7 +168,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                             let at = written_in(path, held, &error);
                             say!(problem, "{}:{}", at.display(), said(held, &error));
                         }
-                        used_document.inherit(&structs, &types, &functions)
+                        used_document.resolve((&structs, &types, &functions))
                     }
                     Err(error) => {
                         say!(problem, "{}: {error}", path.display());

@@ -356,7 +356,7 @@ impl Scene {
         )
         .map_err(Diagnostic::new)?;
         functions_checked(&self.root, &document, (&structs, &types, &functions))?;
-        document.inherit(&structs, &types, &functions);
+        document.resolve((&structs, &types, &functions));
         let root_key = PathBuf::from(self.document_name());
         let inline = lowered
             .inline
@@ -484,7 +484,7 @@ impl Scene {
                 // What its Kernels inherit, its own declarations included:
                 // a function it changes recompiles the Kernels that call it.
                 declarations = declarations_key(&self.structs, &self.types, &self.functions);
-                document.inherit(&structs, &types, &functions);
+                document.resolve((&structs, &types, &functions));
             }
             Err(error) => events.push(Event::Rejected {
                 path: root.clone(),
@@ -861,7 +861,7 @@ impl Scene {
                             .cloned()
                             .collect::<Vec<_>>(),
                     );
-                    document.inherit(&structs, &types, &functions);
+                    document.resolve((&structs, &types, &functions));
                     key
                 }
                 Err(error) => {
@@ -974,7 +974,7 @@ impl Scene {
                 functions.push(shared.clone());
             }
         }
-        document.inherit(&structs, &types, &functions);
+        document.resolve((&structs, &types, &functions));
         orla_compiler::compile_kernel(&document.kernels[0], None).map_err(|e| {
             kernels.located(
                 self.store.as_ref(),

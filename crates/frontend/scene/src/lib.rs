@@ -378,7 +378,7 @@ fn lower(
     let (structs, types, functions) =
         declare(base, &document.uses, orla_language::Own::of(&document))
             .map_err(|message| error(Span::default(), message))?;
-    document.inherit(&structs, &types, &functions);
+    document.resolve((&structs, &types, &functions));
     let document = &document;
     let mut lowering = Lowering {
         loader,
@@ -1217,7 +1217,7 @@ impl Lowering<'_, '_> {
                 let (structs, types, functions) =
                     (self.declare)(sub_base, &document.uses, orla_language::Own::of(&document))
                         .map_err(|m| error(sub_path.span, format!("{}: {m}", sub_path.value)))?;
-                document.inherit(&structs, &types, &functions);
+                document.resolve((&structs, &types, &functions));
                 let read = std::rc::Rc::new(Read {
                     aliases: types.iter().chain(&document.types).cloned().collect(),
                     structs: structs.iter().chain(&document.structs).cloned().collect(),
