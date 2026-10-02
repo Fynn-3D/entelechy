@@ -24,6 +24,7 @@ use orla_abi::{Encoding, Scalar, Type, encoding};
 use orla_ir::{BinaryOp, Function, Instruction, Intrinsic, Module, Op, UnaryOp, Validated};
 
 use crate::failure;
+use crate::frame;
 use crate::layout::{self, Lane, byte_offsets, byte_size, field_offset, holds_wide};
 use crate::offsets;
 
@@ -60,6 +61,17 @@ pub struct Code {
     pub entry: usize,
     pub init: Option<usize>,
     pub merge: Option<usize>,
+    /// Each function's frame as compiled; `None` when the compiler did
+    /// not report one.
+    pub frames: Option<frame::Measured>,
+}
+
+/// The bytes of stack the function just defined in `context` takes as
+/// compiled: its frame below the frame pointer, and the frame pointer and
+/// return address it saves.
+fn frame_bytes(context: &cranelift_codegen::Context) -> Option<usize> {
+    let layout = context.compiled_code()?.buffer.frame_layout()?;
+    Some(layout.frame_to_fp_offset as usize + 16)
 }
 
 /// What the function being translated is.
@@ -235,6 +247,9 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
         .max(1);
     let mut context = jit.make_context();
     let mut fbc = FunctionBuilderContext::new();
+    let mut functions_bytes = Vec::with_capacity(module.functions.len());
+    let mut init_bytes = Some(0);
+    let mut merge_bytes = Some(0);
     for (index, function) in module.functions.iter().enumerate() {
         context.func.signature = functions[index].1.clone();
         {
@@ -246,6 +261,7 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
         }
         jit.define_function(functions[index].0, &mut context)
             .map_err(|error| format!("{}: {error}", function.name))?;
+        functions_bytes.push(frame_bytes(&context));
         jit.clear_context(&mut context);
     }
     if let (Some(init_id), Some(init)) = (init_id, &module.init) {
@@ -259,6 +275,7 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
         }
         jit.define_function(init_id, &mut context)
             .map_err(|error| format!("init: {error}"))?;
+        init_bytes = frame_bytes(&context);
         jit.clear_context(&mut context);
     }
     if let (Some(merge_id), Some(merge)) = (merge_id, &module.merge) {
@@ -272,6 +289,7 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
         }
         jit.define_function(merge_id, &mut context)
             .map_err(|error| format!("merge: {error}"))?;
+        merge_bytes = frame_bytes(&context);
         jit.clear_context(&mut context);
     }
     context.func.signature = entry_signature;
@@ -284,17 +302,27 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
     }
     jit.define_function(entry_id, &mut context)
         .map_err(|error| format!("entry: {error}"))?;
+    let entry_bytes = frame_bytes(&context);
     jit.clear_context(&mut context);
     jit.finalize_definitions()
         .map_err(|error| error.to_string())?;
     let entry = jit.get_finalized_function(entry_id) as usize;
     let init = init_id.map(|id| jit.get_finalized_function(id) as usize);
     let merge = merge_id.map(|id| jit.get_finalized_function(id) as usize);
+    let frames = (|| {
+        Some(frame::Measured {
+            functions: functions_bytes.into_iter().collect::<Option<Vec<_>>>()?,
+            entry: entry_bytes?,
+            init: init_bytes?,
+            merge: merge_bytes?,
+        })
+    })();
     Ok(Code {
         module: jit,
         entry,
         init,
         merge,
+        frames,
     })
 }
 /// The Cranelift type of each scalar of a value of `ty`, in layout

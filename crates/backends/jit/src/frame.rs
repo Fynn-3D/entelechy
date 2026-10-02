@@ -1,8 +1,14 @@
 //! The most stack a module's compiled code can take. The code runs on the
 //! caller's thread and on threads of the default size, where a frame
 //! larger than the guard page steps past it into other memory, so a
-//! module whose bound passes [`MAX_FRAME_BYTES`] is left to the
+//! module whose frames pass [`MAX_FRAME_BYTES`] is left to the
 //! interpreter, which keeps its values on the heap.
+//!
+//! The stack a module takes is the deepest chain of calls from its entry,
+//! its merge or its init, each frame as compiled ([`Measured`]). Before
+//! compiling there is only an estimate from the IR ([`bound`]), an upper
+//! bound: it counts each value's words, though a struct built from
+//! another shares the other's words in the compiled code.
 
 use orla_ir::{Function, Instruction, Module, Op, Type, type_name, words};
 
@@ -10,88 +16,123 @@ use orla_ir::{Function, Instruction, Module, Op, Type, type_name, words};
 /// small part of the smallest thread stack the code runs on.
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 
+/// The bytes of stack each function of a module takes as compiled: its
+/// functions by index, its entry, its init and its merge (0 when it has
+/// none).
+#[derive(Clone, Debug)]
+pub struct Measured {
+    pub functions: Vec<usize>,
+    pub entry: usize,
+    pub init: usize,
+    pub merge: usize,
+}
+
 /// An upper bound on the bytes the frames of `module`'s functions take
 /// together, as deep as calls nest: the deepest chain of calls from the
 /// entry, the merge or the init, each frame counting each value's words
 /// twice (held and spilled) and the words of each array subscripted from
 /// a stack slot. A function calls only those before it, so no chain
 /// returns to a function already on it.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn bound(module: &Module) -> usize {
-    deepest(module)
-        .iter()
-        .map(|frame| frame.words)
-        .sum::<usize>()
-        * 4
+    deepest(module, None).iter().map(|frame| frame.bytes).sum()
 }
 
-/// Why `module` is left to the interpreter, when its frames may pass the
-/// bound: the bytes, and the deepest chain of calls, each frame with the
-/// type whose values take the most of it.
-pub fn refusal(module: &Module) -> Option<String> {
-    let bytes = bound(module);
+/// Why `module` is left to the interpreter, when its frames pass what
+/// compiled code may take: the bytes, and the deepest chain of calls,
+/// each frame with the type whose values are the most of it. With the
+/// frames `measured` as compiled, they decide; without, the estimate.
+pub fn refusal(module: &Module, measured: Option<&Measured>) -> Option<String> {
+    let chain = deepest(module, measured);
+    let bytes: usize = chain.iter().map(|frame| frame.bytes).sum();
     (bytes > MAX_FRAME_BYTES).then(|| {
-        let chain = deepest(module)
+        let calls = chain
             .iter()
             .map(|frame| {
-                let (ty, count, of_type) = frame.largest;
+                let (ty, count, _) = frame.largest;
                 format!(
-                    "`{}` {} bytes, {} of them {count} values of `{}`",
+                    "`{}` {} bytes, the most of its values {count} of `{}`",
                     frame.name,
-                    frame.words * 4,
-                    of_type * 4,
+                    frame.bytes,
                     type_name(ty, &module.structs)
                 )
             })
             .collect::<Vec<_>>()
             .join(", calling ");
+        let taken = if measured.is_some() {
+            "its frames take"
+        } else {
+            "its values may take"
+        };
         format!(
-            "its values may take {bytes} bytes of stack; compiled code takes at most {MAX_FRAME_BYTES}; the deepest calls: {chain}"
+            "{taken} {bytes} bytes of stack; compiled code takes at most {MAX_FRAME_BYTES}; the deepest calls: {calls}"
         )
     })
 }
 
-/// One function's frame: its words, the functions it calls, and the
+/// One function's frame: its bytes, the functions it calls, and the
 /// type whose values take the most of its words (the type, how many
 /// values, their words).
 struct Frame<'a> {
     name: &'a str,
-    words: usize,
+    bytes: usize,
     calls: Vec<usize>,
     largest: (Type, usize, usize),
 }
 
 /// The frames on the deepest chain of calls from the entry, the merge or
-/// the init, outermost first.
-fn deepest(module: &Module) -> Vec<Frame<'_>> {
+/// the init, outermost first: each as `measured`, or as estimated.
+fn deepest<'a>(module: &'a Module, measured: Option<&Measured>) -> Vec<Frame<'a>> {
+    let sized = |mut frame: Frame<'a>, bytes: Option<usize>| {
+        if let Some(bytes) = bytes {
+            frame.bytes = bytes;
+        }
+        frame
+    };
     let functions: Vec<Frame<'_>> = module
         .functions
         .iter()
-        .map(|function| frame(module, function))
+        .enumerate()
+        .map(|(index, function)| {
+            sized(
+                frame(module, function),
+                measured.and_then(|m| m.functions.get(index).copied()),
+            )
+        })
         .collect();
-    // The deepest chain from each function, in words, and the callee it
+    // The deepest chain from each function, in bytes, and the callee it
     // goes on through; a function calls only those before it.
     let mut depth: Vec<(usize, Option<usize>)> = Vec::with_capacity(functions.len());
     let below = |frame: &Frame<'_>, depth: &[(usize, Option<usize>)]| {
         frame
             .calls
             .iter()
-            .filter_map(|&callee| depth.get(callee).map(|(words, _)| (*words, callee)))
+            .filter_map(|&callee| depth.get(callee).map(|(bytes, _)| (*bytes, callee)))
             .max()
     };
     for function in &functions {
         let next = below(function, &depth);
         depth.push((
-            function.words + next.map_or(0, |(words, _)| words),
+            function.bytes + next.map_or(0, |(bytes, _)| bytes),
             next.map(|(_, callee)| callee),
         ));
     }
-    let roots = Some(&module.entry)
-        .into_iter()
-        .chain(&module.merge)
-        .chain(&module.init)
-        .map(|root| frame(module, root));
+    let roots = [
+        Some((&module.entry, measured.map(|m| m.entry))),
+        module
+            .merge
+            .as_ref()
+            .map(|merge| (merge, measured.map(|m| m.merge))),
+        module
+            .init
+            .as_ref()
+            .map(|init| (init, measured.map(|m| m.init))),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|(root, bytes)| sized(frame(module, root), bytes));
     let Some(root) =
-        roots.max_by_key(|root| root.words + below(root, &depth).map_or(0, |(words, _)| words))
+        roots.max_by_key(|root| root.bytes + below(root, &depth).map_or(0, |(bytes, _)| bytes))
     else {
         return Vec::new();
     };
@@ -164,7 +205,7 @@ fn frame<'a>(module: &Module, function: &'a Function) -> Frame<'a> {
         .unwrap_or((Type::Int, 0, 0));
     Frame {
         name: &function.name,
-        words,
+        bytes: words * 4,
         calls,
         largest,
     }

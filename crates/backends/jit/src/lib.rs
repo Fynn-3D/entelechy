@@ -206,27 +206,44 @@ impl Backend for JitBackend {
         "jit"
     }
 
+    /// A module whose estimated frames fit is taken unseen; one whose
+    /// estimate passes the bound is compiled, and its frames as compiled
+    /// decide.
+    #[cfg(not(target_arch = "wasm32"))]
     fn declines(&self, module: &Validated) -> Option<String> {
-        frame::refusal(module)
+        if frame::bound(module) <= frame::MAX_FRAME_BYTES {
+            return None;
+        }
+        self.prepare(module).err()
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn declines(&self, module: &Validated) -> Option<String> {
+        frame::refusal(module, None)
+    }
+
+    /// The module compiled, and taken when its frames as compiled fit
+    /// (the estimate when the compiler reports none).
     #[cfg(not(target_arch = "wasm32"))]
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
-        if let Some(reason) = frame::refusal(module) {
-            return Err(reason);
-        }
         let code = codegen::compile(module, self.isa.clone())?;
-        Ok(Box::new(Compiled {
+        let refused = frame::refusal(module, code.frames.as_ref());
+        let compiled = Compiled {
             module: Some(code.module),
             entry: code.entry,
             init: code.init,
             merge: code.merge,
-        }))
+        };
+        // Refused, the code compiled is let go with `compiled`.
+        match refused {
+            Some(reason) => Err(reason),
+            None => Ok(Box::new(compiled)),
+        }
     }
 
     #[cfg(target_arch = "wasm32")]
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
-        if let Some(reason) = frame::refusal(module) {
+        if let Some(reason) = frame::refusal(module, None) {
             return Err(reason);
         }
         Ok(Box::new(wasm::compile(module)?))

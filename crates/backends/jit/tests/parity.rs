@@ -1042,13 +1042,15 @@ fn an_input_of_the_wrong_layout_is_refused_by_every_backend() {
 
 #[test]
 fn values_past_the_stack_are_left_to_the_interpreter() {
-    // A value of 240 KiB, which a frame holds more than once: past the
-    // stack the compiled code may take, so the JIT refuses the module
-    // and the interpreter, holding values on the heap, runs it.
+    // Two values of 240 KiB subscripted, which the compiled frame holds
+    // in slots of their own: past the stack the compiled code may take,
+    // so the JIT refuses the module and the interpreter, holding values
+    // on the heap, runs it.
     let source = "kernel test.deep@1 { requires { field.write; } output result: Rows<Int>;
         compute {
             let a = [[element(); 4096]; 15];
-            return a[element() % 15][3];
+            let b = [[element() * 2; 4096]; 15];
+            return a[element() % 15][3] + b[(element() + 1) % 15][5] - element() * 2;
         } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let jit = JitBackend::new().unwrap();
@@ -1065,10 +1067,10 @@ fn values_past_the_stack_are_left_to_the_interpreter() {
         .unwrap()[0];
     assert_eq!(host.data(cpu).unwrap().storage(), [0, 1, 2, 3]);
     match jit.prepare(&module) {
-        // The refusal names where the stack goes: the function, and the
-        // type whose values take the most of it.
+        // The refusal names where the stack goes, as compiled: the
+        // function, and the type whose values are the most of it.
         Err(reason) => assert!(
-            reason.contains("stack") && reason.contains("values of `[[Int; 4096]; 15]`"),
+            reason.contains("bytes of stack") && reason.contains("of `[[Int; 4096]; 15]`"),
             "{reason}"
         ),
         Ok(prepared) => {
@@ -1136,21 +1138,26 @@ fn on_both(source: &str) -> (Vec<u32>, Result<Vec<u32>, String>) {
     (expected, compiled)
 }
 
+/// The rows of 4096 words a long function's array holds: a frame of
+/// about 130 KiB as compiled; for the WebAssembly code, bounded by the
+/// estimate, about 160 KiB estimated.
+const ROWS: usize = if cfg!(target_arch = "wasm32") { 2 } else { 8 };
+
 /// A function `name` too long to be written out where it is called: a
-/// frame of about 160 KiB, an array of 2 x 4096 words, after `first`
-/// (another function's call, or the argument) and a chain of arithmetic.
+/// frame of [`ROWS`] x 4096 words subscripted, after `first` (another
+/// function's call, or the argument) and a chain of arithmetic.
 fn long_function(name: &str, first: &str) -> String {
     let chain: String = (1..120)
         .map(|i| format!("let v{i} = (v{} * 3 + {i}) % 1000; ", i - 1))
         .collect();
     format!(
-        "fn {name}(k: Int) -> Int {{ let v0 = {first}; {chain}let a = [[v119; 4096]; 2]; return a[k % 2][1]; }}\n"
+        "fn {name}(k: Int) -> Int {{ let v0 = {first}; {chain}let a = [[v119; 4096]; {ROWS}]; return a[k % {ROWS}][1]; }}\n"
     )
 }
 
 #[test]
 fn functions_called_one_after_another_share_the_stack() {
-    // Three frames of about 160 KiB, called in turn: one is on the stack
+    // Three large frames, called in turn: one is on the stack
     // at a time, so the JIT takes the module and agrees with the
     // interpreter.
     let source = format!(
@@ -1185,4 +1192,27 @@ fn functions_nested_past_the_stack_are_refused() {
         ),
         Ok(rows) => panic!("the JIT took the module: {rows:?}"),
     }
+}
+
+// The WebAssembly code is bounded by the estimate, which counts each
+// value's words.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn values_built_from_others_share_their_words() {
+    // Forty values of a struct of 1025 words, each built from the one
+    // before: counted word for word they would pass the stack, but each
+    // shares the words it keeps of the one before, so the compiled frame
+    // is small and the JIT takes the module, unasked and asked.
+    let updates: String = (1..=40)
+        .map(|i| format!("let b{i} = Big {{ ..b{}, n: b{}.n + {i} }}; ", i - 1, i - 1))
+        .collect();
+    let source = format!(
+        "kernel test.updates@1 {{ requires {{ field.write; }} output result: Rows<Int>;
+        struct Big {{ cells: [Int; 1024]; n: Int; }}
+        compute {{ let b0 = Big {{ cells: [element(); 1024], n: 0 }}; {updates}return b40.n + b40.cells[element() % 4]; }} }}"
+    );
+    let (expected, jit) = on_both(&source);
+    assert_eq!(jit, Ok(expected));
+    let module = compile(&source).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(JitBackend::new().unwrap().declines(&module), None);
 }
