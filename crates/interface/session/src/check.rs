@@ -78,7 +78,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         if let Err(error) =
             orla_compiler::check_functions(&document, (&structs, &types, &functions))
         {
-            let at = written_in(store, path, &error);
+            let at = written_in(store, path, None, &error);
             say!(problem, "{}:{error}", at.display());
         }
         document.inherit(&structs, &types, &functions);
@@ -116,7 +116,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                 }
             }
             Err(error) => {
-                let at = written_in(store, path, &error);
+                let at = written_in(store, path, Some(&kernel.range), &error);
                 let said = located(store, crate::Diagnostic::from(&error), path, path, &[]);
                 say!(problem, "{}:{said}", at.display());
             }
@@ -151,7 +151,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                             &used_document,
                             (&structs, &types, &functions),
                         ) {
-                            let at = written_in(store, path, &error);
+                            let at = written_in(store, path, None, &error);
                             say!(problem, "{}:{error}", at.display());
                         }
                         used_document.inherit(&structs, &types, &functions)
@@ -169,7 +169,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                             }
                         }
                         Err(error) => {
-                            let at = written_in(store, path, &error);
+                            let at = written_in(store, path, Some(&kernel.range), &error);
                             let said =
                                 located(store, crate::Diagnostic::from(&error), path, root, &[]);
                             say!(problem, "{}:{said}", at.display());

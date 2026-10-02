@@ -347,3 +347,122 @@ fn a_kernels_own_declarations_shadow_a_used_librarys() {
     assert_eq!(words, vec![12 + 21 + 16]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A fault in a declaration a Kernel inherits from a used document, a
+/// struct's field, a type's shape or a function's signature, is placed
+/// in the used document: its line and column are that document's.
+#[test]
+fn a_fault_in_an_inherited_declaration_is_placed_in_its_document() {
+    let declarations = [
+        "struct Pair { a: Nope; }\n",
+        "type Cells = Rows<Nope>;\n",
+        "fn twice(x: Nope) -> Int { return 2; }\n",
+    ];
+    for (k, declaration) in declarations.iter().enumerate() {
+        let dir = scratch(
+            &format!("inherited-fault-{k}"),
+            &[
+                ("lib.orla", declaration),
+                (
+                    "k.orla",
+                    "use \"lib.orla\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Int>; compute { return 1; } }\n",
+                ),
+                (
+                    "scene.osn",
+                    "use \"k.orla\";\nnode n: t.k@1 { domain = 1; }\noutput result <- n.result;\n",
+                ),
+            ],
+        );
+        let mut session = orla_session::Session::open(&dir.join("scene.osn"), None, 1 << 20);
+        let events = session.sync();
+        let faults: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                orla_session::Event::Rejected { path, error }
+                    if error.to_string().contains("Nope") =>
+                {
+                    Some(path.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!faults.is_empty(), "{declaration}{events:?}");
+        for path in faults {
+            assert_eq!(
+                path.file_name().unwrap(),
+                "lib.orla",
+                "{declaration}{events:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// A fault in a Kernel's own declaration, of a name a used document
+/// declares too, is placed in the Kernel's document; one in the used
+/// document's, which the Kernel's own shadows, in the used document.
+#[test]
+fn a_fault_in_a_shadowing_declaration_is_placed_where_it_is_written() {
+    let kernel = |own: &str| {
+        format!(
+            "use \"lib.orla\";\nkernel t.k@1 {{ requires {{ field.write; }} output result: Rows<Int>;\n    {own}\n    compute {{ return 1; }} }}\n"
+        )
+    };
+    let cases = [
+        (
+            "struct Pair { a: Int; }\n",
+            kernel("struct Pair { b: Nope; }"),
+            "k.orla",
+        ),
+        (
+            "struct Pair { a: Nope; }\n",
+            kernel("struct Pair { b: Int; }"),
+            "lib.orla",
+        ),
+        (
+            "fn twice(x: Int) -> Int { return 2; }\n",
+            kernel("fn twice(x: Nope) -> Int { return 2; }"),
+            "k.orla",
+        ),
+        (
+            "fn twice(x: Nope) -> Int { return 2; }\n",
+            kernel("fn twice(x: Int) -> Int { return 2; }"),
+            "lib.orla",
+        ),
+    ];
+    for (k, (library, kernel, written)) in cases.iter().enumerate() {
+        let dir = scratch(
+            &format!("shadowing-fault-{k}"),
+            &[
+                ("lib.orla", library),
+                ("k.orla", kernel),
+                (
+                    "scene.osn",
+                    "use \"k.orla\";\nnode n: t.k@1 { domain = 1; }\noutput result <- n.result;\n",
+                ),
+            ],
+        );
+        let mut session = orla_session::Session::open(&dir.join("scene.osn"), None, 1 << 20);
+        let events = session.sync();
+        let faults: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                orla_session::Event::Rejected { path, error }
+                    if error.to_string().contains("Nope") =>
+                {
+                    Some(path.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!faults.is_empty(), "{kernel}{events:?}");
+        for path in faults {
+            assert_eq!(
+                path.file_name().unwrap(),
+                *written,
+                "{library}{kernel}{events:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

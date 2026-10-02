@@ -24,16 +24,16 @@ pub(super) fn structs(kernel: &Kernel) -> Result<Structs, CompileError> {
         };
         let name = &decl.name.value;
         if name == "Image" || Type::from_str(name).is_ok() {
-            return Err(semantic(
-                decl.name.span,
-                format!("`{name}` is already a type name"),
-            ));
+            return Err(
+                semantic(decl.name.span, format!("`{name}` is already a type name"))
+                    .in_declaration(name),
+            );
         }
         if structs.is_enum(name) {
-            return Err(semantic(
-                decl.name.span,
-                format!("type `{name}` is defined twice"),
-            ));
+            return Err(
+                semantic(decl.name.span, format!("type `{name}` is defined twice"))
+                    .in_declaration(name),
+            );
         }
         structs.declare_enum(
             name.clone(),
@@ -57,46 +57,52 @@ fn struct_table_in(
     decls: &[orla_language::StructDecl],
 ) -> Result<Structs, CompileError> {
     for decl in decls {
-        if structs.is_enum(&decl.name.value) {
-            return Err(semantic(
-                decl.name.span,
-                format!("`{}` is already an enum", decl.name.value),
-            ));
-        }
-        if structs.find(&decl.name.value).is_some() {
-            return Err(semantic(
-                decl.name.span,
-                format!("struct `{}` is defined twice", decl.name.value),
-            ));
-        }
-        if Type::from_str(&decl.name.value).is_ok() {
-            return Err(semantic(
-                decl.name.span,
-                format!("`{}` is a builtin type name", decl.name.value),
-            ));
-        }
-        let mut fields: Vec<Field> = Vec::new();
-        for (name, ty_name) in &decl.fields {
-            if fields.iter().any(|field| field.name == name.value) {
-                return Err(semantic(
-                    name.span,
-                    format!("field `{}` is declared twice", name.value),
-                ));
-            }
-            if ty_name.value == decl.name.value {
-                return Err(semantic(ty_name.span, "a struct cannot contain itself"));
-            }
-            let ty = resolve_type(ty_name, &structs)?;
-            fields.push(Field {
-                name: name.value.clone(),
-                ty,
-            });
-        }
-        let def = StructDef::record(decl.name.value.clone(), fields);
-        super::fits(&structs.borrow(), &def, decl.name.span)?;
-        structs.borrow_mut().push(def);
+        struct_entry(&structs, decl).map_err(|error| error.in_declaration(&decl.name.value))?;
     }
     Ok(structs)
+}
+
+/// One struct appended to `structs`.
+fn struct_entry(structs: &Structs, decl: &orla_language::StructDecl) -> Result<(), CompileError> {
+    if structs.is_enum(&decl.name.value) {
+        return Err(semantic(
+            decl.name.span,
+            format!("`{}` is already an enum", decl.name.value),
+        ));
+    }
+    if structs.find(&decl.name.value).is_some() {
+        return Err(semantic(
+            decl.name.span,
+            format!("struct `{}` is defined twice", decl.name.value),
+        ));
+    }
+    if Type::from_str(&decl.name.value).is_ok() {
+        return Err(semantic(
+            decl.name.span,
+            format!("`{}` is a builtin type name", decl.name.value),
+        ));
+    }
+    let mut fields: Vec<Field> = Vec::new();
+    for (name, ty_name) in &decl.fields {
+        if fields.iter().any(|field| field.name == name.value) {
+            return Err(semantic(
+                name.span,
+                format!("field `{}` is declared twice", name.value),
+            ));
+        }
+        if ty_name.value == decl.name.value {
+            return Err(semantic(ty_name.span, "a struct cannot contain itself"));
+        }
+        let ty = resolve_type(ty_name, structs)?;
+        fields.push(Field {
+            name: name.value.clone(),
+            ty,
+        });
+    }
+    let def = StructDef::record(decl.name.value.clone(), fields);
+    super::fits(&structs.borrow(), &def, decl.name.span)?;
+    structs.borrow_mut().push(def);
+    Ok(())
 }
 
 /// Evaluates an untyped literal: integers stay `Int`; a struct literal
@@ -569,45 +575,55 @@ pub(super) fn aliases(
 ) -> Result<Vec<(String, PortType)>, CompileError> {
     let mut aliases: Vec<(String, PortType)> = Vec::new();
     for decl in &kernel.types {
-        let name = &decl.name.value;
         // An enum is a value's type, among the structs.
         if decl.variants().is_some() {
             continue;
         }
-        if structs.is_enum(name) {
-            return Err(semantic(
-                decl.name.span,
-                format!("type `{name}` is defined twice"),
-            ));
-        }
-        if name == "Image"
-            || Type::from_str(name).is_ok()
-            || structs.borrow().iter().any(|s| &s.name == name)
-        {
-            return Err(semantic(
-                decl.name.span,
-                format!("`{name}` is already a type name"),
-            ));
-        }
-        if aliases.iter().any(|(existing, _)| existing == name) {
-            return Err(semantic(
-                decl.name.span,
-                format!("type `{name}` is defined twice"),
-            ));
-        }
-        if aliases
-            .iter()
-            .any(|(existing, _)| *existing == decl.target.value)
-        {
-            return Err(semantic(
-                decl.target.span,
-                "an alias names a shape directly, not another alias",
-            ));
-        }
-        let ty = port_type(&decl.target, structs, &[])?;
-        aliases.push((name.clone(), ty));
+        let ty = alias_entry(decl, structs, &aliases)
+            .map_err(|error| error.in_declaration(&decl.name.value))?;
+        aliases.push((decl.name.value.clone(), ty));
     }
     Ok(aliases)
+}
+
+/// One alias's shape, checked against what is declared before it.
+fn alias_entry(
+    decl: &orla_language::TypeAlias,
+    structs: &Structs,
+    aliases: &[(String, PortType)],
+) -> Result<PortType, CompileError> {
+    let name = &decl.name.value;
+    if structs.is_enum(name) {
+        return Err(semantic(
+            decl.name.span,
+            format!("type `{name}` is defined twice"),
+        ));
+    }
+    if name == "Image"
+        || Type::from_str(name).is_ok()
+        || structs.borrow().iter().any(|s| &s.name == name)
+    {
+        return Err(semantic(
+            decl.name.span,
+            format!("`{name}` is already a type name"),
+        ));
+    }
+    if aliases.iter().any(|(existing, _)| existing == name) {
+        return Err(semantic(
+            decl.name.span,
+            format!("type `{name}` is defined twice"),
+        ));
+    }
+    if aliases
+        .iter()
+        .any(|(existing, _)| *existing == decl.target.value)
+    {
+        return Err(semantic(
+            decl.target.span,
+            "an alias names a shape directly, not another alias",
+        ));
+    }
+    port_type(&decl.target, structs, &[])
 }
 
 pub(super) fn manifest(

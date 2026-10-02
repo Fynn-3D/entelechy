@@ -1806,7 +1806,7 @@ fn broken(x: Float) -> Float { return x * nope; }",
     )
     .unwrap();
     let error = orla_compiler::check_functions(&document, (&[], &[], &[])).unwrap_err();
-    assert_eq!(error.function(), Some("broken"), "{error}");
+    assert_eq!(error.declaration(), Some("broken"), "{error}");
     assert!(
         error.to_string().contains("`nope` is not defined"),
         "{error}"
@@ -1929,4 +1929,36 @@ fn a_type_past_the_value_bounds_is_refused() {
             .is_err_and(|error| error.to_string().contains("more than")),
         "{refused:?}"
     );
+}
+
+/// A fault in a declaration names it, whatever part holds it: a
+/// struct's field, a type's shape, a function's signature or body.
+#[test]
+fn a_fault_names_the_declaration_that_holds_it() {
+    for (source, value, declaration) in [
+        ("struct Pair { a: Nope; }", "1", "Pair"),
+        ("type Cells = Rows<Nope>;", "1", "Cells"),
+        (
+            "type Mode = enum { On }; type Mode = enum { Off };",
+            "Mode.On",
+            "Mode",
+        ),
+        ("fn twice(x: Nope) -> Int { return 2; }", "1", "twice"),
+        (
+            "fn twice(x: Int) -> Int { return nope; }",
+            "twice(1)",
+            "twice",
+        ),
+    ] {
+        let error = compile(&format!(
+            "kernel t.k@1 {{ requires {{ field.write; }} {source} output result: Rows<Int>; compute {{ return {value}; }} }}"
+        ))
+        .expect_err(source);
+        assert_eq!(error.declaration(), Some(declaration), "{source}: {error}");
+    }
+    let error = compile(
+        "kernel t.k@1 { requires { field.write; } input a: Rows<Nope>; output result: Rows<Int>; compute { return 1; } }",
+    )
+    .unwrap_err();
+    assert_eq!(error.declaration(), None, "{error}");
 }

@@ -55,7 +55,7 @@ fn semantic(span: Span, message: impl Into<String>) -> CompileError {
     CompileError::Semantic {
         span,
         message: message.into(),
-        function: None,
+        declaration: None,
     }
 }
 
@@ -398,8 +398,10 @@ pub(crate) fn lower_placed(
                 continue;
             }
             if resolve_type(ty, &structs).is_err() {
-                port_type(ty, &structs, &aliases)
-                    .map_err(|_| semantic(ty.span, format!("`{}` is not a type", ty.value)))?;
+                port_type(ty, &structs, &aliases).map_err(|_| {
+                    semantic(ty.span, format!("`{}` is not a type", ty.value))
+                        .in_declaration(&declaration.name.value)
+                })?;
                 has_field = true;
             }
         }
@@ -625,7 +627,7 @@ fn lower_function(
         .borrow_mut()
         .push(declaration.name.value.clone());
     let lowered = lower_function_body(shared, declaration, fields, generics, name)
-        .map_err(|error| error.in_function(&declaration.name.value));
+        .map_err(|error| error.in_declaration(&declaration.name.value));
     shared.lowering.borrow_mut().pop();
     shared.calls.set(depth - 1);
     lowered
@@ -1291,7 +1293,7 @@ impl<'a> Builder<'a> {
                         CompileError::Semantic {
                             span,
                             message,
-                            function,
+                            declaration,
                         },
                         false,
                     ) => {
@@ -1305,7 +1307,7 @@ impl<'a> Builder<'a> {
                         CompileError::Semantic {
                             span,
                             message: format!("{message} (in `{name}` with {bound})"),
-                            function,
+                            declaration,
                         }
                     }
                     (error, _) => error,
