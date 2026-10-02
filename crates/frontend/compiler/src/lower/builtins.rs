@@ -636,9 +636,9 @@ impl Builder<'_> {
                     )
                 });
                 if let Some((index, expected, ret)) = found {
-                    // A function of a builtin's name stands for it here: a
-                    // call that fits the builtin and not the function says
-                    // which it met.
+                    // A function of a builtin's name stands for it in its
+                    // own document: a call that fits the builtin and not the
+                    // function says which it met.
                     let hiding = |error: CompileError| match error {
                         CompileError::Semantic {
                             span,
@@ -647,7 +647,7 @@ impl Builder<'_> {
                         } if crate::help::builtin(name).is_some() => CompileError::Semantic {
                             span,
                             message: format!(
-                                "{message}; this `{name}` is a function the document reaches, which hides the builtin `{name}`"
+                                "{message}; this `{name}` is the document's own function, which hides the builtin `{name}`"
                             ),
                             declaration,
                         },

@@ -22,8 +22,6 @@ use crate::{Diagnostic, Event};
 pub(crate) struct Scene {
     store: Arc<dyn Store>,
     root: PathBuf,
-    /// The unpublished bindings last said, so each is said once.
-    unpublished_said: Vec<String>,
     /// Libraries the caller adds to the document's uses.
     extra_uses: Vec<PathBuf>,
     /// The root's stamp at its last lowering; `None` lowers it again.
@@ -114,7 +112,6 @@ impl Scene {
             staged: None,
             superseded: false,
             expanded: None,
-            unpublished_said: Vec::new(),
             refusal: None,
         }
     }
@@ -232,6 +229,7 @@ impl Scene {
         events: &mut Vec<Event>,
         readable: &dyn Fn(&Path) -> Result<(), String>,
     ) {
+        let from = events.len();
         // The worker's finished changes publish first.
         let outcome = kernels.collect(runtime, events);
         self.land(outcome, kernels, runtime, events);
@@ -239,6 +237,36 @@ impl Scene {
         if self.sync_libraries(kernels, runtime, events) {
             self.stamp = None;
             self.sync_root(kernels, runtime, events, readable);
+        }
+        // A scene that loaded, however many times this sync: each node
+        // bound to a Kernel a document it reaches only through another
+        // writes, said with the `use` that publishes it.
+        if events[from..]
+            .iter()
+            .any(|event| matches!(event, Event::SceneLoaded))
+        {
+            self.say_unpublished(kernels, events);
+        }
+    }
+
+    /// Says each node of the running scene bound to a Kernel written in a
+    /// document the scene reaches only through another.
+    fn say_unpublished(&self, kernels: &Kernels, events: &mut Vec<Event>) {
+        let Some(graph) = &self.graph else { return };
+        let own: Vec<orla_ir::KernelId> = std::iter::once(self.root.clone())
+            .chain(self.sub_graphs.keys().cloned())
+            .flat_map(|path| kernels.ids_of(&path))
+            .collect();
+        for (node, kernel, why) in
+            crate::sources::unpublished(self.store.as_ref(), &self.root, graph, &self.uses, &own)
+        {
+            let Some(why) = why else { continue };
+            events.push(Event::Rejected {
+                path: self.root.clone(),
+                error: Diagnostic::new(format!(
+                    "node `{node}` binds `{kernel}`, which the scene does not publish; {why}"
+                )),
+            });
         }
     }
 
@@ -629,38 +657,6 @@ impl Scene {
                 let graph = staged.graph;
                 self.params
                     .retain(|name, _| graph.params.iter().any(|p| &p.name == name));
-                // A node bound to a Kernel a document the scene reaches
-                // only through another writes: said now, with how to use
-                // it, before an evaluation finds it missing.
-                let own: Vec<orla_ir::KernelId> = std::iter::once(self.root.clone())
-                    .chain(self.sub_graphs.keys().cloned())
-                    .flat_map(|path| kernels.ids_of(&path))
-                    .collect();
-                let said: Vec<String> = crate::sources::unpublished(
-                    self.store.as_ref(),
-                    &self.root,
-                    &graph,
-                    &self.uses,
-                    &own,
-                )
-                .into_iter()
-                .filter_map(|(node, kernel, why)| {
-                    Some(format!(
-                        "node `{node}` binds `{kernel}`, which the scene does not publish; {}",
-                        why?
-                    ))
-                })
-                .collect();
-                for message in said
-                    .iter()
-                    .filter(|message| !self.unpublished_said.contains(message))
-                {
-                    events.push(Event::Rejected {
-                        path: self.root.clone(),
-                        error: Diagnostic::new(message.clone()),
-                    });
-                }
-                self.unpublished_said = said;
                 self.graph = Some(graph);
                 self.text = Some(staged.text);
                 self.files = staged.files;

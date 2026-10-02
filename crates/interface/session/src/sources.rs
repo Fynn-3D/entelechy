@@ -855,11 +855,15 @@ fn scoped(
             files.push(file);
         }
     }
-    // Nothing declared twice and nothing the user shadows: every name is
-    // plain, as written.
+    // A function of a builtin's name stands for it in its own document
+    // only: everywhere else the name is the builtin's.
+    let hides = |name: &str| builtin_names().contains(name);
+    // Nothing declared twice, nothing the user shadows and no builtin
+    // hidden: every name is plain, as written.
     let clashing = |name: &str| {
         declaring.get(name).is_some_and(|files| files.len() > 1)
             || own.iter().any(|f| f.name.value == name)
+            || hides(name)
     };
     if !reach
         .functions
@@ -886,7 +890,9 @@ fn scoped(
         (files.len() == 1).then(|| files[0])
     };
     let seen_by_user = |name: &str, file: &Path| {
-        !own.iter().any(|f| f.name.value == name) && resolve(name, &top) == Some(file)
+        !hides(name)
+            && !own.iter().any(|f| f.name.value == name)
+            && resolve(name, &top) == Some(file)
     };
     let internal = |name: &str, file: &Path| {
         if seen_by_user(name, file) {
@@ -916,6 +922,8 @@ fn scoped(
         let rename = |name: &str| -> Option<String> {
             let target = if declares(name) {
                 file.as_path()
+            } else if hides(name) {
+                return None;
             } else {
                 resolve(name, reached)?
             };
@@ -943,6 +951,17 @@ fn shown_from(store: &dyn Store, document: &Path, path: &Path) -> String {
 fn hidden_builtin(message: &str) -> Option<&str> {
     let rest = message.split("which hides the builtin `").nth(1)?;
     rest.split('`').next().filter(|name| !name.is_empty())
+}
+
+/// The language's builtins by name, gathered once.
+fn builtin_names() -> &'static BTreeSet<&'static str> {
+    static NAMES: std::sync::OnceLock<BTreeSet<&'static str>> = std::sync::OnceLock::new();
+    NAMES.get_or_init(|| {
+        orla_compiler::help::builtins()
+            .into_iter()
+            .map(|b| b.name)
+            .collect()
+    })
 }
 
 /// The backticked name a diagnostic reports as not a builtin, struct

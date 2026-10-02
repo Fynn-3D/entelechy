@@ -380,6 +380,8 @@ the documents it reaches through `use`, so two libraries may each keep
 a helper or a struct of one name, and an application or a Kernel may
 name its own as a package it uses does, the package's code still
 reaching the package's. The same struct or `type` declared alike in two documents is one.
+A function may take a math builtin's name and stands for it in its own
+document only: a document that uses it keeps the builtin.
 A name two used documents answer differently is refused where it is
 named, naming both. Two documents that `use` each other are refused by
 name. A name a Kernel

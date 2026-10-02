@@ -123,6 +123,17 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         }
     }
     let root = path;
+    // The documents whose Kernels the scene publishes, as a session
+    // publishes them: those its `use` items name. Of a document those use
+    // in turn, the declarations are checked, which Kernels inherit, and
+    // its Kernels are not the scene's.
+    let published = crate::sources::Expanded::of(store, lowered.uses.clone()).files;
+    let publishes = |path: &Path| {
+        let path = store.canonical(path).unwrap_or_else(|_| path.to_path_buf());
+        published
+            .iter()
+            .any(|file| store.canonical(file).unwrap_or_else(|_| file.clone()) == path)
+    };
     // The used documents, each with its own declarations.
     match used_documents(store, base, &document.uses) {
         Ok(used) => {
@@ -160,7 +171,12 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                         say!(problem, "{}: {error}", path.display());
                     }
                 }
-                for kernel in &used_document.kernels {
+                let kernels: &[orla_language::Kernel] = if publishes(path) {
+                    &used_document.kernels
+                } else {
+                    &[]
+                };
+                for kernel in kernels {
                     match orla_compiler::compile_kernel(kernel, None) {
                         Ok(module) => {
                             compiled += 1;
