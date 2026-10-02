@@ -1107,3 +1107,82 @@ fn a_narrow_output_is_charged_the_words_it_is_computed_in() {
         assert_eq!(host.used_words(), 0, "{backend}");
     }
 }
+
+/// Runs `source` on the interpreter and, when the JIT takes it, on the
+/// JIT; answers the interpreter's rows and the JIT's (`None`: refused,
+/// with its reason).
+fn on_both(source: &str) -> (Vec<u32>, Result<Vec<u32>, String>) {
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let jit = JitBackend::new().unwrap();
+    let mut host = Host::new(1 << 22);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(4),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, all());
+    let cpu = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    let expected = host.data(cpu).unwrap().storage().to_vec();
+    let compiled = jit.prepare(&module).map(|prepared| {
+        let mut scope = Scope::new(&mut host, all());
+        let out = jit
+            .execute(prepared.as_ref(), &module, &invocation, &mut scope)
+            .unwrap()[0];
+        host.data(out).unwrap().storage().to_vec()
+    });
+    (expected, compiled)
+}
+
+/// A function `name` too long to be written out where it is called: a
+/// frame of about 160 KiB, an array of 2 x 4096 words, after `first`
+/// (another function's call, or the argument) and a chain of arithmetic.
+fn long_function(name: &str, first: &str) -> String {
+    let chain: String = (1..120)
+        .map(|i| format!("let v{i} = (v{} * 3 + {i}) % 1000; ", i - 1))
+        .collect();
+    format!(
+        "fn {name}(k: Int) -> Int {{ let v0 = {first}; {chain}let a = [[v119; 4096]; 2]; return a[k % 2][1]; }}\n"
+    )
+}
+
+#[test]
+fn functions_called_one_after_another_share_the_stack() {
+    // Three frames of about 160 KiB, called in turn: one is on the stack
+    // at a time, so the JIT takes the module and agrees with the
+    // interpreter.
+    let source = format!(
+        "{}{}{}kernel test.turns@1 {{ requires {{ field.write; }} output result: Rows<Int>;
+        compute {{ return one(element()) + two(element()) + three(element()); }} }}",
+        long_function("one", "k"),
+        long_function("two", "k + 1"),
+        long_function("three", "k + 2"),
+    );
+    let (expected, jit) = on_both(&source);
+    assert_eq!(jit, Ok(expected));
+}
+
+#[test]
+fn functions_nested_past_the_stack_are_refused() {
+    // The same frames, each calling the next: all on the stack at once,
+    // past what compiled code may take; the refusal names the chain.
+    let source = format!(
+        "{}{}{}kernel test.nested@1 {{ requires {{ field.write; }} output result: Rows<Int>;
+        compute {{ return three(element()); }} }}",
+        long_function("one", "k"),
+        long_function("two", "one(k)"),
+        long_function("three", "two(k)"),
+    );
+    let (_, jit) = on_both(&source);
+    match jit {
+        Err(reason) => assert!(
+            reason.contains("`three`")
+                && reason.contains("calling `two`")
+                && reason.contains("calling `one`"),
+            "{reason}"
+        ),
+        Ok(rows) => panic!("the JIT took the module: {rows:?}"),
+    }
+}
