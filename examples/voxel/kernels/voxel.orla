@@ -8,6 +8,7 @@
 // the axes; a label at the top left names the tool and the voxel under
 // the pointer, drawn through the text library.
 use "../../../packages/text.orlapkg";
+use "../../../packages/voxel.orlapkg";
 
 struct Edit {
     yaw: Float; pitch: Float; zoom: Float; pan: Vec3;
@@ -25,7 +26,6 @@ struct Edit {
 }
 type Studio = Rows<Edit>;
 type Voxels = Volume<Int>;
-struct Cast { cell: Vec3; side: Vec3; t: Float; face: Vec3; id: Int; inside: Bool; }
 struct Mark { hit: Bool; depth: Float; color: Vec3; }
 
 // The camera and the walk, shared by the state and the picture: a
@@ -50,39 +50,10 @@ fn ray_at(fwd: Vec3, x: Float, y: Float, width: Float, height: Float) -> Vec3 {
     return normalize(fwd * 1.5 + right * u + up * v);
 }
 
-fn inv(d: Float) -> Float {
-    return if abs(d) < 0.000001 { if d < 0.0 { -1000000.0 } else { 1000000.0 } } else { 1.0 / d };
-}
-
-// Amanatides-Woo: enter the box, then step cell to cell until a
-// colored voxel or the far side.
-fn cast(voxels: Voxels, eye: Vec3, dir: Vec3, n: Float) -> Cast {
-    let ix = inv(dir.x); let iy = inv(dir.y); let iz = inv(dir.z);
-    let ax = (0.0 - eye.x) * ix; let bx = (n - eye.x) * ix;
-    let ay = (0.0 - eye.y) * iy; let by = (n - eye.y) * iy;
-    let az = (0.0 - eye.z) * iz; let bz = (n - eye.z) * iz;
-    let tnear = max(max(min(ax, bx), min(ay, by)), max(min(az, bz), 0.0));
-    let tfar = min(min(max(ax, bx), max(ay, by)), max(az, bz));
-    let p = eye + dir * (tnear + 0.0005);
-    let cell = vec3(clamp(floor(p.x), 0.0, n - 1.0), clamp(floor(p.y), 0.0, n - 1.0), clamp(floor(p.z), 0.0, n - 1.0));
-    let step = vec3(if dir.x < 0.0 { -1.0 } else { 1.0 }, if dir.y < 0.0 { -1.0 } else { 1.0 }, if dir.z < 0.0 { -1.0 } else { 1.0 });
-    let delta = vec3(abs(ix), abs(iy), abs(iz));
-    let side = vec3((cell.x + max(step.x, 0.0) - eye.x) * ix, (cell.y + max(step.y, 0.0) - eye.y) * iy, (cell.z + max(step.z, 0.0) - eye.z) * iz);
-    let entry = if tnear == min(ax, bx) { vec3(-step.x, 0.0, 0.0) } else if tnear == min(ay, by) { vec3(0.0, -step.y, 0.0) } else { vec3(0.0, 0.0, -step.z) };
-    let start = Cast { cell: cell, side: side, t: tnear, face: entry, id: 0, inside: tfar > tnear };
-    return loop 160 with c = start until c.id > 0 || !c.inside {
-        let id = at(voxels, c.cell);
-        if id > 0 { Cast { ..c, id: id } } else {
-            let x_first = c.side.x < c.side.y && c.side.x < c.side.z;
-            let y_first = !x_first && c.side.y < c.side.z;
-            let cell = if x_first { c.cell + vec3(step.x, 0.0, 0.0) } else if y_first { c.cell + vec3(0.0, step.y, 0.0) } else { c.cell + vec3(0.0, 0.0, step.z) };
-            let t = if x_first { c.side.x } else if y_first { c.side.y } else { c.side.z };
-            let side = if x_first { c.side + vec3(delta.x, 0.0, 0.0) } else if y_first { c.side + vec3(0.0, delta.y, 0.0) } else { c.side + vec3(0.0, 0.0, delta.z) };
-            let face = if x_first { vec3(-step.x, 0.0, 0.0) } else if y_first { vec3(0.0, -step.y, 0.0) } else { vec3(0.0, 0.0, -step.z) };
-            let inside = cell.x >= 0.0 && cell.x < n && cell.y >= 0.0 && cell.y < n && cell.z >= 0.0 && cell.z < n;
-            Cast { cell: cell, side: side, t: t, face: face, id: 0, inside: inside }
-        }
-    };
+// The walk through the box: the voxel package's, from the eye to the
+// first colored voxel.
+fn cast(voxels: Voxels, eye: Vec3, dir: Vec3, n: Float) -> VoxelStep {
+    return voxel_walk(voxels, eye, dir, vec3(0.0, 0.0, 0.0), vec3(n, n, n));
 }
 
 fn palette(id: Int) -> Vec3 {
@@ -374,7 +345,7 @@ kernel voxel.draw@1 {
         } else {
             // The floor below the box: a grid that fades with distance, a
             // glow under the model, and the two axes through the origin.
-            let t = (-0.02 - eye.y) * inv(dir.y);
+            let t = (-0.02 - eye.y) * voxel_over(dir.y);
             if dir.y < 0.0 && t > 0.0 {
                 let f = eye + dir * t;
                 let far = exp(-t / (n * 1.6));
