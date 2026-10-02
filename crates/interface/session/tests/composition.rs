@@ -409,6 +409,79 @@ fn only_clock_reading_nodes_re_execute_when_time_advances() {
     assert!(third.executed.is_empty(), "same time, nothing re-executes");
 }
 
+#[test]
+fn a_node_whose_outputs_are_unchanged_spares_what_reads_them() {
+    // A node that reads the clock runs again as time advances; within a
+    // second its outputs are the same word for word, so what reads them
+    // is not run again, and its fresh Fields are let go.
+    let mut runtime = runtime();
+    load(
+        &mut runtime,
+        "kernel test.second@1 { requires { field.write; time.read; } output result: Image; compute { return vec4(floor(time()), 0.0, 0.0, 1.0); } }",
+    );
+    let graph = orla_scene::parse("node second: test.second@1 { domain = vec2(2, 2); }\nnode final: image.invert@1 { source <- second.result; }\noutput r <- final.result;").unwrap();
+    let mut evaluator = Evaluator::new();
+    evaluator.set_fusion(false);
+    let mut frame = |time: f32| {
+        evaluator
+            .evaluate(
+                &graph,
+                &mut runtime,
+                &BTreeMap::new(),
+                &at(time),
+                &BTreeMap::new(),
+            )
+            .unwrap()
+    };
+    let first = frame(0.25);
+    assert_eq!(first.executed, ids(&["second", "final"]));
+    let same = frame(0.5);
+    assert_eq!(same.executed, ids(&["second"]));
+    assert_eq!(same.reused, ids(&["final"]));
+    assert_eq!(same.output, first.output);
+    let later = frame(1.5);
+    assert_eq!(later.executed, ids(&["second", "final"]));
+    near(
+        runtime.host().read_pixel(later.output, 0, 0).unwrap(),
+        [0.0, 1.0, 1.0, 1.0],
+    );
+    assert_eq!(
+        runtime.host().live(),
+        2,
+        "the fresh Fields that gave way were let go"
+    );
+}
+
+#[test]
+fn state_at_a_fixed_point_stops_advancing() {
+    // A counter that adds nothing: its state is the same Field each
+    // evaluation, so it does not advance and the counter is not run again.
+    let mut runtime = runtime();
+    load(&mut runtime, ZERO);
+    load(&mut runtime, INCREMENT);
+    let graph = orla_scene::parse("node seed: test.zero@1 { domain = vec2(2, 2); }\nnode count: test.increment@1 { previous <~ count.result from seed.result; by = 0.0; }\noutput result <- count.result;").unwrap();
+    let mut evaluator = Evaluator::new();
+    evaluator.set_fusion(false);
+    let mut frame = || {
+        evaluator
+            .evaluate(
+                &graph,
+                &mut runtime,
+                &BTreeMap::new(),
+                &Context::default(),
+                &BTreeMap::new(),
+            )
+            .unwrap()
+    };
+    let first = frame();
+    assert_eq!(first.executed, ids(&["seed", "count"]));
+    let second = frame();
+    assert_eq!(second.executed, ids(&["count"]));
+    let third = frame();
+    assert!(third.executed.is_empty(), "{third:?}");
+    assert!(third.committed.is_empty(), "{third:?}");
+}
+
 const ZERO: &str = "kernel test.zero@1 { requires { field.write; } output result: Image; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }";
 const INCREMENT: &str = "kernel test.increment@1 { requires { field.read; field.write; } input previous: Image; param by: Float = 1.0; output result: Image; compute { let c = sample(previous); return vec4(c.r + by, c.g, c.b, 1.0); } }";
 const COUNTER: &str = "

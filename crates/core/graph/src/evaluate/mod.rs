@@ -2,7 +2,10 @@
 //! between evaluations and pointwise chains fused.
 //!
 //! A node's outputs are reused while its Kernel generation, parameters,
-//! domain, context and upstream results are unchanged. `<~` bindings read
+//! domain, context and upstream results are unchanged. A node that runs
+//! again and gives outputs equal word for word to its last (each in Host
+//! memory) keeps its last, so what reads them is reused too, and state at
+//! a fixed point does not advance. `<~` bindings read
 //! the state committed by the previous successful evaluation; an
 //! evaluation commits atomically at its end, and a failed one commits
 //! nothing.
@@ -863,7 +866,9 @@ impl Evaluator {
     }
 
     /// Caches a node's fresh outputs and lets go of the ones they replace,
-    /// unless they are committed state.
+    /// unless they are committed state. Fresh outputs equal word for word
+    /// to the ones they replace give way to those, which keep their epoch:
+    /// what reads them is not run again.
     fn store(
         &mut self,
         id: &NodeId,
@@ -872,6 +877,31 @@ impl Evaluator {
         output_names: Vec<String>,
         runtime: &mut Runtime,
     ) {
+        if let Some(previous) = self.ledger.entry(id)
+            && previous.output_names == output_names
+            && same_words(runtime, &previous.outputs, &outputs)
+        {
+            let kept = previous.outputs.clone();
+            let epoch = previous.epoch;
+            for output in &outputs {
+                if !kept.contains(output)
+                    && !self.ledger.is_cached(*output)
+                    && !self.is_kept(*output)
+                {
+                    release(runtime, *output);
+                }
+            }
+            self.ledger.cache_put(
+                id.clone(),
+                Cached {
+                    key,
+                    outputs: kept,
+                    output_names,
+                    epoch,
+                },
+            );
+            return;
+        }
         self.epoch += 1;
         let fresh = Cached {
             key,
@@ -936,6 +966,16 @@ impl Evaluator {
         self.store(id, running.key, outputs, running.output_names, runtime);
         Ok(())
     }
+}
+
+/// Whether two runs' outputs hold the same Fields word for word, each in
+/// Host memory: one held on a device alone is not read back to compare.
+fn same_words(runtime: &Runtime, previous: &[Handle], fresh: &[Handle]) -> bool {
+    let host = runtime.host();
+    previous.len() == fresh.len()
+        && previous.iter().zip(fresh).all(|(old, new)| {
+            old == new || matches!((host.data(*old), host.data(*new)), (Ok(a), Ok(b)) if a == b)
+        })
 }
 
 fn release(runtime: &mut Runtime, handle: Handle) {

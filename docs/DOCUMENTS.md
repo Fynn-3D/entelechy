@@ -650,7 +650,11 @@ be keywords.
    as migrated. Without `migrate`, the port restarts from `initial` and
    the evaluation reports the reset. A migration that is not published,
    not such a map, of the wrong layout, or failing, fails the evaluation
-   and leaves the state as it was.
+   and leaves the state as it was. A node runs again when its Kernel,
+   its values, its extent, the clock or input it reads, or a source it
+   reads changed; one that gives what it gave last, word for word, is
+   unchanged to what reads it, so a cheap node that settles spares a
+   costly one after it, and state at a fixed point does not advance.
 2. A source is a graph input by name or `node.port`. Inputs and nodes
    share one namespace. A graph may declare several outputs; which
    device takes which is decided by structure (a grid of pixels for the
