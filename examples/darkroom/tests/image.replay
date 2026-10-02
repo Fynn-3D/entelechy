@@ -71,3 +71,12 @@ expect field.result[40] = -0.5 0.00001
 expect field.result[44] = 3.5 0.00001
 expect field.result[70] = 3.7426407 0.00001
 expect field.result[80] = 5.1568542 0.00001
+
+# Palettes of black, red and white. The ramp's corner (0, 0, 0.5), a dim
+# blue, is nearest black in Oklab (0.436 from it, 0.524 from red) but of
+# lightness 0.359, in the second third: red. Its corner (1, 0, 0.5) is
+# nearest red (0.210) but of lightness 0.667, in the last third: white.
+expect nearest.result[0] = 0.0 0.0 0.0 1.0 0.00001
+expect ramped.result[0] = 1.0 0.0 0.0 1.0 0.00001
+expect nearest.result[7] = 1.0 0.0 0.0 1.0 0.00001
+expect ramped.result[7] = 1.0 1.0 1.0 1.0 0.00001

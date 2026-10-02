@@ -1,10 +1,14 @@
-//! The NES look: the picture pixelated, then held to four colors.
+//! Coarse pixels held to a few colours: the picture pixelated into cells
+//! of `cell` pixels, then each cell the colour of `colors`, rows from
+//! dark to light, its lightness falls to. Four colours make the look of
+//! an old console; the colours are the scene's.
 use "../kernels/";
 
 input source: Image;
+input colors: Rows<Vec3>;
 param cell: Float = 8.0;
 
 node coarse: image.pixelate@1 { source <- source; cell = cell; }
-node toned: image.palette@1 { source <- coarse.result; }
+node toned: image.ramp@1 { source <- coarse.result; colors <- colors; }
 
 output result <- toned.result;

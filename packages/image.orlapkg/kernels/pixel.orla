@@ -1,4 +1,5 @@
 // Pixel effects.
+use "colour.orla";
 
 /// Cells of `cell` pixels, each the color at its centre.
 kernel image.pixelate@1 {
@@ -12,19 +13,52 @@ kernel image.pixelate@1 {
     }
 }
 
-/// Four colors by brightness, a palette in a table.
-kernel image.palette@1 {
+/// The colour of `colors` nearest `c` in Oklab, where equal distances
+/// look equal; the first of two as near.
+fn nearest_colour(c: Vec3, colors: Rows<Vec3>) -> Vec3 {
+    let lab = linear_to_oklab(max(c, vec3(0.0, 0.0, 0.0)));
+    let first = at(colors, 0);
+    let start = vec4(first.x, first.y, first.z, length(linear_to_oklab(first) - lab));
+    let best = loop count(colors) with b = start {
+        let k = at(colors, index());
+        let d = length(linear_to_oklab(k) - lab);
+        if d < b.w { vec4(k.x, k.y, k.z, d) } else { b }
+    };
+    return vec3(best.x, best.y, best.z);
+}
+
+/// The colour of `colors`, rows from dark to light, that `c`'s Oklab
+/// lightness falls to: lightness 0 to 1 cut into as many equal steps as
+/// there are rows, so a picture keeps its light and dark in any tint.
+fn ramp_colour(c: Vec3, colors: Rows<Vec3>) -> Vec3 {
+    let n = count(colors);
+    let lightness = linear_to_oklab(max(c, vec3(0.0, 0.0, 0.0))).x;
+    return at(colors, clamp(int(lightness * float(n)), 0, n - 1));
+}
+
+/// Each pixel the colour of `colors` nearest it.
+kernel image.palette@2 {
     requires { field.read; field.write; }
     input source: Image;
+    input colors: Rows<Vec3>;
     output result: Image;
     compute {
         let c = sample(source);
-        let shades = [
-            vec3(0.06, 0.05, 0.12), vec3(0.55, 0.2, 0.4),
-            vec3(0.92, 0.5, 0.2), vec3(1.0, 0.95, 0.7),
-        ];
-        let luma = dot(c.rgb, vec3(0.299, 0.587, 0.114));
-        let k = clamp(int(luma * 4.0), 0, 3);
-        return vec4(shades[k], 1.0);
+        let k = nearest_colour(c.rgb, colors);
+        return vec4(k.x, k.y, k.z, c.a);
+    }
+}
+
+/// Each pixel the colour of `colors`, rows from dark to light, its
+/// lightness falls to (`ramp_colour`).
+kernel image.ramp@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    input colors: Rows<Vec3>;
+    output result: Image;
+    compute {
+        let c = sample(source);
+        let k = ramp_colour(c.rgb, colors);
+        return vec4(k.x, k.y, k.z, c.a);
     }
 }

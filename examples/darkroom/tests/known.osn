@@ -110,6 +110,16 @@ node levelled: image.levels@1 { source <- flat.result; black = 0.2; white = 0.8;
 node curved: image.curve@1 { source <- flat.result; curve <- straight.result; }
 node neutral: image.neutral@1 { n = 17; domain = vec2(289, 17); }
 node looked_up: image.lut@1 { source <- flat.result; lut <- neutral.result; }
+// Three colours from dark to light: black, red, white; the ramp held
+// to them by nearness and by lightness.
+node three: kernel {
+    requires { field.write; }
+    output result: Rows<Vec3>;
+    domain = 3;
+    compute { return match element() { 0 => vec3(0.0, 0.0, 0.0), 1 => vec3(1.0, 0.0, 0.0), _ => vec3(1.0, 1.0, 1.0) }; }
+}
+node nearest: image.palette@2 { source <- ramp.result; colors <- three.result; }
+node ramped: image.ramp@1 { source <- ramp.result; colors <- three.result; }
 
 node even: graph "../../../packages/image.orlapkg/graphs/equalize.osn" { source <- halves.result; }
 node field: graph "../../../packages/image.orlapkg/graphs/distance.osn" { mask <- dot.result; passes = 5; }

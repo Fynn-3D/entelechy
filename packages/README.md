@@ -63,7 +63,10 @@ its interface is held to.
     (`graphs/bloom.osn`), depth of field at a focus the scene gives as
     a row each frame, ACES, colour fringing, darkened corners and grain
     from the noise package's hash; `graphs/nes.osn`, coarse pixels held
-    to four colours.
+    to the colours a scene gives;
+  - palettes a scene gives as rows: each pixel the nearest colour in
+    Oklab (`image.palette@2`), or the colour its lightness falls to,
+    rows from dark to light (`image.ramp@1`).
 
   The `darkroom` example develops a photograph with it, and its replay
   holds each operation to an answer worked by hand on three backends;
