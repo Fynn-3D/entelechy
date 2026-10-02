@@ -1225,8 +1225,9 @@ impl Host {
         Ok(())
     }
 
-    /// Brings a resident Field back into Host memory with the downloaded
-    /// words, dropping the device object. A Field in memory stays as it is.
+    /// Brings a resident Field's downloaded words into Host memory beside
+    /// the device's, which stay: the two are one value, and what the device
+    /// holds can still be drawn from it. A Field in memory stays as it is.
     pub fn materialize(&mut self, handle: Handle, words: Vec<u32>) -> Result<(), HostError> {
         let slot = self.slot_mut(handle)?;
         let (schema, domain) = match &slot.storage {
@@ -1234,7 +1235,10 @@ impl Host {
             Storage::Resident { schema, domain, .. } => (schema.clone(), *domain),
             Storage::Free => return Err(HostError::InvalidHandle(handle)),
         };
-        slot.storage = Storage::Data(FieldData::from_storage(schema, domain, words)?);
+        let data = FieldData::from_storage(schema, domain, words)?;
+        if let Storage::Resident { kept, .. } = &mut slot.storage {
+            *kept = Some(data);
+        }
         Ok(())
     }
 
@@ -1503,7 +1507,14 @@ mod tests {
         host.materialize(resident, vec![0.5f32.to_bits(); 16])
             .unwrap();
         assert_eq!(host.read_pixel(resident, 1, 1).unwrap(), [0.5; 4]);
-        assert!(host.resident(resident).unwrap().is_none());
+        // Brought back, it is still on the device too.
+        assert_eq!(
+            host.resident(resident)
+                .unwrap()
+                .unwrap()
+                .downcast_ref::<u8>(),
+            Some(&7)
+        );
         assert_eq!(host.live(), 2);
         host.release(resident).unwrap();
         host.release(image).unwrap();

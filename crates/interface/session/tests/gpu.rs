@@ -72,10 +72,11 @@ fn chains_and_state_stay_resident_until_observed() {
         if frame == 3 {
             let image = runtime.image(report.output).unwrap();
             assert_eq!(image.pixels()[0][0], 3.0, "state advanced on the device");
-            assert_eq!(runtime.host().resident_count(), runtime.host().live() - 1);
+            // Observed, it is in Host memory and still on the device.
+            assert_eq!(runtime.host().resident_count(), runtime.host().live());
         }
     }
-    // The observed image is an input again, re-uploaded once.
+    // The observed image is an input again, read from the device as is.
     let report = evaluator
         .evaluate(
             &graph,
