@@ -33,7 +33,7 @@
 
 // Lists are runs of the `compact` package; an entry finds its owner by
 // its `owner`.
-use "../../compact.orlapkg";
+use "compact.orlapkg";
 
 struct Body {
     position: Vec2;

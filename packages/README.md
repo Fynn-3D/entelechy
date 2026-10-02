@@ -28,6 +28,13 @@ ORLA_PACKAGES=/path/to/orla/packages orla run scene.osn
 use "image.orlapkg";
 ```
 
+A package names the packages it uses by name, `use "compact.orlapkg";`,
+and finds them beside itself wherever the two are kept together. A
+directory is named for the package its manifest declares, `name@1` in
+`name.orlapkg`, and a scene reaches one package of a name: two editions
+of one are refused, naming both. A Kernel's own id carries the version
+its interface is held to.
+
 - **image** — what Orla does to pictures, over `Image`s in linear light:
   - colour: luminance, sRGB's transfer, HSV and Oklab, the colours of
     heat (`blackbody`) and of the wheel (`hue`), as functions, and

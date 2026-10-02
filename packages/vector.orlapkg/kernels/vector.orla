@@ -31,7 +31,7 @@
 
 // Lists are runs of the `compact` package; an entry finds its owner by
 // its `owner`.
-use "../../compact.orlapkg";
+use "compact.orlapkg";
 
 // A shape as `orla import` writes it, `<stem>.shapes.field`.
 struct Shape {

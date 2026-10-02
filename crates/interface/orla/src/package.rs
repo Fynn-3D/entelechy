@@ -92,6 +92,28 @@ pub fn unpack(file: &Path, dir: &Path) -> Result<usize, String> {
         ));
     }
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    // A refused archive leaves nothing: the directory is this call's own.
+    let unpacked = (|| {
+        unpack_into(file, dir, count, &bytes[at..])?;
+        package_manifest(&orla_session::Disk::default(), &dir.join("package.osn"))
+    })();
+    if let Err(error) = unpacked {
+        let _ = std::fs::remove_dir_all(dir);
+        return Err(error);
+    }
+    Ok(count)
+}
+
+/// Writes the `count` files `bytes` holds into `dir`.
+fn unpack_into(file: &Path, dir: &Path, count: usize, bytes: &[u8]) -> Result<(), String> {
+    let mut at = 0;
+    let take = |at: &mut usize, n: usize| -> Result<&[u8], String> {
+        let slice = bytes
+            .get(*at..*at + n)
+            .ok_or_else(|| format!("{}: the archive ends early", file.display()))?;
+        *at += n;
+        Ok(slice)
+    };
     for _ in 0..count {
         let len = u32::from_le_bytes(take(&mut at, 4)?.try_into().unwrap_or([0; 4])) as usize;
         let path = std::str::from_utf8(take(&mut at, len)?)
@@ -111,8 +133,7 @@ pub fn unpack(file: &Path, dir: &Path) -> Result<usize, String> {
         }
         std::fs::write(&target, data).map_err(|e| format!("{}: {e}", target.display()))?;
     }
-    package_manifest(&orla_session::Disk::default(), &dir.join("package.osn"))?;
-    Ok(count)
+    Ok(())
 }
 
 /// A package's id, needs, and counts of Kernel files, graph presets and

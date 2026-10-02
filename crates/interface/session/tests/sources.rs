@@ -466,3 +466,123 @@ fn a_fault_in_a_shadowing_declaration_is_placed_where_it_is_written() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// A package names a package it uses by its name, and finds it beside
+/// itself wherever the two are kept together: its Kernels' `use` and
+/// its presets' `graph` alike.
+#[test]
+fn a_package_finds_the_packages_it_names_beside_it() {
+    let manifest =
+        |name: &str| format!("package {name}@1 {{ language = 1; ir = 1; }}\nuse \"kernels/\";\n");
+    let dir = scratch("packages-beside", &[]);
+    for sub in [
+        "kept/a.orlapkg/kernels",
+        "kept/a.orlapkg/graphs",
+        "kept/b.orlapkg/kernels",
+        "kept/b.orlapkg/graphs",
+        "scene",
+    ] {
+        std::fs::create_dir_all(dir.join(sub)).unwrap();
+    }
+    for (file, text) in [
+        ("kept/a.orlapkg/package.osn", manifest("a")),
+        (
+            "kept/a.orlapkg/kernels/a.orla",
+            "fn a_one() -> Int { return 1; }\nkernel a.twice@1 { requires { field.read; field.write; } input counts: Rows<Int>; output result: Rows<Int>; compute { return sample(counts) * 2; } }\n".into(),
+        ),
+        (
+            "kept/a.orlapkg/graphs/twice.osn",
+            "use \"../kernels/a.orla\";\ninput counts: Rows<Int>;\nnode once: a.twice@1 { counts <- counts; }\noutput result <- once.result;\n".into(),
+        ),
+        ("kept/b.orlapkg/package.osn", manifest("b")),
+        (
+            "kept/b.orlapkg/kernels/b.orla",
+            "use \"a.orlapkg\";\nkernel b.start@1 { requires { field.write; } output result: Rows<Int>; compute { return element() + a_one(); } }\n".into(),
+        ),
+        (
+            "kept/b.orlapkg/graphs/start.osn",
+            "use \"../kernels/b.orla\";\nnode s: b.start@1 { domain = 3; }\nnode t: graph \"a.orlapkg/graphs/twice.osn\" { counts <- s.result; }\noutput result <- t.result;\n".into(),
+        ),
+        (
+            "scene/scene.osn",
+            "use \"../kept/b.orlapkg\";\nnode p: graph \"../kept/b.orlapkg/graphs/start.osn\" { }\noutput shown <- p.result;\n".into(),
+        ),
+    ] {
+        std::fs::write(dir.join(file), text).unwrap();
+    }
+    let mut session = orla_session::Session::open(&dir.join("scene/scene.osn"), None, 1 << 20);
+    let events = session.sync();
+    assert!(session.graph().is_some(), "{events:?}");
+    session.evaluate(&orla_kernel::Context::default()).unwrap();
+    let (_, words) = session
+        .element_field(&orla_graph::NodeId("p".into()), "result", 2, &[])
+        .unwrap();
+    assert_eq!(words, vec![6]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A name is one package: a directory is named for the package its
+/// manifest declares, and a scene reaching two packages of one name, as
+/// two editions of it, is refused, naming both.
+#[test]
+fn a_name_is_one_package() {
+    let package = |dir: &std::path::Path, at: &str, id: &str| {
+        let root = dir.join(at);
+        std::fs::create_dir_all(root.join("kernels")).unwrap();
+        std::fs::write(
+            root.join("package.osn"),
+            format!("package {id} {{ language = 1; ir = 1; }}\nuse \"kernels/\";\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("kernels/k.orla"),
+            "fn one() -> Int { return 1; }\n",
+        )
+        .unwrap();
+    };
+    let scene = "node s: kernel { requires { field.write; } output result: Rows<Int>; domain = 1; compute { return one(); } }\noutput result <- s.result;\n";
+    let refusal = |dir: &std::path::Path| {
+        let mut session = orla_session::Session::open(&dir.join("scene.osn"), None, 1 << 20);
+        let events = session.sync();
+        (session.graph().is_some(), format!("{events:?}"))
+    };
+
+    let dir = scratch("one-package-editions", &[]);
+    package(&dir, "one/p.orlapkg", "p@1");
+    package(&dir, "two/p.orlapkg", "p@2");
+    std::fs::write(
+        dir.join("scene.osn"),
+        format!("use \"one/p.orlapkg\";\nuse \"two/p.orlapkg\";\n{scene}"),
+    )
+    .unwrap();
+    let (_, said) = refusal(&dir);
+    assert!(
+        said.contains("two packages named `p` are reached")
+            && said.contains("(p@1)")
+            && said.contains("(p@2)"),
+        "{said}"
+    );
+    // One package reached by two spellings is one.
+    std::fs::write(
+        dir.join("scene.osn"),
+        format!("use \"one/p.orlapkg\";\nuse \"one/../one/p.orlapkg\";\n{scene}"),
+    )
+    .unwrap();
+    let (loaded, said) = refusal(&dir);
+    assert!(loaded, "{said}");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let dir = scratch("one-package-misnamed", &[]);
+    package(&dir, "q.orlapkg", "p@1");
+    std::fs::write(
+        dir.join("scene.osn"),
+        format!("use \"q.orlapkg\";\n{scene}"),
+    )
+    .unwrap();
+    let (_, said) = refusal(&dir);
+    assert!(
+        said.contains("the directory `q.orlapkg` declares the package `p@1`"),
+        "{said}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

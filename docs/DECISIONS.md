@@ -776,3 +776,29 @@ every demo in seconds, and a new one joins by being written.
 
 **Where.** The recipe's `replays` step in [PROCESS](../PROCESS.md); the
 `alike` line in [`replay`](../crates/interface/session/src/replay.rs).
+
+## A name is one package; a package's names carry its name
+
+A package is found by its name, and the name is a fact the manifest
+declares and its directory carries: `voxel@1` is `voxel.orlapkg`. A
+scene reaches one package of a name; two, as two editions of one, are
+refused, naming both. A package names the packages it uses by name and
+finds them beside itself. There are no qualified names: a document's
+functions, structs and types are scoped by their document, so two
+packages keep a helper of one name each, and only a name the scene
+calls must answer once. A package's public names carry its name
+(`voxel_walk`, `VoxelBox`), so a scene using many calls each plainly.
+
+**Why.** A name that is checked is one a reader and a `use` agree on;
+two editions of one package in one reach meet as near-alike
+declarations, and refusing them by package says what an author can fix.
+A qualified name would be a second form of every name, through the
+language, the IR's function names, the protocol's reads and every
+message; scoping by document already keeps packages apart, and a prefix
+costs a few characters a public name.
+
+**Where.** `package_manifest` and `one_package_of_its_name` in
+[`sources.rs`](../crates/interface/session/src/sources.rs), with
+`resolve_package` for the search beside a package; the `scoped`
+renaming there; the recipe's check of every package in one scene in
+[PROCESS](../PROCESS.md).

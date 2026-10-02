@@ -16,7 +16,7 @@
 //   mesh      Rows<Point>   position, normal, uv — the rest pose
 //
 // Rotations and transforms are the `transform` package's.
-use "../../transform.orlapkg";
+use "transform.orlapkg";
 
 // A joint's `parent` is its place in this same row, or -1 at the root.
 // `bind` is the inverse bind matrix: where the joint was when the mesh

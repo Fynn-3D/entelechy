@@ -1505,7 +1505,8 @@ fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stderr).contains("packed 3 file(s)"));
-    let unpacked = dir.join("unpacked.orlapkg");
+    let installed = dir.join("installed");
+    let unpacked = installed.join("pixelfx.orlapkg");
     let output = Command::new(orla)
         .arg("unpack")
         .arg(&archive)
@@ -1517,6 +1518,23 @@ fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    // A directory is named for the package it holds: unpacked under
+    // another name, it is refused and nothing is left.
+    let misnamed = dir.join("other.orlapkg");
+    let output = Command::new(orla)
+        .arg("unpack")
+        .arg(&archive)
+        .arg(&misnamed)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("a package's directory is named for it, `pixelfx.orlapkg`"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!misnamed.exists());
     for file in ["package.osn", "kernels/pixelfx.orla", "graphs/nes.osn"] {
         assert_eq!(
             std::fs::read(example.join(file)).unwrap(),
@@ -1541,13 +1559,13 @@ fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
     std::fs::create_dir_all(&elsewhere).unwrap();
     std::fs::write(
         elsewhere.join("scene.osn"),
-        "use \"unpacked.orlapkg\";\nnode source: kernel { requires { field.write; } output result: Image; domain = vec2(8, 8); compute { return vec4(0.5, 0.5, 0.5, 1.0); } }\nnode toned: pixelfx.palette@1 { source <- source.result; }\noutput result <- toned.result;\n",
+        "use \"pixelfx.orlapkg\";\nnode source: kernel { requires { field.write; } output result: Image; domain = vec2(8, 8); compute { return vec4(0.5, 0.5, 0.5, 1.0); } }\nnode toned: pixelfx.palette@1 { source <- source.result; }\noutput result <- toned.result;\n",
     )
     .unwrap();
     let output = Command::new(orla)
         .arg("check")
         .arg(elsewhere.join("scene.osn"))
-        .env("ORLA_PACKAGES", &dir)
+        .env("ORLA_PACKAGES", &installed)
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1560,13 +1578,13 @@ fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
     // own `use` resolves from the package's real location.
     std::fs::write(
         elsewhere.join("preset.osn"),
-        "use \"unpacked.orlapkg\";\nnode source: kernel { requires { field.write; } output result: Image; domain = vec2(8, 8); compute { return vec4(0.5, 0.5, 0.5, 1.0); } }\nnode look: graph \"unpacked.orlapkg/graphs/nes.osn\" { source <- source.result; cell = 4.0; }\noutput result <- look.result;\n",
+        "use \"pixelfx.orlapkg\";\nnode source: kernel { requires { field.write; } output result: Image; domain = vec2(8, 8); compute { return vec4(0.5, 0.5, 0.5, 1.0); } }\nnode look: graph \"pixelfx.orlapkg/graphs/nes.osn\" { source <- source.result; cell = 4.0; }\noutput result <- look.result;\n",
     )
     .unwrap();
     let output = Command::new(orla)
         .arg("check")
         .arg(elsewhere.join("preset.osn"))
-        .env("ORLA_PACKAGES", &dir)
+        .env("ORLA_PACKAGES", &installed)
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1584,7 +1602,7 @@ fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!output.status.success(), "{stdout}");
     assert!(
-        stdout.contains("elsewhere/unpacked.orlapkg: No such file"),
+        stdout.contains("elsewhere/pixelfx.orlapkg: No such file"),
         "{stdout}"
     );
     // `package` checks what the package holds: a Kernel that does not
@@ -1617,7 +1635,7 @@ fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
     let output = Command::new(orla)
         .arg("check")
         .arg(elsewhere.join("scene.osn"))
-        .env("ORLA_PACKAGES", &dir)
+        .env("ORLA_PACKAGES", &installed)
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);

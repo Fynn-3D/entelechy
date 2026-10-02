@@ -12,8 +12,8 @@
 
 // Drawings are the `vector` package's; lists are runs of the `compact`
 // package's.
-use "../../vector.orlapkg";
-use "../../compact.orlapkg";
+use "vector.orlapkg";
+use "compact.orlapkg";
 
 // A glyph as `orla import` writes it: its code, its advance in the
 // font's units, its segments, and its box in ems.

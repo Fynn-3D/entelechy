@@ -773,9 +773,13 @@ It holds its Kernel files, its graph presets (`.osn` placed by path,
 a scene reads by path. `use "image.orlapkg";` brings its Kernels and
 declarations in, as if the scene used what the manifest uses, when the
 manifest's versions are no newer than this Orla's (`orla version` prints
-`orla.api`, `orla.language`, `orla.ir`, `orla.package`). A `use` naming
-nothing beside the document is looked for by name in the directories
-`ORLA_PACKAGES` lists. `orla pack` writes a package as one `.orlapkg`
+`orla.api`, `orla.language`, `orla.ir`, `orla.package`). The directory
+is named for the package it holds, and a name is one package: a scene
+reaching two packages of one name, two editions of it, is refused. A
+`use` naming nothing beside the document is looked for by name beside
+the package the document is in, so a package names the packages it uses
+(`use "compact.orlapkg";`) wherever they are kept together, then in the
+directories `ORLA_PACKAGES` lists. `orla pack` writes a package as one `.orlapkg`
 file, `orla unpack` reads it back, `orla package` says what one holds. A
 Kernel reached by two paths is one file and one owner.
 

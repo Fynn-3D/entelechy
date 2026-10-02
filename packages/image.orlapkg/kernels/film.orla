@@ -3,7 +3,7 @@
 // shows is.
 use "tonemap.orla";
 use "filter.orla";
-use "../../noise.orlapkg";
+use "noise.orlapkg";
 
 /// The picture smaller, each pixel the mean of four samples: all its
 /// light (`over` 0), or only what is past `over`. w, the depth, is kept.

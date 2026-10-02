@@ -40,7 +40,7 @@ node layout: font.layout@1 {
 
 // The glyphs placed, as a drawing in pixels.
 node counts: font.counts@1 { placed <- layout.result; glyphs <- glyphs; }
-node lists: graph "../../compact.orlapkg/graphs/runs.osn" { counts <- counts.result; }
+node lists: graph "compact.orlapkg/graphs/runs.osn" { counts <- counts.result; }
 node shapes: font.shapes@1 { placed <- layout.result; glyphs <- glyphs; counts <- counts.result; ends <- lists.ends; color = color; }
 node segments: font.segments@1 {
     total <- lists.entries;
@@ -55,7 +55,7 @@ node stops: font.no_stops@1 { domain = 1; }
 node canvas: Grid<Int> { domain = window(); }
 node page: font.page@1 { canvas <- canvas.result; domain = 1; }
 node look: vector.whole@1 { view <- page.result; }
-node drawn: graph "../../vector.orlapkg/graphs/draw.osn" {
+node drawn: graph "vector.orlapkg/graphs/draw.osn" {
     shapes <- shapes.result;
     segments <- segments.result;
     stops <- stops.result;

@@ -248,8 +248,10 @@ fn in_package(store: &dyn Store, path: &Path) -> Option<PathBuf> {
     store.exists(&inside).then_some(inside)
 }
 
-/// A missing path, looked up by name as a package in each of the store's
-/// [`Store::packages`].
+/// A missing path, looked up by name as a package: beside the package
+/// the path lies in, when it lies in one, so a package names the
+/// packages it uses wherever they are kept together; then in each of
+/// the store's [`Store::packages`].
 fn resolve_package(store: &dyn Store, path: &Path) -> PathBuf {
     if store.exists(path) {
         return path.to_path_buf();
@@ -257,7 +259,9 @@ fn resolve_package(store: &dyn Store, path: &Path) -> PathBuf {
     let Some(name) = path.file_name() else {
         return path.to_path_buf();
     };
-    for dir in store.packages() {
+    let beside =
+        package_holding(store, path).and_then(|package| Some(package.parent()?.to_path_buf()));
+    for dir in beside.iter().chain(store.packages()) {
         let candidate = dir.join(name);
         if store.is_file(&candidate.join("package.osn")) {
             return candidate;
@@ -308,6 +312,20 @@ pub fn package_manifest(
             manifest.display()
         ));
     };
+    // A directory named `name.orlapkg` holds the package `name`: the
+    // name a `use` finds it by is the name it declares.
+    let dir = manifest.parent().unwrap_or_else(|| Path::new("."));
+    if dir.extension().is_some_and(|ext| ext == "orlapkg") {
+        let named = dir.file_stem().unwrap_or_default().to_string_lossy();
+        let declares = declared.id.value.split('@').next().unwrap_or_default();
+        if named != declares {
+            return Err(format!(
+                "{}: the directory `{named}.orlapkg` declares the package `{}`; a package's directory is named for it, `{declares}.orlapkg`",
+                manifest.display(),
+                declared.id.value
+            ));
+        }
+    }
     if declared.language > orla_language::LANGUAGE_VERSION {
         return Err(format!(
             "package {} needs language {}, and this Orla has language {}",
@@ -335,47 +353,90 @@ pub type Declarations = (
 );
 
 /// Every document a `use` list reaches, recursively, each once,
-/// dependencies first.
+/// dependencies first. A name is one package: two packages of one name
+/// in the reach are refused, naming both.
 pub fn used_documents(
     store: &dyn Store,
     base: &Path,
     uses: &[orla_language::Use],
 ) -> Result<Vec<PathBuf>, String> {
+    use std::collections::{BTreeMap, BTreeSet};
+    struct Reach {
+        visited: BTreeSet<PathBuf>,
+        packages: BTreeMap<String, PathBuf>,
+        out: Vec<PathBuf>,
+    }
     fn gather(
         store: &dyn Store,
         base: &Path,
         uses: &[orla_language::Use],
-        visited: &mut std::collections::BTreeSet<PathBuf>,
-        out: &mut Vec<PathBuf>,
+        reach: &mut Reach,
     ) -> Result<(), String> {
         for item in uses {
             let path = base.join(&item.path.value);
             used_through_its_manifest(store, base, &path)?;
             for file in expand_use(store, &path, item.path.value.ends_with('/'))? {
                 let key = store.canonical(&file).unwrap_or_else(|_| file.clone());
-                if !visited.insert(key) {
+                if !reach.visited.insert(key) {
                     continue;
+                }
+                if let Some(package) = package_holding(store, &file) {
+                    one_package_of_its_name(store, &mut reach.packages, package)?;
                 }
                 let document = store.document(&file)?;
                 let dir = file
                     .parent()
                     .unwrap_or_else(|| Path::new("."))
                     .to_path_buf();
-                gather(store, &dir, &document.uses, visited, out)?;
-                out.push(file);
+                gather(store, &dir, &document.uses, reach)?;
+                reach.out.push(file);
             }
         }
         Ok(())
     }
-    let mut out = Vec::new();
-    gather(
-        store,
-        base,
-        uses,
-        &mut std::collections::BTreeSet::new(),
-        &mut out,
-    )?;
-    Ok(out)
+    let mut reach = Reach {
+        visited: BTreeSet::new(),
+        packages: BTreeMap::new(),
+        out: Vec::new(),
+    };
+    gather(store, base, uses, &mut reach)?;
+    Ok(reach.out)
+}
+
+/// Records `package` as the one package of its name in a reach;
+/// another of the name already there refuses the reach.
+fn one_package_of_its_name(
+    store: &dyn Store,
+    packages: &mut std::collections::BTreeMap<String, PathBuf>,
+    package: PathBuf,
+) -> Result<(), String> {
+    let canonical = |p: &Path| store.canonical(p).unwrap_or_else(|_| p.to_path_buf());
+    let name = package
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    match packages.get(&name) {
+        Some(held) if canonical(held) != canonical(&package) => {
+            let id = |dir: &Path| {
+                package_manifest(store, &dir.join("package.osn"))
+                    .map(|declared| declared.id.value)
+                    .unwrap_or_else(|_| name.clone())
+            };
+            Err(format!(
+                "two packages named `{name}` are reached, {} ({}) and {} ({}); a scene reaches one package of a name",
+                held.display(),
+                id(held),
+                package.display(),
+                id(&package)
+            ))
+        }
+        Some(_) => Ok(()),
+        None => {
+            packages.insert(name, package);
+            Ok(())
+        }
+    }
 }
 
 /// The declarations a document's `use` items bring in, recursively.
@@ -462,12 +523,14 @@ impl Declared {
 
 /// What a walk of the `use` items gathers: each document's functions,
 /// dependencies first; each distinct struct or type, with every document
-/// that declares it; and the documents each one uses directly.
+/// that declares it; the documents each one uses directly; and the one
+/// package of each name.
 #[derive(Default)]
 struct Reach {
     functions: Vec<(orla_language::FnDecl, PathBuf)>,
     declared: Vec<(Declared, Vec<PathBuf>)>,
     uses: std::collections::HashMap<PathBuf, Vec<PathBuf>>,
+    packages: std::collections::BTreeMap<String, PathBuf>,
 }
 
 /// As [`declarations_for`], for a document at `origin`, so a `use`
@@ -518,6 +581,9 @@ pub fn declarations_within(
                 }
                 if !visited.insert(key.clone()) {
                     continue;
+                }
+                if let Some(package) = package_holding(store, &file) {
+                    one_package_of_its_name(store, &mut reach.packages, package)?;
                 }
                 stack.push(key);
                 let document = store.document(&file)?;
