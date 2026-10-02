@@ -1,0 +1,12 @@
+//! The voxel package: worlds of voxels drawn by walking rays through
+//! them, as functions any Kernel calls. A ray walks a volume voxel by
+//! voxel to the first that is not empty; a box of voxels placed in the
+//! world, turned about its up axis, is met by the same walk carried into
+//! its frame, so a still world and the bodies moving in it are drawn
+//! alike; what a ray meets is lit by the sky and a sun, or by lights that
+//! fade with distance, kept to a few steps as pixel art keeps them, and
+//! fades into fog or the dark. There are no Kernels here, only the
+//! arithmetic they share.
+package voxel@1 { language = 1; ir = 1; }
+
+use "kernels/";

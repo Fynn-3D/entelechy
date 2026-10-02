@@ -1,0 +1,200 @@
+// Worlds of voxels: walking a ray through a volume, meeting boxes of
+// voxels placed in the world, lighting what is met, and the camera the
+// rays leave from. A voxel holds an Int, 0 empty; what a voxel's number
+// means (a palette's color, a material) is the caller's.
+
+/// A volume of voxels.
+type Voxels = Volume<Int>;
+
+// ---------------------------------------------------------------- walking
+
+/// A ray's walk through a box of voxels [0, n): the cell it stands in,
+/// the distances to the cells' next sides, the distance walked, the face
+/// it entered by (pointing back along the ray), and the voxel found: 0
+/// while walking, its number once found, -1 once out of the box.
+struct VoxelStep { cell: Vec3; side: Vec3; t: Float; face: Vec3; id: Int; }
+
+fn voxel_over(d: Float) -> Float {
+    return if abs(d) < 0.000001 { if d < 0.0 { -1000000.0 } else { 1000000.0 } } else { 1.0 / d };
+}
+
+fn voxel_within(c: Vec3, n: Vec3) -> Bool {
+    return c.x >= 0.0 && c.x < n.x && c.y >= 0.0 && c.y < n.y && c.z >= 0.0 && c.z < n.z;
+}
+
+/// A ray from `from` along `dir`, in voxels, walked (Amanatides and Woo)
+/// through the box of `n` voxels at `base` in the volume `vox` (a walk
+/// takes at most 1024 steps: boxes of a few hundred voxels a side), to the
+/// first voxel neither empty nor numbered from `pass.x` to `pass.y` (water
+/// a ray sees through, say; `ivec2(1, 0)` passes nothing); id 0 for none.
+/// Its distance `t` is in voxels along `dir`.
+fn voxel_walk_past(vox: Voxels, from: Vec3, dir: Vec3, base: Vec3, n: Vec3, pass: IVec2) -> VoxelStep {
+    let ix = voxel_over(dir.x);
+    let iy = voxel_over(dir.y);
+    let iz = voxel_over(dir.z);
+    let ax = (0.0 - from.x) * ix; let bx = (n.x - from.x) * ix;
+    let ay = (0.0 - from.y) * iy; let by = (n.y - from.y) * iy;
+    let az = (0.0 - from.z) * iz; let bz = (n.z - from.z) * iz;
+    let tnear = max(max(min(ax, bx), min(ay, by)), max(min(az, bz), 0.0));
+    let tfar = min(min(max(ax, bx), max(ay, by)), max(az, bz));
+    let p = from + dir * (tnear + 0.0005);
+    let cell = clamp(floor(p), vec3(0.0, 0.0, 0.0), n - 1.0);
+    let step = vec3(if dir.x < 0.0 { -1.0 } else { 1.0 }, if dir.y < 0.0 { -1.0 } else { 1.0 }, if dir.z < 0.0 { -1.0 } else { 1.0 });
+    let delta = vec3(abs(ix), abs(iy), abs(iz));
+    let side = vec3((cell.x + max(step.x, 0.0) - from.x) * ix, (cell.y + max(step.y, 0.0) - from.y) * iy, (cell.z + max(step.z, 0.0) - from.z) * iz);
+    let entry = if tnear == min(ax, bx) { vec3(0.0 - step.x, 0.0, 0.0) } else if tnear == min(ay, by) { vec3(0.0, 0.0 - step.y, 0.0) } else { vec3(0.0, 0.0, 0.0 - step.z) };
+    let start = VoxelStep { cell: cell, side: side, t: tnear, face: entry, id: if tfar > tnear { 0 } else { -1 } };
+    let found = loop 1024 with w = start until w.id != 0 {
+        let id = at(vox, w.cell + base);
+        if id > 0 && !(id >= pass.x && id <= pass.y) { VoxelStep { ..w, id: id } } else {
+            let x_first = w.side.x < w.side.y && w.side.x < w.side.z;
+            let y_first = !x_first && w.side.y < w.side.z;
+            let next = if x_first { w.cell + vec3(step.x, 0.0, 0.0) } else if y_first { w.cell + vec3(0.0, step.y, 0.0) } else { w.cell + vec3(0.0, 0.0, step.z) };
+            let t = if x_first { w.side.x } else if y_first { w.side.y } else { w.side.z };
+            let side_next = if x_first { w.side + vec3(delta.x, 0.0, 0.0) } else if y_first { w.side + vec3(0.0, delta.y, 0.0) } else { w.side + vec3(0.0, 0.0, delta.z) };
+            let face = if x_first { vec3(0.0 - step.x, 0.0, 0.0) } else if y_first { vec3(0.0, 0.0 - step.y, 0.0) } else { vec3(0.0, 0.0, 0.0 - step.z) };
+            VoxelStep { cell: next, side: side_next, t: t, face: face, id: if voxel_within(next, n) { 0 } else { -1 } }
+        }
+    };
+    return if found.id > 0 { found } else { VoxelStep { ..found, id: 0 } };
+}
+
+/// The first voxel that is not empty, as `voxel_walk_past` passing none.
+fn voxel_walk(vox: Voxels, from: Vec3, dir: Vec3, base: Vec3, n: Vec3) -> VoxelStep {
+    return voxel_walk_past(vox, from, dir, base, n, ivec2(1, 0));
+}
+
+// ---------------------------------------------------------------- boxes in the world
+
+/// A box of voxels standing in the world: its `n` voxels at `base` in its
+/// volume, each `size` world units wide, the middle of its floor at
+/// `foot`, turned by `turn` about the up axis (y). A still world is a box
+/// too, its floor's middle where it stands and its turn 0.
+struct VoxelBox { base: Vec3; n: Vec3; size: Float; foot: Vec3; turn: Float; }
+
+/// What a ray met: how far along it in world units, the voxel's number
+/// (0 nothing), and the face met, in the world.
+struct VoxelMeet { t: Float; id: Int; face: Vec3; }
+
+fn voxel_nothing() -> VoxelMeet { return VoxelMeet { t: 1000000.0, id: 0, face: vec3(0.0, 1.0, 0.0) }; }
+
+/// The nearer of two meetings.
+fn voxel_nearer(a: VoxelMeet, b: VoxelMeet) -> VoxelMeet { return if b.t < a.t { b } else { a }; }
+
+/// A world point in a box's own frame, in its voxels, its floor's middle
+/// at the origin.
+fn voxel_local(m: Vec3, foot: Vec3, turn: Float, size: Float) -> Vec3 {
+    let d = m - foot;
+    let c = cos(turn);
+    let s = sin(turn);
+    return vec3(d.x * c - d.z * s, d.y, d.x * s + d.z * c) / size;
+}
+
+/// A direction in a box's own frame turned back into the world.
+fn voxel_unturned(v: Vec3, turn: Float) -> Vec3 {
+    let c = cos(turn);
+    let s = sin(turn);
+    return vec3(v.x * c + v.z * s, v.y, 0.0 - v.x * s + v.z * c);
+}
+
+/// The first voxel of box `b` a ray from `eye` along the unit `dir` (the
+/// world's) meets, its voxels within `near` world units of the eye left
+/// out (so a box beside the camera never fills the picture), and those
+/// numbered `pass.x` to `pass.y` seen through.
+fn voxel_meet_past(vox: Voxels, b: VoxelBox, eye: Vec3, dir: Vec3, near: Float, pass: IVec2) -> VoxelMeet {
+    let middle = b.foot + vec3(0.0, b.n.y * 0.5 * b.size, 0.0);
+    let to = middle - eye;
+    let across = length(to - dir * dot(to, dir));
+    let half = length(b.n) * 0.5 * b.size;
+    if across > half || dot(to, dir) < 0.0 - half { return voxel_nothing(); }
+    let e = voxel_local(eye, b.foot, b.turn, b.size) + vec3(b.n.x * 0.5, 0.0, b.n.z * 0.5);
+    let d = voxel_local(dir, vec3(0.0, 0.0, 0.0), b.turn, 1.0);
+    let skip = near / b.size;
+    let w = voxel_walk_past(vox, e + d * skip, d, b.base, b.n, pass);
+    return if w.id > 0 { VoxelMeet { t: (w.t + skip) * b.size, id: w.id, face: voxel_unturned(w.face, b.turn) } } else { voxel_nothing() };
+}
+
+/// The first voxel of box `b` a ray meets, as `voxel_meet_past` seeing
+/// through none.
+fn voxel_meet(vox: Voxels, b: VoxelBox, eye: Vec3, dir: Vec3, near: Float) -> VoxelMeet {
+    return voxel_meet_past(vox, b, eye, dir, near, ivec2(1, 0));
+}
+
+// ---------------------------------------------------------------- light
+
+/// The sky and a sun on a face: the sky brighter on faces turned up, the
+/// sun's light (`sun` a unit direction toward it) unless `shaded`, warm
+/// where it falls and cool where only the sky does; kept to `steps` steps.
+fn voxel_daylight(face: Vec3, sun: Vec3, shaded: Bool, steps: Float) -> Vec3 {
+    let sky = 0.5 + 0.12 * face.y;
+    let direct = if shaded { 0.0 } else { max(dot(face, sun), 0.0) * 0.7 };
+    let amount = floor((sky + direct) * steps + 0.5) / steps;
+    let tint = mix(vec3(0.72, 0.8, 0.96), vec3(1.04, 0.98, 0.9), clamp(direct * 1.4, 0.0, 1.0));
+    return amount * tint;
+}
+
+/// Whether a place, `from` in a box's voxels, is shaded from a sun along
+/// `sun` (a unit direction toward it, in the box's frame): a walk toward
+/// it meets a voxel, those numbered `pass.x` to `pass.y` seen through.
+fn voxel_shaded(vox: Voxels, from: Vec3, sun: Vec3, base: Vec3, n: Vec3, pass: IVec2) -> Bool {
+    return voxel_walk_past(vox, from + sun * 0.02, sun, base, n, pass).id > 0;
+}
+
+/// A light at `at`, of `color`, reaching `reach` world units, falling off
+/// with the square of the share of that it has come.
+struct VoxelLight { at: Vec3; reach: Float; color: Vec3; }
+
+/// A light's color on a face at `p`: falling off with distance, brighter
+/// on faces turned to it.
+fn voxel_light(p: Vec3, face: Vec3, l: VoxelLight) -> Vec3 {
+    let to = l.at - p;
+    let d = length(to);
+    let fall = clamp(1.0 - d / l.reach, 0.0, 1.0);
+    let facing = 0.35 + 0.65 * max(dot(face, to / max(d, 0.001)), 0.0);
+    return l.color * fall * fall * facing;
+}
+
+/// A flame's flicker at a place and time, 0.8 to 1.
+fn voxel_flicker(time: Float, p: Vec3) -> Float { return 0.9 + 0.1 * sin(time * 13.0 + p.x) * sin(time * 7.0 + p.z); }
+
+/// Light kept to `steps` steps a channel, as pixel art keeps it.
+fn voxel_stepped(light: Vec3, steps: Float) -> Vec3 { return floor(light * steps + 0.5) / steps; }
+
+/// A color seen through haze to `color_of_haze`, the more the farther
+/// (`thickness` a world unit).
+fn voxel_haze(color: Vec3, distance: Float, thickness: Float, color_of_haze: Vec3) -> Vec3 {
+    return mix(color, color_of_haze, clamp(1.0 - exp(0.0 - distance * thickness), 0.0, 1.0));
+}
+
+/// A color swallowed by the dark: kept by e to the minus `distance` over
+/// `depth`, so at `depth` world units a little over a third is left.
+fn voxel_dark(color: Vec3, distance: Float, depth: Float) -> Vec3 { return color * exp(0.0 - distance / depth); }
+
+// ---------------------------------------------------------------- the camera
+
+/// A camera: where it stands, which way it looks, its right and up, and
+/// its focal length in pixels.
+struct VoxelCamera { eye: Vec3; fwd: Vec3; right: Vec3; up: Vec3; focal: Float; }
+
+/// A camera looking at `look` from `distance` away, turned `yaw` about the
+/// up axis and tipped `pitch` down (radians; yaw 0 looks toward -z).
+fn voxel_orbit(look: Vec3, yaw: Float, pitch: Float, distance: Float, focal: Float) -> VoxelCamera {
+    let fwd = vec3(0.0 - sin(yaw) * cos(pitch), 0.0 - sin(pitch), 0.0 - cos(yaw) * cos(pitch));
+    let right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
+    let up = cross(right, fwd);
+    return VoxelCamera { eye: look - fwd * distance, fwd: fwd, right: right, up: up, focal: focal };
+}
+
+/// The ray through a pixel's middle `pixel` of a picture of `dims`.
+fn voxel_ray(cam: VoxelCamera, pixel: Vec2, dims: Vec2) -> Vec3 {
+    return normalize(cam.fwd * cam.focal + cam.right * (pixel.x - dims.x * 0.5) - cam.up * (pixel.y - dims.y * 0.5));
+}
+
+/// A place as a pixel of a picture of `dims`, and how far before the
+/// camera it is (negative behind).
+fn voxel_project(cam: VoxelCamera, m: Vec3, dims: Vec2) -> Vec3 {
+    let d = m - cam.eye;
+    let z = dot(d, cam.fwd);
+    let s = cam.focal / max(z, 0.01);
+    return vec3(dims.x * 0.5 + dot(d, cam.right) * s, dims.y * 0.5 - dot(d, cam.up) * s, z);
+}

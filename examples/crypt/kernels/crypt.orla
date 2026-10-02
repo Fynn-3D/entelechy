@@ -1,0 +1,115 @@
+// A crypt drawn with the voxel package: a chamber of 48 by 24 by 48
+// voxels of a quarter meter, baked once (flagstones, brick walls, four
+// pillars, a vault, torches on the walls, a pool of water in a corner),
+// and a statue in a box of its own at the middle, turning. A ray a pixel
+// walks the chamber and the statue's box; by firelight (the torches and
+// a lantern going round) the far is swallowed by the dark, by daylight
+// (the vault open to the sky) the sun casts shadows, the water is seen
+// through to the pool's floor, and the far fades into haze.
+use "../../../packages/voxel.orlapkg";
+
+/// Voxel numbers: 1 flagstone, 2 brick, 3 stone, 4 water, 5 torch, 6 iron,
+/// 7 marble, 8 gold.
+fn crypt_color(id: Int) -> Vec3 {
+    return match id {
+        1 => vec3(0.36, 0.34, 0.33), 2 => vec3(0.52, 0.3, 0.22), 3 => vec3(0.45, 0.45, 0.48), 4 => vec3(0.2, 0.35, 0.5),
+        5 => vec3(1.0, 0.75, 0.3), 6 => vec3(0.2, 0.2, 0.22), 7 => vec3(0.85, 0.84, 0.8), _ => vec3(0.95, 0.75, 0.25)
+    };
+}
+fn glows(id: Int) -> Bool { return id == 5; }
+
+/// The chamber's measures: voxels a side, meters a voxel.
+fn chamber() -> Vec3 { return vec3(48.0, 24.0, 48.0); }
+fn grain() -> Float { return 0.25; }
+
+/// The torches, k 0 to 3, on the walls' middles, 2 m up, in meters from
+/// the chamber's floor middle.
+fn torch_at(k: Int) -> Vec3 {
+    return match k { 0 => vec3(5.6, 2.0, 0.0), 1 => vec3(-5.6, 2.0, 0.0), 2 => vec3(0.0, 2.0, 5.6), _ => vec3(0.0, 2.0, -5.6) };
+}
+
+/// The chamber at a voxel: `open` its vault open to the sky.
+fn chamber_at(c: IVec3, open: Bool) -> Int {
+    let m = (vec3(float(c.x), float(c.y), float(c.z)) + vec3(0.5, 0.5, 0.5)) * grain() - vec3(6.0, 0.0, 6.0);
+    let pool = m.x > 2.5 && m.z > 2.5 && m.x < 5.0 && m.z < 5.0;
+    if m.y < 0.5 { return if pool && m.y >= 0.25 { 0 } else if fract(m.x * 0.8) < 0.08 || fract(m.z * 0.8) < 0.08 { 3 } else { 1 }; }
+    if pool && m.y < 0.75 { return 4; }
+    let wall = abs(m.x) > 5.75 || abs(m.z) > 5.75;
+    let vault = 5.5 - 0.06 * (m.x * m.x + m.z * m.z) * 0.25;
+    if wall { return if fract(m.y * 2.0) < 0.15 { 3 } else { 2 }; }
+    if !open && m.y > vault { return 3; }
+    let torch = loop 4 with hit = 0 until hit != 0 {
+        let t = torch_at(index());
+        let d = m - t;
+        if length(d) < 0.2 { 5 } else if abs(d.x) < 0.1 && abs(d.z) < 0.1 && d.y < -0.1 && d.y > -0.5 { 6 } else { 0 }
+    };
+    if torch != 0 { return torch; }
+    let pillar = length(abs(vec2(m.x, m.z)) - vec2(3.0, 3.0)) < 0.45 && !(m.x > 2.0 && m.z > 2.0);
+    return if pillar { 3 } else { 0 };
+}
+
+kernel crypt.bake@1 {
+    requires { field.write; }
+    param open: Int = 0;
+    output result: Voxels;
+    compute { return chamber_at(icoord(), open != 0); }
+}
+
+/// The statue: a figure on a plinth in a box of 16 by 24 by 16 voxels, a
+/// gold crown, its arm held out (so its turning shows).
+fn statue_at(c: IVec3) -> Int {
+    let q = vec3(float(c.x) + 0.5 - 8.0, float(c.y) + 0.5, float(c.z) + 0.5 - 8.0);
+    if q.y < 3.0 { return if abs(q.x) < 4.0 && abs(q.z) < 4.0 { 3 } else { 0 }; }
+    let body = length(vec2(q.x, q.z) / vec2(2.2, 1.6)) < 1.0 && q.y < 15.0;
+    let head = length(q - vec3(0.0, 17.0, 0.0)) < 2.2;
+    let crown = q.y > 18.5 && q.y < 20.0 && abs(length(vec2(q.x, q.z)) - 1.6) < 0.5;
+    let arm = q.y > 11.0 && q.y < 12.5 && q.x > 1.5 && q.x < 7.0 && abs(q.z) < 0.8;
+    return if crown { 8 } else if body || head || arm { 7 } else { 0 };
+}
+
+kernel crypt.statue@1 {
+    requires { field.write; }
+    output result: Voxels;
+    compute { return statue_at(icoord()); }
+}
+
+/// The picture: the camera going round the chamber's middle; by
+/// firelight or (`open`) by day.
+kernel crypt.draw@1 {
+    requires { field.read; field.write; time.read; }
+    input chamber: Voxels;
+    input statue: Voxels;
+    param open: Int = 0;
+    output result: Image;
+    compute {
+        let t = time();
+        let dims = domain();
+        let cam = voxel_orbit(vec3(0.0, 1.5, 0.0), t * 0.3 + 0.6, 0.35, 6.0, dims.y * 0.9);
+        let dir = voxel_ray(cam, coord() + vec2(0.5, 0.5), dims);
+        let room = VoxelBox { base: vec3(0.0, 0.0, 0.0), n: chamber(), size: grain(), foot: vec3(0.0, 0.0, 0.0), turn: 0.0 };
+        let figure = VoxelBox { base: vec3(0.0, 0.0, 0.0), n: vec3(16.0, 24.0, 16.0), size: 0.1, foot: vec3(0.0, 0.5, 0.0), turn: t * 0.8 };
+        // By day the water is seen through.
+        let pass = if open != 0 { ivec2(4, 4) } else { ivec2(1, 0) };
+        let met = voxel_nearer(voxel_meet_past(chamber, room, cam.eye, dir, 0.3, pass), voxel_meet(statue, figure, cam.eye, dir, 0.0));
+        if met.id == 0 {
+            let sky = mix(vec3(0.75, 0.82, 0.92), vec3(0.35, 0.5, 0.8), clamp(dir.y, 0.0, 1.0));
+            return if open != 0 { vec4(sky.x, sky.y, sky.z, 1.0) } else { vec4(0.0, 0.0, 0.0, 1.0) };
+        }
+        let p = cam.eye + dir * met.t;
+        if glows(met.id) { let g = crypt_color(met.id) * 1.1; return vec4(g.x, g.y, g.z, 1.0); }
+        if open != 0 {
+            let sun = normalize(vec3(0.4, 0.8, 0.3));
+            let at = voxel_local(p + met.face * 0.01, vec3(0.0, 0.0, 0.0), 0.0, grain()) + vec3(24.0, 0.0, 24.0);
+            let shaded = voxel_shaded(chamber, at, sun, vec3(0.0, 0.0, 0.0), chamber(), pass);
+            let lit = crypt_color(met.id) * voxel_daylight(met.face, sun, shaded, 7.0);
+            let far = voxel_haze(lit, met.t, 0.05, vec3(0.75, 0.8, 0.88));
+            return vec4(far.x, far.y, far.z, 1.0);
+        }
+        let flicker = voxel_flicker(t, p);
+        let torches = loop 4 with sum = vec3(0.0, 0.0, 0.0) { sum + voxel_light(p, met.face, VoxelLight { at: torch_at(index()), reach: 7.0, color: vec3(1.0, 0.62, 0.3) }) * flicker };
+        let lantern = voxel_light(p, met.face, VoxelLight { at: vec3(cos(t) * 3.5, 1.2, sin(t) * 3.5), reach: 6.0, color: vec3(0.9, 0.85, 0.7) });
+        let light = voxel_stepped(vec3(0.04, 0.045, 0.07) + torches + lantern, 7.0);
+        let seen = voxel_dark(crypt_color(met.id) * light, met.t, 14.0);
+        return vec4(seen.x, seen.y, seen.z, 1.0);
+    }
+}

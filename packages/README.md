@@ -121,6 +121,19 @@ use "image.orlapkg";
   place is the fast path, bit for bit the same on the interpreter and
   the JIT and the device's approximate rasterizer on a GPU
   ([why](../docs/DECISIONS.md)).
+- **voxel** — worlds of voxels drawn by walking rays through them, as
+  functions: a ray walked voxel by voxel through a volume to the first
+  voxel that is not empty, passing through numbers it sees through
+  (`voxel_walk`, `voxel_walk_past`); a box of voxels placed in the world,
+  turned about its up axis, met by the same walk carried into its frame,
+  with a near plane so nothing beside the camera fills the picture
+  (`voxel_meet`); the sky and a sun with shadows (`voxel_daylight`,
+  `voxel_shaded`), lights fading with distance and flickering
+  (`voxel_light`, `voxel_flicker`), light kept to a few steps
+  (`voxel_stepped`), haze and the dark (`voxel_haze`, `voxel_dark`); a
+  camera going round a point, its rays and its projection
+  (`voxel_orbit`, `voxel_ray`, `voxel_project`). Used by
+  `examples/crypt`.
 - **noise** — randomness a Kernel can repeat, as functions and no
   Kernels:
   - hashes of whole numbers by integer arithmetic, the same bits on

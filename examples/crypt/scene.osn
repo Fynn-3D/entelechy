@@ -1,0 +1,12 @@
+// The crypt: a chamber baked once, a statue turning at its middle, and
+// the picture walked through both with the voxel package; `open` 1 lifts
+// the vault to the sky.
+use "kernels/";
+
+param open: Int = 0;
+
+node chamber: crypt.bake@1 { open = open; domain = vec3(48, 24, 48); }
+node statue: crypt.statue@1 { domain = vec3(16, 24, 16); }
+node view: crypt.draw@1 { chamber <- chamber.result; statue <- statue.result; open = open; domain = window(); }
+
+output result <- view.result;
