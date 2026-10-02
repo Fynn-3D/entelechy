@@ -101,7 +101,8 @@ kernel crypt.draw@1 {
             let sun = normalize(vec3(0.4, 0.8, 0.3));
             let at = voxel_local(p + met.face * 0.01, vec3(0.0, 0.0, 0.0), 0.0, grain()) + vec3(24.0, 0.0, 24.0);
             let shaded = voxel_shaded(chamber, at, sun, vec3(0.0, 0.0, 0.0), chamber(), pass);
-            let lit = crypt_color(met.id) * voxel_daylight(met.face, sun, shaded, 7.0);
+            let day = voxel_daylight(met.face, sun, shaded, vec3(0.4, 0.46, 0.6), vec3(0.95, 0.85, 0.65));
+            let lit = crypt_color(met.id) * voxel_stepped(day, 7.0);
             let far = voxel_haze(lit, met.t, 0.05, vec3(0.75, 0.8, 0.88));
             return vec4(far.x, far.y, far.z, 1.0);
         }

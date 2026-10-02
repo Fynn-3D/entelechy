@@ -139,7 +139,8 @@ its interface is held to.
   (`voxel_walk`, `voxel_walk_past`); a box of voxels placed in the world,
   turned about its up axis, met by the same walk carried into its frame,
   with a near plane so nothing beside the camera fills the picture
-  (`voxel_meet`); the sky and a sun with shadows (`voxel_daylight`,
+  (`voxel_meet`); a sky's and a sun's light with shadows, the colours
+  of each the caller's (`voxel_daylight`,
   `voxel_shaded`), lights fading with distance and flickering
   (`voxel_light`, `voxel_flicker`), light kept to a few steps
   (`voxel_stepped`), haze and the dark (`voxel_haze`, `voxel_dark`); a
@@ -148,8 +149,9 @@ its interface is held to.
   sphere, a rounded cuboid or a capsule each painting a number or
   carving (`VoxelShape`), baked into a volume (`voxel.shapes@1`) or
   painted over one (`voxel.paint@1`), which fed back is a world edited a
-  frame at a time; a volume seen by day at the window's size
-  (`graphs/view.osn`), with the camera and box a Kernel picks through
+  frame at a time; one look of a volume by day at the window's size,
+  its sky and lights the scene's (`graphs/view.osn`), with the camera
+  and box a Kernel picks through
   (`voxel_view_camera`, `voxel_view_box`, `voxel_cell`); bodies, a
   volume at rest whose voxels carry a look and the joint they move with
   (`voxel_body`), posed into a box by carrying each voxel back to rest

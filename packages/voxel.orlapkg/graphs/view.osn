@@ -1,4 +1,5 @@
-//! A volume seen by day at the window's size: voxel `id` the color
+//! A volume seen by day at the window's size, one look a scene may take
+//! or write its own of from the package's functions: voxel `id` the color
 //! `colors` holds at `id`, a camera going round the volume's middle, the
 //! sun's shadows and haze before the sky. Place it with
 //!   node view: graph "../../packages/voxel.orlapkg/graphs/view.osn" {
@@ -16,6 +17,8 @@ param yaw: Float = 0.6;
 param pitch: Float = 0.45;
 param distance: Float = 1.1;
 param haze: Float = 0.004;
+param sky_light: Vec3 = vec3(0.6, 0.68, 0.82);
+param sun_light: Vec3 = vec3(0.75, 0.65, 0.5);
 
 node look: voxel.view@1 {
     volume <- volume;
@@ -24,6 +27,8 @@ node look: voxel.view@1 {
     pitch = pitch;
     distance = distance;
     haze = haze;
+    sky_light = sky_light;
+    sun_light = sun_light;
     domain = window();
 }
 

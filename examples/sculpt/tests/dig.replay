@@ -9,7 +9,7 @@ pointer 100 45 up
 frame 0.02
 expect brush.result[0].r = -1
 expect world.result[62253] = 3
-expect 100 45 = 0.70 0.70 0.72 0.03
+expect 100 45 = 0.703 0.715 0.767 0.03
 
 # Held down, the left button digs a ball of 2.5 voxels where the pointer
 # points, deeper each frame as the brush picks against the world as last
@@ -25,7 +25,7 @@ frame 0.08
 pointer 100 45 up
 frame 0.1
 expect brush.result[0].r = -1
-expect 100 45 = 0.35 0.38 0.45 0.03
+expect 100 45 = 0.324 0.356 0.415 0.03
 
 # The right button raises earth on the grass pointed at: the pixel turns
 # from grass to earth.

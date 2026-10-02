@@ -129,15 +129,14 @@ fn voxel_meet(vox: Voxels, b: VoxelBox, eye: Vec3, dir: Vec3, near: Float) -> Vo
 
 // ---------------------------------------------------------------- light
 
-/// The sky and a sun on a face: the sky brighter on faces turned up, the
-/// sun's light (`sun` a unit direction toward it) unless `shaded`, warm
-/// where it falls and cool where only the sky does; kept to `steps` steps.
-fn voxel_daylight(face: Vec3, sun: Vec3, shaded: Bool, steps: Float) -> Vec3 {
-    let sky = 0.5 + 0.12 * face.y;
-    let direct = if shaded { 0.0 } else { max(dot(face, sun), 0.0) * 0.7 };
-    let amount = floor((sky + direct) * steps + 0.5) / steps;
-    let tint = mix(vec3(0.72, 0.8, 0.96), vec3(1.04, 0.98, 0.9), clamp(direct * 1.4, 0.0, 1.0));
-    return amount * tint;
+/// The light of a sky and a sun on a face: the sky's light `sky` by the
+/// share of the sky the face sees, all of it facing up, half facing
+/// sideways, none facing down; the sun's light `sun` by how square the
+/// face turns to it (`toward` a unit direction toward it), unless
+/// `shaded`. A look keeps it to steps (`voxel_stepped`) as it chooses.
+fn voxel_daylight(face: Vec3, toward: Vec3, shaded: Bool, sky: Vec3, sun: Vec3) -> Vec3 {
+    let direct = if shaded { 0.0 } else { max(dot(face, toward), 0.0) };
+    return sky * (0.5 + 0.5 * face.y) + sun * direct;
 }
 
 /// Whether a place, `from` in a box's voxels, is shaded from a sun along
@@ -287,11 +286,13 @@ fn voxel_view_box(n: Vec3) -> VoxelBox {
     return VoxelBox { base: vec3(0.0, 0.0, 0.0), n: n, size: 1.0, foot: vec3(0.0, 0.0, 0.0), turn: 0.0 };
 }
 
-/// A volume seen by day: a camera going round its middle, `yaw` about
-/// the up axis and `pitch` down, `distance` times the volume's diagonal
-/// away; voxel `id` the color `colors` holds at `id`, lit by the sky and a
-/// sun toward `sun` with the shadows it casts, fading into haze
-/// (`haze` a voxel) before the sky.
+/// A volume seen by day, one look of many a Kernel composes from the
+/// functions above: a camera going round its middle, `yaw` about the up
+/// axis and `pitch` down, `distance` times the volume's diagonal away;
+/// voxel `id` the color `colors` holds at `id`, lit by the sky's light
+/// `sky_light` and the sun's `sun_light` from toward `sun`, with the
+/// shadows it casts, fading into haze (`haze` a voxel) before a sky going
+/// from `horizon` to `zenith`.
 kernel voxel.view@1 {
     requires { field.read; field.write; }
     input volume: Voxels;
@@ -300,6 +301,10 @@ kernel voxel.view@1 {
     param pitch: Float = 0.45;
     param distance: Float = 1.1;
     param sun: Vec3 = vec3(0.4, 0.8, 0.3);
+    param sky_light: Vec3 = vec3(0.6, 0.68, 0.82);
+    param sun_light: Vec3 = vec3(0.75, 0.65, 0.5);
+    param horizon: Vec3 = vec3(0.78, 0.84, 0.92);
+    param zenith: Vec3 = vec3(0.36, 0.52, 0.82);
     param haze: Float = 0.004;
     output result: Image;
     compute {
@@ -307,14 +312,14 @@ kernel voxel.view@1 {
         let dims = domain();
         let cam = voxel_view_camera(n, yaw, pitch, distance, dims);
         let dir = voxel_ray(cam, coord() + vec2(0.5, 0.5), dims);
-        let sky = mix(vec3(0.78, 0.84, 0.92), vec3(0.36, 0.52, 0.82), clamp(dir.y, 0.0, 1.0));
+        let sky = mix(horizon, zenith, clamp(dir.y, 0.0, 1.0));
         let met = voxel_meet(volume, voxel_view_box(n), cam.eye, dir, 0.0);
         if met.id == 0 { return vec4(sky.x, sky.y, sky.z, 1.0); }
         let p = cam.eye + dir * met.t;
         let toward = normalize(sun);
         let from = voxel_local(p + met.face * 0.01, vec3(0.0, 0.0, 0.0), 0.0, 1.0) + vec3(n.x * 0.5, 0.0, n.z * 0.5);
         let shaded = voxel_shaded(volume, from, toward, vec3(0.0, 0.0, 0.0), n, ivec2(1, 0));
-        let lit = at(colors, met.id) * voxel_daylight(met.face, toward, shaded, 8.0);
+        let lit = at(colors, met.id) * voxel_daylight(met.face, toward, shaded, sky_light, sun_light);
         let seen = voxel_haze(lit, met.t, haze, sky);
         return vec4(seen.x, seen.y, seen.z, 1.0);
     }

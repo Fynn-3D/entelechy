@@ -10,7 +10,7 @@ window 160 120
 frame 0.0
 expect body.result[57716] = 2
 expect body.result[76292] = 0
-expect 80 80 = 0.380 0.399 0.433 0.03         # the legs, together
+expect 80 80 = 0.36 0.375 0.399 0.03         # the legs, together
 frame 0.25
 expect body.result[57716] = 0
 expect body.result[76292] = 2
