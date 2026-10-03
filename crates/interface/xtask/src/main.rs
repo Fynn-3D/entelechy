@@ -515,3 +515,36 @@ fn differences(main: &Path, branch: &Path) -> Vec<String> {
     }
     found
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A line that differs is a difference, and a file one side lacks; how
+    /// long an evaluation took is not.
+    #[test]
+    fn differences_name_what_differs_and_leave_the_time_out() {
+        let dir = std::env::temp_dir().join(format!("xtask-differences-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let (main, branch) = (dir.join("main"), dir.join("branch"));
+        fs::create_dir_all(&main).unwrap();
+        fs::create_dir_all(&branch).unwrap();
+        fs::write(main.join("same.run"), "loaded\nevaluated in 3 ms\n").unwrap();
+        fs::write(branch.join("same.run"), "loaded\nevaluated in 9 ms\n").unwrap();
+        fs::write(main.join("moved.graph"), "a\nb\n").unwrap();
+        fs::write(branch.join("moved.graph"), "a\nc\n").unwrap();
+        fs::write(branch.join("new.picture"), "1\n").unwrap();
+        let found = differences(&main, &branch);
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(
+            found[0].starts_with("moved.graph differs:\n< b\n> c"),
+            "{found:?}"
+        );
+        assert_eq!(found[1], "new.picture: only the branch's");
+        let _ = fs::remove_dir_all(&dir);
+        assert_ne!(
+            fingerprint(b"P6 1 1 255 abc"),
+            fingerprint(b"P6 1 1 255 abd")
+        );
+    }
+}
