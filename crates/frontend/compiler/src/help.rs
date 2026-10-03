@@ -167,7 +167,6 @@ pub fn builtins() -> Vec<Builtin> {
         fixed("wheel", "context", &["wheel() -> Vec2"], "What the wheel scrolled since the last evaluation, in lines: x sideways, y positive away.", Some(Capability::InputRead), false),
         fixed("pads", "context", &["pads() -> Int"], "How many pads are connected: a player shows a pad's prompts while one is, whether or not it has been touched.", Some(Capability::InputRead), false),
         fixed("key", "context", &["key(code: Int) -> Bool"], "Whether the key with this code is held: letters and digits by uppercase ASCII, arrows 37 to 40, space 32, enter 13, shift 16, escape 27.", Some(Capability::InputRead), false),
-        fixed("zero", "construction", &["zero() -> Name"], "Every field of the struct `Name` zero, written as the base of its literal and nowhere else: `Name { ..zero(), field: value }`.", None, false),
         fixed("vec2", "construction", &["vec2(x: Float, y: Float) -> Vec2", "vec2(x: Int, y: Int) -> Vec2"], "A vector from components, Float or Int (widened), in order; v.xy, v.yx and the like are swizzles.", None, false),
         fixed("vec3", "construction", &["vec3(x: Float, y: Float, z: Float) -> Vec3", "vec3(x: Int, y: Int, z: Int) -> Vec3", "vec3(xy: Vec2, z: Float) -> Vec3", "vec3(x: Float, yz: Vec2) -> Vec3"], "A vector from components, Float, Int (widened) or shorter vectors, in order; v.xyz, v.zyx and the like are swizzles.", None, false),
         fixed("vec4", "construction", &["vec4(x: Float, y: Float, z: Float, w: Float) -> Vec4", "vec4(x: Int, y: Int, z: Int, w: Int) -> Vec4", "vec4(xyz: Vec3, w: Float) -> Vec4", "vec4(xy: Vec2, zw: Vec2) -> Vec4", "vec4(xy: Vec2, z: Float, w: Float) -> Vec4", "vec4(x: Float, yzw: Vec3) -> Vec4"], "A vector from components, Float, Int (widened) or shorter vectors, in order; v.xyz, v.wzyx, c.rgb and the like are swizzles.", None, false),
@@ -395,12 +394,6 @@ pub fn forms() -> Vec<Form> {
             "A bounded fold: `n` is a literal, which is its bound, or any Int expression read once and clamped to 0..=65536; `index()` is the iteration, and `until` stops it early, as `break` does from inside.",
         ),
         form(
-            "pick",
-            "expression",
-            "pick i < n where held   pick i < n where held by key",
-            "The first `i` from 0 below `n` that `held` holds for, or, with `by`, of those the one of least `key` by `<` (an Int, Float, Long or Double; the first of equal ones); -1 for none. It is the loop it stands for: `n` as a loop's, `index()` within it its own, and without a key it stops at the first.",
-        ),
-        form(
             "break",
             "expression",
             "loop n with x = init { if done { break x; } next }",
@@ -422,7 +415,7 @@ pub fn forms() -> Vec<Form> {
             "struct",
             "expression",
             "Name { a: 1.0, b: 2 }   Name { ..base, a: 3.0 }",
-            "A value of a declared struct, or a copy of one with some fields replaced; `Name { ..zero(), a: 3.0 }` makes every field not written zero.",
+            "A value of a declared struct, or a copy of one with some fields replaced.",
         ),
         form(
             "fn",

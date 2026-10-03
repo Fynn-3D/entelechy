@@ -19,8 +19,7 @@ pub(super) const YIELDING: [&str; 1] = ["pads"];
 
 /// The builtins composed from other operations, typed by their arguments;
 /// see [`Builder::composed`].
-pub(super) const COMPOSED: [&str; 10] = [
-    "zero",
+pub(super) const COMPOSED: [&str; 9] = [
     "saturate",
     "distance",
     "radians",
@@ -52,14 +51,6 @@ impl Builder<'_> {
         args: &[Expr],
         span: Span,
     ) -> Result<ValueId, CompileError> {
-        // `zero()` has no value alone: it is a struct literal's base, where
-        // the literal's struct gives it one.
-        if name == "zero" {
-            return Err(semantic(
-                span,
-                "`zero()` is a struct's every field zero, written as the base of its literal: `Name { ..zero(), field: value }`",
-            ));
-        }
         let mut ids = args
             .iter()
             .map(|arg| self.value(arg))

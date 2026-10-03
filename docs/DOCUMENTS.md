@@ -179,18 +179,8 @@ Inside `compute`, a body is `let` bindings and a result.
   carried value. `if done { break x; }` among a loop body's statements
   stops the innermost loop after that iteration with that value, of the
   carried type.
-- **`pick`.** `pick i < n where held` is the first `i` from 0 below `n`
-  that `held` holds for, and `pick i < n where held by key` of those the
-  one of least `key` by `<` (an `Int`, `Float`, `Long` or `Double`; the
-  first of equal ones); -1 for none. It is the `loop` it stands for: `n`
-  as a loop's, `index()` within it its own (an enclosing loop's index is
-  named before it, `let k = index();`), and without a key it stops at the
-  first. `pick` is a word only before a name and `<`, so a function or a
-  node named `pick` stays one.
 - **Structs.** `Name { a: .., b: .. }` builds one; `Name { ..base, a: .. }`
   copies one with fields replaced.
-  `Name { ..zero(), a: .. }` makes every field not written zero, a
-  struct's and an array's within it too.
 - **Nesting.** An expression or block nests at most 256 deep, counting
   what encloses it and operators chained before it (`a + b + c` is three
   deep at `c`); past that the document is refused, saying where; split a
