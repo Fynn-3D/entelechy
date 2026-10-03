@@ -37,7 +37,10 @@ Serialized Graph Format
 What other programs and written sources build against is held to its
 implementation by a test, and grows without breaking what came before;
 see `docs/DECISIONS.md`, *A public contract grows; it breaks only with its
-version*. When the language's surface grows, record it with
+version*. The language and the scene syntax grow only by the owner's
+word (`docs/DECISIONS.md`, *The language grows only by the owner's word*);
+friction found while writing is met by a function, a package or an
+example. When the owner has agreed to the growth, record it with
 `ORLA_BLESS=1 cargo test -p orla-compiler --test surface`; when the scene
 syntax grows, add a document to `crates/frontend/scene/tests/surface/`
 and record it with `ORLA_BLESS=1 cargo test -p orla-scene --test surface`.

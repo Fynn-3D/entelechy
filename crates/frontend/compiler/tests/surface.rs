@@ -5,7 +5,9 @@
 //!
 //! The surface may grow at a version; dropping or changing anything else
 //! takes a new version. The test fails on any difference. `ORLA_BLESS=1`
-//! rewrites the file, and refuses a drop without a version bump.
+//! rewrites the file, and refuses a drop without a version bump. Growing
+//! it is the owner's decision, not a contributor's: see
+//! `docs/DECISIONS.md`, *The language grows only by the owner's word*.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -166,7 +168,9 @@ fn the_surface_a_source_may_use_is_the_one_recorded() {
         .collect();
     if broken.is_empty() {
         panic!(
-            "the surface grew ({added:?} and signatures within); record it with \
+            "the surface grew ({added:?} and signatures within); the language grows only \
+             by the owner's word (docs/DECISIONS.md, *The language grows only by the owner's \
+             word*): take the addition out, or, with that word given, record it with \
              `ORLA_BLESS=1 cargo test -p orla-compiler --test surface`"
         );
     }

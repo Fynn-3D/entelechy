@@ -828,3 +828,34 @@ owner of names, and origins as data, leave nothing to take apart.
 [the language](../crates/frontend/language/src/lib.rs); the walk of the
 `use` items, `declarations_within`, in
 [`sources.rs`](../crates/interface/session/src/sources.rs).
+
+## The language grows only by the owner's word
+
+A form, a keyword, a builtin or a shorthand is added to `.orla` or `.osn`
+only when the owner asks for it or agrees to it in words. A contributor,
+an agent above all, who finds writing hard meets it with what the
+language already has: a function, a package, or an example that shows
+the way. A proposal to grow the language is put to the owner, answering:
+
+1. It lowers to the IR there is: no instruction, backend behaviour,
+   budget rule or runtime concept is new.
+2. How often sources in and beside the repository write what it stands
+   for, counted, not felt while writing one demo.
+3. Why a function, a package or the forms there are cannot write it, or
+   write it only wrongly.
+4. It is a word or a builtin everywhere it may appear, never one that
+   means something in one place alone.
+
+**Why.** Every form is one more thing each creator, an AI above all, must
+learn, and one more thing every later rule must hold for. Friction met
+by one demo at a time grows a language by the sum of its writers' local
+pains, which no one decided. Orla builds the conditions features come
+from, not the features; a function or a package is such a condition, a
+shorthand for one pattern is not.
+
+**Where.** [`surface.txt`](../crates/frontend/compiler/tests/surface.txt)
+holds every builtin and form; [`surface.rs`](../crates/frontend/compiler/tests/surface.rs)
+fails when it grows and names this entry; the scene syntax is held by
+[the scene documents' surface](../crates/frontend/scene/tests/surface/).
+`AGENTS.md` and `PROCESS.md` state the rule where a contributor reads
+first.

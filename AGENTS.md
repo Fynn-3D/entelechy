@@ -334,6 +334,12 @@ external Kernel references or inline `.orla` bodies. JSON remains a structured
 protocol representation. Source resolution belongs to the caller or file loader. Scene
 documents contain authored initial state, not implicit live-state checkpoints.
 
+Do not grow the `.orla` language or the `.osn` syntax on your own: no new
+form, keyword, builtin or shorthand without the owner's explicit word,
+however much friction writing a demo shows. Meet friction with a function,
+a package or an example; see `docs/DECISIONS.md`, *The language grows only
+by the owner's word*.
+
 Before adding complexity, ask:
 
 **Does this belong in the Host, or can it be a Kernel?**
