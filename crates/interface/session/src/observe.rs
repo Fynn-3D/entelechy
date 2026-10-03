@@ -351,7 +351,20 @@ fn locate(
             }
             offset += words_of(f.ty);
         }
-        ty = found.ok_or_else(|| format!("struct `{}` has no field `{field}`", def.name))?;
+        ty = found.ok_or_else(|| {
+            // An array's elements are its fields, named by their index.
+            let hint = field
+                .split_once('[')
+                .filter(|(_, rest)| rest.ends_with(']'))
+                .map(|(name, rest)| {
+                    format!(
+                        "; an array's element is named by its index: `{name}.{}`",
+                        &rest[..rest.len() - 1]
+                    )
+                })
+                .unwrap_or_default();
+            format!("struct `{}` has no field `{field}`{hint}", def.name)
+        })?;
     }
     let words = words_of(ty);
     Ok(Located {

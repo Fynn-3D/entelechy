@@ -129,8 +129,11 @@ pub fn forms() -> Vec<Form> {
         form(
             "expect",
             "expect <node.port[i][.field]> = <value>... [<tolerance>]",
-            "an element of a node's output, or a field of it (a struct's element is compared a field at a time): ints and bools exactly, floats and vectors within the tolerance; `i` counts along the Field, x fastest, then y, then z",
-            &["expect step.result[0].score = 1"],
+            "an element of a node's output, or a field of it (a struct's element is compared a field at a time; an array's element is named by its index, `.cells.2`): ints and bools exactly, floats and vectors within the tolerance; `i` counts along the Field, x fastest, then y, then z",
+            &[
+                "expect step.result[0].score = 1",
+                "expect step.result[0].cells.2 = 0",
+            ],
         ),
         form(
             "expect",

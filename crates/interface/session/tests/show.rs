@@ -56,3 +56,41 @@ fn show_before_a_frame_is_refused() {
     assert!(error.contains("line 2: show before any frame"), "{error}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+const ARRAYS: &str = "struct Tally { counts: [Int; 3]; }
+kernel t.tally@1 {
+    requires { field.write; }
+    output result: Rows<Tally>;
+    compute { let i = element(); return Tally { counts: [each 3 { i * 10 + index() }] }; }
+}
+node tally: t.tally@1 { domain = 2; }
+output result <- tally.result;
+";
+
+#[test]
+fn an_array_element_is_a_field_named_by_its_index() {
+    let dir = scene("arrays");
+    std::fs::write(dir.join("scene.osn"), ARRAYS).unwrap();
+    let outcome = ran(
+        &dir,
+        "scene scene.osn\nframe 0\nshow tally.result[1].counts\nexpect tally.result[1].counts.2 = 12\nexpect tally.result[1].counts.0 < 11\n",
+    )
+    .unwrap();
+    assert_eq!(
+        outcome.shown,
+        ["line 3: tally.result[1].counts is { 0: 10, 1: 11, 2: 12 }"]
+    );
+    assert_eq!(outcome.checks, 2);
+    assert!(outcome.failures.is_empty(), "{:?}", outcome.failures);
+    // Written as an index in brackets, the refusal says how it is named.
+    let error = ran(
+        &dir,
+        "scene scene.osn\nframe 0\nexpect tally.result[1].counts[2] = 12\n",
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("an array's element is named by its index: `counts.2`"),
+        "{error}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
