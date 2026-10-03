@@ -90,6 +90,71 @@ fn chains_and_state_stay_resident_until_observed() {
 }
 
 #[test]
+fn state_at_a_fixed_point_on_the_device_stops_advancing() {
+    // State that keeps itself: the run its committed state calls for gives
+    // the same words, compared on the device, so the state keeps its
+    // Field, the node and what reads it are not run again, and nothing
+    // comes back to the Host.
+    let Some(gpu) = gpu() else { return };
+    let backend: Box<dyn Backend> = Box::new(gpu);
+    let mut runtime = orla_kernel::Runtime::with_backend(1 << 24, backend);
+    load(
+        &mut runtime,
+        "kernel test.ramp@1 { requires { field.write; } output result: Image; compute { return vec4(coord().x, coord().y, 0.0, 1.0); } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.keep@1 { requires { field.read; field.write; } input previous: Image; output result: Image; compute { return sample(previous); } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.double@1 { requires { field.read; field.write; } input source: Image; output result: Image; compute { return sample(source) * 2.0; } }",
+    );
+    let graph = orla_scene::parse(
+        "node seed: test.ramp@1 { domain = vec2(64, 64); }
+         node kept: test.keep@1 { previous <~ kept.result from seed.result; }
+         node twice: test.double@1 { source <- kept.result; }
+         output result <- twice.result;",
+    )
+    .unwrap();
+    let mut evaluator = orla_graph::Evaluator::new();
+    evaluator.set_fusion(false);
+    let empty: std::collections::BTreeMap<String, orla_abi::Handle> =
+        std::collections::BTreeMap::new();
+    let no_params: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
+    let mut frame = || {
+        evaluator
+            .evaluate(
+                &graph,
+                &mut runtime,
+                &empty,
+                &Context::default(),
+                &no_params,
+            )
+            .unwrap()
+    };
+    let names =
+        |nodes: &[orla_graph::NodeId]| nodes.iter().map(|n| n.0.clone()).collect::<Vec<_>>();
+    let first = frame();
+    assert_eq!(names(&first.executed), ["seed", "kept", "twice"]);
+    // Its state changed from the seed to its own first Field: it runs for
+    // that alone, gives the same words, and keeps its Field.
+    let second = frame();
+    assert_eq!(names(&second.executed), ["kept"]);
+    assert_eq!(names(&second.reused), ["seed", "twice"]);
+    assert_eq!(second.output, first.output);
+    let third = frame();
+    assert!(third.executed.is_empty(), "the state is at rest");
+    assert_eq!(
+        runtime.host().resident_count(),
+        runtime.host().live(),
+        "nothing came back to the Host"
+    );
+    let image = runtime.image(third.output).unwrap();
+    assert_eq!(image.pixels()[3 * 64 + 5][0], 10.0);
+}
+
+#[test]
 fn fields_flow_through_the_gpu_exactly() {
     let Some(gpu) = gpu() else { return };
     let backend: Box<dyn Backend> = Box::new(gpu);

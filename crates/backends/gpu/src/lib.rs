@@ -15,6 +15,7 @@ mod pool;
 mod prepare;
 pub mod present;
 mod raster;
+mod same;
 mod stage;
 mod timing;
 mod wait;
@@ -62,6 +63,8 @@ pub struct GpuBackend {
     lock: Mutex<()>,
     /// The rasterizer's pipelines, built on first use.
     raster: OnceLock<Result<raster::RasterPipelines, String>>,
+    /// The pass that compares two Fields, built on first use.
+    same: OnceLock<Result<same::SamePipeline, String>>,
     /// Buffers released Fields left behind; see [`Spare`].
     spare: Spare,
     /// The rasterizer's own targets, kept by shape; see [`SpareTextures`].
@@ -180,6 +183,7 @@ impl GpuBackend {
             uniforms: Mutex::new(None),
             written: Mutex::new((Vec::new(), Vec::new())),
             raster: OnceLock::new(),
+            same: OnceLock::new(),
             spare: Spare::default(),
             targets: SpareTextures::default(),
             measured: std::sync::atomic::AtomicBool::new(false),
@@ -517,5 +521,20 @@ impl Backend for GpuBackend {
         };
         staging.unmap();
         Ok(bytes)
+    }
+
+    fn same_resident(
+        &self,
+        a: &(dyn Any + Send + Sync),
+        b: &(dyn Any + Send + Sync),
+        byte_len: usize,
+    ) -> Result<bool, String> {
+        let (Some(a), Some(b)) = (
+            a.downcast_ref::<DeviceImage>(),
+            b.downcast_ref::<DeviceImage>(),
+        ) else {
+            return Err("image is resident on a different backend".into());
+        };
+        self.same_buffers(&a.buffer, &b.buffer, byte_len)
     }
 }

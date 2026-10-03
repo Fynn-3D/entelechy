@@ -323,6 +323,17 @@ pub trait Backend: Send + Sync {
         let _ = (device, byte_len);
         Err("this backend keeps no resident resources".into())
     }
+
+    /// Whether two resources this backend left resident hold the same
+    /// first `byte_len` bytes. The default downloads both.
+    fn same_resident(
+        &self,
+        a: &(dyn Any + Send + Sync),
+        b: &(dyn Any + Send + Sync),
+        byte_len: usize,
+    ) -> Result<bool, String> {
+        Ok(self.download(a, byte_len)? == self.download(b, byte_len)?)
+    }
 }
 
 #[cfg(test)]

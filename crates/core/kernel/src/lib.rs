@@ -560,6 +560,35 @@ impl Runtime {
         self.bring_home(handle).map(|_| ())
     }
 
+    /// Whether two Fields hold the same words: compared in Host memory
+    /// when both are there, on the device when both are resident on it.
+    /// Fields of different extents or layouts, or apart, are not.
+    pub fn same_words(&self, a: Handle, b: Handle) -> bool {
+        if a == b {
+            return true;
+        }
+        let host = &self.host;
+        if let (Ok(x), Ok(y)) = (host.data(a), host.data(b)) {
+            return x == y;
+        }
+        let (Ok(domain), Ok(other), Ok(schema), Ok(layout)) = (
+            host.domain(a),
+            host.domain(b),
+            host.schema(a),
+            host.schema(b),
+        ) else {
+            return false;
+        };
+        if domain != other || schema != layout {
+            return false;
+        }
+        let (Ok(Some(x)), Ok(Some(y))) = (host.resident(a), host.resident(b)) else {
+            return false;
+        };
+        let byte_len = schema.storage_words(domain.count()) * 4;
+        self.backend.same_resident(x, y, byte_len).unwrap_or(false)
+    }
+
     /// Brings a resident Field's words into Host memory and answers the
     /// bytes moved.
     fn bring_home(&mut self, handle: Handle) -> Result<u64, ExecutionError> {

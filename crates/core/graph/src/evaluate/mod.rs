@@ -3,9 +3,10 @@
 //!
 //! A node's outputs are reused while its Kernel generation, parameters,
 //! domain, context and upstream results are unchanged. A node that runs
-//! again and gives outputs equal word for word to its last (each in Host
-//! memory) keeps its last, so what reads them is reused too, and state at
-//! a fixed point does not advance. `<~` bindings read
+//! again and gives outputs equal word for word to its last keeps its
+//! last, so what reads them is reused too, and state at a fixed point does
+//! not advance: Fields in Host memory are compared there, and Fields on a
+//! device on it when the node ran for its state alone. `<~` bindings read
 //! the state committed by the previous successful evaluation; an
 //! evaluation commits atomically at its end, and a failed one commits
 //! nothing.
@@ -171,6 +172,22 @@ struct CacheKey {
     input: Option<u64>,
 }
 
+impl CacheKey {
+    /// Whether this key differs from `last` in the state it reads alone:
+    /// the node runs again for nothing but committed state.
+    fn moved_by_state_alone(&self, last: &CacheKey) -> bool {
+        self.generation == last.generation
+            && self.params == last.params
+            && self.domain == last.domain
+            && self.time == last.time
+            && self.input == last.input
+            && self.inputs.len() == last.inputs.len()
+            && self.inputs.iter().zip(&last.inputs).all(|(now, was)| {
+                now == was || matches!((now, was), (InputKey::State(_), InputKey::State(_)))
+            })
+    }
+}
+
 #[derive(Debug)]
 struct Cached {
     key: CacheKey,
@@ -275,6 +292,36 @@ pub struct Evaluator {
     /// Whether the running evaluation is a restore's trial, which commits
     /// nothing ([`Evaluator::restore`]).
     trial: bool,
+    /// Nodes running for their state alone whose Fields on a device were
+    /// found changed; see [`Rest`].
+    rest: BTreeMap<NodeId, Rest>,
+}
+
+/// When a node that runs for its state alone has its Fields on a device
+/// compared with its last: comparing waits for the device, so each time
+/// they are found changed the next comparison waits twice as many such
+/// runs, up to 2^[`REST_WAIT_MOST`]. State that settles is found at rest
+/// at once; state that keeps changing waits for the device seldom.
+#[derive(Debug, Default)]
+struct Rest {
+    since: u32,
+    changed: u32,
+}
+
+const REST_WAIT_MOST: u32 = 10;
+
+impl Rest {
+    /// Counts a run for state alone; whether this one is compared.
+    fn due(&mut self) -> bool {
+        self.since += 1;
+        self.since >= 1 << self.changed.min(REST_WAIT_MOST)
+    }
+
+    /// A comparison found the Fields changed.
+    fn found_changed(&mut self) {
+        self.changed += 1;
+        self.since = 0;
+    }
 }
 
 impl fmt::Debug for Evaluator {
@@ -877,10 +924,19 @@ impl Evaluator {
         output_names: Vec<String>,
         runtime: &mut Runtime,
     ) {
+        let by_state = self
+            .ledger
+            .entry(id)
+            .is_some_and(|previous| key.moved_by_state_alone(&previous.key));
+        let on_device = by_state && self.rest.entry(id.clone()).or_default().due();
+        if !by_state {
+            self.rest.remove(id);
+        }
         if let Some(previous) = self.ledger.entry(id)
             && previous.output_names == output_names
-            && same_words(runtime, &previous.outputs, &outputs)
+            && same_words(runtime, &previous.outputs, &outputs, on_device)
         {
+            self.rest.remove(id);
             let kept = previous.outputs.clone();
             let epoch = previous.epoch;
             for output in &outputs {
@@ -901,6 +957,9 @@ impl Evaluator {
                 },
             );
             return;
+        }
+        if on_device && let Some(rest) = self.rest.get_mut(id) {
+            rest.found_changed();
         }
         self.epoch += 1;
         let fresh = Cached {
@@ -968,13 +1027,20 @@ impl Evaluator {
     }
 }
 
-/// Whether two runs' outputs hold the same Fields word for word, each in
-/// Host memory: one held on a device alone is not read back to compare.
-fn same_words(runtime: &Runtime, previous: &[Handle], fresh: &[Handle]) -> bool {
+/// Whether two runs' outputs hold the same Fields word for word. Fields
+/// in Host memory are compared there; Fields held on a device alone are
+/// compared on it only `on_device`, when the node ran for nothing but
+/// the state it reads and its [`Rest`] is due, so a node that runs for
+/// fresh inputs waits for no device.
+fn same_words(runtime: &Runtime, previous: &[Handle], fresh: &[Handle], on_device: bool) -> bool {
     let host = runtime.host();
     previous.len() == fresh.len()
         && previous.iter().zip(fresh).all(|(old, new)| {
-            old == new || matches!((host.data(*old), host.data(*new)), (Ok(a), Ok(b)) if a == b)
+            old == new
+                || match (host.data(*old), host.data(*new)) {
+                    (Ok(a), Ok(b)) => a == b,
+                    _ => on_device && runtime.same_words(*old, *new),
+                }
         })
 }
 
@@ -1064,4 +1130,24 @@ fn short_of_room(error: &orla_kernel::ExecutionError) -> bool {
                 orla_abi::HostError::BudgetExceeded { .. }
             ))
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn state_that_keeps_changing_is_compared_seldom() {
+        // Compared at once; then each change found doubles the runs before
+        // the next comparison, up to the most.
+        let mut rest = Rest::default();
+        let mut compared = Vec::new();
+        for run in 1..=2100 {
+            if rest.due() {
+                compared.push(run);
+                rest.found_changed();
+            }
+        }
+        assert_eq!(compared, [1, 3, 7, 15, 31, 63, 127, 255, 511, 1023, 2047]);
+    }
 }
