@@ -407,6 +407,13 @@ impl Builder<'_> {
                     })?;
                 let ty = Type::Struct(index as u32);
                 let base_id = match base {
+                    // `..zero()`: every field not written zero.
+                    Some(base)
+                        if matches!(&base.kind, ExprKind::Call(call, args) if call == "zero" && args.is_empty())
+                            && self.function_index("zero", base.span)?.is_none() =>
+                    {
+                        Some(self.zero_of(ty))
+                    }
                     Some(base) => {
                         let id = self.value(base)?;
                         if self.ty(id) != ty {
@@ -664,6 +671,15 @@ impl Builder<'_> {
                 expr.span,
                 "`break` gives a `loop` its value; write it among a loop body's statements, as `if done { break x; }`",
             )),
+            ExprKind::Pick {
+                name,
+                count,
+                condition,
+                key,
+            } => {
+                let written = self.picking(name, count, condition, key.as_deref(), expr.span)?;
+                self.value(&written)
+            }
             ExprKind::Loop {
                 count,
                 name,
@@ -1124,4 +1140,166 @@ fn breaks(block: &Block) -> bool {
         }
     }
     of(&block.result)
+}
+
+impl Builder<'_> {
+    /// A value of `ty` with every word zero, built part by part.
+    pub(super) fn zero_of(&mut self, ty: Type) -> ValueId {
+        match ty {
+            Type::Struct(index) => {
+                let fields: Vec<Type> = self.structs()[index as usize]
+                    .fields
+                    .iter()
+                    .map(|f| f.ty)
+                    .collect();
+                let parts = fields
+                    .into_iter()
+                    .map(|field| self.zero_of(field))
+                    .collect();
+                self.emit(ty, Op::Construct(parts))
+            }
+            other => {
+                let value = orla_ir::template(other, &[]);
+                self.emit(other, Op::Const(value))
+            }
+        }
+    }
+
+    /// `pick name < count where condition [by key]` written as the `loop`
+    /// it is: the first index the condition holds for, or, with a key, of
+    /// those the one of least key (`<`, so the first of equal ones), -1
+    /// for none. The key is worked once an index; the loop carries the
+    /// index picked and its key, and the first is had without a key as
+    /// soon as it is found.
+    fn picking(
+        &mut self,
+        name: &orla_language::Spanned<String>,
+        count: &Expr,
+        condition: &Expr,
+        key: Option<&Expr>,
+        span: Span,
+    ) -> Result<Expr, CompileError> {
+        let at = |kind: ExprKind| Expr { kind, span };
+        let named = |text: &str| orla_language::Spanned {
+            value: text.to_owned(),
+            span,
+        };
+        let best = "pick\u{b7}best";
+        let held = "pick\u{b7}key";
+        let index = Block {
+            lets: vec![(name.clone(), at(ExprKind::Call("index".into(), Vec::new())))],
+            result: at(ExprKind::Int(0)),
+        };
+        let Some(key) = key else {
+            // The first: the loop stops once one is found.
+            let body = Block {
+                lets: index.lets,
+                result: at(ExprKind::If {
+                    condition: Box::new(condition.clone()),
+                    then: Box::new(Block {
+                        lets: Vec::new(),
+                        result: at(ExprKind::Name(name.value.clone())),
+                    }),
+                    otherwise: Box::new(Block {
+                        lets: Vec::new(),
+                        result: at(ExprKind::Name(best.into())),
+                    }),
+                }),
+            };
+            return Ok(at(ExprKind::Loop {
+                count: Box::new(count.clone()),
+                name: named(best),
+                init: Box::new(at(ExprKind::Int(-1))),
+                until: Some(Box::new(at(ExprKind::Binary(
+                    orla_language::BinaryOp::GreaterEqual,
+                    Box::new(at(ExprKind::Name(best.into()))),
+                    Box::new(at(ExprKind::Int(0))),
+                )))),
+                body: Box::new(body),
+            }));
+        };
+        // The key's type, from the key worked where the index would stand,
+        // and thrown away.
+        self.buffers.push(Vec::new());
+        let stand_in = self.emit(Type::Int, Op::Const(Value::Int(0)));
+        self.locals
+            .push((name.value.clone(), Local::Value(stand_in)));
+        let probed = self.value(key);
+        self.locals.pop();
+        self.buffers.pop();
+        let key_ty = self.ty(probed?);
+        if !matches!(key_ty, Type::Int | Type::Float | Type::Long | Type::Double) {
+            return Err(semantic(
+                key.span,
+                format!(
+                    "`pick ... by` takes the least key by `<`: an Int, Float, Long or Double, found {}",
+                    self.describe(key_ty)
+                ),
+            ));
+        }
+        let pair = self.picked_type(key_ty);
+        let field = |base: &str, field: &str| {
+            at(ExprKind::Member(
+                Box::new(at(ExprKind::Name(base.into()))),
+                field.into(),
+            ))
+        };
+        let less = |a: Expr, b: Expr| {
+            at(ExprKind::Binary(
+                orla_language::BinaryOp::Less,
+                Box::new(a),
+                Box::new(b),
+            ))
+        };
+        let chosen = at(ExprKind::Struct {
+            name: named(&pair),
+            base: None,
+            fields: vec![
+                (named("at"), at(ExprKind::Name(name.value.clone()))),
+                (named("key"), at(ExprKind::Name(held.into()))),
+            ],
+        });
+        let better = at(ExprKind::Binary(
+            orla_language::BinaryOp::Or,
+            Box::new(less(field(best, "at"), at(ExprKind::Int(0)))),
+            Box::new(less(at(ExprKind::Name(held.into())), field(best, "key"))),
+        ));
+        let keep = || {
+            Box::new(Block {
+                lets: Vec::new(),
+                result: at(ExprKind::Name(best.into())),
+            })
+        };
+        let body = Block {
+            lets: index.lets,
+            result: at(ExprKind::If {
+                condition: Box::new(condition.clone()),
+                then: Box::new(Block {
+                    lets: vec![(named(held), key.clone())],
+                    result: at(ExprKind::If {
+                        condition: Box::new(better),
+                        then: Box::new(Block {
+                            lets: Vec::new(),
+                            result: chosen,
+                        }),
+                        otherwise: keep(),
+                    }),
+                }),
+                otherwise: keep(),
+            }),
+        };
+        let init = at(ExprKind::Struct {
+            name: named(&pair),
+            base: Some(Box::new(at(ExprKind::Call("zero".into(), Vec::new())))),
+            fields: vec![(named("at"), at(ExprKind::Int(-1)))],
+        });
+        let walked = at(ExprKind::Loop {
+            count: Box::new(count.clone()),
+            name: named(best),
+            init: Box::new(init),
+            until: None,
+            body: Box::new(body),
+        });
+        Ok(at(ExprKind::Member(Box::new(walked), "at".into())))
+    }
 }

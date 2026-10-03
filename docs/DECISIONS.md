@@ -828,3 +828,29 @@ owner of names, and origins as data, leave nothing to take apart.
 [the language](../crates/frontend/language/src/lib.rs); the walk of the
 `use` items, `declarations_within`, in
 [`sources.rs`](../crates/interface/session/src/sources.rs).
+
+## Picking is a loop written for the reader
+
+`pick i < n where held [by key]` and `Name { ..zero(), a: .. }` are
+forms the compiler writes as the `loop` and the literal they stand for:
+no instruction, no backend and no budget rule is new. A loop stays the
+one repetition: `index()` within a `pick` is its own, and the first is
+had as soon as it is found. A key is ordered by `<`, the first of equal
+keys kept, so a pick is the same on every backend. `zero` is a builtin
+of the construction kind: a function a document declares of its name
+stands for it there, as a math builtin's does.
+
+**Why.** Of the loops written in the repository and beside it, two in
+five fold to one value, and the hardest to write picked one: a
+sentinel, the key of the best so far worked again each time or packed
+with its index into a vector, a first that ran on past what it found.
+Functions as values would have written them generally, but would have
+put functions into the IR, which every backend, the device's included,
+would have to run. A form the reader writes and the compiler unfolds
+asks nothing of the machine.
+
+**Where.** `picking` and `zero_of` in
+[the lowering of expressions](../crates/frontend/compiler/src/lower/expr.rs);
+the form in [the parser](../crates/frontend/language/src/parser.rs);
+[the tests](../crates/interface/session/tests/pick.rs).
+

@@ -887,6 +887,20 @@ pub enum ExprKind {
         /// The body, yielding the next carried value.
         body: Box<Block>,
     },
+    /// `pick i < count where condition` (the first `i` from 0 the
+    /// condition holds for) or `pick i < count where condition by key`
+    /// (of those, the one of least key, the first of equal ones): an
+    /// `Int`, -1 for none. A `loop` written for the reader.
+    Pick {
+        /// The name the index goes by in the condition and the key.
+        name: Spanned<String>,
+        /// The count, as a `loop`'s.
+        count: Box<Expr>,
+        /// What an index must hold to be picked.
+        condition: Box<Expr>,
+        /// What the least of is picked, if anything.
+        key: Option<Box<Expr>>,
+    },
 }
 
 /// One arm of a `match`: the values it takes and what it yields.

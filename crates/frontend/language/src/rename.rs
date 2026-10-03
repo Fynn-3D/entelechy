@@ -180,6 +180,18 @@ fn visit(expr: &Expr, seen: &mut dyn FnMut(&str, bool)) {
             }
             visit_block(body, seen);
         }
+        ExprKind::Pick {
+            count,
+            condition,
+            key,
+            ..
+        } => {
+            visit(count, seen);
+            visit(condition, seen);
+            if let Some(key) = key {
+                visit(key, seen);
+            }
+        }
     }
 }
 
@@ -270,6 +282,17 @@ fn expr(e: &Expr, rename: Renames<'_>) -> Expr {
             init: boxed(init, rename),
             until: until.as_ref().map(|until| boxed(until, rename)),
             body: Box::new(block(body, rename)),
+        },
+        ExprKind::Pick {
+            name,
+            count,
+            condition,
+            key,
+        } => ExprKind::Pick {
+            name: name.clone(),
+            count: boxed(count, rename),
+            condition: boxed(condition, rename),
+            key: key.as_ref().map(|key| boxed(key, rename)),
         },
         ExprKind::Float(_)
         | ExprKind::Int(_)

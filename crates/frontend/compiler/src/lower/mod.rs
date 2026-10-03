@@ -1006,6 +1006,28 @@ impl<'a> Builder<'a> {
 
     /// The struct a loop with a `break` carries, `(value, stopped)`,
     /// made once per value type.
+    /// The struct a `pick ... by` carries: the index picked and its key.
+    /// Its name, which no source can write, is how its literal names it.
+    pub(super) fn picked_type(&self, key: Type) -> String {
+        let name = format!("(at, {}) picked", self.describe(key));
+        if self.shared.structs.find(&name).is_none() {
+            self.shared.structs.borrow_mut().push(StructDef::record(
+                name.clone(),
+                vec![
+                    Field {
+                        name: "at".into(),
+                        ty: Type::Int,
+                    },
+                    Field {
+                        name: "key".into(),
+                        ty: key,
+                    },
+                ],
+            ));
+        }
+        name
+    }
+
     pub(super) fn pair_type(&self, value: Type) -> Type {
         let name = format!("({}, stopped)", self.describe(value));
         if let Some(index) = self.shared.structs.find(&name) {

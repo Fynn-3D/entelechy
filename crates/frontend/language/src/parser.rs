@@ -2046,6 +2046,49 @@ impl Parser {
                     span,
                 })
             }
+            // `pick i < n where ...`: a word, then a name and `<`, so a
+            // name `pick` elsewhere stays a name.
+            Token::Ident(name)
+                if name == "pick"
+                    && matches!(
+                        self.tokens.get(self.position + 1).map(|l| &l.token),
+                        Some(Token::Ident(_))
+                    )
+                    && matches!(
+                        self.tokens.get(self.position + 2).map(|l| &l.token),
+                        Some(Token::Punct("<"))
+                    ) =>
+            {
+                self.next();
+                let name = self.ident("the name of the index picked")?;
+                self.expect_punct("<")?;
+                let count = self.expr()?;
+                if let ExprKind::Int(literal) = &count.kind
+                    && *literal <= 0
+                {
+                    return Err(ParseError {
+                        span: count.span,
+                        message: format!("`pick` needs a positive integer bound, found {literal}"),
+                    });
+                }
+                self.keyword("where")?;
+                let condition = self.expr()?;
+                let key = if self.is_keyword("by") {
+                    self.next();
+                    Some(Box::new(self.expr()?))
+                } else {
+                    None
+                };
+                Ok(Expr {
+                    kind: ExprKind::Pick {
+                        name,
+                        count: Box::new(count),
+                        condition: Box::new(condition),
+                        key,
+                    },
+                    span,
+                })
+            }
             Token::Ident(name) if RESERVED.contains(&name.as_str()) => {
                 Err(self.unexpected("an expression"))
             }

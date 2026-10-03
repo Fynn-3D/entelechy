@@ -660,6 +660,8 @@ builtin wheel requires input.read
   wheel() -> Vec2
 builtin window requires input.read
   window() -> Vec2
+builtin zero
+  zero() -> Name
 form Bool
   Bool
 form DMat2
@@ -764,6 +766,8 @@ form package
   package name@1 { language = 1; ir = 1; }
 form param
   param gain: Float = 1.0;
+form pick
+  pick i < n where held   pick i < n where held by key
 form prefix
   prefix with sum { return value; }
 form previous

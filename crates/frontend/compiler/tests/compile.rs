@@ -1984,3 +1984,37 @@ fn a_call_to_a_function_hiding_a_builtin_says_so() {
     .unwrap_err();
     assert!(!error.to_string().contains("hides"), "{error}");
 }
+
+/// `pick ... by` takes a key `<` orders; `zero()` stands only as a struct
+/// literal's base; `pick` takes a positive bound, as `loop` does.
+#[test]
+fn pick_and_zero_say_where_they_are_misused() {
+    let error = compile(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Int>; compute { return pick i < 4 where true by vec2(1.0, 0.0); } }",
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("takes the least key by `<`"),
+        "{error}"
+    );
+    let error = compile(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Int>; compute { return zero(); } }",
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("`Name { ..zero(), field: value }`"),
+        "{error}"
+    );
+    let error = compile(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Int>; compute { return pick i < 0 where true; } }",
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("`pick` needs a positive integer bound"),
+        "{error}"
+    );
+}
