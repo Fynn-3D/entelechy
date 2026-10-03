@@ -121,90 +121,29 @@ Steps that need nothing of one another run at once; the first to fail stops
 the run after the steps beside it, its output in the log.
 
 ```sh
-log=target/verify.log; : > "$log"
-step() {
-  local name=$1; shift; local start=$SECONDS
-  if "$@" > "target/verify-$name.out" 2>&1; then
-    printf '%-14s %4d s\n' "$name" $((SECONDS - start)) >> "$log"
-  else
-    printf '%-14s %4d s  FAILED\n' "$name" $((SECONDS - start)) >> "$log"
-    tail -40 "target/verify-$name.out" >> "$log"; return 1
-  fi
-}
-# Steps that need nothing of one another, at once, each a function of its
-# name; the run goes on when all of them passed.
-together() {
-  for name in "$@"; do step "$name" "$name" & done
-  wait
-  ! grep -q FAILED "$log"
-}
-# The bridges wait on the programs they drive, so they run beside the rest.
-tests() { cargo test --workspace -- --skip bridge --skip blender; }
-bridges() { cargo test -p orla --test bridges; }
-# Replays are independent: several at once, each backend in turn; WASI has
-# no threads, so each replay there is one core, and eight run at once.
-replays() {
-  for b in gpu cpu jit; do
-    printf '%s\n' examples/*/tests/*.replay |
-      xargs -P 4 -n 1 ./target/release/orla replay --backend "$b" || return 1
-  done
-  # The device runs every Kernel itself too, nothing left to the processor
-  # by its size.
-  printf '%s\n' examples/*/tests/*.replay |
-    xargs -P 4 -n 1 ./target/release/orla replay --backend gpu --small 0 || return 1
-  # Every node on its own, fusing nothing, holds as fused does.
-  printf '%s\n' examples/*/tests/*.replay |
-    xargs -P 4 -n 1 ./target/release/orla replay --backend jit --no-fusion || return 1
-  # Kernels rounding apart, as another device's might, break no replay;
-  # one whose checks hold two forms alike says so and is left out.
-  printf '%s\n' examples/*/tests/*.replay |
-    xargs -P 4 -n 1 ./target/release/orla replay --backend jit --round-apart || return 1
-  # Every package used in one scene beside every other: none declares a
-  # name another does, as a scene reaches them all in one namespace.
-  local together=target/packages-together
-  mkdir -p "$together"
-  { for package in packages/*.orlapkg; do echo "use \"../../$package\";"; done
-    echo 'node start: Rows<Int> { domain = 3; value = 1; }'
-    echo 'output result <- start.result;'; } > "$together/scene.osn"
-  ./target/release/orla check "$together/scene.osn"
-}
-wasi() {
-  cargo build --release -p orla --target wasm32-wasip1 &&
-  printf '%s\n' examples/*/tests/*.replay |
-    xargs -P 8 -n 1 wasmtime run --dir . target/wasm32-wasip1/release/orla.wasm replay --backend cpu
-}
-# See Against main. Main's build is kept between runs, so an unchanged
-# main builds in seconds.
-against_main() {
-  local out=target/against-main
-  rm -rf "$out/main" "$out/branch" "$out/tree"; git worktree prune
-  mkdir -p "$out/main" "$out/branch"
-  git worktree add -f "$out/tree" main &&
-  CARGO_TARGET_DIR="$out/target" cargo build --release -p orla --manifest-path "$out/tree/Cargo.toml" || return 1
-  for scene in examples/*/scene.osn; do
-    local example=$(basename "$(dirname "$scene")")
-    for side in main branch; do
-      local orla=./target/release/orla; [ "$side" = main ] && orla="$out/target/release/orla"
-      local at="$out/$side/$example"
-      "$orla" check "$scene" > "$at.check" 2>&1
-      "$orla" graph "$scene" > "$at.graph" 2>&1
-      "$orla" run "$scene" --backend cpu --window 64x48 --out "$at.ppm" > "$at.run" 2>&1
-      [ -f "$at.ppm" ] && md5 -q "$at.ppm" > "$at.picture" && rm "$at.ppm"
-    done
-  done
-  git worktree remove --force "$out/tree"
-  diff -r -I 'evaluated in' "$out/main" "$out/branch"
-}
-step fmt cargo fmt --all &&
-step clippy cargo clippy --workspace --all-targets -- -D warnings &&
-step clippy-wasm cargo clippy -p orla-jit -p orla-ffi --features orla-jit/wasm-host --target wasm32-unknown-unknown -- -D warnings &&
-step clippy-page cargo clippy -p orla-gpu -p orla-session --target wasm32-unknown-unknown -- -D warnings &&
-step test-build cargo test --workspace --no-run &&
-together tests bridges &&
-step release cargo build --release &&
-together replays wasi against_main &&
-echo passed >> "$log"
+cargo xtask verify
 ```
+
+[`xtask`](crates/interface/xtask/src/main.rs) runs, in this order:
+
+- `fmt`, then `clippy` over the workspace with every target, then
+  `clippy-wasm` (the JIT writing WebAssembly and the FFI) and
+  `clippy-page` (the device and the session in a page), warnings denied;
+- `test-build`, the workspace's tests built;
+- `tests` and `bridges` at once: the workspace's tests, and the bridges,
+  which wait on the programs they drive;
+- `release`, the release build;
+- `replays`, `wasi` and `against_main` at once. `replays` runs every
+  example's replays by the release build, four at a time, on each
+  backend in turn; then on the device with nothing left to the processor
+  by its size (`--small 0`), with nothing fused (`--no-fusion`), and
+  rounded apart (`--round-apart`; a replay whose checks hold two forms
+  alike says so and is left out); then checks every package used in one
+  scene beside every other, as a scene reaches them all in one namespace.
+  `wasi` builds for WASI and runs every replay there on the processor,
+  eight at once. `against_main` is [below](#against-main).
+
+The log begins with the commit it verifies and ends `passed`.
 
 A step far slower than it was before is a fault to find, not a wait: stop
 the run and look at that step alone. A debug build that slows down every

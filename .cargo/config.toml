@@ -6,3 +6,7 @@ rustflags = ["-C", "link-arg=--export-table", "-C", "link-arg=--growable-table"]
 
 [target.wasm32-wasip1]
 rustflags = ["-C", "link-arg=--export-table", "-C", "link-arg=--growable-table"]
+
+# The repository's own tasks, written in Rust: `cargo xtask verify`.
+[alias]
+xtask = "run --quiet --package xtask --"
