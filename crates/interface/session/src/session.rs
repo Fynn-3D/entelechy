@@ -370,10 +370,15 @@ impl Session {
             Vec::new()
         };
         crate::reads::lock(&reads).settle(store.as_ref(), &read_from);
+        let tables = crate::inputs::table_elements(self.scene.graph(), &self.runtime);
+        let declared = crate::inputs::Declared {
+            graph: self.scene.graph(),
+            files: self.scene.files(),
+            tables: &tables,
+        };
         self.inputs.sync(
             store.as_ref(),
-            self.scene.graph(),
-            self.scene.files(),
+            &declared,
             &readable,
             self.runtime.host_mut(),
             &mut events,

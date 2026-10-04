@@ -18,6 +18,7 @@ pub mod midi;
 pub mod png;
 pub mod ppm;
 pub mod rig;
+pub mod table;
 pub mod wav;
 
 use std::path::Path;
@@ -26,6 +27,9 @@ use orla_host::{Domain, FieldData, Scalar, Schema, Shape};
 
 /// The extensions [`read`] and [`encode`] know, as an error names them.
 const KNOWN: &str = "use .field, .png, .ppm, .pgm, .wav, or .mid";
+
+/// The formats a scene's input reads besides those [`encode`] writes.
+const READ_TOO: &str = "or a data table, .csv or .json";
 
 /// The frames a second a WAV is written at by default.
 pub const DEFAULT_RATE: u32 = 48_000;
@@ -175,7 +179,11 @@ pub fn decode(
             let detail = format!("{} ({} track(s))", describe(&data), song.tracks);
             Ok((data, detail))
         }
-        _ => Err(format!("unknown Field file format; {KNOWN}")),
+        "csv" | "json" => Err(format!(
+            "{} is a data table: it is read as the Kernel reading it lays out its element, as a scene's input",
+            path.display()
+        )),
+        _ => Err(format!("unknown Field file format; {KNOWN}, {READ_TOO}")),
     }
 }
 

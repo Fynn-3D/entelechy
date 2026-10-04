@@ -1,21 +1,92 @@
 //! The Fields a scene's inputs hold: a file (reread on change), a
 //! directory frame chosen by time, a text as character codes, or a
 //! caller binding. Inputs own their Host handles and release each one
-//! they replace or forget.
+//! they replace or forget. A data table (`.csv`, `.json`) is read as the
+//! Kernel reading the input lays out its element, and read again when
+//! that layout changes.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use orla_graph::Graph;
-use orla_kernel::{FieldData, Handle, Host};
+use orla_graph::{Binding, Graph, Source};
+use orla_kernel::{FieldData, Handle, Host, Runtime, Schema};
 
 use crate::store::{Stamp, Store};
 use crate::{Diagnostic, Event};
 
-/// A file an input is read from.
+/// A file an input is read from, and the element a table was read as.
 struct Asset {
     path: PathBuf,
     stamp: Option<Stamp>,
+    table: Option<TableElement>,
+}
+
+/// The element a data table input is read as: the name of each number it
+/// holds and the layout, as the Kernel reading the input lays them out.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct TableElement {
+    names: Vec<String>,
+    schema: Schema,
+}
+
+/// What a scene declares of its inputs: its graph, the files and
+/// directories they are read from, and the element each data table is
+/// read as ([`table_elements`]).
+pub(crate) struct Declared<'a> {
+    pub(crate) graph: Option<&'a Graph>,
+    pub(crate) files: &'a orla_scene::Files,
+    pub(crate) tables: &'a BTreeMap<String, TableElement>,
+}
+
+/// For each scene input a node reads, the element the first node reading
+/// it (in the graph's order) lays it out as; an input no published Kernel
+/// reads has none.
+pub(crate) fn table_elements(
+    graph: Option<&Graph>,
+    runtime: &Runtime,
+) -> BTreeMap<String, TableElement> {
+    let mut found = BTreeMap::new();
+    let Some(graph) = graph else {
+        return found;
+    };
+    for node in &graph.nodes {
+        let Some(version) = runtime.kernel(&node.kernel) else {
+            continue;
+        };
+        let structs: Vec<orla_ir::StructDef> = match (version.module(), version.native()) {
+            (Some(module), _) => module.structs.clone(),
+            (None, Some(op)) => op.structs(),
+            (None, None) => Vec::new(),
+        };
+        for (port, binding) in &node.inputs {
+            let sources = match binding {
+                Binding::Now(source) => vec![source],
+                Binding::Previous {
+                    source, initial, ..
+                } => vec![source, initial],
+            };
+            for source in sources {
+                let Source::External(name) = source else {
+                    continue;
+                };
+                if found.contains_key(name) {
+                    continue;
+                }
+                let Some(declared) = version.manifest().inputs.iter().find(|p| &p.name == port)
+                else {
+                    continue;
+                };
+                let ty = declared.element();
+                if let (Some(names), Some(schema)) = (
+                    orla_ir::number_names(ty, &structs),
+                    orla_ir::schema_of(ty, &structs),
+                ) {
+                    found.insert(name.clone(), TableElement { names, schema });
+                }
+            }
+        }
+    }
+    found
 }
 
 /// A directory input: frame files in name order and the one held now.
@@ -49,6 +120,27 @@ fn frame_files(store: &dyn Store, dir: &Path) -> Result<Vec<PathBuf>, String> {
 /// The words the Host has room for, which a decoded file may take.
 fn room(host: &Host) -> usize {
     host.budget_words().saturating_sub(host.used_words())
+}
+
+/// A data table's rows as the element the Kernel reading input `name`
+/// lays out; refused when no Kernel reads it.
+fn read_table(
+    bytes: &[u8],
+    extension: &str,
+    name: &str,
+    table: Option<&TableElement>,
+    room: usize,
+) -> Result<(FieldData, String), String> {
+    let table = table.ok_or_else(|| {
+        format!("a data table is read as the Kernel reading it lays out its element, and no published Kernel reads `{name}`")
+    })?;
+    let element = orla_formats::table::Element {
+        names: &table.names,
+        schema: &table.schema,
+    };
+    let data = orla_formats::table::decode(bytes, extension, &element, room)?;
+    let detail = format!("{} row(s) of {}", data.domain().count(), data.schema());
+    Ok((data, detail))
 }
 
 /// A file's bytes, when the Field its header describes fits in `room`
@@ -110,20 +202,19 @@ impl Inputs {
         }
     }
 
-    /// Syncs inputs to what `graph` declares: reads new or changed files,
-    /// lists directories, writes texts, forgets undeclared inputs.
+    /// Syncs inputs to what the scene declares: reads new or changed
+    /// files, lists directories, writes texts, forgets undeclared inputs.
     pub(crate) fn sync(
         &mut self,
         store: &dyn Store,
-        graph: Option<&Graph>,
-        files: &orla_scene::Files,
+        declared: &Declared,
         readable: &dyn Fn(&Path) -> Result<(), String>,
         host: &mut Host,
         events: &mut Vec<Event>,
     ) {
-        self.sync_assets(store, graph, files, readable, host, events);
-        self.sync_sequences(store, files, readable, host, events);
-        self.sync_texts(graph, host, events);
+        self.sync_assets(store, declared, readable, host, events);
+        self.sync_sequences(store, declared.files, readable, host, events);
+        self.sync_texts(declared.graph, host, events);
     }
 
     /// Frame failures since the last call.
@@ -135,12 +226,16 @@ impl Inputs {
     fn sync_assets(
         &mut self,
         store: &dyn Store,
-        graph: Option<&Graph>,
-        files: &orla_scene::Files,
+        declared: &Declared,
         readable: &dyn Fn(&Path) -> Result<(), String>,
         host: &mut Host,
         events: &mut Vec<Event>,
     ) {
+        let Declared {
+            graph,
+            files,
+            tables,
+        } = *declared;
         let wanted: Vec<orla_scene::Asset> = files.assets.clone();
         let stale: Vec<String> = self
             .assets
@@ -160,11 +255,12 @@ impl Inputs {
         } in wanted
         {
             let current = store.stamp(&path);
-            if self
-                .assets
-                .get(&name)
-                .is_some_and(|asset| asset.path == path && asset.stamp == current)
-            {
+            let table = orla_formats::table::is_table(&orla_formats::extension(&path))
+                .then(|| tables.get(&name).cloned())
+                .flatten();
+            if self.assets.get(&name).is_some_and(|asset| {
+                asset.path == path && asset.stamp == current && asset.table == table
+            }) {
                 continue;
             }
             self.assets.insert(
@@ -172,6 +268,7 @@ impl Inputs {
                 Asset {
                     path: path.clone(),
                     stamp: current,
+                    table: table.clone(),
                 },
             );
             // Checked at read time, so a refusal reports once per change.
@@ -184,8 +281,12 @@ impl Inputs {
                 continue;
             }
             let read = read_within(store, &path, room(host));
+            let extension = orla_formats::extension(&path);
             let read = read.and_then(|found| match bytes {
                 true => orla_formats::decode_bytes(&found),
+                false if orla_formats::table::is_table(&extension) => {
+                    read_table(&found, &extension, &name, table.as_ref(), room(host))
+                }
                 false => orla_formats::decode(&found, &path, Some(&ty), room(host)),
             });
             let read = read.and_then(|(data, detail)| {

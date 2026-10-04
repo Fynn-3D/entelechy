@@ -415,6 +415,18 @@ changes:
   `at_linear`); `.mid` as rows of `{start, duration, pitch, velocity,
   channel}`, ticks and tempo read as seconds; `.field`, any Field, the
   Host's format. `run --save` and the protocol's `read` write all of them.
+- `input skills: Rows<Skill> = "data/skills.csv";`: a data table, `.csv`
+  or `.json`, read as rows of the element the Kernel reading the input
+  lays out, and read again when that layout changes. Each number is named
+  as `show` names it: a field by name, a nested one with a dot
+  (`look.race`), a vector's lane `x` to `w` or `0` to `3`, an array's
+  element by its index (`items.0`). A CSV's first line names its columns
+  and each line after it is a row; a JSON file is an array of objects,
+  nested objects and arrays naming their numbers as the dots do. Every
+  number must be given and every column or key must name one; a table
+  that cannot be read says the line or row and leaves the input as it
+  was. One number alone is unnamed: a CSV's one column, or a JSON array
+  of numbers.
 - `input title: Rows<Int> = text "ORLA";`: the characters' codes, updated
   when the document's text changes. A string writes a new line, a tab, a
   quote and a backslash as `\n`, `\t`, `\"` and `\\`, so one string may

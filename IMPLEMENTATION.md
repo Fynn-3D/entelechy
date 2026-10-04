@@ -196,7 +196,9 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
 - Formats read live ([formats](crates/interface/formats/src/lib.rs)), each
   against reference vectors: [png](crates/interface/formats/src/png.rs),
   [wav](crates/interface/formats/src/wav.rs), [inflate](crates/interface/formats/src/inflate.rs),
-  [midi](crates/interface/formats/src/midi.rs).
+  [midi](crates/interface/formats/src/midi.rs); data tables, CSV and JSON
+  read as the reading Kernel lays them out ([table](crates/interface/formats/src/table.rs),
+  [table tests](crates/interface/session/tests/tables.rs)).
 - The protocol is an interface over the session: `prepare` never
   publishes, `publish` checks a generation, `compose` rewrites the
   document ([protocol](crates/interface/protocol/src/lib.rs)).
