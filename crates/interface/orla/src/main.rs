@@ -416,7 +416,10 @@ fn new_scene(args: &[String]) -> Result<(), String> {
 
 /// `orla bench`: the same frames, repeated, on one backend or several.
 fn measure(args: &[String]) -> Result<(), String> {
-    let mut options = orla_session::bench::Options::default();
+    let mut options = orla_session::bench::Options {
+        session: orla_session::SessionOptions::from_environment(),
+        ..orla_session::bench::Options::default()
+    };
     let mut backends: Vec<String> = Vec::new();
     let mut iter = args.iter().cloned();
     while let Some(arg) = iter.next() {

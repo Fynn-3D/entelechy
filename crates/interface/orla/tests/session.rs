@@ -1574,6 +1574,19 @@ fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
         stdout.contains("graph `scene` with 2 node(s), 1 use(s)"),
         "{stdout}"
     );
+    // `bench` finds it the same way.
+    let output = Command::new(orla)
+        .arg("bench")
+        .arg(elsewhere.join("scene.osn"))
+        .args(["--backend", "cpu", "--frames", "1", "--repeat", "1"])
+        .env("ORLA_PACKAGES", &installed)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     // A preset inside it is placed by the package name, and the preset's
     // own `use` resolves from the package's real location.
     std::fs::write(
