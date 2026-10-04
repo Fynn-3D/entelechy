@@ -52,11 +52,18 @@ fn room(host: &Host) -> usize {
 }
 
 /// A file's bytes, when the Field its header describes fits in `room`
-/// words: one too large is refused before its body is read.
+/// words: one too large is refused before its body is read. A header
+/// longer than the bytes first read is read in twice as many until it is
+/// whole or the file ends.
 fn read_within(store: &dyn Store, path: &Path, room: usize) -> Result<Vec<u8>, String> {
-    let start = store
-        .read_start(path, orla_formats::file::HEADER_BYTES)
-        .map_err(|e| e.to_string())?;
+    let mut want = orla_formats::file::HEADER_BYTES;
+    let start = loop {
+        let start = store.read_start(path, want).map_err(|e| e.to_string())?;
+        if start.len() < want || orla_formats::header_whole(&start, path) {
+            break start;
+        }
+        want = want.saturating_mul(2);
+    };
     orla_formats::fits(&start, path, room)?;
     store.read(path).map_err(|e| e.to_string())
 }

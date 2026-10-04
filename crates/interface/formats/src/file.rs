@@ -82,8 +82,14 @@ pub fn words(start: &[u8]) -> Result<usize, FileError> {
         .div_ceil(4))
 }
 
-/// The most bytes a Field file's header takes.
+/// The bytes first read for a Field file's header; a header longer than
+/// these (a wide layout's) is read further ([`header_whole`]).
 pub const HEADER_BYTES: usize = 256;
+
+/// Whether `start`, a Field file's first bytes, holds its header whole.
+pub fn header_whole(start: &[u8]) -> bool {
+    start.iter().filter(|b| **b == b'\n').take(2).count() == 2
+}
 
 /// Decodes a Field file.
 pub fn decode(bytes: &[u8]) -> Result<FieldData, FileError> {

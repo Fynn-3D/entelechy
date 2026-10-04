@@ -207,3 +207,49 @@ output read <- back;
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A Field of a wide layout: its header runs past the bytes first read.
+const WIDE: &str = "
+struct Wide { n: Int; rest: [Int; 200]; }
+kernel w.start@1 { requires { field.write; } output result: Rows<Wide>; compute { return Wide { n: 5, rest: [each 200 { index() }] }; } }
+kernel w.next@1 { requires { field.read; field.write; } input last: Rows<Wide>; output result: Rows<Wide>; compute { let w = sample(last); return Wide { ..w, n: w.n + 1 }; } }
+";
+
+/// A file whose header is longer than the bytes first read for it is
+/// read whole: a wide layout written `to` a file is read back.
+#[test]
+fn a_wide_layout_written_is_read_back() {
+    let dir = scratch(
+        "wide",
+        "use \"w.orla\";
+input saved: Rows<Wide> = \"saves/w.field\" else start.result;
+node start: w.start@1 { domain = 1; }
+node next: w.next@1 { last <- saved; }
+output kept <- next.result to \"saves/w.field\";
+",
+    );
+    std::fs::write(dir.join("w.orla"), WIDE).unwrap();
+    let file = dir.join("saves/w.field");
+    let mut session = open(&dir);
+    session.allow_writes(&dir.join("saves")).unwrap();
+    let context = Context::default();
+    session.evaluate(&context).unwrap();
+    assert_eq!(saved(&file)[0], 6);
+    let bytes = std::fs::read(&file).unwrap();
+    let header_end = bytes
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| **b == b'\n')
+        .nth(1)
+        .unwrap()
+        .0;
+    assert!(
+        header_end > orla_formats::file::HEADER_BYTES,
+        "{header_end}"
+    );
+    let events = session.sync();
+    assert_eq!(wrote(&events), 1, "{events:?}");
+    session.evaluate(&context).unwrap();
+    assert_eq!(saved(&file)[0], 7, "the file was read back");
+    assert_eq!(saved(&file)[200], 199);
+}

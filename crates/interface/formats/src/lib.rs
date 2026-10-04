@@ -88,9 +88,16 @@ pub fn read(path: &Path, want: Option<&str>) -> Result<(FieldData, String), Stri
     decode(&bytes, path, want, usize::MAX)
 }
 
+/// Whether `start`, a file's first bytes, holds all its header says of
+/// the Field it decodes to: always, but for a Field file whose header
+/// runs past them.
+pub fn header_whole(start: &[u8], path: &Path) -> bool {
+    extension(path) != "field" || crate::file::header_whole(start)
+}
+
 /// Whether the Field in a file `start` begins holds `words` words at
-/// most, where its first bytes say ([`file::HEADER_BYTES`] of a `.field`);
-/// a reader asks before it reads the rest.
+/// most, where its first bytes say (a `.field`'s whole header,
+/// [`header_whole`]); a reader asks before it reads the rest.
 pub fn fits(start: &[u8], path: &Path, words: usize) -> Result<(), String> {
     if extension(path) != "field" {
         return Ok(());
