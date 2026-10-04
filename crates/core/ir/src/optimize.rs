@@ -72,6 +72,7 @@ pub fn optimize(module: Module) -> Module {
         .init
         .as_ref()
         .map(|f| ctx.function(&inline_calls(f, &functions, &inlinable)));
+    let (functions, entry, merge, init) = ctx.read_through(functions, entry, merge, init);
     prune(Module {
         manifest: module.manifest,
         structs: module.structs,
@@ -80,6 +81,415 @@ pub fn optimize(module: Module) -> Module {
         merge,
         init,
     })
+}
+
+// ---------------------------------------------------------------- arguments read where they are
+
+/// A value a function's argument leads to: the argument's read (`root`)
+/// and the way from it.
+#[derive(Clone)]
+struct Lead {
+    root: u32,
+    path: Vec<Step>,
+}
+
+/// Every value a function's argument `k` leads to by fields and
+/// elements, if the argument itself is used only so or handed whole to
+/// calls (returned as those calls, callee and place); `None` when it is
+/// wanted whole otherwise.
+/// What an argument leads to, and the calls it is handed to whole.
+type Leads = (HashMap<u32, Lead>, Vec<(u32, usize)>);
+
+fn leads_of(function: &Function, k: u32) -> Option<Leads> {
+    fn walk(body: &[Instruction], k: u32, leads: &mut HashMap<u32, Lead>) {
+        for instruction in body {
+            let lead = match &instruction.op {
+                Op::Arg(i) if *i == k => Some(Lead {
+                    root: instruction.id.0,
+                    path: Vec::new(),
+                }),
+                Op::Extract(source, field) => leads.get(&source.0).map(|l| {
+                    let mut path = l.path.clone();
+                    path.push(Step::Field(*field));
+                    Lead { root: l.root, path }
+                }),
+                Op::Subscript(source, index) => leads.get(&source.0).map(|l| {
+                    let mut path = l.path.clone();
+                    path.push(Step::Index(*index));
+                    Lead { root: l.root, path }
+                }),
+                _ => None,
+            };
+            if let Some(lead) = lead {
+                leads.insert(instruction.id.0, lead);
+            }
+            for block in instruction.op.blocks() {
+                walk(&block.body, k, leads);
+            }
+        }
+    }
+    let mut leads = HashMap::new();
+    walk(&function.body, k, &mut leads);
+    let roots: HashSet<u32> = leads
+        .iter()
+        .filter(|(_, l)| l.path.is_empty())
+        .map(|(id, _)| *id)
+        .collect();
+    if roots.is_empty() {
+        return None;
+    }
+    // A root is used only to take parts out of, or handed whole to a call.
+    fn check(body: &[Instruction], roots: &HashSet<u32>, calls: &mut Vec<(u32, usize)>) -> bool {
+        for instruction in body {
+            let ok = match &instruction.op {
+                Op::Extract(_, _) => true,
+                Op::Subscript(_, index) => !roots.contains(&index.0),
+                Op::Call(callee, args) => {
+                    for (place, arg) in args.iter().enumerate() {
+                        if roots.contains(&arg.0) {
+                            calls.push((*callee, place));
+                        }
+                    }
+                    true
+                }
+                Op::If { condition, .. } => !roots.contains(&condition.0),
+                Op::Match { scrutinee, .. } => !roots.contains(&scrutinee.0),
+                Op::Loop { init, bound, .. } => {
+                    !roots.contains(&init.0) && !bound.is_some_and(|b| roots.contains(&b.0))
+                }
+                other => !operands(other).iter().any(|o| roots.contains(&o.0)),
+            };
+            if !ok {
+                return false;
+            }
+            for block in instruction.op.blocks() {
+                if roots.contains(&block.result.0) || !check(&block.body, roots, calls) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+    let mut calls = Vec::new();
+    let fine = check(&function.body, &roots, &mut calls)
+        && !function.results.iter().any(|id| roots.contains(&id.0));
+    fine.then_some((leads, calls))
+}
+
+/// The functions made reading an argument where it lies, by what they
+/// were made from: the function, the argument, the input and the
+/// address's type.
+type Made = HashMap<(u32, u32, u32, Type), u32>;
+
+impl Ctx<'_> {
+    /// Whether a function's argument `k`, a record or array of at least
+    /// [`BIG_ARG_WORDS`] words, can be read where it lies: it is only taken
+    /// apart, or handed whole to functions that can read it so too.
+    fn reads_through(
+        &self,
+        functions: &[Function],
+        g: u32,
+        k: u32,
+        seen: &mut HashMap<(u32, u32), bool>,
+    ) -> bool {
+        if let Some(known) = seen.get(&(g, k)) {
+            return *known;
+        }
+        let function = &functions[g as usize];
+        let wide = function
+            .args
+            .get(k as usize)
+            .is_some_and(|ty| crate::words(self.structs, *ty) >= BIG_ARG_WORDS);
+        let answer = wide
+            && !self.writers.get(g as usize).copied().unwrap_or(false)
+            && leads_of(function, k).is_some_and(|(_, calls)| {
+                calls.iter().all(|(callee, place)| {
+                    self.reads_through(functions, *callee, *place as u32, seen)
+                })
+            });
+        seen.insert((g, k), answer);
+        answer
+    }
+
+    /// `g` with its argument `k` an address of `input`, of type `address`,
+    /// every part of it read there; made once, appended to `functions`.
+    fn made_reading(
+        &self,
+        functions: &mut Vec<Function>,
+        made: &mut Made,
+        g: u32,
+        k: u32,
+        input: u32,
+        address: Type,
+    ) -> u32 {
+        if let Some(index) = made.get(&(g, k, input, address)) {
+            return *index;
+        }
+        let original = functions[g as usize].clone();
+        let (leads, _) = leads_of(&original, k).expect("judged readable through");
+        let mut body = original.body.clone();
+        self.rewrite(&mut body, &leads, functions, made, input, address);
+        let mut args = original.args.clone();
+        args[k as usize] = address;
+        let index = functions.len() as u32;
+        functions.push(Function {
+            name: format!("{}~{k}", original.name),
+            args,
+            body,
+            results: original.results.clone(),
+            bindings: original.bindings.clone(),
+        });
+        made.insert((g, k, input, address), index);
+        index
+    }
+
+    fn rewrite(
+        &self,
+        body: &mut [Instruction],
+        leads: &HashMap<u32, Lead>,
+        functions: &mut Vec<Function>,
+        made: &mut Made,
+        input: u32,
+        address: Type,
+    ) {
+        for instruction in body.iter_mut() {
+            if let Some(lead) = leads.get(&instruction.id.0) {
+                if lead.path.is_empty() {
+                    instruction.ty = address;
+                } else {
+                    instruction.op = Op::Part {
+                        input,
+                        at: Some(ValueId(lead.root)),
+                        path: lead.path.clone(),
+                    };
+                }
+            }
+            if let Op::Call(callee, args) = &instruction.op {
+                let mut callee = *callee;
+                for (place, arg) in args.iter().enumerate() {
+                    if leads.get(&arg.0).is_some_and(|l| l.path.is_empty()) {
+                        callee = self.made_reading(
+                            functions,
+                            made,
+                            callee,
+                            place as u32,
+                            input,
+                            address,
+                        );
+                    }
+                }
+                instruction.op = Op::Call(callee, args.clone());
+            }
+            for block in instruction.op.blocks_mut() {
+                self.rewrite(&mut block.body, leads, functions, made, input, address);
+            }
+        }
+    }
+
+    /// Calls handing a function a whole input element it only takes apart
+    /// hand it the element's address instead, to a function made to read
+    /// the parts there (`made_reading`): no Kernel holds a wide element
+    /// as a value only to pass it on. Returns the functions, made ones
+    /// among them, callees first, and the entry points.
+    fn read_through(
+        &self,
+        functions: Vec<Function>,
+        entry: Function,
+        merge: Option<Function>,
+        init: Option<Function>,
+    ) -> (Vec<Function>, Function, Option<Function>, Option<Function>) {
+        let count = functions.len();
+        let mut functions = functions;
+        let mut made: Made = HashMap::new();
+        let mut touched: HashSet<usize> = HashSet::new();
+        for index in 0..count {
+            let mut body = std::mem::take(&mut functions[index].body);
+            let args = functions[index].args.clone();
+            if self.redirect(&mut body, &args, &mut functions, &mut made) {
+                touched.insert(index);
+            }
+            functions[index].body = body;
+        }
+        let mut points: Vec<(Function, bool)> = Vec::new();
+        for mut point in std::iter::once(entry)
+            .chain(merge.clone())
+            .chain(init.clone())
+        {
+            let mut body = std::mem::take(&mut point.body);
+            let args = point.args.clone();
+            let changed = self.redirect(&mut body, &args, &mut functions, &mut made);
+            point.body = body;
+            points.push((point, changed));
+        }
+        let points: Vec<Function> = points
+            .into_iter()
+            .map(|(point, changed)| {
+                if changed {
+                    self.function(&point)
+                } else {
+                    point
+                }
+            })
+            .collect();
+        if made.is_empty() {
+            let mut points = points.into_iter();
+            let entry = points.next().expect("an entry");
+            let merge = merge.map(|_| points.next().expect("the merge"));
+            let init = init.map(|_| points.next().expect("the init"));
+            return (functions, entry, merge, init);
+        }
+        for (index, function) in functions.iter_mut().enumerate() {
+            if index >= count || touched.contains(&index) {
+                *function = self.function(function);
+            }
+        }
+        let (functions, mut points) = callees_first(functions, points);
+        let entry = points.remove(0);
+        let merge = merge.map(|_| points.remove(0));
+        let init = init.map(|_| points.remove(0));
+        (functions, entry, merge, init)
+    }
+
+    /// A body's calls handed a whole element of an input read at an
+    /// address, to a function that only takes it apart, redirected to one
+    /// made to read the parts there; whether any was.
+    fn redirect(
+        &self,
+        body: &mut [Instruction],
+        args: &[Type],
+        functions: &mut Vec<Function>,
+        made: &mut Made,
+    ) -> bool {
+        let mut types: HashMap<u32, Type> = HashMap::new();
+        let mut reads: HashMap<u32, (u32, ValueId)> = HashMap::new();
+        fn scan(
+            body: &[Instruction],
+            memories: &[bool],
+            types: &mut HashMap<u32, Type>,
+            reads: &mut HashMap<u32, (u32, ValueId)>,
+        ) {
+            for instruction in body {
+                types.insert(instruction.id.0, instruction.ty);
+                if let Op::At(input, at) = &instruction.op
+                    && !memories.get(*input as usize).copied().unwrap_or(true)
+                {
+                    reads.insert(instruction.id.0, (*input, *at));
+                }
+                for block in instruction.op.blocks() {
+                    scan(&block.body, memories, types, reads);
+                }
+            }
+        }
+        scan(body, self.memories, &mut types, &mut reads);
+        let _ = args;
+        if reads.is_empty() {
+            return false;
+        }
+        let mut changed = false;
+        self.redirect_body(body, &types, &reads, functions, made, &mut changed);
+        changed
+    }
+
+    fn redirect_body(
+        &self,
+        body: &mut [Instruction],
+        types: &HashMap<u32, Type>,
+        reads: &HashMap<u32, (u32, ValueId)>,
+        functions: &mut Vec<Function>,
+        made: &mut Made,
+        changed: &mut bool,
+    ) {
+        for instruction in body.iter_mut() {
+            if let Op::Call(callee, args) = &instruction.op {
+                let mut callee = *callee;
+                let mut args = args.clone();
+                for (place, arg) in args.iter_mut().enumerate() {
+                    let Some((input, at)) = reads.get(&arg.0).copied() else {
+                        continue;
+                    };
+                    let mut seen = HashMap::new();
+                    if !self.reads_through(functions, callee, place as u32, &mut seen) {
+                        continue;
+                    }
+                    let address = types.get(&at.0).copied().unwrap_or(Type::Int);
+                    callee =
+                        self.made_reading(functions, made, callee, place as u32, input, address);
+                    *arg = at;
+                    *changed = true;
+                }
+                instruction.op = Op::Call(callee, args);
+            }
+            for block in instruction.op.blocks_mut() {
+                self.redirect_body(&mut block.body, types, reads, functions, made, changed);
+            }
+        }
+    }
+}
+
+/// The functions ordered so each comes after those it calls, the first
+/// written first where they are free to be, and every call, the entry
+/// points' too, renumbered to match.
+fn callees_first(
+    functions: Vec<Function>,
+    points: Vec<Function>,
+) -> (Vec<Function>, Vec<Function>) {
+    fn callees(body: &[Instruction], out: &mut Vec<u32>) {
+        for instruction in body {
+            if let Op::Call(callee, _) = &instruction.op {
+                out.push(*callee);
+            }
+            for block in instruction.op.blocks() {
+                callees(&block.body, out);
+            }
+        }
+    }
+    fn visit(index: usize, functions: &[Function], placed: &mut Vec<bool>, order: &mut Vec<usize>) {
+        if placed[index] {
+            return;
+        }
+        placed[index] = true;
+        let mut called = Vec::new();
+        callees(&functions[index].body, &mut called);
+        for callee in called {
+            visit(callee as usize, functions, placed, order);
+        }
+        order.push(index);
+    }
+    fn renumber(body: &mut [Instruction], to: &[u32]) {
+        for instruction in body {
+            if let Op::Call(callee, _) = &mut instruction.op {
+                *callee = to[*callee as usize];
+            }
+            for block in instruction.op.blocks_mut() {
+                renumber(&mut block.body, to);
+            }
+        }
+    }
+    let mut placed = vec![false; functions.len()];
+    let mut order = Vec::with_capacity(functions.len());
+    for index in 0..functions.len() {
+        visit(index, &functions, &mut placed, &mut order);
+    }
+    let mut to = vec![0u32; functions.len()];
+    for (new, old) in order.iter().enumerate() {
+        to[*old] = new as u32;
+    }
+    let mut slots: Vec<Option<Function>> = functions.into_iter().map(Some).collect();
+    let mut ordered: Vec<Function> = order
+        .iter()
+        .map(|old| slots[*old].take().expect("each once"))
+        .collect();
+    for function in &mut ordered {
+        renumber(&mut function.body, &to);
+    }
+    let points = points
+        .into_iter()
+        .map(|mut point| {
+            renumber(&mut point.body, &to);
+            point
+        })
+        .collect();
+    (ordered, points)
 }
 
 /// The module without the functions its entry points never reach, so an
@@ -857,7 +1267,7 @@ impl Ctx<'_> {
     fn has_effects(&self, op: &Op) -> bool {
         match op {
             Op::Put(..) | Op::Emit(_) | Op::Spend(_) | Op::Look => true,
-            Op::Call(callee, _) => self.writers[*callee as usize],
+            Op::Call(callee, _) => self.writers.get(*callee as usize).copied().unwrap_or(false),
             other => other
                 .blocks()
                 .into_iter()
@@ -875,7 +1285,7 @@ impl Ctx<'_> {
         match op {
             Op::Put(..) | Op::Emit(_) | Op::Spend(_) | Op::Look | Op::Carried | Op::Index => false,
             Op::If { .. } | Op::Match { .. } | Op::Loop { .. } => false,
-            Op::Call(callee, _) => !self.writers[*callee as usize],
+            Op::Call(callee, _) => !self.writers.get(*callee as usize).copied().unwrap_or(false),
             Op::Sample(input)
             | Op::At(input, _)
             | Op::AtLinear(input, _)
