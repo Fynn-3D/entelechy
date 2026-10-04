@@ -67,6 +67,14 @@ fn no_scene() -> EvaluateError {
     ))
 }
 
+impl crate::Warm {
+    /// Opens `backend` (`cpu`, `gpu` or `jit`) once, for many sessions.
+    pub fn open(backend: &str, limits: Limits) -> Result<Self, String> {
+        let (main, ordered) = Session::backends(backend, orla_gpu::Wait::blocking())?;
+        Ok(Self::over(main, ordered, limits))
+    }
+}
+
 /// A main backend and the one for ordered work beside it.
 pub(crate) type Backends = (Box<dyn Backend>, Option<Box<dyn Backend>>);
 type Display = orla_gpu::present::Display;

@@ -170,16 +170,19 @@ pub struct Warm {
 }
 
 impl Warm {
-    /// Opens `backend` (`cpu`, `gpu` or `jit`) once.
-    pub fn open(backend: &str, limits: crate::Limits) -> Result<Self, String> {
-        let (main, ordered) = crate::Session::backends(backend, orla_gpu::Wait::blocking())?;
-        Ok(Self {
+    /// Over backends opened once (`Warm::open`, by the session's opening).
+    pub(crate) fn over(
+        main: Box<dyn Backend>,
+        ordered: Option<Box<dyn Backend>>,
+        limits: crate::Limits,
+    ) -> Self {
+        Self {
             main: Arc::from(main),
             ordered: ordered.map(Arc::from),
             main_memo: Memo::default(),
             ordered_memo: Memo::default(),
             limits,
-        })
+        }
     }
 
     /// A runtime of its own over the backends, preparing each module once
@@ -219,14 +222,10 @@ mod tests {
 
     use super::*;
 
-    /// The interpreter, counting what it prepares and checking it is
-    /// handed its own preparation to run.
-    struct Counting {
-        inner: orla_cpu::CpuBackend,
-        prepared: AtomicUsize,
-    }
+    /// A backend that counts what it prepares and runs nothing.
+    struct Counting(AtomicUsize);
 
-    struct Mine(Box<dyn Prepared>);
+    struct Mine;
     impl Prepared for Mine {
         fn as_any(&self) -> &dyn Any {
             self
@@ -237,22 +236,18 @@ mod tests {
         fn name(&self) -> &'static str {
             "counting"
         }
-        fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
-            self.prepared.fetch_add(1, Ordering::Relaxed);
-            Ok(Box::new(Mine(self.inner.prepare(module)?)))
+        fn prepare(&self, _: &Validated) -> Result<Box<dyn Prepared>, String> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Ok(Box::new(Mine))
         }
         fn execute(
             &self,
-            prepared: &dyn Prepared,
-            module: &Validated,
-            invocation: &Invocation,
-            scope: &mut Scope<'_>,
+            _: &dyn Prepared,
+            _: &Validated,
+            _: &Invocation,
+            _: &mut Scope<'_>,
         ) -> Result<Vec<Handle>, ExecutionError> {
-            let mine = prepared
-                .as_any()
-                .downcast_ref::<Mine>()
-                .expect("handed its own preparation");
-            Backend::execute(&self.inner, mine.0.as_ref(), module, invocation, scope)
+            Err(ExecutionError::Device("runs nothing".into()))
         }
     }
 
@@ -265,19 +260,16 @@ mod tests {
 
     #[test]
     fn a_module_prepared_before_is_not_prepared_again_by_any_runtime() {
-        let inner = Arc::new(Counting {
-            inner: orla_cpu::CpuBackend,
-            prepared: AtomicUsize::new(0),
-        });
+        let inner = Arc::new(Counting(AtomicUsize::new(0)));
         let memo = Memo::default();
         let first = Remembered::new(inner.clone(), Arc::clone(&memo));
         let second = Remembered::new(inner.clone(), Arc::clone(&memo));
         let one = first.prepare(&module("2.0")).unwrap();
         let again = second.prepare(&module("2.0")).unwrap();
-        assert_eq!(inner.prepared.load(Ordering::Relaxed), 1);
+        assert_eq!(inner.0.load(Ordering::Relaxed), 1);
         // The same id, another module: prepared.
         second.prepare(&module("3.0")).unwrap();
-        assert_eq!(inner.prepared.load(Ordering::Relaxed), 2);
+        assert_eq!(inner.0.load(Ordering::Relaxed), 2);
         // Each handed out preparation is the inner backend's own.
         assert!(made(one.as_ref()).as_any().downcast_ref::<Mine>().is_some());
         assert!(
