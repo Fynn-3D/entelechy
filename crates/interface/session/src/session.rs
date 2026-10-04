@@ -67,6 +67,12 @@ fn no_scene() -> EvaluateError {
     ))
 }
 
+/// A main backend and the one for ordered work beside it.
+pub(crate) type Backends = (Box<dyn Backend>, Option<Box<dyn Backend>>);
+type Display = orla_gpu::present::Display;
+/// Backends opened, and the main one's display when it has one.
+type Opened = (Box<dyn Backend>, Option<Box<dyn Backend>>, Option<Display>);
+
 impl Session {
     /// Creates a CPU-backed session; [`Session::sync`] loads files.
     /// `library` is an extra directory or file of Kernels.
@@ -126,24 +132,6 @@ impl Session {
     /// blocking on the device.
     pub fn runtime_for(backend: &str, limits: Limits) -> Result<Runtime, String> {
         Self::build(backend, limits, orla_gpu::Wait::blocking()).map(|built| built.runtime)
-    }
-
-    /// A runtime over `backend` whose Kernels [`crate::apart::chosen`] by
-    /// `split` round apart ([`crate::apart`]), for a replay run to find a
-    /// decision two Kernels each make.
-    pub fn runtime_apart(backend: &str, limits: Limits, split: u32) -> Result<Runtime, String> {
-        let wrap = |inner: Box<dyn Backend>| -> Box<dyn Backend> {
-            Box::new(crate::apart::Apart::new(inner, split))
-        };
-        let (mut runtime, _) = Self::backend_runtime_wrapped(
-            backend,
-            limits.words,
-            orla_gpu::Wait::blocking(),
-            &wrap,
-        )?;
-        runtime.host_mut().set_work(limits.work);
-        runtime.set_small(limits.small);
-        Ok(runtime)
     }
 
     /// Builds a runtime over `cpu`, `gpu`, `jit`, or `best` (the first of
@@ -244,37 +232,27 @@ impl Session {
         budget_words: usize,
         wait: orla_gpu::Wait,
     ) -> Result<(Runtime, Option<orla_gpu::present::Display>), String> {
-        Self::backend_runtime_wrapped(backend, budget_words, wait, &|inner| inner)
+        let (main, ordered, display) = Self::opened(backend, wait)?;
+        Ok((Runtime::with_backends(budget_words, main, ordered), display))
     }
 
-    /// [`Session::backend_runtime`], each backend handed through `wrap`.
-    fn backend_runtime_wrapped(
-        backend: &str,
-        budget_words: usize,
-        wait: orla_gpu::Wait,
-        wrap: &dyn Fn(Box<dyn Backend>) -> Box<dyn Backend>,
-    ) -> Result<(Runtime, Option<orla_gpu::present::Display>), String> {
+    /// The backends `backend` names, opened: the main one and the one for
+    /// ordered work (the JIT beside a GPU).
+    pub(crate) fn backends(backend: &str, wait: orla_gpu::Wait) -> Result<Backends, String> {
+        Self::opened(backend, wait).map(|(main, ordered, _)| (main, ordered))
+    }
+
+    fn opened(backend: &str, wait: orla_gpu::Wait) -> Result<Opened, String> {
         match backend {
-            "cpu" => Ok((
-                Runtime::with_backend(budget_words, wrap(Box::new(orla_cpu::CpuBackend))),
-                None,
-            )),
+            "cpu" => Ok((Box::new(orla_cpu::CpuBackend), None, None)),
             "gpu" => {
                 // The JIT runs scans; the GPU runs everything else.
                 let gpu =
                     orla_gpu::GpuBackend::with_wait(wait).map_err(|error| error.to_string())?;
                 let display = gpu.display();
-                let backend: Box<dyn Backend> = wrap(Box::new(gpu));
-                let ordered = Self::jit().ok().map(wrap);
-                Ok((
-                    Runtime::with_backends(budget_words, backend, ordered),
-                    Some(display),
-                ))
+                Ok((Box::new(gpu), Self::jit().ok(), Some(display)))
             }
-            "jit" => Ok((
-                Runtime::with_backend(budget_words, wrap(Self::jit()?)),
-                None,
-            )),
+            "jit" => Ok((Self::jit()?, None, None)),
             other => Err(format!(
                 "unknown backend `{other}`; use cpu, gpu, jit, or best"
             )),

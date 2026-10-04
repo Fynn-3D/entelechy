@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use orla_ir::Validated;
 use orla_kernel::{Candidate, Expect, KernelId, Runtime, Ticket};
 use orla_language::Kernel;
 
@@ -473,7 +474,7 @@ impl Kernels {
             if same_text && same_declarations && runtime.kernel(&id).is_some() {
                 continue;
             }
-            let module = match orla_compiler::compile_kernel(&kernel, Some(&id)) {
+            let module = match compiled(store, path, &id, &text, declarations, &kernel) {
                 Ok(module) => module,
                 Err(error) => {
                     // One fault in one place is reported once, in the
@@ -699,4 +700,53 @@ impl Written {
             }),
         })
     }
+}
+
+/// Kernels compiled, by the document, id, text and inherited declarations
+/// ([`crate::sources::declarations_key`]) each was compiled from: the
+/// same four compile to the same module, so a session reading the same
+/// documents through the store as one before does not compile them again.
+pub(crate) type Compiled = std::collections::HashMap<(PathBuf, String, String, String), Validated>;
+
+/// A Kernel compiled, or the module it compiled to before from the same
+/// document, id, text and declarations. A refusal is not kept.
+fn compiled(
+    store: &dyn Store,
+    path: &Path,
+    id: &KernelId,
+    text: &str,
+    declarations: &str,
+    kernel: &orla_language::Kernel,
+) -> Result<Validated, orla_compiler::CompileError> {
+    let key = (
+        path.to_path_buf(),
+        id.to_string(),
+        text.to_owned(),
+        declarations.to_owned(),
+    );
+    let lock = |parsed: &crate::store::Parsed| {
+        parsed
+            .compiled
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&key)
+            .cloned()
+    };
+    if let Some(module) = store.parsed().and_then(lock) {
+        return Ok(module);
+    }
+    let module = orla_compiler::compile_kernel(kernel, Some(id))?;
+    if let Some(parsed) = store.parsed() {
+        let mut kept = parsed
+            .compiled
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A long session's edits leave modules behind; they go when there
+        // are many.
+        if kept.len() >= 4096 {
+            kept.clear();
+        }
+        kept.insert(key, module.clone());
+    }
+    Ok(module)
 }

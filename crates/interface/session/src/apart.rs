@@ -250,6 +250,26 @@ impl Backend for Apart {
     ) -> Result<Vec<u8>, String> {
         self.inner.download(device, byte_len)
     }
+    fn last_device_time(&self) -> Option<std::time::Duration> {
+        self.inner.last_device_time()
+    }
+    fn measurement_floor(&self) -> std::time::Duration {
+        self.inner.measurement_floor()
+    }
+    fn set_measured(&self, on: bool) {
+        self.inner.set_measured(on);
+    }
+    fn measures_the_device(&self) -> bool {
+        self.inner.measures_the_device()
+    }
+    fn same_resident(
+        &self,
+        a: &(dyn std::any::Any + Send + Sync),
+        b: &(dyn std::any::Any + Send + Sync),
+        byte_len: usize,
+    ) -> Result<bool, String> {
+        self.inner.same_resident(a, b, byte_len)
+    }
 }
 
 #[cfg(test)]

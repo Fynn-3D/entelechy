@@ -753,15 +753,24 @@ fn replay(args: &[String]) -> Result<(), String> {
     if out.is_some() && (files.len() > 1 || apart) {
         return Err("--out records one run of one replay".into());
     }
+    // Many replays in one run share their backends, each Kernel prepared
+    // once; each replay still opens a session of its own.
+    let warm = if out.is_some() {
+        None
+    } else {
+        Some(orla_session::Warm::open(&backend, limits)?)
+    };
+    // And their documents, each parsed once while its file is unchanged.
+    let store = std::sync::Arc::new(orla_session::Disk::with_packages(
+        orla_session::environment_packages(),
+    ));
     let mut failed = 0;
     for file in &files {
         let text = std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
         let base = file.parent().unwrap_or_else(|| Path::new("."));
         let replay = orla::replay::parse(&text, base)
             .map_err(|error| format!("{}: {error}", file.display()))?;
-        let store = std::sync::Arc::new(orla_session::Disk::with_packages(
-            orla_session::environment_packages(),
-        ));
+        let store = std::sync::Arc::clone(&store);
         if apart && replay.alike {
             println!(
                 "{}: left out rounded apart: it holds two forms alike",
@@ -769,8 +778,8 @@ fn replay(args: &[String]) -> Result<(), String> {
             );
             continue;
         }
-        let ran = if apart {
-            rounded_apart(&replay, &store, &backend, limits, fusion)
+        let ran = if let (true, Some(warm)) = (apart, &warm) {
+            rounded_apart(&replay, &store, warm, fusion)
         } else if let Some(out) = &out {
             let runtime = Session::runtime_for(&backend, limits)?;
             let target = orla::render::Target::of(out);
@@ -783,6 +792,8 @@ fn replay(args: &[String]) -> Result<(), String> {
             let summary = recorder.finish()?;
             recorded("recorded", &target, &summary, sound_rate, started);
             ran
+        } else if let Some(warm) = &warm {
+            orla::replay::run_fused(&replay, store, warm.runtime(), fusion)
         } else {
             let runtime = Session::runtime_for(&backend, limits)?;
             orla::replay::run_fused(&replay, store, runtime, fusion)
@@ -1170,13 +1181,12 @@ fn evaluate_and_export(
 fn rounded_apart(
     replay: &orla::replay::Replay,
     store: &std::sync::Arc<orla_session::Disk>,
-    backend: &str,
-    limits: orla_session::Limits,
+    warm: &orla_session::Warm,
     fusion: bool,
 ) -> Result<orla::replay::Outcome, String> {
     let mut all = orla::replay::Outcome::default();
     for split in 0..orla_session::apart::SPLITS {
-        let runtime = Session::runtime_apart(backend, limits, split)?;
+        let runtime = warm.runtime_apart(split);
         let outcome = orla::replay::run_fused(replay, store.clone(), runtime, fusion)?;
         // Every way runs the same frames, checks and shows.
         all.frames = outcome.frames;

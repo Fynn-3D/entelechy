@@ -722,13 +722,105 @@ fn relative_to(store: &dyn Store, path: &Path, from: &Path) -> String {
     path.display().to_string()
 }
 
-/// A key for a set of shared declarations.
+/// A key for a set of shared declarations: a hash, 128 bits, of all
+/// they say and where (every name, type, body and place written), so a
+/// change to any of them is another key. A function body is hashed once
+/// while it is held: the store keeps each body's hash beside the
+/// documents it parsed, by the body, and a body is shared by every
+/// declaration that inherits it.
 pub(crate) fn declarations_key(
+    store: &dyn Store,
     structs: &[orla_language::StructDecl],
     types: &[orla_language::TypeAlias],
     functions: &[orla_language::FnDecl],
 ) -> String {
-    format!("{structs:?}{types:?}{functions:?}")
+    use std::fmt::Write;
+    let mut key = Twice::default();
+    let _ = write!(key, "{structs:?}{types:?}");
+    for function in functions {
+        let orla_language::FnDecl {
+            name,
+            generics,
+            args,
+            ret,
+            body,
+            origin,
+        } = function;
+        let _ = write!(key, "fn{name:?}{generics:?}{args:?}{ret:?}{origin:?}");
+        let _ = write!(key, "{:032x}", body_hash(store, body));
+    }
+    format!("{:032x}", key.finish())
+}
+
+/// The bodies hashed, by where each lies, with the body held weakly: an
+/// entry whose body is gone is not its address's any more, and its
+/// allocation is not reused while the entry holds it.
+pub(crate) type BodyHashes =
+    std::collections::HashMap<usize, (std::sync::Weak<orla_language::Block>, u128)>;
+
+fn lock(parsed: &Parsed) -> std::sync::MutexGuard<'_, BodyHashes> {
+    parsed
+        .bodies
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// A body's hash, from the store's bodies when it was hashed while held.
+fn body_hash(store: &dyn Store, body: &std::sync::Arc<orla_language::Block>) -> u128 {
+    use std::fmt::Write;
+    let at = std::sync::Arc::as_ptr(body) as usize;
+    if let Some(parsed) = store.parsed()
+        && let Some((held, hash)) = lock(parsed).get(&at)
+        && held
+            .upgrade()
+            .is_some_and(|alive| std::sync::Arc::ptr_eq(&alive, body))
+    {
+        return *hash;
+    }
+    let mut hashed = Twice::default();
+    let _ = write!(hashed, "{body:?}");
+    let hash = hashed.finish();
+    if let Some(parsed) = store.parsed() {
+        let mut bodies = lock(parsed);
+        // Bodies dropped leave their entries; they go when there are many.
+        if bodies.len() >= 4096 {
+            bodies.retain(|_, (held, _)| held.strong_count() > 0);
+        }
+        bodies.insert(at, (std::sync::Arc::downgrade(body), hash));
+    }
+    hash
+}
+
+/// Text hashed two ways at once, for a 128-bit hash: SipHash with its
+/// fixed keys, one of the two begun with a byte the other is not.
+struct Twice(
+    std::collections::hash_map::DefaultHasher,
+    std::collections::hash_map::DefaultHasher,
+);
+
+impl Default for Twice {
+    fn default() -> Self {
+        use std::hash::Hasher;
+        let mut second = std::collections::hash_map::DefaultHasher::new();
+        second.write_u8(1);
+        Self(std::collections::hash_map::DefaultHasher::new(), second)
+    }
+}
+
+impl Twice {
+    fn finish(&self) -> u128 {
+        use std::hash::Hasher;
+        (u128::from(self.0.finish()) << 64) | u128::from(self.1.finish())
+    }
+}
+
+impl std::fmt::Write for Twice {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        use std::hash::Hasher;
+        self.0.write(text.as_bytes());
+        self.1.write(text.as_bytes());
+        Ok(())
+    }
 }
 
 pub(crate) fn named_id(kernel: &Kernel) -> Result<KernelId, crate::Diagnostic> {

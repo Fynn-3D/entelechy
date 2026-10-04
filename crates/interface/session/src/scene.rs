@@ -483,7 +483,12 @@ impl Scene {
                     .collect();
                 // What its Kernels inherit, its own declarations included:
                 // a function it changes recompiles the Kernels that call it.
-                declarations = declarations_key(&self.structs, &self.types, &self.functions);
+                declarations = declarations_key(
+                    self.store.as_ref(),
+                    &self.structs,
+                    &self.types,
+                    &self.functions,
+                );
                 document.resolve((&structs, &types, &functions));
             }
             Err(error) => events.push(Event::Rejected {
@@ -562,7 +567,7 @@ impl Scene {
                         let s: Vec<_> = s.into_iter().chain(doc.structs).collect();
                         let t: Vec<_> = t.into_iter().chain(doc.types).collect();
                         let f: Vec<_> = f.into_iter().chain(doc.functions).collect();
-                        Some(declarations_key(&s, &t, &f))
+                        Some(declarations_key(self.store.as_ref(), &s, &t, &f))
                     })
                     .unwrap_or_default()
             };
@@ -845,6 +850,7 @@ impl Scene {
                     // Its own declarations beside what it uses: a
                     // function it changes recompiles its Kernels.
                     let key = declarations_key(
+                        self.store.as_ref(),
                         &structs
                             .iter()
                             .chain(&document.structs)

@@ -31,6 +31,7 @@ mod options;
 pub mod package;
 pub mod play;
 mod reads;
+pub mod remember;
 pub mod replay;
 mod scene;
 mod session;
@@ -100,6 +101,7 @@ pub struct StateCopy {
     /// The Kernel's words, one per scalar.
     pub words: Vec<u32>,
 }
+pub use remember::Warm;
 pub use session::Session;
 
 pub use observe::parse_target;

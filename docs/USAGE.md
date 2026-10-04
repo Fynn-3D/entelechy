@@ -324,7 +324,12 @@ file. `orla help replay` lists the same forms:
 | `show <node.port[i][.field]>` | prints an element of a node's output after the last frame, or a field of it, a struct field by field; it checks nothing, and the run reports what it shows | `show step.result[0]`, `show step.result[0].score` |
 
 Nodes an expectation names are pinned before the first frame, so fusion
-keeps them; a frame evaluates only what its expectations need.
+keeps them; a frame evaluates only what its expectations need. Replays
+run together, `orla replay tests/*.replay`, each open a session of their
+own and share what their scenes are made of: the backends are opened
+once, each document parsed and each Kernel compiled and prepared once
+while what it is made from is unchanged. A large scene's replays run
+faster together than one by one.
 
 In the Player, a replay drives the scene at
 its own times, prints what it observed at the end, and leaves the window

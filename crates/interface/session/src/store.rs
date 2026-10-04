@@ -69,9 +69,18 @@ pub trait Store: Send + Sync {
 }
 
 /// Documents parsed once per stamp: a document read again unchanged is
-/// not parsed again.
+/// not parsed again; and what is worked out of them once, by content,
+/// for every session reading through the store.
 #[derive(Clone, Debug, Default)]
-pub struct Parsed(std::sync::Arc<Mutex<BTreeMap<PathBuf, ParsedAt>>>);
+pub struct Parsed {
+    documents: std::sync::Arc<Mutex<BTreeMap<PathBuf, ParsedAt>>>,
+    /// Each function body's hash, while the body is held
+    /// ([`crate::sources::declarations_key`]).
+    pub(crate) bodies: std::sync::Arc<Mutex<crate::sources::BodyHashes>>,
+    /// Kernels compiled, by what they were compiled from
+    /// ([`crate::kernels::Compiled`]).
+    pub(crate) compiled: std::sync::Arc<Mutex<crate::kernels::Compiled>>,
+}
 
 /// A document as parsed, and the stamp of the text it was parsed from.
 type ParsedAt = (Stamp, std::sync::Arc<orla_language::Document>);
@@ -83,7 +92,7 @@ impl dyn Store + '_ {
         let stamp = self.stamp(path);
         if let (Some(parsed), Some(stamp)) = (self.parsed(), stamp)
             && let Some((seen, document)) = parsed
-                .0
+                .documents
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .get(path)
@@ -99,7 +108,7 @@ impl dyn Store + '_ {
         );
         if let (Some(parsed), Some(stamp)) = (self.parsed(), stamp) {
             parsed
-                .0
+                .documents
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .insert(
