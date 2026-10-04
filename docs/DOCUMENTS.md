@@ -423,7 +423,8 @@ changes:
   element by its index (`items.0`). A CSV's first line names its columns
   and each line after it is a row; a JSON file is an array of objects,
   nested objects and arrays naming their numbers as the dots do. Every
-  number must be given and every column or key must name one; a table
+  number must be given and every column or key must name one, but for a
+  note, a column or key whose name begins with `#` (`#name`); a table
   that cannot be read says the line or row and leaves the input as it
   was. One number alone is unnamed: a CSV's one column, or a JSON array
   of numbers.

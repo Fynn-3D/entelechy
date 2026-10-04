@@ -10,7 +10,9 @@
 //! [1, 2]}` gives `pos.0` and `pos.1`); an array of numbers, or of arrays,
 //! is rows of one unnamed number, or of numbered ones. A vector's lane is
 //! named `x` to `w` or `0` to `3`. Every number of the element must be
-//! given, and every column or key must name one.
+//! given, and every column or key must name one, but for a note: a
+//! column or key whose name begins with `#` (`#name`) is for whoever
+//! reads the table, and is left out.
 
 use std::collections::BTreeMap;
 
@@ -72,6 +74,17 @@ pub fn decode(
         .collect();
     let wanted = wanted_names(element.names);
     let mut values = Vec::with_capacity(needed);
+    let records: Vec<Record> = records
+        .into_iter()
+        .map(|r| Record {
+            cells: r
+                .cells
+                .into_iter()
+                .filter(|(name, _)| !is_note(name))
+                .collect(),
+            ..r
+        })
+        .collect();
     for record in &records {
         // Every column or key names a number of the element.
         if let Some((name, _)) = record
@@ -116,6 +129,12 @@ pub fn decode(
         u32::try_from(records.len()).map_err(|_| "the table has too many rows".to_owned())?;
     let domain = Domain::Rows(count);
     FieldData::from_values(element.schema.clone(), domain, &values).map_err(|e| e.to_string())
+}
+
+/// Whether a column or key is a note for the reader: its name, or a
+/// nested key's, begins with `#`.
+fn is_note(name: &str) -> bool {
+    name.starts_with('#') || name.contains(".#")
 }
 
 /// A row as read: where it was written, for errors, and each cell by the
@@ -536,6 +555,25 @@ mod tests {
         );
         let big = decode(b"id,power\n1,2\n3,4\n", "csv", &e, 3).unwrap_err();
         assert!(big.contains('4') && big.contains('3'), "{big}");
+    }
+
+    #[test]
+    fn a_note_is_left_out() {
+        let (names, schema) = element(&["id", "power"], vec![Scalar::Int, Scalar::Float]);
+        let e = Element {
+            names: &names,
+            schema: &schema,
+        };
+        let csv = decode(
+            b"#name,id,power\ngoblin,0,1.5\n\"cave, croc\",11,2\n",
+            "csv",
+            &e,
+            usize::MAX,
+        )
+        .unwrap();
+        let json = decode(br##"[{"#name": "goblin", "id": 0, "power": 1.5}, {"#name": "cave croc", "id": 11, "power": 2}]"##, "json", &e, usize::MAX).unwrap();
+        assert_eq!(csv.values(), json.values());
+        assert_eq!(csv.values()[2], 11);
     }
 
     #[test]
