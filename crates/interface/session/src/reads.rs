@@ -57,11 +57,21 @@ impl Reads {
         Ok(())
     }
 
+    /// Whether a sync is to hand [`Reads::settle`] the scene's
+    /// directories: where reads are held, until they are fixed. Where they
+    /// are not, no read is checked against them, so they are not worked
+    /// out at all.
+    pub(crate) fn wants_directories(&self) -> bool {
+        self.restricted && !self.settled
+    }
+
     /// Takes the directories the scene's documents are in or use and its
     /// inputs read from, once a sync has read it; where reads are held,
-    /// only the first time.
+    /// only the first time, and where they are not, never, as nothing is
+    /// checked against them.
     pub(crate) fn settle(&mut self, store: &dyn Store, read_from: &[PathBuf]) {
-        if self.restricted && self.settled {
+        if !self.wants_directories() {
+            self.synced = true;
             return;
         }
         self.beside = read_from
