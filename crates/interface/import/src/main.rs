@@ -23,7 +23,7 @@ usage:
       <stem>.view.field, which the `vector` package draws; a font (.ttf, .otf)
       becomes <stem>.glyphs.field, <stem>.segments.field and
       <stem>.metrics.field, the glyphs of --chars or of every character it
-      maps, which the `font` package lays out. Files go to --out, the
+      maps, for a scene's Kernels to lay out. Files go to --out, the
       source's directory by default.";
 
 fn main() -> ExitCode {

@@ -1,0 +1,15 @@
+//! The letters' grid (`ui.letters`): the text package's bitmap font,
+//! then the side of the atlas's glyphs, then the atlas, a grid 96 texels
+//! across that a scene draws, its glyphs `side` pixels square in order of
+//! the codes it gives `graphs/text.osn`.
+//!
+//!   node letters: graph "ui.orlapkg/graphs/letters.osn" { font <- font; atlas <- glyphs.result; side = 10; }
+use "../kernels/letters.orla";
+
+input font: Grid<Float>;
+input atlas: Grid<Float>;
+param side: Int = 10;
+
+node grid: ui.letters@1 { side = side; font <- font; atlas <- atlas; domain = vec2(96.0, 49.0) + size(atlas) * vec2(0.0, 1.0); }
+
+output letters <- grid.result;

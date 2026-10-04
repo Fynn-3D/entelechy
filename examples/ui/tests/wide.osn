@@ -1,0 +1,40 @@
+// A wide letter drawn from an atlas the scene draws itself, no font: a
+// line of four characters, A, 中, B and 文, the atlas holding 中 alone as
+// a box ten pixels square, rimmed, 0.1 to 0.8 across.
+use "../../../packages/ui.orlapkg";
+
+input font: Grid<Float> = "../../../packages/text.orlapkg/font.png";
+input line: Rows<Int> = text "A中B文";
+
+node codes: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    domain = 1;
+    compute { return 20013; }
+}
+node atlas: kernel {
+    requires { field.write; }
+    output result: Grid<Float>;
+    domain = vec2(96, 10);
+    compute {
+        let p = icoord();
+        let inside = p.x >= 1 && p.x <= 8;
+        return if inside && (p.x == 1 || p.x == 8 || p.y == 0 || p.y == 9) { 1.0 } else { 0.0 };
+    }
+}
+node letters: graph "../../../packages/ui.orlapkg/graphs/letters.osn" { font <- font; atlas <- atlas.result; side = 10; }
+node cells: graph "../../../packages/ui.orlapkg/graphs/text.osn" { text <- line; codes <- codes.result; width = 8; utf8 = 0; }
+node view: kernel {
+    requires { field.read; field.write; }
+    input letters: Grid<Float> <- letters.letters;
+    input cells: Rows<Int> <- cells.letters;
+    output result: Image;
+    domain = vec2(60, 14);
+    compute {
+        let q = coord() + vec2(0.5, 0.5);
+        let ink = row_cover(letters, cells, 0, 8, q, vec2(2.0, 2.0), 1.0);
+        return vec4(ink, ink, ink, 1.0);
+    }
+}
+
+output result <- view.result;

@@ -1,0 +1,121 @@
+scene ../scene.osn
+window 640 360
+
+# The words decoded, twenty cells a row of the 25.
+frame 0.0
+expect count words.letters = 500
+expect words.letters[0] = 83
+expect nav.result[0].row = 0
+
+# The difficulty: left makes it easy, right thrice hard, and no harder.
+key 37 down
+frame 0.1
+key 37 up
+frame 0.15
+expect settings.result[0].difficulty = 0
+key 39 down
+frame 0.2
+key 39 up
+frame 0.25
+key 39 down
+frame 0.3
+key 39 up
+frame 0.35
+key 39 down
+frame 0.4
+key 39 up
+frame 0.45
+expect settings.result[0].difficulty = 2
+
+# The volume a step up; the subtitles turned off by Enter; the hints on
+# by right.
+key 40 down
+frame 0.5
+key 40 up
+frame 0.55
+expect nav.result[0].row = 1
+key 39 down
+frame 0.6
+key 39 up
+frame 0.65
+expect settings.result[0].volume = 0.8 0.0001
+key 40 down
+frame 0.7
+key 40 up
+frame 0.75
+key 13 down
+frame 0.8
+key 13 up
+frame 0.85
+expect settings.result[0].subtitles = false
+key 40 down
+frame 0.9
+key 40 up
+frame 0.95
+key 39 down
+frame 1.0
+key 39 up
+frame 1.05
+expect settings.result[0].hints = true
+
+# Apply: confirmed, the moment noted. Down again comes round to the
+# first row.
+key 40 down
+frame 1.1
+key 40 up
+frame 1.15
+key 13 down
+frame 1.2
+key 13 up
+frame 1.25
+expect settings.result[0].applied_t = 1.2 0.0001
+key 40 down
+frame 1.3
+key 40 up
+frame 1.35
+expect nav.result[0].row = 0
+
+# Held down, the row moves once, then again after the delay, then at
+# the repeat's pace: past 0.4 s, then every 0.12 s.
+key 40 down
+frame 1.5
+expect nav.result[0].row = 1
+frame 1.6 to 1.85 every 0.05
+expect nav.result[0].row = 1
+frame 1.95
+expect nav.result[0].row = 2
+frame 2.0
+frame 2.05
+expect nav.result[0].row = 2
+frame 2.1
+expect nav.result[0].row = 3
+key 40 up
+frame 2.12
+
+# The pointer: moved onto the hints' row it lights it; a click in the
+# middle of the volume's slider sets it there, half; the slider is
+# filled with the accent left of the knob. Two pixels a logical one, the
+# list's rows from y 46, 16 apart.
+pointer 100 204
+frame 2.15
+expect nav.result[0].row = 3
+expect nav.result[0].pointed = 3
+pointer 264 140
+frame 2.2
+pointer 264 140 down
+frame 2.25
+pointer 264 140 up
+frame 2.3
+expect nav.result[0].row = 1
+expect settings.result[0].volume = 0.5 0.02
+expect 230 140 = 1.0 0.84 0.5
+# The Enter key's cap at the bottom right, pale.
+expect 443 345 = 0.86 0.84 0.78
+
+# Esc asks to go back, this frame only.
+key 27 down
+frame 2.35
+expect nav.result[0].back = true
+frame 2.4
+expect nav.result[0].back = false
+key 27 up

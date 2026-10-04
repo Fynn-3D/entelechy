@@ -36,7 +36,7 @@ orla run examples/<example>/scene.osn --out output.ppm --watch
 - [sculpt](sculpt/README.md): an island made of voxel shapes as data, dug and raised by hand and drawn by the voxel package's view.
 - [surface](surface/README.md): a blob meshed from a `Volume<Int>` every frame, the cells compacted and counted.
 - [text](text/README.md): rows of glyphs drawn through a font atlas baked by `run --save`.
-- [type](type/README.md): a Latin and a Chinese font imported by `orla-import`, laid out by the font package and drawn sharp by the vector package.
+- [ui](ui/README.md): a settings screen and a hero's panel drawn with the ui package, moved through by keys, a pad or the pointer.
 - [vector](vector/README.md): an SVG imported by `orla-import` and drawn sharp at any size by the vector package; drag and zoom.
 - [showcase](showcase/README.md): a signed-distance gamepad under physically based shading, with a toolbar in logical pixels.
 - [darkroom](darkroom/README.md): a raw photograph developed with the image package: equalized, graded, sharpened, and a neon outline drawn from a signed distance field.

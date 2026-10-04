@@ -177,12 +177,6 @@ its interface is held to.
   
   Used by the `nebula` example, whose replay holds the hashes to their
   bits on three backends.
-- **font** — type from a TrueType or OpenType font `orla import` read:
-  a row of character codes laid out in lines, each character its font's
-  glyph at its own advance, turned into the shapes and segments the
-  `vector` package draws, so text is as sharp at any size as any
-  drawing. `graphs/text.osn` draws a row of codes over a picture;
-  `font.join@1` joins rows into lines. Used by the `type` example.
 - **physics** — rigid circles and boxes in the plane that fall, collide,
   rest, slide and bounce. `graphs/step.osn` is one step of a world of
   `Body` rows: pairs found through a grid of cells sorted by the `sort`
@@ -191,6 +185,33 @@ its interface is held to.
   given its last step's contacts, which the next starts from. Static,
   kinematic and sensor bodies, collision layers, and `physics.ray@1`
   for what a ray meets. Used by the `physics` example.
+- **ui** — a screen's widgets, drawn per pixel, and the text on them in
+  any language:
+  - layout: rectangles cut into rows, columns, cells and lists, a thing
+    placed in one by alignment, the row a pixel falls in;
+  - paint: coats laid over one another, rounded boxes, rims, shadows,
+    discs, rings, lines, arrows and ticks, each edge smooth over a pixel;
+  - letters: a text, UTF-8 a row a line, decoded once into rows of
+    letters of a fixed width (`graphs/text.osn`), a printable ASCII
+    letter a cell from the text package's bitmap font and a wide one,
+    Chinese say, two cells from an atlas the scene draws, square glyphs
+    in order of the codes it gives (`graphs/letters.osn`); the package
+    draws no font, and a character neither holds is a `?`; one text's
+    letters or another's chosen by a number (`ui.either@1`), read anew
+    only when it changes;
+  - writing: a row of letters at a scale, aligned in a rectangle and cut
+    at its sides, with its shadow; numbers;
+  - widgets over a theme: panels, titled panels, the lit row, buttons,
+    switches, check boxes, sliders, meters with a trail, options with
+    arrows, scroll bars, rules, keys' caps, a pad's face buttons and a
+    prompt beside one;
+  - navigation (`ui.navigate@1`): the row lit and what was asked of it
+    this frame, from the arrows or W A S D, Enter, Esc, a pad's stick and
+    face buttons, the pointer and the wheel, a direction held repeating.
+
+  Every widget is nothing outside its rectangle but its shadow, so a
+  screen is its widgets laid over one another. Used by the `ui`
+  example.
 - **vector** — drawings filled pixel by pixel: the segments and shapes
   `orla import` reads from SVG, drawn through a look (a middle point and a
   zoom) with nonzero or even-odd fills, colours and linear or radial

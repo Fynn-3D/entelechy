@@ -382,8 +382,8 @@ orla import font.ttf --out assets --chars "Hello, world."
   `<stem>.stops.field` and `<stem>.view.field` (the document's size).
   Text, images, patterns, clip paths, masks and filters are reported and
   left out.
-- TrueType or OpenType: what the [`font` package](../packages/font.orlapkg)
-  lays out, as three Fields: `<stem>.glyphs.field` (a row a character in
+- TrueType or OpenType: a font's glyphs, for a scene's Kernels to lay
+  out and draw, as three Fields: `<stem>.glyphs.field` (a row a character in
   order of code, its advance in the font's units, its segments and box;
   first the glyph for a character the font lacks), `<stem>.segments.field`
   (the outlines in ems, y up) and `<stem>.metrics.field`. `--chars` names

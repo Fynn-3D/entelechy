@@ -1,0 +1,18 @@
+scene wide.osn
+
+# The line's letters: A; 中, the atlas's slot 0, over two cells; B; 文,
+# which the atlas does not hold, a `?`; then spaces. The letters' grid
+# holds the glyphs' side at the head of the atlas.
+frame 0
+expect cells.letters[0] = 65
+expect cells.letters[1] = 256
+expect cells.letters[2] = -1
+expect cells.letters[3] = 66
+expect cells.letters[4] = 63
+expect cells.letters[5] = 32
+expect letters.grid.result[4608] = 10.0
+
+# The box stands a pixel in from its two cells, from x 8, and a pixel
+# over the line, from y 2: its left rim at x 10, its inside empty.
+expect 10 5 = 1.0 1.0 1.0
+expect 13 5 = 0.0 0.0 0.0

@@ -1,12 +1,12 @@
-//! A TrueType or OpenType font as the Fields the `font` package lays out
-//! and the `vector` package draws: each glyph's outline flattened to line
-//! segments in ems, y up, filled by the nonzero rule. `ttf-parser` reads
+//! A TrueType or OpenType font as Fields a scene's Kernels lay out and
+//! draw: each glyph's outline flattened to line segments in ems, y up,
+//! filled by the nonzero rule. `ttf-parser` reads
 //! the font (quadratic and cubic outlines, the character map). What is
 //! left out is named in the notes.
 //!
 //! Three files are written:
 //!
-//! - `<stem>.glyphs.field`: `Rows<Letterform>` in order of code, the layout
+//! - `<stem>.glyphs.field`: a row a glyph in order of code, the layout
 //!   [`glyph_schema`] gives; the first, of code -1, is the font's glyph for
 //!   a character it lacks;
 //! - `<stem>.segments.field`: `Rows<Vec4>`, a segment `a.x, a.y, b.x, b.y`;
@@ -20,7 +20,7 @@ use orla_host::{Domain, FieldData, Scalar, Schema};
 /// stray from its curve.
 const TOLERANCE: f32 = 1.0 / 2048.0;
 
-/// A glyph's layout, as the `font` package declares it: `code: Int;
+/// A glyph's layout, as a Kernel declares it to read one: `code: Int;
 /// advance: Int; first: Int; count: Int; lo: Vec2; hi: Vec2`. The advance
 /// is in the font's units, so a line's advances sum exactly; the box is
 /// in ems.
@@ -55,7 +55,7 @@ pub struct Imported {
 /// The three Fields of a font.
 #[derive(Debug)]
 pub struct Fields {
-    /// `Rows<Letterform>`, in order of code.
+    /// A row a glyph, in order of code.
     pub glyphs: FieldData,
     /// `Rows<Vec4>`, the segments.
     pub segments: FieldData,

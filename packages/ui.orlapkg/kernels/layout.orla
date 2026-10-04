@@ -1,0 +1,88 @@
+// Rectangles a screen is laid out in, in its pixels, y down: a
+// rectangle's low corner is its top left, its high corner its bottom
+// right, the high edges not inside. A screen is cut into rows, columns
+// and cells, each widget given one; a pixel asks which it falls in.
+
+/// A rectangle: its top left and its bottom right.
+struct Rect { lo: Vec2; hi: Vec2; }
+
+/// A rectangle from its top left and its size.
+fn rect_at(origin: Vec2, size: Vec2) -> Rect { return Rect { lo: origin, hi: origin + size }; }
+
+fn rect_size(r: Rect) -> Vec2 { return r.hi - r.lo; }
+fn rect_middle(r: Rect) -> Vec2 { return (r.lo + r.hi) * 0.5; }
+
+/// Whether `q` is inside.
+fn holds(r: Rect, q: Vec2) -> Bool { return q.x >= r.lo.x && q.y >= r.lo.y && q.x < r.hi.x && q.y < r.hi.y; }
+
+/// Whether `q` is within `by` of it: a widget's shadow or glow.
+fn near_rect(r: Rect, q: Vec2, by: Float) -> Bool {
+    return q.x >= r.lo.x - by && q.y >= r.lo.y - by && q.x < r.hi.x + by && q.y < r.hi.y + by;
+}
+
+/// Shrunk by `by` on every side; grown, by less than zero.
+fn inset(r: Rect, by: Float) -> Rect { return Rect { lo: r.lo + vec2(by, by), hi: r.hi - vec2(by, by) }; }
+
+/// Shrunk by `x` across and `y` down, each side.
+fn inset2(r: Rect, by: Vec2) -> Rect { return Rect { lo: r.lo + by, hi: r.hi - by }; }
+
+/// Moved by `by`.
+fn moved(r: Rect, by: Vec2) -> Rect { return Rect { lo: r.lo + by, hi: r.hi + by }; }
+
+/// The top `h` of it, and the rest below; the left `w`, and the rest
+/// right of it; the bottom `h`, the right `w`.
+fn top_of(r: Rect, h: Float) -> Rect { return Rect { lo: r.lo, hi: vec2(r.hi.x, min(r.lo.y + h, r.hi.y)) }; }
+fn below_top(r: Rect, h: Float) -> Rect { return Rect { lo: vec2(r.lo.x, min(r.lo.y + h, r.hi.y)), hi: r.hi }; }
+fn left_of(r: Rect, w: Float) -> Rect { return Rect { lo: r.lo, hi: vec2(min(r.lo.x + w, r.hi.x), r.hi.y) }; }
+fn right_of_left(r: Rect, w: Float) -> Rect { return Rect { lo: vec2(min(r.lo.x + w, r.hi.x), r.lo.y), hi: r.hi }; }
+fn bottom_of(r: Rect, h: Float) -> Rect { return Rect { lo: vec2(r.lo.x, max(r.hi.y - h, r.lo.y)), hi: r.hi }; }
+fn right_of(r: Rect, w: Float) -> Rect { return Rect { lo: vec2(max(r.hi.x - w, r.lo.x), r.lo.y), hi: r.hi }; }
+
+/// Row `k` of `n` equal rows, `gap` between each.
+fn row_of(r: Rect, k: Int, n: Int, gap: Float) -> Rect {
+    let h = (r.hi.y - r.lo.y - gap * float(n - 1)) / float(max(n, 1));
+    let y = r.lo.y + float(k) * (h + gap);
+    return Rect { lo: vec2(r.lo.x, y), hi: vec2(r.hi.x, y + h) };
+}
+
+/// Column `k` of `n` equal columns, `gap` between each.
+fn column_of(r: Rect, k: Int, n: Int, gap: Float) -> Rect {
+    let w = (r.hi.x - r.lo.x - gap * float(n - 1)) / float(max(n, 1));
+    let x = r.lo.x + float(k) * (w + gap);
+    return Rect { lo: vec2(x, r.lo.y), hi: vec2(x + w, r.hi.y) };
+}
+
+/// Cell `c` (column, row) of a grid of `n` (columns, rows), `gap`
+/// between each.
+fn cell_of(r: Rect, c: IVec2, n: IVec2, gap: Float) -> Rect {
+    return row_of(column_of(r, c.x, n.x, gap), c.y, n.y, gap);
+}
+
+/// Row `k` of rows `h` high from the top, `gap` between each: a list
+/// whose rows are a size, however many.
+fn list_row(r: Rect, k: Int, h: Float, gap: Float) -> Rect {
+    let y = r.lo.y + float(k) * (h + gap);
+    return Rect { lo: vec2(r.lo.x, y), hi: vec2(r.hi.x, y + h) };
+}
+
+/// Which of the list's rows `q` falls in, `h` high and `gap` apart from
+/// the top; -1 outside them and in a gap.
+fn list_row_at(r: Rect, q: Vec2, h: Float, gap: Float, n: Int) -> Int {
+    if !holds(r, q) { return -1; }
+    let t = (q.y - r.lo.y) / (h + gap);
+    let k = int(floor(t));
+    return if k >= 0 && k < n && (t - float(k)) * (h + gap) < h { k } else { -1 };
+}
+
+/// A thing `size` big placed in it: `align` 0 at its top or left, 0.5
+/// in its middle, 1 at its bottom or right, each way; on whole pixels.
+fn placed(r: Rect, size: Vec2, align: Vec2) -> Rect {
+    let lo = floor(r.lo + (rect_size(r) - size) * align + vec2(0.5, 0.5));
+    return Rect { lo: lo, hi: lo + size };
+}
+
+/// A rectangle `size` big with its middle at `middle`, on whole pixels.
+fn centred(middle: Vec2, size: Vec2) -> Rect {
+    let lo = floor(middle - size * 0.5 + vec2(0.5, 0.5));
+    return Rect { lo: lo, hi: lo + size };
+}
