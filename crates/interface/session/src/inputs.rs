@@ -14,11 +14,13 @@ use orla_kernel::{FieldData, Handle, Host, Runtime, Schema};
 use crate::store::{Stamp, Store};
 use crate::{Diagnostic, Event};
 
-/// A file an input is read from, and the element a table was read as.
+/// A file an input is read from, and the element a table was read as and
+/// the tables its rows named, as they were when it was read.
 struct Asset {
     path: PathBuf,
     stamp: Option<Stamp>,
     table: Option<TableElement>,
+    named: Vec<(PathBuf, Option<Stamp>)>,
 }
 
 /// The element a data table input is read as: the name of each number it
@@ -130,6 +132,7 @@ fn read_table(
     name: &str,
     table: Option<&TableElement>,
     room: usize,
+    tables: &dyn Fn(&str) -> Result<Vec<String>, String>,
 ) -> Result<(FieldData, String), String> {
     let table = table.ok_or_else(|| {
         format!("a data table is read as the Kernel reading it lays out its element, and no published Kernel reads `{name}`")
@@ -138,9 +141,41 @@ fn read_table(
         names: &table.names,
         schema: &table.schema,
     };
-    let data = orla_formats::table::decode(bytes, extension, &element, room)?;
+    let data = orla_formats::table::decode(bytes, extension, &element, room, tables)?;
     let detail = format!("{} row(s) of {}", data.domain().count(), data.schema());
     Ok((data, detail))
+}
+
+/// The row names of the table `name` beside `dir` (`name.csv`, else
+/// `name.json`), read as any input is, and the file and its stamp noted.
+fn table_names(
+    store: &dyn Store,
+    readable: &dyn Fn(&Path) -> Result<(), String>,
+    dir: &Path,
+    name: &str,
+    noted: &std::cell::RefCell<Vec<(PathBuf, Option<Stamp>)>>,
+) -> Result<Vec<String>, String> {
+    if name.is_empty() || name.contains(['/', '\\']) || name.starts_with('.') {
+        return Err(format!(
+            "`{name}` is no table's name: a table is named by its file's stem beside this one"
+        ));
+    }
+    for extension in ["csv", "json"] {
+        let path = dir.join(format!("{name}.{extension}"));
+        if !store.exists(&path) {
+            continue;
+        }
+        readable(&path)?;
+        let bytes = store
+            .read(&path)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        noted.borrow_mut().push((path.clone(), store.stamp(&path)));
+        return orla_formats::table::row_names(&bytes, extension)
+            .map_err(|why| format!("{}: {why}", path.display()));
+    }
+    Err(format!(
+        "no table `{name}` beside it ({name}.csv or {name}.json)"
+    ))
 }
 
 /// A file's bytes, when the Field its header describes fits in `room`
@@ -259,7 +294,13 @@ impl Inputs {
                 .then(|| tables.get(&name).cloned())
                 .flatten();
             if self.assets.get(&name).is_some_and(|asset| {
-                asset.path == path && asset.stamp == current && asset.table == table
+                asset.path == path
+                    && asset.stamp == current
+                    && asset.table == table
+                    && asset
+                        .named
+                        .iter()
+                        .all(|(named, stamp)| store.stamp(named) == *stamp)
             }) {
                 continue;
             }
@@ -269,6 +310,7 @@ impl Inputs {
                     path: path.clone(),
                     stamp: current,
                     table: table.clone(),
+                    named: Vec::new(),
                 },
             );
             // Checked at read time, so a refusal reports once per change.
@@ -282,13 +324,24 @@ impl Inputs {
             }
             let read = read_within(store, &path, room(host));
             let extension = orla_formats::extension(&path);
+            let noted = std::cell::RefCell::new(Vec::new());
+            let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+            let tables = |table: &str| table_names(store, readable, &dir, table, &noted);
             let read = read.and_then(|found| match bytes {
                 true => orla_formats::decode_bytes(&found),
-                false if orla_formats::table::is_table(&extension) => {
-                    read_table(&found, &extension, &name, table.as_ref(), room(host))
-                }
+                false if orla_formats::table::is_table(&extension) => read_table(
+                    &found,
+                    &extension,
+                    &name,
+                    table.as_ref(),
+                    room(host),
+                    &tables,
+                ),
                 false => orla_formats::decode(&found, &path, Some(&ty), room(host)),
             });
+            if let Some(asset) = self.assets.get_mut(&name) {
+                asset.named = noted.into_inner();
+            }
             let read = read.and_then(|(data, detail)| {
                 let data = kept_as(data, &ty)?;
                 let detail = match data.schema().uniform_encoding() {

@@ -158,3 +158,61 @@ fn a_table_no_kernel_reads_is_refused() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A cell `table:name` is the place of the row so named in the table
+/// beside it; the table is read again when the one it names changes,
+/// and a name no row has is refused, the rows read before kept.
+#[test]
+fn a_cell_names_a_row_of_the_table_beside_it() {
+    let dir = std::env::temp_dir().join(format!("orla-tables-named-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("data")).unwrap();
+    std::fs::write(
+        dir.join("k.orla"),
+        "struct Spawn { slot: Int; beast: Int; }
+kernel t.kinds@1 { requires { field.read; field.write; } input spawns: Rows<Spawn>; output result: Rows<Float>; compute { return float(sample(spawns).beast); } }
+",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("data/beasts.csv"),
+        "#name,health\ngoblin,900\nwolf,1200\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("data/spawns.csv"),
+        "slot,beast\n0,beasts:wolf\n1,beasts:goblin\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.osn"),
+        "use \"k.orla\";\ninput spawns: Rows<Spawn> = \"data/spawns.csv\";\nnode kinds: t.kinds@1 { spawns <- spawns; }\noutput result <- kinds.result;\n",
+    )
+    .unwrap();
+    let (mut session, events) = open(&dir);
+    assert!(rejected(&events).is_empty(), "{events:?}");
+    assert_eq!(scores(&mut session), [1.0, 0.0]);
+    // A row put before the others: the names now count from it.
+    std::fs::write(
+        dir.join("data/beasts.csv"),
+        "#name,health\nslime,100\ngoblin,900\nwolf,1200\n",
+    )
+    .unwrap();
+    let events = session.sync();
+    assert!(rejected(&events).is_empty(), "{events:?}");
+    assert_eq!(scores(&mut session), [2.0, 1.0]);
+    // A name no row has.
+    std::fs::write(
+        dir.join("data/spawns.csv"),
+        "slot,beast\n0,beasts:wolf\n1,beasts:gobln\n",
+    )
+    .unwrap();
+    let why = rejected(&session.sync());
+    assert!(
+        why.iter().any(|w| w
+            .contains("line 3: `beast` is \"beasts:gobln\": no row of `beasts` is named `gobln`")),
+        "{why:?}"
+    );
+    assert_eq!(scores(&mut session), [2.0, 1.0]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

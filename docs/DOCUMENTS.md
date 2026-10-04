@@ -424,7 +424,12 @@ changes:
   and each line after it is a row; a JSON file is an array of objects,
   nested objects and arrays naming their numbers as the dots do. Every
   number must be given and every column or key must name one, but for a
-  note, a column or key whose name begins with `#` (`#name`); a table
+  note, a column or key whose name begins with `#` (`#name`). A row's
+  `#name` names it to other tables: a whole-number cell written
+  `table:name` (`beasts:goblin`) is the place, from 0, of the row so
+  named in the table `table.csv` or `table.json` beside this one, read
+  again when that table changes; a name no row has, or two share, is
+  refused; a table
   that cannot be read says the line or row and leaves the input as it
   was. One number alone is unnamed: a CSV's one column, or a JSON array
   of numbers.
