@@ -407,14 +407,26 @@ fn a_scene_opens_on_files_handed_in_and_reads_them_again() {
     };
     assert!(near(picture(session), [0.2, 0.4, 0.6]));
     // The caller's hold goes; the session keeps its own, and a Kernel's
-    // file put again is read by the next evaluate.
+    // file put again is read by the next evaluate, as a file changed on
+    // disk is: compiled off the frames, the old Kernel running until the
+    // new one publishes.
     put(
         files,
         "nowhere/kernels/fill.orla",
         kernel("0.7, 0.1, 0.3").as_bytes(),
     );
     unsafe { orla_ffi::orla_files_free(files) };
-    assert!(near(picture(session), [0.7, 0.1, 0.3]));
+    let mut frames = 0;
+    loop {
+        let now = picture(session);
+        if near(now, [0.7, 0.1, 0.3]) {
+            break;
+        }
+        assert!(near(now, [0.2, 0.4, 0.6]), "{now:?}");
+        frames += 1;
+        assert!(frames < 10000, "the change never published");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
     unsafe { orla_ffi::orla_close(session) };
     // Memory allocated in Orla, as a page asks for it, and freed.
     let room = orla_ffi::orla_alloc(64);
