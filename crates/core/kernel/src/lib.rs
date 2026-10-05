@@ -747,6 +747,19 @@ impl Runtime {
         self.last_placement.as_ref()
     }
 
+    /// Whether the backend the last execution ran on writes the same words
+    /// for the same run every time ([`Backend::repeats_exactly`]).
+    pub fn last_repeats_exactly(&self) -> bool {
+        let Some(placement) = &self.last_placement else {
+            return false;
+        };
+        let mut ran = std::iter::once(&self.backend)
+            .chain(self.ordered.as_ref())
+            .filter(|backend| backend.name() == placement.backend)
+            .peekable();
+        ran.peek().is_some() && ran.all(|backend| backend.repeats_exactly())
+    }
+
     /// Why a run of a Kernel the main backend takes goes to the ordered one
     /// by its size, or `None`: its elements times its typical work are at
     /// most `small`, and it reads no Field the main backend made in this

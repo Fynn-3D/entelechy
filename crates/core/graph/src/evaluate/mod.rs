@@ -857,7 +857,10 @@ impl Evaluator {
                     uploaded: moved.uploaded,
                     downloaded: moved.downloaded,
                 });
-                match rerun {
+                // A run made again under a remembered key is the run
+                // remembered only on a backend that repeats exactly; else
+                // its readers find a new epoch and run.
+                match rerun.filter(|_| runtime.last_repeats_exactly()) {
                     Some(epoch) => {
                         self.store_as(&node.id, key, outputs, output_names, epoch, runtime);
                     }

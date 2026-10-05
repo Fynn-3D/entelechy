@@ -865,20 +865,27 @@ had on that frame takes those outputs; a node that runs and computes
 outputs equal word for word to the remembered ones takes their epoch, so
 what reads it finds its key unchanged. Outputs too large to hold are
 remembered by key and epoch alone, and a node whose key matches runs
-again under that epoch. Runs are held to a budget and forgotten when the
-graph changes.
+again under that epoch when its backend repeats exactly; on any other
+backend it runs under a new one and its readers run. Runs are held to a
+budget, forgotten when the graph changes, and give way when the Host is
+short of room.
 
-**Why.** Kernels are deterministic and the key names everything a node's
-outputs depend on, so outputs under an equal key are the outputs; taking
-them is not an approximation and a replay played so passes or fails as a
-fresh one does. Remembering whole frames by trajectory, not by a hash of
+**Why.** The key names everything a node's outputs depend on, so held
+outputs under an equal key are the outputs; taking them is not an
+approximation and a replay played so passes or fails as a fresh one
+does. Outputs not held are trusted to be made again word for word only
+where the backend says so, and its conformance tests hold it to that, so
+the rule rests on a stated contract, not on how a backend happens to be
+written. Remembering whole frames by trajectory, not by a hash of
 the world, keeps the rule the cache already keeps between one frame and
 the next.
 
 **Where.** [`recall.rs`](../crates/core/graph/src/evaluate/recall.rs)
 remembers and offers runs; [`Resident::play_as`](../crates/interface/session/src/replay.rs)
 names a replay's run; held by [the recall tests](../crates/interface/session/tests/recall.rs),
-which compare a run played again with a fresh session.
+which compare a run played again with a fresh session, and by each
+backend's run of the conformance matrix twice
+([`unrepeated`](../crates/backends/conformance/src/lib.rs)).
 
 ## The language grows only by the owner's word
 

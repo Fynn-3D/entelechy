@@ -64,6 +64,9 @@ impl Backend for Remembered {
     fn uploaded(&self) -> u64 {
         self.inner.uploaded()
     }
+    fn repeats_exactly(&self) -> bool {
+        self.inner.repeats_exactly()
+    }
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
         let id = module.manifest.id.to_string();
         let known = self.memo.lock().ok().and_then(|memo| {

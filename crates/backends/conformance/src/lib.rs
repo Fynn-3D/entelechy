@@ -1724,3 +1724,87 @@ pub fn large_cases() -> Vec<Case> {
         ),
     ]
 }
+
+/// Every case of the matrix whose words a run computes: features, wide,
+/// narrow and shaped ones, and integer sums, for [`unrepeated`].
+pub fn repeat_cases() -> Vec<Case> {
+    cases()
+        .into_iter()
+        .chain(wide_cases())
+        .chain(long_cases())
+        .chain(narrow_cases())
+        .chain(shape_cases())
+        .chain(sum_cases().into_iter().map(|(case, _)| case))
+        .collect()
+}
+
+/// Where `backend` writes other words, or fails otherwise, on a second run
+/// of a case with the same inputs than on the first: a backend that says it
+/// repeats exactly ([`orla_rules::Backend::repeats_exactly`]) answers none.
+/// Each case comes with its module; a case the backend declines or cannot
+/// prepare is left to the matrix.
+pub fn unrepeated(
+    backend: &dyn orla_rules::Backend,
+    cases: &[(Case, orla_ir::Validated)],
+) -> Vec<String> {
+    use orla_abi::{Capability, FieldData, Handle, Host, Invocation, Scope};
+    let words = |host: &Host, handle: Handle| -> Result<Vec<u32>, String> {
+        let schema = host.schema(handle).map_err(|e| e.to_string())?;
+        let count = host.domain(handle).map_err(|e| e.to_string())?.count();
+        match host.resident(handle).map_err(|e| e.to_string())? {
+            Some(device) => Ok(backend
+                .download(device, schema.storage_words(count) * 4)?
+                .chunks_exact(4)
+                .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect()),
+            None => Ok(host
+                .data(handle)
+                .map_err(|e| e.to_string())?
+                .storage()
+                .to_vec()),
+        }
+    };
+    let mut failures = Vec::new();
+    for (case, module) in cases {
+        if backend.declines(module).is_some() {
+            continue;
+        }
+        let Ok(prepared) = backend.prepare(module) else {
+            continue;
+        };
+        let mut host = Host::new(case.room());
+        let inputs = case
+            .inputs
+            .iter()
+            .map(|(schema, domain, values)| {
+                host.adopt(FieldData::from_values(schema.clone(), *domain, values).unwrap())
+                    .unwrap()
+            })
+            .collect();
+        let invocation = Invocation {
+            inputs,
+            params: case.params.clone(),
+            domain: case.domain,
+            context: case.context,
+        };
+        let mut runs: Vec<Result<Vec<Vec<u32>>, String>> = Vec::new();
+        for _ in 0..2 {
+            let outputs = {
+                let mut scope = Scope::new(&mut host, Capability::ALL.into_iter().collect());
+                backend.execute(prepared.as_ref(), module, &invocation, &mut scope)
+            };
+            runs.push(
+                outputs
+                    .map_err(|error| error.to_string())
+                    .and_then(|outputs| outputs.iter().map(|h| words(&host, *h)).collect()),
+            );
+        }
+        if runs[0] != runs[1] {
+            failures.push(format!(
+                "{}: a second run differs from the first",
+                case.name
+            ));
+        }
+    }
+    failures
+}

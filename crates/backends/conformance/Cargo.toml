@@ -12,6 +12,7 @@ doctest = false
 
 [dependencies]
 orla-abi = { path = "../../core/abi" }
+orla-ir = { path = "../../core/ir" }
 orla-rules = { path = "../../core/rules" }
 
 [lints]

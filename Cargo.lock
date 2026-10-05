@@ -1769,6 +1769,7 @@ name = "orla-conformance"
 version = "0.0.2-rc.3"
 dependencies = [
  "orla-abi",
+ "orla-ir",
  "orla-rules",
 ]
 

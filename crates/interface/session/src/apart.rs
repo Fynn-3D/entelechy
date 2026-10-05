@@ -190,6 +190,9 @@ impl Backend for Apart {
     fn uploaded(&self) -> u64 {
         self.inner.uploaded()
     }
+    fn repeats_exactly(&self) -> bool {
+        self.inner.repeats_exactly()
+    }
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
         if !chosen(&module.manifest.id.to_string(), self.split) {
             return self.inner.prepare(module);

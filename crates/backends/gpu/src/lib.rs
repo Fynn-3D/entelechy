@@ -217,6 +217,13 @@ impl Backend for GpuBackend {
         "gpu"
     }
 
+    /// A float sum is folded in source order after a sort, and atomics
+    /// apply only rules whose order does not matter: the same words each
+    /// run.
+    fn repeats_exactly(&self) -> bool {
+        true
+    }
+
     fn last_device_time(&self) -> Option<std::time::Duration> {
         self.last_device_time()
     }

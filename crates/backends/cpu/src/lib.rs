@@ -926,6 +926,11 @@ impl Backend for CpuBackend {
         "cpu"
     }
 
+    /// The reference walks each element in order: the same words each run.
+    fn repeats_exactly(&self) -> bool {
+        true
+    }
+
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
         Ok(Box::new(CpuCode(Code::of(module))))
     }

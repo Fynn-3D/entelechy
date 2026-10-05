@@ -204,3 +204,21 @@ fn extents_past_a_floats_integers_match_the_interpreter() {
         failures.join("\n")
     );
 }
+
+#[test]
+fn every_case_run_twice_writes_the_same_words() {
+    let backend = JitBackend::new().unwrap();
+    assert!(backend.repeats_exactly());
+    let cases: Vec<_> = orla_conformance::repeat_cases()
+        .into_iter()
+        .filter_map(|case| compile(&case.source).ok().map(|module| (case, module)))
+        .collect();
+    let failures = orla_conformance::unrepeated(&backend, &cases);
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases differ:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
+}

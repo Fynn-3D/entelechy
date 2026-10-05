@@ -213,6 +213,14 @@ pub trait Backend: Send + Sync {
         None
     }
 
+    /// Whether a run of a module this backend prepared, given the same
+    /// inputs, params, domain and context, writes the same words every time
+    /// in this process. A graph that remembers a run trusts a run made again
+    /// under the same key to be the run it remembered only when this holds.
+    fn repeats_exactly(&self) -> bool {
+        false
+    }
+
     /// Bytes this backend has uploaded from Host memory to its device
     /// since it was made. Zero for a backend that computes in Host memory.
     fn uploaded(&self) -> u64 {

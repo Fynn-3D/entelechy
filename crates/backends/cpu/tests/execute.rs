@@ -1394,3 +1394,21 @@ fn enums_name_ints_and_a_full_match_ends_in_its_last_arm() {
         [1110, 1220, 1230, 1230, 1230].map(|word: i32| word as u32)
     );
 }
+
+#[test]
+fn every_case_run_twice_writes_the_same_words() {
+    let backend = CpuBackend;
+    assert!(orla_rules::Backend::repeats_exactly(&backend));
+    let cases: Vec<_> = orla_conformance::repeat_cases()
+        .into_iter()
+        .filter_map(|case| compile(&case.source).ok().map(|module| (case, module)))
+        .collect();
+    let failures = orla_conformance::unrepeated(&backend, &cases);
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases differ:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
+}

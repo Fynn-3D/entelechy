@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use orla_kernel::Context;
+use orla_kernel::{Backend, Context, Handle, Invocation, Prepared, Runtime, Scope, Validated};
 use orla_session::Session;
 
 /// A count advanced a frame at a time, a value made of it (`made`), what
@@ -36,8 +36,8 @@ node total: t.total@1 { big <- big.result; count <- count.result; domain = 1; }
 output result <- shown.result;
 ";
 
-fn scratch(made: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("orla-recall-{}", std::process::id()));
+fn scratch(name: &str, made: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("orla-recall-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("k.orla"), kernels(made)).unwrap();
@@ -79,7 +79,7 @@ fn fresh(dir: &Path) -> (f32, f32) {
 
 #[test]
 fn a_run_played_again_computes_only_what_changed_and_answers_alike() {
-    let dir = scratch("x * 2.0");
+    let dir = scratch("again", "x * 2.0");
     let mut session = Session::open(&dir.join("scene.osn"), None, 1 << 24);
     let events = session.sync();
     assert!(session.graph().is_some(), "{events:?}");
@@ -132,5 +132,55 @@ fn a_run_played_again_computes_only_what_changed_and_answers_alike() {
     );
     assert_eq!(answered_parted, fresh(&dir));
     assert_ne!(answered_parted, answered);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The interpreter, not saying it repeats exactly.
+struct Unpromised(orla_cpu::CpuBackend);
+
+impl Backend for Unpromised {
+    fn name(&self) -> &'static str {
+        "unpromised"
+    }
+    fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
+        self.0.prepare(module)
+    }
+    fn execute(
+        &self,
+        prepared: &dyn Prepared,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+    ) -> Result<Vec<Handle>, orla_kernel::ExecutionError> {
+        Backend::execute(&self.0, prepared, module, invocation, scope)
+    }
+}
+
+#[test]
+fn a_run_made_again_on_a_backend_that_does_not_repeat_exactly_runs_what_reads_it() {
+    let dir = scratch("unpromised", "x * 2.0");
+    let runtime = Runtime::with_backends(1 << 24, Box::new(Unpromised(orla_cpu::CpuBackend)), None);
+    let mut session = Session::open_with(&dir.join("scene.osn"), None, runtime);
+    session.sync();
+    session.recall_as(Some("run".into()));
+    let (_, answered) = play(&mut session);
+    session.start_over();
+    session
+        .set_param("seed", orla_kernel::Value::Int(5))
+        .unwrap();
+    session.sync();
+    session.recall_as(Some("other".into()));
+    play(&mut session);
+    session.start_over();
+    session.recall_as(Some("run".into()));
+    let (after, answered_after) = play(&mut session);
+    assert_eq!(answered_after, answered);
+    // The large Field, made again, is not trusted to be the one
+    // remembered: what reads it runs.
+    assert_eq!(
+        after[0],
+        BTreeSet::from(["big".to_owned(), "total".to_owned()]),
+        "{after:?}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

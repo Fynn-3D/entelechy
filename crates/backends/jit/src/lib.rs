@@ -206,6 +206,12 @@ impl Backend for JitBackend {
         "jit"
     }
 
+    /// Work is split by count alone and joined in order: the same words
+    /// each run.
+    fn repeats_exactly(&self) -> bool {
+        true
+    }
+
     /// A module whose estimated frames fit is taken unseen; one whose
     /// estimate passes the bound is compiled, and its frames as compiled
     /// decide.
