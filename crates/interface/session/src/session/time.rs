@@ -309,10 +309,16 @@ impl Session {
             .map_err(|error| format!("the restored world does not run: {error}"))
     }
 
-    /// Syncs and waits until the scene's Kernels being prepared, and the
-    /// scene waiting for them, are published or refused.
+    /// Syncs and waits until the documents being compiled, the scene's
+    /// Kernels being prepared, and the scene waiting for them, are
+    /// published or refused.
     pub fn sync_settled(&mut self) -> Vec<Event> {
         let mut events = self.sync();
+        // Documents compiled on another thread publish at the sync after.
+        while self.scene.compiling() {
+            self.scene.wait_compiled();
+            events.extend(self.sync());
+        }
         let mut landed = Vec::new();
         self.scene
             .wait(&mut self.kernels, &mut self.runtime, &mut landed);

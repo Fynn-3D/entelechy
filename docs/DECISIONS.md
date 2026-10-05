@@ -958,6 +958,29 @@ runtime's `prepare_finished`, `Preparer::finish` and a version's `leaves`
 ([session](../crates/interface/session/src/session.rs)); held by
 [the lazy test](../crates/interface/session/tests/lazy.rs).
 
+## A changed document compiles off the frames
+
+Where replacements prepare off the frames (a Player, a served session),
+so are changed library documents read and their Kernels compiled: a sync
+hands them to another thread, reading them on every core, and returns;
+the running Kernels keep the frames; the first sync after it is done
+publishes them in order, or says why not, as a sync that read them itself
+would. The scene document is read once they land, so it never names a
+Kernel they are about to publish. Without a worker (a replay, a check)
+a sync reads them on every core and publishes them itself.
+
+**Why.** Reading a document and compiling its Kernels is the frontend's
+work, and a shared document reaches many: done on the frame it stopped
+the frames for most of a second. Moving it changes when a change
+publishes, never what publishes: nothing invalid publishes, and a change
+publishes whole or not at all.
+
+**Where.** `read_library`, `Compiling` and `Scene::sync_libraries`
+([scene](../crates/interface/session/src/scene.rs)); `Ledger::prime`
+([kernels](../crates/interface/session/src/kernels.rs));
+`Session::sync_settled` waits for it; held by
+[the compile-ahead test](../crates/interface/session/tests/compile_ahead.rs).
+
 ## The language grows only by the owner's word
 
 A form, a keyword, a builtin or a shorthand is added to `.orla` or `.osn`

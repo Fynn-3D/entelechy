@@ -114,6 +114,81 @@ impl Kernels {
     }
 }
 
+/// What priming reads of the ledger and the runtime
+/// ([`Kernels::ledger`]): the documents' states as published, the running
+/// versions, and how to prepare. It is the ledger's at one moment, so it
+/// primes on any thread.
+pub(crate) struct Ledger {
+    documents: BTreeMap<PathBuf, DocumentState>,
+    running: BTreeMap<KernelId, Arc<KernelVersion>>,
+    preparer: orla_kernel::Preparer,
+    worker: bool,
+}
+
+/// Kernels primed from a [`Ledger`], for the ledger to take
+/// ([`Kernels::take_made`]).
+pub(crate) struct Made {
+    primed: Vec<(KernelId, Primed)>,
+    reaches: Vec<((KernelId, String), String)>,
+}
+
+impl Ledger {
+    /// Primes `documents` as [`Kernels::prime`] does.
+    pub(crate) fn prime(&self, store: &dyn Store, documents: &[(&Path, &[Defined])]) -> Made {
+        let mut reaches_now = Vec::new();
+        let mut jobs: Vec<(&Path, &Defined, String, Option<Arc<KernelVersion>>)> = Vec::new();
+        for (path, defined) in documents {
+            let before = self.documents.get(*path);
+            for d in defined.iter() {
+                if jobs.iter().any(|(_, seen, _, _)| seen.id == d.id) {
+                    continue;
+                }
+                let reaches = crate::sources::reached_key(store, &d.kernel);
+                reaches_now.push(((d.id.clone(), d.text.clone()), reaches.clone()));
+                let running = self.running.get(&d.id).cloned();
+                let unchanged = before.is_some_and(|before| {
+                    before.kernels.get(&d.id) == Some(&d.text)
+                        && before.reached.get(&d.id) == Some(&reaches)
+                });
+                if running.is_some() && unchanged {
+                    continue;
+                }
+                jobs.push((path, d, reaches, running));
+            }
+        }
+        if jobs.len() < 2 {
+            return Made {
+                primed: Vec::new(),
+                reaches: reaches_now,
+            };
+        }
+        let (preparer, worker) = (&self.preparer, self.worker);
+        let made = crate::spread::map(&jobs, |(path, d, reaches, running)| {
+            let module = compiled(store, path, &d.id, &d.text, reaches, &d.kernel).ok()?;
+            let candidate = match running {
+                None => preparer.prepare(module.clone(), &d.text).ok(),
+                Some(running) if !worker => preparer
+                    .prepare_replacing(module.clone(), &d.text, running)
+                    .ok(),
+                Some(_) => None,
+            };
+            Some((
+                d.id.clone(),
+                Primed {
+                    text: d.text.clone(),
+                    reaches: reaches.clone(),
+                    module,
+                    candidate,
+                },
+            ))
+        });
+        Made {
+            primed: made.into_iter().flatten().collect(),
+            reaches: reaches_now,
+        }
+    }
+}
+
 /// A copy of the ledger to restore whole ([`Kernels::put_back`]).
 pub(crate) struct Kept {
     documents: BTreeMap<PathBuf, DocumentState>,
@@ -135,52 +210,36 @@ impl Kernels {
         documents: &[(&Path, &[Defined])],
         runtime: &Runtime,
     ) {
-        let mut jobs: Vec<(&Path, &Defined, String, Option<Arc<KernelVersion>>)> = Vec::new();
-        for (path, defined) in documents {
-            let before = self.documents.get(*path);
-            for d in defined.iter() {
-                if jobs.iter().any(|(_, seen, _, _)| seen.id == d.id) {
-                    continue;
-                }
-                let reaches = crate::sources::reached_key(store, &d.kernel);
-                self.reaches_now
-                    .insert((d.id.clone(), d.text.clone()), reaches.clone());
-                let running = runtime.kernel(&d.id);
-                let unchanged = before.is_some_and(|before| {
-                    before.kernels.get(&d.id) == Some(&d.text)
-                        && before.reached.get(&d.id) == Some(&reaches)
-                });
-                if running.is_some() && unchanged {
-                    continue;
-                }
-                jobs.push((path, d, reaches, running));
-            }
+        let made = self
+            .ledger(documents.iter().map(|(path, _)| *path), runtime)
+            .prime(store, documents);
+        self.take_made(made);
+    }
+
+    /// What priming `paths` reads of the ledger and the runtime, to prime
+    /// on another thread ([`Ledger::prime`]).
+    pub(crate) fn ledger<'a>(
+        &self,
+        paths: impl Iterator<Item = &'a Path>,
+        runtime: &Runtime,
+    ) -> Ledger {
+        Ledger {
+            documents: paths
+                .filter_map(|path| Some((path.to_path_buf(), self.documents.get(path)?.clone())))
+                .collect(),
+            running: runtime
+                .kernels()
+                .map(|version| (version.id().clone(), Arc::clone(version)))
+                .collect(),
+            preparer: runtime.preparer(),
+            worker: runtime.background(),
         }
-        if jobs.len() < 2 {
-            return;
-        }
-        let preparer = runtime.preparer();
-        let worker = runtime.background();
-        let made = crate::spread::map(&jobs, |(path, d, reaches, running)| {
-            let module = compiled(store, path, &d.id, &d.text, reaches, &d.kernel).ok()?;
-            let candidate = match running {
-                None => preparer.prepare(module.clone(), &d.text).ok(),
-                Some(running) if !worker => preparer
-                    .prepare_replacing(module.clone(), &d.text, running)
-                    .ok(),
-                Some(_) => None,
-            };
-            Some((
-                d.id.clone(),
-                Primed {
-                    text: d.text.clone(),
-                    reaches: reaches.clone(),
-                    module,
-                    candidate,
-                },
-            ))
-        });
-        self.primed.extend(made.into_iter().flatten());
+    }
+
+    /// Takes what [`Ledger::prime`] made, for staging to find.
+    pub(crate) fn take_made(&mut self, made: Made) {
+        self.reaches_now.extend(made.reaches);
+        self.primed.extend(made.primed);
     }
 
     /// Lets go of what [`Kernels::prime`] made and staging did not take.

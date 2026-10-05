@@ -58,6 +58,9 @@ pub(crate) struct Scene {
     expanded: Option<Expanded>,
     /// What the last refused read of the root said, while no scene runs.
     refusal: Option<Vec<Event>>,
+    /// Library documents being read and their Kernels compiled on another
+    /// thread ([`Scene::sync_libraries`]).
+    compiling: Option<Compiling>,
 }
 
 /// The running scene, kept to be put back whole ([`Scene::put_back`]).
@@ -94,6 +97,9 @@ type Declared = (
 
 /// What a sync read of one document: its stamp, what it said, and its
 /// Kernels, none when it was refused.
+/// The documents a document uses, each with its stamp when read.
+type Depends = Option<Vec<(PathBuf, Option<Stamp>)>>;
+
 struct Read {
     path: PathBuf,
     current: Option<Stamp>,
@@ -122,6 +128,7 @@ impl Scene {
             superseded: false,
             expanded: None,
             refusal: None,
+            compiling: None,
         }
     }
 
@@ -257,6 +264,12 @@ impl Scene {
         // The worker's finished changes publish first.
         let outcome = kernels.collect(runtime, events);
         self.land(outcome, kernels, runtime, events);
+        // The libraries the running scene uses first: what changed there
+        // either publishes now, or is handed to another thread before the
+        // scene is read, which then waits for it.
+        if self.sync_libraries(kernels, runtime, events) {
+            self.stamp = None;
+        }
         self.sync_root(kernels, runtime, events, readable);
         if self.sync_libraries(kernels, runtime, events) {
             self.stamp = None;
@@ -411,6 +424,11 @@ impl Scene {
         events: &mut Vec<Event>,
         readable: &dyn Fn(&Path) -> Result<(), String>,
     ) {
+        // The scene is read once the library documents being compiled
+        // land, so it never names a Kernel they are about to publish.
+        if self.compiling.is_some() {
+            return;
+        }
         let from = events.len();
         let unchanged = self.stamp.is_some() && self.store.stamp(&self.root) == self.stamp;
         self.read_root(kernels, runtime, events, readable);
@@ -711,6 +729,20 @@ impl Scene {
         self.land(outcome, kernels, runtime, events);
     }
 
+    /// Whether library documents are being read and compiled on another
+    /// thread, to publish at a later sync.
+    pub(crate) fn compiling(&self) -> bool {
+        self.compiling.is_some()
+    }
+
+    /// Waits until the library documents being compiled are done, for
+    /// the next sync to publish.
+    pub(crate) fn wait_compiled(&mut self) {
+        if let Some(compiling) = &mut self.compiling {
+            compiling.wait();
+        }
+    }
+
     /// Loads the libraries the root uses; returns whether any changed.
     fn sync_libraries(
         &mut self,
@@ -755,151 +787,74 @@ impl Scene {
                 .entry(path.as_os_str().to_owned())
                 .or_insert_with(|| store.stamp(path))
         };
+        // A compile handed to another thread lands at the first sync after
+        // it is done; until then nothing more is read.
         let mut read: Vec<Read> = Vec::new();
-        for path in wanted {
-            let current = stamp_of(&path);
-            // Read again when it changed, or any document it uses did.
-            let used_unchanged = self
-                .depends
-                .get(&path)
-                .is_none_or(|used| used.iter().all(|(used, stamp)| stamp_of(used) == *stamp));
-            if kernels.read_at(&path, current) && used_unchanged {
-                continue;
-            }
-            changed = true;
-            self.depends.remove(&path);
-            let mut said = Vec::new();
-            let text = match self.store.read_text(&path) {
-                Ok(text) => text,
-                Err(error) => {
-                    said.push(Event::Rejected {
-                        path: path.clone(),
-                        error: Diagnostic::new(error.to_string()),
-                    });
-                    read.push(Read {
-                        path,
-                        current,
-                        said,
-                        defined: None,
-                    });
-                    continue;
-                }
-            };
-            let document = match orla_language::parse_document(&text) {
-                Ok(document) => document,
-                Err(error) => {
-                    said.push(Event::Rejected {
-                        path: path.clone(),
-                        error: Diagnostic::from(&error),
-                    });
-                    read.push(Read {
-                        path,
-                        current,
-                        said,
-                        defined: None,
-                    });
-                    continue;
-                }
-            };
-            if !is_library(&document) {
-                said.push(Event::Rejected {
-                    path: path.clone(),
-                    error: Diagnostic {
-                        message: "a used document must hold kernels only".into(),
-                        at: Some((1, 1)),
-                    },
-                });
-                read.push(Read {
-                    path,
-                    current,
-                    said,
-                    defined: None,
-                });
-                continue;
-            }
-            let dir = path
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .to_path_buf();
-            let mut document = document;
-            match declarations_within(
-                self.store.as_ref(),
-                Some(&path),
-                &dir,
-                &document.uses,
-                orla_language::Own::of(&document),
-            ) {
-                Ok((structs, types, functions)) => {
-                    let used = used_documents(self.store.as_ref(), &dir, &document.uses)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|used| {
-                            let stamp = self.store.stamp(&used);
-                            (used, stamp)
-                        })
-                        .collect();
-                    self.depends.insert(path.clone(), used);
-                    if let Err(error) =
-                        functions_checked(&path, &document, (&structs, &types, &functions))
-                    {
-                        said.push(Event::Rejected {
-                            path: path.clone(),
-                            error,
-                        });
-                        read.push(Read {
-                            path,
-                            current,
-                            said,
-                            defined: None,
-                        });
-                        continue;
-                    }
-                    document.resolve((&structs, &types, &functions));
-                }
-                Err(error) => {
-                    said.push(Event::Rejected {
-                        path: path.clone(),
-                        error: Diagnostic::new(error),
-                    });
-                    read.push(Read {
-                        path,
-                        current,
-                        said,
-                        defined: None,
-                    });
-                    continue;
-                }
-            };
-            let mut defined = Vec::new();
-            for kernel in &document.kernels {
-                match named_id(kernel) {
-                    Ok(id) => defined.push(Defined {
-                        id,
-                        text: text[orla_language::doc::with_doc(&text, kernel.range.clone())]
-                            .to_owned(),
-                        kernel: kernel.clone(),
-                    }),
-                    Err(message) => said.push(Event::Rejected {
-                        path: path.clone(),
-                        error: message,
-                    }),
-                }
-            }
-            read.push(Read {
-                path,
-                current,
-                said,
-                defined: Some(defined),
-            });
+        let landed = self.compiling.as_mut().and_then(Compiling::landed);
+        if landed.is_some() || self.compiling.as_ref().is_some_and(|c| c.lost) {
+            self.compiling = None;
         }
-        // Every new or changed Kernel compiled and prepared at once; then
-        // each document published in order, with what it said, as if
-        // each were read, compiled and prepared in turn.
-        let primed: Vec<(&Path, &[Defined])> = read
-            .iter()
-            .filter_map(|read| Some((read.path.as_path(), read.defined.as_deref()?)))
-            .collect();
-        kernels.prime(self.store.as_ref(), &primed, runtime);
+        if let Some(compiled) = landed {
+            for (document, depends) in compiled.reads {
+                if wanted.binary_search(&document.path).is_err() {
+                    continue;
+                }
+                self.depends.remove(&document.path);
+                if let Some(used) = depends {
+                    self.depends.insert(document.path.clone(), used);
+                }
+                read.push(document);
+            }
+            kernels.take_made(compiled.made);
+            changed = true;
+        } else if self.compiling.is_none() {
+            let mut to_read: Vec<(PathBuf, Option<Stamp>)> = Vec::new();
+            for path in wanted {
+                let current = stamp_of(&path);
+                // Read again when it changed, or any document it uses did.
+                let used_unchanged = self
+                    .depends
+                    .get(&path)
+                    .is_none_or(|used| used.iter().all(|(used, stamp)| stamp_of(used) == *stamp));
+                if kernels.read_at(&path, current) && used_unchanged {
+                    continue;
+                }
+                to_read.push((path, current));
+            }
+            // Where replacements prepare off the frames, so are the
+            // documents read and their Kernels compiled.
+            if !to_read.is_empty() && runtime.background() {
+                let ledger =
+                    kernels.ledger(to_read.iter().map(|(path, _)| path.as_path()), runtime);
+                match Compiling::start(Arc::clone(&self.store), to_read, ledger) {
+                    Ok(compiling) => {
+                        self.compiling = Some(compiling);
+                        return false;
+                    }
+                    Err(back) => to_read = back,
+                }
+            }
+            changed |= !to_read.is_empty();
+            let store = self.store.as_ref();
+            let reads = crate::spread::map(&to_read, |(path, current)| {
+                read_library(store, path.clone(), *current)
+            });
+            for (document, depends) in reads {
+                self.depends.remove(&document.path);
+                if let Some(used) = depends {
+                    self.depends.insert(document.path.clone(), used);
+                }
+                read.push(document);
+            }
+            // Every new or changed Kernel compiled and prepared at once; then
+            // each document published in order, with what it said, as if
+            // each were read, compiled and prepared in turn.
+            let primed: Vec<(&Path, &[Defined])> = read
+                .iter()
+                .filter_map(|read| Some((read.path.as_path(), read.defined.as_deref()?)))
+                .collect();
+            kernels.prime(self.store.as_ref(), &primed, runtime);
+        }
         for Read {
             path,
             current,
@@ -1071,4 +1026,239 @@ fn undeclared(graph: &Graph, name: &str) -> String {
         setters[0]
     ));
     why
+}
+
+/// One library document read: parsed, its declarations gathered and
+/// checked, its Kernels found; and the documents it uses with their
+/// stamps, when it got as far as gathering them. It reads the store and
+/// nothing else, so it runs on any thread.
+fn read_library(store: &dyn Store, path: PathBuf, current: Option<Stamp>) -> (Read, Depends) {
+    let mut depends = None;
+    let mut said = Vec::new();
+    let text = match store.read_text(&path) {
+        Ok(text) => text,
+        Err(error) => {
+            said.push(Event::Rejected {
+                path: path.clone(),
+                error: Diagnostic::new(error.to_string()),
+            });
+            return (
+                Read {
+                    path,
+                    current,
+                    said,
+                    defined: None,
+                },
+                depends,
+            );
+        }
+    };
+    let document = match orla_language::parse_document(&text) {
+        Ok(document) => document,
+        Err(error) => {
+            said.push(Event::Rejected {
+                path: path.clone(),
+                error: Diagnostic::from(&error),
+            });
+            return (
+                Read {
+                    path,
+                    current,
+                    said,
+                    defined: None,
+                },
+                depends,
+            );
+        }
+    };
+    if !is_library(&document) {
+        said.push(Event::Rejected {
+            path: path.clone(),
+            error: Diagnostic {
+                message: "a used document must hold kernels only".into(),
+                at: Some((1, 1)),
+            },
+        });
+        return (
+            Read {
+                path,
+                current,
+                said,
+                defined: None,
+            },
+            depends,
+        );
+    }
+    let dir = path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let mut document = document;
+    match declarations_within(
+        store,
+        Some(&path),
+        &dir,
+        &document.uses,
+        orla_language::Own::of(&document),
+    ) {
+        Ok((structs, types, functions)) => {
+            let used = used_documents(store, &dir, &document.uses)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|used| {
+                    let stamp = store.stamp(&used);
+                    (used, stamp)
+                })
+                .collect();
+            depends = Some(used);
+            if let Err(error) = functions_checked(&path, &document, (&structs, &types, &functions))
+            {
+                said.push(Event::Rejected {
+                    path: path.clone(),
+                    error,
+                });
+                return (
+                    Read {
+                        path,
+                        current,
+                        said,
+                        defined: None,
+                    },
+                    depends,
+                );
+            }
+            document.resolve((&structs, &types, &functions));
+        }
+        Err(error) => {
+            said.push(Event::Rejected {
+                path: path.clone(),
+                error: Diagnostic::new(error),
+            });
+            return (
+                Read {
+                    path,
+                    current,
+                    said,
+                    defined: None,
+                },
+                depends,
+            );
+        }
+    };
+    let mut defined = Vec::new();
+    for kernel in &document.kernels {
+        match named_id(kernel) {
+            Ok(id) => defined.push(Defined {
+                id,
+                text: text[orla_language::doc::with_doc(&text, kernel.range.clone())].to_owned(),
+                kernel: kernel.clone(),
+            }),
+            Err(message) => said.push(Event::Rejected {
+                path: path.clone(),
+                error: message,
+            }),
+        }
+    }
+    (
+        Read {
+            path,
+            current,
+            said,
+            defined: Some(defined),
+        },
+        depends,
+    )
+}
+
+/// Library documents read and their Kernels primed on another thread
+/// ([`read_library`], [`crate::kernels::Ledger::prime`]), for the sync
+/// after to publish.
+struct Compiling {
+    done: std::sync::mpsc::Receiver<Compiled>,
+    ready: Option<Compiled>,
+    /// Whether its thread ended without an answer (it panicked): its
+    /// documents are read again.
+    lost: bool,
+}
+
+/// What a [`Compiling`] made: each document read, with what it uses, in
+/// order, and its Kernels primed.
+struct Compiled {
+    reads: Vec<(Read, Depends)>,
+    made: crate::kernels::Made,
+}
+
+impl Compiling {
+    /// Starts reading `to_read` on a thread, or gives it back where no
+    /// thread can start.
+    fn start(
+        store: Arc<dyn Store>,
+        to_read: Vec<(PathBuf, Option<Stamp>)>,
+        ledger: crate::kernels::Ledger,
+    ) -> Result<Self, Vec<(PathBuf, Option<Stamp>)>> {
+        let (send, done) = std::sync::mpsc::channel();
+        let shared = Arc::new(std::sync::Mutex::new(Some(to_read)));
+        let theirs = Arc::clone(&shared);
+        let started = std::thread::Builder::new()
+            .name("orla-compile".into())
+            // Room for the language's nesting bound
+            // (orla_language::DEEP_STACK), which the compiler recurses through.
+            .stack_size(256 << 20)
+            .spawn(move || {
+                let Some(to_read) = theirs
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                else {
+                    return;
+                };
+                let store = store.as_ref();
+                let reads = crate::spread::map(&to_read, |(path, current)| {
+                    read_library(store, path.clone(), *current)
+                });
+                let documents: Vec<(&Path, &[Defined])> = reads
+                    .iter()
+                    .filter_map(|(read, _)| Some((read.path.as_path(), read.defined.as_deref()?)))
+                    .collect();
+                let made = ledger.prime(store, &documents);
+                let _ = send.send(Compiled { reads, made });
+            });
+        match started {
+            Ok(_) => Ok(Self {
+                done,
+                ready: None,
+                lost: false,
+            }),
+            Err(_) => Err(shared
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+                .unwrap_or_default()),
+        }
+    }
+
+    /// What it made, once done.
+    fn landed(&mut self) -> Option<Compiled> {
+        if let Some(ready) = self.ready.take() {
+            return Some(ready);
+        }
+        match self.done.try_recv() {
+            Ok(compiled) => Some(compiled),
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.lost = true;
+                None
+            }
+        }
+    }
+
+    /// Waits until it is done.
+    fn wait(&mut self) {
+        if self.ready.is_none() {
+            match self.done.recv() {
+                Ok(compiled) => self.ready = Some(compiled),
+                Err(_) => self.lost = true,
+            }
+        }
+    }
 }

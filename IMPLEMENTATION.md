@@ -125,7 +125,10 @@ builds a Kernel's pipelines when it is needed: a session's graph's
 Kernels as they publish, a replacement before it is ready where the
 version it replaces ran there, anything else at its first run
 ([`Lazy`](crates/backends/gpu/src/prepare.rs),
-[lazy](crates/interface/session/tests/lazy.rs)); `orla check` says a
+[lazy](crates/interface/session/tests/lazy.rs)); a changed library
+document is read and compiled off the frames where replacements prepare
+there ([compile ahead](crates/interface/session/tests/compile_ahead.rs));
+`orla check` says a
 Kernel is large ([size](crates/core/ir/src/size.rs),
 [large](crates/interface/session/tests/large.rs)). A `Long` on the device
 avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
