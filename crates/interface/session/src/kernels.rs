@@ -153,54 +153,26 @@ impl Kernels {
                 jobs.push((path, d, reaches, !running));
             }
         }
-        // One core, or one Kernel, gains nothing from threads.
-        let workers = orla_rules::cores().min(jobs.len());
-        if workers < 2 {
+        if jobs.len() < 2 {
             return;
         }
         let preparer = runtime.preparer();
-        let next = std::sync::atomic::AtomicUsize::new(0);
-        let made: std::sync::Mutex<Vec<(KernelId, Primed)>> = std::sync::Mutex::new(Vec::new());
-        let work = || {
-            loop {
-                let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let Some((path, d, reaches, new)) = jobs.get(at) else {
-                    break;
-                };
-                let Ok(module) = compiled(store, path, &d.id, &d.text, reaches, &d.kernel) else {
-                    continue;
-                };
-                let candidate = new
-                    .then(|| preparer.prepare(module.clone(), &d.text).ok())
-                    .flatten();
-                let primed = Primed {
+        let made = crate::spread::map(&jobs, |(path, d, reaches, new)| {
+            let module = compiled(store, path, &d.id, &d.text, reaches, &d.kernel).ok()?;
+            let candidate = new
+                .then(|| preparer.prepare(module.clone(), &d.text).ok())
+                .flatten();
+            Some((
+                d.id.clone(),
+                Primed {
                     text: d.text.clone(),
                     reaches: reaches.clone(),
                     module,
                     candidate,
-                };
-                made.lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .push((d.id.clone(), primed));
-            }
-        };
-        // Where no thread can be spawned (a page), nothing is primed and
-        // staging compiles and prepares each in turn.
-        std::thread::scope(|scope| {
-            for _ in 0..workers {
-                if std::thread::Builder::new()
-                    .name("orla-prime".into())
-                    .spawn_scoped(scope, work)
-                    .is_err()
-                {
-                    break;
-                }
-            }
+                },
+            ))
         });
-        self.primed.extend(
-            made.into_inner()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
+        self.primed.extend(made.into_iter().flatten());
     }
 
     /// Lets go of what [`Kernels::prime`] made and staging did not take.

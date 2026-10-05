@@ -139,60 +139,19 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
     // The used documents, each with its own declarations.
     match used_documents(store, base, &document.uses) {
         Ok(used) => {
+            // Each used document checked on its own, all at once; what
+            // each found is said in their order.
+            let found = crate::spread::map(&used, |used_path| {
+                check_used(store, used_path, root, publishes(used_path), show_ir)
+            });
             let mut compiled = 0;
-            for path in &used {
-                let text = match store.read_text(path) {
-                    Ok(text) => text,
-                    Err(error) => {
-                        say!(problem, "{}: {error}", path.display());
-                        continue;
-                    }
-                };
-                let Ok(mut used_document) = orla_language::parse_document(&text) else {
-                    continue; // reported by `used_documents`
-                };
-                let dir = path.parent().unwrap_or_else(|| Path::new("."));
-                match declarations_within(
-                    store,
-                    Some(path),
-                    dir,
-                    &used_document.uses,
-                    orla_language::Own::of(&used_document),
-                ) {
-                    Ok((structs, types, functions)) => {
-                        if let Err(error) = orla_compiler::check_functions(
-                            &used_document,
-                            (&structs, &types, &functions),
-                        ) {
-                            let held = held((&structs, &types, &functions));
-                            let at = written_in(path, held, &error);
-                            say!(problem, "{}:{}", at.display(), said(held, &error));
-                        }
-                        used_document.resolve((&structs, &types, &functions))
-                    }
-                    Err(error) => {
-                        say!(problem, "{}: {error}", path.display());
-                    }
-                }
-                let kernels: &[orla_language::Kernel] = if publishes(path) {
-                    &used_document.kernels
-                } else {
-                    &[]
-                };
-                for kernel in kernels {
-                    match orla_compiler::compile_kernel(kernel, None) {
-                        Ok(module) => {
-                            compiled += 1;
-                            if show_ir {
-                                say!(note, "{}: {}\n{module}", path.display(), module.manifest.id);
-                            }
-                        }
-                        Err(error) => {
-                            let held = orla_language::Held::of(kernel);
-                            let at = written_in(path, held, &error);
-                            let said = located(store, said(held, &error), path, root, &[]);
-                            say!(problem, "{}:{said}", at.display());
-                        }
+            for (lines, count) in found {
+                compiled += count;
+                for (problem, line) in lines {
+                    if problem {
+                        say!(problem, "{line}");
+                    } else {
+                        say!(note, "{line}");
                     }
                 }
             }
@@ -251,4 +210,73 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         }
     }
     checked
+}
+
+/// What checking one document a scene uses found, in order, and how many
+/// of its Kernels compiled: its declarations, and its Kernels when the
+/// scene publishes them (`published`).
+fn check_used(
+    store: &dyn Store,
+    path: &Path,
+    root: &Path,
+    published: bool,
+    show_ir: bool,
+) -> (Vec<(bool, String)>, usize) {
+    let mut lines = Vec::new();
+    let mut compiled = 0;
+    let text = match store.read_text(path) {
+        Ok(text) => text,
+        Err(error) => {
+            lines.push((true, format!("{}: {error}", path.display())));
+            return (lines, compiled);
+        }
+    };
+    let Ok(mut used_document) = orla_language::parse_document(&text) else {
+        return (lines, compiled); // reported by `used_documents`
+    };
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    match declarations_within(
+        store,
+        Some(path),
+        dir,
+        &used_document.uses,
+        orla_language::Own::of(&used_document),
+    ) {
+        Ok((structs, types, functions)) => {
+            if let Err(error) =
+                orla_compiler::check_functions(&used_document, (&structs, &types, &functions))
+            {
+                let held = held((&structs, &types, &functions));
+                let at = written_in(path, held, &error);
+                lines.push((true, format!("{}:{}", at.display(), said(held, &error))));
+            }
+            used_document.resolve((&structs, &types, &functions))
+        }
+        Err(error) => lines.push((true, format!("{}: {error}", path.display()))),
+    }
+    let kernels: &[orla_language::Kernel] = if published {
+        &used_document.kernels
+    } else {
+        &[]
+    };
+    for kernel in kernels {
+        match orla_compiler::compile_kernel(kernel, None) {
+            Ok(module) => {
+                compiled += 1;
+                if show_ir {
+                    lines.push((
+                        false,
+                        format!("{}: {}\n{module}", path.display(), module.manifest.id),
+                    ));
+                }
+            }
+            Err(error) => {
+                let held = orla_language::Held::of(kernel);
+                let at = written_in(path, held, &error);
+                let said = located(store, said(held, &error), path, root, &[]);
+                lines.push((true, format!("{}:{said}", at.display())));
+            }
+        }
+    }
+    (lines, compiled)
 }
