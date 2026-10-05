@@ -540,9 +540,10 @@ expect 1 1 = 0.5 0.5 0.25 0.02
         frame[..400 * 9].contains(&0x00E0_E0E0),
         "the line's ink in the top rows"
     );
+    // Escape is the scene's: nothing to stop.
     assert_eq!(
         unsafe { orla_ffi::orla_play_key(session, c("Escape").as_ptr(), 1) },
-        1
+        0
     );
     assert_eq!(
         unsafe { orla_ffi::orla_play_pad(session, c("south").as_ptr(), 1) },

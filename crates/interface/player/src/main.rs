@@ -12,7 +12,7 @@ use orla_gpu::present::{Display, Overlay, Presenter};
 use orla_player::audio::Audio;
 use orla_player::gamepad::Gamepad;
 use orla_session::Session;
-use orla_session::play::{self, Asked, Frame, Placement, Play, View, hud};
+use orla_session::play::{self, Frame, Placement, Play, View, hud};
 use serde_json::Value as Json;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -33,8 +33,9 @@ usage:
       window's size in pixels and its scale factor, which a node's `domain`
       may take as `window()`; --window opens the window at that logical size
       instead of the output's size times --scale. F5 resets state;
-      Tab cycles the preview through the graph's nodes and back to the output;
-      F10 shows a line of frame data over the picture.
+      F6 cycles the preview through the graph's nodes and back to the output;
+      F10 shows a line of frame data over the picture, naming the port shown.
+      Tab, Escape and every other key are the scene's.
       --memory says how many mebibytes of Fields the Host may hold at once,
       2048 by default; a scene of millions of triangles wants more.
       --work says how many million loop iterations one run of a Kernel may
@@ -49,7 +50,7 @@ usage:
       checks run as they come, and when it ends what it observed is
       printed and the window is yours. The replay names its scene, so
       `orla-player --replay <file.replay>` is enough.
-      Press Escape or close the window to quit.
+      Close the window, or press Cmd+Q, to quit.
       With --serve, the creation protocol runs on stdin and stdout inside the
       window, and on every connection to --listen <host:port>: an agent's
       publish, compose, and param land in the frame a person watches, and
@@ -521,11 +522,8 @@ impl ApplicationHandler for Player {
                     Key::Character(text) => text.to_string(),
                     _ => return,
                 };
-                let asked = self.play.key(&mut self.session, &name, down);
+                self.play.key(&mut self.session, &name, down);
                 self.say();
-                if asked == Some(Asked::Stop) {
-                    event_loop.exit();
-                }
             }
             WindowEvent::RedrawRequested => {
                 // With sound, a block is produced when the ring can take

@@ -21,7 +21,7 @@ const PAD_BUTTONS = [
 const BUTTON = { 0: 0, 1: 2, 2: 1 };
 
 /// Keys the page would act on itself, which the scene has instead.
-const HELD = new Set(["Tab", "F5", "F10", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " "]);
+const HELD = new Set(["Tab", "Escape", "F5", "F6", "F10", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " "]);
 
 /// The sound card: a worklet that plays the blocks it is handed, in
 /// order, and says how many samples it holds, which paces the frames as
@@ -109,9 +109,9 @@ class OrlaPlayer {
     return this.orla.session;
   }
 
-  /// Hands a key to the play; true when it asks to stop.
+  /// Hands a key to the play.
   key(name, down) {
-    return this.orla.withText(name, (at) => this.x.orla_play_key(this.session, at, down ? 1 : 0)) === 1;
+    this.orla.withText(name, (at) => this.x.orla_play_key(this.session, at, down ? 1 : 0));
   }
 
   /// One request of the creation protocol (`write`, `publish`, `read`,
@@ -138,12 +138,7 @@ class OrlaPlayer {
   handOver() {
     const hands = this.hands;
     this.hands = [];
-    for (const hand of hands) {
-      if (hand() === "stop") {
-        this.stop();
-        return false;
-      }
-    }
+    for (const hand of hands) hand();
     return true;
   }
 
@@ -153,8 +148,8 @@ class OrlaPlayer {
       if (HELD.has(event.key)) event.preventDefault();
       this.startSound().catch(() => {});
       const key = event.key;
-      this.hands.push(() => (this.key(key, true) ? "stop" : null));
-      if (!this.running && key !== "Escape") this.run();
+      this.hands.push(() => this.key(key, true));
+      if (!this.running) this.run();
     });
     window.addEventListener("keyup", (event) => {
       if (HELD.has(event.key)) event.preventDefault();
@@ -334,15 +329,6 @@ class OrlaPlayer {
       }
       await new Promise((done) => requestAnimationFrame(done));
     }
-  }
-
-  /// Escape: the page cannot close itself, so the scene stops; a key or
-  /// a click goes on.
-  stop() {
-    this.running = false;
-    // Between frames: what waits is answered now, not at the next run.
-    this.orla.inTurn(() => this.answerNow());
-    document.title = "Orla Player (stopped: a key or a click goes on)";
   }
 
   /// Watches the served files under `roots` and hands in the ones that

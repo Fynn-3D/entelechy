@@ -158,7 +158,7 @@ pub struct View {
 pub struct Shown {
     /// The evaluation's report.
     pub report: Report,
-    /// The picture: the graph's, or the node Tab previews.
+    /// The picture: the graph's, or the node F6 previews.
     pub picture: Handle,
     /// The sound output, if any.
     pub sound: Option<Handle>,
@@ -173,13 +173,6 @@ pub enum Frame {
     /// The evaluation failed; the last picture stays, and
     /// [`Play::status`] says why.
     Failed,
-}
-
-/// A request from a key to the device.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Asked {
-    /// Escape: stop playing (a window closes).
-    Stop,
 }
 
 /// A scene being played: input, preview, frame-data line, replay, and
@@ -272,19 +265,18 @@ impl Play {
         }
     }
 
-    /// A key by name (`a`, `ArrowLeft`, `F5`). F5 resets state, Tab
-    /// moves the preview, F10 toggles the frame-data line, Escape asks
-    /// the device to stop; every other key goes to the scene.
-    pub fn key(&mut self, session: &mut Session, name: &str, down: bool) -> Option<Asked> {
+    /// A key by name (`a`, `ArrowLeft`, `F5`). F5 resets state, F6
+    /// moves the preview, F10 toggles the frame-data line; every other
+    /// key goes to the scene, Tab and Escape among them.
+    pub fn key(&mut self, session: &mut Session, name: &str, down: bool) {
         match name {
-            "Escape" => return Some(Asked::Stop),
             "F5" => {
                 if down {
                     session.reset_state();
                     self.said.push("state reset".into());
                 }
             }
-            "Tab" => {
+            "F6" => {
                 if down {
                     self.cycle_preview(session);
                 }
@@ -301,7 +293,6 @@ impl Play {
                 }
             }
         }
-        None
     }
 
     /// A press or release; a release before any frame saw the press
@@ -507,6 +498,18 @@ impl Play {
         );
     }
 
+    /// What the window shows, as the line of frame data names it: the
+    /// previewed node's port, or the scene output `shown` is.
+    pub fn showing(&self, report: &Report, shown: Handle) -> String {
+        match &self.preview {
+            Some(node) => format!("view {node}.result"),
+            None => match report.outputs.iter().find(|(_, handle)| *handle == shown) {
+                Some((name, _)) => format!("output {name}"),
+                None => "output".to_string(),
+            },
+        }
+    }
+
     /// Moves the preview to the next node, or to the graph output after
     /// the last. A previewed node is pinned, so fusion keeps it.
     fn cycle_preview(&mut self, session: &mut Session) {
@@ -596,10 +599,7 @@ impl Play {
             .iter()
             .map(|(_, absorbed)| absorbed.len())
             .sum();
-        let view = match &self.preview {
-            Some(node) => format!("view {node}"),
-            None => "output".to_string(),
-        };
+        let view = self.showing(report, shown);
         let sound = match &self.sound {
             Some(sound) => format!(" | sound {sound}"),
             None => String::new(),

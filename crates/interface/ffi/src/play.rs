@@ -7,7 +7,7 @@
 use std::ffi::{CString, c_char, c_int};
 use std::path::Path;
 
-use orla_session::play::{Asked, Frame, PadAxis, PadButton, View, hud};
+use orla_session::play::{Frame, PadAxis, PadButton, View, hud};
 
 use crate::{
     OPEN_ERROR, Opening, OrlaField, OrlaFiles, OrlaSession, c_string, clock, enter, guarded,
@@ -72,8 +72,8 @@ pub unsafe extern "C" fn orla_open_replay(
     opened(Some(store), Opening::Replay(Path::new(replay)), backend)
 }
 
-/// A key by name (`a`, `ArrowLeft`, `F5`), pressed or released; 1 when
-/// the play asks to stop.
+/// A key by name (`a`, `ArrowLeft`, `F5`), pressed or released; 0 taken,
+/// -1 when the session or the name cannot be read.
 ///
 /// # Safety
 /// `session` is a live session; `name` a NUL-terminated string.
@@ -88,10 +88,8 @@ pub unsafe extern "C" fn orla_play_key(
     };
     let name = name.to_owned();
     guarded(&mut s, |s| {
-        match s.play.key(&mut s.session, &name, down != 0) {
-            Some(Asked::Stop) => 1,
-            None => 0,
-        }
+        s.play.key(&mut s.session, &name, down != 0);
+        0
     })
 }
 

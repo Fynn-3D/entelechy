@@ -68,10 +68,10 @@ else the JIT, else the interpreter when none is named). It is the page's
 devices for the play every interface shares, `player.js`: keys, pointer
 and wheel, the Gamepad API's pads, WebAudio (opened at the first touch,
 as a page may), the canvas, and the served files it watches and hands in
-again when they change. What F5, Tab, F10 and Escape mean, how a pad is
-a keyboard, what the line of frame data says and how a replay drives the
-scene are the play's (`orla_play_*`), not the page's; Escape stops,
-since a page does not close itself, and a key or a click goes on. An
+again when they change. What F5, F6 and F10 mean, how a pad is a
+keyboard, what the line of frame data says and how a replay drives the
+scene are the play's (`orla_play_*`), not the page's; Tab, Escape and the
+other keys are the scene's. An
 agent in the page creates through `player.call(op, fields)`, the
 creation protocol answered between frames as the Player's window
 answers `--serve`: `write` a volume into the voxel editor's `world` and
@@ -93,7 +93,7 @@ republishes its background, over the socket and in the page alike; in
 the page it composes the scene and hands a changed one in, runs the
 same checks on the page's WebGPU, and checks what the GPU presents on a
 canvas; then it plays a replay in `play.html` on the page's GPU and on
-its JIT to its end, and presses F5 and Tab there; then it
+its JIT to its end, and presses F5 and F6 there; then it
 drives the voxel editor with a window and a pointer, places a voxel,
 and resizes the window; then it opens `index.html`, connects it, loads a
 Kernel into its editor, and opens the text example in it in the page;

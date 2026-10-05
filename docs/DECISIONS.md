@@ -623,7 +623,8 @@ on the page's WebGPU in a headless Chrome.
 Every interface that plays a scene shares one play
 (`orla_session::play`): the frame (changes read, a replay's frame taken
 at its time, the scene evaluated, picture and sound named), what F5,
-Tab, F10 and Escape mean, how a pad is a keyboard, how the pointer is
+F6 and F10 mean (every other key, Tab and Escape among them, is the
+scene's), how a pad is a keyboard, how the pointer is
 found in the picture, the line of frame data, and what is said. An
 interface is its devices only: it hands the play its person's input and
 clock, shows the picture and plays the sound on its own devices, and
@@ -657,7 +658,7 @@ wheel, pads and clock (`orla.now`). Held by
 (keys, preview, pointer, sound output, a failure said once, a replay
 played to its end); by the ABI's test through `orla_play_*`; and by the
 web bridge's test, a replay in `play.html` on the page's GPU and JIT, F5
-and Tab pressed there.
+and F6 pressed there.
 
 ## A replay is a test; a piece is made of laws, structure and state
 

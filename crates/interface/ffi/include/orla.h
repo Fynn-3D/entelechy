@@ -112,8 +112,8 @@ OrlaSession *orla_open_files(OrlaFiles *files, const char *scene, const char *ba
  * set on failure. */
 OrlaSession *orla_open_replay(OrlaFiles *files, const char *replay, const char *backend);
 /* A key by its name ("a", "ArrowLeft", "F5", "Escape") pressed (1) or
- * released (0). Returns 1 when it asks the host to stop (Escape), 0
- * otherwise. */
+ * released (0): F5, F6 and F10 are the play's, every other key the
+ * scene's. Returns 0, or -1 when the session or the name cannot be read. */
 int orla_play_key(OrlaSession *session, const char *name, int down);
 /* The pointer at (x, y) in the window's pixels. */
 void orla_play_pointer(OrlaSession *session, float x, float y);

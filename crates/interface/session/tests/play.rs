@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use orla_session::Session;
-use orla_session::play::{Asked, Frame, Placement, Play, View};
+use orla_session::play::{Frame, Placement, Play, View};
 
 const KERNELS: &str = "
 kernel t.zero@1 { requires { field.write; } output result: Rows<Int>; compute { return 0; } }
@@ -74,9 +74,9 @@ fn red(session: &mut Session, picture: orla_kernel::Handle) -> f32 {
 }
 
 /// The picture is the first pixel grid and the sound the first float
-/// rows; F5 restarts the state; a letter reaches the scene's `key`; Tab
-/// cycles the nodes and back to the picture; F10 shows the frame-data
-/// line; Escape asks the device to stop.
+/// rows; F5 restarts the state; a letter, Tab and Escape reach the
+/// scene's `key`; F6 cycles the nodes and back to the picture; F10 shows
+/// the frame-data line, naming the port shown.
 #[test]
 fn the_keys_mean_what_they_mean_in_every_interface() {
     let dir = scratch("keys");
@@ -88,7 +88,7 @@ fn the_keys_mean_what_they_mean_in_every_interface() {
     shown(&mut play, &mut session);
     let third = shown(&mut play, &mut session);
     assert!((red(&mut session, third.picture) - 0.03).abs() < 1e-6);
-    assert_eq!(play.key(&mut session, "F5", true), None);
+    play.key(&mut session, "F5", true);
     assert!(play.said().iter().any(|line| line == "state reset"));
     let again = shown(&mut play, &mut session);
     assert!(
@@ -109,13 +109,17 @@ fn the_keys_mean_what_they_mean_in_every_interface() {
     assert_eq!(green, 1.0, "the letter reached the scene");
     play.key(&mut session, "a", false);
 
-    play.key(&mut session, "Tab", true);
+    play.key(&mut session, "F6", true);
     assert!(play.said().iter().any(|line| line == "previewing zero"));
     let previewed = shown(&mut play, &mut session);
     let zero = session.cached(&orla_graph::NodeId("zero".into()), "result");
-    assert_eq!(Some(previewed.picture), zero, "Tab shows the first node");
+    assert_eq!(Some(previewed.picture), zero, "F6 shows the first node");
+    assert_eq!(
+        play.showing(&previewed.report, previewed.picture),
+        "view zero.result"
+    );
     for _ in 0..4 {
-        play.key(&mut session, "Tab", true);
+        play.key(&mut session, "F6", true);
     }
     assert!(play.said().iter().any(|line| line == "previewing output"));
     let back = shown(&mut play, &mut session);
@@ -123,13 +127,21 @@ fn the_keys_mean_what_they_mean_in_every_interface() {
         back.picture, back.report.outputs[0].1,
         "and then the picture"
     );
+    assert_eq!(play.showing(&back.report, back.picture), "output view");
 
     assert!(play.panel().is_none());
     play.key(&mut session, "F10", true);
     shown(&mut play, &mut session);
     let panel = play.panel().expect("F10 shows the line");
     assert!(panel.width > 0 && panel.height > 0);
-    assert_eq!(play.key(&mut session, "Escape", true), Some(Asked::Stop));
+    // Tab and Escape are the scene's: neither previews nor stops.
+    play.key(&mut session, "Tab", true);
+    play.key(&mut session, "Escape", true);
+    let held = play.context(VIEW).input;
+    assert!(
+        held.key(9) && held.key(27),
+        "Tab and Escape reach the scene"
+    );
 }
 
 /// The pointer is placed in the picture from where the device says it

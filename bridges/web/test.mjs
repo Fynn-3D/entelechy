@@ -240,14 +240,14 @@ try {
       await until(said, /scene loaded/, 30);
       await sleep(500);
       await key("F5");
-      await key("Tab");
+      await key("F6");
       const pressed = await until(said, /state reset[\s\S]*previewing/, 10);
       // An agent in the page, answered between frames as `--serve` is.
       const backend = await run("player.call('status').then((s) => s.backend)");
       return backend === "jit" ? pressed : `the protocol in the page answered ${backend}`;
     });
     const ok = /previewing/.test(keys);
-    console.log(`play.html keys: ${ok ? "F5 and Tab reached the play, and the protocol was answered between frames" : keys}`);
+    console.log(`play.html keys: ${ok ? "F5 and F6 reached the play, and the protocol was answered between frames" : keys}`);
     if (!ok) log = log.replace("RESULT: ok", "RESULT: failed: play.html keys");
   }
   for (const problem of devtools.problems) console.log(`page: ${problem}`);

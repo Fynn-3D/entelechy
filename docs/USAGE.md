@@ -298,12 +298,13 @@ arrows (37 to 40), South is Z, East is X, Start is Enter, Select is
 Escape; its sticks, triggers and buttons are `stick()` and `button()`,
 and `pads()` is how many are connected.
 
-Keys: Tab cycles the preview through the nodes and back to the output;
+Keys: F6 cycles the preview through the nodes and back to the output;
 F5 resets Graph state; F10 shows a line of frame data (frame interval
-and rate, evaluate and present times, backend, window and scale, what
-ran, was reused and was fused, `async` runs, presentation path and
-downloads, the sound device's rate, block size and dry callbacks);
-Escape closes the window.
+and rate, evaluate and present times, backend, window and scale, the
+port shown, what ran, was reused and was fused, `async` runs,
+presentation path and downloads, the sound device's rate, block size and
+dry callbacks). Tab, Escape and every other key are the scene's; closing
+the window, or Cmd+Q, quits.
 
 ## Replay tests
 
