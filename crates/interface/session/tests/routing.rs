@@ -198,15 +198,20 @@ output later <- later.result;
 output turned <- turned.result;
 "#;
 
-/// Its frames, some settling the run off the frame.
+/// Its frames, each settling the run off the frame: when an unsettled
+/// run lands is the machine's timing, which the two sessions compared
+/// need not share.
 const REPLAY: &str = r#"scene kinds.osn
 frame 0.0
+settle
 frame 0.5
 settle
 frame 1.0
+settle
 frame 1.5
 settle
 frame 2.0
+settle
 expect count spread.result = 16
 "#;
 
