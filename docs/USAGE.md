@@ -99,8 +99,9 @@ Evaluates a `.osn` scene once. Flags:
   default); `--work <M>` the million loop iterations one run of a Kernel
   may take (4000 by default); `--small <operations>` the operations a run
   may take, by its elements and its Kernel's typical work, and go to the
-  JIT rather than the device (400000 by default; `0` keeps every run on
-  the device, [why](DECISIONS.md#a-small-run-goes-to-the-processor-a-device-is-for-many-elements)).
+  JIT rather than the device (400000 by default; a run of 64 elements or
+  fewer goes whatever its work, or, reading what the device made in the
+  same evaluation, past 100000 operations; `0` keeps every run on the device, [why](DECISIONS.md#a-small-run-goes-to-the-processor-a-device-is-for-many-elements)).
   A small run rounds as the JIT does, so two forms of one computation a
   replay holds equal to the bit are held with `--small 0` on a GPU.
   `render`, `replay`, `serve`, `graph`, `trace` and `bench` take all three.

@@ -276,11 +276,17 @@ When the main backend is a device and the JIT runs beside it, each run of
 a Kernel goes to the one its size suits: to the JIT when its elements
 times its Kernel's typical work (`Validated::typical_work`, an estimate
 of operations per element from the IR) are at most `--small`, 400,000 by
-default; to the device otherwise. A Kernel the device declines always
-runs on the JIT. A small run that reads a Field the device made in this
+default; to the device otherwise. A run of so few elements that one of
+the device's groups holds them all (64, its 8 by 8) goes to the JIT
+however much each takes, since the device runs them a thread each, far
+slower than the processor. A Kernel the device declines always runs on
+the JIT. A small run that reads a Field the device made in this
 evaluation stays on the device, since bringing it back would wait for
-the device's work before it; a Field made before, state or an input,
-comes back once. A Field uploaded from memory keeps its words in memory
+the device's work before it and break it in two; a run of so few
+elements leaves it still when it is long, past 100,000 operations (two
+thirds of a millisecond a thread at a time on the device, at 6.6 ns an
+operation, more than the wait), unless what it would bring back passes a
+mebibyte. A Field made before, state or an input, comes back once. A Field uploaded from memory keeps its words in memory
 beside the device's copy, as a Field is a value, so neither side sends
 it back again. The report says where each run went and why; `--small 0`
 keeps every run on the device.
@@ -290,7 +296,13 @@ keeps every run on the device.
 hundred small runs takes 15.6 ms on the device and 0.73 ms on the JIT,
 and a step of sixty-seven rigid bodies 10.6 ms against 0.57 ms. Submitting
 them together, or in one pass, costs the same: the time is the dependent
-dispatches themselves. A device earns its cost over many elements, so
+dispatches themselves. A device earns its cost over many elements, and
+nothing over few: a game's step of one element, a fight's whole frame,
+took 0.96 ms on the device and 0.033 ms on the JIT, its readers of a few
+elements kept on the device after it; the frame went from 11.7 to 10.0
+ms. A short run between two of the device's, a learner's guess and its
+error, costs more taken off it than left (3.32 against 3.93 ms a
+frame), so
 where a run goes follows its size, not whether it draws or computes. The
 choice reads the run's elements and the Kernel, never a clock, so a
 replay places every run the same way each time. A run may round its

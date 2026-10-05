@@ -33,6 +33,23 @@ pub use orla_rules::{Backend, Check, ExecutionError, Extent, NativeOp, Prepared,
 /// processor instead.
 pub const DEFAULT_SMALL: u64 = 400_000;
 
+/// The elements a run may have and go to the ordered backend however much
+/// each takes: fewer than one of a device's groups holds, which the device
+/// runs a thread each.
+pub const FEW_ELEMENTS: u64 = 64;
+
+/// The most a run of [`FEW_ELEMENTS`] may read of what the device made in
+/// the same evaluation and still go to the ordered backend, which waits
+/// for it and brings it down.
+pub const FEW_FRESH_BYTES: u64 = 1 << 20;
+
+/// The operations past which a run of [`FEW_ELEMENTS`] that reads what the
+/// device made in the same evaluation still goes to the ordered backend:
+/// run a thread at a time on a device they take longer (two thirds of a
+/// millisecond, at the 6.6 ns an operation measured) than waiting for the
+/// device costs; fewer stay, the device's work kept whole.
+pub const FEW_LONG_WORK: u64 = 100_000;
+
 pub mod clock;
 mod later;
 mod prepare;
@@ -821,13 +838,6 @@ impl Runtime {
         if self.small == 0 || self.ordered.is_none() || !self.backend.has_device() {
             return None;
         }
-        if invocation
-            .inputs
-            .iter()
-            .any(|input| self.fresh.contains(input))
-        {
-            return None;
-        }
         let elements = match run.manifest.mode {
             orla_ir::Mode::Reduce | orla_ir::Mode::Prefix { .. } => invocation
                 .inputs
@@ -836,7 +846,37 @@ impl Runtime {
                 .map_or(0, |domain| domain.count()),
             _ => invocation.domain.count(),
         } as u64;
+        // What it reads that the device made in this evaluation, in bytes:
+        // the ordered backend waits for it and brings it down.
+        let fresh: u64 = invocation
+            .inputs
+            .iter()
+            .filter(|input| self.fresh.contains(*input))
+            .map(
+                |input| match (self.host.schema(*input), self.host.domain(*input)) {
+                    (Ok(schema), Ok(domain)) => schema.storage_words(domain.count()) as u64 * 4,
+                    _ => u64::MAX / 4,
+                },
+            )
+            .fold(0, u64::saturating_add);
         let work = elements.saturating_mul(typical);
+        // Fewer elements than one of the device's groups holds gain nothing
+        // there, the device running them a thread each, far slower than
+        // the processor. They leave it, but for one that reads what the
+        // device made in this evaluation: the processor would wait for
+        // the device and bring it down, breaking the device's work in
+        // two, which pays only when the run itself is long
+        // ([`FEW_LONG_WORK`]) and what comes down is not large.
+        let few = elements <= FEW_ELEMENTS
+            && (fresh == 0 || (work > FEW_LONG_WORK && fresh <= FEW_FRESH_BYTES));
+        if few {
+            return Some(format!(
+                "few: {elements} elements, which a device runs a thread each"
+            ));
+        }
+        if fresh > 0 {
+            return None;
+        }
         (work <= self.small).then(|| format!("small: {elements} elements, about {work} operations"))
     }
 
