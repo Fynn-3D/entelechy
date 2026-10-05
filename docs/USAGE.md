@@ -325,11 +325,21 @@ file. `orla help replay` lists the same forms:
 
 Nodes an expectation names are pinned before the first frame, so fusion
 keeps them; a frame evaluates only what its expectations need. Replays
-run together, `orla replay tests/*.replay`, each open a session of their
-own and share what their scenes are made of: the backends are opened
-once, each document parsed and each Kernel compiled and prepared once
-while what it is made from is unchanged. A large scene's replays run
-faster together than one by one.
+run together, `orla replay tests/*.replay`, share what their scenes are
+made of: the backends are opened once, each document parsed and each
+Kernel compiled and prepared once while what it is made from is
+unchanged, and each scene's replays play on one session, started over
+for each (its state, parameters and pins), as a fresh one would show
+them. A large scene's replays run faster together than one by one.
+
+`orla replay tests/*.replay --watch` keeps them so and plays them again as
+documents, inputs and replay files change: a change plays only the
+replays it reaches (a node their checks read, now or as committed state,
+runs a Kernel published again or reads an input read again; the graph
+rebuilt otherwise, or the replay's own file changed), those that failed
+last first, each said as it ends. A Kernel is published again only when
+what it reaches changes, so a function no replay's checks reach plays
+none. `--round-apart` belongs to a run before a merge, not to `--watch`.
 
 In the Player, a replay drives the scene at
 its own times, prints what it observed at the end, and leaves the window

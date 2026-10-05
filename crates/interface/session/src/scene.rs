@@ -219,6 +219,21 @@ impl Scene {
         Ok(())
     }
 
+    /// Drops every parameter override, each back at the scene's default; a
+    /// param that sizes the graph relowers the document on the next sync.
+    pub(crate) fn clear_params(&mut self) {
+        let sizes = self.newest().is_some_and(|graph| {
+            graph
+                .times_params
+                .iter()
+                .any(|param| self.params.contains_key(param))
+        });
+        self.params.clear();
+        if sizes {
+            self.stamp = None;
+        }
+    }
+
     /// Reads every changed document the root reaches and hands their
     /// Kernels to `kernels`. A changed library rereads the root, whose
     /// Kernels inherit its declarations.

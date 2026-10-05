@@ -604,6 +604,10 @@ pub struct Outcome {
     pub shown: Vec<String>,
     /// Groups the backend refused to run fused, each said once.
     pub refused: Vec<String>,
+    /// The nodes its outcome depends on: what its frames asked for, and
+    /// every node those read, now or as committed state, by the graph,
+    /// whether a frame ran them or spared them as unchanged.
+    pub touched: std::collections::BTreeSet<String>,
 }
 
 impl Outcome {
@@ -655,22 +659,48 @@ pub fn run_each(
     store: std::sync::Arc<dyn crate::Store>,
     runtime: Runtime,
     fusion: bool,
-    mut each: Option<&mut Each<'_>>,
+    each: Option<&mut Each<'_>>,
 ) -> Result<Outcome, String> {
     let mut session = Session::open_in(store, &replay.scene, replay.kernels.as_deref(), runtime);
     session.set_fusion(fusion);
-    let mut rejected = Vec::new();
-    for event in session.sync() {
-        if let crate::Event::Rejected { .. } | crate::Event::SceneRejected(_) = &event {
-            rejected.push(event.to_string());
-        }
+    let events = session.sync();
+    played_on(replay, &mut session, events, each)
+}
+
+/// Whether the session's documents loaded: the rejections said, if any.
+fn loaded(events: Vec<crate::Event>) -> Result<(), String> {
+    let rejected: Vec<String> = events
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event,
+                crate::Event::Rejected { .. } | crate::Event::SceneRejected(_)
+            )
+        })
+        .map(|event| event.to_string())
+        .collect();
+    if rejected.is_empty() {
+        Ok(())
+    } else {
+        Err(rejected.join("\n"))
     }
-    if !rejected.is_empty() {
-        return Err(rejected.join("\n"));
-    }
-    let mut replayer = Replayer::start(replay, &mut session);
-    while let Some(frame) = replayer.next_frame(&mut session)? {
+}
+
+/// A replay played on a session that has just read its documents.
+fn played_on(
+    replay: &Replay,
+    session: &mut Session,
+    events: Vec<crate::Event>,
+    mut each: Option<&mut Each<'_>>,
+) -> Result<Outcome, String> {
+    loaded(events)?;
+    let session = &mut *session;
+    let mut replayer = Replayer::start(replay, session);
+    let mut asked: std::collections::BTreeSet<orla_graph::NodeId> =
+        std::collections::BTreeSet::new();
+    while let Some(frame) = replayer.next_frame(session)? {
         let at = frame.context.time;
+        asked.extend(frame.demand.iter().cloned());
         let mut demand = frame.demand;
         if each.is_some() {
             demand.extend(replayer.producers.iter().cloned());
@@ -679,11 +709,212 @@ pub fn run_each(
             .evaluate_for(&frame.context, &demand)
             .map_err(|error| format!("frame at {at}: {error}"))?;
         if let Some(each) = &mut each {
-            each(&mut session, &report).map_err(|error| format!("frame at {at}: {error}"))?;
+            each(session, &report).map_err(|error| format!("frame at {at}: {error}"))?;
         }
         replayer.evaluated(report);
     }
+    if let Some(graph) = session.graph() {
+        replayer.outcome.touched = reaching(graph, &asked);
+    }
     Ok(replayer.outcome)
+}
+
+/// The nodes `asked` and every node they read, now or as committed state
+/// (with what feeds the state first), through the graph.
+fn reaching(
+    graph: &orla_graph::Graph,
+    asked: &std::collections::BTreeSet<orla_graph::NodeId>,
+) -> std::collections::BTreeSet<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut open: Vec<orla_graph::NodeId> = asked.iter().cloned().collect();
+    while let Some(id) = open.pop() {
+        if !seen.insert(id.0.clone()) {
+            continue;
+        }
+        let Some(node) = graph.node(&id) else {
+            continue;
+        };
+        for binding in node.inputs.values() {
+            let sources = match binding {
+                orla_graph::Binding::Now(source) => vec![source],
+                orla_graph::Binding::Previous {
+                    source, initial, ..
+                } => vec![source, initial],
+            };
+            for source in sources {
+                if let orla_graph::Source::Node { node, .. } = source {
+                    open.push(node.clone());
+                }
+            }
+        }
+    }
+    seen
+}
+
+/// What changed in a scene's documents since its session last read them.
+#[derive(Clone, Debug, Default)]
+pub struct Changed {
+    /// The graph itself changed, or a document was refused: every replay
+    /// of the scene plays again.
+    pub whole: bool,
+    /// The Kernels published again or retired.
+    pub kernels: std::collections::BTreeSet<String>,
+    /// The inputs read again.
+    pub inputs: std::collections::BTreeSet<String>,
+    /// What the sync said, to show.
+    pub said: Vec<String>,
+}
+
+/// Replays played one after another, each scene's on one session kept
+/// for them all: a replay starts the world over
+/// ([`Session::start_over`]), so what it sees is what a fresh session
+/// would show it, while the Kernels stay compiled and prepared, the
+/// documents parsed, and the outputs no state feeds (a world baked from
+/// its seed) are spared. A document changed between replays is read
+/// again as a running session reads it. Rounded apart, each way keeps a
+/// session of its own.
+pub struct Resident {
+    warm: crate::Warm,
+    store: std::sync::Arc<dyn crate::Store>,
+    fusion: bool,
+    sessions: std::collections::HashMap<
+        (std::path::PathBuf, Option<std::path::PathBuf>, Option<u32>),
+        Session,
+    >,
+}
+
+impl Resident {
+    /// Over backends opened once and documents read through `store`.
+    pub fn new(warm: crate::Warm, store: std::sync::Arc<dyn crate::Store>, fusion: bool) -> Self {
+        Self {
+            warm,
+            store,
+            fusion,
+            sessions: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Plays `replay` on its scene's session, rounding apart in `split`
+    /// when one is given ([`crate::apart`]).
+    pub fn play(&mut self, replay: &Replay, split: Option<u32>) -> Result<Outcome, String> {
+        let key = (replay.scene.clone(), replay.kernels.clone(), split);
+        let events = match self.sessions.get_mut(&key) {
+            Some(session) => session.start_over(),
+            None => {
+                let runtime = match split {
+                    Some(split) => self.warm.runtime_apart(split),
+                    None => self.warm.runtime(),
+                };
+                let mut session = Session::open_in(
+                    std::sync::Arc::clone(&self.store),
+                    &replay.scene,
+                    replay.kernels.as_deref(),
+                    runtime,
+                );
+                session.set_fusion(self.fusion);
+                let events = session.sync();
+                self.sessions.insert(key.clone(), session);
+                events
+            }
+        };
+        let session = self.sessions.get_mut(&key).expect("kept above");
+        let played = played_on(replay, session, events, None);
+        if played.is_err() {
+            // A failed run leaves the session as no replay should find it.
+            self.sessions.remove(&key);
+        }
+        played
+    }
+
+    /// Reads every kept session's documents again, saying per scene what
+    /// changed ([`Changed`]). A graph rebuilt the same is no change of its
+    /// own: what changed is what its Kernels and inputs say.
+    pub fn changed(&mut self) -> std::collections::HashMap<std::path::PathBuf, Changed> {
+        let mut changed: std::collections::HashMap<std::path::PathBuf, Changed> =
+            std::collections::HashMap::new();
+        for ((scene, _, _), session) in &mut self.sessions {
+            let before = session.graph().cloned();
+            let events = session.sync();
+            let entry = changed.entry(scene.clone()).or_default();
+            for event in &events {
+                match event {
+                    crate::Event::Published { id, .. } | crate::Event::Retired { id, .. } => {
+                        entry.kernels.insert(id.to_string());
+                    }
+                    crate::Event::Loaded { name, .. }
+                    | crate::Event::Text { name, .. }
+                    | crate::Event::Absent { name, .. } => {
+                        entry.inputs.insert(name.clone());
+                    }
+                    crate::Event::SceneLoaded => {
+                        if session.graph() != before.as_ref() {
+                            entry.whole = true;
+                        }
+                    }
+                    crate::Event::Rejected { .. } | crate::Event::SceneRejected(_) => {
+                        entry.whole = true;
+                        entry.said.push(event.to_string());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        changed
+    }
+
+    /// Whether what changed reaches a replay of `scene` that touched
+    /// `touched`: a node it touched runs a Kernel published again or
+    /// retired, or reads an input read again.
+    pub fn affects(
+        &self,
+        changed: &std::collections::HashMap<std::path::PathBuf, Changed>,
+        scene: &std::path::Path,
+        touched: &std::collections::BTreeSet<String>,
+    ) -> bool {
+        let Some(change) = changed.get(scene) else {
+            return false;
+        };
+        if change.whole {
+            return true;
+        }
+        if change.kernels.is_empty() && change.inputs.is_empty() {
+            return false;
+        }
+        let Some(graph) = self
+            .sessions
+            .iter()
+            .find(|((kept, _, _), _)| kept == scene)
+            .and_then(|(_, session)| session.graph())
+        else {
+            return true;
+        };
+        touched.iter().any(|name| {
+            let Some(node) = graph.node(&orla_graph::NodeId(name.clone())) else {
+                return true;
+            };
+            change.kernels.contains(&node.kernel.to_string())
+                || node.inputs.values().any(|binding| {
+                    let sources = match binding {
+                        orla_graph::Binding::Now(source) => vec![source],
+                        orla_graph::Binding::Previous {
+                            source, initial, ..
+                        } => vec![source, initial],
+                    };
+                    sources.into_iter().any(|source| {
+                        matches!(source, orla_graph::Source::External(input) if change.inputs.contains(input))
+                    })
+                })
+        })
+    }
+
+    /// The documents and files every kept session reads, to watch.
+    pub fn watched(&self) -> Vec<std::path::PathBuf> {
+        let mut all: Vec<std::path::PathBuf> =
+            self.sessions.values().flat_map(Session::watched).collect();
+        all.sort();
+        all.dedup();
+        all
+    }
 }
 
 /// A frame a replay asks for: its context and what it must evaluate. A

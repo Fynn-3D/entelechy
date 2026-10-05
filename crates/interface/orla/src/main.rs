@@ -711,6 +711,7 @@ fn replay(args: &[String]) -> Result<(), String> {
     let mut backend = "jit".to_string();
     let mut limits = orla_session::Limits::default();
     let mut apart = false;
+    let mut watch = false;
     let mut fusion = true;
     let mut files = Vec::new();
     let mut out: Option<PathBuf> = None;
@@ -739,6 +740,7 @@ fn replay(args: &[String]) -> Result<(), String> {
             }
             "--round-apart" => apart = true,
             "--no-fusion" => fusion = false,
+            "--watch" => watch = true,
             flag if orla_session::Limits::takes(flag) => {
                 let text = iter.next().ok_or_else(|| format!("{flag} needs a value"))?;
                 limits.read(flag, text)?;
@@ -753,18 +755,34 @@ fn replay(args: &[String]) -> Result<(), String> {
     if out.is_some() && (files.len() > 1 || apart) {
         return Err("--out records one run of one replay".into());
     }
-    // Many replays in one run share their backends, each Kernel prepared
-    // once; each replay still opens a session of its own.
-    let warm = if out.is_some() {
-        None
-    } else {
-        Some(orla_session::Warm::open(&backend, limits)?)
-    };
-    // And their documents, each parsed once while its file is unchanged.
+    if watch && (out.is_some() || apart) {
+        return Err("--watch plays the replays plainly, each as its documents change".into());
+    }
+    // Their documents, each parsed once while its file is unchanged.
     let store = std::sync::Arc::new(orla_session::Disk::with_packages(
         orla_session::environment_packages(),
     ));
+    // Many replays in one run share their backends, each Kernel prepared
+    // once.
+    // And each scene's replays share one session, started over for each.
+    let mut resident = if out.is_some() {
+        None
+    } else {
+        Some(orla::replay::Resident::new(
+            orla_session::Warm::open(&backend, limits)?,
+            std::sync::Arc::clone(&store) as std::sync::Arc<dyn orla_session::Store>,
+            fusion,
+        ))
+    };
     let mut failed = 0;
+    // Each replay played: its file, itself, the nodes it touched, and
+    // whether it failed.
+    let mut played: Vec<(
+        PathBuf,
+        orla::replay::Replay,
+        std::collections::BTreeSet<String>,
+        bool,
+    )> = Vec::new();
     for file in &files {
         let text = std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
         let base = file.parent().unwrap_or_else(|| Path::new("."));
@@ -778,8 +796,8 @@ fn replay(args: &[String]) -> Result<(), String> {
             );
             continue;
         }
-        let ran = if let (true, Some(warm)) = (apart, &warm) {
-            rounded_apart(&replay, &store, warm, fusion)
+        let ran = if let (true, Some(resident)) = (apart, &mut resident) {
+            rounded_apart(&replay, resident)
         } else if let Some(out) = &out {
             let runtime = Session::runtime_for(&backend, limits)?;
             let target = orla::render::Target::of(out);
@@ -792,46 +810,161 @@ fn replay(args: &[String]) -> Result<(), String> {
             let summary = recorder.finish()?;
             recorded("recorded", &target, &summary, sound_rate, started);
             ran
-        } else if let Some(warm) = &warm {
-            orla::replay::run_fused(&replay, store, warm.runtime(), fusion)
+        } else if let Some(resident) = &mut resident {
+            resident.play(&replay, None)
         } else {
             let runtime = Session::runtime_for(&backend, limits)?;
             orla::replay::run_fused(&replay, store, runtime, fusion)
         };
-        match ran {
-            Ok(outcome) if outcome.failures.is_empty() => {
-                println!(
-                    "{}: ok ({} frames, {} checks)",
-                    file.display(),
-                    outcome.frames,
-                    outcome.checks
-                );
-                for line in outcome.lines() {
-                    println!("  {line}");
-                }
-            }
-            Ok(outcome) => {
-                failed += 1;
-                println!(
-                    "{}: {} of {} checks failed",
-                    file.display(),
-                    outcome.failures.len(),
-                    outcome.checks
-                );
-                for line in outcome.lines() {
-                    println!("  {line}");
-                }
-            }
-            Err(error) => {
-                failed += 1;
-                println!("{}: {error}", file.display());
-            }
+        let touched = ran
+            .as_ref()
+            .map(|outcome| outcome.touched.clone())
+            .unwrap_or_default();
+        let passed = said_outcome(file, ran);
+        if !passed {
+            failed += 1;
         }
+        played.push((file.clone(), replay, touched, !passed));
+    }
+    if watch && let Some(resident) = resident {
+        return watch_replays(resident, played);
     }
     if failed > 0 {
         Err(format!("{failed} replay(s) failed"))
     } else {
         Ok(())
+    }
+}
+
+/// Says how a replay went; whether it passed.
+fn said_outcome(file: &Path, ran: Result<orla::replay::Outcome, String>) -> bool {
+    match ran {
+        Ok(outcome) if outcome.failures.is_empty() => {
+            println!(
+                "{}: ok ({} frames, {} checks)",
+                file.display(),
+                outcome.frames,
+                outcome.checks
+            );
+            for line in outcome.lines() {
+                println!("  {line}");
+            }
+            true
+        }
+        Ok(outcome) => {
+            println!(
+                "{}: {} of {} checks failed",
+                file.display(),
+                outcome.failures.len(),
+                outcome.checks
+            );
+            for line in outcome.lines() {
+                println!("  {line}");
+            }
+            false
+        }
+        Err(error) => {
+            println!("{}: {error}", file.display());
+            false
+        }
+    }
+}
+
+/// `orla replay --watch`: the replays played again as their documents,
+/// inputs and files change, each scene's on its kept session. A change
+/// plays only the replays it reaches (a node they touched runs a Kernel
+/// published again, or reads an input read again; the graph rebuilt
+/// otherwise, or the replay's own file changed: all of the scene's), the
+/// ones that failed last first, each said as it ends.
+fn watch_replays(
+    mut resident: orla::replay::Resident,
+    mut played: Vec<(
+        PathBuf,
+        orla::replay::Replay,
+        std::collections::BTreeSet<String>,
+        bool,
+    )>,
+) -> Result<(), String> {
+    let stamp = |path: &Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
+    let watched = |resident: &orla::replay::Resident,
+                   played: &[(
+        PathBuf,
+        orla::replay::Replay,
+        std::collections::BTreeSet<String>,
+        bool,
+    )]| {
+        let mut all: Vec<PathBuf> = resident.watched();
+        all.extend(played.iter().map(|(file, ..)| file.clone()));
+        all.into_iter()
+            .map(|path| {
+                let at = stamp(&path);
+                (path, at)
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut seen = watched(&resident, &played);
+    eprintln!(
+        "watching {} file(s) of {} replay(s); edit and save",
+        seen.len(),
+        played.len()
+    );
+    loop {
+        std::thread::sleep(Duration::from_millis(200));
+        let now = watched(&resident, &played);
+        if now == seen {
+            continue;
+        }
+        let started = Instant::now();
+        let changed_files: Vec<PathBuf> = now
+            .iter()
+            .filter(|entry| !seen.contains(entry))
+            .map(|(path, _)| path.clone())
+            .collect();
+        let changes = resident.changed();
+        for change in changes.values() {
+            for said in &change.said {
+                println!("{said}");
+            }
+        }
+        // A replay's own file, changed: read again, and played.
+        let mut again: Vec<usize> = Vec::new();
+        for (index, (file, replay, touched, _)) in played.iter_mut().enumerate() {
+            if changed_files.contains(file) {
+                if let Ok(text) = std::fs::read_to_string(&*file)
+                    && let Ok(parsed) =
+                        orla::replay::parse(&text, file.parent().unwrap_or_else(|| Path::new(".")))
+                {
+                    *replay = parsed;
+                }
+                again.push(index);
+            } else if resident.affects(&changes, &replay.scene, touched) {
+                again.push(index);
+            }
+        }
+        // The ones that failed last, first.
+        again.sort_by_key(|&index| !played[index].3);
+        let mut failed = 0;
+        for &index in &again {
+            let (file, replay, ..) = &played[index];
+            let ran = resident.play(replay, None);
+            let touched = ran
+                .as_ref()
+                .map(|outcome| outcome.touched.clone())
+                .unwrap_or_default();
+            let passed = said_outcome(file, ran);
+            if !passed {
+                failed += 1;
+            }
+            played[index].2 = touched;
+            played[index].3 = !passed;
+        }
+        eprintln!(
+            "{} of {} replay(s) reached by the change, {failed} failed, in {:.1} s",
+            again.len(),
+            played.len(),
+            started.elapsed().as_secs_f64()
+        );
+        seen = watched(&resident, &played);
     }
 }
 
@@ -1180,14 +1313,11 @@ fn evaluate_and_export(
 /// ([`orla_session::apart`]), its failures named by the way that found them.
 fn rounded_apart(
     replay: &orla::replay::Replay,
-    store: &std::sync::Arc<orla_session::Disk>,
-    warm: &orla_session::Warm,
-    fusion: bool,
+    resident: &mut orla::replay::Resident,
 ) -> Result<orla::replay::Outcome, String> {
     let mut all = orla::replay::Outcome::default();
     for split in 0..orla_session::apart::SPLITS {
-        let runtime = warm.runtime_apart(split);
-        let outcome = orla::replay::run_fused(replay, store.clone(), runtime, fusion)?;
+        let outcome = resident.play(replay, Some(split))?;
         // Every way runs the same frames, checks and shows.
         all.frames = outcome.frames;
         all.checks = outcome.checks;

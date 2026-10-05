@@ -372,6 +372,10 @@ and the package format, each its own.",
                     "--no-fusion",
                     "Runs pointwise producers apart from their consumers.",
                 ),
+                switch(
+                    "--watch",
+                    "Keeps the replays' sessions and plays again, as documents, inputs and replay files change, only the replays a change reaches, those that failed last first.",
+                ),
                 valued(
                     "--out",
                     "<dir|file.wav>",

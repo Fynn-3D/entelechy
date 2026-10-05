@@ -310,6 +310,30 @@ impl Session {
         self.scene.params()
     }
 
+    /// Starts the world over as the scene opened it, the Kernels and the
+    /// documents kept: every `async` run landed, every pin dropped, every
+    /// port's committed state forgotten, every parameter back at its
+    /// default, and the documents read again. What a replay needs before
+    /// it plays on a session another played on: the session's Kernels,
+    /// prepared and compiled, and the outputs no state feeds, stay as
+    /// they were.
+    pub fn start_over(&mut self) -> Vec<Event> {
+        let _ = self.settle();
+        for pin in std::mem::take(&mut self.pins) {
+            for inner in self.pinned_by(&pin) {
+                self.evaluator.unpin(&inner);
+            }
+        }
+        self.reset_state();
+        let overridden: Vec<String> = self.scene.params().keys().cloned().collect();
+        self.scene.clear_params();
+        for name in overridden {
+            self.history
+                .changed(crate::Change::Param { name }, self.origin.clone());
+        }
+        self.sync()
+    }
+
     /// Every document the session currently watches.
     pub fn watched(&self) -> Vec<PathBuf> {
         self.kernels
