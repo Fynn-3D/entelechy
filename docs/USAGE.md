@@ -55,7 +55,12 @@ orla check --ir examples/grayscale/kernels/grayscale.orla
 ```
 
 Compiles `.orla` or `.osn` files and prints their manifests, or
-diagnostics at `file:line:column`. `--ir` prints the validated IR as a
+diagnostics at `file:line:column`. A scene's nodes are held to their
+Kernels' ports as an evaluation binds them, in the same words: each port
+a node names is declared, each input bound, each parameter of its type,
+each `value(port)` of its domain an input of numbers; what only the data
+decides, such as how many elements `value` reads from, is the
+evaluation's. `--ir` prints the validated IR as a
 backend runs it, with where work is counted (`work spend`) and looked at
 (`work look`). A Kernel that carries more than 5 000 words through its
 branches (the struct values an `if`, a `match` or a `loop` yields, each

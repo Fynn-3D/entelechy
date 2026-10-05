@@ -126,7 +126,8 @@ impl Checked {
 }
 
 /// Checks that the document at `path` parses, lowers with what it
-/// reaches, compiles with the documents it uses, and orders its graph.
+/// reaches, compiles with the documents it uses, binds each node to its
+/// Kernel's ports ([`orla_graph::binding_fault`]), and orders its graph.
 /// `show_ir` also reports each Kernel's accounted IR.
 pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked {
     let mut checked = Checked::default();
@@ -190,6 +191,9 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         }
         document.resolve((&structs, &types, &functions));
     }
+    // Each Kernel compiled, its manifest and structs, which the nodes
+    // binding it are held to.
+    let mut manifests: Vec<Compiled> = Vec::new();
     let mut kernels: Vec<(Option<orla_ir::KernelId>, &orla_language::Kernel)> = document
         .kernels
         .iter()
@@ -204,6 +208,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
     for (id, kernel) in kernels {
         match orla_compiler::compile_kernel(kernel, id.as_ref()) {
             Ok(module) => {
+                manifests.push((module.manifest.clone(), module.structs.clone()));
                 if let Some(large) = large(&module) {
                     say!(note, "{file}: {large}");
                 }
@@ -234,6 +239,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         }
     }
     let root = path;
+    let own_compiled = manifests.len();
     // The documents whose Kernels the scene publishes, as a session
     // publishes them: those its `use` items name. Of a document those use
     // in turn, the declarations are checked, which Kernels inherit, and
@@ -253,9 +259,8 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
             let found = crate::spread::map(&used, |used_path| {
                 check_used(store, used_path, root, publishes(used_path), show_ir)
             });
-            let mut compiled = 0;
-            for (lines, ids) in found {
-                compiled += ids.len();
+            for (lines, modules) in found {
+                manifests.extend(modules);
                 for (problem, line) in lines {
                     if problem {
                         say!(problem, "{line}");
@@ -267,7 +272,8 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
             if !used.is_empty() {
                 say!(
                     note,
-                    "{file}: {compiled} kernel(s) compiled from {} used document(s)",
+                    "{file}: {} kernel(s) compiled from {} used document(s)",
+                    manifests.len() - own_compiled,
                     used.len()
                 );
             }
@@ -284,9 +290,21 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         .filter_map(|kernel| crate::sources::named_id(kernel).ok())
         .chain(lowered.inline.iter().map(|inline| inline.id.clone()))
         .collect();
-    for (node, kernel, why) in
-        crate::sources::unpublished(store, path, &lowered.graph, &lowered.uses, &own)
-    {
+    let unpublished = crate::sources::unpublished(store, path, &lowered.graph, &lowered.uses, &own);
+    // Each node held to its Kernel's ports, as an evaluation binds it.
+    for node in &lowered.graph.nodes {
+        if unpublished.iter().any(|(id, _, _)| id == &node.id) {
+            continue;
+        }
+        let Some((manifest, structs)) = manifests.iter().find(|(m, _)| m.id == node.kernel) else {
+            continue;
+        };
+        if let Err(error) = orla_graph::binding_fault(&lowered.graph, node, manifest, structs) {
+            let at = node.at.clone().unwrap_or_else(|| file.to_owned());
+            say!(problem, "{at}: {error}");
+        }
+    }
+    for (node, kernel, why) in unpublished {
         let at = lowered
             .graph
             .node(&node)
@@ -356,15 +374,18 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
 }
 
 /// What checking one document a scene uses found, in order, and the
-/// Kernels that compiled: its declarations, and its Kernels when the
+/// Kernels that compiled, each its manifest and structs: its declarations, and its Kernels when the
 /// scene publishes them (`published`).
+/// A compiled Kernel's manifest, and the structs its ports name.
+type Compiled = (orla_ir::Manifest, Vec<orla_ir::StructDef>);
+
 fn check_used(
     store: &dyn Store,
     path: &Path,
     root: &Path,
     published: bool,
     show_ir: bool,
-) -> (Vec<(bool, String)>, Vec<orla_ir::KernelId>) {
+) -> (Vec<(bool, String)>, Vec<Compiled>) {
     let mut lines = Vec::new();
     let mut compiled = Vec::new();
     let text = match store.read_text(path) {
@@ -405,7 +426,7 @@ fn check_used(
     for kernel in kernels {
         match orla_compiler::compile_kernel(kernel, None) {
             Ok(module) => {
-                compiled.push(module.manifest.id.clone());
+                compiled.push((module.manifest.clone(), module.structs.clone()));
                 if let Some(large) = large(&module) {
                     lines.push((false, format!("{}: {large}", path.display())));
                 }

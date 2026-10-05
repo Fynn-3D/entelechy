@@ -36,6 +36,7 @@ mod plan;
 mod recall;
 mod state;
 
+pub use bind::binding_fault;
 pub use error::EvaluateError;
 use ledger::Room;
 use plan::{graph_param, suggest};

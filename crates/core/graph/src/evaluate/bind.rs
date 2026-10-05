@@ -3,6 +3,129 @@
 
 use super::*;
 
+/// What of a node's binding its Kernel's manifest alone decides, before
+/// anything runs: every port it names is declared, every input is bound,
+/// every parameter it sets is one the graph has or a value of the
+/// parameter's type, a reduction takes no domain, and each `value(port)`
+/// its domain reads names an input of numbers. [`Evaluator`] holds every
+/// node to it as it binds; a check holds a scene to it unrun.
+pub fn binding_fault(
+    graph: &Graph,
+    node: &Node,
+    manifest: &orla_kernel::Manifest,
+    structs: &[orla_ir::StructDef],
+) -> Result<(), EvaluateError> {
+    undeclared(node, manifest)?;
+    for input in &manifest.inputs {
+        if !node.inputs.contains_key(&input.name) {
+            return Err(EvaluateError::UnboundInput {
+                node: node.id.clone(),
+                port: input.name.clone(),
+            });
+        }
+    }
+    for param in &manifest.params {
+        param_value(graph, node, param, &BTreeMap::new(), structs)?;
+    }
+    if manifest.mode == orla_ir::Mode::Reduce && node.domain.is_some() {
+        return Err(EvaluateError::ReduceDomain(node.id.clone()));
+    }
+    if let Some(DomainSpec::Expr(expr)) = &node.domain {
+        for (port, _) in expr.values_read() {
+            value_slot(node, manifest, &port)?;
+        }
+    }
+    Ok(())
+}
+
+/// A port the node names that its Kernel does not declare.
+fn undeclared(node: &Node, manifest: &orla_kernel::Manifest) -> Result<(), EvaluateError> {
+    for port in node.inputs.keys().chain(node.params.keys()) {
+        let declared = manifest.inputs.iter().any(|input| &input.name == port)
+            || manifest.params.iter().any(|param| &param.name == port);
+        if !declared {
+            let known: Vec<&str> = manifest
+                .inputs
+                .iter()
+                .map(|input| input.name.as_str())
+                .chain(manifest.params.iter().map(|param| param.name.as_str()))
+                .collect();
+            return Err(EvaluateError::UnknownPort {
+                node: node.id.clone(),
+                port: port.clone(),
+                near: orla_abi::names::nearest(port, known).map(str::to_owned),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The value a node gives parameter `param`, in the parameter's type (an
+/// integer may stand for a float): its own, the graph's it names, or the
+/// parameter's default.
+fn param_value(
+    graph: &Graph,
+    node: &Node,
+    param: &orla_ir::Param,
+    overrides: &BTreeMap<String, Value>,
+    structs: &[orla_ir::StructDef],
+) -> Result<Value, EvaluateError> {
+    let given = match node.params.get(&param.name) {
+        None => None,
+        Some(ParamValue::Literal(value)) => Some(value.clone()),
+        Some(ParamValue::Graph(name)) => {
+            Some(graph_param(graph, name, overrides).ok_or_else(|| {
+                let known: Vec<&str> = graph.params.iter().map(|p| p.name.as_str()).collect();
+                EvaluateError::UnknownPort {
+                    node: node.id.clone(),
+                    port: name.clone(),
+                    near: orla_abi::names::nearest(name, known).map(str::to_owned),
+                }
+            })?)
+        }
+    };
+    match given {
+        None => Ok(param.default.clone()),
+        Some(value) => {
+            orla_ir::value_as(&value, param.ty, structs).ok_or_else(|| EvaluateError::ParamType {
+                node: node.id.clone(),
+                name: param.name.clone(),
+                expected: orla_ir::type_name(param.ty, structs),
+                actual: value.to_string(),
+            })
+        }
+    }
+}
+
+/// The input slot `value(port)` reads: an input of the Kernel whose
+/// elements are numbers.
+fn value_slot(
+    node: &Node,
+    manifest: &orla_kernel::Manifest,
+    port: &str,
+) -> Result<usize, EvaluateError> {
+    let fail = |message: String| EvaluateError::Domain {
+        node: node.id.clone(),
+        message,
+    };
+    let slot = manifest
+        .inputs
+        .iter()
+        .position(|input| input.name == port)
+        .ok_or_else(|| {
+            fail(format!(
+                "`value({port})`: `{port}` is not an input of this Kernel"
+            ))
+        })?;
+    let element = manifest.inputs[slot].ty.element;
+    if !matches!(element, Type::Int | Type::Float) {
+        return Err(fail(format!(
+            "`value({port})` reads a number, but `{port}` is a Field of {element}; give it a row of `Int` or `Float`"
+        )));
+    }
+    Ok(slot)
+}
+
 impl Evaluator {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn bind(
@@ -16,23 +139,8 @@ impl Evaluator {
         overrides: &BTreeMap<String, Value>,
     ) -> Result<(Invocation, CacheKey), EvaluateError> {
         let manifest = version.manifest();
-        for port in node.inputs.keys().chain(node.params.keys()) {
-            let declared = manifest.inputs.iter().any(|input| &input.name == port)
-                || manifest.params.iter().any(|param| &param.name == port);
-            if !declared {
-                let known: Vec<&str> = manifest
-                    .inputs
-                    .iter()
-                    .map(|input| input.name.as_str())
-                    .chain(manifest.params.iter().map(|param| param.name.as_str()))
-                    .collect();
-                return Err(EvaluateError::UnknownPort {
-                    node: node.id.clone(),
-                    port: port.clone(),
-                    near: orla_abi::names::nearest(port, known).map(str::to_owned),
-                });
-            }
-        }
+        let structs = version.module().map_or(&[][..], |module| &module.structs);
+        undeclared(node, manifest)?;
         let mut inputs = Vec::with_capacity(manifest.inputs.len());
         let mut input_keys = Vec::with_capacity(manifest.inputs.len());
         for input in &manifest.inputs {
@@ -98,36 +206,7 @@ impl Evaluator {
         }
         let mut params = Vec::with_capacity(manifest.params.len());
         for param in &manifest.params {
-            let given = match node.params.get(&param.name) {
-                None => None,
-                Some(ParamValue::Literal(value)) => Some(value.clone()),
-                Some(ParamValue::Graph(name)) => {
-                    Some(graph_param(graph, name, overrides).ok_or_else(|| {
-                        let known: Vec<&str> =
-                            graph.params.iter().map(|p| p.name.as_str()).collect();
-                        EvaluateError::UnknownPort {
-                            node: node.id.clone(),
-                            port: name.clone(),
-                            near: orla_abi::names::nearest(name, known).map(str::to_owned),
-                        }
-                    })?)
-                }
-            };
-            // The given value in the parameter's type (an integer may
-            // stand for a float).
-            let structs = version.module().map_or(&[][..], |module| &module.structs);
-            let value = match given {
-                None => param.default.clone(),
-                Some(value) => orla_ir::value_as(&value, param.ty, structs).ok_or_else(|| {
-                    EvaluateError::ParamType {
-                        node: node.id.clone(),
-                        name: param.name.clone(),
-                        expected: orla_ir::type_name(param.ty, structs),
-                        actual: value.to_string(),
-                    }
-                })?,
-            };
-            params.push(value);
+            params.push(param_value(graph, node, param, overrides, structs)?);
         }
         let domain = if manifest.mode == orla_ir::Mode::Reduce {
             if node.domain.is_some() {
@@ -204,24 +283,11 @@ impl Evaluator {
                 node: node.id.clone(),
                 message,
             };
-            let slot = manifest
-                .inputs
-                .iter()
-                .position(|input| input.name == port)
-                .ok_or_else(|| {
-                    fail(format!(
-                        "`value({port})`: `{port}` is not an input of this Kernel"
-                    ))
-                })?;
+            let slot = value_slot(node, manifest, &port)?;
             let handle = *inputs
                 .get(slot)
                 .ok_or_else(|| fail(format!("`value({port})`: `{port}` is not a bound input")))?;
             let element = manifest.inputs[slot].ty.element;
-            if !matches!(element, Type::Int | Type::Float) {
-                return Err(fail(format!(
-                    "`value({port})` reads a number, but `{port}` is a Field of {element}; give it a row of `Int` or `Float`"
-                )));
-            }
             let count = runtime.host().domain(handle)?.count();
             if count > VALUE_MAX_ELEMENTS {
                 return Err(fail(format!(
