@@ -74,6 +74,16 @@ fn list_row_at(r: Rect, q: Vec2, h: Float, gap: Float, n: Int) -> Int {
     return if k >= 0 && k < n && (t - float(k)) * (h + gap) < h { k } else { -1 };
 }
 
+/// The row of a list (`n` rows `h` high, `gap` apart) a pixel is drawn
+/// by: the row it falls in, else the lit row (`lit`, -1 none) when `q`
+/// is within `by` of it, as a lit row's band and mark reach past it; -1
+/// none.
+fn list_row_near(r: Rect, q: Vec2, h: Float, gap: Float, n: Int, lit: Int, by: Float) -> Int {
+    let k = list_row_at(r, q, h, gap, n);
+    if k >= 0 { return k; }
+    return if lit >= 0 && lit < n && near_rect(list_row(r, lit, h, gap), q, by) { lit } else { -1 };
+}
+
 /// A thing `size` big placed in it: `align` 0 at its top or left, 0.5
 /// in its middle, 1 at its bottom or right, each way; on whole pixels.
 fn placed(r: Rect, size: Vec2, align: Vec2) -> Rect {

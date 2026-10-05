@@ -41,6 +41,17 @@ fn focused() -> Int { return 1; }
 fn pressed() -> Int { return 2; }
 fn disabled() -> Int { return 3; }
 
+/// A list's row's state: focused when `lit`, disabled unless `enabled`.
+fn state_of(lit: Bool, enabled: Bool) -> Int {
+    return if !enabled { disabled() } else if lit { focused() } else { idle() };
+}
+
+/// The ink of a widget's words in a state: dim when disabled, the accent
+/// when focused or pressed.
+fn state_ink(t: Theme, state: Int) -> Vec4 {
+    return if state == disabled() { t.dim } else if state == idle() { t.ink } else { t.accent };
+}
+
 /// A panel: its shadow, its fill, its rim.
 fn panel(t: Theme, r: Rect, q: Vec2) -> Vec4 {
     if !near_rect(r, q, 6.0) { return clear(); }
@@ -129,33 +140,56 @@ fn meter(t: Theme, r: Rect, full: Float, trail: Float, color: Vec4, trail_color:
     return over(over(over(case_, lost), kept), outline(r, 1.0, 1.0, faded(t.rim, 0.6), q));
 }
 
+/// A list's item: its word at the left, `scale` times the theme's,
+/// banded and marked when focused, dim when disabled.
+fn list_item(t: Theme, letters: Grid<Float>, cells: Rows<Int>, row: Int, width: Int, r: Rect, scale: Float, state: Int, q: Vec2) -> Vec4 {
+    if !near_rect(r, q, 12.0) { return clear(); }
+    let band = if state == focused() { highlight(t, r, q) } else { clear() };
+    let named = label(letters, cells, row, width, inset2(r, vec2(6.0, 0.0)), vec2(0.0, 0.5), t.scale * scale, state_ink(t, state), q);
+    return over(band, named);
+}
+
+/// Where an option's value stands in its row: the right 55%, room left
+/// each side for the arrows.
+fn option_value(r: Rect) -> Rect { return inset2(right_of(r, (r.hi.x - r.lo.x) * 0.55), vec2(14.0, 0.0)); }
+
+/// An option's row but its value: the row banded and marked when
+/// focused, and its name at the left. A screen draws a control of its
+/// own in `option_value`.
+fn option_name(t: Theme, letters: Grid<Float>, cells: Rows<Int>, name: Int, width: Int, r: Rect, state: Int, q: Vec2) -> Vec4 {
+    let band = if state == focused() { highlight(t, r, q) } else { clear() };
+    let left = inset2(left_of(r, (r.hi.x - r.lo.x) * 0.45), vec2(6.0, 0.0));
+    return over(band, label(letters, cells, name, width, left, vec2(0.0, 0.5), t.scale, state_ink(t, state), q));
+}
+
+/// Arrows each side of an option's value, when focused.
+fn option_arrows(t: Theme, r: Rect, state: Int, q: Vec2) -> Vec4 {
+    if state != focused() { return clear(); }
+    let right = option_value(r);
+    return over(arrow(vec2(right.lo.x - 6.0, rect_middle(r).y), 7.0, 0, t.accent, q), arrow(vec2(right.hi.x + 6.0, rect_middle(r).y), 7.0, 1, t.accent, q));
+}
+
 /// An option: its name at the left, its value in the right 55%, and,
 /// focused, arrows each side of the value to change it.
 fn choice(t: Theme, letters: Grid<Float>, cells: Rows<Int>, name: Int, value: Int, width: Int, r: Rect, state: Int, q: Vec2) -> Vec4 {
     if !near_rect(r, q, 12.0) { return clear(); }
-    let lit = state == focused();
-    let ink = if state == disabled() { t.dim } else if lit { t.accent } else { t.ink };
-    let left = inset2(left_of(r, (r.hi.x - r.lo.x) * 0.45), vec2(6.0, 0.0));
-    let right = inset2(right_of(r, (r.hi.x - r.lo.x) * 0.55), vec2(14.0, 0.0));
-    let named = label(letters, cells, name, width, left, vec2(0.0, 0.5), t.scale, ink, q);
-    let valued = label(letters, cells, value, width, right, vec2(0.5, 0.5), t.scale, ink, q);
-    let arrows = if lit { over(arrow(vec2(right.lo.x - 6.0, rect_middle(r).y), 7.0, 0, t.accent, q), arrow(vec2(right.hi.x + 6.0, rect_middle(r).y), 7.0, 1, t.accent, q)) } else { clear() };
-    let band = if lit { highlight(t, r, q) } else { clear() };
-    return over(over(over(band, named), valued), arrows);
+    let valued = label(letters, cells, value, width, option_value(r), vec2(0.5, 0.5), t.scale, state_ink(t, state), q);
+    return over(over(option_name(t, letters, cells, name, width, r, state, q), valued), option_arrows(t, r, state, q));
 }
 
 /// An option whose value is a number.
 fn choice_number(t: Theme, letters: Grid<Float>, cells: Rows<Int>, name: Int, value: Int, width: Int, r: Rect, state: Int, q: Vec2) -> Vec4 {
     if !near_rect(r, q, 12.0) { return clear(); }
-    let lit = state == focused();
-    let ink = if state == disabled() { t.dim } else if lit { t.accent } else { t.ink };
-    let left = inset2(left_of(r, (r.hi.x - r.lo.x) * 0.45), vec2(6.0, 0.0));
-    let right = inset2(right_of(r, (r.hi.x - r.lo.x) * 0.55), vec2(14.0, 0.0));
-    let named = label(letters, cells, name, width, left, vec2(0.0, 0.5), t.scale, ink, q);
-    let valued = number(letters, value, right, vec2(0.5, 0.5), t.scale, ink, q);
-    let arrows = if lit { over(arrow(vec2(right.lo.x - 6.0, rect_middle(r).y), 7.0, 0, t.accent, q), arrow(vec2(right.hi.x + 6.0, rect_middle(r).y), 7.0, 1, t.accent, q)) } else { clear() };
-    let band = if lit { highlight(t, r, q) } else { clear() };
-    return over(over(over(band, named), valued), arrows);
+    let valued = number(letters, value, option_value(r), vec2(0.5, 0.5), t.scale, state_ink(t, state), q);
+    return over(over(option_name(t, letters, cells, name, width, r, state, q), valued), option_arrows(t, r, state, q));
+}
+
+/// An option that is on or off: its name, and a switch at the left of
+/// the value's place.
+fn switch_choice(t: Theme, letters: Grid<Float>, cells: Rows<Int>, name: Int, width: Int, on: Bool, r: Rect, state: Int, q: Vec2) -> Vec4 {
+    if !near_rect(r, q, 12.0) { return clear(); }
+    let pill = placed(option_value(r), vec2(22.0, 10.0), vec2(0.0, 0.5));
+    return over(option_name(t, letters, cells, name, width, r, state, q), toggle(t, pill, on, state, q));
 }
 
 /// A scroll bar down `r`: `shown` rows of `total` from `first`.

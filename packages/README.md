@@ -201,10 +201,12 @@ its interface is held to.
     only when it changes;
   - writing: a row of letters at a scale, aligned in a rectangle and cut
     at its sides, with its shadow; numbers;
-  - widgets over a theme: panels, titled panels, the lit row, buttons,
+  - widgets over a theme: panels, titled panels, the lit row, a list's
+    items and the row a pixel near the lit one is drawn by, buttons,
     switches, check boxes, sliders, meters with a trail, options with
-    arrows, scroll bars, rules, keys' caps, a pad's face buttons and a
-    prompt beside one;
+    arrows or a switch, an option's name beside a control of the
+    screen's own, scroll bars, rules, keys' caps, a pad's face buttons
+    and a prompt beside one;
   - navigation (`ui.navigate@1`): the row lit and what was asked of it
     this frame, from the arrows or W A S D, Enter, Esc, a pad's stick and
     face buttons, the pointer and the wheel, a direction held repeating.
