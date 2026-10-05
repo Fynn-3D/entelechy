@@ -450,7 +450,7 @@ impl GpuBackend {
         }
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("orla kernel"),
-            layout: &pipeline.layout,
+            layout: &pipeline.main.1,
             entries: &entries,
         });
         let mut encoder = self
@@ -509,7 +509,7 @@ impl GpuBackend {
                     end_of_pass_write_index: Some(1),
                 }),
             });
-            pass.set_pipeline(&pipeline.pipeline);
+            pass.set_pipeline(&pipeline.main.0);
             pass.set_bind_group(0, &bind_group, &[]);
             // A scan walks its rows in one invocation.
             if module.manifest.mode == Mode::Scan {

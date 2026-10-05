@@ -30,6 +30,9 @@ pub struct Session {
     evaluator: Evaluator,
     /// Where each node was last said to run, so a change is said once.
     placed: BTreeMap<String, Option<String>>,
+    /// The Kernels the graph's nodes use, by the version last seen
+    /// ([`Session::finish_used`]).
+    used: BTreeMap<orla_kernel::KernelId, orla_kernel::Generation>,
     /// The headless window: size in pixels and scale factor.
     window: Option<([f32; 2], f32)>,
     /// What changed the world, and what was refused.
@@ -116,6 +119,7 @@ impl Session {
             runtime,
             evaluator: Evaluator::new(),
             placed: BTreeMap::new(),
+            used: BTreeMap::new(),
             window: None,
             history: crate::history::History::default(),
             origin: crate::Origin::Local,
@@ -409,6 +413,7 @@ impl Session {
             self.runtime.host_mut(),
             &mut events,
         );
+        self.finish_used();
         self.sync_placements(&mut events);
         events.append(&mut self.inputs.take_frame_events());
         events.append(&mut self.writes.take_events());
@@ -541,6 +546,36 @@ impl Session {
                 Some((node.id.to_string(), self.runtime.placement(&version)))
             })
             .collect()
+    }
+
+    /// Finishes on the main backend, on every core at once, the Kernels
+    /// the graph's nodes use for the first time
+    /// ([`orla_kernel::Preparer::finish`]), so the frame after waits for
+    /// none of them in turn. A replacement was finished in preparing it
+    /// where the version it replaced ran there ([`Runtime::prepare_later`]),
+    /// and a Kernel no node uses is left for a run that needs it.
+    fn finish_used(&mut self) {
+        let Some(graph) = self.scene.graph() else {
+            return;
+        };
+        let mut now = BTreeMap::new();
+        let mut first = Vec::new();
+        for node in &graph.nodes {
+            let Some(version) = self.runtime.kernel(&node.kernel) else {
+                continue;
+            };
+            let id = version.id().clone();
+            if now.insert(id.clone(), version.generation()).is_none()
+                && !self.used.contains_key(&id)
+            {
+                first.push(version);
+            }
+        }
+        if !first.is_empty() {
+            let preparer = self.runtime.preparer();
+            crate::spread::map(&first, |version| preparer.finish(version));
+        }
+        self.used = now;
     }
 
     /// Reports nodes off the main backend, once per change.

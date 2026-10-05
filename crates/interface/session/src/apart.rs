@@ -185,7 +185,16 @@ impl Backend for Apart {
         self.inner.name()
     }
     fn declines(&self, module: &Validated) -> Option<String> {
+        // What the inner backend prepared is the module rounded apart.
+        if chosen(&module.manifest.id.to_string(), self.split)
+            && let Ok((apart, _)) = rounded_apart(module)
+        {
+            return self.inner.declines(&apart);
+        }
         self.inner.declines(module)
+    }
+    fn finish(&self, prepared: &dyn Prepared) {
+        self.inner.finish(prepared);
     }
     fn uploaded(&self) -> u64 {
         self.inner.uploaded()

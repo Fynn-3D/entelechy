@@ -904,7 +904,7 @@ backend's run of the conformance matrix twice
 A device's own compiler can fail on a shader that is valid: a large one,
 for no fault in it that the backend can name (a crash in its register
 allocator, as one was found). That is not a fault of the document, so it
-does not refuse the document: the backend learns, in preparing it, that
+does not refuse the document: the backend learns, in building it, that
 it cannot run that Kernel, declines it from then on as it declines what
 it cannot run beforehand, and the runtime prepares it on the ordered
 backend, said once as any Kernel off the main backend is. A shader the
@@ -926,6 +926,34 @@ device could not build; the runtime's `prepare_on` routes it
 [the unbuilt test](../crates/interface/session/tests/unbuilt.rs).
 `orla check` says when a Kernel is large and what makes it so
 ([size](../crates/core/ir/src/size.rs)).
+
+## A device builds a Kernel when it is needed
+
+Preparing a Kernel for a device validates it as the device takes it (its
+shaders, its bindings) and builds nothing: the device's own compiler, the
+long part and the part that fails, runs when the Kernel is needed there.
+A session builds the Kernels its graph's nodes use for the first time as
+it publishes them, on every core at once, so the first frame waits for
+none of them in turn; a replacement for a version that ran on the device
+is built before it is ready, so the running version keeps the frames
+until the new one can take them without a wait; any other Kernel is built
+by the first run that needs it. A build that fails is a Kernel the device
+cannot build: it goes to the ordered backend from then on, a run that
+found it made again there.
+
+**Why.** A document publishes more Kernels than a scene uses, and a scene
+runs many of its Kernels where the device never does (a few elements, a
+small run); building them all made every edit wait for compiles nothing
+read, one compile after another. Validating first keeps the rule that
+nothing invalid publishes; building where it is needed keeps hot reload
+from stalling a frame.
+
+**Where.** The GPU's [`Lazy`](../crates/backends/gpu/src/prepare.rs) and
+`Backend::finish` ([backend](../crates/core/rules/src/backend.rs)); the
+runtime's `prepare_finished`, `Preparer::finish` and a version's `leaves`
+([kernel](../crates/core/kernel/src/lib.rs)); the session's `finish_used`
+([session](../crates/interface/session/src/session.rs)); held by
+[the lazy test](../crates/interface/session/tests/lazy.rs).
 
 ## The language grows only by the owner's word
 

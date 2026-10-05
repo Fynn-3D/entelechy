@@ -3,15 +3,17 @@
 
 use super::*;
 
-pub(crate) struct Pipeline {
-    pub(crate) pipeline: wgpu::ComputePipeline,
-    pub(crate) layout: wgpu::BindGroupLayout,
+/// What the device runs for a Kernel, its passes `P` built ([`Pass`]),
+/// or validated and waiting for the device's compiler ([`Shader`]).
+pub(crate) struct Pipeline<P = Pass> {
+    /// The map, or a mode's entry.
+    pub(crate) main: P,
     /// The fold of a reduce module, run level by level after the map.
-    pub(crate) reduce: Option<(wgpu::ComputePipeline, wgpu::BindGroupLayout)>,
+    pub(crate) reduce: Option<P>,
     /// The combine of a scatter module, run after the map.
-    pub(crate) scatter: Option<Scatter>,
+    pub(crate) scatter: Option<Scatter<P>>,
     /// The fold of a prefix module, run over the map's output in place.
-    pub(crate) prefix: Option<Prefix>,
+    pub(crate) prefix: Option<Prefix<P>>,
     /// Whether the module's arithmetic can fail, so its map and fold
     /// passes record their first failure; see [`wgsl::can_fail`].
     pub(crate) fails: bool,
@@ -26,10 +28,10 @@ pub(crate) struct Pipeline {
 
 /// A prefix fold's three passes: a block a walk, the blocks' totals
 /// scanned, then every element given its block's offset.
-pub(crate) struct Prefix {
-    pub(crate) blocks: Pass,
-    pub(crate) tops: Pass,
-    pub(crate) offsets: Pass,
+pub(crate) struct Prefix<P = Pass> {
+    pub(crate) blocks: P,
+    pub(crate) tops: P,
+    pub(crate) offsets: P,
     /// Whether it sums whole ([`wgsl::sums_whole`]): high words beside
     /// the output and the totals, and a failure record.
     pub(crate) whole: bool,
@@ -39,41 +41,215 @@ pub(crate) struct Prefix {
 pub(crate) type Pass = (wgpu::ComputePipeline, wgpu::BindGroupLayout);
 
 /// The key transform's two passes: in place, and from the base.
-pub(crate) struct Keys {
-    pub(crate) in_place: Pass,
-    pub(crate) from_base: Pass,
+pub(crate) struct Keys<P = Pass> {
+    pub(crate) in_place: P,
+    pub(crate) from_base: P,
 }
 
 /// A whole sum's two passes around the parallel apply: the high words
 /// set from the base, and the totals checked once every value is in.
-pub(crate) struct Totals {
-    pub(crate) from_base: Pass,
-    pub(crate) check: Pass,
+pub(crate) struct Totals<P = Pass> {
+    pub(crate) from_base: P,
+    pub(crate) check: P,
 }
 
 /// A scatter's combine as pipelines, by its plan.
-pub(crate) enum Scatter {
+pub(crate) enum Scatter<P = Pass> {
     /// A float sum: sort keys, the sort's step, and the fold, which with
     /// `whole` also folds integers whole and records a total that does
     /// not fit.
     Sorted {
-        keys: Pass,
-        step: Pass,
-        fold: Pass,
+        keys: P,
+        step: P,
+        fold: P,
         whole: bool,
     },
     /// An order-free rule: the parallel apply; the gather after `last`; for
     /// `min` and `max` over floats and longs, the key transform in place
     /// after, and before from the base into the target, sparing a base copy.
     Parallel {
-        apply: Pass,
-        gather: Option<Pass>,
-        keys: Option<Keys>,
-        totals: Option<Totals>,
+        apply: P,
+        gather: Option<P>,
+        keys: Option<Keys<P>>,
+        totals: Option<Totals<P>>,
     },
 }
 
-impl Prepared for Pipeline {
+/// A pass validated as the device takes it, its pipeline not yet built:
+/// its shader and its bindings.
+pub(crate) struct Shader {
+    label: String,
+    shader: wgpu::ShaderModule,
+    layout: wgpu::BindGroupLayout,
+}
+
+impl Shader {
+    /// The pipeline, from the device's own compiler: the long part of
+    /// preparing, and the part a device's compiler can fail in.
+    fn built(self, device: &wgpu::Device, wait: Wait) -> Result<Pass, Unbuilt> {
+        let scopes = Scopes::push(device);
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some(&self.label),
+            bind_group_layouts: &[Some(&self.layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some(&self.label),
+            layout: Some(&pipeline_layout),
+            module: &self.shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        scopes.pop(wait, "")?;
+        Ok((pipeline, self.layout))
+    }
+}
+
+/// Each pass of a [`Pipeline`] and its parts, made into another, in order.
+type Make<'a, P, Q> = &'a mut dyn FnMut(P) -> Result<Q, Unbuilt>;
+
+impl<P> Pipeline<P> {
+    fn made<Q>(self, make: Make<'_, P, Q>) -> Result<Pipeline<Q>, Unbuilt> {
+        Ok(Pipeline {
+            main: make(self.main)?,
+            reduce: self.reduce.map(&mut *make).transpose()?,
+            scatter: self.scatter.map(|s| s.made(make)).transpose()?,
+            prefix: self.prefix.map(|p| p.made(make)).transpose()?,
+            fails: self.fails,
+            emits: self.emits,
+            packed: self.packed,
+        })
+    }
+}
+
+impl<P> Prefix<P> {
+    fn made<Q>(self, make: Make<'_, P, Q>) -> Result<Prefix<Q>, Unbuilt> {
+        Ok(Prefix {
+            blocks: make(self.blocks)?,
+            tops: make(self.tops)?,
+            offsets: make(self.offsets)?,
+            whole: self.whole,
+        })
+    }
+}
+
+impl<P> Scatter<P> {
+    fn made<Q>(self, make: Make<'_, P, Q>) -> Result<Scatter<Q>, Unbuilt> {
+        Ok(match self {
+            Self::Sorted {
+                keys,
+                step,
+                fold,
+                whole,
+            } => Scatter::Sorted {
+                keys: make(keys)?,
+                step: make(step)?,
+                fold: make(fold)?,
+                whole,
+            },
+            Self::Parallel {
+                apply,
+                gather,
+                keys,
+                totals,
+            } => Scatter::Parallel {
+                apply: make(apply)?,
+                gather: gather.map(&mut *make).transpose()?,
+                keys: keys
+                    .map(|k| -> Result<Keys<Q>, Unbuilt> {
+                        Ok(Keys {
+                            in_place: make(k.in_place)?,
+                            from_base: make(k.from_base)?,
+                        })
+                    })
+                    .transpose()?,
+                totals: totals
+                    .map(|t| -> Result<Totals<Q>, Unbuilt> {
+                        Ok(Totals {
+                            from_base: make(t.from_base)?,
+                            check: make(t.check)?,
+                        })
+                    })
+                    .transpose()?,
+            },
+        })
+    }
+}
+
+/// A Kernel as the device prepared it: validated, its pipelines built the
+/// first time a run needs them, or when [`Backend::finish`] asks; once
+/// built, kept. A device's compiler that fails on it then is remembered
+/// ([`GpuBackend::declines`]), so a runtime with another backend runs it
+/// there.
+pub(crate) struct Lazy {
+    id: String,
+    module: Validated,
+    /// Its inputs packed into one buffer, known before it is built.
+    pub(crate) packed: Vec<usize>,
+    device: wgpu::Device,
+    wait: Wait,
+    unbuilt: Arc<Mutex<Vec<(Validated, String)>>>,
+    shaders: Mutex<Option<Pipeline<Shader>>>,
+    built: OnceLock<Result<Pipeline, String>>,
+}
+
+impl Lazy {
+    /// The pipelines, built now if they are not yet; a second caller waits
+    /// for the first.
+    pub(crate) fn built(&self) -> Result<&Pipeline, ExecutionError> {
+        self.built
+            .get_or_init(|| {
+                let shaders = self
+                    .shaders
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                    .ok_or_else(|| format!("`{}` was left unbuilt by a failed build", self.id))?;
+                let device = &self.device;
+                let wait = self.wait;
+                match shaders.made(&mut |shader: Shader| shader.built(device, wait)) {
+                    Ok(pipeline) => Ok(pipeline),
+                    Err(Unbuilt::Ours(error)) => Err(error),
+                    Err(Unbuilt::Device(error)) => {
+                        // Its most particular line, the last, said shortly.
+                        let last = error
+                            .lines()
+                            .rev()
+                            .find(|line| !line.trim().is_empty())
+                            .unwrap_or("")
+                            .trim();
+                        let short: String = last.chars().take(160).collect();
+                        let mut unbuilt = self
+                            .unbuilt
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if !unbuilt.iter().any(|(seen, _)| seen == &self.module) {
+                            unbuilt.push((self.module.clone(), short));
+                        }
+                        Err(format!(
+                            "the device's own compiler could not build `{}`: {error}",
+                            self.id
+                        ))
+                    }
+                }
+            })
+            .as_ref()
+            .map_err(|error| ExecutionError::Device(error.clone()))
+    }
+}
+
+/// The pipelines of a Kernel this device prepared, built now if they are
+/// not yet.
+pub(crate) fn built(prepared: &dyn Prepared) -> Result<&Pipeline, ExecutionError> {
+    prepared
+        .as_any()
+        .downcast_ref::<Lazy>()
+        .ok_or_else(|| ExecutionError::Device("kernel was prepared by a different backend".into()))?
+        .built()
+}
+
+impl Prepared for Lazy {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -220,14 +396,14 @@ impl GpuBackend {
         None
     }
 
-    /// Builds one compute pipeline from WGSL with the given bindings, or
-    /// says why not ([`Unbuilt`]).
+    /// One pass from WGSL with the given bindings, validated as the device
+    /// takes it and not yet built, or why not ([`Unbuilt`]).
     pub(crate) fn pass(
         &self,
         label: &str,
         source: &str,
         entries: &[wgpu::BindGroupLayoutEntry],
-    ) -> Result<Pass, Unbuilt> {
+    ) -> Result<Shader, Unbuilt> {
         let scopes = Scopes::push(&self.device);
         let shader = self
             .device
@@ -241,29 +417,32 @@ impl GpuBackend {
                 label: Some(label),
                 entries,
             });
-        let pipeline_layout = self
-            .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some(label),
-                bind_group_layouts: &[Some(&layout)],
-                immediate_size: 0,
-            });
-        let pipeline = self
-            .device
-            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pipeline_layout),
-                module: &shader,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
         scopes.pop(self.wait, source)?;
-        Ok((pipeline, layout))
+        Ok(Shader {
+            label: label.to_owned(),
+            shader,
+            layout,
+        })
     }
 
-    /// Compiles `module` into a pipeline, or says why it cannot run here.
-    pub(crate) fn prepare_kernel(&self, module: &Validated) -> Result<Box<dyn Prepared>, Unbuilt> {
+    /// `module` as the device takes it, every pass validated and none
+    /// built ([`Lazy`]), or why it cannot run here.
+    pub(crate) fn prepare_kernel(&self, module: &Validated) -> Result<Lazy, Unbuilt> {
+        let shaders = self.shaders(module)?;
+        Ok(Lazy {
+            id: module.manifest.id.to_string(),
+            module: module.clone(),
+            packed: shaders.packed.clone(),
+            device: self.device.clone(),
+            wait: self.wait,
+            unbuilt: Arc::clone(&self.unbuilt),
+            shaders: Mutex::new(Some(shaders)),
+            built: OnceLock::new(),
+        })
+    }
+
+    /// `module`'s passes, validated.
+    fn shaders(&self, module: &Validated) -> Result<Pipeline<Shader>, Unbuilt> {
         if let Some(reason) = self.refusal(module) {
             return Err((format!(
                 "`{}`: {reason}; a session with an ordered backend runs it there",
@@ -310,13 +489,6 @@ impl GpuBackend {
         let written = wgsl::written_outputs(module);
         let packed = self.packing(module);
         let source = wgsl::emit_packed(module, &packed);
-        let scopes = Scopes::push(&self.device);
-        let shader = self
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(&module.manifest.id.to_string()),
-                source: wgpu::ShaderSource::Wgsl(source.as_str().into()),
-            });
         let mut entries = vec![
             uniform_entry(wgsl::CONTEXT_BINDING),
             uniform_entry(wgsl::PARAMS_BINDING),
@@ -346,39 +518,9 @@ impl GpuBackend {
                 entries.push(storage_entry(wgsl::EMIT_HIGHS_BINDING, false));
             }
         }
-        let layout = self
-            .device
-            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("orla kernel"),
-                entries: &entries,
-            });
-        let pipeline_layout = self
-            .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("orla kernel"),
-                bind_group_layouts: &[Some(&layout)],
-                immediate_size: 0,
-            });
-        let pipeline = self
-            .device
-            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(&module.manifest.id.to_string()),
-                layout: Some(&pipeline_layout),
-                module: &shader,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
-        scopes.pop(self.wait, &source)?;
+        let main = self.pass(&module.manifest.id.to_string(), &source, &entries)?;
         let reduce = if module.manifest.mode == orla_ir::Mode::Reduce {
-            let scopes = Scopes::push(&self.device);
             let reduce_source = wgsl::emit_reduce_packed(module, &packed);
-            let shader = self
-                .device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("reduce"),
-                    source: wgpu::ShaderSource::Wgsl(reduce_source.as_str().into()),
-                });
             // The map pass's bindings, then the fold's own.
             let (count_binding, in_binding, out_binding) = wgsl::reduce_bindings(module);
             let mut entries = vec![
@@ -401,31 +543,7 @@ impl GpuBackend {
             if fails {
                 entries.push(storage_entry(wgsl::FAILURE_BINDING, false));
             }
-            let layout = self
-                .device
-                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("orla reduce"),
-                    entries: &entries,
-                });
-            let pipeline_layout =
-                self.device
-                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                        label: Some("orla reduce"),
-                        bind_group_layouts: &[Some(&layout)],
-                        immediate_size: 0,
-                    });
-            let pipeline = self
-                .device
-                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some("reduce"),
-                    layout: Some(&pipeline_layout),
-                    module: &shader,
-                    entry_point: Some("main"),
-                    compilation_options: Default::default(),
-                    cache: None,
-                });
-            scopes.pop(self.wait, &reduce_source)?;
-            Some((pipeline, layout))
+            Some(self.pass("reduce", &reduce_source, &entries)?)
         } else {
             None
         };
@@ -528,7 +646,7 @@ impl GpuBackend {
                         .collect::<Vec<_>>(),
                     )?,
                     totals: wgsl::sums_whole(module)
-                        .then(|| -> Result<Totals, Unbuilt> {
+                        .then(|| -> Result<Totals<Shader>, Unbuilt> {
                             Ok(Totals {
                                 from_base: self.pass(
                                     "scatter highs from the base",
@@ -567,7 +685,7 @@ impl GpuBackend {
                         })
                         .transpose()?,
                     keys: keys
-                        .then(|| -> Result<Keys, Unbuilt> {
+                        .then(|| -> Result<Keys<Shader>, Unbuilt> {
                             let entries = [
                                 uniform_entry(wgsl::CONTEXT_BINDING),
                                 storage_entry(wgsl::SCATTER_PAIRS_BINDING, true),
@@ -593,15 +711,14 @@ impl GpuBackend {
         } else {
             None
         };
-        Ok(Box::new(Pipeline {
-            pipeline,
-            layout,
+        Ok(Pipeline {
+            main,
             reduce,
             scatter,
             prefix,
             fails,
             emits,
             packed,
-        }))
+        })
     }
 }

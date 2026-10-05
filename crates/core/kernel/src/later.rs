@@ -130,12 +130,14 @@ impl Runtime {
             inputs,
             ..invocation.clone()
         };
-        let backend = self.shared_backend_for(version);
+        let main = Arc::clone(&self.backend);
+        let ordered = self.ordered.clone();
         let granted = self.scope_grants(version);
         let version = Arc::clone(version);
         let work = move || {
             run_on(
-                backend.as_ref(),
+                main.as_ref(),
+                ordered.as_deref(),
                 &version,
                 &invocation,
                 granted,
@@ -252,15 +254,6 @@ impl Runtime {
         }
     }
 
-    /// The backend a version executes on, the one it was prepared on,
-    /// shared with a thread.
-    fn shared_backend_for(&self, version: &KernelVersion) -> Arc<dyn Backend> {
-        match &self.ordered {
-            Some(ordered) if version.routed().is_some() => Arc::clone(ordered),
-            _ => Arc::clone(&self.backend),
-        }
-    }
-
     /// The words of Fields of this Host, which are released.
     fn take_words(&mut self, outputs: Vec<Handle>) -> Outcome {
         let mut fields = Vec::with_capacity(outputs.len());
@@ -304,7 +297,8 @@ impl Runtime {
 /// On the run's thread: executes over the scratch Host and brings every
 /// output to words, downloading resident ones.
 fn run_on(
-    backend: &dyn Backend,
+    main: &dyn Backend,
+    ordered: Option<&dyn Backend>,
     version: &KernelVersion,
     invocation: &Invocation,
     granted: orla_abi::Capabilities,
@@ -315,10 +309,20 @@ fn run_on(
             "a native operation runs on the frame".into(),
         ));
     };
+    // Where the main backend left it, the ordered backend runs it.
+    let off = ordered
+        .filter(|_| version.routed().is_some())
+        .and_then(|ordered| Some((ordered, version.on_ordered(ordered)?)));
+    let (backend, prepared) = off.unwrap_or((main, prepared.as_ref()));
     let outputs = {
-        let mut scope = Scope::new(host, granted);
-        backend.execute(prepared.as_ref(), run, invocation, &mut scope)
+        let mut scope = Scope::new(host, granted.clone());
+        backend.execute(prepared, run, invocation, &mut scope)
     };
+    // The main backend could not build it as this run needed it: the run is
+    // made again where it now goes.
+    if outputs.is_err() && off.is_none() && ordered.is_some() && version.leaves(main) {
+        return run_on(main, ordered, version, invocation, granted, host);
+    }
     let outputs = crate::held_to(version.manifest(), host, outputs)?;
     outputs
         .into_iter()

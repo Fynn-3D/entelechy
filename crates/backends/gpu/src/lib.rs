@@ -64,7 +64,7 @@ pub struct GpuBackend {
     /// The modules this device's own compiler could not build, and what it
     /// said: declined from then on ([`Backend::declines`]), for another
     /// backend to run.
-    unbuilt: Mutex<Vec<(Validated, String)>>,
+    unbuilt: Arc<Mutex<Vec<(Validated, String)>>>,
     /// The rasterizer's pipelines, built on first use.
     raster: OnceLock<Result<raster::RasterPipelines, String>>,
     /// The pass that compares two Fields, built on first use.
@@ -191,7 +191,7 @@ impl GpuBackend {
             spare: Spare::default(),
             targets: SpareTextures::default(),
             measured: std::sync::atomic::AtomicBool::new(false),
-            unbuilt: Mutex::new(Vec::new()),
+            unbuilt: Arc::new(Mutex::new(Vec::new())),
             timestamps,
             int64,
             int64_atomics,
@@ -285,33 +285,18 @@ impl Backend for GpuBackend {
         self.uploaded.load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// Validates `module` as the device takes it; its pipelines are built
+    /// when a run first needs them ([`Lazy`]).
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
-        match self.prepare_kernel(module) {
-            Ok(prepared) => Ok(prepared),
-            Err(Unbuilt::Ours(error)) => Err(error),
-            // A valid shader the device's compiler failed on: declined from
-            // now on, so a runtime with another backend runs it there.
-            Err(Unbuilt::Device(error)) => {
-                // Its most particular line, the last, said shortly.
-                let last = error
-                    .lines()
-                    .rev()
-                    .find(|line| !line.trim().is_empty())
-                    .unwrap_or("")
-                    .trim();
-                let said: String = last.chars().take(160).collect();
-                let mut unbuilt = self
-                    .unbuilt
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if !unbuilt.iter().any(|(seen, _)| seen == module) {
-                    unbuilt.push((module.clone(), said));
-                }
-                Err(format!(
-                    "the device's own compiler could not build `{}`: {error}",
-                    module.manifest.id
-                ))
-            }
+        self.prepare_kernel(module)
+            .map(|lazy| Box::new(lazy) as Box<dyn Prepared>)
+            .map_err(Unbuilt::said)
+    }
+
+    /// Builds `prepared`'s pipelines, if they are not yet built.
+    fn finish(&self, prepared: &dyn Prepared) {
+        if let Some(lazy) = prepared.as_any().downcast_ref::<Lazy>() {
+            let _ = lazy.built();
         }
     }
 
@@ -344,11 +329,7 @@ impl Backend for GpuBackend {
         scope: &mut Scope<'_>,
     ) -> Result<orla_rules::backend::Checked, ExecutionError> {
         check_invocation(module, invocation, scope)?;
-        let Some(pipeline) = prepared.as_any().downcast_ref::<Pipeline>() else {
-            return Err(ExecutionError::Device(
-                "kernel was prepared by a different backend".into(),
-            ));
-        };
+        let pipeline = built(prepared)?;
         let _guard = self
             .lock
             .lock()
@@ -491,8 +472,8 @@ impl Backend for GpuBackend {
         // through it, so they go one by one.
         if prepared
             .as_any()
-            .downcast_ref::<Pipeline>()
-            .is_some_and(|pipeline| !pipeline.packed.is_empty())
+            .downcast_ref::<Lazy>()
+            .is_some_and(|lazy| !lazy.packed.is_empty())
         {
             return None;
         }

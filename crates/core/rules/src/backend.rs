@@ -230,6 +230,13 @@ pub trait Backend: Send + Sync {
     /// Builds backend state for a validated module.
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String>;
 
+    /// Finishes what [`Backend::prepare`] left for a run to do (a
+    /// device's pipelines, built when first needed), so the first run
+    /// does not wait for it. The default has nothing left.
+    fn finish(&self, prepared: &dyn Prepared) {
+        let _ = prepared;
+    }
+
     /// Executes a prepared module over the invocation's domain, returning one
     /// image handle per manifest output, owned by the scope's Host. Outputs
     /// may be left resident on the backend's device.

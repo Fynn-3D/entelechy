@@ -61,6 +61,9 @@ impl Backend for Remembered {
     fn declines(&self, module: &Validated) -> Option<String> {
         self.inner.declines(module)
     }
+    fn finish(&self, prepared: &dyn Prepared) {
+        self.inner.finish(made(prepared));
+    }
     fn uploaded(&self) -> u64 {
         self.inner.uploaded()
     }

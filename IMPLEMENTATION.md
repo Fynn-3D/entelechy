@@ -120,7 +120,12 @@ why is `Runtime::placement` ([routed test](crates/interface/orla/tests/session.r
 compiler fails on is declined from then on and runs on the JIT, said as
 any routing is ([GPU `declines`](crates/backends/gpu/src/lib.rs),
 `prepare_on` in [the runtime](crates/core/kernel/src/lib.rs),
-[unbuilt](crates/interface/session/tests/unbuilt.rs)); `orla check` says a
+[unbuilt](crates/interface/session/tests/unbuilt.rs)). The device
+builds a Kernel's pipelines when it is needed: a session's graph's
+Kernels as they publish, a replacement before it is ready where the
+version it replaces ran there, anything else at its first run
+([`Lazy`](crates/backends/gpu/src/prepare.rs),
+[lazy](crates/interface/session/tests/lazy.rs)); `orla check` says a
 Kernel is large ([size](crates/core/ir/src/size.rs),
 [large](crates/interface/session/tests/large.rs)). A `Long` on the device
 avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).

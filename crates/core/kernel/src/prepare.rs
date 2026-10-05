@@ -10,13 +10,15 @@ use std::thread::JoinHandle;
 use orla_ir::Validated;
 use orla_rules::Backend;
 
-use crate::{Candidate, PrepareError, Ticket, prepare_on};
+use crate::{Candidate, PrepareError, Ticket, prepare_finished};
 
 /// A module handed to the worker.
 struct Job {
     ticket: Ticket,
     module: Validated,
     source: String,
+    /// Whether it is finished on the main backend before it is ready.
+    finish: bool,
 }
 
 /// What the worker made of one.
@@ -56,8 +58,13 @@ impl Preparer {
             .stack_size(256 << 20)
             .spawn(move || {
                 for job in inbox {
-                    let result =
-                        prepare_on(backend.as_ref(), ordered.as_deref(), job.module, job.source);
+                    let result = prepare_finished(
+                        backend.as_ref(),
+                        ordered.as_deref(),
+                        job.module,
+                        job.source,
+                        job.finish,
+                    );
                     if outbox
                         .send(Done {
                             ticket: job.ticket,
@@ -104,6 +111,7 @@ impl Preparer {
         ticket: Ticket,
         module: Validated,
         source: String,
+        finish: bool,
     ) -> Option<(Validated, String)> {
         let Some(worker) = &self.worker else {
             return Some((module, source));
@@ -112,6 +120,7 @@ impl Preparer {
             ticket,
             module,
             source,
+            finish,
         }) {
             Ok(()) => None,
             Err(unsent) => Some((unsent.0.module, unsent.0.source)),

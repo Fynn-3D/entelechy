@@ -85,6 +85,14 @@ enum Body {
         /// The module prepared on the ordered backend, the first time a run
         /// small enough goes there; `None` when that backend refuses it.
         on_ordered: std::sync::OnceLock<Option<Box<dyn Prepared>>>,
+        /// Why the main backend left it at a run, having prepared it (its
+        /// device's own compiler failed on it when the run needed it
+        /// built): the runs from then on go to the ordered backend.
+        left: std::sync::OnceLock<String>,
+        /// Whether a run went to the main backend, so a replacement is
+        /// finished there ([`Backend::finish`]) before it takes this one's
+        /// place.
+        ran_main: std::sync::atomic::AtomicBool,
     },
     Native(NativeOp),
 }
@@ -142,11 +150,64 @@ impl KernelVersion {
     }
 
     /// Why the main backend left this version to the ordered one, when it
-    /// did.
+    /// did: in preparing it, or at a run.
     pub(crate) fn routed(&self) -> Option<&str> {
         match &self.body {
-            Body::Kernel { routed, .. } => routed.as_deref(),
+            Body::Kernel { routed, left, .. } => {
+                routed.as_deref().or_else(|| left.get().map(String::as_str))
+            }
             Body::Native(_) => None,
+        }
+    }
+
+    /// Whether a run of this version went to the main backend.
+    pub(crate) fn ran_main(&self) -> bool {
+        match &self.body {
+            Body::Kernel { ran_main, .. } => ran_main.load(std::sync::atomic::Ordering::Relaxed),
+            Body::Native(_) => false,
+        }
+    }
+
+    /// What the ordered backend runs this version from: what was prepared
+    /// there when the main backend left it in preparing it, or else what
+    /// was prepared there the first time a run went there; `None` when
+    /// that backend refuses it.
+    pub(crate) fn on_ordered(&self, ordered: &dyn Backend) -> Option<&dyn Prepared> {
+        match &self.body {
+            Body::Kernel {
+                routed: Some(_),
+                prepared,
+                ..
+            } => Some(prepared.as_ref()),
+            Body::Kernel {
+                run, on_ordered, ..
+            } => on_ordered
+                .get_or_init(|| prepared_quietly(ordered, run))
+                .as_deref(),
+            Body::Native(_) => None,
+        }
+    }
+
+    /// After a run on `main` failed: whether `main` now declines this
+    /// version (its device's own compiler failed on it as the run needed
+    /// it built), recorded once, the runs from then on going to the
+    /// ordered backend.
+    pub(crate) fn leaves(&self, main: &dyn Backend) -> bool {
+        let Body::Kernel {
+            run, routed, left, ..
+        } = &self.body
+        else {
+            return false;
+        };
+        if routed.is_some() || left.get().is_some() {
+            return false;
+        }
+        match main.declines(run) {
+            Some(why) => {
+                let _ = left.set(why);
+                true
+            }
+            None => false,
         }
     }
 }
@@ -198,6 +259,8 @@ impl Candidate {
                 prepared: self.prepared,
                 routed: self.routed,
                 on_ordered: std::sync::OnceLock::new(),
+                left: std::sync::OnceLock::new(),
+                ran_main: std::sync::atomic::AtomicBool::new(false),
             },
         }
     }
@@ -357,6 +420,24 @@ pub struct Preparer {
 }
 
 impl Preparer {
+    /// Finishes `version` on the main backend ([`Backend::finish`]), where
+    /// it was prepared there, so its first run there waits for nothing;
+    /// where that backend could not build it after all, its runs go to the
+    /// ordered backend from now on. A panic in the backend leaves it for
+    /// that run to report.
+    pub fn finish(&self, version: &KernelVersion) {
+        if let Body::Kernel { prepared, .. } = &version.body
+            && version.routed().is_none()
+        {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.backend.finish(prepared.as_ref())
+            }));
+            if self.ordered.is_some() {
+                version.leaves(self.backend.as_ref());
+            }
+        }
+    }
+
     /// Prepares `module` as [`Runtime::prepare_module`] does.
     pub fn prepare(&self, module: Validated, source: &str) -> Result<Candidate, PrepareError> {
         granted_by(&self.grants, &module)?;
@@ -401,6 +482,29 @@ fn prepare_on(
         prepared,
         routed,
     })
+}
+
+/// `module` prepared as [`prepare_on`] does and, with `finish`, finished on
+/// the main backend ([`Backend::finish`]); prepared again where the main
+/// backend could not build it after all, for the ordered backend to run.
+pub(crate) fn prepare_finished(
+    main: &dyn Backend,
+    ordered: Option<&dyn Backend>,
+    module: Validated,
+    source: String,
+    finish: bool,
+) -> Result<Candidate, PrepareError> {
+    let candidate = prepare_on(main, ordered, module, source)?;
+    if !finish || candidate.routed.is_some() {
+        return Ok(candidate);
+    }
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        main.finish(candidate.prepared.as_ref())
+    }));
+    if ordered.is_some() && main.declines(&candidate.run).is_some() {
+        return prepare_on(main, ordered, candidate.module, candidate.source);
+    }
+    Ok(candidate)
 }
 
 /// `run` prepared on `backend`. A backend panic is reported as a
@@ -554,19 +658,27 @@ impl Runtime {
     }
 
     /// Hands a validated module to the worker, or prepares it now when
-    /// there is none. `source` is kept for inspection.
+    /// there is none. `source` is kept for inspection. A replacement for a
+    /// version that ran on the main backend is finished there
+    /// ([`Backend::finish`]) before it is ready, so the runs after it
+    /// takes that version's place do not wait for it.
     pub fn prepare_later(&mut self, module: Validated, source: String) -> Ticket {
         let ticket = self.preparer.ticket();
         if let Err(refused) = self.granted(&module) {
             self.preparer.finish(ticket, Err(refused));
             return ticket;
         }
-        if let Some((module, source)) = self.preparer.send(ticket, module, source) {
-            let result = prepare_on(
+        let finish = self
+            .kernels
+            .get(&module.manifest.id)
+            .is_some_and(|running| running.ran_main());
+        if let Some((module, source)) = self.preparer.send(ticket, module, source, finish) {
+            let result = prepare_finished(
                 self.backend.as_ref(),
                 self.ordered.as_deref(),
                 module,
                 source,
+                finish,
             );
             self.preparer.finish(ticket, result);
         }
@@ -1047,6 +1159,7 @@ impl Runtime {
             run,
             prepared,
             typical,
+            ran_main,
             ..
         } = &version.body
             && version.routed().is_none()
@@ -1067,8 +1180,16 @@ impl Runtime {
                 )
             };
             self.telemetry.carried(backend.as_ref(), before);
-            if let Some(outputs) = answered {
+            // The main backend could not build it as the runs needed it: they
+            // are made one by one where it now goes.
+            let left = matches!(answered, Some(Err(_)))
+                && self.ordered.is_some()
+                && version.leaves(backend.as_ref());
+            if let Some(outputs) = answered.filter(|_| !left) {
                 self.telemetry.measured(backend.as_ref());
+                if outputs.is_ok() {
+                    ran_main.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
                 self.last_placement = Some(Placement {
                     backend: backend.name(),
                     routed: None,
@@ -1118,7 +1239,7 @@ impl Runtime {
                 run,
                 prepared,
                 typical,
-                on_ordered,
+                ran_main,
                 ..
             } => {
                 // The ordered backend, when the main one left the Kernel to
@@ -1129,14 +1250,17 @@ impl Runtime {
                 };
                 let off: Option<(Arc<dyn Backend>, &dyn Prepared, String)> =
                     match (&self.ordered, version.routed(), sized) {
-                        (Some(ordered), Some(why), _) => Some((
-                            Arc::clone(ordered),
-                            prepared.as_ref(),
-                            format!("not on {}: {why}", self.backend.name()),
-                        )),
-                        (Some(ordered), None, Some(why)) => on_ordered
-                            .get_or_init(|| prepared_quietly(ordered.as_ref(), run))
-                            .as_deref()
+                        (Some(ordered), Some(why), _) => {
+                            version.on_ordered(ordered.as_ref()).map(|on| {
+                                (
+                                    Arc::clone(ordered),
+                                    on,
+                                    format!("not on {}: {why}", self.backend.name()),
+                                )
+                            })
+                        }
+                        (Some(ordered), None, Some(why)) => version
+                            .on_ordered(ordered.as_ref())
                             .map(|on| (Arc::clone(ordered), on, why)),
                         _ => None,
                     };
@@ -1181,6 +1305,19 @@ impl Runtime {
                     outputs
                 });
                 let main = placement.routed.is_none();
+                if main {
+                    // The main backend could not build it as this run needed
+                    // it: the run is made again where it now goes.
+                    if outputs.is_err()
+                        && self.ordered.is_some()
+                        && version.leaves(self.backend.as_ref())
+                    {
+                        return self.execute(version, invocation);
+                    }
+                    if outputs.is_ok() {
+                        ran_main.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
                 self.last_placement = Some(placement);
                 let outputs = held_to(version.manifest(), &mut self.host, outputs)?;
                 if main {

@@ -15,11 +15,7 @@ impl GpuBackend {
         repeat: u32,
         chain: usize,
     ) -> Result<Vec<Handle>, ExecutionError> {
-        let Some(pipeline) = prepared.as_any().downcast_ref::<Pipeline>() else {
-            return Err(ExecutionError::Device(
-                "kernel was prepared by a different backend".into(),
-            ));
-        };
+        let pipeline = built(prepared)?;
         check_invocation(module, invocation, scope)?;
         let _guard = self
             .lock
@@ -97,7 +93,7 @@ impl GpuBackend {
             }
             let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("orla repeat"),
-                layout: &pipeline.layout,
+                layout: &pipeline.main.1,
                 entries: &entries,
             });
             (group, written)
@@ -115,7 +111,7 @@ impl GpuBackend {
                 let (group, written) = &turns[time % 2];
                 encoder.clear_buffer(written, 0, None);
                 let mut pass = encoder.begin_compute_pass(&describe);
-                pass.set_pipeline(&pipeline.pipeline);
+                pass.set_pipeline(&pipeline.main.0);
                 pass.set_bind_group(0, group, &[]);
                 pass.dispatch_workgroups(groups_x, groups_y, groups_z);
             }
@@ -123,7 +119,7 @@ impl GpuBackend {
             // Dispatches in one pass run in order, each seeing what the one
             // before wrote.
             let mut pass = encoder.begin_compute_pass(&describe);
-            pass.set_pipeline(&pipeline.pipeline);
+            pass.set_pipeline(&pipeline.main.0);
             for time in 0..times {
                 pass.set_bind_group(0, &turns[time % 2].0, &[]);
                 pass.dispatch_workgroups(groups_x, groups_y, groups_z);
