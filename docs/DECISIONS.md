@@ -936,7 +936,8 @@ A session builds the Kernels its graph's nodes use for the first time as
 it publishes them, on every core at once, so the first frame waits for
 none of them in turn; a replacement for a version that ran on the device
 is built before it is ready, so the running version keeps the frames
-until the new one can take them without a wait; any other Kernel is built
+until the new one can take them without a wait, replacements prepared on
+every core but one, which the frames keep; any other Kernel is built
 by the first run that needs it. A build that fails is a Kernel the device
 cannot build: it goes to the ordered backend from then on, a run that
 found it made again there.

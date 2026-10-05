@@ -253,3 +253,53 @@ fn a_replacement_is_built_before_it_is_ready_only_where_its_version_ran() {
     // Never run on the device: left for a run to build.
     assert_eq!(device.builds_of("t.idle@1"), 0);
 }
+
+#[test]
+fn a_session_without_a_worker_makes_its_replacements_ahead_built_where_they_ran() {
+    let dir = std::env::temp_dir().join(format!("orla-lazy-ahead-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let scene = |value: &str| {
+        format!(
+            "kernel t.a@1 {{ requires {{ field.write; }} output result: Rows<Float>; compute {{ return {value}; }} }}
+kernel t.b@1 {{ requires {{ field.write; }} output result: Rows<Float>; compute {{ return {value} + 1.0; }} }}
+kernel t.unused@1 {{ requires {{ field.write; }} output result: Rows<Float>; compute {{ return {value}; }} }}
+node a: t.a@1 {{ domain = 100; }}
+node b: t.b@1 {{ domain = 100; }}
+output result <- a.result;
+output other <- b.result;
+"
+        )
+    };
+    std::fs::write(dir.join("scene.osn"), scene("1.0")).unwrap();
+    let device = device();
+    let mut runtime = Runtime::with_backends(
+        1 << 20,
+        Box::new(device),
+        Some(Box::new(orla_cpu::CpuBackend)),
+    );
+    runtime.set_small(0);
+    let mut session = Session::open_with(&dir.join("scene.osn"), None, runtime);
+    session.sync();
+    session.evaluate(&Context::default()).unwrap();
+    std::fs::write(dir.join("scene.osn"), scene("2.0")).unwrap();
+    let events = session.sync();
+    let published = events
+        .iter()
+        .filter(|e| matches!(e, Event::Published { .. }))
+        .count();
+    assert_eq!(published, 3, "{events:?}");
+    // Built before they were ready: two builds each.
+    assert_eq!(device.builds_of("t.a@1"), 2);
+    assert_eq!(device.builds_of("t.b@1"), 2);
+    assert_eq!(device.builds_of("t.unused@1"), 0, "no node uses it");
+    session.evaluate(&Context::default()).unwrap();
+    let handle = session
+        .cached(&orla_graph::NodeId("a".into()), "result")
+        .unwrap();
+    assert_eq!(
+        f32::from_bits(session.field(handle).unwrap().values()[0]),
+        2.0
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

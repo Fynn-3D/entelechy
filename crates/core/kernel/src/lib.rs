@@ -438,6 +438,24 @@ impl Preparer {
         }
     }
 
+    /// Prepares `module` to replace `running` as [`Runtime::prepare_later`]
+    /// does: finished on the main backend where `running` ran there.
+    pub fn prepare_replacing(
+        &self,
+        module: Validated,
+        source: &str,
+        running: &KernelVersion,
+    ) -> Result<Candidate, PrepareError> {
+        granted_by(&self.grants, &module)?;
+        prepare_finished(
+            self.backend.as_ref(),
+            self.ordered.as_deref(),
+            module,
+            source.to_owned(),
+            running.ran_main(),
+        )
+    }
+
     /// Prepares `module` as [`Runtime::prepare_module`] does.
     pub fn prepare(&self, module: Validated, source: &str) -> Result<Candidate, PrepareError> {
         granted_by(&self.grants, &module)?;

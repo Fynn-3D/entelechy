@@ -1,10 +1,10 @@
-//! Preparing Kernels while frames continue: on a worker thread, or inline
-//! where no thread can start. Each preparation's result is collected once
-//! by its ticket.
+//! Preparing Kernels while frames continue: on worker threads, one core
+//! left to the frames, or inline where no thread can start. Each
+//! preparation's result is collected once by its ticket.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use orla_ir::Validated;
@@ -27,11 +27,12 @@ struct Done {
     result: Result<Candidate, PrepareError>,
 }
 
-/// The thread that prepares modules while frames keep going.
+/// The threads that prepare modules while frames keep going, each taking
+/// the next module handed to them.
 struct Worker {
     jobs: Sender<Job>,
     done: Receiver<Done>,
-    handle: JoinHandle<()>,
+    handles: Vec<JoinHandle<()>>,
 }
 
 /// The worker, if any, uncollected results, and tickets whose results
@@ -45,53 +46,85 @@ pub(crate) struct Preparer {
 }
 
 impl Preparer {
-    /// Starts the worker, which prepares on `backend`, or on `ordered` what
-    /// `backend` declines. Where no thread can start (WebAssembly), every
+    /// Starts the workers, which prepare on `backend`, or on `ordered` what
+    /// `backend` declines: as many as there are cores but one, which the
+    /// frames keep. Where no thread can start (WebAssembly), every
     /// preparation is inline.
     pub(crate) fn start(&mut self, backend: Arc<dyn Backend>, ordered: Option<Arc<dyn Backend>>) {
         let (jobs, inbox) = channel::<Job>();
         let (outbox, done) = channel::<Done>();
-        let Ok(handle) = std::thread::Builder::new()
-            .name("orla-prepare".into())
-            // Room for the language's nesting bound
-            // (orla_language::DEEP_STACK), which backends recurse through.
-            .stack_size(256 << 20)
-            .spawn(move || {
-                for job in inbox {
-                    let result = prepare_finished(
-                        backend.as_ref(),
-                        ordered.as_deref(),
-                        job.module,
-                        job.source,
-                        job.finish,
-                    );
-                    if outbox
-                        .send(Done {
-                            ticket: job.ticket,
-                            result,
-                        })
-                        .is_err()
-                    {
-                        break;
+        let inbox = Arc::new(Mutex::new(inbox));
+        let mut handles = Vec::new();
+        for k in 0..orla_rules::cores().saturating_sub(1).max(1) {
+            let inbox = Arc::clone(&inbox);
+            let outbox = outbox.clone();
+            let backend = Arc::clone(&backend);
+            let ordered = ordered.clone();
+            let Ok(handle) = std::thread::Builder::new()
+                .name(format!("orla-prepare-{k}"))
+                // Room for the language's nesting bound
+                // (orla_language::DEEP_STACK), which backends recurse through.
+                .stack_size(256 << 20)
+                .spawn(move || {
+                    loop {
+                        // The lock is held only to take the next job.
+                        let job = inbox
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .recv();
+                        let Ok(job) = job else {
+                            break;
+                        };
+                        let result = prepare_finished(
+                            backend.as_ref(),
+                            ordered.as_deref(),
+                            job.module,
+                            job.source,
+                            job.finish,
+                        );
+                        if outbox
+                            .send(Done {
+                                ticket: job.ticket,
+                                result,
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
-                }
-            })
-        else {
+                })
+            else {
+                break;
+            };
+            handles.push(handle);
+        }
+        if handles.is_empty() {
             return;
-        };
-        self.worker = Some(Worker { jobs, done, handle });
+        }
+        self.worker = Some(Worker {
+            jobs,
+            done,
+            handles,
+        });
     }
 
-    /// Whether a worker is running.
+    /// Whether the workers are running.
     pub(crate) fn running(&self) -> bool {
         self.worker.is_some()
     }
 
-    /// Stops the worker after the jobs in flight, keeping their results.
+    /// Stops the workers after the jobs in flight, keeping their results.
     pub(crate) fn stop(&mut self) {
-        if let Some(Worker { jobs, done, handle }) = self.worker.take() {
+        if let Some(Worker {
+            jobs,
+            done,
+            handles,
+        }) = self.worker.take()
+        {
             drop(jobs);
-            let _ = handle.join();
+            for handle in handles {
+                let _ = handle.join();
+            }
             for finished in done.try_iter() {
                 self.file(finished);
             }

@@ -9,9 +9,10 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use orla_ir::Validated;
-use orla_kernel::{Candidate, Expect, KernelId, Runtime, Ticket};
+use orla_kernel::{Candidate, Expect, KernelId, KernelVersion, Runtime, Ticket};
 use orla_language::Kernel;
 
 use crate::sources::located;
@@ -97,7 +98,8 @@ pub(crate) struct Kernels {
 }
 
 /// A Kernel compiled ahead of staging, from its text and what it reaches,
-/// and prepared when it is new.
+/// and prepared when it is new, or replaces a running one with no worker
+/// to prepare it.
 struct Primed {
     text: String,
     reaches: String,
@@ -119,8 +121,9 @@ pub(crate) struct Kept {
 }
 
 impl Kernels {
-    /// Compiles, and prepares when new, every Kernel of `documents` that
-    /// staging would compile, on as many threads as there are cores, so
+    /// Compiles, and prepares when new or when no worker prepares
+    /// replacements ([`Runtime::background`]), every Kernel of `documents`
+    /// that staging would compile, on as many threads as there are cores, so
     /// staging finds each ready ([`Kernels::stage_document`]). What it
     /// finds is what it would have made: compiling and preparing a module
     /// read nothing but the module. A Kernel that fails is left for
@@ -132,7 +135,7 @@ impl Kernels {
         documents: &[(&Path, &[Defined])],
         runtime: &Runtime,
     ) {
-        let mut jobs: Vec<(&Path, &Defined, String, bool)> = Vec::new();
+        let mut jobs: Vec<(&Path, &Defined, String, Option<Arc<KernelVersion>>)> = Vec::new();
         for (path, defined) in documents {
             let before = self.documents.get(*path);
             for d in defined.iter() {
@@ -142,26 +145,31 @@ impl Kernels {
                 let reaches = crate::sources::reached_key(store, &d.kernel);
                 self.reaches_now
                     .insert((d.id.clone(), d.text.clone()), reaches.clone());
-                let running = runtime.kernel(&d.id).is_some();
+                let running = runtime.kernel(&d.id);
                 let unchanged = before.is_some_and(|before| {
                     before.kernels.get(&d.id) == Some(&d.text)
                         && before.reached.get(&d.id) == Some(&reaches)
                 });
-                if running && unchanged {
+                if running.is_some() && unchanged {
                     continue;
                 }
-                jobs.push((path, d, reaches, !running));
+                jobs.push((path, d, reaches, running));
             }
         }
         if jobs.len() < 2 {
             return;
         }
         let preparer = runtime.preparer();
-        let made = crate::spread::map(&jobs, |(path, d, reaches, new)| {
+        let worker = runtime.background();
+        let made = crate::spread::map(&jobs, |(path, d, reaches, running)| {
             let module = compiled(store, path, &d.id, &d.text, reaches, &d.kernel).ok()?;
-            let candidate = new
-                .then(|| preparer.prepare(module.clone(), &d.text).ok())
-                .flatten();
+            let candidate = match running {
+                None => preparer.prepare(module.clone(), &d.text).ok(),
+                Some(running) if !worker => preparer
+                    .prepare_replacing(module.clone(), &d.text, running)
+                    .ok(),
+                Some(_) => None,
+            };
             Some((
                 d.id.clone(),
                 Primed {
@@ -592,6 +600,20 @@ impl Kernels {
                 continue;
             }
             let prep = match runtime.kernel(&id) {
+                // A running Kernel's replacement made ahead with no worker.
+                Some(running)
+                    if !runtime.background()
+                        && candidate
+                            .as_ref()
+                            .is_some_and(|candidate| candidate.module() == &module) =>
+                {
+                    items.push(Item {
+                        id,
+                        prep: Prep::Ready(Box::new(candidate.expect("made ahead"))),
+                        expect: Expect::Generation(running.generation()),
+                    });
+                    continue;
+                }
                 // A running Kernel's replacement prepares in the background.
                 Some(running) => {
                     let ticket = runtime.prepare_later(module, text);
