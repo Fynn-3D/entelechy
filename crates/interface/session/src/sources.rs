@@ -556,9 +556,62 @@ pub fn declarations_within(
         })
         .collect();
     let direct: Vec<usize> = direct.iter().filter_map(|p| place(p)).collect();
-    orla_language::scope(&sources, &direct, own, &|name| {
+    // What the language makes of these documents depends on them alone:
+    // a reach whose every document is as it was, from the same `use`
+    // items and own declarations, is named as it was before.
+    let key = scope_key(store, base, uses, own, &reach.documents);
+    if let (Some(parsed), Some(key)) = (store.parsed(), &key)
+        && let Some(named) = parsed
+            .scoped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(key)
+    {
+        return named.clone();
+    }
+    let named = orla_language::scope(&sources, &direct, own, &|name| {
         builtin_names().contains(name)
-    })
+    });
+    if let (Some(parsed), Some(key)) = (store.parsed(), key) {
+        let mut scoped = parsed
+            .scoped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A long session's edits leave keys behind; they go when there
+        // are many.
+        if scoped.len() >= 4096 {
+            scoped.clear();
+        }
+        scoped.insert(key, named.clone());
+    }
+    named
+}
+
+/// What a scope is named from: where the `use` items are written and
+/// what they say, the own declarations' key, and each document reached
+/// with its stamp; none when a document has no stamp.
+fn scope_key(
+    store: &dyn Store,
+    base: &Path,
+    uses: &[orla_language::Use],
+    own: orla_language::Own<'_>,
+    reached: &[(PathBuf, std::sync::Arc<Document>)],
+) -> Option<String> {
+    use std::fmt::Write;
+    let mut key = format!("{}", base.display());
+    for item in uses {
+        let _ = write!(key, "|use {}", item.path.value);
+    }
+    let _ = write!(
+        key,
+        "|own {}",
+        declarations_key(store, own.structs, own.types, own.functions)
+    );
+    for (path, _) in reached {
+        let stamp = store.stamp(path)?;
+        let _ = write!(key, "|{}@{stamp:?}", path.display());
+    }
+    Some(key)
 }
 
 /// `path` as a document beside `document` names it: from `document`'s

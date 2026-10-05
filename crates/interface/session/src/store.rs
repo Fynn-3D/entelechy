@@ -80,6 +80,11 @@ pub struct Parsed {
     /// Kernels compiled, by what they were compiled from
     /// ([`crate::kernels::Compiled`]).
     pub(crate) compiled: std::sync::Arc<Mutex<crate::kernels::Compiled>>,
+    /// What the language named of a document's reach, by what it was
+    /// named from ([`crate::sources::declarations_within`]).
+    pub(crate) scoped: std::sync::Arc<
+        Mutex<std::collections::HashMap<String, Result<orla_language::Declarations, String>>>,
+    >,
 }
 
 /// A document as parsed, and the stamp of the text it was parsed from.
