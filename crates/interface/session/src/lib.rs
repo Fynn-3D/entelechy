@@ -527,15 +527,7 @@ impl fmt::Display for Event {
                 write!(f, "node `{node}` runs on {backend} ({why})")
             }
             Self::Large { path, why, .. } => write!(f, "large: {}: {why}", path.display()),
-            Self::Idle { path, ids } => {
-                let ids: Vec<String> = ids.iter().map(|id| format!("`{id}`")).collect();
-                write!(
-                    f,
-                    "{} publishes {}, which no node of the scene uses: compiled and prepared all the same",
-                    path.display(),
-                    ids.join(", ")
-                )
-            }
+            Self::Idle { path, ids } => f.write_str(&check::idle_said(path, ids)),
         }
     }
 }

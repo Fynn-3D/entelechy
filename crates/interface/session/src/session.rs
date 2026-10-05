@@ -608,24 +608,14 @@ impl Session {
         let Some(graph) = self.scene.graph() else {
             return;
         };
-        let bound: std::collections::BTreeSet<&KernelId> =
-            graph.nodes.iter().map(|node| &node.kernel).collect();
-        let store = self.scene.store().as_ref();
-        let mut idle = BTreeMap::new();
-        for path in self.kernels.documents() {
-            if crate::sources::package_holding(store, &path).is_some() {
-                continue;
-            }
-            let ids: Vec<KernelId> = self
-                .kernels
-                .ids_of(&path)
+        let published = self.kernels.documents().into_iter().map(|path| {
+            let ids = self.kernels.ids_of(&path);
+            (path, ids)
+        });
+        let idle: BTreeMap<PathBuf, Vec<KernelId>> =
+            crate::check::idle(self.scene.store().as_ref(), graph, published)
                 .into_iter()
-                .filter(|id| !bound.contains(id))
                 .collect();
-            if !ids.is_empty() {
-                idle.insert(path, ids);
-            }
-        }
         for (path, ids) in &idle {
             if self.idle.get(path) != Some(ids) {
                 events.push(Event::Idle {

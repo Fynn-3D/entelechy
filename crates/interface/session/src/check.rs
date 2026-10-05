@@ -79,6 +79,38 @@ pub fn large_past(module: &orla_ir::Validated, limit: u64) -> Option<String> {
     ))
 }
 
+/// The Kernels each document of a scene publishes that no node of its
+/// graph uses, by document: each is compiled and prepared with the scene
+/// all the same. A package's are left out: they are its verbs, used or
+/// not.
+pub(crate) fn idle(
+    store: &dyn Store,
+    graph: &orla_graph::Graph,
+    published: impl IntoIterator<Item = (std::path::PathBuf, Vec<orla_ir::KernelId>)>,
+) -> Vec<(std::path::PathBuf, Vec<orla_ir::KernelId>)> {
+    let bound: std::collections::BTreeSet<&orla_ir::KernelId> =
+        graph.nodes.iter().map(|node| &node.kernel).collect();
+    published
+        .into_iter()
+        .filter(|(path, _)| crate::sources::package_holding(store, path).is_none())
+        .filter_map(|(path, ids)| {
+            let ids: Vec<orla_ir::KernelId> =
+                ids.into_iter().filter(|id| !bound.contains(id)).collect();
+            (!ids.is_empty()).then_some((path, ids))
+        })
+        .collect()
+}
+
+/// How [`idle`] Kernels are said.
+pub(crate) fn idle_said(path: &Path, ids: &[orla_ir::KernelId]) -> String {
+    let ids: Vec<String> = ids.iter().map(|id| format!("`{id}`")).collect();
+    format!(
+        "{}: publishes {}, which no node of the scene uses: compiled and prepared with it all the same",
+        path.display(),
+        ids.join(", ")
+    )
+}
+
 /// What checking a document found: the lines to report, in order.
 #[derive(Debug, Default)]
 pub struct Checked {
@@ -213,9 +245,6 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
             .iter()
             .any(|file| store.canonical(file).unwrap_or_else(|_| file.clone()) == path)
     };
-    // The Kernels the scene's own documents publish, by document, for
-    // those no node uses.
-    let mut published_ids: Vec<(std::path::PathBuf, Vec<orla_ir::KernelId>)> = Vec::new();
     // The used documents, each with its own declarations.
     match used_documents(store, base, &document.uses) {
         Ok(used) => {
@@ -225,12 +254,8 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                 check_used(store, used_path, root, publishes(used_path), show_ir)
             });
             let mut compiled = 0;
-            for (used_path, (lines, ids)) in used.iter().zip(found) {
+            for (lines, ids) in found {
                 compiled += ids.len();
-                // A package's Kernels are its verbs, used or not.
-                if crate::sources::package_holding(store, used_path).is_none() {
-                    published_ids.push((used_path.clone(), ids));
-                }
                 for (problem, line) in lines {
                     if problem {
                         say!(problem, "{line}");
@@ -279,33 +304,37 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         }
     }
     // A Kernel the scene publishes and no node uses is compiled and
-    // prepared with it all the same.
+    // prepared with it all the same: the scene's own, and those of every
+    // document it publishes, its placed graphs' included.
     if !document.nodes.is_empty() {
-        let bound: std::collections::BTreeSet<&orla_ir::KernelId> = lowered
-            .graph
-            .nodes
-            .iter()
-            .map(|node| &node.kernel)
-            .collect();
-        let own_ids: Vec<orla_ir::KernelId> = document
+        let own: Vec<orla_ir::KernelId> = document
             .kernels
             .iter()
             .filter_map(|kernel| crate::sources::named_id(kernel).ok())
             .collect();
-        for (at, ids) in std::iter::once((path.to_path_buf(), own_ids)).chain(published_ids) {
-            let idle: Vec<String> = ids
-                .iter()
-                .filter(|id| !bound.contains(id))
-                .map(|id| format!("`{id}`"))
-                .collect();
-            if !idle.is_empty() {
-                say!(
-                    note,
-                    "{}: publishes {}, which no node of the scene uses: compiled and prepared with it all the same",
-                    at.display(),
-                    idle.join(", ")
-                );
-            }
+        // A file reached by more than one spelling of its path, once.
+        let mut files: Vec<std::path::PathBuf> = published
+            .iter()
+            .map(|file| store.canonical(file).unwrap_or_else(|_| file.clone()))
+            .collect();
+        files.sort();
+        files.dedup();
+        let theirs = files.iter().map(|file| {
+            let ids = read_document(store, file)
+                .ok()
+                .and_then(|text| orla_language::parse_document(&text).ok())
+                .map(|used| {
+                    used.kernels
+                        .iter()
+                        .filter_map(|kernel| crate::sources::named_id(kernel).ok())
+                        .collect()
+                })
+                .unwrap_or_default();
+            (file.clone(), ids)
+        });
+        let scene = std::iter::once((path.to_path_buf(), own)).chain(theirs);
+        for (at, ids) in idle(store, &lowered.graph, scene) {
+            say!(note, "{}", idle_said(&at, &ids));
         }
     }
     if !document.nodes.is_empty() {

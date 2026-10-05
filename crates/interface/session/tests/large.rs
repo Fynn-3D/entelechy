@@ -110,6 +110,43 @@ kernel t.idle@1 { requires { field.write; } output result: Rows<Float>; compute 
         "{}",
         idle[0]
     );
+
+    // A placed graph's documents are the scene's too, and each is said
+    // once however it is reached.
+    std::fs::create_dir_all(dir.join("part")).unwrap();
+    std::fs::write(
+        dir.join("part/kernels.orla"),
+        "kernel p.used@1 { requires { field.write; } output result: Rows<Float>; compute { return 3.0; } }
+kernel p.idle@1 { requires { field.write; } output result: Rows<Float>; compute { return 4.0; } }
+",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("part/part.osn"),
+        "use \"kernels.orla\";\nuse \"../lib.orla\";\nnode b: p.used@1 { domain = 1; }\noutput result <- b.result;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.osn"),
+        "use \"lib.orla\";\nnode a: t.used@1 { domain = 1; }\nnode part: graph \"part/part.osn\" { }\noutput result <- a.result;\n",
+    )
+    .unwrap();
+    let checked = orla_session::check_document(
+        &orla_session::Disk::default(),
+        &dir.join("scene.osn"),
+        false,
+    );
+    let idle: Vec<&String> = checked
+        .lines
+        .iter()
+        .map(|(_, line)| line)
+        .filter(|line| line.contains("no node of the scene uses"))
+        .collect();
+    assert_eq!(idle.len(), 2, "{:?}", checked.lines);
+    assert!(
+        idle.iter().any(|line| line.contains("`p.idle@1`")),
+        "{idle:?}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
