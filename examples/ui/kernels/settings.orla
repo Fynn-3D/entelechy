@@ -144,8 +144,7 @@ fn hero(t: Theme, letters: Grid<Float>, words: Rows<Int>, now: Float, q: Vec2) -
     let magick = over(label(letters, words, word_magick(), w, Rect { lo: vec2(inner.lo.x, 64.0), hi: vec2(inner.hi.x, 72.0) }, vec2(0.0, 0.5), t.scale, t.dim, q),
         meter(t, Rect { lo: vec2(inner.lo.x, 75.0), hi: vec2(inner.hi.x, 81.0) }, 0.6, 0.6, vec4(0.3, 0.55, 0.95, 1.0), vec4(0.3, 0.55, 0.95, 1.0), q));
     let gold_row = Rect { lo: vec2(inner.lo.x, 87.0), hi: vec2(inner.hi.x, 95.0) };
-    let gold = over(label(letters, words, word_gold(), w, gold_row, vec2(0.0, 0.5), t.scale, t.dim, q),
-        number(letters, 1250, gold_row, vec2(1.0, 0.5), t.scale, t.accent, q));
+    let gold = named_number(letters, words, word_gold(), w, 1250, gold_row, t.scale, t.dim, t.accent, q);
     let journal_head = label(letters, words, word_journal(), w, Rect { lo: vec2(inner.lo.x, 102.0), hi: vec2(inner.hi.x, 110.0) }, vec2(0.0, 0.5), t.scale, t.accent, q);
     // Three of the journal's lines shown, from `first`.
     let first = int(floor(now)) % (journal_lines() - 2);

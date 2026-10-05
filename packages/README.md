@@ -187,8 +187,9 @@ its interface is held to.
   for what a ray meets. Used by the `physics` example.
 - **ui** — a screen's widgets, drawn per pixel, and the text on them in
   any language:
-  - layout: rectangles cut into rows, columns, cells and lists, a thing
-    placed in one by alignment, the row a pixel falls in;
+  - layout: rectangles cut into rows, columns, cells and lists, a
+    table's row into its columns by where each starts, a thing placed
+    in one by alignment, the row a pixel falls in;
   - paint: coats laid over one another, rounded boxes, rims, shadows,
     discs, rings, lines, arrows and ticks, each edge smooth over a pixel;
   - letters: a text, UTF-8 a row a line, decoded once into rows of
@@ -200,7 +201,8 @@ its interface is held to.
     letters or another's chosen by a number (`ui.either@1`), read anew
     only when it changes;
   - writing: a row of letters at a scale, aligned in a rectangle and cut
-    at its sides, with its shadow; numbers;
+    at its sides, with its shadow; numbers; a name and a number on one
+    row;
   - widgets over a theme: panels, titled panels, the lit row, a list's
     items and the row a pixel near the lit one is drawn by, buttons,
     switches, check boxes, sliders, meters with a trail, options with

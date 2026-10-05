@@ -74,6 +74,21 @@ fn list_row_at(r: Rect, q: Vec2, h: Float, gap: Float, n: Int) -> Int {
     return if k >= 0 && k < n && (t - float(k)) * (h + gap) < h { k } else { -1 };
 }
 
+/// The part of `r` from `from` pixels from its left, `width` wide.
+fn span(r: Rect, from: Float, width: Float) -> Rect {
+    return Rect { lo: vec2(r.lo.x + from, r.lo.y), hi: vec2(min(r.lo.x + from + width, r.hi.x), r.hi.y) };
+}
+
+/// Column `k` (0 to 3) of a table's row whose columns start `starts`
+/// pixels from its left: each up to where the next starts, the last (or
+/// one whose next starts no further right) up to the row's right.
+fn column_in(r: Rect, starts: Vec4, k: Int) -> Rect {
+    let from = match k { 0 => starts.x, 1 => starts.y, 2 => starts.z, _ => starts.w };
+    let next = match k { 0 => starts.y, 1 => starts.z, 2 => starts.w, _ => 0.0 };
+    let end = if k < 3 && next > from { r.lo.x + next } else { r.hi.x };
+    return Rect { lo: vec2(r.lo.x + from, r.lo.y), hi: vec2(end, r.hi.y) };
+}
+
 /// The row of a list (`n` rows `h` high, `gap` apart) a pixel is drawn
 /// by: the row it falls in, else the lit row (`lit`, -1 none) when `q`
 /// is within `by` of it, as a lit row's band and mark reach past it; -1
