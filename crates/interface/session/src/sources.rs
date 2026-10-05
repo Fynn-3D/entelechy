@@ -128,6 +128,12 @@ impl Store for Watching<'_> {
     fn parsed(&self) -> Option<&Parsed> {
         self.store.parsed()
     }
+    fn sync_begins(&self) {
+        self.store.sync_begins();
+    }
+    fn sync_ends(&self) {
+        self.store.sync_ends();
+    }
 }
 
 /// A `use` target's files: a file; each `.orla` directly in a
@@ -786,6 +792,27 @@ pub(crate) fn declarations_key(
     structs: &[orla_language::StructDecl],
     types: &[orla_language::TypeAlias],
     functions: &[orla_language::FnDecl],
+) -> String {
+    hashed(
+        store,
+        &structs.iter().collect::<Vec<_>>(),
+        &types.iter().collect::<Vec<_>>(),
+        &functions.iter().collect::<Vec<_>>(),
+    )
+}
+
+/// A key for the declarations a Kernel reaches ([`Kernel::reached`]), as
+/// [`declarations_key`] keys them.
+pub(crate) fn reached_key(store: &dyn Store, kernel: &Kernel) -> String {
+    let reached = kernel.reached();
+    hashed(store, &reached.structs, &reached.types, &reached.functions)
+}
+
+fn hashed(
+    store: &dyn Store,
+    structs: &[&orla_language::StructDecl],
+    types: &[&orla_language::TypeAlias],
+    functions: &[&orla_language::FnDecl],
 ) -> String {
     use std::fmt::Write;
     let mut key = Twice::default();

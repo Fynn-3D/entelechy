@@ -333,6 +333,9 @@ impl Session {
     pub fn sync(&mut self) -> Vec<Event> {
         let mut events = Vec::new();
         let store = Arc::clone(self.scene.store());
+        // Every document walks the files it reaches; a path is looked at
+        // once a sync.
+        store.sync_begins();
         let reads = Arc::clone(&self.reads);
         let readable = |path: &Path| crate::reads::lock(&reads).check(store.as_ref(), path);
         self.scene
@@ -373,6 +376,7 @@ impl Session {
         events.append(&mut self.inputs.take_frame_events());
         events.append(&mut self.writes.take_events());
         self.remember(&events);
+        store.sync_ends();
         events
     }
 

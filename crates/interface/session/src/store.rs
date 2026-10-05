@@ -66,6 +66,13 @@ pub trait Store: Send + Sync {
     fn stamps_directories(&self) -> bool {
         false
     }
+    /// A sync begins: until it ends, the store may answer a path's kind,
+    /// stamp and resolved path as it first found them, for a sync walks
+    /// the same files from every document. A file changed meanwhile is
+    /// seen by the next sync.
+    fn sync_begins(&self) {}
+    /// The sync ends: every path is looked at afresh.
+    fn sync_ends(&self) {}
 }
 
 /// Documents parsed once per stamp: a document read again unchanged is
@@ -174,6 +181,39 @@ pub(crate) fn folded(path: &Path) -> PathBuf {
 pub struct Disk {
     packages: Vec<PathBuf>,
     parsed: Parsed,
+    /// What a sync found of each path, while one runs.
+    found: std::sync::Arc<Mutex<Option<Found>>>,
+}
+
+/// What a sync found of the file system, by path.
+#[derive(Debug, Default)]
+struct Found {
+    kinds: std::collections::HashMap<PathBuf, Option<Kind>>,
+    stamps: std::collections::HashMap<PathBuf, Option<Stamp>>,
+    resolved: std::collections::HashMap<PathBuf, PathBuf>,
+}
+
+impl Disk {
+    /// `answer` for `path`, from what the running sync found, or asked of
+    /// the file system and kept until the sync ends.
+    fn found<T: Clone>(
+        &self,
+        path: &Path,
+        table: fn(&mut Found) -> &mut std::collections::HashMap<PathBuf, T>,
+        answer: impl FnOnce() -> T,
+    ) -> T {
+        let mut found = self
+            .found
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match found.as_mut() {
+            Some(found) => table(found)
+                .entry(path.to_path_buf())
+                .or_insert_with(answer)
+                .clone(),
+            None => answer(),
+        }
+    }
 }
 
 impl Disk {
@@ -182,6 +222,7 @@ impl Disk {
         Self {
             packages,
             parsed: Parsed::default(),
+            found: Default::default(),
         }
     }
 }
@@ -198,6 +239,20 @@ impl Store for Disk {
 
     fn parsed(&self) -> Option<&Parsed> {
         Some(&self.parsed)
+    }
+
+    fn sync_begins(&self) {
+        *self
+            .found
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Found::default());
+    }
+
+    fn sync_ends(&self) {
+        *self
+            .found
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
@@ -238,18 +293,33 @@ impl Store for Disk {
             .inspect_err(|_| {
                 let _ = std::fs::remove_file(&beside);
             })?;
+        // What the running sync found is the file system before this.
+        if let Some(found) = self
+            .found
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+        {
+            *found = Found::default();
+        }
         std::fs::rename(&beside, path).inspect_err(|_| {
             let _ = std::fs::remove_file(&beside);
         })
     }
 
     fn kind(&self, path: &Path) -> Option<Kind> {
-        let metadata = std::fs::metadata(path).ok()?;
-        Some(if metadata.is_dir() {
-            Kind::Dir
-        } else {
-            Kind::File
-        })
+        self.found(
+            path,
+            |found| &mut found.kinds,
+            || {
+                let metadata = std::fs::metadata(path).ok()?;
+                Some(if metadata.is_dir() {
+                    Kind::Dir
+                } else {
+                    Kind::File
+                })
+            },
+        )
     }
 
     fn list(&self, dir: &Path) -> io::Result<Vec<PathBuf>> {
@@ -260,13 +330,50 @@ impl Store for Disk {
     }
 
     fn stamp(&self, path: &Path) -> Option<Stamp> {
-        let metadata = std::fs::metadata(path).ok()?;
-        Some(Stamp(Seen::Disk(metadata.modified().ok(), metadata.len())))
+        self.found(
+            path,
+            |found| &mut found.stamps,
+            || {
+                let metadata = std::fs::metadata(path).ok()?;
+                Some(Stamp(Seen::Disk(metadata.modified().ok(), metadata.len())))
+            },
+        )
     }
 
     /// The platform's resolved path; under WASI, whose sandbox keeps links
     /// inside its directories, the path made whole.
     fn canonical(&self, path: &Path) -> io::Result<PathBuf> {
+        let known = self
+            .found
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(|found| found.resolved.get(path).cloned());
+        if let Some(resolved) = known {
+            return Ok(resolved);
+        }
+        let resolved = self.resolved(path)?;
+        if let Some(found) = self
+            .found
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+        {
+            found.resolved.insert(path.to_path_buf(), resolved.clone());
+        }
+        Ok(resolved)
+    }
+
+    fn whole(&self, path: &Path) -> PathBuf {
+        match std::env::current_dir() {
+            Ok(dir) if path.is_relative() => folded(&dir.join(path)),
+            _ => folded(path),
+        }
+    }
+}
+
+impl Disk {
+    fn resolved(&self, path: &Path) -> io::Result<PathBuf> {
         match path.canonicalize() {
             Err(error) if error.kind() == io::ErrorKind::Unsupported => {
                 if !path.exists() {
@@ -275,13 +382,6 @@ impl Store for Disk {
                 Ok(self.whole(path))
             }
             resolved => resolved,
-        }
-    }
-
-    fn whole(&self, path: &Path) -> PathBuf {
-        match std::env::current_dir() {
-            Ok(dir) if path.is_relative() => folded(&dir.join(path)),
-            _ => folded(path),
         }
     }
 }

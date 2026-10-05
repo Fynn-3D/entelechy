@@ -12,8 +12,8 @@ use orla_kernel::{Runtime, Value};
 
 use crate::kernels::{Batch, Change, Defined, Kernels};
 use crate::sources::{
-    Expanded, declarations_for, declarations_key, declarations_within, functions_checked,
-    is_library, named_id, read_document, used_documents,
+    Expanded, declarations_for, declarations_within, functions_checked, is_library, named_id,
+    read_document, used_documents,
 };
 use crate::store::{Stamp, Store};
 use crate::{Diagnostic, Event};
@@ -460,7 +460,6 @@ impl Scene {
         let root = self.root.clone();
         let root_key = PathBuf::from(&name);
         let mut document = document;
-        let mut declarations = String::new();
         match declarations_for(
             self.store.as_ref(),
             &base,
@@ -481,14 +480,6 @@ impl Scene {
                     .chain(&document.functions)
                     .cloned()
                     .collect();
-                // What its Kernels inherit, its own declarations included:
-                // a function it changes recompiles the Kernels that call it.
-                declarations = declarations_key(
-                    self.store.as_ref(),
-                    &self.structs,
-                    &self.types,
-                    &self.functions,
-                );
                 document.resolve((&structs, &types, &functions));
             }
             Err(error) => events.push(Event::Rejected {
@@ -542,41 +533,11 @@ impl Scene {
             } else {
                 self.store.stamp(&path)
             };
-            let key = if path == root {
-                declarations.clone()
-            } else {
-                // A sub-graph's inline Kernels inherit through its own
-                // `use` items.
-                let dir = path
-                    .parent()
-                    .unwrap_or_else(|| Path::new("."))
-                    .to_path_buf();
-                self.store
-                    .read_text(&path)
-                    .ok()
-                    .and_then(|text| orla_language::parse_document(&text).ok())
-                    .and_then(|doc| {
-                        let (s, t, f) = declarations_for(
-                            self.store.as_ref(),
-                            &dir,
-                            &doc.uses,
-                            orla_language::Own::of(&doc),
-                        )
-                        .ok()?;
-                        // Its own declarations beside what it uses.
-                        let s: Vec<_> = s.into_iter().chain(doc.structs).collect();
-                        let t: Vec<_> = t.into_iter().chain(doc.types).collect();
-                        let f: Vec<_> = f.into_iter().chain(doc.functions).collect();
-                        Some(declarations_key(self.store.as_ref(), &s, &t, &f))
-                    })
-                    .unwrap_or_default()
-            };
             let staged = kernels.stage_document(
                 self.store.as_ref(),
                 &path,
                 current,
                 defined,
-                &key,
                 &root,
                 runtime,
                 events,
@@ -820,7 +781,7 @@ impl Scene {
                 .unwrap_or_else(|| Path::new("."))
                 .to_path_buf();
             let mut document = document;
-            let declarations = match declarations_within(
+            match declarations_within(
                 self.store.as_ref(),
                 Some(&path),
                 &dir,
@@ -847,28 +808,7 @@ impl Scene {
                         kernels.mark_read(path, current);
                         continue;
                     }
-                    // Its own declarations beside what it uses: a
-                    // function it changes recompiles its Kernels.
-                    let key = declarations_key(
-                        self.store.as_ref(),
-                        &structs
-                            .iter()
-                            .chain(&document.structs)
-                            .cloned()
-                            .collect::<Vec<_>>(),
-                        &types
-                            .iter()
-                            .chain(&document.types)
-                            .cloned()
-                            .collect::<Vec<_>>(),
-                        &functions
-                            .iter()
-                            .chain(&document.functions)
-                            .cloned()
-                            .collect::<Vec<_>>(),
-                    );
                     document.resolve((&structs, &types, &functions));
-                    key
                 }
                 Err(error) => {
                     events.push(Event::Rejected {
@@ -900,7 +840,6 @@ impl Scene {
                 &path,
                 current,
                 defined,
-                &declarations,
                 &root,
                 runtime,
                 events,

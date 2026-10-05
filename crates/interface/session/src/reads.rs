@@ -184,4 +184,10 @@ impl Store for Held {
     fn stamps_directories(&self) -> bool {
         self.inner.stamps_directories()
     }
+    fn sync_begins(&self) {
+        self.inner.sync_begins();
+    }
+    fn sync_ends(&self) {
+        self.inner.sync_ends();
+    }
 }

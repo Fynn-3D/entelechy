@@ -55,11 +55,27 @@ pub fn scope(
     is_builtin: &dyn Fn(&str) -> bool,
 ) -> Result<Declarations, String> {
     let mut reach = Reach::of(sources);
-    let (structs, types) = scoped_types(&mut reach, sources, direct, own)?;
+    // What the document's own code mentions: a declaration it does not
+    // see stays out of its way by a name of its own only when the
+    // document reaches for that name; one it never mentions is left as
+    // it is, and the names stay plain.
+    let mentioned = std::cell::OnceCell::new();
+    let mentions = |name: &str| match own.document {
+        Some(document) => mentioned.get_or_init(|| document.mentions()).contains(name),
+        None => true,
+    };
+    let (structs, types) = scoped_types(&mut reach, sources, direct, own, &mentions)?;
     Ok((
         structs,
         types,
-        scoped(&reach, sources, direct, own.functions, is_builtin)?,
+        scoped(
+            &reach,
+            sources,
+            direct,
+            own.functions,
+            is_builtin,
+            &mentions,
+        )?,
     ))
 }
 
@@ -215,6 +231,7 @@ fn scoped_types(
     sources: &[Source<'_>],
     direct: &[usize],
     own: Own<'_>,
+    mentions: &dyn Fn(&str) -> bool,
 ) -> Result<(Vec<StructDecl>, Vec<TypeAlias>), String> {
     let named = |name: &str| {
         reach
@@ -263,13 +280,13 @@ fn scoped_types(
     let mut top = BTreeSet::new();
     closure(direct, &mut top);
     // Nothing declared twice, nothing the using document declares, and
-    // everything declared by a document it uses: every name is plain, as
+    // nothing it mentions but does not see: every name is plain, as
     // written.
     let seen = |files: &Vec<usize>| files.iter().any(|file| top.contains(file));
     if !reach
         .declared
         .iter()
-        .any(|(d, files)| clashing(d.name()) || !seen(files))
+        .any(|(d, files)| clashing(d.name()) || (!seen(files) && mentions(d.name())))
     {
         return Ok(split(
             reach
@@ -295,9 +312,12 @@ fn scoped_types(
             })
             .collect()
     };
+    // Plain: the one the using document sees by its name, or the only
+    // one of its name, which the document neither declares nor mentions.
     let plain = |i: usize| {
         let name = declared[i].0.name();
-        !own_differs(name) && reaching(name, &top) == [i]
+        (!own_differs(name) && reaching(name, &top) == [i])
+            || (named(name) == 1 && own_decl(name).is_none() && !mentions(name))
     };
     let out_name = |i: usize| {
         let name = declared[i].0.name();
@@ -381,6 +401,7 @@ fn scoped(
     direct: &[usize],
     own: &[FnDecl],
     is_builtin: &dyn Fn(&str) -> bool,
+    mentions: &dyn Fn(&str) -> bool,
 ) -> Result<Vec<FnDecl>, String> {
     // Which documents declare each name.
     let mut declaring: HashMap<&str, Vec<usize>> = HashMap::new();
@@ -401,11 +422,9 @@ fn scoped(
     // What the using document sees: what it uses.
     let mut top = BTreeSet::new();
     closure(direct, &mut top);
-    if !reach
-        .functions
-        .iter()
-        .any(|(decl, file)| clashing(&decl.name.value) || !top.contains(file))
-    {
+    if !reach.functions.iter().any(|(decl, file)| {
+        clashing(&decl.name.value) || (!top.contains(file) && mentions(&decl.name.value))
+    }) {
         return Ok(reach
             .functions
             .iter()
@@ -427,8 +446,17 @@ fn scoped(
             && !own.iter().any(|f| f.name.value == name)
             && resolve(name, &top) == Some(file)
     };
+    // A function the using document neither sees, nor mentions, nor
+    // shares a name with another of keeps its name: nothing reaches for
+    // it by that name but the documents that see it.
+    let unique_unmentioned = |name: &str| {
+        declaring.get(name).is_some_and(|files| files.len() == 1)
+            && !own.iter().any(|f| f.name.value == name)
+            && !hides(name)
+            && !mentions(name)
+    };
     let internal = |name: &str, file: usize| {
-        if seen_by_user(name, file) {
+        if seen_by_user(name, file) || unique_unmentioned(name) {
             name.to_owned()
         } else {
             scoped_name(name, &sources[file].name)

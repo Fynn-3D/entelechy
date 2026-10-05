@@ -32,9 +32,10 @@ struct DocumentState {
     kernels: BTreeMap<KernelId, String>,
     /// Parsed Kernels, which a trace compiles unoptimized.
     asts: BTreeMap<KernelId, Kernel>,
-    /// Key of the shared declarations the Kernels compiled with; a
-    /// change republishes every Kernel.
-    declarations: String,
+    /// Each Kernel's key of the declarations it reaches
+    /// ([`crate::sources::reached_key`]); a Kernel whose text and key
+    /// are as they were is not compiled again.
+    reached: BTreeMap<KernelId, String>,
 }
 
 /// One document's Kernels being prepared, swapped in together once all
@@ -373,21 +374,11 @@ impl Kernels {
         path: &Path,
         current: Option<Stamp>,
         defined: Vec<Defined>,
-        declarations: &str,
         root: &Path,
         runtime: &mut Runtime,
         events: &mut Vec<Event>,
     ) -> Option<bool> {
-        let staged = self.stage_document(
-            store,
-            path,
-            current,
-            defined,
-            declarations,
-            root,
-            runtime,
-            events,
-        );
+        let staged = self.stage_document(store, path, current, defined, root, runtime, events);
         if let Some(batch) = staged {
             let change = Change {
                 documents: vec![(path.to_path_buf(), batch)],
@@ -408,7 +399,6 @@ impl Kernels {
         path: &Path,
         current: Option<Stamp>,
         defined: Vec<Defined>,
-        declarations: &str,
         root: &Path,
         runtime: &mut Runtime,
         events: &mut Vec<Event>,
@@ -428,7 +418,6 @@ impl Kernels {
         }
         let before = self.documents.remove(path).unwrap_or_default();
         let previous = before.kernels.clone();
-        let same_declarations = before.declarations == declarations;
         let leaving: Vec<KernelId> = before
             .kernels
             .keys()
@@ -436,6 +425,7 @@ impl Kernels {
             .cloned()
             .collect();
         let mut kernels = BTreeMap::new();
+        let mut reached = BTreeMap::new();
         let mut asts = BTreeMap::new();
         let mut items = Vec::new();
         let mut failed = false;
@@ -471,10 +461,15 @@ impl Kernels {
             }
             kernels.insert(id.clone(), text.clone());
             let same_text = previous.get(&id) == Some(&text);
-            if same_text && same_declarations && runtime.kernel(&id).is_some() {
+            // What it reaches of what it inherits: a declaration it does
+            // not reach changing changes nothing it compiles to.
+            let reaches = crate::sources::reached_key(store, &kernel);
+            let same_reach = before.reached.get(&id) == Some(&reaches);
+            reached.insert(id.clone(), reaches.clone());
+            if same_text && same_reach && runtime.kernel(&id).is_some() {
                 continue;
             }
-            let module = match compiled(store, path, &id, &text, declarations, &kernel) {
+            let module = match compiled(store, path, &id, &text, &reaches, &kernel) {
                 Ok(module) => module,
                 Err(error) => {
                     // One fault in one place is reported once, in the
@@ -553,7 +548,7 @@ impl Kernels {
                 stamp: current,
                 kernels,
                 asts,
-                declarations: declarations.to_owned(),
+                reached,
             },
         );
         if failed {

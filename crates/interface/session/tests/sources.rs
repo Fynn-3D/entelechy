@@ -24,6 +24,7 @@ const NOTHING: orla_language::Own<'static> = orla_language::Own {
     functions: &[],
     structs: &[],
     types: &[],
+    document: None,
 };
 
 #[test]

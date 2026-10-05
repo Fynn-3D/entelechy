@@ -52,6 +52,7 @@ pub mod doc;
 mod lexer;
 pub use lexer::quoted;
 mod parser;
+mod reach;
 mod rename;
 mod scope;
 
@@ -60,6 +61,7 @@ use std::ops::Range;
 
 pub use orla_abi::names::{did_you_mean, edit_distance, nearest, suggestion};
 pub use parser::{RESERVED, outline, parse, parse_document, parse_literal};
+pub use reach::Reached;
 pub use rename::renamed_type;
 pub use scope::{Declarations, Source, scope};
 
@@ -333,6 +335,10 @@ pub struct Own<'a> {
     pub structs: &'a [StructDecl],
     /// Its types.
     pub types: &'a [TypeAlias],
+    /// The document, whose own code says which names it reaches for
+    /// ([`Document::mentions`]); none, and every name is taken as
+    /// mentioned.
+    pub document: Option<&'a Document>,
 }
 
 impl<'a> Own<'a> {
@@ -342,6 +348,7 @@ impl<'a> Own<'a> {
             functions: &document.functions,
             structs: &document.structs,
             types: &document.types,
+            document: Some(document),
         }
     }
 

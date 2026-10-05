@@ -108,14 +108,14 @@ fn block_names(block: &Block, renames: Renames<'_>) -> bool {
     found
 }
 
-fn visit_block(block: &Block, seen: &mut dyn FnMut(&str, bool)) {
+pub(crate) fn visit_block(block: &Block, seen: &mut dyn FnMut(&str, bool)) {
     for (_, value) in &block.lets {
         visit(value, seen);
     }
     visit(&block.result, seen);
 }
 
-fn visit(expr: &Expr, seen: &mut dyn FnMut(&str, bool)) {
+pub(crate) fn visit(expr: &Expr, seen: &mut dyn FnMut(&str, bool)) {
     match &expr.kind {
         ExprKind::Float(_)
         | ExprKind::Int(_)
