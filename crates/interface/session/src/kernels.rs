@@ -88,6 +88,21 @@ pub(crate) struct Kernels {
     owners: BTreeMap<KernelId, PathBuf>,
     /// Changes being prepared, in order.
     pending: Vec<Change>,
+    /// Kernels compiled, and prepared when new, ahead of staging this
+    /// sync ([`Kernels::prime`]).
+    primed: BTreeMap<KernelId, Primed>,
+    /// What each Kernel [`Kernels::prime`] saw this sync reaches, by its
+    /// id and text: staging the same Kernel finds it here.
+    reaches_now: BTreeMap<(KernelId, String), String>,
+}
+
+/// A Kernel compiled ahead of staging, from its text and what it reaches,
+/// and prepared when it is new.
+struct Primed {
+    text: String,
+    reaches: String,
+    module: Validated,
+    candidate: Option<Candidate>,
 }
 
 impl Kernels {
@@ -104,6 +119,96 @@ pub(crate) struct Kept {
 }
 
 impl Kernels {
+    /// Compiles, and prepares when new, every Kernel of `documents` that
+    /// staging would compile, on as many threads as there are cores, so
+    /// staging finds each ready ([`Kernels::stage_document`]). What it
+    /// finds is what it would have made: compiling and preparing a module
+    /// read nothing but the module. A Kernel that fails is left for
+    /// staging, which says why; what staging does not take is let go by
+    /// [`Kernels::unprime`].
+    pub(crate) fn prime(
+        &mut self,
+        store: &dyn Store,
+        documents: &[(&Path, &[Defined])],
+        runtime: &Runtime,
+    ) {
+        let mut jobs: Vec<(&Path, &Defined, String, bool)> = Vec::new();
+        for (path, defined) in documents {
+            let before = self.documents.get(*path);
+            for d in defined.iter() {
+                if jobs.iter().any(|(_, seen, _, _)| seen.id == d.id) {
+                    continue;
+                }
+                let reaches = crate::sources::reached_key(store, &d.kernel);
+                self.reaches_now
+                    .insert((d.id.clone(), d.text.clone()), reaches.clone());
+                let running = runtime.kernel(&d.id).is_some();
+                let unchanged = before.is_some_and(|before| {
+                    before.kernels.get(&d.id) == Some(&d.text)
+                        && before.reached.get(&d.id) == Some(&reaches)
+                });
+                if running && unchanged {
+                    continue;
+                }
+                jobs.push((path, d, reaches, !running));
+            }
+        }
+        // One core, or one Kernel, gains nothing from threads.
+        let workers = orla_rules::cores().min(jobs.len());
+        if workers < 2 {
+            return;
+        }
+        let preparer = runtime.preparer();
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let made: std::sync::Mutex<Vec<(KernelId, Primed)>> = std::sync::Mutex::new(Vec::new());
+        let work = || {
+            loop {
+                let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some((path, d, reaches, new)) = jobs.get(at) else {
+                    break;
+                };
+                let Ok(module) = compiled(store, path, &d.id, &d.text, reaches, &d.kernel) else {
+                    continue;
+                };
+                let candidate = new
+                    .then(|| preparer.prepare(module.clone(), &d.text).ok())
+                    .flatten();
+                let primed = Primed {
+                    text: d.text.clone(),
+                    reaches: reaches.clone(),
+                    module,
+                    candidate,
+                };
+                made.lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push((d.id.clone(), primed));
+            }
+        };
+        // Where no thread can be spawned (a page), nothing is primed and
+        // staging compiles and prepares each in turn.
+        std::thread::scope(|scope| {
+            for _ in 0..workers {
+                if std::thread::Builder::new()
+                    .name("orla-prime".into())
+                    .spawn_scoped(scope, work)
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        self.primed.extend(
+            made.into_inner()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+    }
+
+    /// Lets go of what [`Kernels::prime`] made and staging did not take.
+    pub(crate) fn unprime(&mut self) {
+        self.primed.clear();
+        self.reaches_now.clear();
+    }
+
     /// A copy to restore, beside the runtime's registry, when a
     /// published change is refused.
     pub(crate) fn keep(&self) -> Kept {
@@ -463,13 +568,24 @@ impl Kernels {
             let same_text = previous.get(&id) == Some(&text);
             // What it reaches of what it inherits: a declaration it does
             // not reach changing changes nothing it compiles to.
-            let reaches = crate::sources::reached_key(store, &kernel);
+            let reaches = match self.reaches_now.get(&(id.clone(), text.clone())) {
+                Some(reaches) => reaches.clone(),
+                None => crate::sources::reached_key(store, &kernel),
+            };
             let same_reach = before.reached.get(&id) == Some(&reaches);
             reached.insert(id.clone(), reaches.clone());
             if same_text && same_reach && runtime.kernel(&id).is_some() {
                 continue;
             }
-            let module = match compiled(store, path, &id, &text, &reaches, &kernel) {
+            let primed = self
+                .primed
+                .remove(&id)
+                .filter(|primed| primed.text == text && primed.reaches == reaches);
+            let (module, candidate) = match primed {
+                Some(primed) => (Ok(primed.module), primed.candidate),
+                None => (compiled(store, path, &id, &text, &reaches, &kernel), None),
+            };
+            let module = match module {
                 Ok(module) => module,
                 Err(error) => {
                     // One fault in one place is reported once, in the
@@ -520,7 +636,10 @@ impl Kernels {
                     });
                     continue;
                 }
-                None => runtime.prepare_module(module, &text),
+                None => match candidate.filter(|candidate| candidate.module() == &module) {
+                    Some(candidate) => Ok(candidate),
+                    None => runtime.prepare_module(module, &text),
+                },
             };
             match prep {
                 Ok(candidate) => items.push(Item {

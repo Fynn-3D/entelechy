@@ -217,6 +217,10 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   ([`runtime_for`](crates/interface/session/src/session.rs)).
 - `prepare` does the work, `publish` swaps a pointer; `prepare_later`
   moves it to a worker ([hot swap](crates/interface/session/tests/hot_swap.rs)).
+- A sync compiles every new or changed Kernel of the documents it read,
+  and prepares the new ones, on every core at once through a
+  [`Preparer`](crates/core/kernel/src/lib.rs); each document then
+  publishes in order as if alone ([prime](crates/interface/session/tests/prime.rs)).
 - The interpreter is the reference; the first failing element in
   row-major order is reported ([compile](crates/backends/cpu/src/eval/compile.rs),
   [execute](crates/backends/cpu/tests/execute.rs)).

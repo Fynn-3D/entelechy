@@ -312,6 +312,46 @@ impl fmt::Display for Ticket {
 /// Prepares a module on `main`, or on `ordered` when there is one and
 /// `main` declines the module; the candidate keeps `main`'s reason, so
 /// where it runs is decided once.
+/// Whether every capability `module` requires is in `grants`.
+fn granted_by(grants: &Capabilities, module: &Validated) -> Result<(), PrepareError> {
+    let missing: Capabilities = module
+        .manifest
+        .requires
+        .iter()
+        .filter(|capability| !grants.contains(*capability))
+        .collect();
+    if missing.iter().next().is_none() {
+        return Ok(());
+    }
+    Err(PrepareError::NotGranted {
+        id: module.manifest.id.clone(),
+        missing,
+    })
+}
+
+/// A runtime's backends and grants, to prepare modules on many threads at
+/// once ([`Runtime::preparer`]); a candidate it makes is the one the
+/// runtime would make.
+#[derive(Clone)]
+pub struct Preparer {
+    backend: Arc<dyn Backend>,
+    ordered: Option<Arc<dyn Backend>>,
+    grants: Capabilities,
+}
+
+impl Preparer {
+    /// Prepares `module` as [`Runtime::prepare_module`] does.
+    pub fn prepare(&self, module: Validated, source: &str) -> Result<Candidate, PrepareError> {
+        granted_by(&self.grants, &module)?;
+        prepare_on(
+            self.backend.as_ref(),
+            self.ordered.as_deref(),
+            module,
+            source.to_owned(),
+        )
+    }
+}
+
 fn prepare_on(
     main: &dyn Backend,
     ordered: Option<&dyn Backend>,
@@ -674,19 +714,17 @@ impl Runtime {
     /// Whether every capability `module` requires is granted: checked first
     /// by preparation, and asked by callers before committing to a module.
     pub fn granted(&self, module: &Validated) -> Result<(), PrepareError> {
-        let missing: Capabilities = module
-            .manifest
-            .requires
-            .iter()
-            .filter(|capability| !self.grants.contains(*capability))
-            .collect();
-        if missing.iter().next().is_none() {
-            return Ok(());
+        granted_by(&self.grants, module)
+    }
+
+    /// What prepares modules as [`Runtime::prepare_module`] does, from any
+    /// thread: this runtime's backends and grants, as they are now.
+    pub fn preparer(&self) -> Preparer {
+        Preparer {
+            backend: Arc::clone(&self.backend),
+            ordered: self.ordered.clone(),
+            grants: self.grants.clone(),
         }
-        Err(PrepareError::NotGranted {
-            id: module.manifest.id.clone(),
-            missing,
-        })
     }
 
     /// What a version runs with: what it requires, of what is granted.

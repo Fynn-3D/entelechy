@@ -92,6 +92,15 @@ type Declared = (
     Vec<orla_language::FnDecl>,
 );
 
+/// What a sync read of one document: its stamp, what it said, and its
+/// Kernels, none when it was refused.
+struct Read {
+    path: PathBuf,
+    current: Option<Stamp>,
+    said: Vec<Event>,
+    defined: Option<Vec<Defined>>,
+}
+
 impl Scene {
     pub(crate) fn new(store: Arc<dyn Store>, root: &Path, library: Option<&Path>) -> Self {
         Self {
@@ -746,6 +755,7 @@ impl Scene {
                 .entry(path.as_os_str().to_owned())
                 .or_insert_with(|| store.stamp(path))
         };
+        let mut read: Vec<Read> = Vec::new();
         for path in wanted {
             let current = stamp_of(&path);
             // Read again when it changed, or any document it uses did.
@@ -758,37 +768,53 @@ impl Scene {
             }
             changed = true;
             self.depends.remove(&path);
+            let mut said = Vec::new();
             let text = match self.store.read_text(&path) {
                 Ok(text) => text,
                 Err(error) => {
-                    events.push(Event::Rejected {
+                    said.push(Event::Rejected {
                         path: path.clone(),
                         error: Diagnostic::new(error.to_string()),
                     });
-                    kernels.mark_read(path, current);
+                    read.push(Read {
+                        path,
+                        current,
+                        said,
+                        defined: None,
+                    });
                     continue;
                 }
             };
             let document = match orla_language::parse_document(&text) {
                 Ok(document) => document,
                 Err(error) => {
-                    events.push(Event::Rejected {
+                    said.push(Event::Rejected {
                         path: path.clone(),
                         error: Diagnostic::from(&error),
                     });
-                    kernels.mark_read(path, current);
+                    read.push(Read {
+                        path,
+                        current,
+                        said,
+                        defined: None,
+                    });
                     continue;
                 }
             };
             if !is_library(&document) {
-                events.push(Event::Rejected {
+                said.push(Event::Rejected {
                     path: path.clone(),
                     error: Diagnostic {
                         message: "a used document must hold kernels only".into(),
                         at: Some((1, 1)),
                     },
                 });
-                kernels.mark_read(path, current);
+                read.push(Read {
+                    path,
+                    current,
+                    said,
+                    defined: None,
+                });
                 continue;
             }
             let dir = path
@@ -816,21 +842,31 @@ impl Scene {
                     if let Err(error) =
                         functions_checked(&path, &document, (&structs, &types, &functions))
                     {
-                        events.push(Event::Rejected {
+                        said.push(Event::Rejected {
                             path: path.clone(),
                             error,
                         });
-                        kernels.mark_read(path, current);
+                        read.push(Read {
+                            path,
+                            current,
+                            said,
+                            defined: None,
+                        });
                         continue;
                     }
                     document.resolve((&structs, &types, &functions));
                 }
                 Err(error) => {
-                    events.push(Event::Rejected {
+                    said.push(Event::Rejected {
                         path: path.clone(),
                         error: Diagnostic::new(error),
                     });
-                    kernels.mark_read(path, current);
+                    read.push(Read {
+                        path,
+                        current,
+                        said,
+                        defined: None,
+                    });
                     continue;
                 }
             };
@@ -843,12 +879,39 @@ impl Scene {
                             .to_owned(),
                         kernel: kernel.clone(),
                     }),
-                    Err(message) => events.push(Event::Rejected {
+                    Err(message) => said.push(Event::Rejected {
                         path: path.clone(),
                         error: message,
                     }),
                 }
             }
+            read.push(Read {
+                path,
+                current,
+                said,
+                defined: Some(defined),
+            });
+        }
+        // Every new or changed Kernel compiled and prepared at once; then
+        // each document published in order, with what it said, as if
+        // each were read, compiled and prepared in turn.
+        let primed: Vec<(&Path, &[Defined])> = read
+            .iter()
+            .filter_map(|read| Some((read.path.as_path(), read.defined.as_deref()?)))
+            .collect();
+        kernels.prime(self.store.as_ref(), &primed, runtime);
+        for Read {
+            path,
+            current,
+            said,
+            defined,
+        } in read
+        {
+            events.extend(said);
+            let Some(defined) = defined else {
+                kernels.mark_read(path, current);
+                continue;
+            };
             let root = self.root.clone();
             let outcome = kernels.publish_document(
                 self.store.as_ref(),
@@ -861,6 +924,7 @@ impl Scene {
             );
             self.land(outcome, kernels, runtime, events);
         }
+        kernels.unprime();
         changed
     }
 
