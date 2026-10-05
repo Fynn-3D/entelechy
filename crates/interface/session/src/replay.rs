@@ -797,6 +797,18 @@ impl Resident {
     /// Plays `replay` on its scene's session, rounding apart in `split`
     /// when one is given ([`crate::apart`]).
     pub fn play(&mut self, replay: &Replay, split: Option<u32>) -> Result<Outcome, String> {
+        self.play_as(None, replay, split)
+    }
+
+    /// [`Resident::play`], remembering the run as `name`: played again
+    /// under that name, each frame takes from the same frame of this run
+    /// what nothing it reads has changed ([`Session::recall_as`]).
+    pub fn play_as(
+        &mut self,
+        name: Option<&str>,
+        replay: &Replay,
+        split: Option<u32>,
+    ) -> Result<Outcome, String> {
         let key = (replay.scene.clone(), replay.kernels.clone(), split);
         let events = match self.sessions.get_mut(&key) {
             Some(session) => session.start_over(),
@@ -818,7 +830,9 @@ impl Resident {
             }
         };
         let session = self.sessions.get_mut(&key).expect("kept above");
+        session.recall_as(name.map(str::to_owned));
         let played = played_on(replay, session, events, None);
+        session.recall_as(None);
         if played.is_err() {
             // A failed run leaves the session as no replay should find it.
             self.sessions.remove(&key);

@@ -310,6 +310,19 @@ impl Session {
         self.scene.params()
     }
 
+    /// Names the run the next evaluations are, from its first frame: each
+    /// frame takes from the same frame of the last run of that name what
+    /// nothing it reads has changed, and is remembered for the next
+    /// ([`orla_graph::Evaluator::recall_as`]). `None` remembers nothing.
+    pub fn recall_as(&mut self, name: Option<String>) {
+        self.evaluator.recall_as(name);
+    }
+
+    /// The bytes remembered runs hold.
+    pub fn recalled_bytes(&self) -> usize {
+        self.evaluator.recalled_bytes()
+    }
+
     /// Starts the world over as the scene opened it, the Kernels and the
     /// documents kept: every `async` run landed, every pin dropped, every
     /// port's committed state forgotten, every parameter back at its

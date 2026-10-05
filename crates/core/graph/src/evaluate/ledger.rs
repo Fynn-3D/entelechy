@@ -52,9 +52,12 @@ impl Evaluator {
     }
 
     /// Whether `handle` is state: committed, or replaced by an evaluation
-    /// that may put it back. State is never released.
+    /// that may put it back, or held by a remembered run. None of these is
+    /// released.
     pub(super) fn is_kept(&self, handle: Handle) -> bool {
-        self.ledger.is_committed(handle) || self.replaced.iter().any(|r| r.previous == Some(handle))
+        self.ledger.is_committed(handle)
+            || self.replaced.iter().any(|r| r.previous == Some(handle))
+            || self.recalled.holds(handle)
     }
 
     pub(super) fn drop_cache(&mut self, id: &NodeId, runtime: &mut Runtime) {
@@ -102,6 +105,7 @@ impl Evaluator {
         for key in stale_state {
             if let Some(handle) = self.ledger.commit_take(&key)
                 && !self.ledger.is_cached(handle)
+                && !self.recalled.holds(handle)
             {
                 release(runtime, handle);
             }

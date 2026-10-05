@@ -33,6 +33,7 @@ mod bind;
 mod error;
 mod ledger;
 mod plan;
+mod recall;
 mod state;
 
 pub use error::EvaluateError;
@@ -188,7 +189,7 @@ impl CacheKey {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Cached {
     key: CacheKey,
     outputs: Vec<Handle>,
@@ -295,6 +296,8 @@ pub struct Evaluator {
     /// Nodes running for their state alone whose Fields on a device were
     /// found changed; see [`Rest`].
     rest: BTreeMap<NodeId, Rest>,
+    /// Runs remembered frame by frame; see [`recall`].
+    recalled: recall::Recalled,
 }
 
 /// When a node that runs for its state alone has its Fields on a device
@@ -339,6 +342,7 @@ impl Evaluator {
     pub fn new() -> Self {
         Self {
             fusion: true,
+            recalled: recall::Recalled::new(),
             ..Self::default()
         }
     }
@@ -381,6 +385,8 @@ impl Evaluator {
 
     /// Releases every cached image and all committed state.
     pub fn clear(&mut self, runtime: &mut Runtime) {
+        // What only remembered runs hold goes first; the rest below.
+        self.forget_runs(runtime);
         let (cache, committed) = self.ledger.take_all();
         self.fused.clear();
         for (_, pending) in std::mem::take(&mut self.pending) {
@@ -667,6 +673,7 @@ impl Evaluator {
                 .map_err(|error| EvaluateError::Requirement(error.message))?;
         }
         let order = self.order_of(graph)?;
+        self.recall_for(graph, runtime);
         self.prune(graph, runtime);
         let landed = self.land(runtime)?;
         let needed = self.needed(graph, demand);
@@ -745,6 +752,19 @@ impl Evaluator {
                     reused.push(node.id.clone());
                     continue;
                 }
+                // What this frame of the remembered run left under the
+                // same key: its outputs, or the epoch to run again under.
+                let rerun = match (!node.is_async)
+                    .then(|| self.recall(&node.id, &key, runtime))
+                    .flatten()
+                {
+                    Some(recall::Offer::Taken) => {
+                        reused.push(node.id.clone());
+                        continue;
+                    }
+                    Some(recall::Offer::Rerun(epoch)) => Some(epoch),
+                    None => None,
+                };
                 let output_names: Vec<String> = group
                     .version
                     .manifest()
@@ -835,7 +855,12 @@ impl Evaluator {
                     uploaded: moved.uploaded,
                     downloaded: moved.downloaded,
                 });
-                self.store(&node.id, key, outputs, output_names, runtime);
+                match rerun {
+                    Some(epoch) => {
+                        self.store_as(&node.id, key, outputs, output_names, epoch, runtime);
+                    }
+                    None => self.store(&node.id, key, outputs, output_names, runtime),
+                }
                 executed.push(node.id.clone());
             }
             if matches!(demand, Demand::Read(_)) {
@@ -878,11 +903,13 @@ impl Evaluator {
                 .map(|(_, handle)| *handle)
                 .ok_or(EvaluateError::Graph(GraphError::NoOutput))?;
             self.wait_for_checks(checks, runtime)?;
-            // A trial commits nothing.
+            // A trial commits nothing, and is not remembered.
             let committed = if self.trial {
                 Vec::new()
             } else {
-                self.commit(graph, runtime)?
+                let committed = self.commit(graph, runtime)?;
+                self.remember_frame(executed.iter().chain(&reused), runtime);
+                committed
             };
             Ok(Some(Report {
                 output,
@@ -931,6 +958,32 @@ impl Evaluator {
         let on_device = by_state && self.rest.entry(id.clone()).or_default().due();
         if !by_state {
             self.rest.remove(id);
+        }
+        // Equal to what this frame of the remembered run left: those
+        // outputs, and their epoch, so what reads them finds its key.
+        if let Some((kept, epoch)) = self.recalled_alike(id, &output_names, &outputs, runtime) {
+            for output in &outputs {
+                if !kept.contains(output)
+                    && !self.ledger.is_cached(*output)
+                    && !self.is_kept(*output)
+                {
+                    release(runtime, *output);
+                }
+            }
+            let fresh = Cached {
+                key,
+                outputs: kept,
+                output_names,
+                epoch,
+            };
+            if let Some(previous) = self.ledger.cache_put(id.clone(), fresh) {
+                for output in previous.outputs {
+                    if !self.ledger.is_cached(output) && !self.is_kept(output) {
+                        release(runtime, output);
+                    }
+                }
+            }
+            return;
         }
         if let Some(previous) = self.ledger.entry(id)
             && previous.output_names == output_names

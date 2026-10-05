@@ -18,7 +18,7 @@ use cranelift_codegen::ir::{
 };
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
-use cranelift_jit::{JITBuilder, JITModule};
+use cranelift_jit::{ArenaMemoryProvider, JITBuilder, JITModule};
 use cranelift_module::{DataDescription, FuncId, Linkage, Module as _};
 use orla_abi::{Encoding, Scalar, Type, encoding};
 use orla_ir::{BinaryOp, Function, Instruction, Intrinsic, Module, Op, UnaryOp, Validated};
@@ -90,6 +90,10 @@ enum Kind {
     Merge,
 }
 
+/// The address space one module's machine code and data may take: reserved,
+/// not committed, so a module takes only the pages it fills.
+const MODULE_RESERVE: usize = 1 << 30;
+
 /// Compiles the module.
 pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, String> {
     // A port keeps every scalar in one encoding, the one generated for.
@@ -110,6 +114,12 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
     for (name, address) in crate::symbols() {
         builder.symbol(name, address);
     }
+    // A module's code and read-only data lie in one reserved region, so the
+    // page-relative address of a table from the code that reads it is in
+    // reach (±2 GiB), however far apart the process's other memory lies.
+    let arena = ArenaMemoryProvider::new_with_size(MODULE_RESERVE)
+        .map_err(|error| format!("reserving room for machine code: {error}"))?;
+    builder.memory_provider(Box::new(arena));
     let mut jit = JITModule::new(builder);
     let ptr = jit.target_config().pointer_type();
     let call_conv = jit.target_config().default_call_conv;

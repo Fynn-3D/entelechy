@@ -811,7 +811,7 @@ fn replay(args: &[String]) -> Result<(), String> {
             recorded("recorded", &target, &summary, sound_rate, started);
             ran
         } else if let Some(resident) = &mut resident {
-            resident.play(&replay, None)
+            resident.play_as(Some(&file.display().to_string()), &replay, None)
         } else {
             let runtime = Session::runtime_for(&backend, limits)?;
             orla::replay::run_fused(&replay, store, runtime, fusion)
@@ -946,7 +946,7 @@ fn watch_replays(
         let mut failed = 0;
         for &index in &again {
             let (file, replay, ..) = &played[index];
-            let ran = resident.play(replay, None);
+            let ran = resident.play_as(Some(&file.display().to_string()), replay, None);
             let touched = ran
                 .as_ref()
                 .map(|outcome| outcome.touched.clone())

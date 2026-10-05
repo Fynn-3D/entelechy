@@ -854,6 +854,32 @@ owner of names, and origins as data, leave nothing to take apart.
 `use` items, `declarations_within`, in
 [`sources.rs`](../crates/interface/session/src/sources.rs).
 
+## A replay played again computes only what changed
+
+A replay is played again as its documents change, and most of each of
+its frames reads nothing that changed. A run played under a name is
+remembered frame by frame: each node's cache entry, its key (the Kernel's
+generation, parameters, inputs by their producers' epochs, domain, clock
+and input) and its outputs. Played again, a node whose key is the one it
+had on that frame takes those outputs; a node that runs and computes
+outputs equal word for word to the remembered ones takes their epoch, so
+what reads it finds its key unchanged. Outputs too large to hold are
+remembered by key and epoch alone, and a node whose key matches runs
+again under that epoch. Runs are held to a budget and forgotten when the
+graph changes.
+
+**Why.** Kernels are deterministic and the key names everything a node's
+outputs depend on, so outputs under an equal key are the outputs; taking
+them is not an approximation and a replay played so passes or fails as a
+fresh one does. Remembering whole frames by trajectory, not by a hash of
+the world, keeps the rule the cache already keeps between one frame and
+the next.
+
+**Where.** [`recall.rs`](../crates/core/graph/src/evaluate/recall.rs)
+remembers and offers runs; [`Resident::play_as`](../crates/interface/session/src/replay.rs)
+names a replay's run; held by [the recall tests](../crates/interface/session/tests/recall.rs),
+which compare a run played again with a fresh session.
+
 ## The language grows only by the owner's word
 
 A form, a keyword, a builtin or a shorthand is added to `.orla` or `.osn`

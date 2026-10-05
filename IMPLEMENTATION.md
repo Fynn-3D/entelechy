@@ -145,6 +145,9 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   mismatch, else restarts the port ([an agent changing it](crates/interface/orla/tests/protocol.rs)).
 - `times = N` expands into `name/1..N` in [scene lowering](crates/frontend/scene/src/lib.rs).
 - `evaluate_for` runs only what the named nodes need.
+- A named run takes, frame by frame, what the same frame of its last run
+  computed under an equal key ([recall](crates/core/graph/src/evaluate/recall.rs),
+  [recall test](crates/interface/session/tests/recall.rs)).
 - `use` across files and cycles ([sources](crates/interface/session/src/sources.rs));
   the names each document sees, shadowing and duplicate names
   ([scope](crates/frontend/language/src/scope.rs), [session test](crates/interface/orla/tests/session.rs)).

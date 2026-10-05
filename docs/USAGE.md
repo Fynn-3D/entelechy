@@ -339,7 +339,10 @@ runs a Kernel published again or reads an input read again; the graph
 rebuilt otherwise, or the replay's own file changed), those that failed
 last first, each said as it ends. A Kernel is published again only when
 what it reaches changes, so a function no replay's checks reach plays
-none. `--round-apart` belongs to a run before a merge, not to `--watch`.
+none. Each replay played again takes, frame by frame, what the same frame
+of its last run computed from what has not changed since, so an edit
+computes only what it changes and what reads it. `--round-apart` belongs
+to a run before a merge, not to `--watch`.
 
 In the Player, a replay drives the scene at
 its own times, prints what it observed at the end, and leaves the window
