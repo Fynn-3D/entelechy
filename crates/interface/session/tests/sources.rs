@@ -871,3 +871,40 @@ fn names_a_used_library_uses_are_not_the_documents() {
     assert_eq!(value, 1013.0);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A name declared in a package the store finds by name is said with
+/// the package's name to use, not a path to it.
+#[test]
+fn a_name_in_a_package_found_by_name_is_said_with_the_packages_name() {
+    let dir = scratch("package-by-name", &[]);
+    std::fs::create_dir_all(dir.join("packages/deep.orlapkg/kernels")).unwrap();
+    for (file, text) in [
+        (
+            "packages/deep.orlapkg/package.osn",
+            "package deep@1 { language = 1; ir = 1; }\nuse \"kernels/\";\n",
+        ),
+        (
+            "packages/deep.orlapkg/kernels/deep.orla",
+            "fn deep() -> Float { return 2.0; }\n",
+        ),
+        (
+            "b.orla",
+            "use \"deep.orlapkg\";\nfn mid() -> Float { return deep(); }\n",
+        ),
+        (
+            "a.orla",
+            "use \"b.orla\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return deep(); } }\n",
+        ),
+        (
+            "scene.osn",
+            "use \"a.orla\";\nnode k: t.k@1 { domain = 1; }\noutput result <- k.result;\n",
+        ),
+    ] {
+        std::fs::write(dir.join(file), text).unwrap();
+    }
+    let store = orla_session::Disk::with_packages(vec![dir.join("packages")]);
+    let checked = orla_session::check_document(&store, &dir.join("scene.osn"), false);
+    let said = format!("{checked:?}");
+    assert!(said.contains("use \\\"deep.orlapkg\\\";"), "{said}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -843,6 +843,17 @@ pub(crate) fn is_library(document: &Document) -> bool {
         && document.params.is_empty()
 }
 
+/// Whether `package` is one the store finds by name: it lies in one of
+/// the store's packages directories.
+fn by_name(store: &dyn Store, package: &Path) -> bool {
+    let canonical = |path: &Path| store.canonical(path).unwrap_or_else(|_| path.to_path_buf());
+    let held = canonical(package);
+    store
+        .packages()
+        .iter()
+        .any(|dir| held.parent() == Some(canonical(dir).as_path()))
+}
+
 /// `error` extended with the `use` that would bring in its missing name,
 /// when a file declaring it is found. `known` are the caller's
 /// documents; `root` is their scene.
@@ -928,8 +939,15 @@ pub(crate) fn located(
             .ok()
             .and_then(|parsed| kind(&parsed))
             .unwrap_or("fn");
-        let target = package_holding(store, deeper).unwrap_or_else(|| deeper.clone());
-        let spelling = relative_to(store, &target, base);
+        let spelling = match package_holding(store, deeper) {
+            // A package the store finds by name is used by its name.
+            Some(package) if by_name(store, &package) => package
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| relative_to(store, &package, base)),
+            Some(package) => relative_to(store, &package, base),
+            None => relative_to(store, deeper, base),
+        };
         return crate::Diagnostic {
             message: format!(
                 "{}; {what} `{name}` is declared in {}, which this document reaches only through another's `use`: a document sees what it uses itself, `use \"{spelling}\";`",
