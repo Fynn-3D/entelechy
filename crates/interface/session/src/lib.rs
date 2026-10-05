@@ -161,7 +161,7 @@ pub enum Allowance {
     FileWrite(PathBuf),
 }
 
-pub use check::{Checked, check_document};
+pub use check::{Checked, LARGE, check_document, large, large_past};
 
 /// A runtime built for a session ([`Session::build`]).
 pub struct Built {

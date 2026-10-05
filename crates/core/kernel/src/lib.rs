@@ -365,9 +365,31 @@ fn prepare_on(
     };
     // Work accounting is one rule in the IR, shared by every backend.
     let run = orla_ir::account(&module).map_err(|e| PrepareError::Accounting(e.to_string()))?;
-    // A backend panic is reported as a rejection; the candidate is
-    // dropped unseen by the registry.
-    let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.prepare(&run)))
+    let prepared = prepared_on(backend, &run);
+    // The main backend found in preparing it that it cannot run it after
+    // all (its device's own compiler failed on a valid shader): it says so
+    // now, and the ordered backend runs it, as it runs what the main one
+    // declines beforehand.
+    let (prepared, routed) = match (prepared, ordered) {
+        (Err(error), Some(ordered)) if routed.is_none() => match main.declines(&run) {
+            Some(why) => (prepared_on(ordered, &run)?, Some(why)),
+            None => return Err(error),
+        },
+        (prepared, _) => (prepared?, routed),
+    };
+    Ok(Candidate {
+        module,
+        run,
+        source,
+        prepared,
+        routed,
+    })
+}
+
+/// `run` prepared on `backend`. A backend panic is reported as a
+/// rejection; the candidate is dropped unseen by the registry.
+fn prepared_on(backend: &dyn Backend, run: &Validated) -> Result<Box<dyn Prepared>, PrepareError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.prepare(run)))
         .map_err(|panic| {
             let said = panic
                 .downcast_ref::<&str>()
@@ -376,14 +398,7 @@ fn prepare_on(
                 .unwrap_or_else(|| "a panic".to_owned());
             PrepareError::Panicked(said)
         })?
-        .map_err(PrepareError::Backend)?;
-    Ok(Candidate {
-        module,
-        run,
-        source,
-        prepared,
-        routed,
-    })
+        .map_err(PrepareError::Backend)
 }
 
 /// `run` prepared on `backend`, or `None` where it declines or fails it: a

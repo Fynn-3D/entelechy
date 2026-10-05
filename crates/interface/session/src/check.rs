@@ -5,6 +5,47 @@ use std::path::Path;
 use crate::sources::{held, located, said, written_in};
 use crate::{Store, declarations_for, declarations_within, read_document, used_documents};
 
+/// The instructions past which a Kernel is said to be large: a device's
+/// compiler may take long over it, or fail on it.
+pub const LARGE: usize = 25_000;
+
+/// What makes a Kernel large, when it is ([`LARGE`]): its instructions, and
+/// its largest functions, each with the calls that reach it, as the
+/// largest are most often reached by a call not meant to bring them.
+pub fn large(module: &orla_ir::Validated) -> Option<String> {
+    large_past(module, LARGE)
+}
+
+/// [`large`], past `limit` instructions.
+pub fn large_past(module: &orla_ir::Validated, limit: usize) -> Option<String> {
+    let sizes = orla_ir::sizes(module);
+    let total = sizes.total();
+    if total <= limit {
+        return None;
+    }
+    let mut order: Vec<usize> = (0..sizes.functions.len()).collect();
+    order.sort_by_key(|&f| std::cmp::Reverse(sizes.functions[f]));
+    let name = |f: u32| module.functions[f as usize].name.clone();
+    let largest: Vec<String> = order
+        .into_iter()
+        .take(3)
+        .map(|f| {
+            let way: Vec<String> = sizes.way_to(f as u32).into_iter().map(name).collect();
+            let by = if way.len() <= 1 {
+                "called by the Kernel itself".to_owned()
+            } else {
+                format!("by {}", way.join(" → "))
+            };
+            format!("`{}` ({}, {by})", name(f as u32), sizes.functions[f])
+        })
+        .collect();
+    Some(format!(
+        "`{}` is {total} instructions, past the {limit} a device's compiler takes in comfort; its largest functions: {}",
+        module.manifest.id,
+        largest.join(", ")
+    ))
+}
+
 /// What checking a document found: the lines to report, in order.
 #[derive(Debug, Default)]
 pub struct Checked {
@@ -98,6 +139,9 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
     for (id, kernel) in kernels {
         match orla_compiler::compile_kernel(kernel, id.as_ref()) {
             Ok(module) => {
+                if let Some(large) = large(&module) {
+                    say!(note, "{file}: {large}");
+                }
                 say!(
                     note,
                     "{file}: {}\n{}",
@@ -263,6 +307,9 @@ fn check_used(
         match orla_compiler::compile_kernel(kernel, None) {
             Ok(module) => {
                 compiled += 1;
+                if let Some(large) = large(&module) {
+                    lines.push((false, format!("{}: {large}", path.display())));
+                }
                 if show_ir {
                     lines.push((
                         false,

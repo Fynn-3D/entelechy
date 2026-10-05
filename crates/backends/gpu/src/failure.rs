@@ -87,6 +87,72 @@ impl Check for FailureCheck {
 /// What the device said, in full. A validation error's `to_string` is
 /// "Validation Error"; its description holds what failed and against which
 /// limit.
+/// Why a pipeline was not built: the shader the backend emitted was
+/// refused (its own fault, said with the source), or the device's own
+/// compiler failed on a shader that was valid.
+#[derive(Debug)]
+pub(crate) enum Unbuilt {
+    Ours(String),
+    Device(String),
+}
+
+impl Unbuilt {
+    /// What it says, whoever's it is.
+    pub(crate) fn said(self) -> String {
+        match self {
+            Self::Ours(said) | Self::Device(said) => said,
+        }
+    }
+}
+
+impl From<String> for Unbuilt {
+    fn from(error: String) -> Self {
+        Self::Ours(error)
+    }
+}
+
+/// The device's errors caught while pipelines are built: a validation
+/// error is the backend's own; an internal or out-of-memory one, the
+/// device's, which would otherwise go uncaptured and panic.
+pub(crate) struct Scopes {
+    internal: wgpu::ErrorScopeGuard,
+    memory: wgpu::ErrorScopeGuard,
+    validation: wgpu::ErrorScopeGuard,
+}
+
+impl Scopes {
+    pub(crate) fn push(device: &wgpu::Device) -> Self {
+        let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+        let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        Self {
+            internal,
+            memory,
+            validation,
+        }
+    }
+
+    /// What was caught since [`Scopes::push`], the backend's own fault said
+    /// with the `source` it emitted.
+    pub(crate) fn pop(self, wait: Wait, source: &str) -> Result<(), Unbuilt> {
+        let ours = wait.block_on(self.validation.pop());
+        let short = wait.block_on(self.memory.pop());
+        let theirs = wait.block_on(self.internal.pop());
+        if let Some(error) = ours {
+            let said = device_error(&error);
+            return Err(Unbuilt::Ours(if source.is_empty() {
+                said
+            } else {
+                format!("{said}\n--- emitted WGSL ---\n{source}")
+            }));
+        }
+        match short.or(theirs) {
+            Some(error) => Err(Unbuilt::Device(device_error(&error))),
+            None => Ok(()),
+        }
+    }
+}
+
 pub(crate) fn device_error(error: &wgpu::Error) -> String {
     match error {
         wgpu::Error::Validation { description, .. } | wgpu::Error::Internal { description, .. } => {

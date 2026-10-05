@@ -116,7 +116,13 @@ A GPU session hands scans and every module the GPU does not take
 beyond the device's bindings are packed into one buffer
 ([packing](crates/backends/gpu/src/wgsl/mod.rs)). Where each node ran and
 why is `Runtime::placement` ([routed test](crates/interface/orla/tests/session.rs),
-[mixed](crates/interface/session/tests/mixed.rs)). A `Long` on the device
+[mixed](crates/interface/session/tests/mixed.rs)). A Kernel the device's own
+compiler fails on is declined from then on and runs on the JIT, said as
+any routing is ([GPU `declines`](crates/backends/gpu/src/lib.rs),
+`prepare_on` in [the runtime](crates/core/kernel/src/lib.rs),
+[unbuilt](crates/interface/session/tests/unbuilt.rs)); `orla check` says a
+Kernel is large ([size](crates/core/ir/src/size.rs),
+[large](crates/interface/session/tests/large.rs)). A `Long` on the device
 avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
 
 ### Fusion, repetition, native operations

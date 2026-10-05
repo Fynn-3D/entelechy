@@ -45,7 +45,7 @@ impl GpuBackend {
             highs: _,
             bound_inputs: _,
         } = staged;
-        let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let scopes = Scopes::push(&self.device);
         // The first time reads the input it was given and writes the
         // first of the two; every time after reads what the one before
         // wrote and writes the other.
@@ -132,9 +132,9 @@ impl GpuBackend {
         let last = if times % 2 == 1 { spare } else { output_buffer };
         self.queue.submit(Some(encoder.finish()));
         let _ = self.device.poll(wgpu::PollType::Poll);
-        if let Some(error) = self.wait.block_on(scope_guard.pop()) {
-            return Err(ExecutionError::Device(device_error(&error)));
-        }
+        scopes
+            .pop(self.wait, "")
+            .map_err(|error| ExecutionError::Device(error.said()))?;
         // What the last time wrote is what the run gives.
         adopt_outputs(
             scope,

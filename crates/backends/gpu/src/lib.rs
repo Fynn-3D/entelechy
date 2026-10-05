@@ -61,6 +61,10 @@ pub struct GpuBackend {
     adapter_name: String,
     /// Serializes executions, so readback is ordered.
     lock: Mutex<()>,
+    /// The modules this device's own compiler could not build, and what it
+    /// said: declined from then on ([`Backend::declines`]), for another
+    /// backend to run.
+    unbuilt: Mutex<Vec<(Validated, String)>>,
     /// The rasterizer's pipelines, built on first use.
     raster: OnceLock<Result<raster::RasterPipelines, String>>,
     /// The pass that compares two Fields, built on first use.
@@ -187,6 +191,7 @@ impl GpuBackend {
             spare: Spare::default(),
             targets: SpareTextures::default(),
             measured: std::sync::atomic::AtomicBool::new(false),
+            unbuilt: Mutex::new(Vec::new()),
             timestamps,
             int64,
             int64_atomics,
@@ -259,10 +264,21 @@ impl Backend for GpuBackend {
     }
 
     fn declines(&self, module: &Validated) -> Option<String> {
-        self.refusal(module).or_else(|| {
-            (module.manifest.mode == orla_ir::Mode::Scan)
-                .then(|| "a scan runs its steps in order, on one thread".to_owned())
-        })
+        self.refusal(module)
+            .or_else(|| {
+                (module.manifest.mode == orla_ir::Mode::Scan)
+                    .then(|| "a scan runs its steps in order, on one thread".to_owned())
+            })
+            .or_else(|| {
+                let unbuilt = self
+                    .unbuilt
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                unbuilt
+                    .iter()
+                    .find(|(seen, _)| seen == module)
+                    .map(|(_, why)| format!("the device's own compiler could not build it ({why})"))
+            })
     }
 
     fn uploaded(&self) -> u64 {
@@ -270,7 +286,33 @@ impl Backend for GpuBackend {
     }
 
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
-        self.prepare_kernel(module)
+        match self.prepare_kernel(module) {
+            Ok(prepared) => Ok(prepared),
+            Err(Unbuilt::Ours(error)) => Err(error),
+            // A valid shader the device's compiler failed on: declined from
+            // now on, so a runtime with another backend runs it there.
+            Err(Unbuilt::Device(error)) => {
+                // Its most particular line, the last, said shortly.
+                let last = error
+                    .lines()
+                    .rev()
+                    .find(|line| !line.trim().is_empty())
+                    .unwrap_or("")
+                    .trim();
+                let said: String = last.chars().take(160).collect();
+                let mut unbuilt = self
+                    .unbuilt
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if !unbuilt.iter().any(|(seen, _)| seen == module) {
+                    unbuilt.push((module.clone(), said));
+                }
+                Err(format!(
+                    "the device's own compiler could not build `{}`: {error}",
+                    module.manifest.id
+                ))
+            }
+        }
     }
 
     fn execute(
@@ -398,15 +440,15 @@ impl Backend for GpuBackend {
         if let Some((word, back)) = &failure {
             encoder.copy_buffer_to_buffer(word, 0, back, 0, wgsl::FAILURE_BYTES);
         }
-        let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let scopes = Scopes::push(&self.device);
         let timing = self.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
         let submission = self.queue.submit(Some(encoder.finish()));
         // One queue runs submissions in order, so only observation waits; under
         // `set_measured` this call waits, so its time is the work.
         self.settle_measured(submission, timing);
-        if let Some(error) = self.wait.block_on(scope_guard.pop()) {
-            return Err(ExecutionError::Device(device_error(&error)));
-        }
+        scopes
+            .pop(self.wait, "")
+            .map_err(|error| ExecutionError::Device(error.said()))?;
         let outputs = adopt_outputs(
             scope,
             module,

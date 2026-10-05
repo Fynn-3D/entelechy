@@ -221,14 +221,14 @@ impl GpuBackend {
     }
 
     /// Builds one compute pipeline from WGSL with the given bindings, or
-    /// returns the validation error with the source.
+    /// says why not ([`Unbuilt`]).
     pub(crate) fn pass(
         &self,
         label: &str,
         source: &str,
         entries: &[wgpu::BindGroupLayoutEntry],
-    ) -> Result<Pass, String> {
-        let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    ) -> Result<Pass, Unbuilt> {
+        let scopes = Scopes::push(&self.device);
         let shader = self
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -258,22 +258,18 @@ impl GpuBackend {
                 compilation_options: Default::default(),
                 cache: None,
             });
-        if let Some(error) = self.wait.block_on(scope_guard.pop()) {
-            return Err(format!(
-                "{}\n--- emitted WGSL ---\n{source}",
-                device_error(&error)
-            ));
-        }
+        scopes.pop(self.wait, source)?;
         Ok((pipeline, layout))
     }
 
     /// Compiles `module` into a pipeline, or says why it cannot run here.
-    pub(crate) fn prepare_kernel(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
+    pub(crate) fn prepare_kernel(&self, module: &Validated) -> Result<Box<dyn Prepared>, Unbuilt> {
         if let Some(reason) = self.refusal(module) {
-            return Err(format!(
+            return Err((format!(
                 "`{}`: {reason}; a session with an ordered backend runs it there",
                 module.manifest.id
-            ));
+            ))
+            .into());
         }
         // A port keeps every scalar one way, and only a map or a scan
         // writes an output narrow: the other modes fold into their
@@ -281,10 +277,10 @@ impl GpuBackend {
         let manifest = &module.manifest;
         for port in manifest.inputs.iter().chain(&manifest.outputs) {
             if port.ty.schema.uniform_encoding().is_none() && !port.ty.schema.is_wide() {
-                return Err(format!(
+                return Err((format!(
                     "`{}` keeps its scalars in more than one encoding ({}); a port keeps them one way",
                     port.name, port.ty.schema
-                ));
+                )).into());
             }
         }
         if !matches!(manifest.mode, orla_ir::Mode::Map | orla_ir::Mode::Scan)
@@ -293,26 +289,28 @@ impl GpuBackend {
                 .iter()
                 .any(|port| !port.ty.schema.is_wide())
         {
-            return Err(format!(
+            return Err((format!(
                 "`{}` is a {} and writes a narrow output; it folds at full width",
                 manifest.id,
                 manifest.mode.name()
-            ));
+            ))
+            .into());
         }
         // A Kernel's ports are buffers the device binds at once, checked here
         // so a Kernel too wide for this device gets this error instead of the
         // driver's validation; a session asks `declines` first and runs it
         // elsewhere.
         if let Some(why) = self.refusal(module) {
-            return Err(format!(
+            return Err((format!(
                 "`{}`: {why}; the interpreter and the JIT have no such limit",
                 module.manifest.id
-            ));
+            ))
+            .into());
         }
         let written = wgsl::written_outputs(module);
         let packed = self.packing(module);
         let source = wgsl::emit_packed(module, &packed);
-        let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let scopes = Scopes::push(&self.device);
         let shader = self
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -371,14 +369,9 @@ impl GpuBackend {
                 compilation_options: Default::default(),
                 cache: None,
             });
-        if let Some(error) = self.wait.block_on(scope_guard.pop()) {
-            return Err(format!(
-                "{}\n--- emitted WGSL ---\n{source}",
-                device_error(&error)
-            ));
-        }
+        scopes.pop(self.wait, &source)?;
         let reduce = if module.manifest.mode == orla_ir::Mode::Reduce {
-            let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let scopes = Scopes::push(&self.device);
             let reduce_source = wgsl::emit_reduce_packed(module, &packed);
             let shader = self
                 .device
@@ -431,12 +424,7 @@ impl GpuBackend {
                     compilation_options: Default::default(),
                     cache: None,
                 });
-            if let Some(error) = self.wait.block_on(scope_guard.pop()) {
-                return Err(format!(
-                    "{}\n--- emitted WGSL ---\n{reduce_source}",
-                    device_error(&error)
-                ));
-            }
+            scopes.pop(self.wait, &reduce_source)?;
             Some((pipeline, layout))
         } else {
             None
@@ -540,7 +528,7 @@ impl GpuBackend {
                         .collect::<Vec<_>>(),
                     )?,
                     totals: wgsl::sums_whole(module)
-                        .then(|| -> Result<Totals, String> {
+                        .then(|| -> Result<Totals, Unbuilt> {
                             Ok(Totals {
                                 from_base: self.pass(
                                     "scatter highs from the base",
@@ -579,7 +567,7 @@ impl GpuBackend {
                         })
                         .transpose()?,
                     keys: keys
-                        .then(|| -> Result<Keys, String> {
+                        .then(|| -> Result<Keys, Unbuilt> {
                             let entries = [
                                 uniform_entry(wgsl::CONTEXT_BINDING),
                                 storage_entry(wgsl::SCATTER_PAIRS_BINDING, true),

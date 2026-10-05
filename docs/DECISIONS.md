@@ -887,6 +887,34 @@ which compare a run played again with a fresh session, and by each
 backend's run of the conformance matrix twice
 ([`unrepeated`](../crates/backends/conformance/src/lib.rs)).
 
+## A Kernel a device cannot build runs where it can
+
+A device's own compiler can fail on a shader that is valid: a large one,
+for no fault in it that the backend can name (a crash in its register
+allocator, as one was found). That is not a fault of the document, so it
+does not refuse the document: the backend learns, in preparing it, that
+it cannot run that Kernel, declines it from then on as it declines what
+it cannot run beforehand, and the runtime prepares it on the ordered
+backend, said once as any Kernel off the main backend is. A shader the
+backend emitted that the device refuses as invalid is the backend's own
+fault and still refuses the document, so no fault of Orla's is hidden by
+running elsewhere. The device's errors are caught whatever their kind,
+never left to panic.
+
+**Why.** Placement is a backend's to decide and the document's to read
+about, never to fail on; the JIT computes what the reference does, so a
+Kernel moved there answers the same. A large game is made of large
+Kernels, and one compiler's limits must not stop it.
+
+**Where.** [`Scopes`](../crates/backends/gpu/src/failure.rs) catch the
+device's errors, sorted into the backend's own and the device's; the GPU's
+[`declines`](../crates/backends/gpu/src/lib.rs) answers for what its
+device could not build; the runtime's `prepare_on` routes it
+([kernel](../crates/core/kernel/src/lib.rs)); held by
+[the unbuilt test](../crates/interface/session/tests/unbuilt.rs).
+`orla check` says when a Kernel is large and what makes it so
+([size](../crates/core/ir/src/size.rs)).
+
 ## The language grows only by the owner's word
 
 A form, a keyword, a builtin or a shorthand is added to `.orla` or `.osn`
