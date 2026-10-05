@@ -3,6 +3,7 @@
 // the voxel package. A voxel is 5 cm; the skin's units are meters.
 use "../../../packages/voxel.orlapkg";
 use "../../../packages/skin.orlapkg";
+use "../../../packages/transform.orlapkg";
 
 fn grain() -> Float { return 0.05; }
 

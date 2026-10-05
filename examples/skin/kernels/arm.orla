@@ -1,6 +1,7 @@
 // What the skin package leaves to the scene: where to stand, what to
 // blend, and how to light it. The posing itself is the package.
 use "../../../packages/skin.orlapkg";
+use "../../../packages/transform.orlapkg";
 
 struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }
 struct Tri { a: Int; b: Int; c: Int; }

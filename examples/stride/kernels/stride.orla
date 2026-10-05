@@ -2,6 +2,7 @@
 // the body starts and how it carries its travel, and the camera that
 // follows it over a striped floor. The posing is the `skin` package.
 use "../../../packages/skin.orlapkg";
+use "../../../packages/transform.orlapkg";
 
 struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }
 struct Tri { a: Int; b: Int; c: Int; }

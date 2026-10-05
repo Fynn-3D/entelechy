@@ -3,7 +3,8 @@
 //!
 //! Functions, structs and types are scoped by document: a name reaches
 //! what its own document declares, or else the one declaration of that
-//! name in the documents it uses (an identical struct or type declared by
+//! name in the documents its own `use` items name, not what those use in
+//! turn (an identical struct or type declared by
 //! several is one). The using document's own declarations are its own; a
 //! declaration it sees by a name keeps the name, and any other of that
 //! name is renamed `name@source`, each gathered declaration naming what
@@ -193,13 +194,10 @@ impl Reach {
     }
 }
 
-/// The sources `from` reaches through `use`, recursively.
-fn closure(from: &[usize], sources: &[Source<'_>], out: &mut BTreeSet<usize>) {
-    for &file in from {
-        if out.insert(file) {
-            closure(&sources[file].uses, sources, out);
-        }
-    }
+/// The sources `from` names: what a document sees is what it uses, not
+/// what those use in turn.
+fn closure(from: &[usize], out: &mut BTreeSet<usize>) {
+    out.extend(from.iter().copied());
 }
 
 /// The gathered structs and types, each under one name in the using
@@ -262,9 +260,17 @@ fn scoped_types(
         }
         (structs, types)
     };
-    // Nothing declared twice and nothing the using document declares:
-    // every name is plain, as written.
-    if !reach.declared.iter().any(|(d, _)| clashing(d.name())) {
+    let mut top = BTreeSet::new();
+    closure(direct, &mut top);
+    // Nothing declared twice, nothing the using document declares, and
+    // everything declared by a document it uses: every name is plain, as
+    // written.
+    let seen = |files: &Vec<usize>| files.iter().any(|file| top.contains(file));
+    if !reach
+        .declared
+        .iter()
+        .any(|(d, files)| clashing(d.name()) || !seen(files))
+    {
         return Ok(split(
             reach
                 .declared
@@ -274,11 +280,9 @@ fn scoped_types(
                 .collect(),
         ));
     }
-    let mut top = BTreeSet::new();
-    closure(direct, sources, &mut top);
     let reached_from = |file: usize| {
         let mut reached = BTreeSet::new();
-        closure(&sources[file].uses, sources, &mut reached);
+        closure(&sources[file].uses, &mut reached);
         reached
     };
     let declared = &reach.declared;
@@ -308,9 +312,6 @@ fn scoped_types(
     let mut refused: Option<String> = None;
     let mut reaches: HashMap<usize, BTreeSet<usize>> = HashMap::new();
     let mut view = |file: usize, name: &str, refused: &mut Option<String>| -> Option<String> {
-        if !clashing(name) {
-            return None;
-        }
         let target = match (0..declared.len())
             .find(|&i| declared[i].0.name() == name && declared[i].1.contains(&file))
         {
@@ -368,7 +369,7 @@ fn scoped_types(
 
 /// The gathered functions, each under one name in the using document's
 /// reach. Each document sees its own functions and those of every
-/// document it reaches through `use`; a name two of those declare is
+/// document it uses itself; a name two of those declare is
 /// the document's own, or else ambiguous. The using document's view
 /// keeps plain names: each function it sees by name keeps that name,
 /// every other is renamed `name@source`, and each body's calls follow
@@ -397,10 +398,13 @@ fn scoped(
             || own.iter().any(|f| f.name.value == name)
             || hides(name)
     };
+    // What the using document sees: what it uses.
+    let mut top = BTreeSet::new();
+    closure(direct, &mut top);
     if !reach
         .functions
         .iter()
-        .any(|(decl, _)| clashing(&decl.name.value))
+        .any(|(decl, file)| clashing(&decl.name.value) || !top.contains(file))
     {
         return Ok(reach
             .functions
@@ -408,9 +412,6 @@ fn scoped(
             .map(|(decl, _)| decl.clone())
             .collect());
     }
-    // Each document's reach: what it uses, recursively.
-    let mut top = BTreeSet::new();
-    closure(direct, sources, &mut top);
     // The document a name reaches from `reached`: one declaring it.
     let resolve = |name: &str, reached: &BTreeSet<usize>| -> Option<usize> {
         let files: Vec<usize> = declaring
@@ -439,7 +440,7 @@ fn scoped(
         let file = *file;
         let reached = reaches.entry(file).or_insert_with(|| {
             let mut reached = BTreeSet::new();
-            closure(&sources[file].uses, sources, &mut reached);
+            closure(&sources[file].uses, &mut reached);
             reached
         });
         let reached = &*reached;

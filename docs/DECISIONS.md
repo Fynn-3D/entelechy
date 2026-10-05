@@ -803,13 +803,38 @@ costs a few characters a public name.
 in [`scope.rs`](../crates/frontend/language/src/scope.rs); the recipe's
 check of every package in one scene in [PROCESS](../PROCESS.md).
 
+## A document sees what it uses itself
+
+A document's names are its own declarations and those of the documents
+its `use` items name: each file of a directory, each file a package's
+manifest uses. What those documents use in turn is theirs: their
+functions call it, and a document that wants it names it in a `use` of
+its own. A name it reaches only through another's `use` is refused,
+said with the `use` that would bring it.
+
+**Why.** Seen through another document, a name is a dependency no line
+of the document states, and a coupling it did not choose: a game's
+widgets using a package brought every name of the package into each
+document that used the widgets, and ten of the game's own names clashed
+with the package's though none of those documents used it. Names are
+then what Kernels already were: a scene publishes the Kernels of the
+documents it uses itself. No form is added: a `use` is how a document
+says what it depends on, and now the only way.
+
+**Where.** `closure` and the views in
+[`scope.rs`](../crates/frontend/language/src/scope.rs); the hint in
+`located` in [`sources.rs`](../crates/interface/session/src/sources.rs);
+`a_document_sees_what_it_uses_itself` and
+`names_a_used_library_uses_are_not_the_documents` in
+[`sources` tests](../crates/interface/session/tests/sources.rs).
+
 ## Sources belong to the loader; names belong to the language
 
 The loader finds documents: it resolves a `use` to files and packages,
 refuses cycles and two packages of one name, and hands the language the
 documents it reached and which uses which. The language decides every
 name: a Kernel sees its own declarations, then its document's, then what
-its document's `use` items bring in, one declaration a name (alike ones
+the documents its `use` items name declare, one declaration a name (alike ones
 are one), and the builtins, which a function of a builtin's name hides
 in its own document only. A declaration a Kernel inherits carries where
 it was written and the name it was written with, so a fault is placed

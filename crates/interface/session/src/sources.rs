@@ -892,21 +892,59 @@ pub(crate) fn located(
             None
         }
     };
-    let declaring: Vec<&PathBuf> = used
-        .iter()
-        .filter(|path| {
-            store
-                .document(path)
-                .is_ok_and(|parsed| kind(&parsed).is_some())
+    // What it names in its own `use` items: the names it sees are theirs.
+    let base = document.parent().unwrap_or_else(|| Path::new("."));
+    let direct: Vec<PathBuf> = store
+        .document(document)
+        .ok()
+        .map(|parsed| {
+            parsed
+                .uses
+                .iter()
+                .flat_map(|item| {
+                    expand_use(
+                        store,
+                        &base.join(&item.path.value),
+                        item.path.value.ends_with('/'),
+                    )
+                    .unwrap_or_default()
+                })
+                .collect()
         })
-        .collect();
+        .unwrap_or_default();
+    let declares = |path: &&PathBuf| {
+        store
+            .document(path)
+            .is_ok_and(|parsed| kind(&parsed).is_some())
+    };
+    let declaring: Vec<&PathBuf> = direct.iter().filter(declares).collect();
+    // Declared only further down: reached through another document's
+    // `use`, which brings its names to that document alone.
+    if declaring.is_empty()
+        && let Some(deeper) = used.iter().find(declares)
+    {
+        let what = store
+            .document(deeper)
+            .ok()
+            .and_then(|parsed| kind(&parsed))
+            .unwrap_or("fn");
+        let target = package_holding(store, deeper).unwrap_or_else(|| deeper.clone());
+        let spelling = relative_to(store, &target, base);
+        return crate::Diagnostic {
+            message: format!(
+                "{}; {what} `{name}` is declared in {}, which this document reaches only through another's `use`: a document sees what it uses itself, `use \"{spelling}\";`",
+                error.message,
+                relative_to(store, deeper, base)
+            ),
+            at: error.at,
+        };
+    }
     let what = declaring
         .first()
         .and_then(|path| store.document(path).ok())
         .and_then(|parsed| kind(&parsed))
         .unwrap_or("fn");
     if declaring.len() > 1 {
-        let base = document.parent().unwrap_or_else(|| Path::new("."));
         let names: Vec<String> = declaring
             .iter()
             .map(|path| relative_to(store, path, base))

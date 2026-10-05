@@ -2,6 +2,7 @@
 // brighter than white) that keeps in w how far away what each pixel
 // shows is.
 use "tonemap.orla";
+use "colour.orla";
 use "filter.orla";
 use "noise.orlapkg";
 

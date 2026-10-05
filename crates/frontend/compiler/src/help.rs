@@ -523,7 +523,7 @@ pub fn forms() -> Vec<Form> {
             "use",
             "document",
             "use \"kernels/\";   use \"name.orlapkg\";",
-            "The documents whose Kernels and declarations this one brings in: a file, a directory, or a package.",
+            "The documents whose Kernels and declarations this one brings in: a file, a directory, or a package; what those use in turn is theirs.",
         ),
         form(
             "package",

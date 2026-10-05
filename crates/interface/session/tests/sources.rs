@@ -783,3 +783,91 @@ fn a_fault_says_names_as_they_were_written() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A document sees what it uses itself: a name declared only by a
+/// document another one uses is not its, and is said with the `use`
+/// that brings it; the document that does use it still calls it.
+#[test]
+fn a_document_sees_what_it_uses_itself() {
+    let dir = scratch(
+        "sees-what-it-uses",
+        &[
+            (
+                "c.orla",
+                "struct Deep { v: Float; }\nfn deep() -> Deep { return Deep { v: 2.0 }; }\n",
+            ),
+            (
+                "b.orla",
+                "use \"c.orla\";\nfn mid() -> Float { return deep().v + 1.0; }\n",
+            ),
+            (
+                "a.orla",
+                "use \"b.orla\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return deep().v; } }\n",
+            ),
+            (
+                "scene.osn",
+                "use \"a.orla\";\nnode k: t.k@1 { domain = 1; }\noutput result <- k.result;\n",
+            ),
+        ],
+    );
+    let checked = orla_session::check_document(
+        &orla_session::Disk::default(),
+        &dir.join("scene.osn"),
+        false,
+    );
+    let said = format!("{checked:?}");
+    assert!(
+        said.contains(
+            "`deep` is declared in c.orla, which this document reaches only through another's `use`"
+        ) && said.contains("use \\\"c.orla\\\";"),
+        "{said}"
+    );
+    // Through a function of the document it uses, it is reached.
+    std::fs::write(
+        dir.join("a.orla"),
+        "use \"b.orla\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return mid(); } }\n",
+    )
+    .unwrap();
+    let checked = orla_session::check_document(
+        &orla_session::Disk::default(),
+        &dir.join("scene.osn"),
+        false,
+    );
+    assert_eq!(checked.problems(), 0, "{checked:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A library declares a name a document it uses declares too, as a
+/// game's widgets beside a package's: a scene using the library sees the
+/// library's alone, so nothing clashes; the library's own functions call
+/// what they see.
+#[test]
+fn names_a_used_library_uses_are_not_the_documents() {
+    let dir = scratch(
+        "not-the-documents",
+        &[
+            (
+                "package.orla",
+                "fn shade() -> Float { return 1.0; }\nfn lit() -> Float { return shade() + 2.0; }\n",
+            ),
+            (
+                "widgets.orla",
+                "use \"package.orla\";\nfn shade() -> Float { return 10.0; }\nfn both() -> Float { return shade() + lit(); }\n",
+            ),
+            (
+                "scene.osn",
+                "use \"widgets.orla\";\nnode k: kernel { requires { field.write; } output result: Rows<Float>; domain = 1; compute { return shade() * 100.0 + both(); } }\noutput result <- k.result;\n",
+            ),
+        ],
+    );
+    let mut session = orla_session::Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    let events = session.sync();
+    assert!(session.graph().is_some(), "{events:?}");
+    session.evaluate(&orla_kernel::Context::default()).unwrap();
+    let handle = session.output(Some("result")).unwrap();
+    let value = f32::from_bits(session.field(handle).unwrap().values()[0]);
+    // The scene's shade is the widgets' (10); both() is its 10 and the
+    // package's lit(), the package's shade (1) and 2.
+    assert_eq!(value, 1013.0);
+    let _ = std::fs::remove_dir_all(&dir);
+}

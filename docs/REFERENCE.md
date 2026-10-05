@@ -184,7 +184,7 @@ Kernels (`.orla`) compute; scenes (`.osn`) compose them into a running world. Wh
 - **times**: `times = 5;   carry port <- output;` A node written once and placed N times, each wired as written, `carry` feeding a port from the previous time's output; at N = 0, a carried output is what its port is first bound to.
 - **async**: `async = true;` The node runs off the frame: the evaluation starts it on a thread and goes on, its readers taking the last output until the run lands.
 - **require**: `require cells: columns * rows <= 1 << bits;` What the scene's parameters must hold to run: two counts over its params, numbers, `window()` and `scale()`, compared. It is checked as the scene loads (`check` and `compose` refuse one the given params break) and before every evaluation, which stops before anything runs; each says what the sides came to. A placed graph's come with it, under its node's name.
-- **use**: `use "kernels/";   use "name.orlapkg";` The documents whose Kernels and declarations this one brings in: a file, a directory, or a package.
+- **use**: `use "kernels/";   use "name.orlapkg";` The documents whose Kernels and declarations this one brings in: a file, a directory, or a package; what those use in turn is theirs.
 - **package**: `package name@1 { language = 1; ir = 1; }` The manifest of a package directory: what it is called and the least language and IR it needs.
 - **vec2**: `vec2(w, h)` A grid's extent.
 - **vec3**: `vec3(w, h, d)` A volume's extent.

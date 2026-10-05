@@ -20,6 +20,7 @@ type Games = Rows<Game>;
 type Stickers = Rows<Int>;
 struct Hit { t: Float; n: Vec3; p: Vec3; }
 use "moves.orla";
+use "../../../packages/text.orlapkg";
 
 // The sticker at cubelet centre c (each coordinate -1, 0 or 1) under
 // the face whose normal is n: 9 per face, rows by the second free axis.

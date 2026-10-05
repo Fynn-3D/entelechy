@@ -371,15 +371,19 @@ Work is bounded in loop iterations ([decision](DECISIONS.md)):
 
 A struct, `type` or `fn` at the top of a document is shared by every
 Kernel in it and in every document that `use`s it. A `.orla` file may
-`use` other `.orla` files or directories: their top-level declarations,
-and what they use, come before the file's own. A scene's `use` brings
-them to its inline Kernels. A function, a struct and a `type` are
+`use` other `.orla` files or directories: their top-level declarations
+come before the file's own. A scene's `use` brings them to its inline
+Kernels. A document sees what it uses itself: the declarations of the
+documents its `use` items name (each file of a directory, each file a
+package's manifest uses), not what those use in turn, whose functions
+their own code still calls. A function, a struct and a `type` are
 scoped by their document: a name reaches the Kernel's own declaration
 of it, then the document's own, or else the one declaration of it in
-the documents it reaches through `use`, so two libraries may each keep
-a helper or a struct of one name, and an application or a Kernel may
-name its own as a package it uses does, the package's code still
-reaching the package's. The same struct or `type` declared alike in two documents is one.
+the documents it uses, so two libraries may each keep a helper or a
+struct of one name, and an application or a Kernel may name its own as
+a package it uses does, the package's code still reaching the
+package's. A name a document reaches only through another's `use` is
+said with the `use` that would bring it. The same struct or `type` declared alike in two documents is one.
 A function may take a math builtin's name and stands for it in its own
 document only: a document that uses it keeps the builtin.
 A name two used documents answer differently is refused where it is
