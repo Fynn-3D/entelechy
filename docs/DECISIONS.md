@@ -925,7 +925,34 @@ device could not build; the runtime's `prepare_on` routes it
 ([kernel](../crates/core/kernel/src/lib.rs)); held by
 [the unbuilt test](../crates/interface/session/tests/unbuilt.rs).
 `orla check` says when a Kernel is large and what makes it so
-([size](../crates/core/ir/src/size.rs)).
+([size](../crates/core/ir/src/size.rs)); see *A Kernel is large by what
+it carries*.
+
+## A Kernel is large by what it carries
+
+`orla check` judges a Kernel's cost to a device's compiler by the words
+it carries through its branches: every struct value an `if`, a `match`
+or a `loop` yields, its words, each function counted as often as it is
+called, as such a compiler writes every call out. Past 5 000 it says the
+Kernel is large, naming the structs and the functions that carry most.
+Its instructions are not the measure. A scene that publishes Kernels no
+node uses is told which, as each is compiled and prepared all the same.
+
+**Why.** Measured on Metal over every Kernel of the examples and a large
+game: the Kernels its compiler took seconds over carried 7 000 to
+31 000 words, and every other carried under 4 200; the instruction count
+put a dozen fast Kernels among them. A compiler keeps a merged value's
+words live together, and takes longer past in proportion to how wide
+they are: a 220-word struct through forty branches took twelve times as
+long as a 40-word one, and a struct kept apart, changed apart, half as
+long as the same words nested in one. What makes a Kernel slow to build
+is what a game is most tempted to write, one row of all its state
+updated everywhere; the note names that, so a narrower struct, or state
+in several rows, is the author's to choose.
+
+**Where.** [`carried`](../crates/core/ir/src/size.rs); `large` and the
+unused note in [check](../crates/interface/session/src/check.rs); held by
+[the large test](../crates/interface/session/tests/large.rs).
 
 ## A device builds a Kernel when it is needed
 

@@ -5,28 +5,48 @@ use std::path::Path;
 use crate::sources::{held, located, said, written_in};
 use crate::{Store, declarations_for, declarations_within, read_document, used_documents};
 
-/// The instructions past which a Kernel is said to be large: a device's
-/// compiler may take long over it, or fail on it.
-pub const LARGE: usize = 25_000;
+/// The words a Kernel may carry through its branches before it is said
+/// to be large ([`orla_ir::carried`]): a device's compiler takes long over
+/// more (seconds, past in proportion), or fails on it.
+pub const LARGE: u64 = 5_000;
 
-/// What makes a Kernel large, when it is ([`LARGE`]): its instructions, and
-/// its largest functions, each with the calls that reach it, as the
-/// largest are most often reached by a call not meant to bring them.
+/// What makes a Kernel large, when it is ([`LARGE`]): the words it carries
+/// through its branches, the structs they are, and the functions that
+/// carry most, each with the calls that reach it.
 pub fn large(module: &orla_ir::Validated) -> Option<String> {
     large_past(module, LARGE)
 }
 
-/// [`large`], past `limit` instructions.
-pub fn large_past(module: &orla_ir::Validated, limit: usize) -> Option<String> {
-    let sizes = orla_ir::sizes(module);
-    let total = sizes.total();
-    if total <= limit {
+/// [`large`], past `limit` words.
+pub fn large_past(module: &orla_ir::Validated, limit: u64) -> Option<String> {
+    let carried = orla_ir::carried(module);
+    if carried.total <= limit {
         return None;
     }
-    let mut order: Vec<usize> = (0..sizes.functions.len()).collect();
-    order.sort_by_key(|&f| std::cmp::Reverse(sizes.functions[f]));
+    let mut by_struct: Vec<usize> = (0..carried.structs.len())
+        .filter(|&s| carried.structs[s] > 0)
+        .collect();
+    let words = |s: usize| orla_ir::words(&module.structs, orla_ir::Type::Struct(s as u32)) as u64;
+    by_struct.sort_by_key(|&s| std::cmp::Reverse(carried.structs[s] * words(s)));
+    let structs: Vec<String> = by_struct
+        .into_iter()
+        .take(3)
+        .map(|s| {
+            format!(
+                "`{}` ({} words) {} times",
+                module.structs[s].name,
+                words(s),
+                carried.structs[s]
+            )
+        })
+        .collect();
+    let sizes = orla_ir::sizes(module);
     let name = |f: u32| module.functions[f as usize].name.clone();
-    let largest: Vec<String> = order
+    let mut by_function: Vec<usize> = (0..carried.functions.len())
+        .filter(|&f| carried.functions[f] > 0)
+        .collect();
+    by_function.sort_by_key(|&f| std::cmp::Reverse(carried.functions[f]));
+    let mut most: Vec<(u64, String)> = by_function
         .into_iter()
         .take(3)
         .map(|f| {
@@ -36,13 +56,26 @@ pub fn large_past(module: &orla_ir::Validated, limit: usize) -> Option<String> {
             } else {
                 format!("by {}", way.join(" → "))
             };
-            format!("`{}` ({}, {by})", name(f as u32), sizes.functions[f])
+            (
+                carried.functions[f],
+                format!("`{}` ({}, {by})", name(f as u32), carried.functions[f]),
+            )
         })
         .collect();
+    if carried.roots > 0 {
+        most.push((
+            carried.roots,
+            format!("the Kernel's own body ({})", carried.roots),
+        ));
+    }
+    most.sort_by_key(|(words, _)| std::cmp::Reverse(*words));
+    let most: Vec<String> = most.into_iter().take(3).map(|(_, said)| said).collect();
     Some(format!(
-        "`{}` is {total} instructions, past the {limit} a device's compiler takes in comfort; its largest functions: {}",
+        "`{}` carries {} words through its branches, past the {limit} a device's compiler takes in comfort: {}; most in {}. A narrower struct, or state kept in several rows, carries fewer",
         module.manifest.id,
-        largest.join(", ")
+        carried.total,
+        structs.join(", "),
+        most.join(", ")
     ))
 }
 
@@ -180,6 +213,9 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
             .iter()
             .any(|file| store.canonical(file).unwrap_or_else(|_| file.clone()) == path)
     };
+    // The Kernels the scene's own documents publish, by document, for
+    // those no node uses.
+    let mut published_ids: Vec<(std::path::PathBuf, Vec<orla_ir::KernelId>)> = Vec::new();
     // The used documents, each with its own declarations.
     match used_documents(store, base, &document.uses) {
         Ok(used) => {
@@ -189,8 +225,12 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                 check_used(store, used_path, root, publishes(used_path), show_ir)
             });
             let mut compiled = 0;
-            for (lines, count) in found {
-                compiled += count;
+            for (used_path, (lines, ids)) in used.iter().zip(found) {
+                compiled += ids.len();
+                // A package's Kernels are its verbs, used or not.
+                if crate::sources::package_holding(store, used_path).is_none() {
+                    published_ids.push((used_path.clone(), ids));
+                }
                 for (problem, line) in lines {
                     if problem {
                         say!(problem, "{line}");
@@ -238,6 +278,36 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
             ),
         }
     }
+    // A Kernel the scene publishes and no node uses is compiled and
+    // prepared with it all the same.
+    if !document.nodes.is_empty() {
+        let bound: std::collections::BTreeSet<&orla_ir::KernelId> = lowered
+            .graph
+            .nodes
+            .iter()
+            .map(|node| &node.kernel)
+            .collect();
+        let own_ids: Vec<orla_ir::KernelId> = document
+            .kernels
+            .iter()
+            .filter_map(|kernel| crate::sources::named_id(kernel).ok())
+            .collect();
+        for (at, ids) in std::iter::once((path.to_path_buf(), own_ids)).chain(published_ids) {
+            let idle: Vec<String> = ids
+                .iter()
+                .filter(|id| !bound.contains(id))
+                .map(|id| format!("`{id}`"))
+                .collect();
+            if !idle.is_empty() {
+                say!(
+                    note,
+                    "{}: publishes {}, which no node of the scene uses: compiled and prepared with it all the same",
+                    at.display(),
+                    idle.join(", ")
+                );
+            }
+        }
+    }
     if !document.nodes.is_empty() {
         match lowered.graph.order() {
             Ok(order) => say!(
@@ -256,8 +326,8 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
     checked
 }
 
-/// What checking one document a scene uses found, in order, and how many
-/// of its Kernels compiled: its declarations, and its Kernels when the
+/// What checking one document a scene uses found, in order, and the
+/// Kernels that compiled: its declarations, and its Kernels when the
 /// scene publishes them (`published`).
 fn check_used(
     store: &dyn Store,
@@ -265,9 +335,9 @@ fn check_used(
     root: &Path,
     published: bool,
     show_ir: bool,
-) -> (Vec<(bool, String)>, usize) {
+) -> (Vec<(bool, String)>, Vec<orla_ir::KernelId>) {
     let mut lines = Vec::new();
-    let mut compiled = 0;
+    let mut compiled = Vec::new();
     let text = match store.read_text(path) {
         Ok(text) => text,
         Err(error) => {
@@ -306,7 +376,7 @@ fn check_used(
     for kernel in kernels {
         match orla_compiler::compile_kernel(kernel, None) {
             Ok(module) => {
-                compiled += 1;
+                compiled.push(module.manifest.id.clone());
                 if let Some(large) = large(&module) {
                     lines.push((false, format!("{}: {large}", path.display())));
                 }

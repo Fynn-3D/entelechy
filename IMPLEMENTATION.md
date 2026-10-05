@@ -129,8 +129,9 @@ version it replaces ran there, anything else at its first run
 document is read and compiled off the frames where replacements prepare
 there ([compile ahead](crates/interface/session/tests/compile_ahead.rs));
 `orla check` says a
-Kernel is large ([size](crates/core/ir/src/size.rs),
-[large](crates/interface/session/tests/large.rs)). A `Long` on the device
+Kernel is large by the words it carries through its branches
+([`carried`](crates/core/ir/src/size.rs)), and which published Kernels
+no node uses ([large](crates/interface/session/tests/large.rs)). A `Long` on the device
 avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
 
 ### Fusion, repetition, native operations

@@ -10,7 +10,7 @@
 mod account;
 mod display;
 pub use display::{NamedManifest, port_type_name, type_name};
-pub use size::{Sizes, sizes};
+pub use size::{Carried, Sizes, carried, sizes};
 mod fuse;
 mod optimize;
 mod size;

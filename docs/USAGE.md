@@ -57,10 +57,13 @@ orla check --ir examples/grayscale/kernels/grayscale.orla
 Compiles `.orla` or `.osn` files and prints their manifests, or
 diagnostics at `file:line:column`. `--ir` prints the validated IR as a
 backend runs it, with where work is counted (`work spend`) and looked at
-(`work look`). A Kernel past 25 000 instructions, which a device's
-compiler may take long over or fail on, is said to be large, with its
-largest functions and the calls that reach each: most often a call that
-was not meant to bring them.
+(`work look`). A Kernel that carries more than 5 000 words through its
+branches (the struct values an `if`, a `match` or a `loop` yields, each
+function as often as it is called), which a device's compiler takes
+seconds over or fails on, is said to be large, with the structs it
+carries and the functions that carry most, each with the calls that
+reach it. A scene that publishes Kernels no node uses is told which: each
+is compiled and prepared with it all the same.
 
 ## Run a scene
 
