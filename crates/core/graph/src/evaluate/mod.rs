@@ -808,24 +808,26 @@ impl Evaluator {
                     }
                     None => runtime.execute(&group.version, &invocation),
                 };
-                // A run the Host has no room for runs again once the outputs
-                // this frame has done with are let go; they are made again
-                // when a later frame asks.
+                // A run the Host has no room for runs again once remembered
+                // runs and the outputs this frame has done with are let go;
+                // they are made again when a later frame asks.
                 let outputs = match run(runtime) {
                     Err(error)
                         if short_of_room(&error)
-                            && self.make_room(
-                                Room {
-                                    at,
-                                    running: &node.id,
-                                    runs_at: &runs_at,
-                                    last_read: &last_read,
-                                    readers: &readers,
-                                    held: &held,
-                                },
-                                executed.iter(),
-                                runtime,
-                            ) > 0 =>
+                            && self.forget_runs_for_room(runtime)
+                                + self.make_room(
+                                    Room {
+                                        at,
+                                        running: &node.id,
+                                        runs_at: &runs_at,
+                                        last_read: &last_read,
+                                        readers: &readers,
+                                        held: &held,
+                                    },
+                                    executed.iter(),
+                                    runtime,
+                                )
+                                > 0 =>
                     {
                         run(runtime)
                     }

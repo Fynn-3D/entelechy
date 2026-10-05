@@ -13,7 +13,9 @@
 //!
 //! What a run remembers holds its Fields until the frame is remembered
 //! again or the runs are forgotten, up to a budget of bytes; frames past
-//! the budget are not remembered. A node's outputs larger than
+//! the budget are not remembered, and a frame short of room in the Host
+//! forgets every run before it lets go of its own outputs. A node's
+//! outputs larger than
 //! [`RECALL_HOLD`] are remembered by their key and epoch alone: a Kernel
 //! is deterministic, so a node whose key is the one it had there computes
 //! what it computed there, and runs again under the epoch it had, its
@@ -143,6 +145,15 @@ impl Evaluator {
             }
         }
         self.recalled.graph = None;
+    }
+
+    /// Forgets every remembered run to make room in the Host: what a run
+    /// remembers gives way to what a frame computes. Answers how many
+    /// Fields only remembered runs held.
+    pub(super) fn forget_runs_for_room(&mut self, runtime: &mut Runtime) -> usize {
+        let held = self.recalled.held.len();
+        self.forget_runs(runtime);
+        held
     }
 
     /// Forgets every remembered run when `graph` is not the one they were
