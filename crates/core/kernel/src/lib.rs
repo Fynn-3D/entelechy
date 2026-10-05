@@ -160,11 +160,20 @@ impl KernelVersion {
         }
     }
 
-    /// Whether a run of this version went to the main backend.
-    pub(crate) fn ran_main(&self) -> bool {
+    /// Where runs of this version went: the main backend, and the ordered
+    /// one for runs the size sent there.
+    pub(crate) fn ahead(&self) -> Ahead {
         match &self.body {
-            Body::Kernel { ran_main, .. } => ran_main.load(std::sync::atomic::Ordering::Relaxed),
-            Body::Native(_) => false,
+            Body::Kernel {
+                ran_main,
+                on_ordered,
+                routed: None,
+                ..
+            } => Ahead {
+                main: ran_main.load(std::sync::atomic::Ordering::Relaxed),
+                ordered: on_ordered.get().is_some_and(Option::is_some),
+            },
+            _ => Ahead::default(),
         }
     }
 
@@ -221,6 +230,9 @@ pub struct Candidate {
     prepared: Box<dyn Prepared>,
     /// Why the main backend left it to the ordered one, if it did.
     routed: Option<String>,
+    /// What it was prepared with on the ordered backend before it was
+    /// ready, for runs the size sends there; `None` when it was not.
+    ordered_ahead: Option<Option<Box<dyn Prepared>>>,
 }
 
 impl fmt::Debug for Candidate {
@@ -258,7 +270,13 @@ impl Candidate {
                 run: Box::new(self.run),
                 prepared: self.prepared,
                 routed: self.routed,
-                on_ordered: std::sync::OnceLock::new(),
+                on_ordered: {
+                    let on = std::sync::OnceLock::new();
+                    if let Some(ahead) = self.ordered_ahead {
+                        let _ = on.set(ahead);
+                    }
+                    on
+                },
                 left: std::sync::OnceLock::new(),
                 ran_main: std::sync::atomic::AtomicBool::new(false),
             },
@@ -439,7 +457,7 @@ impl Preparer {
     }
 
     /// Prepares `module` to replace `running` as [`Runtime::prepare_later`]
-    /// does: finished on the main backend where `running` ran there.
+    /// does: made ready where `running` ran.
     pub fn prepare_replacing(
         &self,
         module: Validated,
@@ -452,7 +470,7 @@ impl Preparer {
             self.ordered.as_deref(),
             module,
             source.to_owned(),
-            running.ran_main(),
+            running.ahead(),
         )
     }
 
@@ -499,28 +517,44 @@ fn prepare_on(
         source,
         prepared,
         routed,
+        ordered_ahead: None,
     })
 }
 
-/// `module` prepared as [`prepare_on`] does and, with `finish`, finished on
-/// the main backend ([`Backend::finish`]); prepared again where the main
-/// backend could not build it after all, for the ordered backend to run.
+/// Where a running version ran, so its replacement is made ready there
+/// before it takes its place: finished on the main backend
+/// ([`Backend::finish`]), prepared on the ordered one for runs the size
+/// sends there.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Ahead {
+    main: bool,
+    ordered: bool,
+}
+
+/// `module` prepared as [`prepare_on`] does, made ready where `ahead`
+/// says; prepared again where the main backend could not build it after
+/// all, for the ordered backend to run.
 pub(crate) fn prepare_finished(
     main: &dyn Backend,
     ordered: Option<&dyn Backend>,
     module: Validated,
     source: String,
-    finish: bool,
+    ahead: Ahead,
 ) -> Result<Candidate, PrepareError> {
-    let candidate = prepare_on(main, ordered, module, source)?;
-    if !finish || candidate.routed.is_some() {
+    let mut candidate = prepare_on(main, ordered, module, source)?;
+    if candidate.routed.is_some() {
         return Ok(candidate);
     }
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        main.finish(candidate.prepared.as_ref())
-    }));
-    if ordered.is_some() && main.declines(&candidate.run).is_some() {
-        return prepare_on(main, ordered, candidate.module, candidate.source);
+    if ahead.main {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            main.finish(candidate.prepared.as_ref())
+        }));
+        if ordered.is_some() && main.declines(&candidate.run).is_some() {
+            return prepare_on(main, ordered, candidate.module, candidate.source);
+        }
+    }
+    if let Some(ordered) = ordered.filter(|_| ahead.ordered) {
+        candidate.ordered_ahead = Some(prepared_quietly(ordered, &candidate.run));
     }
     Ok(candidate)
 }
@@ -676,27 +710,29 @@ impl Runtime {
     }
 
     /// Hands a validated module to the worker, or prepares it now when
-    /// there is none. `source` is kept for inspection. A replacement for a
-    /// version that ran on the main backend is finished there
-    /// ([`Backend::finish`]) before it is ready, so the runs after it
-    /// takes that version's place do not wait for it.
+    /// there is none. `source` is kept for inspection. A replacement is
+    /// made ready where the version it replaces ran: finished on the main
+    /// backend ([`Backend::finish`]), prepared on the ordered one for runs
+    /// the size sends there; so the runs after it takes that version's
+    /// place do not wait for it.
     pub fn prepare_later(&mut self, module: Validated, source: String) -> Ticket {
         let ticket = self.preparer.ticket();
         if let Err(refused) = self.granted(&module) {
             self.preparer.finish(ticket, Err(refused));
             return ticket;
         }
-        let finish = self
+        let ahead = self
             .kernels
             .get(&module.manifest.id)
-            .is_some_and(|running| running.ran_main());
-        if let Some((module, source)) = self.preparer.send(ticket, module, source, finish) {
+            .map(|running| running.ahead())
+            .unwrap_or_default();
+        if let Some((module, source)) = self.preparer.send(ticket, module, source, ahead) {
             let result = prepare_finished(
                 self.backend.as_ref(),
                 self.ordered.as_deref(),
                 module,
                 source,
-                finish,
+                ahead,
             );
             self.preparer.finish(ticket, result);
         }

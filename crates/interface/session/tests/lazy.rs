@@ -19,6 +19,9 @@ struct Device {
     /// Every build, by Kernel id, in order.
     builds: Mutex<Vec<String>>,
     unbuilt: Mutex<Vec<Validated>>,
+    /// Whether it says it has a device, so a run's size may send it to
+    /// the ordered backend.
+    sized: bool,
 }
 
 /// What the device prepared: the interpreter's state, built once.
@@ -64,6 +67,9 @@ impl Device {
 impl Backend for &'static Device {
     fn name(&self) -> &'static str {
         "device"
+    }
+    fn has_device(&self) -> bool {
+        self.sized
     }
     fn declines(&self, module: &Validated) -> Option<String> {
         self.unbuilt
@@ -302,4 +308,70 @@ output other <- b.result;
         2.0
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The interpreter as the ordered backend, counting what it prepares.
+#[derive(Default)]
+struct Ordered(std::sync::atomic::AtomicUsize);
+
+impl Backend for &'static Ordered {
+    fn name(&self) -> &'static str {
+        "ordered"
+    }
+    fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        orla_cpu::CpuBackend.prepare(module)
+    }
+    fn execute(
+        &self,
+        prepared: &dyn Prepared,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+    ) -> Result<Vec<Handle>, ExecutionError> {
+        Backend::execute(&orla_cpu::CpuBackend, prepared, module, invocation, scope)
+    }
+}
+
+#[test]
+fn a_replacement_is_prepared_on_the_ordered_backend_where_its_version_ran_there() {
+    let ordered: &'static Ordered = Box::leak(Box::default());
+    let prepared = || ordered.0.load(std::sync::atomic::Ordering::Relaxed);
+    let device: &'static Device = Box::leak(Box::new(Device {
+        sized: true,
+        ..Device::default()
+    }));
+    let mut runtime = Runtime::with_backends(1 << 20, Box::new(device), Some(Box::new(ordered)));
+    runtime.set_background(true);
+    let k = source("few", "1.0");
+    let candidate = runtime
+        .prepare_module(orla_compiler::compile(&k).unwrap(), &k)
+        .unwrap();
+    let running = runtime.publish(candidate, Expect::Any).unwrap();
+    // One element: the size sends the run to the ordered backend, which
+    // prepares it then.
+    let invocation = Invocation {
+        inputs: vec![],
+        params: Vec::<Value>::new(),
+        domain: Domain::Rows(1),
+        context: Context::default(),
+    };
+    let outputs = runtime.execute(&running, &invocation).unwrap();
+    runtime.host_mut().release(outputs[0]).unwrap();
+    assert_eq!(prepared(), 1);
+
+    let k = source("few", "2.0");
+    let ticket = runtime.prepare_later(orla_compiler::compile(&k).unwrap(), k);
+    let candidate = loop {
+        if let Some(result) = runtime.poll(ticket) {
+            break result.unwrap();
+        }
+        std::thread::yield_now();
+    };
+    assert_eq!(prepared(), 2, "prepared there before it is ready");
+    let replaced = runtime.publish(candidate, Expect::Any).unwrap();
+    let outputs = runtime.execute(&replaced, &invocation).unwrap();
+    let words = runtime.host().data(outputs[0]).unwrap().values().to_vec();
+    assert_eq!(f32::from_bits(words[0]), 2.0);
+    assert_eq!(prepared(), 2, "its first run there prepares nothing");
 }
