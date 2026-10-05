@@ -3221,3 +3221,26 @@ fn a_change_is_answered_once_it_stands_and_nothing_waits_for_it() {
     assert!(!answers.waiting());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// An evaluation asked to `measure` waits for the device at every node and
+/// says so; the next is not measured.
+#[test]
+fn an_evaluation_measures_its_nodes_when_asked_and_only_then() {
+    let dir = scratch_in("-measure");
+    let scene = dir.join("scene.osn");
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "evaluate", "time": 0.0, "measure": true }),
+            json!({ "id": 2, "op": "evaluate", "time": 0.1 }),
+            json!({ "id": 3, "op": "quit" }),
+        ],
+    );
+    let measured = &responses[0]["ok"];
+    assert_eq!(measured["measured"], true, "{measured}");
+    assert!(
+        !measured["timings"].as_array().unwrap().is_empty(),
+        "{measured}"
+    );
+    assert_eq!(responses[1]["ok"]["measured"], false, "{}", responses[1]);
+}

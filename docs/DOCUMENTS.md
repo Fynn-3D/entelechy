@@ -418,7 +418,9 @@ changes:
   one or two floats (the rate is reported, not stored; resample with
   `at_linear`); `.mid` as rows of `{start, duration, pitch, velocity,
   channel}`, ticks and tempo read as seconds; `.field`, any Field, the
-  Host's format. `run --save` and the protocol's `read` write all of them.
+  Host's format. A path through a package's name
+  (`"text.orlapkg/font.png"`) reads the file inside that package, as a
+  `use` of it does. `run --save` and the protocol's `read` write all of them.
 - `input skills: Rows<Skill> = "data/skills.csv";`: a data table, `.csv`
   or `.json`, read as rows of the element the Kernel reading the input
   lays out, and read again when that layout changes. Each number is named
@@ -679,6 +681,12 @@ be keywords.
    reads changed; one that gives what it gave last, word for word, is
    unchanged to what reads it, so a cheap node that settles spares a
    costly one after it, and state at a fixed point does not advance.
+   Words are compared where they are: in Host memory always; held on a
+   device only when the node ran for nothing but the state it reads, as
+   comparing there waits for the device. A node run for a changed input
+   whose outputs stay on a device is changed to what reads it, whatever
+   it gave; to spare what reads it, keep what it reads unchanged instead,
+   a small row (Host memory) that holds still while nothing is done.
 
    State spread over several nodes advances in one order. A node a port
    reads `<~` holds state; another that reads it `<-` sees its new

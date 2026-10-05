@@ -150,7 +150,8 @@ fn a_package_is_what_its_layout_says() {
                     Some("Each count doubled.")
                 );
             }
-            // A file of the package is read where reads are held.
+            // A file of the package is read where reads are held, by its
+            // path or through the package's name.
             "assets" => {
                 assert!(
                     events.iter().any(|e| matches!(
@@ -158,6 +159,16 @@ fn a_package_is_what_its_layout_says() {
                         orla_session::Event::Loaded { name, .. } if name == "picture"
                     )),
                     "the picture in the package is read: {events:?}"
+                );
+                let mut named = served(&dir, "tally.orlapkg", "tally.orlapkg/dot.ppm");
+                let events = named.sync();
+                assert!(
+                    events.iter().any(|e| matches!(
+                        e,
+                        orla_session::Event::Loaded { name, path, .. }
+                            if name == "picture" && path.ends_with("packages/tally.orlapkg/dot.ppm")
+                    )),
+                    "the picture read through the package's name: {events:?}"
                 );
             }
             // Found by its name, and reached by it.

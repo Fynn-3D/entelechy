@@ -436,8 +436,13 @@ pub fn operations() -> Vec<Operation> {
                     Ty::Bool,
                     "first wait for every `async` run to land",
                 ),
+                may(
+                    "measure",
+                    Ty::Bool,
+                    "wait for the device after each node, so `timings` are the work and not its submission",
+                ),
             ]),
-            "executed, reused, committed, outputs",
+            "executed, reused, committed, outputs, timings, measured",
         ),
         op(
             "read",

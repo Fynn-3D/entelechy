@@ -83,7 +83,7 @@ through:
 | `publish` | `source`: string, `expect`?: "absent" \| "any" \| integer | id, generation; and when it computes a `<~` port's initial source, `keeps` (those `node.port`s, which keep what they committed) and `reset` (the requests that start them from the new law) |
 | `retire` | `kernel`?: string | retired |
 | `param` | `name`: string, `value`: value | name, value, events; a node's own value is refused, and changes by `compose` |
-| `evaluate` | `nodes`?: [string], `settle`?: bool, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `pads`?: integer, `keys`?: [integer], `window`?: [w, h], `scale`?: number | executed, reused, committed, outputs |
+| `evaluate` | `nodes`?: [string], `settle`?: bool, `measure`?: bool, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `pads`?: integer, `keys`?: [integer], `window`?: [w, h], `scale`?: number | executed, reused, committed, outputs, timings, measured |
 | `read` | `output`?: string, `node`?: string, `port`?: string, `format`?: "png" \| "rgba32f" \| "ppm" \| "summary" \| "words" \| "field", `from`?: integer, `count`?: integer | a picture: width, height, format, data (base64). Any other Field: shape, extent, count, schema, `fields` (each number's name in an element of several, `hp`, `pos.x`), and its summary (each number's min, max, sum, mean, how many were not zero, and how many were not finite), or `values` from `from` (a number, or a list for an element of several), or format and data (base64) |
 | `write` | `node`: string, `port`?: string, `data`: string, `format`?: "words" \| "field" | the state replaced |
 | `snapshot` | `to`?: string | the world's revision and frame (the frames committed since it), every Kernel with its generation and source, every port's committed state; or the file written |
@@ -248,7 +248,12 @@ evaluations, each at its own `time`.
 
 An evaluation's report carries:
 
-- `timings`, `{node, millis}` for every node that executed, in order;
+- `timings`, `{node, millis}` for every node that executed, in order:
+  on a device, the time to submit its work, as the device runs it after;
+  with `measure: true` (then `measured: true`), each node waits for the
+  device, and its time is the work's, by the device's own clock where it
+  keeps one; measuring stalls the frame at every node, so it is for
+  finding where time goes;
 - `placements`, `{node, backend, routed, uploaded, downloaded}`: the
   backend that ran it, why not the main one (a scan on a GPU session, a
   `Double`), and the bytes brought to and from a device;

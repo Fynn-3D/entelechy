@@ -61,6 +61,9 @@ pub struct Measured {
     pub best: f64,
     /// Milliseconds a frame in the median run.
     pub median: f64,
+    /// Milliseconds the first frame took, which the runs leave out: the
+    /// work done once, compiling, building, filling what is kept.
+    pub first: f64,
     /// Each node's milliseconds a frame, when asked for, averaged over
     /// all frames.
     pub nodes: Vec<NodeTime>,
@@ -130,10 +133,14 @@ pub fn measure(
         time: base.time + frame as f32 / rate,
         ..base
     };
-    // The warm-up frame compiles and allocates, unmeasured.
+    // The first frame compiles and allocates, left out of the runs and
+    // said apart.
+    let warm_started = Instant::now();
     let warm = session
         .evaluate(&context(0))
         .map_err(|e| format!("{backend}: {e}"))?;
+    session.runtime().settle_device();
+    let first = warm_started.elapsed().as_secs_f64() * 1000.0;
     let mut refused: Vec<String> = warm.refused.iter().map(ToString::to_string).collect();
     let mut runs: Vec<f64> = Vec::new();
     let mut frame = 1;
@@ -168,6 +175,7 @@ pub fn measure(
         backend: backend.to_owned(),
         best: runs[0],
         median: runs[runs.len() / 2],
+        first,
         nodes: run.nodes,
         ran,
         device_clock: run.device_clock,
@@ -341,6 +349,12 @@ pub fn table(options: &Options, measured: &[Measured], before: Option<&[Measured
         ));
     }
     for entry in measured {
+        out.push_str(&format!(
+            "{}: the first frame took {:.1} ms, left out above: what is done once, compiling and filling what is kept\n",
+            entry.backend, entry.first
+        ));
+    }
+    for entry in measured {
         for refused in &entry.refused {
             out.push_str(&format!("\n{}: {refused}\n", entry.backend));
         }
@@ -449,10 +463,11 @@ pub fn json(options: &Options, measured: &[Measured]) -> String {
                 })
                 .collect();
             format!(
-                "    {{\"backend\": {:?}, \"best_ms\": {:.4}, \"median_ms\": {:.4}, \"nodes\": [\n{}\n    ]}}",
+                "    {{\"backend\": {:?}, \"best_ms\": {:.4}, \"median_ms\": {:.4}, \"first_ms\": {:.4}, \"nodes\": [\n{}\n    ]}}",
                 entry.backend,
                 entry.best,
                 entry.median,
+                entry.first,
                 nodes.join(",\n")
             )
         })
@@ -493,6 +508,7 @@ pub fn read(path: &Path) -> Result<Vec<Measured>, String> {
             backend: backend.to_owned(),
             best: number("best_ms")?,
             median: number("median_ms")?,
+            first: number("first_ms").unwrap_or(0.0),
             nodes: Vec::new(),
             ran: true,
             device_clock: false,

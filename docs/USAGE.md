@@ -222,13 +222,15 @@ orla bench examples/collapse/scene.osn \
 Steps the scene `--frames` frames `--repeat` times on each backend and
 prints the least run, in milliseconds a frame, with the median beside it
 and the ratio to the first backend. The first frame of all compiles and
-allocates and is discarded; every frame waits for the device; the clock
+allocates: it is left out of the runs and said apart, with what it took;
+every frame waits for the device; the clock
 advances by frame count over `--rate`. `--nodes` measures each node too,
 waiting after each, so a node placed several times is one line
 (`steps/*.spread/* (48)`) and the lines add up to more than the frame.
 `--json <file>` writes the measurement; `--compare <file>` reads one back
-and prints the earlier number and the change. The protocol has the same
-measurement ([PROTOCOL](PROTOCOL.md)).
+and prints the earlier number and the change. Over the protocol,
+`evaluate` with `measure: true` measures each node of one frame the same
+way ([PROTOCOL](PROTOCOL.md)).
 
 ## Backends
 

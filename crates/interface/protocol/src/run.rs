@@ -14,6 +14,9 @@ pub(crate) fn evaluate(session: &mut Session, request: &Request) -> Result<Json,
     if request.get("settle").and_then(Json::as_bool) == Some(true) {
         session.settle().map_err(|e| evaluation_error(&e, None))?;
     }
+    // Measured, each node waits for the device, this evaluation alone.
+    let measured = request.get("measure").and_then(Json::as_bool) == Some(true);
+    session.set_measured(measured);
     let report = match request.get("nodes").and_then(Json::as_array) {
         Some(nodes) => {
             let demand = nodes
@@ -25,6 +28,9 @@ pub(crate) fn evaluate(session: &mut Session, request: &Request) -> Result<Json,
         }
         None => session.evaluate(&context),
     };
+    if measured {
+        session.set_measured(false);
+    }
     let report = report.map_err(|e| {
         let mut json = evaluation_error(&e, None);
         // Where in the Kernel an element failed, traced again.
@@ -33,7 +39,9 @@ pub(crate) fn evaluate(session: &mut Session, request: &Request) -> Result<Json,
         }
         json
     })?;
-    Ok(report_json(session, &report))
+    let mut answer = report_json(session, &report);
+    answer["measured"] = json!(measured);
+    Ok(answer)
 }
 
 /// Forgets all committed state, or one port's with `node` (and `port`,

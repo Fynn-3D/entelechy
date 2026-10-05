@@ -289,6 +289,8 @@ impl Inputs {
             bytes,
         } in wanted
         {
+            // Through a package's name, the file inside it.
+            let path = crate::sources::file_at(store, &path);
             let current = store.stamp(&path);
             let table = orla_formats::table::is_table(&orla_formats::extension(&path))
                 .then(|| tables.get(&name).cloned())

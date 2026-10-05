@@ -221,13 +221,19 @@ pub(crate) fn package_holding(store: &dyn Store, path: &Path) -> Option<PathBuf>
 /// A document's text: the file at `path`, else, for a path through a
 /// package's name, the file inside that package.
 pub fn read_document(store: &dyn Store, path: &Path) -> Result<String, String> {
-    match store.read_text(path) {
-        Ok(text) => Ok(text),
-        Err(missing) => match in_package(store, path) {
-            Some(inside) => store.read_text(&inside).map_err(|error| error.to_string()),
-            None => Err(missing.to_string()),
-        },
+    store
+        .read_text(&file_at(store, path))
+        .map_err(|error| error.to_string())
+}
+
+/// Where a file named by `path` is: there, else, for a path through a
+/// package's name (`text.orlapkg/font.png`), inside that package; a
+/// document's and an input's file alike.
+pub(crate) fn file_at(store: &dyn Store, path: &Path) -> PathBuf {
+    if store.exists(path) {
+        return path.to_path_buf();
     }
+    in_package(store, path).unwrap_or_else(|| path.to_path_buf())
 }
 
 /// Resolves a path through a package name

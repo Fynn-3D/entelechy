@@ -40,7 +40,7 @@ pub const LAYOUT: [Part; 6] = [
     Part {
         name: "assets",
         shape: "name.orlapkg/font.png",
-        doc: "Any other file in the directory, which a scene's `input` reads; a package's files are readable wherever reads are held.",
+        doc: "Any other file in the directory, which a scene's `input` reads by its path or through the package's name (`name.orlapkg/font.png`), as a document is; a package's files are readable wherever reads are held.",
     },
     Part {
         name: "by name",
