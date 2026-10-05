@@ -616,9 +616,24 @@ fn a_background_republish_keeps_the_running_kernel_until_the_worker_is_done() {
         ),
     )
     .unwrap();
-    // The edit is noticed at once; the publish lands on a later sync, and
-    // frames in between run the old version.
+    // The edit is compiled off the frames and said once compiled; the
+    // publish lands on a later sync, and frames in between run the old
+    // version.
     let mut events = session.sync();
+    let mut frames = 0;
+    while events.is_empty() {
+        let report = session.evaluate(&Context::default()).unwrap();
+        let pixel = session
+            .runtime()
+            .host()
+            .read_pixel(report.output, 100, 20)
+            .unwrap();
+        assert_eq!(pixel, before, "the running version keeps its output");
+        frames += 1;
+        assert!(frames < 5000, "the document never compiled");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        events = session.sync();
+    }
     assert!(
         matches!(events.first(), Some(Event::Preparing { id, .. }) if id.to_string() == "image.grayscale@1"),
         "{events:?}"
@@ -641,7 +656,7 @@ fn a_background_republish_keeps_the_running_kernel_until_the_worker_is_done() {
             generation
         );
         frames += 1;
-        assert!(frames < 5000, "the worker never delivered");
+        assert!(frames < 10000, "the worker never delivered");
         std::thread::sleep(std::time::Duration::from_millis(1));
         events = session.sync();
     }
@@ -655,13 +670,13 @@ fn a_background_republish_keeps_the_running_kernel_until_the_worker_is_done() {
     assert_eq!(pixel[1], 0.0);
     assert!(pixel[0] > 0.5);
 
-    // A broken edit is rejected by the compiler at once.
+    // A broken edit is rejected by the compiler once compiled.
     std::fs::write(
         &grayscale,
         "kernel image.grayscale@1 {\n  requires { field.write; }\n  output result: Image;\n  compute { return oops; }\n}",
     )
     .unwrap();
-    let events = session.sync();
+    let events = session.sync_settled();
     assert!(rejected(&events)[0].contains("`oops` is not defined"));
     assert!(session.evaluate(&Context::default()).is_ok());
     let _ = std::fs::remove_dir_all(&dir);

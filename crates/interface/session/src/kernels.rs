@@ -288,6 +288,11 @@ impl Kernels {
             .is_some_and(|state| state.stamp == stamp)
     }
 
+    /// Whether `path` was read before.
+    pub(crate) fn has_read(&self, path: &Path) -> bool {
+        self.documents.contains_key(path)
+    }
+
     /// Records `path` as read at `stamp` without publishing, so an
     /// unreadable document is reread only when it changes.
     pub(crate) fn mark_read(&mut self, path: PathBuf, stamp: Option<Stamp>) {

@@ -376,8 +376,10 @@ programs are in `examples/`.
 
 ## Timing of changes
 
-A saved edit to a running Kernel is prepared on a worker thread: `sync`
-reports `preparing` at once and `published` (or `rejected`) on a later
+A saved edit to a running scene's documents is read and compiled on
+another thread, and a running Kernel's replacement prepared on a worker
+thread: `sync` reports `preparing` once its document is compiled (a
+fault there as `rejected`), and `published` (or `rejected`) on a later
 `sync`; `evaluate` meanwhile runs the previous version. A scene whose own
 Kernels are being prepared waits for them: its `scene_loaded` comes on
 the `sync` that publishes them, `evaluate` until then runs the previous

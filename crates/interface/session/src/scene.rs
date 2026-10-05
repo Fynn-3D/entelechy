@@ -821,9 +821,14 @@ impl Scene {
                 }
                 to_read.push((path, current));
             }
-            // Where replacements prepare off the frames, so are the
-            // documents read and their Kernels compiled.
-            if !to_read.is_empty() && runtime.background() {
+            // Where replacements prepare off the frames, so are documents
+            // read before read again and their Kernels compiled; one read
+            // for the first time is read now, as a Kernel nothing runs yet
+            // prepares now.
+            if !to_read.is_empty()
+                && runtime.background()
+                && to_read.iter().all(|(path, _)| kernels.has_read(path))
+            {
                 let ledger =
                     kernels.ledger(to_read.iter().map(|(path, _)| path.as_path()), runtime);
                 match Compiling::start(Arc::clone(&self.store), to_read, ledger) {

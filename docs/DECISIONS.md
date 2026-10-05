@@ -961,7 +961,9 @@ runtime's `prepare_finished`, `Preparer::finish` and a version's `leaves`
 ## A changed document compiles off the frames
 
 Where replacements prepare off the frames (a Player, a served session),
-so are changed library documents read and their Kernels compiled: a sync
+so are library documents read before and changed since read and their
+Kernels compiled (one read for the first time is read at once, as a
+Kernel nothing runs yet prepares at once): a sync
 hands them to another thread, reading them on every core, and returns;
 the running Kernels keep the frames; the first sync after it is done
 publishes them in order, or says why not, as a sync that read them itself
