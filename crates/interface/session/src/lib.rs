@@ -468,6 +468,26 @@ pub enum Event {
         /// Why it leaves the main backend.
         why: String,
     },
+    /// A Kernel just published is large ([`large`]): what it carries
+    /// through its branches, the structs and the functions that carry
+    /// most. Said for each version published so.
+    Large {
+        /// Document that defines it.
+        path: PathBuf,
+        /// Kernel id.
+        id: KernelId,
+        /// What makes it so.
+        why: String,
+    },
+    /// Kernels a document of the scene publishes and no node uses, each
+    /// compiled and prepared all the same. Said when the scene loads, and
+    /// again when they change.
+    Idle {
+        /// The document.
+        path: PathBuf,
+        /// The Kernels.
+        ids: Vec<KernelId>,
+    },
 }
 
 impl fmt::Display for Event {
@@ -505,6 +525,16 @@ impl fmt::Display for Event {
             }
             Self::Routed { node, backend, why } => {
                 write!(f, "node `{node}` runs on {backend} ({why})")
+            }
+            Self::Large { path, why, .. } => write!(f, "large: {}: {why}", path.display()),
+            Self::Idle { path, ids } => {
+                let ids: Vec<String> = ids.iter().map(|id| format!("`{id}`")).collect();
+                write!(
+                    f,
+                    "{} publishes {}, which no node of the scene uses: compiled and prepared all the same",
+                    path.display(),
+                    ids.join(", ")
+                )
             }
         }
     }

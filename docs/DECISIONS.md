@@ -937,6 +937,9 @@ called, as such a compiler writes every call out. Past 5 000 it says the
 Kernel is large, naming the structs and the functions that carry most.
 Its instructions are not the measure. A scene that publishes Kernels no
 node uses is told which, as each is compiled and prepared all the same.
+A running session says both where its author works: a large Kernel with
+each version it publishes (so a change that narrows it shows the words
+falling), the unused ones as the scene loads.
 
 **Why.** Measured on Metal over every Kernel of the examples and a large
 game: the Kernels its compiler took seconds over carried 7 000 to
@@ -951,7 +954,9 @@ updated everywhere; the note names that, so a narrower struct, or state
 in several rows, is the author's to choose.
 
 **Where.** [`carried`](../crates/core/ir/src/size.rs); `large` and the
-unused note in [check](../crates/interface/session/src/check.rs); held by
+unused note in [check](../crates/interface/session/src/check.rs), and the
+session's `Large` and `Idle` events
+([session](../crates/interface/session/src/session.rs)); held by
 [the large test](../crates/interface/session/tests/large.rs).
 
 ## A device builds a Kernel when it is needed

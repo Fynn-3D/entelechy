@@ -30,6 +30,9 @@ pub struct Session {
     evaluator: Evaluator,
     /// Where each node was last said to run, so a change is said once.
     placed: BTreeMap<String, Option<String>>,
+    /// The Kernels last said to be published and used by no node, by
+    /// document ([`Event::Idle`]).
+    idle: BTreeMap<PathBuf, Vec<KernelId>>,
     /// The Kernels the graph's nodes use, by the version last seen
     /// ([`Session::finish_used`]).
     used: BTreeMap<orla_kernel::KernelId, orla_kernel::Generation>,
@@ -119,6 +122,7 @@ impl Session {
             runtime,
             evaluator: Evaluator::new(),
             placed: BTreeMap::new(),
+            idle: BTreeMap::new(),
             used: BTreeMap::new(),
             window: None,
             history: crate::history::History::default(),
@@ -415,6 +419,7 @@ impl Session {
         );
         self.finish_used();
         self.sync_placements(&mut events);
+        self.sync_shape(&mut events);
         events.append(&mut self.inputs.take_frame_events());
         events.append(&mut self.writes.take_events());
         self.remember(&events);
@@ -576,6 +581,60 @@ impl Session {
             crate::spread::map(&first, |version| preparer.finish(version));
         }
         self.used = now;
+    }
+
+    /// Says what shapes the scene's Kernels as a device's compiler meets
+    /// them: each Kernel this sync published that is large
+    /// ([`Event::Large`]), and, once per change, the Kernels a document of
+    /// the scene publishes and no node uses ([`Event::Idle`]); a
+    /// package's are its verbs, used or not.
+    fn sync_shape(&mut self, events: &mut Vec<Event>) {
+        let large: Vec<Event> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Published { path, id, .. } => {
+                    let version = self.runtime.kernel(id)?;
+                    let why = crate::large(version.module()?)?;
+                    Some(Event::Large {
+                        path: path.clone(),
+                        id: id.clone(),
+                        why,
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+        events.extend(large);
+        let Some(graph) = self.scene.graph() else {
+            return;
+        };
+        let bound: std::collections::BTreeSet<&KernelId> =
+            graph.nodes.iter().map(|node| &node.kernel).collect();
+        let store = self.scene.store().as_ref();
+        let mut idle = BTreeMap::new();
+        for path in self.kernels.documents() {
+            if crate::sources::package_holding(store, &path).is_some() {
+                continue;
+            }
+            let ids: Vec<KernelId> = self
+                .kernels
+                .ids_of(&path)
+                .into_iter()
+                .filter(|id| !bound.contains(id))
+                .collect();
+            if !ids.is_empty() {
+                idle.insert(path, ids);
+            }
+        }
+        for (path, ids) in &idle {
+            if self.idle.get(path) != Some(ids) {
+                events.push(Event::Idle {
+                    path: path.clone(),
+                    ids: ids.clone(),
+                });
+            }
+        }
+        self.idle = idle;
     }
 
     /// Reports nodes off the main backend, once per change.

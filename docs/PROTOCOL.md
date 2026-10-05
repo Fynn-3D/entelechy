@@ -386,8 +386,12 @@ the `sync` that publishes them, `evaluate` until then runs the previous
 scene on its Kernels, and a refused Kernel refuses the scene
 (`scene_rejected`) with none of its Kernels published. `sync` reports
 `routed`, `{node, backend, why}`, once when a node's placement off the
-main backend begins or changes. A Kernel nothing runs yet prepares
-inline.
+main backend begins or changes; `large`, `{path, id, why}`, with each
+version published of a Kernel that carries more through its branches
+than a device's compiler takes in comfort (what `orla check` says of
+it); and `idle`, `{path, ids}`, the Kernels a document of the scene
+publishes and no node uses, once and again when they change. A Kernel
+nothing runs yet prepares inline.
 
 `compose` and `publish` answer with their outcome: the scene landed or
 refused, the Kernel published or refused. Where preparation is off the

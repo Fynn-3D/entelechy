@@ -63,7 +63,9 @@ function as often as it is called), which a device's compiler takes
 seconds over or fails on, is said to be large, with the structs it
 carries and the functions that carry most, each with the calls that
 reach it. A scene that publishes Kernels no node uses is told which: each
-is compiled and prepared with it all the same.
+is compiled and prepared with it all the same. A running session (the
+Player, `serve`, a replay) says both as they come: a large Kernel with
+each version it publishes, the unused ones when the scene loads.
 
 ## Run a scene
 

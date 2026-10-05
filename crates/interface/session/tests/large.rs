@@ -112,3 +112,61 @@ kernel t.idle@1 { requires { field.write; } output result: Rows<Float>; compute 
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_session_says_a_large_kernel_as_it_publishes_and_idle_ones_once() {
+    let dir = std::env::temp_dir().join(format!("orla-shape-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let lib = |extra: &str| {
+        format!(
+            "kernel t.wide@1 {{ {} requires {{ field.write; }} output result: Rows<Float>; compute {{ return widen(float(element())).f0{extra}; }} }}
+kernel t.idle@1 {{ requires {{ field.write; }} output result: Rows<Float>; compute {{ return 2.0; }} }}
+",
+            wide(100, 60)
+        )
+    };
+    std::fs::write(dir.join("lib.orla"), lib("")).unwrap();
+    std::fs::write(
+        dir.join("scene.osn"),
+        "use \"lib.orla\";\nnode a: t.wide@1 { domain = 1; }\noutput result <- a.result;\n",
+    )
+    .unwrap();
+    let runtime =
+        orla_kernel::Runtime::with_backends(1 << 20, Box::new(orla_cpu::CpuBackend), None);
+    let mut session = orla_session::Session::open_with(&dir.join("scene.osn"), None, runtime);
+    let said = |events: &[orla_session::Event]| {
+        let large: Vec<String> = events
+            .iter()
+            .filter_map(|e| match e {
+                orla_session::Event::Large { id, .. } => Some(id.to_string()),
+                _ => None,
+            })
+            .collect();
+        let idle: Vec<String> = events
+            .iter()
+            .filter_map(|e| match e {
+                orla_session::Event::Idle { ids, .. } => Some(
+                    ids.iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                ),
+                _ => None,
+            })
+            .collect();
+        (large, idle)
+    };
+    let (large, idle) = said(&session.sync());
+    assert_eq!(large, ["t.wide@1"]);
+    assert_eq!(idle, ["t.idle@1"]);
+    // Nothing changed: nothing said.
+    let (large, idle) = said(&session.sync());
+    assert!(large.is_empty() && idle.is_empty(), "{large:?} {idle:?}");
+    // A new version, large still: said again; the idle ones as they were.
+    std::fs::write(dir.join("lib.orla"), lib(" + 1.0")).unwrap();
+    let (large, idle) = said(&session.sync());
+    assert_eq!(large, ["t.wide@1"]);
+    assert!(idle.is_empty(), "{idle:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
