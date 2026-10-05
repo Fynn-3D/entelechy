@@ -212,7 +212,10 @@ expect count spread.result = 16
 
 /// [`REPLAY`] written beside its scene, in a directory of its own.
 fn replays() -> Vec<PathBuf> {
-    let dir = std::env::temp_dir().join(format!("orla-routing-{}", std::process::id()));
+    // Each call its own directory: tests running at once write here.
+    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("orla-routing-{}-{call}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("kinds.orla"), KERNELS).unwrap();
     std::fs::write(dir.join("kinds.osn"), SCENE).unwrap();
