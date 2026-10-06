@@ -1046,3 +1046,35 @@ fails when it grows and names this entry; the scene syntax is held by
 [the scene documents' surface](../crates/frontend/scene/tests/surface/).
 `AGENTS.md` and `PROCESS.md` state the rule where a contributor reads
 first.
+
+## A memory is carried page by page
+
+A Field keeps the extent it was declared with; that extent is its
+ceiling, and what a run costs is the pages it changes. The Host divides
+a Field's words into pages of `PAGE_WORDS`. A Field made from another
+records which one it came from and which of its pages differ
+(`Host::adopt_derived`); writing it in place forgets that. A released
+Field's buffer is kept on the Host's spare pile marked with the Field
+it held, so `Host::working` hands back the words of a Field made from
+it by copying the changed pages alone, and `Host::same` compares two
+such Fields on those pages alone. The JIT carries a scan's memory this
+way: it marks a page when a write changes a word on it, and a run it
+cannot follow word by word is adopted whole, as any Field is. The
+interpreter copies a memory whole, the reference the others are held
+to; a backend that does not record what it changed gives up nothing but
+the saving.
+
+**Why.** A scan's memory is sized once, for the most it may hold, and
+the most is what a creator must declare. Copying and comparing it whole
+on every run made each edit cost the ceiling, not the edit. Allocating
+by need would change what a Field is and what a budget counts; pages
+keep the Field a value of the extent it says, the budget counting it
+whole, and make only the work proportional to the change.
+
+**Where.** `Pages`, `Host::working`, `Host::adopt_derived` and
+`Host::same` ([host](../crates/core/host/src/lib.rs)), through the
+`Scope` ([abi](../crates/core/abi/src/lib.rs)); the JIT's `Changed`
+([jit](../crates/backends/jit/src/lib.rs)); the evaluation's
+`same_words` ([evaluate](../crates/core/graph/src/evaluate/mod.rs)).
+Held by the Host's page tests and
+[the carried memory parity test](../crates/backends/jit/tests/parity.rs).

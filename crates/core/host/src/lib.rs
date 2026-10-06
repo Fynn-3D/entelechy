@@ -811,6 +811,81 @@ impl fmt::Display for HostError {
 
 impl std::error::Error for HostError {}
 
+/// Words a page of a Field's storage holds: the unit in which a Field
+/// made from another says what changed ([`Host::adopt_derived`]).
+pub const PAGE_WORDS: usize = 4096;
+
+/// Pages of a Field's storage, a bit each: those a Field made from
+/// another holds different words in.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Pages {
+    bits: Vec<u64>,
+}
+
+impl Pages {
+    /// No page.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The page of storage word `word` marked.
+    pub fn mark(&mut self, word: usize) {
+        let page = word / PAGE_WORDS;
+        let at = page / 64;
+        if self.bits.len() <= at {
+            self.bits.resize(at + 1, 0);
+        }
+        self.bits[at] |= 1 << (page % 64);
+    }
+
+    /// The pages of `count` storage words from `first` marked.
+    pub fn mark_words(&mut self, first: usize, count: usize) {
+        if count == 0 {
+            return;
+        }
+        let last = (first + count - 1) / PAGE_WORDS;
+        for page in first / PAGE_WORDS..=last {
+            self.mark(page * PAGE_WORDS);
+        }
+    }
+
+    /// Whether no page is marked.
+    pub fn is_empty(&self) -> bool {
+        self.bits.iter().all(|word| *word == 0)
+    }
+
+    /// The marked pages, in order.
+    pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
+        self.bits.iter().enumerate().flat_map(|(at, word)| {
+            (0..64)
+                .filter(move |bit| word & (1 << bit) != 0)
+                .map(move |bit| at * 64 + bit)
+        })
+    }
+
+    /// The storage words page `page` covers in a storage of `len` words.
+    fn span(page: usize, len: usize) -> std::ops::Range<usize> {
+        let first = (page * PAGE_WORDS).min(len);
+        first..(first + PAGE_WORDS).min(len)
+    }
+}
+
+/// What a Field is known to be made from: another Field's words, but on
+/// the pages `changed`. A record the Host keeps to copy and compare a
+/// page at a time; the Field is a value as any other.
+#[derive(Clone, Debug)]
+struct Lineage {
+    base: Handle,
+    changed: Pages,
+}
+
+/// A released buffer kept for reuse, and the Field whose words it still
+/// holds, while it holds them.
+struct Spare {
+    words: Vec<u32>,
+    holds: Option<Handle>,
+}
+
 /// Where a Field's words are.
 enum Storage {
     /// Nothing; the slot is free.
@@ -833,6 +908,8 @@ struct Slot {
     storage: Storage,
     /// Budget charged on adoption, returned on release.
     charge: usize,
+    /// What the Field was made from, where that is known.
+    lineage: Option<Lineage>,
 }
 
 impl Slot {
@@ -870,9 +947,9 @@ pub struct Host {
     reserved_words: usize,
     /// The loop iterations one run of a Kernel may take.
     work: u64,
-    /// Word buffers released Fields gave back, largest last, reused by
-    /// `create`.
-    spare: Vec<Vec<u32>>,
+    /// Word buffers released Fields gave back, reused by `create`, and by
+    /// [`Host::working`] where one still holds a Field's words.
+    spare: Vec<Spare>,
 }
 
 impl Host {
@@ -962,8 +1039,18 @@ impl Host {
         let wanted = words_for(schema, domain)?;
         // Charged before anything is allocated.
         self.within_budget(wanted)?;
-        let at = self.spare.iter().position(|buffer| buffer.len() == wanted);
-        Ok(at.map(|at| self.spare.swap_remove(at)))
+        // One holding no Field's words first: another may still be wanted
+        // for what it holds.
+        let at = self
+            .spare
+            .iter()
+            .position(|buffer| buffer.words.len() == wanted && buffer.holds.is_none())
+            .or_else(|| {
+                self.spare
+                    .iter()
+                    .position(|buffer| buffer.words.len() == wanted)
+            });
+        Ok(at.map(|at| self.spare.swap_remove(at).words))
     }
 
     /// Takes ownership of existing data.
@@ -1055,6 +1142,7 @@ impl Host {
                 slot.generation = slot.generation.wrapping_add(1);
                 slot.storage = storage;
                 slot.charge = requested;
+                slot.lineage = None;
                 index
             }
             None => {
@@ -1062,6 +1150,7 @@ impl Host {
                     generation: 0,
                     storage,
                     charge: requested,
+                    lineage: None,
                 });
                 (self.slots.len() - 1) as u32
             }
@@ -1103,6 +1192,8 @@ impl Host {
 
     fn data_mut(&mut self, handle: Handle) -> Result<&mut FieldData, HostError> {
         let slot = self.slot_mut(handle)?;
+        // Words written in place are no longer known to be another's.
+        slot.lineage = None;
         // Words changed in memory are no longer the device's: the device
         // copy goes.
         if let Storage::Resident { kept, .. } = &mut slot.storage
@@ -1247,43 +1338,114 @@ impl Host {
         let slot = self.slot_mut(handle)?;
         let storage = std::mem::replace(&mut slot.storage, Storage::Free);
         let charge = std::mem::take(&mut slot.charge);
+        slot.lineage = None;
         self.used_words -= charge;
         self.free.push(handle.index);
-        // The words go to the spare pile for the next Field of that size.
+        // The words go to the spare pile for the next Field of that size,
+        // still holding the released Field's words.
         if let Storage::Data(data)
         | Storage::Resident {
             kept: Some(data), ..
         } = storage
         {
-            self.keep_spare(data.storage);
+            self.keep_spare(data.storage, Some(handle));
         }
         Ok(())
     }
 
-    /// Keeps a released buffer for reuse. The pile holds a handful of
-    /// buffers and at most an eighth of the budget; the rest is freed.
-    fn keep_spare(&mut self, words: Vec<u32>) {
-        const KEPT: usize = 8;
-        let room = self.budget_words / 8;
+    /// Keeps a released buffer for reuse, with the Field whose words it
+    /// holds. The pile holds a few dozen buffers and at most a quarter of
+    /// the budget; the oldest beyond go.
+    fn keep_spare(&mut self, words: Vec<u32>, holds: Option<Handle>) {
+        const KEPT: usize = 64;
+        let room = self.budget_words / 4;
         if words.is_empty() || words.len() > room {
             return;
         }
-        self.spare.push(words);
-        let mut held: usize = self.spare.iter().map(Vec::len).sum();
+        self.spare.push(Spare { words, holds });
+        let mut held: usize = self.spare.iter().map(|buffer| buffer.words.len()).sum();
         while self.spare.len() > KEPT || held > room {
-            // The smallest is the one worth least.
-            let Some(smallest) = self
-                .spare
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, buffer)| buffer.len())
-                .map(|(at, _)| at)
-            else {
-                break;
-            };
-            held -= self.spare[smallest].len();
-            self.spare.swap_remove(smallest);
+            let oldest = self.spare.remove(0);
+            held -= oldest.words.len();
         }
+    }
+
+    /// A copy of a Field's words to write in place, as a scan's memory
+    /// is: a released buffer that still holds the words of the Field it
+    /// was made from with the pages it changed copied in where there is
+    /// one, else a buffer of the Field's words copied whole.
+    pub fn working(&mut self, handle: Handle) -> Result<Vec<u32>, HostError> {
+        let lineage = self.slot(handle)?.lineage.clone();
+        let len = self.data(handle)?.storage.len();
+        let from_base = lineage.as_ref().and_then(|lineage| {
+            self.spare
+                .iter()
+                .position(|buffer| buffer.holds == Some(lineage.base) && buffer.words.len() == len)
+        });
+        if let (Some(at), Some(lineage)) = (from_base, lineage) {
+            let mut words = self.spare.swap_remove(at).words;
+            let storage = &self.data(handle)?.storage;
+            for page in lineage.changed.iter() {
+                let span = Pages::span(page, len);
+                words[span.clone()].copy_from_slice(&storage[span]);
+            }
+            return Ok(words);
+        }
+        let reuse = self
+            .spare
+            .iter()
+            .position(|buffer| buffer.words.len() == len && buffer.holds.is_none())
+            .map(|at| self.spare.swap_remove(at).words);
+        let storage = &self.data(handle)?.storage;
+        Ok(match reuse {
+            Some(mut words) => {
+                words.copy_from_slice(storage);
+                words
+            }
+            None => storage.clone(),
+        })
+    }
+
+    /// Takes ownership of `data`, made from Field `base`'s words but on the
+    /// pages `changed`: kept as known, so its words are copied and
+    /// compared a page at a time. Where `base` is gone or of another size
+    /// it is adopted as any Field.
+    pub fn adopt_derived(
+        &mut self,
+        data: FieldData,
+        base: Handle,
+        changed: Pages,
+    ) -> Result<Handle, HostError> {
+        let known = self
+            .data(base)
+            .is_ok_and(|base| base.schema == data.schema && base.domain == data.domain);
+        let handle = self.adopt(data)?;
+        if known {
+            self.slot_mut(handle)?.lineage = Some(Lineage { base, changed });
+        }
+        Ok(handle)
+    }
+
+    /// Whether two Fields in Host memory hold the same words: a Field made
+    /// from the other is compared on its changed pages alone. `None` where
+    /// either is on a device only.
+    pub fn same(&self, a: Handle, b: Handle) -> Option<bool> {
+        let (first, second) = (self.data(a).ok()?, self.data(b).ok()?);
+        if first.schema != second.schema || first.domain != second.domain {
+            return Some(false);
+        }
+        for (made, from) in [(b, a), (a, b)] {
+            if let Some(lineage) = &self.slot(made).ok()?.lineage
+                && lineage.base == from
+            {
+                let len = first.storage.len();
+                return Some(lineage.changed.iter().all(|page| {
+                    let span = Pages::span(page, len);
+                    first.storage[span.clone()] == second.storage[span]
+                }));
+            }
+        }
+        Some(first == second)
     }
 
     /// A copy of a Field of pixels as an image. Fails with
@@ -1385,8 +1547,8 @@ mod tests {
         assert!(!Schema::new(vec![Scalar::Float]).is_picture(Domain::Grid(4, 4)));
     }
 
-    /// Released words are reused, and the pile is bounded to a handful of
-    /// buffers and an eighth of the budget.
+    /// Released words are reused, and the pile is bounded to a quarter of
+    /// the budget.
     #[test]
     fn released_words_come_back_and_the_pile_is_bounded() {
         let mut host = Host::new(4096);
@@ -1399,19 +1561,131 @@ mod tests {
         assert!(host.data(again).unwrap().storage().iter().all(|w| *w == 0));
         host.release(again).unwrap();
 
-        // The pile holds at most an eighth of the budget.
+        // The pile holds at most a quarter of the budget.
         for _ in 0..32 {
             let big = host.create(schema.clone(), Domain::Rows(400)).unwrap();
             host.release(big).unwrap();
         }
-        let held: usize = host.spare.iter().map(Vec::len).sum();
-        assert!(held <= 4096 / 8, "the pile holds {held} words");
+        let held: usize = host.spare.iter().map(|buffer| buffer.words.len()).sum();
+        assert!(held <= 4096 / 4, "the pile holds {held} words");
         assert_eq!(host.live(), 0);
 
         // A buffer larger than the pile allows is freed.
         let huge = host.create(schema, Domain::Rows(2048)).unwrap();
         host.release(huge).unwrap();
-        assert!(host.spare.iter().all(|buffer| buffer.len() <= 4096 / 8));
+        assert!(
+            host.spare
+                .iter()
+                .all(|buffer| buffer.words.len() <= 4096 / 4)
+        );
+    }
+
+    fn rows(host: &mut Host, words: Vec<u32>) -> Handle {
+        let count = words.len() as u32;
+        host.adopt(
+            FieldData::from_storage(Schema::new(vec![Scalar::Int]), Domain::Rows(count), words)
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    /// A Field made from another on a few pages: compared on them alone,
+    /// its working copy made from the released base's buffer with those
+    /// pages copied in; written in place, it is a Field as any other.
+    #[test]
+    fn a_field_made_from_another_is_copied_and_compared_a_page_at_a_time() {
+        let len = PAGE_WORDS * 4 + 17;
+        let mut host = Host::new(len * 16);
+        let schema = Schema::new(vec![Scalar::Int]);
+        let base = rows(&mut host, (0..len as u32).collect());
+
+        // A word changed on the third page: told so, the two differ.
+        let mut words = host.working(base).unwrap();
+        words[PAGE_WORDS * 2 + 5] = 99;
+        let mut changed = Pages::new();
+        changed.mark(PAGE_WORDS * 2 + 5);
+        let made = host
+            .adopt_derived(
+                FieldData::from_storage(schema.clone(), Domain::Rows(len as u32), words).unwrap(),
+                base,
+                changed,
+            )
+            .unwrap();
+        assert_eq!(host.same(base, made), Some(false));
+        assert_eq!(host.same(made, base), Some(false));
+
+        // Made again with nothing changed: the same, and the same as a copy
+        // known to nothing.
+        let unchanged = host.working(made).unwrap();
+        let again = host
+            .adopt_derived(
+                FieldData::from_storage(
+                    schema.clone(),
+                    Domain::Rows(len as u32),
+                    unchanged.clone(),
+                )
+                .unwrap(),
+                made,
+                Pages::new(),
+            )
+            .unwrap();
+        assert_eq!(host.same(made, again), Some(true));
+        let plain = rows(&mut host, unchanged);
+        assert_eq!(host.same(again, plain), Some(true));
+
+        // The base released, its buffer still holds its words: the working
+        // copy of what was made from it is that buffer with the page copied.
+        let expected = host.data(made).unwrap().storage().to_vec();
+        host.release(base).unwrap();
+        let spare_before = host.spare.len();
+        let working = host.working(made).unwrap();
+        assert_eq!(working, expected);
+        assert_eq!(
+            host.spare.len(),
+            spare_before - 1,
+            "the base's buffer was taken"
+        );
+
+        // Written in place, what it was made from is no longer known: the
+        // two are compared word for word, and differ.
+        host.write_storage(again, &vec![1; len]).unwrap();
+        assert_eq!(host.same(made, again), Some(false));
+        let ones = rows(&mut host, vec![1; len]);
+        assert_eq!(host.same(again, ones), Some(true));
+    }
+
+    /// A released Field's buffer is known by its handle, generation and
+    /// all: a Field made in its slot after is another, and its buffer does
+    /// not stand for the first's words.
+    #[test]
+    fn a_spare_buffer_holds_the_words_of_the_field_it_came_from_alone() {
+        let mut host = Host::new(PAGE_WORDS * 64);
+        let schema = Schema::new(vec![Scalar::Int]);
+        let base = rows(&mut host, vec![3; PAGE_WORDS]);
+        let made = host
+            .adopt_derived(
+                FieldData::from_storage(
+                    schema,
+                    Domain::Rows(PAGE_WORDS as u32),
+                    vec![3; PAGE_WORDS],
+                )
+                .unwrap(),
+                base,
+                Pages::new(),
+            )
+            .unwrap();
+        host.release(base).unwrap();
+        let other = rows(&mut host, vec![8; PAGE_WORDS]);
+        assert_eq!(other.index, base.index, "the slot is taken again");
+        host.release(other).unwrap();
+        let working = host.working(made).unwrap();
+        assert!(working.iter().all(|w| *w == 3));
+        assert!(
+            host.spare
+                .iter()
+                .any(|buffer| buffer.holds == Some(other) && buffer.words.iter().all(|w| *w == 8)),
+            "the other's buffer was left"
+        );
     }
 
     #[test]

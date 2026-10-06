@@ -1087,18 +1087,19 @@ impl Evaluator {
 }
 
 /// Whether two runs' outputs hold the same Fields word for word. Fields
-/// in Host memory are compared there; Fields held on a device alone are
-/// compared on it only `on_device`, when the node ran for nothing but
-/// the state it reads and its [`Rest`] is due, so a node that runs for
-/// fresh inputs waits for no device.
+/// in Host memory are compared there, one made from the other on the
+/// pages it changed alone (`Host::same`); Fields held on a
+/// device alone are compared on it only `on_device`, when the node ran
+/// for nothing but the state it reads and its [`Rest`] is due, so a node
+/// that runs for fresh inputs waits for no device.
 fn same_words(runtime: &Runtime, previous: &[Handle], fresh: &[Handle], on_device: bool) -> bool {
     let host = runtime.host();
     previous.len() == fresh.len()
         && previous.iter().zip(fresh).all(|(old, new)| {
             old == new
-                || match (host.data(*old), host.data(*new)) {
-                    (Ok(a), Ok(b)) => a == b,
-                    _ => on_device && runtime.same_words(*old, *new),
+                || match host.same(*old, *new) {
+                    Some(same) => same,
+                    None => on_device && runtime.same_words(*old, *new),
                 }
         })
 }

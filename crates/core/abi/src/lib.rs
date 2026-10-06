@@ -14,7 +14,8 @@ use std::str::FromStr;
 
 pub use orla_host::{DEFAULT_WORK, MAX_WORK, encoding};
 pub use orla_host::{
-    Domain, Encoding, FieldData, Handle, Host, HostError, Image, Pixel, Scalar, Schema, Shape,
+    Domain, Encoding, FieldData, Handle, Host, HostError, Image, PAGE_WORDS, Pages, Pixel, Scalar,
+    Schema, Shape,
 };
 
 /// A named authority a Kernel may declare and be granted; what each
@@ -1197,6 +1198,43 @@ impl<'a> Scope<'a> {
     pub fn storage(&self, field: Handle) -> Result<&[u32], AbiError> {
         self.require(Capability::FieldRead)?;
         Ok(self.host.data(field)?.storage())
+    }
+
+    /// A copy of an input's memory as kept, to write in place: a scan's
+    /// memory, which the bound Field never sees changed. Copied a page at a
+    /// time where the Host knows the Field was made from words it still
+    /// holds ([`Host::working`]). Requires `field.read`.
+    pub fn working(&mut self, field: Handle) -> Result<Vec<u32>, AbiError> {
+        self.require(Capability::FieldRead)?;
+        Ok(self.host.working(field)?)
+    }
+
+    /// A new Field of `storage`, as kept, made from input `base`'s words but
+    /// on the pages `changed` ([`Host::adopt_derived`]): what a scan leaves
+    /// its memory as. Requires `field.write`.
+    pub fn adopt_derived(
+        &mut self,
+        schema: Schema,
+        domain: Domain,
+        storage: Vec<u32>,
+        base: Handle,
+        changed: Pages,
+    ) -> Result<Handle, AbiError> {
+        self.require(Capability::FieldWrite)?;
+        let data = FieldData::from_storage(schema, domain, storage)?;
+        Ok(self.host.adopt_derived(data, base, changed)?)
+    }
+
+    /// A new Field of `storage`, as kept. Requires `field.write`.
+    pub fn adopt_storage(
+        &mut self,
+        schema: Schema,
+        domain: Domain,
+        storage: Vec<u32>,
+    ) -> Result<Handle, AbiError> {
+        self.require(Capability::FieldWrite)?;
+        let data = FieldData::from_storage(schema, domain, storage)?;
+        Ok(self.host.adopt(data)?)
     }
 
     /// The device object of a resident input, if any. Requires `field.read`.

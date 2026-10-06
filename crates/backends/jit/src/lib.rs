@@ -53,6 +53,16 @@ pub struct View {
     /// The layout, when it keeps scalars narrow; null when the memory
     /// holds the Kernel's words. What the helpers widen and narrow by.
     schema: *const orla_abi::Schema,
+    /// For a memory, the pages its writes have changed; null for an input.
+    changed: *mut Changed,
+}
+
+/// The pages of a memory a scan's writes changed, and whether those are
+/// all of them: a write into a memory kept narrow is not followed word by
+/// word, and makes the memory's change unknown.
+struct Changed {
+    pages: orla_abi::Pages,
+    known: bool,
 }
 
 /// What the compiled entry reads besides its arguments: inputs,
@@ -319,8 +329,10 @@ fn param_words(value: &orla_abi::Value) -> Vec<u32> {
 struct Shared {
     views: Vec<View>,
     params: Vec<u32>,
-    /// The memories' working copies, by input index; views point here.
-    memories: Vec<(usize, Vec<u32>)>,
+    /// The memories' working copies and what the run changed of them, by
+    /// input index; views point here. Boxed so a view's pointer stays good.
+    #[allow(clippy::type_complexity)]
+    memories: Vec<(usize, Vec<u32>, Box<Changed>)>,
     /// The layouts of the inputs kept narrow; the views point at them.
     /// Boxed so a view's pointer stays good while the vector grows.
     #[allow(clippy::vec_box)]
@@ -354,19 +366,25 @@ fn shared(
     let mut schemas = Vec::new();
     for (index, handle) in invocation.inputs.iter().enumerate() {
         let port = &module.manifest.inputs[index];
-        let words = scope.storage(*handle)?;
-        let len = words.len();
         let extent = scope.size(*handle)?;
         let layout = scope.schema(*handle)?;
         let stride = layout.value_words() as u32;
         let bytes = layout.element_bytes() as u32;
-        let words = if module.manifest.memories.contains(&port.name) {
-            let mut copy = words.to_vec();
+        let (words, len, changed) = if module.manifest.memories.contains(&port.name) {
+            // A working copy the steps write: the bound Field stays as it is.
+            let mut copy = scope.working(*handle)?;
+            let len = copy.len();
             let pointer = copy.as_mut_ptr();
-            memories.push((index, copy));
-            pointer.cast_const()
+            let mut changed = Box::new(Changed {
+                pages: orla_abi::Pages::new(),
+                known: true,
+            });
+            let changed_at: *mut Changed = &mut *changed;
+            memories.push((index, copy, changed));
+            (pointer.cast_const(), len, changed_at)
         } else {
-            words.as_ptr()
+            let words = scope.storage(*handle)?;
+            (words.as_ptr(), words.len(), std::ptr::null_mut())
         };
         // A box does not move when the vector of them grows.
         let schema = if layout.is_wide() {
@@ -386,6 +404,7 @@ fn shared(
             bytes,
             len,
             schema,
+            changed,
         });
     }
     let params: Vec<u32> = invocation.params.iter().flat_map(param_words).collect();
@@ -1123,12 +1142,19 @@ fn run_scan(
         return Err(error.into());
     }
     let mut outputs = vec![output];
-    for (input, words) in &shared.memories {
-        let port = &module.manifest.inputs[*input];
-        let created = scope.size(invocation.inputs[*input]).and_then(|extent| {
-            scope
-                .create(port.ty.schema.clone(), extent)
-                .and_then(|handle| scope.write_storage(handle, words).map(|()| handle))
+    // Each memory as the steps left it, given to the Host as made from the
+    // bound Field but on the pages they changed, where those are known.
+    let Shared { memories, .. } = shared;
+    for (input, words, changed) in memories {
+        let port = &module.manifest.inputs[input];
+        let base = invocation.inputs[input];
+        let schema = port.ty.schema.clone();
+        let created = scope.size(base).and_then(|extent| {
+            if changed.known {
+                scope.adopt_derived(schema, extent, words, base, changed.pages)
+            } else {
+                scope.adopt_storage(schema, extent, words)
+            }
         });
         match created {
             Ok(handle) => outputs.push(handle),
@@ -1171,8 +1197,17 @@ unsafe fn copy_in(view: &View, index: usize, value: *const u32) {
     let stride = view.stride as usize;
     let words = view.words.cast_mut();
     if view.schema.is_null() {
-        unsafe { std::ptr::copy_nonoverlapping(value, words.add(index * stride), stride) };
+        // The pages the element spans marked where a word of it changes.
+        let at = index * stride;
+        let differs = (0..stride).any(|k| unsafe { *words.add(at + k) != *value.add(k) });
+        if differs && !view.changed.is_null() {
+            unsafe { &mut *view.changed }.pages.mark_words(at, stride);
+        }
+        unsafe { std::ptr::copy_nonoverlapping(value, words.add(at), stride) };
         return;
+    }
+    if !view.changed.is_null() {
+        unsafe { &mut *view.changed }.known = false;
     }
     let schema = unsafe { &*view.schema };
     let storage = unsafe { std::slice::from_raw_parts_mut(words, view.len) };

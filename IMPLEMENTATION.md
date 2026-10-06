@@ -94,6 +94,10 @@ Packages built from existing modes, with no engine feature of their own.
   ([runtime](crates/core/kernel/src/lib.rs), [parity](crates/backends/gpu/tests/parity.rs)).
   A resident output is presented by a blit on the device
   ([presenter](crates/backends/gpu/src/present.rs)).
+- Pages: a Field made from another records the pages it changed; a
+  scan memory is copied and compared on those pages alone
+  ([host](crates/core/host/src/lib.rs), [jit](crates/backends/jit/src/lib.rs),
+  [parity](crates/backends/jit/tests/parity.rs)).
 
 ### Execution modes
 

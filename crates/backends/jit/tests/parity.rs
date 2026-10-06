@@ -1216,3 +1216,88 @@ fn values_built_from_others_share_their_words() {
     let module = compile(&source).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(JitBackend::new().unwrap().declines(&module), None);
 }
+
+/// A memory carried from run to run, as an evaluation carries a scan's
+/// state: each run's memory is the last one's, which is released after.
+/// The JIT's memory is made from the bound one on the pages its writes
+/// changed; it holds the interpreter's words every run, and the Host
+/// finds it the same as the last exactly when its words are.
+#[test]
+fn a_memory_carried_from_run_to_run_matches_the_interpreter_and_compares_by_its_pages() {
+    let module = compile(
+        "kernel test.carry@1 { requires { field.read; field.write; }
+         input frame: Rows<Int>; memory cells: Rows<Int>; output result: Rows<Int>;
+         scan with y = 0 {
+             let k = at(frame, 0);
+             let n = count(cells);
+             // Frames of three kinds: two cells changed, a cell written with
+             // what it holds, nothing written.
+             let w = if k % 3 == 0 { put(cells, (k * 1237) % n, k) + put(cells, (k * 7919 + 4095) % n, k + 1) }
+                 else if k % 3 == 1 { put(cells, 5, at(cells, 5)) } else { 0 };
+             return w;
+         } }",
+    )
+    .unwrap();
+    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+    let len = orla_abi::PAGE_WORDS as u32 * 5 + 3;
+    let jit = JitBackend::new().unwrap();
+    let mut host = Host::new(len as usize * 64);
+    let mut cells = host
+        .adopt(
+            orla_abi::FieldData::from_storage(
+                ints.clone(),
+                Domain::Rows(len),
+                vec![0; len as usize],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let mut expected = vec![0u32; len as usize];
+    for k in 0..12u32 {
+        let frame = host
+            .adopt(
+                orla_abi::FieldData::from_storage(ints.clone(), Domain::Rows(1), vec![k]).unwrap(),
+            )
+            .unwrap();
+        let invocation = Invocation {
+            inputs: vec![frame, cells],
+            params: vec![],
+            domain: Domain::Rows(1),
+            context: Context::default(),
+        };
+        let out = {
+            let prepared = jit.prepare(&module).unwrap();
+            let mut scope = Scope::new(&mut host, all());
+            jit.execute(prepared.as_ref(), &module, &invocation, &mut scope)
+                .unwrap()
+        };
+        // The interpreter on the same memory, as the reference.
+        let reference = {
+            let mut scope = Scope::new(&mut host, all());
+            CpuBackend
+                .execute(&module, &invocation, &mut scope)
+                .unwrap()
+        };
+        let carried = host.data(out[1]).unwrap().storage().to_vec();
+        assert_eq!(
+            carried,
+            host.data(reference[1]).unwrap().storage(),
+            "run {k}"
+        );
+        let before = expected.clone();
+        if k % 3 == 0 {
+            expected[((k * 1237) % len) as usize] = k;
+            expected[((k * 7919 + 4095) % len) as usize] = k + 1;
+        }
+        assert_eq!(carried, expected, "run {k}");
+        assert_eq!(
+            host.same(cells, out[1]),
+            Some(before == expected),
+            "run {k}"
+        );
+        for handle in [frame, cells, out[0], reference[0], reference[1]] {
+            host.release(handle).unwrap();
+        }
+        cells = out[1];
+    }
+}
