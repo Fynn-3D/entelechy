@@ -13,9 +13,11 @@ const USAGE: &str = "\
 usage:
   orla-export <file>... --out <target> [--rate <hz>] [--beats <n>]
               [--filter linear|nearest] [--joints <name>,<name>,...]
-      To .glb: a vertices .field (rows of position, normal, uv), a triangles
-      .field (rows of three ints), and a .png for the base color if you have
-      .field and, when it has one, a PNG; a rig's weights, skeleton and clip
+      To .glb: a vertices .field (rows of position, normal, uv, and a
+      tangent where a normal map is read along one), a triangles .field
+      (rows of three ints), and PNGs: the base color, a normal map named
+      <stem>.normal.png and an occlusion map named <stem>.occlusion.png;
+      a rig's weights, skeleton and clip
       .fields beside them write a skin and an animation apiece, --rate naming
       the frames a second the clips were sampled at (30 by default).
       --filter says how the PNG is sampled: linear (blended, with mipmaps,
@@ -115,12 +117,12 @@ fn export(args: &[String]) -> Result<String, String> {
         "glb" => {
             let mut vertices = None;
             let mut triangles = None;
-            let mut texture = None;
+            let mut textures: Vec<PathBuf> = Vec::new();
             let mut rig: Vec<PathBuf> = Vec::new();
             let mut clips: Vec<PathBuf> = Vec::new();
             for input in &inputs {
                 match extension(input).as_str() {
-                    "png" => texture = Some(input.clone()),
+                    "png" => textures.push(input.clone()),
                     "field" => {
                         let data = read_field(input)?;
                         // A rig's rows are told apart by layout.
@@ -129,7 +131,9 @@ fn export(args: &[String]) -> Result<String, String> {
                             .flatten();
                         match part {
                             Some(Part::Weights | Part::Skeleton) => rig.push(input.clone()),
-                            Some(Part::Vertices) => vertices = Some(input.clone()),
+                            Some(Part::Vertices | Part::TangentVertices) => {
+                                vertices = Some(input.clone())
+                            }
                             Some(Part::Triangles) => triangles = Some(input.clone()),
                             Some(Part::Clip) => clips.push(input.clone()),
                             None => {
@@ -149,15 +153,16 @@ fn export(args: &[String]) -> Result<String, String> {
                 }
             }
             let vertices =
-                vertices.ok_or("a GLB needs a vertices .field (rows of eight floats)")?;
+                vertices.ok_or("a GLB needs a vertices .field (rows of eight or twelve floats)")?;
             let triangles =
                 triangles.ok_or("a GLB needs a triangles .field (rows of three ints)")?;
             let rig_paths: Vec<&Path> = rig.iter().map(PathBuf::as_path).collect();
             let clip_paths: Vec<&Path> = clips.iter().map(PathBuf::as_path).collect();
+            let texture_paths: Vec<&Path> = textures.iter().map(PathBuf::as_path).collect();
             gltf::export_rig(
                 &vertices,
                 &triangles,
-                texture.as_deref(),
+                &texture_paths,
                 &rig_paths,
                 &clip_paths,
                 // 30 frames a second unless given, as `orla import`.

@@ -20,7 +20,10 @@ Kernels.
 | `<name>.<clip>.clip.field` | `f×10` | a joint's local translation (3), rotation (4) and scale (3) |
 
 `i` is an `Int` and `f` a `Float`, in the order the ABI lays a struct
-out. The `skin` package declares them as `Point`, `Tri`, `Bound`,
+out. A vertex may carry a tangent after its uv (`f×12`), the way a normal
+map is read along: its `w` is the handedness, the bitangent
+`cross(normal, tangent) * w`; `orla export` writes it as the mesh's
+tangents, and `orla import` reads the position, normal and uv. The `skin` package declares them as `Point`, `Tri`, `Bound`,
 `Joint` and `Pose`.
 
 ## What the numbers mean

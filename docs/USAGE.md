@@ -432,7 +432,10 @@ orla export song.notes.field --out song.mid --beats 100
 ```
 
 `orla-export` writes Host files as other software's formats: vertex,
-triangle and PNG as a GLB (with a rig's rows, a skin and its animations,
+triangle and PNG as a GLB (vertices with a tangent after their uv carry
+it as the mesh's tangents; a PNG named `<stem>.normal.png` is the normal
+map, `<stem>.occlusion.png` the occlusion, any other the base color;
+with a rig's rows, a skin and its animations,
 `--rate` 30 by default; `--filter nearest` samples the PNG texel by texel,
 as pixel art wants, where `linear` blends; `--joints a,b,...` names the
 joints in the skeleton's order); rows of one or two floats as a WAV (`--rate` 48000

@@ -233,7 +233,7 @@ fn a_rig_leaves_as_glb_and_comes_back_posing_the_same() {
     orla_export::gltf::export_rig(
         &path("vertices"),
         &path("triangles"),
-        None,
+        &[],
         &[&path("weights"), &path("skeleton")],
         &[&path("swing.clip"), &path("curl.clip")],
         30.0,
@@ -298,7 +298,7 @@ fn a_texture_is_sampled_linear_or_nearest_as_asked() {
         orla_export::gltf::export_rig(
             &dir.join("crate.vertices.field"),
             &dir.join("crate.triangles.field"),
-            Some(&texture),
+            &[&texture],
             &[],
             &[],
             30.0,
@@ -337,7 +337,7 @@ fn joints_take_the_names_given_in_skeleton_order() {
         orla_export::gltf::export_rig(
             &path("vertices"),
             &path("triangles"),
-            None,
+            &[],
             &[&path("weights"), &path("skeleton")],
             &[&path("swing.clip")],
             30.0,
@@ -375,4 +375,94 @@ fn joints_take_the_names_given_in_skeleton_order() {
             "{name} survived the named round trip bit for bit"
         );
     }
+}
+
+/// Vertices with a tangent carry it as the mesh's tangents, and PNGs
+/// named for a normal map and an occlusion map are the material's; the
+/// importer reads the position, normal and uv back bit for bit.
+#[test]
+fn tangents_and_maps_go_with_the_material() {
+    let dir = scratch("maps");
+    cube(&dir);
+    let plain =
+        orla_formats::file::decode(&std::fs::read(dir.join("crate.vertices.field")).unwrap())
+            .unwrap();
+    let mut with_tangent = Vec::new();
+    for row in plain.storage().chunks_exact(8) {
+        with_tangent.extend(row.iter().map(|w| f32::from_bits(*w)));
+        with_tangent.extend([1.0, 0.0, 0.0, -1.0]);
+    }
+    rows(
+        &dir.join("lit.vertices.field"),
+        &["f"; 12].join(","),
+        &with_tangent,
+    );
+    let flat = vec![[0.5f32, 0.5, 1.0, 1.0]; 4];
+    std::fs::write(
+        dir.join("lit.normal.png"),
+        orla_formats::png::encode(2, 2, &flat),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("lit.occlusion.png"),
+        orla_formats::png::encode(2, 2, &[[0.7, 0.7, 0.7, 1.0]; 4]),
+    )
+    .unwrap();
+    let out = dir.join("lit.glb");
+    orla_export::gltf::export_rig(
+        &dir.join("lit.vertices.field"),
+        &dir.join("crate.triangles.field"),
+        &[
+            &dir.join("crate.albedo.png"),
+            &dir.join("lit.normal.png"),
+            &dir.join("lit.occlusion.png"),
+        ],
+        &[],
+        &[],
+        30.0,
+        &out,
+        &orla_export::gltf::Options::default(),
+    )
+    .unwrap();
+    let json = document(&out);
+    let primitive = &json["meshes"][0]["primitives"][0];
+    let tangent = &json["accessors"][primitive["attributes"]["TANGENT"].as_u64().unwrap() as usize];
+    assert_eq!(
+        (tangent["type"].as_str(), tangent["count"].as_u64()),
+        (Some("VEC4"), Some(24))
+    );
+    let material = &json["materials"][0];
+    assert_eq!(
+        material["pbrMetallicRoughness"]["baseColorTexture"]["index"].as_u64(),
+        Some(0)
+    );
+    assert_eq!(material["normalTexture"]["index"].as_u64(), Some(1));
+    assert_eq!(material["occlusionTexture"]["index"].as_u64(), Some(2));
+    assert_eq!(json["images"].as_array().map(Vec::len), Some(3));
+    // A map is blended whatever the base color asks.
+    assert_eq!(json["textures"][1]["sampler"].as_u64(), Some(1));
+
+    let imported = orla_import::gltf::import(&out, &dir.join("back"), 30.0).unwrap();
+    assert_eq!((imported.vertices, imported.triangles), (24, 12));
+    let before = std::fs::read(dir.join("crate.vertices.field")).unwrap();
+    let after = std::fs::read(&imported.files[0]).unwrap();
+    assert_eq!(
+        before, after,
+        "position, normal and uv came back bit for bit"
+    );
+
+    // Two normal maps are one too many.
+    std::fs::copy(dir.join("lit.normal.png"), dir.join("other.normal.png")).unwrap();
+    let twice = orla_export::gltf::export_rig(
+        &dir.join("lit.vertices.field"),
+        &dir.join("crate.triangles.field"),
+        &[&dir.join("lit.normal.png"), &dir.join("other.normal.png")],
+        &[],
+        &[],
+        30.0,
+        &dir.join("twice.glb"),
+        &orla_export::gltf::Options::default(),
+    );
+    assert!(twice.unwrap_err().contains("a second normal map"));
+    let _ = std::fs::remove_dir_all(&dir);
 }

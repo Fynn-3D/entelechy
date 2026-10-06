@@ -1,5 +1,6 @@
-//! A mesh as GLB: vertex rows `{position, normal, uv}`, triangle rows
-//! and an optional base color PNG become one glTF 2.0 binary with one
+//! A mesh as GLB: vertex rows `{position, normal, uv}` (or with a
+//! tangent after them), triangle rows and optional PNGs (a base color, a
+//! normal map, an occlusion map) become one glTF 2.0 binary with one
 //! mesh, node and scene.
 //!
 //! With the rest of [a rig's rows](../../../docs/RIGS.md) it also writes
@@ -51,6 +52,16 @@ pub struct Options {
     pub filter: Filter,
     /// One name a skeleton row, or none.
     pub joints: Vec<String>,
+}
+
+/// A GLB's pictures, each a PNG: the base color, the normal map (in the
+/// tangent space the vertices' tangents give) and the occlusion (read
+/// from its red).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Textures<'a> {
+    pub color: Option<&'a [u8]>,
+    pub normal: Option<&'a [u8]>,
+    pub occlusion: Option<&'a [u8]>,
 }
 
 /// The inverse of an affine column-major matrix.
@@ -165,8 +176,9 @@ fn decompose(m: &[f32; 16]) -> ([f32; 3], [f32; 4], [f32; 3]) {
     ([m[12], m[13], m[14]], turn, scale)
 }
 
-/// Writes `vertices` (eight floats a row) and `triangles` (three ints a
-/// row) as a GLB, with `texture` as the base color when given.
+/// Writes `vertices` (eight floats a row, or twelve with a tangent) and
+/// `triangles` (three ints a row) as a GLB, with `texture` as the base
+/// color when given.
 pub fn write_glb(
     vertices: &FieldData,
     triangles: &FieldData,
@@ -176,7 +188,10 @@ pub fn write_glb(
     write_rig(
         vertices,
         triangles,
-        texture,
+        &Textures {
+            color: texture,
+            ..Textures::default()
+        },
         None,
         name,
         &Options::default(),
@@ -187,13 +202,17 @@ pub fn write_glb(
 pub fn write_rig(
     vertices: &FieldData,
     triangles: &FieldData,
-    texture: Option<&[u8]>,
+    textures: &Textures<'_>,
     rig: Option<&Rig<'_>>,
     name: &str,
     options: &Options,
 ) -> Result<Vec<u8>, String> {
-    if vertices.schema().value_words() != 8 || vertices.domain().shape() != orla_host::Shape::Rows {
-        return Err("vertices must be rows of {position: Vec3, normal: Vec3, uv: Vec2}".into());
+    let width = vertices.schema().value_words();
+    if !(width == 8 || width == 12) || vertices.domain().shape() != orla_host::Shape::Rows {
+        return Err(
+            "vertices must be rows of {position: Vec3, normal: Vec3, uv: Vec2}, with a tangent: Vec4 after them or not"
+                .into(),
+        );
     }
     if triangles.schema().value_words() != 3 || triangles.domain().shape() != orla_host::Shape::Rows
     {
@@ -203,9 +222,10 @@ pub fn write_rig(
     let mut positions = Vec::with_capacity(count * 12);
     let mut normals = Vec::with_capacity(count * 12);
     let mut uvs = Vec::with_capacity(count * 8);
+    let mut tangents = Vec::with_capacity(if width == 12 { count * 16 } else { 0 });
     let mut lo = [f32::MAX; 3];
     let mut hi = [f32::MIN; 3];
-    for vertex in vertices.values().chunks_exact(8) {
+    for vertex in vertices.values().chunks_exact(width) {
         let floats: Vec<f32> = vertex.iter().map(|w| f32::from_bits(*w)).collect();
         for k in 0..3 {
             lo[k] = lo[k].min(floats[k]);
@@ -214,6 +234,9 @@ pub fn write_rig(
         positions.extend(floats[..3].iter().flat_map(|v| v.to_le_bytes()));
         normals.extend(floats[3..6].iter().flat_map(|v| v.to_le_bytes()));
         uvs.extend(floats[6..8].iter().flat_map(|v| v.to_le_bytes()));
+        if width == 12 {
+            tangents.extend(floats[8..12].iter().flat_map(|v| v.to_le_bytes()));
+        }
     }
     let mut indices = Vec::with_capacity(triangles.domain().count() * 12);
     for index in triangles.values().iter() {
@@ -246,7 +269,15 @@ pub fn write_rig(
     let normal_view = view(&mut bin, &normals, Some(34962));
     let uv_view = view(&mut bin, &uvs, Some(34962));
     let index_view = view(&mut bin, &indices, Some(34963));
-    let texture_view = texture.map(|png| view(&mut bin, png, None));
+    let tangent_view = (width == 12).then(|| view(&mut bin, &tangents, Some(34962)));
+    let pictures: Vec<(&str, usize)> = [
+        ("color", textures.color),
+        ("normal", textures.normal),
+        ("occlusion", textures.occlusion),
+    ]
+    .into_iter()
+    .filter_map(|(role, png)| png.map(|png| (role, view(&mut bin, png, None))))
+    .collect();
     let mut accessors = Vec::new();
     let mut skin_attributes = json!({});
     let mut joints: Vec<Json> = Vec::new();
@@ -473,16 +504,50 @@ pub fn write_rig(
             document["animations"] = json!(animations);
         }
     }
-    if let Some(texture_view) = texture_view {
-        document["images"] = json!([{ "bufferView": texture_view, "mimeType": "image/png" }]);
+    if let Some(tangent_view) = tangent_view {
+        // After the rig's accessors, so their places stand.
+        let mut all = document["accessors"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        all.push(json!({ "bufferView": tangent_view, "componentType": 5126, "count": count, "type": "VEC4" }));
+        document["meshes"][0]["primitives"][0]["attributes"]["TANGENT"] = json!(all.len() - 1);
+        document["accessors"] = json!(all);
+    }
+    if !pictures.is_empty() {
+        document["images"] = json!(
+            pictures
+                .iter()
+                .map(|(_, view)| json!({ "bufferView": view, "mimeType": "image/png" }))
+                .collect::<Vec<_>>()
+        );
+        // The base color as asked; a normal or occlusion map blended.
         let (mag, min) = options.filter.codes();
-        document["samplers"] =
-            json!([{ "magFilter": mag, "minFilter": min, "wrapS": 10497, "wrapT": 10497 }]);
-        document["textures"] = json!([{ "source": 0, "sampler": 0 }]);
-        document["materials"] = json!([{
+        document["samplers"] = json!([
+            { "magFilter": mag, "minFilter": min, "wrapS": 10497, "wrapT": 10497 },
+            { "magFilter": 9729, "minFilter": 9987, "wrapS": 10497, "wrapT": 10497 }
+        ]);
+        document["textures"] = json!(
+            pictures
+                .iter()
+                .enumerate()
+                .map(|(index, (role, _))| json!({ "source": index, "sampler": if *role == "color" { 0 } else { 1 } }))
+                .collect::<Vec<_>>()
+        );
+        let mut material = json!({
             "name": name,
-            "pbrMetallicRoughness": { "baseColorTexture": { "index": 0 }, "metallicFactor": 0.0, "roughnessFactor": 0.8 }
-        }]);
+            "pbrMetallicRoughness": { "metallicFactor": 0.0, "roughnessFactor": 0.8 }
+        });
+        for (index, (role, _)) in pictures.iter().enumerate() {
+            match *role {
+                "color" => {
+                    material["pbrMetallicRoughness"]["baseColorTexture"] = json!({ "index": index })
+                }
+                "normal" => material["normalTexture"] = json!({ "index": index }),
+                _ => material["occlusionTexture"] = json!({ "index": index }),
+            }
+        }
+        document["materials"] = json!([material]);
         document["meshes"][0]["primitives"][0]["material"] = json!(0);
     }
     let mut text = serde_json::to_vec(&document).map_err(|e| e.to_string())?;
@@ -513,7 +578,7 @@ pub fn export(
     export_rig(
         vertices,
         triangles,
-        texture,
+        texture.as_slice(),
         &[],
         &[],
         30.0,
@@ -523,12 +588,14 @@ pub fn export(
 }
 
 /// The same, with `weights`, `skeleton` and clip files, each clip named
-/// by its file name before `.clip.field`, and `options`.
+/// by its file name before `.clip.field`, and `options`. A PNG named
+/// `<stem>.normal.png` is the normal map, `<stem>.occlusion.png` the
+/// occlusion, any other the base color; one of each at most.
 #[allow(clippy::too_many_arguments)]
 pub fn export_rig(
     vertices: &Path,
     triangles: &Path,
-    texture: Option<&Path>,
+    textures: &[&Path],
     rig: &[&Path],
     clips: &[&Path],
     rate: f32,
@@ -539,14 +606,24 @@ pub fn export_rig(
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
         orla_formats::file::decode(&bytes).map_err(|e| format!("{}: {e}", path.display()))
     };
-    let png = match texture {
-        Some(path) => {
-            let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-            orla_formats::png::decode(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
-            Some(bytes)
+    let mut pngs: [Option<Vec<u8>>; 3] = [None, None, None];
+    for path in textures {
+        let file = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let role = if file.ends_with(".normal.png") {
+            1
+        } else if file.ends_with(".occlusion.png") {
+            2
+        } else {
+            0
+        };
+        if pngs[role].is_some() {
+            let what = ["base color", "normal map", "occlusion map"][role];
+            return Err(format!("{}: a second {what}; give one", path.display()));
         }
-        None => None,
-    };
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        orla_formats::png::decode(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        pngs[role] = Some(bytes);
+    }
     let name = out.file_stem().and_then(|s| s.to_str()).unwrap_or("mesh");
     let rig_rows: Vec<FieldData> = rig
         .iter()
@@ -606,7 +683,11 @@ pub fn export_rig(
     let glb = write_rig(
         &read(vertices)?,
         &read(triangles)?,
-        png.as_deref(),
+        &Textures {
+            color: pngs[0].as_deref(),
+            normal: pngs[1].as_deref(),
+            occlusion: pngs[2].as_deref(),
+        },
         rig.as_ref(),
         name,
         options,

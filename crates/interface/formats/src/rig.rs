@@ -9,6 +9,10 @@ use orla_host::{Scalar, Schema};
 pub enum Part {
     /// A vertex at rest: position, normal, uv (`f×8`).
     Vertices,
+    /// A vertex at rest with the tangent a normal map is read along:
+    /// position, normal, uv, tangent (`f×12`; the tangent's `w` the
+    /// handedness, the bitangent `cross(normal, tangent) * w`).
+    TangentVertices,
     /// Three vertex indices (`i×3`).
     Triangles,
     /// A vertex's four joints, then their weights (`i×4, f×4`).
@@ -22,8 +26,9 @@ pub enum Part {
 
 impl Part {
     /// Every part.
-    pub const ALL: [Part; 5] = [
+    pub const ALL: [Part; 6] = [
         Part::Vertices,
+        Part::TangentVertices,
         Part::Triangles,
         Part::Weights,
         Part::Skeleton,
@@ -34,6 +39,7 @@ impl Part {
     pub fn schema(self) -> Schema {
         let (ints, floats) = match self {
             Part::Vertices => (0, 8),
+            Part::TangentVertices => (0, 12),
             Part::Triangles => (3, 0),
             Part::Weights => (4, 4),
             Part::Skeleton => (1, 16),
@@ -87,6 +93,10 @@ mod tests {
         );
         assert_eq!(Part::of(&Part::Triangles.schema()), Some(Part::Triangles));
         assert_eq!(Part::of(&Part::Vertices.schema()), Some(Part::Vertices));
+        assert_eq!(
+            Part::of(&Part::TangentVertices.schema()),
+            Some(Part::TangentVertices)
+        );
         assert_eq!(Part::of(&Schema::pixel()), None);
     }
 }
