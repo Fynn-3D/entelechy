@@ -14,8 +14,8 @@ use std::str::FromStr;
 
 pub use orla_host::{DEFAULT_WORK, MAX_WORK, encoding};
 pub use orla_host::{
-    Domain, Encoding, FieldData, Handle, Host, HostError, Image, PAGE_WORDS, Pages, Pixel, Scalar,
-    Schema, Shape,
+    Domain, Encoding, FieldData, Handle, Host, HostError, Image, MadeFrom, PAGE_WORDS, Pages,
+    Pixel, Scalar, Schema, Shape, Version,
 };
 
 /// A named authority a Kernel may declare and be granted; what each
@@ -1244,6 +1244,28 @@ impl<'a> Scope<'a> {
     ) -> Result<Option<&(dyn std::any::Any + Send + Sync)>, AbiError> {
         self.require(Capability::FieldRead)?;
         Ok(self.host.resident(field)?)
+    }
+
+    /// The Field an input was made from and the storage words it may
+    /// differ from it on ([`Host::made_from`]), for a device to bring a
+    /// copy of that Field up to date. Requires `field.read`.
+    pub fn made_from(&self, field: Handle) -> Result<Option<MadeFrom>, AbiError> {
+        self.require(Capability::FieldRead)?;
+        Ok(self.host.made_from(field)?)
+    }
+
+    /// An input's words as they are now ([`Host::version`]), which a device
+    /// copy of them is known by. Requires `field.read`.
+    pub fn version(&self, field: Handle) -> Result<Version, AbiError> {
+        self.require(Capability::FieldRead)?;
+        Ok(self.host.version(field)?)
+    }
+
+    /// Whether `version` is still what its Field holds ([`Host::holds`]).
+    /// Requires `field.read`.
+    pub fn holds(&self, version: Version) -> Result<bool, AbiError> {
+        self.require(Capability::FieldRead)?;
+        Ok(self.host.holds(version))
     }
 
     /// Gives an input's words a copy on the device, beside the Host's.

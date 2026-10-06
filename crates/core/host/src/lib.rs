@@ -875,15 +875,42 @@ impl Pages {
 /// page at a time; the Field is a value as any other.
 #[derive(Clone, Debug)]
 struct Lineage {
-    base: Handle,
+    base: Version,
     changed: Pages,
 }
 
-/// A released buffer kept for reuse, and the Field whose words it still
-/// holds, while it holds them.
+/// A Field's words as they were between two writes in place: what a
+/// Field made from another, or a buffer kept after a release, names as
+/// what it holds. A Field written in place has a new version, so nothing
+/// takes the words it held before for the words it holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Version {
+    field: Handle,
+    writes: u32,
+}
+
+/// What a Field was made from: other words, and the storage words, page
+/// by page, it may differ from them on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MadeFrom {
+    /// The words it was made from.
+    pub words: Version,
+    /// The storage words it may differ from them on, a page at a time.
+    pub changed: Vec<std::ops::Range<usize>>,
+}
+
+impl Version {
+    /// The Field whose words these are.
+    pub fn field(self) -> Handle {
+        self.field
+    }
+}
+
+/// A released buffer kept for reuse, and the words it still holds,
+/// while it holds them.
 struct Spare {
     words: Vec<u32>,
-    holds: Option<Handle>,
+    holds: Option<Version>,
 }
 
 /// Where a Field's words are.
@@ -910,6 +937,8 @@ struct Slot {
     charge: usize,
     /// What the Field was made from, where that is known.
     lineage: Option<Lineage>,
+    /// How many times its words were written in place.
+    writes: u32,
 }
 
 impl Slot {
@@ -1143,6 +1172,7 @@ impl Host {
                 slot.storage = storage;
                 slot.charge = requested;
                 slot.lineage = None;
+                slot.writes = 0;
                 index
             }
             None => {
@@ -1151,6 +1181,7 @@ impl Host {
                     storage,
                     charge: requested,
                     lineage: None,
+                    writes: 0,
                 });
                 (self.slots.len() - 1) as u32
             }
@@ -1192,8 +1223,10 @@ impl Host {
 
     fn data_mut(&mut self, handle: Handle) -> Result<&mut FieldData, HostError> {
         let slot = self.slot_mut(handle)?;
-        // Words written in place are no longer known to be another's.
+        // Words written in place are no longer known to be another's, nor
+        // the ones a Field made from them was made from.
         slot.lineage = None;
+        slot.writes = slot.writes.wrapping_add(1);
         // Words changed in memory are no longer the device's: the device
         // copy goes.
         if let Storage::Resident { kept, .. } = &mut slot.storage
@@ -1338,6 +1371,10 @@ impl Host {
         let slot = self.slot_mut(handle)?;
         let storage = std::mem::replace(&mut slot.storage, Storage::Free);
         let charge = std::mem::take(&mut slot.charge);
+        let version = Version {
+            field: handle,
+            writes: slot.writes,
+        };
         slot.lineage = None;
         self.used_words -= charge;
         self.free.push(handle.index);
@@ -1348,7 +1385,7 @@ impl Host {
             kept: Some(data), ..
         } = storage
         {
-            self.keep_spare(data.storage, Some(handle));
+            self.keep_spare(data.storage, Some(version));
         }
         Ok(())
     }
@@ -1356,7 +1393,7 @@ impl Host {
     /// Keeps a released buffer for reuse, with the Field whose words it
     /// holds. The pile holds a few dozen buffers and at most a quarter of
     /// the budget; the oldest beyond go.
-    fn keep_spare(&mut self, words: Vec<u32>, holds: Option<Handle>) {
+    fn keep_spare(&mut self, words: Vec<u32>, holds: Option<Version>) {
         const KEPT: usize = 64;
         let room = self.budget_words / 4;
         if words.is_empty() || words.len() > room {
@@ -1419,31 +1456,75 @@ impl Host {
         let known = self
             .data(base)
             .is_ok_and(|base| base.schema == data.schema && base.domain == data.domain);
+        let base = self.version(base);
         let handle = self.adopt(data)?;
-        if known {
+        if known && let Ok(base) = base {
             self.slot_mut(handle)?.lineage = Some(Lineage { base, changed });
         }
         Ok(handle)
     }
 
+    /// A live Field's words as they are now.
+    pub fn version(&self, handle: Handle) -> Result<Version, HostError> {
+        Ok(Version {
+            field: handle,
+            writes: self.slot(handle)?.writes,
+        })
+    }
+
+    /// Whether `version` is still what its Field holds.
+    pub fn holds(&self, version: Version) -> bool {
+        self.slot(version.field)
+            .is_ok_and(|slot| slot.writes == version.writes)
+    }
+
+    /// The words a Field was made from and the storage words, page by
+    /// page, it may differ from them on; `None` where that is not known.
+    pub fn made_from(&self, handle: Handle) -> Result<Option<MadeFrom>, HostError> {
+        let slot = self.slot(handle)?;
+        let Some(lineage) = &slot.lineage else {
+            return Ok(None);
+        };
+        let len = slot
+            .describe()
+            .map_or(0, |(schema, domain)| schema.storage_words(domain.count()));
+        Ok(Some(MadeFrom {
+            words: lineage.base,
+            changed: lineage
+                .changed
+                .iter()
+                .map(|page| Pages::span(page, len))
+                .collect(),
+        }))
+    }
+
     /// Whether two Fields in Host memory hold the same words: a Field made
-    /// from the other is compared on its changed pages alone. `None` where
-    /// either is on a device only.
+    /// from the other is compared on its changed pages alone, two made from
+    /// the same words on the pages either changed. `None` where either is
+    /// on a device only.
     pub fn same(&self, a: Handle, b: Handle) -> Option<bool> {
         let (first, second) = (self.data(a).ok()?, self.data(b).ok()?);
         if first.schema != second.schema || first.domain != second.domain {
             return Some(false);
         }
-        for (made, from) in [(b, a), (a, b)] {
-            if let Some(lineage) = &self.slot(made).ok()?.lineage
-                && lineage.base == from
+        let len = first.storage.len();
+        let on = |page: usize| {
+            let span = Pages::span(page, len);
+            first.storage[span.clone()] == second.storage[span]
+        };
+        let lineage = |field: Handle| self.slot(field).ok()?.lineage.as_ref();
+        let (of_a, of_b) = (lineage(a), lineage(b));
+        for (made, from) in [(of_b, a), (of_a, b)] {
+            if let Some(made) = made
+                && self.version(from).is_ok_and(|now| made.base == now)
             {
-                let len = first.storage.len();
-                return Some(lineage.changed.iter().all(|page| {
-                    let span = Pages::span(page, len);
-                    first.storage[span.clone()] == second.storage[span]
-                }));
+                return Some(made.changed.iter().all(on));
             }
+        }
+        if let (Some(of_a), Some(of_b)) = (of_a, of_b)
+            && of_a.base == of_b.base
+        {
+            return Some(of_a.changed.iter().chain(of_b.changed.iter()).all(on));
         }
         Some(first == second)
     }
@@ -1654,6 +1735,52 @@ mod tests {
         assert_eq!(host.same(again, ones), Some(true));
     }
 
+    /// Two Fields made from the same words are compared on the pages
+    /// either changed; a base written in place after a Field was made from
+    /// it is not what that Field was made from, in memory or released.
+    #[test]
+    fn a_base_written_in_place_is_no_longer_what_was_made_from_it() {
+        let len = PAGE_WORDS * 3;
+        let mut host = Host::new(len * 32);
+        let schema = Schema::new(vec![Scalar::Int]);
+        let base = rows(&mut host, vec![0; len]);
+        let made = |host: &mut Host, at: usize| {
+            let mut words = host.working(base).unwrap();
+            words[at] = 5;
+            let mut changed = Pages::new();
+            changed.mark(at);
+            let field = FieldData::from_storage(schema.clone(), Domain::Rows(len as u32), words);
+            host.adopt_derived(field.unwrap(), base, changed).unwrap()
+        };
+        // Siblings: one changed the first page, one the third.
+        let first = made(&mut host, 1);
+        let third = made(&mut host, PAGE_WORDS * 2);
+        assert_eq!(host.same(first, third), Some(false));
+        let again = made(&mut host, 1);
+        assert_eq!(host.same(first, again), Some(true));
+
+        // The base written in place on a page neither changed: they differ
+        // from it there, and it is compared whole.
+        let words = host.working(base).unwrap();
+        let field = FieldData::from_storage(schema.clone(), Domain::Rows(len as u32), words);
+        let unchanged = host
+            .adopt_derived(field.unwrap(), base, Pages::new())
+            .unwrap();
+        assert_eq!(host.same(base, unchanged), Some(true));
+        let version = host.version(base).unwrap();
+        host.write_element(base, PAGE_WORDS as u32 + 3, &[7])
+            .unwrap();
+        assert!(!host.holds(version));
+        assert_eq!(host.same(base, unchanged), Some(false));
+        assert_eq!(host.same(unchanged, base), Some(false));
+
+        // Released, its buffer holds the written words: what was made from
+        // it before is copied whole, not from that buffer.
+        host.release(base).unwrap();
+        let working = host.working(first).unwrap();
+        assert_eq!(working, host.data(first).unwrap().storage());
+    }
+
     /// A released Field's buffer is known by its handle, generation and
     /// all: a Field made in its slot after is another, and its buffer does
     /// not stand for the first's words.
@@ -1681,9 +1808,10 @@ mod tests {
         let working = host.working(made).unwrap();
         assert!(working.iter().all(|w| *w == 3));
         assert!(
-            host.spare
-                .iter()
-                .any(|buffer| buffer.holds == Some(other) && buffer.words.iter().all(|w| *w == 8)),
+            host.spare.iter().any(
+                |buffer| buffer.holds.is_some_and(|holds| holds.field == other)
+                    && buffer.words.iter().all(|w| *w == 8)
+            ),
             "the other's buffer was left"
         );
     }

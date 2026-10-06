@@ -342,8 +342,8 @@ pub(crate) fn rasterize(
     let (width, height) = (domain.width(), domain.height());
     let vertex_count = scope.size(vertices)?.count() as u32;
     let triangle_count = scope.size(triangles)?.count() as u32;
-    let vertex_buffer = gpu.bind_input(scope, vertices, 0)?;
-    let triangle_buffer = gpu.bind_input(scope, triangles, 1)?;
+    let vertex_buffer = gpu.bind_input(scope, vertices)?;
+    let triangle_buffer = gpu.bind_input(scope, triangles)?;
 
     // The mask is always bound; with none it is a single white texel the
     // shader leaves unread.
@@ -352,7 +352,7 @@ pub(crate) fn rasterize(
         None => orla_abi::Domain::Grid(1, 1),
     };
     let mask_buffer = match mask {
-        Some(mask) => gpu.bind_input(scope, mask, 2)?,
+        Some(mask) => gpu.bind_input(scope, mask)?,
         None => gpu.buffer(
             "rasterize mask",
             &[0u8; 16],
@@ -525,6 +525,7 @@ pub(crate) fn rasterize(
         Box::new(DeviceImage {
             buffer: output_buffer,
             spare: Some(gpu.spare()),
+            holds: None,
         }),
     )?;
     // The call's own targets go back to the pile for the next rasterize of

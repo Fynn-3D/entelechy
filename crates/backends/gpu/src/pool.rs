@@ -2,6 +2,7 @@
 //! and the image a run left resident.
 
 use super::*;
+use std::ops::Range;
 
 /// A resident image: its pixels as a storage buffer of `vec4<f32>`.
 pub(crate) struct DeviceImage {
@@ -9,13 +10,29 @@ pub(crate) struct DeviceImage {
     /// Where the buffer goes when its Field is released, for the next output
     /// of its size. `None` when the buffer is not the backend's to keep.
     pub(crate) spare: Option<Spare>,
+    /// The words the buffer holds when it was uploaded from the Host,
+    /// which it is kept marked with when its Field is released.
+    pub(crate) holds: Option<Held>,
+}
+
+/// A buffer on the pile, and what it holds where that is known.
+pub(crate) type Kept = (wgpu::Buffer, Option<Held>);
+
+/// What an uploaded buffer holds: a Field's words, and, where that Field
+/// was made from other words, those and the storage words it may differ
+/// from them on.
+#[derive(Clone)]
+pub(crate) struct Held {
+    pub(crate) words: Version,
+    pub(crate) made: Option<MadeFrom>,
 }
 
 /// Buffers released Fields left behind, by size, for the next outputs of
-/// those sizes.
+/// those sizes, oldest first; one uploaded from the Host is marked with
+/// the words it still holds.
 #[derive(Clone, Default)]
 pub(crate) struct Spare {
-    pub(crate) held: Arc<Mutex<Vec<wgpu::Buffer>>>,
+    pub(crate) held: Arc<Mutex<Vec<Kept>>>,
 }
 
 /// How many buffers the pile holds, and how many bytes; beyond that they
@@ -106,14 +123,16 @@ impl Spare {
                 && buffer.size() >= size
                 && buffer.size() <= size.saturating_mul(2).max(256)
         };
+        // An unmarked buffer first, so marked ones wait for the Fields made
+        // from theirs.
         if let Some(index) = held
             .iter()
             .enumerate()
-            .filter(|(_, buffer)| fits(buffer))
-            .min_by_key(|(_, buffer)| buffer.size())
+            .filter(|(_, (buffer, _))| fits(buffer))
+            .min_by_key(|(_, (buffer, holds))| (holds.is_some(), buffer.size()))
             .map(|(index, _)| index)
         {
-            return held.swap_remove(index);
+            return held.remove(index).0;
         }
         drop(held);
         device.create_buffer(&wgpu::BufferDescriptor {
@@ -124,13 +143,51 @@ impl Spare {
         })
     }
 
-    /// Keeps a buffer its Field released, while the pile has room.
-    pub(crate) fn keep(&self, buffer: wgpu::Buffer) {
-        let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
-        let bytes: u64 = held.iter().map(wgpu::Buffer::size).sum();
-        if held.len() < SPARE_BUFFERS && bytes + buffer.size() <= SPARE_BYTES {
-            held.push(buffer);
+    /// Keeps a buffer its Field released, marked with the Field whose
+    /// words it holds where it was uploaded; the oldest beyond the pile's
+    /// bounds go.
+    pub(crate) fn keep(&self, buffer: wgpu::Buffer, holds: Option<Held>) {
+        if buffer.size() > SPARE_BYTES {
+            return;
         }
+        let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
+        held.push((buffer, holds));
+        let mut bytes: u64 = held.iter().map(|(buffer, _)| buffer.size()).sum();
+        while held.len() > SPARE_BUFFERS || bytes > SPARE_BYTES {
+            bytes -= held.remove(0).0.size();
+        }
+    }
+
+    /// A buffer of `size` bytes or more holding the words `base` but on
+    /// the returned storage words: one that holds `base`, written on
+    /// `changed`; else one holding other words made from `base`, written on
+    /// those and the words its own differ on.
+    pub(crate) fn take_made(
+        &self,
+        made: &MadeFrom,
+        size: u64,
+    ) -> Option<(wgpu::Buffer, Vec<Range<usize>>)> {
+        let (base, changed) = (made.words, &made.changed);
+        let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
+        let fits = |buffer: &wgpu::Buffer| buffer.size() >= size;
+        if let Some(index) = held.iter().position(|(buffer, holds)| {
+            fits(buffer) && holds.as_ref().is_some_and(|holds| holds.words == base)
+        }) {
+            return Some((held.remove(index).0, changed.to_vec()));
+        }
+        let index = held.iter().position(|(buffer, holds)| {
+            fits(buffer)
+                && holds
+                    .as_ref()
+                    .and_then(|holds| holds.made.as_ref())
+                    .is_some_and(|theirs| theirs.words == base)
+        })?;
+        let (buffer, holds) = held.remove(index);
+        let theirs = holds.and_then(|holds| holds.made).expect("found by it");
+        let mut spans: Vec<Range<usize>> = changed.iter().cloned().chain(theirs.changed).collect();
+        spans.sort_by_key(|span| (span.start, span.end));
+        spans.dedup();
+        Some((buffer, spans))
     }
 }
 
@@ -140,7 +197,7 @@ impl Drop for DeviceImage {
         // command that reads it was submitted before whatever writes it next,
         // and one queue runs in order.
         if let Some(spare) = self.spare.take() {
-            spare.keep(self.buffer.clone());
+            spare.keep(self.buffer.clone(), self.holds.take());
         }
     }
 }

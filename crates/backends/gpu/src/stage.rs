@@ -100,6 +100,7 @@ pub(crate) fn adopt_outputs(
     let device = Box::new(DeviceImage {
         buffer: final_buffer,
         spare: spare.clone(),
+        holds: None,
     });
     let output = scope.adopt_resident(output_port.ty.schema.clone(), output_domain, device)?;
     let mut outputs = vec![output];
@@ -126,6 +127,7 @@ pub(crate) fn adopt_outputs(
             Box::new(DeviceImage {
                 buffer,
                 spare: spare.clone(),
+                holds: None,
             }),
         );
         match adopted {
@@ -146,7 +148,6 @@ impl GpuBackend {
         &self,
         scope: &mut Scope<'_>,
         handle: Handle,
-        index: usize,
     ) -> Result<wgpu::Buffer, ExecutionError> {
         let resident = scope
             .resident(handle)?
@@ -155,26 +156,90 @@ impl GpuBackend {
         if let Some(buffer) = resident {
             return Ok(buffer);
         }
-        let bytes = scope
-            .storage(handle)?
-            .iter()
-            .flat_map(|w| w.to_le_bytes())
-            .collect::<Vec<u8>>();
-        self.uploaded
-            .fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);
-        let buffer = self.buffer(
-            &format!("input {index}"),
-            &bytes,
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        );
+        let usage = wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST;
+        let len = scope.storage(handle)?.len();
+        let size = (len.max(4) as u64 * 4).div_ceil(16) * 16;
+        // A Field made from words a buffer here still holds, or holds but
+        // on pages of its own, is brought up from that buffer on the words
+        // either may differ on alone; else from a copy of the buffer its
+        // base lives in. A write is queued for the next submission, after
+        // every command that read the buffer before.
+        let made = scope.made_from(handle)?;
+        let found = match &made {
+            Some(made) => self.spare.take_made(made, size).or_else(|| {
+                self.copied(scope, made.words, size, usage)
+                    .map(|buffer| (buffer, made.changed.clone()))
+            }),
+            None => None,
+        };
+        let (buffer, spans) = match found {
+            Some(found) => found,
+            None => (
+                self.spare.take(&self.device, size, usage),
+                std::iter::once(0..len).collect(),
+            ),
+        };
+        let storage = scope.storage(handle)?;
+        for span in spans {
+            let bytes = storage[span.clone()]
+                .iter()
+                .flat_map(|w| w.to_le_bytes())
+                .collect::<Vec<u8>>();
+            if bytes.is_empty() {
+                continue;
+            }
+            self.uploaded
+                .fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            self.queue
+                .write_buffer(&buffer, span.start as u64 * 4, &bytes);
+        }
+        let holds = Held {
+            words: scope.version(handle)?,
+            made,
+        };
         scope.make_resident(
             handle,
             Box::new(DeviceImage {
                 buffer: buffer.clone(),
-                spare: None,
+                spare: Some(self.spare.clone()),
+                holds: Some(holds),
             }),
         )?;
         Ok(buffer)
+    }
+
+    /// A copy, on the device, of the buffer a resident Field holding
+    /// `words` has, when it holds `size` bytes or more.
+    fn copied(
+        &self,
+        scope: &Scope<'_>,
+        words: Version,
+        size: u64,
+        usage: wgpu::BufferUsages,
+    ) -> Option<wgpu::Buffer> {
+        if !scope.holds(words).ok()? {
+            return None;
+        }
+        let from = scope
+            .resident(words.field())
+            .ok()??
+            .downcast_ref::<DeviceImage>()?
+            .buffer
+            .clone();
+        if from.size() < size {
+            return None;
+        }
+        let to = self.spare.take(&self.device, size, usage);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("made from"),
+            });
+        encoder.copy_buffer_to_buffer(&from, 0, &to, 0, size);
+        self.queue.submit(Some(encoder.finish()));
+        Some(to)
     }
 
     /// The context and parameter buffers for the execution being staged: the
@@ -281,7 +346,7 @@ impl GpuBackend {
                 f32::from_bits(extent.depth()),
                 0.0,
             ]);
-            let bound = self.bind_input(scope, *handle, index)?;
+            let bound = self.bind_input(scope, *handle)?;
             let port = &module.manifest.inputs[index];
             if module.manifest.memories.contains(&port.name) {
                 let size = (port.ty.schema.storage_words(extent.count()) * 4) as u64;

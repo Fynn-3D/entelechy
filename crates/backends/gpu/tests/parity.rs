@@ -2403,3 +2403,108 @@ fn smoothstep_is_the_interpreters_at_its_edges() {
     assert!(cpu.iter().any(|p| p[0] == 0.0) && cpu.iter().any(|p| p[0] == 1.0));
     assert_eq!(mismatch(&cpu, &gpu_pixels, 1e-5), 0.0);
 }
+
+/// A Field made from another is brought up to the device on the pages it
+/// changed alone: from a copy of the other's buffer while that lives,
+/// from the buffer its upload left behind once it is released. Its words
+/// on the device are its own either way.
+#[test]
+fn a_field_made_from_another_is_uploaded_on_its_changed_pages() {
+    let Some(gpu) = gpu() else { return };
+    let module = compile(
+        "kernel test.twice@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; compute { return sample(rows) * 2; } }",
+    )
+    .unwrap();
+    let prepared = gpu.prepare(&module).unwrap();
+    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+    let page = orla_abi::PAGE_WORDS;
+    let len = page * 5 + 3;
+    let domain = Domain::Rows(len as u32);
+    let mut host = Host::new(len * 64);
+    // Runs the Kernel over `rows`: its words doubled, and the bytes uploaded.
+    let run = |host: &mut Host, rows: orla_abi::Handle| -> (Vec<u32>, u64) {
+        let before = gpu.uploaded();
+        let invocation = Invocation {
+            inputs: vec![rows],
+            params: vec![],
+            domain,
+            context: Context::default(),
+        };
+        let out = {
+            let mut scope = Scope::new(host, all());
+            gpu.execute(prepared.as_ref(), &module, &invocation, &mut scope)
+                .unwrap()
+        };
+        let bytes =
+            Backend::download(&gpu, host.resident(out[0]).unwrap().unwrap(), len * 4).unwrap();
+        host.release(out[0]).unwrap();
+        let words = bytes
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]) / 2)
+            .collect();
+        (words, gpu.uploaded() - before)
+    };
+    let field = |words: &Vec<u32>| {
+        orla_abi::FieldData::from_storage(ints.clone(), domain, words.clone()).unwrap()
+    };
+    let first: Vec<u32> = (0..len as u32).collect();
+    let base = host.adopt(field(&first)).unwrap();
+    assert_eq!(run(&mut host, base), (first.clone(), len as u64 * 4));
+
+    // Made from the base, which lives on the device: a page and the last.
+    let mut second = first.clone();
+    second[page + 1] = 7;
+    second[len - 1] = 9;
+    let mut changed = orla_abi::Pages::new();
+    changed.mark(page + 1);
+    changed.mark(len - 1);
+    let made = host.adopt_derived(field(&second), base, changed).unwrap();
+    assert_eq!(
+        run(&mut host, made),
+        (second.clone(), (page + 3) as u64 * 4)
+    );
+
+    // Made from that one, released before it is bound: the first page.
+    let mut third = second.clone();
+    third[3] = 11;
+    let mut changed = orla_abi::Pages::new();
+    changed.mark(3);
+    let again = host.adopt_derived(field(&third), made, changed).unwrap();
+    host.release(base).unwrap();
+    host.release(made).unwrap();
+    assert_eq!(run(&mut host, again), (third.clone(), page as u64 * 4));
+    host.release(again).unwrap();
+
+    // Two made from words never on the device, the first released before
+    // the second is bound: the second is brought up from the first's
+    // buffer on the pages either changed.
+    let plain = host.adopt(field(&first)).unwrap();
+    let sibling = |host: &mut Host, at: usize| {
+        let mut words = first.clone();
+        words[at] = 13;
+        let mut changed = orla_abi::Pages::new();
+        changed.mark(at);
+        (
+            host.adopt_derived(field(&words), plain, changed).unwrap(),
+            words,
+        )
+    };
+    let (one, words) = sibling(&mut host, page + 2);
+    assert_eq!(run(&mut host, one), (words, len as u64 * 4));
+    host.release(one).unwrap();
+    let (other, words) = sibling(&mut host, page * 4 + 1);
+    assert_eq!(run(&mut host, other), (words, page as u64 * 2 * 4));
+    host.release(other).unwrap();
+
+    // Written in place after it was uploaded, a Field's old buffer holds
+    // other words: what is made from it after is uploaded whole.
+    let written = host.adopt(field(&first)).unwrap();
+    run(&mut host, written);
+    host.write_element(written, 9, &[17]).unwrap();
+    let mut words = first.clone();
+    words[9] = 17;
+    let after = host
+        .adopt_derived(field(&words), written, orla_abi::Pages::new())
+        .unwrap();
+    assert_eq!(run(&mut host, after), (words, len as u64 * 4));
+}

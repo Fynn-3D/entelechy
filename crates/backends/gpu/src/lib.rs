@@ -33,7 +33,7 @@ use std::any::Any;
 use std::fmt;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use orla_abi::{Handle, Invocation, Scope, Value};
+use orla_abi::{Handle, Invocation, MadeFrom, Scope, Value, Version};
 use orla_ir::{Mode, Validated};
 use orla_rules::{ArithmeticError, Backend, Check, NativeOp, Prepared};
 use orla_rules::{ExecutionError, check_invocation};

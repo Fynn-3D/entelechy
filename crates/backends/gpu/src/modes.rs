@@ -245,10 +245,10 @@ impl GpuBackend {
             let (x, y) = wgsl::folded(threads.div_ceil(wgsl::PREFIX_WORKGROUP));
             pass.dispatch_workgroups(x, y, 1);
         }
-        self.spare.keep(sums);
+        self.spare.keep(sums, None);
         if let Some((out_highs, sum_highs)) = highs {
-            self.spare.keep(out_highs);
-            self.spare.keep(sum_highs);
+            self.spare.keep(out_highs, None);
+            self.spare.keep(sum_highs, None);
         }
         output
     }
@@ -358,7 +358,7 @@ impl GpuBackend {
         // One of the two is the answer and becomes the Field; the other goes
         // back to the pile. What read it was submitted before whatever writes
         // it next, and one queue runs in order.
-        self.spare.keep(next);
+        self.spare.keep(next, None);
         current
     }
 
