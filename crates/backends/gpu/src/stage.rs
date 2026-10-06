@@ -167,13 +167,12 @@ impl GpuBackend {
         // base lives in. A write is queued for the next submission, after
         // every command that read the buffer before.
         let made = scope.made_from(handle)?;
-        let found = match &made {
-            Some(made) => self.spare.take_made(made, size).or_else(|| {
-                self.copied(scope, made.words, size, usage)
-                    .map(|buffer| (buffer, made.changed.clone()))
-            }),
-            None => None,
-        };
+        let found = self.spare.take_made(&made, size).or_else(|| {
+            made.iter().find_map(|from| {
+                self.copied(scope, from.words, size, usage)
+                    .map(|buffer| (buffer, from.changed.clone()))
+            })
+        });
         let (buffer, spans) = match found {
             Some(found) => found,
             None => (

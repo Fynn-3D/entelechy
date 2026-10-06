@@ -2496,6 +2496,29 @@ fn a_field_made_from_another_is_uploaded_on_its_changed_pages() {
     assert_eq!(run(&mut host, other), (words, page as u64 * 2 * 4));
     host.release(other).unwrap();
 
+    // Made from a Field made from one uploaded and released: brought up
+    // from that one's buffer on the pages changed since.
+    let ancestor = host.adopt(field(&first)).unwrap();
+    run(&mut host, ancestor);
+    let mut middle_words = first.clone();
+    middle_words[page * 3] = 21;
+    let mut changed = orla_abi::Pages::new();
+    changed.mark(page * 3);
+    let middle = host
+        .adopt_derived(field(&middle_words), ancestor, changed)
+        .unwrap();
+    let mut last_words = middle_words.clone();
+    last_words[page * 5 + 1] = 22;
+    let mut changed = orla_abi::Pages::new();
+    changed.mark(page * 5 + 1);
+    let last = host
+        .adopt_derived(field(&last_words), middle, changed)
+        .unwrap();
+    host.release(ancestor).unwrap();
+    host.release(middle).unwrap();
+    assert_eq!(run(&mut host, last), (last_words, (page + 3) as u64 * 4));
+    host.release(last).unwrap();
+
     // Written in place after it was uploaded, a Field's old buffer holds
     // other words: what is made from it after is uploaded whole.
     let written = host.adopt(field(&first)).unwrap();

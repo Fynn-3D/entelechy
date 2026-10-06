@@ -854,6 +854,24 @@ impl Pages {
         self.bits.iter().all(|word| *word == 0)
     }
 
+    /// Every page `other` marks marked here too.
+    pub fn add(&mut self, other: &Pages) {
+        if self.bits.len() < other.bits.len() {
+            self.bits.resize(other.bits.len(), 0);
+        }
+        for (mine, theirs) in self.bits.iter_mut().zip(&other.bits) {
+            *mine |= theirs;
+        }
+    }
+
+    /// How many pages are marked.
+    pub fn count(&self) -> usize {
+        self.bits
+            .iter()
+            .map(|word| word.count_ones() as usize)
+            .sum()
+    }
+
     /// The marked pages, in order.
     pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
         self.bits.iter().enumerate().flat_map(|(at, word)| {
@@ -870,13 +888,40 @@ impl Pages {
     }
 }
 
-/// What a Field is known to be made from: another Field's words, but on
-/// the pages `changed`. A record the Host keeps to copy and compare a
-/// page at a time; the Field is a value as any other.
+/// What a Field is known to be made from: other Fields' words, nearest
+/// first (the words it was made from, those they were made from, and so
+/// on, [`ANCESTRY`] at most), each with the pages it differs from them
+/// on. A record the Host keeps to copy and compare a page at a time; the
+/// Field is a value as any other.
 #[derive(Clone, Debug)]
 struct Lineage {
-    base: Version,
-    changed: Pages,
+    from: Vec<(Version, Pages)>,
+}
+
+/// How far back a Field's lineage goes: a frame's chain of scans, each
+/// made from the last, reaches the frame before.
+const ANCESTRY: usize = 32;
+
+impl Lineage {
+    /// The pages the Field differs from `words` on, where it was made
+    /// from them.
+    fn pages_from(&self, words: Version) -> Option<&Pages> {
+        self.from
+            .iter()
+            .find(|(from, _)| *from == words)
+            .map(|(_, pages)| pages)
+    }
+
+    /// The pages two Fields made from the same words differ on: the pages
+    /// either differs from the nearest words both were made from on.
+    fn shared(&self, other: &Lineage) -> Option<Pages> {
+        self.from.iter().find_map(|(from, pages)| {
+            let theirs = other.pages_from(*from)?;
+            let mut both = pages.clone();
+            both.add(theirs);
+            Some(both)
+        })
+    }
 }
 
 /// A Field's words as they were between two writes in place: what a
@@ -911,6 +956,9 @@ impl Version {
 struct Spare {
     words: Vec<u32>,
     holds: Option<Version>,
+    /// What the released Field was made from, so the buffer stands for
+    /// those words too but on its changed pages.
+    made: Option<Lineage>,
 }
 
 /// Where a Field's words are.
@@ -1375,31 +1423,33 @@ impl Host {
             field: handle,
             writes: slot.writes,
         };
-        slot.lineage = None;
+        let made = slot.lineage.take();
         self.used_words -= charge;
         self.free.push(handle.index);
         // The words go to the spare pile for the next Field of that size,
-        // still holding the released Field's words.
+        // still holding the released Field's words, and what they were
+        // made from.
         if let Storage::Data(data)
         | Storage::Resident {
             kept: Some(data), ..
         } = storage
         {
-            self.keep_spare(data.storage, Some(version));
+            self.keep_spare(data.storage, Some(version), made);
         }
         Ok(())
     }
 
     /// Keeps a released buffer for reuse, with the Field whose words it
-    /// holds. The pile holds a few dozen buffers and at most a quarter of
-    /// the budget; the oldest beyond go.
-    fn keep_spare(&mut self, words: Vec<u32>, holds: Option<Version>) {
-        const KEPT: usize = 64;
+    /// holds and what that was made from. The pile holds a few hundred
+    /// buffers, enough for the scans of a frame to find their memories'
+    /// the next, and at most a quarter of the budget; the oldest beyond go.
+    fn keep_spare(&mut self, words: Vec<u32>, holds: Option<Version>, made: Option<Lineage>) {
+        const KEPT: usize = 256;
         let room = self.budget_words / 4;
         if words.is_empty() || words.len() > room {
             return;
         }
-        self.spare.push(Spare { words, holds });
+        self.spare.push(Spare { words, holds, made });
         let mut held: usize = self.spare.iter().map(|buffer| buffer.words.len()).sum();
         while self.spare.len() > KEPT || held > room {
             let oldest = self.spare.remove(0);
@@ -1408,21 +1458,41 @@ impl Host {
     }
 
     /// A copy of a Field's words to write in place, as a scan's memory
-    /// is: a released buffer that still holds the words of the Field it
-    /// was made from with the pages it changed copied in where there is
-    /// one, else a buffer of the Field's words copied whole.
+    /// is, made from a released buffer where one holds words it differs
+    /// from on known pages alone, those pages copied in: the buffer of the
+    /// words the Field was made from, of a Field made from the Field, or of
+    /// one made from the same words; else a buffer of the Field's words
+    /// copied whole.
     pub fn working(&mut self, handle: Handle) -> Result<Vec<u32>, HostError> {
         let lineage = self.slot(handle)?.lineage.clone();
+        let version = self.version(handle)?;
         let len = self.data(handle)?.storage.len();
-        let from_base = lineage.as_ref().and_then(|lineage| {
-            self.spare
-                .iter()
-                .position(|buffer| buffer.holds == Some(lineage.base) && buffer.words.len() == len)
-        });
-        if let (Some(at), Some(lineage)) = (from_base, lineage) {
+        // Of the released buffers that hold words this Field differs from
+        // on known pages, the one it differs from on fewest: one holding
+        // words the Field was made from, one made from this Field, one
+        // made from words this Field was made from too.
+        let found = self
+            .spare
+            .iter()
+            .enumerate()
+            .filter(|(_, buffer)| buffer.words.len() == len)
+            .filter_map(|(at, buffer)| {
+                let made = buffer.made.as_ref();
+                let pages = match (&lineage, buffer.holds) {
+                    (Some(lineage), Some(holds)) if lineage.pages_from(holds).is_some() => {
+                        lineage.pages_from(holds).cloned()
+                    }
+                    _ => made
+                        .and_then(|made| made.pages_from(version).cloned())
+                        .or_else(|| lineage.as_ref()?.shared(made?)),
+                }?;
+                Some((at, pages))
+            })
+            .min_by_key(|(_, pages)| pages.count());
+        if let Some((at, pages)) = found {
             let mut words = self.spare.swap_remove(at).words;
             let storage = &self.data(handle)?.storage;
-            for page in lineage.changed.iter() {
+            for page in pages.iter() {
                 let span = Pages::span(page, len);
                 words[span.clone()].copy_from_slice(&storage[span]);
             }
@@ -1456,10 +1526,21 @@ impl Host {
         let known = self
             .data(base)
             .is_ok_and(|base| base.schema == data.schema && base.domain == data.domain);
-        let base = self.version(base);
+        let words = self.version(base);
+        let inherited = self.slot(base).ok().and_then(|slot| slot.lineage.clone());
         let handle = self.adopt(data)?;
-        if known && let Ok(base) = base {
-            self.slot_mut(handle)?.lineage = Some(Lineage { base, changed });
+        if known && let Ok(words) = words {
+            // What the base was made from, it differs from on the base's
+            // pages and its own.
+            let mut from = vec![(words, changed.clone())];
+            for (earlier, mut pages) in inherited.map(|lineage| lineage.from).unwrap_or_default() {
+                if from.len() == ANCESTRY {
+                    break;
+                }
+                pages.add(&changed);
+                from.push((earlier, pages));
+            }
+            self.slot_mut(handle)?.lineage = Some(Lineage { from });
         }
         Ok(handle)
     }
@@ -1478,24 +1559,25 @@ impl Host {
             .is_ok_and(|slot| slot.writes == version.writes)
     }
 
-    /// The words a Field was made from and the storage words, page by
-    /// page, it may differ from them on; `None` where that is not known.
-    pub fn made_from(&self, handle: Handle) -> Result<Option<MadeFrom>, HostError> {
+    /// The words a Field was made from, nearest first, each with the
+    /// storage words, page by page, it may differ from them on; none where
+    /// that is not known.
+    pub fn made_from(&self, handle: Handle) -> Result<Vec<MadeFrom>, HostError> {
         let slot = self.slot(handle)?;
         let Some(lineage) = &slot.lineage else {
-            return Ok(None);
+            return Ok(Vec::new());
         };
         let len = slot
             .describe()
             .map_or(0, |(schema, domain)| schema.storage_words(domain.count()));
-        Ok(Some(MadeFrom {
-            words: lineage.base,
-            changed: lineage
-                .changed
-                .iter()
-                .map(|page| Pages::span(page, len))
-                .collect(),
-        }))
+        Ok(lineage
+            .from
+            .iter()
+            .map(|(words, pages)| MadeFrom {
+                words: *words,
+                changed: pages.iter().map(|page| Pages::span(page, len)).collect(),
+            })
+            .collect())
     }
 
     /// Whether two Fields in Host memory hold the same words: a Field made
@@ -1515,16 +1597,12 @@ impl Host {
         let lineage = |field: Handle| self.slot(field).ok()?.lineage.as_ref();
         let (of_a, of_b) = (lineage(a), lineage(b));
         for (made, from) in [(of_b, a), (of_a, b)] {
-            if let Some(made) = made
-                && self.version(from).is_ok_and(|now| made.base == now)
-            {
-                return Some(made.changed.iter().all(on));
+            if let Some(pages) = made.and_then(|made| made.pages_from(self.version(from).ok()?)) {
+                return Some(pages.iter().all(on));
             }
         }
-        if let (Some(of_a), Some(of_b)) = (of_a, of_b)
-            && of_a.base == of_b.base
-        {
-            return Some(of_a.changed.iter().chain(of_b.changed.iter()).all(on));
+        if let Some(pages) = of_a.and_then(|of_a| of_a.shared(of_b?)) {
+            return Some(pages.iter().all(on));
         }
         Some(first == second)
     }
@@ -1779,6 +1857,97 @@ mod tests {
         host.release(base).unwrap();
         let working = host.working(first).unwrap();
         assert_eq!(working, host.data(first).unwrap().storage());
+    }
+
+    /// A scan's memory bound to the same empty Field run after run: the
+    /// buffer the last run's memory left is that Field's words but on
+    /// the pages it changed, so the next working copy is made from it with
+    /// those pages alone copied back; and a Field made from words two
+    /// Fields were made from is made from the other's buffer, on the
+    /// pages either changed.
+    #[test]
+    fn a_working_copy_is_made_from_what_was_made_from_the_same_words() {
+        let len = PAGE_WORDS * 4;
+        let mut host = Host::new(len * 64);
+        let schema = Schema::new(vec![Scalar::Int]);
+        let empty = rows(&mut host, vec![0; len]);
+        let run = |host: &mut Host, from: Handle, at: usize| {
+            let mut words = host.working(from).unwrap();
+            assert_eq!(
+                &words,
+                host.data(from).unwrap().storage(),
+                "the working copy is the Field"
+            );
+            words[at] = 9;
+            let mut changed = Pages::new();
+            changed.mark(at);
+            let field = FieldData::from_storage(schema.clone(), Domain::Rows(len as u32), words);
+            host.adopt_derived(field.unwrap(), from, changed).unwrap()
+        };
+        // Run after run from the same Field, the last memory released.
+        let first = run(&mut host, empty, 5);
+        host.release(first).unwrap();
+        let held = host.spare.len();
+        let second = run(&mut host, empty, PAGE_WORDS * 3);
+        assert_eq!(
+            host.spare.len(),
+            held - 1,
+            "the released memory's buffer was taken"
+        );
+        host.release(second).unwrap();
+
+        // Siblings: one made from the empty Field, released; another made
+        // from it is worked from that one's buffer.
+        let one = run(&mut host, empty, PAGE_WORDS);
+        let other = run(&mut host, empty, PAGE_WORDS * 2);
+        host.release(one).unwrap();
+        let held = host.spare.len();
+        let words = host.working(other).unwrap();
+        assert_eq!(&words, host.data(other).unwrap().storage());
+        assert_eq!(host.spare.len(), held - 1);
+
+        // Written in place after, the empty Field is not what the buffers
+        // stand for: its working copy has the written word.
+        host.write_element(empty, 7, &[3]).unwrap();
+        let words = host.working(empty).unwrap();
+        assert_eq!(words[7], 3);
+        assert_eq!(&words, host.data(empty).unwrap().storage());
+    }
+
+    /// A Field made from one made from another is known to differ from
+    /// either on the pages changed since: a chain of scans finds the
+    /// buffer of the chain's start, and compares with it, page by page.
+    #[test]
+    fn a_field_is_known_by_what_it_was_made_from_generations_back() {
+        let len = PAGE_WORDS * 6;
+        let mut host = Host::new(len * 64);
+        let schema = Schema::new(vec![Scalar::Int]);
+        let start = rows(&mut host, vec![1; len]);
+        let step = |host: &mut Host, from: Handle, at: usize| {
+            let mut words = host.working(from).unwrap();
+            words[at] = 2;
+            let mut changed = Pages::new();
+            changed.mark(at);
+            let field = FieldData::from_storage(schema.clone(), Domain::Rows(len as u32), words);
+            host.adopt_derived(field.unwrap(), from, changed).unwrap()
+        };
+        let second = step(&mut host, start, 3);
+        let third = step(&mut host, second, PAGE_WORDS * 4);
+        assert_eq!(host.made_from(third).unwrap().len(), 2);
+        assert_eq!(
+            host.made_from(third).unwrap()[1].changed.len(),
+            2,
+            "two pages since the start"
+        );
+        // Compared with the start on the two pages alone, and differing.
+        assert_eq!(host.same(start, third), Some(false));
+        // The start released: the third's working copy is its buffer with
+        // the two pages copied in.
+        host.release(start).unwrap();
+        let held = host.spare.len();
+        let words = host.working(third).unwrap();
+        assert_eq!(&words, host.data(third).unwrap().storage());
+        assert_eq!(host.spare.len(), held - 1);
     }
 
     /// A released Field's buffer is known by its handle, generation and

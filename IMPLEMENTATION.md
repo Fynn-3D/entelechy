@@ -94,8 +94,9 @@ Packages built from existing modes, with no engine feature of their own.
   ([runtime](crates/core/kernel/src/lib.rs), [parity](crates/backends/gpu/tests/parity.rs)).
   A resident output is presented by a blit on the device
   ([presenter](crates/backends/gpu/src/present.rs)).
-- Pages: a Field made from another records the words it was made from
-  and the pages it changed; a scan memory is copied, compared and
+- Pages: a Field made from another records the words it was made from,
+  generations back, and the pages it changed since each; a released
+  buffer keeps the same record; a scan memory is copied, compared and
   uploaded on those pages alone
   ([host](crates/core/host/src/lib.rs), [jit](crates/backends/jit/src/lib.rs),
   [gpu](crates/backends/gpu/src/stage.rs),
@@ -123,7 +124,7 @@ A GPU session hands scans and every module the GPU does not take
 beyond the device's bindings are packed into one buffer
 ([packing](crates/backends/gpu/src/wgsl/mod.rs)). Where each node ran and
 why is `Runtime::placement` ([routed test](crates/interface/orla/tests/session.rs),
-[mixed](crates/interface/session/tests/mixed.rs)). A Kernel the device's own
+[mixed](crates/interface/session/tests/mixed.rs), [few](crates/interface/session/tests/few.rs)). A Kernel the device's own
 compiler fails on is declined from then on and runs on the JIT, said as
 any routing is ([GPU `declines`](crates/backends/gpu/src/lib.rs),
 `prepare_on` in [the runtime](crates/core/kernel/src/lib.rs),

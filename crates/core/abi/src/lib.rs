@@ -1246,10 +1246,10 @@ impl<'a> Scope<'a> {
         Ok(self.host.resident(field)?)
     }
 
-    /// The Field an input was made from and the storage words it may
-    /// differ from it on ([`Host::made_from`]), for a device to bring a
-    /// copy of that Field up to date. Requires `field.read`.
-    pub fn made_from(&self, field: Handle) -> Result<Option<MadeFrom>, AbiError> {
+    /// The words an input was made from, nearest first, and the storage
+    /// words it may differ from each on ([`Host::made_from`]), for a device
+    /// to bring a copy of those words up to date. Requires `field.read`.
+    pub fn made_from(&self, field: Handle) -> Result<Vec<MadeFrom>, AbiError> {
         self.require(Capability::FieldRead)?;
         Ok(self.host.made_from(field)?)
     }

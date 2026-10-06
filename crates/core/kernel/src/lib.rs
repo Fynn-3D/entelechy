@@ -1012,6 +1012,16 @@ impl Runtime {
                 .map_or(0, |domain| domain.count()),
             _ => invocation.domain.count(),
         } as u64;
+        // A scatter carries its target whole: where it runs, the target
+        // is copied and written there, and its readers take it from there.
+        let carried = match run.manifest.mode {
+            orla_ir::Mode::Scatter { base, .. } => invocation
+                .inputs
+                .get(base as usize)
+                .and_then(|input| self.host.domain(*input).ok())
+                .map_or(0, |domain| domain.count() as u64),
+            _ => 0,
+        };
         // What it reads that the device made in this evaluation, in bytes:
         // the ordered backend waits for it and brings it down.
         let fresh: u64 = invocation
@@ -1025,7 +1035,7 @@ impl Runtime {
                 },
             )
             .fold(0, u64::saturating_add);
-        let work = elements.saturating_mul(typical);
+        let work = elements.saturating_mul(typical).saturating_add(carried);
         // Fewer elements than one of the device's groups holds gain nothing
         // there, the device running them a thread each, far slower than
         // the processor. They leave it, but for one that reads what the
@@ -1033,7 +1043,7 @@ impl Runtime {
         // the device and bring it down, breaking the device's work in
         // two, which pays only when the run itself is long
         // ([`FEW_LONG_WORK`]) and what comes down is not large.
-        let few = elements <= FEW_ELEMENTS
+        let few = elements.max(carried) <= FEW_ELEMENTS
             && (fresh == 0 || (work > FEW_LONG_WORK && fresh <= FEW_FRESH_BYTES));
         if few {
             return Some(format!(

@@ -24,7 +24,7 @@ pub(crate) type Kept = (wgpu::Buffer, Option<Held>);
 #[derive(Clone)]
 pub(crate) struct Held {
     pub(crate) words: Version,
-    pub(crate) made: Option<MadeFrom>,
+    pub(crate) made: Vec<MadeFrom>,
 }
 
 /// Buffers released Fields left behind, by size, for the next outputs of
@@ -158,36 +158,45 @@ impl Spare {
         }
     }
 
-    /// A buffer of `size` bytes or more holding the words `base` but on
-    /// the returned storage words: one that holds `base`, written on
-    /// `changed`; else one holding other words made from `base`, written on
-    /// those and the words its own differ on.
+    /// A buffer of `size` bytes or more holding words a Field made as
+    /// `made` says differs from on the returned storage words alone: one
+    /// holding words it was made from, written on the words it differs
+    /// from them on; else one uploaded from a Field made from words it was
+    /// made from too, written on the words either differs on. Of those,
+    /// the one written on fewest words.
     pub(crate) fn take_made(
         &self,
-        made: &MadeFrom,
+        made: &[MadeFrom],
         size: u64,
     ) -> Option<(wgpu::Buffer, Vec<Range<usize>>)> {
-        let (base, changed) = (made.words, &made.changed);
         let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
-        let fits = |buffer: &wgpu::Buffer| buffer.size() >= size;
-        if let Some(index) = held.iter().position(|(buffer, holds)| {
-            fits(buffer) && holds.as_ref().is_some_and(|holds| holds.words == base)
-        }) {
-            return Some((held.remove(index).0, changed.to_vec()));
-        }
-        let index = held.iter().position(|(buffer, holds)| {
-            fits(buffer)
-                && holds
-                    .as_ref()
-                    .and_then(|holds| holds.made.as_ref())
-                    .is_some_and(|theirs| theirs.words == base)
-        })?;
-        let (buffer, holds) = held.remove(index);
-        let theirs = holds.and_then(|holds| holds.made).expect("found by it");
-        let mut spans: Vec<Range<usize>> = changed.iter().cloned().chain(theirs.changed).collect();
-        spans.sort_by_key(|span| (span.start, span.end));
-        spans.dedup();
-        Some((buffer, spans))
+        let spans_for = |holds: &Held| -> Option<Vec<Range<usize>>> {
+            if let Some(mine) = made.iter().find(|mine| mine.words == holds.words) {
+                return Some(mine.changed.clone());
+            }
+            made.iter().find_map(|mine| {
+                let theirs = holds
+                    .made
+                    .iter()
+                    .find(|theirs| theirs.words == mine.words)?;
+                let mut spans: Vec<Range<usize>> = mine
+                    .changed
+                    .iter()
+                    .chain(&theirs.changed)
+                    .cloned()
+                    .collect();
+                spans.sort_by_key(|span| (span.start, span.end));
+                spans.dedup();
+                Some(spans)
+            })
+        };
+        let (index, spans) = held
+            .iter()
+            .enumerate()
+            .filter(|(_, (buffer, _))| buffer.size() >= size)
+            .filter_map(|(index, (_, holds))| Some((index, spans_for(holds.as_ref()?)?)))
+            .min_by_key(|(_, spans)| spans.iter().map(ExactSizeIterator::len).sum::<usize>())?;
+        Some((held.remove(index).0, spans))
     }
 }
 

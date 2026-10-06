@@ -279,7 +279,10 @@ of operations per element from the IR) are at most `--small`, 400,000 by
 default; to the device otherwise. A run of so few elements that one of
 the device's groups holds them all (64, its 8 by 8) goes to the JIT
 however much each takes, since the device runs them a thread each, far
-slower than the processor. A Kernel the device declines always runs on
+slower than the processor. A scatter carries its target whole, so the
+target's elements count among its own: one of few elements written into
+a large target stays where the target is, rather than copying it to the
+processor and back for its readers. A Kernel the device declines always runs on
 the JIT. A small run that reads a Field the device made in this
 evaluation stays on the device, since bringing it back would wait for
 the device's work before it and break it in two; a run of so few
@@ -1054,19 +1057,23 @@ ceiling, and what a run costs is the pages it changes. The Host divides
 a Field's words into pages of `PAGE_WORDS`. A Field made from another
 records the other's words, as a `Version` (the Field and how often it
 was written in place), and which of its pages differ
-(`Host::adopt_derived`); a Field written in place has a new version, so
+(`Host::adopt_derived`), and so for what those were made from, up to
+`ANCESTRY` back, the pages since added up: a frame's chain of scans
+reaches the frame before. A Field written in place has a new version, so
 nothing made from its earlier words takes them for its present ones. A
 released Field's buffer is kept on the Host's spare pile marked with the
-version it holds, so `Host::working` hands back the words of a Field made
-from it by copying the changed pages alone, and `Host::same` compares
-two Fields on the pages either changed when one was made from the
-other, or both from the same words. The JIT carries a scan's memory this
+version it holds and what it was made from, so `Host::working` hands
+back a Field's words from the buffer of words it was made from, of a
+Field made from it, or of one made from the same words, copying the
+pages either changed alone: a scan's memory bound to the same empty
+Field run after run is made from the buffer its last run left. `Host::same`
+compares two Fields on those pages the same way. The JIT carries a scan's memory this
 way: it marks a page when a write changes a word on it, and a run it
 cannot follow word by word is adopted whole, as any Field is. The GPU
-brings such a Field up the same way: from the buffer an upload of the
-words it was made from left behind, or of other words made from those,
-writing the pages either changed, else from a device copy of its base's
-buffer while that lives. The interpreter copies a memory whole, the
+brings such a Field up the same way: from the buffer an upload of
+words it was made from left behind, or of other words made from the
+same, writing the pages either changed, else from a device copy of a
+live base's buffer. The interpreter copies a memory whole, the
 reference the others are held to; a backend that does not record what it
 changed gives up nothing but the saving.
 
