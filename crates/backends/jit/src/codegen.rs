@@ -267,7 +267,7 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
             Fx::new(
                 module, &mut jit, builder, &imports, &functions, ptr, max_stride,
             )
-            .function(function, Kind::Function);
+            .function(function, Kind::Function, &format!("f{index}"));
         }
         jit.define_function(functions[index].0, &mut context)
             .map_err(|error| format!("{}: {error}", function.name))?;
@@ -281,7 +281,7 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
             Fx::new(
                 module, &mut jit, builder, &imports, &functions, ptr, max_stride,
             )
-            .function(init, Kind::Function);
+            .function(init, Kind::Function, "init");
         }
         jit.define_function(init_id, &mut context)
             .map_err(|error| format!("init: {error}"))?;
@@ -295,7 +295,7 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
             Fx::new(
                 module, &mut jit, builder, &imports, &functions, ptr, max_stride,
             )
-            .function(merge, Kind::Merge);
+            .function(merge, Kind::Merge, "merge");
         }
         jit.define_function(merge_id, &mut context)
             .map_err(|error| format!("merge: {error}"))?;
@@ -308,7 +308,11 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
         Fx::new(
             module, &mut jit, builder, &imports, &functions, ptr, max_stride,
         )
-        .function(&module.entry, if scan { Kind::Scan } else { Kind::Map });
+        .function(
+            &module.entry,
+            if scan { Kind::Scan } else { Kind::Map },
+            "entry",
+        );
     }
     jit.define_function(entry_id, &mut context)
         .map_err(|error| format!("entry: {error}"))?;
@@ -382,7 +386,8 @@ struct Fx<'a, 'b> {
     jit: &'a mut JITModule,
     b: FunctionBuilder<'b>,
     ptr: types::Type,
-    /// The function's name, which names the tables it defines.
+    /// The function's place in the module (`f0`, `entry`), which names
+    /// the tables it defines.
     name: String,
     /// The words of every value known at compile time, by id: literals
     /// and vectors, structs and arrays built from them.
@@ -697,10 +702,12 @@ impl<'a, 'b> Fx<'a, 'b> {
         }
     }
 
-    /// Translates a whole function: arguments, body and return.
-    fn function(mut self, function: &Function, kind: Kind) {
+    /// Translates a whole function: arguments, body and return. `place`
+    /// is its name in the module (`f0`, `entry`), its tables' names begin
+    /// with it: two functions of one name each define their own.
+    fn function(mut self, function: &Function, kind: Kind, place: &str) {
         let slots = function.slot_count();
-        self.name = function.name.clone();
+        self.name = place.to_string();
         self.values = vec![Vec::new(); slots];
         self.types = vec![Type::Float; slots];
         self.indexed = indexed(&function.body);
@@ -941,7 +948,8 @@ impl<'a, 'b> Fx<'a, 'b> {
     }
 
     /// The address of a constant array's words in read-only data,
-    /// defined once per array, named after the function and value.
+    /// defined once per array, named after the function's place in the
+    /// module and the value.
     fn table(&mut self, id: u32) -> Value {
         let global = match self.tables.get(&id) {
             Some(global) => *global,

@@ -1301,3 +1301,50 @@ fn a_memory_carried_from_run_to_run_matches_the_interpreter_and_compares_by_its_
         cells = out[1];
     }
 }
+
+#[test]
+fn two_functions_of_one_name_each_keep_their_tables() {
+    // A module may hold two functions of one name (one made for each call
+    // that reads a wide input through); each defines its constant arrays
+    // under its own place in the module. A function long enough to stay
+    // a function, called twice, its twin added beside it.
+    let steps: String = (0..60)
+        .map(|i| format!("let v{} = sin(x * {}.0 + v{}) * 0.5; ", i + 1, i + 2, i))
+        .collect();
+    let source = format!(
+        "kernel test.tables@1 {{ requires {{ field.write; }} output result: Rows<Float>;
+            compute {{ let k = element(); return if k == 0 {{ picked(k) }} else {{ picked(k + 1) * 2.0 }}; }} }}
+        fn picked(k: Int) -> Float {{ let table = [3.0, 5.0, 7.0, 11.0]; let x = table[k - 4 * (k / 4)]; let v0 = x; {steps} return v60; }}"
+    );
+    let mut plain = compile(&source)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .into_module();
+    assert_eq!(
+        plain.functions.len(),
+        1,
+        "the function stays a function of its own"
+    );
+    let twin = plain.functions[0].clone();
+    plain.functions.push(twin);
+    let module = orla_ir::validate(plain).unwrap_or_else(|error| panic!("{error}"));
+    let alone = compile(&source).unwrap_or_else(|error| panic!("{error}"));
+    let run = |module: &orla_ir::Validated| {
+        let jit = JitBackend::new().unwrap();
+        let prepared = jit
+            .prepare(module)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let mut host = Host::new(1 << 20);
+        let invocation = Invocation {
+            inputs: vec![],
+            params: vec![],
+            domain: Domain::Rows(4),
+            context: Context::default(),
+        };
+        let mut scope = Scope::new(&mut host, all());
+        let out = jit
+            .execute(prepared.as_ref(), module, &invocation, &mut scope)
+            .unwrap()[0];
+        host.data(out).unwrap().storage().to_vec()
+    };
+    assert_eq!(run(&module), run(&alone));
+}
