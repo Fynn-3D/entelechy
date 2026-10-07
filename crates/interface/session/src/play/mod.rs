@@ -412,8 +412,13 @@ impl Play {
                     .hud
                     .then(|| self.panel_for(session, &report, picture, &context));
                 // With the line on, the frame settles the device so its
-                // time is measured on its own.
+                // time is measured on its own; overlapping, the time it
+                // waited for the frame before is that time, and the frames
+                // keep overlapping while measured.
                 let device = (self.hud && session.runtime().has_device()).then(|| {
+                    if session.overlaps() {
+                        return session.device_waited().as_secs_f64();
+                    }
                     let waiting = (self.clock)();
                     session.runtime().settle_device();
                     (self.clock)() - waiting

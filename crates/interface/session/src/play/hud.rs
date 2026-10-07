@@ -121,7 +121,7 @@ pub fn stamp(panel: &Panel, frame: &mut [u32], frame_width: u32, frame_height: u
 #[derive(Debug)]
 pub struct Stats {
     last_start: Option<f64>,
-    /// Smoothed milliseconds: frame interval, evaluating, settling the
+    /// Smoothed milliseconds: frame interval, evaluating, waiting for the
     /// device (`None` without one), and presenting (including vsync).
     interval: f64,
     evaluate: f64,
