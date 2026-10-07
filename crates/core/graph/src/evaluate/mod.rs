@@ -301,8 +301,8 @@ pub struct Evaluator {
     recalled: recall::Recalled,
 }
 
-/// When a node that runs for its state alone has its Fields on a device
-/// compared with its last: comparing waits for the device, so each time
+/// When a node that runs for its state alone, or whose outputs are small
+/// ([`SMALL_COMPARED`]), has its Fields on a device compared with its last: comparing waits for the device, so each time
 /// they are found changed the next comparison waits twice as many such
 /// runs, up to 2^[`REST_WAIT_MOST`]. State that settles is found at rest
 /// at once; state that keeps changing waits for the device seldom.
@@ -313,6 +313,25 @@ struct Rest {
 }
 
 const REST_WAIT_MOST: u32 = 10;
+
+/// The most bytes of a node's outputs compared on the device when fresh
+/// inputs moved it: a choice or a count others are made from, which costs
+/// one short wait to find unchanged and spares all that reads it.
+const SMALL_COMPARED: usize = 4096;
+
+/// The bytes `outputs` hold; a handle the Host does not know counts as
+/// past any bound.
+fn outputs_bytes(runtime: &Runtime, outputs: &[Handle]) -> usize {
+    let host = runtime.host();
+    outputs.iter().fold(0usize, |sum, handle| {
+        match (host.domain(*handle), host.schema(*handle)) {
+            (Ok(domain), Ok(schema)) => {
+                sum.saturating_add(schema.storage_words(domain.count()) * 4)
+            }
+            _ => usize::MAX,
+        }
+    })
+}
 
 impl Rest {
     /// Counts a run for state alone; whether this one is compared.
@@ -961,8 +980,12 @@ impl Evaluator {
             .ledger
             .entry(id)
             .is_some_and(|previous| key.moved_by_state_alone(&previous.key));
-        let on_device = by_state && self.rest.entry(id.clone()).or_default().due();
-        if !by_state {
+        // Small outputs are compared on the device whatever moved the
+        // node: what reads them, however costly, runs again only when
+        // they changed, wherever the node was placed.
+        let compared = by_state || outputs_bytes(runtime, &outputs) <= SMALL_COMPARED;
+        let on_device = compared && self.rest.entry(id.clone()).or_default().due();
+        if !compared {
             self.rest.remove(id);
         }
         // Equal to what this frame of the remembered run left: those
@@ -1090,8 +1113,9 @@ impl Evaluator {
 /// in Host memory are compared there, one made from the other on the
 /// pages it changed alone (`Host::same`); Fields held on a
 /// device alone are compared on it only `on_device`, when the node ran
-/// for nothing but the state it reads and its [`Rest`] is due, so a node
-/// that runs for fresh inputs waits for no device.
+/// for nothing but the state it reads, or its outputs are no larger than
+/// [`SMALL_COMPARED`], and its [`Rest`] is due: a node with larger
+/// outputs that runs for fresh inputs waits for no device.
 fn same_words(runtime: &Runtime, previous: &[Handle], fresh: &[Handle], on_device: bool) -> bool {
     let host = runtime.host();
     previous.len() == fresh.len()

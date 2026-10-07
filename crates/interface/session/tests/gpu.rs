@@ -194,3 +194,65 @@ fn fields_flow_through_the_gpu_exactly() {
     // Element 7 reads its clamped neighbour (itself).
     assert_eq!(image.pixels()[7], [14.0, 7.0, 28.0, 1.0]);
 }
+
+#[test]
+fn a_small_output_found_unchanged_on_the_device_spares_what_reads_it() {
+    // A choice made each frame from state that moves (`pick`, one word,
+    // run on the device for fresh inputs) is compared there: unchanged,
+    // the costly Field made from it is not made again; changed, it is.
+    let Some(gpu) = gpu() else { return };
+    let backend: Box<dyn Backend> = Box::new(gpu);
+    let mut runtime = orla_kernel::Runtime::with_backend(1 << 24, backend);
+    load(
+        &mut runtime,
+        "kernel test.zero@1 { requires { field.write; } output result: Rows<Float>; compute { return 0.0; } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.clock@1 { requires { field.read; field.write; time.read; } input previous: Rows<Float>; output result: Rows<Float>; compute { return sample(previous) * 0.0 + time(); } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.pick@1 { requires { field.read; field.write; } input clock: Rows<Float>; param every: Float = 0.0; output result: Rows<Int>; compute { return 3 + int(at(clock, 0) * every); } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.costly@1 { requires { field.read; field.write; } input pick: Rows<Int>; output result: Image; compute { return vec4(float(at(pick, 0)) + coord().x, 0.0, 0.0, 1.0); } }",
+    );
+    let names =
+        |nodes: &[orla_graph::NodeId]| nodes.iter().map(|n| n.0.clone()).collect::<Vec<_>>();
+    let mut run = |every: f32| {
+        let graph = orla_scene::parse(&format!(
+            "node zero: test.zero@1 {{ domain = 1; }}
+             node clock: test.clock@1 {{ previous <~ clock.result from zero.result; domain = 1; }}
+             node pick: test.pick@1 {{ clock <- clock.result; every = {every}; domain = 1; }}
+             node costly: test.costly@1 {{ pick <- pick.result; domain = vec2(256, 256); }}
+             output result <- costly.result;"
+        ))
+        .unwrap();
+        let mut evaluator = orla_graph::Evaluator::new();
+        evaluator.set_fusion(false);
+        let empty: std::collections::BTreeMap<String, orla_abi::Handle> =
+            std::collections::BTreeMap::new();
+        let no_params: std::collections::BTreeMap<String, Value> =
+            std::collections::BTreeMap::new();
+        (1..=4)
+            .map(|k| {
+                let context = Context {
+                    time: k as f32,
+                    ..Context::default()
+                };
+                let report = evaluator
+                    .evaluate(&graph, &mut runtime, &empty, &context, &no_params)
+                    .unwrap();
+                names(&report.executed).contains(&"costly".to_owned())
+            })
+            .collect::<Vec<bool>>()
+    };
+    // The pick stays 3: made once (the first frame, and the one before the
+    // first comparison finds it at rest), then spared.
+    let steady = run(0.0);
+    assert!(steady[0] && !steady[2] && !steady[3], "{steady:?}");
+    // The pick moves with the clock: made every frame.
+    assert_eq!(run(1.0), [true, true, true, true]);
+}
