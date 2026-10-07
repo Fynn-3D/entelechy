@@ -401,7 +401,14 @@ impl Play {
                     self.said
                         .extend(report.refused.iter().map(ToString::to_string));
                 }
-                let evaluated = (self.clock)() - started;
+                // Overlapping, the evaluation waited for the frame before
+                // on the device: that wait is the device's time, not its.
+                let waited = if session.overlaps() {
+                    session.device_waited().as_secs_f64()
+                } else {
+                    0.0
+                };
+                let evaluated = (self.clock)() - started - waited;
                 let picture = self
                     .preview
                     .as_ref()
