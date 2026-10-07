@@ -393,15 +393,20 @@ impl Builder<'_> {
                     .find(&name.value)
                     .map(|index| index as usize)
                     .ok_or_else(|| {
+                        // A struct its document does not see is written as
+                        // its source writes it, and not offered as itself.
+                        let written = orla_language::written_name(&name.value);
                         let structs = self.structs();
-                        let known: Vec<&str> =
-                            structs.iter().map(|def| def.name.as_str()).collect();
+                        let known: Vec<&str> = structs
+                            .iter()
+                            .map(|def| def.name.as_str())
+                            .filter(|known| *known != written)
+                            .collect();
                         semantic(
                             name.span,
                             format!(
-                                "`{}` is not a struct{}",
-                                name.value,
-                                orla_language::did_you_mean(&name.value, known)
+                                "`{written}` is not a struct{}",
+                                orla_language::did_you_mean(written, known)
                             ),
                         )
                     })?;

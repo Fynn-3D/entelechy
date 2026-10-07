@@ -732,13 +732,19 @@ impl Builder<'_> {
                     })?;
                     return Ok(self.emit(ty, Op::Intrinsic(intrinsic, ids)));
                 }
-                // The Kernel's functions, then every builtin via `help`.
+                // A call its document sees no declaration of is written
+                // as its source writes it.
+                let name = orla_language::written_name(name);
+                // The Kernel's functions, then every builtin via `help`;
+                // not one of the name itself, which this call's document
+                // does not see.
                 let mut declared: Vec<&str> = self
                     .shared
                     .plain
                     .keys()
                     .chain(self.shared.templates.keys())
                     .copied()
+                    .filter(|declared| *declared != name)
                     .collect();
                 declared.sort_unstable();
                 let near = orla_language::nearest(name, declared)

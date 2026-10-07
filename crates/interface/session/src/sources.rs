@@ -1025,15 +1025,18 @@ pub(crate) fn located(
             .ok()
             .and_then(|parsed| kind(&parsed))
             .unwrap_or("fn");
-        let spelling = match package_holding(store, deeper) {
-            // A package the store finds by name is used by its name.
-            Some(package) if by_name(store, &package) => package
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| relative_to(store, &package, base)),
-            Some(package) => relative_to(store, &package, base),
-            None => relative_to(store, deeper, base),
-        };
+        // A package's own documents use each other by their paths.
+        let own_package = package_holding(store, document);
+        let spelling =
+            match package_holding(store, deeper).filter(|p| own_package.as_ref() != Some(p)) {
+                // A package the store finds by name is used by its name.
+                Some(package) if by_name(store, &package) => package
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| relative_to(store, &package, base)),
+                Some(package) => relative_to(store, &package, base),
+                None => relative_to(store, deeper, base),
+            };
         return crate::Diagnostic {
             message: format!(
                 "{}; {what} `{name}` is declared in {}, which this document reaches only through another's `use`: a document sees what it uses itself, `use \"{spelling}\";`",

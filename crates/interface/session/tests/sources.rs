@@ -838,6 +838,66 @@ fn a_document_sees_what_it_uses_itself() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A function taking a Field is compiled where a Kernel binds it, and
+/// still sees what its own document uses alone: a function or struct of
+/// a document it does not use is refused at its call, though the
+/// Kernel's document uses that document itself.
+#[test]
+fn a_function_taking_a_field_sees_what_its_document_uses() {
+    let kernel = "use \"mid.orla\";\nuse \"lib.orla\";\nkernel t.k@1 { requires { field.read; field.write; } input xs: Rows<Float>; output result: Rows<Float>; compute { return total(xs); } }\nkernel t.s@1 { requires { field.write; } output result: Rows<Float>; compute { return 1.0; } }\n";
+    let dir = scratch(
+        "field-function-sees",
+        &[
+            (
+                "lib.orla",
+                "struct Deep { v: Float; }\nfn deep() -> Float { return 2.0; }\n",
+            ),
+            (
+                "mid.orla",
+                "fn total(xs: Rows<Float>) -> Float { return at(xs, 0) + deep(); }\n",
+            ),
+            ("a.orla", kernel),
+            (
+                "scene.osn",
+                "use \"a.orla\";\nnode s: t.s@1 { domain = 1; }\nnode k: t.k@1 { xs <- s.result; domain = 1; }\noutput result <- k.result;\n",
+            ),
+        ],
+    );
+    let check = || {
+        orla_session::check_document(
+            &orla_session::Disk::default(),
+            &dir.join("scene.osn"),
+            false,
+        )
+    };
+    let said = format!("{:?}", check());
+    assert!(
+        said.contains("mid.orla:1:")
+            && said.contains("`deep` is not a builtin")
+            && said.contains("use \\\"lib.orla\\\";"),
+        "{said}"
+    );
+    std::fs::write(
+        dir.join("mid.orla"),
+        "fn total(xs: Rows<Float>) -> Float { return Deep { v: at(xs, 0) }.v; }\n",
+    )
+    .unwrap();
+    let said = format!("{:?}", check());
+    assert!(
+        said.contains("`Deep` is not a struct") && !said.contains("Deep@"),
+        "{said}"
+    );
+    // Used itself, both are seen.
+    std::fs::write(
+        dir.join("mid.orla"),
+        "use \"lib.orla\";\nfn total(xs: Rows<Float>) -> Float { return Deep { v: at(xs, 0) }.v + deep(); }\n",
+    )
+    .unwrap();
+    let checked = check();
+    assert_eq!(checked.problems(), 0, "{checked:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A library declares a name a document it uses declares too, as a
 /// game's widgets beside a package's: a scene using the library sees the
 /// library's alone, so nothing clashes; the library's own functions call

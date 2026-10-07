@@ -63,7 +63,7 @@ pub use orla_abi::names::{did_you_mean, edit_distance, nearest, suggestion};
 pub use parser::{RESERVED, outline, parse, parse_document, parse_literal};
 pub use reach::Reached;
 pub use rename::renamed_type;
-pub use scope::{Declarations, Source, scope};
+pub use scope::{Declarations, Source, scope, written_name};
 
 /// The version of the Kernel language and the document format.
 pub const LANGUAGE_VERSION: u32 = 1;
@@ -305,7 +305,8 @@ impl<'a> Held<'a> {
     }
 
     /// `text` with each name the Kernel knows an inherited declaration by
-    /// written as that declaration was written.
+    /// written as that declaration was written, and each name a document
+    /// does not see ([`written_name`]) as it wrote it.
     pub fn written(&self, text: &str) -> String {
         let renamed = self
             .functions
@@ -321,7 +322,7 @@ impl<'a> Held<'a> {
                 out = out.replace(&format!("`{name}{end}"), &format!("`{written}{end}"));
             }
         }
-        out
+        out.replace("@`", "`")
     }
 }
 

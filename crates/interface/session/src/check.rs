@@ -187,7 +187,8 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         {
             let held = held((&structs, &types, &functions));
             let at = written_in(path, held, &error);
-            say!(problem, "{}:{}", at.display(), said(held, &error));
+            let said = located(store, said(held, &error), &at, path, &[]);
+            say!(problem, "{}:{said}", at.display());
         }
         document.resolve((&structs, &types, &functions));
     }
@@ -233,7 +234,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
             Err(error) => {
                 let held = orla_language::Held::of(kernel);
                 let at = written_in(path, held, &error);
-                let said = located(store, said(held, &error), path, path, &[]);
+                let said = located(store, said(held, &error), &at, path, &[]);
                 say!(problem, "{}:{said}", at.display());
             }
         }
@@ -412,7 +413,8 @@ fn check_used(
             {
                 let held = held((&structs, &types, &functions));
                 let at = written_in(path, held, &error);
-                lines.push((true, format!("{}:{}", at.display(), said(held, &error))));
+                let said = located(store, said(held, &error), &at, root, &[]);
+                lines.push((true, format!("{}:{said}", at.display())));
             }
             used_document.resolve((&structs, &types, &functions))
         }
@@ -440,7 +442,7 @@ fn check_used(
             Err(error) => {
                 let held = orla_language::Held::of(kernel);
                 let at = written_in(path, held, &error);
-                let said = located(store, said(held, &error), path, root, &[]);
+                let said = located(store, said(held, &error), &at, root, &[]);
                 lines.push((true, format!("{}:{said}", at.display())));
             }
         }

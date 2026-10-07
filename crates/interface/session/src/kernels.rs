@@ -634,18 +634,16 @@ impl Kernels {
                 Err(error) => {
                     // One fault in one place is reported once, in the
                     // document it is written in.
+                    let at =
+                        crate::sources::written_in(path, orla_language::Held::of(&kernel), &error);
                     let rejected = Event::Rejected {
-                        path: crate::sources::written_in(
-                            path,
-                            orla_language::Held::of(&kernel),
-                            &error,
-                        ),
                         error: self.located(
                             store,
                             crate::sources::said(orla_language::Held::of(&kernel), &error),
-                            path,
+                            &at,
                             root,
                         ),
+                        path: at,
                     };
                     if !events.contains(&rejected) {
                         events.push(rejected);

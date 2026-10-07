@@ -43,6 +43,19 @@ fn scoped_name(name: &str, source: &str) -> String {
     format!("{name}@{source}")
 }
 
+/// The name a call to `name` takes where its document sees no
+/// declaration of it: one no declaration holds, written `name` again in
+/// a message ([`written_name`]).
+fn unseen_name(name: &str) -> String {
+    format!("{name}@")
+}
+
+/// A name as its source writes it: a scoped or unseen name without what
+/// follows its `@`.
+pub fn written_name(name: &str) -> &str {
+    name.split('@').next().unwrap_or(name)
+}
+
 /// The declarations the using document reaches. `sources` are every
 /// document reached, each after the ones it uses (as a walk of the `use`
 /// items finds them); `direct` the ones the using document's own `use`
@@ -282,21 +295,6 @@ fn scoped_types(
     // Nothing declared twice, nothing the using document declares, and
     // nothing it mentions but does not see: every name is plain, as
     // written.
-    let seen = |files: &Vec<usize>| files.iter().any(|file| top.contains(file));
-    if !reach
-        .declared
-        .iter()
-        .any(|(d, files)| clashing(d.name()) || (!seen(files) && mentions(d.name())))
-    {
-        return Ok(split(
-            reach
-                .declared
-                .iter()
-                .filter(|(d, _)| !own_alike(d))
-                .map(|(d, _)| d.clone())
-                .collect(),
-        ));
-    }
     let reached_from = |file: usize| {
         let mut reached = BTreeSet::new();
         closure(&sources[file].uses, &mut reached);
@@ -312,6 +310,50 @@ fn scoped_types(
             })
             .collect()
     };
+    // A name a gathered document declares, which a gathered declaration
+    // or function names from a document that neither declares nor sees it.
+    let unseen = |file: usize, name: &str| {
+        declared.iter().any(|(d, _)| d.name() == name)
+            && !declared
+                .iter()
+                .any(|(d, files)| d.name() == name && files.contains(&file))
+            && reaching(name, &reached_from(file)).is_empty()
+    };
+    let names_unseen = {
+        let found = std::cell::Cell::new(false);
+        let look = |file: usize| {
+            let found = &found;
+            move |name: &str| {
+                if !found.get() && unseen(file, name) {
+                    found.set(true);
+                }
+                None
+            }
+        };
+        for (decl, files) in declared {
+            let _ = decl.renamed(decl.name().to_owned(), &look(files[0]));
+        }
+        for (decl, file) in &reach.functions {
+            let _ = decl.retyped(&look(*file));
+        }
+        found.get()
+    };
+    let seen = |files: &Vec<usize>| files.iter().any(|file| top.contains(file));
+    if !names_unseen
+        && !reach
+            .declared
+            .iter()
+            .any(|(d, files)| clashing(d.name()) || (!seen(files) && mentions(d.name())))
+    {
+        return Ok(split(
+            reach
+                .declared
+                .iter()
+                .filter(|(d, _)| !own_alike(d))
+                .map(|(d, _)| d.clone())
+                .collect(),
+        ));
+    }
     // Plain: the one the using document sees by its name, or the only
     // one of its name, which the document neither declares nor mentions.
     let plain = |i: usize| {
@@ -340,6 +382,11 @@ fn scoped_types(
                 let reached = reaches.entry(file).or_insert_with(|| reached_from(file));
                 let found = reaching(name, reached);
                 match found.as_slice() {
+                    // Declared by a gathered document this one does not
+                    // see: a name no declaration holds.
+                    [] if declared.iter().any(|(d, _)| d.name() == name) => {
+                        return Some(unseen_name(name));
+                    }
                     [] => return None,
                     [one] => *one,
                     many => {
@@ -422,15 +469,6 @@ fn scoped(
     // What the using document sees: what it uses.
     let mut top = BTreeSet::new();
     closure(direct, &mut top);
-    if !reach.functions.iter().any(|(decl, file)| {
-        clashing(&decl.name.value) || (!top.contains(file) && mentions(&decl.name.value))
-    }) {
-        return Ok(reach
-            .functions
-            .iter()
-            .map(|(decl, _)| decl.clone())
-            .collect());
-    }
     // The document a name reaches from `reached`: one declaring it.
     let resolve = |name: &str, reached: &BTreeSet<usize>| -> Option<usize> {
         let files: Vec<usize> = declaring
@@ -441,6 +479,42 @@ fn scoped(
             .collect();
         (files.len() == 1).then(|| files[0])
     };
+    let mut reaches: HashMap<usize, BTreeSet<usize>> = HashMap::new();
+    for (_, file) in &reach.functions {
+        reaches.entry(*file).or_insert_with(|| {
+            let mut reached = BTreeSet::new();
+            closure(&sources[*file].uses, &mut reached);
+            reached
+        });
+    }
+    // A call a gathered function makes to a name a gathered document
+    // declares, which its own document neither declares nor sees: it
+    // reaches no declaration, wherever the function is called from.
+    let unseen = |name: &str, file: usize| {
+        declaring
+            .get(name)
+            .is_some_and(|files| !files.contains(&file))
+            && !hides(name)
+            && resolve(name, &reaches[&file]).is_none()
+    };
+    let calls_unseen = reach.functions.iter().any(|(decl, file)| {
+        let mut found = false;
+        crate::rename::visit_block(&decl.body, &mut |name, call| {
+            found = found || (call && unseen(name, *file));
+        });
+        found
+    });
+    if !calls_unseen
+        && !reach.functions.iter().any(|(decl, file)| {
+            clashing(&decl.name.value) || (!top.contains(file) && mentions(&decl.name.value))
+        })
+    {
+        return Ok(reach
+            .functions
+            .iter()
+            .map(|(decl, _)| decl.clone())
+            .collect());
+    }
     let seen_by_user = |name: &str, file: usize| {
         !hides(name)
             && !own.iter().any(|f| f.name.value == name)
@@ -462,16 +536,10 @@ fn scoped(
             scoped_name(name, &sources[file].name)
         }
     };
-    let mut reaches: HashMap<usize, BTreeSet<usize>> = HashMap::new();
     let mut out = Vec::with_capacity(reach.functions.len());
     for (decl, file) in &reach.functions {
         let file = *file;
-        let reached = reaches.entry(file).or_insert_with(|| {
-            let mut reached = BTreeSet::new();
-            closure(&sources[file].uses, &mut reached);
-            reached
-        });
-        let reached = &*reached;
+        let reached = &reaches[&file];
         let declares = |name: &str| {
             declaring
                 .get(name)
@@ -482,6 +550,8 @@ fn scoped(
                 file
             } else if hides(name) {
                 return None;
+            } else if unseen(name, file) {
+                return Some(unseen_name(name));
             } else {
                 resolve(name, reached)?
             };

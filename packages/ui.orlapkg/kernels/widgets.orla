@@ -5,6 +5,7 @@
 use "layout.orla";
 use "paint.orla";
 use "write.orla";
+use "letters.orla";
 
 /// How a screen's widgets look: the panels' fill and rim, the words'
 /// ink and the dimmed, the accent of what is lit, a track's empty, the
