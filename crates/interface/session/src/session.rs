@@ -882,10 +882,42 @@ impl Session {
         }
     }
 
+    /// Whether later evaluations overlap the device's work on the frame
+    /// before; see [`orla_graph::Evaluator::set_overlap`]. Turning it off
+    /// confirms the frame in flight.
+    pub fn set_overlap(&mut self, on: bool) -> Result<(), EvaluateError> {
+        let set = self.evaluator.set_overlap(on, &mut self.runtime);
+        self.tally();
+        set
+    }
+
+    /// Whether evaluations overlap ([`Session::set_overlap`]).
+    pub fn overlaps(&self) -> bool {
+        self.evaluator.overlaps()
+    }
+
+    /// Confirms the frame in flight, if any; see
+    /// [`orla_graph::Evaluator::confirm`].
+    pub fn confirm(&mut self) -> Result<(), EvaluateError> {
+        let confirmed = self.evaluator.confirm(&mut self.runtime);
+        self.tally();
+        confirmed
+    }
+
+    /// Takes the frames the evaluator took back off the world's count.
+    fn tally(&mut self) {
+        self.history.taken_back(self.evaluator.take_taken_back());
+    }
+
     /// Evaluates the current graph under `context`. Unchanged nodes are
     /// reused; state commits only when the whole evaluation succeeds.
+    /// Overlapping, the frame before is confirmed here, and this one when
+    /// it changed an output written to a file.
     pub fn evaluate(&mut self, context: &Context) -> Result<Report, EvaluateError> {
-        self.one_frame_in_flight();
+        // Overlapping bounds the frames in flight itself.
+        if !self.evaluator.overlaps() {
+            self.one_frame_in_flight();
+        }
         self.inputs.select_frames(
             self.scene.store().as_ref(),
             self.runtime.host_mut(),
@@ -893,21 +925,31 @@ impl Session {
         );
         self.repin();
         let graph = self.scene.graph().ok_or_else(no_scene)?;
-        let report = self.evaluator.evaluate(
+        let evaluated = self.evaluator.evaluate(
             graph,
             &mut self.runtime,
             self.inputs.handles(),
             context,
             self.scene.params(),
-        )?;
-        // Committed: changed outputs may now be written.
+        );
+        let report = match evaluated {
+            Ok(report) => report,
+            Err(error) => {
+                self.tally();
+                return Err(error);
+            }
+        };
+        self.history.ran();
+        // Committed: changed outputs may now be written, once confirmed.
+        if self.writes.due(&self.scene.files().writes, &report) {
+            self.confirm()?;
+        }
         self.writes.after(
             self.scene.store().as_ref(),
             &self.scene.files().writes,
             &report,
             &mut self.runtime,
         );
-        self.history.ran();
         Ok(report)
     }
 
@@ -1100,6 +1142,7 @@ impl Session {
         path: &Path,
     ) -> Result<(), String> {
         let path = self.allowed_write(path)?;
+        self.confirm().map_err(|error| error.to_string())?;
         observe::save(
             self.scene.store().as_ref(),
             self.scene.graph(),
@@ -1269,6 +1312,14 @@ impl Session {
             observe::Written::Observe(why) => SessionError::Observe(why),
             other => SessionError::Unwritable(path.clone(), other.to_string()),
         })
+    }
+
+    /// A Field's words taken later, not waiting for the work submitted
+    /// after this call; see [`orla_kernel::Runtime::fetch`].
+    pub fn fetch(&self, handle: Handle) -> Result<orla_kernel::Fetch, SessionError> {
+        self.runtime
+            .fetch(handle)
+            .map_err(|e| SessionError::Observe(e.to_string()))
     }
 
     /// A Field's data as the Host holds it, brought back from the device

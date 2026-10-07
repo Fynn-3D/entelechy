@@ -9,7 +9,7 @@ pub mod placement;
 pub mod raster;
 pub mod reduce;
 
-pub use backend::{Backend, Check, NativeOp, Prepared};
+pub use backend::{Backend, Check, Downloading, NativeOp, Prepared};
 
 use std::fmt;
 

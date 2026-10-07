@@ -90,6 +90,48 @@ impl Wait {
             .map_err(|error| error.to_string())
     }
 
+    /// Maps `slice` for reading as [`Wait::map_read`] does, waiting only
+    /// for the work up to `after`: what was submitted since runs on.
+    pub fn map_read_after(
+        self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        slice: wgpu::BufferSlice<'_>,
+        after: &wgpu::SubmissionIndex,
+    ) -> Result<(), String> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let wake = self.wake();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+            wake();
+        });
+        if self.parks_with_host() {
+            queue.submit(std::iter::empty());
+        }
+        self.until_after(device, after, || receiver.try_recv().ok())?
+            .map_err(|error| error.to_string())
+    }
+
+    /// Waits until the work up to `after` has run, not what followed it.
+    pub fn done_after(
+        self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        after: &wgpu::SubmissionIndex,
+    ) -> Result<(), String> {
+        match self.0 {
+            // A page answers a submission's end only as everything's.
+            Some(_) => self.drain(device, queue),
+            None => device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: Some(after.clone()),
+                    timeout: None,
+                })
+                .map(drop)
+                .map_err(|error| error.to_string()),
+        }
+    }
+
     /// Waits until the queue has run everything it was given.
     pub fn drain(self, device: &wgpu::Device, queue: &wgpu::Queue) -> Result<(), String> {
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -105,6 +147,31 @@ impl Wait {
     fn wake(self) -> fn() {
         fn nothing() {}
         self.0.map_or(nothing, |parking| parking.wake)
+    }
+
+    /// As [`Wait::until`], polling only for the work up to `after`.
+    fn until_after<T>(
+        self,
+        device: &wgpu::Device,
+        after: &wgpu::SubmissionIndex,
+        mut answer: impl FnMut() -> Option<T>,
+    ) -> Result<T, String> {
+        loop {
+            if let Some(value) = answer() {
+                return Ok(value);
+            }
+            match self.0 {
+                Some(parking) => (parking.park)(),
+                None => {
+                    device
+                        .poll(wgpu::PollType::Wait {
+                            submission_index: Some(after.clone()),
+                            timeout: None,
+                        })
+                        .map_err(|error| error.to_string())?;
+                }
+            }
+        }
     }
 
     /// Polls the device, or parks, until `answer` has something.

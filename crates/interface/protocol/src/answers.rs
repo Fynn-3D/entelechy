@@ -95,6 +95,11 @@ impl Answers {
         }
     }
 
+    /// Whether an answer waits for its request to land.
+    pub fn is_waiting(&self) -> bool {
+        self.waiting.is_some()
+    }
+
     /// Answers the waiting request once it lands, then the queue in turn;
     /// true when the process should end.
     pub fn poll(&mut self, served: &mut dyn Served) -> bool {

@@ -52,39 +52,52 @@ pub(crate) fn table_elements(
         return found;
     };
     for node in &graph.nodes {
+        // The scene inputs it reads that no node before it laid out.
+        let reads: Vec<(&String, &String)> = node
+            .inputs
+            .iter()
+            .flat_map(|(port, binding)| {
+                let sources = match binding {
+                    Binding::Now(source) => vec![source],
+                    Binding::Previous {
+                        source, initial, ..
+                    } => vec![source, initial],
+                };
+                sources.into_iter().filter_map(move |source| match source {
+                    Source::External(name) => Some((port, name)),
+                    Source::Node { .. } => None,
+                })
+            })
+            .filter(|(_, name)| !found.contains_key(*name))
+            .collect();
+        if reads.is_empty() {
+            continue;
+        }
         let Some(version) = runtime.kernel(&node.kernel) else {
             continue;
         };
-        let structs: Vec<orla_ir::StructDef> = match (version.module(), version.native()) {
-            (Some(module), _) => module.structs.clone(),
-            (None, Some(op)) => op.structs(),
-            (None, None) => Vec::new(),
+        let native;
+        let structs: &[orla_ir::StructDef] = match (version.module(), version.native()) {
+            (Some(module), _) => &module.structs,
+            (None, Some(op)) => {
+                native = op.structs();
+                &native
+            }
+            (None, None) => &[],
         };
-        for (port, binding) in &node.inputs {
-            let sources = match binding {
-                Binding::Now(source) => vec![source],
-                Binding::Previous {
-                    source, initial, ..
-                } => vec![source, initial],
+        for (port, name) in reads {
+            if found.contains_key(name) {
+                continue;
+            }
+            let Some(declared) = version.manifest().inputs.iter().find(|p| &p.name == port) else {
+                continue;
             };
-            for source in sources {
-                let Source::External(name) = source else {
-                    continue;
-                };
-                if found.contains_key(name) {
-                    continue;
-                }
-                let Some(declared) = version.manifest().inputs.iter().find(|p| &p.name == port)
-                else {
-                    continue;
-                };
-                let ty = declared.element();
-                if let (Some(names), Some(schema)) = (
-                    orla_ir::number_names(ty, &structs),
-                    orla_ir::schema_of(ty, &structs),
-                ) {
-                    found.insert(name.clone(), TableElement { names, schema });
-                }
+            let ty = declared.element();
+            if let (Some(names), Some(schema)) = (
+                orla_ir::number_names(ty, structs),
+                orla_ir::schema_of(ty, structs),
+            ) {
+                found.insert(name.clone(), TableElement { names, schema });
             }
         }
     }

@@ -58,6 +58,7 @@ impl Evaluator {
         self.ledger.is_committed(handle)
             || self.replaced.iter().any(|r| r.previous == Some(handle))
             || self.recalled.holds(handle)
+            || self.held_back(handle)
     }
 
     pub(super) fn drop_cache(&mut self, id: &NodeId, runtime: &mut Runtime) {

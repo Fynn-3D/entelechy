@@ -25,7 +25,9 @@ pub use orla_abi::{
 };
 pub use orla_abi::{DEFAULT_WORK, MAX_WORK, encoding};
 pub use orla_ir::{KernelId, Manifest, Validated};
-pub use orla_rules::{Backend, Check, ExecutionError, Extent, NativeOp, Prepared, extent};
+pub use orla_rules::{
+    Backend, Check, Downloading, ExecutionError, Extent, NativeOp, Prepared, extent,
+};
 
 /// The operations a run may take, by its elements times its Kernel's
 /// typical work, and go to the ordered backend when the main one is a
@@ -776,6 +778,11 @@ impl Runtime {
         self.backend().settle_device();
     }
 
+    /// A mark of every run submitted so far ([`Backend::submitted`]).
+    pub fn submitted(&self) -> Option<Box<dyn Check>> {
+        self.backend().submitted()
+    }
+
     /// Whether the backend's device work is done only when
     /// [`Runtime::settle_device`] returns, not when `execute` does.
     pub fn has_device(&self) -> bool {
@@ -825,6 +832,34 @@ impl Runtime {
         };
         let byte_len = schema.storage_words(domain.count()) * 4;
         self.backend.same_resident(x, y, byte_len).unwrap_or(false)
+    }
+
+    /// A Field's words taken later ([`Fetch::take`]): from Host memory
+    /// now, or from the device once the work submitted before this call
+    /// has run, not waiting for what is submitted since. The Field may be
+    /// released meanwhile.
+    pub fn fetch(&self, handle: Handle) -> Result<Fetch, ExecutionError> {
+        if let Ok(data) = self.host.data(handle) {
+            return Ok(Fetch::Here(data.clone()));
+        }
+        let host = |e: orla_abi::HostError| ExecutionError::Abi(e.into());
+        let device = self
+            .host
+            .resident(handle)
+            .map_err(host)?
+            .ok_or_else(|| ExecutionError::Device("the Field holds no words".into()))?;
+        let domain = self.host.domain(handle).map_err(host)?;
+        let schema = self.host.schema(handle).map_err(host)?.clone();
+        let byte_len = schema.storage_words(domain.count()) * 4;
+        let coming = self
+            .backend
+            .download_later(device, byte_len)
+            .map_err(ExecutionError::Device)?;
+        Ok(Fetch::Coming {
+            schema,
+            domain,
+            coming,
+        })
     }
 
     /// Brings a resident Field's words into Host memory and answers the
@@ -1451,4 +1486,41 @@ pub struct Moved {
     /// Brought back to Host memory from a device, for a backend that reads
     /// there.
     pub downloaded: u64,
+}
+
+/// A Field's words on their way: [`Runtime::fetch`].
+pub enum Fetch {
+    /// In Host memory already.
+    Here(FieldData),
+    /// Coming from a device.
+    Coming {
+        /// How the words are laid out.
+        schema: Schema,
+        /// Over what extent.
+        domain: Domain,
+        /// The words on their way.
+        coming: Box<dyn Downloading>,
+    },
+}
+
+impl Fetch {
+    /// The Field's words, once they have come.
+    pub fn take(self) -> Result<FieldData, ExecutionError> {
+        match self {
+            Self::Here(data) => Ok(data),
+            Self::Coming {
+                schema,
+                domain,
+                coming,
+            } => {
+                let bytes = coming.take().map_err(ExecutionError::Device)?;
+                let words = bytes
+                    .chunks_exact(4)
+                    .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect();
+                FieldData::from_storage(schema, domain, words)
+                    .map_err(|e| ExecutionError::Abi(e.into()))
+            }
+        }
+    }
 }

@@ -256,3 +256,146 @@ fn a_small_output_found_unchanged_on_the_device_spares_what_reads_it() {
     // The pick moves with the clock: made every frame.
     assert_eq!(run(1.0), [true, true, true, true]);
 }
+
+/// A device that counts its comparisons, otherwise the GPU.
+struct Counted {
+    gpu: GpuBackend,
+    compared: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Backend for Counted {
+    fn name(&self) -> &'static str {
+        self.gpu.name()
+    }
+    fn declines(&self, module: &orla_ir::Validated) -> Option<String> {
+        self.gpu.declines(module)
+    }
+    fn repeats_exactly(&self) -> bool {
+        self.gpu.repeats_exactly()
+    }
+    fn uploaded(&self) -> u64 {
+        self.gpu.uploaded()
+    }
+    fn prepare(
+        &self,
+        module: &orla_ir::Validated,
+    ) -> Result<Box<dyn orla_rules::Prepared>, String> {
+        self.gpu.prepare(module)
+    }
+    fn finish(&self, prepared: &dyn orla_rules::Prepared) {
+        self.gpu.finish(prepared);
+    }
+    fn execute(
+        &self,
+        prepared: &dyn orla_rules::Prepared,
+        module: &orla_ir::Validated,
+        invocation: &orla_abi::Invocation,
+        scope: &mut orla_abi::Scope<'_>,
+    ) -> Result<Vec<orla_abi::Handle>, orla_rules::ExecutionError> {
+        self.gpu.execute(prepared, module, invocation, scope)
+    }
+    fn execute_checked(
+        &self,
+        prepared: &dyn orla_rules::Prepared,
+        module: &orla_ir::Validated,
+        invocation: &orla_abi::Invocation,
+        scope: &mut orla_abi::Scope<'_>,
+    ) -> Result<orla_rules::backend::Checked, orla_rules::ExecutionError> {
+        self.gpu
+            .execute_checked(prepared, module, invocation, scope)
+    }
+    fn has_device(&self) -> bool {
+        true
+    }
+    fn settle_device(&self) {
+        self.gpu.settle_device();
+    }
+    fn submitted(&self) -> Option<Box<dyn orla_rules::Check>> {
+        self.gpu.submitted()
+    }
+    fn download(
+        &self,
+        device: &(dyn std::any::Any + Send + Sync),
+        byte_len: usize,
+    ) -> Result<Vec<u8>, String> {
+        self.gpu.download(device, byte_len)
+    }
+    fn same_resident(
+        &self,
+        a: &(dyn std::any::Any + Send + Sync),
+        b: &(dyn std::any::Any + Send + Sync),
+        byte_len: usize,
+    ) -> Result<bool, String> {
+        self.compared
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.gpu.same_resident(a, b, byte_len)
+    }
+}
+
+#[test]
+fn a_small_output_found_unchanged_while_sparing_nothing_rests() {
+    // The pick stays 3 while the clock moves. Where the costly Field reads
+    // the clock as well, finding the pick unchanged spares nothing, and
+    // the pick is compared seldom; where it reads the pick alone, it is
+    // compared each frame.
+    let compares = |reads_clock: bool| {
+        let gpu = gpu()?;
+        let compared = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let backend: Box<dyn Backend> = Box::new(Counted {
+            gpu,
+            compared: std::sync::Arc::clone(&compared),
+        });
+        let mut runtime = orla_kernel::Runtime::with_backend(1 << 24, backend);
+        runtime.set_small(0);
+        load(
+            &mut runtime,
+            "kernel test.zero@1 { requires { field.write; } output result: Rows<Float>; compute { return 0.0; } }",
+        );
+        load(
+            &mut runtime,
+            "kernel test.clock@1 { requires { field.read; field.write; time.read; } input previous: Rows<Float>; output result: Rows<Float>; compute { return sample(previous) * 0.0 + time(); } }",
+        );
+        load(
+            &mut runtime,
+            "kernel test.pick@1 { requires { field.read; field.write; } input clock: Rows<Float>; output result: Rows<Int>; compute { return 3 + int(at(clock, 0) * 0.0); } }",
+        );
+        load(
+            &mut runtime,
+            "kernel test.costly@1 { requires { field.read; field.write; } input pick: Rows<Int>; input clock: Rows<Float>; param every: Float = 0.0; output result: Image; compute { return vec4(float(at(pick, 0)) + at(clock, 0) * every + coord().x, 0.0, 0.0, 1.0); } }",
+        );
+        let costly_clock = if reads_clock {
+            "clock.result"
+        } else {
+            "zero.result"
+        };
+        let graph = orla_scene::parse(&format!(
+            "node zero: test.zero@1 {{ domain = 1; }}
+             node clock: test.clock@1 {{ previous <~ clock.result from zero.result; domain = 1; }}
+             node pick: test.pick@1 {{ clock <- clock.result; domain = 1; }}
+             node costly: test.costly@1 {{ pick <- pick.result; clock <- {costly_clock}; every = 1.0; domain = vec2(64, 64); }}
+             output result <- costly.result;"
+        ))
+        .unwrap();
+        let mut evaluator = orla_graph::Evaluator::new();
+        evaluator.set_fusion(false);
+        let empty: std::collections::BTreeMap<String, orla_abi::Handle> =
+            std::collections::BTreeMap::new();
+        let no_params: std::collections::BTreeMap<String, Value> =
+            std::collections::BTreeMap::new();
+        for k in 1..=40 {
+            let context = Context {
+                time: k as f32,
+                ..Context::default()
+            };
+            evaluator
+                .evaluate(&graph, &mut runtime, &empty, &context, &no_params)
+                .unwrap();
+        }
+        Some(compared.load(std::sync::atomic::Ordering::SeqCst))
+    };
+    let (Some(sparing), Some(sparing_nothing)) = (compares(false), compares(true)) else {
+        return;
+    };
+    assert!(sparing >= 35, "{sparing}");
+    assert!(sparing_nothing <= 16, "{sparing_nothing}");
+}

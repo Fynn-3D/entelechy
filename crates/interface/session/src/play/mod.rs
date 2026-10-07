@@ -383,7 +383,14 @@ impl Play {
         for held in std::mem::take(&mut self.late) {
             self.set(held, false);
         }
-        match session.evaluate(&context) {
+        // A replay reads what each frame left, so its frames are confirmed.
+        let evaluated = session.evaluate(&context).and_then(|report| {
+            if replayed.is_some() {
+                session.confirm()?;
+            }
+            Ok(report)
+        });
+        match evaluated {
             Ok(report) => {
                 if replayed.is_some()
                     && let Some((replayer, _)) = &mut self.replaying
@@ -426,14 +433,32 @@ impl Play {
                 }))
             }
             Err(error) => {
-                let message = format!("evaluation failed: {error}");
-                if self.reported.failed(&message) {
-                    self.said.push(format!("{message}; last frame is kept"));
-                }
-                self.status = message;
+                self.failed(&error);
                 Frame::Failed
             }
         }
+    }
+
+    /// Confirms the frame in flight before something other than the next
+    /// frame reads the session (a request); a failed one is said as a
+    /// failed frame is. Whether it was confirmed.
+    pub fn confirm(&mut self, session: &mut Session) -> bool {
+        match session.confirm() {
+            Ok(()) => true,
+            Err(error) => {
+                self.failed(&error);
+                false
+            }
+        }
+    }
+
+    /// Says a failed evaluation once, and keeps it as the status.
+    fn failed(&mut self, error: &orla_graph::EvaluateError) {
+        let message = format!("evaluation failed: {error}");
+        if self.reported.failed(&message) {
+            self.said.push(format!("{message}; last frame is kept"));
+        }
+        self.status = message;
     }
 
     /// Records how the device showed the picture: placement (`None`:

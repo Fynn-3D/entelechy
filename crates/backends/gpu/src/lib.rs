@@ -10,6 +10,7 @@
 //! as the CPU reports them.
 
 mod failure;
+mod later;
 mod modes;
 mod pool;
 mod prepare;
@@ -24,6 +25,7 @@ pub mod wgsl;
 pub use wait::Wait;
 
 use failure::*;
+use later::*;
 use pool::*;
 use prepare::*;
 use stage::*;
@@ -259,6 +261,17 @@ impl Backend for GpuBackend {
         let _ = self.wait.drain(&self.device, &self.queue);
     }
 
+    fn submitted(&self) -> Option<Box<dyn Check>> {
+        // An empty submission after the rest: done when they are.
+        let after = self.queue.submit(std::iter::empty());
+        Some(Box::new(Submitted {
+            wait: self.wait,
+            device: self.device.clone(),
+            queue: self.queue.clone(),
+            after,
+        }))
+    }
+
     fn has_device(&self) -> bool {
         true
     }
@@ -424,6 +437,7 @@ impl Backend for GpuBackend {
         let scopes = Scopes::push(&self.device);
         let timing = self.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
         let submission = self.queue.submit(Some(encoder.finish()));
+        let submitted = submission.clone();
         // One queue runs submissions in order, so only observation waits; under
         // `set_measured` this call waits, so its time is the work.
         self.settle_measured(submission, timing);
@@ -445,6 +459,7 @@ impl Backend for GpuBackend {
                 device: self.device.clone(),
                 queue: self.queue.clone(),
                 pair: Some(pair),
+                submitted,
                 pile: Arc::clone(&self.failures),
                 width: domain.width(),
                 totals_width: output_domain.width(),
@@ -551,6 +566,41 @@ impl Backend for GpuBackend {
         };
         staging.unmap();
         Ok(bytes)
+    }
+
+    fn download_later(
+        &self,
+        device: &(dyn Any + Send + Sync),
+        byte_len: usize,
+    ) -> Result<Box<dyn orla_rules::Downloading>, String> {
+        let image = device
+            .downcast_ref::<DeviceImage>()
+            .ok_or_else(|| "image is resident on a different backend".to_string())?;
+        let _guard = self
+            .lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("staging"),
+            size: byte_len as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("orla download"),
+            });
+        encoder.copy_buffer_to_buffer(&image.buffer, 0, &staging, 0, byte_len as u64);
+        let after = self.queue.submit(Some(encoder.finish()));
+        Ok(Box::new(Coming {
+            wait: self.wait,
+            device: self.device.clone(),
+            queue: self.queue.clone(),
+            staging,
+            byte_len,
+            after,
+        }))
     }
 
     fn same_resident(

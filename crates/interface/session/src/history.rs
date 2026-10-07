@@ -157,6 +157,11 @@ impl History {
         self.frame += 1;
     }
 
+    /// Evaluations answered as committed were taken back.
+    pub(crate) fn taken_back(&mut self, frames: u64) {
+        self.frame = self.frame.saturating_sub(frames);
+    }
+
     /// A Kernel was published with `source`.
     pub(crate) fn published(
         &mut self,

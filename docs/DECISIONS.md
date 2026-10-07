@@ -1094,3 +1094,45 @@ evaluation's `same_words` ([evaluate](../crates/core/graph/src/evaluate/mod.rs))
 Held by the Host's page tests,
 [the carried memory parity test](../crates/backends/jit/tests/parity.rs)
 and [the GPU's page upload test](../crates/backends/gpu/tests/parity.rs).
+
+## A window's frames overlap the device's
+
+The Player's evaluations overlap: a frame commits its state without
+waiting for the device, and is confirmed at the end of the next frame,
+once that frame's work has gone to the device behind it: its checks are
+waited on, and a mark of its submitted work (`Backend::submitted`). A
+frame found failed takes back its commit and the next frame's, which was
+made from it; the state is what the frame before them left, the failure
+is the answer of the call that found it, and the world's count of frames
+drops the one answered as committed. Anything other than the next frame
+confirms first: every other entry point of the evaluator, a request to
+the Player (whose `evaluate` answers a confirmed frame), a file write of
+a changed output, a save. What the processor takes home from a frame in
+flight is queued behind its work and taken once the frame is confirmed
+(`Runtime::fetch`): the Player hears each frame's sound a frame later. A
+small node compared on the device, found unchanged while every node that
+reads it ran all the same, rests as one found changed does: such a
+comparison waits for the device and spares nothing. `orla serve`,
+replays and the FFI do not overlap; the protocol's contracts are those
+of a frame confirmed.
+
+**Why.** A frame that waited for its own device work left the processor
+idle while the device drew, and the device idle while the processor made
+the next frame. Committing ahead keeps one frame in each, and holding
+what the commit replaced keeps a failure as harmless as before: nothing
+is released until the frame is confirmed. Two frames in flight at most
+bound the device memory held as one frame in flight did. Any wait in
+the middle of a frame (a download, a comparison) waits for the frame
+before it as well, so what is read is read after confirmation, and a
+comparison is kept only where it spares work.
+
+**Where.** `Evaluator::set_overlap`, `confirm` and `commit_in_flight`
+([frames](../crates/core/graph/src/evaluate/frames.rs)), `weigh_alike`
+([evaluate](../crates/core/graph/src/evaluate/mod.rs)),
+`Runtime::fetch` ([kernel](../crates/core/kernel/src/lib.rs)),
+`Backend::submitted` and `Backend::download_later`
+([rules](../crates/core/rules/src/backend.rs)), the GPU's waits bounded to
+a submission ([wait](../crates/backends/gpu/src/wait.rs),
+[later](../crates/backends/gpu/src/later.rs)), and the Player. Held by
+[the overlap tests](../crates/interface/session/tests/overlap.rs) and
+[the GPU's comparison tests](../crates/interface/session/tests/gpu.rs).

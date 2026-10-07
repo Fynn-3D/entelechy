@@ -194,6 +194,23 @@ pub trait Check: Send {
     fn wait(self: Box<Self>) -> Result<(), ExecutionError>;
 }
 
+/// Words on their way from a device: the copy is queued behind the work
+/// before it, and taking them waits for that work alone.
+pub trait Downloading: Send {
+    /// The bytes, once the copy has run.
+    fn take(self: Box<Self>) -> Result<Vec<u8>, String>;
+}
+
+/// Bytes already in hand: [`Downloading`] where a download is done when
+/// it returns.
+struct Downloaded(Vec<u8>);
+
+impl Downloading for Downloaded {
+    fn take(self: Box<Self>) -> Result<Vec<u8>, String> {
+        Ok(self.0)
+    }
+}
+
 /// A run's outputs and its deferred check, if any.
 pub type Checked = (Vec<Handle>, Option<Box<dyn Check>>);
 
@@ -322,6 +339,13 @@ pub trait Backend: Send + Sync {
     /// Waits for everything this backend has submitted to finish.
     fn settle_device(&self) {}
 
+    /// A mark of every run submitted so far: waiting on it waits until
+    /// they have finished on the device, not for what is submitted after,
+    /// and fails nothing. None where a run is done when it returns.
+    fn submitted(&self) -> Option<Box<dyn Check>> {
+        None
+    }
+
     /// Whether a device of its own finishes this backend's work, so
     /// [`Backend::settle_device`] is what waits for it.
     fn has_device(&self) -> bool {
@@ -337,6 +361,17 @@ pub trait Backend: Send + Sync {
     ) -> Result<Vec<u8>, String> {
         let _ = (device, byte_len);
         Err("this backend keeps no resident resources".into())
+    }
+
+    /// Queues a download of `byte_len` bytes of a resource this backend
+    /// left resident behind the work submitted so far, taken later without
+    /// waiting for what is submitted since. The default downloads now.
+    fn download_later(
+        &self,
+        device: &(dyn Any + Send + Sync),
+        byte_len: usize,
+    ) -> Result<Box<dyn Downloading>, String> {
+        Ok(Box::new(Downloaded(self.download(device, byte_len)?)))
     }
 
     /// Whether two resources this backend left resident hold the same

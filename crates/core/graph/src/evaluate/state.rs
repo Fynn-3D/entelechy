@@ -158,6 +158,7 @@ impl Evaluator {
         params: &BTreeMap<String, Value>,
         states: Vec<(NodeId, String, Handle)>,
     ) -> Result<Report, EvaluateError> {
+        self.confirm(runtime)?;
         let ports: BTreeSet<(NodeId, String)> = graph
             .nodes
             .iter()
@@ -243,7 +244,33 @@ impl Evaluator {
         graph: &Graph,
         runtime: &mut Runtime,
     ) -> Result<Vec<(NodeId, String)>, EvaluateError> {
+        let (advanced, replaced) = self.commit_holding(graph)?;
+        for (_, previous) in replaced {
+            if let Some(previous) = previous
+                && !self.ledger.is_cached(previous)
+                && !self.is_kept(previous)
+            {
+                release(runtime, previous);
+            }
+        }
+        Ok(advanced)
+    }
+
+    /// Commits as [`Evaluator::commit`] does, letting go of nothing: the
+    /// ports advanced, and what each held before.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn commit_holding(
+        &mut self,
+        graph: &Graph,
+    ) -> Result<
+        (
+            Vec<(NodeId, String)>,
+            Vec<((NodeId, String), Option<Handle>)>,
+        ),
+        EvaluateError,
+    > {
         let mut advanced = Vec::new();
+        let mut replaced = Vec::new();
         // A set for the membership test; the list keeps binding order
         // for the answer.
         let mut already: BTreeSet<(NodeId, String)> = BTreeSet::new();
@@ -278,16 +305,11 @@ impl Evaluator {
         for (key, current) in staged {
             let previous = self.ledger.commit_put(key.clone(), current);
             if previous != Some(current) {
-                advanced.push(key);
-                if let Some(previous) = previous
-                    && !self.ledger.is_cached(previous)
-                    && !self.is_kept(previous)
-                {
-                    release(runtime, previous);
-                }
+                advanced.push(key.clone());
+                replaced.push((key, previous));
             }
         }
-        Ok(advanced)
+        Ok((advanced, replaced))
     }
 
     /// Forgets the committed state of `node.port` alone; its `<~` readers
@@ -307,6 +329,7 @@ impl Evaluator {
             });
         }
         self.recover(runtime);
+        self.confirm(runtime)?;
         for id in downstream_of_state(graph, node, port) {
             if let Some(running) = self.running.remove(&id) {
                 runtime.discard_run(running.run);
@@ -344,6 +367,7 @@ impl Evaluator {
                 port: port.to_owned(),
             });
         }
+        self.confirm(runtime)?;
         let key = (node.clone(), port.to_owned());
         let current = self
             .ledger

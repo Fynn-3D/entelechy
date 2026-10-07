@@ -31,6 +31,7 @@ use crate::{Binding, DomainExpr, DomainSpec, Graph, GraphError, Node, NodeId, Pa
 
 mod bind;
 mod error;
+mod frames;
 mod ledger;
 mod plan;
 mod recall;
@@ -299,13 +300,26 @@ pub struct Evaluator {
     rest: BTreeMap<NodeId, Rest>,
     /// Runs remembered frame by frame; see [`recall`].
     recalled: recall::Recalled,
+    /// Whether a frame commits without waiting for its device; see
+    /// [`frames`].
+    overlap: bool,
+    /// The frame committed and not yet confirmed.
+    unconfirmed: Option<frames::Unconfirmed>,
+    /// Frames answered as committed and taken back since last asked; see
+    /// [`Evaluator::take_taken_back`].
+    taken_back: u64,
+    /// Small nodes this evaluation found unchanged; see
+    /// [`Evaluator::weigh_alike`].
+    alike: Vec<NodeId>,
 }
 
 /// When a node that runs for its state alone, or whose outputs are small
-/// ([`SMALL_COMPARED`]), has its Fields on a device compared with its last: comparing waits for the device, so each time
-/// they are found changed the next comparison waits twice as many such
-/// runs, up to 2^[`REST_WAIT_MOST`]. State that settles is found at rest
-/// at once; state that keeps changing waits for the device seldom.
+/// ([`SMALL_COMPARED`]), has its Fields on a device compared with its
+/// last: comparing waits for the device, so each time they are found
+/// changed, or found unchanged while sparing nothing
+/// ([`Evaluator::weigh_alike`]), the next comparison waits twice as many
+/// such runs, up to 2^[`REST_WAIT_MOST`]. State that settles is found at
+/// rest at once; state that keeps changing waits for the device seldom.
 #[derive(Debug, Default)]
 struct Rest {
     since: u32,
@@ -407,6 +421,8 @@ impl Evaluator {
     pub fn clear(&mut self, runtime: &mut Runtime) {
         // What only remembered runs hold goes first; the rest below.
         self.forget_runs(runtime);
+        let mut released = BTreeSet::new();
+        self.drop_in_flight(&mut released, runtime);
         let (cache, committed) = self.ledger.take_all();
         self.fused.clear();
         for (_, pending) in std::mem::take(&mut self.pending) {
@@ -415,7 +431,6 @@ impl Evaluator {
         for (_, running) in std::mem::take(&mut self.running) {
             runtime.discard_run(running.run);
         }
-        let mut released = BTreeSet::new();
         for cached in cache.into_values() {
             for output in cached.outputs {
                 if released.insert(output) {
@@ -435,6 +450,9 @@ impl Evaluator {
     /// dropped, since they began from the forgotten state.
     pub fn reset_state(&mut self, runtime: &mut Runtime) {
         self.recover(runtime);
+        // A frame in flight that failed leaves the state it began from,
+        // which is forgotten here all the same.
+        let _ = self.confirm(runtime);
         for (_, running) in std::mem::take(&mut self.running) {
             runtime.discard_run(running.run);
         }
@@ -503,6 +521,9 @@ impl Evaluator {
         params: &BTreeMap<String, Value>,
     ) -> Result<Report, EvaluateError> {
         self.recover(runtime);
+        if !self.overlap {
+            self.confirm(runtime)?;
+        }
         self.evaluate_with(graph, runtime, externals, context, params, Demand::Every)
             .and_then(reported)
     }
@@ -519,6 +540,7 @@ impl Evaluator {
         params: &BTreeMap<String, Value>,
     ) -> Result<Report, EvaluateError> {
         self.recover(runtime);
+        self.confirm(runtime)?;
         self.trial = true;
         let tried = self
             .evaluate_with(graph, runtime, externals, context, params, Demand::Every)
@@ -541,6 +563,7 @@ impl Evaluator {
         readers: &BTreeSet<NodeId>,
     ) -> Result<(), EvaluateError> {
         self.recover(runtime);
+        self.confirm(runtime)?;
         self.trial = true;
         let tried = self
             .evaluate_with(
@@ -569,6 +592,7 @@ impl Evaluator {
         demand: &BTreeSet<NodeId>,
     ) -> Result<Report, EvaluateError> {
         self.recover(runtime);
+        self.confirm(runtime)?;
         self.evaluate_with(
             graph,
             runtime,
@@ -888,6 +912,7 @@ impl Evaluator {
                 }
                 executed.push(node.id.clone());
             }
+            self.weigh_alike(graph, &executed);
             if matches!(demand, Demand::Read(_)) {
                 self.wait_for_checks(checks, runtime)?;
                 return Ok(None);
@@ -927,11 +952,18 @@ impl Evaluator {
                 .first()
                 .map(|(_, handle)| *handle)
                 .ok_or(EvaluateError::Graph(GraphError::NoOutput))?;
-            self.wait_for_checks(checks, runtime)?;
-            // A trial commits nothing, and is not remembered.
+            // A trial commits nothing, and is not remembered. Overlapping,
+            // the frame commits now and its device is waited for once the
+            // next frame's work has gone to it.
             let committed = if self.trial {
+                self.wait_for_checks(checks, runtime)?;
                 Vec::new()
+            } else if self.overlap && matches!(demand, Demand::Every) {
+                let committed = self.commit_in_flight(graph, runtime, checks, executed.clone())?;
+                self.remember_frame(executed.iter().chain(&reused), runtime);
+                committed
             } else {
+                self.wait_for_checks(checks, runtime)?;
                 let committed = self.commit(graph, runtime)?;
                 self.remember_frame(executed.iter().chain(&reused), runtime);
                 committed
@@ -1018,7 +1050,11 @@ impl Evaluator {
             && previous.output_names == output_names
             && same_words(runtime, &previous.outputs, &outputs, on_device)
         {
-            self.rest.remove(id);
+            if on_device && !by_state {
+                self.alike.push(id.clone());
+            } else {
+                self.rest.remove(id);
+            }
             let kept = previous.outputs.clone();
             let epoch = previous.epoch;
             for output in &outputs {
@@ -1086,6 +1122,38 @@ impl Evaluator {
             landed.push(id);
         }
         Ok(landed)
+    }
+
+    /// Weighs each small node found unchanged this evaluation: it spared
+    /// what reads it only if a reader did not run. Where every reader ran
+    /// all the same, for what else it reads, the comparison waited for the
+    /// device for nothing and rests as one that found a change does
+    /// ([`Rest`]). A node read as state, or as a graph's output, is kept
+    /// compared: what it spares shows after this evaluation.
+    fn weigh_alike(&mut self, graph: &Graph, executed: &[NodeId]) {
+        for id in std::mem::take(&mut self.alike) {
+            let from_it =
+                |source: &Source| matches!(source, Source::Node { node, .. } if *node == id);
+            let mut readers = Vec::new();
+            let mut held = graph.outputs.iter().any(|(_, source)| from_it(source));
+            for reader in &graph.nodes {
+                for binding in reader.inputs.values() {
+                    match binding {
+                        Binding::Now(source) if from_it(source) => readers.push(&reader.id),
+                        Binding::Previous { source, .. } if from_it(source) => held = true,
+                        _ => {}
+                    }
+                }
+            }
+            if !held
+                && !readers.is_empty()
+                && readers.iter().all(|reader| executed.contains(reader))
+            {
+                self.rest.entry(id).or_default().found_changed();
+            } else {
+                self.rest.remove(&id);
+            }
+        }
     }
 
     /// Whether any node's run is still going.

@@ -182,6 +182,9 @@ struct Player {
     gamepad: Option<Gamepad>,
     audio_allowed: bool,
     audio_failed: bool,
+    /// The sound of the frame in flight, fetched to be heard next frame
+    /// ([`Session::overlaps`]).
+    sound_behind: Option<orla_kernel::Fetch>,
 }
 
 impl orla_protocol::Served for Player {
@@ -195,9 +198,12 @@ impl orla_protocol::Served for Player {
         if request.get("op").and_then(Json::as_str) != Some("evaluate") {
             return None;
         }
+        // The frame answered is confirmed: what it committed holds.
         let result = match self.frame() {
-            Some(report) => Ok(orla_protocol::report_json(&self.session, &report)),
-            None => Err(serde_json::json!({ "message": self.play.status() })),
+            Some(report) if self.confirm() => {
+                Ok(orla_protocol::report_json(&self.session, &report))
+            }
+            _ => Err(serde_json::json!({ "message": self.play.status() })),
         };
         Some((orla_protocol::envelope(&id, result), false))
     }
@@ -240,6 +246,17 @@ impl Player {
         }
     }
 
+    /// Confirms the frame in flight; one found failed is taken back, and
+    /// its sound is not heard.
+    fn confirm(&mut self) -> bool {
+        let confirmed = self.play.confirm(&mut self.session);
+        if !confirmed {
+            self.sound_behind = None;
+        }
+        self.say();
+        confirmed
+    }
+
     fn frame(&mut self) -> Option<orla_graph::Report> {
         if let Some(gamepad) = &mut self.gamepad {
             gamepad.poll(&mut self.play);
@@ -250,6 +267,9 @@ impl Player {
         match frame {
             Frame::Wait => None,
             Frame::Failed => {
+                // A failed frame takes back the one before: its sound
+                // is not heard.
+                self.sound_behind = None;
                 let placement = self.blit();
                 self.play.landed(placement, self.last_size);
                 None
@@ -278,6 +298,10 @@ impl Player {
         };
         let pending: Vec<orla_protocol::Incoming> =
             std::iter::from_fn(|| requests.try_recv().ok()).collect();
+        // A request sees what the last frame left, confirmed.
+        if !pending.is_empty() || self.answers.is_waiting() {
+            self.confirm();
+        }
         // Waiting answers first, then new requests; a quit on standard
         // input closes the window.
         let mut answers = std::mem::take(&mut self.answers);
@@ -370,10 +394,26 @@ impl Player {
             }
         }
         // Materializing is the observation boundary: on the frame thread,
-        // never in the device callback.
-        let words: Vec<u32> = match self.session.field(handle) {
-            Ok(data) => data.values().to_vec(),
-            Err(_) => return,
+        // never in the device callback. Overlapping, the sound heard is
+        // the frame before's, confirmed by now and fetched behind its work
+        // alone: this frame's is fetched for the next.
+        let words: Vec<u32> = if self.session.overlaps() {
+            let Ok(fetch) = self.session.fetch(handle) else {
+                return;
+            };
+            match self
+                .sound_behind
+                .replace(fetch)
+                .map(orla_kernel::Fetch::take)
+            {
+                Some(Ok(data)) => data.values().to_vec(),
+                _ => return,
+            }
+        } else {
+            match self.session.field(handle) {
+                Ok(data) => data.values().to_vec(),
+                Err(_) => return,
+            }
         };
         if let Some(audio) = &mut self.audio {
             audio.push(&words, words_per_frame);
@@ -601,6 +641,11 @@ fn main() -> ExitCode {
     }
     // The first load published inline; replacements prepare off the frame.
     session.set_background(true);
+    // The window's frames overlap the device's: the next is made while
+    // the device draws this one.
+    if let Err(error) = session.set_overlap(true) {
+        eprintln!("evaluation failed: {error}");
+    }
     let mut player = Player {
         session,
         play: Play::new(clock),
@@ -618,6 +663,7 @@ fn main() -> ExitCode {
         gamepad,
         audio_allowed: !options.no_audio,
         audio_failed: false,
+        sound_behind: None,
     };
     if let Some(replay) = &options.replay {
         player.play.replay(replay, &mut player.session);

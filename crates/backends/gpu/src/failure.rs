@@ -12,6 +12,9 @@ pub(crate) struct FailureCheck {
     pub(crate) queue: wgpu::Queue,
     /// The failure word and its readback buffer, back to the pile once read.
     pub(crate) pair: Option<(wgpu::Buffer, wgpu::Buffer)>,
+    /// The run's submission: waiting for its word waits for it and what
+    /// came before, not for what was submitted after.
+    pub(crate) submitted: wgpu::SubmissionIndex,
     pub(crate) pile: Arc<Mutex<Vec<(wgpu::Buffer, wgpu::Buffer)>>>,
     /// The mapped domain's width, which turns an element's number into the
     /// reference's column and row.
@@ -30,7 +33,7 @@ impl Check for FailureCheck {
         let (word_buffer, back) = self.pair.take().expect("a check is waited on once");
         let slice = back.slice(..);
         self.wait
-            .map_read(&self.device, &self.queue, slice)
+            .map_read_after(&self.device, &self.queue, slice, &self.submitted)
             .map_err(ExecutionError::Device)?;
         let (word, blocks, left, total) = {
             let bytes = slice

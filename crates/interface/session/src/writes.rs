@@ -51,6 +51,22 @@ impl Writes {
         Ok(())
     }
 
+    /// Whether the evaluation behind `report` changed an output written to
+    /// a file.
+    pub(crate) fn due(&self, writes: &[orla_scene::Write], report: &Report) -> bool {
+        writes.iter().any(|write| {
+            report
+                .outputs
+                .iter()
+                .find(|(name, _)| name == &write.output)
+                .is_some_and(|(_, handle)| {
+                    self.written
+                        .get(&write.path)
+                        .is_none_or(|(last, _)| last != handle)
+                })
+        })
+    }
+
     /// Writes every output the committed evaluation behind `report`
     /// changed.
     pub(crate) fn after(
