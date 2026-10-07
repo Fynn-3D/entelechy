@@ -320,6 +320,23 @@ pub trait Backend: Send + Sync {
         false
     }
 
+    /// Whether frames are clocked on the device as they run: each run's
+    /// work stamped by the device's own clock, read once it is done,
+    /// nothing waited for; see [`Backend::frame_device_time`].
+    fn set_clocked(&self, on: bool) {
+        let _ = on;
+    }
+
+    /// Ends a clocked frame: the runs since the last end are one frame.
+    fn end_frame(&self) {}
+
+    /// How long the device was busy with the latest clocked frame it has
+    /// done, by its own clock; `None` before one is done, or where the
+    /// device keeps no clock. Asking waits for nothing.
+    fn frame_device_time(&self) -> Option<std::time::Duration> {
+        None
+    }
+
     /// Runs a map `repeat` times, feeding input `chain.0` from output
     /// `chain.1` each time, and answers with the last outputs. `None`
     /// (the default) leaves the caller to run the times one by one.

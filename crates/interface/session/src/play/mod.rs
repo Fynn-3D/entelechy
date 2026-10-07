@@ -293,6 +293,8 @@ impl Play {
                 if down {
                     self.hud = !self.hud;
                     self.panel = None;
+                    // Its device time is clocked only while the line shows.
+                    session.set_clocked(self.hud);
                 }
             }
             _ => {
@@ -393,6 +395,7 @@ impl Play {
     /// One frame: syncs disk changes, takes a due replay frame, evaluates,
     /// and names the picture and sound.
     pub fn frame(&mut self, session: &mut Session, view: View) -> Frame {
+        let begun = (self.clock)();
         for event in session.sync() {
             self.said.push(event.to_string());
         }
@@ -402,8 +405,7 @@ impl Play {
             Replayed::Frame(context) => Some(context),
             Replayed::Not => None,
         };
-        self.stats.begin((self.clock)());
-        let started = (self.clock)();
+        self.stats.begin(begun);
         self.settle_pad();
         let context = replayed.unwrap_or_else(|| self.context(view));
         self.input.wheel = [0.0, 0.0];
@@ -430,14 +432,6 @@ impl Play {
                     self.said
                         .extend(report.refused.iter().map(ToString::to_string));
                 }
-                // Overlapping, the evaluation waited for the frame before
-                // on the device: that wait is the device's time, not its.
-                let waited = if session.overlaps() {
-                    session.device_waited().as_secs_f64()
-                } else {
-                    0.0
-                };
-                let evaluated = (self.clock)() - started - waited;
                 let picture = self
                     .preview
                     .as_ref()
@@ -447,21 +441,23 @@ impl Play {
                 self.panel = self
                     .hud
                     .then(|| self.panel_for(session, &report, picture, &context));
-                // With the line on, the frame settles the device so its
-                // time is measured on its own; overlapping, the time it
-                // waited for the frame before is that time, and the frames
-                // keep overlapping while measured.
-                let device = (self.hud && session.runtime().has_device()).then(|| {
-                    if session.overlaps() {
-                        return session.device_waited().as_secs_f64();
-                    }
-                    let waiting = (self.clock)();
-                    session.runtime().settle_device();
-                    (self.clock)() - waiting
-                });
+                // The frame's own work on the processor: all of it but the
+                // wait for the frame before on the device, which is the
+                // device's time, not its. The device's own time is its
+                // clock's, read for a frame it has done (`set_clocked`).
+                let waited = if session.overlaps() {
+                    session.device_waited().as_secs_f64()
+                } else {
+                    0.0
+                };
+                let working = (self.clock)() - begun - waited;
                 self.stats.record(
-                    std::time::Duration::from_secs_f64(evaluated.max(0.0)),
-                    device.map(|d| std::time::Duration::from_secs_f64(d.max(0.0))),
+                    std::time::Duration::from_secs_f64(working.max(0.0)),
+                    if self.hud {
+                        session.frame_device_time()
+                    } else {
+                        None
+                    },
                 );
                 if self.reported.worked() {
                     self.said.push("evaluating again".into());

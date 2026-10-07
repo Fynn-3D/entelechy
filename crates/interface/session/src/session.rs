@@ -896,6 +896,19 @@ impl Session {
         self.evaluator.overlaps()
     }
 
+    /// Whether frames are clocked on the device as they run; see
+    /// [`orla_kernel::Runtime::set_clocked`]. A clocked frame waits for
+    /// nothing more than an unclocked one.
+    pub fn set_clocked(&self, on: bool) {
+        self.runtime.set_clocked(on);
+    }
+
+    /// The device's busy time for the latest clocked frame it has done; see
+    /// [`orla_kernel::Runtime::frame_device_time`].
+    pub fn frame_device_time(&self) -> Option<std::time::Duration> {
+        self.runtime.frame_device_time()
+    }
+
     /// How long the last evaluation waited for the frame before it; see
     /// [`orla_graph::Evaluator::device_waited`].
     pub fn device_waited(&self) -> std::time::Duration {
@@ -946,6 +959,8 @@ impl Session {
             }
         };
         self.history.ran();
+        // The frame's runs are all given: a clocked frame ends here.
+        self.runtime.end_frame();
         // Committed: changed outputs may now be written, once confirmed.
         if self.writes.due(&self.scene.files().writes, &report) {
             self.confirm()?;

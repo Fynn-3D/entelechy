@@ -303,9 +303,9 @@ and `pads()` is how many are connected.
 
 Keys: F6 cycles the preview through the nodes and back to the output;
 F5 resets Graph state; F10 shows a line of frame data (frame interval
-and rate, evaluate and present times, the time the frame waited for the
-device (the frame before, as the Player's frames overlap), backend,
-window and scale, the
+and rate; `cpu`, the processor's work on a frame, its waits left out;
+`gpu`, how long the device was busy with a frame, as it tells each run
+done, without waiting for it; present time; backend, window and scale, the
 port shown, what ran, was reused and was fused, `async` runs,
 presentation path and downloads, the sound device's rate, block size and
 dry callbacks). Tab, Escape and every other key are the scene's; closing

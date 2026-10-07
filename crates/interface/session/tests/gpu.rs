@@ -399,3 +399,55 @@ fn a_small_output_found_unchanged_while_sparing_nothing_rests() {
     assert!(sparing >= 35, "{sparing}");
     assert!(sparing_nothing <= 16, "{sparing_nothing}");
 }
+
+#[test]
+fn a_clocked_frame_gives_the_devices_busy_time_without_waiting_for_it() {
+    // Clocked, each frame's runs are stamped by the device's clock and read
+    // once it has done them: a frame later, its busy time is there.
+    let Some(gpu) = gpu() else { return };
+    let backend: Box<dyn Backend> = Box::new(gpu);
+    let mut runtime = orla_kernel::Runtime::with_backend(1 << 24, backend);
+    runtime.set_small(0);
+    load(
+        &mut runtime,
+        "kernel test.wave@1 { requires { field.write; time.read; } output result: Image; compute { let p = coord(); return vec4(sin(p.x * 0.01 + time()), cos(p.y * 0.01), 0.0, 1.0); } }",
+    );
+    let graph = orla_scene::parse(
+        "node wave: test.wave@1 { domain = vec2(512, 512); } output result <- wave.result;",
+    )
+    .unwrap();
+    let mut evaluator = orla_graph::Evaluator::new();
+    let empty: std::collections::BTreeMap<String, orla_abi::Handle> =
+        std::collections::BTreeMap::new();
+    let no_params: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
+    assert_eq!(runtime.frame_device_time(), None, "nothing clocked yet");
+    runtime.set_clocked(true);
+    let mut busy = None;
+    for k in 0..200 {
+        let context = Context {
+            time: k as f32 * 0.1,
+            ..Context::default()
+        };
+        evaluator
+            .evaluate(&graph, &mut runtime, &empty, &context, &no_params)
+            .unwrap();
+        runtime.end_frame();
+        busy = runtime.frame_device_time();
+        if busy.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    // An adapter without timestamps keeps no clock: nothing to read.
+    let Some(busy) = busy else { return };
+    assert!(
+        busy > std::time::Duration::ZERO && busy < std::time::Duration::from_secs(1),
+        "{busy:?}"
+    );
+    runtime.set_clocked(false);
+    assert_eq!(
+        runtime.frame_device_time(),
+        None,
+        "unclocked, nothing is kept"
+    );
+}

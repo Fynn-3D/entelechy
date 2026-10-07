@@ -783,6 +783,22 @@ impl Runtime {
         self.backend().submitted()
     }
 
+    /// Whether frames are clocked on the device ([`Backend::set_clocked`]).
+    pub fn set_clocked(&self, on: bool) {
+        self.backend().set_clocked(on);
+    }
+
+    /// Ends a clocked frame ([`Backend::end_frame`]).
+    pub fn end_frame(&self) {
+        self.backend().end_frame();
+    }
+
+    /// The device's busy time for the latest clocked frame it has done
+    /// ([`Backend::frame_device_time`]).
+    pub fn frame_device_time(&self) -> Option<std::time::Duration> {
+        self.backend().frame_device_time()
+    }
+
     /// Whether the backend's device work is done only when
     /// [`Runtime::settle_device`] returns, not when `execute` does.
     pub fn has_device(&self) -> bool {

@@ -104,6 +104,8 @@ pub struct GpuBackend {
     /// The nanoseconds the last measured execution took on the device,
     /// or `u64::MAX` for none.
     last_nanos: std::sync::atomic::AtomicU64,
+    /// Frames clocked as they run; see [`Backend::set_clocked`].
+    frames: timing::Frames,
 }
 
 impl fmt::Debug for GpuBackend {
@@ -201,6 +203,7 @@ impl GpuBackend {
             failures: Arc::new(Mutex::new(Vec::new())),
             last_nanos: std::sync::atomic::AtomicU64::new(u64::MAX),
             clock: std::sync::atomic::AtomicU8::new(clock::UNTRIED),
+            frames: timing::Frames::default(),
         })
     }
 
@@ -252,6 +255,18 @@ impl Backend for GpuBackend {
 
     fn measures_the_device(&self) -> bool {
         self.device_clock_answered()
+    }
+
+    fn set_clocked(&self, on: bool) {
+        self.frames.set_clocked(on, &self.device);
+    }
+
+    fn end_frame(&self) {
+        self.frames.end_frame();
+    }
+
+    fn frame_device_time(&self) -> Option<std::time::Duration> {
+        self.frames.done()
     }
 
     /// Waits for the queue to run dry. Dispatches are submitted without a

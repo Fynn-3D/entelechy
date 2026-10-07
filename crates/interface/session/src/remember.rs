@@ -129,6 +129,15 @@ impl Backend for Remembered {
     fn measures_the_device(&self) -> bool {
         self.inner.measures_the_device()
     }
+    fn set_clocked(&self, on: bool) {
+        self.inner.set_clocked(on);
+    }
+    fn end_frame(&self) {
+        self.inner.end_frame();
+    }
+    fn frame_device_time(&self) -> Option<std::time::Duration> {
+        self.inner.frame_device_time()
+    }
     fn execute_repeated(
         &self,
         prepared: &dyn Prepared,

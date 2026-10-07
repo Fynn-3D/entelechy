@@ -121,11 +121,12 @@ pub fn stamp(panel: &Panel, frame: &mut [u32], frame_width: u32, frame_height: u
 #[derive(Debug)]
 pub struct Stats {
     last_start: Option<f64>,
-    /// Smoothed milliseconds: frame interval, evaluating, waiting for the
-    /// device (`None` without one), and presenting (including vsync).
+    /// Smoothed milliseconds: frame interval; the processor's work on a
+    /// frame, its waits left out; the device's busy time on one by its own
+    /// clock (`None` without one); presenting (including vsync).
     interval: f64,
-    evaluate: f64,
-    device: Option<f64>,
+    cpu: f64,
+    gpu: Option<f64>,
     present: f64,
 }
 
@@ -134,8 +135,8 @@ impl Default for Stats {
         Self {
             last_start: None,
             interval: 0.0,
-            evaluate: 0.0,
-            device: None,
+            cpu: 0.0,
+            gpu: None,
             present: 0.0,
         }
     }
@@ -162,11 +163,13 @@ impl Stats {
         }
     }
 
-    /// Records this frame's evaluating and device times.
-    pub fn record(&mut self, evaluate: Duration, device: Option<Duration>) {
-        smooth(&mut self.evaluate, evaluate);
-        if let Some(device) = device {
-            smooth(self.device.get_or_insert(0.0), device);
+    /// Records a frame's processor time and the device's busy time on the
+    /// latest frame it has done.
+    pub fn record(&mut self, cpu: Duration, gpu: Option<Duration>) {
+        smooth(&mut self.cpu, cpu);
+        match gpu {
+            Some(gpu) => smooth(self.gpu.get_or_insert(0.0), gpu),
+            None => self.gpu = None,
         }
     }
 
@@ -182,14 +185,13 @@ impl Stats {
         } else {
             0.0
         };
-        // Labelled `device`: the backend's name follows in `rest`.
-        let device = match self.device {
-            Some(device) => format!("device {device:.2} ms | "),
+        let gpu = match self.gpu {
+            Some(gpu) => format!("gpu {gpu:.2} ms | "),
             None => String::new(),
         };
         format!(
-            "frame {:.1} ms ({fps:.0} fps) | eval {:.2} ms | {device}present {:.2} ms | {rest}",
-            self.interval, self.evaluate, self.present
+            "frame {:.1} ms ({fps:.0} fps) | cpu {:.2} ms | {gpu}present {:.2} ms | {rest}",
+            self.interval, self.cpu, self.present
         )
     }
 }
@@ -224,18 +226,18 @@ mod tests {
         assert!(
             stats
                 .line("x")
-                .starts_with("frame 0.0 ms (0 fps) | eval 2.00 ms | present 0.50 ms | x"),
+                .starts_with("frame 0.0 ms (0 fps) | cpu 2.00 ms | present 0.50 ms | x"),
             "a backend with no device has no time of its own: {}",
             stats.line("x")
         );
-        // A backend with a device reports its time apart from presenting.
+        // A device with a clock reports its busy time apart from presenting.
         let mut stats = Stats::default();
         stats.begin(0.0);
         stats.record(Duration::from_millis(2), Some(Duration::from_micros(1450)));
         stats.presented(Duration::from_micros(500));
         assert!(
             stats.line("x").starts_with(
-                "frame 0.0 ms (0 fps) | eval 2.00 ms | device 1.45 ms | present 0.50 ms | x"
+                "frame 0.0 ms (0 fps) | cpu 2.00 ms | gpu 1.45 ms | present 0.50 ms | x"
             ),
             "{}",
             stats.line("x")
