@@ -898,6 +898,53 @@ fn a_function_taking_a_field_sees_what_its_document_uses() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A scene's param reads its default over the structs its type reaches:
+/// one another document declares, faulty, is said with that document and
+/// its place there, at the param; a struct the type does not reach says
+/// nothing at the param.
+#[test]
+fn a_param_says_a_faulty_struct_with_its_document() {
+    let dir = scratch(
+        "param-struct-elsewhere",
+        &[
+            (
+                "lib.orla",
+                "struct Fine { x: Float; }\nstruct Bad { x: Float; q: Nope; }\n",
+            ),
+            (
+                "k.orla",
+                "kernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return 1.0; } }\n",
+            ),
+            (
+                "scene.osn",
+                "use \"lib.orla\";\nuse \"k.orla\";\nparam p: Bad = Bad { x: 1.0, q: 2 };\nnode k: t.k@1 { domain = 1; }\noutput result <- k.result;\n",
+            ),
+        ],
+    );
+    let check = || {
+        orla_session::check_document(
+            &orla_session::Disk::default(),
+            &dir.join("scene.osn"),
+            false,
+        )
+    };
+    let said = format!("{:?}", check());
+    assert!(
+        said.contains("struct `Bad` (")
+            && said.contains("lib.orla:2:")
+            && said.contains("unknown type `Nope`"),
+        "{said}"
+    );
+    std::fs::write(
+        dir.join("scene.osn"),
+        "use \"lib.orla\";\nuse \"k.orla\";\nparam p: Fine = Fine { x: 1.0 };\nnode k: t.k@1 { domain = 1; }\noutput result <- k.result;\n",
+    )
+    .unwrap();
+    let said = format!("{:?}", check());
+    assert!(!said.contains("Nope"), "{said}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A library declares a name a document it uses declares too, as a
 /// game's widgets beside a package's: a scene using the library sees the
 /// library's alone, so nothing clashes; the library's own functions call

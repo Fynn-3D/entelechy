@@ -51,15 +51,110 @@ pub(super) fn struct_table(decls: &[orla_language::StructDecl]) -> Result<Struct
     struct_table_in(Structs::default(), decls)
 }
 
-/// `structs` with the declared structs appended, in order.
+/// `structs` with the declared structs appended, each after the structs
+/// its fields name: in the order written where that order already holds,
+/// so a struct may name one declared after it.
 fn struct_table_in(
     structs: Structs,
     decls: &[orla_language::StructDecl],
 ) -> Result<Structs, CompileError> {
-    for decl in decls {
+    for decl in dependency_order(decls)? {
         struct_entry(&structs, decl).map_err(|error| error.in_declaration(&decl.name.value))?;
     }
     Ok(structs)
+}
+
+/// The declarations a type written `ty` names, and those their fields
+/// name in turn, in the order declared.
+fn reached_by(decls: &[orla_language::StructDecl], ty: &str) -> Vec<orla_language::StructDecl> {
+    let words = |ty: &str| -> Vec<String> {
+        ty.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .filter(|word| !word.is_empty())
+            .map(str::to_owned)
+            .collect()
+    };
+    let mut reached = vec![false; decls.len()];
+    let mut named = words(ty);
+    while let Some(word) = named.pop() {
+        for (i, decl) in decls.iter().enumerate() {
+            if !reached[i] && decl.name.value == word {
+                reached[i] = true;
+                for (_, field) in &decl.fields {
+                    named.extend(words(&field.value));
+                }
+            }
+        }
+    }
+    decls
+        .iter()
+        .zip(reached)
+        .filter(|(_, r)| *r)
+        .map(|(d, _)| d.clone())
+        .collect()
+}
+
+/// The declarations, each after those its fields name (a depth-first walk
+/// in the order written); two that contain each other are refused.
+fn dependency_order(
+    decls: &[orla_language::StructDecl],
+) -> Result<Vec<&orla_language::StructDecl>, CompileError> {
+    // 0 unvisited, 1 on the walk, 2 placed.
+    let mut state = vec![0u8; decls.len()];
+    let mut order = Vec::with_capacity(decls.len());
+    fn named(decls: &[orla_language::StructDecl], decl: &orla_language::StructDecl) -> Vec<usize> {
+        let mut out = Vec::new();
+        for (_, ty) in &decl.fields {
+            for word in ty
+                .value
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .filter(|word| !word.is_empty() && *word != decl.name.value)
+            {
+                if let Some(i) = decls.iter().position(|d| d.name.value == word)
+                    && !out.contains(&i)
+                {
+                    out.push(i);
+                }
+            }
+        }
+        out
+    }
+    fn visit<'d>(
+        decls: &'d [orla_language::StructDecl],
+        i: usize,
+        state: &mut [u8],
+        order: &mut Vec<&'d orla_language::StructDecl>,
+        walk: &mut Vec<usize>,
+    ) -> Result<(), CompileError> {
+        match state[i] {
+            2 => return Ok(()),
+            1 => {
+                let at = walk.iter().position(|&w| w == i).unwrap_or(0);
+                let names: Vec<String> = walk[at..]
+                    .iter()
+                    .map(|&w| format!("`{}`", decls[w].name.value))
+                    .collect();
+                return Err(semantic(
+                    decls[i].name.span,
+                    format!("structs {} contain one another", names.join(" and ")),
+                )
+                .in_declaration(&decls[i].name.value));
+            }
+            _ => {}
+        }
+        state[i] = 1;
+        walk.push(i);
+        for j in named(decls, &decls[i]) {
+            visit(decls, j, state, order, walk)?;
+        }
+        walk.pop();
+        state[i] = 2;
+        order.push(&decls[i]);
+        Ok(())
+    }
+    for i in 0..decls.len() {
+        visit(decls, i, &mut state, &mut order, &mut Vec::new())?;
+    }
+    Ok(order)
 }
 
 /// One struct appended to `structs`.
@@ -972,13 +1067,14 @@ pub(super) fn manifest(
 }
 
 /// A literal read exact and shaped into the type `ty` names, over the
-/// structs `decls` declare; a double keeps every digit written.
+/// structs `decls` declare that `ty` reaches; a double keeps every digit
+/// written.
 pub(crate) fn literal_of_type(
     expr: &Expr,
     ty: &Spanned<String>,
     decls: &[orla_language::StructDecl],
 ) -> Result<Value, CompileError> {
-    let table = struct_table(decls)?;
+    let table = struct_table(&reached_by(decls, &ty.value))?;
     let ty = resolve_type(ty, &table)?;
     let structs = table.into_inner();
     constant(expr, ty, &structs)

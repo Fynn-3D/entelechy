@@ -332,6 +332,38 @@ fn structs_are_checked_by_name_and_field() {
     assert!(error.to_string().contains("uppercase"), "{error}");
 }
 
+/// A struct may name one declared after it, as functions call in any
+/// order; two that contain each other are refused, naming both. The order
+/// written stays the order laid out where it already holds.
+#[test]
+fn a_struct_names_one_declared_after_it() {
+    let module = compile(
+        "kernel t.k@1 { requires { field.write; } output r: Image; struct Hit { t: Float; at: Spot; } struct Spot { x: Float; y: Float; } compute { let h = Hit { t: 1.0, at: Spot { x: 0.5, y: 0.25 } }; return vec4(h.t, h.at.x, h.at.y, 1.0); } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let text = module.to_string();
+    assert!(
+        text.contains("struct S0 Spot") && text.contains("struct S1 Hit"),
+        "{text}"
+    );
+    let module = compile(
+        "kernel t.k@1 { requires { field.write; } output r: Image; struct Spot { x: Float; y: Float; } struct Hit { t: Float; at: Spot; } compute { let h = Hit { t: 1.0, at: Spot { x: 0.5, y: 0.25 } }; return vec4(h.t, h.at.x, h.at.y, 1.0); } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let text = module.to_string();
+    assert!(
+        text.contains("struct S0 Spot") && text.contains("struct S1 Hit"),
+        "{text}"
+    );
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output r: Image; struct A { b: B; } struct B { a: [A; 2]; } compute { return vec4(0.0, 0.0, 0.0, 1.0); } }",
+    );
+    assert!(
+        message.contains("structs `A` and `B` contain one another"),
+        "{message}"
+    );
+}
+
 #[test]
 fn merge_makes_a_reduction_and_is_checked() {
     let module = compile(

@@ -397,6 +397,8 @@ diagnostic names the declaring document and the `use` to add.
 - Functions call one another in any order; no chain of calls comes back
   to a function, so none recurses, and a cycle is refused naming it
   ([decision](DECISIONS.md)). Repetition is a `loop` carrying the work.
+- A struct may name a struct declared after it; structs that contain one
+  another are refused, naming them.
 - A short function is inlined at compile time; a trace still shows the
   call.
 - A function may take a Field: `fn cast(voxels: Volume<Int>, eye: Vec3)

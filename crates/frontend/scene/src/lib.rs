@@ -276,6 +276,34 @@ fn compiled(span: Span, e: orla_compiler::CompileError) -> DocumentError {
     }
 }
 
+/// A compiler's error in a struct another document declares, said with
+/// that document and the place in it; the caller places it in the scene.
+fn declared_elsewhere(
+    structs: &[orla_language::StructDecl],
+    e: orla_compiler::CompileError,
+) -> Result<DocumentError, orla_compiler::CompileError> {
+    let Some(origin) = e
+        .declaration()
+        .and_then(|name| structs.iter().find(|d| d.name.value == name))
+        .and_then(|d| d.origin.as_ref())
+    else {
+        return Err(e);
+    };
+    let (place, message) = match &e {
+        orla_compiler::CompileError::Semantic { span, message, .. } => (*span, message.clone()),
+        other => (Span::default(), other.to_string()),
+    };
+    let at = if place.is_placed() {
+        format!("{}:{place}", origin.document)
+    } else {
+        origin.document.to_string()
+    };
+    Ok(error(
+        Span::default(),
+        format!("struct `{}` ({at}): {message}", origin.name),
+    ))
+}
+
 /// A node's `domain`: a literal resolves now, an expression when the
 /// node binds.
 fn domain_spec(expr: &orla_language::Expr) -> Result<DomainSpec, DocumentError> {
@@ -1164,8 +1192,16 @@ impl Lowering<'_, '_> {
                 span: decl.ty.span,
             };
             let default = self.known().with_variants(&decl.default)?;
-            let default = orla_compiler::literal_of_type(&default, &ty, &self.resolved_structs())
-                .map_err(|e| compiled(decl.default.span, e))?;
+            let structs = self.resolved_structs();
+            let default = orla_compiler::literal_of_type(&default, &ty, &structs).map_err(|e| {
+                match declared_elsewhere(&structs, e) {
+                    Ok(said) => DocumentError {
+                        span: decl.default.span,
+                        ..said
+                    },
+                    Err(e) => compiled(decl.default.span, e),
+                }
+            })?;
             if params
                 .iter()
                 .any(|p: &GraphParam| p.name == decl.name.value)
