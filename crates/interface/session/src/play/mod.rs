@@ -187,6 +187,9 @@ pub struct Play {
     /// pressed yet: every press lasts at least one frame.
     pressed: Vec<Held>,
     late: Vec<Held>,
+    /// Pad buttons let go of, and when: a button pressed again within
+    /// [`PAD_SETTLE`] was held all along.
+    pad_released: Vec<(PadButton, f64)>,
     /// The pointer in window pixels.
     cursor: (f32, f32),
     placement: Placement,
@@ -209,6 +212,10 @@ pub struct Play {
     said: Vec<String>,
 }
 
+/// How long a pad button's release waits, in seconds: a press within it
+/// is the contacts chattering, the button still held.
+const PAD_SETTLE: f64 = 0.04;
+
 impl Play {
     /// A play timed by `clock`, the host's clock in seconds.
     pub fn new(clock: fn() -> f64) -> Self {
@@ -219,6 +226,7 @@ impl Play {
             pad: Pad::default(),
             pressed: Vec::new(),
             late: Vec::new(),
+            pad_released: Vec::new(),
             cursor: (0.0, 0.0),
             placement: Placement::default(),
             shown_size: (0, 0),
@@ -342,9 +350,29 @@ impl Play {
         self.input.wheel[1] += y;
     }
 
-    /// A pad's button.
+    /// A pad's button. A pad's contacts chatter: a release is held back
+    /// [`PAD_SETTLE`], and a press within it was the button held.
     pub fn pad_button(&mut self, button: PadButton, down: bool) {
-        self.pad.button(&mut self.input, button, down);
+        self.pad_released
+            .retain(|(released, _)| *released != button);
+        if down {
+            self.pad.button(&mut self.input, button, true);
+        } else {
+            self.pad_released.push((button, (self.clock)()));
+        }
+    }
+
+    /// Lets go of the pad buttons released [`PAD_SETTLE`] ago and not
+    /// pressed since.
+    fn settle_pad(&mut self) {
+        let now = (self.clock)();
+        let (gone, held): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pad_released)
+            .into_iter()
+            .partition(|(_, at)| now - at >= PAD_SETTLE);
+        self.pad_released = held;
+        for (button, _) in gone {
+            self.pad.button(&mut self.input, button, false);
+        }
     }
 
     /// A pad's axis.
@@ -376,6 +404,7 @@ impl Play {
         };
         self.stats.begin((self.clock)());
         let started = (self.clock)();
+        self.settle_pad();
         let context = replayed.unwrap_or_else(|| self.context(view));
         self.input.wheel = [0.0, 0.0];
         // Presses are seen; late releases apply from the next frame.
@@ -709,6 +738,49 @@ fn sound(session: &Session, report: &Report) -> Option<Handle> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NOW: AtomicU64 = AtomicU64::new(0);
+
+    fn clock() -> f64 {
+        f64::from_bits(NOW.load(Ordering::SeqCst))
+    }
+
+    fn at(seconds: f64) {
+        NOW.store(seconds.to_bits(), Ordering::SeqCst);
+    }
+
+    /// A button's contacts chattering, released and pressed again within
+    /// the settling time, is the button held; a release that settles lets
+    /// go of it.
+    #[test]
+    fn a_chattering_pad_button_is_held_once() {
+        use super::{PAD_SETTLE, PadButton, Play};
+        let select = orla_kernel::pad::SELECT;
+        at(10.0);
+        let mut play = Play::new(clock);
+        play.pad_button(PadButton::Select, true);
+        play.settle_pad();
+        assert!(play.input.button(select));
+        at(10.016);
+        play.pad_button(PadButton::Select, false);
+        at(10.020);
+        play.settle_pad();
+        assert!(play.input.button(select), "a release not yet settled");
+        play.pad_button(PadButton::Select, true);
+        at(10.024);
+        play.pad_button(PadButton::Select, false);
+        at(10.024 + PAD_SETTLE * 0.5);
+        play.settle_pad();
+        assert!(
+            play.input.button(select),
+            "pressed again within the settling time"
+        );
+        at(10.024 + PAD_SETTLE + 0.001);
+        play.settle_pad();
+        assert!(!play.input.button(select), "a release settled lets go");
+    }
+
     /// Failures differing only in numbers are one run, reported once.
     #[test]
     fn a_run_of_one_failure_is_printed_once() {
