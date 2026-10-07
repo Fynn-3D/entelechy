@@ -176,10 +176,14 @@ fn leads_of(function: &Function, k: u32) -> Option<Leads> {
     fine.then_some((leads, calls))
 }
 
+/// An input read at an address, whole or a part of it by fields: the
+/// input, the address and the fields.
+type ElementRead = (u32, ValueId, Vec<u32>);
+
 /// The functions made reading an argument where it lies, by what they
-/// were made from: the function, the argument, the input and the
-/// address's type.
-type Made = HashMap<(u32, u32, u32, Type), u32>;
+/// were made from: the function, the argument, the input, the address's
+/// type and the fields from the input's element to the argument.
+type Made = HashMap<(u32, u32, u32, Type, Vec<u32>), u32>;
 
 impl Ctx<'_> {
     /// Whether a function's argument `k`, a record or array of at least
@@ -212,7 +216,10 @@ impl Ctx<'_> {
     }
 
     /// `g` with its argument `k` an address of `input`, of type `address`,
-    /// every part of it read there; made once, appended to `functions`.
+    /// the argument the part of its element `base` names (its fields,
+    /// outermost first; none for the whole element), every part of it read
+    /// there; made once, appended to `functions`.
+    #[allow(clippy::too_many_arguments)]
     fn made_reading(
         &self,
         functions: &mut Vec<Function>,
@@ -221,14 +228,15 @@ impl Ctx<'_> {
         k: u32,
         input: u32,
         address: Type,
+        base: &[u32],
     ) -> u32 {
-        if let Some(index) = made.get(&(g, k, input, address)) {
+        if let Some(index) = made.get(&(g, k, input, address, base.to_vec())) {
             return *index;
         }
         let original = functions[g as usize].clone();
         let (leads, _) = leads_of(&original, k).expect("judged readable through");
         let mut body = original.body.clone();
-        self.rewrite(&mut body, &leads, functions, made, input, address);
+        self.rewrite(&mut body, &leads, functions, made, input, address, base);
         let mut args = original.args.clone();
         args[k as usize] = address;
         let index = functions.len() as u32;
@@ -239,10 +247,11 @@ impl Ctx<'_> {
             results: original.results.clone(),
             bindings: original.bindings.clone(),
         });
-        made.insert((g, k, input, address), index);
+        made.insert((g, k, input, address, base.to_vec()), index);
         index
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn rewrite(
         &self,
         body: &mut [Instruction],
@@ -251,16 +260,19 @@ impl Ctx<'_> {
         made: &mut Made,
         input: u32,
         address: Type,
+        base: &[u32],
     ) {
         for instruction in body.iter_mut() {
             if let Some(lead) = leads.get(&instruction.id.0) {
                 if lead.path.is_empty() {
                     instruction.ty = address;
                 } else {
+                    let mut path: Vec<Step> = base.iter().map(|f| Step::Field(*f)).collect();
+                    path.extend(lead.path.iter().copied());
                     instruction.op = Op::Part {
                         input,
                         at: Some(ValueId(lead.root)),
-                        path: lead.path.clone(),
+                        path,
                     };
                 }
             }
@@ -275,13 +287,22 @@ impl Ctx<'_> {
                             place as u32,
                             input,
                             address,
+                            base,
                         );
                     }
                 }
                 instruction.op = Op::Call(callee, args.clone());
             }
             for block in instruction.op.blocks_mut() {
-                self.rewrite(&mut block.body, leads, functions, made, input, address);
+                self.rewrite(
+                    &mut block.body,
+                    leads,
+                    functions,
+                    made,
+                    input,
+                    address,
+                    base,
+                );
             }
         }
     }
@@ -361,19 +382,39 @@ impl Ctx<'_> {
         made: &mut Made,
     ) -> bool {
         let mut types: HashMap<u32, Type> = HashMap::new();
-        let mut reads: HashMap<u32, (u32, ValueId)> = HashMap::new();
+        let mut reads: HashMap<u32, ElementRead> = HashMap::new();
         fn scan(
             body: &[Instruction],
             memories: &[bool],
             types: &mut HashMap<u32, Type>,
-            reads: &mut HashMap<u32, (u32, ValueId)>,
+            reads: &mut HashMap<u32, ElementRead>,
         ) {
             for instruction in body {
                 types.insert(instruction.id.0, instruction.ty);
-                if let Op::At(input, at) = &instruction.op
-                    && !memories.get(*input as usize).copied().unwrap_or(true)
-                {
-                    reads.insert(instruction.id.0, (*input, *at));
+                let outside = |input: u32| !memories.get(input as usize).copied().unwrap_or(true);
+                match &instruction.op {
+                    Op::At(input, at) if outside(*input) => {
+                        reads.insert(instruction.id.0, (*input, *at, Vec::new()));
+                    }
+                    // A part of an element at an address, by fields alone:
+                    // read where it lies as the whole element is.
+                    Op::Part {
+                        input,
+                        at: Some(at),
+                        path,
+                    } if outside(*input) => {
+                        let fields: Option<Vec<u32>> = path
+                            .iter()
+                            .map(|step| match step {
+                                Step::Field(f) => Some(*f),
+                                Step::Index(_) => None,
+                            })
+                            .collect();
+                        if let Some(fields) = fields {
+                            reads.insert(instruction.id.0, (*input, *at, fields));
+                        }
+                    }
+                    _ => {}
                 }
                 for block in instruction.op.blocks() {
                     scan(&block.body, memories, types, reads);
@@ -394,7 +435,7 @@ impl Ctx<'_> {
         &self,
         body: &mut [Instruction],
         types: &HashMap<u32, Type>,
-        reads: &HashMap<u32, (u32, ValueId)>,
+        reads: &HashMap<u32, ElementRead>,
         functions: &mut Vec<Function>,
         made: &mut Made,
         changed: &mut bool,
@@ -404,7 +445,7 @@ impl Ctx<'_> {
                 let mut callee = *callee;
                 let mut args = args.clone();
                 for (place, arg) in args.iter_mut().enumerate() {
-                    let Some((input, at)) = reads.get(&arg.0).copied() else {
+                    let Some((input, at, base)) = reads.get(&arg.0).cloned() else {
                         continue;
                     };
                     let mut seen = HashMap::new();
@@ -412,8 +453,15 @@ impl Ctx<'_> {
                         continue;
                     }
                     let address = types.get(&at.0).copied().unwrap_or(Type::Int);
-                    callee =
-                        self.made_reading(functions, made, callee, place as u32, input, address);
+                    callee = self.made_reading(
+                        functions,
+                        made,
+                        callee,
+                        place as u32,
+                        input,
+                        address,
+                        &base,
+                    );
                     *arg = at;
                     *changed = true;
                 }

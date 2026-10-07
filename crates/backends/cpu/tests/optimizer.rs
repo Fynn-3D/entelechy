@@ -302,6 +302,91 @@ fn a_wide_element_handed_to_a_long_function_is_read_where_it_lies() {
     assert_eq!(run(&plain), run(&optimized));
 }
 
+/// A wide part of an input element, reached by fields (`v.b`), handed to
+/// a function that only takes it apart, is read where it lies as a whole
+/// element is: the function is given the element's address and reads its
+/// parts past the fields that lead to it; the words are the same.
+#[test]
+fn a_wide_part_of_an_element_handed_on_is_read_where_it_lies() {
+    let steps: String = (0..1100)
+        .map(|i| format!("let a{} = a{} * 1.0001 + 0.5;\n", i + 1, i))
+        .collect();
+    let source = format!(
+        "kernel test.part@1 {{ requires {{ field.read; field.write; }}
+            struct Patch {{ points: [Vec3; 16]; label: Int; }}
+            struct View {{ a: Patch; b: Patch; t: Float; }}
+            input views: Rows<View>;
+            output result: Rows<Float>;
+            fn heavy(p: Patch, k: Int) -> Float {{
+                let a0 = p.points[k].y + float(p.label);
+                {steps}
+                return a1100 + p.points[0].x;
+            }}
+            fn handed(p: Patch, k: Int) -> Float {{ return heavy(p, k) + float(p.label); }}
+            compute {{ let v = at(views, element()); return handed(v.b, element() % 16) + v.t; }}
+        }}"
+    );
+    let optimized = compile(&source).unwrap_or_else(|error| panic!("{error}"));
+    let entry = ops(&optimized.entry.body);
+    assert!(
+        !entry.iter().any(|op| matches!(op, Op::At(..))
+            || matches!(op, Op::Part { path, .. } if path.len() == 1 && path[0] == orla_ir::Step::Field(1))),
+        "neither the element nor its part `b` is read whole: {optimized}"
+    );
+    let made: Vec<&orla_ir::Function> = optimized
+        .functions
+        .iter()
+        .filter(|f| f.name.contains('~'))
+        .collect();
+    assert!(!made.is_empty(), "{optimized}");
+    assert!(
+        made.iter().all(|f| ops(&f.body).iter().any(|op| matches!(op,
+            Op::Part { path, .. } if path.first() == Some(&orla_ir::Step::Field(1)) && path.len() > 1))),
+        "each made function reads past `b`: {optimized}"
+    );
+    // The same words as the plain lowering.
+    let plain = compile_unoptimized(&source).unwrap();
+    let patch = 16 * 3 + 1;
+    let view = 2 * patch + 1;
+    let schema = orla_abi::Schema::new(
+        (0..2)
+            .flat_map(|_| {
+                std::iter::repeat_n(orla_abi::Scalar::Float, 48).chain([orla_abi::Scalar::Int])
+            })
+            .chain([orla_abi::Scalar::Float])
+            .collect(),
+    );
+    let words: Vec<u32> = (0..4 * view)
+        .map(|w| {
+            let at = w % view;
+            if at == patch - 1 || at == 2 * patch - 1 {
+                (w / view + at) as u32
+            } else {
+                (w as f32 * 0.25).to_bits()
+            }
+        })
+        .collect();
+    let run = |module: &orla_ir::Validated| -> Vec<u32> {
+        let mut host = Host::new(1 << 22);
+        let views = host
+            .adopt(
+                orla_abi::FieldData::from_values(schema.clone(), orla_abi::Domain::Rows(4), &words)
+                    .unwrap(),
+            )
+            .unwrap();
+        let invocation = Invocation {
+            inputs: vec![views],
+            params: Vec::new(),
+            domain: orla_abi::Domain::Rows(4),
+            context: Default::default(),
+        };
+        let mut scope = Scope::new(&mut host, all());
+        let outputs = CpuBackend.execute(module, &invocation, &mut scope).unwrap();
+        host.data(outputs[0]).unwrap().storage().to_vec()
+    };
+    assert_eq!(run(&plain), run(&optimized));
+}
+
 /// A memory the steps write keeps its whole read: a part would see a
 /// `put` between read and part that the copy would not.
 #[test]
