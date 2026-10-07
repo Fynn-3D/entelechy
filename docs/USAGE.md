@@ -55,7 +55,8 @@ orla check --ir examples/grayscale/kernels/grayscale.orla
 ```
 
 Compiles `.orla` or `.osn` files and prints their manifests, or
-diagnostics at `file:line:column`. A scene's nodes are held to their
+diagnostics at `file:line:column`, every fault of a document's functions
+in one run. A scene's nodes are held to their
 Kernels' ports as an evaluation binds them, in the same words: each port
 a node names is declared, each input bound, each parameter of its type,
 each `value(port)` of its domain an input of numbers; what only the data
@@ -68,7 +69,9 @@ function as often as it is called), which a device's compiler takes
 seconds over or fails on, is said to be large, with the structs it
 carries and the functions that carry most, each with the calls that
 reach it. A scene that publishes Kernels no node uses is told which: each
-is compiled and prepared with it all the same. A running session (the
+is compiled and prepared with it all the same. A node with no `domain`
+that carries its own output back through an input other than its first
+is noted: it runs over that first input, so its state takes that size. A running session (the
 Player, `serve`, a replay) says both as they come: a large Kernel with
 each version it publishes, the unused ones when the scene loads.
 

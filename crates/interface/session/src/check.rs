@@ -182,8 +182,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         &document.uses,
         orla_language::Own::of(&document),
     ) {
-        if let Err(error) =
-            orla_compiler::check_functions(&document, (&structs, &types, &functions))
+        for error in orla_compiler::check_functions_each(&document, (&structs, &types, &functions))
         {
             let held = held((&structs, &types, &functions));
             let at = written_in(path, held, &error);
@@ -304,6 +303,16 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
             let at = node.at.clone().unwrap_or_else(|| file.to_owned());
             say!(problem, "{at}: {error}");
         }
+        if let Some((port, output, first)) =
+            orla_graph::borrowed_domain(&lowered.graph, node, manifest)
+        {
+            let at = node.at.clone().unwrap_or_else(|| file.to_owned());
+            say!(
+                note,
+                "{at}: node `{}` carries its own `{output}` back through `{port}` and has no `domain`: it runs over its first input `{first}`, so its state takes that input's size; write its `domain`, or make `{port}` its first input",
+                node.id
+            );
+        }
     }
     for (node, kernel, why) in unpublished {
         let at = lowered
@@ -408,8 +417,8 @@ fn check_used(
         orla_language::Own::of(&used_document),
     ) {
         Ok((structs, types, functions)) => {
-            if let Err(error) =
-                orla_compiler::check_functions(&used_document, (&structs, &types, &functions))
+            for error in
+                orla_compiler::check_functions_each(&used_document, (&structs, &types, &functions))
             {
                 let held = held((&structs, &types, &functions));
                 let at = written_in(path, held, &error);

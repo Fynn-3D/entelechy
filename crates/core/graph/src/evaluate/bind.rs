@@ -3,6 +3,79 @@
 
 use super::*;
 
+/// A node that carries its own output back through an input other than
+/// its first, and has no `domain`: it runs over its first input, so the
+/// state it carries takes that input's size, not its own. The port that
+/// carries it, the output carried, and the first input; `None` otherwise
+/// (a reduction's output is one element whatever it reads; a memory
+/// keeps its own size; a first input made from what the node carries, as
+/// a newer state of it, is that state's size).
+pub fn borrowed_domain(
+    graph: &Graph,
+    node: &Node,
+    manifest: &orla_kernel::Manifest,
+) -> Option<(String, String, String)> {
+    if node.domain.is_some() || manifest.mode == orla_ir::Mode::Reduce {
+        return None;
+    }
+    let own = |port: &str| match node.inputs.get(port) {
+        Some(Binding::Previous {
+            source: Source::Node { node: from, port },
+            ..
+        }) if *from == node.id => Some(port.clone()),
+        _ => None,
+    };
+    let first = manifest.inputs.first()?;
+    if own(&first.name).is_some() {
+        return None;
+    }
+    if made_from_itself(graph, node, &first.name) {
+        return None;
+    }
+    // A memory keeps its own size, whatever the domain.
+    let memory = |port: &str| manifest.memories.iter().any(|m| m == port);
+    manifest
+        .inputs
+        .iter()
+        .skip(1)
+        .filter(|input| !memory(&input.name))
+        .find_map(|input| {
+            own(&input.name).map(|output| (input.name.clone(), output, first.name.clone()))
+        })
+}
+
+/// Whether `node`'s input `port` is made, through the nodes upstream of
+/// it, from what `node` carried out of the last evaluation.
+fn made_from_itself(graph: &Graph, node: &Node, port: &str) -> bool {
+    let mut seen: Vec<&NodeId> = Vec::new();
+    let mut open: Vec<&NodeId> = match node.inputs.get(port) {
+        Some(Binding::Now(Source::Node { node: from, .. })) => vec![from],
+        _ => return false,
+    };
+    while let Some(id) = open.pop() {
+        if seen.contains(&id) {
+            continue;
+        }
+        seen.push(id);
+        let Some(upstream) = graph.node(id) else {
+            continue;
+        };
+        for binding in upstream.inputs.values() {
+            match binding {
+                Binding::Previous {
+                    source: Source::Node { node: from, .. },
+                    ..
+                } if *from == node.id => return true,
+                Binding::Now(Source::Node { node: from, .. }) if *from != node.id => {
+                    open.push(from)
+                }
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
 /// What of a node's binding its Kernel's manifest alone decides, before
 /// anything runs: every port it names is declared, every input is bound,
 /// every parameter it sets is one the graph has or a value of the

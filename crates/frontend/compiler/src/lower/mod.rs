@@ -344,6 +344,38 @@ pub(crate) fn lower(
     lower_placed(kernel, id, checked).map(|(module, _)| module)
 }
 
+/// Each function `checked` names lowered on its own, as [`lower`] checks
+/// them: every fault found, each once, rather than the first.
+pub(crate) fn check_each(kernel: &Kernel, checked: &[String]) -> Vec<CompileError> {
+    let setup = (|| {
+        let structs = structs(kernel)?;
+        let aliases = aliases(kernel, &structs)?;
+        let manifest = manifest(kernel, None, &structs, &aliases)?;
+        Ok::<_, CompileError>((structs, aliases, manifest))
+    })();
+    let (structs, aliases, manifest) = match setup {
+        Ok(setup) => setup,
+        Err(error) => return vec![error],
+    };
+    let record = outputs_record(&manifest, &structs);
+    let shared = match shared_of(kernel, &manifest, &structs, &aliases, record) {
+        Ok(shared) => shared,
+        Err(error) => return vec![error],
+    };
+    let checking = Builder::new(&shared, false, "", Vec::new());
+    let mut faults: Vec<CompileError> = Vec::new();
+    for name in checked {
+        if let Err(error) = checking.function_index(name, Span::default())
+            && !faults.iter().any(|seen| {
+                seen.to_string() == error.to_string() && seen.declaration() == error.declaration()
+            })
+        {
+            faults.push(error);
+        }
+    }
+    faults
+}
+
 /// [`lower`], and where each value of it is written.
 pub(crate) fn lower_placed(
     kernel: &Kernel,
@@ -354,67 +386,7 @@ pub(crate) fn lower_placed(
     let aliases = aliases(kernel, &structs)?;
     let manifest = manifest(kernel, id, &structs, &aliases)?;
     let record = outputs_record(&manifest, &structs);
-    // A function with a Field parameter is a template, instantiated per
-    // port binding; the others lower where first called. A function may
-    // call any other, whatever their order, so long as no chain of calls
-    // reaches back to it.
-    let shared = Shared {
-        manifest: &manifest,
-        structs: &structs,
-        aliases: &aliases,
-        functions: RefCell::new(Vec::new()),
-        templates: std::collections::HashMap::new(),
-        plain: std::collections::HashMap::new(),
-        calls: std::cell::Cell::new(0),
-        places: RefCell::new(Vec::new()),
-        last_places: RefCell::new(crate::Places::new()),
-        lowered: RefCell::new(BTreeMap::new()),
-        instances: RefCell::new(BTreeMap::new()),
-        lowering: RefCell::new(Vec::new()),
-        needs: RefCell::new(BTreeMap::new()),
-        record,
-    };
-    let mut shared = shared;
-    let mut seen = BTreeSet::new();
-    for (position, declaration) in kernel.functions.iter().enumerate() {
-        if RESERVED_BUILTINS.contains(&declaration.name.value.as_str()) {
-            return Err(semantic(
-                declaration.name.span,
-                format!(
-                    "`{}` is a builtin of the language; a function cannot take its name (a math builtin's, like `step`, it can, and stands for it here)",
-                    declaration.name.value
-                ),
-            ));
-        }
-        if !seen.insert(declaration.name.value.as_str()) {
-            return Err(semantic(
-                declaration.name.span,
-                format!("function `{}` is defined twice", declaration.name.value),
-            ));
-        }
-        let mut has_field = false;
-        for (_, ty) in &declaration.args {
-            if declaration.generics.iter().any(|g| g.value == ty.value) {
-                continue;
-            }
-            if resolve_type(ty, &structs).is_err() {
-                port_type(ty, &structs, &aliases).map_err(|_| {
-                    semantic(ty.span, format!("`{}` is not a type", ty.value))
-                        .in_declaration(&declaration.name.value)
-                })?;
-                has_field = true;
-            }
-        }
-        if has_field || !declaration.generics.is_empty() {
-            shared
-                .templates
-                .insert(declaration.name.value.as_str(), (position, declaration));
-        } else {
-            shared
-                .plain
-                .insert(declaration.name.value.as_str(), (position, declaration));
-        }
-    }
+    let shared = shared_of(kernel, &manifest, &structs, &aliases, record)?;
     {
         let checking = Builder::new(&shared, false, "", Vec::new());
         for name in checked {
@@ -560,6 +532,78 @@ pub(crate) fn lower_placed(
         },
         places,
     ))
+}
+
+/// What every block of `kernel` resolves names against: its functions
+/// registered, a function with a Field or type parameter as a template.
+fn shared_of<'a>(
+    kernel: &'a Kernel,
+    manifest: &'a Manifest,
+    structs: &'a Structs,
+    aliases: &'a [(String, PortType)],
+    record: Option<u32>,
+) -> Result<Shared<'a>, CompileError> {
+    // A function with a Field parameter is a template, instantiated per
+    // port binding; the others lower where first called. A function may
+    // call any other, whatever their order, so long as no chain of calls
+    // reaches back to it.
+    let mut shared = Shared {
+        manifest,
+        structs,
+        aliases,
+        functions: RefCell::new(Vec::new()),
+        templates: std::collections::HashMap::new(),
+        plain: std::collections::HashMap::new(),
+        calls: std::cell::Cell::new(0),
+        places: RefCell::new(Vec::new()),
+        last_places: RefCell::new(crate::Places::new()),
+        lowered: RefCell::new(BTreeMap::new()),
+        instances: RefCell::new(BTreeMap::new()),
+        lowering: RefCell::new(Vec::new()),
+        needs: RefCell::new(BTreeMap::new()),
+        record,
+    };
+    let mut seen = BTreeSet::new();
+    for (position, declaration) in kernel.functions.iter().enumerate() {
+        if RESERVED_BUILTINS.contains(&declaration.name.value.as_str()) {
+            return Err(semantic(
+                declaration.name.span,
+                format!(
+                    "`{}` is a builtin of the language; a function cannot take its name (a math builtin's, like `step`, it can, and stands for it here)",
+                    declaration.name.value
+                ),
+            ));
+        }
+        if !seen.insert(declaration.name.value.as_str()) {
+            return Err(semantic(
+                declaration.name.span,
+                format!("function `{}` is defined twice", declaration.name.value),
+            ));
+        }
+        let mut has_field = false;
+        for (_, ty) in &declaration.args {
+            if declaration.generics.iter().any(|g| g.value == ty.value) {
+                continue;
+            }
+            if resolve_type(ty, structs).is_err() {
+                port_type(ty, structs, aliases).map_err(|_| {
+                    semantic(ty.span, format!("`{}` is not a type", ty.value))
+                        .in_declaration(&declaration.name.value)
+                })?;
+                has_field = true;
+            }
+        }
+        if has_field || !declaration.generics.is_empty() {
+            shared
+                .templates
+                .insert(declaration.name.value.as_str(), (position, declaration));
+        } else {
+            shared
+                .plain
+                .insert(declaration.name.value.as_str(), (position, declaration));
+        }
+    }
+    Ok(shared)
 }
 
 /// What every block of a Kernel resolves names against.

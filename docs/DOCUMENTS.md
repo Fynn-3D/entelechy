@@ -718,7 +718,9 @@ be keywords.
 5. `domain = count;`, `domain = vec2(width, height);` or `domain =
    vec3(width, height, depth);` sets a node's output extent in its
    output's shape; a node with an input defaults to its first declared
-   input's extent. The extent may be an expression of: `size(port)` (the
+   input's extent. A node with no `domain` that carries its own output
+   back through another input (`previous <~ node.result` not first)
+   holds state of its first input's size; a check notes it. The extent may be an expression of: `size(port)` (the
    bound extent, as a count, pair or triple), `count(port)`,
    `value(port)` and `value(port, i)`, the node's and the graph's
    parameters by name, numbers, `vec2`/`vec3`, `+ - * / <<`, `max`, `min`,

@@ -12,7 +12,9 @@ mod domain;
 mod evaluate;
 
 pub use domain::{Compare, DomainError, DomainExpr, DomainOp, DomainSpec, Requirement};
-pub use evaluate::{EvaluateError, Evaluator, Placed, PlanEntry, Refused, Report, binding_fault};
+pub use evaluate::{
+    EvaluateError, Evaluator, Placed, PlanEntry, Refused, Report, binding_fault, borrowed_domain,
+};
 pub use orla_abi::{Context, Domain, InputState, Value};
 pub use orla_ir::KernelId;
 use std::collections::BTreeMap;

@@ -945,6 +945,54 @@ fn a_param_says_a_faulty_struct_with_its_document() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A check says every fault a document's functions hold, each once, in
+/// one run: a fault in a function others call is said where it is.
+#[test]
+fn a_check_says_every_fault_of_a_document() {
+    let dir = scratch(
+        "every-fault",
+        &[
+            (
+                "lib.orla",
+                "fn a(x: Float) -> Float { return x + nope1; }\nfn b(x: Float) -> Float { return a(x) * 2.0; }\nfn c(x: Float) -> Float { return x + nope2(x); }\nfn d(x: Int) -> Float { return x.w; }\nfn fine(x: Float) -> Float { return x; }\n",
+            ),
+            (
+                "k.orla",
+                "use \"lib.orla\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return fine(1.0); } }\n",
+            ),
+            (
+                "scene.osn",
+                "use \"k.orla\";\nnode n: t.k@1 { domain = 1; }\noutput result <- n.result;\n",
+            ),
+        ],
+    );
+    let checked = orla_session::check_document(
+        &orla_session::Disk::default(),
+        &dir.join("scene.osn"),
+        false,
+    );
+    let problems: Vec<&String> = checked
+        .lines
+        .iter()
+        .filter(|(p, _)| *p)
+        .map(|(_, l)| l)
+        .collect();
+    assert_eq!(problems.len(), 3, "{problems:?}");
+    for (place, says) in [
+        ("lib.orla:1:", "nope1"),
+        ("lib.orla:3:", "nope2"),
+        ("lib.orla:4:", "`.w`"),
+    ] {
+        assert!(
+            problems
+                .iter()
+                .any(|l| l.contains(place) && l.contains(says)),
+            "{place} {says}: {problems:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A library declares a name a document it uses declares too, as a
 /// game's widgets beside a package's: a scene using the library sees the
 /// library's alone, so nothing clashes; the library's own functions call

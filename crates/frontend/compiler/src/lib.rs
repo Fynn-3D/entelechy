@@ -137,24 +137,57 @@ pub fn check_functions(
         return Ok(());
     }
     orla_language::on_a_deep_stack(|| {
-        let mut kernel = orla_language::parse(
-            "kernel orla.functions@1 { requires { field.read; field.write; time.read; input.read; } output result: Rows<Float>; compute { return 0.0; } }",
-        )?;
-        let (structs, types, functions) = inherited;
-        kernel.structs = structs.iter().chain(&document.structs).cloned().collect();
-        kernel.types = types.iter().chain(&document.types).cloned().collect();
-        kernel.functions = functions
-            .iter()
-            .chain(&document.functions)
-            .cloned()
-            .collect();
-        let own: Vec<String> = document
-            .functions
-            .iter()
-            .map(|f| f.name.value.clone())
-            .collect();
+        let (kernel, own) = functions_kernel(document, inherited)?;
         lower::lower(&kernel, None, &own).map(drop)
     })
+}
+
+/// [`check_functions`], saying every fault its functions hold, each once:
+/// what a check lists, so one run shows all a document must mend.
+pub fn check_functions_each(
+    document: &orla_language::Document,
+    inherited: (
+        &[orla_language::StructDecl],
+        &[orla_language::TypeAlias],
+        &[orla_language::FnDecl],
+    ),
+) -> Vec<CompileError> {
+    if document.functions.is_empty() {
+        return Vec::new();
+    }
+    orla_language::on_a_deep_stack(|| match functions_kernel(document, inherited) {
+        Ok((kernel, own)) => lower::check_each(&kernel, &own),
+        Err(error) => vec![error],
+    })
+}
+
+/// A Kernel holding `document`'s functions and what it inherits, and the
+/// names of the document's own functions.
+fn functions_kernel(
+    document: &orla_language::Document,
+    inherited: (
+        &[orla_language::StructDecl],
+        &[orla_language::TypeAlias],
+        &[orla_language::FnDecl],
+    ),
+) -> Result<(orla_language::Kernel, Vec<String>), CompileError> {
+    let mut kernel = orla_language::parse(
+        "kernel orla.functions@1 { requires { field.read; field.write; time.read; input.read; } output result: Rows<Float>; compute { return 0.0; } }",
+    )?;
+    let (structs, types, functions) = inherited;
+    kernel.structs = structs.iter().chain(&document.structs).cloned().collect();
+    kernel.types = types.iter().chain(&document.types).cloned().collect();
+    kernel.functions = functions
+        .iter()
+        .chain(&document.functions)
+        .cloned()
+        .collect();
+    let own: Vec<String> = document
+        .functions
+        .iter()
+        .map(|f| f.name.value.clone())
+        .collect();
+    Ok((kernel, own))
 }
 
 /// Where each value of a Kernel's function is written in its document.

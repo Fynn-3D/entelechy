@@ -92,3 +92,74 @@ fn what_only_the_data_decides_is_left_to_the_evaluation() {
     assert!(problems.is_empty(), "{problems:?}");
     assert!(evaluated.is_empty(), "{evaluated}");
 }
+
+/// What a check of `scene`, over `lib`, notes and says.
+fn checked_lines(name: &str, lib: &str, scene: &str) -> Vec<String> {
+    let dir = std::env::temp_dir().join(format!("orla-binds-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("lib.orla"), lib).unwrap();
+    std::fs::write(dir.join("scene.osn"), format!("use \"lib.orla\";\n{scene}")).unwrap();
+    let checked = orla_session::check_document(
+        &orla_session::Disk::default(),
+        &dir.join("scene.osn"),
+        false,
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    checked.lines.iter().map(|(_, line)| line.clone()).collect()
+}
+
+/// A node with no `domain` that carries its own output back through an
+/// input other than its first runs over that first input, so its state
+/// takes another's size: a check notes it. Its own `domain`, the carried
+/// port first, or a first input made from what it carries says nothing.
+#[test]
+fn a_check_notes_state_carried_past_the_first_input() {
+    let lib = "kernel t.one@1 { requires { field.write; } output result: Rows<Float>; compute { return 0.0; } }
+kernel t.step@1 { requires { field.read; field.write; } input table: Rows<Float>; input previous: Rows<Float>; output result: Rows<Float>; compute { return sample(previous) + 1.0; } }
+kernel t.first@1 { requires { field.read; field.write; } input previous: Rows<Float>; input table: Rows<Float>; output result: Rows<Float>; compute { return sample(previous) + 1.0; } }
+kernel t.pass@1 { requires { field.read; field.write; } input from: Rows<Float>; output result: Rows<Float>; compute { return sample(from); } }
+";
+    let notes = |name: &str, scene: &str| -> Vec<String> {
+        checked_lines(name, lib, scene)
+            .into_iter()
+            .filter(|line| line.contains("carries its own"))
+            .collect()
+    };
+    let head = "node start: t.one@1 { domain = 1; }\nnode table: t.one@1 { domain = 5; }\n";
+    let said = notes(
+        "carried-past",
+        &format!(
+            "{head}node s: t.step@1 {{ table <- table.result; previous <~ s.result from start.result; }}\noutput o <- s.result;\n"
+        ),
+    );
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].contains("node `s` carries its own `result` back through `previous`")
+            && said[0].contains("its first input `table`"),
+        "{said:?}"
+    );
+    for (name, scene) in [
+        (
+            "carried-domain",
+            format!(
+                "{head}node s: t.step@1 {{ table <- table.result; previous <~ s.result from start.result; domain = 1; }}\noutput o <- s.result;\n"
+            ),
+        ),
+        (
+            "carried-first",
+            format!(
+                "{head}node s: t.first@1 {{ previous <~ s.result from start.result; table <- table.result; }}\noutput o <- s.result;\n"
+            ),
+        ),
+        (
+            "carried-made",
+            format!(
+                "{head}node newer: t.pass@1 {{ from <~ s.result from start.result; }}\nnode s: t.step@1 {{ table <- newer.result; previous <~ s.result from start.result; }}\noutput o <- s.result;\n"
+            ),
+        ),
+    ] {
+        let said = notes(name, &scene);
+        assert!(said.is_empty(), "{name}: {said:?}");
+    }
+}
