@@ -175,10 +175,9 @@ impl NativeOp {
 //   input triangles: Rows<{ a: Int; b: Int; c: Int; }>
 //   input canvas: Grid<Long>
 //   output surface: Grid<{ depth: Float; normal: Vec3; uv: Vec2; id: Int; }>
-// As `native.rasterize@1`, over the extent of `canvas`, the empty canvas
-// the raster package's Kernels take theirs from: the node's domain is
-// `size(canvas)`. The canvas's keys are not read; every pixel starts
-// empty.
+// The raster package's `canvas.osn`, fast: as `native.rasterize@1`, over
+// the extent of `canvas`, an empty canvas: the node's domain is
+// `size(canvas)`. Its keys are not read; every pixel starts empty.
 "
             }
             Self::RasterizeCutout => {

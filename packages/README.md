@@ -131,14 +131,17 @@ its interface is held to.
   a `width` and `height`, `graphs/window.osn` at the window's size;
   `graphs/cutout.osn` and `graphs/cutout_window.osn` take a `mask` and
   leave out a fragment whose alpha there is below `cutout`, which is how
-  leaves and fences are drawn. Each covers a triangle with one
+  leaves and fences are drawn; `graphs/canvas.osn` draws over an empty
+  `canvas` another node sized, so a surface follows a size the scene
+  computes. Each covers a triangle with one
   invocation; a `tiled` form of each (`tiled.osn`, `tiled_window.osn`,
   `cutout_tiled.osn`, `cutout_tiled_window.osn`) cuts a triangle larger
   than a `tile` across many, which a mesh of few large triangles wants on
   a device and a mesh of small ones pays for. It
   is the rasterizer every example places; `native.rasterize@1` in its
-  place is the fast path, bit for bit the same on the interpreter and
-  the JIT and the device's approximate rasterizer on a GPU
+  place is the fast path (`@2` the cutout presets', `@3` the canvas
+  preset's), bit for bit the same on the interpreter and the JIT and the
+  device's approximate rasterizer on a GPU
   ([why](../docs/DECISIONS.md)).
 - **voxel** — worlds of voxels drawn by walking rays through them, as
   functions: a ray walked voxel by voxel through a volume to the first

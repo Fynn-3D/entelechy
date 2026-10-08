@@ -197,11 +197,11 @@ dropping or tightening anything a source could write is refused until
 
 A scene places `packages/raster.orlapkg` to turn triangles into a
 surface (`raster.osn` or `window.osn`; `cutout.osn` or
-`cutout_window.osn` where a mask's alpha cuts fragments away) and binds
-`native.rasterize@1` or `@2` in its place, one node for another, where it
-wants speed; `@3` takes the package's `canvas` as the package's Kernels
-do, so a surface whose extent another node computes swaps the same way.
-Both keep one rule: a pixel is covered where its centre is inside the
+`cutout_window.osn` where a mask's alpha cuts fragments away;
+`canvas.osn` over an empty canvas another node sized) and binds the
+preset's fast path in its place, one node for another, where it wants
+speed: `native.rasterize@1` for `raster.osn` and `window.osn`, `@2` for
+the cutout presets, `@3` for `canvas.osn`. Both keep one rule: a pixel is covered where its centre is inside the
 triangle's box and on or inside all three edges, holds the nearest
 fragment in `[0, 1)`, the earlier triangle on a tie, with
 attributes interpolated by `1 / w`; with a cutout, a fragment whose alpha
@@ -213,7 +213,10 @@ triangle with two corners at one point is skipped by that test alone.
 Each triangle's box is found once, and every step reads it.
 
 **Why.** As Kernels, rasterization is typed, traced, hot-reloaded, the
-same on every backend, and changeable by an author. The native path is
+same on every backend, and changeable by an author. A native operation
+is a package's Rust fast path, written where its Kernels are not fast
+enough: each one is a preset of the package, its ports the preset's, so
+every native has a Kernel definition it is held to. The native path is
 an acceleration of the package, not a second definition: on the
 interpreter and the JIT it is exact to the rule, on a GPU it is the
 device's rasterizer, approximate at edges. The Graph does not know that
@@ -235,7 +238,8 @@ path's inside them; `degenerate.replay` holds that a triangle with two
 corners at one point draws nothing and the tiled presets draw what the
 one-pass ones do, on all three; `cutout.replay` holds the package's cutout to
 `native.rasterize@2` on all three, and a session test holds them equal to
-the bit on the interpreter and the JIT.
+the bit on the interpreter and the JIT; `canvas.replay` holds `canvas.osn`
+to `raster.osn` to the bit and to `native.rasterize@3` on all three.
 
 ## Contacts are solved all at once, each against its own share of a body
 
