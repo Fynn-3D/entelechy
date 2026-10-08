@@ -147,13 +147,23 @@ pub struct Stats {
     cpu: f64,
     gpu: Option<f64>,
     present: f64,
-    /// Each node's smoothed device milliseconds, and those between nodes,
-    /// from the latest clocked frame told ([`Stats::told`]).
+    /// Each node's device milliseconds, and those between nodes, as
+    /// shown: averaged over the last [`SHOWN_EVERY`] clocked frames told
+    /// ([`Stats::told`]) and held until the next as many.
     nodes: Vec<(String, f64)>,
     between: f64,
+    /// What the clocked frames told since the last shown add up to, and
+    /// how many they are.
+    summed: Vec<(String, f64)>,
+    summed_between: f64,
+    summed_frames: u32,
     /// The latest clocked frame told.
     told: Option<u64>,
 }
+
+/// The clocked frames each shown line of nodes averages, about half a
+/// second: a line that changes every frame cannot be read.
+const SHOWN_EVERY: u32 = 30;
 
 impl Default for Stats {
     fn default() -> Self {
@@ -165,6 +175,9 @@ impl Default for Stats {
             present: 0.0,
             nodes: Vec::new(),
             between: 0.0,
+            summed: Vec::new(),
+            summed_between: 0.0,
+            summed_frames: 0,
             told: None,
         }
     }
@@ -202,24 +215,35 @@ impl Stats {
     }
 
     /// Records a clocked frame's device time node by node, once a frame:
-    /// a node not in it is taken as idle.
+    /// a node not in it is taken as idle. The first frame is shown at
+    /// once, then each [`SHOWN_EVERY`] frames' average.
     pub fn told(&mut self, times: &crate::DeviceTimes) {
         if self.told == Some(times.frame) {
             return;
         }
+        let first = self.told.is_none();
         self.told = Some(times.frame);
-        for (_, average) in &mut self.nodes {
-            *average *= 0.9;
-        }
         for (node, busy) in &times.nodes {
             let name = node.to_string();
-            match self.nodes.iter_mut().find(|(n, _)| *n == name) {
-                Some((_, average)) => *average += busy.as_secs_f64() * 1000.0 * 0.1,
-                None => self.nodes.push((name, busy.as_secs_f64() * 1000.0)),
+            let millis = busy.as_secs_f64() * 1000.0;
+            match self.summed.iter_mut().find(|(n, _)| *n == name) {
+                Some((_, sum)) => *sum += millis,
+                None => self.summed.push((name, millis)),
             }
         }
-        self.nodes.retain(|(_, average)| *average >= 0.005);
-        smooth(&mut self.between, times.between);
+        self.summed_between += times.between.as_secs_f64() * 1000.0;
+        self.summed_frames += 1;
+        if first || self.summed_frames >= SHOWN_EVERY {
+            let frames = f64::from(self.summed_frames);
+            self.nodes = std::mem::take(&mut self.summed)
+                .into_iter()
+                .map(|(name, sum)| (name, sum / frames))
+                .filter(|(_, average)| *average >= 0.005)
+                .collect();
+            self.between = self.summed_between / frames;
+            self.summed_between = 0.0;
+            self.summed_frames = 0;
+        }
     }
 
     /// The nodes that kept the device busiest, `most` of them, a line of
@@ -323,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn the_busiest_nodes_follow_the_line_and_an_absent_one_fades() {
+    fn the_busiest_nodes_follow_the_line_averaged_and_held_half_a_second() {
         let id = |n: &str| orla_graph::NodeId(n.to_owned());
         let ms = Duration::from_millis;
         let mut stats = Stats::default();
@@ -345,8 +369,9 @@ mod tests {
                 "hud_top 1.00 | between nodes 0.00".to_string()
             ]
         );
-        // The same frame told again changes nothing; a later one without a
-        // node lets it fade.
+        // The same frame told again changes nothing; later ones are held
+        // until as many as a shown line averages are told, a frame without
+        // a node counting it idle.
         stats.told(&crate::DeviceTimes {
             frame: 1,
             busy: ms(7),
@@ -354,16 +379,21 @@ mod tests {
             between: Duration::ZERO,
         });
         assert!(stats.busiest(1, 1)[0].contains("look 4.00"));
-        stats.told(&crate::DeviceTimes {
-            frame: 2,
-            busy: ms(2),
-            nodes: vec![(id("raster.drawn"), ms(2))],
-            between: Duration::ZERO,
-        });
-        assert!(
-            stats.busiest(1, 1)[0].contains("look 3.60"),
-            "{:?}",
-            stats.busiest(1, 1)
+        for frame in 2..2 + u64::from(SHOWN_EVERY) {
+            let look = if frame % 2 == 0 { ms(1) } else { ms(3) };
+            stats.told(&crate::DeviceTimes {
+                frame,
+                busy: ms(4),
+                nodes: vec![(id("look"), look), (id("raster.drawn"), ms(2))],
+                between: Duration::ZERO,
+            });
+            if frame < 1 + u64::from(SHOWN_EVERY) {
+                assert!(stats.busiest(1, 1)[0].contains("look 4.00"), "held");
+            }
+        }
+        assert_eq!(
+            stats.busiest(2, 2)[0],
+            "gpu by node: look 2.00 | raster.drawn 2.00 | between nodes 0.00",
         );
         // Lines stack, each as wide as the longest.
         let two = lines(&["1".to_string(), "_".to_string()], 1);

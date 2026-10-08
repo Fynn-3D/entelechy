@@ -309,7 +309,8 @@ done, without waiting for it; present time; backend, window and scale, the
 port shown, what ran, was reused and was fused, `async` runs,
 presentation path and downloads, the sound device's rate, block size and
 dry callbacks) and under it the nodes that kept the device busiest, each
-its smoothed milliseconds, then what ran between nodes. Tab, Escape and every other key are the scene's; closing
+its milliseconds averaged over half a second and held until the next
+half, then what ran between nodes. Tab, Escape and every other key are the scene's; closing
 the window, or Cmd+Q, quits.
 
 ## Replay tests
