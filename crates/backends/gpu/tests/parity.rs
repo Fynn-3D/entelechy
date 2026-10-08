@@ -429,6 +429,28 @@ fn the_rasterizer_matches_the_reference_on_interior_pixels() {
         compared > 2000 && covered > 800,
         "{compared} compared, {covered} covered"
     );
+    // Onto a canvas of the same extent, the device draws the same surface.
+    let canvas = runtime
+        .host_mut()
+        .create(
+            orla_rules::raster::canvas_schema(),
+            Domain::Grid(width, height),
+        )
+        .unwrap();
+    let on_canvas = runtime
+        .kernel(&"native.rasterize@3".parse().unwrap())
+        .expect("the canvas form is published from the start");
+    let drawn = runtime
+        .execute(
+            &on_canvas,
+            &orla_abi::Invocation {
+                inputs: vec![vertex_rows, triangle_rows, canvas],
+                ..invocation
+            },
+        )
+        .unwrap()[0];
+    runtime.materialize(drawn).unwrap();
+    assert_eq!(runtime.host().data(drawn).unwrap().storage(), &device[..]);
 }
 
 #[test]

@@ -537,9 +537,8 @@ impl Backend for GpuBackend {
         scope: &mut Scope<'_>,
     ) -> Result<Vec<Handle>, ExecutionError> {
         match op {
-            NativeOp::Rasterize => raster::rasterize(self, &self.raster, invocation, scope, false),
-            NativeOp::RasterizeCutout => {
-                raster::rasterize(self, &self.raster, invocation, scope, true)
+            NativeOp::Rasterize | NativeOp::RasterizeCutout | NativeOp::RasterizeCanvas => {
+                raster::rasterize(self, &self.raster, invocation, scope, op)
             }
         }
     }

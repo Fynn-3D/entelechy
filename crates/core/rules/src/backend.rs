@@ -20,17 +20,25 @@ pub enum NativeOp {
     /// The same, dropping each fragment whose `mask` alpha is below
     /// `cutout`.
     RasterizeCutout,
+    /// The same onto a `canvas`, whose extent the surface takes, as the
+    /// raster package's Kernels take theirs.
+    RasterizeCanvas,
 }
 
 impl NativeOp {
     /// Every native operation.
-    pub const ALL: [NativeOp; 2] = [NativeOp::Rasterize, NativeOp::RasterizeCutout];
+    pub const ALL: [NativeOp; 3] = [
+        NativeOp::Rasterize,
+        NativeOp::RasterizeCutout,
+        NativeOp::RasterizeCanvas,
+    ];
 
     /// The id a graph binds to.
     pub fn id(self) -> KernelId {
         match self {
             Self::Rasterize => KernelId::new("native.rasterize", 1).expect("valid id"),
             Self::RasterizeCutout => KernelId::new("native.rasterize", 2).expect("valid id"),
+            Self::RasterizeCanvas => KernelId::new("native.rasterize", 3).expect("valid id"),
         }
     }
 
@@ -103,8 +111,21 @@ impl NativeOp {
             });
             return manifest;
         }
+        if self == Self::RasterizeCanvas {
+            let mut manifest = Self::Rasterize.manifest();
+            manifest.id = self.id();
+            manifest.inputs.push(Port {
+                name: "canvas".into(),
+                ty: PortType {
+                    element: Type::Long,
+                    shape: Shape::Grid,
+                    schema: crate::raster::canvas_schema(),
+                },
+            });
+            return manifest;
+        }
         match self {
-            Self::RasterizeCutout => unreachable!("answered above"),
+            Self::RasterizeCutout | Self::RasterizeCanvas => unreachable!("answered above"),
             Self::Rasterize => Manifest {
                 id: self.id(),
                 mode: orla_ir::Mode::Map,
@@ -147,6 +168,19 @@ impl NativeOp {
     /// The contract as text, shown where a Kernel shows its source.
     pub fn source(self) -> &'static str {
         match self {
+            Self::RasterizeCanvas => {
+                "\
+// native.rasterize@3: the backend's rasterizer, onto a canvas.
+//   input vertices: Rows<{ clip: Vec4; normal: Vec3; uv: Vec2; }>
+//   input triangles: Rows<{ a: Int; b: Int; c: Int; }>
+//   input canvas: Grid<Long>
+//   output surface: Grid<{ depth: Float; normal: Vec3; uv: Vec2; id: Int; }>
+// As `native.rasterize@1`, over the extent of `canvas`, the empty canvas
+// the raster package's Kernels take theirs from: the node's domain is
+// `size(canvas)`. The canvas's keys are not read; every pixel starts
+// empty.
+"
+            }
             Self::RasterizeCutout => {
                 "\
 // native.rasterize@2: the backend's rasterizer, with a cutout.

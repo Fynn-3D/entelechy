@@ -7,8 +7,8 @@
 use std::sync::OnceLock;
 
 use orla_abi::{Handle, Invocation, Scope};
-use orla_rules::ExecutionError;
 use orla_rules::raster::{SURFACE_WORDS, check_rasterize, surface_schema};
+use orla_rules::{ExecutionError, NativeOp};
 
 use crate::{DeviceImage, GpuBackend};
 
@@ -320,15 +320,23 @@ pub(crate) fn rasterize(
     pipelines: &OnceLock<Result<RasterPipelines, String>>,
     invocation: &Invocation,
     scope: &mut Scope<'_>,
-    cutout: bool,
+    op: NativeOp,
 ) -> Result<Vec<Handle>, ExecutionError> {
-    let (vertices, triangles, mask, alpha) = if cutout {
-        let (vertices, triangles, mask, alpha) =
-            orla_rules::raster::check_rasterize_cutout(invocation, scope)?;
-        (vertices, triangles, Some(mask), alpha)
-    } else {
-        let (vertices, triangles) = check_rasterize(invocation, scope)?;
-        (vertices, triangles, None, 0.0)
+    let (vertices, triangles, mask, alpha) = match op {
+        NativeOp::RasterizeCutout => {
+            let (vertices, triangles, mask, alpha) =
+                orla_rules::raster::check_rasterize_cutout(invocation, scope)?;
+            (vertices, triangles, Some(mask), alpha)
+        }
+        NativeOp::RasterizeCanvas => {
+            let (vertices, triangles) =
+                orla_rules::raster::check_rasterize_canvas(invocation, scope)?;
+            (vertices, triangles, None, 0.0)
+        }
+        NativeOp::Rasterize => {
+            let (vertices, triangles) = check_rasterize(invocation, scope)?;
+            (vertices, triangles, None, 0.0)
+        }
     };
     let pipelines = match pipelines.get_or_init(|| build(&gpu.device, gpu.wait)) {
         Ok(pipelines) => pipelines,

@@ -88,6 +88,13 @@ pub fn mask_alpha(words: &[u32], width: u32, height: u32, uv: [f32; 2]) -> f32 {
     top + (bottom - top) * fy
 }
 
+/// The layout of a canvas: one `Long` key a pixel, as the raster
+/// package's empty canvas holds.
+pub fn canvas_schema() -> Schema {
+    // A `Long` is kept as two words.
+    Schema::new(vec![Scalar::Long; 2])
+}
+
 /// The surface layout: `depth: Float, normal: Vec3, uv: Vec2, id: Int`.
 pub fn surface_schema() -> Schema {
     let mut scalars = vec![Scalar::Float; SURFACE_WORDS - 1];
@@ -101,7 +108,16 @@ pub fn check_rasterize(
     invocation: &Invocation,
     scope: &Scope<'_>,
 ) -> Result<(Handle, Handle), ExecutionError> {
-    let (vertices, triangles, _) = check_rasterize_with(invocation, scope, false)?;
+    let (vertices, triangles, _) = check_rasterize_with(invocation, scope, Extra::None)?;
+    Ok((vertices, triangles))
+}
+
+/// The same for the canvas form: the surface is the canvas's extent.
+pub fn check_rasterize_canvas(
+    invocation: &Invocation,
+    scope: &Scope<'_>,
+) -> Result<(Handle, Handle), ExecutionError> {
+    let (vertices, triangles, _) = check_rasterize_with(invocation, scope, Extra::Canvas)?;
     Ok((vertices, triangles))
 }
 
@@ -111,7 +127,7 @@ pub fn check_rasterize_cutout(
     invocation: &Invocation,
     scope: &Scope<'_>,
 ) -> Result<(Handle, Handle, Handle, f32), ExecutionError> {
-    let (vertices, triangles, mask) = check_rasterize_with(invocation, scope, true)?;
+    let (vertices, triangles, mask) = check_rasterize_with(invocation, scope, Extra::Mask)?;
     let mask = mask.expect("a cutout asked for its mask");
     let cutout = match invocation.params.first() {
         Some(orla_abi::Value::Float(value)) => *value,
@@ -120,12 +136,20 @@ pub fn check_rasterize_cutout(
     Ok((vertices, triangles, mask, cutout))
 }
 
+/// The third input a form of the rasterizer takes, if any.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Extra {
+    None,
+    Mask,
+    Canvas,
+}
+
 fn check_rasterize_with(
     invocation: &Invocation,
     scope: &Scope<'_>,
-    cutout: bool,
+    extra: Extra,
 ) -> Result<(Handle, Handle, Option<Handle>), ExecutionError> {
-    let wanted = if cutout { 3 } else { 2 };
+    let wanted = if extra == Extra::None { 2 } else { 3 };
     if invocation.inputs.len() != wanted {
         return Err(ExecutionError::InputCount {
             expected: wanted,
@@ -133,7 +157,7 @@ fn check_rasterize_with(
         });
     }
     let (vertices, triangles) = (invocation.inputs[0], invocation.inputs[1]);
-    let mask = cutout.then(|| invocation.inputs[2]);
+    let mask = (extra == Extra::Mask).then(|| invocation.inputs[2]);
     let contract = |message: String| ExecutionError::Device(format!("rasterize: {message}"));
     if scope.schema(vertices)? != vertex_schema() {
         return Err(contract(
@@ -159,6 +183,25 @@ fn check_rasterize_with(
     }
     if invocation.domain.is_empty() {
         return Err(ExecutionError::EmptyDomain);
+    }
+    if extra == Extra::Canvas {
+        let canvas = invocation.inputs[2];
+        if scope.schema(canvas)? != canvas_schema() {
+            return Err(contract("`canvas` must be a grid of `Long`".into()));
+        }
+        let extent = scope.size(canvas)?;
+        if extent.shape() != Shape::Grid {
+            return Err(contract("`canvas` must be a grid".into()));
+        }
+        if extent != invocation.domain {
+            return Err(contract(format!(
+                "the surface is the canvas's extent, {} by {}, not {} by {}: its domain is `size(canvas)`",
+                extent.width(),
+                extent.height(),
+                invocation.domain.width(),
+                invocation.domain.height()
+            )));
+        }
     }
     if let Some(mask) = mask {
         if scope.schema(mask)? != mask_schema() {
@@ -206,6 +249,17 @@ pub fn rasterize(
         return Err(error.into());
     }
     Ok(vec![output])
+}
+
+/// Rasterizes onto a canvas: as [`rasterize`], over the canvas's extent.
+pub fn rasterize_canvas(
+    invocation: &Invocation,
+    scope: &mut Scope<'_>,
+) -> Result<Vec<Handle>, ExecutionError> {
+    check_rasterize_canvas(invocation, scope)?;
+    let mut drawn = invocation.clone();
+    drawn.inputs.truncate(2);
+    rasterize(&drawn, scope)
 }
 
 /// Rasterizes with a cutout: a fragment whose mask alpha is below the
@@ -811,6 +865,53 @@ mod tests {
         assert_eq!(
             surface(&empty, 1, 1, 2),
             ([1.0, 0.0, 0.0, 0.0, 0.0, 0.0], -1)
+        );
+    }
+
+    #[test]
+    fn the_canvas_form_draws_what_the_plain_one_draws_over_its_canvas() {
+        use orla_abi::{Capabilities, Capability, Context, Domain, Host, Invocation, Scope};
+        let mut host = Host::new(1 << 20);
+        let corners: Vec<u32> = [
+            vertex([-1.0, -1.0, 0.5, 1.0], [0.0, 0.0, 1.0], [0.0, 1.0]),
+            vertex([1.0, -1.0, 0.5, 1.0], [0.0, 1.0, 0.0], [1.0, 1.0]),
+            vertex([0.0, 1.0, 0.3, 1.0], [1.0, 0.0, 0.0], [0.5, 0.0]),
+        ]
+        .concat();
+        let vertices = host.create(vertex_schema(), Domain::Rows(3)).unwrap();
+        host.write_values(vertices, &corners).unwrap();
+        let triangles = host.create(triangle_schema(), Domain::Rows(1)).unwrap();
+        host.write_values(triangles, &[0, 1, 2]).unwrap();
+        let canvas = host.create(canvas_schema(), Domain::Grid(12, 9)).unwrap();
+        let all: Capabilities = Capability::ALL.into_iter().collect();
+        let mut scope = Scope::new(&mut host, all);
+        let at = |inputs: Vec<Handle>, domain| Invocation {
+            inputs,
+            params: vec![],
+            domain,
+            context: Context::default(),
+        };
+        let plain = rasterize(
+            &at(vec![vertices, triangles], Domain::Grid(12, 9)),
+            &mut scope,
+        )
+        .unwrap()[0];
+        let drawn = rasterize_canvas(
+            &at(vec![vertices, triangles, canvas], Domain::Grid(12, 9)),
+            &mut scope,
+        )
+        .unwrap()[0];
+        assert_eq!(scope.size(drawn).unwrap(), Domain::Grid(12, 9));
+        assert_eq!(scope.values(drawn).unwrap(), scope.values(plain).unwrap());
+        // A domain other than the canvas's is refused before anything is drawn.
+        let refused = rasterize_canvas(
+            &at(vec![vertices, triangles, canvas], Domain::Grid(8, 8)),
+            &mut scope,
+        )
+        .unwrap_err();
+        assert!(
+            format!("{refused:?}").contains("size(canvas)"),
+            "{refused:?}"
         );
     }
 

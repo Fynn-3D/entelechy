@@ -199,9 +199,11 @@ A scene places `packages/raster.orlapkg` to turn triangles into a
 surface (`raster.osn` or `window.osn`; `cutout.osn` or
 `cutout_window.osn` where a mask's alpha cuts fragments away) and binds
 `native.rasterize@1` or `@2` in its place, one node for another, where it
-wants speed. Both keep one rule: a pixel is covered where its centre is
-inside the triangle's box and on or inside all three edges, holds the
-nearest fragment in `[0, 1)`, the earlier triangle on a tie, with
+wants speed; `@3` takes the package's `canvas` as the package's Kernels
+do, so a surface whose extent another node computes swaps the same way.
+Both keep one rule: a pixel is covered where its centre is inside the
+triangle's box and on or inside all three edges, holds the nearest
+fragment in `[0, 1)`, the earlier triangle on a tie, with
 attributes interpolated by `1 / w`; with a cutout, a fragment whose alpha
 in the mask at its own uv is below the cutout is not drawn. The `tiled`
 presets cut a box larger than a tile across a pool of invocations, for

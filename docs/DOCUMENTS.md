@@ -752,7 +752,11 @@ be keywords.
    `surface`, a grid of `depth: Float; normal: Vec3; uv: Vec2; id: Int`
    over the node's `domain`: bit for bit the raster package's surface on
    the interpreter and the JIT, the device's rasterizer, approximate at
-   edges, on a GPU ([decision](DECISIONS.md)).
+   edges, on a GPU ([decision](DECISIONS.md)). `native.rasterize@3`
+   takes a `canvas` (a `Grid<Long>`, the empty canvas the package's
+   Kernels take their extent from) as well and draws over its extent,
+   `domain = size(canvas);`, so a surface sized by another node's output
+   is drawn as the package draws it.
 9. A graph exposes `input`, `param` and `output` like a Kernel, so it is
    placed with `node name: graph "path.osn" { ... }`. Placement
    flattens it: its nodes join the parent under `name.`, its inputs take

@@ -955,6 +955,7 @@ impl Backend for CpuBackend {
         match op {
             NativeOp::Rasterize => orla_rules::raster::rasterize(invocation, scope),
             NativeOp::RasterizeCutout => orla_rules::raster::rasterize_cutout(invocation, scope),
+            NativeOp::RasterizeCanvas => orla_rules::raster::rasterize_canvas(invocation, scope),
         }
     }
 }
