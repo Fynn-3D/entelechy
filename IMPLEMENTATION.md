@@ -144,10 +144,12 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
 
 ### Fusion, repetition, native operations
 
-- Fusion: [`fuse`](crates/core/ir/src/fuse.rs) and `fuse_outputs`,
-  [planner](crates/core/graph/src/evaluate/plan.rs); bit-identical
-  ([test](crates/backends/cpu/tests/fusion.rs)). A reduce, scan, scatter,
-  async or native node is never fused.
+- Fusion: [`fuse`](crates/core/ir/src/fuse.rs), `fuse_outputs`,
+  `fuse_indexed` (a row read at an offset) and `counted` (an input only
+  counted), [planner](crates/core/graph/src/evaluate/plan.rs);
+  bit-identical ([test](crates/backends/cpu/tests/fusion.rs), on every
+  backend [offset](crates/interface/session/tests/offset.rs)). A reduce,
+  scan, scatter, async or native node is never fused.
 - One Field per declared output or the execution fails
   ([`held_to`](crates/core/kernel/src/lib.rs), [test](crates/interface/session/tests/hot_swap.rs)).
 - Repetition: one Kernel over its own output is one group, one GPU

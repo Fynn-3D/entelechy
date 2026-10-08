@@ -231,6 +231,38 @@ impl DomainExpr {
         }
     }
 
+    /// Replaces `count` and `size` of every port `known` answers for with
+    /// that port's extent; other ports stay. A port whose producer is fused
+    /// away is counted from the extent the plan knows.
+    pub fn with_extents(&self, known: &dyn Fn(&str) -> Option<Domain>) -> Self {
+        let inner = |parts: &[Self]| -> Vec<Self> {
+            parts.iter().map(|part| part.with_extents(known)).collect()
+        };
+        let whole = |v: u32| Self::Int(i64::from(v));
+        match self {
+            Self::Count(port) => {
+                known(port).map_or_else(|| self.clone(), |d| whole(d.count() as u32))
+            }
+            Self::Size(port) => match known(port) {
+                Some(Domain::Rows(n)) => whole(n),
+                Some(Domain::Grid(w, h)) => Self::Vector(vec![whole(w), whole(h)]),
+                Some(Domain::Volume(w, h, d)) => Self::Vector(vec![whole(w), whole(h), whole(d)]),
+                None => self.clone(),
+            },
+            Self::Int(_) | Self::Float(_) | Self::Name(_) | Self::Value(..) | Self::Context(_) => {
+                self.clone()
+            }
+            Self::Vector(parts) => Self::Vector(inner(parts)),
+            Self::Call(name, parts) => Self::Call(name.clone(), inner(parts)),
+            Self::Neg(expr) => Self::Neg(Box::new(expr.with_extents(known))),
+            Self::Binary(op, a, b) => Self::Binary(
+                *op,
+                Box::new(a.with_extents(known)),
+                Box::new(b.with_extents(known)),
+            ),
+        }
+    }
+
     /// Whether the expression refers to nothing: a literal extent.
     pub fn is_constant(&self) -> bool {
         match self {

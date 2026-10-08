@@ -1,6 +1,7 @@
 //! What executes: every node as its own group, producers fused into
-//! their sole pointwise consumers, a node placed many times run as one,
-//! and each group's domain.
+//! their sole consumers that read them pointwise or at an offset of their
+//! element, readers that only count a fused producer given its extent, a
+//! node placed many times run as one, and each group's domain.
 
 use super::*;
 
@@ -102,6 +103,7 @@ impl Evaluator {
                     parts: vec![(node.id.clone(), version.generation())],
                     version,
                     absorbed: Vec::new(),
+                    counted: Vec::new(),
                     repeat: 1,
                     chain: None,
                     fused: None,
@@ -140,7 +142,37 @@ impl Evaluator {
         for (_, source) in &graph.outputs {
             count(source);
         }
+        // The readers that ask an output only its count or size, each a map:
+        // it can read the extent from params instead, so it holds no
+        // fusion back.
+        let mut counting: BTreeMap<(NodeId, String), Vec<(NodeId, String)>> = BTreeMap::new();
+        for group in &groups {
+            let Some(module) = group.module() else {
+                continue;
+            };
+            if group.node.is_async
+                || module.manifest.mode != orla_ir::Mode::Map
+                || !module.manifest.memories.is_empty()
+            {
+                continue;
+            }
+            for (name, binding) in &group.node.inputs {
+                let Binding::Now(Source::Node { node, port }) = binding else {
+                    continue;
+                };
+                let input = module.manifest.inputs.iter().position(|i| &i.name == name);
+                if input.is_some_and(|input| orla_ir::counts_only(module, input as u32)) {
+                    counting
+                        .entry((node.clone(), port.clone()))
+                        .or_default()
+                        .push((group.node.id.clone(), name.clone()));
+                }
+            }
+        }
         let mut absorbed_into: BTreeMap<NodeId, usize> = BTreeMap::new();
+        // A fused group and a reader counting what it absorbed: both run
+        // their new versions, or neither does.
+        let mut ties: Vec<(usize, usize)> = Vec::new();
         // Each group's position by node; groups are only rewired here,
         // so positions hold.
         let at: BTreeMap<NodeId, usize> = groups
@@ -203,17 +235,40 @@ impl Evaluator {
                     };
                     links.push((name.clone(), input as u32, output as u32));
                 }
+                // The readers that only count the producer outside this
+                // group: each at the group it is in now, under the port it
+                // reads through there, and the output it counts.
+                let mut outside: Vec<(usize, String, u32)> = Vec::new();
+                for (k, out) in producer_manifest.outputs.iter().enumerate() {
+                    let key = (producer_id.clone(), out.name.clone());
+                    for (reader, port) in counting.get(&key).into_iter().flatten() {
+                        let mut owner = at[reader];
+                        while let Some(next) = absorbed_into.get(&originals[owner].node.id) {
+                            owner = *next;
+                        }
+                        if owner == position {
+                            continue;
+                        }
+                        let name = if owner == at[reader] {
+                            port.clone()
+                        } else {
+                            orla_ir::fused_name(&reader.0, port)
+                        };
+                        outside.push((owner, name, k as u32));
+                    }
+                }
                 let only_readers = producer_manifest
                     .outputs
                     .iter()
                     .enumerate()
                     .all(|(k, out)| {
                         let linked = links.iter().filter(|link| link.2 == k as u32).count();
+                        let counted = outside.iter().filter(|o| o.2 == k as u32).count();
                         let read = readers
                             .get(&(producer_id.clone(), out.name.clone()))
                             .copied()
                             .unwrap_or(0);
-                        read == linked
+                        read == linked + counted
                     });
                 // A narrow output rounds its values, so it stays
                 // materialized.
@@ -226,14 +281,56 @@ impl Evaluator {
                 if links.is_empty() || !only_readers || narrow {
                     continue;
                 }
+                // Only IR maps fuse: native operations have no IR, and a
+                // reduction is not one element per consumer element.
+                let (Some(consumer_module), Some(producer_module)) =
+                    (consumer.module(), groups[producer_position].module())
+                else {
+                    continue;
+                };
+                if consumer_module.manifest.mode != orla_ir::Mode::Map
+                    || producer_module.manifest.mode != orla_ir::Mode::Map
+                {
+                    continue;
+                }
+                // Read at its own element, the producer runs first; read at
+                // an offset of it, the producer is called at that row.
+                let uses: Vec<orla_ir::InputUse> = links
+                    .iter()
+                    .map(|link| orla_ir::input_use(consumer_module, link.1))
+                    .collect();
+                let indexed = if uses.iter().all(|use_| !use_.addressed)
+                    && uses.iter().any(|use_| use_.sampled)
+                {
+                    false
+                } else if uses.iter().any(|use_| use_.addressed)
+                    && links.iter().all(|link| {
+                        orla_ir::offset_read(consumer_module, link.1)
+                            || orla_ir::counts_only(consumer_module, link.1)
+                    })
+                {
+                    true
+                } else {
+                    continue;
+                };
+                // The producer's extent comes in by params wherever it is
+                // read at an offset or counted, so it must be known now.
+                let by_params =
+                    indexed || !outside.is_empty() || uses.iter().any(|use_| use_.counted);
+                let known = producer_domain.filter(|domain| domain.count() > 0);
+                if by_params && known.is_none() {
+                    continue;
+                }
                 // Whether the producer feeds the consumer's first input,
                 // which sets its extent when it has no `domain`.
                 let reads_first = links.iter().any(|link| link.1 == 0);
                 // A consumer with no `domain` runs over its first input's
                 // extent; when that input is the producer, the extents
                 // match and the producer's expression moves onto the
-                // fused node under the fused port names.
+                // fused node under the fused port names. A consumer that
+                // reads at an offset runs over its own, known now.
                 let carried = match (producer_domain, runs) {
+                    (Some(_), _) if indexed => None,
                     (Some(a), Some(b)) if a == b => None,
                     (None, None)
                         if consumer.node.domain.is_none()
@@ -251,24 +348,18 @@ impl Evaluator {
                     }
                     _ => continue,
                 };
-                // Only IR maps fuse: native operations have no IR, and a
-                // reduction is not one element per consumer element.
-                let (Some(consumer_module), Some(producer_module)) =
-                    (consumer.module(), groups[producer_position].module())
-                else {
-                    continue;
+                // A consumer read at an offset keeps its own domain, its
+                // counts of the fused ports read from the extent now.
+                let linked: Vec<String> = links.iter().map(|link| link.0.clone()).collect();
+                let indexed_domain = match known {
+                    Some(extent) if indexed => {
+                        match without_ports(&consumer.node.domain, runs, &linked, extent) {
+                            Some(domain) => Some(domain),
+                            None => continue,
+                        }
+                    }
+                    _ => None,
                 };
-                if consumer_module.manifest.mode != orla_ir::Mode::Map
-                    || producer_module.manifest.mode != orla_ir::Mode::Map
-                {
-                    continue;
-                }
-                if !links
-                    .iter()
-                    .all(|link| orla_ir::samples_only(consumer_module, link.1))
-                {
-                    continue;
-                }
                 let producer = &groups[producer_position];
                 // A fused group holds a bounded number of nodes, so a long
                 // chain fuses into several, each compiled in bounded time.
@@ -277,13 +368,24 @@ impl Evaluator {
                 }
                 let mut parts = consumer.parts.clone();
                 parts.extend(producer.parts.iter().cloned());
+                let mut counted = consumer.counted.clone();
+                counted.extend(producer.counted.iter().cloned());
+                let members = Members {
+                    parts: parts.clone(),
+                    counted: counted.clone(),
+                };
                 let pairs: Vec<(u32, u32)> = links.iter().map(|link| (link.1, link.2)).collect();
                 // The IR fuses here; only a group that executes is
                 // prepared, once the plan is made.
-                if self.declined.get(&consumer.node.id) == Some(&parts) {
+                if self.declined.get(&consumer.node.id) == Some(&members) {
                     continue;
                 }
-                let module = match orla_ir::fuse_outputs(
+                let fuse = if indexed {
+                    orla_ir::fuse_indexed
+                } else {
+                    orla_ir::fuse_outputs
+                };
+                let module = match fuse(
                     consumer_module,
                     &pairs,
                     producer_module,
@@ -291,7 +393,7 @@ impl Evaluator {
                 ) {
                     Ok(module) => Arc::new(module),
                     Err(error) if error.declines => {
-                        self.declined.insert(consumer.node.id.clone(), parts);
+                        self.declined.insert(consumer.node.id.clone(), members);
                         continue;
                     }
                     Err(error) => {
@@ -322,16 +424,83 @@ impl Evaluator {
                     .iter()
                     .map(|param| param.name.clone())
                     .collect();
+                // Each reader counting the producer elsewhere drops the
+                // Field for the extent's params, its whole group at once.
+                let mut recounted: BTreeMap<usize, Vec<(u32, String)>> = BTreeMap::new();
+                let mut blocked = false;
+                for (owner, name, _) in &outside {
+                    let group = &groups[*owner];
+                    let bound = matches!(
+                        group.node.inputs.get(name),
+                        Some(Binding::Now(Source::Node { node, .. })) if node == &producer_id
+                    );
+                    let input = group.manifest().inputs.iter().position(|i| &i.name == name);
+                    match (bound, input, group.module()) {
+                        (true, Some(input), Some(module))
+                            if orla_ir::counts_only(module, input as u32) =>
+                        {
+                            recounted
+                                .entry(*owner)
+                                .or_default()
+                                .push((input as u32, name.clone()));
+                        }
+                        _ => blocked = true,
+                    }
+                }
+                // Each such reader's domain, its counts of the producer
+                // read from the extent now.
+                let mut reader_domains = BTreeMap::new();
+                for (owner, inputs) in &recounted {
+                    let gone: Vec<String> = inputs.iter().map(|(_, name)| name.clone()).collect();
+                    let extent = known.expect("a counted producer's extent is known");
+                    match without_ports(
+                        &groups[*owner].node.domain,
+                        plans[*owner].runs,
+                        &gone,
+                        extent,
+                    ) {
+                        Some(domain) => {
+                            reader_domains.insert(*owner, domain);
+                        }
+                        None => blocked = true,
+                    }
+                }
+                if blocked {
+                    continue;
+                }
+                let mut readers_now = Vec::with_capacity(recounted.len());
+                for (owner, inputs) in &recounted {
+                    let group = &groups[*owner];
+                    let module = group.module().expect("checked above");
+                    let prefixed: Vec<(u32, String)> = inputs
+                        .iter()
+                        .map(|(input, _)| (*input, producer_id.0.clone()))
+                        .collect();
+                    let module = orla_ir::counted(module, &prefixed).map_err(|error| {
+                        EvaluateError::Fusion {
+                            node: group.node.id.clone(),
+                            message: error.to_string(),
+                        }
+                    })?;
+                    readers_now.push((*owner, Arc::new(module)));
+                }
+                let given = known.map(extent_values);
+                if let Some(given) = &given {
+                    give_extent(&mut params, &module.manifest, &prefix, given);
+                }
                 let mut absorbed = consumer.absorbed.clone();
                 absorbed.push(producer_id.clone());
                 absorbed.extend(producer.absorbed.iter().cloned());
                 let group = &mut groups[position];
                 group.fused = Some(module);
                 group.parts = parts;
+                group.counted = counted;
                 group.absorbed = absorbed;
                 group.node.inputs = inputs;
                 group.node.params = params;
-                if group.node.domain.is_none() {
+                if let Some(domain) = indexed_domain {
+                    group.node.domain = domain;
+                } else if group.node.domain.is_none() {
                     group.node.domain = match (runs, carried) {
                         (Some(domain), _) => Some(DomainSpec::Literal(domain)),
                         (None, Some(expr)) => {
@@ -339,6 +508,20 @@ impl Evaluator {
                         }
                         (None, None) => None,
                     };
+                }
+                for (owner, module) in readers_now {
+                    let reader = &mut groups[owner];
+                    for (_, name) in &recounted[&owner] {
+                        reader.node.inputs.remove(name);
+                    }
+                    let given = given
+                        .as_ref()
+                        .expect("a counted producer's extent is known");
+                    give_extent(&mut reader.node.params, &module.manifest, &prefix, given);
+                    reader.node.domain = reader_domains.remove(&owner).expect("found above");
+                    reader.counted.push(producer_id.clone());
+                    reader.fused = Some(module);
+                    ties.push((position, owner));
                 }
                 absorbed_into.insert(producer_id, position);
                 // What the producer fused is inside the consumer's now.
@@ -375,12 +558,25 @@ impl Evaluator {
                 continue;
             };
             let id = group.node.id.clone();
-            let parts = group.parts.clone();
-            match self.fused_version(runtime, &id, parts, || Ok((*module).clone()))? {
+            let members = group.members();
+            match self.fused_version(runtime, &id, members, || Ok((*module).clone()))? {
                 Some(version) => group.version = version,
                 None => {
                     settled = false;
                     unfused.insert(position);
+                }
+            }
+        }
+        // A group still preparing holds back every group tied to it.
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for (a, b) in &ties {
+                let (a, b) = (owner(*a), owner(*b));
+                if unfused.contains(&a) != unfused.contains(&b) {
+                    unfused.insert(a);
+                    unfused.insert(b);
+                    changed = true;
                 }
             }
         }
@@ -439,11 +635,14 @@ impl Evaluator {
             // The run takes the first node's inputs and the last's name.
             let mut node = group.node;
             node.inputs = previous.node.inputs;
+            let mut counted = previous.counted;
+            counted.extend(group.counted);
             out.push(Group {
                 node,
                 version: group.version,
                 parts,
                 absorbed,
+                counted,
                 repeat: previous.repeat + 1,
                 chain: Some((input, output)),
                 fused: None,
@@ -530,15 +729,15 @@ impl Evaluator {
         &mut self,
         runtime: &mut Runtime,
         consumer: &NodeId,
-        parts: Vec<(NodeId, Generation)>,
+        members: Members,
         fuse: impl FnOnce() -> Result<orla_ir::Validated, orla_ir::FuseError>,
     ) -> Result<Option<Arc<KernelVersion>>, EvaluateError> {
         if let Some(existing) = self.fused.get(consumer)
-            && existing.parts == parts
+            && existing.members == members
         {
             return Ok(Some(Arc::clone(&existing.version)));
         }
-        if self.declined.get(consumer) == Some(&parts) {
+        if self.declined.get(consumer) == Some(&members) {
             return Ok(None);
         }
         let fusion = |message: String| EvaluateError::Fusion {
@@ -546,7 +745,7 @@ impl Evaluator {
             message,
         };
         let ticket = match self.pending.get(consumer) {
-            Some(pending) if pending.parts == parts => pending.ticket,
+            Some(pending) if pending.members == members => pending.ticket,
             other => {
                 if let Some(superseded) = other {
                     runtime.discard(superseded.ticket);
@@ -557,16 +756,23 @@ impl Evaluator {
                 let module = match fuse() {
                     Ok(module) => module,
                     Err(error) if error.declines => {
-                        self.declined.insert(consumer.clone(), parts);
+                        self.declined.insert(consumer.clone(), members);
                         return Ok(None);
                     }
                     Err(error) => return Err(fusion(error.to_string())),
                 };
                 let source = format!(
                     "// fused: {}\n",
-                    parts
+                    members
+                        .parts
                         .iter()
                         .map(|(node, generation)| format!("{node}@{generation}"))
+                        .chain(
+                            members
+                                .counted
+                                .iter()
+                                .map(|node| format!("count of {node}"))
+                        )
                         .collect::<Vec<_>>()
                         .join(" + ")
                 );
@@ -574,7 +780,7 @@ impl Evaluator {
                 self.pending.insert(
                     consumer.clone(),
                     Pending {
-                        parts: parts.clone(),
+                        members: members.clone(),
                         ticket,
                     },
                 );
@@ -593,10 +799,10 @@ impl Evaluator {
             Err(PrepareError::Backend(reason)) => {
                 self.refused.push(Refused {
                     node: consumer.clone(),
-                    members: parts.iter().map(|(node, _)| node.clone()).collect(),
+                    members: members.parts.iter().map(|(node, _)| node.clone()).collect(),
                     reason,
                 });
-                self.declined.insert(consumer.clone(), parts);
+                self.declined.insert(consumer.clone(), members);
                 return Ok(None);
             }
             Err(error) => return Err(fusion(error.to_string())),
@@ -605,7 +811,7 @@ impl Evaluator {
         self.fused.insert(
             consumer.clone(),
             Fused {
-                parts,
+                members,
                 version: Arc::clone(&version),
             },
         );
@@ -756,6 +962,60 @@ pub(super) struct Planned {
     pub runs: Option<Domain>,
     /// The extent its outputs have, which its readers see.
     pub extent: Option<Domain>,
+}
+
+/// The values of a producer's extent params ([`orla_ir::extent_params`]):
+/// its element count and its extent, as `count` and `size` give them.
+fn extent_values(domain: Domain) -> [Value; 2] {
+    let size = match domain {
+        Domain::Rows(n) => Value::Int(n as i32),
+        Domain::Grid(w, h) => Value::Vec2([w as f32, h as f32]),
+        Domain::Volume(w, h, d) => Value::Vec3([w as f32, h as f32, d as f32]),
+    };
+    [Value::Int(domain.count() as i32), size]
+}
+
+/// A node's domain once its ports `gone` leave it, each bound to a
+/// producer of extent `extent`: what it resolves to when known now, else
+/// its expression with their counts and sizes read from that extent;
+/// `None` when it reads a value of one, which only the Field holds.
+fn without_ports(
+    domain: &Option<DomainSpec>,
+    runs: Option<Domain>,
+    gone: &[String],
+    extent: Domain,
+) -> Option<Option<DomainSpec>> {
+    if let Some(runs) = runs {
+        return Some(Some(DomainSpec::Literal(runs)));
+    }
+    match domain {
+        Some(DomainSpec::Expr(expr)) => {
+            if expr
+                .values_read()
+                .iter()
+                .any(|(port, _)| gone.contains(port))
+            {
+                return None;
+            }
+            let known = |port: &str| gone.iter().any(|g| g == port).then_some(extent);
+            Some(Some(DomainSpec::Expr(expr.with_extents(&known))))
+        }
+        other => Some(other.clone()),
+    }
+}
+
+/// Sets the extent params of the producer `prefix` that `manifest` reads.
+fn give_extent(
+    params: &mut BTreeMap<String, ParamValue>,
+    manifest: &orla_kernel::Manifest,
+    prefix: &str,
+    values: &[Value; 2],
+) {
+    for (name, value) in orla_ir::extent_params(prefix).into_iter().zip(values) {
+        if manifest.params.iter().any(|param| param.name == name) {
+            params.insert(name, ParamValue::Literal(value.clone()));
+        }
+    }
 }
 
 /// The id a fused group executes under: `fused.<node>@1` with the node

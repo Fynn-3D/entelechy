@@ -561,7 +561,23 @@ fn graph(args: &[String]) -> Result<(), String> {
                     )
                 };
                 let domain = entry.domain.map(|d| format!(" {d}")).unwrap_or_default();
-                println!("//   {}{absorbed}: {}{domain}", entry.node, entry.kernel);
+                let counted = if entry.counted.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "; counts {}",
+                        entry
+                            .counted
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                println!(
+                    "//   {}{absorbed}: {}{domain}{counted}",
+                    entry.node, entry.kernel
+                );
                 // What each node of the group holding state reads of
                 // state: what this evaluation made, or what the last
                 // committed. A node holding none reads what is newest, as

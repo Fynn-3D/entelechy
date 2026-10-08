@@ -211,16 +211,24 @@ struct Cached {
     epoch: u64,
 }
 
+/// What a fused version is made of: the nodes inlined into it, at their
+/// generations, and the producers whose extent it reads from params.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Members {
+    parts: Vec<(NodeId, Generation)>,
+    counted: Vec<NodeId>,
+}
+
 /// A fused version kept while its constituents are unchanged.
 struct Fused {
-    parts: Vec<(NodeId, Generation)>,
+    members: Members,
     version: Arc<KernelVersion>,
 }
 
 /// A fused version the runtime is still preparing; until it arrives the
 /// group's nodes execute separately.
 struct Pending {
-    parts: Vec<(NodeId, Generation)>,
+    members: Members,
     ticket: Ticket,
 }
 
@@ -239,6 +247,9 @@ struct Group {
     version: Arc<KernelVersion>,
     parts: Vec<(NodeId, Generation)>,
     absorbed: Vec<NodeId>,
+    /// The producers no longer stored for it, whose count or size it reads
+    /// from params instead.
+    counted: Vec<NodeId>,
     /// How many times the Kernel runs, each feeding `chain` from the one
     /// before: 1, or N for `times = N` over the node's own output.
     repeat: u32,
@@ -262,6 +273,14 @@ impl Group {
     fn module(&self) -> Option<&orla_ir::Validated> {
         self.fused.as_deref().or_else(|| self.version.module())
     }
+
+    /// What its fused version is made of.
+    fn members(&self) -> Members {
+        Members {
+            parts: self.parts.clone(),
+            counted: self.counted.clone(),
+        }
+    }
 }
 
 /// One executing unit as the planner sees it, for inspection.
@@ -273,6 +292,9 @@ pub struct PlanEntry {
     pub kernel: KernelId,
     /// Producers inlined into it.
     pub absorbed: Vec<NodeId>,
+    /// Producers fused elsewhere whose count or size it reads from the
+    /// extent the plan knows, as they are not stored for it.
+    pub counted: Vec<NodeId>,
     /// The bindings the group executes with, absorbed producers' inputs
     /// renamed `producer/port`.
     pub inputs: BTreeMap<String, Binding>,
@@ -291,7 +313,7 @@ pub struct Evaluator {
     fused: BTreeMap<NodeId, Fused>,
     /// Groups fusion declined, by consumer, at their generations; retried
     /// when one changes.
-    declined: BTreeMap<NodeId, Vec<(NodeId, Generation)>>,
+    declined: BTreeMap<NodeId, Members>,
     /// Groups a backend refused fused, kept until a report carries them.
     refused: Vec<Refused>,
     pending: BTreeMap<NodeId, Pending>,
@@ -422,7 +444,7 @@ impl Evaluator {
         self.fused
             .iter()
             .find(|(consumer, fused)| {
-                *consumer != node && fused.parts.iter().any(|(part, _)| part == node)
+                *consumer != node && fused.members.parts.iter().any(|(part, _)| part == node)
             })
             .map(|(consumer, _)| consumer)
     }
@@ -518,6 +540,7 @@ impl Evaluator {
                 node: group.node.id.clone(),
                 kernel: group.version.id().clone(),
                 absorbed: group.absorbed.clone(),
+                counted: group.counted.clone(),
                 inputs: group.node.inputs.clone(),
                 domain: group.node.domain.as_ref().and_then(DomainSpec::literal),
             })

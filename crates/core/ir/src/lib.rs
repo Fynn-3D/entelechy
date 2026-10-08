@@ -20,7 +20,10 @@ use std::fmt;
 use std::str::FromStr;
 
 pub use account::{Renumbering, account, account_renumbered};
-pub use fuse::{FuseError, InputUse, fuse, fuse_outputs, fused_name, input_use, samples_only};
+pub use fuse::{
+    FuseError, InputUse, counted, counts_only, extent_params, fuse, fuse_indexed, fuse_outputs,
+    fused_name, input_use, offset_read, samples_only,
+};
 pub use optimize::{optimize, renumbered};
 pub use orla_abi::{
     Capabilities, Capability, Encoding, Number, PortType, Scalar, Schema, Shape, ShapeIndex, Type,

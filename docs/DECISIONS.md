@@ -1229,3 +1229,39 @@ which both call.
 ([check](../crates/interface/session/src/check.rs)). Held by
 [the binding tests](../crates/interface/session/tests/binds.rs).
 
+## A producer read at an offset fuses as a function of the row
+
+A producer fuses into its one reader when that reader reads it at its own
+element (pointwise), and also when it reads a row of it at an offset of
+its own element: `element()` plus or less a value every element shares,
+at one address, outside any loop (`offset_read`). The producer's entry
+then becomes a function of the row, called where the reader read, at the
+address clamped into the producer's extent as `at` clamps it; the
+producer's element is that row, its samples read there, and its
+`domain()` is its extent. A reader that only asks a producer its count or
+size does not hold the fusion back: it drops the Field and reads the
+extent from two params (`extent_params`), set by the planner from the
+extent the plan already knows. A domain that waits on a value (`value(port)`)
+still waits, its counts and sizes of the fused ports written as the
+extent known. A fused group and the readers counting what it absorbed are
+prepared together; until all have arrived, all run as they were, and
+`orla graph` says what each counts. Rows only: a grid read at an offset
+is a float address, floored and clamped by axis, and stays stored.
+
+**Why.** A scene's lists are joined and gathered by offset (`at(a, k)`,
+`at(b, k - count(a))`), and each join wrote a whole Field that one Kernel
+read once, then sat on the device. A count read elsewhere kept it stored
+too. One address per element keeps the work a stored Field would cost:
+each row is computed at most once, where it is read. An extent passed as a
+param keeps the fused module the same when only the counts change, so it
+is prepared once. Two reads per element, or reads in a loop, would compute
+the producer again for each, so they stay stored.
+
+**Where.** `offset_read`, `fuse_indexed`, `counted` and `extent_params`
+([fuse](../crates/core/ir/src/fuse.rs)), the planner's readers that
+count, its ties and `without_ports`
+([plan](../crates/core/graph/src/evaluate/plan.rs)),
+`DomainExpr::with_extents` ([domain](../crates/core/graph/src/domain.rs)).
+Held by [the fusion tests](../crates/backends/cpu/tests/fusion.rs) and,
+on the processor, the JIT and the device,
+[the offset tests](../crates/interface/session/tests/offset.rs).

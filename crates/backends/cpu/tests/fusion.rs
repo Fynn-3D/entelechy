@@ -1,7 +1,7 @@
 use orla_abi::{Capability, Context, Domain, Host, Invocation, Scope, Value};
 use orla_compiler::{compile, compile_unoptimized};
 use orla_cpu::CpuBackend;
-use orla_ir::{fuse, fuse_outputs, samples_only};
+use orla_ir::{counted, counts_only, fuse, fuse_indexed, fuse_outputs, offset_read, samples_only};
 
 fn granted() -> orla_abi::Capabilities {
     Capability::ALL.into_iter().collect()
@@ -72,7 +72,7 @@ fn addressed_inputs_do_not_fuse() {
     let pixelate = compile(PIXELATE).unwrap();
     assert!(!samples_only(&pixelate, 0));
     let error = fuse(&pixelate, 0, &gradient, "source").unwrap_err();
-    assert!(error.to_string().contains("address or size"), "{error}");
+    assert!(error.to_string().contains("by address"), "{error}");
     assert!(samples_only(&compile(GRAYSCALE).unwrap(), 0));
 }
 
@@ -220,4 +220,123 @@ fn a_producer_of_several_outputs_fuses_whole_and_changes_no_bit() {
     // A link whose layouts differ is the scene's mismatch, not fusion's.
     let wrong = fuse_outputs(&show, &[(2, 1)], &split, "split").unwrap_err();
     assert!(wrong.declines, "{wrong}");
+}
+
+const LIFT: &str = "kernel test.lift@1 { requires { field.read; field.write; time.read; } struct P { x: Float; n: Int; } input source: Rows<Float>; param k: Float = 2.0; output result: Rows<P>; compute { let v = sample(source) * k + float(element()) * 0.5 + float(domain()) + time(); return P { x: v, n: element() * 3 + count(source) }; } }";
+const JOIN: &str = "kernel test.join@1 { requires { field.read; field.write; } struct P { x: Float; n: Int; } input a: Rows<P>; input b: Rows<Float>; output result: Rows<Float>; compute { let k = element(); let n = count(a); if k < n { let p = at(a, k + 1); return p.x + float(p.n); } return at(b, k - n) + float(size(a)); } }";
+const TALLY: &str = "kernel test.tally@1 { requires { field.read; field.write; } input a: Rows<Float>; input b: Rows<Float>; output result: Rows<Float>; compute { return at(b, element()) + float(count(a)) * 0.5 + float(size(a)); } }";
+
+fn rows(host: &mut Host, values: &[f32]) -> orla_abi::Handle {
+    let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Float]);
+    let words: Vec<u32> = values.iter().map(|v| v.to_bits()).collect();
+    host.adopt(
+        orla_abi::FieldData::from_values(schema, Domain::Rows(values.len() as u32), &words)
+            .unwrap(),
+    )
+    .unwrap()
+}
+
+fn run_rows(
+    module: &orla_ir::Validated,
+    inputs: Vec<orla_abi::Handle>,
+    params: Vec<Value>,
+    count: u32,
+    host: &mut Host,
+) -> (orla_abi::Handle, Vec<u32>) {
+    let invocation = Invocation {
+        inputs,
+        params,
+        domain: Domain::Rows(count),
+        context: Context {
+            time: 0.25,
+            ..Context::default()
+        },
+    };
+    let mut scope = Scope::new(host, granted());
+    let output = CpuBackend.execute(module, &invocation, &mut scope).unwrap()[0];
+    (output, host.data(output).unwrap().storage().to_vec())
+}
+
+#[test]
+fn a_producer_read_at_an_offset_fuses_as_a_function_of_the_row_and_changes_no_bit() {
+    for compiled in [compile, compile_unoptimized] {
+        let lift = compiled(LIFT).unwrap();
+        let join = compiled(JOIN).unwrap();
+        assert!(offset_read(&join, 0), "`a` is read at element() + 1");
+        assert!(offset_read(&join, 1), "`b` at element() - count(a)");
+        assert!(!samples_only(&join, 0));
+        let fused = fuse_indexed(&join, &[(0, 0)], &lift, "lift").unwrap();
+        assert_eq!(
+            fused
+                .manifest
+                .params
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>(),
+            ["lift/k", "lift/#count", "lift/#size"]
+        );
+        let mut host = Host::new(1 << 20);
+        let source = rows(&mut host, &[1.0, 2.5, -3.0, 4.0, 0.125]);
+        let b = rows(&mut host, &[10.0, 20.0, 30.0]);
+        // Two rows past `b`, so its last is read clamped; `a`'s last row
+        // reads one past its end, clamped too.
+        let (a, _) = run_rows(&lift, vec![source], vec![Value::Float(1.5)], 5, &mut host);
+        let (_, separate) = run_rows(&join, vec![a, b], vec![], 10, &mut host);
+        let (_, together) = run_rows(
+            &fused,
+            vec![b, source],
+            vec![Value::Float(1.5), Value::Int(5), Value::Int(5)],
+            10,
+            &mut host,
+        );
+        assert_eq!(separate, together, "fusion must not change a single bit");
+    }
+}
+
+#[test]
+fn a_kernel_that_only_counts_an_input_reads_its_extent_from_params() {
+    let tally = compile(TALLY).unwrap();
+    assert!(counts_only(&tally, 0));
+    assert!(!counts_only(&tally, 1));
+    let alone = counted(&tally, &[(0, "lift".into())]).unwrap();
+    assert_eq!(alone.manifest.inputs.len(), 1);
+    let mut host = Host::new(1 << 20);
+    let a = rows(&mut host, &[0.0; 7]);
+    let b = rows(&mut host, &[1.0, 2.0, 3.0]);
+    let (_, stored) = run_rows(&tally, vec![a, b], vec![], 3, &mut host);
+    let (_, told) = run_rows(
+        &alone,
+        vec![b],
+        vec![Value::Int(7), Value::Int(7)],
+        3,
+        &mut host,
+    );
+    assert_eq!(stored, told);
+    assert!(counted(&tally, &[(1, "b".into())]).is_err(), "`b` is read");
+}
+
+#[test]
+fn only_one_offset_of_the_element_outside_loops_is_an_offset_read() {
+    let reads = |body: &str| {
+        let source = format!(
+            "kernel test.read@1 {{ requires {{ field.read; field.write; }} input a: Rows<Float>; output result: Rows<Float>; compute {{ {body} }} }}"
+        );
+        offset_read(&compile_unoptimized(&source).unwrap(), 0)
+    };
+    assert!(reads("return at(a, element());"));
+    assert!(reads("let n = count(a) / 2; return at(a, n + element());"));
+    assert!(!reads("return at(a, element() * 2);"), "not an offset");
+    assert!(
+        !reads("return at(a, element()) + at(a, element() + 1);"),
+        "two rows"
+    );
+    assert!(!reads("return sample(a);"), "a sample");
+    assert!(
+        !reads("return loop 2 with s = 0.0 { s + at(a, element()) };"),
+        "read in a loop"
+    );
+    assert!(
+        !reads("return at(a, int(at(a, 0)));"),
+        "an address read from the input"
+    );
 }
