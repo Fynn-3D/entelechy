@@ -1,6 +1,7 @@
-//! The F10 frame-data line, rendered on the CPU with a 5x7 font into
-//! `0x00RRGGBB` pixels for a presenter to overlay. Times come from the
-//! host's clock.
+//! The F10 frame data, rendered on the CPU with a 5x7 font into
+//! `0x00RRGGBB` pixels for a presenter to overlay: a line of the frame's
+//! times, then the nodes that kept the device busiest. Times come from the
+//! host's clock, and the device's own where it keeps one.
 
 use std::time::Duration;
 
@@ -56,6 +57,8 @@ const GLYPHS: &[(char, Glyph)] = &[
     ('(', [0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02]),
     (')', [0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08]),
     ('~', [0x00, 0x00, 0x08, 0x15, 0x02, 0x00, 0x00]),
+    ('_', [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F]),
+    ('#', [0x0A, 0x0A, 0x1F, 0x0A, 0x1F, 0x0A, 0x0A]),
 ];
 
 /// A glyph plus one column of space; a glyph plus a row above and below.
@@ -77,11 +80,32 @@ pub struct Panel {
 /// Renders `text` at `scale` device pixels per font pixel, uppercase as
 /// lowercase; a character outside the font is a gap.
 pub fn panel(text: &str, scale: u32) -> Panel {
+    lines(&[text.to_owned()], scale)
+}
+
+/// Renders `texts`, a line each, one under another, as [`panel`] does.
+pub fn lines(texts: &[String], scale: u32) -> Panel {
     let scale = scale.max(1);
-    let chars: Vec<char> = text.chars().map(|c| c.to_ascii_lowercase()).collect();
-    let width = (chars.len() as u32 * CELL.0 + 1) * scale;
-    let height = CELL.1 * scale;
+    let rows: Vec<Vec<char>> = texts
+        .iter()
+        .map(|text| text.chars().map(|c| c.to_ascii_lowercase()).collect())
+        .collect();
+    let longest = rows.iter().map(Vec::len).max().unwrap_or(0) as u32;
+    let width = (longest * CELL.0 + 1) * scale;
+    let height = CELL.1 * scale * rows.len().max(1) as u32;
     let mut pixels = vec![PAPER; (width * height) as usize];
+    for (line, chars) in rows.iter().enumerate() {
+        let top = line as u32 * CELL.1 * scale;
+        draw(chars, &mut pixels, width, top, scale);
+    }
+    Panel {
+        width,
+        height,
+        pixels,
+    }
+}
+
+fn draw(chars: &[char], pixels: &mut [u32], width: u32, top: u32, scale: u32) {
     for (column, c) in chars.iter().enumerate() {
         let Some((_, glyph)) = GLYPHS.iter().find(|(name, _)| name == c) else {
             continue;
@@ -92,18 +116,13 @@ pub fn panel(text: &str, scale: u32) -> Panel {
                     continue;
                 }
                 let x0 = (column as u32 * CELL.0 + 1 + bit) * scale;
-                let y0 = (row as u32 + 1) * scale;
+                let y0 = top + (row as u32 + 1) * scale;
                 for y in y0..y0 + scale {
                     let start = (y * width + x0) as usize;
                     pixels[start..start + scale as usize].fill(INK);
                 }
             }
         }
-    }
-    Panel {
-        width,
-        height,
-        pixels,
     }
 }
 
@@ -128,6 +147,12 @@ pub struct Stats {
     cpu: f64,
     gpu: Option<f64>,
     present: f64,
+    /// Each node's smoothed device milliseconds, and those between nodes,
+    /// from the latest clocked frame told ([`Stats::told`]).
+    nodes: Vec<(String, f64)>,
+    between: f64,
+    /// The latest clocked frame told.
+    told: Option<u64>,
 }
 
 impl Default for Stats {
@@ -138,6 +163,9 @@ impl Default for Stats {
             cpu: 0.0,
             gpu: None,
             present: 0.0,
+            nodes: Vec::new(),
+            between: 0.0,
+            told: None,
         }
     }
 }
@@ -171,6 +199,56 @@ impl Stats {
             Some(gpu) => smooth(self.gpu.get_or_insert(0.0), gpu),
             None => self.gpu = None,
         }
+    }
+
+    /// Records a clocked frame's device time node by node, once a frame:
+    /// a node not in it is taken as idle.
+    pub fn told(&mut self, times: &crate::DeviceTimes) {
+        if self.told == Some(times.frame) {
+            return;
+        }
+        self.told = Some(times.frame);
+        for (_, average) in &mut self.nodes {
+            *average *= 0.9;
+        }
+        for (node, busy) in &times.nodes {
+            let name = node.to_string();
+            match self.nodes.iter_mut().find(|(n, _)| *n == name) {
+                Some((_, average)) => *average += busy.as_secs_f64() * 1000.0 * 0.1,
+                None => self.nodes.push((name, busy.as_secs_f64() * 1000.0)),
+            }
+        }
+        self.nodes.retain(|(_, average)| *average >= 0.005);
+        smooth(&mut self.between, times.between);
+    }
+
+    /// The nodes that kept the device busiest, `most` of them, a line of
+    /// `a_line` each, then what ran between nodes.
+    pub fn busiest(&self, most: usize, a_line: usize) -> Vec<String> {
+        if self.told.is_none() {
+            return Vec::new();
+        }
+        let mut nodes = self.nodes.clone();
+        nodes.sort_by(|a, b| b.1.total_cmp(&a.1));
+        nodes.truncate(most);
+        let mut said: Vec<String> = nodes
+            .chunks(a_line.max(1))
+            .map(|chunk| {
+                chunk
+                    .iter()
+                    .map(|(name, ms)| format!("{name} {ms:.2}"))
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            })
+            .collect();
+        match said.first_mut() {
+            Some(first) => *first = format!("gpu by node: {first}"),
+            None => said.push("gpu by node:".into()),
+        }
+        if let Some(last) = said.last_mut() {
+            last.push_str(&format!(" | between nodes {:.2}", self.between));
+        }
+        said
     }
 
     /// Records this frame's presenting time.
@@ -241,6 +319,59 @@ mod tests {
             ),
             "{}",
             stats.line("x")
+        );
+    }
+
+    #[test]
+    fn the_busiest_nodes_follow_the_line_and_an_absent_one_fades() {
+        let id = |n: &str| orla_graph::NodeId(n.to_owned());
+        let ms = Duration::from_millis;
+        let mut stats = Stats::default();
+        assert!(stats.busiest(3, 2).is_empty(), "nothing told, nothing said");
+        stats.told(&crate::DeviceTimes {
+            frame: 1,
+            busy: ms(7),
+            nodes: vec![
+                (id("look"), ms(4)),
+                (id("raster.drawn"), ms(2)),
+                (id("hud_top"), ms(1)),
+            ],
+            between: Duration::ZERO,
+        });
+        assert_eq!(
+            stats.busiest(3, 2),
+            vec![
+                "gpu by node: look 4.00 | raster.drawn 2.00".to_string(),
+                "hud_top 1.00 | between nodes 0.00".to_string()
+            ]
+        );
+        // The same frame told again changes nothing; a later one without a
+        // node lets it fade.
+        stats.told(&crate::DeviceTimes {
+            frame: 1,
+            busy: ms(7),
+            nodes: Vec::new(),
+            between: Duration::ZERO,
+        });
+        assert!(stats.busiest(1, 1)[0].contains("look 4.00"));
+        stats.told(&crate::DeviceTimes {
+            frame: 2,
+            busy: ms(2),
+            nodes: vec![(id("raster.drawn"), ms(2))],
+            between: Duration::ZERO,
+        });
+        assert!(
+            stats.busiest(1, 1)[0].contains("look 3.60"),
+            "{:?}",
+            stats.busiest(1, 1)
+        );
+        // Lines stack, each as wide as the longest.
+        let two = lines(&["1".to_string(), "_".to_string()], 1);
+        assert_eq!((two.width, two.height), (7, 18));
+        assert_eq!(
+            two.pixels[(16 * 7 + 1) as usize],
+            INK,
+            "the underscore, on the second line's last row"
         );
     }
 }

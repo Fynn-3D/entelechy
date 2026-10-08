@@ -459,6 +459,11 @@ impl Play {
                         None
                     },
                 );
+                if self.hud
+                    && let Some(times) = session.device_times()
+                {
+                    self.stats.told(&times);
+                }
                 if self.reported.worked() {
                     self.said.push("evaluating again".into());
                 }
@@ -703,7 +708,9 @@ impl Play {
             self.downloads,
             context.time,
         );
-        hud::panel(&self.stats.line(&rest), context.scale.round() as u32)
+        let mut said = vec![self.stats.line(&rest)];
+        said.extend(self.stats.busiest(12, 6));
+        hud::lines(&said, context.scale.round() as u32)
     }
 }
 

@@ -277,11 +277,14 @@ impl Backend for Apart {
     fn set_clocked(&self, on: bool) {
         self.inner.set_clocked(on);
     }
-    fn end_frame(&self) {
-        self.inner.end_frame();
+    fn clock_mark(&self) -> usize {
+        self.inner.clock_mark()
     }
-    fn frame_device_time(&self) -> Option<std::time::Duration> {
-        self.inner.frame_device_time()
+    fn end_frame(&self) -> Option<u64> {
+        self.inner.end_frame()
+    }
+    fn clocked_frame(&self) -> Option<orla_rules::ClockedFrame> {
+        self.inner.clocked_frame()
     }
     fn same_resident(
         &self,

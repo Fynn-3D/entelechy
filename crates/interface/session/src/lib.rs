@@ -23,6 +23,7 @@
 pub mod apart;
 pub mod bench;
 mod check;
+mod clocked;
 pub mod history;
 mod inputs;
 mod kernels;
@@ -102,6 +103,7 @@ pub struct StateCopy {
     /// The Kernel's words, one per scalar.
     pub words: Vec<u32>,
 }
+pub use clocked::DeviceTimes;
 pub use remember::Warm;
 pub use session::Session;
 

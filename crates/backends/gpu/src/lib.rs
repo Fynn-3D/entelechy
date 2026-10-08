@@ -115,6 +115,15 @@ impl fmt::Debug for GpuBackend {
 }
 
 impl GpuBackend {
+    /// Gives the device a run, work or copy: every run but the empty ones
+    /// a wait is marked by goes through here, so a clocked frame counts
+    /// each.
+    pub(crate) fn submit(&self, commands: wgpu::CommandBuffer) -> wgpu::SubmissionIndex {
+        let submission = self.queue.submit(Some(commands));
+        self.frames.submitted(&self.queue);
+        submission
+    }
+
     /// Opens the default adapter, blocking to wait for the device; a page
     /// opens it with [`GpuBackend::with_wait`].
     pub fn new() -> Result<Self, GpuError> {
@@ -261,11 +270,15 @@ impl Backend for GpuBackend {
         self.frames.set_clocked(on, &self.device);
     }
 
-    fn end_frame(&self) {
-        self.frames.end_frame();
+    fn clock_mark(&self) -> usize {
+        self.frames.mark()
     }
 
-    fn frame_device_time(&self) -> Option<std::time::Duration> {
+    fn end_frame(&self) -> Option<u64> {
+        self.frames.end_frame()
+    }
+
+    fn clocked_frame(&self) -> Option<orla_rules::ClockedFrame> {
         self.frames.done()
     }
 
@@ -451,7 +464,7 @@ impl Backend for GpuBackend {
         }
         let scopes = Scopes::push(&self.device);
         let timing = self.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
-        let submission = self.queue.submit(Some(encoder.finish()));
+        let submission = self.submit(encoder.finish());
         let submitted = submission.clone();
         // One queue runs submissions in order, so only observation waits; under
         // `set_measured` this call waits, so its time is the work.
@@ -568,7 +581,7 @@ impl Backend for GpuBackend {
                 label: Some("orla download"),
             });
         encoder.copy_buffer_to_buffer(&image.buffer, 0, &staging, 0, size);
-        self.queue.submit(Some(encoder.finish()));
+        self.submit(encoder.finish());
         self.wait
             .map_read(&self.device, &self.queue, staging.slice(..))?;
         let bytes: Vec<u8> = {
@@ -606,7 +619,7 @@ impl Backend for GpuBackend {
                 label: Some("orla download"),
             });
         encoder.copy_buffer_to_buffer(&image.buffer, 0, &staging, 0, byte_len as u64);
-        let after = self.queue.submit(Some(encoder.finish()));
+        let after = self.submit(encoder.finish());
         Ok(Box::new(Coming {
             wait: self.wait,
             device: self.device.clone(),

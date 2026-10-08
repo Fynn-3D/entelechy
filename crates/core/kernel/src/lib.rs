@@ -26,7 +26,7 @@ pub use orla_abi::{
 pub use orla_abi::{DEFAULT_WORK, MAX_WORK, encoding};
 pub use orla_ir::{KernelId, Manifest, Validated};
 pub use orla_rules::{
-    Backend, Check, Downloading, ExecutionError, Extent, NativeOp, Prepared, extent,
+    Backend, Check, ClockedFrame, Downloading, ExecutionError, Extent, NativeOp, Prepared, extent,
 };
 
 /// The operations a run may take, by its elements times its Kernel's
@@ -788,15 +788,26 @@ impl Runtime {
         self.backend().set_clocked(on);
     }
 
-    /// Ends a clocked frame ([`Backend::end_frame`]).
-    pub fn end_frame(&self) {
-        self.backend().end_frame();
+    /// How many runs the open clocked frame has been given
+    /// ([`Backend::clock_mark`]).
+    pub fn clock_mark(&self) -> usize {
+        self.backend().clock_mark()
     }
 
-    /// The device's busy time for the latest clocked frame it has done
-    /// ([`Backend::frame_device_time`]).
+    /// Ends a clocked frame, answering its number ([`Backend::end_frame`]).
+    pub fn end_frame(&self) -> Option<u64> {
+        self.backend().end_frame()
+    }
+
+    /// The latest clocked frame the device has done
+    /// ([`Backend::clocked_frame`]).
+    pub fn clocked_frame(&self) -> Option<ClockedFrame> {
+        self.backend().clocked_frame()
+    }
+
+    /// The device's busy time for the latest clocked frame it has done.
     pub fn frame_device_time(&self) -> Option<std::time::Duration> {
-        self.backend().frame_device_time()
+        self.clocked_frame().map(|frame| frame.busy())
     }
 
     /// Whether the backend's device work is done only when

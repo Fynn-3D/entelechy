@@ -214,6 +214,25 @@ impl NativeOp {
     }
 }
 
+/// A frame the device has done, by its clock ([`Backend::clocked_frame`]):
+/// its number, and how long each of its runs kept the device busy, from
+/// its submission or the run before's end, whichever is later, to its own
+/// end; the runs in the order they were given.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ClockedFrame {
+    /// The frame's number ([`Backend::end_frame`]).
+    pub frame: u64,
+    /// Each run's busy time, in order.
+    pub runs: Vec<std::time::Duration>,
+}
+
+impl ClockedFrame {
+    /// The frame's whole busy time.
+    pub fn busy(&self) -> std::time::Duration {
+        self.runs.iter().sum()
+    }
+}
+
 /// Backend-owned state built from a module at preparation time.
 pub trait Prepared: Any + Send + Sync {
     /// For downcasting by the backend that built it.
@@ -353,20 +372,30 @@ pub trait Backend: Send + Sync {
         false
     }
 
-    /// Whether frames are clocked on the device as they run: each run's
-    /// work stamped by the device's own clock, read once it is done,
-    /// nothing waited for; see [`Backend::frame_device_time`].
+    /// Whether frames are clocked on the device as they run: each run
+    /// the device is given, work or copy, timed by when the device tells
+    /// it done, nothing waited for; see [`Backend::clocked_frame`].
     fn set_clocked(&self, on: bool) {
         let _ = on;
     }
 
-    /// Ends a clocked frame: the runs since the last end are one frame.
-    fn end_frame(&self) {}
+    /// How many runs the clocked frame open now has been given: a caller
+    /// marks what it runs between two marks as its own.
+    fn clock_mark(&self) -> usize {
+        0
+    }
 
-    /// How long the device was busy with the latest clocked frame it has
-    /// done, by its own clock; `None` before one is done, or where the
-    /// device keeps no clock. Asking waits for nothing.
-    fn frame_device_time(&self) -> Option<std::time::Duration> {
+    /// Ends a clocked frame, the runs since the last end its runs: its
+    /// number, counted from the first frame clocked; `None` unclocked.
+    fn end_frame(&self) -> Option<u64> {
+        None
+    }
+
+    /// The latest clocked frame the device has done: its number and each
+    /// of its runs' busy time, in the order they were given; `None` before
+    /// one is done, or where the device keeps no clock. Asking waits for
+    /// nothing.
+    fn clocked_frame(&self) -> Option<ClockedFrame> {
         None
     }
 

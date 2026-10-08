@@ -308,7 +308,8 @@ and rate; `cpu`, the processor's work on a frame, its waits left out;
 done, without waiting for it; present time; backend, window and scale, the
 port shown, what ran, was reused and was fused, `async` runs,
 presentation path and downloads, the sound device's rate, block size and
-dry callbacks). Tab, Escape and every other key are the scene's; closing
+dry callbacks) and under it the nodes that kept the device busiest, each
+its smoothed milliseconds, then what ran between nodes. Tab, Escape and every other key are the scene's; closing
 the window, or Cmd+Q, quits.
 
 ## Replay tests

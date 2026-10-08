@@ -14,6 +14,10 @@ pub(crate) fn evaluate(session: &mut Session, request: &Request) -> Result<Json,
     if request.get("settle").and_then(Json::as_bool) == Some(true) {
         session.settle().map_err(|e| evaluation_error(&e, None))?;
     }
+    // Clocked, the device times the frames as they run, from this one on.
+    if let Some(clock) = request.get("clock").and_then(Json::as_bool) {
+        session.set_clocked(clock);
+    }
     // Measured, each node waits for the device, this evaluation alone.
     let measured = request.get("measure").and_then(Json::as_bool) == Some(true);
     session.set_measured(measured);
@@ -41,7 +45,22 @@ pub(crate) fn evaluate(session: &mut Session, request: &Request) -> Result<Json,
     })?;
     let mut answer = report_json(session, &report);
     answer["measured"] = json!(measured);
+    answer["device"] = device_json(session.device_times());
     Ok(answer)
+}
+
+/// The latest clocked frame the device has done, node by node, or null.
+fn device_json(times: Option<orla_session::DeviceTimes>) -> Json {
+    let millis = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+    match times {
+        None => Json::Null,
+        Some(times) => json!({
+            "frame": times.frame,
+            "busy": millis(times.busy),
+            "between": millis(times.between),
+            "nodes": times.nodes.iter().map(|(node, busy)| json!({ "node": node.to_string(), "millis": millis(*busy) })).collect::<Vec<_>>(),
+        }),
+    }
 }
 
 /// Forgets all committed state, or one port's with `node` (and `port`,

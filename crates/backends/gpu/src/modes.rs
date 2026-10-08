@@ -126,7 +126,7 @@ impl GpuBackend {
             }
         }
         let last = if times % 2 == 1 { spare } else { output_buffer };
-        self.queue.submit(Some(encoder.finish()));
+        self.submit(encoder.finish());
         let _ = self.device.poll(wgpu::PollType::Poll);
         scopes
             .pop(self.wait, "")

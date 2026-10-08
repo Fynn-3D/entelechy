@@ -158,7 +158,7 @@ impl GpuBackend {
             pass.dispatch_workgroups(words.div_ceil(256).clamp(1, 65535), 1, 1);
         }
         encoder.copy_buffer_to_buffer(&differs, 0, &back, 0, 4);
-        self.queue.submit(Some(encoder.finish()));
+        self.submit(encoder.finish());
         self.wait
             .map_read(&self.device, &self.queue, back.slice(..))?;
         let word = {

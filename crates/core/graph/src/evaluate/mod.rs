@@ -79,6 +79,11 @@ pub struct Report {
     /// call (a GPU submission), or the device clock under a measured
     /// profile.
     pub timings: Vec<(NodeId, std::time::Duration)>,
+    /// Each executed node's runs in the clocked frame, in evaluation order:
+    /// those the device was given between its marks
+    /// ([`orla_kernel::Runtime::clock_mark`]), which the frame's clock
+    /// times once the device has done them.
+    pub clocked: Vec<(NodeId, std::ops::Range<usize>)>,
     /// Where each executed node ran, in evaluation order.
     pub placements: Vec<Placed>,
     /// State ports carried into a new layout by their migration Kernel.
@@ -745,6 +750,7 @@ impl Evaluator {
             let mut reused = Vec::new();
             let mut fused = Vec::new();
             let mut timings = Vec::new();
+            let mut clocked = Vec::new();
             let mut placements = Vec::new();
             // Every node run on the frame, in order, with its device
             // status, checked before anything commits.
@@ -849,6 +855,7 @@ impl Evaluator {
                 }
                 runtime.take_moved();
                 let started = orla_kernel::clock::now();
+                let first_run = runtime.clock_mark();
                 let run = |runtime: &mut Runtime| match group.chain {
                     Some(chain) => {
                         runtime.execute_repeated(&group.version, &invocation, group.repeat, chain)
@@ -890,6 +897,7 @@ impl Evaluator {
                     .last_measured()
                     .unwrap_or_else(|| orla_kernel::clock::since(started));
                 timings.push((node.id.clone(), took));
+                clocked.push((node.id.clone(), first_run..runtime.clock_mark()));
                 checks.push((node.id.clone(), runtime.take_checks()));
                 // Where it ran, which a run's size may decide.
                 let placement = runtime
@@ -975,6 +983,7 @@ impl Evaluator {
                 output,
                 executed,
                 timings,
+                clocked,
                 placements,
                 reused,
                 committed,

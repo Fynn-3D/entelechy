@@ -451,3 +451,70 @@ fn a_clocked_frame_gives_the_devices_busy_time_without_waiting_for_it() {
         "unclocked, nothing is kept"
     );
 }
+
+#[test]
+fn a_clocked_frames_device_time_is_shared_out_to_the_nodes_that_ran() {
+    // Two nodes on the device, clocked: once the device has done a frame,
+    // each has its runs' busy time by name, and with what ran between
+    // nodes they make up the frame's.
+    let Some(gpu) = gpu() else { return };
+    let dir = std::env::temp_dir().join(format!("orla-node-clock-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("lib.orla"),
+        "kernel t.wave@1 { requires { field.write; time.read; } output result: Image; compute { let p = coord(); return vec4(sin(p.x * 0.01 + time()), cos(p.y * 0.01), 0.0, 1.0); } }
+kernel t.blur@1 { requires { field.read; field.write; } input picture: Image; output result: Image; compute { let p = coord(); let n = size(picture); return (at(picture, p) + at(picture, min(p + vec2(1.0, 0.0), n - vec2(1.0, 1.0)))) * 0.5; } }",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.osn"),
+        "use \"lib.orla\";\nnode wave: t.wave@1 { domain = vec2(512, 512); }\nnode blur: t.blur@1 { picture <- wave.result; }\noutput result <- blur.result;\n",
+    )
+    .unwrap();
+    let backend: Box<dyn Backend> = Box::new(gpu);
+    let mut runtime = orla_kernel::Runtime::with_backend(1 << 26, backend);
+    runtime.set_small(0);
+    let mut session = orla_session::Session::open_with(&dir.join("scene.osn"), None, runtime);
+    session.sync();
+    assert_eq!(session.device_times(), None, "nothing clocked yet");
+    session.set_clocked(true);
+    let mut told = None;
+    for k in 0..300 {
+        let context = Context {
+            time: k as f32 * 0.1,
+            ..Context::default()
+        };
+        session.evaluate(&context).unwrap();
+        told = session.device_times();
+        if told.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    // An adapter that tells nothing done keeps no clock.
+    let Some(times) = told else { return };
+    let names: Vec<String> = times.nodes.iter().map(|(n, _)| n.to_string()).collect();
+    assert_eq!(names, ["wave", "blur"], "in evaluation order, by name");
+    assert!(
+        times
+            .nodes
+            .iter()
+            .all(|(_, busy)| *busy > std::time::Duration::ZERO),
+        "{times:?}"
+    );
+    let shared: std::time::Duration = times
+        .nodes
+        .iter()
+        .map(|(_, busy)| *busy)
+        .sum::<std::time::Duration>()
+        + times.between;
+    assert_eq!(
+        shared, times.busy,
+        "the nodes and what ran between them make up the frame"
+    );
+    session.set_clocked(false);
+    session.evaluate(&Context::default()).unwrap();
+    assert_eq!(session.device_times(), None, "unclocked, nothing is told");
+}

@@ -441,8 +441,13 @@ pub fn operations() -> Vec<Operation> {
                     Ty::Bool,
                     "wait for the device after each node, so `timings` are the work and not its submission",
                 ),
+                may(
+                    "clock",
+                    Ty::Bool,
+                    "time the frames on the device as they run, waiting for nothing, from this evaluation on (false stops); `device` is the latest one done, node by node",
+                ),
             ]),
-            "executed, reused, committed, outputs, timings, measured",
+            "executed, reused, committed, outputs, timings, measured, device",
         ),
         op(
             "read",

@@ -48,6 +48,8 @@ pub struct Session {
     /// The names asked to stay materialized ([`Session::pin`]), resolved
     /// against the running graph before each evaluation.
     pins: Vec<orla_graph::NodeId>,
+    /// Each clocked frame's nodes' runs, until the device tells the frame.
+    node_clock: crate::clocked::NodeClock,
 }
 
 /// A request's claim on the scene it wrote, from asked to landed. A scene
@@ -129,6 +131,7 @@ impl Session {
             origin: crate::Origin::Local,
             claim: Claim::None,
             pins: Vec::new(),
+            node_clock: crate::clocked::NodeClock::default(),
         }
     }
 
@@ -899,14 +902,24 @@ impl Session {
     /// Whether frames are clocked on the device as they run; see
     /// [`orla_kernel::Runtime::set_clocked`]. A clocked frame waits for
     /// nothing more than an unclocked one.
-    pub fn set_clocked(&self, on: bool) {
+    pub fn set_clocked(&mut self, on: bool) {
         self.runtime.set_clocked(on);
+        if !on {
+            self.node_clock.clear();
+        }
     }
 
     /// The device's busy time for the latest clocked frame it has done; see
     /// [`orla_kernel::Runtime::frame_device_time`].
     pub fn frame_device_time(&self) -> Option<std::time::Duration> {
         self.runtime.frame_device_time()
+    }
+
+    /// The latest clocked frame the device has done, node by node: what
+    /// each node's runs kept it busy, by its own clock. Nothing waits; a
+    /// frame is told some frames after it ran.
+    pub fn device_times(&self) -> Option<crate::DeviceTimes> {
+        self.node_clock.times(&self.runtime.clocked_frame()?)
     }
 
     /// How long the last evaluation waited for the frame before it; see
@@ -959,8 +972,11 @@ impl Session {
             }
         };
         self.history.ran();
-        // The frame's runs are all given: a clocked frame ends here.
-        self.runtime.end_frame();
+        // The frame's runs are all given: a clocked frame ends here, its
+        // nodes' runs kept until the device tells it.
+        if let Some(frame) = self.runtime.end_frame() {
+            self.node_clock.ended(frame, report.clocked.clone());
+        }
         // Committed: changed outputs may now be written, once confirmed.
         if self.writes.due(&self.scene.files().writes, &report) {
             self.confirm()?;

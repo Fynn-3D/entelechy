@@ -83,8 +83,6 @@ impl GpuBackend {
         timing: Option<wgpu::Buffer>,
     ) {
         let _ = submission;
-        // Clocked, the run's end is told once the device has done it.
-        self.frames.submitted(&self.queue);
         if !self.measured() {
             let _ = self.device.poll(wgpu::PollType::Poll);
             return;
@@ -160,14 +158,15 @@ pub(crate) struct Frames {
     waiting: Arc<std::sync::atomic::AtomicBool>,
     /// The runs since the last frame ended: each its submission and end.
     open: Mutex<Vec<Run>>,
-    /// Ended frames whose runs are not all done, oldest first.
-    ended: Mutex<std::collections::VecDeque<Vec<Run>>>,
+    /// Ended frames whose runs are not all done, oldest first, by number.
+    ended: Mutex<std::collections::VecDeque<(u64, Vec<Run>)>>,
+    /// The frames ended since clocking began.
+    frames: std::sync::atomic::AtomicU64,
     /// The end of the last run counted, which a run after it starts from
     /// at the earliest.
     last_end: Mutex<Option<std::time::Instant>>,
-    /// The nanoseconds the device was busy with the latest frame done,
-    /// `u64::MAX` before one is.
-    last: std::sync::atomic::AtomicU64,
+    /// The latest frame done.
+    last: Mutex<Option<orla_rules::ClockedFrame>>,
 }
 
 type Run = Arc<Mutex<(std::time::Instant, Option<std::time::Instant>)>>;
@@ -180,8 +179,9 @@ impl Default for Frames {
             waiting: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             open: Mutex::new(Vec::new()),
             ended: Mutex::new(std::collections::VecDeque::new()),
+            frames: std::sync::atomic::AtomicU64::new(0),
             last_end: Mutex::new(None),
-            last: std::sync::atomic::AtomicU64::new(u64::MAX),
+            last: Mutex::new(None),
         }
     }
 }
@@ -202,8 +202,7 @@ impl Frames {
             lock(&self.open).clear();
             lock(&self.ended).clear();
             *lock(&self.last_end) = None;
-            self.last
-                .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
+            *lock(&self.last) = None;
             return;
         }
         if cfg!(target_arch = "wasm32")
@@ -234,8 +233,8 @@ impl Frames {
             });
     }
 
-    /// A run just submitted, for the open frame: its end is told when the
-    /// device has done it.
+    /// A run just submitted, work or copy, for the open frame: its end is
+    /// told when the device has done it.
     pub(crate) fn submitted(&self, queue: &wgpu::Queue) {
         if !self.clocked() {
             return;
@@ -250,24 +249,33 @@ impl Frames {
         });
     }
 
-    /// Ends the open frame.
-    pub(crate) fn end_frame(&self) {
+    /// How many runs the open frame has been given.
+    pub(crate) fn mark(&self) -> usize {
+        lock(&self.open).len()
+    }
+
+    /// Ends the open frame, answering its number; `None` unclocked.
+    pub(crate) fn end_frame(&self) -> Option<u64> {
         if !self.clocked() {
-            return;
+            return None;
         }
+        let number = self
+            .frames
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let runs = std::mem::take(&mut *lock(&self.open));
         let mut ended = lock(&self.ended);
-        ended.push_back(runs);
+        ended.push_back((number, runs));
         while ended.len() > FRAMES_WAITING {
             ended.pop_front();
         }
+        Some(number)
     }
 
-    /// The device's busy time for the latest frame whose runs are all done.
-    pub(crate) fn done(&self) -> Option<std::time::Duration> {
+    /// The latest frame whose runs are all done, each run's busy time.
+    pub(crate) fn done(&self) -> Option<orla_rules::ClockedFrame> {
         let mut ended = lock(&self.ended);
         let mut last_end = lock(&self.last_end);
-        while let Some(runs) = ended.front() {
+        while let Some((number, runs)) = ended.front() {
             let told: Option<Vec<(std::time::Instant, std::time::Instant)>> = runs
                 .iter()
                 .map(|run| {
@@ -275,20 +283,22 @@ impl Frames {
                     r.1.map(|end| (r.0, end))
                 })
                 .collect();
-            let Some(mut told) = told else { break };
-            told.sort_by_key(|(_, end)| *end);
-            let mut busy = std::time::Duration::ZERO;
+            let Some(told) = told else { break };
+            // The device runs its queue in order: each run kept it busy
+            // from its submission, or the run before's end if later.
+            let mut busy = Vec::with_capacity(told.len());
             for (submitted, end) in told {
                 let from = last_end.map_or(submitted, |before| submitted.max(before));
-                busy += end.saturating_duration_since(from);
-                *last_end = Some(end);
+                busy.push(end.saturating_duration_since(from));
+                *last_end = Some(end.max(last_end.unwrap_or(end)));
             }
-            self.last
-                .store(busy.as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+            *lock(&self.last) = Some(orla_rules::ClockedFrame {
+                frame: *number,
+                runs: busy,
+            });
             ended.pop_front();
         }
-        let nanos = self.last.load(std::sync::atomic::Ordering::Relaxed);
-        (nanos != u64::MAX).then(|| std::time::Duration::from_nanos(nanos))
+        lock(&self.last).clone()
     }
 }
 

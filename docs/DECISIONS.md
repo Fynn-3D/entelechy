@@ -1147,15 +1147,20 @@ a submission ([wait](../crates/backends/gpu/src/wait.rs),
 
 The Player's frame-data line shows the frame's interval, the processor's
 work on it (`cpu`, its waits for the device left out), and how long the
-device was busy with it (`gpu`). The device's time is taken without
-waiting for it: while the line shows, each run's submission is noted and
-the device tells when it has done the run (`Backend::set_clocked`,
-`end_frame`, `frame_device_time`); a run kept the device busy from its
-submission, or the end of the run before if later, to its own end, and a
-frame's runs are summed. A waiter on its own thread hears the device as
-it finishes, so an end is told when it happens. Nothing about how frames
-run changes while they are clocked, and nothing is clocked while the line
-is hidden.
+device was busy with it (`gpu`), and under it the nodes that kept the
+device busiest. The device's time is taken without waiting for it: while
+the line shows, every run the device is given, work or copy, is noted as
+it is submitted and the device tells when it has done the run
+(`Backend::set_clocked`, `clock_mark`, `end_frame`, `clocked_frame`); a
+run kept the device busy from its submission, or the end of the run
+before if later, to its own end. A node owns the runs given between the
+marks taken before and after it runs (`Report::clocked`); a frame, told
+some frames later by its number, gives each node its runs' sum, and the
+runs no node owns are counted between nodes. A waiter on its own thread
+hears the device as it finishes, so an end is told when it happens.
+Nothing about how frames run changes while they are clocked, and nothing
+is clocked while the line is hidden; over the protocol `evaluate` clocks
+with `clock` and answers `device`.
 
 **Why.** A reading that waits for the device changes what it reads: the
 line once settled the device every frame to time it, which stopped the
@@ -1167,6 +1172,7 @@ frame follows whichever of the two is the longer.
 
 **Where.** `Frames` ([timing](../crates/backends/gpu/src/timing.rs)),
 `Backend::set_clocked` ([rules](../crates/core/rules/src/backend.rs)),
+`NodeClock` ([clocked](../crates/interface/session/src/clocked.rs)),
 `Stats` ([hud](../crates/interface/session/src/play/hud.rs)) and
 `Play::frame` ([play](../crates/interface/session/src/play/mod.rs)). Held
-by [the clocked frame test](../crates/interface/session/tests/gpu.rs).
+by the clocked frame tests ([gpu](../crates/interface/session/tests/gpu.rs)).

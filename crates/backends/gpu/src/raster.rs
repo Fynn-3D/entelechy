@@ -519,7 +519,7 @@ pub(crate) fn rasterize(
     // Under a measured run a native operation waits for the device like any
     // node, and reports the device's clock where there is one.
     let timing = gpu.resolve_timing(&mut encoder, timing_set.as_ref(), 4);
-    let submission = gpu.queue.submit(Some(encoder.finish()));
+    let submission = gpu.submit(encoder.finish());
     gpu.settle_measured(submission, timing);
     if let Some(error) = gpu.wait.block_on(guard.pop()) {
         return Err(ExecutionError::Device(format!(

@@ -237,7 +237,7 @@ impl GpuBackend {
                 label: Some("made from"),
             });
         encoder.copy_buffer_to_buffer(&from, 0, &to, 0, size);
-        self.queue.submit(Some(encoder.finish()));
+        self.submit(encoder.finish());
         Some(to)
     }
 
