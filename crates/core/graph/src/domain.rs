@@ -14,7 +14,7 @@
 
 use std::fmt;
 
-use orla_abi::{Domain, Value};
+use orla_abi::{Domain, Shape, Value};
 
 /// The most elements a Field read by `value(port)` may hold.
 pub const VALUE_MAX_ELEMENTS: usize = 1024;
@@ -33,6 +33,25 @@ impl DomainSpec {
     pub fn literal(&self) -> Option<Domain> {
         match self {
             Self::Literal(domain) => Some(*domain),
+            Self::Expr(_) => None,
+        }
+    }
+
+    /// The shape the extent comes out in, where it is written plainly: a
+    /// literal, a `vec2` or `vec3`, `window()`, or one number; `None`
+    /// where it depends on what a port is bound to.
+    pub fn plain_shape(&self) -> Option<Shape> {
+        match self {
+            Self::Literal(domain) => Some(domain.shape()),
+            Self::Expr(DomainExpr::Vector(parts)) => match parts.len() {
+                2 => Some(Shape::Grid),
+                3 => Some(Shape::Volume),
+                _ => None,
+            },
+            Self::Expr(DomainExpr::Context(name)) if name == "window" => Some(Shape::Grid),
+            Self::Expr(DomainExpr::Int(_) | DomainExpr::Count(_) | DomainExpr::Value(..)) => {
+                Some(Shape::Rows)
+            }
             Self::Expr(_) => None,
         }
     }

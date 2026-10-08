@@ -79,8 +79,9 @@ fn made_from_itself(graph: &Graph, node: &Node, port: &str) -> bool {
 /// What of a node's binding its Kernel's manifest alone decides, before
 /// anything runs: every port it names is declared, every input is bound,
 /// every parameter it sets is one the graph has or a value of the
-/// parameter's type, a reduction takes no domain, and each `value(port)`
-/// its domain reads names an input of numbers. [`Evaluator`] holds every
+/// parameter's type, a reduction takes no domain, a domain whose shape
+/// it writes plainly is its output's, and each `value(port)` its domain
+/// reads names an input of numbers. [`Evaluator`] holds every
 /// node to it as it binds; a check holds a scene to it unrun.
 pub fn binding_fault(
     graph: &Graph,
@@ -102,6 +103,21 @@ pub fn binding_fault(
     }
     if manifest.mode == orla_ir::Mode::Reduce && node.domain.is_some() {
         return Err(EvaluateError::ReduceDomain(node.id.clone()));
+    }
+    // A scatter's domain is its first input's shape, not its output's.
+    if let (Some(shape), Some(output)) = (
+        node.domain.as_ref().and_then(DomainSpec::plain_shape),
+        manifest.outputs.first(),
+    ) && !matches!(manifest.mode, orla_ir::Mode::Scatter { .. })
+        && output.ty.shape != shape
+    {
+        return Err(EvaluateError::Domain {
+            node: node.id.clone(),
+            message: format!(
+                "output is a {} but the domain is a {shape}",
+                output.ty.shape
+            ),
+        });
     }
     if let Some(DomainSpec::Expr(expr)) = &node.domain {
         for (port, _) in expr.values_read() {

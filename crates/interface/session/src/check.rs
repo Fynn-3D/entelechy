@@ -291,12 +291,21 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         .chain(lowered.inline.iter().map(|inline| inline.id.clone()))
         .collect();
     let unpublished = crate::sources::unpublished(store, path, &lowered.graph, &lowered.uses, &own);
-    // Each node held to its Kernel's ports, as an evaluation binds it.
+    // Each node held to its Kernel's ports, as an evaluation binds it: a
+    // Kernel the scene publishes, or one of the backend's natives.
+    let natives: Vec<Compiled> = orla_kernel::NativeOp::ALL
+        .iter()
+        .map(|op| (op.manifest(), op.structs()))
+        .collect();
     for node in &lowered.graph.nodes {
         if unpublished.iter().any(|(id, _, _)| id == &node.id) {
             continue;
         }
-        let Some((manifest, structs)) = manifests.iter().find(|(m, _)| m.id == node.kernel) else {
+        let Some((manifest, structs)) = manifests
+            .iter()
+            .chain(&natives)
+            .find(|(m, _)| m.id == node.kernel)
+        else {
             continue;
         };
         if let Err(error) = orla_graph::binding_fault(&lowered.graph, node, manifest, structs) {

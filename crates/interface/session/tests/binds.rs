@@ -8,6 +8,11 @@ use orla_session::Session;
 const LIB: &str = "kernel t.fill@1 { requires { field.write; } output result: Rows<Float>; compute { return 1.0; } }
 kernel t.sized@1 { requires { field.read; field.write; } input fit: Rows<Float>; output result: Rows<Float>; compute { return 2.0; } }
 kernel t.scaled@1 { requires { field.write; } param k: Float = 1.0; output result: Rows<Float>; compute { return k; } }
+kernel t.plane@1 { requires { field.write; } output result: Grid<Float>; compute { return 1.0; } }
+struct Corner { clip: Vec4; normal: Vec3; uv: Vec2; }
+struct Tri { a: Int; b: Int; c: Int; }
+kernel t.corners@1 { requires { field.write; } output result: Rows<Corner>; compute { return Corner { clip: vec4(0.0, 0.0, 0.5, 1.0), normal: vec3(0.0, 0.0, 1.0), uv: vec2(0.0, 0.0) }; } }
+kernel t.tris@1 { requires { field.write; } output result: Rows<Tri>; compute { return Tri { a: 0, b: 1, c: 2 }; } }
 ";
 
 /// What a check of `scene` says is a problem, and what evaluating it says.
@@ -61,6 +66,16 @@ fn a_binding_its_kernel_refuses_is_said_by_the_check_as_the_evaluation_says_it()
             "param",
             "node a: t.scaled@1 { k = vec2(1.0, 2.0); domain = 3; }\noutput result <- a.result;\n",
             "node `a` sets `k` to",
+        ),
+        (
+            "native",
+            "node c: t.corners@1 { domain = 3; }\nnode t: t.tris@1 { domain = 1; }\nnode r: native.rasterize@1 { vertices <- c.result; triangles <- t.result; domain = vec2(value(fit, 0), 4); }\noutput result <- r.surface;\n",
+            "`value(fit)`: `fit` is not an input of this Kernel",
+        ),
+        (
+            "shape",
+            "node a: t.plane@1 { domain = 3; }\noutput result <- a.result;\n",
+            "output is a Grid but the domain is a Rows",
         ),
     ] {
         let (problems, evaluated) = said(name, scene);
