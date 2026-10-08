@@ -1,6 +1,10 @@
 //! Cached, dirty-tracked evaluation of a graph, with state committed
 //! between evaluations and pointwise chains fused.
 //!
+//! A frame runs what something reads ([`Graph::read_through`]): the
+//! outputs, the state, the pinned nodes and what they read; a trial runs
+//! every node.
+//!
 //! A node's outputs are reused while its Kernel generation, parameters,
 //! domain, context and upstream results are unchanged. A node that runs
 //! again and gives outputs equal word for word to its last keeps its
@@ -37,7 +41,7 @@ mod plan;
 mod recall;
 mod state;
 
-pub use bind::{binding_fault, borrowed_domain};
+pub use bind::{Bound, binding_fault, borrowed_domain, type_fault};
 pub use error::EvaluateError;
 use ledger::Room;
 use plan::{graph_param, suggest};
@@ -45,8 +49,11 @@ use plan::{graph_param, suggest};
 /// Which nodes an evaluation runs.
 #[derive(Clone, Copy)]
 enum Demand<'a> {
-    /// Every node.
+    /// Every node: a trial, proving every node of a scene before it lands.
     Every,
+    /// A frame: what something reads ([`Graph::read_through`]), with the
+    /// nodes pinned to be read.
+    Frame,
     /// These, what they read, state producers and outputs never produced.
     For(&'a BTreeSet<NodeId>),
     /// Only what these read, for a trial reporting no output.
@@ -532,11 +539,12 @@ impl Evaluator {
         if !self.overlap {
             self.confirm(runtime)?;
         }
-        self.evaluate_with(graph, runtime, externals, context, params, Demand::Every)
+        self.evaluate_with(graph, runtime, externals, context, params, Demand::Frame)
             .and_then(reported)
     }
 
-    /// Evaluates as [`Evaluator::evaluate`] does and commits nothing: `<~`
+    /// Evaluates as [`Evaluator::evaluate`] does, every node of the graph,
+    /// and commits nothing: `<~`
     /// readers keep the state last committed, and the results stay cached
     /// for reading; runs off the frame are not started.
     pub fn evaluate_trial(
@@ -637,6 +645,7 @@ impl Evaluator {
         let at = graph.index();
         let demand = match demand {
             Demand::Every => return None,
+            Demand::Frame => return Some(graph.read_through(self.pinned.iter().cloned())),
             Demand::For(demand) => demand,
             Demand::Read(readers) => {
                 let mut needed = BTreeSet::new();
@@ -969,7 +978,7 @@ impl Evaluator {
             let committed = if self.trial {
                 self.wait_for_checks(checks, runtime)?;
                 Vec::new()
-            } else if self.overlap && matches!(demand, Demand::Every) {
+            } else if self.overlap && matches!(demand, Demand::Every | Demand::Frame) {
                 let committed = self.commit_in_flight(graph, runtime, checks, executed.clone())?;
                 self.remember_frame(executed.iter().chain(&reused), runtime);
                 committed

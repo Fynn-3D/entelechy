@@ -85,6 +85,16 @@ pub(crate) fn why_no_value(
         }
         return format!("`{node}` is not a node of this scene");
     }
+    // A frame runs what something reads; a node nothing reads has no value
+    // until it is pinned.
+    if !graph
+        .read_through(evaluator.pins().iter().cloned())
+        .contains(node)
+    {
+        return format!(
+            "nothing reads node `{node}` (no output, state or pin reaches it), so a frame does not run it; pin it and evaluate again"
+        );
+    }
     match evaluator.fused_into(node) {
         Some(reader) => format!(
             "node `{node}` runs fused into `{reader}` and keeps no `{port}` of its own; pin it and evaluate again"

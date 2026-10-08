@@ -297,6 +297,53 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         .iter()
         .map(|op| (op.manifest(), op.structs()))
         .collect();
+    // What a source is, as far as a check can know it: a node's output by
+    // its Kernel's port, an input read from a file by the shape it is
+    // declared.
+    let bound = |source: &orla_graph::Source| -> Option<orla_graph::Bound> {
+        match source {
+            orla_graph::Source::Node { node, port } => {
+                let producer = lowered.graph.node(node)?;
+                let (manifest, _) = manifests
+                    .iter()
+                    .chain(&natives)
+                    .find(|(m, _)| m.id == producer.kernel)?;
+                let output = manifest.outputs.iter().find(|o| o.name == *port)?;
+                Some((output.ty.shape, Some(output.ty.schema.clone())))
+            }
+            orla_graph::Source::External(name) => {
+                let asset = lowered.files.assets.iter().find(|a| a.name == *name)?;
+                let ty = asset.ty.trim();
+                let shape = if asset.bytes || ty.starts_with("Rows<") {
+                    orla_ir::Shape::Rows
+                } else if ty.starts_with("Grid<") || ty == "Image" {
+                    orla_ir::Shape::Grid
+                } else if ty.starts_with("Volume<") {
+                    orla_ir::Shape::Volume
+                } else {
+                    return None;
+                };
+                // A layout too where the element is one of the language's
+                // own, kept as its words: a struct's is its document's.
+                let element = if asset.bytes {
+                    "Int"
+                } else if ty == "Image" {
+                    "Vec4"
+                } else {
+                    ty.split_once('<')
+                        .and_then(|(_, rest)| rest.strip_suffix('>'))
+                        .unwrap_or("")
+                        .trim()
+                };
+                let schema = element
+                    .parse::<orla_ir::Type>()
+                    .ok()
+                    .filter(|_| !element.contains(" as "))
+                    .and_then(|element| orla_ir::schema_of(element, &[]));
+                Some((shape, schema))
+            }
+        }
+    };
     for node in &lowered.graph.nodes {
         if unpublished.iter().any(|(id, _, _)| id == &node.id) {
             continue;
@@ -311,6 +358,11 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         if let Err(error) = orla_graph::binding_fault(&lowered.graph, node, manifest, structs) {
             let at = node.at.clone().unwrap_or_else(|| file.to_owned());
             say!(problem, "{at}: {error}");
+        } else if let Err(error) =
+            orla_graph::type_fault(&lowered.graph, node, manifest, structs, &bound)
+        {
+            let at = node.at.clone().unwrap_or_else(|| file.to_owned());
+            say!(problem, "{at}: {error}");
         }
         if let Some((port, output, first)) =
             orla_graph::borrowed_domain(&lowered.graph, node, manifest)
@@ -322,6 +374,42 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                 node.id
             );
         }
+    }
+    // A frame runs what something reads: a node nothing reads (no output,
+    // state, or input's fallback while its file is absent) never runs.
+    let fallbacks = lowered
+        .graph
+        .fallbacks
+        .iter()
+        .filter_map(|(_, source)| match source {
+            orla_graph::Source::Node { node, .. } => Some(node.clone()),
+            orla_graph::Source::External(_) => None,
+        });
+    let read = lowered.graph.read_through(fallbacks);
+    // Said once a chain, at its top: a node only an unread one reads goes
+    // with it.
+    let read_at_all: std::collections::BTreeSet<&orla_graph::NodeId> = lowered
+        .graph
+        .nodes
+        .iter()
+        .flat_map(|node| node.inputs.values())
+        .filter_map(|binding| match binding {
+            orla_graph::Binding::Now(orla_graph::Source::Node { node, .. }) => Some(node),
+            _ => None,
+        })
+        .collect();
+    for node in lowered
+        .graph
+        .nodes
+        .iter()
+        .filter(|node| !read.contains(&node.id) && !read_at_all.contains(&node.id))
+    {
+        let at = node.at.clone().unwrap_or_else(|| file.to_owned());
+        say!(
+            note,
+            "{at}: nothing reads node `{}` (no output or state reaches it), so a frame does not run it, nor what only it reads; a replay or a reader that pins it runs it",
+            node.id
+        );
     }
     for (node, kernel, why) in unpublished {
         let at = lowered

@@ -917,8 +917,19 @@ fn a_trace_shows_one_element_of_a_node_and_reports_carry_timings() {
     assert!(
         timings
             .iter()
-            .any(|t| t["node"] == "machine" && t["millis"].is_number()),
+            .any(|t| t["node"] == "view" && t["millis"].is_number()),
         "{timings:?}"
+    );
+    // Nothing reads `machine`, so the frame does not run it; a trace runs
+    // it all the same.
+    assert!(
+        !responses[0]["ok"]["executed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n == "machine"),
+        "{}",
+        responses[0]
     );
     let trace = &responses[1]["ok"];
     assert_eq!(trace["kernel"], "t.step@1");

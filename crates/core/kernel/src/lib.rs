@@ -26,7 +26,8 @@ pub use orla_abi::{
 pub use orla_abi::{DEFAULT_WORK, MAX_WORK, encoding};
 pub use orla_ir::{KernelId, Manifest, Validated};
 pub use orla_rules::{
-    Backend, Check, ClockedFrame, Downloading, ExecutionError, Extent, NativeOp, Prepared, extent,
+    Backend, Check, ClockedFrame, Downloading, ExecutionError, Extent, NativeOp, Prepared,
+    check_domain_shape, check_input_types, extent, input_type_fault,
 };
 
 /// The operations a run may take, by its elements times its Kernel's

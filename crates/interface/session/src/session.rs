@@ -1138,12 +1138,19 @@ impl Session {
     }
 
     /// The nodes `name` pins in the running graph: itself, or a placed
-    /// graph's output nodes.
+    /// graph's output nodes; a name placed `times = N` its last time's.
     fn pinned_by(&self, name: &orla_graph::NodeId) -> Vec<orla_graph::NodeId> {
-        let placed = self
-            .scene
-            .graph()
-            .and_then(|graph| graph.placed.iter().find(|(id, _)| *id == name.0));
+        let graph = self.scene.graph();
+        let last = graph
+            .and_then(|graph| {
+                graph
+                    .repeated
+                    .iter()
+                    .find(|(repeated, _)| *repeated == name.0)
+            })
+            .map_or_else(|| name.clone(), |(_, last)| last.clone());
+        let name = &last;
+        let placed = graph.and_then(|graph| graph.placed.iter().find(|(id, _)| *id == name.0));
         match placed {
             Some((_, outputs)) => outputs
                 .iter()

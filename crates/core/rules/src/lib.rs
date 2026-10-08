@@ -13,7 +13,7 @@ pub use backend::{Backend, Check, ClockedFrame, Downloading, NativeOp, Prepared}
 
 use std::fmt;
 
-use orla_abi::{AbiError, Domain, Invocation, Scalar, Scope, Shape};
+use orla_abi::{AbiError, Domain, Invocation, Scalar, Schema, Scope, Shape};
 use orla_ir::{Combine, Mode, Validated};
 
 /// Integer arithmetic without a result.
@@ -728,24 +728,15 @@ pub fn check_invocation(
             actual: invocation.inputs.len(),
         });
     }
-    for (port, handle) in manifest.inputs.iter().zip(&invocation.inputs) {
-        let (shape, schema) = scope.bound(*handle)?;
-        let message = if shape != port.ty.shape {
-            format!("expects {} but is bound to a {shape}", port.ty.shape)
-        } else if schema != port.ty.schema {
-            format!(
-                "expects an element of {} but is bound to a Field of {}",
-                port.ty.schema.describe(),
-                schema.describe()
-            )
-        } else {
-            continue;
-        };
-        return Err(ExecutionError::InputType {
-            name: port.name.clone(),
-            message,
-        });
+    let mut bound = Vec::with_capacity(invocation.inputs.len());
+    for handle in &invocation.inputs {
+        bound.push(scope.bound(*handle)?);
     }
+    let bound: Vec<Option<(Shape, Option<&Schema>)>> = bound
+        .iter()
+        .map(|(shape, schema)| Some((*shape, Some(schema))))
+        .collect();
+    check_input_types(manifest, &bound)?;
     if invocation.params.len() != manifest.params.len() {
         return Err(ExecutionError::ParamCount {
             expected: manifest.params.len(),
@@ -774,24 +765,79 @@ pub fn check_invocation(
         }
         return Ok(());
     }
-    // A scatter's output has the target's shape; its domain has its first
-    // input's shape, the one `element()`, `coord()` and `domain()` read.
+    check_domain_shape(manifest, invocation.domain.shape())
+}
+
+/// What a binding's types alone decide of its inputs: each one bound
+/// (`Some`) is of its port's shape, and of its port's element layout where
+/// that is known (`Some` too). A check holds a scene to it unrun, as
+/// [`check_invocation`] holds every run.
+pub fn check_input_types(
+    manifest: &orla_ir::Manifest,
+    inputs: &[Option<(Shape, Option<&Schema>)>],
+) -> Result<(), ExecutionError> {
+    for (port, bound) in manifest.inputs.iter().zip(inputs) {
+        let Some((shape, schema)) = bound else {
+            continue;
+        };
+        if let Some(message) = input_type_fault(&port.ty, *shape, *schema) {
+            return Err(ExecutionError::InputType {
+                name: port.name.clone(),
+                message,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// How a Field of `shape` (and of `schema`, where it is known) differs
+/// from a port of type `port`, however either is spelled; `None` for one
+/// it takes.
+pub fn input_type_fault(
+    port: &orla_abi::PortType,
+    shape: Shape,
+    schema: Option<&Schema>,
+) -> Option<String> {
+    if shape != port.shape {
+        return Some(format!("expects {} but is bound to a {shape}", port.shape));
+    }
+    match schema {
+        Some(schema) if *schema != port.schema => Some(format!(
+            "expects an element of {} but is bound to a Field of {}",
+            port.schema.describe(),
+            schema.describe()
+        )),
+        _ => None,
+    }
+}
+
+/// What a run's domain must be of its shape: a scatter's its first
+/// input's (the one `element()`, `coord()` and `domain()` read; its output
+/// has the target's), any other its output's. A reduction is held to its
+/// one element apart.
+pub fn check_domain_shape(
+    manifest: &orla_ir::Manifest,
+    domain: Shape,
+) -> Result<(), ExecutionError> {
+    if manifest.mode == Mode::Reduce {
+        return Ok(());
+    }
     if let (Mode::Scatter { .. }, Some(first)) = (manifest.mode, manifest.inputs.first())
-        && first.ty.shape != invocation.domain.shape()
+        && first.ty.shape != domain
     {
         return Err(ExecutionError::ScatterDomain {
             input: first.name.clone(),
             expected: first.ty.shape,
-            actual: invocation.domain.shape(),
+            actual: domain,
         });
     }
     if let Some(output) = manifest.outputs.first()
         && !matches!(manifest.mode, Mode::Scatter { .. })
-        && output.ty.shape != invocation.domain.shape()
+        && output.ty.shape != domain
     {
         return Err(ExecutionError::DomainShape {
             expected: output.ty.shape,
-            actual: invocation.domain.shape(),
+            actual: domain,
         });
     }
     Ok(())

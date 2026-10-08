@@ -2,6 +2,7 @@
 //! Kernel's declared ports.
 
 use super::*;
+use orla_abi::Shape;
 
 /// A node that carries its own output back through an input other than
 /// its first, and has no `domain`: it runs over its first input, so the
@@ -79,9 +80,8 @@ fn made_from_itself(graph: &Graph, node: &Node, port: &str) -> bool {
 /// What of a node's binding its Kernel's manifest alone decides, before
 /// anything runs: every port it names is declared, every input is bound,
 /// every parameter it sets is one the graph has or a value of the
-/// parameter's type, a reduction takes no domain, a domain whose shape
-/// it writes plainly is its output's, and each `value(port)` its domain
-/// reads names an input of numbers. [`Evaluator`] holds every
+/// parameter's type, a reduction takes no domain, and each `value(port)`
+/// its domain reads names an input of numbers. [`Evaluator`] holds every
 /// node to it as it binds; a check holds a scene to it unrun.
 pub fn binding_fault(
     graph: &Graph,
@@ -104,25 +104,79 @@ pub fn binding_fault(
     if manifest.mode == orla_ir::Mode::Reduce && node.domain.is_some() {
         return Err(EvaluateError::ReduceDomain(node.id.clone()));
     }
-    // A scatter's domain is its first input's shape, not its output's.
-    if let (Some(shape), Some(output)) = (
-        node.domain.as_ref().and_then(DomainSpec::plain_shape),
-        manifest.outputs.first(),
-    ) && !matches!(manifest.mode, orla_ir::Mode::Scatter { .. })
-        && output.ty.shape != shape
-    {
-        return Err(EvaluateError::Domain {
-            node: node.id.clone(),
-            message: format!(
-                "output is a {} but the domain is a {shape}",
-                output.ty.shape
-            ),
-        });
-    }
     if let Some(DomainSpec::Expr(expr)) = &node.domain {
         for (port, _) in expr.values_read() {
             value_slot(node, manifest, &port)?;
         }
+    }
+    Ok(())
+}
+
+/// What a source is known to be: its shape, and its element layout where
+/// that is known too.
+pub type Bound = (Shape, Option<orla_abi::Schema>);
+
+/// What of a node's binding the types of what it reads decide, before
+/// anything runs: each input of its port's shape and element layout
+/// (`bound` says what a source is, as far as it is known: its shape, and
+/// its layout where that is known too), and its domain of the shape its
+/// output (a scatter's first input) is, the domain's shape found as
+/// resolving it would find it, or its first input's where it has none.
+/// The rules are the ones every binding and run is held to
+/// ([`orla_kernel::input_type_fault`], [`orla_kernel::check_domain_shape`]);
+/// a check holds a scene to them unrun.
+pub fn type_fault(
+    graph: &Graph,
+    node: &Node,
+    manifest: &orla_kernel::Manifest,
+    structs: &[orla_ir::StructDef],
+    bound: &dyn Fn(&Source) -> Option<Bound>,
+) -> Result<(), EvaluateError> {
+    let fault = |error| EvaluateError::Execution {
+        node: node.id.clone(),
+        error,
+    };
+    let types: Vec<Option<Bound>> = manifest
+        .inputs
+        .iter()
+        .map(|port| match node.inputs.get(&port.name)? {
+            Binding::Now(source) | Binding::Previous { source, .. } => bound(source),
+        })
+        .collect();
+    // Said as binding says it.
+    for (port, bound) in manifest.inputs.iter().zip(&types) {
+        if let Some((shape, schema)) = bound
+            && let Some(message) = orla_kernel::input_type_fault(&port.ty, *shape, schema.as_ref())
+        {
+            return Err(EvaluateError::PortKind {
+                node: node.id.clone(),
+                port: port.name.clone(),
+                message,
+            });
+        }
+    }
+    if manifest.mode == orla_ir::Mode::Reduce {
+        return Ok(());
+    }
+    let port_shape = |name: &str| {
+        manifest
+            .inputs
+            .iter()
+            .position(|input| input.name == name)
+            .and_then(|at| types[at].as_ref().map(|(shape, _)| *shape))
+    };
+    let param = |name: &str| match manifest.params.iter().find(|p| p.name == name) {
+        Some(p) => param_value(graph, node, p, &BTreeMap::new(), structs).ok(),
+        None => graph_param(graph, name, &BTreeMap::new()),
+    };
+    let shape = match &node.domain {
+        Some(spec) => spec.shape(&port_shape, &param),
+        None => types
+            .first()
+            .and_then(|t| t.as_ref().map(|(shape, _)| *shape)),
+    };
+    if let Some(shape) = shape {
+        orla_kernel::check_domain_shape(manifest, shape).map_err(fault)?;
     }
     Ok(())
 }
@@ -268,21 +322,7 @@ impl Evaluator {
             // however either is spelled.
             let bound_shape = runtime.host().domain(handle)?.shape();
             let bound_schema = runtime.host().schema(handle)?;
-            let message = if input.ty.shape != bound_shape {
-                Some(format!(
-                    "expects {} but is bound to a {bound_shape}",
-                    input.ty.shape
-                ))
-            } else if input.ty.schema != *bound_schema {
-                Some(format!(
-                    "expects an element of {} ({}) but is bound to a Field of {} ({bound_schema})",
-                    input.ty.schema.describe(),
-                    input.ty.schema,
-                    bound_schema.describe()
-                ))
-            } else {
-                None
-            };
+            let message = orla_kernel::input_type_fault(&input.ty, bound_shape, Some(bound_schema));
             if let Some(message) = message {
                 return Err(EvaluateError::PortKind {
                     node: node.id.clone(),

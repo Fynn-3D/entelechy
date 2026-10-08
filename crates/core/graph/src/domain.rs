@@ -37,22 +37,24 @@ impl DomainSpec {
         }
     }
 
-    /// The shape the extent comes out in, where it is written plainly: a
-    /// literal, a `vec2` or `vec3`, `window()`, or one number; `None`
-    /// where it depends on what a port is bound to.
-    pub fn plain_shape(&self) -> Option<Shape> {
-        match self {
-            Self::Literal(domain) => Some(domain.shape()),
-            Self::Expr(DomainExpr::Vector(parts)) => match parts.len() {
-                2 => Some(Shape::Grid),
-                3 => Some(Shape::Volume),
-                _ => None,
-            },
-            Self::Expr(DomainExpr::Context(name)) if name == "window" => Some(Shape::Grid),
-            Self::Expr(DomainExpr::Int(_) | DomainExpr::Count(_) | DomainExpr::Value(..)) => {
-                Some(Shape::Rows)
-            }
-            Self::Expr(_) => None,
+    /// The shape the extent comes out in, as resolving it would give it:
+    /// from the shapes of the ports it reads (`port`) and the values of
+    /// the parameters it names (`param`); `None` where either is unknown
+    /// or it would not resolve.
+    pub fn shape(
+        &self,
+        port: &dyn Fn(&str) -> Option<Shape>,
+        param: &dyn Fn(&str) -> Option<Value>,
+    ) -> Option<Shape> {
+        let parts = match self {
+            Self::Literal(domain) => return Some(domain.shape()),
+            Self::Expr(expr) => expr.parts(port, param)?,
+        };
+        match parts {
+            1 => Some(Shape::Rows),
+            2 => Some(Shape::Grid),
+            3 => Some(Shape::Volume),
+            _ => None,
         }
     }
 }
@@ -292,6 +294,48 @@ impl DomainExpr {
             Size::Two([w, h]) => Domain::Grid(side(w)?, side(h)?),
             Size::Three([w, h, d]) => Domain::Volume(side(w)?, side(h)?, side(d)?),
         })
+    }
+
+    /// How many numbers the expression sizes with, as [`DomainExpr::size`]
+    /// would come out: one, two or three; `None` where a port's shape or a
+    /// parameter's value is unknown, or it would not resolve.
+    fn parts(
+        &self,
+        port: &dyn Fn(&str) -> Option<Shape>,
+        param: &dyn Fn(&str) -> Option<Value>,
+    ) -> Option<usize> {
+        let combined = |a: usize, b: usize| (a == b || a == 1 || b == 1).then_some(a.max(b));
+        match self {
+            Self::Int(_) | Self::Float(_) | Self::Count(_) | Self::Value(..) => Some(1),
+            Self::Name(name) => Size::of(&param(name)?).map(|size| size.parts().len()),
+            Self::Size(name) => Some(match port(name)? {
+                Shape::Rows => 1,
+                Shape::Grid => 2,
+                Shape::Volume => 3,
+            }),
+            Self::Context(name) => match name.as_str() {
+                "window" => Some(2),
+                "scale" => Some(1),
+                _ => None,
+            },
+            Self::Vector(parts) => {
+                for part in parts {
+                    if part.parts(port, param)? != 1 {
+                        return None;
+                    }
+                }
+                Some(parts.len())
+            }
+            Self::Call(_, args) => {
+                let mut parts = 1;
+                for arg in args {
+                    parts = combined(parts, arg.parts(port, param)?)?;
+                }
+                Some(parts)
+            }
+            Self::Neg(inner) => inner.parts(port, param),
+            Self::Binary(_, a, b) => combined(a.parts(port, param)?, b.parts(port, param)?),
+        }
     }
 
     fn size(&self, inputs: &Inputs<'_>) -> Result<Size, DomainError> {

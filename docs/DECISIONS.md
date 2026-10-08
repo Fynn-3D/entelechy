@@ -1176,3 +1176,56 @@ frame follows whichever of the two is the longer.
 `Stats` ([hud](../crates/interface/session/src/play/hud.rs)) and
 `Play::frame` ([play](../crates/interface/session/src/play/mod.rs)). Held
 by the clocked frame tests ([gpu](../crates/interface/session/tests/gpu.rs)).
+
+## A frame runs what something reads
+
+A frame runs the nodes something reads: every output's (one written to a
+file too), every state's (what a `<~` carries and the source it starts
+from), every node pinned to be read (a replay's `expect` and `show`, the
+Player's preview, the protocol's `pin`, a `--save`), and what each of
+them reads through `<-`, in turn (`Graph::read_through`). A node nothing
+reads does not run: it keeps no value, `read` says so and how to give it
+one, and `orla check` notes it once, at the top of its chain. A trial
+(`compose` proving a scene before it lands) runs every node, so a node
+not yet read is proved all the same.
+
+**Why.** A Kernel is pure: a node nothing reads changes nothing anyone
+sees, so running it is only its cost, every frame; a scene's dead
+branches made it slower without a sign. What a frame costs is now what
+it shows. Proving a scene is another matter: there, a node is run because
+it may be read once it lands.
+
+**Where.** `Graph::read_through`
+([graph](../crates/core/graph/src/lib.rs)), `Demand::Frame` in the
+[evaluator](../crates/core/graph/src/evaluate/mod.rs), the check's note
+([check](../crates/interface/session/src/check.rs)) and `why_no_value`
+([observe](../crates/interface/session/src/observe.rs)). Held by
+[the unread tests](../crates/interface/session/tests/unread.rs).
+
+## A check refuses what the types refuse
+
+`orla check` holds every node, a native operation's too, to the rules a
+binding and a run are held to wherever the types alone decide them: each
+input of its port's shape and element layout, and the domain of the shape
+its output (a scatter's first input) is. A source's type is its
+producer's output port, or the shape an input read from a file is
+declared, with its layout too where the element is one of the language's
+own; a domain's shape is found as resolving it finds it, from the shapes
+of the ports it reads and the parameters it names, or is its first
+input's. What the data decides (a `value(port)` past the end, a count
+that comes out zero) is the evaluation's. A check says a fault in the
+words the evaluation would.
+
+**Why.** A fault the types decide is a fault before anything runs; found
+only by running, it is found late, on one backend, in another's words. A
+rule said twice drifts: the binding's input check and the run's were two,
+and said the same fault two ways, so they are one function each now,
+which both call.
+
+**Where.** `type_fault` ([bind](../crates/core/graph/src/evaluate/bind.rs)),
+`DomainSpec::shape` ([domain](../crates/core/graph/src/domain.rs)),
+`input_type_fault` and `check_domain_shape`
+([rules](../crates/core/rules/src/lib.rs)), the check's sources
+([check](../crates/interface/session/src/check.rs)). Held by
+[the binding tests](../crates/interface/session/tests/binds.rs).
+

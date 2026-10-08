@@ -9,6 +9,7 @@ const LIB: &str = "kernel t.fill@1 { requires { field.write; } output result: Ro
 kernel t.sized@1 { requires { field.read; field.write; } input fit: Rows<Float>; output result: Rows<Float>; compute { return 2.0; } }
 kernel t.scaled@1 { requires { field.write; } param k: Float = 1.0; output result: Rows<Float>; compute { return k; } }
 kernel t.plane@1 { requires { field.write; } output result: Grid<Float>; compute { return 1.0; } }
+kernel t.pair@1 { requires { field.write; } output result: Rows<Vec2>; compute { return vec2(1.0, 2.0); } }
 struct Corner { clip: Vec4; normal: Vec3; uv: Vec2; }
 struct Tri { a: Int; b: Int; c: Int; }
 kernel t.corners@1 { requires { field.write; } output result: Rows<Corner>; compute { return Corner { clip: vec4(0.0, 0.0, 0.5, 1.0), normal: vec3(0.0, 0.0, 1.0), uv: vec2(0.0, 0.0) }; } }
@@ -76,6 +77,21 @@ fn a_binding_its_kernel_refuses_is_said_by_the_check_as_the_evaluation_says_it()
             "shape",
             "node a: t.plane@1 { domain = 3; }\noutput result <- a.result;\n",
             "output is a Grid but the domain is a Rows",
+        ),
+        (
+            "input shape",
+            "node g: t.plane@1 { domain = vec2(2, 2); }\nnode a: t.sized@1 { fit <- g.result; domain = 3; }\noutput result <- a.result;\n",
+            "node `a` port `fit`: expects Rows but is bound to a Grid",
+        ),
+        (
+            "input layout",
+            "node p: t.pair@1 { domain = 3; }\nnode a: t.sized@1 { fit <- p.result; domain = 3; }\noutput result <- a.result;\n",
+            "node `a` port `fit`: expects an element of one float but is bound to a Field of two floats",
+        ),
+        (
+            "domain read",
+            "node f: t.fill@1 { domain = 3; }\nnode a: t.sized@1 { fit <- f.result; domain = vec2(count(fit), 2); }\noutput result <- a.result;\n",
+            "output is a Rows but the domain is a Grid",
         ),
     ] {
         let (problems, evaluated) = said(name, scene);
@@ -177,4 +193,44 @@ kernel t.pass@1 { requires { field.read; field.write; } input from: Rows<Float>;
         let said = notes(name, &scene);
         assert!(said.is_empty(), "{name}: {said:?}");
     }
+}
+
+#[test]
+fn an_input_a_file_gives_is_held_to_the_shape_and_layout_it_is_declared() {
+    // The file is absent, so the evaluation stops before; the check holds
+    // the declaration to the port all the same, the layout where the
+    // element is the language's own.
+    for (name, declared, fault) in [
+        (
+            "file shape",
+            "Grid<Float>",
+            "node `a` port `fit`: expects Rows but is bound to a Grid",
+        ),
+        (
+            "file layout",
+            "Rows<Vec2>",
+            "node `a` port `fit`: expects an element of one float but is bound to a Field of two floats",
+        ),
+    ] {
+        let (problems, _) = said(
+            name,
+            &format!(
+                "input table: {declared} = \"absent.field\";\nnode a: t.sized@1 {{ fit <- table; domain = 3; }}\noutput result <- a.result;\n"
+            ),
+        );
+        assert!(
+            problems.iter().any(|line| line.contains(fault)),
+            "{name}: {problems:?}"
+        );
+    }
+    // A layout of a document's own struct is that document's: only its
+    // shape is held.
+    let (problems, _) = said(
+        "file struct",
+        "input table: Rows<Corner> = \"absent.field\";\nnode a: t.sized@1 { fit <- table; domain = 3; }\noutput result <- a.result;\n",
+    );
+    assert!(
+        !problems.iter().any(|line| line.contains("expects")),
+        "{problems:?}"
+    );
 }

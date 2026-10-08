@@ -13,11 +13,12 @@ mod evaluate;
 
 pub use domain::{Compare, DomainError, DomainExpr, DomainOp, DomainSpec, Requirement};
 pub use evaluate::{
-    EvaluateError, Evaluator, Placed, PlanEntry, Refused, Report, binding_fault, borrowed_domain,
+    Bound, EvaluateError, Evaluator, Placed, PlanEntry, Refused, Report, binding_fault,
+    borrowed_domain, type_fault,
 };
 pub use orla_abi::{Context, Domain, InputState, Value};
 pub use orla_ir::KernelId;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 /// Name of a node within a graph.
@@ -315,6 +316,55 @@ impl Graph {
             .enumerate()
             .map(|(at, node)| (&node.id, at))
             .collect()
+    }
+
+    /// The nodes a frame runs: what something reads. Every output's node
+    /// (a file's too), every state's (what a `<~` carries and the source it
+    /// starts from), the nodes in `also` (those pinned to be read), and
+    /// every node they read through `<-`, in turn. A node none of them
+    /// reads computes nothing anyone sees, so it does not run.
+    pub fn read_through(&self, also: impl IntoIterator<Item = NodeId>) -> BTreeSet<NodeId> {
+        let mut seeds: BTreeSet<NodeId> = also.into_iter().collect();
+        for (_, source) in &self.outputs {
+            if let Source::Node { node, .. } = source {
+                seeds.insert(node.clone());
+            }
+        }
+        for node in &self.nodes {
+            for binding in node.inputs.values() {
+                if let Binding::Previous {
+                    source, initial, ..
+                } = binding
+                {
+                    for source in [source, initial] {
+                        if let Source::Node { node, .. } = source {
+                            seeds.insert(node.clone());
+                        }
+                    }
+                }
+            }
+        }
+        self.read_by(seeds)
+    }
+
+    /// `seeds` and every node they read through `<-`, in turn.
+    pub fn read_by(&self, seeds: BTreeSet<NodeId>) -> BTreeSet<NodeId> {
+        let at = self.index();
+        let mut read = seeds;
+        let mut frontier: Vec<NodeId> = read.iter().cloned().collect();
+        while let Some(id) = frontier.pop() {
+            let Some(node) = at.get(&id).map(|at| &self.nodes[*at]) else {
+                continue;
+            };
+            for binding in node.inputs.values() {
+                if let Binding::Now(Source::Node { node: producer, .. }) = binding
+                    && read.insert(producer.clone())
+                {
+                    frontier.push(producer.clone());
+                }
+            }
+        }
+        read
     }
 
     /// What an external reads while the caller supplies nothing for it.
