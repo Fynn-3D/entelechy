@@ -19,7 +19,7 @@ pub(crate) fn evaluate(session: &mut Session, request: &Request) -> Result<Json,
         session.set_clocked(clock);
     }
     // Measured, each node waits for the device, this evaluation alone.
-    let measured = request.get("measure").and_then(Json::as_bool) == Some(true);
+    let measured = measure_asked(request.json());
     session.set_measured(measured);
     let report = match request.get("nodes").and_then(Json::as_array) {
         Some(nodes) => {
@@ -43,10 +43,22 @@ pub(crate) fn evaluate(session: &mut Session, request: &Request) -> Result<Json,
         }
         json
     })?;
-    let mut answer = report_json(session, &report);
+    Ok(evaluation_json(session, &report, measured))
+}
+
+/// Whether an `evaluate` request asks each node's time by the device's
+/// clock (`measure: true`).
+pub fn measure_asked(request: &Json) -> bool {
+    request.get("measure").and_then(Json::as_bool) == Some(true)
+}
+
+/// What an `evaluate` answers: its report, whether it was measured, and
+/// the latest clocked frame the device has done.
+pub fn evaluation_json(session: &Session, report: &orla_graph::Report, measured: bool) -> Json {
+    let mut answer = report_json(session, report);
     answer["measured"] = json!(measured);
     answer["device"] = device_json(session.device_times());
-    Ok(answer)
+    answer
 }
 
 /// The latest clocked frame the device has done, node by node, or null.

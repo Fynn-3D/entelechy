@@ -192,17 +192,26 @@ impl orla_protocol::Served for Player {
         &mut self.session
     }
 
-    /// `evaluate` runs one window frame under the person's input.
+    /// `evaluate` runs one window frame under the person's input;
+    /// measured, each of its nodes waits for the device.
     fn own(&mut self, incoming: &orla_protocol::Incoming) -> Option<(String, bool)> {
         let (id, request) = orla_protocol::parse_request(&incoming.line).ok()?;
         if request.get("op").and_then(Json::as_str) != Some("evaluate") {
             return None;
         }
+        let measured = orla_protocol::measure_asked(&request);
+        self.session.set_measured(measured);
+        let frame = self.frame();
+        if measured {
+            self.session.set_measured(false);
+        }
         // The frame answered is confirmed: what it committed holds.
-        let result = match self.frame() {
-            Some(report) if self.confirm() => {
-                Ok(orla_protocol::report_json(&self.session, &report))
-            }
+        let result = match frame {
+            Some(report) if self.confirm() => Ok(orla_protocol::evaluation_json(
+                &self.session,
+                &report,
+                measured,
+            )),
             _ => Err(serde_json::json!({ "message": self.play.status() })),
         };
         Some((orla_protocol::envelope(&id, result), false))

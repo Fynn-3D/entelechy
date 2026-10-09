@@ -36,6 +36,7 @@ use crate::request::Request;
 
 pub use answers::{Answers, Served};
 pub use envelope::{envelope, parse_request};
+pub use run::{evaluation_json, measure_asked};
 pub use transport::{Incoming, Reply, listen, serve, stdin_into, stdin_lines};
 pub use wire::{
     context_of, report_json, trace_json, type_name, value_from_json, value_json, words_json,

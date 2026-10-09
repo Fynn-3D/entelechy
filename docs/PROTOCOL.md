@@ -100,7 +100,8 @@ through:
 - **stdin/stdout.** `orla serve`, or the Player with `orla-player
   --serve <scene.osn>`: requests arrive while the window runs, `evaluate`
   answers with the next window frame under the person's pointer and
-  keys, and `read` returns the frame the window shows.
+  keys (its own input fields are not read; `measure` is, and times that
+  frame), and `read` returns the frame the window shows.
 - **Socket.** `--listen <host:port>` (`127.0.0.1:7788`; port 0 for any
   free port, named on stderr as `listening on ...`) accepts connections
   carrying the same lines, one response per request in order. Every
