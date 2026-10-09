@@ -394,8 +394,12 @@ scene on its Kernels, and a refused Kernel refuses the scene
 main backend begins or changes; `large`, `{path, id, why}`, with each
 version published of a Kernel that carries more through its branches
 than a device's compiler takes in comfort (what `orla check` says of
-it); and `idle`, `{path, ids}`, the Kernels a document of the scene
-publishes and no node uses, once and again when they change. A Kernel
+it); `idle`, `{path, ids}`, the Kernels a document of the scene
+publishes and no node uses, once and again when they change; and
+`unrun`, `{node, why}`, a node with no `domain` whose Kernel compares
+`element()` with its first input's count, so the elements past that
+count are never run (what `orla check` says of it), once and again when
+it changes. A Kernel
 nothing runs yet prepares inline.
 
 `compose` and `publish` answer with their outcome: the scene landed or

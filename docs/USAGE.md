@@ -71,9 +71,14 @@ carries and the functions that carry most, each with the calls that
 reach it. A scene that publishes Kernels no node uses is told which: each
 is compiled and prepared with it all the same. A node with no `domain`
 that carries its own output back through an input other than its first
-is noted: it runs over that first input, so its state takes that size. A running session (the
-Player, `serve`, a replay) says both as they come: a large Kernel with
-each version it publishes, the unused ones when the scene loads.
+is noted: it runs over that first input, so its state takes that size. A
+node with no `domain` whose Kernel compares `element()` with its first
+input's count (a join of two rows) is noted too: over that first input
+the elements past its count, which the test is for, are never run. A
+running session (the Player, `serve`, a replay) says these as they
+come: a large Kernel with each version it publishes, the unused ones and
+the nodes that leave elements unrun when the scene loads. A node that
+binds a Kernel its document could not publish says why it was refused.
 
 ## Run a scene
 
@@ -101,7 +106,9 @@ Evaluates a `.osn` scene once. Flags:
   made.
 - `--out <file>` writes the scene's picture, in the format its extension
   names. `run` writes the files named and no others.
-- `--profile` prints each executed node's time, the backend that ran it
+- `--profile` (also on `render` and `replay`, over the frames after the
+  first, each node's time a frame, the busiest first; a replay so timed
+  evaluates its scene's outputs every frame) prints each executed node's time, the backend that ran it
   (and why, when a GPU session sent it to the JIT), and the bytes it
   carried between Host and device. It waits for the device after each
   node, so a GPU line is the work, by the device's timestamps, or the

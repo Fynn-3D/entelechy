@@ -16,6 +16,9 @@ pub enum EvaluateError {
         kernel: KernelId,
         /// The published id it was probably meant to be.
         near: Option<String>,
+        /// Why its document was refused, when its caller knows: what a
+        /// session says of the Kernel it could not publish.
+        refused: Option<String>,
     },
     /// The caller did not supply a declared external image.
     MissingExternal {
@@ -159,7 +162,22 @@ impl fmt::Display for EvaluateError {
         match self {
             Self::Graph(error) => write!(f, "{error}"),
             Self::Requirement(message) => write!(f, "the graph's requirement {message}"),
-            Self::UnknownKernel { node, kernel, near } => write!(
+            Self::UnknownKernel {
+                node,
+                kernel,
+                near,
+                refused: Some(why),
+            } => write!(
+                f,
+                "node `{node}` binds `{kernel}`, which is not published: its document was refused: {why}{}",
+                suggest(near)
+            ),
+            Self::UnknownKernel {
+                node,
+                kernel,
+                near,
+                refused: None,
+            } => write!(
                 f,
                 "node `{node}` binds `{kernel}`, which is not published{}",
                 suggest(near)

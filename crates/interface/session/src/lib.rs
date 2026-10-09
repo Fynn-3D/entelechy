@@ -481,6 +481,16 @@ pub enum Event {
         /// What makes it so.
         why: String,
     },
+    /// A node with no `domain` whose Kernel compares its element with its
+    /// first input's count, so the elements past that count, which the
+    /// test is for, are never run ([`check::defaulted_domain`]). Said once
+    /// when the scene loads, and again when it changes.
+    Unrun {
+        /// The node.
+        node: String,
+        /// What is said of it.
+        why: String,
+    },
     /// Kernels a document of the scene publishes and no node uses, each
     /// compiled and prepared all the same. Said when the scene loads, and
     /// again when they change.
@@ -529,6 +539,7 @@ impl fmt::Display for Event {
                 write!(f, "node `{node}` runs on {backend} ({why})")
             }
             Self::Large { path, why, .. } => write!(f, "large: {}: {why}", path.display()),
+            Self::Unrun { why, .. } => f.write_str(why),
             Self::Idle { path, ids } => f.write_str(&check::idle_said(path, ids)),
         }
     }

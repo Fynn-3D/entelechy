@@ -33,6 +33,9 @@ pub struct Session {
     /// The Kernels last said to be published and used by no node, by
     /// document ([`Event::Idle`]).
     idle: BTreeMap<PathBuf, Vec<KernelId>>,
+    /// What was last said of nodes whose default domain leaves elements
+    /// unrun ([`Event::Unrun`]), by node.
+    unrun: BTreeMap<String, String>,
     /// The Kernels the graph's nodes use, by the version last seen
     /// ([`Session::finish_used`]).
     used: BTreeMap<orla_kernel::KernelId, orla_kernel::Generation>,
@@ -125,6 +128,7 @@ impl Session {
             evaluator: Evaluator::new(),
             placed: BTreeMap::new(),
             idle: BTreeMap::new(),
+            unrun: BTreeMap::new(),
             used: BTreeMap::new(),
             window: None,
             history: crate::history::History::default(),
@@ -628,6 +632,29 @@ impl Session {
             }
         }
         self.idle = idle;
+        let unrun: BTreeMap<String, String> = graph
+            .nodes
+            .iter()
+            .filter_map(|node| {
+                let version = self.runtime.kernel(&node.kernel)?;
+                let module = version.module()?;
+                let why = crate::check::defaulted_domain(
+                    node,
+                    &module.manifest,
+                    crate::check::first_counted_against(module),
+                )?;
+                Some((node.id.to_string(), why))
+            })
+            .collect();
+        for (node, why) in &unrun {
+            if self.unrun.get(node) != Some(why) {
+                events.push(Event::Unrun {
+                    node: node.clone(),
+                    why: why.clone(),
+                });
+            }
+        }
+        self.unrun = unrun;
     }
 
     /// Reports nodes off the main backend, once per change.
@@ -968,7 +995,7 @@ impl Session {
             Ok(report) => report,
             Err(error) => {
                 self.tally();
-                return Err(error);
+                return Err(self.with_refusal(error));
             }
         };
         self.history.ran();
@@ -990,6 +1017,27 @@ impl Session {
         Ok(report)
     }
 
+    /// A Kernel not published, told why its document refused it.
+    fn with_refusal(&self, error: EvaluateError) -> EvaluateError {
+        match error {
+            EvaluateError::UnknownKernel {
+                node,
+                kernel,
+                near,
+                refused: None,
+            } => {
+                let refused = self.kernels.refused(&kernel).map(str::to_owned);
+                EvaluateError::UnknownKernel {
+                    node,
+                    kernel,
+                    near,
+                    refused,
+                }
+            }
+            other => other,
+        }
+    }
+
     /// Evaluates only what `demand` needs; see
     /// [`orla_graph::Evaluator::evaluate_for`].
     pub fn evaluate_for(
@@ -1005,14 +1053,17 @@ impl Session {
         );
         self.repin();
         let graph = self.scene.graph().ok_or_else(no_scene)?;
-        let report = self.evaluator.evaluate_for(
-            graph,
-            &mut self.runtime,
-            self.inputs.handles(),
-            context,
-            self.scene.params(),
-            demand,
-        )?;
+        let report = self
+            .evaluator
+            .evaluate_for(
+                graph,
+                &mut self.runtime,
+                self.inputs.handles(),
+                context,
+                self.scene.params(),
+                demand,
+            )
+            .map_err(|error| self.with_refusal(error))?;
         self.history.ran();
         Ok(report)
     }

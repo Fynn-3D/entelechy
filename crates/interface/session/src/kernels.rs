@@ -95,6 +95,10 @@ pub(crate) struct Kernels {
     /// What each Kernel [`Kernels::prime`] saw this sync reaches, by its
     /// id and text: staging the same Kernel finds it here.
     reaches_now: BTreeMap<(KernelId, String), String>,
+    /// The Kernels a document defines that its last change could not
+    /// publish, each with the first reason it was refused (`path:line:col:
+    /// message`); gone once the Kernel is published.
+    refused: BTreeMap<KernelId, String>,
 }
 
 /// A Kernel compiled ahead of staging, from its text and what it reaches,
@@ -108,6 +112,11 @@ struct Primed {
 }
 
 impl Kernels {
+    /// Why `id`'s document could not publish it, when it was refused.
+    pub(crate) fn refused(&self, id: &KernelId) -> Option<&str> {
+        self.refused.get(id).map(String::as_str)
+    }
+
     /// The document that publishes `id`, if a document does.
     pub(crate) fn owner(&self, id: &KernelId) -> Option<&Path> {
         self.owners.get(id).map(PathBuf::as_path)
@@ -440,6 +449,7 @@ impl Kernels {
         match runtime.publish_all(ready) {
             Ok(versions) => {
                 for (version, path) in versions.into_iter().zip(from) {
+                    self.refused.remove(version.id());
                     events.push(Event::Published {
                         path: path.clone(),
                         id: version.id().clone(),
@@ -578,6 +588,8 @@ impl Kernels {
         let mut asts = BTreeMap::new();
         let mut items = Vec::new();
         let mut failed = false;
+        let said = events.len();
+        let ids: Vec<KernelId> = defined.iter().map(|d| d.id.clone()).collect();
         for Defined { id, text, kernel } in defined {
             // A graph placed more than once defines its Kernels once.
             match kernels.get(&id) {
@@ -727,6 +739,20 @@ impl Kernels {
             },
         );
         if failed {
+            // Each of its Kernels not running is refused for the first
+            // reason this document was.
+            let why = events[said..].iter().find_map(|event| match event {
+                Event::Rejected { path, error } => Some(match error.at {
+                    Some(_) => format!("{}:{error}", path.display()),
+                    None => format!("{}: {error}", path.display()),
+                }),
+                _ => None,
+            });
+            if let Some(why) = why {
+                for id in ids.iter().filter(|id| runtime.kernel(id).is_none()) {
+                    self.refused.insert(id.clone(), why.clone());
+                }
+            }
             let change = Change {
                 documents: vec![(path.to_path_buf(), batch)],
                 scene: false,

@@ -222,7 +222,10 @@ with the frames. The clock is the frame count
 over the rate, so a render is the same every time; async nodes are
 waited for after every frame. ffmpeg makes a video of the directory.
 --save writes a node's output after the last frame, as run's does:
-how a state trained or settled over many frames is kept.",
+how a state trained or settled over many frames is kept.
+--profile times every node alone, waiting for the device after each,
+over the frames after the first (which compiles and allocates), and
+prints each node's milliseconds a frame, the busiest first.",
             flags: with(
                 vec![
                     valued("--frames", "<n>", "How many frames to step."),
@@ -239,6 +242,10 @@ how a state trained or settled over many frames is kept.",
                     ),
                     window_flag(),
                     save_flag(),
+                    switch(
+                        "--profile",
+                        "Prints each node's time a frame over the frames after the first.",
+                    ),
                 ],
                 session_flags(),
             ),
@@ -371,6 +378,10 @@ and the package format, each its own.",
                 switch(
                     "--no-fusion",
                     "Runs pointwise producers apart from their consumers.",
+                ),
+                switch(
+                    "--profile",
+                    "Times each replay's nodes, its outputs evaluated every frame: each node's time a frame over the frames after the first.",
                 ),
                 switch(
                     "--watch",

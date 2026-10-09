@@ -160,11 +160,11 @@ impl Recorder {
 }
 
 /// Renders `options.frames` frames into `options.out`, calling
-/// `progress` with each recorded frame's index.
+/// `progress` with each recorded frame's index and report.
 pub fn render(
     session: &mut Session,
     options: &Options,
-    mut progress: impl FnMut(u32),
+    mut progress: impl FnMut(u32, &orla_graph::Report),
 ) -> Result<Summary, String> {
     let mut recorder = Recorder::new(Target::of(&options.out), options.sound_rate)?;
     let (size, scale) = options.window.unwrap_or(([0.0, 0.0], 1.0));
@@ -185,7 +185,7 @@ pub fn render(
         session
             .settle()
             .map_err(|e| format!("frame {index}: {e}"))?;
-        progress(index);
+        progress(index, &report);
     }
     recorder.finish()
 }

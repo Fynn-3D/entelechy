@@ -210,7 +210,11 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
     for (id, kernel) in kernels {
         match orla_compiler::compile_kernel(kernel, id.as_ref()) {
             Ok(module) => {
-                manifests.push((module.manifest.clone(), module.structs.clone()));
+                manifests.push((
+                    module.manifest.clone(),
+                    module.structs.clone(),
+                    first_counted_against(&module),
+                ));
                 if let Some(large) = large(&module) {
                     say!(note, "{file}: {large}");
                 }
@@ -297,7 +301,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
     // Kernel the scene publishes, or one of the backend's natives.
     let natives: Vec<Compiled> = orla_kernel::NativeOp::ALL
         .iter()
-        .map(|op| (op.manifest(), op.structs()))
+        .map(|op| (op.manifest(), op.structs(), false))
         .collect();
     // What a source is, as far as a check can know it: a node's output by
     // its Kernel's port, an input read from a file by the shape it is
@@ -306,10 +310,10 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         match source {
             orla_graph::Source::Node { node, port } => {
                 let producer = lowered.graph.node(node)?;
-                let (manifest, _) = manifests
+                let (manifest, _, _) = manifests
                     .iter()
                     .chain(&natives)
-                    .find(|(m, _)| m.id == producer.kernel)?;
+                    .find(|(m, _, _)| m.id == producer.kernel)?;
                 let output = manifest.outputs.iter().find(|o| o.name == *port)?;
                 Some((output.ty.shape, Some(output.ty.schema.clone())))
             }
@@ -350,10 +354,10 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         if unpublished.iter().any(|(id, _, _)| id == &node.id) {
             continue;
         }
-        let Some((manifest, structs)) = manifests
+        let Some((manifest, structs, counted)) = manifests
             .iter()
             .chain(&natives)
-            .find(|(m, _)| m.id == node.kernel)
+            .find(|(m, _, _)| m.id == node.kernel)
         else {
             continue;
         };
@@ -365,6 +369,10 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         {
             let at = node.at.clone().unwrap_or_else(|| file.to_owned());
             say!(problem, "{at}: {error}");
+        }
+        if let Some(why) = defaulted_domain(node, manifest, *counted) {
+            let at = node.at.clone().unwrap_or_else(|| file.to_owned());
+            say!(note, "{at}: {why}");
         }
         if let Some((port, output, first)) =
             orla_graph::borrowed_domain(&lowered.graph, node, manifest)
@@ -485,8 +493,73 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
 /// What checking one document a scene uses found, in order, and the
 /// Kernels that compiled, each its manifest and structs: its declarations, and its Kernels when the
 /// scene publishes them (`published`).
-/// A compiled Kernel's manifest, and the structs its ports name.
-type Compiled = (orla_ir::Manifest, Vec<orla_ir::StructDef>);
+/// A compiled Kernel's manifest, the structs its ports name, and whether
+/// it weighs its element against its first input's count
+/// ([`first_counted_against`]).
+type Compiled = (orla_ir::Manifest, Vec<orla_ir::StructDef>, bool);
+
+/// Whether `module` compares its element with its first input's count
+/// (`element() < count(first)`, as a join of two rows does): a test that,
+/// run over that input (a node with no `domain`), is always decided the
+/// same way.
+pub(crate) fn first_counted_against(module: &orla_ir::Module) -> bool {
+    use orla_ir::{BinaryOp, Op};
+    fn walk(
+        body: &[orla_ir::Instruction],
+        elements: &mut Vec<orla_ir::ValueId>,
+        counts: &mut Vec<orla_ir::ValueId>,
+        tests: &mut Vec<(orla_ir::ValueId, orla_ir::ValueId)>,
+    ) {
+        for instruction in body {
+            match &instruction.op {
+                Op::Element => elements.push(instruction.id),
+                Op::Count(0) => counts.push(instruction.id),
+                Op::Binary(
+                    BinaryOp::Less
+                    | BinaryOp::LessEqual
+                    | BinaryOp::Greater
+                    | BinaryOp::GreaterEqual
+                    | BinaryOp::Equal
+                    | BinaryOp::NotEqual,
+                    a,
+                    b,
+                ) => tests.push((*a, *b)),
+                op => {
+                    for block in op.blocks() {
+                        walk(&block.body, elements, counts, tests);
+                    }
+                }
+            }
+        }
+    }
+    if module.manifest.inputs.is_empty() {
+        return false;
+    }
+    let (mut elements, mut counts, mut tests) = (Vec::new(), Vec::new(), Vec::new());
+    walk(&module.entry.body, &mut elements, &mut counts, &mut tests);
+    tests.iter().any(|(a, b)| {
+        (elements.contains(a) && counts.contains(b)) || (elements.contains(b) && counts.contains(a))
+    })
+}
+
+/// What to say of a node with no `domain`, which runs over its first input,
+/// when its Kernel compares its element with that input's count
+/// (`counted`): the elements past it, which such a test is for, are never
+/// run, as a join's second input would not be.
+pub(crate) fn defaulted_domain(
+    node: &orla_graph::Node,
+    manifest: &orla_ir::Manifest,
+    counted: bool,
+) -> Option<String> {
+    if node.domain.is_some() || !counted || manifest.mode == orla_ir::Mode::Reduce {
+        return None;
+    }
+    let first = &manifest.inputs.first()?.name;
+    Some(format!(
+        "node `{}` has no `domain`, so it runs over its first input `{first}`, one element each; its Kernel compares `element()` with `count({first})`, which over that domain is decided the same way every element, so elements past `{first}`'s are never run; write its `domain`",
+        node.id
+    ))
+}
 
 fn check_used(
     store: &dyn Store,
@@ -536,7 +609,11 @@ fn check_used(
     for kernel in kernels {
         match orla_compiler::compile_kernel(kernel, None) {
             Ok(module) => {
-                compiled.push((module.manifest.clone(), module.structs.clone()));
+                compiled.push((
+                    module.manifest.clone(),
+                    module.structs.clone(),
+                    first_counted_against(&module),
+                ));
                 if let Some(large) = large(&module) {
                     lines.push((false, format!("{}: {large}", path.display())));
                 }

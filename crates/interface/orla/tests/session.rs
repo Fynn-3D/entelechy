@@ -555,6 +555,65 @@ fn a_replay_says_ok_or_what_failed() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `--profile` on `render` and on `replay` times each node over the frames
+/// after the first, each a line in milliseconds a frame, and their sum.
+#[test]
+fn render_and_replay_profile_their_nodes() {
+    let orla = env!("CARGO_BIN_EXE_orla");
+    let dir = scratch("profile");
+    std::fs::write(
+        dir.join("clocked.osn"),
+        "node ticks: kernel { requires { field.write; time.read; } output result: Image; domain = vec2(8, 8); compute { return vec4(fract(time()), 0.0, 0.0, 1.0); } }\noutput result <- ticks.result;\n",
+    )
+    .unwrap();
+    let output = Command::new(orla)
+        .args(["render", "--frames", "3", "--profile", "--out"])
+        .arg(dir.join("frames"))
+        .arg(dir.join("clocked.osn"))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("profile of 2 frame(s) after the first"),
+        "{stderr}"
+    );
+    assert!(
+        stderr
+            .lines()
+            .any(|line| line.trim_start().starts_with("ticks ")),
+        "{stderr}"
+    );
+    assert!(stderr.contains("(sum)"), "{stderr}");
+    std::fs::write(
+        dir.join("timed.replay"),
+        "scene clocked.osn\nframe 0.0\nframe 0.1\nframe 0.2\n",
+    )
+    .unwrap();
+    let output = Command::new(orla)
+        .args(["replay", "--profile"])
+        .arg(dir.join("timed.replay"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("profile of 2 frame(s) after the first"),
+        "{stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("ticks ")),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("timed.replay: ok (3 frames, 0 checks)"),
+        "{stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn the_graph_command_prints_the_plan() {
     let dir = scratch("graph");

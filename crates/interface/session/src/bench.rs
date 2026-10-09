@@ -201,24 +201,52 @@ fn node_times(
     backend: &str,
 ) -> Result<NodeRun, String> {
     session.set_measured(true);
-    // A node's time, placement and traffic over all frames.
-    #[derive(Default)]
-    struct Total {
-        ms: f64,
-        backend: String,
-        routed: Option<String>,
-        uploaded: u64,
-        downloaded: u64,
-    }
-    let mut totals: BTreeMap<String, Total> = BTreeMap::new();
+    let mut profile = Profile::default();
     let frames = options.frames.max(1);
     for _ in 0..frames {
         let report = session
             .evaluate(&context(*frame))
             .map_err(|e| format!("{backend}: {e}"))?;
         *frame += 1;
+        profile.add(&report);
+    }
+    session.set_measured(false);
+    // The per-node measurement floor comes off every node; the backend
+    // knows it only after the run.
+    let floor = session.measurement_floor().as_secs_f64() * 1000.0;
+    let nodes = profile.nodes(floor);
+    Ok(NodeRun {
+        nodes,
+        device_clock: session.measures_the_device(),
+        floor,
+    })
+}
+
+/// Each node's time, placement and traffic over frames timed node by node
+/// (a session [`Session::set_measured`]): what `bench --nodes` reports,
+/// and `render` and `replay` under `--profile`.
+#[derive(Default)]
+pub struct Profile {
+    frames: u32,
+    totals: BTreeMap<String, Total>,
+}
+
+/// A node's time, placement and traffic over all frames.
+#[derive(Default)]
+struct Total {
+    ms: f64,
+    backend: String,
+    routed: Option<String>,
+    uploaded: u64,
+    downloaded: u64,
+}
+
+impl Profile {
+    /// Adds a frame's report: each node it ran.
+    pub fn add(&mut self, report: &orla_graph::Report) {
+        self.frames += 1;
         for ((node, took), placed) in report.timings.iter().zip(&report.placements) {
-            let total = totals.entry(node.0.clone()).or_default();
+            let total = self.totals.entry(node.0.clone()).or_default();
             total.ms += took.as_secs_f64() * 1000.0;
             total.backend = placed.backend.to_owned();
             total.routed.clone_from(&placed.routed);
@@ -226,50 +254,87 @@ fn node_times(
             total.downloaded += placed.downloaded;
         }
     }
-    session.set_measured(false);
-    // The per-node measurement floor comes off every node; the backend
-    // knows it only after the run.
-    let floor = session.measurement_floor().as_secs_f64() * 1000.0;
-    // Repeated placements group into one line: `steps/*.spread/*` and
-    // their count.
-    let mut grouped: BTreeMap<String, (NodeTime, usize)> = BTreeMap::new();
-    let per_frame = u64::from(frames);
-    for (node, total) in totals {
-        let (entry, count) = grouped.entry(pattern(&node)).or_insert_with(|| {
-            (
-                NodeTime {
-                    node: String::new(),
-                    ms: 0.0,
-                    backend: total.backend.clone(),
-                    routed: total.routed.clone(),
-                    uploaded: 0,
-                    downloaded: 0,
-                },
-                0,
-            )
-        });
-        entry.ms += (total.ms / f64::from(frames) - floor).max(0.0);
-        entry.uploaded += total.uploaded / per_frame;
-        entry.downloaded += total.downloaded / per_frame;
-        *count += 1;
+
+    /// How many frames were added.
+    pub fn frames(&self) -> u32 {
+        self.frames
     }
-    let mut nodes: Vec<NodeTime> = grouped
-        .into_iter()
-        .map(|(node, (mut time, count))| {
-            time.node = if count > 1 {
-                format!("{node} ({count})")
-            } else {
-                node
-            };
-            time
-        })
-        .collect();
-    nodes.sort_by(|a, b| b.ms.total_cmp(&a.ms));
-    Ok(NodeRun {
-        nodes,
-        device_clock: session.measures_the_device(),
-        floor,
-    })
+
+    /// Each node's milliseconds a frame (over every frame added, a frame
+    /// that reused it counting none), less `floor` (what measuring one
+    /// node costs before it does anything); repeated placements grouped
+    /// into one line, `steps/*.spread/*` and their count; the busiest
+    /// first.
+    pub fn nodes(&self, floor: f64) -> Vec<NodeTime> {
+        let frames = self.frames.max(1);
+        let mut grouped: BTreeMap<String, (NodeTime, usize)> = BTreeMap::new();
+        let per_frame = u64::from(frames);
+        for (node, total) in &self.totals {
+            let (entry, count) = grouped.entry(pattern(node)).or_insert_with(|| {
+                (
+                    NodeTime {
+                        node: String::new(),
+                        ms: 0.0,
+                        backend: total.backend.clone(),
+                        routed: total.routed.clone(),
+                        uploaded: 0,
+                        downloaded: 0,
+                    },
+                    0,
+                )
+            });
+            entry.ms += (total.ms / f64::from(frames) - floor).max(0.0);
+            entry.uploaded += total.uploaded / per_frame;
+            entry.downloaded += total.downloaded / per_frame;
+            *count += 1;
+        }
+        let mut nodes: Vec<NodeTime> = grouped
+            .into_iter()
+            .map(|(node, (mut time, count))| {
+                time.node = if count > 1 {
+                    format!("{node} ({count})")
+                } else {
+                    node
+                };
+                time
+            })
+            .collect();
+        nodes.sort_by(|a, b| b.ms.total_cmp(&a.ms));
+        nodes
+    }
+
+    /// The profile as lines: a heading saying how the nodes were timed
+    /// (`device_clock`, `floor`), each node's line, their sum.
+    pub fn lines(&self, floor: f64, device_clock: bool) -> Vec<String> {
+        let nodes = self.nodes(floor);
+        let how = if device_clock {
+            "what the device's own clock said each one took".to_owned()
+        } else if floor > 0.0 {
+            format!(
+                "the call and the wait after it, less the {floor:.3} ms measuring one node costs before it does anything"
+            )
+        } else {
+            "the call, which is the whole of the work on this backend".to_owned()
+        };
+        let mut lines = vec![format!(
+            "profile of {} frame(s) after the first, ms a frame a node — {how}:",
+            self.frames
+        )];
+        for time in &nodes {
+            lines.push(format!(
+                "  {:<28} {:8.3}  {}",
+                time.node,
+                time.ms,
+                time.placement_text()
+            ));
+        }
+        let sum: f64 = nodes.iter().map(|time| time.ms).sum();
+        lines.push(format!(
+            "  {:<28} {sum:8.3}  (a node runs alone under a profile, so the sum is more than a frame)",
+            "(sum)"
+        ));
+        lines
+    }
 }
 
 /// A node name with repetition indices as `*`: `steps/3.spread/6` is

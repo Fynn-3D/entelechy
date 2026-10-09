@@ -53,6 +53,7 @@ impl Evaluator {
                     node: node.id.clone(),
                     kernel: node.kernel.clone(),
                     near,
+                    refused: None,
                 }
             })?;
             versions.push(version);

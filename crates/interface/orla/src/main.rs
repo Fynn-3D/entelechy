@@ -147,6 +147,8 @@ struct RenderOptions {
     render: orla::render::Options,
     /// Node outputs written after the last frame, as `run --save`.
     saves: Vec<(String, String, PathBuf)>,
+    /// Each node's time a frame, over the frames after the first.
+    profile: bool,
 }
 
 /// `--save <node.port>=<file>`, or `<node>=<file>` for its `result`.
@@ -173,6 +175,7 @@ fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
             out: PathBuf::from("frames"),
             window: None,
         },
+        profile: false,
     };
     let mut iter = args.iter().cloned();
     while let Some(arg) = iter.next() {
@@ -204,6 +207,7 @@ fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
                 options.render.window = Some(orla_session::parse_window(&value("--window")?)?);
             }
             "--save" => options.saves.push(parse_save(&value("--save")?)?),
+            "--profile" => options.profile = true,
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -227,11 +231,24 @@ fn render(args: &[String]) -> Result<(), String> {
     loaded(&session, &events)?;
     let started = Instant::now();
     let total = options.render.frames;
-    let summary = orla::render::render(&mut session, &options.render, |index| {
+    // A profile waits for the device after each node; the first frame,
+    // which compiles and allocates, is left out of it.
+    session.set_measured(options.profile);
+    let mut profile = orla_session::bench::Profile::default();
+    let summary = orla::render::render(&mut session, &options.render, |index, report| {
         if (index + 1) % 60 == 0 || index + 1 == total {
             eprintln!("frame {}/{total}", index + 1);
         }
+        if options.profile && index > 0 {
+            profile.add(report);
+        }
     })?;
+    if options.profile {
+        let floor = session.measurement_floor().as_secs_f64() * 1000.0;
+        for line in profile.lines(floor, session.measures_the_device()) {
+            eprintln!("{line}");
+        }
+    }
     recorded(
         "rendered",
         &orla::render::Target::of(&options.render.out),
@@ -732,6 +749,7 @@ fn replay(args: &[String]) -> Result<(), String> {
     let mut files = Vec::new();
     let mut out: Option<PathBuf> = None;
     let mut sound_rate = 48_000u32;
+    let mut profile = false;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -755,6 +773,7 @@ fn replay(args: &[String]) -> Result<(), String> {
                     .ok_or_else(|| "--backend needs a value".to_string())?;
             }
             "--round-apart" => apart = true,
+            "--profile" => profile = true,
             "--no-fusion" => fusion = false,
             "--watch" => watch = true,
             flag if orla_session::Limits::takes(flag) => {
@@ -773,6 +792,9 @@ fn replay(args: &[String]) -> Result<(), String> {
     }
     if watch && (out.is_some() || apart) {
         return Err("--watch plays the replays plainly, each as its documents change".into());
+    }
+    if profile && (out.is_some() || apart || watch) {
+        return Err("--profile times one plain run of each replay".into());
     }
     // Their documents, each parsed once while its file is unchanged.
     let store = std::sync::Arc::new(orla_session::Disk::with_packages(
@@ -814,6 +836,31 @@ fn replay(args: &[String]) -> Result<(), String> {
         }
         let ran = if let (true, Some(resident)) = (apart, &mut resident) {
             rounded_apart(&replay, resident)
+        } else if profile {
+            // Every frame evaluates the scene's outputs, each node timed
+            // alone after the first frame, which compiles and allocates.
+            let runtime = Session::runtime_for(&backend, limits)?;
+            let mut timed = orla_session::bench::Profile::default();
+            let mut clock = (0.0, false);
+            let mut first = true;
+            let mut each = |session: &mut Session, report: &orla_graph::Report| {
+                if first {
+                    first = false;
+                    session.set_measured(true);
+                } else {
+                    timed.add(report);
+                    clock = (
+                        session.measurement_floor().as_secs_f64() * 1000.0,
+                        session.measures_the_device(),
+                    );
+                }
+                Ok(())
+            };
+            let ran = orla::replay::run_each(&replay, store, runtime, fusion, Some(&mut each));
+            for line in timed.lines(clock.0, clock.1) {
+                println!("{line}");
+            }
+            ran
         } else if let Some(out) = &out {
             let runtime = Session::runtime_for(&backend, limits)?;
             let target = orla::render::Target::of(out);
