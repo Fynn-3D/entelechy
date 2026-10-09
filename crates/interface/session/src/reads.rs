@@ -74,11 +74,13 @@ impl Reads {
             self.synced = true;
             return;
         }
-        self.beside = read_from
-            .iter()
-            .chain(store.packages())
-            .filter_map(|dir| store.canonical(dir).ok())
-            .collect();
+        self.beside = outermost(
+            read_from
+                .iter()
+                .chain(store.packages())
+                .filter_map(|dir| store.canonical(dir).ok())
+                .collect(),
+        );
         self.settled = self.restricted;
         self.synced = true;
     }
@@ -118,6 +120,22 @@ impl Reads {
             target.display()
         ))
     }
+}
+
+/// The directories of `dirs` no other one holds, each once: every read
+/// is checked against them, so a scene of many inputs in a few
+/// directories checks a few.
+fn outermost(mut dirs: Vec<PathBuf>) -> Vec<PathBuf> {
+    dirs.sort();
+    dirs.dedup();
+    let mut kept: Vec<PathBuf> = Vec::with_capacity(dirs.len());
+    // Sorted, a directory comes before every one under it.
+    for dir in dirs {
+        if !kept.iter().any(|held| dir.starts_with(held)) {
+            kept.push(dir);
+        }
+    }
+    kept
 }
 
 /// A store whose reads are held to [`Reads`].
