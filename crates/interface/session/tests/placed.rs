@@ -124,6 +124,61 @@ output result <- c.result;
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A graph is the file it is in: placed by the scene and by a graph the
+/// scene places, its path written two ways, its Kernels (an inline one
+/// and a filled Field) are one set, published once, and each placement
+/// runs.
+#[test]
+fn a_graph_placed_from_two_levels_is_one_document() {
+    let dir = std::env::temp_dir().join(format!("orla-placed-levels-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("g")).unwrap();
+    std::fs::write(
+        dir.join("inc.osn"),
+        "input value: Rows<Float>;
+node one: Rows<Float> { domain = 2; value = 1.0; }
+node plus: kernel {
+    requires { field.read; field.write; }
+    input v: Rows<Float> <- value;
+    input w: Rows<Float> <- one.result;
+    output result: Rows<Float>;
+    compute { return sample(v) + sample(w); }
+}
+output result <- plus.result;
+",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("g/wrap.osn"),
+        "input value: Rows<Float>;
+node inner: graph \"../inc.osn\" { value <- value; }
+output result <- inner.result;
+",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.osn"),
+        "node seed: Rows<Float> { domain = 2; value = 1.0; }
+node a: graph \"inc.osn\" { value <- seed.result; }
+node b: graph \"g/wrap.osn\" { value <- a.result; }
+output result <- b.result;
+",
+    )
+    .unwrap();
+    let mut session = Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    let events = session.sync();
+    assert!(session.graph().is_some(), "{events:?}");
+    session.evaluate(&Context::default()).unwrap();
+    let output = session.output(None).unwrap();
+    let words = session.field(output).unwrap().values().into_owned();
+    assert_eq!(
+        f32::from_bits(words[0]),
+        3.0,
+        "two placements, each adding one"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A node placed `times = N` is named, wherever a node's port is, as the
 /// scene names it: `name.port` is its last time's, a placed graph's
 /// output through the node inside it.

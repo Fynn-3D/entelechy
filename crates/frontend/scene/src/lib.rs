@@ -100,8 +100,10 @@ impl From<ParseError> for DocumentError {
     }
 }
 
-/// Reads the text of a document at a resolved path.
-pub type Loader<'a> = dyn FnMut(&Path) -> Result<String, String> + 'a;
+/// Reads a document at a path a placement writes: where the file is
+/// (one path for one file, however it is written or reached) and its
+/// text.
+pub type Loader<'a> = dyn FnMut(&Path) -> Result<(PathBuf, String), String> + 'a;
 
 /// Resolves a document's `use` items, given its directory and what it
 /// declares itself, to the structs, type aliases and functions every
@@ -369,8 +371,10 @@ struct Lowering<'a, 'b> {
     /// Nodes placed so far, every level together.
     placed: usize,
     /// Each sub-graph document placed so far, read, parsed and declared
-    /// once however often it is placed.
+    /// once however often it is placed, by where its file is.
     read: BTreeMap<PathBuf, std::rc::Rc<Read>>,
+    /// Where the file a written path names is, as the loader said.
+    located: BTreeMap<PathBuf, PathBuf>,
 }
 
 /// A sub-graph document as a placement uses it: its text, its parse with
@@ -441,6 +445,7 @@ fn lower(
         stack: Vec::new(),
         placed: 0,
         read: BTreeMap::new(),
+        located: BTreeMap::new(),
     };
     let level = lowering.level(document, text, name, base, &PathBuf::from(name), None)?;
     lowering.out.graph.externals = level.externals;
@@ -1231,22 +1236,32 @@ impl Lowering<'_, '_> {
         inputs: BTreeMap<String, Binding>,
         node_params: BTreeMap<String, ParamValue>,
     ) -> Result<Vec<(String, Source)>, DocumentError> {
-        let resolved = base.join(&sub_path.value);
+        // A document is the file it is in: placed from two levels, or
+        // written two ways, it is one document, its Kernels one set.
+        let written = base.join(&sub_path.value);
+        let (resolved, text) = match self.located.get(&written) {
+            Some(at) => (at.clone(), None),
+            None => {
+                let (at, text) = (self.loader)(&written).map_err(|message| {
+                    error(
+                        sub_path.span,
+                        format!("cannot load `{}`: {message}", sub_path.value),
+                    )
+                })?;
+                self.located.insert(written, at.clone());
+                (at, Some(text))
+            }
+        };
         if self.stack.contains(&resolved) {
             return Err(error(
                 sub_path.span,
                 format!("sub-graph `{}` places itself", sub_path.value),
             ));
         }
-        let read = match self.read.get(&resolved) {
-            Some(read) => std::rc::Rc::clone(read),
-            None => {
-                let text = (self.loader)(&resolved).map_err(|message| {
-                    error(
-                        sub_path.span,
-                        format!("cannot load `{}`: {message}", sub_path.value),
-                    )
-                })?;
+        let read = match (self.read.get(&resolved), text) {
+            (Some(read), _) => std::rc::Rc::clone(read),
+            (None, None) => unreachable!("a located document is read where it is located"),
+            (None, Some(text)) => {
                 let mut document = orla_language::parse_document(&text)
                     .map_err(|e| error(sub_path.span, format!("{}:{e}", sub_path.value)))?;
                 let sub_base = resolved.parent().unwrap_or_else(|| Path::new("."));
@@ -1806,7 +1821,7 @@ fn literal_expr(value: Value, span: Span) -> Expr {
 /// Inline Kernels and sub-graphs take [`load`].
 pub fn parse(text: &str) -> Result<Graph, DocumentError> {
     let document = orla_language::parse_document(text).map_err(DocumentError::from)?;
-    let mut loader = |path: &std::path::Path| -> Result<String, String> {
+    let mut loader = |path: &std::path::Path| -> Result<(PathBuf, String), String> {
         Err(format!(
             "sub-graph `{}` cannot be loaded here",
             path.display()
@@ -1846,7 +1861,7 @@ pub fn from_document(
     document: &orla_language::Document,
     name: &str,
 ) -> Result<Lowered, DocumentError> {
-    let mut loader = |path: &std::path::Path| -> Result<String, String> {
+    let mut loader = |path: &std::path::Path| -> Result<(PathBuf, String), String> {
         Err(format!(
             "sub-graph `{}` cannot be loaded here; use orla_scene::load with a loader",
             path.display()
@@ -2024,7 +2039,8 @@ output result <- a.result;
              }
              output result <- named.result;";
         let document = orla_language::parse_document(source).unwrap();
-        let mut none = |path: &Path| -> Result<String, String> { Err(path.display().to_string()) };
+        let mut none =
+            |path: &Path| -> Result<(PathBuf, String), String> { Err(path.display().to_string()) };
         let lowered = load(&document, source, "My-Scene", Path::new("."), &mut none).unwrap();
         // The text publishes as is: the node's id written in, its domain
         // removed.
@@ -2074,7 +2090,9 @@ output result <- a.result;
              output result <- look.result;",
         )
         .unwrap();
-        let mut loader = |_: &Path| -> Result<String, String> { Ok(placed.to_owned()) };
+        let mut loader = |path: &Path| -> Result<(PathBuf, String), String> {
+            Ok((path.to_path_buf(), placed.to_owned()))
+        };
         let error = load(&root, "", "main", Path::new("app"), &mut loader).unwrap_err();
         assert_eq!(
             error.message,
@@ -2098,9 +2116,9 @@ output result <- a.result;
         )
         .unwrap();
         let mut reads = 0;
-        let mut loader = |_: &Path| -> Result<String, String> {
+        let mut loader = |path: &Path| -> Result<(PathBuf, String), String> {
             reads += 1;
-            Ok(display.to_owned())
+            Ok((path.to_path_buf(), display.to_owned()))
         };
         let lowered = load(&root, "", "main", Path::new("root"), &mut loader).unwrap();
         let ids: Vec<&str> = lowered
@@ -2128,7 +2146,9 @@ output result <- a.result;
              output result <- a.result;",
         )
         .unwrap();
-        let mut loader = |_: &Path| -> Result<String, String> { Ok(grid.to_owned()) };
+        let mut loader = |path: &Path| -> Result<(PathBuf, String), String> {
+            Ok((path.to_path_buf(), grid.to_owned()))
+        };
         let lowered = load(&root, "", "main", Path::new("root"), &mut loader).unwrap();
         let written: Vec<String> = lowered
             .graph
@@ -2219,9 +2239,9 @@ output result <- a.result;
              output result <- again.result;",
         )
         .unwrap();
-        let mut loader = |path: &Path| -> Result<String, String> {
+        let mut loader = |path: &Path| -> Result<(PathBuf, String), String> {
             assert_eq!(path, Path::new("root/shared/display.osn"));
-            Ok(display.to_owned())
+            Ok((path.to_path_buf(), display.to_owned()))
         };
         let lowered = load(&root, "", "main", Path::new("root"), &mut loader).unwrap();
         let graph = &lowered.graph;
@@ -2513,11 +2533,12 @@ output raw <- first.result to bytes \"raw.bin\";";
             "node inner: graph \"inner.osn\" { }\noutput result <- inner.result;",
         )
         .unwrap();
-        let mut loader = |_: &Path| -> Result<String, String> {
-            Ok(
+        let mut loader = |path: &Path| -> Result<(PathBuf, String), String> {
+            Ok((
+                path.to_path_buf(),
                 "node a: test.zero@1 { domain = 1; }\noutput result <- a.result to \"f.field\";"
                     .into(),
-            )
+            ))
         };
         let refused = load(&placed, "", "main", Path::new("."), &mut loader).unwrap_err();
         assert!(
@@ -2583,7 +2604,7 @@ output raw <- first.result to bytes \"raw.bin\";";
         let mut loader = |path: &Path| {
             files
                 .get(path)
-                .cloned()
+                .map(|text| (path.to_path_buf(), text.clone()))
                 .ok_or_else(|| format!("{} is missing", path.display()))
         };
         let refused = load(&document, text, "scene", Path::new(""), &mut loader).unwrap_err();

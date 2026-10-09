@@ -12,8 +12,8 @@ use orla_kernel::{Runtime, Value};
 
 use crate::kernels::{Batch, Change, Defined, Kernels};
 use crate::sources::{
-    Expanded, declarations_for, declarations_within, functions_checked, is_library, named_id,
-    read_document, used_documents,
+    Expanded, declarations_for, declarations_within, functions_checked, is_library,
+    locate_document, named_id, used_documents,
 };
 use crate::store::{Stamp, Store};
 use crate::{Diagnostic, Event};
@@ -342,7 +342,7 @@ impl Scene {
                 .map_err(|why| Diagnostic::new(format!("`{}` is not read: {why}", path.value)))?;
         }
         let store = self.store.as_ref();
-        let mut loader = |path: &Path| read_document(store, path);
+        let mut loader = |path: &Path| locate_document(store, path);
         let mut declare =
             |base: &Path, uses: &[orla_language::Use], own: orla_language::Own<'_>| {
                 declarations_for(store, base, uses, own)

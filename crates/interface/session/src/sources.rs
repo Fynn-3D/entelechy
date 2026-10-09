@@ -226,6 +226,23 @@ pub fn read_document(store: &dyn Store, path: &Path) -> Result<String, String> {
         .map_err(|error| error.to_string())
 }
 
+/// A placed document: where its file is (its canonical path, one for one
+/// file however a placement writes or reaches it, said from the working
+/// directory when it lies under it) and its text.
+pub fn locate_document(store: &dyn Store, path: &Path) -> Result<(PathBuf, String), String> {
+    let at = file_at(store, path);
+    let text = store.read_text(&at).map_err(|error| error.to_string())?;
+    let Ok(whole) = store.canonical(&at) else {
+        return Ok((at, text));
+    };
+    let here = store.canonical(Path::new("."));
+    let said = here
+        .ok()
+        .and_then(|here| whole.strip_prefix(here).ok().map(Path::to_path_buf))
+        .unwrap_or(whole);
+    Ok((said, text))
+}
+
 /// Where a file named by `path` is: there, else, for a path through a
 /// package's name (`text.orlapkg/font.png`), inside that package; a
 /// document's and an input's file alike.

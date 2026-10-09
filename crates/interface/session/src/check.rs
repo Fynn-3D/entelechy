@@ -3,7 +3,9 @@
 use std::path::Path;
 
 use crate::sources::{held, located, said, written_in};
-use crate::{Store, declarations_for, declarations_within, read_document, used_documents};
+use crate::{
+    Store, declarations_for, declarations_within, locate_document, read_document, used_documents,
+};
 
 /// The words a Kernel may carry through its branches before it is said
 /// to be large ([`orla_ir::carried`]): a device's compiler takes long over
@@ -163,7 +165,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         .and_then(|stem| stem.to_str())
         .unwrap_or("scene");
     let base = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut loader = |path: &Path| read_document(store, path);
+    let mut loader = |path: &Path| locate_document(store, path);
     let mut declare = |base: &Path, uses: &[orla_language::Use], own: orla_language::Own<'_>| {
         declarations_for(store, base, uses, own)
     };

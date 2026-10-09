@@ -762,7 +762,10 @@ be keywords.
    flattens it: its nodes join the parent under `name.`, its inputs take
    the parent's wires, its params the parent's values (or its defaults),
    and `name.output` reads its outputs. An inline Kernel's `param x:
-   Float = amount;` takes the graph param `amount`. The caller overrides
+   Float = amount;` takes the graph param `amount`. A graph is the file
+   it is in: placed many times, from any level, its path written any way
+   or reached through a package's name, it is one document, its Kernels
+   defined once. The caller overrides
    a graph's params at evaluation; a graph cannot place itself. A scene's
    own output may also be written to a file, `output kept <- state.result
    to "saves/state.field";` in the extension's format, or `to bytes

@@ -109,8 +109,8 @@ pub use session::Session;
 
 pub use observe::parse_target;
 pub use sources::{
-    Declarations, PACKAGE_VERSION, declarations_for, declarations_within, package_manifest,
-    read_document, used_documents,
+    Declarations, PACKAGE_VERSION, declarations_for, declarations_within, locate_document,
+    package_manifest, read_document, used_documents,
 };
 
 /// What `trace` returns: the reference interpreter's record of one

@@ -33,7 +33,11 @@ fn lowered(path: &Path) -> Result<String, String> {
     let document = orla_language::parse_document(&text).map_err(|e| e.to_string())?;
     let base = path.parent().unwrap().to_path_buf();
     let name = path.file_stem().unwrap().to_string_lossy().into_owned();
-    let mut loader = |path: &Path| std::fs::read_to_string(path).map_err(|e| e.to_string());
+    let mut loader = |path: &Path| {
+        std::fs::read_to_string(path)
+            .map(|text| (path.to_path_buf(), text))
+            .map_err(|e| e.to_string())
+    };
     let mut declare = |_: &Path, _: &[orla_language::Use], _: orla_language::Own<'_>| {
         Ok((Vec::new(), Vec::new(), Vec::new()))
     };
