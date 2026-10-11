@@ -6,8 +6,8 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use orla_graph::Report;
-use orla_kernel::{Context, Handle, InputState, Runtime};
+use entelechy_graph::Report;
+use entelechy_kernel::{Context, Handle, InputState, Runtime};
 
 use crate::Session;
 
@@ -37,7 +37,7 @@ pub fn forms() -> Vec<Form> {
             "scene",
             "scene <path>",
             "the scene to test, relative to the replay file; required",
-            &["scene ../scene.osn"],
+            &["scene ../scene.esn"],
         ),
         form(
             "library",
@@ -241,7 +241,7 @@ pub enum Step {
         /// Parameter name.
         name: String,
         /// The value.
-        value: orla_kernel::Value,
+        value: entelechy_kernel::Value,
     },
     /// Check a field of an element of a node's output after the last frame.
     ExpectElement {
@@ -414,16 +414,16 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
                     "left" => 0,
                     "right" => 1,
                     "middle" => 2,
-                    "south" => orla_kernel::pad::SOUTH,
-                    "east" => orla_kernel::pad::EAST,
-                    "west" => orla_kernel::pad::WEST,
-                    "north" => orla_kernel::pad::NORTH,
-                    "l1" => orla_kernel::pad::LEFT_SHOULDER,
-                    "r1" => orla_kernel::pad::RIGHT_SHOULDER,
-                    "l3" => orla_kernel::pad::LEFT_THUMB,
-                    "r3" => orla_kernel::pad::RIGHT_THUMB,
-                    "start" => orla_kernel::pad::START,
-                    "select" => orla_kernel::pad::SELECT,
+                    "south" => entelechy_kernel::pad::SOUTH,
+                    "east" => entelechy_kernel::pad::EAST,
+                    "west" => entelechy_kernel::pad::WEST,
+                    "north" => entelechy_kernel::pad::NORTH,
+                    "l1" => entelechy_kernel::pad::LEFT_SHOULDER,
+                    "r1" => entelechy_kernel::pad::RIGHT_SHOULDER,
+                    "l3" => entelechy_kernel::pad::LEFT_THUMB,
+                    "r3" => entelechy_kernel::pad::RIGHT_THUMB,
+                    "start" => entelechy_kernel::pad::START,
+                    "select" => entelechy_kernel::pad::SELECT,
                     _ => {
                         return Err(error(
                             "button is `left`, `right`, `middle`, or a pad's `south`, `east`, \
@@ -470,15 +470,15 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
             }),
             ["reset"] => steps.push(Step::Reset),
             ["reset", target] => {
-                let (node, port) = orla_graph::split_port(target)
+                let (node, port) = entelechy_graph::split_port(target)
                     .ok_or_else(|| error("`reset` takes nothing or `node.port`".to_owned()))?;
                 steps.push(Step::ResetPort { node: node.0, port });
             }
             ["param", name, value @ ..] if !value.is_empty() => {
                 let text = value.join(" ");
-                let expr = orla_language::parse_literal(&text)
+                let expr = entelechy_language::parse_literal(&text)
                     .map_err(|e| error(format!("param `{name}`: {e}")))?;
-                let value = orla_compiler::literal(&expr)
+                let value = entelechy_compiler::literal(&expr)
                     .map_err(|e| error(format!("param `{name}`: {e}")))?;
                 steps.push(Step::Param {
                     name: name.to_string(),
@@ -486,7 +486,7 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
                 });
             }
             ["expect", "count", target, "=", count] => {
-                let (node, port) = orla_graph::split_port(target)
+                let (node, port) = entelechy_graph::split_port(target)
                     .ok_or_else(|| error("`expect count` takes `node.port`".to_owned()))?;
                 steps.push(Step::ExpectCount {
                     node: node.0,
@@ -568,7 +568,7 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
                     format!(
                         "`{word}` is no step; the steps are {}{}",
                         keywords.join(", "),
-                        orla_language::did_you_mean(word, keywords.iter().copied())
+                        entelechy_language::did_you_mean(word, keywords.iter().copied())
                     )
                 } else {
                     format!(
@@ -696,7 +696,7 @@ fn played_on(
     loaded(events)?;
     let session = &mut *session;
     let mut replayer = Replayer::start(replay, session);
-    let mut asked: std::collections::BTreeSet<orla_graph::NodeId> =
+    let mut asked: std::collections::BTreeSet<entelechy_graph::NodeId> =
         std::collections::BTreeSet::new();
     while let Some(frame) = replayer.next_frame(session)? {
         let at = frame.context.time;
@@ -722,11 +722,11 @@ fn played_on(
 /// The nodes `asked` and every node they read, now or as committed state
 /// (with what feeds the state first), through the graph.
 fn reaching(
-    graph: &orla_graph::Graph,
-    asked: &std::collections::BTreeSet<orla_graph::NodeId>,
+    graph: &entelechy_graph::Graph,
+    asked: &std::collections::BTreeSet<entelechy_graph::NodeId>,
 ) -> std::collections::BTreeSet<String> {
     let mut seen = std::collections::BTreeSet::new();
-    let mut open: Vec<orla_graph::NodeId> = asked.iter().cloned().collect();
+    let mut open: Vec<entelechy_graph::NodeId> = asked.iter().cloned().collect();
     while let Some(id) = open.pop() {
         if !seen.insert(id.0.clone()) {
             continue;
@@ -736,13 +736,13 @@ fn reaching(
         };
         for binding in node.inputs.values() {
             let sources = match binding {
-                orla_graph::Binding::Now(source) => vec![source],
-                orla_graph::Binding::Previous {
+                entelechy_graph::Binding::Now(source) => vec![source],
+                entelechy_graph::Binding::Previous {
                     source, initial, ..
                 } => vec![source, initial],
             };
             for source in sources {
-                if let orla_graph::Source::Node { node, .. } = source {
+                if let entelechy_graph::Source::Node { node, .. } = source {
                     open.push(node.clone());
                 }
             }
@@ -903,19 +903,19 @@ impl Resident {
             return true;
         };
         touched.iter().any(|name| {
-            let Some(node) = graph.node(&orla_graph::NodeId(name.clone())) else {
+            let Some(node) = graph.node(&entelechy_graph::NodeId(name.clone())) else {
                 return true;
             };
             change.kernels.contains(&node.kernel.to_string())
                 || node.inputs.values().any(|binding| {
                     let sources = match binding {
-                        orla_graph::Binding::Now(source) => vec![source],
-                        orla_graph::Binding::Previous {
+                        entelechy_graph::Binding::Now(source) => vec![source],
+                        entelechy_graph::Binding::Previous {
                             source, initial, ..
                         } => vec![source, initial],
                     };
                     sources.into_iter().any(|source| {
-                        matches!(source, orla_graph::Source::External(input) if change.inputs.contains(input))
+                        matches!(source, entelechy_graph::Source::External(input) if change.inputs.contains(input))
                     })
                 })
         })
@@ -937,7 +937,7 @@ pub struct Frame {
     /// The time, input and window of this frame.
     pub context: Context,
     /// The named nodes, and the picture when a pixel expectation follows.
-    pub demand: std::collections::BTreeSet<orla_graph::NodeId>,
+    pub demand: std::collections::BTreeSet<entelechy_graph::NodeId>,
 }
 
 /// A replay played a frame at a time over a caller's session: the steps
@@ -949,8 +949,8 @@ pub struct Replayer {
     input: InputState,
     window: ([f32; 2], f32),
     last: Option<Report>,
-    named: std::collections::BTreeSet<orla_graph::NodeId>,
-    producers: Vec<orla_graph::NodeId>,
+    named: std::collections::BTreeSet<entelechy_graph::NodeId>,
+    producers: Vec<entelechy_graph::NodeId>,
     /// What the replay has observed so far.
     pub outcome: Outcome,
 }
@@ -961,15 +961,17 @@ impl Replayer {
     pub fn start(replay: &Replay, session: &mut Session) -> Self {
         // What an expectation names, by the node that produces it: a
         // placed graph's output names the node inside that gives it.
-        let named: std::collections::BTreeSet<orla_graph::NodeId> = replay
+        let named: std::collections::BTreeSet<entelechy_graph::NodeId> = replay
             .steps
             .iter()
             .filter_map(|step| match step {
                 Step::ExpectElement { node, port, .. }
                 | Step::ExpectCount { node, port, .. }
-                | Step::Show { node, port, .. } => {
-                    Some(session.producer(&orla_graph::NodeId(node.clone()), port).0)
-                }
+                | Step::Show { node, port, .. } => Some(
+                    session
+                        .producer(&entelechy_graph::NodeId(node.clone()), port)
+                        .0,
+                ),
                 _ => None,
             })
             .collect();
@@ -983,8 +985,8 @@ impl Replayer {
                     .outputs
                     .iter()
                     .filter_map(|(_, source)| match source {
-                        orla_graph::Source::Node { node, .. } => Some(node.clone()),
-                        orla_graph::Source::External(_) => None,
+                        entelechy_graph::Source::Node { node, .. } => Some(node.clone()),
+                        entelechy_graph::Source::External(_) => None,
                     })
                     .collect()
             })
@@ -1088,7 +1090,7 @@ impl Replayer {
             Step::Reset => session.reset_state(),
             Step::ResetPort { node, port } => {
                 session
-                    .reset_port(&orla_graph::NodeId(node.clone()), port)
+                    .reset_port(&entelechy_graph::NodeId(node.clone()), port)
                     .map_err(|error| format!("reset {node}.{port}: {error}"))?;
             }
             Step::Param { name, value } => {
@@ -1150,7 +1152,7 @@ impl Replayer {
                     return Err(format!("line {line}: expect before any frame"));
                 }
                 outcome.checks += 1;
-                match session.element_count(&orla_graph::NodeId(node.clone()), port) {
+                match session.element_count(&entelechy_graph::NodeId(node.clone()), port) {
                     Ok(actual) if actual == *count => {}
                     Ok(actual) => outcome.failures.push(format!(
                         "line {line}: {node}.{port} holds {actual} element(s), expected {count}"
@@ -1169,7 +1171,7 @@ impl Replayer {
                         .placements
                         .iter()
                         .find(|placed| placed.node.0 == *node)
-                        .map(|placed| orla_kernel::Placement {
+                        .map(|placed| entelechy_kernel::Placement {
                             backend: placed.backend,
                             routed: placed.routed.clone(),
                         })
@@ -1282,8 +1284,8 @@ impl Compare {
 }
 
 /// A number as a replay writes it.
-fn written(n: &orla_ir::Number) -> String {
-    use orla_ir::Number;
+fn written(n: &entelechy_ir::Number) -> String {
+    use entelechy_ir::Number;
     match n {
         Number::Float(v) => format!("{v}"),
         Number::Double(v) => format!("{v}"),
@@ -1302,9 +1304,9 @@ fn shown(
     index: u32,
     path: &[String],
 ) -> Result<String, String> {
-    let node_id = orla_graph::NodeId(node.to_owned());
+    let node_id = entelechy_graph::NodeId(node.to_owned());
     let (ty, words) = session.element_field(&node_id, port, index, path)?;
-    if matches!(ty, orla_ir::Type::Struct(_)) {
+    if matches!(ty, entelechy_ir::Type::Struct(_)) {
         let fields = session.element_fields(&node_id, port, path)?;
         let mut parts = Vec::with_capacity(fields.len());
         for field in fields {
@@ -1317,7 +1319,7 @@ fn shown(
         }
         return Ok(format!("{{ {} }}", parts.join(", ")));
     }
-    let numbers = orla_ir::template(ty, &[])
+    let numbers = entelechy_ir::template(ty, &[])
         .rebuilt(&mut words.iter().copied())
         .numbers();
     Ok(numbers.iter().map(written).collect::<Vec<_>>().join(" "))
@@ -1334,13 +1336,13 @@ fn check_element(
     compare: Compare,
     values: &[String],
 ) -> Result<Option<String>, String> {
-    use orla_ir::{Number, Type};
-    let node_id = orla_graph::NodeId(node.to_owned());
+    use entelechy_ir::{Number, Type};
+    let node_id = entelechy_graph::NodeId(node.to_owned());
     let (ty, words) = session.element_field(&node_id, port, index, path)?;
     if matches!(ty, Type::Struct(_)) {
         return Err("name a field of the struct; whole structs are not compared".into());
     }
-    let numbers = orla_ir::template(ty, &[])
+    let numbers = entelechy_ir::template(ty, &[])
         .rebuilt(&mut words.iter().copied())
         .numbers();
     let components = numbers.len();
@@ -1418,7 +1420,7 @@ mod tests {
     use super::*;
 
     /// Every form's examples parse, together they cover every step, and
-    /// `docs/USAGE.md` shows the forms; `ORLA_BLESS=1` writes them again.
+    /// `docs/USAGE.md` shows the forms; `ENTELECHY_BLESS=1` writes them again.
     #[test]
     fn the_forms_parse_cover_every_step_and_are_shown() {
         let lines: Vec<&str> = forms()
@@ -1467,12 +1469,12 @@ mod tests {
         let end = start + text[start..].find("\n\n").expect("the table ends") + 1;
         let table = forms_table();
         if text[start..end] != table {
-            if std::env::var_os("ORLA_BLESS").is_some() {
+            if std::env::var_os("ENTELECHY_BLESS").is_some() {
                 std::fs::write(&path, format!("{}{table}{}", &text[..start], &text[end..]))
                     .unwrap();
             } else {
                 panic!(
-                    "docs/USAGE.md's replay forms are not the parser's; write them again with ORLA_BLESS=1 cargo test -p orla-session --lib\n{table}"
+                    "docs/USAGE.md's replay forms are not the parser's; write them again with ENTELECHY_BLESS=1 cargo test -p entelechy-session --lib\n{table}"
                 );
             }
         }
@@ -1482,7 +1484,7 @@ mod tests {
     /// time counted from the first; a range that runs backward is refused.
     #[test]
     fn a_range_of_frames_is_a_frame_at_each_step() {
-        let replay = parse("scene s.osn\nframe 0.1 to 1.0 every 0.1\n", Path::new(".")).unwrap();
+        let replay = parse("scene s.esn\nframe 0.1 to 1.0 every 0.1\n", Path::new(".")).unwrap();
         let times: Vec<f32> = replay
             .steps
             .iter()
@@ -1493,13 +1495,13 @@ mod tests {
             .collect();
         let written: Vec<f32> = (1..=10).map(|i| (i as f64 / 10.0) as f32).collect();
         assert_eq!(times, written);
-        let error = parse("scene s.osn\nframe 1 to 0 every 0.1\n", Path::new(".")).unwrap_err();
+        let error = parse("scene s.esn\nframe 1 to 0 every 0.1\n", Path::new(".")).unwrap_err();
         assert!(
             error.message.contains("frames run forward"),
             "{}",
             error.message
         );
-        let error = parse("scene s.osn\nframe 0 to 1 every 0\n", Path::new(".")).unwrap_err();
+        let error = parse("scene s.esn\nframe 0 to 1 every 0\n", Path::new(".")).unwrap_err();
         assert!(
             error.message.contains("frames run forward"),
             "{}",
@@ -1510,19 +1512,19 @@ mod tests {
     /// A line no form reads names the steps, or how its keyword is written.
     #[test]
     fn a_line_no_form_reads_says_what_is() {
-        let error = parse("scene s.osn\nfram 0", Path::new(".")).unwrap_err();
+        let error = parse("scene s.esn\nfram 0", Path::new(".")).unwrap_err();
         assert!(
             error.message.contains("did you mean `frame`"),
             "{}",
             error.message
         );
-        let error = parse("scene s.osn\nstick up 1 2", Path::new(".")).unwrap_err();
+        let error = parse("scene s.esn\nstick up 1 2", Path::new(".")).unwrap_err();
         assert!(
             error.message.contains("stick is `left`"),
             "{}",
             error.message
         );
-        let error = parse("scene s.osn\nwheel 1", Path::new(".")).unwrap_err();
+        let error = parse("scene s.esn\nwheel 1", Path::new(".")).unwrap_err();
         assert!(
             error.message.contains("`wheel` is written wheel <x> <y>"),
             "{}",
@@ -1533,7 +1535,7 @@ mod tests {
     #[test]
     fn an_element_is_held_equal_or_to_one_side() {
         let replay = parse(
-            "scene s.osn\nexpect a.result[0] = 1\nexpect a.result[0] < 2\nexpect a.result[1].v >= 0.5 0.5 0.5\nexpect a.result[2] > -1\nexpect a.result[3] <= 0\n",
+            "scene s.esn\nexpect a.result[0] = 1\nexpect a.result[0] < 2\nexpect a.result[1].v >= 0.5 0.5 0.5\nexpect a.result[2] > -1\nexpect a.result[3] <= 0\n",
             Path::new("."),
         )
         .unwrap();
@@ -1556,7 +1558,7 @@ mod tests {
             ]
         );
         // An unknown comparison is refused.
-        let error = parse("scene s.osn\nexpect a.result[0] ~ 1\n", Path::new(".")).unwrap_err();
+        let error = parse("scene s.esn\nexpect a.result[0] ~ 1\n", Path::new(".")).unwrap_err();
         assert!(error.message.contains("cannot read"), "{error}");
         assert!(Compare::Below.holds(1.0, 2.0) && !Compare::Below.holds(2.0, 2.0));
         assert!(Compare::AtLeast.holds(2.0, 2.0) && !Compare::Above.holds(2.0, 2.0));
@@ -1565,11 +1567,11 @@ mod tests {
     #[test]
     fn parses_every_step() {
         let replay = parse(
-            "scene s.osn\nkernels k\nframe 0.5\npointer 1 2 down\npointer up\nkey 65 down\nreset\nexpect 1 2 = 0.1 0.2 0.3\nexpect 1 2 = 0 0 0 0.5\nbutton right down\nwheel 0 -1\n",
+            "scene s.esn\nkernels k\nframe 0.5\npointer 1 2 down\npointer up\nkey 65 down\nreset\nexpect 1 2 = 0.1 0.2 0.3\nexpect 1 2 = 0 0 0 0.5\nbutton right down\nwheel 0 -1\n",
             Path::new("/base"),
         )
         .unwrap();
-        assert_eq!(replay.scene, Path::new("/base/s.osn"));
+        assert_eq!(replay.scene, Path::new("/base/s.esn"));
         assert_eq!(replay.kernels, Some(PathBuf::from("/base/k")));
         let _ = "library";
         assert_eq!(replay.steps.len(), 9);
@@ -1585,7 +1587,7 @@ mod tests {
         let error = parse("scene s\nbutton fourth down\n", Path::new(".")).unwrap_err();
         assert!(error.message.contains("left"), "{error}");
         let replay = parse(
-            "scene s.osn\nexpect step.result[0].score = 1\nexpect mix.result[3] = 0.5 0.25 0.02\n",
+            "scene s.esn\nexpect step.result[0].score = 1\nexpect mix.result[3] = 0.5 0.25 0.02\n",
             Path::new("."),
         )
         .unwrap();

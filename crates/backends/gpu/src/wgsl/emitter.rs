@@ -102,7 +102,7 @@ pub(crate) struct Emitter<'a> {
 }
 
 /// Every value `body` defines, with its type, in nested blocks too.
-fn types_in(body: &[orla_ir::Instruction], out: &mut std::collections::HashMap<u32, Type>) {
+fn types_in(body: &[entelechy_ir::Instruction], out: &mut std::collections::HashMap<u32, Type>) {
     for instruction in body {
         out.insert(instruction.id.0, instruction.ty);
         for block in instruction.op.blocks() {
@@ -553,7 +553,7 @@ impl Emitter<'_> {
                 let manifest = &self.module.manifest;
                 let stride = manifest.inputs[*input as usize].ty.schema.value_words();
                 let element = manifest.inputs[*input as usize].element();
-                let layout = orla_ir::part_layout(&self.module.structs, element, path)
+                let layout = entelechy_ir::part_layout(&self.module.structs, element, path)
                     .expect("a path validation walked");
                 let mut offset = format!("{}i", layout.base);
                 for (index, count, part) in layout.steps {

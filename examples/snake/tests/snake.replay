@@ -1,4 +1,4 @@
-scene snake.osn
+scene snake.esn
 
 # Eight ticks per second; cells are 10 pixels, centres at (10x + 5, 10y + 5).
 # The snake starts at (5..8, 12) heading right with food at (20, 12).

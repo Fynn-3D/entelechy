@@ -11,42 +11,42 @@ in [DECISIONS](docs/DECISIONS.md).
 
 | Proof | Where it is exercised |
 | --- | --- |
-| `.orla` compiles | [compiler tests](crates/frontend/compiler/tests/compile.rs) |
+| `.ent` compiles | [compiler tests](crates/frontend/compiler/tests/compile.rs) |
 | Kernel calls Host only through ABI | [scope tests](crates/core/abi/src/lib.rs), [denied execution](crates/backends/cpu/tests/execute.rs), [validator capability checks](crates/core/ir/src/validate.rs) |
-| Kernel hot-swaps without restart | [hot swap tests](crates/interface/session/tests/hot_swap.rs), [a scene's change swapped whole](crates/interface/session/tests/scene_change.rs), [session tests](crates/interface/orla/tests/session.rs) |
-| Graph references KernelID | [composition tests](crates/interface/session/tests/composition.rs), [example scene](examples/grayscale/scene.osn) |
+| Kernel hot-swaps without restart | [hot swap tests](crates/interface/session/tests/hot_swap.rs), [a scene's change swapped whole](crates/interface/session/tests/scene_change.rs), [session tests](crates/interface/entelechy/tests/session.rs) |
+| Graph references KernelID | [composition tests](crates/interface/session/tests/composition.rs), [example scene](examples/grayscale/scene.esn) |
 
 ## Layers
 
 The crates sit by layer in `crates/core`, `crates/frontend`,
 `crates/backends` and `crates/interface`. Which layer depends on which,
 and which crates take an outside dependency, is held by
-[a test](crates/interface/orla/tests/layers.rs). Tests depend in the same
+[a test](crates/interface/entelechy/tests/layers.rs). Tests depend in the same
 directions: a test needing a higher crate lives in that crate's tests.
 
 | Layer | Implementation | Evidence |
 | --- | --- | --- |
-| Host Core | [host](crates/core/host/src/lib.rs) | handles, budgets, bounds; `.field` in [orla-formats](crates/interface/formats/src/file.rs), [its bytes pinned](crates/interface/formats/tests/field_file.rs) |
+| Host Core | [host](crates/core/host/src/lib.rs) | handles, budgets, bounds; `.field` in [entelechy-formats](crates/interface/formats/src/file.rs), [its bytes pinned](crates/interface/formats/tests/field_file.rs) |
 | Capability ABI | [abi](crates/core/abi/src/lib.rs), [names](crates/core/abi/src/names.rs) | [capability set pinned to `ABI_VERSION`](crates/core/abi/tests/contract.rs) |
-| Orla IR | [ir](crates/core/ir/src/lib.rs), [validation](crates/core/ir/src/validate.rs), [display](crates/core/ir/src/display.rs), [fusion](crates/core/ir/src/fuse.rs), [optimizer](crates/core/ir/src/optimize.rs) | [fusion bit-identity](crates/backends/cpu/tests/fusion.rs) |
+| Entelechy IR | [ir](crates/core/ir/src/lib.rs), [validation](crates/core/ir/src/validate.rs), [display](crates/core/ir/src/display.rs), [fusion](crates/core/ir/src/fuse.rs), [optimizer](crates/core/ir/src/optimize.rs) | [fusion bit-identity](crates/backends/cpu/tests/fusion.rs) |
 | Kernel language | [language](crates/frontend/language/src/lib.rs), [parser](crates/frontend/language/src/parser.rs), [lexer](crates/frontend/language/src/lexer.rs), [scope](crates/frontend/language/src/scope.rs) | parser tests in place |
 | Compiler | [compiler](crates/frontend/compiler/src/lib.rs), [lowering](crates/frontend/compiler/src/lower/), [help](crates/frontend/compiler/src/help.rs) | [compile tests](crates/frontend/compiler/tests/compile.rs), [surface at its version](crates/frontend/compiler/tests/surface.rs), [help written as the language takes it](crates/frontend/compiler/tests/help_examples.rs), [every signature and its capability compiled](crates/frontend/compiler/tests/help_signatures.rs) |
 | File writes | [writes](crates/interface/session/src/writes.rs); `else` fallback in the [evaluator](crates/core/graph/src/evaluate/mod.rs) | [session](crates/interface/session/tests/writes.rs), [lowering](crates/frontend/scene/src/lib.rs), [save replay](examples/data/tests/save.replay) |
 | Shared rules | [rules](crates/core/rules/src/lib.rs), [`Backend`](crates/core/rules/src/backend.rs), [reduce tree](crates/core/rules/src/reduce.rs), [rasterizer](crates/core/rules/src/raster.rs) | every backend's parity test |
 | Reference backend | [cpu](crates/backends/cpu/src/lib.rs), [word code](crates/backends/cpu/src/eval/) | [execution](crates/backends/cpu/tests/execute.rs), [optimizer](crates/backends/cpu/tests/optimizer.rs) |
-| JIT backend | [jit](crates/backends/jit/src/lib.rs), [Cranelift emission](crates/backends/jit/src/codegen.rs), [WebAssembly emission](crates/backends/jit/src/wasm) | [parity](crates/backends/jit/tests/parity.rs), [matrix](crates/backends/jit/tests/matrix.rs), [as WebAssembly in node](crates/interface/orla/tests/wasm.rs) |
+| JIT backend | [jit](crates/backends/jit/src/lib.rs), [Cranelift emission](crates/backends/jit/src/codegen.rs), [WebAssembly emission](crates/backends/jit/src/wasm) | [parity](crates/backends/jit/tests/parity.rs), [matrix](crates/backends/jit/tests/matrix.rs), [as WebAssembly in node](crates/interface/entelechy/tests/wasm.rs) |
 | GPU backend | [gpu](crates/backends/gpu/src/lib.rs), [WGSL](crates/backends/gpu/src/wgsl/mod.rs), [rasterizer](crates/backends/gpu/src/raster.rs), [presenter](crates/backends/gpu/src/present.rs), [wait](crates/backends/gpu/src/wait.rs) | [parity](crates/backends/gpu/tests/parity.rs), [matrix](crates/backends/gpu/tests/matrix.rs) (skip without an adapter), [shader names](crates/backends/gpu/tests/names.rs) |
 | Conformance matrix | [matrix](crates/backends/conformance/src/lib.rs) | bit for bit [on the JIT](crates/backends/jit/tests/matrix.rs), ints exact and floats to rounding [on the GPU](crates/backends/gpu/tests/matrix.rs) |
 | Kernel Runtime | [runtime](crates/core/kernel/src/lib.rs), [off-frame runs](crates/core/kernel/src/later.rs), [clock](crates/core/kernel/src/clock.rs) | [hot swap](crates/interface/session/tests/hot_swap.rs), [async](crates/interface/session/tests/later.rs), [mixed backends](crates/interface/session/tests/mixed.rs) |
 | Scene documents | [scene](crates/frontend/scene/src/lib.rs), [domain](crates/frontend/scene/src/domain.rs) | lowering tests in place, [every form lowered](crates/frontend/scene/tests/surface.rs) |
 | Graph Runtime | [graph](crates/core/graph/src/lib.rs), [evaluator](crates/core/graph/src/evaluate/mod.rs), [domain](crates/core/graph/src/domain.rs) | [composition tests](crates/interface/session/tests/composition.rs) |
-| Session | [session](crates/interface/session/src/session.rs): [scene](crates/interface/session/src/scene.rs), [kernels](crates/interface/session/src/kernels.rs), [inputs](crates/interface/session/src/inputs.rs), [sources](crates/interface/session/src/sources.rs), [observe](crates/interface/session/src/observe.rs), [store](crates/interface/session/src/store.rs), [bench](crates/interface/session/src/bench.rs); [formats](crates/interface/formats/src/lib.rs) | [session tests](crates/interface/orla/tests/session.rs) |
-| Creation protocol | [protocol](crates/interface/protocol/src/lib.rs): [inspect](crates/interface/protocol/src/inspect.rs), [create](crates/interface/protocol/src/create.rs), [run](crates/interface/protocol/src/run.rs), [fields](crates/interface/protocol/src/fields.rs), [wire](crates/interface/protocol/src/wire.rs), [transport](crates/interface/protocol/src/transport.rs), [WebSocket](crates/interface/protocol/src/websocket.rs) | [client](crates/interface/orla/tests/protocol.rs), [live agents](crates/interface/orla/tests/agent.rs), op table held to the server (in place) [what agents found wanting](crates/interface/orla/tests/findings/), [help's examples and scenarios run](crates/interface/orla/tests/help_examples.rs) |
-| Command line | [orla](crates/interface/orla/src/main.rs), [replay](crates/interface/session/src/replay.rs), [render](crates/interface/orla/src/render.rs), [packages](crates/interface/orla/src/package.rs), [scaffold](crates/interface/orla/src/scaffold.rs) | every example replay on three backends |
-| C ABI | [ffi](crates/interface/ffi/src/lib.rs), [header](crates/interface/ffi/include/orla.h) | [ABI](crates/interface/ffi/tests/abi.rs), [header held to the exports](crates/interface/ffi/tests/header.rs), [C example](bridges/c/hello.c) |
-| Player | [play](crates/interface/session/src/play/mod.rs), shared by every front; window [loop](crates/interface/player/src/main.rs), [audio](crates/interface/player/src/audio.rs), [gamepad](crates/interface/player/src/gamepad.rs); page [player.js](bridges/web/player.js) over [`orla_play_*`](crates/interface/ffi/src/play.rs) | [play tests](crates/interface/session/tests/play.rs), [ABI test](crates/interface/ffi/tests/abi.rs) |
+| Session | [session](crates/interface/session/src/session.rs): [scene](crates/interface/session/src/scene.rs), [kernels](crates/interface/session/src/kernels.rs), [inputs](crates/interface/session/src/inputs.rs), [sources](crates/interface/session/src/sources.rs), [observe](crates/interface/session/src/observe.rs), [store](crates/interface/session/src/store.rs), [bench](crates/interface/session/src/bench.rs); [formats](crates/interface/formats/src/lib.rs) | [session tests](crates/interface/entelechy/tests/session.rs) |
+| Creation protocol | [protocol](crates/interface/protocol/src/lib.rs): [inspect](crates/interface/protocol/src/inspect.rs), [create](crates/interface/protocol/src/create.rs), [run](crates/interface/protocol/src/run.rs), [fields](crates/interface/protocol/src/fields.rs), [wire](crates/interface/protocol/src/wire.rs), [transport](crates/interface/protocol/src/transport.rs), [WebSocket](crates/interface/protocol/src/websocket.rs) | [client](crates/interface/entelechy/tests/protocol.rs), [live agents](crates/interface/entelechy/tests/agent.rs), op table held to the server (in place) [what agents found wanting](crates/interface/entelechy/tests/findings/), [help's examples and scenarios run](crates/interface/entelechy/tests/help_examples.rs) |
+| Command line | [entelechy](crates/interface/entelechy/src/main.rs), [replay](crates/interface/session/src/replay.rs), [render](crates/interface/entelechy/src/render.rs), [packages](crates/interface/entelechy/src/package.rs), [scaffold](crates/interface/entelechy/src/scaffold.rs) | every example replay on three backends |
+| C ABI | [ffi](crates/interface/ffi/src/lib.rs), [header](crates/interface/ffi/include/entelechy.h) | [ABI](crates/interface/ffi/tests/abi.rs), [header held to the exports](crates/interface/ffi/tests/header.rs), [C example](bridges/c/hello.c) |
+| Player | [play](crates/interface/session/src/play/mod.rs), shared by every front; window [loop](crates/interface/player/src/main.rs), [audio](crates/interface/player/src/audio.rs), [gamepad](crates/interface/player/src/gamepad.rs); page [player.js](bridges/web/player.js) over [`entelechy_play_*`](crates/interface/ffi/src/play.rs) | [play tests](crates/interface/session/tests/play.rs), [ABI test](crates/interface/ffi/tests/abi.rs) |
 | Import and export | [import](crates/interface/import/src/), [export](crates/interface/export/src/) | [MIDI](crates/interface/formats/tests/midi.rs), [round trip](crates/interface/export/tests/round_trip.rs), [SVG](crates/interface/import/src/svg.rs), [vector replays](examples/vector/tests/) |
-| Bridges | [bridges](bridges/) | [bridge tests](crates/interface/orla/tests/bridges.rs), when the program is present |
+| Bridges | [bridges](bridges/) | [bridge tests](crates/interface/entelechy/tests/bridges.rs), when the program is present |
 
 ## Libraries
 
@@ -54,19 +54,19 @@ Packages built from existing modes, with no engine feature of their own.
 
 | Library | Built from | Evidence |
 | --- | --- | --- |
-| [Stream compaction](packages/compact.orlapkg/kernels/compact.orla) | `prefix with sum`, reduce, scatter, `value(port)` | [culled replay](examples/culled/tests/culled.replay) |
-| [Radix sort](packages/sort.orlapkg/kernels/sort.orla) | prefix and scatter | [neighbours replay](examples/neighbours/tests/neighbours.replay) |
-| [Mip levels](packages/image.orlapkg/graphs/mip.osn) | `times`, `carry`, the rasterizer's `uv` | [mipmap replay](examples/mipmap/tests/ground.replay) |
-| [Text](packages/text.orlapkg/kernels/text.orla) | `Rows<Glyph>`, a `Grid<Float>` atlas | [text replay](examples/text/tests/text.replay) |
-| [Skinning](packages/skin.orlapkg/kernels/skin.orla), [rig contract](docs/RIGS.md) | maps over rows, `<~` | [rig tests](crates/interface/orla/tests/rigs.rs); [skin](examples/skin/tests/skin.replay), [crowd](examples/crowd/tests/crowd.replay), [reach](examples/reach/tests/reach.replay), [elbow](examples/reach/tests/elbow.replay), [stride](examples/stride/tests/stride.replay) replays |
-| [Rasterization](packages/raster.orlapkg/kernels/raster.orla) | scatter `min` of `Long` keys with `emit` | [edges](examples/mesh/tests/edges.replay) and [cutout](examples/mesh/tests/cutout.replay) replays on three backends, [session test](crates/interface/orla/tests/session.rs); [ten million triangles](examples/mesh/tests/ten_million.osn) for `bench` |
-| [Vector drawing](packages/vector.orlapkg/kernels/vector.orla) | `prefix with sum`, scatter `max` with `emit`, `value(port)` | [vector replays](examples/vector/tests/) on three backends |
-| [Rigid bodies](packages/physics.orlapkg/kernels/physics.orla), [decision](docs/DECISIONS.md#contacts-are-solved-all-at-once-each-against-its-own-share-of-a-body) | the sort package, scatter `sum` of pushes, `times` with two `carry`s, `<~` | [physics replays](examples/physics/tests/) on three backends |
-| [Widgets and letters](packages/ui.orlapkg/package.osn) | maps over grids, `<~` navigation state, `value(port)` and `count(port)` extents | [ui replay](examples/ui/tests/ui.replay) on three backends |
+| [Stream compaction](packages/compact.entpkg/kernels/compact.ent) | `prefix with sum`, reduce, scatter, `value(port)` | [culled replay](examples/culled/tests/culled.replay) |
+| [Radix sort](packages/sort.entpkg/kernels/sort.ent) | prefix and scatter | [neighbours replay](examples/neighbours/tests/neighbours.replay) |
+| [Mip levels](packages/image.entpkg/graphs/mip.esn) | `times`, `carry`, the rasterizer's `uv` | [mipmap replay](examples/mipmap/tests/ground.replay) |
+| [Text](packages/text.entpkg/kernels/text.ent) | `Rows<Glyph>`, a `Grid<Float>` atlas | [text replay](examples/text/tests/text.replay) |
+| [Skinning](packages/skin.entpkg/kernels/skin.ent), [rig contract](docs/RIGS.md) | maps over rows, `<~` | [rig tests](crates/interface/entelechy/tests/rigs.rs); [skin](examples/skin/tests/skin.replay), [crowd](examples/crowd/tests/crowd.replay), [reach](examples/reach/tests/reach.replay), [elbow](examples/reach/tests/elbow.replay), [stride](examples/stride/tests/stride.replay) replays |
+| [Rasterization](packages/raster.entpkg/kernels/raster.ent) | scatter `min` of `Long` keys with `emit` | [edges](examples/mesh/tests/edges.replay) and [cutout](examples/mesh/tests/cutout.replay) replays on three backends, [session test](crates/interface/entelechy/tests/session.rs); [ten million triangles](examples/mesh/tests/ten_million.esn) for `bench` |
+| [Vector drawing](packages/vector.entpkg/kernels/vector.ent) | `prefix with sum`, scatter `max` with `emit`, `value(port)` | [vector replays](examples/vector/tests/) on three backends |
+| [Rigid bodies](packages/physics.entpkg/kernels/physics.ent), [decision](docs/DECISIONS.md#contacts-are-solved-all-at-once-each-against-its-own-share-of-a-body) | the sort package, scatter `sum` of pushes, `times` with two `carry`s, `<~` | [physics replays](examples/physics/tests/) on three backends |
+| [Widgets and letters](packages/ui.entpkg/package.esn) | maps over grids, `<~` navigation state, `value(port)` and `count(port)` extents | [ui replay](examples/ui/tests/ui.replay) on three backends |
 | [Font import](crates/interface/import/src/font.rs) | glyph outlines as `Rows` of segments | [importer tests](crates/interface/import/src/font.rs), on a font the tests build from the format's tables |
-| [Image](packages/image.orlapkg/package.osn) | maps, scatter `sum` and prefix `sum` (histograms), `times` with a carried step (jump flooding) | [image replay](examples/darkroom/tests/image.replay) on three backends |
-| [Noise](packages/noise.orlapkg/kernels/noise.orla) | functions over `Int` bits (`mul_wrap`, `>>>`) | [noise replay](examples/nebula/tests/noise.replay) on three backends |
-| [Camera finish](packages/image.orlapkg/graphs/finish.osn) | maps over grids, `size(port)` domains, the noise package | [nebula replay](examples/nebula/tests/nebula.replay) on three backends |
+| [Image](packages/image.entpkg/package.esn) | maps, scatter `sum` and prefix `sum` (histograms), `times` with a carried step (jump flooding) | [image replay](examples/darkroom/tests/image.replay) on three backends |
+| [Noise](packages/noise.entpkg/kernels/noise.ent) | functions over `Int` bits (`mul_wrap`, `>>>`) | [noise replay](examples/nebula/tests/noise.replay) on three backends |
+| [Camera finish](packages/image.entpkg/graphs/finish.esn) | maps over grids, `size(port)` domains, the noise package | [nebula replay](examples/nebula/tests/nebula.replay) on three backends |
 
 ## Where each contract is enforced
 
@@ -123,7 +123,7 @@ A GPU session hands scans and every module the GPU does not take
 ([`Backend::takes`](crates/core/rules/src/backend.rs)) to the JIT; inputs
 beyond the device's bindings are packed into one buffer
 ([packing](crates/backends/gpu/src/wgsl/mod.rs)). Where each node ran and
-why is `Runtime::placement` ([routed test](crates/interface/orla/tests/session.rs),
+why is `Runtime::placement` ([routed test](crates/interface/entelechy/tests/session.rs),
 [mixed](crates/interface/session/tests/mixed.rs), [few](crates/interface/session/tests/few.rs)). A Kernel the device's own
 compiler fails on is declined from then on and runs on the JIT, said as
 any routing is ([GPU `declines`](crates/backends/gpu/src/lib.rs),
@@ -136,7 +136,7 @@ version it replaces ran there, anything else at its first run
 [lazy](crates/interface/session/tests/lazy.rs)); a changed library
 document is read and compiled off the frames where replacements prepare
 there ([compile ahead](crates/interface/session/tests/compile_ahead.rs));
-`orla check` says a
+`entelechy check` says a
 Kernel is large by the words it carries through its branches
 ([`carried`](crates/core/ir/src/size.rs)), and which published Kernels
 no node uses ([large](crates/interface/session/tests/large.rs)). A `Long` on the device
@@ -167,7 +167,7 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   ([state](crates/core/graph/src/evaluate/state.rs),
   [composition](crates/interface/session/tests/composition.rs)).
 - Migration: `reconcile_state` runs the named `migrate` Kernel on a shape
-  mismatch, else restarts the port ([an agent changing it](crates/interface/orla/tests/protocol.rs)).
+  mismatch, else restarts the port ([an agent changing it](crates/interface/entelechy/tests/protocol.rs)).
 - `times = N` expands into `name/1..N` in [scene lowering](crates/frontend/scene/src/lib.rs).
 - `evaluate_for` runs only what the named nodes need.
 - A named run takes, frame by frame, what the same frame of its last run
@@ -175,7 +175,7 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   [recall test](crates/interface/session/tests/recall.rs)).
 - `use` across files and cycles ([sources](crates/interface/session/src/sources.rs));
   the names each document sees, shadowing and duplicate names
-  ([scope](crates/frontend/language/src/scope.rs), [session test](crates/interface/orla/tests/session.rs)).
+  ([scope](crates/frontend/language/src/scope.rs), [session test](crates/interface/entelechy/tests/session.rs)).
 - Parameters of any value type, checked by layout
   ([`Param`, `value_as`](crates/core/ir/src/lib.rs), [`Value`](crates/core/abi/src/lib.rs),
   [`set_param`](crates/interface/session/src/scene.rs),
@@ -205,14 +205,14 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   placed by [`account`](crates/core/ir/src/account.rs) in `prepare_on`
   ([runtime](crates/core/kernel/src/lib.rs)); held by the
   [IR tests](crates/frontend/compiler/tests/compile.rs) and
-  [session tests](crates/interface/orla/tests/session.rs).
+  [session tests](crates/interface/entelechy/tests/session.rs).
 - Integer failures are the reference's everywhere: the GPU's checked
   arithmetic ([`can_fail`](crates/backends/gpu/src/wgsl/mod.rs)) and
   [`Check`](crates/core/rules/src/backend.rs)
   ([device test](crates/backends/gpu/tests/parity.rs)).
 - Only nodes declaring `time.read` or `input.read` re-execute on a clock
   or input change ([composition](crates/interface/session/tests/composition.rs)).
-- `orla help` is generated from the typing rule and the lowering
+- `entelechy help` is generated from the typing rule and the lowering
   ([help](crates/frontend/compiler/src/help.rs)); unknown names answer with
   the near miss ([names](crates/core/abi/src/names.rs)).
 
@@ -231,7 +231,7 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
 - The protocol is an interface over the session: `prepare` never
   publishes, `publish` checks a generation, `compose` rewrites the
   document ([protocol](crates/interface/protocol/src/lib.rs)).
-- The C ABI's lifetimes are in its [header](crates/interface/ffi/include/orla.h).
+- The C ABI's lifetimes are in its [header](crates/interface/ffi/include/entelechy.h).
 - Application tests are `.replay` data ([replay](crates/interface/session/src/replay.rs)),
   run by the verification in [HANDOFF](HANDOFF.md).
 
@@ -246,7 +246,7 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   and prepares the new ones, on every core at once through a
   [`Preparer`](crates/core/kernel/src/lib.rs); each document then
   publishes in order as if alone ([prime](crates/interface/session/tests/prime.rs)).
-  `orla check` checks the documents a scene uses the same way, each on
+  `entelechy check` checks the documents a scene uses the same way, each on
   its own, and says what they found in their order
   ([spread](crates/interface/session/src/spread.rs)).
 - The interpreter is the reference; the first failing element in
@@ -257,13 +257,13 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   which the compiler's value places put in the source
   ([trace](crates/backends/cpu/src/lib.rs),
   [places](crates/frontend/compiler/src/lib.rs),
-  [test](crates/interface/orla/tests/session.rs)).
+  [test](crates/interface/entelechy/tests/session.rs)).
 - The optimizer rewrites exactly and moves nothing that can fail
   ([optimize](crates/core/ir/src/optimize.rs), [test](crates/backends/cpu/tests/optimizer.rs)).
 - A platform without threads, links, native code or a clock does the same
   work another way ([decision](docs/DECISIONS.md), [later](crates/core/kernel/src/later.rs),
   [store](crates/interface/session/src/store.rs), [clock](crates/core/kernel/src/clock.rs),
-  [bridges test](crates/interface/orla/tests/bridges.rs)).
+  [bridges test](crates/interface/entelechy/tests/bridges.rs)).
 
 ### Measuring
 

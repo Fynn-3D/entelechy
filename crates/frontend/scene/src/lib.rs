@@ -1,5 +1,5 @@
 #![warn(missing_docs)]
-//! Scene documents: a parsed `.osn` lowered into the Graph model, with
+//! Scene documents: a parsed `.esn` lowered into the Graph model, with
 //! sub-graphs flattened in place.
 //!
 //! The frontend half of composition: this crate reads and checks what
@@ -17,21 +17,21 @@ use std::fmt;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use orla_abi::Value;
-use orla_ir::KernelId;
-use orla_language::NodeDecl;
-use orla_language::{
+use entelechy_abi::Value;
+use entelechy_ir::KernelId;
+use entelechy_language::NodeDecl;
+use entelechy_language::{
     BindingDecl, Document, Expr, ExprKind, Kernel, NodeKind, NodeMember, ParseError, SourceRef,
     Span, Spanned,
 };
 
-use orla_graph::{
+use entelechy_graph::{
     Binding, DomainExpr, DomainSpec, Graph, GraphParam, Node, NodeId, ParamValue, Requirement,
     Source,
 };
 
 /// The port type an alias stands for, following aliases to the end.
-fn resolved(ty: &str, aliases: &[orla_language::TypeAlias]) -> String {
+fn resolved(ty: &str, aliases: &[entelechy_language::TypeAlias]) -> String {
     let mut ty = ty.to_owned();
     for _ in 0..8 {
         match aliases.iter().find(|alias| alias.name.value == ty) {
@@ -110,13 +110,13 @@ pub type Loader<'a> = dyn FnMut(&Path) -> Result<(PathBuf, String), String> + 'a
 /// Kernel of the document sees. The caller reads the files.
 pub type Declare<'a> = dyn FnMut(
         &Path,
-        &[orla_language::Use],
-        orla_language::Own<'_>,
+        &[entelechy_language::Use],
+        entelechy_language::Own<'_>,
     ) -> Result<
         (
-            Vec<orla_language::StructDecl>,
-            Vec<orla_language::TypeAlias>,
-            Vec<orla_language::FnDecl>,
+            Vec<entelechy_language::StructDecl>,
+            Vec<entelechy_language::TypeAlias>,
+            Vec<entelechy_language::FnDecl>,
         ),
         String,
     > + 'a;
@@ -267,9 +267,9 @@ fn error(span: Span, message: impl Into<String>) -> DocumentError {
 
 /// A compiler's error as the document's: where the compiler placed it, else
 /// at `span`, said once.
-fn compiled(span: Span, e: orla_compiler::CompileError) -> DocumentError {
+fn compiled(span: Span, e: entelechy_compiler::CompileError) -> DocumentError {
     match e {
-        orla_compiler::CompileError::Semantic {
+        entelechy_compiler::CompileError::Semantic {
             span: placed,
             message,
             ..
@@ -281,9 +281,9 @@ fn compiled(span: Span, e: orla_compiler::CompileError) -> DocumentError {
 /// A compiler's error in a struct another document declares, said with
 /// that document and the place in it; the caller places it in the scene.
 fn declared_elsewhere(
-    structs: &[orla_language::StructDecl],
-    e: orla_compiler::CompileError,
-) -> Result<DocumentError, orla_compiler::CompileError> {
+    structs: &[entelechy_language::StructDecl],
+    e: entelechy_compiler::CompileError,
+) -> Result<DocumentError, entelechy_compiler::CompileError> {
     let Some(origin) = e
         .declaration()
         .and_then(|name| structs.iter().find(|d| d.name.value == name))
@@ -292,7 +292,9 @@ fn declared_elsewhere(
         return Err(e);
     };
     let (place, message) = match &e {
-        orla_compiler::CompileError::Semantic { span, message, .. } => (*span, message.clone()),
+        entelechy_compiler::CompileError::Semantic { span, message, .. } => {
+            (*span, message.clone())
+        }
         other => (Span::default(), other.to_string()),
     };
     let at = if place.is_placed() {
@@ -308,7 +310,7 @@ fn declared_elsewhere(
 
 /// A node's `domain`: a literal resolves now, an expression when the
 /// node binds.
-fn domain_spec(expr: &orla_language::Expr) -> Result<DomainSpec, DocumentError> {
+fn domain_spec(expr: &entelechy_language::Expr) -> Result<DomainSpec, DocumentError> {
     spec_of(domain_expr(expr)?, expr.span)
 }
 
@@ -339,7 +341,7 @@ fn spec_of(domain: DomainExpr, span: Span) -> Result<DomainSpec, DocumentError> 
 /// A document's nodes and outputs after `times` expansion.
 type Expanded = (
     Vec<NodeDecl>,
-    Vec<(orla_language::Spanned<String>, SourceRef)>,
+    Vec<(entelechy_language::Spanned<String>, SourceRef)>,
     BTreeMap<String, String>,
 );
 
@@ -365,9 +367,9 @@ struct Lowering<'a, 'b> {
     stack: Vec<PathBuf>,
     /// The declarations of the document being lowered, own and
     /// inherited, which fills and synthesized Kernels resolve through.
-    aliases: Vec<orla_language::TypeAlias>,
-    structs: Vec<orla_language::StructDecl>,
-    functions: Vec<orla_language::FnDecl>,
+    aliases: Vec<entelechy_language::TypeAlias>,
+    structs: Vec<entelechy_language::StructDecl>,
+    functions: Vec<entelechy_language::FnDecl>,
     /// Nodes placed so far, every level together.
     placed: usize,
     /// Each sub-graph document placed so far, read, parsed and declared
@@ -382,9 +384,9 @@ struct Lowering<'a, 'b> {
 struct Read {
     text: String,
     document: Document,
-    aliases: Vec<orla_language::TypeAlias>,
-    structs: Vec<orla_language::StructDecl>,
-    functions: Vec<orla_language::FnDecl>,
+    aliases: Vec<entelechy_language::TypeAlias>,
+    structs: Vec<entelechy_language::StructDecl>,
+    functions: Vec<entelechy_language::FnDecl>,
 }
 
 /// The most nodes one scene places, every level of `times` and sub-graph
@@ -393,7 +395,7 @@ pub const MAX_PLACED: usize = 1 << 16;
 
 /// A place in a document, as the `file:line:column` of Kernel
 /// diagnostics.
-fn written_at(path: &Path, span: orla_language::Span) -> String {
+fn written_at(path: &Path, span: entelechy_language::Span) -> String {
     format!("{}:{}:{}", path.display(), span.line, span.column)
 }
 
@@ -408,7 +410,7 @@ fn lower(
 ) -> Result<Lowered, DocumentError> {
     let mut document = document.clone();
     let (structs, types, functions) =
-        declare(base, &document.uses, orla_language::Own::of(&document))
+        declare(base, &document.uses, entelechy_language::Own::of(&document))
             .map_err(|message| error(Span::default(), message))?;
     document.resolve((&structs, &types, &functions));
     let document = &document;
@@ -515,7 +517,10 @@ fn check_placement(
             Span::default(),
             format!(
                 "sub-graph `{node}` has no {what} `{name}`{}; its {what}s are {listed}",
-                orla_language::suggestion(orla_language::nearest(name, names.iter().copied()))
+                entelechy_language::suggestion(entelechy_language::nearest(
+                    name,
+                    names.iter().copied()
+                ))
             ),
         )
     };
@@ -650,7 +655,10 @@ impl Place<'_> {
     /// A requirement in the flattened graph: named with the prefix, each
     /// param what the parent passed. Every name it reads is a param of
     /// this graph.
-    fn requirement(&self, decl: &orla_language::RequireDecl) -> Result<Requirement, DocumentError> {
+    fn requirement(
+        &self,
+        decl: &entelechy_language::RequireDecl,
+    ) -> Result<Requirement, DocumentError> {
         let requirement = domain::requirement(decl)?;
         let unknown = std::cell::RefCell::new(None);
         let _ = requirement.with_names(&|name| {
@@ -1152,7 +1160,7 @@ impl Lowering<'_, '_> {
     /// The structs in reach, their fields' types read through the
     /// aliases in reach, as the compiler reads a literal of them: an enum a
     /// used document declares is an `Int` there too.
-    fn resolved_structs(&self) -> Vec<orla_language::StructDecl> {
+    fn resolved_structs(&self) -> Vec<entelechy_language::StructDecl> {
         let field_type = |ty: &str| match ty
             .strip_prefix('[')
             .and_then(|inner| inner.strip_suffix(']'))
@@ -1167,14 +1175,14 @@ impl Lowering<'_, '_> {
         };
         self.structs
             .iter()
-            .map(|decl| orla_language::StructDecl {
+            .map(|decl| entelechy_language::StructDecl {
                 fields: decl
                     .fields
                     .iter()
                     .map(|(name, ty)| {
                         (
                             name.clone(),
-                            orla_language::Spanned {
+                            entelechy_language::Spanned {
                                 value: field_type(&ty.value),
                                 span: ty.span,
                             },
@@ -1192,21 +1200,22 @@ impl Lowering<'_, '_> {
         for decl in &document.params {
             // Read in the param's declared type, with the document's
             // structs.
-            let ty = orla_language::Spanned {
+            let ty = entelechy_language::Spanned {
                 value: resolved(&decl.ty.value, &self.aliases),
                 span: decl.ty.span,
             };
             let default = self.known().with_variants(&decl.default)?;
             let structs = self.resolved_structs();
-            let default = orla_compiler::literal_of_type(&default, &ty, &structs).map_err(|e| {
-                match declared_elsewhere(&structs, e) {
-                    Ok(said) => DocumentError {
-                        span: decl.default.span,
-                        ..said
-                    },
-                    Err(e) => compiled(decl.default.span, e),
-                }
-            })?;
+            let default =
+                entelechy_compiler::literal_of_type(&default, &ty, &structs).map_err(|e| {
+                    match declared_elsewhere(&structs, e) {
+                        Ok(said) => DocumentError {
+                            span: decl.default.span,
+                            ..said
+                        },
+                        Err(e) => compiled(decl.default.span, e),
+                    }
+                })?;
             if params
                 .iter()
                 .any(|p: &GraphParam| p.name == decl.name.value)
@@ -1262,12 +1271,15 @@ impl Lowering<'_, '_> {
             (Some(read), _) => std::rc::Rc::clone(read),
             (None, None) => unreachable!("a located document is read where it is located"),
             (None, Some(text)) => {
-                let mut document = orla_language::parse_document(&text)
+                let mut document = entelechy_language::parse_document(&text)
                     .map_err(|e| error(sub_path.span, format!("{}:{e}", sub_path.value)))?;
                 let sub_base = resolved.parent().unwrap_or_else(|| Path::new("."));
-                let (structs, types, functions) =
-                    (self.declare)(sub_base, &document.uses, orla_language::Own::of(&document))
-                        .map_err(|m| error(sub_path.span, format!("{}: {m}", sub_path.value)))?;
+                let (structs, types, functions) = (self.declare)(
+                    sub_base,
+                    &document.uses,
+                    entelechy_language::Own::of(&document),
+                )
+                .map_err(|m| error(sub_path.span, format!("{}: {m}", sub_path.value)))?;
                 document.resolve((&structs, &types, &functions));
                 let read = std::rc::Rc::new(Read {
                     aliases: types.iter().chain(&document.types).cloned().collect(),
@@ -1404,7 +1416,7 @@ impl Lowering<'_, '_> {
             let mut node_params = BTreeMap::new();
             let mut domain = None;
             let mut is_async = false;
-            let mut bind = |port: &orla_language::Spanned<String>, binding: Binding| {
+            let mut bind = |port: &entelechy_language::Spanned<String>, binding: Binding| {
                 if inputs.insert(port.value.clone(), binding).is_some() {
                     return Err(error(
                         port.span,
@@ -1584,7 +1596,7 @@ impl Lowering<'_, '_> {
                         literal_text(&value),
                         ty.value
                     );
-                    let mut kernel = orla_language::parse(&text).map_err(|e| {
+                    let mut kernel = entelechy_language::parse(&text).map_err(|e| {
                         error(ty.span, format!("a filled Field of `{}`: {e}", ty.value))
                     })?;
                     // It inherits the document's declarations, aliases
@@ -1652,12 +1664,12 @@ impl Lowering<'_, '_> {
                             .map_or(Span::default(), |r| r.span);
                         let names: Vec<&str> =
                             outputs.iter().map(|(name, _)| name.as_str()).collect();
-                        let near = orla_language::nearest(port, names.iter().copied());
+                        let near = entelechy_language::nearest(port, names.iter().copied());
                         error(
                             span,
                             format!(
                                 "sub-graph `{node}` has no output `{port}`{}; its outputs are {}",
-                                orla_language::suggestion(near),
+                                entelechy_language::suggestion(near),
                                 names
                                     .iter()
                                     .map(|name| format!("`{name}`"))
@@ -1789,7 +1801,7 @@ impl Known {
                 .find(|(declared, _)| declared == name)
                 .map(|(_, variants)| variants.clone())
         };
-        orla_compiler::with_variants(expr, &variants_of).map_err(|e| compiled(expr.span, e))
+        entelechy_compiler::with_variants(expr, &variants_of).map_err(|e| compiled(expr.span, e))
     }
 }
 
@@ -1806,21 +1818,21 @@ fn literal(expr: &Expr, known: &Known) -> Result<Value, DocumentError> {
             .find(|(struct_name, _)| struct_name == name)
             .map(|(_, fields)| fields.clone())
     };
-    orla_compiler::literal_exact(&expr, &fields_of).map_err(|e| compiled(expr.span, e))
+    entelechy_compiler::literal_exact(&expr, &fields_of).map_err(|e| compiled(expr.span, e))
 }
 
 /// A value's own literal as an expression, for rewriting param defaults.
 fn literal_expr(value: Value, span: Span) -> Expr {
-    let mut expr =
-        orla_language::parse_literal(&value.to_string()).expect("a value's literal reads back");
+    let mut expr = entelechy_language::parse_literal(&value.to_string())
+        .expect("a value's literal reads back");
     expr.span = span;
     expr
 }
 
-/// Parses a `.osn` document that references published Kernels only.
+/// Parses a `.esn` document that references published Kernels only.
 /// Inline Kernels and sub-graphs take [`load`].
 pub fn parse(text: &str) -> Result<Graph, DocumentError> {
-    let document = orla_language::parse_document(text).map_err(DocumentError::from)?;
+    let document = entelechy_language::parse_document(text).map_err(DocumentError::from)?;
     let mut loader = |path: &std::path::Path| -> Result<(PathBuf, String), String> {
         Err(format!(
             "sub-graph `{}` cannot be loaded here",
@@ -1858,12 +1870,12 @@ pub fn parse(text: &str) -> Result<Graph, DocumentError> {
 /// `name`, reporting inline Kernels for the loader to publish. Anonymous
 /// inline Kernels are named by [`anonymous_id`].
 pub fn from_document(
-    document: &orla_language::Document,
+    document: &entelechy_language::Document,
     name: &str,
 ) -> Result<Lowered, DocumentError> {
     let mut loader = |path: &std::path::Path| -> Result<(PathBuf, String), String> {
         Err(format!(
-            "sub-graph `{}` cannot be loaded here; use orla_scene::load with a loader",
+            "sub-graph `{}` cannot be loaded here; use entelechy_scene::load with a loader",
             path.display()
         ))
     };
@@ -1884,7 +1896,7 @@ pub fn from_document(
 /// in place: nodes prefixed with the placing node's name, inputs and
 /// params taken from the parent.
 pub fn load(
-    document: &orla_language::Document,
+    document: &entelechy_language::Document,
     text: &str,
     name: &str,
     base: &std::path::Path,
@@ -1905,7 +1917,7 @@ pub fn load(
 /// Loads like [`load`], also resolving every document's `use` items
 /// through `declare` for all its Kernels.
 pub fn load_with(
-    document: &orla_language::Document,
+    document: &entelechy_language::Document,
     text: &str,
     name: &str,
     base: &std::path::Path,
@@ -1925,7 +1937,7 @@ pub fn load_with(
 
 /// As [`load_with`], with parameter overrides a node's `times` may read.
 pub fn load_with_params(
-    document: &orla_language::Document,
+    document: &entelechy_language::Document,
     text: &str,
     name: &str,
     base: &std::path::Path,
@@ -1939,7 +1951,7 @@ pub fn load_with_params(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orla_abi::Domain;
+    use entelechy_abi::Domain;
 
     const DOCUMENT: &str = "
 // a comment
@@ -2038,7 +2050,7 @@ output result <- a.result;
                  compute { return sample(source); }
              }
              output result <- named.result;";
-        let document = orla_language::parse_document(source).unwrap();
+        let document = entelechy_language::parse_document(source).unwrap();
         let mut none =
             |path: &Path| -> Result<(PathBuf, String), String> { Err(path.display().to_string()) };
         let lowered = load(&document, source, "My-Scene", Path::new("."), &mut none).unwrap();
@@ -2050,7 +2062,7 @@ output result <- a.result;
             lowered.inline[0].text
         );
         assert!(
-            orla_language::parse(&lowered.inline[0].text).is_ok(),
+            entelechy_language::parse(&lowered.inline[0].text).is_ok(),
             "{}",
             lowered.inline[0].text
         );
@@ -2069,9 +2081,11 @@ output result <- a.result;
         assert!(matches!(trail.inputs["previous"], Binding::Previous { .. }));
         assert_eq!(trail.domain, Some(DomainSpec::Literal(Domain::Grid(4, 4))));
         assert_eq!(trail.params["fade"], ParamValue::Graph("decay".into()));
-        let compiled =
-            orla_compiler::compile_kernel(&lowered.inline[0].kernel, Some(&lowered.inline[0].id))
-                .unwrap();
+        let compiled = entelechy_compiler::compile_kernel(
+            &lowered.inline[0].kernel,
+            Some(&lowered.inline[0].id),
+        )
+        .unwrap();
         assert_eq!(compiled.manifest.params[0].default, Value::Float(0.9));
     }
 
@@ -2084,9 +2098,9 @@ output result <- a.result;
             param strength: Float = 1.0;
             node map: image.tonemap@1 { source <- source; exposure = strength; }
             output result <- map.result;";
-        let root = orla_language::parse_document(
+        let root = entelechy_language::parse_document(
             "node scene: image.gradient@1 { domain = vec2(8, 8); }
-             node look: graph \"fx.orlapkg/graphs/look.osn\" { source <- scene.result; strenght = 0.5; }
+             node look: graph \"fx.entpkg/graphs/look.esn\" { source <- scene.result; strenght = 0.5; }
              output result <- look.result;",
         )
         .unwrap();
@@ -2096,7 +2110,7 @@ output result <- a.result;
         let error = load(&root, "", "main", Path::new("app"), &mut loader).unwrap_err();
         assert_eq!(
             error.message,
-            "fx.orlapkg/graphs/look.osn: sub-graph `look` has no param `strenght`; did you mean `strength`?; its params are `strength`"
+            "fx.entpkg/graphs/look.esn: sub-graph `look` has no param `strenght`; did you mean `strength`?; its params are `strength`"
         );
     }
 
@@ -2107,11 +2121,11 @@ output result <- a.result;
         let display = "input source: Image;
             node map: image.tonemap@1 { source <- source; }
             output result <- map.result;";
-        let root = orla_language::parse_document(
+        let root = entelechy_language::parse_document(
             "node scene: image.gradient@1 { domain = vec2(8, 8); }
-             node a: graph \"d.osn\" { source <- scene.result; }
-             node b: graph \"d.osn\" { source <- a.result; }
-             node c: graph \"d.osn\" { source <- b.result; }
+             node a: graph \"d.esn\" { source <- scene.result; }
+             node b: graph \"d.esn\" { source <- a.result; }
+             node c: graph \"d.esn\" { source <- b.result; }
              output result <- c.result;",
         )
         .unwrap();
@@ -2138,11 +2152,11 @@ output result <- a.result;
             require cells: columns * 2 <= 1 << bits;
             node n: t.k@1 { domain = columns; }
             output result <- n.result;";
-        let root = orla_language::parse_document(
+        let root = entelechy_language::parse_document(
             "param wide: Int = 100;
              require positive: wide > 0;
-             node a: graph \"grid.osn\" { columns = wide; }
-             node b: graph \"grid.osn\" { bits = 7; }
+             node a: graph \"grid.esn\" { columns = wide; }
+             node b: graph \"grid.esn\" { bits = 7; }
              output result <- a.result;",
         )
         .unwrap();
@@ -2189,8 +2203,8 @@ output result <- a.result;
             "{failed}"
         );
         // Broken by the params as given, the document is refused as it loads.
-        let broken = orla_language::parse_document(
-            "node b: graph \"grid.osn\" { bits = 3; } output result <- b.result;",
+        let broken = entelechy_language::parse_document(
+            "node b: graph \"grid.esn\" { bits = 3; } output result <- b.result;",
         )
         .unwrap();
         let refused = load(&broken, "", "main", Path::new("root"), &mut loader).unwrap_err();
@@ -2217,7 +2231,7 @@ output result <- a.result;
                 "compares with",
             ),
         ] {
-            let document = orla_language::parse_document(text).unwrap();
+            let document = entelechy_language::parse_document(text).unwrap();
             let error = load(&document, text, "main", Path::new("root"), &mut loader).unwrap_err();
             assert!(error.message.contains(says), "{error}");
         }
@@ -2231,16 +2245,16 @@ output result <- a.result;
             node map: image.tonemap@1 { source <- source; exposure = exposure; }
             node fade: image.fade@1 { previous <~ fade.result from map.result; }
             output result <- fade.result;";
-        let root = orla_language::parse_document(
+        let root = entelechy_language::parse_document(
             "param strength: Float = 2.0;
              node scene: image.gradient@1 { domain = vec2(8, 8); }
-             node display: graph \"shared/display.osn\" { source <- scene.result; exposure = strength; }
-             node again: graph \"shared/display.osn\" { source <- display.result; }
+             node display: graph \"shared/display.esn\" { source <- scene.result; exposure = strength; }
+             node again: graph \"shared/display.esn\" { source <- display.result; }
              output result <- again.result;",
         )
         .unwrap();
         let mut loader = |path: &Path| -> Result<(PathBuf, String), String> {
-            assert_eq!(path, Path::new("root/shared/display.osn"));
+            assert_eq!(path, Path::new("root/shared/display.esn"));
             Ok((path.to_path_buf(), display.to_owned()))
         };
         let lowered = load(&root, "", "main", Path::new("root"), &mut loader).unwrap();
@@ -2294,7 +2308,7 @@ output result <- a.result;
         );
         assert_eq!(
             lowered.documents,
-            vec![PathBuf::from("root/shared/display.osn"); 2]
+            vec![PathBuf::from("root/shared/display.esn"); 2]
         );
         assert!(graph.order().is_ok());
     }
@@ -2337,7 +2351,7 @@ output result <- a.result;
         assert!(error.message.contains("literal"), "{error}");
         let error = parse("node a: t.k@1 { y = nope; }\noutput r <- a.r;").unwrap_err();
         assert!(error.message.contains("not a param"), "{error}");
-        let error = parse("node a: graph \"x.osn\" { }\noutput r <- a.r;").unwrap_err();
+        let error = parse("node a: graph \"x.esn\" { }\noutput r <- a.r;").unwrap_err();
         assert!(error.message.contains("cannot load"), "{error}");
     }
 }
@@ -2388,7 +2402,7 @@ output result <- show.result;
             "the name means the last time"
         );
         // The caller's value sizes the graph; one time keeps the plain name.
-        let document = orla_language::parse_document(REPEATED).unwrap();
+        let document = entelechy_language::parse_document(REPEATED).unwrap();
         let mut none: Box<Declare<'_>> =
             Box::new(|_, _, _| Ok((Vec::new(), Vec::new(), Vec::new())));
         let mut loader: Box<Loader<'_>> = Box::new(|_| Err("no files".into()));
@@ -2487,7 +2501,7 @@ output result <- show.result;
 output kept <- show.result to \"saves/kept.field\";
 output raw <- first.result to bytes \"raw.bin\";";
         let lowered =
-            from_document(&orla_language::parse_document(text).unwrap(), "graph").unwrap();
+            from_document(&entelechy_language::parse_document(text).unwrap(), "graph").unwrap();
         let graph = lowered.graph;
         assert_eq!(
             graph.fallback("saved"),
@@ -2529,8 +2543,8 @@ output raw <- first.result to bytes \"raw.bin\";";
         )
         .unwrap_err();
         assert!(twice.message.contains("written by two outputs"), "{twice}");
-        let placed = orla_language::parse_document(
-            "node inner: graph \"inner.osn\" { }\noutput result <- inner.result;",
+        let placed = entelechy_language::parse_document(
+            "node inner: graph \"inner.esn\" { }\noutput result <- inner.result;",
         )
         .unwrap();
         let mut loader = |path: &Path| -> Result<(PathBuf, String), String> {
@@ -2586,21 +2600,21 @@ output raw <- first.result to bytes \"raw.bin\";";
         // nineteen small files.
         let mut files: BTreeMap<PathBuf, String> = BTreeMap::new();
         files.insert(
-            PathBuf::from("g0.osn"),
+            PathBuf::from("g0.esn"),
             "input x: Rows<Int>;\nnode n: t.i@1 { previous <- x; }\noutput result <- n.result;\n"
                 .into(),
         );
         for k in 1..=18 {
             files.insert(
-                PathBuf::from(format!("g{k}.osn")),
+                PathBuf::from(format!("g{k}.esn")),
                 format!(
-                    "input x: Rows<Int>;\nnode a: graph \"g{j}.osn\" {{ x <- x; }}\nnode b: graph \"g{j}.osn\" {{ x <- a.result; }}\noutput result <- b.result;\n",
+                    "input x: Rows<Int>;\nnode a: graph \"g{j}.esn\" {{ x <- x; }}\nnode b: graph \"g{j}.esn\" {{ x <- a.result; }}\noutput result <- b.result;\n",
                     j = k - 1
                 ),
             );
         }
-        let text = "node s: t.z@1 { domain = 1; }\nnode top: graph \"g18.osn\" { x <- s.result; }\noutput result <- top.result;\n";
-        let document = orla_language::parse_document(text).unwrap();
+        let text = "node s: t.z@1 { domain = 1; }\nnode top: graph \"g18.esn\" { x <- s.result; }\noutput result <- top.result;\n";
+        let document = entelechy_language::parse_document(text).unwrap();
         let mut loader = |path: &Path| {
             files
                 .get(path)
@@ -2656,7 +2670,7 @@ impl std::fmt::Display for Printed<'_> {
                 Some((_, text)) => writeln!(
                     f,
                     "input {external}: Rows<Int> = text {};",
-                    orla_language::quoted(text)
+                    entelechy_language::quoted(text)
                 )?,
                 None => writeln!(f, "input {external}: Image;")?,
             }
@@ -2703,7 +2717,7 @@ impl std::fmt::Display for Printed<'_> {
     }
 }
 
-/// Renders a value in the literal grammar shared with `.orla`.
+/// Renders a value in the literal grammar shared with `.ent`.
 pub fn literal_text(value: &Value) -> String {
     // A scene number reads back as written, without `d`.
     match value {

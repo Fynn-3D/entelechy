@@ -14,9 +14,9 @@ use super::*;
 /// A frame committed and not yet confirmed.
 pub(super) struct Unconfirmed {
     /// Its runs' checks, in run order.
-    checks: Vec<(NodeId, Vec<Box<dyn orla_kernel::Check>>)>,
+    checks: Vec<(NodeId, Vec<Box<dyn entelechy_kernel::Check>>)>,
     /// Its work, all of it, finished on the device.
-    mark: Option<Box<dyn orla_kernel::Check>>,
+    mark: Option<Box<dyn entelechy_kernel::Check>>,
     /// What its commit replaced, port by port, held to be put back.
     replaced: Vec<((NodeId, String), Option<Handle>)>,
     /// The nodes it ran, whose outputs leave the cache if it failed.
@@ -80,7 +80,7 @@ impl Evaluator {
         &mut self,
         graph: &Graph,
         runtime: &mut Runtime,
-        checks: Vec<(NodeId, Vec<Box<dyn orla_kernel::Check>>)>,
+        checks: Vec<(NodeId, Vec<Box<dyn entelechy_kernel::Check>>)>,
         ran: Vec<NodeId>,
     ) -> Result<Vec<(NodeId, String)>, EvaluateError> {
         let (advanced, replaced) = self.commit_holding(graph)?;
@@ -93,9 +93,9 @@ impl Evaluator {
         };
         match self.unconfirmed.replace(frame) {
             Some(before) => {
-                let started = orla_kernel::clock::now();
+                let started = entelechy_kernel::clock::now();
                 let settled = self.settle_frame(before, runtime);
-                self.waited = orla_kernel::clock::since(started);
+                self.waited = entelechy_kernel::clock::since(started);
                 settled.map(|()| advanced)
             }
             None => Ok(advanced),
@@ -117,7 +117,7 @@ impl Evaluator {
             replaced,
             ran,
         } = frame;
-        let mut failed: Option<(NodeId, orla_kernel::ExecutionError)> = None;
+        let mut failed: Option<(NodeId, entelechy_kernel::ExecutionError)> = None;
         for (node, node_checks) in checks {
             for check in node_checks {
                 if let Err(error) = check.wait()

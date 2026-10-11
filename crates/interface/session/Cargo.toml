@@ -1,6 +1,6 @@
 [package]
-name = "orla-session"
-description = "Orla session: a live scene over the runtimes, which every interface drives"
+name = "entelechy-session"
+description = "Entelechy session: a live scene over the runtimes, which every interface drives"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,21 +11,21 @@ rust-version.workspace = true
 doctest = false
 
 [dependencies]
-orla-compiler = { path = "../../frontend/compiler" }
-orla-language = { path = "../../frontend/language" }
-orla-ir = { path = "../../core/ir" }
-orla-graph = { path = "../../core/graph" }
-orla-scene = { path = "../../frontend/scene" }
-orla-kernel = { path = "../../core/kernel" }
-orla-rules = { path = "../../core/rules" }
-orla-cpu = { path = "../../backends/cpu" }
-orla-gpu = { path = "../../backends/gpu" }
-orla-jit = { path = "../../backends/jit" }
-orla-formats = { path = "../../interface/formats" }
+entelechy-compiler = { path = "../../frontend/compiler" }
+entelechy-language = { path = "../../frontend/language" }
+entelechy-ir = { path = "../../core/ir" }
+entelechy-graph = { path = "../../core/graph" }
+entelechy-scene = { path = "../../frontend/scene" }
+entelechy-kernel = { path = "../../core/kernel" }
+entelechy-rules = { path = "../../core/rules" }
+entelechy-cpu = { path = "../../backends/cpu" }
+entelechy-gpu = { path = "../../backends/gpu" }
+entelechy-jit = { path = "../../backends/jit" }
+entelechy-formats = { path = "../../interface/formats" }
 
 [dev-dependencies]
-orla-abi = { path = "../../core/abi" }
-orla-conformance = { path = "../../backends/conformance" }
+entelechy-abi = { path = "../../core/abi" }
+entelechy-conformance = { path = "../../backends/conformance" }
 
 [lints]
 workspace = true

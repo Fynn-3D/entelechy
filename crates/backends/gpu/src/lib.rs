@@ -35,10 +35,10 @@ use std::any::Any;
 use std::fmt;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use orla_abi::{Handle, Invocation, MadeFrom, Scope, Value, Version};
-use orla_ir::{Mode, Validated};
-use orla_rules::{ArithmeticError, Backend, Check, NativeOp, Prepared};
-use orla_rules::{ExecutionError, check_invocation};
+use entelechy_abi::{Handle, Invocation, MadeFrom, Scope, Value, Version};
+use entelechy_ir::{Mode, Validated};
+use entelechy_rules::{ArithmeticError, Backend, Check, NativeOp, Prepared};
+use entelechy_rules::{ExecutionError, check_invocation};
 
 /// The GPU could not be opened.
 #[derive(Debug)]
@@ -182,7 +182,7 @@ impl GpuBackend {
         }
         let (device, queue) = wait
             .block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("orla"),
+                label: Some("entelechy"),
                 required_features: features,
                 required_limits,
                 ..Default::default()
@@ -278,7 +278,7 @@ impl Backend for GpuBackend {
         self.frames.end_frame()
     }
 
-    fn clocked_frame(&self) -> Option<orla_rules::ClockedFrame> {
+    fn clocked_frame(&self) -> Option<entelechy_rules::ClockedFrame> {
         self.frames.done()
     }
 
@@ -307,7 +307,7 @@ impl Backend for GpuBackend {
     fn declines(&self, module: &Validated) -> Option<String> {
         self.refusal(module)
             .or_else(|| {
-                (module.manifest.mode == orla_ir::Mode::Scan)
+                (module.manifest.mode == entelechy_ir::Mode::Scan)
                     .then(|| "a scan runs its steps in order, on one thread".to_owned())
             })
             .or_else(|| {
@@ -368,7 +368,7 @@ impl Backend for GpuBackend {
         module: &Validated,
         invocation: &Invocation,
         scope: &mut Scope<'_>,
-    ) -> Result<orla_rules::backend::Checked, ExecutionError> {
+    ) -> Result<entelechy_rules::backend::Checked, ExecutionError> {
         check_invocation(module, invocation, scope)?;
         let pipeline = built(prepared)?;
         let _guard = self
@@ -380,7 +380,7 @@ impl Backend for GpuBackend {
         // What comes out: one element for a reduction, the target's extent
         // for a scatter, the domain otherwise.
         let output_domain = match mode {
-            Mode::Reduce => orla_abi::Domain::Rows(1),
+            Mode::Reduce => entelechy_abi::Domain::Rows(1),
             Mode::Scatter { base, .. } => scope.size(invocation.inputs[base as usize])?,
             _ => domain,
         };
@@ -492,7 +492,7 @@ impl Backend for GpuBackend {
                 width: domain.width(),
                 totals_width: output_domain.width(),
                 budget: module.manifest.budget,
-                run: orla_rules::Run::new(scope.work()),
+                run: entelechy_rules::Run::new(scope.work()),
             }) as Box<dyn Check>
         });
         Ok((outputs, check))
@@ -578,7 +578,7 @@ impl Backend for GpuBackend {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("orla download"),
+                label: Some("entelechy download"),
             });
         encoder.copy_buffer_to_buffer(&image.buffer, 0, &staging, 0, size);
         self.submit(encoder.finish());
@@ -599,7 +599,7 @@ impl Backend for GpuBackend {
         &self,
         device: &(dyn Any + Send + Sync),
         byte_len: usize,
-    ) -> Result<Box<dyn orla_rules::Downloading>, String> {
+    ) -> Result<Box<dyn entelechy_rules::Downloading>, String> {
         let image = device
             .downcast_ref::<DeviceImage>()
             .ok_or_else(|| "image is resident on a different backend".to_string())?;
@@ -616,7 +616,7 @@ impl Backend for GpuBackend {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("orla download"),
+                label: Some("entelechy download"),
             });
         encoder.copy_buffer_to_buffer(&image.buffer, 0, &staging, 0, byte_len as u64);
         let after = self.submit(encoder.finish());

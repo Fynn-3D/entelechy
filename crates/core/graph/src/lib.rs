@@ -12,12 +12,12 @@ mod domain;
 mod evaluate;
 
 pub use domain::{Compare, DomainError, DomainExpr, DomainOp, DomainSpec, Requirement};
+pub use entelechy_abi::{Context, Domain, InputState, Value};
+pub use entelechy_ir::KernelId;
 pub use evaluate::{
     Bound, EvaluateError, Evaluator, Placed, PlanEntry, Refused, Report, binding_fault,
     borrowed_domain, type_fault,
 };
-pub use orla_abi::{Context, Domain, InputState, Value};
-pub use orla_ir::KernelId;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -243,7 +243,7 @@ impl fmt::Display for GraphError {
                 source,
                 near,
             } => {
-                let hint = orla_abi::names::suggestion(near.as_deref());
+                let hint = entelechy_abi::names::suggestion(near.as_deref());
                 write!(
                     f,
                     "node `{node}` port `{port}` refers to unknown source `{source}`{hint}"
@@ -455,11 +455,11 @@ impl Graph {
                     if !known {
                         // Every name, for the closest-match suggestion.
                         let near = match source {
-                            Source::Node { node, .. } => orla_abi::names::nearest(
+                            Source::Node { node, .. } => entelechy_abi::names::nearest(
                                 &node.0,
                                 self.nodes.iter().map(|n| n.id.0.as_str()),
                             ),
-                            Source::External(name) => orla_abi::names::nearest(
+                            Source::External(name) => entelechy_abi::names::nearest(
                                 name,
                                 self.externals.iter().map(String::as_str),
                             ),

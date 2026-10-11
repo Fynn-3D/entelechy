@@ -6,9 +6,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use orla_formats::ppm;
-use orla_graph::{EvaluateError, Evaluator, Graph, Report};
-use orla_kernel::{Backend, Context, Expect, Handle, KernelId, Runtime, Value};
+use entelechy_formats::ppm;
+use entelechy_graph::{EvaluateError, Evaluator, Graph, Report};
+use entelechy_kernel::{Backend, Context, Expect, Handle, KernelId, Runtime, Value};
 
 use crate::store::Store;
 use crate::{
@@ -38,7 +38,7 @@ pub struct Session {
     unrun: BTreeMap<String, String>,
     /// The Kernels the graph's nodes use, by the version last seen
     /// ([`Session::finish_used`]).
-    used: BTreeMap<orla_kernel::KernelId, orla_kernel::Generation>,
+    used: BTreeMap<entelechy_kernel::KernelId, entelechy_kernel::Generation>,
     /// The headless window: size in pixels and scale factor.
     window: Option<([f32; 2], f32)>,
     /// What changed the world, and what was refused.
@@ -50,7 +50,7 @@ pub struct Session {
     claim: Claim,
     /// The names asked to stay materialized ([`Session::pin`]), resolved
     /// against the running graph before each evaluation.
-    pins: Vec<orla_graph::NodeId>,
+    pins: Vec<entelechy_graph::NodeId>,
     /// Each clocked frame's nodes' runs, until the device tells the frame.
     node_clock: crate::clocked::NodeClock,
 }
@@ -73,22 +73,22 @@ pub(crate) enum Claim {
 
 /// The error an evaluation returns when no scene has loaded.
 fn no_scene() -> EvaluateError {
-    EvaluateError::Graph(orla_graph::GraphError::UnknownOutput(
-        orla_graph::Source::External("<no scene>".into()),
+    EvaluateError::Graph(entelechy_graph::GraphError::UnknownOutput(
+        entelechy_graph::Source::External("<no scene>".into()),
     ))
 }
 
 impl crate::Warm {
     /// Opens `backend` (`cpu`, `gpu` or `jit`) once, for many sessions.
     pub fn open(backend: &str, limits: Limits) -> Result<Self, String> {
-        let (main, ordered) = Session::backends(backend, orla_gpu::Wait::blocking())?;
+        let (main, ordered) = Session::backends(backend, entelechy_gpu::Wait::blocking())?;
         Ok(Self::over(main, ordered, limits))
     }
 }
 
 /// A main backend and the one for ordered work beside it.
 pub(crate) type Backends = (Box<dyn Backend>, Option<Box<dyn Backend>>);
-type Display = orla_gpu::present::Display;
+type Display = entelechy_gpu::present::Display;
 /// Backends opened, and the main one's display when it has one.
 type Opened = (Box<dyn Backend>, Option<Box<dyn Backend>>, Option<Display>);
 
@@ -99,7 +99,7 @@ impl Session {
         Self::open_with(
             scene,
             library,
-            Runtime::with_backend(budget_words, Box::new(orla_cpu::CpuBackend)),
+            Runtime::with_backend(budget_words, Box::new(entelechy_cpu::CpuBackend)),
         )
     }
 
@@ -154,7 +154,7 @@ impl Session {
     /// Builds a runtime over a named backend ([`Session::build`]),
     /// blocking on the device.
     pub fn runtime_for(backend: &str, limits: Limits) -> Result<Runtime, String> {
-        Self::build(backend, limits, orla_gpu::Wait::blocking()).map(|built| built.runtime)
+        Self::build(backend, limits, entelechy_gpu::Wait::blocking()).map(|built| built.runtime)
     }
 
     /// Builds a runtime over `cpu`, `gpu`, `jit`, or `best` (the first of
@@ -163,7 +163,7 @@ impl Session {
     pub fn build(
         backend: &str,
         limits: Limits,
-        wait: orla_gpu::Wait,
+        wait: entelechy_gpu::Wait,
     ) -> Result<crate::Built, String> {
         let mut passed_over = Vec::new();
         let one = [backend];
@@ -201,7 +201,7 @@ impl Session {
         library: Option<&Path>,
         backend: &str,
         limits: Limits,
-        wait: orla_gpu::Wait,
+        wait: entelechy_gpu::Wait,
         hold_reads: bool,
     ) -> Result<crate::Loaded, String> {
         let one = [backend];
@@ -253,25 +253,25 @@ impl Session {
     fn backend_runtime(
         backend: &str,
         budget_words: usize,
-        wait: orla_gpu::Wait,
-    ) -> Result<(Runtime, Option<orla_gpu::present::Display>), String> {
+        wait: entelechy_gpu::Wait,
+    ) -> Result<(Runtime, Option<entelechy_gpu::present::Display>), String> {
         let (main, ordered, display) = Self::opened(backend, wait)?;
         Ok((Runtime::with_backends(budget_words, main, ordered), display))
     }
 
     /// The backends `backend` names, opened: the main one and the one for
     /// ordered work (the JIT beside a GPU).
-    pub(crate) fn backends(backend: &str, wait: orla_gpu::Wait) -> Result<Backends, String> {
+    pub(crate) fn backends(backend: &str, wait: entelechy_gpu::Wait) -> Result<Backends, String> {
         Self::opened(backend, wait).map(|(main, ordered, _)| (main, ordered))
     }
 
-    fn opened(backend: &str, wait: orla_gpu::Wait) -> Result<Opened, String> {
+    fn opened(backend: &str, wait: entelechy_gpu::Wait) -> Result<Opened, String> {
         match backend {
-            "cpu" => Ok((Box::new(orla_cpu::CpuBackend), None, None)),
+            "cpu" => Ok((Box::new(entelechy_cpu::CpuBackend), None, None)),
             "gpu" => {
                 // The JIT runs scans; the GPU runs everything else.
-                let gpu =
-                    orla_gpu::GpuBackend::with_wait(wait).map_err(|error| error.to_string())?;
+                let gpu = entelechy_gpu::GpuBackend::with_wait(wait)
+                    .map_err(|error| error.to_string())?;
                 let display = gpu.display();
                 Ok((Box::new(gpu), Self::jit().ok(), Some(display)))
             }
@@ -284,7 +284,7 @@ impl Session {
 
     /// The JIT, where the machine or a WebAssembly host runs its code.
     fn jit() -> Result<Box<dyn Backend>, String> {
-        orla_jit::JitBackend::new().map(|jit| Box::new(jit) as Box<dyn Backend>)
+        entelechy_jit::JitBackend::new().map(|jit| Box::new(jit) as Box<dyn Backend>)
     }
 
     /// The current graph, if the scene loaded.
@@ -328,7 +328,7 @@ impl Session {
     /// Names the run the next evaluations are, from its first frame: each
     /// frame takes from the same frame of the last run of that name what
     /// nothing it reads has changed, and is remembered for the next
-    /// ([`orla_graph::Evaluator::recall_as`]). `None` remembers nothing.
+    /// ([`entelechy_graph::Evaluator::recall_as`]). `None` remembers nothing.
     pub fn recall_as(&mut self, name: Option<String>) {
         self.evaluator.recall_as(name);
     }
@@ -444,7 +444,7 @@ impl Session {
     /// Restricts input reads to the scene's own directories (its own, its
     /// placed graphs', its libraries' and packages') and those
     /// [`Session::allow_reads`] allowed; for sessions an agent drives
-    /// (`serve`, `--serve`, `orla_request`). Refused after the first
+    /// (`serve`, `--serve`, `entelechy_request`). Refused after the first
     /// sync; the directories are fixed as the scene first loads.
     pub fn restrict_reads(&mut self) -> Result<(), String> {
         crate::reads::lock(&self.reads).restrict()
@@ -475,7 +475,7 @@ impl Session {
     /// compiles within the session's grants. Side-effect free; callers ask
     /// before replacing the document.
     pub fn check_scene(&self, text: &str) -> Result<(), crate::Diagnostic> {
-        let granted = |module: &orla_ir::Validated| {
+        let granted = |module: &entelechy_ir::Validated| {
             self.runtime
                 .granted(module)
                 .map_err(|why| crate::Diagnostic::new(why.to_string()))
@@ -546,7 +546,7 @@ impl Session {
 
     /// Where each node with a published Kernel runs, and why when off the
     /// main backend.
-    pub fn placements(&self) -> Vec<(String, orla_kernel::Placement)> {
+    pub fn placements(&self) -> Vec<(String, entelechy_kernel::Placement)> {
         let Some(graph) = self.scene.graph() else {
             return Vec::new();
         };
@@ -562,7 +562,7 @@ impl Session {
 
     /// Finishes on the main backend, on every core at once, the Kernels
     /// the graph's nodes use for the first time
-    /// ([`orla_kernel::Preparer::finish`]), so the frame after waits for
+    /// ([`entelechy_kernel::Preparer::finish`]), so the frame after waits for
     /// none of them in turn. A replacement was finished in preparing it
     /// where the version it replaced ran there ([`Runtime::prepare_later`]),
     /// and a Kernel no node uses is left for a run that needs it.
@@ -734,7 +734,7 @@ impl Session {
     pub fn publishing(
         &mut self,
         publishing: &Publishing,
-    ) -> Option<Result<std::sync::Arc<orla_kernel::KernelVersion>, crate::Diagnostic>> {
+    ) -> Option<Result<std::sync::Arc<entelechy_kernel::KernelVersion>, crate::Diagnostic>> {
         let prepared = self.runtime.poll(publishing.ticket)?;
         let published = prepared
             .map_err(|e| crate::Diagnostic::new(e.to_string()))
@@ -757,7 +757,7 @@ impl Session {
 
     /// Records a refused Kernel source, by its id when it parses.
     fn refused_source(&mut self, source: &str, error: &crate::Diagnostic) {
-        let subject = orla_language::parse_document(source)
+        let subject = entelechy_language::parse_document(source)
             .ok()
             .and_then(|document| document.kernels.first().and_then(|k| k.id.clone()))
             .map_or_else(|| "a Kernel".to_owned(), |id| id.value);
@@ -776,7 +776,7 @@ impl Session {
         &mut self,
         source: &str,
         expect: Expect,
-    ) -> Result<std::sync::Arc<orla_kernel::KernelVersion>, crate::Diagnostic> {
+    ) -> Result<std::sync::Arc<entelechy_kernel::KernelVersion>, crate::Diagnostic> {
         let publishing = self.publish_later(source, expect)?;
         loop {
             if let Some(published) = self.publishing(&publishing) {
@@ -791,7 +791,7 @@ impl Session {
     pub fn prepare_source(
         &self,
         source: &str,
-    ) -> Result<orla_kernel::Candidate, crate::Diagnostic> {
+    ) -> Result<entelechy_kernel::Candidate, crate::Diagnostic> {
         self.scene
             .prepare_source(source, &self.kernels, &self.runtime)
     }
@@ -812,8 +812,12 @@ impl Session {
 
     /// The node and port that produce what `node.port` names: itself, or
     /// for a placed graph's output or a scene output, the node that gives
-    /// it ([`orla_graph::Graph::producer`]).
-    pub fn producer(&self, node: &orla_graph::NodeId, port: &str) -> (orla_graph::NodeId, String) {
+    /// it ([`entelechy_graph::Graph::producer`]).
+    pub fn producer(
+        &self,
+        node: &entelechy_graph::NodeId,
+        port: &str,
+    ) -> (entelechy_graph::NodeId, String) {
         self.scene
             .graph()
             .and_then(|graph| graph.producer(node, port))
@@ -821,14 +825,14 @@ impl Session {
     }
 
     /// The Field last evaluated for what `node.port` names, if any.
-    pub fn cached(&self, node: &orla_graph::NodeId, port: &str) -> Option<Handle> {
+    pub fn cached(&self, node: &entelechy_graph::NodeId, port: &str) -> Option<Handle> {
         let (node, port) = self.producer(node, port);
         self.evaluator.cached(&node, &port)
     }
 
     /// The node `node` runs fused into, if any
-    /// ([`orla_graph::Evaluator::fused_into`]).
-    pub fn fused_into(&self, node: &orla_graph::NodeId) -> Option<orla_graph::NodeId> {
+    /// ([`entelechy_graph::Evaluator::fused_into`]).
+    pub fn fused_into(&self, node: &entelechy_graph::NodeId) -> Option<entelechy_graph::NodeId> {
         let (node, _) = self.producer(node, "result");
         self.evaluator.fused_into(&node).cloned()
     }
@@ -837,10 +841,10 @@ impl Session {
     /// as that document writes them (its `struct`s, `type`s and `fn`s),
     /// and the document; none for a Kernel no document publishes.
     pub fn shared_with(&self, kernel: &KernelId) -> Option<(PathBuf, String)> {
-        use orla_language::StatementKind;
+        use entelechy_language::StatementKind;
         let path = self.kernels.owner(kernel)?.to_path_buf();
         let text = self.store().read_text(&path).ok()?;
-        let outline = orla_language::outline(&text).ok()?;
+        let outline = entelechy_language::outline(&text).ok()?;
         let shared: Vec<&str> = outline
             .statements
             .iter()
@@ -862,7 +866,7 @@ impl Session {
         let Some(graph) = self.scene.graph() else {
             return Vec::new();
         };
-        let runs = |node: &orla_graph::NodeId| {
+        let runs = |node: &entelechy_graph::NodeId| {
             graph
                 .nodes
                 .iter()
@@ -871,8 +875,8 @@ impl Session {
         let mut out = Vec::new();
         for node in &graph.nodes {
             for (port, binding) in &node.inputs {
-                if let orla_graph::Binding::Previous {
-                    initial: orla_graph::Source::Node { node: from, .. },
+                if let entelechy_graph::Binding::Previous {
+                    initial: entelechy_graph::Source::Node { node: from, .. },
                     ..
                 } = binding
                     && runs(from)
@@ -886,14 +890,14 @@ impl Session {
 
     /// Why `node`'s `port` has no value to read: not a node, placed as
     /// several, folded into its reader, or not run since it was placed.
-    pub fn why_no_value(&self, node: &orla_graph::NodeId, port: &str) -> String {
+    pub fn why_no_value(&self, node: &entelechy_graph::NodeId, port: &str) -> String {
         let (node, port) = self.producer(node, port);
         observe::why_no_value(self.scene.graph(), &self.evaluator, &node, &port)
     }
 
     /// Waits for every `async` node's run and takes it in; see
-    /// [`orla_graph::Evaluator::settle`].
-    pub fn settle(&mut self) -> Result<Vec<orla_graph::NodeId>, EvaluateError> {
+    /// [`entelechy_graph::Evaluator::settle`].
+    pub fn settle(&mut self) -> Result<Vec<entelechy_graph::NodeId>, EvaluateError> {
         self.evaluator.settle(&mut self.runtime)
     }
 
@@ -913,7 +917,7 @@ impl Session {
     }
 
     /// Whether later evaluations overlap the device's work on the frame
-    /// before; see [`orla_graph::Evaluator::set_overlap`]. Turning it off
+    /// before; see [`entelechy_graph::Evaluator::set_overlap`]. Turning it off
     /// confirms the frame in flight.
     pub fn set_overlap(&mut self, on: bool) -> Result<(), EvaluateError> {
         let set = self.evaluator.set_overlap(on, &mut self.runtime);
@@ -927,7 +931,7 @@ impl Session {
     }
 
     /// Whether frames are clocked on the device as they run; see
-    /// [`orla_kernel::Runtime::set_clocked`]. A clocked frame waits for
+    /// [`entelechy_kernel::Runtime::set_clocked`]. A clocked frame waits for
     /// nothing more than an unclocked one.
     pub fn set_clocked(&mut self, on: bool) {
         self.runtime.set_clocked(on);
@@ -937,7 +941,7 @@ impl Session {
     }
 
     /// The device's busy time for the latest clocked frame it has done; see
-    /// [`orla_kernel::Runtime::frame_device_time`].
+    /// [`entelechy_kernel::Runtime::frame_device_time`].
     pub fn frame_device_time(&self) -> Option<std::time::Duration> {
         self.runtime.frame_device_time()
     }
@@ -950,13 +954,13 @@ impl Session {
     }
 
     /// How long the last evaluation waited for the frame before it; see
-    /// [`orla_graph::Evaluator::device_waited`].
+    /// [`entelechy_graph::Evaluator::device_waited`].
     pub fn device_waited(&self) -> std::time::Duration {
         self.evaluator.device_waited()
     }
 
     /// Confirms the frame in flight, if any; see
-    /// [`orla_graph::Evaluator::confirm`].
+    /// [`entelechy_graph::Evaluator::confirm`].
     pub fn confirm(&mut self) -> Result<(), EvaluateError> {
         let confirmed = self.evaluator.confirm(&mut self.runtime);
         self.tally();
@@ -1039,11 +1043,11 @@ impl Session {
     }
 
     /// Evaluates only what `demand` needs; see
-    /// [`orla_graph::Evaluator::evaluate_for`].
+    /// [`entelechy_graph::Evaluator::evaluate_for`].
     pub fn evaluate_for(
         &mut self,
         context: &Context,
-        demand: &std::collections::BTreeSet<orla_graph::NodeId>,
+        demand: &std::collections::BTreeSet<entelechy_graph::NodeId>,
     ) -> Result<Report, EvaluateError> {
         self.one_frame_in_flight();
         self.inputs.select_frames(
@@ -1069,10 +1073,10 @@ impl Session {
     }
 
     /// Replaces the committed state of `node.port` with `words`; see
-    /// [`orla_graph::Evaluator::write`].
+    /// [`entelechy_graph::Evaluator::write`].
     pub fn write(
         &mut self,
-        node: &orla_graph::NodeId,
+        node: &entelechy_graph::NodeId,
         port: &str,
         words: Vec<u32>,
     ) -> Result<(), EvaluateError> {
@@ -1102,7 +1106,7 @@ impl Session {
     /// its `<~` readers restart on the next evaluation.
     pub fn reset_port(
         &mut self,
-        node: &orla_graph::NodeId,
+        node: &entelechy_graph::NodeId,
         port: &str,
     ) -> Result<(), EvaluateError> {
         self.repin();
@@ -1137,7 +1141,7 @@ impl Session {
     }
 
     /// The fixed cost of measuring one node; see
-    /// [`orla_kernel::Backend::measurement_floor`]. Known after a
+    /// [`entelechy_kernel::Backend::measurement_floor`]. Known after a
     /// measured run.
     pub fn measurement_floor(&self) -> std::time::Duration {
         self.runtime().measurement_floor()
@@ -1161,7 +1165,7 @@ impl Session {
     /// Keeps what `node` names materialized so it can be read: a node, or
     /// a placed graph by the nodes that give its outputs. The name holds
     /// across a scene read again.
-    pub fn pin(&mut self, node: orla_graph::NodeId) {
+    pub fn pin(&mut self, node: entelechy_graph::NodeId) {
         if !self.pins.contains(&node) {
             self.pins.push(node);
         }
@@ -1169,7 +1173,7 @@ impl Session {
     }
 
     /// What would execute right now, in order, with fusion applied.
-    pub fn plan(&mut self) -> Result<Vec<orla_graph::PlanEntry>, EvaluateError> {
+    pub fn plan(&mut self) -> Result<Vec<entelechy_graph::PlanEntry>, EvaluateError> {
         self.repin();
         let graph = self.scene.graph().ok_or_else(no_scene)?;
         self.evaluator.plan_summary(
@@ -1181,7 +1185,7 @@ impl Session {
     }
 
     /// Lets fusion have what `node` names back.
-    pub fn unpin(&mut self, node: &orla_graph::NodeId) {
+    pub fn unpin(&mut self, node: &entelechy_graph::NodeId) {
         self.pins.retain(|pinned| pinned != node);
         for inner in self.pinned_by(node) {
             self.evaluator.unpin(&inner);
@@ -1190,7 +1194,7 @@ impl Session {
 
     /// The nodes `name` pins in the running graph: itself, or a placed
     /// graph's output nodes; a name placed `times = N` its last time's.
-    fn pinned_by(&self, name: &orla_graph::NodeId) -> Vec<orla_graph::NodeId> {
+    fn pinned_by(&self, name: &entelechy_graph::NodeId) -> Vec<entelechy_graph::NodeId> {
         let graph = self.scene.graph();
         let last = graph
             .and_then(|graph| {
@@ -1206,8 +1210,8 @@ impl Session {
             Some((_, outputs)) => outputs
                 .iter()
                 .filter_map(|(_, source)| match source {
-                    orla_graph::Source::Node { node, .. } => Some(node.clone()),
-                    orla_graph::Source::External(_) => None,
+                    entelechy_graph::Source::Node { node, .. } => Some(node.clone()),
+                    entelechy_graph::Source::External(_) => None,
                 })
                 .collect(),
             None => vec![name.clone()],
@@ -1232,7 +1236,7 @@ impl Session {
     /// [`Session::allowed_write`] allows, whoever asks.
     pub fn save(
         &mut self,
-        node: &orla_graph::NodeId,
+        node: &entelechy_graph::NodeId,
         port: &str,
         path: &Path,
     ) -> Result<(), String> {
@@ -1250,7 +1254,11 @@ impl Session {
     }
 
     /// How many elements a node's output holds.
-    pub fn element_count(&self, node: &orla_graph::NodeId, port: &str) -> Result<usize, String> {
+    pub fn element_count(
+        &self,
+        node: &entelechy_graph::NodeId,
+        port: &str,
+    ) -> Result<usize, String> {
         let (node, port) = self.producer(node, port);
         observe::element_count(&self.evaluator, &self.runtime, &node, &port)
     }
@@ -1263,13 +1271,13 @@ impl Session {
     /// added.
     pub fn trace(
         &mut self,
-        node: &orla_graph::NodeId,
+        node: &entelechy_graph::NodeId,
         at: [u32; 3],
         context: &Context,
     ) -> Result<Traced, String> {
         let (target, version) = observe::trace_target(self.scene.graph(), &self.runtime, node)?;
         // Pin the node's sources for this evaluation so they have Fields.
-        let pinned: Vec<orla_graph::NodeId> = observe::trace_sources(&target)
+        let pinned: Vec<entelechy_graph::NodeId> = observe::trace_sources(&target)
             .into_iter()
             .filter(|source| !self.evaluator.pins().contains(source))
             .collect();
@@ -1338,8 +1346,8 @@ impl Session {
             return None;
         };
         let (x, y) = match error {
-            orla_kernel::ExecutionError::Arithmetic { x, y, .. }
-            | orla_kernel::ExecutionError::Exhausted { x, y, .. } => (*x, *y),
+            entelechy_kernel::ExecutionError::Arithmetic { x, y, .. }
+            | entelechy_kernel::ExecutionError::Exhausted { x, y, .. } => (*x, *y),
             _ => return None,
         };
         // A volume's row counts its layers through: past the first layer
@@ -1351,11 +1359,11 @@ impl Session {
     /// `node.port[index].field.field` ([`crate::observe::parse_target`]).
     pub fn element_field(
         &mut self,
-        node: &orla_graph::NodeId,
+        node: &entelechy_graph::NodeId,
         port: &str,
         index: u32,
         path: &[String],
-    ) -> Result<(orla_ir::Type, Vec<u32>), String> {
+    ) -> Result<(entelechy_ir::Type, Vec<u32>), String> {
         let (node, port) = self.producer(node, port);
         observe::element_field(
             self.scene.graph(),
@@ -1372,7 +1380,7 @@ impl Session {
     /// is `""`.
     pub fn element_names(
         &self,
-        node: &orla_graph::NodeId,
+        node: &entelechy_graph::NodeId,
         port: &str,
     ) -> Result<Vec<String>, String> {
         let (node, port) = self.producer(node, port);
@@ -1383,7 +1391,7 @@ impl Session {
     /// order; none for a value that is not a struct.
     pub fn element_fields(
         &mut self,
-        node: &orla_graph::NodeId,
+        node: &entelechy_graph::NodeId,
         port: &str,
         path: &[String],
     ) -> Result<Vec<String>, String> {
@@ -1410,8 +1418,8 @@ impl Session {
     }
 
     /// A Field's words taken later, not waiting for the work submitted
-    /// after this call; see [`orla_kernel::Runtime::fetch`].
-    pub fn fetch(&self, handle: Handle) -> Result<orla_kernel::Fetch, SessionError> {
+    /// after this call; see [`entelechy_kernel::Runtime::fetch`].
+    pub fn fetch(&self, handle: Handle) -> Result<entelechy_kernel::Fetch, SessionError> {
         self.runtime
             .fetch(handle)
             .map_err(|e| SessionError::Observe(e.to_string()))
@@ -1419,7 +1427,7 @@ impl Session {
 
     /// A Field's data as the Host holds it, brought back from the device
     /// first.
-    pub fn field(&mut self, handle: Handle) -> Result<&orla_kernel::FieldData, SessionError> {
+    pub fn field(&mut self, handle: Handle) -> Result<&entelechy_kernel::FieldData, SessionError> {
         self.runtime
             .materialize(handle)
             .map_err(|e| SessionError::Observe(e.to_string()))?;
@@ -1427,8 +1435,8 @@ impl Session {
     }
 
     /// The output of `report` every interface shows: the first picture
-    /// ([`orla_kernel::Schema::is_picture`]).
-    pub fn picture_of(&self, report: &orla_graph::Report) -> Option<Handle> {
+    /// ([`entelechy_kernel::Schema::is_picture`]).
+    pub fn picture_of(&self, report: &entelechy_graph::Report) -> Option<Handle> {
         report
             .outputs
             .iter()
@@ -1437,7 +1445,7 @@ impl Session {
     }
 
     /// Whether the Field `handle` is a picture
-    /// ([`orla_kernel::Schema::is_picture`]).
+    /// ([`entelechy_kernel::Schema::is_picture`]).
     pub fn is_picture(&self, handle: Handle) -> bool {
         let host = self.runtime.host();
         match (host.schema(handle), host.domain(handle)) {
@@ -1460,16 +1468,18 @@ impl Session {
                     let known = graph.outputs.iter().map(|(output, _)| output.as_str());
                     format!(
                         "no output named `{name}`{}",
-                        orla_language::did_you_mean(name, known)
+                        entelechy_language::did_you_mean(name, known)
                     )
                 })?,
             None => graph.primary_output().ok_or("the graph has no output")?,
         };
         match source {
-            orla_graph::Source::Node { node, port } => self
+            entelechy_graph::Source::Node { node, port } => self
                 .cached(node, port)
                 .ok_or_else(|| "evaluate before reading an output".to_owned()),
-            orla_graph::Source::External(_) => Err(format!("output `{name}` is an external image")),
+            entelechy_graph::Source::External(_) => {
+                Err(format!("output `{name}` is an external image"))
+            }
         }
     }
 
@@ -1495,24 +1505,24 @@ impl Session {
 
     /// The output of `report` every interface plays, and its channels:
     /// the first rows of one float (mono) or two (stereo).
-    pub fn sound_of(&self, report: &orla_graph::Report) -> Option<(Handle, usize)> {
+    pub fn sound_of(&self, report: &entelechy_graph::Report) -> Option<(Handle, usize)> {
         let host = self.runtime.host();
         report.outputs.iter().find_map(|(_, handle)| {
             let rows = host
                 .domain(*handle)
-                .is_ok_and(|d| d.shape() == orla_kernel::Shape::Rows);
+                .is_ok_and(|d| d.shape() == entelechy_kernel::Shape::Rows);
             let schema = host.schema(*handle).ok()?;
             let floats = schema
                 .scalars()
                 .iter()
-                .all(|c| *c == orla_kernel::Scalar::Float);
+                .all(|c| *c == entelechy_kernel::Scalar::Float);
             let channels = schema.value_words();
             (rows && floats && (1..=2).contains(&channels)).then_some((*handle, channels))
         })
     }
 
     /// A Field of pixels as an image, brought back from the device first.
-    pub fn picture(&mut self, handle: Handle) -> Result<orla_kernel::Image, SessionError> {
+    pub fn picture(&mut self, handle: Handle) -> Result<entelechy_kernel::Image, SessionError> {
         self.runtime
             .image(handle)
             .map_err(|e| SessionError::Observe(e.to_string()))
@@ -1524,7 +1534,7 @@ impl Session {
         image: Handle,
         x: u32,
         y: u32,
-    ) -> Result<orla_kernel::Pixel, SessionError> {
+    ) -> Result<entelechy_kernel::Pixel, SessionError> {
         observe::read_pixel(&mut self.runtime, image, x, y)
     }
 }

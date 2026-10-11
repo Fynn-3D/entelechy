@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use orla_graph::Report;
-use orla_kernel::{Handle, Runtime};
+use entelechy_graph::Report;
+use entelechy_kernel::{Handle, Runtime};
 
 use crate::Event;
 use crate::store::Store;
@@ -53,7 +53,7 @@ impl Writes {
 
     /// Whether the evaluation behind `report` changed an output written to
     /// a file.
-    pub(crate) fn due(&self, writes: &[orla_scene::Write], report: &Report) -> bool {
+    pub(crate) fn due(&self, writes: &[entelechy_scene::Write], report: &Report) -> bool {
         writes.iter().any(|write| {
             report
                 .outputs
@@ -72,7 +72,7 @@ impl Writes {
     pub(crate) fn after(
         &mut self,
         store: &dyn Store,
-        writes: &[orla_scene::Write],
+        writes: &[entelechy_scene::Write],
         report: &Report,
         runtime: &mut Runtime,
     ) {
@@ -188,12 +188,14 @@ fn encode(
     runtime.materialize(handle).map_err(|e| e.to_string())?;
     let data = runtime.host().data(handle).map_err(|e| e.to_string())?;
     if bytes {
-        return orla_formats::encode_bytes(data);
+        return entelechy_formats::encode_bytes(data);
     }
-    orla_formats::encode(data, &orla_formats::extension(path), None).map_err(|why| match why {
-        orla_formats::EncodeError::Unknown => why.to_string(),
-        orla_formats::EncodeError::Unfit(what) => {
-            format!("the output is {what}; write it as .field")
+    entelechy_formats::encode(data, &entelechy_formats::extension(path), None).map_err(|why| {
+        match why {
+            entelechy_formats::EncodeError::Unknown => why.to_string(),
+            entelechy_formats::EncodeError::Unfit(what) => {
+                format!("the output is {what}; write it as .field")
+            }
         }
     })
 }

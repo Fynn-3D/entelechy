@@ -5,7 +5,7 @@
 //! element, or one that holds only inside a form, is held by the
 //! compiler's own tests.
 
-use orla_compiler::{compile, help};
+use entelechy_compiler::{compile, help};
 
 /// A value of `ty` as a Kernel writes it, for the types a signature names.
 fn value_of(ty: &str) -> Option<&'static str> {

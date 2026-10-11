@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # A 160 by 90 window. The pointer at (100, 45) points at the stone hill,
 # voxel (45, 12, 30), whose index in the 64 by 32 by 64 volume is

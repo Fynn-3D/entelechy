@@ -1,4 +1,4 @@
-scene wide.osn
+scene wide.esn
 
 # A ball just above a ground that covers 90000 cells comes to rest on it
 # in a twelfth of a second, where a missed pair lets it fall through.

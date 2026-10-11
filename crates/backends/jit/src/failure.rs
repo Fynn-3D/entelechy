@@ -1,7 +1,7 @@
 //! The failure codes a run stores in its context, shared by native
 //! code, WebAssembly and the helpers, and their reading as errors.
 
-use orla_rules::{ArithmeticError, ExecutionError};
+use entelechy_rules::{ArithmeticError, ExecutionError};
 
 use crate::Shared;
 

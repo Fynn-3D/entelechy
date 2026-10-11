@@ -2,9 +2,9 @@
 //! device. These need the scene language and the runtime together, held
 //! by the session layer.
 
-use orla_abi::{Context, Value};
-use orla_gpu::GpuBackend;
-use orla_rules::Backend;
+use entelechy_abi::{Context, Value};
+use entelechy_gpu::GpuBackend;
+use entelechy_rules::Backend;
 
 fn gpu() -> Option<GpuBackend> {
     match GpuBackend::new() {
@@ -19,10 +19,10 @@ fn gpu() -> Option<GpuBackend> {
 /// Compiles and publishes a Kernel as a session does: compiling is the
 /// caller's step, the runtime takes validated IR.
 fn load(
-    runtime: &mut orla_kernel::Runtime,
+    runtime: &mut entelechy_kernel::Runtime,
     source: &str,
-) -> std::sync::Arc<orla_kernel::KernelVersion> {
-    let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
+) -> std::sync::Arc<entelechy_kernel::KernelVersion> {
+    let module = entelechy_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
     runtime.load(module, source).unwrap()
 }
 
@@ -30,7 +30,7 @@ fn load(
 fn chains_and_state_stay_resident_until_observed() {
     let Some(gpu) = gpu() else { return };
     let backend: Box<dyn Backend> = Box::new(gpu);
-    let mut runtime = orla_kernel::Runtime::with_backend(1 << 24, backend);
+    let mut runtime = entelechy_kernel::Runtime::with_backend(1 << 24, backend);
     load(
         &mut runtime,
         "kernel test.zero@1 { requires { field.write; } output result: Image; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }",
@@ -43,15 +43,15 @@ fn chains_and_state_stay_resident_until_observed() {
         &mut runtime,
         "kernel test.blur@1 { requires { field.read; field.write; } input source: Image; output result: Image; compute { let c = coord(); return (fetch(source, c) + fetch(source, c + vec2(1.0, 0.0))) * 0.5; } }",
     );
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "node seed: test.zero@1 { domain = vec2(8, 8); }
          node count: test.increment@1 { previous <~ count.result from seed.result; }
          node soft: test.blur@1 { source <- count.result; }
          output result <- soft.result;",
     )
     .unwrap();
-    let mut evaluator = orla_graph::Evaluator::new();
-    let empty: std::collections::BTreeMap<String, orla_abi::Handle> =
+    let mut evaluator = entelechy_graph::Evaluator::new();
+    let empty: std::collections::BTreeMap<String, entelechy_abi::Handle> =
         std::collections::BTreeMap::new();
     let no_params: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
     for frame in 1..=3 {
@@ -97,7 +97,7 @@ fn state_at_a_fixed_point_on_the_device_stops_advancing() {
     // comes back to the Host.
     let Some(gpu) = gpu() else { return };
     let backend: Box<dyn Backend> = Box::new(gpu);
-    let mut runtime = orla_kernel::Runtime::with_backend(1 << 24, backend);
+    let mut runtime = entelechy_kernel::Runtime::with_backend(1 << 24, backend);
     load(
         &mut runtime,
         "kernel test.ramp@1 { requires { field.write; } output result: Image; compute { return vec4(coord().x, coord().y, 0.0, 1.0); } }",
@@ -110,16 +110,16 @@ fn state_at_a_fixed_point_on_the_device_stops_advancing() {
         &mut runtime,
         "kernel test.double@1 { requires { field.read; field.write; } input source: Image; output result: Image; compute { return sample(source) * 2.0; } }",
     );
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "node seed: test.ramp@1 { domain = vec2(64, 64); }
          node kept: test.keep@1 { previous <~ kept.result from seed.result; }
          node twice: test.double@1 { source <- kept.result; }
          output result <- twice.result;",
     )
     .unwrap();
-    let mut evaluator = orla_graph::Evaluator::new();
+    let mut evaluator = entelechy_graph::Evaluator::new();
     evaluator.set_fusion(false);
-    let empty: std::collections::BTreeMap<String, orla_abi::Handle> =
+    let empty: std::collections::BTreeMap<String, entelechy_abi::Handle> =
         std::collections::BTreeMap::new();
     let no_params: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
     let mut frame = || {
@@ -134,7 +134,7 @@ fn state_at_a_fixed_point_on_the_device_stops_advancing() {
             .unwrap()
     };
     let names =
-        |nodes: &[orla_graph::NodeId]| nodes.iter().map(|n| n.0.clone()).collect::<Vec<_>>();
+        |nodes: &[entelechy_graph::NodeId]| nodes.iter().map(|n| n.0.clone()).collect::<Vec<_>>();
     let first = frame();
     assert_eq!(names(&first.executed), ["seed", "kept", "twice"]);
     // Its state changed from the seed to its own first Field: it runs for
@@ -158,7 +158,7 @@ fn state_at_a_fixed_point_on_the_device_stops_advancing() {
 fn fields_flow_through_the_gpu_exactly() {
     let Some(gpu) = gpu() else { return };
     let backend: Box<dyn Backend> = Box::new(gpu);
-    let mut runtime = orla_kernel::Runtime::with_backend(1 << 24, backend);
+    let mut runtime = entelechy_kernel::Runtime::with_backend(1 << 24, backend);
     load(
         &mut runtime,
         "kernel test.seed@1 { requires { field.write; } output result: Rows<Particle>; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let i = element(); return Particle { position: vec2(float(i), float(i) * 0.5), life: i * 3, alive: i / 2 * 2 == i }; } }",
@@ -171,7 +171,7 @@ fn fields_flow_through_the_gpu_exactly() {
         &mut runtime,
         "kernel test.draw@1 { requires { field.read; field.write; } input particles: Rows<Particle>; output result: Image; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let p = at(particles, int(coord().x)); return vec4(p.position.x, p.position.y, float(p.life), float(p.alive)); } }",
     );
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "node seed: test.seed@1 { domain = 8; }
          node step: test.step@1 { previous <~ step.result from seed.result; }
          node draw: test.draw@1 { source <- step.result; domain = vec2(8, 1); }
@@ -180,8 +180,8 @@ fn fields_flow_through_the_gpu_exactly() {
             .as_str(),
     )
     .unwrap();
-    let mut evaluator = orla_graph::Evaluator::new();
-    let none: std::collections::BTreeMap<String, orla_abi::Handle> = Default::default();
+    let mut evaluator = entelechy_graph::Evaluator::new();
+    let none: std::collections::BTreeMap<String, entelechy_abi::Handle> = Default::default();
     let params: std::collections::BTreeMap<String, Value> = Default::default();
     let report = evaluator
         .evaluate(&graph, &mut runtime, &none, &Context::default(), &params)
@@ -202,7 +202,7 @@ fn a_small_output_found_unchanged_on_the_device_spares_what_reads_it() {
     // the costly Field made from it is not made again; changed, it is.
     let Some(gpu) = gpu() else { return };
     let backend: Box<dyn Backend> = Box::new(gpu);
-    let mut runtime = orla_kernel::Runtime::with_backend(1 << 24, backend);
+    let mut runtime = entelechy_kernel::Runtime::with_backend(1 << 24, backend);
     load(
         &mut runtime,
         "kernel test.zero@1 { requires { field.write; } output result: Rows<Float>; compute { return 0.0; } }",
@@ -220,9 +220,9 @@ fn a_small_output_found_unchanged_on_the_device_spares_what_reads_it() {
         "kernel test.costly@1 { requires { field.read; field.write; } input pick: Rows<Int>; output result: Image; compute { return vec4(float(at(pick, 0)) + coord().x, 0.0, 0.0, 1.0); } }",
     );
     let names =
-        |nodes: &[orla_graph::NodeId]| nodes.iter().map(|n| n.0.clone()).collect::<Vec<_>>();
+        |nodes: &[entelechy_graph::NodeId]| nodes.iter().map(|n| n.0.clone()).collect::<Vec<_>>();
     let mut run = |every: f32| {
-        let graph = orla_scene::parse(&format!(
+        let graph = entelechy_scene::parse(&format!(
             "node zero: test.zero@1 {{ domain = 1; }}
              node clock: test.clock@1 {{ previous <~ clock.result from zero.result; domain = 1; }}
              node pick: test.pick@1 {{ clock <- clock.result; every = {every}; domain = 1; }}
@@ -230,9 +230,9 @@ fn a_small_output_found_unchanged_on_the_device_spares_what_reads_it() {
              output result <- costly.result;"
         ))
         .unwrap();
-        let mut evaluator = orla_graph::Evaluator::new();
+        let mut evaluator = entelechy_graph::Evaluator::new();
         evaluator.set_fusion(false);
-        let empty: std::collections::BTreeMap<String, orla_abi::Handle> =
+        let empty: std::collections::BTreeMap<String, entelechy_abi::Handle> =
             std::collections::BTreeMap::new();
         let no_params: std::collections::BTreeMap<String, Value> =
             std::collections::BTreeMap::new();
@@ -267,7 +267,7 @@ impl Backend for Counted {
     fn name(&self) -> &'static str {
         self.gpu.name()
     }
-    fn declines(&self, module: &orla_ir::Validated) -> Option<String> {
+    fn declines(&self, module: &entelechy_ir::Validated) -> Option<String> {
         self.gpu.declines(module)
     }
     fn repeats_exactly(&self) -> bool {
@@ -278,29 +278,29 @@ impl Backend for Counted {
     }
     fn prepare(
         &self,
-        module: &orla_ir::Validated,
-    ) -> Result<Box<dyn orla_rules::Prepared>, String> {
+        module: &entelechy_ir::Validated,
+    ) -> Result<Box<dyn entelechy_rules::Prepared>, String> {
         self.gpu.prepare(module)
     }
-    fn finish(&self, prepared: &dyn orla_rules::Prepared) {
+    fn finish(&self, prepared: &dyn entelechy_rules::Prepared) {
         self.gpu.finish(prepared);
     }
     fn execute(
         &self,
-        prepared: &dyn orla_rules::Prepared,
-        module: &orla_ir::Validated,
-        invocation: &orla_abi::Invocation,
-        scope: &mut orla_abi::Scope<'_>,
-    ) -> Result<Vec<orla_abi::Handle>, orla_rules::ExecutionError> {
+        prepared: &dyn entelechy_rules::Prepared,
+        module: &entelechy_ir::Validated,
+        invocation: &entelechy_abi::Invocation,
+        scope: &mut entelechy_abi::Scope<'_>,
+    ) -> Result<Vec<entelechy_abi::Handle>, entelechy_rules::ExecutionError> {
         self.gpu.execute(prepared, module, invocation, scope)
     }
     fn execute_checked(
         &self,
-        prepared: &dyn orla_rules::Prepared,
-        module: &orla_ir::Validated,
-        invocation: &orla_abi::Invocation,
-        scope: &mut orla_abi::Scope<'_>,
-    ) -> Result<orla_rules::backend::Checked, orla_rules::ExecutionError> {
+        prepared: &dyn entelechy_rules::Prepared,
+        module: &entelechy_ir::Validated,
+        invocation: &entelechy_abi::Invocation,
+        scope: &mut entelechy_abi::Scope<'_>,
+    ) -> Result<entelechy_rules::backend::Checked, entelechy_rules::ExecutionError> {
         self.gpu
             .execute_checked(prepared, module, invocation, scope)
     }
@@ -310,7 +310,7 @@ impl Backend for Counted {
     fn settle_device(&self) {
         self.gpu.settle_device();
     }
-    fn submitted(&self) -> Option<Box<dyn orla_rules::Check>> {
+    fn submitted(&self) -> Option<Box<dyn entelechy_rules::Check>> {
         self.gpu.submitted()
     }
     fn download(
@@ -345,7 +345,7 @@ fn a_small_output_found_unchanged_while_sparing_nothing_rests() {
             gpu,
             compared: std::sync::Arc::clone(&compared),
         });
-        let mut runtime = orla_kernel::Runtime::with_backend(1 << 24, backend);
+        let mut runtime = entelechy_kernel::Runtime::with_backend(1 << 24, backend);
         runtime.set_small(0);
         load(
             &mut runtime,
@@ -368,7 +368,7 @@ fn a_small_output_found_unchanged_while_sparing_nothing_rests() {
         } else {
             "zero.result"
         };
-        let graph = orla_scene::parse(&format!(
+        let graph = entelechy_scene::parse(&format!(
             "node zero: test.zero@1 {{ domain = 1; }}
              node clock: test.clock@1 {{ previous <~ clock.result from zero.result; domain = 1; }}
              node pick: test.pick@1 {{ clock <- clock.result; domain = 1; }}
@@ -376,9 +376,9 @@ fn a_small_output_found_unchanged_while_sparing_nothing_rests() {
              output result <- costly.result;"
         ))
         .unwrap();
-        let mut evaluator = orla_graph::Evaluator::new();
+        let mut evaluator = entelechy_graph::Evaluator::new();
         evaluator.set_fusion(false);
-        let empty: std::collections::BTreeMap<String, orla_abi::Handle> =
+        let empty: std::collections::BTreeMap<String, entelechy_abi::Handle> =
             std::collections::BTreeMap::new();
         let no_params: std::collections::BTreeMap<String, Value> =
             std::collections::BTreeMap::new();
@@ -406,18 +406,18 @@ fn a_clocked_frame_gives_the_devices_busy_time_without_waiting_for_it() {
     // once it has done them: a frame later, its busy time is there.
     let Some(gpu) = gpu() else { return };
     let backend: Box<dyn Backend> = Box::new(gpu);
-    let mut runtime = orla_kernel::Runtime::with_backend(1 << 24, backend);
+    let mut runtime = entelechy_kernel::Runtime::with_backend(1 << 24, backend);
     runtime.set_small(0);
     load(
         &mut runtime,
         "kernel test.wave@1 { requires { field.write; time.read; } output result: Image; compute { let p = coord(); return vec4(sin(p.x * 0.01 + time()), cos(p.y * 0.01), 0.0, 1.0); } }",
     );
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "node wave: test.wave@1 { domain = vec2(512, 512); } output result <- wave.result;",
     )
     .unwrap();
-    let mut evaluator = orla_graph::Evaluator::new();
-    let empty: std::collections::BTreeMap<String, orla_abi::Handle> =
+    let mut evaluator = entelechy_graph::Evaluator::new();
+    let empty: std::collections::BTreeMap<String, entelechy_abi::Handle> =
         std::collections::BTreeMap::new();
     let no_params: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
     assert_eq!(runtime.frame_device_time(), None, "nothing clocked yet");
@@ -458,24 +458,24 @@ fn a_clocked_frames_device_time_is_shared_out_to_the_nodes_that_ran() {
     // each has its runs' busy time by name, and with what ran between
     // nodes they make up the frame's.
     let Some(gpu) = gpu() else { return };
-    let dir = std::env::temp_dir().join(format!("orla-node-clock-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-node-clock-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("lib.orla"),
+        dir.join("lib.ent"),
         "kernel t.wave@1 { requires { field.write; time.read; } output result: Image; compute { let p = coord(); return vec4(sin(p.x * 0.01 + time()), cos(p.y * 0.01), 0.0, 1.0); } }
 kernel t.blur@1 { requires { field.read; field.write; } input picture: Image; output result: Image; compute { let p = coord(); let n = size(picture); return (at(picture, p) + at(picture, min(p + vec2(1.0, 0.0), n - vec2(1.0, 1.0)))) * 0.5; } }",
     )
     .unwrap();
     std::fs::write(
-        dir.join("scene.osn"),
-        "use \"lib.orla\";\nnode wave: t.wave@1 { domain = vec2(512, 512); }\nnode blur: t.blur@1 { picture <- wave.result; }\noutput result <- blur.result;\n",
+        dir.join("scene.esn"),
+        "use \"lib.ent\";\nnode wave: t.wave@1 { domain = vec2(512, 512); }\nnode blur: t.blur@1 { picture <- wave.result; }\noutput result <- blur.result;\n",
     )
     .unwrap();
     let backend: Box<dyn Backend> = Box::new(gpu);
-    let mut runtime = orla_kernel::Runtime::with_backend(1 << 26, backend);
+    let mut runtime = entelechy_kernel::Runtime::with_backend(1 << 26, backend);
     runtime.set_small(0);
-    let mut session = orla_session::Session::open_with(&dir.join("scene.osn"), None, runtime);
+    let mut session = entelechy_session::Session::open_with(&dir.join("scene.esn"), None, runtime);
     session.sync();
     assert_eq!(session.device_times(), None, "nothing clocked yet");
     session.set_clocked(true);

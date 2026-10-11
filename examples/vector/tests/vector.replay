@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 window 400 300
 
 # At its own size the drawing lands a unit to a pixel. Each colour is

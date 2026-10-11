@@ -1,0 +1,15 @@
+/// Edit the weights or `amount` while `entelechy run --watch` is running.
+kernel image.grayscale@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    param amount: Float = 1.0;
+    output result: Image;
+    fn luma(c: Vec4) -> Float {
+        return c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
+    }
+    compute {
+        let c = sample(source);
+        let g = luma(c);
+        return mix(c, vec4(g, g, g, c.a), amount);
+    }
+}

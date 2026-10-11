@@ -1,14 +1,14 @@
 //! GPU results match the CPU interpreter within floating-point tolerance.
 //! Tests skip when no adapter is available.
 
-use orla_abi::{Capabilities, Capability, Context, Domain, Host, Invocation, Scope, Value};
-use orla_compiler::compile;
-use orla_cpu::CpuBackend;
-use orla_gpu::GpuBackend;
-use orla_rules::Backend;
+use entelechy_abi::{Capabilities, Capability, Context, Domain, Host, Invocation, Scope, Value};
+use entelechy_compiler::compile;
+use entelechy_cpu::CpuBackend;
+use entelechy_gpu::GpuBackend;
+use entelechy_rules::Backend;
 
 /// Downloads a resident GPU output into Host memory as pixels.
-fn materialized(gpu: &GpuBackend, host: &mut Host, handle: orla_abi::Handle) -> Vec<[f32; 4]> {
+fn materialized(gpu: &GpuBackend, host: &mut Host, handle: entelechy_abi::Handle) -> Vec<[f32; 4]> {
     let byte_len = host
         .schema(handle)
         .unwrap()
@@ -56,7 +56,7 @@ fn both(
 
 fn both_module(
     gpu: &GpuBackend,
-    module: &orla_compiler::Validated,
+    module: &entelechy_compiler::Validated,
     inputs: &[Vec<[f32; 4]>],
     input_size: (u32, u32),
     params: Vec<Value>,
@@ -67,7 +67,8 @@ fn both_module(
         .iter()
         .map(|pixels| {
             host.adopt_image(
-                orla_abi::Image::from_pixels(input_size.0, input_size.1, pixels.clone()).unwrap(),
+                entelechy_abi::Image::from_pixels(input_size.0, input_size.1, pixels.clone())
+                    .unwrap(),
             )
             .unwrap()
         })
@@ -238,7 +239,7 @@ fn input_context_matches_between_backends() {
     } }";
     let module = compile(source).unwrap();
     let mut host = Host::new(1 << 16);
-    let mut input = orla_abi::InputState::default();
+    let mut input = entelechy_abi::InputState::default();
     input.pointer = [3.0, 1.0];
     input.pointer_down = true;
     input.set_key(65, true);
@@ -274,7 +275,7 @@ fn preparing_on_the_worker_never_disturbs_the_executing_thread() {
     let Some(gpu) = gpu() else { return };
     // The device is taken before the backend goes to the runtime.
     let device = gpu.device().clone();
-    let mut runtime = orla_kernel::Runtime::with_backend(1 << 22, Box::new(gpu));
+    let mut runtime = entelechy_kernel::Runtime::with_backend(1 << 22, Box::new(gpu));
     runtime.set_background(true);
     let source = |value: &str| {
         format!(
@@ -282,11 +283,11 @@ fn preparing_on_the_worker_never_disturbs_the_executing_thread() {
         )
     };
     let running = load(&mut runtime, &source("0.125"));
-    let invocation = orla_abi::Invocation {
+    let invocation = entelechy_abi::Invocation {
         inputs: vec![],
         params: vec![],
         domain: Domain::Grid(64, 64),
-        context: orla_abi::Context::default(),
+        context: entelechy_abi::Context::default(),
     };
     // A source new to the device, long enough that the worker's compile
     // overlaps everything below.
@@ -338,9 +339,9 @@ fn preparing_on_the_worker_never_disturbs_the_executing_thread() {
 
 #[test]
 fn the_rasterizer_matches_the_reference_on_interior_pixels() {
-    use orla_rules::raster::{SURFACE_WORDS, rasterize_words, triangle_schema, vertex_schema};
+    use entelechy_rules::raster::{SURFACE_WORDS, rasterize_words, triangle_schema, vertex_schema};
     let Some(gpu) = gpu() else { return };
-    let mut runtime = orla_kernel::Runtime::with_backend(1 << 24, Box::new(gpu));
+    let mut runtime = entelechy_kernel::Runtime::with_backend(1 << 24, Box::new(gpu));
     // Two triangles at w = 2, for perspective correction: a large one at
     // depth 0.6 and a nearer one at 0.3 over the lower-left, with distinct
     // normals and uvs.
@@ -363,13 +364,17 @@ fn the_rasterizer_matches_the_reference_on_interior_pixels() {
     let host = runtime.host_mut();
     let vertex_rows = host
         .adopt(
-            orla_abi::FieldData::from_storage(vertex_schema(), Domain::Rows(6), vertices.clone())
-                .unwrap(),
+            entelechy_abi::FieldData::from_storage(
+                vertex_schema(),
+                Domain::Rows(6),
+                vertices.clone(),
+            )
+            .unwrap(),
         )
         .unwrap();
     let triangle_rows = host
         .adopt(
-            orla_abi::FieldData::from_storage(
+            entelechy_abi::FieldData::from_storage(
                 triangle_schema(),
                 Domain::Rows(2),
                 triangles.clone(),
@@ -381,11 +386,11 @@ fn the_rasterizer_matches_the_reference_on_interior_pixels() {
         .kernel(&"native.rasterize@1".parse().unwrap())
         .expect("the rasterizer is published from the start");
     assert!(raster.native().is_some() && raster.module().is_none());
-    let invocation = orla_abi::Invocation {
+    let invocation = entelechy_abi::Invocation {
         inputs: vec![vertex_rows, triangle_rows],
         params: vec![],
         domain: Domain::Grid(width, height),
-        context: orla_abi::Context::default(),
+        context: entelechy_abi::Context::default(),
     };
     let surface = runtime.execute(&raster, &invocation).unwrap()[0];
     runtime.materialize(surface).unwrap();
@@ -433,7 +438,7 @@ fn the_rasterizer_matches_the_reference_on_interior_pixels() {
     let canvas = runtime
         .host_mut()
         .create(
-            orla_rules::raster::canvas_schema(),
+            entelechy_rules::raster::canvas_schema(),
             Domain::Grid(width, height),
         )
         .unwrap();
@@ -443,7 +448,7 @@ fn the_rasterizer_matches_the_reference_on_interior_pixels() {
     let drawn = runtime
         .execute(
             &on_canvas,
-            &orla_abi::Invocation {
+            &entelechy_abi::Invocation {
                 inputs: vec![vertex_rows, triangle_rows, canvas],
                 ..invocation
             },
@@ -464,7 +469,7 @@ fn reductions_match_between_backends() {
     let mut host = Host::new(1 << 20);
     let image = host
         .adopt_image(
-            orla_abi::Image::from_pixels(
+            entelechy_abi::Image::from_pixels(
                 width,
                 height,
                 (0..width * height)
@@ -477,14 +482,14 @@ fn reductions_match_between_backends() {
             .unwrap(),
         )
         .unwrap();
-    let invocation = orla_abi::Invocation {
+    let invocation = entelechy_abi::Invocation {
         inputs: vec![image],
         params: vec![],
         domain: Domain::Rows(1),
-        context: orla_abi::Context::default(),
+        context: entelechy_abi::Context::default(),
     };
     let mut scope = Scope::new(&mut host, all());
-    let cpu_out = orla_cpu::CpuBackend
+    let cpu_out = entelechy_cpu::CpuBackend
         .execute(&module, &invocation, &mut scope)
         .unwrap()[0];
     let cpu_stats = host.element(cpu_out, 0).unwrap().to_vec();
@@ -540,10 +545,12 @@ fn prefixes_match_between_backends() {
     // 70000 exceeds one invocation's walk in a frame.
     for count in [1u32, 10, 5000, 70000] {
         let ints: Vec<u32> = (0..count).map(|i| ((i as i32 % 11) - 5) as u32).collect();
-        let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+        let schema = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
         let mut host = Host::new(1 << 24);
         let rows = host
-            .adopt(orla_abi::FieldData::from_storage(schema, Domain::Rows(count), ints).unwrap())
+            .adopt(
+                entelechy_abi::FieldData::from_storage(schema, Domain::Rows(count), ints).unwrap(),
+            )
             .unwrap();
         let (cpu_words, gpu_words) = on_both(&gpu, &mut host, &sum, rows, count);
         let mut running = 0i32;
@@ -572,10 +579,15 @@ fn prefixes_match_between_backends() {
                 ]
             })
             .collect();
-        let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Float]);
+        let schema = entelechy_abi::Schema::new(vec![
+            entelechy_abi::Scalar::Int,
+            entelechy_abi::Scalar::Float,
+        ]);
         let mut host = Host::new(1 << 24);
         let rows = host
-            .adopt(orla_abi::FieldData::from_storage(schema, Domain::Rows(count), words).unwrap())
+            .adopt(
+                entelechy_abi::FieldData::from_storage(schema, Domain::Rows(count), words).unwrap(),
+            )
             .unwrap();
         let (cpu_words, gpu_words) = on_both(&gpu, &mut host, &worst, rows, count);
         assert_eq!(cpu_words, gpu_words, "max over {count}");
@@ -587,18 +599,18 @@ fn prefixes_match_between_backends() {
 fn on_both(
     gpu: &GpuBackend,
     host: &mut Host,
-    module: &orla_compiler::Validated,
-    input: orla_abi::Handle,
+    module: &entelechy_compiler::Validated,
+    input: entelechy_abi::Handle,
     count: u32,
 ) -> (Vec<u32>, Vec<u32>) {
-    let invocation = orla_abi::Invocation {
+    let invocation = entelechy_abi::Invocation {
         inputs: vec![input],
         params: Vec::new(),
         domain: Domain::Rows(count),
-        context: orla_abi::Context::default(),
+        context: entelechy_abi::Context::default(),
     };
     let mut scope = Scope::new(host, all());
-    let cpu_out = orla_cpu::CpuBackend
+    let cpu_out = entelechy_cpu::CpuBackend
         .execute(module, &invocation, &mut scope)
         .unwrap()[0];
     let cpu_words = host.data(cpu_out).unwrap().storage().to_vec();
@@ -635,19 +647,22 @@ fn scans_match_between_backends() {
             ]
         })
         .collect();
-    let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Float]);
+    let schema = entelechy_abi::Schema::new(vec![
+        entelechy_abi::Scalar::Int,
+        entelechy_abi::Scalar::Float,
+    ]);
     let mut host = Host::new(1 << 20);
     let rows = host
-        .adopt(orla_abi::FieldData::from_storage(schema, Domain::Rows(count), words).unwrap())
+        .adopt(entelechy_abi::FieldData::from_storage(schema, Domain::Rows(count), words).unwrap())
         .unwrap();
-    let invocation = orla_abi::Invocation {
+    let invocation = entelechy_abi::Invocation {
         inputs: vec![rows],
         params: vec![Value::Float(0.1)],
         domain: Domain::Rows(count),
-        context: orla_abi::Context::default(),
+        context: entelechy_abi::Context::default(),
     };
     let mut scope = Scope::new(&mut host, all());
-    let cpu_out = orla_cpu::CpuBackend
+    let cpu_out = entelechy_cpu::CpuBackend
         .execute(&module, &invocation, &mut scope)
         .unwrap()[0];
     let cpu_words = host.data(cpu_out).unwrap().storage().to_vec();
@@ -724,19 +739,19 @@ fn linear_interpolation_matches_between_backends() {
             ]
         })
         .collect();
-    let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Float; 3]);
+    let schema = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float; 3]);
     let mut host = Host::new(1 << 16);
     let points = host
-        .adopt(orla_abi::FieldData::from_storage(schema, Domain::Rows(9), words).unwrap())
+        .adopt(entelechy_abi::FieldData::from_storage(schema, Domain::Rows(9), words).unwrap())
         .unwrap();
-    let invocation = orla_abi::Invocation {
+    let invocation = entelechy_abi::Invocation {
         inputs: vec![points],
         params: vec![],
         domain: Domain::Rows(9),
-        context: orla_abi::Context::default(),
+        context: entelechy_abi::Context::default(),
     };
     let mut scope = Scope::new(&mut host, all());
-    let cpu_out = orla_cpu::CpuBackend
+    let cpu_out = entelechy_cpu::CpuBackend
         .execute(&module, &invocation, &mut scope)
         .unwrap()[0];
     let cpu_words = host.data(cpu_out).unwrap().storage().to_vec();
@@ -802,13 +817,16 @@ fn scatters_match_between_backends() {
             ]
         })
         .collect();
-    let drop_schema = orla_abi::Schema::new(vec![
-        orla_abi::Scalar::Float,
-        orla_abi::Scalar::Float,
-        orla_abi::Scalar::Float,
-        orla_abi::Scalar::Int,
+    let drop_schema = entelechy_abi::Schema::new(vec![
+        entelechy_abi::Scalar::Float,
+        entelechy_abi::Scalar::Float,
+        entelechy_abi::Scalar::Float,
+        entelechy_abi::Scalar::Int,
     ]);
-    let cell_schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Float, orla_abi::Scalar::Int]);
+    let cell_schema = entelechy_abi::Schema::new(vec![
+        entelechy_abi::Scalar::Float,
+        entelechy_abi::Scalar::Int,
+    ]);
     let canvas_words: Vec<u32> = (0..24).flat_map(|i| [0.0f32.to_bits(), i % 3]).collect();
     for combine in ["sum", "max", "min", "last"] {
         let source = source.replace("with sum", &format!("with {combine}"));
@@ -816,7 +834,7 @@ fn scatters_match_between_backends() {
         let mut host = Host::new(1 << 20);
         let drops = host
             .adopt(
-                orla_abi::FieldData::from_storage(
+                entelechy_abi::FieldData::from_storage(
                     drop_schema.clone(),
                     Domain::Rows(count),
                     drop_words.clone(),
@@ -826,7 +844,7 @@ fn scatters_match_between_backends() {
             .unwrap();
         let canvas = host
             .adopt(
-                orla_abi::FieldData::from_storage(
+                entelechy_abi::FieldData::from_storage(
                     cell_schema.clone(),
                     Domain::Grid(6, 4),
                     canvas_words.clone(),
@@ -834,14 +852,14 @@ fn scatters_match_between_backends() {
                 .unwrap(),
             )
             .unwrap();
-        let invocation = orla_abi::Invocation {
+        let invocation = entelechy_abi::Invocation {
             inputs: vec![drops, canvas],
             params: vec![],
             domain: Domain::Rows(count),
-            context: orla_abi::Context::default(),
+            context: entelechy_abi::Context::default(),
         };
         let mut scope = Scope::new(&mut host, all());
-        let cpu_out = orla_cpu::CpuBackend
+        let cpu_out = entelechy_cpu::CpuBackend
             .execute(&module, &invocation, &mut scope)
             .unwrap()[0];
         let cpu_words = host.data(cpu_out).unwrap().storage().to_vec();
@@ -874,7 +892,8 @@ fn scatters_match_between_backends() {
     // meet `min` and `max` in one total order, in any arrival order.
     let counting = "kernel test.count@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input grid: Grid<Tally>; output result: Grid<Tally>; struct Drop { at: Vec2; weight: Float; id: Int; } struct Tally { hits: Int; ids: Int; } struct Splat { cell: Vec2; value: Tally; } scatter into grid with sum { let d = sample(drops); return Splat { cell: d.at, value: Tally { hits: 1, ids: d.id } }; } }";
     let module = compile(counting).unwrap_or_else(|error| panic!("{error}"));
-    let tally_schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Int]);
+    let tally_schema =
+        entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int, entelechy_abi::Scalar::Int]);
     let mut odd_words = drop_words.clone();
     for i in 0..count as usize {
         if i % 97 == 0 {
@@ -908,23 +927,28 @@ fn scatters_match_between_backends() {
         let mut host = Host::new(1 << 20);
         let drops = host
             .adopt(
-                orla_abi::FieldData::from_storage(drop_schema.clone(), Domain::Rows(count), words)
-                    .unwrap(),
+                entelechy_abi::FieldData::from_storage(
+                    drop_schema.clone(),
+                    Domain::Rows(count),
+                    words,
+                )
+                .unwrap(),
             )
             .unwrap();
         let grid = host
             .adopt(
-                orla_abi::FieldData::from_storage(schema, Domain::Grid(6, 4), grid_words).unwrap(),
+                entelechy_abi::FieldData::from_storage(schema, Domain::Grid(6, 4), grid_words)
+                    .unwrap(),
             )
             .unwrap();
-        let invocation = orla_abi::Invocation {
+        let invocation = entelechy_abi::Invocation {
             inputs: vec![drops, grid],
             params: vec![],
             domain: Domain::Rows(count),
-            context: orla_abi::Context::default(),
+            context: entelechy_abi::Context::default(),
         };
         let mut scope = Scope::new(&mut host, all());
-        let cpu_out = orla_cpu::CpuBackend
+        let cpu_out = entelechy_cpu::CpuBackend
             .execute(&module, &invocation, &mut scope)
             .unwrap()[0];
         let cpu_words = host.data(cpu_out).unwrap().storage().to_vec();
@@ -968,13 +992,17 @@ fn scatters_match_between_backends() {
     let mut host = Host::new(1 << 24);
     let drops = host
         .adopt(
-            orla_abi::FieldData::from_storage(drop_schema.clone(), Domain::Rows(many), many_words)
-                .unwrap(),
+            entelechy_abi::FieldData::from_storage(
+                drop_schema.clone(),
+                Domain::Rows(many),
+                many_words,
+            )
+            .unwrap(),
         )
         .unwrap();
     let canvas = host
         .adopt(
-            orla_abi::FieldData::from_storage(
+            entelechy_abi::FieldData::from_storage(
                 cell_schema.clone(),
                 Domain::Grid(6, 4),
                 canvas_words.clone(),
@@ -982,14 +1010,14 @@ fn scatters_match_between_backends() {
             .unwrap(),
         )
         .unwrap();
-    let invocation = orla_abi::Invocation {
+    let invocation = entelechy_abi::Invocation {
         inputs: vec![drops, canvas],
         params: vec![],
         domain: Domain::Rows(many),
-        context: orla_abi::Context::default(),
+        context: entelechy_abi::Context::default(),
     };
     let mut scope = Scope::new(&mut host, all());
-    let cpu_out = orla_cpu::CpuBackend
+    let cpu_out = entelechy_cpu::CpuBackend
         .execute(&module, &invocation, &mut scope)
         .unwrap()[0];
     let cpu_words = host.data(cpu_out).unwrap().storage().to_vec();
@@ -1017,7 +1045,7 @@ fn scatters_match_between_backends() {
         let mut host = Host::new(1 << 20);
         let drops = host
             .adopt(
-                orla_abi::FieldData::from_storage(
+                entelechy_abi::FieldData::from_storage(
                     drop_schema.clone(),
                     Domain::Rows(count),
                     odd_words.clone(),
@@ -1027,22 +1055,22 @@ fn scatters_match_between_backends() {
             .unwrap();
         let grid = host
             .adopt(
-                orla_abi::FieldData::from_storage(
-                    orla_abi::Schema::new(vec![orla_abi::Scalar::Float]),
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float]),
                     Domain::Grid(6, 4),
                     (0..24).map(|_| 0.5f32.to_bits()).collect(),
                 )
                 .unwrap(),
             )
             .unwrap();
-        let invocation = orla_abi::Invocation {
+        let invocation = entelechy_abi::Invocation {
             inputs: vec![drops, grid],
             params: vec![],
             domain: Domain::Rows(count),
-            context: orla_abi::Context::default(),
+            context: entelechy_abi::Context::default(),
         };
         let mut scope = Scope::new(&mut host, all());
-        let cpu_out = orla_cpu::CpuBackend
+        let cpu_out = entelechy_cpu::CpuBackend
             .execute(&module, &invocation, &mut scope)
             .unwrap()[0];
         let cpu_words = host.data(cpu_out).unwrap().storage().to_vec();
@@ -1075,12 +1103,15 @@ fn memories_match_between_backends() {
     let source = "kernel test.walk@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory screen: Grid<Int>; memory tally: Rows<Cell>; output result: Rows<Vec2>; struct Cell { hits: Int; last: Float; } fn flip(s: Grid<Int>, p: Vec2, seen: Int) -> Int { return put(s, p, (1 - seen) >>> 0); } scan with at_ = vec2(3.0, 2.0) { let seen = at(screen, at_); flip(screen, at_, seen); let t = at(tally, seen); put(tally, seen, Cell { hits: t.hits + 1, last: float(index()) }); put(screen, vec2(-1.0, 0.0), 9); let next = vec2(float((int(at_.x) + 3 + seen * 5) % 16), float((int(at_.y) + 1 + seen) % 8)); return next; } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let steps = 300u32;
-    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
-    let cells = orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Float]);
+    let ints = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
+    let cells = entelechy_abi::Schema::new(vec![
+        entelechy_abi::Scalar::Int,
+        entelechy_abi::Scalar::Float,
+    ]);
     let mut host = Host::new(1 << 20);
     let ticks = host
         .adopt(
-            orla_abi::FieldData::from_storage(
+            entelechy_abi::FieldData::from_storage(
                 ints.clone(),
                 Domain::Rows(steps),
                 vec![0; steps as usize],
@@ -1089,11 +1120,14 @@ fn memories_match_between_backends() {
         )
         .unwrap();
     let screen = host
-        .adopt(orla_abi::FieldData::from_storage(ints, Domain::Grid(16, 8), vec![0; 128]).unwrap())
+        .adopt(
+            entelechy_abi::FieldData::from_storage(ints, Domain::Grid(16, 8), vec![0; 128])
+                .unwrap(),
+        )
         .unwrap();
     let tally = host
         .adopt(
-            orla_abi::FieldData::from_storage(
+            entelechy_abi::FieldData::from_storage(
                 cells,
                 Domain::Rows(2),
                 vec![0, 0.0f32.to_bits(), 0, 0.0f32.to_bits()],
@@ -1101,14 +1135,14 @@ fn memories_match_between_backends() {
             .unwrap(),
         )
         .unwrap();
-    let invocation = orla_abi::Invocation {
+    let invocation = entelechy_abi::Invocation {
         inputs: vec![ticks, screen, tally],
         params: vec![],
         domain: Domain::Rows(steps),
-        context: orla_abi::Context::default(),
+        context: entelechy_abi::Context::default(),
     };
     let mut scope = Scope::new(&mut host, all());
-    let cpu_outputs = orla_cpu::CpuBackend
+    let cpu_outputs = entelechy_cpu::CpuBackend
         .execute(&module, &invocation, &mut scope)
         .unwrap();
     assert_eq!(cpu_outputs.len(), 3);
@@ -1155,14 +1189,14 @@ fn integer_arithmetic_matches_between_backends() {
         } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let mut host = Host::new(1 << 16);
-    let invocation = orla_abi::Invocation {
+    let invocation = entelechy_abi::Invocation {
         inputs: vec![],
         params: vec![],
         domain: Domain::Rows(200),
-        context: orla_abi::Context::default(),
+        context: entelechy_abi::Context::default(),
     };
     let mut scope = Scope::new(&mut host, all());
-    let cpu = orla_cpu::CpuBackend
+    let cpu = entelechy_cpu::CpuBackend
         .execute(&module, &invocation, &mut scope)
         .unwrap()[0];
     let cpu_words = host.data(cpu).unwrap().storage().to_vec();
@@ -1191,26 +1225,27 @@ fn a_step_reads_what_the_step_before_wrote_even_when_it_reads_first() {
     let source = "kernel test.pc@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory regs: Rows<Int>; output result: Rows<Int>; scan with n = 0 { let pc = at(regs, 15); put(regs, 15, pc + 2); return pc; } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let mut host = Host::new(1 << 16);
-    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+    let ints = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
     let ticks = host
         .adopt(
-            orla_abi::FieldData::from_storage(ints.clone(), Domain::Rows(5), vec![0; 5]).unwrap(),
+            entelechy_abi::FieldData::from_storage(ints.clone(), Domain::Rows(5), vec![0; 5])
+                .unwrap(),
         )
         .unwrap();
     let regs = host
-        .adopt(orla_abi::FieldData::from_storage(ints, Domain::Rows(17), vec![0; 17]).unwrap())
+        .adopt(entelechy_abi::FieldData::from_storage(ints, Domain::Rows(17), vec![0; 17]).unwrap())
         .unwrap();
-    let invocation = orla_abi::Invocation {
+    let invocation = entelechy_abi::Invocation {
         inputs: vec![ticks, regs],
         params: vec![],
         domain: Domain::Rows(5),
-        context: orla_abi::Context::default(),
+        context: entelechy_abi::Context::default(),
     };
     let prepared = Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
     let mut scope = Scope::new(&mut host, all());
     let outputs =
         Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap();
-    let words = |handle: orla_abi::Handle, n: usize| -> Vec<u32> {
+    let words = |handle: entelechy_abi::Handle, n: usize| -> Vec<u32> {
         let device = host.resident(handle).unwrap().expect("resident");
         let bytes = Backend::download(&gpu, device, n * 4).unwrap();
         bytes
@@ -1232,11 +1267,11 @@ fn rows_of_every_length_are_every_element() {
     let prepared = Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
     for count in [1u32, 7, 8, 63, 64, 65, 511, 512, 513, 4095, 4097, 100_003] {
         let mut host = Host::new(1 << 24);
-        let invocation = orla_abi::Invocation {
+        let invocation = entelechy_abi::Invocation {
             inputs: vec![],
             params: vec![],
             domain: Domain::Rows(count),
-            context: orla_abi::Context::default(),
+            context: entelechy_abi::Context::default(),
         };
         let mut scope = Scope::new(&mut host, all());
         let out =
@@ -1261,11 +1296,11 @@ fn long_rows_are_dispatched_as_a_grid() {
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let count = 1_100_000u32;
     let mut host = Host::new(1 << 24);
-    let invocation = orla_abi::Invocation {
+    let invocation = entelechy_abi::Invocation {
         inputs: vec![],
         params: vec![],
         domain: Domain::Rows(count),
-        context: orla_abi::Context::default(),
+        context: entelechy_abi::Context::default(),
     };
     let prepared = Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
     let mut scope = Scope::new(&mut host, all());
@@ -1303,14 +1338,14 @@ fn a_match_is_a_switch_on_the_gpu() {
     let source = "kernel test.pick@1 { requires { field.write; } output result: Rows<Int>; compute { let i = element() - 3; let picked = match i { 0 => 100, 1 | 2 => { let doubled = i * 2; doubled }, -1 | -3 => -7, 5 => 5, _ => 42 }; let summed = loop 4 with acc = 0 { acc + match index() { 0 | 3 => 1, _ => 10 } }; return picked * 1000 + summed; } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let mut host = Host::new(1 << 16);
-    let invocation = orla_abi::Invocation {
+    let invocation = entelechy_abi::Invocation {
         inputs: vec![],
         params: vec![],
         domain: Domain::Rows(10),
-        context: orla_abi::Context::default(),
+        context: entelechy_abi::Context::default(),
     };
     let mut scope = Scope::new(&mut host, all());
-    let cpu = orla_cpu::CpuBackend
+    let cpu = entelechy_cpu::CpuBackend
         .execute(&module, &invocation, &mut scope)
         .unwrap()[0];
     let cpu_words = host.data(cpu).unwrap().storage().to_vec();
@@ -1338,12 +1373,12 @@ fn a_merge_may_read_inputs_params_and_the_context() {
         compute { return sample(xs) * at(weights, element()); }
         merge(a, b) { return a + b + at(weights, 1) * k + first(weights) + time(); } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
-    let floats = orla_abi::Schema::new(vec![orla_abi::Scalar::Float]);
+    let floats = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float]);
     let mut host = Host::new(1 << 16);
     let count = 37u32;
     let xs = host
         .adopt(
-            orla_abi::FieldData::from_storage(
+            entelechy_abi::FieldData::from_storage(
                 floats.clone(),
                 Domain::Rows(count),
                 (0..count).map(|i| (i as f32 * 0.5).to_bits()).collect(),
@@ -1353,7 +1388,7 @@ fn a_merge_may_read_inputs_params_and_the_context() {
         .unwrap();
     let weights = host
         .adopt(
-            orla_abi::FieldData::from_storage(
+            entelechy_abi::FieldData::from_storage(
                 floats,
                 Domain::Rows(count),
                 (0..count)
@@ -1363,17 +1398,17 @@ fn a_merge_may_read_inputs_params_and_the_context() {
             .unwrap(),
         )
         .unwrap();
-    let invocation = orla_abi::Invocation {
+    let invocation = entelechy_abi::Invocation {
         inputs: vec![xs, weights],
-        params: vec![orla_abi::Value::Float(0.25)],
+        params: vec![entelechy_abi::Value::Float(0.25)],
         domain: Domain::Rows(1),
-        context: orla_abi::Context {
+        context: entelechy_abi::Context {
             time: 2.0,
-            ..orla_abi::Context::default()
+            ..entelechy_abi::Context::default()
         },
     };
     let mut scope = Scope::new(&mut host, all());
-    let cpu = orla_cpu::CpuBackend
+    let cpu = entelechy_cpu::CpuBackend
         .execute(&module, &invocation, &mut scope)
         .unwrap()[0];
     let cpu_words = host.data(cpu).unwrap().storage().to_vec();
@@ -1416,7 +1451,7 @@ fn nothing_the_shader_declares_spells_a_type() {
             "kernel test.names@1 {{ requires {{ field.write; }} output result: Rows<Int>; compute {{ {padding} let counted = loop 16 with a = 0 {{ a + int(float(index()) * 0.5) }}; return counted{sum}; }} }}"
         );
         let module = compile(&source).unwrap_or_else(|error| panic!("{error}"));
-        let shader = orla_gpu::wgsl::emit(&module);
+        let shader = entelechy_gpu::wgsl::emit(&module);
         for declared in ["i32", "u32", "f32", "bool", "vec2", "mat2x2", "array"] {
             for form in [
                 format!("var {declared}:"),
@@ -1436,11 +1471,11 @@ fn nothing_the_shader_declares_spells_a_type() {
 /// triangle shows through the near one's holes, as on the reference.
 #[test]
 fn a_cutout_drops_the_fragments_its_mask_does_not_cover() {
-    use orla_rules::raster::{
+    use entelechy_rules::raster::{
         Cutout, SURFACE_WORDS, mask_schema, rasterize_masked, triangle_schema, vertex_schema,
     };
     let Some(gpu) = gpu() else { return };
-    let mut runtime = orla_kernel::Runtime::with_backend(1 << 24, Box::new(gpu));
+    let mut runtime = entelechy_kernel::Runtime::with_backend(1 << 24, Box::new(gpu));
     let vertex = |clip: [f32; 4], normal: [f32; 3], uv: [f32; 2]| -> Vec<u32> {
         clip.iter()
             .chain(normal.iter())
@@ -1480,13 +1515,17 @@ fn a_cutout_drops_the_fragments_its_mask_does_not_cover() {
     let host = runtime.host_mut();
     let vertex_rows = host
         .adopt(
-            orla_abi::FieldData::from_storage(vertex_schema(), Domain::Rows(8), vertices.clone())
-                .unwrap(),
+            entelechy_abi::FieldData::from_storage(
+                vertex_schema(),
+                Domain::Rows(8),
+                vertices.clone(),
+            )
+            .unwrap(),
         )
         .unwrap();
     let triangle_rows = host
         .adopt(
-            orla_abi::FieldData::from_storage(
+            entelechy_abi::FieldData::from_storage(
                 triangle_schema(),
                 Domain::Rows(4),
                 triangles.clone(),
@@ -1496,7 +1535,7 @@ fn a_cutout_drops_the_fragments_its_mask_does_not_cover() {
         .unwrap();
     let mask_grid = host
         .adopt(
-            orla_abi::FieldData::from_storage(
+            entelechy_abi::FieldData::from_storage(
                 mask_schema(),
                 Domain::Grid(mask_w, mask_h),
                 mask.clone(),
@@ -1507,11 +1546,11 @@ fn a_cutout_drops_the_fragments_its_mask_does_not_cover() {
     let raster = runtime
         .kernel(&"native.rasterize@2".parse().unwrap())
         .expect("the cutout rasterizer is published from the start");
-    let invocation = orla_abi::Invocation {
+    let invocation = entelechy_abi::Invocation {
         inputs: vec![vertex_rows, triangle_rows, mask_grid],
-        params: vec![orla_abi::Value::Float(0.5)],
+        params: vec![entelechy_abi::Value::Float(0.5)],
         domain: Domain::Grid(width, height),
-        context: orla_abi::Context::default(),
+        context: entelechy_abi::Context::default(),
     };
     let surface = runtime.execute(&raster, &invocation).unwrap()[0];
     runtime.materialize(surface).unwrap();
@@ -1571,10 +1610,10 @@ fn a_cutout_drops_the_fragments_its_mask_does_not_cover() {
 /// Compiles and publishes a Kernel as a session does: compiling is the
 /// caller's step, the runtime takes validated IR.
 fn load(
-    runtime: &mut orla_kernel::Runtime,
+    runtime: &mut entelechy_kernel::Runtime,
     source: &str,
-) -> std::sync::Arc<orla_kernel::KernelVersion> {
-    let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
+) -> std::sync::Arc<entelechy_kernel::KernelVersion> {
+    let module = entelechy_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
     runtime.load(module, source).unwrap()
 }
 
@@ -1583,8 +1622,11 @@ fn a_node_off_the_device_says_what_its_trip_carried() {
     let Some(gpu) = gpu() else {
         return;
     };
-    let mut runtime =
-        orla_kernel::Runtime::with_backends(1 << 20, Box::new(gpu), Some(Box::new(CpuBackend)));
+    let mut runtime = entelechy_kernel::Runtime::with_backends(
+        1 << 20,
+        Box::new(gpu),
+        Some(Box::new(CpuBackend)),
+    );
     // Only what the device declines leaves it, however small: its trips are
     // what this test asks.
     runtime.set_small(0);
@@ -1592,7 +1634,7 @@ fn a_node_off_the_device_says_what_its_trip_carried() {
         let module = compile(source).unwrap();
         let candidate = runtime.prepare_module(module, source).unwrap();
         runtime
-            .publish(candidate, orla_kernel::Expect::Absent)
+            .publish(candidate, entelechy_kernel::Expect::Absent)
             .unwrap()
     };
     let map = publish(
@@ -1604,7 +1646,7 @@ fn a_node_off_the_device_says_what_its_trip_carried() {
     let back = publish(
         "kernel t.back@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; compute { return sample(rows) + 1; } }",
     );
-    let run = |runtime: &mut orla_kernel::Runtime, version, inputs| {
+    let run = |runtime: &mut entelechy_kernel::Runtime, version, inputs| {
         let outputs = runtime
             .execute(
                 version,
@@ -1619,7 +1661,7 @@ fn a_node_off_the_device_says_what_its_trip_carried() {
         (outputs[0], runtime.take_moved())
     };
     let (rows, moved) = run(&mut runtime, &map, vec![]);
-    assert_eq!(moved, orla_kernel::Moved::default());
+    assert_eq!(moved, entelechy_kernel::Moved::default());
     // The scan reads in Host memory: the map's rows come home.
     assert!(runtime.placement(&scan).routed.is_some());
     let (sums, moved) = run(&mut runtime, &scan, vec![rows]);
@@ -1642,8 +1684,8 @@ fn a_failure_on_the_device_is_the_reference_failure() {
             .iter()
             .map(|words| {
                 host.adopt(
-                    orla_abi::FieldData::from_values(
-                        orla_abi::Schema::new(vec![orla_abi::Scalar::Int]),
+                    entelechy_abi::FieldData::from_values(
+                        entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]),
                         Domain::Rows(words.len() as u32),
                         words,
                     )
@@ -1751,18 +1793,18 @@ fn a_kernel_of_many_helpers_and_fields_runs_on_the_device() {
 fn on_both_inputs(
     gpu: &GpuBackend,
     host: &mut Host,
-    module: &orla_compiler::Validated,
-    inputs: Vec<orla_abi::Handle>,
+    module: &entelechy_compiler::Validated,
+    inputs: Vec<entelechy_abi::Handle>,
     domain: Domain,
 ) -> (Vec<u32>, Vec<u32>) {
-    let invocation = orla_abi::Invocation {
+    let invocation = entelechy_abi::Invocation {
         inputs,
         params: Vec::new(),
         domain,
-        context: orla_abi::Context::default(),
+        context: entelechy_abi::Context::default(),
     };
     let mut scope = Scope::new(host, all());
-    let cpu_out = orla_cpu::CpuBackend
+    let cpu_out = entelechy_cpu::CpuBackend
         .execute(module, &invocation, &mut scope)
         .unwrap()[0];
     let cpu_words = host.data(cpu_out).unwrap().storage().to_vec();
@@ -1803,7 +1845,8 @@ fn repeated_runs_are_the_interpreters_runs_in_turn() {
         for repeat in 1..=4u32 {
             let mut host = Host::new(1 << 24);
             let mut seed = || {
-                let data = orla_abi::FieldData::new(schema.clone(), Domain::Rows(count)).unwrap();
+                let data =
+                    entelechy_abi::FieldData::new(schema.clone(), Domain::Rows(count)).unwrap();
                 let handle = host.adopt(data).unwrap();
                 host.write_values(
                     handle,
@@ -1814,11 +1857,11 @@ fn repeated_runs_are_the_interpreters_runs_in_turn() {
             };
             let first = seed();
             let second = seed();
-            let invocation = |input| orla_abi::Invocation {
+            let invocation = |input| entelechy_abi::Invocation {
                 inputs: vec![input],
                 params: vec![],
                 domain: Domain::Rows(count),
-                context: orla_abi::Context::default(),
+                context: entelechy_abi::Context::default(),
             };
             let mut last = first;
             for _ in 0..repeat {
@@ -1873,11 +1916,15 @@ fn extents_past_a_floats_integers_match() {
     let Some(gpu) = gpu() else { return };
     let count = (1u32 << 24) + 1;
     let mut host = Host::new(1 << 27);
-    let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+    let schema = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
     let flags = host
         .adopt(
-            orla_abi::FieldData::from_storage(schema, Domain::Rows(count), vec![0; count as usize])
-                .unwrap(),
+            entelechy_abi::FieldData::from_storage(
+                schema,
+                Domain::Rows(count),
+                vec![0; count as usize],
+            )
+            .unwrap(),
         )
         .unwrap();
     let module = compile(
@@ -1900,15 +1947,15 @@ fn passes_over_more_rows_than_one_dimension_holds_match() {
     let count = 5_000_000u32;
     let mut host = Host::new(1 << 26);
     let ints = |host: &mut Host, words: Vec<u32>| {
-        let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+        let schema = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
         let n = words.len() as u32;
-        host.adopt(orla_abi::FieldData::from_storage(schema, Domain::Rows(n), words).unwrap())
+        host.adopt(entelechy_abi::FieldData::from_storage(schema, Domain::Rows(n), words).unwrap())
             .unwrap()
     };
     let floats = |host: &mut Host, words: Vec<u32>| {
-        let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Float]);
+        let schema = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float]);
         let n = words.len() as u32;
-        host.adopt(orla_abi::FieldData::from_storage(schema, Domain::Rows(n), words).unwrap())
+        host.adopt(entelechy_abi::FieldData::from_storage(schema, Domain::Rows(n), words).unwrap())
             .unwrap()
     };
     // Each run takes fresh inputs: one the device ran on is resident there.
@@ -1993,8 +2040,8 @@ fn long_extremes_land_as_the_references_do() {
         .unwrap();
         let keys = host
             .adopt(
-                orla_abi::FieldData::from_storage(
-                    orla_abi::Schema::new(vec![orla_abi::Scalar::Int]),
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]),
                     Domain::Rows(count),
                     (0..count)
                         .map(|i| i.wrapping_mul(2_654_435_761) >> 5)
@@ -2005,8 +2052,8 @@ fn long_extremes_land_as_the_references_do() {
             .unwrap();
         let slots = host
             .adopt(
-                orla_abi::FieldData::from_storage(
-                    orla_abi::Schema::new(vec![orla_abi::Scalar::Long; 4]),
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Long; 4]),
                     Domain::Rows(61),
                     (0..61u64)
                         .flat_map(|i| {
@@ -2037,8 +2084,8 @@ fn emitted_pairs_land_as_the_references_do() {
     let count = 50_000u32;
     let mut host = Host::new(1 << 24);
     let adopt = |host: &mut Host, scalar, domain: Domain, words: Vec<u32>| {
-        let schema = orla_abi::Schema::new(vec![scalar]);
-        host.adopt(orla_abi::FieldData::from_storage(schema, domain, words).unwrap())
+        let schema = entelechy_abi::Schema::new(vec![scalar]);
+        host.adopt(entelechy_abi::FieldData::from_storage(schema, domain, words).unwrap())
             .unwrap()
     };
     for rule in ["sum", "max", "min"] {
@@ -2059,13 +2106,13 @@ fn emitted_pairs_land_as_the_references_do() {
         let inputs = vec![
             adopt(
                 &mut host,
-                orla_abi::Scalar::Int,
+                entelechy_abi::Scalar::Int,
                 Domain::Rows(count),
                 (0..count).collect(),
             ),
             adopt(
                 &mut host,
-                orla_abi::Scalar::Int,
+                entelechy_abi::Scalar::Int,
                 Domain::Rows(97),
                 vec![5; 97],
             ),
@@ -2091,7 +2138,7 @@ fn emitted_pairs_land_as_the_references_do() {
         let inputs = vec![
             adopt(
                 &mut host,
-                orla_abi::Scalar::Int,
+                entelechy_abi::Scalar::Int,
                 Domain::Rows(count),
                 (0..count)
                     .map(|i| i.wrapping_mul(2_654_435_761) >> 7)
@@ -2099,7 +2146,7 @@ fn emitted_pairs_land_as_the_references_do() {
             ),
             adopt(
                 &mut host,
-                orla_abi::Scalar::Float,
+                entelechy_abi::Scalar::Float,
                 Domain::Grid(20, 12),
                 vec![0.5f32.to_bits(); 240],
             ),
@@ -2117,7 +2164,10 @@ fn a_keyed_target_starts_from_every_word_of_its_base() {
     let Some(gpu) = gpu() else { return };
     let count = 20_000u32;
     let mut host = Host::new(1 << 24);
-    let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Float, orla_abi::Scalar::Int]);
+    let schema = entelechy_abi::Schema::new(vec![
+        entelechy_abi::Scalar::Float,
+        entelechy_abi::Scalar::Int,
+    ]);
     for rule in ["min", "max"] {
         let module = compile(&format!(
             "kernel test.mixed@1 {{ requires {{ field.read; field.write; }}
@@ -2134,8 +2184,8 @@ fn a_keyed_target_starts_from_every_word_of_its_base() {
         .unwrap();
         let keys = host
             .adopt(
-                orla_abi::FieldData::from_storage(
-                    orla_abi::Schema::new(vec![orla_abi::Scalar::Int]),
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]),
                     Domain::Rows(count),
                     (0..count)
                         .map(|i| i.wrapping_mul(2_654_435_761) >> 9)
@@ -2147,7 +2197,7 @@ fn a_keyed_target_starts_from_every_word_of_its_base() {
         // More cells than any pair reaches, so some keep their base.
         let cells = host
             .adopt(
-                orla_abi::FieldData::from_storage(
+                entelechy_abi::FieldData::from_storage(
                     schema.clone(),
                     Domain::Rows(160),
                     (0..160i64)
@@ -2240,30 +2290,31 @@ fn inputs_past_the_devices_bindings_are_packed_and_read_where_they_are() {
         let mut host = Host::new(1 << 22);
         let handles: Vec<_> = (0..inputs)
             .map(|k| {
-                let (schema, words): (orla_abi::Schema, Vec<u32>) = if narrow(k) {
+                let (schema, words): (entelechy_abi::Schema, Vec<u32>) = if narrow(k) {
                     (
-                        orla_abi::Schema::encoded(
-                            vec![orla_abi::Scalar::Int],
-                            vec![orla_abi::Encoding::U8],
+                        entelechy_abi::Schema::encoded(
+                            vec![entelechy_abi::Scalar::Int],
+                            vec![entelechy_abi::Encoding::U8],
                         )
                         .unwrap(),
                         (0..rows).map(|i| (i * 7 + k as u32) % 256).collect(),
                     )
                 } else if record(k) {
                     (
-                        orla_abi::Schema::new(vec![orla_abi::Scalar::Int; 2]),
+                        entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int; 2]),
                         (0..rows)
                             .flat_map(|i| [i + 1000, i * 5 + k as u32])
                             .collect(),
                     )
                 } else {
                     (
-                        orla_abi::Schema::new(vec![orla_abi::Scalar::Int]),
+                        entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]),
                         (0..rows).map(|i| i * 3 + k as u32 * 11).collect(),
                     )
                 };
                 host.adopt(
-                    orla_abi::FieldData::from_values(schema, Domain::Rows(rows), &words).unwrap(),
+                    entelechy_abi::FieldData::from_values(schema, Domain::Rows(rows), &words)
+                        .unwrap(),
                 )
                 .unwrap()
             })
@@ -2354,8 +2405,8 @@ fn branches_nested_past_what_a_shader_holds_run_off_the_device() {
     for shape in ["nested", "ladder", "loops", "match"] {
         for n in [1usize, 10, 40, 60] {
             let module = compile(&source(shape, n)).unwrap_or_else(|error| panic!("{error}"));
-            let estimate = orla_gpu::wgsl::brace_depth(&module);
-            let emitted = braces(&orla_gpu::wgsl::emit(&module));
+            let estimate = entelechy_gpu::wgsl::brace_depth(&module);
+            let emitted = braces(&entelechy_gpu::wgsl::emit(&module));
             assert!(
                 (emitted..=emitted + 1).contains(&estimate),
                 "{shape} {n}: estimated {estimate}, emitted {emitted}"
@@ -2367,14 +2418,14 @@ fn branches_nested_past_what_a_shader_holds_run_off_the_device() {
         let module = compile(&source).unwrap_or_else(|error| panic!("{error}"));
         let why = gpu.declines(&module).expect("past the brace limit");
         assert!(why.contains("nest"), "{why}");
-        let mut runtime = orla_kernel::Runtime::with_backends(
+        let mut runtime = entelechy_kernel::Runtime::with_backends(
             1 << 20,
             Box::new(GpuBackend::new().unwrap()),
             Some(Box::new(CpuBackend)),
         );
         let candidate = runtime.prepare_module(module.clone(), &source).unwrap();
         let version = runtime
-            .publish(candidate, orla_kernel::Expect::Absent)
+            .publish(candidate, entelechy_kernel::Expect::Absent)
             .unwrap();
         assert!(runtime.placement(&version).routed.is_some(), "{shape}");
         let outputs = runtime
@@ -2438,13 +2489,13 @@ fn a_field_made_from_another_is_uploaded_on_its_changed_pages() {
     )
     .unwrap();
     let prepared = gpu.prepare(&module).unwrap();
-    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
-    let page = orla_abi::PAGE_WORDS;
+    let ints = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
+    let page = entelechy_abi::PAGE_WORDS;
     let len = page * 5 + 3;
     let domain = Domain::Rows(len as u32);
     let mut host = Host::new(len * 64);
     // Runs the Kernel over `rows`: its words doubled, and the bytes uploaded.
-    let run = |host: &mut Host, rows: orla_abi::Handle| -> (Vec<u32>, u64) {
+    let run = |host: &mut Host, rows: entelechy_abi::Handle| -> (Vec<u32>, u64) {
         let before = gpu.uploaded();
         let invocation = Invocation {
             inputs: vec![rows],
@@ -2467,7 +2518,7 @@ fn a_field_made_from_another_is_uploaded_on_its_changed_pages() {
         (words, gpu.uploaded() - before)
     };
     let field = |words: &Vec<u32>| {
-        orla_abi::FieldData::from_storage(ints.clone(), domain, words.clone()).unwrap()
+        entelechy_abi::FieldData::from_storage(ints.clone(), domain, words.clone()).unwrap()
     };
     let first: Vec<u32> = (0..len as u32).collect();
     let base = host.adopt(field(&first)).unwrap();
@@ -2477,7 +2528,7 @@ fn a_field_made_from_another_is_uploaded_on_its_changed_pages() {
     let mut second = first.clone();
     second[page + 1] = 7;
     second[len - 1] = 9;
-    let mut changed = orla_abi::Pages::new();
+    let mut changed = entelechy_abi::Pages::new();
     changed.mark(page + 1);
     changed.mark(len - 1);
     let made = host.adopt_derived(field(&second), base, changed).unwrap();
@@ -2489,7 +2540,7 @@ fn a_field_made_from_another_is_uploaded_on_its_changed_pages() {
     // Made from that one, released before it is bound: the first page.
     let mut third = second.clone();
     third[3] = 11;
-    let mut changed = orla_abi::Pages::new();
+    let mut changed = entelechy_abi::Pages::new();
     changed.mark(3);
     let again = host.adopt_derived(field(&third), made, changed).unwrap();
     host.release(base).unwrap();
@@ -2504,7 +2555,7 @@ fn a_field_made_from_another_is_uploaded_on_its_changed_pages() {
     let sibling = |host: &mut Host, at: usize| {
         let mut words = first.clone();
         words[at] = 13;
-        let mut changed = orla_abi::Pages::new();
+        let mut changed = entelechy_abi::Pages::new();
         changed.mark(at);
         (
             host.adopt_derived(field(&words), plain, changed).unwrap(),
@@ -2524,14 +2575,14 @@ fn a_field_made_from_another_is_uploaded_on_its_changed_pages() {
     run(&mut host, ancestor);
     let mut middle_words = first.clone();
     middle_words[page * 3] = 21;
-    let mut changed = orla_abi::Pages::new();
+    let mut changed = entelechy_abi::Pages::new();
     changed.mark(page * 3);
     let middle = host
         .adopt_derived(field(&middle_words), ancestor, changed)
         .unwrap();
     let mut last_words = middle_words.clone();
     last_words[page * 5 + 1] = 22;
-    let mut changed = orla_abi::Pages::new();
+    let mut changed = entelechy_abi::Pages::new();
     changed.mark(page * 5 + 1);
     let last = host
         .adopt_derived(field(&last_words), middle, changed)
@@ -2549,7 +2600,7 @@ fn a_field_made_from_another_is_uploaded_on_its_changed_pages() {
     let mut words = first.clone();
     words[9] = 17;
     let after = host
-        .adopt_derived(field(&words), written, orla_abi::Pages::new())
+        .adopt_derived(field(&words), written, entelechy_abi::Pages::new())
         .unwrap();
     assert_eq!(run(&mut host, after), (words, len as u64 * 4));
 }

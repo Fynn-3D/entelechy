@@ -1,6 +1,6 @@
-scene ../scene.osn
+scene ../scene.esn
 
-# The song `orla-import` read from song.mid: twenty-one notes over 9.6
+# The song `entelechy-import` read from song.mid: twenty-one notes over 9.6
 # seconds, a melody on channel 0 and a bass on channel 1. A frame's
 # block is what sounds at that moment, and the roll draws the same
 # notes with a playhead across them.

@@ -1,4 +1,4 @@
-scene ../parts/packed/scene.osn
+scene ../parts/packed/scene.esn
 
 # The first frame: a height kept in 16 bits, a normal in three signed
 # bytes (each a whole number of 127ths), the light in half floats, a

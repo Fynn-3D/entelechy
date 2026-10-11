@@ -1,10 +1,10 @@
 //! The `.field` file is a contract other programs keep: the bridges, the
 //! importer and exporter, `run --save` and scene inputs. Its bytes are
 //! pinned both ways for every scalar and a spread of narrow encodings.
-//! Breaking them takes a new `ORLAFIELD` version.
+//! Breaking them takes a new `ENTELECHYFIELD` version.
 
-use orla_formats::file::{decode, encode_data};
-use orla_host::{Domain, Encoding, FieldData, Schema};
+use entelechy_formats::file::{decode, encode_data};
+use entelechy_host::{Domain, Encoding, FieldData, Schema};
 
 /// A Field from its layout as a file spells it and its values as words.
 fn field(layout: &str, domain: Domain, values: &[u32]) -> FieldData {
@@ -14,7 +14,7 @@ fn field(layout: &str, domain: Domain, values: &[u32]) -> FieldData {
 
 /// The file's bytes: its header, then the element bytes given.
 fn file(header: &str, elements: &[u8]) -> Vec<u8> {
-    let mut bytes = format!("ORLAFIELD 1\n{header}\n").into_bytes();
+    let mut bytes = format!("ENTELECHYFIELD 1\n{header}\n").into_bytes();
     bytes.extend_from_slice(elements);
     bytes
 }

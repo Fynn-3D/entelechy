@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # The whole: each part placed as a sub-graph, its nodes named under the
 # node that places it, its picture in a panel of a 640 by 400 window.

@@ -1,7 +1,7 @@
 # Sound
 
 Sound written as Kernels, heard and seen. Two parts, each a graph that
-runs on its own, placed together in `scene.osn`: the synth's voice and
+runs on its own, placed together in `scene.esn`: the synth's voice and
 the spectrum's voice a fifth above it (330 Hz over 220 Hz) are mixed by
 `sound.mix` into one stereo block, the scene's sound output, and
 `sound.side` shows the synth's scope beside the spectrum in one window.
@@ -38,20 +38,20 @@ A sound and its spectrum. `voice` writes a block of samples each frame
 frequency bins, one map over `count(block)`; `peak` finds the loudest
 bin; `draw` paints the bars and `text.label` names the frequency.
 
-`spectrum.osn` is the graph, its font and caption wired by whoever
-places it; `scene.osn` reads them from the text package and places it,
+`spectrum.esn` is the graph, its font and caption wired by whoever
+places it; `scene.esn` reads them from the text package and places it,
 and the whole places it beside the synth with `across = 2`, so its
 picture takes half the window.
 
 ## Running
 
 ```sh
-orla player examples/sound/scene.osn
-orla player examples/sound/parts/synth/scene.osn
-orla player examples/sound/parts/spectrum/scene.osn
-orla run examples/sound/scene.osn --window 640x400 --out sound.ppm
-orla run examples/sound/parts/spectrum/scene.osn --window 320x200 --save spectrum.voice.result=tone.wav
-orla replay examples/sound/tests/sound.replay
-orla replay examples/sound/tests/scope.replay
-orla replay examples/sound/tests/spectrum.replay
+entelechy player examples/sound/scene.esn
+entelechy player examples/sound/parts/synth/scene.esn
+entelechy player examples/sound/parts/spectrum/scene.esn
+entelechy run examples/sound/scene.esn --window 640x400 --out sound.ppm
+entelechy run examples/sound/parts/spectrum/scene.esn --window 320x200 --save spectrum.voice.result=tone.wav
+entelechy replay examples/sound/tests/sound.replay
+entelechy replay examples/sound/tests/scope.replay
+entelechy replay examples/sound/tests/spectrum.replay
 ```

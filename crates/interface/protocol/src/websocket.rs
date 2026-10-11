@@ -155,7 +155,7 @@ pub fn handshake(
             Ok(true)
         }
         _ => {
-            let body = "This is Orla's creation protocol: JSON lines on a socket, or the same lines as WebSocket text frames. See docs/PROTOCOL.md.\n";
+            let body = "This is Entelechy's creation protocol: JSON lines on a socket, or the same lines as WebSocket text frames. See docs/PROTOCOL.md.\n";
             write!(
                 writer,
                 "HTTP/1.1 426 Upgrade Required\r\nUpgrade: websocket\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",
@@ -171,7 +171,7 @@ pub fn handshake(
 pub fn accept_key(key: &str) -> String {
     let mut material = key.trim().as_bytes().to_vec();
     material.extend_from_slice(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
-    orla_formats::base64::base64(&sha1(&material))
+    entelechy_formats::base64::base64(&sha1(&material))
 }
 
 /// Reads one message, joining fragments; `Ok(None)` when the peer closed

@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # A small window and a small texture: the same picture at a coarser
 # grain, which is enough to say what the levels are for.

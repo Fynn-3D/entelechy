@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use orla_session::{Session, replay};
+use entelechy_session::{Session, replay};
 
 const SCENE: &str = "struct Spot { at: Vec2; hits: Int; }
 kernel t.spots@1 {
@@ -16,16 +16,16 @@ output result <- spots.result;
 ";
 
 fn scene(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("orla-show-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-show-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("scene.osn"), SCENE).unwrap();
+    std::fs::write(dir.join("scene.esn"), SCENE).unwrap();
     dir
 }
 
 fn ran(dir: &Path, text: &str) -> Result<replay::Outcome, String> {
     let replay = replay::parse(text, dir).map_err(|e| e.to_string())?;
-    let runtime = Session::runtime_for("cpu", orla_session::Limits::default()).unwrap();
+    let runtime = Session::runtime_for("cpu", entelechy_session::Limits::default()).unwrap();
     replay::run(&replay, runtime)
 }
 
@@ -34,7 +34,7 @@ fn show_prints_an_element_and_a_field_and_checks_nothing() {
     let dir = scene("prints");
     let outcome = ran(
         &dir,
-        "scene scene.osn\nframe 0\nshow spots.result[2]\nshow spots.result[2].hits\nexpect spots.result[2].hits = 4\n",
+        "scene scene.esn\nframe 0\nshow spots.result[2]\nshow spots.result[2].hits\nexpect spots.result[2].hits = 4\n",
     )
     .unwrap();
     assert_eq!(
@@ -52,7 +52,7 @@ fn show_prints_an_element_and_a_field_and_checks_nothing() {
 #[test]
 fn show_before_a_frame_is_refused() {
     let dir = scene("early");
-    let error = ran(&dir, "scene scene.osn\nshow spots.result[0]\n").unwrap_err();
+    let error = ran(&dir, "scene scene.esn\nshow spots.result[0]\n").unwrap_err();
     assert!(error.contains("line 2: show before any frame"), "{error}");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -70,10 +70,10 @@ output result <- tally.result;
 #[test]
 fn an_array_element_is_a_field_named_by_its_index() {
     let dir = scene("arrays");
-    std::fs::write(dir.join("scene.osn"), ARRAYS).unwrap();
+    std::fs::write(dir.join("scene.esn"), ARRAYS).unwrap();
     let outcome = ran(
         &dir,
-        "scene scene.osn\nframe 0\nshow tally.result[1].counts\nexpect tally.result[1].counts.2 = 12\nexpect tally.result[1].counts.0 < 11\n",
+        "scene scene.esn\nframe 0\nshow tally.result[1].counts\nexpect tally.result[1].counts.2 = 12\nexpect tally.result[1].counts.0 < 11\n",
     )
     .unwrap();
     assert_eq!(
@@ -85,7 +85,7 @@ fn an_array_element_is_a_field_named_by_its_index() {
     // Written as an index in brackets, the refusal says how it is named.
     let error = ran(
         &dir,
-        "scene scene.osn\nframe 0\nexpect tally.result[1].counts[2] = 12\n",
+        "scene scene.esn\nframe 0\nexpect tally.result[1].counts[2] = 12\n",
     )
     .unwrap_err();
     assert!(

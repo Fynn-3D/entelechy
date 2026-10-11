@@ -1,7 +1,7 @@
 #![warn(missing_docs)]
-//! Orla language frontend (L5).
+//! Entelechy language frontend (L5).
 //!
-//! One grammar, two file roles: a `.orla` file holds Kernels; a `.osn`
+//! One grammar, two file roles: a `.ent` file holds Kernels; a `.esn`
 //! file is a graph that uses libraries, declares inputs and outputs, and
 //! places nodes, each referencing a Kernel by id or carrying one inline.
 //!
@@ -59,7 +59,7 @@ mod scope;
 use std::fmt;
 use std::ops::Range;
 
-pub use orla_abi::names::{did_you_mean, edit_distance, nearest, suggestion};
+pub use entelechy_abi::names::{did_you_mean, edit_distance, nearest, suggestion};
 pub use parser::{RESERVED, outline, parse, parse_document, parse_literal};
 pub use reach::Reached;
 pub use rename::renamed_type;
@@ -79,8 +79,8 @@ pub struct PackageDecl {
     pub ir: u32,
 }
 
-/// A whole file. For a `.osn` the file is the graph; for a `.orla` only
-/// `kernels` is populated; a package's `package.osn` has `package`.
+/// A whole file. For a `.esn` the file is the graph; for a `.ent` only
+/// `kernels` is populated; a package's `package.esn` has `package`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Document {
     /// The package this document is the manifest of, if it is one.
@@ -387,7 +387,7 @@ pub enum NodeKind {
     /// A Kernel written in place, published under its id if it has one;
     /// the loader names an anonymous one after the document and node.
     Inline(Box<Kernel>),
-    /// Another `.osn` document as a node: `node fx: graph "path";`, wired
+    /// Another `.esn` document as a node: `node fx: graph "path";`, wired
     /// and set like a Kernel.
     SubGraph(Spanned<String>),
     /// A filled Field of a type: zeros, or `value = 0.5;`; its element a
@@ -634,7 +634,7 @@ pub struct PortDecl {
     pub binding: Option<BindingDecl>,
     /// Document inputs only: a file read, `= "atlas.ppm"`.
     pub file: Option<Spanned<String>>,
-    /// Document inputs only: text held as character codes, `= text "ORLA"`.
+    /// Document inputs only: text held as character codes, `= text "ENTELECHY"`.
     pub text: Option<Spanned<String>>,
     /// Document inputs only: a directory read frame by frame,
     /// `= frames "clip/" at 30`.
@@ -729,7 +729,7 @@ pub fn on_a_deep_stack<T: Send>(work: impl FnOnce() -> T + Send) -> T {
     let spawned = std::thread::scope(|scope| {
         let work = &mut work;
         std::thread::Builder::new()
-            .name("orla-compile".into())
+            .name("entelechy-compile".into())
             .stack_size(DEEP_STACK)
             .spawn_scoped(scope, move || {
                 DEEP.with(|deep| deep.set(true));

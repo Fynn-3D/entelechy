@@ -30,10 +30,15 @@ pub enum PrefixPass {
 }
 
 /// Two words combined under `combine` by their scalar, the rule of
-/// `orla_rules::combine_words`. An integer `sum` is kept whole instead
+/// `entelechy_rules::combine_words`. An integer `sum` is kept whole instead
 /// ([`sums_whole`]).
-pub(crate) fn prefix_word(combine: Combine, scalar: orla_abi::Scalar, a: &str, b: &str) -> String {
-    let float = matches!(scalar, orla_abi::Scalar::Float);
+pub(crate) fn prefix_word(
+    combine: Combine,
+    scalar: entelechy_abi::Scalar,
+    a: &str,
+    b: &str,
+) -> String {
+    let float = matches!(scalar, entelechy_abi::Scalar::Float);
     match (combine, float) {
         (Combine::Sum, false) => {
             format!("bitcast<u32>(bitcast<i32>({a}) + bitcast<i32>({b}))")

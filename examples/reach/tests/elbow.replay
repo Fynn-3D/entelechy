@@ -1,4 +1,4 @@
-scene elbow.osn
+scene elbow.esn
 
 # The elbow faces the point exactly, at two moments of the clip: the
 # shoulder under it is somewhere else each time, so its space is worked

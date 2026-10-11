@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # The posed box is 48 voxels a side, voxel (x, y, z) at index
 # x + 48 * y + 2304 * z, its floor's middle at (24, 0, 24). At rest the

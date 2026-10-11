@@ -1,4 +1,4 @@
-scene torus.osn
+scene torus.esn
 
 # The torus's surface at pixels on an edge between two triangles, where
 # a rasterizer's rule is tested: the pixel's owner and its depth, as the

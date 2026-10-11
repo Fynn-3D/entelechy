@@ -7,7 +7,7 @@ rebuilt every frame from Kernels:
 - `flock.counts@1`: a scatter with `sum`, the bodies in each cell.
 - `flock.ends@1`: `prefix with sum` over the counts, where each cell's
   run ends in sorted order.
-- `packages/sort.orlapkg`: a stable radix sort that puts each cell's
+- `packages/sort.entpkg`: a stable radix sort that puts each cell's
   bodies side by side.
 
 `radius` is one cell; `cap` is how many bodies of a cell a body reads.
@@ -20,6 +20,6 @@ ordered and stable, that no cell exceeds `cap`, and that every-pair draws
 the same picture to rounding.
 
 ```sh
-orla player examples/neighbours/scene.osn
-orla replay examples/neighbours/tests/neighbours.replay
+entelechy player examples/neighbours/scene.esn
+entelechy replay examples/neighbours/tests/neighbours.replay
 ```

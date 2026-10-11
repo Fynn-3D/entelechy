@@ -412,7 +412,7 @@ pub(super) fn migrate(
     context: &Context,
 ) -> Result<Handle, String> {
     let manifest = version.manifest();
-    if manifest.mode != orla_ir::Mode::Map || manifest.inputs.len() != 1 {
+    if manifest.mode != entelechy_ir::Mode::Map || manifest.inputs.len() != 1 {
         return Err("must be a map over one input, the old state, giving the new".to_owned());
     }
     let domain = runtime

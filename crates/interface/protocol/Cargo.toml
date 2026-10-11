@@ -1,6 +1,6 @@
 [package]
-name = "orla-protocol"
-description = "Orla creation protocol: JSON lines, over stdin or a WebSocket, that drive a live session"
+name = "entelechy-protocol"
+description = "Entelechy creation protocol: JSON lines, over stdin or a WebSocket, that drive a live session"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,14 +11,14 @@ rust-version.workspace = true
 doctest = false
 
 [dependencies]
-orla-session = { path = "../../interface/session" }
-orla-formats = { path = "../../interface/formats" }
-orla-compiler = { path = "../../frontend/compiler" }
-orla-graph = { path = "../../core/graph" }
-orla-ir = { path = "../../core/ir" }
-orla-language = { path = "../../frontend/language" }
-orla-scene = { path = "../../frontend/scene" }
-orla-kernel = { path = "../../core/kernel" }
+entelechy-session = { path = "../../interface/session" }
+entelechy-formats = { path = "../../interface/formats" }
+entelechy-compiler = { path = "../../frontend/compiler" }
+entelechy-graph = { path = "../../core/graph" }
+entelechy-ir = { path = "../../core/ir" }
+entelechy-language = { path = "../../frontend/language" }
+entelechy-scene = { path = "../../frontend/scene" }
+entelechy-kernel = { path = "../../core/kernel" }
 serde_json = "1"
 
 [lints]

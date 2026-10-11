@@ -1,4 +1,4 @@
-scene showcase.osn
+scene showcase.esn
 
 # A 160 by 90 window at an eighth of the scale: a sixty-fourth of the
 # pixels, the toolbar laid out at an eighth size, so its items are centred

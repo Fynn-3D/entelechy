@@ -11,9 +11,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use orla_ir::Validated;
-use orla_kernel::{Candidate, Expect, KernelId, KernelVersion, Runtime, Ticket};
-use orla_language::Kernel;
+use entelechy_ir::Validated;
+use entelechy_kernel::{Candidate, Expect, KernelId, KernelVersion, Runtime, Ticket};
+use entelechy_language::Kernel;
 
 use crate::sources::located;
 use crate::store::{Stamp, Store};
@@ -130,7 +130,7 @@ impl Kernels {
 pub(crate) struct Ledger {
     documents: BTreeMap<PathBuf, DocumentState>,
     running: BTreeMap<KernelId, Arc<KernelVersion>>,
-    preparer: orla_kernel::Preparer,
+    preparer: entelechy_kernel::Preparer,
     worker: bool,
 }
 
@@ -646,12 +646,15 @@ impl Kernels {
                 Err(error) => {
                     // One fault in one place is reported once, in the
                     // document it is written in.
-                    let at =
-                        crate::sources::written_in(path, orla_language::Held::of(&kernel), &error);
+                    let at = crate::sources::written_in(
+                        path,
+                        entelechy_language::Held::of(&kernel),
+                        &error,
+                    );
                     let rejected = Event::Rejected {
                         error: self.located(
                             store,
-                            crate::sources::said(orla_language::Held::of(&kernel), &error),
+                            crate::sources::said(entelechy_language::Held::of(&kernel), &error),
                             &at,
                             root,
                         ),
@@ -844,7 +847,8 @@ impl Kernels {
             .documents
             .iter()
             .find_map(|(path, state)| state.asts.get(id).map(|kernel| (path, kernel)))?;
-        let (module, places) = orla_compiler::compile_kernel_unoptimized(kernel, Some(id)).ok()?;
+        let (module, places) =
+            entelechy_compiler::compile_kernel_unoptimized(kernel, Some(id)).ok()?;
         Some(Written {
             module,
             places,
@@ -857,11 +861,11 @@ impl Kernels {
 /// A Kernel as its document writes it: unoptimized, with where each value
 /// is written.
 pub(crate) struct Written {
-    pub(crate) module: orla_kernel::Validated,
-    pub(crate) places: orla_compiler::SourcePlaces,
+    pub(crate) module: entelechy_kernel::Validated,
+    pub(crate) places: entelechy_compiler::SourcePlaces,
     pub(crate) path: PathBuf,
     /// The Kernel, what it holds knowing where each was written.
-    pub(crate) kernel: orla_language::Kernel,
+    pub(crate) kernel: entelechy_language::Kernel,
 }
 
 impl Written {
@@ -875,7 +879,7 @@ impl Written {
                 let index = self.module.functions.iter().position(|f| &f.name == name)?;
                 (
                     self.places.functions.get(index)?,
-                    orla_language::Held::of(&self.kernel)
+                    entelechy_language::Held::of(&self.kernel)
                         .origin_of(name)
                         .map_or_else(
                             || self.path.clone(),
@@ -890,7 +894,7 @@ impl Written {
             line: span.line,
             column: span.column,
             function: fault.function.as_deref().map(|name| {
-                orla_language::Held::of(&self.kernel)
+                entelechy_language::Held::of(&self.kernel)
                     .origin_of(name)
                     .map_or_else(|| name.to_owned(), |origin| origin.name.clone())
             }),
@@ -912,8 +916,8 @@ fn compiled(
     id: &KernelId,
     text: &str,
     declarations: &str,
-    kernel: &orla_language::Kernel,
-) -> Result<Validated, orla_compiler::CompileError> {
+    kernel: &entelechy_language::Kernel,
+) -> Result<Validated, entelechy_compiler::CompileError> {
     let key = (
         path.to_path_buf(),
         id.to_string(),
@@ -931,7 +935,7 @@ fn compiled(
     if let Some(module) = store.parsed().and_then(lock) {
         return Ok(module);
     }
-    let module = orla_compiler::compile_kernel(kernel, Some(id))?;
+    let module = entelechy_compiler::compile_kernel(kernel, Some(id))?;
     if let Some(parsed) = store.parsed() {
         let mut kept = parsed
             .compiled

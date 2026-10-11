@@ -90,8 +90,11 @@ pub fn import(path: &Path, out_dir: &Path) -> Result<Imported, String> {
     std::fs::create_dir_all(out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("sound");
     let file = out_dir.join(format!("{stem}.wav"));
-    std::fs::write(&file, orla_formats::wav::encode(&words, channels, rate))
-        .map_err(|e| format!("{}: {e}", file.display()))?;
+    std::fs::write(
+        &file,
+        entelechy_formats::wav::encode(&words, channels, rate),
+    )
+    .map_err(|e| format!("{}: {e}", file.display()))?;
     Ok(Imported {
         file,
         rate,
@@ -107,7 +110,8 @@ mod tests {
     /// Fixtures: a 440 Hz tone at half amplitude, 0.3 s at 22050 Hz (the
     /// OGG in stereo). Decoding keeps rate, channels, loudness and pitch.
     fn check(name: &str, channels: usize) {
-        let dir = std::env::temp_dir().join(format!("orla-audio-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("entelechy-audio-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let source = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures")
@@ -123,7 +127,7 @@ mod tests {
             "{name}: {} frames",
             imported.frames
         );
-        let (field, detail) = orla_formats::read(&imported.file, None).unwrap();
+        let (field, detail) = entelechy_formats::read(&imported.file, None).unwrap();
         assert!(detail.ends_with("at 22050 Hz"), "{detail}");
         assert_eq!(field.schema().value_words(), channels);
         let left: Vec<f32> = field

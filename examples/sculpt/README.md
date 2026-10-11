@@ -1,7 +1,7 @@
 # Sculpt
 
 An island of 64 by 32 by 64 voxels made of shapes as data and sculpted
-by hand, with the voxel package (`packages/voxel.orlapkg`). Ten rows of
+by hand, with the voxel package (`packages/voxel.entpkg`). Ten rows of
 `VoxelShape` (rounded cuboids of sand, grass and earth, a sphere of
 stone, a pond dug out and filled, two trees of a capsule and a ball) are
 baked into a volume by `voxel.shapes@1`.
@@ -13,12 +13,12 @@ drawn, through the same camera the view draws with
 shape a frame; `voxel.paint@1`, fed back, paints it over the world. With
 no button held the brush gives a shape holding nothing, the world is
 unchanged, and what reads it does not run again. The package's
-`graphs/view.osn` draws it by day: the sun's shadows, haze before the
+`graphs/view.esn` draws it by day: the sun's shadows, haze before the
 sky.
 
 ```sh
-orla-player examples/sculpt/scene.osn
-orla-player examples/sculpt/scene.osn --param yaw=2.2
+entelechy-player examples/sculpt/scene.esn
+entelechy-player examples/sculpt/scene.esn --param yaw=2.2
 ```
 
 ## Tests

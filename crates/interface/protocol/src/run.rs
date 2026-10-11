@@ -3,7 +3,7 @@
 
 use serde_json::{Value as Json, json};
 
-use orla_session::Session;
+use entelechy_session::Session;
 
 use crate::request::Request;
 use crate::wire::{context_of, evaluation_error, failure, place_json, report_json};
@@ -26,7 +26,7 @@ pub(crate) fn evaluate(session: &mut Session, request: &Request) -> Result<Json,
             let demand = nodes
                 .iter()
                 .filter_map(Json::as_str)
-                .map(|node| orla_graph::NodeId(node.to_owned()))
+                .map(|node| entelechy_graph::NodeId(node.to_owned()))
                 .collect();
             session.evaluate_for(&context, &demand)
         }
@@ -54,7 +54,11 @@ pub fn measure_asked(request: &Json) -> bool {
 
 /// What an `evaluate` answers: its report, whether it was measured, and
 /// the latest clocked frame the device has done.
-pub fn evaluation_json(session: &Session, report: &orla_graph::Report, measured: bool) -> Json {
+pub fn evaluation_json(
+    session: &Session,
+    report: &entelechy_graph::Report,
+    measured: bool,
+) -> Json {
     let mut answer = report_json(session, report);
     answer["measured"] = json!(measured);
     answer["device"] = device_json(session.device_times());
@@ -62,7 +66,7 @@ pub fn evaluation_json(session: &Session, report: &orla_graph::Report, measured:
 }
 
 /// The latest clocked frame the device has done, node by node, or null.
-fn device_json(times: Option<orla_session::DeviceTimes>) -> Json {
+fn device_json(times: Option<entelechy_session::DeviceTimes>) -> Json {
     let millis = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
     match times {
         None => Json::Null,
@@ -93,7 +97,7 @@ pub(crate) fn reset(session: &mut Session, request: &Request) -> Result<Json, Js
             .ok_or_else(|| failure("`port` must be a string"))?,
     };
     session
-        .reset_port(&orla_graph::NodeId(node.clone()), port)
+        .reset_port(&entelechy_graph::NodeId(node.clone()), port)
         .map_err(|e| failure(e.to_string()))?;
     Ok(json!({ "reset": true, "node": node, "port": port }))
 }

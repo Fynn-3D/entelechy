@@ -1,18 +1,18 @@
 # Examples
 
-Each example is a directory with a `scene.osn` entry, usually a
-`kernels/` directory of the `.orla` libraries it uses and a `tests/`
+Each example is a directory with a `scene.esn` entry, usually a
+`kernels/` directory of the `.ent` libraries it uses and a `tests/`
 directory of `.replay` scripts and their fixture scenes, and a
 `README.md` saying what it shows and how to run it.
 
 An example is a whole program; a reusable capability it draws on is a
 package in [`packages/`](../packages/README.md), used whole by path
-(`use "../../packages/skin.orlapkg";`) or, with `ORLA_PACKAGES` set, by
+(`use "../../packages/skin.entpkg";`) or, with `ENTELECHY_PACKAGES` set, by
 name. An example uses packages and nothing uses an example. Small
 helpers stay in the example, so one directory reads whole.
 
 ```sh
-orla run examples/<example>/scene.osn --out output.ppm --watch
+entelechy run examples/<example>/scene.esn --out output.ppm --watch
 ```
 
 ## Language and execution modes
@@ -28,7 +28,7 @@ orla run examples/<example>/scene.osn --out output.ppm --watch
 
 - [path](path/README.md): a progressive path tracer; samples and bounces are graph parameters, the running sum is state.
 - [mesh](mesh/README.md): a torus subdivided, projected, rasterized by the raster package and shaded; `native.rasterize@1` is the fast path.
-- [model](model/README.md): a GLB crate imported by `orla-import`, rasterized and textured with `at_linear`.
+- [model](model/README.md): a GLB crate imported by `entelechy-import`, rasterized and textured with `at_linear`.
 - [mipmap](mipmap/README.md): a ground read at the mip level each pixel needs, levels from a sub-graph placed with `carry`.
 - [decided](decided/README.md): geometry sized inside the frame by `domain = value(detail) * value(detail)`.
 - [culled](culled/README.md): ten million triangles, of which a frame places the chunks it sees through the compact package.
@@ -37,7 +37,7 @@ orla run examples/<example>/scene.osn --out output.ppm --watch
 - [surface](surface/README.md): a blob meshed from a `Volume<Int>` every frame, the cells compacted and counted.
 - [text](text/README.md): rows of glyphs drawn through a font atlas baked by `run --save`.
 - [ui](ui/README.md): a settings screen and a hero's panel drawn with the ui package, moved through by keys, a pad or the pointer.
-- [vector](vector/README.md): an SVG imported by `orla-import` and drawn sharp at any size by the vector package; drag and zoom.
+- [vector](vector/README.md): an SVG imported by `entelechy-import` and drawn sharp at any size by the vector package; drag and zoom.
 - [showcase](showcase/README.md): a signed-distance gamepad under physically based shading, with a toolbar in logical pixels.
 - [darkroom](darkroom/README.md): a raw photograph developed with the image package: equalized, graded, sharpened, and a neon outline drawn from a signed distance field.
 - [nebula](nebula/README.md): a drift through a nebula made by the noise package, finished by the image package's camera look: glow, depth of field, tone and grain.
@@ -50,7 +50,7 @@ orla run examples/<example>/scene.osn --out output.ppm --watch
 - [fluid](fluid/README.md): smoke by Navier-Stokes, the pressure solve one Jacobi Kernel placed with `times`.
 - [collapse](collapse/README.md): wave function collapse on a `Grid<Int>` of tile bitmasks.
 - [learn](learn/README.md): a 2-16-1 network trained by gradient descent, the gradient a scatter.
-- [cube-puzzle](cube-puzzle/README.md): a playable cube puzzle and a 54-32-1 network trained on its scrambles; `play.osn` reads kept weights.
+- [cube-puzzle](cube-puzzle/README.md): a playable cube puzzle and a 54-32-1 network trained on its scrambles; `play.esn` reads kept weights.
 
 ## Sound
 
@@ -78,6 +78,6 @@ orla run examples/<example>/scene.osn --out output.ppm --watch
 
 ## Agents, packages and files
 
-- [package](package/README.md): a scene using `image.orlapkg` and its preset; what `orla pack` carries.
+- [package](package/README.md): a scene using `image.entpkg` and its preset; what `entelechy pack` carries.
 - [level](level/README.md): a binary level format read by a Kernel from `bytes`.
 - [clip](clip/README.md): an input read frame by frame from a directory with `frames`.

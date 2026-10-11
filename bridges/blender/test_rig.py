@@ -1,10 +1,10 @@
 """Pushes a rig out of Blender and exports the same rig as glTF, so the
-two ways into Orla can be held against each other.
+two ways into Entelechy can be held against each other.
 
-    blender -b --python bridges/blender/test_rig.py -- --out /tmp/orla-rig
+    blender -b --python bridges/blender/test_rig.py -- --out /tmp/entelechy-rig
 
 writes `<out>/pushed/` (the bridge's rows) and `<out>/arm.glb` (for
-`orla import`). `crates/interface/orla/tests/bridges.rs` poses both and compares the
+`entelechy import`). `crates/interface/entelechy/tests/bridges.rs` poses both and compares the
 pictures; run by hand, the lines below say what was written.
 """
 
@@ -26,9 +26,9 @@ def load(name):
 
 
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
-out = argv[argv.index("--out") + 1] if "--out" in argv else "/tmp/orla-rig"
+out = argv[argv.index("--out") + 1] if "--out" in argv else "/tmp/entelechy-rig"
 
-bridge = load("orla_bridge")
+bridge = load("entelechy_bridge")
 maker = load("make_rig")
 
 mesh, armature = maker.build()
@@ -56,8 +56,8 @@ import math
 
 bridge.register()
 scene = bpy.context.scene
-scene.orla.assets_dir = os.path.join(out, "live")
-scene.orla.live = True
+scene.entelechy.assets_dir = os.path.join(out, "live")
+scene.entelechy.live = True
 bpy.context.view_layer.objects.active = armature
 pose_file = os.path.join(out, "live", "Arm.pose.clip.field")
 before = open(pose_file, "rb").read()
@@ -68,7 +68,7 @@ bpy.context.view_layer.update()
 after = open(pose_file, "rb").read()
 assert after != before, "posing the armature pushed nothing"
 print("live: posing the armature pushed the mesh it deforms")
-scene.orla.live = False
+scene.entelechy.live = False
 
 glb = os.path.join(out, "arm.glb")
 bpy.ops.export_scene.gltf(

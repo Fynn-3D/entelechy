@@ -10,12 +10,12 @@ use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use orla_abi::{Handle, Invocation, Scope};
-use orla_ir::Validated;
-use orla_rules::backend::Checked;
-use orla_rules::{Backend, ExecutionError, NativeOp, Prepared};
-use orla_session::Session;
-use orla_session::replay::{self, Replayer};
+use entelechy_abi::{Handle, Invocation, Scope};
+use entelechy_ir::Validated;
+use entelechy_rules::backend::Checked;
+use entelechy_rules::{Backend, ExecutionError, NativeOp, Prepared};
+use entelechy_session::Session;
+use entelechy_session::replay::{self, Replayer};
 
 /// A backend that knows its own prepared state, as a device backend does:
 /// it marks what it prepares with its name and refuses to run what
@@ -175,7 +175,7 @@ kernel k.shift@1 { requires { field.read; field.write; } input x: Rows<Float>; o
 const SCENE: &str = r#"// A scene of every kind of work: maps fused into one, a map repeated
 // with a carry, a reduction, a prefix, a scatter that emits, a scan, a
 // walk in rounds of the loop limit, and a run off the frame.
-use "kinds.orla";
+use "kinds.ent";
 node seed: k.seed@1 { domain = 64; }
 node steps: k.step@1 { times = 6; x <- seed.result; carry x <- result; }
 node a: k.step@1 { x <- steps.result; }
@@ -201,7 +201,7 @@ output turned <- turned.result;
 /// Its frames, each settling the run off the frame: when an unsettled
 /// run lands is the machine's timing, which the two sessions compared
 /// need not share.
-const REPLAY: &str = r#"scene kinds.osn
+const REPLAY: &str = r#"scene kinds.esn
 frame 0.0
 settle
 frame 0.5
@@ -220,10 +220,10 @@ fn replays() -> Vec<PathBuf> {
     // Each call its own directory: tests running at once write here.
     static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("orla-routing-{}-{call}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-routing-{}-{call}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("kinds.orla"), KERNELS).unwrap();
-    std::fs::write(dir.join("kinds.osn"), SCENE).unwrap();
+    std::fs::write(dir.join("kinds.ent"), KERNELS).unwrap();
+    std::fs::write(dir.join("kinds.esn"), SCENE).unwrap();
     std::fs::write(dir.join("kinds.replay"), REPLAY).unwrap();
     vec![dir.join("kinds.replay")]
 }
@@ -240,23 +240,23 @@ enum Split {
 /// A session over the replay's scene: on the JIT, or on the JIT with what
 /// `split` names left to the interpreter.
 fn opened(replay: &replay::Replay, split: Option<Split>) -> Session {
-    let limits = orla_session::Limits::default();
+    let limits = entelechy_session::Limits::default();
     let runtime = if let Some(split) = split {
         let (half, device) = match split {
             Split::Half(half) => (Some(half), false),
             Split::Sized => (None, true),
         };
-        let mut runtime = orla_kernel::Runtime::with_backends(
+        let mut runtime = entelechy_kernel::Runtime::with_backends(
             limits.words,
             Box::new(Owned {
                 name: "main",
-                inner: Box::new(orla_jit::JitBackend::new().unwrap()),
+                inner: Box::new(entelechy_jit::JitBackend::new().unwrap()),
                 half,
                 device,
             }),
             Some(Box::new(Owned {
                 name: "ordered",
-                inner: Box::new(orla_cpu::CpuBackend),
+                inner: Box::new(entelechy_cpu::CpuBackend),
                 half: None,
                 device: false,
             })),
@@ -268,7 +268,7 @@ fn opened(replay: &replay::Replay, split: Option<Split>) -> Session {
         Session::runtime_for("jit", limits).unwrap()
     };
     let mut session = Session::open_in(
-        Arc::new(orla_session::Disk::default()),
+        Arc::new(entelechy_session::Disk::default()),
         &replay.scene,
         replay.kernels.as_deref(),
         runtime,
@@ -278,7 +278,7 @@ fn opened(replay: &replay::Replay, split: Option<Split>) -> Session {
 }
 
 /// Every output of the scene by name, as words.
-fn outputs(session: &mut Session, report: &orla_graph::Report) -> Vec<(String, Vec<u32>)> {
+fn outputs(session: &mut Session, report: &entelechy_graph::Report) -> Vec<(String, Vec<u32>)> {
     report
         .outputs
         .iter()

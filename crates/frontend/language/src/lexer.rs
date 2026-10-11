@@ -1,4 +1,4 @@
-//! Tokenizer for Orla documents.
+//! Tokenizer for Entelechy documents.
 
 use crate::{ParseError, Span};
 

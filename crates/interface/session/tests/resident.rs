@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use orla_session::replay::{Replay, Resident, parse, run_fused};
-use orla_session::{Disk, Limits, Session, Warm};
+use entelechy_session::replay::{Replay, Resident, parse, run_fused};
+use entelechy_session::{Disk, Limits, Session, Warm};
 
 const SCENE: &str = "
 param step: Float = 1.0;
@@ -36,26 +36,26 @@ fn limits() -> Limits {
 
 /// What a replay shows, run on a session of its own.
 fn fresh(replay: &Replay) -> Vec<String> {
-    let store: Arc<dyn orla_session::Store> = Arc::new(Disk::default());
+    let store: Arc<dyn entelechy_session::Store> = Arc::new(Disk::default());
     let runtime = Session::runtime_for("cpu", limits()).unwrap();
     run_fused(replay, store, runtime, true).unwrap().shown
 }
 
 #[test]
 fn replays_on_one_kept_session_see_what_fresh_ones_would() {
-    let dir = std::env::temp_dir().join(format!("orla-resident-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-resident-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("scene.osn"), SCENE).unwrap();
+    std::fs::write(dir.join("scene.esn"), SCENE).unwrap();
     let three = replay(
         &dir,
-        "scene scene.osn\nparam step 3\nframe 0 to 0.2 every 0.1\nshow count.result[0]\nshow baked.result[0]\n",
+        "scene scene.esn\nparam step 3\nframe 0 to 0.2 every 0.1\nshow count.result[0]\nshow baked.result[0]\n",
     );
     let plain = replay(
         &dir,
-        "scene scene.osn\nframe 0 to 0.1 every 0.1\nshow count.result[0]\nshow baked.result[0]\n",
+        "scene scene.esn\nframe 0 to 0.1 every 0.1\nshow count.result[0]\nshow baked.result[0]\n",
     );
-    let store: Arc<dyn orla_session::Store> = Arc::new(Disk::default());
+    let store: Arc<dyn entelechy_session::Store> = Arc::new(Disk::default());
     let mut resident = Resident::new(Warm::open("cpu", limits()).unwrap(), store, true);
     for replay in [&three, &plain, &three, &plain] {
         let kept = resident.play(replay, None).unwrap();
@@ -64,7 +64,7 @@ fn replays_on_one_kept_session_see_what_fresh_ones_would() {
     }
     // The scene changed between replays: read again, as a fresh one reads it.
     std::fs::write(
-        dir.join("scene.osn"),
+        dir.join("scene.esn"),
         SCENE.replace("step * 100.0", "step * 7.0"),
     )
     .unwrap();
@@ -83,16 +83,16 @@ fn replays_on_one_kept_session_see_what_fresh_ones_would() {
 /// baked node's Kernel changing, and one that reads the baked node is.
 #[test]
 fn a_change_reaches_the_replays_whose_checks_read_it() {
-    let dir = std::env::temp_dir().join(format!("orla-reached-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-reached-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("scene.osn"), SCENE).unwrap();
+    std::fs::write(dir.join("scene.esn"), SCENE).unwrap();
     let counting = replay(
         &dir,
-        "scene scene.osn\nframe 0 to 0.2 every 0.1\nshow count.result[0]\n",
+        "scene scene.esn\nframe 0 to 0.2 every 0.1\nshow count.result[0]\n",
     );
-    let baking = replay(&dir, "scene scene.osn\nframe 0\nshow baked.result[0]\n");
-    let store: Arc<dyn orla_session::Store> = Arc::new(Disk::default());
+    let baking = replay(&dir, "scene scene.esn\nframe 0\nshow baked.result[0]\n");
+    let store: Arc<dyn entelechy_session::Store> = Arc::new(Disk::default());
     let mut resident = Resident::new(Warm::open("cpu", limits()).unwrap(), store, true);
     // Played in either order, each knows what it reads.
     let baked_first = resident.play(&baking, None).unwrap().touched;
@@ -101,7 +101,7 @@ fn a_change_reaches_the_replays_whose_checks_read_it() {
     assert_eq!(baked, baked_first);
     assert!(counted.contains("count") && counted.contains("zero") && !counted.contains("baked"));
     std::fs::write(
-        dir.join("scene.osn"),
+        dir.join("scene.esn"),
         SCENE.replace("step * 100.0", "step * 7.0"),
     )
     .unwrap();

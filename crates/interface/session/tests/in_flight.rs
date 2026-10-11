@@ -4,14 +4,14 @@
 
 use std::sync::{Arc, Mutex};
 
-use orla_abi::{Handle, Invocation, Scope};
-use orla_kernel::{Backend, Runtime};
-use orla_session::Session;
+use entelechy_abi::{Handle, Invocation, Scope};
+use entelechy_kernel::{Backend, Runtime};
+use entelechy_session::Session;
 
 /// A device that runs on the CPU and records each run and each wait.
 struct Device {
     log: Arc<Mutex<Vec<&'static str>>>,
-    cpu: orla_cpu::CpuBackend,
+    cpu: entelechy_cpu::CpuBackend,
 }
 
 impl Backend for Device {
@@ -26,17 +26,17 @@ impl Backend for Device {
     }
     fn prepare(
         &self,
-        module: &orla_ir::Validated,
-    ) -> Result<Box<dyn orla_kernel::Prepared>, String> {
+        module: &entelechy_ir::Validated,
+    ) -> Result<Box<dyn entelechy_kernel::Prepared>, String> {
         self.cpu.prepare(module)
     }
     fn execute(
         &self,
-        prepared: &dyn orla_kernel::Prepared,
-        module: &orla_ir::Validated,
+        prepared: &dyn entelechy_kernel::Prepared,
+        module: &entelechy_ir::Validated,
         invocation: &Invocation,
         scope: &mut Scope<'_>,
-    ) -> Result<Vec<Handle>, orla_kernel::ExecutionError> {
+    ) -> Result<Vec<Handle>, entelechy_kernel::ExecutionError> {
         self.log.lock().unwrap().push("run");
         Backend::execute(&self.cpu, prepared, module, invocation, scope)
     }
@@ -49,15 +49,15 @@ fn each_evaluation_waits_for_the_last_ones_device_work_first() {
         1 << 24,
         Box::new(Device {
             log: Arc::clone(&log),
-            cpu: orla_cpu::CpuBackend,
+            cpu: entelechy_cpu::CpuBackend,
         }),
         None,
     );
     // Every run on the device, however small.
     runtime.set_small(0);
-    let dir = std::env::temp_dir().join(format!("orla-in-flight-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-in-flight-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let scene = dir.join("scene.osn");
+    let scene = dir.join("scene.esn");
     std::fs::write(
         &scene,
         "node seed: kernel {
@@ -77,16 +77,16 @@ output result <- count.result;
     )
     .unwrap();
     let mut session = Session::open_in(
-        Arc::new(orla_session::Disk::default()),
+        Arc::new(entelechy_session::Disk::default()),
         &scene,
         None,
         runtime,
     );
     let _ = session.sync();
     for frame in 0..3 {
-        let context = orla_graph::Context {
+        let context = entelechy_graph::Context {
             time: frame as f32 * 0.1,
-            ..orla_graph::Context::default()
+            ..entelechy_graph::Context::default()
         };
         log.lock().unwrap().clear();
         let report = session.evaluate(&context).unwrap();

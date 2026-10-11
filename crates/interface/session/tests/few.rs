@@ -4,10 +4,10 @@
 //! that reads what the device made in the same evaluation goes only when
 //! it is long, the device's work kept whole otherwise.
 
-use orla_abi::{Handle, Invocation, Scope};
-use orla_ir::Validated;
-use orla_kernel::{Backend, ExecutionError, Prepared, Runtime};
-use orla_session::Session;
+use entelechy_abi::{Handle, Invocation, Scope};
+use entelechy_ir::Validated;
+use entelechy_kernel::{Backend, ExecutionError, Prepared, Runtime};
+use entelechy_session::Session;
 
 /// The interpreter, as a device.
 struct Device;
@@ -20,7 +20,7 @@ impl Backend for Device {
         true
     }
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
-        orla_cpu::CpuBackend.prepare(module)
+        entelechy_cpu::CpuBackend.prepare(module)
     }
     fn execute(
         &self,
@@ -29,18 +29,24 @@ impl Backend for Device {
         invocation: &Invocation,
         scope: &mut Scope<'_>,
     ) -> Result<Vec<Handle>, ExecutionError> {
-        Backend::execute(&orla_cpu::CpuBackend, prepared, module, invocation, scope)
+        Backend::execute(
+            &entelechy_cpu::CpuBackend,
+            prepared,
+            module,
+            invocation,
+            scope,
+        )
     }
 }
 
 #[test]
 fn few_elements_of_much_work_go_to_the_processor_and_many_stay() {
-    let dir = std::env::temp_dir().join(format!("orla-few-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-few-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     // Work enough that the size alone keeps either on the device.
     std::fs::write(
-        dir.join("scene.osn"),
+        dir.join("scene.esn"),
         "kernel t.heavy@1 { requires { field.write; } output result: Rows<Float>; compute {
     return loop 60000 with a = float(element()) { a * 0.999 + sin(a) * cos(a) + fract(a) * 0.5 };
 } }
@@ -76,11 +82,13 @@ output marked_small <- mark_small.result;
     let runtime = Runtime::with_backends(
         1 << 24,
         Box::new(Device),
-        Some(Box::new(orla_cpu::CpuBackend)),
+        Some(Box::new(entelechy_cpu::CpuBackend)),
     );
-    let mut session = Session::open_with(&dir.join("scene.osn"), None, runtime);
+    let mut session = Session::open_with(&dir.join("scene.esn"), None, runtime);
     session.sync();
-    let report = session.evaluate(&orla_kernel::Context::default()).unwrap();
+    let report = session
+        .evaluate(&entelechy_kernel::Context::default())
+        .unwrap();
     let placed = |node: &str| {
         report
             .placements
@@ -104,7 +112,7 @@ output marked_small <- mark_small.result;
     // A scatter of two elements run again into a target of a million made
     // before carries the target whole, so it stays where the target is;
     // into a target of a few, it goes.
-    let later = orla_kernel::Context {
+    let later = entelechy_kernel::Context {
         time: 1.0,
         ..Default::default()
     };

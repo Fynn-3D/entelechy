@@ -20,6 +20,6 @@ The replay uses a 160 by 90 window: it clicks the color item, stops
 the turntable, drags and reads the yaw, then resets.
 
 ```sh
-orla player examples/showcase/scene.osn --scale 1
-orla replay examples/showcase/tests/showcase.replay --backend gpu
+entelechy player examples/showcase/scene.esn --scale 1
+entelechy replay examples/showcase/tests/showcase.replay --backend gpu
 ```

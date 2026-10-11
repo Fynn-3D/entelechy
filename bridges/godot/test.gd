@@ -1,16 +1,16 @@
 ## Checks the bridge headless against three sessions it serves itself:
 ##
 ##   cargo build --release
-##   godot --headless --path bridges/godot -s test.gd [-- --orla <path>]
+##   godot --headless --path bridges/godot -s test.gd [-- --entelechy <path>]
 ##
 ## The text example's picture is read and its background republished, the
-## voxel editor is driven by an OrlaView with a window and a pointer, and
+## voxel editor is driven by an EntelechyView with a window and a pointer, and
 ## the mesh example's torus comes out as an ArrayMesh. Prints one line per
 ## check and ends with `RESULT: ok`, or names the first failure.
 extends SceneTree
 
-const Client = preload("res://orla_client.gd")
-const View = preload("res://orla_view.gd")
+const Client = preload("res://entelechy_client.gd")
+const View = preload("res://entelechy_view.gd")
 
 var _sessions: Array[Dictionary] = []
 
@@ -23,12 +23,12 @@ func _initialize() -> void:
 
 func _first_frame() -> void:
 	var args := OS.get_cmdline_user_args()
-	var orla := ProjectSettings.globalize_path("res://../../target/release/orla")
-	var at := args.find("--orla")
+	var entelechy := ProjectSettings.globalize_path("res://../../target/release/entelechy")
+	var at := args.find("--entelechy")
 	if at >= 0 and at + 1 < args.size():
-		orla = args[at + 1]
+		entelechy = args[at + 1]
 	var result := "RESULT: ok"
-	var failure := _run(orla)
+	var failure := _run(entelechy)
 	if not failure.is_empty():
 		result = "RESULT: failed: " + failure
 	for session in _sessions:
@@ -38,10 +38,10 @@ func _first_frame() -> void:
 
 
 ## Every check; the first failure's message, or an empty String.
-func _run(orla: String) -> String:
-	var text_port := _serve(orla, "examples/text/scene.osn", "cpu")
-	var voxel_port := _serve(orla, "examples/voxel/scene.osn", "gpu")
-	var mesh_port := _serve(orla, "examples/mesh/scene.osn", "cpu")
+func _run(entelechy: String) -> String:
+	var text_port := _serve(entelechy, "examples/text/scene.esn", "cpu")
+	var voxel_port := _serve(entelechy, "examples/voxel/scene.esn", "gpu")
+	var mesh_port := _serve(entelechy, "examples/mesh/scene.esn", "cpu")
 	if text_port == 0 or voxel_port == 0 or mesh_port == 0:
 		return "a session did not start"
 	for check in [_text.bind(text_port), _voxel.bind(voxel_port), _mesh.bind(mesh_port), _main.bind(mesh_port)]:
@@ -53,12 +53,12 @@ func _run(orla: String) -> String:
 	return ""
 
 
-## Starts `orla serve` on a free port and returns the port, 0 on failure.
-func _serve(orla: String, scene: String, backend: String) -> int:
+## Starts `entelechy serve` on a free port and returns the port, 0 on failure.
+func _serve(entelechy: String, scene: String, backend: String) -> int:
 	var path := ProjectSettings.globalize_path("res://../../" + scene)
-	var started := OS.execute_with_pipe(orla, ["serve", path, "--backend", backend, "--listen", "127.0.0.1:0"], false)
+	var started := OS.execute_with_pipe(entelechy, ["serve", path, "--backend", backend, "--listen", "127.0.0.1:0"], false)
 	if started.is_empty():
-		print("cannot start ", orla)
+		print("cannot start ", entelechy)
 		return 0
 	_sessions.append(started)
 	var stderr: FileAccess = started["stderr"]
@@ -99,22 +99,22 @@ func _text(port: int) -> String:
 	if client == null:
 		return "text: cannot connect"
 	var status := client.request("status")
-	if not str(status.get("scene", "")).ends_with("scene.osn"):
+	if not str(status.get("scene", "")).ends_with("scene.esn"):
 		return "text: status " + JSON.stringify(status)
 	var kernels := client.request("kernels")
 	var ids: Array = kernels.get("kernels", []).map(func(k): return k["id"])
 	if not ids.has("text.draw@1"):
 		return "text: kernels " + str(ids)
-	# The picture as the replay pins it: the title's O at (8, 6) twice the size.
+	# The picture as the replay pins it: the title's E at (8, 6) twice the size.
 	client.request("evaluate", {"time": 0.0})
 	var read := client.request("read", {"format": "ppm"})
 	if int(read.get("width", 0)) != 192 or int(read.get("height", 0)) != 88:
 		return "text: size %sx%s" % [read.get("width"), read.get("height")]
 	var frame := Client.decode_ppm(read["data"])
 	if not _color_is(frame, 10, 6, Color(1.0, 0.85, 0.45), 0.02):
-		return "text: the O's top is " + str(frame.get_pixel(10, 6))
-	if not _color_is(frame, 12, 12, Color(0.09, 0.1, 0.13), 0.02):
-		return "text: the O's hollow is " + str(frame.get_pixel(12, 12))
+		return "text: the E's top is " + str(frame.get_pixel(10, 6))
+	if not _color_is(frame, 12, 9, Color(0.09, 0.1, 0.13), 0.02):
+		return "text: the E's gap is " + str(frame.get_pixel(12, 9))
 	print("text: picture read")
 	# The background is the node's inline Kernel: its source comes back as
 	# publish takes it, so a recolored copy publishes over it.
@@ -134,8 +134,8 @@ func _text(port: int) -> String:
 		return "text: published " + JSON.stringify(published)
 	client.request("evaluate", {"time": 0.1})
 	var again := Client.decode_ppm(client.request("read", {"format": "ppm"})["data"])
-	if not _color_is(again, 12, 12, Color(0.3, 0.1, 0.1), 0.02):
-		return "text: the recolored hollow is " + str(again.get_pixel(12, 12))
+	if not _color_is(again, 12, 9, Color(0.3, 0.1, 0.1), 0.02):
+		return "text: the recolored gap is " + str(again.get_pixel(12, 9))
 	if not _color_is(again, 10, 6, Color(1.0, 0.85, 0.45), 0.02):
 		return "text: the title changed"
 	print("text: background republished")
@@ -147,7 +147,7 @@ func _voxel(port: int) -> String:
 	var client := _connect(port)
 	if client == null:
 		return "voxel: cannot connect"
-	# An OrlaView is the window: the replay's 240 by 135, and its size goes
+	# An EntelechyView is the window: the replay's 240 by 135, and its size goes
 	# with every evaluate. Headless, the scale is one, so the bar is laid
 	# out full size and the pointer aims at the picture.
 	var view := View.new()
@@ -206,7 +206,7 @@ func _mesh(port: int) -> String:
 	if client == null:
 		return "mesh: cannot connect"
 	# The torus's rows as a mesh: 1152 vertices, 2304 triangles, flat in
-	# Orla's xz plane, so its y extent is the smallest.
+	# Entelechy's xz plane, so its y extent is the smallest.
 	var mesh := client.mesh_of("torus", "faces")
 	if mesh == null or mesh.get_surface_count() != 1:
 		return "mesh: no surface"
@@ -245,7 +245,7 @@ func _main(port: int) -> String:
 	root.add_child(main)
 	main.url.text = "127.0.0.1:%d" % port
 	main._connect()
-	if not str(main.status.text).begins_with("scene.osn on cpu"):
+	if not str(main.status.text).begins_with("scene.esn on cpu"):
 		return "main: status " + main.status.text
 	if main.params_box.get_child_count() != 1:
 		return "main: %d param controls" % main.params_box.get_child_count()

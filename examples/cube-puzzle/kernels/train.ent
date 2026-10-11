@@ -1,0 +1,160 @@
+// The network: a 54-32-1 perceptron that guesses how many turns a cube
+// is from solved, trained as the cube is played with, on scrambles it
+// makes itself: every frame, 64 cubes turned a random number of times
+// (0 to 8), the number their label. Weights: hidden unit j's 54 weights
+// and bias at 55j .. 55j + 54, the output's weights on the units at
+// 1760 .. 1791, its bias at 1792.
+
+use "moves.ent";
+type Batch = Rows<Float>;
+
+fn noise(n: Float) -> Float {
+    let q = fract(n * 0.1031);
+    let r = q * (q + 33.33);
+    return fract((r + r) * q);
+}
+
+// The sticker color, centred, as the network sees it.
+fn seen(color: Int) -> Float { return float(color) / 5.0 - 0.5; }
+
+// Hidden unit j of the network `w` over the 54 values `x` reads with `get`.
+fn unit(w: Rows<Float>, x: Rows<Float>, first: Int, j: Int) -> Float {
+    return tanh(loop 54 with acc = at(w, j * 55 + 54) { acc + at(w, j * 55 + index()) * at(x, first + index()) });
+}
+
+/// Small random weights to start from.
+kernel train.init@1 {
+    requires { field.write; }
+    output result: Batch;
+    compute { return (noise(float(element()) + 0.37) - 0.5) * 0.3; }
+}
+
+/// This frame's scrambles: element e is sticker e % 54 of cube e / 54,
+/// which is solved, then turned k random times; the color is the one
+/// that ends up there, found by following the permutations back.
+kernel train.samples@1 {
+    requires { field.read; field.write; time.read; }
+    output result: Batch;
+    compute {
+        let e = element();
+        let cube = e / 54;
+        let i = e % 54;
+        let frame = floor(time() * 60.0 + 0.5);
+        let k = int(noise(frame * 0.713 + float(cube) * 7.1 + 0.3) * 9.0);
+        let source = loop 8 with idx = i {
+            if index() < k {
+                let m = int(noise(frame * 1.7 + float(cube) * 3.3 + float(k - 1 - index()) * 0.71 + 0.5) * 12.0);
+                perm(m, idx)
+            } else { idx }
+        };
+        return seen(source / 9);
+    }
+}
+
+/// The label of each cube of the frame: how many turns it was given.
+kernel train.labels@1 {
+    requires { field.write; time.read; }
+    output result: Batch;
+    compute {
+        let cube = element();
+        let frame = floor(time() * 60.0 + 0.5);
+        return float(int(noise(frame * 0.713 + float(cube) * 7.1 + 0.3) * 9.0));
+    }
+}
+
+/// The hidden units of every cube of the batch: element e is unit e % 32
+/// of cube e / 32.
+kernel train.act@1 {
+    requires { field.read; field.write; }
+    input samples: Batch;
+    input weights: Batch;
+    output result: Batch;
+    compute {
+        let e = element();
+        return unit(weights, samples, (e / 32) * 54, e % 32);
+    }
+}
+
+/// The output of every cube less its label: the gradient of half the
+/// squared error at the output.
+kernel train.delta@1 {
+    requires { field.read; field.write; }
+    input act: Batch;
+    input labels: Batch;
+    input weights: Batch;
+    output result: Batch;
+    compute {
+        let cube = element();
+        let o = loop 32 with acc = at(weights, 1792) { acc + at(weights, 1760 + index()) * at(act, cube * 32 + index()) };
+        return o - at(labels, cube);
+    }
+}
+
+/// The gradient, summed over the batch, weight by weight: element e is
+/// weight e % 1793 of cube e / 1793 (the node's domain is the product),
+/// one term of the chain rule from the hidden units and the deltas
+/// already computed.
+kernel train.grads@1 {
+    requires { field.read; field.write; }
+    input samples: Batch;
+    input act: Batch;
+    input delta: Batch;
+    input weights: Batch;
+    input zeros: Batch;
+    output result: Batch;
+    struct Term { at: Int; value: Float; }
+    scatter into zeros with sum {
+        let e = element();
+        let cube = e / 1793;
+        let k = e % 1793;
+        let d = at(delta, cube);
+        let value = if k == 1792 { d }
+            else if k >= 1760 { d * at(act, cube * 32 + (k - 1760)) }
+            else {
+                let j = k / 55;
+                let i = k % 55;
+                let h = at(act, cube * 32 + j);
+                let through = d * at(weights, 1760 + j) * (1.0 - h * h);
+                through * (if i == 54 { 1.0 } else { at(samples, cube * 54 + i) })
+            };
+        return Term { at: k, value: value };
+    }
+}
+
+/// One step down the mean gradient.
+kernel train.step@1 {
+    requires { field.read; field.write; }
+    input weights: Batch;
+    input grads: Batch;
+    param rate: Float = 0.05;
+    param count: Float = 64.0;
+    output result: Batch;
+    compute { return sample(weights) - rate * at(grads, element()) / count; }
+}
+
+/// The mean squared error over the batch, halved.
+kernel train.loss@1 {
+    requires { field.read; field.write; }
+    input delta: Batch;
+    output result: Losses;
+    compute {
+        let d = sample(delta);
+        return Loss { sum: 0.5 * d * d, count: 1 };
+    }
+    merge(a, b) { return Loss { sum: a.sum + b.sum, count: a.count + b.count }; }
+}
+
+/// The network's guess for the cube on screen.
+kernel train.guess@1 {
+    requires { field.read; field.write; }
+    input stickers: Rows<Int>;
+    input weights: Batch;
+    output result: Batch;
+    compute {
+        return loop 32 with acc = at(weights, 1792) {
+            let j = index();
+            let h = tanh(loop 54 with s = at(weights, j * 55 + 54) { s + at(weights, j * 55 + index()) * seen(at(stickers, index())) });
+            acc + at(weights, 1760 + j) * h
+        };
+    }
+}

@@ -1,0 +1,34 @@
+//! The raster preset over a canvas: as `raster.esn`, the surface the
+//! extent of `canvas`, an empty canvas (every key
+//! `9223372036854775807l`, as `raster.esn`'s `empty` makes) another node
+//! sized, so a surface follows a size the scene computes. Place it with
+//!   node raster: graph "../../packages/raster.entpkg/graphs/canvas.esn" {
+//!       vertices <- project.result;
+//!       triangles <- faces.result;
+//!       canvas <- empty.result;
+//!   }
+//! and read `raster.surface` where `native.rasterize@3` gave `surface`.
+use "../kernels/raster.ent";
+
+input vertices: Rows<Corner>;
+input triangles: Rows<Face>;
+input canvas: Grid<Long>;
+
+// Each triangle's box, found once: every step below reads it.
+node boxes: raster.boxes@1 { triangles <- triangles; vertices <- vertices; canvas <- canvas; }
+
+// Every triangle covers its own box, one invocation each, starting from
+// the empty canvas.
+node cover: raster.cover@3 {
+    triangles <- triangles;
+    vertices <- vertices;
+    boxes <- boxes.result;
+    keys <- canvas;
+}
+node resolved: raster.resolve@2 {
+    keys <- cover.result;
+    triangles <- triangles;
+    vertices <- vertices;
+}
+
+output surface <- resolved.result;

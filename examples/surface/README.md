@@ -10,7 +10,7 @@ the compact package ranks them with `prefix with sum`, and the geometry
 nodes are sized by the count:
 
 ```
-node kept: graph "../../packages/compact.orlapkg/graphs/compact.osn" {
+node kept: graph "../../packages/compact.entpkg/graphs/compact.esn" {
     flags <- flags.result;
 }
 node corners: surface.corners@1 {

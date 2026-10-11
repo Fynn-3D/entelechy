@@ -95,11 +95,11 @@ fn verify() -> ExitCode {
             &[
                 "clippy",
                 "-p",
-                "orla-jit",
+                "entelechy-jit",
                 "-p",
-                "orla-ffi",
+                "entelechy-ffi",
                 "--features",
-                "orla-jit/wasm-host",
+                "entelechy-jit/wasm-host",
                 "--target",
                 "wasm32-unknown-unknown",
                 "--",
@@ -112,9 +112,9 @@ fn verify() -> ExitCode {
             &[
                 "clippy",
                 "-p",
-                "orla-gpu",
+                "entelechy-gpu",
                 "-p",
-                "orla-session",
+                "entelechy-session",
                 "--target",
                 "wasm32-unknown-unknown",
                 "--",
@@ -138,7 +138,7 @@ fn verify() -> ExitCode {
                     "blender",
                 ],
             ),
-            cargo("bridges", &["test", "-p", "orla", "--test", "bridges"]),
+            cargo("bridges", &["test", "-p", "entelechy", "--test", "bridges"]),
         ],
         vec![cargo("release", &["build", "--release"])],
         vec![
@@ -236,7 +236,7 @@ fn output(command: &mut Command) -> Option<String> {
 }
 
 /// The files `pattern` names, `examples/*/tests/*.replay` or
-/// `examples/*/scene.osn`: one `*` a directory, one a file name; sorted.
+/// `examples/*/scene.esn`: one `*` a directory, one a file name; sorted.
 fn listed(dir: &str, inner: Option<&str>, suffix: &str) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let Ok(entries) = fs::read_dir(dir) else {
@@ -280,7 +280,7 @@ fn pool<T: Sync>(items: &[T], at_once: usize, each: impl Fn(&T) -> bool + Sync) 
     !failed.load(std::sync::atomic::Ordering::SeqCst)
 }
 
-const ORLA: &str = "./target/release/orla";
+const ENTELECHY: &str = "./target/release/entelechy";
 
 /// Every example's replays, by the release build: each backend in turn;
 /// then the device running every Kernel itself, nothing left to the
@@ -300,7 +300,11 @@ fn replays(out: &Out) -> Result<(), String> {
     ];
     for mode in modes {
         let passed = pool(&all, 4, |replay| {
-            run(out, Command::new(ORLA).arg("replay").args(mode).arg(replay)).is_ok()
+            run(
+                out,
+                Command::new(ENTELECHY).arg("replay").args(mode).arg(replay),
+            )
+            .is_ok()
         });
         if !passed {
             return Err(format!("a replay failed with {}", mode.join(" ")));
@@ -309,7 +313,7 @@ fn replays(out: &Out) -> Result<(), String> {
     let together = Path::new("target/packages-together");
     fs::create_dir_all(together).map_err(|e| e.to_string())?;
     let mut scene = String::new();
-    for package in listed("packages", None, ".orlapkg")
+    for package in listed("packages", None, ".entpkg")
         .iter()
         .filter(|p| p.is_dir())
     {
@@ -318,12 +322,12 @@ fn replays(out: &Out) -> Result<(), String> {
     scene.push_str(
         "node start: Rows<Int> { domain = 3; value = 1; }\noutput result <- start.result;\n",
     );
-    fs::write(together.join("scene.osn"), scene).map_err(|e| e.to_string())?;
+    fs::write(together.join("scene.esn"), scene).map_err(|e| e.to_string())?;
     run(
         out,
-        Command::new(ORLA)
+        Command::new(ENTELECHY)
             .arg("check")
-            .arg(together.join("scene.osn")),
+            .arg(together.join("scene.esn")),
     )
 }
 
@@ -336,7 +340,7 @@ fn wasi(out: &Out) -> Result<(), String> {
             "build",
             "--release",
             "-p",
-            "orla",
+            "entelechy",
             "--target",
             "wasm32-wasip1",
         ]),
@@ -350,7 +354,7 @@ fn wasi(out: &Out) -> Result<(), String> {
                     "run",
                     "--dir",
                     ".",
-                    "target/wasm32-wasip1/release/orla.wasm",
+                    "target/wasm32-wasip1/release/entelechy.wasm",
                     "replay",
                     "--backend",
                     "cpu",
@@ -389,22 +393,25 @@ fn against_main(out: &Out) -> Result<(), String> {
     let built = run(
         out,
         Command::new("cargo")
-            .args(["build", "--release", "-p", "orla", "--manifest-path"])
+            .args(["build", "--release", "-p", "entelechy", "--manifest-path"])
             .arg(tree.join("Cargo.toml"))
             .env("CARGO_TARGET_DIR", dir.join("target")),
     );
     if built.is_ok() {
-        let main_orla = dir.join("target/release/orla");
-        for scene in listed("examples", None, "scene.osn") {
+        let main_entelechy = dir.join("target/release/entelechy");
+        for scene in listed("examples", None, "scene.esn") {
             let example = scene
                 .parent()
                 .and_then(Path::file_name)
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            for (side, orla) in [("main", main_orla.as_path()), ("branch", Path::new(ORLA))] {
+            for (side, entelechy) in [
+                ("main", main_entelechy.as_path()),
+                ("branch", Path::new(ENTELECHY)),
+            ] {
                 let at = dir.join(side).join(&example);
                 let said = |args: &[&str]| {
-                    let said = Command::new(orla)
+                    let said = Command::new(entelechy)
                         .args(args)
                         .arg(&scene)
                         .stdin(Stdio::null())
@@ -415,7 +422,7 @@ fn against_main(out: &Out) -> Result<(), String> {
                 let _ = fs::write(at.with_extension("check"), said(&["check"]));
                 let _ = fs::write(at.with_extension("graph"), said(&["graph"]));
                 let picture = at.with_extension("ppm");
-                let ran = Command::new(orla)
+                let ran = Command::new(entelechy)
                     .args(["run"])
                     .arg(&scene)
                     .args(["--backend", "cpu", "--window", "64x48", "--out"])

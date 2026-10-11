@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # Four paths a frame through three bounces, eight frames: the sum in the
 # accumulator counts 32 samples, and the picture is their mean. The CPU

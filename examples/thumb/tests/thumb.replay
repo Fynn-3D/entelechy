@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # A frame is 9363 instructions: the program paints its 32 by 32 picture
 # with t = 0, ticks (t becomes 1, counted into RAM at 0x0FF0, 2t stored

@@ -1,12 +1,12 @@
 //! Operations on a node's Fields: read, write committed state, trace one
 //! element, and pin for reading.
 
-use orla_kernel::Number;
+use entelechy_kernel::Number;
 use serde_json::{Value as Json, json};
 
-use orla_formats::base64::{base64, unbase64};
-use orla_formats::ppm;
-use orla_session::Session;
+use entelechy_formats::base64::{base64, unbase64};
+use entelechy_formats::ppm;
+use entelechy_session::Session;
 
 use crate::request::Request;
 use crate::wire::{context_of, failure, trace_json};
@@ -24,12 +24,12 @@ fn known_node(session: &Session, node: &str) -> Result<(), Json> {
 }
 
 /// `node` is not a node of `graph`: the near miss named.
-fn unknown_node(graph: &orla_graph::Graph, node: &str) -> Json {
+fn unknown_node(graph: &entelechy_graph::Graph, node: &str) -> Json {
     let known: Vec<&str> = graph.nodes.iter().map(|n| n.id.0.as_str()).collect();
-    let near = orla_language::nearest(node, known.iter().copied());
+    let near = entelechy_language::nearest(node, known.iter().copied());
     failure(format!(
         "`{node}` is not a node of this scene{}",
-        orla_language::suggestion(near)
+        entelechy_language::suggestion(near)
     ))
 }
 
@@ -58,8 +58,8 @@ pub(crate) fn trace(session: &mut Session, request: &Request) -> Result<Json, Js
     };
     known_node(session, &node)?;
     let context = context_of(session, request.json());
-    let id = orla_graph::NodeId(node.clone());
-    let orla_session::Traced {
+    let id = entelechy_graph::NodeId(node.clone());
+    let entelechy_session::Traced {
         trace,
         kernel,
         place,
@@ -86,9 +86,9 @@ pub(crate) fn write(session: &mut Session, request: &Request) -> Result<Json, Js
     let bytes = unbase64(&data).map_err(failure)?;
     let words: Vec<u32> = if request.get("format").and_then(Json::as_str) == Some("field") {
         // A Field file: its layout and extent must be the port's.
-        let data = orla_formats::file::decode(&bytes).map_err(|e| failure(e.to_string()))?;
+        let data = entelechy_formats::file::decode(&bytes).map_err(|e| failure(e.to_string()))?;
         let current = session
-            .cached(&orla_graph::NodeId(node.clone()), &port)
+            .cached(&entelechy_graph::NodeId(node.clone()), &port)
             .ok_or_else(|| failure(format!("`{node}.{port}` has no value yet; evaluate first")))?;
         let host = session.runtime().host();
         let (schema, domain) = (
@@ -120,7 +120,7 @@ pub(crate) fn write(session: &mut Session, request: &Request) -> Result<Json, Js
     };
     let count = words.len();
     session
-        .write(&orla_graph::NodeId(node.clone()), &port, words)
+        .write(&entelechy_graph::NodeId(node.clone()), &port, words)
         .map_err(|e| failure(e.to_string()))?;
     Ok(json!({ "node": node, "port": port, "words": count }))
 }
@@ -136,7 +136,7 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
             .and_then(Json::as_str)
             .unwrap_or("result");
         session
-            .cached(&orla_graph::NodeId(node.to_owned()), port)
+            .cached(&entelechy_graph::NodeId(node.to_owned()), port)
             .ok_or_else(|| {
                 // An unknown node name is reported before the pin hint.
                 if !graph.nodes.iter().any(|n| n.id.0 == node) {
@@ -144,7 +144,7 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
                 }
                 // Folded into its reader, it keeps a value only pinned;
                 // otherwise evaluating gives it one.
-                let id = orla_graph::NodeId(node.to_owned());
+                let id = entelechy_graph::NodeId(node.to_owned());
                 let why = failure(session.why_no_value(&id, port));
                 match session.fused_into(&id) {
                     Some(_) => why,
@@ -190,7 +190,7 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
             "result".to_owned(),
         ),
     };
-    if let Ok(names) = session.element_names(&orla_graph::NodeId(named.0), &named.1)
+    if let Ok(names) = session.element_names(&entelechy_graph::NodeId(named.0), &named.1)
         && names.len() > 1
     {
         described["fields"] = json!(names);
@@ -218,7 +218,7 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
         "words" | "field" => {
             let data = session.field(handle).map_err(|e| failure(e.to_string()))?;
             let bytes: Vec<u8> = if format == "field" {
-                orla_formats::file::encode_data(data)
+                entelechy_formats::file::encode_data(data)
             } else {
                 data.values().iter().flat_map(|w| w.to_le_bytes()).collect()
             };
@@ -232,7 +232,9 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
                 .picture(handle)
                 .map_err(|e| failure(e.to_string()))?;
             let bytes = match format {
-                "png" => orla_formats::png::encode(image.width(), image.height(), image.pixels()),
+                "png" => {
+                    entelechy_formats::png::encode(image.width(), image.height(), image.pixels())
+                }
                 "ppm" => ppm::encode(&image),
                 _ => image
                     .pixels()
@@ -274,7 +276,7 @@ fn number_json(number: Number) -> Json {
 /// number, or a list of its numbers in order.
 fn values(
     session: &mut Session,
-    handle: orla_kernel::Handle,
+    handle: entelechy_kernel::Handle,
     described: Json,
     (from, count): (u64, u64),
 ) -> Result<Json, Json> {
@@ -314,7 +316,7 @@ fn values(
 /// not zero, and how many were not finite.
 fn summary(
     session: &mut Session,
-    handle: orla_kernel::Handle,
+    handle: entelechy_kernel::Handle,
     described: Json,
 ) -> Result<Json, Json> {
     let data = session.field(handle).map_err(|e| failure(e.to_string()))?;
@@ -375,7 +377,7 @@ fn summary(
 pub(crate) fn pin(session: &mut Session, request: &Request) -> Result<Json, Json> {
     let node = request.text("node")?;
     known_node(session, &node)?;
-    session.pin(orla_graph::NodeId(node.clone()));
+    session.pin(entelechy_graph::NodeId(node.clone()));
     Ok(json!({ "pinned": node }))
 }
 
@@ -383,7 +385,7 @@ pub(crate) fn pin(session: &mut Session, request: &Request) -> Result<Json, Json
 pub(crate) fn unpin(session: &mut Session, request: &Request) -> Result<Json, Json> {
     let node = request.text("node")?;
     known_node(session, &node)?;
-    session.unpin(&orla_graph::NodeId(node.clone()));
+    session.unpin(&entelechy_graph::NodeId(node.clone()));
     Ok(json!({ "unpinned": node }))
 }
 
@@ -463,8 +465,8 @@ pub(crate) fn snapshot(session: &mut Session, request: &Request) -> Result<Json,
 /// context succeeds; that frame commits nothing.
 pub(crate) fn restore(session: &mut Session, request: &Request) -> Result<Json, Json> {
     let laws = match request.get("laws").and_then(Json::as_str) {
-        Some("current") => orla_session::Laws::Current,
-        Some("snapshot") => orla_session::Laws::Snapshot,
+        Some("current") => entelechy_session::Laws::Current,
+        Some("snapshot") => entelechy_session::Laws::Snapshot,
         _ => {
             return Err(failure(
                 "`laws` says what the restored world runs under: \"current\" or \"snapshot\"",
@@ -496,8 +498,8 @@ pub(crate) fn restore(session: &mut Session, request: &Request) -> Result<Json, 
     };
     // The structure defaults to the current scene.
     let structure = match request.get("structure").and_then(Json::as_str) {
-        None | Some("current") => orla_session::Structure::Current,
-        Some("snapshot") => orla_session::Structure::Snapshot,
+        None | Some("current") => entelechy_session::Structure::Current,
+        Some("snapshot") => entelechy_session::Structure::Snapshot,
         Some(other) => {
             return Err(failure(format!(
                 "`structure` is \"current\" or \"snapshot\", not `{other}`"
@@ -518,7 +520,7 @@ pub(crate) fn restore(session: &mut Session, request: &Request) -> Result<Json, 
 }
 
 /// A snapshot read back from what `snapshot` wrote.
-fn snapshot_from(json: &Json) -> Result<orla_session::Snapshot, Json> {
+fn snapshot_from(json: &Json) -> Result<entelechy_session::Snapshot, Json> {
     let bad = |what: &str| failure(format!("not a snapshot: {what}"));
     if json.get("snapshot").and_then(Json::as_u64) != Some(u64::from(SNAPSHOT_VERSION)) {
         return Err(bad(&format!(
@@ -545,7 +547,11 @@ fn snapshot_from(json: &Json) -> Result<orla_session::Snapshot, Json> {
             .get("source")
             .and_then(Json::as_str)
             .ok_or_else(|| bad("a law's source"))?;
-        laws.push((id, orla_kernel::Generation(generation), source.to_owned()));
+        laws.push((
+            id,
+            entelechy_kernel::Generation(generation),
+            source.to_owned(),
+        ));
     }
     let mut states = Vec::new();
     for state in json
@@ -559,7 +565,7 @@ fn snapshot_from(json: &Json) -> Result<orla_session::Snapshot, Json> {
                 .and_then(Json::as_str)
                 .ok_or_else(|| bad(&format!("a state's {key}")))
         };
-        let schema: orla_kernel::Schema = text("layout")?
+        let schema: entelechy_kernel::Schema = text("layout")?
             .parse()
             .map_err(|e: String| bad(&format!("a state's layout: {e}")))?;
         // Exactly three sides, each a whole u32.
@@ -574,9 +580,9 @@ fn snapshot_from(json: &Json) -> Result<orla_session::Snapshot, Json> {
             return Err(bad("a state's extent is three whole sides"));
         };
         let domain = match text("shape")? {
-            "Rows" => orla_kernel::Domain::Rows(w),
-            "Grid" => orla_kernel::Domain::Grid(w, h),
-            "Volume" => orla_kernel::Domain::Volume(w, h, d),
+            "Rows" => entelechy_kernel::Domain::Rows(w),
+            "Grid" => entelechy_kernel::Domain::Grid(w, h),
+            "Volume" => entelechy_kernel::Domain::Volume(w, h, d),
             other => return Err(bad(&format!("`{other}` is no shape"))),
         };
         let bytes = unbase64(text("data")?).map_err(|e| bad(&format!("a state's data: {e}")))?;
@@ -587,7 +593,7 @@ fn snapshot_from(json: &Json) -> Result<orla_session::Snapshot, Json> {
             .chunks_exact(4)
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
-        states.push(orla_session::StateCopy {
+        states.push(entelechy_session::StateCopy {
             node: text("node")?.to_owned(),
             port: text("port")?.to_owned(),
             schema,
@@ -600,7 +606,7 @@ fn snapshot_from(json: &Json) -> Result<orla_session::Snapshot, Json> {
         .and_then(|scene| scene.get("text"))
         .and_then(Json::as_str)
         .map(str::to_owned);
-    Ok(orla_session::Snapshot {
+    Ok(entelechy_session::Snapshot {
         revision: number("revision")?,
         frame: number("frame")?,
         laws,

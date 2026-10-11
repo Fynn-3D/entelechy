@@ -30,7 +30,7 @@ mod wire;
 
 use serde_json::{Value as Json, json};
 
-use orla_session::Session;
+use entelechy_session::Session;
 
 use crate::request::Request;
 
@@ -57,7 +57,7 @@ pub fn answer(session: &mut Session, incoming: Incoming) -> bool {
 /// Answers as [`respond_line`] does, recording changes as from the
 /// request's channel.
 pub fn respond_from(session: &mut Session, incoming: &Incoming) -> (String, bool) {
-    let before = session.act_for(orla_session::Origin::Protocol(incoming.from.clone()));
+    let before = session.act_for(entelechy_session::Origin::Protocol(incoming.from.clone()));
     let answered = respond_line(session, &incoming.line);
     session.act_for(before);
     answered
@@ -116,12 +116,12 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         "unpin" => fields::unpin(session, &request),
         "quit" => Ok(json!({ "bye": true })),
         other => {
-            let near = orla_language::nearest(other, ops::names());
+            let near = entelechy_language::nearest(other, ops::names());
             Err(json!({
                 "message": format!(
                     "unknown op `{other}`; the operations are {}{}",
                     ops::names().join(", "),
-                    orla_language::suggestion(near)
+                    entelechy_language::suggestion(near)
                 ),
                 "operations": ops::names(),
             }))
@@ -133,27 +133,28 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
 mod tests {
     use super::*;
     use crate::wire::diagnostic_json;
-    use orla_kernel::Value;
+    use entelechy_kernel::Value;
 
     /// A picture of 8 by 8 texels, the whole scene a request is put to.
     const SCENE: &str = "node gradient: kernel { requires { field.write; } output result: Image; domain = vec2(8, 8); compute { return vec4(coord().x / 8.0, coord().y / 8.0, 0.5, 1.0); } }\noutput result <- gradient.result;\n";
 
     /// A session over [`SCENE`], written into a directory of its own.
     fn session(name: &str) -> (std::path::PathBuf, Session) {
-        let dir = std::env::temp_dir().join(format!("orla-protocol-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("entelechy-protocol-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("scene.osn"), SCENE).unwrap();
+        std::fs::write(dir.join("scene.esn"), SCENE).unwrap();
         let session = Session::open(
-            &dir.join("scene.osn"),
+            &dir.join("scene.esn"),
             None,
-            orla_session::DEFAULT_BUDGET_WORDS,
+            entelechy_session::DEFAULT_BUDGET_WORDS,
         );
         (dir, session)
     }
 
     /// `docs/PROTOCOL.md`'s table is the operations' rendering, and every
-    /// operation is answered; `ORLA_BLESS=1` writes the table again.
+    /// operation is answered; `ENTELECHY_BLESS=1` writes the table again.
     #[test]
     fn the_document_shows_every_operation_and_every_operation_is_answered() {
         let path =
@@ -166,13 +167,13 @@ mod tests {
         let end = start + text[start..].find("\n\n").expect("the table ends") + 1;
         let table = ops::table();
         if text[start..end] != table {
-            if std::env::var_os("ORLA_BLESS").is_some() {
+            if std::env::var_os("ENTELECHY_BLESS").is_some() {
                 std::fs::write(&path, format!("{}{table}{}", &text[..start], &text[end..]))
                     .unwrap();
             } else {
                 panic!(
                     "docs/PROTOCOL.md's table is not the operations'; write it again with \
-                     ORLA_BLESS=1 cargo test -p orla-protocol\nexpected:\n{table}"
+                     ENTELECHY_BLESS=1 cargo test -p entelechy-protocol\nexpected:\n{table}"
                 );
             }
         }
@@ -330,7 +331,7 @@ mod tests {
 
     #[test]
     fn a_diagnostic_carries_its_place_as_data() {
-        let json = diagnostic_json(&orla_session::Diagnostic {
+        let json = diagnostic_json(&entelechy_session::Diagnostic {
             message: "`oops` is not defined".into(),
             at: Some((4, 20)),
         });
@@ -338,7 +339,7 @@ mod tests {
         assert_eq!(json["column"], 20);
         assert_eq!(json["message"], "`oops` is not defined");
         // A message starting with numbers carries no place.
-        let plain = diagnostic_json(&orla_session::Diagnostic::new("3:4 is a ratio"));
+        let plain = diagnostic_json(&entelechy_session::Diagnostic::new("3:4 is a ratio"));
         assert!(plain["line"].is_null());
         assert_eq!(plain["message"], "3:4 is a ratio");
     }
@@ -354,7 +355,7 @@ mod tests {
     }
 
     /// Every rendered region of the documents is its rendering;
-    /// `ORLA_BLESS=1` writes the regions again.
+    /// `ENTELECHY_BLESS=1` writes the regions again.
     #[test]
     fn the_documents_render_what_they_show() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -364,7 +365,7 @@ mod tests {
                 files.push(entry.path());
             }
         }
-        let bless = std::env::var_os("ORLA_BLESS").is_some();
+        let bless = std::env::var_os("ENTELECHY_BLESS").is_some();
         let mut wrong = Vec::new();
         let mut regions = 0;
         for path in files {
@@ -406,7 +407,7 @@ mod tests {
         if !bless {
             assert!(
                 wrong.is_empty(),
-                "{}\nwrite the regions again with ORLA_BLESS=1 cargo test -p orla-protocol",
+                "{}\nwrite the regions again with ENTELECHY_BLESS=1 cargo test -p entelechy-protocol",
                 wrong.join("\n")
             );
         }

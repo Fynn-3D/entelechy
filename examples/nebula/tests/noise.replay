@@ -1,4 +1,4 @@
-scene noise.osn
+scene noise.esn
 
 # The noise package: a hash of whole numbers is the same bits on every
 # backend; value noise stays within -1 and 1 and gradient noise near

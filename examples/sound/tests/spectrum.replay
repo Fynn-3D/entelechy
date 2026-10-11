@@ -1,4 +1,4 @@
-scene ../parts/spectrum/scene.osn
+scene ../parts/spectrum/scene.esn
 
 # 220 hertz with a second and a third partial: the loudest bin is the
 # second (110 + 2 x 55 = 220), and the bins at 440 and 660 carry the

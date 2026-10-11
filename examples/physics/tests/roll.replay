@@ -1,4 +1,4 @@
-scene roll.osn
+scene roll.esn
 
 # A third of a second on: the rolling ball rides at its radius, and the
 # fast one is stopped by the wall, not passed through it.

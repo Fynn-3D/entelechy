@@ -6,8 +6,8 @@ use std::collections::VecDeque;
 use std::ops::Range;
 use std::time::Duration;
 
-use orla_graph::NodeId;
-use orla_kernel::ClockedFrame;
+use entelechy_graph::NodeId;
+use entelechy_kernel::ClockedFrame;
 
 /// The frames ended and not yet told, each its nodes' runs: as many as the
 /// device's clock keeps waiting.

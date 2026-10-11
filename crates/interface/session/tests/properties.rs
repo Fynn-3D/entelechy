@@ -7,16 +7,16 @@
 //!   counts on from the last;
 //! - what the Host holds does not grow with the number of steps.
 //!
-//! The steps come from a seed; `ORLA_FUZZ=<n>` takes more of them.
+//! The steps come from a seed; `ENTELECHY_FUZZ=<n>` takes more of them.
 
 use std::path::Path;
 
-use orla_conformance::random::Rng;
-use orla_kernel::Context;
-use orla_session::Session;
+use entelechy_conformance::random::Rng;
+use entelechy_kernel::Context;
+use entelechy_session::Session;
 
 fn steps() -> usize {
-    std::env::var("ORLA_FUZZ")
+    std::env::var("ENTELECHY_FUZZ")
         .ok()
         .and_then(|n| n.parse().ok())
         .unwrap_or(400)
@@ -57,7 +57,7 @@ kernel t.down@1 {{ requires {{ field.read; field.write; }} struct Wide {{ count:
 fn scene(layout: u32) -> String {
     let migrate = if layout == 1 { "" } else { " migrate t.up@1" };
     format!(
-        "use \"lib.orla\";
+        "use \"lib.ent\";
 node seed: t.zero@1 {{ domain = 1; }}
 node count: t.step@1 {{ previous <~ count.result from seed.result{migrate}; }}
 node check: t.check@1 {{ tally <- count.result; }}
@@ -77,23 +77,23 @@ fn write(path: &Path, text: &str) {
 
 #[test]
 fn a_random_life_keeps_the_state_and_the_host_honest() {
-    let dir = std::env::temp_dir().join(format!("orla-properties-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-properties-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let (lib, root) = (dir.join("lib.orla"), dir.join("scene.osn"));
+    let (lib, root) = (dir.join("lib.ent"), dir.join("scene.esn"));
     let (mut layout, mut fail_at) = (1u32, 1_000_000i32);
     write(&lib, &library(layout, fail_at, false));
     write(&root, &scene(layout));
     let runtime = Session::runtime_for("jit", Default::default()).unwrap();
     let mut session = Session::open_with(&root, None, runtime);
     session.sync();
-    let count_node = orla_graph::NodeId("count".into());
+    let count_node = entelechy_graph::NodeId("count".into());
     // The model's committed count.
     let mut committed = 0i32;
     // The committed state's layout; `None` while it is the seed.
     let mut kept_as: Option<u32> = None;
     // A snapshot, with the model's world at that moment.
-    let mut taken: Option<(orla_session::Snapshot, i32, Option<u32>)> = None;
+    let mut taken: Option<(entelechy_session::Snapshot, i32, Option<u32>)> = None;
     let mut restored = 0;
     let mut rng = Rng::new(0x57a7e);
     let mut most_held = 0usize;
@@ -186,8 +186,8 @@ fn a_random_life_keeps_the_state_and_the_host_honest() {
                 };
                 match session.restore(
                     snapshot,
-                    orla_session::Laws::Current,
-                    orla_session::Structure::Current,
+                    entelechy_session::Laws::Current,
+                    entelechy_session::Structure::Current,
                     &Context::default(),
                 ) {
                     Ok(_) => {

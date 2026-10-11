@@ -1,6 +1,6 @@
 [package]
-name = "orla-host"
-description = "Orla Host Core: primitive resources with explicit ownership and budgets"
+name = "entelechy-host"
+description = "Entelechy Host Core: primitive resources with explicit ownership and budgets"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

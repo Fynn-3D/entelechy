@@ -1,0 +1,35 @@
+//! The raster preset at the window's size: the surface is the window's
+//! extent in pixels, and follows it when it is resized, as a node of
+//! `domain = window();` does. Place it with
+//!   node raster: graph "../../packages/raster.entpkg/graphs/window.esn" {
+//!       vertices <- project.result;
+//!       triangles <- faces.result;
+//!   }
+//! and read `raster.surface`.
+use "../kernels/raster.ent";
+
+input vertices: Rows<Corner>;
+input triangles: Rows<Face>;
+// What a pixel holds before anything is drawn on it: the key no
+// fragment gives.
+node empty: Grid<Long> { domain = window(); value = 9223372036854775807l; }
+
+// Each triangle's box, found once: every step below reads it.
+node boxes: raster.boxes@1 { triangles <- triangles; vertices <- vertices; canvas <- empty.result; }
+
+// Every triangle covers its own box, one invocation each: the fastest
+// for meshes of small triangles. `tiled` forms of this preset cut a
+// large triangle across many.
+node cover: raster.cover@3 {
+    triangles <- triangles;
+    vertices <- vertices;
+    boxes <- boxes.result;
+    keys <- empty.result;
+}
+node resolved: raster.resolve@2 {
+    keys <- cover.result;
+    triangles <- triangles;
+    vertices <- vertices;
+}
+
+output surface <- resolved.result;

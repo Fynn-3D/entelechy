@@ -1,20 +1,20 @@
 //! Random programs on the device against the interpreter: integer and
 //! boolean programs word for word, and failures alike. Floats match only
 //! to rounding, which random programs amplify without bound; the feature
-//! matrix holds them. `ORLA_FUZZ=<n>` runs more.
+//! matrix holds them. `ENTELECHY_FUZZ=<n>` runs more.
 
-use orla_abi::{Capabilities, Capability, Host, Invocation, Scalar, Scope};
-use orla_compiler::compile;
-use orla_cpu::CpuBackend;
-use orla_gpu::GpuBackend;
-use orla_rules::Backend;
+use entelechy_abi::{Capabilities, Capability, Host, Invocation, Scalar, Scope};
+use entelechy_compiler::compile;
+use entelechy_cpu::CpuBackend;
+use entelechy_gpu::GpuBackend;
+use entelechy_rules::Backend;
 
 fn all() -> Capabilities {
     Capability::ALL.into_iter().collect()
 }
 
 fn count() -> usize {
-    std::env::var("ORLA_FUZZ")
+    std::env::var("ENTELECHY_FUZZ")
         .ok()
         .and_then(|n| n.parse().ok())
         .unwrap_or(150)
@@ -25,7 +25,7 @@ fn random_programs_give_the_interpreters_integers_on_the_device() {
     let Ok(gpu) = GpuBackend::new() else {
         return;
     };
-    let cases = orla_conformance::random::exact_cases(0x6f1a, count());
+    let cases = entelechy_conformance::random::exact_cases(0x6f1a, count());
     let mut failures = Vec::new();
     for case in &cases {
         let module = match compile(&case.source) {
@@ -45,7 +45,7 @@ fn random_programs_give_the_interpreters_integers_on_the_device() {
             .iter()
             .map(|(schema, domain, words)| {
                 host.adopt(
-                    orla_abi::FieldData::from_values(schema.clone(), *domain, words).unwrap(),
+                    entelechy_abi::FieldData::from_values(schema.clone(), *domain, words).unwrap(),
                 )
                 .unwrap()
             })

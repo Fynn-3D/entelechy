@@ -7,7 +7,7 @@ flags into kept indices and a count, and every geometry node is sized by
 that count:
 
 ```
-node kept: graph "../../packages/compact.orlapkg/graphs/compact.osn" {
+node kept: graph "../../packages/compact.entpkg/graphs/compact.esn" {
     flags <- visible.result;
 }
 node ground: world.ground@1 {
@@ -22,6 +22,6 @@ node ground: world.ground@1 {
 stick or arrow keys steer; without input the camera sweeps on its own.
 
 ```sh
-orla player examples/culled/scene.osn --backend gpu
-orla replay examples/culled/tests/culled.replay
+entelechy player examples/culled/scene.esn --backend gpu
+entelechy replay examples/culled/tests/culled.replay
 ```

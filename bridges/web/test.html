@@ -2,16 +2,16 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Orla web bridge test</title>
-<script type="importmap">{ "imports": { "orla": "./orla-host.mjs" } }</script>
+<title>Entelechy web bridge test</title>
+<script type="importmap">{ "imports": { "entelechy": "./entelechy-host.mjs" } }</script>
 </head>
 <body>
 <!--
 Exercises the bridge, against two serving sessions:
-  orla serve examples/text/scene.osn --listen 127.0.0.1:0    (note the port)
-  orla serve examples/voxel/scene.osn --listen 127.0.0.1:0   (note the port)
-and, with `glue=<path>` (what `wasm-bindgen` wrote for Orla built for a
-page), against Orla in the page, on its JIT and on the browser's WebGPU:
+  entelechy serve examples/text/scene.esn --listen 127.0.0.1:0    (note the port)
+  entelechy serve examples/voxel/scene.esn --listen 127.0.0.1:0   (note the port)
+and, with `glue=<path>` (what `wasm-bindgen` wrote for Entelechy built for a
+page), against Entelechy in the page, on its JIT and on the browser's WebGPU:
 the page is served
 from the repository's root by `node bridges/web/test.mjs`, which does all
 of it headless, and which answers `/list?roots=a,b` with the files under
@@ -22,9 +22,9 @@ page it also composes the scene and hands a changed one in; and it
 drives the voxel editor with a window and a pointer.
 -->
 <pre id="log"></pre>
-<script src="orla.js"></script>
+<script src="entelechy.js"></script>
 <script>
-const { OrlaClient, OrlaInPage, Driver, decodePpm, decodeWords } = Orla;
+const { EntelechyClient, EntelechyInPage, Driver, decodePpm, decodeWords } = Entelechy;
 
 const log = document.getElementById("log");
 const say = (text) => { log.textContent += text + "\n"; };
@@ -43,21 +43,21 @@ const color = (decoded, x, y, rgb, tolerance, what) => {
 
 async function textScene(client, where) {
   const status = await client.call("status");
-  assert(status.scene.endsWith("scene.osn"), `status: ${JSON.stringify(status)}`);
+  assert(status.scene.endsWith("scene.esn"), `status: ${JSON.stringify(status)}`);
   const kernels = await client.call("kernels");
   const ids = kernels.kernels.map((k) => k.id);
   assert(ids.includes("text.draw@1"), `kernels: ${ids}`);
-  // The picture as the replay pins it: the title's O at (8, 6) twice the size.
+  // The picture as the replay pins it: the title's E at (8, 6) twice the size.
   await client.call("evaluate", { time: 0 });
   const read = await client.call("read", { format: "ppm" });
   assert(read.width === 192 && read.height === 88, `size ${read.width}x${read.height}`);
   const frame = decodePpm(read.data);
-  color(frame, 10, 6, [1.0, 0.85, 0.45], 0.02, "the O's top");
-  color(frame, 12, 12, [0.09, 0.1, 0.13], 0.02, "the O's hollow");
+  color(frame, 10, 6, [1.0, 0.85, 0.45], 0.02, "the E's top");
+  color(frame, 12, 9, [0.09, 0.1, 0.13], 0.02, "the E's gap");
   say(`text ${where}: picture read`);
   // The background is the node's inline Kernel: its source comes back as
   // publish takes it (the id written in, the node's domain left out), so
-  // a recolored copy publishes over it and the hollow of the O changes.
+  // a recolored copy publishes over it and the gap in the E changes.
   const back = await client.call("kernel", { kernel: "scene.back@1" });
   say(`text ${where}: background source fetched`);
   assert(back.source.startsWith("kernel scene.back@1 {") && !back.source.includes("domain ="), `source as publish takes it: ${back.source}`);
@@ -75,12 +75,12 @@ async function textScene(client, where) {
   assert(published.id === "scene.back@1", `published ${published.id}`);
   await client.call("evaluate", { time: 0.1 });
   const again = decodePpm((await client.call("read", { format: "ppm" })).data);
-  color(again, 12, 12, [0.3, 0.1, 0.1], 0.02, "the recolored hollow");
+  color(again, 12, 9, [0.3, 0.1, 0.1], 0.02, "the recolored gap");
   color(again, 10, 6, [1.0, 0.85, 0.45], 0.02, "the title still");
   say(`text ${where}: background republished`);
 }
 
-/// Orla in the page, over the text example's files and the packages.
+/// Entelechy in the page, over the text example's files and the packages.
 async function inPage(glue) {
   const fetched = async (path) => {
     const response = await fetch(`/${path}`);
@@ -88,43 +88,43 @@ async function inPage(glue) {
     return new Uint8Array(await response.arrayBuffer());
   };
   const list = await (await fetch("/list?roots=examples/text,packages")).json();
-  const orla = await OrlaInPage.load(`/${glue}`);
-  for (const path of list) orla.put(path, await fetched(path));
-  await orla.open("examples/text/scene.osn");
+  const entelechy = await EntelechyInPage.load(`/${glue}`);
+  for (const path of list) entelechy.put(path, await fetched(path));
+  await entelechy.open("examples/text/scene.esn");
   // The JIT, its code WebAssembly this page loaded: a Kernel it could not
   // load would be refused, and the picture would say so.
-  const about = await orla.call("status");
+  const about = await entelechy.call("status");
   assert(about.backend === "jit", `in the page on ${about.backend}`);
-  await textScene(orla, "in the page");
-  const hollow = async (rgb, what) => {
-    await orla.call("evaluate", { time: 0.2 });
-    color(decodePpm((await orla.call("read", { format: "ppm" })).data), 12, 12, rgb, 0.02, what);
+  await textScene(entelechy, "in the page");
+  const gap = async (rgb, what) => {
+    await entelechy.call("evaluate", { time: 0.2 });
+    color(decodePpm((await entelechy.call("read", { format: "ppm" })).data), 12, 9, rgb, 0.02, what);
   };
   // A composed scene is written to the files handed in and read back.
-  const document = await orla.call("document");
+  const document = await entelechy.call("document");
   const green = document.text.replace("vec4(0.09, 0.1, 0.13, 1.0)", "vec4(0.1, 0.3, 0.1, 1.0)");
   assert(green !== document.text, "the scene's background is where expected");
-  await orla.call("compose", { text: green, expect: document.version });
-  await hollow([0.1, 0.3, 0.1], "the composed background");
+  await entelechy.call("compose", { text: green, expect: document.version });
+  await gap([0.1, 0.3, 0.1], "the composed background");
   say("text in the page: composed");
   // A file handed in again is a file changed on disk: a sync reads it.
-  orla.put("examples/text/scene.osn", new TextEncoder().encode(green.replace("vec4(0.1, 0.3, 0.1, 1.0)", "vec4(0.1, 0.1, 0.3, 1.0)")));
-  const synced = await orla.call("sync");
+  entelechy.put("examples/text/scene.esn", new TextEncoder().encode(green.replace("vec4(0.1, 0.3, 0.1, 1.0)", "vec4(0.1, 0.1, 0.3, 1.0)")));
+  const synced = await entelechy.call("sync");
   assert(synced.events.some((event) => JSON.stringify(event).includes("scene")), `sync: ${JSON.stringify(synced)}`);
-  await hollow([0.1, 0.1, 0.3], "the background handed in");
+  await gap([0.1, 0.1, 0.3], "the background handed in");
   say("text in the page: a file handed in again is read");
-  orla.close();
+  entelechy.close();
   // The same checks on the browser's WebGPU, the GPU backend's own code
   // waiting for the device by giving the page turns.
-  const gpu = await OrlaInPage.load(`/${glue}`);
+  const gpu = await EntelechyInPage.load(`/${glue}`);
   for (const path of list) gpu.put(path, await fetched(path));
-  await gpu.open("examples/text/scene.osn", "gpu");
+  await gpu.open("examples/text/scene.esn", "gpu");
   const about_gpu = await gpu.call("status");
   assert(about_gpu.backend === "gpu", `on the page's GPU, on ${about_gpu.backend}`);
   await textScene(gpu, "on the page's GPU");
   // Presented from the device on a canvas of its own, nothing read back:
   // what the canvas shows is the picture, the republished background in
-  // the O's hollow and the title around it.
+  // the E's gap and the title around it.
   const view = window.document.createElement("canvas");
   view.width = 192;
   view.height = 88;
@@ -140,7 +140,7 @@ async function inPage(glue) {
   const copied = copy.getContext("2d");
   copied.drawImage(shown, 0, 0);
   const presented = { width: copy.width, height: copy.height, data: copied.getImageData(0, 0, copy.width, copy.height).data };
-  color(presented, 12, 12, [0.3, 0.1, 0.1], 0.02, "the presented hollow");
+  color(presented, 12, 9, [0.3, 0.1, 0.1], 0.02, "the presented gap");
   color(presented, 10, 6, [1.0, 0.85, 0.45], 0.02, "the presented title");
   say("text on the page's GPU: presented on a canvas, nothing read back");
   gpu.close();
@@ -148,9 +148,9 @@ async function inPage(glue) {
   // code, or the scene does not run.
   const voxelFiles = await (await fetch("/list?roots=examples/voxel,packages")).json();
   for (const backend of ["jit", "gpu"]) {
-    const voxel = await OrlaInPage.load(`/${glue}`);
+    const voxel = await EntelechyInPage.load(`/${glue}`);
     for (const path of voxelFiles) voxel.put(path, await fetched(path));
-    await voxel.open("examples/voxel/scene.osn", backend);
+    await voxel.open("examples/voxel/scene.esn", backend);
     const report = await voxel.call("evaluate", { time: 0, window: [240, 135] });
     const shown = report.outputs.find((output) => output.width > 0);
     assert(shown && shown.width === 240 && shown.height === 135, `voxel in the page on ${backend}: ${JSON.stringify(report.outputs)}`);
@@ -162,7 +162,7 @@ async function inPage(glue) {
 }
 
 async function voxelScene(port) {
-  const client = await OrlaClient.open(`ws://127.0.0.1:${port}`);
+  const client = await EntelechyClient.open(`ws://127.0.0.1:${port}`);
   // A canvas is the window: the replay's 240 by 135, and the Driver sends
   // its size with every evaluate. The scale is the device's; at scale one
   // the bar is laid out full size, so the pointer aims at the picture.
@@ -204,7 +204,7 @@ async function voxelScene(port) {
 
 (async () => {
   try {
-    const text = await OrlaClient.open(`ws://127.0.0.1:${query.get("text")}`);
+    const text = await EntelechyClient.open(`ws://127.0.0.1:${query.get("text")}`);
     await textScene(text, "over a socket");
     text.close();
     if (query.get("glue")) await inPage(query.get("glue"));

@@ -1,4 +1,4 @@
-scene voxel.osn
+scene voxel.esn
 
 # A 240 by 135 window at a quarter of the scale: a sixteenth of the
 # pixels, the bar laid out at a quarter size, so its items are centred

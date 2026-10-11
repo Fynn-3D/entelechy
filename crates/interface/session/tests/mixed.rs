@@ -4,14 +4,14 @@
 
 use std::sync::{Arc, Mutex};
 
-use orla_abi::{Capabilities, Capability, Domain, Handle, Invocation, Scope};
-use orla_kernel::{Backend, Expect, Runtime};
+use entelechy_abi::{Capabilities, Capability, Domain, Handle, Invocation, Scope};
+use entelechy_kernel::{Backend, Expect, Runtime};
 
 /// A backend that records what it is asked, and does it on the CPU.
 struct Recorder {
     name: &'static str,
     log: Arc<Mutex<Vec<String>>>,
-    cpu: orla_cpu::CpuBackend,
+    cpu: entelechy_cpu::CpuBackend,
     /// Declines a module holding a `Double`, like a device without one.
     no_doubles: bool,
     /// Leaves scans to another backend, like a device that would walk one
@@ -23,17 +23,17 @@ impl Backend for Recorder {
     fn name(&self) -> &'static str {
         self.name
     }
-    fn declines(&self, module: &orla_ir::Validated) -> Option<String> {
-        if self.no_scans && module.manifest.mode == orla_ir::Mode::Scan {
+    fn declines(&self, module: &entelechy_ir::Validated) -> Option<String> {
+        if self.no_scans && module.manifest.mode == entelechy_ir::Mode::Scan {
             return Some("a scan runs its steps in order, on one thread".to_owned());
         }
-        (self.no_doubles && module.holds(orla_abi::Type::Double))
+        (self.no_doubles && module.holds(entelechy_abi::Type::Double))
             .then(|| "it holds a Double".to_owned())
     }
     fn prepare(
         &self,
-        module: &orla_ir::Validated,
-    ) -> Result<Box<dyn orla_kernel::Prepared>, String> {
+        module: &entelechy_ir::Validated,
+    ) -> Result<Box<dyn entelechy_kernel::Prepared>, String> {
         self.log
             .lock()
             .unwrap()
@@ -42,11 +42,11 @@ impl Backend for Recorder {
     }
     fn execute(
         &self,
-        prepared: &dyn orla_kernel::Prepared,
-        module: &orla_ir::Validated,
+        prepared: &dyn entelechy_kernel::Prepared,
+        module: &entelechy_ir::Validated,
         invocation: &Invocation,
         scope: &mut Scope<'_>,
-    ) -> Result<Vec<Handle>, orla_kernel::ExecutionError> {
+    ) -> Result<Vec<Handle>, entelechy_kernel::ExecutionError> {
         self.log
             .lock()
             .unwrap()
@@ -65,14 +65,14 @@ fn scans_go_to_the_ordered_backend_and_the_rest_stays() {
     let main = Recorder {
         name: "main",
         log: log.clone(),
-        cpu: orla_cpu::CpuBackend,
+        cpu: entelechy_cpu::CpuBackend,
         no_doubles: false,
         no_scans: true,
     };
     let ordered = Recorder {
         name: "ordered",
         log: log.clone(),
-        cpu: orla_cpu::CpuBackend,
+        cpu: entelechy_cpu::CpuBackend,
         no_doubles: false,
         no_scans: false,
     };
@@ -127,7 +127,7 @@ fn scans_go_to_the_ordered_backend_and_the_rest_stays() {
         Some("not on main: a scan runs its steps in order, on one thread")
     );
     // Backends computing in Host memory move nothing.
-    assert_eq!(runtime.take_moved(), orla_kernel::Moved::default());
+    assert_eq!(runtime.take_moved(), entelechy_kernel::Moved::default());
     // Without a second backend, everything is the main one's.
     let plain = cpu(1 << 16);
     assert_eq!(plain.ordered_backend_name(), None);
@@ -140,7 +140,7 @@ fn what_the_main_backend_declines_goes_to_the_ordered_one_and_says_why() {
     let backend = |name, no_doubles| Recorder {
         name,
         log: log.clone(),
-        cpu: orla_cpu::CpuBackend,
+        cpu: entelechy_cpu::CpuBackend,
         no_doubles,
         no_scans: false,
     };
@@ -181,7 +181,7 @@ fn what_the_main_backend_declines_goes_to_the_ordered_one_and_says_why() {
 /// A backend that reports a device time for every Kernel and none for a
 /// native operation.
 struct Clocked {
-    cpu: orla_cpu::CpuBackend,
+    cpu: entelechy_cpu::CpuBackend,
     /// Whether the clock has a reading, taken when read, like a device
     /// timestamp: an untimed call answers nothing.
     timed: std::sync::atomic::AtomicBool,
@@ -193,26 +193,26 @@ impl Backend for Clocked {
     }
     fn prepare(
         &self,
-        module: &orla_ir::Validated,
-    ) -> Result<Box<dyn orla_kernel::Prepared>, String> {
+        module: &entelechy_ir::Validated,
+    ) -> Result<Box<dyn entelechy_kernel::Prepared>, String> {
         self.cpu.prepare(module)
     }
     fn execute(
         &self,
-        prepared: &dyn orla_kernel::Prepared,
-        module: &orla_ir::Validated,
+        prepared: &dyn entelechy_kernel::Prepared,
+        module: &entelechy_ir::Validated,
         invocation: &Invocation,
         scope: &mut Scope<'_>,
-    ) -> Result<Vec<Handle>, orla_kernel::ExecutionError> {
+    ) -> Result<Vec<Handle>, entelechy_kernel::ExecutionError> {
         self.timed.store(true, std::sync::atomic::Ordering::Relaxed);
         Backend::execute(&self.cpu, prepared, module, invocation, scope)
     }
     fn execute_native(
         &self,
-        op: orla_kernel::NativeOp,
+        op: entelechy_kernel::NativeOp,
         invocation: &Invocation,
         scope: &mut Scope<'_>,
-    ) -> Result<Vec<Handle>, orla_kernel::ExecutionError> {
+    ) -> Result<Vec<Handle>, entelechy_kernel::ExecutionError> {
         Backend::execute_native(&self.cpu, op, invocation, scope)
     }
     fn last_device_time(&self) -> Option<std::time::Duration> {
@@ -228,7 +228,7 @@ fn a_node_the_backend_did_not_time_is_not_given_its_neighbours_number() {
     let mut runtime = Runtime::with_backend(
         1 << 22,
         Box::new(Clocked {
-            cpu: orla_cpu::CpuBackend,
+            cpu: entelechy_cpu::CpuBackend,
             timed: std::sync::atomic::AtomicBool::new(false),
         }),
     );
@@ -239,19 +239,20 @@ fn a_node_the_backend_did_not_time_is_not_given_its_neighbours_number() {
     let points = runtime.publish(points, Expect::Absent).unwrap();
     let faces = runtime.publish(faces, Expect::Absent).unwrap();
 
-    let run = |runtime: &mut Runtime, version: &Arc<orla_kernel::KernelVersion>, count: u32| {
-        runtime
-            .execute(
-                version,
-                &Invocation {
-                    inputs: vec![],
-                    params: vec![],
-                    domain: Domain::Rows(count),
-                    context: Default::default(),
-                },
-            )
-            .unwrap()
-    };
+    let run =
+        |runtime: &mut Runtime, version: &Arc<entelechy_kernel::KernelVersion>, count: u32| {
+            runtime
+                .execute(
+                    version,
+                    &Invocation {
+                        inputs: vec![],
+                        params: vec![],
+                        domain: Domain::Rows(count),
+                        context: Default::default(),
+                    },
+                )
+                .unwrap()
+        };
     let vertices = run(&mut runtime, &points, 3)[0];
     // A Kernel: the backend's clock answers.
     assert_eq!(
@@ -265,7 +266,7 @@ fn a_node_the_backend_did_not_time_is_not_given_its_neighbours_number() {
     );
 
     let raster = runtime
-        .kernel(&orla_kernel::NativeOp::Rasterize.id())
+        .kernel(&entelechy_kernel::NativeOp::Rasterize.id())
         .unwrap();
     runtime
         .execute(
@@ -288,15 +289,15 @@ fn a_node_the_backend_did_not_time_is_not_given_its_neighbours_number() {
 }
 
 /// A runtime on the reference backend, as a session opens one.
-fn cpu(budget_words: usize) -> orla_kernel::Runtime {
-    orla_kernel::Runtime::with_backend(budget_words, Box::new(orla_cpu::CpuBackend))
+fn cpu(budget_words: usize) -> entelechy_kernel::Runtime {
+    entelechy_kernel::Runtime::with_backend(budget_words, Box::new(entelechy_cpu::CpuBackend))
 }
 
 /// Compiles and prepares a Kernel without publishing it.
 fn prepare(
-    runtime: &orla_kernel::Runtime,
+    runtime: &entelechy_kernel::Runtime,
     source: &str,
-) -> Result<orla_kernel::Candidate, orla_kernel::PrepareError> {
-    let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
+) -> Result<entelechy_kernel::Candidate, entelechy_kernel::PrepareError> {
+    let module = entelechy_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
     runtime.prepare_module(module, source)
 }

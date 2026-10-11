@@ -4,11 +4,11 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
-use orla_ir::{
+use entelechy_ir::{
     Block as IrBlock, Capability, Field, Function, Instruction, Intrinsic, KernelId,
     MAX_ARRAY_COUNT, Manifest, Mode, Module, Op, Port, PortType, Shape, StructDef, Type, ValueId,
 };
-use orla_language::{Block, Expr, ExprKind, FnDecl, Kernel, Span, Spanned};
+use entelechy_language::{Block, Expr, ExprKind, FnDecl, Kernel, Span, Spanned};
 
 use crate::{CompileError, Variants};
 
@@ -26,7 +26,7 @@ pub(crate) fn callable() -> Vec<&'static str> {
         .chain(builtins::YIELDING.iter())
         .chain(builtins::FORMULAS.iter())
         .copied()
-        .chain(orla_ir::Intrinsic::ALL.iter().map(|(_, name)| *name))
+        .chain(entelechy_ir::Intrinsic::ALL.iter().map(|(_, name)| *name))
         .collect();
     names.sort_unstable();
     names.dedup();
@@ -64,7 +64,10 @@ fn parse_type(name: &Spanned<String>) -> Result<Type, CompileError> {
         let known: Vec<&str> = Type::NAMED.iter().map(|(_, name)| *name).collect();
         semantic(
             name.span,
-            format!("{error}{}", orla_language::did_you_mean(&name.value, known)),
+            format!(
+                "{error}{}",
+                entelechy_language::did_you_mean(&name.value, known)
+            ),
         )
     })
 }
@@ -180,7 +183,7 @@ fn variant_in(
                 span,
                 format!(
                     "`{name}` has no variant `{variant}`{}",
-                    orla_language::did_you_mean(
+                    entelechy_language::did_you_mean(
                         variant,
                         variants.iter().map(|(declared, _)| declared.as_str())
                     )
@@ -274,8 +277,8 @@ fn array_type(
 /// Whether a value of the struct `def`, over the types in `table`, is
 /// within the bounds every value is.
 pub(crate) fn fits(table: &[StructDef], def: &StructDef, span: Span) -> Result<(), CompileError> {
-    let measured = orla_ir::measure_struct(def, &|ty| orla_ir::measure(table, ty));
-    match orla_ir::too_large(measured) {
+    let measured = entelechy_ir::measure_struct(def, &|ty| entelechy_ir::measure(table, ty));
+    match entelechy_ir::too_large(measured) {
         Some(why) => Err(semantic(
             span,
             format!("`{}` is too large: {why}", def.name),
@@ -301,7 +304,7 @@ fn subscript_element(ty: Type, structs: &[StructDef]) -> Option<(Type, usize)> {
 
 /// Human-readable type for diagnostics, naming structs.
 fn describe(ty: Type, structs: &[StructDef]) -> String {
-    orla_ir::type_name(ty, structs)
+    entelechy_ir::type_name(ty, structs)
 }
 
 /// Registers the record of a map's several outputs: a struct named
@@ -619,7 +622,7 @@ struct Shared<'a> {
     /// where first called.
     plain: std::collections::HashMap<&'a str, (usize, &'a FnDecl)>,
     /// How deep the function being lowered is called, at most
-    /// [`orla_language::MAX_NESTING`], so a chain of calls cannot exhaust
+    /// [`entelechy_language::MAX_NESTING`], so a chain of calls cannot exhaust
     /// the compiling thread's stack.
     calls: std::cell::Cell<usize>,
     /// Each function's places, by its index in `functions`.
@@ -655,12 +658,12 @@ fn lower_function(
 ) -> Result<(Function, Vec<(Capability, String)>), CompileError> {
     // A function lowers where first called, inside its caller's lowering.
     let depth = shared.calls.get() + 1;
-    if depth > orla_language::MAX_NESTING {
+    if depth > entelechy_language::MAX_NESTING {
         return Err(semantic(
             declaration.name.span,
             format!(
                 "calls nest more than {} deep to reach `{}`; a chain of calls that long is a loop",
-                orla_language::MAX_NESTING,
+                entelechy_language::MAX_NESTING,
                 declaration.name.value
             ),
         ));
@@ -808,7 +811,7 @@ struct Builder<'a> {
     bindings: Vec<(ValueId, String)>,
     /// Unnamed numbers written without a width, exact (a float as a
     /// `Double`, an integer as a `Long`) until they meet a width.
-    literals: std::collections::HashMap<u32, orla_ir::Number>,
+    literals: std::collections::HashMap<u32, entelechy_ir::Number>,
     /// Unnamed vectors, matrices and arrays of written numbers alone;
     /// each takes the kind it meets as a whole.
     aggregates: BTreeSet<u32>,
@@ -898,7 +901,7 @@ impl<'a> Builder<'a> {
     /// Refuses a written number past the largest `Float` that is a
     /// `Float`.
     fn refuse_large(&self, id: ValueId) -> Result<(), CompileError> {
-        let (Some(span), Some(orla_ir::Number::Double(written))) =
+        let (Some(span), Some(entelechy_ir::Number::Double(written))) =
             (self.too_large.get(&id.0), self.literals.get(&id.0))
         else {
             return Ok(());
@@ -1222,7 +1225,7 @@ impl<'a> Builder<'a> {
             span,
             format!(
                 "`{name}` is not defined{}",
-                orla_language::did_you_mean(name, known)
+                entelechy_language::did_you_mean(name, known)
             ),
         ))
     }
@@ -1296,7 +1299,7 @@ impl<'a> Builder<'a> {
                                 ty.value,
                                 param.value,
                                 port.name,
-                                orla_ir::port_type_name(&port.ty, &self.structs())
+                                entelechy_ir::port_type_name(&port.ty, &self.structs())
                             ),
                         ));
                     }
@@ -1406,7 +1409,7 @@ impl<'a> Builder<'a> {
                     expr.span,
                     format!(
                         "`{name}` is not an input{}",
-                        orla_language::did_you_mean(name, known)
+                        entelechy_language::did_you_mean(name, known)
                     ),
                 )
             })?;

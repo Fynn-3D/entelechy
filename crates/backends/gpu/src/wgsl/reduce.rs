@@ -8,8 +8,8 @@ pub const REDUCE_WORKGROUP: u32 = 64;
 pub const REDUCE_SPAN: u32 = MAX_GROUPS * REDUCE_WORKGROUP;
 
 /// Emits a reduce module's fold pass: output element `i` is the run of
-/// at most [`orla_rules::reduce::FOLD`] elements from `i * FOLD`, folded
-/// by the shared pairwise tree ([`orla_rules::reduce::LEVELS_AT_ONCE`]
+/// at most [`entelechy_rules::reduce::FOLD`] elements from `i * FOLD`, folded
+/// by the shared pairwise tree ([`entelechy_rules::reduce::LEVELS_AT_ONCE`]
 /// levels per pass). Run with the level's count in the uniform until one
 /// element is left.
 pub fn emit_reduce(module: &Module) -> String {
@@ -72,7 +72,7 @@ pub fn emit_reduce_packed(module: &Module, packed: &[usize]) -> String {
         out.push('\n');
     }
     emit_function(&mut out, module, merge, "merge", false, packed);
-    let fold = orla_rules::reduce::FOLD;
+    let fold = entelechy_rules::reduce::FOLD;
     let element = wgsl_type(element);
     let _ = writeln!(
         out,

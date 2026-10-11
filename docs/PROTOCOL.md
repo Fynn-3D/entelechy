@@ -2,7 +2,7 @@
 
 **Answers:** what an agent sends over the wire, and what comes back.
 
-`orla serve <scene.osn>` drives a live session over standard input and
+`entelechy serve <scene.esn>` drives a live session over standard input and
 output: one JSON object per line in, one per line out. Any agent in any
 language creates through it under the same authority rules as the CLI
 and the Player: Kernels are prepared before they are published,
@@ -64,14 +64,14 @@ through:
 
 | door | opened by | carries |
 | --- | --- | --- |
-| stdin | `orla serve <scene.osn>` | Request lines on standard input, answer lines on standard output; `quit` ends the process. |
-| socket | `orla serve <scene.osn> --listen <host:port>` | The same lines over each TCP connection to the address; `quit` ends the connection. |
-| websocket | `orla serve <scene.osn> --listen <host:port>` | The same lines as WebSocket text messages to the same address, one request a message. |
+| stdin | `entelechy serve <scene.esn>` | Request lines on standard input, answer lines on standard output; `quit` ends the process. |
+| socket | `entelechy serve <scene.esn> --listen <host:port>` | The same lines over each TCP connection to the address; `quit` ends the connection. |
+| websocket | `entelechy serve <scene.esn> --listen <host:port>` | The same lines as WebSocket text messages to the same address, one request a message. |
 <!-- end -->
 
 | op | fields | answer |
 | --- | --- | --- |
-| `status` |  | backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, loaded (whether a scene is), refused (why not, when not), revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, versions (`orla`, `api`, `language`, `ir`, `package`) |
+| `status` |  | backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, loaded (whether a scene is), refused (why not, when not), revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, versions (`entelechy`, `api`, `language`, `ir`, `package`) |
 | `kernels` |  | a list of manifests, each with its generation, which `publish`'s `expect` names |
 | `kernel` | `kernel`?: string, `generation`?: integer | manifest, generation, source, as `publish` takes it |
 | `graph` |  | inputs, params, nodes, outputs |
@@ -97,8 +97,8 @@ through:
 
 ## Transports
 
-- **stdin/stdout.** `orla serve`, or the Player with `orla-player
-  --serve <scene.osn>`: requests arrive while the window runs, `evaluate`
+- **stdin/stdout.** `entelechy serve`, or the Player with `entelechy-player
+  --serve <scene.esn>`: requests arrive while the window runs, `evaluate`
   answers with the next window frame under the person's pointer and
   keys (its own input fields are not read; `measure` is, and times that
   frame), and `read` returns the frame the window shows.
@@ -116,8 +116,8 @@ through:
   <origin>` (`https://host:port` as a browser writes it). A page opened
   from a file says `null`, as a sandboxed frame on any site does, so it
   connects only with `--allow-origin null`.
-- **In process.** `orla_request` in
-  [`orla.h`](../crates/interface/ffi/include/orla.h) (`include/orla.h` in a
+- **In process.** `entelechy_request` in
+  [`entelechy.h`](../crates/interface/ffi/include/entelechy.h) (`include/entelechy.h` in a
   release) takes one line and
   returns its answer, beside the C functions that evaluate and read
   Fields in place.
@@ -237,7 +237,7 @@ same way (a `Double` as the number that reads back as it, a `Long` past
 absent), `pointer`, `down`, `buttons` (held, by number: 0 left, 1
 right, 2 middle), `wheel` (scrolled since the last evaluation), `keys`,
 `window` (`[w, h]` in pixels) and `scale` (one when absent). An
-evaluation naming no window sees the one `orla serve --window
+evaluation naming no window sees the one `entelechy serve --window
 <w>x<h>[@<scale>]` gave, and none otherwise. Inside the Player the
 window is the person's and these two are ignored. Many frames are many
 evaluations, each at its own `time`.
@@ -344,7 +344,7 @@ either way ([decision](DECISIONS.md)).
 ## Status and history
 
 `status` answers the backend, scene, watched files, counts, `versions`
-(the release, ABI, language, IR and package format, as `orla version`
+(the release, ABI, language, IR and package format, as `entelechy version`
 prints them),
 `grants`, and the position: `revision` moves when the world changes
 other than by running (a Kernel published or retired, the scene read
@@ -353,7 +353,7 @@ committed since.
 
 `history` (`since` a revision) says what made each later revision and
 its origin: a document on disk, or the protocol and its channel
-(`stdin`, `socket 3`, `websocket 4`, `orla_request`). The origin is how
+(`stdin`, `socket 3`, `websocket 4`, `entelechy_request`). The origin is how
 a change arrived, not who sent it: an edit found on disk while a request
 is answered is its document's; the scene a `compose` or `param` loads is
 the request's. Refused attempts are listed with why and move nothing.
@@ -361,7 +361,7 @@ History is bounded and holds changes, never whole worlds.
 
 ## Help
 
-`help` answers Orla's syntax and API, layer by layer, gathered from the
+`help` answers Entelechy's syntax and API, layer by layer, gathered from the
 tables the implementation executes: the types, the builtins and the
 forms from the compiler, the reserved words from the parser, what each
 capability grants from the ABI, a package's parts from the session, the
@@ -394,12 +394,12 @@ scene on its Kernels, and a refused Kernel refuses the scene
 `routed`, `{node, backend, why}`, once when a node's placement off the
 main backend begins or changes; `large`, `{path, id, why}`, with each
 version published of a Kernel that carries more through its branches
-than a device's compiler takes in comfort (what `orla check` says of
+than a device's compiler takes in comfort (what `entelechy check` says of
 it); `idle`, `{path, ids}`, the Kernels a document of the scene
 publishes and no node uses, once and again when they change; and
 `unrun`, `{node, why}`, a node with no `domain` whose Kernel compares
 `element()` with its first input's count, so the elements past that
-count are never run (what `orla check` says of it), once and again when
+count are never run (what `entelechy check` says of it), once and again when
 it changes. A Kernel
 nothing runs yet prepares inline.
 
@@ -408,4 +408,4 @@ refused, the Kernel published or refused. Where preparation is off the
 frame (`serve`, the Player) the answer waits for it and nothing else
 does: frames go on, other connections are answered, and what a
 connection sent after it is answered after it, in order. One change is
-made at a time. `orla_request` answers in its call.
+made at a time. `entelechy_request` answers in its call.

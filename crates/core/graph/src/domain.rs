@@ -14,7 +14,7 @@
 
 use std::fmt;
 
-use orla_abi::{Domain, Shape, Value};
+use entelechy_abi::{Domain, Shape, Value};
 
 /// The most elements a Field read by `value(port)` may hold.
 pub const VALUE_MAX_ELEMENTS: usize = 1024;
@@ -173,10 +173,10 @@ impl DomainExpr {
     }
 
     /// The expression on a fused node: ports and this Kernel's parameter
-    /// names as [`orla_ir::fused_name`] qualifies them; graph parameter
+    /// names as [`entelechy_ir::fused_name`] qualifies them; graph parameter
     /// names stay.
     pub fn renamed(&self, prefix: &str, params: &[String]) -> Self {
-        let rename = |name: &String| orla_ir::fused_name(prefix, name);
+        let rename = |name: &String| entelechy_ir::fused_name(prefix, name);
         let inner = |parts: &[Self]| -> Vec<Self> {
             parts
                 .iter()

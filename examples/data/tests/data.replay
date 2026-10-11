@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # Four panels of 304 x 184 pixels, eight in from each quarter of a
 # 640 x 400 window, each part's picture as large as fits: packed and

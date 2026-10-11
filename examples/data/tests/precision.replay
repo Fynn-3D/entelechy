@@ -1,4 +1,4 @@
-scene ../parts/precision/scene.osn
+scene ../parts/precision/scene.esn
 
 # Nothing here is computed by a device: on a GPU session every node runs
 # on the ordered backend, and elsewhere on the only one.

@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # A 320 by 200 window over a 32 by 20 grid, ten pixels a cell. Eight
 # cells settle a frame and the count is exactly that: with sixteen

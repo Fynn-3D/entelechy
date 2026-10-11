@@ -1,6 +1,6 @@
 [package]
-name = "orla-player"
-description = "Orla Player: a window that shows a live Graph scene and hot-reloads its Kernels"
+name = "entelechy-player"
+description = "Entelechy Player: a window that shows a live Graph scene and hot-reloads its Kernels"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,15 +11,15 @@ rust-version.workspace = true
 doctest = false
 
 [[bin]]
-name = "orla-player"
+name = "entelechy-player"
 path = "src/main.rs"
 
 [dependencies]
-orla-session = { path = "../../interface/session" }
-orla-protocol = { path = "../../interface/protocol" }
-orla-kernel = { path = "../../core/kernel" }
-orla-gpu = { path = "../../backends/gpu" }
-orla-graph = { path = "../../core/graph" }
+entelechy-session = { path = "../../interface/session" }
+entelechy-protocol = { path = "../../interface/protocol" }
+entelechy-kernel = { path = "../../core/kernel" }
+entelechy-gpu = { path = "../../backends/gpu" }
+entelechy-graph = { path = "../../core/graph" }
 winit = "0.30.13"
 softbuffer = "0.4"
 cpal = "0.18"

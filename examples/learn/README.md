@@ -2,7 +2,7 @@
 
 A 2-16-1 perceptron trained by gradient descent to tell the inside of a
 circle from the outside, all in Kernels. The weights are a Field of 65
-floats carried through `<~`. A step (`train.osn`) is one scatter that
+floats carried through `<~`. A step (`train.esn`) is one scatter that
 sums gradients (`domain = 16640;`, 256 points by 65 weights) and one map
 that updates; the scene places eight steps a frame. `loss` is a reduce;
 `view` paints the network's answer; `dots` scatters the points.
@@ -17,7 +17,7 @@ The replay pins the loss at the start and after 160 steps, and three
 pixels of the answer, on all three backends.
 
 ```sh
-orla player examples/learn/scene.osn
-orla replay examples/learn/tests/learn.replay --backend jit
-orla render examples/learn/scene.osn --frames 120 --backend gpu --out /tmp/learn
+entelechy player examples/learn/scene.esn
+entelechy replay examples/learn/tests/learn.replay --backend jit
+entelechy render examples/learn/scene.esn --frames 120 --backend gpu --out /tmp/learn
 ```

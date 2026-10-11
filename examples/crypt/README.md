@@ -1,6 +1,6 @@
 # Crypt
 
-A crypt drawn with the voxel package (`packages/voxel.orlapkg`): a
+A crypt drawn with the voxel package (`packages/voxel.entpkg`): a
 chamber of 48 by 24 by 48 voxels of a quarter meter, baked once, and a
 statue in a box of voxels of its own at the middle, turning. A ray a
 pixel walks the chamber and the statue's box (`voxel_meet`, the box's
@@ -16,8 +16,8 @@ its floor (`voxel_meet_past`), and the far fades into haze
 (`voxel_haze`).
 
 ```sh
-orla-player examples/crypt/scene.osn
-orla-player examples/crypt/scene.osn --param open=1
+entelechy-player examples/crypt/scene.esn
+entelechy-player examples/crypt/scene.esn --param open=1
 ```
 
 ## Tests

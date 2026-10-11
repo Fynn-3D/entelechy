@@ -5,15 +5,15 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use orla_kernel::{Context, KernelId};
-use orla_session::{Event, Memory, Session};
+use entelechy_kernel::{Context, KernelId};
+use entelechy_session::{Event, Memory, Session};
 
 /// The root: `k.src` makes a picture under the output `port`, read by a
 /// placed graph.
 fn root(port: &str) -> String {
     format!(
         "node src: kernel k.src@1 {{ requires {{ field.write; }} output {port}: Image; domain = vec2(4, 4); compute {{ return vec4(0.5, 0.25, 0.75, 1.0); }} }}\n\
-         node shown: graph \"sub.osn\" {{ source <- src.{port}; }}\n\
+         node shown: graph \"sub.esn\" {{ source <- src.{port}; }}\n\
          output result <- shown.result;\n"
     )
 }
@@ -27,9 +27,9 @@ fn sub(body: &str) -> String {
     )
 }
 
-fn open(files: &Arc<Memory>, runtime: orla_kernel::Runtime) -> Session {
-    let store: Arc<dyn orla_session::Store> = Arc::clone(files) as _;
-    Session::open_in(store, Path::new("/s/scene.osn"), None, runtime)
+fn open(files: &Arc<Memory>, runtime: entelechy_kernel::Runtime) -> Session {
+    let store: Arc<dyn entelechy_session::Store> = Arc::clone(files) as _;
+    Session::open_in(store, Path::new("/s/scene.esn"), None, runtime)
 }
 
 fn put(files: &Memory, name: &str, text: &str) {
@@ -46,11 +46,11 @@ fn generation(session: &Session, id: &str) -> Option<u64> {
 #[test]
 fn a_refused_document_publishes_none_of_the_scenes_change() {
     let files = Arc::new(Memory::default());
-    put(&files, "scene.osn", &root("result"));
-    put(&files, "sub.osn", &sub("return sample(source);"));
+    put(&files, "scene.esn", &root("result"));
+    put(&files, "sub.esn", &sub("return sample(source);"));
     let mut session = open(
         &files,
-        orla_session::Session::runtime_for("cpu", Default::default()).unwrap(),
+        entelechy_session::Session::runtime_for("cpu", Default::default()).unwrap(),
     );
     session.sync();
     session.evaluate(&Context::default()).unwrap();
@@ -58,8 +58,8 @@ fn a_refused_document_publishes_none_of_the_scenes_change() {
 
     // The root renames its output and rewires; the placed graph's Kernel
     // fails to compile.
-    put(&files, "scene.osn", &root("out"));
-    put(&files, "sub.osn", &sub("return nothing;"));
+    put(&files, "scene.esn", &root("out"));
+    put(&files, "sub.esn", &sub("return nothing;"));
     let events = session.sync();
     assert!(
         events.iter().any(|e| matches!(e, Event::SceneRejected(_))),
@@ -75,7 +75,7 @@ fn a_refused_document_publishes_none_of_the_scenes_change() {
         .expect("the scene running runs on");
 
     // Mended, the change is taken whole.
-    put(&files, "sub.osn", &sub("return sample(source) * 0.5;"));
+    put(&files, "sub.esn", &sub("return sample(source) * 0.5;"));
     let events = session.sync();
     assert!(
         events.iter().any(|e| matches!(e, Event::SceneLoaded)),
@@ -90,15 +90,15 @@ fn a_refused_document_publishes_none_of_the_scenes_change() {
 #[test]
 fn a_scene_prepared_off_the_frame_goes_live_with_its_kernels() {
     let files = Arc::new(Memory::default());
-    put(&files, "scene.osn", &root("result"));
-    put(&files, "sub.osn", &sub("return sample(source);"));
-    let runtime = orla_kernel::Runtime::with_backend(1 << 20, Box::new(Deliberate));
+    put(&files, "scene.esn", &root("result"));
+    put(&files, "sub.esn", &sub("return sample(source);"));
+    let runtime = entelechy_kernel::Runtime::with_backend(1 << 20, Box::new(Deliberate));
     let mut session = open(&files, runtime);
     session.sync();
     session.set_background(true);
     session.evaluate(&Context::default()).unwrap();
 
-    put(&files, "scene.osn", &root("out"));
+    put(&files, "scene.esn", &root("out"));
     let mut loaded = false;
     for _ in 0..5_000 {
         let events = session.sync();
@@ -120,15 +120,15 @@ fn a_scene_prepared_off_the_frame_goes_live_with_its_kernels() {
 /// Kernel with an output named `refused`.
 struct Deliberate;
 
-impl orla_kernel::Backend for Deliberate {
+impl entelechy_kernel::Backend for Deliberate {
     fn name(&self) -> &'static str {
         "deliberate"
     }
 
     fn prepare(
         &self,
-        module: &orla_kernel::Validated,
-    ) -> Result<Box<dyn orla_kernel::Prepared>, String> {
+        module: &entelechy_kernel::Validated,
+    ) -> Result<Box<dyn entelechy_kernel::Prepared>, String> {
         std::thread::sleep(std::time::Duration::from_millis(20));
         if module
             .manifest
@@ -138,17 +138,23 @@ impl orla_kernel::Backend for Deliberate {
         {
             return Err("this device refuses it".into());
         }
-        orla_kernel::Backend::prepare(&orla_cpu::CpuBackend, module)
+        entelechy_kernel::Backend::prepare(&entelechy_cpu::CpuBackend, module)
     }
 
     fn execute(
         &self,
-        prepared: &dyn orla_kernel::Prepared,
-        module: &orla_kernel::Validated,
-        invocation: &orla_kernel::Invocation,
-        scope: &mut orla_kernel::Scope<'_>,
-    ) -> Result<Vec<orla_kernel::Handle>, orla_kernel::ExecutionError> {
-        orla_kernel::Backend::execute(&orla_cpu::CpuBackend, prepared, module, invocation, scope)
+        prepared: &dyn entelechy_kernel::Prepared,
+        module: &entelechy_kernel::Validated,
+        invocation: &entelechy_kernel::Invocation,
+        scope: &mut entelechy_kernel::Scope<'_>,
+    ) -> Result<Vec<entelechy_kernel::Handle>, entelechy_kernel::ExecutionError> {
+        entelechy_kernel::Backend::execute(
+            &entelechy_cpu::CpuBackend,
+            prepared,
+            module,
+            invocation,
+            scope,
+        )
     }
 }
 
@@ -157,16 +163,16 @@ impl orla_kernel::Backend for Deliberate {
 #[test]
 fn a_scene_whose_kernel_fails_off_the_frame_is_refused_and_the_old_one_runs() {
     let files = Arc::new(Memory::default());
-    put(&files, "scene.osn", &root("result"));
-    put(&files, "sub.osn", &sub("return sample(source);"));
-    let runtime = orla_kernel::Runtime::with_backend(1 << 20, Box::new(Deliberate));
+    put(&files, "scene.esn", &root("result"));
+    put(&files, "sub.esn", &sub("return sample(source);"));
+    let runtime = entelechy_kernel::Runtime::with_backend(1 << 20, Box::new(Deliberate));
     let mut session = open(&files, runtime);
     session.sync();
     session.set_background(true);
     session.evaluate(&Context::default()).unwrap();
     let before = generation(&session, "k.src@1");
 
-    put(&files, "scene.osn", &root("refused"));
+    put(&files, "scene.esn", &root("refused"));
     let mut refused = false;
     for _ in 0..5_000 {
         let events = session.sync();
@@ -193,17 +199,17 @@ fn a_scene_whose_kernel_fails_off_the_frame_is_refused_and_the_old_one_runs() {
 #[test]
 fn a_claimed_scene_landing_later_is_the_requests() {
     let files = Arc::new(Memory::default());
-    put(&files, "scene.osn", &root("result"));
-    put(&files, "sub.osn", &sub("return sample(source);"));
-    let runtime = orla_kernel::Runtime::with_backend(1 << 20, Box::new(Deliberate));
+    put(&files, "scene.esn", &root("result"));
+    put(&files, "sub.esn", &sub("return sample(source);"));
+    let runtime = entelechy_kernel::Runtime::with_backend(1 << 20, Box::new(Deliberate));
     let mut session = open(&files, runtime);
     session.sync();
     session.set_background(true);
     let (since, _) = session.position();
 
-    let asked = orla_session::Origin::Protocol("socket 1".into());
+    let asked = entelechy_session::Origin::Protocol("socket 1".into());
     let before = session.act_for(asked.clone());
-    put(&files, "scene.osn", &root("out"));
+    put(&files, "scene.esn", &root("out"));
     session.claim_scene();
     let mut landed = session
         .sync()
@@ -224,7 +230,7 @@ fn a_claimed_scene_landing_later_is_the_requests() {
     let scene = session
         .changes_since(since)
         .into_iter()
-        .rfind(|record| matches!(record.change, orla_session::Change::Scene { .. }))
+        .rfind(|record| matches!(record.change, entelechy_session::Change::Scene { .. }))
         .expect("the scene is recorded");
     assert_eq!(scene.origin, asked);
 }
@@ -242,8 +248,8 @@ fn a_param_is_judged_by_the_newest_scene_read() {
         )
     };
     let files = Arc::new(Memory::default());
-    put(&files, "scene.osn", &scene("speed", "0.25"));
-    let runtime = orla_kernel::Runtime::with_backend(1 << 20, Box::new(Deliberate));
+    put(&files, "scene.esn", &scene("speed", "0.25"));
+    let runtime = entelechy_kernel::Runtime::with_backend(1 << 20, Box::new(Deliberate));
     let mut session = open(&files, runtime);
     session.sync();
     session.set_background(true);
@@ -251,15 +257,15 @@ fn a_param_is_judged_by_the_newest_scene_read() {
 
     // The new document declares `zoom`, not `speed`, and its Kernel
     // changes, so it waits for the worker.
-    put(&files, "scene.osn", &scene("zoom", "0.75"));
+    put(&files, "scene.esn", &scene("zoom", "0.75"));
     session.sync();
     assert!(
         session
-            .set_param("speed", orla_kernel::Value::Float(2.0))
+            .set_param("speed", entelechy_kernel::Value::Float(2.0))
             .is_err()
     );
     session
-        .set_param("zoom", orla_kernel::Value::Float(5.0))
+        .set_param("zoom", entelechy_kernel::Value::Float(5.0))
         .expect("the newest scene declares it");
     for _ in 0..5_000 {
         if session
@@ -273,7 +279,7 @@ fn a_param_is_judged_by_the_newest_scene_read() {
     }
     assert_eq!(
         session.params().get("zoom"),
-        Some(&orla_kernel::Value::Float(5.0)),
+        Some(&entelechy_kernel::Value::Float(5.0)),
         "the value set is the scene's once it runs"
     );
     assert!(session.params().get("speed").is_none());
@@ -285,17 +291,17 @@ fn a_param_is_judged_by_the_newest_scene_read() {
 #[test]
 fn best_opens_where_the_scene_loads_and_says_why_when_it_loads_nowhere() {
     let files = Arc::new(Memory::default());
-    put(&files, "scene.osn", &root("result"));
-    put(&files, "sub.osn", &sub("return sample(source);"));
-    let store: Arc<dyn orla_session::Store> = Arc::clone(&files) as _;
+    put(&files, "scene.esn", &root("result"));
+    put(&files, "sub.esn", &sub("return sample(source);"));
+    let store: Arc<dyn entelechy_session::Store> = Arc::clone(&files) as _;
     let open = |backend: &str| {
         Session::open_loaded(
             Arc::clone(&store),
-            Path::new("/s/scene.osn"),
+            Path::new("/s/scene.esn"),
             None,
             backend,
             Default::default(),
-            orla_gpu::Wait::blocking(),
+            entelechy_gpu::Wait::blocking(),
             true,
         )
     };
@@ -308,7 +314,7 @@ fn best_opens_where_the_scene_loads_and_says_why_when_it_loads_nowhere() {
     );
     loaded.session.evaluate(&Context::default()).unwrap();
 
-    put(&files, "sub.osn", &sub("return nothing;"));
+    put(&files, "sub.esn", &sub("return nothing;"));
     for backend in ["best", "cpu"] {
         let Err(why) = open(backend) else {
             panic!("{backend}: a scene that loads nowhere opens");
@@ -322,17 +328,17 @@ fn best_opens_where_the_scene_loads_and_says_why_when_it_loads_nowhere() {
 #[test]
 fn a_claimed_scene_superseded_on_disk_is_the_documents() {
     let files = Arc::new(Memory::default());
-    put(&files, "scene.osn", &root("result"));
-    put(&files, "sub.osn", &sub("return sample(source);"));
-    let runtime = orla_kernel::Runtime::with_backend(1 << 20, Box::new(Deliberate));
+    put(&files, "scene.esn", &root("result"));
+    put(&files, "sub.esn", &sub("return sample(source);"));
+    let runtime = entelechy_kernel::Runtime::with_backend(1 << 20, Box::new(Deliberate));
     let mut session = open(&files, runtime);
     session.sync();
     session.set_background(true);
     let (since, _) = session.position();
 
-    let asked = orla_session::Origin::Protocol("socket 1".into());
+    let asked = entelechy_session::Origin::Protocol("socket 1".into());
     let before = session.act_for(asked.clone());
-    put(&files, "scene.osn", &root("out"));
+    put(&files, "scene.esn", &root("out"));
     session.claim_scene();
     session.sync();
     session.act_for(before);
@@ -341,7 +347,7 @@ fn a_claimed_scene_superseded_on_disk_is_the_documents() {
         "the claimed scene waits for its Kernel"
     );
     // A person's edit on disk replaces it before it lands.
-    put(&files, "scene.osn", &root("again"));
+    put(&files, "scene.esn", &root("again"));
     let mut landed = false;
     for _ in 0..5_000 {
         if session
@@ -358,11 +364,11 @@ fn a_claimed_scene_superseded_on_disk_is_the_documents() {
     let scene = session
         .changes_since(since)
         .into_iter()
-        .rfind(|record| matches!(record.change, orla_session::Change::Scene { .. }))
+        .rfind(|record| matches!(record.change, entelechy_session::Change::Scene { .. }))
         .expect("the scene is recorded");
     assert_eq!(
         scene.origin,
-        orla_session::Origin::Document(PathBuf::from("/s/scene.osn"))
+        entelechy_session::Origin::Document(PathBuf::from("/s/scene.esn"))
     );
 }
 
@@ -373,20 +379,20 @@ fn a_claimed_scene_superseded_on_disk_is_the_documents() {
 fn a_changed_function_republishes_the_kernels_that_call_it() {
     let files = Arc::new(Memory::default());
     let base = |gain: &str| format!("fn gain(x: Float) -> Float {{ return x * {gain}; }}\n");
-    let mid = "use \"base.orla\";\n\
+    let mid = "use \"base.ent\";\n\
                fn twice(x: Float) -> Float { return x * 2.0; }\n\
                kernel l.own@1 { requires { field.write; } output result: Rows<Float>; compute { return twice(1.0); } }\n\
                kernel l.used@1 { requires { field.write; } output result: Rows<Float>; compute { return gain(1.0); } }\n";
-    put(&files, "base.orla", &base("3.0"));
-    put(&files, "mid.orla", mid);
+    put(&files, "base.ent", &base("3.0"));
+    put(&files, "mid.ent", mid);
     put(
         &files,
-        "scene.osn",
-        "use \"mid.orla\";\nnode a: l.own@1 { domain = 1; }\nnode b: l.used@1 { domain = 1; }\noutput a <- a.result;\noutput b <- b.result;\n",
+        "scene.esn",
+        "use \"mid.ent\";\nnode a: l.own@1 { domain = 1; }\nnode b: l.used@1 { domain = 1; }\noutput a <- a.result;\noutput b <- b.result;\n",
     );
     let mut session = open(
         &files,
-        orla_session::Session::runtime_for("cpu", Default::default()).unwrap(),
+        entelechy_session::Session::runtime_for("cpu", Default::default()).unwrap(),
     );
     session.sync();
     let value = |session: &mut Session, node: &str| {
@@ -406,13 +412,13 @@ fn a_changed_function_republishes_the_kernels_that_call_it() {
 
     // Its own function changes.
     let before = generation(&session, "l.own@1");
-    put(&files, "mid.orla", &mid.replace("x * 2.0", "x * 7.0"));
+    put(&files, "mid.ent", &mid.replace("x * 2.0", "x * 7.0"));
     session.sync();
     assert!(generation(&session, "l.own@1") > before);
     assert_eq!(value(&mut session, "a"), 7.0);
 
     // A function of the library it uses changes.
-    put(&files, "base.orla", &base("5.0"));
+    put(&files, "base.ent", &base("5.0"));
     session.sync();
     assert_eq!(value(&mut session, "b"), 5.0);
 }
@@ -431,15 +437,15 @@ fn a_changed_function_republishes_only_the_kernels_it_reaches() {
              kernel l.apart@1 {{ requires {{ field.write; }} output result: Rows<Float>; compute {{ return 4.0; }} }}\n"
         )
     };
-    put(&files, "lib.orla", &lib("2.0", "Calls."));
+    put(&files, "lib.ent", &lib("2.0", "Calls."));
     put(
         &files,
-        "scene.osn",
-        "use \"lib.orla\";\nnode a: l.calls@1 { domain = 1; }\nnode b: l.apart@1 { domain = 1; }\noutput a <- a.result;\noutput b <- b.result;\n",
+        "scene.esn",
+        "use \"lib.ent\";\nnode a: l.calls@1 { domain = 1; }\nnode b: l.apart@1 { domain = 1; }\noutput a <- a.result;\noutput b <- b.result;\n",
     );
     let mut session = open(
         &files,
-        orla_session::Session::runtime_for("cpu", Default::default()).unwrap(),
+        entelechy_session::Session::runtime_for("cpu", Default::default()).unwrap(),
     );
     session.sync();
     let (calls, apart) = (
@@ -447,14 +453,14 @@ fn a_changed_function_republishes_only_the_kernels_it_reaches() {
         generation(&session, "l.apart@1"),
     );
 
-    put(&files, "lib.orla", &lib("3.0", "Calls."));
+    put(&files, "lib.ent", &lib("3.0", "Calls."));
     session.sync();
     assert!(generation(&session, "l.calls@1") > calls);
     assert_eq!(generation(&session, "l.apart@1"), apart);
 
     // Its doc is its text.
     let calls = generation(&session, "l.calls@1");
-    put(&files, "lib.orla", &lib("3.0", "Calls gain."));
+    put(&files, "lib.ent", &lib("3.0", "Calls gain."));
     session.sync();
     assert!(generation(&session, "l.calls@1") > calls);
     assert_eq!(generation(&session, "l.apart@1"), apart);
@@ -472,22 +478,22 @@ fn refusals(events: &[Event]) -> usize {
 #[test]
 fn an_unchanged_refusal_is_said_once() {
     let files = Arc::new(Memory::default());
-    put(&files, "scene.osn", "");
+    put(&files, "scene.esn", "");
     let mut session = open(
         &files,
-        orla_session::Session::runtime_for("cpu", Default::default()).unwrap(),
+        entelechy_session::Session::runtime_for("cpu", Default::default()).unwrap(),
     );
     assert_eq!(refusals(&session.sync()), 1);
     assert_eq!(refusals(&session.sync()), 0);
     assert_eq!(refusals(&session.sync()), 0);
 
     // Written again, still empty: a change, said again.
-    put(&files, "scene.osn", "// nothing yet\n");
+    put(&files, "scene.esn", "// nothing yet\n");
     assert_eq!(refusals(&session.sync()), 1);
     assert_eq!(refusals(&session.sync()), 0);
 
-    put(&files, "scene.osn", &root("result"));
-    put(&files, "sub.osn", &sub("return sample(source);"));
+    put(&files, "scene.esn", &root("result"));
+    put(&files, "sub.esn", &sub("return sample(source);"));
     session.sync();
     assert!(session.graph().is_some());
 }
@@ -497,10 +503,10 @@ fn an_unchanged_refusal_is_said_once() {
 #[test]
 fn a_graph_appearing_under_a_refused_root_loads_it() {
     let files = Arc::new(Memory::default());
-    put(&files, "scene.osn", &root("result"));
+    put(&files, "scene.esn", &root("result"));
     let mut session = open(
         &files,
-        orla_session::Session::runtime_for("cpu", Default::default()).unwrap(),
+        entelechy_session::Session::runtime_for("cpu", Default::default()).unwrap(),
     );
     let first = session.sync();
     assert_eq!(refusals(&first), 1, "{first:?}");
@@ -508,7 +514,7 @@ fn a_graph_appearing_under_a_refused_root_loads_it() {
     assert_eq!(refusals(&again), 0, "{again:?}");
     assert!(session.graph().is_none());
 
-    put(&files, "sub.osn", &sub("return sample(source);"));
+    put(&files, "sub.esn", &sub("return sample(source);"));
     let found = session.sync();
     assert!(session.graph().is_some(), "{found:?}");
 }
@@ -520,17 +526,13 @@ fn a_refused_library_is_said_once() {
     let files = Arc::new(Memory::default());
     put(
         &files,
-        "scene.osn",
-        "use \"lib.orla\";\nnode n: kernel { requires { field.write; } output result: Image; domain = vec2(2, 2); compute { return vec4(1.0, 1.0, 1.0, 1.0); } }\noutput result <- n.result;\n",
+        "scene.esn",
+        "use \"lib.ent\";\nnode n: kernel { requires { field.write; } output result: Image; domain = vec2(2, 2); compute { return vec4(1.0, 1.0, 1.0, 1.0); } }\noutput result <- n.result;\n",
     );
-    put(
-        &files,
-        "lib.orla",
-        "fn tint() -> Vec4 { return nothing; }\n",
-    );
+    put(&files, "lib.ent", "fn tint() -> Vec4 { return nothing; }\n");
     let mut session = open(
         &files,
-        orla_session::Session::runtime_for("cpu", Default::default()).unwrap(),
+        entelechy_session::Session::runtime_for("cpu", Default::default()).unwrap(),
     );
     session.sync();
     let again = session.sync();

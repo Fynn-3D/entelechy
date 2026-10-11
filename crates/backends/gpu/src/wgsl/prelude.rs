@@ -420,7 +420,7 @@ fn begin_work() {{
     looked = 0u;
     next_look = {}u;
 }}",
-        orla_ir::WORK_BLOCK.min(budget + 1)
+        entelechy_ir::WORK_BLOCK.min(budget + 1)
     );
     if can_fail(module) {
         // An invocation records only its first failure, where the
@@ -484,10 +484,10 @@ fn settle_left() {{
         owed = 0u;
     }}
 }}",
-                shift = orla_ir::WORK_BLOCK.trailing_zeros(),
-                mask = orla_ir::WORK_BLOCK - 1,
+                shift = entelechy_ir::WORK_BLOCK.trailing_zeros(),
+                mask = entelechy_ir::WORK_BLOCK - 1,
                 past = budget + 1,
-                handed = 64 * orla_ir::WORK_BLOCK,
+                handed = 64 * entelechy_ir::WORK_BLOCK,
             );
         }
         out.push_str(CHECKED_HELPERS);
@@ -708,7 +708,7 @@ pub(crate) fn emit_memory_writer(
     out: &mut String,
     module: &Module,
     index: usize,
-    port: &orla_ir::Port,
+    port: &entelechy_ir::Port,
 ) {
     let element = port.element();
     let slot = CONTEXT_HEAD + index;
@@ -774,7 +774,12 @@ pub(crate) fn emit_memory_writer(
 
 /// Emits `linear_in{i}(c)`: the input interpolated at a fractional
 /// position, element centres at half-integers, clamped at the edges.
-pub(crate) fn emit_linear(out: &mut String, module: &Module, index: usize, port: &orla_ir::Port) {
+pub(crate) fn emit_linear(
+    out: &mut String,
+    module: &Module,
+    index: usize,
+    port: &entelechy_ir::Port,
+) {
     let element = port.element();
     if !all_floats(module, element) {
         return;

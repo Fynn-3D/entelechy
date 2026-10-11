@@ -17,8 +17,8 @@ joint. A voxel is 5 cm, the skin's units meters. The `voxel` package's
 view draws it.
 
 ```sh
-orla-player examples/golem/scene.osn
-orla-player examples/golem/scene.osn --param yaw=2.0
+entelechy-player examples/golem/scene.esn
+entelechy-player examples/golem/scene.esn --param yaw=2.0
 ```
 
 ## Tests

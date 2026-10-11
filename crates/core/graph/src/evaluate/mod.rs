@@ -24,8 +24,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
-use orla_abi::{Capability, Context, Domain, FieldData, Handle, Invocation, Type, Value};
-use orla_kernel::{
+use entelechy_abi::{Capability, Context, Domain, FieldData, Handle, Invocation, Type, Value};
+use entelechy_kernel::{
     ExecutionError, Generation, HostError, KernelId, KernelVersion, PrepareError, Run, Runtime,
     Ticket,
 };
@@ -88,7 +88,7 @@ pub struct Report {
     pub timings: Vec<(NodeId, std::time::Duration)>,
     /// Each executed node's runs in the clocked frame, in evaluation order:
     /// those the device was given between its marks
-    /// ([`orla_kernel::Runtime::clock_mark`]), which the frame's clock
+    /// ([`entelechy_kernel::Runtime::clock_mark`]), which the frame's clock
     /// times once the device has done them.
     pub clocked: Vec<(NodeId, std::ops::Range<usize>)>,
     /// Where each executed node ran, in evaluation order.
@@ -257,20 +257,20 @@ struct Group {
     chain: Option<(usize, usize)>,
     /// While the plan is made, the fused module of the producers inlined
     /// so far; prepared once the group is known to execute.
-    fused: Option<Arc<orla_ir::Validated>>,
+    fused: Option<Arc<entelechy_ir::Validated>>,
 }
 
 impl Group {
     /// The manifest of what the group computes: its fused module's, else
     /// its version's.
-    fn manifest(&self) -> &orla_kernel::Manifest {
+    fn manifest(&self) -> &entelechy_kernel::Manifest {
         self.fused
             .as_ref()
             .map_or_else(|| self.version.manifest(), |module| &module.manifest)
     }
 
     /// The IR of what the group computes, when it has one.
-    fn module(&self) -> Option<&orla_ir::Validated> {
+    fn module(&self) -> Option<&entelechy_ir::Validated> {
         self.fused.as_deref().or_else(|| self.version.module())
     }
 
@@ -786,7 +786,7 @@ impl Evaluator {
             let mut placements = Vec::new();
             // Every node run on the frame, in order, with its device
             // status, checked before anything commits.
-            let mut checks: Vec<(NodeId, Vec<Box<dyn orla_kernel::Check>>)> = Vec::new();
+            let mut checks: Vec<(NodeId, Vec<Box<dyn entelechy_kernel::Check>>)> = Vec::new();
             runtime.take_checks();
             runtime.begin_evaluation();
             let mut pending = Vec::new();
@@ -886,7 +886,7 @@ impl Evaluator {
                     runtime.discard_run(running.run);
                 }
                 runtime.take_moved();
-                let started = orla_kernel::clock::now();
+                let started = entelechy_kernel::clock::now();
                 let first_run = runtime.clock_mark();
                 let run = |runtime: &mut Runtime| match group.chain {
                     Some(chain) => {
@@ -927,7 +927,7 @@ impl Evaluator {
                 // own time otherwise.
                 let took = runtime
                     .last_measured()
-                    .unwrap_or_else(|| orla_kernel::clock::since(started));
+                    .unwrap_or_else(|| entelechy_kernel::clock::since(started));
                 timings.push((node.id.clone(), took));
                 clocked.push((node.id.clone(), first_run..runtime.clock_mark()));
                 checks.push((node.id.clone(), runtime.take_checks()));
@@ -975,7 +975,7 @@ impl Evaluator {
                         self.cached(node, port).ok_or_else(|| {
                             // Its real outputs, for the suggestion.
                             let near = self.ledger.entry(node).and_then(|cached| {
-                                orla_abi::names::nearest(
+                                entelechy_abi::names::nearest(
                                     port,
                                     cached.output_names.iter().map(String::as_str),
                                 )
@@ -1318,12 +1318,12 @@ fn held_nodes(graph: &Graph, pinned: &BTreeSet<NodeId>) -> BTreeSet<NodeId> {
 
 /// Whether a run failed for want of room in the Host, which letting go of
 /// what the frame is done with may give it.
-fn short_of_room(error: &orla_kernel::ExecutionError) -> bool {
+fn short_of_room(error: &entelechy_kernel::ExecutionError) -> bool {
     matches!(
         error,
-        orla_kernel::ExecutionError::OverRoom { .. }
-            | orla_kernel::ExecutionError::Abi(orla_abi::AbiError::Host(
-                orla_abi::HostError::BudgetExceeded { .. }
+        entelechy_kernel::ExecutionError::OverRoom { .. }
+            | entelechy_kernel::ExecutionError::Abi(entelechy_abi::AbiError::Host(
+                entelechy_abi::HostError::BudgetExceeded { .. }
             ))
     )
 }

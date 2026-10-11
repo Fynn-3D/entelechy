@@ -1,8 +1,8 @@
-use orla_kernel::{Context, Domain, Invocation};
+use entelechy_kernel::{Context, Domain, Invocation};
 
 const COLOR: &str = "kernel test.color@1 { requires { field.read; field.write; } input source: Image; output result: Image; compute { let c = sample(source); return vec4(c.r * 2.0, c.g, c.b, c.a); } }";
 
-fn invocation(input: orla_kernel::Handle) -> Invocation {
+fn invocation(input: entelechy_kernel::Handle) -> Invocation {
     Invocation {
         inputs: vec![input],
         params: vec![],
@@ -115,16 +115,16 @@ fn a_discarded_run_gives_its_room_back() {
 }
 
 /// A runtime on the reference backend, as a session opens one.
-fn cpu(budget_words: usize) -> orla_kernel::Runtime {
-    orla_kernel::Runtime::with_backend(budget_words, Box::new(orla_cpu::CpuBackend))
+fn cpu(budget_words: usize) -> entelechy_kernel::Runtime {
+    entelechy_kernel::Runtime::with_backend(budget_words, Box::new(entelechy_cpu::CpuBackend))
 }
 
 /// Compiles and publishes a Kernel as a session does: compiling is the
 /// caller's step, the runtime takes validated IR.
 fn load(
-    runtime: &mut orla_kernel::Runtime,
+    runtime: &mut entelechy_kernel::Runtime,
     source: &str,
-) -> std::sync::Arc<orla_kernel::KernelVersion> {
-    let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
+) -> std::sync::Arc<entelechy_kernel::KernelVersion> {
+    let module = entelechy_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
     runtime.load(module, source).unwrap()
 }

@@ -9,8 +9,8 @@ pipeline: ffmpeg writes a directory of PNGs, the scene reads it as
 `frames`, `render` writes the result.
 
 ```sh
-orla player examples/clip/scene.osn
-orla replay examples/clip/tests/clip.replay
+entelechy player examples/clip/scene.esn
+entelechy replay examples/clip/tests/clip.replay
 ffmpeg -i in.mp4 clip/%04d.png          # a real clip in, at its rate
-orla render examples/clip/scene.osn --frames 120 --rate 30 --out /tmp/out
+entelechy render examples/clip/scene.esn --frames 120 --rate 30 --out /tmp/out
 ```

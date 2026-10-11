@@ -1,12 +1,12 @@
 # AGENTS.md
 
-**Answers:** what Orla is, what the rules are, and which document answers what.
+**Answers:** what Entelechy is, what the rules are, and which document answers what.
 
 Read in this order; each document answers one question.
 
 | # | Document | Answers |
 | --- | --- | --- |
-| 1 | `AGENTS.md` | What Orla is and what the rules are |
+| 1 | `AGENTS.md` | What Entelechy is and what the rules are |
 | 2 | `README.md` | What it looks like from outside |
 | 3 | `ARCHITECTURE-PLAN.md` | Which phase the work is in, and what accepts it |
 | 4 | `CORE-ARCHITECTURE.md` | Where the boundaries are |
@@ -23,7 +23,7 @@ Then, by the question:
 | What command does this? | `docs/USAGE.md` |
 | What does an agent send over the wire? | `docs/PROTOCOL.md` |
 | What rows is a rig? | `docs/RIGS.md` |
-| What may a Kernel call? | `orla help`, `orla help <name>` |
+| What may a Kernel call? | `entelechy help`, `entelechy help <name>` |
 | Why is it this way and not another? | `docs/DECISIONS.md` |
 
 Then inspect:
@@ -38,7 +38,7 @@ Do not rely on previous-session memory.
 ## Documentation maintenance
 
 - `ARCHITECTURE-PLAN.md` and `CORE-ARCHITECTURE.md` are
-  Orla's architectural bibles. Preserve their original text verbatim. Do not
+  Entelechy's architectural bibles. Preserve their original text verbatim. Do not
   edit, abridge, restructure, or append clarifications without an explicit user
   request to change those documents. General cleanup, consistency reviews, and
   implementation decisions do not authorize changes to these originals.
@@ -57,13 +57,13 @@ Do not rely on previous-session memory.
 - HANDOFF preserves the next action and non-obvious constraints. Git preserves
   history. Dated benchmark artifacts describe experiments, not current guarantees.
 
-## Orla
+## Entelechy
 
-You are building **Orla**.
+You are building **Entelechy**.
 
-Orla is not an application.
+Entelechy is not an application.
 
-Orla is a runtime for software that can evolve while it is running.
+Entelechy is a runtime for software that can evolve while it is running.
 
 > **Host is the world.  
 > Kernel is the law.  
@@ -81,7 +81,7 @@ Host Core
 ↓
 Capability ABI
 ↓
-Orla IR
+Entelechy IR
 ↓
 Kernel Runtime
 ↓
@@ -174,19 +174,19 @@ No capability means no access.
 
 ## IR
 
-`.orla` source is not the machine.
+`.ent` source is not the machine.
 
 ```text
-.orla
+.ent
 ↓
 AST
 ↓
-Orla IR
+Entelechy IR
 ↓
 Backend
 ```
 
-Keep Orla IR independent from CPU, GPU, WASM, Metal, CUDA, or any single backend.
+Keep Entelechy IR independent from CPU, GPU, WASM, Metal, CUDA, or any single backend.
 
 The frontend describes computation.
 
@@ -264,7 +264,7 @@ Make side effects explicit.
 
 ## AI
 
-Orla is built for AI to create through Kernels and Graphs. AI Runtime and
+Entelechy is built for AI to create through Kernels and Graphs. AI Runtime and
 AI Control Layer describe creative responsibilities, not a required deployment
 location. Keep creation contracts open to any agent or AI-native CLI, independent
 of model provider. All integrations follow the same authority and validation rules.
@@ -296,8 +296,8 @@ parallel resource lifecycles or execution engines for new element types, audio,
 or geometry. Preserve owned-value semantics and backend-neutral ABI boundaries.
 
 Keep runtime implementation, launchers, and runtime infrastructure tests in Rust.
-Application behavior and verification predicates belong in `.orla`, composition
-in `.osn`, and input replay in declarative data. Application authors must not need
+Application behavior and verification predicates belong in `.ent`, composition
+in `.esn`, and input replay in declarative data. Application authors must not need
 new Rust test code or a native rebuild to validate their work.
 Keep each demo in `examples/<demo>/`, with its project entry, `kernels/`, and
 authored `tests/`. Demo-specific documentation belongs in that directory. Follow
@@ -310,13 +310,13 @@ reference interpreter and the conformance matrix. Only the interface
 layer may depend on everything.
 Keep core, frontend, the interpreter and the conformance matrix free of
 external dependencies. Two backends take the one dependency their machine
-needs and keep it behind the `Backend` boundary: `orla-gpu` takes wgpu (and
-pollster to wait on it) to reach a device, and `orla-jit` takes Cranelift to
-generate native code. The interface layer (`orla-session`, `orla-protocol`,
-the `orla` CLI, the Player, `orla-import`, `orla-export`, `orla-ffi`) is the
+needs and keep it behind the `Backend` boundary: `entelechy-gpu` takes wgpu (and
+pollster to wait on it) to reach a device, and `entelechy-jit` takes Cranelift to
+generate native code. The interface layer (`entelechy-session`, `entelechy-protocol`,
+the `entelechy` CLI, the Player, `entelechy-import`, `entelechy-export`, `entelechy-ffi`) is the
 only other place that may take them, for devices, for formats that are not
-worth decoding twice, and for the protocol's JSON; `orla-formats`, the codecs
-they share, takes none. `orla-jit` and `orla-ffi` are the
+worth decoding twice, and for the protocol's JSON; `entelechy-formats`, the codecs
+they share, takes none. `entelechy-jit` and `entelechy-ffi` are the
 two crates allowed `unsafe`: the JIT calls the code it produces, the FFI
 reads the pointers and strings a C caller hands it, and nothing else.
 Bridges to other programs live in `bridges/<program>/`, written in that
@@ -327,14 +327,14 @@ and nothing in the workspace depends on them.
 Do not introduce scripts or interpreter dependencies in other languages.
 Data formats and documentation are not executable
 language dependencies. External agents remain free to use any implementation
-language when communicating through Orla's public contracts.
+language when communicating through Entelechy's public contracts.
 
-Keep `.orla` for Kernel source and `.osn` for declarative scene composition, with
-external Kernel references or inline `.orla` bodies. JSON remains a structured
+Keep `.ent` for Kernel source and `.esn` for declarative scene composition, with
+external Kernel references or inline `.ent` bodies. JSON remains a structured
 protocol representation. Source resolution belongs to the caller or file loader. Scene
 documents contain authored initial state, not implicit live-state checkpoints.
 
-Do not grow the `.orla` language or the `.osn` syntax on your own: no new
+Do not grow the `.ent` language or the `.esn` syntax on your own: no new
 form, keyword, builtin or shorthand without the owner's explicit word,
 however much friction writing a demo shows. Meet friction with a function,
 a package or an example; see `docs/DECISIONS.md`, *The language grows only
@@ -390,8 +390,8 @@ Protect this order:
 ```text
 1. Host Core
 2. Capability ABI
-3. Minimal .orla Language
-4. Orla IR
+3. Minimal .ent Language
+4. Entelechy IR
 5. Compiler
 6. Kernel Runtime
 7. Atomic Hot Reload
@@ -408,10 +408,10 @@ Do not build the beautiful editor before the runtime is real.
 
 ## First Proof
 
-Orla becomes real when:
+Entelechy becomes real when:
 
 ```text
-.orla compiles
+.ent compiles
 
 Kernel calls Host only through ABI
 
@@ -455,7 +455,7 @@ Backend leakage
 
 ## Final Rule
 
-Do not build features into Orla.
+Do not build features into Entelechy.
 
 Build the conditions from which features can emerge.
 

@@ -13,7 +13,7 @@ clip ─ skin.stride ─ skin.palette ─ skin.apply ─ skin.place ─ raster
    clock, and the clock as it was last evaluation (<~)
 ```
 
-- [`skin.stride@1`](../../packages/skin.orlapkg/kernels/skin.orla) loops
+- [`skin.stride@1`](../../packages/skin.entpkg/kernels/skin.ent) loops
   the clip with the root's ground travel removed.
 - `skin.travel@1` gives the root's travel between the previous clock
   and now, loops counted.

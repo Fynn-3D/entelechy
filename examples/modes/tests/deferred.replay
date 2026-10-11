@@ -1,4 +1,4 @@
-scene ../parts/deferred/scene.osn
+scene ../parts/deferred/scene.esn
 
 # One Kernel wrote the G-buffer: the blue sphere's color, its normal
 # and its distance at one pixel, the sky's far depth at another.

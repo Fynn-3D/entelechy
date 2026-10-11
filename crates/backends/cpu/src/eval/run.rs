@@ -1,8 +1,8 @@
 //! The machine that runs word code: one frame per call on a stack, the
 //! memories' working copies, and what a trace records.
 
-use orla_abi::Domain;
-use orla_ir::BinaryOp;
+use entelechy_abi::Domain;
+use entelechy_ir::BinaryOp;
 
 use crate::{ArithmeticError, ExecutionError};
 
@@ -21,7 +21,7 @@ pub(crate) const CALL_RECORDS: usize = 256;
 
 /// The partial-block work a thread gathers before handing it to the
 /// run's shared total.
-const LEFT_HANDED: u64 = 64 * orla_ir::WORK_BLOCK as u64;
+const LEFT_HANDED: u64 = 64 * entelechy_ir::WORK_BLOCK as u64;
 
 /// Interpreter state for one thread: a stack of words holding every
 /// frame, and the loop indices of the running element.
@@ -44,7 +44,7 @@ pub(crate) struct Machine<'p, 's> {
     pub(super) emitted: Vec<u32>,
     /// A scatter's charge against the Host's budget: every emitted pair
     /// plus the word naming its element.
-    pub(super) held: Option<&'p orla_rules::Held>,
+    pub(super) held: Option<&'p entelechy_rules::Held>,
     pub(super) stack: Vec<u32>,
     /// Top of the stack: where the next call's frame begins.
     pub(super) sp: usize,
@@ -140,7 +140,7 @@ impl<'p, 's> Machine<'p, 's> {
     }
 
     /// Charges what this machine emits to `held`.
-    pub(crate) fn hold(&mut self, held: &'p orla_rules::Held) {
+    pub(crate) fn hold(&mut self, held: &'p entelechy_rules::Held) {
         self.held = Some(held);
     }
 
@@ -269,7 +269,7 @@ impl<'p, 's> Machine<'p, 's> {
         &self,
         function: usize,
         frame: &[u32],
-        id: orla_ir::ValueId,
+        id: entelechy_ir::ValueId,
     ) -> Vec<u32> {
         let loc = self.program.code.functions[function].locs[id.0 as usize];
         frame[loc.at..loc.at + loc.n].to_vec()
@@ -320,7 +320,7 @@ impl<'p, 's> Machine<'p, 's> {
     /// The words of the entry's value `id` after the last run (the entry
     /// frame starts the stack): its last assignment, or zeros if its
     /// block never ran.
-    pub(crate) fn entry_value(&self, id: orla_ir::ValueId) -> Vec<u32> {
+    pub(crate) fn entry_value(&self, id: entelechy_ir::ValueId) -> Vec<u32> {
         let loc = self.program.code.entry.locs[id.0 as usize];
         self.stack[loc.at..loc.at + loc.n].to_vec()
     }
@@ -355,7 +355,7 @@ impl<'p, 's> Machine<'p, 's> {
     /// Keeps the running element's partial block; hands the thread's sum
     /// on at `LEFT_HANDED`.
     fn keep_left(&mut self) -> Result<(), ExecutionError> {
-        self.left += u64::from(self.work % orla_ir::WORK_BLOCK);
+        self.left += u64::from(self.work % entelechy_ir::WORK_BLOCK);
         self.work = 0;
         self.looked = 0;
         if self.left >= LEFT_HANDED {
@@ -389,7 +389,7 @@ impl<'p, 's> Machine<'p, 's> {
         if self.work > budget {
             return Err(self.exhausted(budget));
         }
-        let filled = self.work / orla_ir::WORK_BLOCK - self.looked / orla_ir::WORK_BLOCK;
+        let filled = self.work / entelechy_ir::WORK_BLOCK - self.looked / entelechy_ir::WORK_BLOCK;
         self.looked = self.work;
         if filled > 0 && run.spend(filled) {
             return Err(run.overrun());
@@ -1187,7 +1187,7 @@ impl<'p, 's> Machine<'p, 's> {
                 // a half splits into the lower neighbour and a weight,
                 // each axis clamped at the edges.
                 let axis = |v: f32, limit: u32| -> (usize, usize, f32) {
-                    let (lower, upper, weight) = orla_rules::linear_axis(v, limit);
+                    let (lower, upper, weight) = entelechy_rules::linear_axis(v, limit);
                     (lower as usize, upper as usize, weight)
                 };
                 let (x0, x1, fx) = axis(address[0], domain.width());
@@ -1287,9 +1287,9 @@ pub(super) fn read_address(stack: &[u32], at: usize, kind: Address, rest: f32) -
 /// Each axis floored and clamped into range (NaN counts as zero).
 pub(super) fn clamp_address(domain: Domain, address: [f32; 3]) -> [u32; 3] {
     [
-        orla_rules::clamp_axis(address[0], domain.width()),
-        orla_rules::clamp_axis(address[1], domain.height()),
-        orla_rules::clamp_axis(address[2], domain.depth()),
+        entelechy_rules::clamp_axis(address[0], domain.width()),
+        entelechy_rules::clamp_axis(address[1], domain.height()),
+        entelechy_rules::clamp_axis(address[2], domain.depth()),
     ]
 }
 

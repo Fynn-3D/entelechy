@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 window 320 180
 
 # The clip travels 1.2 along -z a loop, a second a loop, and plays in

@@ -1,9 +1,9 @@
-"""Opens a GLB Orla wrote and says what Blender found in it.
+"""Opens a GLB Entelechy wrote and says what Blender found in it.
 
     blender -b --python bridges/blender/test_back.py -- --glb /tmp/arm.glb
 
 The loop this closes is the one someone actually works in: rig in
-Blender, push or import into Orla, and open what Orla writes back.
+Blender, push or import into Entelechy, and open what Entelechy writes back.
 """
 
 import os

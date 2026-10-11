@@ -30,4 +30,4 @@ node scan: image.blur@1 {
 output result <- scan.result;
 output gray <- gray.result;
 // use kernels directory
-// use ../shared/tonemap.orla
+// use ../shared/tonemap.ent

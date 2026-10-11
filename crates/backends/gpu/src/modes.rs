@@ -92,7 +92,7 @@ impl GpuBackend {
                 });
             }
             let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("orla repeat"),
+                label: Some("entelechy repeat"),
                 layout: &pipeline.main.1,
                 entries: &entries,
             });
@@ -101,7 +101,7 @@ impl GpuBackend {
         .collect();
         let times = repeat.saturating_sub(1) as usize;
         let describe = wgpu::ComputePassDescriptor {
-            label: Some("orla repeat"),
+            label: Some("entelechy repeat"),
             timestamp_writes: None,
         };
         if wgsl::output_shares_words(module, 0) {
@@ -163,7 +163,7 @@ impl GpuBackend {
         failure: Option<&wgpu::Buffer>,
     ) -> wgpu::Buffer {
         let count = element_count.max(1);
-        let per_block = orla_rules::prefix::block(count);
+        let per_block = entelechy_rules::prefix::block(count);
         let blocks = count.div_ceil(per_block);
         let plan: [u32; 4] = [count as u32, per_block as u32, blocks as u32, 0];
         let plan_bytes: Vec<u8> = plan.iter().flat_map(|v| v.to_le_bytes()).collect();
@@ -225,13 +225,13 @@ impl GpuBackend {
                 ]);
             }
             let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("orla prefix"),
+                label: Some("entelechy prefix"),
                 layout,
                 entries: &entries,
             });
             let last = index + 1 == passes.len();
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("orla prefix"),
+                label: Some("entelechy prefix"),
                 timestamp_writes: timing.and_then(|query_set| {
                     last.then_some(wgpu::ComputePassTimestampWrites {
                         query_set,
@@ -282,7 +282,7 @@ impl GpuBackend {
         // level before, so nothing stale is seen.
         let other = self.spare.take(
             &self.device,
-            (orla_rules::reduce::after_fold(count as usize) as u64 * stride).max(16),
+            (entelechy_rules::reduce::after_fold(count as usize) as u64 * stride).max(16),
             wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
@@ -332,14 +332,14 @@ impl GpuBackend {
                 });
             }
             let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("orla reduce"),
+                label: Some("entelechy reduce"),
                 layout: reduce_layout,
                 entries: &fold_entries,
             });
             // Every level closes the window; the last one to write is
             // the end of the node's work.
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("orla reduce"),
+                label: Some("entelechy reduce"),
                 timestamp_writes: timing.map(|query_set| wgpu::ComputePassTimestampWrites {
                     query_set,
                     beginning_of_pass_write_index: None,
@@ -348,7 +348,7 @@ impl GpuBackend {
             });
             pass.set_pipeline(reduce_pipeline);
             pass.set_bind_group(0, &group, &[]);
-            let ahead = orla_rules::reduce::after_fold(count as usize) as u32;
+            let ahead = entelechy_rules::reduce::after_fold(count as usize) as u32;
             let (x, y) = wgsl::folded(ahead.div_ceil(wgsl::REDUCE_WORKGROUP));
             pass.dispatch_workgroups(x, y, 1);
             drop(pass);
@@ -388,7 +388,7 @@ impl GpuBackend {
         ) = (scatter, highs)
         {
             let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("orla scatter highs"),
+                label: Some("entelechy scatter highs"),
                 layout: &totals.from_base.1,
                 entries: &[
                     wgpu::BindGroupEntry {
@@ -406,7 +406,7 @@ impl GpuBackend {
                 ],
             });
             let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("orla scatter highs"),
+                label: Some("entelechy scatter highs"),
                 timestamp_writes: None,
             });
             compute.set_pipeline(&totals.from_base.0);
@@ -423,7 +423,7 @@ impl GpuBackend {
         };
         let keys = &keys.from_base;
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("orla scatter"),
+            label: Some("entelechy scatter"),
             layout: &keys.1,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -441,7 +441,7 @@ impl GpuBackend {
             ],
         });
         let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("orla scatter keys"),
+            label: Some("entelechy scatter keys"),
             timestamp_writes: None,
         });
         compute.set_pipeline(&keys.0);
@@ -526,7 +526,7 @@ impl GpuBackend {
         ];
         let bind = |layout: &wgpu::BindGroupLayout, entries: &[wgpu::BindGroupEntry]| {
             self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("orla scatter"),
+                label: Some("entelechy scatter"),
                 layout,
                 entries,
             })
@@ -537,7 +537,7 @@ impl GpuBackend {
                         offsets: &[u32],
                         groups: u32| {
             let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("orla scatter"),
+                label: Some("entelechy scatter"),
                 timestamp_writes: timing.map(|query_set| wgpu::ComputePassTimestampWrites {
                     query_set,
                     beginning_of_pass_write_index: None,
@@ -637,7 +637,7 @@ impl GpuBackend {
                 // pass run in order, each seeing the last one's writes.
                 {
                     let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("orla scatter sort"),
+                        label: Some("entelechy scatter sort"),
                         timestamp_writes: timing.map(|query_set| {
                             wgpu::ComputePassTimestampWrites {
                                 query_set,

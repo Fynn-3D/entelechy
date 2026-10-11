@@ -1,0 +1,13 @@
+//! A Gaussian blur, both ways, as a sub-graph. `sigma` is in the
+//! output's pixels; `domain` smaller than the source shrinks as it
+//! blurs. Place it with
+//!   node soft: graph "image.entpkg/graphs/blur.esn" { source <- x.result; sigma = 3.0; }
+use "../kernels/filter.ent";
+
+input source: Image;
+param sigma: Float = 2.0;
+
+node across: image.blur@1 { source <- source; axis = vec2(1.0, 0.0); sigma = sigma; }
+node down: image.blur@1 { source <- across.result; axis = vec2(0.0, 1.0); sigma = sigma; }
+
+output result <- down.result;

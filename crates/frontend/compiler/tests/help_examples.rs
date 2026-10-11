@@ -3,8 +3,8 @@
 //! and elides nothing with `...`) parses where such a piece is written: a
 //! document, a Kernel's members, a Kernel's body, or a node's members.
 
-use orla_compiler::help;
-use orla_language::parse_document;
+use entelechy_compiler::help;
+use entelechy_language::parse_document;
 
 /// The words a whole declaration begins with.
 const DECLARES: [&str; 16] = [

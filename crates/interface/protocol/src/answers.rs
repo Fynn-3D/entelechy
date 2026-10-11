@@ -9,7 +9,7 @@ use std::collections::VecDeque;
 
 use serde_json::Value as Json;
 
-use orla_session::{Origin, Publishing, Session};
+use entelechy_session::{Origin, Publishing, Session};
 
 use crate::create;
 use crate::request::Request;

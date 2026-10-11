@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 window 320 180
 
 # At rest both clips stand where the rig does, so the arm is straight

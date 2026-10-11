@@ -1,0 +1,103 @@
+// A flight through a nebula, all of it noise. The cloud's density is a
+// fractal sum of gradient noise, carved into filaments by ridged noise;
+// its colour turns round the wheel with another; stars are the cells of
+// a hash, the hottest white and the coolest red. The camera drifts
+// forward through it. The picture is light with, in w, how far away what
+// each pixel shows is, for the image package's finish.
+use "../../../packages/noise.entpkg";
+use "../../../packages/image.entpkg";
+
+/// How thick the cloud is at `p`, 0 upward.
+fn cloud(p: Vec3) -> Float {
+    let body = fbm3(p * 0.09, 4, 7) * 0.5 + 0.5;
+    let veins = ridged3(p * 0.05 + vec3(3.1, 0.0, 0.0), 3, 11);
+    return max(body * veins - 0.42, 0.0) * 4.0;
+}
+
+/// The cloud's colour at `p`: round the wheel, slowly across space.
+fn tint(p: Vec3) -> Vec3 {
+    return hue(0.75 + 0.6 * fbm3(p * 0.03 + vec3(0.0, 9.0, 0.0), 2, 3));
+}
+
+/// The stars behind: one cell in six hundred of the sky holds one, its
+/// warmth from the hash.
+fn stars(dir: Vec3) -> Vec3 {
+    let cell = floor(dir * 400.0);
+    let h = hash3(cell, 5);
+    let lit = if h > 0.9983 { (h - 0.9983) / 0.0017 } else { 0.0 };
+    return blackbody(0.55 + 0.45 * hash3(cell, 6)) * lit * 3.0;
+}
+
+/// The camera at `t`: drifting forward, turning slowly.
+struct Eye { at: Vec3; fwd: Vec3; right: Vec3; up: Vec3; }
+
+fn camera(t: Float) -> Eye {
+    let at_eye = vec3(sin(t * 0.07) * 20.0, sin(t * 0.05) * 8.0, 0.0 - t * 6.0);
+    let fwd = normalize(vec3(sin(t * 0.11) * 0.3, sin(t * 0.08) * 0.15, -1.0));
+    let right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
+    return Eye { at: at_eye, fwd: fwd, right: right, up: cross(right, fwd) };
+}
+
+/// Each pixel's ray through the cloud, `steps` samples a metre and a half
+/// apart: light gathered, the stars behind what it lets through, and the
+/// depth where it grew half opaque (or 200 metres).
+kernel nebula.look@1 {
+    requires { field.write; time.read; }
+    param steps: Int = 64;
+    output result: Grid<Vec4>;
+    compute {
+        let t = time();
+        let dims = domain();
+        let px = coord() + vec2(0.5, 0.5);
+        let eye = camera(t);
+        let dir = normalize(eye.fwd * dims.y * 1.1 + eye.right * (px.x - dims.x * 0.5) - eye.up * (px.y - dims.y * 0.5));
+        let marched = loop steps with s = vec4(0.0, 0.0, 0.0, 1.0) {
+            let d = 2.0 + float(index()) * 1.5;
+            let p = eye.at + dir * d;
+            let dense = cloud(p) * 0.35;
+            let kept = exp(0.0 - dense * 1.5);
+            let glow = tint(p) * (0.35 + 2.2 * max(fbm3(p * 0.2, 2, 13), 0.0));
+            let light = vec3(s.x, s.y, s.z) + glow * (s.w * (1.0 - kept));
+            vec4(light.x, light.y, light.z, s.w * kept)
+        };
+        let seen = vec3(marched.x, marched.y, marched.z) + stars(dir) * marched.w;
+        let depth = if marched.w < 0.5 { 30.0 } else { 200.0 };
+        return vec4(seen.x, seen.y, seen.z, depth);
+    }
+}
+
+/// How far the camera is focused: one row.
+kernel nebula.lens@1 {
+    requires { field.write; }
+    param distance: Float = 30.0;
+    output result: Rows<Float>;
+    compute { return distance; }
+}
+
+/// What the noise package gives at a few points, for the tests: a hash of
+/// whole numbers (x), value noise (y), gradient noise (z), and the
+/// distance to the nearest Worley point (w).
+kernel nebula.probe@1 {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    compute {
+        let i = element();
+        let p = vec3(float(i) * 1.37 + 0.2, float(i) * 0.71 - 3.1, float(i) * 2.13 + 5.7);
+        return vec4(unit_of(hash_int3(i, i * 3, i * 7, 1)), value3(p, 2), gradient3(p, 3), worley3(p, 4).x);
+    }
+}
+
+/// How much curl noise spreads or gathers at a few points: its
+/// divergence, taken across the step the curl itself takes, so the
+/// differences cancel; none, up to rounding.
+kernel nebula.spread@1 {
+    requires { field.write; }
+    output result: Rows<Float>;
+    compute {
+        let p = vec3(float(element()) * 0.93 + 0.31, 1.7, float(element()) * 0.41 - 2.2);
+        let e = 0.1;
+        return (curl3(p + vec3(e, 0.0, 0.0), 9).x - curl3(p - vec3(e, 0.0, 0.0), 9).x
+              + curl3(p + vec3(0.0, e, 0.0), 9).y - curl3(p - vec3(0.0, e, 0.0), 9).y
+              + curl3(p + vec3(0.0, 0.0, e), 9).z - curl3(p - vec3(0.0, 0.0, e), 9).z) / (2.0 * e);
+    }
+}

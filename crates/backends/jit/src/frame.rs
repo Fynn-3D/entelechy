@@ -10,7 +10,7 @@
 //! bound: it counts each value's words, though a struct built from
 //! another shares the other's words in the compiled code.
 
-use orla_ir::{Function, Instruction, Module, Op, Type, type_name, words};
+use entelechy_ir::{Function, Instruction, Module, Op, Type, type_name, words};
 
 /// Stack the compiled functions of one module may take together: a
 /// small part of the smallest thread stack the code runs on.

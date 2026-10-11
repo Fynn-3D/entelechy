@@ -1,0 +1,7 @@
+// The tiles part on its own, the atlas read from a file the Host
+// watches: edit assets/atlas.png and the tiles change.
+input atlas: Image = "assets/atlas.png";
+
+node tiles: graph "tiles.esn" { atlas <- atlas; }
+
+output result <- tiles.result;

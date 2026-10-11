@@ -3,7 +3,7 @@
 //! come from the IR's table and typing rules; the other builtins are the
 //! ones the lowering dispatches.
 
-use orla_ir::{Capability, Intrinsic, Type};
+use entelechy_ir::{Capability, Intrinsic, Type};
 
 /// One builtin as `help` shows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -330,7 +330,7 @@ pub fn forms() -> Vec<Form> {
         form(
             "input",
             "kernel",
-            "input x: Image;   = \"atlas.png\";   = text \"ORLA\";   = frames \"clip/\" at 30;",
+            "input x: Image;   = \"atlas.png\";   = text \"ENTELECHY\";   = frames \"clip/\" at 30;",
             "In a Kernel, a Field it reads, bound by the node that runs it (`source <- other.result;`); in a scene, a Field the caller supplies, or one the Host reads from a file, from text, or frame by frame from a directory.",
         ),
         form(
@@ -492,7 +492,7 @@ pub fn forms() -> Vec<Form> {
         form(
             "graph",
             "graph",
-            "node name: graph \"other.osn\" { source <- src; param = 2; }",
+            "node name: graph \"other.esn\" { source <- src; param = 2; }",
             "Another document placed as a node: its nodes join under `name.`, its inputs take the wiring, its outputs are read as `name.output`.",
         ),
         form(
@@ -522,7 +522,7 @@ pub fn forms() -> Vec<Form> {
         form(
             "use",
             "document",
-            "use \"kernels/\";   use \"name.orlapkg\";",
+            "use \"kernels/\";   use \"name.entpkg\";",
             "The documents whose Kernels and declarations this one brings in: a file, a directory, or a package; what those use in turn is theirs.",
         ),
         form(
@@ -549,7 +549,7 @@ pub fn similar(name: &str) -> Vec<&'static str> {
     let close = |candidate: &str| {
         candidate.contains(name)
             || name.contains(candidate)
-            || orla_language::edit_distance(candidate, name) <= 2
+            || entelechy_language::edit_distance(candidate, name) <= 2
     };
     builtins()
         .into_iter()

@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 window 192 108
 param count 4096
 param cols 16

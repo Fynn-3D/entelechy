@@ -7,10 +7,10 @@
 pub mod hud;
 pub mod pad;
 
-use orla_graph::{NodeId, Report};
-use orla_kernel::{Context, Handle, InputState};
+use entelechy_graph::{NodeId, Report};
+use entelechy_kernel::{Context, Handle, InputState};
 
-pub use orla_rules::placement::{Placement, placement};
+pub use entelechy_rules::placement::{Placement, placement};
 pub use pad::{Pad, PadAxis, PadButton};
 
 use crate::Session;
@@ -495,7 +495,7 @@ impl Play {
     }
 
     /// Says a failed evaluation once, and keeps it as the status.
-    fn failed(&mut self, error: &orla_graph::EvaluateError) {
+    fn failed(&mut self, error: &entelechy_graph::EvaluateError) {
         let message = format!("evaluation failed: {error}");
         if self.reported.failed(&message) {
             self.said.push(format!("{message}; last frame is kept"));
@@ -672,7 +672,7 @@ impl Play {
             None => String::new(),
         };
         // Nodes routed off the main backend, and the bytes carried.
-        let routed: Vec<&orla_graph::Placed> = report
+        let routed: Vec<&entelechy_graph::Placed> = report
             .placements
             .iter()
             .filter(|placed| placed.routed.is_some())
@@ -759,7 +759,7 @@ mod tests {
     #[test]
     fn a_chattering_pad_button_is_held_once() {
         use super::{PAD_SETTLE, PadButton, Play};
-        let select = orla_kernel::pad::SELECT;
+        let select = entelechy_kernel::pad::SELECT;
         at(10.0);
         let mut play = Play::new(clock);
         play.pad_button(PadButton::Select, true);

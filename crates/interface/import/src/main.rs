@@ -1,4 +1,4 @@
-//! `orla-import`: outside files as the Host's files, outside the
+//! `entelechy-import`: outside files as the Host's files, outside the
 //! runtime. A model becomes vertex and triangle rows and a PNG; a
 //! compressed sound a WAV; a score a notes Field; a drawing the segments
 //! and shapes the `vector` package draws.
@@ -6,11 +6,11 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use orla_import::{audio, font, gltf, midi, svg};
+use entelechy_import::{audio, font, gltf, midi, svg};
 
 const USAGE: &str = "\
 usage:
-  orla-import <file> [--out <dir>] [--rate <fps>] [--chars <text>]
+  entelechy-import <file> [--out <dir>] [--rate <fps>] [--chars <text>]
       A model (.gltf, .glb) becomes <stem>.vertices.field, <stem>.triangles.field
       and, when it has one in PNG, <stem>.albedo.png. A model with a skin also
       becomes <stem>.weights.field and <stem>.skeleton.field, and one

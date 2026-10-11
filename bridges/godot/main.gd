@@ -1,11 +1,11 @@
 ## The bridge's demo: connect to a serving session, run it frame after
-## frame in an OrlaView, set the graph's params from a side panel, reset
+## frame in an EntelechyView, set the graph's params from a side panel, reset
 ## the state, and see the round trip. Everything here goes through
-## OrlaClient; the view is the window.
+## EntelechyClient; the view is the window.
 extends Control
 
-const Client = preload("res://orla_client.gd")
-const View = preload("res://orla_view.gd")
+const Client = preload("res://entelechy_client.gd")
+const View = preload("res://entelechy_view.gd")
 
 var client: Client = Client.new()
 var view: View
@@ -31,7 +31,7 @@ func _ready() -> void:
 
 	url = LineEdit.new()
 	url.text = "127.0.0.1:7788"
-	url.placeholder_text = "host:port of `orla serve --listen`"
+	url.placeholder_text = "host:port of `entelechy serve --listen`"
 	side.add_child(url)
 	var row := HBoxContainer.new()
 	side.add_child(row)

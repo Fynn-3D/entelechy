@@ -1,8 +1,8 @@
 //! A node's written `domain`, accepted into the Graph's [`DomainExpr`]:
 //! the subset of the expression language a domain may use.
 
-use orla_graph::{Compare, DomainExpr, DomainOp, Requirement};
-use orla_language::{BinaryOp, Expr, ExprKind, RequireDecl};
+use entelechy_graph::{Compare, DomainExpr, DomainOp, Requirement};
+use entelechy_language::{BinaryOp, Expr, ExprKind, RequireDecl};
 
 use crate::DocumentError;
 
@@ -188,7 +188,7 @@ pub fn domain_expr(expr: &Expr) -> Result<DomainExpr, DocumentError> {
                 return Err(fail(format!(
                     "`{other}` cannot size a domain; it takes numbers, parameters and {}{}",
                     known.join(", "),
-                    orla_language::did_you_mean(other, known.iter().copied())
+                    entelechy_language::did_you_mean(other, known.iter().copied())
                 )));
             }
         },
@@ -301,7 +301,7 @@ mod tests {
     #[test]
     fn every_function_is_one_a_domain_takes() {
         for function in functions() {
-            let expr = orla_language::parse_literal(function.example)
+            let expr = entelechy_language::parse_literal(function.example)
                 .unwrap_or_else(|e| panic!("{}: {e:?}", function.example));
             assert!(domain_expr(&expr).is_ok(), "{}", function.example);
             assert!(
@@ -310,14 +310,14 @@ mod tests {
                 function.name
             );
         }
-        let expr = orla_language::parse_literal("values(count)").unwrap();
+        let expr = entelechy_language::parse_literal("values(count)").unwrap();
         let refused = domain_expr(&expr).unwrap_err().to_string();
         assert!(refused.contains("did you mean `value`"), "{refused}");
     }
-    use orla_abi::{Domain, Value};
+    use entelechy_abi::{Domain, Value};
 
     fn parse(text: &str) -> DomainExpr {
-        domain_expr(&orla_language::parse_literal(text).unwrap()).unwrap()
+        domain_expr(&entelechy_language::parse_literal(text).unwrap()).unwrap()
     }
 
     #[test]
@@ -510,7 +510,8 @@ mod tests {
             .resolve(&port, &param, &context, &vector)
             .unwrap_err();
         assert!(error.to_string().contains("one number"), "{error}");
-        let error = domain_expr(&orla_language::parse_literal("sin(2.0)").unwrap()).unwrap_err();
+        let error =
+            domain_expr(&entelechy_language::parse_literal("sin(2.0)").unwrap()).unwrap_err();
         assert!(error.to_string().contains("cannot size"), "{error}");
     }
 

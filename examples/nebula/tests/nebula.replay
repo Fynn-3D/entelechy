@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # The nebula through the image package's finish: the picture fills the
 # window, the rays below it carry their depth (where the cloud grew half

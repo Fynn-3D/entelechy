@@ -1,6 +1,6 @@
 [package]
-name = "orla-language"
-description = "Minimal .orla Kernel language frontend: lexer, parser, AST"
+name = "entelechy-language"
+description = "Minimal .ent Kernel language frontend: lexer, parser, AST"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,7 +11,7 @@ rust-version.workspace = true
 doctest = false
 
 [dependencies]
-orla-abi = { path = "../../core/abi" }
+entelechy-abi = { path = "../../core/abi" }
 
 [lints]
 workspace = true

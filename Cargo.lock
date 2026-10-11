@@ -708,6 +708,241 @@ dependencies = [
 ]
 
 [[package]]
+name = "entelechy"
+version = "0.0.2-rc.3"
+dependencies = [
+ "entelechy-compiler",
+ "entelechy-conformance",
+ "entelechy-cpu",
+ "entelechy-formats",
+ "entelechy-graph",
+ "entelechy-ir",
+ "entelechy-kernel",
+ "entelechy-language",
+ "entelechy-protocol",
+ "entelechy-scene",
+ "entelechy-session",
+ "serde_json",
+]
+
+[[package]]
+name = "entelechy-abi"
+version = "0.0.2-rc.3"
+dependencies = [
+ "entelechy-host",
+]
+
+[[package]]
+name = "entelechy-compiler"
+version = "0.0.2-rc.3"
+dependencies = [
+ "entelechy-ir",
+ "entelechy-language",
+]
+
+[[package]]
+name = "entelechy-conformance"
+version = "0.0.2-rc.3"
+dependencies = [
+ "entelechy-abi",
+ "entelechy-ir",
+ "entelechy-rules",
+]
+
+[[package]]
+name = "entelechy-cpu"
+version = "0.0.2-rc.3"
+dependencies = [
+ "entelechy-abi",
+ "entelechy-compiler",
+ "entelechy-conformance",
+ "entelechy-ir",
+ "entelechy-rules",
+]
+
+[[package]]
+name = "entelechy-export"
+version = "0.0.2-rc.3"
+dependencies = [
+ "entelechy-formats",
+ "entelechy-host",
+ "entelechy-import",
+ "serde_json",
+]
+
+[[package]]
+name = "entelechy-ffi"
+version = "0.0.2-rc.3"
+dependencies = [
+ "entelechy-abi",
+ "entelechy-gpu",
+ "entelechy-graph",
+ "entelechy-jit",
+ "entelechy-protocol",
+ "entelechy-session",
+ "wasm-bindgen",
+ "web-sys",
+ "wgpu",
+]
+
+[[package]]
+name = "entelechy-formats"
+version = "0.0.2-rc.3"
+dependencies = [
+ "entelechy-host",
+]
+
+[[package]]
+name = "entelechy-gpu"
+version = "0.0.2-rc.3"
+dependencies = [
+ "entelechy-abi",
+ "entelechy-compiler",
+ "entelechy-conformance",
+ "entelechy-cpu",
+ "entelechy-graph",
+ "entelechy-ir",
+ "entelechy-kernel",
+ "entelechy-rules",
+ "pollster",
+ "wgpu",
+]
+
+[[package]]
+name = "entelechy-graph"
+version = "0.0.2-rc.3"
+dependencies = [
+ "entelechy-abi",
+ "entelechy-ir",
+ "entelechy-kernel",
+]
+
+[[package]]
+name = "entelechy-host"
+version = "0.0.2-rc.3"
+
+[[package]]
+name = "entelechy-import"
+version = "0.0.2-rc.3"
+dependencies = [
+ "entelechy-formats",
+ "entelechy-host",
+ "serde_json",
+ "symphonia",
+ "ttf-parser",
+ "usvg",
+]
+
+[[package]]
+name = "entelechy-ir"
+version = "0.0.2-rc.3"
+dependencies = [
+ "entelechy-abi",
+]
+
+[[package]]
+name = "entelechy-jit"
+version = "0.0.2-rc.3"
+dependencies = [
+ "cranelift-codegen",
+ "cranelift-frontend",
+ "cranelift-jit",
+ "cranelift-module",
+ "cranelift-native",
+ "entelechy-abi",
+ "entelechy-compiler",
+ "entelechy-conformance",
+ "entelechy-cpu",
+ "entelechy-ir",
+ "entelechy-rules",
+]
+
+[[package]]
+name = "entelechy-kernel"
+version = "0.0.2-rc.3"
+dependencies = [
+ "entelechy-abi",
+ "entelechy-ir",
+ "entelechy-rules",
+]
+
+[[package]]
+name = "entelechy-language"
+version = "0.0.2-rc.3"
+dependencies = [
+ "entelechy-abi",
+]
+
+[[package]]
+name = "entelechy-player"
+version = "0.0.2-rc.3"
+dependencies = [
+ "cpal",
+ "entelechy-gpu",
+ "entelechy-graph",
+ "entelechy-kernel",
+ "entelechy-protocol",
+ "entelechy-session",
+ "gilrs",
+ "serde_json",
+ "softbuffer",
+ "winit",
+]
+
+[[package]]
+name = "entelechy-protocol"
+version = "0.0.2-rc.3"
+dependencies = [
+ "entelechy-compiler",
+ "entelechy-formats",
+ "entelechy-graph",
+ "entelechy-ir",
+ "entelechy-kernel",
+ "entelechy-language",
+ "entelechy-scene",
+ "entelechy-session",
+ "serde_json",
+]
+
+[[package]]
+name = "entelechy-rules"
+version = "0.0.2-rc.3"
+dependencies = [
+ "entelechy-abi",
+ "entelechy-ir",
+]
+
+[[package]]
+name = "entelechy-scene"
+version = "0.0.2-rc.3"
+dependencies = [
+ "entelechy-abi",
+ "entelechy-compiler",
+ "entelechy-graph",
+ "entelechy-ir",
+ "entelechy-language",
+]
+
+[[package]]
+name = "entelechy-session"
+version = "0.0.2-rc.3"
+dependencies = [
+ "entelechy-abi",
+ "entelechy-compiler",
+ "entelechy-conformance",
+ "entelechy-cpu",
+ "entelechy-formats",
+ "entelechy-gpu",
+ "entelechy-graph",
+ "entelechy-ir",
+ "entelechy-jit",
+ "entelechy-kernel",
+ "entelechy-language",
+ "entelechy-rules",
+ "entelechy-scene",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1729,241 +1964,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c7c9e0d9b23589f26070720bac724174bfec1083e82f7854cdd0267518343c0"
 dependencies = [
  "num-traits",
-]
-
-[[package]]
-name = "orla"
-version = "0.0.2-rc.3"
-dependencies = [
- "orla-compiler",
- "orla-conformance",
- "orla-cpu",
- "orla-formats",
- "orla-graph",
- "orla-ir",
- "orla-kernel",
- "orla-language",
- "orla-protocol",
- "orla-scene",
- "orla-session",
- "serde_json",
-]
-
-[[package]]
-name = "orla-abi"
-version = "0.0.2-rc.3"
-dependencies = [
- "orla-host",
-]
-
-[[package]]
-name = "orla-compiler"
-version = "0.0.2-rc.3"
-dependencies = [
- "orla-ir",
- "orla-language",
-]
-
-[[package]]
-name = "orla-conformance"
-version = "0.0.2-rc.3"
-dependencies = [
- "orla-abi",
- "orla-ir",
- "orla-rules",
-]
-
-[[package]]
-name = "orla-cpu"
-version = "0.0.2-rc.3"
-dependencies = [
- "orla-abi",
- "orla-compiler",
- "orla-conformance",
- "orla-ir",
- "orla-rules",
-]
-
-[[package]]
-name = "orla-export"
-version = "0.0.2-rc.3"
-dependencies = [
- "orla-formats",
- "orla-host",
- "orla-import",
- "serde_json",
-]
-
-[[package]]
-name = "orla-ffi"
-version = "0.0.2-rc.3"
-dependencies = [
- "orla-abi",
- "orla-gpu",
- "orla-graph",
- "orla-jit",
- "orla-protocol",
- "orla-session",
- "wasm-bindgen",
- "web-sys",
- "wgpu",
-]
-
-[[package]]
-name = "orla-formats"
-version = "0.0.2-rc.3"
-dependencies = [
- "orla-host",
-]
-
-[[package]]
-name = "orla-gpu"
-version = "0.0.2-rc.3"
-dependencies = [
- "orla-abi",
- "orla-compiler",
- "orla-conformance",
- "orla-cpu",
- "orla-graph",
- "orla-ir",
- "orla-kernel",
- "orla-rules",
- "pollster",
- "wgpu",
-]
-
-[[package]]
-name = "orla-graph"
-version = "0.0.2-rc.3"
-dependencies = [
- "orla-abi",
- "orla-ir",
- "orla-kernel",
-]
-
-[[package]]
-name = "orla-host"
-version = "0.0.2-rc.3"
-
-[[package]]
-name = "orla-import"
-version = "0.0.2-rc.3"
-dependencies = [
- "orla-formats",
- "orla-host",
- "serde_json",
- "symphonia",
- "ttf-parser",
- "usvg",
-]
-
-[[package]]
-name = "orla-ir"
-version = "0.0.2-rc.3"
-dependencies = [
- "orla-abi",
-]
-
-[[package]]
-name = "orla-jit"
-version = "0.0.2-rc.3"
-dependencies = [
- "cranelift-codegen",
- "cranelift-frontend",
- "cranelift-jit",
- "cranelift-module",
- "cranelift-native",
- "orla-abi",
- "orla-compiler",
- "orla-conformance",
- "orla-cpu",
- "orla-ir",
- "orla-rules",
-]
-
-[[package]]
-name = "orla-kernel"
-version = "0.0.2-rc.3"
-dependencies = [
- "orla-abi",
- "orla-ir",
- "orla-rules",
-]
-
-[[package]]
-name = "orla-language"
-version = "0.0.2-rc.3"
-dependencies = [
- "orla-abi",
-]
-
-[[package]]
-name = "orla-player"
-version = "0.0.2-rc.3"
-dependencies = [
- "cpal",
- "gilrs",
- "orla-gpu",
- "orla-graph",
- "orla-kernel",
- "orla-protocol",
- "orla-session",
- "serde_json",
- "softbuffer",
- "winit",
-]
-
-[[package]]
-name = "orla-protocol"
-version = "0.0.2-rc.3"
-dependencies = [
- "orla-compiler",
- "orla-formats",
- "orla-graph",
- "orla-ir",
- "orla-kernel",
- "orla-language",
- "orla-scene",
- "orla-session",
- "serde_json",
-]
-
-[[package]]
-name = "orla-rules"
-version = "0.0.2-rc.3"
-dependencies = [
- "orla-abi",
- "orla-ir",
-]
-
-[[package]]
-name = "orla-scene"
-version = "0.0.2-rc.3"
-dependencies = [
- "orla-abi",
- "orla-compiler",
- "orla-graph",
- "orla-ir",
- "orla-language",
-]
-
-[[package]]
-name = "orla-session"
-version = "0.0.2-rc.3"
-dependencies = [
- "orla-abi",
- "orla-compiler",
- "orla-conformance",
- "orla-cpu",
- "orla-formats",
- "orla-gpu",
- "orla-graph",
- "orla-ir",
- "orla-jit",
- "orla-kernel",
- "orla-language",
- "orla-rules",
- "orla-scene",
 ]
 
 [[package]]

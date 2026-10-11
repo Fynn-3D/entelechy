@@ -3,7 +3,7 @@ language 1
 input atlas: Image;
 input narrow: Image;
 input song: Image;
-input title: Rows<Int> = text "ORLA";
+input title: Rows<Int> = text "ENTELECHY";
 input level: Image;
 input clip: Image;
 

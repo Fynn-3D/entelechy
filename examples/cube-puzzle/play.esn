@@ -1,0 +1,35 @@
+// The cube with a network already trained: `weights.field` is what
+// `render scene.esn --frames 300 --save step.result=weights.field`
+// kept, 300 frames of training; guess reads it as an input, and two
+// labels say what it thinks and what you did. Everything else is the
+// scene's cube.
+use "kernels/";
+use "../../packages/text.entpkg";
+
+input font: Grid<Float> = "../../packages/text.entpkg/font.png";
+input weights: Rows<Float> = "weights.field";
+input net: Rows<Int> = text "net thinks";
+input you: Rows<Int> = text "you made";
+
+node begin: cube.begin@1 { domain = 1; }
+node solved: cube.solved@1 { domain = 54; }
+node game: cube.game@1 { previous <~ game.result from begin.result; }
+node stickers: cube.stickers@1 { previous <~ stickers.result from solved.result; game <- game.result; }
+node guess: train.guess@1 { stickers <- stickers.result; weights <- weights; domain = 1; }
+node made: kernel {
+    requires { field.read; field.write; }
+    input game: Games <- game.result;
+    output result: Rows<Float>;
+    domain = 1;
+    compute { return float(at(game, 0).count); }
+}
+
+node view: cube.draw@1 { game <- game.result; stickers <- stickers.result; domain = window(); }
+node thinks: text.label@1 { caption <- net; values <- guess.result; places = 2; decimals = 1; domain = size(caption) + 5; }
+node line1: text.layout@1 { codes <- thinks.result; origin = vec2(12.0, 12.0); scale = 2.0; }
+node over1: text.draw@1 { under <- view.result; glyphs <- line1.result; font <- font; }
+node did: text.label@1 { caption <- you; values <- made.result; places = 2; domain = size(caption) + 3; }
+node line2: text.layout@1 { codes <- did.result; origin = vec2(12.0, 32.0); scale = 2.0; }
+node over2: text.draw@1 { under <- over1.result; glyphs <- line2.result; font <- font; }
+
+output result <- over2.result;

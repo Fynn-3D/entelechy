@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// `f` of each item, in the items' order, on as many threads as there
 /// are cores.
 pub(crate) fn map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
-    let workers = orla_rules::cores().min(items.len());
+    let workers = entelechy_rules::cores().min(items.len());
     let made: Mutex<Vec<Option<R>>> = Mutex::new(items.iter().map(|_| None).collect());
     let next = AtomicUsize::new(0);
     let work = || {
@@ -26,7 +26,7 @@ pub(crate) fn map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> 
         std::thread::scope(|scope| {
             for _ in 0..workers {
                 if std::thread::Builder::new()
-                    .name("orla-spread".into())
+                    .name("entelechy-spread".into())
                     .spawn_scoped(scope, work)
                     .is_err()
                 {

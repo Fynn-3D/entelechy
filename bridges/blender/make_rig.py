@@ -4,10 +4,10 @@ Two bones, a box weighted to them, and two actions to blend between.
 Run it headless and import what it writes:
 
     blender -b --python bridges/blender/make_rig.py -- --out examples/skin/source/arm.glb
-    orla import examples/skin/source/arm.glb --out examples/skin/assets
+    entelechy import examples/skin/source/arm.glb --out examples/skin/assets
 
 It is here rather than beside the example because it is Blender's
-language, not Orla's, and because it is the shortest statement of what a
+language, not Entelechy's, and because it is the shortest statement of what a
 rig has to be for the bridge to carry it: bones in a chain, a mesh
 parented with automatic weights, and actions on the armature.
 """

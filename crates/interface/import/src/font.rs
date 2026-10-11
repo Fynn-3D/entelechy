@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use orla_host::{Domain, FieldData, Scalar, Schema};
+use entelechy_host::{Domain, FieldData, Scalar, Schema};
 
 /// How finely curves are cut: the largest distance, in ems, a segment may
 /// stray from its curve.
@@ -81,7 +81,7 @@ pub fn import(path: &Path, out_dir: &Path, chars: Option<&str>) -> Result<Import
         ("metrics", &fields.metrics),
     ] {
         let file = out_dir.join(format!("{stem}.{name}.field"));
-        std::fs::write(&file, orla_formats::file::encode_data(data))
+        std::fs::write(&file, entelechy_formats::file::encode_data(data))
             .map_err(|e| format!("{}: {e}", file.display()))?;
         files.push(file);
     }

@@ -26,6 +26,6 @@ program, and hold on the CPU, the JIT and the GPU. A GPU session runs
 the scan on the JIT and the picture on the device.
 
 ```sh
-orla player examples/thumb/scene.osn --backend jit --window 512x512
-orla replay examples/thumb/tests/thumb.replay --backend jit
+entelechy player examples/thumb/scene.esn --backend jit --window 512x512
+entelechy replay examples/thumb/tests/thumb.replay --backend jit
 ```

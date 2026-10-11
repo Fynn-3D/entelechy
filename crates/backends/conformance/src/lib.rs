@@ -17,7 +17,7 @@
 //! reduction, a scan with a memory, a scatter, an emitting scatter, a
 //! prefix, and a map writing four named outputs.
 
-use orla_abi::{Context, Domain, Encoding, InputState, Scalar, Schema, Value};
+use entelechy_abi::{Context, Domain, Encoding, InputState, Scalar, Schema, Value};
 
 pub mod random;
 
@@ -539,9 +539,9 @@ pub fn context() -> Context {
     input.set_key(32, true);
     // Pad: sticks off centre, a trigger half down, three buttons held.
     input.sticks = [[0.625, -0.375], [-0.8125, 0.25], [0.5, 0.0]];
-    input.set_button(orla_abi::pad::SOUTH, true);
-    input.set_button(orla_abi::pad::NORTH, true);
-    input.set_button(orla_abi::pad::START, true);
+    input.set_button(entelechy_abi::pad::SOUTH, true);
+    input.set_button(entelechy_abi::pad::NORTH, true);
+    input.set_button(entelechy_abi::pad::START, true);
     input.pads = 2;
     Context {
         time: 1.5,
@@ -1440,8 +1440,11 @@ pub enum Summed {
 
 impl Summed {
     /// Where `outcome` differs from what the case must come to, as text.
-    pub fn judge(&self, outcome: &Result<Vec<u32>, orla_rules::ExecutionError>) -> Option<String> {
-        use orla_rules::{ArithmeticError, ExecutionError};
+    pub fn judge(
+        &self,
+        outcome: &Result<Vec<u32>, entelechy_rules::ExecutionError>,
+    ) -> Option<String> {
+        use entelechy_rules::{ArithmeticError, ExecutionError};
         match (self, outcome) {
             (Self::Words(want), Ok(got)) if want == got => None,
             (
@@ -1740,14 +1743,14 @@ pub fn repeat_cases() -> Vec<Case> {
 
 /// Where `backend` writes other words, or fails otherwise, on a second run
 /// of a case with the same inputs than on the first: a backend that says it
-/// repeats exactly ([`orla_rules::Backend::repeats_exactly`]) answers none.
+/// repeats exactly ([`entelechy_rules::Backend::repeats_exactly`]) answers none.
 /// Each case comes with its module; a case the backend declines or cannot
 /// prepare is left to the matrix.
 pub fn unrepeated(
-    backend: &dyn orla_rules::Backend,
-    cases: &[(Case, orla_ir::Validated)],
+    backend: &dyn entelechy_rules::Backend,
+    cases: &[(Case, entelechy_ir::Validated)],
 ) -> Vec<String> {
-    use orla_abi::{Capability, FieldData, Handle, Host, Invocation, Scope};
+    use entelechy_abi::{Capability, FieldData, Handle, Host, Invocation, Scope};
     let words = |host: &Host, handle: Handle| -> Result<Vec<u32>, String> {
         let schema = host.schema(handle).map_err(|e| e.to_string())?;
         let count = host.domain(handle).map_err(|e| e.to_string())?.count();

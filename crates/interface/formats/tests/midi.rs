@@ -1,7 +1,7 @@
 //! A MIDI file read as notes and written back. The file is built byte by
 //! byte from the format's definition, so the reader is what is tested.
 
-use orla_formats::midi::{self as read, Note, encode};
+use entelechy_formats::midi::{self as read, Note, encode};
 
 /// A variable-length quantity, as the format writes one.
 fn varint(mut value: u32) -> Vec<u8> {
@@ -176,28 +176,28 @@ fn a_score_read_live_is_the_score_imported() {
         (240, vec![0x81, 67, 0]),
     ]);
     let bytes = file(480, &[tempo, notes]);
-    let dir = std::env::temp_dir().join(format!("orla-midi-score-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-midi-score-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let song = dir.join("song.mid");
     std::fs::write(&song, &bytes).unwrap();
     let imported = dir.join("song.notes.field");
     let rows = read::field(&read::read(&bytes).unwrap()).unwrap();
-    std::fs::write(&imported, orla_formats::file::encode_data(&rows)).unwrap();
-    let (live, detail) = orla_formats::read(&song, None).unwrap();
-    let (from_file, _) = orla_formats::read(&imported, None).unwrap();
+    std::fs::write(&imported, entelechy_formats::file::encode_data(&rows)).unwrap();
+    let (live, detail) = entelechy_formats::read(&song, None).unwrap();
+    let (from_file, _) = entelechy_formats::read(&imported, None).unwrap();
     std::fs::remove_dir_all(&dir).ok();
     assert_eq!(live, from_file, "{detail}");
-    assert_eq!(live.domain(), orla_host::Domain::Rows(3));
+    assert_eq!(live.domain(), entelechy_host::Domain::Rows(3));
     // Written out again, it reads back as the same rows.
-    let written = orla_formats::encode(&live, "mid", None).unwrap();
-    let again = orla_formats::midi::field(&read::read(&written).unwrap()).unwrap();
+    let written = entelechy_formats::encode(&live, "mid", None).unwrap();
+    let again = entelechy_formats::midi::field(&read::read(&written).unwrap()).unwrap();
     assert_eq!(again.domain(), live.domain());
 }
 
 #[test]
 fn a_field_that_does_not_fit_a_format_says_what_it_is_not() {
-    use orla_formats::EncodeError;
-    use orla_host::{Domain, FieldData, Scalar, Schema};
+    use entelechy_formats::EncodeError;
+    use entelechy_host::{Domain, FieldData, Scalar, Schema};
     let rows = FieldData::from_storage(
         Schema::new(vec![Scalar::Float]),
         Domain::Rows(2),
@@ -205,20 +205,20 @@ fn a_field_that_does_not_fit_a_format_says_what_it_is_not() {
     )
     .unwrap();
     assert_eq!(
-        orla_formats::encode(&rows, "png", None),
+        entelechy_formats::encode(&rows, "png", None),
         Err(EncodeError::Unfit("not a grid"))
     );
     assert_eq!(
-        orla_formats::encode(&rows, "mid", None),
+        entelechy_formats::encode(&rows, "mid", None),
         Err(EncodeError::Unfit(
             "not rows of a note (start, duration, pitch, velocity, channel)"
         ))
     );
     assert_eq!(
-        orla_formats::encode(&rows, "pdf", None),
+        entelechy_formats::encode(&rows, "pdf", None),
         Err(EncodeError::Unknown)
     );
-    assert!(orla_formats::encode(&rows, "wav", Some(8000)).is_ok());
+    assert!(entelechy_formats::encode(&rows, "wav", Some(8000)).is_ok());
 }
 
 #[test]

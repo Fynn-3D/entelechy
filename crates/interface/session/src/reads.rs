@@ -105,12 +105,12 @@ impl Reads {
         // A package reached by path from elsewhere is one to name.
         let package = target.ancestors().find_map(|dir| {
             let name = dir.file_name()?.to_str()?;
-            name.ends_with(".orlapkg")
+            name.ends_with(".entpkg")
                 .then(|| (name.to_owned(), dir.parent()))
         });
         let hint = match package {
             Some((name, Some(parent))) => format!(
-                "; a package elsewhere is used by name, `use \"{name}\";`, with its directory in `ORLA_PACKAGES` ({})",
+                "; a package elsewhere is used by name, `use \"{name}\";`, with its directory in `ENTELECHY_PACKAGES` ({})",
                 parent.display()
             ),
             _ => String::new(),

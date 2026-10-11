@@ -1,4 +1,4 @@
-scene native.osn
+scene native.esn
 
 # The fast path's surface, read by field as a Kernel's would be: the
 # owner, the depth and the uv at pixels inside a triangle, away from

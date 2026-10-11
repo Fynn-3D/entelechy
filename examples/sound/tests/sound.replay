@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # The whole: one block of 800 stereo frames, the synth's voice with the
 # spectrum's a fifth above it, and the two pictures side by side.

@@ -1,13 +1,13 @@
-# Orla bridge for Godot
+# Entelechy bridge for Godot
 
-A Godot 4 project that is a client of Orla's creation protocol and
+A Godot 4 project that is a client of Entelechy's creation protocol and
 nothing more, in GDScript: a socket that speaks the protocol, a Control
 that is a session's window, and a demo scene around them. Nothing in the
-Rust workspace depends on it, and it knows nothing about how Orla is
+Rust workspace depends on it, and it knows nothing about how Entelechy is
 built.
 
 ```sh
-orla serve examples/fluid/scene.osn --backend jit --listen 127.0.0.1:7788
+entelechy serve examples/fluid/scene.esn --backend jit --listen 127.0.0.1:7788
 godot --path bridges/godot          # or open the folder in the Godot editor and press play
 ```
 
@@ -23,7 +23,7 @@ SpinBox, a CheckBox, or a field taking `[x, y]`), set with `param`; a
 param that sizes the graph resizes the running scene. **Reset state** is
 the Player's F5. The status line shows the round trip and what ran.
 
-- `orla_client.gd` (`OrlaClient`) is the client on its own: `open`,
+- `entelechy_client.gd` (`EntelechyClient`) is the client on its own: `open`,
   `request(op, fields)` (blocking; the session answers in order, so a
   frame's evaluate-then-read stays two calls), `close`; the decoders
   `decode_ppm` (an RGB8 `Image`), `decode_words` with `float_at`,
@@ -32,7 +32,7 @@ the Player's F5. The status line shows the round trip and what ran.
   `ArrayMesh` from rows of eight or nine floats and rows of three ints
   (the mesh and model examples' layout), winding turned for Godot's
   front face. A Kernel's mesh is then a `MeshInstance3D` away.
-- `orla_view.gd` (`OrlaView`) is the window: a Control holding a client,
+- `entelechy_view.gd` (`EntelechyView`) is the window: a Control holding a client,
   `step()` for one frame (evaluate, read, show), `start`/`stop` for
   frame after frame in `_process`, the input from `_gui_input`, and the
   signals `framed(report, millis)` and `stopped(message)`.
@@ -43,9 +43,9 @@ by `preload`, so they also load headless, before the editor has
 catalogued the classes.
 
 `test.gd` checks all of it headless against three sessions it starts
-itself (Godot spawns `orla serve` through a pipe and reads each port from
+itself (Godot spawns `entelechy serve` through a pipe and reads each port from
 its stderr): it reads the text example's picture and republishes its
-background, drives the voxel editor through an `OrlaView` with a window
+background, drives the voxel editor through an `EntelechyView` with a window
 and a pointer, places a voxel and resizes the window, pulls the mesh
 example's torus as an `ArrayMesh` and sets its `level`, and connects the
 demo scene itself. Godot 4.6 (installed at `/usr/local/bin/godot` here),

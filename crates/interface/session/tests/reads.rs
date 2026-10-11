@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use orla_session::{Event, Session};
+use entelechy_session::{Event, Session};
 
 const SCENE: &str = "node start: Rows<Int> { domain = 1; value = 1; }
 output result <- start.result;
@@ -16,24 +16,24 @@ const FAR: &str = "kernel far.away@1 { requires { field.write; } output result: 
 /// A 1x1 picture, as a P6 file.
 const PICTURE: &[u8] = b"P6\n1 1\n255\n\xff\x80\x00";
 
-/// A directory holding `app/scene.osn` and, outside it, `outside/` with a
+/// A directory holding `app/scene.esn` and, outside it, `outside/` with a
 /// Kernel, a picture and a directory.
 fn built(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("orla-reads-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-reads-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("app")).unwrap();
     std::fs::create_dir_all(dir.join("outside/data")).unwrap();
-    std::fs::write(dir.join("app/scene.osn"), SCENE).unwrap();
-    std::fs::write(dir.join("outside/far.orla"), FAR).unwrap();
+    std::fs::write(dir.join("app/scene.esn"), SCENE).unwrap();
+    std::fs::write(dir.join("outside/far.ent"), FAR).unwrap();
     std::fs::write(dir.join("outside/secret.ppm"), PICTURE).unwrap();
     dir
 }
 
-/// A session of `app/scene.osn` with its reads held, first loaded.
+/// A session of `app/scene.esn` with its reads held, first loaded.
 fn served(dir: &Path) -> Session {
-    let runtime = Session::runtime_for("cpu", orla_session::Limits::default()).unwrap();
-    let store = Arc::new(orla_session::Disk::default());
-    let mut session = Session::open_in(store, &dir.join("app/scene.osn"), None, runtime);
+    let runtime = Session::runtime_for("cpu", entelechy_session::Limits::default()).unwrap();
+    let store = Arc::new(entelechy_session::Disk::default());
+    let mut session = Session::open_in(store, &dir.join("app/scene.esn"), None, runtime);
     session.restrict_reads().unwrap();
     let events = session.sync();
     assert!(session.graph().is_some(), "{events:?}");
@@ -61,11 +61,11 @@ fn a_placed_graphs_own_use_is_held() {
     let dir = built("nested");
     let mut session = served(&dir);
     std::fs::write(
-        dir.join("app/sub.osn"),
-        "use \"../outside/far.orla\";\nnode f: far.away@1 { }\noutput result <- f.result;\n",
+        dir.join("app/sub.esn"),
+        "use \"../outside/far.ent\";\nnode f: far.away@1 { }\noutput result <- f.result;\n",
     )
     .unwrap();
-    let events = composed(&mut session, "node s: graph \"sub.osn\" { }\n");
+    let events = composed(&mut session, "node s: graph \"sub.esn\" { }\n");
     let published = session
         .runtime()
         .kernels()
@@ -78,36 +78,36 @@ fn a_placed_graphs_own_use_is_held() {
 fn a_package_made_outside_is_not_read() {
     let dir = built("package");
     let mut session = served(&dir);
-    let package = dir.join("outside/made.orlapkg");
+    let package = dir.join("outside/made.entpkg");
     std::fs::create_dir_all(&package).unwrap();
-    std::fs::write(package.join("package.osn"), "").unwrap();
+    std::fs::write(package.join("package.esn"), "").unwrap();
     std::fs::write(package.join("secret.ppm"), PICTURE).unwrap();
     let events = composed(
         &mut session,
-        "input pic: Image = \"../outside/made.orlapkg/secret.ppm\";\n",
+        "input pic: Image = \"../outside/made.entpkg/secret.ppm\";\n",
     );
     assert!(!loaded(&events, "pic"), "{events:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A package used by path from outside is refused, saying how to use
-/// it: by name, its directory in `ORLA_PACKAGES`.
+/// it: by name, its directory in `ENTELECHY_PACKAGES`.
 #[test]
 fn a_package_outside_is_refused_naming_the_way_in() {
     let dir = built("package-use");
     let mut session = served(&dir);
-    let package = dir.join("outside/made.orlapkg");
+    let package = dir.join("outside/made.entpkg");
     std::fs::create_dir_all(package.join("kernels")).unwrap();
     std::fs::write(
-        package.join("package.osn"),
+        package.join("package.esn"),
         "package made@1 { language = 1; ir = 1; }\nuse \"kernels/\";\n",
     )
     .unwrap();
-    std::fs::write(package.join("kernels/far.orla"), FAR).unwrap();
-    let events = composed(&mut session, "use \"../outside/made.orlapkg\";\n");
+    std::fs::write(package.join("kernels/far.ent"), FAR).unwrap();
+    let events = composed(&mut session, "use \"../outside/made.entpkg\";\n");
     let said = events.iter().any(|event| {
         matches!(event, Event::SceneRejected(why)
-            if why.message.contains("`use \"made.orlapkg\";`") && why.message.contains("ORLA_PACKAGES"))
+            if why.message.contains("`use \"made.entpkg\";`") && why.message.contains("ENTELECHY_PACKAGES"))
     });
     assert!(said, "{events:?}");
     let _ = std::fs::remove_dir_all(&dir);
@@ -171,13 +171,13 @@ fn a_write_through_a_link_and_dot_dot_is_judged_where_it_lands() {
 fn the_first_scenes_own_inputs_stay_readable() {
     let dir = built("own");
     std::fs::write(
-        dir.join("app/scene.osn"),
+        dir.join("app/scene.esn"),
         format!("{SCENE}input pic: Image = \"../outside/secret.ppm\";\n"),
     )
     .unwrap();
-    let runtime = Session::runtime_for("cpu", orla_session::Limits::default()).unwrap();
-    let store = Arc::new(orla_session::Disk::default());
-    let mut session = Session::open_in(store, &dir.join("app/scene.osn"), None, runtime);
+    let runtime = Session::runtime_for("cpu", entelechy_session::Limits::default()).unwrap();
+    let store = Arc::new(entelechy_session::Disk::default());
+    let mut session = Session::open_in(store, &dir.join("app/scene.esn"), None, runtime);
     session.restrict_reads().unwrap();
     let events = session.sync();
     assert!(loaded(&events, "pic"), "{events:?}");

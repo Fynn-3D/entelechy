@@ -4,12 +4,12 @@
 
 use std::collections::BTreeMap;
 
-use orla_abi::{Handle, Invocation, Scope};
-use orla_graph::{Context, Evaluator, NodeId, Report};
-use orla_ir::Validated;
-use orla_kernel::{Backend, Runtime};
-use orla_rules::backend::Checked;
-use orla_rules::{ExecutionError, NativeOp, Prepared};
+use entelechy_abi::{Handle, Invocation, Scope};
+use entelechy_graph::{Context, Evaluator, NodeId, Report};
+use entelechy_ir::Validated;
+use entelechy_kernel::{Backend, Runtime};
+use entelechy_rules::backend::Checked;
+use entelechy_rules::{ExecutionError, NativeOp, Prepared};
 
 const SEQ: &str = "kernel test.seq@1 { requires { field.write; } output result: Rows<Float>; compute { return float(element()) * 1.25 - 2.0; } }";
 const LIFT: &str = "kernel test.lift@1 { requires { field.read; field.write; } struct P { x: Float; n: Int; } input source: Rows<Float>; param k: Float = 2.0; output result: Rows<P>; compute { let v = sample(source) * k + float(element()) * 0.5 + float(domain()); return P { x: v, n: element() * 3 + count(source) }; } }";
@@ -34,7 +34,7 @@ fn ids(names: &[&str]) -> Vec<NodeId> {
 fn runtime(backend: Box<dyn Backend>) -> Runtime {
     let mut runtime = Runtime::with_backend(1 << 20, backend);
     for source in [SEQ, LIFT, JOIN, TALLY] {
-        let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
+        let module = entelechy_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
         runtime.load(module, source).unwrap();
     }
     runtime
@@ -58,7 +58,7 @@ fn plain_and_fused(
     document: &str,
 ) -> (Report, Vec<Vec<u32>>, Vec<Vec<u32>>) {
     let mut runtime = runtime(backend);
-    let graph = orla_scene::parse(document).unwrap_or_else(|error| panic!("{error}"));
+    let graph = entelechy_scene::parse(document).unwrap_or_else(|error| panic!("{error}"));
     let evaluate = |evaluator: &mut Evaluator, runtime: &mut Runtime| {
         evaluator
             .evaluate(
@@ -84,10 +84,10 @@ fn plain_and_fused(
 
 fn backends() -> Vec<(&'static str, Box<dyn Backend>)> {
     let mut backends: Vec<(&'static str, Box<dyn Backend>)> = vec![
-        ("cpu", Box::new(orla_cpu::CpuBackend)),
-        ("jit", Box::new(orla_jit::JitBackend::new().unwrap())),
+        ("cpu", Box::new(entelechy_cpu::CpuBackend)),
+        ("jit", Box::new(entelechy_jit::JitBackend::new().unwrap())),
     ];
-    match orla_gpu::GpuBackend::new() {
+    match entelechy_gpu::GpuBackend::new() {
         Ok(gpu) => backends.push(("gpu", Box::new(gpu))),
         Err(error) => eprintln!("skipping the gpu: {error}"),
     }
@@ -127,8 +127,8 @@ fn a_reader_that_only_counts_a_fused_producer_is_given_its_extent() {
         assert_eq!(into_join, Some(ids(&["lift", "s", "t"])), "{name}");
     }
     // The plan says what `tally` counts without reading it.
-    let mut runtime = runtime(Box::new(orla_cpu::CpuBackend));
-    let graph = orla_scene::parse(&document).unwrap();
+    let mut runtime = runtime(Box::new(entelechy_cpu::CpuBackend));
+    let graph = entelechy_scene::parse(&document).unwrap();
     let plan = Evaluator::new()
         .plan_summary(&graph, &mut runtime, &BTreeMap::new(), &BTreeMap::new())
         .unwrap();
@@ -141,14 +141,14 @@ fn a_reader_that_only_counts_a_fused_producer_is_given_its_extent() {
 fn a_producer_read_at_two_rows_stays_stored() {
     // Two rows of `lift` per element would compute it twice: it is
     // stored, and only what reads at one row fuses.
-    let mut runtime = runtime(Box::new(orla_cpu::CpuBackend));
+    let mut runtime = runtime(Box::new(entelechy_cpu::CpuBackend));
     let twice = JOIN.replace("test.join@1", "test.join@2").replace(
         "let p = at(a, k + 1); return p.x + float(p.n);",
         "return at(a, k + 1).x + at(a, k).x;",
     );
-    let module = orla_compiler::compile(&twice).unwrap();
+    let module = entelechy_compiler::compile(&twice).unwrap();
     runtime.load(module, &twice).unwrap();
-    let graph = orla_scene::parse(&CHAIN.replace("test.join@1", "test.join@2")).unwrap();
+    let graph = entelechy_scene::parse(&CHAIN.replace("test.join@1", "test.join@2")).unwrap();
     let report = Evaluator::new()
         .evaluate(
             &graph,
@@ -174,14 +174,14 @@ impl Backend for SlowToCount {
         "cpu"
     }
     fn declines(&self, module: &Validated) -> Option<String> {
-        Backend::declines(&orla_cpu::CpuBackend, module)
+        Backend::declines(&entelechy_cpu::CpuBackend, module)
     }
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
         let counts = module.manifest.params.iter().any(|p| p.name.contains('#'));
         if counts && module.manifest.id.to_string().contains("tally") {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        Backend::prepare(&orla_cpu::CpuBackend, module)
+        Backend::prepare(&entelechy_cpu::CpuBackend, module)
     }
     fn execute(
         &self,
@@ -190,7 +190,13 @@ impl Backend for SlowToCount {
         invocation: &Invocation,
         scope: &mut Scope<'_>,
     ) -> Result<Vec<Handle>, ExecutionError> {
-        Backend::execute(&orla_cpu::CpuBackend, prepared, module, invocation, scope)
+        Backend::execute(
+            &entelechy_cpu::CpuBackend,
+            prepared,
+            module,
+            invocation,
+            scope,
+        )
     }
     fn execute_checked(
         &self,
@@ -199,7 +205,13 @@ impl Backend for SlowToCount {
         invocation: &Invocation,
         scope: &mut Scope<'_>,
     ) -> Result<Checked, ExecutionError> {
-        Backend::execute_checked(&orla_cpu::CpuBackend, prepared, module, invocation, scope)
+        Backend::execute_checked(
+            &entelechy_cpu::CpuBackend,
+            prepared,
+            module,
+            invocation,
+            scope,
+        )
     }
     fn execute_native(
         &self,
@@ -207,7 +219,7 @@ impl Backend for SlowToCount {
         invocation: &Invocation,
         scope: &mut Scope<'_>,
     ) -> Result<Vec<Handle>, ExecutionError> {
-        Backend::execute_native(&orla_cpu::CpuBackend, op, invocation, scope)
+        Backend::execute_native(&entelechy_cpu::CpuBackend, op, invocation, scope)
     }
 }
 
@@ -217,7 +229,7 @@ fn a_counting_reader_and_the_group_it_counts_arrive_together_from_the_worker() {
     // inside: until both arrive, both run as they were, and every frame
     // is the plain one, though `join` arrives first.
     let document = format!("{CHAIN}output join <- join.result;");
-    let graph = orla_scene::parse(&document).unwrap();
+    let graph = entelechy_scene::parse(&document).unwrap();
     let mut runtime = runtime(Box::new(SlowToCount));
     runtime.set_background(true);
     let evaluate = |evaluator: &mut Evaluator, runtime: &mut Runtime| {
@@ -282,10 +294,11 @@ output join <- join.result;
     for (name, backend) in backends() {
         let mut runtime = runtime(backend);
         for source in [four, &join, &tally] {
-            let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
+            let module =
+                entelechy_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
             runtime.load(module, source).unwrap();
         }
-        let graph = orla_scene::parse(document).unwrap();
+        let graph = entelechy_scene::parse(document).unwrap();
         let evaluate = |evaluator: &mut Evaluator, runtime: &mut Runtime| {
             evaluator
                 .evaluate(

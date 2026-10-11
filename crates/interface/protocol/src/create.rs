@@ -2,10 +2,10 @@
 //! retiring Kernels, setting parameters. A publish is checked against the
 //! expected generation; a rejected change leaves the running version.
 
-use orla_kernel::{Expect, Generation};
+use entelechy_kernel::{Expect, Generation};
 use serde_json::{Value as Json, json};
 
-use orla_session::Session;
+use entelechy_session::Session;
 
 use crate::request::Request;
 use crate::wire::{
@@ -53,7 +53,7 @@ pub(crate) fn compose_with(
         }
         (None, Some(edits)) => {
             let written = written.map_err(|e| failure(format!("{}: {e}", root.display())))?;
-            orla_scene::edit::edit(&written, &edits_from_json(edits)?)
+            entelechy_scene::edit::edit(&written, &edits_from_json(edits)?)
                 .map_err(|e| failure(e.to_string()))?
         }
         _ => request.text("text")?,
@@ -97,8 +97,8 @@ pub(crate) fn compose_with(
 /// (`node`, `output`, `param`, `require`, `input`, `kernel`, `struct`,
 /// `type`, `fn`, `use`), optionally a node's `member`, and `text`, the whole statement
 /// or member, or null to remove it.
-fn edits_from_json(edits: &Json) -> Result<Vec<orla_scene::edit::Edit>, Json> {
-    use orla_scene::edit::{Edit, StatementKind, Target};
+fn edits_from_json(edits: &Json) -> Result<Vec<entelechy_scene::edit::Edit>, Json> {
+    use entelechy_scene::edit::{Edit, StatementKind, Target};
     const KINDS: [(&str, StatementKind); 10] = [
         ("node", StatementKind::Node),
         ("output", StatementKind::Output),
@@ -167,9 +167,9 @@ fn edits_from_json(edits: &Json) -> Result<Vec<orla_scene::edit::Edit>, Json> {
 }
 
 /// A document's version: the digest of its text
-/// ([`orla_session::history::digest`]), stable across builds and platforms.
+/// ([`entelechy_session::history::digest`]), stable across builds and platforms.
 pub(crate) fn document_version(text: &str) -> String {
-    format!("{:016x}", orla_session::history::digest(text))
+    format!("{:016x}", entelechy_session::history::digest(text))
 }
 
 /// Reads again what changed on disk.
@@ -213,7 +213,7 @@ pub(crate) fn publish(session: &mut Session, request: &Request) -> Result<Json, 
 pub(crate) fn publish_begin(
     session: &mut Session,
     request: &Request,
-) -> Result<orla_session::Publishing, Json> {
+) -> Result<entelechy_session::Publishing, Json> {
     let source = request.text("source")?;
     let expect = match request.get("expect") {
         None | Some(Json::Null) => Expect::Any,
@@ -237,7 +237,10 @@ pub(crate) fn publish_begin(
 /// What a finished `publish` answers.
 pub(crate) fn published_json(
     session: &Session,
-    published: Result<std::sync::Arc<orla_kernel::KernelVersion>, orla_session::Diagnostic>,
+    published: Result<
+        std::sync::Arc<entelechy_kernel::KernelVersion>,
+        entelechy_session::Diagnostic,
+    >,
 ) -> Result<Json, Json> {
     let version = published.map_err(|e| diagnostic_json(&e))?;
     let mut answer =
@@ -248,7 +251,7 @@ pub(crate) fn published_json(
     if !kept.is_empty() {
         let resets: Vec<Json> = kept
             .iter()
-            .filter_map(|at| orla_graph::split_port(at))
+            .filter_map(|at| entelechy_graph::split_port(at))
             .map(|(node, port)| json!({ "op": "reset", "node": node.0, "port": port }))
             .collect();
         answer["keeps"] = json!(kept);

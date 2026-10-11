@@ -7,10 +7,12 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use orla_abi::{Handle, Invocation, Scope};
-use orla_ir::Validated;
-use orla_kernel::{Backend, Context, Domain, ExecutionError, Expect, Prepared, Runtime, Value};
-use orla_session::{Event, Session};
+use entelechy_abi::{Handle, Invocation, Scope};
+use entelechy_ir::Validated;
+use entelechy_kernel::{
+    Backend, Context, Domain, ExecutionError, Expect, Prepared, Runtime, Value,
+};
+use entelechy_session::{Event, Session};
 
 /// The interpreter as a device that builds on first need, whose compiler
 /// fails on Kernels named `big`, declining them from then on.
@@ -81,7 +83,7 @@ impl Backend for &'static Device {
     }
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
         Ok(Box::new(Lazy {
-            inner: orla_cpu::CpuBackend.prepare(module)?,
+            inner: entelechy_cpu::CpuBackend.prepare(module)?,
             module: module.clone(),
             built: OnceLock::new(),
         }))
@@ -99,7 +101,7 @@ impl Backend for &'static Device {
         self.build(prepared)?;
         let inner = &prepared.as_any().downcast_ref::<Lazy>().unwrap().inner;
         Backend::execute(
-            &orla_cpu::CpuBackend,
+            &entelechy_cpu::CpuBackend,
             inner.as_ref(),
             module,
             invocation,
@@ -114,11 +116,11 @@ fn device() -> &'static Device {
 
 #[test]
 fn a_kernel_a_node_uses_is_built_as_it_publishes_and_routed_if_it_cannot_be() {
-    let dir = std::env::temp_dir().join(format!("orla-lazy-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-lazy-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("scene.osn"),
+        dir.join("scene.esn"),
         "kernel t.small@1 { requires { field.write; } output result: Rows<Float>; compute { return 2.0; } }
 kernel t.big@1 { requires { field.read; field.write; } input x: Rows<Float>; output result: Rows<Float>; compute { return at(x, 0) * 3.0; } }
 kernel t.unused@1 { requires { field.write; } output result: Rows<Float>; compute { return 1.0; } }
@@ -132,11 +134,11 @@ output result <- big.result;
     let mut runtime = Runtime::with_backends(
         1 << 20,
         Box::new(device),
-        Some(Box::new(orla_cpu::CpuBackend)),
+        Some(Box::new(entelechy_cpu::CpuBackend)),
     );
     // Every run on the device, however few its elements.
     runtime.set_small(0);
-    let mut session = Session::open_with(&dir.join("scene.osn"), None, runtime);
+    let mut session = Session::open_with(&dir.join("scene.esn"), None, runtime);
     let mut events = session.sync();
     assert_eq!(device.builds_of("t.small@1"), 1);
     assert_eq!(device.builds_of("t.big@1"), 1);
@@ -144,7 +146,7 @@ output result <- big.result;
     for _ in 0..2 {
         session.evaluate(&Context::default()).unwrap();
         let handle = session
-            .cached(&orla_graph::NodeId("big".into()), "result")
+            .cached(&entelechy_graph::NodeId("big".into()), "result")
             .unwrap();
         assert_eq!(
             f32::from_bits(session.field(handle).unwrap().values()[0]),
@@ -172,12 +174,12 @@ fn a_run_that_finds_its_kernel_unbuildable_is_made_again_on_the_ordered_backend(
     let mut runtime = Runtime::with_backends(
         1 << 20,
         Box::new(device),
-        Some(Box::new(orla_cpu::CpuBackend)),
+        Some(Box::new(entelechy_cpu::CpuBackend)),
     );
     runtime.set_small(0);
     let big = source("big", "3.0");
     let candidate = runtime
-        .prepare_module(orla_compiler::compile(&big).unwrap(), &big)
+        .prepare_module(entelechy_compiler::compile(&big).unwrap(), &big)
         .unwrap();
     let version = runtime.publish(candidate, Expect::Any).unwrap();
     assert_eq!(runtime.placement(&version).routed, None);
@@ -215,14 +217,14 @@ fn a_replacement_is_built_before_it_is_ready_only_where_its_version_ran() {
     let mut runtime = Runtime::with_backends(
         1 << 20,
         Box::new(device),
-        Some(Box::new(orla_cpu::CpuBackend)),
+        Some(Box::new(entelechy_cpu::CpuBackend)),
     );
     runtime.set_small(0);
     runtime.set_background(true);
     let publish = |runtime: &mut Runtime, k: &str, value: &str| {
         let candidate = runtime
             .prepare_module(
-                orla_compiler::compile(&source(k, value)).unwrap(),
+                entelechy_compiler::compile(&source(k, value)).unwrap(),
                 &source(k, value),
             )
             .unwrap();
@@ -243,7 +245,7 @@ fn a_replacement_is_built_before_it_is_ready_only_where_its_version_ran() {
 
     for k in ["ran", "idle"] {
         let ticket = runtime.prepare_later(
-            orla_compiler::compile(&source(k, "2.0")).unwrap(),
+            entelechy_compiler::compile(&source(k, "2.0")).unwrap(),
             source(k, "2.0"),
         );
         let candidate = loop {
@@ -262,7 +264,7 @@ fn a_replacement_is_built_before_it_is_ready_only_where_its_version_ran() {
 
 #[test]
 fn a_session_without_a_worker_makes_its_replacements_ahead_built_where_they_ran() {
-    let dir = std::env::temp_dir().join(format!("orla-lazy-ahead-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-lazy-ahead-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let scene = |value: &str| {
@@ -277,18 +279,18 @@ output other <- b.result;
 "
         )
     };
-    std::fs::write(dir.join("scene.osn"), scene("1.0")).unwrap();
+    std::fs::write(dir.join("scene.esn"), scene("1.0")).unwrap();
     let device = device();
     let mut runtime = Runtime::with_backends(
         1 << 20,
         Box::new(device),
-        Some(Box::new(orla_cpu::CpuBackend)),
+        Some(Box::new(entelechy_cpu::CpuBackend)),
     );
     runtime.set_small(0);
-    let mut session = Session::open_with(&dir.join("scene.osn"), None, runtime);
+    let mut session = Session::open_with(&dir.join("scene.esn"), None, runtime);
     session.sync();
     session.evaluate(&Context::default()).unwrap();
-    std::fs::write(dir.join("scene.osn"), scene("2.0")).unwrap();
+    std::fs::write(dir.join("scene.esn"), scene("2.0")).unwrap();
     let events = session.sync();
     let published = events
         .iter()
@@ -301,7 +303,7 @@ output other <- b.result;
     assert_eq!(device.builds_of("t.unused@1"), 0, "no node uses it");
     session.evaluate(&Context::default()).unwrap();
     let handle = session
-        .cached(&orla_graph::NodeId("a".into()), "result")
+        .cached(&entelechy_graph::NodeId("a".into()), "result")
         .unwrap();
     assert_eq!(
         f32::from_bits(session.field(handle).unwrap().values()[0]),
@@ -320,7 +322,7 @@ impl Backend for &'static Ordered {
     }
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
         self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        orla_cpu::CpuBackend.prepare(module)
+        entelechy_cpu::CpuBackend.prepare(module)
     }
     fn execute(
         &self,
@@ -329,7 +331,13 @@ impl Backend for &'static Ordered {
         invocation: &Invocation,
         scope: &mut Scope<'_>,
     ) -> Result<Vec<Handle>, ExecutionError> {
-        Backend::execute(&orla_cpu::CpuBackend, prepared, module, invocation, scope)
+        Backend::execute(
+            &entelechy_cpu::CpuBackend,
+            prepared,
+            module,
+            invocation,
+            scope,
+        )
     }
 }
 
@@ -345,7 +353,7 @@ fn a_replacement_is_prepared_on_the_ordered_backend_where_its_version_ran_there(
     runtime.set_background(true);
     let k = source("few", "1.0");
     let candidate = runtime
-        .prepare_module(orla_compiler::compile(&k).unwrap(), &k)
+        .prepare_module(entelechy_compiler::compile(&k).unwrap(), &k)
         .unwrap();
     let running = runtime.publish(candidate, Expect::Any).unwrap();
     // One element: the size sends the run to the ordered backend, which
@@ -361,7 +369,7 @@ fn a_replacement_is_prepared_on_the_ordered_backend_where_its_version_ran_there(
     assert_eq!(prepared(), 1);
 
     let k = source("few", "2.0");
-    let ticket = runtime.prepare_later(orla_compiler::compile(&k).unwrap(), k);
+    let ticket = runtime.prepare_later(entelechy_compiler::compile(&k).unwrap(), k);
     let candidate = loop {
         if let Some(result) = runtime.poll(ticket) {
             break result.unwrap();

@@ -4,7 +4,7 @@
 //! and every form with its shape. Docs are excluded.
 //!
 //! The surface may grow at a version; dropping or changing anything else
-//! takes a new version. The test fails on any difference. `ORLA_BLESS=1`
+//! takes a new version. The test fails on any difference. `ENTELECHY_BLESS=1`
 //! rewrites the file, and refuses a drop without a version bump. Growing
 //! it is the owner's decision, not a contributor's: see
 //! `docs/DECISIONS.md`, *The language grows only by the owner's word*.
@@ -12,8 +12,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use orla_compiler::help;
-use orla_language::LANGUAGE_VERSION;
+use entelechy_compiler::help;
+use entelechy_language::LANGUAGE_VERSION;
 
 /// One entry: its header line (`builtin name`, with `requires` and
 /// `entry` as they apply, or `form name`) and the lines under it.
@@ -148,7 +148,7 @@ fn the_surface_a_source_may_use_is_the_one_recorded() {
         parse(&recorded)
     };
     let broken = broken(&before, &now);
-    if std::env::var_os("ORLA_BLESS").is_some() {
+    if std::env::var_os("ENTELECHY_BLESS").is_some() {
         assert!(
             broken.is_empty() || LANGUAGE_VERSION > version,
             "refusing to record a surface that breaks language {version} sources without a \
@@ -171,13 +171,13 @@ fn the_surface_a_source_may_use_is_the_one_recorded() {
             "the surface grew ({added:?} and signatures within); the language grows only \
              by the owner's word (docs/DECISIONS.md, *The language grows only by the owner's \
              word*): take the addition out, or, with that word given, record it with \
-             `ORLA_BLESS=1 cargo test -p orla-compiler --test surface`"
+             `ENTELECHY_BLESS=1 cargo test -p entelechy-compiler --test surface`"
         );
     }
     panic!(
         "sources written for language {version} would stop compiling:\n{}\nraise \
          LANGUAGE_VERSION, then record the surface with \
-         `ORLA_BLESS=1 cargo test -p orla-compiler --test surface`",
+         `ENTELECHY_BLESS=1 cargo test -p entelechy-compiler --test surface`",
         broken.join("\n")
     );
 }

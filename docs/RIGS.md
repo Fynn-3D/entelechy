@@ -3,9 +3,9 @@
 **Answers:** what rows a rig is, so any tool can write one and any scene
 can read it.
 
-A rig is five kinds of row. `orla import` writes them from a glTF, the
+A rig is five kinds of row. `entelechy import` writes them from a glTF, the
 Blender bridge from an armature, and the
-[`skin` package](../packages/skin.orlapkg) reads them. They are Fields
+[`skin` package](../packages/skin.entpkg) reads them. They are Fields
 like any other; the runtime has no notion of a joint, and posing is
 Kernels.
 
@@ -22,8 +22,8 @@ Kernels.
 `i` is an `Int` and `f` a `Float`, in the order the ABI lays a struct
 out. A vertex may carry a tangent after its uv (`f×12`), the way a normal
 map is read along: its `w` is the handedness, the bitangent
-`cross(normal, tangent) * w`; `orla export` writes it as the mesh's
-tangents, and `orla import` reads the position, normal and uv. The `skin` package declares them as `Point`, `Tri`, `Bound`,
+`cross(normal, tangent) * w`; `entelechy export` writes it as the mesh's
+tangents, and `entelechy import` reads the position, normal and uv. The `skin` package declares them as `Point`, `Tri`, `Bound`,
 `Joint` and `Pose`.
 
 ## What the numbers mean
@@ -40,7 +40,7 @@ tangents, and `orla import` reads the position, normal and uv. The `skin` packag
 - **Clips.** A clip holds `frames * joints` rows: every joint of a frame,
   frame after frame. A pose is local, in its parent's space; a root's is
   in the skin's. The rotation is a quaternion, `x y z w`. The rows carry
-  no sample rate: `orla import` prints it, the bridge uses the scene's,
+  no sample rate: `entelechy import` prints it, the bridge uses the scene's,
   and a scene passes it to `skin.sample@1` as `rate`.
 - **Travel.** A clip whose root travels closes on itself: its last frame
   is its first with the root moved on by one stride, so it loops every
@@ -56,19 +56,19 @@ tangents, and `orla import` reads the position, normal and uv. The `skin` packag
   Kernels when their node is sized for it. The rig's own rows stay one
   of each.
 
-`orla import` takes a model's first skin and names in its notes what
+`entelechy import` takes a model's first skin and names in its notes what
 these rows do not hold (other skins, morph targets, a second material's
 texture).
 
 ## What holds it
 
-[`crates/interface/orla/tests/rigs.rs`](../crates/interface/orla/tests/rigs.rs) is the
-contract as a test: one table of layouts, checked against what `orla
-import` writes of a rig `orla export` wrote, and by a scene posing the
+[`crates/interface/entelechy/tests/rigs.rs`](../crates/interface/entelechy/tests/rigs.rs) is the
+contract as a test: one table of layouts, checked against what `entelechy
+import` writes of a rig `entelechy export` wrote, and by a scene posing the
 fresh rows and evaluating. The `skin` package reads the same rows in
 [`examples/skin`](../examples/skin), whose replays hold it. The Blender bridge's push
 is held to the same table in
-[`crates/interface/orla/tests/bridges.rs`](../crates/interface/orla/tests/bridges.rs),
+[`crates/interface/entelechy/tests/bridges.rs`](../crates/interface/entelechy/tests/bridges.rs),
 which also poses a pushed rig and its own glTF and checks they land in
 the same place.
 
@@ -76,7 +76,7 @@ A tool that writes these five files is done: nothing is registered.
 
 ## The way back out
 
-`orla-export` writes the five rows as a GLB: the mesh and its triangles,
+`entelechy-export` writes the five rows as a GLB: the mesh and its triangles,
 a skin whose joints carry the rest pose the inverse binds imply, and one
 animation per clip, sampled at `--rate`. The mesh, weights and skeleton
 round-trip bit for bit, the clips to a quaternion's rounding; Blender
@@ -89,6 +89,6 @@ count that is not the skeleton's is refused. Names are the GLB's, and the
 rows it came from are the same whatever they are called.
 
 ```sh
-orla-export examples/skin/assets/arm.*.field --out arm.glb --rate 30
-orla-export examples/skin/assets/arm.*.field --out arm.glb --rate 30 --joints shoulder,elbow
+entelechy-export examples/skin/assets/arm.*.field --out arm.glb --rate 30
+entelechy-export examples/skin/assets/arm.*.field --out arm.glb --rate 30 --joints shoulder,elbow
 ```

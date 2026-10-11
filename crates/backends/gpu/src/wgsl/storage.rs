@@ -43,7 +43,7 @@ pub(crate) fn f32_bits(value: f32) -> String {
     format!("bitcast<f32>({:#010x}u)", value.to_bits())
 }
 
-/// The `orla_abi::encoding` rules for half floats (both ways) and
+/// The `entelechy_abi::encoding` rules for half floats (both ways) and
 /// normalized narrowing, in integer arithmetic the shader compiler keeps
 /// exact.
 pub(crate) fn emit_encodings(out: &mut String) {

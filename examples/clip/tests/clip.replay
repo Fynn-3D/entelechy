@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # Four frames, red, green, blue, yellow, at two a second: the frame is
 # floor(time * 2), wrapping after the fourth.

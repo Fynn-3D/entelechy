@@ -1,7 +1,7 @@
 //! The capabilities a Kernel may declare are the ABI: a Host grants no
 //! other. Adding, dropping or renaming one changes `ABI_VERSION` here.
 
-use orla_abi::{ABI_VERSION, Capability};
+use entelechy_abi::{ABI_VERSION, Capability};
 
 #[test]
 fn the_capabilities_are_those_of_the_abi_version() {

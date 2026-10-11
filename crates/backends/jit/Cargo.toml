@@ -1,6 +1,6 @@
 [package]
-name = "orla-jit"
-description = "JIT backend: compiles Orla IR to native code through Cranelift, or to WebAssembly where Orla is WebAssembly, and runs it on the CPU"
+name = "entelechy-jit"
+description = "JIT backend: compiles Entelechy IR to native code through Cranelift, or to WebAssembly where Entelechy is WebAssembly, and runs it on the CPU"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,14 +12,14 @@ doctest = false
 
 [features]
 # On WebAssembly, the code the JIT makes is WebAssembly, which the host
-# loads (`orla.load`, an import the host provides); without this the JIT
+# loads (`entelechy.load`, an import the host provides); without this the JIT
 # is absent there, and a WebAssembly build imports nothing.
 wasm-host = []
 
 [dependencies]
-orla-rules = { path = "../../core/rules" }
-orla-abi = { path = "../../core/abi" }
-orla-ir = { path = "../../core/ir" }
+entelechy-rules = { path = "../../core/rules" }
+entelechy-abi = { path = "../../core/abi" }
+entelechy-ir = { path = "../../core/ir" }
 
 # Cranelift makes native code; on WebAssembly the JIT writes WebAssembly
 # itself.
@@ -32,9 +32,9 @@ cranelift-module = "0.131"
 cranelift-native = "0.131"
 
 [dev-dependencies]
-orla-cpu = { path = "../../backends/cpu" }
-orla-compiler = { path = "../../frontend/compiler" }
-orla-conformance = { path = "../../backends/conformance" }
+entelechy-cpu = { path = "../../backends/cpu" }
+entelechy-compiler = { path = "../../frontend/compiler" }
+entelechy-conformance = { path = "../../backends/conformance" }
 
 # The one crate that calls code it produced: it takes its own lints
 # rather than the workspace's `unsafe_code = "forbid"`, and keeps every

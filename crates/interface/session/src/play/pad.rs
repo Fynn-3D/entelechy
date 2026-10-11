@@ -15,7 +15,7 @@
 //! many are connected. The device
 //! names the pad's controls; this module gives them meaning.
 
-use orla_kernel::{InputState, pad};
+use entelechy_kernel::{InputState, pad};
 
 /// A pad's button, by position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

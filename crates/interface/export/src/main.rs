@@ -1,17 +1,17 @@
-//! `orla-export`: the Host's files as other software's formats. Mesh
+//! `entelechy-export`: the Host's files as other software's formats. Mesh
 //! rows (and a PNG) become a GLB, rows of one or two floats a WAV, a
 //! grid a PNG.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use orla_export::gltf;
-use orla_formats::rig::Part;
-use orla_host::{FieldData, Shape};
+use entelechy_export::gltf;
+use entelechy_formats::rig::Part;
+use entelechy_host::{FieldData, Shape};
 
 const USAGE: &str = "\
 usage:
-  orla-export <file>... --out <target> [--rate <hz>] [--beats <n>]
+  entelechy-export <file>... --out <target> [--rate <hz>] [--beats <n>]
               [--filter linear|nearest] [--joints <name>,<name>,...]
       To .glb: a vertices .field (rows of position, normal, uv, and a
       tangent where a normal map is read along one), a triangles .field
@@ -50,7 +50,7 @@ fn main() -> ExitCode {
 }
 
 fn read_field(path: &Path) -> Result<FieldData, String> {
-    orla_formats::read(path, None)
+    entelechy_formats::read(path, None)
         .map(|(data, _)| data)
         .map_err(|e| format!("{}: {e}", path.display()))
 }
@@ -165,7 +165,7 @@ fn export(args: &[String]) -> Result<String, String> {
                 &texture_paths,
                 &rig_paths,
                 &clip_paths,
-                // 30 frames a second unless given, as `orla import`.
+                // 30 frames a second unless given, as `entelechy import`.
                 rate.unwrap_or(30) as f32,
                 &out,
                 &options,
@@ -193,14 +193,14 @@ fn export(args: &[String]) -> Result<String, String> {
                 // A WAV input brings its rate; a .field takes the given one.
                 "wav" => rate.or_else(|| {
                     let bytes = std::fs::read(input).ok()?;
-                    orla_formats::wav::decode(&bytes)
+                    entelechy_formats::wav::decode(&bytes)
                         .ok()
                         .map(|sound| sound.rate)
                 }),
                 "png" => None,
                 _ => beats,
             };
-            let bytes = orla_formats::encode(&data, format, rate)
+            let bytes = entelechy_formats::encode(&data, format, rate)
                 .map_err(|why| format!("{}: {why}", input.display()))?;
             std::fs::write(&out, bytes).map_err(|e| format!("{}: {e}", out.display()))?;
             let domain = data.domain();
@@ -210,7 +210,7 @@ fn export(args: &[String]) -> Result<String, String> {
                     out.display(),
                     domain.count(),
                     data.schema().value_words(),
-                    rate.unwrap_or(orla_formats::DEFAULT_RATE)
+                    rate.unwrap_or(entelechy_formats::DEFAULT_RATE)
                 ),
                 "png" => format!(
                     "wrote {}: {} by {}",
@@ -221,8 +221,8 @@ fn export(args: &[String]) -> Result<String, String> {
                 _ => {
                     let values = data.values();
                     let notes = values
-                        .chunks_exact(orla_formats::midi::schema().value_words())
-                        .map(orla_formats::midi::note);
+                        .chunks_exact(entelechy_formats::midi::schema().value_words())
+                        .map(entelechy_formats::midi::note);
                     let seconds = notes
                         .map(|note| note.start + note.duration)
                         .fold(0.0f32, f32::max);
@@ -230,7 +230,7 @@ fn export(args: &[String]) -> Result<String, String> {
                         "wrote {}: {} note(s) over {seconds:.2} s at {} beats a minute",
                         out.display(),
                         domain.count(),
-                        beats.map_or(orla_formats::DEFAULT_BEATS, |beats| beats as f32)
+                        beats.map_or(entelechy_formats::DEFAULT_BEATS, |beats| beats as f32)
                     )
                 }
             })

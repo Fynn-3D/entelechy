@@ -2,8 +2,8 @@
 
 How a Kernel runs: as a map, a reduction, a Kernel with several outputs,
 a scatter, and a node off the frame. Each is a part in `parts/`, a whole
-scene of its own; `scene.osn` places the five as sub-graphs
-(`node reduction: graph "parts/exposure/scene.osn" {}`) and
+scene of its own; `scene.esn` places the five as sub-graphs
+(`node reduction: graph "parts/exposure/scene.esn" {}`) and
 `modes.panels@1` draws their pictures in one window, three panels over
 two.
 
@@ -13,10 +13,10 @@ scatter (particles)    off_frame (async)
 ```
 
 ```sh
-orla player examples/modes/scene.osn
-orla run examples/modes/scene.osn --window 640x400 --out modes.ppm
-orla replay examples/modes/tests/*.replay
-orla player examples/modes/parts/<part>/scene.osn
+entelechy player examples/modes/scene.esn
+entelechy run examples/modes/scene.esn --window 640x400 --out modes.ppm
+entelechy replay examples/modes/tests/*.replay
+entelechy player examples/modes/parts/<part>/scene.esn
 ```
 
 `tests/modes.replay` checks each panel of the whole and a value inside
@@ -36,7 +36,7 @@ Sorting as two map Kernels: `sort.rank` counts, for each value, the
 values below it (ties by index), and `sort.gather` picks the value of
 each rank. Each is a bounded `loop` over `count(values)`, so the work is
 quadratic. `sort.bars` draws the values before and after; they reshuffle
-every half second. The [`sort` package](../../packages/sort.orlapkg) is
+every half second. The [`sort` package](../../packages/sort.entpkg) is
 a radix sort, built from `prefix` and `scatter`.
 
 ## Several outputs: deferred
@@ -72,7 +72,7 @@ cell and pixel.
 
 ## Off the frame: async
 
-A Thumb machine (`parts/async/kernels/thumb.orla`) whose `step` node
+A Thumb machine (`parts/async/kernels/thumb.ent`) whose `step` node
 says `async = true;`: an evaluation starts the step on its own thread
 and continues, `view` shows the RAM the last landed step left, and
 `clock` sweeps a hand over it by the frame's time. The first step runs
@@ -89,5 +89,5 @@ same count while the second runs, and the landed count after `settle`.
 The JIT runs its half a million instructions a step fastest:
 
 ```sh
-orla run --backend jit --window 64x64 examples/modes/parts/async/scene.osn
+entelechy run --backend jit --window 64x64 examples/modes/parts/async/scene.esn
 ```

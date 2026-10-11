@@ -1,0 +1,68 @@
+// Histograms: how many pixels fall at each brightness, and the
+// equalization that spreads them evenly. Brightness is Oklab's
+// lightness of the linear colour, clamped 0 to 1, so bins of equal
+// width are steps the eye sees as equal; `count(bins)` of them.
+use "colour.ent";
+
+/// How bright a linear colour looks, 0 for black to 1 for white.
+fn lightness(c: Vec3) -> Float { return clamp(linear_to_oklab(max(c, vec3(0.0, 0.0, 0.0))).x, 0.0, 1.0); }
+
+/// The bin a colour falls in, of `bins`.
+fn bin_of(c: Vec3, bins: Int) -> Int {
+    return min(int(lightness(c) * float(bins)), bins - 1);
+}
+
+/// Empty bins (`domain` how many).
+kernel image.zeros@1 {
+    requires { field.write; }
+    output result: Rows<Int>;
+    compute { return 0; }
+}
+
+/// How many pixels of the source fall in each bin.
+kernel image.histogram@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    input bins: Rows<Int>;
+    output result: Rows<Int>;
+    struct Tally { bin: Int; one: Int; }
+    scatter into bins with sum {
+        return Tally { bin: bin_of(sample(source).xyz, count(bins)), one: 1 };
+    }
+}
+
+/// The cumulative count: at each bin, the pixels in it and below.
+kernel image.cumulate@1 {
+    requires { field.read; field.write; }
+    input counts: Rows<Int>;
+    output result: Rows<Int>;
+    prefix with sum { return sample(counts); }
+}
+
+/// The picture equalized: each pixel's lightness moved to the share
+/// of the pixels darker than it (`cumulative`, from `image.cumulate`),
+/// read between the counts below and through its bin by where in the
+/// bin it falls, so a smooth gradient stays smooth. The colour is
+/// scaled to reach it: lightness grows as the cube root of a scale, so
+/// the cube of the ratio, which keeps the hue. `amount` mixes it with
+/// the source.
+kernel image.equalize@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    input cumulative: Rows<Int>;
+    param amount: Float = 1.0;
+    output result: Image;
+    compute {
+        let s = sample(source);
+        let n = count(cumulative);
+        let total = float(max(at(cumulative, n - 1), 1));
+        let l = lightness(s.xyz);
+        let bin = bin_of(s.xyz, n);
+        let below = if bin > 0 { float(at(cumulative, bin - 1)) } else { 0.0 };
+        let through = float(at(cumulative, bin));
+        let wanted = mix(below, through, clamp(l * float(n) - float(bin), 0.0, 1.0)) / total;
+        let ratio = wanted / max(l, 0.0001);
+        let c = mix(s.xyz, s.xyz * (ratio * ratio * ratio), amount);
+        return vec4(c.x, c.y, c.z, s.w);
+    }
+}

@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # The darkroom at 160 by 90: the finished picture fills the window and
 # is opaque; the mark's centre is well inside it and a corner far

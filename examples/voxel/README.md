@@ -33,6 +33,6 @@ words, `write` words into `world.result`. The Player speaks the
 protocol with `--serve`.
 
 ```sh
-orla player examples/voxel/scene.osn --scale 1
-orla replay examples/voxel/tests/voxel.replay --backend gpu
+entelechy player examples/voxel/scene.esn --scale 1
+entelechy replay examples/voxel/tests/voxel.replay --backend gpu
 ```

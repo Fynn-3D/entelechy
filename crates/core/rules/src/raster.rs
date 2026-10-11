@@ -33,7 +33,7 @@
 //! - param 0, `cutout`: the alpha a fragment must have, `0.5` by
 //!   default.
 
-use orla_abi::{Handle, Invocation, Scalar, Schema, Scope, Shape};
+use entelechy_abi::{Handle, Invocation, Scalar, Schema, Scope, Shape};
 
 use crate::ExecutionError;
 
@@ -130,7 +130,7 @@ pub fn check_rasterize_cutout(
     let (vertices, triangles, mask) = check_rasterize_with(invocation, scope, Extra::Mask)?;
     let mask = mask.expect("a cutout asked for its mask");
     let cutout = match invocation.params.first() {
-        Some(orla_abi::Value::Float(value)) => *value,
+        Some(entelechy_abi::Value::Float(value)) => *value,
         _ => 0.5,
     };
     Ok((vertices, triangles, mask, cutout))
@@ -560,7 +560,7 @@ mod tests {
     /// allocation or drawing.
     #[test]
     fn a_surface_past_the_budget_is_refused_before_it_is_drawn() {
-        use orla_abi::{Capabilities, Capability, Context, Domain, Host, Invocation, Scope};
+        use entelechy_abi::{Capabilities, Capability, Context, Domain, Host, Invocation, Scope};
         let mut host = Host::new(1 << 20);
         let vertices = host.create(vertex_schema(), Domain::Rows(3)).unwrap();
         let triangles = host.create(triangle_schema(), Domain::Rows(1)).unwrap();
@@ -576,8 +576,8 @@ mod tests {
         assert!(
             matches!(
                 refused,
-                ExecutionError::Abi(orla_abi::AbiError::Host(
-                    orla_abi::HostError::BudgetExceeded { .. }
+                ExecutionError::Abi(entelechy_abi::AbiError::Host(
+                    entelechy_abi::HostError::BudgetExceeded { .. }
                 ))
             ),
             "{refused:?}"
@@ -870,7 +870,7 @@ mod tests {
 
     #[test]
     fn the_canvas_form_draws_what_the_plain_one_draws_over_its_canvas() {
-        use orla_abi::{Capabilities, Capability, Context, Domain, Host, Invocation, Scope};
+        use entelechy_abi::{Capabilities, Capability, Context, Domain, Host, Invocation, Scope};
         let mut host = Host::new(1 << 20);
         let corners: Vec<u32> = [
             vertex([-1.0, -1.0, 0.5, 1.0], [0.0, 0.0, 1.0], [0.0, 1.0]),

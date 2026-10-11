@@ -1,0 +1,85 @@
+// Distance: how far every pixel is from a shape, by jump flooding (Rong
+// and Tan). Each pixel keeps the nearest seed it has heard of; each
+// pass asks the eight pixels a step away, the step halving from half the
+// picture down to one, and one pass more at one.
+use "colour.ent";
+
+/// Seeds: where the mask is on (its luminance times alpha past
+/// `threshold`, or not past it when `inside` is false), the pixel's own
+/// centre, else none. A seed is (x, y, 1, 0); none is all zeros.
+kernel image.seeds@1 {
+    requires { field.read; field.write; }
+    input mask: Image;
+    param threshold: Float = 0.5;
+    param inside: Bool = true;
+    output result: Image;
+    compute {
+        let m = sample(mask);
+        let on = luminance(m.xyz) * m.w > threshold;
+        let c = coord() + vec2(0.5, 0.5);
+        return if on == inside { vec4(c.x, c.y, 1.0, 0.0) } else { vec4(0.0, 0.0, 0.0, 0.0) };
+    }
+}
+
+/// The first step: half the picture's longer side, as a power of two.
+kernel image.first_step@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    output result: Rows<Int>;
+    compute {
+        let side = int(max(size(source).x, size(source).y));
+        let whole = loop 16 with s = 1 until s >= side { s * 2 };
+        return max(whole / 2, 1);
+    }
+}
+
+/// The next step: half this one, never below one.
+kernel image.next_step@1 {
+    requires { field.read; field.write; }
+    input step: Rows<Int>;
+    output result: Rows<Int>;
+    compute { return max(at(step, 0) / 2, 1); }
+}
+
+/// One pass: the nearest seed among this pixel's and the eight a step
+/// away.
+kernel image.flood@1 {
+    requires { field.read; field.write; }
+    input seeds: Image;
+    input step: Rows<Int>;
+    output result: Image;
+    compute {
+        let here = coord() + vec2(0.5, 0.5);
+        let s = float(at(step, 0));
+        return loop 9 with best = sample(seeds) {
+            let o = vec2(float(index() % 3 - 1), float(index() / 3 - 1)) * s;
+            let q = here + o;
+            let other = at(seeds, q - vec2(0.5, 0.5));
+            let inside = q.x >= 0.0 && q.y >= 0.0 && q.x < size(seeds).x && q.y < size(seeds).y;
+            let closer = best.z < 0.5 || distance(other.xy, here) < distance(best.xy, here);
+            if inside && other.z > 0.5 && closer { other } else { best }
+        };
+    }
+}
+
+/// The signed distance, in pixels, from each pixel's centre to the
+/// shape's edge: from the nearest pixel of the shape when outside it
+/// (`inside`'s flood), less the distance to the nearest pixel outside
+/// it when within (`outside`'s flood); half a pixel taken off each, so
+/// the edge lies between the pixels either side. Where a flood found no
+/// seed, `reach`.
+kernel image.distance@1 {
+    requires { field.read; field.write; }
+    input inside: Image;
+    input outside: Image;
+    param reach: Float = 1000.0;
+    output result: Grid<Float>;
+    compute {
+        let here = coord() + vec2(0.5, 0.5);
+        let a = sample(inside);
+        let b = sample(outside);
+        let to_shape = if a.z > 0.5 { distance(a.xy, here) } else { reach };
+        let to_space = if b.z > 0.5 { distance(b.xy, here) } else { reach };
+        return if to_shape < 0.25 { 0.5 - to_space } else { to_shape - 0.5 };
+    }
+}

@@ -1,0 +1,26 @@
+// The torus drawn by the fast path: `native.rasterize@1` in place of the
+// raster package, one node for another. On the interpreter and the JIT
+// it draws what the package draws, bit for bit; on a GPU it is the
+// device's rasterizer, which may take an edge pixel the other way.
+use "../kernels/";
+
+param level: Int = 1;
+
+node torus: mesh.torus@1 { domain = 1152; }
+node faces: mesh.torus_faces@1 { domain = 2304; }
+node subdivided: graph "../level.esn" {
+    times = level;
+    carry mesh <- vertices;
+    carry faces <- triangles;
+    mesh <- torus.result;
+    faces <- faces.result;
+}
+node project: mesh.project@1 { mesh <- subdivided.vertices; }
+node raster: native.rasterize@1 {
+    vertices <- project.result;
+    triangles <- subdivided.triangles;
+    domain = vec2(320, 240);
+}
+node view: mesh.shade@1 { surface <- raster.surface; }
+
+output result <- view.result;

@@ -1,4 +1,4 @@
-//! Orla's syntax and API, layer by layer, gathered from the tables the
+//! Entelechy's syntax and API, layer by layer, gathered from the tables the
 //! implementation executes: the builtins and the forms from the compiler,
 //! the reserved words from the parser, what a `domain` may call from the
 //! scene's lowering, what a capability grants from the ABI, a package's
@@ -8,9 +8,9 @@
 
 use serde_json::{Value as Json, json};
 
-use orla_compiler::help::{Builtin, Form};
-use orla_kernel::Capability;
-use orla_session::replay;
+use entelechy_compiler::help::{Builtin, Form};
+use entelechy_kernel::Capability;
+use entelechy_session::replay;
 
 /// The sections in the order the reference gives them, each with what it
 /// holds.
@@ -104,23 +104,23 @@ fn op_json(op: &crate::ops::Operation) -> Json {
 
 /// Every item of every section, in full.
 fn items() -> Vec<Json> {
-    let builtins = orla_compiler::help::builtins();
+    let builtins = entelechy_compiler::help::builtins();
     let mut out: Vec<Json> = builtins.iter().map(builtin_json).collect();
     out.extend(
         Capability::ALL
             .iter()
             .map(|capability| authority_json(*capability, &builtins)),
     );
-    out.extend(orla_compiler::help::forms().iter().map(form_json));
+    out.extend(entelechy_compiler::help::forms().iter().map(form_json));
     // The parser's own table of the words no name may be.
     out.push(json!({
         "section": "kernel",
         "name": "reserved",
         "kind": "document",
-        "shape": orla_language::RESERVED.join(" "),
+        "shape": entelechy_language::RESERVED.join(" "),
         "doc": "The words the language keeps for itself, each beginning a statement or an expression or going between its parts: a Kernel, node, port, param, function, struct or binding may not be named one. The words that begin items (`kernel`, `input`, `type`, `from` and the rest) name things anywhere else; a Kernel's param is not named `domain` or `async`, which a node sets itself.",
     }));
-    out.extend(orla_scene::domain::functions().iter().map(|f| {
+    out.extend(entelechy_scene::domain::functions().iter().map(|f| {
         json!({
             "section": "scene",
             "name": f.name,
@@ -130,7 +130,7 @@ fn items() -> Vec<Json> {
             "examples": [format!("domain = {};", f.example)],
         })
     }));
-    out.extend(orla_session::package::LAYOUT.iter().map(|part| {
+    out.extend(entelechy_session::package::LAYOUT.iter().map(|part| {
         json!({
             "section": "packages",
             "name": part.name,
@@ -168,7 +168,7 @@ pub fn reference() -> String {
     let all = items();
     let text = |item: &Json, key: &str| item[key].as_str().unwrap_or_default().to_owned();
     let mut out = String::from(
-        "# Orla\n\nKernels (`.orla`) compute; scenes (`.osn`) compose them into a running world. Whole programs are in `examples/`.\n",
+        "# Entelechy\n\nKernels (`.ent`) compute; scenes (`.esn`) compose them into a running world. Whole programs are in `examples/`.\n",
     );
     for (section, what) in SECTIONS {
         out.push_str(&format!("\n## {section}: {what}\n\n"));
@@ -234,9 +234,9 @@ pub fn named(name: &str) -> Result<Json, Json> {
             .collect();
         names.sort_unstable();
         names.dedup();
-        let near = orla_language::nearest(name, names.iter().copied());
+        let near = entelechy_language::nearest(name, names.iter().copied());
         return Err(json!({
-            "message": format!("nothing named `{name}`{}", orla_language::suggestion(near)),
+            "message": format!("nothing named `{name}`{}", entelechy_language::suggestion(near)),
             "similar": near.into_iter().collect::<Vec<_>>(),
         }));
     }

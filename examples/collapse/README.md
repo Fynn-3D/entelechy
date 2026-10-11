@@ -12,7 +12,7 @@ start ─ steps (×8) ─┬─ pick (the fewest left: a reduce)
                                    └─ tally ─ label ─ glyphs ─ draw
 ```
 
-A step (`step.osn`) picks the cell with the fewest options, settles it,
+A step (`step.esn`) picks the cell with the fewest options, settles it,
 and spreads the constraint six times; the scene places eight steps a
 frame and carries the grid through `<~`. Hold the pointer down to make
 cells forget; idle spots also forget on their own.
@@ -21,6 +21,6 @@ Every step is integer work; the replay pins its counts exactly on the
 interpreter, the JIT and the GPU.
 
 ```sh
-orla player examples/collapse/scene.osn
-orla replay examples/collapse/tests/collapse.replay
+entelechy player examples/collapse/scene.esn
+entelechy replay examples/collapse/tests/collapse.replay
 ```

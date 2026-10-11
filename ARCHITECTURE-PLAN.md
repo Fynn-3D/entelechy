@@ -1,8 +1,8 @@
-# Orla Architecture Plan
+# Entelechy Architecture Plan
 
 ## 0. Positioning
 
-**Orla** is a dynamic Kernel Runtime and software framework designed for the AI-native era.
+**Entelechy** is a dynamic Kernel Runtime and software framework designed for the AI-native era.
 
 Its purpose is not to provide a fixed set of application features.
 
@@ -19,7 +19,7 @@ composed
 reused
 ```
 
-The core architectural equation of Orla is:
+The core architectural equation of Entelechy is:
 
 ```text
 Stable Host
@@ -35,7 +35,7 @@ AI Compiler
 Dynamic Software System
 ```
 
-In Orla, application capabilities are not assumed to be permanently embedded into the host binary.
+In Entelechy, application capabilities are not assumed to be permanently embedded into the host binary.
 
 Instead, a capability is treated as a:
 
@@ -65,7 +65,7 @@ Application
 User
 ```
 
-Orla introduces a different model:
+Entelechy introduces a different model:
 
 ```text
 Human / AI
@@ -74,7 +74,7 @@ Intent
      ↓
 Kernel / Graph
      ↓
-Orla Runtime
+Entelechy Runtime
      ↓
 Live Capability
 ```
@@ -85,7 +85,7 @@ For example, a user may request:
 "Create a real-time pixel fluid simulator."
 ```
 
-An Orla-based system could potentially perform:
+An Entelechy-based system could potentially perform:
 
 ```text
 Intent Analysis
@@ -111,7 +111,7 @@ The host application itself does not need to be rebuilt.
 
 # 2. Core Philosophy
 
-Orla is based on several architectural principles.
+Entelechy is based on several architectural principles.
 
 ## 2.1 Stable Host, Dynamic Kernel
 
@@ -134,7 +134,7 @@ Kernels define what can happen inside that world.
 
 ## 2.2 Capability-First Architecture
 
-Orla should not fundamentally organize itself around concepts such as:
+Entelechy should not fundamentally organize itself around concepts such as:
 
 ```text
 Class
@@ -191,13 +191,13 @@ These are different interfaces around the same underlying computational capabili
 └───────────────────┬─────────────────────┘
                     │
 ┌───────────────────▼─────────────────────┐
-│             Orla Kernel Runtime         │
+│           Entelechy Kernel Runtime      │
 │                                         │
 │ Compile / Validate / Load / Hot Swap    │
 └───────────────────┬─────────────────────┘
                     │
 ┌───────────────────▼─────────────────────┐
-│                 Orla IR                 │
+│               Entelechy IR              │
 │                                         │
 │ Typed Intermediate Representation       │
 └──────────────┬──────────────┬───────────┘
@@ -217,7 +217,7 @@ These are different interfaces around the same underlying computational capabili
 
 # 4. Layer Model
 
-The long-term Orla stack can be described as:
+The long-term Entelechy stack can be described as:
 
 ```text
 L0  Hardware
@@ -226,7 +226,7 @@ L1  Host Core
 
 L2  Capability ABI
 
-L3  Orla IR
+L3  Entelechy IR
 
 L4  Kernel Runtime
 
@@ -258,7 +258,7 @@ Storage
 Network
 ```
 
-Upper Orla layers should avoid depending directly on specific hardware architectures.
+Upper Entelechy layers should avoid depending directly on specific hardware architectures.
 
 Hardware-specific behavior should remain behind backend abstractions.
 
@@ -266,7 +266,7 @@ Hardware-specific behavior should remain behind backend abstractions.
 
 # 6. L1 — Host Core
 
-The Host Core should be one of the most stable parts of Orla.
+The Host Core should be one of the most stable parts of Entelechy.
 
 Its responsibilities include:
 
@@ -419,7 +419,7 @@ Native Code Execution
 Raw System Memory
 ```
 
-Orla should use capability-based security rather than implicit global access.
+Entelechy should use capability-based security rather than implicit global access.
 
 ---
 
@@ -467,13 +467,13 @@ This manifest becomes part of the stable contract between the Kernel and the Run
 
 ---
 
-# 11. L3 — Orla IR
+# 11. L3 — Entelechy IR
 
-The Orla Kernel Language should not compile directly into a single backend format.
+The Entelechy Kernel Language should not compile directly into a single backend format.
 
 There should be an intermediate representation:
 
-**Orla IR**
+**Entelechy IR**
 
 Compilation pipeline:
 
@@ -486,14 +486,14 @@ AST
 ↓
 Semantic Analysis
 ↓
-Orla IR
+Entelechy IR
 ↓
 Backend Compiler
 ```
 
 ---
 
-# 12. Why Orla Needs an IR
+# 12. Why Entelechy Needs an IR
 
 Without an IR, the architecture may become tightly coupled:
 
@@ -516,7 +516,7 @@ NPU
 A better design is:
 
 ```text
-             Orla IR
+             Entelechy IR
 
         ┌──────┼──────┐
         │      │      │
@@ -527,7 +527,7 @@ This allows the language frontend and hardware backends to evolve independently.
 
 ---
 
-# 13. Desired Properties of Orla IR
+# 13. Desired Properties of Entelechy IR
 
 The IR should ideally be:
 
@@ -547,13 +547,13 @@ Optimizable
 Backend-neutral
 ```
 
-The IR should become Orla's true internal computational representation.
+The IR should become Entelechy's true internal computational representation.
 
 ---
 
 # 14. L4 — Kernel Runtime
 
-The Kernel Runtime is the execution heart of Orla.
+The Kernel Runtime is the execution heart of Entelechy.
 
 Its responsibilities include:
 
@@ -676,9 +676,9 @@ The Registry acts as the capability index of the system.
 
 ---
 
-# 18. L5 — Orla Kernel Language
+# 18. L5 — Entelechy Kernel Language
 
-The Kernel Language should be the primary capability definition language of Orla.
+The Kernel Language should be the primary capability definition language of Entelechy.
 
 Its initial design should prioritize:
 
@@ -747,7 +747,7 @@ node Pixelate {
 When:
 
 ```text
-pixelate.orla
+pixelate.ent
 ```
 
 is added or modified, the Runtime can:
@@ -914,7 +914,7 @@ State migration should be explicit.
 
 # 25. Stateless Kernels First
 
-Orla should strongly prefer stateless Kernels when possible.
+Entelechy should strongly prefer stateless Kernels when possible.
 
 Ideal form:
 
@@ -1098,13 +1098,13 @@ Intermediate Textures
 Temporary Buffers
 ```
 
-Kernel fusion could become a major performance feature of Orla.
+Kernel fusion could become a major performance feature of Entelechy.
 
 ---
 
 # 31. L7 — AI Runtime
 
-AI should not be treated as a chat feature inside Orla.
+AI should not be treated as a chat feature inside Entelechy.
 
 It should be treated as a:
 
@@ -1196,13 +1196,13 @@ Capability API
 
 AI-generated code should not be allowed to directly inject arbitrary native code into the Host.
 
-That would bypass Orla's safety model.
+That would bypass Entelechy's safety model.
 
 ---
 
 # 34. L8 — Interface Layer
 
-Orla should not depend on one user interface.
+Entelechy should not depend on one user interface.
 
 Possible interfaces include:
 
@@ -1230,19 +1230,19 @@ All of them operate on the same underlying Runtime.
 
 ---
 
-# 35. Orla and AnimaComposer
+# 35. Entelechy and AnimaComposer
 
 If AnimaComposer remains the creative product layer, the relationship can be:
 
 ```text
 AnimaComposer
 =
-Orla Runtime
+Entelechy Runtime
 +
 Creative Interface
 ```
 
-Orla is the platform.
+Entelechy is the platform.
 
 AnimaComposer is one product powered by that platform.
 
@@ -1251,7 +1251,7 @@ AnimaComposer is one product powered by that platform.
 # 36. Suggested Repository Structure
 
 ```text
-orla/
+entelechy/
 
 host/
 
@@ -1338,7 +1338,7 @@ The first phase should not attempt to build the entire language ecosystem.
 
 The goal is simple:
 
-> Prove that an Orla Kernel can be dynamically compiled, loaded, executed, and hot-swapped.
+> Prove that an Entelechy Kernel can be dynamically compiled, loaded, executed, and hot-swapped.
 
 Initial components:
 
@@ -1387,7 +1387,7 @@ The first demonstration should be extremely small:
 ```text
 Image
 ↓
-Orla Kernel: Grayscale
+Entelechy Kernel: Grayscale
 ↓
 Output
 ```
@@ -1395,7 +1395,7 @@ Output
 Then modify:
 
 ```text
-grayscale.orla
+grayscale.ent
 ```
 
 Save the file.
@@ -1404,7 +1404,7 @@ The application remains running.
 
 The output updates immediately.
 
-If this works reliably, the architectural core of Orla is proven.
+If this works reliably, the architectural core of Entelechy is proven.
 
 ---
 
@@ -1441,7 +1441,7 @@ Output
 Every node is implemented by:
 
 ```text
-.orla
+.ent
 ```
 
 Kernel files.
@@ -1473,7 +1473,7 @@ Example user request:
 The system generates:
 
 ```text
-scanline.orla
+scanline.ent
 ```
 
 Then:
@@ -1499,7 +1499,7 @@ The software has effectively created a new capability while running.
 Add:
 
 ```text
-Orla IR Optimizer
+Entelechy IR Optimizer
 
 Kernel Fusion
 
@@ -1516,13 +1516,13 @@ State Migration
 Plugin Packages
 ```
 
-At this stage, Orla becomes a serious runtime architecture rather than a simple scripting layer.
+At this stage, Entelechy becomes a serious runtime architecture rather than a simple scripting layer.
 
 ---
 
 # 42. Phase 5 — General Dynamic Compute Runtime
 
-Orla can later expand beyond visual computing.
+Entelechy can later expand beyond visual computing.
 
 Potential domains:
 
@@ -1544,7 +1544,7 @@ Automation
 Agents
 ```
 
-At this point Orla becomes:
+At this point Entelechy becomes:
 
 ```text
 General Dynamic Compute Runtime
@@ -1554,12 +1554,12 @@ rather than only a graphics engine.
 
 ---
 
-# 43. Orla Package Format
+# 43. Entelechy Package Format
 
 A future package format could be:
 
 ```text
-.orlapkg
+.entpkg
 ```
 
 Containing:
@@ -1579,7 +1579,7 @@ metadata
 Example:
 
 ```text
-nes_fx.orlapkg
+nes_fx.entpkg
 ```
 
 Installing the package may automatically provide:
@@ -1617,11 +1617,11 @@ Package Version
 For example:
 
 ```text
-orla.api = 1
+entelechy.api = 1
 
-orla.language = 1
+entelechy.language = 1
 
-orla.ir = 1
+entelechy.ir = 1
 ```
 
 These should not be collapsed into one global version number.
@@ -1704,7 +1704,7 @@ This makes effects visible to both the Runtime and the user.
 
 # 47. Pure Kernel Model
 
-The ideal primitive computational unit of Orla is:
+The ideal primitive computational unit of Entelechy is:
 
 ```text
 Kernel:
@@ -1789,7 +1789,7 @@ These categories should not be mixed.
 
 # 49. Long-Term Technical Moat
 
-The long-term technical moat of Orla is not primarily:
+The long-term technical moat of Entelechy is not primarily:
 
 ```text
 Node Editor
@@ -1804,9 +1804,9 @@ Kernel Syntax
 The deeper assets are:
 
 ```text
-Orla Capability ABI
+Entelechy Capability ABI
 
-Orla IR
+Entelechy IR
 
 Kernel Runtime
 
@@ -1825,7 +1825,7 @@ should be treated as strategic core infrastructure.
 
 ---
 
-# 50. Orla vs Traditional Plugins
+# 50. Entelechy vs Traditional Plugins
 
 Traditional plugin systems often look like:
 
@@ -1835,14 +1835,14 @@ Native Code
 Host API
 ```
 
-Orla instead follows:
+Entelechy instead follows:
 
 ```text
 Capability
 ↓
 Kernel Language
 ↓
-Orla IR
+Entelechy IR
 ↓
 Sandbox Runtime
 ↓
@@ -1867,7 +1867,7 @@ Live Composition
 
 # 51. End-State Architecture
 
-The final vision of Orla is not:
+The final vision of Entelechy is not:
 
 ```text
 Software that supports custom Kernels.
@@ -1889,14 +1889,14 @@ Conceptually:
                 Graph / Kernel
                       │
                       ▼
-                 Orla Runtime
+                 Entelechy Runtime
               ┌───────┴───────┐
               │               │
            Graph VM        Kernel VM
               │               │
               └───────┬───────┘
                       │
-                   Orla IR
+                   Entelechy IR
                       │
                 Capability ABI
                       │
@@ -1914,33 +1914,33 @@ Conceptually:
 A possible product hierarchy:
 
 ```text
-Orla
+Entelechy
     Runtime / Kernel Platform
 
 AnimaComposer
     Visual Creative Environment
-    powered by Orla
+    powered by Entelechy
 ```
 
-The Orla ecosystem may later include:
+The Entelechy ecosystem may later include:
 
 ```text
-Orla Runtime
+Entelechy Runtime
 
-Orla Kernel
+Entelechy Kernel
 
-Orla Graph
+Entelechy Graph
 
-Orla Studio
+Entelechy Studio
 
-Orla SDK
+Entelechy SDK
 ```
 
 ---
 
 # 53. One-Sentence Definition
 
-> **Orla is an AI-native dynamic Kernel Runtime where the Host defines a stable world, Kernels define capabilities, Graphs compose them, and AI can generate new capabilities at runtime.**
+> **Entelechy is an AI-native dynamic Kernel Runtime where the Host defines a stable world, Kernels define capabilities, Graphs compose them, and AI can generate new capabilities at runtime.**
 
 ---
 
@@ -1949,16 +1949,16 @@ Orla SDK
 The first implementation should prove only four things:
 
 ```text
-1. A .orla file can be compiled.
+1. A .ent file can be compiled.
 
 2. Compiled code can call the Host through a stable ABI.
 
-3. A modified .orla file can be atomically hot-swapped.
+3. A modified .ent file can be atomically hot-swapped.
 
 4. A Graph can reference a KernelID instead of host-language implementation code.
 ```
 
-If these four properties work cleanly, the architectural foundation of Orla is valid.
+If these four properties work cleanly, the architectural foundation of Entelechy is valid.
 
 Everything else:
 

@@ -18,13 +18,13 @@ impl Evaluator {
     /// the cache, so the next evaluation reruns them.
     pub(super) fn wait_for_checks(
         &mut self,
-        checks: Vec<(NodeId, Vec<Box<dyn orla_kernel::Check>>)>,
+        checks: Vec<(NodeId, Vec<Box<dyn entelechy_kernel::Check>>)>,
         runtime: &mut Runtime,
     ) -> Result<(), EvaluateError> {
         if checks.iter().all(|(_, checks)| checks.is_empty()) {
             return Ok(());
         }
-        let mut failed: Option<(usize, NodeId, orla_kernel::ExecutionError)> = None;
+        let mut failed: Option<(usize, NodeId, entelechy_kernel::ExecutionError)> = None;
         let mut order = Vec::with_capacity(checks.len());
         for (at, (node, node_checks)) in checks.into_iter().enumerate() {
             order.push(node.clone());

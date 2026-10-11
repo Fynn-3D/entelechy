@@ -4,8 +4,8 @@
 
 use std::path::{Path, PathBuf};
 
-use orla_kernel::Context;
-use orla_session::{Limits, Session};
+use entelechy_kernel::Context;
+use entelechy_session::{Limits, Session};
 
 const KERNELS: &str = "
 kernel t.paint@1 { requires { field.write; } output result: Grid<Vec4>; compute { return vec4(0.5, 0.25, 1.0, 1.0); } }
@@ -14,7 +14,7 @@ kernel t.count@1 { requires { field.write; } output result: Rows<Int>; compute {
 ";
 
 const SCENE: &str = "
-use \"k.orla\";
+use \"k.ent\";
 node paint: t.paint@1 { domain = vec2(4, 2); }
 node narrow: t.narrow@1 { domain = vec2(4, 2); }
 node count: t.count@1 { domain = 3; }
@@ -24,11 +24,11 @@ output rows <- count.result;
 ";
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("orla-outputs-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-outputs-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("k.orla"), KERNELS).unwrap();
-    std::fs::write(dir.join("scene.osn"), SCENE).unwrap();
+    std::fs::write(dir.join("k.ent"), KERNELS).unwrap();
+    std::fs::write(dir.join("scene.esn"), SCENE).unwrap();
     dir
 }
 
@@ -40,7 +40,7 @@ fn open(dir: &Path, backend: &str) -> Option<Session> {
         ..Limits::default()
     };
     let runtime = Session::runtime_for(backend, limits).ok()?;
-    let mut session = Session::open_with(&dir.join("scene.osn"), None, runtime);
+    let mut session = Session::open_with(&dir.join("scene.esn"), None, runtime);
     let events = session.sync_settled();
     assert!(session.graph().is_some(), "{events:?}");
     Some(session)

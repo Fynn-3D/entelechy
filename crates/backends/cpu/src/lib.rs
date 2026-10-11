@@ -15,12 +15,12 @@ mod eval;
 
 use std::any::Any;
 
-use orla_abi::{Domain, Handle, Invocation, Scope, Type};
-use orla_ir::{Combine, Mode, Validated};
+use entelechy_abi::{Domain, Handle, Invocation, Scope, Type};
+use entelechy_ir::{Combine, Mode, Validated};
 
-use orla_rules::{Backend, NativeOp, Prepared};
+use entelechy_rules::{Backend, NativeOp, Prepared};
 
-pub use orla_rules::{
+pub use entelechy_rules::{
     ArithmeticError, ExecutionError, address_words, check_invocation, check_scan, check_scatter,
     combine_words, float_order_key, scatter_index,
 };
@@ -90,7 +90,7 @@ impl CpuBackend {
                 combine,
             );
         }
-        orla_rules::outputs_fit_words(module, invocation.domain, scope)?;
+        entelechy_rules::outputs_fit_words(module, invocation.domain, scope)?;
         let program = eval::Program::with(code, module, invocation, scope, invocation.domain)?;
         let results = compute(&program, &strides)?;
         program.outcome()?;
@@ -156,8 +156,8 @@ fn reduce(
     stride: usize,
 ) -> Result<Vec<Handle>, ExecutionError> {
     let domain = scope.size(invocation.inputs[0])?;
-    let held = orla_rules::Held::new(scope.room());
-    if !held.take(orla_rules::held_values(true, domain.count(), stride)) {
+    let held = entelechy_rules::Held::new(scope.room());
+    if !held.take(entelechy_rules::held_values(true, domain.count(), stride)) {
         return Err(held.over());
     }
     let program = eval::Program::with(code.clone(), module, invocation, scope, domain)?;
@@ -205,8 +205,8 @@ fn prefix(
     combine: Combine,
 ) -> Result<Vec<Handle>, ExecutionError> {
     let domain = scope.size(invocation.inputs[0])?;
-    let held = orla_rules::Held::new(scope.room());
-    if !held.take(orla_rules::held_values(false, domain.count(), stride)) {
+    let held = entelechy_rules::Held::new(scope.room());
+    if !held.take(entelechy_rules::held_values(false, domain.count(), stride)) {
         return Err(held.over());
     }
     let program = eval::Program::with(code.clone(), module, invocation, scope, domain)?;
@@ -220,12 +220,17 @@ fn prefix(
         let mut running = values[..stride].to_vec();
         for element in 1..count {
             let at = element * stride;
-            orla_rules::combine_words(combine, scalars, &mut running, &values[at..at + stride])
-                .map_err(|error| ExecutionError::Arithmetic {
-                    x: element as u32,
-                    y: 0,
-                    error,
-                })?;
+            entelechy_rules::combine_words(
+                combine,
+                scalars,
+                &mut running,
+                &values[at..at + stride],
+            )
+            .map_err(|error| ExecutionError::Arithmetic {
+                x: element as u32,
+                y: 0,
+                error,
+            })?;
             values[at..at + stride].copy_from_slice(&running);
         }
     }
@@ -281,10 +286,10 @@ pub struct TraceFault {
     /// The function it failed in, `None` the entry.
     pub function: Option<String>,
     /// The failing value in that function.
-    pub value: Option<orla_ir::ValueId>,
+    pub value: Option<entelechy_ir::ValueId>,
     /// In the entry, the value it failed under: the failing one, or the
     /// call it failed in.
-    pub entry_value: Option<orla_ir::ValueId>,
+    pub entry_value: Option<entelechy_ir::ValueId>,
     /// That function's bindings as the failure left them, when it failed
     /// in a function.
     pub bindings: Vec<TraceValue>,
@@ -292,17 +297,19 @@ pub struct TraceFault {
 
 /// The loop whose spend `function` wrote at frame word `word`.
 fn loop_spent_at(
-    function: &orla_ir::Function,
+    function: &entelechy_ir::Function,
     locs: &[(usize, usize)],
     word: usize,
-) -> Option<orla_ir::ValueId> {
+) -> Option<entelechy_ir::ValueId> {
     fn walk(
-        body: &[orla_ir::Instruction],
+        body: &[entelechy_ir::Instruction],
         locs: &[(usize, usize)],
         word: usize,
-    ) -> Option<orla_ir::ValueId> {
+    ) -> Option<entelechy_ir::ValueId> {
         body.iter().find_map(|instruction| match instruction.op {
-            orla_ir::Op::Spend(looped) if locs[instruction.id.0 as usize].0 == word => Some(looped),
+            entelechy_ir::Op::Spend(looped) if locs[instruction.id.0 as usize].0 == word => {
+                Some(looped)
+            }
             _ => instruction
                 .op
                 .blocks()
@@ -316,25 +323,25 @@ fn loop_spent_at(
 /// The first value of `function` an operation that can fail wrote at
 /// frame word `word`, by `locs` (each value's word and width).
 fn value_written_at(
-    function: &orla_ir::Function,
+    function: &entelechy_ir::Function,
     locs: &[(usize, usize)],
     word: usize,
-) -> Option<orla_ir::ValueId> {
+) -> Option<entelechy_ir::ValueId> {
     fn walk(
-        body: &[orla_ir::Instruction],
+        body: &[entelechy_ir::Instruction],
         locs: &[(usize, usize)],
         word: usize,
         any: bool,
-    ) -> Option<orla_ir::ValueId> {
+    ) -> Option<entelechy_ir::ValueId> {
         for instruction in body {
             let (at, n) = locs[instruction.id.0 as usize];
             let fails = matches!(
                 instruction.op,
-                orla_ir::Op::Binary(..)
-                    | orla_ir::Op::Unary(..)
-                    | orla_ir::Op::Intrinsic(..)
-                    | orla_ir::Op::Call(..)
-                    | orla_ir::Op::Loop { .. }
+                entelechy_ir::Op::Binary(..)
+                    | entelechy_ir::Op::Unary(..)
+                    | entelechy_ir::Op::Intrinsic(..)
+                    | entelechy_ir::Op::Call(..)
+                    | entelechy_ir::Op::Loop { .. }
             );
             if (any || fails) && n > 0 && at == word {
                 return Some(instruction.id);
@@ -369,16 +376,21 @@ pub const CALL_RECORDS: usize = eval::CALL_RECORDS;
 /// conditions: an `if` branch ran when its `if` ran and chose it; a loop
 /// value ran when its loop did (showing the last iteration).
 fn ran_values(
-    entry: &orla_ir::Function,
-    value: &dyn Fn(orla_ir::ValueId) -> Vec<u32>,
-    failed: Option<orla_ir::ValueId>,
+    entry: &entelechy_ir::Function,
+    value: &dyn Fn(entelechy_ir::ValueId) -> Vec<u32>,
+    failed: Option<entelechy_ir::ValueId>,
 ) -> Vec<bool> {
     struct Walk<'a> {
-        value: &'a dyn Fn(orla_ir::ValueId) -> Vec<u32>,
-        failed: Option<orla_ir::ValueId>,
+        value: &'a dyn Fn(entelechy_ir::ValueId) -> Vec<u32>,
+        failed: Option<entelechy_ir::ValueId>,
         stopped: bool,
     }
-    fn walk(instructions: &[orla_ir::Instruction], live: bool, w: &mut Walk<'_>, ran: &mut [bool]) {
+    fn walk(
+        instructions: &[entelechy_ir::Instruction],
+        live: bool,
+        w: &mut Walk<'_>,
+        ran: &mut [bool],
+    ) {
         for instruction in instructions {
             // The failing value did not come to be, nor anything after it.
             w.stopped |= w.failed == Some(instruction.id);
@@ -386,7 +398,7 @@ fn ran_values(
             ran[instruction.id.0 as usize] = live;
             let value = w.value;
             match &instruction.op {
-                orla_ir::Op::If {
+                entelechy_ir::Op::If {
                     condition,
                     then,
                     otherwise,
@@ -395,7 +407,7 @@ fn ran_values(
                     walk(&then.body, chosen, w, ran);
                     walk(&otherwise.body, live && !chosen, w, ran);
                 }
-                orla_ir::Op::Match {
+                entelechy_ir::Op::Match {
                     scrutinee,
                     arms,
                     otherwise,
@@ -409,7 +421,7 @@ fn ran_values(
                     }
                     walk(&otherwise.body, live && !taken, w, ran);
                 }
-                orla_ir::Op::Loop { until, body, .. } => {
+                entelechy_ir::Op::Loop { until, body, .. } => {
                     if let Some(until) = until {
                         walk(&until.body, live, w, ran);
                     }
@@ -432,11 +444,11 @@ fn ran_values(
 /// The named values of a function from its frame, the ones whose block
 /// ran marked, and its results.
 fn values_of(
-    function: &orla_ir::Function,
-    value: &dyn Fn(orla_ir::ValueId) -> Vec<u32>,
+    function: &entelechy_ir::Function,
+    value: &dyn Fn(entelechy_ir::ValueId) -> Vec<u32>,
     result: &dyn Fn(usize) -> Vec<u32>,
     result_names: Vec<String>,
-    failed: Option<orla_ir::ValueId>,
+    failed: Option<entelechy_ir::ValueId>,
 ) -> (Vec<TraceValue>, Vec<TraceValue>) {
     let ran = ran_values(function, value, failed);
     let bindings = function
@@ -721,7 +733,7 @@ fn scatter(
     let sources = invocation.domain;
     let address = address_words(target);
     let program = eval::Program::with(code.clone(), module, invocation, scope, sources)?;
-    let held = orla_rules::Held::new(scope.room());
+    let held = entelechy_rules::Held::new(scope.room());
     let (pairs, sources_of) = compute_pairs(&program, address + stride, &held)?;
     program.outcome()?;
     drop(program);
@@ -731,10 +743,10 @@ fn scatter(
     // A sum is each element's whole total in any order; an overflow
     // names the element whose total leaves the range.
     if combine == Combine::Sum {
-        if !held.take(orla_rules::Sums::held_words(scalars, target.count())) {
+        if !held.take(entelechy_rules::Sums::held_words(scalars, target.count())) {
             return Err(held.over());
         }
-        let mut sums = orla_rules::Sums::new(scalars, &words);
+        let mut sums = entelechy_rules::Sums::new(scalars, &words);
         for pair in pairs.chunks_exact(address + stride) {
             if let Some(at) = scatter_index(target, &pair[..address]) {
                 sums.add(&mut words, at, &pair[address..]);
@@ -789,13 +801,13 @@ type Pairs = (Vec<u32>, Vec<u32>);
 fn compute_pairs(
     program: &eval::Program<'_>,
     pair_words: usize,
-    held: &orla_rules::Held,
+    held: &entelechy_rules::Held,
 ) -> Result<Pairs, ExecutionError> {
     let domain = program.domain;
     let width = domain.width() as usize;
     let height = domain.height();
     let element_count = width * height as usize * domain.depth() as usize;
-    let threads = orla_rules::cores()
+    let threads = entelechy_rules::cores()
         .min(element_count.max(1))
         .min(element_count.div_ceil(PARALLEL_THRESHOLD))
         .max(1);
@@ -862,7 +874,7 @@ fn compute(program: &eval::Program<'_>, strides: &[usize]) -> Result<Vec<u32>, E
     let mut results = vec![0u32; rows * row_words];
     let element_count = width * rows;
     // Split by elements: a `Rows` domain is a single row.
-    let threads = orla_rules::cores()
+    let threads = entelechy_rules::cores()
         .min(element_count.max(1))
         .min(element_count.div_ceil(PARALLEL_THRESHOLD))
         .max(1);
@@ -953,9 +965,13 @@ impl Backend for CpuBackend {
         scope: &mut Scope<'_>,
     ) -> Result<Vec<Handle>, ExecutionError> {
         match op {
-            NativeOp::Rasterize => orla_rules::raster::rasterize(invocation, scope),
-            NativeOp::RasterizeCutout => orla_rules::raster::rasterize_cutout(invocation, scope),
-            NativeOp::RasterizeCanvas => orla_rules::raster::rasterize_canvas(invocation, scope),
+            NativeOp::Rasterize => entelechy_rules::raster::rasterize(invocation, scope),
+            NativeOp::RasterizeCutout => {
+                entelechy_rules::raster::rasterize_cutout(invocation, scope)
+            }
+            NativeOp::RasterizeCanvas => {
+                entelechy_rules::raster::rasterize_canvas(invocation, scope)
+            }
         }
     }
 }

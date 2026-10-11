@@ -3,7 +3,7 @@
 //!
 //! The runtime owns the Host, the backend it is given, and the registry
 //! of published Kernel versions. It takes validated IR; every backend
-//! implements the [`Backend`] contract from `orla-rules`. A published
+//! implements the [`Backend`] contract from `entelechy-rules`. A published
 //! version is immutable. [`Runtime::prepare_module`] builds a
 //! [`Candidate`] outside the registry; [`Runtime::publish`] swaps it in
 //! atomically when the caller's expected generation still holds. A failed
@@ -18,14 +18,14 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-pub use orla_abi::pad;
-pub use orla_abi::{
+pub use entelechy_abi::pad;
+pub use entelechy_abi::{
     ABI_VERSION, Capabilities, Capability, Context, Domain, Encoding, FieldData, Handle, Host,
     HostError, Image, InputState, Invocation, Number, Pixel, Scalar, Schema, Scope, Shape, Value,
 };
-pub use orla_abi::{DEFAULT_WORK, MAX_WORK, encoding};
-pub use orla_ir::{KernelId, Manifest, Validated};
-pub use orla_rules::{
+pub use entelechy_abi::{DEFAULT_WORK, MAX_WORK, encoding};
+pub use entelechy_ir::{KernelId, Manifest, Validated};
+pub use entelechy_rules::{
     Backend, Check, ClockedFrame, Downloading, ExecutionError, Extent, NativeOp, Prepared,
     check_domain_shape, check_input_types, extent, input_type_fault,
 };
@@ -76,7 +76,7 @@ enum Body {
         /// The Kernel as compiled, read by fusion and inspection.
         module: Box<Validated>,
         /// The module the backend runs: the Kernel with its work accounted
-        /// ([`orla_ir::account`]).
+        /// ([`entelechy_ir::account`]).
         run: Box<Validated>,
         prepared: Box<dyn Prepared>,
         /// Why the main backend left it to the ordered one, decided when it
@@ -501,7 +501,8 @@ fn prepare_on(
         _ => main,
     };
     // Work accounting is one rule in the IR, shared by every backend.
-    let run = orla_ir::account(&module).map_err(|e| PrepareError::Accounting(e.to_string()))?;
+    let run =
+        entelechy_ir::account(&module).map_err(|e| PrepareError::Accounting(e.to_string()))?;
     let prepared = prepared_on(backend, &run);
     // The main backend found in preparing it that it cannot run it after
     // all (its device's own compiler failed on a valid shader): it says so
@@ -870,7 +871,7 @@ impl Runtime {
         if let Ok(data) = self.host.data(handle) {
             return Ok(Fetch::Here(data.clone()));
         }
-        let host = |e: orla_abi::HostError| ExecutionError::Abi(e.into());
+        let host = |e: entelechy_abi::HostError| ExecutionError::Abi(e.into());
         let device = self
             .host
             .resident(handle)
@@ -1068,7 +1069,7 @@ impl Runtime {
             return None;
         }
         let elements = match run.manifest.mode {
-            orla_ir::Mode::Reduce | orla_ir::Mode::Prefix { .. } => invocation
+            entelechy_ir::Mode::Reduce | entelechy_ir::Mode::Prefix { .. } => invocation
                 .inputs
                 .first()
                 .and_then(|input| self.host.domain(*input).ok())
@@ -1078,7 +1079,7 @@ impl Runtime {
         // A scatter carries its target whole: where it runs, the target
         // is copied and written there, and its readers take it from there.
         let carried = match run.manifest.mode {
-            orla_ir::Mode::Scatter { base, .. } => invocation
+            entelechy_ir::Mode::Scatter { base, .. } => invocation
                 .inputs
                 .get(base as usize)
                 .and_then(|input| self.host.domain(*input).ok())

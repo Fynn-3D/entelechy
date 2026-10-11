@@ -1,4 +1,4 @@
-use orla_kernel::{Context, Domain, Expect, Generation, Invocation, KernelId, Runtime, Value};
+use entelechy_kernel::{Context, Domain, Expect, Generation, Invocation, KernelId, Runtime, Value};
 
 fn source(red: &str) -> String {
     format!(
@@ -12,8 +12,8 @@ fn id() -> KernelId {
 
 fn run(
     runtime: &mut Runtime,
-    version: &orla_kernel::KernelVersion,
-    input: orla_kernel::Handle,
+    version: &entelechy_kernel::KernelVersion,
+    input: entelechy_kernel::Handle,
 ) -> [f32; 4] {
     let invocation = Invocation {
         inputs: vec![input],
@@ -39,7 +39,7 @@ fn a_failed_candidate_leaves_the_running_kernel_alive() {
         .unwrap();
     assert_eq!(run(&mut runtime, &first, input), [0.25, 0.5, 0.75, 1.0]);
 
-    let error = orla_compiler::compile(&source("nonsense")).unwrap_err();
+    let error = entelechy_compiler::compile(&source("nonsense")).unwrap_err();
     assert!(
         error.to_string().contains("`nonsense` is not defined"),
         "{error}"
@@ -129,7 +129,7 @@ fn background_preparation_resolves_through_tickets() {
     let mut runtime = cpu(64);
     let input = runtime.host_mut().create_image(1, 1).unwrap();
     // Inline: a ticket is ready when issued.
-    let module = orla_compiler::compile(&source("0.25")).unwrap();
+    let module = entelechy_compiler::compile(&source("0.25")).unwrap();
     let ticket = runtime.prepare_later(module, source("0.25"));
     let candidate = runtime.poll(ticket).unwrap().unwrap();
     assert_eq!(candidate.id(), &id());
@@ -140,7 +140,7 @@ fn background_preparation_resolves_through_tickets() {
     runtime.set_background(true);
     assert!(runtime.background());
     let running = load(&mut runtime, &source("0.5"));
-    let module = orla_compiler::compile(&source("0.75")).unwrap();
+    let module = entelechy_compiler::compile(&source("0.75")).unwrap();
     let ticket = runtime.prepare_later(module, source("0.75"));
     let mut candidate = None;
     for _ in 0..2000 {
@@ -159,10 +159,10 @@ fn background_preparation_resolves_through_tickets() {
 
     // A discarded ticket never surfaces; stopping the worker keeps what it
     // finished.
-    let module = orla_compiler::compile(&source("0.1")).unwrap();
+    let module = entelechy_compiler::compile(&source("0.1")).unwrap();
     let dropped = runtime.prepare_later(module, source("0.1"));
     runtime.discard(dropped);
-    let module = orla_compiler::compile(&source("0.2")).unwrap();
+    let module = entelechy_compiler::compile(&source("0.2")).unwrap();
     let kept = runtime.prepare_later(module, source("0.2"));
     runtime.set_background(false);
     assert!(runtime.poll(dropped).is_none());
@@ -174,7 +174,7 @@ fn background_preparation_resolves_through_tickets() {
 
 #[test]
 fn native_operations_are_published_by_the_runtime_and_cannot_be_replaced() {
-    use orla_kernel::NativeOp;
+    use entelechy_kernel::NativeOp;
     let mut runtime = cpu(1 << 16);
     let raster = runtime.kernel(&NativeOp::Rasterize.id()).unwrap();
     assert_eq!(raster.generation(), Generation(0));
@@ -207,8 +207,8 @@ fn native_operations_are_published_by_the_runtime_and_cannot_be_replaced() {
     let host = runtime.host_mut();
     let vertices = host
         .adopt(
-            orla_kernel::FieldData::from_storage(
-                orla_rules::raster::vertex_schema(),
+            entelechy_kernel::FieldData::from_storage(
+                entelechy_rules::raster::vertex_schema(),
                 Domain::Rows(3),
                 words,
             )
@@ -217,8 +217,8 @@ fn native_operations_are_published_by_the_runtime_and_cannot_be_replaced() {
         .unwrap();
     let triangles = host
         .adopt(
-            orla_kernel::FieldData::from_storage(
-                orla_rules::raster::triangle_schema(),
+            entelechy_kernel::FieldData::from_storage(
+                entelechy_rules::raster::triangle_schema(),
                 Domain::Rows(1),
                 vec![0, 1, 2],
             )
@@ -254,26 +254,26 @@ fn native_operations_are_published_by_the_runtime_and_cannot_be_replaced() {
 }
 
 /// A runtime on the reference backend, as a session opens one.
-fn cpu(budget_words: usize) -> orla_kernel::Runtime {
-    orla_kernel::Runtime::with_backend(budget_words, Box::new(orla_cpu::CpuBackend))
+fn cpu(budget_words: usize) -> entelechy_kernel::Runtime {
+    entelechy_kernel::Runtime::with_backend(budget_words, Box::new(entelechy_cpu::CpuBackend))
 }
 
 /// Compiles and publishes a Kernel as a session does: compiling is the
 /// caller's step, the runtime takes validated IR.
 fn load(
-    runtime: &mut orla_kernel::Runtime,
+    runtime: &mut entelechy_kernel::Runtime,
     source: &str,
-) -> std::sync::Arc<orla_kernel::KernelVersion> {
-    let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
+) -> std::sync::Arc<entelechy_kernel::KernelVersion> {
+    let module = entelechy_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
     runtime.load(module, source).unwrap()
 }
 
 /// Compiles and prepares a Kernel without publishing it.
 fn prepare(
-    runtime: &orla_kernel::Runtime,
+    runtime: &entelechy_kernel::Runtime,
     source: &str,
-) -> Result<orla_kernel::Candidate, orla_kernel::PrepareError> {
-    let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
+) -> Result<entelechy_kernel::Candidate, entelechy_kernel::PrepareError> {
+    let module = entelechy_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
     runtime.prepare_module(module, source)
 }
 
@@ -281,27 +281,27 @@ fn prepare(
 /// runtime refuses to pass on.
 struct Lossy;
 
-impl orla_kernel::Backend for Lossy {
+impl entelechy_kernel::Backend for Lossy {
     fn name(&self) -> &'static str {
         "lossy"
     }
 
     fn prepare(
         &self,
-        module: &orla_kernel::Validated,
-    ) -> Result<Box<dyn orla_kernel::Prepared>, String> {
-        orla_kernel::Backend::prepare(&orla_cpu::CpuBackend, module)
+        module: &entelechy_kernel::Validated,
+    ) -> Result<Box<dyn entelechy_kernel::Prepared>, String> {
+        entelechy_kernel::Backend::prepare(&entelechy_cpu::CpuBackend, module)
     }
 
     fn execute(
         &self,
-        prepared: &dyn orla_kernel::Prepared,
-        module: &orla_kernel::Validated,
+        prepared: &dyn entelechy_kernel::Prepared,
+        module: &entelechy_kernel::Validated,
         invocation: &Invocation,
-        scope: &mut orla_kernel::Scope<'_>,
-    ) -> Result<Vec<orla_kernel::Handle>, orla_kernel::ExecutionError> {
-        let mut outputs = orla_kernel::Backend::execute(
-            &orla_cpu::CpuBackend,
+        scope: &mut entelechy_kernel::Scope<'_>,
+    ) -> Result<Vec<entelechy_kernel::Handle>, entelechy_kernel::ExecutionError> {
+        let mut outputs = entelechy_kernel::Backend::execute(
+            &entelechy_cpu::CpuBackend,
             prepared,
             module,
             invocation,
@@ -316,7 +316,7 @@ impl orla_kernel::Backend for Lossy {
 
 #[test]
 fn a_backend_that_answers_with_the_wrong_count_of_fields_is_refused() {
-    let mut runtime = orla_kernel::Runtime::with_backend(1 << 12, Box::new(Lossy));
+    let mut runtime = entelechy_kernel::Runtime::with_backend(1 << 12, Box::new(Lossy));
     let version = load(
         &mut runtime,
         "kernel test.two@1 { requires { field.write; } output a: Image; output b: Grid<Float>; compute { return { a: vec4(1.0, 0.0, 0.0, 1.0), b: 2.0 }; } }",
@@ -347,29 +347,35 @@ fn a_backend_that_answers_with_the_wrong_count_of_fields_is_refused() {
 /// A backend that panics on a module containing `PANIC`.
 struct Brittle;
 
-impl orla_kernel::Backend for Brittle {
+impl entelechy_kernel::Backend for Brittle {
     fn name(&self) -> &'static str {
         "brittle"
     }
 
     fn prepare(
         &self,
-        module: &orla_kernel::Validated,
-    ) -> Result<Box<dyn orla_kernel::Prepared>, String> {
+        module: &entelechy_kernel::Validated,
+    ) -> Result<Box<dyn entelechy_kernel::Prepared>, String> {
         if module.manifest.id.to_string().contains("panics") {
             panic!("the backend could not handle this module");
         }
-        orla_kernel::Backend::prepare(&orla_cpu::CpuBackend, module)
+        entelechy_kernel::Backend::prepare(&entelechy_cpu::CpuBackend, module)
     }
 
     fn execute(
         &self,
-        prepared: &dyn orla_kernel::Prepared,
-        module: &orla_kernel::Validated,
+        prepared: &dyn entelechy_kernel::Prepared,
+        module: &entelechy_kernel::Validated,
         invocation: &Invocation,
-        scope: &mut orla_kernel::Scope<'_>,
-    ) -> Result<Vec<orla_kernel::Handle>, orla_kernel::ExecutionError> {
-        orla_kernel::Backend::execute(&orla_cpu::CpuBackend, prepared, module, invocation, scope)
+        scope: &mut entelechy_kernel::Scope<'_>,
+    ) -> Result<Vec<entelechy_kernel::Handle>, entelechy_kernel::ExecutionError> {
+        entelechy_kernel::Backend::execute(
+            &entelechy_cpu::CpuBackend,
+            prepared,
+            module,
+            invocation,
+            scope,
+        )
     }
 }
 
@@ -381,7 +387,7 @@ fn a_backend_that_panics_preparing_rejects_the_kernel_and_the_worker_lives() {
     let mut runtime = Runtime::with_backend(1 << 12, Box::new(Brittle));
     let first = load(&mut runtime, &source("c.r"));
     let panics = |id: &str| {
-        orla_compiler::compile(&format!(
+        entelechy_compiler::compile(&format!(
             "kernel test.{id}@1 {{ requires {{ field.write; }} output result: Image; compute {{ return vec4(1.0, 0.0, 0.0, 1.0); }} }}"
         ))
         .unwrap()
@@ -417,8 +423,8 @@ fn a_backend_that_panics_preparing_rejects_the_kernel_and_the_worker_lives() {
     assert_eq!(runtime.kernel(&id()).unwrap().generation(), Generation(2));
 }
 
-fn compile_ok(source: &str) -> orla_kernel::Validated {
-    orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"))
+fn compile_ok(source: &str) -> entelechy_kernel::Validated {
+    entelechy_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"))
 }
 
 /// Candidates published as one change are all checked before any swaps:
@@ -473,8 +479,8 @@ fn a_kernel_requiring_what_is_not_granted_is_refused_and_the_running_one_stays()
     let first = load(&mut runtime, &source("c.r"));
     runtime.set_grants(
         [
-            orla_kernel::Capability::FieldRead,
-            orla_kernel::Capability::FieldWrite,
+            entelechy_kernel::Capability::FieldRead,
+            entelechy_kernel::Capability::FieldWrite,
         ]
         .into_iter()
         .collect(),
@@ -501,7 +507,7 @@ fn a_kernel_requiring_what_is_not_granted_is_refused_and_the_running_one_stays()
     };
     assert!(matches!(
         refused,
-        Err(orla_kernel::PrepareError::NotGranted { .. })
+        Err(entelechy_kernel::PrepareError::NotGranted { .. })
     ));
     assert_eq!(
         runtime.kernel(&id()).unwrap().generation(),

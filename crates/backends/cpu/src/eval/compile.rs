@@ -1,8 +1,10 @@
 //! From validated IR to word code: a module compiled for one invocation,
 //! its functions one by one, values given frame offsets as they are met.
 
-use orla_abi::{Domain, Invocation, Scope, Type, Value};
-use orla_ir::{BinaryOp, Block, Function, Instruction, Intrinsic, Op, UnaryOp, Validated, ValueId};
+use entelechy_abi::{Domain, Invocation, Scope, Type, Value};
+use entelechy_ir::{
+    BinaryOp, Block, Function, Instruction, Intrinsic, Op, UnaryOp, Validated, ValueId,
+};
 
 use crate::{ArithmeticError, ExecutionError};
 
@@ -17,7 +19,7 @@ pub(super) struct InputView<'s> {
     pub(super) stride: usize,
     /// The layout when it keeps scalars narrower than a word: reads widen
     /// through it and writes narrow. `None` holds the Kernel's words.
-    pub(super) narrow: Option<orla_abi::Schema>,
+    pub(super) narrow: Option<entelechy_abi::Schema>,
 }
 
 impl InputView<'_> {
@@ -68,20 +70,22 @@ pub(crate) struct Program<'s> {
     /// The domain the entry maps over: the output's, or the first input's
     /// for a reduction or a scan.
     pub(crate) domain: Domain,
-    pub(super) context: orla_abi::Context,
+    pub(super) context: entelechy_abi::Context,
     /// The loop iterations an element may run, when the module's worst
     /// case can exceed it; `None` runs uncounted.
     pub(super) budget: Option<u32>,
     /// The run's total that every thread hands its blocks to, when the
     /// module counts.
-    pub(super) run: Option<orla_rules::Run>,
+    pub(super) run: Option<entelechy_rules::Run>,
 }
 
 impl Program<'_> {
     /// The run's verdict once every element has handed in its work: the
     /// failure when the elements together exceeded the Host's bound.
     pub(crate) fn outcome(&self) -> Result<(), ExecutionError> {
-        self.run.as_ref().map_or(Ok(()), orla_rules::Run::outcome)
+        self.run
+            .as_ref()
+            .map_or(Ok(()), entelechy_rules::Run::outcome)
     }
 }
 
@@ -101,7 +105,7 @@ pub(super) struct Shared {
     pub(super) functions: Vec<Code>,
     pub(super) param_at: Vec<usize>,
     /// The module's struct table, which element paths resolve against.
-    pub(super) records: Vec<orla_ir::StructDef>,
+    pub(super) records: Vec<entelechy_ir::StructDef>,
     /// What one element of each input is.
     pub(super) elements: Vec<Type>,
 }
@@ -156,7 +160,7 @@ impl<'s> Program<'s> {
             let code = compile_function(&shared, function, None);
             shared.functions.push(code);
         }
-        let carry_ty = (module.manifest.mode == orla_ir::Mode::Scan)
+        let carry_ty = (module.manifest.mode == entelechy_ir::Mode::Scan)
             .then(|| module.manifest.outputs[0].element());
         let carry = carry_ty.map_or(0, |ty| shared.words_of(ty));
         let entry = compile_function(&shared, &module.entry, carry_ty);
@@ -234,7 +238,7 @@ impl<'s> Program<'s> {
             budget: module.accounted().then_some(module.manifest.budget),
             run: module
                 .accounted()
-                .then(|| orla_rules::Run::new(scope.work())),
+                .then(|| entelechy_rules::Run::new(scope.work())),
         })
     }
 }
@@ -386,7 +390,7 @@ pub(super) fn use_counts(function: &Function, slots: usize) -> Vec<u32> {
                         note(at);
                     }
                     for step in path {
-                        if let orla_ir::Step::Index(index) = step {
+                        if let entelechy_ir::Step::Index(index) = step {
                             note(index);
                         }
                     }
@@ -954,7 +958,7 @@ impl FunctionCompiler<'_> {
             Op::Part { input, at, path } => {
                 let dst = define(self);
                 let element = self.shared.elements[*input as usize];
-                let layout = orla_ir::part_layout(&self.shared.records, element, path)
+                let layout = entelechy_ir::part_layout(&self.shared.records, element, path)
                     .expect("a path validation walked");
                 let base = layout.base;
                 let steps = layout
@@ -1147,8 +1151,8 @@ impl FunctionCompiler<'_> {
             Intrinsic::Log => map1(f32::ln),
             Intrinsic::Min if is_int(0) => imap2(i32::min),
             Intrinsic::Max if is_int(0) => imap2(i32::max),
-            Intrinsic::Min => map2(orla_rules::min_f32),
-            Intrinsic::Max => map2(orla_rules::max_f32),
+            Intrinsic::Min => map2(entelechy_rules::min_f32),
+            Intrinsic::Max => map2(entelechy_rules::max_f32),
             Intrinsic::AddWrap => imap2(i32::wrapping_add),
             Intrinsic::SubWrap => imap2(i32::wrapping_sub),
             Intrinsic::MulWrap => imap2(i32::wrapping_mul),
@@ -1161,9 +1165,9 @@ impl FunctionCompiler<'_> {
                 sh: self.stride(&args[2], n),
                 n,
             },
-            Intrinsic::Clamp => {
-                map3(|v, low, high| orla_rules::min_f32(orla_rules::max_f32(v, low), high))
-            }
+            Intrinsic::Clamp => map3(|v, low, high| {
+                entelechy_rules::min_f32(entelechy_rules::max_f32(v, low), high)
+            }),
             Intrinsic::Mix => map3(|a, b, t| a + (b - a) * t),
             Intrinsic::ToFloat => Instr::ToFloat {
                 dst: dst.at,
@@ -1185,8 +1189,10 @@ impl FunctionCompiler<'_> {
             Intrinsic::Smoothstep => map3(|low, high, x| {
                 // The same clamp as `clamp` (the rule's `max` then `min`),
                 // so NaN and signed zeros agree between the two.
-                let t =
-                    orla_rules::min_f32(orla_rules::max_f32((x - low) / (high - low), 0.0), 1.0);
+                let t = entelechy_rules::min_f32(
+                    entelechy_rules::max_f32((x - low) / (high - low), 0.0),
+                    1.0,
+                );
                 t * t * (3.0 - 2.0 * t)
             }),
             Intrinsic::Atan2 => Instr::Atan2 {
@@ -1430,20 +1436,22 @@ impl FunctionCompiler<'_> {
             Intrinsic::Sinh => map1(f64::sinh),
             Intrinsic::Cosh => map1(f64::cosh),
             Intrinsic::Tanh => map1(f64::tanh),
-            Intrinsic::Min => map2(orla_rules::min_f64),
-            Intrinsic::Max => map2(orla_rules::max_f64),
+            Intrinsic::Min => map2(entelechy_rules::min_f64),
+            Intrinsic::Max => map2(entelechy_rules::max_f64),
             Intrinsic::Pow => map2(f64::powf),
             Intrinsic::Atan2 => map2(f64::atan2),
             Intrinsic::Step => map2(|edge, x| if x >= edge { 1.0 } else { 0.0 }),
             #[allow(clippy::manual_clamp)]
-            Intrinsic::Clamp => {
-                map3(|v, low, high| orla_rules::min_f64(orla_rules::max_f64(v, low), high))
-            }
+            Intrinsic::Clamp => map3(|v, low, high| {
+                entelechy_rules::min_f64(entelechy_rules::max_f64(v, low), high)
+            }),
             Intrinsic::Mix => map3(|a, b, t| a + (b - a) * t),
             Intrinsic::Fma => map3(|a, b, c| a.mul_add(b, c)),
             Intrinsic::Smoothstep => map3(|low, high, x| {
-                let t =
-                    orla_rules::min_f64(orla_rules::max_f64((x - low) / (high - low), 0.0), 1.0);
+                let t = entelechy_rules::min_f64(
+                    entelechy_rules::max_f64((x - low) / (high - low), 0.0),
+                    1.0,
+                );
                 t * t * (3.0 - 2.0 * t)
             }),
             other => unreachable!("`{}` takes no 64-bit value", other.name()),

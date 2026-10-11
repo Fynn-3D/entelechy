@@ -20,12 +20,12 @@ solved ─────────────────────┘       
 init ─ step <~ ─ act ─ delta ─ grads (scatter) ─ step; loss           (64 scrambles a frame)
 ```
 
-`play.osn` is inference only: it reads `weights.field`, saved from 300
-frames of `scene.osn`.
+`play.esn` is inference only: it reads `weights.field`, saved from 300
+frames of `scene.esn`.
 
 ```sh
-orla player examples/cube-puzzle/scene.osn
-orla player examples/cube-puzzle/play.osn
-orla replay examples/cube-puzzle/tests/cube-puzzle.replay --backend jit
-orla render examples/cube-puzzle/scene.osn --frames 300 --backend jit --window 64x64 --out /tmp/cube-puzzle --save step.result=examples/cube-puzzle/weights.field
+entelechy player examples/cube-puzzle/scene.esn
+entelechy player examples/cube-puzzle/play.esn
+entelechy replay examples/cube-puzzle/tests/cube-puzzle.replay --backend jit
+entelechy render examples/cube-puzzle/scene.esn --frames 300 --backend jit --window 64x64 --out /tmp/cube-puzzle --save step.result=examples/cube-puzzle/weights.field
 ```

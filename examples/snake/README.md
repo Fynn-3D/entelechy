@@ -19,6 +19,6 @@ F5 in the Player, or `reset` in a replay, restarts. The replay covers
 moving, turning, an ignored reversal, eating, dying, and reset.
 
 ```sh
-orla player examples/snake/scene.osn --scale 2
-orla replay examples/snake/tests/snake.replay
+entelechy player examples/snake/scene.esn --scale 2
+entelechy replay examples/snake/tests/snake.replay
 ```

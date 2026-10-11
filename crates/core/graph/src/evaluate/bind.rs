@@ -2,7 +2,7 @@
 //! Kernel's declared ports.
 
 use super::*;
-use orla_abi::Shape;
+use entelechy_abi::Shape;
 
 /// A node that carries its own output back through an input other than
 /// its first, and has no `domain`: it runs over its first input, so the
@@ -14,9 +14,9 @@ use orla_abi::Shape;
 pub fn borrowed_domain(
     graph: &Graph,
     node: &Node,
-    manifest: &orla_kernel::Manifest,
+    manifest: &entelechy_kernel::Manifest,
 ) -> Option<(String, String, String)> {
-    if node.domain.is_some() || manifest.mode == orla_ir::Mode::Reduce {
+    if node.domain.is_some() || manifest.mode == entelechy_ir::Mode::Reduce {
         return None;
     }
     let own = |port: &str| match node.inputs.get(port) {
@@ -86,8 +86,8 @@ fn made_from_itself(graph: &Graph, node: &Node, port: &str) -> bool {
 pub fn binding_fault(
     graph: &Graph,
     node: &Node,
-    manifest: &orla_kernel::Manifest,
-    structs: &[orla_ir::StructDef],
+    manifest: &entelechy_kernel::Manifest,
+    structs: &[entelechy_ir::StructDef],
 ) -> Result<(), EvaluateError> {
     undeclared(node, manifest)?;
     for input in &manifest.inputs {
@@ -101,7 +101,7 @@ pub fn binding_fault(
     for param in &manifest.params {
         param_value(graph, node, param, &BTreeMap::new(), structs)?;
     }
-    if manifest.mode == orla_ir::Mode::Reduce && node.domain.is_some() {
+    if manifest.mode == entelechy_ir::Mode::Reduce && node.domain.is_some() {
         return Err(EvaluateError::ReduceDomain(node.id.clone()));
     }
     if let Some(DomainSpec::Expr(expr)) = &node.domain {
@@ -114,7 +114,7 @@ pub fn binding_fault(
 
 /// What a source is known to be: its shape, and its element layout where
 /// that is known too.
-pub type Bound = (Shape, Option<orla_abi::Schema>);
+pub type Bound = (Shape, Option<entelechy_abi::Schema>);
 
 /// What of a node's binding the types of what it reads decide, before
 /// anything runs: each input of its port's shape and element layout
@@ -123,13 +123,13 @@ pub type Bound = (Shape, Option<orla_abi::Schema>);
 /// output (a scatter's first input) is, the domain's shape found as
 /// resolving it would find it, or its first input's where it has none.
 /// The rules are the ones every binding and run is held to
-/// ([`orla_kernel::input_type_fault`], [`orla_kernel::check_domain_shape`]);
+/// ([`entelechy_kernel::input_type_fault`], [`entelechy_kernel::check_domain_shape`]);
 /// a check holds a scene to them unrun.
 pub fn type_fault(
     graph: &Graph,
     node: &Node,
-    manifest: &orla_kernel::Manifest,
-    structs: &[orla_ir::StructDef],
+    manifest: &entelechy_kernel::Manifest,
+    structs: &[entelechy_ir::StructDef],
     bound: &dyn Fn(&Source) -> Option<Bound>,
 ) -> Result<(), EvaluateError> {
     let fault = |error| EvaluateError::Execution {
@@ -146,7 +146,8 @@ pub fn type_fault(
     // Said as binding says it.
     for (port, bound) in manifest.inputs.iter().zip(&types) {
         if let Some((shape, schema)) = bound
-            && let Some(message) = orla_kernel::input_type_fault(&port.ty, *shape, schema.as_ref())
+            && let Some(message) =
+                entelechy_kernel::input_type_fault(&port.ty, *shape, schema.as_ref())
         {
             return Err(EvaluateError::PortKind {
                 node: node.id.clone(),
@@ -155,7 +156,7 @@ pub fn type_fault(
             });
         }
     }
-    if manifest.mode == orla_ir::Mode::Reduce {
+    if manifest.mode == entelechy_ir::Mode::Reduce {
         return Ok(());
     }
     let port_shape = |name: &str| {
@@ -176,13 +177,13 @@ pub fn type_fault(
             .and_then(|t| t.as_ref().map(|(shape, _)| *shape)),
     };
     if let Some(shape) = shape {
-        orla_kernel::check_domain_shape(manifest, shape).map_err(fault)?;
+        entelechy_kernel::check_domain_shape(manifest, shape).map_err(fault)?;
     }
     Ok(())
 }
 
 /// A port the node names that its Kernel does not declare.
-fn undeclared(node: &Node, manifest: &orla_kernel::Manifest) -> Result<(), EvaluateError> {
+fn undeclared(node: &Node, manifest: &entelechy_kernel::Manifest) -> Result<(), EvaluateError> {
     for port in node.inputs.keys().chain(node.params.keys()) {
         let declared = manifest.inputs.iter().any(|input| &input.name == port)
             || manifest.params.iter().any(|param| &param.name == port);
@@ -196,7 +197,7 @@ fn undeclared(node: &Node, manifest: &orla_kernel::Manifest) -> Result<(), Evalu
             return Err(EvaluateError::UnknownPort {
                 node: node.id.clone(),
                 port: port.clone(),
-                near: orla_abi::names::nearest(port, known).map(str::to_owned),
+                near: entelechy_abi::names::nearest(port, known).map(str::to_owned),
             });
         }
     }
@@ -209,9 +210,9 @@ fn undeclared(node: &Node, manifest: &orla_kernel::Manifest) -> Result<(), Evalu
 fn param_value(
     graph: &Graph,
     node: &Node,
-    param: &orla_ir::Param,
+    param: &entelechy_ir::Param,
     overrides: &BTreeMap<String, Value>,
-    structs: &[orla_ir::StructDef],
+    structs: &[entelechy_ir::StructDef],
 ) -> Result<Value, EvaluateError> {
     let given = match node.params.get(&param.name) {
         None => None,
@@ -222,21 +223,21 @@ fn param_value(
                 EvaluateError::UnknownPort {
                     node: node.id.clone(),
                     port: name.clone(),
-                    near: orla_abi::names::nearest(name, known).map(str::to_owned),
+                    near: entelechy_abi::names::nearest(name, known).map(str::to_owned),
                 }
             })?)
         }
     };
     match given {
         None => Ok(param.default.clone()),
-        Some(value) => {
-            orla_ir::value_as(&value, param.ty, structs).ok_or_else(|| EvaluateError::ParamType {
+        Some(value) => entelechy_ir::value_as(&value, param.ty, structs).ok_or_else(|| {
+            EvaluateError::ParamType {
                 node: node.id.clone(),
                 name: param.name.clone(),
-                expected: orla_ir::type_name(param.ty, structs),
+                expected: entelechy_ir::type_name(param.ty, structs),
                 actual: value.to_string(),
-            })
-        }
+            }
+        }),
     }
 }
 
@@ -244,7 +245,7 @@ fn param_value(
 /// elements are numbers.
 fn value_slot(
     node: &Node,
-    manifest: &orla_kernel::Manifest,
+    manifest: &entelechy_kernel::Manifest,
     port: &str,
 ) -> Result<usize, EvaluateError> {
     let fail = |message: String| EvaluateError::Domain {
@@ -322,7 +323,8 @@ impl Evaluator {
             // however either is spelled.
             let bound_shape = runtime.host().domain(handle)?.shape();
             let bound_schema = runtime.host().schema(handle)?;
-            let message = orla_kernel::input_type_fault(&input.ty, bound_shape, Some(bound_schema));
+            let message =
+                entelechy_kernel::input_type_fault(&input.ty, bound_shape, Some(bound_schema));
             if let Some(message) = message {
                 return Err(EvaluateError::PortKind {
                     node: node.id.clone(),
@@ -337,7 +339,7 @@ impl Evaluator {
         for param in &manifest.params {
             params.push(param_value(graph, node, param, overrides, structs)?);
         }
-        let domain = if manifest.mode == orla_ir::Mode::Reduce {
+        let domain = if manifest.mode == entelechy_ir::Mode::Reduce {
             if node.domain.is_some() {
                 return Err(EvaluateError::ReduceDomain(node.id.clone()));
             }
@@ -401,7 +403,7 @@ impl Evaluator {
     /// [`VALUE_MAX_ELEMENTS`] scalars.
     pub(super) fn domain_values(
         node: &Node,
-        manifest: &orla_kernel::Manifest,
+        manifest: &entelechy_kernel::Manifest,
         expr: &DomainExpr,
         runtime: &mut Runtime,
         inputs: &[Handle],

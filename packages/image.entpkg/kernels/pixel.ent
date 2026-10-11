@@ -1,0 +1,148 @@
+// Pixel effects.
+use "colour.ent";
+
+/// Cells of `cell` pixels, each the color at its centre.
+kernel image.pixelate@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    param cell: Float = 8.0;
+    output result: Image;
+    compute {
+        let centre = floor(coord() / cell) * cell + cell * 0.5;
+        return at(source, centre);
+    }
+}
+
+/// The colour of `colors` nearest `c` in Oklab, where equal distances
+/// look equal; the first of two as near.
+fn nearest_colour(c: Vec3, colors: Rows<Vec3>) -> Vec3 {
+    let lab = linear_to_oklab(max(c, vec3(0.0, 0.0, 0.0)));
+    let first = at(colors, 0);
+    let start = vec4(first.x, first.y, first.z, length(linear_to_oklab(first) - lab));
+    let best = loop count(colors) with b = start {
+        let k = at(colors, index());
+        let d = length(linear_to_oklab(k) - lab);
+        if d < b.w { vec4(k.x, k.y, k.z, d) } else { b }
+    };
+    return vec3(best.x, best.y, best.z);
+}
+
+/// The colour of `colors`, rows from dark to light, that `c`'s Oklab
+/// lightness falls to: lightness 0 to 1 cut into as many equal steps as
+/// there are rows, so a picture keeps its light and dark in any tint.
+fn ramp_colour(c: Vec3, colors: Rows<Vec3>) -> Vec3 {
+    let n = count(colors);
+    let lightness = linear_to_oklab(max(c, vec3(0.0, 0.0, 0.0))).x;
+    return at(colors, clamp(int(lightness * float(n)), 0, n - 1));
+}
+
+/// Each pixel the colour of `colors` nearest it.
+kernel image.palette@2 {
+    requires { field.read; field.write; }
+    input source: Image;
+    input colors: Rows<Vec3>;
+    output result: Image;
+    compute {
+        let c = sample(source);
+        let k = nearest_colour(c.rgb, colors);
+        return vec4(k.x, k.y, k.z, c.a);
+    }
+}
+
+/// Each pixel the colour of `colors`, rows from dark to light, its
+/// lightness falls to (`ramp_colour`).
+kernel image.ramp@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    input colors: Rows<Vec3>;
+    output result: Image;
+    compute {
+        let c = sample(source);
+        let k = ramp_colour(c.rgb, colors);
+        return vec4(k.x, k.y, k.z, c.a);
+    }
+}
+
+/// The threshold of pixel `p` in a 4 by 4 Bayer matrix, from 1/32 to
+/// 31/32: neighbours apart, so a share of pixels over it spreads evenly.
+fn bayer4(p: IVec2) -> Float {
+    let m = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+    let x = ((p.x % 4) + 4) % 4;
+    let y = ((p.y % 4) + 4) % 4;
+    return (float(m[y * 4 + x]) + 0.5) / 16.0;
+}
+
+/// `c` held to `colors` with ordered dithering at pixel `p`: of the two
+/// colours nearest it in Oklab, the farther is taken at the pixels whose
+/// threshold the share of the way `c` lies toward it passes.
+fn dithered_colour(c: Vec3, colors: Rows<Vec3>, p: IVec2) -> Vec3 {
+    let lab = linear_to_oklab(max(c, vec3(0.0, 0.0, 0.0)));
+    let first = at(colors, 0);
+    let start = DitherPair { near: first, near_d: length(linear_to_oklab(first) - lab), next: first, next_d: 1000000.0 };
+    let pair = loop count(colors) with b = start {
+        let k = at(colors, index());
+        let d = length(linear_to_oklab(k) - lab);
+        if index() == 0 { b } else if d < b.near_d { DitherPair { near: k, near_d: d, next: b.near, next_d: b.near_d } }
+        else if d < b.next_d { DitherPair { ..b, next: k, next_d: d } } else { b }
+    };
+    let a = linear_to_oklab(pair.near);
+    let toward = linear_to_oklab(pair.next) - a;
+    let share = clamp(dot(lab - a, toward) / max(dot(toward, toward), 0.000001), 0.0, 1.0);
+    return if share > bayer4(p) { pair.next } else { pair.near };
+}
+
+/// The two colours of a palette nearest one, and how near.
+struct DitherPair { near: Vec3; near_d: Float; next: Vec3; next_d: Float; }
+
+/// Each pixel held to `colors` with ordered dithering (`dithered_colour`):
+/// a gradient becomes a pattern of two colours.
+kernel image.dither@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    input colors: Rows<Vec3>;
+    output result: Image;
+    compute {
+        let c = sample(source);
+        let k = dithered_colour(c.rgb, colors, icoord());
+        return vec4(k.x, k.y, k.z, c.a);
+    }
+}
+
+/// Whether pixel `p` of `source` is drawn: its alpha at least a half.
+fn drawn(source: Image, p: IVec2) -> Bool {
+    let n = isize(source);
+    return p.x >= 0 && p.y >= 0 && p.x < n.x && p.y < n.y && at(source, p).a >= 0.5;
+}
+
+/// A line of `color` round what is drawn: each pixel not drawn beside one
+/// that is, across a side, or across a corner too (`corners`).
+kernel image.outline@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    param color: Vec4 = vec4(0.0, 0.0, 0.0, 1.0);
+    param corners: Bool = false;
+    output result: Image;
+    compute {
+        let p = icoord();
+        if drawn(source, p) { return sample(source); }
+        let side = drawn(source, p + ivec2(1, 0)) || drawn(source, p - ivec2(1, 0)) || drawn(source, p + ivec2(0, 1)) || drawn(source, p - ivec2(0, 1));
+        let corner = drawn(source, p + ivec2(1, 1)) || drawn(source, p - ivec2(1, 1)) || drawn(source, p + ivec2(1, -1)) || drawn(source, p - ivec2(1, -1));
+        return if side || (corners && corner) { color } else { sample(source) };
+    }
+}
+
+/// A shadow of `color` cast by what is drawn, `offset` pixels away, under
+/// it: each pixel not drawn whose pixel `offset` back is.
+kernel image.shadow@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    param offset: Vec2 = vec2(1.0, 1.0);
+    param color: Vec4 = vec4(0.0, 0.0, 0.0, 0.5);
+    output result: Image;
+    compute {
+        let p = icoord();
+        if drawn(source, p) { return sample(source); }
+        let back = p - ivec2(int(floor(offset.x)), int(floor(offset.y)));
+        return if drawn(source, back) { color } else { sample(source) };
+    }
+}

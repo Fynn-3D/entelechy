@@ -18,9 +18,9 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use orla_abi::{FieldData, Handle, Host, Invocation, Scope};
-use orla_ir::Validated;
-use orla_rules::ExecutionError;
+use entelechy_abi::{FieldData, Handle, Host, Invocation, Scope};
+use entelechy_ir::Validated;
+use entelechy_rules::ExecutionError;
 
 use crate::{Backend, Body, KernelVersion, Runtime};
 
@@ -151,7 +151,7 @@ impl Runtime {
         let theirs = std::sync::Arc::clone(&shared);
         let landed = self.runs.landed.clone();
         let started = std::thread::Builder::new()
-            .name(format!("orla run {run}"))
+            .name(format!("entelechy run {run}"))
             .spawn(move || {
                 let work = theirs.lock().ok().and_then(|mut work| work.take());
                 if let Some(work) = work {
@@ -235,7 +235,8 @@ impl Runtime {
             fields.push((self.host.schema(*handle).map_err(abi)?.clone(), domain));
             sizes.push(domain);
         }
-        let domain = orla_rules::output_domain(module.manifest.mode, invocation.domain, &sizes);
+        let domain =
+            entelechy_rules::output_domain(module.manifest.mode, invocation.domain, &sizes);
         for port in &module.manifest.outputs {
             fields.push((port.ty.schema.clone(), domain));
             fields.push((port.ty.schema.clone(), domain));
@@ -301,7 +302,7 @@ fn run_on(
     ordered: Option<&dyn Backend>,
     version: &KernelVersion,
     invocation: &Invocation,
-    granted: orla_abi::Capabilities,
+    granted: entelechy_abi::Capabilities,
     host: &mut Host,
 ) -> Outcome {
     let Body::Kernel { run, prepared, .. } = &version.body else {
@@ -344,6 +345,6 @@ fn run_on(
         .collect()
 }
 
-fn abi(error: orla_abi::HostError) -> ExecutionError {
+fn abi(error: entelechy_abi::HostError) -> ExecutionError {
     ExecutionError::Abi(error.into())
 }

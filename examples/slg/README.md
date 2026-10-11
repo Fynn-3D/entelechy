@@ -16,7 +16,7 @@ blank ────────────────────────�
   order, last frame's keys); it issues orders.
 - `slg.units`: applies the order to the soldiers: move, strike, wait,
   new turn.
-- `slg.relax`, placed repeatedly through `passes.osn`: movement range,
+- `slg.relax`, placed repeatedly through `passes.esn`: movement range,
   and the distance field the enemy follows to the fords.
 - `slg.draw`: tiles, sprites, cursor, health bars, status bar.
 - `bgm.play`: a sixteen-step chiptune sequencer with a noise hit on each
@@ -26,6 +26,6 @@ The skirmish replay asserts on the state rows through a selection, a
 strike, and an enemy turn.
 
 ```sh
-orla player examples/slg/scene.osn --scale 3
-orla replay examples/slg/tests/skirmish.replay
+entelechy player examples/slg/scene.esn --scale 3
+entelechy replay examples/slg/tests/skirmish.replay
 ```

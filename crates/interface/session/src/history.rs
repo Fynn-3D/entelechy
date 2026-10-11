@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 
-use orla_kernel::{Generation, KernelId};
+use entelechy_kernel::{Generation, KernelId};
 
 /// How many changes and attempts are remembered; the oldest go first.
 const CHANGES: usize = 512;
@@ -143,7 +143,7 @@ pub(crate) struct History {
 
 /// Seconds since the Unix epoch; zero where the machine has no clock.
 fn wall() -> u64 {
-    orla_kernel::clock::wall().unwrap_or(0)
+    entelechy_kernel::clock::wall().unwrap_or(0)
 }
 
 impl History {

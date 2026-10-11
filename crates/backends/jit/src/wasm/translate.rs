@@ -1,9 +1,9 @@
-//! Orla IR to WebAssembly, instruction for instruction as `codegen`
+//! Entelechy IR to WebAssembly, instruction for instruction as `codegen`
 //! does, so the words are the interpreter's: every IR value is its
 //! words, one local each; `if`, `match` and `loop` are WebAssembly
 //! blocks; integer arithmetic is checked, the first failure recorded in
 //! the context. Host reads and Rust-rounded math call the crate's
-//! helpers through Orla's function table.
+//! helpers through Entelechy's function table.
 //!
 //! Stack data in `codegen` (the scratch, a callee's result, an array
 //! indexed at run time) is here a slot in memory the prepared Kernel
@@ -13,8 +13,8 @@
 
 use std::collections::HashMap;
 
-use orla_abi::{Encoding, Scalar, Type, encoding};
-use orla_ir::{BinaryOp, Function, Instruction, Intrinsic, Module, Op, UnaryOp};
+use entelechy_abi::{Encoding, Scalar, Type, encoding};
+use entelechy_ir::{BinaryOp, Function, Instruction, Intrinsic, Module, Op, UnaryOp};
 
 use super::encode::{Body, Signature, Val, signed, unsigned};
 use crate::failure;
@@ -474,7 +474,7 @@ impl<'a> Fx<'a> {
         self.set(count);
         self.get(looked);
         self.set(seen);
-        let mask = self.i32c((orla_ir::WORK_BLOCK - 1) as i32);
+        let mask = self.i32c((entelechy_ir::WORK_BLOCK - 1) as i32);
         let block = self.bin(looked, mask, I32_OR, Val::I32);
         let block_end = self.add_imm(block, 1);
         let past = self.i32c(budget.wrapping_add(1) as i32);
@@ -541,7 +541,7 @@ impl<'a> Fx<'a> {
             self.set(stop);
             self.byte(ELSE);
             {
-                let shift = self.i32c(orla_ir::WORK_BLOCK.trailing_zeros() as i32);
+                let shift = self.i32c(entelechy_ir::WORK_BLOCK.trailing_zeros() as i32);
                 let now = self.bin(work, shift, I32_SHR_U, Val::I32);
                 let before = self.bin(seen, shift, I32_SHR_U, Val::I32);
                 let filled = self.bin(now, before, I32_SUB, Val::I32);
@@ -679,7 +679,7 @@ impl<'a> Fx<'a> {
                 }
             }
             if let Some((count, _, _)) = self.work {
-                let mask = self.i32c((orla_ir::WORK_BLOCK - 1) as i32);
+                let mask = self.i32c((entelechy_ir::WORK_BLOCK - 1) as i32);
                 let short = self.bin(count, mask, I32_AND, Val::I32);
                 let short = self.un(short, I64_EXTEND_I32_U, Val::I64);
                 let left = self.ctx_load(Val::I64, offsets::LEFT);
@@ -785,11 +785,11 @@ impl<'a> Fx<'a> {
         self.slot(offset)
     }
 
-    fn words(&self, id: &orla_ir::ValueId) -> Vec<W> {
+    fn words(&self, id: &entelechy_ir::ValueId) -> Vec<W> {
         self.values[id.0 as usize].clone()
     }
 
-    fn ty(&self, id: &orla_ir::ValueId) -> Type {
+    fn ty(&self, id: &entelechy_ir::ValueId) -> Type {
         self.types[id.0 as usize]
     }
 
@@ -890,7 +890,7 @@ impl<'a> Fx<'a> {
         if encoding == Encoding::Word {
             return self.loads(tys, base, 0);
         }
-        let kinds: Vec<Scalar> = orla_ir::schema_of(ty, &self.module.structs)
+        let kinds: Vec<Scalar> = entelechy_ir::schema_of(ty, &self.module.structs)
             .map(|schema| schema.scalars().to_vec())
             .unwrap_or_default();
         let size = encoding.bytes() as u32;
@@ -946,7 +946,7 @@ impl<'a> Fx<'a> {
             Encoding::F16 => {
                 let r = raw(self, 0x2f);
                 let bits = self
-                    .helper("orla_jit_half", &[r], Some(Val::I32))
+                    .helper("entelechy_jit_half", &[r], Some(Val::I32))
                     .expect("a result");
                 self.un(bits, F32_REINTERPRET_I32, Val::F32)
             }
@@ -954,9 +954,15 @@ impl<'a> Fx<'a> {
         }
     }
 
-    fn part_offset(&mut self, input: u32, path: &[orla_ir::Step], words: usize, unit: i32) -> W {
+    fn part_offset(
+        &mut self,
+        input: u32,
+        path: &[entelechy_ir::Step],
+        words: usize,
+        unit: i32,
+    ) -> W {
         let element = self.module.manifest.inputs[input as usize].element();
-        let layout = orla_ir::part_layout(&self.module.structs, element, path)
+        let layout = entelechy_ir::part_layout(&self.module.structs, element, path)
             .expect("a path validation walked");
         let mut offset = self.i32c(layout.base as i32);
         for (index, count, stride) in layout.steps {
@@ -1051,7 +1057,7 @@ impl<'a> Fx<'a> {
 
     /// The element `at` reads at `address`: an `Int` over rows, a `Vec2`
     /// or `Vec3` over a grid or volume.
-    fn address_index(&mut self, input: u32, address: &orla_ir::ValueId) -> W {
+    fn address_index(&mut self, input: u32, address: &entelechy_ir::ValueId) -> W {
         let words = self.words(address);
         match self.ty(address) {
             Type::Int => self.rows_index(input, words[0]),
@@ -1082,11 +1088,11 @@ impl<'a> Fx<'a> {
                 .numbers()
                 .into_iter()
                 .map(|number| match number {
-                    orla_ir::Number::Float(v) => self.f32c(v),
-                    orla_ir::Number::Int(v) => self.i32c(v),
-                    orla_ir::Number::Bool(v) => self.i32c(i32::from(v)),
-                    orla_ir::Number::Double(v) => self.f64c(v),
-                    orla_ir::Number::Long(v) => self.i64c(v),
+                    entelechy_ir::Number::Float(v) => self.f32c(v),
+                    entelechy_ir::Number::Int(v) => self.i32c(v),
+                    entelechy_ir::Number::Bool(v) => self.i32c(i32::from(v)),
+                    entelechy_ir::Number::Double(v) => self.f64c(v),
+                    entelechy_ir::Number::Long(v) => self.i64c(v),
                 })
                 .collect(),
             Op::Param(index) => {
@@ -1318,7 +1324,7 @@ impl<'a> Fx<'a> {
                 let zero = self.i32c(0);
                 let ctx = self.ctx;
                 vec![
-                    self.helper("orla_jit_button", &[ctx, zero], Some(Val::I32))
+                    self.helper("entelechy_jit_button", &[ctx, zero], Some(Val::I32))
                         .expect("a result"),
                 ]
             }
@@ -1326,7 +1332,7 @@ impl<'a> Fx<'a> {
                 let code = self.words(code)[0];
                 let ctx = self.ctx;
                 vec![
-                    self.helper("orla_jit_button", &[ctx, code], Some(Val::I32))
+                    self.helper("entelechy_jit_button", &[ctx, code], Some(Val::I32))
                         .expect("a result"),
                 ]
             }
@@ -1334,7 +1340,7 @@ impl<'a> Fx<'a> {
                 let code = self.words(code)[0];
                 let ctx = self.ctx;
                 vec![
-                    self.helper("orla_jit_key", &[ctx, code], Some(Val::I32))
+                    self.helper("entelechy_jit_key", &[ctx, code], Some(Val::I32))
                         .expect("a result"),
                 ]
             }
@@ -1393,7 +1399,7 @@ impl<'a> Fx<'a> {
                     Type::Vec2 => (words[0], words[1], half),
                     _ => (words[0], words[1], words[2]),
                 };
-                self.read_into_scratch("orla_jit_linear", *input, x, y, z);
+                self.read_into_scratch("entelechy_jit_linear", *input, x, y, z);
                 let tys = word_types(self.module, ty);
                 self.load_scratch(&tys)
             }
@@ -1413,7 +1419,7 @@ impl<'a> Fx<'a> {
                 let bytes: u32 = words.iter().map(|word| word.1.bytes()).sum();
                 let n = self.i32c((bytes / 4) as i32);
                 let ctx = self.ctx;
-                self.helper("orla_jit_emit", &[ctx, element, slot, n], None);
+                self.helper("entelechy_jit_emit", &[ctx, element, slot, n], None);
                 words
             }
             Op::Put(input, address, value) => {
@@ -1426,7 +1432,7 @@ impl<'a> Fx<'a> {
                 match self.ty(address) {
                     Type::Int => {
                         self.helper(
-                            "orla_jit_put_rows",
+                            "entelechy_jit_put_rows",
                             &[ctx, index, address_words[0], slot],
                             None,
                         );
@@ -1437,7 +1443,7 @@ impl<'a> Fx<'a> {
                             Type::Vec2 => (address_words[0], address_words[1], zero),
                             _ => (address_words[0], address_words[1], address_words[2]),
                         };
-                        self.helper("orla_jit_put", &[ctx, index, x, y, z, slot], None);
+                        self.helper("entelechy_jit_put", &[ctx, index, x, y, z, slot], None);
                     }
                 }
                 words
@@ -1467,9 +1473,9 @@ impl<'a> Fx<'a> {
     fn match_(
         &mut self,
         ty: Type,
-        scrutinee: orla_ir::ValueId,
-        arms: &[(Vec<i32>, orla_ir::Block)],
-        otherwise: &orla_ir::Block,
+        scrutinee: entelechy_ir::ValueId,
+        arms: &[(Vec<i32>, entelechy_ir::Block)],
+        otherwise: &entelechy_ir::Block,
     ) -> Vec<W> {
         let value = self.words(&scrutinee)[0];
         let results: Vec<W> = word_types(self.module, ty)
@@ -1551,12 +1557,12 @@ impl<'a> Fx<'a> {
     fn loop_(
         &mut self,
         ty: Type,
-        id: orla_ir::ValueId,
+        id: entelechy_ir::ValueId,
         count: u32,
-        bound: Option<orla_ir::ValueId>,
-        init: orla_ir::ValueId,
-        until: Option<&orla_ir::Block>,
-        body: &orla_ir::Block,
+        bound: Option<entelechy_ir::ValueId>,
+        init: entelechy_ir::ValueId,
+        until: Option<&entelechy_ir::Block>,
+        body: &entelechy_ir::Block,
     ) -> Vec<W> {
         let limit = match bound {
             Some(bound) => {
@@ -1780,7 +1786,12 @@ impl<'a> Fx<'a> {
         }
     }
 
-    fn binary(&mut self, op: BinaryOp, a: &orla_ir::ValueId, b: &orla_ir::ValueId) -> Vec<W> {
+    fn binary(
+        &mut self,
+        op: BinaryOp,
+        a: &entelechy_ir::ValueId,
+        b: &entelechy_ir::ValueId,
+    ) -> Vec<W> {
         let (ta, tb) = (self.ty(a), self.ty(b));
         let (wa, wb) = (self.words(a), self.words(b));
         let int_like = ta.is_int_kind() || tb.is_int_kind();
@@ -1820,9 +1831,9 @@ impl<'a> Fx<'a> {
             }
             BinaryOp::Rem => self.zip2(&wa, &wb, |fx, x, y| {
                 let (name, ty) = if x.1 == Val::F64 {
-                    ("orla_jit_fmod", Val::F64)
+                    ("entelechy_jit_fmod", Val::F64)
                 } else {
-                    ("orla_jit_fmodf", Val::F32)
+                    ("entelechy_jit_fmodf", Val::F32)
                 };
                 fx.helper(name, &[x, y], Some(ty)).expect("a result")
             }),
@@ -1881,7 +1892,7 @@ impl<'a> Fx<'a> {
         }
     }
 
-    fn intrinsic(&mut self, intrinsic: Intrinsic, args: &[orla_ir::ValueId]) -> Vec<W> {
+    fn intrinsic(&mut self, intrinsic: Intrinsic, args: &[entelechy_ir::ValueId]) -> Vec<W> {
         let w: Vec<Vec<W>> = args.iter().map(|a| self.words(a)).collect();
         let is_int = |fx: &Self, k: usize| fx.ty(&args[k]).is_int_kind();
         let map1 = |fx: &mut Self, f: &mut dyn FnMut(&mut Self, W) -> W| -> Vec<W> {
@@ -1933,9 +1944,9 @@ impl<'a> Fx<'a> {
             }),
             Intrinsic::Fma => self.zip3(&w[0], &w[1], &w[2], |fx, a, b, c| {
                 let name = if a.1 == Val::F64 {
-                    "orla_jit_fma"
+                    "entelechy_jit_fma"
                 } else {
-                    "orla_jit_fmaf"
+                    "entelechy_jit_fmaf"
                 };
                 fx.helper(name, &[a, b, c], Some(a.1)).expect("a result")
             }),
@@ -2056,9 +2067,9 @@ impl<'a> Fx<'a> {
             }
             Intrinsic::Pow => self.zip2(&w[0], &w[1], |fx, x, y| {
                 let name = if x.1 == Val::F64 {
-                    "orla_jit_pow"
+                    "entelechy_jit_pow"
                 } else {
-                    "orla_jit_powf"
+                    "entelechy_jit_powf"
                 };
                 fx.helper(name, &[x, y], Some(x.1)).expect("a result")
             }),
@@ -2085,9 +2096,9 @@ impl<'a> Fx<'a> {
             }),
             Intrinsic::Atan2 => {
                 let (name, ty) = if self.ty(&args[0]) == Type::Double {
-                    ("orla_jit_atan2", Val::F64)
+                    ("entelechy_jit_atan2", Val::F64)
                 } else {
-                    ("orla_jit_atan2f", Val::F32)
+                    ("entelechy_jit_atan2f", Val::F32)
                 };
                 vec![
                     self.helper(name, &[w[0][0], w[1][0]], Some(ty))
@@ -2100,7 +2111,7 @@ impl<'a> Fx<'a> {
     fn conversion(
         &mut self,
         intrinsic: Intrinsic,
-        args: &[orla_ir::ValueId],
+        args: &[entelechy_ir::ValueId],
         words: &[W],
     ) -> Vec<W> {
         let from = self.ty(&args[0]).scalar().unwrap_or(Type::Float);
@@ -2116,19 +2127,19 @@ impl<'a> Fx<'a> {
 
 fn unary_helper(intrinsic: Intrinsic, wide: bool) -> &'static str {
     let (narrow, wide_name) = match intrinsic {
-        Intrinsic::Sin => ("orla_jit_sinf", "orla_jit_sin"),
-        Intrinsic::Cos => ("orla_jit_cosf", "orla_jit_cos"),
-        Intrinsic::Tan => ("orla_jit_tanf", "orla_jit_tan"),
-        Intrinsic::Asin => ("orla_jit_asinf", "orla_jit_asin"),
-        Intrinsic::Acos => ("orla_jit_acosf", "orla_jit_acos"),
-        Intrinsic::Atan => ("orla_jit_atanf", "orla_jit_atan"),
-        Intrinsic::Exp => ("orla_jit_expf", "orla_jit_exp"),
-        Intrinsic::Log => ("orla_jit_logf", "orla_jit_log"),
-        Intrinsic::Exp2 => ("orla_jit_exp2f", "orla_jit_exp2"),
-        Intrinsic::Log2 => ("orla_jit_log2f", "orla_jit_log2"),
-        Intrinsic::Sinh => ("orla_jit_sinhf", "orla_jit_sinh"),
-        Intrinsic::Cosh => ("orla_jit_coshf", "orla_jit_cosh"),
-        _ => ("orla_jit_tanhf", "orla_jit_tanh"),
+        Intrinsic::Sin => ("entelechy_jit_sinf", "entelechy_jit_sin"),
+        Intrinsic::Cos => ("entelechy_jit_cosf", "entelechy_jit_cos"),
+        Intrinsic::Tan => ("entelechy_jit_tanf", "entelechy_jit_tan"),
+        Intrinsic::Asin => ("entelechy_jit_asinf", "entelechy_jit_asin"),
+        Intrinsic::Acos => ("entelechy_jit_acosf", "entelechy_jit_acos"),
+        Intrinsic::Atan => ("entelechy_jit_atanf", "entelechy_jit_atan"),
+        Intrinsic::Exp => ("entelechy_jit_expf", "entelechy_jit_exp"),
+        Intrinsic::Log => ("entelechy_jit_logf", "entelechy_jit_log"),
+        Intrinsic::Exp2 => ("entelechy_jit_exp2f", "entelechy_jit_exp2"),
+        Intrinsic::Log2 => ("entelechy_jit_log2f", "entelechy_jit_log2"),
+        Intrinsic::Sinh => ("entelechy_jit_sinhf", "entelechy_jit_sinh"),
+        Intrinsic::Cosh => ("entelechy_jit_coshf", "entelechy_jit_cosh"),
+        _ => ("entelechy_jit_tanhf", "entelechy_jit_tanh"),
     };
     if wide { wide_name } else { narrow }
 }

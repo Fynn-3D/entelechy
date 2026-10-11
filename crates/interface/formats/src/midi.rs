@@ -5,7 +5,7 @@
 
 use std::collections::VecDeque;
 
-use orla_host::{Domain, FieldData, Scalar, Schema};
+use entelechy_host::{Domain, FieldData, Scalar, Schema};
 
 /// One note, as a scene reads it:
 /// `struct Note { start: Float; duration: Float; pitch: Int; velocity: Float; channel: Int; }`

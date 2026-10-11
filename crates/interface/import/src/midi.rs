@@ -1,9 +1,9 @@
-//! A MIDI file as a notes `.field`, read by [`orla_formats::midi`],
+//! A MIDI file as a notes `.field`, read by [`entelechy_formats::midi`],
 //! with what was left out named.
 
 use std::path::{Path, PathBuf};
 
-pub use orla_formats::midi::{Note, Song, read, schema};
+pub use entelechy_formats::midi::{Note, Song, read, schema};
 
 /// What a MIDI import produced.
 pub struct Imported {
@@ -23,7 +23,8 @@ pub struct Imported {
 pub fn import(path: &Path, out_dir: &Path) -> Result<Imported, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let song = read(&bytes)?;
-    let data = orla_formats::midi::field(&song).map_err(|e| format!("{}: {e}", path.display()))?;
+    let data =
+        entelechy_formats::midi::field(&song).map_err(|e| format!("{}: {e}", path.display()))?;
     let stem = path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -31,7 +32,7 @@ pub fn import(path: &Path, out_dir: &Path) -> Result<Imported, String> {
         .to_owned();
     std::fs::create_dir_all(out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
     let file_path = out_dir.join(format!("{stem}.notes.field"));
-    std::fs::write(&file_path, orla_formats::file::encode_data(&data))
+    std::fs::write(&file_path, entelechy_formats::file::encode_data(&data))
         .map_err(|e| format!("{}: {e}", file_path.display()))?;
     let seconds = song
         .notes

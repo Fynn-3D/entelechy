@@ -3,8 +3,8 @@
 //! one word; a `Double` or `Long` is two words, low first
 //! (little-endian on every JIT target).
 
-use orla_abi::Type;
-use orla_ir::Module;
+use entelechy_abi::Type;
+use entelechy_ir::Module;
 
 /// One scalar of a value, by what holds it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

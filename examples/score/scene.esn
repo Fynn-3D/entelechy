@@ -1,0 +1,15 @@
+// The score `entelechy-import` read from song.mid: voice turns it into the
+// block of samples the sound card takes, roll draws it as a piano roll
+// with a playhead. The song repeats every `loops` seconds.
+use "kernels/";
+
+input song: Rows<Note> = "assets/song.notes.field";
+
+param loops: Float = 9.6;
+param gain: Float = 0.22;
+
+node voice: score.voice@1 { song <- song; loops = loops; gain = gain; domain = 800; }
+node roll: score.roll@1 { song <- song; loops = loops; domain = window(); }
+
+output result <- roll.result;
+output sound <- voice.result;

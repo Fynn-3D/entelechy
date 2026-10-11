@@ -1,12 +1,12 @@
 // Runs the bridge's test page headless: serves the text and voxel examples,
-// serves the repository's files to the page over HTTP (for Orla in the
+// serves the repository's files to the page over HTTP (for Entelechy in the
 // page, when `--glue` names what `wasm-bindgen` wrote for it), opens test.html in a
 // headless Chrome over the DevTools protocol, waits for its RESULT line,
 // prints the page's log, and exits 0 when it passed. Node 22 or later
 // (for its WebSocket) and a Chrome; nothing installed.
 //
-//   node bridges/web/test.mjs [--orla target/release/orla] [--chrome <path>]
-//                             [--glue target/page/orla_ffi.js]
+//   node bridges/web/test.mjs [--entelechy target/release/entelechy] [--chrome <path>]
+//                             [--glue target/page/entelechy_ffi.js]
 
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
@@ -23,7 +23,7 @@ const option = (name, fallback) => {
   const at = args.indexOf(name);
   return at >= 0 ? args[at + 1] : fallback;
 };
-const orla = resolve(root, option("--orla", "target/release/orla"));
+const entelechy = resolve(root, option("--entelechy", "target/release/entelechy"));
 const chrome = option(
   "--chrome",
   process.platform === "darwin"
@@ -31,12 +31,12 @@ const chrome = option(
     : "google-chrome",
 );
 
-/// Starts `orla serve` on a free port and resolves with the port. It
+/// Starts `entelechy serve` on a free port and resolves with the port. It
 /// admits a page opened from a file, as the README says to.
 function serve(scene, backend) {
   return new Promise((resolvePort, reject) => {
     const listen = ["--listen", "127.0.0.1:0", "--allow-origin", "null"];
-    const child = spawn(orla, ["serve", join(root, scene), "--backend", backend, ...listen], {
+    const child = spawn(entelechy, ["serve", join(root, scene), "--backend", backend, ...listen], {
       stdio: ["pipe", "ignore", "pipe"],
     });
     let text = "";
@@ -112,12 +112,12 @@ const sleep = (millis) => new Promise((done) => setTimeout(done, millis));
 
 const children = [];
 const closers = [];
-const profile = mkdtempSync(join(tmpdir(), "orla-web-"));
+const profile = mkdtempSync(join(tmpdir(), "entelechy-web-"));
 let status = 1;
 try {
   const [text, voxel] = await Promise.all([
-    serve("examples/text/scene.osn", "cpu"),
-    serve("examples/voxel/scene.osn", "gpu"),
+    serve("examples/text/scene.esn", "cpu"),
+    serve("examples/voxel/scene.esn", "gpu"),
   ]);
   children.push(text.child, voxel.child);
   const browser = await launch(profile);
@@ -126,7 +126,7 @@ try {
   const served = await serveFiles();
   closers.push(() => served.close());
   const origin = `http://127.0.0.1:${served.address().port}`;
-  const glue = option("--glue", "target/page/orla_ffi.js");
+  const glue = option("--glue", "target/page/entelechy_ffi.js");
   const inPage = existsSync(resolve(root, glue));
   if (!inPage) console.log(`in the page: skipped, no ${glue}`);
   const gluePath = relative(root, resolve(root, glue)).split(sep).join("/");
@@ -175,7 +175,7 @@ try {
     console.log(`index.html: ${ok ? "connected, framed, and loaded a Kernel" : `status "${page}", ${kernels} kernels, loaded ${loaded}`}`);
     if (!ok) log = log.replace("RESULT: ok", "RESULT: failed: index.html");
   }
-  // The page again, served, with Orla opened in it over the text
+  // The page again, served, with Entelechy opened in it over the text
   // example's files: the status line frames, the Kernels list.
   if (log.includes("RESULT: ok") && inPage) {
     const created = await devtools.send("Target.createTarget", { url: `${origin}/bridges/web/index.html?glue=${encodeURIComponent(`/${gluePath}`)}` });
@@ -188,7 +188,7 @@ try {
       const bytes = async (path) => new Uint8Array(await (await fetch("/" + path)).arrayBuffer());
       const list = await (await fetch("/list?roots=examples/text,packages")).json();
       const files = await Promise.all(list.map(async (path) => [path, await bytes(path)]));
-      await openInPage(files, "examples/text/scene.osn");
+      await openInPage(files, "examples/text/scene.esn");
       return document.getElementById("status").textContent + " | " + document.getElementById("kernels").options.length;
     })().catch((error) => "failed: " + error.message)`);
     const ok = / ms .*\| [1-9]/.test(opened);
@@ -236,7 +236,7 @@ try {
       console.log(`play.html on the ${on}: ${ok ? "the replay played to its end, every check held" : text}`);
       if (!ok) log = log.replace("RESULT: ok", `RESULT: failed: play.html on the ${on}`);
     }
-    const keys = await play("scene=examples/ant/scene.osn&on=jit", async ({ said, key, run }) => {
+    const keys = await play("scene=examples/ant/scene.esn&on=jit", async ({ said, key, run }) => {
       await until(said, /scene loaded/, 30);
       await sleep(500);
       await key("F5");

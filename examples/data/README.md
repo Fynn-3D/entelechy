@@ -3,23 +3,23 @@
 How Fields hold what they hold: as narrow as it needs, as wide as it
 needs, as structs of exact integers and booleans, and kept in a file
 across runs. Four parts, each a scene of its own in `parts/<part>/`, and
-`scene.osn` placing all four as sub-graphs and drawing their pictures in
+`scene.esn` placing all four as sub-graphs and drawing their pictures in
 one window: packed top left, precision top right, tiles bottom left,
 save bottom right.
 
 ```sh
-orla player examples/data/scene.osn
-orla run examples/data/scene.osn --window 640x400 --out data.ppm
-orla replay examples/data/tests/data.replay
+entelechy player examples/data/scene.esn
+entelechy run examples/data/scene.esn --window 640x400 --out data.ppm
+entelechy replay examples/data/tests/data.replay
 ```
 
 A placed graph reads no files, so a part that reads files is two
-documents: `<part>.osn`, the graph with plain inputs, and `scene.osn`,
+documents: `<part>.esn`, the graph with plain inputs, and `scene.esn`,
 which reads the files and places it. The composite places the same
 graphs and reads the same files itself. Precision reads none; its
-`scene.osn` is placed as it is.
+`scene.esn` is placed as it is.
 
-`data.panels` in `kernels/data.orla` fits each picture into its panel
+`data.panels` in `kernels/data.ent` fits each picture into its panel
 without changing its shape, reading it pixel by pixel. In the composite
 the save part counts presses of space from nothing and writes nothing: a
 placed graph's outputs are wired, never written, so the tally is kept
@@ -42,13 +42,13 @@ Each Field stored as narrow as what it holds; Kernels still compute in
 `light` combines picture, normals and tiles into half-float radiance
 carried frame to frame, and `tonemap` makes the picture. A narrow Field
 between two nodes is materialized, not fused, because its rounding is
-part of the scene. `albedo.png` is baked by `bake.osn`; `tiles.bin` is
+part of the scene. `albedo.png` is baked by `bake.esn`; `tiles.bin` is
 64 bytes of tile numbers. `tests/packed.replay` pins height, a normal
 and the light with tolerances of one encoding step.
 
 ```sh
-orla player examples/data/parts/packed/scene.osn
-orla run examples/data/parts/packed/bake.osn --save picture.result=examples/data/parts/packed/albedo.png
+entelechy player examples/data/parts/packed/scene.esn
+entelechy run examples/data/parts/packed/bake.esn --save picture.result=examples/data/parts/packed/albedo.png
 ```
 
 ## Precision
@@ -67,7 +67,7 @@ These nodes run on the JIT when the session's backend is the GPU.
 moves the part near the origin, where both halves draw the ring.
 
 ```sh
-orla player examples/data/parts/precision/scene.osn
+entelechy player examples/data/parts/precision/scene.esn
 ```
 
 ## Tiles
@@ -77,12 +77,12 @@ passable: Bool }`. `generate` lays out the map; `flood` spreads water to
 passable neighbours each frame through `<~`; `render` draws each pixel
 from the map and a sprite atlas, at `domain = size(map) * tile`. The
 atlas is `assets/atlas.png`, an input the Host reads and watches, so
-edits to it show while the Player runs; `bake.osn` draws it.
-`tests/tiles.replay` floods an 8 x 6 map from `tests/tiles.osn`.
+edits to it show while the Player runs; `bake.esn` draws it.
+`tests/tiles.replay` floods an 8 x 6 map from `tests/tiles.esn`.
 
 ```sh
-orla player examples/data/parts/tiles/scene.osn
-orla run examples/data/parts/tiles/bake.osn --save atlas=examples/data/parts/tiles/assets/atlas.png
+entelechy player examples/data/parts/tiles/scene.esn
+entelechy run examples/data/parts/tiles/bake.esn --save atlas=examples/data/parts/tiles/assets/atlas.png
 ```
 
 ## Save
@@ -93,8 +93,8 @@ its result `to "saves/tally.field"` after each committed change, when
 started with `--allow file.write`; without it, the session reports the
 skipped write. On start, `saved` reads the file, or `fresh` when there
 is none. `save.show` lights one cell per press. `tests/save.replay` uses
-the fixture `tests/save.osn`, which writes nothing.
+the fixture `tests/save.esn`, which writes nothing.
 
 ```sh
-orla player examples/data/parts/save/scene.osn --allow file.write=examples/data/parts/save/saves
+entelechy player examples/data/parts/save/scene.esn --allow file.write=examples/data/parts/save/saves
 ```

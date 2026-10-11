@@ -1,0 +1,24 @@
+// Sound written as Kernels, heard and seen: the synth and the spectrum
+// placed as two parts. The spectrum's voice sounds a fifth above the
+// synth's; `mix` lays it into the synth's stereo block, the one sound
+// output, and `side` shows the synth's scope beside the spectrum.
+use "kernels/";
+
+input font: Grid<Float> = "../../packages/text.entpkg/font.png";
+input caption: Rows<Int> = text "loudest";
+
+param pitch: Float = 330.0;
+
+node synth: graph "parts/synth/scene.esn" {}
+node spectrum: graph "parts/spectrum/spectrum.esn" {
+    font <- font;
+    caption <- caption;
+    pitch = pitch;
+    across = 2;
+}
+
+node mix: sound.mix@1 { stereo <- synth.sound; mono <- spectrum.sound; }
+node side: sound.side@1 { left <- synth.view; right <- spectrum.result; domain = window(); }
+
+output view <- side.result;
+output sound <- mix.result;

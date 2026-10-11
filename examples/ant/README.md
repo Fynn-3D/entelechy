@@ -8,6 +8,6 @@ vectors throughout: `icoord() / zoom` finds a pixel's cell, `isize(cells)`
 wraps the walk, and `put` writes a cell by its integer address.
 
 ```sh
-orla player examples/ant/scene.osn
-orla replay examples/ant/tests/ant.replay
+entelechy player examples/ant/scene.esn
+entelechy replay examples/ant/tests/ant.replay
 ```

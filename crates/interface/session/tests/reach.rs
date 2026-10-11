@@ -3,11 +3,11 @@
 //! uses, leaves it running as it was; the function it calls, changed,
 //! publishes it again.
 
-use orla_kernel::{Context, KernelId};
-use orla_session::Session;
+use entelechy_kernel::{Context, KernelId};
+use entelechy_session::Session;
 
 fn scratch() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("orla-reach-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-reach-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -27,25 +27,25 @@ fn generation(session: &Session) -> u64 {
 #[test]
 fn a_kernel_is_compiled_again_only_when_what_it_reaches_changes() {
     let dir = scratch();
-    std::fs::write(dir.join("lib.orla"), library("1.0", "2.0")).unwrap();
+    std::fs::write(dir.join("lib.ent"), library("1.0", "2.0")).unwrap();
     std::fs::write(
-        dir.join("k.orla"),
-        "use \"lib.orla\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return used(); } }\n",
+        dir.join("k.ent"),
+        "use \"lib.ent\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return used(); } }\n",
     )
     .unwrap();
     std::fs::write(
-        dir.join("scene.osn"),
-        "use \"k.orla\";\nnode k: t.k@1 { domain = 1; }\noutput result <- k.result;\n",
+        dir.join("scene.esn"),
+        "use \"k.ent\";\nnode k: t.k@1 { domain = 1; }\noutput result <- k.result;\n",
     )
     .unwrap();
-    let mut session = Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    let mut session = Session::open(&dir.join("scene.esn"), None, 1 << 20);
     let events = session.sync();
     assert!(session.graph().is_some(), "{events:?}");
     session.evaluate(&Context::default()).unwrap();
     let first = generation(&session);
     // What it does not call: changed, and a function added.
     std::fs::write(
-        dir.join("lib.orla"),
+        dir.join("lib.ent"),
         format!(
             "{}fn added() -> Float {{ return 4.0; }}\n",
             library("1.0", "3.0")
@@ -55,7 +55,7 @@ fn a_kernel_is_compiled_again_only_when_what_it_reaches_changes() {
     session.sync();
     assert_eq!(generation(&session), first);
     // What it calls, changed: published again, and it answers so.
-    std::fs::write(dir.join("lib.orla"), library("5.0", "3.0")).unwrap();
+    std::fs::write(dir.join("lib.ent"), library("5.0", "3.0")).unwrap();
     session.sync();
     assert!(generation(&session) > first);
     session.evaluate(&Context::default()).unwrap();

@@ -1,5 +1,5 @@
 # Exercises the bridge headless, against a serving session:
-#   orla serve examples/mesh/scene.osn --listen 127.0.0.1:0   (note the port)
+#   entelechy serve examples/mesh/scene.esn --listen 127.0.0.1:0   (note the port)
 #   Blender -b --python bridges/blender/test_bridge.py -- --port <port> --out <dir>
 # It pushes a textured cube as the Host's files and reads them back, then
 # pulls the torus and the picture from the session and sets a param.
@@ -15,9 +15,9 @@ port = int(args[args.index("--port") + 1])
 out = args[args.index("--out") + 1]
 
 here = os.path.dirname(os.path.abspath(__file__))
-spec = importlib.util.spec_from_file_location("orla_bridge", os.path.join(here, "orla_bridge.py"))
+spec = importlib.util.spec_from_file_location("entelechy_bridge", os.path.join(here, "entelechy_bridge.py"))
 bridge = importlib.util.module_from_spec(spec)
-sys.modules["orla_bridge"] = bridge
+sys.modules["entelechy_bridge"] = bridge
 spec.loader.exec_module(bridge)
 bridge.register()
 
@@ -45,8 +45,8 @@ floats = struct.unpack("<288f", words)
 xs = floats[0::8]
 ys = floats[1::8]
 zs = floats[2::8]
-# Blender z up becomes Orla y up: the cube lifted by one along Blender's
-# z stands at y 0.5..1.5 in Orla, and Blender's y runs along Orla's -z.
+# Blender z up becomes Entelechy y up: the cube lifted by one along Blender's
+# z stands at y 0.5..1.5 in Entelechy, and Blender's y runs along Entelechy's -z.
 assert min(xs) == -0.5 and max(xs) == 0.5, (min(xs), max(xs))
 assert min(ys) == 0.5 and max(ys) == 1.5, (min(ys), max(ys))
 assert min(zs) == -0.5 and max(zs) == 0.5, (min(zs), max(zs))
@@ -55,24 +55,24 @@ assert (shape, extent, schema) == ("Rows", (12, 1, 1), "i,i,i"), (shape, extent,
 assert open(paths[2], "rb").read(8) == b"\x89PNG\r\n\x1a\n"
 print("push: ok")
 
-client = bridge.OrlaClient("127.0.0.1", port)
+client = bridge.EntelechyClient("127.0.0.1", port)
 status = client.call("status")
 assert status["nodes"] >= 3, status
 torus = bridge.pull_mesh(client, "torus", "faces", name="Torus", weld=False)
 assert len(torus.data.vertices) == 1152 and len(torus.data.polygons) == 2304, (len(torus.data.vertices), len(torus.data.polygons))
 # The subdivided torus is a Kernel's product behind fusion: the pull pins
 # it; welded, its corners fold back to shared vertices. It is a node of a
-# placed sub-graph, so its name carries the placement's — `orla graph`
+# placed sub-graph, so its name carries the placement's — `entelechy graph`
 # prints the names a session knows, and a name that is not one of them is
 # refused rather than pinned.
 fine = bridge.pull_mesh(client, "subdivided.vertices", "subdivided.triangles", name="Fine")
 assert len(fine.data.polygons) == 9216 and len(fine.data.vertices) < 8064, (len(fine.data.vertices), len(fine.data.polygons))
-# The torus lies in Orla's xz plane; turned back, it lies flat in Blender's xy.
+# The torus lies in Entelechy's xz plane; turned back, it lies flat in Blender's xy.
 zs = [v.co.z for v in fine.data.vertices]
 ys = [v.co.y for v in fine.data.vertices]
 assert max(zs) - min(zs) < max(ys) - min(ys), (max(zs) - min(zs), max(ys) - min(ys))
 # A watch reads the rows each tick and rebuilds only when they change.
-settings = bpy.context.scene.orla
+settings = bpy.context.scene.entelechy
 settings.vertex_node, settings.triangle_node, settings.watch_name = (
     "subdivided.vertices",
     "subdivided.triangles",

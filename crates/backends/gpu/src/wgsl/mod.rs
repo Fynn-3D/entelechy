@@ -1,4 +1,4 @@
-//! WGSL emission from validated Orla IR.
+//! WGSL emission from validated Entelechy IR.
 //!
 //! A value slot is a WGSL `let`, or a `var` for `if` and `loop` results;
 //! IR blocks are WGSL blocks. Resources are storage buffers of `u32`
@@ -6,8 +6,8 @@
 
 use std::fmt::Write;
 
-use orla_abi::{Encoding, Scalar, encoding};
-use orla_ir::{
+use entelechy_abi::{Encoding, Scalar, encoding};
+use entelechy_ir::{
     BinaryOp, Block, Combine, Function, Instruction, Intrinsic, Mode, Module, Op, Shape, Type,
     UnaryOp, Value, ValueId,
 };
@@ -42,7 +42,7 @@ pub const INPUT_BINDING: u32 = 3;
 /// failure: all ones less `element * 4 + code`, the greatest kept, so
 /// it names the first element in row-major order; zero is none. Word 1
 /// counts blocks of work taken, word 2 is the most allowed
-/// ([`orla_rules::Run`]).
+/// ([`entelechy_rules::Run`]).
 pub const FAILURE_BINDING: u32 = 90;
 
 /// The deepest brace nesting WGSL compiles.
@@ -180,7 +180,10 @@ pub fn sums_whole(module: &Module) -> bool {
         Mode::Prefix { combine } => (module.manifest.outputs[0].ty.schema.scalars(), combine),
         _ => return false,
     };
-    combine == Combine::Sum && scalars.iter().any(|s| matches!(s, orla_abi::Scalar::Int))
+    combine == Combine::Sum
+        && scalars
+            .iter()
+            .any(|s| matches!(s, entelechy_abi::Scalar::Int))
 }
 
 /// Whether a whole sum keeps its high words in a separate buffer: a
@@ -295,8 +298,8 @@ pub fn folded(groups: u32) -> (u32, u32) {
 /// A map's dispatch over `domain`: workgroups in x, y, z, and the fold
 /// (elements per unit of `gid.y`) for rows. Rows fill whole workgroups:
 /// strips `fold` wide, a workgroup's rows on consecutive strips.
-pub fn dispatch(domain: orla_abi::Domain) -> (u32, u32, u32, u32) {
-    if domain.shape() == orla_abi::Shape::Rows {
+pub fn dispatch(domain: entelechy_abi::Domain) -> (u32, u32, u32, u32) {
+    if domain.shape() == entelechy_abi::Shape::Rows {
         let groups_x = domain
             .width()
             .div_ceil(WORKGROUP * WORKGROUP)

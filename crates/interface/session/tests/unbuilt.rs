@@ -5,10 +5,10 @@
 
 use std::sync::Mutex;
 
-use orla_abi::{Handle, Invocation, Scope};
-use orla_ir::Validated;
-use orla_kernel::{Backend, ExecutionError, Prepared, Runtime};
-use orla_session::{Event, Session};
+use entelechy_abi::{Handle, Invocation, Scope};
+use entelechy_ir::Validated;
+use entelechy_kernel::{Backend, ExecutionError, Prepared, Runtime};
+use entelechy_session::{Event, Session};
 
 /// The interpreter as a device whose compiler fails on Kernels named
 /// `big`; with `remember`, it declines them from then on, as the GPU
@@ -36,7 +36,7 @@ impl Backend for Device {
             }
             return Err("the compiler crashed".to_owned());
         }
-        orla_cpu::CpuBackend.prepare(module)
+        entelechy_cpu::CpuBackend.prepare(module)
     }
     fn execute(
         &self,
@@ -45,16 +45,22 @@ impl Backend for Device {
         invocation: &Invocation,
         scope: &mut Scope<'_>,
     ) -> Result<Vec<Handle>, ExecutionError> {
-        Backend::execute(&orla_cpu::CpuBackend, prepared, module, invocation, scope)
+        Backend::execute(
+            &entelechy_cpu::CpuBackend,
+            prepared,
+            module,
+            invocation,
+            scope,
+        )
     }
 }
 
 fn scene(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("orla-unbuilt-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-unbuilt-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("scene.osn"),
+        dir.join("scene.esn"),
         "kernel t.small@1 { requires { field.write; } output result: Rows<Float>; compute { return 2.0; } }
 kernel t.big@1 { requires { field.read; field.write; } input x: Rows<Float>; output result: Rows<Float>; compute { return at(x, 0) * 3.0; } }
 node small: t.small@1 { domain = 1; }
@@ -74,9 +80,9 @@ fn session(dir: &std::path::Path, remember: bool) -> Session {
     let runtime = Runtime::with_backends(
         1 << 20,
         Box::new(device),
-        Some(Box::new(orla_cpu::CpuBackend)),
+        Some(Box::new(entelechy_cpu::CpuBackend)),
     );
-    Session::open_with(&dir.join("scene.osn"), None, runtime)
+    Session::open_with(&dir.join("scene.esn"), None, runtime)
 }
 
 #[test]
@@ -88,7 +94,9 @@ fn a_kernel_the_device_could_not_build_runs_on_the_ordered_backend_said_once() {
         !events.iter().any(|e| matches!(e, Event::Rejected { .. })),
         "{events:?}"
     );
-    session.evaluate(&orla_kernel::Context::default()).unwrap();
+    session
+        .evaluate(&entelechy_kernel::Context::default())
+        .unwrap();
     events.extend(session.sync());
     let routed: Vec<_> = events
         .iter()
@@ -101,7 +109,7 @@ fn a_kernel_the_device_could_not_build_runs_on_the_ordered_backend_said_once() {
     assert_eq!(routed[0].0, "big");
     assert!(routed[0].1.contains("could not build"), "{routed:?}");
     let handle = session
-        .cached(&orla_graph::NodeId("big".into()), "result")
+        .cached(&entelechy_graph::NodeId("big".into()), "result")
         .unwrap();
     assert_eq!(
         f32::from_bits(session.field(handle).unwrap().values()[0]),

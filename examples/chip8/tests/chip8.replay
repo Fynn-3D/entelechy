@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # A 128 by 64 window: two pixels a cell. The first frame boots the
 # machine: V0 and V1 to zero, I to the sprite, one draw, then the loop

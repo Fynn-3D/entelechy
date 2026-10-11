@@ -17,7 +17,7 @@
 //! forgets every run before it lets go of its own outputs. A node's
 //! outputs larger than
 //! [`RECALL_HOLD`] are remembered by their key and epoch alone: on a
-//! backend that repeats exactly ([`orla_kernel::Backend::repeats_exactly`])
+//! backend that repeats exactly ([`entelechy_kernel::Backend::repeats_exactly`])
 //! a node whose key is the one it had there computes what it computed
 //! there, and runs again under the epoch it had, its readers finding their
 //! keys; elsewhere it runs under a new epoch and its readers run. A changed graph forgets every run.

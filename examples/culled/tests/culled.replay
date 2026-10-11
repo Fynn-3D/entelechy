@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 window 320 180
 param cols 48
 param side 12

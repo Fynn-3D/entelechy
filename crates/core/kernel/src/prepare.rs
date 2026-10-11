@@ -7,8 +7,8 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use orla_ir::Validated;
-use orla_rules::Backend;
+use entelechy_ir::Validated;
+use entelechy_rules::Backend;
 
 use crate::{Ahead, Candidate, PrepareError, Ticket, prepare_finished};
 
@@ -55,15 +55,15 @@ impl Preparer {
         let (outbox, done) = channel::<Done>();
         let inbox = Arc::new(Mutex::new(inbox));
         let mut handles = Vec::new();
-        for k in 0..orla_rules::cores().saturating_sub(1).max(1) {
+        for k in 0..entelechy_rules::cores().saturating_sub(1).max(1) {
             let inbox = Arc::clone(&inbox);
             let outbox = outbox.clone();
             let backend = Arc::clone(&backend);
             let ordered = ordered.clone();
             let Ok(handle) = std::thread::Builder::new()
-                .name(format!("orla-prepare-{k}"))
+                .name(format!("entelechy-prepare-{k}"))
                 // Room for the language's nesting bound
-                // (orla_language::DEEP_STACK), which backends recurse through.
+                // (entelechy_language::DEEP_STACK), which backends recurse through.
                 .stack_size(256 << 20)
                 .spawn(move || {
                     loop {

@@ -1,8 +1,8 @@
 # Vector
 
 A drawing read from SVG and drawn by the
-[vector package](../../packages/vector.orlapkg/kernels/vector.orla), sharp
-at any size. `orla import` turns `source/garden.svg` into the four Fields
+[vector package](../../packages/vector.entpkg/kernels/vector.ent), sharp
+at any size. `entelechy import` turns `source/garden.svg` into the four Fields
 in `assets/`:
 
 - the segments its curves are cut into;
@@ -10,7 +10,7 @@ in `assets/`:
 - its gradients' stops;
 - its size.
 
-`graphs/draw.osn` fills each pixel from them, tiled: a pixel asks only
+`graphs/draw.esn` fills each pixel from them, tiled: a pixel asks only
 the shapes near its tile and their segments near the tile. The scene's
 `eye` Kernel keeps where the eye is from frame to frame: a drag moves the
 drawing, and the wheel zooms about the pointer.
@@ -34,7 +34,7 @@ holds where every Kernel rounds alike, and
 of 66,000 segments, more than one loop counts.
 
 ```sh
-orla import examples/vector/source/garden.svg --out examples/vector/assets
-orla player examples/vector/scene.osn
-orla replay examples/vector/tests/vector.replay --backend gpu
+entelechy import examples/vector/source/garden.svg --out examples/vector/assets
+entelechy player examples/vector/scene.esn
+entelechy replay examples/vector/tests/vector.replay --backend gpu
 ```

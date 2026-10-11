@@ -1,0 +1,15 @@
+//! Tone mapping as a sub-graph. Place it with
+//!   node display: graph "image.entpkg/graphs/display.esn" {
+//!       source <- x.result; exposure = 1.2;
+//!   }
+use "../kernels/tonemap.ent";
+
+input source: Image;
+param exposure: Float = 1.0;
+
+node map: image.tonemap@2 {
+    source <- source;
+    exposure = exposure;
+}
+
+output result <- map.result;

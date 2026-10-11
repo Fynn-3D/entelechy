@@ -1,4 +1,4 @@
-//! `orla check`: a document checked through a store, without a session.
+//! `entelechy check`: a document checked through a store, without a session.
 
 use std::path::Path;
 
@@ -8,27 +8,29 @@ use crate::{
 };
 
 /// The words a Kernel may carry through its branches before it is said
-/// to be large ([`orla_ir::carried`]): a device's compiler takes long over
+/// to be large ([`entelechy_ir::carried`]): a device's compiler takes long over
 /// more (seconds, past in proportion), or fails on it.
 pub const LARGE: u64 = 5_000;
 
 /// What makes a Kernel large, when it is ([`LARGE`]): the words it carries
 /// through its branches, the structs they are, and the functions that
 /// carry most, each with the calls that reach it.
-pub fn large(module: &orla_ir::Validated) -> Option<String> {
+pub fn large(module: &entelechy_ir::Validated) -> Option<String> {
     large_past(module, LARGE)
 }
 
 /// [`large`], past `limit` words.
-pub fn large_past(module: &orla_ir::Validated, limit: u64) -> Option<String> {
-    let carried = orla_ir::carried(module);
+pub fn large_past(module: &entelechy_ir::Validated, limit: u64) -> Option<String> {
+    let carried = entelechy_ir::carried(module);
     if carried.total <= limit {
         return None;
     }
     let mut by_struct: Vec<usize> = (0..carried.structs.len())
         .filter(|&s| carried.structs[s] > 0)
         .collect();
-    let words = |s: usize| orla_ir::words(&module.structs, orla_ir::Type::Struct(s as u32)) as u64;
+    let words = |s: usize| {
+        entelechy_ir::words(&module.structs, entelechy_ir::Type::Struct(s as u32)) as u64
+    };
     by_struct.sort_by_key(|&s| std::cmp::Reverse(carried.structs[s] * words(s)));
     let structs: Vec<String> = by_struct
         .into_iter()
@@ -42,7 +44,7 @@ pub fn large_past(module: &orla_ir::Validated, limit: u64) -> Option<String> {
             )
         })
         .collect();
-    let sizes = orla_ir::sizes(module);
+    let sizes = entelechy_ir::sizes(module);
     let name = |f: u32| module.functions[f as usize].name.clone();
     let mut by_function: Vec<usize> = (0..carried.functions.len())
         .filter(|&f| carried.functions[f] > 0)
@@ -87,16 +89,16 @@ pub fn large_past(module: &orla_ir::Validated, limit: u64) -> Option<String> {
 /// not.
 pub(crate) fn idle(
     store: &dyn Store,
-    graph: &orla_graph::Graph,
-    published: impl IntoIterator<Item = (std::path::PathBuf, Vec<orla_ir::KernelId>)>,
-) -> Vec<(std::path::PathBuf, Vec<orla_ir::KernelId>)> {
-    let bound: std::collections::BTreeSet<&orla_ir::KernelId> =
+    graph: &entelechy_graph::Graph,
+    published: impl IntoIterator<Item = (std::path::PathBuf, Vec<entelechy_ir::KernelId>)>,
+) -> Vec<(std::path::PathBuf, Vec<entelechy_ir::KernelId>)> {
+    let bound: std::collections::BTreeSet<&entelechy_ir::KernelId> =
         graph.nodes.iter().map(|node| &node.kernel).collect();
     published
         .into_iter()
         .filter(|(path, _)| crate::sources::package_holding(store, path).is_none())
         .filter_map(|(path, ids)| {
-            let ids: Vec<orla_ir::KernelId> =
+            let ids: Vec<entelechy_ir::KernelId> =
                 ids.into_iter().filter(|id| !bound.contains(id)).collect();
             (!ids.is_empty()).then_some((path, ids))
         })
@@ -104,7 +106,7 @@ pub(crate) fn idle(
 }
 
 /// How [`idle`] Kernels are said.
-pub(crate) fn idle_said(path: &Path, ids: &[orla_ir::KernelId]) -> String {
+pub(crate) fn idle_said(path: &Path, ids: &[entelechy_ir::KernelId]) -> String {
     let ids: Vec<String> = ids.iter().map(|id| format!("`{id}`")).collect();
     format!(
         "{}: publishes {}, which no node of the scene uses: compiled and prepared with it all the same",
@@ -129,7 +131,7 @@ impl Checked {
 
 /// Checks that the document at `path` parses, lowers with what it
 /// reaches, compiles with the documents it uses, binds each node to its
-/// Kernel's ports ([`orla_graph::binding_fault`]), and orders its graph.
+/// Kernel's ports ([`entelechy_graph::binding_fault`]), and orders its graph.
 /// `show_ir` also reports each Kernel's accounted IR.
 pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked {
     let mut checked = Checked::default();
@@ -153,7 +155,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
             return checked;
         }
     };
-    let document = match orla_language::parse_document(&text) {
+    let document = match entelechy_language::parse_document(&text) {
         Ok(document) => document,
         Err(error) => {
             say!(problem, "{file}:{error}");
@@ -166,11 +168,12 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         .unwrap_or("scene");
     let base = path.parent().unwrap_or_else(|| Path::new("."));
     let mut loader = |path: &Path| locate_document(store, path);
-    let mut declare = |base: &Path, uses: &[orla_language::Use], own: orla_language::Own<'_>| {
-        declarations_for(store, base, uses, own)
-    };
+    let mut declare =
+        |base: &Path, uses: &[entelechy_language::Use], own: entelechy_language::Own<'_>| {
+            declarations_for(store, base, uses, own)
+        };
     let lowered =
-        match orla_scene::load_with(&document, &text, name, base, &mut loader, &mut declare) {
+        match entelechy_scene::load_with(&document, &text, name, base, &mut loader, &mut declare) {
             Ok(lowered) => lowered,
             Err(error) => {
                 say!(problem, "{file}:{error}");
@@ -182,9 +185,10 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         store,
         base,
         &document.uses,
-        orla_language::Own::of(&document),
+        entelechy_language::Own::of(&document),
     ) {
-        for error in orla_compiler::check_functions_each(&document, (&structs, &types, &functions))
+        for error in
+            entelechy_compiler::check_functions_each(&document, (&structs, &types, &functions))
         {
             let held = held((&structs, &types, &functions));
             let at = written_in(path, held, &error);
@@ -196,7 +200,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
     // Each Kernel compiled, its manifest and structs, which the nodes
     // binding it are held to.
     let mut manifests: Vec<Compiled> = Vec::new();
-    let mut kernels: Vec<(Option<orla_ir::KernelId>, &orla_language::Kernel)> = document
+    let mut kernels: Vec<(Option<entelechy_ir::KernelId>, &entelechy_language::Kernel)> = document
         .kernels
         .iter()
         .map(|kernel| (None, kernel))
@@ -208,7 +212,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
             .map(|inline| (Some(inline.id.clone()), &inline.kernel)),
     );
     for (id, kernel) in kernels {
-        match orla_compiler::compile_kernel(kernel, id.as_ref()) {
+        match entelechy_compiler::compile_kernel(kernel, id.as_ref()) {
             Ok(module) => {
                 manifests.push((
                     module.manifest.clone(),
@@ -230,14 +234,14 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                 );
                 // The accounted module, as a backend runs it.
                 if show_ir {
-                    match orla_ir::account(&module) {
+                    match entelechy_ir::account(&module) {
                         Ok(run) => say!(note, "{run}"),
                         Err(error) => say!(note, "{file}: accounting: {error}"),
                     }
                 }
             }
             Err(error) => {
-                let held = orla_language::Held::of(kernel);
+                let held = entelechy_language::Held::of(kernel);
                 let at = written_in(path, held, &error);
                 let said = located(store, said(held, &error), &at, path, &[]);
                 say!(problem, "{}:{said}", at.display());
@@ -290,7 +294,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
     }
     // Each node's Kernel published by the scene, as a session publishes
     // it: its own, its inline ones, those of the documents it uses.
-    let own: Vec<orla_ir::KernelId> = document
+    let own: Vec<entelechy_ir::KernelId> = document
         .kernels
         .iter()
         .filter_map(|kernel| crate::sources::named_id(kernel).ok())
@@ -299,16 +303,16 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
     let unpublished = crate::sources::unpublished(store, path, &lowered.graph, &lowered.uses, &own);
     // Each node held to its Kernel's ports, as an evaluation binds it: a
     // Kernel the scene publishes, or one of the backend's natives.
-    let natives: Vec<Compiled> = orla_kernel::NativeOp::ALL
+    let natives: Vec<Compiled> = entelechy_kernel::NativeOp::ALL
         .iter()
         .map(|op| (op.manifest(), op.structs(), false))
         .collect();
     // What a source is, as far as a check can know it: a node's output by
     // its Kernel's port, an input read from a file by the shape it is
     // declared.
-    let bound = |source: &orla_graph::Source| -> Option<orla_graph::Bound> {
+    let bound = |source: &entelechy_graph::Source| -> Option<entelechy_graph::Bound> {
         match source {
-            orla_graph::Source::Node { node, port } => {
+            entelechy_graph::Source::Node { node, port } => {
                 let producer = lowered.graph.node(node)?;
                 let (manifest, _, _) = manifests
                     .iter()
@@ -317,15 +321,15 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                 let output = manifest.outputs.iter().find(|o| o.name == *port)?;
                 Some((output.ty.shape, Some(output.ty.schema.clone())))
             }
-            orla_graph::Source::External(name) => {
+            entelechy_graph::Source::External(name) => {
                 let asset = lowered.files.assets.iter().find(|a| a.name == *name)?;
                 let ty = asset.ty.trim();
                 let shape = if asset.bytes || ty.starts_with("Rows<") {
-                    orla_ir::Shape::Rows
+                    entelechy_ir::Shape::Rows
                 } else if ty.starts_with("Grid<") || ty == "Image" {
-                    orla_ir::Shape::Grid
+                    entelechy_ir::Shape::Grid
                 } else if ty.starts_with("Volume<") {
-                    orla_ir::Shape::Volume
+                    entelechy_ir::Shape::Volume
                 } else {
                     return None;
                 };
@@ -342,10 +346,10 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                         .trim()
                 };
                 let schema = element
-                    .parse::<orla_ir::Type>()
+                    .parse::<entelechy_ir::Type>()
                     .ok()
                     .filter(|_| !element.contains(" as "))
-                    .and_then(|element| orla_ir::schema_of(element, &[]));
+                    .and_then(|element| entelechy_ir::schema_of(element, &[]));
                 Some((shape, schema))
             }
         }
@@ -361,11 +365,12 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         else {
             continue;
         };
-        if let Err(error) = orla_graph::binding_fault(&lowered.graph, node, manifest, structs) {
+        if let Err(error) = entelechy_graph::binding_fault(&lowered.graph, node, manifest, structs)
+        {
             let at = node.at.clone().unwrap_or_else(|| file.to_owned());
             say!(problem, "{at}: {error}");
         } else if let Err(error) =
-            orla_graph::type_fault(&lowered.graph, node, manifest, structs, &bound)
+            entelechy_graph::type_fault(&lowered.graph, node, manifest, structs, &bound)
         {
             let at = node.at.clone().unwrap_or_else(|| file.to_owned());
             say!(problem, "{at}: {error}");
@@ -375,7 +380,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
             say!(note, "{at}: {why}");
         }
         if let Some((port, output, first)) =
-            orla_graph::borrowed_domain(&lowered.graph, node, manifest)
+            entelechy_graph::borrowed_domain(&lowered.graph, node, manifest)
         {
             let at = node.at.clone().unwrap_or_else(|| file.to_owned());
             say!(
@@ -392,19 +397,19 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         .fallbacks
         .iter()
         .filter_map(|(_, source)| match source {
-            orla_graph::Source::Node { node, .. } => Some(node.clone()),
-            orla_graph::Source::External(_) => None,
+            entelechy_graph::Source::Node { node, .. } => Some(node.clone()),
+            entelechy_graph::Source::External(_) => None,
         });
     let read = lowered.graph.read_through(fallbacks);
     // Said once a chain, at its top: a node only an unread one reads goes
     // with it.
-    let read_at_all: std::collections::BTreeSet<&orla_graph::NodeId> = lowered
+    let read_at_all: std::collections::BTreeSet<&entelechy_graph::NodeId> = lowered
         .graph
         .nodes
         .iter()
         .flat_map(|node| node.inputs.values())
         .filter_map(|binding| match binding {
-            orla_graph::Binding::Now(orla_graph::Source::Node { node, .. }) => Some(node),
+            entelechy_graph::Binding::Now(entelechy_graph::Source::Node { node, .. }) => Some(node),
             _ => None,
         })
         .collect();
@@ -442,7 +447,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
     // prepared with it all the same: the scene's own, and those of every
     // document it publishes, its placed graphs' included.
     if !document.nodes.is_empty() {
-        let own: Vec<orla_ir::KernelId> = document
+        let own: Vec<entelechy_ir::KernelId> = document
             .kernels
             .iter()
             .filter_map(|kernel| crate::sources::named_id(kernel).ok())
@@ -457,7 +462,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
         let theirs = files.iter().map(|file| {
             let ids = read_document(store, file)
                 .ok()
-                .and_then(|text| orla_language::parse_document(&text).ok())
+                .and_then(|text| entelechy_language::parse_document(&text).ok())
                 .map(|used| {
                     used.kernels
                         .iter()
@@ -496,19 +501,19 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
 /// A compiled Kernel's manifest, the structs its ports name, and whether
 /// it weighs its element against its first input's count
 /// ([`first_counted_against`]).
-type Compiled = (orla_ir::Manifest, Vec<orla_ir::StructDef>, bool);
+type Compiled = (entelechy_ir::Manifest, Vec<entelechy_ir::StructDef>, bool);
 
 /// Whether `module` compares its element with its first input's count
 /// (`element() < count(first)`, as a join of two rows does): a test that,
 /// run over that input (a node with no `domain`), is always decided the
 /// same way.
-pub(crate) fn first_counted_against(module: &orla_ir::Module) -> bool {
-    use orla_ir::{BinaryOp, Op};
+pub(crate) fn first_counted_against(module: &entelechy_ir::Module) -> bool {
+    use entelechy_ir::{BinaryOp, Op};
     fn walk(
-        body: &[orla_ir::Instruction],
-        elements: &mut Vec<orla_ir::ValueId>,
-        counts: &mut Vec<orla_ir::ValueId>,
-        tests: &mut Vec<(orla_ir::ValueId, orla_ir::ValueId)>,
+        body: &[entelechy_ir::Instruction],
+        elements: &mut Vec<entelechy_ir::ValueId>,
+        counts: &mut Vec<entelechy_ir::ValueId>,
+        tests: &mut Vec<(entelechy_ir::ValueId, entelechy_ir::ValueId)>,
     ) {
         for instruction in body {
             match &instruction.op {
@@ -547,11 +552,11 @@ pub(crate) fn first_counted_against(module: &orla_ir::Module) -> bool {
 /// (`counted`): the elements past it, which such a test is for, are never
 /// run, as a join's second input would not be.
 pub(crate) fn defaulted_domain(
-    node: &orla_graph::Node,
-    manifest: &orla_ir::Manifest,
+    node: &entelechy_graph::Node,
+    manifest: &entelechy_ir::Manifest,
     counted: bool,
 ) -> Option<String> {
-    if node.domain.is_some() || !counted || manifest.mode == orla_ir::Mode::Reduce {
+    if node.domain.is_some() || !counted || manifest.mode == entelechy_ir::Mode::Reduce {
         return None;
     }
     let first = &manifest.inputs.first()?.name;
@@ -577,7 +582,7 @@ fn check_used(
             return (lines, compiled);
         }
     };
-    let Ok(mut used_document) = orla_language::parse_document(&text) else {
+    let Ok(mut used_document) = entelechy_language::parse_document(&text) else {
         return (lines, compiled); // reported by `used_documents`
     };
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
@@ -586,12 +591,13 @@ fn check_used(
         Some(path),
         dir,
         &used_document.uses,
-        orla_language::Own::of(&used_document),
+        entelechy_language::Own::of(&used_document),
     ) {
         Ok((structs, types, functions)) => {
-            for error in
-                orla_compiler::check_functions_each(&used_document, (&structs, &types, &functions))
-            {
+            for error in entelechy_compiler::check_functions_each(
+                &used_document,
+                (&structs, &types, &functions),
+            ) {
                 let held = held((&structs, &types, &functions));
                 let at = written_in(path, held, &error);
                 let said = located(store, said(held, &error), &at, root, &[]);
@@ -601,13 +607,13 @@ fn check_used(
         }
         Err(error) => lines.push((true, format!("{}: {error}", path.display()))),
     }
-    let kernels: &[orla_language::Kernel] = if published {
+    let kernels: &[entelechy_language::Kernel] = if published {
         &used_document.kernels
     } else {
         &[]
     };
     for kernel in kernels {
-        match orla_compiler::compile_kernel(kernel, None) {
+        match entelechy_compiler::compile_kernel(kernel, None) {
             Ok(module) => {
                 compiled.push((
                     module.manifest.clone(),
@@ -625,7 +631,7 @@ fn check_used(
                 }
             }
             Err(error) => {
-                let held = orla_language::Held::of(kernel);
+                let held = entelechy_language::Held::of(kernel);
                 let at = written_in(path, held, &error);
                 let said = located(store, said(held, &error), &at, root, &[]);
                 lines.push((true, format!("{}:{said}", at.display())));

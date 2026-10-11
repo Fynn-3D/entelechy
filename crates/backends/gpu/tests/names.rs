@@ -3,8 +3,8 @@
 //! synthesized pair struct, declare no name WGSL already means. The same
 //! Kernel runs on a device in `parity.rs`.
 
-use orla_compiler::compile;
-use orla_gpu::wgsl::{emit, emit_scatter_gather};
+use entelechy_compiler::compile;
+use entelechy_gpu::wgsl::{emit, emit_scatter_gather};
 
 /// Names WGSL gives meaning to that a numbered name could spell.
 const WGSL: &[&str] = &[
@@ -89,7 +89,7 @@ fn many_helpers_and_fields_are_named_apart_from_wgsl() {
     );
     // Unoptimized, so the shader keeps its many helpers.
     let module =
-        orla_compiler::compile_unoptimized(&source).unwrap_or_else(|error| panic!("{error}"));
+        entelechy_compiler::compile_unoptimized(&source).unwrap_or_else(|error| panic!("{error}"));
     let shader = emit(&module);
     clean(&shader);
     assert!(

@@ -6,10 +6,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use orla_abi::{Handle, Invocation, Scope};
-use orla_kernel::{Backend, Check, ExecutionError, Runtime};
-use orla_rules::backend::Checked;
-use orla_session::Session;
+use entelechy_abi::{Handle, Invocation, Scope};
+use entelechy_kernel::{Backend, Check, ExecutionError, Runtime};
+use entelechy_rules::backend::Checked;
+use entelechy_session::Session;
 
 type Log = Arc<Mutex<Vec<&'static str>>>;
 
@@ -18,7 +18,7 @@ type Log = Arc<Mutex<Vec<&'static str>>>;
 struct Device {
     log: Log,
     failing: Arc<AtomicBool>,
-    cpu: orla_cpu::CpuBackend,
+    cpu: entelechy_cpu::CpuBackend,
 }
 
 /// A run's verdict, recorded when waited on.
@@ -62,14 +62,14 @@ impl Backend for Device {
     }
     fn prepare(
         &self,
-        module: &orla_ir::Validated,
-    ) -> Result<Box<dyn orla_kernel::Prepared>, String> {
+        module: &entelechy_ir::Validated,
+    ) -> Result<Box<dyn entelechy_kernel::Prepared>, String> {
         self.cpu.prepare(module)
     }
     fn execute(
         &self,
-        prepared: &dyn orla_kernel::Prepared,
-        module: &orla_ir::Validated,
+        prepared: &dyn entelechy_kernel::Prepared,
+        module: &entelechy_ir::Validated,
         invocation: &Invocation,
         scope: &mut Scope<'_>,
     ) -> Result<Vec<Handle>, ExecutionError> {
@@ -77,8 +77,8 @@ impl Backend for Device {
     }
     fn execute_checked(
         &self,
-        prepared: &dyn orla_kernel::Prepared,
-        module: &orla_ir::Validated,
+        prepared: &dyn entelechy_kernel::Prepared,
+        module: &entelechy_ir::Validated,
         invocation: &Invocation,
         scope: &mut Scope<'_>,
     ) -> Result<Checked, ExecutionError> {
@@ -98,9 +98,9 @@ fn opened(name: &str, device: Device) -> (Session, std::path::PathBuf) {
     let mut runtime = Runtime::with_backends(1 << 24, Box::new(device), None);
     // Every run on the device, however small.
     runtime.set_small(0);
-    let dir = std::env::temp_dir().join(format!("orla-overlap-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-overlap-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let scene = dir.join("scene.osn");
+    let scene = dir.join("scene.esn");
     std::fs::write(
         &scene,
         "node seed: kernel {
@@ -120,7 +120,7 @@ output result <- count.result;
     )
     .unwrap();
     let mut session = Session::open_in(
-        Arc::new(orla_session::Disk::default()),
+        Arc::new(entelechy_session::Disk::default()),
         &scene,
         None,
         runtime,
@@ -130,10 +130,10 @@ output result <- count.result;
     (session, dir)
 }
 
-fn at(time: f32) -> orla_graph::Context {
-    orla_graph::Context {
+fn at(time: f32) -> entelechy_graph::Context {
+    entelechy_graph::Context {
         time,
-        ..orla_graph::Context::default()
+        ..entelechy_graph::Context::default()
     }
 }
 
@@ -141,7 +141,7 @@ fn at(time: f32) -> orla_graph::Context {
 fn first(session: &mut Session) -> f32 {
     session.confirm().unwrap();
     let handle = session
-        .cached(&orla_graph::NodeId("count".into()), "result")
+        .cached(&entelechy_graph::NodeId("count".into()), "result")
         .unwrap();
     f32::from_bits(session.field(handle).unwrap().values()[0])
 }
@@ -154,7 +154,7 @@ fn an_overlapping_frame_is_waited_for_once_the_next_has_gone_to_the_device() {
         Device {
             log: Arc::clone(&log),
             failing: Arc::default(),
-            cpu: orla_cpu::CpuBackend,
+            cpu: entelechy_cpu::CpuBackend,
         },
     );
     session.evaluate(&at(1.0)).unwrap();
@@ -189,7 +189,7 @@ fn a_frame_found_failed_takes_back_its_commit_and_the_next_ones() {
         Device {
             log: Log::default(),
             failing: Arc::clone(&failing),
-            cpu: orla_cpu::CpuBackend,
+            cpu: entelechy_cpu::CpuBackend,
         },
     );
     session.evaluate(&at(1.0)).unwrap();

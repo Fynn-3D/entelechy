@@ -8,8 +8,8 @@
 
 use std::path::Path;
 
-use orla_formats::rig::multiply;
-use orla_host::{FieldData, Scalar};
+use entelechy_formats::rig::multiply;
+use entelechy_host::{FieldData, Scalar};
 use serde_json::{Value as Json, json};
 
 /// A rig's rows beside the mesh.
@@ -208,13 +208,14 @@ pub fn write_rig(
     options: &Options,
 ) -> Result<Vec<u8>, String> {
     let width = vertices.schema().value_words();
-    if !(width == 8 || width == 12) || vertices.domain().shape() != orla_host::Shape::Rows {
+    if !(width == 8 || width == 12) || vertices.domain().shape() != entelechy_host::Shape::Rows {
         return Err(
             "vertices must be rows of {position: Vec3, normal: Vec3, uv: Vec2}, with a tangent: Vec4 after them or not"
                 .into(),
         );
     }
-    if triangles.schema().value_words() != 3 || triangles.domain().shape() != orla_host::Shape::Rows
+    if triangles.schema().value_words() != 3
+        || triangles.domain().shape() != entelechy_host::Shape::Rows
     {
         return Err("triangles must be rows of {a: Int, b: Int, c: Int}".into());
     }
@@ -445,7 +446,7 @@ pub fn write_rig(
         }
     }
     let mut document = json!({
-        "asset": { "version": "2.0", "generator": "orla-export" },
+        "asset": { "version": "2.0", "generator": "entelechy-export" },
         "scene": 0,
         "scenes": [{ "nodes": [0] }],
         "nodes": [{ "mesh": 0, "name": name }],
@@ -604,7 +605,7 @@ pub fn export_rig(
 ) -> Result<(), String> {
     let read = |path: &Path| -> Result<FieldData, String> {
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        orla_formats::file::decode(&bytes).map_err(|e| format!("{}: {e}", path.display()))
+        entelechy_formats::file::decode(&bytes).map_err(|e| format!("{}: {e}", path.display()))
     };
     let mut pngs: [Option<Vec<u8>>; 3] = [None, None, None];
     for path in textures {
@@ -621,7 +622,7 @@ pub fn export_rig(
             return Err(format!("{}: a second {what}; give one", path.display()));
         }
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        orla_formats::png::decode(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        entelechy_formats::png::decode(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
         pngs[role] = Some(bytes);
     }
     let name = out.file_stem().and_then(|s| s.to_str()).unwrap_or("mesh");

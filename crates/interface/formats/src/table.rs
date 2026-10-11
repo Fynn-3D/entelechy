@@ -21,12 +21,12 @@
 
 use std::collections::BTreeMap;
 
-use orla_host::{Domain, FieldData, Scalar, Schema};
+use entelechy_host::{Domain, FieldData, Scalar, Schema};
 
 /// The element a table's rows are read as: the name of each number it
 /// holds, in layout order, and the layout.
 pub struct Element<'a> {
-    /// A name for each number, as [`orla_ir`]'s `number_names` gives them.
+    /// A name for each number, as [`entelechy_ir`]'s `number_names` gives them.
     pub names: &'a [String],
     /// The layout the numbers are kept in.
     pub schema: &'a Schema,
@@ -78,7 +78,7 @@ pub fn decode(
     let per_row = element.schema.value_words();
     let needed = records.len().saturating_mul(per_row);
     if needed > words {
-        return Err(orla_host::HostError::BudgetExceeded {
+        return Err(entelechy_host::HostError::BudgetExceeded {
             requested: needed,
             available: words,
         }

@@ -1,10 +1,10 @@
-// Runs a program Orla built for WebAssembly under WASI (a test binary,
-// or the command line) in node, as the host of the code Orla's JIT
-// writes: the same `orla.load` the page gives it (orla.js). Cargo uses it
+// Runs a program Entelechy built for WebAssembly under WASI (a test binary,
+// or the command line) in node, as the host of the code Entelechy's JIT
+// writes: the same `entelechy.load` the page gives it (entelechy.js). Cargo uses it
 // as the runner for `wasm32-wasip1`:
 //
 //   CARGO_TARGET_WASM32_WASIP1_RUNNER="node bridges/web/wasi.mjs" \
-//     cargo test -p orla-jit --features wasm-host --target wasm32-wasip1
+//     cargo test -p entelechy-jit --features wasm-host --target wasm32-wasip1
 //
 // The program sees this machine's files, and the current directory is
 // its own; its arguments follow the file.
@@ -16,7 +16,7 @@ import { WASI } from "node:wasi";
 
 process.removeAllListeners("warning");
 const here = dirname(fileURLToPath(import.meta.url));
-await import(join(here, "orla.js"));
+await import(join(here, "entelechy.js"));
 const [file, ...args] = process.argv.slice(2);
 const wasi = new WASI({
   version: "preview1",
@@ -30,6 +30,6 @@ const wasi = new WASI({
 let instance = null;
 instance = new WebAssembly.Instance(new WebAssembly.Module(readFileSync(file)), {
   ...wasi.getImportObject(),
-  orla: globalThis.Orla.host(() => instance),
+  entelechy: globalThis.Entelechy.host(() => instance),
 });
 process.exitCode = wasi.start(instance);

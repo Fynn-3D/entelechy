@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # The file says what it is: version 1, a map 24 by 14, five entities.
 # Every one of those numbers is read out of the bytes by a Kernel.

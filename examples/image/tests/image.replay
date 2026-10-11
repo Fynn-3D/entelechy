@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # At 640 by 400 each panel is 213 by 200 pixels, the part's picture
 # scaled whole into it less a 6 pixel margin and centred. Each check

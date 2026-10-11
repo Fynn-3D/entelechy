@@ -1,4 +1,4 @@
-scene skirmish.osn
+scene skirmish.esn
 
 # Sixty frames a second. The cursor starts on unit 0 at (1, 4); unit 1 at
 # (2, 5) stands next to enemy 0 at (3, 5). Keys are held for one frame.

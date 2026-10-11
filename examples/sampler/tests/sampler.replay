@@ -1,4 +1,4 @@
-scene sampler.osn
+scene sampler.esn
 
 # The first frame is a beat: the clip starts. Each frame reads on 800
 # frames; thirty frames later the half-second clip has run out and the

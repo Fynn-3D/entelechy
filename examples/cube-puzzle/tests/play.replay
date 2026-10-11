@@ -1,4 +1,4 @@
-scene ../play.osn
+scene ../play.esn
 
 # The trained network on the cube: near zero when solved, about one
 # after a turn, more after a scramble. Its weights are a file the

@@ -18,7 +18,7 @@ helpers, implicit ownership.
 
 Every state has an owner, and every rule one. A rule found with a second owner
 is left with one, and held there by the compiler or by a row in
-`crates/interface/orla/tests/owners.rs`; see `docs/DECISIONS.md`, *A rule that
+`crates/interface/entelechy/tests/owners.rs`; see `docs/DECISIONS.md`, *A rule that
 had two owners is held to one*. Prefer immutable values, explicit mutation,
 explicit lifetime, explicit dependencies.
 
@@ -29,7 +29,7 @@ These are stable boundaries; change them intentionally and test compatibility:
 
 ```text
 Capability ABI
-Orla IR
+Entelechy IR
 KernelID
 Serialized Graph Format
 ```
@@ -41,12 +41,12 @@ version*. The language and the scene syntax grow only by the owner's
 word (`docs/DECISIONS.md`, *The language grows only by the owner's word*);
 friction found while writing is met by a function, a package or an
 example. When the owner has agreed to the growth, record it with
-`ORLA_BLESS=1 cargo test -p orla-compiler --test surface`; when the scene
+`ENTELECHY_BLESS=1 cargo test -p entelechy-compiler --test surface`; when the scene
 syntax grows, add a document to `crates/frontend/scene/tests/surface/`
-and record it with `ORLA_BLESS=1 cargo test -p orla-scene --test surface`.
+and record it with `ENTELECHY_BLESS=1 cargo test -p entelechy-scene --test surface`.
 
 What an agent trial finds wanting is recorded, once fixed, as data in
-`crates/interface/orla/tests/findings/`: the request, and what its answer
+`crates/interface/entelechy/tests/findings/`: the request, and what its answer
 must hold. A fix follows the rule's existing owner, and changes every
 place that consumes it, the bridges and documents included; the findings
 already recorded hold it to not breaking what was fixed before.

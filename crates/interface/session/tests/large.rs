@@ -34,8 +34,8 @@ fn a_kernel_carrying_a_wide_struct_through_many_branches_is_large() {
         "kernel t.k@1 {{ {} requires {{ field.write; }} output result: Rows<Float>; compute {{ return widen(float(element())).f0; }} }}",
         wide(100, 60)
     );
-    let module = orla_compiler::compile(&source).unwrap();
-    let said = orla_session::large(&module).expect("6000 words carried");
+    let module = entelechy_compiler::compile(&source).unwrap();
+    let said = entelechy_session::large(&module).expect("6000 words carried");
     assert!(said.contains("`t.k@1` carries 6000 words"), "{said}");
     assert!(said.contains("`Wide` (100 words) 60 times"), "{said}");
     assert!(
@@ -47,14 +47,14 @@ fn a_kernel_carrying_a_wide_struct_through_many_branches_is_large() {
         "kernel t.k@1 {{ {} requires {{ field.write; }} output result: Rows<Float>; compute {{ let x = float(element()); return widen(x).f0 + widen(x + 1.0).f1; }} }}",
         wide(100, 60)
     );
-    let said = orla_session::large(&orla_compiler::compile(&source).unwrap()).unwrap();
+    let said = entelechy_session::large(&entelechy_compiler::compile(&source).unwrap()).unwrap();
     assert!(said.contains("carries 12000 words"), "{said}");
     // The same struct through fewer branches is not.
     let source = format!(
         "kernel t.k@1 {{ {} requires {{ field.write; }} output result: Rows<Float>; compute {{ return widen(float(element())).f0; }} }}",
         wide(100, 20)
     );
-    assert!(orla_session::large(&orla_compiler::compile(&source).unwrap()).is_none());
+    assert!(entelechy_session::large(&entelechy_compiler::compile(&source).unwrap()).is_none());
 }
 
 #[test]
@@ -70,31 +70,31 @@ fn many_instructions_carrying_little_are_not_large() {
 {steps}    return a9999;
 }} }}"
     );
-    let module = orla_compiler::compile(&source).unwrap();
-    assert!(orla_ir::sizes(&module).total() > 25_000);
-    assert!(orla_session::large(&module).is_none());
+    let module = entelechy_compiler::compile(&source).unwrap();
+    assert!(entelechy_ir::sizes(&module).total() > 25_000);
+    assert!(entelechy_session::large(&module).is_none());
 }
 
 #[test]
 fn a_kernel_the_scene_publishes_and_no_node_uses_is_said() {
-    let dir = std::env::temp_dir().join(format!("orla-idle-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-idle-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("lib.orla"),
+        dir.join("lib.ent"),
         "kernel t.used@1 { requires { field.write; } output result: Rows<Float>; compute { return 1.0; } }
 kernel t.idle@1 { requires { field.write; } output result: Rows<Float>; compute { return 2.0; } }
 ",
     )
     .unwrap();
     std::fs::write(
-        dir.join("scene.osn"),
-        "use \"lib.orla\";\nnode a: t.used@1 { domain = 1; }\noutput result <- a.result;\n",
+        dir.join("scene.esn"),
+        "use \"lib.ent\";\nnode a: t.used@1 { domain = 1; }\noutput result <- a.result;\n",
     )
     .unwrap();
-    let checked = orla_session::check_document(
-        &orla_session::Disk::default(),
-        &dir.join("scene.osn"),
+    let checked = entelechy_session::check_document(
+        &entelechy_session::Disk::default(),
+        &dir.join("scene.esn"),
         false,
     );
     assert_eq!(checked.problems(), 0, "{:?}", checked.lines);
@@ -106,7 +106,7 @@ kernel t.idle@1 { requires { field.write; } output result: Rows<Float>; compute 
         .collect();
     assert_eq!(idle.len(), 1, "{:?}", checked.lines);
     assert!(
-        idle[0].contains("lib.orla: publishes `t.idle@1`,"),
+        idle[0].contains("lib.ent: publishes `t.idle@1`,"),
         "{}",
         idle[0]
     );
@@ -115,25 +115,25 @@ kernel t.idle@1 { requires { field.write; } output result: Rows<Float>; compute 
     // once however it is reached.
     std::fs::create_dir_all(dir.join("part")).unwrap();
     std::fs::write(
-        dir.join("part/kernels.orla"),
+        dir.join("part/kernels.ent"),
         "kernel p.used@1 { requires { field.write; } output result: Rows<Float>; compute { return 3.0; } }
 kernel p.idle@1 { requires { field.write; } output result: Rows<Float>; compute { return 4.0; } }
 ",
     )
     .unwrap();
     std::fs::write(
-        dir.join("part/part.osn"),
-        "use \"kernels.orla\";\nuse \"../lib.orla\";\nnode b: p.used@1 { domain = 1; }\noutput result <- b.result;\n",
+        dir.join("part/part.esn"),
+        "use \"kernels.ent\";\nuse \"../lib.ent\";\nnode b: p.used@1 { domain = 1; }\noutput result <- b.result;\n",
     )
     .unwrap();
     std::fs::write(
-        dir.join("scene.osn"),
-        "use \"lib.orla\";\nnode a: t.used@1 { domain = 1; }\nnode part: graph \"part/part.osn\" { }\noutput result <- a.result;\n",
+        dir.join("scene.esn"),
+        "use \"lib.ent\";\nnode a: t.used@1 { domain = 1; }\nnode part: graph \"part/part.esn\" { }\noutput result <- a.result;\n",
     )
     .unwrap();
-    let checked = orla_session::check_document(
-        &orla_session::Disk::default(),
-        &dir.join("scene.osn"),
+    let checked = entelechy_session::check_document(
+        &entelechy_session::Disk::default(),
+        &dir.join("scene.esn"),
         false,
     );
     let idle: Vec<&String> = checked
@@ -152,7 +152,7 @@ kernel p.idle@1 { requires { field.write; } output result: Rows<Float>; compute 
 
 #[test]
 fn a_session_says_a_large_kernel_as_it_publishes_and_idle_ones_once() {
-    let dir = std::env::temp_dir().join(format!("orla-shape-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-shape-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let lib = |extra: &str| {
@@ -163,27 +163,30 @@ kernel t.idle@1 {{ requires {{ field.write; }} output result: Rows<Float>; compu
             wide(100, 60)
         )
     };
-    std::fs::write(dir.join("lib.orla"), lib("")).unwrap();
+    std::fs::write(dir.join("lib.ent"), lib("")).unwrap();
     std::fs::write(
-        dir.join("scene.osn"),
-        "use \"lib.orla\";\nnode a: t.wide@1 { domain = 1; }\noutput result <- a.result;\n",
+        dir.join("scene.esn"),
+        "use \"lib.ent\";\nnode a: t.wide@1 { domain = 1; }\noutput result <- a.result;\n",
     )
     .unwrap();
-    let runtime =
-        orla_kernel::Runtime::with_backends(1 << 20, Box::new(orla_cpu::CpuBackend), None);
-    let mut session = orla_session::Session::open_with(&dir.join("scene.osn"), None, runtime);
-    let said = |events: &[orla_session::Event]| {
+    let runtime = entelechy_kernel::Runtime::with_backends(
+        1 << 20,
+        Box::new(entelechy_cpu::CpuBackend),
+        None,
+    );
+    let mut session = entelechy_session::Session::open_with(&dir.join("scene.esn"), None, runtime);
+    let said = |events: &[entelechy_session::Event]| {
         let large: Vec<String> = events
             .iter()
             .filter_map(|e| match e {
-                orla_session::Event::Large { id, .. } => Some(id.to_string()),
+                entelechy_session::Event::Large { id, .. } => Some(id.to_string()),
                 _ => None,
             })
             .collect();
         let idle: Vec<String> = events
             .iter()
             .filter_map(|e| match e {
-                orla_session::Event::Idle { ids, .. } => Some(
+                entelechy_session::Event::Idle { ids, .. } => Some(
                     ids.iter()
                         .map(ToString::to_string)
                         .collect::<Vec<_>>()
@@ -201,7 +204,7 @@ kernel t.idle@1 {{ requires {{ field.write; }} output result: Rows<Float>; compu
     let (large, idle) = said(&session.sync());
     assert!(large.is_empty() && idle.is_empty(), "{large:?} {idle:?}");
     // A new version, large still: said again; the idle ones as they were.
-    std::fs::write(dir.join("lib.orla"), lib(" + 1.0")).unwrap();
+    std::fs::write(dir.join("lib.ent"), lib(" + 1.0")).unwrap();
     let (large, idle) = said(&session.sync());
     assert_eq!(large, ["t.wide@1"]);
     assert!(idle.is_empty(), "{idle:?}");

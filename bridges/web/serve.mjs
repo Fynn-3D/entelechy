@@ -1,5 +1,5 @@
 // Serves the repository's files, read only, to a page on this machine:
-// what Orla in the page needs, since a page that loads modules (the glue
+// what Entelechy in the page needs, since a page that loads modules (the glue
 // `wasm-bindgen` writes) is served rather than opened from a file.
 // `/list?roots=a,b` answers every file under those directories, which a
 // test hands in, and `/stamps?roots=a,b` when each was last changed,
@@ -50,7 +50,7 @@ export function serve(port = 0) {
     }
     const type = types[path.slice(path.lastIndexOf("."))] || "application/octet-stream";
     // Never kept: what is served is what is on disk now, as a page that
-    // watches the files, and Orla rebuilt, must find.
+    // watches the files, and Entelechy rebuilt, must find.
     response.writeHead(200, { "content-type": type, "cache-control": "no-store" });
     response.end(readFileSync(path));
   });

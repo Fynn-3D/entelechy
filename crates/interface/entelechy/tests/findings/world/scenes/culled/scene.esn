@@ -1,0 +1,70 @@
+// Ten million triangles of world, of which a frame places what it can
+// see. `world.visible` writes a flag per chunk, the compact package
+// turns those flags into the kept chunk indices and how many there are,
+// and every node that builds geometry is sized by that number.
+use "kernels/";
+
+param cols: Int = 64;      // chunks across the world: cols * cols of them
+param cell: Float = 0.03125;   // a chunk's size, so the world is cols * cell across
+param side: Int = 36;      // vertices across a chunk
+// How far the eye reaches and how wide it sees; the fog fades the
+// ground out at `reach`, so what the cull drops was going to be sky.
+param reach: Float = 0.9;
+// `--param culling=false` keeps every chunk: the whole world placed
+// every frame, and the same picture, which is what the replay checks.
+param culling: Bool = true;
+param spread: Float = 1.55;
+
+node start: world.start@1 { domain = 1; }
+node camera: world.fly@1 {
+    previous <~ camera.result from start.result;
+    cols = cols;
+    cell = cell;
+    domain = 1;
+}
+
+node visible: world.visible@1 {
+    camera <- camera.result;
+    cols = cols;
+    cell = cell;
+    reach = reach;
+    spread = spread;
+    culling = culling;
+    domain = cols * cols;
+}
+
+node kept: graph "../../packages/compact.entpkg/graphs/compact.esn" {
+    flags <- visible.result;
+}
+
+node ground: world.ground@1 {
+    kept <- kept.indices;
+    cols = cols;
+    cell = cell;
+    side = side;
+    domain = max(value(count), 1) * side * side;
+    // `count` is the kept count; the port is bound below so the domain
+    // can read it.
+    count <- kept.count;
+}
+node faces: world.faces@1 {
+    side = side;
+    domain = max(value(count), 1) * 2 * (side - 1) * (side - 1);
+    count <- kept.count;
+}
+
+node project: world.project@1 {
+    mesh <- ground.result;
+    camera <- camera.result;
+}
+node raster: graph "../../packages/raster.entpkg/graphs/window.esn" {
+    vertices <- project.result;
+    triangles <- faces.result;
+}
+node view: world.shade@1 {
+    surface <- raster.surface;
+    camera <- camera.result;
+    reach = reach;
+}
+
+output result <- view.result;

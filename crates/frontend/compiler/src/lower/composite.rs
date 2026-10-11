@@ -3,7 +3,7 @@
 //! and `inverse`. Each is one formula in one order of operations on
 //! every backend.
 
-use orla_ir::{BinaryOp, Block as IrBlock, Intrinsic, Op, Type, ValueId};
+use entelechy_ir::{BinaryOp, Block as IrBlock, Intrinsic, Op, Type, ValueId};
 
 use super::Builder;
 use super::matrix::{self, Arith};
@@ -250,6 +250,6 @@ impl Arith for Scalars<'_, '_> {
     }
     fn neg(&mut self, a: ValueId) -> ValueId {
         self.builder
-            .emit(self.kind, Op::Unary(orla_ir::UnaryOp::Neg, a))
+            .emit(self.kind, Op::Unary(entelechy_ir::UnaryOp::Neg, a))
     }
 }

@@ -173,7 +173,7 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
                 .schema
                 .scalars()
                 .iter()
-                .any(|scalar| matches!(scalar, orla_abi::Scalar::Float));
+                .any(|scalar| matches!(scalar, entelechy_abi::Scalar::Float));
             if combine == Combine::Last {
                 return Err(error(
                     "manifest",
@@ -1411,7 +1411,7 @@ mod tests {
         module.entry.body.push(instruction(
             1,
             Type::Float,
-            Op::Const(orla_abi::Value::Float(0.5)),
+            Op::Const(entelechy_abi::Value::Float(0.5)),
         ));
         module.entry.results = vec![ValueId(0), ValueId(1)];
         assert!(validate(module.clone()).is_ok());

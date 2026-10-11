@@ -1,8 +1,8 @@
-# Orla
+# Entelechy
 
 **An AI-native dynamic kernel runtime.**
 
-Orla is built on one idea:
+Entelechy is built on one idea:
 
 > **The host defines the world.  
 > Kernels define what can happen inside it.  
@@ -22,7 +22,7 @@ Human / AI
     ↓
  Kernel
     ↓
- Orla Runtime
+ Entelechy Runtime
     ↓
  Hardware
 ```
@@ -40,7 +40,7 @@ Graph Runtime
 
 Kernel Runtime
 
-Orla IR
+Entelechy IR
 
 Capability ABI
 
@@ -108,16 +108,16 @@ AI-generatable
 
 ---
 
-## Orla IR
+## Entelechy IR
 
 Kernel source does not belong to any specific machine.
 
 ``` text
-.orla
+.ent
 ↓
 AST
 ↓
-Orla IR
+Entelechy IR
 ↓
 CPU / GPU / WASM / NPU
 ```
@@ -163,7 +163,7 @@ Change a Kernel.
 
 Save it.
 
-Orla:
+Entelechy:
 
 ``` text
 Compile
@@ -215,7 +215,7 @@ Graph = Program
 
 ## AI
 
-AI should not control Orla by injecting arbitrary native code.
+AI should not control Entelechy by injecting arbitrary native code.
 
 AI operates through:
 
@@ -253,7 +253,7 @@ It becomes a **capability compiler**.
 
 ---
 
-## Orla's Architecture
+## Entelechy's Architecture
 
 ``` text
                  Human
@@ -264,7 +264,7 @@ It becomes a **capability compiler**.
             Graph / Kernel
                    │
                    ▼
-             Orla Runtime
+             Entelechy Runtime
                    │
           ┌────────┴────────┐
           │                 │
@@ -272,7 +272,7 @@ It becomes a **capability compiler**.
           │                 │
           └────────┬────────┘
                    │
-                Orla IR
+                Entelechy IR
                    │
             Capability ABI
                    │
@@ -285,7 +285,7 @@ It becomes a **capability compiler**.
 
 ## The Boundary
 
-Orla separates two worlds:
+Entelechy separates two worlds:
 
 ``` text
 Stable World
@@ -311,22 +311,22 @@ Traditional software asks:
 
 > What features were built into the application?
 
-Orla asks:
+Entelechy asks:
 
 > What capabilities can exist inside the runtime?
 
 Traditional software ships functionality.
 
-Orla ships a world where functionality can be created.
+Entelechy ships a world where functionality can be created.
 
 ---
 
 ## The First Proof
 
-The first version of Orla only needs to prove four things:
+The first version of Entelechy only needs to prove four things:
 
 ``` text
-.orla can compile
+.ent can compile
 
 Kernel can call Host through ABI
 
@@ -345,7 +345,7 @@ Everything else can grow later.
 
 ## Final Definition
 
-> **Orla is a runtime for software that can evolve while it is running.**
+> **Entelechy is a runtime for software that can evolve while it is running.**
 
 Or even shorter:
 

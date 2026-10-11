@@ -2,11 +2,11 @@
 //! builtins, builtins composed from other operations, and the
 //! document's own functions, which precede the math intrinsics.
 
-use orla_ir::{
+use entelechy_ir::{
     BinaryOp, Block as IrBlock, Capability, Intrinsic, Mode, Op, Shape, ShapeIndex, Type, Value,
     ValueId,
 };
-use orla_language::{Expr, Span};
+use entelechy_language::{Expr, Span};
 
 use crate::CompileError;
 
@@ -296,7 +296,7 @@ impl Builder<'_> {
                 self.arity(name, args, 2, span)?;
                 let (input, port) = self.input_index(&args[0], name)?;
                 let element = port.element();
-                let expected = orla_ir::linear_index_type(port.shape());
+                let expected = entelechy_ir::linear_index_type(port.shape());
                 let (port_name, shape) = (port.name.clone(), port.shape());
                 let index = self.value(&args[1])?;
                 if self.ty(index) != expected {
@@ -312,7 +312,7 @@ impl Builder<'_> {
                 if !layout
                     .scalars()
                     .iter()
-                    .all(|s| *s == orla_ir::Scalar::Float)
+                    .all(|s| *s == entelechy_ir::Scalar::Float)
                 {
                     return Err(semantic(
                         args[0].span,
@@ -734,7 +734,7 @@ impl Builder<'_> {
                 }
                 // A call its document sees no declaration of is written
                 // as its source writes it.
-                let name = orla_language::written_name(name);
+                let name = entelechy_language::written_name(name);
                 // The Kernel's functions, then every builtin via `help`;
                 // not one of the name itself, which this call's document
                 // does not see.
@@ -747,12 +747,13 @@ impl Builder<'_> {
                     .filter(|declared| *declared != name)
                     .collect();
                 declared.sort_unstable();
-                let near = orla_language::nearest(name, declared)
+                let near = entelechy_language::nearest(name, declared)
                     .map(str::to_owned)
                     .or_else(|| {
-                        orla_language::nearest(name, crate::help::similar(name)).map(str::to_owned)
+                        entelechy_language::nearest(name, crate::help::similar(name))
+                            .map(str::to_owned)
                     });
-                let suggestion = orla_language::suggestion(near.as_deref());
+                let suggestion = entelechy_language::suggestion(near.as_deref());
                 Err(semantic(
                     span,
                     format!(

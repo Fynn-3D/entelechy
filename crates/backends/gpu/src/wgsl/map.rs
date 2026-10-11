@@ -144,7 +144,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation
         settle_left();
     }}
 }}",
-            mask = orla_ir::WORK_BLOCK - 1,
+            mask = entelechy_ir::WORK_BLOCK - 1,
         );
         return out;
     }

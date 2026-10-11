@@ -1,4 +1,4 @@
-scene known.osn
+scene known.esn
 
 # Colour: HSV of (0.25, 0.5, 0.75); the HSV and Oklab round trips land
 # where they started; white's luminance is one; sRGB's transfer undoes

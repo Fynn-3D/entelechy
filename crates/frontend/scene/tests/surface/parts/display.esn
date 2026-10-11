@@ -1,0 +1,11 @@
+// A graph placed by `placed.esn`: its input takes the parent's wire and
+// its parameter the parent's value.
+input source: Image;
+param exposure: Float = 1.0;
+
+node tone: image.tonemap@1 {
+    source <- source;
+    exposure = exposure;
+}
+
+output result <- tone.result;

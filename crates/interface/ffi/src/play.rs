@@ -1,4 +1,4 @@
-//! The shared play (`orla_session::play`) through the C ABI. A host (a
+//! The shared play (`entelechy_session::play`) through the C ABI. A host (a
 //! page, say) hands in keys, pointer, wheel and pads, asks for a frame,
 //! and shows the picture and plays the sound on its own devices. Key
 //! meanings, pad mapping, the frame data line and replays belong to the
@@ -7,11 +7,11 @@
 use std::ffi::{CString, c_char, c_int};
 use std::path::Path;
 
-use orla_session::play::{Frame, PadAxis, PadButton, View, hud};
+use entelechy_session::play::{Frame, PadAxis, PadButton, View, hud};
 
 use crate::{
-    OPEN_ERROR, Opening, OrlaField, OrlaFiles, OrlaSession, c_string, clock, enter, guarded,
-    opened, text,
+    EntelechyField, EntelechyFiles, EntelechySession, OPEN_ERROR, Opening, c_string, clock, enter,
+    guarded, opened, text,
 };
 
 /// A pad button by its name in the header.
@@ -53,21 +53,21 @@ fn pad_axis(name: &str) -> Option<PadAxis> {
 /// ends.
 ///
 /// # Safety
-/// `files` is a pointer `orla_files` returned, not freed yet; `replay`
+/// `files` is a pointer `entelechy_files` returned, not freed yet; `replay`
 /// and `backend` are NULL or NUL-terminated strings.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_open_replay(
-    files: *mut OrlaFiles,
+pub unsafe extern "C" fn entelechy_open_replay(
+    files: *mut EntelechyFiles,
     replay: *const c_char,
     backend: *const c_char,
-) -> *mut OrlaSession {
+) -> *mut EntelechySession {
     let (Some(files), Some(replay)) = (unsafe { files.as_ref() }, unsafe { text(replay) }) else {
         OPEN_ERROR.with(|slot| {
-            *slot.borrow_mut() = c_string("orla_open_replay needs files and a replay");
+            *slot.borrow_mut() = c_string("entelechy_open_replay needs files and a replay");
         });
         return std::ptr::null_mut();
     };
-    let store: std::sync::Arc<dyn orla_session::Store> = files.files.clone();
+    let store: std::sync::Arc<dyn entelechy_session::Store> = files.files.clone();
     let backend = unsafe { text(backend) }.unwrap_or("jit");
     opened(Some(store), Opening::Replay(Path::new(replay)), backend)
 }
@@ -78,8 +78,8 @@ pub unsafe extern "C" fn orla_open_replay(
 /// # Safety
 /// `session` is a live session; `name` a NUL-terminated string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_play_key(
-    session: *mut OrlaSession,
+pub unsafe extern "C" fn entelechy_play_key(
+    session: *mut EntelechySession,
     name: *const c_char,
     down: c_int,
 ) -> c_int {
@@ -98,7 +98,7 @@ pub unsafe extern "C" fn orla_play_key(
 /// # Safety
 /// `session` is a live session.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_play_pointer(session: *mut OrlaSession, x: f32, y: f32) {
+pub unsafe extern "C" fn entelechy_play_pointer(session: *mut EntelechySession, x: f32, y: f32) {
     if let Some(mut s) = unsafe { enter(session) } {
         s.play.pointer(x, y);
     }
@@ -109,7 +109,11 @@ pub unsafe extern "C" fn orla_play_pointer(session: *mut OrlaSession, x: f32, y:
 /// # Safety
 /// `session` is a live session.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_play_button(session: *mut OrlaSession, which: c_int, down: c_int) {
+pub unsafe extern "C" fn entelechy_play_button(
+    session: *mut EntelechySession,
+    which: c_int,
+    down: c_int,
+) {
     if let (Some(mut s), Ok(which)) = (unsafe { enter(session) }, u8::try_from(which)) {
         s.play.button(which, down != 0);
     }
@@ -120,7 +124,7 @@ pub unsafe extern "C" fn orla_play_button(session: *mut OrlaSession, which: c_in
 /// # Safety
 /// `session` is a live session.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_play_wheel(session: *mut OrlaSession, x: f32, y: f32) {
+pub unsafe extern "C" fn entelechy_play_wheel(session: *mut EntelechySession, x: f32, y: f32) {
     if let Some(mut s) = unsafe { enter(session) } {
         s.play.wheel(x, y);
     }
@@ -131,8 +135,8 @@ pub unsafe extern "C" fn orla_play_wheel(session: *mut OrlaSession, x: f32, y: f
 /// # Safety
 /// `session` is a live session; `name` a NUL-terminated string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_play_pad(
-    session: *mut OrlaSession,
+pub unsafe extern "C" fn entelechy_play_pad(
+    session: *mut EntelechySession,
     name: *const c_char,
     down: c_int,
 ) -> c_int {
@@ -152,8 +156,8 @@ pub unsafe extern "C" fn orla_play_pad(
 /// # Safety
 /// `session` is a live session; `name` a NUL-terminated string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_play_axis(
-    session: *mut OrlaSession,
+pub unsafe extern "C" fn entelechy_play_axis(
+    session: *mut EntelechySession,
     name: *const c_char,
     value: f32,
 ) -> c_int {
@@ -173,7 +177,7 @@ pub unsafe extern "C" fn orla_play_axis(
 /// # Safety
 /// `session` is a live session.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_play_pads(session: *mut OrlaSession, count: c_int) {
+pub unsafe extern "C" fn entelechy_play_pads(session: *mut EntelechySession, count: c_int) {
     if let Some(mut s) = unsafe { enter(session) } {
         s.play.pads_connected(count.max(0) as u32);
     }
@@ -186,8 +190,8 @@ pub unsafe extern "C" fn orla_play_pads(session: *mut OrlaSession, count: c_int)
 /// # Safety
 /// `session` is a live session.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_play_frame(
-    session: *mut OrlaSession,
+pub unsafe extern "C" fn entelechy_play_frame(
+    session: *mut EntelechySession,
     width: f32,
     height: f32,
     scale: f32,
@@ -206,8 +210,9 @@ pub unsafe extern "C" fn orla_play_frame(
         match s.play.frame(&mut s.session, view) {
             Frame::Wait => 1,
             Frame::Shown(shown) => {
-                s.report =
-                    c_string(&orla_protocol::report_json(&s.session, &shown.report).to_string());
+                s.report = c_string(
+                    &entelechy_protocol::report_json(&s.session, &shown.report).to_string(),
+                );
                 s.shown = Some((shown.picture, shown.sound));
                 0
             }
@@ -225,8 +230,8 @@ pub unsafe extern "C" fn orla_play_frame(
 /// # Safety
 /// `session` is a live session; `canvas` a NUL-terminated string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_play_present(
-    session: *mut OrlaSession,
+pub unsafe extern "C" fn entelechy_play_present(
+    session: *mut EntelechySession,
     canvas: *const c_char,
 ) -> c_int {
     let (Some(mut s), Some(canvas)) = (unsafe { enter(session) }, unsafe { text(canvas) }) else {
@@ -240,7 +245,7 @@ pub unsafe extern "C" fn orla_play_present(
         };
         let started = clock();
         let panel = s.play.panel().cloned();
-        let overlay = panel.as_ref().map(|panel| orla_gpu::present::Overlay {
+        let overlay = panel.as_ref().map(|panel| entelechy_gpu::present::Overlay {
             pixels: &panel.pixels,
             width: panel.width,
             height: panel.height,
@@ -264,14 +269,14 @@ pub unsafe extern "C" fn orla_play_present(
 
 /// The frame's picture drawn on the CPU into a `width` by `height` window,
 /// letterboxed, with the frame data line: `0x00RRGGBB`, row after row,
-/// valid until the next call on the session. NULL with `orla_error()` set
+/// valid until the next call on the session. NULL with `entelechy_error()` set
 /// on failure.
 ///
 /// # Safety
 /// `session` is a live session.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_play_pixels(
-    session: *mut OrlaSession,
+pub unsafe extern "C" fn entelechy_play_pixels(
+    session: *mut EntelechySession,
     width: u32,
     height: u32,
 ) -> *const u32 {
@@ -292,7 +297,7 @@ pub unsafe extern "C" fn orla_play_pixels(
         let (pixels, (shown_width, shown_height)) = &s.picture;
         s.pixels.clear();
         s.pixels.resize(width as usize * height as usize, 0);
-        let placement = orla_session::play::present(
+        let placement = entelechy_session::play::present(
             pixels,
             *shown_width,
             *shown_height,
@@ -322,14 +327,14 @@ pub unsafe extern "C" fn orla_play_pixels(
 
 /// The frame's sound block (one or two floats per sample frame), read in
 /// place. 0 and `field` filled when there is one, 1 when none, -1 with
-/// `orla_error()` set on failure.
+/// `entelechy_error()` set on failure.
 ///
 /// # Safety
-/// `session` is a live session; `field` points to an `OrlaField` to fill.
+/// `session` is a live session; `field` points to an `EntelechyField` to fill.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_play_sound(
-    session: *mut OrlaSession,
-    field: *mut OrlaField,
+pub unsafe extern "C" fn entelechy_play_sound(
+    session: *mut EntelechySession,
+    field: *mut EntelechyField,
 ) -> c_int {
     let (Some(mut s), Some(field)) = (unsafe { enter(session) }, unsafe { field.as_mut() }) else {
         return -1;
@@ -352,8 +357,8 @@ pub unsafe extern "C" fn orla_play_sound(
 /// # Safety
 /// `session` is a live session; `description` a NUL-terminated string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_play_sound_opened(
-    session: *mut OrlaSession,
+pub unsafe extern "C" fn entelechy_play_sound_opened(
+    session: *mut EntelechySession,
     description: *const c_char,
 ) {
     if let (Some(mut s), Some(description)) =
@@ -369,7 +374,7 @@ pub unsafe extern "C" fn orla_play_sound_opened(
 /// # Safety
 /// `session` is a live session.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_play_said(session: *mut OrlaSession) -> *const c_char {
+pub unsafe extern "C" fn entelechy_play_said(session: *mut EntelechySession) -> *const c_char {
     let Some(mut s) = (unsafe { enter(session) }) else {
         return crate::EMPTY.as_ptr();
     };
@@ -382,6 +387,6 @@ pub unsafe extern "C" fn orla_play_said(session: *mut OrlaSession) -> *const c_c
 /// # Safety
 /// `session` is NULL or a live session.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_play_replaying(session: *const OrlaSession) -> c_int {
+pub unsafe extern "C" fn entelechy_play_replaying(session: *const EntelechySession) -> c_int {
     unsafe { enter(session) }.is_some_and(|s| s.play.replaying()) as c_int
 }

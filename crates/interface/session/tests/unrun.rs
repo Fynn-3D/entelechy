@@ -4,8 +4,8 @@
 //! session says so once when the scene loads; with its `domain` written,
 //! neither does.
 
-use orla_kernel::{Context, Runtime};
-use orla_session::{Event, Session};
+use entelechy_kernel::{Context, Runtime};
+use entelechy_session::{Event, Session};
 
 const JOIN: &str = "kernel t.a@1 { requires { field.write; } output result: Rows<Int>; compute { return 1; } }
 kernel t.b@1 { requires { field.write; } output result: Rows<Int>; compute { return 2; } }
@@ -15,19 +15,19 @@ kernel t.join@1 { requires { field.read; field.write; } input first: Rows<Int>; 
 
 fn scene(domain: &str) -> String {
     format!(
-        "use \"k.orla\";\nnode a: t.a@1 {{ domain = 2; }}\nnode b: t.b@1 {{ domain = 3; }}\nnode j: t.join@1 {{ first <- a.result; second <- b.result;{domain} }}\noutput result <- j.result;\n"
+        "use \"k.ent\";\nnode a: t.a@1 {{ domain = 2; }}\nnode b: t.b@1 {{ domain = 3; }}\nnode j: t.join@1 {{ first <- a.result; second <- b.result;{domain} }}\noutput result <- j.result;\n"
     )
 }
 
 fn said(name: &str, domain: &str) -> (Vec<String>, Vec<String>, usize) {
-    let dir = std::env::temp_dir().join(format!("orla-unrun-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-unrun-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("k.orla"), JOIN).unwrap();
-    std::fs::write(dir.join("scene.osn"), scene(domain)).unwrap();
-    let checked = orla_session::check_document(
-        &orla_session::Disk::default(),
-        &dir.join("scene.osn"),
+    std::fs::write(dir.join("k.ent"), JOIN).unwrap();
+    std::fs::write(dir.join("scene.esn"), scene(domain)).unwrap();
+    let checked = entelechy_session::check_document(
+        &entelechy_session::Disk::default(),
+        &dir.join("scene.esn"),
         false,
     );
     let notes = checked
@@ -36,8 +36,8 @@ fn said(name: &str, domain: &str) -> (Vec<String>, Vec<String>, usize) {
         .filter(|(_, line)| line.contains("compares `element()`"))
         .map(|(_, line)| line.clone())
         .collect();
-    let runtime = Runtime::with_backends(1 << 20, Box::new(orla_cpu::CpuBackend), None);
-    let mut session = Session::open_with(&dir.join("scene.osn"), None, runtime);
+    let runtime = Runtime::with_backends(1 << 20, Box::new(entelechy_cpu::CpuBackend), None);
+    let mut session = Session::open_with(&dir.join("scene.esn"), None, runtime);
     let mut events: Vec<String> = session
         .sync()
         .iter()

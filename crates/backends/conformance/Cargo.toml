@@ -1,5 +1,5 @@
 [package]
-name = "orla-conformance"
+name = "entelechy-conformance"
 description = "The conformance matrix: every language feature under every execution mode, as Kernels with their inputs, for the backends' parity tests"
 version.workspace = true
 edition.workspace = true
@@ -11,9 +11,9 @@ rust-version.workspace = true
 doctest = false
 
 [dependencies]
-orla-abi = { path = "../../core/abi" }
-orla-ir = { path = "../../core/ir" }
-orla-rules = { path = "../../core/rules" }
+entelechy-abi = { path = "../../core/abi" }
+entelechy-ir = { path = "../../core/ir" }
+entelechy-rules = { path = "../../core/rules" }
 
 [lints]
 workspace = true

@@ -1,14 +1,14 @@
 //! The GPU side of native `rasterize`, with the contract of
-//! [`orla_rules::raster`]: a render pipeline into two float targets for
+//! [`entelechy_rules::raster`]: a render pipeline into two float targets for
 //! the surface attributes and a depth target for order, then a compute
 //! pass compacting the targets, where they were written, into the Host's
 //! word layout as a resident grid.
 
 use std::sync::OnceLock;
 
-use orla_abi::{Handle, Invocation, Scope};
-use orla_rules::raster::{SURFACE_WORDS, check_rasterize, surface_schema};
-use orla_rules::{ExecutionError, NativeOp};
+use entelechy_abi::{Handle, Invocation, Scope};
+use entelechy_rules::raster::{SURFACE_WORDS, check_rasterize, surface_schema};
+use entelechy_rules::{ExecutionError, NativeOp};
 
 use crate::{DeviceImage, GpuBackend};
 
@@ -166,7 +166,7 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 fn build(device: &wgpu::Device, wait: crate::Wait) -> Result<RasterPipelines, String> {
     let guard = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let raster = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("orla rasterize"),
+        label: Some("entelechy rasterize"),
         source: wgpu::ShaderSource::Wgsl(RASTER_WGSL.into()),
     });
     let storage = |binding: u32, visibility: wgpu::ShaderStages, read_only: bool| {
@@ -192,7 +192,7 @@ fn build(device: &wgpu::Device, wait: crate::Wait) -> Result<RasterPipelines, St
         count: None,
     };
     let render_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("orla rasterize"),
+        label: Some("entelechy rasterize"),
         entries: &[
             uniform(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
             storage(1, wgpu::ShaderStages::VERTEX, true),
@@ -201,7 +201,7 @@ fn build(device: &wgpu::Device, wait: crate::Wait) -> Result<RasterPipelines, St
         ],
     });
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("orla rasterize"),
+        label: Some("entelechy rasterize"),
         bind_group_layouts: &[Some(&render_layout)],
         immediate_size: 0,
     });
@@ -211,7 +211,7 @@ fn build(device: &wgpu::Device, wait: crate::Wait) -> Result<RasterPipelines, St
         write_mask: wgpu::ColorWrites::ALL,
     });
     let render = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("orla rasterize"),
+        label: Some("entelechy rasterize"),
         layout: Some(&render_pipeline_layout),
         vertex: wgpu::VertexState {
             module: &raster,
@@ -246,7 +246,7 @@ fn build(device: &wgpu::Device, wait: crate::Wait) -> Result<RasterPipelines, St
         cache: None,
     });
     let compact_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("orla compact"),
+        label: Some("entelechy compact"),
         source: wgpu::ShaderSource::Wgsl(COMPACT_WGSL.into()),
     });
     let sampled = |binding: u32| wgpu::BindGroupLayoutEntry {
@@ -260,7 +260,7 @@ fn build(device: &wgpu::Device, wait: crate::Wait) -> Result<RasterPipelines, St
         count: None,
     };
     let compact_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("orla compact"),
+        label: Some("entelechy compact"),
         entries: &[
             uniform(0, wgpu::ShaderStages::COMPUTE),
             sampled(1),
@@ -269,12 +269,12 @@ fn build(device: &wgpu::Device, wait: crate::Wait) -> Result<RasterPipelines, St
         ],
     });
     let compact_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("orla compact"),
+        label: Some("entelechy compact"),
         bind_group_layouts: &[Some(&compact_layout)],
         immediate_size: 0,
     });
     let compact = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("orla compact"),
+        label: Some("entelechy compact"),
         layout: Some(&compact_pipeline_layout),
         module: &compact_module,
         entry_point: Some("main"),
@@ -325,12 +325,12 @@ pub(crate) fn rasterize(
     let (vertices, triangles, mask, alpha) = match op {
         NativeOp::RasterizeCutout => {
             let (vertices, triangles, mask, alpha) =
-                orla_rules::raster::check_rasterize_cutout(invocation, scope)?;
+                entelechy_rules::raster::check_rasterize_cutout(invocation, scope)?;
             (vertices, triangles, Some(mask), alpha)
         }
         NativeOp::RasterizeCanvas => {
             let (vertices, triangles) =
-                orla_rules::raster::check_rasterize_canvas(invocation, scope)?;
+                entelechy_rules::raster::check_rasterize_canvas(invocation, scope)?;
             (vertices, triangles, None, 0.0)
         }
         NativeOp::Rasterize => {
@@ -357,7 +357,7 @@ pub(crate) fn rasterize(
     // shader leaves unread.
     let mask_size = match mask {
         Some(mask) => scope.size(mask)?,
-        None => orla_abi::Domain::Grid(1, 1),
+        None => entelechy_abi::Domain::Grid(1, 1),
     };
     let mask_buffer = match mask {
         Some(mask) => gpu.bind_input(scope, mask)?,
@@ -380,7 +380,7 @@ pub(crate) fn rasterize(
     let frame_bytes: Vec<u8> = frame.iter().flat_map(|v| v.to_le_bytes()).collect();
     let frame_buffer = gpu.buffer("rasterize frame", &frame_bytes, wgpu::BufferUsages::UNIFORM);
     let render_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("orla rasterize"),
+        label: Some("entelechy rasterize"),
         layout: &pipelines.render_layout,
         entries: &[
             wgpu::BindGroupEntry {
@@ -418,7 +418,7 @@ pub(crate) fn rasterize(
     let compact_bytes: Vec<u8> = compact_frame.iter().flat_map(|v| v.to_le_bytes()).collect();
     let compact_uniform = gpu.buffer("compact frame", &compact_bytes, wgpu::BufferUsages::UNIFORM);
     let compact_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("orla compact"),
+        label: Some("entelechy compact"),
         layout: &pipelines.compact_layout,
         entries: &[
             wgpu::BindGroupEntry {
@@ -447,7 +447,7 @@ pub(crate) fn rasterize(
     let mut encoder = gpu
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("orla rasterize"),
+            label: Some("entelechy rasterize"),
         });
     {
         fn attachment(
@@ -465,7 +465,7 @@ pub(crate) fn rasterize(
             })
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("orla rasterize"),
+            label: Some("entelechy rasterize"),
             color_attachments: &[
                 attachment(
                     &a_view,
@@ -502,7 +502,7 @@ pub(crate) fn rasterize(
     }
     {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("orla compact"),
+            label: Some("entelechy compact"),
             timestamp_writes: timing_set.as_ref().map(|query_set| {
                 wgpu::ComputePassTimestampWrites {
                     query_set,

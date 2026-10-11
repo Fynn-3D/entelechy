@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 window 240 135
 param instances 16
 param across 4

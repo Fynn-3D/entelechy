@@ -2,10 +2,10 @@
 //! mode computes the same words from optimized and lowered IR, and the
 //! optimized IR is smaller.
 
-use orla_abi::{Capabilities, Capability, Host, Invocation, Scope};
-use orla_compiler::{compile, compile_unoptimized};
-use orla_cpu::CpuBackend;
-use orla_ir::{Instruction, Op};
+use entelechy_abi::{Capabilities, Capability, Host, Invocation, Scope};
+use entelechy_compiler::{compile, compile_unoptimized};
+use entelechy_cpu::CpuBackend;
+use entelechy_ir::{Instruction, Op};
 
 fn all() -> Capabilities {
     Capability::ALL.into_iter().collect()
@@ -37,10 +37,10 @@ fn count(instructions: &[Instruction]) -> usize {
 fn every_feature_under_every_mode_computes_the_same_words_optimized() {
     let mut failures = Vec::new();
     let (mut before, mut after) = (0, 0);
-    for case in orla_conformance::cases() {
+    for case in entelechy_conformance::cases() {
         let plain = compile_unoptimized(&case.source).unwrap();
         let optimized = compile(&case.source).unwrap();
-        let size = |module: &orla_ir::Validated| {
+        let size = |module: &entelechy_ir::Validated| {
             module
                 .functions
                 .iter()
@@ -52,14 +52,15 @@ fn every_feature_under_every_mode_computes_the_same_words_optimized() {
         };
         before += size(&plain);
         after += size(&optimized);
-        let run = |module: &orla_ir::Validated| -> Result<Vec<Vec<u32>>, String> {
+        let run = |module: &entelechy_ir::Validated| -> Result<Vec<Vec<u32>>, String> {
             let mut host = Host::new(1 << 22);
             let handles: Vec<_> = case
                 .inputs
                 .iter()
                 .map(|(schema, domain, words)| {
                     host.adopt(
-                        orla_abi::FieldData::from_values(schema.clone(), *domain, words).unwrap(),
+                        entelechy_abi::FieldData::from_values(schema.clone(), *domain, words)
+                            .unwrap(),
                     )
                     .unwrap()
                 })
@@ -253,7 +254,7 @@ fn a_wide_element_handed_to_a_long_function_is_read_where_it_lies() {
             .any(|op| matches!(op, Op::At(..))),
         "no whole element is read: {optimized}"
     );
-    let made: Vec<&orla_ir::Function> = optimized
+    let made: Vec<&entelechy_ir::Function> = optimized
         .functions
         .iter()
         .filter(|f| f.name.contains('~'))
@@ -267,9 +268,9 @@ fn a_wide_element_handed_to_a_long_function_is_read_where_it_lies() {
     // The same words as the plain lowering.
     let plain = compile_unoptimized(&source).unwrap();
     let patch_words = 16 * 3 + 1;
-    let schema = orla_abi::Schema::new(
-        std::iter::repeat_n(orla_abi::Scalar::Float, 48)
-            .chain([orla_abi::Scalar::Int])
+    let schema = entelechy_abi::Schema::new(
+        std::iter::repeat_n(entelechy_abi::Scalar::Float, 48)
+            .chain([entelechy_abi::Scalar::Int])
             .collect(),
     );
     let words: Vec<u32> = (0..4 * patch_words)
@@ -281,18 +282,22 @@ fn a_wide_element_handed_to_a_long_function_is_read_where_it_lies() {
             }
         })
         .collect();
-    let run = |module: &orla_ir::Validated| -> Vec<u32> {
+    let run = |module: &entelechy_ir::Validated| -> Vec<u32> {
         let mut host = Host::new(1 << 22);
         let patches = host
             .adopt(
-                orla_abi::FieldData::from_values(schema.clone(), orla_abi::Domain::Rows(4), &words)
-                    .unwrap(),
+                entelechy_abi::FieldData::from_values(
+                    schema.clone(),
+                    entelechy_abi::Domain::Rows(4),
+                    &words,
+                )
+                .unwrap(),
             )
             .unwrap();
         let invocation = Invocation {
             inputs: vec![patches],
             params: Vec::new(),
-            domain: orla_abi::Domain::Rows(4),
+            domain: entelechy_abi::Domain::Rows(4),
             context: Default::default(),
         };
         let mut scope = Scope::new(&mut host, all());
@@ -330,10 +335,10 @@ fn a_wide_part_of_an_element_handed_on_is_read_where_it_lies() {
     let entry = ops(&optimized.entry.body);
     assert!(
         !entry.iter().any(|op| matches!(op, Op::At(..))
-            || matches!(op, Op::Part { path, .. } if path.len() == 1 && path[0] == orla_ir::Step::Field(1))),
+            || matches!(op, Op::Part { path, .. } if path.len() == 1 && path[0] == entelechy_ir::Step::Field(1))),
         "neither the element nor its part `b` is read whole: {optimized}"
     );
-    let made: Vec<&orla_ir::Function> = optimized
+    let made: Vec<&entelechy_ir::Function> = optimized
         .functions
         .iter()
         .filter(|f| f.name.contains('~'))
@@ -341,19 +346,20 @@ fn a_wide_part_of_an_element_handed_on_is_read_where_it_lies() {
     assert!(!made.is_empty(), "{optimized}");
     assert!(
         made.iter().all(|f| ops(&f.body).iter().any(|op| matches!(op,
-            Op::Part { path, .. } if path.first() == Some(&orla_ir::Step::Field(1)) && path.len() > 1))),
+            Op::Part { path, .. } if path.first() == Some(&entelechy_ir::Step::Field(1)) && path.len() > 1))),
         "each made function reads past `b`: {optimized}"
     );
     // The same words as the plain lowering.
     let plain = compile_unoptimized(&source).unwrap();
     let patch = 16 * 3 + 1;
     let view = 2 * patch + 1;
-    let schema = orla_abi::Schema::new(
+    let schema = entelechy_abi::Schema::new(
         (0..2)
             .flat_map(|_| {
-                std::iter::repeat_n(orla_abi::Scalar::Float, 48).chain([orla_abi::Scalar::Int])
+                std::iter::repeat_n(entelechy_abi::Scalar::Float, 48)
+                    .chain([entelechy_abi::Scalar::Int])
             })
-            .chain([orla_abi::Scalar::Float])
+            .chain([entelechy_abi::Scalar::Float])
             .collect(),
     );
     let words: Vec<u32> = (0..4 * view)
@@ -366,18 +372,22 @@ fn a_wide_part_of_an_element_handed_on_is_read_where_it_lies() {
             }
         })
         .collect();
-    let run = |module: &orla_ir::Validated| -> Vec<u32> {
+    let run = |module: &entelechy_ir::Validated| -> Vec<u32> {
         let mut host = Host::new(1 << 22);
         let views = host
             .adopt(
-                orla_abi::FieldData::from_values(schema.clone(), orla_abi::Domain::Rows(4), &words)
-                    .unwrap(),
+                entelechy_abi::FieldData::from_values(
+                    schema.clone(),
+                    entelechy_abi::Domain::Rows(4),
+                    &words,
+                )
+                .unwrap(),
             )
             .unwrap();
         let invocation = Invocation {
             inputs: vec![views],
             params: Vec::new(),
-            domain: orla_abi::Domain::Rows(4),
+            domain: entelechy_abi::Domain::Rows(4),
             context: Default::default(),
         };
         let mut scope = Scope::new(&mut host, all());
@@ -422,12 +432,12 @@ fn a_branch_on_a_literal_is_the_block_it_takes() {
             .filter(|op| matches!(op, Op::Match { .. } | Op::If { .. }))
             .count()
     };
-    let run = |module: &orla_ir::Validated| -> Result<Vec<u32>, String> {
+    let run = |module: &entelechy_ir::Validated| -> Result<Vec<u32>, String> {
         let mut host = Host::new(1 << 20);
         let invocation = Invocation {
             inputs: vec![],
             params: vec![],
-            domain: orla_abi::Domain::Rows(8),
+            domain: entelechy_abi::Domain::Rows(8),
             context: Default::default(),
         };
         let mut scope = Scope::new(&mut host, all());

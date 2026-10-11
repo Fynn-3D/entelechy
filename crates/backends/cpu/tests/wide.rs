@@ -1,8 +1,10 @@
 //! Doubles and longs on the interpreter, held to Rust's `f64` and `i64`.
 
-use orla_abi::{Capabilities, Capability, Context, Domain, Host, Invocation, Scalar, Scope, Value};
-use orla_compiler::compile;
-use orla_cpu::{CpuBackend, ExecutionError};
+use entelechy_abi::{
+    Capabilities, Capability, Context, Domain, Host, Invocation, Scalar, Scope, Value,
+};
+use entelechy_compiler::compile;
+use entelechy_cpu::{CpuBackend, ExecutionError};
 
 fn granted() -> Capabilities {
     [Capability::FieldRead, Capability::FieldWrite]

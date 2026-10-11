@@ -1,4 +1,4 @@
-scene motion.osn
+scene motion.esn
 
 # Ten steps a frame. After a second: the ball fell 4.5, struck the
 # ground at 9.49 and left it at half that, slowed since by gravity; the

@@ -4,8 +4,8 @@
 
 use std::path::Path;
 
-use orla_formats::{EncodeError, WRITTEN, encode, writable};
-use orla_host::{Domain, FieldData, Scalar, Schema};
+use entelechy_formats::{EncodeError, WRITTEN, encode, writable};
+use entelechy_host::{Domain, FieldData, Scalar, Schema};
 
 #[test]
 fn every_written_extension_is_one_encode_knows() {

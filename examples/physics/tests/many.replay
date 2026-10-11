@@ -1,4 +1,4 @@
-scene many.osn
+scene many.esn
 
 # The pairs the grid finds are every pair whose boxes overlap, asked one
 # by one; poured for three quarters of a second, no circle is out of

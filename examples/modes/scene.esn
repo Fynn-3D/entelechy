@@ -1,0 +1,23 @@
+// Each part's scene placed whole as a sub-graph; `panels` draws their
+// five pictures in one window.
+//
+//   reduction  maps       outputs
+//   scatter    off_frame
+use "kernels/";
+
+node reduction: graph "parts/exposure/scene.esn" {}
+node maps: graph "parts/sort/scene.esn" {}
+node outputs: graph "parts/deferred/scene.esn" {}
+node scatter: graph "parts/particles/scene.esn" {}
+node off_frame: graph "parts/async/scene.esn" {}
+
+node panels: modes.panels@1 {
+    reduction <- reduction.result;
+    maps <- maps.result;
+    outputs <- outputs.result;
+    scatter <- scatter.result;
+    off_frame <- off_frame.result;
+    domain = window();
+}
+
+output result <- panels.result;

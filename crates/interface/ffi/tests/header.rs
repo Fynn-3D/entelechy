@@ -1,8 +1,8 @@
-//! `include/orla.h` is the C ABI's contract; the Rust is what it links
+//! `include/entelechy.h` is the C ABI's contract; the Rust is what it links
 //! to. Both hold the same functions, the same version, and every header
 //! struct laid out the same, field by field.
 
-const HEADER: &str = include_str!("../include/orla.h");
+const HEADER: &str = include_str!("../include/entelechy.h");
 const SOURCE: &str = concat!(
     include_str!("../src/lib.rs"),
     include_str!("../src/play.rs")
@@ -22,11 +22,11 @@ fn header_code() -> String {
     code
 }
 
-/// Every `orla_` name followed by `(` in `text` and preceded by
+/// Every `entelechy_` name followed by `(` in `text` and preceded by
 /// `before`, in order, once each.
 fn functions(text: &str, before: &str) -> Vec<String> {
     let mut names = Vec::new();
-    for (at, _) in text.match_indices("orla_") {
+    for (at, _) in text.match_indices("entelechy_") {
         let head = &text[..at];
         let bounded = !head
             .chars()
@@ -40,7 +40,7 @@ fn functions(text: &str, before: &str) -> Vec<String> {
             .chars()
             .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
             .collect();
-        if name.starts_with("orla_")
+        if name.starts_with("entelechy_")
             && tail[name.len()..].starts_with('(')
             && !names.contains(&name)
         {
@@ -127,14 +127,17 @@ fn the_header_declares_what_the_library_exports() {
 fn the_header_and_the_library_are_the_same_version() {
     let line = HEADER
         .lines()
-        .find_map(|line| line.strip_prefix("#define ORLA_ABI_VERSION "))
-        .expect("the header defines ORLA_ABI_VERSION");
-    assert_eq!(line.trim().parse::<u32>().unwrap(), orla_ffi::ABI_VERSION);
+        .find_map(|line| line.strip_prefix("#define ENTELECHY_ABI_VERSION "))
+        .expect("the header defines ENTELECHY_ABI_VERSION");
+    assert_eq!(
+        line.trim().parse::<u32>().unwrap(),
+        entelechy_ffi::ABI_VERSION
+    );
 }
 
 #[test]
 fn every_struct_the_header_lays_out_is_laid_out_alike() {
-    for name in ["OrlaInput", "OrlaField"] {
+    for name in ["EntelechyInput", "EntelechyField"] {
         assert_eq!(
             header_fields(name),
             rust_fields(name),

@@ -1,0 +1,112 @@
+// Moving through a list of rows by keys, a pad or the pointer: which row
+// is lit, and what was asked of it this frame. The keys are the arrows
+// or W A S D, Enter or Space to confirm, Esc or Backspace to go back; a
+// pad's left stick, south to confirm and east to go back; the pointer
+// lights the row it moves onto, a click confirms it, the wheel steps.
+// A direction held repeats after a moment. The navigation is state a
+// node keeps (`previous <~ result from start`); what it asks is the
+// scene's to do: change a value by `by`, act on `confirm`, leave on
+// `back`.
+use "layout.ent";
+
+/// The navigation after a frame: the row lit (`rows` of them); the
+/// change asked of it this frame, left -1 and right 1 (`by`); confirm
+/// and back pressed this frame; the row under the pointer (-1 none) and
+/// how far across it (0 to 1); what was held, a bit each (up, down,
+/// left, right, confirm, back, click), when the direction held was
+/// pressed and when it last repeated; the pointer where it was.
+struct Nav {
+    row: Int; by: Int; confirm: Bool; back: Bool; pointed: Int; along: Float;
+    held: Int; pressed_t: Float; repeated_t: Float; pointer_at: Vec2;
+}
+
+/// A direction held repeats after `nav_delay()` seconds, every
+/// `nav_every()` seconds.
+fn nav_delay() -> Float { return 0.4; }
+fn nav_every() -> Float { return 0.12; }
+
+fn held_bit(held: Int, bit: Int) -> Bool { return (held & (1 << bit)) != 0; }
+
+/// The navigation before any frame, row `row` lit.
+kernel ui.nav_start@1 {
+    requires { field.write; }
+    param row: Int = 0;
+    output result: Rows<Nav>;
+    compute {
+        return Nav { row: row, by: 0, confirm: false, back: false, pointed: -1, along: 0.0,
+            held: 0, pressed_t: 0.0, repeated_t: 0.0, pointer_at: vec2(-1.0, -1.0) };
+    }
+}
+
+/// The navigation after a frame through `rows` rows, round when `wrap`
+/// is 1. The list lies where its row `list` says, in the output's
+/// pixels (its left, top, width, and the rows' height), the rows `gap`
+/// apart, for the pointer: a scene's layout works it out, the window's
+/// size and scale known. `active` 0 holds it still, its row kept and
+/// nothing asked.
+kernel ui.navigate@1 {
+    requires { field.read; field.write; input.read; time.read; }
+    param rows: Int = 1;
+    param wrap: Int = 1;
+    param active: Int = 1;
+    param gap: Float = 0.0;
+    input previous: Rows<Nav>;
+    input list: Rows<Vec4>;
+    output result: Rows<Nav>;
+    compute {
+        let o = at(previous, 0);
+        let now = time();
+        let stick_ = stick(0);
+        let up = key(38) || key(87) || stick_.y > 0.5;
+        let down = key(40) || key(83) || stick_.y < -0.5;
+        let left = key(37) || key(65) || stick_.x < -0.5;
+        let right = key(39) || key(68) || stick_.x > 0.5;
+        let confirm_held = key(13) || key(32) || button(8);
+        let back_held = key(27) || key(8) || button(9);
+        let click = pointer_down();
+        let held = (if up { 1 } else { 0 }) | (if down { 2 } else { 0 }) | (if left { 4 } else { 0 }) | (if right { 8 } else { 0 })
+            | (if confirm_held { 16 } else { 0 }) | (if back_held { 32 } else { 0 }) | (if click { 64 } else { 0 });
+        let p = pointer();
+        if active == 0 {
+            return Nav { ..o, by: 0, confirm: false, back: false, held: held, pointer_at: p };
+        }
+        // A direction pressed this frame, or held past the delay at the
+        // repeat's pace.
+        let directions = held & 15;
+        let fresh = directions & (15 - (o.held & 15));
+        let pressed_t = if fresh != 0 { now } else { o.pressed_t };
+        let repeating = directions != 0 && fresh == 0 && now - pressed_t >= nav_delay() && now - o.repeated_t >= nav_every();
+        let acting = if fresh != 0 { fresh } else if repeating { directions } else { 0 };
+        let repeated_t = if fresh != 0 || repeating { now } else { o.repeated_t };
+        let wheel_steps = int(-sign(wheel().y));
+        let step = (if held_bit(acting, 1) { 1 } else { 0 }) - (if held_bit(acting, 0) { 1 } else { 0 }) + wheel_steps;
+        let by = (if held_bit(acting, 3) { 1 } else { 0 }) - (if held_bit(acting, 2) { 1 } else { 0 });
+        let n = max(rows, 1);
+        let stepped_row = if wrap == 1 { ((o.row + step) % n + n) % n } else { clamp(o.row + step, 0, n - 1) };
+        // The pointer: the row under it, lit when it moves onto it.
+        let l = at(list, 0);
+        let area = Rect { lo: l.xy, hi: vec2(l.x + l.z, l.y + float(n) * (l.w + gap)) };
+        let pointed = list_row_at(area, p, l.w, gap, n);
+        let moved_ = length(p - o.pointer_at) > 0.5;
+        let clicked = click && !held_bit(o.held, 6);
+        let row = if pointed >= 0 && (moved_ || clicked) { pointed } else { stepped_row };
+        let along = if pointed >= 0 { clamp((p.x - l.x) / max(l.z, 1.0), 0.0, 1.0) } else { 0.0 };
+        let confirm = (confirm_held && !held_bit(o.held, 4)) || (clicked && pointed >= 0);
+        let back = back_held && !held_bit(o.held, 5);
+        return Nav { row: row, by: by, confirm: confirm, back: back, pointed: pointed, along: along,
+            held: held, pressed_t: pressed_t, repeated_t: repeated_t, pointer_at: p };
+    }
+}
+
+/// What a widget in row `k` is with the navigation at `nav`: focused when
+/// lit, else idle; disabled when not `enabled`.
+fn row_state(nav: Nav, k: Int, enabled: Bool) -> Int {
+    return if !enabled { 3 } else if nav.row == k { 1 } else { 0 };
+}
+
+/// A count changed by `by` within `lo` to `hi`; round among `n`.
+fn stepped(v: Int, by: Int, lo: Int, hi: Int) -> Int { return clamp(v + by, lo, hi); }
+fn cycled(v: Int, by: Int, n: Int) -> Int { return ((v + by) % max(n, 1) + max(n, 1)) % max(n, 1); }
+
+/// A level (0 to 1) changed by `by` steps of `step`.
+fn slid(v: Float, by: Int, step: Float) -> Float { return clamp(v + float(by) * step, 0.0, 1.0); }

@@ -1,7 +1,7 @@
 # Crowd
 
 Sixty-four arms from one rig, each at its own moment in the clip. The
-[`skin` package](../../packages/skin.orlapkg) Kernels pose a crowd by
+[`skin` package](../../packages/skin.entpkg) Kernels pose a crowd by
 their `domain`: `instances * count(skeleton)` poses the skeletons and
 `instances * count(mesh)` moves the meshes.
 

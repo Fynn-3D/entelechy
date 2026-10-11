@@ -1,4 +1,4 @@
-scene many.osn
+scene many.esn
 window 64 48
 
 # Zoomed until a pixel is about a quarter of a unit: the last square, the

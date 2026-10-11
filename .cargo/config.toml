@@ -1,5 +1,5 @@
-# Where Orla is WebAssembly, the JIT's code is WebAssembly the host
-# loads, reached through Orla's function table: the table is exported
+# Where Entelechy is WebAssembly, the JIT's code is WebAssembly the host
+# loads, reached through Entelechy's function table: the table is exported
 # for the host to put it in, and may grow.
 [target.wasm32-unknown-unknown]
 rustflags = ["-C", "link-arg=--export-table", "-C", "link-arg=--growable-table"]

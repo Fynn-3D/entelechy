@@ -1,10 +1,10 @@
-# Orla
+# Entelechy
 
 **A runtime for software that evolves while it runs, built for AI agents to create with.**
 
-![A gamepad drawn by Orla Kernels: signed-distance modelling, physically based shading, a toolbar, all in .orla](docs/media/showcase.jpg)
+![A gamepad drawn by Entelechy Kernels: signed-distance modelling, physically based shading, a toolbar, all in .ent](docs/media/showcase.jpg)
 
-<sub>Every pixel above is computed by Kernels written in `.orla` and composed by a `.osn` scene
+<sub>Every pixel above is computed by Kernels written in `.ent` and composed by a `.esn` scene
 ([`examples/showcase`](examples/showcase/README.md)). The Host knows no gamepads, no shading, no toolbar.</sub>
 
 > **Host is the world.**
@@ -12,7 +12,7 @@
 > **Graph is the structure.**
 > **AI is the creator.**
 
-## What Orla is
+## What Entelechy is
 
 - **Kernels are the laws.** A Kernel is a small typed function, `Y = K(X, P, C)`: inputs, parameters,
   context in; outputs out. It reaches the machine only through the capabilities it declares and is
@@ -30,7 +30,7 @@
 ## A Kernel and a scene
 
 ```text
-// kernels/grayscale.orla
+// kernels/grayscale.ent
 kernel image.grayscale@1 {
     requires { field.read; field.write; }
     input source: Image;
@@ -48,7 +48,7 @@ kernel image.grayscale@1 {
 ```
 
 ```text
-// scene.osn
+// scene.esn
 use "kernels/";
 
 node source: image.gradient@1 { domain = vec2(128, 128); }
@@ -64,13 +64,13 @@ a diagnostic at `file:line:column` while the old one keeps running.
 ## Start
 
 Download a release from [Releases](https://github.com/Fynn-3D/orla/releases),
-unpack it, and run `bin/orla` from its directory:
+unpack it, and run `bin/entelechy` from its directory:
 
 ```sh
-bin/orla new hello                                  # a scene that runs: Kernel, scene, test
-bin/orla player hello/scene.osn                     # open it in a window; edit the Kernel live
-bin/orla run examples/grayscale/scene.osn --out gray.png
-bin/orla help                                       # the syntax and API of every layer
+bin/entelechy new hello                                  # a scene that runs: Kernel, scene, test
+bin/entelechy player hello/scene.esn                     # open it in a window; edit the Kernel live
+bin/entelechy run examples/grayscale/scene.esn --out gray.png
+bin/entelechy help                                       # the syntax and API of every layer
 ```
 
 From the source (Rust 1.93 or later), `cargo build --release` puts the
@@ -82,17 +82,17 @@ An agent creates through one open protocol: JSON lines over stdin and stdout, a 
 or a C function. Any model, any language, any CLI; the same authority rules for all.
 
 ```sh
-bin/orla serve examples/life/scene.osn
+bin/entelechy serve examples/life/scene.esn
 ```
 
 ```text
 → {"id":1,"op":"status"}
-← {"id":1,"ok":{"backend":"jit","kernels":5,"nodes":3,"revision":4,"scene":"examples/life/scene.osn",...}}
+← {"id":1,"ok":{"backend":"jit","kernels":5,"nodes":3,"revision":4,"scene":"examples/life/scene.esn",...}}
 → {"id":2,"op":"prepare","source":"kernel demo.tint@1 { ... vec4(1.0, 0.5, nope, 1.0) ... }"}
 ← {"id":2,"error":{"line":1,"column":152,"message":"`nope` is not defined"}}
 ```
 
-`bin/orla help` prints the syntax and API of every layer: the types, the builtins, how a
+`bin/entelechy help` prints the syntax and API of every layer: the types, the builtins, how a
 Kernel and a scene are written, the capabilities, packages, the protocol and replay tests
 ([the same text](docs/REFERENCE.md)). Whole programs are in [`examples/`](examples/README.md).
 
@@ -113,7 +113,7 @@ protocol from [Blender](bridges/blender/README.md), [Godot](bridges/godot/README
 
 ## What runs on it
 
-![A voxel editor built from Orla Kernels](docs/media/voxel.jpg)
+![A voxel editor built from Entelechy Kernels](docs/media/voxel.jpg)
 
 54 examples, each a scene, its Kernels and its replay tests, none with a line of Rust:
 
@@ -133,7 +133,7 @@ Browse them in [`examples/`](examples/README.md).
 ```text
 Host Core        memory, devices, time, budgets
 Capability ABI   declared capabilities, opaque handles
-Orla IR          typed computation, backend-neutral
+Entelechy IR          typed computation, backend-neutral
 Kernel Runtime   prepare, validate, atomic swap
 Graph Runtime    composition by KernelID, typed ports
 Interfaces       CLI, Player, protocol, C ABI, bridges
@@ -156,7 +156,7 @@ in the browser on WebAssembly and WebGPU.
 | Which command does what | [Usage](docs/USAGE.md) |
 | Why it is this way | [Decisions](docs/DECISIONS.md) |
 | Where the code and its evidence are | [Implementation](IMPLEMENTATION.md) |
-| The rules for working on Orla | [AGENTS](AGENTS.md), [PROCESS](PROCESS.md) |
+| The rules for working on Entelechy | [AGENTS](AGENTS.md), [PROCESS](PROCESS.md) |
 
 ## License
 

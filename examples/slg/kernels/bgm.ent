@@ -1,0 +1,80 @@
+// The music: a chiptune loop and a hit sound, as one row of stereo frames
+// per evaluation. The sequencer's step comes from a sample counter that
+// crosses blocks through Graph state, so the tune never skips; the hit
+// sound starts when the rules issue a strike, so the sound follows the
+// game rather than the picture.
+// The game's state row is declared once, in slg.ent; `use` brings the
+// declaration here so `order` is read from the same layout.
+use "slg.ent";
+
+struct Tone { left: Float; right: Float; count: Int; lead: Float; bass: Float; hit: Float; }
+type Music = Rows<Tone>;
+
+kernel bgm.silence@1 {
+    requires { field.write; }
+    output result: Music;
+    compute { return Tone { left: 0.0, right: 0.0, count: -1, lead: 0.0, bass: 0.0, hit: 0.0 }; }
+}
+
+kernel bgm.play@1 {
+    requires { field.read; field.write; time.read; }
+    input previous: Music;
+    input game: Rows<Game>;
+    param tempo: Float = 8.0;      // steps per second
+    param gain: Float = 0.12;
+    output result: Music;
+
+    // A sixteen-step melody in semitones above A3, and a bass line under it.
+    fn lead_note(step: Int) -> Float {
+        let s = step % 16;
+        return if s == 0 { 0.0 } else if s == 1 { 4.0 } else if s == 2 { 7.0 } else if s == 3 { 12.0 }
+            else if s == 4 { 7.0 } else if s == 5 { 4.0 } else if s == 6 { 0.0 } else if s == 7 { 2.0 }
+            else if s == 8 { 4.0 } else if s == 9 { 7.0 } else if s == 10 { 9.0 } else if s == 11 { 12.0 }
+            else if s == 12 { 9.0 } else if s == 13 { 7.0 } else if s == 14 { 4.0 } else { 2.0 };
+    }
+
+    fn bass_note(step: Int) -> Float {
+        let bar = (step / 4) % 4;
+        return if bar == 0 { -12.0 } else if bar == 1 { -8.0 } else if bar == 2 { -5.0 } else { -7.0 };
+    }
+
+    fn pitch(semitones: Float) -> Float {
+        return 220.0 * pow(2.0, semitones / 12.0);
+    }
+
+    fn hash(n: Float) -> Float {
+        let q = fract(n * 0.1031);
+        let r = q + q * (q + 33.33);
+        return fract(r * r * 2.0);
+    }
+
+    compute {
+        let last = at(previous, count(previous) - 1);
+        let hz = if rate() > 0.0 { rate() } else { 48000.0 };
+        let n = last.count + 1 + element();
+        let t = float(n) / hz;
+        let step = int(floor(t * tempo));
+        let within = fract(t * tempo);
+        // Phases advance from the last block's, so notes carry across blocks.
+        let lead = fract(last.lead + float(element() + 1) * pitch(lead_note(step)) / hz);
+        let bass = fract(last.bass + float(element() + 1) * pitch(bass_note(step)) / hz);
+        let square = if lead < 0.5 { 1.0 } else { -1.0 };
+        let triangle = abs(bass * 4.0 - 2.0) - 1.0;
+        let envelope = 1.0 - within * 0.6;
+        // A strike this frame starts the hit: noise that dies in a sixth of a second.
+        let g = at(game, 0);
+        let hit_start = if g.order == 2 { 1.0 } else { last.hit };
+        let hit = max(hit_start - float(element() + 1) / (hz * 0.16), 0.0);
+        let noise = (hash(float(n)) * 2.0 - 1.0) * hit * hit;
+        let mixed = (square * envelope * 0.5 + triangle * 0.4) * gain + noise * 0.25;
+        return Tone { left: mixed, right: mixed * 0.9 + noise * 0.05, count: n, lead: lead, bass: bass, hit: hit };
+    }
+}
+
+/// The stereo frames the sound card takes.
+kernel bgm.stereo@1 {
+    requires { field.read; field.write; }
+    input music: Music;
+    output result: Rows<Vec2>;
+    compute { let m = sample(music); return vec2(m.left, m.right); }
+}

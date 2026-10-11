@@ -1,6 +1,6 @@
 //! Waiting for the device. On a machine the thread blocks. In a page the
 //! browser answers only when the page's script has a turn, so waiting
-//! parks Orla ([`Wait::parks`]): the host suspends it (JavaScript Promise
+//! parks Entelechy ([`Wait::parks`]): the host suspends it (JavaScript Promise
 //! Integration) until the answer's callback, or a future's waker, calls
 //! the host's wake. Neither way spins.
 

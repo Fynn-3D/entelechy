@@ -16,7 +16,7 @@ The step reads no other body, so it is a map. The scatter's counts are
 atomic each and every backend gives the same words.
 
 ```sh
-orla bench examples/million/scene.osn --window 960x540 --backend all --nodes
-orla player examples/million/scene.osn
-orla run examples/million/scene.osn --param count=4000000 --window 960x540 --backend gpu --out four.ppm
+entelechy bench examples/million/scene.esn --window 960x540 --backend all --nodes
+entelechy player examples/million/scene.esn
+entelechy run examples/million/scene.esn --param count=4000000 --window 960x540 --backend gpu --out four.ppm
 ```

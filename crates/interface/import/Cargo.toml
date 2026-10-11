@@ -1,5 +1,5 @@
 [package]
-name = "orla-import"
+name = "entelechy-import"
 description = "The importer: brings models and sounds in as the Host's files, from outside the runtime"
 version.workspace = true
 edition.workspace = true
@@ -12,12 +12,12 @@ doctest = false
 path = "src/lib.rs"
 
 [[bin]]
-name = "orla-import"
+name = "entelechy-import"
 path = "src/main.rs"
 
 [dependencies]
-orla-formats = { path = "../../interface/formats" }
-orla-host = { path = "../../core/host" }
+entelechy-formats = { path = "../../interface/formats" }
+entelechy-host = { path = "../../core/host" }
 serde_json = "1"
 # Lossy and compressed audio: a decoder is not worth writing again. Only
 # the interface layer and the two backends' machines take dependencies;

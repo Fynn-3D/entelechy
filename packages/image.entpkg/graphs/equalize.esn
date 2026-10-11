@@ -1,0 +1,17 @@
+//! Histogram equalization as a sub-graph: the pixels counted into
+//! `bins` by brightness, the counts accumulated, and each pixel moved to
+//! its rank. Place it with
+//!   node even: graph "image.entpkg/graphs/equalize.esn" { source <- x.result; amount = 0.7; }
+use "../kernels/histogram.ent";
+
+input source: Image;
+param bins: Int = 256;
+param amount: Float = 1.0;
+
+node empty: image.zeros@1 { domain = bins; }
+node counts: image.histogram@1 { source <- source; bins <- empty.result; }
+node ranks: image.cumulate@1 { counts <- counts.result; }
+node even: image.equalize@1 { source <- source; cumulative <- ranks.result; amount = amount; }
+
+output result <- even.result;
+output counts <- counts.result;

@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # Seed 7 deals an I piece first: at time zero it lies across row 1 at
 # columns 3 to 6 of the well; the bottom row is prefilled but for its

@@ -1,0 +1,20 @@
+// Each part's scene placed whole as a sub-graph; panels lays their
+// pictures out in the window, three across and two down.
+use "kernels/";
+
+node blur: graph "parts/blur/scene.esn" {}
+node cube: graph "parts/cube/scene.esn" {}
+node marching: graph "parts/marching/scene.esn" {}
+node volume: graph "parts/volume/scene.esn" {}
+node scroll: graph "parts/scroll/scene.esn" {}
+
+node panels: panels.grid@1 {
+    blur <- blur.result;
+    cube <- cube.result;
+    marching <- marching.result;
+    volume <- volume.result;
+    scroll <- scroll.result;
+    domain = window();
+}
+
+output result <- panels.result;

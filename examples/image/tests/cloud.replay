@@ -1,4 +1,4 @@
-scene ../parts/volume/scene.osn
+scene ../parts/volume/scene.esn
 
 # The density fades to nothing toward the cube's edges, so the image
 # corners show the sky gradient alone: exact on both backends. The centre

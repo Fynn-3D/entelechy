@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # Solved at the start; U turned (fifteen frames at four turns a second),
 # the stickers permuted as the model says and the front's top row now

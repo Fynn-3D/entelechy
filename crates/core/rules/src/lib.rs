@@ -13,8 +13,8 @@ pub use backend::{Backend, Check, ClockedFrame, Downloading, NativeOp, Prepared}
 
 use std::fmt;
 
-use orla_abi::{AbiError, Domain, Invocation, Scalar, Schema, Scope, Shape};
-use orla_ir::{Combine, Mode, Validated};
+use entelechy_abi::{AbiError, Domain, Invocation, Scalar, Schema, Scope, Shape};
+use entelechy_ir::{Combine, Mode, Validated};
 
 /// Integer arithmetic without a result.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -125,7 +125,7 @@ pub enum ExecutionError {
 }
 
 /// A run's total of loop iterations, shared by every thread that runs
-/// its elements. Elements hand in full blocks of [`orla_ir::WORK_BLOCK`]
+/// its elements. Elements hand in full blocks of [`entelechy_ir::WORK_BLOCK`]
 /// iterations as they go, so a run past the Host's bound stops early;
 /// remainders are summed per thread and handed in at the end. The run
 /// fails when the exact total passes the bound, whatever the schedule.
@@ -137,9 +137,9 @@ pub struct Run {
 }
 
 impl Run {
-    /// A run that may take `work` iterations ([`orla_abi::Scope::work`]).
+    /// A run that may take `work` iterations ([`entelechy_abi::Scope::work`]).
     pub fn new(work: u64) -> Self {
-        let blocks = (work / u64::from(orla_ir::WORK_BLOCK)).min(u64::from(u32::MAX / 2));
+        let blocks = (work / u64::from(entelechy_ir::WORK_BLOCK)).min(u64::from(u32::MAX / 2));
         Self {
             blocks: std::sync::atomic::AtomicU32::new(0),
             left: std::sync::atomic::AtomicU64::new(0),
@@ -160,7 +160,7 @@ impl Run {
     /// Hands the run a thread's summed remainders. `true` once the run
     /// has passed its bound.
     pub fn settle(&self, left: u64) -> bool {
-        let block = u64::from(orla_ir::WORK_BLOCK);
+        let block = u64::from(entelechy_ir::WORK_BLOCK);
         self.left
             .fetch_add(left % block, std::sync::atomic::Ordering::Relaxed);
         self.spend((left / block).min(u64::from(u32::MAX / 2)) as u32)
@@ -177,7 +177,7 @@ impl Run {
     /// The verdict for blocks and remainder counted elsewhere (a
     /// device's record read back).
     pub fn judge(work: u64, blocks: u64, left: u64) -> Result<(), ExecutionError> {
-        match blocks * u64::from(orla_ir::WORK_BLOCK) + left > work {
+        match blocks * u64::from(entelechy_ir::WORK_BLOCK) + left > work {
             true => Err(ExecutionError::Overrun { work }),
             false => Ok(()),
         }
@@ -217,7 +217,7 @@ pub fn held_values(reduction: bool, count: usize, stride: usize) -> usize {
 /// The Host words a run holds beyond its Fields (a scatter's pairs while
 /// applied, a reduction's or a prefix's values), against the room the
 /// Host had when the run began
-/// ([`orla_abi::Scope::room`]). Shared by every thread of the run.
+/// ([`entelechy_abi::Scope::room`]). Shared by every thread of the run.
 pub struct Held {
     words: std::sync::atomic::AtomicUsize,
     room: usize,
@@ -702,11 +702,11 @@ pub fn outputs_fit_words(
     domain: Domain,
     scope: &Scope<'_>,
 ) -> Result<(), ExecutionError> {
-    let wide: Vec<orla_abi::Schema> = module
+    let wide: Vec<entelechy_abi::Schema> = module
         .manifest
         .outputs
         .iter()
-        .map(|port| orla_abi::Schema::new(port.ty.schema.scalars().to_vec()))
+        .map(|port| entelechy_abi::Schema::new(port.ty.schema.scalars().to_vec()))
         .collect();
     let fields: Vec<_> = wide.iter().map(|schema| (schema, domain)).collect();
     Ok(scope.can_hold(&fields)?)
@@ -745,11 +745,12 @@ pub fn check_invocation(
     }
     // A value is its type's words, scalar for scalar.
     for (param, value) in manifest.params.iter().zip(&invocation.params) {
-        let wanted = orla_ir::schema_of(param.ty, &module.structs).map(|s| s.scalars().to_vec());
+        let wanted =
+            entelechy_ir::schema_of(param.ty, &module.structs).map(|s| s.scalars().to_vec());
         if wanted.as_deref() != Some(value.scalars().as_slice()) {
             return Err(ExecutionError::ParamType {
                 name: param.name.clone(),
-                expected: orla_ir::type_name(param.ty, &module.structs),
+                expected: entelechy_ir::type_name(param.ty, &module.structs),
                 actual: value.to_string(),
             });
         }
@@ -773,7 +774,7 @@ pub fn check_invocation(
 /// that is known (`Some` too). A check holds a scene to it unrun, as
 /// [`check_invocation`] holds every run.
 pub fn check_input_types(
-    manifest: &orla_ir::Manifest,
+    manifest: &entelechy_ir::Manifest,
     inputs: &[Option<(Shape, Option<&Schema>)>],
 ) -> Result<(), ExecutionError> {
     for (port, bound) in manifest.inputs.iter().zip(inputs) {
@@ -794,7 +795,7 @@ pub fn check_input_types(
 /// from a port of type `port`, however either is spelled; `None` for one
 /// it takes.
 pub fn input_type_fault(
-    port: &orla_abi::PortType,
+    port: &entelechy_abi::PortType,
     shape: Shape,
     schema: Option<&Schema>,
 ) -> Option<String> {
@@ -816,7 +817,7 @@ pub fn input_type_fault(
 /// has the target's), any other its output's. A reduction is held to its
 /// one element apart.
 pub fn check_domain_shape(
-    manifest: &orla_ir::Manifest,
+    manifest: &entelechy_ir::Manifest,
     domain: Shape,
 ) -> Result<(), ExecutionError> {
     if manifest.mode == Mode::Reduce {

@@ -1,10 +1,10 @@
-//! Orla as a library in another process: the session the CLI and the
-//! Player run, behind the C ABI in `include/orla.h`. A host opens a scene,
+//! Entelechy as a library in another process: the session the CLI and the
+//! Player run, behind the C ABI in `include/entelechy.h`. A host opens a scene,
 //! evaluates it under its own input, and reads Fields in place in the
 //! Host's memory; the JSON protocol is reachable one line at a time.
 //!
 //! A session is used from one thread and one call at a time: a call made
-//! while another is inside it is refused ([`OrlaSession`]). Returned
+//! while another is inside it is refused ([`EntelechySession`]). Returned
 //! strings and pointers belong to the session until the next call on it;
 //! a Field's words until the next evaluate, request or close. No panic
 //! crosses the boundary: each entry reports one as an error.
@@ -15,16 +15,16 @@ use std::ops::{Deref, DerefMut};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
-use orla_abi::{Context, Handle, InputState, Shape};
-use orla_session::Session;
+use entelechy_abi::{Context, Handle, InputState, Shape};
+use entelechy_session::Session;
 
-/// The version of the header's contract, `ORLA_ABI_VERSION`.
+/// The version of the header's contract, `ENTELECHY_ABI_VERSION`.
 pub const ABI_VERSION: u32 = 1;
 
-/// What an evaluation sees; the layout of `OrlaInput` in the header.
+/// What an evaluation sees; the layout of `EntelechyInput` in the header.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct OrlaInput {
+pub struct EntelechyInput {
     pub time: f32,
     pub rate: f32,
     pub pointer: [f32; 2],
@@ -35,7 +35,7 @@ pub struct OrlaInput {
     pub keys: [u32; 8],
 }
 
-impl Default for OrlaInput {
+impl Default for EntelechyInput {
     fn default() -> Self {
         Self {
             time: 0.0,
@@ -50,10 +50,10 @@ impl Default for OrlaInput {
     }
 }
 
-/// A Field as it lies in memory; the layout of `OrlaField` in the header.
+/// A Field as it lies in memory; the layout of `EntelechyField` in the header.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct OrlaField {
+pub struct EntelechyField {
     pub words: *const u32,
     pub width: u32,
     pub height: u32,
@@ -66,17 +66,17 @@ pub struct OrlaField {
 }
 
 /// A session as a caller holds it, and whether a call is inside it. A
-/// call made while another is inside (a page reaching in while Orla waits
+/// call made while another is inside (a page reaching in while Entelechy waits
 /// for its device) is refused as a NULL session is, so no two calls
 /// touch what is held at once.
-pub struct OrlaSession {
+pub struct EntelechySession {
     inside: Cell<bool>,
     held: UnsafeCell<Held>,
 }
 
 /// A session entered by one call; what it holds is that call's alone
 /// until it leaves.
-struct Entered<'a>(&'a OrlaSession);
+struct Entered<'a>(&'a EntelechySession);
 
 impl Deref for Entered<'_> {
     type Target = Held;
@@ -105,7 +105,7 @@ impl Drop for Entered<'_> {
 ///
 /// # Safety
 /// `session` is NULL or a live session.
-unsafe fn enter<'a>(session: *const OrlaSession) -> Option<Entered<'a>> {
+unsafe fn enter<'a>(session: *const EntelechySession) -> Option<Entered<'a>> {
     let session = unsafe { session.as_ref() }?;
     if session.inside.replace(true) {
         return None;
@@ -129,17 +129,17 @@ struct Held {
         not(all(target_arch = "wasm32", target_os = "unknown")),
         allow(dead_code)
     )]
-    display: Option<orla_gpu::present::Display>,
+    display: Option<entelechy_gpu::present::Display>,
     /// The canvas id last presented on, and its surface.
     #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-    presenter: Option<(String, orla_gpu::present::Presenter)>,
+    presenter: Option<(String, entelechy_gpu::present::Presenter)>,
     /// The scene played: see `play.rs`.
-    play: orla_session::play::Play,
+    play: entelechy_session::play::Play,
     /// The last frame's picture and sound, as the play names them.
     shown: Option<(Handle, Option<Handle>)>,
-    /// The play's messages, for `orla_play_said`.
+    /// The play's messages, for `entelechy_play_said`.
     said: CString,
-    /// A frame drawn on the CPU, `0x00RRGGBB`, for `orla_play_pixels`.
+    /// A frame drawn on the CPU, `0x00RRGGBB`, for `entelechy_play_pixels`.
     pixels: Vec<u32>,
     /// The last picture read back, and its size; shown again when a frame
     /// fails or a picture cannot be read back.
@@ -151,7 +151,7 @@ pub use play::*;
 
 /// Where a presented picture landed (`None`: the canvas took no frame)
 /// and its size.
-type Presented = (Option<orla_session::play::Placement>, (u32, u32));
+type Presented = (Option<entelechy_session::play::Placement>, (u32, u32));
 
 thread_local! {
     static OPEN_ERROR: RefCell<CString> = RefCell::new(CString::default());
@@ -202,7 +202,7 @@ impl Held {
         &mut self,
         canvas: &str,
         handle: Handle,
-        overlay: Option<orla_gpu::present::Overlay<'_>>,
+        overlay: Option<entelechy_gpu::present::Overlay<'_>>,
     ) -> Result<Option<Presented>, String> {
         use wasm_bindgen::JsCast;
         let Some(display) = &self.display else {
@@ -242,9 +242,12 @@ impl Held {
         &mut self,
         _canvas: &str,
         _handle: Handle,
-        _overlay: Option<orla_gpu::present::Overlay<'_>>,
+        _overlay: Option<entelechy_gpu::present::Overlay<'_>>,
     ) -> Result<Option<Presented>, String> {
-        Err("a picture is presented on a page's canvas; a program reads it with orla_output".into())
+        Err(
+            "a picture is presented on a page's canvas; a program reads it with entelechy_output"
+                .into(),
+        )
     }
 
     fn fail(&mut self, message: impl Into<String>) -> c_int {
@@ -259,7 +262,7 @@ impl Held {
     }
 
     /// The words of a materialized Field and the layout around them.
-    fn field(&mut self, handle: Handle, field: &mut OrlaField) -> Result<(), String> {
+    fn field(&mut self, handle: Handle, field: &mut EntelechyField) -> Result<(), String> {
         let data = self
             .session
             .field(handle)
@@ -277,9 +280,9 @@ impl Held {
                 .or_insert_with(|| data.values().into_owned())
                 .as_ptr()
         };
-        let values = orla_abi::Schema::new(schema.scalars().to_vec());
+        let values = entelechy_abi::Schema::new(schema.scalars().to_vec());
         self.schema = c_string(&values.to_string());
-        *field = OrlaField {
+        *field = EntelechyField {
             words,
             width: domain.width(),
             height: domain.height(),
@@ -307,7 +310,7 @@ fn guarded(session: &mut Held, body: impl FnOnce(&mut Held) -> c_int) -> c_int {
                 .downcast_ref::<&str>()
                 .map(|s| (*s).to_owned())
                 .or_else(|| payload.downcast_ref::<String>().cloned())
-                .unwrap_or_else(|| "a panic inside Orla".to_owned());
+                .unwrap_or_else(|| "a panic inside Entelechy".to_owned());
             session.fail(format!("panic: {message}"))
         }
     }
@@ -315,27 +318,27 @@ fn guarded(session: &mut Held, body: impl FnOnce(&mut Held) -> c_int) -> c_int {
 
 /// The library's version.
 #[unsafe(no_mangle)]
-pub extern "C" fn orla_version() -> *const c_char {
+pub extern "C" fn entelechy_version() -> *const c_char {
     VERSION.as_ptr()
 }
 
-/// Opens a scene on a backend; NULL with `orla_open_error` set on failure.
+/// Opens a scene on a backend; NULL with `entelechy_open_error` set on failure.
 ///
 /// # Safety
 /// `scene`, `backend` and `library` are NULL or NUL-terminated strings.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_open(
+pub unsafe extern "C" fn entelechy_open(
     scene: *const c_char,
     backend: *const c_char,
     library: *const c_char,
-) -> *mut OrlaSession {
+) -> *mut EntelechySession {
     unsafe { open(None, scene, backend, library) }
 }
 
-// In a page, Orla waits for the device by parking: `orla.wait` suspends
-// Orla (JavaScript Promise Integration) until the device calls `orla.wake`.
+// In a page, Entelechy waits for the device by parking: `entelechy.wait` suspends
+// Entelechy (JavaScript Promise Integration) until the device calls `entelechy.wake`.
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-#[link(wasm_import_module = "orla")]
+#[link(wasm_import_module = "entelechy")]
 unsafe extern "C" {
     fn wait();
     fn wake();
@@ -343,7 +346,7 @@ unsafe extern "C" {
 
 // A page's clock: `performance.now()`, in milliseconds.
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-#[link(wasm_import_module = "orla")]
+#[link(wasm_import_module = "entelechy")]
 unsafe extern "C" {
     fn now() -> f64;
 }
@@ -365,7 +368,7 @@ fn clock() -> f64 {
 }
 
 /// How this process waits for a device.
-fn waiting() -> orla_session::Wait {
+fn waiting() -> entelechy_session::Wait {
     #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
     {
         fn park() {
@@ -374,30 +377,31 @@ fn waiting() -> orla_session::Wait {
         fn woken() {
             unsafe { wake() }
         }
-        orla_session::Wait::parks(park, woken)
+        entelechy_session::Wait::parks(park, woken)
     }
     #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     {
-        orla_session::Wait::blocking()
+        entelechy_session::Wait::blocking()
     }
 }
 
 /// Opens a scene over `store`, the disk when `None`.
 ///
 /// # Safety
-/// As `orla_open`.
+/// As `entelechy_open`.
 unsafe fn open(
-    store: Option<std::sync::Arc<dyn orla_session::Store>>,
+    store: Option<std::sync::Arc<dyn entelechy_session::Store>>,
     scene: *const c_char,
     backend: *const c_char,
     library: *const c_char,
-) -> *mut OrlaSession {
+) -> *mut EntelechySession {
     let backend = unsafe { text(backend) }.unwrap_or("best");
     let library = unsafe { text(library) }.map(Path::new);
     match unsafe { text(scene) } {
         Some(scene) => opened(store, Opening::Scene(Path::new(scene), library), backend),
         None => {
-            OPEN_ERROR.with(|slot| *slot.borrow_mut() = c_string("orla_open needs a scene path"));
+            OPEN_ERROR
+                .with(|slot| *slot.borrow_mut() = c_string("entelechy_open needs a scene path"));
             std::ptr::null_mut()
         }
     }
@@ -410,18 +414,19 @@ enum Opening<'a> {
     Replay(&'a Path),
 }
 
-/// Opens a session; NULL with `orla_open_error` set on failure.
+/// Opens a session; NULL with `entelechy_open_error` set on failure.
 fn opened(
-    store: Option<std::sync::Arc<dyn orla_session::Store>>,
+    store: Option<std::sync::Arc<dyn entelechy_session::Store>>,
     opening: Opening<'_>,
     backend: &str,
-) -> *mut OrlaSession {
+) -> *mut EntelechySession {
     let set_error = |message: String| {
         OPEN_ERROR.with(|slot| *slot.borrow_mut() = c_string(&message));
         std::ptr::null_mut()
     };
     let made = catch_unwind(AssertUnwindSafe(|| {
-        let store = store.unwrap_or_else(|| std::sync::Arc::new(orla_session::Disk::default()));
+        let store =
+            store.unwrap_or_else(|| std::sync::Arc::new(entelechy_session::Disk::default()));
         let (scene, library, replay) = match opening {
             Opening::Scene(scene, library) => {
                 (scene.to_path_buf(), library.map(Path::to_path_buf), None)
@@ -431,20 +436,20 @@ fn opened(
                     .read_text(path)
                     .map_err(|e| format!("{}: {e}", path.display()))?;
                 let base = path.parent().unwrap_or(Path::new(""));
-                let replay = orla_session::replay::parse(&text, base)
+                let replay = entelechy_session::replay::parse(&text, base)
                     .map_err(|e| format!("{}: {e}", path.display()))?;
                 (replay.scene.clone(), replay.kernels.clone(), Some(replay))
             }
         };
-        // Every session here answers `orla_request`, so its reads are held
+        // Every session here answers `entelechy_request`, so its reads are held
         // from the start to the directories of the scene as first loaded,
-        // plus what `orla_allow` allows.
+        // plus what `entelechy_allow` allows.
         let loaded = Session::open_loaded(
             store,
             &scene,
             library.as_deref(),
             backend,
-            orla_session::Limits::default(),
+            entelechy_session::Limits::default(),
             waiting(),
             true,
         )?;
@@ -453,7 +458,7 @@ fn opened(
         // The first load publishes inline; later replacements are prepared
         // off the caller's thread so frames go on (in place in a page).
         session.set_background(true);
-        let mut play = orla_session::play::Play::new(clock);
+        let mut play = entelechy_session::play::Play::new(clock);
         for passed in passed_over {
             play.say(format!("backend passed over: {passed}"));
         }
@@ -463,7 +468,7 @@ fn opened(
         Ok((session, display, play))
     }));
     match made {
-        Ok(Ok((session, display, play))) => Box::into_raw(Box::new(OrlaSession {
+        Ok(Ok((session, display, play))) => Box::into_raw(Box::new(EntelechySession {
             inside: Cell::new(false),
             held: UnsafeCell::new(Held {
                 session,
@@ -483,20 +488,20 @@ fn opened(
             }),
         })),
         Ok(Err(message)) => set_error(message),
-        Err(_) => set_error("a panic inside Orla while opening".to_owned()),
+        Err(_) => set_error("a panic inside Entelechy while opening".to_owned()),
     }
 }
 
 /// An in-memory file store a session opened on it reads instead of a disk.
 /// Files put after opening are read on the session's next evaluate.
-pub struct OrlaFiles {
-    files: std::sync::Arc<orla_session::Memory>,
+pub struct EntelechyFiles {
+    files: std::sync::Arc<entelechy_session::Memory>,
 }
 
 /// A new, empty set of files.
 #[unsafe(no_mangle)]
-pub extern "C" fn orla_files() -> *mut OrlaFiles {
-    Box::into_raw(Box::new(OrlaFiles {
+pub extern "C" fn entelechy_files() -> *mut EntelechyFiles {
+    Box::into_raw(Box::new(EntelechyFiles {
         files: std::sync::Arc::default(),
     }))
 }
@@ -504,12 +509,12 @@ pub extern "C" fn orla_files() -> *mut OrlaFiles {
 /// Puts a file's bytes at `path`, replacing what was there.
 ///
 /// # Safety
-/// `files` is a pointer `orla_files` returned, not freed yet; `path` is a
+/// `files` is a pointer `entelechy_files` returned, not freed yet; `path` is a
 /// NUL-terminated string; `data` is NULL when `len` is 0, or points to
 /// `len` bytes.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_files_put(
-    files: *mut OrlaFiles,
+pub unsafe extern "C" fn entelechy_files_put(
+    files: *mut EntelechyFiles,
     path: *const c_char,
     data: *const u8,
     len: usize,
@@ -530,50 +535,50 @@ pub unsafe extern "C" fn orla_files_put(
 /// keeps its own.
 ///
 /// # Safety
-/// `files` is NULL or a pointer `orla_files` returned, not freed yet.
+/// `files` is NULL or a pointer `entelechy_files` returned, not freed yet.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_files_free(files: *mut OrlaFiles) {
+pub unsafe extern "C" fn entelechy_files_free(files: *mut EntelechyFiles) {
     if !files.is_null() {
         drop(unsafe { Box::from_raw(files) });
     }
 }
 
-/// Opens a scene whose documents are `files`, as `orla_open` without the
+/// Opens a scene whose documents are `files`, as `entelechy_open` without the
 /// disk.
 ///
 /// # Safety
-/// `files` is a pointer `orla_files` returned, not freed yet; `scene`
+/// `files` is a pointer `entelechy_files` returned, not freed yet; `scene`
 /// and `backend` are NULL or NUL-terminated strings.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_open_files(
-    files: *mut OrlaFiles,
+pub unsafe extern "C" fn entelechy_open_files(
+    files: *mut EntelechyFiles,
     scene: *const c_char,
     backend: *const c_char,
-) -> *mut OrlaSession {
+) -> *mut EntelechySession {
     let Some(files) = (unsafe { files.as_ref() }) else {
-        OPEN_ERROR.with(|slot| *slot.borrow_mut() = c_string("orla_open_files needs files"));
+        OPEN_ERROR.with(|slot| *slot.borrow_mut() = c_string("entelechy_open_files needs files"));
         return std::ptr::null_mut();
     };
-    let store: std::sync::Arc<dyn orla_session::Store> = files.files.clone();
+    let store: std::sync::Arc<dyn entelechy_session::Store> = files.files.clone();
     unsafe { open(Some(store), scene, backend, std::ptr::null()) }
 }
 
-/// Allocates `size` bytes in Orla's memory for a caller with no shared
-/// allocator (a page, where Orla is WebAssembly); NULL on failure.
+/// Allocates `size` bytes in Entelechy's memory for a caller with no shared
+/// allocator (a page, where Entelechy is WebAssembly); NULL on failure.
 #[unsafe(no_mangle)]
-pub extern "C" fn orla_alloc(size: usize) -> *mut u8 {
+pub extern "C" fn entelechy_alloc(size: usize) -> *mut u8 {
     let Ok(layout) = std::alloc::Layout::from_size_align(size.max(1), 8) else {
         return std::ptr::null_mut();
     };
     unsafe { std::alloc::alloc(layout) }
 }
 
-/// Frees what `orla_alloc` gave, with the size it was asked for.
+/// Frees what `entelechy_alloc` gave, with the size it was asked for.
 ///
 /// # Safety
-/// `pointer` is NULL or what `orla_alloc(size)` returned, not freed yet.
+/// `pointer` is NULL or what `entelechy_alloc(size)` returned, not freed yet.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_free(pointer: *mut u8, size: usize) {
+pub unsafe extern "C" fn entelechy_free(pointer: *mut u8, size: usize) {
     if let (false, Ok(layout)) = (
         pointer.is_null(),
         std::alloc::Layout::from_size_align(size.max(1), 8),
@@ -582,18 +587,18 @@ pub unsafe extern "C" fn orla_free(pointer: *mut u8, size: usize) {
     }
 }
 
-/// Why the last `orla_open` on this thread failed.
+/// Why the last `entelechy_open` on this thread failed.
 #[unsafe(no_mangle)]
-pub extern "C" fn orla_open_error() -> *const c_char {
+pub extern "C" fn entelechy_open_error() -> *const c_char {
     OPEN_ERROR.with(|slot| slot.borrow().as_ptr())
 }
 
 /// Ends a session.
 ///
 /// # Safety
-/// `session` is NULL or a pointer `orla_open` returned, not closed yet.
+/// `session` is NULL or a pointer `entelechy_open` returned, not closed yet.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_close(session: *mut OrlaSession) {
+pub unsafe extern "C" fn entelechy_close(session: *mut EntelechySession) {
     // A session another call is inside is not freed under it.
     if unsafe { session.as_ref() }.is_some_and(|held| !held.inside.get()) {
         drop(unsafe { Box::from_raw(session) });
@@ -605,7 +610,7 @@ pub unsafe extern "C" fn orla_close(session: *mut OrlaSession) {
 /// # Safety
 /// `session` is NULL or a live session.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_error(session: *const OrlaSession) -> *const c_char {
+pub unsafe extern "C" fn entelechy_error(session: *const EntelechySession) -> *const c_char {
     match unsafe { enter(session) } {
         Some(session) => session.error.as_ptr(),
         None => EMPTY.as_ptr(),
@@ -615,11 +620,11 @@ pub unsafe extern "C" fn orla_error(session: *const OrlaSession) -> *const c_cha
 /// Evaluates the scene once under `input`.
 ///
 /// # Safety
-/// `session` is a live session; `input` is NULL or points to an `OrlaInput`.
+/// `session` is a live session; `input` is NULL or points to an `EntelechyInput`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_evaluate(
-    session: *mut OrlaSession,
-    input: *const OrlaInput,
+pub unsafe extern "C" fn entelechy_evaluate(
+    session: *mut EntelechySession,
+    input: *const EntelechyInput,
 ) -> c_int {
     let Some(mut session) = (unsafe { enter(session) }) else {
         return -1;
@@ -655,7 +660,8 @@ pub unsafe extern "C" fn orla_evaluate(
         };
         match s.session.evaluate(&context) {
             Ok(report) => {
-                s.report = c_string(&orla_protocol::report_json(&s.session, &report).to_string());
+                s.report =
+                    c_string(&entelechy_protocol::report_json(&s.session, &report).to_string());
                 0
             }
             Err(error) => s.fail(error.to_string()),
@@ -668,7 +674,7 @@ pub unsafe extern "C" fn orla_evaluate(
 /// # Safety
 /// `session` is NULL or a live session.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_report(session: *const OrlaSession) -> *const c_char {
+pub unsafe extern "C" fn entelechy_report(session: *const EntelechySession) -> *const c_char {
     match unsafe { enter(session) } {
         Some(session) => session.report.as_ptr(),
         None => EMPTY.as_ptr(),
@@ -679,12 +685,12 @@ pub unsafe extern "C" fn orla_report(session: *const OrlaSession) -> *const c_ch
 ///
 /// # Safety
 /// `session` is a live session; `name` is NULL or a string; `field` points
-/// to an `OrlaField` to fill.
+/// to an `EntelechyField` to fill.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_output(
-    session: *mut OrlaSession,
+pub unsafe extern "C" fn entelechy_output(
+    session: *mut EntelechySession,
     name: *const c_char,
-    field: *mut OrlaField,
+    field: *mut EntelechyField,
 ) -> c_int {
     let (Some(mut session), Some(field)) = (unsafe { enter(session) }, unsafe { field.as_mut() })
     else {
@@ -712,8 +718,8 @@ pub unsafe extern "C" fn orla_output(
 /// # Safety
 /// `session` is a live session; `canvas` is a string, `output` NULL or one.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_present(
-    session: *mut OrlaSession,
+pub unsafe extern "C" fn entelechy_present(
+    session: *mut EntelechySession,
     canvas: *const c_char,
     output: *const c_char,
 ) -> c_int {
@@ -736,25 +742,25 @@ pub unsafe extern "C" fn orla_present(
 ///
 /// # Safety
 /// `session` is a live session; `node` is a string, `port` NULL or one;
-/// `field` points to an `OrlaField` to fill.
+/// `field` points to an `EntelechyField` to fill.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_node(
-    session: *mut OrlaSession,
+pub unsafe extern "C" fn entelechy_node(
+    session: *mut EntelechySession,
     node: *const c_char,
     port: *const c_char,
-    field: *mut OrlaField,
+    field: *mut EntelechyField,
 ) -> c_int {
     let (Some(mut session), Some(field)) = (unsafe { enter(session) }, unsafe { field.as_mut() })
     else {
         return -1;
     };
     let Some(node) = (unsafe { text(node) }).map(str::to_owned) else {
-        return session.fail("orla_node needs a node name");
+        return session.fail("entelechy_node needs a node name");
     };
     let port = unsafe { text(port) }.unwrap_or("result").to_owned();
     guarded(&mut session, |s| {
         s.clear();
-        let id = orla_graph::NodeId(node.clone());
+        let id = entelechy_graph::NodeId(node.clone());
         let Some(handle) = s.session.cached(&id, &port) else {
             let why = s.session.why_no_value(&id, &port);
             return s.fail(why);
@@ -773,14 +779,17 @@ pub unsafe extern "C" fn orla_node(
 /// # Safety
 /// `session` is a live session; `allowance` is a NUL-terminated string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_allow(session: *mut OrlaSession, allowance: *const c_char) -> c_int {
+pub unsafe extern "C" fn entelechy_allow(
+    session: *mut EntelechySession,
+    allowance: *const c_char,
+) -> c_int {
     let Some(mut session) = (unsafe { enter(session) }) else {
         return -1;
     };
     let allowance = unsafe { text(allowance) }.unwrap_or("").to_owned();
     guarded(&mut session, |s| {
         s.clear();
-        match orla_session::parse_allow(&allowance).and_then(|a| s.session.allow(&a)) {
+        match entelechy_session::parse_allow(&allowance).and_then(|a| s.session.allow(&a)) {
             Ok(()) => 0,
             Err(error) => s.fail(error),
         }
@@ -792,8 +801,8 @@ pub unsafe extern "C" fn orla_allow(session: *mut OrlaSession, allowance: *const
 /// # Safety
 /// `session` is a live session; `line` is a NUL-terminated string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orla_request(
-    session: *mut OrlaSession,
+pub unsafe extern "C" fn entelechy_request(
+    session: *mut EntelechySession,
     line: *const c_char,
 ) -> *const c_char {
     let Some(mut session) = (unsafe { enter(session) }) else {
@@ -803,12 +812,12 @@ pub unsafe extern "C" fn orla_request(
     guarded(&mut session, |s| {
         s.clear();
         s.widened.clear();
-        // Its changes are recorded with origin `orla_request`, as `stdin`
+        // Its changes are recorded with origin `entelechy_request`, as `stdin`
         // or `socket 3` are for a served session.
-        let before = s
-            .session
-            .act_for(orla_session::Origin::Protocol("orla_request".into()));
-        let (response, _quit) = orla_protocol::respond_line(&mut s.session, &line);
+        let before = s.session.act_for(entelechy_session::Origin::Protocol(
+            "entelechy_request".into(),
+        ));
+        let (response, _quit) = entelechy_protocol::respond_line(&mut s.session, &line);
         s.session.act_for(before);
         s.response = c_string(&response);
         0
@@ -824,32 +833,32 @@ mod tests {
     /// is, and the session serves again once the first leaves.
     #[test]
     fn a_call_while_another_is_inside_is_refused() {
-        let dir = std::env::temp_dir().join(format!("orla-ffi-inside-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("entelechy-ffi-inside-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
-            dir.join("scene.osn"),
+            dir.join("scene.esn"),
             "node fill: kernel { requires { field.write; } output result: Image; domain = vec2(4, 4); compute { return vec4(0.5, 0.5, 0.5, 1.0); } }\noutput result <- fill.result;\n",
         )
         .unwrap();
-        let scene = CString::new(dir.join("scene.osn").to_str().unwrap()).unwrap();
+        let scene = CString::new(dir.join("scene.esn").to_str().unwrap()).unwrap();
         let cpu = CString::new("cpu").unwrap();
-        let session = unsafe { orla_open(scene.as_ptr(), cpu.as_ptr(), std::ptr::null()) };
+        let session = unsafe { entelechy_open(scene.as_ptr(), cpu.as_ptr(), std::ptr::null()) };
         assert!(!session.is_null());
         let status = CString::new(r#"{"op":"status"}"#).unwrap();
         {
             let _inside = unsafe { enter(session) }.expect("the first call enters");
             assert!(unsafe { enter(session) }.is_none());
-            assert_eq!(unsafe { orla_evaluate(session, std::ptr::null()) }, -1);
-            let answer = unsafe { CStr::from_ptr(orla_request(session, status.as_ptr())) };
+            assert_eq!(unsafe { entelechy_evaluate(session, std::ptr::null()) }, -1);
+            let answer = unsafe { CStr::from_ptr(entelechy_request(session, status.as_ptr())) };
             assert!(answer.to_bytes().is_empty());
             // Not freed under the call inside it.
-            unsafe { orla_close(session) };
+            unsafe { entelechy_close(session) };
         }
-        assert_eq!(unsafe { orla_evaluate(session, std::ptr::null()) }, 0);
-        let answer = unsafe { CStr::from_ptr(orla_request(session, status.as_ptr())) };
+        assert_eq!(unsafe { entelechy_evaluate(session, std::ptr::null()) }, 0);
+        let answer = unsafe { CStr::from_ptr(entelechy_request(session, status.as_ptr())) };
         assert!(answer.to_string_lossy().contains("\"ok\""));
-        unsafe { orla_close(session) };
+        unsafe { entelechy_close(session) };
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -857,7 +866,8 @@ mod tests {
     /// the header says, however many other Fields are read meanwhile.
     #[test]
     fn widened_words_outlive_other_reads() {
-        let dir = std::env::temp_dir().join(format!("orla-ffi-widened-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("entelechy-ffi-widened-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let node = |name: &str, value: i32| {
@@ -870,13 +880,13 @@ mod tests {
             node("a", 1),
             node("b", 2)
         );
-        std::fs::write(dir.join("scene.osn"), text).unwrap();
-        let scene = CString::new(dir.join("scene.osn").to_str().unwrap()).unwrap();
+        std::fs::write(dir.join("scene.esn"), text).unwrap();
+        let scene = CString::new(dir.join("scene.esn").to_str().unwrap()).unwrap();
         let cpu = CString::new("cpu").unwrap();
-        let session = unsafe { orla_open(scene.as_ptr(), cpu.as_ptr(), std::ptr::null()) };
+        let session = unsafe { entelechy_open(scene.as_ptr(), cpu.as_ptr(), std::ptr::null()) };
         assert!(!session.is_null());
-        assert_eq!(unsafe { orla_evaluate(session, std::ptr::null()) }, 0);
-        let empty = || OrlaField {
+        assert_eq!(unsafe { entelechy_evaluate(session, std::ptr::null()) }, 0);
+        let empty = || EntelechyField {
             words: std::ptr::null(),
             width: 0,
             height: 0,
@@ -889,15 +899,21 @@ mod tests {
         };
         let (name_a, name_b) = (CString::new("a").unwrap(), CString::new("b").unwrap());
         let mut a = empty();
-        assert_eq!(unsafe { orla_output(session, name_a.as_ptr(), &mut a) }, 0);
+        assert_eq!(
+            unsafe { entelechy_output(session, name_a.as_ptr(), &mut a) },
+            0
+        );
         for _ in 0..4 {
             let mut b = empty();
-            assert_eq!(unsafe { orla_output(session, name_b.as_ptr(), &mut b) }, 0);
+            assert_eq!(
+                unsafe { entelechy_output(session, name_b.as_ptr(), &mut b) },
+                0
+            );
         }
         // Read through the pointer the first call gave.
         let words = unsafe { std::slice::from_raw_parts(a.words, a.count as usize) };
         assert!(words.iter().all(|word| *word == 1), "{:?}", &words[..8]);
-        unsafe { orla_close(session) };
+        unsafe { entelechy_close(session) };
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

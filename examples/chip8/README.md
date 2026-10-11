@@ -21,6 +21,6 @@ blank (screen) ────┘
 `--backend jit` runs the step as native code.
 
 ```sh
-orla player examples/chip8/scene.osn --window 640x320
-orla replay examples/chip8/tests/chip8.replay
+entelechy player examples/chip8/scene.esn --window 640x320
+entelechy replay examples/chip8/tests/chip8.replay
 ```

@@ -7,8 +7,8 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use orla_kernel::{Backend, Context, Handle, Invocation, Prepared, Runtime, Scope, Validated};
-use orla_session::Session;
+use entelechy_kernel::{Backend, Context, Handle, Invocation, Prepared, Runtime, Scope, Validated};
+use entelechy_session::Session;
 
 /// A count advanced a frame at a time, a value made of it (`made`), what
 /// reads that (`shown`), and a large Field made once (`big`, over a
@@ -25,7 +25,7 @@ kernel t.total@1 {{ requires {{ field.read; field.write; }} input big: Rows<Floa
     )
 }
 
-const SCENE: &str = "use \"k.orla\";
+const SCENE: &str = "use \"k.ent\";
 param seed: Int = 7;
 node zero: t.zero@1 { domain = 1; }
 node count: t.count@1 { previous <~ count.result from zero.result; domain = 1; }
@@ -37,20 +37,20 @@ output result <- shown.result;
 ";
 
 fn scratch(name: &str, made: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("orla-recall-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-recall-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("k.orla"), kernels(made)).unwrap();
-    std::fs::write(dir.join("scene.osn"), SCENE).unwrap();
+    std::fs::write(dir.join("k.ent"), kernels(made)).unwrap();
+    std::fs::write(dir.join("scene.esn"), SCENE).unwrap();
     dir
 }
 
 /// Plays four frames asking for `shown` and `total`: what each frame
 /// executed, and what they answered on the last.
 fn play(session: &mut Session) -> (Vec<BTreeSet<String>>, (f32, f32)) {
-    let demand: BTreeSet<orla_graph::NodeId> = ["shown", "total"]
+    let demand: BTreeSet<entelechy_graph::NodeId> = ["shown", "total"]
         .into_iter()
-        .map(|n| orla_graph::NodeId(n.into()))
+        .map(|n| entelechy_graph::NodeId(n.into()))
         .collect();
     let mut executed = Vec::new();
     for frame in 0..4 {
@@ -63,7 +63,7 @@ fn play(session: &mut Session) -> (Vec<BTreeSet<String>>, (f32, f32)) {
     }
     let read = |session: &mut Session, node: &str| {
         let handle = session
-            .cached(&orla_graph::NodeId(node.into()), "result")
+            .cached(&entelechy_graph::NodeId(node.into()), "result")
             .unwrap();
         f32::from_bits(session.field(handle).unwrap().values()[0])
     };
@@ -72,7 +72,7 @@ fn play(session: &mut Session) -> (Vec<BTreeSet<String>>, (f32, f32)) {
 }
 
 fn fresh(dir: &Path) -> (f32, f32) {
-    let mut session = Session::open(&dir.join("scene.osn"), None, 1 << 24);
+    let mut session = Session::open(&dir.join("scene.esn"), None, 1 << 24);
     session.sync();
     play(&mut session).1
 }
@@ -80,7 +80,7 @@ fn fresh(dir: &Path) -> (f32, f32) {
 #[test]
 fn a_run_played_again_computes_only_what_changed_and_answers_alike() {
     let dir = scratch("again", "x * 2.0");
-    let mut session = Session::open(&dir.join("scene.osn"), None, 1 << 24);
+    let mut session = Session::open(&dir.join("scene.esn"), None, 1 << 24);
     let events = session.sync();
     assert!(session.graph().is_some(), "{events:?}");
     session.recall_as(Some("run".into()));
@@ -97,7 +97,7 @@ fn a_run_played_again_computes_only_what_changed_and_answers_alike() {
     // more, and what reads it is taken as it was.
     session.start_over();
     session
-        .set_param("seed", orla_kernel::Value::Int(5))
+        .set_param("seed", entelechy_kernel::Value::Int(5))
         .unwrap();
     session.sync();
     session.recall_as(Some("other".into()));
@@ -109,7 +109,7 @@ fn a_run_played_again_computes_only_what_changed_and_answers_alike() {
     assert_eq!(after[0], BTreeSet::from(["big".to_owned()]), "{after:?}");
     assert!(after[1..].iter().all(BTreeSet::is_empty), "{after:?}");
     // A changed Kernel computing the same: it runs; what reads it does not.
-    std::fs::write(dir.join("k.orla"), kernels("x + x")).unwrap();
+    std::fs::write(dir.join("k.ent"), kernels("x + x")).unwrap();
     session.start_over();
     session.recall_as(Some("run".into()));
     let (alike, answered_alike) = play(&mut session);
@@ -122,7 +122,7 @@ fn a_run_played_again_computes_only_what_changed_and_answers_alike() {
     );
     // Computing otherwise: what reads it runs, and answers as a fresh
     // session does.
-    std::fs::write(dir.join("k.orla"), kernels("x * 3.0")).unwrap();
+    std::fs::write(dir.join("k.ent"), kernels("x * 3.0")).unwrap();
     session.start_over();
     session.recall_as(Some("run".into()));
     let (parted, answered_parted) = play(&mut session);
@@ -136,7 +136,7 @@ fn a_run_played_again_computes_only_what_changed_and_answers_alike() {
 }
 
 /// The interpreter, not saying it repeats exactly.
-struct Unpromised(orla_cpu::CpuBackend);
+struct Unpromised(entelechy_cpu::CpuBackend);
 
 impl Backend for Unpromised {
     fn name(&self) -> &'static str {
@@ -151,7 +151,7 @@ impl Backend for Unpromised {
         module: &Validated,
         invocation: &Invocation,
         scope: &mut Scope<'_>,
-    ) -> Result<Vec<Handle>, orla_kernel::ExecutionError> {
+    ) -> Result<Vec<Handle>, entelechy_kernel::ExecutionError> {
         Backend::execute(&self.0, prepared, module, invocation, scope)
     }
 }
@@ -159,14 +159,18 @@ impl Backend for Unpromised {
 #[test]
 fn a_run_made_again_on_a_backend_that_does_not_repeat_exactly_runs_what_reads_it() {
     let dir = scratch("unpromised", "x * 2.0");
-    let runtime = Runtime::with_backends(1 << 24, Box::new(Unpromised(orla_cpu::CpuBackend)), None);
-    let mut session = Session::open_with(&dir.join("scene.osn"), None, runtime);
+    let runtime = Runtime::with_backends(
+        1 << 24,
+        Box::new(Unpromised(entelechy_cpu::CpuBackend)),
+        None,
+    );
+    let mut session = Session::open_with(&dir.join("scene.esn"), None, runtime);
     session.sync();
     session.recall_as(Some("run".into()));
     let (_, answered) = play(&mut session);
     session.start_over();
     session
-        .set_param("seed", orla_kernel::Value::Int(5))
+        .set_param("seed", entelechy_kernel::Value::Int(5))
         .unwrap();
     session.sync();
     session.recall_as(Some("other".into()));

@@ -301,7 +301,7 @@ pub fn operations() -> Vec<Operation> {
             "status",
             "The session at a glance.",
             vec![],
-            "backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, loaded (whether a scene is), refused (why not, when not), revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, versions (`orla`, `api`, `language`, `ir`, `package`)",
+            "backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, loaded (whether a scene is), refused (why not, when not), revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, versions (`entelechy`, `api`, `language`, `ir`, `package`)",
         ),
         op(
             "kernels",
@@ -541,7 +541,7 @@ pub fn operations() -> Vec<Operation> {
         ),
         op(
             "help",
-            "Orla's syntax and API, layer by layer: all of it, or one name in full.",
+            "Entelechy's syntax and API, layer by layer: all of it, or one name in full.",
             vec![may(
                 "name",
                 Ty::Str,
@@ -623,13 +623,13 @@ pub(crate) fn check(request: &Json) -> Result<(), Json> {
         if key == "op" || key == "id" || takes.contains(&key.as_str()) {
             continue;
         }
-        let similar = orla_language::nearest(key, takes.iter().copied());
+        let similar = entelechy_language::nearest(key, takes.iter().copied());
         return Err(json!({
             "message": format!(
                 "`{}` takes {}; `{key}` is not one of them{}",
                 op.name,
                 listed(),
-                orla_language::suggestion(similar)
+                entelechy_language::suggestion(similar)
             ),
             "fields": takes,
             "similar": similar.into_iter().collect::<Vec<_>>(),

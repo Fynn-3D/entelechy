@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # Eight-pixel cells, each one of the scene's four colours by its Oklab
 # lightness: two pixels of one cell agree; the disc, brightest, takes the

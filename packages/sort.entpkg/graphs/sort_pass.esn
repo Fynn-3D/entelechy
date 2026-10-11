@@ -1,0 +1,22 @@
+//! One bit of the sort: the rank of the zeros, then every element to
+//! its place. `sort.esn` places this once a bit, carrying both the
+//! permutation and the bit it is on.
+use "../kernels/sort.ent";
+
+input order: Rows<Int>;
+input keys: Rows<Int>;
+input bit: Rows<Int>;
+input slots: Rows<Int>;
+
+node zeros: sort.zeros@1 { order <- order; keys <- keys; bit <- bit; }
+node placed: sort.place@1 {
+    order <- order;
+    keys <- keys;
+    bit <- bit;
+    zeros <- zeros.result;
+    slots <- slots;
+}
+node next: sort.next_bit@1 { previous <- bit; domain = 1; }
+
+output result <- placed.result;
+output step <- next.result;

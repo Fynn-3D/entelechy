@@ -1,0 +1,16 @@
+// A placed graph sized by its own parameters: given a number, given the
+// parent's parameter, and left at its default.
+param size: Int = 16;
+
+node literal: graph "parts/tile.esn" {
+    side = 4;
+    fill = 0.5;
+}
+
+node passed: graph "parts/tile.esn" {
+    side = size;
+}
+
+node defaulted: graph "parts/tile.esn" { }
+
+output result <- literal.result;

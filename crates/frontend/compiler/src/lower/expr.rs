@@ -1,8 +1,8 @@
 //! Expressions to instructions: every form of the language, typed and
 //! diagnosed as it lowers.
 
-use orla_ir::{BinaryOp, Block as IrBlock, MAX_LOOP_COUNT, Op, Type, UnaryOp, Value, ValueId};
-use orla_language::{Block, Expr, ExprKind, Span};
+use entelechy_ir::{BinaryOp, Block as IrBlock, MAX_LOOP_COUNT, Op, Type, UnaryOp, Value, ValueId};
+use entelechy_language::{Block, Expr, ExprKind, Span};
 
 use crate::CompileError;
 
@@ -22,11 +22,11 @@ impl Builder<'_> {
     fn value_here(&mut self, expr: &Expr) -> Result<ValueId, CompileError> {
         match &expr.kind {
             ExprKind::Float(value) => {
-                let id = self.written(orla_ir::Number::Double(*value));
+                let id = self.written(entelechy_ir::Number::Double(*value));
                 self.mark_large(id, expr.span);
                 Ok(id)
             }
-            ExprKind::Int(value) => Ok(self.written(orla_ir::Number::Long(*value))),
+            ExprKind::Int(value) => Ok(self.written(entelechy_ir::Number::Long(*value))),
             ExprKind::Double(value) => {
                 Ok(self.emit(Type::Double, Op::Const(Value::Double(*value))))
             }
@@ -39,11 +39,11 @@ impl Builder<'_> {
             // arm runs: `n != 0 && x / n > 1` divides only when `n` is
             // not zero.
             ExprKind::Binary(
-                op @ (orla_language::BinaryOp::And | orla_language::BinaryOp::Or),
+                op @ (entelechy_language::BinaryOp::And | entelechy_language::BinaryOp::Or),
                 left,
                 right,
             ) => {
-                let and = matches!(op, orla_language::BinaryOp::And);
+                let and = matches!(op, entelechy_language::BinaryOp::And);
                 let symbol = if and { "&&" } else { "||" };
                 let condition = self.value(left)?;
                 if self.ty(condition) != Type::Bool {
@@ -89,25 +89,25 @@ impl Builder<'_> {
             }
             ExprKind::Binary(op, left, right) => {
                 let op = match op {
-                    orla_language::BinaryOp::Add => BinaryOp::Add,
-                    orla_language::BinaryOp::Sub => BinaryOp::Sub,
-                    orla_language::BinaryOp::Mul => BinaryOp::Mul,
-                    orla_language::BinaryOp::Div => BinaryOp::Div,
-                    orla_language::BinaryOp::Rem => BinaryOp::Rem,
-                    orla_language::BinaryOp::Less => BinaryOp::Less,
-                    orla_language::BinaryOp::LessEqual => BinaryOp::LessEqual,
-                    orla_language::BinaryOp::Greater => BinaryOp::Greater,
-                    orla_language::BinaryOp::GreaterEqual => BinaryOp::GreaterEqual,
-                    orla_language::BinaryOp::Equal => BinaryOp::Equal,
-                    orla_language::BinaryOp::NotEqual => BinaryOp::NotEqual,
-                    orla_language::BinaryOp::And => BinaryOp::And,
-                    orla_language::BinaryOp::Or => BinaryOp::Or,
-                    orla_language::BinaryOp::BitAnd => BinaryOp::BitAnd,
-                    orla_language::BinaryOp::BitOr => BinaryOp::BitOr,
-                    orla_language::BinaryOp::BitXor => BinaryOp::BitXor,
-                    orla_language::BinaryOp::Shl => BinaryOp::Shl,
-                    orla_language::BinaryOp::Shr => BinaryOp::Shr,
-                    orla_language::BinaryOp::Ushr => BinaryOp::Ushr,
+                    entelechy_language::BinaryOp::Add => BinaryOp::Add,
+                    entelechy_language::BinaryOp::Sub => BinaryOp::Sub,
+                    entelechy_language::BinaryOp::Mul => BinaryOp::Mul,
+                    entelechy_language::BinaryOp::Div => BinaryOp::Div,
+                    entelechy_language::BinaryOp::Rem => BinaryOp::Rem,
+                    entelechy_language::BinaryOp::Less => BinaryOp::Less,
+                    entelechy_language::BinaryOp::LessEqual => BinaryOp::LessEqual,
+                    entelechy_language::BinaryOp::Greater => BinaryOp::Greater,
+                    entelechy_language::BinaryOp::GreaterEqual => BinaryOp::GreaterEqual,
+                    entelechy_language::BinaryOp::Equal => BinaryOp::Equal,
+                    entelechy_language::BinaryOp::NotEqual => BinaryOp::NotEqual,
+                    entelechy_language::BinaryOp::And => BinaryOp::And,
+                    entelechy_language::BinaryOp::Or => BinaryOp::Or,
+                    entelechy_language::BinaryOp::BitAnd => BinaryOp::BitAnd,
+                    entelechy_language::BinaryOp::BitOr => BinaryOp::BitOr,
+                    entelechy_language::BinaryOp::BitXor => BinaryOp::BitXor,
+                    entelechy_language::BinaryOp::Shl => BinaryOp::Shl,
+                    entelechy_language::BinaryOp::Shr => BinaryOp::Shr,
+                    entelechy_language::BinaryOp::Ushr => BinaryOp::Ushr,
                 };
                 let left = self.value(left)?;
                 let right = self.value(right)?;
@@ -395,7 +395,7 @@ impl Builder<'_> {
                     .ok_or_else(|| {
                         // A struct its document does not see is written as
                         // its source writes it, and not offered as itself.
-                        let written = orla_language::written_name(&name.value);
+                        let written = entelechy_language::written_name(&name.value);
                         let structs = self.structs();
                         let known: Vec<&str> = structs
                             .iter()
@@ -406,7 +406,7 @@ impl Builder<'_> {
                             name.span,
                             format!(
                                 "`{written}` is not a struct{}",
-                                orla_language::did_you_mean(written, known)
+                                entelechy_language::did_you_mean(written, known)
                             ),
                         )
                     })?;
@@ -511,7 +511,10 @@ impl Builder<'_> {
                             format!(
                                 "`{}` is not an output of this Kernel{}",
                                 field.value,
-                                orla_language::did_you_mean(&field.value, names.iter().copied())
+                                entelechy_language::did_you_mean(
+                                    &field.value,
+                                    names.iter().copied()
+                                )
                             ),
                         ));
                     };
@@ -987,7 +990,7 @@ impl Builder<'_> {
     #[allow(clippy::type_complexity)]
     fn arms<'m>(
         &self,
-        arms: &'m [orla_language::MatchArm],
+        arms: &'m [entelechy_language::MatchArm],
         otherwise: Option<&'m Block>,
         span: Span,
     ) -> Result<(Vec<(Vec<i32>, &'m Block)>, &'m Block), CompileError> {
@@ -1069,20 +1072,20 @@ impl Builder<'_> {
     /// A constant truth-value block: the settled arm of `&&` or `||`.
     fn constant_block(&mut self, value: bool) -> IrBlock {
         self.buffers.push(Vec::new());
-        let result = self.emit(Type::Bool, Op::Const(orla_ir::Value::Bool(value)));
+        let result = self.emit(Type::Bool, Op::Const(entelechy_ir::Value::Bool(value)));
         let body = self.buffers.pop().expect("the nested buffer is open");
         IrBlock { body, result }
     }
 
     /// A float constant.
     pub(super) fn constant(&mut self, value: f32) -> ValueId {
-        self.emit(Type::Float, Op::Const(orla_ir::Value::Float(value)))
+        self.emit(Type::Float, Op::Const(entelechy_ir::Value::Float(value)))
     }
 
     /// A constant of a float kind: a `Float`, or a `Double` exact.
     pub(super) fn number(&mut self, kind: Type, value: f64) -> ValueId {
         match kind {
-            Type::Double => self.emit(Type::Double, Op::Const(orla_ir::Value::Double(value))),
+            Type::Double => self.emit(Type::Double, Op::Const(entelechy_ir::Value::Double(value))),
             _ => self.constant(value as f32),
         }
     }

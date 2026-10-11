@@ -249,7 +249,7 @@ kernel t.k@1 { requires { field.read; field.write; } input hits: Hits; output re
     #[test]
     fn a_document_mentions_what_its_own_code_names() {
         let document = parse_document(
-            "use \"lib.orla\";
+            "use \"lib.ent\";
 fn own() -> Float { return helper(); }
 kernel t.k@1 { requires { field.write; } output result: Rows<Shape>; compute { return Shape { v: own() }; } }
 ",

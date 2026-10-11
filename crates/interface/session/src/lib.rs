@@ -1,7 +1,7 @@
-//! A live session over one `.osn` document and the libraries it uses.
+//! A live session over one `.esn` document and the libraries it uses.
 //!
 //! The session parses the document, publishes its inline Kernels, follows
-//! its `use` items to `.orla` libraries, and builds the Graph. Each
+//! its `use` items to `.ent` libraries, and builds the Graph. Each
 //! [`Session::sync`] republishes only Kernels whose text changed; a
 //! rejected replacement leaves the running version. Source resolution
 //! lives here.
@@ -15,8 +15,8 @@
 //! [observes](observe) is read from the parts it is handed.
 //!
 //! Every interface (command line, Player, C ABI, importer, exporter) opens
-//! a [`Session`]. The wire is `orla-protocol`; file formats are
-//! `orla-formats`.
+//! a [`Session`]. The wire is `entelechy-protocol`; file formats are
+//! `entelechy-formats`.
 
 #![warn(missing_docs)]
 
@@ -44,13 +44,13 @@ mod writes;
 use std::fmt;
 use std::path::PathBuf;
 
-use orla_formats::ppm;
-use orla_kernel::{Generation, KernelId};
+use entelechy_formats::ppm;
+use entelechy_kernel::{Generation, KernelId};
 
+/// How a device is waited for: blocking, or giving a page turns.
+pub use entelechy_gpu::Wait;
 pub use history::{Attempt, Change, Origin, Record};
 pub use options::{SessionOptions, environment_packages};
-/// How a device is waited for: blocking, or giving a page turns.
-pub use orla_gpu::Wait;
 pub use store::{Disk, Memory, Parsed, Store};
 
 /// The world at one moment, taken for its caller to keep
@@ -97,9 +97,9 @@ pub struct StateCopy {
     /// Its port.
     pub port: String,
     /// The element layout.
-    pub schema: orla_kernel::Schema,
+    pub schema: entelechy_kernel::Schema,
     /// The extent.
-    pub domain: orla_kernel::Domain,
+    pub domain: entelechy_kernel::Domain,
     /// The Kernel's words, one per scalar.
     pub words: Vec<u32>,
 }
@@ -115,7 +115,7 @@ pub use sources::{
 
 /// What `trace` returns: the reference interpreter's record of one
 /// element, re-exported so interfaces read it here.
-pub use orla_cpu::{CALL_RECORDS, Trace, TraceFault, TraceValue};
+pub use entelechy_cpu::{CALL_RECORDS, Trace, TraceFault, TraceValue};
 
 /// Where in its document a Kernel's failure is written.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -168,9 +168,9 @@ pub use check::{Checked, LARGE, check_document, large, large_past};
 /// A runtime built for a session ([`Session::build`]).
 pub struct Built {
     /// The runtime.
-    pub runtime: orla_kernel::Runtime,
+    pub runtime: entelechy_kernel::Runtime,
     /// The device's display, when the backend has one.
-    pub display: Option<orla_gpu::present::Display>,
+    pub display: Option<entelechy_gpu::present::Display>,
     /// The backends tried first and passed over, as `name: why`.
     pub passed_over: Vec<String>,
 }
@@ -178,8 +178,8 @@ pub struct Built {
 /// A `publish` being prepared ([`Session::publish_later`]), finished by
 /// [`Session::publishing`].
 pub struct Publishing {
-    ticket: orla_kernel::Ticket,
-    expect: orla_kernel::Expect,
+    ticket: entelechy_kernel::Ticket,
+    expect: entelechy_kernel::Expect,
     source: String,
 }
 
@@ -188,7 +188,7 @@ pub struct Loaded {
     /// The session, its scene loaded.
     pub session: Session,
     /// The device's display, when the backend has one.
-    pub display: Option<orla_gpu::present::Display>,
+    pub display: Option<entelechy_gpu::present::Display>,
     /// What reading the scene said.
     pub events: Vec<Event>,
     /// The backends tried first and passed over, as `name: why`.
@@ -266,8 +266,8 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             words: DEFAULT_BUDGET_WORDS,
-            work: orla_kernel::DEFAULT_WORK,
-            small: orla_kernel::DEFAULT_SMALL,
+            work: entelechy_kernel::DEFAULT_WORK,
+            small: entelechy_kernel::DEFAULT_SMALL,
         }
     }
 }
@@ -291,7 +291,7 @@ impl Limits {
             "--memory" => self.words = budget_of_megabytes(whole("mebibytes")? as usize),
             "--work" => {
                 let millions = whole("millions of iterations")?;
-                let most = orla_kernel::MAX_WORK / 1_000_000;
+                let most = entelechy_kernel::MAX_WORK / 1_000_000;
                 if millions > most {
                     return Err(format!(
                         "--work is at most {most} million iterations, found {millions}"
@@ -331,7 +331,7 @@ impl Diagnostic {
 
     /// A diagnostic at a place in its document; one whose span is no
     /// place has none.
-    pub fn at(span: orla_language::Span, message: impl Into<String>) -> Self {
+    pub fn at(span: entelechy_language::Span, message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
             at: span.is_placed().then_some((span.line, span.column)),
@@ -348,23 +348,23 @@ impl fmt::Display for Diagnostic {
     }
 }
 
-impl From<&orla_language::ParseError> for Diagnostic {
-    fn from(error: &orla_language::ParseError) -> Self {
+impl From<&entelechy_language::ParseError> for Diagnostic {
+    fn from(error: &entelechy_language::ParseError) -> Self {
         Self::at(error.span, error.message.clone())
     }
 }
 
-impl From<&orla_scene::DocumentError> for Diagnostic {
-    fn from(error: &orla_scene::DocumentError) -> Self {
+impl From<&entelechy_scene::DocumentError> for Diagnostic {
+    fn from(error: &entelechy_scene::DocumentError) -> Self {
         Self::at(error.span, error.message.clone())
     }
 }
 
-impl From<&orla_compiler::CompileError> for Diagnostic {
-    fn from(error: &orla_compiler::CompileError) -> Self {
+impl From<&entelechy_compiler::CompileError> for Diagnostic {
+    fn from(error: &entelechy_compiler::CompileError) -> Self {
         match error {
-            orla_compiler::CompileError::Parse(error) => error.into(),
-            orla_compiler::CompileError::Semantic { span, message, .. } => {
+            entelechy_compiler::CompileError::Parse(error) => error.into(),
+            entelechy_compiler::CompileError::Semantic { span, message, .. } => {
                 Self::at(*span, message.clone())
             }
             other => Self::new(other.to_string()),
@@ -555,7 +555,7 @@ pub enum SessionError {
     /// No scene has been loaded successfully.
     NoScene,
     /// The Host rejected an import.
-    Host(orla_kernel::HostError),
+    Host(entelechy_kernel::HostError),
     /// A resident image could not be brought back for observation.
     Observe(String),
     /// The file's extension names no format that takes the Field.

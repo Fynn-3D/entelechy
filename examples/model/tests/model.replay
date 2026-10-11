@@ -1,4 +1,4 @@
-scene model.osn
+scene model.esn
 
 # At time 0 the crate stands tilted toward the camera, turned a little by
 # its node in the file: the top shows planks lit from above, the front is

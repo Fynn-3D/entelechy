@@ -2,15 +2,15 @@
 
 **Answers:** which command does what, with a line you can run.
 
-`orla` prints every command and flag with no arguments; this page is the
-commands with a line to run and what their flags mean. `orla player`,
-`orla import` and `orla export` run `orla-player`, `orla-import` and
-`orla-export` beside `orla` with the same arguments.
+`entelechy` prints every command and flag with no arguments; this page is the
+commands with a line to run and what their flags mean. `entelechy player`,
+`entelechy import` and `entelechy export` run `entelechy-player`, `entelechy-import` and
+`entelechy-export` beside `entelechy` with the same arguments.
 
-In a release, `orla` is `bin/orla`, and the paths below are relative to
+In a release, `entelechy` is `bin/entelechy`, and the paths below are relative to
 the unpacked directory. From the source, `cargo build --release` puts
 every program in `target/release/`, and `cargo run --release --` runs
-`orla`:
+`entelechy`:
 
 ```sh
 cargo build --workspace
@@ -20,11 +20,11 @@ cargo test --workspace
 ## Start here
 
 ```sh
-orla new hello
-orla player hello/scene.osn
+entelechy new hello
+entelechy player hello/scene.esn
 ```
 
-`orla new <dir>` writes a directory that runs: a Kernel, the scene that
+`entelechy new <dir>` writes a directory that runs: a Kernel, the scene that
 places it, a replay that checks what it draws, and a README saying what
 to change first. `--kind` picks the start: `picture` (the default, one
 Kernel over the window), `sound` (a voice with a drawing of it) or
@@ -35,10 +35,10 @@ alone and says why.
 ## Syntax and API
 
 ```sh
-orla help              # every layer's syntax and API, and the commands
-orla help smoothstep   # one name in full: a builtin's signatures and capability
-orla help window       # every item of a name: the builtin, the replay line, the operation
-orla help publish --json
+entelechy help              # every layer's syntax and API, and the commands
+entelechy help smoothstep   # one name in full: a builtin's signatures and capability
+entelechy help window       # every item of a name: the builtin, the replay line, the operation
+entelechy help publish --json
 ```
 
 Every answer comes from the table the part it describes executes: the
@@ -51,10 +51,10 @@ commands. The protocol's `help` answers the same, without `commands`
 ## Check a Kernel
 
 ```sh
-orla check --ir examples/grayscale/kernels/grayscale.orla
+entelechy check --ir examples/grayscale/kernels/grayscale.ent
 ```
 
-Compiles `.orla` or `.osn` files and prints their manifests, or
+Compiles `.ent` or `.esn` files and prints their manifests, or
 diagnostics at `file:line:column`, every fault of a document's functions
 in one run. A scene's nodes are held to their
 Kernels' ports as an evaluation binds them, in the same words: each port
@@ -83,10 +83,10 @@ binds a Kernel its document could not publish says why it was refused.
 ## Run a scene
 
 ```sh
-orla run examples/grayscale/scene.osn --out output.ppm
+entelechy run examples/grayscale/scene.esn --out output.ppm
 ```
 
-Evaluates a `.osn` scene once. Flags:
+Evaluates a `.esn` scene once. Flags:
 
 - `--library <dir|file>` adds Kernel sources beyond the scene's `use`.
 - `--input <name>=<file>` binds an external Field the scene declares with
@@ -143,18 +143,18 @@ Evaluates a `.osn` scene once. Flags:
 nodes were still running and which landed.
 
 ```sh
-orla player examples/data/parts/save/scene.osn --allow file.write=examples/data/parts/save/saves
+entelechy player examples/data/parts/save/scene.esn --allow file.write=examples/data/parts/save/saves
 ```
 
 ## Render frames
 
 ```sh
-orla render examples/sound/scene.osn --window 640x400 --frames 300 --out /tmp/sound
+entelechy render examples/sound/scene.esn --window 640x400 --frames 300 --out /tmp/sound
 ffmpeg -framerate 60 -i /tmp/sound/%04d.png -i /tmp/sound/sound.wav -pix_fmt yuv420p /tmp/sound.mp4
-orla render examples/sound/scene.osn --frames 600 --out /tmp/sound.wav
+entelechy render examples/sound/scene.esn --frames 600 --out /tmp/sound.wav
 ```
 
-`orla render <scene.osn> --frames <n>` steps the scene at `--rate` (60
+`entelechy render <scene.esn> --frames <n>` steps the scene at `--rate` (60
 by default) and records each frame. `--out` names where: a directory
 (`frames` by default) holds each frame's picture as `<dir>/0000.png`,
 ... and the sound, block after block, as `<dir>/sound.wav`; a `.wav`
@@ -169,8 +169,8 @@ scene reads back (`input weights: Rows<Float> = "weights.field";`).
 ## Trace one element
 
 ```sh
-orla trace examples/thumb/scene.osn --node machine --element 9352 --window 128x128
-orla trace examples/life/scene.osn --node life --at 3 4
+entelechy trace examples/thumb/scene.esn --node machine --element 9352 --window 128x128
+entelechy trace examples/life/scene.esn --node life --at 3 4
 ```
 
 Evaluates what the node reads (at `--time`, zero by default, under
@@ -192,22 +192,22 @@ evaluation too. The protocol's `trace` is the same as JSON.
 ## Packages and versions
 
 ```sh
-orla package packages/text.orlapkg
+entelechy package packages/text.entpkg
 ```
 
-`orla package <dir.orlapkg>` checks a package as `orla check` checks a
+`entelechy package <dir.entpkg>` checks a package as `entelechy check` checks a
 document (its manifest, its Kernels compiled, its presets read) and says
-what it holds; `orla pack <dir.orlapkg> [<file>]` writes it as one `.orlapkg`
-file; `orla unpack <file> <new dir>` reads it back. A scene uses a
-package with `use "name.orlapkg";`, by path or by name through
-`ORLA_PACKAGES`. `orla version` prints `orla.api`, `orla.language`,
-`orla.ir` and `orla.package`; a package needing a newer language or IR
+what it holds; `entelechy pack <dir.entpkg> [<file>]` writes it as one `.entpkg`
+file; `entelechy unpack <file> <new dir>` reads it back. A scene uses a
+package with `use "name.entpkg";`, by path or by name through
+`ENTELECHY_PACKAGES`. `entelechy version` prints `entelechy.api`, `entelechy.language`,
+`entelechy.ir` and `entelechy.package`; a package needing a newer language or IR
 is refused with both numbers.
 
 ## Inspect a graph
 
 ```sh
-orla graph examples/grayscale/scene.osn
+entelechy graph examples/grayscale/scene.esn
 ```
 
 Prints the flattened graph in canonical form (a placed graph's nodes named
@@ -230,7 +230,7 @@ protocol report's `refused`.
 ## Measure a scene
 
 ```sh
-orla bench examples/collapse/scene.osn \
+entelechy bench examples/collapse/scene.esn \
     --window 640x400 --backend all --frames 20 --repeat 3 --nodes
 ```
 
@@ -250,7 +250,7 @@ way ([PROTOCOL](PROTOCOL.md)).
 ## Backends
 
 ```sh
-orla run examples/showcase/scene.osn --backend gpu --out showcase.ppm
+entelechy run examples/showcase/scene.esn --backend gpu --out showcase.ppm
 ```
 
 `run`, `render`, `replay`, `serve`, `trace` and the Player take
@@ -270,7 +270,7 @@ is the default; the Player's default is `best`.
 ## Hot reload
 
 ```sh
-orla run examples/grayscale/scene.osn --out output.ppm --watch
+entelechy run examples/grayscale/scene.esn --out output.ppm --watch
 ```
 
 Save the scene or any document it uses: the Kernels whose text changed
@@ -282,7 +282,7 @@ retires.
 ## Player
 
 ```sh
-orla player examples/life/scene.osn
+entelechy player examples/life/scene.esn
 ```
 
 Opens a scene in a window and keeps it live, watching files as `--watch`
@@ -323,17 +323,17 @@ the window, or Cmd+Q, quits.
 ## Replay tests
 
 ```sh
-orla replay examples/life/tests/blinker.replay
-orla player --replay examples/voxel/tests/voxel.replay
+entelechy replay examples/life/tests/blinker.replay
+entelechy player --replay examples/voxel/tests/voxel.replay
 ```
 
 An application's tests are `.replay` files next to its scene, one step a
 line, `#` to the end of a line a comment, paths relative to the replay
-file. `orla help replay` lists the same forms:
+file. `entelechy help replay` lists the same forms:
 
 | form | what it does | example |
 | --- | --- | --- |
-| `scene <path>` | the scene to test, relative to the replay file; required | `scene ../scene.osn` |
+| `scene <path>` | the scene to test, relative to the replay file; required | `scene ../scene.esn` |
 | `library <path>` | Kernels beyond the scene's `use` | `library ../kernels/` |
 | `alike` | its checks hold two forms of one computation equal word for word, which they are only where every Kernel rounds alike, so `--round-apart` leaves the replay out | `alike` |
 | `frame <seconds> [to <seconds> every <seconds>]` | evaluates one frame at this session time; with `to` and `every`, a frame at each step from the first time to the last, both included | `frame 0.0`, `frame 0.1 to 2.0 every 0.1` |
@@ -356,14 +356,14 @@ file. `orla help replay` lists the same forms:
 
 Nodes an expectation names are pinned before the first frame, so fusion
 keeps them; a frame evaluates only what its expectations need. Replays
-run together, `orla replay tests/*.replay`, share what their scenes are
+run together, `entelechy replay tests/*.replay`, share what their scenes are
 made of: the backends are opened once, each document parsed and each
 Kernel compiled and prepared once while what it is made from is
 unchanged, and each scene's replays play on one session, started over
 for each (its state, parameters and pins), as a fresh one would show
 them. A large scene's replays run faster together than one by one.
 
-`orla replay tests/*.replay --watch` keeps them so and plays them again as
+`entelechy replay tests/*.replay --watch` keeps them so and plays them again as
 documents, inputs and replay files change: a change plays only the
 replays it reaches (a node their checks read, now or as committed state,
 runs a Kernel published again or reads an input read again; the graph
@@ -379,7 +379,7 @@ In the Player, a replay drives the scene at
 its own times, prints what it observed at the end, and leaves the window
 to the person.
 
-`orla replay --round-apart` runs each replay three ways, some of its
+`entelechy replay --round-apart` runs each replay three ways, some of its
 Kernels rounding as another device might (a multiply fused into an add,
 a division taken by the reciprocal), chosen by their ids; each way
 parts other Kernels. A replay allows what a device's rounding changes
@@ -393,7 +393,7 @@ agree to the bit only where every Kernel rounds alike. Such a replay says
 `alike`, and `--round-apart` leaves it out, saying so.
 `--no-fusion` runs every node on its own.
 
-`orla replay <file> --out <dir | file.wav>` records the frames the replay
+`entelechy replay <file> --out <dir | file.wav>` records the frames the replay
 evaluates as `render` records its own: each frame's picture and the
 sound, block after block, or the sound alone. `rate()` reads zero in a
 replay, as without a device; the WAV is written at `--sound-rate`
@@ -402,15 +402,15 @@ replay, as without a device; the WAV is written at `--sound-rate`
 ## Import and export
 
 ```sh
-orla import examples/model/source/crate.glb --out examples/model/assets
-orla import examples/skin/source/arm.glb --out examples/skin/assets
-orla import song.ogg --out assets   # writes assets/song.wav
-orla import examples/score/song.mid --out examples/score/assets
-orla import examples/vector/source/garden.svg --out examples/vector/assets
-orla import font.ttf --out assets --chars "Hello, world."
+entelechy import examples/model/source/crate.glb --out examples/model/assets
+entelechy import examples/skin/source/arm.glb --out examples/skin/assets
+entelechy import song.ogg --out assets   # writes assets/song.wav
+entelechy import examples/score/song.mid --out examples/score/assets
+entelechy import examples/vector/source/garden.svg --out examples/vector/assets
+entelechy import font.ttf --out assets --chars "Hello, world."
 ```
 
-`orla-import` writes what a scene takes as inputs, into `--out <dir>`
+`entelechy-import` writes what a scene takes as inputs, into `--out <dir>`
 (the source's directory by default):
 
 - glTF or GLB: vertices as rows of `{position, normal, uv}` with node
@@ -419,12 +419,12 @@ orla import font.ttf --out assets --chars "Hello, world."
   skipped. A skin adds `<stem>.weights.field`, `<stem>.skeleton.field`
   and one `<stem>.<name>.clip.field` per animation, sampled at `--rate`
   frames a second (30 by default), per [the rig contract](RIGS.md),
-  which the [`skin` package](../packages/skin.orlapkg) poses.
+  which the [`skin` package](../packages/skin.entpkg) poses.
 - MP3, OGG Vorbis, FLAC, AAC in MP4, Matroska audio: a WAV at the file's
   rate, one or two channels.
 - Standard MIDI: `<stem>.notes.field`, a row a note (start and length in
   seconds, key, velocity 0 to 1, channel).
-- SVG: what the [`vector` package](../packages/vector.orlapkg) draws, as four
+- SVG: what the [`vector` package](../packages/vector.entpkg) draws, as four
   Fields: `<stem>.segments.field` (each path's curves cut into segments,
   a stroke as the outline it paints), `<stem>.shapes.field` (colour or
   linear or radial gradient, fill rule, box, in paint order),
@@ -440,13 +440,13 @@ orla import font.ttf --out assets --chars "Hello, world."
   ligatures and shaping are left out.
 
 ```sh
-orla export crate.vertices.field crate.triangles.field crate.albedo.png --out crate.glb
-orla export kick.field --out kick.wav --rate 48000
-orla export atlas.field --out atlas.png
-orla export song.notes.field --out song.mid --beats 100
+entelechy export crate.vertices.field crate.triangles.field crate.albedo.png --out crate.glb
+entelechy export kick.field --out kick.wav --rate 48000
+entelechy export atlas.field --out atlas.png
+entelechy export song.notes.field --out song.mid --beats 100
 ```
 
-`orla-export` writes Host files as other software's formats: vertex,
+`entelechy-export` writes Host files as other software's formats: vertex,
 triangle and PNG as a GLB (vertices with a tangent after their uv carry
 it as the mesh's tangents; a PNG named `<stem>.normal.png` is the normal
 map, `<stem>.occlusion.png` the occlusion, any other the base color;
@@ -455,13 +455,13 @@ with a rig's rows, a skin and its animations,
 as pixel art wants, where `linear` blends; `--joints a,b,...` names the
 joints in the skeleton's order); rows of one or two floats as a WAV (`--rate` 48000
 by default); a grid of pixels or floats as a PNG; rows of notes as MIDI
-(`--beats` a minute, 120 by default). What `orla-import` read is written
+(`--beats` a minute, 120 by default). What `entelechy-import` read is written
 back bit for bit.
 
 ## Creation protocol
 
 ```sh
-orla serve examples/life/scene.osn
+entelechy serve examples/life/scene.esn
 ```
 
 Agents drive a session with JSON lines on stdin and stdout;
@@ -469,7 +469,7 @@ Agents drive a session with JSON lines on stdin and stdout;
 connection that opens with HTTP is upgraded to a WebSocket. A page
 connects from this machine, or from an origin `--allow-origin` names
 (`null` for a page opened from a file). `--window` is the window evaluations see unless
-they name one. `orla-player --serve` serves the same protocol from the
+they name one. `entelechy-player --serve` serves the same protocol from the
 window a person is watching. The operations are in
 [PROTOCOL](PROTOCOL.md).
 
@@ -478,24 +478,24 @@ window a person is watching. The operations are in
 From a release, whose library is `lib/` and header `include/`:
 
 ```sh
-cc bridges/c/hello.c -Iinclude -Llib -lorla_ffi -Wl,-rpath,lib -o hello
-./hello examples/text/scene.osn jit
+cc bridges/c/hello.c -Iinclude -Llib -lentelechy_ffi -Wl,-rpath,lib -o hello
+./hello examples/text/scene.esn jit
 ```
 
 From the source:
 
 ```sh
-cargo build --release -p orla-ffi
-cc bridges/c/hello.c -Icrates/interface/ffi/include -Ltarget/release -lorla_ffi -o hello
-DYLD_LIBRARY_PATH=target/release ./hello examples/text/scene.osn jit
+cargo build --release -p entelechy-ffi
+cc bridges/c/hello.c -Icrates/interface/ffi/include -Ltarget/release -lentelechy_ffi -o hello
+DYLD_LIBRARY_PATH=target/release ./hello examples/text/scene.esn jit
 ```
 
-`orla-ffi` builds `liborla_ffi`, dynamic and static, behind the C header
-[`orla.h`](../crates/interface/ffi/include/orla.h) (`include/orla.h` and
-`lib/liborla_ffi.dylib` in a release). A host opens a scene
+`entelechy-ffi` builds `libentelechy_ffi`, dynamic and static, behind the C header
+[`entelechy.h`](../crates/interface/ffi/include/entelechy.h) (`include/entelechy.h` and
+`lib/libentelechy_ffi.dylib` in a release). A host opens a scene
 from a path or from files it hands in, evaluates it under its own input,
 and reads an output or pinned node in place as a pointer with extent,
-stride, shape and schema; `orla_request` takes one protocol line. A
+stride, shape and schema; `entelechy_request` takes one protocol line. A
 returned pointer is valid until the next call, a Field's words until the
 next evaluate, request or close; one thread at a time per session.
 [`bridges/c`](../bridges/c/README.md) is the example.
@@ -506,57 +506,57 @@ next evaluate, request or close; one thread at a time per session.
 their program's language that speak the protocol over `--listen`:
 
 ```sh
-orla player --serve --listen 127.0.0.1:7788 examples/mesh/scene.osn
+entelechy player --serve --listen 127.0.0.1:7788 examples/mesh/scene.esn
 ```
 
 Each bridge's README says how to open it. From the source, `cargo test
--p orla --test bridges` runs web through node and Chrome and Godot
+-p entelechy --test bridges` runs web through node and Chrome and Godot
 through `godot -s`, and skips, saying so, what has no tool installed.
 
 ## WebAssembly
 
-A release carries both: `orla-<version>-wasm32-wasip1.wasm`, the `orla`
-command for any WASI runtime, and `orla-<version>-web.tar.gz`, Orla in a
+A release carries both: `entelechy-<version>-wasm32-wasip1.wasm`, the `entelechy`
+command for any WASI runtime, and `entelechy-<version>-web.tar.gz`, Entelechy in a
 page with the web bridge, the examples and the packages:
 
 ```sh
-wasmtime run --dir . orla-<version>-wasm32-wasip1.wasm replay examples/ant/tests/ant.replay --backend cpu
-cd orla-<version>-web && node bridges/web/serve.mjs   # then http://127.0.0.1:7789/bridges/web/play.html?scene=examples/voxel/scene.osn
+wasmtime run --dir . entelechy-<version>-wasm32-wasip1.wasm replay examples/ant/tests/ant.replay --backend cpu
+cd entelechy-<version>-web && node bridges/web/serve.mjs   # then http://127.0.0.1:7789/bridges/web/play.html?scene=examples/voxel/scene.esn
 ```
 
 From the source:
 
 ```sh
 rustup target add wasm32-wasip1
-cargo build --release -p orla --target wasm32-wasip1
-wasmtime run --dir . target/wasm32-wasip1/release/orla.wasm replay examples/ant/tests/ant.replay --backend cpu
+cargo build --release -p entelechy --target wasm32-wasip1
+wasmtime run --dir . target/wasm32-wasip1/release/entelechy.wasm replay examples/ant/tests/ant.replay --backend cpu
 ```
 
-Under WASI, `orla` runs scenes on the interpreter and `serve` answers on
+Under WASI, `entelechy` runs scenes on the interpreter and `serve` answers on
 stdin and stdout; there is no JIT, and an `async` run lands on the frame
 that started it.
 
 ```sh
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version <the wasm-bindgen Cargo.lock holds>
-cargo build --release -p orla-ffi --target wasm32-unknown-unknown
+cargo build --release -p entelechy-ffi --target wasm32-unknown-unknown
 wasm-bindgen --target web --keep-lld-exports --no-typescript --out-dir target/page \
-  target/wasm32-unknown-unknown/release/orla_ffi.wasm
+  target/wasm32-unknown-unknown/release/entelechy_ffi.wasm
 node bridges/web/serve.mjs     # then http://127.0.0.1:7789/bridges/web/index.html
 ```
 
-In a page, Orla is the C ABI with `wasm-bindgen`'s glue. Its documents
-are files the page hands in (`orla_files`, `orla_files_put`,
-`orla_open_files`) and it answers the protocol through `orla_request`.
+In a page, Entelechy is the C ABI with `wasm-bindgen`'s glue. Its documents
+are files the page hands in (`entelechy_files`, `entelechy_files_put`,
+`entelechy_open_files`) and it answers the protocol through `entelechy_request`.
 It runs on its JIT, which writes WebAssembly the page loads
-(`orla.load`), or on the browser's WebGPU, waiting for the device by
-suspending (`orla.wait`, JavaScript Promise Integration: Chrome and Edge
-137 and later) and drawing on a canvas with `orla_present`. It runs on
+(`entelechy.load`), or on the browser's WebGPU, waiting for the device by
+suspending (`entelechy.wait`, JavaScript Promise Integration: Chrome and Edge
+137 and later) and drawing on a canvas with `entelechy_present`. It runs on
 the page's one thread with no clock, so nothing is timed. `play.html`
 is the Player in a page:
 
 ```text
-http://127.0.0.1:7789/bridges/web/play.html?scene=examples/voxel/scene.osn
+http://127.0.0.1:7789/bridges/web/play.html?scene=examples/voxel/scene.esn
 http://127.0.0.1:7789/bridges/web/play.html?replay=examples/voxel/tests/voxel.replay&on=gpu
 ```
 

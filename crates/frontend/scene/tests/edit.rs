@@ -1,7 +1,7 @@
 //! An edit by declaration changes only those bytes: the rest of the text,
 //! comments and layout included, stays as written.
 
-use orla_scene::edit::{Edit, StatementKind, Target, edit};
+use entelechy_scene::edit::{Edit, StatementKind, Target, edit};
 
 const SCENE: &str = "// The castle on its ground.
 use \"kernels/\";

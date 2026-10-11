@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value as Json;
 
-use orla_formats::file;
-use orla_host::Domain;
+use entelechy_formats::file;
+use entelechy_host::Domain;
 
-use orla_formats::base64::unbase64;
+use entelechy_formats::base64::unbase64;
 
 /// What an import produced.
 pub struct Imported {
@@ -35,7 +35,7 @@ pub struct Imported {
     pub files: Vec<PathBuf>,
 }
 
-use orla_formats::rig::{self, Matrix, multiply};
+use entelechy_formats::rig::{self, Matrix, multiply};
 
 const IDENTITY: Matrix = [
     1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
@@ -920,7 +920,7 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
             Vec::new()
         };
         if bytes.starts_with(b"\x89PNG") {
-            orla_formats::png::decode(&bytes).map_err(|e| format!("the texture: {e}"))?;
+            entelechy_formats::png::decode(&bytes).map_err(|e| format!("the texture: {e}"))?;
             let texture_path = out_dir.join(format!("{stem}.albedo.png"));
             std::fs::write(&texture_path, &bytes)
                 .map_err(|e| format!("{}: {e}", texture_path.display()))?;
@@ -1079,7 +1079,7 @@ mod tests {
         }
         let uri = format!(
             "data:application/octet-stream;base64,{}",
-            orla_formats::base64::base64(&bin)
+            entelechy_formats::base64::base64(&bin)
         );
         format!(
             r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0]}}],
@@ -1135,7 +1135,7 @@ mod tests {
         }
         let uri = format!(
             "data:application/octet-stream;base64,{}",
-            orla_formats::base64::base64(&bin)
+            entelechy_formats::base64::base64(&bin)
         );
         format!(
             r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0,1]}}],
@@ -1168,7 +1168,7 @@ mod tests {
     /// What is left out is named in the notes.
     #[test]
     fn what_is_left_out_is_named() {
-        let dir = std::env::temp_dir().join(format!("orla-gltf-notes-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("entelechy-gltf-notes-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let text = quad_gltf()
@@ -1204,7 +1204,7 @@ mod tests {
 
     #[test]
     fn a_rig_imports_as_a_skeleton_a_binding_and_a_clip() {
-        let dir = std::env::temp_dir().join(format!("orla-gltf-rig-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("entelechy-gltf-rig-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("arm.gltf"), rigged_gltf()).unwrap();
@@ -1264,7 +1264,7 @@ mod tests {
 
     #[test]
     fn an_accessor_holds_only_the_elements_in_the_file() {
-        let dir = std::env::temp_dir().join(format!("orla-gltf-count-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("entelechy-gltf-count-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let quad = quad_gltf();
@@ -1294,7 +1294,7 @@ mod tests {
 
     #[test]
     fn a_quad_imports_transformed_with_computed_normals() {
-        let dir = std::env::temp_dir().join(format!("orla-gltf-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("entelechy-gltf-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("quad.gltf"), quad_gltf()).unwrap();

@@ -8,10 +8,10 @@ playhead in clip frames, and `sampler.block` reads the clip with
 rate. The clock retriggers every second; so does Space.
 
 `sampler.kick`, a falling-pitch decaying sine, is baked to the WAV by
-`bake.osn`. Any drum in its place plays.
+`bake.esn`. Any drum in its place plays.
 
 ```sh
-orla run examples/sampler/bake.osn --save kick=examples/sampler/assets/kick.wav
-orla player examples/sampler/scene.osn --scale 3
-orla replay examples/sampler/tests/sampler.replay
+entelechy run examples/sampler/bake.esn --save kick=examples/sampler/assets/kick.wav
+entelechy player examples/sampler/scene.esn --scale 3
+entelechy replay examples/sampler/tests/sampler.replay
 ```

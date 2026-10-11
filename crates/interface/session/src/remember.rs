@@ -14,10 +14,10 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use orla_ir::Validated;
-use orla_kernel::{Handle, Invocation, Runtime, Scope};
-use orla_rules::backend::Checked;
-use orla_rules::{Backend, ExecutionError, NativeOp, Prepared};
+use entelechy_ir::Validated;
+use entelechy_kernel::{Handle, Invocation, Runtime, Scope};
+use entelechy_rules::backend::Checked;
+use entelechy_rules::{Backend, ExecutionError, NativeOp, Prepared};
 
 /// What was prepared, by Kernel id: each module prepared under it and
 /// its preparation.
@@ -138,7 +138,7 @@ impl Backend for Remembered {
     fn end_frame(&self) -> Option<u64> {
         self.inner.end_frame()
     }
-    fn clocked_frame(&self) -> Option<orla_rules::ClockedFrame> {
+    fn clocked_frame(&self) -> Option<entelechy_rules::ClockedFrame> {
         self.inner.clocked_frame()
     }
     fn execute_repeated(
@@ -270,7 +270,7 @@ mod tests {
     }
 
     fn module(scale: &str) -> Validated {
-        orla_compiler::compile(&format!(
+        entelechy_compiler::compile(&format!(
             "kernel t.k@1 {{ requires {{ field.write; }} output result: Rows<Float>; compute {{ return float(element()) * {scale}; }} }}"
         ))
         .unwrap()

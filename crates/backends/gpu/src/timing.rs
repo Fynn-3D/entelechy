@@ -39,7 +39,7 @@ impl GpuBackend {
         let worth_asking = self.clock.load(std::sync::atomic::Ordering::Relaxed) != clock::SILENT;
         (self.measured() && self.timestamps && worth_asking).then(|| {
             self.device.create_query_set(&wgpu::QuerySetDescriptor {
-                label: Some("orla timing"),
+                label: Some("entelechy timing"),
                 ty: wgpu::QueryType::Timestamp,
                 count,
             })
@@ -57,13 +57,13 @@ impl GpuBackend {
         set.map(|set| {
             let bytes = u64::from(count) * 8;
             let resolved = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("orla timing resolve"),
+                label: Some("entelechy timing resolve"),
                 size: bytes,
                 usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             });
             let read = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("orla timing read"),
+                label: Some("entelechy timing read"),
                 size: bytes,
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
@@ -125,7 +125,7 @@ impl GpuBackend {
             let encoder = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("orla floor"),
+                    label: Some("entelechy floor"),
                 });
             let started = std::time::Instant::now();
             self.queue.submit(Some(encoder.finish()));
@@ -166,7 +166,7 @@ pub(crate) struct Frames {
     /// at the earliest.
     last_end: Mutex<Option<std::time::Instant>>,
     /// The latest frame done.
-    last: Mutex<Option<orla_rules::ClockedFrame>>,
+    last: Mutex<Option<entelechy_rules::ClockedFrame>>,
 }
 
 type Run = Arc<Mutex<(std::time::Instant, Option<std::time::Instant>)>>;
@@ -217,7 +217,7 @@ impl Frames {
         let pending = Arc::clone(&self.pending);
         let waiting = Arc::clone(&self.waiting);
         let _ = std::thread::Builder::new()
-            .name("orla device clock".into())
+            .name("entelechy device clock".into())
             .spawn(move || {
                 while on.load(std::sync::atomic::Ordering::Relaxed) {
                     if pending.load(std::sync::atomic::Ordering::Relaxed) > 0 {
@@ -272,7 +272,7 @@ impl Frames {
     }
 
     /// The latest frame whose runs are all done, each run's busy time.
-    pub(crate) fn done(&self) -> Option<orla_rules::ClockedFrame> {
+    pub(crate) fn done(&self) -> Option<entelechy_rules::ClockedFrame> {
         let mut ended = lock(&self.ended);
         let mut last_end = lock(&self.last_end);
         while let Some((number, runs)) = ended.front() {
@@ -292,7 +292,7 @@ impl Frames {
                 busy.push(end.saturating_duration_since(from));
                 *last_end = Some(end.max(last_end.unwrap_or(end)));
             }
-            *lock(&self.last) = Some(orla_rules::ClockedFrame {
+            *lock(&self.last) = Some(entelechy_rules::ClockedFrame {
                 frame: *number,
                 runs: busy,
             });

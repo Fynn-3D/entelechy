@@ -735,13 +735,13 @@ form fill
 form fn
   fn name(a: Float) -> Float { ... }   fn name<T>(a: T) -> T { ... }
 form graph
-  node name: graph "other.osn" { source <- src; param = 2; }
+  node name: graph "other.esn" { source <- src; param = 2; }
 form if
   if condition { a } else { b }   if condition { return a; }
 form inline
   node name: kernel { ... input x: Image <- src; ... }
 form input
-  input x: Image;   = "atlas.png";   = text "ORLA";   = frames "clip/" at 30;
+  input x: Image;   = "atlas.png";   = text "ENTELECHY";   = frames "clip/" at 30;
 form kernel
   kernel id@version { requires { ... } input ... output ... compute { ... } }
 form let
@@ -783,4 +783,4 @@ form times
 form type
   type Cells = Grid<Int>;   struct Cell { alive: Int; age: Float; }
 form use
-  use "kernels/";   use "name.orlapkg";
+  use "kernels/";   use "name.entpkg";

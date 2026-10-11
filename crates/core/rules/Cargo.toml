@@ -1,5 +1,5 @@
 [package]
-name = "orla-rules"
+name = "entelechy-rules"
 description = "The rules of Kernel execution every backend keeps: invocations, addresses, combines, the matrix formulas, the rasterizer's contract"
 version.workspace = true
 edition.workspace = true
@@ -11,8 +11,8 @@ rust-version.workspace = true
 doctest = false
 
 [dependencies]
-orla-abi = { path = "../../core/abi" }
-orla-ir = { path = "../../core/ir" }
+entelechy-abi = { path = "../../core/abi" }
+entelechy-ir = { path = "../../core/ir" }
 
 [lints]
 workspace = true

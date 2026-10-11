@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # Eight gradient steps a frame at rate 2. The loss (a sum over the 256
 # points) falls as the network learns the circle; after twenty frames, 160

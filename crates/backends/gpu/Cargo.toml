@@ -1,6 +1,6 @@
 [package]
-name = "orla-gpu"
-description = "GPU backend: emits WGSL from Orla IR and runs it as compute dispatches through wgpu"
+name = "entelechy-gpu"
+description = "GPU backend: emits WGSL from Entelechy IR and runs it as compute dispatches through wgpu"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,9 +11,9 @@ rust-version.workspace = true
 doctest = false
 
 [dependencies]
-orla-rules = { path = "../../core/rules" }
-orla-abi = { path = "../../core/abi" }
-orla-ir = { path = "../../core/ir" }
+entelechy-rules = { path = "../../core/rules" }
+entelechy-abi = { path = "../../core/abi" }
+entelechy-ir = { path = "../../core/ir" }
 pollster = "0.4"
 
 # `std` keeps wgpu error scopes thread-local, so the preparation worker and
@@ -30,11 +30,11 @@ wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "w
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "fragile-send-sync-non-atomic-wasm"] }
 
 [dev-dependencies]
-orla-kernel = { path = "../../core/kernel" }
-orla-cpu = { path = "../../backends/cpu" }
-orla-compiler = { path = "../../frontend/compiler" }
-orla-conformance = { path = "../../backends/conformance" }
-orla-graph = { path = "../../core/graph" }
+entelechy-kernel = { path = "../../core/kernel" }
+entelechy-cpu = { path = "../../backends/cpu" }
+entelechy-compiler = { path = "../../frontend/compiler" }
+entelechy-conformance = { path = "../../backends/conformance" }
+entelechy-graph = { path = "../../core/graph" }
 
 [lints]
 workspace = true

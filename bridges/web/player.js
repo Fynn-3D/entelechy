@@ -1,14 +1,14 @@
-// Orla's Player in a page: the page's devices for the play every
-// interface shares (`orla_session::play`, reached through the C ABI's
-// `orla_play_*`). What the keys mean, how a pad is a keyboard, what the
+// Entelechy's Player in a page: the page's devices for the play every
+// interface shares (`entelechy_session::play`, reached through the C ABI's
+// `entelechy_play_*`). What the keys mean, how a pad is a keyboard, what the
 // line of frame data says, which output is the picture and which the
 // sound, and how a replay drives the scene are the play's; this is only
 // the canvas, the page's events, the Gamepad API, WebAudio, and the
-// served files watched and handed in. A classic script after orla.js; it
-// defines `OrlaPlayer`.
+// served files watched and handed in. A classic script after entelechy.js; it
+// defines `EntelechyPlayer`.
 
 (() => {
-const { OrlaInPage } = Orla;
+const { EntelechyInPage } = Entelechy;
 
 /// The Gamepad API's standard mapping, button by button, in the play's
 /// names; the triggers (6, 7) are axes.
@@ -27,7 +27,7 @@ const HELD = new Set(["Tab", "Escape", "F5", "F6", "F10", "ArrowLeft", "ArrowRig
 /// order, and says how many samples it holds, which paces the frames as
 /// the Player's ring does.
 const WORKLET = `
-class OrlaSound extends AudioWorkletProcessor {
+class EntelechySound extends AudioWorkletProcessor {
   constructor() {
     super();
     this.blocks = [];
@@ -54,25 +54,25 @@ class OrlaSound extends AudioWorkletProcessor {
     return true;
   }
 }
-registerProcessor("orla-sound", OrlaSound);
+registerProcessor("entelechy-sound", EntelechySound);
 `;
 
-class OrlaPlayer {
-  /// Plays `orla` (an OrlaInPage with its scene open) on `canvas`, the
+class EntelechyPlayer {
+  /// Plays `entelechy` (an EntelechyInPage with its scene open) on `canvas`, the
   /// page's window, with `shown` a canvas over it that takes no pointer,
   /// where the GPU presents.
-  constructor(orla, canvas, shown) {
-    this.orla = orla;
-    this.x = orla.x;
+  constructor(entelechy, canvas, shown) {
+    this.entelechy = entelechy;
+    this.x = entelechy.x;
     this.canvas = canvas;
     this.shown = shown;
     this.context = canvas.getContext("2d");
     const promising = (name) =>
       typeof WebAssembly.promising === "function" ? WebAssembly.promising(this.x[name]) : this.x[name];
-    this.frame = promising("orla_play_frame");
-    this.present = promising("orla_play_present");
-    this.pixels = promising("orla_play_pixels");
-    this.sound = promising("orla_play_sound");
+    this.frame = promising("entelechy_play_frame");
+    this.present = promising("entelechy_play_present");
+    this.pixels = promising("entelechy_play_pixels");
+    this.sound = promising("entelechy_play_sound");
     this.running = false;
     this.pads = new Map();
     this.audio = null;
@@ -81,7 +81,7 @@ class OrlaPlayer {
     this.said = [];
     this.onsaid = (line) => console.log(line);
     // What the person did, handed to the play between frames: a frame
-    // waiting on the device has Orla suspended, and nothing may reach
+    // waiting on the device has Entelechy suspended, and nothing may reach
     // into it until it is done.
     this.hands = [];
     // Requests of the creation protocol, answered between frames as the
@@ -95,33 +95,33 @@ class OrlaPlayer {
   /// pairs), on `backend`, or as the Player does when none is named: the
   /// GPU, else the JIT, else the interpreter.
   static async open({ glue, files, scene, replay, backend, canvas, shown }) {
-    const orla = await OrlaInPage.load(glue);
-    for (const [path, bytes] of files) orla.put(path, bytes);
-    // "best" is Orla's to decide, as for the Player: the backends it
+    const entelechy = await EntelechyInPage.load(glue);
+    for (const [path, bytes] of files) entelechy.put(path, bytes);
+    // "best" is Entelechy's to decide, as for the Player: the backends it
     // passed over are among what the play says.
     const on = backend || "best";
-    if (replay) await orla.openReplay(replay, on);
-    else await orla.open(scene, on);
-    return new OrlaPlayer(orla, canvas, shown);
+    if (replay) await entelechy.openReplay(replay, on);
+    else await entelechy.open(scene, on);
+    return new EntelechyPlayer(entelechy, canvas, shown);
   }
 
   get session() {
-    return this.orla.session;
+    return this.entelechy.session;
   }
 
   /// Hands a key to the play.
   key(name, down) {
-    this.orla.withText(name, (at) => this.x.orla_play_key(this.session, at, down ? 1 : 0));
+    this.entelechy.withText(name, (at) => this.x.entelechy_play_key(this.session, at, down ? 1 : 0));
   }
 
   /// One request of the creation protocol (`write`, `publish`, `read`,
   /// ...), answered between frames, or in its own turn while the scene is
-  /// stopped; the same promise `OrlaInPage.call` gives. Everything that
-  /// reaches into Orla, a frame, a hand, a request, waits for its turn,
+  /// stopped; the same promise `EntelechyInPage.call` gives. Everything that
+  /// reaches into Entelechy, a frame, a hand, a request, waits for its turn,
   /// so nothing reaches in while a call inside waits for the device.
   call(op, fields = {}) {
     const asked = new Promise((resolve, reject) => this.requests.push({ op, fields, resolve, reject }));
-    if (!this.running) this.orla.inTurn(() => this.answerNow());
+    if (!this.running) this.entelechy.inTurn(() => this.answerNow());
     return asked;
   }
 
@@ -130,7 +130,7 @@ class OrlaPlayer {
     const requests = this.requests;
     this.requests = [];
     for (const { op, fields, resolve, reject } of requests) {
-      await this.orla.callNow(op, fields).then(resolve, reject);
+      await this.entelechy.callNow(op, fields).then(resolve, reject);
     }
   }
 
@@ -159,18 +159,18 @@ class OrlaPlayer {
     const scale = () => window.devicePixelRatio || 1;
     this.canvas.addEventListener("pointermove", (event) => {
       const [x, y] = [event.offsetX * scale(), event.offsetY * scale()];
-      this.hands.push(() => this.x.orla_play_pointer(this.session, x, y));
+      this.hands.push(() => this.x.entelechy_play_pointer(this.session, x, y));
     });
     this.canvas.addEventListener("pointerdown", (event) => {
       this.startSound().catch(() => {});
       this.canvas.setPointerCapture(event.pointerId);
       const button = BUTTON[event.button] ?? 0;
-      this.hands.push(() => this.x.orla_play_button(this.session, button, 1));
+      this.hands.push(() => this.x.entelechy_play_button(this.session, button, 1));
       if (!this.running) this.run();
     });
     this.canvas.addEventListener("pointerup", (event) => {
       const button = BUTTON[event.button] ?? 0;
-      this.hands.push(() => this.x.orla_play_button(this.session, button, 0));
+      this.hands.push(() => this.x.entelechy_play_button(this.session, button, 0));
     });
     this.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
     this.canvas.addEventListener("wheel", (event) => {
@@ -178,7 +178,7 @@ class OrlaPlayer {
       const unit = event.deltaMode === 1 ? 1 : 1 / 40;
       // Lines, y positive away from the person.
       const [x, y] = [event.deltaX * unit, -event.deltaY * unit];
-      this.hands.push(() => this.x.orla_play_wheel(this.session, x, y));
+      this.hands.push(() => this.x.entelechy_play_wheel(this.session, x, y));
     }, { passive: false });
     // Both canvases are the window: sized by the one always shown, since
     // the other is hidden, and so sizeless, until the device draws on it.
@@ -204,13 +204,13 @@ class OrlaPlayer {
       const last = this.pads.get(pad.index) || { buttons: [], axes: [] };
       const axis = (name, value, at) => {
         if (last.axes[at] !== value) {
-          this.orla.withText(name, (text) => this.x.orla_play_axis(this.session, text, value));
+          this.entelechy.withText(name, (text) => this.x.entelechy_play_axis(this.session, text, value));
         }
       };
       pad.buttons.forEach((button, at) => {
         const name = PAD_BUTTONS[at];
         if (name && last.buttons[at] !== button.pressed) {
-          this.orla.withText(name, (text) => this.x.orla_play_pad(this.session, text, button.pressed ? 1 : 0));
+          this.entelechy.withText(name, (text) => this.x.entelechy_play_pad(this.session, text, button.pressed ? 1 : 0));
         }
       });
       // A page's stick reads down as positive; the play's up is.
@@ -225,12 +225,12 @@ class OrlaPlayer {
         axes: [pad.axes[0] ?? 0, -(pad.axes[1] ?? 0), pad.axes[2] ?? 0, -(pad.axes[3] ?? 0), pad.buttons[6]?.value ?? 0, pad.buttons[7]?.value ?? 0],
       });
     }
-    this.x.orla_play_pads(this.session, connected);
+    this.x.entelechy_play_pads(this.session, connected);
   }
 
   /// What the play said, to the page's console and to whoever listens.
   say() {
-    const said = this.orla.text(this.x.orla_play_said(this.session));
+    const said = this.entelechy.text(this.x.entelechy_play_said(this.session));
     for (const line of said.split("\n").filter(Boolean)) {
       this.said.push(line);
       this.onsaid(line);
@@ -239,7 +239,7 @@ class OrlaPlayer {
 
   /// One frame: the play's, shown on the page, in its turn.
   step() {
-    return this.orla.inTurn(() => this.stepNow());
+    return this.entelechy.inTurn(() => this.stepNow());
   }
 
   async stepNow() {
@@ -258,13 +258,13 @@ class OrlaPlayer {
       await this.show();
       await this.play();
     } else if (framed < 0) {
-      document.title = `Orla: ${this.orla.text(this.x.orla_error(this.session))}`;
+      document.title = `Entelechy: ${this.entelechy.text(this.x.entelechy_error(this.session))}`;
     }
   }
 
   /// The picture: from the device where it can, else drawn on the CPU.
   async show() {
-    const presented = await this.orla.withText(this.shown.id, (id) => this.present(this.session, id));
+    const presented = await this.entelechy.withText(this.shown.id, (id) => this.present(this.session, id));
     this.shown.style.display = presented === 0 ? "block" : "none";
     if (presented === 0) return;
     const { width, height } = this.canvas;
@@ -285,7 +285,7 @@ class OrlaPlayer {
   /// The frame's sound, to the card once it is open.
   async play() {
     if (!this.audio || !this.audio.node) return;
-    const field = this.x.orla_alloc(36);
+    const field = this.x.entelechy_alloc(36);
     try {
       if ((await this.sound(this.session, field)) !== 0) return;
       const at = new Uint32Array(this.x.memory.buffer, field, 9);
@@ -294,7 +294,7 @@ class OrlaPlayer {
       this.block = count;
       this.audio.node.port.postMessage({ samples, channels: stride }, [samples.buffer]);
     } finally {
-      this.x.orla_free(field, 36);
+      this.x.entelechy_free(field, 36);
     }
   }
 
@@ -306,19 +306,19 @@ class OrlaPlayer {
     this.audio = { context, node: null };
     const url = URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" }));
     await context.audioWorklet.addModule(url);
-    const node = new AudioWorkletNode(context, "orla-sound", { outputChannelCount: [2] });
+    const node = new AudioWorkletNode(context, "entelechy-sound", { outputChannelCount: [2] });
     node.port.onmessage = (event) => (this.held = event.data);
     node.connect(context.destination);
     this.audio.node = node;
     const described = `${context.sampleRate} Hz`;
-    this.hands.push(() => this.orla.withText(described, (text) => this.x.orla_play_sound_opened(this.session, text)));
+    this.hands.push(() => this.entelechy.withText(described, (text) => this.x.entelechy_play_sound_opened(this.session, text)));
   }
 
   /// Frame after frame, a frame each time the page draws.
   async run() {
     if (this.running) return;
     this.running = true;
-    document.title = "Orla Player";
+    document.title = "Entelechy Player";
     while (this.running) {
       try {
         await this.step();
@@ -343,7 +343,7 @@ class OrlaPlayer {
           for (const [path, stamp] of Object.entries(now)) {
             if (stamps[path] !== stamp) {
               const bytes = new Uint8Array(await (await fetch(`/${path}`)).arrayBuffer());
-              this.hands.push(() => this.orla.put(path, bytes));
+              this.hands.push(() => this.entelechy.put(path, bytes));
             }
           }
         }
@@ -357,5 +357,5 @@ class OrlaPlayer {
   }
 }
 
-globalThis.OrlaPlayer = OrlaPlayer;
+globalThis.EntelechyPlayer = EntelechyPlayer;
 })();

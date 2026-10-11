@@ -1,0 +1,124 @@
+//! A drawing through `look` at the window's size, tiled: the canvas is
+//! cut into tiles of 16 pixels, each keeps the shapes whose boxes reach
+//! it, each of those keeps the segments that reach the tile and the
+//! winding of those past it to the right, and each pixel asks only those.
+//! It draws the words `vector.draw@1` draws, at the cost of a few passes
+//! over shapes and segments, so a large drawing (a map, a page of type)
+//! draws in time.
+use "../kernels/vector.ent";
+
+input shapes: Rows<Shape>;
+input segments: Rows<Vec4>;
+input stops: Rows<Stop>;
+input view: Rows<Vec2>;
+input look: Rows<Look>;
+param background: Vec4 = vec4(1.0, 1.0, 1.0, 1.0);
+
+// The canvas, which only gives its size, and its tiles.
+node canvas: Grid<Int> { domain = window(); }
+node tiles: Grid<Int> { domain = ceil(window() / 16); }
+
+// Where each pixel is in the drawing, found once for every node that asks.
+node across: Grid<Int> { domain = floor(window() * vec2(1, 0) + vec2(0, 1)); }
+node down: Grid<Int> { domain = floor(window() * vec2(0, 1) + vec2(1, 0)); }
+node frame: vector.frame@1 {
+    across <- across.result; down <- down.result; view <- view; look <- look;
+    domain = count(across) + count(down) + 1;
+}
+
+// The tiles each shape's box reaches, and the shapes each tile keeps,
+// in their order: the cells.
+node reach: vector.reach@1 { shapes <- shapes; view <- view; look <- look; canvas <- canvas.result; }
+node shape_chunks: vector.shape_chunks@1 { reach <- reach.result; domain = ceil(count(reach) / 256); }
+node tile_counts: vector.tile_counts@1 {
+    reach <- reach.result;
+    chunks <- shape_chunks.result;
+    tiles <- tiles.result;
+    domain = count(tiles);
+}
+node tile_lists: graph "compact.entpkg/graphs/runs.esn" { counts <- tile_counts.result; }
+node tile_shapes: vector.tile_fill@1 {
+    reach <- reach.result;
+    chunks <- shape_chunks.result;
+    counts <- tile_counts.result;
+    ends <- tile_lists.ends;
+    tiles <- tiles.result;
+    slots <- tile_lists.slots;
+    domain = count(tiles);
+}
+
+// Segments on the canvas, and the box of each chunk of them.
+node placed: vector.placed@1 { segments <- segments; view <- view; look <- look; canvas <- canvas.result; }
+node segment_chunks: vector.segment_chunks@1 { placed <- placed.result; domain = ceil(count(placed) / 256); }
+
+// Each cell's units, a chunk of its shape's segments to each; the
+// segments each unit gives its cell; the cells' lists of them.
+node units: vector.units@1 { total <- tile_lists.entries; tile_shapes <- tile_shapes.result; shapes <- shapes; domain = value(total); }
+node unit_lists: graph "compact.entpkg/graphs/runs.esn" { counts <- units.result; }
+node kept: vector.kept@1 {
+    total <- unit_lists.entries;
+    units <- units.result;
+    unit_ends <- unit_lists.ends;
+    tile_ends <- tile_lists.ends;
+    tile_shapes <- tile_shapes.result;
+    tiles <- tiles.result;
+    shapes <- shapes;
+    placed <- placed.result;
+    chunks <- segment_chunks.result;
+    domain = value(total);
+}
+node kept_lists: graph "compact.entpkg/graphs/runs.esn" { counts <- kept.result; }
+node cell_segments: vector.keep@1 {
+    total <- unit_lists.entries;
+    kept <- kept.result;
+    kept_ends <- kept_lists.ends;
+    units <- units.result;
+    unit_ends <- unit_lists.ends;
+    tile_ends <- tile_lists.ends;
+    tile_shapes <- tile_shapes.result;
+    tiles <- tiles.result;
+    shapes <- shapes;
+    placed <- placed.result;
+    chunks <- segment_chunks.result;
+    slots <- kept_lists.slots;
+    domain = value(total);
+}
+
+// Each cell's backdrop, a row of its tile at a time.
+node backdrop_zeros: vector.zeros@1 { total <- tile_lists.entries; domain = value(total) * 16; }
+node backdrop: vector.backdrop@1 {
+    total <- unit_lists.entries;
+    units <- units.result;
+    unit_ends <- unit_lists.ends;
+    tile_ends <- tile_lists.ends;
+    tile_shapes <- tile_shapes.result;
+    tiles <- tiles.result;
+    shapes <- shapes;
+    placed <- placed.result;
+    chunks <- segment_chunks.result;
+    segments <- segments;
+    frame <- frame.result;
+    canvas <- canvas.result;
+    zeros <- backdrop_zeros.result;
+    domain = value(total);
+}
+
+node drawn: vector.draw_tiled@1 {
+    shapes <- shapes;
+    segments <- segments;
+    stops <- stops;
+    frame <- frame.result;
+    tile_counts <- tile_counts.result;
+    tile_ends <- tile_lists.ends;
+    tile_shapes <- tile_shapes.result;
+    units <- units.result;
+    unit_ends <- unit_lists.ends;
+    kept <- kept.result;
+    kept_ends <- kept_lists.ends;
+    cell_segments <- cell_segments.result;
+    backdrop <- backdrop.result;
+    background = background;
+    domain = window();
+}
+
+output picture <- drawn.result;

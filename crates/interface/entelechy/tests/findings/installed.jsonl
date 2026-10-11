@@ -1,0 +1,3 @@
+{"scene": "scenes/text", "installed": true}
+{"finding": "an installed package used by its name loads", "send": {"op": "compose", "text": "use \"compact.entpkg\";\n{scene}"}, "expect": {"at": {"/ok/written": true}}}
+{"finding": "a package directory was refused by its path where reads are held, though every package is readable", "send": {"op": "compose", "text": "use \"../../packages/compact.entpkg\";\n{scene}"}, "expect": {"at": {"/ok/written": true}}}

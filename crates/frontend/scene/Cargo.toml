@@ -1,6 +1,6 @@
 [package]
-name = "orla-scene"
-description = "Orla scene documents: .osn lowered into the Graph model, sub-graphs flattened, inline Kernels handed to the loader"
+name = "entelechy-scene"
+description = "Entelechy scene documents: .esn lowered into the Graph model, sub-graphs flattened, inline Kernels handed to the loader"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,11 +11,11 @@ rust-version.workspace = true
 doctest = false
 
 [dependencies]
-orla-abi = { path = "../../core/abi" }
-orla-ir = { path = "../../core/ir" }
-orla-language = { path = "../../frontend/language" }
-orla-compiler = { path = "../../frontend/compiler" }
-orla-graph = { path = "../../core/graph" }
+entelechy-abi = { path = "../../core/abi" }
+entelechy-ir = { path = "../../core/ir" }
+entelechy-language = { path = "../../frontend/language" }
+entelechy-compiler = { path = "../../frontend/compiler" }
+entelechy-graph = { path = "../../core/graph" }
 
 [lints]
 workspace = true

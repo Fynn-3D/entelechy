@@ -1,0 +1,19 @@
+// A level in a format of its own, read by a Kernel rather than a tool:
+// `bytes` hands the file to the scene as rows of one integer a byte,
+// and level.draw walks the header, the tiles and the entity list.
+use "kernels/";
+use "../../packages/text.entpkg";
+
+input level: Rows<Int> = bytes "level.bin";
+input font: Grid<Float> = "../../packages/text.entpkg/font.png";
+input caption: Rows<Int> = text "entities";
+
+param zoom: Float = 0.92;
+
+node map: level.draw@1 { data <- level; zoom = zoom; domain = window(); }
+node about: level.about@1 { data <- level; domain = 4; }
+node label: text.label@1 { caption <- caption; values <- about.result; index = 3; places = 3; domain = size(caption) + 5; }
+node glyphs: text.layout@1 { codes <- label.result; origin = vec2(10.0, 10.0); scale = 2.0; }
+node shown: text.draw@1 { under <- map.result; glyphs <- glyphs.result; font <- font; }
+
+output result <- shown.result;

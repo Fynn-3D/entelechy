@@ -1,11 +1,11 @@
 //! The JIT against the CPU interpreter: the same words and the same
 //! integer failures over a map Kernel's whole vocabulary.
 
-use orla_abi::{Capabilities, Capability, Context, Domain, Host, Invocation, Scope, Value};
-use orla_compiler::compile;
-use orla_cpu::{ArithmeticError, CpuBackend, ExecutionError};
-use orla_jit::JitBackend;
-use orla_rules::Backend;
+use entelechy_abi::{Capabilities, Capability, Context, Domain, Host, Invocation, Scope, Value};
+use entelechy_compiler::compile;
+use entelechy_cpu::{ArithmeticError, CpuBackend, ExecutionError};
+use entelechy_jit::JitBackend;
+use entelechy_rules::Backend;
 
 fn all() -> Capabilities {
     Capability::ALL.into_iter().collect()
@@ -14,7 +14,7 @@ fn all() -> Capabilities {
 /// Runs a module on both backends and returns each one's output words.
 fn both(
     source: &str,
-    inputs: &[(orla_abi::Schema, Domain, Vec<u32>)],
+    inputs: &[(entelechy_abi::Schema, Domain, Vec<u32>)],
     params: Vec<Value>,
     domain: Domain,
     context: Context,
@@ -26,7 +26,8 @@ fn both(
         .iter()
         .map(|(schema, domain, words)| {
             host.adopt(
-                orla_abi::FieldData::from_storage(schema.clone(), *domain, words.clone()).unwrap(),
+                entelechy_abi::FieldData::from_storage(schema.clone(), *domain, words.clone())
+                    .unwrap(),
             )
             .unwrap()
         })
@@ -83,10 +84,10 @@ fn the_vocabulary_matches_the_interpreter_bit_for_bit() {
             let same = vec2(x, 1.0) == vec2(float(i), 1.0) && v != vec3(0.0, 0.0, 0.0) && !(x > 100.0);
             return Out { f: s.sum + lin + walked.sum + trig + shaped + v4.w + dot(m, r) + time() + pointer().x + float(key(65)) + float(pointer_down()) + rate() + window().y + scale(), i: s.count + walked.count + bits + ints + int(same) + dense * 3 + sparse, v: m + r, b: same || c.on };
         } }";
-    let cell = orla_abi::Schema::new(vec![
-        orla_abi::Scalar::Float,
-        orla_abi::Scalar::Int,
-        orla_abi::Scalar::Bool,
+    let cell = entelechy_abi::Schema::new(vec![
+        entelechy_abi::Scalar::Float,
+        entelechy_abi::Scalar::Int,
+        entelechy_abi::Scalar::Bool,
     ]);
     let grid: Vec<u32> = (0..48)
         .flat_map(|i| {
@@ -115,7 +116,7 @@ fn the_vocabulary_matches_the_interpreter_bit_for_bit() {
         &[
             (cell, Domain::Grid(8, 6), grid),
             (
-                orla_abi::Schema::new(vec![orla_abi::Scalar::Float]),
+                entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float]),
                 Domain::Rows(16),
                 rows,
             ),
@@ -160,7 +161,10 @@ fn float_addresses_clamp_as_the_interpreters_do() {
             let whole = at(cells, vec2(x, y));
             return whole.b + at(cells, vec2(y, x)).b * 100 + int(whole.a) * 10000 + at(cube, vec3(x, y, z)) * 1000000;
         } }";
-    let cell = orla_abi::Schema::new(vec![orla_abi::Scalar::Float, orla_abi::Scalar::Int]);
+    let cell = entelechy_abi::Schema::new(vec![
+        entelechy_abi::Scalar::Float,
+        entelechy_abi::Scalar::Int,
+    ]);
     let cells: Vec<u32> = (0..20)
         .flat_map(|i| [((i % 7) as f32).to_bits(), i as u32])
         .collect();
@@ -170,7 +174,7 @@ fn float_addresses_clamp_as_the_interpreters_do() {
         &[
             (cell, Domain::Grid(5, 4), cells),
             (
-                orla_abi::Schema::new(vec![orla_abi::Scalar::Int]),
+                entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]),
                 Domain::Volume(3, 3, 2),
                 cube,
             ),
@@ -226,7 +230,7 @@ fn integer_failures_are_reported_at_their_element() {
 /// Runs a module on both backends and returns every output's words.
 fn both_all(
     source: &str,
-    inputs: &[(orla_abi::Schema, Domain, Vec<u32>)],
+    inputs: &[(entelechy_abi::Schema, Domain, Vec<u32>)],
     domain: Domain,
 ) -> (Vec<Vec<u32>>, Vec<Vec<u32>>) {
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
@@ -236,7 +240,8 @@ fn both_all(
         .iter()
         .map(|(schema, domain, words)| {
             host.adopt(
-                orla_abi::FieldData::from_storage(schema.clone(), *domain, words.clone()).unwrap(),
+                entelechy_abi::FieldData::from_storage(schema.clone(), *domain, words.clone())
+                    .unwrap(),
             )
             .unwrap()
         })
@@ -288,8 +293,11 @@ fn scans_and_their_memories_match_the_interpreter() {
             return next;
         } }";
     let steps = 300u32;
-    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
-    let cells = orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Float]);
+    let ints = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
+    let cells = entelechy_abi::Schema::new(vec![
+        entelechy_abi::Scalar::Int,
+        entelechy_abi::Scalar::Float,
+    ]);
     let (cpu, jit) = both_all(
         source,
         &[
@@ -319,10 +327,10 @@ fn a_scan_step_that_fails_names_its_element() {
     let module = compile(source).unwrap();
     let jit = JitBackend::new().unwrap();
     let mut host = Host::new(1 << 16);
-    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+    let ints = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
     let rows = host
         .adopt(
-            orla_abi::FieldData::from_storage(ints, Domain::Rows(6), vec![2, 5, 1, 0, 3, 3])
+            entelechy_abi::FieldData::from_storage(ints, Domain::Rows(6), vec![2, 5, 1, 0, 3, 3])
                 .unwrap(),
         )
         .unwrap();
@@ -361,7 +369,7 @@ fn reductions_fold_in_the_interpreters_tree() {
     let (cpu, jit) = both_all(
         source,
         &[(
-            orla_abi::Schema::pixel(),
+            entelechy_abi::Schema::pixel(),
             Domain::Grid(width, height),
             pixels,
         )],
@@ -390,13 +398,16 @@ fn scatters_apply_in_element_order_with_the_same_rule() {
             ]
         })
         .collect();
-    let drop_schema = orla_abi::Schema::new(vec![
-        orla_abi::Scalar::Float,
-        orla_abi::Scalar::Float,
-        orla_abi::Scalar::Float,
-        orla_abi::Scalar::Int,
+    let drop_schema = entelechy_abi::Schema::new(vec![
+        entelechy_abi::Scalar::Float,
+        entelechy_abi::Scalar::Float,
+        entelechy_abi::Scalar::Float,
+        entelechy_abi::Scalar::Int,
     ]);
-    let cell = orla_abi::Schema::new(vec![orla_abi::Scalar::Float, orla_abi::Scalar::Int]);
+    let cell = entelechy_abi::Schema::new(vec![
+        entelechy_abi::Scalar::Float,
+        entelechy_abi::Scalar::Int,
+    ]);
     let (cpu, jit) = both_all(
         source,
         &[
@@ -413,7 +424,7 @@ fn scatters_apply_in_element_order_with_the_same_rule() {
         let source = format!(
             "kernel test.rows@1 {{ requires {{ field.read; field.write; }} input keys: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>; struct Pair {{ at: Int; value: Int; }} scatter into slots with {rule} {{ let k = sample(keys); return Pair {{ at: k % 9 - 1, value: k * 7 % 13 - 6 }}; }} }}"
         );
-        let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+        let ints = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
         let (cpu, jit) = both_all(
             &source,
             &[
@@ -429,14 +440,14 @@ fn scatters_apply_in_element_order_with_the_same_rule() {
 #[test]
 fn a_merge_or_a_combine_that_overflows_is_reported() {
     let jit = JitBackend::new().unwrap();
-    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+    let ints = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
     // The fold overflows at the second level.
     let source = "kernel test.total@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; compute { return sample(rows); } merge(a, b) { return a + b; } }";
     let module = compile(source).unwrap();
     let mut host = Host::new(1 << 16);
     let rows = host
         .adopt(
-            orla_abi::FieldData::from_storage(
+            entelechy_abi::FieldData::from_storage(
                 ints.clone(),
                 Domain::Rows(4),
                 vec![0x4000_0000, 0x4000_0000, 1, 1],
@@ -468,7 +479,7 @@ fn a_merge_or_a_combine_that_overflows_is_reported() {
     let mut host = Host::new(1 << 16);
     let rows = host
         .adopt(
-            orla_abi::FieldData::from_storage(
+            entelechy_abi::FieldData::from_storage(
                 ints.clone(),
                 Domain::Rows(4),
                 vec![0x4000_0000, 0x3000_0000, 0x4000_0000, 1],
@@ -477,7 +488,7 @@ fn a_merge_or_a_combine_that_overflows_is_reported() {
         )
         .unwrap();
     let slots = host
-        .adopt(orla_abi::FieldData::from_storage(ints, Domain::Rows(2), vec![0; 2]).unwrap())
+        .adopt(entelechy_abi::FieldData::from_storage(ints, Domain::Rows(2), vec![0; 2]).unwrap())
         .unwrap();
     let invocation = Invocation {
         inputs: vec![rows, slots],
@@ -505,7 +516,7 @@ fn a_merge_may_read_inputs_params_and_the_context() {
         fn first(w: Rows<Float>) -> Float { return at(w, 0); }
         compute { return sample(xs) * at(weights, element()); }
         merge(a, b) { return a + b + at(weights, 1) * k + first(weights) + time(); } }";
-    let floats = orla_abi::Schema::new(vec![orla_abi::Scalar::Float]);
+    let floats = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float]);
     let count = 37u32;
     let (cpu, jit) = both(
         source,
@@ -595,7 +606,7 @@ fn emitted_pairs_land_as_the_interpreters_do() {
                 return Pair {{ at: k % 101 - 3, value: k % 17 }};
             }} }}"
         );
-        let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+        let ints = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
         let (cpu, jit) = both_all(
             &source,
             &[
@@ -632,8 +643,8 @@ fn keys_emitted_from_nested_loops_land_as_the_interpreters_do() {
             };
             return none;
         } }";
-    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
-    let longs = orla_abi::Schema::new(vec![orla_abi::Scalar::Long; 2]);
+    let ints = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
+    let longs = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Long; 2]);
     let (cpu, jit) = both_all(
         source,
         &[
@@ -671,8 +682,11 @@ fn a_target_cut_into_parts_sees_its_pairs_in_order() {
     let keys: Vec<u32> = (0..count)
         .map(|i| i.wrapping_mul(2_654_435_761) >> 8)
         .collect();
-    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
-    let cells = orla_abi::Schema::new(vec![orla_abi::Scalar::Float, orla_abi::Scalar::Int]);
+    let ints = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
+    let cells = entelechy_abi::Schema::new(vec![
+        entelechy_abi::Scalar::Float,
+        entelechy_abi::Scalar::Int,
+    ]);
     for rule in ["sum", "last", "min", "max"] {
         let source = format!(
             "kernel test.parts@1 {{ requires {{ field.read; field.write; }}
@@ -709,11 +723,13 @@ fn a_target_cut_into_parts_sees_its_pairs_in_order() {
     let mut host = Host::new(1 << 22);
     let inputs = vec![
         host.adopt(
-            orla_abi::FieldData::from_storage(ints.clone(), Domain::Rows(count), keys).unwrap(),
+            entelechy_abi::FieldData::from_storage(ints.clone(), Domain::Rows(count), keys)
+                .unwrap(),
         )
         .unwrap(),
         host.adopt(
-            orla_abi::FieldData::from_storage(ints, Domain::Rows(4999), vec![0; 4999]).unwrap(),
+            entelechy_abi::FieldData::from_storage(ints, Domain::Rows(4999), vec![0; 4999])
+                .unwrap(),
         )
         .unwrap(),
     ];
@@ -740,7 +756,7 @@ fn a_target_cut_into_parts_sees_its_pairs_in_order() {
 /// the budget, the same on both.
 #[test]
 fn values_a_reduction_holds_past_the_hosts_room_fail_the_run_on_both() {
-    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+    let ints = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
     for (source, runs) in [
         (
             "kernel test.total@1 { requires { field.read; field.write; } input keys: Rows<Int>; output result: Rows<Int>; compute { return sample(keys); } merge(a, b) { return a + b; } }",
@@ -756,7 +772,7 @@ fn values_a_reduction_holds_past_the_hosts_room_fail_the_run_on_both() {
             let mut host = Host::new(budget);
             let keys = host
                 .adopt(
-                    orla_abi::FieldData::from_storage(
+                    entelechy_abi::FieldData::from_storage(
                         ints.clone(),
                         Domain::Rows(1000),
                         vec![1; 1000],
@@ -782,7 +798,7 @@ fn values_a_reduction_holds_past_the_hosts_room_fail_the_run_on_both() {
         for backend in [&CpuBackend as &dyn Backend, &jit] {
             let error = run(2000, backend).unwrap_err();
             assert!(
-                matches!(error, orla_rules::ExecutionError::OverRoom { .. }),
+                matches!(error, entelechy_rules::ExecutionError::OverRoom { .. }),
                 "{source}: {error}"
             );
         }
@@ -807,12 +823,12 @@ fn pairs_past_the_hosts_room_fail_the_run_on_both() {
          } }",
     )
     .unwrap();
-    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+    let ints = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
     let run = |budget: usize, backend: &dyn Backend| {
         let mut host = Host::new(budget);
         let inputs = vec![
             host.adopt(
-                orla_abi::FieldData::from_storage(
+                entelechy_abi::FieldData::from_storage(
                     ints.clone(),
                     Domain::Rows(200),
                     (0..200).collect(),
@@ -821,7 +837,7 @@ fn pairs_past_the_hosts_room_fail_the_run_on_both() {
             )
             .unwrap(),
             host.adopt(
-                orla_abi::FieldData::from_storage(ints.clone(), Domain::Rows(64), vec![0; 64])
+                entelechy_abi::FieldData::from_storage(ints.clone(), Domain::Rows(64), vec![0; 64])
                     .unwrap(),
             )
             .unwrap(),
@@ -843,7 +859,7 @@ fn pairs_past_the_hosts_room_fail_the_run_on_both() {
     for backend in [&CpuBackend as &dyn Backend, &jit] {
         let error = run(100_000, backend).unwrap_err();
         assert!(
-            matches!(error, orla_rules::ExecutionError::OverRoom { .. }),
+            matches!(error, entelechy_rules::ExecutionError::OverRoom { .. }),
             "{error}"
         );
     }
@@ -860,7 +876,7 @@ fn pairs_past_the_hosts_room_fail_the_run_on_both() {
 /// its failure.
 fn outcomes(
     source: &str,
-    schema: orla_abi::Schema,
+    schema: entelechy_abi::Schema,
     words: Vec<u32>,
     domain: Domain,
 ) -> [Result<Vec<u32>, ExecutionError>; 2] {
@@ -872,7 +888,7 @@ fn outcomes(
         let mut host = Host::new(1 << 24);
         let rows = host
             .adopt(
-                orla_abi::FieldData::from_storage(
+                entelechy_abi::FieldData::from_storage(
                     schema.clone(),
                     Domain::Rows(count as u32),
                     words.clone(),
@@ -902,7 +918,7 @@ fn outcomes(
 #[test]
 fn folds_split_across_workers_are_the_walks() {
     let n = 400_000usize;
-    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+    let ints = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
     let mixed = (0..n)
         .map(|i| ((i as i64 * 2_654_435_761 % 20_001) - 10_000) as i32 as u32)
         .collect::<Vec<_>>();
@@ -914,10 +930,10 @@ fn folds_split_across_workers_are_the_walks() {
         assert!(cpu.is_ok(), "{rule}: {cpu:?}");
         assert_eq!(cpu, jit, "an Int prefix with {rule}");
     }
-    let record = orla_abi::Schema::new(vec![
-        orla_abi::Scalar::Int,
-        orla_abi::Scalar::Long,
-        orla_abi::Scalar::Long,
+    let record = entelechy_abi::Schema::new(vec![
+        entelechy_abi::Scalar::Int,
+        entelechy_abi::Scalar::Long,
+        entelechy_abi::Scalar::Long,
     ]);
     let words = (0..n)
         .flat_map(|i| {
@@ -980,7 +996,7 @@ fn at_linear_blends_an_element_wider_than_64_words() {
             let w = at_linear(rows, float(element()) * 0.61 + 0.3);
             return dot(w.a0, vec4(1.0, 2.0, 3.0, 1.0)) + dot(w.a1, vec4(1.0, 2.0, 3.0, 2.0)) + dot(w.a2, vec4(1.0, 2.0, 3.0, 3.0)) + dot(w.a3, vec4(1.0, 2.0, 3.0, 4.0)) + dot(w.a4, vec4(1.0, 2.0, 3.0, 5.0)) + dot(w.a5, vec4(1.0, 2.0, 3.0, 6.0)) + dot(w.a6, vec4(1.0, 2.0, 3.0, 7.0)) + dot(w.a7, vec4(1.0, 2.0, 3.0, 8.0)) + dot(w.a8, vec4(1.0, 2.0, 3.0, 9.0)) + dot(w.a9, vec4(1.0, 2.0, 3.0, 10.0)) + dot(w.a10, vec4(1.0, 2.0, 3.0, 11.0)) + dot(w.a11, vec4(1.0, 2.0, 3.0, 12.0)) + dot(w.a12, vec4(1.0, 2.0, 3.0, 13.0)) + dot(w.a13, vec4(1.0, 2.0, 3.0, 14.0)) + dot(w.a14, vec4(1.0, 2.0, 3.0, 15.0)) + dot(w.a15, vec4(1.0, 2.0, 3.0, 16.0)) + dot(w.a16, vec4(1.0, 2.0, 3.0, 17.0));
         } }";
-    let wide = orla_abi::Schema::new(vec![orla_abi::Scalar::Float; 68]);
+    let wide = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float; 68]);
     let rows: Vec<u32> = (0..6 * 68)
         .map(|i| ((i as f32) * 0.37).sin().to_bits())
         .collect();
@@ -1005,13 +1021,13 @@ fn an_input_of_the_wrong_layout_is_refused_by_every_backend() {
     let mut host = Host::new(1 << 16);
     let narrow = host
         .create(
-            orla_abi::Schema::new(vec![orla_abi::Scalar::Float]),
+            entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float]),
             Domain::Rows(4),
         )
         .unwrap();
     let grid = host
         .create(
-            orla_abi::Schema::new(vec![orla_abi::Scalar::Float; 8]),
+            entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float; 8]),
             Domain::Grid(2, 2),
         )
         .unwrap();
@@ -1238,13 +1254,13 @@ fn a_memory_carried_from_run_to_run_matches_the_interpreter_and_compares_by_its_
          } }",
     )
     .unwrap();
-    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
-    let len = orla_abi::PAGE_WORDS as u32 * 5 + 3;
+    let ints = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
+    let len = entelechy_abi::PAGE_WORDS as u32 * 5 + 3;
     let jit = JitBackend::new().unwrap();
     let mut host = Host::new(len as usize * 64);
     let mut cells = host
         .adopt(
-            orla_abi::FieldData::from_storage(
+            entelechy_abi::FieldData::from_storage(
                 ints.clone(),
                 Domain::Rows(len),
                 vec![0; len as usize],
@@ -1256,7 +1272,8 @@ fn a_memory_carried_from_run_to_run_matches_the_interpreter_and_compares_by_its_
     for k in 0..12u32 {
         let frame = host
             .adopt(
-                orla_abi::FieldData::from_storage(ints.clone(), Domain::Rows(1), vec![k]).unwrap(),
+                entelechy_abi::FieldData::from_storage(ints.clone(), Domain::Rows(1), vec![k])
+                    .unwrap(),
             )
             .unwrap();
         let invocation = Invocation {
@@ -1326,9 +1343,9 @@ fn two_functions_of_one_name_each_keep_their_tables() {
     );
     let twin = plain.functions[0].clone();
     plain.functions.push(twin);
-    let module = orla_ir::validate(plain).unwrap_or_else(|error| panic!("{error}"));
+    let module = entelechy_ir::validate(plain).unwrap_or_else(|error| panic!("{error}"));
     let alone = compile(&source).unwrap_or_else(|error| panic!("{error}"));
-    let run = |module: &orla_ir::Validated| {
+    let run = |module: &entelechy_ir::Validated| {
         let jit = JitBackend::new().unwrap();
         let prepared = jit
             .prepare(module)

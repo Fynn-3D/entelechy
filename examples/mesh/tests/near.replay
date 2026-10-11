@@ -1,4 +1,4 @@
-scene near.osn
+scene near.esn
 
 # A triangle in front of the eye: the sheet is drawn and the corners of
 # the picture are not.

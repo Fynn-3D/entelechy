@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # The voxel package's view of the island at 160 by 90: the sky above,
 # the pond's water, grass in the sun and, two pixels up, in a tree's

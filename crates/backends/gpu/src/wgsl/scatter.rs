@@ -170,7 +170,9 @@ pub fn long_extremes(module: &Module) -> bool {
     let scalars = module.manifest.inputs[base as usize].ty.schema.scalars();
     matches!(combine, Combine::Min | Combine::Max)
         && !scalars.is_empty()
-        && scalars.iter().all(|s| matches!(s, orla_abi::Scalar::Long))
+        && scalars
+            .iter()
+            .all(|s| matches!(s, entelechy_abi::Scalar::Long))
 }
 
 /// The scatter target's atomic array type: words, or longs under
@@ -189,7 +191,9 @@ pub fn scatter_plan(module: &Module) -> ScatterPlan {
         return ScatterPlan::Sorted;
     };
     let scalars = module.manifest.inputs[base as usize].ty.schema.scalars();
-    let floats = scalars.iter().any(|s| matches!(s, orla_abi::Scalar::Float));
+    let floats = scalars
+        .iter()
+        .any(|s| matches!(s, entelechy_abi::Scalar::Float));
     match combine {
         Combine::Sum if floats => ScatterPlan::Sorted,
         Combine::Sum => ScatterPlan::Parallel {
@@ -605,10 +609,10 @@ pub fn emit_scatter_keys(module: &Module, from_base: bool) -> String {
     let mut k = 0;
     while let Some(scalar) = scalars.get(k) {
         match scalar {
-            orla_abi::Scalar::Float => lines.push(format!(
+            entelechy_abi::Scalar::Float => lines.push(format!(
                 "    out0[b + {k}u] = bitcast<u32>(key_of(bitcast<i32>({from}[b + {k}u])));"
             )),
-            orla_abi::Scalar::Long => {
+            entelechy_abi::Scalar::Long => {
                 if from_base {
                     lines.push(format!("    out0[b + {k}u] = pairs[b + {k}u];"));
                 }

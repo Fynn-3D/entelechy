@@ -1,0 +1,90 @@
+// A drawing past what one loop counts: a square in each of `squares`
+// cells four units wide, 256 to a row, red and blue in turn, and over
+// them a green disc of `sides` segments, drawn tiled.
+use "../../../packages/vector.entpkg";
+
+param squares: Int = 66048;
+param sides: Int = 66000;
+param center: Vec2 = vec2(512.0, 516.0);
+param zoom: Float = 1.0;
+
+fn corner(x: Float, y: Float, k: Int) -> Vec2 {
+    return vec2(x + if k == 1 || k == 2 { 3.0 } else { 1.0 }, y + if k >= 2 { 3.0 } else { 1.0 });
+}
+
+node shapes: kernel {
+    requires { field.read; field.write; }
+    param squares: Int = squares;
+    param sides: Int = sides;
+    output result: Rows<Shape>;
+    compute {
+        let i = element();
+        let square = i < squares;
+        let x = float(i % 256) * 4.0;
+        let y = float(i / 256) * 4.0;
+        let color = if !square { vec4(0.0, 1.0, 0.0, 1.0) } else { if i % 2 == 0 { vec4(1.0, 0.0, 0.0, 1.0) } else { vec4(0.0, 0.0, 1.0, 1.0) } };
+        return Shape {
+            color: color,
+            first: if square { i * 4 } else { squares * 4 },
+            count: if square { 4 } else { sides },
+            rule: 0,
+            paint: 0,
+            lo: if square { vec2(x + 1.0, y + 1.0) } else { vec2(412.0, 416.0) },
+            hi: if square { vec2(x + 3.0, y + 3.0) } else { vec2(612.0, 616.0) },
+            gradient: vec4(0.0, 0.0, 0.0, 0.0),
+            inverse: vec4(1.0, 0.0, 0.0, 1.0),
+            shift: vec2(0.0, 0.0),
+            stops: 0,
+            stop_count: 0,
+            spread: 0,
+        };
+    }
+    domain = squares + 1;
+}
+
+node segments: kernel {
+    requires { field.read; field.write; }
+    param squares: Int = squares;
+    param sides: Int = sides;
+    output result: Rows<Vec4>;
+    compute {
+        let e = element();
+        if e < squares * 4 {
+            let i = e / 4;
+            let x = float(i % 256) * 4.0;
+            let y = float(i / 256) * 4.0;
+            let a = corner(x, y, e % 4);
+            let b = corner(x, y, (e + 1) % 4);
+            return vec4(a.x, a.y, b.x, b.y);
+        }
+        let j = e - squares * 4;
+        let step = 6.2831853 / float(sides);
+        let a = vec2(512.0, 516.0) + vec2(cos(float(j) * step), sin(float(j) * step)) * 100.0;
+        let b = vec2(512.0, 516.0) + vec2(cos(float(j + 1) * step), sin(float(j + 1) * step)) * 100.0;
+        return vec4(a.x, a.y, b.x, b.y);
+    }
+    domain = squares * 4 + sides;
+}
+
+node stops: kernel {
+    requires { field.read; field.write; }
+    output result: Rows<Stop>;
+    compute { return Stop { offset: 0.0, color: vec4(0.0, 0.0, 0.0, 1.0) }; }
+    domain = 1;
+}
+node view: Rows<Vec2> { domain = 1; value = vec2(1024.0, 1032.0); }
+
+node look: kernel {
+    requires { field.read; field.write; }
+    param center: Vec2 = center;
+    param zoom: Float = zoom;
+    output result: Rows<Look>;
+    compute { return Look { center: center, zoom: zoom }; }
+    domain = 1;
+}
+node drawn: graph "../../../packages/vector.entpkg/graphs/draw.esn" {
+    shapes <- shapes.result; segments <- segments.result; stops <- stops.result; view <- view.result;
+    look <- look.result;
+}
+
+output picture <- drawn.picture;

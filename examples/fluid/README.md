@@ -14,7 +14,7 @@ rest ──┴─ hand
   plume, buoyancy and vorticity confinement.
 - `fluid.divergence`, `fluid.relax` and `fluid.project` are face
   differences on the staggered grid.
-- The pressure solve is `solve.osn` (eight Jacobi steps) placed five
+- The pressure solve is `solve.esn` (eight Jacobi steps) placed five
   times, starting from last frame's pressure.
 - `fluid.smoke` carries the smoke; `fluid.draw` paints it, tinted by speed.
 - `fluid.hand` is one row: the pointer, its button, and its motion.
@@ -24,6 +24,6 @@ summed |divergence| before and after projection), then stirs and reads
 the velocities and the smoke.
 
 ```sh
-orla player examples/fluid/scene.osn --scale 3
-orla replay examples/fluid/tests/fluid.replay --backend gpu
+entelechy player examples/fluid/scene.esn --scale 3
+entelechy replay examples/fluid/tests/fluid.replay --backend gpu
 ```

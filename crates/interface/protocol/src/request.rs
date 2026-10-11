@@ -1,7 +1,7 @@
 //! A request as its operation reads it, with one error form for a
 //! missing or mistyped field.
 
-use orla_kernel::KernelId;
+use entelechy_kernel::KernelId;
 use serde_json::Value as Json;
 
 use crate::wire::failure;

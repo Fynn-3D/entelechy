@@ -1,11 +1,11 @@
 //! The feature matrix on the JIT: every feature under every mode, bit
 //! for bit against the interpreter.
 
-use orla_abi::{Capabilities, Capability, Host, Invocation, Scope};
-use orla_compiler::compile;
-use orla_cpu::CpuBackend;
-use orla_jit::JitBackend;
-use orla_rules::Backend;
+use entelechy_abi::{Capabilities, Capability, Host, Invocation, Scope};
+use entelechy_compiler::compile;
+use entelechy_cpu::CpuBackend;
+use entelechy_jit::JitBackend;
+use entelechy_rules::Backend;
 
 fn all() -> Capabilities {
     Capability::ALL.into_iter().collect()
@@ -13,7 +13,7 @@ fn all() -> Capabilities {
 
 #[test]
 fn every_feature_under_every_mode_matches_the_interpreter() {
-    let cases = orla_conformance::cases();
+    let cases = entelechy_conformance::cases();
     let failures = differences(&cases);
     assert!(
         failures.is_empty(),
@@ -26,7 +26,7 @@ fn every_feature_under_every_mode_matches_the_interpreter() {
 
 #[test]
 fn every_64_bit_feature_under_every_mode_matches_the_interpreter() {
-    let cases = orla_conformance::wide_cases();
+    let cases = entelechy_conformance::wide_cases();
     let failures = differences(&cases);
     assert!(
         failures.is_empty(),
@@ -39,7 +39,7 @@ fn every_64_bit_feature_under_every_mode_matches_the_interpreter() {
 
 #[test]
 fn every_long_feature_matches_the_interpreter() {
-    let cases = orla_conformance::long_cases();
+    let cases = entelechy_conformance::long_cases();
     let failures = differences(&cases);
     assert!(
         failures.is_empty(),
@@ -52,7 +52,7 @@ fn every_long_feature_matches_the_interpreter() {
 
 #[test]
 fn every_element_shape_a_scatter_holds_matches_the_interpreter() {
-    let cases = orla_conformance::shape_cases();
+    let cases = entelechy_conformance::shape_cases();
     let failures = differences(&cases);
     assert!(
         failures.is_empty(),
@@ -64,7 +64,7 @@ fn every_element_shape_a_scatter_holds_matches_the_interpreter() {
 }
 
 /// Each case's JIT run against the interpreter's, bit for bit.
-fn differences(cases: &[orla_conformance::Case]) -> Vec<String> {
+fn differences(cases: &[entelechy_conformance::Case]) -> Vec<String> {
     let jit = JitBackend::new().unwrap();
     let mut failures = Vec::new();
     for case in cases {
@@ -84,7 +84,7 @@ fn differences(cases: &[orla_conformance::Case]) -> Vec<String> {
             .iter()
             .map(|(schema, domain, words)| {
                 host.adopt(
-                    orla_abi::FieldData::from_values(schema.clone(), *domain, words).unwrap(),
+                    entelechy_abi::FieldData::from_values(schema.clone(), *domain, words).unwrap(),
                 )
                 .unwrap()
             })
@@ -132,7 +132,7 @@ fn differences(cases: &[orla_conformance::Case]) -> Vec<String> {
             let candidate = host.data(*b).unwrap().values().into_owned();
             let scalars = host.schema(*a).unwrap().scalars().to_vec();
             if let Some(mismatch) =
-                orla_conformance::compare(&scalars, &reference, &candidate, 0.0, 0.0)
+                entelechy_conformance::compare(&scalars, &reference, &candidate, 0.0, 0.0)
             {
                 failures.push(format!("{}: output {which}: {mismatch}", case.name));
             }
@@ -146,10 +146,10 @@ fn differences(cases: &[orla_conformance::Case]) -> Vec<String> {
 /// that does not fails at the first such element, in any addition order.
 #[test]
 fn integer_sums_are_whole_totals_on_jit_as_everywhere() {
-    let Some(backend) = orla_jit::JitBackend::new().ok() else {
+    let Some(backend) = entelechy_jit::JitBackend::new().ok() else {
         return;
     };
-    let failures: Vec<String> = orla_conformance::sum_cases()
+    let failures: Vec<String> = entelechy_conformance::sum_cases()
         .iter()
         .filter_map(|(case, want)| {
             want.judge(&summed(&backend, case))
@@ -161,31 +161,33 @@ fn integer_sums_are_whole_totals_on_jit_as_everywhere() {
 
 /// Runs one integer sum case on `backend`: the output's words, or why not.
 fn summed(
-    backend: &dyn orla_rules::Backend,
-    case: &orla_conformance::Case,
-) -> Result<Vec<u32>, orla_rules::ExecutionError> {
+    backend: &dyn entelechy_rules::Backend,
+    case: &entelechy_conformance::Case,
+) -> Result<Vec<u32>, entelechy_rules::ExecutionError> {
     let module =
-        orla_compiler::compile(&case.source).unwrap_or_else(|e| panic!("{}: {e}", case.name));
-    let mut host = orla_abi::Host::new(1 << 22);
+        entelechy_compiler::compile(&case.source).unwrap_or_else(|e| panic!("{}: {e}", case.name));
+    let mut host = entelechy_abi::Host::new(1 << 22);
     let inputs = case
         .inputs
         .iter()
         .map(|(schema, domain, words)| {
-            host.adopt(orla_abi::FieldData::from_values(schema.clone(), *domain, words).unwrap())
-                .unwrap()
+            host.adopt(
+                entelechy_abi::FieldData::from_values(schema.clone(), *domain, words).unwrap(),
+            )
+            .unwrap()
         })
         .collect();
-    let invocation = orla_abi::Invocation {
+    let invocation = entelechy_abi::Invocation {
         inputs,
         params: case.params.clone(),
         domain: case.domain,
         context: case.context,
     };
-    let all: orla_abi::Capabilities = orla_abi::Capability::ALL.into_iter().collect();
-    let mut scope = orla_abi::Scope::new(&mut host, all);
+    let all: entelechy_abi::Capabilities = entelechy_abi::Capability::ALL.into_iter().collect();
+    let mut scope = entelechy_abi::Scope::new(&mut host, all);
     let prepared = backend
         .prepare(&module)
-        .map_err(orla_rules::ExecutionError::Device)?;
+        .map_err(entelechy_rules::ExecutionError::Device)?;
     let outputs = backend.execute(prepared.as_ref(), &module, &invocation, &mut scope)?;
     Ok(scope.values(outputs[0])?.into_owned())
 }
@@ -194,7 +196,7 @@ fn summed(
 /// each element, count, size and domain as the interpreter gives them.
 #[test]
 fn extents_past_a_floats_integers_match_the_interpreter() {
-    let cases = orla_conformance::large_cases();
+    let cases = entelechy_conformance::large_cases();
     let failures = differences(&cases);
     assert!(
         failures.is_empty(),
@@ -209,11 +211,11 @@ fn extents_past_a_floats_integers_match_the_interpreter() {
 fn every_case_run_twice_writes_the_same_words() {
     let backend = JitBackend::new().unwrap();
     assert!(backend.repeats_exactly());
-    let cases: Vec<_> = orla_conformance::repeat_cases()
+    let cases: Vec<_> = entelechy_conformance::repeat_cases()
         .into_iter()
         .filter_map(|case| compile(&case.source).ok().map(|module| (case, module)))
         .collect();
-    let failures = orla_conformance::unrepeated(&backend, &cases);
+    let failures = entelechy_conformance::unrepeated(&backend, &cases);
     assert!(
         failures.is_empty(),
         "{} of {} cases differ:\n{}",

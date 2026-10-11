@@ -6,7 +6,7 @@
 //! A format belongs here when it decodes to a numerical Field, needs
 //! nothing outside the workspace, and is read live as a scene input.
 //! Application formats are read as bytes ([`read_bytes`]) and parsed by
-//! a Kernel; the rest are converted by `orla-import` or a bridge.
+//! a Kernel; the rest are converted by `entelechy-import` or a bridge.
 
 #![warn(missing_docs)]
 
@@ -23,7 +23,7 @@ pub mod wav;
 
 use std::path::Path;
 
-use orla_host::{Domain, FieldData, Scalar, Schema, Shape};
+use entelechy_host::{Domain, FieldData, Scalar, Schema, Shape};
 
 /// The extensions [`read`] and [`encode`] know, as an error names them.
 const KNOWN: &str = "use .field, .png, .ppm, .pgm, .wav, or .mid";
@@ -47,7 +47,7 @@ pub fn writable(path: &Path) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "{} names no format Orla writes; {KNOWN}",
+        "{} names no format Entelechy writes; {KNOWN}",
         path.display()
     ))
 }
@@ -108,7 +108,7 @@ pub fn fits(start: &[u8], path: &Path, words: usize) -> Result<(), String> {
     }
     let needed = crate::file::words(start).map_err(|e| e.to_string())?;
     if needed > words {
-        return Err(orla_host::HostError::BudgetExceeded {
+        return Err(entelechy_host::HostError::BudgetExceeded {
             requested: needed,
             available: words,
         }

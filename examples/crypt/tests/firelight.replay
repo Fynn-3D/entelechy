@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # By firelight: a torch on the far wall glows its own color, whatever
 # the dark; a corner far from every fire is near black; the statue at

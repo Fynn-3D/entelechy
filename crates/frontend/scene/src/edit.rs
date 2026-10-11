@@ -5,9 +5,9 @@
 use std::fmt;
 use std::ops::Range;
 
-use orla_language::{Outline, Statement, outline};
+use entelechy_language::{Outline, Statement, outline};
 
-pub use orla_language::StatementKind;
+pub use entelechy_language::StatementKind;
 
 /// What an edit names.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -322,7 +322,7 @@ fn add_statement(text: &str, outline: &Outline, kind: StatementKind, fragment: &
 /// indented as the last member.
 fn add_member(
     text: &str,
-    block: &orla_language::NodeBlock,
+    block: &entelechy_language::NodeBlock,
     (fragment, comment): (&str, bool),
 ) -> String {
     let same_line = |a: usize, b: usize| !text[a..b].contains('\n');

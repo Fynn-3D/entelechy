@@ -90,17 +90,20 @@ pub struct Parsed {
     /// What the language named of a document's reach, by what it was
     /// named from ([`crate::sources::declarations_within`]).
     pub(crate) scoped: std::sync::Arc<
-        Mutex<std::collections::HashMap<String, Result<orla_language::Declarations, String>>>,
+        Mutex<std::collections::HashMap<String, Result<entelechy_language::Declarations, String>>>,
     >,
 }
 
 /// A document as parsed, and the stamp of the text it was parsed from.
-type ParsedAt = (Stamp, std::sync::Arc<orla_language::Document>);
+type ParsedAt = (Stamp, std::sync::Arc<entelechy_language::Document>);
 
 impl dyn Store + '_ {
     /// The document at `path`, parsed; an error names the path. A store
     /// that keeps parsed documents parses a file once per stamp.
-    pub fn document(&self, path: &Path) -> Result<std::sync::Arc<orla_language::Document>, String> {
+    pub fn document(
+        &self,
+        path: &Path,
+    ) -> Result<std::sync::Arc<entelechy_language::Document>, String> {
         let stamp = self.stamp(path);
         if let (Some(parsed), Some(stamp)) = (self.parsed(), stamp)
             && let Some((seen, document)) = parsed
@@ -116,7 +119,8 @@ impl dyn Store + '_ {
             .read_text(path)
             .map_err(|e| format!("{}: {e}", path.display()))?;
         let document = std::sync::Arc::new(
-            orla_language::parse_document(&text).map_err(|e| format!("{}:{e}", path.display()))?,
+            entelechy_language::parse_document(&text)
+                .map_err(|e| format!("{}:{e}", path.display()))?,
         );
         if let (Some(parsed), Some(stamp)) = (self.parsed(), stamp) {
             parsed
@@ -493,7 +497,8 @@ mod tests {
 
     #[test]
     fn a_files_start_is_read_alone() {
-        let dir = std::env::temp_dir().join(format!("orla-store-start-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("entelechy-store-start-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("f.txt");
@@ -509,7 +514,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_link_at_the_working_name_is_not_written_through() {
-        let dir = std::env::temp_dir().join(format!("orla-store-link-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("entelechy-store-link-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let elsewhere = dir.join("elsewhere.txt");
@@ -541,17 +546,17 @@ mod tests {
     #[test]
     fn memory_holds_files_and_the_directories_they_imply() {
         let memory = Memory::default();
-        memory.put(Path::new("scene/main.osn"), b"a".to_vec());
-        memory.put(Path::new("scene/kernels/k.orla"), b"k".to_vec());
+        memory.put(Path::new("scene/main.esn"), b"a".to_vec());
+        memory.put(Path::new("scene/kernels/k.ent"), b"k".to_vec());
         let store: &dyn Store = &memory;
         assert_eq!(
             store
-                .read_text(Path::new("scene/kernels/../main.osn"))
+                .read_text(Path::new("scene/kernels/../main.esn"))
                 .unwrap(),
             "a"
         );
         assert!(store.is_dir(Path::new("scene/kernels")));
-        assert!(store.is_file(Path::new("./scene/main.osn")));
+        assert!(store.is_file(Path::new("./scene/main.esn")));
         assert!(!store.exists(Path::new("scene/other")));
         let mut listed = store.list(Path::new("scene")).unwrap();
         listed.sort();
@@ -559,12 +564,12 @@ mod tests {
             listed,
             [
                 PathBuf::from("scene/kernels"),
-                PathBuf::from("scene/main.osn")
+                PathBuf::from("scene/main.esn")
             ]
         );
-        let before = store.stamp(Path::new("scene/main.osn"));
-        memory.put(Path::new("scene/main.osn"), b"b".to_vec());
-        assert_ne!(store.stamp(Path::new("scene/main.osn")), before);
+        let before = store.stamp(Path::new("scene/main.esn"));
+        memory.put(Path::new("scene/main.esn"), b"b".to_vec());
+        assert_ne!(store.stamp(Path::new("scene/main.esn")), before);
     }
 }
 
@@ -614,7 +619,7 @@ mod parsed_tests {
     #[test]
     fn a_document_is_parsed_once_per_stamp() {
         let store = Counting::default();
-        let path = Path::new("/s/lib.orla");
+        let path = Path::new("/s/lib.ent");
         store
             .files
             .put(path, b"fn f(x: Float) -> Float { return x; }".to_vec());

@@ -1,0 +1,22 @@
+// generate -> flood (fed back) -> render. The atlas comes from whoever
+// places this graph: `scene.esn` reads it from a file the Host watches.
+use "kernels/";
+
+input atlas: Image;
+
+node map: tiles.generate@1 {
+    domain = vec2(20, 15);
+    source = vec2(3.0, 7.0);
+}
+
+node flood: tiles.flood@1 {
+    previous <~ flood.result from map.result;
+}
+
+node view: tiles.render@1 {
+    map <- flood.result;
+    atlas <- atlas;
+    domain = size(map) * tile;     // 20x15 tiles at 16 pixels: 320x240
+}
+
+output result <- view.result;

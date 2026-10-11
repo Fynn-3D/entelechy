@@ -1,0 +1,104 @@
+// What a pixel of a screen is painted: a colour and how much it covers,
+// a `Vec4` of straight colour and coverage, laid one over another. Shapes
+// say their cover of a pixel from their signed distance to its middle,
+// so their edges are smooth at any size; `q` is a pixel's middle.
+use "layout.ent";
+
+/// Nothing: no colour, no cover.
+fn clear() -> Vec4 { return vec4(0.0, 0.0, 0.0, 0.0); }
+
+/// A colour covering as much as `a`.
+fn paint(c: Vec3, a: Float) -> Vec4 { return vec4(c.x, c.y, c.z, a); }
+
+/// `p` with its cover times `k`.
+fn faded(p: Vec4, k: Float) -> Vec4 { return vec4(p.x, p.y, p.z, p.w * k); }
+
+/// `top` over `under`, as a painter lays one coat on another.
+fn over(under: Vec4, top: Vec4) -> Vec4 {
+    let a = top.w + under.w * (1.0 - top.w);
+    if a <= 0.0 { return clear(); }
+    let c = (top.xyz * top.w + under.xyz * under.w * (1.0 - top.w)) / a;
+    return vec4(c.x, c.y, c.z, a);
+}
+
+/// A painting laid over an opaque picture.
+fn onto(picture: Vec3, p: Vec4) -> Vec3 { return mix(picture, p.xyz, p.w); }
+
+/// How much of a pixel a shape covers whose edge is `d` from its middle,
+/// less than zero inside.
+fn cover(d: Float) -> Float { return clamp(0.5 - d, 0.0, 1.0); }
+
+/// The signed distance from `q` to a rectangle with corners rounded by
+/// `radius`: less than zero inside.
+fn rounded_distance(q: Vec2, r: Rect, radius: Float) -> Float {
+    let half = rect_size(r) * 0.5;
+    let k = min(radius, min(half.x, half.y));
+    let d = abs(q - rect_middle(r)) - half + vec2(k, k);
+    return length(max(d, vec2(0.0, 0.0))) + min(max(d.x, d.y), 0.0) - k;
+}
+
+/// A rectangle filled, its corners rounded by `radius`.
+fn fill(r: Rect, radius: Float, color: Vec4, q: Vec2) -> Vec4 {
+    if !near_rect(r, q, 1.0) { return clear(); }
+    return faded(color, cover(rounded_distance(q, r, radius)));
+}
+
+/// A rectangle's edge, `width` wide inside it.
+fn outline(r: Rect, radius: Float, width: Float, color: Vec4, q: Vec2) -> Vec4 {
+    if !near_rect(r, q, 1.0) { return clear(); }
+    let d = rounded_distance(q, r, radius);
+    return faded(color, cover(d) * (1.0 - cover(d + width)));
+}
+
+/// A rectangle filled `from` at its top to `to` at its bottom.
+fn graded(r: Rect, radius: Float, from: Vec4, to: Vec4, q: Vec2) -> Vec4 {
+    if !near_rect(r, q, 1.0) { return clear(); }
+    let t = clamp((q.y - r.lo.y) / max(r.hi.y - r.lo.y, 1.0), 0.0, 1.0);
+    return faded(mix(from, to, t), cover(rounded_distance(q, r, radius)));
+}
+
+/// The soft shadow a rectangle casts `by` below and right, spread over
+/// `blur` pixels, `strength` at its darkest.
+fn shadow(r: Rect, radius: Float, by: Vec2, blur: Float, strength: Float, q: Vec2) -> Vec4 {
+    let cast = moved(r, by);
+    if !near_rect(cast, q, blur) { return clear(); }
+    let d = rounded_distance(q, cast, radius);
+    return paint(vec3(0.0, 0.0, 0.0), strength * (1.0 - smoothstep(-blur, blur, d)));
+}
+
+/// A disc, and a ring `width` wide inside its edge.
+fn disc(middle: Vec2, radius: Float, color: Vec4, q: Vec2) -> Vec4 {
+    return faded(color, cover(length(q - middle) - radius));
+}
+fn ring(middle: Vec2, radius: Float, width: Float, color: Vec4, q: Vec2) -> Vec4 {
+    let d = length(q - middle) - radius;
+    return faded(color, cover(d) * (1.0 - cover(d + width)));
+}
+
+/// A line from `a` to `b`, `width` wide, its ends round.
+fn segment(a: Vec2, b: Vec2, width: Float, color: Vec4, q: Vec2) -> Vec4 {
+    let ab = b - a;
+    let t = clamp(dot(q - a, ab) / max(dot(ab, ab), 0.000001), 0.0, 1.0);
+    return faded(color, cover(length(q - a - ab * t) - width * 0.5));
+}
+
+/// A triangle pointing one way from its middle, `size` across: 0 left,
+/// 1 right, 2 up, 3 down; on whole pixels, as pixel art draws one.
+fn arrow(middle: Vec2, size: Float, way: Int, color: Vec4, q: Vec2) -> Vec4 {
+    let l = floor(q) - floor(middle);
+    let h = floor(size * 0.5);
+    // Along the way it points and across it.
+    let along = match way { 0 => -l.x, 1 => l.x, 2 => -l.y, _ => l.y };
+    let across = if way < 2 { l.y } else { l.x };
+    let t = along + floor(h * 0.5);
+    let inside = t >= 0.0 && t <= h && abs(across) <= h - t;
+    return if inside { color } else { clear() };
+}
+
+/// A tick in a box `size` across from `origin`.
+fn tick(origin: Vec2, size: Float, width: Float, color: Vec4, q: Vec2) -> Vec4 {
+    let a = origin + vec2(0.2, 0.55) * size;
+    let b = origin + vec2(0.42, 0.75) * size;
+    let c = origin + vec2(0.8, 0.28) * size;
+    return over(segment(a, b, width, color, q), segment(b, c, width, color, q));
+}

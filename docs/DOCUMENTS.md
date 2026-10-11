@@ -1,4 +1,4 @@
-# Orla documents
+# Entelechy documents
 
 **Answers:** how a Kernel and a scene are written.
 
@@ -6,17 +6,17 @@ Every type, builtin and form, at once: [REFERENCE](REFERENCE.md).
 
 Two file roles share one grammar, one lexer, and one literal syntax.
 
-- **`.orla` is a Kernel library.** It holds `kernel` items and the
+- **`.ent` is a Kernel library.** It holds `kernel` items and the
   declarations they share.
-- **`.osn` is a node graph.** The file is the graph: it uses libraries,
+- **`.esn` is a node graph.** The file is the graph: it uses libraries,
   declares its inputs and outputs, and places nodes. A node references a
-  published Kernel by id or carries its own Kernel inline, so one `.osn`
+  published Kernel by id or carries its own Kernel inline, so one `.esn`
   can be complete on its own.
 
 Both use `//` comments, `;`-terminated statements, and `{ }` blocks.
 Diagnostics are `file:line:column: message`. The exact language is
 defined by [the frontend](../crates/frontend/language/src/lib.rs) and its
-tests; `orla help <name>` shows any builtin's or form's signatures.
+tests; `entelechy help <name>` shows any builtin's or form's signatures.
 
 Whole scenes are in [`examples/`](../examples/README.md); the fragments
 below explain.
@@ -370,8 +370,8 @@ Work is bounded in loop iterations ([decision](DECISIONS.md)):
 ### Declarations, `use` and functions
 
 A struct, `type` or `fn` at the top of a document is shared by every
-Kernel in it and in every document that `use`s it. A `.orla` file may
-`use` other `.orla` files or directories: their top-level declarations
+Kernel in it and in every document that `use`s it. A `.ent` file may
+`use` other `.ent` files or directories: their top-level declarations
 come before the file's own. A scene's `use` brings them to its inline
 Kernels. A document sees what it uses itself: the declarations of the
 documents its `use` items name (each file of a directory, each file a
@@ -421,7 +421,7 @@ changes:
   `at_linear`); `.mid` as rows of `{start, duration, pitch, velocity,
   channel}`, ticks and tempo read as seconds; `.field`, any Field, the
   Host's format. A path through a package's name
-  (`"text.orlapkg/font.png"`) reads the file inside that package, as a
+  (`"text.entpkg/font.png"`) reads the file inside that package, as a
   `use` of it does. `run --save` and the protocol's `read` write all of them.
 - `input skills: Rows<Skill> = "data/skills.csv";`: a data table, `.csv`
   or `.json`, read as rows of the element the Kernel reading the input
@@ -441,7 +441,7 @@ changes:
   that cannot be read says the line or row and leaves the input as it
   was. One number alone is unnamed: a CSV's one column, or a JSON array
   of numbers.
-- `input title: Rows<Int> = text "ORLA";`: the characters' codes, updated
+- `input title: Rows<Int> = text "ENTELECHY";`: the characters' codes, updated
   when the document's text changes. A string writes a new line, a tab, a
   quote and a backslash as `\n`, `\t`, `\"` and `\\`, so one string may
   hold several lines of text.
@@ -627,8 +627,8 @@ device; the words that come out are the same.
 ## Graph
 
 ```text
-use "kernels/";                       // every .orla directly in the directory
-use "../shared/tonemap.orla";         // one library file
+use "kernels/";                       // every .ent directly in the directory
+use "../shared/tonemap.ent";         // one library file
 
 input photo: Image;                   // supplied by the caller
 param amount: Float = 1.0;            // a graph parameter, overridable by the caller
@@ -651,7 +651,7 @@ node trail: kernel {                  // an anonymous Kernel, placed here
 node glow: kernel fx.glow@1 { ... }   // a named inline Kernel: placed here and
                                       // also publishable to other nodes by id
 
-node display: graph "../shared/display.osn" {   // another graph placed as a node
+node display: graph "../shared/display.esn" {   // another graph placed as a node
     source <- glow.result;            // wires its `input`s
     exposure = 1.2;                   // sets its `param`s
 }
@@ -697,7 +697,7 @@ be keywords.
    must agree on, a battle beginning, is decided by one node, and the
    others take it from that node's new state `<-` and do not decide it
    again from what they read `<~`; a node that steps first reads the
-   others `<~`, and those after it read it `<-`. `orla graph` says under
+   others `<~`, and those after it read it `<-`. `entelechy graph` says under
    each node of its plan which nodes' new state and which committed
    state it reads.
 2. A source is a graph input by name or `node.port`. Inputs and nodes
@@ -742,7 +742,7 @@ be keywords.
    from two documents is an error. An anonymous inline Kernel is named
    `<document>.<node>@1`.
 7. A `use` path is relative to the document; a trailing `/` means the
-   directory's `.orla` files. Used documents hold Kernels only. A graph's
+   directory's `.ent` files. Used documents hold Kernels only. A graph's
    `input` may have any port type; a parent wires it like a node port,
    checked by shape and layout where it binds.
 8. A node may bind a backend's native operation by id: `node raster:
@@ -760,7 +760,7 @@ be keywords.
    `domain = size(canvas);`, so a surface sized by another node's output
    is drawn as the package draws it.
 9. A graph exposes `input`, `param` and `output` like a Kernel, so it is
-   placed with `node name: graph "path.osn" { ... }`. Placement
+   placed with `node name: graph "path.esn" { ... }`. Placement
    flattens it: its nodes join the parent under `name.`, its inputs take
    the parent's wires, its params the parent's values (or its defaults),
    and `name.output` reads its outputs. An inline Kernel's `param x:
@@ -816,7 +816,7 @@ be keywords.
 
 ### Packages
 
-A package is a directory, `name.orlapkg/`, with a manifest `package.osn`
+A package is a directory, `name.entpkg/`, with a manifest `package.esn`
 at its root:
 
 ```text
@@ -824,19 +824,19 @@ package image@1 { language = 1; ir = 1; }     // its id, and the least language 
 use "kernels/";                                // its Kernels, as any document uses them
 ```
 
-It holds its Kernel files, its graph presets (`.osn` placed by path,
-`node nes: graph "image.orlapkg/graphs/nes.osn" { ... }`), and assets
-a scene reads by path. `use "image.orlapkg";` brings its Kernels and
+It holds its Kernel files, its graph presets (`.esn` placed by path,
+`node nes: graph "image.entpkg/graphs/nes.esn" { ... }`), and assets
+a scene reads by path. `use "image.entpkg";` brings its Kernels and
 declarations in, as if the scene used what the manifest uses, when the
-manifest's versions are no newer than this Orla's (`orla version` prints
-`orla.api`, `orla.language`, `orla.ir`, `orla.package`). The directory
+manifest's versions are no newer than this Entelechy's (`entelechy version` prints
+`entelechy.api`, `entelechy.language`, `entelechy.ir`, `entelechy.package`). The directory
 is named for the package it holds, and a name is one package: a scene
 reaching two packages of one name, two editions of it, is refused. A
 `use` naming nothing beside the document is looked for by name beside
 the package the document is in, so a package names the packages it uses
-(`use "compact.orlapkg";`) wherever they are kept together, then in the
-directories `ORLA_PACKAGES` lists. `orla pack` writes a package as one `.orlapkg`
-file, `orla unpack` reads it back, `orla package` says what one holds. A
+(`use "compact.entpkg";`) wherever they are kept together, then in the
+directories `ENTELECHY_PACKAGES` lists. `entelechy pack` writes a package as one `.entpkg`
+file, `entelechy unpack` reads it back, `entelechy package` says what one holds. A
 Kernel reached by two paths is one file and one owner.
 
 ### Loading
@@ -845,7 +845,7 @@ The session parses the graph, publishes its inline Kernels, follows its
 `use` items, packages included, and rebuilds the Graph model. It
 publishes the Kernels of the documents the scene's `use` items name; of
 a document those use in turn it reaches the declarations only, so a node
-bound to a Kernel written there is said at load, and by `orla check`,
+bound to a Kernel written there is said at load, and by `entelechy check`,
 with the `use` that publishes it. A changed
 document republishes only the Kernels whose text changed; a rejected
 replacement keeps the running version; a Kernel that leaves its document

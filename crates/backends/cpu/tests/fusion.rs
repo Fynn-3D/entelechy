@@ -1,9 +1,11 @@
-use orla_abi::{Capability, Context, Domain, Host, Invocation, Scope, Value};
-use orla_compiler::{compile, compile_unoptimized};
-use orla_cpu::CpuBackend;
-use orla_ir::{counted, counts_only, fuse, fuse_indexed, fuse_outputs, offset_read, samples_only};
+use entelechy_abi::{Capability, Context, Domain, Host, Invocation, Scope, Value};
+use entelechy_compiler::{compile, compile_unoptimized};
+use entelechy_cpu::CpuBackend;
+use entelechy_ir::{
+    counted, counts_only, fuse, fuse_indexed, fuse_outputs, offset_read, samples_only,
+};
 
-fn granted() -> orla_abi::Capabilities {
+fn granted() -> entelechy_abi::Capabilities {
     Capability::ALL.into_iter().collect()
 }
 
@@ -12,8 +14,8 @@ const GRAYSCALE: &str = "kernel image.grayscale@1 { requires { field.read; field
 const PIXELATE: &str = "kernel image.pixelate@1 { requires { field.read; field.write; } input source: Image; param size: Int = 4; output result: Image; compute { let block = float(max(size, 1)); return fetch(source, floor(coord() / block) * block); } }";
 
 fn run(
-    module: &orla_ir::Validated,
-    inputs: Vec<orla_abi::Handle>,
+    module: &entelechy_ir::Validated,
+    inputs: Vec<entelechy_abi::Handle>,
     params: Vec<Value>,
     host: &mut Host,
 ) -> Vec<[f32; 4]> {
@@ -54,7 +56,7 @@ fn fused_pointwise_chain_is_bit_identical_to_the_materialized_chain() {
     let mut host = Host::new(4096);
     let intermediate = run(&gradient, vec![], vec![Value::Float(0.5)], &mut host);
     let handle = host
-        .adopt_image(orla_abi::Image::from_pixels(5, 4, intermediate).unwrap())
+        .adopt_image(entelechy_abi::Image::from_pixels(5, 4, intermediate).unwrap())
         .unwrap();
     let separate = run(&grayscale, vec![handle], vec![Value::Float(0.3)], &mut host);
     let together = run(
@@ -99,7 +101,7 @@ fn producer_helpers_with_struct_arguments_survive_fusion() {
         .expect("the helper is carried over");
     assert_eq!(
         helper.args,
-        [orla_ir::Type::Struct(3)],
+        [entelechy_ir::Type::Struct(3)],
         "shifted past the consumer's three structs"
     );
     let mut host = Host::new(1 << 16);
@@ -115,7 +117,7 @@ fn producer_helpers_with_struct_arguments_survive_fusion() {
             .into_iter()
             .collect(),
     );
-    let output = orla_cpu::CpuBackend
+    let output = entelechy_cpu::CpuBackend
         .execute(&fused, &invocation, &mut scope)
         .unwrap()[0];
     let values: Vec<f32> = (0..3)
@@ -153,7 +155,7 @@ fn a_whole_element_the_consumer_passes_on_keeps_its_own_struct() {
             .into_iter()
             .collect(),
     );
-    let output = orla_cpu::CpuBackend
+    let output = entelechy_cpu::CpuBackend
         .execute(&fused, &invocation, &mut scope)
         .unwrap()[0];
     let rows: Vec<[u32; 3]> = (0..4)
@@ -193,7 +195,7 @@ fn a_producer_of_several_outputs_fuses_whole_and_changes_no_bit() {
     let mut host = Host::new(1 << 16);
     let other = host
         .adopt_image(
-            orla_abi::Image::from_pixels(
+            entelechy_abi::Image::from_pixels(
                 5,
                 4,
                 (0..20).map(|i| [i as f32 * 0.1, 0.5, 0.25, 0.0]).collect(),
@@ -226,23 +228,23 @@ const LIFT: &str = "kernel test.lift@1 { requires { field.read; field.write; tim
 const JOIN: &str = "kernel test.join@1 { requires { field.read; field.write; } struct P { x: Float; n: Int; } input a: Rows<P>; input b: Rows<Float>; output result: Rows<Float>; compute { let k = element(); let n = count(a); if k < n { let p = at(a, k + 1); return p.x + float(p.n); } return at(b, k - n) + float(size(a)); } }";
 const TALLY: &str = "kernel test.tally@1 { requires { field.read; field.write; } input a: Rows<Float>; input b: Rows<Float>; output result: Rows<Float>; compute { return at(b, element()) + float(count(a)) * 0.5 + float(size(a)); } }";
 
-fn rows(host: &mut Host, values: &[f32]) -> orla_abi::Handle {
-    let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Float]);
+fn rows(host: &mut Host, values: &[f32]) -> entelechy_abi::Handle {
+    let schema = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float]);
     let words: Vec<u32> = values.iter().map(|v| v.to_bits()).collect();
     host.adopt(
-        orla_abi::FieldData::from_values(schema, Domain::Rows(values.len() as u32), &words)
+        entelechy_abi::FieldData::from_values(schema, Domain::Rows(values.len() as u32), &words)
             .unwrap(),
     )
     .unwrap()
 }
 
 fn run_rows(
-    module: &orla_ir::Validated,
-    inputs: Vec<orla_abi::Handle>,
+    module: &entelechy_ir::Validated,
+    inputs: Vec<entelechy_abi::Handle>,
     params: Vec<Value>,
     count: u32,
     host: &mut Host,
-) -> (orla_abi::Handle, Vec<u32>) {
+) -> (entelechy_abi::Handle, Vec<u32>) {
     let invocation = Invocation {
         inputs,
         params,

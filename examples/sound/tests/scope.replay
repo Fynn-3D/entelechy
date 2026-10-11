@@ -1,4 +1,4 @@
-scene ../parts/synth/scene.osn
+scene ../parts/synth/scene.esn
 
 # 220 Hz at 48 kHz over 800 frames is 3.67 cycles per block, low-passed
 # by the scan filter (cutoff 0.25 per sample lags the wave a little).

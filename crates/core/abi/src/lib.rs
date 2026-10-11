@@ -12,8 +12,8 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::str::FromStr;
 
-pub use orla_host::{DEFAULT_WORK, MAX_WORK, encoding};
-pub use orla_host::{
+pub use entelechy_host::{DEFAULT_WORK, MAX_WORK, encoding};
+pub use entelechy_host::{
     Domain, Encoding, FieldData, Handle, Host, HostError, Image, MadeFrom, PAGE_WORDS, Pages,
     Pixel, Scalar, Schema, Shape, Version,
 };
@@ -41,7 +41,7 @@ impl Capability {
         Capability::InputRead,
     ];
 
-    /// Stable spelling used in `.orla` sources and manifests.
+    /// Stable spelling used in `.ent` sources and manifests.
     pub fn name(self) -> &'static str {
         match self {
             Self::FieldRead => "field.read",
@@ -244,7 +244,7 @@ impl Type {
 }
 
 impl Type {
-    /// Stable spelling used in `.orla` sources; structs print by index.
+    /// Stable spelling used in `.ent` sources; structs print by index.
     pub fn name(self) -> &'static str {
         Self::NAMED
             .iter()

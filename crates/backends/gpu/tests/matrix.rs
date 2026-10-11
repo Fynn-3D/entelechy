@@ -1,11 +1,11 @@
 //! The feature matrix on the GPU: every feature under every mode, ints
 //! and booleans exact and floats to rounding against the interpreter.
 
-use orla_abi::{Capabilities, Capability, Host, Invocation, Scope};
-use orla_compiler::compile;
-use orla_cpu::CpuBackend;
-use orla_gpu::GpuBackend;
-use orla_rules::Backend;
+use entelechy_abi::{Capabilities, Capability, Host, Invocation, Scope};
+use entelechy_compiler::compile;
+use entelechy_cpu::CpuBackend;
+use entelechy_gpu::GpuBackend;
+use entelechy_rules::Backend;
 
 fn all() -> Capabilities {
     Capability::ALL.into_iter().collect()
@@ -16,7 +16,7 @@ fn every_feature_under_every_mode_matches_the_interpreter() {
     let Some(gpu) = GpuBackend::new().ok() else {
         return;
     };
-    let cases = orla_conformance::cases();
+    let cases = entelechy_conformance::cases();
     let failures = differences(&gpu, &cases);
     assert!(
         failures.is_empty(),
@@ -32,7 +32,7 @@ fn every_long_feature_matches_the_interpreter_where_the_device_has_longs() {
     let Some(gpu) = GpuBackend::new().ok() else {
         return;
     };
-    let cases = orla_conformance::long_cases();
+    let cases = entelechy_conformance::long_cases();
     let module = compile(&cases[0].source).unwrap();
     if gpu.declines(&module).is_some() {
         return;
@@ -49,7 +49,7 @@ fn every_long_feature_matches_the_interpreter_where_the_device_has_longs() {
 
 /// Each case's GPU run against the interpreter's: integers and booleans
 /// exact, floats to rounding.
-fn differences(gpu: &GpuBackend, cases: &[orla_conformance::Case]) -> Vec<String> {
+fn differences(gpu: &GpuBackend, cases: &[entelechy_conformance::Case]) -> Vec<String> {
     let mut failures = Vec::new();
     for case in cases {
         let module = match compile(&case.source) {
@@ -65,7 +65,7 @@ fn differences(gpu: &GpuBackend, cases: &[orla_conformance::Case]) -> Vec<String
             .iter()
             .map(|(schema, domain, words)| {
                 host.adopt(
-                    orla_abi::FieldData::from_values(schema.clone(), *domain, words).unwrap(),
+                    entelechy_abi::FieldData::from_values(schema.clone(), *domain, words).unwrap(),
                 )
                 .unwrap()
             })
@@ -143,7 +143,7 @@ fn differences(gpu: &GpuBackend, cases: &[orla_conformance::Case]) -> Vec<String
                 None => host.data(*b).unwrap().values().into_owned(),
             };
             if let Some(mismatch) =
-                orla_conformance::compare(&scalars, &reference, &candidate, 2e-4, 1e-3)
+                entelechy_conformance::compare(&scalars, &reference, &candidate, 2e-4, 1e-3)
             {
                 failures.push(format!("{}: output {which}: {mismatch}", case.name));
             }
@@ -160,7 +160,7 @@ fn every_element_shape_a_scatter_holds_matches_the_interpreter() {
     let Some(gpu) = GpuBackend::new().ok() else {
         return;
     };
-    let cases = orla_conformance::shape_cases();
+    let cases = entelechy_conformance::shape_cases();
     let mut taken = Vec::new();
     for case in &cases {
         let module = compile(&case.source).unwrap();
@@ -203,7 +203,7 @@ fn a_64_bit_feature_is_not_taken_and_says_why() {
     let Some(gpu) = GpuBackend::new().ok() else {
         return;
     };
-    for case in orla_conformance::wide_cases() {
+    for case in entelechy_conformance::wide_cases() {
         let module = compile(&case.source).unwrap();
         assert!(gpu.declines(&module).is_some(), "{}: taken", case.name);
         let Err(error) = Backend::prepare(&gpu, &module) else {
@@ -213,10 +213,10 @@ fn a_64_bit_feature_is_not_taken_and_says_why() {
     }
     // It takes everything else except a scan, which goes to an ordered
     // backend where there is one.
-    for case in orla_conformance::cases() {
+    for case in entelechy_conformance::cases() {
         let module = compile(&case.source).unwrap();
         match module.manifest.mode {
-            orla_ir::Mode::Scan => {
+            entelechy_ir::Mode::Scan => {
                 let why = gpu.declines(&module).unwrap_or_default();
                 assert!(
                     why.contains("a scan runs its steps in order"),
@@ -235,10 +235,10 @@ fn a_64_bit_feature_is_not_taken_and_says_why() {
 /// that does not fails at the first such element, in any addition order.
 #[test]
 fn integer_sums_are_whole_totals_on_gpu_as_everywhere() {
-    let Some(backend) = orla_gpu::GpuBackend::new().ok() else {
+    let Some(backend) = entelechy_gpu::GpuBackend::new().ok() else {
         return;
     };
-    let failures: Vec<String> = orla_conformance::sum_cases()
+    let failures: Vec<String> = entelechy_conformance::sum_cases()
         .iter()
         .filter_map(|(case, want)| {
             want.judge(&summed(&backend, case))
@@ -250,31 +250,33 @@ fn integer_sums_are_whole_totals_on_gpu_as_everywhere() {
 
 /// Runs one integer sum case on `backend`: the output's words, or why not.
 fn summed(
-    backend: &dyn orla_rules::Backend,
-    case: &orla_conformance::Case,
-) -> Result<Vec<u32>, orla_rules::ExecutionError> {
+    backend: &dyn entelechy_rules::Backend,
+    case: &entelechy_conformance::Case,
+) -> Result<Vec<u32>, entelechy_rules::ExecutionError> {
     let module =
-        orla_compiler::compile(&case.source).unwrap_or_else(|e| panic!("{}: {e}", case.name));
-    let mut host = orla_abi::Host::new(1 << 22);
+        entelechy_compiler::compile(&case.source).unwrap_or_else(|e| panic!("{}: {e}", case.name));
+    let mut host = entelechy_abi::Host::new(1 << 22);
     let inputs = case
         .inputs
         .iter()
         .map(|(schema, domain, words)| {
-            host.adopt(orla_abi::FieldData::from_values(schema.clone(), *domain, words).unwrap())
-                .unwrap()
+            host.adopt(
+                entelechy_abi::FieldData::from_values(schema.clone(), *domain, words).unwrap(),
+            )
+            .unwrap()
         })
         .collect();
-    let invocation = orla_abi::Invocation {
+    let invocation = entelechy_abi::Invocation {
         inputs,
         params: case.params.clone(),
         domain: case.domain,
         context: case.context,
     };
-    let all: orla_abi::Capabilities = orla_abi::Capability::ALL.into_iter().collect();
-    let mut scope = orla_abi::Scope::new(&mut host, all);
+    let all: entelechy_abi::Capabilities = entelechy_abi::Capability::ALL.into_iter().collect();
+    let mut scope = entelechy_abi::Scope::new(&mut host, all);
     let prepared = backend
         .prepare(&module)
-        .map_err(orla_rules::ExecutionError::Device)?;
+        .map_err(entelechy_rules::ExecutionError::Device)?;
     let outputs = backend.execute(prepared.as_ref(), &module, &invocation, &mut scope)?;
     drop(scope);
     // What stays on the device is brought home as the Host keeps it.
@@ -284,7 +286,7 @@ fn summed(
             let words = host.schema(outputs[0]).unwrap().storage_words(count);
             Ok(backend
                 .download(device, words * 4)
-                .map_err(orla_rules::ExecutionError::Device)?
+                .map_err(entelechy_rules::ExecutionError::Device)?
                 .chunks_exact(4)
                 .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                 .collect())
@@ -300,7 +302,7 @@ fn extents_past_a_floats_integers_match_the_interpreter() {
     let Some(gpu) = GpuBackend::new().ok() else {
         return;
     };
-    let cases = orla_conformance::large_cases();
+    let cases = entelechy_conformance::large_cases();
     let failures = differences(&gpu, &cases);
     assert!(
         failures.is_empty(),
@@ -317,11 +319,11 @@ fn every_case_run_twice_writes_the_same_words() {
         return;
     };
     assert!(backend.repeats_exactly());
-    let cases: Vec<_> = orla_conformance::repeat_cases()
+    let cases: Vec<_> = entelechy_conformance::repeat_cases()
         .into_iter()
         .filter_map(|case| compile(&case.source).ok().map(|module| (case, module)))
         .collect();
-    let failures = orla_conformance::unrepeated(&backend, &cases);
+    let failures = entelechy_conformance::unrepeated(&backend, &cases);
     assert!(
         failures.is_empty(),
         "{} of {} cases differ:\n{}",

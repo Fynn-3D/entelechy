@@ -9,14 +9,14 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use orla_graph::{Evaluator, Graph, Node, NodeId};
-use orla_kernel::{Context, Handle, KernelVersion, Runtime, Validated, Value};
+use entelechy_graph::{Evaluator, Graph, Node, NodeId};
+use entelechy_kernel::{Context, Handle, KernelVersion, Runtime, Validated, Value};
 
 use crate::SessionError;
 
 /// A vector component by letter (`xyzw` or `rgba`): its word and type.
-fn component_of(ty: orla_ir::Type, name: &str) -> Option<(usize, orla_ir::Type)> {
-    use orla_ir::Type;
+fn component_of(ty: entelechy_ir::Type, name: &str) -> Option<(usize, entelechy_ir::Type)> {
+    use entelechy_ir::Type;
     let (lanes, element) = match ty {
         Type::Vec2 => (2, Type::Float),
         Type::Vec3 => (3, Type::Float),
@@ -42,7 +42,7 @@ pub fn parse_target(text: &str) -> Result<(String, String, u32, Vec<String>), St
         .split_once(']')
         .ok_or_else(|| "name an element as `node.port[index]`".to_string())?;
     let (node, port) =
-        orla_graph::split_port(head).ok_or_else(|| "name `node.port`".to_string())?;
+        entelechy_graph::split_port(head).ok_or_else(|| "name `node.port`".to_string())?;
     let index = index
         .parse::<u32>()
         .map_err(|_| format!("element index `{index}` is not a whole number"))?;
@@ -135,7 +135,7 @@ pub(crate) enum Written {
     /// Reading the Field back from the device failed.
     Observe(String),
     /// The file's extension names no format.
-    Unknown(orla_formats::EncodeError),
+    Unknown(entelechy_formats::EncodeError),
     /// The Field does not fit the format the extension names.
     Unfit(&'static str),
     /// The store refused it.
@@ -169,12 +169,11 @@ pub(crate) fn write(
         .host()
         .data(handle)
         .map_err(|e| Written::Observe(e.to_string()))?;
-    let bytes = orla_formats::encode(data, &orla_formats::extension(path), None).map_err(
-        |why| match why {
-            orla_formats::EncodeError::Unfit(what) => Written::Unfit(what),
+    let bytes = entelechy_formats::encode(data, &entelechy_formats::extension(path), None)
+        .map_err(|why| match why {
+            entelechy_formats::EncodeError::Unfit(what) => Written::Unfit(what),
             unknown => Written::Unknown(unknown),
-        },
-    )?;
+        })?;
     store
         .write(path, &bytes)
         .map_err(|e| Written::Io(path.to_path_buf(), e))
@@ -229,13 +228,13 @@ pub(crate) fn trace_sources(target: &Node) -> Vec<NodeId> {
     let mut sources = Vec::new();
     for binding in target.inputs.values() {
         let read = match binding {
-            orla_graph::Binding::Now(source) => vec![source],
-            orla_graph::Binding::Previous {
+            entelechy_graph::Binding::Now(source) => vec![source],
+            entelechy_graph::Binding::Previous {
                 source, initial, ..
             } => vec![source, initial],
         };
         for source in read {
-            if let orla_graph::Source::Node { node, .. } = source {
+            if let entelechy_graph::Source::Node { node, .. } = source {
                 sources.push(node.clone());
             }
         }
@@ -259,7 +258,7 @@ pub(crate) fn trace_element(
     (target, version): (&Node, &Arc<KernelVersion>),
     context: &Context,
     at: [u32; 3],
-) -> Result<orla_cpu::Trace, String> {
+) -> Result<entelechy_cpu::Trace, String> {
     let invocation = evaluator
         .invocation(graph, target, version, runtime, inputs, context, params)
         .map_err(|error| error.to_string())?;
@@ -272,17 +271,17 @@ pub(crate) fn trace_element(
     let module = written.unwrap_or_else(|| version.module().expect("a traced Kernel has a module"));
     // Work-accounted, as a backend runs it.
     let (module, renumbering) =
-        orla_ir::account_renumbered(module).map_err(|error| error.to_string())?;
+        entelechy_ir::account_renumbered(module).map_err(|error| error.to_string())?;
     // Only the required capabilities the session grants.
-    let granted: orla_kernel::Capabilities = module
+    let granted: entelechy_kernel::Capabilities = module
         .manifest
         .requires
         .iter()
         .filter(|capability| runtime.grants().contains(*capability))
         .collect();
-    let mut scope = orla_kernel::Scope::new(runtime.host_mut(), granted);
-    let mut trace =
-        orla_cpu::trace(&module, &invocation, &mut scope, at).map_err(|error| error.to_string())?;
+    let mut scope = entelechy_kernel::Scope::new(runtime.host_mut(), granted);
+    let mut trace = entelechy_cpu::trace(&module, &invocation, &mut scope, at)
+        .map_err(|error| error.to_string())?;
     // A failure names its values as the written module numbers them.
     if let Some(fault) = &mut trace.fault {
         let function = fault
@@ -303,10 +302,10 @@ pub(crate) fn trace_element(
 /// starts at in the element, how many words it is, and the struct table
 /// its Kernel names its fields by.
 struct Located {
-    ty: orla_ir::Type,
+    ty: entelechy_ir::Type,
     offset: usize,
     words: usize,
-    structs: Vec<orla_ir::StructDef>,
+    structs: Vec<entelechy_ir::StructDef>,
 }
 
 fn locate(
@@ -315,7 +314,7 @@ fn locate(
     (node, port): (&NodeId, &str),
     path: &[String],
 ) -> Result<Located, String> {
-    use orla_ir::Type;
+    use entelechy_ir::Type;
     let kernel = graph
         .and_then(|graph| graph.nodes.iter().find(|n| &n.id == node))
         .map(|n| n.kernel.clone())
@@ -330,7 +329,7 @@ fn locate(
         .find(|o| o.name == port)
         .ok_or_else(|| format!("`{kernel}` has no output `{port}`"))?;
     // Struct table: the module's, or a native operation's own.
-    let structs: Vec<orla_ir::StructDef> = match (version.module(), version.native()) {
+    let structs: Vec<entelechy_ir::StructDef> = match (version.module(), version.native()) {
         (Some(module), _) => module.structs.clone(),
         (None, Some(op)) => op.structs(),
         (None, None) => Vec::new(),
@@ -338,7 +337,7 @@ fn locate(
     // Follow the path to a word offset and type.
     let mut ty = output.element();
     let mut offset = 0usize;
-    let words_of = |ty: Type| orla_ir::schema_of(ty, &structs).map_or(1, |s| s.value_words());
+    let words_of = |ty: Type| entelechy_ir::schema_of(ty, &structs).map_or(1, |s| s.value_words());
     for field in path {
         if let Some((component, element)) = component_of(ty, field) {
             offset += component;
@@ -394,7 +393,7 @@ pub(crate) fn element_field(
     (node, port): (&NodeId, &str),
     index: u32,
     path: &[String],
-) -> Result<(orla_ir::Type, Vec<u32>), String> {
+) -> Result<(entelechy_ir::Type, Vec<u32>), String> {
     let at = locate(graph, runtime, (node, port), path)?;
     let handle = evaluator
         .cached(node, port)
@@ -418,7 +417,7 @@ pub(crate) fn element_fields(
 ) -> Result<Vec<String>, String> {
     let at = locate(graph, runtime, (node, port), path)?;
     Ok(match at.ty {
-        orla_ir::Type::Struct(id) => at
+        entelechy_ir::Type::Struct(id) => at
             .structs
             .get(id as usize)
             .map(|def| def.fields.iter().map(|f| f.name.clone()).collect())
@@ -435,7 +434,7 @@ pub(crate) fn element_names(
     (node, port): (&NodeId, &str),
 ) -> Result<Vec<String>, String> {
     let at = locate(graph, runtime, (node, port), &[])?;
-    orla_ir::number_names(at.ty, &at.structs)
+    entelechy_ir::number_names(at.ty, &at.structs)
         .ok_or_else(|| format!("`{node}.{port}` holds a struct its Kernel does not describe"))
 }
 
@@ -445,7 +444,7 @@ pub(crate) fn read_pixel(
     image: Handle,
     x: u32,
     y: u32,
-) -> Result<orla_kernel::Pixel, SessionError> {
+) -> Result<entelechy_kernel::Pixel, SessionError> {
     // Reads four words of the materialized Field; the picture is not
     // copied.
     runtime
@@ -460,12 +459,14 @@ pub(crate) fn read_pixel(
     }
     let (width, height) = (domain.width(), domain.height() * domain.depth());
     if x >= width || y >= height {
-        return Err(SessionError::Host(orla_kernel::HostError::OutOfBounds {
-            x,
-            y,
-            width,
-            height,
-        }));
+        return Err(SessionError::Host(
+            entelechy_kernel::HostError::OutOfBounds {
+                x,
+                y,
+                width,
+                height,
+            },
+        ));
     }
     let words = host
         .element(image, y * width + x)

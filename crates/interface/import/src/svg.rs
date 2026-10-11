@@ -16,7 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
-use orla_host::{Domain, FieldData, Scalar, Schema};
+use entelechy_host::{Domain, FieldData, Scalar, Schema};
 use usvg::tiny_skia_path::{self, PathSegment, Point, Transform};
 
 /// How finely curves are cut: the largest distance, in parts of the
@@ -103,7 +103,7 @@ pub fn import(path: &Path, out_dir: &Path) -> Result<Imported, String> {
         ("view", &fields.view),
     ] {
         let file = out_dir.join(format!("{stem}.{name}.field"));
-        std::fs::write(&file, orla_formats::file::encode_data(data))
+        std::fs::write(&file, entelechy_formats::file::encode_data(data))
             .map_err(|e| format!("{}: {e}", file.display()))?;
         files.push(file);
     }

@@ -1,42 +1,42 @@
 # Packages
 
 A package is a capability with a stable interface, meant to be reused:
-a directory with a `package.osn` naming it and the least language and IR
+a directory with a `package.esn` naming it and the least language and IR
 it needs, a `kernels/` directory it `use`s, and `graphs/` presets a
 scene places as nodes. A scene, an example or another package uses it
-whole, `use "…/name.orlapkg";`, never a file inside it, so the
+whole, `use "…/name.entpkg";`, never a file inside it, so the
 manifest's versions hold; a preset in `graphs/` and a file it ships
 (`font.png`) are reached by their path inside it, or through its name
-(`input font: Grid<Float> = "text.orlapkg/font.png";`). Every package is used
-by an example, whose replay tests it. `orla pack` carries one as a single `.orlapkg` file and
-`orla unpack` opens it again; `orla package <dir>` prints what one
+(`input font: Grid<Float> = "text.entpkg/font.png";`). Every package is used
+by an example, whose replay tests it. `entelechy pack` carries one as a single `.entpkg` file and
+`entelechy unpack` opens it again; `entelechy package <dir>` prints what one
 holds.
 
 A scene reaches a package by path:
 
 ```text
-use "../../packages/image.orlapkg";
-node display: graph "../../packages/image.orlapkg/graphs/display.osn" { ... }
+use "../../packages/image.entpkg";
+node display: graph "../../packages/image.entpkg/graphs/display.esn" { ... }
 ```
 
-or by name, when `ORLA_PACKAGES` lists the directory it is in:
+or by name, when `ENTELECHY_PACKAGES` lists the directory it is in:
 
 ```sh
-ORLA_PACKAGES=/path/to/orla/packages orla run scene.osn
+ENTELECHY_PACKAGES=/path/to/entelechy/packages entelechy run scene.esn
 ```
 
 ```text
-use "image.orlapkg";
+use "image.entpkg";
 ```
 
-A package names the packages it uses by name, `use "compact.orlapkg";`,
+A package names the packages it uses by name, `use "compact.entpkg";`,
 and finds them beside itself wherever the two are kept together. A
 directory is named for the package its manifest declares, `name@1` in
-`name.orlapkg`, and a scene reaches one package of a name: two editions
+`name.entpkg`, and a scene reaches one package of a name: two editions
 of one are refused, naming both. A Kernel's own id carries the version
 its interface is held to.
 
-- **image** — what Orla does to pictures, over `Image`s in linear light:
+- **image** — what Entelechy does to pictures, over `Image`s in linear light:
   - colour: luminance, sRGB's transfer, HSV and Oklab, the colours of
     heat (`blackbody`) and of the wheel (`hue`), as functions, and
     `image.encode` / `image.decode` for a window or a file;
@@ -44,28 +44,28 @@ its interface is held to.
     and others), and compositing one picture over another as the W3C
     spec does, on sRGB's stored values as painting programs blend or on
     light itself;
-  - filters: Gaussian blur (`graphs/blur.osn`), a box shrink, any
-    convolution, unsharp sharpening (`graphs/sharpen.osn`), Sobel
+  - filters: Gaussian blur (`graphs/blur.esn`), a box shrink, any
+    convolution, unsharp sharpening (`graphs/sharpen.esn`), Sobel
     edges, dilation and erosion, bicubic resizing;
   - tone: exposure, contrast, saturation and hue in Oklab; levels;
     curves; 3D LUTs, and the neutral LUT a grade is baked into; ACES;
   - histograms by Oklab lightness, so equal bins are equal steps to the
     eye: counting by scatter, the cumulative count by prefix,
-    equalization (`graphs/equalize.osn`);
+    equalization (`graphs/equalize.esn`);
   - distance: the signed distance from every pixel to a shape, by jump
-    flooding (`graphs/distance.osn`);
+    flooding (`graphs/distance.esn`);
   - sampling: four texels blended through `mod` for a tile, which
-    `at_linear` cannot do at a Field's edge (`wrap.orla`), and the strip
+    `at_linear` cannot do at a Field's edge (`wrap.ent`), and the strip
     of mip levels with the reads that pick one, for a surface running
-    away from the eye (`graphs/mip.osn`);
-  - looks a scene places last: `graphs/display.osn` (tone and gamma);
-    `graphs/finish.osn`, a camera's, over a picture that keeps each
+    away from the eye (`graphs/mip.esn`);
+  - looks a scene places last: `graphs/display.esn` (tone and gamma);
+    `graphs/finish.esn`, a camera's, over a picture that keeps each
     pixel's depth in w: a glow round what is past white
-    (`graphs/bloom.osn`), depth of field at a focus the scene gives as
+    (`graphs/bloom.esn`), depth of field at a focus the scene gives as
     a row each frame, ACES, colour fringing, darkened corners and grain
     from the noise package's hash, each step a function another look
     composes (`fringed`, `defocus`, `vignetted`, `film_grain`);
-    `graphs/nes.osn`, coarse pixels held
+    `graphs/nes.esn`, coarse pixels held
     to the colours a scene gives;
   - palettes a scene gives as rows: each pixel the nearest colour in
     Oklab (`image.palette@2`), or the colour its lightness falls to,
@@ -81,20 +81,20 @@ its interface is held to.
   holds each operation to an answer worked by hand on three backends;
   `nebula`, `mipmap` and `package` use its looks and sampling.
 - **text** — a 5 by 7 font baked into `font.png`, the layout that turns
-  a string into glyph rows, and the Kernels that draw them. `write.orla`
+  a string into glyph rows, and the Kernels that draw them. `write.ent`
   draws from a Kernel's own code, pixel by pixel: a character, a run of
   codes (a word of a `text` input), a number, and the lengths a message
   is put together with. A scene
   binds the font beside using the package:
-  `input font: Grid<Float> = "../../packages/text.orlapkg/font.png";`
+  `input font: Grid<Float> = "../../packages/text.entpkg/font.png";`
 - **compact** — a row of flags in, the kept indices and their count
   out. A `domain` reading `value(count)` says how many things a frame
-  works on; this says which ones. `graphs/compact.osn` is the three
+  works on; this says which ones. `graphs/compact.esn` is the three
   steps — a prefix sum for the rank, a reduce for the count, a scatter
   that puts each kept index where its rank says — and what comes back
   sizes and steers whatever does the work. Frustum culling, live
   particles, the lights that reach a tile: the shape is the same.
-  `graphs/runs.osn` is the same rank for lists: each of a row of owners
+  `graphs/runs.esn` is the same rank for lists: each of a row of owners
   counts its entries, and the preset gives where each owner's run ends,
   how many entries there are and the row of -1 a scatter fills, walking
   what it counted; `owner` finds an entry's owner, `rounds` and
@@ -107,7 +107,7 @@ its interface is held to.
   bodies by the grid cell they are in, which is what turns every pair
   into the nine cells around one.
 - **skin** — a skeleton, the clips that pose it, and the mesh that
-  follows, its rotations the `transform` package's. `orla import`
+  follows, its rotations the `transform` package's. `entelechy import`
   writes the rows out of a rigged glTF and the
   Blender bridge writes the same ones ([the contract](../docs/RIGS.md)); sampling a clip, blending two,
   composing a joint's parents and moving a vertex by the four joints it
@@ -116,7 +116,7 @@ its interface is held to.
   for one — `instances * count(skeleton)` poses that many skeletons —
   and `skin.blend@1` takes a weight a joint, which is a mask, while
   `skin.add@1` lays a clip over a pose rather than into it.
-  `graphs/pose.osn` plays one clip as one node; `examples/skin` blends
+  `graphs/pose.esn` plays one clip as one node; `examples/skin` blends
   two by hand and `examples/crowd` poses sixty-four.
 - **transform** — rotations as quaternions and rigid transforms as
   matrices, as functions and no Kernels: a turn about an axis, one
@@ -127,15 +127,15 @@ its interface is held to.
   turns things uses the same.
 - **raster** — triangles turned into the surface a camera sees, as
   Kernels: for every pixel the nearest triangle's depth, normal and uv,
-  perspective-correct, and its row as `id`. `graphs/raster.osn` draws at
-  a `width` and `height`, `graphs/window.osn` at the window's size;
-  `graphs/cutout.osn` and `graphs/cutout_window.osn` take a `mask` and
+  perspective-correct, and its row as `id`. `graphs/raster.esn` draws at
+  a `width` and `height`, `graphs/window.esn` at the window's size;
+  `graphs/cutout.esn` and `graphs/cutout_window.esn` take a `mask` and
   leave out a fragment whose alpha there is below `cutout`, which is how
-  leaves and fences are drawn; `graphs/canvas.osn` draws over an empty
+  leaves and fences are drawn; `graphs/canvas.esn` draws over an empty
   `canvas` another node sized, so a surface follows a size the scene
   computes. Each covers a triangle with one
-  invocation; a `tiled` form of each (`tiled.osn`, `tiled_window.osn`,
-  `cutout_tiled.osn`, `cutout_tiled_window.osn`) cuts a triangle larger
+  invocation; a `tiled` form of each (`tiled.esn`, `tiled_window.esn`,
+  `cutout_tiled.esn`, `cutout_tiled_window.esn`) cuts a triangle larger
   than a `tile` across many, which a mesh of few large triangles wants on
   a device and a mesh of small ones pays for. It
   is the rasterizer every example places; `native.rasterize@1` in its
@@ -160,7 +160,7 @@ its interface is held to.
   carving (`VoxelShape`), baked into a volume (`voxel.shapes@1`) or
   painted over one (`voxel.paint@1`), which fed back is a world edited a
   frame at a time; one look of a volume by day at the window's size,
-  its sky and lights the scene's (`graphs/view.osn`), with the camera
+  its sky and lights the scene's (`graphs/view.esn`), with the camera
   and box a Kernel picks through
   (`voxel_view_camera`, `voxel_view_box`, `voxel_cell`); bodies, a
   volume at rest whose voxels carry a look and the joint they move with
@@ -182,7 +182,7 @@ its interface is held to.
   Used by the `nebula` example, whose replay holds the hashes to their
   bits on three backends.
 - **physics** — rigid circles and boxes in the plane that fall, collide,
-  rest, slide and bounce. `graphs/step.osn` is one step of a world of
+  rest, slide and bounce. `graphs/step.esn` is one step of a world of
   `Body` rows: pairs found through a grid of cells sorted by the `sort`
   package, manifolds of up to two points, every contact solved at once
   over substeps against its share of each body, and bounces; a world is
@@ -197,10 +197,10 @@ its interface is held to.
   - paint: coats laid over one another, rounded boxes, rims, shadows,
     discs, rings, lines, arrows and ticks, each edge smooth over a pixel;
   - letters: a text, UTF-8 a row a line, decoded once into rows of
-    letters of a fixed width (`graphs/text.osn`), a printable ASCII
+    letters of a fixed width (`graphs/text.esn`), a printable ASCII
     letter a cell from the text package's bitmap font and a wide one,
     Chinese say, two cells from an atlas the scene draws, square glyphs
-    in order of the codes it gives (`graphs/letters.osn`); the package
+    in order of the codes it gives (`graphs/letters.esn`); the package
     draws no font, and a character neither holds is a `?`; one text's
     letters or another's chosen by a number (`ui.either@1`), read anew
     only when it changes;
@@ -221,12 +221,12 @@ its interface is held to.
   screen is its widgets laid over one another. Used by the `ui`
   example.
 - **vector** — drawings filled pixel by pixel: the segments and shapes
-  `orla import` reads from SVG, drawn through a look (a middle point and a
+  `entelechy import` reads from SVG, drawn through a look (a middle point and a
   zoom) with nonzero or even-odd fills, colours and linear or radial
-  gradients, each edge smoothed over a pixel. `graphs/draw.osn` draws it
+  gradients, each edge smoothed over a pixel. `graphs/draw.esn` draws it
   tiled: each pixel asks only the shapes whose boxes reach its tile and
   their segments that reach the tile, over the winding of those past it,
   word for word what the plain `vector.draw@1` draws where every Kernel
   rounds alike, so a drawing of many thousand shapes draws in time.
-  `graphs/drawing.osn` draws one whole, fitted to the window. Used by the
+  `graphs/drawing.esn` draws one whole, fitted to the window. Used by the
   `vector` example.

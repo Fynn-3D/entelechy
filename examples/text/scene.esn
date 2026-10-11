@@ -1,0 +1,43 @@
+// Text drawn by Kernels: a title written as text at twice the size, the
+// whole font as a specimen, and the pointer's x as digits that follow it;
+// each is a row of glyphs painted over the picture through the font
+// atlas, a file the Host watches.
+use "../../packages/text.entpkg";
+
+input font: Grid<Float> = "../../packages/text.entpkg/font.png";
+// A string is an input of the document: the characters' codes as rows.
+input title: Rows<Int> = text "ENTELECHY";
+
+// The picture the text goes on.
+node back: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = vec2(192, 88);
+    compute { return vec4(0.09, 0.1, 0.13, 1.0); }
+}
+
+node title_glyphs: text.layout@1 { codes <- title; origin = vec2(8.0, 6.0); scale = 2.0; }
+node titled: text.draw@1 { under <- back.result; glyphs <- title_glyphs.result; font <- font; color = vec3(1.0, 0.85, 0.45); }
+
+// Every printable code once, sixteen to a line.
+node codes: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    domain = 95;
+    compute { return 32 + element(); }
+}
+node specimen: text.layout@1 { codes <- codes.result; origin = vec2(8.0, 30.0); wrap = 16; }
+node shown: text.draw@1 { under <- titled.result; glyphs <- specimen.result; font <- font; color = vec3(0.75, 0.78, 0.85); }
+
+// The pointer's x, as three digits at the top right.
+node probe: kernel {
+    requires { field.write; input.read; }
+    output result: Rows<Float>;
+    domain = 1;
+    compute { return pointer().x; }
+}
+node digits: text.digits@1 { values <- probe.result; places = 3; domain = places; }
+node readout: text.layout@1 { codes <- digits.result; origin = vec2(148.0, 6.0); scale = 2.0; }
+node view: text.draw@1 { under <- shown.result; glyphs <- readout.result; font <- font; color = vec3(0.5, 0.9, 0.6); }
+
+output result <- view.result;

@@ -17,7 +17,7 @@ mean, and the reset on drag; the interpreter and the JIT match word for
 word, the GPU to the last place.
 
 ```sh
-orla player examples/path/scene.osn
-orla replay examples/path/tests/path.replay
-orla render examples/path/scene.osn --frames 32 --backend gpu --window 320x240 --param samples=8 --out /tmp/path
+entelechy player examples/path/scene.esn
+entelechy replay examples/path/tests/path.replay
+entelechy render examples/path/scene.esn --frames 32 --backend gpu --window 320x240 --param samples=8 --out /tmp/path
 ```

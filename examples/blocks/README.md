@@ -12,6 +12,6 @@ The replay sets `param seed` and `param prefill`, drops a piece into
 the gap, and checks the row clears and the cells above fall.
 
 ```sh
-orla player examples/blocks/scene.osn --scale 2
-orla replay examples/blocks/tests/blocks.replay
+entelechy player examples/blocks/scene.esn --scale 2
+entelechy replay examples/blocks/tests/blocks.replay
 ```

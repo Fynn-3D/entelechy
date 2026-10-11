@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 window 320 180
 
 # A third of a second in: the curl has the elbow bent, and the shoulder,

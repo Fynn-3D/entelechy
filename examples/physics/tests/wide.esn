@@ -1,0 +1,33 @@
+// A ball on a ground wider than a loop counts cells, the ground the
+// last body: the pair is still found, in the one cell it begins in.
+use "../../../packages/physics.entpkg";
+
+node start: kernel {
+    requires { field.read; field.write; }
+    output result: Rows<Body>;
+    compute {
+        let i = element();
+        if i == 1 { return box(vec2(0.0, -150.0), vec2(150.0, 150.0), 0.0, 0.0); }
+        return circle(vec2(0.0, 0.52), 0.5, 1.0);
+    }
+    domain = 2;
+}
+
+node none: physics.no_contacts@1 { domain = 1; }
+node world: graph "../../../packages/physics.entpkg/graphs/step.esn" {
+    bodies <~ world.result from start.result;
+    held <~ world.contacts from none.result;
+    origin = vec2(-150.0, -300.0);
+    columns = 300;
+    rows = 300;
+    bits = 17;
+}
+
+node now: kernel {
+    requires { field.read; field.write; }
+    input bodies: Rows<Body> <- world.result;
+    output result: Rows<Body>;
+    compute { return sample(bodies); }
+}
+
+output bodies <- now.result;

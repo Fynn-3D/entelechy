@@ -3,14 +3,14 @@
 //! bytes where the layout keeps a scalar narrow (`f:unorm8`).
 //!
 //! ```text
-//! ORLAFIELD 1
+//! ENTELECHYFIELD 1
 //! Grid 64 16 1 f,f,f,f
 //! <width * height * depth * bytes-per-element bytes>
 //! ```
 
 use std::fmt;
 
-use orla_host::{Domain, FieldData, HostError, Schema, Shape};
+use entelechy_host::{Domain, FieldData, HostError, Schema, Shape};
 
 /// Why bytes are not a Field file.
 #[derive(Debug)]
@@ -45,7 +45,7 @@ impl fmt::Display for FileError {
 
 impl std::error::Error for FileError {}
 
-const MAGIC: &str = "ORLAFIELD 1";
+const MAGIC: &str = "ENTELECHYFIELD 1";
 
 /// Encodes a Field with its layout and extent, from its storage.
 pub fn encode(schema: &Schema, domain: Domain, storage: &[u32]) -> Vec<u8> {
@@ -165,7 +165,7 @@ mod tests {
     #[test]
     fn the_words_a_field_takes_are_read_from_its_header_alone() {
         let schema = Schema::new(vec![Scalar::Float; 2])
-            .with_encoding(orla_host::Encoding::Unorm8)
+            .with_encoding(entelechy_host::Encoding::Unorm8)
             .unwrap();
         let bytes = encode(&schema, Domain::Rows(3), &[0, 0]);
         // Six bytes of elements are two words, known from the header.
@@ -188,7 +188,7 @@ mod tests {
             3,
         ];
         let bytes = encode(&schema, Domain::Volume(1, 3, 1), &words);
-        assert!(bytes.starts_with(b"ORLAFIELD 1\nVolume 1 3 1 f,i\n"));
+        assert!(bytes.starts_with(b"ENTELECHYFIELD 1\nVolume 1 3 1 f,i\n"));
         let data = decode(&bytes).unwrap();
         assert_eq!(data.domain(), Domain::Volume(1, 3, 1));
         assert_eq!(data.schema(), &schema);
@@ -207,7 +207,7 @@ mod tests {
     fn a_narrow_field_keeps_its_bytes_in_its_file() {
         // Three elements of two unorm8 floats: six bytes in two words.
         let schema = Schema::new(vec![Scalar::Float; 2])
-            .with_encoding(orla_host::Encoding::Unorm8)
+            .with_encoding(entelechy_host::Encoding::Unorm8)
             .unwrap();
         let values: Vec<u32> = [0.0f32, 1.0, 0.5, 0.25, 1.0, 0.0]
             .iter()
@@ -216,14 +216,14 @@ mod tests {
         let data = FieldData::from_values(schema.clone(), Domain::Rows(3), &values).unwrap();
         assert_eq!(data.storage().len(), 2);
         let bytes = encode_data(&data);
-        let header = b"ORLAFIELD 1\nRows 3 1 1 f:unorm8,f:unorm8\n";
+        let header = b"ENTELECHYFIELD 1\nRows 3 1 1 f:unorm8,f:unorm8\n";
         assert!(bytes.starts_with(header));
         assert_eq!(&bytes[header.len()..], &[0, 255, 128, 64, 255, 0]);
         let back = decode(&bytes).unwrap();
         assert_eq!(back, data);
         assert_eq!(
             back.element(1).unwrap()[1],
-            orla_host::Encoding::Unorm8.decode(Scalar::Float, 64)
+            entelechy_host::Encoding::Unorm8.decode(Scalar::Float, 64)
         );
     }
 }

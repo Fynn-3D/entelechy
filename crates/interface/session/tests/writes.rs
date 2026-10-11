@@ -4,8 +4,8 @@
 
 use std::path::{Path, PathBuf};
 
-use orla_kernel::{Context, Value};
-use orla_session::{Event, Session};
+use entelechy_kernel::{Context, Value};
+use entelechy_session::{Event, Session};
 
 const KERNELS: &str = "
 kernel t.start@1 { requires { field.write; } output result: Rows<Int>; compute { return 5; } }
@@ -15,16 +15,16 @@ kernel t.bytes@1 { requires { field.write; } param top: Int = 255; output result
 ";
 
 fn scratch(name: &str, scene: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("orla-writes-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-writes-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("saves")).unwrap();
-    std::fs::write(dir.join("k.orla"), KERNELS).unwrap();
-    std::fs::write(dir.join("scene.osn"), scene).unwrap();
+    std::fs::write(dir.join("k.ent"), KERNELS).unwrap();
+    std::fs::write(dir.join("scene.esn"), scene).unwrap();
     dir
 }
 
 fn open(dir: &Path) -> Session {
-    let mut session = Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    let mut session = Session::open(&dir.join("scene.esn"), None, 1 << 20);
     let events = session.sync();
     assert!(session.graph().is_some(), "{events:?}");
     session
@@ -48,7 +48,7 @@ fn refused(events: &[Event]) -> Vec<String> {
 }
 
 fn saved(path: &Path) -> Vec<u32> {
-    orla_formats::read(path, None)
+    entelechy_formats::read(path, None)
         .unwrap()
         .0
         .values()
@@ -56,7 +56,7 @@ fn saved(path: &Path) -> Vec<u32> {
 }
 
 const SAVING: &str = "
-use \"k.orla\";
+use \"k.ent\";
 param by: Int = 1;
 input saved: Rows<Int> = \"saves/n.field\" else start.result;
 node start: t.start@1 { domain = 1; }
@@ -153,7 +153,7 @@ fn an_output_is_written_where_allowed_once_it_changed_and_read_back() {
 fn a_write_never_leaves_the_allowed_directory() {
     let dir = scratch(
         "outside",
-        "use \"k.orla\";
+        "use \"k.ent\";
 node start: t.start@1 { domain = 1; }
 output kept <- start.result to \"saves/../outside.field\";
 ",
@@ -178,7 +178,7 @@ output kept <- start.result to \"saves/../outside.field\";
 fn bytes_are_written_as_bytes_and_only_bytes_are() {
     let dir = scratch(
         "bytes",
-        "use \"k.orla\";
+        "use \"k.ent\";
 param top: Int = 255;
 input back: Rows<Int> = bytes \"saves/b.bin\" else made.result;
 node made: t.bytes@1 { top = top; domain = 5; }
@@ -221,14 +221,14 @@ kernel w.next@1 { requires { field.read; field.write; } input last: Rows<Wide>; 
 fn a_wide_layout_written_is_read_back() {
     let dir = scratch(
         "wide",
-        "use \"w.orla\";
+        "use \"w.ent\";
 input saved: Rows<Wide> = \"saves/w.field\" else start.result;
 node start: w.start@1 { domain = 1; }
 node next: w.next@1 { last <- saved; }
 output kept <- next.result to \"saves/w.field\";
 ",
     );
-    std::fs::write(dir.join("w.orla"), WIDE).unwrap();
+    std::fs::write(dir.join("w.ent"), WIDE).unwrap();
     let file = dir.join("saves/w.field");
     let mut session = open(&dir);
     session.allow_writes(&dir.join("saves")).unwrap();
@@ -244,7 +244,7 @@ output kept <- next.result to \"saves/w.field\";
         .unwrap()
         .0;
     assert!(
-        header_end > orla_formats::file::HEADER_BYTES,
+        header_end > entelechy_formats::file::HEADER_BYTES,
         "{header_end}"
     );
     let events = session.sync();

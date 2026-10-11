@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use orla_kernel::Context;
+use entelechy_kernel::Context;
 
 use crate::Session;
 
@@ -243,7 +243,7 @@ struct Total {
 
 impl Profile {
     /// Adds a frame's report: each node it ran.
-    pub fn add(&mut self, report: &orla_graph::Report) {
+    pub fn add(&mut self, report: &entelechy_graph::Report) {
         self.frames += 1;
         for ((node, took), placed) in report.timings.iter().zip(&report.placements) {
             let total = self.totals.entry(node.0.clone()).or_default();

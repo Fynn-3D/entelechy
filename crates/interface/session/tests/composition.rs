@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use orla_graph::{Context, EvaluateError, Evaluator, Graph, GraphError, NodeId};
-use orla_kernel::{ExecutionError, Runtime};
+use entelechy_graph::{Context, EvaluateError, Evaluator, Graph, GraphError, NodeId};
+use entelechy_kernel::{ExecutionError, Runtime};
 
 fn at(time: f32) -> Context {
     Context {
@@ -40,7 +40,7 @@ fn runtime() -> Runtime {
 
 #[test]
 fn graphs_bind_nodes_to_kernel_ids_and_reuse_unchanged_results() {
-    let graph = orla_scene::parse(DOCUMENT).unwrap();
+    let graph = entelechy_scene::parse(DOCUMENT).unwrap();
     let mut runtime = runtime();
     let mut evaluator = Evaluator::new();
     evaluator.set_fusion(false);
@@ -75,7 +75,7 @@ fn graphs_bind_nodes_to_kernel_ids_and_reuse_unchanged_results() {
 
 #[test]
 fn republishing_a_kernel_invalidates_only_its_dependents() {
-    let graph = orla_scene::parse(DOCUMENT).unwrap();
+    let graph = entelechy_scene::parse(DOCUMENT).unwrap();
     let mut runtime = runtime();
     let mut evaluator = Evaluator::new();
     evaluator.set_fusion(false);
@@ -116,7 +116,7 @@ fn republishing_a_kernel_invalidates_only_its_dependents() {
 
 #[test]
 fn parameter_and_structure_changes_are_tracked() {
-    let mut graph = orla_scene::parse(DOCUMENT).unwrap();
+    let mut graph = entelechy_scene::parse(DOCUMENT).unwrap();
     let mut runtime = runtime();
     let mut evaluator = Evaluator::new();
     evaluator.set_fusion(false);
@@ -132,7 +132,7 @@ fn parameter_and_structure_changes_are_tracked() {
 
     graph.nodes[1].params.insert(
         "amount".into(),
-        orla_graph::ParamValue::Literal(orla_graph::Value::Int(0)),
+        entelechy_graph::ParamValue::Literal(entelechy_graph::Value::Int(0)),
     );
     let report = evaluator
         .evaluate(
@@ -152,7 +152,7 @@ fn parameter_and_structure_changes_are_tracked() {
     graph.nodes.pop();
     graph.outputs = vec![(
         "result".into(),
-        orla_graph::Source::Node {
+        entelechy_graph::Source::Node {
             node: NodeId("gray".into()),
             port: "result".into(),
         },
@@ -175,7 +175,7 @@ fn parameter_and_structure_changes_are_tracked() {
 
 #[test]
 fn externals_feed_graph_inputs() {
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "input photo: Image;\nnode inv: image.invert@1 { source <- photo; }\noutput result <- inv.result;",
     )
     .unwrap();
@@ -217,7 +217,7 @@ fn externals_feed_graph_inputs() {
 
 #[test]
 fn failures_are_attributed_and_last_good_results_survive() {
-    let graph = orla_scene::parse(DOCUMENT).unwrap();
+    let graph = entelechy_scene::parse(DOCUMENT).unwrap();
     let mut runtime = runtime();
     let mut evaluator = Evaluator::new();
     let first = evaluator
@@ -253,7 +253,7 @@ fn failures_are_attributed_and_last_good_results_survive() {
     );
     assert!(runtime.host().read_pixel(first.output, 0, 0).is_ok());
 
-    let missing = orla_scene::parse(
+    let missing = entelechy_scene::parse(
         "node a: image.missing@1 { domain = vec2(1, 1); }\noutput r <- a.result;",
     )
     .unwrap();
@@ -274,23 +274,24 @@ fn failures_are_attributed_and_last_good_results_survive() {
 
 #[test]
 fn structural_errors_are_reported_before_execution() {
-    let cyclic = orla_scene::parse("node a: image.invert@1 { source <- b.result; }\nnode b: image.invert@1 { source <- a.result; }\noutput r <- a.result;").unwrap();
+    let cyclic = entelechy_scene::parse("node a: image.invert@1 { source <- b.result; }\nnode b: image.invert@1 { source <- a.result; }\noutput r <- a.result;").unwrap();
     assert!(matches!(cyclic.order(), Err(GraphError::Cycle(_))));
-    let dangling =
-        orla_scene::parse("node a: image.invert@1 { source <- nowhere; }\noutput r <- a.result;")
-            .unwrap();
+    let dangling = entelechy_scene::parse(
+        "node a: image.invert@1 { source <- nowhere; }\noutput r <- a.result;",
+    )
+    .unwrap();
     assert!(matches!(
         dangling.order(),
         Err(GraphError::UnknownSource { .. })
     ));
     // A name one letter out is suggested.
-    let near = orla_scene::parse(
+    let near = entelechy_scene::parse(
         "node source: image.gradient@1 { domain = vec2(1, 1); }\nnode a: image.invert@1 { source <- sorce.result; }\noutput r <- a.result;",
     )
     .unwrap();
     let message = near.order().unwrap_err().to_string();
     assert!(message.ends_with("did you mean `source`?"), "{message}");
-    let typo_port = orla_scene::parse(
+    let typo_port = entelechy_scene::parse(
         "node a: image.gradient@1 { domain = vec2(1, 1); }\nnode b: image.grayscale@1 { sorce <- a.result; }\noutput r <- b.result;",
     )
     .unwrap();
@@ -305,7 +306,7 @@ fn structural_errors_are_reported_before_execution() {
         .unwrap_err()
         .to_string();
     assert!(message.ends_with("did you mean `source`?"), "{message}");
-    let typo_kernel = orla_scene::parse(
+    let typo_kernel = entelechy_scene::parse(
         "node a: image.gradiant@1 { domain = vec2(1, 1); }\noutput r <- a.result;",
     )
     .unwrap();
@@ -324,14 +325,14 @@ fn structural_errors_are_reported_before_execution() {
         "{message}"
     );
     // The scene refuses a scene without output first; the graph still does.
-    let mut no_output = orla_scene::parse(
+    let mut no_output = entelechy_scene::parse(
         "node a: image.gradient@1 { domain = vec2(1, 1); }\noutput r <- a.result;",
     )
     .unwrap();
     no_output.outputs.clear();
     assert!(matches!(no_output.order(), Err(GraphError::NoOutput)));
     let no_domain =
-        orla_scene::parse("node a: image.gradient@1 { }\noutput r <- a.result;").unwrap();
+        entelechy_scene::parse("node a: image.gradient@1 { }\noutput r <- a.result;").unwrap();
     let mut runtime = runtime();
     let error = Evaluator::new()
         .evaluate(
@@ -343,7 +344,7 @@ fn structural_errors_are_reported_before_execution() {
         )
         .unwrap_err();
     assert_eq!(error, EvaluateError::NoDomain(NodeId("a".into())));
-    let bad_port = orla_scene::parse(
+    let bad_port = entelechy_scene::parse(
         "node a: image.gradient@1 { domain = vec2(1, 1); gain = 2; }\noutput r <- a.result;",
     )
     .unwrap();
@@ -369,7 +370,7 @@ fn only_clock_reading_nodes_re_execute_when_time_advances() {
         &mut runtime,
         "kernel image.pulse@1 { requires { field.read; field.write; time.read; } input source: Image; output result: Image; compute { let c = sample(source); return vec4(c.r * fract(time()), c.g, c.b, c.a); } }",
     );
-    let graph = orla_scene::parse("node source: image.gradient@1 { domain = vec2(2, 2); }\nnode pulse: image.pulse@1 { source <- source.result; }\noutput r <- pulse.result;").unwrap();
+    let graph = entelechy_scene::parse("node source: image.gradient@1 { domain = vec2(2, 2); }\nnode pulse: image.pulse@1 { source <- source.result; }\noutput r <- pulse.result;").unwrap();
     let mut evaluator = Evaluator::new();
     evaluator.set_fusion(false);
     let first = evaluator
@@ -419,7 +420,7 @@ fn a_node_whose_outputs_are_unchanged_spares_what_reads_them() {
         &mut runtime,
         "kernel test.second@1 { requires { field.write; time.read; } output result: Image; compute { return vec4(floor(time()), 0.0, 0.0, 1.0); } }",
     );
-    let graph = orla_scene::parse("node second: test.second@1 { domain = vec2(2, 2); }\nnode final: image.invert@1 { source <- second.result; }\noutput r <- final.result;").unwrap();
+    let graph = entelechy_scene::parse("node second: test.second@1 { domain = vec2(2, 2); }\nnode final: image.invert@1 { source <- second.result; }\noutput r <- final.result;").unwrap();
     let mut evaluator = Evaluator::new();
     evaluator.set_fusion(false);
     let mut frame = |time: f32| {
@@ -459,7 +460,7 @@ fn state_at_a_fixed_point_stops_advancing() {
     let mut runtime = runtime();
     load(&mut runtime, ZERO);
     load(&mut runtime, INCREMENT);
-    let graph = orla_scene::parse("node seed: test.zero@1 { domain = vec2(2, 2); }\nnode count: test.increment@1 { previous <~ count.result from seed.result; by = 0.0; }\noutput result <- count.result;").unwrap();
+    let graph = entelechy_scene::parse("node seed: test.zero@1 { domain = vec2(2, 2); }\nnode count: test.increment@1 { previous <~ count.result from seed.result; by = 0.0; }\noutput result <- count.result;").unwrap();
     let mut evaluator = Evaluator::new();
     evaluator.set_fusion(false);
     let mut frame = || {
@@ -490,7 +491,7 @@ node count: test.increment@1 { previous <~ count.result from seed.result; }
 output result <- count.result;
 ";
 
-fn red(runtime: &Runtime, handle: orla_kernel::Handle) -> f32 {
+fn red(runtime: &Runtime, handle: entelechy_kernel::Handle) -> f32 {
     runtime.host().read_pixel(handle, 1, 1).unwrap()[0]
 }
 
@@ -499,9 +500,9 @@ fn feedback_bindings_read_committed_state_and_advance_per_evaluation() {
     let mut runtime = cpu(1024);
     load(&mut runtime, ZERO);
     load(&mut runtime, INCREMENT);
-    let graph = orla_scene::parse(COUNTER).unwrap();
+    let graph = entelechy_scene::parse(COUNTER).unwrap();
     assert_eq!(
-        orla_scene::parse(&orla_scene::print(&graph)).unwrap(),
+        entelechy_scene::parse(&entelechy_scene::print(&graph)).unwrap(),
         graph
     );
     let mut evaluator = Evaluator::new();
@@ -571,13 +572,13 @@ fn a_failed_evaluation_commits_nothing() {
         &mut runtime,
         "kernel test.gate@1 { requires { field.read; field.write; } input source: Image; param d: Int = 1; output result: Image; compute { let q = 1 / d; return sample(source) * float(q); } }",
     );
-    let mut graph = orla_scene::parse(&format!(
+    let mut graph = entelechy_scene::parse(&format!(
         "{COUNTER}node gate: test.gate@1 {{ source <- count.result; d = 1; }}\n"
     ))
     .unwrap();
     graph.outputs = vec![(
         "result".into(),
-        orla_graph::Source::Node {
+        entelechy_graph::Source::Node {
             node: NodeId("gate".into()),
             port: "result".into(),
         },
@@ -597,7 +598,7 @@ fn a_failed_evaluation_commits_nothing() {
 
     graph.nodes[2].params.insert(
         "d".into(),
-        orla_graph::ParamValue::Literal(orla_graph::Value::Int(0)),
+        entelechy_graph::ParamValue::Literal(entelechy_graph::Value::Int(0)),
     );
     for _ in 0..2 {
         let error = evaluator
@@ -613,7 +614,7 @@ fn a_failed_evaluation_commits_nothing() {
     }
     graph.nodes[2].params.insert(
         "d".into(),
-        orla_graph::ParamValue::Literal(orla_graph::Value::Int(1)),
+        entelechy_graph::ParamValue::Literal(entelechy_graph::Value::Int(1)),
     );
     let report = evaluator
         .evaluate(
@@ -638,11 +639,11 @@ fn a_failed_evaluation_commits_nothing() {
 
 #[test]
 fn feedback_edges_are_not_dependencies_and_must_name_nodes() {
-    let ring = orla_scene::parse("node a: test.increment@1 { previous <~ b.result from seed.result; }\nnode b: test.increment@1 { previous <~ a.result from seed.result; }\nnode seed: test.zero@1 { domain = vec2(1, 1); }\noutput r <- a.result;").unwrap();
+    let ring = entelechy_scene::parse("node a: test.increment@1 { previous <~ b.result from seed.result; }\nnode b: test.increment@1 { previous <~ a.result from seed.result; }\nnode seed: test.zero@1 { domain = vec2(1, 1); }\noutput r <- a.result;").unwrap();
     assert!(ring.order().is_ok(), "mutual feedback is not a cycle");
-    let error = orla_scene::parse("input photo: Image;\nnode a: test.increment@1 { previous <~ photo from photo; }\noutput r <- a.result;").unwrap_err();
+    let error = entelechy_scene::parse("input photo: Image;\nnode a: test.increment@1 { previous <~ photo from photo; }\noutput r <- a.result;").unwrap_err();
     assert!(error.message.contains("carry no state"), "{error}");
-    let error = orla_scene::parse(
+    let error = entelechy_scene::parse(
         "node a: test.increment@1 { previous <~ a.result; }\noutput r <- a.result;",
     )
     .unwrap_err();
@@ -656,7 +657,7 @@ fn input_reading_nodes_re_execute_when_input_changes() {
         &mut runtime,
         "kernel image.paint@1 { requires { field.read; field.write; input.read; } input source: Image; output result: Image; compute { let c = sample(source); let near = length(coord() - pointer()) < 1.5; let hit = if near && pointer_down() { 1.0 } else { 0.0 }; return vec4(hit, float(key(65)), c.b, c.a); } }",
     );
-    let graph = orla_scene::parse("node source: image.gradient@1 { domain = vec2(4, 4); }\nnode paint: image.paint@1 { source <- source.result; }\noutput r <- paint.result;").unwrap();
+    let graph = entelechy_scene::parse("node source: image.gradient@1 { domain = vec2(4, 4); }\nnode paint: image.paint@1 { source <- source.result; }\noutput r <- paint.result;").unwrap();
     let mut evaluator = Evaluator::new();
     let mut context = Context::default();
     let first = evaluator
@@ -709,7 +710,7 @@ fn input_reading_nodes_re_execute_when_input_changes() {
 #[test]
 fn graph_params_feed_nodes_and_can_be_overridden() {
     let mut runtime = runtime();
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "param amount: Float = 1.0;\nnode source: image.gradient@1 { domain = vec2(2, 2); }\nnode gray: image.grayscale@1 { source <- source.result; amount = amount; }\noutput r <- gray.result;",
     )
     .unwrap();
@@ -728,7 +729,7 @@ fn graph_params_feed_nodes_and_can_be_overridden() {
         (gray[0] - gray[1]).abs() < 1e-5,
         "default 1.0 fully desaturates"
     );
-    let overrides = BTreeMap::from([("amount".to_string(), orla_graph::Value::Int(0))]);
+    let overrides = BTreeMap::from([("amount".to_string(), entelechy_graph::Value::Int(0))]);
     let second = evaluator
         .evaluate(
             &graph,
@@ -743,7 +744,7 @@ fn graph_params_feed_nodes_and_can_be_overridden() {
         runtime.host().read_pixel(second.output, 1, 0).unwrap(),
         [1.0, 0.0, 0.0, 1.0],
     );
-    let missing = BTreeMap::from([("nope".to_string(), orla_graph::Value::Int(0))]);
+    let missing = BTreeMap::from([("nope".to_string(), entelechy_graph::Value::Int(0))]);
     let third = evaluator
         .evaluate(
             &graph,
@@ -773,7 +774,7 @@ fn graph_params_feed_nodes_and_can_be_overridden() {
     );
 }
 
-fn pixels(runtime: &Runtime, handle: orla_kernel::Handle) -> Vec<[f32; 4]> {
+fn pixels(runtime: &Runtime, handle: entelechy_kernel::Handle) -> Vec<[f32; 4]> {
     runtime.host().image(handle).unwrap().pixels().to_vec()
 }
 
@@ -786,7 +787,7 @@ fn fusion_absorbs_sole_pointwise_producers_and_changes_no_pixel() {
     );
     // gradient -> gray -> inv -> blocks: gray and inv are pointwise; blocks
     // fetches, so it stays separate and absorbs nothing.
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "node source: image.gradient@1 { domain = vec2(6, 4); }
          node gray: image.grayscale@1 { source <- source.result; amount = 0.5; }
          node inv: image.invert@1 { source <- gray.result; }
@@ -898,8 +899,8 @@ fn fusion_absorbs_sole_pointwise_producers_and_changes_no_pixel() {
 }
 
 /// How many instructions a module holds, nested blocks included.
-fn instructions(module: &orla_ir::Module) -> usize {
-    fn walk(body: &[orla_ir::Instruction]) -> usize {
+fn instructions(module: &entelechy_ir::Module) -> usize {
+    fn walk(body: &[entelechy_ir::Instruction]) -> usize {
         body.iter()
             .map(|instruction| {
                 1 + instruction
@@ -926,28 +927,34 @@ struct Bounded {
     most: usize,
 }
 
-impl orla_kernel::Backend for Bounded {
+impl entelechy_kernel::Backend for Bounded {
     fn name(&self) -> &'static str {
         "bounded"
     }
     fn prepare(
         &self,
-        module: &orla_ir::Validated,
-    ) -> Result<Box<dyn orla_kernel::Prepared>, String> {
+        module: &entelechy_ir::Validated,
+    ) -> Result<Box<dyn entelechy_kernel::Prepared>, String> {
         let size = instructions(module);
         if size > self.most {
             return Err(format!("its {size} instructions pass {}", self.most));
         }
-        orla_kernel::Backend::prepare(&orla_cpu::CpuBackend, module)
+        entelechy_kernel::Backend::prepare(&entelechy_cpu::CpuBackend, module)
     }
     fn execute(
         &self,
-        prepared: &dyn orla_kernel::Prepared,
-        module: &orla_ir::Validated,
-        invocation: &orla_abi::Invocation,
-        scope: &mut orla_abi::Scope<'_>,
-    ) -> Result<Vec<orla_abi::Handle>, ExecutionError> {
-        orla_kernel::Backend::execute(&orla_cpu::CpuBackend, prepared, module, invocation, scope)
+        prepared: &dyn entelechy_kernel::Prepared,
+        module: &entelechy_ir::Validated,
+        invocation: &entelechy_abi::Invocation,
+        scope: &mut entelechy_abi::Scope<'_>,
+    ) -> Result<Vec<entelechy_abi::Handle>, ExecutionError> {
+        entelechy_kernel::Backend::execute(
+            &entelechy_cpu::CpuBackend,
+            prepared,
+            module,
+            invocation,
+            scope,
+        )
     }
 }
 
@@ -956,14 +963,14 @@ fn a_fused_group_the_backend_refuses_runs_unfused() {
     // The backend takes the largest of the three alone, and no more.
     let most = [GRADIENT, GRAYSCALE, INVERT]
         .iter()
-        .map(|source| instructions(&orla_compiler::compile(source).unwrap()))
+        .map(|source| instructions(&entelechy_compiler::compile(source).unwrap()))
         .max()
         .unwrap();
-    let mut runtime = orla_kernel::Runtime::with_backend(1024, Box::new(Bounded { most }));
+    let mut runtime = entelechy_kernel::Runtime::with_backend(1024, Box::new(Bounded { most }));
     for source in [GRADIENT, GRAYSCALE, INVERT] {
         load(&mut runtime, source);
     }
-    let graph = orla_scene::parse(DOCUMENT).unwrap();
+    let graph = entelechy_scene::parse(DOCUMENT).unwrap();
     let mut plain = Evaluator::new();
     plain.set_fusion(false);
     let reference = plain
@@ -1025,7 +1032,7 @@ fn outputs_state_sources_and_shared_producers_stay_materialized() {
     let mut runtime = runtime();
     load(&mut runtime, ZERO);
     load(&mut runtime, INCREMENT);
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "node seed: test.zero@1 { domain = vec2(2, 2); }
          node count: test.increment@1 { previous <~ count.result from seed.result; }
          node a: image.invert@1 { source <- count.result; }
@@ -1082,7 +1089,7 @@ fn a_long_pointwise_chain_fuses_into_groups_of_bounded_size() {
         ));
     }
     scene.push_str("output result <- n199.result;\n");
-    let graph = orla_scene::parse(&scene).unwrap();
+    let graph = entelechy_scene::parse(&scene).unwrap();
     let mut plain = Evaluator::new();
     plain.set_fusion(false);
     let reference = plain
@@ -1124,7 +1131,7 @@ fn a_long_pointwise_chain_fuses_into_groups_of_bounded_size() {
 fn fusion_prepares_on_the_worker_and_never_changes_a_pixel() {
     let mut runtime = runtime();
     runtime.set_background(true);
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "node source: image.gradient@1 { domain = vec2(6, 4); }
          node gray: image.grayscale@1 { source <- source.result; amount = 0.5; }
          node inv: image.invert@1 { source <- gray.result; }
@@ -1196,7 +1203,7 @@ fn reductions_produce_one_element_and_stay_out_of_fusion() {
         &mut runtime,
         "kernel test.show@1 { requires { field.read; field.write; } input total: Rows<Vec4>; output result: Image; compute { let t = at(total, 0); return t / 24.0; } }",
     );
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "node source: image.gradient@1 { domain = vec2(6, 4); }
          node gray: image.grayscale@1 { source <- source.result; amount = 1.0; }
          node total: test.total@1 { source <- gray.result; }
@@ -1223,7 +1230,7 @@ fn reductions_produce_one_element_and_stay_out_of_fusion() {
     let total = evaluator.cached(&NodeId("total".into()), "result").unwrap();
     assert_eq!(
         runtime.host().domain(total).unwrap(),
-        orla_kernel::Domain::Rows(1)
+        entelechy_kernel::Domain::Rows(1)
     );
     let expected: [f32; 4] = pixels(
         &runtime,
@@ -1240,7 +1247,7 @@ fn reductions_produce_one_element_and_stay_out_of_fusion() {
     }
 
     // A reduction with a domain is refused, the node named.
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "node source: image.gradient@1 { domain = vec2(6, 4); }
          node total: test.total@1 { source <- source.result; domain = 1; }
          output result <- total.result;",
@@ -1270,7 +1277,7 @@ fn scans_follow_their_input_and_stay_out_of_fusion() {
         &mut runtime,
         "kernel test.prefix@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan with total = 0 { return total + sample(rows); } }",
     );
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "node ramp: test.ramp@1 { domain = 5; }
          node prefix: test.prefix@1 { rows <- ramp.result; }
          output result <- prefix.result;",
@@ -1293,7 +1300,7 @@ fn scans_follow_their_input_and_stay_out_of_fusion() {
     );
     assert_eq!(
         runtime.host().domain(report.output).unwrap(),
-        orla_kernel::Domain::Rows(5)
+        entelechy_kernel::Domain::Rows(5)
     );
     let totals: Vec<i32> = (0..5)
         .map(|i| runtime.host().element(report.output, i).unwrap()[0] as i32)
@@ -1301,7 +1308,7 @@ fn scans_follow_their_input_and_stay_out_of_fusion() {
     assert_eq!(totals, [1, 3, 6, 10, 15]);
 
     // A domain other than the input's is refused by the backend.
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "node ramp: test.ramp@1 { domain = 5; }
          node prefix: test.prefix@1 { rows <- ramp.result; domain = 3; }
          output result <- prefix.result;",
@@ -1328,7 +1335,7 @@ fn a_write_replaces_committed_state_and_is_checked() {
     let mut runtime = cpu(1024);
     load(&mut runtime, ZERO);
     load(&mut runtime, INCREMENT);
-    let graph = orla_scene::parse(COUNTER).unwrap();
+    let graph = entelechy_scene::parse(COUNTER).unwrap();
     let mut evaluator = Evaluator::new();
     let ctx = Context::default();
     let count = NodeId("count".into());
@@ -1386,7 +1393,7 @@ fn a_demanded_evaluation_runs_the_state_and_skips_the_rest() {
     let mut runtime = cpu(1024);
     load(&mut runtime, ZERO);
     load(&mut runtime, INCREMENT);
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "node seed: test.zero@1 { domain = vec2(2, 2); }
          node count: test.increment@1 { previous <~ count.result from seed.result; }
          node view: test.increment@1 { previous <- count.result; by = 100.0; }
@@ -1462,8 +1469,8 @@ fn a_side_from_a_size_divides_as_one_from_the_window() {
         window: [101.0, 101.0],
         ..Context::default()
     };
-    let side = |runtime: &mut orla_kernel::Runtime, domain: &str| {
-        let graph = orla_scene::parse(&format!(
+    let side = |runtime: &mut entelechy_kernel::Runtime, domain: &str| {
+        let graph = entelechy_scene::parse(&format!(
             "node source: image.gradient@1 {{ domain = window(); }}\nnode half: image.grayscale@1 {{ source <- source.result; amount = 1.0; domain = {domain}; }}\noutput r <- half.result;"
         ))
         .unwrap();
@@ -1492,7 +1499,7 @@ fn a_side_from_a_size_divides_as_one_from_the_window() {
 #[test]
 fn a_domain_may_take_the_window_and_follows_it() {
     let mut runtime = runtime();
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "node source: image.gradient@1 { domain = window() / scale(); }\noutput r <- source.result;",
     )
     .unwrap();
@@ -1568,7 +1575,7 @@ fn a_memory_fed_back_persists_across_evaluations() {
         &mut runtime,
         "kernel test.count@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { let v = at(ram, 0) + 1; put(ram, 0, v); return v; } }",
     );
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "node ticks: test.ticks@1 { domain = 3; }
 node zero: test.zero@1 { domain = 2; }
 node machine: test.count@1 { ticks <- ticks.result; ram <~ machine.ram from zero.result; }
@@ -1585,7 +1592,7 @@ output r <- machine.result;",
             &BTreeMap::new(),
         )
         .unwrap();
-    let read = |runtime: &Runtime, handle: orla_kernel::Handle, i: u32| {
+    let read = |runtime: &Runtime, handle: entelechy_kernel::Handle, i: u32| {
         runtime.host().element(handle, i).unwrap()[0]
     };
     // Three steps count to three within the frame...
@@ -1629,7 +1636,7 @@ node count: tally.step@1 { previous <~ count.result from seed.result migrate tal
 output result <- count.result;
 ";
 
-fn tally(runtime: &Runtime, handle: orla_kernel::Handle) -> Vec<i32> {
+fn tally(runtime: &Runtime, handle: entelechy_kernel::Handle) -> Vec<i32> {
     runtime
         .host()
         .element(handle, 0)
@@ -1650,12 +1657,12 @@ fn a_republished_kernels_new_state_layout_is_migrated_reset_or_refused() {
     ] {
         load(&mut runtime, source);
     }
-    let graph = orla_scene::parse(TALLY_SCENE).unwrap();
+    let graph = entelechy_scene::parse(TALLY_SCENE).unwrap();
     assert_eq!(
-        orla_scene::parse(&orla_scene::print(&graph)).unwrap(),
+        entelechy_scene::parse(&entelechy_scene::print(&graph)).unwrap(),
         graph
     );
-    assert!(orla_scene::print(&graph).contains("migrate tally.upgrade@1"));
+    assert!(entelechy_scene::print(&graph).contains("migrate tally.upgrade@1"));
     let mut evaluator = Evaluator::new();
     let ctx = Context::default();
     let evaluate = |evaluator: &mut Evaluator, runtime: &mut Runtime, graph: &Graph| {
@@ -1688,7 +1695,7 @@ fn a_republished_kernels_new_state_layout_is_migrated_reset_or_refused() {
     // Back to the old layout with a wrong-layout migration: the evaluation
     // fails, the state stays, and the old Kernel reads it again.
     let wrong =
-        orla_scene::parse(&TALLY_SCENE.replace("tally.upgrade@1", "tally.wrong@1")).unwrap();
+        entelechy_scene::parse(&TALLY_SCENE.replace("tally.upgrade@1", "tally.wrong@1")).unwrap();
     load(&mut runtime, TALLY_STEP_V1);
     let error = evaluate(&mut evaluator, &mut runtime, &wrong).unwrap_err();
     assert!(
@@ -1709,7 +1716,8 @@ fn a_republished_kernels_new_state_layout_is_migrated_reset_or_refused() {
 
     // Without a migration, a changed layout restarts the state from its
     // initial source, reported.
-    let plain = orla_scene::parse(&TALLY_SCENE.replace(" migrate tally.upgrade@1", "")).unwrap();
+    let plain =
+        entelechy_scene::parse(&TALLY_SCENE.replace(" migrate tally.upgrade@1", "")).unwrap();
     load(&mut runtime, TALLY_STEP_V1);
     let report = evaluate(&mut evaluator, &mut runtime, &plain).unwrap();
     assert_eq!(tally(&runtime, report.output), vec![1]);
@@ -1750,8 +1758,8 @@ fn a_failed_evaluation_puts_back_the_state_a_migration_replaced() {
     let evaluate = |evaluator: &mut Evaluator, runtime: &mut Runtime, graph: &Graph| {
         evaluator.evaluate(graph, runtime, &BTreeMap::new(), &ctx, &BTreeMap::new())
     };
-    let plain = orla_scene::parse(TALLY_SCENE).unwrap();
-    let checked = orla_scene::parse(&format!(
+    let plain = entelechy_scene::parse(TALLY_SCENE).unwrap();
+    let checked = entelechy_scene::parse(&format!(
         "{TALLY_SCENE}node check: tally.check@1 {{ tally <- count.result; }}\noutput checked <- check.result;\n"
     ))
     .unwrap();
@@ -1771,7 +1779,7 @@ fn a_failed_evaluation_puts_back_the_state_a_migration_replaced() {
     assert_eq!(tally(&runtime, report.output), vec![5]);
 
     // Two ports: the second's migration gives the wrong layout. Both stay.
-    let two = orla_scene::parse(
+    let two = entelechy_scene::parse(
         "node seed: tally.zero@1 { domain = 1; }
 node a: tally.step@1 { previous <~ a.result from seed.result migrate tally.upgrade@1; }
 node b: tally.step@1 { previous <~ b.result from seed.result migrate tally.wrong@1; }
@@ -1811,8 +1819,8 @@ output result <- final.result;
 
 #[test]
 fn an_async_node_runs_off_the_frame_and_the_frame_carries_its_last_output() {
-    let graph = orla_scene::parse(OFF_FRAME).unwrap();
-    assert!(orla_scene::print(&graph).contains("async = true;"));
+    let graph = entelechy_scene::parse(OFF_FRAME).unwrap();
+    assert!(entelechy_scene::print(&graph).contains("async = true;"));
     let mut runtime = runtime();
     load(&mut runtime, COUNT);
     let mut evaluator = Evaluator::new();
@@ -1889,7 +1897,7 @@ const SPREAD: &str = "kernel test.spread@1 { requires { field.read; field.write;
 
 #[test]
 fn a_scatter_node_may_set_its_own_domain_and_still_writes_the_targets_extent() {
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "node zeros: test.zeros@1 { domain = 4; }\nnode spread: test.spread@1 { target <- zeros.result; domain = 10; }\nnode plain: test.spread@1 { target <- zeros.result; }\noutput result <- spread.result;\noutput plain <- plain.result;\n",
     )
     .unwrap();
@@ -1918,18 +1926,19 @@ fn a_scatter_node_may_set_its_own_domain_and_still_writes_the_targets_extent() {
 #[test]
 fn a_filled_field_says_what_it_cannot_hold_and_what_it_needs() {
     // A Field of a type a parameter cannot hold is a Kernel's work.
-    let error = orla_scene::parse(
+    let error = entelechy_scene::parse(
         "node cells: Grid<Cell> { domain = vec2(2, 2); }\noutput result <- cells.result;\n",
     )
     .unwrap_err()
     .to_string();
     assert!(error.contains("a Kernel fills it"), "{error}");
-    let error = orla_scene::parse("node zeros: Rows<Float> { }\noutput result <- zeros.result;\n")
-        .unwrap_err()
-        .to_string();
+    let error =
+        entelechy_scene::parse("node zeros: Rows<Float> { }\noutput result <- zeros.result;\n")
+            .unwrap_err()
+            .to_string();
     assert!(error.contains("needs a `domain`"), "{error}");
     // A filled Field is a Kernel of the document, so it takes a session.
-    let error = orla_scene::parse(
+    let error = entelechy_scene::parse(
         "node zeros: Rows<Float> { domain = 3; }\noutput result <- zeros.result;\n",
     )
     .unwrap_err()
@@ -1953,7 +1962,7 @@ fn a_node_placed_over_its_own_output_runs_as_one_repeated_execution() {
     let source = "node seed: test.seed@1 { domain = vec2(4, 3); }
          node step: test.step@1 { times = 5; carry previous <- result; previous <- seed.result; by = 2.0; }
          output result <- step.result;";
-    let graph = orla_scene::parse(source).unwrap();
+    let graph = entelechy_scene::parse(source).unwrap();
 
     // Unfused, every time is its own execution: the reference.
     let mut plain = Evaluator::new();
@@ -2016,7 +2025,7 @@ fn a_node_placed_over_its_own_output_runs_as_one_repeated_execution() {
 
     // The same run written by hand joins the same way; a step read
     // elsewhere is materialized, splitting the run there.
-    let watched = orla_scene::parse(
+    let watched = entelechy_scene::parse(
         "node seed: test.seed@1 { domain = vec2(4, 3); }
          node one: test.step@1 { previous <- seed.result; by = 2.0; }
          node two: test.step@1 { previous <- one.result; by = 2.0; }
@@ -2056,7 +2065,7 @@ output result <- rows.result;
 fn a_kernel_decides_how_many_elements_the_next_node_runs() {
     // `rows` is as long as the number `live` wrote this frame: the one
     // domain term that reads data.
-    let graph = orla_scene::parse(DECIDED).unwrap();
+    let graph = entelechy_scene::parse(DECIDED).unwrap();
     let mut runtime = cpu(1 << 16);
     for source in [TALLY, RUN] {
         load(&mut runtime, source);
@@ -2108,7 +2117,7 @@ fn a_kernel_decides_how_many_elements_the_next_node_runs() {
 
 #[test]
 fn a_domain_that_reads_a_field_still_fuses_with_its_producer() {
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "
 node live: test.tally@1 { domain = 1; }
 node rows: test.run@1 { live <- live.result; domain = value(live) * 3; }
@@ -2147,17 +2156,17 @@ output result <- twice.result;
 }
 
 /// A runtime on the reference backend, as a session opens one.
-fn cpu(budget_words: usize) -> orla_kernel::Runtime {
-    orla_kernel::Runtime::with_backend(budget_words, Box::new(orla_cpu::CpuBackend))
+fn cpu(budget_words: usize) -> entelechy_kernel::Runtime {
+    entelechy_kernel::Runtime::with_backend(budget_words, Box::new(entelechy_cpu::CpuBackend))
 }
 
 /// Compiles and publishes a Kernel as a session does: compiling is the
 /// caller's step, the runtime takes validated IR.
 fn load(
-    runtime: &mut orla_kernel::Runtime,
+    runtime: &mut entelechy_kernel::Runtime,
     source: &str,
-) -> std::sync::Arc<orla_kernel::KernelVersion> {
-    let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
+) -> std::sync::Arc<entelechy_kernel::KernelVersion> {
+    let module = entelechy_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
     runtime.load(module, source).unwrap()
 }
 
@@ -2166,11 +2175,11 @@ const COMBINE: &str = "kernel shade.combine@1 { requires { field.read; field.wri
 
 /// Evaluates `document` fused and unfused; returns the fused report and
 /// both pictures.
-fn fused_and_plain(document: &str) -> (orla_graph::Report, Vec<[f32; 4]>, Vec<[f32; 4]>) {
+fn fused_and_plain(document: &str) -> (entelechy_graph::Report, Vec<[f32; 4]>, Vec<[f32; 4]>) {
     let mut runtime = runtime();
     load(&mut runtime, SPLIT);
     load(&mut runtime, COMBINE);
-    let graph = orla_scene::parse(document).unwrap_or_else(|error| panic!("{error}"));
+    let graph = entelechy_scene::parse(document).unwrap_or_else(|error| panic!("{error}"));
     let mut plain = Evaluator::new();
     plain.set_fusion(false);
     let reference = plain
@@ -2244,14 +2253,14 @@ fn a_map_of_several_outputs_repeats_and_keeps_the_last_times_outputs() {
         &mut runtime,
         "kernel test.seed@1 { requires { field.write; } output result: Grid<Float>; compute { return coord().x; } }",
     );
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "node seed: test.seed@1 { domain = vec2(4, 3); }
          node walk: test.walk@1 { times = 3; carry previous <- result; previous <- seed.result; }
          output result <- walk.result;
          output trail <- walk.trail;",
     )
     .unwrap();
-    let words = |runtime: &Runtime, report: &orla_graph::Report| -> Vec<Vec<u32>> {
+    let words = |runtime: &Runtime, report: &entelechy_graph::Report| -> Vec<Vec<u32>> {
         report
             .outputs
             .iter()
@@ -2298,7 +2307,7 @@ fn a_narrow_field_between_two_nodes_is_written_and_read_not_fused_away() {
     let mut runtime = runtime();
     load(&mut runtime, PACK);
     load(&mut runtime, SHOW);
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "node source: image.gradient@1 { domain = vec2(6, 4); }
          node pack: image.pack@1 { source <- source.result; }
          node show: image.show@1 { packed <- pack.result; }
@@ -2321,7 +2330,7 @@ fn a_narrow_field_between_two_nodes_is_written_and_read_not_fused_away() {
         "the gradient fuses into pack; pack does not fuse into show"
     );
     // Pixel (3, 1) of a 6 by 4 gradient: u = 3/5, v = 1/3, as bytes.
-    let byte = |x: f32| (x * 255.0).round_ties_even() * orla_kernel::encoding::UNORM8 * 2.0;
+    let byte = |x: f32| (x * 255.0).round_ties_even() * entelechy_kernel::encoding::UNORM8 * 2.0;
     let pixel = runtime.host().read_pixel(report.output, 3, 1).unwrap();
     assert_eq!(pixel, [byte(0.6), byte(1.0 / 3.0), 0.0, 2.0]);
     let packed = evaluator.cached(&NodeId("pack".into()), "result").unwrap();
@@ -2332,7 +2341,7 @@ fn a_narrow_field_between_two_nodes_is_written_and_read_not_fused_away() {
     );
 
     // A picture of floats is not a picture of bytes: the binding says so.
-    let wide = orla_scene::parse(
+    let wide = entelechy_scene::parse(
         "node source: image.gradient@1 { domain = vec2(6, 4); }
          node show: image.show@1 { packed <- source.result; }
          output result <- show.result;",
@@ -2356,7 +2365,7 @@ const INT_ZERO: &str =
 const FAILS_AT: &str = "kernel t.fails@1 { requires { field.read; field.write; } input x: Rows<Int>; param at: Int = 5; output result: Rows<Int>; compute { return 100 / (at(x, 0) - at); } }";
 const COPY: &str = "kernel t.copy@1 { requires { field.read; field.write; } input x: Rows<Int>; output result: Rows<Int>; compute { return at(x, 0); } }";
 
-fn int_at(runtime: &Runtime, handle: orla_kernel::Handle) -> i32 {
+fn int_at(runtime: &Runtime, handle: entelechy_kernel::Handle) -> i32 {
     runtime.host().element(handle, 0).unwrap()[0] as i32
 }
 
@@ -2369,7 +2378,7 @@ fn a_failed_restore_leaves_no_run_going_and_commits_are_whole() {
     let (none, params) = (BTreeMap::new(), BTreeMap::new());
     let ctx = Context::default();
     // An async reader of the count, and a check that fails at 5.
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "node seed: t.zero@1 { domain = 1; }
 node count: t.inc@1 { previous <~ count.result from seed.result; domain = 1; }
 node slow: t.copy@1 { x <- count.result; async = true; domain = 1; }
@@ -2389,9 +2398,9 @@ output slow <- slow.result;
     let four = runtime
         .host_mut()
         .adopt(
-            orla_kernel::FieldData::from_values(
-                orla_kernel::Schema::new(vec![orla_kernel::Scalar::Int]),
-                orla_kernel::Domain::Rows(1),
+            entelechy_kernel::FieldData::from_values(
+                entelechy_kernel::Schema::new(vec![entelechy_kernel::Scalar::Int]),
+                entelechy_kernel::Domain::Rows(1),
                 &[4],
             )
             .unwrap(),
@@ -2428,9 +2437,9 @@ output slow <- slow.result;
         runtime
             .host_mut()
             .adopt(
-                orla_kernel::FieldData::from_values(
-                    orla_kernel::Schema::new(vec![orla_kernel::Scalar::Int]),
-                    orla_kernel::Domain::Rows(1),
+                entelechy_kernel::FieldData::from_values(
+                    entelechy_kernel::Schema::new(vec![entelechy_kernel::Scalar::Int]),
+                    entelechy_kernel::Domain::Rows(1),
                     &[v],
                 )
                 .unwrap(),
@@ -2462,7 +2471,7 @@ fn a_commit_advances_every_port_or_none() {
     for source in [INC, INT_ZERO] {
         load(&mut runtime, source);
     }
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "node seed: t.zero@1 { domain = 1; }
 node a: t.inc@1 { previous <~ a.result from seed.result; domain = 1; }
 node b: t.inc@1 { previous <~ a.bogus from seed.result; domain = 1; }
@@ -2490,7 +2499,7 @@ fn a_restore_that_swaps_two_ports_and_fails_puts_both_back() {
     for source in [INC, INT_ZERO, FAILS_AT] {
         load(&mut runtime, source);
     }
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "node seed: t.zero@1 { domain = 1; }
 node a: t.inc@1 { previous <~ a.result from seed.result; domain = 1; }
 node b: t.inc@1 { previous <~ b.result from seed.result; by = 10; domain = 1; }
@@ -2507,7 +2516,7 @@ output result <- check.result;
             .evaluate(&graph, &mut runtime, &none, &ctx, &params)
             .unwrap();
     }
-    let committed: BTreeMap<String, orla_kernel::Handle> = evaluator
+    let committed: BTreeMap<String, entelechy_kernel::Handle> = evaluator
         .committed_states()
         .into_iter()
         .map(|(node, _, handle)| (node.0, handle))
@@ -2527,7 +2536,7 @@ output result <- check.result;
         ],
     );
     assert!(refused.is_err());
-    let after: BTreeMap<String, orla_kernel::Handle> = evaluator
+    let after: BTreeMap<String, entelechy_kernel::Handle> = evaluator
         .committed_states()
         .into_iter()
         .map(|(node, _, handle)| (node.0, handle))
@@ -2554,7 +2563,7 @@ fn one_port_starts_again_and_the_others_keep_their_state() {
     let mut runtime = cpu(1024);
     load(&mut runtime, ZERO);
     load(&mut runtime, INCREMENT);
-    let graph = orla_scene::parse(TWO_COUNTERS).unwrap();
+    let graph = entelechy_scene::parse(TWO_COUNTERS).unwrap();
     let mut evaluator = Evaluator::new();
     let none = BTreeMap::new();
     let defaults = BTreeMap::new();
@@ -2617,7 +2626,7 @@ output other <- other.result;
 
 #[test]
 fn a_reset_lets_go_of_the_runs_that_began_from_the_state_it_forgot() {
-    let graph = orla_scene::parse(TWO_OFF_FRAME).unwrap();
+    let graph = entelechy_scene::parse(TWO_OFF_FRAME).unwrap();
     let mut runtime = runtime();
     load(&mut runtime, COUNT);
     let mut evaluator = Evaluator::new();
@@ -2688,7 +2697,7 @@ fn a_fused_chain_is_one_version_run_by_its_last_node() {
         ));
     }
     text.push_str("output result <- n31.result;\n");
-    let graph = orla_scene::parse(&text).unwrap();
+    let graph = entelechy_scene::parse(&text).unwrap();
     let mut evaluator = Evaluator::new();
     for _ in 0..3 {
         evaluator
@@ -2712,7 +2721,7 @@ fn a_fused_chain_is_one_version_run_by_its_last_node() {
 
 #[test]
 fn a_plan_follows_fusion_turned_off_and_on() {
-    let graph = orla_scene::parse(DOCUMENT).unwrap();
+    let graph = entelechy_scene::parse(DOCUMENT).unwrap();
     let mut runtime = runtime();
     let mut evaluator = Evaluator::new();
     let summary = |evaluator: &mut Evaluator, runtime: &mut Runtime| {
@@ -2737,12 +2746,13 @@ fn a_plan_follows_fusion_turned_off_and_on() {
 
 #[test]
 fn a_changed_graph_is_planned_anew_and_the_first_again() {
-    let first = orla_scene::parse(DOCUMENT).unwrap();
+    let first = entelechy_scene::parse(DOCUMENT).unwrap();
     // `gray` is also read as an output, so it is not fused away.
-    let second = orla_scene::parse(&format!("{DOCUMENT}output shade <- gray.result;\n")).unwrap();
+    let second =
+        entelechy_scene::parse(&format!("{DOCUMENT}output shade <- gray.result;\n")).unwrap();
     let mut runtime = runtime();
     let mut evaluator = Evaluator::new();
-    let mut summary = |graph: &orla_graph::Graph| {
+    let mut summary = |graph: &entelechy_graph::Graph| {
         evaluator
             .plan_summary(graph, &mut runtime, &BTreeMap::new(), &BTreeMap::new())
             .unwrap()
@@ -2761,7 +2771,7 @@ fn a_changed_graph_is_planned_anew_and_the_first_again() {
 /// in the evaluation, one reading it `<~` its state as committed.
 #[test]
 fn a_graph_says_what_each_node_reads_of_state() {
-    let graph = orla_scene::parse(
+    let graph = entelechy_scene::parse(
         "node begin: t.begin@1 { domain = 1; }
 node world: t.world@1 { previous <~ world.result from begin.result; fight <~ fight.result from begin.result; }
 node fight: t.fight@1 { previous <~ fight.result from begin.result; world <- world.result; }
@@ -2769,9 +2779,10 @@ node field: t.field@1 { fight <- fight.result; world <- world.result; begin <- b
 output result <- field.result;",
     )
     .unwrap();
-    let reads = |id: &str| graph.reads(&orla_graph::NodeId(id.into())).unwrap();
-    let names =
-        |nodes: &[orla_graph::NodeId]| nodes.iter().map(ToString::to_string).collect::<Vec<_>>();
+    let reads = |id: &str| graph.reads(&entelechy_graph::NodeId(id.into())).unwrap();
+    let names = |nodes: &[entelechy_graph::NodeId]| {
+        nodes.iter().map(ToString::to_string).collect::<Vec<_>>()
+    };
     assert!(!reads("begin").holds_state);
     let world = reads("world");
     assert!(world.holds_state);

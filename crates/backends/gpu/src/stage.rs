@@ -31,7 +31,7 @@ pub(crate) struct Staged {
     /// buffers, and the pack where some are packed.
     pub(crate) bound_inputs: Vec<(u32, wgpu::Buffer)>,
     /// A memory's copy, written by the steps, to adopt as that output.
-    pub(crate) memory_outputs: Vec<(usize, wgpu::Buffer, orla_abi::Domain)>,
+    pub(crate) memory_outputs: Vec<(usize, wgpu::Buffer, entelechy_abi::Domain)>,
     pub(crate) output_buffer: wgpu::Buffer,
     /// A map's outputs after the first, in the manifest's order.
     pub(crate) further_outputs: Vec<wgpu::Buffer>,
@@ -53,12 +53,12 @@ pub(crate) fn execution_domain(
     module: &Validated,
     invocation: &Invocation,
     scope: &Scope<'_>,
-) -> Result<orla_abi::Domain, ExecutionError> {
+) -> Result<entelechy_abi::Domain, ExecutionError> {
     Ok(match module.manifest.mode {
         Mode::Reduce | Mode::Prefix { .. } => scope.size(invocation.inputs[0])?,
-        Mode::Scan => orla_rules::check_scan(invocation, scope)?,
+        Mode::Scan => entelechy_rules::check_scan(invocation, scope)?,
         Mode::Scatter { base, .. } => {
-            orla_rules::check_scatter(invocation, scope, base as usize)?;
+            entelechy_rules::check_scatter(invocation, scope, base as usize)?;
             invocation.domain
         }
         Mode::Map => invocation.domain,
@@ -69,7 +69,7 @@ pub(crate) fn execution_domain(
 /// before a buffer is made for one.
 pub(crate) fn outputs_fit(
     module: &Validated,
-    domain: orla_abi::Domain,
+    domain: entelechy_abi::Domain,
     scope: &Scope<'_>,
 ) -> Result<(), ExecutionError> {
     let mut fields: Vec<_> = module
@@ -90,10 +90,10 @@ pub(crate) fn outputs_fit(
 pub(crate) fn adopt_outputs(
     scope: &mut Scope<'_>,
     module: &Validated,
-    output_domain: orla_abi::Domain,
+    output_domain: entelechy_abi::Domain,
     final_buffer: wgpu::Buffer,
     further_outputs: Vec<wgpu::Buffer>,
-    memory_outputs: Vec<(usize, wgpu::Buffer, orla_abi::Domain)>,
+    memory_outputs: Vec<(usize, wgpu::Buffer, entelechy_abi::Domain)>,
     spare: Option<Spare>,
 ) -> Result<Vec<Handle>, ExecutionError> {
     let output_port = &module.manifest.outputs[0];
@@ -301,7 +301,7 @@ impl GpuBackend {
         module: &Validated,
         invocation: &Invocation,
         scope: &mut Scope<'_>,
-        domain: orla_abi::Domain,
+        domain: entelechy_abi::Domain,
         timing: Option<&wgpu::QuerySet>,
     ) -> Result<Staged, ExecutionError> {
         let element_count = domain.count();
@@ -335,7 +335,7 @@ impl GpuBackend {
         let mut input_buffers: Vec<wgpu::Buffer> = Vec::with_capacity(invocation.inputs.len());
         // A memory's steps write it, so the bound buffer is a copy of the
         // input's, and that copy is the memory's output afterwards.
-        let mut memory_outputs: Vec<(usize, wgpu::Buffer, orla_abi::Domain)> = Vec::new();
+        let mut memory_outputs: Vec<(usize, wgpu::Buffer, entelechy_abi::Domain)> = Vec::new();
         let mut copies: Vec<(wgpu::Buffer, wgpu::Buffer, u64)> = Vec::new();
         for (index, handle) in invocation.inputs.iter().enumerate() {
             let extent = scope.size(*handle)?;
@@ -513,14 +513,14 @@ impl GpuBackend {
             });
         }
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("orla kernel"),
+            label: Some("entelechy kernel"),
             layout: &pipeline.main.1,
             entries: &entries,
         });
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("orla"),
+                label: Some("entelechy"),
             });
         for (from, to, size) in &copies {
             encoder.copy_buffer_to_buffer(from, 0, to, 0, *size);
@@ -547,7 +547,7 @@ impl GpuBackend {
         // No failure yet, no work taken, and the most the run may take;
         // written before this submission's passes run.
         if let Some((failure, _)) = &failure {
-            let limit = orla_rules::Run::new(scope.work()).limit();
+            let limit = entelechy_rules::Run::new(scope.work()).limit();
             let record: Vec<u8> = [0u32, 0, limit, 0, 0, 0, 0, 0]
                 .iter()
                 .flat_map(|word| word.to_le_bytes())
@@ -566,7 +566,7 @@ impl GpuBackend {
         }
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("orla kernel"),
+                label: Some("entelechy kernel"),
                 timestamp_writes: timing.map(|query_set| wgpu::ComputePassTimestampWrites {
                     query_set,
                     beginning_of_pass_write_index: Some(0),

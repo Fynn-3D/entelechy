@@ -1,4 +1,4 @@
-//! Orla IR to Cranelift.
+//! Entelechy IR to Cranelift.
 //!
 //! Every IR value is its words in the ABI's element layout, one
 //! Cranelift value per lane (a `Bool` is an `i32` of 0 or 1). `if` and
@@ -20,8 +20,8 @@ use cranelift_codegen::isa::TargetIsa;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{ArenaMemoryProvider, JITBuilder, JITModule};
 use cranelift_module::{DataDescription, FuncId, Linkage, Module as _};
-use orla_abi::{Encoding, Scalar, Type, encoding};
-use orla_ir::{BinaryOp, Function, Instruction, Intrinsic, Module, Op, UnaryOp, Validated};
+use entelechy_abi::{Encoding, Scalar, Type, encoding};
+use entelechy_ir::{BinaryOp, Function, Instruction, Intrinsic, Module, Op, UnaryOp, Validated};
 
 use crate::failure;
 use crate::frame;
@@ -144,55 +144,55 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
     let unary64_sig = sig(&[types::F64], &[types::F64]);
     let binary64_sig = sig(&[types::F64, types::F64], &[types::F64]);
     let imports = Imports {
-        linear: declare(&mut jit, "orla_jit_linear", &linear_sig)?,
-        key: declare(&mut jit, "orla_jit_key", &key_sig)?,
-        button: declare(&mut jit, "orla_jit_button", &key_sig)?,
-        put: declare(&mut jit, "orla_jit_put", &put_sig)?,
-        put_rows: declare(&mut jit, "orla_jit_put_rows", &put_rows_sig)?,
-        emit: declare(&mut jit, "orla_jit_emit", &emit_sig)?,
+        linear: declare(&mut jit, "entelechy_jit_linear", &linear_sig)?,
+        key: declare(&mut jit, "entelechy_jit_key", &key_sig)?,
+        button: declare(&mut jit, "entelechy_jit_button", &key_sig)?,
+        put: declare(&mut jit, "entelechy_jit_put", &put_sig)?,
+        put_rows: declare(&mut jit, "entelechy_jit_put_rows", &put_rows_sig)?,
+        emit: declare(&mut jit, "entelechy_jit_emit", &emit_sig)?,
         unary: [
-            (Intrinsic::Sin, "orla_jit_sinf"),
-            (Intrinsic::Cos, "orla_jit_cosf"),
-            (Intrinsic::Tan, "orla_jit_tanf"),
-            (Intrinsic::Asin, "orla_jit_asinf"),
-            (Intrinsic::Acos, "orla_jit_acosf"),
-            (Intrinsic::Atan, "orla_jit_atanf"),
-            (Intrinsic::Exp, "orla_jit_expf"),
-            (Intrinsic::Log, "orla_jit_logf"),
-            (Intrinsic::Exp2, "orla_jit_exp2f"),
-            (Intrinsic::Log2, "orla_jit_log2f"),
-            (Intrinsic::Sinh, "orla_jit_sinhf"),
-            (Intrinsic::Cosh, "orla_jit_coshf"),
-            (Intrinsic::Tanh, "orla_jit_tanhf"),
+            (Intrinsic::Sin, "entelechy_jit_sinf"),
+            (Intrinsic::Cos, "entelechy_jit_cosf"),
+            (Intrinsic::Tan, "entelechy_jit_tanf"),
+            (Intrinsic::Asin, "entelechy_jit_asinf"),
+            (Intrinsic::Acos, "entelechy_jit_acosf"),
+            (Intrinsic::Atan, "entelechy_jit_atanf"),
+            (Intrinsic::Exp, "entelechy_jit_expf"),
+            (Intrinsic::Log, "entelechy_jit_logf"),
+            (Intrinsic::Exp2, "entelechy_jit_exp2f"),
+            (Intrinsic::Log2, "entelechy_jit_log2f"),
+            (Intrinsic::Sinh, "entelechy_jit_sinhf"),
+            (Intrinsic::Cosh, "entelechy_jit_coshf"),
+            (Intrinsic::Tanh, "entelechy_jit_tanhf"),
         ]
         .into_iter()
         .map(|(intrinsic, name)| declare(&mut jit, name, &unary_sig).map(|id| (intrinsic, id)))
         .collect::<Result<Vec<_>, _>>()?,
-        powf: declare(&mut jit, "orla_jit_powf", &binary_sig)?,
-        atan2f: declare(&mut jit, "orla_jit_atan2f", &binary_sig)?,
-        fmodf: declare(&mut jit, "orla_jit_fmodf", &binary_sig)?,
-        half: declare(&mut jit, "orla_jit_half", &sig(&[i], &[i]))?,
+        powf: declare(&mut jit, "entelechy_jit_powf", &binary_sig)?,
+        atan2f: declare(&mut jit, "entelechy_jit_atan2f", &binary_sig)?,
+        fmodf: declare(&mut jit, "entelechy_jit_fmodf", &binary_sig)?,
+        half: declare(&mut jit, "entelechy_jit_half", &sig(&[i], &[i]))?,
         unary64: [
-            (Intrinsic::Sin, "orla_jit_sin"),
-            (Intrinsic::Cos, "orla_jit_cos"),
-            (Intrinsic::Tan, "orla_jit_tan"),
-            (Intrinsic::Asin, "orla_jit_asin"),
-            (Intrinsic::Acos, "orla_jit_acos"),
-            (Intrinsic::Atan, "orla_jit_atan"),
-            (Intrinsic::Exp, "orla_jit_exp"),
-            (Intrinsic::Log, "orla_jit_log"),
-            (Intrinsic::Exp2, "orla_jit_exp2"),
-            (Intrinsic::Log2, "orla_jit_log2"),
-            (Intrinsic::Sinh, "orla_jit_sinh"),
-            (Intrinsic::Cosh, "orla_jit_cosh"),
-            (Intrinsic::Tanh, "orla_jit_tanh"),
+            (Intrinsic::Sin, "entelechy_jit_sin"),
+            (Intrinsic::Cos, "entelechy_jit_cos"),
+            (Intrinsic::Tan, "entelechy_jit_tan"),
+            (Intrinsic::Asin, "entelechy_jit_asin"),
+            (Intrinsic::Acos, "entelechy_jit_acos"),
+            (Intrinsic::Atan, "entelechy_jit_atan"),
+            (Intrinsic::Exp, "entelechy_jit_exp"),
+            (Intrinsic::Log, "entelechy_jit_log"),
+            (Intrinsic::Exp2, "entelechy_jit_exp2"),
+            (Intrinsic::Log2, "entelechy_jit_log2"),
+            (Intrinsic::Sinh, "entelechy_jit_sinh"),
+            (Intrinsic::Cosh, "entelechy_jit_cosh"),
+            (Intrinsic::Tanh, "entelechy_jit_tanh"),
         ]
         .into_iter()
         .map(|(intrinsic, name)| declare(&mut jit, name, &unary64_sig).map(|id| (intrinsic, id)))
         .collect::<Result<Vec<_>, _>>()?,
-        pow: declare(&mut jit, "orla_jit_pow", &binary64_sig)?,
-        atan2: declare(&mut jit, "orla_jit_atan2", &binary64_sig)?,
-        fmod: declare(&mut jit, "orla_jit_fmod", &binary64_sig)?,
+        pow: declare(&mut jit, "entelechy_jit_pow", &binary64_sig)?,
+        atan2: declare(&mut jit, "entelechy_jit_atan2", &binary64_sig)?,
+        fmod: declare(&mut jit, "entelechy_jit_fmod", &binary64_sig)?,
     };
     // Every function takes the context, a pointer for its result's
     // words, then its arguments' words. Entries take the signatures of
@@ -209,7 +209,7 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
             .map_err(|error| error.to_string())?;
         functions.push((id, signature));
     }
-    let scan = module.manifest.mode == orla_ir::Mode::Scan;
+    let scan = module.manifest.mode == entelechy_ir::Mode::Scan;
     let entry_signature = if scan {
         sig(&[ptr, i, ptr, ptr], &[])
     } else {
@@ -228,7 +228,7 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
     };
     let merge_signature = sig(&[ptr, ptr, ptr, ptr], &[]);
     let merge_id = match &module.merge {
-        Some(_) if module.manifest.mode == orla_ir::Mode::Reduce => Some(
+        Some(_) if module.manifest.mode == entelechy_ir::Mode::Reduce => Some(
             jit.declare_function("merge", Linkage::Local, &merge_signature)
                 .map_err(|error| error.to_string())?,
         ),
@@ -237,7 +237,7 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
     // The scratch slot holds a `put`'s value, an input's element, or an
     // `emit`'s pair: an address of at most three words, then the element.
     let pair = match module.manifest.mode {
-        orla_ir::Mode::Scatter { base, .. } => {
+        entelechy_ir::Mode::Scatter { base, .. } => {
             module.manifest.inputs[base as usize]
                 .ty
                 .schema
@@ -431,7 +431,7 @@ struct Fx<'a, 'b> {
     powf: FuncRef,
     atan2f: FuncRef,
     fmodf: FuncRef,
-    /// `orla_jit_half`, which widens a half float.
+    /// `entelechy_jit_half`, which widens a half float.
     half: FuncRef,
     unary64: Vec<(Intrinsic, FuncRef)>,
     pow: FuncRef,
@@ -447,7 +447,7 @@ struct Fx<'a, 'b> {
     /// an execution, so loops hoist their loads.
     settled: MemFlags,
     /// The loop iterations an element may run, when the module counts
-    /// them; see [`orla_ir::Module::counts_work`].
+    /// them; see [`entelechy_ir::Module::counts_work`].
     budget: Option<u32>,
     /// When the module counts: the element's iterations, in a register
     /// and written to the context around calls; the next count that
@@ -566,7 +566,7 @@ impl<'a, 'b> Fx<'a, 'b> {
         let block = self
             .b
             .ins()
-            .bor_imm(looked, i64::from(orla_ir::WORK_BLOCK - 1));
+            .bor_imm(looked, i64::from(entelechy_ir::WORK_BLOCK - 1));
         let block_end = self.b.ins().iadd_imm(block, 1);
         let past = self.i32c(i64::from(budget) + 1);
         let at = self.b.ins().umin(block_end, past);
@@ -649,7 +649,7 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.b.switch_to_block(spend);
         self.b.seal_block(spend);
         let looked = self.b.use_var(seen);
-        let shift = i64::from(orla_ir::WORK_BLOCK.trailing_zeros());
+        let shift = i64::from(entelechy_ir::WORK_BLOCK.trailing_zeros());
         let filled_now = self.b.ins().ushr_imm(work, shift);
         let filled_before = self.b.ins().ushr_imm(looked, shift);
         let filled = self.b.ins().isub(filled_now, filled_before);
@@ -823,7 +823,7 @@ impl<'a, 'b> Fx<'a, 'b> {
             let short = self
                 .b
                 .ins()
-                .band_imm(held, i64::from(orla_ir::WORK_BLOCK - 1));
+                .band_imm(held, i64::from(entelechy_ir::WORK_BLOCK - 1));
             let short = self.b.ins().uextend(types::I64, short);
             let left = self
                 .b
@@ -888,7 +888,7 @@ impl<'a, 'b> Fx<'a, 'b> {
 
     /// A value's words stored in a stack slot of their own, and its
     /// address.
-    fn store_words(&mut self, id: orla_ir::ValueId) -> Value {
+    fn store_words(&mut self, id: entelechy_ir::ValueId) -> Value {
         let words = self.words(&id);
         let types = word_types(self.module, self.ty(&id));
         let slot = self.b.create_sized_stack_slot(StackSlotData::new(
@@ -974,11 +974,11 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.b.ins().global_value(self.ptr, global)
     }
 
-    fn words(&self, id: &orla_ir::ValueId) -> Vec<Value> {
+    fn words(&self, id: &entelechy_ir::ValueId) -> Vec<Value> {
         self.values[id.0 as usize].clone()
     }
 
-    fn ty(&self, id: &orla_ir::ValueId) -> Type {
+    fn ty(&self, id: &entelechy_ir::ValueId) -> Type {
         self.types[id.0 as usize]
     }
 
@@ -1020,7 +1020,7 @@ impl<'a, 'b> Fx<'a, 'b> {
     fn conversion(
         &mut self,
         intrinsic: Intrinsic,
-        args: &[orla_ir::ValueId],
+        args: &[entelechy_ir::ValueId],
         words: &[Value],
     ) -> Vec<Value> {
         let from = self.ty(&args[0]).scalar().unwrap_or(Type::Float);
@@ -1055,7 +1055,7 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.b.ins().fcmp(FloatCC::Unordered, v, v)
     }
 
-    /// `min` by `orla_rules::min_f32`: the other operand when one is NaN,
+    /// `min` by `entelechy_rules::min_f32`: the other operand when one is NaN,
     /// and of two equal zeros the negative (Cranelift's `fmin` orders the
     /// zeros; the NaN is replaced here).
     fn fmin(&mut self, a: Value, b: Value) -> Value {
@@ -1063,7 +1063,7 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.nan_gives_way(a, b, m)
     }
 
-    /// `max` by `orla_rules::max_f32`: of two equal zeros the positive.
+    /// `max` by `entelechy_rules::max_f32`: of two equal zeros the positive.
     fn fmax(&mut self, a: Value, b: Value) -> Value {
         let m = self.b.ins().fmax(a, b);
         self.nan_gives_way(a, b, m)
@@ -1229,8 +1229,8 @@ impl<'a, 'b> Fx<'a, 'b> {
     }
 
     /// One element of an input, loaded inline: extent and stride from the
-    /// view, the element clamped exactly as `orla_jit_sample` and
-    /// `orla_jit_read_rows` clamp.
+    /// view, the element clamped exactly as `entelechy_jit_sample` and
+    /// `entelechy_jit_read_rows` clamp.
     fn element_words(
         &mut self,
         input: u32,
@@ -1274,7 +1274,7 @@ impl<'a, 'b> Fx<'a, 'b> {
         if encoding == Encoding::Word {
             return self.loads(tys, self.flags, base, 0);
         }
-        let kinds: Vec<Scalar> = orla_ir::schema_of(ty, &self.module.structs)
+        let kinds: Vec<Scalar> = entelechy_ir::schema_of(ty, &self.module.structs)
             .map(|schema| schema.scalars().to_vec())
             .unwrap_or_default();
         let size = encoding.bytes() as i32;
@@ -1371,12 +1371,12 @@ impl<'a, 'b> Fx<'a, 'b> {
     fn part_offset(
         &mut self,
         input: u32,
-        path: &[orla_ir::Step],
+        path: &[entelechy_ir::Step],
         words: usize,
         unit: i64,
     ) -> Value {
         let element = self.module.manifest.inputs[input as usize].element();
-        let layout = orla_ir::part_layout(&self.module.structs, element, path)
+        let layout = entelechy_ir::part_layout(&self.module.structs, element, path)
             .expect("a path validation walked");
         let mut offset = self.i32c(layout.base as i64);
         for (index, count, stride) in layout.steps {
@@ -1426,7 +1426,7 @@ impl<'a, 'b> Fx<'a, 'b> {
     }
 
     /// A float address into a grid or volume, each axis floored, NaN as
-    /// zero, and clamped into the Field as an integer: `orla_rules::clamp_axis`
+    /// zero, and clamped into the Field as an integer: `entelechy_rules::clamp_axis`
     /// inline.
     fn float_index(&mut self, input: u32, x: Value, y: Value, z: Value) -> Value {
         let view = self.view(input);
@@ -1456,7 +1456,7 @@ impl<'a, 'b> Fx<'a, 'b> {
 
     /// The element `at` reads at `address`: an `Int` over rows, a `Vec2`
     /// or `Vec3` over a grid or volume.
-    fn address_index(&mut self, input: u32, address: &orla_ir::ValueId) -> Value {
+    fn address_index(&mut self, input: u32, address: &entelechy_ir::ValueId) -> Value {
         let words = self.words(address);
         match self.ty(address) {
             Type::Int => self.rows_index(input, words[0]),
@@ -1523,11 +1523,11 @@ impl<'a, 'b> Fx<'a, 'b> {
                     .numbers()
                     .into_iter()
                     .map(|number| match number {
-                        orla_ir::Number::Float(v) => self.f32c(v),
-                        orla_ir::Number::Int(v) => self.i32c(i64::from(v)),
-                        orla_ir::Number::Bool(v) => self.i32c(i64::from(v)),
-                        orla_ir::Number::Double(v) => self.b.ins().f64const(v),
-                        orla_ir::Number::Long(v) => self.b.ins().iconst(types::I64, v),
+                        entelechy_ir::Number::Float(v) => self.f32c(v),
+                        entelechy_ir::Number::Int(v) => self.i32c(i64::from(v)),
+                        entelechy_ir::Number::Bool(v) => self.i32c(i64::from(v)),
+                        entelechy_ir::Number::Double(v) => self.b.ins().f64const(v),
+                        entelechy_ir::Number::Long(v) => self.b.ins().iconst(types::I64, v),
                     })
                     .collect()
             }
@@ -2155,7 +2155,12 @@ impl<'a, 'b> Fx<'a, 'b> {
         }
     }
 
-    fn binary(&mut self, op: BinaryOp, a: &orla_ir::ValueId, b: &orla_ir::ValueId) -> Vec<Value> {
+    fn binary(
+        &mut self,
+        op: BinaryOp,
+        a: &entelechy_ir::ValueId,
+        b: &entelechy_ir::ValueId,
+    ) -> Vec<Value> {
         let (ta, tb) = (self.ty(a), self.ty(b));
         let (wa, wb) = (self.words(a), self.words(b));
         let int_like = ta.is_int_kind() || tb.is_int_kind();
@@ -2272,7 +2277,7 @@ impl<'a, 'b> Fx<'a, 'b> {
         }
     }
 
-    fn intrinsic(&mut self, intrinsic: Intrinsic, args: &[orla_ir::ValueId]) -> Vec<Value> {
+    fn intrinsic(&mut self, intrinsic: Intrinsic, args: &[entelechy_ir::ValueId]) -> Vec<Value> {
         let w: Vec<Vec<Value>> = args.iter().map(|a| self.words(a)).collect();
         let is_int = |fx: &Self, k: usize| fx.ty(&args[k]).is_int_kind();
         let map1 = |fx: &mut Self, f: &mut dyn FnMut(&mut Self, Value) -> Value| -> Vec<Value> {

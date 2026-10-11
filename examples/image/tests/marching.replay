@@ -1,4 +1,4 @@
-scene ../parts/marching/scene.osn
+scene ../parts/marching/scene.esn
 
 # At time zero the contour crosses the middle row at x = 89 and 314 and
 # the middle column at y = 119 and 244; the middle is inside, the

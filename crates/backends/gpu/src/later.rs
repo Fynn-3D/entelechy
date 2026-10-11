@@ -15,7 +15,7 @@ pub(crate) struct Coming {
     pub(crate) after: wgpu::SubmissionIndex,
 }
 
-impl orla_rules::Downloading for Coming {
+impl entelechy_rules::Downloading for Coming {
     fn take(self: Box<Self>) -> Result<Vec<u8>, String> {
         let slice = self.staging.slice(..);
         self.wait

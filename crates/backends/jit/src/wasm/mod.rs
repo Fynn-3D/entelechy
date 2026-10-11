@@ -1,6 +1,6 @@
 //! The JIT on WebAssembly: a Kernel's IR written as a module
-//! ([`translate`]) that the host loads into Orla's function table
-//! (`orla.load`, imported under `wasm-host`). The module imports Orla's
+//! ([`translate`]) that the host loads into Entelechy's function table
+//! (`entelechy.load`, imported under `wasm-host`). The module imports Entelechy's
 //! memory and table, so it reads Fields in place and calls helpers by
 //! their table index. The returned index is a function pointer, called
 //! like native code.
@@ -11,16 +11,16 @@ mod translate;
 use std::any::Any;
 use std::collections::HashMap;
 
-use orla_ir::{Mode, Validated};
-use orla_rules::Prepared;
+use entelechy_ir::{Mode, Validated};
+use entelechy_rules::Prepared;
 
 use encode::{Module, Val};
 use translate::{Fx, Kind, Shared, signature};
 
 #[cfg(feature = "wasm-host")]
-#[link(wasm_import_module = "orla")]
+#[link(wasm_import_module = "entelechy")]
 unsafe extern "C" {
-    /// Compiles `len` bytes of a module, instantiates it over Orla's
+    /// Compiles `len` bytes of a module, instantiates it over Entelechy's
     /// memory and table, puts the functions it exports as "0", "1", ...
     /// into the table, writes their indices to `slots` (at most `most`),
     /// and answers how many; below zero when the host refuses the module.
@@ -76,7 +76,7 @@ pub fn compile(module: &Validated) -> Result<Compiled, String> {
             ));
         }
     }
-    // A pointer to a helper is its index in Orla's table.
+    // A pointer to a helper is its index in Entelechy's table.
     let helpers: HashMap<&'static str, u32> = crate::symbols()
         .into_iter()
         .map(|(name, address)| (name, address as usize as u32))

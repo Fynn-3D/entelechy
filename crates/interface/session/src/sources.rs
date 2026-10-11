@@ -1,5 +1,5 @@
 //! Source resolution: what a `use` reaches (a file, a directory of
-//! `.orla`, or a package beside the document or in the store's
+//! `.ent`, or a package beside the document or in the store's
 //! [`Store::packages`]),
 //! inherited declarations, and where a missing name is declared.
 //! Stateless; reads through the given store.
@@ -8,12 +8,12 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use orla_kernel::KernelId;
-use orla_language::{Document, Kernel};
+use entelechy_kernel::KernelId;
+use entelechy_language::{Document, Kernel};
 
 use crate::store::{Kind, Parsed, Stamp, Store};
 
-/// The format of an `.orlapkg` archive and of a package's manifest.
+/// The format of an `.entpkg` archive and of a package's manifest.
 pub const PACKAGE_VERSION: u32 = 1;
 
 /// What a document's `use`s reach, and the stamp of everything the
@@ -136,8 +136,8 @@ impl Store for Watching<'_> {
     }
 }
 
-/// A `use` target's files: a file; each `.orla` directly in a
-/// directory; or a package (a directory with `package.osn`, beside the
+/// A `use` target's files: a file; each `.ent` directly in a
+/// directory; or a package (a directory with `package.esn`, beside the
 /// document or in the store's packages), whose manifest `use`s are followed
 /// once its versions fit.
 pub(crate) fn expand_use(
@@ -153,7 +153,7 @@ pub(crate) fn expand_use(
         true => path,
         false => in_package(store, &path).unwrap_or(path),
     };
-    if store.is_file(&path.join("package.osn")) {
+    if store.is_file(&path.join("package.esn")) {
         return package_files(store, &path).map(|files| files.into_iter().map(canonical).collect());
     }
     if trailing_slash || store.is_dir(&path) {
@@ -161,7 +161,7 @@ pub(crate) fn expand_use(
             .list(&path)
             .unwrap_or_default()
             .into_iter()
-            .filter(|path| path.extension().is_some_and(|ext| ext == "orla"))
+            .filter(|path| path.extension().is_some_and(|ext| ext == "ent"))
             .collect();
         files.sort();
         Ok(files.into_iter().map(canonical).collect())
@@ -178,7 +178,7 @@ fn used_through_its_manifest(store: &dyn Store, base: &Path, path: &Path) -> Res
     if !path.components().any(|part| {
         Path::new(part.as_os_str())
             .extension()
-            .is_some_and(|ext| ext == "orlapkg")
+            .is_some_and(|ext| ext == "entpkg")
     }) {
         return Ok(());
     }
@@ -207,13 +207,13 @@ fn used_through_its_manifest(store: &dyn Store, base: &Path, path: &Path) -> Res
 }
 
 /// The package `path` lies inside: the nearest directory above it named
-/// `*.orlapkg` that holds a manifest.
+/// `*.entpkg` that holds a manifest.
 pub(crate) fn package_holding(store: &dyn Store, path: &Path) -> Option<PathBuf> {
     path.ancestors()
         .skip(1)
         .find(|dir| {
-            dir.extension().is_some_and(|ext| ext == "orlapkg")
-                && store.is_file(&dir.join("package.osn"))
+            dir.extension().is_some_and(|ext| ext == "entpkg")
+                && store.is_file(&dir.join("package.esn"))
         })
         .map(Path::to_path_buf)
 }
@@ -244,7 +244,7 @@ pub fn locate_document(store: &dyn Store, path: &Path) -> Result<(PathBuf, Strin
 }
 
 /// Where a file named by `path` is: there, else, for a path through a
-/// package's name (`text.orlapkg/font.png`), inside that package; a
+/// package's name (`text.entpkg/font.png`), inside that package; a
 /// document's and an input's file alike.
 pub(crate) fn file_at(store: &dyn Store, path: &Path) -> PathBuf {
     if store.exists(path) {
@@ -254,17 +254,17 @@ pub(crate) fn file_at(store: &dyn Store, path: &Path) -> PathBuf {
 }
 
 /// Resolves a path through a package name
-/// (`image.orlapkg/graphs/x.osn`) to the existing file inside it.
+/// (`image.entpkg/graphs/x.esn`) to the existing file inside it.
 fn in_package(store: &dyn Store, path: &Path) -> Option<PathBuf> {
     let mut rest = PathBuf::new();
-    // The last `.orlapkg` part names the package, the path up to it where
+    // The last `.entpkg` part names the package, the path up to it where
     // it lies; the rest is inside.
     let mut name: Option<PathBuf> = None;
     let mut before = PathBuf::new();
     for part in path.components() {
         let piece = Path::new(part.as_os_str());
         before.push(piece);
-        if piece.extension().is_some_and(|ext| ext == "orlapkg") {
+        if piece.extension().is_some_and(|ext| ext == "entpkg") {
             name = Some(before.clone());
             rest = PathBuf::new();
         } else if name.is_some() {
@@ -292,7 +292,7 @@ fn resolve_package(store: &dyn Store, path: &Path) -> PathBuf {
         package_holding(store, path).and_then(|package| Some(package.parent()?.to_path_buf()));
     for dir in beside.iter().chain(store.packages()) {
         let candidate = dir.join(name);
-        if store.is_file(&candidate.join("package.osn")) {
+        if store.is_file(&candidate.join("package.esn")) {
             return candidate;
         }
     }
@@ -301,17 +301,17 @@ fn resolve_package(store: &dyn Store, path: &Path) -> PathBuf {
 
 /// The Kernel files a package's manifest uses, once its versions fit.
 pub(crate) fn package_files(store: &dyn Store, dir: &Path) -> Result<Vec<PathBuf>, String> {
-    let manifest = dir.join("package.osn");
+    let manifest = dir.join("package.esn");
     let declared = package_manifest(store, &manifest)?;
     let text = store
         .read_text(&manifest)
         .map_err(|e| format!("{}: {e}", manifest.display()))?;
-    let document =
-        orla_language::parse_document(&text).map_err(|e| format!("{}:{e}", manifest.display()))?;
+    let document = entelechy_language::parse_document(&text)
+        .map_err(|e| format!("{}:{e}", manifest.display()))?;
     let mut files = Vec::new();
     for item in &document.uses {
         let path = dir.join(&item.path.value);
-        if store.is_file(&path.join("package.osn"))
+        if store.is_file(&path.join("package.esn"))
             && store.canonical(&path).ok() == store.canonical(dir).ok()
         {
             return Err(format!(
@@ -325,57 +325,57 @@ pub(crate) fn package_files(store: &dyn Store, dir: &Path) -> Result<Vec<PathBuf
 }
 
 /// A checked package manifest: it declares a package whose language and
-/// IR versions this Orla supports.
+/// IR versions this Entelechy supports.
 pub fn package_manifest(
     store: &dyn Store,
     manifest: &Path,
-) -> Result<orla_language::PackageDecl, String> {
+) -> Result<entelechy_language::PackageDecl, String> {
     let text = store
         .read_text(manifest)
         .map_err(|e| format!("{}: {e}", manifest.display()))?;
-    let document =
-        orla_language::parse_document(&text).map_err(|e| format!("{}:{e}", manifest.display()))?;
+    let document = entelechy_language::parse_document(&text)
+        .map_err(|e| format!("{}:{e}", manifest.display()))?;
     let Some(declared) = document.package else {
         return Err(format!(
             "{}: a package manifest begins `package name@version {{ language = N; ir = N; }}`",
             manifest.display()
         ));
     };
-    // A directory named `name.orlapkg` holds the package `name`: the
+    // A directory named `name.entpkg` holds the package `name`: the
     // name a `use` finds it by is the name it declares.
     let dir = manifest.parent().unwrap_or_else(|| Path::new("."));
-    if dir.extension().is_some_and(|ext| ext == "orlapkg") {
+    if dir.extension().is_some_and(|ext| ext == "entpkg") {
         let named = dir.file_stem().unwrap_or_default().to_string_lossy();
         let declares = declared.id.value.split('@').next().unwrap_or_default();
         if named != declares {
             return Err(format!(
-                "{}: the directory `{named}.orlapkg` declares the package `{}`; a package's directory is named for it, `{declares}.orlapkg`",
+                "{}: the directory `{named}.entpkg` declares the package `{}`; a package's directory is named for it, `{declares}.entpkg`",
                 manifest.display(),
                 declared.id.value
             ));
         }
     }
-    if declared.language > orla_language::LANGUAGE_VERSION {
+    if declared.language > entelechy_language::LANGUAGE_VERSION {
         return Err(format!(
-            "package {} needs language {}, and this Orla has language {}",
+            "package {} needs language {}, and this Entelechy has language {}",
             declared.id.value,
             declared.language,
-            orla_language::LANGUAGE_VERSION
+            entelechy_language::LANGUAGE_VERSION
         ));
     }
-    if declared.ir > orla_ir::IR_VERSION {
+    if declared.ir > entelechy_ir::IR_VERSION {
         return Err(format!(
-            "package {} needs ir {}, and this Orla has ir {}",
+            "package {} needs ir {}, and this Entelechy has ir {}",
             declared.id.value,
             declared.ir,
-            orla_ir::IR_VERSION
+            entelechy_ir::IR_VERSION
         ));
     }
     Ok(declared)
 }
 
 /// Declarations a document shares: structs, type aliases, functions.
-pub type Declarations = orla_language::Declarations;
+pub type Declarations = entelechy_language::Declarations;
 
 /// Every document a `use` list reaches, recursively, each once,
 /// dependencies first. A name is one package: two packages of one name
@@ -383,7 +383,7 @@ pub type Declarations = orla_language::Declarations;
 pub fn used_documents(
     store: &dyn Store,
     base: &Path,
-    uses: &[orla_language::Use],
+    uses: &[entelechy_language::Use],
 ) -> Result<Vec<PathBuf>, String> {
     use std::collections::{BTreeMap, BTreeSet};
     struct Reach {
@@ -394,7 +394,7 @@ pub fn used_documents(
     fn gather(
         store: &dyn Store,
         base: &Path,
-        uses: &[orla_language::Use],
+        uses: &[entelechy_language::Use],
         reach: &mut Reach,
     ) -> Result<(), String> {
         for item in uses {
@@ -444,7 +444,7 @@ fn one_package_of_its_name(
     match packages.get(&name) {
         Some(held) if canonical(held) != canonical(&package) => {
             let id = |dir: &Path| {
-                package_manifest(store, &dir.join("package.osn"))
+                package_manifest(store, &dir.join("package.esn"))
                     .map(|declared| declared.id.value)
                     .unwrap_or_else(|_| name.clone())
             };
@@ -476,8 +476,8 @@ fn one_package_of_its_name(
 pub fn declarations_for(
     store: &dyn Store,
     base: &Path,
-    uses: &[orla_language::Use],
-    own: orla_language::Own<'_>,
+    uses: &[entelechy_language::Use],
+    own: entelechy_language::Own<'_>,
 ) -> Result<Declarations, String> {
     declarations_within(store, None, base, uses, own)
 }
@@ -498,14 +498,14 @@ pub fn declarations_within(
     store: &dyn Store,
     origin: Option<&Path>,
     base: &Path,
-    uses: &[orla_language::Use],
-    own: orla_language::Own<'_>,
+    uses: &[entelechy_language::Use],
+    own: entelechy_language::Own<'_>,
 ) -> Result<Declarations, String> {
     /// The documents `uses` names directly, after walking each one.
     fn gather(
         store: &dyn Store,
         base: &Path,
-        uses: &[orla_language::Use],
+        uses: &[entelechy_language::Use],
         visited: &mut std::collections::BTreeSet<PathBuf>,
         stack: &mut Vec<PathBuf>,
         reach: &mut Reach,
@@ -567,10 +567,10 @@ pub fn declarations_within(
     // The names are the language's: it is handed the documents and which
     // uses which.
     let place = |path: &Path| reach.documents.iter().position(|(p, _)| p == path);
-    let sources: Vec<orla_language::Source<'_>> = reach
+    let sources: Vec<entelechy_language::Source<'_>> = reach
         .documents
         .iter()
-        .map(|(path, document)| orla_language::Source {
+        .map(|(path, document)| entelechy_language::Source {
             name: path.display().to_string(),
             functions: &document.functions,
             structs: &document.structs,
@@ -598,7 +598,7 @@ pub fn declarations_within(
     {
         return named.clone();
     }
-    let named = orla_language::scope(&sources, &direct, own, &|name| {
+    let named = entelechy_language::scope(&sources, &direct, own, &|name| {
         builtin_names().contains(name)
     });
     if let (Some(parsed), Some(key)) = (store.parsed(), key) {
@@ -622,8 +622,8 @@ pub fn declarations_within(
 fn scope_key(
     store: &dyn Store,
     base: &Path,
-    uses: &[orla_language::Use],
-    own: orla_language::Own<'_>,
+    uses: &[entelechy_language::Use],
+    own: entelechy_language::Own<'_>,
     reached: &[(PathBuf, std::sync::Arc<Document>)],
 ) -> Option<String> {
     use std::fmt::Write;
@@ -665,7 +665,7 @@ fn hidden_builtin(message: &str) -> Option<&str> {
 fn builtin_names() -> &'static BTreeSet<&'static str> {
     static NAMES: std::sync::OnceLock<BTreeSet<&'static str>> = std::sync::OnceLock::new();
     NAMES.get_or_init(|| {
-        orla_compiler::help::builtins()
+        entelechy_compiler::help::builtins()
             .into_iter()
             .map(|b| b.name)
             .collect()
@@ -693,8 +693,8 @@ fn missing_name(message: &str) -> Option<String> {
 /// in one, else `document`. `held` is what the Kernel holds.
 pub(crate) fn written_in(
     document: &Path,
-    held: orla_language::Held<'_>,
-    error: &orla_compiler::CompileError,
+    held: entelechy_language::Held<'_>,
+    error: &entelechy_compiler::CompileError,
 ) -> PathBuf {
     error
         .declaration()
@@ -708,8 +708,8 @@ pub(crate) fn written_in(
 /// What an error of a Kernel says, each name the Kernel knows an
 /// inherited declaration by written as that declaration was written.
 pub(crate) fn said(
-    held: orla_language::Held<'_>,
-    error: &orla_compiler::CompileError,
+    held: entelechy_language::Held<'_>,
+    error: &entelechy_compiler::CompileError,
 ) -> crate::Diagnostic {
     let d = crate::Diagnostic::from(error);
     crate::Diagnostic {
@@ -721,12 +721,12 @@ pub(crate) fn said(
 /// What the declarations `inherited` and a document's own hold.
 pub(crate) fn held<'a>(
     inherited: (
-        &'a [orla_language::StructDecl],
-        &'a [orla_language::TypeAlias],
-        &'a [orla_language::FnDecl],
+        &'a [entelechy_language::StructDecl],
+        &'a [entelechy_language::TypeAlias],
+        &'a [entelechy_language::FnDecl],
     ),
-) -> orla_language::Held<'a> {
-    orla_language::Held {
+) -> entelechy_language::Held<'a> {
+    entelechy_language::Held {
         structs: inherited.0,
         types: inherited.1,
         functions: inherited.2,
@@ -739,12 +739,12 @@ pub(crate) fn functions_checked(
     path: &Path,
     document: &Document,
     inherited: (
-        &[orla_language::StructDecl],
-        &[orla_language::TypeAlias],
-        &[orla_language::FnDecl],
+        &[entelechy_language::StructDecl],
+        &[entelechy_language::TypeAlias],
+        &[entelechy_language::FnDecl],
     ),
 ) -> Result<(), crate::Diagnostic> {
-    orla_compiler::check_functions(document, inherited).map_err(|error| {
+    entelechy_compiler::check_functions(document, inherited).map_err(|error| {
         let at = written_in(path, held(inherited), &error);
         let d = said(held(inherited), &error);
         if at == path {
@@ -812,9 +812,9 @@ fn relative_to(store: &dyn Store, path: &Path, from: &Path) -> String {
 /// declaration that inherits it.
 pub(crate) fn declarations_key(
     store: &dyn Store,
-    structs: &[orla_language::StructDecl],
-    types: &[orla_language::TypeAlias],
-    functions: &[orla_language::FnDecl],
+    structs: &[entelechy_language::StructDecl],
+    types: &[entelechy_language::TypeAlias],
+    functions: &[entelechy_language::FnDecl],
 ) -> String {
     hashed(
         store,
@@ -833,15 +833,15 @@ pub(crate) fn reached_key(store: &dyn Store, kernel: &Kernel) -> String {
 
 fn hashed(
     store: &dyn Store,
-    structs: &[&orla_language::StructDecl],
-    types: &[&orla_language::TypeAlias],
-    functions: &[&orla_language::FnDecl],
+    structs: &[&entelechy_language::StructDecl],
+    types: &[&entelechy_language::TypeAlias],
+    functions: &[&entelechy_language::FnDecl],
 ) -> String {
     use std::fmt::Write;
     let mut key = Twice::default();
     let _ = write!(key, "{structs:?}{types:?}");
     for function in functions {
-        let orla_language::FnDecl {
+        let entelechy_language::FnDecl {
             name,
             generics,
             args,
@@ -859,7 +859,7 @@ fn hashed(
 /// entry whose body is gone is not its address's any more, and its
 /// allocation is not reused while the entry holds it.
 pub(crate) type BodyHashes =
-    std::collections::HashMap<usize, (std::sync::Weak<orla_language::Block>, u128)>;
+    std::collections::HashMap<usize, (std::sync::Weak<entelechy_language::Block>, u128)>;
 
 fn lock(parsed: &Parsed) -> std::sync::MutexGuard<'_, BodyHashes> {
     parsed
@@ -869,7 +869,7 @@ fn lock(parsed: &Parsed) -> std::sync::MutexGuard<'_, BodyHashes> {
 }
 
 /// A body's hash, from the store's bodies when it was hashed while held.
-fn body_hash(store: &dyn Store, body: &std::sync::Arc<orla_language::Block>) -> u128 {
+fn body_hash(store: &dyn Store, body: &std::sync::Arc<entelechy_language::Block>) -> u128 {
     use std::fmt::Write;
     let at = std::sync::Arc::as_ptr(body) as usize;
     if let Some(parsed) = store.parsed()
@@ -979,7 +979,7 @@ pub(crate) fn located(
     let Some(name) = missing_name(&error.message) else {
         return error;
     };
-    // Search known documents and `.orla` files beside this document,
+    // Search known documents and `.ent` files beside this document,
     // the scene and each known one, excluding what this already uses.
     let used: Vec<PathBuf> = store
         .document(document)
@@ -1087,7 +1087,7 @@ pub(crate) fn located(
         if let Ok(entries) = store.list(dir) {
             let mut files: Vec<PathBuf> = entries
                 .into_iter()
-                .filter(|path| path.extension().is_some_and(|ext| ext == "orla"))
+                .filter(|path| path.extension().is_some_and(|ext| ext == "ent"))
                 .collect();
             files.sort();
             search.append(&mut files);
@@ -1105,7 +1105,7 @@ pub(crate) fn located(
     search.retain(|path| {
         path != document
             && !used.iter().any(|seen| seen == path)
-            && path.extension().is_some_and(|ext| ext == "orla")
+            && path.extension().is_some_and(|ext| ext == "ent")
     });
     search.dedup();
     let Some((file, kind)) = declared_in(store, &name, &search) else {
@@ -1134,10 +1134,10 @@ pub(crate) fn located(
 pub(crate) fn unpublished(
     store: &dyn Store,
     root: &Path,
-    graph: &orla_graph::Graph,
+    graph: &entelechy_graph::Graph,
     uses: &[(PathBuf, bool)],
     own: &[KernelId],
-) -> Vec<(orla_graph::NodeId, KernelId, Option<String>)> {
+) -> Vec<(entelechy_graph::NodeId, KernelId, Option<String>)> {
     let files = Expanded::of(store, uses.to_vec()).files;
     let writes = |path: &Path, id: &KernelId| {
         store.document(path).is_ok_and(|parsed| {

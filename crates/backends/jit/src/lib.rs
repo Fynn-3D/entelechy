@@ -7,8 +7,8 @@
 //! checks, reads through the scope's gate, and libm. Native operations
 //! run on the wrapped CPU backend.
 //!
-//! When Orla is itself WebAssembly, the code is WebAssembly (`wasm`),
-//! loaded into Orla's function table; a table index stands for a
+//! When Entelechy is itself WebAssembly, the code is WebAssembly (`wasm`),
+//! loaded into Entelechy's function table; a table index stands for a
 //! function pointer.
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -28,10 +28,10 @@ use std::sync::Arc;
 use cranelift_codegen::isa::TargetIsa;
 #[cfg(not(target_arch = "wasm32"))]
 use cranelift_codegen::settings::{self, Configurable};
-use orla_abi::{Domain, Handle, Invocation, Scope};
-use orla_ir::{Combine, Mode, Validated};
-use orla_rules::{ArithmeticError, ExecutionError, check_invocation};
-use orla_rules::{Backend, NativeOp, Prepared};
+use entelechy_abi::{Domain, Handle, Invocation, Scope};
+use entelechy_ir::{Combine, Mode, Validated};
+use entelechy_rules::{ArithmeticError, ExecutionError, check_invocation};
+use entelechy_rules::{Backend, NativeOp, Prepared};
 
 /// Elements per thread below which the run stays single-threaded.
 const PARALLEL_THRESHOLD: usize = 4096;
@@ -52,7 +52,7 @@ pub struct View {
     len: usize,
     /// The layout, when it keeps scalars narrow; null when the memory
     /// holds the Kernel's words. What the helpers widen and narrow by.
-    schema: *const orla_abi::Schema,
+    schema: *const entelechy_abi::Schema,
     /// For a memory, the pages its writes have changed; null for an input.
     changed: *mut Changed,
 }
@@ -61,7 +61,7 @@ pub struct View {
 /// all of them: a write into a memory kept narrow is not followed word by
 /// word, and makes the memory's change unknown.
 struct Changed {
-    pages: orla_abi::Pages,
+    pages: entelechy_abi::Pages,
     known: bool,
 }
 
@@ -95,7 +95,7 @@ pub struct Ctx {
     /// already the run's.
     looked: u32,
     /// The run's count of blocks, which the element adds a block to at
-    /// a time, and the most it may reach ([`orla_rules::Run`]).
+    /// a time, and the most it may reach ([`entelechy_rules::Run`]).
     run_blocks: *const std::sync::atomic::AtomicU32,
     run_limit: u32,
     /// The partial blocks of this thread's finished elements, summed and
@@ -108,7 +108,7 @@ pub struct Ctx {
     /// null where nothing emits.
     emitted: *mut Vec<u32>,
     /// The run's hold against the Host's room, covering emitted pairs.
-    held: *const orla_rules::Held,
+    held: *const entelechy_rules::Held,
 }
 
 /// A map entry's native signature: the context, a run's first element
@@ -311,15 +311,19 @@ impl Backend for JitBackend {
         scope: &mut Scope<'_>,
     ) -> Result<Vec<Handle>, ExecutionError> {
         match op {
-            NativeOp::Rasterize => orla_rules::raster::rasterize(invocation, scope),
-            NativeOp::RasterizeCutout => orla_rules::raster::rasterize_cutout(invocation, scope),
-            NativeOp::RasterizeCanvas => orla_rules::raster::rasterize_canvas(invocation, scope),
+            NativeOp::Rasterize => entelechy_rules::raster::rasterize(invocation, scope),
+            NativeOp::RasterizeCutout => {
+                entelechy_rules::raster::rasterize_cutout(invocation, scope)
+            }
+            NativeOp::RasterizeCanvas => {
+                entelechy_rules::raster::rasterize_canvas(invocation, scope)
+            }
         }
     }
 }
 
 /// Words of a parameter, as the CPU lays them out.
-fn param_words(value: &orla_abi::Value) -> Vec<u32> {
+fn param_words(value: &entelechy_abi::Value) -> Vec<u32> {
     value.words()
 }
 
@@ -337,15 +341,15 @@ struct Shared {
     /// The layouts of the inputs kept narrow; the views point at them.
     /// Boxed so a view's pointer stays good while the vector grows.
     #[allow(clippy::vec_box)]
-    schemas: Vec<Box<orla_abi::Schema>>,
+    schemas: Vec<Box<entelechy_abi::Schema>>,
     template: Ctx,
     /// The loop iterations an element may run, for naming a failure.
     budget: u32,
     /// The run's total; boxed so the contexts' pointer to it stays good.
-    run: Box<orla_rules::Run>,
+    run: Box<entelechy_rules::Run>,
     /// The run's hold beyond its Fields against the Host's room; boxed
     /// for the same reason.
-    held: Box<orla_rules::Held>,
+    held: Box<entelechy_rules::Held>,
 }
 
 // The views point into the scope's Fields, borrowed for the run, and the
@@ -377,7 +381,7 @@ fn shared(
             let len = copy.len();
             let pointer = copy.as_mut_ptr();
             let mut changed = Box::new(Changed {
-                pages: orla_abi::Pages::new(),
+                pages: entelechy_abi::Pages::new(),
                 known: true,
             });
             let changed_at: *mut Changed = &mut *changed;
@@ -392,7 +396,7 @@ fn shared(
             std::ptr::null()
         } else {
             let boxed = Box::new(layout);
-            let pointer: *const orla_abi::Schema = &*boxed;
+            let pointer: *const entelechy_abi::Schema = &*boxed;
             schemas.push(boxed);
             pointer
         };
@@ -410,8 +414,8 @@ fn shared(
     }
     let params: Vec<u32> = invocation.params.iter().flat_map(param_words).collect();
     let input = &invocation.context.input;
-    let run = Box::new(orla_rules::Run::new(scope.work()));
-    let held = Box::new(orla_rules::Held::new(scope.room()));
+    let run = Box::new(entelechy_rules::Run::new(scope.work()));
+    let held = Box::new(entelechy_rules::Held::new(scope.room()));
     // The vectors' heap buffers stay put when the vectors move into `Shared`.
     let template = Ctx {
         views: views.as_ptr(),
@@ -480,7 +484,7 @@ fn compute_emitting(
 /// How many threads `items` pieces of work are worth: every core, but
 /// no fewer than `PARALLEL_THRESHOLD` pieces a thread.
 fn workers(items: usize) -> usize {
-    orla_rules::cores()
+    entelechy_rules::cores()
         .min(items.div_ceil(PARALLEL_THRESHOLD))
         .max(1)
 }
@@ -502,7 +506,7 @@ fn compute_into(
     let rows = height as usize * domain.depth() as usize;
     let element_count = width * rows;
     // Split by elements: a `Rows` domain is one long row.
-    let threads = orla_rules::cores()
+    let threads = entelechy_rules::cores()
         .min(element_count.max(1))
         .min(element_count.div_ceil(PARALLEL_THRESHOLD))
         .max(1);
@@ -635,7 +639,7 @@ fn run(
             }
         };
     }
-    orla_rules::outputs_fit_words(module, domain, scope)?;
+    entelechy_rules::outputs_fit_words(module, domain, scope)?;
     let results = compute(entry, &shared, domain, stride)?;
     shared.run.outcome()?;
     let mut outputs = Vec::with_capacity(module.manifest.outputs.len());
@@ -682,7 +686,7 @@ fn run_reduce(
     let count = domain.count();
     if !shared
         .held
-        .take(orla_rules::held_values(true, count, stride))
+        .take(entelechy_rules::held_values(true, count, stride))
     {
         return Err(shared.held.over());
     }
@@ -769,7 +773,7 @@ fn run_prefix(
     let shared = shared(module, invocation, scope, domain)?;
     if !shared
         .held
-        .take(orla_rules::held_values(false, domain.count(), stride))
+        .take(entelechy_rules::held_values(false, domain.count(), stride))
     {
         return Err(shared.held.over());
     }
@@ -787,17 +791,17 @@ fn run_prefix(
         }
     };
     let folded = match (scalars, combine) {
-        ([orla_abi::Scalar::Int], Combine::Sum) => {
+        ([entelechy_abi::Scalar::Int], Combine::Sum) => {
             fold_prefix(&mut values, stride, int(i32::checked_add))
         }
-        ([orla_abi::Scalar::Int], Combine::Min) => {
+        ([entelechy_abi::Scalar::Int], Combine::Min) => {
             fold_prefix(&mut values, stride, int(|a, b| Some(a.min(b))))
         }
-        ([orla_abi::Scalar::Int], Combine::Max) => {
+        ([entelechy_abi::Scalar::Int], Combine::Max) => {
             fold_prefix(&mut values, stride, int(|a, b| Some(a.max(b))))
         }
         _ => fold_prefix(&mut values, stride, |running, value| {
-            orla_rules::combine_words(combine, scalars, running, value)
+            entelechy_rules::combine_words(combine, scalars, running, value)
         }),
     };
     folded.map_err(|(element, error)| ExecutionError::Arithmetic {
@@ -916,9 +920,9 @@ fn run_scatter(
     combine: Combine,
 ) -> Result<Vec<Handle>, ExecutionError> {
     let entry: Entry = unsafe { std::mem::transmute::<usize, Entry>(entry) };
-    let target = orla_rules::check_scatter(invocation, scope, base)?;
+    let target = entelechy_rules::check_scatter(invocation, scope, base)?;
     let sources = invocation.domain;
-    let address = orla_rules::address_words(target);
+    let address = entelechy_rules::address_words(target);
     let port = &module.manifest.outputs[0];
     let stride = port.ty.schema.value_words();
     let shared = shared(module, invocation, scope, sources)?;
@@ -956,7 +960,7 @@ fn run_scatter(
     if summed
         && !shared
             .held
-            .take(orla_rules::Sums::held_words(scalars, count))
+            .take(entelechy_rules::Sums::held_words(scalars, count))
     {
         return Err(shared.held.over());
     }
@@ -964,7 +968,7 @@ fn run_scatter(
     let sort = |(first, end, emitted): &Emitted| -> Vec<Vec<u32>> {
         let mut buckets = vec![Vec::new(); parts];
         let mut put = |pair: &[u32], index: usize| {
-            if let Some(at) = orla_rules::scatter_index(target, &pair[..address]) {
+            if let Some(at) = entelechy_rules::scatter_index(target, &pair[..address]) {
                 let bucket = &mut buckets[at / span];
                 bucket.push(at as u32);
                 bucket.push(index as u32);
@@ -1001,7 +1005,7 @@ fn run_scatter(
         // A sum is each element's whole total; the failure is the first
         // target element whose total overflows.
         if summed {
-            let mut sums = orla_rules::Sums::new(scalars, slice);
+            let mut sums = entelechy_rules::Sums::new(scalars, slice);
             for run in &sorted {
                 for pair in run[part].chunks_exact(record) {
                     sums.add(slice, pair[0] as usize - part * span, &pair[2..]);
@@ -1014,7 +1018,7 @@ fn run_scatter(
         for run in &sorted {
             for pair in run[part].chunks_exact(record) {
                 let at = pair[0] as usize - part * span;
-                orla_rules::combine_words(
+                entelechy_rules::combine_words(
                     combine,
                     scalars,
                     &mut slice[at * stride..(at + 1) * stride],
@@ -1071,7 +1075,7 @@ fn run_scatter(
 
 /// Partial-block work a thread holds before handing it to the run, so
 /// the shared total is touched rarely.
-const LEFT_HANDED: u64 = 64 * orla_ir::WORK_BLOCK as u64;
+const LEFT_HANDED: u64 = 64 * entelechy_ir::WORK_BLOCK as u64;
 
 /// Hands a context's held partial-block work to the run once it is
 /// `at_least`; fails once the run is past its total.
@@ -1088,7 +1092,7 @@ fn hand_left(ctx: &mut Ctx, shared: &Shared, at_least: u64) -> Result<(), Execut
 /// Holds the partial block of a merge, step or `init`, as the map's code
 /// does for its elements, and resets the work count.
 fn keep_left(ctx: &mut Ctx, shared: &Shared) -> Result<(), ExecutionError> {
-    ctx.left += u64::from(ctx.work % orla_ir::WORK_BLOCK);
+    ctx.left += u64::from(ctx.work % entelechy_ir::WORK_BLOCK);
     ctx.work = 0;
     ctx.looked = 0;
     hand_left(ctx, shared, LEFT_HANDED)
@@ -1107,7 +1111,7 @@ fn run_scan(
 ) -> Result<Vec<Handle>, ExecutionError> {
     let entry: ScanEntry = unsafe { std::mem::transmute::<usize, ScanEntry>(entry) };
     let init: Init = unsafe { std::mem::transmute::<usize, Init>(init) };
-    let domain = orla_rules::check_scan(invocation, scope)?;
+    let domain = entelechy_rules::check_scan(invocation, scope)?;
     let shared = shared(module, invocation, scope, domain)?;
     let port = &module.manifest.outputs[0];
     let stride = port.ty.schema.value_words();
@@ -1218,7 +1222,7 @@ unsafe fn copy_in(view: &View, index: usize, value: *const u32) {
 }
 
 /// `at` on rows: the index clamped into range.
-unsafe extern "C" fn orla_jit_read_rows(ctx: *const Ctx, input: u32, i: i32, out: *mut u32) {
+unsafe extern "C" fn entelechy_jit_read_rows(ctx: *const Ctx, input: u32, i: i32, out: *mut u32) {
     let view = unsafe { view(ctx, input) };
     let count = view.width * view.height * view.depth;
     let index = i.clamp(0, count as i32 - 1) as usize;
@@ -1226,7 +1230,7 @@ unsafe extern "C" fn orla_jit_read_rows(ctx: *const Ctx, input: u32, i: i32, out
 }
 
 /// `sample`: this element's coordinates, clamped into the input.
-unsafe extern "C" fn orla_jit_sample(
+unsafe extern "C" fn entelechy_jit_sample(
     ctx: *const Ctx,
     input: u32,
     x: u32,
@@ -1245,7 +1249,7 @@ unsafe extern "C" fn orla_jit_sample(
 }
 
 /// `at_linear`: the CPU interpreter's blend of the neighbouring elements.
-unsafe extern "C" fn orla_jit_linear(
+unsafe extern "C" fn entelechy_jit_linear(
     ctx: *const Ctx,
     input: u32,
     x: f32,
@@ -1255,7 +1259,7 @@ unsafe extern "C" fn orla_jit_linear(
 ) {
     let view = unsafe { view(ctx, input) };
     let axis = |v: f32, limit: u32| -> (usize, usize, f32) {
-        let (lower, upper, weight) = orla_rules::linear_axis(v, limit);
+        let (lower, upper, weight) = entelechy_rules::linear_axis(v, limit);
         (lower as usize, upper as usize, weight)
     };
     let (x0, x1, fx) = axis(x, view.width);
@@ -1307,7 +1311,7 @@ unsafe extern "C" fn orla_jit_linear(
 }
 
 /// Whether a key is held, by code.
-unsafe extern "C" fn orla_jit_key(ctx: *const Ctx, code: i32) -> i32 {
+unsafe extern "C" fn entelechy_jit_key(ctx: *const Ctx, code: i32) -> i32 {
     if !(0..256).contains(&code) {
         return 0;
     }
@@ -1317,8 +1321,8 @@ unsafe extern "C" fn orla_jit_key(ctx: *const Ctx, code: i32) -> i32 {
 
 /// Whether a button is held: 0 left, 1 right, 2 middle of a pointer,
 /// then a pad's from 8.
-unsafe extern "C" fn orla_jit_button(ctx: *const Ctx, code: i32) -> i32 {
-    if !(0..orla_abi::BUTTONS).contains(&code) {
+unsafe extern "C" fn entelechy_jit_button(ctx: *const Ctx, code: i32) -> i32 {
+    if !(0..entelechy_abi::BUTTONS).contains(&code) {
         return 0;
     }
     let bits = unsafe { (*ctx).buttons };
@@ -1327,7 +1331,7 @@ unsafe extern "C" fn orla_jit_button(ctx: *const Ctx, code: i32) -> i32 {
 
 /// `emit`: the element's index and the pair's `n` words, kept in the
 /// order they come.
-unsafe extern "C" fn orla_jit_emit(ctx: *mut Ctx, element: u32, pair: *const u32, n: u32) {
+unsafe extern "C" fn entelechy_jit_emit(ctx: *mut Ctx, element: u32, pair: *const u32, n: u32) {
     let ctx = unsafe { &mut *ctx };
     if ctx.emitted.is_null() || ctx.error != 0 {
         return;
@@ -1345,7 +1349,12 @@ unsafe extern "C" fn orla_jit_emit(ctx: *mut Ctx, element: u32, pair: *const u32
 
 /// `put` into a rows memory: the element's words replaced; an index
 /// outside the memory is dropped.
-unsafe extern "C" fn orla_jit_put_rows(ctx: *const Ctx, input: u32, i: i32, value: *const u32) {
+unsafe extern "C" fn entelechy_jit_put_rows(
+    ctx: *const Ctx,
+    input: u32,
+    i: i32,
+    value: *const u32,
+) {
     let view = unsafe { view(ctx, input) };
     let count = view.width * view.height * view.depth;
     if i < 0 || i as u32 >= count {
@@ -1356,7 +1365,7 @@ unsafe extern "C" fn orla_jit_put_rows(ctx: *const Ctx, input: u32, i: i32, valu
 
 /// `put` into a grid or volume memory: an address outside it (NaN
 /// included) is dropped unclamped, as in the interpreter.
-unsafe extern "C" fn orla_jit_put(
+unsafe extern "C" fn entelechy_jit_put(
     ctx: *const Ctx,
     input: u32,
     x: f32,
@@ -1379,7 +1388,7 @@ unsafe extern "C" fn orla_jit_put(
 }
 
 /// The float error flag: the first failure wins.
-unsafe extern "C" fn orla_jit_fail(ctx: *mut Ctx, code: u32) {
+unsafe extern "C" fn entelechy_jit_fail(ctx: *mut Ctx, code: u32) {
     unsafe {
         if (*ctx).error == 0 {
             (*ctx).error = code;
@@ -1399,19 +1408,19 @@ macro_rules! unary_math {
 }
 
 unary_math! {
-    orla_jit_sinf => sin,
-    orla_jit_cosf => cos,
-    orla_jit_tanf => tan,
-    orla_jit_asinf => asin,
-    orla_jit_acosf => acos,
-    orla_jit_atanf => atan,
-    orla_jit_expf => exp,
-    orla_jit_logf => ln,
-    orla_jit_exp2f => exp2,
-    orla_jit_log2f => log2,
-    orla_jit_sinhf => sinh,
-    orla_jit_coshf => cosh,
-    orla_jit_tanhf => tanh,
+    entelechy_jit_sinf => sin,
+    entelechy_jit_cosf => cos,
+    entelechy_jit_tanf => tan,
+    entelechy_jit_asinf => asin,
+    entelechy_jit_acosf => acos,
+    entelechy_jit_atanf => atan,
+    entelechy_jit_expf => exp,
+    entelechy_jit_logf => ln,
+    entelechy_jit_exp2f => exp2,
+    entelechy_jit_log2f => log2,
+    entelechy_jit_sinhf => sinh,
+    entelechy_jit_coshf => cosh,
+    entelechy_jit_tanhf => tanh,
 }
 
 macro_rules! unary_math64 {
@@ -1426,115 +1435,121 @@ macro_rules! unary_math64 {
 }
 
 unary_math64! {
-    orla_jit_sin => sin,
-    orla_jit_cos => cos,
-    orla_jit_tan => tan,
-    orla_jit_asin => asin,
-    orla_jit_acos => acos,
-    orla_jit_atan => atan,
-    orla_jit_exp => exp,
-    orla_jit_log => ln,
-    orla_jit_exp2 => exp2,
-    orla_jit_log2 => log2,
-    orla_jit_sinh => sinh,
-    orla_jit_cosh => cosh,
-    orla_jit_tanh => tanh,
+    entelechy_jit_sin => sin,
+    entelechy_jit_cos => cos,
+    entelechy_jit_tan => tan,
+    entelechy_jit_asin => asin,
+    entelechy_jit_acos => acos,
+    entelechy_jit_atan => atan,
+    entelechy_jit_exp => exp,
+    entelechy_jit_log => ln,
+    entelechy_jit_exp2 => exp2,
+    entelechy_jit_log2 => log2,
+    entelechy_jit_sinh => sinh,
+    entelechy_jit_cosh => cosh,
+    entelechy_jit_tanh => tanh,
 }
 
 /// `pow` on doubles.
-extern "C" fn orla_jit_pow(x: f64, y: f64) -> f64 {
+extern "C" fn entelechy_jit_pow(x: f64, y: f64) -> f64 {
     x.powf(y)
 }
 
 /// `atan2` on doubles.
-extern "C" fn orla_jit_atan2(y: f64, x: f64) -> f64 {
+extern "C" fn entelechy_jit_atan2(y: f64, x: f64) -> f64 {
     y.atan2(x)
 }
 
 /// `%` on doubles: the remainder, truncated.
-extern "C" fn orla_jit_fmod(a: f64, b: f64) -> f64 {
+extern "C" fn entelechy_jit_fmod(a: f64, b: f64) -> f64 {
     a % b
 }
 
 /// `pow` on floats.
-extern "C" fn orla_jit_powf(x: f32, y: f32) -> f32 {
+extern "C" fn entelechy_jit_powf(x: f32, y: f32) -> f32 {
     x.powf(y)
 }
 
 /// `atan2` on floats.
-extern "C" fn orla_jit_atan2f(y: f32, x: f32) -> f32 {
+extern "C" fn entelechy_jit_atan2f(y: f32, x: f32) -> f32 {
     y.atan2(x)
 }
 
 /// `%` on floats: the remainder, truncated.
-extern "C" fn orla_jit_fmodf(a: f32, b: f32) -> f32 {
+extern "C" fn entelechy_jit_fmodf(a: f32, b: f32) -> f32 {
     a % b
 }
 
 /// `fma` on floats and doubles: one rounding, as the interpreter's
 /// `mul_add`. WebAssembly code calls this.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-extern "C" fn orla_jit_fmaf(a: f32, b: f32, c: f32) -> f32 {
+extern "C" fn entelechy_jit_fmaf(a: f32, b: f32, c: f32) -> f32 {
     a.mul_add(b, c)
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-extern "C" fn orla_jit_fma(a: f64, b: f64, c: f64) -> f64 {
+extern "C" fn entelechy_jit_fma(a: f64, b: f64, c: f64) -> f64 {
     a.mul_add(b, c)
 }
 
 /// A half float's bits widened to a float's by the Host's rule.
-extern "C" fn orla_jit_half(h: u32) -> u32 {
-    orla_abi::encoding::f16_to_f32(h)
+extern "C" fn entelechy_jit_half(h: u32) -> u32 {
+    entelechy_abi::encoding::f16_to_f32(h)
 }
 
 /// The helpers by symbol name, for the JIT to import.
 pub(crate) fn symbols() -> Vec<(&'static str, *const u8)> {
     vec![
-        ("orla_jit_read_rows", orla_jit_read_rows as *const u8),
-        ("orla_jit_sample", orla_jit_sample as *const u8),
-        ("orla_jit_linear", orla_jit_linear as *const u8),
-        ("orla_jit_key", orla_jit_key as *const u8),
-        ("orla_jit_button", orla_jit_button as *const u8),
-        ("orla_jit_put", orla_jit_put as *const u8),
-        ("orla_jit_put_rows", orla_jit_put_rows as *const u8),
-        ("orla_jit_emit", orla_jit_emit as *const u8),
-        ("orla_jit_fail", orla_jit_fail as *const u8),
-        ("orla_jit_sinf", orla_jit_sinf as *const u8),
-        ("orla_jit_cosf", orla_jit_cosf as *const u8),
-        ("orla_jit_tanf", orla_jit_tanf as *const u8),
-        ("orla_jit_asinf", orla_jit_asinf as *const u8),
-        ("orla_jit_acosf", orla_jit_acosf as *const u8),
-        ("orla_jit_atanf", orla_jit_atanf as *const u8),
-        ("orla_jit_expf", orla_jit_expf as *const u8),
-        ("orla_jit_logf", orla_jit_logf as *const u8),
-        ("orla_jit_exp2f", orla_jit_exp2f as *const u8),
-        ("orla_jit_log2f", orla_jit_log2f as *const u8),
-        ("orla_jit_sinhf", orla_jit_sinhf as *const u8),
-        ("orla_jit_coshf", orla_jit_coshf as *const u8),
-        ("orla_jit_tanhf", orla_jit_tanhf as *const u8),
-        ("orla_jit_powf", orla_jit_powf as *const u8),
-        ("orla_jit_atan2f", orla_jit_atan2f as *const u8),
-        ("orla_jit_fmodf", orla_jit_fmodf as *const u8),
-        ("orla_jit_half", orla_jit_half as *const u8),
-        ("orla_jit_sin", orla_jit_sin as *const u8),
-        ("orla_jit_cos", orla_jit_cos as *const u8),
-        ("orla_jit_tan", orla_jit_tan as *const u8),
-        ("orla_jit_asin", orla_jit_asin as *const u8),
-        ("orla_jit_acos", orla_jit_acos as *const u8),
-        ("orla_jit_atan", orla_jit_atan as *const u8),
-        ("orla_jit_exp", orla_jit_exp as *const u8),
-        ("orla_jit_log", orla_jit_log as *const u8),
-        ("orla_jit_exp2", orla_jit_exp2 as *const u8),
-        ("orla_jit_log2", orla_jit_log2 as *const u8),
-        ("orla_jit_sinh", orla_jit_sinh as *const u8),
-        ("orla_jit_cosh", orla_jit_cosh as *const u8),
-        ("orla_jit_tanh", orla_jit_tanh as *const u8),
-        ("orla_jit_pow", orla_jit_pow as *const u8),
-        ("orla_jit_atan2", orla_jit_atan2 as *const u8),
-        ("orla_jit_fmod", orla_jit_fmod as *const u8),
-        ("orla_jit_fmaf", orla_jit_fmaf as *const u8),
-        ("orla_jit_fma", orla_jit_fma as *const u8),
+        (
+            "entelechy_jit_read_rows",
+            entelechy_jit_read_rows as *const u8,
+        ),
+        ("entelechy_jit_sample", entelechy_jit_sample as *const u8),
+        ("entelechy_jit_linear", entelechy_jit_linear as *const u8),
+        ("entelechy_jit_key", entelechy_jit_key as *const u8),
+        ("entelechy_jit_button", entelechy_jit_button as *const u8),
+        ("entelechy_jit_put", entelechy_jit_put as *const u8),
+        (
+            "entelechy_jit_put_rows",
+            entelechy_jit_put_rows as *const u8,
+        ),
+        ("entelechy_jit_emit", entelechy_jit_emit as *const u8),
+        ("entelechy_jit_fail", entelechy_jit_fail as *const u8),
+        ("entelechy_jit_sinf", entelechy_jit_sinf as *const u8),
+        ("entelechy_jit_cosf", entelechy_jit_cosf as *const u8),
+        ("entelechy_jit_tanf", entelechy_jit_tanf as *const u8),
+        ("entelechy_jit_asinf", entelechy_jit_asinf as *const u8),
+        ("entelechy_jit_acosf", entelechy_jit_acosf as *const u8),
+        ("entelechy_jit_atanf", entelechy_jit_atanf as *const u8),
+        ("entelechy_jit_expf", entelechy_jit_expf as *const u8),
+        ("entelechy_jit_logf", entelechy_jit_logf as *const u8),
+        ("entelechy_jit_exp2f", entelechy_jit_exp2f as *const u8),
+        ("entelechy_jit_log2f", entelechy_jit_log2f as *const u8),
+        ("entelechy_jit_sinhf", entelechy_jit_sinhf as *const u8),
+        ("entelechy_jit_coshf", entelechy_jit_coshf as *const u8),
+        ("entelechy_jit_tanhf", entelechy_jit_tanhf as *const u8),
+        ("entelechy_jit_powf", entelechy_jit_powf as *const u8),
+        ("entelechy_jit_atan2f", entelechy_jit_atan2f as *const u8),
+        ("entelechy_jit_fmodf", entelechy_jit_fmodf as *const u8),
+        ("entelechy_jit_half", entelechy_jit_half as *const u8),
+        ("entelechy_jit_sin", entelechy_jit_sin as *const u8),
+        ("entelechy_jit_cos", entelechy_jit_cos as *const u8),
+        ("entelechy_jit_tan", entelechy_jit_tan as *const u8),
+        ("entelechy_jit_asin", entelechy_jit_asin as *const u8),
+        ("entelechy_jit_acos", entelechy_jit_acos as *const u8),
+        ("entelechy_jit_atan", entelechy_jit_atan as *const u8),
+        ("entelechy_jit_exp", entelechy_jit_exp as *const u8),
+        ("entelechy_jit_log", entelechy_jit_log as *const u8),
+        ("entelechy_jit_exp2", entelechy_jit_exp2 as *const u8),
+        ("entelechy_jit_log2", entelechy_jit_log2 as *const u8),
+        ("entelechy_jit_sinh", entelechy_jit_sinh as *const u8),
+        ("entelechy_jit_cosh", entelechy_jit_cosh as *const u8),
+        ("entelechy_jit_tanh", entelechy_jit_tanh as *const u8),
+        ("entelechy_jit_pow", entelechy_jit_pow as *const u8),
+        ("entelechy_jit_atan2", entelechy_jit_atan2 as *const u8),
+        ("entelechy_jit_fmod", entelechy_jit_fmod as *const u8),
+        ("entelechy_jit_fmaf", entelechy_jit_fmaf as *const u8),
+        ("entelechy_jit_fma", entelechy_jit_fma as *const u8),
     ]
 }
 

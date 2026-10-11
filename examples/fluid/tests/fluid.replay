@@ -1,4 +1,4 @@
-scene fluid.osn
+scene fluid.esn
 
 # Thirty frames of the plume alone on a 64 by 64 grid. The projection
 # removes most of the divergence the forces and the advection put in:

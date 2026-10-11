@@ -1,7 +1,7 @@
 <!-- rendered: reference -->
-# Orla
+# Entelechy
 
-Kernels (`.orla`) compute; scenes (`.osn`) compose them into a running world. Whole programs are in `examples/`.
+Kernels (`.ent`) compute; scenes (`.esn`) compose them into a running world. Whole programs are in `examples/`.
 
 ## types: the types a port, a param or a value has
 
@@ -148,7 +148,7 @@ Kernels (`.orla`) compute; scenes (`.osn`) compose them into a running world. Wh
 ## kernel: how a Kernel is written: its declarations and expressions
 
 - **requires**: `requires { field.read; field.write; time.read; input.read; }` The capabilities a Kernel uses, and no others: reading inputs, writing outputs, the clock, the pointer, keys and window.
-- **input**: `input x: Image;   = "atlas.png";   = text "ORLA";   = frames "clip/" at 30;` In a Kernel, a Field it reads, bound by the node that runs it (`source <- other.result;`); in a scene, a Field the caller supplies, or one the Host reads from a file, from text, or frame by frame from a directory.
+- **input**: `input x: Image;   = "atlas.png";   = text "ENTELECHY";   = frames "clip/" at 30;` In a Kernel, a Field it reads, bound by the node that runs it (`source <- other.result;`); in a scene, a Field the caller supplies, or one the Host reads from a file, from text, or frame by frame from a directory.
 - **param**: `param gain: Float = 1.0;` In a Kernel, a value the node that runs it may set (`gain = 0.5;`), with its default; in a scene, a value the caller sets (`--param`, the protocol's `param`) and its nodes read by name.
 - **output**: `output result: Grid<Vec4>;   output shown <- node.port;   output kept <- node.port to "saves/n.field";` In a Kernel, a Field it writes, an element per element of its domain (a map may write several); in a scene, a named result: the first picture is what it shows, the first row of one or two Floats (mono, stereo) what it plays, a block each frame joined to the last (`rate()` over the frame rate samples keeps it in time), and one written `to` a file is saved after each evaluation that changed it, where allowed.
 - **type**: `type Cells = Grid<Int>;   struct Cell { alive: Int; age: Float; }` A name for a port type, an enum, or a struct of named fields, shared by the Kernels of a document.
@@ -179,12 +179,12 @@ Kernels (`.orla`) compute; scenes (`.osn`) compose them into a running world. Wh
 - **node**: `node name: fx.glow@1 { port <- source.result; param = 2; domain = vec2(w, h); }` A node runs a Kernel: its inputs wired at the consumer, its parameters set, its extent explicit or the first input's.
 - **inline**: `node name: kernel { ... input x: Image <- src; ... }` A Kernel written in place; its inputs carry their wiring, `<-` or `<~` with its initial source (`input s: Rows<Float> <~ name.result from start.result;`), a param whose default names a scene param follows that param (`param gain: Float = amount;`), and the session publishes it under the document's name.
 - **fill**: `node zeros: Rows<Float> { domain = 65; value = 0.5; }` A node that is a Field rather than a Kernel: its element's zero, or the `value` given, over the domain. Its element is a Float, Int, Bool, Vec2, Vec3 or Vec4 (a pixel for `Image`), or an alias of one; a struct is filled by a Kernel.
-- **graph**: `node name: graph "other.osn" { source <- src; param = 2; }` Another document placed as a node: its nodes join under `name.`, its inputs take the wiring, its outputs are read as `name.output`.
+- **graph**: `node name: graph "other.esn" { source <- src; param = 2; }` Another document placed as a node: its nodes join under `name.`, its inputs take the wiring, its outputs are read as `name.output`.
 - **previous**: `port <~ node.output from initial [migrate id@v];` State: the port reads what the last evaluation committed, the initial source before the first, and a migration carries it when a republished Kernel changes its layout; the Kernels reading the port are republished for the new layout with it.
 - **times**: `times = 5;   carry port <- output;` A node written once and placed N times, each wired as written, `carry` feeding a port from the previous time's output; at N = 0, a carried output is what its port is first bound to.
 - **async**: `async = true;` The node runs off the frame: the evaluation starts it on a thread and goes on, its readers taking the last output until the run lands.
 - **require**: `require cells: columns * rows <= 1 << bits;` What the scene's parameters must hold to run: two counts over its params, numbers, `window()` and `scale()`, compared. It is checked as the scene loads (`check` and `compose` refuse one the given params break) and before every evaluation, which stops before anything runs; each says what the sides came to. A placed graph's come with it, under its node's name.
-- **use**: `use "kernels/";   use "name.orlapkg";` The documents whose Kernels and declarations this one brings in: a file, a directory, or a package; what those use in turn is theirs.
+- **use**: `use "kernels/";   use "name.entpkg";` The documents whose Kernels and declarations this one brings in: a file, a directory, or a package; what those use in turn is theirs.
 - **package**: `package name@1 { language = 1; ir = 1; }` The manifest of a package directory: what it is called and the least language and IR it needs.
 - **vec2**: `vec2(w, h)` A grid's extent.
 - **vec3**: `vec3(w, h, d)` A volume's extent.
@@ -207,16 +207,16 @@ Kernels (`.orla`) compute; scenes (`.osn`) compose them into a running world. Wh
 
 ## packages: what a package holds and how a scene reaches one
 
-- **manifest**: `name.orlapkg/package.osn: package name@1 { language = 1; ir = 1; }` Its name and edition, and the least language and IR it needs: one this Orla does not have refuses the package, naming both. The directory is named for the package, `name.orlapkg`; a scene reaches one package of a name, and two, as two editions of one, are refused.
+- **manifest**: `name.entpkg/package.esn: package name@1 { language = 1; ir = 1; }` Its name and edition, and the least language and IR it needs: one this Entelechy does not have refuses the package, naming both. The directory is named for the package, `name.entpkg`; a scene reaches one package of a name, and two, as two editions of one, are refused.
 - **kernels**: `use "kernels/";   (in the manifest)` The documents the manifest uses, inside the directory, are the package's Kernels; a scene that uses the package publishes every one of them. A document outside the package uses it whole, never a file inside it, so the manifest's versions hold.
-- **graphs**: `name.orlapkg/graphs/*.osn` Preset graphs, placed with `node n: graph "name.orlapkg/graphs/g.osn" { ... }`.
+- **graphs**: `name.entpkg/graphs/*.esn` Preset graphs, placed with `node n: graph "name.entpkg/graphs/g.esn" { ... }`.
 - **docs**: `//! at the top of a manifest or a preset;   /// above a Kernel, a port or a param` What each part is for, in its source; `kernel` and `kernels` answer a published Kernel's.
-- **assets**: `name.orlapkg/font.png` Any other file in the directory, which a scene's `input` reads by its path or through the package's name (`name.orlapkg/font.png`), as a document is; a package's files are readable wherever reads are held.
-- **by name**: `use "name.orlapkg";` A package not beside the document is found by its name: beside the package the document is in, so packages kept together name one another; then in each directory of `ORLA_PACKAGES`; then in `packages/` beside the program.
+- **assets**: `name.entpkg/font.png` Any other file in the directory, which a scene's `input` reads by its path or through the package's name (`name.entpkg/font.png`), as a document is; a package's files are readable wherever reads are held.
+- **by name**: `use "name.entpkg";` A package not beside the document is found by its name: beside the package the document is in, so packages kept together name one another; then in each directory of `ENTELECHY_PACKAGES`; then in `packages/` beside the program.
 
 ## protocol: the operations a session answers
 
-- **status**: `status` {} The session at a glance. Answers backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, loaded (whether a scene is), refused (why not, when not), revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, versions (`orla`, `api`, `language`, `ir`, `package`).
+- **status**: `status` {} The session at a glance. Answers backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, loaded (whether a scene is), refused (why not, when not), revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, versions (`entelechy`, `api`, `language`, `ir`, `package`).
 - **kernels**: `kernels` {} Every published Kernel, with its generation. Answers a list of manifests, each with its generation, which `publish`'s `expect` names.
 - **kernel**: `kernel` {`kernel`?: string, `generation`?: integer} One Kernel's manifest and source. Answers manifest, generation, source, as `publish` takes it.
 - **graph**: `graph` {} The running scene's structure. Answers inputs, params, nodes, outputs.
@@ -234,7 +234,7 @@ Kernels (`.orla`) compute; scenes (`.osn`) compose them into a running world. Wh
 - **snapshot**: `snapshot` {`to`?: string} The whole world: its Kernels, its scene and every committed state. Answers the world's revision and frame (the frames committed since it), every Kernel with its generation and source, every port's committed state; or the file written.
 - **restore**: `restore` {`snapshot`?: object, `from`?: string, `laws`: "current" | "snapshot", `structure`?: "current" | "snapshot", `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `pads`?: integer, `keys`?: [integer], `window`?: [w, h], `scale`?: number} Puts a snapshot's world back, after a trial frame that commits nothing: the state is the snapshot's, which the next frame reads; until then `read` shows the trial frame's outputs. Answers revision, frame, report.
 - **reset**: `reset` {`node`?: string, `port`?: string} Forgets committed state; `<~` readers start from their initial sources. Answers what was reset.
-- **help**: `help` {`name`?: string} Orla's syntax and API, layer by layer: all of it, or one name in full. Answers `reference`, the whole of it as one Markdown text, and `versions`; or with `name`, every item of that name in full. An unknown name is an error with `similar`.
+- **help**: `help` {`name`?: string} Entelechy's syntax and API, layer by layer: all of it, or one name in full. Answers `reference`, the whole of it as one Markdown text, and `versions`; or with `name`, every item of that name in full. An unknown name is an error with `similar`.
 - **trace**: `trace` {`node`: string, `at`?: [x, y] | [x, y, z], `element`?: integer, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `pads`?: integer, `keys`?: [integer], `window`?: [w, h], `scale`?: number} Runs one element of a node's Kernel and shows every step of it. Answers kernel, at, bindings, results, calls, and when the element failed, fault: its message, the function it failed in with that function's bindings, and the operation's path, line and column.
 - **pin**: `pin` {`node`: string} Keeps a node materialized so `read` can see it. Answers pinned.
 - **unpin**: `unpin` {`node`: string} Lets fusion have a pinned node back. Answers unpinned.
@@ -263,9 +263,9 @@ Kernels (`.orla`) compute; scenes (`.osn`) compose them into a running world. Wh
 - **port**: `error: `port`: string` The state port whose migration failed.
 - **migration**: `error: `migration`: string` The Kernel that failed to migrate that state.
 - **frame**: `error: `frame`: integer` The frame a run failed at, counted from its first.
-- **stdin**: `orla serve <scene.osn>` Request lines on standard input, answer lines on standard output; `quit` ends the process.
-- **socket**: `orla serve <scene.osn> --listen <host:port>` The same lines over each TCP connection to the address; `quit` ends the connection.
-- **websocket**: `orla serve <scene.osn> --listen <host:port>` The same lines as WebSocket text messages to the same address, one request a message.
+- **stdin**: `entelechy serve <scene.esn>` Request lines on standard input, answer lines on standard output; `quit` ends the process.
+- **socket**: `entelechy serve <scene.esn> --listen <host:port>` The same lines over each TCP connection to the address; `quit` ends the connection.
+- **websocket**: `entelechy serve <scene.esn> --listen <host:port>` The same lines as WebSocket text messages to the same address, one request a message.
 
 ## replay: the lines of a replay test
 

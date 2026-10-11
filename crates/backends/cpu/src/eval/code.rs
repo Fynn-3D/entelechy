@@ -1,7 +1,7 @@
 //! The word code: what a function compiles to. Offsets are relative
 //! to the running frame; a value is a run of words there.
 
-use orla_ir::BinaryOp;
+use entelechy_ir::BinaryOp;
 
 use crate::ArithmeticError;
 

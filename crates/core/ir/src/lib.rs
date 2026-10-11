@@ -1,5 +1,5 @@
 #![warn(missing_docs)]
-//! Orla IR (L3).
+//! Entelechy IR (L3).
 //!
 //! The typed, SSA-like, structured, backend-independent form of a Kernel.
 //! Each instruction defines one value and refers only to values defined
@@ -20,15 +20,15 @@ use std::fmt;
 use std::str::FromStr;
 
 pub use account::{Renumbering, account, account_renumbered};
+pub use entelechy_abi::{
+    Capabilities, Capability, Encoding, Number, PortType, Scalar, Schema, Shape, ShapeIndex, Type,
+    Value,
+};
 pub use fuse::{
     FuseError, InputUse, counted, counts_only, extent_params, fuse, fuse_indexed, fuse_outputs,
     fused_name, input_use, offset_read, samples_only,
 };
 pub use optimize::{optimize, renumbered};
-pub use orla_abi::{
-    Capabilities, Capability, Encoding, Number, PortType, Scalar, Schema, Shape, ShapeIndex, Type,
-    Value,
-};
 pub use validate::{Validated, ValidationError, linear_index_type, validate};
 
 /// The IR version, raised when a module's validity or meaning changes.
@@ -251,7 +251,7 @@ pub fn template(ty: Type, structs: &[StructDef]) -> Value {
 }
 
 /// `value` retyped as `ty` when their layouts match (see
-/// [`Number::as_kind`](orla_abi::Number::as_kind)); otherwise `None`.
+/// [`Number::as_kind`](entelechy_abi::Number::as_kind)); otherwise `None`.
 pub fn value_as(value: &Value, ty: Type, structs: &[StructDef]) -> Option<Value> {
     value.shaped_like(&template(ty, structs))
 }
@@ -339,7 +339,7 @@ impl Mode {
 pub enum Combine {
     /// Fieldwise addition. A float adds in element order; an integer is the
     /// element's whole total and fails, at the first element, only when that
-    /// total overflows (`orla_rules::Sums`).
+    /// total overflows (`entelechy_rules::Sums`).
     Sum,
     /// Fieldwise minimum.
     Min,
@@ -350,7 +350,7 @@ pub enum Combine {
 }
 
 impl Combine {
-    /// Stable spelling used in `.orla` sources.
+    /// Stable spelling used in `.ent` sources.
     pub fn name(self) -> &'static str {
         match self {
             Self::Sum => "sum",

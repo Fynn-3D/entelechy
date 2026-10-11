@@ -12,10 +12,12 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use orla_ir::{BinaryOp, Function, Instruction, Intrinsic, Op, Type, Validated, Value, ValueId};
-use orla_kernel::{Handle, Invocation, Scope};
-use orla_rules::backend::Checked;
-use orla_rules::{Backend, ExecutionError, NativeOp, Prepared};
+use entelechy_ir::{
+    BinaryOp, Function, Instruction, Intrinsic, Op, Type, Validated, Value, ValueId,
+};
+use entelechy_kernel::{Handle, Invocation, Scope};
+use entelechy_rules::backend::Checked;
+use entelechy_rules::{Backend, ExecutionError, NativeOp, Prepared};
 
 /// The ways of choosing which Kernels round apart: a run each.
 pub const SPLITS: u32 = 3;
@@ -51,9 +53,9 @@ pub fn rounded_apart(module: &Validated) -> Result<(Validated, usize), String> {
         // again as a module is.
         let mut next = u32::MAX;
         reciprocal(&mut function.body, &mut next, &mut changed);
-        *function = orla_ir::renumbered(std::mem::replace(function, empty()));
+        *function = entelechy_ir::renumbered(std::mem::replace(function, empty()));
     }
-    orla_ir::validate(module)
+    entelechy_ir::validate(module)
         .map(|module| (module, changed))
         .map_err(|error| error.to_string())
 }
@@ -283,7 +285,7 @@ impl Backend for Apart {
     fn end_frame(&self) -> Option<u64> {
         self.inner.end_frame()
     }
-    fn clocked_frame(&self) -> Option<orla_rules::ClockedFrame> {
+    fn clocked_frame(&self) -> Option<entelechy_rules::ClockedFrame> {
         self.inner.clocked_frame()
     }
     fn same_resident(
@@ -301,7 +303,7 @@ mod tests {
     use super::*;
 
     fn compiled(source: &str) -> Validated {
-        orla_compiler::compile(source).unwrap()
+        entelechy_compiler::compile(source).unwrap()
     }
 
     #[test]

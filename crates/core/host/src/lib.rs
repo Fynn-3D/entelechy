@@ -390,7 +390,7 @@ pub enum Shape {
 }
 
 impl Shape {
-    /// Stable spelling used in `.orla` sources.
+    /// Stable spelling used in `.ent` sources.
     pub fn name(self) -> &'static str {
         match self {
             Self::Rows => "Rows",

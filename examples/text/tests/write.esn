@@ -1,0 +1,39 @@
+// The text package's functions, drawn by a Kernel's own code, for
+// write.replay: two codes of a text input at (0, 0), -42 at (0, 8), and
+// an H twice the size at (32, 0); and what the counting functions say.
+use "../../../packages/text.entpkg";
+
+input words: Rows<Int> = text "HP  ";
+node font: text.font@1 { domain = vec2(96, 48); }
+
+node drawn: kernel {
+    requires { field.read; field.write; }
+    input font: Grid<Float> <- font.result;
+    input words: Rows<Int> <- words;
+    output result: Grid<Float>;
+    domain = vec2(48, 16);
+    compute {
+        let px = icoord();
+        let ink = codes_ink(font, words, 0, 2, px, ivec2(0, 0), 1)
+            || number_ink(font, -42, px, ivec2(0, 8), 1)
+            || code_ink(font, 72, px, ivec2(32, 0), 2);
+        return if ink { 1.0 } else { 0.0 };
+    }
+}
+
+node counted: kernel {
+    requires { field.read; field.write; }
+    input words: Rows<Int> <- words;
+    output result: Rows<Int>;
+    domain = 5;
+    compute {
+        let i = element();
+        return if i == 0 { trimmed_length(words, 0, 4) }
+            else if i == 1 { digit_count(-42) }
+            else if i == 2 { digit_code(-42, 1) }
+            else if i == 3 { digit_count(0) }
+            else { digit_code(1907, 3) };
+    }
+}
+
+output result <- drawn.result;

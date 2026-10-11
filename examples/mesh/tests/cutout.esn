@@ -1,0 +1,141 @@
+// The raster package's cutout held to the fast path's: the torus drawn
+// through a checker mask, half its texels clear, by the package's
+// `cutout.esn` and by `native.rasterize@2`, and the pixels they draw
+// differently counted — which triangle, and its depth to the bit. On the
+// interpreter and the JIT the fast path is the package's rule written in
+// Rust, so none differ; on a GPU it is the device's rasterizer, which
+// may take an edge pixel the other way. The same torus drawn without a
+// mask says how much the cutout took away.
+use "../kernels/";
+
+param level: Int = 1;
+param cutout: Float = 0.5;
+
+node torus: mesh.torus@1 { domain = 1152; }
+node faces: mesh.torus_faces@1 { domain = 2304; }
+node subdivided: graph "../level.esn" {
+    times = level;
+    carry mesh <- vertices;
+    carry faces <- triangles;
+    mesh <- torus.result;
+    faces <- faces.result;
+}
+node project: mesh.project@1 { mesh <- subdivided.vertices; }
+
+// A checker of eight texels a square: alpha one, then zero.
+node mask: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = vec2(64, 64);
+    compute {
+        let square = floor(coord() / 8.0);
+        let clear = fract((square.x + square.y) * 0.5) > 0.25;
+        return vec4(1.0, 1.0, 1.0, if clear { 0.0 } else { 1.0 });
+    }
+}
+
+node package: graph "../../../packages/raster.entpkg/graphs/cutout.esn" {
+    vertices <- project.result;
+    triangles <- subdivided.triangles;
+    mask <- mask.result;
+    cutout = cutout;
+    width = 320;
+    height = 240;
+}
+node native: native.rasterize@2 {
+    vertices <- project.result;
+    triangles <- subdivided.triangles;
+    mask <- mask.result;
+    cutout = cutout;
+    domain = vec2(320, 240);
+}
+node whole: graph "../../../packages/raster.entpkg/graphs/raster.esn" {
+    vertices <- project.result;
+    triangles <- subdivided.triangles;
+    width = 320;
+    height = 240;
+}
+
+// The same two, cut into tiles two pixels wide, so nearly every triangle
+// is covered a tile to an invocation: the package's two forms, which
+// must draw the same surface to the bit on every backend.
+node tiled: graph "../../../packages/raster.entpkg/graphs/cutout_tiled.esn" {
+    vertices <- project.result;
+    triangles <- subdivided.triangles;
+    mask <- mask.result;
+    cutout = cutout;
+    width = 320;
+    height = 240;
+    tile = 2;
+}
+node tiled_whole: graph "../../../packages/raster.entpkg/graphs/tiled.esn" {
+    vertices <- project.result;
+    triangles <- subdivided.triangles;
+    width = 320;
+    height = 240;
+    tile = 2;
+}
+
+// How many pixels either tiled form draws other than its one-pass form,
+// any word of the surface to the bit.
+node split: kernel {
+    requires { field.read; field.write; }
+    input cut: GBuffer <- package.surface;
+    input cut_tiled: GBuffer <- tiled.surface;
+    input all: GBuffer <- whole.surface;
+    input all_tiled: GBuffer <- tiled_whole.surface;
+    output result: Rows<Int>;
+    compute {
+        let a = sample(cut);
+        let b = sample(cut_tiled);
+        let c = sample(all);
+        let d = sample(all_tiled);
+        let same_cut = a.id == b.id && bits(a.depth) == bits(b.depth)
+            && bits(a.uv.x) == bits(b.uv.x) && bits(a.uv.y) == bits(b.uv.y) && bits(a.normal.z) == bits(b.normal.z);
+        let same_all = c.id == d.id && bits(c.depth) == bits(d.depth)
+            && bits(c.uv.x) == bits(d.uv.x) && bits(c.uv.y) == bits(d.uv.y) && bits(c.normal.z) == bits(d.normal.z);
+        return if same_cut && same_all { 0 } else { 1 };
+    }
+    merge(a, b) { return a + b; }
+}
+
+// How many pixels the two draw differently: a different triangle, or
+// none where the other has one — which the device's rasterizer may do at
+// an edge pixel, or at a texel of the mask it reads at another uv.
+node differ: kernel {
+    requires { field.read; field.write; }
+    input cut: GBuffer <- package.surface;
+    input fast: GBuffer <- native.surface;
+    output result: Rows<Int>;
+    compute { return if sample(cut).id != sample(fast).id { 1 } else { 0 }; }
+    merge(a, b) { return a + b; }
+}
+
+// How many pixels the two place at different depths, to the bit: none on
+// the interpreter and the JIT, where the fast path is the rule in Rust;
+// on a device, whose depth is its own, nearly every one.
+node deeper: kernel {
+    requires { field.read; field.write; }
+    input cut: GBuffer <- package.surface;
+    input fast: GBuffer <- native.surface;
+    output result: Rows<Int>;
+    compute { return if bits(sample(cut).depth) != bits(sample(fast).depth) { 1 } else { 0 }; }
+    merge(a, b) { return a + b; }
+}
+
+// How many pixels the mask took from the torus: drawn without it, not
+// with it.
+node taken: kernel {
+    requires { field.read; field.write; }
+    input cut: GBuffer <- package.surface;
+    input all: GBuffer <- whole.surface;
+    output result: Rows<Int>;
+    compute {
+        return if sample(all).id >= 0 && sample(cut).id < 0 { 1 } else { 0 };
+    }
+    merge(a, b) { return a + b; }
+}
+
+node view: mesh.shade@1 { surface <- package.surface; }
+
+output result <- view.result;

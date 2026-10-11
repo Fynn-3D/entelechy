@@ -1,12 +1,12 @@
 //! The JSON wire forms: values, a request's context, evaluation reports,
 //! traces, manifests, the Graph, session events and positioned errors.
 
-use orla_graph::{Binding, ParamValue, Source};
-use orla_ir::{Type, Validated};
-use orla_kernel::{Context, Generation, InputState, KernelId, Manifest, Value};
+use entelechy_graph::{Binding, ParamValue, Source};
+use entelechy_ir::{Type, Validated};
+use entelechy_kernel::{Context, Generation, InputState, KernelId, Manifest, Value};
 use serde_json::{Value as Json, json};
 
-use orla_session::{Event, Session};
+use entelechy_session::{Event, Session};
 
 /// The context an `evaluate`, `trace` or `restore` request describes:
 /// time, rate, pointer, buttons, wheel, sticks, pads, keys, and the
@@ -74,7 +74,7 @@ pub fn context_of(session: &Session, request: &Json) -> Context {
 }
 
 /// The JSON form of an evaluation report.
-pub fn report_json(session: &Session, report: &orla_graph::Report) -> Json {
+pub fn report_json(session: &Session, report: &entelechy_graph::Report) -> Json {
     let host = session.runtime().host();
     let outputs = report
         .outputs
@@ -114,7 +114,7 @@ fn words_of(module: &Validated, ty: Type) -> usize {
 
 /// A value of a type that is not a struct, from its words.
 fn plain_value(ty: Type, words: &[u32]) -> Value {
-    orla_ir::template(ty, &[]).rebuilt(&mut words.iter().copied())
+    entelechy_ir::template(ty, &[]).rebuilt(&mut words.iter().copied())
 }
 
 /// A type's source name; a struct by its name.
@@ -236,10 +236,10 @@ pub fn trace_json(
     module: &Validated,
     node: &str,
     kernel: &KernelId,
-    trace: &orla_session::Trace,
-    place: Option<&orla_session::SourcePlace>,
+    trace: &entelechy_session::Trace,
+    place: Option<&entelechy_session::SourcePlace>,
 ) -> Json {
-    let values = |list: &[orla_session::TraceValue]| {
+    let values = |list: &[entelechy_session::TraceValue]| {
         list.iter()
             .map(|value| json!({ "name": value.name, "type": type_name(module, value.ty), "value": words_json(module, value.ty, &value.words), "ran": value.ran }))
             .collect::<Vec<_>>()
@@ -268,7 +268,7 @@ pub fn trace_json(
 }
 
 /// Adds where a failure is written: `path`, `line`, `column`.
-pub(crate) fn place_json(json: &mut Json, place: &orla_session::SourcePlace) {
+pub(crate) fn place_json(json: &mut Json, place: &entelechy_session::SourcePlace) {
     json["path"] = json!(place.path.display().to_string());
     json["line"] = json!(place.line);
     json["column"] = json!(place.column);
@@ -281,7 +281,7 @@ pub(crate) fn failure(message: impl Into<String>) -> Json {
 /// A failed evaluation as data: the message, its node if any, for a
 /// failed state migration the port and migration Kernel, and a run's
 /// `frame`.
-pub(crate) fn evaluation_error(error: &orla_graph::EvaluateError, frame: Option<u64>) -> Json {
+pub(crate) fn evaluation_error(error: &entelechy_graph::EvaluateError, frame: Option<u64>) -> Json {
     let message = match frame {
         Some(frame) => format!("frame {frame}: {error}"),
         None => error.to_string(),
@@ -290,7 +290,7 @@ pub(crate) fn evaluation_error(error: &orla_graph::EvaluateError, frame: Option<
     if let Some(node) = error.node() {
         json["node"] = json!(node.to_string());
     }
-    if let orla_graph::EvaluateError::Migration { port, kernel, .. } = error {
+    if let entelechy_graph::EvaluateError::Migration { port, kernel, .. } = error {
         json["port"] = json!(port);
         json["migration"] = json!(kernel.to_string());
     }
@@ -301,7 +301,7 @@ pub(crate) fn evaluation_error(error: &orla_graph::EvaluateError, frame: Option<
 }
 
 /// A diagnostic as data: its message, and line and column when placed.
-pub(crate) fn diagnostic_json(diagnostic: &orla_session::Diagnostic) -> Json {
+pub(crate) fn diagnostic_json(diagnostic: &entelechy_session::Diagnostic) -> Json {
     let mut json = failure(diagnostic.message.clone());
     if let Some((line, column)) = diagnostic.at {
         json["line"] = json!(line);
@@ -313,16 +313,16 @@ pub(crate) fn diagnostic_json(diagnostic: &orla_session::Diagnostic) -> Json {
 pub(crate) fn manifest_json(
     manifest: &Manifest,
     generation: Generation,
-    structs: &[orla_ir::StructDef],
+    structs: &[entelechy_ir::StructDef],
 ) -> Json {
-    let port = |ty: &orla_ir::PortType| orla_ir::port_type_name(ty, structs);
+    let port = |ty: &entelechy_ir::PortType| entelechy_ir::port_type_name(ty, structs);
     json!({
         "id": manifest.id.to_string(),
         "generation": generation.0,
         "mode": manifest.mode.to_string(),
         "requires": manifest.requires.iter().map(|c| c.to_string()).collect::<Vec<_>>(),
         "inputs": manifest.inputs.iter().map(|p| json!({ "name": p.name, "type": port(&p.ty) })).collect::<Vec<_>>(),
-        "params": manifest.params.iter().map(|p| json!({ "name": p.name, "type": orla_ir::type_name(p.ty, structs), "default": value_json(&p.default) })).collect::<Vec<_>>(),
+        "params": manifest.params.iter().map(|p| json!({ "name": p.name, "type": entelechy_ir::type_name(p.ty, structs), "default": value_json(&p.default) })).collect::<Vec<_>>(),
         "outputs": manifest.outputs.iter().map(|p| json!({ "name": p.name, "type": port(&p.ty) })).collect::<Vec<_>>(),
         "memories": manifest.memories,
         "budget": manifest.budget,
@@ -330,9 +330,9 @@ pub(crate) fn manifest_json(
 }
 
 pub(crate) fn graph_json(
-    graph: &orla_graph::Graph,
+    graph: &entelechy_graph::Graph,
     overrides: &std::collections::BTreeMap<String, Value>,
-    placements: &[(String, orla_kernel::Placement)],
+    placements: &[(String, entelechy_kernel::Placement)],
 ) -> Json {
     let source = |source: &Source| source.to_string();
     let placed = |node: &str| placements.iter().find(|(id, _)| id == node).map(|(_, p)| p);
@@ -359,10 +359,10 @@ pub(crate) fn graph_json(
                 ParamValue::Graph(p) => json!({ "param": p }),
             })).collect::<serde_json::Map<_, _>>(),
             "domain": node.domain.as_ref().map(|d| match d {
-                orla_graph::DomainSpec::Literal(orla_kernel::Domain::Rows(n)) => json!([n]),
-                orla_graph::DomainSpec::Literal(orla_kernel::Domain::Grid(w, h)) => json!([w, h]),
-                orla_graph::DomainSpec::Literal(orla_kernel::Domain::Volume(w, h, d)) => json!([w, h, d]),
-                orla_graph::DomainSpec::Expr(expr) => json!(expr.to_string()),
+                entelechy_graph::DomainSpec::Literal(entelechy_kernel::Domain::Rows(n)) => json!([n]),
+                entelechy_graph::DomainSpec::Literal(entelechy_kernel::Domain::Grid(w, h)) => json!([w, h]),
+                entelechy_graph::DomainSpec::Literal(entelechy_kernel::Domain::Volume(w, h, d)) => json!([w, h, d]),
+                entelechy_graph::DomainSpec::Expr(expr) => json!(expr.to_string()),
             }),
             "async": node.is_async,
         })).collect::<Vec<_>>(),

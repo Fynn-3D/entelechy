@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # Silence, then the `1` key fills the lowest string with noise and it
 # rings on through the frames after it, smoother and quieter each time

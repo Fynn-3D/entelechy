@@ -1,6 +1,6 @@
-//! The `orla-player` command: a window, sound card and pads over a live
+//! The `entelechy-player` command: a window, sound card and pads over a live
 //! session. Frames, key meanings and the frame line are
-//! `orla_session::play`'s.
+//! `entelechy_session::play`'s.
 
 use std::num::NonZeroU32;
 use std::process::ExitCode;
@@ -8,11 +8,11 @@ use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use orla_gpu::present::{Display, Overlay, Presenter};
-use orla_player::audio::Audio;
-use orla_player::gamepad::Gamepad;
-use orla_session::Session;
-use orla_session::play::{self, Frame, Placement, Play, View, hud};
+use entelechy_gpu::present::{Display, Overlay, Presenter};
+use entelechy_player::audio::Audio;
+use entelechy_player::gamepad::Gamepad;
+use entelechy_session::Session;
+use entelechy_session::play::{self, Frame, Placement, Play, View, hud};
 use serde_json::Value as Json;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -23,7 +23,7 @@ use winit::window::{Window, WindowId};
 
 const USAGE: &str = "\
 usage:
-  orla-player <scene.osn> [--library <dir|file>] [--input <name>=<file.ppm>]... [--scale <n>]
+  entelechy-player <scene.esn> [--library <dir|file>] [--input <name>=<file.ppm>]... [--scale <n>]
               [--replay <file.replay>]
               [--window <w>x<h>] [--backend gpu|cpu|jit|best] [--memory <MB>] [--work <M>]
               [--allow file.read|file.write=<dir>]... [--grant <capability,...>]
@@ -49,7 +49,7 @@ usage:
       keys and window drive the scene at the replay's own times, its
       checks run as they come, and when it ends what it observed is
       printed and the window is yours. The replay names its scene, so
-      `orla-player --replay <file.replay>` is enough.
+      `entelechy-player --replay <file.replay>` is enough.
       Close the window, or press Cmd+Q, to quit.
       With --serve, the creation protocol runs on stdin and stdout inside the
       window, and on every connection to --listen <host:port>: an agent's
@@ -64,7 +64,7 @@ const DEFAULT_WINDOW: (u32, u32) = (960, 540);
 struct Options {
     /// The session: scene, library, inputs, params, backend, limits and
     /// allowances.
-    session: orla_session::SessionOptions,
+    session: entelechy_session::SessionOptions,
     scale: u32,
     /// The window's logical size, when given; else the output's times `scale`.
     window: Option<(u32, u32)>,
@@ -75,12 +75,12 @@ struct Options {
     no_audio: bool,
     /// A replay driving the scene frame by frame at its own times; the
     /// person takes over when it ends.
-    replay: Option<orla_session::replay::Replay>,
+    replay: Option<entelechy_session::replay::Replay>,
 }
 
 fn parse(args: &[String]) -> Result<Options, String> {
     let mut options = Options {
-        session: orla_session::SessionOptions::from_environment(),
+        session: entelechy_session::SessionOptions::from_environment(),
         scale: 2,
         window: None,
         serve: false,
@@ -108,7 +108,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 let text = std::fs::read_to_string(&path)
                     .map_err(|e| format!("{}: {e}", path.display()))?;
                 let base = path.parent().unwrap_or(std::path::Path::new("."));
-                let replay = orla_session::replay::parse(&text, base)
+                let replay = entelechy_session::replay::parse(&text, base)
                     .map_err(|e| format!("{}: {e}", path.display()))?;
                 options.replay = Some(replay);
             }
@@ -120,7 +120,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
                     .ok_or_else(|| "--scale needs a positive integer".to_string())?;
             }
             "--window" => {
-                let ([w, h], _) = orla_session::parse_window(&value("--window")?)?;
+                let ([w, h], _) = entelechy_session::parse_window(&value("--window")?)?;
                 options.window = Some((w as u32, h as u32));
             }
             other => return Err(format!("unknown flag {other}")),
@@ -138,7 +138,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         }
         if options.window.is_none() {
             options.window = replay.steps.iter().find_map(|step| match step {
-                orla_session::replay::Step::Window { size, scale } => {
+                entelechy_session::replay::Step::Window { size, scale } => {
                     Some(((size[0] / scale) as u32, (size[1] / scale) as u32))
                 }
                 _ => None,
@@ -169,13 +169,13 @@ struct Player {
     /// The GPU presenter, when the backend is the GPU and the surface is
     /// configured; it shows frames without readback.
     presenter: Option<Presenter>,
-    last_frame: Option<orla_kernel::Image>,
+    last_frame: Option<entelechy_kernel::Image>,
     last_size: (u32, u32),
     /// Protocol requests arriving from stdin or a socket, when serving.
-    requests: Option<Receiver<orla_protocol::Incoming>>,
+    requests: Option<Receiver<entelechy_protocol::Incoming>>,
     /// The answers owed, including a `compose` or `publish` waiting for
     /// its change to stand while frames continue.
-    answers: orla_protocol::Answers,
+    answers: entelechy_protocol::Answers,
     /// The sound card, opened when a scene has a sound-shaped output.
     audio: Option<Audio>,
     /// The gamepads, when the system offers them.
@@ -184,22 +184,22 @@ struct Player {
     audio_failed: bool,
     /// The sound of the frame in flight, fetched to be heard next frame
     /// ([`Session::overlaps`]).
-    sound_behind: Option<orla_kernel::Fetch>,
+    sound_behind: Option<entelechy_kernel::Fetch>,
 }
 
-impl orla_protocol::Served for Player {
+impl entelechy_protocol::Served for Player {
     fn session(&mut self) -> &mut Session {
         &mut self.session
     }
 
     /// `evaluate` runs one window frame under the person's input;
     /// measured, each of its nodes waits for the device.
-    fn own(&mut self, incoming: &orla_protocol::Incoming) -> Option<(String, bool)> {
-        let (id, request) = orla_protocol::parse_request(&incoming.line).ok()?;
+    fn own(&mut self, incoming: &entelechy_protocol::Incoming) -> Option<(String, bool)> {
+        let (id, request) = entelechy_protocol::parse_request(&incoming.line).ok()?;
         if request.get("op").and_then(Json::as_str) != Some("evaluate") {
             return None;
         }
-        let measured = orla_protocol::measure_asked(&request);
+        let measured = entelechy_protocol::measure_asked(&request);
         self.session.set_measured(measured);
         let frame = self.frame();
         if measured {
@@ -207,14 +207,14 @@ impl orla_protocol::Served for Player {
         }
         // The frame answered is confirmed: what it committed holds.
         let result = match frame {
-            Some(report) if self.confirm() => Ok(orla_protocol::evaluation_json(
+            Some(report) if self.confirm() => Ok(entelechy_protocol::evaluation_json(
                 &self.session,
                 &report,
                 measured,
             )),
             _ => Err(serde_json::json!({ "message": self.play.status() })),
         };
-        Some((orla_protocol::envelope(&id, result), false))
+        Some((entelechy_protocol::envelope(&id, result), false))
     }
 }
 
@@ -266,7 +266,7 @@ impl Player {
         confirmed
     }
 
-    fn frame(&mut self) -> Option<orla_graph::Report> {
+    fn frame(&mut self) -> Option<entelechy_graph::Report> {
         if let Some(gamepad) = &mut self.gamepad {
             gamepad.poll(&mut self.play);
         }
@@ -305,7 +305,7 @@ impl Player {
         let Some(requests) = &self.requests else {
             return;
         };
-        let pending: Vec<orla_protocol::Incoming> =
+        let pending: Vec<entelechy_protocol::Incoming> =
             std::iter::from_fn(|| requests.try_recv().ok()).collect();
         // A request sees what the last frame left, confirmed.
         if !pending.is_empty() || self.answers.is_waiting() {
@@ -327,7 +327,10 @@ impl Player {
     /// Shows a picture from the device when resident and presentable,
     /// else by download and blit. Returns placement, path, and whether it
     /// downloaded.
-    fn show(&mut self, output: orla_kernel::Handle) -> (Option<Placement>, &'static str, bool) {
+    fn show(
+        &mut self,
+        output: entelechy_kernel::Handle,
+    ) -> (Option<Placement>, &'static str, bool) {
         if let (Some(window), Some(presenter)) = (&self.window, &mut self.presenter) {
             // What the device cannot show as it lies downloads (widened)
             // and is drawn or refused below.
@@ -374,7 +377,7 @@ impl Player {
 
     /// Hands the frame's sound output to the sound card, opening it on
     /// first use.
-    fn sound(&mut self, sound: Option<orla_kernel::Handle>) {
+    fn sound(&mut self, sound: Option<entelechy_kernel::Handle>) {
         if !self.audio_allowed || self.audio_failed {
             return;
         }
@@ -413,7 +416,7 @@ impl Player {
             match self
                 .sound_behind
                 .replace(fetch)
-                .map(orla_kernel::Fetch::take)
+                .map(entelechy_kernel::Fetch::take)
             {
                 Some(Ok(data)) => data.values().to_vec(),
                 _ => return,
@@ -436,7 +439,7 @@ impl Player {
                 .graph()
                 .map(|graph| graph.name.clone())
                 .unwrap_or_else(|| "no scene".into());
-            window.set_title(&format!("Orla Player: {name}"));
+            window.set_title(&format!("Entelechy Player: {name}"));
         }
     }
 
@@ -464,7 +467,7 @@ impl Player {
         let pixels = self
             .last_frame
             .as_ref()
-            .map_or(&[][..], orla_kernel::Image::pixels);
+            .map_or(&[][..], entelechy_kernel::Image::pixels);
         let placement = play::present(
             pixels,
             self.last_size.0,
@@ -495,7 +498,7 @@ impl ApplicationHandler for Player {
             .requested
             .unwrap_or((width * self.scale, height * self.scale));
         let attributes = Window::default_attributes()
-            .with_title("Orla Player")
+            .with_title("Entelechy Player")
             .with_inner_size(LogicalSize::new(logical_width, logical_height));
         let window = match event_loop.create_window(attributes) {
             Ok(window) => Arc::new(window),
@@ -609,7 +612,11 @@ fn main() -> ExitCode {
         }
     };
     let backend = options.session.backend.as_deref().unwrap_or("best");
-    let built = match Session::build(backend, options.session.limits, orla_gpu::Wait::blocking()) {
+    let built = match Session::build(
+        backend,
+        options.session.limits,
+        entelechy_gpu::Wait::blocking(),
+    ) {
         Ok(built) => built,
         Err(error) => {
             eprintln!("error: {error}");
@@ -667,7 +674,7 @@ fn main() -> ExitCode {
         last_frame: None,
         last_size: (0, 0),
         requests: None,
-        answers: orla_protocol::Answers::new(),
+        answers: entelechy_protocol::Answers::new(),
         audio: None,
         gamepad,
         audio_allowed: !options.no_audio,
@@ -681,8 +688,8 @@ fn main() -> ExitCode {
     if options.serve {
         let (sender, receiver) = channel();
         if let Some(address) = &options.listen {
-            let origins = orla_protocol::websocket::Origins::with(options.origins.clone());
-            match orla_protocol::listen(address, sender.clone(), origins) {
+            let origins = entelechy_protocol::websocket::Origins::with(options.origins.clone());
+            match entelechy_protocol::listen(address, sender.clone(), origins) {
                 Ok(bound) => eprintln!("listening on {bound}"),
                 Err(error) => {
                     eprintln!("error: cannot listen on {address}: {error}");
@@ -690,7 +697,7 @@ fn main() -> ExitCode {
                 }
             }
         }
-        if let Err(error) = orla_protocol::stdin_into(sender) {
+        if let Err(error) = entelechy_protocol::stdin_into(sender) {
             eprintln!("error: cannot read standard input: {error}");
             return ExitCode::FAILURE;
         }

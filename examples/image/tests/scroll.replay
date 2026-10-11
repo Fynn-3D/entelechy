@@ -1,4 +1,4 @@
-scene ../parts/scroll/scene.osn
+scene ../parts/scroll/scene.esn
 
 # At time zero the tile's edge falls between pixels 191 and 192, and a
 # square's edge inside the tile between 23 and 24. Nearest texels step

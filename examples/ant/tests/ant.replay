@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # One frame is 250 steps from the centre of a blank grid. The first step
 # flips (48, 32) and turns the ant right, to (49, 32); the second flips

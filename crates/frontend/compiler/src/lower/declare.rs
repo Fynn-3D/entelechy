@@ -4,11 +4,11 @@
 
 use std::str::FromStr;
 
-use orla_ir::{
+use entelechy_ir::{
     Capability, Combine, Field, KernelId, Manifest, Mode, Param, Port, PortType, Shape, StructDef,
     Type, Value, schema_of,
 };
-use orla_language::{Expr, ExprKind, Kernel, Span, Spanned};
+use entelechy_language::{Expr, ExprKind, Kernel, Span, Spanned};
 
 use crate::CompileError;
 
@@ -47,7 +47,9 @@ pub(super) fn structs(kernel: &Kernel) -> Result<Structs, CompileError> {
 }
 
 /// The struct table the declarations make, in order.
-pub(super) fn struct_table(decls: &[orla_language::StructDecl]) -> Result<Structs, CompileError> {
+pub(super) fn struct_table(
+    decls: &[entelechy_language::StructDecl],
+) -> Result<Structs, CompileError> {
     struct_table_in(Structs::default(), decls)
 }
 
@@ -56,7 +58,7 @@ pub(super) fn struct_table(decls: &[orla_language::StructDecl]) -> Result<Struct
 /// so a struct may name one declared after it.
 fn struct_table_in(
     structs: Structs,
-    decls: &[orla_language::StructDecl],
+    decls: &[entelechy_language::StructDecl],
 ) -> Result<Structs, CompileError> {
     for decl in dependency_order(decls)? {
         struct_entry(&structs, decl).map_err(|error| error.in_declaration(&decl.name.value))?;
@@ -66,7 +68,10 @@ fn struct_table_in(
 
 /// The declarations a type written `ty` names, and those their fields
 /// name in turn, in the order declared.
-fn reached_by(decls: &[orla_language::StructDecl], ty: &str) -> Vec<orla_language::StructDecl> {
+fn reached_by(
+    decls: &[entelechy_language::StructDecl],
+    ty: &str,
+) -> Vec<entelechy_language::StructDecl> {
     let words = |ty: &str| -> Vec<String> {
         ty.split(|c: char| !(c.is_alphanumeric() || c == '_'))
             .filter(|word| !word.is_empty())
@@ -96,12 +101,15 @@ fn reached_by(decls: &[orla_language::StructDecl], ty: &str) -> Vec<orla_languag
 /// The declarations, each after those its fields name (a depth-first walk
 /// in the order written); two that contain each other are refused.
 fn dependency_order(
-    decls: &[orla_language::StructDecl],
-) -> Result<Vec<&orla_language::StructDecl>, CompileError> {
+    decls: &[entelechy_language::StructDecl],
+) -> Result<Vec<&entelechy_language::StructDecl>, CompileError> {
     // 0 unvisited, 1 on the walk, 2 placed.
     let mut state = vec![0u8; decls.len()];
     let mut order = Vec::with_capacity(decls.len());
-    fn named(decls: &[orla_language::StructDecl], decl: &orla_language::StructDecl) -> Vec<usize> {
+    fn named(
+        decls: &[entelechy_language::StructDecl],
+        decl: &entelechy_language::StructDecl,
+    ) -> Vec<usize> {
         let mut out = Vec::new();
         for (_, ty) in &decl.fields {
             for word in ty
@@ -119,10 +127,10 @@ fn dependency_order(
         out
     }
     fn visit<'d>(
-        decls: &'d [orla_language::StructDecl],
+        decls: &'d [entelechy_language::StructDecl],
         i: usize,
         state: &mut [u8],
-        order: &mut Vec<&'d orla_language::StructDecl>,
+        order: &mut Vec<&'d entelechy_language::StructDecl>,
         walk: &mut Vec<usize>,
     ) -> Result<(), CompileError> {
         match state[i] {
@@ -158,7 +166,10 @@ fn dependency_order(
 }
 
 /// One struct appended to `structs`.
-fn struct_entry(structs: &Structs, decl: &orla_language::StructDecl) -> Result<(), CompileError> {
+fn struct_entry(
+    structs: &Structs,
+    decl: &entelechy_language::StructDecl,
+) -> Result<(), CompileError> {
     if structs.is_enum(&decl.name.value) {
         return Err(semantic(
             decl.name.span,
@@ -211,7 +222,7 @@ pub(crate) fn literal(expr: &Expr) -> Result<Value, CompileError> {
 /// booleans, vector and matrix constructors and their `d`/`l` kin,
 /// `[a, b]`, `[v; N]`, and `Name { field: .. }` with fields in the order
 /// `fields_of` gives. An array or struct is a record of its members;
-/// [`orla_ir::value_as`] shapes it into a type.
+/// [`entelechy_ir::value_as`] shapes it into a type.
 pub(crate) fn literal_in(
     expr: &Expr,
     fields_of: &dyn Fn(&str) -> Option<Vec<String>>,
@@ -397,7 +408,7 @@ mod num {
 /// `ivec2(3, 4)`, `mat3(c0, c1, c2)` from columns, `mat3(1.0)` down the
 /// diagonal, and their double and long kin.
 fn constructed(name: &str, args: &[Value]) -> Option<Value> {
-    use orla_ir::{Number, Scalar};
+    use entelechy_ir::{Number, Scalar};
     let (scalar, n, matrix) = match name {
         "vec2" => (Scalar::Float, 2, false),
         "vec3" => (Scalar::Float, 3, false),
@@ -469,7 +480,7 @@ fn constructed(name: &str, args: &[Value]) -> Option<Value> {
     for number in numbers {
         number.push_words(&mut words);
     }
-    Some(orla_ir::template(ty, &[]).rebuilt(&mut words.into_iter()))
+    Some(entelechy_ir::template(ty, &[]).rebuilt(&mut words.into_iter()))
 }
 
 /// The matrix of order `n` of `kind`.
@@ -634,8 +645,11 @@ pub(super) fn port_type(
     let schema = match kept {
         None => schema,
         Some(kept) => {
-            let Some(encoding) = orla_ir::Encoding::parse(kept) else {
-                let names: Vec<&str> = orla_ir::Encoding::NARROW.iter().map(|e| e.name()).collect();
+            let Some(encoding) = entelechy_ir::Encoding::parse(kept) else {
+                let names: Vec<&str> = entelechy_ir::Encoding::NARROW
+                    .iter()
+                    .map(|e| e.name())
+                    .collect();
                 return Err(semantic(
                     text.span,
                     format!(
@@ -683,7 +697,7 @@ pub(super) fn aliases(
 
 /// One alias's shape, checked against what is declared before it.
 fn alias_entry(
-    decl: &orla_language::TypeAlias,
+    decl: &entelechy_language::TypeAlias,
     structs: &Structs,
     aliases: &[(String, PortType)],
 ) -> Result<PortType, CompileError> {
@@ -738,7 +752,7 @@ pub(super) fn manifest(
             ));
         }
     };
-    let requires: orla_ir::Capabilities = kernel
+    let requires: entelechy_ir::Capabilities = kernel
         .requires
         .iter()
         .map(|name| {
@@ -752,7 +766,7 @@ pub(super) fn manifest(
             })
         })
         .collect::<Result<_, _>>()?;
-    let ports = |decls: &[orla_language::PortDecl]| {
+    let ports = |decls: &[entelechy_language::PortDecl]| {
         decls
             .iter()
             .map(|decl| {
@@ -1041,14 +1055,16 @@ pub(super) fn manifest(
         }
     }
     let budget = match &kernel.budget {
-        None => orla_ir::DEFAULT_BUDGET,
-        Some(declared) if (1..=orla_ir::MAX_BUDGET).contains(&declared.value) => declared.value,
+        None => entelechy_ir::DEFAULT_BUDGET,
+        Some(declared) if (1..=entelechy_ir::MAX_BUDGET).contains(&declared.value) => {
+            declared.value
+        }
         Some(declared) => {
             return Err(semantic(
                 declared.span,
                 format!(
                     "a Kernel's budget is 1 to {} loop iterations an element, found {}",
-                    orla_ir::MAX_BUDGET,
+                    entelechy_ir::MAX_BUDGET,
                     declared.value
                 ),
             ));
@@ -1072,7 +1088,7 @@ pub(super) fn manifest(
 pub(crate) fn literal_of_type(
     expr: &Expr,
     ty: &Spanned<String>,
-    decls: &[orla_language::StructDecl],
+    decls: &[entelechy_language::StructDecl],
 ) -> Result<Value, CompileError> {
     let table = struct_table(&reached_by(decls, &ty.value))?;
     let ty = resolve_type(ty, &table)?;
@@ -1094,7 +1110,7 @@ pub(super) fn constant(
             .map(|def| def.fields.iter().map(|field| field.name.clone()).collect())
     };
     let value = literal_exact(expr, &fields_of)?;
-    orla_ir::value_as(&value, ty, structs).ok_or_else(|| {
+    entelechy_ir::value_as(&value, ty, structs).ok_or_else(|| {
         // A literal past its width says so.
         let value = match literal_in(expr, &fields_of) {
             Ok(written) => written,

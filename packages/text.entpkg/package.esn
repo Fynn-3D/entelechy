@@ -1,0 +1,8 @@
+//! The text package: a 5 by 7 font baked into `font.png`, the layout
+//! that turns a string into glyph rows, and the Kernels that draw them.
+//! A scene binds the font as an input beside using the package:
+//!   use "../../packages/text.entpkg";
+//!   input font: Grid<Float> = "../../packages/text.entpkg/font.png";
+package text@1 { language = 1; ir = 1; }
+
+use "kernels/";

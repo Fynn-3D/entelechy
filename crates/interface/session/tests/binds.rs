@@ -2,8 +2,8 @@
 //! by a check, unrun, in the words an evaluation says it; what only the
 //! data decides is left to the evaluation.
 
-use orla_kernel::{Context, Runtime};
-use orla_session::Session;
+use entelechy_kernel::{Context, Runtime};
+use entelechy_session::Session;
 
 const LIB: &str = "kernel t.fill@1 { requires { field.write; } output result: Rows<Float>; compute { return 1.0; } }
 kernel t.sized@1 { requires { field.read; field.write; } input fit: Rows<Float>; output result: Rows<Float>; compute { return 2.0; } }
@@ -18,14 +18,14 @@ kernel t.tris@1 { requires { field.write; } output result: Rows<Tri>; compute { 
 
 /// What a check of `scene` says is a problem, and what evaluating it says.
 fn said(name: &str, scene: &str) -> (Vec<String>, String) {
-    let dir = std::env::temp_dir().join(format!("orla-binds-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-binds-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("lib.orla"), LIB).unwrap();
-    std::fs::write(dir.join("scene.osn"), format!("use \"lib.orla\";\n{scene}")).unwrap();
-    let checked = orla_session::check_document(
-        &orla_session::Disk::default(),
-        &dir.join("scene.osn"),
+    std::fs::write(dir.join("lib.ent"), LIB).unwrap();
+    std::fs::write(dir.join("scene.esn"), format!("use \"lib.ent\";\n{scene}")).unwrap();
+    let checked = entelechy_session::check_document(
+        &entelechy_session::Disk::default(),
+        &dir.join("scene.esn"),
         false,
     );
     let problems = checked
@@ -34,8 +34,8 @@ fn said(name: &str, scene: &str) -> (Vec<String>, String) {
         .filter(|(problem, _)| *problem)
         .map(|(_, line)| line.clone())
         .collect();
-    let runtime = Runtime::with_backends(1 << 20, Box::new(orla_cpu::CpuBackend), None);
-    let mut session = Session::open_with(&dir.join("scene.osn"), None, runtime);
+    let runtime = Runtime::with_backends(1 << 20, Box::new(entelechy_cpu::CpuBackend), None);
+    let mut session = Session::open_with(&dir.join("scene.esn"), None, runtime);
     session.sync();
     let evaluated = match session.evaluate(&Context::default()) {
         Ok(_) => String::new(),
@@ -126,14 +126,14 @@ fn what_only_the_data_decides_is_left_to_the_evaluation() {
 
 /// What a check of `scene`, over `lib`, notes and says.
 fn checked_lines(name: &str, lib: &str, scene: &str) -> Vec<String> {
-    let dir = std::env::temp_dir().join(format!("orla-binds-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-binds-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("lib.orla"), lib).unwrap();
-    std::fs::write(dir.join("scene.osn"), format!("use \"lib.orla\";\n{scene}")).unwrap();
-    let checked = orla_session::check_document(
-        &orla_session::Disk::default(),
-        &dir.join("scene.osn"),
+    std::fs::write(dir.join("lib.ent"), lib).unwrap();
+    std::fs::write(dir.join("scene.esn"), format!("use \"lib.ent\";\n{scene}")).unwrap();
+    let checked = entelechy_session::check_document(
+        &entelechy_session::Disk::default(),
+        &dir.join("scene.esn"),
         false,
     );
     let _ = std::fs::remove_dir_all(&dir);

@@ -37,7 +37,7 @@ impl GpuBackend {
 
 /// Where a picture lands in a window: one rule for the device's presenter
 /// and a CPU blit alike.
-pub use orla_rules::placement::{Placement, placement};
+pub use entelechy_rules::placement::{Placement, placement};
 
 /// The WGSL that blits a `vec4<f32>` storage buffer onto the surface.
 pub const BLIT: &str = "
@@ -138,11 +138,11 @@ impl Display {
         config.format = format;
         surface.configure(device, &config);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("orla blit"),
+            label: Some("entelechy blit"),
             source: wgpu::ShaderSource::Wgsl(BLIT.into()),
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("orla blit"),
+            label: Some("entelechy blit"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -177,12 +177,12 @@ impl Display {
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("orla blit"),
+            label: Some("entelechy blit"),
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("orla blit"),
+            label: Some("entelechy blit"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -265,7 +265,7 @@ impl Display {
         let overlay_buffer =
             self.buffer("blit overlay", &overlay_bytes, wgpu::BufferUsages::STORAGE);
         let bind_group = gpu_device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("orla blit"),
+            label: Some("entelechy blit"),
             layout: &presenter.layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -298,11 +298,11 @@ impl Display {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = gpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("orla present"),
+            label: Some("entelechy present"),
         });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("orla blit"),
+                label: Some("entelechy blit"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     depth_slice: None,
@@ -378,7 +378,7 @@ mod tests {
         let (_, _, device, _) = gpu.parts();
         let guard = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let _ = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("orla blit"),
+            label: Some("entelechy blit"),
             source: wgpu::ShaderSource::Wgsl(BLIT.into()),
         });
         assert!(pollster::block_on(guard.pop()).is_none());

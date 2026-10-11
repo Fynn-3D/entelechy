@@ -5,8 +5,8 @@
 
 use std::any::Any;
 
-use orla_abi::{Handle, Invocation, Scope, Shape};
-use orla_ir::{Capabilities, Capability, KernelId, Manifest, Port, PortType, Type, Validated};
+use entelechy_abi::{Handle, Invocation, Scope, Shape};
+use entelechy_ir::{Capabilities, Capability, KernelId, Manifest, Port, PortType, Type, Validated};
 
 use crate::ExecutionError;
 
@@ -44,12 +44,12 @@ impl NativeOp {
 
     /// The structs the manifest's ports name, by index: a vertex, a
     /// triangle, a surface texel and, for the cutout, a mask pixel.
-    pub fn structs(self) -> Vec<orla_ir::StructDef> {
-        let def = |name: &str, fields: &[(&str, Type)]| orla_ir::StructDef {
+    pub fn structs(self) -> Vec<entelechy_ir::StructDef> {
+        let def = |name: &str, fields: &[(&str, Type)]| entelechy_ir::StructDef {
             name: name.to_owned(),
             fields: fields
                 .iter()
-                .map(|(name, ty)| orla_ir::Field {
+                .map(|(name, ty)| entelechy_ir::Field {
                     name: (*name).to_owned(),
                     ty: *ty,
                 })
@@ -104,10 +104,10 @@ impl NativeOp {
                     schema: crate::raster::mask_schema(),
                 },
             });
-            manifest.params.push(orla_ir::Param {
+            manifest.params.push(entelechy_ir::Param {
                 name: "cutout".into(),
                 ty: Type::Float,
-                default: orla_abi::Value::Float(0.5),
+                default: entelechy_abi::Value::Float(0.5),
             });
             return manifest;
         }
@@ -128,9 +128,9 @@ impl NativeOp {
             Self::RasterizeCutout | Self::RasterizeCanvas => unreachable!("answered above"),
             Self::Rasterize => Manifest {
                 id: self.id(),
-                mode: orla_ir::Mode::Map,
+                mode: entelechy_ir::Mode::Map,
                 memories: Vec::new(),
-                budget: orla_ir::DEFAULT_BUDGET,
+                budget: entelechy_ir::DEFAULT_BUDGET,
                 requires: [Capability::FieldRead, Capability::FieldWrite]
                     .into_iter()
                     .collect::<Capabilities>(),
@@ -175,7 +175,7 @@ impl NativeOp {
 //   input triangles: Rows<{ a: Int; b: Int; c: Int; }>
 //   input canvas: Grid<Long>
 //   output surface: Grid<{ depth: Float; normal: Vec3; uv: Vec2; id: Int; }>
-// The raster package's `canvas.osn`, fast: as `native.rasterize@1`, over
+// The raster package's `canvas.esn`, fast: as `native.rasterize@1`, over
 // the extent of `canvas`, an empty canvas: the node's domain is
 // `size(canvas)`. Its keys are not read; every pixel starts empty.
 "
@@ -477,7 +477,7 @@ mod tests {
             let structs = op.structs();
             let manifest = op.manifest();
             for port in manifest.inputs.iter().chain(&manifest.outputs) {
-                let schema = orla_ir::schema_of(port.ty.element, &structs)
+                let schema = entelechy_ir::schema_of(port.ty.element, &structs)
                     .unwrap_or_else(|| panic!("{} names an undefined struct", port.name));
                 assert_eq!(schema, port.ty.schema, "{:?} port {}", op, port.name);
             }

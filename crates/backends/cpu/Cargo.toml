@@ -1,6 +1,6 @@
 [package]
-name = "orla-cpu"
-description = "CPU backend: executes validated Orla IR through the Capability ABI"
+name = "entelechy-cpu"
+description = "CPU backend: executes validated Entelechy IR through the Capability ABI"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,13 +11,13 @@ rust-version.workspace = true
 doctest = false
 
 [dependencies]
-orla-rules = { path = "../../core/rules" }
-orla-abi = { path = "../../core/abi" }
-orla-ir = { path = "../../core/ir" }
+entelechy-rules = { path = "../../core/rules" }
+entelechy-abi = { path = "../../core/abi" }
+entelechy-ir = { path = "../../core/ir" }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
-orla-compiler = { path = "../../frontend/compiler" }
-orla-conformance = { path = "../../backends/conformance" }
+entelechy-compiler = { path = "../../frontend/compiler" }
+entelechy-conformance = { path = "../../backends/conformance" }

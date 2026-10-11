@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use orla_kernel::{Runtime, Value};
+use entelechy_kernel::{Runtime, Value};
 
 use crate::{Allowance, Limits, Session, parse_allow};
 
@@ -29,7 +29,7 @@ pub struct SessionOptions {
     pub allow: Vec<Allowance>,
     /// The capabilities a Kernel may be given (`--grant`); `None` grants
     /// every capability.
-    pub grants: Option<orla_kernel::Capabilities>,
+    pub grants: Option<entelechy_kernel::Capabilities>,
     /// Where a `use` by name finds a package; see [`environment_packages`].
     pub packages: Vec<PathBuf>,
 }
@@ -52,12 +52,12 @@ impl Default for SessionOptions {
 }
 
 /// The package directories a front takes from where it runs: each
-/// `:`-separated `ORLA_PACKAGES` directory, then the `packages` directory
+/// `:`-separated `ENTELECHY_PACKAGES` directory, then the `packages` directory
 /// installed beside its executable's `bin` (a release's), when there is
 /// one. A front passes them to the session it opens; the session reads no
 /// environment of its own.
 pub fn environment_packages() -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = std::env::var_os("ORLA_PACKAGES")
+    let mut dirs: Vec<PathBuf> = std::env::var_os("ENTELECHY_PACKAGES")
         .map(|dirs| std::env::split_paths(&dirs).collect())
         .unwrap_or_default();
     let installed = std::env::current_exe()
@@ -102,11 +102,13 @@ impl SessionOptions {
             "--grant" => {
                 let grants = self.grants.get_or_insert_with(Default::default);
                 for name in value(arg)?.split(',').filter(|name| !name.is_empty()) {
-                    let capability: orla_kernel::Capability =
+                    let capability: entelechy_kernel::Capability =
                         name.trim().parse().map_err(|_| {
                             format!(
                                 "--grant takes capabilities ({}), not `{name}`",
-                                orla_kernel::Capability::ALL.map(|c| c.name()).join(", ")
+                                entelechy_kernel::Capability::ALL
+                                    .map(|c| c.name())
+                                    .join(", ")
                             )
                         })?;
                     grants.insert(capability);
@@ -118,8 +120,8 @@ impl SessionOptions {
                 let (name, text) = binding
                     .split_once('=')
                     .ok_or_else(|| "--param needs <name>=<literal>".to_string())?;
-                let expr = orla_language::parse_literal(text).map_err(|e| e.to_string())?;
-                let literal = orla_compiler::literal(&expr).map_err(|e| e.to_string())?;
+                let expr = entelechy_language::parse_literal(text).map_err(|e| e.to_string())?;
+                let literal = entelechy_compiler::literal(&expr).map_err(|e| e.to_string())?;
                 self.params.push((name.to_owned(), literal));
             }
             "--input" => {

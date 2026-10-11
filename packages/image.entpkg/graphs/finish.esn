@@ -1,0 +1,24 @@
+//! The whole finish, as a sub-graph, usually a scene's last node: the
+//! glow, the soft copy for the depth of field, and the grade, filling the
+//! window. `source` is the picture of light with its depth in w; `focus`
+//! a row whose first value is how far the camera is focused. Place it with
+//!   node finish: graph "image.entpkg/graphs/finish.esn" {
+//!       source <- look.result; focus <- lens.result;
+//!   }
+use "../kernels/film.ent";
+
+input source: Grid<Vec4>;
+input focus: Rows<Float>;
+param exposure: Float = 1.0;
+param over: Float = 0.8;
+param grain: Float = 0.03;
+
+node glow: graph "bloom.esn" { source <- source; over = over; }
+node small: image.shrink@1 { source <- source; domain = ceil(size(source) / 3); }
+node soft: graph "blur.esn" { source <- small.result; sigma = 2.15; }
+node grade: image.grade@2 {
+    source <- source; soft <- soft.result; near_glow <- glow.near; far_glow <- glow.far; focus <- focus;
+    exposure = exposure; grain = grain; domain = window();
+}
+
+output result <- grade.result;

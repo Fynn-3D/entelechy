@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use orla_host::{Domain, FieldData, HostError, Scalar, Schema};
+use entelechy_host::{Domain, FieldData, HostError, Scalar, Schema};
 
 /// Why bytes are not a WAV the Host can take.
 #[derive(Debug)]

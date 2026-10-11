@@ -164,17 +164,17 @@ pub struct Door {
 pub const DOORS: [Door; 3] = [
     Door {
         name: "stdin",
-        opened: "orla serve <scene.osn>",
+        opened: "entelechy serve <scene.esn>",
         doc: "Request lines on standard input, answer lines on standard output; `quit` ends the process.",
     },
     Door {
         name: "socket",
-        opened: "orla serve <scene.osn> --listen <host:port>",
+        opened: "entelechy serve <scene.esn> --listen <host:port>",
         doc: "The same lines over each TCP connection to the address; `quit` ends the connection.",
     },
     Door {
         name: "websocket",
-        opened: "orla serve <scene.osn> --listen <host:port>",
+        opened: "entelechy serve <scene.esn> --listen <host:port>",
         doc: "The same lines as WebSocket text messages to the same address, one request a message.",
     },
 ];

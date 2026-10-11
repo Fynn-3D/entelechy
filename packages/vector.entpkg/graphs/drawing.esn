@@ -1,0 +1,25 @@
+//! A drawing, whole and fitted to the window, over `background`. Its
+//! Fields are what `entelechy import drawing.svg` writes:
+//!
+//!   node picture: graph "../../packages/vector.entpkg/graphs/drawing.esn" {
+//!       shapes <- shapes; segments <- segments; stops <- stops; view <- view;
+//!   }
+use "../kernels/vector.ent";
+
+input shapes: Rows<Shape>;
+input segments: Rows<Vec4>;
+input stops: Rows<Stop>;
+input view: Rows<Vec2>;
+param background: Vec4 = vec4(1.0, 1.0, 1.0, 1.0);
+
+node look: vector.whole@1 { view <- view; }
+node drawn: graph "draw.esn" {
+    shapes <- shapes;
+    segments <- segments;
+    stops <- stops;
+    view <- view;
+    look <- look.result;
+    background = background;
+}
+
+output picture <- drawn.picture;

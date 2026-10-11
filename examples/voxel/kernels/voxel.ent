@@ -1,0 +1,395 @@
+// A voxel studio: a Volume<Int> of colors fed back through the Graph,
+// one row of state (the camera, the tool, the color, the voxel under
+// the pointer), a backup volume for one level of undo, and a picture.
+// The middle button orbits, with Shift it pans, the wheel zooms; the
+// left button applies the tool to the voxel under the pointer and keeps
+// applying it while held; the right button erases whatever the tool. A
+// bar at the bottom holds the tools; a compass at the top right shows
+// the axes; a label at the top left names the tool and the voxel under
+// the pointer, drawn through the text library.
+use "../../../packages/text.entpkg";
+use "../../../packages/voxel.entpkg";
+
+struct Edit {
+    yaw: Float; pitch: Float; zoom: Float; pan: Vec3;
+    px: Float; py: Float;                    // pointer, last frame
+    down: Bool; right: Bool; middle: Bool;   // buttons, last frame
+    on_bar: Bool;                            // the left press began on the bar
+    painting: Bool; erasing: Bool;           // a stroke in progress, left or right
+    stroked: Bool;                           // the stroke has changed something
+    tool: Int; color: Int; hover: Int;
+    found: Bool; hit: Vec3; face: Vec3;      // the voxel under the pointer and the face seen
+    apply: Bool; act: Int; begin: Bool;      // this frame edits, with this tool, starting a stroke
+    since: Int;                              // frames since the last edit
+    undo: Bool; reset: Bool;
+    zkey: Bool;
+}
+type Studio = Rows<Edit>;
+type Voxels = Volume<Int>;
+struct Mark { hit: Bool; depth: Float; color: Vec3; }
+
+// The camera and the walk, shared by the state and the picture: a
+// function with a Field parameter is instantiated for the port it is
+// called with, so `cast(voxels, ...)` reads whichever volume is bound.
+fn eye_at(yaw: Float, pitch: Float, zoom: Float, n: Float, pan: Vec3) -> Vec3 {
+    let centre = vec3(n * 0.5, n * 0.25, n * 0.5) + pan;
+    let radius = n * 1.3 * zoom;
+    return centre + vec3(sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch)) * radius;
+}
+
+// The camera's forward, from its orbit alone.
+fn forward(yaw: Float, pitch: Float) -> Vec3 {
+    return normalize(vec3(sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch)) * -1.0);
+}
+
+fn ray_at(fwd: Vec3, x: Float, y: Float, width: Float, height: Float) -> Vec3 {
+    let right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
+    let up = cross(right, fwd);
+    let u = (x - width * 0.5) / height;
+    let v = (height * 0.5 - y) / height;
+    return normalize(fwd * 1.5 + right * u + up * v);
+}
+
+// The walk through the box: the voxel package's, from the eye to the
+// first colored voxel.
+fn cast(voxels: Voxels, eye: Vec3, dir: Vec3, n: Float) -> VoxelStep {
+    return voxel_walk(voxels, eye, dir, vec3(0.0, 0.0, 0.0), vec3(n, n, n));
+}
+
+fn palette(id: Int) -> Vec3 {
+    return if id == 1 { vec3(0.92, 0.9, 0.86) } else if id == 2 { vec3(0.85, 0.25, 0.2) }
+        else if id == 3 { vec3(0.3, 0.65, 0.3) } else if id == 4 { vec3(0.25, 0.45, 0.85) }
+        else if id == 5 { vec3(0.95, 0.8, 0.25) } else if id == 6 { vec3(0.9, 0.5, 0.2) }
+        else if id == 7 { vec3(0.45, 0.3, 0.2) } else { vec3(0.55, 0.56, 0.6) };
+}
+
+// Whether a voxel is colored, empty outside the box.
+fn solid(voxels: Voxels, c: Vec3, n: Float) -> Bool {
+    let inside = c.x >= 0.0 && c.x < n && c.y >= 0.0 && c.y < n && c.z >= 0.0 && c.z < n;
+    return inside && at(voxels, c) > 0;
+}
+
+
+/// The starting model: a ground plate, a tree, a few blocks.
+kernel voxel.seed@1 {
+    requires { field.write; }
+    output result: Voxels;
+    compute {
+        let c = coord();
+        let trunk = c.x == 24.0 && c.z == 24.0 && c.y >= 1.0 && c.y <= 7.0;
+        let crown = length(c - vec3(24.0, 10.0, 24.0)) < 4.5;
+        let steps = c.y >= 1.0 && c.y <= 3.0 && c.x >= 8.0 && c.x <= 16.0 - c.y * 2.0 && c.z >= 30.0 && c.z <= 34.0;
+        let ground = c.y == 0.0;
+        return if trunk { 7 } else if crown { 3 } else if steps { 2 } else if ground { 8 } else { 0 };
+    }
+}
+
+kernel voxel.begin@1 {
+    requires { field.write; }
+    output result: Studio;
+    compute {
+        return Edit {
+            yaw: 0.7, pitch: 0.5, zoom: 0.8, pan: vec3(0.0, 0.0, 0.0),
+            px: 0.0, py: 0.0, down: false, right: false, middle: false,
+            on_bar: false, painting: false, erasing: false, stroked: false,
+            tool: 0, color: 1, hover: -1,
+            found: false, hit: vec3(0.0, 0.0, 0.0), face: vec3(0.0, 1.0, 0.0),
+            apply: false, act: 0, begin: false, since: 0,
+            undo: false, reset: false,
+            zkey: false
+        };
+    }
+}
+
+/// The bar: six items of 64 pixels with 12 between, centred at the bottom,
+/// laid out in logical pixels (the window's scale factor is the unit), so
+/// it keeps its size on screen however large the window is.
+/// Place, erase, paint, the color (a click cycles it), undo, reset.
+kernel voxel.state@1 {
+    requires { field.read; field.write; input.read; }
+    input previous: Studio;
+    input voxels: Voxels;
+    param repeat: Int = 4;
+    output result: Studio;
+
+    fn item_at(px: Float, py: Float, width: Float, height: Float, unit: Float) -> Int {
+        let x = px / unit;
+        let y = py / unit;
+        let bottom = height / unit;
+        let left = width / unit * 0.5 - 222.0;
+        let inside = y >= bottom - 56.0 && y <= bottom - 8.0 && x >= left && x <= left + 444.0;
+        let slot = int(floor((x - left) / 76.0));
+        let within = (x - left) - float(slot) * 76.0 <= 64.0;
+        return if inside && within && slot >= 0 && slot < 6 { slot } else { -1 };
+    }
+
+    compute {
+        let s = sample(previous);
+        let p = pointer();
+        let left = pointer_down();
+        let right = button(1);
+        let middle = button(2);
+        let shift = key(16);
+        // The picture fills the window; the bar and the compass are laid
+        // out in logical pixels.
+        let { x: width, y: height } = window();
+        let unit = scale();
+        let hover = item_at(p.x, p.y, width, height, unit);
+        let on_compass = length(p / unit - vec2(width / unit - 52.0, 52.0)) < 44.0;
+        let n = size(voxels).x;
+        // The middle button orbits; with Shift it pans, by what the
+        // pointer covers at the model's distance.
+        let dx = if middle && s.middle { p.x - s.px } else { 0.0 };
+        let dy = if middle && s.middle { p.y - s.py } else { 0.0 };
+        let yaw = if shift { s.yaw } else { s.yaw + dx * 0.008 };
+        let pitch = if shift { s.pitch } else { clamp(s.pitch + dy * 0.008, 0.08, 1.45) };
+        let zoom = clamp(s.zoom + (if key(38) { -0.02 } else { 0.0 }) + (if key(40) { 0.02 } else { 0.0 }) - wheel().y * 0.08, 0.5, 2.5);
+        let fwd = forward(yaw, pitch);
+        let cam_right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
+        let cam_up = cross(cam_right, fwd);
+        let per_pixel = n * 1.3 * zoom / (1.5 * height);
+        let moved_pan = if shift { s.pan - cam_right * (dx * per_pixel) + cam_up * (dy * per_pixel) } else { s.pan };
+        // The bar takes a left press that began on it and a release on it.
+        let pressed = left && !s.down;
+        let released = !left && s.down;
+        let on_bar = if pressed { hover >= 0 } else if released { false } else { s.on_bar };
+        let item = if released && s.on_bar { item_at(s.px, s.py, width, height, unit) } else { -1 };
+        let reset = item == 5;
+        let pan = if reset { vec3(0.0, 0.0, 0.0) } else { moved_pan };
+        let eye = eye_at(yaw, pitch, zoom, n, pan);
+        let seen = cast(voxels, eye, ray_at(fwd, p.x, p.y, width, height), n);
+        // Strokes: the left button paints with the tool, the right erases;
+        // either begins on the picture and repeats while held.
+        let painting = if pressed { hover < 0 && !on_compass } else if released { false } else { s.painting };
+        let erasing = if right && !s.right { hover < 0 && !on_compass } else if !right { false } else { s.erasing };
+        let held = painting || erasing;
+        let first = (pressed && painting) || (right && !s.right && erasing);
+        let tool = if item >= 0 && item <= 2 { item } else { s.tool };
+        let act = if erasing { 1 } else { tool };
+        let since = if s.apply { 1 } else { s.since + 1 };
+        let target = seen.cell + seen.face;
+        let in_box = target.x >= 0.0 && target.x < n && target.y >= 0.0 && target.y < n && target.z >= 0.0 && target.z < n;
+        let can = seen.id > 0 && (act != 0 || in_box);
+        let apply = held && (first || since >= repeat) && can;
+        let stroked = if held { s.stroked || apply } else { false };
+        let undo_key = key(90);
+        return Edit {
+            yaw: if reset { 0.7 } else { yaw },
+            pitch: if reset { 0.5 } else { pitch },
+            zoom: if reset { 0.8 } else { zoom },
+            pan: pan,
+            px: p.x, py: p.y, down: left, right: right, middle: middle,
+            on_bar: on_bar, painting: painting, erasing: erasing, stroked: stroked,
+            tool: tool,
+            color: if item == 3 { s.color % 8 + 1 } else { s.color },
+            hover: hover,
+            found: seen.id > 0, hit: seen.cell, face: seen.face,
+            apply: apply, act: act, begin: apply && !s.stroked, since: since,
+            undo: item == 4 || (undo_key && !s.zkey),
+            reset: reset,
+            zkey: undo_key
+        };
+    }
+}
+
+/// The volume after this frame's edit: one voxel placed, erased, or
+/// painted; or the backup restored; or the model reset.
+kernel voxel.edit@1 {
+    requires { field.read; field.write; }
+    input previous: Voxels;
+    input backup: Voxels;
+    input origin: Voxels;
+    input state: Studio;
+    output result: Voxels;
+    compute {
+        let s = at(state, 0);
+        let me = sample(previous);
+        let c = coord();
+        let target = if s.act == 0 { s.hit + s.face } else { s.hit };
+        return if s.reset { sample(origin) }
+            else if s.undo { sample(backup) }
+            else if s.apply && c == target { if s.act == 1 { 0 } else { s.color } }
+            else { me };
+    }
+}
+
+/// The backup takes the volume as it stood before each stroke, so undo
+/// restores it, and a second undo restores the stroke.
+kernel voxel.keep@1 {
+    requires { field.read; field.write; }
+    input previous: Voxels;
+    input world: Voxels;
+    input state: Studio;
+    output result: Voxels;
+    compute {
+        let s = at(state, 0);
+        return if s.begin || s.undo || s.reset { sample(world) } else { sample(previous) };
+    }
+}
+
+/// The label: the item under the pointer, else the tool in hand, by name
+/// from the scene's text of names (six characters each), then the voxel
+/// under the pointer as three two-digit numbers, dashes when there is
+/// none or the pointer is on the bar; fifteen glyphs at the top left,
+/// laid out in logical pixels with
+/// the glyph at a whole multiple of the scale so the font stays crisp.
+kernel voxel.label@1 {
+    requires { field.read; field.write; input.read; }
+    input state: Studio;
+    input names: Rows<Int>;
+    output result: Text;
+    compute {
+        let s = at(state, 0);
+        let i = element();
+        let item = if s.hover >= 0 { s.hover } else { s.tool };
+        let code = if i < 6 { at(names, item * 6 + i) }
+            else if i == 6 || i == 9 || i == 12 { 32 }
+            else {
+                let v = if i <= 8 { s.hit.x } else if i <= 11 { s.hit.y } else { s.hit.z };
+                let tens = i == 7 || i == 10 || i == 13;
+                // Under the bar there is no voxel, whatever the ray behind it hits.
+                if !s.found || s.hover >= 0 { 45 } else {
+                    let n = int(v);
+                    48 + (if tens { n / 10 } else { n % 10 })
+                }
+            };
+        let unit = scale();
+        let glyph = max(1.0, round(unit * 2.0));
+        return Glyph { code: code, origin: vec2(12.0, 12.0) * unit + vec2(float(i) * 6.0 * glyph, 0.0), scale: glyph };
+    }
+}
+
+/// The picture: the same camera and the same cast as the state, per
+/// pixel; faces lit by their direction, darkened where neighbours crowd
+/// the face; the voxel under the pointer outlined; a floor whose grid
+/// fades with distance; a compass of the axes; the bar; the label.
+kernel voxel.draw@1 {
+    requires { field.read; field.write; input.read; }
+    input voxels: Voxels;
+    input state: Studio;
+    input label: Text;
+    input font: Atlas;
+    output result: Image;
+
+    // Occlusion on a face from the four voxels beside it, each weighing
+    // by how close the point is to its side.
+    fn occlusion(cell: Vec3, face: Vec3, local: Vec3, n: Float) -> Float {
+        let over = cell + face;
+        let ta = if abs(face.x) > 0.5 { vec3(0.0, 1.0, 0.0) } else { vec3(1.0, 0.0, 0.0) };
+        let tb = if abs(face.z) > 0.5 { vec3(0.0, 1.0, 0.0) } else { vec3(0.0, 0.0, 1.0) };
+        let la = dot(local, ta);
+        let lb = dot(local, tb);
+        let shade = (if solid(voxels, over + ta, n) { la } else { 0.0 }) + (if solid(voxels, over - ta, n) { 1.0 - la } else { 0.0 })
+                  + (if solid(voxels, over + tb, n) { lb } else { 0.0 }) + (if solid(voxels, over - tb, n) { 1.0 - lb } else { 0.0 });
+        return 1.0 - 0.45 * clamp(shade, 0.0, 1.5);
+    }
+
+    fn icon(item: Int, u: Vec2, tool: Int, color: Int) -> Vec3 {
+        let box = max(abs(u.x), abs(u.y));
+        let ring = abs(box - 9.0) < 1.5;
+        let plus = (abs(u.x) < 1.2 && abs(u.y) < 5.0) || (abs(u.y) < 1.2 && abs(u.x) < 5.0);
+        let minus = abs(u.y) < 1.2 && abs(u.x) < 5.0;
+        let dot_ = length(u) < 5.0;
+        let swatch = box < 9.0;
+        let arc = abs(length(u) - 8.0) < 1.5 && !(u.x > 0.0 && u.y < 0.0);
+        let head = u.x > 0.0 && u.y < 0.0 && abs(u.x - 8.0) + abs(u.y + 2.0) < 4.0;
+        let cross_ = abs(abs(u.x) - abs(u.y)) < 1.5 && box < 8.0;
+        let light = vec3(0.92, 0.92, 0.95);
+        let on = if item == 0 { ring || plus } else if item == 1 { ring || minus } else if item == 2 { dot_ }
+            else if item == 3 { swatch } else if item == 4 { arc || head } else { cross_ };
+        let tint = if item == 2 || item == 3 { palette(color) } else { light };
+        return if on { tint } else { vec3(0.0, 0.0, 0.0) };
+    }
+
+    // One axis of the compass: a disc where the axis points, nearer
+    // ones drawn over farther ones; the negative end smaller and dimmer.
+    fn mark(d: Vec2, axis: Vec3, right: Vec3, up: Vec3, fwd: Vec3, color: Vec3, positive: Bool) -> Mark {
+        let at = vec2(dot(axis, right), -dot(axis, up)) * 26.0;
+        let depth = dot(axis, fwd);
+        let r = if positive { 7.0 } else { 5.0 };
+        let dist = length(d - at);
+        let disc = dist < r;
+        let stem = positive && !disc && abs(d.x * at.y - d.y * at.x) / (length(at) + 0.001) < 1.2 && dot(d, at) > 0.0 && dot(d, at) < dot(at, at);
+        let shade = 0.75 + 0.25 * (0.0 - depth);
+        let c = if positive { color * shade } else if dist < r - 1.8 { color * 0.25 } else { color * 0.7 };
+        return Mark { hit: disc || stem, depth: if disc { depth } else { depth + 0.5 }, color: if stem { color * 0.6 } else { c } };
+    }
+
+    fn nearer_mark(a: Mark, b: Mark) -> Mark {
+        return if a.hit && (!b.hit || a.depth <= b.depth) { a } else { b };
+    }
+
+    compute {
+        let s = at(state, 0);
+        let px = coord();
+        let { x: width, y: height } = domain();
+        let n = size(voxels).x;
+        let eye = eye_at(s.yaw, s.pitch, s.zoom, n, s.pan);
+        let fwd = forward(s.yaw, s.pitch);
+        let cam_right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
+        let cam_up = cross(cam_right, fwd);
+        let dir = ray_at(fwd, px.x + 0.5, px.y + 0.5, width, height);
+        let seen = cast(voxels, eye, dir, n);
+        let sky = mix(vec3(0.07, 0.075, 0.09), vec3(0.025, 0.027, 0.035), clamp(dir.y * 2.0 + 0.6, 0.0, 1.0));
+        let scene = if seen.id > 0 {
+            let p = eye + dir * seen.t;
+            let local = p - seen.cell;
+            let light = normalize(vec3(-0.4, 0.9, 0.5));
+            let lit = 0.35 + 0.65 * clamp(dot(seen.face, light), 0.0, 1.0);
+            let base = palette(seen.id) * lit * occlusion(seen.cell, seen.face, local, n);
+            // The voxel under the pointer: its seen face outlined.
+            let mine = s.found && seen.cell == s.hit && seen.face == s.face;
+            let edge = min(min(local.x, 1.0 - local.x), min(min(local.y, 1.0 - local.y), min(local.z, 1.0 - local.z)));
+            let on_edge = mine && edge < 0.08;
+            if on_edge { vec3(1.0, 1.0, 1.0) } else if mine { base * 1.2 + vec3(0.05, 0.05, 0.05) } else { base }
+        } else {
+            // The floor below the box: a grid that fades with distance, a
+            // glow under the model, and the two axes through the origin.
+            let t = (-0.02 - eye.y) * voxel_over(dir.y);
+            if dir.y < 0.0 && t > 0.0 {
+                let f = eye + dir * t;
+                let far = exp(-t / (n * 1.6));
+                let g = max(abs(fract(f.x / 8.0) - 0.5), abs(fract(f.z / 8.0) - 0.5));
+                let line = if g > 0.47 { 0.09 * far } else { 0.0 };
+                let centre = length(vec2(f.x - n * 0.5, f.z - n * 0.5));
+                let glow = 0.05 * exp(-centre / (n * 0.8)) * far;
+                let x_axis = if abs(f.z) < 0.25 && f.x > -n * 6.0 { vec3(0.55, 0.12, 0.1) * far } else { vec3(0.0, 0.0, 0.0) };
+                let z_axis = if abs(f.x) < 0.25 && f.z > -n * 6.0 { vec3(0.1, 0.2, 0.6) * far } else { vec3(0.0, 0.0, 0.0) };
+                sky + vec3(line + glow, line + glow, line + glow) + x_axis + z_axis
+            } else { sky }
+        };
+        // The bar and the compass are laid out in logical pixels: the
+        // window's scale factor is the unit.
+        let unit = scale();
+        let q = (px + vec2(0.5, 0.5)) / unit;
+        let wd = width / unit;
+        let hd = height / unit;
+        // The compass at the top right: the axes as the camera sees them.
+        let d = q - vec2(wd - 52.0, 52.0);
+        let m = nearer_mark(nearer_mark(nearer_mark(
+            mark(d, vec3(1.0, 0.0, 0.0), cam_right, cam_up, fwd, vec3(1.0, 0.3, 0.3), true),
+            mark(d, vec3(0.0, 1.0, 0.0), cam_right, cam_up, fwd, vec3(0.55, 0.85, 0.3), true)),
+            mark(d, vec3(0.0, 0.0, 1.0), cam_right, cam_up, fwd, vec3(0.3, 0.5, 1.0), true)),
+            nearer_mark(nearer_mark(
+            mark(d, vec3(-1.0, 0.0, 0.0), cam_right, cam_up, fwd, vec3(1.0, 0.3, 0.3), false),
+            mark(d, vec3(0.0, -1.0, 0.0), cam_right, cam_up, fwd, vec3(0.55, 0.85, 0.3), false)),
+            mark(d, vec3(0.0, 0.0, -1.0), cam_right, cam_up, fwd, vec3(0.3, 0.5, 1.0), false)));
+        let in_compass = length(d) < 40.0;
+        let with_compass = if m.hit { m.color } else if in_compass { mix(scene, vec3(0.1, 0.105, 0.13), 0.5) } else { scene };
+        // The bar, drawn over everything.
+        let left = wd * 0.5 - 222.0;
+        let slot = int(floor((q.x - left) / 76.0));
+        let u = vec2((q.x - left) - float(slot) * 76.0 - 32.0, q.y - (hd - 32.0));
+        let in_bar = q.y >= hd - 56.0 && q.y <= hd - 8.0 && q.x >= left && q.x <= left + 444.0;
+        let in_item = in_bar && slot >= 0 && slot < 6 && abs(u.x) <= 32.0;
+        let active = in_item && slot == s.tool;
+        let hovered = in_item && slot == s.hover;
+        let glyph = if in_item { icon(slot, u, s.tool, s.color) } else { vec3(0.0, 0.0, 0.0) };
+        let plate = if active { vec3(0.36, 0.38, 0.46) } else if hovered { vec3(0.2, 0.21, 0.25) } else { vec3(0.11, 0.115, 0.14) };
+        let color = if in_bar { mix(with_compass, plate, 0.85) + glyph } else { with_compass };
+        // The label, in the text library's ink.
+        let lettered = mix(color, vec3(0.95, 0.95, 0.97), ink(label, font, px + vec2(0.5, 0.5)));
+        let out = pow(clamp(lettered, 0.0, 1.0), 1.0 / 1.8);
+        return vec4(out.x, out.y, out.z, 1.0);
+    }
+}

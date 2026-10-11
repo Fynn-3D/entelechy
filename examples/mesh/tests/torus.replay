@@ -1,4 +1,4 @@
-scene torus.osn
+scene torus.esn
 
 # At time 0 the torus sits tilted toward the camera. The hole and the
 # corners show the background gradient; the left of the ring lands on an

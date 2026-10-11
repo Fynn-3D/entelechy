@@ -47,8 +47,9 @@ impl Evaluator {
                     .kernels()
                     .map(|version| version.id().to_string())
                     .collect();
-                let near = orla_abi::names::nearest(&wanted, published.iter().map(String::as_str))
-                    .map(str::to_owned);
+                let near =
+                    entelechy_abi::names::nearest(&wanted, published.iter().map(String::as_str))
+                        .map(str::to_owned);
                 EvaluateError::UnknownKernel {
                     node: node.id.clone(),
                     kernel: node.kernel.clone(),
@@ -152,7 +153,7 @@ impl Evaluator {
                 continue;
             };
             if group.node.is_async
-                || module.manifest.mode != orla_ir::Mode::Map
+                || module.manifest.mode != entelechy_ir::Mode::Map
                 || !module.manifest.memories.is_empty()
             {
                 continue;
@@ -162,7 +163,7 @@ impl Evaluator {
                     continue;
                 };
                 let input = module.manifest.inputs.iter().position(|i| &i.name == name);
-                if input.is_some_and(|input| orla_ir::counts_only(module, input as u32)) {
+                if input.is_some_and(|input| entelechy_ir::counts_only(module, input as u32)) {
                     counting
                         .entry((node.clone(), port.clone()))
                         .or_default()
@@ -253,7 +254,7 @@ impl Evaluator {
                         let name = if owner == at[reader] {
                             port.clone()
                         } else {
-                            orla_ir::fused_name(&reader.0, port)
+                            entelechy_ir::fused_name(&reader.0, port)
                         };
                         outside.push((owner, name, k as u32));
                     }
@@ -289,16 +290,16 @@ impl Evaluator {
                 else {
                     continue;
                 };
-                if consumer_module.manifest.mode != orla_ir::Mode::Map
-                    || producer_module.manifest.mode != orla_ir::Mode::Map
+                if consumer_module.manifest.mode != entelechy_ir::Mode::Map
+                    || producer_module.manifest.mode != entelechy_ir::Mode::Map
                 {
                     continue;
                 }
                 // Read at its own element, the producer runs first; read at
                 // an offset of it, the producer is called at that row.
-                let uses: Vec<orla_ir::InputUse> = links
+                let uses: Vec<entelechy_ir::InputUse> = links
                     .iter()
-                    .map(|link| orla_ir::input_use(consumer_module, link.1))
+                    .map(|link| entelechy_ir::input_use(consumer_module, link.1))
                     .collect();
                 let indexed = if uses.iter().all(|use_| !use_.addressed)
                     && uses.iter().any(|use_| use_.sampled)
@@ -306,8 +307,8 @@ impl Evaluator {
                     false
                 } else if uses.iter().any(|use_| use_.addressed)
                     && links.iter().all(|link| {
-                        orla_ir::offset_read(consumer_module, link.1)
-                            || orla_ir::counts_only(consumer_module, link.1)
+                        entelechy_ir::offset_read(consumer_module, link.1)
+                            || entelechy_ir::counts_only(consumer_module, link.1)
                     })
                 {
                     true
@@ -382,9 +383,9 @@ impl Evaluator {
                     continue;
                 }
                 let fuse = if indexed {
-                    orla_ir::fuse_indexed
+                    entelechy_ir::fuse_indexed
                 } else {
-                    orla_ir::fuse_outputs
+                    entelechy_ir::fuse_outputs
                 };
                 let module = match fuse(
                     consumer_module,
@@ -413,11 +414,11 @@ impl Evaluator {
                     inputs.remove(linked);
                 }
                 for (name, binding) in &producer.node.inputs {
-                    inputs.insert(orla_ir::fused_name(&prefix, name), binding.clone());
+                    inputs.insert(entelechy_ir::fused_name(&prefix, name), binding.clone());
                 }
                 let mut params = consumer.node.params.clone();
                 for (name, value) in &producer.node.params {
-                    params.insert(orla_ir::fused_name(&prefix, name), value.clone());
+                    params.insert(entelechy_ir::fused_name(&prefix, name), value.clone());
                 }
                 let producer_params: Vec<String> = producer
                     .manifest()
@@ -438,7 +439,7 @@ impl Evaluator {
                     let input = group.manifest().inputs.iter().position(|i| &i.name == name);
                     match (bound, input, group.module()) {
                         (true, Some(input), Some(module))
-                            if orla_ir::counts_only(module, input as u32) =>
+                            if entelechy_ir::counts_only(module, input as u32) =>
                         {
                             recounted
                                 .entry(*owner)
@@ -477,7 +478,7 @@ impl Evaluator {
                         .iter()
                         .map(|(input, _)| (*input, producer_id.0.clone()))
                         .collect();
-                    let module = orla_ir::counted(module, &prefixed).map_err(|error| {
+                    let module = entelechy_ir::counted(module, &prefixed).map_err(|error| {
                         EvaluateError::Fusion {
                             node: group.node.id.clone(),
                             message: error.to_string(),
@@ -683,7 +684,7 @@ impl Evaluator {
         }
         let manifest = next.version.manifest();
         // Only a map repeats.
-        if manifest.mode != orla_ir::Mode::Map || next.version.module().is_none() {
+        if manifest.mode != entelechy_ir::Mode::Map || next.version.module().is_none() {
             return None;
         }
         // Exactly one port differs, bound to the previous output.
@@ -731,7 +732,7 @@ impl Evaluator {
         runtime: &mut Runtime,
         consumer: &NodeId,
         members: Members,
-        fuse: impl FnOnce() -> Result<orla_ir::Validated, orla_ir::FuseError>,
+        fuse: impl FnOnce() -> Result<entelechy_ir::Validated, entelechy_ir::FuseError>,
     ) -> Result<Option<Arc<KernelVersion>>, EvaluateError> {
         if let Some(existing) = self.fused.get(consumer)
             && existing.members == members
@@ -838,7 +839,7 @@ impl Evaluator {
     /// it can be known before execution: it runs over its `domain`, or
     /// its first input's extent (a reduction over one row, as
     /// [`Evaluator::bind`] binds it), and its outputs' extent is
-    /// where [`orla_kernel::extent`] says its mode takes it from.
+    /// where [`entelechy_kernel::extent`] says its mode takes it from.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn planned(
         &self,
@@ -896,16 +897,16 @@ impl Evaluator {
                 .and_then(|port| node.inputs.get(&port.name))
                 .and_then(of_binding)
         };
-        let runs = if manifest.mode == orla_ir::Mode::Reduce {
+        let runs = if manifest.mode == entelechy_ir::Mode::Reduce {
             Some(Domain::Rows(1))
         } else {
             self.planned_runs(graph, node, version, &of_binding, overrides, context)
                 .or_else(|| node.domain.is_none().then(|| input(0)).flatten())
         };
-        let extent = match orla_kernel::extent(manifest.mode) {
-            orla_kernel::Extent::Invocation => runs,
-            orla_kernel::Extent::OneRow => Some(Domain::Rows(1)),
-            orla_kernel::Extent::Input(at) => input(at),
+        let extent = match entelechy_kernel::extent(manifest.mode) {
+            entelechy_kernel::Extent::Invocation => runs,
+            entelechy_kernel::Extent::OneRow => Some(Domain::Rows(1)),
+            entelechy_kernel::Extent::Input(at) => input(at),
         };
         Planned { runs, extent }
     }
@@ -965,7 +966,7 @@ pub(super) struct Planned {
     pub extent: Option<Domain>,
 }
 
-/// The values of a producer's extent params ([`orla_ir::extent_params`]):
+/// The values of a producer's extent params ([`entelechy_ir::extent_params`]):
 /// its element count and its extent, as `count` and `size` give them.
 fn extent_values(domain: Domain) -> [Value; 2] {
     let size = match domain {
@@ -1008,11 +1009,11 @@ fn without_ports(
 /// Sets the extent params of the producer `prefix` that `manifest` reads.
 fn give_extent(
     params: &mut BTreeMap<String, ParamValue>,
-    manifest: &orla_kernel::Manifest,
+    manifest: &entelechy_kernel::Manifest,
     prefix: &str,
     values: &[Value; 2],
 ) {
-    for (name, value) in orla_ir::extent_params(prefix).into_iter().zip(values) {
+    for (name, value) in entelechy_ir::extent_params(prefix).into_iter().zip(values) {
         if manifest.params.iter().any(|param| param.name == name) {
             params.insert(name, ParamValue::Literal(value.clone()));
         }
@@ -1053,7 +1054,7 @@ pub(super) fn graph_param(
     })
 }
 
-/// `; did you mean `x`?` for [`orla_abi::names::nearest`]'s match.
+/// `; did you mean `x`?` for [`entelechy_abi::names::nearest`]'s match.
 pub(super) fn suggest(near: &Option<String>) -> String {
-    orla_abi::names::suggestion(near.as_deref())
+    entelechy_abi::names::suggestion(near.as_deref())
 }

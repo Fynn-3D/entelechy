@@ -2,9 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Orla bridge</title>
-<!-- Orla in the page imports its host's functions as `orla`. -->
-<script type="importmap">{ "imports": { "orla": "./orla-host.mjs" } }</script>
+<title>Entelechy bridge</title>
+<!-- Entelechy in the page imports its host's functions as `entelechy`. -->
+<script type="importmap">{ "imports": { "entelechy": "./entelechy-host.mjs" } }</script>
 <style>
   :root { color-scheme: dark; }
   body { margin: 0; font: 13px/1.4 system-ui, sans-serif; background: #15161a; color: #d8dae0; display: grid; grid-template-columns: 1fr 380px; grid-template-rows: auto 1fr; height: 100vh; }
@@ -36,9 +36,9 @@
   <label>Session <input id="url" type="text" value="ws://127.0.0.1:7788" spellcheck="false"></label>
   <button id="connect">Connect</button>
   <span class="sep"></span>
-  <label class="pick" title="Orla in this page: add the folders a scene reads, as the repository has them (examples, packages)">Add folder<input id="folders" type="file" webkitdirectory multiple></label>
+  <label class="pick" title="Entelechy in this page: add the folders a scene reads, as the repository has them (examples, packages)">Add folder<input id="folders" type="file" webkitdirectory multiple></label>
   <select id="scenes" disabled></select>
-  <select id="on" title="What runs the Kernels in the page: Orla's JIT, whose code the page loads; the browser's WebGPU; or the interpreter"><option>jit</option><option>gpu</option><option>cpu</option></select>
+  <select id="on" title="What runs the Kernels in the page: Entelechy's JIT, whose code the page loads; the browser's WebGPU; or the interpreter"><option>jit</option><option>gpu</option><option>cpu</option></select>
   <button id="here" disabled>Open here</button>
   <span class="sep"></span>
   <button id="run" disabled>Run</button>
@@ -67,9 +67,9 @@
     middle buttons, the wheel, arrows and letters reach Kernels that declare <code>input.read</code>.
   </div>
 </aside>
-<script src="orla.js"></script>
+<script src="entelechy.js"></script>
 <script>
-const { OrlaClient, OrlaInPage, Driver } = Orla;
+const { EntelechyClient, EntelechyInPage, Driver } = Entelechy;
 
 const $ = (id) => document.getElementById(id);
 const status = (text) => { $("status").textContent = text; };
@@ -166,19 +166,19 @@ const attach = async (opened) => {
 
 $("connect").onclick = async () => {
   try {
-    await attach(await OrlaClient.open($("url").value));
+    await attach(await EntelechyClient.open($("url").value));
   } catch (error) {
     status(error.message);
   }
 };
 
-// Orla in the page. The folders added are its documents, by the paths
+// Entelechy in the page. The folders added are its documents, by the paths
 // they have under the folder picked, so `examples` and `packages` picked
 // one after the other keep the repository's `../../packages/...`.
 const picked = new Map();
 const skipped = (path) => path.split("/").some((part) => part.startsWith(".") || part === "target" || part === "node_modules");
 const listScenes = () => {
-  const scenes = [...picked.keys()].filter((path) => path.endsWith(".osn") && !path.endsWith("/package.osn")).sort();
+  const scenes = [...picked.keys()].filter((path) => path.endsWith(".esn") && !path.endsWith("/package.esn")).sort();
   const select = $("scenes");
   select.innerHTML = "";
   for (const path of scenes) {
@@ -197,26 +197,26 @@ $("folders").onchange = (event) => {
   status(`${picked.size} files to hand in`);
 };
 
-// Where the repository puts Orla built for a page: the glue
+// Where the repository puts Entelechy built for a page: the glue
 // `wasm-bindgen` wrote, beside the module. The page is served, as a
 // page that loads modules must be.
-const glue = new URLSearchParams(location.search).get("glue") || "../../target/page/orla_ffi.js";
+const glue = new URLSearchParams(location.search).get("glue") || "../../target/page/entelechy_ffi.js";
 
 /// Opens `scene` in the page over `files`, [path, bytes] pairs, on
 /// `backend`; what Open here does with the folders added, and what a
 /// test calls.
 const openInPage = async (files, scene, backend = "jit") => {
-  const orla = await OrlaInPage.load(glue);
-  for (const [path, data] of files) orla.put(path, data);
-  await orla.open(scene, backend);
-  await attach(orla);
-  return orla;
+  const entelechy = await EntelechyInPage.load(glue);
+  for (const [path, data] of files) entelechy.put(path, data);
+  await entelechy.open(scene, backend);
+  await attach(entelechy);
+  return entelechy;
 };
 globalThis.openInPage = openInPage;
 
 $("here").onclick = async () => {
   try {
-    status("loading Orla into the page");
+    status("loading Entelechy into the page");
     const files = await Promise.all(
       [...picked].map(async ([path, file]) => [path, new Uint8Array(await file.arrayBuffer())]),
     );

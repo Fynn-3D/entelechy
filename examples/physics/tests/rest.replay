@@ -1,4 +1,4 @@
-scene rest.osn
+scene rest.esn
 
 # A step a sixtieth of a second, ten a frame. After a second a ball
 # dropped on the ground rests on it, a column of five boxes stands

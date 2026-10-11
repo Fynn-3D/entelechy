@@ -1,6 +1,6 @@
 [package]
-name = "orla-compiler"
-description = "Compiles .orla sources into validated Orla IR"
+name = "entelechy-compiler"
+description = "Compiles .ent sources into validated Entelechy IR"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,8 +11,8 @@ rust-version.workspace = true
 doctest = false
 
 [dependencies]
-orla-language = { path = "../../frontend/language" }
-orla-ir = { path = "../../core/ir" }
+entelechy-language = { path = "../../frontend/language" }
+entelechy-ir = { path = "../../core/ir" }
 
 [lints]
 workspace = true

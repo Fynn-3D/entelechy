@@ -5,14 +5,14 @@
 //! lowers to at `LANGUAGE_VERSION`.
 //!
 //! A changed lowering waits for a new `LANGUAGE_VERSION`. Every Kernel a
-//! document writes in place compiles. `ORLA_BLESS=1` records new
+//! document writes in place compiles. `ENTELECHY_BLESS=1` records new
 //! documents and refuses to change recorded ones until the version is
 //! raised. `parts/` holds documents others place, not lowered alone.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use orla_language::LANGUAGE_VERSION;
+use entelechy_language::LANGUAGE_VERSION;
 
 fn surface() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/surface")
@@ -30,7 +30,7 @@ fn relative(path: &Path, base: &Path) -> String {
 /// files, stepped frames, sizing params, inline Kernels and uses.
 fn lowered(path: &Path) -> Result<String, String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let document = orla_language::parse_document(&text).map_err(|e| e.to_string())?;
+    let document = entelechy_language::parse_document(&text).map_err(|e| e.to_string())?;
     let base = path.parent().unwrap().to_path_buf();
     let name = path.file_stem().unwrap().to_string_lossy().into_owned();
     let mut loader = |path: &Path| {
@@ -38,10 +38,10 @@ fn lowered(path: &Path) -> Result<String, String> {
             .map(|text| (path.to_path_buf(), text))
             .map_err(|e| e.to_string())
     };
-    let mut declare = |_: &Path, _: &[orla_language::Use], _: orla_language::Own<'_>| {
+    let mut declare = |_: &Path, _: &[entelechy_language::Use], _: entelechy_language::Own<'_>| {
         Ok((Vec::new(), Vec::new(), Vec::new()))
     };
-    let lowered = orla_scene::load_with_params(
+    let lowered = entelechy_scene::load_with_params(
         &document,
         &text,
         &name,
@@ -53,11 +53,11 @@ fn lowered(path: &Path) -> Result<String, String> {
     .map_err(|e| e.to_string())?;
     // Every Kernel written in place compiles, filled Fields' included.
     for inline in &lowered.inline {
-        orla_compiler::compile_kernel(&inline.kernel, Some(&inline.id))
+        entelechy_compiler::compile_kernel(&inline.kernel, Some(&inline.id))
             .map_err(|e| format!("the Kernel `{}` it writes does not compile: {e}", inline.id))?;
     }
     let graph = &lowered.graph;
-    let mut out = orla_scene::print(graph);
+    let mut out = entelechy_scene::print(graph);
     for asset in &lowered.files.assets {
         let kind = if asset.bytes { " bytes" } else { "" };
         out.push_str(&format!(
@@ -96,12 +96,12 @@ fn lowered(path: &Path) -> Result<String, String> {
 
 #[test]
 fn every_scene_form_lowers_as_recorded() {
-    let bless = std::env::var_os("ORLA_BLESS").is_some();
+    let bless = std::env::var_os("ENTELECHY_BLESS").is_some();
     let mut documents: Vec<PathBuf> = std::fs::read_dir(surface())
         .unwrap()
         .flatten()
         .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "osn"))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "esn"))
         .collect();
     documents.sort();
     assert!(documents.len() >= 6, "found only {documents:?}");
@@ -153,12 +153,12 @@ fn every_scene_form_lowers_as_recorded() {
     }
     assert!(
         broken.is_empty(),
-        "scenes written for language {LANGUAGE_VERSION} would change meaning or stop loading:\n{}\nraise LANGUAGE_VERSION, then record with `ORLA_BLESS=1 cargo test -p orla-scene --test surface`",
+        "scenes written for language {LANGUAGE_VERSION} would change meaning or stop loading:\n{}\nraise LANGUAGE_VERSION, then record with `ENTELECHY_BLESS=1 cargo test -p entelechy-scene --test surface`",
         broken.join("\n")
     );
     assert!(
         new.is_empty() || bless,
         "new scene forms, not yet recorded: {new:?}; record them with \
-         `ORLA_BLESS=1 cargo test -p orla-scene --test surface`"
+         `ENTELECHY_BLESS=1 cargo test -p entelechy-scene --test surface`"
     );
 }

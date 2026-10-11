@@ -5,8 +5,8 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use orla_graph::Report;
-use orla_kernel::{Context, Expect, FieldData, KernelId, KernelVersion};
+use entelechy_graph::Report;
+use entelechy_kernel::{Context, Expect, FieldData, KernelId, KernelVersion};
 
 use super::Session;
 use crate::Event;
@@ -62,7 +62,11 @@ impl Session {
 
     /// A Kernel's source at `generation`, from the registry or the
     /// history.
-    pub fn source_at(&self, id: &KernelId, generation: orla_kernel::Generation) -> Option<String> {
+    pub fn source_at(
+        &self,
+        id: &KernelId,
+        generation: entelechy_kernel::Generation,
+    ) -> Option<String> {
         match self.runtime.kernel(id) {
             Some(version) if version.generation() == generation => {
                 Some(version.source().to_owned())
@@ -124,7 +128,7 @@ impl Session {
     /// ([`crate::Structure::Snapshot`]), its Kernels published together
     /// ([`crate::Laws::Snapshot`]), then its state installed and proved by
     /// one uncommitted frame under `context`
-    /// ([`orla_graph::Evaluator::restore`]). On failure, the scene
+    /// ([`entelechy_graph::Evaluator::restore`]). On failure, the scene
     /// document, the exact running versions, the state and the history
     /// stay as they were, and the attempt is recorded.
     pub fn restore(
@@ -283,7 +287,7 @@ impl Session {
             match adopted {
                 Ok(handle) => {
                     states.push((
-                        orla_graph::NodeId(copy.node.clone()),
+                        entelechy_graph::NodeId(copy.node.clone()),
                         copy.port.clone(),
                         handle,
                     ));

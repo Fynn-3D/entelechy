@@ -25,7 +25,7 @@ pub(crate) struct FailureCheck {
     /// The run's budget, for naming a failure past it.
     pub(crate) budget: u32,
     /// The run's total, for naming a run past it.
-    pub(crate) run: orla_rules::Run,
+    pub(crate) run: entelechy_rules::Run,
 }
 
 impl Check for FailureCheck {
@@ -61,7 +61,11 @@ impl Check for FailureCheck {
             });
         }
         if word == 0 {
-            return orla_rules::Run::judge(self.run.work(), u64::from(blocks), u64::from(left));
+            return entelechy_rules::Run::judge(
+                self.run.work(),
+                u64::from(blocks),
+                u64::from(left),
+            );
         }
         let word = u32::MAX - word;
         let element = word / 4;

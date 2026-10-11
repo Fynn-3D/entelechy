@@ -2,9 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Orla Player</title>
-<!-- Orla in the page imports its host's functions as `orla`. -->
-<script type="importmap">{ "imports": { "orla": "./orla-host.mjs" } }</script>
+<title>Entelechy Player</title>
+<!-- Entelechy in the page imports its host's functions as `entelechy`. -->
+<script type="importmap">{ "imports": { "entelechy": "./entelechy-host.mjs" } }</script>
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
   canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
@@ -16,19 +16,19 @@
 The Player in a page: the picture and nothing else, as the Player's
 window is. Served (node bridges/web/serve.mjs), it plays what its address
 names:
-  play.html?scene=examples/voxel/scene.osn
+  play.html?scene=examples/voxel/scene.esn
   play.html?replay=examples/ant/tests/ant.replay
 with `on=gpu|jit|cpu` for what runs it (the GPU, else the JIT, else the
 interpreter, when none is named), `roots=a,b` for the directories handed
 in and watched (the scene's example and the packages when none are
-named), and `glue=` for where Orla built for a page is. F5 resets the
+named), and `glue=` for where Entelechy built for a page is. F5 resets the
 state, F6 moves the preview, F10 shows the line of frame data; Tab,
 Escape and the other keys are the scene's; what the play says is on the
 page's console.
 -->
 <canvas id="view" tabindex="0"></canvas>
 <canvas id="shown"></canvas>
-<script src="orla.js"></script>
+<script src="entelechy.js"></script>
 <script src="player.js"></script>
 <script>
 (async () => {
@@ -37,7 +37,7 @@ page's console.
   const replay = query.get("replay");
   const named = scene || replay;
   if (!named) {
-    document.title = "Orla Player: name a scene or a replay in the address";
+    document.title = "Entelechy Player: name a scene or a replay in the address";
     return;
   }
   const top = named.split("/").slice(0, 2).join("/");
@@ -47,8 +47,8 @@ page's console.
     const files = await Promise.all(
       list.map(async (path) => [path, new Uint8Array(await (await fetch(`/${path}`)).arrayBuffer())]),
     );
-    const player = await OrlaPlayer.open({
-      glue: query.get("glue") || "../../target/page/orla_ffi.js",
+    const player = await EntelechyPlayer.open({
+      glue: query.get("glue") || "../../target/page/entelechy_ffi.js",
       files,
       scene,
       replay,
@@ -62,7 +62,7 @@ page's console.
     document.getElementById("view").focus();
     player.run();
   } catch (error) {
-    document.title = `Orla Player: ${error.message}`;
+    document.title = `Entelechy Player: ${error.message}`;
     console.error(error);
   }
 })();

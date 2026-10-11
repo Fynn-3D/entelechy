@@ -1,0 +1,98 @@
+// Triangles whose last two corners are one point, large enough to be
+// covered a tile at a time, among ordinary ones. Such a triangle has no
+// area: every step of the tiled raster must agree it draws nothing, on
+// every backend, however a device's compiler arranges its arithmetic,
+// and the ordinary triangles among them draw what the one-pass form
+// draws, to the bit.
+use "../kernels/";
+
+// Every third triangle ordinary, the others two corners at one point.
+node corners: kernel {
+    requires { field.write; }
+    output result: Rows<Vertex>;
+    domain = 15000;
+    fn rnd(x: Int) -> Float {
+        let a = mul_wrap(x ^ (x >>> 16), 0x45d9f3b);
+        let b = mul_wrap(a ^ (a >>> 16), 0x45d9f3b);
+        return float((b ^ (b >>> 16)) & 0xFFFFFF) / 16777216.0;
+    }
+    compute {
+        let v = element();
+        let t = v / 3;
+        let k = v % 3;
+        let ordinary = t % 3 == 0;
+        let at = vec2(rnd(t * 7 + 1), rnd(t * 7 + 2)) * 1.8 - vec2(0.9, 0.9);
+        let far = at + (vec2(rnd(t * 7 + 3), rnd(t * 7 + 4)) - vec2(0.5, 0.5)) * 0.9;
+        let side = at + (vec2(rnd(t * 7 + 5), rnd(t * 7 + 6)) - vec2(0.5, 0.5)) * 0.9;
+        let p = if k == 0 { at } else { if k == 1 || !ordinary { far } else { side } };
+        let depth = 0.2 + 0.6 * rnd(t * 7 + 7);
+        return Vertex { clip: vec4(p.x, p.y, depth, 1.0), normal: vec3(0.0, 0.0, 1.0), uv: vec2(rnd(v), 0.5) };
+    }
+}
+node faces: kernel {
+    requires { field.write; }
+    output result: Rows<Tri>;
+    domain = 5000;
+    compute { let t = element(); return Tri { a: 3 * t, b: 3 * t + 1, c: 3 * t + 2 }; }
+}
+node mask: Image { domain = vec2(8, 8); value = vec4(1.0, 1.0, 1.0, 1.0); }
+
+node whole: graph "../../../packages/raster.entpkg/graphs/raster.esn" {
+    vertices <- corners.result; triangles <- faces.result; width = 320; height = 240;
+}
+node tiled: graph "../../../packages/raster.entpkg/graphs/tiled.esn" {
+    vertices <- corners.result; triangles <- faces.result; width = 320; height = 240;
+}
+node cut: graph "../../../packages/raster.entpkg/graphs/cutout.esn" {
+    vertices <- corners.result; triangles <- faces.result; mask <- mask.result; width = 320; height = 240;
+}
+node cut_tiled: graph "../../../packages/raster.entpkg/graphs/cutout_tiled.esn" {
+    vertices <- corners.result; triangles <- faces.result; mask <- mask.result; width = 320; height = 240;
+}
+
+// How many pixels a degenerate triangle holds, in any of the four.
+node flat: kernel {
+    requires { field.read; field.write; }
+    input a: GBuffer <- whole.surface;
+    input b: GBuffer <- tiled.surface;
+    input c: GBuffer <- cut.surface;
+    input d: GBuffer <- cut_tiled.surface;
+    output result: Rows<Int>;
+    compute {
+        let ids = [sample(a).id, sample(b).id, sample(c).id, sample(d).id];
+        let wrong = [each 4 { if ids[index()] >= 0 && ids[index()] % 3 != 0 { 1 } else { 0 } }];
+        return wrong[0] + wrong[1] + wrong[2] + wrong[3];
+    }
+    merge(a, b) { return a + b; }
+}
+
+// How many pixels either tiled form draws other than its one-pass form,
+// any word of the surface to the bit.
+node split: kernel {
+    requires { field.read; field.write; }
+    input a: GBuffer <- whole.surface;
+    input b: GBuffer <- tiled.surface;
+    input c: GBuffer <- cut.surface;
+    input d: GBuffer <- cut_tiled.surface;
+    output result: Rows<Int>;
+    compute {
+        let p = sample(a);
+        let q = sample(b);
+        let r = sample(c);
+        let s = sample(d);
+        let same = p.id == q.id && bits(p.depth) == bits(q.depth) && r.id == s.id && bits(r.depth) == bits(s.depth);
+        return if same { 0 } else { 1 };
+    }
+    merge(a, b) { return a + b; }
+}
+
+// How many pixels the ordinary triangles draw, so the test draws some.
+node drawn: kernel {
+    requires { field.read; field.write; }
+    input a: GBuffer <- whole.surface;
+    output result: Rows<Int>;
+    compute { return if sample(a).id >= 0 { 1 } else { 0 }; }
+    merge(a, b) { return a + b; }
+}
+
+output flat <- flat.result;

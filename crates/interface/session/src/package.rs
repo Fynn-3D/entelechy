@@ -19,8 +19,8 @@ pub struct Part {
 pub const LAYOUT: [Part; 6] = [
     Part {
         name: "manifest",
-        shape: "name.orlapkg/package.osn: package name@1 { language = 1; ir = 1; }",
-        doc: "Its name and edition, and the least language and IR it needs: one this Orla does not have refuses the package, naming both. The directory is named for the package, `name.orlapkg`; a scene reaches one package of a name, and two, as two editions of one, are refused.",
+        shape: "name.entpkg/package.esn: package name@1 { language = 1; ir = 1; }",
+        doc: "Its name and edition, and the least language and IR it needs: one this Entelechy does not have refuses the package, naming both. The directory is named for the package, `name.entpkg`; a scene reaches one package of a name, and two, as two editions of one, are refused.",
     },
     Part {
         name: "kernels",
@@ -29,8 +29,8 @@ pub const LAYOUT: [Part; 6] = [
     },
     Part {
         name: "graphs",
-        shape: "name.orlapkg/graphs/*.osn",
-        doc: "Preset graphs, placed with `node n: graph \"name.orlapkg/graphs/g.osn\" { ... }`.",
+        shape: "name.entpkg/graphs/*.esn",
+        doc: "Preset graphs, placed with `node n: graph \"name.entpkg/graphs/g.esn\" { ... }`.",
     },
     Part {
         name: "docs",
@@ -39,12 +39,12 @@ pub const LAYOUT: [Part; 6] = [
     },
     Part {
         name: "assets",
-        shape: "name.orlapkg/font.png",
-        doc: "Any other file in the directory, which a scene's `input` reads by its path or through the package's name (`name.orlapkg/font.png`), as a document is; a package's files are readable wherever reads are held.",
+        shape: "name.entpkg/font.png",
+        doc: "Any other file in the directory, which a scene's `input` reads by its path or through the package's name (`name.entpkg/font.png`), as a document is; a package's files are readable wherever reads are held.",
     },
     Part {
         name: "by name",
-        shape: "use \"name.orlapkg\";",
-        doc: "A package not beside the document is found by its name: beside the package the document is in, so packages kept together name one another; then in each directory of `ORLA_PACKAGES`; then in `packages/` beside the program.",
+        shape: "use \"name.entpkg\";",
+        doc: "A package not beside the document is found by its name: beside the package the document is in, so packages kept together name one another; then in each directory of `ENTELECHY_PACKAGES`; then in `packages/` beside the program.",
     },
 ];

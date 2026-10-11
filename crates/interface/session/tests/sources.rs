@@ -4,10 +4,10 @@
 
 use std::path::PathBuf;
 
-use orla_session::declarations_for;
+use entelechy_session::declarations_for;
 
 fn scratch(name: &str, files: &[(&str, &str)]) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("orla-sources-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-sources-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     for (file, text) in files {
@@ -16,11 +16,11 @@ fn scratch(name: &str, files: &[(&str, &str)]) -> PathBuf {
     dir
 }
 
-fn uses(text: &str) -> Vec<orla_language::Use> {
-    orla_language::parse_document(text).unwrap().uses
+fn uses(text: &str) -> Vec<entelechy_language::Use> {
+    entelechy_language::parse_document(text).unwrap().uses
 }
 
-const NOTHING: orla_language::Own<'static> = orla_language::Own {
+const NOTHING: entelechy_language::Own<'static> = entelechy_language::Own {
     functions: &[],
     structs: &[],
     types: &[],
@@ -32,18 +32,18 @@ fn one_declaration_written_in_two_files_is_one() {
     let dir = scratch(
         "same",
         &[
-            ("a.orla", "struct Surface { depth: Float; id: Int; }\n"),
+            ("a.ent", "struct Surface { depth: Float; id: Int; }\n"),
             // The same fields, written further down its file.
             (
-                "b.orla",
+                "b.ent",
                 "// another library\n\n\nstruct Surface { depth: Float; id: Int; }\n",
             ),
         ],
     );
     let (structs, _, _) = declarations_for(
-        &orla_session::Disk::default(),
+        &entelechy_session::Disk::default(),
         &dir,
-        &uses("use \"a.orla\";\nuse \"b.orla\";"),
+        &uses("use \"a.ent\";\nuse \"b.ent\";"),
         NOTHING,
     )
     .unwrap();
@@ -59,26 +59,26 @@ fn two_declarations_of_one_name_are_each_their_documents() {
         "different",
         &[
             (
-                "a.orla",
+                "a.ent",
                 "struct Surface { depth: Float; id: Int; }\ntype Surfaces = Rows<Surface>;\nfn deep(s: Surface) -> Float { return s.depth; }\n",
             ),
-            ("b.orla", "struct Surface { depth: Float; }\n"),
+            ("b.ent", "struct Surface { depth: Float; }\n"),
         ],
     );
     let (structs, types, functions) = declarations_for(
-        &orla_session::Disk::default(),
+        &entelechy_session::Disk::default(),
         &dir,
-        &uses("use \"a.orla\";\nuse \"b.orla\";"),
+        &uses("use \"a.ent\";\nuse \"b.ent\";"),
         NOTHING,
     )
     .unwrap();
     let a = format!(
         "Surface@{}",
-        dir.canonicalize().unwrap().join("a.orla").display()
+        dir.canonicalize().unwrap().join("a.ent").display()
     );
     let b = format!(
         "Surface@{}",
-        dir.canonicalize().unwrap().join("b.orla").display()
+        dir.canonicalize().unwrap().join("b.ent").display()
     );
     let names: Vec<&str> = structs.iter().map(|d| d.name.value.as_str()).collect();
     assert_eq!(names, [a.as_str(), b.as_str()]);
@@ -94,18 +94,18 @@ fn a_name_two_used_documents_declare_is_refused_where_named() {
     let dir = scratch(
         "named",
         &[
-            ("a.orla", "struct Surface { depth: Float; id: Int; }\n"),
-            ("b.orla", "struct Surface { depth: Float; }\n"),
+            ("a.ent", "struct Surface { depth: Float; id: Int; }\n"),
+            ("b.ent", "struct Surface { depth: Float; }\n"),
             (
-                "c.orla",
-                "use \"a.orla\";\nuse \"b.orla\";\nfn flat(s: Surface) -> Float { return s.depth; }\n",
+                "c.ent",
+                "use \"a.ent\";\nuse \"b.ent\";\nfn flat(s: Surface) -> Float { return s.depth; }\n",
             ),
         ],
     );
     let error = declarations_for(
-        &orla_session::Disk::default(),
+        &entelechy_session::Disk::default(),
         &dir,
-        &uses("use \"c.orla\";"),
+        &uses("use \"c.ent\";"),
         NOTHING,
     )
     .unwrap_err();
@@ -114,23 +114,23 @@ fn a_name_two_used_documents_declare_is_refused_where_named() {
         "{error}"
     );
     assert!(
-        error.contains("a.orla") && error.contains("b.orla"),
+        error.contains("a.ent") && error.contains("b.ent"),
         "{error}"
     );
 
-    let own = orla_language::parse_document("struct Surface { id: Int; }\n").unwrap();
+    let own = entelechy_language::parse_document("struct Surface { id: Int; }\n").unwrap();
     let (structs, _, _) = declarations_for(
-        &orla_session::Disk::default(),
+        &entelechy_session::Disk::default(),
         &dir,
-        &uses("use \"a.orla\";"),
-        orla_language::Own::of(&own),
+        &uses("use \"a.ent\";"),
+        entelechy_language::Own::of(&own),
     )
     .unwrap();
     assert_eq!(
         structs[0].name.value,
         format!(
             "Surface@{}",
-            dir.canonicalize().unwrap().join("a.orla").display()
+            dir.canonicalize().unwrap().join("a.ent").display()
         )
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -144,16 +144,16 @@ fn a_declaration_made_alike_by_the_user_is_one() {
     let dir = scratch(
         "alike",
         &[(
-            "a.orla",
+            "a.ent",
             "type Cells = Volume<Int>;\nfn corner(v: Cells) -> Int { return at(v, ivec3(0, 0, 0)); }\n",
         )],
     );
-    let own = orla_language::parse_document("type Cells = Volume<Int>;\n").unwrap();
+    let own = entelechy_language::parse_document("type Cells = Volume<Int>;\n").unwrap();
     let (_, types, functions) = declarations_for(
-        &orla_session::Disk::default(),
+        &entelechy_session::Disk::default(),
         &dir,
-        &uses("use \"a.orla\";"),
-        orla_language::Own::of(&own),
+        &uses("use \"a.ent\";"),
+        entelechy_language::Own::of(&own),
     )
     .unwrap();
     assert!(types.is_empty(), "{types:?}");
@@ -168,7 +168,7 @@ fn a_used_directory_gains_and_loses_files_between_syncs() {
     let dir = scratch(
         "gains",
         &[(
-            "scene.osn",
+            "scene.esn",
             "use \"kernels/\";\nnode x: lib.a@1 { domain = 4; }\noutput result <- x.result;\n",
         )],
     );
@@ -178,16 +178,17 @@ fn a_used_directory_gains_and_loses_files_between_syncs() {
             "kernel lib.{name}@1 {{ requires {{ field.write; }} output result: Rows<Float>; compute {{ return 1.0; }} }}\n"
         )
     };
-    std::fs::write(dir.join("kernels/a.orla"), kernel("a")).unwrap();
+    std::fs::write(dir.join("kernels/a.ent"), kernel("a")).unwrap();
     let runtime =
-        orla_session::Session::runtime_for("cpu", orla_session::Limits::default()).unwrap();
-    let mut session = orla_session::Session::open_in(
-        std::sync::Arc::new(orla_session::Disk::default()),
-        &dir.join("scene.osn"),
+        entelechy_session::Session::runtime_for("cpu", entelechy_session::Limits::default())
+            .unwrap();
+    let mut session = entelechy_session::Session::open_in(
+        std::sync::Arc::new(entelechy_session::Disk::default()),
+        &dir.join("scene.esn"),
         None,
         runtime,
     );
-    let published = |session: &orla_session::Session, name: &str| {
+    let published = |session: &entelechy_session::Session, name: &str| {
         session
             .runtime()
             .kernel(&format!("lib.{name}@1").parse().unwrap())
@@ -199,10 +200,10 @@ fn a_used_directory_gains_and_loses_files_between_syncs() {
     // Idle syncs in between keep what they reached.
     session.sync();
     assert!(published(&session, "a"));
-    std::fs::write(dir.join("kernels/b.orla"), kernel("b")).unwrap();
+    std::fs::write(dir.join("kernels/b.ent"), kernel("b")).unwrap();
     let events = session.sync();
     assert!(published(&session, "b"), "{events:?}");
-    std::fs::remove_file(dir.join("kernels/b.orla")).unwrap();
+    std::fs::remove_file(dir.join("kernels/b.ent")).unwrap();
     let events = session.sync();
     assert!(!published(&session, "b"), "{events:?}");
     assert!(published(&session, "a"));
@@ -211,24 +212,24 @@ fn a_used_directory_gains_and_loses_files_between_syncs() {
 
 /// Files handed in, counting the stamps asked of each path.
 struct Counting {
-    files: orla_session::Memory,
+    files: entelechy_session::Memory,
     stamps: std::sync::Mutex<std::collections::BTreeMap<PathBuf, usize>>,
 }
 
-impl orla_session::Store for Counting {
+impl entelechy_session::Store for Counting {
     fn read(&self, path: &std::path::Path) -> std::io::Result<Vec<u8>> {
         self.files.read(path)
     }
     fn write(&self, path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
         self.files.write(path, bytes)
     }
-    fn kind(&self, path: &std::path::Path) -> Option<orla_session::store::Kind> {
+    fn kind(&self, path: &std::path::Path) -> Option<entelechy_session::store::Kind> {
         self.files.kind(path)
     }
     fn list(&self, dir: &std::path::Path) -> std::io::Result<Vec<PathBuf>> {
         self.files.list(dir)
     }
-    fn stamp(&self, path: &std::path::Path) -> Option<orla_session::store::Stamp> {
+    fn stamp(&self, path: &std::path::Path) -> Option<entelechy_session::store::Stamp> {
         *self
             .stamps
             .lock()
@@ -250,20 +251,20 @@ impl orla_session::Store for Counting {
 /// as there are libraries, not as there are uses.
 #[test]
 fn an_idle_sync_stamps_each_document_once() {
-    let files = orla_session::Memory::default();
+    let files = entelechy_session::Memory::default();
     let put =
         |name: &str, text: String| files.put(&PathBuf::from("/s").join(name), text.into_bytes());
     for i in 0..6 {
-        let uses: String = (0..i).map(|j| format!("use \"l{j}.orla\";\n")).collect();
+        let uses: String = (0..i).map(|j| format!("use \"l{j}.ent\";\n")).collect();
         put(
-            &format!("lib/l{i}.orla"),
+            &format!("lib/l{i}.ent"),
             format!(
                 "{uses}kernel lib.k{i}@1 {{ requires {{ field.write; }} output result: Rows<Float>; compute {{ return {i}.0; }} }}\n"
             ),
         );
     }
     put(
-        "scene.osn",
+        "scene.esn",
         "use \"lib/\";\nnode n: lib.k5@1 { domain = 1; }\noutput result <- n.result;\n".into(),
     );
     let store = std::sync::Arc::new(Counting {
@@ -271,10 +272,11 @@ fn an_idle_sync_stamps_each_document_once() {
         stamps: Default::default(),
     });
     let runtime =
-        orla_session::Session::runtime_for("cpu", orla_session::Limits::default()).unwrap();
-    let mut session = orla_session::Session::open_in(
-        std::sync::Arc::clone(&store) as std::sync::Arc<dyn orla_session::Store>,
-        std::path::Path::new("/s/scene.osn"),
+        entelechy_session::Session::runtime_for("cpu", entelechy_session::Limits::default())
+            .unwrap();
+    let mut session = entelechy_session::Session::open_in(
+        std::sync::Arc::clone(&store) as std::sync::Arc<dyn entelechy_session::Store>,
+        std::path::Path::new("/s/scene.esn"),
         None,
         runtime,
     );
@@ -296,20 +298,22 @@ fn a_scene_struct_holds_a_used_enum_beside_its_params() {
     let dir = scratch(
         "enum-beside-param",
         &[
-            ("lib.orla", "type Mode = enum { Idle, Walk };\n"),
+            ("lib.ent", "type Mode = enum { Idle, Walk };\n"),
             (
-                "scene.osn",
-                "use \"lib.orla\";\nparam speed: Float = 1.0;\nstruct Pose { mode: Mode; modes: [Mode; 2]; }\nnode n: kernel { requires { field.write; } output result: Rows<Pose>; domain = 1; compute { return Pose { mode: Mode.Walk, modes: [Mode.Idle, Mode.Walk] }; } }\noutput result <- n.result;\n",
+                "scene.esn",
+                "use \"lib.ent\";\nparam speed: Float = 1.0;\nstruct Pose { mode: Mode; modes: [Mode; 2]; }\nnode n: kernel { requires { field.write; } output result: Rows<Pose>; domain = 1; compute { return Pose { mode: Mode.Walk, modes: [Mode.Idle, Mode.Walk] }; } }\noutput result <- n.result;\n",
             ),
         ],
     );
-    let mut session = orla_session::Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    let mut session = entelechy_session::Session::open(&dir.join("scene.esn"), None, 1 << 20);
     let events = session.sync();
     assert!(session.graph().is_some(), "{events:?}");
-    session.evaluate(&orla_kernel::Context::default()).unwrap();
+    session
+        .evaluate(&entelechy_kernel::Context::default())
+        .unwrap();
     let (_, words) = session
         .element_field(
-            &orla_graph::NodeId("n".into()),
+            &entelechy_graph::NodeId("n".into()),
             "result",
             0,
             &["mode".into()],
@@ -328,22 +332,24 @@ fn a_kernels_own_declarations_shadow_a_used_librarys() {
         "kernel-own",
         &[
             (
-                "lib.orla",
+                "lib.ent",
                 "struct Pair { a: Int; b: Int; }\ntype Mode = enum { Idle, Walk };\nfn over(a: Int, b: Int) -> Int { return a + b; }\nfn total(x: Int) -> Int { let p = Pair { a: x, b: x * 2 }; return over(p.a, p.b) + Mode.Walk; }\n",
             ),
             (
-                "scene.osn",
-                "use \"lib.orla\";\nnode n: kernel { requires { field.write; } output result: Rows<Int>; domain = 1;\n    struct Pair { left: Int; right: Int; }\n    type Mode = enum { Off = 10, On = 20 };\n    fn over(a: Int, b: Int) -> Int { return a * b; }\n    compute { let p = Pair { left: 1, right: Mode.On }; return over(3, 4) + p.left + p.right + total(5); } }\noutput result <- n.result;\n",
+                "scene.esn",
+                "use \"lib.ent\";\nnode n: kernel { requires { field.write; } output result: Rows<Int>; domain = 1;\n    struct Pair { left: Int; right: Int; }\n    type Mode = enum { Off = 10, On = 20 };\n    fn over(a: Int, b: Int) -> Int { return a * b; }\n    compute { let p = Pair { left: 1, right: Mode.On }; return over(3, 4) + p.left + p.right + total(5); } }\noutput result <- n.result;\n",
             ),
         ],
     );
-    let mut session = orla_session::Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    let mut session = entelechy_session::Session::open(&dir.join("scene.esn"), None, 1 << 20);
     let events = session.sync();
     assert!(session.graph().is_some(), "{events:?}");
-    session.evaluate(&orla_kernel::Context::default()).unwrap();
+    session
+        .evaluate(&entelechy_kernel::Context::default())
+        .unwrap();
     // Its own: 3 * 4, and 1 + 20; the library's: 5 + 10, and 1.
     let (_, words) = session
-        .element_field(&orla_graph::NodeId("n".into()), "result", 0, &[])
+        .element_field(&entelechy_graph::NodeId("n".into()), "result", 0, &[])
         .unwrap();
     assert_eq!(words, vec![12 + 21 + 16]);
     let _ = std::fs::remove_dir_all(&dir);
@@ -363,23 +369,23 @@ fn a_fault_in_an_inherited_declaration_is_placed_in_its_document() {
         let dir = scratch(
             &format!("inherited-fault-{k}"),
             &[
-                ("lib.orla", declaration),
+                ("lib.ent", declaration),
                 (
-                    "k.orla",
-                    "use \"lib.orla\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Int>; compute { return 1; } }\n",
+                    "k.ent",
+                    "use \"lib.ent\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Int>; compute { return 1; } }\n",
                 ),
                 (
-                    "scene.osn",
-                    "use \"k.orla\";\nnode n: t.k@1 { domain = 1; }\noutput result <- n.result;\n",
+                    "scene.esn",
+                    "use \"k.ent\";\nnode n: t.k@1 { domain = 1; }\noutput result <- n.result;\n",
                 ),
             ],
         );
-        let mut session = orla_session::Session::open(&dir.join("scene.osn"), None, 1 << 20);
+        let mut session = entelechy_session::Session::open(&dir.join("scene.esn"), None, 1 << 20);
         let events = session.sync();
         let faults: Vec<_> = events
             .iter()
             .filter_map(|event| match event {
-                orla_session::Event::Rejected { path, error }
+                entelechy_session::Event::Rejected { path, error }
                     if error.to_string().contains("Nope") =>
                 {
                     Some(path.clone())
@@ -391,7 +397,7 @@ fn a_fault_in_an_inherited_declaration_is_placed_in_its_document() {
         for path in faults {
             assert_eq!(
                 path.file_name().unwrap(),
-                "lib.orla",
+                "lib.ent",
                 "{declaration}{events:?}"
             );
         }
@@ -406,49 +412,49 @@ fn a_fault_in_an_inherited_declaration_is_placed_in_its_document() {
 fn a_fault_in_a_shadowing_declaration_is_placed_where_it_is_written() {
     let kernel = |own: &str| {
         format!(
-            "use \"lib.orla\";\nkernel t.k@1 {{ requires {{ field.write; }} output result: Rows<Int>;\n    {own}\n    compute {{ return 1; }} }}\n"
+            "use \"lib.ent\";\nkernel t.k@1 {{ requires {{ field.write; }} output result: Rows<Int>;\n    {own}\n    compute {{ return 1; }} }}\n"
         )
     };
     let cases = [
         (
             "struct Pair { a: Int; }\n",
             kernel("struct Pair { b: Nope; }"),
-            "k.orla",
+            "k.ent",
         ),
         (
             "struct Pair { a: Nope; }\n",
             kernel("struct Pair { b: Int; }"),
-            "lib.orla",
+            "lib.ent",
         ),
         (
             "fn twice(x: Int) -> Int { return 2; }\n",
             kernel("fn twice(x: Nope) -> Int { return 2; }"),
-            "k.orla",
+            "k.ent",
         ),
         (
             "fn twice(x: Nope) -> Int { return 2; }\n",
             kernel("fn twice(x: Int) -> Int { return 2; }"),
-            "lib.orla",
+            "lib.ent",
         ),
     ];
     for (k, (library, kernel, written)) in cases.iter().enumerate() {
         let dir = scratch(
             &format!("shadowing-fault-{k}"),
             &[
-                ("lib.orla", library),
-                ("k.orla", kernel),
+                ("lib.ent", library),
+                ("k.ent", kernel),
                 (
-                    "scene.osn",
-                    "use \"k.orla\";\nnode n: t.k@1 { domain = 1; }\noutput result <- n.result;\n",
+                    "scene.esn",
+                    "use \"k.ent\";\nnode n: t.k@1 { domain = 1; }\noutput result <- n.result;\n",
                 ),
             ],
         );
-        let mut session = orla_session::Session::open(&dir.join("scene.osn"), None, 1 << 20);
+        let mut session = entelechy_session::Session::open(&dir.join("scene.esn"), None, 1 << 20);
         let events = session.sync();
         let faults: Vec<_> = events
             .iter()
             .filter_map(|event| match event {
-                orla_session::Event::Rejected { path, error }
+                entelechy_session::Event::Rejected { path, error }
                     if error.to_string().contains("Nope") =>
                 {
                     Some(path.clone())
@@ -477,46 +483,48 @@ fn a_package_finds_the_packages_it_names_beside_it() {
         |name: &str| format!("package {name}@1 {{ language = 1; ir = 1; }}\nuse \"kernels/\";\n");
     let dir = scratch("packages-beside", &[]);
     for sub in [
-        "kept/a.orlapkg/kernels",
-        "kept/a.orlapkg/graphs",
-        "kept/b.orlapkg/kernels",
-        "kept/b.orlapkg/graphs",
+        "kept/a.entpkg/kernels",
+        "kept/a.entpkg/graphs",
+        "kept/b.entpkg/kernels",
+        "kept/b.entpkg/graphs",
         "scene",
     ] {
         std::fs::create_dir_all(dir.join(sub)).unwrap();
     }
     for (file, text) in [
-        ("kept/a.orlapkg/package.osn", manifest("a")),
+        ("kept/a.entpkg/package.esn", manifest("a")),
         (
-            "kept/a.orlapkg/kernels/a.orla",
+            "kept/a.entpkg/kernels/a.ent",
             "fn a_one() -> Int { return 1; }\nkernel a.twice@1 { requires { field.read; field.write; } input counts: Rows<Int>; output result: Rows<Int>; compute { return sample(counts) * 2; } }\n".into(),
         ),
         (
-            "kept/a.orlapkg/graphs/twice.osn",
-            "use \"../kernels/a.orla\";\ninput counts: Rows<Int>;\nnode once: a.twice@1 { counts <- counts; }\noutput result <- once.result;\n".into(),
+            "kept/a.entpkg/graphs/twice.esn",
+            "use \"../kernels/a.ent\";\ninput counts: Rows<Int>;\nnode once: a.twice@1 { counts <- counts; }\noutput result <- once.result;\n".into(),
         ),
-        ("kept/b.orlapkg/package.osn", manifest("b")),
+        ("kept/b.entpkg/package.esn", manifest("b")),
         (
-            "kept/b.orlapkg/kernels/b.orla",
-            "use \"a.orlapkg\";\nkernel b.start@1 { requires { field.write; } output result: Rows<Int>; compute { return element() + a_one(); } }\n".into(),
-        ),
-        (
-            "kept/b.orlapkg/graphs/start.osn",
-            "use \"../kernels/b.orla\";\nnode s: b.start@1 { domain = 3; }\nnode t: graph \"a.orlapkg/graphs/twice.osn\" { counts <- s.result; }\noutput result <- t.result;\n".into(),
+            "kept/b.entpkg/kernels/b.ent",
+            "use \"a.entpkg\";\nkernel b.start@1 { requires { field.write; } output result: Rows<Int>; compute { return element() + a_one(); } }\n".into(),
         ),
         (
-            "scene/scene.osn",
-            "use \"../kept/b.orlapkg\";\nnode p: graph \"../kept/b.orlapkg/graphs/start.osn\" { }\noutput shown <- p.result;\n".into(),
+            "kept/b.entpkg/graphs/start.esn",
+            "use \"../kernels/b.ent\";\nnode s: b.start@1 { domain = 3; }\nnode t: graph \"a.entpkg/graphs/twice.esn\" { counts <- s.result; }\noutput result <- t.result;\n".into(),
+        ),
+        (
+            "scene/scene.esn",
+            "use \"../kept/b.entpkg\";\nnode p: graph \"../kept/b.entpkg/graphs/start.esn\" { }\noutput shown <- p.result;\n".into(),
         ),
     ] {
         std::fs::write(dir.join(file), text).unwrap();
     }
-    let mut session = orla_session::Session::open(&dir.join("scene/scene.osn"), None, 1 << 20);
+    let mut session = entelechy_session::Session::open(&dir.join("scene/scene.esn"), None, 1 << 20);
     let events = session.sync();
     assert!(session.graph().is_some(), "{events:?}");
-    session.evaluate(&orla_kernel::Context::default()).unwrap();
+    session
+        .evaluate(&entelechy_kernel::Context::default())
+        .unwrap();
     let (_, words) = session
-        .element_field(&orla_graph::NodeId("p".into()), "result", 2, &[])
+        .element_field(&entelechy_graph::NodeId("p".into()), "result", 2, &[])
         .unwrap();
     assert_eq!(words, vec![6]);
     let _ = std::fs::remove_dir_all(&dir);
@@ -531,29 +539,29 @@ fn a_name_is_one_package() {
         let root = dir.join(at);
         std::fs::create_dir_all(root.join("kernels")).unwrap();
         std::fs::write(
-            root.join("package.osn"),
+            root.join("package.esn"),
             format!("package {id} {{ language = 1; ir = 1; }}\nuse \"kernels/\";\n"),
         )
         .unwrap();
         std::fs::write(
-            root.join("kernels/k.orla"),
+            root.join("kernels/k.ent"),
             "fn one() -> Int { return 1; }\n",
         )
         .unwrap();
     };
     let scene = "node s: kernel { requires { field.write; } output result: Rows<Int>; domain = 1; compute { return one(); } }\noutput result <- s.result;\n";
     let refusal = |dir: &std::path::Path| {
-        let mut session = orla_session::Session::open(&dir.join("scene.osn"), None, 1 << 20);
+        let mut session = entelechy_session::Session::open(&dir.join("scene.esn"), None, 1 << 20);
         let events = session.sync();
         (session.graph().is_some(), format!("{events:?}"))
     };
 
     let dir = scratch("one-package-editions", &[]);
-    package(&dir, "one/p.orlapkg", "p@1");
-    package(&dir, "two/p.orlapkg", "p@2");
+    package(&dir, "one/p.entpkg", "p@1");
+    package(&dir, "two/p.entpkg", "p@2");
     std::fs::write(
-        dir.join("scene.osn"),
-        format!("use \"one/p.orlapkg\";\nuse \"two/p.orlapkg\";\n{scene}"),
+        dir.join("scene.esn"),
+        format!("use \"one/p.entpkg\";\nuse \"two/p.entpkg\";\n{scene}"),
     )
     .unwrap();
     let (_, said) = refusal(&dir);
@@ -565,8 +573,8 @@ fn a_name_is_one_package() {
     );
     // One package reached by two spellings is one.
     std::fs::write(
-        dir.join("scene.osn"),
-        format!("use \"one/p.orlapkg\";\nuse \"one/../one/p.orlapkg\";\n{scene}"),
+        dir.join("scene.esn"),
+        format!("use \"one/p.entpkg\";\nuse \"one/../one/p.entpkg\";\n{scene}"),
     )
     .unwrap();
     let (loaded, said) = refusal(&dir);
@@ -574,15 +582,11 @@ fn a_name_is_one_package() {
     let _ = std::fs::remove_dir_all(&dir);
 
     let dir = scratch("one-package-misnamed", &[]);
-    package(&dir, "q.orlapkg", "p@1");
-    std::fs::write(
-        dir.join("scene.osn"),
-        format!("use \"q.orlapkg\";\n{scene}"),
-    )
-    .unwrap();
+    package(&dir, "q.entpkg", "p@1");
+    std::fs::write(dir.join("scene.esn"), format!("use \"q.entpkg\";\n{scene}")).unwrap();
     let (_, said) = refusal(&dir);
     assert!(
-        said.contains("the directory `q.orlapkg` declares the package `p@1`"),
+        said.contains("the directory `q.entpkg` declares the package `p@1`"),
         "{said}"
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -599,33 +603,38 @@ fn a_function_hides_a_builtin_in_its_own_document_only() {
         "hiding-builtin",
         &[
             (
-                "lib.orla",
+                "lib.ent",
                 "fn dot(a: Int) -> Int { return a; }\nfn uses_own(a: Int) -> Int { return dot(a) + 1; }\n",
             ),
             (
-                "scene.osn",
-                "use \"lib.orla\";\nnode n: kernel { requires { field.write; } output result: Rows<Float>; domain = 1; compute { return dot(vec2(2.0, 0.0), vec2(1.5, 0.0)) + float(uses_own(3)); } }\noutput result <- n.result;\n",
+                "scene.esn",
+                "use \"lib.ent\";\nnode n: kernel { requires { field.write; } output result: Rows<Float>; domain = 1; compute { return dot(vec2(2.0, 0.0), vec2(1.5, 0.0)) + float(uses_own(3)); } }\noutput result <- n.result;\n",
             ),
             (
-                "own.orla",
+                "own.ent",
                 "fn dot(a: Int) -> Int { return a; }\nkernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return dot(vec2(1.0, 0.0), vec2(1.0, 0.0)); } }\n",
             ),
         ],
     );
-    let mut session = orla_session::Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    let mut session = entelechy_session::Session::open(&dir.join("scene.esn"), None, 1 << 20);
     let events = session.sync();
     assert!(session.graph().is_some(), "{events:?}");
-    session.evaluate(&orla_kernel::Context::default()).unwrap();
+    session
+        .evaluate(&entelechy_kernel::Context::default())
+        .unwrap();
     // The builtin: 2 * 1.5; the library's own: 3 + 1.
     let (_, words) = session
-        .element_field(&orla_graph::NodeId("n".into()), "result", 0, &[])
+        .element_field(&entelechy_graph::NodeId("n".into()), "result", 0, &[])
         .unwrap();
     assert_eq!(f32::from_bits(words[0]), 7.0);
-    let checked =
-        orla_session::check_document(&orla_session::Disk::default(), &dir.join("own.orla"), false);
+    let checked = entelechy_session::check_document(
+        &entelechy_session::Disk::default(),
+        &dir.join("own.ent"),
+        false,
+    );
     assert!(
         checked.lines.iter().any(|(problem, line)| *problem
-            && line.contains("hides the builtin `dot`, declared in own.orla")),
+            && line.contains("hides the builtin `dot`, declared in own.ent")),
         "{checked:?}"
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -640,31 +649,31 @@ fn a_kernel_reached_only_through_another_document_is_said_with_its_use() {
     std::fs::create_dir_all(dir.join("kernels")).unwrap();
     for (file, text) in [
         (
-            "kernels/atlas.orla",
-            "use \"palettes.orla\";\nkernel t.atlas@1 { requires { field.write; } output result: Rows<Int>; compute { return twice(1); } }\n",
+            "kernels/atlas.ent",
+            "use \"palettes.ent\";\nkernel t.atlas@1 { requires { field.write; } output result: Rows<Int>; compute { return twice(1); } }\n",
         ),
         (
-            "kernels/palettes.orla",
+            "kernels/palettes.ent",
             "fn twice(x: Int) -> Int { return 2 * x; }\nkernel t.greens@1 { requires { field.write; } output result: Rows<Int>; compute { return 4; } }\n",
         ),
         (
-            "scene.osn",
-            "use \"kernels/atlas.orla\";\nnode a: t.atlas@1 { domain = 1; }\nnode g: t.greens@1 { domain = 1; }\noutput result <- g.result;\n",
+            "scene.esn",
+            "use \"kernels/atlas.ent\";\nnode a: t.atlas@1 { domain = 1; }\nnode g: t.greens@1 { domain = 1; }\noutput result <- g.result;\n",
         ),
     ] {
         std::fs::write(dir.join(file), text).unwrap();
     }
-    let wants = "`t.greens@1` is written in kernels/palettes.orla, which the scene reaches only through kernels/atlas.orla";
-    let mut session = orla_session::Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    let wants = "`t.greens@1` is written in kernels/palettes.ent, which the scene reaches only through kernels/atlas.ent";
+    let mut session = entelechy_session::Session::open(&dir.join("scene.esn"), None, 1 << 20);
     let first = format!("{:?}{:?}", session.sync(), session.sync());
     assert_eq!(first.matches(wants).count(), 1, "{first}");
     assert!(
-        first.contains("wants `use \\\"kernels/palettes.orla\\\";`"),
+        first.contains("wants `use \\\"kernels/palettes.ent\\\";`"),
         "{first}"
     );
-    let checked = orla_session::check_document(
-        &orla_session::Disk::default(),
-        &dir.join("scene.osn"),
+    let checked = entelechy_session::check_document(
+        &entelechy_session::Disk::default(),
+        &dir.join("scene.esn"),
         false,
     );
     assert!(
@@ -675,17 +684,17 @@ fn a_kernel_reached_only_through_another_document_is_said_with_its_use() {
         "{checked:?}"
     );
     // Used itself, it is published, and nothing is said.
-    std::fs::write(dir.join("scene.osn"), "use \"kernels/atlas.orla\";\nuse \"kernels/palettes.orla\";\nnode a: t.atlas@1 { domain = 1; }\nnode g: t.greens@1 { domain = 1; }\noutput result <- g.result;\n").unwrap();
-    let checked = orla_session::check_document(
-        &orla_session::Disk::default(),
-        &dir.join("scene.osn"),
+    std::fs::write(dir.join("scene.esn"), "use \"kernels/atlas.ent\";\nuse \"kernels/palettes.ent\";\nnode a: t.atlas@1 { domain = 1; }\nnode g: t.greens@1 { domain = 1; }\noutput result <- g.result;\n").unwrap();
+    let checked = entelechy_session::check_document(
+        &entelechy_session::Disk::default(),
+        &dir.join("scene.esn"),
         false,
     );
     assert_eq!(checked.problems(), 0, "{checked:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `orla check` compiles the Kernels a scene publishes, as a session
+/// `entelechy check` compiles the Kernels a scene publishes, as a session
 /// does: a Kernel of a document the scene reaches only through another
 /// is not the scene's, while that document's functions, which Kernels
 /// inherit, are checked.
@@ -695,30 +704,30 @@ fn check_compiles_the_kernels_a_scene_publishes() {
     std::fs::create_dir_all(dir.join("kernels")).unwrap();
     for (file, text) in [
         (
-            "kernels/atlas.orla",
-            "use \"deep.orla\";\nkernel t.atlas@1 { requires { field.write; } output result: Rows<Int>; compute { return twice(1); } }\n",
+            "kernels/atlas.ent",
+            "use \"deep.ent\";\nkernel t.atlas@1 { requires { field.write; } output result: Rows<Int>; compute { return twice(1); } }\n",
         ),
         (
-            "kernels/deep.orla",
+            "kernels/deep.ent",
             "fn twice(x: Int) -> Int { return 2 * x; }\nkernel t.deep@1 { requires { field.write; } output result: Rows<Int>; compute { return nowhere; } }\n",
         ),
         (
-            "scene.osn",
-            "use \"kernels/atlas.orla\";\nnode a: t.atlas@1 { domain = 1; }\noutput result <- a.result;\n",
+            "scene.esn",
+            "use \"kernels/atlas.ent\";\nnode a: t.atlas@1 { domain = 1; }\noutput result <- a.result;\n",
         ),
     ] {
         std::fs::write(dir.join(file), text).unwrap();
     }
-    let checked = orla_session::check_document(
-        &orla_session::Disk::default(),
-        &dir.join("scene.osn"),
+    let checked = entelechy_session::check_document(
+        &entelechy_session::Disk::default(),
+        &dir.join("scene.esn"),
         false,
     );
     assert_eq!(checked.problems(), 0, "{checked:?}");
-    std::fs::write(dir.join("kernels/deep.orla"), "fn twice(x: Int) -> Int { return 2 * nothing; }\nkernel t.deep@1 { requires { field.write; } output result: Rows<Int>; compute { return nowhere; } }\n").unwrap();
-    let checked = orla_session::check_document(
-        &orla_session::Disk::default(),
-        &dir.join("scene.osn"),
+    std::fs::write(dir.join("kernels/deep.ent"), "fn twice(x: Int) -> Int { return 2 * nothing; }\nkernel t.deep@1 { requires { field.write; } output result: Rows<Int>; compute { return nowhere; } }\n").unwrap();
+    let checked = entelechy_session::check_document(
+        &entelechy_session::Disk::default(),
+        &dir.join("scene.esn"),
         false,
     );
     assert!(
@@ -748,25 +757,25 @@ fn a_fault_says_names_as_they_were_written() {
         "written-names",
         &[
             (
-                "lib.orla",
+                "lib.ent",
                 "fn twice(x: Int) -> Int { return x * 2; }\nfn four() -> Int { return twice(1, 2); }\n",
             ),
             (
-                "k.orla",
-                "use \"lib.orla\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Int>;\n    fn twice(x: Int) -> Int { return x + x; }\n    compute { return twice(1) + four(); } }\n",
+                "k.ent",
+                "use \"lib.ent\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Int>;\n    fn twice(x: Int) -> Int { return x + x; }\n    compute { return twice(1) + four(); } }\n",
             ),
             (
-                "scene.osn",
-                "use \"k.orla\";\nnode n: t.k@1 { domain = 1; }\noutput result <- n.result;\n",
+                "scene.esn",
+                "use \"k.ent\";\nnode n: t.k@1 { domain = 1; }\noutput result <- n.result;\n",
             ),
         ],
     );
-    let mut session = orla_session::Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    let mut session = entelechy_session::Session::open(&dir.join("scene.esn"), None, 1 << 20);
     let faults: Vec<_> = session
         .sync()
         .into_iter()
         .filter_map(|event| match event {
-            orla_session::Event::Rejected { path, error }
+            entelechy_session::Event::Rejected { path, error }
                 if error.to_string().contains("argument") =>
             {
                 Some((path, error.to_string()))
@@ -776,7 +785,7 @@ fn a_fault_says_names_as_they_were_written() {
         .collect();
     assert!(!faults.is_empty());
     for (path, said) in faults {
-        assert_eq!(path.file_name().unwrap(), "lib.orla", "{said}");
+        assert_eq!(path.file_name().unwrap(), "lib.ent", "{said}");
         assert!(
             said.contains("`twice` takes 1 argument(s), found 2") && !said.contains('@'),
             "{said}"
@@ -794,44 +803,44 @@ fn a_document_sees_what_it_uses_itself() {
         "sees-what-it-uses",
         &[
             (
-                "c.orla",
+                "c.ent",
                 "struct Deep { v: Float; }\nfn deep() -> Deep { return Deep { v: 2.0 }; }\n",
             ),
             (
-                "b.orla",
-                "use \"c.orla\";\nfn mid() -> Float { return deep().v + 1.0; }\n",
+                "b.ent",
+                "use \"c.ent\";\nfn mid() -> Float { return deep().v + 1.0; }\n",
             ),
             (
-                "a.orla",
-                "use \"b.orla\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return deep().v; } }\n",
+                "a.ent",
+                "use \"b.ent\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return deep().v; } }\n",
             ),
             (
-                "scene.osn",
-                "use \"a.orla\";\nnode k: t.k@1 { domain = 1; }\noutput result <- k.result;\n",
+                "scene.esn",
+                "use \"a.ent\";\nnode k: t.k@1 { domain = 1; }\noutput result <- k.result;\n",
             ),
         ],
     );
-    let checked = orla_session::check_document(
-        &orla_session::Disk::default(),
-        &dir.join("scene.osn"),
+    let checked = entelechy_session::check_document(
+        &entelechy_session::Disk::default(),
+        &dir.join("scene.esn"),
         false,
     );
     let said = format!("{checked:?}");
     assert!(
         said.contains(
-            "`deep` is declared in c.orla, which this document reaches only through another's `use`"
-        ) && said.contains("use \\\"c.orla\\\";"),
+            "`deep` is declared in c.ent, which this document reaches only through another's `use`"
+        ) && said.contains("use \\\"c.ent\\\";"),
         "{said}"
     );
     // Through a function of the document it uses, it is reached.
     std::fs::write(
-        dir.join("a.orla"),
-        "use \"b.orla\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return mid(); } }\n",
+        dir.join("a.ent"),
+        "use \"b.ent\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return mid(); } }\n",
     )
     .unwrap();
-    let checked = orla_session::check_document(
-        &orla_session::Disk::default(),
-        &dir.join("scene.osn"),
+    let checked = entelechy_session::check_document(
+        &entelechy_session::Disk::default(),
+        &dir.join("scene.esn"),
         false,
     );
     assert_eq!(checked.problems(), 0, "{checked:?}");
@@ -844,41 +853,41 @@ fn a_document_sees_what_it_uses_itself() {
 /// Kernel's document uses that document itself.
 #[test]
 fn a_function_taking_a_field_sees_what_its_document_uses() {
-    let kernel = "use \"mid.orla\";\nuse \"lib.orla\";\nkernel t.k@1 { requires { field.read; field.write; } input xs: Rows<Float>; output result: Rows<Float>; compute { return total(xs); } }\nkernel t.s@1 { requires { field.write; } output result: Rows<Float>; compute { return 1.0; } }\n";
+    let kernel = "use \"mid.ent\";\nuse \"lib.ent\";\nkernel t.k@1 { requires { field.read; field.write; } input xs: Rows<Float>; output result: Rows<Float>; compute { return total(xs); } }\nkernel t.s@1 { requires { field.write; } output result: Rows<Float>; compute { return 1.0; } }\n";
     let dir = scratch(
         "field-function-sees",
         &[
             (
-                "lib.orla",
+                "lib.ent",
                 "struct Deep { v: Float; }\nfn deep() -> Float { return 2.0; }\n",
             ),
             (
-                "mid.orla",
+                "mid.ent",
                 "fn total(xs: Rows<Float>) -> Float { return at(xs, 0) + deep(); }\n",
             ),
-            ("a.orla", kernel),
+            ("a.ent", kernel),
             (
-                "scene.osn",
-                "use \"a.orla\";\nnode s: t.s@1 { domain = 1; }\nnode k: t.k@1 { xs <- s.result; domain = 1; }\noutput result <- k.result;\n",
+                "scene.esn",
+                "use \"a.ent\";\nnode s: t.s@1 { domain = 1; }\nnode k: t.k@1 { xs <- s.result; domain = 1; }\noutput result <- k.result;\n",
             ),
         ],
     );
     let check = || {
-        orla_session::check_document(
-            &orla_session::Disk::default(),
-            &dir.join("scene.osn"),
+        entelechy_session::check_document(
+            &entelechy_session::Disk::default(),
+            &dir.join("scene.esn"),
             false,
         )
     };
     let said = format!("{:?}", check());
     assert!(
-        said.contains("mid.orla:1:")
+        said.contains("mid.ent:1:")
             && said.contains("`deep` is not a builtin")
-            && said.contains("use \\\"lib.orla\\\";"),
+            && said.contains("use \\\"lib.ent\\\";"),
         "{said}"
     );
     std::fs::write(
-        dir.join("mid.orla"),
+        dir.join("mid.ent"),
         "fn total(xs: Rows<Float>) -> Float { return Deep { v: at(xs, 0) }.v; }\n",
     )
     .unwrap();
@@ -889,8 +898,8 @@ fn a_function_taking_a_field_sees_what_its_document_uses() {
     );
     // Used itself, both are seen.
     std::fs::write(
-        dir.join("mid.orla"),
-        "use \"lib.orla\";\nfn total(xs: Rows<Float>) -> Float { return Deep { v: at(xs, 0) }.v + deep(); }\n",
+        dir.join("mid.ent"),
+        "use \"lib.ent\";\nfn total(xs: Rows<Float>) -> Float { return Deep { v: at(xs, 0) }.v + deep(); }\n",
     )
     .unwrap();
     let checked = check();
@@ -908,36 +917,36 @@ fn a_param_says_a_faulty_struct_with_its_document() {
         "param-struct-elsewhere",
         &[
             (
-                "lib.orla",
+                "lib.ent",
                 "struct Fine { x: Float; }\nstruct Bad { x: Float; q: Nope; }\n",
             ),
             (
-                "k.orla",
+                "k.ent",
                 "kernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return 1.0; } }\n",
             ),
             (
-                "scene.osn",
-                "use \"lib.orla\";\nuse \"k.orla\";\nparam p: Bad = Bad { x: 1.0, q: 2 };\nnode k: t.k@1 { domain = 1; }\noutput result <- k.result;\n",
+                "scene.esn",
+                "use \"lib.ent\";\nuse \"k.ent\";\nparam p: Bad = Bad { x: 1.0, q: 2 };\nnode k: t.k@1 { domain = 1; }\noutput result <- k.result;\n",
             ),
         ],
     );
     let check = || {
-        orla_session::check_document(
-            &orla_session::Disk::default(),
-            &dir.join("scene.osn"),
+        entelechy_session::check_document(
+            &entelechy_session::Disk::default(),
+            &dir.join("scene.esn"),
             false,
         )
     };
     let said = format!("{:?}", check());
     assert!(
         said.contains("struct `Bad` (")
-            && said.contains("lib.orla:2:")
+            && said.contains("lib.ent:2:")
             && said.contains("unknown type `Nope`"),
         "{said}"
     );
     std::fs::write(
-        dir.join("scene.osn"),
-        "use \"lib.orla\";\nuse \"k.orla\";\nparam p: Fine = Fine { x: 1.0 };\nnode k: t.k@1 { domain = 1; }\noutput result <- k.result;\n",
+        dir.join("scene.esn"),
+        "use \"lib.ent\";\nuse \"k.ent\";\nparam p: Fine = Fine { x: 1.0 };\nnode k: t.k@1 { domain = 1; }\noutput result <- k.result;\n",
     )
     .unwrap();
     let said = format!("{:?}", check());
@@ -953,22 +962,22 @@ fn a_check_says_every_fault_of_a_document() {
         "every-fault",
         &[
             (
-                "lib.orla",
+                "lib.ent",
                 "fn a(x: Float) -> Float { return x + nope1; }\nfn b(x: Float) -> Float { return a(x) * 2.0; }\nfn c(x: Float) -> Float { return x + nope2(x); }\nfn d(x: Int) -> Float { return x.w; }\nfn fine(x: Float) -> Float { return x; }\n",
             ),
             (
-                "k.orla",
-                "use \"lib.orla\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return fine(1.0); } }\n",
+                "k.ent",
+                "use \"lib.ent\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return fine(1.0); } }\n",
             ),
             (
-                "scene.osn",
-                "use \"k.orla\";\nnode n: t.k@1 { domain = 1; }\noutput result <- n.result;\n",
+                "scene.esn",
+                "use \"k.ent\";\nnode n: t.k@1 { domain = 1; }\noutput result <- n.result;\n",
             ),
         ],
     );
-    let checked = orla_session::check_document(
-        &orla_session::Disk::default(),
-        &dir.join("scene.osn"),
+    let checked = entelechy_session::check_document(
+        &entelechy_session::Disk::default(),
+        &dir.join("scene.esn"),
         false,
     );
     let problems: Vec<&String> = checked
@@ -979,9 +988,9 @@ fn a_check_says_every_fault_of_a_document() {
         .collect();
     assert_eq!(problems.len(), 3, "{problems:?}");
     for (place, says) in [
-        ("lib.orla:1:", "nope1"),
-        ("lib.orla:3:", "nope2"),
-        ("lib.orla:4:", "`.w`"),
+        ("lib.ent:1:", "nope1"),
+        ("lib.ent:3:", "nope2"),
+        ("lib.ent:4:", "`.w`"),
     ] {
         assert!(
             problems
@@ -1003,23 +1012,25 @@ fn names_a_used_library_uses_are_not_the_documents() {
         "not-the-documents",
         &[
             (
-                "package.orla",
+                "package.ent",
                 "fn shade() -> Float { return 1.0; }\nfn lit() -> Float { return shade() + 2.0; }\n",
             ),
             (
-                "widgets.orla",
-                "use \"package.orla\";\nfn shade() -> Float { return 10.0; }\nfn both() -> Float { return shade() + lit(); }\n",
+                "widgets.ent",
+                "use \"package.ent\";\nfn shade() -> Float { return 10.0; }\nfn both() -> Float { return shade() + lit(); }\n",
             ),
             (
-                "scene.osn",
-                "use \"widgets.orla\";\nnode k: kernel { requires { field.write; } output result: Rows<Float>; domain = 1; compute { return shade() * 100.0 + both(); } }\noutput result <- k.result;\n",
+                "scene.esn",
+                "use \"widgets.ent\";\nnode k: kernel { requires { field.write; } output result: Rows<Float>; domain = 1; compute { return shade() * 100.0 + both(); } }\noutput result <- k.result;\n",
             ),
         ],
     );
-    let mut session = orla_session::Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    let mut session = entelechy_session::Session::open(&dir.join("scene.esn"), None, 1 << 20);
     let events = session.sync();
     assert!(session.graph().is_some(), "{events:?}");
-    session.evaluate(&orla_kernel::Context::default()).unwrap();
+    session
+        .evaluate(&entelechy_kernel::Context::default())
+        .unwrap();
     let handle = session.output(Some("result")).unwrap();
     let value = f32::from_bits(session.field(handle).unwrap().values()[0]);
     // The scene's shade is the widgets' (10); both() is its 10 and the
@@ -1033,34 +1044,34 @@ fn names_a_used_library_uses_are_not_the_documents() {
 #[test]
 fn a_name_in_a_package_found_by_name_is_said_with_the_packages_name() {
     let dir = scratch("package-by-name", &[]);
-    std::fs::create_dir_all(dir.join("packages/deep.orlapkg/kernels")).unwrap();
+    std::fs::create_dir_all(dir.join("packages/deep.entpkg/kernels")).unwrap();
     for (file, text) in [
         (
-            "packages/deep.orlapkg/package.osn",
+            "packages/deep.entpkg/package.esn",
             "package deep@1 { language = 1; ir = 1; }\nuse \"kernels/\";\n",
         ),
         (
-            "packages/deep.orlapkg/kernels/deep.orla",
+            "packages/deep.entpkg/kernels/deep.ent",
             "fn deep() -> Float { return 2.0; }\n",
         ),
         (
-            "b.orla",
-            "use \"deep.orlapkg\";\nfn mid() -> Float { return deep(); }\n",
+            "b.ent",
+            "use \"deep.entpkg\";\nfn mid() -> Float { return deep(); }\n",
         ),
         (
-            "a.orla",
-            "use \"b.orla\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return deep(); } }\n",
+            "a.ent",
+            "use \"b.ent\";\nkernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return deep(); } }\n",
         ),
         (
-            "scene.osn",
-            "use \"a.orla\";\nnode k: t.k@1 { domain = 1; }\noutput result <- k.result;\n",
+            "scene.esn",
+            "use \"a.ent\";\nnode k: t.k@1 { domain = 1; }\noutput result <- k.result;\n",
         ),
     ] {
         std::fs::write(dir.join(file), text).unwrap();
     }
-    let store = orla_session::Disk::with_packages(vec![dir.join("packages")]);
-    let checked = orla_session::check_document(&store, &dir.join("scene.osn"), false);
+    let store = entelechy_session::Disk::with_packages(vec![dir.join("packages")]);
+    let checked = entelechy_session::check_document(&store, &dir.join("scene.esn"), false);
     let said = format!("{checked:?}");
-    assert!(said.contains("use \\\"deep.orlapkg\\\";"), "{said}");
+    assert!(said.contains("use \\\"deep.entpkg\\\";"), "{said}");
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -1,4 +1,4 @@
-//! The scene from its documents: the root `.osn`, its sub-graphs and
+//! The scene from its documents: the root `.esn`, its sub-graphs and
 //! libraries, their shared declarations, the lowered Graph, and caller
 //! params. The scene reads documents; the ledger ([`Kernels`])
 //! publishes their Kernels.
@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use orla_graph::{Graph, GraphParam};
-use orla_kernel::{Runtime, Value};
+use entelechy_graph::{Graph, GraphParam};
+use entelechy_kernel::{Runtime, Value};
 
 use crate::kernels::{Batch, Change, Defined, Kernels};
 use crate::sources::{
@@ -36,12 +36,12 @@ pub(crate) struct Scene {
     depends: BTreeMap<PathBuf, Vec<(PathBuf, Option<Stamp>)>>,
     /// Shared declarations from `use`s and the root's top level; a
     /// Kernel published through the protocol inherits them.
-    structs: Vec<orla_language::StructDecl>,
-    types: Vec<orla_language::TypeAlias>,
-    functions: Vec<orla_language::FnDecl>,
+    structs: Vec<entelechy_language::StructDecl>,
+    types: Vec<entelechy_language::TypeAlias>,
+    functions: Vec<entelechy_language::FnDecl>,
     graph: Option<Graph>,
     /// The lowered document's file inputs and outputs.
-    files: orla_scene::Files,
+    files: entelechy_scene::Files,
     /// The root's text as last lowered: the structure that runs.
     text: Option<String>,
     /// Caller overrides of graph parameters.
@@ -70,7 +70,7 @@ pub(crate) struct Kept {
     sub_graphs: BTreeMap<PathBuf, Option<Stamp>>,
     declared: Declared,
     graph: Option<Graph>,
-    files: orla_scene::Files,
+    files: entelechy_scene::Files,
     text: Option<String>,
     params: BTreeMap<String, Value>,
 }
@@ -79,7 +79,7 @@ pub(crate) struct Kept {
 struct Staged {
     graph: Graph,
     text: String,
-    files: orla_scene::Files,
+    files: entelechy_scene::Files,
     uses: Vec<(PathBuf, bool)>,
     sub_graphs: BTreeMap<PathBuf, Option<Stamp>>,
     /// Graph documents only the running scene places; their Kernels
@@ -90,9 +90,9 @@ struct Staged {
 }
 
 type Declared = (
-    Vec<orla_language::StructDecl>,
-    Vec<orla_language::TypeAlias>,
-    Vec<orla_language::FnDecl>,
+    Vec<entelechy_language::StructDecl>,
+    Vec<entelechy_language::TypeAlias>,
+    Vec<entelechy_language::FnDecl>,
 );
 
 /// What a sync read of one document: its stamp, what it said, and its
@@ -121,7 +121,7 @@ impl Scene {
             types: Vec::new(),
             functions: Vec::new(),
             graph: None,
-            files: orla_scene::Files::default(),
+            files: entelechy_scene::Files::default(),
             text: None,
             params: BTreeMap::new(),
             staged: None,
@@ -179,7 +179,7 @@ impl Scene {
     }
 
     /// The scene's file inputs and outputs.
-    pub(crate) fn files(&self) -> &orla_scene::Files {
+    pub(crate) fn files(&self) -> &entelechy_scene::Files {
         &self.files
     }
 
@@ -290,7 +290,7 @@ impl Scene {
     /// document the scene reaches only through another.
     fn say_unpublished(&self, kernels: &Kernels, events: &mut Vec<Event>) {
         let Some(graph) = &self.graph else { return };
-        let own: Vec<orla_ir::KernelId> = std::iter::once(self.root.clone())
+        let own: Vec<entelechy_ir::KernelId> = std::iter::once(self.root.clone())
             .chain(self.sub_graphs.keys().cloned())
             .flat_map(|path| kernels.ids_of(&path))
             .collect();
@@ -328,13 +328,14 @@ impl Scene {
         &self,
         text: &str,
         readable: &dyn Fn(&Path) -> Result<(), String>,
-    ) -> Result<(orla_language::Document, orla_scene::Lowered), Diagnostic> {
-        let document = orla_language::parse_document(text).map_err(|e| Diagnostic::from(&e))?;
+    ) -> Result<(entelechy_language::Document, entelechy_scene::Lowered), Diagnostic> {
+        let document =
+            entelechy_language::parse_document(text).map_err(|e| Diagnostic::from(&e))?;
         // Every used or placed document passes `readable` before any is
         // read.
         let base = self.base();
         let placed = document.nodes.iter().filter_map(|node| match &node.kind {
-            orla_language::NodeKind::SubGraph(path) => Some(path),
+            entelechy_language::NodeKind::SubGraph(path) => Some(path),
             _ => None,
         });
         for path in document.uses.iter().map(|item| &item.path).chain(placed) {
@@ -344,10 +345,10 @@ impl Scene {
         let store = self.store.as_ref();
         let mut loader = |path: &Path| locate_document(store, path);
         let mut declare =
-            |base: &Path, uses: &[orla_language::Use], own: orla_language::Own<'_>| {
+            |base: &Path, uses: &[entelechy_language::Use], own: entelechy_language::Own<'_>| {
                 declarations_for(store, base, uses, own)
             };
-        let lowered = orla_scene::load_with_params(
+        let lowered = entelechy_scene::load_with_params(
             &document,
             text,
             &self.document_name(),
@@ -382,14 +383,14 @@ impl Scene {
         &self,
         text: &str,
         readable: &dyn Fn(&Path) -> Result<(), String>,
-        granted: &dyn Fn(&orla_ir::Validated) -> Result<(), Diagnostic>,
+        granted: &dyn Fn(&entelechy_ir::Validated) -> Result<(), Diagnostic>,
     ) -> Result<(), Diagnostic> {
         let (mut document, lowered) = self.lower(text, readable)?;
         let (structs, types, functions) = declarations_for(
             self.store.as_ref(),
             &self.base(),
             &document.uses,
-            orla_language::Own::of(&document),
+            entelechy_language::Own::of(&document),
         )
         .map_err(Diagnostic::new)?;
         functions_checked(&self.root, &document, (&structs, &types, &functions))?;
@@ -406,7 +407,7 @@ impl Scene {
             .map(|kernel| (named_id(kernel), kernel));
         for (id, kernel) in top.chain(inline) {
             let id = id?;
-            let module = orla_compiler::compile_kernel(kernel, Some(&id))
+            let module = entelechy_compiler::compile_kernel(kernel, Some(&id))
                 .map_err(|error| Diagnostic::from(&error))?;
             granted(&module)?;
         }
@@ -506,7 +507,7 @@ impl Scene {
             self.store.as_ref(),
             &base,
             &document.uses,
-            orla_language::Own::of(&document),
+            entelechy_language::Own::of(&document),
         ) {
             Ok((structs, types, functions)) => {
                 if let Err(error) =
@@ -533,7 +534,7 @@ impl Scene {
             match named_id(kernel) {
                 Ok(id) => by_document.entry(root.clone()).or_default().push(Defined {
                     id,
-                    text: text[orla_language::doc::with_doc(&text, kernel.range.clone())]
+                    text: text[entelechy_language::doc::with_doc(&text, kernel.range.clone())]
                         .to_owned(),
                     kernel: kernel.clone(),
                 }),
@@ -895,7 +896,7 @@ impl Scene {
         source: &str,
         kernels: &Kernels,
         runtime: &Runtime,
-    ) -> Result<orla_kernel::Candidate, Diagnostic> {
+    ) -> Result<entelechy_kernel::Candidate, Diagnostic> {
         let module = self.compile_source(source, kernels)?;
         runtime
             .prepare_module(module, source)
@@ -907,9 +908,9 @@ impl Scene {
         &self,
         source: &str,
         kernels: &Kernels,
-    ) -> Result<orla_kernel::Validated, Diagnostic> {
+    ) -> Result<entelechy_kernel::Validated, Diagnostic> {
         let mut document =
-            orla_language::parse_document(source).map_err(|e| Diagnostic::from(&e))?;
+            entelechy_language::parse_document(source).map_err(|e| Diagnostic::from(&e))?;
         if document.kernels.len() != 1 {
             return Err(Diagnostic::new(format!(
                 "expected one kernel, found {}",
@@ -924,7 +925,7 @@ impl Scene {
                 self.store.as_ref(),
                 base,
                 &document.uses,
-                orla_language::Own::of(&document),
+                entelechy_language::Own::of(&document),
             )
             .map_err(Diagnostic::new)?
         };
@@ -932,7 +933,7 @@ impl Scene {
         // the source's own win, so a Kernel may redefine a shared struct
         // and change a state's layout while it runs.
         for shared in &self.structs {
-            let declared = |d: &orla_language::StructDecl| d.name.value == shared.name.value;
+            let declared = |d: &entelechy_language::StructDecl| d.name.value == shared.name.value;
             if !document.structs.iter().any(declared)
                 && !structs.iter().any(declared)
                 && !document.kernels[0].structs.iter().any(declared)
@@ -941,7 +942,7 @@ impl Scene {
             }
         }
         for shared in &self.types {
-            let declared = |d: &orla_language::TypeAlias| d.name.value == shared.name.value;
+            let declared = |d: &entelechy_language::TypeAlias| d.name.value == shared.name.value;
             if !document.types.iter().any(declared)
                 && !types.iter().any(declared)
                 && !document.kernels[0].types.iter().any(declared)
@@ -950,7 +951,7 @@ impl Scene {
             }
         }
         for shared in &self.functions {
-            let declared = |d: &orla_language::FnDecl| d.name.value == shared.name.value;
+            let declared = |d: &entelechy_language::FnDecl| d.name.value == shared.name.value;
             if !document.functions.iter().any(declared)
                 && !functions.iter().any(declared)
                 && !document.kernels[0].functions.iter().any(declared)
@@ -959,7 +960,7 @@ impl Scene {
             }
         }
         document.resolve((&structs, &types, &functions));
-        orla_compiler::compile_kernel(&document.kernels[0], None).map_err(|e| {
+        entelechy_compiler::compile_kernel(&document.kernels[0], None).map_err(|e| {
             kernels.located(
                 self.store.as_ref(),
                 Diagnostic::from(&e),
@@ -973,10 +974,10 @@ impl Scene {
 /// A graph's refusal at the place `document` wrote the source it names,
 /// when it wrote it; a cycle, or a source in a placed graph, has none.
 pub(crate) fn graph_diagnostic(
-    document: &orla_language::Document,
-    error: &orla_graph::GraphError,
+    document: &entelechy_language::Document,
+    error: &entelechy_graph::GraphError,
 ) -> Diagnostic {
-    use orla_graph::{GraphError, Source};
+    use entelechy_graph::{GraphError, Source};
     let named = match error {
         GraphError::UnknownSource { source, .. } | GraphError::UnknownOutput(source) => {
             Some(source)
@@ -1004,9 +1005,9 @@ pub(crate) fn graph_diagnostic(
 /// the nodes that set it themselves.
 fn undeclared(graph: &Graph, name: &str) -> String {
     let mut why = format!("`{name}` is not a param the scene declares");
-    let near = orla_language::nearest(name, graph.params.iter().map(|p| p.name.as_str()));
+    let near = entelechy_language::nearest(name, graph.params.iter().map(|p| p.name.as_str()));
     if near.is_some() {
-        why.push_str(&orla_language::suggestion(near));
+        why.push_str(&entelechy_language::suggestion(near));
         return why;
     }
     let setters: Vec<&str> = graph
@@ -1058,7 +1059,7 @@ fn read_library(store: &dyn Store, path: PathBuf, current: Option<Stamp>) -> (Re
             );
         }
     };
-    let document = match orla_language::parse_document(&text) {
+    let document = match entelechy_language::parse_document(&text) {
         Ok(document) => document,
         Err(error) => {
             said.push(Event::Rejected {
@@ -1104,7 +1105,7 @@ fn read_library(store: &dyn Store, path: PathBuf, current: Option<Stamp>) -> (Re
         Some(&path),
         &dir,
         &document.uses,
-        orla_language::Own::of(&document),
+        entelechy_language::Own::of(&document),
     ) {
         Ok((structs, types, functions)) => {
             let used = used_documents(store, &dir, &document.uses)
@@ -1155,7 +1156,8 @@ fn read_library(store: &dyn Store, path: PathBuf, current: Option<Stamp>) -> (Re
         match named_id(kernel) {
             Ok(id) => defined.push(Defined {
                 id,
-                text: text[orla_language::doc::with_doc(&text, kernel.range.clone())].to_owned(),
+                text: text[entelechy_language::doc::with_doc(&text, kernel.range.clone())]
+                    .to_owned(),
                 kernel: kernel.clone(),
             }),
             Err(message) => said.push(Event::Rejected {
@@ -1205,9 +1207,9 @@ impl Compiling {
         let shared = Arc::new(std::sync::Mutex::new(Some(to_read)));
         let theirs = Arc::clone(&shared);
         let started = std::thread::Builder::new()
-            .name("orla-compile".into())
+            .name("entelechy-compile".into())
             // Room for the language's nesting bound
-            // (orla_language::DEEP_STACK), which the compiler recurses through.
+            // (entelechy_language::DEEP_STACK), which the compiler recurses through.
             .stack_size(256 << 20)
             .spawn(move || {
                 let Some(to_read) = theirs

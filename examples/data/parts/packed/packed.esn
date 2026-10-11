@@ -1,0 +1,22 @@
+// Every Field as narrow as it holds. The picture and the tile map come
+// from whoever places this graph: `scene.esn` reads them from files.
+use "kernels/";
+
+input albedo: Grid<Vec4 as unorm8>;
+input tiles: Rows<Int as u8>;
+
+param turn: Float = 0.0;
+
+node height: packed.height@1 { turn = turn; domain = vec2(160, 90); }
+node normal: packed.normal@1 { height <- height.result; }
+node dark: Grid<Vec4 as f16> { domain = vec2(160, 90); }
+node light: packed.light@1 {
+    albedo <- albedo;
+    normal <- normal.result;
+    tiles <- tiles;
+    previous <~ light.result from dark.result;
+    domain = vec2(160, 90);
+}
+node show: packed.tonemap@1 { hdr <- light.result; }
+
+output result <- show.result;

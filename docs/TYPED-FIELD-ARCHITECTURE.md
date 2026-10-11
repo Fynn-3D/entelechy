@@ -104,7 +104,7 @@ not product algorithms.
    boundary has executable evidence.
 
 Unmet obligations are HANDOFF.md's. Infrastructure is verified in Rust;
-authored computation and predicates are `.orla`, composed in `.osn`,
+authored computation and predicates are `.ent`, composed in `.esn`,
 with declarative replay.
 
 ## Where

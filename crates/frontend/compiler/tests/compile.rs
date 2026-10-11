@@ -1,6 +1,6 @@
-use orla_compiler::{CompileError, compile};
-use orla_ir::{Capability, Op, Type};
-use orla_language::Span;
+use entelechy_compiler::{CompileError, compile};
+use entelechy_ir::{Capability, Op, Type};
+use entelechy_language::Span;
 
 const GRAYSCALE: &str = r#"
 kernel image.grayscale@1 {
@@ -34,17 +34,17 @@ fn grayscale_compiles_to_validated_ir() {
     assert!(manifest.requires.contains(Capability::FieldRead));
     assert_eq!(manifest.inputs[0].name, "source");
     assert_eq!(manifest.params[0].name, "amount");
-    assert_eq!(manifest.outputs[0].ty, orla_ir::PortType::image());
+    assert_eq!(manifest.outputs[0].ty, entelechy_ir::PortType::image());
     // The lowering keeps the helper; the optimizer inlines it and drops
     // the uncalled function.
-    let lowered = orla_compiler::compile_unoptimized(GRAYSCALE).unwrap();
+    let lowered = entelechy_compiler::compile_unoptimized(GRAYSCALE).unwrap();
     assert_eq!(lowered.functions.len(), 1);
     assert_eq!(lowered.functions[0].args, vec![Type::Vec4]);
     assert!(module.functions.is_empty());
     assert!(module.entry.body.iter().any(|i| i.op == Op::Sample(0)));
     // The optimizer inlines a short function: the call is in the lowering,
     // the arithmetic in the entry.
-    let written = orla_compiler::compile_unoptimized(GRAYSCALE).unwrap();
+    let written = entelechy_compiler::compile_unoptimized(GRAYSCALE).unwrap();
     assert!(
         written
             .entry
@@ -124,12 +124,15 @@ fn parameter_defaults_are_constants_of_the_declared_type() {
     .unwrap();
     assert_eq!(
         module.manifest.params[0].default,
-        orla_ir::Value::Vec2([1.0, -2.0])
+        entelechy_ir::Value::Vec2([1.0, -2.0])
     );
-    assert_eq!(module.manifest.params[1].default, orla_ir::Value::Int(-3));
+    assert_eq!(
+        module.manifest.params[1].default,
+        entelechy_ir::Value::Int(-3)
+    );
     assert_eq!(
         module.manifest.params[2].default,
-        orla_ir::Value::Float(2.0)
+        entelechy_ir::Value::Float(2.0)
     );
     let (_, message) = semantic(
         "kernel t.k@1 { requires { field.write; } param f: Float = 1.0 + 1.0; output r: Image; compute { return vec4(f, 0.0, 0.0, 1.0); } }",
@@ -154,11 +157,11 @@ fn a_float_is_written_with_an_exponent() {
     assert_eq!(
         defaults,
         [
-            orla_ir::Value::Float(1e30),
-            orla_ir::Value::Float(2.5e-3),
-            orla_ir::Value::Float(400.0),
-            orla_ir::Value::Double(300.0),
-            orla_ir::Value::Float(7.0),
+            entelechy_ir::Value::Float(1e30),
+            entelechy_ir::Value::Float(2.5e-3),
+            entelechy_ir::Value::Float(400.0),
+            entelechy_ir::Value::Double(300.0),
+            entelechy_ir::Value::Float(7.0),
         ]
     );
     // A `Long` is a whole number, however written.
@@ -182,7 +185,7 @@ fn time_and_vec3_are_typed_and_gated() {
     .unwrap();
     assert_eq!(
         module.manifest.params[0].default,
-        orla_ir::Value::Vec3([1.0, 0.5, 0.25])
+        entelechy_ir::Value::Vec3([1.0, 0.5, 0.25])
     );
     assert!(module.to_string().contains("context time"));
     let (_, message) = semantic(
@@ -269,7 +272,7 @@ fn control_flow_is_scoped_and_typed() {
     .unwrap();
     assert_eq!(
         module.manifest.params[0].default,
-        orla_ir::Value::Bool(true)
+        entelechy_ir::Value::Bool(true)
     );
     let text = module.to_string();
     assert!(text.contains("= if %"), "{text}");
@@ -370,7 +373,7 @@ fn merge_makes_a_reduction_and_is_checked() {
         "kernel test.mean@1 { requires { field.read; field.write; } input source: Image; output result: Rows<Vec2>; compute { let c = sample(source); return vec2(c.r, 1.0); } merge(a, b) { return a + b; } }",
     )
     .unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(module.manifest.mode, orla_ir::Mode::Reduce);
+    assert_eq!(module.manifest.mode, entelechy_ir::Mode::Reduce);
     let text = module.to_string();
     assert!(text.contains("mode reduce"), "{text}");
     assert!(text.contains("fn merge(arg0: Vec2, arg1: Vec2)"), "{text}");
@@ -399,7 +402,7 @@ fn scan_carries_a_value_and_is_checked() {
         "kernel test.prefix@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan with total = 0 { return total + sample(rows); } }",
     )
     .unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(module.manifest.mode, orla_ir::Mode::Scan);
+    assert_eq!(module.manifest.mode, entelechy_ir::Mode::Scan);
     let text = module.to_string();
     assert!(text.contains("mode scan"), "{text}");
     assert!(text.contains("fn init()"), "{text}");
@@ -435,7 +438,7 @@ fn scan_carries_a_value_and_is_checked() {
 /// function and the builtin that needs them.
 #[test]
 fn a_function_needs_its_capabilities_only_where_it_is_called() {
-    let document = orla_language::parse_document(
+    let document = entelechy_language::parse_document(
         "fn beat(t: Float) -> Float { return t * rate(); }
 fn twice(t: Float) -> Float { return beat(t) * 2.0; }
 kernel t.plain@1 { requires { field.write; } output result: Rows<Float>; compute { return 2.0; } }
@@ -450,7 +453,7 @@ kernel t.through@1 { requires { field.write; } output result: Rows<Float>; compu
             .iter()
             .find(|k| k.id.as_ref().is_some_and(|id| id.value == name))
             .unwrap();
-        orla_compiler::compile_kernel(kernel, None)
+        entelechy_compiler::compile_kernel(kernel, None)
     };
     compiled("t.plain@1").unwrap_or_else(|e| panic!("{e}"));
     compiled("t.held@1").unwrap_or_else(|e| panic!("{e}"));
@@ -483,7 +486,7 @@ fn rate_is_context_under_time_read() {
 #[test]
 fn functions_with_field_parameters_are_instantiated_per_port() {
     // The lowering is inspected; the optimizer inlines short functions.
-    let module = orla_compiler::compile_unoptimized(
+    let module = entelechy_compiler::compile_unoptimized(
         "kernel test.peek@1 { requires { field.read; field.write; } input a: Grid<Float>; input b: Grid<Float>; output result: Grid<Float>;
             fn half(x: Float) -> Float { return x * 0.5; }
             fn peek(f: Grid<Float>, c: Vec2) -> Float { return half(at(f, c)) + at(f, c + vec2(1.0, 0.0)); }
@@ -593,8 +596,8 @@ fn a_prefix_names_a_rule_that_folds_in_any_order() {
     .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(
         module.manifest.mode,
-        orla_ir::Mode::Prefix {
-            combine: orla_ir::Combine::Sum
+        entelechy_ir::Mode::Prefix {
+            combine: entelechy_ir::Combine::Sum
         }
     );
     let text = module.to_string();
@@ -633,9 +636,9 @@ fn scatter_names_its_target_and_rule_and_is_checked() {
     .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(
         module.manifest.mode,
-        orla_ir::Mode::Scatter {
+        entelechy_ir::Mode::Scatter {
             base: 1,
-            combine: orla_ir::Combine::Sum
+            combine: entelechy_ir::Combine::Sum
         }
     );
     let text = module.to_string();
@@ -882,7 +885,7 @@ fn arrays_are_typed_built_indexed_and_checked() {
     .unwrap();
     assert_eq!(
         module.manifest.params[0].default,
-        orla_ir::Value::Double(1e39)
+        entelechy_ir::Value::Double(1e39)
     );
 }
 
@@ -956,8 +959,8 @@ fn calls_nested_past_the_limit_are_refused_not_a_crash() {
         source.push_str(&format!("compute {{ return f{}(0.0); }} }}", n - 1));
         source
     };
-    assert!(compile(&chain(orla_language::MAX_NESTING)).is_ok());
-    for n in [orla_language::MAX_NESTING + 1, 30000] {
+    assert!(compile(&chain(entelechy_language::MAX_NESTING)).is_ok());
+    for n in [entelechy_language::MAX_NESTING + 1, 30000] {
         let (_, message) = semantic(&chain(n));
         assert!(
             message.contains("calls nest more than 256 deep"),
@@ -1090,7 +1093,7 @@ fn matrices_are_built_from_columns_multiplied_and_checked() {
 #[test]
 fn integer_vectors_address_fields_without_conversions_in_the_source() {
     // The lowering is inspected; the optimizer inlines short functions.
-    let module = orla_compiler::compile_unoptimized(
+    let module = entelechy_compiler::compile_unoptimized(
         "kernel t.k@1 { requires { field.read; field.write; }
             struct Site { cell: IVec2; weight: Int; }
             input cells: Grid<Int>;
@@ -1185,7 +1188,7 @@ fn vectors_build_from_vectors_swizzle_and_functions_may_take_a_math_builtins_nam
     let text = module.to_string();
     // The calls name the document's `step` and `mix`, not the builtins;
     // the lowering is inspected, before inlining.
-    let written = orla_compiler::compile_unoptimized(SHADOWING)
+    let written = entelechy_compiler::compile_unoptimized(SHADOWING)
         .unwrap()
         .to_string();
     assert!(written.contains("call fn0("), "{written}");
@@ -1315,7 +1318,7 @@ fn no_chain_of_calls_reaches_back_to_a_function() {
 #[test]
 fn a_type_parameter_is_bound_by_the_call() {
     // The lowering is inspected; the optimizer inlines short functions.
-    let module = orla_compiler::compile_unoptimized(
+    let module = entelechy_compiler::compile_unoptimized(
         "kernel t.k@1 { requires { field.write; } output result: Rows<Float>;
             fn twice<T>(v: T) -> T { return v + v; }
             compute { let i = element(); return twice(float(i)) + twice(vec2(1.0, 2.0)).x + float(twice(i)); } }",
@@ -1331,7 +1334,7 @@ fn a_type_parameter_is_bound_by_the_call() {
     assert_eq!(module.functions.len(), 3, "one instance a type: {text}");
 
     // The same types again are the same instance.
-    let module = orla_compiler::compile_unoptimized(
+    let module = entelechy_compiler::compile_unoptimized(
         "kernel t.k@1 { requires { field.write; } output result: Rows<Float>; fn twice<T>(v: T) -> T { return v + v; } compute { return twice(1.0) + twice(2.0); } }",
     )
     .unwrap();
@@ -1535,13 +1538,13 @@ fn a_parameter_is_any_value_a_kernel_can_hold() {
     let params = &module.manifest.params;
     let names: Vec<String> = params
         .iter()
-        .map(|p| orla_ir::type_name(p.ty, &module.structs))
+        .map(|p| entelechy_ir::type_name(p.ty, &module.structs))
         .collect();
     assert_eq!(
         names,
         ["Mat4", "Mat2", "IVec2", "Light", "[Float; 3]", "[Int; 4]"]
     );
-    use orla_ir::Value;
+    use entelechy_ir::Value;
     let mut identity = [0.0f32; 16];
     for k in 0..4 {
         identity[k * 5] = 1.0;
@@ -1587,7 +1590,7 @@ fn a_parameter_is_any_value_a_kernel_can_hold() {
 /// `LOOK_WORK` alone looks each iteration. Accounting is idempotent.
 #[test]
 fn work_is_accounted_in_the_ir() {
-    fn ops(instructions: &[orla_ir::Instruction], out: &mut Vec<String>) {
+    fn ops(instructions: &[entelechy_ir::Instruction], out: &mut Vec<String>) {
         for instruction in instructions {
             match &instruction.op {
                 Op::Loop { until, body, .. } => {
@@ -1611,7 +1614,7 @@ fn work_is_accounted_in_the_ir() {
             }
         }
     }
-    let shape = |module: &orla_ir::Validated| {
+    let shape = |module: &entelechy_ir::Validated| {
         let mut out = Vec::new();
         ops(&module.entry.body, &mut out);
         out.join(" ")
@@ -1678,9 +1681,9 @@ fn a_spend_follows_its_loop() {
     moved.entry.body.swap(at, at + 1);
     moved.entry.body[at].id = a;
     moved.entry.body[at + 1].id = b;
-    let error = orla_ir::validate(moved).unwrap_err().to_string();
+    let error = entelechy_ir::validate(moved).unwrap_err().to_string();
     assert!(error.contains("not the loop right before it"), "{error}");
-    assert!(orla_ir::validate(module).is_ok());
+    assert!(entelechy_ir::validate(module).is_ok());
 }
 
 #[test]
@@ -1735,7 +1738,7 @@ fn a_helper_the_kernel_never_calls_is_not_in_its_module() {
         module.functions.len()
     );
     // What it calls, and what that calls, it keeps.
-    let unoptimized = orla_compiler::compile_unoptimized(
+    let unoptimized = entelechy_compiler::compile_unoptimized(
         "kernel t.rank@1 { requires { field.read; field.write; }
          fn keyed(z: Float, t: Int) -> Long { return (long(bits(z)) << 32) | long(t); }
          input counts: Rows<Int>; output result: Rows<Int>;
@@ -1776,8 +1779,8 @@ fn nested_builders_are_refused_before_they_run_away() {
     assert!(compile(&kernel("[each 64 { [each 64 { float(index()) }][3] }]")).is_ok());
 }
 
-fn account_ok(module: &orla_ir::Validated) -> orla_ir::Validated {
-    orla_ir::account(module).unwrap_or_else(|error| panic!("{error}"))
+fn account_ok(module: &entelechy_ir::Validated) -> entelechy_ir::Validated {
+    entelechy_ir::account(module).unwrap_or_else(|error| panic!("{error}"))
 }
 
 /// A written division with a remainder is an integer, refused beside a
@@ -1832,20 +1835,21 @@ fn functions_call_each_other_in_any_order_whatever_is_lowered_first() {
 /// A document's functions are checked once, called or not.
 #[test]
 fn a_documents_functions_are_checked_called_or_not() {
-    let document = orla_language::parse_document(
+    let document = entelechy_language::parse_document(
         "fn fine(x: Float) -> Float { return x; }
 fn broken(x: Float) -> Float { return x * nope; }",
     )
     .unwrap();
-    let error = orla_compiler::check_functions(&document, (&[], &[], &[])).unwrap_err();
+    let error = entelechy_compiler::check_functions(&document, (&[], &[], &[])).unwrap_err();
     assert_eq!(error.declaration(), Some("broken"), "{error}");
     assert!(
         error.to_string().contains("`nope` is not defined"),
         "{error}"
     );
     let fine =
-        orla_language::parse_document("fn fine(x: Float) -> Float { return x * rate(); }").unwrap();
-    orla_compiler::check_functions(&fine, (&[], &[], &[]))
+        entelechy_language::parse_document("fn fine(x: Float) -> Float { return x * rate(); }")
+            .unwrap();
+    entelechy_compiler::check_functions(&fine, (&[], &[], &[]))
         .unwrap_or_else(|e| panic!("a capability is its callers': {e}"));
 }
 
@@ -1859,12 +1863,15 @@ fn an_enum_names_its_variants_and_a_match_names_them_all() {
         kernel t.first@1 { requires { field.write; } param start: Mood = Mood.Angry; output r: Rows<Mood>; compute { return start; } }
         kernel t.second@1 { requires { field.read; field.write; } input moods: Rows<Mood>; output r: Rows<Int>;
             compute { let tag = Tag { mood: sample(moods) }; return match tag.mood { Mood.Calm => 1, Mood.Wary => 2, Mood.Angry => 3 }; } }";
-    let document = orla_language::parse_document(source).unwrap();
+    let document = entelechy_language::parse_document(source).unwrap();
     for kernel in &document.kernels {
-        orla_compiler::compile_kernel(kernel, None).unwrap_or_else(|error| panic!("{error}"));
+        entelechy_compiler::compile_kernel(kernel, None).unwrap_or_else(|error| panic!("{error}"));
     }
-    let first = orla_compiler::compile_kernel(&document.kernels[0], None).unwrap();
-    assert_eq!(first.manifest.params[0].default, orla_ir::Value::Int(2));
+    let first = entelechy_compiler::compile_kernel(&document.kernels[0], None).unwrap();
+    assert_eq!(
+        first.manifest.params[0].default,
+        entelechy_ir::Value::Int(2)
+    );
     assert_eq!(first.manifest.outputs[0].element(), Type::Int);
 
     let kernel = |body: &str| {
@@ -1921,7 +1928,10 @@ fn a_variant_is_its_written_number_or_one_past_the_last() {
         .iter()
         .map(|p| p.default.clone())
         .collect();
-    assert_eq!(defaults, [1, 11, 0, -1].map(orla_ir::Value::Int).to_vec());
+    assert_eq!(
+        defaults,
+        [1, 11, 0, -1].map(entelechy_ir::Value::Int).to_vec()
+    );
     let said = compile(
         "kernel t.k@1 { requires { field.write; } type Mode = enum { A = 1, B = 0, C }; output r: Rows<Int>; compute { return 0; } }",
     )
@@ -1943,14 +1953,14 @@ fn a_type_past_the_value_bounds_is_refused() {
         "{head} let a = [[element(); 4096]; 17]; return a[1][2]; }} }}"
     ));
     assert!(message.contains("is too large"), "{message}");
-    let chain: String = (1..=orla_ir::MAX_TYPE_DEPTH)
+    let chain: String = (1..=entelechy_ir::MAX_TYPE_DEPTH)
         .map(|k| format!("struct S{k} {{ a: S{}; }}\n", k - 1))
         .collect();
     let (_, message) = semantic(&format!(
         "kernel t.k@1 {{ requires {{ field.write; }} output r: Rows<Int>; struct S0 {{ a: Int; }}\n{chain} compute {{ return 0; }} }}"
     ));
     assert!(message.contains("nests at most"), "{message}");
-    let deep = orla_language::MAX_NESTING + 1;
+    let deep = entelechy_language::MAX_NESTING + 1;
     let ty = format!("{}Int{}", "[".repeat(deep), "; 1]".repeat(deep));
     let refused = compile(&format!(
         "kernel t.k@1 {{ requires {{ field.write; }} param p: {ty} = 0; output r: Rows<Int>; compute {{ return 0; }} }}"

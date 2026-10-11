@@ -8,8 +8,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use orla_graph::{Binding, Graph, Source};
-use orla_kernel::{FieldData, Handle, Host, Runtime, Schema};
+use entelechy_graph::{Binding, Graph, Source};
+use entelechy_kernel::{FieldData, Handle, Host, Runtime, Schema};
 
 use crate::store::{Stamp, Store};
 use crate::{Diagnostic, Event};
@@ -36,7 +36,7 @@ pub(crate) struct TableElement {
 /// read as ([`table_elements`]).
 pub(crate) struct Declared<'a> {
     pub(crate) graph: Option<&'a Graph>,
-    pub(crate) files: &'a orla_scene::Files,
+    pub(crate) files: &'a entelechy_scene::Files,
     pub(crate) tables: &'a BTreeMap<String, TableElement>,
 }
 
@@ -77,7 +77,7 @@ pub(crate) fn table_elements(
             continue;
         };
         let native;
-        let structs: &[orla_ir::StructDef] = match (version.module(), version.native()) {
+        let structs: &[entelechy_ir::StructDef] = match (version.module(), version.native()) {
             (Some(module), _) => &module.structs,
             (None, Some(op)) => {
                 native = op.structs();
@@ -94,8 +94,8 @@ pub(crate) fn table_elements(
             };
             let ty = declared.element();
             if let (Some(names), Some(schema)) = (
-                orla_ir::number_names(ty, structs),
-                orla_ir::schema_of(ty, structs),
+                entelechy_ir::number_names(ty, structs),
+                entelechy_ir::schema_of(ty, structs),
             ) {
                 found.insert(name.clone(), TableElement { names, schema });
             }
@@ -150,11 +150,11 @@ fn read_table(
     let table = table.ok_or_else(|| {
         format!("a data table is read as the Kernel reading it lays out its element, and no published Kernel reads `{name}`")
     })?;
-    let element = orla_formats::table::Element {
+    let element = entelechy_formats::table::Element {
         names: &table.names,
         schema: &table.schema,
     };
-    let data = orla_formats::table::decode(bytes, extension, &element, room, tables)?;
+    let data = entelechy_formats::table::decode(bytes, extension, &element, room, tables)?;
     let detail = format!("{} row(s) of {}", data.domain().count(), data.schema());
     Ok((data, detail))
 }
@@ -183,7 +183,7 @@ fn table_names(
             .read(&path)
             .map_err(|e| format!("{}: {e}", path.display()))?;
         noted.borrow_mut().push((path.clone(), store.stamp(&path)));
-        return orla_formats::table::row_names(&bytes, extension)
+        return entelechy_formats::table::row_names(&bytes, extension)
             .map_err(|why| format!("{}: {why}", path.display()));
     }
     Err(format!(
@@ -196,15 +196,15 @@ fn table_names(
 /// longer than the bytes first read is read in twice as many until it is
 /// whole or the file ends.
 fn read_within(store: &dyn Store, path: &Path, room: usize) -> Result<Vec<u8>, String> {
-    let mut want = orla_formats::file::HEADER_BYTES;
+    let mut want = entelechy_formats::file::HEADER_BYTES;
     let start = loop {
         let start = store.read_start(path, want).map_err(|e| e.to_string())?;
-        if start.len() < want || orla_formats::header_whole(&start, path) {
+        if start.len() < want || entelechy_formats::header_whole(&start, path) {
             break start;
         }
         want = want.saturating_mul(2);
     };
-    orla_formats::fits(&start, path, room)?;
+    entelechy_formats::fits(&start, path, room)?;
     store.read(path).map_err(|e| e.to_string())
 }
 
@@ -284,7 +284,7 @@ impl Inputs {
             files,
             tables,
         } = *declared;
-        let wanted: Vec<orla_scene::Asset> = files.assets.clone();
+        let wanted: Vec<entelechy_scene::Asset> = files.assets.clone();
         let stale: Vec<String> = self
             .assets
             .keys()
@@ -295,7 +295,7 @@ impl Inputs {
             self.assets.remove(&name);
             self.forget(host, &name);
         }
-        for orla_scene::Asset {
+        for entelechy_scene::Asset {
             name,
             path,
             ty,
@@ -305,7 +305,7 @@ impl Inputs {
             // Through a package's name, the file inside it.
             let path = crate::sources::file_at(store, &path);
             let current = store.stamp(&path);
-            let table = orla_formats::table::is_table(&orla_formats::extension(&path))
+            let table = entelechy_formats::table::is_table(&entelechy_formats::extension(&path))
                 .then(|| tables.get(&name).cloned())
                 .flatten();
             if self.assets.get(&name).is_some_and(|asset| {
@@ -338,13 +338,13 @@ impl Inputs {
                 continue;
             }
             let read = read_within(store, &path, room(host));
-            let extension = orla_formats::extension(&path);
+            let extension = entelechy_formats::extension(&path);
             let noted = std::cell::RefCell::new(Vec::new());
             let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
             let tables = |table: &str| table_names(store, readable, &dir, table, &noted);
             let read = read.and_then(|found| match bytes {
-                true => orla_formats::decode_bytes(&found),
-                false if orla_formats::table::is_table(&extension) => read_table(
+                true => entelechy_formats::decode_bytes(&found),
+                false if entelechy_formats::table::is_table(&extension) => read_table(
                     &found,
                     &extension,
                     &name,
@@ -352,7 +352,7 @@ impl Inputs {
                     room(host),
                     &tables,
                 ),
-                false => orla_formats::decode(&found, &path, Some(&ty), room(host)),
+                false => entelechy_formats::decode(&found, &path, Some(&ty), room(host)),
             });
             if let Some(asset) = self.assets.get_mut(&name) {
                 asset.named = noted.into_inner();
@@ -404,7 +404,7 @@ impl Inputs {
     fn sync_sequences(
         &mut self,
         store: &dyn Store,
-        files: &orla_scene::Files,
+        files: &entelechy_scene::Files,
         readable: &dyn Fn(&Path) -> Result<(), String>,
         host: &mut Host,
         events: &mut Vec<Event>,
@@ -489,7 +489,7 @@ impl Inputs {
             let path = sequence.files[index].clone();
             let ty = sequence.ty.clone();
             let loaded = read_within(store, &path, room(host))
-                .and_then(|found| orla_formats::decode(&found, &path, Some(&ty), room(host)))
+                .and_then(|found| entelechy_formats::decode(&found, &path, Some(&ty), room(host)))
                 .and_then(|(data, _)| {
                     let data = kept_as(data, &ty)?;
                     host.adopt(data).map_err(|e| e.to_string())
@@ -531,8 +531,8 @@ impl Inputs {
             let words: Vec<u32> = text.chars().map(|c| c as u32).collect();
             let chars = words.len();
             let data = FieldData::from_storage(
-                orla_kernel::Schema::new(vec![orla_kernel::Scalar::Int]),
-                orla_kernel::Domain::Rows(chars as u32),
+                entelechy_kernel::Schema::new(vec![entelechy_kernel::Scalar::Int]),
+                entelechy_kernel::Domain::Rows(chars as u32),
                 words,
             );
             match data.and_then(|data| host.adopt(data)) {
@@ -558,7 +558,7 @@ fn kept_as(data: FieldData, ty: &str) -> Result<FieldData, String> {
     else {
         return Ok(data);
     };
-    let encoding = orla_kernel::Encoding::parse(name.trim())
+    let encoding = entelechy_kernel::Encoding::parse(name.trim())
         .ok_or_else(|| format!("`{name}` is not an encoding"))?;
     let schema = data
         .schema()

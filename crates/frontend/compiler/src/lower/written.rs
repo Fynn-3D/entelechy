@@ -5,7 +5,7 @@
 //! and an integer an `Int` (`Long` when too big). A `let` fixes the
 //! width.
 
-use orla_ir::{BinaryOp, Block as IrBlock, Number, Op, Type, Value, ValueId};
+use entelechy_ir::{BinaryOp, Block as IrBlock, Number, Op, Type, Value, ValueId};
 
 use super::Builder;
 
@@ -27,8 +27,8 @@ impl Builder<'_> {
 
     /// Marks a written number past the largest `Float` as written at
     /// `span`, once; the operands a fold consumed are no longer.
-    pub(super) fn mark_large(&mut self, id: ValueId, span: orla_language::Span) {
-        if let Some(orla_ir::Number::Double(v)) = self.literals.get(&id.0)
+    pub(super) fn mark_large(&mut self, id: ValueId, span: entelechy_language::Span) {
+        if let Some(entelechy_ir::Number::Double(v)) = self.literals.get(&id.0)
             && v.is_finite()
             && (*v as f32).is_infinite()
         {

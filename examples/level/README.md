@@ -13,6 +13,6 @@ level.bin ─ bytes ─┬─ draw (the map and its entities)
 ```
 
 ```sh
-orla player examples/level/scene.osn
-orla replay examples/level/tests/level.replay
+entelechy player examples/level/scene.esn
+entelechy replay examples/level/tests/level.replay
 ```

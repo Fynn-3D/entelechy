@@ -1,5 +1,5 @@
 [package]
-name = "orla-ffi"
+name = "entelechy-ffi"
 description = "C ABI host: a session as a library any program loads in its own process, the Fields read in place"
 version.workspace = true
 edition.workspace = true
@@ -9,20 +9,20 @@ rust-version.workspace = true
 [lib]
 # The crate has no doc tests, so `cargo test` skips the rustdoc pass.
 doctest = false
-name = "orla_ffi"
+name = "entelechy_ffi"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-orla-session = { path = "../../interface/session" }
-orla-protocol = { path = "../../interface/protocol" }
-orla-abi = { path = "../../core/abi" }
-orla-graph = { path = "../../core/graph" }
-orla-gpu = { path = "../../backends/gpu" }
+entelechy-session = { path = "../../interface/session" }
+entelechy-protocol = { path = "../../interface/protocol" }
+entelechy-abi = { path = "../../core/abi" }
+entelechy-graph = { path = "../../core/graph" }
+entelechy-gpu = { path = "../../backends/gpu" }
 
-# Where Orla is WebAssembly, the program that loads it (a page) is the
+# Where Entelechy is WebAssembly, the program that loads it (a page) is the
 # host of the code the JIT writes.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-orla-jit = { path = "../../backends/jit", features = ["wasm-host"] }
+entelechy-jit = { path = "../../backends/jit", features = ["wasm-host"] }
 
 # In a page, the canvas a picture is presented on is found by its id.
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]

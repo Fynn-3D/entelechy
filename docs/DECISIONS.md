@@ -1,6 +1,6 @@
 # Decisions
 
-**Answers:** why Orla is this way and not another, where the answer is
+**Answers:** why Entelechy is this way and not another, where the answer is
 not visible in the code.
 
 Each entry is a decision that holds until it is replaced by name. It
@@ -22,7 +22,7 @@ rather than wrap, a measure is made whole before it sizes anything, and
 a boolean, a color or a struct is not a size.
 
 **Why.** A scene that computes values is a second language beside
-`.orla`: untyped, untraced, unchecked, run on the Host rather than a
+`.ent`: untyped, untraced, unchecked, run on the Host rather than a
 backend. Every computation belongs where it is typed, traced,
 hot-reloaded and held to one result on every backend; a Kernel computes
 any count and `value(port)` sizes by it.
@@ -49,7 +49,7 @@ and has a failing element may be named for either. Both bounds are a
 node's own: a Kernel whose work is counted is never fused.
 
 Where work is counted is written into the IR once:
-[`orla_ir::account`](../crates/core/ir/src/account.rs) follows every loop
+[`entelechy_ir::account`](../crates/core/ir/src/account.rs) follows every loop
 with a `Spend` of the iterations whose body ran, ends every element with
 a `Look`, and puts a `Look` first in the `until` of every loop that can
 run more than 2^20 iterations itself. The runtime accounts a module as
@@ -128,22 +128,22 @@ iterations, not memory; a published Kernel must not take the machine's
 memory by asking.
 
 **Where.** [`Scope::room`](../crates/core/abi/src/lib.rs); `OverRoom` in
-[`orla_rules`](../crates/core/rules/src/lib.rs), held by the JIT's
+[`entelechy_rules`](../crates/core/rules/src/lib.rs), held by the JIT's
 [parity tests](../crates/backends/jit/tests/parity.rs). Letting go is
 `Evaluator::make_room` in [the evaluator](../crates/core/graph/src/evaluate/ledger.rs),
-held by [a chain longer than the Host holds](../crates/interface/orla/tests/session.rs).
+held by [a chain longer than the Host holds](../crates/interface/entelechy/tests/session.rs).
 
 ## A few formats are read live; the rest are bytes or converted
 
 The Host has one format of its own, `.field`, and raw bytes. Every other
 format goes one of three ways:
 
-- **Read live** by [`orla-formats`](../crates/interface/formats/src/lib.rs): PNG,
+- **Read live** by [`entelechy-formats`](../crates/interface/formats/src/lib.rs): PNG,
   PPM, PGM, WAV and MIDI. A scene's input names the file; the session
   decodes it again whenever it changes.
 - **Bytes to a Kernel**: `input level: Rows<Int> = bytes "level.bin";`.
   What the bytes mean (a level, a ROM, Markdown) is the Kernel's.
-- **Converted outside the runtime** by `orla-import` and `orla-export`, or
+- **Converted outside the runtime** by `entelechy-import` and `entelechy-export`, or
   by a bridge: glTF, MP3 and other lossy sounds, SVG as the segments and
   shapes a Kernel fills, TrueType and OpenType fonts as the glyphs'
   outlines in the same segments, and documents such as a PDF or a slide deck, as
@@ -156,16 +156,16 @@ dependency outside the workspace, and is worth editing while a scene runs.
 and would run again in every scene, so it is not a Kernel's work; a
 format whose meaning is the application's belongs in a Kernel. A document
 is not a Field, and the typed-field architecture refuses a subsystem for
-it. A closed live set keeps `orla-formats` from collecting every format.
+it. A closed live set keeps `entelechy-formats` from collecting every format.
 
-**Where.** [`orla-formats`](../crates/interface/formats/src/lib.rs) takes the Host
-and nothing else; `orla-import` and `orla-export` depend on it and the
+**Where.** [`entelechy-formats`](../crates/interface/formats/src/lib.rs) takes the Host
+and nothing else; `entelechy-import` and `entelechy-export` depend on it and the
 Host, never on the session or a backend. `read`, `read_bytes` and
 `encode` are the only ways a session turns a file into a Field and back.
 
 ## A public contract grows; it breaks only with its version
 
-Six things are written against by programs and sources Orla does not
+Six things are written against by programs and sources Entelechy does not
 see: the protocol an agent speaks, the C ABI, the capabilities a Kernel
 declares, the `.field` file, what a Kernel may call and write, and what a
 scene document may say. Each may grow. What was valid against it stays
@@ -187,21 +187,21 @@ decision, and the version says which kind.
 
 **Where.** The tests above. The language surface and the scene documents
 are recorded as data. A new scene document is recorded with
-`ORLA_BLESS=1`; one that lowers differently is refused until
+`ENTELECHY_BLESS=1`; one that lowers differently is refused until
 `LANGUAGE_VERSION` is raised. A new builtin or signature, or a
-capability dropped from a requirement, is recorded with `ORLA_BLESS=1`;
+capability dropped from a requirement, is recorded with `ENTELECHY_BLESS=1`;
 dropping or tightening anything a source could write is refused until
 `LANGUAGE_VERSION` is raised.
 
 ## The rasterizer is a package; the native one is its fast path
 
-A scene places `packages/raster.orlapkg` to turn triangles into a
-surface (`raster.osn` or `window.osn`; `cutout.osn` or
-`cutout_window.osn` where a mask's alpha cuts fragments away;
-`canvas.osn` over an empty canvas another node sized) and binds the
+A scene places `packages/raster.entpkg` to turn triangles into a
+surface (`raster.esn` or `window.esn`; `cutout.esn` or
+`cutout_window.esn` where a mask's alpha cuts fragments away;
+`canvas.esn` over an empty canvas another node sized) and binds the
 preset's fast path in its place, one node for another, where it wants
-speed: `native.rasterize@1` for `raster.osn` and `window.osn`, `@2` for
-the cutout presets, `@3` for `canvas.osn`. Both keep one rule: a pixel is covered where its centre is inside the
+speed: `native.rasterize@1` for `raster.esn` and `window.esn`, `@2` for
+the cutout presets, `@3` for `canvas.esn`. Both keep one rule: a pixel is covered where its centre is inside the
 triangle's box and on or inside all three edges, holds the nearest
 fragment in `[0, 1)`, the earlier triangle on a tie, with
 attributes interpolated by `1 / w`; with a cutout, a fragment whose alpha
@@ -225,21 +225,21 @@ chooses. A device may compute one expression to different last bits in
 two Kernels, as its compiler fuses a multiply into an add where it
 chooses, so a decision two Kernels must share is made in one: were a
 box found twice, the tiles counted from one would be cut from another.
-`orla replay --round-apart` finds one made twice, by rounding some
+`entelechy replay --round-apart` finds one made twice, by rounding some
 Kernels as another device might.
 
 **Where.** The package and its presets; every example places it.
-[`ten_million.osn`](../examples/mesh/tests/ten_million.osn) is the scale
+[`ten_million.esn`](../examples/mesh/tests/ten_million.esn) is the scale
 scene. On the interpreter and the JIT the fast path is
-`orla_rules::raster`, held bit for bit to the rule by a test that writes
+`entelechy_rules::raster`, held bit for bit to the rule by a test that writes
 the rule plainly. `examples/mesh/tests/edges.replay` pins the package's
 surface at edge pixels on all three backends and `native.replay` the fast
 path's inside them; `degenerate.replay` holds that a triangle with two
 corners at one point draws nothing and the tiled presets draw what the
 one-pass ones do, on all three; `cutout.replay` holds the package's cutout to
 `native.rasterize@2` on all three, and a session test holds them equal to
-the bit on the interpreter and the JIT; `canvas.replay` holds `canvas.osn`
-to `raster.osn` to the bit and to `native.rasterize@3` on all three.
+the bit on the interpreter and the JIT; `canvas.replay` holds `canvas.esn`
+to `raster.esn` to the bit and to `native.rasterize@3` on all three.
 
 ## Contacts are solved all at once, each against its own share of a body
 
@@ -263,8 +263,8 @@ once needs more passes, which is why a step takes eight substeps, and
 carrying the impulses from step to step is what lets a resting stack
 stand still.
 
-**Where.** [`physics.orla`](../packages/physics.orlapkg/kernels/physics.orla)
-and its [step](../packages/physics.orlapkg/graphs/step.osn);
+**Where.** [`physics.ent`](../packages/physics.entpkg/kernels/physics.ent)
+and its [step](../packages/physics.entpkg/graphs/step.esn);
 [`rest.replay`](../examples/physics/tests/rest.replay) holds a column
 of boxes still for seconds, [`motion.replay`](../examples/physics/tests/motion.replay)
 a bounce, friction on a slope and a kinematic platform to their
@@ -318,9 +318,9 @@ replay places every run the same way each time. A run may round its
 last bits differently on the two, so a decision two Kernels share is
 made in one (see *The rasterizer is a package*).
 
-**Where.** `Runtime::execute` in [`orla-kernel`](../crates/core/kernel/src/lib.rs),
-the estimate in [`orla-ir`](../crates/core/ir/src/lib.rs), the kept
-words in [`orla-host`](../crates/core/host/src/lib.rs);
+**Where.** `Runtime::execute` in [`entelechy-kernel`](../crates/core/kernel/src/lib.rs),
+the estimate in [`entelechy-ir`](../crates/core/ir/src/lib.rs), the kept
+words in [`entelechy-host`](../crates/core/host/src/lib.rs);
 [`routing.rs`](../crates/interface/session/tests/routing.rs) holds a
 scene of every kind of work to the JIT's alone with small runs placed
 off a main backend, and the verify recipe replays every example on the
@@ -361,15 +361,15 @@ substitutes for its input when the evaluation starts
 
 ## What a served scene reaches is what the person running it gave
 
-A session an agent drives (`orla serve`, the Player's `--serve`, a
-program's `orla_request`) holds the scene to what the person who started
+A session an agent drives (`entelechy serve`, the Player's `--serve`, a
+program's `entelechy_request`) holds the scene to what the person who started
 it allowed; nothing over the wire widens it.
 
 - Whether reads are held is decided when the session opens, before its
   scene is first read. Readable are the directories of the scene as it
   first loads (the root, the graphs it places, what it uses, the files its
   inputs read), the directories packages are found in, and `--allow
-  file.read`, judged where a path lands after its links. A program allows more with `orla_allow`.
+  file.read`, judged where a path lands after its links. A program allows more with `entelechy_allow`.
 - An agent's `save` and a scene's `to` land only where `--allow
   file.write` says.
 - A page opens the socket only from this machine or from an origin
@@ -399,10 +399,10 @@ runs has no channel back out but its allowed writes.
 [transport](../crates/interface/protocol/src/transport.rs) and
 [WebSocket](../crates/interface/protocol/src/websocket.rs); the Host's
 [budget](../crates/core/host/src/lib.rs). Held by the protocol's tests
-([`protocol.rs`](../crates/interface/orla/tests/protocol.rs)): saves,
+([`protocol.rs`](../crates/interface/entelechy/tests/protocol.rs)): saves,
 reads, origins and compose; and by the C ABI's
 ([`abi.rs`](../crates/interface/ffi/tests/abi.rs)) for reads through
-`orla_request`.
+`entelechy_request`.
 
 ## Float `min` and `max` have one rule, and it is not the machine's
 
@@ -416,8 +416,8 @@ other way, `min(-0.0, 0.0)` is `-0.0`; `clamp` is `max` then `min`, and
 hardware, so one program gave `inf` and `-inf` on two backends. A
 semantics a backend may choose is not one.
 
-**Where.** The interpreter writes the rule out (`orla_rules::max_f32` and
-its siblings in [`orla_rules`](../crates/core/rules/src/lib.rs)), the JIT
+**Where.** The interpreter writes the rule out (`entelechy_rules::max_f32` and
+its siblings in [`entelechy_rules`](../crates/core/rules/src/lib.rs)), the JIT
 emits it, the GPU calls `max_ref` in the shader's
 [preamble](../crates/backends/gpu/src/wgsl/prelude.rs). Held by the JIT's
 random programs ([`fuzz.rs`](../crates/backends/jit/tests/fuzz.rs)).
@@ -429,7 +429,7 @@ total: what it held and every value added to it, as mathematics adds
 them. It fails only when that total does not fit the scalar, naming the
 first element whose total does not; a total that passes the end of the
 range and comes back is the total it comes back to. The interpreter and
-the JIT keep each total wide (`orla_rules::Sums`), counted against the
+the JIT keep each total wide (`entelechy_rules::Sums`), counted against the
 run's room. The GPU adds a word atomically and carries into a high word
 beside it, checks once every value is in, and, where a float is summed
 beside the integer in element order, carries the high word as it folds.
@@ -437,7 +437,7 @@ beside the integer in element order, carries the high word as it folds.
 **Why.** A sum's inputs, not the order a machine adds them, decide it, so
 every backend answers alike, to the element that fails.
 
-**Where.** `Sums` in [`orla_rules`](../crates/core/rules/src/lib.rs); the
+**Where.** `Sums` in [`entelechy_rules`](../crates/core/rules/src/lib.rs); the
 GPU's [emitter](../crates/backends/gpu/src/wgsl/emitter.rs).
 
 ## Reality changes atomically; history records why
@@ -551,7 +551,7 @@ run under `wasmtime` on the interpreter.
 A session reads its scene, the documents it uses and the files its
 inputs name, and writes its outputs and requests, through one `Store`:
 the disk, or files its caller handed in and may hand in again. The C ABI
-opens a session on handed-in files; a page running Orla as WebAssembly
+opens a session on handed-in files; a page running Entelechy as WebAssembly
 does exactly that. A file handed in again is a changed file, read at the
 next sync. Where a machine has no clock, nothing is timed and history is
 not dated.
@@ -562,38 +562,38 @@ changed and where a write lands are one question in memory and on disk,
 answered once; hot reload is the same act in a page.
 
 **Where.** [`store.rs`](../crates/interface/session/src/store.rs) in
-the session; `orla_files`, `orla_files_put` and `orla_open_files` in
-the [C ABI](../crates/interface/ffi/include/orla.h);
+the session; `entelechy_files`, `entelechy_files_put` and `entelechy_open_files` in
+the [C ABI](../crates/interface/ffi/include/entelechy.h);
 [`clock.rs`](../crates/core/kernel/src/clock.rs) in the runtime;
-`OrlaInPage` in the web bridge. Held by the ABI's test (a scene from
+`EntelechyInPage` in the web bridge. Held by the ABI's test (a scene from
 paths no disk has, a Kernel put again) and the web bridge's, which runs
 the text example in a headless Chrome.
 
-## Where Orla is WebAssembly, its JIT writes WebAssembly
+## Where Entelechy is WebAssembly, its JIT writes WebAssembly
 
-Where Orla is WebAssembly, the JIT writes a Kernel's IR as a WebAssembly
+Where Entelechy is WebAssembly, the JIT writes a Kernel's IR as a WebAssembly
 module, instruction for instruction what the Cranelift translation does,
-importing Orla's memory and function table. The host (a page's script;
-node, for the tests) compiles it and puts its functions into Orla's
+importing Entelechy's memory and function table. The host (a page's script;
+node, for the tests) compiles it and puts its functions into Entelechy's
 table; the index it returns is a function pointer, so the drivers of the
 five modes, the context, the helpers, integer failures and the work
 budget are the JIT's own, unchanged. What would be on a stack lives in
 slots the prepared Kernel owns: WebAssembly runs on one thread and a
 Kernel's functions do not recurse.
 
-**Why.** Kernels arrive and change while Orla runs, so only compiling
+**Why.** Kernels arrive and change while Entelechy runs, so only compiling
 them where they arrive makes them fast. A function pointer that is a
 table index shares the native JIT's host side; the module is written by
 hand, so no dependency is taken.
 
 **Where.** [`wasm/`](../crates/backends/jit/src/wasm) in the JIT, its
-`wasm-host` feature, which `orla-ffi` turns on for a page; `host` in
-the web bridge's [`orla.js`](../bridges/web/orla.js), which
-[`wasi.mjs`](../bridges/web/wasi.mjs) uses to run Orla's WebAssembly
+`wasm-host` feature, which `entelechy-ffi` turns on for a page; `host` in
+the web bridge's [`entelechy.js`](../bridges/web/entelechy.js), which
+[`wasi.mjs`](../bridges/web/wasi.mjs) uses to run Entelechy's WebAssembly
 tests in node. Held by the JIT's own tests (parity cases, feature
 matrix, random programs) run as WebAssembly, alongside the core's, the
 front end's and the interpreter's
-(`crates/interface/orla/tests/wasm.rs`); and by the web bridge's test,
+(`crates/interface/entelechy/tests/wasm.rs`); and by the web bridge's test,
 which runs the text and voxel examples in a headless Chrome.
 
 ## In a page, waiting for the device is giving the page a turn
@@ -602,16 +602,16 @@ Browser WebGPU answers a readback, a pipeline's validation, even the
 device, only once the page's script has had a turn, and an evaluation
 waits for such answers mid-frame (a JIT scan reading GPU output, a
 `value(port)`, an async node's inputs, a `read`). In a page the GPU
-backend waits by parking: Orla calls `orla.wait`, a suspending import
+backend waits by parking: Entelechy calls `entelechy.wait`, a suspending import
 (JavaScript Promise Integration), and is suspended until the device's
-answer, or a future's waker, calls `orla.wake`. Nothing spins; input
+answer, or a future's waker, calls `entelechy.wake`. Nothing spins; input
 waits for the frame to end. The GPU backend is one everywhere; only how
-it waits differs (`orla_gpu::Wait`: block, or park), and `orla-ffi`
+it waits differs (`entelechy_gpu::Wait`: block, or park), and `entelechy-ffi`
 supplies the turn. A parking wait submits an empty batch after it asks
 for a mapping, since a browser may look at the device only when
 something is submitted; a blocking wait polls the device. The browser is
 reached through wgpu's WebGPU backend, whose glue `wasm-bindgen` writes;
-its import of `orla` is the page's `orla-host.mjs`, through an import
+its import of `entelechy` is the page's `entelechy-host.mjs`, through an import
 map.
 
 **Why.** Without suspension a frame would split at every place a backend
@@ -622,15 +622,15 @@ suspended, and one GPU backend keeps one body of evidence.
 
 **Where.** [`wait.rs`](../crates/backends/gpu/src/wait.rs) in the GPU
 backend, `Session::runtime_waiting`, `waiting` in the
-[C ABI](../crates/interface/ffi/src/lib.rs), `host` and `OrlaInPage` in
-the web bridge's [`orla.js`](../bridges/web/orla.js). Held by the web
+[C ABI](../crates/interface/ffi/src/lib.rs), `host` and `EntelechyInPage` in
+the web bridge's [`entelechy.js`](../bridges/web/entelechy.js). Held by the web
 bridge's test, which runs the text example's checks and the voxel example
 on the page's WebGPU in a headless Chrome.
 
 ## What playing a scene means is decided once
 
 Every interface that plays a scene shares one play
-(`orla_session::play`): the frame (changes read, a replay's frame taken
+(`entelechy_session::play`): the frame (changes read, a replay's frame taken
 at its time, the scene evaluated, picture and sound named), what F5,
 F6 and F10 mean (every other key, Tab and Escape among them, is the
 scene's), how a pad is a keyboard, how the pointer is
@@ -660,21 +660,21 @@ its [pad](../crates/interface/session/src/play/pad.rs) and
 [line of frame data](../crates/interface/session/src/play/hud.rs); the
 window, sound card and pads of [the Player](../crates/interface/player/src/main.rs).
 A page's Player is its devices over the same play, through the C ABI
-(`orla_play_*`, [play.rs](../crates/interface/ffi/src/play.rs)):
+(`entelechy_play_*`, [play.rs](../crates/interface/ffi/src/play.rs)):
 [player.js](../bridges/web/player.js) hands it the page's keys, pointer,
-wheel, pads and clock (`orla.now`). Held by
+wheel, pads and clock (`entelechy.now`). Held by
 [the play's tests](../crates/interface/session/tests/play.rs), headless
 (keys, preview, pointer, sound output, a failure said once, a replay
-played to its end); by the ABI's test through `orla_play_*`; and by the
+played to its end); by the ABI's test through `entelechy_play_*`; and by the
 web bridge's test, a replay in `play.html` on the page's GPU and JIT, F5
 and F6 pressed there.
 
 ## A replay is a test; a piece is made of laws, structure and state
 
 A replay is input played into a scene over time, and what it expects: a
-test. It lives under its example's `tests/`. Played headless (`orla
+test. It lives under its example's `tests/`. Played headless (`entelechy
 replay`), it holds the scene, frames as fast as they compute; played by
-the shared play (`orla-player --replay`, `play.html?replay=`), it also
+the shared play (`entelechy-player --replay`, `play.html?replay=`), it also
 holds the interface (keys and pads mapped, pointer found, picture shown,
 a page's device waited for) and can be watched. The window is handed
 over when it ends.
@@ -693,7 +693,7 @@ there.
 reads and runs a replay; [`play`](../crates/interface/session/src/play/mod.rs)
 plays one. Held by the example replays under the verification, the
 Player's test that a replay played in a window holds as it does
-headless, the ABI's through `orla_play_*`, and the web bridge's in
+headless, the ABI's through `entelechy_play_*`, and the web bridge's in
 `play.html` on the page's GPU and JIT.
 
 ## A rule that had two owners is held to one
@@ -717,14 +717,14 @@ hold behaviour, not ownership. A guard per broken rule is few and
 precise, each proven by the bug it catches; a guard per rule is fragile
 patterns readers learn to silence.
 
-**Where.** [`owners.rs`](../crates/interface/orla/tests/owners.rs): the
+**Where.** [`owners.rs`](../crates/interface/entelechy/tests/owners.rs): the
 rows, each shown to fail on the source its commit replaced. The
 session's store, `pub(crate)` in [the session](../crates/interface/session/src/session.rs).
-The layers are held beside it, in [`layers.rs`](../crates/interface/orla/tests/layers.rs).
+The layers are held beside it, in [`layers.rs`](../crates/interface/entelechy/tests/layers.rs).
 
-## Orla describes itself, from the tables it enforces
+## Entelechy describes itself, from the tables it enforces
 
-Orla's syntax and API are one reference, layer by layer: the types, the
+Entelechy's syntax and API are one reference, layer by layer: the types, the
 builtins and the forms of the Kernel language; the scene's forms and
 what a `domain` may call; the capabilities and what each grants; a
 package's parts; the protocol's operations and its wire; the replay
@@ -745,7 +745,7 @@ IR stays computation alone.
 [`envelope`](../crates/interface/protocol/src/envelope.rs),
 [`Capability::doc`](../crates/core/abi/src/lib.rs),
 [`replay::forms`](../crates/interface/session/src/replay.rs),
-[`commands`](../crates/interface/orla/src/commands.rs),
+[`commands`](../crates/interface/entelechy/src/commands.rs),
 [`doc`](../crates/frontend/language/src/doc.rs); held by
 [the signatures compiled](../crates/frontend/compiler/tests/help_signatures.rs)
 and [the forms parsed](../crates/frontend/compiler/tests/help_examples.rs).
@@ -778,19 +778,19 @@ at the start of an evaluation in
 flattened in [`scene`](../crates/frontend/scene/src/lib.rs) (test
 `requirements_flatten_named_with_their_place_reading_what_the_parent_passed`),
 and held end to end by `a_requirement_the_parameters_break_stops_the_evaluation`
-in [the session tests](../crates/interface/orla/tests/session.rs).
+in [the session tests](../crates/interface/entelechy/tests/session.rs).
 
 ## The framework is tested by its own scenes, a demo by its replays
 
 Rust tests hold the framework: the language, the IR, the runtime, the
 backends and the session, each with scenes written in the test. None
 reads, lists or names a file under `examples/` or `packages/`. A demo or
-a package holds itself: its replays, run by the release `orla replay` on
+a package holds itself: its replays, run by the release `entelechy replay` on
 every backend, with nothing left to the processor by its size, with
 nothing fused, and rounded apart. A replay whose checks hold two forms
 equal word for word says `alike`, and rounding apart leaves it out.
 
-**Why.** A demo is written in `.orla` and `.osn`, and its author needs
+**Why.** A demo is written in `.ent` and `.esn`, and its author needs
 no Rust to validate it. Rust tests that walk the demos tie the framework
 to them: every demo added makes the framework's tests slower, and every
 exception a demo needs lands in Rust. Replays in the release build hold
@@ -802,7 +802,7 @@ every demo in seconds, and a new one joins by being written.
 ## A name is one package; a package's names carry its name
 
 A package is found by its name, and the name is a fact the manifest
-declares and its directory carries: `voxel@1` is `voxel.orlapkg`. A
+declares and its directory carries: `voxel@1` is `voxel.entpkg`. A
 scene reaches one package of a name; two, as two editions of one, are
 refused, naming both. A package names the packages it uses by name and
 finds them beside itself. There are no qualified names: a document's
@@ -919,7 +919,7 @@ it cannot run that Kernel, declines it from then on as it declines what
 it cannot run beforehand, and the runtime prepares it on the ordered
 backend, said once as any Kernel off the main backend is. A shader the
 backend emitted that the device refuses as invalid is the backend's own
-fault and still refuses the document, so no fault of Orla's is hidden by
+fault and still refuses the document, so no fault of Entelechy's is hidden by
 running elsewhere. The device's errors are caught whatever their kind,
 never left to panic.
 
@@ -934,13 +934,13 @@ device's errors, sorted into the backend's own and the device's; the GPU's
 device could not build; the runtime's `prepare_on` routes it
 ([kernel](../crates/core/kernel/src/lib.rs)); held by
 [the unbuilt test](../crates/interface/session/tests/unbuilt.rs).
-`orla check` says when a Kernel is large and what makes it so
+`entelechy check` says when a Kernel is large and what makes it so
 ([size](../crates/core/ir/src/size.rs)); see *A Kernel is large by what
 it carries*.
 
 ## A Kernel is large by what it carries
 
-`orla check` judges a Kernel's cost to a device's compiler by the words
+`entelechy check` judges a Kernel's cost to a device's compiler by the words
 it carries through its branches: every struct value an `if`, a `match`
 or a `loop` yields, its words, each function counted as often as it is
 called, as such a compiler writes every call out. Past 5 000 it says the
@@ -1027,7 +1027,7 @@ publishes whole or not at all.
 
 ## The language grows only by the owner's word
 
-A form, a keyword, a builtin or a shorthand is added to `.orla` or `.osn`
+A form, a keyword, a builtin or a shorthand is added to `.ent` or `.esn`
 only when the owner asks for it or agrees to it in words. A contributor,
 an agent above all, who finds writing hard meets it with what the
 language already has: a function, a package, or an example that shows
@@ -1045,7 +1045,7 @@ the way. A proposal to grow the language is put to the owner, answering:
 **Why.** Every form is one more thing each creator, an AI above all, must
 learn, and one more thing every later rule must hold for. Friction met
 by one demo at a time grows a language by the sum of its writers' local
-pains, which no one decided. Orla builds the conditions features come
+pains, which no one decided. Entelechy builds the conditions features come
 from, not the features; a function or a package is such a condition, a
 shorthand for one pattern is not.
 
@@ -1118,7 +1118,7 @@ flight is queued behind its work and taken once the frame is confirmed
 (`Runtime::fetch`): the Player hears each frame's sound a frame later. A
 small node compared on the device, found unchanged while every node that
 reads it ran all the same, rests as one found changed does: such a
-comparison waits for the device and spares nothing. `orla serve`,
+comparison waits for the device and spares nothing. `entelechy serve`,
 replays and the FFI do not overlap; the protocol's contracts are those
 of a frame confirmed.
 
@@ -1185,7 +1185,7 @@ from), every node pinned to be read (a replay's `expect` and `show`, the
 Player's preview, the protocol's `pin`, a `--save`), and what each of
 them reads through `<-`, in turn (`Graph::read_through`). A node nothing
 reads does not run: it keeps no value, `read` says so and how to give it
-one, and `orla check` notes it once, at the top of its chain. A trial
+one, and `entelechy check` notes it once, at the top of its chain. A trial
 (`compose` proving a scene before it lands) runs every node, so a node
 not yet read is proved all the same.
 
@@ -1204,7 +1204,7 @@ it may be read once it lands.
 
 ## A check refuses what the types refuse
 
-`orla check` holds every node, a native operation's too, to the rules a
+`entelechy check` holds every node, a native operation's too, to the rules a
 binding and a run are held to wherever the types alone decide them: each
 input of its port's shape and element layout, and the domain of the shape
 its output (a scatter's first input) is. A source's type is its
@@ -1245,7 +1245,7 @@ extent the plan already knows. A domain that waits on a value (`value(port)`)
 still waits, its counts and sizes of the fused ports written as the
 extent known. A fused group and the readers counting what it absorbed are
 prepared together; until all have arrived, all run as they were, and
-`orla graph` says what each counts. Rows only: a grid read at an offset
+`entelechy graph` says what each counts. Rows only: a grid read at an offset
 is a float address, floored and clamped by axis, and stays stored.
 
 **Why.** A scene's lists are joined and gathered by offset (`at(a, k)`,

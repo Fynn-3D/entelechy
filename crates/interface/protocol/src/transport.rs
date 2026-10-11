@@ -4,7 +4,7 @@
 
 use std::io::{BufRead, Write};
 
-use orla_session::Session;
+use entelechy_session::Session;
 
 use crate::respond_line;
 
@@ -81,7 +81,7 @@ fn write_stdout(line: &str) {
 /// [`stdin_lines`] itself, answering each before the next.
 pub fn stdin_into(sink: std::sync::mpsc::Sender<Incoming>) -> std::io::Result<()> {
     std::thread::Builder::new()
-        .name("orla stdin".into())
+        .name("entelechy stdin".into())
         .spawn(move || {
             for incoming in stdin_lines() {
                 if sink.send(incoming).is_err() {
@@ -156,7 +156,8 @@ fn is_http(opening: &[u8]) -> bool {
 
 /// Answers a non-upgrade HTTP request with 400 and closes.
 fn refuse_http(mut stream: std::net::TcpStream) {
-    let body = "Orla's creation protocol takes JSON lines, or a WebSocket; see docs/PROTOCOL.md.\n";
+    let body =
+        "Entelechy's creation protocol takes JSON lines, or a WebSocket; see docs/PROTOCOL.md.\n";
     let _ = write!(
         stream,
         "HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",

@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 
 # By day, the vault open: the floor in a pillar's shadow is lit by the
 # sky alone, blue and darker; in the sun it is brighter and even. The

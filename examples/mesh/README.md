@@ -4,15 +4,15 @@ A subdivided torus drawn by the raster package.
 
 - `mesh.torus` and `mesh.torus_faces` build the vertex and triangle rows.
 - `mesh.split_vertices` and `mesh.split_faces` split each triangle into
-  four, one level per placement of the sub-graph `level.osn`, placed
+  four, one level per placement of the sub-graph `level.esn`, placed
   `level` times with `carry` (`--param level=2` is two levels).
 - `mesh.project` projects the vertices into clip space.
-- The [raster package](../../packages/raster.orlapkg/kernels/raster.orla)
+- The [raster package](../../packages/raster.entpkg/kernels/raster.ent)
   turns the rows into a `Grid<Surface>` of depth, normal, uv and triangle
   id, the same on all three backends (`tests/edges.replay`).
 - `mesh.shade` lights the surface.
 
-`tests/native.osn` puts `native.rasterize@1` in the package's place: bit
+`tests/native.esn` puts `native.rasterize@1` in the package's place: bit
 for bit on the interpreter and the JIT; on the GPU it is the device's
 rasterizer, and edge pixels may differ. `tests/canvas.replay` holds the
 package's canvas preset to its plain one and to `native.rasterize@3`. `tests/near.replay` pins the
@@ -24,7 +24,7 @@ draw, on every backend: each triangle's box is found once and every step
 reads it, so no step can round it differently from another.
 
 ```sh
-orla player examples/mesh/scene.osn --backend gpu
-orla replay examples/mesh/tests/torus.replay
-orla replay examples/mesh/tests/near.replay
+entelechy player examples/mesh/scene.esn --backend gpu
+entelechy replay examples/mesh/tests/torus.replay
+entelechy replay examples/mesh/tests/near.replay
 ```

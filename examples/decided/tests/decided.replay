@@ -1,4 +1,4 @@
-scene ../scene.osn
+scene ../scene.esn
 window 640 360
 
 # High over the ground: the Kernel asks for the coarsest mesh it has and

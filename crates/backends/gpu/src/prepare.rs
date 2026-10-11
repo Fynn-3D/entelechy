@@ -311,19 +311,19 @@ impl GpuBackend {
                 wgsl::BRACE_LIMIT
             ));
         }
-        if module.holds(orla_abi::Type::Double) {
+        if module.holds(entelechy_abi::Type::Double) {
             return Some("it holds a Double, which the device does not compute".to_owned());
         }
 
-        if !module.holds(orla_abi::Type::Long) {
+        if !module.holds(entelechy_abi::Type::Long) {
             return None;
         }
         if !self.int64 {
             return Some("it holds a Long, and the device has no 64-bit integers".to_owned());
         }
         match module.manifest.mode {
-            orla_ir::Mode::Map | orla_ir::Mode::Reduce => None,
-            orla_ir::Mode::Scatter { .. } if wgsl::long_extremes(module) => (!self.int64_atomics)
+            entelechy_ir::Mode::Map | entelechy_ir::Mode::Reduce => None,
+            entelechy_ir::Mode::Scatter { .. } if wgsl::long_extremes(module) => (!self.int64_atomics)
                 .then(|| {
                     "it scatters Longs, and the device has no 64-bit atomic min and max".to_owned()
                 }),
@@ -462,11 +462,13 @@ impl GpuBackend {
                 )).into());
             }
         }
-        if !matches!(manifest.mode, orla_ir::Mode::Map | orla_ir::Mode::Scan)
-            && manifest
-                .outputs
-                .iter()
-                .any(|port| !port.ty.schema.is_wide())
+        if !matches!(
+            manifest.mode,
+            entelechy_ir::Mode::Map | entelechy_ir::Mode::Scan
+        ) && manifest
+            .outputs
+            .iter()
+            .any(|port| !port.ty.schema.is_wide())
         {
             return Err((format!(
                 "`{}` is a {} and writes a narrow output; it folds at full width",
@@ -519,7 +521,7 @@ impl GpuBackend {
             }
         }
         let main = self.pass(&module.manifest.id.to_string(), &source, &entries)?;
-        let reduce = if module.manifest.mode == orla_ir::Mode::Reduce {
+        let reduce = if module.manifest.mode == entelechy_ir::Mode::Reduce {
             let reduce_source = wgsl::emit_reduce_packed(module, &packed);
             // The map pass's bindings, then the fold's own.
             let (count_binding, in_binding, out_binding) = wgsl::reduce_bindings(module);
@@ -547,7 +549,7 @@ impl GpuBackend {
         } else {
             None
         };
-        let prefix = if matches!(module.manifest.mode, orla_ir::Mode::Prefix { .. }) {
+        let prefix = if matches!(module.manifest.mode, entelechy_ir::Mode::Prefix { .. }) {
             let mut entries = vec![
                 uniform_entry(wgsl::PREFIX_PLAN_BINDING),
                 storage_entry(wgsl::PREFIX_OUT_BINDING, false),
@@ -583,7 +585,7 @@ impl GpuBackend {
         } else {
             None
         };
-        let scatter = if matches!(module.manifest.mode, orla_ir::Mode::Scatter { .. }) {
+        let scatter = if matches!(module.manifest.mode, entelechy_ir::Mode::Scatter { .. }) {
             let scatter = match wgsl::scatter_plan(module) {
                 wgsl::ScatterPlan::Sorted => Scatter::Sorted {
                     keys: self.pass(

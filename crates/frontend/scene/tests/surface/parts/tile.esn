@@ -1,0 +1,11 @@
+// A graph `sized.esn` places: its extent and its fill are its own
+// parameters, which become what the parent passed.
+param side: Int = 8;
+param fill: Float = 1.0;
+
+node blank: Grid<Float> {
+    domain = vec2(side, side * 2);
+    value = fill;
+}
+
+output result <- blank.result;

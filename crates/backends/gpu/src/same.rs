@@ -31,7 +31,7 @@ pub(crate) struct SamePipeline {
 pub(crate) fn build(device: &wgpu::Device, wait: Wait) -> Result<SamePipeline, String> {
     let guard = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("orla same"),
+        label: Some("entelechy same"),
         source: wgpu::ShaderSource::Wgsl(SAME_WGSL.into()),
     });
     let entry = |binding: u32, ty: wgpu::BufferBindingType| wgpu::BindGroupLayoutEntry {
@@ -45,7 +45,7 @@ pub(crate) fn build(device: &wgpu::Device, wait: Wait) -> Result<SamePipeline, S
         count: None,
     };
     let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("orla same"),
+        label: Some("entelechy same"),
         entries: &[
             entry(0, wgpu::BufferBindingType::Storage { read_only: true }),
             entry(1, wgpu::BufferBindingType::Storage { read_only: true }),
@@ -54,12 +54,12 @@ pub(crate) fn build(device: &wgpu::Device, wait: Wait) -> Result<SamePipeline, S
         ],
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("orla same"),
+        label: Some("entelechy same"),
         bind_group_layouts: &[Some(&layout)],
         immediate_size: 0,
     });
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("orla same"),
+        label: Some("entelechy same"),
         layout: Some(&pipeline_layout),
         module: &module,
         entry_point: Some("main"),
@@ -99,19 +99,19 @@ impl GpuBackend {
             })
         };
         let differs = buffer(
-            "orla same",
+            "entelechy same",
             4,
             wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
         );
         let count = buffer(
-            "orla same count",
+            "entelechy same count",
             16,
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
         let back = buffer(
-            "orla same back",
+            "entelechy same back",
             4,
             wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         );
@@ -121,7 +121,7 @@ impl GpuBackend {
             &[words.to_le_bytes(), [0; 4], [0; 4], [0; 4]].concat(),
         );
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("orla same"),
+            label: Some("entelechy same"),
             layout: &same.layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -145,12 +145,12 @@ impl GpuBackend {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("orla same"),
+                label: Some("entelechy same"),
             });
         encoder.clear_buffer(&differs, 0, None);
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("orla same"),
+                label: Some("entelechy same"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&same.pipeline);

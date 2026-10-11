@@ -1,0 +1,6 @@
+//! The physics package: rigid circles and boxes in the plane that fall,
+//! collide, rest, slide and bounce, stepped by Kernels. `graphs/step.esn`
+//! is one step of a world of bodies; `physics.ray@1` asks what a ray meets.
+package physics@1 { language = 1; ir = 1; }
+
+use "kernels/";

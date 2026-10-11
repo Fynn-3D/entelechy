@@ -1,6 +1,6 @@
 [package]
-name = "orla-kernel"
-description = "Orla Kernel Runtime: prepare, publish, execute, and atomically replace Kernel versions"
+name = "entelechy-kernel"
+description = "Entelechy Kernel Runtime: prepare, publish, execute, and atomically replace Kernel versions"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,9 +11,9 @@ rust-version.workspace = true
 doctest = false
 
 [dependencies]
-orla-rules = { path = "../../core/rules" }
-orla-abi = { path = "../../core/abi" }
-orla-ir = { path = "../../core/ir" }
+entelechy-rules = { path = "../../core/rules" }
+entelechy-abi = { path = "../../core/abi" }
+entelechy-ir = { path = "../../core/ir" }
 
 [lints]
 workspace = true

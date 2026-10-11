@@ -5,8 +5,8 @@
 
 use std::path::{Path, PathBuf};
 
-use orla_kernel::Context;
-use orla_session::{Event, Session};
+use entelechy_kernel::Context;
+use entelechy_session::{Event, Session};
 
 const KERNELS: &str = "
 struct Skill { id: Int; power: Float; at: Vec2; on: Bool; }
@@ -19,15 +19,15 @@ kernel t.score@1 {
 ";
 
 fn scratch(name: &str, table: &str, file: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("orla-tables-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-tables-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("data")).unwrap();
-    std::fs::write(dir.join("k.orla"), KERNELS).unwrap();
+    std::fs::write(dir.join("k.ent"), KERNELS).unwrap();
     std::fs::write(dir.join("data").join(file), table).unwrap();
     std::fs::write(
-        dir.join("scene.osn"),
+        dir.join("scene.esn"),
         format!(
-            "use \"k.orla\";\ninput skills: Rows<Skill> = \"data/{file}\";\nnode score: t.score@1 {{ skills <- skills; }}\noutput result <- score.result;\n"
+            "use \"k.ent\";\ninput skills: Rows<Skill> = \"data/{file}\";\nnode score: t.score@1 {{ skills <- skills; }}\noutput result <- score.result;\n"
         ),
     )
     .unwrap();
@@ -35,7 +35,7 @@ fn scratch(name: &str, table: &str, file: &str) -> PathBuf {
 }
 
 fn open(dir: &Path) -> (Session, Vec<Event>) {
-    let mut session = Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    let mut session = Session::open(&dir.join("scene.esn"), None, 1 << 20);
     let events = session.sync();
     assert!(session.graph().is_some(), "{events:?}");
     (session, events)
@@ -123,7 +123,7 @@ fn a_table_is_read_again_when_its_layout_changes() {
     let (mut session, _) = open(&dir);
     assert_eq!(scores(&mut session), [303.5]);
     std::fs::write(
-        dir.join("k.orla"),
+        dir.join("k.ent"),
         KERNELS.replace("on: Bool; }", "on: Bool; rank: Int; }"),
     )
     .unwrap();
@@ -140,8 +140,8 @@ fn a_table_is_read_again_when_its_layout_changes() {
 fn a_table_no_kernel_reads_is_refused() {
     let dir = scratch("unread", "id\n1\n", "skills.csv");
     std::fs::write(
-        dir.join("scene.osn"),
-        "use \"k.orla\";\ninput skills: Rows<Skill> = \"data/skills.csv\";\ninput other: Rows<Skill> = \"data/skills.csv\";\nnode score: t.score@1 { skills <- skills; }\noutput result <- score.result;\n",
+        dir.join("scene.esn"),
+        "use \"k.ent\";\ninput skills: Rows<Skill> = \"data/skills.csv\";\ninput other: Rows<Skill> = \"data/skills.csv\";\nnode score: t.score@1 { skills <- skills; }\noutput result <- score.result;\n",
     )
     .unwrap();
     std::fs::write(
@@ -164,11 +164,11 @@ fn a_table_no_kernel_reads_is_refused() {
 /// and a name no row has is refused, the rows read before kept.
 #[test]
 fn a_cell_names_a_row_of_the_table_beside_it() {
-    let dir = std::env::temp_dir().join(format!("orla-tables-named-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-tables-named-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("data")).unwrap();
     std::fs::write(
-        dir.join("k.orla"),
+        dir.join("k.ent"),
         "struct Spawn { slot: Int; beast: Int; }
 kernel t.kinds@1 { requires { field.read; field.write; } input spawns: Rows<Spawn>; output result: Rows<Float>; compute { return float(sample(spawns).beast); } }
 ",
@@ -185,8 +185,8 @@ kernel t.kinds@1 { requires { field.read; field.write; } input spawns: Rows<Spaw
     )
     .unwrap();
     std::fs::write(
-        dir.join("scene.osn"),
-        "use \"k.orla\";\ninput spawns: Rows<Spawn> = \"data/spawns.csv\";\nnode kinds: t.kinds@1 { spawns <- spawns; }\noutput result <- kinds.result;\n",
+        dir.join("scene.esn"),
+        "use \"k.ent\";\ninput spawns: Rows<Spawn> = \"data/spawns.csv\";\nnode kinds: t.kinds@1 { spawns <- spawns; }\noutput result <- kinds.result;\n",
     )
     .unwrap();
     let (mut session, events) = open(&dir);

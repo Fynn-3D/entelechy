@@ -1,13 +1,13 @@
 //! Random programs on the JIT against the interpreter: the same words bit
 //! for bit, or the same failure at the same element. Programs come from
-//! `orla_conformance::random` by seed, so a difference reproduces by its
-//! name. `ORLA_FUZZ=<n>` runs more.
+//! `entelechy_conformance::random` by seed, so a difference reproduces by its
+//! name. `ENTELECHY_FUZZ=<n>` runs more.
 
-use orla_abi::{Capabilities, Capability, Host, Invocation, Scope};
-use orla_compiler::compile;
-use orla_cpu::CpuBackend;
-use orla_jit::JitBackend;
-use orla_rules::Backend;
+use entelechy_abi::{Capabilities, Capability, Host, Invocation, Scope};
+use entelechy_compiler::compile;
+use entelechy_cpu::CpuBackend;
+use entelechy_jit::JitBackend;
+use entelechy_rules::Backend;
 
 fn all() -> Capabilities {
     Capability::ALL.into_iter().collect()
@@ -15,7 +15,7 @@ fn all() -> Capabilities {
 
 /// How many programs a run tries.
 fn count() -> usize {
-    std::env::var("ORLA_FUZZ")
+    std::env::var("ENTELECHY_FUZZ")
         .ok()
         .and_then(|n| n.parse().ok())
         .unwrap_or(400)
@@ -24,7 +24,7 @@ fn count() -> usize {
 #[test]
 fn random_programs_run_on_the_jit_as_on_the_interpreter() {
     let jit = JitBackend::new().unwrap();
-    let cases = orla_conformance::random::cases(0x0f1a, count());
+    let cases = entelechy_conformance::random::cases(0x0f1a, count());
     let mut failures = Vec::new();
     let mut failed_alike = 0;
     for case in &cases {
@@ -44,7 +44,7 @@ fn random_programs_run_on_the_jit_as_on_the_interpreter() {
             .iter()
             .map(|(schema, domain, words)| {
                 host.adopt(
-                    orla_abi::FieldData::from_values(schema.clone(), *domain, words).unwrap(),
+                    entelechy_abi::FieldData::from_values(schema.clone(), *domain, words).unwrap(),
                 )
                 .unwrap()
             })
@@ -73,7 +73,7 @@ fn random_programs_run_on_the_jit_as_on_the_interpreter() {
                     let candidate = host.data(*b).unwrap().values().into_owned();
                     let scalars = host.schema(*a).unwrap().scalars().to_vec();
                     if let Some(mismatch) =
-                        orla_conformance::compare(&scalars, &reference, &candidate, 0.0, 0.0)
+                        entelechy_conformance::compare(&scalars, &reference, &candidate, 0.0, 0.0)
                     {
                         failures.push(format!(
                             "{}: output {which}: {mismatch}\n{}",

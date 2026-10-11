@@ -1,4 +1,4 @@
-scene wide.osn
+scene wide.esn
 
 # The line's letters: A; 中, the atlas's slot 0, over two cells; B; 文,
 # which the atlas does not hold, a `?`; then spaces. The letters' grid

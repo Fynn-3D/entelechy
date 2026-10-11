@@ -2,7 +2,7 @@
 //! ([RIGS](../../../../docs/RIGS.md)), shared by import and export, and
 //! their matrix product.
 
-use orla_host::{Scalar, Schema};
+use entelechy_host::{Scalar, Schema};
 
 /// One part of a mesh or of its rig, as a file of rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,7 +80,7 @@ mod tests {
     fn a_part_kept_narrow_is_the_part_it_is() {
         let narrow = |part: Part, encoding: &str| {
             part.schema()
-                .with_encoding(orla_host::encoding::Encoding::parse(encoding).unwrap())
+                .with_encoding(entelechy_host::encoding::Encoding::parse(encoding).unwrap())
                 .unwrap()
         };
         assert_eq!(

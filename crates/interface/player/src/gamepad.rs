@@ -1,9 +1,9 @@
 //! The system's gamepads through gilrs, each button and axis handed to
 //! the play by name, and how many are connected. Their meaning is
-//! `orla_session::play::pad`'s.
+//! `entelechy_session::play::pad`'s.
 
+use entelechy_session::play::{PadAxis, PadButton, Play};
 use gilrs::{Axis, Button, EventType, GamepadId, Gilrs};
-use orla_session::play::{PadAxis, PadButton, Play};
 
 /// The connected pads, polled once per frame.
 pub struct Gamepad {

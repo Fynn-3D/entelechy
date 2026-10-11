@@ -19,7 +19,7 @@ pub fn type_name(ty: Type, structs: &[StructDef]) -> String {
 }
 
 /// A port type with a Kernel's struct names in it (`Rows<Note>`).
-pub fn port_type_name(ty: &orla_abi::PortType, structs: &[StructDef]) -> String {
+pub fn port_type_name(ty: &entelechy_abi::PortType, structs: &[StructDef]) -> String {
     if ty.is_image() {
         return "Image".to_owned();
     }

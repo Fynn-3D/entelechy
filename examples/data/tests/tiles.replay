@@ -1,4 +1,4 @@
-scene tiles.osn
+scene tiles.esn
 
 # Tile centres are 8 pixels in from a tile's corner. Sprites are flat there,
 # and the height shade is at most 15%, so colors are checked loosely.

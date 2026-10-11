@@ -3,7 +3,7 @@
 use std::path::Path;
 
 fn scratch(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("orla-export-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("entelechy-export-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -11,7 +11,7 @@ fn scratch(name: &str) -> std::path::PathBuf {
 
 /// Writes rows of `layout` as a `.field` file at `path`.
 fn rows(path: &Path, layout: &str, values: &[f32]) {
-    let schema: orla_host::Schema = layout.parse().unwrap();
+    let schema: entelechy_host::Schema = layout.parse().unwrap();
     let width = layout.split(',').count();
     let words: Vec<u32> = layout
         .split(',')
@@ -25,8 +25,12 @@ fn rows(path: &Path, layout: &str, values: &[f32]) {
             }
         })
         .collect();
-    let domain = orla_host::Domain::Rows((values.len() / width) as u32);
-    std::fs::write(path, orla_formats::file::encode(&schema, domain, &words)).unwrap();
+    let domain = entelechy_host::Domain::Rows((values.len() / width) as u32);
+    std::fs::write(
+        path,
+        entelechy_formats::file::encode(&schema, domain, &words),
+    )
+    .unwrap();
 }
 
 /// A unit cube, four vertices a face so each keeps its face's normal,
@@ -70,7 +74,7 @@ fn cube(dir: &Path) {
         .collect();
     std::fs::write(
         dir.join("crate.albedo.png"),
-        orla_formats::png::encode(4, 4, &checker),
+        entelechy_formats::png::encode(4, 4, &checker),
     )
     .unwrap();
 }
@@ -150,14 +154,14 @@ fn the_crate_leaves_as_glb_and_comes_back_the_same() {
     std::fs::create_dir_all(&assets).unwrap();
     cube(&assets);
     let out = dir.join("crate.glb");
-    orla_export::gltf::export(
+    entelechy_export::gltf::export(
         &assets.join("crate.vertices.field"),
         &assets.join("crate.triangles.field"),
         Some(&assets.join("crate.albedo.png")),
         &out,
     )
     .unwrap();
-    let imported = orla_import::gltf::import(&out, &dir.join("back"), 30.0).unwrap();
+    let imported = entelechy_import::gltf::import(&out, &dir.join("back"), 30.0).unwrap();
     assert_eq!((imported.vertices, imported.triangles), (24, 12));
     assert!(
         imported.texture.is_some() && imported.notes.is_empty(),
@@ -190,15 +194,15 @@ fn a_tone_leaves_as_wav_and_decodes_back() {
     let name = "tone.wav";
     let path = dir.join(name);
     let words: Vec<u32> = samples.iter().map(|v| v.to_bits()).collect();
-    std::fs::write(&path, orla_formats::wav::encode(&words, 2, rate)).unwrap();
-    let imported = orla_import::audio::import(&path, &dir.join("back")).unwrap();
+    std::fs::write(&path, entelechy_formats::wav::encode(&words, 2, rate)).unwrap();
+    let imported = entelechy_import::audio::import(&path, &dir.join("back")).unwrap();
     assert_eq!((imported.rate, imported.channels), (rate, 2), "{name}");
     assert!(
         imported.frames >= rate as usize / 2 && imported.frames < rate as usize,
         "{name}: {} frames",
         imported.frames
     );
-    let (field, _) = orla_formats::read(&imported.file, None).unwrap();
+    let (field, _) = entelechy_formats::read(&imported.file, None).unwrap();
     let left: Vec<f32> = field
         .storage()
         .iter()
@@ -230,7 +234,7 @@ fn a_rig_leaves_as_glb_and_comes_back_posing_the_same() {
     arm(&assets);
     let out = dir.join("arm.glb");
     let path = |name: &str| assets.join(format!("arm.{name}.field"));
-    orla_export::gltf::export_rig(
+    entelechy_export::gltf::export_rig(
         &path("vertices"),
         &path("triangles"),
         &[],
@@ -238,11 +242,11 @@ fn a_rig_leaves_as_glb_and_comes_back_posing_the_same() {
         &[&path("swing.clip"), &path("curl.clip")],
         30.0,
         &out,
-        &orla_export::gltf::Options::default(),
+        &entelechy_export::gltf::Options::default(),
     )
     .unwrap();
     let back = dir.join("back");
-    let imported = orla_import::gltf::import(&out, &back, 30.0).unwrap();
+    let imported = entelechy_import::gltf::import(&out, &back, 30.0).unwrap();
     assert_eq!(imported.joints, 2);
     assert_eq!(
         imported.clips,
@@ -261,9 +265,9 @@ fn a_rig_leaves_as_glb_and_comes_back_posing_the_same() {
     // The clips are resampled, so they come within a rounding.
     for name in ["swing", "curl"] {
         let before =
-            orla_formats::file::decode(&std::fs::read(path(&format!("{name}.clip"))).unwrap())
+            entelechy_formats::file::decode(&std::fs::read(path(&format!("{name}.clip"))).unwrap())
                 .unwrap();
-        let after = orla_formats::file::decode(
+        let after = entelechy_formats::file::decode(
             &std::fs::read(back.join(format!("arm.{name}.clip.field"))).unwrap(),
         )
         .unwrap();
@@ -293,9 +297,9 @@ fn a_texture_is_sampled_linear_or_nearest_as_asked() {
     let dir = scratch("filter");
     cube(&dir);
     let texture = dir.join("crate.albedo.png");
-    let sampler = |filter: orla_export::gltf::Filter, name: &str| {
+    let sampler = |filter: entelechy_export::gltf::Filter, name: &str| {
         let out = dir.join(name);
-        orla_export::gltf::export_rig(
+        entelechy_export::gltf::export_rig(
             &dir.join("crate.vertices.field"),
             &dir.join("crate.triangles.field"),
             &[&texture],
@@ -303,7 +307,7 @@ fn a_texture_is_sampled_linear_or_nearest_as_asked() {
             &[],
             30.0,
             &out,
-            &orla_export::gltf::Options {
+            &entelechy_export::gltf::Options {
                 filter,
                 joints: Vec::new(),
             },
@@ -311,12 +315,12 @@ fn a_texture_is_sampled_linear_or_nearest_as_asked() {
         .unwrap();
         document(&out)["samplers"][0].clone()
     };
-    let linear = sampler(orla_export::gltf::Filter::Linear, "linear.glb");
+    let linear = sampler(entelechy_export::gltf::Filter::Linear, "linear.glb");
     assert_eq!(
         (linear["magFilter"].as_u64(), linear["minFilter"].as_u64()),
         (Some(9729), Some(9987))
     );
-    let nearest = sampler(orla_export::gltf::Filter::Nearest, "nearest.glb");
+    let nearest = sampler(entelechy_export::gltf::Filter::Nearest, "nearest.glb");
     assert_eq!(
         (nearest["magFilter"].as_u64(), nearest["minFilter"].as_u64()),
         (Some(9728), Some(9728))
@@ -334,7 +338,7 @@ fn joints_take_the_names_given_in_skeleton_order() {
     arm(&assets);
     let path = |name: &str| assets.join(format!("arm.{name}.field"));
     let export = |joints: &[&str], out: &Path| {
-        orla_export::gltf::export_rig(
+        entelechy_export::gltf::export_rig(
             &path("vertices"),
             &path("triangles"),
             &[],
@@ -342,8 +346,8 @@ fn joints_take_the_names_given_in_skeleton_order() {
             &[&path("swing.clip")],
             30.0,
             out,
-            &orla_export::gltf::Options {
-                filter: orla_export::gltf::Filter::Linear,
+            &entelechy_export::gltf::Options {
+                filter: entelechy_export::gltf::Filter::Linear,
                 joints: joints.iter().map(|name| (*name).to_owned()).collect(),
             },
         )
@@ -366,7 +370,7 @@ fn joints_take_the_names_given_in_skeleton_order() {
     );
     let blank = export(&["shoulder", " "], &dir.join("blank.glb")).unwrap_err();
     assert!(blank.contains("joint 1 has no name"), "{blank}");
-    let imported = orla_import::gltf::import(&out, &dir.join("back"), 30.0).unwrap();
+    let imported = entelechy_import::gltf::import(&out, &dir.join("back"), 30.0).unwrap();
     assert_eq!(imported.joints, 2);
     for name in ["weights", "skeleton"] {
         assert_eq!(
@@ -385,7 +389,7 @@ fn tangents_and_maps_go_with_the_material() {
     let dir = scratch("maps");
     cube(&dir);
     let plain =
-        orla_formats::file::decode(&std::fs::read(dir.join("crate.vertices.field")).unwrap())
+        entelechy_formats::file::decode(&std::fs::read(dir.join("crate.vertices.field")).unwrap())
             .unwrap();
     let mut with_tangent = Vec::new();
     for row in plain.storage().chunks_exact(8) {
@@ -400,16 +404,16 @@ fn tangents_and_maps_go_with_the_material() {
     let flat = vec![[0.5f32, 0.5, 1.0, 1.0]; 4];
     std::fs::write(
         dir.join("lit.normal.png"),
-        orla_formats::png::encode(2, 2, &flat),
+        entelechy_formats::png::encode(2, 2, &flat),
     )
     .unwrap();
     std::fs::write(
         dir.join("lit.occlusion.png"),
-        orla_formats::png::encode(2, 2, &[[0.7, 0.7, 0.7, 1.0]; 4]),
+        entelechy_formats::png::encode(2, 2, &[[0.7, 0.7, 0.7, 1.0]; 4]),
     )
     .unwrap();
     let out = dir.join("lit.glb");
-    orla_export::gltf::export_rig(
+    entelechy_export::gltf::export_rig(
         &dir.join("lit.vertices.field"),
         &dir.join("crate.triangles.field"),
         &[
@@ -421,7 +425,7 @@ fn tangents_and_maps_go_with_the_material() {
         &[],
         30.0,
         &out,
-        &orla_export::gltf::Options::default(),
+        &entelechy_export::gltf::Options::default(),
     )
     .unwrap();
     let json = document(&out);
@@ -442,7 +446,7 @@ fn tangents_and_maps_go_with_the_material() {
     // A map is blended whatever the base color asks.
     assert_eq!(json["textures"][1]["sampler"].as_u64(), Some(1));
 
-    let imported = orla_import::gltf::import(&out, &dir.join("back"), 30.0).unwrap();
+    let imported = entelechy_import::gltf::import(&out, &dir.join("back"), 30.0).unwrap();
     assert_eq!((imported.vertices, imported.triangles), (24, 12));
     let before = std::fs::read(dir.join("crate.vertices.field")).unwrap();
     let after = std::fs::read(&imported.files[0]).unwrap();
@@ -453,7 +457,7 @@ fn tangents_and_maps_go_with_the_material() {
 
     // Two normal maps are one too many.
     std::fs::copy(dir.join("lit.normal.png"), dir.join("other.normal.png")).unwrap();
-    let twice = orla_export::gltf::export_rig(
+    let twice = entelechy_export::gltf::export_rig(
         &dir.join("lit.vertices.field"),
         &dir.join("crate.triangles.field"),
         &[&dir.join("lit.normal.png"), &dir.join("other.normal.png")],
@@ -461,7 +465,7 @@ fn tangents_and_maps_go_with_the_material() {
         &[],
         30.0,
         &dir.join("twice.glb"),
-        &orla_export::gltf::Options::default(),
+        &entelechy_export::gltf::Options::default(),
     );
     assert!(twice.unwrap_err().contains("a second normal map"));
     let _ = std::fs::remove_dir_all(&dir);

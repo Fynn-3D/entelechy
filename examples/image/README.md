@@ -4,22 +4,22 @@ Pictures from arrays, matrices, volumes and samplers. Five parts, each
 a scene of its own that shows one thing a Kernel does with data: a
 weight table and a `Mat3`, a `Mat4` and its inverse, a case table, a
 `Volume<Float>`, and sampling through `mod`. The whole places every
-part's scene as a sub-graph (`node blur: graph "parts/blur/scene.osn"
+part's scene as a sub-graph (`node blur: graph "parts/blur/scene.esn"
 {}`) and lays their pictures out in the window with one small Kernel,
 `panels.grid@1`: three across and two down, each scaled whole into its
 panel.
 
 ```sh
-orla player examples/image/scene.osn
-orla run examples/image/scene.osn --window 640x400 --out image.ppm
-orla replay examples/image/tests/image.replay
+entelechy player examples/image/scene.esn
+entelechy run examples/image/scene.esn --window 640x400 --out image.ppm
+entelechy replay examples/image/tests/image.replay
 ```
 
 Each part runs and is tested on its own:
 
 ```sh
-orla player examples/image/parts/<part>/scene.osn
-orla replay examples/image/tests/<part>.replay
+entelechy player examples/image/parts/<part>/scene.esn
+entelechy replay examples/image/tests/<part>.replay
 ```
 
 ## Blur

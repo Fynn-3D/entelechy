@@ -15,6 +15,6 @@ committed evaluation. Hold the mouse button to paint, hold C to clear,
 press F5 to restart from the seed.
 
 ```sh
-orla player examples/life/scene.osn --scale 4
-orla replay examples/life/tests/blinker.replay
+entelechy player examples/life/scene.esn --scale 4
+entelechy replay examples/life/tests/blinker.replay
 ```
