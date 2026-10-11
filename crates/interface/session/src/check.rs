@@ -261,6 +261,38 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
             .iter()
             .any(|file| store.canonical(file).unwrap_or_else(|_| file.clone()) == path)
     };
+    // A Kernel id is one Kernel: one the scene publishes from two
+    // documents, a session publishes from the first and refuses from the
+    // second.
+    let canonical = |path: &Path| store.canonical(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut owners: Vec<(entelechy_ir::KernelId, std::path::PathBuf)> = document
+        .kernels
+        .iter()
+        .filter_map(|kernel| crate::sources::named_id(kernel).ok())
+        .map(|id| (id, canonical(path)))
+        .collect();
+    for file in &published {
+        let Ok(parsed) = store.document(file) else {
+            continue;
+        };
+        let file = canonical(file);
+        for id in parsed
+            .kernels
+            .iter()
+            .filter_map(|kernel| crate::sources::named_id(kernel).ok())
+        {
+            match owners.iter().find(|(owned, _)| *owned == id) {
+                Some((_, owner)) if *owner != file => say!(
+                    problem,
+                    "{}: {id} is already published by {}; kernel ids are unique",
+                    file.display(),
+                    owner.display()
+                ),
+                Some(_) => {}
+                None => owners.push((id, file.clone())),
+            }
+        }
+    }
     // The used documents, each with its own declarations.
     match used_documents(store, base, &document.uses) {
         Ok(used) => {

@@ -690,33 +690,21 @@ fn scoped(
 }
 /// A document's own declarations, put in front of each of its Kernels'
 /// own: every Kernel of a document sees what its document declares, with
-/// one layout. The parser gives each Kernel so.
+/// one layout. A Kernel's own function, struct or type is the innermost
+/// scope, as over what a document uses ([`resolve`]). The parser gives
+/// each Kernel so.
 pub(crate) fn document_scope(document: &mut Document) {
     if document.structs.is_empty() && document.types.is_empty() && document.functions.is_empty() {
         return;
     }
-    let shared = document.structs.clone();
-    let shared_types = document.types.clone();
-    let shared_functions = document.functions.clone();
-    let prepend = |kernel: &mut Kernel| {
-        let mut structs = shared.clone();
-        structs.append(&mut kernel.structs);
-        kernel.structs = structs;
-        let mut types = shared_types.clone();
-        types.append(&mut kernel.types);
-        kernel.types = types;
-        let mut functions = shared_functions.clone();
-        functions.append(&mut kernel.functions);
-        kernel.functions = functions;
-    };
-    for kernel in &mut document.kernels {
-        prepend(kernel);
-    }
-    for node in &mut document.nodes {
-        if let NodeKind::Inline(kernel) = &mut node.kind {
-            prepend(kernel);
-        }
-    }
+    let (structs, types, functions) = (
+        document.structs.clone(),
+        document.types.clone(),
+        document.functions.clone(),
+    );
+    for_each_kernel(document, &|kernel| {
+        put_before(kernel, (&structs, &types, &functions), "document")
+    });
 }
 
 /// The declarations `used` (what a document's `use` items bring in, as
@@ -731,90 +719,102 @@ pub(crate) fn resolve(document: &mut Document, used: (&[StructDecl], &[TypeAlias
     if structs.is_empty() && types.is_empty() && functions.is_empty() {
         return;
     }
-    let prepend = |kernel: &mut Kernel| {
-        let own_fns: Vec<String> = kernel
-            .functions
-            .iter()
-            .map(|f| f.name.value.clone())
-            .collect();
-        // Only a name the shared declarations hold too is renamed:
-        // one the using document declares alike is not passed, and the
-        // shared functions name the Kernel's own.
-        let own_types: Vec<String> = kernel
-            .structs
-            .iter()
-            .map(|s| s.name.value.clone())
-            .chain(kernel.types.iter().map(|t| t.name.value.clone()))
-            .filter(|name| {
-                structs.iter().any(|d| &d.name.value == name)
-                    || types.iter().any(|d| &d.name.value == name)
-            })
-            .collect();
-        let call = |name: &str| {
-            own_fns
-                .iter()
-                .any(|own| own == name)
-                .then(|| format!("{name}@shared"))
-        };
-        let ty = |name: &str| {
-            own_types
-                .iter()
-                .any(|own| own == name)
-                .then(|| format!("{name}@shared"))
-        };
-        let spanned = |old: &Spanned<String>, value: String| Spanned {
-            value,
-            span: old.span,
-        };
-        let mut all: Vec<StructDecl> = structs
-            .iter()
-            .map(|decl| StructDecl {
-                origin: decl.origin.clone(),
-                name: spanned(
-                    &decl.name,
-                    ty(&decl.name.value).unwrap_or_else(|| decl.name.value.clone()),
-                ),
-                fields: decl
-                    .fields
-                    .iter()
-                    .map(|(name, t)| (name.clone(), spanned(t, renamed_type(&t.value, &ty))))
-                    .collect(),
-            })
-            .collect();
-        all.append(&mut kernel.structs);
-        kernel.structs = all;
-        let mut aliases: Vec<TypeAlias> = types
-            .iter()
-            .map(|alias| TypeAlias {
-                origin: alias.origin.clone(),
-                name: spanned(
-                    &alias.name,
-                    ty(&alias.name.value).unwrap_or_else(|| alias.name.value.clone()),
-                ),
-                target: spanned(&alias.target, renamed_type(&alias.target.value, &ty)),
-            })
-            .collect();
-        aliases.append(&mut kernel.types);
-        kernel.types = aliases;
-        let mut shared: Vec<FnDecl> = functions
-            .iter()
-            .map(|f| {
-                f.renamed(
-                    call(&f.name.value).unwrap_or_else(|| f.name.value.clone()),
-                    &call,
-                )
-                .retyped(&ty)
-            })
-            .collect();
-        shared.append(&mut kernel.functions);
-        kernel.functions = shared;
-    };
+    for_each_kernel(document, &|kernel| {
+        put_before(kernel, (structs, types, functions), "shared")
+    });
+}
+
+/// `change` made to every Kernel of `document`, its inline ones too.
+fn for_each_kernel(document: &mut Document, change: &dyn Fn(&mut Kernel)) {
     for kernel in &mut document.kernels {
-        prepend(kernel);
+        change(kernel);
     }
     for node in &mut document.nodes {
         if let NodeKind::Inline(kernel) = &mut node.kind {
-            prepend(kernel);
+            change(kernel);
         }
     }
+}
+
+/// `outer`'s declarations put in front of `kernel`'s own; one of a name
+/// the Kernel declares itself is renamed `name@suffix` out of its way,
+/// and the declarations that name it follow it.
+fn put_before(kernel: &mut Kernel, outer: (&[StructDecl], &[TypeAlias], &[FnDecl]), suffix: &str) {
+    let (structs, types, functions) = outer;
+    let own_fns: Vec<String> = kernel
+        .functions
+        .iter()
+        .map(|f| f.name.value.clone())
+        .collect();
+    // Only a name the shared declarations hold too is renamed:
+    // one the using document declares alike is not passed, and the
+    // shared functions name the Kernel's own.
+    let own_types: Vec<String> = kernel
+        .structs
+        .iter()
+        .map(|s| s.name.value.clone())
+        .chain(kernel.types.iter().map(|t| t.name.value.clone()))
+        .filter(|name| {
+            structs.iter().any(|d| &d.name.value == name)
+                || types.iter().any(|d| &d.name.value == name)
+        })
+        .collect();
+    let call = |name: &str| {
+        own_fns
+            .iter()
+            .any(|own| own == name)
+            .then(|| format!("{name}@{suffix}"))
+    };
+    let ty = |name: &str| {
+        own_types
+            .iter()
+            .any(|own| own == name)
+            .then(|| format!("{name}@{suffix}"))
+    };
+    let spanned = |old: &Spanned<String>, value: String| Spanned {
+        value,
+        span: old.span,
+    };
+    let mut all: Vec<StructDecl> = structs
+        .iter()
+        .map(|decl| StructDecl {
+            origin: decl.origin.clone(),
+            name: spanned(
+                &decl.name,
+                ty(&decl.name.value).unwrap_or_else(|| decl.name.value.clone()),
+            ),
+            fields: decl
+                .fields
+                .iter()
+                .map(|(name, t)| (name.clone(), spanned(t, renamed_type(&t.value, &ty))))
+                .collect(),
+        })
+        .collect();
+    all.append(&mut kernel.structs);
+    kernel.structs = all;
+    let mut aliases: Vec<TypeAlias> = types
+        .iter()
+        .map(|alias| TypeAlias {
+            origin: alias.origin.clone(),
+            name: spanned(
+                &alias.name,
+                ty(&alias.name.value).unwrap_or_else(|| alias.name.value.clone()),
+            ),
+            target: spanned(&alias.target, renamed_type(&alias.target.value, &ty)),
+        })
+        .collect();
+    aliases.append(&mut kernel.types);
+    kernel.types = aliases;
+    let mut shared: Vec<FnDecl> = functions
+        .iter()
+        .map(|f| {
+            f.renamed(
+                call(&f.name.value).unwrap_or_else(|| f.name.value.clone()),
+                &call,
+            )
+            .retyped(&ty)
+        })
+        .collect();
+    shared.append(&mut kernel.functions);
+    kernel.functions = shared;
 }

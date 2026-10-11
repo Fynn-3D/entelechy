@@ -640,6 +640,80 @@ fn a_function_hides_a_builtin_in_its_own_document_only() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A Kernel's own function and struct are its own, over its document's
+/// of the same name, while the document's own code keeps reaching the
+/// document's.
+#[test]
+fn a_kernels_own_declarations_shadow_its_documents() {
+    let dir = scratch(
+        "kernel-shadows-document",
+        &[
+            (
+                "app.ent",
+                "struct S { x: Float; }\nfn f() -> Float { return 1.0; }\nfn g() -> Float { return f() + S { x: 4.0 }.x; }\nkernel t.k@1 { requires { field.write; } output result: Rows<Float>; struct S { y: Float; } fn f() -> Float { return 2.0; } compute { return f() * 10.0 + g() + S { y: 100.0 }.y; } }\n",
+            ),
+            (
+                "scene.esn",
+                "use \"app.ent\";\nnode n: t.k@1 { domain = 1; }\noutput result <- n.result;\n",
+            ),
+        ],
+    );
+    let mut session = entelechy_session::Session::open(&dir.join("scene.esn"), None, 1 << 20);
+    let events = session.sync();
+    assert!(session.graph().is_some(), "{events:?}");
+    session
+        .evaluate(&entelechy_kernel::Context::default())
+        .unwrap();
+    // The Kernel's own: 2 * 10 and 100; the document's, through `g`: 1 + 4.
+    let (_, words) = session
+        .element_field(&entelechy_graph::NodeId("n".into()), "result", 0, &[])
+        .unwrap();
+    assert_eq!(f32::from_bits(words[0]), 125.0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A Kernel id two documents the scene publishes both write is refused
+/// by the check from the second, as a session refuses it.
+#[test]
+fn check_refuses_a_kernel_id_two_documents_publish() {
+    let kernel = "kernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return 1.0; } }\n";
+    let dir = scratch(
+        "kernel-id-twice",
+        &[
+            ("a.ent", kernel),
+            ("b.ent", kernel),
+            (
+                "scene.esn",
+                "use \"a.ent\";\nuse \"b.ent\";\nnode k: t.k@1 { domain = 1; }\noutput result <- k.result;\n",
+            ),
+        ],
+    );
+    let checked = entelechy_session::check_document(
+        &entelechy_session::Disk::default(),
+        &dir.join("scene.esn"),
+        false,
+    );
+    assert!(
+        checked.lines.iter().any(|(problem, line)| *problem
+            && line.contains("b.ent: t.k@1 is already published by")
+            && line.contains("a.ent; kernel ids are unique")),
+        "{checked:?}"
+    );
+    // One document reached by two paths is one.
+    std::fs::write(
+        dir.join("scene.esn"),
+        "use \"a.ent\";\nuse \"./a.ent\";\nnode k: t.k@1 { domain = 1; }\noutput result <- k.result;\n",
+    )
+    .unwrap();
+    let checked = entelechy_session::check_document(
+        &entelechy_session::Disk::default(),
+        &dir.join("scene.esn"),
+        false,
+    );
+    assert_eq!(checked.problems(), 0, "{checked:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A node bound to a Kernel written in a document the scene reaches only
 /// through another is said, once, with the `use` that publishes it; the
 /// check says the same.
