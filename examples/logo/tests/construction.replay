@@ -1,0 +1,14 @@
+scene ../construction.esn
+
+# The sheet at 800 by 800: a step of the lattice is 88.3 pixels, the
+# seed's middle at x 399.5, y 570.5, sixteen modules (35.3 pixels) round.
+# The sheet's guides and outlines are drawn from the functions that draw
+# the mark, so each falls on the mark faint beneath it.
+window 800 800
+param size 800
+frame 0.0
+expect 5 5 = 0.965 0.962 0.95                    # the paper
+expect 399 570 = 0.22 0.5 0.86                   # the seed's middle, a guide's point
+expect 420 560 = 0.98 0.852 0.635                # the seed, faint gold within its outline
+expect 435 570 = 0.86 0.303 0.257 0.02           # the seed's outline at its radius
+expect 410 450 = 0.879 0.281 0.221 0.02          # the diamond's edge from the one to the two

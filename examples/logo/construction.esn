@@ -1,0 +1,10 @@
+// The mark's drawing sheet, drawn by `logo.construction@1` from the
+// functions that draw the mark: every point of the mark on its lattice,
+// guide and circle. `size` is the sheet's side.
+use "kernels/";
+
+param size: Int = 1600;
+
+node sheet: logo.construction@1 { domain = vec2(size, size); }
+
+output result <- sheet.result;

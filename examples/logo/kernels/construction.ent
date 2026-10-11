@@ -1,0 +1,100 @@
+// The mark's drawing sheet, drawn from the same functions the mark is
+// (`logo.ent`): its grid and lattice, the guides its points stand on, the
+// circle its crown is drawn on (three steps about a point half a step
+// below the diamond's middle), the diamond, the 3-4-5 triangles its outer
+// branches rise on, every circle's outline; the mark itself faint beneath
+// them. A change to the construction moves the mark and its sheet alike.
+use "logo.ent";
+
+fn paper() -> Vec3 { return vec3(0.965, 0.962, 0.95); }
+fn guide() -> Vec3 { return vec3(0.22, 0.5, 0.86); }
+fn build() -> Vec3 { return vec3(0.88, 0.28, 0.22); }
+
+/// How far `p` is from the whole line through `a` and `b`.
+fn to_line(p: Vec2, a: Vec2, b: Vec2) -> Float {
+    let d = normalize(b - a);
+    let q = p - a;
+    return abs(d.x * q.y - d.y * q.x);
+}
+
+/// 1 on a dash of a line at length `s` along it, `n` dashes a unit.
+fn dashes(s: Float, n: Float) -> Float { return if fract(s * n) < 0.5 { 1.0 } else { 0.0 }; }
+
+fn paint(c: Vec3, col: Vec3, a: Float) -> Vec3 { return mix(c, col, clamp(a, 0.0, 1.0)); }
+
+kernel logo.construction@1 {
+    requires { field.write; }
+    output result: Image;
+    compute {
+        let size = domain();
+        let unit = size.y / 2.9;
+        let p = (coord() + 0.5 - size * 0.5) / unit * vec2(1.0, -1.0) + vec2(0.0, -0.1);
+        let px = 1.0 / unit;
+        let a = lattice();
+        let m = module();
+        let s = seed_centre();
+        let hair = 0.55 * px;
+        let fine = 0.9 * px;
+        // The grid of whole steps, and the lattice's diagonals between them.
+        let gx = abs(p.x / a - floor(p.x / a + 0.5)) * a;
+        let gy = abs(p.y / a - floor(p.y / a + 0.5)) * a;
+        let c0 = paint(paper(), vec3(0.8, 0.83, 0.88), stroke(min(gx, gy), hair, px) * 0.8);
+        let u = (p.x + p.y) / a;
+        let v = (p.x - p.y) / a;
+        let du = abs(u - floor(u + 0.5)) * a * 0.70710678;
+        let dv = abs(v - floor(v + 0.5)) * a * 0.70710678;
+        let c1 = paint(c0, vec3(0.86, 0.88, 0.92), stroke(min(du, dv), hair, px) * 0.7);
+        // The mark, faint.
+        let mk = seed_mark(p, 1, 0, px);
+        let c2 = paint(c1, mk.xyz, mk.w * 0.42);
+        // Guides: the axis; the lines of the three, the two, the one; the
+        // crown's middle, the seed's, the ground's, the crown's top.
+        let cc = crown_centre();
+        let ground_y = ground_line().x;
+        let rows = [a, 0.0, -a, cc.y, s.y, ground_y, cc.y + 3.0 * a];
+        let hz = loop 7 with d = 100.0 { min(d, abs(p.y - rows[index()])) };
+        let c3 = paint(c2, guide(), max(stroke(hz, fine, px), stroke(abs(p.x), fine, px)) * 0.75);
+        // The crown's circle: three steps about its middle; the diamond's,
+        // one step about the origin.
+        let crown_d = abs(length(p - cc) - 3.0 * a);
+        let c4 = paint(c3, guide(), stroke(crown_d, fine * 1.4, px) * dashes(atan2(p.x - cc.x, p.y - cc.y) * 3.0 * a, 22.0));
+        let c5 = paint(c4, guide(), stroke(abs(length(p) - a), fine, px));
+        // The diamond.
+        let diamond = min(min(along(p, lattice_node(0), lattice_node(1)).x, along(p, lattice_node(0), lattice_node(2)).x),
+            min(along(p, lattice_node(1), lattice_node(4)).x, along(p, lattice_node(2), lattice_node(4)).x));
+        let c7 = paint(c5, build(), stroke(diamond, fine * 1.3, px));
+        // The outer branches' 3-4-5 triangles: three quarters out from the
+        // two, one step up, five quarters along the branch; right angles
+        // marked. The trunk is five quarters too.
+        let tri = loop 2 with d = 100.0 {
+            let side = if index() == 0 { -1.0 } else { 1.0 };
+            let n1 = lattice_node(if side < 0.0 { 1 } else { 2 });
+            let corner = n1 + vec2(side * 0.75 * a, 0.0);
+            let n3 = corner + vec2(0.0, a);
+            let q = 0.12 * a;
+            let sq = min(along(p, corner + vec2(0.0 - side * q, 0.0), corner + vec2(0.0 - side * q, q)).x, along(p, corner + vec2(0.0, q), corner + vec2(0.0 - side * q, q)).x);
+            min(d, min(min(along(p, n1, corner).x, along(p, corner, n3).x), sq))
+        };
+        let c8 = paint(c7, build(), stroke(tri, fine * 1.3, px));
+        // The crown's radii, from its middle to each of its nine.
+        let radii = loop 9 with d = 100.0 { min(d, along(p, cc, lattice_crown(index())).x) };
+        let c9 = paint(c8, build(), stroke(radii, hair * 1.2, px) * dashes(length(p - cc), 40.0) * 0.8);
+        // The angle at the crown's middle: from straight up to the last radius.
+        let ang = atan2(p.x - cc.x, p.y - cc.y);
+        let arc_on = if ang < 0.0 && ang > -1.04719755 { 1.0 } else { 0.0 };
+        let c10 = paint(c9, build(), stroke(abs(length(p - cc) - 0.9 * a), fine * 1.3, px) * arc_on);
+        // Every circle's outline: the seed, the nodes, the rings.
+        let nodes = loop 6 with d = 100.0 {
+            let i = index();
+            let r = if i == 0 { 11.0 * m } else if i < 3 { 9.0 * m } else { 7.0 * m };
+            min(d, abs(length(p - lattice_node(i)) - r))
+        };
+        let rings = loop 9 with d = 100.0 { min(d, abs(length(p - lattice_crown(index())) - 7.0 * m)) };
+        let outline = min(min(nodes, rings), abs(length(p - s) - 16.0 * m));
+        let c11 = paint(c10, build(), stroke(outline, fine, px));
+        // The lattice's points the nodes stand on, and the seed's middle.
+        let pts = loop 6 with d = 100.0 { min(d, length(p - lattice_node(index()))) };
+        let c12 = paint(c11, guide(), stroke(min(min(pts, length(p - s)), length(p - crown_centre())), 2.2 * px, px));
+        return vec4(c12.x, c12.y, c12.z, 1.0);
+    }
+}

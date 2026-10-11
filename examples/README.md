@@ -41,7 +41,7 @@ entelechy run examples/<example>/scene.esn --out output.ppm --watch
 - [showcase](showcase/README.md): a signed-distance gamepad under physically based shading, with a toolbar in logical pixels.
 - [darkroom](darkroom/README.md): a raw photograph developed with the image package: equalized, graded, sharpened, and a neon outline drawn from a signed distance field.
 - [nebula](nebula/README.md): a drift through a nebula made by the noise package, finished by the image package's camera look: glow, depth of field, tone and grain.
-- [logo](logo/README.md): Entelechy's logo, a constructed mark and a name drawn in strokes, every version from one Kernel.
+- [logo](logo/README.md): Entelechy's logo, a constructed mark and a name drawn in strokes, every version from one Kernel, and the mark's drawing sheet drawn from the same functions.
 
 ## Simulation and learning
 
