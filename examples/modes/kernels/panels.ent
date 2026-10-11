@@ -26,18 +26,31 @@ kernel modes.panels@1 {
 
     compute {
         let cell = domain() / vec2(3.0, 2.0);
-        let c = coord() + vec2(0.5, 0.5);
+        let c = coord() + 0.5;
         let column = floor(c.x / cell.x);
         let row = floor(c.y / cell.y);
         let k = int(row * 3.0 + column);
         // The cell less a gap on every side, so the panels stand apart.
-        let inner = cell - vec2(gap, gap) * 2.0;
-        let p = c - vec2(column, row) * cell - vec2(gap, gap);
+        let inner = cell - gap * 2.0;
+        let p = c - vec2(column, row) * cell - gap;
         let background = vec4(0.02, 0.02, 0.03, 1.0);
-        let e = if k == 0 { size(reduction) } else if k == 1 { size(maps) } else if k == 2 { size(outputs) } else if k == 3 { size(scatter) } else { size(off_frame) };
+        let e = match k {
+            0 => size(reduction),
+            1 => size(maps),
+            2 => size(outputs),
+            3 => size(scatter),
+            _ => size(off_frame),
+        };
         let f = fit(p, inner, vec2(float(e.x), float(e.y)));
         let a = f.at;
-        let color = if k == 0 { at(reduction, a) } else if k == 1 { at(maps, a) } else if k == 2 { at(outputs, a) } else if k == 3 { at(scatter, a) } else { at(off_frame, a) };
+        // Only the panel's own picture is read.
+        let color = match k {
+            0 => at(reduction, a),
+            1 => at(maps, a),
+            2 => at(outputs, a),
+            3 => at(scatter, a),
+            _ => at(off_frame, a),
+        };
         return if f.inside && k < 5 { vec4(color.rgb, 1.0) } else { background };
     }
 }

@@ -184,8 +184,8 @@ kernel physics.bounds@1 {
         let s = abs(sin(b.angle));
         let e = if b.shape == 0 { b.size } else { vec2(c * b.size.x + s * b.size.y, s * b.size.x + c * b.size.y) };
         let grow = margin + sweep(b, dt);
-        let lo = b.position - e - vec2(grow, grow);
-        let hi = b.position + e + vec2(grow, grow);
+        let lo = b.position - e - grow;
+        let hi = b.position + e + grow;
         return Bounds { lo: lo, hi: hi, first: cell_at(lo, origin, cell, columns, rows), last: cell_at(hi, origin, cell, columns, rows) };
     }
 }
@@ -454,10 +454,10 @@ fn incident(h: Vec2, p: Vec2, x: Vec2, y: Vec2, normal: Vec2) -> Clipped {
     let c0 = if along {
         if n.x >= 0.0 { vec2(h.x, -h.y) } else { vec2(-h.x, h.y) }
     } else {
-        if n.y >= 0.0 { vec2(h.x, h.y) } else { vec2(-h.x, -h.y) }
+        if n.y >= 0.0 { h } else { -h }
     };
     let c1 = if along {
-        if n.x >= 0.0 { vec2(h.x, h.y) } else { vec2(-h.x, -h.y) }
+        if n.x >= 0.0 { h } else { -h }
     } else {
         if n.y >= 0.0 { vec2(-h.x, h.y) } else { vec2(h.x, -h.y) }
     };
@@ -486,7 +486,7 @@ fn boxes(a: Body, b: Body, margin: Float) -> Touch {
     if max(max(face_a.x, face_a.y), max(face_b.x, face_b.y)) > margin { return apart(); }
     // 0, 1: a face of `a` along its x or y; 2, 3: of `b`.
     let s0 = face_a.x;
-    let axis1 = if face_a.y > 0.95 * s0 + 0.01 * ha.y { 1 } else { 0 };
+    let axis1 = int(face_a.y > 0.95 * s0 + 0.01 * ha.y);
     let s1 = if axis1 == 1 { face_a.y } else { s0 };
     let axis2 = if face_b.x > 0.95 * s1 + 0.01 * hb.x { 2 } else { axis1 };
     let s2 = if axis2 == 2 { face_b.x } else { s1 };
@@ -514,7 +514,7 @@ fn boxes(a: Body, b: Body, margin: Float) -> Touch {
     let m1 = two.v1 - front_normal * (0.5 * t1);
     let keep0 = t0 <= margin;
     let keep1 = t1 <= margin;
-    let count = (if keep0 { 1 } else { 0 }) + (if keep1 { 1 } else { 0 });
+    let count = int(keep0) + int(keep1);
     return Touch {
         normal: normal,
         count: count,
@@ -534,7 +534,7 @@ fn touch(a: Body, b: Body, margin: Float) -> Touch {
             Touch { ..f, normal: -f.normal }
         }
     };
-    return Touch { ..t, count: if t.s1 <= margin { 1 } else { 0 } };
+    return Touch { ..t, count: int(t.s1 <= margin) };
 }
 
 // A point held by both bodies where they touch.
@@ -610,7 +610,7 @@ kernel physics.collide@1 {
             a: pair.a,
             b: pair.b,
             count: t.count,
-            sensor: if sensor { 1 } else { 0 },
+            sensor: int(sensor),
             normal: n,
             p1: carried(holding(a, b, t.c1, t.s1, n), was, n, near, round),
             p2: carried(holding(a, b, t.c2, t.s2, n), was, n, near, round),
@@ -872,7 +872,7 @@ kernel physics.push@1 {
     compute {
         let b = sample(bodies);
         let p = sample(pushes);
-        return Body { ..b, velocity: b.velocity + vec2(p.x, p.y), spin: b.spin + p.z };
+        return Body { ..b, velocity: b.velocity + p.xy, spin: b.spin + p.z };
     }
 }
 

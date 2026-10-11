@@ -61,7 +61,7 @@ kernel level.draw@1 {
         // The map, centred and scaled to fit, a tile a square.
         let side = min(res.x / map.x, res.y / map.y) * zoom;
         let origin = (res - map * side) * 0.5;
-        let cell = (coord() + vec2(0.5, 0.5) - origin) / side;
+        let cell = (coord() + 0.5 - origin) / side;
         let inside = cell.x >= 0.0 && cell.y >= 0.0 && cell.x < map.x && cell.y < map.y;
         let x = clamp(int(cell.x), 0, w - 1);
         let y = clamp(int(cell.y), 0, h - 1);
@@ -86,7 +86,7 @@ kernel level.draw@1 {
             }
         };
         let shown = if known { lit } else { vec3(0.35, 0.05, 0.08) };
-        return vec4(shown.x, shown.y, shown.z, 1.0);
+        return vec4(shown, 1.0);
     }
 }
 

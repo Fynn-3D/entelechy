@@ -195,7 +195,7 @@ kernel flock.crowded@1 {
     input counts: Rows<Int>;
     param cap: Int = 64;
     output result: Rows<Int>;
-    compute { return if sample(counts) > cap { 1 } else { 0 }; }
+    compute { return int(sample(counts) > cap); }
     merge(a, b) { return a + b; }
 }
 
@@ -248,9 +248,9 @@ kernel flock.view@1 {
     param bright: Float = 0.30;
     output result: Image;
     compute {
-        let p = (coord() + vec2(0.5, 0.5)) / domain() * size(heat);
+        let p = (coord() + 0.5) / domain() * size(heat);
         let n = at_linear(heat, p);
-        let lit = 1.0 - exp(0.0 - n * bright);
+        let lit = 1.0 - exp(-n * bright);
         let tint = mix(vec3(0.10, 0.13, 0.26), vec3(0.99, 0.86, 0.52), lit);
         return vec4(tint * (0.10 + 0.90 * lit), 1.0);
     }

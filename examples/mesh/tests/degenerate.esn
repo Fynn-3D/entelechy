@@ -60,7 +60,7 @@ node flat: kernel {
     output result: Rows<Int>;
     compute {
         let ids = [sample(a).id, sample(b).id, sample(c).id, sample(d).id];
-        let wrong = [each 4 { if ids[index()] >= 0 && ids[index()] % 3 != 0 { 1 } else { 0 } }];
+        let wrong = [each 4 { int(ids[index()] >= 0 && ids[index()] % 3 != 0) }];
         return wrong[0] + wrong[1] + wrong[2] + wrong[3];
     }
     merge(a, b) { return a + b; }
@@ -91,7 +91,7 @@ node drawn: kernel {
     requires { field.read; field.write; }
     input a: GBuffer <- whole.surface;
     output result: Rows<Int>;
-    compute { return if sample(a).id >= 0 { 1 } else { 0 }; }
+    compute { return int(sample(a).id >= 0); }
     merge(a, b) { return a + b; }
 }
 

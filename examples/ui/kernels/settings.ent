@@ -85,7 +85,7 @@ kernel demo.settings@1 {
         let on_slider = (n.along * rect_size(option_list()).x - value_left()) / (value_width() - 22.0);
         return match n.row {
             0 => Settings { ..s, difficulty: stepped(s.difficulty, n.by, 0, 2) },
-            1 => Settings { ..s, volume: if n.confirm && n.pointed == 1 { clamp(on_slider, 0.0, 1.0) } else { slid(s.volume, n.by, 0.1) } },
+            1 => Settings { ..s, volume: if n.confirm && n.pointed == 1 { saturate(on_slider) } else { slid(s.volume, n.by, 0.1) } },
             2 => Settings { ..s, subtitles: if turn { !s.subtitles } else { s.subtitles } },
             3 => Settings { ..s, hints: if turn { !s.hints } else { s.hints } },
             _ => Settings { ..s, applied_t: if n.confirm { time() } else { s.applied_t } }
@@ -138,7 +138,7 @@ fn hero(t: Theme, letters: Grid<Float>, words: Rows<Int>, now: Float, q: Vec2) -
     let cycle = fract(now / 4.0) * 4.0;
     let hit = cycle >= 2.0;
     let full = if hit { 0.5 } else { 0.8 };
-    let trail = if hit { mix(0.8, 0.5, clamp((cycle - 2.0) / 0.8, 0.0, 1.0)) } else { full };
+    let trail = if hit { mix(0.8, 0.5, saturate((cycle - 2.0) / 0.8)) } else { full };
     let health = over(label(letters, words, word_health(), w, Rect { lo: vec2(inner.lo.x, 42.0), hi: vec2(inner.hi.x, 50.0) }, vec2(0.0, 0.5), t.scale, t.dim, q),
         meter(t, Rect { lo: vec2(inner.lo.x, 53.0), hi: vec2(inner.hi.x, 59.0) }, full, trail, vec4(0.85, 0.25, 0.22, 1.0), vec4(1.0, 0.85, 0.6, 1.0), q));
     let magick = over(label(letters, words, word_magick(), w, Rect { lo: vec2(inner.lo.x, 64.0), hi: vec2(inner.hi.x, 72.0) }, vec2(0.0, 0.5), t.scale, t.dim, q),
@@ -167,12 +167,12 @@ kernel demo.view@1 {
     compute {
         let w = window();
         let k = pixels_per(w);
-        let q = (coord() + vec2(0.5, 0.5)) / k - screen_offset(w);
+        let q = (coord() + 0.5) / k - screen_offset(w);
         let s = at(settings, 0);
         let n = at(nav, 0);
         let t = theme_dusk();
         let now = time();
-        let sky = mix(vec3(0.16, 0.2, 0.32), vec3(0.42, 0.3, 0.32), clamp(q.y / logical().y, 0.0, 1.0));
+        let sky = mix(vec3(0.16, 0.2, 0.32), vec3(0.42, 0.3, 0.32), saturate(q.y / logical().y));
         let wt = text_width();
         let settings_ = titled_panel(t, letters, words, word_settings(), wt, settings_panel(), 2.0, q);
         let rows = if near_rect(option_list(), q, 10.0) && q.y >= option_list().lo.y && q.y < option_list().hi.y { option_row(t, letters, words, s, n, int(floor((q.y - option_list().lo.y) / row_pitch())), q) } else { clear() };
@@ -183,6 +183,6 @@ kernel demo.view@1 {
             over(key_cap(t, letters, words, word_enter(), wt, true, vec2(220.0, bottom), q), key_cap(t, letters, words, word_esc(), wt, true, vec2(262.0, bottom), q)));
         let screen = over(over(over(over(settings_, rows), note), hero(t, letters, words, now, q)), prompts);
         let c = onto(sky, screen);
-        return vec4(c.x, c.y, c.z, 1.0);
+        return vec4(c, 1.0);
     }
 }

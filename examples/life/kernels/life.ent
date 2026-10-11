@@ -14,8 +14,8 @@ kernel life.seed@1 {
     fn hash(p: Vec2) -> Float {
         // Sin-free so the CPU and GPU agree on every cell.
         let q = fract(p * vec2(0.1031, 0.1030));
-        let d = dot(q, vec2(q.y, q.x) + vec2(33.33, 33.33));
-        let r = q + vec2(d, d);
+        let d = dot(q, q.yx + 33.33);
+        let r = q + d;
         return fract((r.x + r.y) * (r.x - r.y + 1.0));
     }
 
@@ -36,16 +36,19 @@ kernel life.step@1 {
     param brush: Float = 2.0;
     output result: Cells;
 
-    fn alive_at(x: Float, y: Float) -> Int {
-        return if at(previous, vec2(x, y)).alive { 1 } else { 0 };
+    fn alive_at(p: Vec2) -> Int {
+        return int(at(previous, p).alive);
     }
 
     compute {
         let c = coord();
         let me = sample(previous);
-        let n = alive_at(c.x - 1.0, c.y - 1.0) + alive_at(c.x, c.y - 1.0) + alive_at(c.x + 1.0, c.y - 1.0)
-              + alive_at(c.x - 1.0, c.y) + alive_at(c.x + 1.0, c.y)
-              + alive_at(c.x - 1.0, c.y + 1.0) + alive_at(c.x, c.y + 1.0) + alive_at(c.x + 1.0, c.y + 1.0);
+        // The live cells of the eight around it: the three by three
+        // block, less its middle.
+        let n = loop 9 with sum = 0 {
+            let offset = vec2(float(index() % 3), float(index() / 3)) - 1.0;
+            sum + if index() == 4 { 0 } else { alive_at(c + offset) }
+        };
         let survives = me.alive && (n == 2 || n == 3);
         let born = !me.alive && n == 3;
         let painted = pointer_down() && length(c - pointer()) <= brush;
@@ -65,7 +68,7 @@ kernel life.show@1 {
         let dead = vec3(0.07, 0.09, 0.14);
         let fresh = vec3(1.0, 0.85, 0.45);
         let old = vec3(0.55, 0.75, 0.95);
-        let color = if cell.alive { mix(fresh, old, clamp(float(cell.age) / 20.0, 0.0, 1.0)) } else { dead };
-        return vec4(color.x, color.y, color.z, 1.0);
+        let color = if cell.alive { mix(fresh, old, saturate(float(cell.age) / 20.0)) } else { dead };
+        return vec4(color, 1.0);
     }
 }

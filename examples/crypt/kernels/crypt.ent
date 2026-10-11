@@ -30,7 +30,7 @@ fn torch_at(k: Int) -> Vec3 {
 
 /// The chamber at a voxel: `open` its vault open to the sky.
 fn chamber_at(c: IVec3, open: Bool) -> Int {
-    let m = (vec3(float(c.x), float(c.y), float(c.z)) + vec3(0.5, 0.5, 0.5)) * grain() - vec3(6.0, 0.0, 6.0);
+    let m = (vec3(float(c.x), float(c.y), float(c.z)) + 0.5) * grain() - vec3(6.0, 0.0, 6.0);
     let pool = m.x > 2.5 && m.z > 2.5 && m.x < 5.0 && m.z < 5.0;
     if m.y < 0.5 { return if pool && m.y >= 0.25 { 0 } else if fract(m.x * 0.8) < 0.08 || fract(m.z * 0.8) < 0.08 { 3 } else { 1 }; }
     if pool && m.y < 0.75 { return 4; }
@@ -44,7 +44,7 @@ fn chamber_at(c: IVec3, open: Bool) -> Int {
         if length(d) < 0.2 { 5 } else if abs(d.x) < 0.1 && abs(d.z) < 0.1 && d.y < -0.1 && d.y > -0.5 { 6 } else { 0 }
     };
     if torch != 0 { return torch; }
-    let pillar = length(abs(vec2(m.x, m.z)) - vec2(3.0, 3.0)) < 0.45 && !(m.x > 2.0 && m.z > 2.0);
+    let pillar = length(abs(vec2(m.x, m.z)) - 3.0) < 0.45 && !(m.x > 2.0 && m.z > 2.0);
     return if pillar { 3 } else { 0 };
 }
 
@@ -85,18 +85,18 @@ kernel crypt.draw@1 {
         let t = time();
         let dims = domain();
         let cam = voxel_orbit(vec3(0.0, 1.5, 0.0), t * 0.3 + 0.6, 0.35, 6.0, dims.y * 0.9);
-        let dir = voxel_ray(cam, coord() + vec2(0.5, 0.5), dims);
+        let dir = voxel_ray(cam, coord() + 0.5, dims);
         let room = VoxelBox { base: vec3(0.0, 0.0, 0.0), n: chamber(), size: grain(), foot: vec3(0.0, 0.0, 0.0), turn: 0.0 };
         let figure = VoxelBox { base: vec3(0.0, 0.0, 0.0), n: vec3(16.0, 24.0, 16.0), size: 0.1, foot: vec3(0.0, 0.5, 0.0), turn: t * 0.8 };
         // By day the water is seen through.
         let pass = if open != 0 { ivec2(4, 4) } else { ivec2(1, 0) };
         let met = voxel_nearer(voxel_meet_past(chamber, room, cam.eye, dir, 0.3, pass), voxel_meet(statue, figure, cam.eye, dir, 0.0));
         if met.id == 0 {
-            let sky = mix(vec3(0.75, 0.82, 0.92), vec3(0.35, 0.5, 0.8), clamp(dir.y, 0.0, 1.0));
-            return if open != 0 { vec4(sky.x, sky.y, sky.z, 1.0) } else { vec4(0.0, 0.0, 0.0, 1.0) };
+            let sky = mix(vec3(0.75, 0.82, 0.92), vec3(0.35, 0.5, 0.8), saturate(dir.y));
+            return if open != 0 { vec4(sky, 1.0) } else { vec4(0.0, 0.0, 0.0, 1.0) };
         }
         let p = cam.eye + dir * met.t;
-        if glows(met.id) { let g = crypt_color(met.id) * 1.1; return vec4(g.x, g.y, g.z, 1.0); }
+        if glows(met.id) { let g = crypt_color(met.id) * 1.1; return vec4(g, 1.0); }
         if open != 0 {
             let sun = normalize(vec3(0.4, 0.8, 0.3));
             let at = voxel_local(p + met.face * 0.01, vec3(0.0, 0.0, 0.0), 0.0, grain()) + vec3(24.0, 0.0, 24.0);
@@ -104,13 +104,13 @@ kernel crypt.draw@1 {
             let day = voxel_daylight(met.face, sun, shaded, vec3(0.4, 0.46, 0.6), vec3(0.95, 0.85, 0.65));
             let lit = crypt_color(met.id) * voxel_stepped(day, 7.0);
             let far = voxel_haze(lit, met.t, 0.05, vec3(0.75, 0.8, 0.88));
-            return vec4(far.x, far.y, far.z, 1.0);
+            return vec4(far, 1.0);
         }
         let flicker = voxel_flicker(t, p);
         let torches = loop 4 with sum = vec3(0.0, 0.0, 0.0) { sum + voxel_light(p, met.face, VoxelLight { at: torch_at(index()), reach: 7.0, color: vec3(1.0, 0.62, 0.3) }) * flicker };
         let lantern = voxel_light(p, met.face, VoxelLight { at: vec3(cos(t) * 3.5, 1.2, sin(t) * 3.5), reach: 6.0, color: vec3(0.9, 0.85, 0.7) });
         let light = voxel_stepped(vec3(0.04, 0.045, 0.07) + torches + lantern, 7.0);
         let seen = voxel_dark(crypt_color(met.id) * light, met.t, 14.0);
-        return vec4(seen.x, seen.y, seen.z, 1.0);
+        return vec4(seen, 1.0);
     }
 }

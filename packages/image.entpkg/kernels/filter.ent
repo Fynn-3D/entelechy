@@ -17,12 +17,12 @@ kernel image.blur@1 {
     output result: Image;
     compute {
         let scale = size(source) / domain();
-        let p = (coord() + vec2(0.5, 0.5)) * scale;
+        let p = (coord() + 0.5) * scale;
         let reach = int(ceil(3.0 * sigma));
         let spread = 2.0 * max(sigma, 0.0001) * max(sigma, 0.0001);
         let total = loop 2 * reach + 1 with w = Weighed { sum: vec4(0.0, 0.0, 0.0, 0.0), weight: 0.0 } {
             let k = float(index() - reach);
-            let g = exp(0.0 - k * k / spread);
+            let g = exp(-k * k / spread);
             Weighed { sum: w.sum + at_linear(source, p + axis * scale * k) * g, weight: w.weight + g }
         };
         return total.sum / total.weight;
@@ -42,7 +42,7 @@ kernel image.shrink@1 {
         let step = scale / vec2(float(n.x), float(n.y));
         let sum = loop n.x * n.y with s = vec4(0.0, 0.0, 0.0, 0.0) {
             let i = index();
-            s + at_linear(source, corner + step * (vec2(float(i % n.x), float(i / n.x)) + vec2(0.5, 0.5)))
+            s + at_linear(source, corner + step * (vec2(float(i % n.x), float(i / n.x)) + 0.5))
         };
         return sum / float(n.x * n.y);
     }
@@ -76,24 +76,24 @@ kernel image.sharpen@1 {
     output result: Image;
     compute {
         let s = sample(source);
-        let uv = (coord() + vec2(0.5, 0.5)) / domain();
+        let uv = (coord() + 0.5) / domain();
         let b = at_linear(blurred, uv * size(blurred));
         let c = s.xyz + (s.xyz - b.xyz) * amount;
-        return vec4(c.x, c.y, c.z, s.w);
+        return vec4(c, s.w);
     }
 }
 
 /// The Sobel gradient of the source's luminance at `c`: how fast it
 /// grows along x and along y.
 fn sobel(source: Image, c: Vec2) -> Vec2 {
-    let a = luminance(at(source, c + vec2(-1.0, -1.0)).xyz);
+    let a = luminance(at(source, c - 1.0).xyz);
     let b = luminance(at(source, c + vec2(0.0, -1.0)).xyz);
     let d = luminance(at(source, c + vec2(1.0, -1.0)).xyz);
     let e = luminance(at(source, c + vec2(-1.0, 0.0)).xyz);
     let f = luminance(at(source, c + vec2(1.0, 0.0)).xyz);
     let g = luminance(at(source, c + vec2(-1.0, 1.0)).xyz);
     let h = luminance(at(source, c + vec2(0.0, 1.0)).xyz);
-    let k = luminance(at(source, c + vec2(1.0, 1.0)).xyz);
+    let k = luminance(at(source, c + 1.0).xyz);
     return vec2((d + 2.0 * f + k) - (a + 2.0 * e + g), (g + 2.0 * h + k) - (a + 2.0 * b + d));
 }
 
@@ -145,7 +145,7 @@ kernel image.resize@1 {
     input source: Image;
     output result: Image;
     compute {
-        let p = (coord() + vec2(0.5, 0.5)) * size(source) / domain() - vec2(0.5, 0.5);
+        let p = (coord() + 0.5) * size(source) / domain() - 0.5;
         let base = floor(p);
         let wx = cubic_weights(p.x - base.x);
         let wy = cubic_weights(p.y - base.y);

@@ -34,30 +34,30 @@ fn soft_noise(x: Float, s: Int) -> Float {
     return mix(hash1(int(i), s) * 2.0 - 1.0, hash1(int(i) + 1, s) * 2.0 - 1.0, f * f * (3.0 - 2.0 * f));
 }
 
-fn envelope(t: Float, a: Float, d: Float) -> Float { return if t < 0.0 { 0.0 } else if t < a { t / a } else { exp(0.0 - (t - a) / d) }; }
+fn envelope(t: Float, a: Float, d: Float) -> Float { return if t < 0.0 { 0.0 } else if t < a { t / a } else { exp(-(t - a) / d) }; }
 
 fn tone(f: Float, t: Float) -> Float { return sin(tau() * fract(f * t)); }
 
 /// A thud: a low tone falling from `base` + 150 Hz to `base`.
 fn thud(t: Float, base: Float) -> Float {
     if t < 0.0 { return 0.0; }
-    return sin(tau() * fract(base * t + 150.0 * (1.0 - exp(0.0 - t * 30.0)) / 30.0)) * exp(0.0 - t * 12.0);
+    return sin(tau() * fract(base * t + 150.0 * (1.0 - exp(-t * 30.0)) / 30.0)) * exp(-t * 12.0);
 }
 
 /// A metal ring: a tone at `f` rung by one at `ratio` times it.
 fn clang(f: Float, ratio: Float, t: Float, d: Float) -> Float {
     if t < 0.0 { return 0.0; }
-    return sin(tau() * fract(f * t) + 3.0 * exp(0.0 - t * 8.0) * sin(tau() * fract(f * ratio * t))) * exp(0.0 - t / d);
+    return sin(tau() * fract(f * t) + 3.0 * exp(-t * 8.0) * sin(tau() * fract(f * ratio * t))) * exp(-t / d);
 }
 
 fn bell(f: Float, t: Float) -> Float {
     if t < 0.0 { return 0.0; }
-    return sin(tau() * fract(f * t) + 1.2 * exp(0.0 - t * 4.0) * sin(tau() * fract(f * 2.76 * t))) * exp(0.0 - t * 4.0);
+    return sin(tau() * fract(f * t) + 1.2 * exp(-t * 4.0) * sin(tau() * fract(f * 2.76 * t))) * exp(-t * 4.0);
 }
 
 fn pluck(f: Float, t: Float) -> Float {
     if t < 0.0 { return 0.0; }
-    return (tone(f, t) * exp(0.0 - t * 3.0) + tone(f * 2.0, t) * 0.5 * exp(0.0 - t * 6.0) + tone(f * 3.0, t) * 0.25 * exp(0.0 - t * 10.0)) * 0.5;
+    return (tone(f, t) * exp(-t * 3.0) + tone(f * 2.0, t) * 0.5 * exp(-t * 6.0) + tone(f * 3.0, t) * 0.25 * exp(-t * 10.0)) * 0.5;
 }
 
 /// A horn's note: a few harmonics swelling in, held, let go at `len`.
@@ -70,7 +70,7 @@ fn horn(f: Float, t: Float, len: Float) -> Float {
 /// A drum: a skin's low boom and the stick's slap.
 fn drum(t: Float, n: Int, base: Float) -> Float {
     if t < 0.0 { return 0.0; }
-    return thud(t, base) + white(n, 7) * exp(0.0 - t * 45.0) * 0.35;
+    return thud(t, base) + white(n, 7) * exp(-t * 45.0) * 0.35;
 }
 
 /// The clock before the first block, which `synth.clock` counts on from:
@@ -78,7 +78,7 @@ fn drum(t: Float, n: Int, base: Float) -> Float {
 kernel synth.clock_start@1 {
     requires { field.write; }
     output result: Clocks;
-    compute { return Clock { n: 0 - block() }; }
+    compute { return Clock { n: -block() }; }
 }
 
 /// The clock a block on.

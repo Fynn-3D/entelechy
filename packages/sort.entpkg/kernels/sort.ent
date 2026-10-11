@@ -55,7 +55,7 @@ kernel sort.zeros@1 {
     output result: Rows<Int>;
     prefix with sum {
         let key = at(keys, sample(order));
-        return if ((key >>> at(bit, 0)) & 1) == 0 { 1 } else { 0 };
+        return int(((key >>> at(bit, 0)) & 1) == 0);
     }
 }
 

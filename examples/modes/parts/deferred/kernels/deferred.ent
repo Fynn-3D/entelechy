@@ -42,7 +42,7 @@ kernel deferred.surface@1 {
     output depth: Grid<Float>;
     compute {
         let size = domain();
-        let uv = (coord() + vec2(0.5, 0.5) - size * 0.5) / size.y;
+        let uv = (coord() + 0.5 - size * 0.5) / size.y;
         let eye = vec3(sin(turn) * 5.0, 1.6, -cos(turn) * 5.0);
         let forward = normalize(vec3(0.0, 0.7, 0.0) - eye);
         let right = normalize(cross(vec3(0.0, 1.0, 0.0), forward));
@@ -88,7 +88,7 @@ kernel deferred.outline@1 {
         let w = 1.0 / at(depth, c);
         let across = 1.0 / at(depth, c + ivec2(1, 0)) + 1.0 / at(depth, c - ivec2(1, 0)) - 2.0 * w;
         let down = 1.0 / at(depth, c + ivec2(0, 1)) + 1.0 / at(depth, c - ivec2(0, 1)) - 2.0 * w;
-        return if abs(across) + abs(down) > jump * w { 1.0 } else { 0.0 };
+        return float(abs(across) + abs(down) > jump * w);
     }
 }
 

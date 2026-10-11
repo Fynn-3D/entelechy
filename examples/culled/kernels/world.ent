@@ -47,7 +47,7 @@ kernel world.fly@1 {
     output result: Rows<Camera>;
 
     fn held(code: Int) -> Float {
-        return if key(code) { 1.0 } else { 0.0 };
+        return float(key(code));
     }
 
     compute {
@@ -102,12 +102,12 @@ kernel world.visible@1 {
         let cz = (float(i / cols) + 0.5) * cell - half;
         let radius = cell * 0.75;
         let forward = vec2(sin(cam.heading), cos(cam.heading));
-        let right = vec2(cos(cam.heading), 0.0 - sin(cam.heading));
+        let right = vec2(cos(cam.heading), -sin(cam.heading));
         let away = vec2(cx - cam.x, cz - cam.z);
         let ahead = dot(away, forward);
         let aside = abs(dot(away, right));
-        return if ahead > 0.0 - radius && ahead < reach + radius
-            && aside < ahead * spread + radius * 1.5 { 1 } else { 0 };
+        return int(ahead > -radius && ahead < reach + radius
+            && aside < ahead * spread + radius * 1.5);
     }
 }
 
@@ -184,7 +184,7 @@ kernel world.project@1 {
         let v = sample(mesh);
         let away = vec2(v.position.x - cam.x, v.position.z - cam.z);
         let forward = vec2(sin(cam.heading), cos(cam.heading));
-        let right = vec2(cos(cam.heading), 0.0 - sin(cam.heading));
+        let right = vec2(cos(cam.heading), -sin(cam.heading));
         let view = vec3(dot(away, right), v.position.y - cam.height, dot(away, forward));
         let f = 1.2;
         let near = 0.02;
@@ -215,7 +215,7 @@ kernel world.shade@1 {
         let cam = at(camera, 0);
         let sky = mix(vec3(0.50, 0.62, 0.78), vec3(0.14, 0.20, 0.34), coord().y / domain().y);
         let lit = max(dot(normalize(s.normal), normalize(vec3(0.4, 0.75, 0.5))), 0.0);
-        let away = clamp(length(s.uv - vec2(cam.x, cam.z)) / reach, 0.0, 1.0);
+        let away = saturate(length(s.uv - vec2(cam.x, cam.z)) / reach);
         let ground = mix(vec3(0.30, 0.40, 0.24) * (0.25 + 0.75 * lit), sky, away * away * away);
         return vec4(if s.id < 0 { sky } else { ground }, 1.0);
     }

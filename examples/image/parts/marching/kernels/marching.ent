@@ -39,12 +39,12 @@ fn segments(case: Int) -> [Int; 4] {
 
 // Where the level crosses between two corner values, 0 to 1.
 fn cross(a: Float, b: Float, level: Float) -> Float {
-    return clamp((level - a) / (b - a), 0.0, 1.0);
+    return saturate((level - a) / (b - a));
 }
 
 fn to_segment(p: Vec2, a: Vec2, b: Vec2) -> Float {
     let ab = b - a;
-    let t = clamp(dot(p - a, ab) / max(dot(ab, ab), 0.000001), 0.0, 1.0);
+    let t = saturate(dot(p - a, ab) / max(dot(ab, ab), 0.000001));
     return length(p - (a + ab * t));
 }
 

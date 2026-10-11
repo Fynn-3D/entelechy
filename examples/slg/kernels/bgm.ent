@@ -28,16 +28,12 @@ kernel bgm.play@1 {
 
     // A sixteen-step melody in semitones above A3, and a bass line under it.
     fn lead_note(step: Int) -> Float {
-        let s = step % 16;
-        return if s == 0 { 0.0 } else if s == 1 { 4.0 } else if s == 2 { 7.0 } else if s == 3 { 12.0 }
-            else if s == 4 { 7.0 } else if s == 5 { 4.0 } else if s == 6 { 0.0 } else if s == 7 { 2.0 }
-            else if s == 8 { 4.0 } else if s == 9 { 7.0 } else if s == 10 { 9.0 } else if s == 11 { 12.0 }
-            else if s == 12 { 9.0 } else if s == 13 { 7.0 } else if s == 14 { 4.0 } else { 2.0 };
+        return [0.0, 4.0, 7.0, 12.0, 7.0, 4.0, 0.0, 2.0, 4.0, 7.0, 9.0, 12.0, 9.0, 7.0, 4.0, 2.0][step % 16];
     }
 
+    // A bar each of A2, C#3, E3 and D3.
     fn bass_note(step: Int) -> Float {
-        let bar = (step / 4) % 4;
-        return if bar == 0 { -12.0 } else if bar == 1 { -8.0 } else if bar == 2 { -5.0 } else { -7.0 };
+        return [-12.0, -8.0, -5.0, -7.0][(step / 4) % 4];
     }
 
     fn pitch(semitones: Float) -> Float {
@@ -58,7 +54,7 @@ kernel bgm.play@1 {
         let envelope = 1.0 - within * 0.6;
         // A strike this frame starts the hit: noise that dies in a sixth of a second.
         let g = at(game, 0);
-        let hit_start = if g.order == 2 { 1.0 } else { last.hit };
+        let hit_start = if g.order == Order.Attack { 1.0 } else { last.hit };
         let hit = max(hit_start - float(element() + 1) / (hz() * 0.16), 0.0);
         let noise = white(n, 3) * hit * hit;
         let mixed = (square * envelope * 0.5 + triangle * 0.4) * gain + noise * 0.25;

@@ -16,7 +16,7 @@ kernel image.seeds@1 {
     compute {
         let m = sample(mask);
         let on = luminance(m.xyz) * m.w > threshold;
-        let c = coord() + vec2(0.5, 0.5);
+        let c = coord() + 0.5;
         return if on == inside { vec4(c.x, c.y, 1.0, 0.0) } else { vec4(0.0, 0.0, 0.0, 0.0) };
     }
 }
@@ -49,12 +49,12 @@ kernel image.flood@1 {
     input step: Rows<Int>;
     output result: Image;
     compute {
-        let here = coord() + vec2(0.5, 0.5);
+        let here = coord() + 0.5;
         let s = float(at(step, 0));
         return loop 9 with best = sample(seeds) {
             let o = vec2(float(index() % 3 - 1), float(index() / 3 - 1)) * s;
             let q = here + o;
-            let other = at(seeds, q - vec2(0.5, 0.5));
+            let other = at(seeds, q - 0.5);
             let inside = q.x >= 0.0 && q.y >= 0.0 && q.x < size(seeds).x && q.y < size(seeds).y;
             let closer = best.z < 0.5 || distance(other.xy, here) < distance(best.xy, here);
             if inside && other.z > 0.5 && closer { other } else { best }
@@ -75,7 +75,7 @@ kernel image.distance@1 {
     param reach: Float = 1000.0;
     output result: Grid<Float>;
     compute {
-        let here = coord() + vec2(0.5, 0.5);
+        let here = coord() + 0.5;
         let a = sample(inside);
         let b = sample(outside);
         let to_shape = if a.z > 0.5 { distance(a.xy, here) } else { reach };

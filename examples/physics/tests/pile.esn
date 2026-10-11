@@ -47,7 +47,7 @@ node out: kernel {
     output result: Rows<Int>;
     compute {
         let b = sample(bodies);
-        return if b.shape == 0 && (b.position.y < 0.0 || abs(b.position.x) > 3.0) { 1 } else { 0 };
+        return int(b.shape == 0 && (b.position.y < 0.0 || abs(b.position.x) > 3.0));
     }
     merge(a, b) { return a + b; }
 }

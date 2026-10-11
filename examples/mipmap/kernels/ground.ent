@@ -34,13 +34,13 @@ kernel ground.quad@1 {
         let near = i < 2;
         let left = i % 2 == 0;
         let along = if near { 2.0 } else { reach };
-        let x = (if left { 0.0 - 1.0 } else { 1.0 }) * along;
+        let x = (if left { -1.0 } else { 1.0 }) * along;
         let z = if near { 1.2 } else { reach };
         let f = 1.9;
         let far = reach;
         let near_plane = 0.2;
         return Vertex {
-            clip: vec4(x * f / 1.7778, 0.0 - 1.0 * f,
+            clip: vec4(x * f / 1.7778, -1.0 * f,
                        z * far / (far - near_plane) - near_plane * far / (far - near_plane), z),
             normal: vec3(0.0, 1.0, 0.0),
             uv: vec2(x * 0.5, z * 0.5),

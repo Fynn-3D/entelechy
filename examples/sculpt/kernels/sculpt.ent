@@ -54,7 +54,7 @@ kernel sculpt.brush@1 {
         let dir = voxel_ray(cam, pointer(), window());
         let b = voxel_view_box(n);
         let met = voxel_meet(volume, b, cam.eye, dir, 0.0);
-        let cell = voxel_cell(b, cam.eye, dir, met) + vec3(0.5, 0.5, 0.5);
+        let cell = voxel_cell(b, cam.eye, dir, met) + 0.5;
         if met.id == 0 { return voxel_sphere(cell, -1.0, 0); }
         return if button(0) { voxel_sphere(cell, radius, 0) } else if button(1) { voxel_sphere(cell + met.face, radius, 2) } else { voxel_sphere(cell, -1.0, 0) };
     }

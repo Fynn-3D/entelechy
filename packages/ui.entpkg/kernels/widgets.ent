@@ -90,7 +90,7 @@ fn push_button(t: Theme, letters: Grid<Float>, cells: Rows<Int>, row: Int, width
     let cast = if state == pressed() { clear() } else { shadow(r, t.radius, vec2(0.0, 2.0), 2.0, 0.4, q) };
     let ink = if state == disabled() { t.dim } else if state == idle() { t.ink } else { t.accent };
     let word = label(letters, cells, row, width, body, vec2(0.5, 0.5), t.scale, ink, q);
-    return over(over(over(cast, fill(body, t.radius, vec4(face.x, face.y, face.z, max(face.w, 0.9)), q)), outline(body, t.radius, 1.0, rim, q)), word);
+    return over(over(over(cast, fill(body, t.radius, vec4(face.xyz, max(face.w, 0.9)), q)), outline(body, t.radius, 1.0, rim, q)), word);
 }
 
 /// A switch: a pill with its knob at the right and lit when on.
@@ -118,7 +118,7 @@ fn checkbox(t: Theme, r: Rect, checked: Bool, state: Int, q: Vec2) -> Vec4 {
 fn slider(t: Theme, r: Rect, value: Float, state: Int, q: Vec2) -> Vec4 {
     let h = r.hi.y - r.lo.y;
     if !near_rect(r, q, h) { return clear(); }
-    let v = clamp(value, 0.0, 1.0);
+    let v = saturate(value);
     let mid = rect_middle(r).y;
     let track = Rect { lo: vec2(r.lo.x, mid - 2.0), hi: vec2(r.hi.x, mid + 2.0) };
     let x = r.lo.x + (r.hi.x - r.lo.x) * v;
@@ -136,8 +136,8 @@ fn meter(t: Theme, r: Rect, full: Float, trail: Float, color: Vec4, trail_color:
     let w = r.hi.x - r.lo.x;
     let inner = inset(r, 1.0);
     let case_ = fill(r, 1.0, vec4(0.0, 0.0, 0.0, 0.6), q);
-    let lost = fill(Rect { lo: inner.lo, hi: vec2(inner.lo.x + (w - 2.0) * clamp(max(trail, full), 0.0, 1.0), inner.hi.y) }, 0.0, trail_color, q);
-    let kept = fill(Rect { lo: inner.lo, hi: vec2(inner.lo.x + (w - 2.0) * clamp(full, 0.0, 1.0), inner.hi.y) }, 0.0, color, q);
+    let lost = fill(Rect { lo: inner.lo, hi: vec2(inner.lo.x + (w - 2.0) * saturate(max(trail, full)), inner.hi.y) }, 0.0, trail_color, q);
+    let kept = fill(Rect { lo: inner.lo, hi: vec2(inner.lo.x + (w - 2.0) * saturate(full), inner.hi.y) }, 0.0, color, q);
     return over(over(over(case_, lost), kept), outline(r, 1.0, 1.0, faded(t.rim, 0.6), q));
 }
 

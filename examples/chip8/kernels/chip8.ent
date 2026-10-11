@@ -106,13 +106,9 @@ kernel chip8.step@1 {
     struct Draw { row: Int; hit: Int; }
     struct Col { col: Int; hit: Int; }
 
-    // The keypad on the keyboard.
+    // The keypad on the keyboard: key 0 to F as X 1 2 3 Q W E A S D Z C 4 R F V.
     fn pressed(k: Int) -> Bool {
-        let code = if k == 0 { 88 } else if k == 1 { 49 } else if k == 2 { 50 } else if k == 3 { 51 }
-            else if k == 4 { 81 } else if k == 5 { 87 } else if k == 6 { 69 } else if k == 7 { 65 }
-            else if k == 8 { 83 } else if k == 9 { 68 } else if k == 10 { 90 } else if k == 11 { 67 }
-            else if k == 12 { 52 } else if k == 13 { 82 } else if k == 14 { 70 } else { 86 };
-        return key(code);
+        return key([88, 49, 50, 51, 81, 87, 69, 65, 83, 68, 90, 67, 52, 82, 70, 86][k]);
     }
 
     scan with n = 0 {
@@ -157,10 +153,10 @@ kernel chip8.step@1 {
                     5 => vx - vy, 6 => vx >> 1, 7 => vy - vx, _ => vx << 1
                 };
                 let flag = match nn {
-                    4 => if r > 255 { 1 } else { 0 },
-                    5 => if vx >= vy { 1 } else { 0 },
+                    4 => int(r > 255),
+                    5 => int(vx >= vy),
                     6 => vx & 1,
-                    7 => if vy >= vx { 1 } else { 0 },
+                    7 => int(vy >= vx),
                     14 => (vx >> 7) & 1,
                     _ => -1
                 };
@@ -233,12 +229,12 @@ kernel chip8.view@1 {
     input screen: Screen;
     output result: Image;
     compute {
-        let uv = (coord() + vec2(0.5, 0.5)) / domain() * vec2(64.0, 32.0);
+        let uv = (coord() + 0.5) / domain() * vec2(64.0, 32.0);
         let on = at(screen, floor(uv)) == 1;
         let local = fract(uv);
         let edge = local.x < 0.08 || local.y < 0.08;
         let lit = if on { vec3(0.55, 0.95, 0.45) } else { vec3(0.06, 0.09, 0.06) };
         let color = if edge { lit * 0.7 } else { lit };
-        return vec4(color.x, color.y, color.z, 1.0);
+        return vec4(color, 1.0);
     }
 }

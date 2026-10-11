@@ -1,11 +1,13 @@
 // A tile map: a Grid<Tile> of exact integers and booleans, flooded a step
 // per frame through Graph state, and drawn through an atlas image. Two
 // grids of different element types meet in `render`.
-struct Tile { kind: Int; height: Float; passable: Bool; }
+// A kind is also its sprite's place in the atlas.
+type Kind = enum { Grass, Sand, Rock, Water };
+struct Tile { kind: Kind; height: Float; passable: Bool; }
 type Map = Grid<Tile>;
 
-/// Kinds: 0 grass, 1 sand, 2 rock, 3 water. Rock lies on a fixed lattice so
-/// the map is deterministic; the spring is at `source`.
+/// Rock lies on a fixed lattice so the map is deterministic; the spring
+/// is at `source`.
 kernel tiles.generate@1 {
     requires { field.write; }
     param source: Vec2 = vec2(0.0, 0.0);
@@ -14,18 +16,18 @@ kernel tiles.generate@1 {
     fn hash(p: Vec2) -> Float {
         // Sin-free so the CPU and GPU agree on every tile.
         let q = fract(p * vec2(0.1031, 0.1030));
-        let d = dot(q, vec2(q.y, q.x) + vec2(33.33, 33.33));
-        let r = q + vec2(d, d);
+        let d = dot(q, q.yx + 33.33);
+        let r = q + d;
         return fract((r.x + r.y) * (r.x - r.y + 1.0));
     }
 
     compute {
         let c = coord();
-        let rock = fract((c.x * 3.0 + c.y * 5.0) / 7.0) < 0.2 && fract((c.x * 3.0 + c.y * 5.0) / 7.0) > 0.1;
+        let lattice = fract((c.x * 3.0 + c.y * 5.0) / 7.0);
+        let rock = lattice > 0.1 && lattice < 0.2;
         let h = hash(c);
-        let ground = if h < 0.7 { 0 } else { 1 };
-        let kind = if c.x == source.x && c.y == source.y { 3 } else if rock { 2 } else { ground };
-        return Tile { kind: kind, height: h, passable: kind != 2 };
+        let kind = if c == source { Kind.Water } else if rock { Kind.Rock } else if h < 0.7 { Kind.Grass } else { Kind.Sand };
+        return Tile { kind: kind, height: h, passable: kind != Kind.Rock };
     }
 }
 
@@ -35,16 +37,15 @@ kernel tiles.flood@1 {
     input previous: Map;
     output result: Map;
 
-    fn wet(x: Float, y: Float) -> Bool {
-        return at(previous, vec2(x, y)).kind == 3;
+    fn wet(p: Vec2) -> Bool {
+        return at(previous, p).kind == Kind.Water;
     }
 
     compute {
         let c = coord();
         let me = sample(previous);
-        let neighbour = wet(c.x - 1.0, c.y) || wet(c.x + 1.0, c.y) || wet(c.x, c.y - 1.0) || wet(c.x, c.y + 1.0);
-        let kind = if me.passable && neighbour { 3 } else { me.kind };
-        return Tile { kind: kind, height: me.height, passable: me.passable };
+        let neighbour = wet(c - vec2(1.0, 0.0)) || wet(c + vec2(1.0, 0.0)) || wet(c - vec2(0.0, 1.0)) || wet(c + vec2(0.0, 1.0));
+        return if me.passable && neighbour { Tile { ..me, kind: Kind.Water } } else { me };
     }
 }
 
@@ -56,15 +57,17 @@ kernel tiles.atlas@1 {
 
     compute {
         let c = coord();
-        let kind = floor(c.x / 16.0);
-        let u = c.x - kind * 16.0;
-        let base = if kind == 0.0 { vec3(0.35, 0.65, 0.3) }
-            else if kind == 1.0 { vec3(0.85, 0.75, 0.5) }
-            else if kind == 2.0 { vec3(0.45, 0.45, 0.5) }
-            else { vec3(0.2, 0.45, 0.85) };
+        let column = floor(c.x / 16.0);
+        let u = c.x - column * 16.0;
+        let base = match int(column) {
+            Kind.Grass => vec3(0.35, 0.65, 0.3),
+            Kind.Sand => vec3(0.85, 0.75, 0.5),
+            Kind.Rock => vec3(0.45, 0.45, 0.5),
+            _ => vec3(0.2, 0.45, 0.85),
+        };
         let edge = u < 1.0 || u > 14.0 || c.y < 1.0 || c.y > 14.0;
         let color = if edge { base * 0.7 } else { base };
-        return vec4(color.x, color.y, color.z, 1.0);
+        return vec4(color, 1.0);
     }
 }
 
@@ -83,6 +86,6 @@ kernel tiles.render@1 {
         let local = floor((px - cell * tile) / tile * 16.0);
         let sprite = at(atlas, vec2(float(t.kind) * 16.0 + local.x, local.y));
         let shade = 0.85 + 0.15 * t.height;
-        return vec4(sprite.x * shade, sprite.y * shade, sprite.z * shade, 1.0);
+        return vec4(sprite.rgb * shade, 1.0);
     }
 }

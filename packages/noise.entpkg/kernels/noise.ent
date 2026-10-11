@@ -78,7 +78,7 @@ fn slope3(x: Int, y: Int, z: Int, seed: Int, d: Vec3) -> Float {
     let h = hash_int3(x, y, z, seed) & 15;
     let u = if h < 8 { d.x } else { d.y };
     let v = if h < 4 { d.y } else if h == 12 || h == 14 { d.x } else { d.z };
-    return (if (h & 1) == 0 { u } else { 0.0 - u }) + (if (h & 2) == 0 { v } else { 0.0 - v });
+    return (if (h & 1) == 0 { u } else { -u }) + (if (h & 2) == 0 { v } else { -v });
 }
 
 /// Gradient (Perlin) noise, about -1 to 1: smoother than value noise,
@@ -95,7 +95,7 @@ fn gradient3(p: Vec3, seed: Int) -> Float {
     let near = mix(mix(slope3(x, y, z, seed, f), slope3(x + 1, y, z, seed, f - vec3(1.0, 0.0, 0.0)), u),
                    mix(slope3(x, y + 1, z, seed, f - vec3(0.0, 1.0, 0.0)), slope3(x + 1, y + 1, z, seed, f - vec3(1.0, 1.0, 0.0)), u), v);
     let far = mix(mix(slope3(x, y, z + 1, seed, f - vec3(0.0, 0.0, 1.0)), slope3(x + 1, y, z + 1, seed, f - vec3(1.0, 0.0, 1.0)), u),
-                  mix(slope3(x, y + 1, z + 1, seed, f - vec3(0.0, 1.0, 1.0)), slope3(x + 1, y + 1, z + 1, seed, f - vec3(1.0, 1.0, 1.0)), u), v);
+                  mix(slope3(x, y + 1, z + 1, seed, f - vec3(0.0, 1.0, 1.0)), slope3(x + 1, y + 1, z + 1, seed, f - 1.0), u), v);
     return mix(near, far, w);
 }
 

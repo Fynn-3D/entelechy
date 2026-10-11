@@ -11,8 +11,8 @@ kernel cloud.density@1 {
     fn hash(p: Vec3) -> Float {
         // Sin-free so the CPU and GPU agree on every cell.
         let q = fract(p * vec3(0.1031, 0.1030, 0.0973));
-        let d = dot(q, vec3(q.y, q.z, q.x) + vec3(33.33, 33.33, 33.33));
-        let r = q + vec3(d, d, d);
+        let d = dot(q, vec3(q.y, q.z, q.x) + 33.33);
+        let r = q + d;
         return fract((r.x + r.y) * r.z);
     }
 
@@ -23,18 +23,18 @@ kernel cloud.density@1 {
         let a = mix(hash(i), hash(i + vec3(1.0, 0.0, 0.0)), u.x);
         let b = mix(hash(i + vec3(0.0, 1.0, 0.0)), hash(i + vec3(1.0, 1.0, 0.0)), u.x);
         let c = mix(hash(i + vec3(0.0, 0.0, 1.0)), hash(i + vec3(1.0, 0.0, 1.0)), u.x);
-        let d = mix(hash(i + vec3(0.0, 1.0, 1.0)), hash(i + vec3(1.0, 1.0, 1.0)), u.x);
+        let d = mix(hash(i + vec3(0.0, 1.0, 1.0)), hash(i + 1.0), u.x);
         return mix(mix(a, b, u.y), mix(c, d, u.y), u.z);
     }
 
     compute {
-        let p = (coord() + vec3(0.5, 0.5, 0.5)) / domain();
+        let p = (coord() + 0.5) / domain();
         let q = p * scale + vec3(time() * 0.15, 0.0, time() * 0.1);
         let n = noise(q) * 0.5 + noise(q * 2.0) * 0.25 + noise(q * 4.0) * 0.125;
         // Fade toward the edges so the cloud floats inside the box.
-        let edge = p - vec3(0.5, 0.5, 0.5);
-        let inside = clamp(1.0 - length(edge) * 2.2, 0.0, 1.0);
-        return clamp((n - cover) * 4.0, 0.0, 1.0) * inside;
+        let edge = p - 0.5;
+        let inside = saturate(1.0 - length(edge) * 2.2);
+        return saturate((n - cover) * 4.0) * inside;
     }
 }
 
@@ -58,7 +58,7 @@ kernel cloud.render@1 {
         let px = coord();
         let extent = domain();
         // Orthographic camera looking down the z axis.
-        let uv = (px + vec2(0.5, 0.5)) / extent;
+        let uv = (px + 0.5) / extent;
         let step = 1.0 / 48.0;
         let m = loop 48 with m = March { light: 0.0, transmit: 1.0 } until m.transmit < 0.01 {
             let z = (float(index()) + 0.5) * step;
@@ -69,7 +69,7 @@ kernel cloud.render@1 {
             March { light: m.light + lit, transmit: m.transmit * absorbed }
         };
         let sky = mix(vec3(0.35, 0.55, 0.9), vec3(0.75, 0.85, 1.0), uv.y);
-        let color = sky * m.transmit + vec3(1.0, 1.0, 1.0) * min(m.light * 1.3, 1.0);
-        return vec4(color.x, color.y, color.z, 1.0);
+        let color = sky * m.transmit + 1.0 * min(m.light * 1.3, 1.0);
+        return vec4(color, 1.0);
     }
 }

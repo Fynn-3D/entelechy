@@ -116,7 +116,7 @@ kernel skin.blend@1 {
         let masked = count(mix) > 1;
         let joints = count(mix);
         let how = if masked { at(mix, element() % joints) } else { at(mix, 0) };
-        return mixing(sample(first), sample(second), clamp(how, 0.0, 1.0));
+        return mixing(sample(first), sample(second), saturate(how));
     }
 }
 
@@ -136,7 +136,7 @@ kernel skin.add@1 {
     output result: Rows<Pose>;
     compute {
         let joints = count(weight);
-        let how = clamp(if joints > 1 { at(weight, element() % joints) } else { at(weight, 0) }, 0.0, 1.0);
+        let how = saturate(if joints > 1 { at(weight, element() % joints) } else { at(weight, 0) });
         let b = sample(base);
         let over = sample(add);
         let was = sample(rest);
@@ -272,13 +272,13 @@ kernel skin.aim@1 {
         let joints = count(skeleton);
         let instance = element() / joints;
         if element() % joints != joint { return p; }
-        let how = clamp(at(weight, min(instance, count(weight) - 1)), 0.0, 1.0);
+        let how = saturate(at(weight, min(instance, count(weight) - 1)));
         let block = instance * joints;
         // The target where the joint's own translation is: its parent's
         // space, which is the space its pose is written in.
         let goal = at(target, min(instance, count(target) - 1));
-        let local = inverse(standing(poses, skeleton, block, joint, depth)) * vec4(goal.x, goal.y, goal.z, 1.0);
-        let toward = vec3(local.x, local.y, local.z) - p.at;
+        let local = inverse(standing(poses, skeleton, block, joint, depth)) * vec4(goal, 1.0);
+        let toward = local.xyz - p.at;
         let far = sqrt(dot(toward, toward));
         if far == 0.0 { return p; }
         let facing = rotating(p.turn, normalize(axis));
@@ -345,8 +345,8 @@ kernel skin.apply@1 {
         let moved = m * vec4(v.position.x, v.position.y, v.position.z, 1.0);
         let turned = m * vec4(v.normal.x, v.normal.y, v.normal.z, 0.0);
         return Point {
-            position: vec3(moved.x, moved.y, moved.z),
-            normal: normalize(vec3(turned.x, turned.y, turned.z)),
+            position: moved.xyz,
+            normal: normalize(turned.xyz),
             uv: v.uv,
         };
     }
@@ -367,8 +367,8 @@ kernel skin.place@1 {
         let moved = place * vec4(v.position.x, v.position.y, v.position.z, 1.0);
         let turned = place * vec4(v.normal.x, v.normal.y, v.normal.z, 0.0);
         return Point {
-            position: vec3(moved.x, moved.y, moved.z),
-            normal: normalize(vec3(turned.x, turned.y, turned.z)),
+            position: moved.xyz,
+            normal: normalize(turned.xyz),
             uv: v.uv,
         };
     }

@@ -32,7 +32,7 @@ fn stars(dir: Vec3) -> Vec3 {
 struct Eye { at: Vec3; fwd: Vec3; right: Vec3; up: Vec3; }
 
 fn camera(t: Float) -> Eye {
-    let at_eye = vec3(sin(t * 0.07) * 20.0, sin(t * 0.05) * 8.0, 0.0 - t * 6.0);
+    let at_eye = vec3(sin(t * 0.07) * 20.0, sin(t * 0.05) * 8.0, -t * 6.0);
     let fwd = normalize(vec3(sin(t * 0.11) * 0.3, sin(t * 0.08) * 0.15, -1.0));
     let right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
     return Eye { at: at_eye, fwd: fwd, right: right, up: cross(right, fwd) };
@@ -48,21 +48,21 @@ kernel nebula.look@1 {
     compute {
         let t = time();
         let dims = domain();
-        let px = coord() + vec2(0.5, 0.5);
+        let px = coord() + 0.5;
         let eye = camera(t);
         let dir = normalize(eye.fwd * dims.y * 1.1 + eye.right * (px.x - dims.x * 0.5) - eye.up * (px.y - dims.y * 0.5));
         let marched = loop steps with s = vec4(0.0, 0.0, 0.0, 1.0) {
             let d = 2.0 + float(index()) * 1.5;
             let p = eye.at + dir * d;
             let dense = cloud(p) * 0.35;
-            let kept = exp(0.0 - dense * 1.5);
+            let kept = exp(-dense * 1.5);
             let glow = tint(p) * (0.35 + 2.2 * max(fbm3(p * 0.2, 2, 13), 0.0));
-            let light = vec3(s.x, s.y, s.z) + glow * (s.w * (1.0 - kept));
-            vec4(light.x, light.y, light.z, s.w * kept)
+            let light = s.xyz + glow * (s.w * (1.0 - kept));
+            vec4(light, s.w * kept)
         };
-        let seen = vec3(marched.x, marched.y, marched.z) + stars(dir) * marched.w;
+        let seen = marched.xyz + stars(dir) * marched.w;
         let depth = if marched.w < 0.5 { 30.0 } else { 200.0 };
-        return vec4(seen.x, seen.y, seen.z, depth);
+        return vec4(seen, depth);
     }
 }
 

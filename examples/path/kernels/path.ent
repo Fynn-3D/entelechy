@@ -71,7 +71,7 @@ fn world(ray: Ray) -> Hit {
 
 // The sky, the other light in the room.
 fn sky(direction: Vec3) -> Vec3 {
-    let t = clamp(direction.y * 0.5 + 0.5, 0.0, 1.0);
+    let t = saturate(direction.y * 0.5 + 0.5);
     return mix(vec3(0.22, 0.25, 0.32), vec3(0.45, 0.58, 0.85), t) * 0.8;
 }
 
@@ -117,7 +117,7 @@ kernel path.sample@1 {
         let taken = sample(history).a;
         let before = if e.moved { 0.0 } else { taken };
         let res = domain();
-        let px = coord() + vec2(0.5, 0.5);
+        let px = coord() + 0.5;
         let seed = hash(px.x * 1.7 + px.y * 311.7 + before * 0.61 + 1.3);
         let forward = vec3(sin(e.yaw) * cos(e.pitch), sin(e.pitch), cos(e.yaw) * cos(e.pitch));
         let right = normalize(cross(vec3(0.0, 1.0, 0.0), forward));
@@ -127,7 +127,7 @@ kernel path.sample@1 {
         // two counts a parameter sets, and the loops take them.
         let paths = loop samples with s = Path { sum: vec3(0.0, 0.0, 0.0), seed: next(seed) } {
             // The pixel's own place, jittered, so the edges smooth out.
-            let jitter = vec2(next(s.seed), next(next(s.seed))) - vec2(0.5, 0.5);
+            let jitter = vec2(next(s.seed), next(next(s.seed))) - 0.5;
             let uv = (px + jitter - res * 0.5) / res.y;
             let direction = normalize(forward * 1.6 + right * uv.x + up * -uv.y);
             let walked = loop bounces with b = Bounce {
@@ -165,7 +165,7 @@ kernel path.view@1 {
     compute {
         let c = sample(sum);
         let mean = c.rgb / max(c.a, 1.0) * exposure;
-        let mapped = mean / (mean + vec3(1.0, 1.0, 1.0));
+        let mapped = mean / (mean + 1.0);
         let gamma = vec3(pow(mapped.x, 0.4545), pow(mapped.y, 0.4545), pow(mapped.z, 0.4545));
         return vec4(gamma, 1.0);
     }

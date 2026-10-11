@@ -26,7 +26,7 @@ fn mip_level(strip: Grid<Vec4>, uv: Vec2, k: Int, side: Int) -> Vec4 {
     let y0 = mip_start(k, side);
     let x = clamp(fract(uv.x) * wide, 0.5, wide - 0.5);
     let y = clamp(fract(uv.y) * wide, 0.5, wide - 0.5);
-    return at_linear(strip, vec2(x, y0 + y) - vec2(0.5, 0.5));
+    return at_linear(strip, vec2(x, y0 + y) - 0.5);
 }
 
 // The level a pixel asks for, from how far the uv moves to the pixel

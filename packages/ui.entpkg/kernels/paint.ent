@@ -8,17 +8,17 @@ use "layout.ent";
 fn clear() -> Vec4 { return vec4(0.0, 0.0, 0.0, 0.0); }
 
 /// A colour covering as much as `a`.
-fn paint(c: Vec3, a: Float) -> Vec4 { return vec4(c.x, c.y, c.z, a); }
+fn paint(c: Vec3, a: Float) -> Vec4 { return vec4(c, a); }
 
 /// `p` with its cover times `k`.
-fn faded(p: Vec4, k: Float) -> Vec4 { return vec4(p.x, p.y, p.z, p.w * k); }
+fn faded(p: Vec4, k: Float) -> Vec4 { return vec4(p.xyz, p.w * k); }
 
 /// `top` over `under`, as a painter lays one coat on another.
 fn over(under: Vec4, top: Vec4) -> Vec4 {
     let a = top.w + under.w * (1.0 - top.w);
     if a <= 0.0 { return clear(); }
     let c = (top.xyz * top.w + under.xyz * under.w * (1.0 - top.w)) / a;
-    return vec4(c.x, c.y, c.z, a);
+    return vec4(c, a);
 }
 
 /// A painting laid over an opaque picture.
@@ -26,14 +26,14 @@ fn onto(picture: Vec3, p: Vec4) -> Vec3 { return mix(picture, p.xyz, p.w); }
 
 /// How much of a pixel a shape covers whose edge is `d` from its middle,
 /// less than zero inside.
-fn cover(d: Float) -> Float { return clamp(0.5 - d, 0.0, 1.0); }
+fn cover(d: Float) -> Float { return saturate(0.5 - d); }
 
 /// The signed distance from `q` to a rectangle with corners rounded by
 /// `radius`: less than zero inside.
 fn rounded_distance(q: Vec2, r: Rect, radius: Float) -> Float {
     let half = rect_size(r) * 0.5;
     let k = min(radius, min(half.x, half.y));
-    let d = abs(q - rect_middle(r)) - half + vec2(k, k);
+    let d = abs(q - rect_middle(r)) - half + k;
     return length(max(d, vec2(0.0, 0.0))) + min(max(d.x, d.y), 0.0) - k;
 }
 
@@ -53,7 +53,7 @@ fn outline(r: Rect, radius: Float, width: Float, color: Vec4, q: Vec2) -> Vec4 {
 /// A rectangle filled `from` at its top to `to` at its bottom.
 fn graded(r: Rect, radius: Float, from: Vec4, to: Vec4, q: Vec2) -> Vec4 {
     if !near_rect(r, q, 1.0) { return clear(); }
-    let t = clamp((q.y - r.lo.y) / max(r.hi.y - r.lo.y, 1.0), 0.0, 1.0);
+    let t = saturate((q.y - r.lo.y) / max(r.hi.y - r.lo.y, 1.0));
     return faded(mix(from, to, t), cover(rounded_distance(q, r, radius)));
 }
 
@@ -78,7 +78,7 @@ fn ring(middle: Vec2, radius: Float, width: Float, color: Vec4, q: Vec2) -> Vec4
 /// A line from `a` to `b`, `width` wide, its ends round.
 fn segment(a: Vec2, b: Vec2, width: Float, color: Vec4, q: Vec2) -> Vec4 {
     let ab = b - a;
-    let t = clamp(dot(q - a, ab) / max(dot(ab, ab), 0.000001), 0.0, 1.0);
+    let t = saturate(dot(q - a, ab) / max(dot(ab, ab), 0.000001));
     return faded(color, cover(length(q - a - ab * t) - width * 0.5));
 }
 

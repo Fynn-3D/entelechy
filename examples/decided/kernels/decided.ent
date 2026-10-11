@@ -41,7 +41,7 @@ kernel decided.detail@1 {
     output result: Rows<Int>;
 
     compute {
-        let near = clamp(1.0 - at(camera, 0).height, 0.0, 1.0);
+        let near = saturate(1.0 - at(camera, 0).height);
         let side = float(coarsest) + (float(finest) - float(coarsest)) * near * near;
         return clamp(int(side), 2, finest);
     }
@@ -62,10 +62,10 @@ kernel decided.ground@1 {
         let z = v - 0.5;
         let h = sin(x * 11.0) * cos(z * 9.0) * 0.05 + sin(x * 27.0 + z * 19.0) * 0.012;
         let dx = cos(x * 11.0) * 11.0 * 0.05 + cos(x * 27.0 + z * 19.0) * 27.0 * 0.012;
-        let dz = 0.0 - sin(z * 9.0) * 9.0 * 0.05 + cos(x * 27.0 + z * 19.0) * 19.0 * 0.012;
+        let dz = -sin(z * 9.0) * 9.0 * 0.05 + cos(x * 27.0 + z * 19.0) * 19.0 * 0.012;
         return Point {
             position: vec3(x, h, z),
-            normal: normalize(vec3(0.0 - dx, 1.0, 0.0 - dz)),
+            normal: normalize(vec3(-dx, 1.0, -dz)),
             uv: vec2(u, v),
         };
     }

@@ -50,17 +50,17 @@ kernel image.blend@1 {
     output result: Image;
     compute {
         let b = sample(base);
-        let uv = (coord() + vec2(0.5, 0.5)) / domain();
+        let uv = (coord() + 0.5) / domain();
         let t = at_linear(top, uv * size(top));
         let encoded = space == Space.Encoded;
         let cb = if encoded { linear_to_srgb(max(b.xyz, vec3(0.0, 0.0, 0.0))) } else { b.xyz };
         let cs = if encoded { linear_to_srgb(max(t.xyz, vec3(0.0, 0.0, 0.0))) } else { t.xyz };
-        let a_base = clamp(b.w, 0.0, 1.0);
-        let a_top = clamp(t.w * opacity, 0.0, 1.0);
+        let a_base = saturate(b.w);
+        let a_top = saturate(t.w * opacity);
         let mixed = cs * (1.0 - a_base) + blend(mode, cb, cs) * a_base;
         let alpha = a_top + a_base * (1.0 - a_top);
         let joined = (mixed * a_top + cb * (a_base * (1.0 - a_top))) / max(alpha, 0.000001);
         let c = if encoded { srgb_to_linear(joined) } else { joined };
-        return vec4(c.x, c.y, c.z, alpha);
+        return vec4(c, alpha);
     }
 }

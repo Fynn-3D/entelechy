@@ -64,7 +64,7 @@ kernel ui.navigate@1 {
         let confirm_held = key(13) || key(32) || button(8);
         let back_held = key(27) || key(8) || button(9);
         let click = pointer_down();
-        let held = (if up { 1 } else { 0 }) | (if down { 2 } else { 0 }) | (if left { 4 } else { 0 }) | (if right { 8 } else { 0 })
+        let held = int(up) | (if down { 2 } else { 0 }) | (if left { 4 } else { 0 }) | (if right { 8 } else { 0 })
             | (if confirm_held { 16 } else { 0 }) | (if back_held { 32 } else { 0 }) | (if click { 64 } else { 0 });
         let p = pointer();
         if active == 0 {
@@ -79,8 +79,8 @@ kernel ui.navigate@1 {
         let acting = if fresh != 0 { fresh } else if repeating { directions } else { 0 };
         let repeated_t = if fresh != 0 || repeating { now } else { o.repeated_t };
         let wheel_steps = int(-sign(wheel().y));
-        let step = (if held_bit(acting, 1) { 1 } else { 0 }) - (if held_bit(acting, 0) { 1 } else { 0 }) + wheel_steps;
-        let by = (if held_bit(acting, 3) { 1 } else { 0 }) - (if held_bit(acting, 2) { 1 } else { 0 });
+        let step = int(held_bit(acting, 1)) - int(held_bit(acting, 0)) + wheel_steps;
+        let by = int(held_bit(acting, 3)) - int(held_bit(acting, 2));
         let n = max(rows, 1);
         let stepped_row = if wrap == 1 { ((o.row + step) % n + n) % n } else { clamp(o.row + step, 0, n - 1) };
         // The pointer: the row under it, lit when it moves onto it.
@@ -90,7 +90,7 @@ kernel ui.navigate@1 {
         let moved_ = length(p - o.pointer_at) > 0.5;
         let clicked = click && !held_bit(o.held, 6);
         let row = if pointed >= 0 && (moved_ || clicked) { pointed } else { stepped_row };
-        let along = if pointed >= 0 { clamp((p.x - l.x) / max(l.z, 1.0), 0.0, 1.0) } else { 0.0 };
+        let along = if pointed >= 0 { saturate((p.x - l.x) / max(l.z, 1.0)) } else { 0.0 };
         let confirm = (confirm_held && !held_bit(o.held, 4)) || (clicked && pointed >= 0);
         let back = back_held && !held_bit(o.held, 5);
         return Nav { row: row, by: by, confirm: confirm, back: back, pointed: pointed, along: along,
@@ -101,7 +101,7 @@ kernel ui.navigate@1 {
 /// What a widget in row `k` is with the navigation at `nav`: focused when
 /// lit, else idle; disabled when not `enabled`.
 fn row_state(nav: Nav, k: Int, enabled: Bool) -> Int {
-    return if !enabled { 3 } else if nav.row == k { 1 } else { 0 };
+    return if !enabled { 3 } else { int(nav.row == k) };
 }
 
 /// A count changed by `by` within `lo` to `hi`; round among `n`.
@@ -109,4 +109,4 @@ fn stepped(v: Int, by: Int, lo: Int, hi: Int) -> Int { return clamp(v + by, lo, 
 fn cycled(v: Int, by: Int, n: Int) -> Int { return ((v + by) % max(n, 1) + max(n, 1)) % max(n, 1); }
 
 /// A level (0 to 1) changed by `by` steps of `step`.
-fn slid(v: Float, by: Int, step: Float) -> Float { return clamp(v + float(by) * step, 0.0, 1.0); }
+fn slid(v: Float, by: Int, step: Float) -> Float { return saturate(v + float(by) * step); }

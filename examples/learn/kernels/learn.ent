@@ -33,9 +33,9 @@ kernel learn.points@1 {
     output result: Rows<Point>;
     compute {
         let i = float(element());
-        let p = vec2(hash(i + 0.5), hash(i + 17.25)) * 2.0 - vec2(1.0, 1.0);
+        let p = vec2(hash(i + 0.5), hash(i + 17.25)) * 2.0 - 1.0;
         let inside = length(p - vec2(0.1, 0.05)) < 0.55;
-        return Point { position: p, label: if inside { 1.0 } else { 0.0 } };
+        return Point { position: p, label: float(inside) };
     }
 }
 
@@ -111,13 +111,13 @@ kernel learn.view@1 {
     input weights: Rows<Float>;
     output result: Image;
     compute {
-        let uv = (coord() + vec2(0.5, 0.5)) / domain();
+        let uv = (coord() + 0.5) / domain();
         let p = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
         let o = sigmoid(logit(weights, p));
         let color = mix(vec3(0.15, 0.25, 0.55), vec3(0.95, 0.6, 0.2), o);
         let ring = abs(length(p - vec2(0.1, 0.05)) - 0.55) < 0.008;
         let shown = if ring { color * 0.5 } else { color };
-        return vec4(shown.x, shown.y, shown.z, 1.0);
+        return vec4(shown, 1.0);
     }
 }
 

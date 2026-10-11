@@ -102,9 +102,9 @@ kernel {name}.draw@1 {{
         let color = mix(
             vec3(0.15, 0.25, 0.45),
             vec3(0.95, 0.65, 0.35),
-            ring * clamp(1.2 - away, 0.0, 1.0)
+            ring * saturate(1.2 - away)
         );
-        return vec4(color.x, color.y, color.z, 1.0);
+        return vec4(color, 1.0);
     }}
 }}
 "#
@@ -185,10 +185,10 @@ kernel {name}.draw@1 {{
         let uv = coord() / domain();
         let value = at_linear(block, uv.x * float(count(block)));
         let away = abs(uv.y - (0.5 + value * 0.4)) * domain().y;
-        let ink = vec3(0.45, 0.85, 0.75) * clamp(1.5 - away, 0.0, 1.0);
+        let ink = vec3(0.45, 0.85, 0.75) * saturate(1.5 - away);
         let ground = vec3(0.06, 0.07, 0.10);
         let lit = ground + ink;
-        return vec4(lit.x, lit.y, lit.z, 1.0);
+        return vec4(lit, 1.0);
     }}
 }}
 "#
@@ -291,10 +291,10 @@ kernel {name}.draw@1 {{
         let uv = coord() / domain();
         let cell = int(uv * size(cells));
         let mark = float(at(cells, cell)) / float(max(fade, 1));
-        let local = fract(uv * size(cells)) - vec2(0.5, 0.5);
-        let inside = clamp(1.0 - length(local) * 2.4, 0.0, 1.0);
+        let local = fract(uv * size(cells)) - 0.5;
+        let inside = saturate(1.0 - length(local) * 2.4);
         let color = mix(vec3(0.08, 0.09, 0.13), vec3(0.45, 0.90, 0.80), mark * inside);
-        return vec4(color.x, color.y, color.z, 1.0);
+        return vec4(color, 1.0);
     }}
 }}
 "#

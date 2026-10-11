@@ -27,7 +27,7 @@ fn project(mvp: Mat4, p: Vec3, half: Vec2) -> Vec2 {
 
 fn segment(p: Vec2, a: Vec2, b: Vec2) -> Float {
     let ab = b - a;
-    let t = clamp(dot(p - a, ab) / dot(ab, ab), 0.0, 1.0);
+    let t = saturate(dot(p - a, ab) / dot(ab, ab));
     return length(p - (a + ab * t));
 }
 

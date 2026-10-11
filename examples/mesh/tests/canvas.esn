@@ -63,7 +63,7 @@ node differ: kernel {
     input over: GBuffer <- package.surface;
     input fast: GBuffer <- native.surface;
     output result: Rows<Int>;
-    compute { return if sample(over).id != sample(fast).id { 1 } else { 0 }; }
+    compute { return int(sample(over).id != sample(fast).id); }
     merge(a, b) { return a + b; }
 }
 
@@ -72,7 +72,7 @@ node drawn: kernel {
     requires { field.read; field.write; }
     input over: GBuffer <- package.surface;
     output result: Rows<Int>;
-    compute { return if sample(over).id >= 0 { 1 } else { 0 }; }
+    compute { return int(sample(over).id >= 0); }
     merge(a, b) { return a + b; }
 }
 

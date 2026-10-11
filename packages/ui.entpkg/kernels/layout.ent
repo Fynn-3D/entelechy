@@ -21,7 +21,7 @@ fn near_rect(r: Rect, q: Vec2, by: Float) -> Bool {
 }
 
 /// Shrunk by `by` on every side; grown, by less than zero.
-fn inset(r: Rect, by: Float) -> Rect { return Rect { lo: r.lo + vec2(by, by), hi: r.hi - vec2(by, by) }; }
+fn inset(r: Rect, by: Float) -> Rect { return Rect { lo: r.lo + by, hi: r.hi - by }; }
 
 /// Shrunk by `x` across and `y` down, each side.
 fn inset2(r: Rect, by: Vec2) -> Rect { return Rect { lo: r.lo + by, hi: r.hi - by }; }
@@ -102,12 +102,12 @@ fn list_row_near(r: Rect, q: Vec2, h: Float, gap: Float, n: Int, lit: Int, by: F
 /// A thing `size` big placed in it: `align` 0 at its top or left, 0.5
 /// in its middle, 1 at its bottom or right, each way; on whole pixels.
 fn placed(r: Rect, size: Vec2, align: Vec2) -> Rect {
-    let lo = floor(r.lo + (rect_size(r) - size) * align + vec2(0.5, 0.5));
+    let lo = floor(r.lo + (rect_size(r) - size) * align + 0.5);
     return Rect { lo: lo, hi: lo + size };
 }
 
 /// A rectangle `size` big with its middle at `middle`, on whole pixels.
 fn centred(middle: Vec2, size: Vec2) -> Rect {
-    let lo = floor(middle - size * 0.5 + vec2(0.5, 0.5));
+    let lo = floor(middle - size * 0.5 + 0.5);
     return Rect { lo: lo, hi: lo + size };
 }

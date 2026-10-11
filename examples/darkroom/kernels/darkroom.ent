@@ -8,11 +8,11 @@ use "../../../packages/image.entpkg";
 /// The sky and hills seen at `p` (x across in heights, y down), `y` the
 /// height down the picture; `horizon` where the lake begins.
 fn land(p: Vec2, y: Float, horizon: Float, t: Float) -> Vec3 {
-    let up = clamp((horizon - y) / horizon, 0.0, 1.0);
+    let up = saturate((horizon - y) / horizon);
     let sky = mix(vec3(0.5, 0.33, 0.26), vec3(0.08, 0.11, 0.24), up);
     let sun_at = vec2(1.15, 0.5);
     let d = length(p - sun_at);
-    let sun = vec3(1.0, 0.72, 0.42) * (exp(0.0 - d * d / 0.0009) * 5.0 + exp(0.0 - d / 0.12) * 0.3);
+    let sun = vec3(1.0, 0.72, 0.42) * (exp(-d * d / 0.0009) * 5.0 + exp(-d / 0.12) * 0.3);
     let cloud = smoothstep(0.05, 0.5, fbm2(vec2(p.x * 2.5 + t * 0.02, p.y * 8.0), 5, 7)) * up;
     let air = mix(sky + sun, vec3(0.42, 0.3, 0.28), cloud * 0.7);
     let ridge = horizon - 0.04 - 0.12 * (fbm2(vec2(p.x * 2.2, 0.5), 4, 3) * 0.5 + 0.5);
@@ -29,7 +29,7 @@ kernel darkroom.photo@1 {
     output result: Image;
     compute {
         let t = time();
-        let uv = (coord() + vec2(0.5, 0.5)) / domain();
+        let uv = (coord() + 0.5) / domain();
         let aspect = domain().x / domain().y;
         let p = vec2(uv.x * aspect, uv.y);
         let horizon = 0.66;
@@ -40,7 +40,7 @@ kernel darkroom.photo@1 {
         };
         // A raw picture: flat, its blacks lifted.
         let flat = c * 0.7 + vec3(0.02, 0.02, 0.025);
-        return vec4(flat.x, flat.y, flat.z, 1.0);
+        return vec4(flat, 1.0);
     }
 }
 
@@ -49,11 +49,11 @@ kernel darkroom.mark@1 {
     requires { field.write; time.read; }
     output result: Image;
     compute {
-        let uv = (coord() + vec2(0.5, 0.5)) / domain();
+        let uv = (coord() + 0.5) / domain();
         let q = vec2((uv.x - 0.3) * domain().x / domain().y, uv.y - 0.36);
         let angle = atan2(q.y, q.x) + time() * 0.3;
         let on = length(q) < 0.13 * (0.78 + 0.22 * cos(5.0 * angle));
-        let v = if on { 1.0 } else { 0.0 };
+        let v = float(on);
         return vec4(v, v, v, 1.0);
     }
 }
@@ -66,12 +66,12 @@ kernel darkroom.neon@1 {
     input distance: Grid<Float>;
     output result: Image;
     compute {
-        let uv = (coord() + vec2(0.5, 0.5)) / domain();
+        let uv = (coord() + 0.5) / domain();
         let d = at_linear(distance, uv * size(distance));
-        let line = exp(0.0 - d * d / 2.0);
-        let glow = exp(0.0 - abs(d) / 14.0) * 0.45;
+        let line = exp(-d * d / 2.0);
+        let glow = exp(-abs(d) / 14.0) * 0.45;
         let c = vec3(1.0, 0.12, 0.65) * line * 0.9 + vec3(0.15, 0.85, 1.0) * glow * 0.8;
-        return vec4(c.x, c.y, c.z, clamp(line + glow, 0.0, 1.0));
+        return vec4(c, saturate(line + glow));
     }
 }
 
@@ -81,8 +81,8 @@ kernel darkroom.vignette@1 {
     param strength: Float = 0.9;
     output result: Image;
     compute {
-        let d = (coord() + vec2(0.5, 0.5)) / domain() - vec2(0.5, 0.5);
-        let v = clamp(1.0 - strength * dot(d, d) * 2.0, 0.0, 1.0);
+        let d = (coord() + 0.5) / domain() - 0.5;
+        let v = saturate(1.0 - strength * dot(d, d) * 2.0);
         return vec4(v, v, v, 1.0);
     }
 }
@@ -99,7 +99,7 @@ kernel darkroom.pick@1 {
     param view: Int = 5;
     output result: Image;
     compute {
-        let uv = (coord() + vec2(0.5, 0.5)) / domain();
+        let uv = (coord() + 0.5) / domain();
         return match view {
             0 => at_linear(a, uv * size(a)),
             1 => at_linear(b, uv * size(b)),

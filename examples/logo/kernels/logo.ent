@@ -15,7 +15,7 @@
 /// How far `p` is from the segment `a`–`b`.
 fn to_segment(p: Vec2, a: Vec2, b: Vec2) -> Float {
     let ab = b - a;
-    let h = clamp(dot(p - a, ab) / max(dot(ab, ab), 0.000001), 0.0, 1.0);
+    let h = saturate(dot(p - a, ab) / max(dot(ab, ab), 0.000001));
     return length(p - a - ab * h);
 }
 
@@ -72,14 +72,14 @@ fn name_letter(i: Int) -> Int { return [0, 1, 2, 0, 3, 0, 4, 5, 6][clamp(i, 0, 8
 
 /// A layer laid over what is there: `col` where `a` covers.
 fn lay(acc: Vec4, col: Vec3, a: Float) -> Vec4 {
-    let k = clamp(a, 0.0, 1.0);
+    let k = saturate(a);
     let w = k + acc.w * (1.0 - k);
     let c = (col * k + acc.xyz * (acc.w * (1.0 - k))) / max(w, 0.0001);
-    return vec4(c.x, c.y, c.z, w);
+    return vec4(c, w);
 }
 
 /// What is there cut away where `a` covers, the ground showing through.
-fn cut(acc: Vec4, a: Float) -> Vec4 { return vec4(acc.x, acc.y, acc.z, acc.w * (1.0 - clamp(a, 0.0, 1.0))); }
+fn cut(acc: Vec4, a: Float) -> Vec4 { return vec4(acc.xyz, acc.w * (1.0 - saturate(a))); }
 
 /// Coverage of a stroke `w` wide at distance `d`, `px` a pixel.
 fn stroke(d: Float, w: Float, px: Float) -> Float { return 1.0 - smoothstep(w - px, w + px, d); }
@@ -87,7 +87,7 @@ fn stroke(d: Float, w: Float, px: Float) -> Float { return 1.0 - smoothstep(w - 
 /// How far `p` is from the segment `a`–`b` (x), and how far along it, 0 to 1 (y).
 fn along(p: Vec2, a: Vec2, b: Vec2) -> Vec2 {
     let ab = b - a;
-    let h = clamp(dot(p - a, ab) / max(dot(ab, ab), 0.000001), 0.0, 1.0);
+    let h = saturate(dot(p - a, ab) / max(dot(ab, ab), 0.000001));
     return vec2(length(p - a - ab * h), h);
 }
 
@@ -132,15 +132,15 @@ fn seed_mark(p: Vec2, light: Int, ink: Int, px: Float) -> Vec4 {
     let s = seed_centre();
     let ink_c = ink_colour(light, ink);
     let top = crown_centre().y + 3.0 * a;
-    let f = clamp((p.y - s.y) / (top - s.y), 0.0, 1.0);
+    let f = saturate((p.y - s.y) / (top - s.y));
     let hue = if ink >= 1 { ink_c } else { mix(root_hue(light), tip_hue(light), f) };
     let tip = if ink >= 1 { ink_c } else { tip_hue(light) };
     let gold = if ink >= 1 { ink_c } else { seed_gold() };
     let earth = if ink >= 1 { ink_c } else if light == 1 { vec3(0.45, 0.47, 0.58) } else { vec3(0.55, 0.58, 0.72) };
-    let acc0 = vec4(hue.x, hue.y, hue.z, 0.0);
+    let acc0 = vec4(hue, 0.0);
     // The ground, three modules either side of its line.
     let gl = ground_line();
-    let g = along(p, vec2(0.0 - gl.y, gl.x), vec2(gl.y, gl.x));
+    let g = along(p, vec2(-gl.y, gl.x), vec2(gl.y, gl.x));
     let acc1 = lay(acc0, earth, stroke(g.x, 3.0 * m, px));
     // The ten thousand: dots of two modules, about seven apart, the first
     // touching its node, the last two modules short of its ring.
@@ -190,7 +190,7 @@ fn seed_mark_reach() -> Vec4 {
     let m = module();
     let side = 3.0 * a * sin(1.04719755) + 7.0 * m;
     let up = crown_centre().y + 3.0 * a + 7.0 * m;
-    let down = 0.0 - (ground_line().x - 3.0 * m);
+    let down = -(ground_line().x - 3.0 * m);
     return vec4(side, side, up, down);
 }
 
@@ -217,7 +217,7 @@ kernel logo.draw@1 {
             let fit = 2.2 * max(reach.x, (reach.z + reach.w) * 0.5) / 2.0;
             let mid = (reach.z - reach.w) * 0.5;
             let m = seed_mark(q * fit + vec2(0.0, mid), light, ink, fit / unit);
-            return vec4(m.x, m.y, m.z, m.w);
+            return m;
         }
         // The lockup, in steps of the lattice (a): a margin of a all round,
         // the mark, a gap of a, the name two steps high (the diamond's
@@ -248,9 +248,9 @@ kernel logo.draw@1 {
             // On nothing: the mark, the name and its seed, each where it covers.
             let under = if m.w > 0.0 { m.xyz } else { ink_c };
             let cc = mix(mix(under, ink_c, text), gold, seed);
-            return vec4(cc.x, cc.y, cc.z, max(max(m.w, text), seed));
+            return vec4(cc, max(max(m.w, text), seed));
         }
         let c = mix(mix(mix(ground, m.xyz, m.w), ink_c, text), gold, seed);
-        return vec4(c.x, c.y, c.z, 1.0);
+        return vec4(c, 1.0);
     }
 }

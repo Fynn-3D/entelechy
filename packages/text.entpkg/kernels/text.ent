@@ -78,8 +78,8 @@ kernel text.draw@1 {
     output result: Image;
     compute {
         let c = sample(under);
-        let a = ink(glyphs, font, coord() + vec2(0.5, 0.5));
-        return mix(c, vec4(color.x, color.y, color.z, c.a), a);
+        let a = ink(glyphs, font, coord() + 0.5);
+        return mix(c, vec4(color, c.a), a);
     }
 }
 

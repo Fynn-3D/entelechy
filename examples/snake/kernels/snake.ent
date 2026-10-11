@@ -13,7 +13,8 @@ struct Game {
     advanced: Bool;            // this evaluation moved the head
     ate: Bool;                 // and reached the food
 }
-struct Cell { kind: Int; ttl: Int; }    // kind: 0 empty, 1 snake, 2 food
+type Kind = enum { Empty, Snake, Food };
+struct Cell { kind: Kind; ttl: Int; }
 type State = Rows<Game>;
 type Board = Grid<Cell>;
 
@@ -35,9 +36,9 @@ kernel snake.empty@1 {
     output result: Board;
     compute {
         let c = icoord();
-        return if c.y == 12 && c.x >= 5 && c.x <= 8 { Cell { kind: 1, ttl: c.x - 4 } }
-            else if c == ivec2(20, 12) { Cell { kind: 2, ttl: 0 } }
-            else { Cell { kind: 0, ttl: 0 } };
+        return if c.y == 12 && c.x >= 5 && c.x <= 8 { Cell { kind: Kind.Snake, ttl: c.x - 4 } }
+            else if c == ivec2(20, 12) { Cell { kind: Kind.Food, ttl: 0 } }
+            else { Cell { kind: Kind.Empty, ttl: 0 } };
     }
 }
 
@@ -58,7 +59,7 @@ kernel snake.step@1 {
     // Whether cell `probe` can take the food: empty, and not the new head.
     fn free(probe: Int, width: Int, head: IVec2) -> Bool {
         let cell = ivec2(probe % width, probe / width);
-        return at(board, cell).kind == 0 && cell != head;
+        return at(board, cell).kind == Kind.Empty && cell != head;
     }
 
     compute {
@@ -79,9 +80,9 @@ kernel snake.step@1 {
         let advancing = g.alive && tick != g.tick;
         let next = ivec2(g.hx + dx, g.hy + dy);
         let inside = next.x >= 0 && next.x < width && next.y >= 0 && next.y < height;
-        let target = if inside { at(board, next) } else { Cell { kind: 0, ttl: 0 } };
+        let target = if inside { at(board, next) } else { Cell { kind: Kind.Empty, ttl: 0 } };
         // A body cell with time left after this tick is still there to hit.
-        let alive = g.alive && (!advancing || (inside && !(target.kind == 1 && target.ttl > 1)));
+        let alive = g.alive && (!advancing || (inside && !(target.kind == Kind.Snake && target.ttl > 1)));
         let moved = advancing && alive;
         let ate = moved && next == ivec2(g.fx, g.fy);
         let cells = width * height;
@@ -120,13 +121,13 @@ kernel snake.board@1 {
         let cell = sample(previous);
         let is_head = g.advanced && here == ivec2(g.hx, g.hy);
         let is_food = here == ivec2(g.fx, g.fy);
-        let body = if g.advanced && cell.kind == 1 && !g.ate {
-            Cell { ..cell, kind: if cell.ttl > 1 { 1 } else { 0 }, ttl: cell.ttl - 1 }
+        let body = if g.advanced && cell.kind == Kind.Snake && !g.ate {
+            Cell { ..cell, kind: if cell.ttl > 1 { Kind.Snake } else { Kind.Empty }, ttl: cell.ttl - 1 }
         } else { cell };
-        return if is_head { Cell { kind: 1, ttl: g.length } }
-            else if body.kind == 1 { body }
-            else if is_food { Cell { kind: 2, ttl: 0 } }
-            else { Cell { kind: 0, ttl: 0 } };
+        return if is_head { Cell { kind: Kind.Snake, ttl: g.length } }
+            else if body.kind == Kind.Snake { body }
+            else if is_food { Cell { kind: Kind.Food, ttl: 0 } }
+            else { Cell { kind: Kind.Empty, ttl: 0 } };
     }
 }
 
@@ -146,10 +147,10 @@ kernel snake.draw@1 {
         let local = c - which * cell;
         let it = at(board, which);
         let on_line = local.x < 1.0 || local.y < 1.0;
-        let is_head = it.kind == 1 && it.ttl == g.length;
-        let color = if it.kind == 2 { vec3(0.95, 0.3, 0.3) }
+        let is_head = it.kind == Kind.Snake && it.ttl == g.length;
+        let color = if it.kind == Kind.Food { vec3(0.95, 0.3, 0.3) }
             else if is_head { vec3(0.7, 1.0, 0.6) }
-            else if it.kind == 1 { vec3(0.3, 0.8, 0.4) }
+            else if it.kind == Kind.Snake { vec3(0.3, 0.8, 0.4) }
             else if on_line { vec3(0.11, 0.12, 0.16) }
             else { vec3(0.08, 0.09, 0.12) };
         let shown = if g.alive { color } else { mix(color, vec3(0.5, 0.1, 0.1), 0.5) };

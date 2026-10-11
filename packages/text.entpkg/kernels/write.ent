@@ -41,7 +41,7 @@ fn trimmed_length(codes: Codes, first: Int, length: Int) -> Int {
 /// when it is below zero.
 fn digit_count(n: Int) -> Int {
     let digits = loop 10 with k = ivec2(abs(n) / 10, 1) until k.x == 0 { ivec2(k.x / 10, k.y + 1) };
-    return digits.y + (if n < 0 { 1 } else { 0 });
+    return digits.y + int(n < 0);
 }
 
 /// The code of character `i` of `n` written out, most significant first;

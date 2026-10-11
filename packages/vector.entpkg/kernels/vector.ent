@@ -76,7 +76,7 @@ struct Slot { at: Int; value: Int; }
 // The distance from `p` to the segment from `a` to `b`.
 fn to_segment(p: Vec2, a: Vec2, b: Vec2) -> Float {
     let ab = b - a;
-    let t = clamp(dot(p - a, ab) / max(dot(ab, ab), 0.0000001), 0.0, 1.0);
+    let t = saturate(dot(p - a, ab) / max(dot(ab, ab), 0.0000001));
     return length(p - (a + ab * t));
 }
 
@@ -84,7 +84,7 @@ fn to_segment(p: Vec2, a: Vec2, b: Vec2) -> Float {
 fn spread_by(t: Float, spread: Int) -> Float {
     if spread == 1 { return 1.0 - abs(fract(t * 0.5) * 2.0 - 1.0); }
     if spread == 2 { return fract(t); }
-    return clamp(t, 0.0, 1.0);
+    return saturate(t);
 }
 
 // A gradient's colour at `t`: the stops about it blended.
@@ -115,18 +115,18 @@ fn paint_at(shape: Shape, stops: Rows<Stop>, p: Vec2) -> Vec4 {
     let g = shape.gradient;
     let t = if shape.paint == 1 {
         let d = vec2(g.z - g.x, g.w - g.y);
-        dot(q - vec2(g.x, g.y), d) / max(dot(d, d), 0.0000001)
+        dot(q - g.xy, d) / max(dot(d, d), 0.0000001)
     } else {
-        length(q - vec2(g.x, g.y)) / max(g.z, 0.0000001)
+        length(q - g.xy) / max(g.z, 0.0000001)
     };
     let c = stops_at(stops, shape.stops, shape.stop_count, spread_by(t, shape.spread));
-    return vec4(c.x, c.y, c.z, c.w * shape.color.w);
+    return vec4(c.xyz, c.w * shape.color.w);
 }
 
 // One segment's part in a pixel: its crossing of the ray to the right
 // and its distance, gathered into `w` (winding, nearest).
 fn crossed(w: Vec2, seg: Vec4, p: Vec2) -> Vec2 {
-    let a = vec2(seg.x, seg.y);
+    let a = seg.xy;
     let b = vec2(seg.z, seg.w);
     let crosses = (a.y <= p.y) != (b.y <= p.y);
     let x = a.x + (p.y - a.y) * (b.x - a.x) / (b.y - a.y);
@@ -144,7 +144,7 @@ fn laid(below: Vec4, s: Shape, stops: Rows<Stop>, p: Vec2, pixel: Float, hit: Ve
     let winding = int(hit.x);
     let inside = if s.rule == 0 { winding != 0 } else { winding % 2 != 0 };
     let signed = if inside { hit.y } else { -hit.y };
-    let cover = clamp(0.5 + signed / pixel, 0.0, 1.0);
+    let cover = saturate(0.5 + signed / pixel);
     let c = paint_at(s, stops, p);
     let a = c.w * cover;
     return vec4(below.x * (1.0 - a) + c.x * a, below.y * (1.0 - a) + c.y * a, below.z * (1.0 - a) + c.z * a, below.w * (1.0 - a) + a);
@@ -203,7 +203,7 @@ kernel vector.draw@1 {
     output result: Image;
     compute {
         let v = seen(frame, int(domain().x), coord());
-        let p = vec2(v.x, v.y);
+        let p = v.xy;
         let pixel = v.z;
         let n = count(shapes);
         return loop rounds(n) with over = background {
@@ -249,8 +249,8 @@ kernel vector.reach@1 {
     compute {
         let s = sample(shapes);
         let res = size(canvas);
-        let lo = on_canvas(s.lo, view, look, res) - vec2(2.0, 2.0);
-        let hi = on_canvas(s.hi, view, look, res) + vec2(2.0, 2.0);
+        let lo = on_canvas(s.lo, view, look, res) - 2.0;
+        let hi = on_canvas(s.hi, view, look, res) + 2.0;
         let none = Reach { x0: 0, y0: 0, x1: -1, y1: -1 };
         if hi.x < 0.0 || hi.y < 0.0 || lo.x > res.x || lo.y > res.y { return none; }
         return Reach {
@@ -396,7 +396,7 @@ kernel vector.placed@1 {
     compute {
         let s = sample(segments);
         let res = size(canvas);
-        let a = on_canvas(vec2(s.x, s.y), view, look, res);
+        let a = on_canvas(s.xy, view, look, res);
         let b = on_canvas(vec2(s.z, s.w), view, look, res);
         return vec4(a.x, a.y, b.x, b.y);
     }
@@ -599,7 +599,7 @@ kernel vector.draw_tiled@1 {
     compute {
         let res = domain();
         let v = seen(frame, int(res.x), coord());
-        let p = vec2(v.x, v.y);
+        let p = v.xy;
         let pixel = v.z;
         let rows = int(tile());
         let tx = int(coord().x / tile());

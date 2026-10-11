@@ -115,13 +115,13 @@ kernel thumb.step@1 {
 
     // Flags: N and Z from a result; the unsigned compare; the carry and
     // overflow of an add and of a subtract.
-    fn nz(v: Int) -> Int { return (if v < 0 { 8 } else { 0 }) | (if v == 0 { 4 } else { 0 }); }
+    fn nz(v: Int) -> Int { return int(v < 0) << 3 | int(v == 0) << 2; }
     fn ult(a: Int, b: Int) -> Bool { return (a ^ 0x80000000) < (b ^ 0x80000000); }
     fn add_flags(a: Int, b: Int, r: Int) -> Int {
-        return nz(r) | (if ult(r, a) { 2 } else { 0 }) | (if ((a ^ r) & (b ^ r)) < 0 { 1 } else { 0 });
+        return nz(r) | int(ult(r, a)) << 1 | int(((a ^ r) & (b ^ r)) < 0);
     }
     fn sub_flags(a: Int, b: Int, r: Int) -> Int {
-        return nz(r) | (if ult(a, b) { 0 } else { 2 }) | (if ((a ^ b) & (a ^ r)) < 0 { 1 } else { 0 });
+        return nz(r) | int(!ult(a, b)) << 1 | int(((a ^ b) & (a ^ r)) < 0);
     }
     fn keep_cv(flags: Int, v: Int) -> Int { return nz(v) | (flags & 3); }
     fn keep_v(flags: Int, v: Int, carry: Int) -> Int { return nz(v) | (carry << 1) | (flags & 1); }
@@ -161,14 +161,16 @@ kernel thumb.step@1 {
         let z = bit(f, 2) == 1;
         let c = bit(f, 1) == 1;
         let v = bit(f, 0) == 1;
-        return if cond == 0 { z } else if cond == 1 { !z }
-            else if cond == 2 { c } else if cond == 3 { !c }
-            else if cond == 4 { n } else if cond == 5 { !n }
-            else if cond == 6 { v } else if cond == 7 { !v }
-            else if cond == 8 { c && !z } else if cond == 9 { !c || z }
-            else if cond == 10 { n == v } else if cond == 11 { n != v }
-            else if cond == 12 { !z && n == v } else if cond == 13 { z || n != v }
-            else { true };
+        return match cond {
+            0 => z, 1 => !z,                    // EQ NE
+            2 => c, 3 => !c,                    // CS CC
+            4 => n, 5 => !n,                    // MI PL
+            6 => v, 7 => !v,                    // VS VC
+            8 => c && !z, 9 => !c || z,         // HI LS
+            10 => n == v, 11 => n != v,         // GE LT
+            12 => !z && n == v, 13 => z || n != v,  // GT LE
+            _ => true,                          // AL
+        };
     }
 
     // Registers: a read of r15 is the instruction's address plus four,
@@ -211,10 +213,12 @@ kernel thumb.step@1 {
             let opc = (op >>> 11) & 3;
             let d = (op >>> 8) & 7;
             let a = at(regs, d);
-            if opc == 0 { put(regs, d, imm8); Step { next: pc + 2, flags: keep_cv(flags, imm8) } }
-            else if opc == 1 { Step { next: pc + 2, flags: sub_flags(a, imm8, sub_wrap(a, imm8)) } }
-            else if opc == 2 { let r = add_wrap(a, imm8); put(regs, d, r); Step { next: pc + 2, flags: add_flags(a, imm8, r) } }
-            else { let r = sub_wrap(a, imm8); put(regs, d, r); Step { next: pc + 2, flags: sub_flags(a, imm8, r) } }
+            match opc {
+                0 => { put(regs, d, imm8); Step { next: pc + 2, flags: keep_cv(flags, imm8) } },  // MOV
+                1 => Step { next: pc + 2, flags: sub_flags(a, imm8, sub_wrap(a, imm8)) },         // CMP
+                2 => { let r = add_wrap(a, imm8); put(regs, d, r); Step { next: pc + 2, flags: add_flags(a, imm8, r) } },  // ADD
+                _ => { let r = sub_wrap(a, imm8); put(regs, d, r); Step { next: pc + 2, flags: sub_flags(a, imm8, r) } },  // SUB
+            }
             },
             2 => {
             if (op >>> 10) == 0x10 {
@@ -232,7 +236,7 @@ kernel thumb.step@1 {
                         let r1 = add_wrap(vd, vs);
                         let r = add_wrap(r1, carry);
                         let c = if ult(r1, vd) || (carry == 1 && r1 == -1) { 2 } else { 0 };
-                        let v = if ((vd ^ r) & (vs ^ r)) < 0 { 1 } else { 0 };
+                        let v = int(((vd ^ r) & (vs ^ r)) < 0);
                         put(regs, rd, r);
                         Step { next: pc + 2, flags: nz(r) | c | v }
                     },
@@ -241,7 +245,7 @@ kernel thumb.step@1 {
                         let r1 = sub_wrap(vd, vs);
                         let r = sub_wrap(r1, 1 - carry);
                         let c = if !ult(vd, vs) && !(carry == 0 && r1 == 0) { 2 } else { 0 };
-                        let v = if ((vd ^ vs) & (vd ^ r)) < 0 { 1 } else { 0 };
+                        let v = int(((vd ^ vs) & (vd ^ r)) < 0);
                         put(regs, rd, r);
                         Step { next: pc + 2, flags: nz(r) | c | v }
                     },
@@ -290,10 +294,12 @@ kernel thumb.step@1 {
                     Step { next: pc + 2, flags: flags }
                 } else {
                     let sh = (op >>> 10) & 3;
-                    if sh == 0 { wr16(ram, a, vd) }
-                    else if sh == 1 { put(regs, rd, rd16(ram, a)) }
-                    else if sh == 2 { put(regs, rd, sext(rd8(ram, a), 8)) }
-                    else { put(regs, rd, sext(rd16(ram, a), 16)) };
+                    match sh {
+                        0 => wr16(ram, a, vd),                        // STRH
+                        1 => put(regs, rd, rd16(ram, a)),             // LDRH
+                        2 => put(regs, rd, sext(rd8(ram, a), 8)),     // LDSB
+                        _ => put(regs, rd, sext(rd16(ram, a), 16)),   // LDSH
+                    };
                     Step { next: pc + 2, flags: flags }
                 }
             }
@@ -407,7 +413,7 @@ kernel thumb.view@1 {
     input ram: Words;
     output result: Image;
     compute {
-        let uv = (coord() + vec2(0.5, 0.5)) / domain() * vec2(32.0, 32.0);
+        let uv = (coord() + 0.5) / domain() * 32.0;
         let cell = floor(uv);
         let a = 0x1000 + int(cell.y) * 32 + int(cell.x);
         let v = (at(ram, a >>> 2) >>> ((a & 3) * 8)) & 0xFF;
@@ -416,6 +422,6 @@ kernel thumb.view@1 {
         let edge = local.x < 0.06 || local.y < 0.06;
         let color = vec3(t, fract(t * 4.0) * 0.6 + 0.2, 1.0 - t);
         let shaded = if edge { color * 0.7 } else { color };
-        return vec4(shaded.x, shaded.y, shaded.z, 1.0);
+        return vec4(shaded, 1.0);
     }
 }

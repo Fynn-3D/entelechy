@@ -141,7 +141,7 @@ fn hue(i: Int, body: Body) -> Vec3 {
 
 fn to_segment(p: Vec2, a: Vec2, b: Vec2) -> Float {
     let ab = b - a;
-    let t = clamp(dot(p - a, ab) / max(dot(ab, ab), 0.0000001), 0.0, 1.0);
+    let t = saturate(dot(p - a, ab) / max(dot(ab, ab), 0.0000001));
     return length(p - (a + ab * t));
 }
 
@@ -167,8 +167,8 @@ fn tile_rows(res: Vec2) -> Int { return int(ceil(res.y / tile())); }
 // the box.
 fn tile_box(t: Int, res: Vec2) -> Vec4 {
     let columns = tile_columns(res);
-    let first = vec2(float(t % columns), float(t / columns)) * tile() + vec2(0.5, 0.5);
-    let last = min(first + vec2(tile() - 1.0, tile() - 1.0), res - vec2(0.5, 0.5));
+    let first = vec2(float(t % columns), float(t / columns)) * tile() + 0.5;
+    let last = min(first + vec2(tile() - 1.0, tile() - 1.0), res - 0.5);
     let a = world_at(first, res);
     let b = world_at(last, res);
     let grown = vec2(3.0, 3.0) * unit(res);
@@ -241,8 +241,8 @@ kernel world.view@1 {
     compute {
         let res = domain();
         let u = unit(res);
-        let p = world_at(coord() + vec2(0.5, 0.5), res);
-        let sky = mix(vec3(0.95, 0.96, 0.98), vec3(0.78, 0.85, 0.93), clamp(p.y / 20.0, 0.0, 1.0));
+        let p = world_at(coord() + 0.5, res);
+        let sky = mix(vec3(0.95, 0.96, 0.98), vec3(0.78, 0.85, 0.93), saturate(p.y / 20.0));
         let cell = floor(coord() / tile());
         let t = int(cell.y) * tile_columns(res) + int(cell.x);
         let n = at(counts, t);
@@ -250,18 +250,18 @@ kernel world.view@1 {
         let painted = loop n with c = sky {
             let i = at(lists, start + index());
             let mark = at(marks, i);
-            let far = abs(p - vec2(mark.x, mark.y)) - vec2(mark.z + u, mark.z + u);
+            let far = abs(p - mark.xy) - vec2(mark.z + u, mark.z + u);
             if max(far.x, far.y) > 0.0 { c } else {
                 let b = at(bodies, i);
                 let d = outside(b, p);
                 if d > u { c } else {
-                    let cover = clamp(0.5 - d / u, 0.0, 1.0);
+                    let cover = saturate(0.5 - d / u);
                     let lit = at(felt, i) > 0;
                     let fill = if b.sensor != 0 {
                         mix(c, if lit { vec3(0.3, 0.85, 0.4) } else { vec3(0.55, 0.8, 0.6) }, if lit { 0.55 } else { 0.25 })
                     } else {
                         let base = hue(i, b);
-                        let rim = clamp(-d / (2.5 * u), 0.0, 1.0);
+                        let rim = saturate(-d / (2.5 * u));
                         let glow = if lit { vec3(0.2, 0.25, 0.0) } else { vec3(0.0, 0.0, 0.0) };
                         mix(base * 0.55, base, rim) + glow
                     };
@@ -271,8 +271,8 @@ kernel world.view@1 {
         };
         let ray = at(rays, 0);
         let hit = at(hits, 0);
-        let beam = clamp(1.0 - to_segment(p, ray.origin, hit.point) / u, 0.0, 1.0) * 0.6;
-        let dot_ = clamp(1.0 - (length(p - hit.point) - 3.0 * u) / u, 0.0, 1.0) * (if hit.body >= 0 { 1.0 } else { 0.0 });
+        let beam = saturate(1.0 - to_segment(p, ray.origin, hit.point) / u) * 0.6;
+        let dot_ = saturate(1.0 - (length(p - hit.point) - 3.0 * u) / u) * float(hit.body >= 0);
         let lined = mix(painted, vec3(0.9, 0.2, 0.2), beam);
         return vec4(mix(lined, vec3(0.95, 0.15, 0.15), dot_), 1.0);
     }

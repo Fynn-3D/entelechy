@@ -30,7 +30,7 @@ kernel stride.clip@1 {
             // The shoulder: lying along -z at rest, bobbing and rocking,
             // and travelling.
             return Pose {
-                at: vec3(0.0, 0.06 * (1.0 - cos(phase * 6.2831853)), 0.0 - stride * phase),
+                at: vec3(0.0, 0.06 * (1.0 - cos(phase * 6.2831853)), -stride * phase),
                 turn: turn_about(vec3(1.0, 0.0, 0.0), -1.5707963 + 0.3 * wave),
                 grow: vec3(1.0, 1.0, 1.0),
             };
@@ -73,8 +73,8 @@ fn view_of(p: Vec3, eye: Vec3, aspect: Float) -> Vec4 {
     let far = 30.0;
     // Right is -z, up is y, and the camera looks down -x.
     let depth = v.x;
-    return vec4((0.0 - v.z) * f / aspect, v.y * f,
-                depth * far / (near - far) + near * far / (near - far), 0.0 - depth);
+    return vec4((-v.z) * f / aspect, v.y * f,
+                depth * far / (near - far) + near * far / (near - far), -depth);
 }
 
 kernel stride.project@1 {
@@ -116,10 +116,10 @@ kernel stride.shade@1 {
         let sky = mix(vec3(0.16, 0.19, 0.25), vec3(0.06, 0.07, 0.10), coord().y / size.y);
         if dy >= 0.0 { return vec4(sky, 1.0); }
         let t = (floor - eye.y) / dy;
-        let hit = eye + vec3(-1.0, dy, 0.0 - dx) * t;
+        let hit = eye + vec3(-1.0, dy, -dx) * t;
         let band = fract(hit.z / 0.4) < 0.5;
         let ground = if band { vec3(0.30, 0.32, 0.28) } else { vec3(0.22, 0.24, 0.21) };
-        let fade = clamp(t / 25.0, 0.0, 1.0);
+        let fade = saturate(t / 25.0);
         return vec4(mix(ground, sky, fade), 1.0);
     }
 }

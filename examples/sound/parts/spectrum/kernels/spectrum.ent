@@ -74,12 +74,12 @@ kernel spectrum.draw@1 {
     output result: Image;
     compute {
         let res = domain();
-        let uv = (coord() + vec2(0.5, 0.5)) / res;
+        let uv = (coord() + 0.5) / res;
         let n = count(bins);
         let which = int(uv.x * float(n));
         let power = at(bins, which) * gain;
         // The bars stop short of the top, where the readout is.
-        let height = clamp(power, 0.0, 1.0) * 0.78;
+        let height = saturate(power) * 0.78;
         let inside = uv.y > 1.0 - height;
         let gap = fract(uv.x * float(n)) < 0.12;
         let loudest = which == at(peak, 0).bin;
@@ -91,7 +91,7 @@ kernel spectrum.draw@1 {
             mix(vec3(0.05, 0.06, 0.09), vec3(0.09, 0.11, 0.16), uv.y)
         };
         let color = if inside && !gap { bar } else { back };
-        return vec4(color.x, color.y, color.z, 1.0);
+        return vec4(color, 1.0);
     }
 }
 

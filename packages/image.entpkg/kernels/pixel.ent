@@ -18,13 +18,13 @@ kernel image.pixelate@1 {
 fn nearest_colour(c: Vec3, colors: Rows<Vec3>) -> Vec3 {
     let lab = linear_to_oklab(max(c, vec3(0.0, 0.0, 0.0)));
     let first = at(colors, 0);
-    let start = vec4(first.x, first.y, first.z, length(linear_to_oklab(first) - lab));
+    let start = vec4(first, length(linear_to_oklab(first) - lab));
     let best = loop count(colors) with b = start {
         let k = at(colors, index());
         let d = length(linear_to_oklab(k) - lab);
-        if d < b.w { vec4(k.x, k.y, k.z, d) } else { b }
+        if d < b.w { vec4(k, d) } else { b }
     };
-    return vec3(best.x, best.y, best.z);
+    return best.xyz;
 }
 
 /// The colour of `colors`, rows from dark to light, that `c`'s Oklab
@@ -45,7 +45,7 @@ kernel image.palette@2 {
     compute {
         let c = sample(source);
         let k = nearest_colour(c.rgb, colors);
-        return vec4(k.x, k.y, k.z, c.a);
+        return vec4(k, c.a);
     }
 }
 
@@ -59,7 +59,7 @@ kernel image.ramp@1 {
     compute {
         let c = sample(source);
         let k = ramp_colour(c.rgb, colors);
-        return vec4(k.x, k.y, k.z, c.a);
+        return vec4(k, c.a);
     }
 }
 
@@ -87,7 +87,7 @@ fn dithered_colour(c: Vec3, colors: Rows<Vec3>, p: IVec2) -> Vec3 {
     };
     let a = linear_to_oklab(pair.near);
     let toward = linear_to_oklab(pair.next) - a;
-    let share = clamp(dot(lab - a, toward) / max(dot(toward, toward), 0.000001), 0.0, 1.0);
+    let share = saturate(dot(lab - a, toward) / max(dot(toward, toward), 0.000001));
     return if share > bayer4(p) { pair.next } else { pair.near };
 }
 
@@ -104,7 +104,7 @@ kernel image.dither@1 {
     compute {
         let c = sample(source);
         let k = dithered_colour(c.rgb, colors, icoord());
-        return vec4(k.x, k.y, k.z, c.a);
+        return vec4(k, c.a);
     }
 }
 

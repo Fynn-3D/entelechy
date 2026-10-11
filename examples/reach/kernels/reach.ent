@@ -19,7 +19,7 @@ fn view_of(p: Vec3, aspect: Float) -> Vec4 {
     let near = 0.1;
     let far = 20.0;
     return vec4(v.x * f / aspect, v.y * f,
-                v.z * far / (near - far) + near * far / (near - far), 0.0 - v.z);
+                v.z * far / (near - far) + near * far / (near - far), -v.z);
 }
 
 /// The point the shoulder turns to, in the rig's own space: a slow loop
@@ -34,10 +34,10 @@ kernel reach.target@1 {
         if pointer_down() {
             let p = pointer();
             let span = 2.0 * (4.2 + depth) / 1.7321;
-            return vec3((p.x - 0.5) * span * aspect, 0.6 + (0.5 - p.y) * span, 0.0 - depth);
+            return vec3((p.x - 0.5) * span * aspect, 0.6 + (0.5 - p.y) * span, -depth);
         }
         let t = time();
-        return vec3(sin(t * 0.8) * 1.6, 0.4 + sin(t * 1.3) * 1.0, 0.0 - depth);
+        return vec3(sin(t * 0.8) * 1.6, 0.4 + sin(t * 1.3) * 1.0, -depth);
     }
 }
 
@@ -78,11 +78,11 @@ kernel reach.shade@1 {
         let n = normalize(s.normal);
         let lit = max(dot(n, normalize(light)), 0.0);
         let rim = pow(1.0 - abs(n.z), 3.0) * 0.3;
-        let body = vec3(0.72, 0.58, 0.44) * (0.25 + 0.75 * lit) + vec3(rim, rim, rim);
+        let body = vec3(0.72, 0.58, 0.44) * (0.25 + 0.75 * lit) + rim;
         let seen = if s.id < 0 { sky } else { body };
         let c = view_of(at(target, 0), aspect);
         let spot = vec2((c.x / c.w * 0.5 + 0.5) * size.x, (0.5 - c.y / c.w * 0.5) * size.y);
-        let d = distance(coord() + vec2(0.5, 0.5), spot);
+        let d = distance(coord() + 0.5, spot);
         let ring = d < 5.0 && d > 3.0;
         return vec4(if ring { vec3(0.95, 0.35, 0.25) } else { seen }, 1.0);
     }

@@ -37,7 +37,7 @@ node one: kernel {
     requires { field.write; }
     output result: Rows<Float>;
     domain = 9;
-    compute { return if element() == 4 { 1.0 } else { 0.0 }; }
+    compute { return float(element() == 4); }
 }
 node box: kernel {
     requires { field.write; }
@@ -60,9 +60,9 @@ node colour: kernel {
     compute {
         let c = vec3(0.25, 0.5, 0.75);
         let h = rgb_to_hsv(c);
-        return if element() == 0 { vec4(h.x, h.y, h.z, 0.0) }
+        return if element() == 0 { vec4(h, 0.0) }
             else if element() == 1 { vec4(length(hsv_to_rgb(h) - c), length(oklab_to_linear(linear_to_oklab(c)) - c), luminance(vec3(1.0, 1.0, 1.0)), 0.0) }
-            else { let s = linear_to_srgb(srgb_to_linear(c)); vec4(s.x, s.y, s.z, srgb_decode(0.5)) };
+            else { let s = linear_to_srgb(srgb_to_linear(c)); vec4(s, srgb_decode(0.5)) };
     }
 }
 node base: kernel {

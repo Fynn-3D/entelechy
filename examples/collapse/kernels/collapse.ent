@@ -145,7 +145,7 @@ kernel collapse.view@1 {
     // middle and a stub to each side the tile is open on, which meets
     // the neighbour's stub exactly at the edge.
     fn pipe(tile: Int, p: Vec2) -> Float {
-        return loop 4 with d = length(p - vec2(0.5, 0.5)) - 0.17 {
+        return loop 4 with d = length(p - 0.5) - 0.17 {
             if ((tile >>> index()) & 1) == 0 { d } else {
                 let arm = match index() {
                     0 => length(p - vec2(0.5, clamp(p.y, 0.0, 0.5))),
@@ -171,11 +171,11 @@ kernel collapse.view@1 {
         let ink = mix(vec3(0.42, 0.85, 0.78), vec3(0.96, 0.72, 0.32), (uv.x + uv.y) / (extent.x + extent.y));
         let waiting = mix(vec3(0.24, 0.20, 0.13), vec3(0.11, 0.13, 0.19), float(left) / 15.0);
         let color = if left == 1 {
-            mix(ink, ground, clamp(pipe(ctz(mask), local) * edge, 0.0, 1.0))
+            mix(ink, ground, saturate(pipe(ctz(mask), local) * edge))
         } else {
-            let dot = length(local - vec2(0.5, 0.5)) - 0.1 - float(left) * 0.012;
-            mix(waiting, ground, clamp(dot * edge, 0.0, 1.0))
+            let dot = length(local - 0.5) - 0.1 - float(left) * 0.012;
+            mix(waiting, ground, saturate(dot * edge))
         };
-        return vec4(color.x, color.y, color.z, 1.0);
+        return vec4(color, 1.0);
     }
 }

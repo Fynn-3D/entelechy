@@ -30,7 +30,7 @@ kernel mesh.torus@1 {
         let centre = vec3(cos(a), 0.0, sin(a)) * major;
         let radial = vec3(cos(a) * cos(b), sin(b), sin(a) * cos(b));
         let p = centre + radial * minor;
-        return Vertex { clip: vec4(p.x, p.y, p.z, 1.0), normal: radial, uv: vec2(u, v) };
+        return Vertex { clip: vec4(p, 1.0), normal: radial, uv: vec2(u, v) };
     }
 }
 
@@ -102,15 +102,17 @@ kernel mesh.split_faces@1 {
     compute {
         let i = element();
         let t = at(faces, i / 4);
-        let corner = i - (i / 4) * 4;
         let base = count(mesh) + (i / 4) * 3;   // this triangle's midpoints
         let ab = base;
         let bc = base + 1;
         let ca = base + 2;
-        return if corner == 0 { Tri { a: t.a, b: ab, c: ca } }
-            else if corner == 1 { Tri { a: ab, b: t.b, c: bc } }
-            else if corner == 2 { Tri { a: ca, b: bc, c: t.c } }
-            else { Tri { a: ab, b: bc, c: ca } };
+        // Three corners and the middle.
+        return match i % 4 {
+            0 => Tri { a: t.a, b: ab, c: ca },
+            1 => Tri { a: ab, b: t.b, c: bc },
+            2 => Tri { a: ca, b: bc, c: t.c },
+            _ => Tri { a: ab, b: bc, c: ca },
+        };
     }
 }
 
@@ -171,8 +173,8 @@ kernel mesh.shade@1 {
         let glint = pow(max(dot(n, h), 0.0), 40.0) * 0.5;
         let check = (fract(s.uv.x * 12.0) < 0.5) != (fract(s.uv.y * 6.0) < 0.5);
         let base = if check { vec3(0.9, 0.55, 0.25) } else { vec3(0.25, 0.6, 0.85) };
-        let lit = base * (0.12 + 0.88 * diffuse) + vec3(glint, glint, glint);
+        let lit = base * (0.12 + 0.88 * diffuse) + glint;
         let color = if s.id < 0 { sky } else { lit };
-        return vec4(color.x, color.y, color.z, 1.0);
+        return vec4(color, 1.0);
     }
 }

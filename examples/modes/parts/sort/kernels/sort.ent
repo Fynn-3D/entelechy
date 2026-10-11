@@ -68,6 +68,6 @@ kernel sort.bars@1 {
         let base = if top { d.y * 0.5 } else { d.y };
         let lit = c.y > base - value * d.y * 0.45;
         let color = if lit { mix(vec3(0.2, 0.5, 0.9), vec3(1.0, 0.8, 0.3), value) } else { vec3(0.06, 0.07, 0.1) };
-        return vec4(color.x, color.y, color.z, 1.0);
+        return vec4(color, 1.0);
     }
 }

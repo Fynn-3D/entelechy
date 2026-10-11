@@ -18,9 +18,9 @@ fn to_line(p: Vec2, a: Vec2, b: Vec2) -> Float {
 }
 
 /// 1 on a dash of a line at length `s` along it, `n` dashes a unit.
-fn dashes(s: Float, n: Float) -> Float { return if fract(s * n) < 0.5 { 1.0 } else { 0.0 }; }
+fn dashes(s: Float, n: Float) -> Float { return float(fract(s * n) < 0.5); }
 
-fn paint(c: Vec3, col: Vec3, a: Float) -> Vec3 { return mix(c, col, clamp(a, 0.0, 1.0)); }
+fn paint(c: Vec3, col: Vec3, a: Float) -> Vec3 { return mix(c, col, saturate(a)); }
 
 kernel logo.construction@1 {
     requires { field.write; }
@@ -72,7 +72,7 @@ kernel logo.construction@1 {
             let corner = n1 + vec2(side * 0.75 * a, 0.0);
             let n3 = corner + vec2(0.0, a);
             let q = 0.12 * a;
-            let sq = min(along(p, corner + vec2(0.0 - side * q, 0.0), corner + vec2(0.0 - side * q, q)).x, along(p, corner + vec2(0.0, q), corner + vec2(0.0 - side * q, q)).x);
+            let sq = min(along(p, corner + vec2(-side * q, 0.0), corner + vec2(-side * q, q)).x, along(p, corner + vec2(0.0, q), corner + vec2(-side * q, q)).x);
             min(d, min(min(along(p, n1, corner).x, along(p, corner, n3).x), sq))
         };
         let c8 = paint(c7, build(), stroke(tri, fine * 1.3, px));
@@ -81,7 +81,7 @@ kernel logo.construction@1 {
         let c9 = paint(c8, build(), stroke(radii, hair * 1.2, px) * dashes(length(p - cc), 40.0) * 0.8);
         // The angle at the crown's middle: from straight up to the last radius.
         let ang = atan2(p.x - cc.x, p.y - cc.y);
-        let arc_on = if ang < 0.0 && ang > -1.04719755 { 1.0 } else { 0.0 };
+        let arc_on = float(ang < 0.0 && ang > -1.04719755);
         let c10 = paint(c9, build(), stroke(abs(length(p - cc) - 0.9 * a), fine * 1.3, px) * arc_on);
         // Every circle's outline: the seed, the nodes, the rings.
         let nodes = loop 6 with d = 100.0 {
@@ -95,6 +95,6 @@ kernel logo.construction@1 {
         // The lattice's points the nodes stand on, and the seed's middle.
         let pts = loop 6 with d = 100.0 { min(d, length(p - lattice_node(index()))) };
         let c12 = paint(c11, guide(), stroke(min(min(pts, length(p - s)), length(p - crown_centre())), 2.2 * px, px));
-        return vec4(c12.x, c12.y, c12.z, 1.0);
+        return vec4(c12, 1.0);
     }
 }

@@ -5,7 +5,7 @@
 use "colour.ent";
 
 /// How bright a linear colour looks, 0 for black to 1 for white.
-fn lightness(c: Vec3) -> Float { return clamp(linear_to_oklab(max(c, vec3(0.0, 0.0, 0.0))).x, 0.0, 1.0); }
+fn lightness(c: Vec3) -> Float { return saturate(linear_to_oklab(max(c, vec3(0.0, 0.0, 0.0))).x); }
 
 /// The bin a colour falls in, of `bins`.
 fn bin_of(c: Vec3, bins: Int) -> Int {
@@ -60,9 +60,9 @@ kernel image.equalize@1 {
         let bin = bin_of(s.xyz, n);
         let below = if bin > 0 { float(at(cumulative, bin - 1)) } else { 0.0 };
         let through = float(at(cumulative, bin));
-        let wanted = mix(below, through, clamp(l * float(n) - float(bin), 0.0, 1.0)) / total;
+        let wanted = mix(below, through, saturate(l * float(n) - float(bin))) / total;
         let ratio = wanted / max(l, 0.0001);
         let c = mix(s.xyz, s.xyz * (ratio * ratio * ratio), amount);
-        return vec4(c.x, c.y, c.z, s.w);
+        return vec4(c, s.w);
     }
 }

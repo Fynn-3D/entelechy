@@ -29,7 +29,7 @@ kernel compact.offsets@1 {
     input flags: Rows<Int>;
     output result: Rows<Int>;
     prefix with sum {
-        return if sample(flags) != 0 { 1 } else { 0 };
+        return int(sample(flags) != 0);
     }
 }
 
@@ -39,7 +39,7 @@ kernel compact.total@1 {
     requires { field.read; field.write; }
     input flags: Rows<Int>;
     output result: Rows<Int>;
-    compute { return if sample(flags) != 0 { 1 } else { 0 }; }
+    compute { return int(sample(flags) != 0); }
     merge(a, b) { return a + b; }
 }
 

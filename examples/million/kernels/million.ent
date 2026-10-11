@@ -57,7 +57,7 @@ kernel million.step@1 {
     output result: Bodies;
     compute {
         let body = sample(previous);
-        let from_middle = body.at - vec2(0.5, 0.5);
+        let from_middle = body.at - 0.5;
         let away = max(length(from_middle), 0.03);
         let towards = from_middle / away;
         let v = body.v - towards * (pull / (away * away)) * step;
@@ -85,7 +85,7 @@ kernel million.splat@1 {
         // canvas, and a scatter drops what falls outside.
         let extent = size(canvas);
         let across = min(extent.x, extent.y);
-        let cell = floor((body.at - vec2(0.5, 0.5)) * across + extent * 0.5);
+        let cell = floor((body.at - 0.5) * across + extent * 0.5);
         // A count is an Int, and integers add in any order: a million
         // writers meet in one atomic each. A Float sum would have to be
         // added up in element order to give the same word every time,
@@ -105,10 +105,10 @@ kernel million.draw@1 {
         // Counts run from none to hundreds, so the picture is of their
         // logarithm; a linear one is a white disc on black.
         let count = float(sample(heat));
-        let lit = clamp(log(1.0 + count * scale) * 0.55, 0.0, 1.0);
+        let lit = saturate(log(1.0 + count * scale) * 0.55);
         let ground = vec3(0.04, 0.05, 0.08);
         let warm = mix(vec3(0.20, 0.45, 0.95), vec3(0.99, 0.80, 0.42), lit);
         let color = mix(ground, warm, lit);
-        return vec4(color.x, color.y, color.z, 1.0);
+        return vec4(color, 1.0);
     }
 }

@@ -15,8 +15,8 @@ fn hertz(pitch: Int) -> Float {
 // How loud a note is `age` seconds in: a quick rise, a slow fall, and
 // silence once it is over.
 fn envelope(age: Float, duration: Float) -> Float {
-    let rise = clamp(age / 0.012, 0.0, 1.0);
-    let fall = clamp(1.0 - (age - duration) / 0.09, 0.0, 1.0);
+    let rise = saturate(age / 0.012);
+    let fall = saturate(1.0 - (age - duration) / 0.09);
     let body = 0.35 + 0.65 * exp(-age * 1.4);
     return if age < 0.0 { 0.0 } else { rise * fall * body };
 }
@@ -62,7 +62,7 @@ kernel score.roll@1 {
     output result: Image;
     compute {
         let res = domain();
-        let uv = (coord() + vec2(0.5, 0.5)) / res;
+        let uv = (coord() + 0.5) / res;
         let second = uv.x * loops;
         let key = float(highest) - uv.y * float(highest - lowest);
         let n = count(song);
@@ -96,6 +96,6 @@ kernel score.roll@1 {
         } else {
             back
         };
-        return vec4(color.x, color.y, color.z, 1.0);
+        return vec4(color, 1.0);
     }
 }

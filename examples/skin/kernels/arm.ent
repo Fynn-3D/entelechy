@@ -21,7 +21,7 @@ kernel arm.hand@1 {
     compute {
         if element() == 0 { return time() * speed; }
         let p = pointer();
-        return if pointer_down() { clamp(p.y, 0.0, 1.0) } else { 0.5 + 0.5 * sin(time() * 0.9) };
+        return if pointer_down() { saturate(p.y) } else { 0.5 + 0.5 * sin(time() * 0.9) };
     }
 }
 
@@ -62,7 +62,7 @@ kernel arm.project@1 {
         let far = 20.0;
         return Vertex {
             clip: vec4(view.x * f / aspect, view.y * f,
-                       view.z * far / (near - far) + near * far / (near - far), 0.0 - view.z),
+                       view.z * far / (near - far) + near * far / (near - far), -view.z),
             normal: n,
             uv: v.uv,
         };
@@ -82,7 +82,7 @@ kernel arm.shade@1 {
         let l = normalize(light);
         let lit = max(dot(n, l), 0.0);
         let rim = pow(1.0 - abs(n.z), 3.0) * 0.3;
-        let body = vec3(0.72, 0.58, 0.44) * (0.25 + 0.75 * lit) + vec3(rim, rim, rim);
+        let body = vec3(0.72, 0.58, 0.44) * (0.25 + 0.75 * lit) + rim;
         return vec4(if s.id < 0 { sky } else { body }, 1.0);
     }
 }

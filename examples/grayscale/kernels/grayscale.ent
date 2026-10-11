@@ -5,7 +5,7 @@ kernel image.grayscale@1 {
     param amount: Float = 1.0;
     output result: Image;
     fn luma(c: Vec4) -> Float {
-        return c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
+        return dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
     }
     compute {
         let c = sample(source);

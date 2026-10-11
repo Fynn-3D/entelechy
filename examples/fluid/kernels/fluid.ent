@@ -183,7 +183,7 @@ kernel fluid.smoke@1 {
     compute {
         let c = coord();
         let ext = domain();
-        let here = c + vec2(0.5, 0.5);
+        let here = c + 0.5;
         let carried = at_linear(previous, here - flow_at(velocity, here) * dt);
         let h = at(hand, 0);
         let d = here - vec2(h.x, h.y);
@@ -201,14 +201,14 @@ kernel fluid.draw@1 {
     input velocity: Flow;
     output result: Image;
     compute {
-        let s = clamp(sample(smoke), 0.0, 1.0);
-        let speed = length(flow_at(velocity, coord() + vec2(0.5, 0.5)));
+        let s = saturate(sample(smoke));
+        let speed = length(flow_at(velocity, coord() + 0.5));
         let calm = vec3(0.92, 0.88, 0.82);
         let fast = vec3(0.45, 0.7, 1.0);
-        let tint = mix(calm, fast, clamp(speed * 0.2, 0.0, 1.0));
+        let tint = mix(calm, fast, saturate(speed * 0.2));
         let ground = vec3(0.02, 0.022, 0.03);
         let color = ground + tint * pow(s, 0.8);
-        return vec4(color.x, color.y, color.z, 1.0);
+        return vec4(color, 1.0);
     }
 }
 

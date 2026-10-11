@@ -58,8 +58,8 @@ node check: kernel {
         let world = at(palette, 1) * inverse(at(skeleton, 1).bind);
         let origin = world * vec4(0.0, 0.0, 0.0, 1.0);
         let along = world * vec4(0.0, 1.0, 0.0, 0.0);
-        let to = at(target, 0) - vec3(origin.x, origin.y, origin.z);
-        return dot(normalize(vec3(along.x, along.y, along.z)), normalize(to));
+        let to = at(target, 0) - origin.xyz;
+        return dot(normalize(along.xyz), normalize(to));
     }
 }
 

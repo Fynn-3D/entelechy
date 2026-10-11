@@ -102,7 +102,7 @@ kernel crowd.project@1 {
         let far = 80.0;
         return Vertex {
             clip: vec4(view.x * f / aspect, view.y * f,
-                       view.z * far / (near - far) + near * far / (near - far), 0.0 - view.z),
+                       view.z * far / (near - far) + near * far / (near - far), -view.z),
             normal: n,
             uv: v.uv,
         };

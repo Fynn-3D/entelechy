@@ -9,7 +9,7 @@ fn turn_about(axis: Vec3, angle: Float) -> Vec4 {
     let length = sqrt(dot(axis, axis));
     if length == 0.0 { return vec4(0.0, 0.0, 0.0, 1.0); }
     let a = axis / length * sin(angle * 0.5);
-    return vec4(a.x, a.y, a.z, cos(angle * 0.5));
+    return vec4(a, cos(angle * 0.5));
 }
 
 // One rotation after another: `after(a, b)` turns by `b`, then by `a`.
@@ -23,7 +23,7 @@ fn after(a: Vec4, b: Vec4) -> Vec4 {
 
 // The way back from a rotation.
 fn back(q: Vec4) -> Vec4 {
-    return vec4(0.0 - q.x, 0.0 - q.y, 0.0 - q.z, q.w);
+    return vec4(-q.x, -q.y, -q.z, q.w);
 }
 
 // The shorter way round between two rotations, `t` of the way from `a`
@@ -37,7 +37,7 @@ fn between(a: Vec4, b: Vec4, t: Float) -> Vec4 {
 
 // A vector turned by a rotation.
 fn rotating(q: Vec4, v: Vec3) -> Vec3 {
-    let u = vec3(q.x, q.y, q.z);
+    let u = q.xyz;
     let t = cross(u, v) * 2.0;
     return v + t * q.w + cross(u, t);
 }
@@ -50,10 +50,10 @@ fn arc(a: Vec3, b: Vec3) -> Vec4 {
     if d < -0.999999 {
         let side = if abs(a.x) < 0.9 { cross(a, vec3(1.0, 0.0, 0.0)) } else { cross(a, vec3(0.0, 1.0, 0.0)) };
         let n = normalize(side);
-        return vec4(n.x, n.y, n.z, 0.0);
+        return vec4(n, 0.0);
     }
     let c = cross(a, b);
-    let q = vec4(c.x, c.y, c.z, 1.0 + d);
+    let q = vec4(c, 1.0 + d);
     return q / sqrt(dot(q, q));
 }
 
@@ -74,7 +74,7 @@ fn transform(at: Vec3, turn: Vec4, grow: Vec3) -> Mat4 {
         r[0] * grow.x,
         r[1] * grow.y,
         r[2] * grow.z,
-        vec4(at.x, at.y, at.z, 1.0));
+        vec4(at, 1.0));
 }
 
 // A turn of `a` radians about one axis, as a `Mat3`: what a camera

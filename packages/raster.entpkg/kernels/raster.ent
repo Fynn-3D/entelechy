@@ -403,7 +403,7 @@ kernel raster.resolve@2 {
         }
         let t = int(key & 0xFFFFFFFFl);
         let k = corners(at(triangles, t), vertices, size(keys));
-        let p = coord() + vec2(0.5, 0.5);
+        let p = coord() + 0.5;
         let w0 = edge(k.b.xy, k.c.xy, p);
         let w1 = edge(k.c.xy, k.a.xy, p);
         let w2 = edge(k.a.xy, k.b.xy, p);
