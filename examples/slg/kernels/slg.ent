@@ -1,6 +1,6 @@
 // A small tactics game in the NES manner. One row of state holds the turn
 // machine, one row of units holds the armies, a grid holds the terrain,
-// and the movement range is six relaxation passes over that grid. The
+// and the movement range is six of the grid package's passes over it. The
 // rules only issue orders; the unit row applies them; the picture is the
 // last node. Arrows move the cursor, Z confirms, X cancels, Enter ends
 // the turn.
@@ -108,11 +108,12 @@ kernel slg.seed@1 {
     }
 }
 
-/// One relaxation pass: the cheapest way in from a neighbour. Water and
-/// units of the other team block; friends may be passed through.
-kernel slg.relax@1 {
+/// What each cell costs to enter, for the grid package's passes: its
+/// tile's cost, or 999, not entered, where a unit of the other team
+/// stands; friends may be passed through. Water costs 99, so a walk to the
+/// prey crosses a river where it has to.
+kernel slg.costs@1 {
     requires { field.read; field.write; }
-    input previous: Range;
     input map: Map;
     input units: Units;
     input game: State;
@@ -125,22 +126,11 @@ kernel slg.relax@1 {
         };
     }
 
-    fn enter(x: Int, y: Int, extent: Vec2) -> Int {
-        return if x < 0 || y < 0 || x >= int(extent.x) || y >= int(extent.y) { 999 } else { at(previous, vec2(x, y)) };
-    }
-
     compute {
         let g = at(game, 0);
         let c = coord();
-        let x = int(c.x);
-        let y = int(c.y);
-        let extent = domain();
-        let mine = sample(previous);
         let team = if g.selected >= 0 { at(units, g.selected).team } else { 0 };
-        let cost = sample(map).cost;
-        let best = min(min(enter(x - 1, y, extent), enter(x + 1, y, extent)), min(enter(x, y - 1, extent), enter(x, y + 1, extent)));
-        let entered = if blocked(x, y, team) { 999 } else { min(best + cost, 999) };
-        return min(mine, entered);
+        return if blocked(int(c.x), int(c.y), team) { 999 } else { sample(map).cost };
     }
 }
 

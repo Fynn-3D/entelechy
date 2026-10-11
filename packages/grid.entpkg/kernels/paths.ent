@@ -1,0 +1,83 @@
+// Ways over a grid of cells: how far each cell is from a seed, a pass at a
+// time (each cell its cheapest neighbour's and its own cost), how a walk
+// steps down that toward its seed, and the walk drawn as a line with an
+// arrow's head where it ends.
+
+/// Far: a cell not yet reached, or one none may reach.
+fn grid_far() -> Int { return 9999; }
+
+fn grid_inside(dist: Grid<Int>, c: IVec2) -> Bool { let n = size(dist); return c.x >= 0 && c.y >= 0 && float(c.x) < n.x && float(c.y) < n.y; }
+fn grid_at(dist: Grid<Int>, c: IVec2) -> Int { return if grid_inside(dist, c) { at(dist, vec2(float(c.x), float(c.y))) } else { grid_far() }; }
+
+/// One pass: each cell the nearer of what it is and its cheapest
+/// neighbour's and its own cost (`cost`, `blocked` or more not entered).
+/// A node runs it `times = N; carry previous <- result;` from a seed (0
+/// where it begins, `grid_far()` else).
+kernel grid.relax@1 {
+    requires { field.read; field.write; }
+    input previous: Grid<Int>;
+    input cost: Grid<Int>;
+    param blocked: Int = 99;
+    output result: Grid<Int>;
+    compute {
+        let c = ivec2(int(coord().x), int(coord().y));
+        let mine = sample(previous);
+        let k = sample(cost);
+        let ways = [ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1)];
+        let best = loop 4 with b = grid_far() { min(b, grid_at(previous, c + ways[index()])) };
+        let entered = if k >= blocked { grid_far() } else { min(best + k, grid_far()) };
+        return min(mine, entered);
+    }
+}
+
+/// A step from `c` toward the seed of `dist`: the neighbour nearest it
+/// (the first of right, left, down, up when two are as near); `c` when
+/// none is nearer.
+fn grid_step(dist: Grid<Int>, c: IVec2) -> IVec2 {
+    let ways = [ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1)];
+    let best = loop 4 with b = ivec3(c.x, c.y, grid_at(dist, c)) {
+        let n = c + ways[index()];
+        let v = grid_at(dist, n);
+        if v < b.z { ivec3(n.x, n.y, v) } else { b }
+    };
+    return ivec2(best.x, best.y);
+}
+
+/// How far point `p` is from the segment `a` to `b`.
+fn off_segment(p: Vec2, a: Vec2, b: Vec2) -> Float {
+    let ab = b - a;
+    let s = clamp(dot(p - a, ab) / max(dot(ab, ab), 0.0001), 0.0, 1.0);
+    return length(p - a - ab * s);
+}
+
+/// The walk from cell `from` down `dist` (its seed `to`) drawn at `p` (in
+/// cells: a cell's middle is its index and a half): a line through each
+/// step's middle `half` of a cell wide each side, and at `to` an arrow's
+/// head pointing the way the last step goes; how much covers `p` (0 to 1).
+/// At most `steps` steps.
+fn path_cover(dist: Grid<Int>, from: IVec2, to: IVec2, p: Vec2, half: Float) -> Float {
+    let mid = vec2(0.5, 0.5);
+    let walked = loop 24 with w = vec4(float(from.x), float(from.y), 1000.0, 0.0) {
+        let here = ivec2(int(w.x), int(w.y));
+        if w.w > 0.5 || (here.x == to.x && here.y == to.y) { vec4(w.x, w.y, w.z, 1.0) } else {
+            let next = grid_step(dist, here);
+            let a = vec2(float(here.x), float(here.y)) + mid;
+            let n = vec2(float(next.x), float(next.y)) + mid;
+            // The last step stops short, where the arrow's head begins.
+            let b = if next.x == to.x && next.y == to.y { n - normalize(n - a + vec2(0.0001, 0.0)) * 0.28 } else { n };
+            vec4(float(next.x), float(next.y), min(w.z, off_segment(p, a, b)), if next.x == here.x && next.y == here.y { 1.0 } else { 0.0 })
+        }
+    };
+    let line = 1.0 - smoothstep(half * 0.7, half, walked.z);
+    let before = loop 24 with w = ivec4(from.x, from.y, from.x, from.y) {
+        let here = ivec2(w.x, w.y);
+        if here.x == to.x && here.y == to.y { w } else { let next = grid_step(dist, here); ivec4(next.x, next.y, here.x, here.y) }
+    };
+    let way = normalize(vec2(float(to.x - before.z), float(to.y - before.w)) + vec2(0.0001, 0.0));
+    let side = vec2(0.0 - way.y, way.x);
+    let tip = vec2(float(to.x), float(to.y)) + mid + way * 0.22;
+    let d = p - tip;
+    let back = 0.0 - dot(d, way);
+    let head = if back >= 0.0 && back <= 0.5 && abs(dot(d, side)) <= back * 0.42 { 1.0 } else { 0.0 };
+    return if from.x != to.x || from.y != to.y { max(line, head) } else { 0.0 };
+}

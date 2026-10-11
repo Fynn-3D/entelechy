@@ -67,6 +67,8 @@ Packages built from existing modes, with no engine feature of their own.
 | [Image](packages/image.entpkg/package.esn) | maps, scatter `sum` and prefix `sum` (histograms), `times` with a carried step (jump flooding) | [image replay](examples/darkroom/tests/image.replay) on three backends |
 | [Noise](packages/noise.entpkg/kernels/noise.ent) | functions over `Int` bits (`mul_wrap`, `>>>`) | [noise replay](examples/nebula/tests/noise.replay) on three backends |
 | [Camera finish](packages/image.entpkg/graphs/finish.esn) | maps over grids, `size(port)` domains, the noise package | [nebula replay](examples/nebula/tests/nebula.replay) on three backends |
+| [Ways over a grid](packages/grid.entpkg/kernels/paths.ent) | `times` with a carried pass over a cost grid | [skirmish replay](examples/slg/tests/skirmish.replay) on three backends |
+| [Synthesis](packages/synth.entpkg/kernels/synth.ent) | a clock carried by `<~`, `rate()`, functions of time | [skirmish replay](examples/slg/tests/skirmish.replay) on three backends |
 
 ## Where each contract is enforced
 

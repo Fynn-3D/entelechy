@@ -230,3 +230,19 @@ its interface is held to.
   rounds alike, so a drawing of many thousand shapes draws in time.
   `graphs/drawing.esn` draws one whole, fitted to the window. Used by the
   `vector` example.
+- **grid** — ways over a grid of cells: how far each cell is from a seed
+  by what each costs to enter, one pass at a time (`grid.relax@1`, placed
+  `times = N; carry previous <- result;` from a seed of 0 where it begins
+  and `grid_far()` elsewhere, a cost at `blocked` or more not entered);
+  the step a walk takes toward its seed (`grid_step`); and the walk drawn
+  as a line with an arrow's head (`path_cover`). A project makes the
+  costs and the seed: what stands in the way is its own. Used by the
+  `slg` example.
+- **synth** — sound made from tones and noise, a block of 800 stereo
+  samples a frame: the clock counting the samples played
+  (`synth.clock_start@1`, `synth.clock@1`), or one kept to the time that
+  makes up a slow frame's shortfall (`synth.paced@1`); the cues a
+  program's events set going on eight voices (`Cue`); and the sounds
+  they are made of, as functions: white and smoothed noise, an envelope,
+  a tone, a thud, a metal clang, a bell, a pluck, a horn, a drum. Used by
+  the `slg` example.

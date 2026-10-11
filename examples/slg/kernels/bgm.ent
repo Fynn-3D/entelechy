@@ -1,11 +1,12 @@
 // The music: a chiptune loop and a hit sound, as one row of stereo frames
-// per evaluation. The sequencer's step comes from a sample counter that
-// crosses blocks through Graph state, so the tune never skips; the hit
-// sound starts when the rules issue a strike, so the sound follows the
-// game rather than the picture.
+// per evaluation. The sequencer's step comes from the synth package's
+// clock, carried across blocks through Graph state, so the tune never
+// skips; the hit sound starts when the rules issue a strike, so the sound
+// follows the game rather than the picture.
 // The game's state row is declared once, in slg.ent; `use` brings the
 // declaration here so `order` is read from the same layout.
 use "slg.ent";
+use "../../../packages/synth.entpkg";
 
 struct Tone { left: Float; right: Float; count: Int; lead: Float; bass: Float; hit: Float; }
 type Music = Rows<Tone>;
@@ -19,6 +20,7 @@ kernel bgm.silence@1 {
 kernel bgm.play@1 {
     requires { field.read; field.write; time.read; }
     input previous: Music;
+    input clock: Clocks;
     input game: Rows<Game>;
     param tempo: Float = 8.0;      // steps per second
     param gain: Float = 0.12;
@@ -42,30 +44,23 @@ kernel bgm.play@1 {
         return 220.0 * pow(2.0, semitones / 12.0);
     }
 
-    fn hash(n: Float) -> Float {
-        let q = fract(n * 0.1031);
-        let r = q + q * (q + 33.33);
-        return fract(r * r * 2.0);
-    }
-
     compute {
         let last = at(previous, count(previous) - 1);
-        let hz = if rate() > 0.0 { rate() } else { 48000.0 };
-        let n = last.count + 1 + element();
-        let t = float(n) / hz;
+        let n = at(clock, 0).n + element();
+        let t = float(n) / hz();
         let step = int(floor(t * tempo));
         let within = fract(t * tempo);
         // Phases advance from the last block's, so notes carry across blocks.
-        let lead = fract(last.lead + float(element() + 1) * pitch(lead_note(step)) / hz);
-        let bass = fract(last.bass + float(element() + 1) * pitch(bass_note(step)) / hz);
+        let lead = fract(last.lead + float(element() + 1) * pitch(lead_note(step)) / hz());
+        let bass = fract(last.bass + float(element() + 1) * pitch(bass_note(step)) / hz());
         let square = if lead < 0.5 { 1.0 } else { -1.0 };
         let triangle = abs(bass * 4.0 - 2.0) - 1.0;
         let envelope = 1.0 - within * 0.6;
         // A strike this frame starts the hit: noise that dies in a sixth of a second.
         let g = at(game, 0);
         let hit_start = if g.order == 2 { 1.0 } else { last.hit };
-        let hit = max(hit_start - float(element() + 1) / (hz * 0.16), 0.0);
-        let noise = (hash(float(n)) * 2.0 - 1.0) * hit * hit;
+        let hit = max(hit_start - float(element() + 1) / (hz() * 0.16), 0.0);
+        let noise = white(n, 3) * hit * hit;
         let mixed = (square * envelope * 0.5 + triangle * 0.4) * gain + noise * 0.25;
         return Tone { left: mixed, right: mixed * 0.9 + noise * 0.05, count: n, lead: lead, bass: bass, hit: hit };
     }

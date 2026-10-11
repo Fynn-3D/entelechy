@@ -1,0 +1,149 @@
+// Sound made from tones and noise, a block of stereo samples a frame: the
+// clock counting the samples played, the cues a program's events set going
+// (each a voice's until another takes it), and the tones, noises and
+// envelopes their sounds are made of. A project's own Kernels turn its
+// events into cues and its cues into sound.
+use "noise.entpkg";
+
+/// The samples played before this frame's block.
+struct Clock { n: Int; }
+type Clocks = Rows<Clock>;
+/// A sound set going: what it is, which of its kind, the sample it starts
+/// at, where it is heard (-1 left to 1 right), how loud; `head` the voice
+/// the next cue takes.
+struct Cue { kind: Int; param: Int; start: Int; pan: Float; gain: Float; head: Int; }
+type Cues = Rows<Cue>;
+
+/// The samples a frame, the voices, the samples a second (the device's,
+/// 48000 without one).
+fn block() -> Int { return 800; }
+fn voices() -> Int { return 8; }
+fn hz() -> Float { return if rate() > 0.0 { rate() } else { 48000.0 }; }
+fn tau() -> Float { return 6.2831853; }
+/// A voice with nothing to play.
+fn quiet() -> Cue { return Cue { kind: 0, param: 0, start: 0, pan: 0.0, gain: 0.0, head: 0 }; }
+
+/// White noise, -1 to 1, at sample `n`.
+fn white(n: Int, s: Int) -> Float { return hash1(n, s) * 2.0 - 1.0; }
+
+/// Noise smoothed between random values `x` apart: its pitch rises with
+/// how fast x runs.
+fn soft_noise(x: Float, s: Int) -> Float {
+    let i = floor(x);
+    let f = x - i;
+    return mix(hash1(int(i), s) * 2.0 - 1.0, hash1(int(i) + 1, s) * 2.0 - 1.0, f * f * (3.0 - 2.0 * f));
+}
+
+fn envelope(t: Float, a: Float, d: Float) -> Float { return if t < 0.0 { 0.0 } else if t < a { t / a } else { exp(0.0 - (t - a) / d) }; }
+
+fn tone(f: Float, t: Float) -> Float { return sin(tau() * fract(f * t)); }
+
+/// A thud: a low tone falling from `base` + 150 Hz to `base`.
+fn thud(t: Float, base: Float) -> Float {
+    if t < 0.0 { return 0.0; }
+    return sin(tau() * fract(base * t + 150.0 * (1.0 - exp(0.0 - t * 30.0)) / 30.0)) * exp(0.0 - t * 12.0);
+}
+
+/// A metal ring: a tone at `f` rung by one at `ratio` times it.
+fn clang(f: Float, ratio: Float, t: Float, d: Float) -> Float {
+    if t < 0.0 { return 0.0; }
+    return sin(tau() * fract(f * t) + 3.0 * exp(0.0 - t * 8.0) * sin(tau() * fract(f * ratio * t))) * exp(0.0 - t / d);
+}
+
+fn bell(f: Float, t: Float) -> Float {
+    if t < 0.0 { return 0.0; }
+    return sin(tau() * fract(f * t) + 1.2 * exp(0.0 - t * 4.0) * sin(tau() * fract(f * 2.76 * t))) * exp(0.0 - t * 4.0);
+}
+
+fn pluck(f: Float, t: Float) -> Float {
+    if t < 0.0 { return 0.0; }
+    return (tone(f, t) * exp(0.0 - t * 3.0) + tone(f * 2.0, t) * 0.5 * exp(0.0 - t * 6.0) + tone(f * 3.0, t) * 0.25 * exp(0.0 - t * 10.0)) * 0.5;
+}
+
+/// A horn's note: a few harmonics swelling in, held, let go at `len`.
+fn horn(f: Float, t: Float, len: Float) -> Float {
+    if t < 0.0 || t > len + 0.3 { return 0.0; }
+    let swell = smoothstep(0.0, 0.06, t) * (1.0 - smoothstep(len, len + 0.3, t));
+    return (tone(f, t) + tone(f * 2.0, t) * 0.5 + tone(f * 3.0, t) * 0.3 + tone(f * 4.0, t) * 0.12) * swell * 0.3;
+}
+
+/// A drum: a skin's low boom and the stick's slap.
+fn drum(t: Float, n: Int, base: Float) -> Float {
+    if t < 0.0 { return 0.0; }
+    return thud(t, base) + white(n, 7) * exp(0.0 - t * 45.0) * 0.35;
+}
+
+/// The clock before the first block, which `synth.clock` counts on from:
+/// the first block begins at sample 0.
+kernel synth.clock_start@1 {
+    requires { field.write; }
+    output result: Clocks;
+    compute { return Clock { n: 0 - block() }; }
+}
+
+/// The clock a block on.
+kernel synth.clock@1 {
+    requires { field.read; field.write; }
+    input previous: Clocks;
+    output result: Clocks;
+    compute { return Clock { n: sample(previous).n + block() }; }
+}
+
+/// A clock kept to the time rather than to the frames: the samples
+/// played before this frame's block and how many the block holds, as
+/// many as the time since the last frame asks (in steps of `paced_step`,
+/// at least one, at most `paced_most`), the shortfall a slow frame left
+/// made up in the next; after a long stall it takes up the time again.
+/// The first block is the longest but one: a player sizes its ring of
+/// blocks by the first (four of it), and a block over half the ring could
+/// not be queued.
+/// The sound is then rendered over `value(size, 0)` samples (`synth.paced_size`).
+struct Paced { n: Int; block: Int; }
+type Paceds = Rows<Paced>;
+fn paced_step() -> Int { return 400; }
+fn paced_first() -> Int { return 1600; }
+fn paced_most() -> Int { return 3200; }
+
+kernel synth.paced_start@1 {
+    requires { field.write; }
+    output result: Paceds;
+    compute { return Paced { n: -1, block: paced_first() }; }
+}
+
+kernel synth.paced@1 {
+    requires { field.read; field.write; time.read; }
+    input previous: Paceds;
+    output result: Paceds;
+    compute {
+        let p = sample(previous);
+        let want = int(floor(time() * hz()));
+        if p.n < 0 { return Paced { n: max(want - paced_first(), 0), block: paced_first() }; }
+        let n = p.n + p.block;
+        let owed = want - n;
+        if owed > paced_most() * 4 { return Paced { n: max(want - paced_first(), n), block: paced_first() }; }
+        let steps = clamp((owed + paced_step() / 2) / paced_step(), 1, paced_most() / paced_step());
+        return Paced { n: n, block: steps * paced_step() };
+    }
+}
+
+/// The paced clock as the voices and the sound read it, and the block's
+/// size for the sound's domain.
+kernel synth.paced_clock@1 {
+    requires { field.read; field.write; }
+    input paced: Paceds;
+    output result: Clocks;
+    compute { return Clock { n: max(at(paced, 0).n, 0) }; }
+}
+kernel synth.paced_size@1 {
+    requires { field.read; field.write; }
+    input paced: Paceds;
+    output result: Rows<Float>;
+    compute { return float(at(paced, 0).block); }
+}
+
+/// The voices, quiet.
+kernel synth.cues_start@1 {
+    requires { field.write; }
+    output result: Cues;
+    compute { return quiet(); }
+}
