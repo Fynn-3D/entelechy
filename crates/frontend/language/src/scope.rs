@@ -4,8 +4,8 @@
 //! Functions, structs and types are scoped by document: a name reaches
 //! what its own document declares, or else the one declaration of that
 //! name in the documents its own `use` items name, not what those use in
-//! turn (an identical struct or type declared by
-//! several is one). The using document's own declarations are its own; a
+//! turn (a struct or type several declare alike, each name in it reaching
+//! the same declarations, is one). The using document's own declarations are its own; a
 //! declaration it sees by a name keeps the name, and any other of that
 //! name is renamed `name@source`, each gathered declaration naming what
 //! its own document sees. A function of a builtin's name stands for it in
@@ -121,6 +121,48 @@ impl Declared {
         }
     }
 
+    /// The names it writes for types: its fields' types, or its target's;
+    /// an enum's variants name none.
+    fn names(&self) -> Vec<String> {
+        let names = std::cell::RefCell::new(Vec::new());
+        let note = |name: &str| {
+            names.borrow_mut().push(name.to_string());
+            None
+        };
+        match self {
+            Declared::Struct(d) => {
+                for (_, ty) in &d.fields {
+                    renamed_type(&ty.value, &note);
+                }
+            }
+            Declared::Type(d) if d.variants().is_none() => {
+                renamed_type(&d.target.value, &note);
+            }
+            Declared::Type(_) => {}
+        }
+        names.into_inner()
+    }
+
+    /// This declaration as written in `document`.
+    fn written_in(&self, document: std::sync::Arc<str>) -> Declared {
+        let origin = |name: &Spanned<String>| {
+            Some(Origin {
+                document,
+                name: name.value.clone(),
+            })
+        };
+        match self {
+            Declared::Struct(d) => Declared::Struct(StructDecl {
+                origin: origin(&d.name),
+                ..d.clone()
+            }),
+            Declared::Type(d) => Declared::Type(TypeAlias {
+                origin: origin(&d.name),
+                ..d.clone()
+            }),
+        }
+    }
+
     /// This declaration named `name`, each struct or type named in it that
     /// `rename` maps written by the new name.
     fn renamed(&self, name: String, rename: &dyn Fn(&str) -> Option<String>) -> Declared {
@@ -156,6 +198,63 @@ impl Declared {
             }),
         }
     }
+}
+
+/// The declarations of `name` the document `file` reaches, by their place
+/// in `declared`: its own, or else those of the documents it uses.
+fn reaching_from(
+    declared: &[(Declared, Vec<usize>)],
+    sources: &[Source<'_>],
+    file: usize,
+    name: &str,
+) -> Vec<usize> {
+    let of = |within: &dyn Fn(usize) -> bool| -> Vec<usize> {
+        (0..declared.len())
+            .filter(|&i| declared[i].0.name() == name && declared[i].1.iter().any(|&f| within(f)))
+            .collect()
+    };
+    let own = of(&|f| f == file);
+    if own.is_empty() {
+        of(&|f| sources[file].uses.contains(&f))
+    } else {
+        own
+    }
+}
+
+/// Whether the declaration at `at` is alike to the using document's own
+/// `mine`: written alike, and each name it writes reaching, from every
+/// document that writes it, what that name reaches from the using
+/// document, which sees its own declarations (`own_decl`) or else those of
+/// the documents it uses (`direct`).
+fn alike_to_own(
+    declared: &[(Declared, Vec<usize>)],
+    sources: &[Source<'_>],
+    direct: &[usize],
+    own_decl: &dyn Fn(&str) -> Option<Declared>,
+    at: usize,
+    mine: &Declared,
+    depth: usize,
+) -> bool {
+    let (decl, files) = &declared[at];
+    if depth > 16 || !decl.same(mine) {
+        return false;
+    }
+    decl.names().iter().all(|name| {
+        let used: Vec<usize> = (0..declared.len())
+            .filter(|&i| {
+                declared[i].0.name() == name && declared[i].1.iter().any(|f| direct.contains(f))
+            })
+            .collect();
+        let theirs = own_decl(name);
+        files.iter().all(|&file| {
+            let reached = reaching_from(declared, sources, file, name);
+            match &theirs {
+                Some(own) => matches!(reached.as_slice(), [one]
+                    if alike_to_own(declared, sources, direct, own_decl, *one, own, depth + 1)),
+                None => reached == used,
+            }
+        })
+    })
 }
 
 /// Every source's functions, dependencies first, and each distinct struct
@@ -216,6 +315,30 @@ impl Reach {
                 }
             }
         }
+        // Declarations written alike are one only where each name they
+        // write reaches the same declarations from every document that
+        // writes them: those that reach others are another declaration.
+        while let Some((at, apart)) = (0..declared.len()).find_map(|at| {
+            let (decl, files) = &declared[at];
+            let reached = |file: usize| -> Vec<Vec<usize>> {
+                decl.names()
+                    .iter()
+                    .map(|name| reaching_from(&declared, sources, file, name))
+                    .collect()
+            };
+            let first = reached(files[0]);
+            let apart: Vec<usize> = files
+                .iter()
+                .copied()
+                .filter(|&file| reached(file) != first)
+                .collect();
+            (!apart.is_empty()).then_some((at, apart))
+        }) {
+            declared[at].1.retain(|file| !apart.contains(file));
+            let document: std::sync::Arc<str> = sources[apart[0]].name.as_str().into();
+            let decl = declared[at].0.written_in(document);
+            declared.push((decl, apart));
+        }
         Self {
             functions,
             declared,
@@ -267,18 +390,20 @@ fn scoped_types(
                     .map(|d| Declared::Type(d.clone()))
             })
     };
+    let alike = |at: usize, mine: &Declared| {
+        alike_to_own(&reach.declared, sources, direct, &own_decl, at, mine, 0)
+    };
     let own_differs = |name: &str| {
         own_decl(name).is_some_and(|mine| {
-            reach
-                .declared
-                .iter()
-                .any(|(d, _)| d.name() == name && !d.same(&mine))
+            (0..reach.declared.len())
+                .any(|at| reach.declared[at].0.name() == name && !alike(at, &mine))
         })
     };
     let clashing = |name: &str| named(name) > 1 || own_differs(name);
     // A reached declaration the using document makes alike itself is its
     // own, and is not gathered again.
-    let own_alike = |d: &Declared| own_decl(d.name()).is_some_and(|mine| d.same(&mine));
+    let own_alike =
+        |at: usize| own_decl(reach.declared[at].0.name()).is_some_and(|mine| alike(at, &mine));
     let split = |declared: Vec<Declared>| {
         let mut structs = Vec::new();
         let mut types = Vec::new();
@@ -349,8 +474,9 @@ fn scoped_types(
             reach
                 .declared
                 .iter()
-                .filter(|(d, _)| !own_alike(d))
-                .map(|(d, _)| d.clone())
+                .enumerate()
+                .filter(|&(at, _)| !own_alike(at))
+                .map(|(_, (d, _))| d.clone())
                 .collect(),
         ));
     }
@@ -411,7 +537,7 @@ fn scoped_types(
     };
     let mut out = Vec::with_capacity(declared.len());
     for (i, (decl, files)) in declared.iter().enumerate() {
-        if own_alike(decl) {
+        if own_alike(i) {
             continue;
         }
         let names = std::cell::RefCell::new(|name: &str| view(files[0], name, &mut refused));

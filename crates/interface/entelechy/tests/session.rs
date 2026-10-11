@@ -805,6 +805,80 @@ fn libraries_share_declarations_through_use_and_keep_their_own() {
 }
 
 #[test]
+fn a_type_written_alike_over_different_structs_is_two() {
+    let dir = std::env::temp_dir().join(format!("entelechy-alike-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("a")).unwrap();
+    std::fs::create_dir_all(dir.join("b")).unwrap();
+    // Two libraries write `Styles` alike, each over its own `Style`.
+    std::fs::write(
+        dir.join("a/a.ent"),
+        "struct Style { x: Float; }\ntype Styles = Rows<Style>;\nkernel t.a@1 { requires { field.write; } output result: Styles; compute { return Style { x: 1.0 }; } }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("b/b.ent"),
+        "struct Style { y: Int; z: Int; }\ntype Styles = Rows<Style>;\nkernel t.b@1 { requires { field.write; } output result: Styles; compute { return Style { y: 2, z: 3 }; } }\n",
+    )
+    .unwrap();
+    // A Kernel that uses both and names `Styles` reaches two, whichever
+    // it uses first.
+    for (first, second) in [("a", "b"), ("b", "a")] {
+        std::fs::write(
+            dir.join("scene.esn"),
+            format!("use \"{first}/\";\nuse \"{second}/\";\nnode seed: t.a@1 {{ domain = 4; }}\nnode show: kernel {{ requires {{ field.read; field.write; }} input styles: Styles <- seed.result; output result: Image; domain = vec2(1, 1); compute {{ return vec4(float(count(styles)), 0.0, 0.0, 1.0); }} }}\noutput result <- show.result;\n"),
+        )
+        .unwrap();
+        let mut session = Session::open(&dir.join("scene.esn"), None, 1 << 20);
+        let refused = rejected(&session.sync()).join("\n");
+        assert!(
+            refused.contains("`Styles` is declared by"),
+            "{first} first: {refused}"
+        );
+    }
+    // Alike over alike structs, the two are one.
+    std::fs::write(
+        dir.join("b/b.ent"),
+        "struct Style { x: Float; }\ntype Styles = Rows<Style>;\n",
+    )
+    .unwrap();
+    let mut session = Session::open(&dir.join("scene.esn"), None, 1 << 20);
+    let events = session.sync();
+    assert_eq!(rejected(&events), Vec::<String>::new(), "{events:?}");
+    let report = session.evaluate(&Context::default()).unwrap();
+    assert_eq!(
+        session.read_pixel(report.output, 0, 0).unwrap(),
+        [4.0, 0.0, 0.0, 1.0]
+    );
+
+    // A document writing `Styles` alike over a `Style` of its own has its
+    // own: a library's function of the library's `Styles` refuses it
+    // where it is passed.
+    std::fs::write(
+        dir.join("a/a.ent"),
+        "struct Style { x: Float; }\ntype Styles = Rows<Style>;\nfn first_x(s: Styles) -> Float { return at(s, 0).x; }\nkernel t.a@1 { requires { field.write; } output result: Styles; compute { return Style { x: 1.0 }; } }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("own.ent"),
+        "use \"a/\";\nstruct Style { q: Int; }\ntype Styles = Rows<Style>;\nkernel t.own@1 { requires { field.read; field.write; } input styles: Styles; output result: Image; compute { return vec4(first_x(styles), 0.0, 0.0, 1.0); } }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.esn"),
+        "use \"own.ent\";\nnode show: t.own@1 { domain = vec2(1, 1); }\noutput result <- show.result;\n",
+    )
+    .unwrap();
+    let mut session = Session::open(&dir.join("scene.esn"), None, 1 << 20);
+    let refused = rejected(&session.sync()).join("\n");
+    assert!(
+        refused.starts_with("4:") && refused.contains("`first_x` expects"),
+        "{refused}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn functions_are_shared_through_use_and_scoped_by_document() {
     let dir = scratch("functions");
     std::fs::write(
