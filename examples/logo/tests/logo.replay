@@ -1,0 +1,29 @@
+scene ../scene.esn
+
+# The lockup at 1000 by 300: the lattice step is 39.2 pixels, the mark's
+# diamond centred at x 148, y 144; the seed 88 below it, 15.7 round; the
+# name's E begins at x 303 and its C holds a seed at x 779.
+window 1000 300
+param width 1000
+param height 300
+frame 0.0
+expect 5 5 = 0.035 0.04 0.085                    # the dark ground
+expect 147 232 = 1.0 0.7 0.2                     # the gold seed
+expect 147 183 = 0.384 0.715 1.0                 # the one, a quarter up from root to tip
+expect 147 45 = 0.035 0.04 0.085                 # the top ring, hollow
+expect 303 144 = 0.93 0.95 1.0                   # the E's stem, in ink
+expect 778 144 = 1.0 0.7 0.2                     # the C's seed
+
+# On light, the same places in the light's colours.
+param light 1
+frame 0.1
+expect 5 5 = 0.97 0.97 0.98
+expect 147 232 = 1.0 0.7 0.2
+expect 303 144 = 0.08 0.09 0.16
+
+# In one ink, the seeds are ink too; pure black on white.
+param ink 2
+frame 0.2
+expect 5 5 = 1.0 1.0 1.0
+expect 147 232 = 0.0 0.0 0.0
+expect 778 144 = 0.0 0.0 0.0

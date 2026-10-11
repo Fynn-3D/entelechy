@@ -1,0 +1,15 @@
+// Entelechy's logo, drawn by `logo.draw@1`: `light` 1 on a light ground,
+// `ink` 1 in one ink (2 pure black or white), `alone` 1 the mark alone,
+// `clear` 1 the lockup on nothing. `width` and `height` are the picture's.
+use "kernels/";
+
+param light: Int = 0;
+param ink: Int = 0;
+param alone: Int = 0;
+param clear: Int = 0;
+param width: Int = 2000;
+param height: Int = 600;
+
+node logo: logo.draw@1 { light = light; ink = ink; alone = alone; clear = clear; domain = vec2(width, height); }
+
+output result <- logo.result;
