@@ -1,33 +1,45 @@
-# Entelechy
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/media/entelechy-logo-dark.png">
+    <img src="docs/media/entelechy-logo-light.png" alt="Entelechy: a gold seed grows one node, then two, then three, then the ten thousand" width="560">
+  </picture>
+</p>
 
-**A runtime for software that evolves while it runs, built for AI agents to create with.**
+<h3 align="center">Software that becomes, while it runs.</h3>
 
-![A gamepad drawn by Entelechy Kernels: signed-distance modelling, physically based shading, a toolbar, all in .ent](docs/media/showcase.jpg)
-
-<sub>Every pixel above is computed by Kernels written in `.ent` and composed by a `.esn` scene
-([`examples/showcase`](examples/showcase/README.md)). The Host knows no gamepads, no shading, no toolbar.</sub>
+<p align="center">
+A runtime where programs are grown, not shipped: AI writes the laws, composes the structure,
+and changes both while the world keeps running.
+</p>
 
 > **Host is the world.**
 > **Kernel is the law.**
 > **Graph is the structure.**
 > **AI is the creator.**
 
-## What Entelechy is
+## Everything here was computed
 
-- **Kernels are the laws.** A Kernel is a small typed function, `Y = K(X, P, C)`: inputs, parameters,
-  context in; outputs out. It reaches the machine only through the capabilities it declares and is
-  granted.
-- **Graphs are the structure.** A scene composes Kernels by stable id (`image.blur@1`) and wires their
-  typed ports. Kernel owns computation; Graph owns relationships.
-- **The Host is the world.** It owns memory, devices and time, and nothing else. Images, sound,
-  geometry, rigs and game state are one resource: a typed Field.
-- **Change is atomic.** A new Kernel is compiled, validated and prepared beside the running one, then
-  swapped in whole. A rejected change leaves the running program as it was.
-- **One IR, many machines.** Every Kernel lowers to one backend-neutral IR, run by a reference
-  interpreter, a JIT (native code through Cranelift, or WebAssembly) and the GPU (WGSL through wgpu).
-  The interpreter is the reference; the JIT matches it bit for bit.
+<table>
+  <tr>
+    <td width="33%"><a href="examples/showcase/README.md"><img src="docs/media/gallery-showcase.jpg" alt="A gamepad"></a><br><sub><b>A product shot,</b> modelled by signed distances and lit by physically based shading.</sub></td>
+    <td width="33%"><a href="examples/path/README.md"><img src="docs/media/gallery-path.jpg" alt="A path-traced scene"></a><br><sub><b>Light, traced.</b> A progressive path tracer: samples and bounces are graph parameters.</sub></td>
+    <td width="33%"><a href="examples/nebula/README.md"><img src="docs/media/gallery-nebula.jpg" alt="A nebula"></a><br><sub><b>A nebula from noise,</b> finished as film: glow, depth of field, grain.</sub></td>
+  </tr>
+  <tr>
+    <td width="33%"><a href="examples/sculpt/README.md"><img src="docs/media/gallery-sculpt.jpg" alt="A voxel island"></a><br><sub><b>An island of voxels,</b> made of shapes as data, dug and raised by hand.</sub></td>
+    <td width="33%"><a href="examples/physics/README.md"><img src="docs/media/gallery-physics.jpg" alt="Boxes and balls"></a><br><sub><b>Boxes and balls</b> that fall, stack, slide and bounce, stepped by the physics package.</sub></td>
+    <td width="33%"><a href="examples/cube-puzzle/README.md"><img src="docs/media/gallery-cube-puzzle.jpg" alt="A cube puzzle"></a><br><sub><b>A network learns</b> how far a cube puzzle is scrambled, trained by gradient descent.</sub></td>
+  </tr>
+</table>
 
-## A Kernel and a scene
+Every pixel above is computed by Kernels written in `.ent` and composed by `.esn` scenes, and every one
+of these programs is tested by replays, none with a line of Rust. The Host knows no gamepad, no light, no
+cube. It knows memory, devices and time.
+
+## How a program becomes
+
+**A law.** A Kernel is a small typed function, `Y = K(X, P, C)`. It reaches the machine only through the
+capabilities it declares and is granted.
 
 ```text
 // kernels/grayscale.ent
@@ -47,6 +59,9 @@ kernel image.grayscale@1 {
 }
 ```
 
+**A structure.** A scene composes Kernels by stable id and wires their typed ports. Kernel owns
+computation; Graph owns relationships.
+
 ```text
 // scene.esn
 use "kernels/";
@@ -58,28 +73,19 @@ node blocks: image.pixelate@1  { source <- gray.result; size = 8; }
 output result <- blocks.result;
 ```
 
-Edit either file while it runs: the new version replaces the old at the next frame, or is refused with
-a diagnostic at `file:line:column` while the old one keeps running.
+**A change, while it runs.** Edit either file and the new version is compiled, validated and prepared
+beside the running one, then swapped in whole at the next frame. A change that is wrong is refused at
+`file:line:column`, and the world keeps running as it was.
 
-## Start
+Images, sound, geometry, rigs and game state are one resource, a typed Field. Every Kernel lowers to one
+backend-neutral IR, run by a reference interpreter, a JIT (native code through Cranelift, or
+WebAssembly) and the GPU (WGSL through wgpu). The interpreter is the reference; the JIT matches it bit
+for bit.
 
-Download a release from [Releases](https://github.com/Fynn-3D/orla/releases),
-unpack it, and run `bin/entelechy` from its directory:
+## AI is the creator
 
-```sh
-bin/entelechy new hello                                  # a scene that runs: Kernel, scene, test
-bin/entelechy player hello/scene.esn                     # open it in a window; edit the Kernel live
-bin/entelechy run examples/grayscale/scene.esn --out gray.png
-bin/entelechy help                                       # the syntax and API of every layer
-```
-
-From the source (Rust 1.93 or later), `cargo build --release` puts the
-same programs in `target/release/`.
-
-## For AI agents
-
-An agent creates through one open protocol: JSON lines over stdin and stdout, a socket, a WebSocket,
-or a C function. Any model, any language, any CLI; the same authority rules for all.
+An agent creates through one open protocol: JSON lines over stdin and stdout, a socket, a WebSocket, or
+a C function. Any model, any language, any CLI; the same authority rules for all.
 
 ```sh
 bin/entelechy serve examples/life/scene.esn
@@ -92,57 +98,62 @@ bin/entelechy serve examples/life/scene.esn
 ← {"id":2,"error":{"line":1,"column":152,"message":"`nope` is not defined"}}
 ```
 
-`bin/entelechy help` prints the syntax and API of every layer: the types, the builtins, how a
-Kernel and a scene are written, the capabilities, packages, the protocol and replay tests
-([the same text](docs/REFERENCE.md)). Whole programs are in [`examples/`](examples/README.md).
-
-What an agent can rely on:
+The safe path is the powerful path:
 
 - **Authority is granted.** A Kernel runs with the capabilities the person running the session grants;
   files are read and written only in directories they allow.
 - **Every change is validated first.** A Kernel or a scene is compiled and checked before it replaces
   anything; publication is atomic and checked against the generation the agent last saw.
-- **State commits only when truth is valid.** A frame's state and file writes commit only when the
-  whole evaluation succeeds.
+- **State commits only when truth is valid.** A frame's state and file writes commit only when the whole
+  evaluation succeeds.
 - **The world is observable.** Any port can be read, any element traced through its Kernel, any node
   timed; a run is a replay, and a replay is a test.
 
-The operations, fields and answers are in [the protocol](docs/PROTOCOL.md). Bridges speak the same
-protocol from [Blender](bridges/blender/README.md), [Godot](bridges/godot/README.md),
+`bin/entelechy help` prints the syntax and API of every layer ([the same text](docs/REFERENCE.md)); the
+operations, fields and answers are in [the protocol](docs/PROTOCOL.md). Bridges speak the same protocol
+from [Blender](bridges/blender/README.md), [Godot](bridges/godot/README.md),
 [a web page](bridges/web/README.md) and [C](bridges/c/README.md).
+
+## Start
+
+From the source (Rust 1.93 or later), `cargo build --release` puts the programs in `target/release/`;
+a [release](https://github.com/Fynn-3D/orla/releases) archive carries the same programs in `bin/`.
+
+```sh
+entelechy new hello                                  # a scene that runs: Kernel, scene, test
+entelechy player hello/scene.esn                     # open it in a window; edit the Kernel live
+entelechy run examples/grayscale/scene.esn --out gray.png
+entelechy help                                       # the syntax and API of every layer
+```
 
 ## What runs on it
 
-![A voxel editor built from Entelechy Kernels](docs/media/voxel.jpg)
-
-54 examples, each a scene, its Kernels and its replay tests, none with a line of Rust:
-
 | | |
 | --- | --- |
-| **Rendering** | path tracing, ray marching, deferred shading, a rasterizer written as Kernels, ten million culled triangles, volumes, text |
-| **Simulation** | a million bodies, smoke by Navier-Stokes, neighbour search, wave function collapse |
+| **Rendering** | path tracing, ray marching, deferred shading, a rasterizer written as Kernels, ten million culled triangles, volumes, vectors, text |
+| **Simulation** | a million bodies, smoke by Navier-Stokes, neighbour search, rigid bodies, wave function collapse |
 | **Learning** | networks trained by gradient descent, one learning how far a cube puzzle is scrambled |
 | **Sound** | a synthesizer, plucked strings, a sampler, a spectrum, MIDI in and out |
 | **Rigs** | glTF and Blender rigs posed, blended, aimed and walked by the `skin` package |
 | **Games and machines** | Snake, falling blocks, a tactics game, a voxel editor, a CHIP-8 interpreter, an ARM Thumb core |
 
-Browse them in [`examples/`](examples/README.md).
+Each is a scene, its Kernels and its replay tests: browse them in [`examples/`](examples/README.md).
 
 ## How it is built
 
 ```text
 Host Core        memory, devices, time, budgets
 Capability ABI   declared capabilities, opaque handles
-Entelechy IR          typed computation, backend-neutral
+Entelechy IR     typed computation, backend-neutral
 Kernel Runtime   prepare, validate, atomic swap
 Graph Runtime    composition by KernelID, typed ports
 Interfaces       CLI, Player, protocol, C ABI, bridges
 ```
 
-Rust, in layers held by tests: the core depends on the core alone, a backend on the core alone, and
-only the interface layer on everything. The core and front end take no external dependency; `unsafe`
-lives in two crates, the JIT and the C ABI. Verified on macOS (Apple silicon, Metal), under WASI, and
-in the browser on WebAssembly and WebGPU.
+Rust, in layers held by tests: the core depends on the core alone, a backend on the core alone, and only
+the interface layer on everything. The core and front end take no external dependency; `unsafe` lives in
+two crates, the JIT and the C ABI. Verified on macOS (Apple silicon, Metal), under WASI, and in the
+browser on WebAssembly and WebGPU.
 
 ## Read further
 
