@@ -333,6 +333,42 @@ fn cases() -> Vec<Case> {
             Runs(1.0),
         ),
         (
+            "two libraries' enums of one name, a variant named",
+            vec![
+                ("a.ent", s("type Mode = enum { Idle, Walk };\n")),
+                ("b.ent", s("type Mode = enum { Run, Fly };\n")),
+                (
+                    "app.ent",
+                    app(&["a.ent", "b.ent"], "", "", "return float(Mode.Idle);"),
+                ),
+            ],
+            Refused(
+                "`Mode` is not an enum or a value; `Mode.Idle` names a variant of an enum this document sees; type `Mode` is declared by a.ent and b.ent",
+            ),
+        ),
+        (
+            "an enum reached only through another's use, a variant named",
+            vec![
+                ("c.ent", s("type Mode = enum { Idle, Walk };\n")),
+                ("b.ent", s("use \"c.ent\";\n")),
+                (
+                    "app.ent",
+                    app(&["b.ent"], "", "", "return float(Mode.Walk);"),
+                ),
+            ],
+            Refused(
+                "type `Mode` is declared in c.ent, which this document reaches only through another's `use`",
+            ),
+        ),
+        (
+            "a value misspelled before a member keeps its suggestion",
+            vec![(
+                "app.ent",
+                app(&[], "", "", "let place = vec2(1.0, 2.0); return plcae.x;"),
+            )],
+            Refused("`plcae` is not defined; did you mean `place`?"),
+        ),
+        (
             "an enum of the same variants at other values is another",
             vec![
                 ("a.ent", s("type Mode = enum { Idle, Walk };\n")),
@@ -445,7 +481,7 @@ fn cases() -> Vec<Case> {
                     ),
                 ),
             ],
-            Refused("lib.ent here, found P"),
+            Refused("`px` expects P (of lib.ent) here, found P"),
         ),
         (
             "the document's type alike over its own struct passed to a library's function",
@@ -463,7 +499,7 @@ fn cases() -> Vec<Case> {
                     ),
                 ),
             ],
-            Refused("lib.ent for `s`, but `s` is Rows<St>"),
+            Refused("`first_x` expects Sts (of lib.ent) for `s`, but `s` is Rows<St>"),
         ),
         // A scene's inline Kernels see what the scene uses, as a document's.
         (

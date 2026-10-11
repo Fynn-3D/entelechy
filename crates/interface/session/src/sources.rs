@@ -672,8 +672,8 @@ fn builtin_names() -> &'static BTreeSet<&'static str> {
     })
 }
 
-/// The backticked name a diagnostic reports as not a builtin, struct
-/// or type, or as an unknown type.
+/// The backticked name a diagnostic reports as not a builtin, struct,
+/// type or enum, or as an unknown type.
 fn missing_name(message: &str) -> Option<String> {
     let rest = message.rsplit(": ").next().unwrap_or(message);
     if let Some(unknown) = rest.strip_prefix("unknown type `") {
@@ -684,7 +684,8 @@ fn missing_name(message: &str) -> Option<String> {
     let says = rest.contains("is not a builtin")
         || rest.contains("is not a struct")
         || rest.contains("is not a type")
-        || rest.contains("is not a port type");
+        || rest.contains("is not a port type")
+        || rest.contains("is not an enum");
     (says && !name.is_empty()).then(|| name.to_owned())
 }
 
@@ -976,6 +977,37 @@ fn by_name(store: &dyn Store, package: &Path) -> bool {
         .any(|dir| held.parent() == Some(canonical(dir).as_path()))
 }
 
+/// `message` with each declaration renamed out of another's way,
+/// `name@source`, said as the name and the document it was written in,
+/// from `document`'s directory: `P (of lib.ent)`.
+fn sources_named(store: &dyn Store, document: &Path, message: &str) -> String {
+    let base = document.parent().unwrap_or_else(|| Path::new("."));
+    let mut out = String::with_capacity(message.len());
+    let mut rest = message;
+    while let Some(at) = rest.find('@') {
+        let (before, after) = rest.split_at(at);
+        let source_len = after[1..]
+            .find(|c: char| c.is_whitespace() || matches!(c, '`' | ',' | ';' | ')' | '>' | '<'))
+            .map_or(after.len() - 1, |end| end);
+        let source = &after[1..1 + source_len];
+        // A Kernel's version (`t.k@1`) or a renamed one's place: only a
+        // document names a file.
+        if source.ends_with(".ent") || source.ends_with(".esn") {
+            out.push_str(before);
+            out.push_str(" (of ");
+            out.push_str(&relative_to(store, Path::new(source), base));
+            out.push(')');
+        } else {
+            out.push_str(before);
+            out.push('@');
+            out.push_str(source);
+        }
+        rest = &after[1 + source_len..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// `error` extended with the `use` that would bring in its missing name,
 /// when a file declaring it is found. `known` are the caller's
 /// documents; `root` is their scene.
@@ -986,6 +1018,10 @@ pub(crate) fn located(
     root: &Path,
     known: &[PathBuf],
 ) -> crate::Diagnostic {
+    let error = crate::Diagnostic {
+        message: sources_named(store, document, &error.message),
+        ..error
+    };
     // A function hiding a builtin: the document that declares it.
     // A builtin is hidden only in the document of the function hiding it.
     if hidden_builtin(&error.message).is_some() {

@@ -200,7 +200,26 @@ impl Builder<'_> {
                     let value = super::variant_of(self.shared.structs, name, member, expr.span)?;
                     return Ok(self.emit(Type::Int, Op::Const(Value::Int(value))));
                 }
-                let inner = self.value(inner)?;
+                // A capitalized name no value holds, before a member, names
+                // an enum this Kernel does not reach; any other is a value
+                // misspelled, and keeps its suggestion.
+                let inner = match self.value(inner) {
+                    Err(error)
+                        if matches!(&inner.kind, ExprKind::Name(name) if name.starts_with(char::is_uppercase))
+                            && error.to_string().contains("is not defined") =>
+                    {
+                        let ExprKind::Name(name) = &inner.kind else {
+                            unreachable!()
+                        };
+                        return Err(semantic(
+                            inner.span,
+                            format!(
+                                "`{name}` is not an enum or a value; `{name}.{member}` names a variant of an enum this document sees"
+                            ),
+                        ));
+                    }
+                    other => other?,
+                };
                 let ty = self.ty(inner);
                 if let Type::Struct(index) = ty {
                     let table = self.structs();
