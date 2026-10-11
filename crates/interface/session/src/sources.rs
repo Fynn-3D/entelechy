@@ -948,6 +948,25 @@ pub(crate) fn is_library(document: &Document) -> bool {
 
 /// Whether `package` is one the store finds by name: it lies in one of
 /// the store's packages directories.
+/// How `document` writes a `use` that reaches `target`: the package that
+/// holds it, whole, by its name where the store finds it by name and else
+/// by its path; a document of `document`'s own package, or of none, by its
+/// own path.
+fn use_spelling(store: &dyn Store, document: &Path, target: &Path) -> String {
+    let base = document.parent().unwrap_or_else(|| Path::new("."));
+    // A package's own documents use each other by their paths.
+    let own_package = package_holding(store, document);
+    match package_holding(store, target).filter(|p| own_package.as_ref() != Some(p)) {
+        // A package the store finds by name is used by its name.
+        Some(package) if by_name(store, &package) => package
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| relative_to(store, &package, base)),
+        Some(package) => relative_to(store, &package, base),
+        None => relative_to(store, target, base),
+    }
+}
+
 fn by_name(store: &dyn Store, package: &Path) -> bool {
     let canonical = |path: &Path| store.canonical(path).unwrap_or_else(|_| path.to_path_buf());
     let held = canonical(package);
@@ -1042,18 +1061,7 @@ pub(crate) fn located(
             .ok()
             .and_then(|parsed| kind(&parsed))
             .unwrap_or("fn");
-        // A package's own documents use each other by their paths.
-        let own_package = package_holding(store, document);
-        let spelling =
-            match package_holding(store, deeper).filter(|p| own_package.as_ref() != Some(p)) {
-                // A package the store finds by name is used by its name.
-                Some(package) if by_name(store, &package) => package
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| relative_to(store, &package, base)),
-                Some(package) => relative_to(store, &package, base),
-                None => relative_to(store, deeper, base),
-            };
+        let spelling = use_spelling(store, document, deeper);
         return crate::Diagnostic {
             message: format!(
                 "{}; {what} `{name}` is declared in {}, which this document reaches only through another's `use`: a document sees what it uses itself, `use \"{spelling}\";`",
@@ -1147,7 +1155,8 @@ pub(crate) fn unpublished(
                 .any(|k| named_id(k).ok().as_ref() == Some(id))
         })
     };
-    let shown = |path: &Path| shown_from(store, root, path);
+    let base = root.parent().unwrap_or_else(|| Path::new("."));
+    let shown = |path: &Path| relative_to(store, path, base);
     graph
         .nodes
         .iter()
@@ -1170,7 +1179,7 @@ pub(crate) fn unpublished(
                     node.kernel,
                     shown(&reached),
                     shown(&via),
-                    shown(&reached)
+                    use_spelling(store, root, &reached)
                 )
             });
             (node.id.clone(), node.kernel.clone(), why)

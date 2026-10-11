@@ -691,6 +691,41 @@ fn a_kernel_reached_only_through_another_document_is_said_with_its_use() {
         false,
     );
     assert_eq!(checked.problems(), 0, "{checked:?}");
+
+    // A Kernel written in a package the scene reaches through a document
+    // wants the package used whole, never a file inside it.
+    std::fs::create_dir_all(dir.join("lib/tones.entpkg/kernels")).unwrap();
+    for (file, text) in [
+        (
+            "lib/tones.entpkg/package.esn",
+            "package tones@1 { language = 1; ir = 1; }\nuse \"kernels/\";\n",
+        ),
+        (
+            "lib/tones.entpkg/kernels/tones.ent",
+            "kernel tones.start@1 { requires { field.write; } output result: Rows<Int>; compute { return 0; } }\n",
+        ),
+        (
+            "kernels/music.ent",
+            "use \"../lib/tones.entpkg\";\nkernel t.music@1 { requires { field.write; } output result: Rows<Int>; compute { return 1; } }\n",
+        ),
+        (
+            "scene.esn",
+            "use \"kernels/music.ent\";\nnode m: t.music@1 { domain = 1; }\nnode s: tones.start@1 { domain = 1; }\noutput result <- s.result;\n",
+        ),
+    ] {
+        std::fs::write(dir.join(file), text).unwrap();
+    }
+    let checked = entelechy_session::check_document(
+        &entelechy_session::Disk::default(),
+        &dir.join("scene.esn"),
+        false,
+    );
+    assert!(
+        checked.lines.iter().any(|(problem, line)| *problem
+            && line.contains("which the scene reaches only through kernels/music.ent")
+            && line.contains("wants `use \"lib/tones.entpkg\";`")),
+        "{checked:?}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
