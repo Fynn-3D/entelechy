@@ -88,7 +88,7 @@ An agent creates through one open protocol: JSON lines over stdin and stdout, a 
 a C function. Any model, any language, any CLI; the same authority rules for all.
 
 ```sh
-bin/entelechy serve examples/life/scene.esn
+entelechy serve examples/life/scene.esn
 ```
 
 ```text
@@ -109,15 +109,14 @@ The safe path is the powerful path:
 - **The world is observable.** Any port can be read, any element traced through its Kernel, any node
   timed; a run is a replay, and a replay is a test.
 
-`bin/entelechy help` prints the syntax and API of every layer ([the same text](docs/REFERENCE.md)); the
+`entelechy help` prints the syntax and API of every layer ([the same text](docs/REFERENCE.md)); the
 operations, fields and answers are in [the protocol](docs/PROTOCOL.md). Bridges speak the same protocol
 from [Blender](bridges/blender/README.md), [Godot](bridges/godot/README.md),
 [a web page](bridges/web/README.md) and [C](bridges/c/README.md).
 
 ## Start
 
-From the source (Rust 1.93 or later), `cargo build --release` puts the programs in `target/release/`;
-a [release](https://github.com/Fynn-3D/orla/releases) archive carries the same programs in `bin/`.
+From the source (Rust 1.93 or later), `cargo build --release` puts the programs in `target/release/`.
 
 ```sh
 entelechy new hello                                  # a scene that runs: Kernel, scene, test
