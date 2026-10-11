@@ -32,7 +32,7 @@ fn rgb_to_hsv(c: Vec3) -> Vec3 {
 }
 fn hsv_to_rgb(c: Vec3) -> Vec3 {
     let k = abs(fract(vec3(c.x + 1.0, c.x + 2.0 / 3.0, c.x + 1.0 / 3.0)) * 6.0 - 3.0);
-    let pure = clamp(k - 1.0, vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0));
+    let pure = saturate(k - 1.0);
     return mix(vec3(1.0, 1.0, 1.0), pure, c.y) * c.z;
 }
 
@@ -85,7 +85,7 @@ fn blackbody(heat: Float) -> Vec3 {
 /// magenta, and red again.
 fn hue(h: Float) -> Vec3 {
     let k = fract(h) * 6.0;
-    return clamp(vec3(abs(k - 3.0) - 1.0, 2.0 - abs(k - 2.0), 2.0 - abs(k - 4.0)), vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0));
+    return saturate(vec3(abs(k - 3.0) - 1.0, 2.0 - abs(k - 2.0), 2.0 - abs(k - 4.0)));
 }
 
 /// Linear light to sRGB's stored values (for a window or a file), and
@@ -94,7 +94,7 @@ kernel image.encode@1 {
     requires { field.read; field.write; }
     input source: Image;
     output result: Image;
-    compute { let s = sample(source); let c = linear_to_srgb(max(s.xyz, vec3(0.0, 0.0, 0.0))); return vec4(c, s.w); }
+    compute { let s = sample(source); let c = linear_to_srgb(max(s.xyz, 0.0)); return vec4(c, s.w); }
 }
 kernel image.decode@1 {
     requires { field.read; field.write; }

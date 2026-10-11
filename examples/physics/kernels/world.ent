@@ -46,17 +46,19 @@ kernel world.start@1 {
     output result: Rows<Body>;
     compute {
         let i = element();
-        if i == 0 { return box(vec2(0.0, -0.5), vec2(17.0, 0.5), 0.0, 0.0); }
-        if i == 1 { return box(vec2(-16.5, 10.0), vec2(0.5, 10.5), 0.0, 0.0); }
-        if i == 2 { return box(vec2(16.5, 10.0), vec2(0.5, 10.5), 0.0, 0.0); }
-        if i == 3 { return box(vec2(-9.5, 4.0), vec2(5.0, 0.25), -0.35, 0.0); }
-        if i == 4 { return Body { ..box(vec2(-1.5, 1.0), vec2(1.5, 1.0), 0.0, 0.0), sensor: 1 }; }
-        if i < 41 { return pyramid(i - 5); }
-        if i < first_shot() {
-            let k = i - 41;
-            return Body { ..circle(vec2(-13.5 + float(k % 5) * 1.0, 9.0 + float(k / 5) * 1.2), 0.4, 1.0), restitution: 0.3 };
-        }
-        return parked(i);
+        return match i {
+            0 => box(vec2(0.0, -0.5), vec2(17.0, 0.5), 0.0, 0.0),
+            1 => box(vec2(-16.5, 10.0), vec2(0.5, 10.5), 0.0, 0.0),
+            2 => box(vec2(16.5, 10.0), vec2(0.5, 10.5), 0.0, 0.0),
+            3 => box(vec2(-9.5, 4.0), vec2(5.0, 0.25), -0.35, 0.0),
+            4 => Body { ..box(vec2(-1.5, 1.0), vec2(1.5, 1.0), 0.0, 0.0), sensor: 1 },
+            5..41 => pyramid(i - 5),
+            41..51 => {
+                let k = i - 41;
+                Body { ..circle(vec2(-13.5 + float(k % 5) * 1.0, 9.0 + float(k / 5) * 1.2), 0.4, 1.0), restitution: 0.3 }
+            },
+            _ => parked(i),
+        };
     }
 }
 
@@ -90,7 +92,7 @@ kernel world.drop@1 {
         let pressed = pointer_down() && !h.down;
         let slot = first_shot() + h.shots % shots();
         if !pressed || element() != slot { return b; }
-        return Body { ..circle(world_at(pointer(), max(window(), vec2(1.0, 1.0))), 0.35, 3.0), restitution: 0.2 };
+        return Body { ..circle(world_at(pointer(), max(window(), 1.0)), 0.35, 3.0), restitution: 0.2 };
     }
 }
 
@@ -100,7 +102,7 @@ kernel world.aim@1 {
     output result: Rows<Ray>;
     compute {
         let corner = vec2(-15.5, 18.5);
-        let to = world_at(pointer(), max(window(), vec2(1.0, 1.0)));
+        let to = world_at(pointer(), max(window(), 1.0));
         let d = to - corner;
         let n = if length(d) > 0.0001 { d / length(d) } else { vec2(1.0, 0.0) };
         return Ray { origin: corner, direction: n, length: 60.0, mask: -1 };
@@ -126,7 +128,7 @@ fn outside(b: Body, p: Vec2) -> Float {
     let q = unturn(p - b.position, b.angle);
     if b.shape == 0 { return length(q) - b.size.x; }
     let d = abs(q) - b.size;
-    return length(max(d, vec2(0.0, 0.0))) + min(max(d.x, d.y), 0.0);
+    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
 }
 
 fn hue(i: Int, body: Body) -> Vec3 {
@@ -151,7 +153,7 @@ kernel world.marks@1 {
     requires { field.read; field.write; }
     input bodies: Rows<Body>;
     output result: Rows<Vec4>;
-    compute { let b = sample(bodies); return vec4(b.position.x, b.position.y, extent(b), 0.0); }
+    compute { let b = sample(bodies); return vec4(b.position, extent(b), 0.0); }
 }
 
 // The picture is drawn a tile of `tile()` pixels at a time, each tile
@@ -168,13 +170,13 @@ fn tile_rows(res: Vec2) -> Int { return int(ceil(res.y / tile())); }
 fn tile_box(t: Int, res: Vec2) -> Vec4 {
     let columns = tile_columns(res);
     let first = vec2(float(t % columns), float(t / columns)) * tile() + 0.5;
-    let last = min(first + vec2(tile() - 1.0, tile() - 1.0), res - 0.5);
+    let last = min(first + (tile() - 1.0), res - 0.5);
     let a = world_at(first, res);
     let b = world_at(last, res);
-    let grown = vec2(3.0, 3.0) * unit(res);
+    let grown = 3.0 * unit(res);
     let lo = min(a, b) - grown;
     let hi = max(a, b) + grown;
-    return vec4(lo.x, lo.y, hi.x, hi.y);
+    return vec4(lo, hi);
 }
 
 // Whether the box of mark `m` reaches a tile's box.
@@ -250,7 +252,7 @@ kernel world.view@1 {
         let painted = loop n with c = sky {
             let i = at(lists, start + index());
             let mark = at(marks, i);
-            let far = abs(p - mark.xy) - vec2(mark.z + u, mark.z + u);
+            let far = abs(p - mark.xy) - (mark.z + u);
             if max(far.x, far.y) > 0.0 { c } else {
                 let b = at(bodies, i);
                 let d = outside(b, p);

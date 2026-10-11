@@ -6,6 +6,11 @@
 /// A rectangle: its top left and its bottom right.
 struct Rect { lo: Vec2; hi: Vec2; }
 
+/// What a widget in a rectangle is now: at rest, focused (lit by the
+/// navigation or under the pointer), pressed, or not to be used
+/// (`idle()`, `focused()`, `pressed()`, `disabled()`).
+type WidgetState = enum { Idle, Focused, Pressed, Disabled };
+
 /// A rectangle from its top left and its size.
 fn rect_at(origin: Vec2, size: Vec2) -> Rect { return Rect { lo: origin, hi: origin + size }; }
 

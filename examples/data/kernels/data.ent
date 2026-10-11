@@ -30,11 +30,13 @@ kernel data.panels@1 {
         let lower = c.y >= half.y;
         let corner = vec2(if right { half.x } else { 0.0 }, if lower { half.y } else { 0.0 });
         let local = c - corner - gap;
-        let extent = half - vec2(gap * 2.0, gap * 2.0);
-        return if local.x < 0.0 || local.y < 0.0 || local.x >= extent.x || local.y >= extent.y { vec4(0.03, 0.03, 0.04, 1.0) }
-            else if !right && !lower { fit(packed, local, extent) }
-            else if right && !lower { fit(precision, local, extent) }
-            else if !right { fit(tiles, local, extent) }
-            else { fit(save, local, extent) };
+        let extent = half - gap * 2.0;
+        if local.x < 0.0 || local.y < 0.0 || local.x >= extent.x || local.y >= extent.y { return vec4(0.03, 0.03, 0.04, 1.0); }
+        return match int(right) + 2 * int(lower) {
+            0 => fit(packed, local, extent),
+            1 => fit(precision, local, extent),
+            2 => fit(tiles, local, extent),
+            _ => fit(save, local, extent),
+        };
     }
 }

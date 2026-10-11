@@ -73,8 +73,7 @@ fn palette(id: Int) -> Vec3 {
 
 // Whether a voxel is colored, empty outside the box.
 fn solid(voxels: Voxels, c: Vec3, n: Float) -> Bool {
-    let inside = c.x >= 0.0 && c.x < n && c.y >= 0.0 && c.y < n && c.z >= 0.0 && c.z < n;
-    return inside && at(voxels, c) > 0;
+    return voxel_within(c, vec3(n, n, n)) && at(voxels, c) > 0;
 }
 
 
@@ -102,7 +101,7 @@ kernel voxel.begin@1 {
             on_bar: false, painting: false, erasing: false, stroked: false,
             tool: Item.Place, color: 1, hover: Item.None,
             found: false, hit: vec3(0.0, 0.0, 0.0), face: vec3(0.0, 1.0, 0.0),
-            apply: false, act: 0, begin: false, since: 0,
+            apply: false, act: Item.Place, begin: false, since: 0,
             undo: false, reset: false,
             zkey: false
         };
@@ -176,8 +175,7 @@ kernel voxel.state@1 {
         let act = if erasing { Item.Erase } else { tool };
         let since = if s.apply { 1 } else { s.since + 1 };
         let target = seen.cell + seen.face;
-        let in_box = target.x >= 0.0 && target.x < n && target.y >= 0.0 && target.y < n && target.z >= 0.0 && target.z < n;
-        let can = seen.id > 0 && (act != Item.Place || in_box);
+        let can = seen.id > 0 && (act != Item.Place || voxel_within(target, vec3(n, n, n)));
         let apply = held && (first || since >= repeat) && can;
         let stroked = if held { s.stroked || apply } else { false };
         let undo_key = key(90);
@@ -250,17 +248,19 @@ kernel voxel.label@1 {
         let s = at(state, 0);
         let i = element();
         let item = if s.hover != Item.None { s.hover } else { s.tool };
-        let code = if i < 6 { at(names, item * 6 + i) }
-            else if i == 6 || i == 9 || i == 12 { 32 }
-            else {
-                let v = if i <= 8 { s.hit.x } else if i <= 11 { s.hit.y } else { s.hit.z };
+        let code = match i {
+            0..6 => at(names, item * 6 + i),
+            6 | 9 | 12 => 32,
+            _ => {
+                let v = match i { 7 | 8 => s.hit.x, 10 | 11 => s.hit.y, _ => s.hit.z };
                 let tens = i == 7 || i == 10 || i == 13;
                 // Under the bar there is no voxel, whatever the ray behind it hits.
                 if !s.found || s.hover != Item.None { 45 } else {
                     let n = int(v);
                     48 + (if tens { n / 10 } else { n % 10 })
                 }
-            };
+            },
+        };
         let unit = scale();
         let glyph = max(1.0, round(unit * 2.0));
         return Glyph { code: code, origin: vec2(12.0, 12.0) * unit + vec2(float(i) * 6.0 * glyph, 0.0), scale: glyph };
@@ -365,11 +365,11 @@ kernel voxel.draw@1 {
                 let far = exp(-t / (n * 1.6));
                 let g = max(abs(fract(f.x / 8.0) - 0.5), abs(fract(f.z / 8.0) - 0.5));
                 let line = if g > 0.47 { 0.09 * far } else { 0.0 };
-                let centre = length(vec2(f.x - n * 0.5, f.z - n * 0.5));
+                let centre = length(f.xz - n * 0.5);
                 let glow = 0.05 * exp(-centre / (n * 0.8)) * far;
                 let x_axis = if abs(f.z) < 0.25 && f.x > -n * 6.0 { vec3(0.55, 0.12, 0.1) * far } else { vec3(0.0, 0.0, 0.0) };
                 let z_axis = if abs(f.x) < 0.25 && f.z > -n * 6.0 { vec3(0.1, 0.2, 0.6) * far } else { vec3(0.0, 0.0, 0.0) };
-                sky + vec3(line + glow, line + glow, line + glow) + x_axis + z_axis
+                sky + (line + glow) + x_axis + z_axis
             } else { sky }
         };
         // The bar and the compass are laid out in logical pixels: the

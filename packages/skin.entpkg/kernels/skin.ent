@@ -87,13 +87,13 @@ kernel skin.sample@1 {
         let moment = at(at, element() / joints) * rate;
         let last = float(frames - 1);
         let held = if repeat {
-            moment - float(frames) * floor(moment / float(frames))
+            mod(moment, float(frames))
         } else {
             clamp(moment, 0.0, last)
         };
         let first = int(floor(held));
         let next = if repeat { (first + 1) % frames } else { min(first + 1, frames - 1) };
-        let t = held - floor(held);
+        let t = fract(held);
         let joint = element() % joints;
         return mixing(at(clip, first * joints + joint), at(clip, next * joints + joint), t);
     }
@@ -163,7 +163,7 @@ fn travelled(clip: Clip, joints: Int, joint: Int, moment: Float, ground: Vec3) -
     let held = moment - loops * span;
     let first = int(floor(held));
     let next = min(first + 1, frames - 1);
-    let here = mix(at(clip, first * joints + joint).at, at(clip, next * joints + joint).at, held - floor(held));
+    let here = mix(at(clip, first * joints + joint).at, at(clip, next * joints + joint).at, fract(held));
     return (stride * loops + here - start) * ground;
 }
 
@@ -190,14 +190,14 @@ kernel skin.stride@1 {
         let frames = count(clip) / joints;
         let span = float(max(frames - 1, 1));
         let moment = at(at, element() / joints) * rate;
-        let held = moment - span * floor(moment / span);
+        let held = mod(moment, span);
         let first = int(floor(held));
         let next = min(first + 1, frames - 1);
         let mine = element() % joints;
-        let p = mixing(at(clip, first * joints + mine), at(clip, next * joints + mine), held - floor(held));
+        let p = mixing(at(clip, first * joints + mine), at(clip, next * joints + mine), fract(held));
         if mine != joint { return p; }
         let away = (p.at - at(clip, joint).at) * ground;
-        return Pose { at: p.at - away, turn: p.turn, grow: p.grow };
+        return Pose { ..p, at: p.at - away };
     }
 }
 
@@ -283,7 +283,7 @@ kernel skin.aim@1 {
         if far == 0.0 { return p; }
         let facing = rotating(p.turn, normalize(axis));
         let turned = after(arc(normalize(facing), toward / far), p.turn);
-        return Pose { at: p.at, turn: between(p.turn, turned, how), grow: p.grow };
+        return Pose { ..p, turn: between(p.turn, turned, how) };
     }
 }
 
@@ -342,8 +342,8 @@ kernel skin.apply@1 {
               + at(palette, block + b.joints[1]) * b.weights.y
               + at(palette, block + b.joints[2]) * b.weights.z
               + at(palette, block + b.joints[3]) * b.weights.w;
-        let moved = m * vec4(v.position.x, v.position.y, v.position.z, 1.0);
-        let turned = m * vec4(v.normal.x, v.normal.y, v.normal.z, 0.0);
+        let moved = m * vec4(v.position, 1.0);
+        let turned = m * vec4(v.normal, 0.0);
         return Point {
             position: moved.xyz,
             normal: normalize(turned.xyz),
@@ -364,8 +364,8 @@ kernel skin.place@1 {
     compute {
         let v = sample(mesh);
         let place = posing(at(places, element() / count(one)));
-        let moved = place * vec4(v.position.x, v.position.y, v.position.z, 1.0);
-        let turned = place * vec4(v.normal.x, v.normal.y, v.normal.z, 0.0);
+        let moved = place * vec4(v.position, 1.0);
+        let turned = place * vec4(v.normal, 0.0);
         return Point {
             position: moved.xyz,
             normal: normalize(turned.xyz),

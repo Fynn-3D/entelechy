@@ -82,7 +82,7 @@ kernel nebula.probe@1 {
     output result: Rows<Vec4>;
     compute {
         let i = element();
-        let p = vec3(float(i) * 1.37 + 0.2, float(i) * 0.71 - 3.1, float(i) * 2.13 + 5.7);
+        let p = float(i) * vec3(1.37, 0.71, 2.13) + vec3(0.2, -3.1, 5.7);
         return vec4(unit_of(hash_int3(i, i * 3, i * 7, 1)), value3(p, 2), gradient3(p, 3), worley3(p, 4).x);
     }
 }
@@ -94,7 +94,8 @@ kernel nebula.spread@1 {
     requires { field.write; }
     output result: Rows<Float>;
     compute {
-        let p = vec3(float(element()) * 0.93 + 0.31, 1.7, float(element()) * 0.41 - 2.2);
+        let f = float(element());
+        let p = vec3(f * 0.93 + 0.31, 1.7, f * 0.41 - 2.2);
         let e = 0.1;
         return (curl3(p + vec3(e, 0.0, 0.0), 9).x - curl3(p - vec3(e, 0.0, 0.0), 9).x
               + curl3(p + vec3(0.0, e, 0.0), 9).y - curl3(p - vec3(0.0, e, 0.0), 9).y

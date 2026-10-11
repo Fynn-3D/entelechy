@@ -58,7 +58,7 @@ fn world(ray: Ray) -> Hit {
     let floor_at = ray.origin + ray.direction * floor_t;
     let dark = (floor(floor_at.x) + floor(floor_at.z)) % 2.0 == 0.0;
     let ground = Hit {
-        t: if floor_t > 0.001 && length(vec2(floor_at.x, floor_at.z)) < 14.0 { floor_t } else { -1.0 },
+        t: if floor_t > 0.001 && length(floor_at.xz) < 14.0 { floor_t } else { -1.0 },
         normal: vec3(0.0, 1.0, 0.0),
         albedo: if dark { vec3(0.32, 0.33, 0.36) } else { vec3(0.74, 0.73, 0.68) },
         light: vec3(0.0, 0.0, 0.0),
@@ -138,7 +138,7 @@ kernel path.sample@1 {
             } {
                 let hit = world(b.ray);
                 if hit.t < 0.0 {
-                    Bounce { ray: b.ray, weight: vec3(0.0, 0.0, 0.0), sum: b.sum + b.weight * sky(b.ray.direction), seed: b.seed }
+                    Bounce { ..b, weight: vec3(0.0, 0.0, 0.0), sum: b.sum + b.weight * sky(b.ray.direction) }
                 } else {
                     let point = b.ray.origin + b.ray.direction * hit.t;
                     Bounce {
@@ -166,7 +166,6 @@ kernel path.view@1 {
         let c = sample(sum);
         let mean = c.rgb / max(c.a, 1.0) * exposure;
         let mapped = mean / (mean + 1.0);
-        let gamma = vec3(pow(mapped.x, 0.4545), pow(mapped.y, 0.4545), pow(mapped.z, 0.4545));
-        return vec4(gamma, 1.0);
+        return vec4(pow(mapped, 0.4545), 1.0);
     }
 }

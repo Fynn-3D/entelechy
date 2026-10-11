@@ -5,7 +5,7 @@ use "colour.ent";
 fn aces(x: Vec3) -> Vec3 {
     let n = x * (x * 2.51 + 0.03);
     let d = x * (x * 2.43 + 0.59) + 0.14;
-    return clamp(n / d, vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0));
+    return saturate(n / d);
 }
 
 /// ACES-style tone mapping, encoded by sRGB's transfer for a window or
@@ -18,7 +18,7 @@ kernel image.tonemap@2 {
 
     compute {
         let c = sample(source);
-        let mapped = aces(vec3(c.r, c.g, c.b) * exposure);
+        let mapped = aces(c.rgb * exposure);
         let shown = linear_to_srgb(mapped);
         return vec4(shown, c.a);
     }

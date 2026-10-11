@@ -6,17 +6,17 @@
 struct Particle { position: Vec2; velocity: Vec2; age: Float; }
 type Canvas = Grid<Vec3>;
 
+fn hash(n: Float) -> Float {
+    // Sin-free so the CPU and GPU agree on every particle.
+    let q = fract(n * 0.1031);
+    let r = q + q * (q + 33.33);
+    return fract(r * r * 2.0);
+}
+
 kernel particles.seed@1 {
     requires { field.write; }
     param spread: Float = 0.6;
     output result: Rows<Particle>;
-
-    fn hash(n: Float) -> Float {
-        // Sin-free so the CPU and GPU agree on every particle.
-        let q = fract(n * 0.1031);
-        let r = q + q * (q + 33.33);
-        return fract(r * r * 2.0);
-    }
 
     compute {
         let i = float(element());
@@ -38,10 +38,8 @@ kernel particles.step@1 {
     param pull: Float = 1.2;
     output result: Rows<Particle>;
 
-    fn respawn(p: Particle, seed: Float) -> Particle {
-        let q = fract(seed * 0.1031);
-        let r = q + q * (q + 33.33);
-        let angle = fract(r * r * 2.0) * 6.2831853;
+    fn respawn(seed: Float) -> Particle {
+        let angle = hash(seed) * 6.2831853;
         return Particle {
             position: vec2(0.5, 0.5),
             velocity: vec2(cos(angle), sin(angle)) * 0.4,
@@ -60,9 +58,9 @@ kernel particles.step@1 {
         // Bounce off the floor and the walls.
         let floored = if moved.y > 1.0 { vec2(pushed.x * 0.9, -pushed.y * 0.8) } else { pushed };
         let walled = if moved.x < 0.0 || moved.x > 1.0 { vec2(-floored.x, floored.y) } else { floored };
-        let inside = clamp(moved, vec2(0.0, 0.0), vec2(1.0, 1.0));
+        let inside = saturate(moved);
         let next = Particle { position: inside, velocity: walled, age: p.age + dt };
-        return if next.age > 6.0 { respawn(next, float(element()) + time()) } else { next };
+        return if next.age > 6.0 { respawn(float(element()) + time()) } else { next };
     }
 }
 
@@ -114,7 +112,7 @@ kernel particles.draw@1 {
         let extent = domain();
         let glow = loop 49 with acc = vec3(0.0, 0.0, 0.0) {
             let k = index();
-            let offset = vec2(float(k % 7) - 3.0, float(k / 7) - 3.0);
+            let offset = vec2(k % 7, k / 7) - 3.0;
             let q = px + offset;
             let inside = q.x >= 0.0 && q.x < extent.x && q.y >= 0.0 && q.y < extent.y;
             let w = saturate(1.0 - length(offset) / radius);

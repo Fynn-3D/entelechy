@@ -4,12 +4,19 @@
 // spreads what that rules out to its neighbours; a frame takes several
 // steps, and the picture is whatever the grid has settled into so far.
 //
-// A tile is four bits, one a side: 1 the side towards -y, 2 towards +x,
-// 4 towards +y, 8 towards -x, each saying the pipe leaves that way. Two
-// cells fit when the sides they share agree, so a run of tiles is one
-// connected plumbing, and the sixteen tiles are every combination.
+// A tile is four bits, one a side, bit `Side`: up towards -y, right
+// towards +x, down towards +y, left towards -x, each saying the pipe
+// leaves that way. Two cells fit when the sides they share agree, so a
+// run of tiles is one connected plumbing, and the sixteen tiles are
+// every combination.
 
+type Side = enum { Up, Right, Down, Left };
 struct Pick { rank: Int; at: Int; }
+
+// Every tile but the blank one: what a cell that forgets can be again.
+fn every_tile() -> Int { return 0xFFFE; }
+// The rank of a cell already one tile: past every other.
+fn settled_rank() -> Int { return 0x7FFFFFF; }
 
 // The tiles whose `side` is open (1) or closed (0).
 fn side_mask(side: Int, value: Int) -> Int {
@@ -39,7 +46,7 @@ fn mix32(n: Int) -> Int {
 kernel collapse.start@1 {
     requires { field.write; }
     output result: Grid<Int>;
-    compute { return 0xFFFE; }
+    compute { return every_tile(); }
 }
 
 /// The cell to collapse next: the fewest tiles left, ties broken by a
@@ -53,7 +60,7 @@ kernel collapse.pick@1 {
         let { x, y } = icoord();
         let here = y * isize(cells).x + x;
         let left = popcount(sample(cells));
-        let rank = if left < 2 { 0x7FFFFFF } else { left * 64 + (mix32(here) & 63) };
+        let rank = if left < 2 { settled_rank() } else { left * 64 + (mix32(here) & 63) };
         return Pick { rank: rank, at: here };
     }
     merge(a, b) {
@@ -77,19 +84,19 @@ kernel collapse.step@1 {
         let here = y * extent.x + x;
         let mask = sample(cells);
         let chosen = at(pick, 0);
-        let middle = vec2(float(x) + 0.5, float(y) + 0.5);
-        let window = max(window(), vec2(1.0, 1.0));
-        let under = pointer() / window * float(extent);
+        let middle = coord() + 0.5;
+        let screen = max(window(), 1.0);
+        let under = pointer() / screen * float(extent);
         let melting = pointer_down() && distance(under, middle) < melt;
         // With nothing left to decide the grid would stand still, so a
         // spot of it forgets a few times a second and grows back: the
         // picture is never finished, and never the same twice.
-        let idle = chosen.rank > 0xFFFFFF;
+        let idle = chosen.rank == settled_rank();
         let spot = mix32(int(time() * 3.0));
         let ax = x - urem(spot >>> 17, extent.x);
         let ay = y - urem(spot >>> 5, extent.y);
         let eroding = idle && ax * ax + ay * ay < erode * erode;
-        if melting || eroding { return 0xFFFE; }
+        if melting || eroding { return every_tile(); }
         if here != chosen.at || popcount(mask) < 2 { return mask; }
         // The kth tile still possible, k drawn from the cell and the
         // moment: the loop walks the bits and stops at it.
@@ -117,12 +124,12 @@ kernel collapse.spread@1 {
         let c = icoord();
         let { x: w, y: h } = isize(cells);
         let mask = at(cells, c);
-        let up = if c.y > 0 { allowed(at(cells, c + ivec2(0, -1)), 2, 0) } else { side_mask(0, 0) };
-        let right = if c.x < w - 1 { allowed(at(cells, c + ivec2(1, 0)), 3, 1) } else { side_mask(1, 0) };
-        let down = if c.y < h - 1 { allowed(at(cells, c + ivec2(0, 1)), 0, 2) } else { side_mask(2, 0) };
-        let left = if c.x > 0 { allowed(at(cells, c + ivec2(-1, 0)), 1, 3) } else { side_mask(3, 0) };
+        let up = if c.y > 0 { allowed(at(cells, c + ivec2(0, -1)), Side.Down, Side.Up) } else { side_mask(Side.Up, 0) };
+        let right = if c.x < w - 1 { allowed(at(cells, c + ivec2(1, 0)), Side.Left, Side.Right) } else { side_mask(Side.Right, 0) };
+        let down = if c.y < h - 1 { allowed(at(cells, c + ivec2(0, 1)), Side.Up, Side.Down) } else { side_mask(Side.Down, 0) };
+        let left = if c.x > 0 { allowed(at(cells, c + ivec2(-1, 0)), Side.Right, Side.Left) } else { side_mask(Side.Left, 0) };
         let next = mask & up & right & down & left;
-        return if next == 0 { 0xFFFE } else { next };
+        return if next == 0 { every_tile() } else { next };
     }
 }
 
@@ -148,10 +155,10 @@ kernel collapse.view@1 {
         return loop 4 with d = length(p - 0.5) - 0.17 {
             if ((tile >>> index()) & 1) == 0 { d } else {
                 let arm = match index() {
-                    0 => length(p - vec2(0.5, clamp(p.y, 0.0, 0.5))),
-                    1 => length(p - vec2(clamp(p.x, 0.5, 1.0), 0.5)),
-                    2 => length(p - vec2(0.5, clamp(p.y, 0.5, 1.0))),
-                    _ => length(p - vec2(clamp(p.x, 0.0, 0.5), 0.5)),
+                    Side.Up => length(p - vec2(0.5, clamp(p.y, 0.0, 0.5))),
+                    Side.Right => length(p - vec2(clamp(p.x, 0.5, 1.0), 0.5)),
+                    Side.Down => length(p - vec2(0.5, clamp(p.y, 0.5, 1.0))),
+                    Side.Left => length(p - vec2(clamp(p.x, 0.0, 0.5), 0.5)),
                 };
                 min(d, arm - 0.12)
             }

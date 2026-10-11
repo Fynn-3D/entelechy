@@ -41,7 +41,7 @@ kernel modes.panels@1 {
             3 => size(scatter),
             _ => size(off_frame),
         };
-        let f = fit(p, inner, vec2(float(e.x), float(e.y)));
+        let f = fit(p, inner, e);
         let a = f.at;
         // Only the panel's own picture is read.
         let color = match k {

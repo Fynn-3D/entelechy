@@ -5,7 +5,7 @@
 use "colour.ent";
 
 /// How bright a linear colour looks, 0 for black to 1 for white.
-fn lightness(c: Vec3) -> Float { return saturate(linear_to_oklab(max(c, vec3(0.0, 0.0, 0.0))).x); }
+fn lightness(c: Vec3) -> Float { return saturate(linear_to_oklab(max(c, 0.0)).x); }
 
 /// The bin a colour falls in, of `bins`.
 fn bin_of(c: Vec3, bins: Int) -> Int {

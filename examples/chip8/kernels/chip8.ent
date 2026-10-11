@@ -89,8 +89,7 @@ kernel chip8.start@1 {
     requires { field.write; }
     output result: Bytes;
     compute {
-        let r = element();
-        return if r == 17 { 512 } else if r == 21 { 12345 } else { 0 };
+        return match element() { 17 => 512, 21 => 12345, _ => 0 };
     }
 }
 
@@ -103,8 +102,6 @@ kernel chip8.step@1 {
     memory regs: Bytes;
     memory screen: Screen;
     output result: Rows<Int>;
-    struct Draw { row: Int; hit: Int; }
-    struct Col { col: Int; hit: Int; }
 
     // The keypad on the keyboard: key 0 to F as X 1 2 3 Q W E A S D Z C 4 R F V.
     fn pressed(k: Int) -> Bool {
@@ -123,7 +120,7 @@ kernel chip8.step@1 {
         let hi = op >> 12;
         let x = (op >> 8) & 15;
         let y = (op >> 4) & 15;
-        let nn = op & 15;
+        let nibble = op & 15;
         let kk = op & 255;
         let nnn = op & 4095;
         let vx = at(regs, x);
@@ -133,7 +130,7 @@ kernel chip8.step@1 {
         let next = match hi {
             0 => {
                 if op == 224 {
-                    loop 2048 with k = 0 { put(screen, vec2(k % 64, k / 64), 0); k + 1 };
+                    loop 2048 with k = 0 { put(screen, ivec2(index() % 64, index() / 64), 0) };
                     pc + 2
                 } else if op == 238 {
                     put(regs, 18, sp - 1);
@@ -148,11 +145,11 @@ kernel chip8.step@1 {
             6 => { put(regs, x, kk); pc + 2 },
             7 => { put(regs, x, (vx + kk) & 255); pc + 2 },
             8 => {
-                let r = match nn {
+                let r = match nibble {
                     0 => vy, 1 => vx | vy, 2 => vx & vy, 3 => vx ^ vy, 4 => vx + vy,
                     5 => vx - vy, 6 => vx >> 1, 7 => vy - vx, _ => vx << 1
                 };
-                let flag = match nn {
+                let flag = match nibble {
                     4 => int(r > 255),
                     5 => int(vx >= vy),
                     6 => vx & 1,
@@ -179,20 +176,20 @@ kernel chip8.step@1 {
             13 => {
                 // Sprite rows from I, xor-drawn at (VX, VY) with wrap; VF says
                 // whether a pixel went out.
-                let drawn = loop 16 with d = Draw { row: 0, hit: 0 } until d.row >= nn {
-                    let byte = at(ram, i + d.row);
-                    let py = (vy + d.row) & 31;
-                    let across = loop 8 with c = Col { col: 0, hit: d.hit } {
-                        let bit = (byte >> (7 - c.col)) & 1;
-                        let px = (vx + c.col) & 63;
+                let hit = loop nibble with any = 0 {
+                    let row = index();
+                    let byte = at(ram, i + row);
+                    let py = (vy + row) & 31;
+                    loop 8 with h = any {
+                        let bit = (byte >> (7 - index())) & 1;
+                        let px = (vx + index()) & 63;
                         let old = at(screen, vec2(px, py));
                         let now = old ^ bit;
                         put(screen, vec2(px, py), now);
-                        Col { col: c.col + 1, hit: if old == 1 && now == 0 { 1 } else { c.hit } }
-                    };
-                    Draw { row: d.row + 1, hit: across.hit }
+                        if old == 1 && now == 0 { 1 } else { h }
+                    }
                 };
-                put(regs, 15, drawn.hit);
+                put(regs, 15, hit);
                 pc + 2
             },
             14 => {
@@ -211,8 +208,8 @@ kernel chip8.step@1 {
                 30 => { put(regs, 16, (i + vx) & 4095); pc + 2 },
                 41 => { put(regs, 16, 80 + (vx & 15) * 5); pc + 2 },
                 51 => { put(ram, i, vx / 100); put(ram, i + 1, (vx / 10) % 10); put(ram, i + 2, vx % 10); pc + 2 },
-                85 => { loop 16 with r = 0 until r > x { put(ram, i + r, at(regs, r)); r + 1 }; pc + 2 },
-                101 => { loop 16 with r = 0 until r > x { put(regs, r, at(ram, i + r)); r + 1 }; pc + 2 },
+                85 => { loop x + 1 with r = 0 { put(ram, i + index(), at(regs, index())) }; pc + 2 },
+                101 => { loop x + 1 with r = 0 { put(regs, index(), at(ram, i + index())) }; pc + 2 },
                 _ => pc + 2
             },
             _ => pc + 2

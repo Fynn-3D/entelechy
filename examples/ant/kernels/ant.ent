@@ -11,8 +11,7 @@ kernel ant.start@1 {
     param y: Int = 32;
     output result: Rows<Int>;
     compute {
-        let i = element();
-        return if i == 0 { x } else if i == 1 { y } else { 0 };
+        return match element() { 0 => x, 1 => y, _ => 0 };
     }
 }
 

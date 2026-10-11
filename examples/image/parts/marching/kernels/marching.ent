@@ -38,7 +38,7 @@ fn segments(case: Int) -> [Int; 4] {
 }
 
 // Where the level crosses between two corner values, 0 to 1.
-fn cross(a: Float, b: Float, level: Float) -> Float {
+fn crossing(a: Float, b: Float, level: Float) -> Float {
     return saturate((level - a) / (b - a));
 }
 
@@ -66,10 +66,10 @@ kernel marching.draw@1 {
         ];
         let case = int(v[0] > level) | (int(v[1] > level) << 1) | (int(v[2] > level) << 2) | (int(v[3] > level) << 3);
         let points = [
-            vec2(cross(v[0], v[1], level), 0.0),
-            vec2(1.0, cross(v[1], v[2], level)),
-            vec2(cross(v[3], v[2], level), 1.0),
-            vec2(0.0, cross(v[0], v[3], level)),
+            vec2(crossing(v[0], v[1], level), 0.0),
+            vec2(1.0, crossing(v[1], v[2], level)),
+            vec2(crossing(v[3], v[2], level), 1.0),
+            vec2(0.0, crossing(v[0], v[3], level)),
         ];
         let edges = segments(case);
         let nearest = loop 2 with best = 10.0 {

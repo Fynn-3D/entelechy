@@ -29,20 +29,21 @@ fn voxel_within(c: Vec3, n: Vec3) -> Bool {
 /// a ray sees through, say; `ivec2(1, 0)` passes nothing); id 0 for none.
 /// Its distance `t` is in voxels along `dir`.
 fn voxel_walk_past(vox: Voxels, from: Vec3, dir: Vec3, base: Vec3, n: Vec3, pass: IVec2) -> VoxelStep {
-    let ix = voxel_over(dir.x);
-    let iy = voxel_over(dir.y);
-    let iz = voxel_over(dir.z);
-    let ax = (-from.x) * ix; let bx = (n.x - from.x) * ix;
-    let ay = (-from.y) * iy; let by = (n.y - from.y) * iy;
-    let az = (-from.z) * iz; let bz = (n.z - from.z) * iz;
-    let tnear = max(max(min(ax, bx), min(ay, by)), max(min(az, bz), 0.0));
-    let tfar = min(min(max(ax, bx), max(ay, by)), max(az, bz));
+    // The distances along the ray to the box's low and high sides, each
+    // axis; the ray is inside from the last entry to the first exit.
+    let over = vec3(voxel_over(dir.x), voxel_over(dir.y), voxel_over(dir.z));
+    let lows = -from * over;
+    let highs = (n - from) * over;
+    let enter = min(lows, highs);
+    let leave = max(lows, highs);
+    let tnear = max(max(enter.x, enter.y), max(enter.z, 0.0));
+    let tfar = min(min(leave.x, leave.y), leave.z);
     let p = from + dir * (tnear + 0.0005);
     let cell = clamp(floor(p), vec3(0.0, 0.0, 0.0), n - 1.0);
     let step = vec3(if dir.x < 0.0 { -1.0 } else { 1.0 }, if dir.y < 0.0 { -1.0 } else { 1.0 }, if dir.z < 0.0 { -1.0 } else { 1.0 });
-    let delta = vec3(abs(ix), abs(iy), abs(iz));
-    let side = vec3((cell.x + max(step.x, 0.0) - from.x) * ix, (cell.y + max(step.y, 0.0) - from.y) * iy, (cell.z + max(step.z, 0.0) - from.z) * iz);
-    let entry = if tnear == min(ax, bx) { vec3(-step.x, 0.0, 0.0) } else if tnear == min(ay, by) { vec3(0.0, -step.y, 0.0) } else { vec3(0.0, 0.0, -step.z) };
+    let delta = abs(over);
+    let side = (cell + max(step, 0.0) - from) * over;
+    let entry = if tnear == enter.x { vec3(-step.x, 0.0, 0.0) } else if tnear == enter.y { vec3(0.0, -step.y, 0.0) } else { vec3(0.0, 0.0, -step.z) };
     let start = VoxelStep { cell: cell, side: side, t: tnear, face: entry, id: if tfar > tnear { 0 } else { -1 } };
     let found = loop 1024 with w = start until w.id != 0 {
         let id = at(vox, w.cell + base);
@@ -241,7 +242,7 @@ fn voxel_distance(s: VoxelShape, p: Vec3) -> Float {
 /// The voxel at cell `c`, holding `id`, painted over by each of `shapes`
 /// in order: the last holding its middle gives it its number.
 fn voxel_painted(id: Int, c: IVec3, shapes: Rows<VoxelShape>) -> Int {
-    let p = vec3(float(c.x) + 0.5, float(c.y) + 0.5, float(c.z) + 0.5);
+    let p = float(c) + 0.5;
     return loop count(shapes) with v = id {
         let s = at(shapes, index());
         if voxel_distance(s, p) <= 0.0 { s.id } else { v }
@@ -331,9 +332,9 @@ kernel voxel.view@1 {
 /// the joint it moves with. A body at rest is a volume of these, baked
 /// once (`voxel.shapes@1` paints them as any number), and posed; it is
 /// not drawn itself.
-fn voxel_body(look: Int, joint: Int) -> Int { return look + joint * 65536; }
-fn voxel_look(number: Int) -> Int { return number % 65536; }
-fn voxel_joint(number: Int) -> Int { return number / 65536; }
+fn voxel_body(look: Int, joint: Int) -> Int { return look | joint << 16; }
+fn voxel_look(number: Int) -> Int { return number & 65535; }
+fn voxel_joint(number: Int) -> Int { return number >> 16; }
 
 /// What a posed body shows at `p`, in its box's voxels (its floor's
 /// middle at the origin), each voxel `grain` skin units wide: the body at
@@ -375,7 +376,7 @@ kernel voxel.posed@1 {
     compute {
         let c = icoord();
         let n = domain();
-        let p = vec3(float(c.x) + 0.5 - n.x * 0.5, float(c.y) + 0.5, float(c.z) + 0.5 - n.z * 0.5);
+        let p = float(c) + 0.5 - vec3(n.x * 0.5, 0.0, n.z * 0.5);
         return voxel_posed(rest, unposing, 0, count(unposing), grain, p);
     }
 }

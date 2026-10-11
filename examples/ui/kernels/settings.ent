@@ -7,32 +7,17 @@ use "../../../packages/ui.entpkg";
 struct Settings { difficulty: Int; volume: Float; subtitles: Bool; hints: Bool; applied_t: Float; }
 
 /// The rows of the options' list.
+type Row = enum { Difficulty, Volume, Subtitles, Hints, Apply };
 fn option_rows() -> Int { return 5; }
-fn row_apply() -> Int { return 4; }
 
-/// The text's rows (`assets/ui.txt`), twenty cells each.
+/// The text's rows (`assets/ui.txt`), twenty cells each: `Difficulties`
+/// starts easy, normal and hard, `Entries` the journal's six lines.
 fn text_width() -> Int { return 20; }
-fn word_settings() -> Int { return 0; }
-fn word_difficulty() -> Int { return 1; }
-/// Easy, normal, hard.
-fn words_difficulties() -> Int { return 2; }
-fn word_volume() -> Int { return 5; }
-fn word_subtitles() -> Int { return 6; }
-fn word_hints() -> Int { return 7; }
-fn word_apply() -> Int { return 8; }
-fn word_saved() -> Int { return 9; }
-fn word_hero() -> Int { return 10; }
-fn word_health() -> Int { return 11; }
-fn word_magick() -> Int { return 12; }
-fn word_gold() -> Int { return 13; }
-fn word_journal() -> Int { return 14; }
-/// The journal's six lines.
-fn words_journal() -> Int { return 15; }
+type Word = enum {
+    Settings, Difficulty, Difficulties, Volume = 5, Subtitles, Hints, Apply, Saved,
+    Hero, Health, Magick, Gold, Journal, Entries, Confirm = 21, Back, Enter, Esc
+};
 fn journal_lines() -> Int { return 6; }
-fn word_confirm() -> Int { return 21; }
-fn word_back() -> Int { return 22; }
-fn word_enter() -> Int { return 23; }
-fn word_esc() -> Int { return 24; }
 
 // ---------------------------------------------------------------- layout
 
@@ -84,10 +69,10 @@ kernel demo.settings@1 {
         // The slider's share of the row, as `slider_rect` lays it.
         let on_slider = (n.along * rect_size(option_list()).x - value_left()) / (value_width() - 22.0);
         return match n.row {
-            0 => Settings { ..s, difficulty: stepped(s.difficulty, n.by, 0, 2) },
-            1 => Settings { ..s, volume: if n.confirm && n.pointed == 1 { saturate(on_slider) } else { slid(s.volume, n.by, 0.1) } },
-            2 => Settings { ..s, subtitles: if turn { !s.subtitles } else { s.subtitles } },
-            3 => Settings { ..s, hints: if turn { !s.hints } else { s.hints } },
+            Row.Difficulty => Settings { ..s, difficulty: stepped(s.difficulty, n.by, 0, 2) },
+            Row.Volume => Settings { ..s, volume: if n.confirm && n.pointed == Row.Volume { saturate(on_slider) } else { slid(s.volume, n.by, 0.1) } },
+            Row.Subtitles => Settings { ..s, subtitles: if turn { !s.subtitles } else { s.subtitles } },
+            Row.Hints => Settings { ..s, hints: if turn { !s.hints } else { s.hints } },
             _ => Settings { ..s, applied_t: if n.confirm { time() } else { s.applied_t } }
         };
     }
@@ -109,20 +94,23 @@ fn option_row(t: Theme, letters: Grid<Float>, words: Rows<Int>, s: Settings, nav
     let row = inset2(list_row(option_list(), k, row_pitch(), 0.0), vec2(0.0, 1.0));
     let state = row_state(nav, k, true);
     let w = text_width();
-    if k == 0 { return choice(t, letters, words, word_difficulty(), words_difficulties() + s.difficulty, w, row, state, q); }
-    if k == row_apply() {
-        let b = placed(row, vec2(72.0, rect_size(row).y), vec2(0.5, 0.5));
-        return push_button(t, letters, words, word_apply(), w, b, if state == focused() && nav.confirm { pressed() } else { state }, q);
-    }
-    if k == 2 { return switch_choice(t, letters, words, word_subtitles(), w, s.subtitles, row, state, q); }
-    // A name, and a control of the screen's own in the value's place.
-    let named = option_name(t, letters, words, if k == 1 { word_volume() } else { word_hints() }, w, row, state, q);
-    let place = slider_rect(row);
-    let control = if k == 1 {
-        over(slider(t, Rect { lo: place.lo, hi: vec2(place.hi.x - 22.0, place.hi.y) }, s.volume, state, q),
-            number(letters, int(s.volume * 100.0 + 0.5), right_of(place, 18.0), vec2(1.0, 0.5), t.scale, state_ink(t, state), q))
-    } else { checkbox(t, placed(option_value(row), vec2(10.0, 10.0), vec2(0.0, 0.5)), s.hints, state, q) };
-    return over(named, control);
+    return match k {
+        Row.Difficulty => choice(t, letters, words, Word.Difficulty, Word.Difficulties + s.difficulty, w, row, state, q),
+        Row.Subtitles => switch_choice(t, letters, words, Word.Subtitles, w, s.subtitles, row, state, q),
+        Row.Apply => {
+            let b = placed(row, vec2(72.0, rect_size(row).y), vec2(0.5, 0.5));
+            push_button(t, letters, words, Word.Apply, w, b, if state == focused() && nav.confirm { pressed() } else { state }, q)
+        },
+        // A name, and a control of the screen's own in the value's place.
+        Row.Volume => {
+            let place = slider_rect(row);
+            over(option_name(t, letters, words, Word.Volume, w, row, state, q),
+                over(slider(t, Rect { lo: place.lo, hi: vec2(place.hi.x - 22.0, place.hi.y) }, s.volume, state, q),
+                    number(letters, int(s.volume * 100.0 + 0.5), right_of(place, 18.0), vec2(1.0, 0.5), t.scale, state_ink(t, state), q)))
+        },
+        _ => over(option_name(t, letters, words, Word.Hints, w, row, state, q),
+            checkbox(t, placed(option_value(row), vec2(10.0, 10.0), vec2(0.0, 0.5)), s.hints, state, q))
+    };
 }
 
 /// The hero's panel: health and magick, the health falling every four
@@ -132,25 +120,25 @@ fn hero(t: Theme, letters: Grid<Float>, words: Rows<Int>, now: Float, q: Vec2) -
     let r = hero_panel();
     if !near_rect(r, q, 6.0) { return clear(); }
     let w = text_width();
-    let base = titled_panel(t, letters, words, word_hero(), w, r, 1.0, q);
+    let base = titled_panel(t, letters, words, Word.Hero, w, r, 1.0, q);
     if !holds(r, q) { return base; }
     let inner = inset(r, 8.0);
     let cycle = fract(now / 4.0) * 4.0;
     let hit = cycle >= 2.0;
     let full = if hit { 0.5 } else { 0.8 };
     let trail = if hit { mix(0.8, 0.5, saturate((cycle - 2.0) / 0.8)) } else { full };
-    let health = over(label(letters, words, word_health(), w, Rect { lo: vec2(inner.lo.x, 42.0), hi: vec2(inner.hi.x, 50.0) }, vec2(0.0, 0.5), t.scale, t.dim, q),
+    let health = over(label(letters, words, Word.Health, w, Rect { lo: vec2(inner.lo.x, 42.0), hi: vec2(inner.hi.x, 50.0) }, vec2(0.0, 0.5), t.scale, t.dim, q),
         meter(t, Rect { lo: vec2(inner.lo.x, 53.0), hi: vec2(inner.hi.x, 59.0) }, full, trail, vec4(0.85, 0.25, 0.22, 1.0), vec4(1.0, 0.85, 0.6, 1.0), q));
-    let magick = over(label(letters, words, word_magick(), w, Rect { lo: vec2(inner.lo.x, 64.0), hi: vec2(inner.hi.x, 72.0) }, vec2(0.0, 0.5), t.scale, t.dim, q),
+    let magick = over(label(letters, words, Word.Magick, w, Rect { lo: vec2(inner.lo.x, 64.0), hi: vec2(inner.hi.x, 72.0) }, vec2(0.0, 0.5), t.scale, t.dim, q),
         meter(t, Rect { lo: vec2(inner.lo.x, 75.0), hi: vec2(inner.hi.x, 81.0) }, 0.6, 0.6, vec4(0.3, 0.55, 0.95, 1.0), vec4(0.3, 0.55, 0.95, 1.0), q));
     let gold_row = Rect { lo: vec2(inner.lo.x, 87.0), hi: vec2(inner.hi.x, 95.0) };
-    let gold = named_number(letters, words, word_gold(), w, 1250, gold_row, t.scale, t.dim, t.accent, q);
-    let journal_head = label(letters, words, word_journal(), w, Rect { lo: vec2(inner.lo.x, 102.0), hi: vec2(inner.hi.x, 110.0) }, vec2(0.0, 0.5), t.scale, t.accent, q);
+    let gold = named_number(letters, words, Word.Gold, w, 1250, gold_row, t.scale, t.dim, t.accent, q);
+    let journal_head = label(letters, words, Word.Journal, w, Rect { lo: vec2(inner.lo.x, 102.0), hi: vec2(inner.hi.x, 110.0) }, vec2(0.0, 0.5), t.scale, t.accent, q);
     // Three of the journal's lines shown, from `first`.
     let first = int(floor(now)) % (journal_lines() - 2);
     let lines = Rect { lo: vec2(inner.lo.x, 114.0), hi: vec2(inner.hi.x - 6.0, 150.0) };
     let k = int(floor((q.y - lines.lo.y) / 12.0));
-    let line = if holds(lines, q) && k < 3 { label(letters, words, words_journal() + first + k, w, list_row(lines, k, 12.0, 0.0), vec2(0.0, 0.5), t.scale, t.ink, q) } else { clear() };
+    let line = if holds(lines, q) && k < 3 { label(letters, words, Word.Entries + first + k, w, list_row(lines, k, 12.0, 0.0), vec2(0.0, 0.5), t.scale, t.ink, q) } else { clear() };
     let bar = scrollbar(t, Rect { lo: vec2(inner.hi.x - 3.0, 114.0), hi: vec2(inner.hi.x, 150.0) }, first, 3, journal_lines(), q);
     return over(over(over(over(over(over(base, health), magick), gold), journal_head), line), bar);
 }
@@ -174,13 +162,13 @@ kernel demo.view@1 {
         let now = time();
         let sky = mix(vec3(0.16, 0.2, 0.32), vec3(0.42, 0.3, 0.32), saturate(q.y / logical().y));
         let wt = text_width();
-        let settings_ = titled_panel(t, letters, words, word_settings(), wt, settings_panel(), 2.0, q);
+        let settings_ = titled_panel(t, letters, words, Word.Settings, wt, settings_panel(), 2.0, q);
         let rows = if near_rect(option_list(), q, 10.0) && q.y >= option_list().lo.y && q.y < option_list().hi.y { option_row(t, letters, words, s, n, int(floor((q.y - option_list().lo.y) / row_pitch())), q) } else { clear() };
         let note_at = Rect { lo: vec2(24.0, 146.0), hi: vec2(188.0, 156.0) };
-        let note = if now - s.applied_t < 1.5 { label(letters, words, word_saved(), wt, note_at, vec2(0.5, 0.5), t.scale, t.accent, q) } else { clear() };
+        let note = if now - s.applied_t < 1.5 { label(letters, words, Word.Saved, wt, note_at, vec2(0.5, 0.5), t.scale, t.accent, q) } else { clear() };
         let bottom = 172.0;
-        let prompts = over(over(prompt(t, letters, words, word_confirm(), wt, 0, vec2(14.0, bottom), q), prompt(t, letters, words, word_back(), wt, 1, vec2(84.0, bottom), q)),
-            over(key_cap(t, letters, words, word_enter(), wt, true, vec2(220.0, bottom), q), key_cap(t, letters, words, word_esc(), wt, true, vec2(262.0, bottom), q)));
+        let prompts = over(over(prompt(t, letters, words, Word.Confirm, wt, 0, vec2(14.0, bottom), q), prompt(t, letters, words, Word.Back, wt, 1, vec2(84.0, bottom), q)),
+            over(key_cap(t, letters, words, Word.Enter, wt, true, vec2(220.0, bottom), q), key_cap(t, letters, words, Word.Esc, wt, true, vec2(262.0, bottom), q)));
         let screen = over(over(over(over(settings_, rows), note), hero(t, letters, words, now, q)), prompts);
         let c = onto(sky, screen);
         return vec4(c, 1.0);

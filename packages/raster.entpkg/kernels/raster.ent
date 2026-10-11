@@ -116,7 +116,7 @@ fn boxed(k: Corners, size: Vec2) -> Box {
 // where it leaves none: the centre outside an edge, or the depth outside
 // `[0, 1)`.
 fn depth_at(k: Corners, px: Int, py: Int) -> Float {
-    let p = vec2(float(px) + 0.5, float(py) + 0.5);
+    let p = vec2(px, py) + 0.5;
     let w0 = edge(k.b.xy, k.c.xy, p);
     let w1 = edge(k.c.xy, k.a.xy, p);
     let w2 = edge(k.a.xy, k.b.xy, p);
@@ -127,7 +127,7 @@ fn depth_at(k: Corners, px: Int, py: Int) -> Float {
 // The uv a triangle's fragment at a pixel's centre has, perspective-
 // correct by `1 / w`, in the order the surface reads it back.
 fn uv_at(k: Corners, va: Corner, vb: Corner, vc: Corner, px: Int, py: Int) -> Vec2 {
-    let p = vec2(float(px) + 0.5, float(py) + 0.5);
+    let p = vec2(px, py) + 0.5;
     let l0 = edge(k.b.xy, k.c.xy, p) / k.area;
     let l1 = edge(k.c.xy, k.a.xy, p) / k.area;
     let l2 = edge(k.a.xy, k.b.xy, p) / k.area;
@@ -185,7 +185,7 @@ kernel raster.cover@3 {
             loop b.w with dx = 0 {
                 let z = depth_at(k, b.x0 + dx, b.y0 + dy);
                 if z >= 0.0 {
-                    emit(Hit { pixel: vec2(float(b.x0 + dx), float(b.y0 + dy)), key: key_of(z, t) });
+                    emit(Hit { pixel: vec2(b.x0 + dx, b.y0 + dy), key: key_of(z, t) });
                 }
                 dx + 1
             };
@@ -288,7 +288,7 @@ kernel raster.cover_tiles@2 {
                 loop at_.w with dx = 0 {
                     let z = depth_at(k, at_.x0 + dx, at_.y0 + dy);
                     if z >= 0.0 {
-                        emit(Hit { pixel: vec2(float(at_.x0 + dx), float(at_.y0 + dy)), key: key_of(z, at_.t) });
+                        emit(Hit { pixel: vec2(at_.x0 + dx, at_.y0 + dy), key: key_of(z, at_.t) });
                     }
                     dx + 1
                 };
@@ -331,7 +331,7 @@ kernel raster.cover_cutout@3 {
                 let py = b.y0 + dy;
                 let z = depth_at(k, px, py);
                 if z >= 0.0 && at_linear(mask, uv_at(k, va, vb, vc, px, py) * texels).a >= cutout {
-                    emit(Hit { pixel: vec2(float(px), float(py)), key: key_of(z, t) });
+                    emit(Hit { pixel: vec2(px, py), key: key_of(z, t) });
                 }
                 dx + 1
             };
@@ -375,7 +375,7 @@ kernel raster.cover_cutout_tiles@2 {
                     let py = at_.y0 + dy;
                     let z = depth_at(k, px, py);
                     if z >= 0.0 && at_linear(mask, uv_at(k, va, vb, vc, px, py) * texels).a >= cutout {
-                        emit(Hit { pixel: vec2(float(px), float(py)), key: key_of(z, at_.t) });
+                        emit(Hit { pixel: vec2(px, py), key: key_of(z, at_.t) });
                     }
                     dx + 1
                 };

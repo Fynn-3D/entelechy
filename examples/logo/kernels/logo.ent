@@ -29,28 +29,25 @@ fn arc(p: Vec2, c: Vec2, r: Float, a0: Float, a1: Float) -> Float {
     return if a >= a0 && a <= a1 { abs(length(d) - r) } else { min(length(p - e0), length(p - e1)) };
 }
 
+/// The name's letters.
+type Glyph = enum { E, N, T, L, C, H, Y };
+
 /// How far `p` (in a letter's box: 0.62 wide, 1 tall) is from letter `k`'s
-/// strokes: E, N, T, L, C, H, Y as 0 to 6.
-fn letter(k: Int, p: Vec2) -> Float {
-    if k == 0 {
-        return min(min(to_segment(p, vec2(0.0, 0.0), vec2(0.0, 1.0)), to_segment(p, vec2(0.0, 1.0), vec2(0.56, 1.0))),
-            min(to_segment(p, vec2(0.0, 0.5), vec2(0.46, 0.5)), to_segment(p, vec2(0.0, 0.0), vec2(0.56, 0.0))));
-    }
-    if k == 1 {
-        return min(to_segment(p, vec2(0.0, 0.0), vec2(0.0, 1.0)), min(to_segment(p, vec2(0.0, 1.0), vec2(0.6, 0.0)), to_segment(p, vec2(0.6, 0.0), vec2(0.6, 1.0))));
-    }
-    if k == 2 { return min(to_segment(p, vec2(0.0, 1.0), vec2(0.62, 1.0)), to_segment(p, vec2(0.31, 1.0), vec2(0.31, 0.0))); }
-    if k == 3 { return min(to_segment(p, vec2(0.0, 1.0), vec2(0.0, 0.0)), to_segment(p, vec2(0.0, 0.0), vec2(0.52, 0.0))); }
-    if k == 4 {
+/// strokes.
+fn letter(k: Glyph, p: Vec2) -> Float {
+    return match k {
+        Glyph.E => min(min(to_segment(p, vec2(0.0, 0.0), vec2(0.0, 1.0)), to_segment(p, vec2(0.0, 1.0), vec2(0.56, 1.0))),
+            min(to_segment(p, vec2(0.0, 0.5), vec2(0.46, 0.5)), to_segment(p, vec2(0.0, 0.0), vec2(0.56, 0.0)))),
+        Glyph.N => min(to_segment(p, vec2(0.0, 0.0), vec2(0.0, 1.0)), min(to_segment(p, vec2(0.0, 1.0), vec2(0.6, 0.0)), to_segment(p, vec2(0.6, 0.0), vec2(0.6, 1.0)))),
+        Glyph.T => min(to_segment(p, vec2(0.0, 1.0), vec2(0.62, 1.0)), to_segment(p, vec2(0.31, 1.0), vec2(0.31, 0.0))),
+        Glyph.L => min(to_segment(p, vec2(0.0, 1.0), vec2(0.0, 0.0)), to_segment(p, vec2(0.0, 0.0), vec2(0.52, 0.0))),
         // A stadium's outline open to the right: its two half-circles,
         // each stopping short of the right, and the left side between.
-        return min(to_segment(p, vec2(0.0, 0.31), vec2(0.0, 0.69)),
-            min(arc(p, vec2(0.31, 0.69), 0.31, 0.6, 3.1415927), arc(p, vec2(0.31, 0.31), 0.31, -3.1415927, -0.6)));
-    }
-    if k == 5 {
-        return min(to_segment(p, vec2(0.0, 0.0), vec2(0.0, 1.0)), min(to_segment(p, vec2(0.6, 0.0), vec2(0.6, 1.0)), to_segment(p, vec2(0.0, 0.5), vec2(0.6, 0.5))));
-    }
-    return min(to_segment(p, vec2(0.0, 1.0), vec2(0.31, 0.5)), min(to_segment(p, vec2(0.62, 1.0), vec2(0.31, 0.5)), to_segment(p, vec2(0.31, 0.5), vec2(0.31, 0.0))));
+        Glyph.C => min(to_segment(p, vec2(0.0, 0.31), vec2(0.0, 0.69)),
+            min(arc(p, vec2(0.31, 0.69), 0.31, 0.6, 3.1415927), arc(p, vec2(0.31, 0.31), 0.31, -3.1415927, -0.6))),
+        Glyph.H => min(to_segment(p, vec2(0.0, 0.0), vec2(0.0, 1.0)), min(to_segment(p, vec2(0.6, 0.0), vec2(0.6, 1.0)), to_segment(p, vec2(0.0, 0.5), vec2(0.6, 0.5)))),
+        Glyph.Y => min(to_segment(p, vec2(0.0, 1.0), vec2(0.31, 0.5)), min(to_segment(p, vec2(0.62, 1.0), vec2(0.31, 0.5)), to_segment(p, vec2(0.31, 0.5), vec2(0.31, 0.0)))),
+    };
 }
 
 /// The graph's hues: at its root and at its tip, on dark or `light`.
@@ -67,8 +64,10 @@ fn ink_colour(light: Int, ink: Int) -> Vec3 {
 /// The seed's gold.
 fn seed_gold() -> Vec3 { return vec3(1.0, 0.7, 0.2); }
 
-/// The name's letters, in order, as `letter`'s numbers.
-fn name_letter(i: Int) -> Int { return [0, 1, 2, 0, 3, 0, 4, 5, 6][clamp(i, 0, 8)]; }
+/// The name's letters, in order.
+fn name_letter(i: Int) -> Glyph {
+    return [Glyph.E, Glyph.N, Glyph.T, Glyph.E, Glyph.L, Glyph.E, Glyph.C, Glyph.H, Glyph.Y][i];
+}
 
 /// A layer laid over what is there: `col` where `a` covers.
 fn lay(acc: Vec4, col: Vec3, a: Float) -> Vec4 {
@@ -103,7 +102,13 @@ fn lattice_node(i: Int) -> Vec2 {
     let a = lattice();
     let xs = [0.0, -1.0, 1.0, -1.75, 0.0, 1.75];
     let ys = [-1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
-    return vec2(xs[clamp(i, 0, 5)], ys[clamp(i, 0, 5)]) * a;
+    return vec2(xs[i], ys[i]) * a;
+}
+
+/// The nodes' radii: the one eleven modules, the two nine, the three seven.
+fn node_radius(i: Int) -> Float {
+    let m = module();
+    return match i { 0 => 11.0 * m, 1 | 2 => 9.0 * m, _ => 7.0 * m };
 }
 
 /// The crown circle's middle: half a step below the diamond's.
@@ -168,12 +173,8 @@ fn seed_mark(p: Vec2, light: Int, ink: Int, px: Float) -> Vec4 {
     };
     let trunk = along(p, s, lattice_node(0));
     let acc3 = lay(acc2, hue, max(edges, stroke(trunk.x, 7.0 * m, px)));
-    // The nodes: eleven, nine and seven modules.
-    let nodes = loop 6 with c = 0.0 {
-        let i = index();
-        let r = if i == 0 { 11.0 * m } else if i < 3 { 9.0 * m } else { 7.0 * m };
-        max(c, stroke(length(p - lattice_node(i)), r, px))
-    };
+    // The nodes.
+    let nodes = loop 6 with c = 0.0 { max(c, stroke(length(p - lattice_node(index())), node_radius(index()), px)) };
     let acc4 = lay(acc3, hue, nodes);
     // The rings: five modules round, two either side, hollow within.
     let ring = loop 9 with c = 100.0 { min(c, length(p - lattice_crown(index()))) };

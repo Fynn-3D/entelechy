@@ -65,7 +65,7 @@ kernel million.step@1 {
         // One that has left the picture is made again on the disc, so
         // a scene left running stays a scene.
         if away > 0.9 { return placed(element() * 2 + 1, pull); }
-        return Body { at: at, v: v, tint: body.tint };
+        return Body { ..body, at: at, v: v };
     }
 }
 

@@ -15,9 +15,9 @@ kernel sampler.kick@1 {
     output result: Clip;
     compute {
         let t = float(element()) / 48000.0;
-        let pitch = 40.0 + 110.0 * exp(-t * 18.0);
+        // The phase: the pitch, 40 + 110 e^(-18 t) Hz, summed over time.
         let phase = 6.2831853 * (40.0 * t + 110.0 / 18.0 * (1.0 - exp(-t * 18.0)));
-        return sin(phase) * exp(-t * 7.0) * 0.9 + 0.0 * pitch;
+        return sin(phase) * exp(-t * 7.0) * 0.9;
     }
 }
 

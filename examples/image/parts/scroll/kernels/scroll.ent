@@ -39,8 +39,10 @@ kernel scroll.view@1 {
         let offset = vec2(time() * speed, time() * speed * 0.37);
         let q = (p + 0.5) / zoom + offset;
         let w = mod(q, n);
-        return if band == 0 { at(tile, w) }
-            else if band == 1 { at_linear(tile, w) }
-            else { at_linear_wrapped(tile, q) };
+        return match band {
+            0 => at(tile, w),
+            1 => at_linear(tile, w),
+            _ => at_linear_wrapped(tile, q),
+        };
     }
 }

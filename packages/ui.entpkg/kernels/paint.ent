@@ -34,7 +34,7 @@ fn rounded_distance(q: Vec2, r: Rect, radius: Float) -> Float {
     let half = rect_size(r) * 0.5;
     let k = min(radius, min(half.x, half.y));
     let d = abs(q - rect_middle(r)) - half + k;
-    return length(max(d, vec2(0.0, 0.0))) + min(max(d.x, d.y), 0.0) - k;
+    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - k;
 }
 
 /// A rectangle filled, its corners rounded by `radius`.

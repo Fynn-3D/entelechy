@@ -11,14 +11,14 @@ fn sheet_cell(k: Int, columns: Int) -> IVec2 { return ivec2(k % columns, k / col
 /// `k` is.
 fn sheet_texel(k: Int, columns: Int, cell: IVec2, p: IVec2) -> IVec2 {
     let c = sheet_cell(k, columns);
-    return ivec2(c.x * cell.x + p.x, c.y * cell.y + p.y);
+    return c * cell + p;
 }
 
 /// Which frame texel `t` of a sheet is in, and where in it: what a
 /// Kernel drawing a whole sheet asks of each texel.
 fn sheet_place(t: IVec2, columns: Int, cell: IVec2) -> SheetPlace {
-    let c = ivec2(t.x / cell.x, t.y / cell.y);
-    return SheetPlace { frame: c.y * columns + c.x, at: ivec2(t.x - c.x * cell.x, t.y - c.y * cell.y) };
+    let c = t / cell;
+    return SheetPlace { frame: c.y * columns + c.x, at: t - c * cell };
 }
 
 /// Pixel `p` of frame `k` of `sheet`.

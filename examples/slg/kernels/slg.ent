@@ -50,8 +50,7 @@ kernel slg.map@1 {
 
     compute {
         let c = coord();
-        let x = int(c.x);
-        let y = int(c.y);
+        let { x, y } = icoord();
         let h = hash(c);
         let river = x == 8 && y != 3 && y != 8;
         let fort = (x == 1 && y == 5) || (x == 14 && y == 6);
@@ -106,11 +105,9 @@ kernel slg.seed@1 {
     compute {
         let g = at(game, 0);
         let index = if who == 0 { g.selected } else { g.prey };
-        let c = coord();
-        let here = vec2(int(c.x), int(c.y));
         return if index >= 0 {
             let u = at(units, index);
-            if here == vec2(u.x, u.y) { 0 } else { 999 }
+            if icoord() == ivec2(u.x, u.y) { 0 } else { 999 }
         } else { 999 };
     }
 }
@@ -135,9 +132,9 @@ kernel slg.costs@1 {
 
     compute {
         let g = at(game, 0);
-        let c = coord();
+        let c = icoord();
         let team = if g.selected >= 0 { at(units, g.selected).team } else { Team.Player };
-        return if blocked(int(c.x), int(c.y), team) { 999 } else { sample(map).cost };
+        return if blocked(c.x, c.y, team) { 999 } else { sample(map).cost };
     }
 }
 
@@ -194,34 +191,31 @@ kernel slg.game@1 {
     }
 
     fn adjacent_foe(x: Int, y: Int, team: Team) -> Int {
-        let a = unit_at(x - 1, y);
-        let b = unit_at(x + 1, y);
-        let c = unit_at(x, y - 1);
-        let d = unit_at(x, y + 1);
-        let foe = if a >= 0 && at(units, a).team != team { a }
-            else if b >= 0 && at(units, b).team != team { b }
-            else if c >= 0 && at(units, c).team != team { c }
-            else if d >= 0 && at(units, d).team != team { d }
-            else { -1 };
-        return foe;
+        // Left, right, above, below: the first foe found.
+        let around = [ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1)];
+        return loop 4 with foe = -1 {
+            let o = around[index()];
+            let n = unit_at(x + o.x, y + o.y);
+            if n >= 0 && at(units, n).team != team { break n; }
+            foe
+        };
     }
 
     compute {
         let g = sample(previous);
-        let extent = size(map);
-        let w = int(extent.x);
-        let h = int(extent.y);
+        let { x: w, y: h } = isize(map);
         // Keys as bits: left, up, right, down, Z, X, Enter. An edge is a
         // key held now that was not held last frame.
         let keys = [37, 38, 39, 40, 90, 88, 13];
         let now = loop 7 with m = 0 { m | int(key(keys[index()])) << index() };
-        let left = bit(now, 0) && !bit(g.held, 0);
-        let up = bit(now, 1) && !bit(g.held, 1);
-        let right = bit(now, 2) && !bit(g.held, 2);
-        let down = bit(now, 3) && !bit(g.held, 3);
-        let confirm = bit(now, 4) && !bit(g.held, 4);
-        let cancel = bit(now, 5) && !bit(g.held, 5);
-        let end_turn = bit(now, 6) && !bit(g.held, 6);
+        let pressed = now & (g.held ^ 127);
+        let left = bit(pressed, 0);
+        let up = bit(pressed, 1);
+        let right = bit(pressed, 2);
+        let down = bit(pressed, 3);
+        let confirm = bit(pressed, 4);
+        let cancel = bit(pressed, 5);
+        let end_turn = bit(pressed, 6);
         let cx = clamp(g.cx + int(right) - int(left), 0, w - 1);
         let cy = clamp(g.cy + int(down) - int(up), 0, h - 1);
         // An order names `selected` for the unit row this frame; the
@@ -350,7 +344,7 @@ kernel slg.draw@1 {
             // A round tree in each cell.
             Terrain.Forest => if (px % 8 - 4) * (px % 8 - 4) + (py % 8 - 4) * (py % 8 - 4) < 9 { vec3(0.1, 0.45, 0.15) } else { vec3(0.25, 0.65, 0.25) },
             // A peak, shaded on one side.
-            Terrain.Mountain => if py > 14 - (px - 8) * (if px < 8 { -1 } else { 1 }) { vec3(0.45, 0.4, 0.35) } else { vec3(0.6, 0.55, 0.5) },
+            Terrain.Mountain => if py > 14 - abs(px - 8) { vec3(0.45, 0.4, 0.35) } else { vec3(0.6, 0.55, 0.5) },
             // Ripples.
             Terrain.Water => if (px + py) % 8 < 2 { vec3(0.55, 0.75, 1.0) } else { vec3(0.2, 0.4, 0.9) },
             // Courses of stone.
@@ -378,15 +372,13 @@ kernel slg.draw@1 {
 
     compute {
         let g = at(game, 0);
-        let c = coord();
-        let x = int(c.x);
-        let y = int(c.y);
+        let { x, y } = icoord();
         let tx = x / 16;
         let ty = y / 16;
         let px = x % 16;
         let py = y % 16;
-        let extent = size(map);
-        let on_map = ty < int(extent.y);
+        let rows = isize(map).y;
+        let on_map = ty < rows;
         let tile = if on_map { at(map, vec2(tx, ty)) } else { Tile { kind: Terrain.Grass, cost: 1 } };
         let ground = terrain(tile.kind, px, py);
         // Reachable cells glow while a destination is being chosen.
@@ -404,17 +396,22 @@ kernel slg.draw@1 {
         let with_units = if here.a > 0.5 { here.xyz } else { lit };
         // The cursor: a blinking frame.
         let blink = int(floor(time() * 6.0)) % 2 == 0;
-        let frame = on_map && tx == g.cx && ty == g.cy && (px == 0 || px == 15 || py == 0 || py == 15) && blink && g.phase < Phase.Choose;
-        let enemy_mark = on_map && tx == g.cx && ty == g.cy && (px == 0 || px == 15 || py == 0 || py == 15) && g.phase >= Phase.Choose && g.phase <= Phase.Striking;
+        let border = on_map && tx == g.cx && ty == g.cy && (px == 0 || px == 15 || py == 0 || py == 15);
+        let frame = border && blink && g.phase < Phase.Choose;
+        let enemy_mark = border && g.phase >= Phase.Choose && g.phase <= Phase.Striking;
         let scene = if frame { vec3(1.0, 1.0, 1.0) } else if enemy_mark { vec3(1.0, 0.5, 0.2) } else { with_units };
         // The status bar: turn as ticks, phase as a color block, ends as a tint.
-        let bar = if ty >= int(extent.y) {
+        let bar = if ty >= rows {
             let ticks = (x - 8) / 8 < g.turn && (x - 8) % 8 < 5 && x >= 8 && y >= 200 && y < 208;
             let phase_color = if g.phase < Phase.Choose { vec3(0.3, 0.45, 1.0) } else { vec3(1.0, 0.35, 0.3) };
             let block = x >= 200 && x < 248 && y >= 200 && y < 208;
             if ticks { vec3(1.0, 1.0, 1.0) } else if block { phase_color } else { vec3(0.05, 0.05, 0.08) }
         } else { scene };
-        let ended = if g.phase == Phase.Won { mix(bar, vec3(1.0, 0.9, 0.3), 0.4) } else if g.phase == Phase.Lost { mix(bar, vec3(0.5, 0.1, 0.1), 0.5) } else { bar };
+        let ended = match g.phase {
+            Phase.Won => mix(bar, vec3(1.0, 0.9, 0.3), 0.4),
+            Phase.Lost => mix(bar, vec3(0.5, 0.1, 0.1), 0.5),
+            _ => bar,
+        };
         return vec4(ended, 1.0);
     }
 }

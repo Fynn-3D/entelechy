@@ -8,6 +8,12 @@
 use "moves.ent";
 type Batch = Rows<Float>;
 
+// The weights' layout, as above.
+fn unit_weights() -> Int { return 55; }
+fn out_weights() -> Int { return 1760; }
+fn out_bias() -> Int { return 1792; }
+fn weight_count() -> Int { return 1793; }
+
 fn noise(n: Float) -> Float {
     let q = fract(n * 0.1031);
     let r = q * (q + 33.33);
@@ -17,9 +23,13 @@ fn noise(n: Float) -> Float {
 // The sticker color, centred, as the network sees it.
 fn seen(color: Int) -> Float { return float(color) / 5.0 - 0.5; }
 
-// Hidden unit j of the network `w` over the 54 values `x` reads with `get`.
+// How many turns cube `cube` of frame `frame` is given, 0 to 8.
+fn turns(frame: Float, cube: Int) -> Int { return int(noise(frame * 0.713 + float(cube) * 7.1 + 0.3) * 9.0); }
+
+// Hidden unit j of the network `w` over the 54 values of `x` from `first`.
 fn unit(w: Rows<Float>, x: Rows<Float>, first: Int, j: Int) -> Float {
-    return tanh(loop 54 with acc = at(w, j * 55 + 54) { acc + at(w, j * 55 + index()) * at(x, first + index()) });
+    let base = j * unit_weights();
+    return tanh(loop 54 with acc = at(w, base + 54) { acc + at(w, base + index()) * at(x, first + index()) });
 }
 
 /// Small random weights to start from.
@@ -40,7 +50,7 @@ kernel train.samples@1 {
         let cube = e / 54;
         let i = e % 54;
         let frame = floor(time() * 60.0 + 0.5);
-        let k = int(noise(frame * 0.713 + float(cube) * 7.1 + 0.3) * 9.0);
+        let k = turns(frame, cube);
         let source = loop 8 with idx = i {
             if index() < k {
                 let m = int(noise(frame * 1.7 + float(cube) * 3.3 + float(k - 1 - index()) * 0.71 + 0.5) * 12.0);
@@ -58,7 +68,7 @@ kernel train.labels@1 {
     compute {
         let cube = element();
         let frame = floor(time() * 60.0 + 0.5);
-        return float(int(noise(frame * 0.713 + float(cube) * 7.1 + 0.3) * 9.0));
+        return float(turns(frame, cube));
     }
 }
 
@@ -85,7 +95,7 @@ kernel train.delta@1 {
     output result: Batch;
     compute {
         let cube = element();
-        let o = loop 32 with acc = at(weights, 1792) { acc + at(weights, 1760 + index()) * at(act, cube * 32 + index()) };
+        let o = loop 32 with acc = at(weights, out_bias()) { acc + at(weights, out_weights() + index()) * at(act, cube * 32 + index()) };
         return o - at(labels, cube);
     }
 }
@@ -105,18 +115,20 @@ kernel train.grads@1 {
     struct Term { at: Int; value: Float; }
     scatter into zeros with sum {
         let e = element();
-        let cube = e / 1793;
-        let k = e % 1793;
+        let cube = e / weight_count();
+        let k = e % weight_count();
         let d = at(delta, cube);
-        let value = if k == 1792 { d }
-            else if k >= 1760 { d * at(act, cube * 32 + (k - 1760)) }
-            else {
-                let j = k / 55;
-                let i = k % 55;
+        let value = match k {
+            1792 => d,
+            1760..1792 => d * at(act, cube * 32 + (k - out_weights())),
+            _ => {
+                let j = k / unit_weights();
+                let i = k % unit_weights();
                 let h = at(act, cube * 32 + j);
-                let through = d * at(weights, 1760 + j) * (1.0 - h * h);
+                let through = d * at(weights, out_weights() + j) * (1.0 - h * h);
                 through * (if i == 54 { 1.0 } else { at(samples, cube * 54 + i) })
-            };
+            },
+        };
         return Term { at: k, value: value };
     }
 }
@@ -151,10 +163,11 @@ kernel train.guess@1 {
     input weights: Batch;
     output result: Batch;
     compute {
-        return loop 32 with acc = at(weights, 1792) {
+        return loop 32 with acc = at(weights, out_bias()) {
             let j = index();
-            let h = tanh(loop 54 with s = at(weights, j * 55 + 54) { s + at(weights, j * 55 + index()) * seen(at(stickers, index())) });
-            acc + at(weights, 1760 + j) * h
+            let base = j * unit_weights();
+            let h = tanh(loop 54 with s = at(weights, base + 54) { s + at(weights, base + index()) * seen(at(stickers, index())) });
+            acc + at(weights, out_weights() + j) * h
         };
     }
 }

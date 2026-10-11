@@ -4,7 +4,7 @@
 // times as it should iterate; the frame's result feeds the next frame
 // through the Graph. The pointer stirs the fluid and adds smoke; a plume
 // at the bottom keeps it alive when nobody touches it.
-struct Touch { x: Float; y: Float; down: Bool; vx: Float; vy: Float; }
+struct Touch { at: Vec2; down: Bool; moved: Vec2; }
 type Hand = Rows<Touch>;
 type Flow = Grid<Vec2>;
 type Amount = Grid<Float>;
@@ -13,7 +13,7 @@ type Amount = Grid<Float>;
 kernel fluid.rest@1 {
     requires { field.write; }
     output result: Hand;
-    compute { return Touch { x: 0.0, y: 0.0, down: false, vx: 0.0, vy: 0.0 }; }
+    compute { return Touch { at: vec2(0.0, 0.0), down: false, moved: vec2(0.0, 0.0) }; }
 }
 
 /// The pointer as a row: where it is, whether it is down, and how far it
@@ -27,12 +27,32 @@ kernel fluid.hand@1 {
         let p = pointer();
         let down = pointer_down();
         let moving = down && s.down;
-        return Touch {
-            x: p.x, y: p.y, down: down,
-            vx: if moving { p.x - s.x } else { 0.0 },
-            vy: if moving { p.y - s.y } else { 0.0 }
-        };
+        return Touch { at: p, down: down, moved: if moving { p - s.at } else { vec2(0.0, 0.0) } };
     }
+}
+
+// How much the hand, while down, reaches the point p.
+fn near_hand(p: Vec2, h: Touch, radius: Float) -> Float {
+    let d = p - h.at;
+    return if h.down { exp(-dot(d, d) / (radius * radius)) } else { 0.0 };
+}
+
+// The plume's strength at p, near the bottom's middle.
+fn plume_at(p: Vec2, ext: Vec2, source: Float) -> Float {
+    let e = p - vec2(ext.x * 0.5, ext.y - 10.0);
+    return exp(-dot(e, e) / 60.0) * source;
+}
+
+// The cells of the border, where the pressure is not solved.
+fn solid(c: Vec2, ext: Vec2) -> Bool {
+    return c.x < 1.0 || c.x > ext.x - 1.5 || c.y < 1.0 || c.y > ext.y - 1.5;
+}
+
+// A velocity with no flow through the border's faces: the walls.
+fn walled(v: Vec2, c: Vec2, ext: Vec2) -> Vec2 {
+    let wall_x = c.x < 1.5 || c.x > ext.x - 1.5;
+    let wall_y = c.y < 1.5 || c.y > ext.y - 1.5;
+    return vec2(if wall_x { 0.0 } else { v.x }, if wall_y { 0.0 } else { v.y });
 }
 
 // The velocity is staggered: a cell's x stands on its left face, its y
@@ -75,11 +95,8 @@ kernel fluid.advect@1 {
 
     // The forces at a point: the hand, the plume, and the lift.
     fn force(p: Vec2, ext: Vec2, h: Touch) -> Vec2 {
-        let d = p - vec2(h.x, h.y);
-        let near = if h.down { exp(-dot(d, d) / (radius * radius)) } else { 0.0 };
-        let stir = vec2(h.vx, h.vy) * (push * near);
-        let e = p - vec2(ext.x * 0.5, ext.y - 10.0);
-        let plume = exp(-dot(e, e) / 60.0) * source;
+        let stir = h.moved * (push * near_hand(p, h, radius));
+        let plume = plume_at(p, ext, source);
         let sway = vec2(0.3 * sin(time() * 2.1) + 0.2 * sin(time() * 5.3), -0.6) * plume;
         let rise = vec2(0.0, -lift * at_linear(smoke, p));
         return stir + sway + rise;
@@ -100,10 +117,7 @@ kernel fluid.advect@1 {
                      abs(curl(c + vec2(0.0, 1.0))) - abs(curl(c - vec2(0.0, 1.0))));
         let n = g / (length(g) + 0.0001);
         let confine = vec2(n.y, -n.x) * (w * swirl * dt);
-        let out = (vec2(u, v) + confine) * drag;
-        let wall_x = c.x < 1.5 || c.x > ext.x - 1.5;
-        let wall_y = c.y < 1.5 || c.y > ext.y - 1.5;
-        return vec2(if wall_x { 0.0 } else { out.x }, if wall_y { 0.0 } else { out.y });
+        return walled((vec2(u, v) + confine) * drag, c, ext);
     }
 }
 
@@ -116,8 +130,7 @@ kernel fluid.divergence@1 {
         let c = coord();
         let ext = domain();
         let here = sample(velocity);
-        let solid = c.x < 1.0 || c.x > ext.x - 1.5 || c.y < 1.0 || c.y > ext.y - 1.5;
-        return if solid { 0.0 } else {
+        return if solid(c, ext) { 0.0 } else {
             at(velocity, c + vec2(1.0, 0.0)).x - here.x + at(velocity, c + vec2(0.0, 1.0)).y - here.y
         };
     }
@@ -134,8 +147,7 @@ kernel fluid.relax@1 {
     output result: Amount;
 
     fn beside(c: Vec2, own: Float, ext: Vec2) -> Float {
-        let solid = c.x < 1.0 || c.x > ext.x - 1.5 || c.y < 1.0 || c.y > ext.y - 1.5;
-        return if solid { own } else { at(pressure, c) };
+        return if solid(c, ext) { own } else { at(pressure, c) };
     }
 
     compute {
@@ -160,10 +172,7 @@ kernel fluid.project@1 {
         let ext = domain();
         let p = sample(pressure);
         let grad = vec2(p - at(pressure, c - vec2(1.0, 0.0)), p - at(pressure, c - vec2(0.0, 1.0)));
-        let out = sample(velocity) - grad;
-        let wall_x = c.x < 1.5 || c.x > ext.x - 1.5;
-        let wall_y = c.y < 1.5 || c.y > ext.y - 1.5;
-        return vec2(if wall_x { 0.0 } else { out.x }, if wall_y { 0.0 } else { out.y });
+        return walled(sample(velocity) - grad, c, ext);
     }
 }
 
@@ -186,11 +195,7 @@ kernel fluid.smoke@1 {
         let here = c + 0.5;
         let carried = at_linear(previous, here - flow_at(velocity, here) * dt);
         let h = at(hand, 0);
-        let d = here - vec2(h.x, h.y);
-        let near = if h.down { exp(-dot(d, d) / (radius * radius)) } else { 0.0 };
-        let e = here - vec2(ext.x * 0.5, ext.y - 10.0);
-        let plume = exp(-dot(e, e) / 60.0) * source;
-        return min(carried * fade + feed * (0.2 * near + plume), 1.2);
+        return min(carried * fade + feed * (0.2 * near_hand(here, h, radius) + plume_at(here, ext, source)), 1.2);
     }
 }
 

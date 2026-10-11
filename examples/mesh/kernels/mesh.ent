@@ -22,7 +22,7 @@ kernel mesh.torus@1 {
     compute {
         let i = element();
         let ring = i / segments;
-        let seg = i - ring * segments;
+        let seg = i % segments;
         let u = float(seg) / float(segments);
         let v = float(ring) / float(rings);
         let a = u * 6.2831853;
@@ -44,14 +44,14 @@ kernel mesh.torus_faces@1 {
     compute {
         let cell = element() / 2;
         let ring = cell / segments;
-        let seg = cell - ring * segments;
-        let seg1 = if seg + 1 == segments { 0 } else { seg + 1 };
-        let ring1 = if ring + 1 == rings { 0 } else { ring + 1 };
+        let seg = cell % segments;
+        let seg1 = (seg + 1) % segments;
+        let ring1 = (ring + 1) % rings;
         let v00 = ring * segments + seg;
         let v10 = ring * segments + seg1;
         let v01 = ring1 * segments + seg;
         let v11 = ring1 * segments + seg1;
-        return if element() == cell * 2 {
+        return if element() % 2 == 0 {
             Tri { a: v00, b: v10, c: v11 }
         } else {
             Tri { a: v00, b: v11, c: v01 }
@@ -85,10 +85,11 @@ kernel mesh.split_vertices@1 {
         } else {
             let k = i - originals;
             let t = at(faces, k / 3);
-            let edge = k - (k / 3) * 3;
-            if edge == 0 { midpoint(at(mesh, t.a), at(mesh, t.b)) }
-            else if edge == 1 { midpoint(at(mesh, t.b), at(mesh, t.c)) }
-            else { midpoint(at(mesh, t.c), at(mesh, t.a)) }
+            match k % 3 {
+                0 => midpoint(at(mesh, t.a), at(mesh, t.b)),
+                1 => midpoint(at(mesh, t.b), at(mesh, t.c)),
+                _ => midpoint(at(mesh, t.c), at(mesh, t.a)),
+            }
         };
     }
 }
@@ -138,9 +139,9 @@ kernel mesh.project@1 {
     compute {
         let v = sample(mesh);
         let angle = time() * spin;
-        let p = rotate_x(rotate_y(vec3(v.clip.x, v.clip.y, v.clip.z), angle), tilt);
+        let p = rotate_x(rotate_y(v.clip.xyz, angle), tilt);
         let n = rotate_x(rotate_y(v.normal, angle), tilt);
-        let view = vec3(p.x, p.y, p.z - distance);
+        let view = p - vec3(0.0, 0.0, distance);
         let f = 2.1445;
         let near = 0.1;
         let far = 10.0;

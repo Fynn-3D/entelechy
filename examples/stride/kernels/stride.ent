@@ -56,7 +56,7 @@ kernel stride.stand@1 {
     output result: Rows<Pose>;
     compute {
         let p = sample(previous);
-        return Pose { at: p.at + sample(travel), turn: p.turn, grow: p.grow };
+        return Pose { ..p, at: p.at + sample(travel) };
     }
 }
 
@@ -109,7 +109,8 @@ kernel stride.shade@1 {
             return vec4(vec3(0.72, 0.58, 0.44) * (0.3 + 0.7 * lit), 1.0);
         }
         let size = domain();
-        let ndc = vec2((coord().x + 0.5) / size.x * 2.0 - 1.0, 1.0 - (coord().y + 0.5) / size.y * 2.0);
+        let uv = (coord() + 0.5) / size;
+        let ndc = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
         let dx = ndc.x * aspect / 1.7321;
         let dy = ndc.y / 1.7321;
         let eye = eye_of(at(stand, 0).at);

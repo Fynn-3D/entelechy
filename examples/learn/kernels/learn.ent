@@ -63,16 +63,15 @@ kernel learn.grads@1 {
         let point = at(points, e / 65);
         let p = point.position;
         let d = sigmoid(logit(weights, p)) - point.label;   // dL/ds for the log loss
-        let value = if k == 64 {
-            d
-        } else if k >= 48 {
-            d * hidden(weights, p, k - 48)
-        } else {
-            let j = k / 3;
-            let h = hidden(weights, p, j);
-            let through = d * at(weights, 48 + j) * (1.0 - h * h);
-            let i = k % 3;
-            through * (if i == 0 { p.x } else if i == 1 { p.y } else { 1.0 })
+        let value = match k {
+            64 => d,
+            48..64 => d * hidden(weights, p, k - 48),
+            _ => {
+                let j = k / 3;
+                let h = hidden(weights, p, j);
+                let through = d * at(weights, 48 + j) * (1.0 - h * h);
+                through * [p.x, p.y, 1.0][k % 3]
+            },
         };
         return Term { at: k, value: value };
     }

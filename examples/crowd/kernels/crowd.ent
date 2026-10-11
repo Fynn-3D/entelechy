@@ -96,7 +96,7 @@ kernel crowd.project@1 {
         let orbit = rotate_x(tilt) * rotate_y(turn + time() * spin);
         let p = orbit * (v.position - focus);
         let n = orbit * v.normal;
-        let view = vec3(p.x, p.y, p.z - distance);
+        let view = p - vec3(0.0, 0.0, distance);
         let f = 2.1445;
         let near = 0.1;
         let far = 80.0;

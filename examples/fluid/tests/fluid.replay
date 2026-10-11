@@ -62,11 +62,11 @@ pointer 36 20 down
 frame 0.6333
 pointer 38 20 down
 frame 0.65
-expect hand.result[0].vx = 2.0 0.001
+expect hand.result[0].moved.x = 2.0 0.001
 expect hand.result[0].down = true
 pointer up
 frame 0.6667
 expect hand.result[0].down = false
-expect hand.result[0].vx = 0.0 0.001
+expect hand.result[0].moved.x = 0.0 0.001
 expect project.result[1320] = 1.71 0.07 0.15  # cell (40, 20): the fluid follows the hand
 expect smoke.result[1320] = 0.3 0.1           # and carries smoke the hand left

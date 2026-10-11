@@ -63,7 +63,7 @@ kernel packed.tonemap@1 {
     output result: Image;
     compute {
         let c = sample(hdr).rgb;
-        return vec4(c / (vec3(1.0, 1.0, 1.0) + c), 1.0);
+        return vec4(c / (c + 1.0), 1.0);
     }
 }
 
@@ -73,7 +73,7 @@ kernel packed.albedo@1 {
     output result: Image;
     compute {
         let c = icoord();
-        let t = (c / ivec2(8, 8));
+        let t = c / 8;
         let warm = (t.x + t.y) % 2 == 0;
         let edge = c.x % 8 == 0 || c.y % 8 == 0;
         let base = if warm { vec3(0.82, 0.55, 0.32) } else { vec3(0.36, 0.52, 0.72) };

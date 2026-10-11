@@ -8,15 +8,21 @@
 // through to the pool's floor, and the far fades into haze.
 use "../../../packages/voxel.entpkg";
 
-/// Voxel numbers: 1 flagstone, 2 brick, 3 stone, 4 water, 5 torch, 6 iron,
-/// 7 marble, 8 gold.
-fn crypt_color(id: Int) -> Vec3 {
+type Stone = enum { Air, Flagstone, Brick, Rock, Water, Torch, Iron, Marble, Gold };
+
+fn crypt_color(id: Stone) -> Vec3 {
     return match id {
-        1 => vec3(0.36, 0.34, 0.33), 2 => vec3(0.52, 0.3, 0.22), 3 => vec3(0.45, 0.45, 0.48), 4 => vec3(0.2, 0.35, 0.5),
-        5 => vec3(1.0, 0.75, 0.3), 6 => vec3(0.2, 0.2, 0.22), 7 => vec3(0.85, 0.84, 0.8), _ => vec3(0.95, 0.75, 0.25)
+        Stone.Flagstone => vec3(0.36, 0.34, 0.33),
+        Stone.Brick => vec3(0.52, 0.3, 0.22),
+        Stone.Rock => vec3(0.45, 0.45, 0.48),
+        Stone.Water => vec3(0.2, 0.35, 0.5),
+        Stone.Torch => vec3(1.0, 0.75, 0.3),
+        Stone.Iron => vec3(0.2, 0.2, 0.22),
+        Stone.Marble => vec3(0.85, 0.84, 0.8),
+        _ => vec3(0.95, 0.75, 0.25),
     };
 }
-fn glows(id: Int) -> Bool { return id == 5; }
+fn glows(id: Stone) -> Bool { return id == Stone.Torch; }
 
 /// The chamber's measures: voxels a side, meters a voxel.
 fn chamber() -> Vec3 { return vec3(48.0, 24.0, 48.0); }
@@ -29,23 +35,25 @@ fn torch_at(k: Int) -> Vec3 {
 }
 
 /// The chamber at a voxel: `open` its vault open to the sky.
-fn chamber_at(c: IVec3, open: Bool) -> Int {
-    let m = (vec3(float(c.x), float(c.y), float(c.z)) + 0.5) * grain() - vec3(6.0, 0.0, 6.0);
+fn chamber_at(c: IVec3, open: Bool) -> Stone {
+    let m = (float(c) + 0.5) * grain() - vec3(6.0, 0.0, 6.0);
     let pool = m.x > 2.5 && m.z > 2.5 && m.x < 5.0 && m.z < 5.0;
-    if m.y < 0.5 { return if pool && m.y >= 0.25 { 0 } else if fract(m.x * 0.8) < 0.08 || fract(m.z * 0.8) < 0.08 { 3 } else { 1 }; }
-    if pool && m.y < 0.75 { return 4; }
+    if m.y < 0.5 {
+        return if pool && m.y >= 0.25 { Stone.Air } else if fract(m.x * 0.8) < 0.08 || fract(m.z * 0.8) < 0.08 { Stone.Rock } else { Stone.Flagstone };
+    }
+    if pool && m.y < 0.75 { return Stone.Water; }
     let wall = abs(m.x) > 5.75 || abs(m.z) > 5.75;
     let vault = 5.5 - 0.06 * (m.x * m.x + m.z * m.z) * 0.25;
-    if wall { return if fract(m.y * 2.0) < 0.15 { 3 } else { 2 }; }
-    if !open && m.y > vault { return 3; }
-    let torch = loop 4 with hit = 0 until hit != 0 {
+    if wall { return if fract(m.y * 2.0) < 0.15 { Stone.Rock } else { Stone.Brick }; }
+    if !open && m.y > vault { return Stone.Rock; }
+    let torch = loop 4 with hit = Stone.Air until hit != Stone.Air {
         let t = torch_at(index());
         let d = m - t;
-        if length(d) < 0.2 { 5 } else if abs(d.x) < 0.1 && abs(d.z) < 0.1 && d.y < -0.1 && d.y > -0.5 { 6 } else { 0 }
+        if length(d) < 0.2 { Stone.Torch } else if abs(d.x) < 0.1 && abs(d.z) < 0.1 && d.y < -0.1 && d.y > -0.5 { Stone.Iron } else { Stone.Air }
     };
-    if torch != 0 { return torch; }
-    let pillar = length(abs(vec2(m.x, m.z)) - 3.0) < 0.45 && !(m.x > 2.0 && m.z > 2.0);
-    return if pillar { 3 } else { 0 };
+    if torch != Stone.Air { return torch; }
+    let pillar = length(abs(m.xz) - 3.0) < 0.45 && !(m.x > 2.0 && m.z > 2.0);
+    return if pillar { Stone.Rock } else { Stone.Air };
 }
 
 kernel crypt.bake@1 {
@@ -57,14 +65,14 @@ kernel crypt.bake@1 {
 
 /// The statue: a figure on a plinth in a box of 16 by 24 by 16 voxels, a
 /// gold crown, its arm held out (so its turning shows).
-fn statue_at(c: IVec3) -> Int {
-    let q = vec3(float(c.x) + 0.5 - 8.0, float(c.y) + 0.5, float(c.z) + 0.5 - 8.0);
-    if q.y < 3.0 { return if abs(q.x) < 4.0 && abs(q.z) < 4.0 { 3 } else { 0 }; }
-    let body = length(vec2(q.x, q.z) / vec2(2.2, 1.6)) < 1.0 && q.y < 15.0;
+fn statue_at(c: IVec3) -> Stone {
+    let q = float(c) + 0.5 - vec3(8.0, 0.0, 8.0);
+    if q.y < 3.0 { return if abs(q.x) < 4.0 && abs(q.z) < 4.0 { Stone.Rock } else { Stone.Air }; }
+    let body = length(q.xz / vec2(2.2, 1.6)) < 1.0 && q.y < 15.0;
     let head = length(q - vec3(0.0, 17.0, 0.0)) < 2.2;
-    let crown = q.y > 18.5 && q.y < 20.0 && abs(length(vec2(q.x, q.z)) - 1.6) < 0.5;
+    let crown = q.y > 18.5 && q.y < 20.0 && abs(length(q.xz) - 1.6) < 0.5;
     let arm = q.y > 11.0 && q.y < 12.5 && q.x > 1.5 && q.x < 7.0 && abs(q.z) < 0.8;
-    return if crown { 8 } else if body || head || arm { 7 } else { 0 };
+    return if crown { Stone.Gold } else if body || head || arm { Stone.Marble } else { Stone.Air };
 }
 
 kernel crypt.statue@1 {
@@ -91,7 +99,7 @@ kernel crypt.draw@1 {
         // By day the water is seen through.
         let pass = if open != 0 { ivec2(4, 4) } else { ivec2(1, 0) };
         let met = voxel_nearer(voxel_meet_past(chamber, room, cam.eye, dir, 0.3, pass), voxel_meet(statue, figure, cam.eye, dir, 0.0));
-        if met.id == 0 {
+        if met.id == Stone.Air {
             let sky = mix(vec3(0.75, 0.82, 0.92), vec3(0.35, 0.5, 0.8), saturate(dir.y));
             return if open != 0 { vec4(sky, 1.0) } else { vec4(0.0, 0.0, 0.0, 1.0) };
         }

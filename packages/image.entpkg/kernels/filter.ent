@@ -152,8 +152,8 @@ kernel image.resize@1 {
         return loop 16 with s = vec4(0.0, 0.0, 0.0, 0.0) {
             let i = index() % 4;
             let j = index() / 4;
-            let w = (if i == 0 { wx.x } else if i == 1 { wx.y } else if i == 2 { wx.z } else { wx.w })
-                  * (if j == 0 { wy.x } else if j == 1 { wy.y } else if j == 2 { wy.z } else { wy.w });
+            let w = match i { 0 => wx.x, 1 => wx.y, 2 => wx.z, _ => wx.w }
+                  * match j { 0 => wy.x, 1 => wy.y, 2 => wy.z, _ => wy.w };
             s + at(source, base + vec2(float(i - 1), float(j - 1))) * w
         };
     }

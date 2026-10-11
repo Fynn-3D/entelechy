@@ -30,7 +30,7 @@ kernel exposure.measure@1 {
     output result: Measure;
 
     fn luma(c: Vec4) -> Float {
-        return c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
+        return dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
     }
 
     compute {
@@ -57,7 +57,7 @@ kernel exposure.apply@1 {
         let mean = m.sum / float(m.count);
         let gain = target / max(mean, 0.001);
         let c = sample(source) * gain;
-        let mapped = vec3(c.r, c.g, c.b) / (vec3(1.0, 1.0, 1.0) + vec3(c.r, c.g, c.b));
+        let mapped = c.rgb / (c.rgb + 1.0);
         return vec4(mapped, 1.0);
     }
 }

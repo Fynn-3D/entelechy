@@ -39,18 +39,17 @@ kernel spectrum.bins@1 {
     param lowest: Float = 110.0;      // the first bin's frequency
     param spacing: Float = 55.0;      // and how far apart they stand
     output result: Bins;
-    struct Turn { re: Float; im: Float; }
     compute {
         let hz = if rate() > 0.0 { rate() } else { 48000.0 };
         let frequency = lowest + float(element()) * spacing;
         let step = frequency * 6.2831853 / hz;
         let n = count(block);
-        let turned = loop n with t = Turn { re: 0.0, im: 0.0 } {
-            let s = at(block, index());
+        // The block turned at the bin's frequency, summed: real and imaginary.
+        let t = loop n with t = vec2(0.0, 0.0) {
             let angle = step * float(index());
-            Turn { re: t.re + s * cos(angle), im: t.im + s * sin(angle) }
+            t + at(block, index()) * vec2(cos(angle), sin(angle))
         };
-        let power = sqrt(turned.re * turned.re + turned.im * turned.im) / float(n);
+        let power = sqrt(t.x * t.x + t.y * t.y) / float(n);
         return power;
     }
 }

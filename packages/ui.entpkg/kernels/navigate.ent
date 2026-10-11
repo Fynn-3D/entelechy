@@ -64,8 +64,8 @@ kernel ui.navigate@1 {
         let confirm_held = key(13) || key(32) || button(8);
         let back_held = key(27) || key(8) || button(9);
         let click = pointer_down();
-        let held = int(up) | (if down { 2 } else { 0 }) | (if left { 4 } else { 0 }) | (if right { 8 } else { 0 })
-            | (if confirm_held { 16 } else { 0 }) | (if back_held { 32 } else { 0 }) | (if click { 64 } else { 0 });
+        let held = int(up) | int(down) << 1 | int(left) << 2 | int(right) << 3
+            | int(confirm_held) << 4 | int(back_held) << 5 | int(click) << 6;
         let p = pointer();
         if active == 0 {
             return Nav { ..o, by: 0, confirm: false, back: false, held: held, pointer_at: p };
@@ -73,7 +73,7 @@ kernel ui.navigate@1 {
         // A direction pressed this frame, or held past the delay at the
         // repeat's pace.
         let directions = held & 15;
-        let fresh = directions & (15 - (o.held & 15));
+        let fresh = directions & ((o.held & 15) ^ 15);
         let pressed_t = if fresh != 0 { now } else { o.pressed_t };
         let repeating = directions != 0 && fresh == 0 && now - pressed_t >= nav_delay() && now - o.repeated_t >= nav_every();
         let acting = if fresh != 0 { fresh } else if repeating { directions } else { 0 };
@@ -101,7 +101,7 @@ kernel ui.navigate@1 {
 /// What a widget in row `k` is with the navigation at `nav`: focused when
 /// lit, else idle; disabled when not `enabled`.
 fn row_state(nav: Nav, k: Int, enabled: Bool) -> Int {
-    return if !enabled { 3 } else { int(nav.row == k) };
+    return if !enabled { WidgetState.Disabled } else if nav.row == k { WidgetState.Focused } else { WidgetState.Idle };
 }
 
 /// A count changed by `by` within `lo` to `hi`; round among `n`.

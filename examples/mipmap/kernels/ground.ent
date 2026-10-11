@@ -15,8 +15,8 @@ kernel ground.texture@1 {
     output result: Image;
     compute {
         let c = icoord();
-        let check = ((c.x >> 2) + (c.y >> 2)) % 2 == 0;
-        let line = c.x % 32 == 0 || c.y % 32 == 0;
+        let check = ((c.x >> 2) + (c.y >> 2)) & 1 == 0;
+        let line = c.x & 31 == 0 || c.y & 31 == 0;
         let color = if line { vec3(0.85, 0.15, 0.10) }
             else if check { vec3(0.92, 0.90, 0.86) }
             else { vec3(0.12, 0.14, 0.20) };
@@ -40,7 +40,7 @@ kernel ground.quad@1 {
         let far = reach;
         let near_plane = 0.2;
         return Vertex {
-            clip: vec4(x * f / 1.7778, -1.0 * f,
+            clip: vec4(x * f / 1.7778, -f,
                        z * far / (far - near_plane) - near_plane * far / (far - near_plane), z),
             normal: vec3(0.0, 1.0, 0.0),
             uv: vec2(x * 0.5, z * 0.5),
@@ -72,8 +72,8 @@ kernel ground.shade@1 {
         let s = sample(surface);
         if s.id < 0 { return vec4(0.05, 0.06, 0.09, 1.0); }
         let c = icoord();
-        let right = at(surface, vec2(float(c.x + 1), float(c.y)));
-        let below = at(surface, vec2(float(c.x), float(c.y + 1)));
+        let right = at(surface, c + ivec2(1, 0));
+        let below = at(surface, c + ivec2(0, 1));
         let du = if right.id == s.id { right.uv - s.uv } else { vec2(0.0, 0.0) };
         let dv = if below.id == s.id { below.uv - s.uv } else { vec2(0.0, 0.0) };
         let wanted = if mip { mip_wanted(du, dv, side, levels) } else { 0.0 };

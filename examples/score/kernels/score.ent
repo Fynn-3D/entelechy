@@ -38,9 +38,11 @@ kernel score.voice@1 {
             let note = at(song, index());
             let age = at - note.start;
             let loud = envelope(age, note.duration) * note.velocity;
-            // The bass takes a rounder tone than the melody.
+            // The melody (channel 0) and the bass (channel 1) take
+            // different tones.
             let f = hertz(note.pitch);
-            let tone = if note.channel == 0 {
+            let melody = note.channel == 0;
+            let tone = if melody {
                 sin(at * f * 6.2831853) * 0.7 + sin(at * f * 2.0 * 6.2831853) * 0.3
             } else {
                 sin(at * f * 6.2831853) + sin(at * f * 3.0 * 6.2831853) * 0.12

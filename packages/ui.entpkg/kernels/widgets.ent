@@ -36,11 +36,11 @@ fn theme_paper() -> Theme {
 }
 
 /// What a widget is now: at rest, focused (lit by the navigation or
-/// under the pointer), pressed, or not to be used.
-fn idle() -> Int { return 0; }
-fn focused() -> Int { return 1; }
-fn pressed() -> Int { return 2; }
-fn disabled() -> Int { return 3; }
+/// under the pointer), pressed, or not to be used (`WidgetState`).
+fn idle() -> Int { return WidgetState.Idle; }
+fn focused() -> Int { return WidgetState.Focused; }
+fn pressed() -> Int { return WidgetState.Pressed; }
+fn disabled() -> Int { return WidgetState.Disabled; }
 
 /// A list's row's state: focused when `lit`, disabled unless `enabled`.
 fn state_of(lit: Bool, enabled: Bool) -> Int {
@@ -88,7 +88,7 @@ fn push_button(t: Theme, letters: Grid<Float>, cells: Rows<Int>, row: Int, width
     let face = if state == pressed() { mix(t.panel, t.accent, 0.35) } else if state == focused() { mix(t.panel, t.accent, 0.2) } else { t.panel };
     let rim = if state == disabled() { t.dim } else if state == idle() { t.rim } else { t.accent };
     let cast = if state == pressed() { clear() } else { shadow(r, t.radius, vec2(0.0, 2.0), 2.0, 0.4, q) };
-    let ink = if state == disabled() { t.dim } else if state == idle() { t.ink } else { t.accent };
+    let ink = state_ink(t, state);
     let word = label(letters, cells, row, width, body, vec2(0.5, 0.5), t.scale, ink, q);
     return over(over(over(cast, fill(body, t.radius, vec4(face.xyz, max(face.w, 0.9)), q)), outline(body, t.radius, 1.0, rim, q)), word);
 }

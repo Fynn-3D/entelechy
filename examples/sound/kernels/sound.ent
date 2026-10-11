@@ -17,7 +17,7 @@ kernel sound.mix@1 {
     compute {
         let s = sample(stereo);
         let m = at(mono, element()) * balance * 0.5;
-        return vec2(s.x + m, s.y + m) * gain;
+        return (s + m) * gain;
     }
 }
 

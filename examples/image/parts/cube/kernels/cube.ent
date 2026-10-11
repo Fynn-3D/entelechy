@@ -65,7 +65,8 @@ kernel cube.draw@1 {
         // The solid: the ray leaves the eye at the origin, is taken into
         // the cube's own space by the inverse model matrix, and marches a
         // unit box there.
-        let rd = normalize(vec3((c.x - half.x) / half.y, (half.y - c.y) / half.y, -f));
+        let d = (c - half) / half.y;
+        let rd = normalize(vec3(d.x, -d.y, -f));
         let inv = inverse(model);
         let ro = (inv * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
         let rdo = (inv * vec4(rd, 0.0)).xyz;

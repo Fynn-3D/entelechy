@@ -24,7 +24,7 @@ fn ink(glyphs: Text, font: Atlas, px: Vec2) -> Float {
         let cell = code - 32;
         let local = (px - g.origin) / g.scale;
         let inside = local.x >= 0.0 && local.x < 6.0 && local.y >= 0.0 && local.y < 8.0;
-        let texel = vec2(float(cell % 16) * 6.0 + floor(local.x), float(cell / 16) * 8.0 + floor(local.y));
+        let texel = vec2(float(cell & 15) * 6.0 + floor(local.x), float(cell >> 4) * 8.0 + floor(local.y));
         let hit = if inside { at(font, texel) } else { 0.0 };
         Ink { next: k.next + 1, cover: max(k.cover, hit) }
     };
@@ -57,13 +57,12 @@ kernel text.digits@1 {
     input values: Rows<Float>;
     param places: Int = 3;
     output result: Codes;
-    struct Power { k: Int; p: Int; }
     compute {
         let i = element();
         let v = int(round(abs(at(values, 0))));
         let want = places - 1 - i;
-        let unit = loop 9 with q = Power { k: 0, p: 1 } until q.k >= want { Power { k: q.k + 1, p: q.p * 10 } };
-        let lead = v / unit.p;
+        let unit = loop min(want, 9) with p = 1 { p * 10 };
+        let lead = v / unit;
         return if lead == 0 && i < places - 1 { 32 } else { 48 + lead % 10 };
     }
 }
@@ -96,10 +95,7 @@ kernel text.label@1 {
     param places: Int = 2;
     param decimals: Int = 0;
     output result: Codes;
-    struct Power { k: Int; p: Int; }
-    fn tenth(n: Int) -> Int {
-        return (loop 9 with q = Power { k: 0, p: 1 } until q.k >= n { Power { k: q.k + 1, p: q.p * 10 } }).p;
-    }
+    fn tenth(n: Int) -> Int { return loop min(n, 9) with p = 1 { p * 10 }; }
     compute {
         let i = element();
         let n = count(caption);

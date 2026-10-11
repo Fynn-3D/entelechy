@@ -6,9 +6,9 @@
 // A turn of `angle` radians about `axis`, which need not be of unit
 // length. No axis is no turn.
 fn turn_about(axis: Vec3, angle: Float) -> Vec4 {
-    let length = sqrt(dot(axis, axis));
-    if length == 0.0 { return vec4(0.0, 0.0, 0.0, 1.0); }
-    let a = axis / length * sin(angle * 0.5);
+    let magnitude = sqrt(dot(axis, axis));
+    if magnitude == 0.0 { return vec4(0.0, 0.0, 0.0, 1.0); }
+    let a = axis / magnitude * sin(angle * 0.5);
     return vec4(a, cos(angle * 0.5));
 }
 
@@ -31,8 +31,8 @@ fn back(q: Vec4) -> Vec4 {
 fn between(a: Vec4, b: Vec4, t: Float) -> Vec4 {
     let same = if dot(a, b) < 0.0 { vec4(0.0, 0.0, 0.0, 0.0) - b } else { b };
     let mixed = a * (1.0 - t) + same * t;
-    let length = sqrt(dot(mixed, mixed));
-    return if length > 0.0 { mixed / length } else { a };
+    let magnitude = sqrt(dot(mixed, mixed));
+    return if magnitude > 0.0 { mixed / magnitude } else { a };
 }
 
 // A vector turned by a rotation.
@@ -59,7 +59,7 @@ fn arc(a: Vec3, b: Vec3) -> Vec4 {
 
 // A rotation as the matrix it stands for.
 fn turning(q: Vec4) -> Mat4 {
-    let x = q.x; let y = q.y; let z = q.z; let w = q.w;
+    let { x, y, z, w } = q;
     return mat4(
         vec4(1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + z * w), 2.0 * (x * z - y * w), 0.0),
         vec4(2.0 * (x * y - z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z + x * w), 0.0),

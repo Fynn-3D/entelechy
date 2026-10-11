@@ -19,7 +19,7 @@ kernel image.bright@1 {
         let q = scale * 0.25;
         let c = (at_linear(source, p + q) + at_linear(source, p - q)
                + at_linear(source, p + vec2(q.x, -q.y)) + at_linear(source, p - vec2(q.x, -q.y))) * 0.25;
-        let light = max(c.xyz - over, vec3(0.0, 0.0, 0.0));
+        let light = max(c.xyz - over, 0.0);
         return vec4(light, c.w);
     }
 }
@@ -85,6 +85,6 @@ kernel image.grade@2 {
         let toned = aces((seen + bloom.xyz) * exposure);
         let shown = linear_to_srgb(toned) * vignetted(uv, vignette);
         let g = film_grain(coord(), time(), grain);
-        return vec4(shown.x + g, shown.y + g, shown.z + g, 1.0);
+        return vec4(shown + g, 1.0);
     }
 }

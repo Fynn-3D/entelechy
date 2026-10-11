@@ -5,14 +5,14 @@ use "colour.ent";
 /// the light, so it suits light brighter than white too; saturation and
 /// hue turned in Oklab, so a change looks even across colours.
 fn adjusted(c: Vec3, exposure: Float, contrast: Float, saturation: Float, hue: Float) -> Vec3 {
-    let lit = max(c * exp2(exposure), vec3(0.0, 0.0, 0.0));
+    let lit = max(c * exp2(exposure), 0.0);
     let grey = vec3(0.18, 0.18, 0.18);
-    let shaped = vec3(pow(lit.x / 0.18, contrast), pow(lit.y / 0.18, contrast), pow(lit.z / 0.18, contrast)) * grey;
+    let shaped = pow(lit / 0.18, contrast) * grey;
     let lab = linear_to_oklab(shaped);
     let turn = hue * 6.2831853;
     let a = (lab.y * cos(turn) - lab.z * sin(turn)) * saturation;
     let b = (lab.y * sin(turn) + lab.z * cos(turn)) * saturation;
-    return max(oklab_to_linear(vec3(lab.x, a, b)), vec3(0.0, 0.0, 0.0));
+    return max(oklab_to_linear(vec3(lab.x, a, b)), 0.0);
 }
 
 /// The picture adjusted: `exposure` stops, `contrast` (1 none),
@@ -43,9 +43,9 @@ kernel image.levels@1 {
     output result: Image;
     compute {
         let s = sample(source);
-        let t = clamp((s.xyz - black) / max(white - black, 0.0001), vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0));
+        let t = saturate((s.xyz - black) / max(white - black, 0.0001));
         let g = 1.0 / max(gamma, 0.0001);
-        return vec4(pow(t.x, g), pow(t.y, g), pow(t.z, g), s.w);
+        return vec4(pow(t, g), s.w);
     }
 }
 
@@ -60,7 +60,7 @@ kernel image.curve@1 {
     compute {
         let s = sample(source);
         let last = float(count(curve) - 1);
-        let p = clamp(s.xyz, vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0)) * last + 0.5;
+        let p = saturate(s.xyz) * last + 0.5;
         return vec4(at_linear(curve, p.x).x, at_linear(curve, p.y).y, at_linear(curve, p.z).z, s.w);
     }
 }
@@ -70,9 +70,9 @@ kernel image.curve@1 {
 /// blue square by square; blended between squares and within them.
 fn lut_at(lut: Image, c: Vec3) -> Vec3 {
     let n = size(lut).y;
-    let q = clamp(c, vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0)) * (n - 1.0);
+    let q = saturate(c) * (n - 1.0);
     let slice = min(floor(q.z), n - 2.0);
-    let within = vec2(q.x + 0.5, q.y + 0.5);
+    let within = q.xy + 0.5;
     let lower = at_linear(lut, within + vec2(slice * n, 0.0)).xyz;
     let upper = at_linear(lut, within + vec2((slice + 1.0) * n, 0.0)).xyz;
     return mix(lower, upper, q.z - slice);

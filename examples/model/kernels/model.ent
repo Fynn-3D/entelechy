@@ -28,7 +28,7 @@ kernel model.project@1 {
         let orbit = rotate_x(tilt) * rotate_y(angle);   // one matrix for both
         let p = orbit * v.position;
         let n = orbit * v.normal;
-        let view = vec3(p.x, p.y, p.z - distance);
+        let view = p - vec3(0.0, 0.0, distance);
         let f = 2.1445;
         let near = 0.1;
         let far = 10.0;
@@ -59,7 +59,7 @@ kernel model.shade@1 {
         let h = normalize(l + vec3(0.0, 0.0, 1.0));
         let glint = pow(max(dot(n, h), 0.0), 30.0) * 0.25;
         let tex = at_linear(albedo, s.uv * size(albedo));
-        let base = vec3(tex.r, tex.g, tex.b);
+        let base = tex.rgb;
         let lit = base * (0.3 + 0.7 * diffuse) + glint;
         let color = if s.id < 0 { sky } else { lit };
         return vec4(color, 1.0);

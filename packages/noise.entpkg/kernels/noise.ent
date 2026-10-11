@@ -36,8 +36,8 @@ fn below_of(h: Int, n: Int) -> Int { return umulhi(h, max(n, 1)); }
 /// A random number from 0 up to 1 for a whole number, a grid cell of a
 /// plane, or a cell of space.
 fn hash1(x: Int, seed: Int) -> Float { return unit_of(hash_int(x, seed)); }
-fn hash2(c: Vec2, seed: Int) -> Float { return unit_of(hash_int2(int(floor(c.x)), int(floor(c.y)), seed)); }
-fn hash3(c: Vec3, seed: Int) -> Float { return unit_of(hash_int3(int(floor(c.x)), int(floor(c.y)), int(floor(c.z)), seed)); }
+fn hash2(c: Vec2, seed: Int) -> Float { let i = int(floor(c)); return unit_of(hash_int2(i.x, i.y, seed)); }
+fn hash3(c: Vec3, seed: Int) -> Float { let i = int(floor(c)); return unit_of(hash_int3(i.x, i.y, i.z, seed)); }
 
 /// Perlin's quintic: 0 at 0, 1 at 1, flat at both.
 fn fade(t: Float) -> Float { return t * t * t * (t * (t * 6.0 - 15.0) + 10.0); }
@@ -49,8 +49,7 @@ fn corner3(x: Int, y: Int, z: Int, seed: Int) -> Float { return unit_of(hash_int
 /// Value noise, -1 to 1: random values at the whole numbers, blended.
 fn value2(p: Vec2, seed: Int) -> Float {
     let i = floor(p);
-    let x = int(i.x);
-    let y = int(i.y);
+    let { x, y } = int(i);
     let u = fade(p.x - i.x);
     let v = fade(p.y - i.y);
     return mix(mix(corner2(x, y, seed), corner2(x + 1, y, seed), u),
@@ -59,9 +58,7 @@ fn value2(p: Vec2, seed: Int) -> Float {
 
 fn value3(p: Vec3, seed: Int) -> Float {
     let i = floor(p);
-    let x = int(i.x);
-    let y = int(i.y);
-    let z = int(i.z);
+    let { x, y, z } = int(i);
     let u = fade(p.x - i.x);
     let v = fade(p.y - i.y);
     let w = fade(p.z - i.z);
@@ -86,9 +83,7 @@ fn slope3(x: Int, y: Int, z: Int, seed: Int, d: Vec3) -> Float {
 fn gradient3(p: Vec3, seed: Int) -> Float {
     let i = floor(p);
     let f = p - i;
-    let x = int(i.x);
-    let y = int(i.y);
-    let z = int(i.z);
+    let { x, y, z } = int(i);
     let u = fade(f.x);
     let v = fade(f.y);
     let w = fade(f.z);
@@ -135,10 +130,8 @@ fn worley3(p: Vec3, seed: Int) -> Vec3 {
     let i = floor(p);
     return loop 27 with best = vec3(10.0, 10.0, 0.0) {
         let k = index();
-        let cell = i + vec3(float(k % 3 - 1), float((k / 3) % 3 - 1), float(k / 9 - 1));
-        let x = int(cell.x);
-        let y = int(cell.y);
-        let z = int(cell.z);
+        let cell = i + float(ivec3(k % 3, (k / 3) % 3, k / 9) - 1);
+        let { x, y, z } = int(cell);
         let at_point = cell + vec3(unit_of(hash_int3(x, y, z, seed)), unit_of(hash_int3(x, y, z, seed + 1)), unit_of(hash_int3(x, y, z, seed + 2)));
         let d = length(p - at_point);
         if d < best.x { vec3(d, best.x, unit_of(hash_int3(x, y, z, seed + 3))) }

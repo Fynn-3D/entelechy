@@ -32,12 +32,15 @@ node eye: kernel {
         let res = max(window(), vec2(1.0, 1.0));
         let p = pointer();
         let down = pointer_down();
-        let pixel = 1.0 / (min(res.x / size.x, res.y / size.y) * e.zoom);
+        // Pixels a unit of the drawing at zoom 1: the drawing fit to the window.
+        let fit = min(res.x / size.x, res.y / size.y);
+        let pixel = 1.0 / (fit * e.zoom);
         let dragged = if down && e.down { e.center - (p - e.pointer) * pixel } else { e.center };
         let zoom = clamp(e.zoom * exp(wheel().y * 0.15), 0.25, 400.0);
-        let under = dragged + (p - res * 0.5) * pixel;
-        let after = 1.0 / (min(res.x / size.x, res.y / size.y) * zoom);
-        return Eye { center: under - (p - res * 0.5) * after, zoom: zoom, pointer: p, down: down };
+        let off = p - res * 0.5;
+        let under = dragged + off * pixel;
+        let after = 1.0 / (fit * zoom);
+        return Eye { center: under - off * after, zoom: zoom, pointer: p, down: down };
     }
 }
 

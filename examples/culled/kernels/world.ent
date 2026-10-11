@@ -98,12 +98,11 @@ kernel world.visible@1 {
         let cam = at(camera, 0);
         let half = float(cols) * cell * 0.5;
         let i = element();
-        let cx = (float(i % cols) + 0.5) * cell - half;
-        let cz = (float(i / cols) + 0.5) * cell - half;
+        let centre = (float(ivec2(i % cols, i / cols)) + 0.5) * cell - half;
         let radius = cell * 0.75;
         let forward = vec2(sin(cam.heading), cos(cam.heading));
         let right = vec2(cos(cam.heading), -sin(cam.heading));
-        let away = vec2(cx - cam.x, cz - cam.z);
+        let away = centre - vec2(cam.x, cam.z);
         let ahead = dot(away, forward);
         let aside = abs(dot(away, right));
         return int(ahead > -radius && ahead < reach + radius
@@ -182,7 +181,7 @@ kernel world.project@1 {
     compute {
         let cam = at(camera, 0);
         let v = sample(mesh);
-        let away = vec2(v.position.x - cam.x, v.position.z - cam.z);
+        let away = v.position.xz - vec2(cam.x, cam.z);
         let forward = vec2(sin(cam.heading), cos(cam.heading));
         let right = vec2(cos(cam.heading), -sin(cam.heading));
         let view = vec3(dot(away, right), v.position.y - cam.height, dot(away, forward));

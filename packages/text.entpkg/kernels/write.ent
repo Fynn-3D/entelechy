@@ -11,7 +11,7 @@ fn glyph_ink(font: Atlas, code: Int, x: Int, y: Int) -> Bool {
     if x < 0 || y < 0 || x > 4 || y > 6 { return false; }
     let known = match code { 32..=126 => code, _ => 63 };
     let c = known - 32;
-    return at(font, vec2(float((c % 16) * 6 + x), float((c / 16) * 8 + y))) > 0.5;
+    return at(font, ivec2((c & 15) * 6 + x, (c >> 4) * 8 + y)) > 0.5;
 }
 
 /// Whether pixel `px` is ink of `code`, its cell's top left at `origin`.
@@ -51,8 +51,8 @@ fn digit_code(n: Int, i: Int) -> Int {
     if i < 0 || i >= count { return 32; }
     if n < 0 && i == 0 { return 45; }
     let place = count - 1 - i;
-    let shifted = loop 10 with k = ivec2(abs(n), 0) until k.y >= place { ivec2(k.x / 10, k.y + 1) };
-    return 48 + shifted.x % 10;
+    let unit = loop place with p = 1 { p * 10 };
+    return 48 + (abs(n) / unit) % 10;
 }
 
 /// Whether pixel `px` is ink of `n` written out from `origin`.

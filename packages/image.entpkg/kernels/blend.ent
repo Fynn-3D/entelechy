@@ -53,8 +53,8 @@ kernel image.blend@1 {
         let uv = (coord() + 0.5) / domain();
         let t = at_linear(top, uv * size(top));
         let encoded = space == Space.Encoded;
-        let cb = if encoded { linear_to_srgb(max(b.xyz, vec3(0.0, 0.0, 0.0))) } else { b.xyz };
-        let cs = if encoded { linear_to_srgb(max(t.xyz, vec3(0.0, 0.0, 0.0))) } else { t.xyz };
+        let cb = if encoded { linear_to_srgb(max(b.xyz, 0.0)) } else { b.xyz };
+        let cs = if encoded { linear_to_srgb(max(t.xyz, 0.0)) } else { t.xyz };
         let a_base = saturate(b.w);
         let a_top = saturate(t.w * opacity);
         let mixed = cs * (1.0 - a_base) + blend(mode, cb, cs) * a_base;

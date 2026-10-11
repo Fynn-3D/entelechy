@@ -16,7 +16,7 @@ kernel image.pixelate@1 {
 /// The colour of `colors` nearest `c` in Oklab, where equal distances
 /// look equal; the first of two as near.
 fn nearest_colour(c: Vec3, colors: Rows<Vec3>) -> Vec3 {
-    let lab = linear_to_oklab(max(c, vec3(0.0, 0.0, 0.0)));
+    let lab = linear_to_oklab(max(c, 0.0));
     let first = at(colors, 0);
     let start = vec4(first, length(linear_to_oklab(first) - lab));
     let best = loop count(colors) with b = start {
@@ -32,7 +32,7 @@ fn nearest_colour(c: Vec3, colors: Rows<Vec3>) -> Vec3 {
 /// there are rows, so a picture keeps its light and dark in any tint.
 fn ramp_colour(c: Vec3, colors: Rows<Vec3>) -> Vec3 {
     let n = count(colors);
-    let lightness = linear_to_oklab(max(c, vec3(0.0, 0.0, 0.0))).x;
+    let lightness = linear_to_oklab(max(c, 0.0)).x;
     return at(colors, clamp(int(lightness * float(n)), 0, n - 1));
 }
 
@@ -67,8 +67,8 @@ kernel image.ramp@1 {
 /// 31/32: neighbours apart, so a share of pixels over it spreads evenly.
 fn bayer4(p: IVec2) -> Float {
     let m = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
-    let x = ((p.x % 4) + 4) % 4;
-    let y = ((p.y % 4) + 4) % 4;
+    let x = p.x & 3;
+    let y = p.y & 3;
     return (float(m[y * 4 + x]) + 0.5) / 16.0;
 }
 
@@ -76,7 +76,7 @@ fn bayer4(p: IVec2) -> Float {
 /// colours nearest it in Oklab, the farther is taken at the pixels whose
 /// threshold the share of the way `c` lies toward it passes.
 fn dithered_colour(c: Vec3, colors: Rows<Vec3>, p: IVec2) -> Vec3 {
-    let lab = linear_to_oklab(max(c, vec3(0.0, 0.0, 0.0)));
+    let lab = linear_to_oklab(max(c, 0.0));
     let first = at(colors, 0);
     let start = DitherPair { near: first, near_d: length(linear_to_oklab(first) - lab), next: first, next_d: 1000000.0 };
     let pair = loop count(colors) with b = start {

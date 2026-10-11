@@ -50,6 +50,12 @@ struct Shape {
     spread: Int;
 }
 
+// A shape's fill rule, its paint and its gradient's spread, as its
+// `rule`, `paint` and `spread` hold them.
+type FillRule = enum { NonZero, EvenOdd };
+type Paint = enum { Colour, Linear, Radial };
+type Spread = enum { Pad, Reflect, Repeat };
+
 // A gradient's stop, `<stem>.stops.field`: where it is, its colour.
 struct Stop { offset: Float; color: Vec4; }
 
@@ -82,15 +88,16 @@ fn to_segment(p: Vec2, a: Vec2, b: Vec2) -> Float {
 
 // Where a gradient is at `t`, spread past its ends.
 fn spread_by(t: Float, spread: Int) -> Float {
-    if spread == 1 { return 1.0 - abs(fract(t * 0.5) * 2.0 - 1.0); }
-    if spread == 2 { return fract(t); }
-    return saturate(t);
+    return match spread {
+        Spread.Reflect => 1.0 - abs(fract(t * 0.5) * 2.0 - 1.0),
+        Spread.Repeat => fract(t),
+        _ => saturate(t),
+    };
 }
 
 // A gradient's colour at `t`: the stops about it blended.
 fn stops_at(stops: Rows<Stop>, first: Int, n: Int, t: Float) -> Vec4 {
-    let start = at(stops, first);
-    let found = loop n with pick = vec4(start.color.x, start.color.y, start.color.z, start.color.w) {
+    let found = loop n with pick = at(stops, first).color {
         let s = at(stops, first + index());
         let before = at(stops, first + max(index() - 1, 0));
         let span = s.offset - before.offset;
@@ -109,12 +116,12 @@ fn stops_at(stops: Rows<Stop>, first: Int, n: Int, t: Float) -> Vec4 {
 
 // A shape's paint at the drawing's point `p`.
 fn paint_at(shape: Shape, stops: Rows<Stop>, p: Vec2) -> Vec4 {
-    if shape.paint == 0 { return shape.color; }
+    if shape.paint == Paint.Colour { return shape.color; }
     let m = shape.inverse;
     let q = vec2(m.x * p.x + m.z * p.y + shape.shift.x, m.y * p.x + m.w * p.y + shape.shift.y);
     let g = shape.gradient;
-    let t = if shape.paint == 1 {
-        let d = vec2(g.z - g.x, g.w - g.y);
+    let t = if shape.paint == Paint.Linear {
+        let d = g.zw - g.xy;
         dot(q - g.xy, d) / max(dot(d, d), 0.0000001)
     } else {
         length(q - g.xy) / max(g.z, 0.0000001)
@@ -127,7 +134,7 @@ fn paint_at(shape: Shape, stops: Rows<Stop>, p: Vec2) -> Vec4 {
 // and its distance, gathered into `w` (winding, nearest).
 fn crossed(w: Vec2, seg: Vec4, p: Vec2) -> Vec2 {
     let a = seg.xy;
-    let b = vec2(seg.z, seg.w);
+    let b = seg.zw;
     let crosses = (a.y <= p.y) != (b.y <= p.y);
     let x = a.x + (p.y - a.y) * (b.x - a.x) / (b.y - a.y);
     let turn = if crosses && x > p.x { if b.y > a.y { 1.0 } else { -1.0 } } else { 0.0 };
@@ -142,12 +149,12 @@ fn near(s: Shape, p: Vec2, pixel: Float) -> Bool {
 // A shape laid over `below`, given its winding and nearest segment.
 fn laid(below: Vec4, s: Shape, stops: Rows<Stop>, p: Vec2, pixel: Float, hit: Vec2) -> Vec4 {
     let winding = int(hit.x);
-    let inside = if s.rule == 0 { winding != 0 } else { winding % 2 != 0 };
+    let inside = if s.rule == FillRule.NonZero { winding != 0 } else { winding % 2 != 0 };
     let signed = if inside { hit.y } else { -hit.y };
     let cover = saturate(0.5 + signed / pixel);
     let c = paint_at(s, stops, p);
     let a = c.w * cover;
-    return vec4(below.x * (1.0 - a) + c.x * a, below.y * (1.0 - a) + c.y * a, below.z * (1.0 - a) + c.z * a, below.w * (1.0 - a) + a);
+    return vec4(below.xyz * (1.0 - a) + c.xyz * a, below.w * (1.0 - a) + a);
 }
 
 /// Where the look puts each pixel's centre in the drawing, and a pixel's
@@ -253,12 +260,9 @@ kernel vector.reach@1 {
         let hi = on_canvas(s.hi, view, look, res) + 2.0;
         let none = Reach { x0: 0, y0: 0, x1: -1, y1: -1 };
         if hi.x < 0.0 || hi.y < 0.0 || lo.x > res.x || lo.y > res.y { return none; }
-        return Reach {
-            x0: int(floor(max(lo.x, 0.0) / tile())),
-            y0: int(floor(max(lo.y, 0.0) / tile())),
-            x1: min(int(floor(min(hi.x, res.x) / tile())), tile_columns(res) - 1),
-            y1: min(int(floor(min(hi.y, res.y) / tile())), tile_rows(res) - 1),
-        };
+        let first = int(floor(max(lo, 0.0) / tile()));
+        let last = min(int(floor(min(hi, res) / tile())), ivec2(tile_columns(res), tile_rows(res)) - 1);
+        return Reach { x0: first.x, y0: first.y, x1: last.x, y1: last.y };
     }
 }
 
@@ -397,8 +401,8 @@ kernel vector.placed@1 {
         let s = sample(segments);
         let res = size(canvas);
         let a = on_canvas(s.xy, view, look, res);
-        let b = on_canvas(vec2(s.z, s.w), view, look, res);
-        return vec4(a.x, a.y, b.x, b.y);
+        let b = on_canvas(s.zw, view, look, res);
+        return vec4(a, b);
     }
 }
 
@@ -415,7 +419,7 @@ kernel vector.segment_chunks@1 {
             let g = first + index();
             let s = at(placed, g);
             if g >= n { u } else {
-                vec4(min(u.x, min(s.x, s.z)), min(u.y, min(s.y, s.w)), max(u.z, max(s.x, s.z)), max(u.w, max(s.y, s.w)))
+                vec4(min(u.xy, min(s.xy, s.zw)), max(u.zw, max(s.xy, s.zw)))
             }
         };
     }
@@ -602,9 +606,10 @@ kernel vector.draw_tiled@1 {
         let p = v.xy;
         let pixel = v.z;
         let rows = int(tile());
-        let tx = int(coord().x / tile());
-        let ty = int(coord().y / tile());
-        let row = int(coord().y) - ty * rows;
+        let cell = icoord();
+        let tx = cell.x / rows;
+        let ty = cell.y / rows;
+        let row = cell.y % rows;
         let t = ty * tile_columns(res) + tx;
         let n = at(tile_counts, t);
         let first = at(tile_ends, t) - n;

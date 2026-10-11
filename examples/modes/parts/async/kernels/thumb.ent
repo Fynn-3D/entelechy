@@ -6,6 +6,9 @@
 // in RAM and counts its frames; the picture is the framebuffer.
 type Words = Rows<Int>;
 
+/// The ALU operations of format 4, by their four opcode bits.
+type Alu = enum { And, Eor, Lsl, Lsr, Asr, Adc, Sbc, Ror, Tst, Neg, Cmp, Cmn, Orr, Mul, Bic, Mvn };
+
 /// The program, halfword by halfword (bytes by arithmetic, as the CHIP-8
 /// does). Registers: r7 the framebuffer, r6 the frame count t, r5 y, r4 x.
 /// Each cell of the picture is (x ^ y) + t; `tick` then counts the frame
@@ -113,10 +116,9 @@ kernel thumb.step@1 {
         return put(m, a >>> 2, (w & ((0xFF << sh) ^ -1)) | ((v & 0xFF) << sh));
     }
 
-    // Flags: N and Z from a result; the unsigned compare; the carry and
-    // overflow of an add and of a subtract.
+    // Flags: N and Z from a result; the carry and overflow of an add and
+    // of a subtract.
     fn nz(v: Int) -> Int { return int(v < 0) << 3 | int(v == 0) << 2; }
-    fn ult(a: Int, b: Int) -> Bool { return (a ^ 0x80000000) < (b ^ 0x80000000); }
     fn add_flags(a: Int, b: Int, r: Int) -> Int {
         return nz(r) | int(ult(r, a)) << 1 | int(((a ^ r) & (b ^ r)) < 0);
     }
@@ -127,7 +129,6 @@ kernel thumb.step@1 {
     fn keep_v(flags: Int, v: Int, carry: Int) -> Int { return nz(v) | (carry << 1) | (flags & 1); }
     fn bit(v: Int, n: Int) -> Int { return (v >>> n) & 1; }
     fn sext(v: Int, bits: Int) -> Int { return (v << (32 - bits)) >> (32 - bits); }
-    fn popcount8(bits: Int) -> Int { return loop 8 with n = 0 { n + bit(bits, index()) }; }
 
     // The barrel shifter by an amount 0..255, with the carry out; an
     // amount of zero leaves the value and the carry alone.
@@ -195,9 +196,11 @@ kernel thumb.step@1 {
             if (op >>> 11) & 3 != 3 {
                 // Format 1: shift by an immediate; a zero LSR or ASR is 32.
                 let opc = (op >>> 11) & 3;
-                let s = if opc == 0 { lsl(vs, off5, carry) }
-                    else if opc == 1 { lsr(vs, if off5 == 0 { 32 } else { off5 }, carry) }
-                    else { asr(vs, if off5 == 0 { 32 } else { off5 }, carry) };
+                let s = match opc {
+                    0 => lsl(vs, off5, carry),
+                    1 => lsr(vs, if off5 == 0 { 32 } else { off5 }, carry),
+                    _ => asr(vs, if off5 == 0 { 32 } else { off5 }, carry),
+                };
                 put(regs, rd, s.value);
                 Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) }
             } else {
@@ -226,38 +229,38 @@ kernel thumb.step@1 {
                 let opc = (op >>> 6) & 15;
                 let amount = vs & 0xFF;
                 match opc {
-                    0 => { let r = vd & vs; put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } },
-                    1 => { let r = vd ^ vs; put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } },
-                    2 => { let s = lsl(vd, amount, carry); put(regs, rd, s.value); Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) } },
-                    3 => { let s = lsr(vd, amount, carry); put(regs, rd, s.value); Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) } },
-                    4 => { let s = asr(vd, amount, carry); put(regs, rd, s.value); Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) } },
-                    5 => {
+                    Alu.And => { let r = vd & vs; put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } },
+                    Alu.Eor => { let r = vd ^ vs; put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } },
+                    Alu.Lsl => { let s = lsl(vd, amount, carry); put(regs, rd, s.value); Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) } },
+                    Alu.Lsr => { let s = lsr(vd, amount, carry); put(regs, rd, s.value); Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) } },
+                    Alu.Asr => { let s = asr(vd, amount, carry); put(regs, rd, s.value); Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) } },
+                    Alu.Adc => {
                         // Add with carry: the carry out of either addition.
                         let r1 = add_wrap(vd, vs);
                         let r = add_wrap(r1, carry);
-                        let c = if ult(r1, vd) || (carry == 1 && r1 == -1) { 2 } else { 0 };
+                        let c = int(ult(r1, vd) || (carry == 1 && r1 == -1)) << 1;
                         let v = int(((vd ^ r) & (vs ^ r)) < 0);
                         put(regs, rd, r);
                         Step { next: pc + 2, flags: nz(r) | c | v }
                     },
-                    6 => {
+                    Alu.Sbc => {
                         // Subtract with carry: rd - rs - (1 - C).
                         let r1 = sub_wrap(vd, vs);
                         let r = sub_wrap(r1, 1 - carry);
-                        let c = if !ult(vd, vs) && !(carry == 0 && r1 == 0) { 2 } else { 0 };
+                        let c = int(!ult(vd, vs) && !(carry == 0 && r1 == 0)) << 1;
                         let v = int(((vd ^ vs) & (vd ^ r)) < 0);
                         put(regs, rd, r);
                         Step { next: pc + 2, flags: nz(r) | c | v }
                     },
-                    7 => { let s = ror(vd, amount, carry); put(regs, rd, s.value); Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) } },
-                    8 => Step { next: pc + 2, flags: keep_cv(flags, vd & vs) },
-                    9 => { let r = sub_wrap(0, vs); put(regs, rd, r); Step { next: pc + 2, flags: sub_flags(0, vs, r) } },
-                    10 => Step { next: pc + 2, flags: sub_flags(vd, vs, sub_wrap(vd, vs)) },
-                    11 => Step { next: pc + 2, flags: add_flags(vd, vs, add_wrap(vd, vs)) },
-                    12 => { let r = vd | vs; put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } },
-                    13 => { let r = mul_wrap(vd, vs); put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } },
-                    14 => { let r = vd & (vs ^ -1); put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } },
-                    _ => { let r = vs ^ -1; put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } }
+                    Alu.Ror => { let s = ror(vd, amount, carry); put(regs, rd, s.value); Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) } },
+                    Alu.Tst => Step { next: pc + 2, flags: keep_cv(flags, vd & vs) },
+                    Alu.Neg => { let r = sub_wrap(0, vs); put(regs, rd, r); Step { next: pc + 2, flags: sub_flags(0, vs, r) } },
+                    Alu.Cmp => Step { next: pc + 2, flags: sub_flags(vd, vs, sub_wrap(vd, vs)) },
+                    Alu.Cmn => Step { next: pc + 2, flags: add_flags(vd, vs, add_wrap(vd, vs)) },
+                    Alu.Orr => { let r = vd | vs; put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } },
+                    Alu.Mul => { let r = mul_wrap(vd, vs); put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } },
+                    Alu.Bic => { let r = vd & (vs ^ -1); put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } },
+                    Alu.Mvn => { let r = vs ^ -1; put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } }
                 }
             } else if (op >>> 10) == 0x11 {
                 // Format 5: add, compare, move on high registers, and BX.
@@ -266,18 +269,22 @@ kernel thumb.step@1 {
                 let hs = rs | (bit(op, 6) << 3);
                 let a = reg(regs, hd, pc);
                 let b = reg(regs, hs, pc);
-                if opc == 0 {
-                    let r = add_wrap(a, b);
-                    if hd == 15 { Step { next: r & -2, flags: flags } }
-                    else { put(regs, hd, r); Step { next: pc + 2, flags: flags } }
-                } else if opc == 1 { Step { next: pc + 2, flags: sub_flags(a, b, sub_wrap(a, b)) } }
-                else if opc == 2 {
-                    if hd == 15 { Step { next: b & -2, flags: flags } }
-                    else { put(regs, hd, b); Step { next: pc + 2, flags: flags } }
-                } else {
+                match opc {
+                    0 => {
+                        // ADD
+                        let r = add_wrap(a, b);
+                        if hd == 15 { Step { next: r & -2, flags: flags } }
+                        else { put(regs, hd, r); Step { next: pc + 2, flags: flags } }
+                    },
+                    1 => Step { next: pc + 2, flags: sub_flags(a, b, sub_wrap(a, b)) },  // CMP
+                    2 => {
+                        // MOV
+                        if hd == 15 { Step { next: b & -2, flags: flags } }
+                        else { put(regs, hd, b); Step { next: pc + 2, flags: flags } }
+                    },
                     // BX: a branch to a Thumb address; an ARM address (bit 0
                     // clear) is followed as Thumb, this core knowing no other.
-                    Step { next: b & -2, flags: flags }
+                    _ => Step { next: b & -2, flags: flags },
                 }
             } else if (op >>> 11) == 0x9 {
                 // Format 6: a word relative to the pipeline's pc, word-aligned.
@@ -343,7 +350,7 @@ kernel thumb.step@1 {
                 let extra = bit(op, 8);
                 let list = op & 0xFF;
                 if bit(op, 11) == 0 {
-                    let base = sub_wrap(sp, 4 * (popcount8(list) + extra));
+                    let base = sub_wrap(sp, 4 * (popcount(list) + extra));
                     let after = loop 8 with a = base {
                         if bit(list, index()) == 1 { wr32(ram, a, at(regs, index())); a + 4 } else { a }
                     };
@@ -379,8 +386,7 @@ kernel thumb.step@1 {
             } else {
                 // Format 16: a conditional branch; format 17, SWI, is a no-op.
                 let cond = (op >>> 8) & 15;
-                if cond == 15 { Step { next: pc + 2, flags: flags } }
-                else if holds(cond, flags) { Step { next: pc + 4 + sext(imm8, 8) * 2, flags: flags } }
+                if cond != 15 && holds(cond, flags) { Step { next: pc + 4 + sext(imm8, 8) * 2, flags: flags } }
                 else { Step { next: pc + 2, flags: flags } }
             }
             },

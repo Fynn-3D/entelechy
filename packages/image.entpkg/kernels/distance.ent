@@ -17,7 +17,7 @@ kernel image.seeds@1 {
         let m = sample(mask);
         let on = luminance(m.xyz) * m.w > threshold;
         let c = coord() + 0.5;
-        return if on == inside { vec4(c.x, c.y, 1.0, 0.0) } else { vec4(0.0, 0.0, 0.0, 0.0) };
+        return if on == inside { vec4(c, 1.0, 0.0) } else { vec4(0.0, 0.0, 0.0, 0.0) };
     }
 }
 

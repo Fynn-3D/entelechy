@@ -11,7 +11,7 @@ kernel cloud.density@1 {
     fn hash(p: Vec3) -> Float {
         // Sin-free so the CPU and GPU agree on every cell.
         let q = fract(p * vec3(0.1031, 0.1030, 0.0973));
-        let d = dot(q, vec3(q.y, q.z, q.x) + 33.33);
+        let d = dot(q, q.yzx + 33.33);
         let r = q + d;
         return fract((r.x + r.y) * r.z);
     }
@@ -19,7 +19,7 @@ kernel cloud.density@1 {
     fn noise(p: Vec3) -> Float {
         let i = floor(p);
         let f = fract(p);
-        let u = f * f * (vec3(3.0, 3.0, 3.0) - f * 2.0);
+        let u = f * f * (3.0 - f * 2.0);
         let a = mix(hash(i), hash(i + vec3(1.0, 0.0, 0.0)), u.x);
         let b = mix(hash(i + vec3(0.0, 1.0, 0.0)), hash(i + vec3(1.0, 1.0, 0.0)), u.x);
         let c = mix(hash(i + vec3(0.0, 0.0, 1.0)), hash(i + vec3(1.0, 0.0, 1.0)), u.x);
@@ -62,14 +62,14 @@ kernel cloud.render@1 {
         let step = 1.0 / 48.0;
         let m = loop 48 with m = March { light: 0.0, transmit: 1.0 } until m.transmit < 0.01 {
             let z = (float(index()) + 0.5) * step;
-            let d = density_at(vec3(uv.x, uv.y, z));
+            let d = density_at(vec3(uv, z));
             let absorbed = exp(-d * absorb * step);
             // Light falls off with depth, as if lit from the front.
             let lit = (1.0 - absorbed) * m.transmit * (1.0 - z * 0.6);
             March { light: m.light + lit, transmit: m.transmit * absorbed }
         };
         let sky = mix(vec3(0.35, 0.55, 0.9), vec3(0.75, 0.85, 1.0), uv.y);
-        let color = sky * m.transmit + 1.0 * min(m.light * 1.3, 1.0);
+        let color = sky * m.transmit + min(m.light * 1.3, 1.0);
         return vec4(color, 1.0);
     }
 }

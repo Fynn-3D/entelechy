@@ -81,7 +81,7 @@ fn figure_code(v: Int, i: Int) -> Int {
     let n = figures(v);
     if v < 0 && i == 0 { return 45; }
     let place = n - 1 - i;
-    let p = loop 9 with m = 1 { if index() < place { m * 10 } else { m } };
+    let p = loop min(place, 9) with m = 1 { m * 10 };
     return 48 + (abs(v) / p) % 10;
 }
 

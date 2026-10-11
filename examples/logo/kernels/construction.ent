@@ -36,14 +36,11 @@ kernel logo.construction@1 {
         let hair = 0.55 * px;
         let fine = 0.9 * px;
         // The grid of whole steps, and the lattice's diagonals between them.
-        let gx = abs(p.x / a - floor(p.x / a + 0.5)) * a;
-        let gy = abs(p.y / a - floor(p.y / a + 0.5)) * a;
-        let c0 = paint(paper(), vec3(0.8, 0.83, 0.88), stroke(min(gx, gy), hair, px) * 0.8);
-        let u = (p.x + p.y) / a;
-        let v = (p.x - p.y) / a;
-        let du = abs(u - floor(u + 0.5)) * a * 0.70710678;
-        let dv = abs(v - floor(v + 0.5)) * a * 0.70710678;
-        let c1 = paint(c0, vec3(0.86, 0.88, 0.92), stroke(min(du, dv), hair, px) * 0.7);
+        let g = abs(p / a - floor(p / a + 0.5)) * a;
+        let c0 = paint(paper(), vec3(0.8, 0.83, 0.88), stroke(min(g.x, g.y), hair, px) * 0.8);
+        let uv = vec2(p.x + p.y, p.x - p.y) / a;
+        let duv = abs(uv - floor(uv + 0.5)) * a * 0.70710678;
+        let c1 = paint(c0, vec3(0.86, 0.88, 0.92), stroke(min(duv.x, duv.y), hair, px) * 0.7);
         // The mark, faint.
         let mk = seed_mark(p, 1, 0, px);
         let c2 = paint(c1, mk.xyz, mk.w * 0.42);
@@ -67,8 +64,8 @@ kernel logo.construction@1 {
         // two, one step up, five quarters along the branch; right angles
         // marked. The trunk is five quarters too.
         let tri = loop 2 with d = 100.0 {
-            let side = if index() == 0 { -1.0 } else { 1.0 };
-            let n1 = lattice_node(if side < 0.0 { 1 } else { 2 });
+            let side = float(index()) * 2.0 - 1.0;
+            let n1 = lattice_node(1 + index());
             let corner = n1 + vec2(side * 0.75 * a, 0.0);
             let n3 = corner + vec2(0.0, a);
             let q = 0.12 * a;
@@ -84,11 +81,7 @@ kernel logo.construction@1 {
         let arc_on = float(ang < 0.0 && ang > -1.04719755);
         let c10 = paint(c9, build(), stroke(abs(length(p - cc) - 0.9 * a), fine * 1.3, px) * arc_on);
         // Every circle's outline: the seed, the nodes, the rings.
-        let nodes = loop 6 with d = 100.0 {
-            let i = index();
-            let r = if i == 0 { 11.0 * m } else if i < 3 { 9.0 * m } else { 7.0 * m };
-            min(d, abs(length(p - lattice_node(i)) - r))
-        };
+        let nodes = loop 6 with d = 100.0 { min(d, abs(length(p - lattice_node(index())) - node_radius(index()))) };
         let rings = loop 9 with d = 100.0 { min(d, abs(length(p - lattice_crown(index())) - 7.0 * m)) };
         let outline = min(min(nodes, rings), abs(length(p - s) - 16.0 * m));
         let c11 = paint(c10, build(), stroke(outline, fine, px));

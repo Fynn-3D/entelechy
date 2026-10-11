@@ -50,9 +50,9 @@ kernel ui.letters@1 {
     output result: Grid<Float>;
     compute {
         let p = icoord();
-        if p.y < 48 { return if p.x < 96 { at(font, vec2(float(p.x), float(p.y))) } else { 0.0 }; }
+        if p.y < 48 { return if p.x < 96 { at(font, p) } else { 0.0 }; }
         if p.y == 48 { return if p.x == 0 { float(side) } else { 0.0 }; }
-        return at(atlas, vec2(float(p.x), float(p.y - letters_atlas_top())));
+        return at(atlas, p - ivec2(0, letters_atlas_top()));
     }
 }
 
@@ -130,7 +130,8 @@ fn char_at(text: Rows<Int>, i: Int, utf8: Bool) -> IVec2 {
     let b0 = at(text, i);
     if !utf8 || b0 < 128 { return ivec2(b0, 1); }
     let n = if b0 >= 240 { 4 } else if b0 >= 224 { 3 } else { 2 };
-    let lead = if n == 4 { b0 & 7 } else if n == 3 { b0 & 15 } else { b0 & 31 };
+    // The lead byte's bits after its n ones and the zero that ends them.
+    let lead = b0 & (127 >> n);
     let code = loop n - 1 with c = lead { (c << 6) | (at(text, i + 1 + index()) & 63) };
     return ivec2(code, n);
 }
