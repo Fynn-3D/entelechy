@@ -189,20 +189,26 @@ fn find<'a>(
     Ok(at)
 }
 
-/// `range` replaced by a fragment, which, ending in a comment, ends its
-/// line before what followed `range` there.
+/// `range` replaced by a fragment, which, ending in a comment, takes the
+/// place of the comment that ended its line, or ends its line before
+/// what followed `range` there.
 fn replace(text: &str, range: Range<usize>, (fragment, comment): (&str, bool)) -> String {
     let (with, end) = ended(text, range.start, range.end, fragment, comment);
     splice(text, range.start..end, &with)
 }
 
 /// `fragment` put in at `start` before what is at `end`, and where what
-/// follows it then begins: ending in a comment with more on the line
-/// after `end`, a new line indented as the line at `start` follows it,
-/// and the spaces after `end` go.
+/// follows it then begins: ending in a comment, it takes the place of a
+/// comment that ended the line after `end`, or with more on the line, a
+/// new line indented as the line at `start` follows it, and the spaces
+/// after `end` go.
 fn ended(text: &str, start: usize, end: usize, fragment: &str, comment: bool) -> (String, usize) {
-    if !comment || text[end..line_end(text, end)].trim().is_empty() {
+    let rest = text[end..line_end(text, end)].trim();
+    if !comment || rest.is_empty() {
         return (fragment.to_owned(), end);
+    }
+    if rest.starts_with("//") {
+        return (fragment.to_owned(), line_end(text, end));
     }
     let line = text[..start].rfind('\n').map_or(0, |i| i + 1);
     let indent: String = text[line..]

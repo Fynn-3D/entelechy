@@ -307,6 +307,25 @@ fn a_fragment_ending_in_a_comment_ends_its_line_before_what_followed() {
     )
     .unwrap();
     assert_eq!(edited, "param a: Float = 3.0; // three\n");
+    // Its comment takes the place of the one that ended the line, a
+    // statement's and a member's alike; without one, the old one stays.
+    let edited = edit(
+        "param a: Float = 1.0;   // one\nnode k: t.c@1 {\n    from = 1.0; // one\n}\n",
+        &[
+            statement(
+                StatementKind::Param,
+                "a",
+                "param a: Float = 3.0;   // three",
+            ),
+            member("k", "from", Some("from = 3.0; // three")),
+            statement(StatementKind::Param, "a", "param a: Float = 4.0;"),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        edited,
+        "param a: Float = 4.0;   // three\nnode k: t.c@1 {\n    from = 3.0; // three\n}\n"
+    );
 }
 
 #[test]
