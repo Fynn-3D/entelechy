@@ -294,6 +294,10 @@ ready, so a republish never stalls a frame. It takes `run`'s
 - `--scale <n>` sets the initial magnification; `--window <w>x<h>` the
   initial logical size.
 - `--no-audio` leaves the sound card closed.
+- `--hold-pointer` holds the pointer in the window once it is clicked:
+  the system's cursor is locked and hidden, and the scene's `pointer()`
+  moves with the mouse and stays inside the window (the scene draws it).
+  The window losing the focus lets it go.
 - `--replay <file>` plays a replay in the window (see
   [Replay tests](#replay-tests)).
 - `--serve`, `--listen <host:port>` and `--allow-origin <origin>` serve

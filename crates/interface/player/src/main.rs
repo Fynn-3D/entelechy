@@ -16,10 +16,12 @@ use entelechy_session::play::{self, Frame, Placement, Play, View, hud};
 use serde_json::Value as Json;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{
+    DeviceEvent, DeviceId, ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::Key;
-use winit::window::{Window, WindowId};
+use winit::window::{CursorGrabMode, Window, WindowId};
 
 const USAGE: &str = "\
 usage:
@@ -36,6 +38,10 @@ usage:
       F6 cycles the preview through the graph's nodes and back to the output;
       F10 shows a line of frame data over the picture, naming the port shown.
       Tab, Escape and every other key are the scene's.
+      --hold-pointer holds the pointer in the window once it is clicked:
+      the system's cursor is locked and hidden, the scene's pointer moves
+      with the mouse and stays inside the window (the scene draws it);
+      the window losing the focus (Cmd+Tab) lets it go.
       --memory says how many mebibytes of Fields the Host may hold at once,
       2048 by default; a scene of millions of triangles wants more.
       --work says how many million loop iterations one run of a Kernel may
@@ -76,6 +82,8 @@ struct Options {
     /// A replay driving the scene frame by frame at its own times; the
     /// person takes over when it ends.
     replay: Option<entelechy_session::replay::Replay>,
+    /// Hold the pointer in the window once it is clicked.
+    hold_pointer: bool,
 }
 
 fn parse(args: &[String]) -> Result<Options, String> {
@@ -88,6 +96,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         origins: Vec::new(),
         no_audio: false,
         replay: None,
+        hold_pointer: false,
     };
     let mut iter = args.iter().cloned();
     while let Some(arg) = iter.next() {
@@ -103,6 +112,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
             }
             "--allow-origin" => options.origins.push(value("--allow-origin")?),
             "--no-audio" => options.no_audio = true,
+            "--hold-pointer" => options.hold_pointer = true,
             "--replay" => {
                 let path = std::path::PathBuf::from(value("--replay")?);
                 let text = std::fs::read_to_string(&path)
@@ -185,6 +195,12 @@ struct Player {
     /// The sound of the frame in flight, fetched to be heard next frame
     /// ([`Session::overlaps`]).
     sound_behind: Option<entelechy_kernel::Fetch>,
+    /// Whether the pointer is held once the window is clicked, where the
+    /// system's cursor last was, and the held pointer while it is held
+    /// ([`entelechy_player::pointer`]).
+    hold_pointer: bool,
+    cursor: (f64, f64),
+    held: Option<(f64, f64)>,
 }
 
 impl entelechy_protocol::Served for Player {
@@ -493,6 +509,33 @@ impl Player {
     }
 }
 
+impl Player {
+    /// The pointer held: the system's cursor locked (or, where it cannot
+    /// be, confined) and hidden, the held pointer where it was.
+    fn hold(&mut self) {
+        let Some(window) = &self.window else { return };
+        let locked = window
+            .set_cursor_grab(CursorGrabMode::Locked)
+            .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined));
+        if locked.is_ok() {
+            window.set_cursor_visible(false);
+            self.held = Some(self.cursor);
+        }
+    }
+
+    /// The pointer let go: the system's cursor free and shown where the
+    /// held one was.
+    fn let_go(&mut self) {
+        let (Some(at), Some(window)) = (self.held.take(), &self.window) else {
+            return;
+        };
+        let _ = window.set_cursor_grab(CursorGrabMode::None);
+        let _ = window.set_cursor_position(winit::dpi::PhysicalPosition::new(at.0, at.1));
+        window.set_cursor_visible(true);
+        self.cursor = at;
+    }
+}
+
 impl ApplicationHandler for Player {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
@@ -548,10 +591,18 @@ impl ApplicationHandler for Player {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::CursorMoved { position, .. } => {
-                self.play.pointer(position.x as f32, position.y as f32);
+                self.cursor = (position.x, position.y);
+                if self.held.is_none() {
+                    self.play.pointer(position.x as f32, position.y as f32);
+                }
             }
+            // Out of the focus, a held pointer is let go.
+            WindowEvent::Focused(false) => self.let_go(),
             WindowEvent::MouseInput { state, button, .. } => {
                 let held = state == ElementState::Pressed;
+                if held && self.hold_pointer && self.held.is_none() {
+                    self.hold();
+                }
                 match button {
                     MouseButton::Left => self.play.button(0, held),
                     MouseButton::Right => self.play.button(1, held),
@@ -596,6 +647,24 @@ impl ApplicationHandler for Player {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// A held pointer moves by the mouse's own motion, inside the window.
+    fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
+        let (Some(at), Some(window)) = (self.held, &self.window) else {
+            return;
+        };
+        if let DeviceEvent::MouseMotion { delta } = event {
+            let size = window.inner_size();
+            let next = entelechy_player::pointer::held_step(
+                at,
+                delta,
+                window.scale_factor(),
+                (size.width, size.height),
+            );
+            self.held = Some(next);
+            self.play.pointer(next.0 as f32, next.1 as f32);
         }
     }
 
@@ -689,6 +758,9 @@ fn main() -> ExitCode {
         audio_allowed: !options.no_audio,
         audio_failed: false,
         sound_behind: None,
+        hold_pointer: options.hold_pointer,
+        cursor: (0.0, 0.0),
+        held: None,
     };
     if let Some(replay) = &options.replay {
         player.play.replay(replay, &mut player.session);
