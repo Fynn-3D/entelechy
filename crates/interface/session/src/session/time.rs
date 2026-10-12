@@ -80,6 +80,27 @@ impl Session {
         self.history.scene_text(digest).map(str::to_owned)
     }
 
+    /// The text the scene's document at `path` (as a compose names it,
+    /// [`Session::composable`]) had at version `digest`, when the session
+    /// remembers a compose that wrote it, or for the scene, a change that
+    /// loaded it.
+    pub fn document_at(&self, path: &std::path::Path, digest: u64) -> Result<String, String> {
+        let landed = self.composable(path)?;
+        let root = self
+            .store()
+            .canonical(self.scene.root())
+            .unwrap_or_else(|_| self.scene.root().to_path_buf());
+        self.history
+            .document_text(&landed, digest, landed == root)
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                format!(
+                    "version {digest:016x} of `{}` is not one the session remembers",
+                    landed.display()
+                )
+            })
+    }
+
     /// The world as it stands, taken whole: position, published Kernels,
     /// every port's committed state (uncommitted outputs excluded), and
     /// the scene document. Device Fields are brought back first.

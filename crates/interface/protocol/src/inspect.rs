@@ -134,6 +134,10 @@ pub(crate) fn history(session: &Session, request: &Request) -> Result<Json, Json
                 entelechy_session::Change::Scene { document } => {
                     json!({ "kind": "scene", "version": format!("{document:016x}") })
                 }
+                entelechy_session::Change::Documents { written } => json!({
+                    "kind": "documents",
+                    "documents": written.iter().map(|(path, version)| json!({ "path": path.display().to_string(), "version": format!("{version:016x}") })).collect::<Vec<_>>(),
+                }),
                 entelechy_session::Change::Param { name } => json!({ "kind": "param", "name": name }),
                 entelechy_session::Change::Written { node, port } => {
                     json!({ "kind": "written", "node": node, "port": port })
@@ -183,6 +187,19 @@ pub(crate) fn document(session: &Session, request: &Request) -> Result<Json, Jso
         let path = path
             .as_str()
             .ok_or_else(|| failure("`path` is a document's path, from the scene's directory"))?;
+        if let Some(version) = request.get("version").and_then(Json::as_str) {
+            let digest = u64::from_str_radix(version, 16)
+                .map_err(|_| failure(format!("version {version} is not one `document` answers")))?;
+            let text = session
+                .document_at(std::path::Path::new(path), digest)
+                .map_err(failure)?;
+            let (landed, _) = session
+                .composed_document(std::path::Path::new(path))
+                .map_err(failure)?;
+            return Ok(
+                json!({ "path": landed.display().to_string(), "text": text, "version": version }),
+            );
+        }
         let (landed, text) = session
             .composed_document(std::path::Path::new(path))
             .map_err(failure)?;

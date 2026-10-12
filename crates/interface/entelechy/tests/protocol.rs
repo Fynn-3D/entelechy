@@ -1968,6 +1968,97 @@ fn compose_writes_the_scenes_replays_and_they_play() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// What a compose writes is remembered, each document's version: `history`
+/// lists them, `document` with a `path` and a `version` reads one back, and
+/// composing it again rolls that document back.
+#[test]
+fn composed_documents_are_remembered_and_rolled_back() {
+    let dir = std::env::temp_dir().join(format!(
+        "entelechy-protocol-remembered-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let scene = dir.join("scene.esn");
+    std::fs::write(
+        &scene,
+        "node k: kernel { requires { field.write; } output result: Rows<Float>; domain = 3; compute { return 1.0; } }\noutput result <- k.result;\n",
+    )
+    .unwrap();
+    let times = |by: &str| {
+        format!(
+            "kernel a.times@1 {{ requires {{ field.read; field.write; }} input xs: Rows<Float>; output result: Rows<Float>; compute {{ return sample(xs) * {by}; }} }}\n"
+        )
+    };
+    let wired = "use \"kernels/a.ent\";\nnode k: kernel { requires { field.write; } output result: Rows<Float>; domain = 3; compute { return 1.0; } }\nnode t: a.times@1 { xs <- k.result; }\noutput result <- t.result;\n";
+    let version = |text: &str| format!("{:016x}", entelechy_session::history::digest(text));
+    let largest = |answer: &Json| answer["ok"]["summary"][0]["max"].as_f64();
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "compose", "documents": [
+                { "path": "kernels/a.ent", "text": times("2.0") },
+                { "text": wired },
+            ] }),
+            json!({ "id": 2, "op": "compose", "path": "kernels/a.ent", "text": times("3.0") }),
+            json!({ "id": 3, "op": "evaluate" }),
+            json!({ "id": 4, "op": "read", "format": "summary" }),
+            json!({ "id": 5, "op": "history" }),
+            // The first version read back, and composed again: rolled back.
+            json!({ "id": 6, "op": "document", "path": "kernels/a.ent", "version": version(&times("2.0")) }),
+            json!({ "id": 7, "op": "compose", "path": "kernels/a.ent", "text": times("2.0") }),
+            json!({ "id": 8, "op": "evaluate" }),
+            json!({ "id": 9, "op": "read", "format": "summary" }),
+            // A version never written is not remembered; the scene's are, by its path too.
+            json!({ "id": 10, "op": "document", "path": "kernels/a.ent", "version": "0000000000000000" }),
+            json!({ "id": 11, "op": "document", "path": "scene.esn", "version": version(wired) }),
+        ],
+    );
+    assert_eq!(largest(&responses[3]), Some(3.0), "{}", responses[3]);
+    let remembered: Vec<&Json> = responses[4]["ok"]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|change| change["kind"] == "documents")
+        .collect();
+    assert_eq!(remembered.len(), 2, "{}", responses[4]);
+    let first: Vec<(&str, &str)> = remembered[0]["documents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| (d["path"].as_str().unwrap(), d["version"].as_str().unwrap()))
+        .collect();
+    assert!(
+        first.len() == 2
+            && first[0].0.ends_with("kernels/a.ent")
+            && first[1].0.ends_with("scene.esn"),
+        "{first:?}"
+    );
+    assert_eq!(first[0].1, version(&times("2.0")));
+    assert!(
+        remembered[0]["origin"]["protocol"].is_string(),
+        "{}",
+        responses[4]
+    );
+    assert_eq!(responses[5]["ok"]["text"], times("2.0"), "{}", responses[5]);
+    assert_eq!(
+        largest(&responses[8]),
+        Some(2.0),
+        "rolled back: {}",
+        responses[8]
+    );
+    assert!(
+        responses[9]["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("not one the session remembers"),
+        "{}",
+        responses[9]
+    );
+    assert_eq!(responses[10]["ok"]["text"], wired, "{}", responses[10]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A file elsewhere is refused by name, and read once `--allow file.read`
 /// names its directory.
 #[test]

@@ -64,6 +64,12 @@ pub enum Change {
         /// The document's text, by digest.
         document: u64,
     },
+    /// Documents of the scene were written by a compose, each by its one
+    /// name and its text, by digest ([`History::source`]).
+    Documents {
+        /// Each document written and its version.
+        written: Vec<(PathBuf, u64)>,
+    },
     /// A graph param was set.
     Param {
         /// Its name.
@@ -201,6 +207,15 @@ impl History {
         self.record(origin, Change::Scene { document });
     }
 
+    /// Documents a compose wrote, whose texts are kept.
+    pub(crate) fn documents(&mut self, written: &[(PathBuf, String)], origin: Origin) {
+        let written = written
+            .iter()
+            .map(|(path, text)| (path.clone(), self.keep(text)))
+            .collect();
+        self.record(origin, Change::Documents { written });
+    }
+
     /// Anything else that changed the world.
     pub(crate) fn changed(&mut self, change: Change, origin: Origin) {
         self.record(origin, change);
@@ -257,6 +272,24 @@ impl History {
             .flatten()
     }
 
+    /// A text the document at `path` had, by digest, when a remembered
+    /// compose wrote it or, for the scene, a remembered change loaded it.
+    pub(crate) fn document_text(
+        &self,
+        path: &std::path::Path,
+        digest: u64,
+        scene: bool,
+    ) -> Option<&str> {
+        let written = self.changes.iter().any(|record| match &record.change {
+            Change::Documents { written } => written
+                .iter()
+                .any(|(at, version)| at == path && *version == digest),
+            Change::Scene { document } => scene && *document == digest,
+            _ => false,
+        });
+        written.then(|| self.source(digest)).flatten()
+    }
+
     /// The source a Kernel had at `generation`, when a remembered change
     /// published it.
     pub(crate) fn source_of(&self, id: &KernelId, generation: Generation) -> Option<&str> {
@@ -291,6 +324,11 @@ impl History {
             match gone.change {
                 Change::Published { source, .. } => self.forget(source),
                 Change::Scene { document } => self.forget(document),
+                Change::Documents { written } => {
+                    for (_, version) in written {
+                        self.forget(version);
+                    }
+                }
                 _ => {}
             }
         }
@@ -345,5 +383,39 @@ mod tests {
         let first = history.changes(0).next().unwrap();
         assert_eq!(first.revision, 4);
         assert_eq!(first.after_frames, 2);
+    }
+
+    /// Documents a compose wrote are one change, each text readable by its
+    /// path and version until the change is let go.
+    #[test]
+    fn composed_documents_are_one_change_read_back_until_let_go() {
+        let mut history = History::default();
+        let (scene, kernel) = (
+            PathBuf::from("/w/scene.esn"),
+            PathBuf::from("/w/kernels/a.ent"),
+        );
+        history.documents(
+            &[
+                (kernel.clone(), "fn a() -> Float { return 1.0; }".into()),
+                (scene.clone(), "use \"kernels/a.ent\";".into()),
+            ],
+            Origin::Local,
+        );
+        assert_eq!(history.position(), (1, 0));
+        let a = digest("fn a() -> Float { return 1.0; }");
+        assert_eq!(
+            history.document_text(&kernel, a, false),
+            Some("fn a() -> Float { return 1.0; }")
+        );
+        assert_eq!(
+            history.document_text(&scene, a, true),
+            None,
+            "a version is its own document's"
+        );
+        for _ in 0..CHANGES {
+            history.changed(Change::Reset, Origin::Local);
+        }
+        assert_eq!(history.document_text(&kernel, a, false), None);
+        assert!(history.sources.is_empty(), "{:?}", history.sources.keys());
     }
 }

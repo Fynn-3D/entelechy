@@ -660,6 +660,10 @@ impl Session {
                 .write(path, text.as_bytes())
                 .map_err(|e| SessionError::Io(path.clone(), e))?;
         }
+        // What was written is remembered, each document's text, so any of
+        // them can be read back and composed again.
+        let written: Vec<(PathBuf, String)> = others.into_iter().chain(scene).collect();
+        self.history.documents(&written, self.origin.clone());
         Ok(Ok(()))
     }
 
