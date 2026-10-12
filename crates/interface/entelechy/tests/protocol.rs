@@ -1888,6 +1888,86 @@ fn compose_writes_the_scenes_documents_together_or_none() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `compose` writes a scene's replays too, whole, once each parses and
+/// names a scene there; what it wrote plays as any replay does.
+#[test]
+fn compose_writes_the_scenes_replays_and_they_play() {
+    let dir =
+        std::env::temp_dir().join(format!("entelechy-protocol-replays-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let scene = dir.join("scene.esn");
+    std::fs::write(
+        &scene,
+        "node k: kernel { requires { field.write; } output result: Rows<Float>; domain = 3; compute { return float(element()); } }\noutput result <- k.result;\n",
+    )
+    .unwrap();
+    let replay = "scene ../scene.esn\nframe 0.0\nexpect k.result[2] = 2.0\n";
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "compose", "path": "tests/k.replay", "text": replay }),
+            json!({ "id": 2, "op": "document", "path": "tests/k.replay" }),
+            json!({ "id": 3, "op": "compose", "path": "tests/bad.replay", "text": "scene ../scene.esn\nframe soon\n" }),
+            json!({ "id": 4, "op": "compose", "path": "tests/lost.replay", "text": "scene ../nowhere.esn\nframe 0.0\n" }),
+            json!({ "id": 5, "op": "compose", "path": "tests/k.replay", "edits": [{ "node": "k", "text": null }] }),
+            json!({ "id": 6, "op": "compose", "path": "../away.replay", "text": replay }),
+        ],
+    );
+    let written = &responses[0]["ok"];
+    assert_eq!(written["written"], true, "{}", responses[0]);
+    assert!(
+        written["documents"][0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("tests/k.replay"),
+        "{written}"
+    );
+    assert_eq!(responses[1]["ok"]["text"], replay, "{}", responses[1]);
+    let bad = &responses[2]["error"];
+    assert!(
+        bad["path"]
+            .as_str()
+            .unwrap_or_default()
+            .ends_with("tests/bad.replay"),
+        "{bad}"
+    );
+    assert_eq!(bad["line"], 2, "{bad}");
+    for (index, says) in [
+        (3, "is not a scene document there"),
+        (4, "written whole, by `text`"),
+        (5, "outside the scene's directory"),
+    ] {
+        let answer = &responses[index]["error"];
+        assert!(
+            answer["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(says),
+            "{index}: {}",
+            responses[index]
+        );
+    }
+    assert!(!dir.join("tests/bad.replay").exists());
+    assert!(!dir.join("tests/lost.replay").exists());
+    // What the protocol wrote is a test as any other: it plays and holds.
+    let played = Command::new(env!("CARGO_BIN_EXE_entelechy"))
+        .arg("replay")
+        .arg(dir.join("tests/k.replay"))
+        .arg("--backend")
+        .arg("cpu")
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&played.stdout);
+    assert!(
+        played.status.success(),
+        "{said}{}",
+        String::from_utf8_lossy(&played.stderr)
+    );
+    assert!(said.contains(": ok"), "{said}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A file elsewhere is refused by name, and read once `--allow file.read`
 /// names its directory.
 #[test]

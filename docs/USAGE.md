@@ -329,7 +329,8 @@ entelechy player --replay examples/voxel/tests/voxel.replay
 
 An application's tests are `.replay` files next to its scene, one step a
 line, `#` to the end of a line a comment, paths relative to the replay
-file. `entelechy help replay` lists the same forms:
+file. An agent writes them over the protocol as it writes the scene's
+other documents (`compose` with a `.replay` path). `entelechy help replay` lists the same forms:
 
 | form | what it does | example |
 | --- | --- | --- |

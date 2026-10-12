@@ -468,9 +468,9 @@ protocol. Held by the protocol's tests and the history's own.
 
 - **Structure**, a statement at a time: `compose` edits the scene's
   documents (the scene, and the Kernel and graph documents under its
-  directory that it uses or places) where a node, a node's member, an
-  output or a declaration is written, and only there, or writes one
-  whole; several documents change as one, all written or none. The scene
+  directory that it uses or places, and the replays that test it) where
+  a node, a node's member, an output or a declaration is written, and
+  only there, or writes one whole; several documents change as one, all written or none. The scene
   is then read again as an edit on disk is; texts whose graph cannot run
   a frame (a missing source, a cycle) or whose Kernels do not compile or
   are not granted are refused before any is written.
@@ -491,8 +491,8 @@ also a person's: an agent names what it changes and every other byte
 stays. An agent with no files of its own (a page, another machine)
 reaches the documents only through this door, so the door reaches all
 of the scene's: a work made over the wire is laid out as one made by
-hand, its Kernels in their own documents, and is checked whole before
-it is written. Only under the scene's directory, and never in a
+hand, its Kernels in their own documents and its tests beside them,
+and is checked whole before it is written. Only under the scene's directory, and never in a
 package, which is kept as it was found. A port is the smallest part of state that restarts without
 inventing a state no evaluation committed.
 

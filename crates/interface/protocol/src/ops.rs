@@ -395,7 +395,7 @@ pub fn operations() -> Vec<Operation> {
                 may(
                     "path",
                     Ty::Str,
-                    "another document of the scene, from its directory: a `.ent` or `.esn` under it that the scene uses or places, or a new one this compose makes it use",
+                    "another document of the scene, from its directory: a `.ent` or `.esn` under it that the scene uses or places, or a new one this compose makes it use, or a `.replay` that names a scene there",
                 ),
                 may(
                     "documents",

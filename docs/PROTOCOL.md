@@ -140,8 +140,8 @@ through:
   or `graph` naming one refuses the scene before any of it is read.
 - **Writes** take `--allow file.write=<dir>`. Neither is ever granted
   over the wire ([decision](DECISIONS.md)). `compose` writes only the
-  scene's own documents: `.ent` and `.esn` files under the scene's
-  directory, where they land after their links, none in a package
+  scene's own documents: `.ent`, `.esn` and `.replay` files under the
+  scene's directory, where they land after their links, none in a package
   directory; the person who serves a scene gave its directory.
 - **Grants.** `status` answers `grants`, the capabilities a Kernel may be
   given: all, unless the server was started with `--grant` naming fewer.
@@ -194,6 +194,12 @@ with its `version` and, for `edits`, the `text` they made. A document
 written must be one the scene, as written, uses or places. The answer
 lists each document written with its new version, under `documents`,
 once the Kernels it changed run.
+
+A replay is one of the scene's documents too, its tests: `compose` writes
+a `.replay` under the scene's directory whole, by `text`, once it parses
+and the scene (and the Kernels) it names are there, written or written in
+the same compose; no scene uses a replay, so none must. What it wrote
+plays as any replay does (`entelechy replay`, the Player's `--replay`).
 
 `compose` checks before it writes: a text that does not lower, names a
 source nothing provides, wires a cycle, defines a Kernel that does not

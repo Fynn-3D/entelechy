@@ -546,8 +546,8 @@ impl Session {
     }
 
     /// Where `path`, spelled from the scene's directory or whole, lands as
-    /// a document a compose may write: a `.ent` or `.esn` file under the
-    /// scene's directory, judged where it lands after its links, and in
+    /// a document a compose may write: a `.ent`, `.esn` or `.replay` file
+    /// under the scene's directory, judged where it lands after its links, and in
     /// no package directory. A package is the person's, kept as found.
     pub fn composable(&self, path: &Path) -> Result<PathBuf, String> {
         let store = self.store();
@@ -556,10 +556,10 @@ impl Session {
         let wanted = store.whole(&dir.join(path));
         if !matches!(
             wanted.extension().and_then(|e| e.to_str()),
-            Some("ent" | "esn")
+            Some("ent" | "esn" | "replay")
         ) {
             return Err(format!(
-                "`{}` is not a document: a compose writes `.ent` and `.esn` files",
+                "`{}` is not a document: a compose writes `.ent`, `.esn` and `.replay` files",
                 path.display()
             ));
         }
@@ -617,7 +617,8 @@ impl Session {
 
     /// Replaces documents of the scene, each whole, all or none: each where
     /// a compose may write ([`Session::composable`]), each the scene uses or
-    /// places once all are written (a new one is used by the same change),
+    /// places once all are written (a new one is used by the same change)
+    /// or a replay that parses and names a scene there,
     /// and the scene with all of them checked as `entelechy check` checks
     /// it, their Kernels compiled and granted, before any reaches the
     /// store. The scene is written last. A refusal names the document at
@@ -694,12 +695,49 @@ impl Session {
                 .read_text(&root)
                 .map_err(|e| refused(root.clone(), e.to_string()))?,
         };
+        // A replay written parses, and the scene and Kernels it names are
+        // there once all is written; it names a scene, no scene names it.
+        let is_replay = |path: &Path| path.extension().is_some_and(|e| e == "replay");
+        for (path, text) in landed.iter().filter(|(path, _)| is_replay(path)) {
+            let base = path.parent().unwrap_or_else(|| Path::new("."));
+            let replay = crate::replay::parse(text, base).map_err(|error| crate::Refusal {
+                path: path.clone(),
+                diagnostic: crate::Diagnostic {
+                    message: error.message.clone(),
+                    at: Some((error.line, 1)),
+                },
+            })?;
+            let scene_written = overlay.kind(&overlay.whole(&replay.scene))
+                == Some(crate::store::Kind::File)
+                && replay.scene.extension().is_some_and(|e| e == "esn");
+            if !scene_written {
+                return Err(refused(
+                    path.clone(),
+                    format!(
+                        "the scene it names, `{}`, is not a scene document there",
+                        replay.scene.display()
+                    ),
+                ));
+            }
+            if let Some(kernels) = &replay.kernels
+                && overlay.kind(&overlay.whole(kernels)).is_none()
+            {
+                return Err(refused(
+                    path.clone(),
+                    format!(
+                        "the Kernels it names, `{}`, are not there",
+                        kernels.display()
+                    ),
+                ));
+            }
+        }
         // Each document written is one the scene, as written, uses or places;
         // a reach that cannot be worked out is the whole check's to say.
         let reached = reached_documents(&overlay, &root, &root_text);
         for (path, _) in &landed {
             if let Some(reached) = &reached
                 && *path != root
+                && !is_replay(path)
                 && !reached.contains(path)
             {
                 return Err(refused(

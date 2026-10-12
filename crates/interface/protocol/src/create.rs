@@ -190,6 +190,11 @@ fn compose_documents(session: &mut Session, request: &Request, settle: bool) -> 
                     "a document takes `text` or `edits`, not both".into(),
                 ));
             }
+            (None, Some(_)) if path.extension().is_some_and(|e| e == "replay") => {
+                return Err(at_fault(
+                    "a replay is written whole, by `text`; `edits` name a scene's or a Kernel document's statements".into(),
+                ));
+            }
             (None, Some(edits)) => entelechy_scene::edit::edit(
                 current.as_deref().unwrap_or(""),
                 &edits_from_json(edits)?,
