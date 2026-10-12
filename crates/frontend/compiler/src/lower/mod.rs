@@ -379,6 +379,72 @@ pub(crate) fn check_each(kernel: &Kernel, checked: &[String]) -> Vec<CompileErro
     faults
 }
 
+/// Each template `checked` names, lowered once with its Field parameters
+/// bound to ports of their declared types: what a Kernel holds a
+/// template to where it calls it, held here where none does. The ports
+/// are a scan's memories, so a template may `put` to them, as one a scan
+/// calls does; whether the caller is a scan is the caller's to hold. A
+/// template with a type parameter has no type to lower with until a call
+/// binds one. A fault [`check_each`] says of the Kernel itself is not
+/// said again here.
+pub(crate) fn check_templates(kernel: &Kernel, checked: &[String]) -> Vec<CompileError> {
+    let Ok((structs, aliases, manifest)) = (|| {
+        let structs = structs(kernel)?;
+        let aliases = aliases(kernel, &structs)?;
+        let manifest = manifest(kernel, None, &structs, &aliases)?;
+        Ok::<_, CompileError>((structs, aliases, manifest))
+    })() else {
+        return Vec::new();
+    };
+    let mut faults = Vec::new();
+    for declaration in &kernel.functions {
+        if !checked.contains(&declaration.name.value) || !declaration.generics.is_empty() {
+            continue;
+        }
+        let mut ports = Vec::new();
+        for (param, ty) in &declaration.args {
+            if resolve_type(ty, &structs).is_err()
+                && let Ok(ty) = port_type(ty, &structs, &aliases)
+            {
+                ports.push(Port {
+                    name: param.value.clone(),
+                    ty,
+                });
+            }
+        }
+        if ports.is_empty() {
+            continue;
+        }
+        // A scan's first input is not a memory: one of the Kernel's own
+        // output's type stands before the memories, so a template sees
+        // the shape a plain function is checked with.
+        let mut scan = manifest.clone();
+        scan.mode = Mode::Scan;
+        scan.inputs = std::iter::once(Port {
+            name: String::new(),
+            ty: manifest.outputs[0].ty.clone(),
+        })
+        .chain(ports.iter().cloned())
+        .collect();
+        scan.memories = ports.iter().map(|port| port.name.clone()).collect();
+        scan.outputs.extend(ports.iter().cloned());
+        let shared = match shared_of(kernel, &scan, &structs, &aliases, None) {
+            Ok(shared) => shared,
+            Err(_) => return faults,
+        };
+        let fields = ports
+            .iter()
+            .enumerate()
+            .map(|(index, port)| (port.name.clone(), index as u32 + 1))
+            .collect();
+        let name = declaration.name.value.as_str();
+        if let Err(error) = lower_function(&shared, declaration, fields, Vec::new(), name) {
+            faults.push(error);
+        }
+    }
+    faults
+}
+
 /// [`lower`], and where each value of it is written.
 pub(crate) fn lower_placed(
     kernel: &Kernel,

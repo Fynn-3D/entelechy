@@ -1853,6 +1853,32 @@ fn broken(x: Float) -> Float { return x * nope; }",
         .unwrap_or_else(|e| panic!("a capability is its callers': {e}"));
 }
 
+/// A template, a function with a Field parameter, is checked once with
+/// that parameter bound to a port of its declared type, called or not;
+/// one a scan calls may `put` to it.
+#[test]
+fn a_documents_templates_are_checked_called_or_not() {
+    let check = |source: &str| {
+        let document = entelechy_language::parse_document(source).unwrap();
+        entelechy_compiler::check_functions(&document, (&[], &[], &[]))
+    };
+    let error = check("fn broken(f: Grid<Float>, c: IVec2) -> Float { return at(f, c) + nope; }")
+        .unwrap_err();
+    assert_eq!(error.declaration(), Some("broken"), "{error}");
+    assert!(
+        error.to_string().contains("`nope` is not defined"),
+        "{error}"
+    );
+    let error = check("fn wrong(f: Grid<Vec4>, c: IVec2) -> Vec4 { return vec4(at(f, c), 1.0); }")
+        .unwrap_err();
+    assert!(error.to_string().contains("found 5"), "{error}");
+    check(
+        "fn flip(cells: Grid<Int>, c: IVec2) -> Int { let v = at(cells, c); put(cells, c, 1 - v); return v; }
+fn twice(cells: Grid<Int>, c: IVec2) -> Int { return flip(cells, c) + flip(cells, c); }",
+    )
+    .unwrap_or_else(|e| panic!("a template a scan calls writes its memory: {e}"));
+}
+
 /// An enum names `Int`s: a type a value, a field, a port's element and a
 /// parameter may have, declared once for every Kernel of a document; a
 /// `match` naming its variants names every one or ends with `_`.

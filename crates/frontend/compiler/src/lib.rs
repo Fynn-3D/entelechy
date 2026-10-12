@@ -123,8 +123,9 @@ pub fn compile_kernel(
 /// Kernel calls it or not, against what the document declares and
 /// `inherited`, the structs, types and functions of the documents it
 /// uses. A Kernel lowers only the functions it calls; this is where the
-/// others are held to the language. A function's capabilities are its
-/// callers' to hold, so none is refused here.
+/// others are held to the language, a template with its Field
+/// parameters bound to ports of their declared types. A function's
+/// capabilities are its callers' to hold, so none is refused here.
 pub fn check_functions(
     document: &entelechy_language::Document,
     inherited: (
@@ -138,7 +139,11 @@ pub fn check_functions(
     }
     entelechy_language::on_a_deep_stack(|| {
         let (kernel, own) = functions_kernel(document, inherited)?;
-        lower::lower(&kernel, None, &own).map(drop)
+        lower::lower(&kernel, None, &own)?;
+        match lower::check_templates(&kernel, &own).into_iter().next() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     })
 }
 
@@ -156,7 +161,18 @@ pub fn check_functions_each(
         return Vec::new();
     }
     entelechy_language::on_a_deep_stack(|| match functions_kernel(document, inherited) {
-        Ok((kernel, own)) => lower::check_each(&kernel, &own),
+        Ok((kernel, own)) => {
+            let mut faults = lower::check_each(&kernel, &own);
+            for error in lower::check_templates(&kernel, &own) {
+                if !faults.iter().any(|seen| {
+                    seen.to_string() == error.to_string()
+                        && seen.declaration() == error.declaration()
+                }) {
+                    faults.push(error);
+                }
+            }
+            faults
+        }
         Err(error) => vec![error],
     })
 }
