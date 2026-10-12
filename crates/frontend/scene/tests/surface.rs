@@ -73,6 +73,9 @@ fn lowered(path: &Path) -> Result<String, String> {
             relative(dir, &base)
         ));
     }
+    for (name, path) in &lowered.files.checks {
+        out.push_str(&format!("// checks {name} {}\n", relative(path, &base)));
+    }
     for param in &graph.times_params {
         out.push_str(&format!("// sizes {param}\n"));
     }

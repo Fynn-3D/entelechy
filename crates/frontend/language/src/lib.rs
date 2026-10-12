@@ -642,6 +642,9 @@ pub struct PortDecl {
     /// Document inputs only: a file read as bytes, one per element,
     /// `= bytes "level.bin"`.
     pub bytes: Option<Spanned<String>>,
+    /// Document inputs only: what the language finds wrong in the
+    /// documents of a file or a directory, as text, `= checks "src/"`.
+    pub checks: Option<Spanned<String>>,
     /// What a file input reads while its file is unreadable:
     /// `... else fresh.result`.
     pub otherwise: Option<SourceRef>,

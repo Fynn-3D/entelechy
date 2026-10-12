@@ -407,6 +407,7 @@ impl Session {
                         .filter_map(|asset| asset.path.parent().map(Path::to_path_buf)),
                 )
                 .chain(files.sequences.iter().map(|(_, dir, ..)| dir.clone()))
+                .chain(files.checks.iter().map(|(_, path)| path.clone()))
                 .collect()
         } else {
             Vec::new()

@@ -1153,11 +1153,13 @@ impl Parser {
         let mut text = None;
         let mut frames = None;
         let mut bytes = None;
+        let mut checks = None;
         if !wired && self.eat_punct("=") {
             let as_text = self.is_keyword("text");
             let as_frames = self.is_keyword("frames");
             let as_bytes = self.is_keyword("bytes");
-            if as_text || as_frames || as_bytes {
+            let as_checks = self.is_keyword("checks");
+            if as_text || as_frames || as_bytes || as_checks {
                 self.next();
             }
             let (token, span) = self.next();
@@ -1165,7 +1167,7 @@ impl Parser {
                 return Err(ParseError {
                     span,
                     message: format!(
-                        "an input's value is a quoted path, `text` and a quoted string, `frames`, a quoted directory and `at` a rate, or `bytes` and a quoted path, found {}",
+                        "an input's value is a quoted path, `text` and a quoted string, `frames`, a quoted directory and `at` a rate, `bytes` and a quoted path, or `checks` and a quoted path, found {}",
                         token.describe()
                     ),
                 });
@@ -1192,6 +1194,8 @@ impl Parser {
                 text = Some(Spanned { value, span });
             } else if as_bytes {
                 bytes = Some(Spanned { value, span });
+            } else if as_checks {
+                checks = Some(Spanned { value, span });
             } else {
                 file = Some(Spanned { value, span });
             }
@@ -1212,6 +1216,7 @@ impl Parser {
             text,
             frames,
             bytes,
+            checks,
             otherwise,
             binding_range,
         })

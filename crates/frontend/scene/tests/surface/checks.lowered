@@ -1,0 +1,10 @@
+language 1
+// checks
+input problems: Image;
+
+node show: image.show@1 {
+    problems <- problems;
+}
+
+output result <- show.result;
+// checks problems src

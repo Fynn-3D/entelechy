@@ -129,6 +129,73 @@ impl Checked {
     }
 }
 
+/// What the language finds wrong in `documents` (those of `root`, a
+/// file or a directory, each checked as [`check_document`] checks it), a
+/// line a problem: `file:line:column: message`, the file relative to
+/// `root` (to its directory when it is a file), a problem with no place at
+/// line and column 0; in order of file and place, each once. A newline
+/// alone when there is none, as a Field holds one character at least.
+pub(crate) fn problems_text(
+    store: &dyn Store,
+    root: &Path,
+    documents: &[std::path::PathBuf],
+) -> String {
+    let base = if store.kind(root) == Some(crate::store::Kind::File) {
+        root.parent().unwrap_or(root)
+    } else {
+        root
+    };
+    // Compared by their one name: a document a `use` reaches is said by
+    // it, a link read through.
+    let named = |path: &Path| store.canonical(path).unwrap_or_else(|_| store.whole(path));
+    let base = named(base);
+    let mut found = std::collections::BTreeSet::new();
+    for document in documents {
+        for (problem, line) in check_document(store, document, false).lines {
+            if !problem {
+                continue;
+            }
+            let (file, at, message) = placed(&line);
+            let file = named(Path::new(&file));
+            let file = file
+                .strip_prefix(&base)
+                .unwrap_or(&file)
+                .display()
+                .to_string();
+            found.insert((file, at.0, at.1, message));
+        }
+    }
+    if found.is_empty() {
+        return "\n".to_owned();
+    }
+    found
+        .into_iter()
+        .map(|(file, line, column, message)| format!("{file}:{line}:{column}: {message}\n"))
+        .collect()
+}
+
+/// A problem's line as [`check_document`] says it, taken apart: its
+/// file, its line and column (0 and 0 when it has no place), its message.
+fn placed(line: &str) -> (String, (u32, u32), String) {
+    let place = |rest: &str| -> Option<(u32, u32, String)> {
+        let (line, rest) = rest.split_once(':')?;
+        let (column, message) = rest.split_once(": ")?;
+        Some((line.parse().ok()?, column.parse().ok()?, message.to_owned()))
+    };
+    let colons = line.match_indices(':').map(|(at, _)| at);
+    for at in colons.clone() {
+        if let Some((l, c, message)) = place(&line[at + 1..]) {
+            return (line[..at].to_owned(), (l, c), message);
+        }
+    }
+    for at in colons {
+        if let Some(message) = line[at + 1..].strip_prefix(' ') {
+            return (line[..at].to_owned(), (0, 0), message.to_owned());
+        }
+    }
+    (String::new(), (0, 0), line.to_owned())
+}
+
 /// Checks that the document at `path` parses, lowers with what it
 /// reaches, compiles with the documents it uses, binds each node to its
 /// Kernel's ports ([`entelechy_graph::binding_fault`]), and orders its graph.
@@ -354,6 +421,18 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                 Some((output.ty.shape, Some(output.ty.schema.clone())))
             }
             entelechy_graph::Source::External(name) => {
+                // What a check finds is text, as bytes are.
+                if lowered
+                    .files
+                    .checks
+                    .iter()
+                    .any(|(checked, _)| checked == name)
+                {
+                    return Some((
+                        entelechy_ir::Shape::Rows,
+                        entelechy_ir::schema_of(entelechy_ir::Type::Int, &[]),
+                    ));
+                }
                 let asset = lowered.files.assets.iter().find(|a| a.name == *name)?;
                 let ty = asset.ty.trim();
                 let shape = if asset.bytes || ty.starts_with("Rows<") {

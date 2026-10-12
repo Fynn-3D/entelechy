@@ -172,6 +172,10 @@ pub struct Files {
     /// Externals read frame by frame from a directory: name, resolved
     /// directory, type as written, and frames per second of session time.
     pub sequences: Vec<(String, PathBuf, String, u32)>,
+    /// Externals holding what the language finds wrong in the documents
+    /// of a file or a directory, as text: name, resolved path. The session
+    /// checks them again when one changes.
+    pub checks: Vec<(String, PathBuf)>,
     /// The root document's file outputs, written after a committed
     /// evaluation that changed them.
     pub writes: Vec<Write>,
@@ -454,6 +458,7 @@ fn lower(
     lowering.out.files.assets = level.assets;
     lowering.out.graph.texts = level.texts;
     lowering.out.files.sequences = level.sequences;
+    lowering.out.files.checks = level.checks;
     lowering.out.graph.params = level.params;
     lowering.out.graph.outputs = level.outputs;
     lowering.out.graph.fallbacks = level.fallbacks;
@@ -485,6 +490,7 @@ struct Level {
     assets: Vec<Asset>,
     texts: Vec<(String, String)>,
     sequences: Vec<(String, PathBuf, String, u32)>,
+    checks: Vec<(String, PathBuf)>,
     params: Vec<GraphParam>,
     /// Outputs in declaration order; the first is the primary.
     outputs: Vec<(String, Source)>,
@@ -560,6 +566,7 @@ struct Inputs {
     assets: Vec<Asset>,
     texts: Vec<(String, String)>,
     sequences: Vec<(String, PathBuf, String, u32)>,
+    checks: Vec<(String, PathBuf)>,
 }
 
 /// Where a document is lowered: its node prefix, what its placing graph
@@ -1082,6 +1089,7 @@ impl Lowering<'_, '_> {
         let mut assets = Vec::new();
         let mut texts = Vec::new();
         let mut sequences = Vec::new();
+        let mut checks = Vec::new();
         for input in &document.inputs {
             // What arrives is checked by shape and layout where it binds.
             if input.binding.is_some() {
@@ -1147,6 +1155,24 @@ impl Lowering<'_, '_> {
                     frames.rate,
                 ));
             }
+            if let Some(checked) = &input.checks {
+                if placement.is_some() {
+                    return Err(error(
+                        checked.span,
+                        "a placed graph's input is wired by the placing graph; it cannot check documents",
+                    ));
+                }
+                let ty = resolved(&input.ty.value, &self.aliases);
+                if ty != "Rows<Int>" {
+                    return Err(error(
+                        input.ty.span,
+                        format!(
+                            "what `checks` finds is text, a character a row: `Rows<Int>`, not `{ty}`"
+                        ),
+                    ));
+                }
+                checks.push((input.name.value.clone(), base.join(&checked.value)));
+            }
             externals.push(input.name.value.clone());
         }
         Ok(Inputs {
@@ -1154,6 +1180,7 @@ impl Lowering<'_, '_> {
             assets,
             texts,
             sequences,
+            checks,
         })
     }
 
@@ -1358,6 +1385,7 @@ impl Lowering<'_, '_> {
             assets,
             texts,
             sequences,
+            checks,
         } = self.inputs(document, base, placement)?;
         let params = self.params(document)?;
         // The root's params, read before any sub-graph: a sub-graph's
@@ -1776,6 +1804,7 @@ impl Lowering<'_, '_> {
             assets,
             texts,
             sequences,
+            checks,
             params,
             outputs,
             fallbacks,

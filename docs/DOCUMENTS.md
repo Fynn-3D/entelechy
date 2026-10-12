@@ -450,6 +450,13 @@ changes:
 - `input clip: Image = frames "clip/" at 30;`: a directory's files in
   name order (same formats), frame `floor(time * rate)` wrapping at the
   end, brought in each evaluation; listed again on sync.
+- `input problems: Rows<Int> = checks "src/";`: what the language finds
+  wrong in the documents of a file or a directory (every `.ent` and `.esn`
+  under it), each checked as `entelechy check` checks it, as text, a line
+  a problem: `file:line:column: message`, the file relative to the
+  directory, a problem with no place at line and column 0, each once, in
+  order; a newline alone when there is none. Checked again on sync when
+  one of them changes, or which there are.
 - `input saved: Rows<Tally> = "saves/tally.field" else fresh.result;`
   reads `fresh.result` until the file exists (`examples/data/parts/save`).
 

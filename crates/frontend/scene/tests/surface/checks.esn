@@ -1,0 +1,9 @@
+// What the language finds wrong in a directory's documents, held as
+// text the Host checks again when one changes.
+input problems: Rows<Int> = checks "src/";
+
+node show: image.show@1 {
+    problems <- problems;
+}
+
+output result <- show.result;

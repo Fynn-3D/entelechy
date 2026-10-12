@@ -763,6 +763,34 @@ IR stays computation alone.
 [the signatures compiled](../crates/frontend/compiler/tests/help_signatures.rs)
 and [the forms parsed](../crates/frontend/compiler/tests/help_examples.rs).
 
+## A scene may read what the language finds wrong
+
+A scene input may hold what the language finds wrong in the documents
+of a file or a directory: `input problems: Rows<Int> = checks "src/";`.
+The session checks each document there as `entelechy check` does, and
+the input holds the problems as text, a line each, `file:line:column:
+message`; it checks them again when one changes. Nothing else of the
+language is given: no new type, no structured diagnostic, no checking
+of a text a Kernel holds.
+
+**Why.** The language's judgement of a document is its own
+self-description, and a scene that edits documents (an editor, an agent
+working in a scene) needs it where it draws. An input is how the Host
+hands a scene what it reads from outside; a check is one more thing
+read, on the same sync, so no lifecycle is added. Text is the form every
+interface already says a problem in, written by one function; a Kernel
+reads it as it reads any text. Checking a Kernel's own text would put
+the compiler under the runtime, which the layers forbid: a document is
+checked once it is written.
+
+**Where.** `checks` in the parser
+([parser](../crates/frontend/language/src/parser.rs)) and `Files::checks`
+([scene](../crates/frontend/scene/src/lib.rs)); `sync_checks`
+([inputs](../crates/interface/session/src/inputs.rs)) and
+`problems_text` ([check](../crates/interface/session/src/check.rs)). Held
+by [the checks tests](../crates/interface/session/tests/checks.rs) and
+the scene surface's `checks.esn`.
+
 ## A graph says what its parameters must hold
 
 `require name: a <= b;` is a scene's statement of what its parameters

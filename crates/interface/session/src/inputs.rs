@@ -113,6 +113,44 @@ struct Sequence {
     current: Option<usize>,
 }
 
+/// A `checks` input: the file or directory it checks, and each document
+/// found there with its stamp when it was last checked.
+struct Checks {
+    path: PathBuf,
+    documents: Vec<(PathBuf, Option<Stamp>)>,
+}
+
+/// The documents a `checks` input checks: the file, or every `.ent` and
+/// `.esn` under the directory (hidden ones left out), in name order.
+fn documents_under(store: &dyn Store, path: &Path) -> Vec<PathBuf> {
+    match store.kind(path) {
+        Some(crate::store::Kind::File) => vec![path.to_path_buf()],
+        Some(crate::store::Kind::Dir) => {
+            let mut found = Vec::new();
+            let mut entries = store.list(path).unwrap_or_default();
+            entries.sort();
+            for entry in entries {
+                let hidden = entry
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_none_or(|name| name.starts_with('.'));
+                if hidden {
+                    continue;
+                }
+                let document =
+                    matches!(entelechy_formats::extension(&entry).as_str(), "ent" | "esn");
+                match store.kind(&entry) {
+                    Some(crate::store::Kind::Dir) => found.extend(documents_under(store, &entry)),
+                    Some(crate::store::Kind::File) if document => found.push(entry),
+                    _ => {}
+                }
+            }
+            found
+        }
+        None => Vec::new(),
+    }
+}
+
 /// The file extensions a frame may have.
 const FRAME_EXTENSIONS: [&str; 5] = ["png", "ppm", "pgm", "field", "wav"];
 
@@ -217,6 +255,8 @@ pub(crate) struct Inputs {
     assets: BTreeMap<String, Asset>,
     /// Directory inputs.
     sequences: BTreeMap<String, Sequence>,
+    /// Inputs holding what the language finds wrong in documents.
+    checks: BTreeMap<String, Checks>,
     /// Text inputs with their text.
     texts: BTreeMap<String, String>,
     /// Frame selection failures, reported by the next sync.
@@ -235,6 +275,7 @@ impl Inputs {
             .values()
             .map(|asset| asset.path.clone())
             .chain(self.sequences.values().map(|sequence| sequence.dir.clone()))
+            .chain(self.checks.values().map(|checks| checks.path.clone()))
     }
 
     /// Makes `handle` what input `name` holds, releasing what it held.
@@ -262,6 +303,7 @@ impl Inputs {
     ) {
         self.sync_assets(store, declared, readable, host, events);
         self.sync_sequences(store, declared.files, readable, host, events);
+        self.sync_checks(store, declared.files, readable, host, events);
         self.sync_texts(declared.graph, host, events);
     }
 
@@ -504,6 +546,79 @@ impl Inputs {
                 Err(error) => self.frame_events.push(Event::Rejected {
                     path,
                     error: Diagnostic::new(error.to_string()),
+                }),
+            }
+        }
+    }
+
+    /// Checks each `checks` input's documents again when one of them, or
+    /// which there are, changed, and holds what was found as text
+    /// ([`crate::check::problems_text`]); forgets undeclared ones.
+    fn sync_checks(
+        &mut self,
+        store: &dyn Store,
+        files: &entelechy_scene::Files,
+        readable: &dyn Fn(&Path) -> Result<(), String>,
+        host: &mut Host,
+        events: &mut Vec<Event>,
+    ) {
+        let stale: Vec<String> = self
+            .checks
+            .keys()
+            .filter(|name| !files.checks.iter().any(|(wanted, _)| wanted == *name))
+            .cloned()
+            .collect();
+        for name in stale {
+            self.checks.remove(&name);
+            self.forget(host, &name);
+        }
+        for (name, path) in &files.checks {
+            let documents = documents_under(store, path);
+            let stamps: Vec<(PathBuf, Option<Stamp>)> = documents
+                .iter()
+                .map(|document| (document.clone(), store.stamp(document)))
+                .collect();
+            if self
+                .checks
+                .get(name)
+                .is_some_and(|checks| checks.path == *path && checks.documents == stamps)
+            {
+                continue;
+            }
+            self.checks.insert(
+                name.clone(),
+                Checks {
+                    path: path.clone(),
+                    documents: stamps,
+                },
+            );
+            if let Some(why) = std::iter::once(path.as_path())
+                .chain(documents.iter().map(PathBuf::as_path))
+                .find_map(|path| readable(path).err())
+            {
+                self.forget(host, name);
+                events.push(Event::Rejected {
+                    path: path.clone(),
+                    error: Diagnostic::new(why),
+                });
+                continue;
+            }
+            let text = crate::check::problems_text(store, path, &documents);
+            let problems = text.lines().filter(|line| !line.is_empty()).count();
+            let read = entelechy_formats::decode_bytes(text.as_bytes())
+                .and_then(|(data, _)| host.adopt(data).map_err(|error| error.to_string()));
+            match read {
+                Ok(handle) => {
+                    self.hold(host, name, handle);
+                    events.push(Event::Loaded {
+                        name: name.clone(),
+                        path: path.clone(),
+                        detail: format!("{problems} problem(s) in {} document(s)", documents.len()),
+                    });
+                }
+                Err(error) => events.push(Event::Rejected {
+                    path: path.clone(),
+                    error: Diagnostic::new(error),
                 }),
             }
         }
