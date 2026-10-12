@@ -114,6 +114,12 @@ pub(crate) fn history(session: &Session, request: &Request) -> Result<Json, Json
         entelechy_session::Origin::Local => json!("local"),
     };
     let generation = |g: &Option<entelechy_kernel::Generation>| g.map(|g| g.0);
+    let versions = |documents: &[(std::path::PathBuf, u64)]| {
+        documents
+            .iter()
+            .map(|(path, version)| json!({ "path": path.display().to_string(), "version": format!("{version:016x}") }))
+            .collect::<Vec<_>>()
+    };
     let changes: Vec<Json> = session
         .changes_since(since)
         .iter()
@@ -131,12 +137,14 @@ pub(crate) fn history(session: &Session, request: &Request) -> Result<Json, Json
                 entelechy_session::Change::Retired { id, from } => {
                     json!({ "kind": "retired", "kernel": id.to_string(), "from": generation(from) })
                 }
-                entelechy_session::Change::Scene { document } => {
-                    json!({ "kind": "scene", "version": format!("{document:016x}") })
-                }
+                entelechy_session::Change::Scene { document, documents } => json!({
+                    "kind": "scene",
+                    "version": format!("{document:016x}"),
+                    "documents": versions(documents),
+                }),
                 entelechy_session::Change::Documents { written } => json!({
                     "kind": "documents",
-                    "documents": written.iter().map(|(path, version)| json!({ "path": path.display().to_string(), "version": format!("{version:016x}") })).collect::<Vec<_>>(),
+                    "documents": versions(written),
                 }),
                 entelechy_session::Change::Param { name } => json!({ "kind": "param", "name": name }),
                 entelechy_session::Change::Written { node, port } => {

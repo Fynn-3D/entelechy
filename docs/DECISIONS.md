@@ -447,8 +447,9 @@ world changes other than by running (a Kernel published or retired, the
 scene read again, a param set, state written or reset); the frame counts
 the evaluations committed within it. Every change is recorded with its
 origin (its document, the protocol and its channel, or the program), and
-Kernel sources and the texts a compose writes are kept once each by
-digest, so an old generation or document can be read and written again; refused attempts are recorded apart, with why,
+Kernel sources and the texts of the scene's documents, as loaded or
+composed, are kept once each by digest, so an old generation or
+document can be read and written again, however it was edited; refused attempts are recorded apart, with why,
 and move nothing. A snapshot takes the world whole, committed state only,
 with the sources of its laws, and is kept by whoever asked, or written to
 a file where writes are allowed.

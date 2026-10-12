@@ -290,6 +290,13 @@ impl Kernels {
         self.documents.keys().cloned().collect()
     }
 
+    /// Every document with the stamp it was last read at.
+    pub(crate) fn stamps(&self) -> impl Iterator<Item = (&Path, Option<Stamp>)> {
+        self.documents
+            .iter()
+            .map(|(path, state)| (path.as_path(), state.stamp))
+    }
+
     /// Whether `path` was last read at `stamp`.
     pub(crate) fn read_at(&self, path: &Path, stamp: Option<Stamp>) -> bool {
         self.documents

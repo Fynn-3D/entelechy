@@ -538,3 +538,67 @@ fn a_refused_library_is_said_once() {
     let again = session.sync();
     assert!(again.is_empty(), "{again:?}");
 }
+
+/// Each document a scene loads is remembered at the version it loaded,
+/// whatever changed it: a placed graph rewired on disk and a library of
+/// functions alone are read back by path and version.
+#[test]
+fn every_document_a_scene_loads_is_remembered_by_its_version() {
+    let files = Arc::new(Memory::default());
+    let base = |gain: &str| format!("fn gain(x: Float) -> Float {{ return x * {gain}; }}\n");
+    let wired = |by: &str| {
+        format!(
+            "use \"base.ent\";\ninput source: Image;\n\
+             node m: kernel k.m@1 {{ requires {{ field.read; field.write; }} input source: Image <- source; output result: Image; compute {{ return sample(source) * gain(1.0); }} }}\n\
+             output result <- {by}.result;\n"
+        )
+    };
+    put(&files, "base.ent", &base("1.0"));
+    put(&files, "sub.esn", &wired("m"));
+    put(&files, "scene.esn", &root("result"));
+    let mut session = open(
+        &files,
+        entelechy_session::Session::runtime_for("cpu", Default::default()).unwrap(),
+    );
+    session.sync();
+    put(&files, "base.ent", &base("2.0"));
+    session.sync();
+    // The graph's output is rewired through a node of its own; no Kernel
+    // of it changes.
+    let rewired = wired("n").replace(
+        "output result <-",
+        "node n: kernel k.n@1 { requires { field.read; field.write; } input source: Image <- m.result; output result: Image; compute { return sample(source); } }\noutput result <-",
+    );
+    put(&files, "sub.esn", &rewired);
+    session.sync();
+    let version = |text: &str| entelechy_session::history::digest(text);
+    for (path, text) in [
+        ("base.ent", base("1.0")),
+        ("base.ent", base("2.0")),
+        ("sub.esn", wired("m")),
+        ("sub.esn", rewired.clone()),
+    ] {
+        assert_eq!(
+            session.document_at(Path::new(path), version(&text)),
+            Ok(text),
+            "{path}"
+        );
+    }
+    // A version is its own document's, and is recorded once.
+    assert!(
+        session
+            .document_at(Path::new("sub.esn"), version(&base("1.0")))
+            .is_err()
+    );
+    let named = session
+        .changes_since(0)
+        .into_iter()
+        .filter_map(|record| match record.change {
+            entelechy_session::Change::Scene { documents, .. } => Some(documents),
+            _ => None,
+        })
+        .flatten()
+        .filter(|(path, _)| path.ends_with("base.ent"))
+        .count();
+    assert_eq!(named, 2);
+}

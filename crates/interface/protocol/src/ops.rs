@@ -339,7 +339,7 @@ pub fn operations() -> Vec<Operation> {
                 may(
                     "generation",
                     Ty::Int,
-                    "one the session remembers (the scene a change loaded, or a document a compose wrote); the current when not given",
+                    "one the session remembers (a document of the scene as a change loaded it or a compose wrote it); the current when not given",
                 ),
             ],
             "manifest, generation, source, as `publish` takes it",

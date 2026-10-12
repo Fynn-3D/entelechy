@@ -178,6 +178,14 @@ impl Scene {
         self.text.as_deref()
     }
 
+    /// The graph documents the running scene places, with the stamp each
+    /// was read at.
+    pub(crate) fn placed(&self) -> impl Iterator<Item = (&Path, Option<Stamp>)> {
+        self.sub_graphs
+            .iter()
+            .map(|(path, stamp)| (path.as_path(), *stamp))
+    }
+
     /// The scene's file inputs and outputs.
     pub(crate) fn files(&self) -> &entelechy_scene::Files {
         &self.files

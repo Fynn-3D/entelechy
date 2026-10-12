@@ -175,8 +175,9 @@ the source a Kernel had then, while history remembers it.
 ## Scene
 
 `document` answers the scene's `version`, a digest of its text, and with
-a `version` a text the session remembers: the scene a `scene` change
-loaded, or a document a `compose` wrote. `compose`
+a `version` a text the session remembers: a document of the scene as a
+`scene` change loaded it, or as a `compose` wrote it, edited on disk or
+over the protocol alike. `compose`
 answers the version it wrote; with `expect` it writes only if the
 document is still that version, else refuses with the current one.
 Composing an old text against the standing version rolls that document
@@ -383,7 +384,10 @@ its origin: a document on disk, or the protocol and its channel
 a change arrived, not who sent it: an edit found on disk while a request
 is answered is its document's; the scene a `compose` or `param` loads is
 the request's. A `compose` is one `documents` change listing each
-document it wrote with its version, which `document` reads back. Refused attempts are listed with why and move nothing.
+document it wrote with its version; a `scene` change lists, under
+`documents`, the scene's other documents it loaded at a version not
+remembered before. `document` reads each back. Refused attempts are
+listed with why and move nothing.
 History is bounded and holds changes, never whole worlds.
 
 ## Help

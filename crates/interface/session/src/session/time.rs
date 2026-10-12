@@ -2,7 +2,7 @@
 //! change lands whole or not at all; a refused one leaves world, laws,
 //! structure and history as they were, and records the attempt.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use entelechy_graph::Report;
@@ -434,7 +434,32 @@ impl Session {
         }
         if scene_loaded {
             let text = self.scene.text().unwrap_or_default().to_owned();
-            self.history.scene(&text, scene_origin);
+            let loaded = self.loaded_documents();
+            self.history.scene(&text, &loaded, scene_origin);
         }
+    }
+
+    /// The scene's other documents a compose may write, each with its text
+    /// as the session read it: a document changed on disk since, or whose
+    /// text does not parse, is left for the load that reads it.
+    fn loaded_documents(&self) -> Vec<(PathBuf, String)> {
+        let store = self.store();
+        let root = self.scene.root();
+        let mut loaded: Vec<(PathBuf, String)> = self
+            .scene
+            .placed()
+            .chain(self.kernels.stamps())
+            .filter(|(path, stamp)| *path != root && stamp.is_some())
+            .filter_map(|(path, stamp)| {
+                let landed = self.composable(&store.whole(path)).ok()?;
+                let text = store.read_text(path).ok()?;
+                let unchanged = store.stamp(path) == stamp;
+                let parses = entelechy_language::parse_document(&text).is_ok();
+                (unchanged && parses).then_some((landed, text))
+            })
+            .collect();
+        loaded.sort_by(|a, b| a.0.cmp(&b.0));
+        loaded.dedup_by(|a, b| a.0 == b.0);
+        loaded
     }
 }

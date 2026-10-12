@@ -2,8 +2,9 @@
 //! revision, moved by every change but running (publish, retire, scene
 //! read, param, state written or reset), and the frames committed since.
 //! Changes and refused attempts are remembered with their origin, within
-//! fixed bounds, newest kept. Kernel sources are kept once by digest, so
-//! a generation the registry released stays readable. Whole worlds are
+//! fixed bounds, newest kept. Kernel sources and the scene's document
+//! texts are kept once by digest, so a generation the registry released
+//! and a document's earlier version stay readable. Whole worlds are
 //! snapshots, kept by whoever took them.
 
 use std::collections::{BTreeMap, VecDeque};
@@ -59,10 +60,13 @@ pub enum Change {
         from: Option<Generation>,
     },
     /// The scene graph was rebuilt from a document version
-    /// ([`History::source`]).
+    /// ([`History::source`]), with the other documents of the scene it
+    /// loaded at versions not remembered before.
     Scene {
         /// The document's text, by digest.
         document: u64,
+        /// Each other document loaded at a new version, and that version.
+        documents: Vec<(PathBuf, u64)>,
     },
     /// Documents of the scene were written by a compose, each by its one
     /// name and its text, by digest ([`History::source`]).
@@ -145,6 +149,9 @@ pub(crate) struct History {
     sources: BTreeMap<u64, (String, usize)>,
     /// Each Kernel's generation as last recorded, for a change's `from`.
     current: BTreeMap<KernelId, Generation>,
+    /// Each document's version as last recorded, so a scene records only
+    /// the documents it loaded at a new one.
+    latest: BTreeMap<PathBuf, u64>,
 }
 
 /// Seconds since the Unix epoch; zero where the machine has no clock.
@@ -201,19 +208,39 @@ impl History {
         );
     }
 
-    /// The scene rebuilt from `text`, which is kept.
-    pub(crate) fn scene(&mut self, text: &str, origin: Origin) {
+    /// The scene rebuilt from `text`, with its other documents `loaded`;
+    /// the texts are kept, the others' only when new to their path.
+    pub(crate) fn scene(&mut self, text: &str, loaded: &[(PathBuf, String)], origin: Origin) {
         let document = self.keep(text);
-        self.record(origin, Change::Scene { document });
+        let documents = self.versions(loaded, true);
+        self.record(
+            origin,
+            Change::Scene {
+                document,
+                documents,
+            },
+        );
     }
 
     /// Documents a compose wrote, whose texts are kept.
     pub(crate) fn documents(&mut self, written: &[(PathBuf, String)], origin: Origin) {
-        let written = written
-            .iter()
-            .map(|(path, text)| (path.clone(), self.keep(text)))
-            .collect();
+        let written = self.versions(written, false);
         self.record(origin, Change::Documents { written });
+    }
+
+    /// Each text kept and its path's latest version set; with `new_only`,
+    /// a text already its path's latest is left out.
+    fn versions(&mut self, texts: &[(PathBuf, String)], new_only: bool) -> Vec<(PathBuf, u64)> {
+        let mut versions = Vec::new();
+        for (path, text) in texts {
+            if new_only && self.latest.get(path) == Some(&digest(text)) {
+                continue;
+            }
+            let version = self.keep(text);
+            self.latest.insert(path.clone(), version);
+            versions.push((path.clone(), version));
+        }
+        versions
     }
 
     /// Anything else that changed the world.
@@ -267,13 +294,13 @@ impl History {
     pub(crate) fn scene_text(&self, digest: u64) -> Option<&str> {
         self.changes
             .iter()
-            .any(|record| matches!(record.change, Change::Scene { document } if document == digest))
+            .any(|record| matches!(record.change, Change::Scene { document, .. } if document == digest))
             .then(|| self.source(digest))
             .flatten()
     }
 
     /// A text the document at `path` had, by digest, when a remembered
-    /// compose wrote it or, for the scene, a remembered change loaded it.
+    /// compose wrote it or a remembered scene change loaded it.
     pub(crate) fn document_text(
         &self,
         path: &std::path::Path,
@@ -284,7 +311,15 @@ impl History {
             Change::Documents { written } => written
                 .iter()
                 .any(|(at, version)| at == path && *version == digest),
-            Change::Scene { document } => scene && *document == digest,
+            Change::Scene {
+                document,
+                documents,
+            } => {
+                (scene && *document == digest)
+                    || documents
+                        .iter()
+                        .any(|(at, version)| at == path && *version == digest)
+            }
             _ => false,
         });
         written.then(|| self.source(digest)).flatten()
@@ -323,14 +358,27 @@ impl History {
         {
             match gone.change {
                 Change::Published { source, .. } => self.forget(source),
-                Change::Scene { document } => self.forget(document),
-                Change::Documents { written } => {
-                    for (_, version) in written {
-                        self.forget(version);
-                    }
+                Change::Scene {
+                    document,
+                    documents,
+                } => {
+                    self.forget(document);
+                    self.forget_versions(documents);
                 }
+                Change::Documents { written } => self.forget_versions(written),
                 _ => {}
             }
+        }
+    }
+
+    /// Forgets the versions a dropped record named; a path's latest
+    /// version no record names any more is recorded again when loaded.
+    fn forget_versions(&mut self, versions: Vec<(PathBuf, u64)>) {
+        for (path, version) in versions {
+            if self.latest.get(&path) == Some(&version) {
+                self.latest.remove(&path);
+            }
+            self.forget(version);
         }
     }
 
