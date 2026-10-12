@@ -156,7 +156,14 @@ pub(crate) fn problems_text(
                 continue;
             }
             let (file, at, message) = placed(&line);
-            let file = named(Path::new(&file));
+            // A document that fails where it is used is said after its
+            // user's name: `user.ent:/path/used.ent`.
+            let file = file
+                .rsplit_once(':')
+                .map(|(_, used)| used)
+                .filter(|used| store.exists(Path::new(used)))
+                .unwrap_or(&file);
+            let file = named(Path::new(file));
             let file = file
                 .strip_prefix(&base)
                 .unwrap_or(&file)

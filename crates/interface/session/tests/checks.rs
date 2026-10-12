@@ -79,6 +79,21 @@ fn a_checks_input_holds_the_problems_found_and_follows_the_documents() {
 }
 
 #[test]
+fn a_used_document_that_does_not_parse_is_said_by_its_own_path() {
+    let dir = scratch("used");
+    std::fs::write(
+        dir.join("src/lib/warm.ent"),
+        "fn warm(x: Float) -> Vec3 {\n    let y = x\n    return vec3(y, 0.0, 0.0);\n}\n",
+    )
+    .unwrap();
+    let mut session = open(&dir);
+    let found = text(&mut session);
+    assert!(found.starts_with("lib/warm.ent:3:5: "), "{found}");
+    assert_eq!(found.lines().count(), 1, "{found}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn what_a_check_finds_is_text() {
     let dir = scratch("typed");
     std::fs::write(
