@@ -339,9 +339,6 @@ pub struct Evaluator {
     overlap: bool,
     /// The frame committed and not yet confirmed.
     unconfirmed: Option<frames::Unconfirmed>,
-    /// How long the last evaluation waited for the frame before it; see
-    /// [`Evaluator::device_waited`].
-    waited: std::time::Duration,
     /// Frames answered as committed and taken back since last asked; see
     /// [`Evaluator::take_taken_back`].
     taken_back: u64,

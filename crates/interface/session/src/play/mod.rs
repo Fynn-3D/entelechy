@@ -396,6 +396,7 @@ impl Play {
     /// and names the picture and sound.
     pub fn frame(&mut self, session: &mut Session, view: View) -> Frame {
         let begun = (self.clock)();
+        let waited_before = session.device_waited();
         for event in session.sync() {
             self.said.push(event.to_string());
         }
@@ -441,15 +442,14 @@ impl Play {
                 self.panel = self
                     .hud
                     .then(|| self.panel_for(session, &report, picture, &context));
-                // The frame's own work on the processor: all of it but the
-                // wait for the frame before on the device, which is the
-                // device's time, not its. The device's own time is its
-                // clock's, read for a frame it has done (`set_clocked`).
-                let waited = if session.overlaps() {
-                    session.device_waited().as_secs_f64()
-                } else {
-                    0.0
-                };
+                // The frame's own work on the processor: all of it but its
+                // waits for the device, which are the device's time, not
+                // its. The device's own time is its clock's, read for a
+                // frame it has done (`set_clocked`).
+                let waited = session
+                    .device_waited()
+                    .saturating_sub(waited_before)
+                    .as_secs_f64();
                 let working = (self.clock)() - begun - waited;
                 self.stats.record(
                     std::time::Duration::from_secs_f64(working.max(0.0)),

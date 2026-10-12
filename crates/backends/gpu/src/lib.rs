@@ -22,6 +22,7 @@ mod timing;
 mod wait;
 pub mod wgsl;
 
+use wait::Spent;
 pub use wait::Wait;
 
 use failure::*;
@@ -56,6 +57,8 @@ impl std::error::Error for GpuError {}
 pub struct GpuBackend {
     /// How to wait for the device: block, or give the page turns.
     wait: Wait,
+    /// The time callers have spent blocked on the device's work.
+    spent: Spent,
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
     device: wgpu::Device,
@@ -191,6 +194,7 @@ impl GpuBackend {
         let adapter_name = adapter.get_info().name;
         Ok(Self {
             wait,
+            spent: Spent::default(),
             instance,
             adapter,
             device,
@@ -286,7 +290,9 @@ impl Backend for GpuBackend {
     /// wait, so a caller timing a frame calls this; a Player gets it from
     /// presenting.
     fn settle_device(&self) {
-        let _ = self.wait.drain(&self.device, &self.queue);
+        let _ = self
+            .spent
+            .time(|| self.wait.drain(&self.device, &self.queue));
     }
 
     fn submitted(&self) -> Option<Box<dyn Check>> {
@@ -294,6 +300,7 @@ impl Backend for GpuBackend {
         let after = self.queue.submit(std::iter::empty());
         Some(Box::new(Submitted {
             wait: self.wait,
+            spent: self.spent.clone(),
             device: self.device.clone(),
             queue: self.queue.clone(),
             after,
@@ -484,6 +491,7 @@ impl Backend for GpuBackend {
         let check = failure.map(|pair| {
             Box::new(FailureCheck {
                 wait: self.wait,
+                spent: self.spent.clone(),
                 device: self.device.clone(),
                 queue: self.queue.clone(),
                 pair: Some(pair),
@@ -582,8 +590,10 @@ impl Backend for GpuBackend {
             });
         encoder.copy_buffer_to_buffer(&image.buffer, 0, &staging, 0, size);
         self.submit(encoder.finish());
-        self.wait
-            .map_read(&self.device, &self.queue, staging.slice(..))?;
+        self.spent.time(|| {
+            self.wait
+                .map_read(&self.device, &self.queue, staging.slice(..))
+        })?;
         let bytes: Vec<u8> = {
             let view = staging
                 .slice(..)
@@ -622,6 +632,7 @@ impl Backend for GpuBackend {
         let after = self.submit(encoder.finish());
         Ok(Box::new(Coming {
             wait: self.wait,
+            spent: self.spent.clone(),
             device: self.device.clone(),
             queue: self.queue.clone(),
             staging,
@@ -643,5 +654,9 @@ impl Backend for GpuBackend {
             return Err("image is resident on a different backend".into());
         };
         self.same_buffers(&a.buffer, &b.buffer, byte_len)
+    }
+
+    fn waited(&self) -> std::time::Duration {
+        self.spent.total()
     }
 }

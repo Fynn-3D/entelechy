@@ -7,6 +7,7 @@ use super::*;
 /// [`Backend::download_later`].
 pub(crate) struct Coming {
     pub(crate) wait: Wait,
+    pub(crate) spent: Spent,
     pub(crate) device: wgpu::Device,
     pub(crate) queue: wgpu::Queue,
     pub(crate) staging: wgpu::Buffer,
@@ -18,8 +19,10 @@ pub(crate) struct Coming {
 impl entelechy_rules::Downloading for Coming {
     fn take(self: Box<Self>) -> Result<Vec<u8>, String> {
         let slice = self.staging.slice(..);
-        self.wait
-            .map_read_after(&self.device, &self.queue, slice, &self.after)?;
+        self.spent.time(|| {
+            self.wait
+                .map_read_after(&self.device, &self.queue, slice, &self.after)
+        })?;
         let bytes = slice
             .get_mapped_range()
             .map_err(|error| error.to_string())?[..self.byte_len]
@@ -32,6 +35,7 @@ impl entelechy_rules::Downloading for Coming {
 /// Every run submitted before it, finished: [`Backend::submitted`].
 pub(crate) struct Submitted {
     pub(crate) wait: Wait,
+    pub(crate) spent: Spent,
     pub(crate) device: wgpu::Device,
     pub(crate) queue: wgpu::Queue,
     pub(crate) after: wgpu::SubmissionIndex,
@@ -39,8 +43,8 @@ pub(crate) struct Submitted {
 
 impl Check for Submitted {
     fn wait(self: Box<Self>) -> Result<(), ExecutionError> {
-        self.wait
-            .done_after(&self.device, &self.queue, &self.after)
+        self.spent
+            .time(|| self.wait.done_after(&self.device, &self.queue, &self.after))
             .map_err(ExecutionError::Device)
     }
 }

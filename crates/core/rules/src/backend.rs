@@ -463,6 +463,14 @@ pub trait Backend: Send + Sync {
     ) -> Result<bool, String> {
         Ok(self.download(a, byte_len)? == self.download(b, byte_len)?)
     }
+
+    /// How long callers of this backend have been blocked waiting for its
+    /// device's work, in all, since it was made: every wait for a run, a
+    /// download, a comparison or a mark counts where it happens. Zero
+    /// where no device keeps work after a call returns.
+    fn waited(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
 }
 
 #[cfg(test)]

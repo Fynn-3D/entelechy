@@ -401,6 +401,40 @@ fn a_small_output_found_unchanged_while_sparing_nothing_rests() {
 }
 
 #[test]
+fn every_wait_for_the_device_is_counted() {
+    // A download waits for the run before it; the time it was blocked is
+    // the backend's to tell, summed.
+    let Some(gpu) = gpu() else { return };
+    let backend: Box<dyn Backend> = Box::new(gpu);
+    let mut runtime = entelechy_kernel::Runtime::with_backend(1 << 24, backend);
+    load(
+        &mut runtime,
+        "kernel test.heavy@1 { requires { field.write; } output result: Rows<Float>; compute { return loop 4000 with a = float(element()) { a * 0.999 + sin(a) }; } }",
+    );
+    let graph = entelechy_scene::parse(
+        "node heavy: test.heavy@1 { domain = 65536; }
+         output result <- heavy.result;",
+    )
+    .unwrap();
+    let mut evaluator = entelechy_graph::Evaluator::new();
+    let empty: std::collections::BTreeMap<String, entelechy_abi::Handle> =
+        std::collections::BTreeMap::new();
+    let no_params: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
+    let before = runtime.device_waited();
+    let report = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &empty,
+            &Context::default(),
+            &no_params,
+        )
+        .unwrap();
+    runtime.materialize(report.output).unwrap();
+    assert!(runtime.device_waited() > before);
+}
+
+#[test]
 fn a_clocked_frame_gives_the_devices_busy_time_without_waiting_for_it() {
     // Clocked, each frame's runs are stamped by the device's clock and read
     // once it has done them: a frame later, its busy time is there.

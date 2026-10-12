@@ -8,6 +8,35 @@ use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
+/// The time spent blocked waiting for the device's work, summed over
+/// every wait that counts it: [`Backend::waited`] reads it. Shared by the
+/// backend and what it hands out to wait later (marks, checks, downloads).
+///
+/// [`Backend::waited`]: entelechy_rules::Backend::waited
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Spent(Arc<std::sync::atomic::AtomicU64>);
+
+impl Spent {
+    /// `wait`'s answer, its time counted.
+    /// A page has no clock to ask: there nothing is counted.
+    pub(crate) fn time<T>(&self, wait: impl FnOnce() -> T) -> T {
+        if cfg!(all(target_arch = "wasm32", target_os = "unknown")) {
+            return wait();
+        }
+        let started = std::time::Instant::now();
+        let answer = wait();
+        let nanos = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        self.0
+            .fetch_add(nanos, std::sync::atomic::Ordering::Relaxed);
+        answer
+    }
+
+    /// All the time counted so far.
+    pub(crate) fn total(&self) -> std::time::Duration {
+        std::time::Duration::from_nanos(self.0.load(std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
 /// How to wait: block, or park with the host until it is woken.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Wait(Option<Parking>);

@@ -51,12 +51,6 @@ impl Evaluator {
         }
     }
 
-    /// How long the last overlapping evaluation waited for the frame
-    /// before it to finish on the device: what overlapping did not hide.
-    pub fn device_waited(&self) -> std::time::Duration {
-        self.waited
-    }
-
     /// How many frames answered as committed were taken back since last
     /// asked: a frame found failed is one, the frame made from it had its
     /// failure as its answer.
@@ -84,7 +78,6 @@ impl Evaluator {
         ran: Vec<NodeId>,
     ) -> Result<Vec<(NodeId, String)>, EvaluateError> {
         let (advanced, replaced) = self.commit_holding(graph)?;
-        self.waited = std::time::Duration::ZERO;
         let frame = Unconfirmed {
             checks,
             mark: runtime.submitted(),
@@ -92,12 +85,7 @@ impl Evaluator {
             ran,
         };
         match self.unconfirmed.replace(frame) {
-            Some(before) => {
-                let started = entelechy_kernel::clock::now();
-                let settled = self.settle_frame(before, runtime);
-                self.waited = entelechy_kernel::clock::since(started);
-                settled.map(|()| advanced)
-            }
+            Some(before) => self.settle_frame(before, runtime).map(|()| advanced),
             None => Ok(advanced),
         }
     }

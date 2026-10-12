@@ -1220,10 +1220,10 @@ impl Session {
         self.node_clock.times(&self.runtime.clocked_frame()?)
     }
 
-    /// How long the last evaluation waited for the frame before it; see
-    /// [`entelechy_graph::Evaluator::device_waited`].
+    /// How long callers have been blocked on the device's work in all;
+    /// see [`entelechy_kernel::Runtime::device_waited`].
     pub fn device_waited(&self) -> std::time::Duration {
-        self.evaluator.device_waited()
+        self.runtime.device_waited()
     }
 
     /// Confirms the frame in flight, if any; see

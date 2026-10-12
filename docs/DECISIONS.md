@@ -1159,7 +1159,10 @@ a submission ([wait](../crates/backends/gpu/src/wait.rs),
 ## A frame's device time is the device's to tell
 
 The Player's frame-data line shows the frame's interval, the processor's
-work on it (`cpu`, its waits for the device left out), and how long the
+work on it (`cpu`, every wait for the device left out: the waits for the
+frame before, and those in the middle of a frame, a download or a
+comparison, each counted by the backend where its caller blocks,
+`Backend::waited`), and how long the
 device was busy with it (`gpu`), and under it the nodes that kept the
 device busiest. The device's time is taken without waiting for it: while
 the line shows, every run the device is given, work or copy, is noted as
@@ -1175,10 +1178,11 @@ Nothing about how frames run changes while they are clocked, and nothing
 is clocked while the line is hidden; over the protocol `evaluate` clocks
 with `clock` and answers `device`.
 
-**Why.** A reading that waits for the device changes what it reads: the
-line once settled the device every frame to time it, which stopped the
-frames overlapping, and a wait taken as the device's time measures only
-what overlapping did not hide. A device's own timestamps would be
+**Why.** A reading that waits for the device changes what it reads: a
+line that settles the device every frame to time it stops the frames
+overlapping, and a wait taken as the device's time measures only what
+overlapping did not hide. A wait is the device's time wherever it falls,
+so the one place that blocks is the one that counts it. A device's own timestamps would be
 better, but a driver may take them and resolve nothing; every device
 says when work is done. With `frame`, `cpu` and `gpu` side by side, the
 frame follows whichever of the two is the longer.
@@ -1186,9 +1190,11 @@ frame follows whichever of the two is the longer.
 **Where.** `Frames` ([timing](../crates/backends/gpu/src/timing.rs)),
 `Backend::set_clocked` ([rules](../crates/core/rules/src/backend.rs)),
 `NodeClock` ([clocked](../crates/interface/session/src/clocked.rs)),
+`Backend::waited` and the GPU's `Spent` ([wait](../crates/backends/gpu/src/wait.rs)),
 `Stats` ([hud](../crates/interface/session/src/play/hud.rs)) and
 `Play::frame` ([play](../crates/interface/session/src/play/mod.rs)). Held
-by the clocked frame tests ([gpu](../crates/interface/session/tests/gpu.rs)).
+by the clocked frame tests and the waits counted
+([gpu](../crates/interface/session/tests/gpu.rs)).
 
 ## A frame runs what something reads
 

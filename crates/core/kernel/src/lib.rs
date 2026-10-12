@@ -780,6 +780,12 @@ impl Runtime {
         self.backend().settle_device();
     }
 
+    /// How long callers have been blocked on the main backend's device in
+    /// all ([`Backend::waited`]).
+    pub fn device_waited(&self) -> std::time::Duration {
+        self.backend.waited()
+    }
+
     /// A mark of every run submitted so far ([`Backend::submitted`]).
     pub fn submitted(&self) -> Option<Box<dyn Check>> {
         self.backend().submitted()

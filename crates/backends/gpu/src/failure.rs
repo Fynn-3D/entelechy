@@ -6,8 +6,9 @@ use super::*;
 /// A device run's failure word: the first failing element, in row-major
 /// order, and why. Read once the device is waited for.
 pub(crate) struct FailureCheck {
-    /// How the device is waited for.
+    /// How the device is waited for, and the time it is counted in.
     pub(crate) wait: Wait,
+    pub(crate) spent: Spent,
     pub(crate) device: wgpu::Device,
     pub(crate) queue: wgpu::Queue,
     /// The failure word and its readback buffer, back to the pile once read.
@@ -32,8 +33,11 @@ impl Check for FailureCheck {
     fn wait(mut self: Box<Self>) -> Result<(), ExecutionError> {
         let (word_buffer, back) = self.pair.take().expect("a check is waited on once");
         let slice = back.slice(..);
-        self.wait
-            .map_read_after(&self.device, &self.queue, slice, &self.submitted)
+        self.spent
+            .time(|| {
+                self.wait
+                    .map_read_after(&self.device, &self.queue, slice, &self.submitted)
+            })
             .map_err(ExecutionError::Device)?;
         let (word, blocks, left, total) = {
             let bytes = slice

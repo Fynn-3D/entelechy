@@ -159,8 +159,10 @@ impl GpuBackend {
         }
         encoder.copy_buffer_to_buffer(&differs, 0, &back, 0, 4);
         self.submit(encoder.finish());
-        self.wait
-            .map_read(&self.device, &self.queue, back.slice(..))?;
+        self.spent.time(|| {
+            self.wait
+                .map_read(&self.device, &self.queue, back.slice(..))
+        })?;
         let word = {
             let view = back
                 .slice(..)
