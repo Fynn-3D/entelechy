@@ -113,10 +113,13 @@ struct Sequence {
     current: Option<usize>,
 }
 
-/// A `checks` input: the file or directory it checks, and each document
-/// found there with its stamp when it was last checked.
+/// A `checks` or an `outline` input: the file or directory it reads,
+/// whether it holds what the documents define (else what is wrong in
+/// them), and each document found there with its stamp when it was last
+/// read.
 struct Checks {
     path: PathBuf,
+    outline: bool,
     documents: Vec<(PathBuf, Option<Stamp>)>,
 }
 
@@ -592,9 +595,10 @@ impl Inputs {
         }
     }
 
-    /// Checks each `checks` input's documents again when one of them, or
-    /// which there are, changed, and holds what was found as text
-    /// ([`crate::check::problems_text`]); forgets undeclared ones.
+    /// Reads each `checks` and `outline` input's documents again when one
+    /// of them, or which there are, changed, and holds what was found as
+    /// text ([`crate::check::problems_text`],
+    /// [`crate::check::outline_text`]); forgets undeclared ones.
     fn sync_checks(
         &mut self,
         store: &dyn Store,
@@ -606,30 +610,40 @@ impl Inputs {
         let stale: Vec<String> = self
             .checks
             .keys()
-            .filter(|name| !files.checks.iter().any(|(wanted, _)| wanted == *name))
+            .filter(|name| {
+                !files
+                    .checks
+                    .iter()
+                    .chain(&files.outlines)
+                    .any(|(wanted, _)| wanted == *name)
+            })
             .cloned()
             .collect();
         for name in stale {
             self.checks.remove(&name);
             self.forget(host, &name);
         }
-        for (name, path) in &files.checks {
+        let wanted = files
+            .checks
+            .iter()
+            .map(|(name, path)| (name, path, false))
+            .chain(files.outlines.iter().map(|(name, path)| (name, path, true)));
+        for (name, path, outline) in wanted {
             let documents = documents_under(store, path);
             let stamps: Vec<(PathBuf, Option<Stamp>)> = documents
                 .iter()
                 .map(|document| (document.clone(), store.stamp(document)))
                 .collect();
-            if self
-                .checks
-                .get(name)
-                .is_some_and(|checks| checks.path == *path && checks.documents == stamps)
-            {
+            if self.checks.get(name).is_some_and(|checks| {
+                checks.path == *path && checks.outline == outline && checks.documents == stamps
+            }) {
                 continue;
             }
             self.checks.insert(
                 name.clone(),
                 Checks {
                     path: path.clone(),
+                    outline,
                     documents: stamps,
                 },
             );
@@ -644,8 +658,17 @@ impl Inputs {
                 });
                 continue;
             }
-            let text = crate::check::problems_text(store, path, &documents);
-            let problems = text.lines().filter(|line| !line.is_empty()).count();
+            let text = if outline {
+                crate::check::outline_text(store, path, &documents)
+            } else {
+                crate::check::problems_text(store, path, &documents)
+            };
+            let lines = text.lines().filter(|line| !line.is_empty()).count();
+            let found = if outline {
+                "definition(s)"
+            } else {
+                "problem(s)"
+            };
             let read = entelechy_formats::decode_bytes(text.as_bytes())
                 .and_then(|(data, _)| host.adopt(data).map_err(|error| error.to_string()));
             match read {
@@ -654,7 +677,7 @@ impl Inputs {
                     events.push(Event::Loaded {
                         name: name.clone(),
                         path: path.clone(),
-                        detail: format!("{problems} problem(s) in {} document(s)", documents.len()),
+                        detail: format!("{lines} {found} in {} document(s)", documents.len()),
                     });
                 }
                 Err(error) => events.push(Event::Rejected {

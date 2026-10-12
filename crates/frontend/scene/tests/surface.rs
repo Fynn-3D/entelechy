@@ -76,6 +76,9 @@ fn lowered(path: &Path) -> Result<String, String> {
     for (name, path) in &lowered.files.checks {
         out.push_str(&format!("// checks {name} {}\n", relative(path, &base)));
     }
+    for (name, path) in &lowered.files.outlines {
+        out.push_str(&format!("// outline {name} {}\n", relative(path, &base)));
+    }
     for (name, dir) in &lowered.files.files {
         out.push_str(&format!("// directory {name} {}\n", relative(dir, &base)));
     }

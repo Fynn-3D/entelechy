@@ -457,6 +457,17 @@ changes:
   directory, a problem with no place at line and column 0, each once, in
   order; a newline alone when there is none. Checked again on sync when
   one of them changes, or which there are.
+- `input defined: Rows<Int> = outline "src/";`: what the documents of a
+  file or a directory define (every `.ent` and `.esn` under it), as
+  text, a line a definition: `file:line:column: kind name: signature`,
+  the file relative to the directory, the column where the name is
+  written; kinds `fn`, `kernel`, `struct`, `type`, `input`, `param`,
+  `output` and `node`, the signature a function's arguments and result,
+  a Kernel's ports and params, a struct's fields, an alias's or an
+  input's or a param's type, a node's Kernel, graph or type (none for an
+  output); in order of file and place. A document that does not parse
+  defines nothing; a newline alone when nothing is defined. Read again on
+  sync when one of them changes, or which there are.
 - `input disk: Rows<Int> = files "project/";`: every file under a
   directory (hidden ones and those under hidden directories left out),
   in path order, a word each count, path byte and file byte: `[n,

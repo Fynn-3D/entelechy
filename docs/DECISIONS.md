@@ -791,6 +791,34 @@ checked once it is written.
 by [the checks tests](../crates/interface/session/tests/checks.rs) and
 the scene surface's `checks.esn`.
 
+## A scene may read what its documents define
+
+A scene input may hold what the documents of a file or a directory
+define: `input defined: Rows<Int> = outline "src/";`, a line a
+definition, `file:line:column: kind name: signature`, read again when
+one changes. It is `checks`' twin: one says where the language finds a
+document wrong, the other what the language finds a document says.
+
+**Why.** An editor, or an agent at work in one, asks where a name is
+defined and what it takes and gives: to go to it, to show its signature
+where the cursor is, to find a symbol by name, to know what a Kernel's
+ports are before wiring it. The language already reads every document
+into its declarations; an input hands that reading to the scene on the
+sync that already watches documents, so no lifecycle is added and no
+second parser is written in a scene. Text, as `checks` gives, is what a
+Kernel reads as it reads any text, and what a person reads too. Only
+what a document declares is given, not types inferred in expressions:
+that would put the compiler under the runtime, which the layers forbid.
+
+**Where.** `outline` in the parser
+([parser](../crates/frontend/language/src/parser.rs)),
+`definitions` ([language](../crates/frontend/language/src/lib.rs)),
+`Files::outlines` ([scene](../crates/frontend/scene/src/lib.rs)),
+`sync_checks` ([inputs](../crates/interface/session/src/inputs.rs)) and
+`outline_text` ([check](../crates/interface/session/src/check.rs)). Held
+by [the outline tests](../crates/interface/session/tests/outline.rs)
+and the scene surface's `outline.esn`.
+
 ## A scene may read and change a directory's files
 
 A scene input may hold every file under a directory, its path and its

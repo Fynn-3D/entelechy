@@ -181,6 +181,58 @@ pub(crate) fn problems_text(
         .collect()
 }
 
+/// What `documents` define (those of `root`, a file or a directory), a
+/// line a definition: `file:line:column: kind name: signature`
+/// ([`entelechy_language::definitions`]), the file relative to `root`
+/// (to its directory when it is a file), `: signature` left out when
+/// there is none; in order of file and place. A document that does not
+/// parse defines nothing. A newline alone when there is nothing, as a
+/// Field holds one character at least.
+pub(crate) fn outline_text(
+    store: &dyn Store,
+    root: &Path,
+    documents: &[std::path::PathBuf],
+) -> String {
+    let base = if store.kind(root) == Some(crate::store::Kind::File) {
+        root.parent().unwrap_or(root)
+    } else {
+        root
+    };
+    let named = |path: &Path| store.canonical(path).unwrap_or_else(|_| store.whole(path));
+    let base = named(base);
+    let mut text = String::new();
+    for document in documents {
+        let file = named(document);
+        let file = file
+            .strip_prefix(&base)
+            .unwrap_or(&file)
+            .display()
+            .to_string();
+        let Ok(source) = store.read(document) else {
+            continue;
+        };
+        let source = String::from_utf8_lossy(&source);
+        let Ok(parsed) = entelechy_language::parse_document(&source) else {
+            continue;
+        };
+        for d in entelechy_language::definitions(&parsed) {
+            let signature = if d.signature.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", d.signature)
+            };
+            text.push_str(&format!(
+                "{file}:{}:{}: {} {}{signature}\n",
+                d.span.line, d.span.column, d.kind, d.name
+            ));
+        }
+    }
+    if text.is_empty() {
+        return "\n".to_owned();
+    }
+    text
+}
+
 /// A problem's line as [`check_document`] says it, taken apart: its
 /// file, its line and column (0 and 0 when it has no place), its message.
 fn placed(line: &str) -> (String, (u32, u32), String) {
@@ -435,6 +487,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                     .checks
                     .iter()
                     .chain(&lowered.files.files)
+                    .chain(&lowered.files.outlines)
                     .any(|(checked, _)| checked == name)
                 {
                     return Some((

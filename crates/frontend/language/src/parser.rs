@@ -1157,13 +1157,15 @@ impl Parser {
         let mut bytes = None;
         let mut checks = None;
         let mut files = None;
+        let mut outline = None;
         if !wired && self.eat_punct("=") {
             let as_text = self.is_keyword("text");
             let as_frames = self.is_keyword("frames");
             let as_bytes = self.is_keyword("bytes");
             let as_checks = self.is_keyword("checks");
             let as_files = self.is_keyword("files");
-            if as_text || as_frames || as_bytes || as_checks || as_files {
+            let as_outline = self.is_keyword("outline");
+            if as_text || as_frames || as_bytes || as_checks || as_files || as_outline {
                 self.next();
             }
             let (token, span) = self.next();
@@ -1171,7 +1173,7 @@ impl Parser {
                 return Err(ParseError {
                     span,
                     message: format!(
-                        "an input's value is a quoted path, `text` and a quoted string, `frames`, a quoted directory and `at` a rate, `bytes` and a quoted path, `checks` and a quoted path, or `files` and a quoted directory, found {}",
+                        "an input's value is a quoted path, `text` and a quoted string, `frames`, a quoted directory and `at` a rate, `bytes` and a quoted path, `checks` or `outline` and a quoted path, or `files` and a quoted directory, found {}",
                         token.describe()
                     ),
                 });
@@ -1202,6 +1204,8 @@ impl Parser {
                 checks = Some(Spanned { value, span });
             } else if as_files {
                 files = Some(Spanned { value, span });
+            } else if as_outline {
+                outline = Some(Spanned { value, span });
             } else {
                 file = Some(Spanned { value, span });
             }
@@ -1224,6 +1228,7 @@ impl Parser {
             bytes,
             checks,
             files,
+            outline,
             otherwise,
             binding_range,
         })

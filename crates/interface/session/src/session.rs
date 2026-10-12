@@ -409,6 +409,7 @@ impl Session {
                 .chain(files.sequences.iter().map(|(_, dir, ..)| dir.clone()))
                 .chain(files.checks.iter().map(|(_, path)| path.clone()))
                 .chain(files.files.iter().map(|(_, dir)| dir.clone()))
+                .chain(files.outlines.iter().map(|(_, path)| path.clone()))
                 .collect()
         } else {
             Vec::new()

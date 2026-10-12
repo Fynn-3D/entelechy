@@ -331,7 +331,7 @@ pub fn forms() -> Vec<Form> {
             "input",
             "kernel",
             "input x: Image;   = \"atlas.png\";   = text \"ENTELECHY\";   = frames \"clip/\" at 30;",
-            "In a Kernel, a Field it reads, bound by the node that runs it (`source <- other.result;`); in a scene, a Field the caller supplies, or one the Host reads from a file, from text, frame by frame from a directory, every file under a directory with its path, or what the language finds wrong in a file's or a directory's documents, as text.",
+            "In a Kernel, a Field it reads, bound by the node that runs it (`source <- other.result;`); in a scene, a Field the caller supplies, or one the Host reads from a file, from text, frame by frame from a directory, every file under a directory with its path, or what the language finds wrong in, or defined by, a file's or a directory's documents, as text.",
         ),
         form(
             "param",

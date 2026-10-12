@@ -1,0 +1,9 @@
+// What the documents of a directory define, held as text the Host reads
+// again when one changes.
+input defined: Rows<Int> = outline "src/";
+
+node show: image.show@1 {
+    defined <- defined;
+}
+
+output result <- show.result;

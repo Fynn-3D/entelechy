@@ -183,6 +183,10 @@ pub struct Files {
     /// bytes: name, resolved directory. The session reads them again when
     /// one changes, or which there are.
     pub files: Vec<(String, PathBuf)>,
+    /// Externals holding what the documents of a file or a directory
+    /// define, as text: name, resolved path. The session reads them again
+    /// when one changes.
+    pub outlines: Vec<(String, PathBuf)>,
     /// The root document's file outputs, written after a committed
     /// evaluation that changed them.
     pub writes: Vec<Write>,
@@ -467,6 +471,7 @@ fn lower(
     lowering.out.files.sequences = level.sequences;
     lowering.out.files.checks = level.checks;
     lowering.out.files.files = level.files;
+    lowering.out.files.outlines = level.outlines;
     lowering.out.graph.params = level.params;
     lowering.out.graph.outputs = level.outputs;
     lowering.out.graph.fallbacks = level.fallbacks;
@@ -500,6 +505,7 @@ struct Level {
     sequences: Vec<(String, PathBuf, String, u32)>,
     checks: Vec<(String, PathBuf)>,
     files: Vec<(String, PathBuf)>,
+    outlines: Vec<(String, PathBuf)>,
     params: Vec<GraphParam>,
     /// Outputs in declaration order; the first is the primary.
     outputs: Vec<(String, Source)>,
@@ -577,6 +583,7 @@ struct Inputs {
     sequences: Vec<(String, PathBuf, String, u32)>,
     checks: Vec<(String, PathBuf)>,
     files: Vec<(String, PathBuf)>,
+    outlines: Vec<(String, PathBuf)>,
 }
 
 /// Where a document is lowered: its node prefix, what its placing graph
@@ -1101,6 +1108,7 @@ impl Lowering<'_, '_> {
         let mut sequences = Vec::new();
         let mut checks = Vec::new();
         let mut files = Vec::new();
+        let mut outlines = Vec::new();
         for input in &document.inputs {
             // What arrives is checked by shape and layout where it binds.
             if input.binding.is_some() {
@@ -1202,6 +1210,24 @@ impl Lowering<'_, '_> {
                 }
                 files.push((input.name.value.clone(), base.join(&dir.value)));
             }
+            if let Some(outlined) = &input.outline {
+                if placement.is_some() {
+                    return Err(error(
+                        outlined.span,
+                        "a placed graph's input is wired by the placing graph; it cannot read what documents define",
+                    ));
+                }
+                let ty = resolved(&input.ty.value, &self.aliases);
+                if ty != "Rows<Int>" {
+                    return Err(error(
+                        input.ty.span,
+                        format!(
+                            "what `outline` finds is text, a character a row: `Rows<Int>`, not `{ty}`"
+                        ),
+                    ));
+                }
+                outlines.push((input.name.value.clone(), base.join(&outlined.value)));
+            }
             externals.push(input.name.value.clone());
         }
         Ok(Inputs {
@@ -1211,6 +1237,7 @@ impl Lowering<'_, '_> {
             sequences,
             checks,
             files,
+            outlines,
         })
     }
 
@@ -1417,6 +1444,7 @@ impl Lowering<'_, '_> {
             sequences,
             checks,
             files,
+            outlines,
         } = self.inputs(document, base, placement)?;
         let params = self.params(document)?;
         // The root's params, read before any sub-graph: a sub-graph's
@@ -1838,6 +1866,7 @@ impl Lowering<'_, '_> {
             sequences,
             checks,
             files,
+            outlines,
             params,
             outputs,
             fallbacks,

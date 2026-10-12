@@ -652,6 +652,9 @@ pub struct PortDecl {
     /// Document inputs only: every file under a directory, its path and
     /// its bytes, `= files "project/"`.
     pub files: Option<Spanned<String>>,
+    /// Document inputs only: what the documents of a file or a directory
+    /// define, as text, `= outline "src/"`.
+    pub outline: Option<Spanned<String>>,
     /// What a file input reads while its file is unreadable:
     /// `... else fresh.result`.
     pub otherwise: Option<SourceRef>,
@@ -938,3 +941,160 @@ impl fmt::Display for ParseError {
 }
 
 impl std::error::Error for ParseError {}
+
+/// One thing a document defines: where its name is written, what it is,
+/// its name, and what it takes and gives as written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Definition {
+    /// Where the name is written.
+    pub span: Span,
+    /// `fn`, `kernel`, `struct`, `type`, `input`, `param`, `output` or `node`.
+    pub kind: &'static str,
+    /// The name; a Kernel's id.
+    pub name: String,
+    /// A function's arguments and result, a Kernel's ports, a struct's
+    /// fields, an alias's type, an input's or a param's type, a node's
+    /// Kernel, graph or type; empty for an output.
+    pub signature: String,
+}
+
+/// What `document` defines, in the order its names are written: its own
+/// functions, structs and aliases, its Kernels (and theirs), its scene's
+/// inputs, params, outputs and nodes.
+pub fn definitions(document: &Document) -> Vec<Definition> {
+    let mut found = Vec::new();
+    let own = |origin: &Option<Origin>| origin.is_none();
+    let fns = |found: &mut Vec<Definition>, functions: &[FnDecl]| {
+        for f in functions.iter().filter(|f| own(&f.origin)) {
+            let generics = if f.generics.is_empty() {
+                String::new()
+            } else {
+                let names: Vec<&str> = f.generics.iter().map(|g| g.value.as_str()).collect();
+                format!("<{}>", names.join(", "))
+            };
+            let args: Vec<String> = f
+                .args
+                .iter()
+                .map(|(name, ty)| format!("{}: {}", name.value, ty.value))
+                .collect();
+            found.push(Definition {
+                span: f.name.span,
+                kind: "fn",
+                name: f.name.value.clone(),
+                signature: format!("{generics}({}) -> {}", args.join(", "), f.ret.value),
+            });
+        }
+    };
+    let structs = |found: &mut Vec<Definition>, structs: &[StructDecl]| {
+        for s in structs.iter().filter(|s| own(&s.origin)) {
+            let fields: Vec<String> = s
+                .fields
+                .iter()
+                .map(|(name, ty)| format!("{}: {}", name.value, ty.value))
+                .collect();
+            found.push(Definition {
+                span: s.name.span,
+                kind: "struct",
+                name: s.name.value.clone(),
+                signature: format!("{{ {} }}", fields.join("; ")),
+            });
+        }
+    };
+    let types = |found: &mut Vec<Definition>, types: &[TypeAlias]| {
+        for t in types.iter().filter(|t| own(&t.origin)) {
+            found.push(Definition {
+                span: t.name.span,
+                kind: "type",
+                name: t.name.value.clone(),
+                signature: t.target.value.clone(),
+            });
+        }
+    };
+    let ports = |ports: &[PortDecl]| -> String {
+        ports
+            .iter()
+            .map(|p| format!("{}: {}", p.name.value, p.ty.value))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    fns(&mut found, &document.functions);
+    structs(&mut found, &document.structs);
+    types(&mut found, &document.types);
+    let kernels = document
+        .kernels
+        .iter()
+        .chain(document.nodes.iter().filter_map(|node| match &node.kind {
+            NodeKind::Inline(kernel) => Some(kernel.as_ref()),
+            _ => None,
+        }));
+    for kernel in kernels {
+        if let Some(id) = &kernel.id {
+            let params: Vec<String> = kernel
+                .params
+                .iter()
+                .map(|p| format!("{}: {}", p.name.value, p.ty.value))
+                .collect();
+            let mut parts = Vec::new();
+            if !kernel.inputs.is_empty() {
+                parts.push(format!("in {}", ports(&kernel.inputs)));
+            }
+            if !params.is_empty() {
+                parts.push(format!("param {}", params.join(", ")));
+            }
+            parts.push(format!("out {}", ports(&kernel.outputs)));
+            found.push(Definition {
+                span: id.span,
+                kind: "kernel",
+                name: id.value.clone(),
+                signature: parts.join("; "),
+            });
+        }
+        fns(&mut found, &kernel.functions);
+        structs(&mut found, &kernel.structs);
+        types(&mut found, &kernel.types);
+    }
+    for input in &document.inputs {
+        found.push(Definition {
+            span: input.name.span,
+            kind: "input",
+            name: input.name.value.clone(),
+            signature: input.ty.value.clone(),
+        });
+    }
+    for param in &document.params {
+        found.push(Definition {
+            span: param.name.span,
+            kind: "param",
+            name: param.name.value.clone(),
+            signature: param.ty.value.clone(),
+        });
+    }
+    for (name, _) in &document.outputs {
+        found.push(Definition {
+            span: name.span,
+            kind: "output",
+            name: name.value.clone(),
+            signature: String::new(),
+        });
+    }
+    for node in &document.nodes {
+        let signature = match &node.kind {
+            NodeKind::Reference(id) => id.value.clone(),
+            NodeKind::Inline(kernel) => kernel
+                .id
+                .as_ref()
+                .map_or_else(String::new, |id| id.value.clone()),
+            NodeKind::SubGraph(path) => format!("graph \"{}\"", path.value),
+            NodeKind::Fill(ty) => ty.value.clone(),
+        };
+        found.push(Definition {
+            span: node.name.span,
+            kind: "node",
+            name: node.name.value.clone(),
+            signature,
+        });
+    }
+    found.sort_by_key(|d| (d.span.line, d.span.column));
+    found.dedup_by(|a, b| a.span == b.span && a.kind == b.kind);
+    found
+}

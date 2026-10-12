@@ -1,0 +1,10 @@
+language 1
+// outline
+input defined: Image;
+
+node show: image.show@1 {
+    defined <- defined;
+}
+
+output result <- show.result;
+// outline defined src
