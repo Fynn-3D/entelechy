@@ -126,7 +126,7 @@ Kernels (`.ent`) compute; scenes (`.esn`) compose them into a running world. Who
 - **stick**: `stick(n: Int) -> Vec2` A pad's axis pair: 0 the left stick, 1 the right, 2 the two triggers (x left, y right). Sticks run -1 to 1 with y away from the person, triggers 0 to 1; all zero without a pad. Needs `input.read`.
 - **wheel**: `wheel() -> Vec2` What the wheel scrolled since the last evaluation, in lines: x sideways, y positive away. Needs `input.read`.
 - **pads**: `pads() -> Int` How many pads are connected: a player shows a pad's prompts while one is, whether or not it has been touched. Needs `input.read`.
-- **key**: `key(code: Int) -> Bool` Whether the key with this code is held: letters and digits by uppercase ASCII, arrows 37 to 40, space 32, enter 13, shift 16, escape 27. Needs `input.read`.
+- **key**: `key(code: Int) -> Bool` Whether the key with this code is held, the browser's codes: letters and digits by uppercase ASCII; backspace 8, tab 9, enter 13, shift 16, control 17, alt 18, escape 27, space 32, page up 33, page down 34, end 35, home 36, arrows 37 to 40 (left, up, right, down), delete 46, command or windows 91; ; 186, = 187, , 188, - 189, . 190, / 191, ` 192, [ 219, \ 220, ] 221, ' 222. A character typed with shift is the key under it on a US keyboard: ( is 57, : is 186. Needs `input.read`.
 - **vec2**: `vec2(x: Float, y: Float) -> Vec2`; `vec2(x: Int, y: Int) -> Vec2` A vector from components, Float or Int (widened), in order; v.xy, v.yx and the like are swizzles.
 - **vec3**: `vec3(x: Float, y: Float, z: Float) -> Vec3`; `vec3(x: Int, y: Int, z: Int) -> Vec3`; `vec3(xy: Vec2, z: Float) -> Vec3`; `vec3(x: Float, yz: Vec2) -> Vec3` A vector from components, Float, Int (widened) or shorter vectors, in order; v.xyz, v.zyx and the like are swizzles.
 - **vec4**: `vec4(x: Float, y: Float, z: Float, w: Float) -> Vec4`; `vec4(x: Int, y: Int, z: Int, w: Int) -> Vec4`; `vec4(xyz: Vec3, w: Float) -> Vec4`; `vec4(xy: Vec2, zw: Vec2) -> Vec4`; `vec4(xy: Vec2, z: Float, w: Float) -> Vec4`; `vec4(x: Float, yzw: Vec3) -> Vec4` A vector from components, Float, Int (widened) or shorter vectors, in order; v.xyz, v.wzyx, c.rgb and the like are swizzles.
@@ -280,7 +280,7 @@ Kernels (`.ent`) compute; scenes (`.esn`) compose them into a running world. Who
 - **pads**: `pads <count>` how many pads are connected from here on, what `pads()` reads
 - **wheel**: `wheel <x> <y>` the scroll for the next frame only
 - **window**: `window <w> <h> [<scale>]` the window in pixels, for `window()`, and its scale factor; one when not given
-- **key**: `key <code> down | up` a key by the browser's code: letters and digits by uppercase ASCII, space 32, enter 13, arrows 37 to 40
+- **key**: `key <code> down | up` a key by the browser's code, as `key()` reads it: letters and digits by uppercase ASCII, space 32, enter 13, arrows 37 to 40, the rest in `help key`
 - **reset**: `reset [<node.port>]` forgets every node's committed state, or one port's
 - **param**: `param <name> <literal>` sets a graph parameter
 - **expect**: `expect <x> <y> = <r> <g> <b> [<tolerance>]` the picture's color at x y from its top left, each channel 0 to 1 as the Kernel wrote it; tolerance 0.01 when not given

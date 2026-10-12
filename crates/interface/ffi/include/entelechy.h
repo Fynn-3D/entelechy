@@ -32,8 +32,7 @@ typedef struct EntelechySession EntelechySession;
  * window in physical pixels (zero by zero for none, then the session's
  * own window applies) and its scale factor, the pointer buttons held as
  * bits (0 left, 1 right, 2 middle), and the keys held as one bit per
- * code 0..255 (letters and digits by uppercase ASCII, arrows 37 to 40,
- * space 32, enter 13, shift 16, escape 27). */
+ * code 0..255, the codes `key()` reads (`entelechy help key`). */
 typedef struct EntelechyInput {
     float time;
     float rate;

@@ -14,7 +14,7 @@ godot --path bridges/godot          # or open the folder in the Godot editor and
 **Connect** opens the socket and asks for `status` and the graph's
 params; **Run** evaluates frame after frame: every `evaluate` carries the
 pointer in output pixels, the buttons held, what the wheel scrolled, the
-keys down (letters and digits by uppercase ASCII, arrows 37 to 40), the
+keys down (the codes `key()` reads, `entelechy help key`), the
 view's size in device pixels as the window and the screen's scale factor;
 every frame is then `read` as a PPM and drawn, letterboxed like the
 Player. Click the picture to give it the keys; drag in the fluid, paint

@@ -102,7 +102,7 @@ pub fn forms() -> Vec<Form> {
         form(
             "key",
             "key <code> down | up",
-            "a key by the browser's code: letters and digits by uppercase ASCII, space 32, enter 13, arrows 37 to 40",
+            "a key by the browser's code, as `key()` reads it: letters and digits by uppercase ASCII, space 32, enter 13, arrows 37 to 40, the rest in `help key`",
             &["key 67 down"],
         ),
         form(

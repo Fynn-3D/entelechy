@@ -114,8 +114,10 @@ pub fn present(
     placed
 }
 
-/// Browser-style key code for a key name: a single character by its
-/// ASCII uppercase, or a listed named key.
+/// The browser's code for a key, by the key's name or the character it
+/// typed (`key()` reads these; its help lists them): a letter or a digit
+/// by its ASCII uppercase, a character typed with shift by the key under
+/// it on a US keyboard, or a listed named key.
 pub fn key_code(name: &str) -> Option<i32> {
     let mut chars = name.chars();
     if let (Some(c), None) = (chars.next(), chars.next()) {
@@ -123,6 +125,27 @@ pub fn key_code(name: &str) -> Option<i32> {
         return match upper {
             'A'..='Z' | '0'..='9' => Some(upper as i32),
             ' ' => Some(32),
+            ')' => Some(48),
+            '!' => Some(49),
+            '@' => Some(50),
+            '#' => Some(51),
+            '$' => Some(52),
+            '%' => Some(53),
+            '^' => Some(54),
+            '&' => Some(55),
+            '*' => Some(56),
+            '(' => Some(57),
+            ';' | ':' => Some(186),
+            '=' | '+' => Some(187),
+            ',' | '<' => Some(188),
+            '-' | '_' => Some(189),
+            '.' | '>' => Some(190),
+            '/' | '?' => Some(191),
+            '`' | '~' => Some(192),
+            '[' | '{' => Some(219),
+            '\\' | '|' => Some(220),
+            ']' | '}' => Some(221),
+            '\'' | '"' => Some(222),
             _ => None,
         };
     }
@@ -135,10 +158,16 @@ pub fn key_code(name: &str) -> Option<i32> {
         "Shift" => 16,
         "Control" => 17,
         "Alt" => 18,
+        "PageUp" => 33,
+        "PageDown" => 34,
+        "End" => 35,
+        "Home" => 36,
         "ArrowLeft" => 37,
         "ArrowUp" => 38,
         "ArrowRight" => 39,
         "ArrowDown" => 40,
+        "Delete" => 46,
+        "Super" | "Meta" => 91,
         _ => return None,
     })
 }
@@ -853,5 +882,14 @@ mod tests {
         assert_eq!(key_code("a"), Some(65));
         assert_eq!(key_code("ArrowLeft"), Some(37));
         assert_eq!(key_code("F5"), None);
+        // A character typed with shift is the key under it.
+        assert_eq!(key_code(";"), Some(186));
+        assert_eq!(key_code(":"), Some(186));
+        assert_eq!(key_code("("), Some(57));
+        assert_eq!(key_code("{"), key_code("["));
+        assert_eq!(key_code("\""), Some(222));
+        assert_eq!(key_code("\\"), Some(220));
+        assert_eq!(key_code("Delete"), Some(46));
+        assert_eq!(key_code("Super"), Some(91));
     }
 }

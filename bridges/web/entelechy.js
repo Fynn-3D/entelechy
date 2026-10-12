@@ -422,15 +422,30 @@ class Driver {
     this.listen();
   }
 
-  /// The key codes a Kernel reads: letters and digits by uppercase ASCII,
-  /// arrows 37 to 40, space 32, enter 13, shift 16, escape 27.
+  /// The key codes a Kernel reads (`entelechy help key`): a letter or a
+  /// digit by its ASCII uppercase, a character typed with shift by the
+  /// key under it on a US keyboard, a named key by the browser's code.
   static keyCode(event) {
     if (event.key.length === 1) {
       const upper = event.key.toUpperCase();
-      return upper.charCodeAt(0);
+      if (/^[A-Z0-9 ]$/.test(upper)) return upper.charCodeAt(0);
+      return Driver.TYPED[event.key];
     }
-    return { ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Enter: 13, Shift: 16, Escape: 27, Tab: 9, Backspace: 8 }[event.key];
+    return Driver.NAMED[event.key];
   }
+
+  static TYPED = {
+    ")": 48, "!": 49, "@": 50, "#": 51, "$": 52, "%": 53, "^": 54, "&": 55, "*": 56, "(": 57,
+    ";": 186, ":": 186, "=": 187, "+": 187, ",": 188, "<": 188, "-": 189, "_": 189,
+    ".": 190, ">": 190, "/": 191, "?": 191, "`": 192, "~": 192, "[": 219, "{": 219,
+    "\\": 220, "|": 220, "]": 221, "}": 221, "'": 222, "\"": 222,
+  };
+
+  static NAMED = {
+    Backspace: 8, Tab: 9, Enter: 13, Shift: 16, Control: 17, Alt: 18, Escape: 27,
+    PageUp: 33, PageDown: 34, End: 35, Home: 36,
+    ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Delete: 46, Meta: 91,
+  };
 
   listen() {
     const canvas = this.canvas;

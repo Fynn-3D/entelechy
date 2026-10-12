@@ -125,14 +125,53 @@ func _notification(what: int) -> void:
 			_buttons.clear()
 
 
-## The key codes a Kernel reads: letters and digits by uppercase ASCII,
-## arrows 37 to 40, space 32, enter 13, shift 16, escape 27, tab 9,
-## backspace 8; -1 for a key the protocol does not name.
+## The key codes a Kernel reads (`entelechy help key`): a letter or a
+## digit by its ASCII uppercase, a punctuation key by the browser's code
+## for it on a US keyboard, a named key by the browser's code; -1 for a
+## key the protocol does not name.
 static func key_code(event: InputEventKey) -> int:
 	var key := event.keycode
 	if key >= KEY_A and key <= KEY_Z or key >= KEY_0 and key <= KEY_9 or key == KEY_SPACE:
 		return key
 	match key:
+		KEY_SEMICOLON:
+			return 186
+		KEY_EQUAL:
+			return 187
+		KEY_COMMA:
+			return 188
+		KEY_MINUS:
+			return 189
+		KEY_PERIOD:
+			return 190
+		KEY_SLASH:
+			return 191
+		KEY_QUOTELEFT:
+			return 192
+		KEY_BRACKETLEFT:
+			return 219
+		KEY_BACKSLASH:
+			return 220
+		KEY_BRACKETRIGHT:
+			return 221
+		KEY_APOSTROPHE:
+			return 222
+		KEY_PAGEUP:
+			return 33
+		KEY_PAGEDOWN:
+			return 34
+		KEY_END:
+			return 35
+		KEY_HOME:
+			return 36
+		KEY_DELETE:
+			return 46
+		KEY_CTRL:
+			return 17
+		KEY_ALT:
+			return 18
+		KEY_META:
+			return 91
 		KEY_LEFT:
 			return 37
 		KEY_UP:

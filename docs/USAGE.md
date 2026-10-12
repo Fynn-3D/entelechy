@@ -349,7 +349,7 @@ other documents (`compose` with a `.replay` path). `entelechy help replay` lists
 | `pads <count>` | how many pads are connected from here on, what `pads()` reads | `pads 1` |
 | `wheel <x> <y>` | the scroll for the next frame only | `wheel 0 -1` |
 | `window <w> <h> [<scale>]` | the window in pixels, for `window()`, and its scale factor; one when not given | `window 240 135`, `window 240 135 0.25` |
-| `key <code> down \| up` | a key by the browser's code: letters and digits by uppercase ASCII, space 32, enter 13, arrows 37 to 40 | `key 67 down` |
+| `key <code> down \| up` | a key by the browser's code, as `key()` reads it: letters and digits by uppercase ASCII, space 32, enter 13, arrows 37 to 40, the rest in `help key` | `key 67 down` |
 | `reset [<node.port>]` | forgets every node's committed state, or one port's | `reset`, `reset step.result` |
 | `param <name> <literal>` | sets a graph parameter | `param exposure 1.5` |
 | `expect <x> <y> = <r> <g> <b> [<tolerance>]` | the picture's color at x y from its top left, each channel 0 to 1 as the Kernel wrote it; tolerance 0.01 when not given | `expect 11 10 = 1.0 1.0 1.0`, `expect 11 10 = 1.0 1.0 1.0 0.05` |
