@@ -714,7 +714,7 @@ impl Session {
         // The scene checked whole, as `entelechy check` checks it.
         let checked = crate::check::check_document(&overlay, &root, false);
         if let Some((_, line)) = checked.lines.iter().find(|(problem, _)| *problem) {
-            return Err(placed(&overlay, line, &root));
+            return Err(placed(&overlay, line, &root, &landed));
         }
         let readable = |path: &Path| self.allowed_read(path);
         let granted = |module: &entelechy_ir::Validated| {
@@ -1799,9 +1799,31 @@ fn reached_documents(
 }
 
 /// A problem line of a check (`path:line:column: message`, or `path:
-/// message`) as a refusal of the document it names, the scene when it
-/// names none.
-fn placed(store: &dyn Store, line: &str, root: &Path) -> crate::Refusal {
+/// message`) as a refusal of the document it names: a place a graph names
+/// by its name (`scene:39:6`, as a node says where it is written) is the
+/// graph document of that name among those written, else the scene; the
+/// scene too when the line names none.
+fn placed(
+    store: &dyn Store,
+    line: &str,
+    root: &Path,
+    written: &[(PathBuf, String)],
+) -> crate::Refusal {
+    let document = |named: &str| {
+        let path = store.whole(Path::new(named));
+        if store.kind(&path) == Some(crate::store::Kind::File) {
+            return store.canonical(&path).unwrap_or(path);
+        }
+        written
+            .iter()
+            .map(|(path, _)| path)
+            .find(|path| {
+                path.extension().is_some_and(|e| e == "esn")
+                    && path.file_stem().is_some_and(|stem| stem == named)
+            })
+            .cloned()
+            .unwrap_or_else(|| root.to_path_buf())
+    };
     let bytes = line.as_bytes();
     let mut at = None;
     let mut i = 0;
@@ -1835,16 +1857,13 @@ fn placed(store: &dyn Store, line: &str, root: &Path) -> crate::Refusal {
         i += 1;
     }
     match at {
-        Some((end, line_no, column, message)) => {
-            let path = store.whole(Path::new(&line[..end]));
-            crate::Refusal {
-                path: store.canonical(&path).unwrap_or(path),
-                diagnostic: crate::Diagnostic {
-                    message,
-                    at: Some((line_no, column)),
-                },
-            }
-        }
+        Some((end, line_no, column, message)) => crate::Refusal {
+            path: document(&line[..end]),
+            diagnostic: crate::Diagnostic {
+                message,
+                at: Some((line_no, column)),
+            },
+        },
         None => crate::Refusal {
             path: root.to_path_buf(),
             diagnostic: crate::Diagnostic::new(line),

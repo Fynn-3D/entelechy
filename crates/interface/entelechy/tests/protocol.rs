@@ -1799,6 +1799,12 @@ fn compose_writes_the_scenes_documents_together_or_none() {
             ] }),
             json!({ "id": 10, "op": "compose", "path": "kernels/a.ent", "expect": stale, "text": twice("6.0") }),
             json!({ "id": 11, "op": "compose", "text": start, "documents": [] }),
+            // A fault a node says where it is written is the scene's, at that line.
+            json!({ "id": 13, "op": "compose", "documents": [
+                { "path": "kernels/e.ent", "text": "kernel e.one@1 { requires { field.write; } output result: Rows<Float>; compute { return 1.0; } }\n" },
+                { "path": "kernels/a.ent", "text": format!("use \"e.ent\";\n{}", twice("3.0")) },
+                { "edits": [{ "node": "k", "text": "node k: e.one@1 { domain = 3; }" }] },
+            ] }),
             // A new document whose own use reaches nothing is refused for that, not as unused.
             json!({ "id": 12, "op": "compose", "documents": [
                 { "path": "kernels/c.ent", "text": "use \"nowhere.ent\";\nfn c() -> Float { return 1.0; }\n" },
@@ -1838,7 +1844,8 @@ fn compose_writes_the_scenes_documents_together_or_none() {
         (8, "refers to unknown source `missing.result`"),
         (9, "changed since it was read"),
         (10, "they stand in each"),
-        (11, "nowhere.ent"),
+        (11, "which the scene does not publish"),
+        (12, "nowhere.ent"),
     ] {
         let answer = &responses[index]["error"];
         assert!(
@@ -1864,6 +1871,15 @@ fn compose_writes_the_scenes_documents_together_or_none() {
     );
     assert!(!dir.join("kernels/b.ent").exists());
     assert!(!dir.join("kernels/c.ent").exists());
+    let placed = &responses[11]["error"];
+    assert!(
+        placed["path"]
+            .as_str()
+            .unwrap_or_default()
+            .ends_with("scene.esn"),
+        "{placed}"
+    );
+    assert!(placed["line"].as_u64().is_some(), "{placed}");
     assert!(!dir.with_file_name("outside.ent").exists());
     assert_eq!(
         std::fs::read_to_string(dir.join("shelf/kept.entpkg/kernels/kept.ent")).unwrap(),
