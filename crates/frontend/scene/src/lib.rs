@@ -161,6 +161,9 @@ pub struct Write {
     /// Whether the Field goes out as its bytes, one per element of a
     /// `Rows<Int>`, instead of in the extension's format.
     pub bytes: bool,
+    /// Whether the Field is a list of operations on the files under the
+    /// directory `path` (`to files "dir/"`).
+    pub files: bool,
 }
 
 /// A scene's file contract: inputs read from files, directories read as
@@ -176,6 +179,10 @@ pub struct Files {
     /// of a file or a directory, as text: name, resolved path. The session
     /// checks them again when one changes.
     pub checks: Vec<(String, PathBuf)>,
+    /// Externals holding every file under a directory, its path and its
+    /// bytes: name, resolved directory. The session reads them again when
+    /// one changes, or which there are.
+    pub files: Vec<(String, PathBuf)>,
     /// The root document's file outputs, written after a committed
     /// evaluation that changed them.
     pub writes: Vec<Write>,
@@ -459,6 +466,7 @@ fn lower(
     lowering.out.graph.texts = level.texts;
     lowering.out.files.sequences = level.sequences;
     lowering.out.files.checks = level.checks;
+    lowering.out.files.files = level.files;
     lowering.out.graph.params = level.params;
     lowering.out.graph.outputs = level.outputs;
     lowering.out.graph.fallbacks = level.fallbacks;
@@ -491,6 +499,7 @@ struct Level {
     texts: Vec<(String, String)>,
     sequences: Vec<(String, PathBuf, String, u32)>,
     checks: Vec<(String, PathBuf)>,
+    files: Vec<(String, PathBuf)>,
     params: Vec<GraphParam>,
     /// Outputs in declaration order; the first is the primary.
     outputs: Vec<(String, Source)>,
@@ -567,6 +576,7 @@ struct Inputs {
     texts: Vec<(String, String)>,
     sequences: Vec<(String, PathBuf, String, u32)>,
     checks: Vec<(String, PathBuf)>,
+    files: Vec<(String, PathBuf)>,
 }
 
 /// Where a document is lowered: its node prefix, what its placing graph
@@ -1090,6 +1100,7 @@ impl Lowering<'_, '_> {
         let mut texts = Vec::new();
         let mut sequences = Vec::new();
         let mut checks = Vec::new();
+        let mut files = Vec::new();
         for input in &document.inputs {
             // What arrives is checked by shape and layout where it binds.
             if input.binding.is_some() {
@@ -1173,6 +1184,24 @@ impl Lowering<'_, '_> {
                 }
                 checks.push((input.name.value.clone(), base.join(&checked.value)));
             }
+            if let Some(dir) = &input.files {
+                if placement.is_some() {
+                    return Err(error(
+                        dir.span,
+                        "a placed graph's input is wired by the placing graph; it cannot read a directory's files",
+                    ));
+                }
+                let ty = resolved(&input.ty.value, &self.aliases);
+                if ty != "Rows<Int>" {
+                    return Err(error(
+                        input.ty.span,
+                        format!(
+                            "a directory's files are read as words, their paths and bytes: `Rows<Int>`, not `{ty}`"
+                        ),
+                    ));
+                }
+                files.push((input.name.value.clone(), base.join(&dir.value)));
+            }
             externals.push(input.name.value.clone());
         }
         Ok(Inputs {
@@ -1181,6 +1210,7 @@ impl Lowering<'_, '_> {
             texts,
             sequences,
             checks,
+            files,
         })
     }
 
@@ -1386,6 +1416,7 @@ impl Lowering<'_, '_> {
             texts,
             sequences,
             checks,
+            files,
         } = self.inputs(document, base, placement)?;
         let params = self.params(document)?;
         // The root's params, read before any sub-graph: a sub-graph's
@@ -1797,6 +1828,7 @@ impl Lowering<'_, '_> {
                 output: write.output.clone(),
                 path: base.join(&write.path.value),
                 bytes: write.bytes,
+                files: write.files,
             });
         }
         Ok(Level {
@@ -1805,6 +1837,7 @@ impl Lowering<'_, '_> {
             texts,
             sequences,
             checks,
+            files,
             params,
             outputs,
             fallbacks,
@@ -2554,11 +2587,13 @@ output raw <- first.result to bytes \"raw.bin\";";
                     output: "kept".into(),
                     path: PathBuf::from("./saves/kept.field"),
                     bytes: false,
+                    files: false,
                 },
                 Write {
                     output: "raw".into(),
                     path: PathBuf::from("./raw.bin"),
                     bytes: true,
+                    files: false,
                 },
             ]
         );

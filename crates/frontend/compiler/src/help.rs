@@ -331,7 +331,7 @@ pub fn forms() -> Vec<Form> {
             "input",
             "kernel",
             "input x: Image;   = \"atlas.png\";   = text \"ENTELECHY\";   = frames \"clip/\" at 30;",
-            "In a Kernel, a Field it reads, bound by the node that runs it (`source <- other.result;`); in a scene, a Field the caller supplies, or one the Host reads from a file, from text, frame by frame from a directory, or what the language finds wrong in a file's or a directory's documents, as text.",
+            "In a Kernel, a Field it reads, bound by the node that runs it (`source <- other.result;`); in a scene, a Field the caller supplies, or one the Host reads from a file, from text, frame by frame from a directory, every file under a directory with its path, or what the language finds wrong in a file's or a directory's documents, as text.",
         ),
         form(
             "param",
@@ -343,7 +343,7 @@ pub fn forms() -> Vec<Form> {
             "output",
             "kernel",
             "output result: Grid<Vec4>;   output shown <- node.port;   output kept <- node.port to \"saves/n.field\";",
-            "In a Kernel, a Field it writes, an element per element of its domain (a map may write several); in a scene, a named result: the first picture is what it shows, the first row of one or two Floats (mono, stereo) what it plays, a block each frame joined to the last (`rate()` over the frame rate samples keeps it in time), and one written `to` a file is saved after each evaluation that changed it, where allowed.",
+            "In a Kernel, a Field it writes, an element per element of its domain (a map may write several); in a scene, a named result: the first picture is what it shows, the first row of one or two Floats (mono, stereo) what it plays, a block each frame joined to the last (`rate()` over the frame rate samples keeps it in time), and one written `to` a file is saved after each evaluation that changed it, where allowed; one written `to files` a directory is a list of operations on its files (write, remove, rename), done once each time it changes.",
         ),
         form(
             "type",

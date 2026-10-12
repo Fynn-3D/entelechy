@@ -414,6 +414,8 @@ pub(crate) fn events_json(events: &[Event]) -> Vec<Json> {
             }
             Event::Absent { name, path } => json!({ "kind": "absent", "name": name, "path": path.display().to_string() }),
             Event::Wrote { output, path, bytes } => json!({ "kind": "wrote", "output": output, "path": path.display().to_string(), "bytes": bytes }),
+            Event::Removed { output, path } => json!({ "kind": "removed", "output": output, "path": path.display().to_string() }),
+            Event::Renamed { output, from, to } => json!({ "kind": "renamed", "output": output, "from": from.display().to_string(), "to": to.display().to_string() }),
             Event::WriteRefused { output, path, why } => json!({ "kind": "write_refused", "output": output, "path": path.display().to_string(), "why": why }),
             Event::Large { path, id, why } => json!({ "kind": "large", "path": path.display().to_string(), "id": id.to_string(), "why": why }),
             Event::Unrun { node, why } => json!({ "kind": "unrun", "node": node, "why": why }),

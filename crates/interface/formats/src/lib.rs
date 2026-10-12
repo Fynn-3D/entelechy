@@ -12,6 +12,7 @@
 
 pub mod base64;
 pub mod deflate;
+pub mod directory;
 pub mod file;
 pub mod inflate;
 pub mod midi;

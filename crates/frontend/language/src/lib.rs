@@ -199,8 +199,9 @@ pub struct NodeMemberAt {
     pub range: Range<usize>,
 }
 
-/// `to "file"` or `to bytes "file"` after an output: the file, relative
-/// to the document, the output's Field is written to.
+/// `to "file"`, `to bytes "file"` or `to files "dir/"` after an output:
+/// the file, relative to the document, the output's Field is written to,
+/// or the directory its operations act in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WriteDecl {
     /// The output written.
@@ -210,6 +211,9 @@ pub struct WriteDecl {
     /// Written as bytes, one per `Rows<Int>` element; otherwise in the
     /// format the file's extension names.
     pub bytes: bool,
+    /// The Field is a list of operations on the files under the directory
+    /// `path`: each written, removed or renamed.
+    pub files: bool,
 }
 
 impl Document {
@@ -645,6 +649,9 @@ pub struct PortDecl {
     /// Document inputs only: what the language finds wrong in the
     /// documents of a file or a directory, as text, `= checks "src/"`.
     pub checks: Option<Spanned<String>>,
+    /// Document inputs only: every file under a directory, its path and
+    /// its bytes, `= files "project/"`.
+    pub files: Option<Spanned<String>>,
     /// What a file input reads while its file is unreadable:
     /// `... else fresh.result`.
     pub otherwise: Option<SourceRef>,

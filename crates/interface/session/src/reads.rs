@@ -174,6 +174,15 @@ impl Store for Held {
     fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
         self.inner.write(path, bytes)
     }
+    fn remove(&self, path: &Path) -> io::Result<()> {
+        self.inner.remove(path)
+    }
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.inner.rename(from, to)
+    }
+    fn remove_empty(&self, dir: &Path) -> io::Result<()> {
+        self.inner.remove_empty(dir)
+    }
     fn kind(&self, path: &Path) -> Option<Kind> {
         self.inner.kind(path)
     }

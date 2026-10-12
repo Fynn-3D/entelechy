@@ -120,7 +120,8 @@ fn read_document(source: &str) -> Result<(Document, Outline), ParseError> {
                 if parser.is_keyword("to") {
                     parser.next();
                     let bytes = parser.is_keyword("bytes");
-                    if bytes {
+                    let files = parser.is_keyword("files");
+                    if bytes || files {
                         parser.next();
                     }
                     let (token, span) = parser.next();
@@ -128,7 +129,7 @@ fn read_document(source: &str) -> Result<(Document, Outline), ParseError> {
                         return Err(ParseError {
                             span,
                             message: format!(
-                                "an output is written `to` a quoted path, or `to bytes` and a quoted path, found {}",
+                                "an output is written `to` a quoted path, `to bytes` and a quoted path, or `to files` and a quoted directory, found {}",
                                 token.describe()
                             ),
                         });
@@ -137,6 +138,7 @@ fn read_document(source: &str) -> Result<(Document, Outline), ParseError> {
                         output: name.value.clone(),
                         path: Spanned { value: path, span },
                         bytes,
+                        files,
                     });
                 }
                 parser.expect_punct(";")?;
@@ -1154,12 +1156,14 @@ impl Parser {
         let mut frames = None;
         let mut bytes = None;
         let mut checks = None;
+        let mut files = None;
         if !wired && self.eat_punct("=") {
             let as_text = self.is_keyword("text");
             let as_frames = self.is_keyword("frames");
             let as_bytes = self.is_keyword("bytes");
             let as_checks = self.is_keyword("checks");
-            if as_text || as_frames || as_bytes || as_checks {
+            let as_files = self.is_keyword("files");
+            if as_text || as_frames || as_bytes || as_checks || as_files {
                 self.next();
             }
             let (token, span) = self.next();
@@ -1167,7 +1171,7 @@ impl Parser {
                 return Err(ParseError {
                     span,
                     message: format!(
-                        "an input's value is a quoted path, `text` and a quoted string, `frames`, a quoted directory and `at` a rate, `bytes` and a quoted path, or `checks` and a quoted path, found {}",
+                        "an input's value is a quoted path, `text` and a quoted string, `frames`, a quoted directory and `at` a rate, `bytes` and a quoted path, `checks` and a quoted path, or `files` and a quoted directory, found {}",
                         token.describe()
                     ),
                 });
@@ -1196,6 +1200,8 @@ impl Parser {
                 bytes = Some(Spanned { value, span });
             } else if as_checks {
                 checks = Some(Spanned { value, span });
+            } else if as_files {
+                files = Some(Spanned { value, span });
             } else {
                 file = Some(Spanned { value, span });
             }
@@ -1217,6 +1223,7 @@ impl Parser {
             frames,
             bytes,
             checks,
+            files,
             otherwise,
             binding_range,
         })

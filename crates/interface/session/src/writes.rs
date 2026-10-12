@@ -1,6 +1,9 @@
 //! A scene's file outputs (`output name <- source to "file";`). The
 //! session writes each after a committed evaluation that changed it,
-//! whole, into an allowed directory.
+//! whole, into an allowed directory; an output `to files "dir/"` is a
+//! list of operations on the files under the directory, each done once
+//! when the list changes: a write where writes are allowed, a removal or
+//! a rename where removals are too.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
@@ -21,6 +24,8 @@ pub(crate) struct Writes {
     /// caller's own writes ([`Writes::place`]); a scene's `to` needs an
     /// allowed directory.
     files: Vec<PathBuf>,
+    /// Directories files may be removed from and renamed in, resolved.
+    deletes: Vec<PathBuf>,
     /// Per file: the Field last written, and a digest of its bytes.
     written: BTreeMap<PathBuf, (Handle, u64)>,
     /// Refusals reported, each once until it changes.
@@ -41,6 +46,22 @@ impl Writes {
             ));
         }
         self.allowed.push(resolved);
+        Ok(())
+    }
+
+    /// Allows files in the existing directory `dir` and under it to be
+    /// removed and renamed.
+    pub(crate) fn allow_deletes(&mut self, store: &dyn Store, dir: &Path) -> Result<(), String> {
+        let resolved = store
+            .canonical(dir)
+            .map_err(|e| format!("cannot allow removals in {}: {e}", dir.display()))?;
+        if !store.is_dir(&resolved) {
+            return Err(format!(
+                "cannot allow removals in {}: not a directory",
+                dir.display()
+            ));
+        }
+        self.deletes.push(resolved);
         Ok(())
     }
 
@@ -93,6 +114,10 @@ impl Writes {
             {
                 continue;
             }
+            if write.files {
+                self.operate(store, write, handle, runtime);
+                continue;
+            }
             let outcome = self.place_in(store, &write.path, false).and_then(|target| {
                 encode(runtime, handle, &write.path, write.bytes).map(|b| (target, b))
             });
@@ -129,6 +154,139 @@ impl Writes {
                 }
                 Err(why) => self.refuse(&write.output, &write.path, why),
             }
+        }
+    }
+
+    /// Does the operations output `write` holds, once for each list that
+    /// differs from the last one done: each in order, one refused leaving
+    /// the others to be done.
+    fn operate(
+        &mut self,
+        store: &dyn Store,
+        write: &entelechy_scene::Write,
+        handle: Handle,
+        runtime: &mut Runtime,
+    ) {
+        let ops = runtime
+            .materialize(handle)
+            .map_err(|e| e.to_string())
+            .and_then(|()| runtime.host().data(handle).map_err(|e| e.to_string()))
+            .and_then(|data| {
+                let words: Vec<u8> = data.values().iter().flat_map(|w| w.to_le_bytes()).collect();
+                Ok((digest(&words), entelechy_formats::directory::ops(data)?))
+            });
+        let (digest, ops) = match ops {
+            Ok(read) => read,
+            Err(why) => {
+                self.written.insert(write.path.clone(), (handle, 0));
+                self.refuse(&write.output, &write.path, why);
+                return;
+            }
+        };
+        let last = self.written.insert(write.path.clone(), (handle, digest));
+        if last.is_some_and(|(_, done)| done == digest) {
+            return;
+        }
+        let root = match resolve(store, &write.path) {
+            Ok(root) => root,
+            Err(why) => return self.refuse(&write.output, &write.path, why),
+        };
+        for op in ops {
+            let named = write.path.join(op.path());
+            if let Err(why) = self.done(store, &root, write, &op) {
+                self.refuse(&write.output, &named, why);
+            } else {
+                self.said.retain(|(path, _)| path != &named);
+            }
+        }
+    }
+
+    /// Does one operation under `root`, the directory resolved.
+    fn done(
+        &mut self,
+        store: &dyn Store,
+        root: &Path,
+        write: &entelechy_scene::Write,
+        op: &entelechy_formats::directory::Op,
+    ) -> Result<(), String> {
+        use entelechy_formats::directory::Op;
+        let output = write.output.clone();
+        match op {
+            Op::Write { path, bytes } => {
+                let target = self.place_in(store, &write.path.join(path), false)?;
+                if store.read(&target).is_ok_and(|found| found == *bytes) {
+                    return Ok(());
+                }
+                store
+                    .write(&target, bytes)
+                    .map_err(|e| format!("{}: {e}", target.display()))?;
+                self.events.push(Event::Wrote {
+                    output,
+                    path: write.path.join(path),
+                    bytes: bytes.len(),
+                });
+            }
+            Op::Remove { path } => {
+                let target = self.removable(store, &write.path.join(path))?;
+                store
+                    .remove(&target)
+                    .map_err(|e| format!("{}: {e}", target.display()))?;
+                self.emptied(store, root, &target);
+                self.events.push(Event::Removed {
+                    output,
+                    path: write.path.join(path),
+                });
+            }
+            Op::Rename { from, to } => {
+                let source = self.removable(store, &write.path.join(from))?;
+                let target = self.place_in(store, &write.path.join(to), false)?;
+                if store.exists(&target) {
+                    return Err(format!("{} is there already", target.display()));
+                }
+                store
+                    .rename(&source, &target)
+                    .map_err(|e| format!("{}: {e}", source.display()))?;
+                self.emptied(store, root, &source);
+                self.events.push(Event::Renamed {
+                    output,
+                    from: write.path.join(from),
+                    to: write.path.join(to),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Where a file to be removed or renamed is: a file, inside a directory
+    /// allowed with `--allow file.delete`.
+    fn removable(&self, store: &dyn Store, path: &Path) -> Result<PathBuf, String> {
+        if self.deletes.is_empty() {
+            return Err(format!(
+                "removing and renaming files is not allowed; run with `--allow file.delete={}`",
+                path.parent().unwrap_or(Path::new(".")).display()
+            ));
+        }
+        let target = resolve(store, path)?;
+        if !self.deletes.iter().any(|dir| target.starts_with(dir)) {
+            return Err(format!(
+                "{} is outside every directory allowed with `--allow file.delete`",
+                target.display()
+            ));
+        }
+        if store.kind(&target) != Some(crate::store::Kind::File) {
+            return Err(format!("{} is not a file", target.display()));
+        }
+        Ok(target)
+    }
+
+    /// Removes the directories `gone` left empty, up to `root`.
+    fn emptied(&self, store: &dyn Store, root: &Path, gone: &Path) {
+        let mut dir = gone.parent();
+        while let Some(at) = dir.filter(|at| at.starts_with(root) && *at != root) {
+            if store.remove_empty(at).is_err() {
+                break;
+            }
+            dir = at.parent();
         }
     }
 

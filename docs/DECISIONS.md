@@ -791,6 +791,37 @@ checked once it is written.
 by [the checks tests](../crates/interface/session/tests/checks.rs) and
 the scene surface's `checks.esn`.
 
+## A scene may read and change a directory's files
+
+A scene input may hold every file under a directory, its path and its
+bytes: `input disk: Rows<Int> = files "project/";`, read again when one
+changes. A scene output may change them: `output ops <- x.result to files
+"project/";` is a list of operations, each writing, removing or renaming
+a file, done once each time the list changes. Writes need `--allow
+file.write`; removals and renames need `--allow file.delete` as well.
+
+**Why.** Files are the Host's world; a scene that edits a project (an
+editor, an agent's workshop) needs the project's files as they are on
+disk, which ones there are included, and must make, rename and remove
+them, without the scene being rewritten for each new file. One input and
+one output keep the files on the existing sync and write paths, so no
+lifecycle is added. Operations, not the directory's whole state, are
+written: a list a scene gets wrong refuses or does too little, and never
+removes what it forgot to list, and changes made outside the scene stand
+until the scene asks otherwise. Removal is its own allowance, for it
+cannot be undone. Both are words, as bytes and text are, so a Kernel
+reads them as it reads any `Rows<Int>`.
+
+**Where.** `files` in the parser
+([parser](../crates/frontend/language/src/parser.rs)) and `Files::files`,
+`Write::files` ([scene](../crates/frontend/scene/src/lib.rs)); the
+words' layout in
+[directory](../crates/interface/formats/src/directory.rs); `sync_files`
+([inputs](../crates/interface/session/src/inputs.rs)) and `operate`
+([writes](../crates/interface/session/src/writes.rs)). Held by [the files
+tests](../crates/interface/session/tests/files.rs) and the scene
+surface's `directory.esn`.
+
 ## A graph says what its parameters must hold
 
 `require name: a <= b;` is a scene's statement of what its parameters

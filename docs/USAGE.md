@@ -128,8 +128,10 @@ Evaluates a `.esn` scene once. Flags:
 - `--allow file.write=<dir>` lets outputs written `to` a file
   (`output kept <- tally.result to "saves/tally.field";`) land in that
   directory; without it the session says what was not written.
+  `--allow file.delete=<dir>` lets an output `to files "dir/"` remove and
+  rename files there; its writes still need `file.write`.
   `--allow file.read=<dir>` lets a served scene's inputs read there.
-  `render`, `serve` and the Player take both; a server takes its
+  `render`, `serve` and the Player take all three; a server takes its
   allowances from its command line, never from a connection. `bench` and
   `replay` write nothing.
 - `--grant <capability,...>` names the capabilities a Kernel may be

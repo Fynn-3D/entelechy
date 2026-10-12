@@ -41,6 +41,12 @@ pub trait Store: Send + Sync {
     }
     /// Replaces the file atomically, making the directories it needs.
     fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()>;
+    /// Removes the file.
+    fn remove(&self, path: &Path) -> io::Result<()>;
+    /// Renames the file `from` to `to`, making the directories `to` needs.
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
+    /// Removes the directory when it holds nothing; leaves it otherwise.
+    fn remove_empty(&self, dir: &Path) -> io::Result<()>;
     /// What is at `path`, if anything.
     fn kind(&self, path: &Path) -> Option<Kind>;
     /// What a directory holds, unordered.
@@ -198,6 +204,18 @@ struct Found {
 }
 
 impl Disk {
+    /// Forgets what the running sync found: the file system is changing.
+    fn forget_found(&self) {
+        if let Some(found) = self
+            .found
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+        {
+            *found = Found::default();
+        }
+    }
+
     /// `answer` for `path`, from what the running sync found, or asked of
     /// the file system and kept until the sync ends.
     fn found<T: Clone>(
@@ -297,18 +315,31 @@ impl Store for Disk {
             .inspect_err(|_| {
                 let _ = std::fs::remove_file(&beside);
             })?;
-        // What the running sync found is the file system before this.
-        if let Some(found) = self
-            .found
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_mut()
-        {
-            *found = Found::default();
-        }
+        self.forget_found();
         std::fs::rename(&beside, path).inspect_err(|_| {
             let _ = std::fs::remove_file(&beside);
         })
+    }
+
+    fn remove(&self, path: &Path) -> io::Result<()> {
+        self.forget_found();
+        std::fs::remove_file(path)
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        if let Some(dir) = to.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir)?;
+        }
+        self.forget_found();
+        std::fs::rename(from, to)
+    }
+
+    fn remove_empty(&self, dir: &Path) -> io::Result<()> {
+        if std::fs::read_dir(dir)?.next().is_some() {
+            return Ok(());
+        }
+        self.forget_found();
+        std::fs::remove_dir(dir)
     }
 
     fn kind(&self, path: &Path) -> Option<Kind> {
@@ -482,6 +513,18 @@ impl Store for Overlay<'_> {
         Err(io::Error::other("texts being checked are not written"))
     }
 
+    fn remove(&self, _: &Path) -> io::Result<()> {
+        Err(io::Error::other("texts being checked are not removed"))
+    }
+
+    fn rename(&self, _: &Path, _: &Path) -> io::Result<()> {
+        Err(io::Error::other("texts being checked are not renamed"))
+    }
+
+    fn remove_empty(&self, _: &Path) -> io::Result<()> {
+        Ok(())
+    }
+
     fn kind(&self, path: &Path) -> Option<Kind> {
         if self.held(path).is_some() {
             return Some(Kind::File);
@@ -556,6 +599,31 @@ impl Store for Memory {
         held.writes += 1;
         let version = held.writes;
         held.files.insert(folded(path), (bytes.to_vec(), version));
+        Ok(())
+    }
+
+    fn remove(&self, path: &Path) -> io::Result<()> {
+        self.held()
+            .files
+            .remove(&folded(path))
+            .map(drop)
+            .ok_or_else(|| io::ErrorKind::NotFound.into())
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        let mut held = self.held();
+        let (bytes, _) = held
+            .files
+            .remove(&folded(from))
+            .ok_or(io::ErrorKind::NotFound)?;
+        held.writes += 1;
+        let version = held.writes;
+        held.files.insert(folded(to), (bytes, version));
+        Ok(())
+    }
+
+    fn remove_empty(&self, _: &Path) -> io::Result<()> {
+        // A directory is there while a file under it is.
         Ok(())
     }
 
@@ -712,6 +780,15 @@ mod parsed_tests {
         }
         fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
             self.files.write(path, bytes)
+        }
+        fn remove(&self, path: &Path) -> io::Result<()> {
+            self.files.remove(path)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            self.files.rename(from, to)
+        }
+        fn remove_empty(&self, dir: &Path) -> io::Result<()> {
+            self.files.remove_empty(dir)
         }
         fn kind(&self, path: &Path) -> Option<Kind> {
             self.files.kind(path)

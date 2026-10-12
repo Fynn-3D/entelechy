@@ -421,11 +421,13 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                 Some((output.ty.shape, Some(output.ty.schema.clone())))
             }
             entelechy_graph::Source::External(name) => {
-                // What a check finds is text, as bytes are.
+                // What a check finds is text, as bytes are, and a
+                // directory's files are words.
                 if lowered
                     .files
                     .checks
                     .iter()
+                    .chain(&lowered.files.files)
                     .any(|(checked, _)| checked == name)
                 {
                     return Some((

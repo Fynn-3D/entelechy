@@ -1,0 +1,10 @@
+// A directory's files, each its path and its bytes, read again when one
+// changes; and operations on them written back.
+input disk: Rows<Int> = files "project/";
+
+node edit: image.show@1 {
+    disk <- disk;
+}
+
+output result <- edit.result;
+output done <- edit.result to files "project/";

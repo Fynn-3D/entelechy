@@ -457,6 +457,12 @@ changes:
   directory, a problem with no place at line and column 0, each once, in
   order; a newline alone when there is none. Checked again on sync when
   one of them changes, or which there are.
+- `input disk: Rows<Int> = files "project/";`: every file under a
+  directory (hidden ones and those under hidden directories left out),
+  in path order, a word each count, path byte and file byte: `[n,
+  (path_len, size, path.., bytes..)*]`, the path relative to the
+  directory, parted by `/`. Read again on sync when one of them changes,
+  or which there are.
 - `input saved: Rows<Tally> = "saves/tally.field" else fresh.result;`
   reads `fresh.result` until the file exists (`examples/data/parts/save`).
 
@@ -781,6 +787,15 @@ be keywords.
    "f.bin"` for a `Rows<Int>` of bytes: the session writes it whole after
    an evaluation that changed it commits, only into a directory allowed
    with `--allow file.write=<dir>`; a failed evaluation writes nothing.
+   `to files "project/"` takes a `Rows<Int>` of operations on the files
+   under the directory, `[n, (kind, path_len, size, path.., data..)*]`
+   (words after the `n`th unread): kind 0 writes `data` as the file,
+   making it and its directories when absent; 1 removes it (`size` 0),
+   and the directories it leaves empty; 2 renames it to the path `data`
+   spells, never onto a file that is there. Paths are as a `files` input
+   spells them; a malformed list is refused whole. Each list is done once,
+   in order, when it differs from the last one done; a write needs
+   `--allow file.write`, a removal or a rename `--allow file.delete` too.
    A placed graph's outputs are wired, never written
    ([decision](DECISIONS.md)).
 10. `times = N;` on a Kernel node or placed graph stands for `name/1` to

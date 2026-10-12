@@ -103,6 +103,15 @@ impl Store for Watching<'_> {
     fn write(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         self.store.write(path, bytes)
     }
+    fn remove(&self, path: &Path) -> std::io::Result<()> {
+        self.store.remove(path)
+    }
+    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        self.store.rename(from, to)
+    }
+    fn remove_empty(&self, dir: &Path) -> std::io::Result<()> {
+        self.store.remove_empty(dir)
+    }
     fn kind(&self, path: &Path) -> Option<Kind> {
         self.note_parent(path);
         self.store.kind(path)

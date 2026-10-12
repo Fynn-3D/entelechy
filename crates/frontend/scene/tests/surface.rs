@@ -76,6 +76,23 @@ fn lowered(path: &Path) -> Result<String, String> {
     for (name, path) in &lowered.files.checks {
         out.push_str(&format!("// checks {name} {}\n", relative(path, &base)));
     }
+    for (name, dir) in &lowered.files.files {
+        out.push_str(&format!("// directory {name} {}\n", relative(dir, &base)));
+    }
+    for write in &lowered.files.writes {
+        let kind = if write.files {
+            " files"
+        } else if write.bytes {
+            " bytes"
+        } else {
+            ""
+        };
+        out.push_str(&format!(
+            "// writes {} {}{kind}\n",
+            write.output,
+            relative(&write.path, &base)
+        ));
+    }
     for param in &graph.times_params {
         out.push_str(&format!("// sizes {param}\n"));
     }

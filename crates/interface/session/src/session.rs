@@ -408,6 +408,7 @@ impl Session {
                 )
                 .chain(files.sequences.iter().map(|(_, dir, ..)| dir.clone()))
                 .chain(files.checks.iter().map(|(_, path)| path.clone()))
+                .chain(files.files.iter().map(|(_, dir)| dir.clone()))
                 .collect()
         } else {
             Vec::new()
@@ -443,6 +444,12 @@ impl Session {
         self.writes.allow(self.scene.store().as_ref(), dir)
     }
 
+    /// Allows an output `to files` to remove and rename files in `dir` and
+    /// under it; writing them still needs [`Session::allow_writes`].
+    pub fn allow_deletes(&mut self, dir: &Path) -> Result<(), String> {
+        self.writes.allow_deletes(self.scene.store().as_ref(), dir)
+    }
+
     /// Restricts input reads to the scene's own directories (its own, its
     /// placed graphs', its libraries' and packages') and those
     /// [`Session::allow_reads`] allowed; for sessions an agent drives
@@ -469,6 +476,7 @@ impl Session {
         match allowance {
             crate::Allowance::FileRead(dir) => self.allow_reads(dir),
             crate::Allowance::FileWrite(dir) => self.allow_writes(dir),
+            crate::Allowance::FileDelete(dir) => self.allow_deletes(dir),
         }
     }
 

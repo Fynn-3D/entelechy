@@ -28,7 +28,7 @@ usage:
   entelechy-player <scene.esn> [--library <dir|file>] [--input <name>=<file.ppm>]... [--scale <n>]
               [--replay <file.replay>]
               [--window <w>x<h>] [--backend gpu|cpu|jit|best] [--memory <MB>] [--work <M>]
-              [--allow file.read|file.write=<dir>]... [--grant <capability,...>]
+              [--allow file.read|file.write|file.delete=<dir>]... [--grant <capability,...>]
       Open a window showing the scene output. Kernel files are republished as
       they change; a rejected change keeps the running version. The pointer
       and keys reach Kernels that declare `input.read`, and so do the
@@ -48,6 +48,8 @@ usage:
       take, all its elements together, 4000 by default.
       --allow file.write=<dir> lets the scene's outputs written `to` a file
       land in that directory; nothing is written without it.
+      --allow file.delete=<dir> lets an output `to files` remove and
+      rename files there.
       --allow file.read=<dir> lets a served scene's inputs read files
       there; with --serve a scene reads only beside its documents without
       it.

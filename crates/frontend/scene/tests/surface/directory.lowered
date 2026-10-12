@@ -1,0 +1,12 @@
+language 1
+// directory
+input disk: Image;
+
+node edit: image.show@1 {
+    disk <- disk;
+}
+
+output result <- edit.result;
+output done <- edit.result;
+// directory disk project
+// writes done project files

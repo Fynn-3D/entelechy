@@ -223,6 +223,15 @@ impl entelechy_session::Store for Counting {
     fn write(&self, path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
         self.files.write(path, bytes)
     }
+    fn remove(&self, path: &std::path::Path) -> std::io::Result<()> {
+        self.files.remove(path)
+    }
+    fn rename(&self, from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+        self.files.rename(from, to)
+    }
+    fn remove_empty(&self, dir: &std::path::Path) -> std::io::Result<()> {
+        self.files.remove_empty(dir)
+    }
     fn kind(&self, path: &std::path::Path) -> Option<entelechy_session::store::Kind> {
         self.files.kind(path)
     }

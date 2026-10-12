@@ -161,6 +161,9 @@ pub enum Allowance {
     FileRead(PathBuf),
     /// Outputs may be written to files in this directory and under it.
     FileWrite(PathBuf),
+    /// Files in this directory and under it may be removed and renamed
+    /// by an output `to files`.
+    FileDelete(PathBuf),
 }
 
 pub use check::{Checked, LARGE, check_document, large, large_past};
@@ -195,16 +198,19 @@ pub struct Loaded {
     pub passed_over: Vec<String>,
 }
 
-/// Parses an allowance given on a command line: `file.read=<dir>` or
-/// `file.write=<dir>`.
+/// Parses an allowance given on a command line: `file.read=<dir>`,
+/// `file.write=<dir>` or `file.delete=<dir>`.
 pub fn parse_allow(text: &str) -> Result<Allowance, String> {
     match text.split_once('=') {
         Some(("file.read", dir)) if !dir.is_empty() => Ok(Allowance::FileRead(PathBuf::from(dir))),
         Some(("file.write", dir)) if !dir.is_empty() => {
             Ok(Allowance::FileWrite(PathBuf::from(dir)))
         }
+        Some(("file.delete", dir)) if !dir.is_empty() => {
+            Ok(Allowance::FileDelete(PathBuf::from(dir)))
+        }
         _ => Err(format!(
-            "--allow takes file.read=<directory> or file.write=<directory>, found `{text}`"
+            "--allow takes file.read=<directory>, file.write=<directory> or file.delete=<directory>, found `{text}`"
         )),
     }
 }
@@ -459,6 +465,22 @@ pub enum Event {
         /// How many bytes.
         bytes: usize,
     },
+    /// A file was removed by an output's operations.
+    Removed {
+        /// The output.
+        output: String,
+        /// The file.
+        path: PathBuf,
+    },
+    /// A file was renamed by an output's operations.
+    Renamed {
+        /// The output.
+        output: String,
+        /// The file as it was.
+        from: PathBuf,
+        /// The file as it is.
+        to: PathBuf,
+    },
     /// An output's write was refused; said once until the reason changes
     /// or a write succeeds.
     WriteRefused {
@@ -541,6 +563,15 @@ impl fmt::Display for Event {
                 path,
                 bytes,
             } => write!(f, "wrote `{output}` to {} ({bytes} bytes)", path.display()),
+            Self::Removed { output, path } => {
+                write!(f, "`{output}` removed {}", path.display())
+            }
+            Self::Renamed { output, from, to } => write!(
+                f,
+                "`{output}` renamed {} to {}",
+                from.display(),
+                to.display()
+            ),
             Self::WriteRefused { output, path, why } => {
                 write!(f, "did not write `{output}` to {}: {why}", path.display())
             }

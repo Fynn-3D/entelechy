@@ -102,8 +102,8 @@ pub fn session_flags() -> Vec<Flag> {
         ),
         repeated(
             "--allow",
-            "file.read|file.write=<dir>",
-            "Lets the scene read files from, or write its outputs into, a directory.",
+            "file.read|file.write|file.delete=<dir>",
+            "Lets the scene read files from, write its outputs into, or remove and rename files in, a directory.",
         ),
         valued(
             "--grant",
@@ -178,11 +178,12 @@ line; a node runs alone under a profile, so the lines add up to
 more than a frame, and the sum says by how much.
 --allow file.write=<dir> lets the scene's outputs written `to` a file
 land in that directory and under it, once an evaluation that changed
-them commits; nothing is written without it. `render`, `serve` and
-the Player take it too. --allow file.read=<dir> lets a served
-scene's inputs read files there: under `serve`, where an agent
-composes the scene, a scene reads only beside its documents
-without it.
+them commits; nothing is written without it. --allow
+file.delete=<dir> lets an output `to files` remove and rename files
+there. --allow file.read=<dir> lets a served scene's inputs read
+files there: under `serve`, where an agent composes the scene, a
+scene reads only beside its documents without it. `render`, `serve`
+and the Player take all three.
 --grant field.read,field.write,... names the capabilities a Kernel
 may be given, and no others (every one without it): a Kernel that
 requires another is refused when it is prepared, and what ran
