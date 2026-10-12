@@ -288,6 +288,16 @@ impl Backend for Apart {
     fn clocked_frame(&self) -> Option<entelechy_rules::ClockedFrame> {
         self.inner.clocked_frame()
     }
+    fn submitted(&self) -> Option<Box<dyn entelechy_rules::Check>> {
+        self.inner.submitted()
+    }
+    fn download_later(
+        &self,
+        device: &(dyn std::any::Any + Send + Sync),
+        byte_len: usize,
+    ) -> Result<Box<dyn entelechy_rules::Downloading>, String> {
+        self.inner.download_later(device, byte_len)
+    }
     fn same_resident(
         &self,
         a: &(dyn std::any::Any + Send + Sync),
@@ -296,11 +306,52 @@ impl Backend for Apart {
     ) -> Result<bool, String> {
         self.inner.same_resident(a, b, byte_len)
     }
+    fn waited(&self) -> std::time::Duration {
+        self.inner.waited()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A device that has waited five milliseconds and marks what it was
+    /// given.
+    struct Waiting;
+
+    struct Done;
+    impl entelechy_rules::Check for Done {
+        fn wait(self: Box<Self>) -> Result<(), ExecutionError> {
+            Ok(())
+        }
+    }
+
+    impl Backend for Waiting {
+        fn name(&self) -> &'static str {
+            "waiting"
+        }
+        fn has_device(&self) -> bool {
+            true
+        }
+        fn submitted(&self) -> Option<Box<dyn entelechy_rules::Check>> {
+            Some(Box::new(Done))
+        }
+        fn waited(&self) -> std::time::Duration {
+            std::time::Duration::from_millis(5)
+        }
+        fn prepare(&self, _: &Validated) -> Result<Box<dyn Prepared>, String> {
+            Err("prepares nothing".into())
+        }
+        fn execute(
+            &self,
+            _: &dyn Prepared,
+            _: &Validated,
+            _: &Invocation,
+            _: &mut Scope<'_>,
+        ) -> Result<Vec<Handle>, ExecutionError> {
+            Err(ExecutionError::Device("runs nothing".into()))
+        }
+    }
 
     fn compiled(source: &str) -> Validated {
         entelechy_compiler::compile(source).unwrap()
@@ -324,5 +375,12 @@ mod tests {
             !ops.iter().any(|op| op.starts_with("Binary(Add")),
             "{ops:?}"
         );
+    }
+
+    #[test]
+    fn a_device_rounded_apart_marks_and_counts_its_waits_as_its_own() {
+        let apart = Apart::new(Box::new(Waiting), 1);
+        assert!(apart.submitted().is_some());
+        assert_eq!(apart.waited(), std::time::Duration::from_millis(5));
     }
 }
