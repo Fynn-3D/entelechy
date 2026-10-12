@@ -482,7 +482,7 @@ pub fn operations() -> Vec<Operation> {
                     "time the frames on the device as they run, waiting for nothing, from this evaluation on (false stops); `device` is the latest one done, node by node",
                 ),
             ]),
-            "executed, reused, committed, outputs, timings, measured, device",
+            "executed, reused, committed, outputs, timings, measured, device; in the Player, ignored (the context fields it gave, which the window's own input stands in for) and a note",
         ),
         op(
             "read",

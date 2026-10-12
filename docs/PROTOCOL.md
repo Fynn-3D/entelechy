@@ -83,7 +83,7 @@ through:
 | `publish` | `source`: string, `expect`?: "absent" \| "any" \| integer | id, generation; and when it computes a `<~` port's initial source, `keeps` (those `node.port`s, which keep what they committed) and `reset` (the requests that start them from the new law) |
 | `retire` | `kernel`?: string | retired |
 | `param` | `name`: string, `value`: value | name, value, events; a node's own value is refused, and changes by `compose` |
-| `evaluate` | `nodes`?: [string], `settle`?: bool, `measure`?: bool, `clock`?: bool, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `pads`?: integer, `keys`?: [integer], `window`?: [w, h], `scale`?: number | executed, reused, committed, outputs, timings, measured, device |
+| `evaluate` | `nodes`?: [string], `settle`?: bool, `measure`?: bool, `clock`?: bool, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `pads`?: integer, `keys`?: [integer], `window`?: [w, h], `scale`?: number | executed, reused, committed, outputs, timings, measured, device; in the Player, ignored (the context fields it gave, which the window's own input stands in for) and a note |
 | `read` | `output`?: string, `node`?: string, `port`?: string, `format`?: "png" \| "rgba32f" \| "ppm" \| "summary" \| "words" \| "field", `from`?: integer, `count`?: integer | a picture: width, height, format, data (base64). Any other Field: shape, extent, count, schema, `fields` (each number's name in an element of several, `hp`, `pos.x`), and its summary (each number's min, max, sum, mean, how many were not zero, and how many were not finite), or `values` from `from` (a number, or a list for an element of several), or format and data (base64) |
 | `write` | `node`: string, `port`?: string, `data`: string, `format`?: "words" \| "field" | the state replaced |
 | `snapshot` | `to`?: string | the world's revision and frame (the frames committed since it), every Kernel with its generation and source, every port's committed state; or the file written |
@@ -100,8 +100,8 @@ through:
 - **stdin/stdout.** `entelechy serve`, or the Player with `entelechy-player
   --serve <scene.esn>`: requests arrive while the window runs, `evaluate`
   answers with the next window frame under the person's pointer and
-  keys (its own input fields are not read; `measure` is, and times that
-  frame), and `read` returns the frame the window shows.
+  keys (its own input fields are not read, and are named in its answer's
+  `ignored`; `measure` is, and times that frame), and `read` returns the frame the window shows.
 - **Socket.** `--listen <host:port>` (`127.0.0.1:7788`; port 0 for any
   free port, named on stderr as `listening on ...`) accepts connections
   carrying the same lines, one response per request in order. Every

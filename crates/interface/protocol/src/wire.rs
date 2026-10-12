@@ -8,6 +8,20 @@ use serde_json::{Value as Json, json};
 
 use entelechy_session::{Event, Session};
 
+/// The fields of a request that describe its context: what [`context_of`] reads.
+pub const CONTEXT_FIELDS: [&str; 11] = [
+    "time", "rate", "pointer", "down", "buttons", "wheel", "sticks", "pads", "keys", "window",
+    "scale",
+];
+
+/// Which of [`CONTEXT_FIELDS`] a request gives.
+pub fn context_given(request: &Json) -> Vec<&'static str> {
+    CONTEXT_FIELDS
+        .into_iter()
+        .filter(|field| request.get(field).is_some())
+        .collect()
+}
+
 /// The context an `evaluate`, `trace` or `restore` request describes:
 /// time, rate, pointer, buttons, wheel, sticks, pads, keys, and the
 /// window.

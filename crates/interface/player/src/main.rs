@@ -205,13 +205,22 @@ impl entelechy_protocol::Served for Player {
         if measured {
             self.session.set_measured(false);
         }
-        // The frame answered is confirmed: what it committed holds.
+        // The frame answered is confirmed: what it committed holds. Its
+        // input and clock are the person's; context the request gave is
+        // named as not read, so a caller is not misled.
+        let ignored = entelechy_protocol::context_given(&request);
         let result = match frame {
-            Some(report) if self.confirm() => Ok(entelechy_protocol::evaluation_json(
-                &self.session,
-                &report,
-                measured,
-            )),
+            Some(report) if self.confirm() => {
+                let mut answer =
+                    entelechy_protocol::evaluation_json(&self.session, &report, measured);
+                if !ignored.is_empty() {
+                    answer["ignored"] = serde_json::json!(ignored);
+                    answer["note"] = serde_json::json!(
+                        "the window's input and clock are the person's: the Player runs each evaluate under them and reads none of the fields named in `ignored`; `entelechy serve` takes them"
+                    );
+                }
+                Ok(answer)
+            }
             _ => Err(serde_json::json!({ "message": self.play.status() })),
         };
         Some((entelechy_protocol::envelope(&id, result), false))
