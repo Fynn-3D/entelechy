@@ -1771,7 +1771,8 @@ fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
     assert!(output.status.success(), "{stdout}");
     assert!(stdout.contains("graph `preset` with 3 node(s)"), "{stdout}");
     // Where the command runs finds no package: from the directory that
-    // holds it, without ENTELECHY_PACKAGES, the name is not found either.
+    // holds it, without ENTELECHY_PACKAGES, the name is not found either,
+    // and the check says where it looked and how to look further.
     let output = Command::new(entelechy)
         .arg("check")
         .arg("elsewhere/scene.esn")
@@ -1782,7 +1783,7 @@ fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!output.status.success(), "{stdout}");
     assert!(
-        stdout.contains("elsewhere/pixelfx.entpkg: No such file"),
+        stdout.contains("no package `pixelfx.entpkg` is found: not at `elsewhere/pixelfx.entpkg`, no package directory is set; add the directory that holds `pixelfx.entpkg` to `ENTELECHY_PACKAGES`"),
         "{stdout}"
     );
     // `package` checks what the package holds: a Kernel that does not

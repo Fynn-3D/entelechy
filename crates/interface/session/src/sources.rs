@@ -153,6 +153,11 @@ pub(crate) fn expand_use(
         true => path,
         false => in_package(store, &path).unwrap_or(path),
     };
+    if !store.exists(&path)
+        && let Some(missing) = package_missing(store, &path)
+    {
+        return Err(missing);
+    }
     if store.is_file(&path.join("package.esn")) {
         return package_files(store, &path).map(|files| files.into_iter().map(canonical).collect());
     }
@@ -223,7 +228,47 @@ pub(crate) fn package_holding(store: &dyn Store, path: &Path) -> Option<PathBuf>
 pub fn read_document(store: &dyn Store, path: &Path) -> Result<String, String> {
     store
         .read_text(&file_at(store, path))
-        .map_err(|error| error.to_string())
+        .map_err(|error| package_missing(store, path).unwrap_or_else(|| error.to_string()))
+}
+
+/// Why `path` is not found when it goes through a package's name that
+/// no directory holds: the package, where it was looked for, and how a
+/// directory is added to the search.
+fn package_missing(store: &dyn Store, path: &Path) -> Option<String> {
+    let mut named = None;
+    let mut before = PathBuf::new();
+    for part in path.components() {
+        before.push(part);
+        if Path::new(part.as_os_str())
+            .extension()
+            .is_some_and(|ext| ext == "entpkg")
+        {
+            named = Some(before.clone());
+        }
+    }
+    let named = named?;
+    if store.exists(&resolve_package(store, &named)) {
+        return None;
+    }
+    let name = named.file_name()?.to_string_lossy();
+    let searched = match store.packages() {
+        [] => "no package directory is set".to_owned(),
+        dirs => format!(
+            "nor in the package directories {}",
+            dirs.iter()
+                .map(|dir| format!("`{}`", dir.display()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    let beside = match package_holding(store, &named) {
+        Some(package) => format!(", not beside `{}`", package.display()),
+        None => String::new(),
+    };
+    Some(format!(
+        "no package `{name}` is found: not at `{}`{beside}, {searched}; add the directory that holds `{name}` to `ENTELECHY_PACKAGES`",
+        named.display()
+    ))
 }
 
 /// A placed document: where its file is (its canonical path, one for one
@@ -231,7 +276,9 @@ pub fn read_document(store: &dyn Store, path: &Path) -> Result<String, String> {
 /// directory when it lies under it) and its text.
 pub fn locate_document(store: &dyn Store, path: &Path) -> Result<(PathBuf, String), String> {
     let at = file_at(store, path);
-    let text = store.read_text(&at).map_err(|error| error.to_string())?;
+    let text = store
+        .read_text(&at)
+        .map_err(|error| package_missing(store, path).unwrap_or_else(|| error.to_string()))?;
     let Ok(whole) = store.canonical(&at) else {
         return Ok((at, text));
     };

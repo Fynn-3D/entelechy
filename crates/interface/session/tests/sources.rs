@@ -1184,3 +1184,32 @@ fn a_name_in_a_package_found_by_name_is_said_with_the_packages_name() {
     assert!(said.contains("use \\\"deep.entpkg\\\";"), "{said}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A package no directory holds is said by its name, with where it was
+/// looked for and how a directory joins the search.
+#[test]
+fn a_package_not_found_is_said_with_where_it_was_looked_for() {
+    let dir = scratch("package-not-found", &[]);
+    std::fs::create_dir_all(dir.join("packages")).unwrap();
+    std::fs::write(
+        dir.join("scene.esn"),
+        "use \"absent.entpkg\";\nnode k: t.k@1 { domain = 1; }\noutput result <- k.result;\n",
+    )
+    .unwrap();
+    let store = entelechy_session::Disk::with_packages(vec![dir.join("packages")]);
+    let checked = entelechy_session::check_document(&store, &dir.join("scene.esn"), false);
+    let said = format!("{checked:?}");
+    assert!(
+        said.contains("no package `absent.entpkg` is found"),
+        "{said}"
+    );
+    assert!(
+        said.contains(&format!(
+            "nor in the package directories `{}`",
+            dir.join("packages").display()
+        )),
+        "{said}"
+    );
+    assert!(said.contains("to `ENTELECHY_PACKAGES`"), "{said}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
