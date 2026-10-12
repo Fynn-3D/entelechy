@@ -198,7 +198,8 @@ exists is replaced; what does not is added after the last of its kind (a
 member laid out as its block is). Only those bytes change; every other
 statement, comment and blank line stays. A removed statement takes the
 comment lines right above it; a text ending in a comment takes the place
-of the comment that ended the line of what it replaces. An edit that cannot be made (a text
+of the comment that ended the line of what it replaces, and one beginning
+with comment lines the place of those right above it. An edit that cannot be made (a text
 declaring something else or more than one thing; nothing to remove)
 refuses the whole `compose`, naming the edit, and writes nothing; the
 result is then checked as any text is.

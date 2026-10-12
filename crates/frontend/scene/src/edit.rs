@@ -87,7 +87,18 @@ fn apply(text: &str, edit: &Edit) -> Result<String, String> {
             let at = find(&outline, *kind, name)?;
             Ok(match (at, fragment) {
                 (Some(statement), Some(fragment)) => {
-                    replace(text, statement.range.clone(), fragment)
+                    // A text that begins with comment lines takes the
+                    // place of those right above the statement.
+                    let range = statement.range.clone();
+                    let line = text[..range.start].rfind('\n').map_or(0, |i| i + 1);
+                    let own_line = text[line..range.start].trim().is_empty();
+                    let above = comments_above(text, line);
+                    let start = if fragment.0.starts_with("//") && own_line && above < line {
+                        above
+                    } else {
+                        range.start
+                    };
+                    replace(text, start..range.end, fragment)
                 }
                 (Some(statement), None) => remove(text, statement.range.clone(), true),
                 (None, Some((fragment, _))) => add_statement(text, &outline, *kind, fragment),
@@ -191,7 +202,8 @@ fn find<'a>(
 
 /// `range` replaced by a fragment, which, ending in a comment, takes the
 /// place of the comment that ended its line, or ends its line before
-/// what followed `range` there.
+/// what followed `range` there. A statement's range starts at the
+/// comment lines above it when the fragment begins with its own.
 fn replace(text: &str, range: Range<usize>, (fragment, comment): (&str, bool)) -> String {
     let (with, end) = ended(text, range.start, range.end, fragment, comment);
     splice(text, range.start..end, &with)
@@ -243,16 +255,11 @@ fn remove(text: &str, range: Range<usize>, comments: bool) -> String {
         let start = text[..range.start].trim_end_matches([' ', '\t']).len();
         return splice(text, start..range.end, "");
     }
-    let mut start = line_start;
-    if comments {
-        while start > 0 {
-            let above = text[..start - 1].rfind('\n').map_or(0, |i| i + 1);
-            if !text[above..start].trim_start().starts_with("//") {
-                break;
-            }
-            start = above;
-        }
-    }
+    let start = if comments {
+        comments_above(text, line_start)
+    } else {
+        line_start
+    };
     // Between two blank lines, one of them goes with it.
     let mut end = line_end;
     let blank_before = start == 0 || text[..start].ends_with("\n\n");
@@ -260,6 +267,20 @@ fn remove(text: &str, range: Range<usize>, comments: bool) -> String {
         end += 1;
     }
     splice(text, start..end, "")
+}
+
+/// Where the comment lines right above the line starting at `line`
+/// begin, or `line` when there are none.
+fn comments_above(text: &str, line: usize) -> usize {
+    let mut start = line;
+    while start > 0 {
+        let above = text[..start - 1].rfind('\n').map_or(0, |i| i + 1);
+        if !text[above..start].trim_start().starts_with("//") {
+            break;
+        }
+        start = above;
+    }
+    start
 }
 
 /// The order of statement kinds, for placing the first of a kind.

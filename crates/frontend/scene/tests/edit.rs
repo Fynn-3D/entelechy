@@ -328,6 +328,40 @@ fn a_fragment_ending_in_a_comment_ends_its_line_before_what_followed() {
     );
 }
 
+/// A text beginning with comment lines takes the place of the comment
+/// lines right above the statement it replaces; without them, those stay.
+#[test]
+fn a_fragment_beginning_with_comments_takes_the_place_of_those_above() {
+    let text = "// Kept apart.\n\n/// Old.\n/// Older.\nfn f() -> Float { return 1.0; }\n/// Its own.\nfn g() -> Float { return 2.0; }\n";
+    let edited = edit(
+        text,
+        &[
+            statement(
+                StatementKind::Fn,
+                "f",
+                "/// New.\nfn f() -> Float { return 3.0; }",
+            ),
+            statement(StatementKind::Fn, "g", "fn g() -> Float { return 4.0; }"),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        edited,
+        "// Kept apart.\n\n/// New.\nfn f() -> Float { return 3.0; }\n/// Its own.\nfn g() -> Float { return 4.0; }\n"
+    );
+    // Sent again as it is, it stays one.
+    let again = edit(
+        &edited,
+        &[statement(
+            StatementKind::Fn,
+            "f",
+            "/// New.\nfn f() -> Float { return 3.0; }",
+        )],
+    )
+    .unwrap();
+    assert_eq!(again, edited);
+}
+
 #[test]
 fn a_requirement_is_added_after_the_params_and_replaced_by_name() {
     let edited = edit(
