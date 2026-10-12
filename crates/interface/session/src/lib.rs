@@ -310,6 +310,15 @@ impl Limits {
     }
 }
 
+/// A change of several documents refused: the document at fault and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refusal {
+    /// The document, by its one name.
+    pub path: std::path::PathBuf,
+    /// Why, and where in it.
+    pub diagnostic: Diagnostic,
+}
+
 /// What is wrong with a document, and where when known. The position is
 /// data an interface hands an agent as is.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -173,6 +173,24 @@ impl Ty {
 
 /// One of `compose`'s `edits`: a statement by its kind and name, or a
 /// node's member, and its new text.
+/// One document of a compose of several.
+fn document_change() -> Ty {
+    Ty::Record(vec![
+        may(
+            "path",
+            Ty::Str,
+            "the document, from the scene's directory; the scene when not given",
+        ),
+        may("text", Ty::Str, "its whole text; or `edits`"),
+        may(
+            "edits",
+            Ty::List(Box::new(edit())),
+            "edits of it as it stands",
+        ),
+        may("expect", Ty::Str, "its version `document` answered"),
+    ])
+}
+
 fn edit() -> Ty {
     let named = |kind: &'static str, doc: &'static str| may(kind, Ty::Str, doc);
     Ty::Record(vec![
@@ -334,12 +352,19 @@ pub fn operations() -> Vec<Operation> {
         ),
         op(
             "document",
-            "The scene document's text.",
-            vec![may(
-                "version",
-                Ty::Str,
-                "one the session remembers; the current when not given",
-            )],
+            "The scene document's text, or another document of the scene's.",
+            vec![
+                may(
+                    "version",
+                    Ty::Str,
+                    "one the session remembers; the current when not given",
+                ),
+                may(
+                    "path",
+                    Ty::Str,
+                    "a document of the scene, from its directory, as `compose` names it; the scene when not given",
+                ),
+            ],
             "path, text, and version, which `compose`'s `expect` names",
         ),
         op(
@@ -354,7 +379,7 @@ pub fn operations() -> Vec<Operation> {
         ),
         op(
             "compose",
-            "Changes the scene: rewrites its document on disk, the file at `path` (`document` and `status` name it), once the text is checked; answered once the scene stands. A refused text writes nothing and is an error: why, at `line` and `column`, the document's `version`, and for `edits` the `text` they made, which `line` counts in.",
+            "Changes the scene: rewrites its document on disk (`document` and `status` name it), or with `path` or `documents` the scene's other documents too, once the texts are checked; answered once the scene stands. A refused text writes nothing and is an error: why, at `line` and `column`, the document's `version`, and for `edits` the `text` they made, which `line` counts in.",
             vec![
                 may("text", Ty::Str, "the whole document; or `edits`"),
                 may(
@@ -367,8 +392,18 @@ pub fn operations() -> Vec<Operation> {
                     Ty::Str,
                     "the version `document` answered; refused when the scene changed since",
                 ),
+                may(
+                    "path",
+                    Ty::Str,
+                    "another document of the scene, from its directory: a `.ent` or `.esn` under it that the scene uses or places, or a new one this compose makes it use",
+                ),
+                may(
+                    "documents",
+                    Ty::List(Box::new(document_change())),
+                    "several documents changed as one: all checked together, all written or none",
+                ),
             ],
-            "events, version, path (the document), written",
+            "events, version, path (the scene), written; with `path` or `documents`, documents (each written document's path and version)",
         ),
         op(
             "sync",

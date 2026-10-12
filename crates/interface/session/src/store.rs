@@ -419,6 +419,125 @@ impl Memory {
     }
 }
 
+/// A store seen through texts not yet written: each of `texts` read as
+/// if it stood at its path (new files and the directories they would
+/// make included), everything else as `base` has it. What a compose of
+/// several documents is checked against before any reaches `base`;
+/// nothing is written through it.
+pub(crate) struct Overlay<'a> {
+    base: &'a dyn Store,
+    /// Each text by where its path lands ([`Overlay::landed`]).
+    texts: BTreeMap<PathBuf, (Vec<u8>, u64)>,
+}
+
+impl<'a> Overlay<'a> {
+    pub(crate) fn new(base: &'a dyn Store, texts: &[(PathBuf, String)]) -> Self {
+        let mut overlay = Self {
+            base,
+            texts: BTreeMap::new(),
+        };
+        for (path, text) in texts {
+            let at = overlay.landed(path);
+            overlay
+                .texts
+                .insert(at, (text.as_bytes().to_vec(), crate::history::digest(text)));
+        }
+        overlay
+    }
+
+    /// Where `path` lands in `base`: its nearest directory that exists by
+    /// its one name, and the rest of the path after it, so every spelling
+    /// of a file not yet written names it alike.
+    fn landed(&self, path: &Path) -> PathBuf {
+        let mut existing = self.base.whole(path);
+        let mut rest = Vec::new();
+        while self.base.kind(&existing).is_none() {
+            let (Some(up), Some(name)) = (existing.parent(), existing.file_name()) else {
+                break;
+            };
+            rest.push(name.to_owned());
+            existing = up.to_path_buf();
+        }
+        let mut at = self.base.canonical(&existing).unwrap_or(existing);
+        for name in rest.iter().rev() {
+            at.push(name);
+        }
+        at
+    }
+
+    fn held(&self, path: &Path) -> Option<&(Vec<u8>, u64)> {
+        self.texts.get(&self.landed(path))
+    }
+}
+
+impl Store for Overlay<'_> {
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        match self.held(path) {
+            Some((bytes, _)) => Ok(bytes.clone()),
+            None => self.base.read(path),
+        }
+    }
+
+    fn write(&self, _: &Path, _: &[u8]) -> io::Result<()> {
+        Err(io::Error::other("texts being checked are not written"))
+    }
+
+    fn kind(&self, path: &Path) -> Option<Kind> {
+        if self.held(path).is_some() {
+            return Some(Kind::File);
+        }
+        self.base.kind(path).or_else(|| {
+            let at = self.landed(path);
+            self.texts
+                .keys()
+                .any(|file| file.starts_with(&at))
+                .then_some(Kind::Dir)
+        })
+    }
+
+    fn list(&self, dir: &Path) -> io::Result<Vec<PathBuf>> {
+        let at = self.landed(dir);
+        let mut found = self.base.list(dir).unwrap_or_default();
+        for file in self.texts.keys() {
+            if let Ok(rest) = file.strip_prefix(&at)
+                && let Some(first) = rest.components().next()
+            {
+                let entry = dir.join(first);
+                if !found.contains(&entry) {
+                    found.push(entry);
+                }
+            }
+        }
+        if found.is_empty() && self.base.kind(dir).is_none() {
+            return Err(io::ErrorKind::NotFound.into());
+        }
+        Ok(found)
+    }
+
+    fn stamp(&self, path: &Path) -> Option<Stamp> {
+        match self.held(path) {
+            Some((_, version)) => Some(Stamp(Seen::Memory(*version))),
+            None => self.base.stamp(path),
+        }
+    }
+
+    fn canonical(&self, path: &Path) -> io::Result<PathBuf> {
+        match self.base.kind(path) {
+            Some(_) => self.base.canonical(path),
+            None if self.kind(path).is_some() => Ok(self.landed(path)),
+            None => Err(io::ErrorKind::NotFound.into()),
+        }
+    }
+
+    fn whole(&self, path: &Path) -> PathBuf {
+        self.base.whole(path)
+    }
+
+    fn packages(&self) -> &[PathBuf] {
+        self.base.packages()
+    }
+}
+
 impl Store for Memory {
     fn parsed(&self) -> Option<&Parsed> {
         Some(&self.parsed)

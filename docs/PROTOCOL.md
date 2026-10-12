@@ -75,9 +75,9 @@ through:
 | `kernels` |  | a list of manifests, each with its generation, which `publish`'s `expect` names |
 | `kernel` | `kernel`?: string, `generation`?: integer | manifest, generation, source, as `publish` takes it |
 | `graph` |  | inputs, params, nodes, outputs |
-| `document` | `version`?: string | path, text, and version, which `compose`'s `expect` names |
+| `document` | `version`?: string, `path`?: string | path, text, and version, which `compose`'s `expect` names |
 | `history` | `since`?: integer | revision, frame (the frames committed since that revision), the changes after `since` and the attempts refused since, each with its origin |
-| `compose` | `text`?: string, `edits`?: [{node?: string, output?: string, param?: string, require?: string, input?: string, kernel?: string, struct?: string, type?: string, fn?: string, use?: string, member?: string, text: string \| null}], `expect`?: string | events, version, path (the document), written |
+| `compose` | `text`?: string, `edits`?: [{node?: string, output?: string, param?: string, require?: string, input?: string, kernel?: string, struct?: string, type?: string, fn?: string, use?: string, member?: string, text: string \| null}], `expect`?: string, `path`?: string, `documents`?: [{path?: string, text?: string, edits?: [{node?: string, output?: string, param?: string, require?: string, input?: string, kernel?: string, struct?: string, type?: string, fn?: string, use?: string, member?: string, text: string \| null}], expect?: string}] | events, version, path (the scene), written; with `path` or `documents`, documents (each written document's path and version) |
 | `sync` |  | events |
 | `prepare` | `source`: string | id, manifest; or an error at a line and column |
 | `publish` | `source`: string, `expect`?: "absent" \| "any" \| integer | id, generation; and when it computes a `<~` port's initial source, `keeps` (those `node.port`s, which keep what they committed) and `reset` (the requests that start them from the new law) |
@@ -139,7 +139,10 @@ through:
   widen it; a file elsewhere is a `rejected` event naming it, and a `use`
   or `graph` naming one refuses the scene before any of it is read.
 - **Writes** take `--allow file.write=<dir>`. Neither is ever granted
-  over the wire ([decision](DECISIONS.md)).
+  over the wire ([decision](DECISIONS.md)). `compose` writes only the
+  scene's own documents: `.ent` and `.esn` files under the scene's
+  directory, where they land after their links, none in a package
+  directory; the person who serves a scene gave its directory.
 - **Grants.** `status` answers `grants`, the capabilities a Kernel may be
   given: all, unless the server was started with `--grant` naming fewer.
   A Kernel requiring one not granted is refused when prepared, naming
@@ -154,8 +157,8 @@ is. `publish` changes the running world, not a file: a Kernel published
 through the protocol belongs to no document, the document it came from
 is left as it is on disk, and when that document next changes, its
 Kernel is published from the file again. A Kernel is kept by writing it
-into a document the scene uses (`compose` a document that holds it), or
-with the whole world by `snapshot`.
+into a document the scene uses (`compose` with that document's `path`),
+or with the whole world by `snapshot`.
 
 `kernels` lists the backend's native operations alongside published
 Kernels, at generation 0. A manifest's `memories` names ports that are
@@ -177,6 +180,20 @@ answers the version it wrote; with `expect` it writes only if the
 document is still that version, else refuses with the current one.
 Composing an old document against the standing version rolls the
 structure back.
+
+The scene's other documents are composed alike. `path` names one, from
+the scene's directory: a document the scene uses or places, or a new
+one; `document` with that `path` reads it. `documents` changes several
+at once, each with its own `path` (none for the scene), `text` or
+`edits`, and `expect`: a new Kernel document and the scene's `use` of
+it, the node that runs it and the output it feeds, in one change. All
+are checked together, as `entelechy check` checks the scene with them,
+their Kernels compiled and granted, before any is written; one refused
+writes none, and the refusal names the document at fault in `path`,
+with its `version` and, for `edits`, the `text` they made. A document
+written must be one the scene, as written, uses or places. The answer
+lists each document written with its new version, under `documents`,
+once the Kernels it changed run.
 
 `compose` checks before it writes: a text that does not lower, names a
 source nothing provides, wires a cycle, defines a Kernel that does not

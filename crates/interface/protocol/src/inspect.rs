@@ -176,8 +176,27 @@ pub(crate) fn graph(session: &Session) -> Result<Json, Json> {
 }
 
 /// The scene document on disk, or with `version`, a version the session
-/// remembers from a change that loaded it.
+/// remembers from a change that loaded it; with `path`, the document of
+/// the scene there (from the scene's directory), as a compose names it.
 pub(crate) fn document(session: &Session, request: &Request) -> Result<Json, Json> {
+    if let Some(path) = request.get("path") {
+        let path = path
+            .as_str()
+            .ok_or_else(|| failure("`path` is a document's path, from the scene's directory"))?;
+        let (landed, text) = session
+            .composed_document(std::path::Path::new(path))
+            .map_err(failure)?;
+        let text = text.ok_or_else(|| {
+            failure(format!(
+                "`{}` is not written yet: a compose may make it",
+                landed.display()
+            ))
+        })?;
+        let version = crate::create::document_version(&text);
+        return Ok(
+            json!({ "path": landed.display().to_string(), "text": text, "version": version }),
+        );
+    }
     if let Some(version) = request.get("version").and_then(Json::as_str) {
         let text = u64::from_str_radix(version, 16)
             .ok()

@@ -357,23 +357,22 @@ impl Session {
     /// request's. One sync is at most one scene change.
     pub(super) fn remember(&mut self, events: &[Event]) {
         use super::Claim;
-        let landing = events
-            .iter()
-            .any(|e| matches!(e, Event::SceneLoaded | Event::SceneRejected(_)));
         // A scene read in the claimed one's place is its document's.
         let superseded = self.scene.take_superseded();
         let (claimant, landed) = match std::mem::take(&mut self.claim) {
             Claim::Asked => (Some(self.origin.clone()), None),
-            Claim::Waiting(origin) if !superseded => {
-                // A later sync's events are the request's answer.
-                let landed = landing.then(|| events.to_vec());
-                (Some(origin), landed)
+            Claim::Waiting(origin, mut gathered) if !superseded => {
+                // The later syncs' events are the request's answer.
+                gathered.extend(events.iter().cloned());
+                (Some(origin), Some(gathered))
             }
             Claim::Landed(events) => (None, Some(events)),
-            Claim::Waiting(_) | Claim::None => (None, None),
+            Claim::Waiting(..) | Claim::None => (None, None),
         };
         self.claim = match (&claimant, landed) {
-            (Some(origin), _) if self.scene.waiting() => Claim::Waiting(origin.clone()),
+            (Some(origin), gathered) if self.scene_waiting() => {
+                Claim::Waiting(origin.clone(), gathered.unwrap_or_default())
+            }
             (_, Some(events)) => Claim::Landed(events),
             _ => Claim::None,
         };

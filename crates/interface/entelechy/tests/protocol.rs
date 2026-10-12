@@ -112,10 +112,21 @@ fn talk(scene: &Path, requests: &[Json]) -> Vec<Json> {
 
 /// [`talk`] to a session started with `flags` after the scene.
 fn talk_with(scene: &Path, flags: &[&str], requests: &[Json]) -> Vec<Json> {
+    talk_in(scene, flags, &[], requests)
+}
+
+/// [`talk_with`], the session's environment holding `environment` too.
+fn talk_in(
+    scene: &Path,
+    flags: &[&str],
+    environment: &[(&str, &Path)],
+    requests: &[Json],
+) -> Vec<Json> {
     let mut child = Command::new(env!("CARGO_BIN_EXE_entelechy"))
         .arg("serve")
         .arg(scene)
         .args(flags)
+        .envs(environment.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1689,6 +1700,168 @@ fn compose_checks_before_it_writes_and_against_the_version_read() {
     assert_eq!(taken["path"], scene.display().to_string());
     assert_eq!(responses[1]["ok"]["version"], taken["version"]);
     assert_eq!(responses[1]["ok"]["text"], grown);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `compose` writes the scene's other documents too: by `path`, or several
+/// at once under `documents`, all checked together, all written or none;
+/// only `.ent` and `.esn` files under the scene's directory, each one the
+/// scene uses or places, none in a package directory; `document` reads
+/// them by `path`.
+#[test]
+fn compose_writes_the_scenes_documents_together_or_none() {
+    let dir = std::env::temp_dir().join(format!(
+        "entelechy-protocol-documents-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("shelf/kept.entpkg/kernels")).unwrap();
+    std::fs::write(
+        dir.join("shelf/kept.entpkg/package.esn"),
+        "package kept@1 { language = 1; ir = 1; }\nuse \"kernels/\";\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("shelf/kept.entpkg/kernels/kept.ent"),
+        "fn kept() -> Float { return 1.0; }\n",
+    )
+    .unwrap();
+    let scene = dir.join("scene.esn");
+    let start = "node k: kernel { requires { field.write; } output result: Rows<Float>; domain = 3; compute { return 1.0; } }\noutput result <- k.result;\n";
+    std::fs::write(&scene, start).unwrap();
+    let twice = |by: &str| {
+        format!(
+            "kernel a.twice@1 {{ requires {{ field.read; field.write; }} input xs: Rows<Float>; output result: Rows<Float>; compute {{ return sample(xs) * {by}; }} }}\n"
+        )
+    };
+    let largest = |answer: &Json| answer["ok"]["summary"][0]["max"].as_f64();
+    let responses = talk_in(
+        &scene,
+        &[],
+        &[("ENTELECHY_PACKAGES", &dir.join("shelf"))],
+        &[
+            // A new document, and the scene using it, at once.
+            json!({ "id": 1, "op": "compose", "documents": [
+                { "path": "kernels/a.ent", "text": twice("2.0") },
+                { "edits": [
+                    { "use": "kernels/a.ent", "text": "use \"kernels/a.ent\";" },
+                    { "node": "t", "text": "node t: a.twice@1 { xs <- k.result; }" },
+                    { "output": "result", "text": "output result <- t.result;" },
+                ] },
+            ] }),
+            json!({ "id": 2, "op": "evaluate" }),
+            json!({ "id": 3, "op": "read", "format": "summary" }),
+            json!({ "id": 4, "op": "document", "path": "kernels/a.ent" }),
+        ],
+    );
+    let written = &responses[0]["ok"];
+    assert_eq!(written["written"], true, "{}", responses[0]);
+    let named: Vec<&str> = written["documents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["path"].as_str().unwrap())
+        .collect();
+    assert!(
+        named.len() == 2 && named[0].ends_with("kernels/a.ent") && named[1].ends_with("scene.esn"),
+        "{named:?}"
+    );
+    assert_eq!(largest(&responses[2]), Some(2.0), "{}", responses[2]);
+    let read = &responses[3]["ok"];
+    assert_eq!(read["text"], twice("2.0"), "{}", responses[3]);
+    assert_eq!(read["version"], written["documents"][0]["version"]);
+    let version = read["version"].as_str().unwrap().to_owned();
+
+    let stale = version.clone();
+    let responses = talk_in(
+        &scene,
+        &[],
+        &[("ENTELECHY_PACKAGES", &dir.join("shelf"))],
+        &[
+            // Edited by `path`, answered once its Kernel runs.
+            json!({ "id": 1, "op": "compose", "path": "kernels/a.ent", "expect": version, "edits": [
+                { "kernel": "a.twice@1", "text": twice("3.0").trim() },
+            ] }),
+            json!({ "id": 2, "op": "evaluate" }),
+            json!({ "id": 3, "op": "read", "format": "summary" }),
+            // A fault is said in its document, which stays as it was.
+            json!({ "id": 4, "op": "compose", "path": "kernels/a.ent", "text": twice("2.0").replace("sample(xs)", "sample(nope)") }),
+            // A new document the scene does not use; one outside its
+            // directory; one not a document; one in a package directory.
+            json!({ "id": 5, "op": "compose", "path": "kernels/b.ent", "text": "fn b() -> Float { return 1.0; }\n" }),
+            json!({ "id": 6, "op": "compose", "path": "../outside.ent", "text": "fn o() -> Float { return 1.0; }\n" }),
+            json!({ "id": 7, "op": "compose", "path": "notes.txt", "text": "notes" }),
+            json!({ "id": 8, "op": "compose", "path": "shelf/kept.entpkg/kernels/kept.ent", "text": "fn kept() -> Float { return 2.0; }\n" }),
+            // All or none: a right document beside a wrong scene.
+            json!({ "id": 9, "op": "compose", "documents": [
+                { "path": "kernels/a.ent", "text": twice("5.0") },
+                { "edits": [{ "node": "t", "text": "node t: a.twice@1 { xs <- missing.result; }" }] },
+            ] }),
+            json!({ "id": 10, "op": "compose", "path": "kernels/a.ent", "expect": stale, "text": twice("6.0") }),
+            json!({ "id": 11, "op": "compose", "text": start, "documents": [] }),
+        ],
+    );
+    assert_eq!(responses[0]["ok"]["written"], true, "{}", responses[0]);
+    assert_eq!(
+        largest(&responses[2]),
+        Some(3.0),
+        "the edit runs once compose answers: {}",
+        responses[2]
+    );
+    let fault = &responses[3]["error"];
+    assert!(
+        fault["path"]
+            .as_str()
+            .unwrap_or_default()
+            .ends_with("kernels/a.ent"),
+        "{fault}"
+    );
+    assert!(
+        fault["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("`nope` is not an input"),
+        "{fault}"
+    );
+    assert_eq!(fault["line"], 1, "{fault}");
+    assert_eq!(fault["written"], false, "{fault}");
+    for (index, says) in [
+        (4, "neither uses nor places it"),
+        (5, "outside the scene's directory"),
+        (6, "is not a document"),
+        (7, "in the package directory"),
+        (8, "refers to unknown source `missing.result`"),
+        (9, "changed since it was read"),
+        (10, "they stand in each"),
+    ] {
+        let answer = &responses[index]["error"];
+        assert!(
+            answer["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(says),
+            "{index}: {}",
+            responses[index]
+        );
+    }
+    assert!(
+        responses[8]["error"]["path"]
+            .as_str()
+            .unwrap_or_default()
+            .ends_with("scene.esn"),
+        "{}",
+        responses[8]
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("kernels/a.ent")).unwrap(),
+        twice("3.0")
+    );
+    assert!(!dir.join("kernels/b.ent").exists());
+    assert!(!dir.with_file_name("outside.ent").exists());
+    assert_eq!(
+        std::fs::read_to_string(dir.join("shelf/kept.entpkg/kernels/kept.ent")).unwrap(),
+        "fn kept() -> Float { return 1.0; }\n"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

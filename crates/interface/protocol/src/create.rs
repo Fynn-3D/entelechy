@@ -28,6 +28,9 @@ pub(crate) fn compose_with(
     request: &Request,
     settle: bool,
 ) -> Result<Json, Json> {
+    if request.get("documents").is_some() || request.get("path").is_some() {
+        return compose_documents(session, request, settle);
+    }
     let root = session.root().to_path_buf();
     let written = session.scene_text();
     let current = written
@@ -90,6 +93,155 @@ pub(crate) fn compose_with(
         "version": document_version(&text),
         "path": root.display().to_string(),
         "written": true,
+    }))
+}
+
+/// [`compose`] of documents of the scene other than its root, or of
+/// several at once: `path` names one (from the scene's directory), or
+/// `documents` lists each with its own `path` (none for the scene),
+/// `text` or `edits`, and `expect`. All are checked together before any
+/// is written, and all are written or none.
+fn compose_documents(session: &mut Session, request: &Request, settle: bool) -> Result<Json, Json> {
+    let scene_name = session
+        .root()
+        .file_name()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| session.root().to_path_buf());
+    let items: Vec<&serde_json::Map<String, Json>> = match request.get("documents") {
+        Some(documents) => {
+            if ["path", "text", "edits", "expect"]
+                .iter()
+                .any(|key| request.get(key).is_some())
+            {
+                return Err(failure(
+                    "`documents` carries each document's own `path`, `text` or `edits`, and `expect`; they stand in each, not beside it",
+                ));
+            }
+            let list = documents
+                .as_array()
+                .ok_or_else(|| failure("`documents` is an array, one object a document"))?;
+            if list.is_empty() {
+                return Err(failure("`documents` names at least one document"));
+            }
+            list.iter()
+                .map(|item| {
+                    item.as_object()
+                        .ok_or_else(|| failure("each of `documents` is an object"))
+                })
+                .collect::<Result<_, _>>()?
+        }
+        None => vec![
+            request
+                .json()
+                .as_object()
+                .ok_or_else(|| failure("a request is an object"))?,
+        ],
+    };
+    struct Change {
+        path: std::path::PathBuf,
+        text: String,
+        version: String,
+        edited: bool,
+    }
+    let mut changes = Vec::new();
+    for item in items {
+        let named = match item.get("path") {
+            None => scene_name.clone(),
+            Some(Json::String(path)) => std::path::PathBuf::from(path),
+            Some(_) => {
+                return Err(failure(
+                    "`path` is a document's path, from the scene's directory",
+                ));
+            }
+        };
+        let (path, current) = session.composed_document(&named).map_err(|why| {
+            let mut refused = failure(why);
+            refused["path"] = json!(named.display().to_string());
+            refused["written"] = json!(false);
+            refused
+        })?;
+        let version = current.as_deref().map(document_version).unwrap_or_default();
+        let at_fault = |message: String| {
+            let mut refused = failure(message);
+            refused["path"] = json!(path.display().to_string());
+            refused["version"] = json!(version);
+            refused["written"] = json!(false);
+            refused
+        };
+        if let Some(expect) = item.get("expect") {
+            let expect = expect
+                .as_str()
+                .ok_or_else(|| at_fault("`expect` is the `version` `document` answered".into()))?;
+            if version != expect {
+                return Err(at_fault(format!(
+                    "`{}` is at version {}, not {expect}: it changed since it was read",
+                    path.display(),
+                    if version.is_empty() {
+                        "none (it is not written)"
+                    } else {
+                        &version
+                    }
+                )));
+            }
+        }
+        let text = match (item.get("text"), item.get("edits")) {
+            (Some(_), Some(_)) => {
+                return Err(at_fault(
+                    "a document takes `text` or `edits`, not both".into(),
+                ));
+            }
+            (None, Some(edits)) => entelechy_scene::edit::edit(
+                current.as_deref().unwrap_or(""),
+                &edits_from_json(edits)?,
+            )
+            .map_err(|e| at_fault(e.to_string()))?,
+            (Some(Json::String(text)), None) => text.clone(),
+            (Some(_), None) => return Err(at_fault("`text` is the document's whole text".into())),
+            (None, None) => return Err(at_fault("a document changes by `text` or `edits`".into())),
+        };
+        changes.push(Change {
+            path,
+            text,
+            version,
+            edited: item.get("edits").is_some(),
+        });
+    }
+    let texts: Vec<(std::path::PathBuf, String)> = changes
+        .iter()
+        .map(|c| (c.path.clone(), c.text.clone()))
+        .collect();
+    if let Err(refusal) = session
+        .write_documents(&texts)
+        .map_err(|e| failure(e.to_string()))?
+    {
+        let mut refused = diagnostic_json(&refusal.diagnostic);
+        refused["path"] = json!(refusal.path.display().to_string());
+        refused["written"] = json!(false);
+        if let Some(change) = changes.iter().find(|c| c.path == refusal.path) {
+            refused["version"] = json!(change.version);
+            if change.edited {
+                refused["text"] = json!(change.text);
+            }
+        }
+        return Err(refused);
+    }
+    session.claim_scene();
+    let events = if settle {
+        session.sync_settled()
+    } else {
+        session.sync()
+    };
+    let root = session.root().display().to_string();
+    let scene = session
+        .scene_text()
+        .map(|text| document_version(&text))
+        .unwrap_or_default();
+    Ok(json!({
+        "events": events_json(&events),
+        "version": scene,
+        "path": root,
+        "written": true,
+        "documents": changes.iter().map(|c| json!({ "path": c.path.display().to_string(), "version": document_version(&c.text) })).collect::<Vec<_>>(),
     }))
 }
 

@@ -64,8 +64,9 @@ pub(crate) enum Claim {
     None,
     /// The next scene read is the change of the request being answered.
     Asked,
-    /// The request's scene waits for its Kernels.
-    Waiting(crate::Origin),
+    /// The request's scene waits for its Kernels, with the events of the
+    /// syncs since it was asked.
+    Waiting(crate::Origin, Vec<Event>),
     /// The request's scene landed on a later sync, with that sync's
     /// events ([`Session::take_landing`]).
     Landed(Vec<Event>),
@@ -544,6 +545,224 @@ impl Session {
         Ok(Ok(()))
     }
 
+    /// Where `path`, spelled from the scene's directory or whole, lands as
+    /// a document a compose may write: a `.ent` or `.esn` file under the
+    /// scene's directory, judged where it lands after its links, and in
+    /// no package directory. A package is the person's, kept as found.
+    pub fn composable(&self, path: &Path) -> Result<PathBuf, String> {
+        let store = self.store();
+        let dir = self.scene.root().parent().unwrap_or_else(|| Path::new("."));
+        let home = store.canonical(dir).unwrap_or_else(|_| store.whole(dir));
+        let wanted = store.whole(&dir.join(path));
+        if !matches!(
+            wanted.extension().and_then(|e| e.to_str()),
+            Some("ent" | "esn")
+        ) {
+            return Err(format!(
+                "`{}` is not a document: a compose writes `.ent` and `.esn` files",
+                path.display()
+            ));
+        }
+        // Where it lands: its nearest directory that exists, after links,
+        // and the rest of its path, made new.
+        let mut existing = wanted.clone();
+        let mut rest = Vec::new();
+        while store.kind(&existing).is_none() {
+            let (Some(up), Some(name)) = (existing.parent(), existing.file_name()) else {
+                break;
+            };
+            rest.push(name.to_owned());
+            existing = up.to_path_buf();
+        }
+        let mut landed = store.canonical(&existing).unwrap_or(existing);
+        for name in rest.iter().rev() {
+            landed.push(name);
+        }
+        if !landed.starts_with(&home) {
+            return Err(format!(
+                "`{}` is outside the scene's directory `{}`: a compose writes the scene's documents there and nowhere else",
+                path.display(),
+                home.display()
+            ));
+        }
+        for packages in store.packages() {
+            let packages = store
+                .canonical(packages)
+                .unwrap_or_else(|_| store.whole(packages));
+            if landed.starts_with(&packages) {
+                return Err(format!(
+                    "`{}` is in the package directory `{}`: a package is kept as it was found, not composed",
+                    path.display(),
+                    packages.display()
+                ));
+            }
+        }
+        Ok(landed)
+    }
+
+    /// The document a compose names by `path` ([`Session::composable`]):
+    /// where it lands, and its text, none when it is new.
+    pub fn composed_document(&self, path: &Path) -> Result<(PathBuf, Option<String>), String> {
+        let landed = self.composable(path)?;
+        if self.store().kind(&landed).is_none() {
+            return Ok((landed, None));
+        }
+        self.allowed_read(&landed)?;
+        let text = self
+            .store()
+            .read_text(&landed)
+            .map_err(|e| format!("{}: {e}", landed.display()))?;
+        Ok((landed, Some(text)))
+    }
+
+    /// Replaces documents of the scene, each whole, all or none: each where
+    /// a compose may write ([`Session::composable`]), each the scene uses or
+    /// places once all are written (a new one is used by the same change),
+    /// and the scene with all of them checked as `entelechy check` checks
+    /// it, their Kernels compiled and granted, before any reaches the
+    /// store. The scene is written last. A refusal names the document at
+    /// fault, leaves every document as it was, and is recorded as an
+    /// attempt. The outer error is the store's.
+    pub fn write_documents(
+        &mut self,
+        changes: &[(PathBuf, String)],
+    ) -> Result<Result<(), crate::Refusal>, SessionError> {
+        let checked = self.check_documents(changes);
+        let landed = match checked {
+            Ok(landed) => landed,
+            Err(refusal) => {
+                let text = changes
+                    .iter()
+                    .find(|(path, _)| {
+                        self.composable(path).ok().as_deref() == Some(refusal.path.as_path())
+                    })
+                    .map(|(_, text)| text.as_str());
+                self.history.refused(
+                    refusal.path.display().to_string(),
+                    refusal.diagnostic.to_string(),
+                    text,
+                    self.origin.clone(),
+                );
+                return Ok(Err(refusal));
+            }
+        };
+        let root = self
+            .store()
+            .canonical(self.scene.root())
+            .unwrap_or_else(|_| self.scene.root().to_path_buf());
+        // The documents the scene reaches first, so the scene, read
+        // again, finds them all.
+        let (scene, others): (Vec<_>, Vec<_>) =
+            landed.into_iter().partition(|(path, _)| *path == root);
+        for (path, text) in others.iter().chain(&scene) {
+            self.store()
+                .write(path, text.as_bytes())
+                .map_err(|e| SessionError::Io(path.clone(), e))?;
+        }
+        Ok(Ok(()))
+    }
+
+    fn check_documents(
+        &self,
+        changes: &[(PathBuf, String)],
+    ) -> Result<Vec<(PathBuf, String)>, crate::Refusal> {
+        let store = self.store();
+        let refused = |path: PathBuf, message: String| crate::Refusal {
+            path,
+            diagnostic: crate::Diagnostic::new(message),
+        };
+        let mut landed: Vec<(PathBuf, String)> = Vec::new();
+        for (path, text) in changes {
+            let at = self
+                .composable(path)
+                .map_err(|why| refused(path.clone(), why))?;
+            if landed.iter().any(|(seen, _)| *seen == at) {
+                return Err(refused(
+                    at,
+                    "this document is named twice in one compose".into(),
+                ));
+            }
+            landed.push((at, text.clone()));
+        }
+        let root = store
+            .canonical(self.scene.root())
+            .unwrap_or_else(|_| self.scene.root().to_path_buf());
+        let overlay = crate::store::Overlay::new(store, &landed);
+        let root_text = match landed.iter().find(|(path, _)| *path == root) {
+            Some((_, text)) => text.clone(),
+            None => (&overlay as &dyn Store)
+                .read_text(&root)
+                .map_err(|e| refused(root.clone(), e.to_string()))?,
+        };
+        // Each document written is one the scene, as written, uses or places.
+        let reached = reached_documents(&overlay, &root, &root_text);
+        for (path, _) in &landed {
+            if *path != root && !reached.contains(path) {
+                return Err(refused(
+                    path.clone(),
+                    format!(
+                        "`{}` is written but the scene neither uses nor places it: a document a compose adds is used in the same compose",
+                        path.display()
+                    ),
+                ));
+            }
+        }
+        // The scene checked whole, as `entelechy check` checks it.
+        let checked = crate::check::check_document(&overlay, &root, false);
+        if let Some((_, line)) = checked.lines.iter().find(|(problem, _)| *problem) {
+            return Err(placed(&overlay, line, &root));
+        }
+        let readable = |path: &Path| self.allowed_read(path);
+        let granted = |module: &entelechy_ir::Validated| {
+            self.runtime
+                .granted(module)
+                .map_err(|why| crate::Diagnostic::new(why.to_string()))
+        };
+        self.scene
+            .check_in(&overlay, &root_text, &readable, &granted)
+            .map_err(|diagnostic| crate::Refusal {
+                path: root.clone(),
+                diagnostic,
+            })?;
+        // A written Kernel document's Kernels are granted as the scene's are.
+        for (path, _) in landed.iter().filter(|(path, _)| *path != root) {
+            if path.extension().and_then(|e| e.to_str()) != Some("ent") {
+                continue;
+            }
+            let mut document = (&overlay as &dyn Store)
+                .document(path)
+                .map(|document| (*document).clone())
+                .map_err(|why| refused(path.clone(), why))?;
+            let dir = path.parent().unwrap_or_else(|| Path::new("."));
+            let (structs, types, functions) = crate::sources::declarations_for(
+                &overlay,
+                dir,
+                &document.uses,
+                entelechy_language::Own::of(&document),
+            )
+            .map_err(|why| refused(path.clone(), why))?;
+            document.resolve((&structs, &types, &functions));
+            for kernel in &document.kernels {
+                let id = crate::sources::named_id(kernel).map_err(|diagnostic| crate::Refusal {
+                    path: path.clone(),
+                    diagnostic,
+                })?;
+                let module =
+                    entelechy_compiler::compile_kernel(kernel, Some(&id)).map_err(|error| {
+                        crate::Refusal {
+                            path: path.clone(),
+                            diagnostic: crate::Diagnostic::from(&error),
+                        }
+                    })?;
+                granted(&module).map_err(|diagnostic| crate::Refusal {
+                    path: path.clone(),
+                    diagnostic,
+                })?;
+            }
+        }
+        Ok(landed)
+    }
+
     /// Where each node with a published Kernel runs, and why when off the
     /// main backend.
     pub fn placements(&self) -> Vec<(String, entelechy_kernel::Placement)> {
@@ -691,9 +910,11 @@ impl Session {
     }
 
     /// Whether the scene last read waits for its Kernels before it
-    /// replaces the running one.
+    /// replaces the running one, for the documents it uses, compiling off
+    /// the frames, before it is read again, or for a Kernel they changed,
+    /// still preparing, before it runs.
     pub fn scene_waiting(&self) -> bool {
-        self.scene.waiting()
+        self.scene.waiting() || self.kernels.preparing()
     }
 
     /// The events of the later sync on which a request's claimed scene
@@ -1536,5 +1757,95 @@ impl Session {
         y: u32,
     ) -> Result<entelechy_kernel::Pixel, SessionError> {
         observe::read_pixel(&mut self.runtime, image, x, y)
+    }
+}
+
+/// The documents the scene at `root`, its text `text`, uses or places,
+/// and what those use and place in turn, each by its one name.
+fn reached_documents(
+    store: &dyn Store,
+    root: &Path,
+    text: &str,
+) -> std::collections::BTreeSet<PathBuf> {
+    let mut reached = std::collections::BTreeSet::new();
+    let mut graphs = vec![(root.to_path_buf(), text.to_owned())];
+    let one = |path: &Path| store.canonical(path).unwrap_or_else(|_| store.whole(path));
+    while let Some((path, text)) = graphs.pop() {
+        if !reached.insert(one(&path)) {
+            continue;
+        }
+        let Ok(document) = entelechy_language::parse_document(&text) else {
+            continue;
+        };
+        let base = path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        if let Ok(used) = crate::sources::used_documents(store, &base, &document.uses) {
+            reached.extend(used.iter().map(|used| one(used)));
+        }
+        for node in &document.nodes {
+            if let entelechy_language::NodeKind::SubGraph(placed) = &node.kind {
+                let at = crate::sources::file_at(store, &base.join(&placed.value));
+                if let Ok(text) = store.read_text(&at) {
+                    graphs.push((at, text));
+                }
+            }
+        }
+    }
+    reached
+}
+
+/// A problem line of a check (`path:line:column: message`, or `path:
+/// message`) as a refusal of the document it names, the scene when it
+/// names none.
+fn placed(store: &dyn Store, line: &str, root: &Path) -> crate::Refusal {
+    let bytes = line.as_bytes();
+    let mut at = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b':' {
+            let rest = &line[i + 1..];
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if !digits.is_empty() && rest[digits.len()..].starts_with(':') {
+                let after = &rest[digits.len() + 1..];
+                let column: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+                if !column.is_empty() && after[column.len()..].starts_with(':') {
+                    at = Some((
+                        i,
+                        digits.parse().unwrap_or(1),
+                        column.parse().unwrap_or(1),
+                        after[column.len() + 1..].trim().to_owned(),
+                    ));
+                    break;
+                }
+            }
+            if rest.starts_with(' ') && at.is_none() && i > 0 {
+                let path = store.whole(Path::new(&line[..i]));
+                if store.kind(&path).is_some() {
+                    return crate::Refusal {
+                        path: store.canonical(&path).unwrap_or(path),
+                        diagnostic: crate::Diagnostic::new(rest.trim()),
+                    };
+                }
+            }
+        }
+        i += 1;
+    }
+    match at {
+        Some((end, line_no, column, message)) => {
+            let path = store.whole(Path::new(&line[..end]));
+            crate::Refusal {
+                path: store.canonical(&path).unwrap_or(path),
+                diagnostic: crate::Diagnostic {
+                    message,
+                    at: Some((line_no, column)),
+                },
+            }
+        }
+        None => crate::Refusal {
+            path: root.to_path_buf(),
+            diagnostic: crate::Diagnostic::new(line),
+        },
     }
 }

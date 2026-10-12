@@ -383,6 +383,11 @@ impl Kernels {
         scene
     }
 
+    /// Whether a change is still being prepared, to publish at a later sync.
+    pub(crate) fn preparing(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
     /// Waits until every pending change is published or refused; returns
     /// the scene's outcome as [`Kernels::collect`] does.
     pub(crate) fn wait(&mut self, runtime: &mut Runtime, events: &mut Vec<Event>) -> Option<bool> {

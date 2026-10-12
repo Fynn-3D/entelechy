@@ -329,6 +329,16 @@ impl Scene {
         text: &str,
         readable: &dyn Fn(&Path) -> Result<(), String>,
     ) -> Result<(entelechy_language::Document, entelechy_scene::Lowered), Diagnostic> {
+        self.lower_in(self.store.as_ref(), text, readable)
+    }
+
+    /// [`Scene::lower`], its documents read from `store`.
+    fn lower_in(
+        &self,
+        store: &dyn Store,
+        text: &str,
+        readable: &dyn Fn(&Path) -> Result<(), String>,
+    ) -> Result<(entelechy_language::Document, entelechy_scene::Lowered), Diagnostic> {
         let document =
             entelechy_language::parse_document(text).map_err(|e| Diagnostic::from(&e))?;
         // Every used or placed document passes `readable` before any is
@@ -342,7 +352,6 @@ impl Scene {
             readable(&base.join(&path.value))
                 .map_err(|why| Diagnostic::new(format!("`{}` is not read: {why}", path.value)))?;
         }
-        let store = self.store.as_ref();
         let mut loader = |path: &Path| locate_document(store, path);
         let mut declare =
             |base: &Path, uses: &[entelechy_language::Use], own: entelechy_language::Own<'_>| {
@@ -385,9 +394,20 @@ impl Scene {
         readable: &dyn Fn(&Path) -> Result<(), String>,
         granted: &dyn Fn(&entelechy_ir::Validated) -> Result<(), Diagnostic>,
     ) -> Result<(), Diagnostic> {
-        let (mut document, lowered) = self.lower(text, readable)?;
+        self.check_in(self.store.as_ref(), text, readable, granted)
+    }
+
+    /// [`Scene::check`], its documents read from `store`.
+    pub(crate) fn check_in(
+        &self,
+        store: &dyn Store,
+        text: &str,
+        readable: &dyn Fn(&Path) -> Result<(), String>,
+        granted: &dyn Fn(&entelechy_ir::Validated) -> Result<(), Diagnostic>,
+    ) -> Result<(), Diagnostic> {
+        let (mut document, lowered) = self.lower_in(store, text, readable)?;
         let (structs, types, functions) = declarations_for(
-            self.store.as_ref(),
+            store,
             &self.base(),
             &document.uses,
             entelechy_language::Own::of(&document),
@@ -704,9 +724,10 @@ impl Scene {
         std::mem::take(&mut self.superseded)
     }
 
-    /// Whether a staged scene waits for its Kernels.
+    /// Whether a staged scene waits for its Kernels, or documents it uses
+    /// compile off the frames before it is read again.
     pub(crate) fn waiting(&self) -> bool {
-        self.staged.is_some()
+        self.staged.is_some() || self.compiling.is_some()
     }
 
     /// Whether the running or staged scene places `path` as a graph.

@@ -466,11 +466,14 @@ protocol. Held by the protocol's tests and the history's own.
 
 ## A live world is changed through three doors, each at its own grain
 
-- **Structure**, a statement at a time: `compose` edits the scene text
-  where a node, a node's member, an output or a declaration is written,
-  and only there, or writes it whole. The scene is then read again as an
-  edit on disk is; a text whose graph cannot run a frame (a missing
-  source, a cycle) is refused before it replaces the running one.
+- **Structure**, a statement at a time: `compose` edits the scene's
+  documents (the scene, and the Kernel and graph documents under its
+  directory that it uses or places) where a node, a node's member, an
+  output or a declaration is written, and only there, or writes one
+  whole; several documents change as one, all written or none. The scene
+  is then read again as an edit on disk is; texts whose graph cannot run
+  a frame (a missing source, a cycle) or whose Kernels do not compile or
+  are not granted are refused before any is written.
 - **State**, a committed port at a time: `write` replaces one, `reset`
   with a `node` and `port` restarts one from its initial source, `reset`
   alone restarts all, `restore` installs a world. A run off the frame
@@ -485,11 +488,18 @@ Nothing else reaches in.
 value set from outside is structure the document does not say, lost at
 the next read and invisible to `document` and history. The document is
 also a person's: an agent names what it changes and every other byte
-stays. A port is the smallest part of state that restarts without
+stays. An agent with no files of its own (a page, another machine)
+reaches the documents only through this door, so the door reaches all
+of the scene's: a work made over the wire is laid out as one made by
+hand, its Kernels in their own documents, and is checked whole before
+it is written. Only under the scene's directory, and never in a
+package, which is kept as it was found. A port is the smallest part of state that restarts without
 inventing a state no evaluation committed.
 
 **Where.** [`edit`](../crates/frontend/scene/src/edit.rs) in the scene,
-over the language's `outline`, and `compose` in the protocol;
+over the language's `outline`; `compose` in the protocol, and
+`Session::composable` and `Session::write_documents`, checked through
+the store's `Overlay`;
 `Graph::order` where the session lowers a scene. `Evaluator::reset_port`
 and `reset_state` in the
 [graph's state](../crates/core/graph/src/evaluate/state.rs);
@@ -499,7 +509,9 @@ graph's tests (one port restarts, the others keep theirs; a reset lets
 go of exactly the runs that began from what it forgot), the scene's edit
 tests (every byte an edit does not name is kept), the protocol's (a
 node's own value refused by `param`, changed by an edit and kept by the
-document; a declared param reaching its node), and the voxel replay.
+document; a declared param reaching its node; the scene's documents
+composed together or none, only where a compose may write), and the
+voxel replay.
 
 ## A world is restored only when the whole world can live again
 
