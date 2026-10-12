@@ -1799,6 +1799,11 @@ fn compose_writes_the_scenes_documents_together_or_none() {
             ] }),
             json!({ "id": 10, "op": "compose", "path": "kernels/a.ent", "expect": stale, "text": twice("6.0") }),
             json!({ "id": 11, "op": "compose", "text": start, "documents": [] }),
+            // A new document whose own use reaches nothing is refused for that, not as unused.
+            json!({ "id": 12, "op": "compose", "documents": [
+                { "path": "kernels/c.ent", "text": "use \"nowhere.ent\";\nfn c() -> Float { return 1.0; }\n" },
+                { "edits": [{ "use": "kernels/c.ent", "text": "use \"kernels/c.ent\";" }] },
+            ] }),
         ],
     );
     assert_eq!(responses[0]["ok"]["written"], true, "{}", responses[0]);
@@ -1833,6 +1838,7 @@ fn compose_writes_the_scenes_documents_together_or_none() {
         (8, "refers to unknown source `missing.result`"),
         (9, "changed since it was read"),
         (10, "they stand in each"),
+        (11, "nowhere.ent"),
     ] {
         let answer = &responses[index]["error"];
         assert!(
@@ -1857,6 +1863,7 @@ fn compose_writes_the_scenes_documents_together_or_none() {
         twice("3.0")
     );
     assert!(!dir.join("kernels/b.ent").exists());
+    assert!(!dir.join("kernels/c.ent").exists());
     assert!(!dir.with_file_name("outside.ent").exists());
     assert_eq!(
         std::fs::read_to_string(dir.join("shelf/kept.entpkg/kernels/kept.ent")).unwrap(),

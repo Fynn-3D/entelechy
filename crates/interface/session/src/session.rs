@@ -694,10 +694,14 @@ impl Session {
                 .read_text(&root)
                 .map_err(|e| refused(root.clone(), e.to_string()))?,
         };
-        // Each document written is one the scene, as written, uses or places.
+        // Each document written is one the scene, as written, uses or places;
+        // a reach that cannot be worked out is the whole check's to say.
         let reached = reached_documents(&overlay, &root, &root_text);
         for (path, _) in &landed {
-            if *path != root && !reached.contains(path) {
+            if let Some(reached) = &reached
+                && *path != root
+                && !reached.contains(path)
+            {
                 return Err(refused(
                     path.clone(),
                     format!(
@@ -1761,12 +1765,13 @@ impl Session {
 }
 
 /// The documents the scene at `root`, its text `text`, uses or places,
-/// and what those use and place in turn, each by its one name.
+/// and what those use and place in turn, each by its one name; none when
+/// a document does not parse or a use does not resolve.
 fn reached_documents(
     store: &dyn Store,
     root: &Path,
     text: &str,
-) -> std::collections::BTreeSet<PathBuf> {
+) -> Option<std::collections::BTreeSet<PathBuf>> {
     let mut reached = std::collections::BTreeSet::new();
     let mut graphs = vec![(root.to_path_buf(), text.to_owned())];
     let one = |path: &Path| store.canonical(path).unwrap_or_else(|_| store.whole(path));
@@ -1774,16 +1779,13 @@ fn reached_documents(
         if !reached.insert(one(&path)) {
             continue;
         }
-        let Ok(document) = entelechy_language::parse_document(&text) else {
-            continue;
-        };
+        let document = entelechy_language::parse_document(&text).ok()?;
         let base = path
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
-        if let Ok(used) = crate::sources::used_documents(store, &base, &document.uses) {
-            reached.extend(used.iter().map(|used| one(used)));
-        }
+        let used = crate::sources::used_documents(store, &base, &document.uses).ok()?;
+        reached.extend(used.iter().map(|used| one(used)));
         for node in &document.nodes {
             if let entelechy_language::NodeKind::SubGraph(placed) = &node.kind {
                 let at = crate::sources::file_at(store, &base.join(&placed.value));
@@ -1793,7 +1795,7 @@ fn reached_documents(
             }
         }
     }
-    reached
+    Some(reached)
 }
 
 /// A problem line of a check (`path:line:column: message`, or `path:
