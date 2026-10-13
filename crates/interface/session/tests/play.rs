@@ -178,12 +178,18 @@ fn the_pointer_is_found_in_the_picture_where_it_landed() {
     assert_eq!(context.input.wheel, [0.0, 2.0]);
 }
 
+/// A clock a second on at each look: every frame looks at the disk.
+fn ticking() -> f64 {
+    static SECONDS: AtomicU64 = AtomicU64::new(0);
+    SECONDS.fetch_add(1, Ordering::Relaxed) as f64
+}
+
 /// A failure every frame is reported once, and recovery is reported.
 #[test]
 fn a_failure_is_said_once() {
     let dir = scratch("failure");
     let mut session = open(&dir);
-    let mut play = Play::new(still);
+    let mut play = Play::new(ticking);
     shown(&mut play, &mut session);
     let broken = SCENE.replace("domain = vec2(4, 2);", "domain = window() / 0.0;");
     std::fs::write(dir.join("scene.esn"), broken).unwrap();

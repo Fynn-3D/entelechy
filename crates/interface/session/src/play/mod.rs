@@ -241,11 +241,17 @@ pub struct Play {
     status: String,
     /// Lines for the device to print or show.
     said: Vec<String>,
+    /// When the disk was last looked at, `None` before the first frame.
+    synced: Option<f64>,
 }
 
 /// How long a pad button's release waits, in seconds: a press within it
 /// is the contacts chattering, the button still held.
 const PAD_SETTLE: f64 = 0.04;
+
+/// How often the disk is looked at, in seconds: changes to documents and
+/// input files are found within it, and frames between do not stat them.
+const SYNC_EVERY: f64 = 0.25;
 
 impl Play {
     /// A play timed by `clock`, the host's clock in seconds.
@@ -273,6 +279,7 @@ impl Play {
             sound: None,
             status: "starting".into(),
             said: Vec::new(),
+            synced: None,
         }
     }
 
@@ -468,13 +475,18 @@ impl Play {
         self.sound = Some(description.into());
     }
 
-    /// One frame: syncs disk changes, takes a due replay frame, evaluates,
+    /// One frame: syncs disk changes (every [`SYNC_EVERY`] seconds, every
+    /// frame while a replay plays), takes a due replay frame, evaluates,
     /// and names the picture and sound.
     pub fn frame(&mut self, session: &mut Session, view: View) -> Frame {
         let begun = (self.clock)();
         let waited_before = session.device_waited();
-        for event in session.sync() {
-            self.said.push(event.to_string());
+        let due = self.replaying.is_some() || self.synced.is_none_or(|at| begun - at >= SYNC_EVERY);
+        if due {
+            self.synced = Some(begun);
+            for event in session.sync() {
+                self.said.push(event.to_string());
+            }
         }
         // While a replay plays, it is the whole input.
         let replayed = match self.replay_frame(session) {

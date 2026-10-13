@@ -33,7 +33,8 @@ usage:
               [--allow file.read|file.write|file.delete=<dir>]...
               [--allow clipboard.read|clipboard.write]... [--grant <capability,...>]
       Open a window showing the scene output. Kernel files are republished as
-      they change; a rejected change keeps the running version. The pointer
+      they change, the disk looked at four times a second; a rejected change
+      keeps the running version. The pointer
       and keys reach Kernels that declare `input.read`, and so do the
       window's size in pixels and its scale factor, which a node's `domain`
       may take as `window()`; --window opens the window at that logical size
