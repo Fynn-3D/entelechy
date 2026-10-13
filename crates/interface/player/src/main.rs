@@ -21,6 +21,7 @@ use winit::event::{
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState};
+use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 const USAGE: &str = "\
@@ -736,17 +737,16 @@ impl ApplicationHandler for Player {
                 self.play.typed(&text);
             }
             WindowEvent::Ime(Ime::Disabled) => self.composing = false,
-            WindowEvent::KeyboardInput {
-                event:
-                    KeyEvent {
-                        logical_key,
-                        state,
-                        repeat,
-                        text,
-                        ..
-                    },
-                ..
-            } => {
+            WindowEvent::KeyboardInput { event, .. } => {
+                // The key pressed, as the keyboard has it without the
+                // modifiers held: Option+Z is Z, not the Ω it types.
+                let logical_key = event.key_without_modifiers();
+                let KeyEvent {
+                    state,
+                    repeat,
+                    text,
+                    ..
+                } = event;
                 let down = state == ElementState::Pressed;
                 let shortcut = self.modifiers.control_key() || self.modifiers.super_key();
                 // Cmd+O (Ctrl+O off macOS) chooses a folder, where the
