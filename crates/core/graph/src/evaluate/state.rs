@@ -5,8 +5,9 @@ use super::*;
 
 impl Evaluator {
     /// Before the nodes run: every `<~` port whose committed state lacks
-    /// the port's shape and layout is carried over by its migration
-    /// Kernel, or restarts from its initial source without one. The
+    /// the port's shape and layout is carried over by the state's
+    /// migration Kernel (the one any of its readers names), or restarts
+    /// from its initial source without one. The
     /// replaced state is kept for [`Evaluator::release_replaced`] or
     /// [`Evaluator::restore_replaced`]. A failed migration puts back what
     /// this call changed.
@@ -31,6 +32,20 @@ impl Evaluator {
     ) -> Result<(Migrated, Reset), EvaluateError> {
         let mut migrated = Vec::new();
         let mut reset = Vec::new();
+        // A state's migration is the one any of its readers names
+        // (`Graph::order` refuses two).
+        let named: BTreeMap<(NodeId, String), KernelId> = groups
+            .iter()
+            .flat_map(|group| group.node.inputs.values())
+            .filter_map(|binding| match binding {
+                Binding::Previous {
+                    source: Source::Node { node, port },
+                    migration: Some(kernel),
+                    ..
+                } => Some(((node.clone(), port.clone()), kernel.clone())),
+                _ => None,
+            })
+            .collect();
         for group in groups {
             let manifest = group.version.manifest();
             for (name, binding) in &group.node.inputs {
@@ -68,7 +83,7 @@ impl Evaluator {
                         schema.describe()
                     )
                 };
-                let carried = match migration {
+                let carried = match migration.as_ref().or_else(|| named.get(&key)) {
                     Some(kernel) => {
                         let fail = |message: String| EvaluateError::Migration {
                             node: group.node.id.clone(),

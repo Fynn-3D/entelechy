@@ -231,6 +231,15 @@ pub enum GraphError {
         /// The port.
         port: String,
     },
+    /// Two `<~` readers of one state name different migrations for it.
+    TwoMigrations {
+        /// The state: a node's output.
+        state: Source,
+        /// One reader's migration.
+        first: KernelId,
+        /// Another reader's.
+        second: KernelId,
+    },
 }
 
 impl fmt::Display for GraphError {
@@ -262,6 +271,14 @@ impl fmt::Display for GraphError {
             Self::FeedbackNeedsNode { node, port } => write!(
                 f,
                 "node `{node}` port `{port}` reads previous state from an external image; use a node output"
+            ),
+            Self::TwoMigrations {
+                state,
+                first,
+                second,
+            } => write!(
+                f,
+                "the state of `{state}` is migrated by `{first}` and by `{second}`; its readers name one migration, or one of them does"
             ),
         }
     }
@@ -472,6 +489,37 @@ impl Graph {
                             near,
                         });
                     }
+                }
+            }
+        }
+        // A state's migration is the state's: its `<~` readers name at most
+        // one between them.
+        let mut migrations: Vec<(&Source, &KernelId)> = Vec::new();
+        for node in &self.nodes {
+            for binding in node.inputs.values() {
+                let Binding::Previous {
+                    source,
+                    migration: Some(kernel),
+                    ..
+                } = binding
+                else {
+                    continue;
+                };
+                let first = migrations
+                    .iter()
+                    .find(|(state, _)| *state == source)
+                    .map(|(_, first)| *first);
+                if first.is_none() {
+                    migrations.push((source, kernel));
+                }
+                if let Some(first) = first
+                    && first != kernel
+                {
+                    return Err(GraphError::TwoMigrations {
+                        state: source.clone(),
+                        first: first.clone(),
+                        second: kernel.clone(),
+                    });
                 }
             }
         }

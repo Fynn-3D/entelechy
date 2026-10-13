@@ -707,8 +707,10 @@ be keywords.
    `port <~ source from initial migrate kernel.id@v` carries the state
    over: the named Kernel is a map over one input in the old layout,
    giving the new, run once before the nodes; the evaluation reports it
-   as migrated. Without `migrate`, the port restarts from `initial` and
-   the evaluation reports the reset. A migration that is not published,
+   as migrated. The migration is the state's: one of its `<~` readers
+   naming it carries it for all of them, and two naming different ones
+   are refused. Without one, the state restarts from `initial` and the
+   evaluation reports the reset. A migration that is not published,
    not such a map, of the wrong layout, or failing, fails the evaluation
    and leaves the state as it was. A node runs again when its Kernel,
    its values, its extent, the clock or input it reads, or a source it

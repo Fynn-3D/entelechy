@@ -1738,6 +1738,70 @@ fn a_republished_kernels_new_state_layout_is_migrated_reset_or_refused() {
     );
 }
 
+const TALLY_PEEK_V1: &str = "kernel tally.peek@1 { requires { field.read; field.write; } struct Tally { count: Int; } input previous: Rows<Tally>; output result: Rows<Int>; compute { return sample(previous).count; } }";
+const TALLY_PEEK_V2: &str = "kernel tally.peek@1 { requires { field.read; field.write; } struct Tally { count: Int; doubled: Int; } input previous: Rows<Tally>; output result: Rows<Int>; compute { return sample(previous).count; } }";
+/// A reader of the count's state before the count itself, naming no
+/// migration.
+const TALLY_PEEKED: &str = "
+node seed: tally.zero@1 { domain = 1; }
+node peek: tally.peek@1 { previous <~ count.result from seed.result; }
+node count: tally.step@1 { previous <~ count.result from seed.result migrate tally.upgrade@1; }
+output result <- count.result;
+output seen <- peek.result;
+";
+
+/// A state's migration is the state's: one reader naming it carries the
+/// state for every reader, whichever meets the changed layout first; two
+/// readers naming different ones are refused.
+#[test]
+fn a_states_migration_is_named_by_any_of_its_readers() {
+    let mut runtime = cpu(1024);
+    for source in [
+        TALLY_ZERO,
+        TALLY_STEP_V1,
+        TALLY_PEEK_V1,
+        TALLY_UPGRADE,
+        TALLY_UPGRADE_WRONG,
+    ] {
+        load(&mut runtime, source);
+    }
+    let graph = entelechy_scene::parse(TALLY_PEEKED).unwrap();
+    let mut evaluator = Evaluator::new();
+    let ctx = Context::default();
+    let evaluate = |evaluator: &mut Evaluator, runtime: &mut Runtime, graph: &Graph| {
+        evaluator.evaluate(graph, runtime, &BTreeMap::new(), &ctx, &BTreeMap::new())
+    };
+    for _ in 0..3 {
+        evaluate(&mut evaluator, &mut runtime, &graph).unwrap();
+    }
+    load(&mut runtime, TALLY_STEP_V2);
+    load(&mut runtime, TALLY_PEEK_V2);
+    let report = evaluate(&mut evaluator, &mut runtime, &graph).unwrap();
+    assert!(report.reset.is_empty(), "{:?}", report.reset);
+    assert_eq!(
+        tally(&runtime, report.output),
+        vec![4, 8],
+        "carried, not restarted"
+    );
+    assert_eq!(report.migrated.len(), 1);
+
+    let two = entelechy_scene::parse(&TALLY_PEEKED.replace(
+        "previous <~ count.result from seed.result; }",
+        "previous <~ count.result from seed.result migrate tally.wrong@1; }",
+    ))
+    .unwrap();
+    let error = evaluate(&mut evaluator, &mut runtime, &two).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("is migrated by `tally.wrong@1` and by `tally.upgrade@1`")
+            || error
+                .to_string()
+                .contains("is migrated by `tally.upgrade@1` and by `tally.wrong@1`"),
+        "{error}"
+    );
+}
+
 const TALLY_FAILS_AT_5: &str = "kernel tally.check@1 { requires { field.read; field.write; } struct Tally { count: Int; doubled: Int; } input tally: Rows<Tally>; output result: Rows<Int>; compute { let t = sample(tally); return 100 / (t.count - 5); } }";
 
 /// The replaced state is put back for the Kernel that wrote it; when one
