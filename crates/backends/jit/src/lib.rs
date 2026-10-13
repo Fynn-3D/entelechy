@@ -83,6 +83,8 @@ pub struct Ctx {
     scale: f32,
     buttons: u32,
     keys: [u32; 8],
+    /// The characters typed since the last evaluation, 0 after the last.
+    typed: [u32; entelechy_abi::TYPED],
     width: u32,
     height: u32,
     depth: u32,
@@ -430,6 +432,7 @@ fn shared(
         scale: invocation.context.scale,
         buttons: input.button_bits(),
         keys: input.key_words(),
+        typed: input.typed_words(),
         width: domain.width(),
         height: domain.height(),
         depth: domain.depth(),
@@ -524,6 +527,7 @@ fn compute_into(
         scale: t.scale,
         buttons: t.buttons,
         keys: t.keys,
+        typed: t.typed,
         width: t.width,
         height: t.height,
         depth: t.depth,
@@ -1319,6 +1323,15 @@ unsafe extern "C" fn entelechy_jit_key(ctx: *const Ctx, code: i32) -> i32 {
     ((keys[(code >> 5) as usize] >> (code & 31)) & 1) as i32
 }
 
+/// The character typed at place `k` since the last evaluation, 0 after
+/// the last.
+unsafe extern "C" fn entelechy_jit_typed(ctx: *const Ctx, k: i32) -> i32 {
+    if !(0..entelechy_abi::TYPED as i32).contains(&k) {
+        return 0;
+    }
+    (unsafe { &(*ctx).typed })[k as usize] as i32
+}
+
 /// Whether a button is held: 0 left, 1 right, 2 middle of a pointer,
 /// then a pad's from 8.
 unsafe extern "C" fn entelechy_jit_button(ctx: *const Ctx, code: i32) -> i32 {
@@ -1507,6 +1520,7 @@ pub(crate) fn symbols() -> Vec<(&'static str, *const u8)> {
         ("entelechy_jit_sample", entelechy_jit_sample as *const u8),
         ("entelechy_jit_linear", entelechy_jit_linear as *const u8),
         ("entelechy_jit_key", entelechy_jit_key as *const u8),
+        ("entelechy_jit_typed", entelechy_jit_typed as *const u8),
         ("entelechy_jit_button", entelechy_jit_button as *const u8),
         ("entelechy_jit_put", entelechy_jit_put as *const u8),
         (

@@ -524,6 +524,7 @@ impl Emitter<'_> {
             Op::Window => "ctx[4].zw".to_owned(),
             Op::Scale => "ctx[5].x".to_owned(),
             Op::Key(code) => format!("key_down({})", v(code)),
+            Op::Typed(k) => format!("typed_at({})", v(k)),
             Op::Element => "i32(element)".to_owned(),
             Op::Count(input) => {
                 let slot = CONTEXT_HEAD as u32 + input;

@@ -633,6 +633,8 @@ builtin trunc
   trunc(x: Vec2) -> Vec2
   trunc(x: Vec3) -> Vec3
   trunc(x: Vec4) -> Vec4
+builtin typed requires input.read
+  typed(k: Int) -> Int
 builtin udiv
   udiv(a: Int, b: Int) -> Int
 builtin ult

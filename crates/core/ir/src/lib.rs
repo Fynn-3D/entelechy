@@ -1249,6 +1249,10 @@ pub enum Op {
     /// Whether the key with the given `Int` code is held, as `Bool`.
     /// Context: `input.read`.
     Key(ValueId),
+    /// The character typed since the last evaluation at the given `Int`
+    /// place, as an `Int` code point; 0 after the last. Context:
+    /// `input.read`.
+    Typed(ValueId),
     /// The current element's linear index as `Int`. Entry point only.
     Element,
     /// The element of an input at the current coordinate, clamped to the

@@ -439,6 +439,21 @@ impl Builder<'_> {
                 }
                 Ok(self.emit(Type::Bool, Op::Key(code)))
             }
+            "typed" => {
+                self.require(name, Capability::InputRead, span)?;
+                self.arity(name, args, 1, span)?;
+                let k = self.value(&args[0])?;
+                if self.ty(k) != Type::Int {
+                    return Err(semantic(
+                        args[0].span,
+                        format!(
+                            "`typed` needs an Int place, found {}",
+                            self.describe(self.ty(k))
+                        ),
+                    ));
+                }
+                Ok(self.emit(Type::Int, Op::Typed(k)))
+            }
             "index" => {
                 self.arity(name, args, 0, span)?;
                 if let Some((position, depth)) = self.each.last().copied()

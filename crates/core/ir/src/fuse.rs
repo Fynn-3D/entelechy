@@ -1103,7 +1103,9 @@ impl<'a> Renumber<'a> {
                 *address = self.map(*address);
                 *value = self.map(*value);
             }
-            Op::Key(code) | Op::Button(code) | Op::Stick(code) => *code = self.map(*code),
+            Op::Key(code) | Op::Typed(code) | Op::Button(code) | Op::Stick(code) => {
+                *code = self.map(*code)
+            }
             Op::Spend(counted) | Op::Emit(counted) => *counted = self.map(*counted),
             Op::Look => {}
             Op::Const(_)

@@ -100,6 +100,12 @@ pub fn forms() -> Vec<Form> {
             &["window 240 135", "window 240 135 0.25"],
         ),
         form(
+            "type",
+            "type \"<text>\"",
+            "characters typed, what `typed()` reads on the next frame (32 a frame, the rest on the frames after); `\\\"`, `\\\\`, `\\n` and `\\t` inside the quotes, `#` among them no comment",
+            &["type \"你好, Quill\""],
+        ),
+        form(
             "key",
             "key <code> down | up",
             "a key by the browser's code, as `key()` reads it: letters and digits by uppercase ASCII, space 32, enter 13, arrows 37 to 40, the rest in `help key`",
@@ -211,6 +217,9 @@ pub enum Step {
     },
     /// What the wheel scrolls for the next frame.
     Wheel([f32; 2]),
+    /// Characters typed, for the next frames to read with `typed()`, as
+    /// many a frame as one holds.
+    Type(String),
     /// A pad's axis pair: 0 left stick, 1 right stick, 2 triggers.
     Stick {
         /// Which pair.
@@ -345,6 +354,41 @@ impl std::error::Error for ReplayError {}
 /// The most frames one `frame ... to ... every` line evaluates.
 const MAX_FRAMES: u64 = 1 << 20;
 
+/// The text of a `type` line after its keyword: one quoted string, with
+/// `\"`, `\\`, `\n` and `\t`, then nothing but a comment.
+fn typed_text(rest: &str) -> Result<String, String> {
+    let shape = "`type` takes one quoted text: type \"<text>\"";
+    let mut chars = rest.trim_start().chars();
+    if chars.next() != Some('"') {
+        return Err(shape.into());
+    }
+    let mut text = String::new();
+    loop {
+        match chars.next() {
+            None => return Err(shape.into()),
+            Some('"') => break,
+            Some('\\') => text.push(match chars.next() {
+                Some('"') => '"',
+                Some('\\') => '\\',
+                Some('n') => '\n',
+                Some('t') => '\t',
+                other => {
+                    return Err(format!(
+                        "`type` knows `\\\"`, `\\\\`, `\\n` and `\\t`, not `\\{}`",
+                        other.map(String::from).unwrap_or_default()
+                    ));
+                }
+            }),
+            Some(c) => text.push(c),
+        }
+    }
+    let after = chars.as_str().trim();
+    if !after.is_empty() && !after.starts_with('#') {
+        return Err(shape.into());
+    }
+    Ok(text)
+}
+
 /// Parses replay text; relative paths resolve against `base`.
 pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
     let mut scene = None;
@@ -354,6 +398,11 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
     for (index, raw) in text.lines().enumerate() {
         let line = index as u32 + 1;
         let error = |message: String| ReplayError { line, message };
+        // Typed text is quoted, a `#` in it no comment.
+        if let Some(rest) = raw.trim_start().strip_prefix("type ") {
+            steps.push(Step::Type(typed_text(rest).map_err(error)?));
+            continue;
+        }
         let content = raw.split('#').next().unwrap_or("").trim();
         if content.is_empty() {
             continue;
@@ -947,6 +996,8 @@ pub struct Replayer {
     steps: Vec<Step>,
     next: usize,
     input: InputState,
+    /// Characters typed and not yet read by a frame.
+    typing: String,
     window: ([f32; 2], f32),
     last: Option<Report>,
     named: std::collections::BTreeSet<entelechy_graph::NodeId>,
@@ -995,6 +1046,7 @@ impl Replayer {
             steps: replay.steps.clone(),
             next: 0,
             input: InputState::default(),
+            typing: String::new(),
             window: ([0.0, 0.0], 1.0),
             last: None,
             named,
@@ -1024,10 +1076,13 @@ impl Replayer {
             let position = self.next;
             self.next += 1;
             if let Step::Frame(time) = &self.steps[position] {
+                // The characters typed, as many as a frame holds.
+                let mut input = self.input;
+                self.typing = input.type_text(&self.typing).to_owned();
                 let context = Context {
                     time: *time,
                     rate: 0.0,
-                    input: self.input,
+                    input,
                     window: self.window.0,
                     scale: self.window.1,
                 };
@@ -1086,6 +1141,7 @@ impl Replayer {
                 }
             }
             Step::Wheel(delta) => input.wheel = *delta,
+            Step::Type(text) => self.typing.push_str(text),
             Step::Pads(count) => input.pads = *count,
             Step::Reset => session.reset_state(),
             Step::ResetPort { node, port } => {
@@ -1429,7 +1485,7 @@ mod tests {
             .collect();
         let replay = parse(&lines.join("\n"), Path::new(".")).unwrap();
         assert!(replay.kernels.is_some(), "`library` is a form");
-        let mut seen = [false; 17];
+        let mut seen = [false; 18];
         for step in &replay.steps {
             seen[match step {
                 Step::Frame(_) => 0,
@@ -1449,6 +1505,7 @@ mod tests {
                 Step::Expect { .. } => 14,
                 Step::Pads(_) => 15,
                 Step::Show { .. } => 16,
+                Step::Type(_) => 17,
             }] = true;
         }
         assert!(

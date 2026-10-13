@@ -1459,7 +1459,12 @@ fn operands(op: &Op) -> Vec<ValueId> {
         Op::Extract(source, _) => vec![*source],
         Op::Subscript(array, index) => vec![*array, *index],
         Op::Call(_, args) | Op::Intrinsic(_, args) => args.clone(),
-        Op::At(_, at) | Op::AtLinear(_, at) | Op::Key(at) | Op::Button(at) | Op::Stick(at) => {
+        Op::At(_, at)
+        | Op::AtLinear(_, at)
+        | Op::Key(at)
+        | Op::Typed(at)
+        | Op::Button(at)
+        | Op::Stick(at) => {
             vec![*at]
         }
         Op::Part { at, path, .. } => at
@@ -1910,9 +1915,12 @@ fn rename(op: &mut Op, map: &dyn Fn(ValueId) -> ValueId) {
                 *arg = map(*arg);
             }
         }
-        Op::At(_, at) | Op::AtLinear(_, at) | Op::Key(at) | Op::Button(at) | Op::Stick(at) => {
-            *at = map(*at)
-        }
+        Op::At(_, at)
+        | Op::AtLinear(_, at)
+        | Op::Key(at)
+        | Op::Typed(at)
+        | Op::Button(at)
+        | Op::Stick(at) => *at = map(*at),
         Op::Part { at, path, .. } => {
             if let Some(at) = at {
                 *at = map(*at);

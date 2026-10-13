@@ -330,6 +330,8 @@ impl GpuBackend {
         let sticks = input.sticks;
         context.extend_from_slice(&[sticks[0][0], sticks[0][1], sticks[1][0], sticks[1][1]]);
         context.extend_from_slice(&[sticks[2][0], sticks[2][1], input.pads as f32, 0.0]);
+        // The characters typed, four a slot.
+        context.extend(input.typed_words().iter().map(|c| f32::from_bits(*c)));
         // Inputs: bind resident buffers directly; upload the rest once and
         // leave them resident.
         let mut input_buffers: Vec<wgpu::Buffer> = Vec::with_capacity(invocation.inputs.len());

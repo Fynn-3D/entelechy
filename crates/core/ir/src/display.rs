@@ -243,6 +243,7 @@ impl fmt::Display for Op {
             Self::Pointer => f.write_str("context pointer"),
             Self::PointerDown => f.write_str("context pointer.down"),
             Self::Key(code) => write!(f, "context key {code}"),
+            Self::Typed(k) => write!(f, "context typed {k}"),
             Self::Button(code) => write!(f, "context button {code}"),
             Self::Wheel => f.write_str("context wheel"),
             Self::Pads => f.write_str("context pads"),

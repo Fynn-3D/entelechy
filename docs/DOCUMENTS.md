@@ -321,9 +321,11 @@ Fields and context:
   samples per second, zero without a device) need `time.read`.
 - `pointer()`, `pointer_down()`, `button(n)` (0 left, 1 right, 2
   middle), `wheel()` (scroll since the last evaluation, `Vec2`),
-  `key(code)`, `window()` (physical pixels, `Vec2`, zero by zero without
-  one) and `scale()` (physical per logical pixel, one without a window)
-  need `input.read`. A bar laid out in units of `scale()` keeps its
+  `key(code)`, `typed(k)` (the `k`th character typed since the last
+  evaluation as a code point, 0 after the last: what keys or an input
+  method wrote, while `key` says which keys are held), `window()`
+  (physical pixels, `Vec2`, zero by zero without one) and `scale()`
+  (physical per logical pixel, one without a window) need `input.read`. A bar laid out in units of `scale()` keeps its
   on-screen size.
 - Reading a port needs `field.read`, writing `field.write`.
 

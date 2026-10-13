@@ -83,14 +83,14 @@ through:
 | `publish` | `source`: string, `expect`?: "absent" \| "any" \| integer | id, generation; and when it computes a `<~` port's initial source, `keeps` (those `node.port`s, which keep what they committed) and `reset` (the requests that start them from the new law) |
 | `retire` | `kernel`?: string | retired |
 | `param` | `name`: string, `value`: value | name, value, events; a node's own value is refused, and changes by `compose` |
-| `evaluate` | `nodes`?: [string], `settle`?: bool, `measure`?: bool, `clock`?: bool, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `pads`?: integer, `keys`?: [integer], `window`?: [w, h], `scale`?: number | executed, reused, committed, outputs, timings, measured, device; in the Player, ignored (the context fields it gave, which the window's own input stands in for) and a note |
+| `evaluate` | `nodes`?: [string], `settle`?: bool, `measure`?: bool, `clock`?: bool, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `pads`?: integer, `keys`?: [integer], `text`?: string, `window`?: [w, h], `scale`?: number | executed, reused, committed, outputs, timings, measured, device; in the Player, ignored (the context fields it gave, which the window's own input stands in for) and a note |
 | `read` | `output`?: string, `node`?: string, `port`?: string, `format`?: "png" \| "rgba32f" \| "ppm" \| "summary" \| "words" \| "field", `from`?: integer, `count`?: integer | a picture: width, height, format, data (base64). Any other Field: shape, extent, count, schema, `fields` (each number's name in an element of several, `hp`, `pos.x`), and its summary (each number's min, max, sum, mean, how many were not zero, and how many were not finite), or `values` from `from` (a number, or a list for an element of several), or format and data (base64) |
 | `write` | `node`: string, `port`?: string, `data`: string, `format`?: "words" \| "field" | the state replaced |
 | `snapshot` | `to`?: string | the world's revision and frame (the frames committed since it), every Kernel with its generation and source, every port's committed state; or the file written |
-| `restore` | `snapshot`?: object, `from`?: string, `laws`: "current" \| "snapshot", `structure`?: "current" \| "snapshot", `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `pads`?: integer, `keys`?: [integer], `window`?: [w, h], `scale`?: number | revision, frame, report |
+| `restore` | `snapshot`?: object, `from`?: string, `laws`: "current" \| "snapshot", `structure`?: "current" \| "snapshot", `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `pads`?: integer, `keys`?: [integer], `text`?: string, `window`?: [w, h], `scale`?: number | revision, frame, report |
 | `reset` | `node`?: string, `port`?: string | what was reset |
 | `help` | `name`?: string | `reference`, the whole of it as one Markdown text, and `versions`; or with `name`, every item of that name in full. An unknown name is an error with `similar` |
-| `trace` | `node`: string, `at`?: [x, y] \| [x, y, z], `element`?: integer, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `pads`?: integer, `keys`?: [integer], `window`?: [w, h], `scale`?: number | kernel, at, bindings, results, calls, and when the element failed, fault: its message, the function it failed in with that function's bindings, and the operation's path, line and column |
+| `trace` | `node`: string, `at`?: [x, y] \| [x, y, z], `element`?: integer, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `pads`?: integer, `keys`?: [integer], `text`?: string, `window`?: [w, h], `scale`?: number | kernel, at, bindings, results, calls, and when the element failed, fault: its message, the function it failed in with that function's bindings, and the operation's path, line and column |
 | `pin` | `node`: string | pinned |
 | `unpin` | `node`: string | unpinned |
 | `quit` |  | bye |
@@ -263,7 +263,9 @@ same way (a `Double` as the number that reads back as it, a `Long` past
 `evaluate` takes `time`, `rate` (the sound device's clock; zero when
 absent), `pointer`, `down`, `buttons` (held, by number: 0 left, 1
 right, 2 middle), `wheel` (scrolled since the last evaluation), `keys`,
-`window` (`[w, h]` in pixels) and `scale` (one when absent). An
+`text` (the characters typed since the last evaluation, what `typed()`
+reads; more than 32 are refused, the rest is the next evaluation's to
+give), `window` (`[w, h]` in pixels) and `scale` (one when absent). An
 evaluation naming no window sees the one `entelechy serve --window
 <w>x<h>[@<scale>]` gave, and none otherwise. Inside the Player the
 window is the person's and these two are ignored. Many frames are many

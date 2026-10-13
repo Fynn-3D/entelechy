@@ -57,7 +57,7 @@ pub(crate) fn trace(session: &mut Session, request: &Request) -> Result<Json, Js
         }
     };
     known_node(session, &node)?;
-    let context = context_of(session, request.json());
+    let context = context_of(session, request.json())?;
     let id = entelechy_graph::NodeId(node.clone());
     let entelechy_session::Traced {
         trace,
@@ -507,7 +507,7 @@ pub(crate) fn restore(session: &mut Session, request: &Request) -> Result<Json, 
         }
     };
     let snapshot = snapshot_from(json)?;
-    let context = context_of(session, request.json());
+    let context = context_of(session, request.json())?;
     let report = session
         .restore(&snapshot, laws, structure, &context)
         .map_err(failure)?;

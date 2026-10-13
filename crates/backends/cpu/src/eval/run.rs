@@ -1054,6 +1054,9 @@ impl<'p, 's> Machine<'p, 's> {
             Instr::Key { dst, code } => {
                 s[fp + dst] = program.context.input.key(s[fp + code] as i32) as u32;
             }
+            Instr::Typed { dst, k } => {
+                s[fp + dst] = program.context.input.typed(s[fp + k] as i32) as u32;
+            }
             Instr::Button { dst, code } => {
                 s[fp + dst] = program.context.input.button(s[fp + code] as i32) as u32;
             }

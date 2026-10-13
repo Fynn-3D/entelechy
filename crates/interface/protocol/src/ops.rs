@@ -281,6 +281,11 @@ fn context() -> Vec<Field> {
             "keys held, by the browser's codes",
         ),
         may(
+            "text",
+            Ty::Str,
+            "the characters typed since the last evaluation, what `typed()` reads; 32 at most",
+        ),
+        may(
             "window",
             Ty::Numbers(&["w", "h"]),
             "the window in pixels; else the session's",

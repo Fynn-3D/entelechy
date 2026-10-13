@@ -424,6 +424,10 @@ pub(super) enum Instr {
         dst: usize,
         code: usize,
     },
+    Typed {
+        dst: usize,
+        k: usize,
+    },
     Button {
         dst: usize,
         code: usize,

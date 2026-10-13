@@ -216,6 +216,8 @@ pub struct Play {
     /// pressed yet: every press lasts at least one frame.
     pressed: Vec<Held>,
     late: Vec<Held>,
+    /// Characters typed and not yet read by a frame.
+    typing: String,
     /// Pad buttons let go of, and when: a button pressed again within
     /// [`PAD_SETTLE`] was held all along.
     pad_released: Vec<(PadButton, f64)>,
@@ -255,6 +257,7 @@ impl Play {
             pad: Pad::default(),
             pressed: Vec::new(),
             late: Vec::new(),
+            typing: String::new(),
             pad_released: Vec::new(),
             cursor: (0.0, 0.0),
             placement: Placement::default(),
@@ -374,6 +377,18 @@ impl Play {
         self.update_pointer();
     }
 
+    /// Characters typed (a key's text, or what an input method commits),
+    /// what `typed()` reads: the next frame takes as many as it holds,
+    /// the frames after the rest. Control characters (Enter, Tab,
+    /// Backspace) and the private codes some systems give arrows and
+    /// function keys are keys, which `key()` reads, not characters.
+    pub fn typed(&mut self, text: &str) {
+        self.typing.extend(
+            text.chars()
+                .filter(|c| !c.is_control() && !('\u{F700}'..='\u{F8FF}').contains(c)),
+        );
+    }
+
     /// Wheel lines, y positive away from the person; accumulated until
     /// the next frame.
     pub fn wheel(&mut self, x: f32, y: f32) {
@@ -432,12 +447,15 @@ impl Play {
         // While a replay plays, it is the whole input.
         let replayed = match self.replay_frame(session) {
             Replayed::Wait => return Frame::Wait,
-            Replayed::Frame(context) => Some(context),
+            Replayed::Frame(context) => Some(*context),
             Replayed::Not => None,
         };
         self.stats.begin(begun);
         self.settle_pad();
-        let context = replayed.unwrap_or_else(|| self.context(view));
+        let mut context = replayed.unwrap_or_else(|| self.context(view));
+        if replayed.is_none() {
+            self.typing = context.input.type_text(&self.typing).to_owned();
+        }
         self.input.wheel = [0.0, 0.0];
         // Presses are seen; late releases apply from the next frame.
         self.pressed.clear();
@@ -646,7 +664,7 @@ impl Play {
         match replayer.next_frame(session) {
             Ok(Some(frame)) => {
                 self.status = format!("replaying, {:.2} s", frame.context.time);
-                Replayed::Frame(frame.context)
+                Replayed::Frame(Box::new(frame.context))
             }
             Ok(None) => {
                 let outcome = &replayer.outcome;
@@ -753,7 +771,7 @@ enum Held {
 /// A replay's answer for the next frame.
 enum Replayed {
     Wait,
-    Frame(Context),
+    Frame(Box<Context>),
     Not,
 }
 

@@ -983,6 +983,15 @@ impl<'a> Checker<'a> {
                 }
                 Type::Bool
             }
+            Op::Typed(k) => {
+                self.require(Capability::InputRead, position)?;
+                if self.operand(*k, position)? != Type::Int {
+                    return Err(self.fail(format!(
+                        "{position} asks for a character typed at a non-Int place"
+                    )));
+                }
+                Type::Int
+            }
             Op::Button(code) => {
                 self.require(Capability::InputRead, position)?;
                 if self.operand(*code, position)? != Type::Int {

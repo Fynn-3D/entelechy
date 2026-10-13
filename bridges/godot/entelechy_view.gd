@@ -1,6 +1,6 @@
 ## A Control that is a session's window: its size in device pixels and
 ## the screen's scale go with every `evaluate`, the pointer, buttons,
-## wheel and keys over it are the input, and each frame is an `evaluate`
+## wheel, keys and the text typed over it are the input, and each frame is an `evaluate`
 ## followed by a `read` shown as its texture, letterboxed like the Player.
 class_name EntelechyView
 extends Control
@@ -26,6 +26,7 @@ var _texture := ImageTexture.new()
 var _pointer := Vector2.ZERO
 var _buttons := {}
 var _keys := {}
+var _typing := []
 var _wheel := Vector2.ZERO
 var _started := 0
 var _stepping := false
@@ -112,6 +113,10 @@ func _gui_input(event: InputEvent) -> void:
 			set_pointer(event.position)
 		accept_event()
 	elif event is InputEventKey:
+		# A character typed, unless it is a shortcut.
+		if event.pressed and event.unicode > 31 and event.unicode != 127 \
+				and not event.ctrl_pressed and not event.meta_pressed:
+			_typing.append(String.chr(event.unicode))
 		var code := key_code(event)
 		if code >= 0:
 			press_key(code, event.pressed)
@@ -200,6 +205,9 @@ func step() -> Dictionary:
 		return {"error": "not connected"}
 	var wheel := _wheel
 	_wheel = Vector2.ZERO
+	# As many characters as an evaluation holds; the rest the next.
+	var text := "".join(PackedStringArray(_typing.slice(0, 32)))
+	_typing = _typing.slice(32)
 	var began := Time.get_ticks_usec()
 	var report := client.request("evaluate", {
 		"time": (Time.get_ticks_msec() - _started) / 1000.0,
@@ -207,6 +215,7 @@ func step() -> Dictionary:
 		"buttons": _buttons.keys(),
 		"wheel": [wheel.x, wheel.y],
 		"keys": _keys.keys(),
+		"text": text,
 		"window": [window_size().x, window_size().y],
 		"scale": window_scale(),
 	})

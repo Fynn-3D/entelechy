@@ -270,6 +270,12 @@ mod tests {
             refused(json!({ "op": "evaluate", "keys": [65, "B"] }))
                 .contains("`keys[1]` is integer")
         );
+        assert!(refused(json!({ "op": "evaluate", "text": 7 })).contains("`text` is string"));
+        // An evaluation holds 32 characters typed.
+        assert!(
+            refused(json!({ "op": "evaluate", "text": "a".repeat(33) }))
+                .contains("`text` holds at most 32 characters")
+        );
         assert!(
             refused(json!({ "op": "compose", "edits": [{ "node": 3, "text": null }] }))
                 .contains("`edits[0].node` is string")

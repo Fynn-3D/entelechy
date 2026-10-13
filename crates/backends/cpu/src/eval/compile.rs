@@ -382,9 +382,12 @@ pub(super) fn use_counts(function: &Function, slots: usize) -> Vec<u32> {
                     }
                     note(&body.result);
                 }
-                Op::At(_, a) | Op::AtLinear(_, a) | Op::Key(a) | Op::Button(a) | Op::Stick(a) => {
-                    note(a)
-                }
+                Op::At(_, a)
+                | Op::AtLinear(_, a)
+                | Op::Key(a)
+                | Op::Typed(a)
+                | Op::Button(a)
+                | Op::Stick(a) => note(a),
                 Op::Part { at, path, .. } => {
                     if let Some(at) = at {
                         note(at);
@@ -925,6 +928,10 @@ impl FunctionCompiler<'_> {
             Op::Key(code) => Instr::Key {
                 dst: define(self).at,
                 code: self.loc(code).at,
+            },
+            Op::Typed(k) => Instr::Typed {
+                dst: define(self).at,
+                k: self.loc(k).at,
             },
             Op::Element => Instr::Element {
                 dst: define(self).at,

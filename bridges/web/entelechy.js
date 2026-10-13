@@ -396,7 +396,8 @@ function placement(width, height, targetWidth, targetHeight) {
 
 /// Drives a session from a canvas: the canvas is the window (its size in
 /// device pixels and the device's scale go with every `evaluate`), the
-/// pointer, buttons, wheel and keys over it are the input, and each frame
+/// pointer, buttons, wheel, keys and the text typed over it are the input,
+/// and each frame
 /// is an `evaluate` followed by a `read` drawn onto the canvas. Given
 /// `shown`, a second canvas over the first that takes no pointer, a
 /// session that can present (Entelechy in the page, on its GPU) draws each
@@ -411,6 +412,7 @@ class Driver {
     this.pointer = [0, 0];
     this.buttons = new Set();
     this.keys = new Set();
+    this.typing = [];
     this.wheel = [0, 0];
     this.frame = { width: 0, height: 0 };
     this.placed = { x: 0, y: 0, width: 0, height: 0 };
@@ -470,11 +472,20 @@ class Driver {
       this.wheel[1] -= event.deltaY * unit;
     }, { passive: false });
     canvas.addEventListener("keydown", (event) => {
+      // A character typed, unless it is a shortcut or an input method's.
+      if (event.key.length >= 1 && [...event.key].length === 1 && !event.isComposing
+        && !event.ctrlKey && !event.metaKey && !/\p{Cc}/u.test(event.key)) {
+        this.typing.push(event.key);
+      }
       const code = Driver.keyCode(event);
       if (code !== undefined) {
         this.keys.add(code);
         event.preventDefault();
       }
+    });
+    // What an input method commits is typed.
+    canvas.addEventListener("compositionend", (event) => {
+      this.typing.push(...[...(event.data || "")]);
     });
     canvas.addEventListener("keyup", (event) => {
       const code = Driver.keyCode(event);
@@ -520,6 +531,8 @@ class Driver {
   async step() {
     const wheel = this.wheel;
     this.wheel = [0, 0];
+    // As many characters as an evaluation holds; the rest the next.
+    const text = this.typing.splice(0, 32).join("");
     const started = performance.now();
     const report = await this.client.call("evaluate", {
       time: (started - this.started) / 1000,
@@ -527,6 +540,7 @@ class Driver {
       buttons: [...this.buttons],
       wheel,
       keys: [...this.keys],
+      ...(text ? { text } : {}),
       window: this.window(),
       scale: window.devicePixelRatio || 1,
     });

@@ -268,12 +268,18 @@ pub fn output_binding(module: &Module, k: usize) -> u32 {
 pub const WORKGROUP: u32 = 8;
 /// Context slots before the per-input extents: `[width, height, time,
 /// button bits]`, `[pointer.x, pointer.y, depth, rate]`, two slots of key
-/// bits, `[wheel.x, wheel.y, window.x, window.y]`, and `[scale, fold, 0,
-/// 0]`, where `fold` is the elements per unit of `gid.y` for a `Rows`
-/// domain, which is dispatched as a grid (else zero). Each input then has
-/// `[width, height, depth, 0]`. Extents, the fold and the key bits are
-/// the bits of `u32`s, read with `bitcast`, so every extent is exact.
-pub const CONTEXT_HEAD: usize = 8;
+/// bits, `[wheel.x, wheel.y, window.x, window.y]`, `[scale, fold, 1, 0]`,
+/// where `fold` is the elements per unit of `gid.y` for a `Rows` domain,
+/// which is dispatched as a grid (else zero), the pad's two slots
+/// (`[left.x, left.y, right.x, right.y]`, `[triggers.x, triggers.y, pads,
+/// 0]`), and eight slots of the characters typed, four a slot. Each input
+/// then has `[width, height, depth, 0]`. Extents, the fold, the key bits
+/// and the characters are the bits of `u32`s, read with `bitcast`, so
+/// every one is exact.
+pub const CONTEXT_HEAD: usize = 16;
+
+// `typed_at` in the prelude reads eight slots of four characters.
+const _: () = assert!(entelechy_abi::TYPED == 32);
 
 /// The context word holding 1, which the shader compiler cannot fold.
 /// Multiplied into an integer dividend, it makes a narrowed value (such

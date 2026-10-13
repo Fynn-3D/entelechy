@@ -299,3 +299,36 @@ fn a_placed_nodes_port_is_what_follows_the_last_dot() {
     // A name with no port is refused where a port is needed.
     assert!(parse("scene scene.esn\nreset gray\n", Path::new(".")).is_err());
 }
+
+/// The text a device types (a key's, or an input method's commit) reaches
+/// `typed()` on the next frame and that frame alone; control characters
+/// and the private codes some systems give arrows are keys, not text.
+#[test]
+fn text_typed_reaches_the_next_frame_alone() {
+    let dir = scratch("typed");
+    std::fs::write(
+        dir.join("k.ent"),
+        "kernel t.chars@1 { requires { field.write; input.read; } output result: Rows<Int>; compute { return typed(element()); } }
+kernel t.blank@1 { requires { field.write; } output result: Image; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }
+",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.esn"),
+        "use \"k.ent\";\nnode blank: t.blank@1 { domain = vec2(1, 1); }\nnode chars: t.chars@1 { domain = 3; }\noutput view <- blank.result;\noutput chars <- chars.result;\n",
+    )
+    .unwrap();
+    let mut session = open(&dir);
+    let mut play = Play::new(still);
+    let read = |session: &mut Session| -> Vec<u32> {
+        let handle = session.output(Some("chars")).unwrap();
+        session.field(handle).unwrap().values().to_vec()
+    };
+    play.typed("a\r\t\u{8}\u{F700}");
+    play.typed("你");
+    shown(&mut play, &mut session);
+    assert_eq!(read(&mut session), [97, 20320, 0]);
+    shown(&mut play, &mut session);
+    assert_eq!(read(&mut session), [0, 0, 0]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -23,7 +23,7 @@ pub use entelechy_abi::{
     ABI_VERSION, Capabilities, Capability, Context, Domain, Encoding, FieldData, Handle, Host,
     HostError, Image, InputState, Invocation, Number, Pixel, Scalar, Schema, Scope, Shape, Value,
 };
-pub use entelechy_abi::{DEFAULT_WORK, MAX_WORK, encoding};
+pub use entelechy_abi::{DEFAULT_WORK, MAX_WORK, TYPED, encoding};
 pub use entelechy_ir::{KernelId, Manifest, Validated};
 pub use entelechy_rules::{
     Backend, Check, ClockedFrame, Downloading, ExecutionError, Extent, NativeOp, Prepared,

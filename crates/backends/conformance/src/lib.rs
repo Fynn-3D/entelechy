@@ -212,8 +212,8 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
         ),
         (
             "context",
-            "let t = time() + rate() + window().x + window().y + scale() + pointer().x + pointer().y + wheel().x + wheel().y; let keys = int(key(65)) + int(key(37)) * 2 + int(pointer_down()) * 4 + int(button(1)) * 8 + int(button(2)) * 16; let pad = stick(0) + stick(1) * 2.0 + stick(2) * 4.0 + stick(9); let held = int(button(8)) + int(button(11)) * 2 + int(button(16)) * 4 + int(button(23)) * 8;",
-            "Out { f: t + pad.x + pad.y, i: keys + held * 32 + pads() * 1024, b: key(32), v: vec3(window().x, scale(), pad.y) }",
+            "let t = time() + rate() + window().x + window().y + scale() + pointer().x + pointer().y + wheel().x + wheel().y; let keys = int(key(65)) + int(key(37)) * 2 + int(pointer_down()) * 4 + int(button(1)) * 8 + int(button(2)) * 16; let pad = stick(0) + stick(1) * 2.0 + stick(2) * 4.0 + stick(9); let held = int(button(8)) + int(button(11)) * 2 + int(button(16)) * 4 + int(button(23)) * 8; let chars = typed(0) * 3 + typed(1) + typed(2) + typed(-1) + typed(40) + typed(i % 3);",
+            "Out { f: t + pad.x + pad.y, i: keys + held * 32 + pads() * 1024 + chars, b: key(32), v: vec3(window().x, scale(), pad.y) }",
         ),
         (
             "params",
@@ -527,7 +527,8 @@ fn params() -> Vec<Value> {
 }
 
 /// The context every case runs under: time, rate, window, pointer with
-/// two buttons held, wheel, three keys down, and two pads connected.
+/// two buttons held, wheel, three keys down, two pads connected, and two
+/// characters typed.
 pub fn context() -> Context {
     let mut input = InputState::default();
     input.pointer = [12.5, 7.25];
@@ -543,6 +544,7 @@ pub fn context() -> Context {
     input.set_button(entelechy_abi::pad::NORTH, true);
     input.set_button(entelechy_abi::pad::START, true);
     input.pads = 2;
+    input.type_text("你a");
     Context {
         time: 1.5,
         rate: 48000.0,

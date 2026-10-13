@@ -38,6 +38,7 @@ const OVERRUN: i64 = failure::OVERRUN as i64;
 struct Imports {
     linear: FuncId,
     key: FuncId,
+    typed: FuncId,
     button: FuncId,
     put: FuncId,
     put_rows: FuncId,
@@ -146,6 +147,7 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
     let imports = Imports {
         linear: declare(&mut jit, "entelechy_jit_linear", &linear_sig)?,
         key: declare(&mut jit, "entelechy_jit_key", &key_sig)?,
+        typed: declare(&mut jit, "entelechy_jit_typed", &key_sig)?,
         button: declare(&mut jit, "entelechy_jit_button", &key_sig)?,
         put: declare(&mut jit, "entelechy_jit_put", &put_sig)?,
         put_rows: declare(&mut jit, "entelechy_jit_put_rows", &put_rows_sig)?,
@@ -423,6 +425,7 @@ struct Fx<'a, 'b> {
     calls: Vec<FuncRef>,
     linear: FuncRef,
     key: FuncRef,
+    typed: FuncRef,
     button: FuncRef,
     put: FuncRef,
     put_rows: FuncRef,
@@ -479,6 +482,7 @@ impl<'a, 'b> Fx<'a, 'b> {
         };
         let linear = import(jit, &mut b, imports.linear);
         let key = import(jit, &mut b, imports.key);
+        let typed = import(jit, &mut b, imports.typed);
         let button = import(jit, &mut b, imports.button);
         let put = import(jit, &mut b, imports.put);
         let put_rows = import(jit, &mut b, imports.put_rows);
@@ -532,6 +536,7 @@ impl<'a, 'b> Fx<'a, 'b> {
             calls,
             linear,
             key,
+            typed,
             button,
             put,
             put_rows,
@@ -2002,6 +2007,11 @@ impl<'a, 'b> Fx<'a, 'b> {
             Op::Key(code) => {
                 let code = self.words(code)[0];
                 let call = self.b.ins().call(self.key, &[self.ctx, code]);
+                vec![self.b.inst_results(call)[0]]
+            }
+            Op::Typed(k) => {
+                let k = self.words(k)[0];
+                let call = self.b.ins().call(self.typed, &[self.ctx, k]);
                 vec![self.b.inst_results(call)[0]]
             }
             Op::Count(input) => {

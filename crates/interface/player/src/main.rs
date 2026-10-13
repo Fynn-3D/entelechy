@@ -17,10 +17,10 @@ use serde_json::Value as Json;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{
-    DeviceEvent, DeviceId, ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent,
+    DeviceEvent, DeviceId, ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent,
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::Key;
+use winit::keyboard::{Key, ModifiersState};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 const USAGE: &str = "\
@@ -203,6 +203,12 @@ struct Player {
     hold_pointer: bool,
     cursor: (f64, f64),
     held: Option<(f64, f64)>,
+    /// The modifiers held: a key's text with Control or Command is a
+    /// shortcut, not typing.
+    modifiers: ModifiersState,
+    /// Whether an input method is composing: the keys go to it, and its
+    /// commit is the text typed.
+    composing: bool,
 }
 
 impl entelechy_protocol::Served for Player {
@@ -585,6 +591,8 @@ impl ApplicationHandler for Player {
                 }
             }
         }
+        // Input methods (Chinese among them) commit text to `typed()`.
+        window.set_ime_allowed(true);
         self.window = Some(window);
         self.update_title();
     }
@@ -620,17 +628,39 @@ impl ApplicationHandler for Player {
                 };
                 self.play.wheel(x, y);
             }
+            WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
+            // Text comes from a key, held keys repeating, unless an input
+            // method is composing or the key is a shortcut; else from what
+            // the input method commits.
+            WindowEvent::Ime(Ime::Preedit(text, _)) => self.composing = !text.is_empty(),
+            WindowEvent::Ime(Ime::Commit(text)) => {
+                self.composing = false;
+                self.play.typed(&text);
+            }
+            WindowEvent::Ime(Ime::Disabled) => self.composing = false,
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
                         logical_key,
                         state,
-                        repeat: false,
+                        repeat,
+                        text,
                         ..
                     },
                 ..
             } => {
                 let down = state == ElementState::Pressed;
+                let shortcut = self.modifiers.control_key() || self.modifiers.super_key();
+                if down
+                    && !self.composing
+                    && !shortcut
+                    && let Some(text) = &text
+                {
+                    self.play.typed(text);
+                }
+                if repeat {
+                    return;
+                }
                 let name = match logical_key {
                     Key::Named(named) => format!("{named:?}"),
                     Key::Character(text) => text.to_string(),
@@ -763,6 +793,8 @@ fn main() -> ExitCode {
         hold_pointer: options.hold_pointer,
         cursor: (0.0, 0.0),
         held: None,
+        modifiers: ModifiersState::empty(),
+        composing: false,
     };
     if let Some(replay) = &options.replay {
         player.play.replay(replay, &mut player.session);

@@ -9,9 +9,9 @@ use serde_json::{Value as Json, json};
 use entelechy_session::{Event, Session};
 
 /// The fields of a request that describe its context: what [`context_of`] reads.
-pub const CONTEXT_FIELDS: [&str; 11] = [
-    "time", "rate", "pointer", "down", "buttons", "wheel", "sticks", "pads", "keys", "window",
-    "scale",
+pub const CONTEXT_FIELDS: [&str; 12] = [
+    "time", "rate", "pointer", "down", "buttons", "wheel", "sticks", "pads", "keys", "text",
+    "window", "scale",
 ];
 
 /// Which of [`CONTEXT_FIELDS`] a request gives.
@@ -23,9 +23,9 @@ pub fn context_given(request: &Json) -> Vec<&'static str> {
 }
 
 /// The context an `evaluate`, `trace` or `restore` request describes:
-/// time, rate, pointer, buttons, wheel, sticks, pads, keys, and the
-/// window.
-pub fn context_of(session: &Session, request: &Json) -> Context {
+/// time, rate, pointer, buttons, wheel, sticks, pads, keys, the text
+/// typed, and the window. More text than one evaluation holds is refused.
+pub fn context_of(session: &Session, request: &Json) -> Result<Context, Json> {
     let number_at = |list: &Vec<Json>, index: usize| {
         list.get(index).and_then(Json::as_f64).unwrap_or(0.0) as f32
     };
@@ -84,7 +84,15 @@ pub fn context_of(session: &Session, request: &Json) -> Context {
             context.input.set_key(key as i32, true);
         }
     }
-    context
+    if let Some(text) = request.get("text").and_then(Json::as_str)
+        && !context.input.type_text(text).is_empty()
+    {
+        return Err(failure(format!(
+            "`text` holds at most {} characters an evaluation; type the rest in the next",
+            entelechy_kernel::TYPED
+        )));
+    }
+    Ok(context)
 }
 
 /// The JSON form of an evaluation report.

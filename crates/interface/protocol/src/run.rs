@@ -10,7 +10,7 @@ use crate::wire::{context_of, evaluation_error, failure, place_json, report_json
 
 /// Evaluates the scene once.
 pub(crate) fn evaluate(session: &mut Session, request: &Request) -> Result<Json, Json> {
-    let context = context_of(session, request.json());
+    let context = context_of(session, request.json())?;
     if request.get("settle").and_then(Json::as_bool) == Some(true) {
         session.settle().map_err(|e| evaluation_error(&e, None))?;
     }

@@ -291,6 +291,11 @@ pub(crate) fn emit_preamble(
     let word = bitcast<u32>(ctx[2u + (c >> 7u)][(c >> 5u) & 3u]);
     return ((word >> (c & 31u)) & 1u) == 1u;
 }}
+fn typed_at(k: i32) -> i32 {{
+    if (k < 0 || k > 31) {{ return 0; }}
+    let c = u32(k);
+    return bitcast<i32>(ctx[8u + (c >> 2u)][c & 3u]);
+}}
 fn stick_at(which: i32) -> vec2<f32> {{
     if (which == 0) {{ return ctx[6].xy; }}
     if (which == 1) {{ return ctx[6].zw; }}

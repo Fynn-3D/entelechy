@@ -894,7 +894,14 @@ pub struct InputState {
     /// A pad's buttons as bits, the lowest being [`pad::SOUTH`].
     pad_buttons: u32,
     keys: [u32; 8],
+    /// The characters typed since the last evaluation, as Unicode code
+    /// points in order, 0 after the last.
+    typed: [u32; TYPED],
 }
+
+/// How many characters one evaluation's input holds; those typed past
+/// them wait for the next.
+pub const TYPED: usize = 32;
 
 /// Button numbers `InputState::button` knows: a pointer's 0 to 2, a pad's
 /// from 8.
@@ -997,6 +1004,43 @@ impl InputState {
         self.keys
     }
 
+    /// The `k`th character typed since the last evaluation as a code
+    /// point, 0 after the last and for `k` outside `0..TYPED`.
+    pub fn typed(&self, k: i32) -> i32 {
+        if !(0..TYPED as i32).contains(&k) {
+            return 0;
+        }
+        self.typed[k as usize] as i32
+    }
+
+    /// The characters typed, as code points, 0 after the last.
+    pub fn typed_words(&self) -> [u32; TYPED] {
+        self.typed
+    }
+
+    /// Adds characters typed after those already held; gives back those
+    /// past the room left, for a later evaluation. A NUL is not a
+    /// character typed.
+    pub fn type_text<'a>(&mut self, text: &'a str) -> &'a str {
+        let mut held = self.typed.iter().take_while(|c| **c != 0).count();
+        for (at, c) in text.char_indices() {
+            if c == '\0' {
+                continue;
+            }
+            if held == TYPED {
+                return &text[at..];
+            }
+            self.typed[held] = c as u32;
+            held += 1;
+        }
+        ""
+    }
+
+    /// Forgets the characters typed, once an evaluation has seen them.
+    pub fn clear_typed(&mut self) {
+        self.typed = [0; TYPED];
+    }
+
     /// A value that changes whenever any observable input changes.
     pub fn fingerprint(&self) -> u64 {
         let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -1017,6 +1061,9 @@ impl InputState {
         feed(self.pads);
         for word in self.keys {
             feed(word);
+        }
+        for c in self.typed {
+            feed(c);
         }
         hash
     }
@@ -1354,6 +1401,32 @@ impl<'a> Scope<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The characters typed are held in order up to [`TYPED`], the rest
+    /// given back; outside the places held, and once cleared, none.
+    #[test]
+    fn characters_typed_are_held_in_order_and_the_rest_given_back() {
+        let mut input = InputState::default();
+        assert_eq!(input.type_text("你a"), "");
+        let before = input.fingerprint();
+        assert_eq!(input.type_text("b"), "");
+        assert_ne!(input.fingerprint(), before);
+        assert_eq!(
+            [
+                input.typed(0),
+                input.typed(1),
+                input.typed(2),
+                input.typed(3)
+            ],
+            [20320, 97, 98, 0]
+        );
+        assert_eq!([input.typed(-1), input.typed(TYPED as i32)], [0, 0]);
+        let long = "x".repeat(TYPED);
+        assert_eq!(input.type_text(&long), "xxx");
+        assert_eq!(input.typed(TYPED as i32 - 1), 'x' as i32);
+        input.clear_typed();
+        assert_eq!(input.typed(0), 0);
+    }
 
     /// An element's words read back as the numbers that wrote them, a
     /// 64-bit pair as one.

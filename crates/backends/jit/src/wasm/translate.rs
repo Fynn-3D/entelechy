@@ -1344,6 +1344,14 @@ impl<'a> Fx<'a> {
                         .expect("a result"),
                 ]
             }
+            Op::Typed(k) => {
+                let k = self.words(k)[0];
+                let ctx = self.ctx;
+                vec![
+                    self.helper("entelechy_jit_typed", &[ctx, k], Some(Val::I32))
+                        .expect("a result"),
+                ]
+            }
             Op::Count(input) => {
                 let view = self.view(*input);
                 let w = self.load(Val::I32, view, offsets::VIEW_WIDTH as u32);
