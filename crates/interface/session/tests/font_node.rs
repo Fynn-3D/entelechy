@@ -156,3 +156,43 @@ fn a_check_counts_a_font_nodes_codes_as_read() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_replay_reads_the_codes_its_frames_do_not_ask_for() {
+    let dir = scratch("replay");
+    let text = "scene scene.esn\nframe 0.0\nframe 0.05\nexpect copy.result[0].code = 111\nexpect copy.result[1].code = -1\nexpect copy.result[2].code = 73\n";
+    let replay = entelechy_session::replay::parse(text, &dir).unwrap();
+    let runtime = Session::runtime_for("cpu", entelechy_session::Limits::default()).unwrap();
+    let outcome = entelechy_session::replay::run(&replay, runtime).unwrap();
+    assert_eq!(
+        (outcome.checks, outcome.failures.len()),
+        (3, 0),
+        "{outcome:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_players_frames_give_the_glyphs_a_frame_later() {
+    use entelechy_session::play::{Frame, Play, View};
+    let dir = scratch("play");
+    let mut session = open(&dir);
+    let mut play = Play::new(|| 0.0);
+    let view = View {
+        window: [8.0, 4.0],
+        scale: 1.0,
+        rate: 0.0,
+    };
+    for _ in 0..2 {
+        assert!(
+            matches!(play.frame(&mut session, view), Frame::Shown(_)),
+            "{}",
+            play.status()
+        );
+    }
+    let handle = session.output(Some("result")).unwrap();
+    let words = session.field(handle).unwrap().values().to_vec();
+    let codes: Vec<i32> = words.chunks(8).map(|row| row[0] as i32).collect();
+    assert_eq!(codes, vec![111, -1, 73]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

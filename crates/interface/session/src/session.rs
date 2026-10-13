@@ -1452,6 +1452,11 @@ impl Session {
             context.time,
         );
         self.repin();
+        // The font nodes' characters are read after every frame, whatever
+        // it asks for.
+        let mut demand = demand.clone();
+        demand.extend(self.font_codes());
+        let demand = &demand;
         let graph = self.scene.graph().ok_or_else(no_scene)?;
         let report = self
             .evaluator
@@ -1623,20 +1628,22 @@ impl Session {
             }
         }
         // What a font node reads its characters from stays materialized.
-        let codes: Vec<(entelechy_graph::NodeId, String)> = self
-            .scene
+        for node in self.font_codes() {
+            self.evaluator.pin(node);
+        }
+    }
+
+    /// The nodes that produce the font nodes' characters.
+    fn font_codes(&self) -> Vec<entelechy_graph::NodeId> {
+        self.scene
             .files()
             .fonts
             .iter()
             .filter_map(|font| match &font.codes {
-                entelechy_graph::Source::Node { node, port } => Some((node.clone(), port.clone())),
+                entelechy_graph::Source::Node { node, port } => Some(self.producer(node, port).0),
                 entelechy_graph::Source::External(_) => None,
             })
-            .collect();
-        for (node, port) in codes {
-            let (node, _) = self.producer(&node, &port);
-            self.evaluator.pin(node);
-        }
+            .collect()
     }
 
     /// Gives each font node the characters its `codes` held when last
