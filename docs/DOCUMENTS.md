@@ -476,6 +476,12 @@ changes:
   (path_len, size, path.., bytes..)*]`, the path relative to the
   directory, parted by `/`. Read again on sync when one of them changes,
   or which there are.
+- `input pasted: Rows<Int> = clipboard;`: the clipboard's text, a
+  character (a code point) a row and a 0 after the last; a scene's own
+  inputs only. In the Player the clipboard is the system's, read only
+  with `--allow clipboard.read` (empty without), looked at again at most
+  four times a second; elsewhere it is the session's own, which a
+  replay's `clipboard "text"` fills.
 - `input saved: Rows<Tally> = "saves/tally.field" else fresh.result;`
   reads `fresh.result` until the file exists (`examples/data/parts/save`).
 
@@ -809,6 +815,10 @@ be keywords.
    spells them; a malformed list is refused whole. Each list is done once,
    in order, when it differs from the last one done; a write needs
    `--allow file.write`, a removal or a rename `--allow file.delete` too.
+   `to clipboard` takes a `Rows<Int>` of characters and puts them, to
+   the first 0, on the clipboard an input `= clipboard` reads, when it
+   changes and is not empty; one output writes it. The system's
+   clipboard, in the Player, needs `--allow clipboard.write`.
    A placed graph's outputs are wired, never written
    ([decision](DECISIONS.md)).
    A font is placed as a node too: `node g: font "x.ttf" { codes <-

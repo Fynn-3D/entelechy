@@ -107,8 +107,8 @@ pub fn session_flags() -> Vec<Flag> {
         ),
         repeated(
             "--allow",
-            "file.read|file.write|file.delete=<dir>",
-            "Lets the scene read files from, write its outputs into, or remove and rename files in, a directory.",
+            "file.read|file.write|file.delete=<dir>|clipboard.read|clipboard.write",
+            "Lets the scene read files from, write its outputs into, or remove and rename files in, a directory; or read and write the system's clipboard.",
         ),
         valued(
             "--grant",
@@ -197,7 +197,10 @@ file.delete=<dir> lets an output `to files` remove and rename files
 there. --allow file.read=<dir> lets a served scene's inputs read
 files there: under `serve`, where an agent composes the scene, a
 scene reads only beside its documents without it. `render`, `serve`
-and the Player take all three.
+and the Player take all three. --allow clipboard.read and --allow
+clipboard.write let the Player's scene read and write the system's
+clipboard; elsewhere a scene's clipboard is the session's own, which
+a replay's `clipboard \"text\"` fills, and needs neither.
 --grant field.read,field.write,... names the capabilities a Kernel
 may be given, and no others (every one without it): a Kernel that
 requires another is refused when it is prepared, and what ran

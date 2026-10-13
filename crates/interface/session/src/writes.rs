@@ -84,7 +84,7 @@ impl Writes {
     /// Whether the evaluation behind `report` changed an output written to
     /// a file.
     pub(crate) fn due(&self, writes: &[entelechy_scene::Write], report: &Report) -> bool {
-        writes.iter().any(|write| {
+        writes.iter().filter(|write| !write.clipboard).any(|write| {
             report
                 .outputs
                 .iter()
@@ -106,7 +106,7 @@ impl Writes {
         report: &Report,
         runtime: &mut Runtime,
     ) {
-        for write in writes {
+        for write in writes.iter().filter(|write| !write.clipboard) {
             let Some(handle) = report
                 .outputs
                 .iter()

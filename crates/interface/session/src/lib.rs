@@ -23,6 +23,7 @@
 pub mod apart;
 pub mod bench;
 mod check;
+mod clipboard;
 mod clocked;
 pub mod history;
 mod inputs;
@@ -165,7 +166,13 @@ pub enum Allowance {
     /// Files in this directory and under it may be removed and renamed
     /// by an output `to files`.
     FileDelete(PathBuf),
+    /// An input `= clipboard` may read the system's clipboard.
+    ClipboardRead,
+    /// An output `to clipboard` may write the system's clipboard.
+    ClipboardWrite,
 }
+
+pub use clipboard::{Clipboard, Held};
 
 pub use check::{Checked, LARGE, check_document, check_document_with, large, large_past};
 
@@ -200,8 +207,14 @@ pub struct Loaded {
 }
 
 /// Parses an allowance given on a command line: `file.read=<dir>`,
-/// `file.write=<dir>` or `file.delete=<dir>`.
+/// `file.write=<dir>`, `file.delete=<dir>`, `clipboard.read` or
+/// `clipboard.write`.
 pub fn parse_allow(text: &str) -> Result<Allowance, String> {
+    match text {
+        "clipboard.read" => return Ok(Allowance::ClipboardRead),
+        "clipboard.write" => return Ok(Allowance::ClipboardWrite),
+        _ => {}
+    }
     match text.split_once('=') {
         Some(("file.read", dir)) if !dir.is_empty() => Ok(Allowance::FileRead(PathBuf::from(dir))),
         Some(("file.write", dir)) if !dir.is_empty() => {
@@ -211,7 +224,7 @@ pub fn parse_allow(text: &str) -> Result<Allowance, String> {
             Ok(Allowance::FileDelete(PathBuf::from(dir)))
         }
         _ => Err(format!(
-            "--allow takes file.read=<directory>, file.write=<directory> or file.delete=<directory>, found `{text}`"
+            "--allow takes file.read=<directory>, file.write=<directory>, file.delete=<directory>, clipboard.read or clipboard.write, found `{text}`"
         )),
     }
 }

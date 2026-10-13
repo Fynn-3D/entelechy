@@ -106,6 +106,12 @@ pub fn forms() -> Vec<Form> {
             &["type \"你好, Quill\""],
         ),
         form(
+            "clipboard",
+            "clipboard \"<text>\"",
+            "the clipboard holding this text from here on, as a person copying elsewhere leaves it: what an input `= clipboard` reads; the same escapes as `type`",
+            &["clipboard \"from elsewhere\""],
+        ),
+        form(
             "key",
             "key <code> down | up",
             "a key by the browser's code, as `key()` reads it: letters and digits by uppercase ASCII, space 32, enter 13, arrows 37 to 40, the rest in `help key`",
@@ -220,6 +226,8 @@ pub enum Step {
     /// Characters typed, for the next frames to read with `typed()`, as
     /// many a frame as one holds.
     Type(String),
+    /// The clipboard's text from here on.
+    Clipboard(String),
     /// A pad's axis pair: 0 left stick, 1 right stick, 2 triggers.
     Stick {
         /// Which pair.
@@ -354,18 +362,19 @@ impl std::error::Error for ReplayError {}
 /// The most frames one `frame ... to ... every` line evaluates.
 const MAX_FRAMES: u64 = 1 << 20;
 
-/// The text of a `type` line after its keyword: one quoted string, with
-/// `\"`, `\\`, `\n` and `\t`, then nothing but a comment.
-fn typed_text(rest: &str) -> Result<String, String> {
-    let shape = "`type` takes one quoted text: type \"<text>\"";
+/// The text of a `type` or `clipboard` line after its keyword: one
+/// quoted string, with `\"`, `\\`, `\n` and `\t`, then nothing but a
+/// comment.
+fn quoted_text(rest: &str, keyword: &str) -> Result<String, String> {
+    let shape = format!("`{keyword}` takes one quoted text: {keyword} \"<text>\"");
     let mut chars = rest.trim_start().chars();
     if chars.next() != Some('"') {
-        return Err(shape.into());
+        return Err(shape.clone());
     }
     let mut text = String::new();
     loop {
         match chars.next() {
-            None => return Err(shape.into()),
+            None => return Err(shape.clone()),
             Some('"') => break,
             Some('\\') => text.push(match chars.next() {
                 Some('"') => '"',
@@ -374,7 +383,7 @@ fn typed_text(rest: &str) -> Result<String, String> {
                 Some('t') => '\t',
                 other => {
                     return Err(format!(
-                        "`type` knows `\\\"`, `\\\\`, `\\n` and `\\t`, not `\\{}`",
+                        "`{keyword}` knows `\\\"`, `\\\\`, `\\n` and `\\t`, not `\\{}`",
                         other.map(String::from).unwrap_or_default()
                     ));
                 }
@@ -384,7 +393,7 @@ fn typed_text(rest: &str) -> Result<String, String> {
     }
     let after = chars.as_str().trim();
     if !after.is_empty() && !after.starts_with('#') {
-        return Err(shape.into());
+        return Err(shape.clone());
     }
     Ok(text)
 }
@@ -398,9 +407,15 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
     for (index, raw) in text.lines().enumerate() {
         let line = index as u32 + 1;
         let error = |message: String| ReplayError { line, message };
-        // Typed text is quoted, a `#` in it no comment.
+        // Typed and copied text is quoted, a `#` in it no comment.
         if let Some(rest) = raw.trim_start().strip_prefix("type ") {
-            steps.push(Step::Type(typed_text(rest).map_err(error)?));
+            steps.push(Step::Type(quoted_text(rest, "type").map_err(error)?));
+            continue;
+        }
+        if let Some(rest) = raw.trim_start().strip_prefix("clipboard ") {
+            steps.push(Step::Clipboard(
+                quoted_text(rest, "clipboard").map_err(error)?,
+            ));
             continue;
         }
         let content = raw.split('#').next().unwrap_or("").trim();
@@ -1142,6 +1157,9 @@ impl Replayer {
             }
             Step::Wheel(delta) => input.wheel = *delta,
             Step::Type(text) => self.typing.push_str(text),
+            Step::Clipboard(text) => session
+                .place_clipboard(text)
+                .map_err(|error| format!("clipboard: {error}"))?,
             Step::Pads(count) => input.pads = *count,
             Step::Reset => session.reset_state(),
             Step::ResetPort { node, port } => {
@@ -1485,7 +1503,7 @@ mod tests {
             .collect();
         let replay = parse(&lines.join("\n"), Path::new(".")).unwrap();
         assert!(replay.kernels.is_some(), "`library` is a form");
-        let mut seen = [false; 18];
+        let mut seen = [false; 19];
         for step in &replay.steps {
             seen[match step {
                 Step::Frame(_) => 0,
@@ -1506,6 +1524,7 @@ mod tests {
                 Step::Pads(_) => 15,
                 Step::Show { .. } => 16,
                 Step::Type(_) => 17,
+                Step::Clipboard(_) => 18,
             }] = true;
         }
         assert!(

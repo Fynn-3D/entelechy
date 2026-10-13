@@ -199,9 +199,10 @@ pub struct NodeMemberAt {
     pub range: Range<usize>,
 }
 
-/// `to "file"`, `to bytes "file"` or `to files "dir/"` after an output:
-/// the file, relative to the document, the output's Field is written to,
-/// or the directory its operations act in.
+/// `to "file"`, `to bytes "file"`, `to files "dir/"` or `to clipboard`
+/// after an output: the file, relative to the document, the output's
+/// Field is written to, the directory its operations act in, or the
+/// system clipboard its text is put on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WriteDecl {
     /// The output written.
@@ -214,6 +215,9 @@ pub struct WriteDecl {
     /// The Field is a list of operations on the files under the directory
     /// `path`: each written, removed or renamed.
     pub files: bool,
+    /// The Field is text put on the system clipboard, a character a row
+    /// to the first 0; `path` is empty, its span the word's.
+    pub clipboard: bool,
 }
 
 impl Document {
@@ -659,6 +663,8 @@ pub struct PortDecl {
     /// Document inputs only: what the documents of a file or a directory
     /// define, as text, `= outline "src/"`.
     pub outline: Option<Spanned<String>>,
+    /// Document inputs only: the system clipboard's text, `= clipboard`.
+    pub clipboard: Option<Span>,
     /// What a file input reads while its file is unreadable:
     /// `... else fresh.result`.
     pub otherwise: Option<SourceRef>,

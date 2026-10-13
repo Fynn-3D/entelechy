@@ -58,6 +58,8 @@ pub struct Session {
     /// The folder last chosen ([`Session::choose_folder`]) and what it was
     /// allowed.
     chosen: Option<(PathBuf, Vec<crate::Allowance>)>,
+    /// The clipboard: the session's own, or the system's given.
+    board: crate::clipboard::Board,
 }
 
 /// A request's claim on the scene it wrote, from asked to landed. A scene
@@ -144,6 +146,7 @@ impl Session {
             node_clock: crate::clocked::NodeClock::default(),
             bound: BTreeMap::new(),
             chosen: None,
+            board: crate::clipboard::Board::default(),
         }
     }
 
@@ -467,6 +470,13 @@ impl Session {
             self.runtime.host_mut(),
             &mut events,
         );
+        let clipboards = self.scene.files().clipboards.clone();
+        self.board.sync(
+            &clipboards,
+            &mut self.inputs,
+            self.runtime.host_mut(),
+            &mut events,
+        );
         self.finish_used();
         self.sync_placements(&mut events);
         self.sync_shape(&mut events);
@@ -590,12 +600,44 @@ impl Session {
         self.chosen.as_ref().map(|(dir, _)| dir.as_path())
     }
 
+    /// The system's clipboard for the scene's `= clipboard` inputs and `to
+    /// clipboard` outputs, in the session's own one's stead; reading and
+    /// writing it then need `--allow clipboard.read` and
+    /// `--allow clipboard.write`.
+    pub fn give_clipboard(&mut self, device: Box<dyn crate::Clipboard>) {
+        self.board.give(device);
+    }
+
+    /// Puts `text` on the clipboard, as a person copying elsewhere would,
+    /// and has the scene's `= clipboard` inputs hold it at once.
+    pub fn place_clipboard(&mut self, text: &str) -> Result<(), String> {
+        self.board.place(text)?;
+        let clipboards = self.scene.files().clipboards.clone();
+        let mut events = Vec::new();
+        self.board.sync(
+            &clipboards,
+            &mut self.inputs,
+            self.runtime.host_mut(),
+            &mut events,
+        );
+        self.remember(&events);
+        Ok(())
+    }
+
     /// Grants what a command line's `--allow` said.
     pub fn allow(&mut self, allowance: &crate::Allowance) -> Result<(), String> {
         match allowance {
             crate::Allowance::FileRead(dir) => self.allow_reads(dir),
             crate::Allowance::FileWrite(dir) => self.allow_writes(dir),
             crate::Allowance::FileDelete(dir) => self.allow_deletes(dir),
+            crate::Allowance::ClipboardRead => {
+                self.board.allow_read();
+                Ok(())
+            }
+            crate::Allowance::ClipboardWrite => {
+                self.board.allow_write();
+                Ok(())
+            }
         }
     }
 
@@ -1414,6 +1456,8 @@ impl Session {
             &report,
             &mut self.runtime,
         );
+        self.board
+            .after(&self.scene.files().writes, &report, &mut self.runtime);
         Ok(report)
     }
 

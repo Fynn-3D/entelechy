@@ -283,6 +283,7 @@ Kernels (`.ent`) compute; scenes (`.esn`) compose them into a running world. Who
 - **wheel**: `wheel <x> <y>` the scroll for the next frame only
 - **window**: `window <w> <h> [<scale>]` the window in pixels, for `window()`, and its scale factor; one when not given
 - **type**: `type "<text>"` characters typed, what `typed()` reads on the next frame (32 a frame, the rest on the frames after); `\"`, `\\`, `\n` and `\t` inside the quotes, `#` among them no comment
+- **clipboard**: `clipboard "<text>"` the clipboard holding this text from here on, as a person copying elsewhere leaves it: what an input `= clipboard` reads; the same escapes as `type`
 - **key**: `key <code> down | up` a key by the browser's code, as `key()` reads it: letters and digits by uppercase ASCII, space 32, enter 13, arrows 37 to 40, the rest in `help key`
 - **reset**: `reset [<node.port>]` forgets every node's committed state, or one port's
 - **param**: `param <name> <literal>` sets a graph parameter

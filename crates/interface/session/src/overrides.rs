@@ -106,7 +106,10 @@ pub fn kind_of(files: &entelechy_scene::Files, name: &str) -> Option<Kind> {
             Kind::File
         });
     }
-    let write = files.writes.iter().find(|w| w.output == name)?;
+    let write = files
+        .writes
+        .iter()
+        .find(|w| w.output == name && !w.clipboard)?;
     Some(if write.files {
         Kind::Directory
     } else {

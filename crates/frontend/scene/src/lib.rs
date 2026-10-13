@@ -164,6 +164,9 @@ pub struct Write {
     /// Whether the Field is a list of operations on the files under the
     /// directory `path` (`to files "dir/"`).
     pub files: bool,
+    /// Whether the Field is text put on the system clipboard (`to
+    /// clipboard`), a character a row to the first 0; `path` is empty.
+    pub clipboard: bool,
 }
 
 /// A scene's file contract: inputs read from files, directories read as
@@ -187,6 +190,10 @@ pub struct Files {
     /// define, as text: name, resolved path. The session reads them again
     /// when one changes.
     pub outlines: Vec<(String, PathBuf)>,
+    /// Externals holding the system clipboard's text, a character a row
+    /// and a 0 after the last (`= clipboard`): the session reads it again
+    /// when it changes.
+    pub clipboards: Vec<String>,
     /// The root document's file outputs, written after a committed
     /// evaluation that changed them.
     pub writes: Vec<Write>,
@@ -498,6 +505,7 @@ fn lower(
     lowering.out.files.checks = level.checks;
     lowering.out.files.files = level.files;
     lowering.out.files.outlines = level.outlines;
+    lowering.out.files.clipboards = level.clipboards;
     lowering.out.graph.params = level.params;
     lowering.out.graph.outputs = level.outputs;
     lowering.out.graph.fallbacks = level.fallbacks;
@@ -532,6 +540,7 @@ struct Level {
     checks: Vec<(String, PathBuf)>,
     files: Vec<(String, PathBuf)>,
     outlines: Vec<(String, PathBuf)>,
+    clipboards: Vec<String>,
     params: Vec<GraphParam>,
     /// Outputs in declaration order; the first is the primary.
     outputs: Vec<(String, Source)>,
@@ -610,6 +619,7 @@ struct Inputs {
     checks: Vec<(String, PathBuf)>,
     files: Vec<(String, PathBuf)>,
     outlines: Vec<(String, PathBuf)>,
+    clipboards: Vec<String>,
 }
 
 /// Where a document is lowered: its node prefix, what its placing graph
@@ -1135,6 +1145,7 @@ impl Lowering<'_, '_> {
         let mut checks = Vec::new();
         let mut files = Vec::new();
         let mut outlines = Vec::new();
+        let mut clipboards = Vec::new();
         for input in &document.inputs {
             // What arrives is checked by shape and layout where it binds.
             if input.binding.is_some() {
@@ -1254,6 +1265,24 @@ impl Lowering<'_, '_> {
                 }
                 outlines.push((input.name.value.clone(), base.join(&outlined.value)));
             }
+            if let Some(span) = input.clipboard {
+                if placement.is_some() {
+                    return Err(error(
+                        span,
+                        "a placed graph's input is wired by the placing graph; it cannot read the clipboard",
+                    ));
+                }
+                let ty = resolved(&input.ty.value, &self.aliases);
+                if ty != "Rows<Int>" {
+                    return Err(error(
+                        input.ty.span,
+                        format!(
+                            "the clipboard is text, a character a row: `Rows<Int>`, not `{ty}`"
+                        ),
+                    ));
+                }
+                clipboards.push(input.name.value.clone());
+            }
             externals.push(input.name.value.clone());
         }
         Ok(Inputs {
@@ -1264,6 +1293,7 @@ impl Lowering<'_, '_> {
             checks,
             files,
             outlines,
+            clipboards,
         })
     }
 
@@ -1471,6 +1501,7 @@ impl Lowering<'_, '_> {
             checks,
             files,
             outlines,
+            clipboards,
         } = self.inputs(document, base, placement)?;
         let params = self.params(document)?;
         // The root's params, read before any sub-graph: a sub-graph's
@@ -1925,9 +1956,16 @@ impl Lowering<'_, '_> {
                     "only the scene itself writes files; a placed graph's outputs are wired by the placing graph",
                 ));
             }
-            if writes
-                .iter()
-                .any(|w: &Write| w.path == base.join(&write.path.value))
+            if write.clipboard && writes.iter().any(|w: &Write| w.clipboard) {
+                return Err(error(
+                    write.path.span,
+                    "the clipboard is written by two outputs",
+                ));
+            }
+            if !write.clipboard
+                && writes
+                    .iter()
+                    .any(|w: &Write| !w.clipboard && w.path == base.join(&write.path.value))
             {
                 return Err(error(
                     write.path.span,
@@ -1936,9 +1974,14 @@ impl Lowering<'_, '_> {
             }
             writes.push(Write {
                 output: write.output.clone(),
-                path: base.join(&write.path.value),
+                path: if write.clipboard {
+                    PathBuf::new()
+                } else {
+                    base.join(&write.path.value)
+                },
                 bytes: write.bytes,
                 files: write.files,
+                clipboard: write.clipboard,
             });
         }
         Ok(Level {
@@ -1949,6 +1992,7 @@ impl Lowering<'_, '_> {
             checks,
             files,
             outlines,
+            clipboards,
             params,
             outputs,
             fallbacks,
@@ -2740,12 +2784,14 @@ output raw <- first.result to bytes \"raw.bin\";";
                     path: PathBuf::from("./saves/kept.field"),
                     bytes: false,
                     files: false,
+                    clipboard: false,
                 },
                 Write {
                     output: "raw".into(),
                     path: PathBuf::from("./raw.bin"),
                     bytes: true,
                     files: false,
+                    clipboard: false,
                 },
             ]
         );

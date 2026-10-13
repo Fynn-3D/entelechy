@@ -341,6 +341,11 @@ impl Inputs {
         }
     }
 
+    /// Whether `name` holds a Field.
+    pub(crate) fn holds(&self, name: &str) -> bool {
+        self.handles.contains_key(name)
+    }
+
     fn forget(&mut self, host: &mut Host, name: &str) {
         if let Some(handle) = self.handles.remove(name) {
             let _ = host.release(handle);

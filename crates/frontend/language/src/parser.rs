@@ -119,26 +119,33 @@ fn read_document(source: &str) -> Result<(Document, Outline), ParseError> {
                 let source = parser.source_ref()?;
                 if parser.is_keyword("to") {
                     parser.next();
-                    let bytes = parser.is_keyword("bytes");
-                    let files = parser.is_keyword("files");
-                    if bytes || files {
-                        parser.next();
-                    }
-                    let (token, span) = parser.next();
-                    let Token::Str(path) = token else {
-                        return Err(ParseError {
-                            span,
-                            message: format!(
-                                "an output is written `to` a quoted path, `to bytes` and a quoted path, or `to files` and a quoted directory, found {}",
-                                token.describe()
-                            ),
-                        });
+                    let (path, span, bytes, files, clipboard) = if parser.is_keyword("clipboard") {
+                        let (_, span) = parser.next();
+                        (String::new(), span, false, false, true)
+                    } else {
+                        let bytes = parser.is_keyword("bytes");
+                        let files = parser.is_keyword("files");
+                        if bytes || files {
+                            parser.next();
+                        }
+                        let (token, span) = parser.next();
+                        let Token::Str(path) = token else {
+                            return Err(ParseError {
+                                span,
+                                message: format!(
+                                    "an output is written `to` a quoted path, `to bytes` and a quoted path, `to files` and a quoted directory, or `to clipboard`, found {}",
+                                    token.describe()
+                                ),
+                            });
+                        };
+                        (path, span, bytes, files, false)
                     };
                     document.writes.push(WriteDecl {
                         output: name.value.clone(),
                         path: Spanned { value: path, span },
                         bytes,
                         files,
+                        clipboard,
                     });
                 }
                 parser.expect_punct(";")?;
@@ -1177,56 +1184,61 @@ impl Parser {
         let mut checks = None;
         let mut files = None;
         let mut outline = None;
+        let mut clipboard = None;
         if !wired && self.eat_punct("=") {
-            let as_text = self.is_keyword("text");
-            let as_frames = self.is_keyword("frames");
-            let as_bytes = self.is_keyword("bytes");
-            let as_checks = self.is_keyword("checks");
-            let as_files = self.is_keyword("files");
-            let as_outline = self.is_keyword("outline");
-            if as_text || as_frames || as_bytes || as_checks || as_files || as_outline {
-                self.next();
-            }
-            let (token, span) = self.next();
-            let Token::Str(value) = token else {
-                return Err(ParseError {
-                    span,
-                    message: format!(
-                        "an input's value is a quoted path, `text` and a quoted string, `frames`, a quoted directory and `at` a rate, `bytes` and a quoted path, `checks` or `outline` and a quoted path, or `files` and a quoted directory, found {}",
-                        token.describe()
-                    ),
-                });
-            };
-            if as_frames {
-                self.keyword("at")?;
-                let rate = match self.next() {
-                    (Token::Int(rate), _) if rate > 0 => rate as u32,
-                    (token, span) => {
-                        return Err(ParseError {
-                            span,
-                            message: format!(
-                                "`frames` are read `at` a whole number of frames a second, found {}",
-                                token.describe()
-                            ),
-                        });
-                    }
-                };
-                frames = Some(FramesDecl {
-                    dir: Spanned { value, span },
-                    rate,
-                });
-            } else if as_text {
-                text = Some(Spanned { value, span });
-            } else if as_bytes {
-                bytes = Some(Spanned { value, span });
-            } else if as_checks {
-                checks = Some(Spanned { value, span });
-            } else if as_files {
-                files = Some(Spanned { value, span });
-            } else if as_outline {
-                outline = Some(Spanned { value, span });
+            if self.is_keyword("clipboard") {
+                clipboard = Some(self.next().1);
             } else {
-                file = Some(Spanned { value, span });
+                let as_text = self.is_keyword("text");
+                let as_frames = self.is_keyword("frames");
+                let as_bytes = self.is_keyword("bytes");
+                let as_checks = self.is_keyword("checks");
+                let as_files = self.is_keyword("files");
+                let as_outline = self.is_keyword("outline");
+                if as_text || as_frames || as_bytes || as_checks || as_files || as_outline {
+                    self.next();
+                }
+                let (token, span) = self.next();
+                let Token::Str(value) = token else {
+                    return Err(ParseError {
+                        span,
+                        message: format!(
+                            "an input's value is a quoted path, `text` and a quoted string, `frames`, a quoted directory and `at` a rate, `bytes` and a quoted path, `checks` or `outline` and a quoted path, `files` and a quoted directory, or `clipboard`, found {}",
+                            token.describe()
+                        ),
+                    });
+                };
+                if as_frames {
+                    self.keyword("at")?;
+                    let rate = match self.next() {
+                        (Token::Int(rate), _) if rate > 0 => rate as u32,
+                        (token, span) => {
+                            return Err(ParseError {
+                                span,
+                                message: format!(
+                                    "`frames` are read `at` a whole number of frames a second, found {}",
+                                    token.describe()
+                                ),
+                            });
+                        }
+                    };
+                    frames = Some(FramesDecl {
+                        dir: Spanned { value, span },
+                        rate,
+                    });
+                } else if as_text {
+                    text = Some(Spanned { value, span });
+                } else if as_bytes {
+                    bytes = Some(Spanned { value, span });
+                } else if as_checks {
+                    checks = Some(Spanned { value, span });
+                } else if as_files {
+                    files = Some(Spanned { value, span });
+                } else if as_outline {
+                    outline = Some(Spanned { value, span });
+                } else {
+                    file = Some(Spanned { value, span });
+                }
             }
         }
         // `else source`: read while the file is unreadable.
@@ -1248,6 +1260,7 @@ impl Parser {
             checks,
             files,
             outline,
+            clipboard,
             otherwise,
             binding_range,
         })

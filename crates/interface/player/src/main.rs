@@ -30,7 +30,8 @@ usage:
               [--folder <name,...> [--folder-allow <file.write,file.delete>]]
               [--replay <file.replay>]
               [--window <w>x<h>] [--backend gpu|cpu|jit|best] [--memory <MB>] [--work <M>]
-              [--allow file.read|file.write|file.delete=<dir>]... [--grant <capability,...>]
+              [--allow file.read|file.write|file.delete=<dir>]...
+              [--allow clipboard.read|clipboard.write]... [--grant <capability,...>]
       Open a window showing the scene output. Kernel files are republished as
       they change; a rejected change keeps the running version. The pointer
       and keys reach Kernels that declare `input.read`, and so do the
@@ -62,6 +63,9 @@ usage:
       --allow file.read=<dir> lets a served scene's inputs read files
       there; with --serve a scene reads only beside its documents without
       it.
+      --allow clipboard.read lets an input `= clipboard` read the system's
+      clipboard, --allow clipboard.write an output `to clipboard` put text
+      there; without them the clipboard reads empty and nothing is put.
       --replay <file.replay> plays a replay in the window: its pointer,
       keys and window drive the scene at the replay's own times, its
       checks run as they come, and when it ends what it observed is
@@ -74,6 +78,21 @@ usage:
       its evaluate observes that person's input. A browser's page connects
       from this machine; a page elsewhere only from an origin
       --allow-origin <origin> names (`null` for a page opened from a file).";
+
+/// The system's clipboard, opened for each read and write.
+struct SystemClipboard;
+
+impl entelechy_session::Clipboard for SystemClipboard {
+    fn text(&mut self) -> Option<String> {
+        arboard::Clipboard::new().ok()?.get_text().ok()
+    }
+
+    fn put(&mut self, text: &str) -> Result<(), String> {
+        arboard::Clipboard::new()
+            .and_then(|mut clipboard| clipboard.set_text(text.to_owned()))
+            .map_err(|e| format!("the clipboard: {e}"))
+    }
+}
 
 /// The window `window()` reads before one opens, when none was asked for.
 const DEFAULT_WINDOW: (u32, u32) = (960, 540);
@@ -848,6 +867,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    session.give_clipboard(Box::new(SystemClipboard));
     // A served scene's reads are held to its documents' directories and
     // the person's allowances, fixed before the scene is first read.
     if options.serve
