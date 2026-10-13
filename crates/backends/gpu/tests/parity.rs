@@ -2351,6 +2351,53 @@ fn inputs_past_the_devices_bindings_are_packed_and_read_where_they_are() {
     assert!(error.contains(&why), "{error}");
 }
 
+/// Past the device's bindings, rows are packed before grids: a grid, as
+/// large as a window, declared last keeps its own binding, and the
+/// kernel reads every input where it is, the interpreter's words.
+#[test]
+fn rows_are_packed_before_grids() {
+    let Some(gpu) = gpu() else { return };
+    let rows_n = 36;
+    let grids_n = 3;
+    let ports: String = (0..rows_n)
+        .map(|k| format!("input f{k}: Rows<Int>; "))
+        .chain((0..grids_n).map(|k| format!("input g{k}: Grid<Int>; ")))
+        .collect();
+    let terms: Vec<String> = (0..rows_n)
+        .map(|k| format!("at(f{k}, element())"))
+        .chain((0..grids_n).map(|k| format!("sample(g{k})")))
+        .collect();
+    let module = compile(&format!(
+        "kernel test.rows_first@1 {{ requires {{ field.read; field.write; }} {ports}
+         output result: Grid<Int>; compute {{ return {}; }} }}",
+        terms.join(" + ")
+    ))
+    .unwrap_or_else(|error| panic!("{error}"));
+    let packed = entelechy_gpu::wgsl::packed_inputs(&module, 31, 31);
+    assert!(!packed.is_empty(), "39 inputs are past 31 bindings");
+    assert!(
+        packed.iter().all(|&k| k < rows_n),
+        "only rows are packed: {packed:?}"
+    );
+    let (w, h) = (16u32, 8u32);
+    let mut host = Host::new(1 << 22);
+    let int = || entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
+    let handles: Vec<_> = (0..rows_n + grids_n)
+        .map(|k| {
+            let (domain, count) = if k < rows_n {
+                (Domain::Rows(w * h), w * h)
+            } else {
+                (Domain::Grid(w, h), w * h)
+            };
+            let words: Vec<u32> = (0..count).map(|i| i * 3 + k as u32 * 7).collect();
+            host.adopt(entelechy_abi::FieldData::from_values(int(), domain, &words).unwrap())
+                .unwrap()
+        })
+        .collect();
+    let (cpu, device) = on_both_inputs(&gpu, &mut host, &module, handles, Domain::Grid(w, h));
+    assert_eq!(cpu, device);
+}
+
 /// The backend predicts a module's brace depth before emitting it (never
 /// less than the shader's, at most one more); past WGSL's limit it
 /// declines, and a session runs the module on the ordered backend.

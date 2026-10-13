@@ -123,7 +123,8 @@ the [conformance matrix](crates/backends/conformance/src/lib.rs).
 
 A GPU session hands scans and every module the GPU does not take
 ([`Backend::takes`](crates/core/rules/src/backend.rs)) to the JIT; inputs
-beyond the device's bindings are packed into one buffer
+beyond the device's bindings are packed into one buffer, copied before
+each run, rows before grids and volumes
 ([packing](crates/backends/gpu/src/wgsl/mod.rs)). Where each node ran and
 why is `Runtime::placement` ([routed test](crates/interface/entelechy/tests/session.rs),
 [mixed](crates/interface/session/tests/mixed.rs), [few](crates/interface/session/tests/few.rs)). A Kernel the device's own

@@ -106,10 +106,13 @@ pub fn bindings(module: &Module) -> (usize, usize) {
 }
 
 /// The inputs packed into one buffer so the module binds at most `most`
-/// buffers and `most_storage` storage buffers: the fewest that fit, last
-/// read-only inputs first (a memory keeps its own). Packing `k` inputs
-/// saves `k - 1` bindings. Empty when the module fits, or when packing
-/// every read-only input is still too wide.
+/// buffers and `most_storage` storage buffers: the fewest that fit, read-
+/// only inputs only (a memory keeps its own), rows before grids and
+/// volumes and the last declared first within each. A pack is copied
+/// whole before every run, and a grid or a volume is the kind as large
+/// as an image or a window; rows are most often a handful of words.
+/// Packing `k` inputs saves `k - 1` bindings. Empty when the module fits,
+/// or when packing every read-only input is still too wide.
 pub fn packed_inputs(module: &Module, most: usize, most_storage: usize) -> Vec<usize> {
     let (uniforms, storage) = bindings(module);
     let over = (uniforms + storage)
@@ -118,14 +121,13 @@ pub fn packed_inputs(module: &Module, most: usize, most_storage: usize) -> Vec<u
     if over == 0 {
         return Vec::new();
     }
-    let candidates: Vec<usize> = (0..module.manifest.inputs.len())
+    let inputs = &module.manifest.inputs;
+    let read_only = |k: &usize| !module.manifest.memories.contains(&inputs[*k].name);
+    let rows = |k: &usize| inputs[*k].shape() == Shape::Rows;
+    let candidates: Vec<usize> = (0..inputs.len())
         .rev()
-        .filter(|&k| {
-            !module
-                .manifest
-                .memories
-                .contains(&module.manifest.inputs[k].name)
-        })
+        .filter(|k| read_only(k) && rows(k))
+        .chain((0..inputs.len()).rev().filter(|k| read_only(k) && !rows(k)))
         .collect();
     if candidates.len() < over + 1 {
         return Vec::new();
