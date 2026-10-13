@@ -123,6 +123,16 @@ struct Checks {
     documents: Vec<(PathBuf, Option<Stamp>)>,
 }
 
+/// A font node's font as last read, and the characters it was last given
+/// (their Field's handle, so the same Field is not read twice).
+struct Font {
+    path: PathBuf,
+    stamp: Option<Stamp>,
+    bytes: Vec<u8>,
+    codes: Vec<i32>,
+    seen: Option<Handle>,
+}
+
 /// The documents a `checks` input checks: the file, or every `.ent` and
 /// `.esn` under the directory (hidden ones left out), in name order.
 fn documents_under(store: &dyn Store, path: &Path) -> Vec<PathBuf> {
@@ -299,6 +309,8 @@ pub(crate) struct Inputs {
     checks: BTreeMap<String, Checks>,
     /// Inputs holding a directory's files.
     listed: BTreeMap<String, Listed>,
+    /// Font nodes' fonts, by node.
+    fonts: BTreeMap<String, Font>,
     /// Text inputs with their text.
     texts: BTreeMap<String, String>,
     /// Frame selection failures, reported by the next sync.
@@ -319,6 +331,7 @@ impl Inputs {
             .chain(self.sequences.values().map(|sequence| sequence.dir.clone()))
             .chain(self.checks.values().map(|checks| checks.path.clone()))
             .chain(self.listed.values().map(|listed| listed.dir.clone()))
+            .chain(self.fonts.values().map(|font| font.path.clone()))
     }
 
     /// Makes `handle` what input `name` holds, releasing what it held.
@@ -348,7 +361,149 @@ impl Inputs {
         self.sync_sequences(store, declared.files, readable, host, events);
         self.sync_checks(store, declared.files, readable, host, events);
         self.sync_files(store, declared.files, readable, host, events);
+        self.sync_fonts(store, declared.files, readable, host, events);
         self.sync_texts(declared.graph, host, events);
+    }
+
+    /// Reads each font node's font when it is new or changed and gives the
+    /// node the glyphs of the characters it was last given (none at
+    /// first); forgets undeclared ones.
+    fn sync_fonts(
+        &mut self,
+        store: &dyn Store,
+        files: &entelechy_scene::Files,
+        readable: &dyn Fn(&Path) -> Result<(), String>,
+        host: &mut Host,
+        events: &mut Vec<Event>,
+    ) {
+        let stale: Vec<String> = self
+            .fonts
+            .keys()
+            .filter(|node| !files.fonts.iter().any(|font| &font.node == *node))
+            .cloned()
+            .collect();
+        for node in stale {
+            self.fonts.remove(&node);
+            for port in entelechy_scene::FONT_OUTPUTS {
+                self.forget(host, &format!("{node}.{port}"));
+            }
+        }
+        for font in &files.fonts {
+            let stamp = store.stamp(&font.path);
+            if self
+                .fonts
+                .get(&font.node)
+                .is_some_and(|known| known.path == font.path && known.stamp == stamp)
+            {
+                continue;
+            }
+            let bytes = readable(&font.path)
+                .and_then(|()| store.read(&font.path).map_err(|e| e.to_string()));
+            let bytes = match bytes {
+                Ok(bytes) => bytes,
+                Err(why) => {
+                    for (_, external) in &font.outputs {
+                        self.forget(host, external);
+                    }
+                    self.fonts.remove(&font.node);
+                    events.push(Event::Rejected {
+                        path: font.path.clone(),
+                        error: Diagnostic::new(why),
+                    });
+                    continue;
+                }
+            };
+            let codes = self
+                .fonts
+                .remove(&font.node)
+                .filter(|known| known.path == font.path)
+                .map(|known| known.codes)
+                .unwrap_or_default();
+            self.fonts.insert(
+                font.node.clone(),
+                Font {
+                    path: font.path.clone(),
+                    stamp,
+                    bytes,
+                    codes,
+                    seen: None,
+                },
+            );
+            if let Err(why) = self.give_glyphs(font, host) {
+                events.push(Event::Rejected {
+                    path: font.path.clone(),
+                    error: Diagnostic::new(why),
+                });
+            } else {
+                events.push(Event::Loaded {
+                    name: font.node.clone(),
+                    path: font.path.clone(),
+                    detail: "a font node's font".into(),
+                });
+            }
+        }
+    }
+
+    /// Whether font node `font` was last given `handle`'s characters.
+    pub(crate) fn font_saw(&self, font: &entelechy_scene::FontNode, handle: Handle) -> bool {
+        self.fonts
+            .get(&font.node)
+            .is_none_or(|known| known.seen == Some(handle))
+    }
+
+    /// Gives font node `font` the characters `codes` (read from the Field
+    /// `handle`): its glyphs again when they differ from the last; what
+    /// fails is reported by the next sync.
+    pub(crate) fn give_codes(
+        &mut self,
+        font: &entelechy_scene::FontNode,
+        handle: Handle,
+        codes: Result<Vec<i32>, String>,
+        host: &mut Host,
+    ) {
+        let Some(known) = self.fonts.get_mut(&font.node) else {
+            return;
+        };
+        known.seen = Some(handle);
+        let given = match codes {
+            Ok(codes) if known.codes == codes => return,
+            Ok(codes) => {
+                known.codes = codes;
+                self.give_glyphs(font, host)
+            }
+            Err(why) => Err(why),
+        };
+        if let Err(why) = given {
+            self.frame_events.push(Event::Rejected {
+                path: font.path.clone(),
+                error: Diagnostic::new(format!("font node `{}`: {why}", font.node)),
+            });
+        }
+    }
+
+    /// Holds font node `font`'s three Fields, of the characters it was
+    /// last given.
+    fn give_glyphs(
+        &mut self,
+        font: &entelechy_scene::FontNode,
+        host: &mut Host,
+    ) -> Result<(), String> {
+        let Some(known) = self.fonts.get(&font.node) else {
+            return Ok(());
+        };
+        let fields = entelechy_import::font::glyphs_of(&known.bytes, &known.codes)?;
+        for (port, data) in [
+            ("glyphs", fields.glyphs),
+            ("outlines", fields.segments),
+            ("metrics", fields.metrics),
+        ] {
+            let Some((_, external)) = font.outputs.iter().find(|(name, _)| name == port) else {
+                continue;
+            };
+            let handle = host.adopt(data).map_err(|e| e.to_string())?;
+            self.hold(host, external, handle);
+        }
+        Ok(())
     }
 
     /// Frame failures since the last call.

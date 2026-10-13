@@ -190,7 +190,30 @@ pub struct Files {
     /// The root document's file outputs, written after a committed
     /// evaluation that changed them.
     pub writes: Vec<Write>,
+    /// Font nodes, at every level: the session reads their fonts and
+    /// gives each the glyphs of the characters its `codes` held when last
+    /// evaluated.
+    pub fonts: Vec<FontNode>,
 }
+
+/// A `font` node: `node g: font "x.ttf" { codes <- c.result; }`. It is
+/// three externals the session fills, `glyphs`, `outlines` and `metrics`
+/// in the layouts `entelechy import` writes a font's Fields in, read as
+/// `g.glyphs` and the others.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FontNode {
+    /// The node's id, placed.
+    pub node: String,
+    /// The font file, resolved against the document's directory.
+    pub path: PathBuf,
+    /// Where the characters wanted come from, read as last evaluated.
+    pub codes: Source,
+    /// Each output's port and the external that holds it.
+    pub outputs: Vec<(String, String)>,
+}
+
+/// A font node's outputs, in order.
+pub const FONT_OUTPUTS: [&str; 3] = ["glyphs", "outlines", "metrics"];
 
 /// A lowered document: the graph plus everything the loader must publish
 /// and watch.
@@ -465,7 +488,10 @@ fn lower(
         located: BTreeMap::new(),
     };
     let level = lowering.level(document, text, name, base, &PathBuf::from(name), None)?;
+    // The root's inputs, then the font nodes' Fields, every level's.
+    let fonts: Vec<String> = std::mem::take(&mut lowering.out.graph.externals);
     lowering.out.graph.externals = level.externals;
+    lowering.out.graph.externals.extend(fonts);
     lowering.out.files.assets = level.assets;
     lowering.out.graph.texts = level.texts;
     lowering.out.files.sequences = level.sequences;
@@ -1475,6 +1501,7 @@ impl Lowering<'_, '_> {
         }
         let mut aliases: BTreeMap<String, Vec<(String, Source)>> = BTreeMap::new();
         let first_node = self.out.graph.nodes.len();
+        let mut fonts: Vec<FontNode> = Vec::new();
         // Each file input's fallback while the file is absent, renamed
         // with the nodes it may name.
         let mut fallback_refs: Vec<SourceRef> = document
@@ -1709,6 +1736,57 @@ impl Lowering<'_, '_> {
                         is_async,
                     });
                 }
+                NodeKind::Font(font_path) => {
+                    if domain.is_some() || is_async || !node_params.is_empty() {
+                        return Err(error(
+                            font_path.span,
+                            "a font node takes no `domain`, `async` or parameters: it is a row a code of `codes`",
+                        ));
+                    }
+                    if let Some(other) = inputs.keys().find(|port| port.as_str() != "codes") {
+                        return Err(error(
+                            font_path.span,
+                            format!("a font node's one input is `codes`, not `{other}`"),
+                        ));
+                    }
+                    let codes = match inputs.remove("codes") {
+                        Some(Binding::Now(source)) => source,
+                        Some(Binding::Previous { .. }) => {
+                            return Err(error(
+                                font_path.span,
+                                "a font node reads `codes` as last evaluated already: write `codes <- node.port;`",
+                            ));
+                        }
+                        None => {
+                            return Err(error(
+                                font_path.span,
+                                "a font node needs `codes <- node.port;`, the characters it gives the glyphs of",
+                            ));
+                        }
+                    };
+                    let outputs: Vec<(String, String)> = FONT_OUTPUTS
+                        .iter()
+                        .map(|port| ((*port).to_owned(), format!("{}.{port}", id.0)))
+                        .collect();
+                    for (_, external) in &outputs {
+                        self.out.graph.externals.push(external.clone());
+                    }
+                    aliases.insert(
+                        id.0.clone(),
+                        outputs
+                            .iter()
+                            .map(|(port, external)| {
+                                (port.clone(), Source::External(external.clone()))
+                            })
+                            .collect(),
+                    );
+                    fonts.push(FontNode {
+                        node: id.0.clone(),
+                        path: base.join(&font_path.value),
+                        codes,
+                        outputs,
+                    });
+                }
                 NodeKind::SubGraph(sub_path) => {
                     if domain.is_some() {
                         return Err(error(
@@ -1768,6 +1846,10 @@ impl Lowering<'_, '_> {
             }
             Ok(())
         };
+        for font in &mut fonts {
+            resolve(&mut font.codes)?;
+        }
+        self.out.files.fonts.extend(fonts);
         for node in &mut self.out.graph.nodes[first_node..] {
             for binding in node.inputs.values_mut() {
                 match binding {
@@ -2207,6 +2289,47 @@ output result <- a.result;
 
     /// A sub-graph placed many times is read once: each placement is its
     /// own nodes, from the one document.
+    #[test]
+    fn a_font_node_in_a_placed_graph_is_three_externals_named_where_it_stands() {
+        let text = "node codes: t.codes@1 { domain = 4; }
+            node g: font \"fonts/x.ttf\" { codes <- codes.result; }
+            node draw: t.draw@1 { glyphs <- g.glyphs; outlines <- g.outlines; domain = 1; }
+            output result <- draw.result;";
+        let root = entelechy_language::parse_document(
+            "node ed: graph \"parts/editor.esn\" {}
+             output result <- ed.result;",
+        )
+        .unwrap();
+        let mut loader = |path: &Path| -> Result<(PathBuf, String), String> {
+            Ok((path.to_path_buf(), text.to_owned()))
+        };
+        let lowered = load(&root, "", "main", Path::new("root"), &mut loader).unwrap();
+        assert_eq!(
+            lowered.graph.externals,
+            ["ed.g.glyphs", "ed.g.outlines", "ed.g.metrics"]
+        );
+        let font = &lowered.files.fonts[0];
+        assert_eq!(font.node, "ed.g");
+        assert_eq!(font.path, Path::new("root/parts/fonts/x.ttf"));
+        assert_eq!(
+            font.codes,
+            Source::Node {
+                node: NodeId("ed.codes".into()),
+                port: "result".into()
+            }
+        );
+        let draw = lowered
+            .graph
+            .nodes
+            .iter()
+            .find(|n| n.id.0 == "ed.draw")
+            .unwrap();
+        assert_eq!(
+            draw.inputs["glyphs"],
+            Binding::Now(Source::External("ed.g.glyphs".into()))
+        );
+    }
+
     #[test]
     fn a_sub_graph_placed_many_times_is_read_once() {
         let display = "input source: Image;

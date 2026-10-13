@@ -811,6 +811,16 @@ be keywords.
    `--allow file.write`, a removal or a rename `--allow file.delete` too.
    A placed graph's outputs are wired, never written
    ([decision](DECISIONS.md)).
+   A font is placed as a node too: `node g: font "x.ttf" { codes <-
+   wanted.result; }`. The Host reads the font file (TrueType or
+   OpenType, read as `entelechy import` reads one) and gives the
+   characters `codes` held when last evaluated, so a frame later, as
+   three Fields read like outputs: `g.glyphs` a row a code in order
+   (`code: Int; advance: Int; first: Int; count: Int; lo: Vec2; hi:
+   Vec2`; a code the font lacks -1), `g.outlines` their line segments in
+   ems (`Rows<Vec4>`), `g.metrics` one row (`units: Int; ascent: Float;
+   descent: Float; gap: Float`). They are read again only when `codes`
+   or the file changes; a font node takes no domain or params.
 10. `times = N;` on a Kernel node or placed graph stands for `name/1` to
     `name/N`, each wired as written; `carry port <- output;` feeds the
     port from the previous time's output from the second time on.

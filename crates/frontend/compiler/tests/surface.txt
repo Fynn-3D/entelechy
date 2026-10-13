@@ -736,6 +736,8 @@ form fill
   node zeros: Rows<Float> { domain = 65; value = 0.5; }
 form fn
   fn name(a: Float) -> Float { ... }   fn name<T>(a: T) -> T { ... }
+form font
+  node g: font "fonts/x.ttf" { codes <- wanted.result; }
 form graph
   node name: graph "other.esn" { source <- src; param = 2; }
 form if

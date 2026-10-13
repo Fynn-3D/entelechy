@@ -397,6 +397,10 @@ pub enum NodeKind {
     /// A filled Field of a type: zeros, or `value = 0.5;`; its element a
     /// scalar or vector, or an alias of one.
     Fill(Spanned<String>),
+    /// A font file's glyphs as the Host reads them: `node g: font
+    /// "x.ttf" { codes <- c.result; }`, its outputs `glyphs`, `outlines`
+    /// and `metrics` for the characters `codes` holds.
+    Font(Spanned<String>),
 }
 
 /// One line inside a reference node's block.
@@ -1085,6 +1089,7 @@ pub fn definitions(document: &Document) -> Vec<Definition> {
                 .as_ref()
                 .map_or_else(String::new, |id| id.value.clone()),
             NodeKind::SubGraph(path) => format!("graph \"{}\"", path.value),
+            NodeKind::Font(path) => format!("font \"{}\"", path.value),
             NodeKind::Fill(ty) => ty.value.clone(),
         };
         found.push(Definition {

@@ -473,6 +473,15 @@ entelechy import font.ttf --out assets --chars "Hello, world."
   the characters to import, every one the font maps by default. Kerning,
   ligatures and shaping are left out.
 
+A scene may read a font itself, a node giving the glyphs of the
+characters another node asks for, read again only as those change:
+
+```text
+node glyphs: font "fonts/x.ttf" { codes <- wanted.result; }
+// glyphs.glyphs, glyphs.outlines, glyphs.metrics: the import's layouts,
+// a row a code of `wanted`, a frame later
+```
+
 ```sh
 entelechy export crate.vertices.field crate.triangles.field crate.albedo.png --out crate.glb
 entelechy export kick.field --out kick.wav --rate 48000

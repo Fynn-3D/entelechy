@@ -497,6 +497,12 @@ pub fn forms() -> Vec<Form> {
             "Another document placed as a node: its nodes join under `name.`, its inputs take the wiring, its outputs are read as `name.output`.",
         ),
         form(
+            "font",
+            "graph",
+            "node g: font \"fonts/x.ttf\" { codes <- wanted.result; }",
+            "A font file's glyphs as the Host reads them, for the characters `codes` (a `Rows<Int>` of code points) held when last evaluated, so a frame later: `g.glyphs` a row a code in order (`code: Int; advance: Int; first: Int; count: Int; lo: Vec2; hi: Vec2`, the advance in the font's units, the box in ems; a code the font lacks -1), `g.outlines` their outlines' line segments in ems, y up (`Rows<Vec4>`), `g.metrics` one row (`units: Int; ascent: Float; descent: Float; gap: Float`). Read again when `codes` or the file changes.",
+        ),
+        form(
             "previous",
             "graph",
             "port <~ node.output from initial [migrate id@v];",

@@ -184,7 +184,12 @@ pub(crate) fn graph(session: &Session) -> Result<Json, Json> {
     let graph = session
         .graph()
         .ok_or_else(|| failure("no scene is loaded"))?;
-    Ok(graph_json(graph, session.params(), &session.placements()))
+    Ok(graph_json(
+        graph,
+        session.params(),
+        &session.placements(),
+        session.fonts(),
+    ))
 }
 
 /// The scene document on disk, or with `version`, a version the session

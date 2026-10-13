@@ -1142,6 +1142,7 @@ dependencies = [
  "entelechy-formats",
  "entelechy-gpu",
  "entelechy-graph",
+ "entelechy-import",
  "entelechy-ir",
  "entelechy-jit",
  "entelechy-kernel",

@@ -300,6 +300,12 @@ impl Session {
         self.scene.graph()
     }
 
+    /// The scene's font nodes, every level's: each the externals its
+    /// glyphs, outlines and metrics are in, and where its codes come from.
+    pub fn fonts(&self) -> &[entelechy_scene::FontNode] {
+        &self.scene.files().fonts
+    }
+
     /// The scene document.
     pub fn root(&self) -> &Path {
         self.scene.root()
@@ -1386,6 +1392,7 @@ impl Session {
             }
         };
         self.history.ran();
+        self.feed_fonts();
         // The frame's runs are all given: a clocked frame ends here, its
         // nodes' runs kept until the device tells it.
         if let Some(frame) = self.runtime.end_frame() {
@@ -1452,6 +1459,7 @@ impl Session {
             )
             .map_err(|error| self.with_refusal(error))?;
         self.history.ran();
+        self.feed_fonts();
         Ok(report)
     }
 
@@ -1607,6 +1615,54 @@ impl Session {
             for node in self.pinned_by(&name) {
                 self.evaluator.pin(node);
             }
+        }
+        // What a font node reads its characters from stays materialized.
+        let codes: Vec<(entelechy_graph::NodeId, String)> = self
+            .scene
+            .files()
+            .fonts
+            .iter()
+            .filter_map(|font| match &font.codes {
+                entelechy_graph::Source::Node { node, port } => Some((node.clone(), port.clone())),
+                entelechy_graph::Source::External(_) => None,
+            })
+            .collect();
+        for (node, port) in codes {
+            let (node, _) = self.producer(&node, &port);
+            self.evaluator.pin(node);
+        }
+    }
+
+    /// Gives each font node the characters its `codes` held when last
+    /// evaluated, reading the Field only when it is another than it last
+    /// read; the node's glyphs follow for the next evaluation.
+    fn feed_fonts(&mut self) {
+        let fonts = self.scene.files().fonts.clone();
+        for font in &fonts {
+            let handle = match &font.codes {
+                entelechy_graph::Source::Node { node, port } => self.cached(node, port),
+                entelechy_graph::Source::External(name) => self.inputs.handles().get(name).copied(),
+            };
+            let Some(handle) = handle else {
+                continue;
+            };
+            if self.inputs.font_saw(font, handle) {
+                continue;
+            }
+            let codes = self
+                .runtime
+                .materialize(handle)
+                .map_err(|e| e.to_string())
+                .and_then(|()| self.runtime.host().data(handle).map_err(|e| e.to_string()))
+                .and_then(|data| {
+                    if data.schema().scalars() == [entelechy_kernel::Scalar::Int] {
+                        Ok(data.storage().iter().map(|&w| w as i32).collect())
+                    } else {
+                        Err("its `codes` are a `Rows<Int>` of characters".to_owned())
+                    }
+                });
+            self.inputs
+                .give_codes(font, handle, codes, self.runtime.host_mut());
         }
     }
 

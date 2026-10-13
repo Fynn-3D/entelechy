@@ -355,6 +355,7 @@ pub(crate) fn graph_json(
     graph: &entelechy_graph::Graph,
     overrides: &std::collections::BTreeMap<String, Value>,
     placements: &[(String, entelechy_kernel::Placement)],
+    fonts: &[entelechy_scene::FontNode],
 ) -> Json {
     let source = |source: &Source| source.to_string();
     let placed = |node: &str| placements.iter().find(|(id, _)| id == node).map(|(_, p)| p);
@@ -389,6 +390,13 @@ pub(crate) fn graph_json(
             "async": node.is_async,
         })).collect::<Vec<_>>(),
         "outputs": graph.outputs.iter().map(|(name, s)| json!({ "name": name, "source": source(s) })).collect::<Vec<_>>(),
+        "fonts": fonts.iter().map(|font| json!({
+            "id": font.node,
+            "kind": "font",
+            "path": font.path.display().to_string(),
+            "codes": source(&font.codes),
+            "outputs": font.outputs.iter().map(|(port, input)| json!({ "port": port, "input": input })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
     })
 }
 

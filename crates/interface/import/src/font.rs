@@ -93,8 +93,6 @@ pub fn import(path: &Path, out_dir: &Path, chars: Option<&str>) -> Result<Import
 pub fn read(bytes: &[u8], chars: Option<&str>) -> Result<(Fields, Imported), String> {
     let face = ttf_parser::Face::parse(bytes, 0)
         .map_err(|e| format!("not a TrueType or OpenType font this reads: {e}"))?;
-    let units = face.units_per_em();
-    let em = 1.0 / f32::from(units);
     let mut codes: Vec<char> = match chars {
         Some(text) => text.chars().collect(),
         None => {
@@ -123,72 +121,13 @@ pub fn read(bytes: &[u8], chars: Option<&str>) -> Result<(Fields, Imported), Str
     if entries.len() == 1 {
         return Err("the font maps none of the characters asked for".into());
     }
+    let mut drawer = Drawer::new(&face);
     let mut glyphs: Vec<u32> = Vec::new();
-    let mut segments: Vec<u32> = Vec::new();
-    let mut first = 0usize;
-    // Characters the font draws with one glyph share its segments.
-    let mut drawn: std::collections::HashMap<u16, [u32; 6]> = std::collections::HashMap::new();
     for &(code, id) in &entries {
-        let advance = i32::from(face.glyph_hor_advance(id).unwrap_or(0));
-        if let Some(&[at, count, lo_x, lo_y, hi_x, hi_y]) = drawn.get(&id.0) {
-            glyphs.extend([
-                code as u32,
-                advance as u32,
-                at,
-                count,
-                lo_x,
-                lo_y,
-                hi_x,
-                hi_y,
-            ]);
-            continue;
-        }
-        let mut outline = Outline {
-            em,
-            tolerance: TOLERANCE,
-            start: [0.0; 2],
-            at: [0.0; 2],
-            segments: Vec::new(),
-        };
-        face.outline_glyph(id, &mut outline);
-        outline.close();
-        let (mut lo, mut hi) = ([0.0f32; 2], [0.0f32; 2]);
-        if let Some(s) = outline.segments.first() {
-            lo = [s[0], s[1]];
-            hi = lo;
-        }
-        for s in &outline.segments {
-            for (x, y) in [(s[0], s[1]), (s[2], s[3])] {
-                lo = [lo[0].min(x), lo[1].min(y)];
-                hi = [hi[0].max(x), hi[1].max(y)];
-            }
-            segments.extend(s.iter().map(|v| v.to_bits()));
-        }
-        let count = outline.segments.len();
-        let [lo_x, lo_y, hi_x, hi_y] = [lo[0], lo[1], hi[0], hi[1]].map(f32::to_bits);
-        let row = [first as u32, count as u32, lo_x, lo_y, hi_x, hi_y];
-        drawn.insert(id.0, row);
-        glyphs.extend([code as u32, advance as u32]);
-        glyphs.extend(row);
-        first += count;
+        glyphs.extend(drawer.row(code, id));
     }
-    if segments.is_empty() {
-        segments = vec![0; 4];
-    }
-    let metrics = [
-        i32::from(units) as u32,
-        (f32::from(face.ascender()) * em).to_bits(),
-        (f32::from(face.descender()) * em).to_bits(),
-        (f32::from(face.line_gap()) * em).to_bits(),
-    ];
-    let field = |schema: Schema, rows: usize, words: Vec<u32>| {
-        FieldData::from_storage(schema, Domain::Rows(rows as u32), words).map_err(|e| e.to_string())
-    };
-    let fields = Fields {
-        glyphs: field(glyph_schema(), entries.len(), glyphs)?,
-        segments: field(Schema::new(vec![Scalar::Float; 4]), first.max(1), segments)?,
-        metrics: field(metrics_schema(), 1, metrics.to_vec())?,
-    };
+    let first = drawer.first;
+    let fields = drawer.fields(glyphs, entries.len())?;
     let mut notes = vec!["kerning, ligatures and shaping are left out; each character is its own glyph at its own advance".to_owned()];
     if face.is_variable() {
         notes.push("a variable font is read at its default instance".into());
@@ -201,6 +140,143 @@ pub fn read(bytes: &[u8], chars: Option<&str>) -> Result<(Fields, Imported), Str
         notes,
     };
     Ok((fields, imported))
+}
+
+/// The Fields of the characters `codes` asks for, a glyph row each in the
+/// order asked (row `k` codes[k]'s), for a scene's `font` node: a code
+/// the font lacks, or none (zero or below), is the missing glyph's row
+/// with its code -1 and no outline; no codes, one such row.
+pub fn glyphs_of(bytes: &[u8], codes: &[i32]) -> Result<Fields, String> {
+    let face = ttf_parser::Face::parse(bytes, 0)
+        .map_err(|e| format!("not a TrueType or OpenType font this reads: {e}"))?;
+    let mut drawer = Drawer::new(&face);
+    let missing_advance =
+        i32::from(face.glyph_hor_advance(ttf_parser::GlyphId(0)).unwrap_or(0)) as u32;
+    let mut glyphs: Vec<u32> = Vec::new();
+    for &code in codes {
+        let id = u32::try_from(code)
+            .ok()
+            .filter(|&c| c > 0)
+            .and_then(char::from_u32)
+            .and_then(|c| face.glyph_index(c));
+        match id {
+            Some(id) => glyphs.extend(drawer.row(code, id)),
+            None => glyphs.extend([-1i32 as u32, missing_advance, 0, 0, 0, 0, 0, 0]),
+        }
+    }
+    let rows = codes.len().max(1);
+    if codes.is_empty() {
+        glyphs.extend([-1i32 as u32, missing_advance, 0, 0, 0, 0, 0, 0]);
+    }
+    drawer.fields(glyphs, rows)
+}
+
+/// Draws a face's glyphs into one run of segments, a glyph drawn once
+/// however many characters or rows share it.
+struct Drawer<'a> {
+    face: &'a ttf_parser::Face<'a>,
+    em: f32,
+    /// Each glyph drawn: where its segments begin, how many, its box.
+    drawn: std::collections::HashMap<u16, [u32; 6]>,
+    segments: Vec<u32>,
+    first: usize,
+}
+
+impl<'a> Drawer<'a> {
+    fn new(face: &'a ttf_parser::Face<'a>) -> Self {
+        Self {
+            face,
+            em: 1.0 / f32::from(face.units_per_em()),
+            drawn: std::collections::HashMap::new(),
+            segments: Vec::new(),
+            first: 0,
+        }
+    }
+
+    /// Glyph `id`'s row for `code`, in [`glyph_schema`]'s layout, its
+    /// outline drawn if no row before drew it.
+    fn row(&mut self, code: i32, id: ttf_parser::GlyphId) -> [u32; 8] {
+        let advance = i32::from(self.face.glyph_hor_advance(id).unwrap_or(0));
+        if let Some(&[at, count, lo_x, lo_y, hi_x, hi_y]) = self.drawn.get(&id.0) {
+            return [
+                code as u32,
+                advance as u32,
+                at,
+                count,
+                lo_x,
+                lo_y,
+                hi_x,
+                hi_y,
+            ];
+        }
+        let mut outline = Outline {
+            em: self.em,
+            tolerance: TOLERANCE,
+            start: [0.0; 2],
+            at: [0.0; 2],
+            segments: Vec::new(),
+        };
+        self.face.outline_glyph(id, &mut outline);
+        outline.close();
+        let (mut lo, mut hi) = ([0.0f32; 2], [0.0f32; 2]);
+        if let Some(s) = outline.segments.first() {
+            lo = [s[0], s[1]];
+            hi = lo;
+        }
+        for s in &outline.segments {
+            for (x, y) in [(s[0], s[1]), (s[2], s[3])] {
+                lo = [lo[0].min(x), lo[1].min(y)];
+                hi = [hi[0].max(x), hi[1].max(y)];
+            }
+            self.segments.extend(s.iter().map(|v| v.to_bits()));
+        }
+        let count = outline.segments.len();
+        let [lo_x, lo_y, hi_x, hi_y] = [lo[0], lo[1], hi[0], hi[1]].map(f32::to_bits);
+        let row = [self.first as u32, count as u32, lo_x, lo_y, hi_x, hi_y];
+        self.drawn.insert(id.0, row);
+        self.first += count;
+        [
+            code as u32,
+            advance as u32,
+            row[0],
+            row[1],
+            row[2],
+            row[3],
+            row[4],
+            row[5],
+        ]
+    }
+
+    /// The three Fields: `rows` glyph rows of `glyphs`, the segments drawn
+    /// (one of zeros when none), the face's measures.
+    fn fields(self, glyphs: Vec<u32>, rows: usize) -> Result<Fields, String> {
+        let face = self.face;
+        let units = face.units_per_em();
+        let em = self.em;
+        let mut segments = self.segments;
+        if segments.is_empty() {
+            segments = vec![0; 4];
+        }
+        let metrics = [
+            i32::from(units) as u32,
+            (f32::from(face.ascender()) * em).to_bits(),
+            (f32::from(face.descender()) * em).to_bits(),
+            (f32::from(face.line_gap()) * em).to_bits(),
+        ];
+        let field = |schema: Schema, rows: usize, words: Vec<u32>| {
+            FieldData::from_storage(schema, Domain::Rows(rows as u32), words)
+                .map_err(|e| e.to_string())
+        };
+        Ok(Fields {
+            glyphs: field(glyph_schema(), rows, glyphs)?,
+            segments: field(
+                Schema::new(vec![Scalar::Float; 4]),
+                self.first.max(1),
+                segments,
+            )?,
+            metrics: field(metrics_schema(), 1, metrics.to_vec())?,
+        })
+    }
 }
 
 /// A glyph's outline as line segments in ems, curves cut until within
@@ -294,10 +370,11 @@ impl ttf_parser::OutlineBuilder for Outline {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
+/// A small TrueType font built from the format's tables, so tests read a
+/// font without carrying one: 1000 units an em, a box for a missing
+/// character, a space, `I`, `l`, and an `o` of two loops of quadratic
+/// curves that dips just below the baseline.
+pub mod sample {
     /// A point of a TrueType outline: x, y, and whether it is on the curve.
     type Point = (i16, i16, bool);
 
@@ -330,10 +407,8 @@ mod tests {
         out
     }
 
-    /// A TrueType font built from the format's tables, 1000 units an em:
-    /// a box for a missing character, a space, `I`, `l`, and an `o` of
-    /// two loops of quadratic curves that dips just below the baseline.
-    fn latin() -> Vec<u8> {
+    /// The font.
+    pub fn latin() -> Vec<u8> {
         let bar = |x0: i16, x1: i16, top: i16| {
             glyph(&[&[
                 (x0, 0, true),
@@ -467,6 +542,12 @@ mod tests {
         }
         font
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sample::latin;
+    use super::*;
 
     fn words(data: &FieldData) -> Vec<u32> {
         data.storage().to_vec()
@@ -523,5 +604,19 @@ mod tests {
     #[test]
     fn what_is_not_a_font_is_refused() {
         assert!(read(b"not a font", None).is_err());
+    }
+
+    #[test]
+    fn a_font_node_has_a_row_for_each_code_asked_in_order() {
+        let fields = glyphs_of(&latin(), &['o' as i32, 0x4E2D, 'I' as i32, 'o' as i32]).unwrap();
+        let glyphs = words(&fields.glyphs);
+        let codes: Vec<i32> = glyphs.chunks(8).map(|g| g[0] as i32).collect();
+        assert_eq!(codes, vec!['o' as i32, -1, 'I' as i32, 'o' as i32]);
+        // The second `o` shares the first's segments; the missing row has none.
+        assert_eq!(glyphs[2..4], glyphs[26..28]);
+        assert_eq!(glyphs[11], 0);
+        let empty = glyphs_of(&latin(), &[]).unwrap();
+        assert_eq!(words(&empty.glyphs)[0] as i32, -1);
+        assert_eq!(empty.glyphs.storage().len(), 8);
     }
 }

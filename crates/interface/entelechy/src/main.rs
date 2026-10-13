@@ -570,6 +570,19 @@ fn graph(args: &[String]) -> Result<(), String> {
         .ok_or_else(|| "the scene did not load".to_string())?
         .clone();
     print!("{}", entelechy_scene::print(&graph));
+    for font in session.fonts() {
+        println!(
+            "// font node {}: \"{}\", codes from {}, read as {}",
+            font.node,
+            font.path.display(),
+            font.codes,
+            font.outputs
+                .iter()
+                .map(|(_, input)| input.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
     let kernels: Vec<String> = session
         .runtime()
         .kernels()

@@ -74,7 +74,7 @@ through:
 | `status` |  | backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, loaded (whether a scene is), refused (why not, when not), revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, versions (`entelechy`, `api`, `language`, `ir`, `package`) |
 | `kernels` |  | a list of manifests, each with its generation, which `publish`'s `expect` names |
 | `kernel` | `kernel`?: string, `generation`?: integer | manifest, generation, source, as `publish` takes it |
-| `graph` |  | inputs, params, nodes, outputs |
+| `graph` |  | inputs, params, nodes, outputs, fonts (each font node: id, path, codes, its outputs and the inputs they are in) |
 | `document` | `version`?: string, `path`?: string | path, text, and version, which `compose`'s `expect` names |
 | `history` | `since`?: integer | revision, frame (the frames committed since that revision), the changes after `since` and the attempts refused since, each with its origin |
 | `compose` | `text`?: string, `edits`?: [{node?: string, output?: string, param?: string, require?: string, input?: string, kernel?: string, struct?: string, type?: string, fn?: string, use?: string, member?: string, text: string \| null}], `expect`?: string, `path`?: string, `documents`?: [{path?: string, text?: string, edits?: [{node?: string, output?: string, param?: string, require?: string, input?: string, kernel?: string, struct?: string, type?: string, fn?: string, use?: string, member?: string, text: string \| null}], expect?: string}] | events, version, path (the scene), written; with `path` or `documents`, documents (each written document's path and version) |
