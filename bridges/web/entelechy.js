@@ -424,10 +424,16 @@ class Driver {
     this.listen();
   }
 
-  /// The key codes a Kernel reads (`entelechy help key`): a letter or a
-  /// digit by its ASCII uppercase, a character typed with shift by the
-  /// key under it on a US keyboard, a named key by the browser's code.
+  /// The key codes a Kernel reads (`entelechy help key`): the key pressed
+  /// as a US keyboard has it, whatever its modifiers type (Option+Z is Z,
+  /// not Ω): a letter or a digit by its ASCII uppercase, a punctuation key
+  /// by its code; else a character typed with shift by the key under it,
+  /// a named key by the browser's code.
   static keyCode(event) {
+    const code = event.code || "";
+    if (/^Key[A-Z]$/.test(code)) return code.charCodeAt(3);
+    if (/^Digit[0-9]$/.test(code)) return code.charCodeAt(5);
+    if (code in Driver.CODES) return Driver.CODES[code];
     if (event.key.length === 1) {
       const upper = event.key.toUpperCase();
       if (/^[A-Z0-9 ]$/.test(upper)) return upper.charCodeAt(0);
@@ -435,6 +441,11 @@ class Driver {
     }
     return Driver.NAMED[event.key];
   }
+
+  static CODES = {
+    Space: 32, Semicolon: 186, Equal: 187, Comma: 188, Minus: 189, Period: 190, Slash: 191,
+    Backquote: 192, BracketLeft: 219, Backslash: 220, BracketRight: 221, Quote: 222,
+  };
 
   static TYPED = {
     ")": 48, "!": 49, "@": 50, "#": 51, "$": 52, "%": 53, "^": 54, "&": 55, "*": 56, "(": 57,
