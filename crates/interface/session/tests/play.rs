@@ -276,6 +276,30 @@ fn a_press_lasts_a_frame_however_quick() {
     assert!(!play.context(VIEW).input.pointer_down);
 }
 
+#[test]
+fn keys_whose_release_went_elsewhere_are_let_go() {
+    let dir = scratch("released");
+    let mut session = open(&dir);
+    let mut play = Play::new(still);
+    shown(&mut play, &mut session);
+    // Shift and Command pressed here, then the focus gone with their
+    // releases: the window let go of every key.
+    play.key(&mut session, "Shift", true);
+    play.key(&mut session, "Super", true);
+    play.key(&mut session, "a", true);
+    shown(&mut play, &mut session);
+    play.release_keys();
+    let input = play.context(VIEW).input;
+    assert!(!input.key(16) && !input.key(91) && !input.key(65));
+    // The system saying Command is no longer held lets it go too.
+    play.key(&mut session, "Super", true);
+    play.key(&mut session, "Shift", true);
+    shown(&mut play, &mut session);
+    play.modifiers(true, false, false, false);
+    let input = play.context(VIEW).input;
+    assert!(input.key(16) && !input.key(91));
+}
+
 /// A placed graph's node id carries its place (`fx.gray`), so every
 /// replay step naming a port takes it after the last dot.
 #[test]

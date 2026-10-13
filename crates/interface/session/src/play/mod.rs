@@ -365,6 +365,38 @@ impl Play {
         }
     }
 
+    /// Every key let go: the window lost the focus, and the releases of
+    /// the keys held go to whatever has it.
+    pub fn release_keys(&mut self) {
+        let keys: Vec<Held> = self
+            .pressed
+            .iter()
+            .copied()
+            .filter(|held| matches!(held, Held::Key(_)))
+            .collect();
+        self.pressed.retain(|held| !matches!(held, Held::Key(_)));
+        self.late.retain(|held| !matches!(held, Held::Key(_)));
+        for held in keys {
+            self.set(held, false);
+        }
+        for code in 0..256 {
+            self.input.set_key(code, false);
+        }
+    }
+
+    /// The modifier keys the system says are held: Shift, Control, Alt
+    /// and Command (or Windows) that are not are let go, whichever
+    /// window their release went to.
+    pub fn modifiers(&mut self, shift: bool, control: bool, alt: bool, command: bool) {
+        for (code, held) in [(16, shift), (17, control), (18, alt), (91, command)] {
+            if !held {
+                self.pressed.retain(|h| *h != Held::Key(code));
+                self.late.retain(|h| *h != Held::Key(code));
+                self.input.set_key(code, false);
+            }
+        }
+    }
+
     /// The pointer at `(x, y)` in window pixels.
     pub fn pointer(&mut self, x: f32, y: f32) {
         self.cursor = (x, y);

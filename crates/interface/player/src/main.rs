@@ -606,8 +606,12 @@ impl ApplicationHandler for Player {
                     self.play.pointer(position.x as f32, position.y as f32);
                 }
             }
-            // Out of the focus, a held pointer is let go.
-            WindowEvent::Focused(false) => self.let_go(),
+            // Out of the focus, a held pointer and every held key are let
+            // go: their releases go to the window that has it.
+            WindowEvent::Focused(false) => {
+                self.let_go();
+                self.play.release_keys();
+            }
             WindowEvent::MouseInput { state, button, .. } => {
                 let held = state == ElementState::Pressed;
                 if held && self.hold_pointer && self.held.is_none() {
@@ -628,7 +632,14 @@ impl ApplicationHandler for Player {
                 };
                 self.play.wheel(x, y);
             }
-            WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
+            // The modifiers as the system has them: one released while
+            // another window had the focus is let go here too.
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.modifiers = modifiers.state();
+                let m = self.modifiers;
+                self.play
+                    .modifiers(m.shift_key(), m.control_key(), m.alt_key(), m.super_key());
+            }
             // Text comes from a key, held keys repeating, unless an input
             // method is composing or the key is a shortcut; else from what
             // the input method commits.
