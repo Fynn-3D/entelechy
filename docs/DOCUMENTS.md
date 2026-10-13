@@ -820,7 +820,11 @@ be keywords.
    Vec2`; a code the font lacks -1), `g.outlines` their line segments in
    ems (`Rows<Vec4>`), `g.metrics` one row (`units: Int; ascent: Float;
    descent: Float; gap: Float`). They are read again only when `codes`
-   or the file changes; a font node takes no domain or params.
+   or the file changes; a font node takes no domain or params. Before
+   any codes, `g.glyphs` is the missing glyph's one row (-1); a font
+   that cannot be read gives that row, one zero segment and zero
+   metrics, and is reported. The font file is read like any input
+   file, from wherever its path names.
 10. `times = N;` on a Kernel node or placed graph stands for `name/1` to
     `name/N`, each wired as written; `carry port <- output;` feeds the
     port from the previous time's output from the second time on.

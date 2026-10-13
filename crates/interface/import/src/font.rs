@@ -171,6 +171,21 @@ pub fn glyphs_of(bytes: &[u8], codes: &[i32]) -> Result<Fields, String> {
     drawer.fields(glyphs, rows)
 }
 
+/// A font node's Fields before its font is read, or when it cannot be:
+/// one row of the missing glyph's (code -1, no outline), one segment of
+/// zeros, and zero measures.
+pub fn placeholder() -> Fields {
+    let field = |schema: Schema, words: Vec<u32>| {
+        FieldData::from_storage(schema, Domain::Rows(1), words)
+            .expect("one row of the schema's words")
+    };
+    Fields {
+        glyphs: field(glyph_schema(), vec![-1i32 as u32, 0, 0, 0, 0, 0, 0, 0]),
+        segments: field(Schema::new(vec![Scalar::Float; 4]), vec![0; 4]),
+        metrics: field(metrics_schema(), vec![0; 4]),
+    }
+}
+
 /// Draws a face's glyphs into one run of segments, a glyph drawn once
 /// however many characters or rows share it.
 struct Drawer<'a> {

@@ -402,10 +402,17 @@ impl Inputs {
             let bytes = match bytes {
                 Ok(bytes) => bytes,
                 Err(why) => {
-                    for (_, external) in &font.outputs {
-                        self.forget(host, external);
-                    }
+                    // The node still gives Fields, the missing glyph's, so
+                    // the frames that read it run.
                     self.fonts.remove(&font.node);
+                    if let Err(error) =
+                        self.hold_fields(font, entelechy_import::font::placeholder(), host)
+                    {
+                        events.push(Event::Rejected {
+                            path: font.path.clone(),
+                            error: Diagnostic::new(error),
+                        });
+                    }
                     events.push(Event::Rejected {
                         path: font.path.clone(),
                         error: Diagnostic::new(why),
@@ -430,6 +437,14 @@ impl Inputs {
                 },
             );
             if let Err(why) = self.give_glyphs(font, host) {
+                if let Err(error) =
+                    self.hold_fields(font, entelechy_import::font::placeholder(), host)
+                {
+                    events.push(Event::Rejected {
+                        path: font.path.clone(),
+                        error: Diagnostic::new(error),
+                    });
+                }
                 events.push(Event::Rejected {
                     path: font.path.clone(),
                     error: Diagnostic::new(why),
@@ -492,6 +507,16 @@ impl Inputs {
             return Ok(());
         };
         let fields = entelechy_import::font::glyphs_of(&known.bytes, &known.codes)?;
+        self.hold_fields(font, fields, host)
+    }
+
+    /// Holds `fields` as font node `font`'s three outputs.
+    fn hold_fields(
+        &mut self,
+        font: &entelechy_scene::FontNode,
+        fields: entelechy_import::font::Fields,
+        host: &mut Host,
+    ) -> Result<(), String> {
         for (port, data) in [
             ("glyphs", fields.glyphs),
             ("outlines", fields.segments),

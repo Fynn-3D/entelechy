@@ -443,6 +443,12 @@ impl Session {
                 .chain(files.checks.iter().map(|(_, path)| path.clone()))
                 .chain(files.files.iter().map(|(_, dir)| dir.clone()))
                 .chain(files.outlines.iter().map(|(_, path)| path.clone()))
+                .chain(
+                    files
+                        .fonts
+                        .iter()
+                        .filter_map(|font| font.path.parent().map(Path::to_path_buf)),
+                )
                 .collect()
         } else {
             Vec::new()

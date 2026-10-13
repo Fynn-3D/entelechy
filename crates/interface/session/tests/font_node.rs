@@ -101,3 +101,58 @@ fn a_font_node_names_its_one_input() {
     assert!(said.iter().any(|line| line.contains("`codes`")), "{said:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_font_by_absolute_path_elsewhere_gives_fields_from_the_first_frame() {
+    let dir = scratch("absolute");
+    let elsewhere = scratch("absolute-font");
+    let font = elsewhere.join("fonts/sample.ttf");
+    std::fs::remove_dir_all(dir.join("fonts")).unwrap();
+    std::fs::write(
+        dir.join("scene.esn"),
+        SCENE.replace("fonts/sample.ttf", font.to_str().unwrap()),
+    )
+    .unwrap();
+    let mut session = open(&dir);
+    // The first evaluate after opening, as `serve` and the Player run it.
+    assert_eq!(codes(&mut session), vec![-1]);
+    let metrics = session.output(Some("metrics")).unwrap();
+    assert_eq!(session.field(metrics).unwrap().values()[0], 1000);
+    assert_eq!(codes(&mut session), vec![111, -1, 73]);
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&elsewhere);
+}
+
+#[test]
+fn a_font_that_cannot_be_read_still_gives_the_missing_glyph() {
+    let dir = scratch("unread");
+    std::fs::write(dir.join("fonts/sample.ttf"), b"not a font").unwrap();
+    let mut session = Session::open(&dir.join("scene.esn"), None, 1 << 22);
+    let said: Vec<String> = session.sync().iter().map(ToString::to_string).collect();
+    assert!(
+        said.iter().any(|line| line.contains("rejected")),
+        "{said:?}"
+    );
+    assert_eq!(codes(&mut session), vec![-1]);
+    assert_eq!(codes(&mut session), vec![-1]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_check_counts_a_font_nodes_codes_as_read() {
+    let dir = scratch("check");
+    let checked = entelechy_session::check_document(
+        &entelechy_session::Disk::default(),
+        &dir.join("scene.esn"),
+        false,
+    );
+    assert!(
+        checked
+            .lines
+            .iter()
+            .all(|(_, line)| !line.contains("nothing reads")),
+        "{:?}",
+        checked.lines
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

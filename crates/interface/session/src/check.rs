@@ -584,12 +584,15 @@ pub fn check_document_with(
         }
     }
     // A frame runs what something reads: a node nothing reads (no output,
-    // state, or input's fallback while its file is absent) never runs.
+    // state, input's fallback while its file is absent, or font node's
+    // codes) never runs.
     let fallbacks = lowered
         .graph
         .fallbacks
         .iter()
-        .filter_map(|(_, source)| match source {
+        .map(|(_, source)| source)
+        .chain(lowered.files.fonts.iter().map(|font| &font.codes))
+        .filter_map(|source| match source {
             entelechy_graph::Source::Node { node, .. } => Some(node.clone()),
             entelechy_graph::Source::External(_) => None,
         });
