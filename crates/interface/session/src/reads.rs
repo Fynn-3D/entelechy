@@ -57,6 +57,13 @@ impl Reads {
         Ok(())
     }
 
+    /// Takes back reads from `dir` that [`Reads::allow`] gave.
+    pub(crate) fn revoke(&mut self, store: &dyn Store, dir: &Path) {
+        if let Ok(resolved) = store.canonical(dir) {
+            self.allowed.retain(|allowed| *allowed != resolved);
+        }
+    }
+
     /// Whether a sync is to hand [`Reads::settle`] the scene's
     /// directories: where reads are held, until they are fixed. Where they
     /// are not, no read is checked against them, so they are not worked

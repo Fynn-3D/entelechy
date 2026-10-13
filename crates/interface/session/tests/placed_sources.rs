@@ -1,6 +1,7 @@
-//! The caller places a scene's file-backed inputs and outputs
-//! (`--input`, `--output`, [`Overrides`]): the inputs read there, the
-//! outputs write there.
+//! The caller places a scene's file-backed inputs and outputs: at launch
+//! (`--input`, `--output`, [`Overrides`]) and while it runs, a folder the
+//! person chose ([`Session::choose_folder`]): the inputs read there, the
+//! outputs write there, the folder given only what was asked.
 
 use std::path::{Path, PathBuf};
 
@@ -137,5 +138,48 @@ fn a_name_the_scene_does_not_read_from_a_file_is_refused() {
         said.iter().any(|line| line.contains("--output result")),
         "{said:?}"
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_chosen_folder_takes_the_directories_and_only_the_grants_asked() {
+    let dir = scratch("chosen");
+    let (mut session, events) = opened(&dir, Overrides::default());
+    assert!(session.graph().is_some(), "{events:?}");
+    assert_eq!(listed(&mut session), vec!["main.ent".to_owned()]);
+    let names = ["disk".to_owned(), "done".to_owned()];
+    // A file-backed input is no folder's.
+    assert!(
+        session
+            .choose_folder(&["note".to_owned()], &dir.join("other"), &[])
+            .is_err()
+    );
+    // Chosen with reads alone: read there, and nothing written there.
+    session
+        .choose_folder(&names, &dir.join("other"), &[])
+        .unwrap();
+    session.sync();
+    assert_eq!(listed(&mut session), vec!["elsewhere.txt".to_owned()]);
+    ask(&dir, &[(WRITE, "made.txt", b"hi")]);
+    session.sync();
+    session.evaluate(&Context::default()).unwrap();
+    session.sync();
+    assert!(!dir.join("other/made.txt").exists());
+    // Chosen again with writes: written there.
+    session
+        .choose_folder(&names, &dir.join("other"), &["file.write".to_owned()])
+        .unwrap();
+    ask(&dir, &[(WRITE, "made2.txt", b"yo")]);
+    session.sync();
+    session.evaluate(&Context::default()).unwrap();
+    session.sync();
+    assert_eq!(std::fs::read(dir.join("other/made2.txt")).unwrap(), b"yo");
+    // Another folder chosen: the first gives its write back.
+    std::fs::create_dir_all(dir.join("third")).unwrap();
+    session
+        .choose_folder(&names, &dir.join("third"), &[])
+        .unwrap();
+    assert!(session.allowed_write(&dir.join("other/x.txt")).is_err());
+    assert_eq!(session.chosen_folder(), Some(dir.join("third").as_path()));
     let _ = std::fs::remove_dir_all(&dir);
 }

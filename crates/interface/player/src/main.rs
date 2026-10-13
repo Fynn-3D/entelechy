@@ -27,6 +27,7 @@ const USAGE: &str = "\
 usage:
   entelechy-player <scene.esn> [--library <dir|file>] [--input <name>=<path>]...
               [--output <name>=<path>]... [--scale <n>]
+              [--folder <name,...> [--folder-allow <file.write,file.delete>]]
               [--replay <file.replay>]
               [--window <w>x<h>] [--backend gpu|cpu|jit|best] [--memory <MB>] [--work <M>]
               [--allow file.read|file.write|file.delete=<dir>]... [--grant <capability,...>]
@@ -39,6 +40,11 @@ usage:
       F6 cycles the preview through the graph's nodes and back to the output;
       F10 shows a line of frame data over the picture, naming the port shown.
       Tab, Escape and every other key are the scene's.
+      --folder <name,...> lets Cmd+O (Ctrl+O elsewhere) choose a folder in the
+      system's dialog for those inputs and outputs, each one that reads or
+      writes a directory (files, checks, outline, to files): placed there at
+      once, the folder allowed reads and what --folder-allow
+      <file.write,file.delete> says, a folder chosen before given back.
       --input and --output read and write the scene's input or output at the
       path given in place of the one it names.
       --hold-pointer holds the pointer in the window once it is clicked:
@@ -89,6 +95,10 @@ struct Options {
     replay: Option<entelechy_session::replay::Replay>,
     /// Hold the pointer in the window once it is clicked.
     hold_pointer: bool,
+    /// The inputs and outputs a folder chosen with Cmd+O takes, and what
+    /// the folder is allowed besides reads.
+    folder: Vec<String>,
+    folder_allow: Vec<String>,
 }
 
 fn parse(args: &[String]) -> Result<Options, String> {
@@ -102,6 +112,8 @@ fn parse(args: &[String]) -> Result<Options, String> {
         no_audio: false,
         replay: None,
         hold_pointer: false,
+        folder: Vec::new(),
+        folder_allow: Vec::new(),
     };
     let mut iter = args.iter().cloned();
     while let Some(arg) = iter.next() {
@@ -118,6 +130,17 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--allow-origin" => options.origins.push(value("--allow-origin")?),
             "--no-audio" => options.no_audio = true,
             "--hold-pointer" => options.hold_pointer = true,
+            "--folder" => options.folder.extend(listed(&value("--folder")?)),
+            "--folder-allow" => {
+                for grant in listed(&value("--folder-allow")?) {
+                    if !["file.read", "file.write", "file.delete"].contains(&grant.as_str()) {
+                        return Err(format!(
+                            "--folder-allow takes file.read, file.write and file.delete, not `{grant}`"
+                        ));
+                    }
+                    options.folder_allow.push(grant);
+                }
+            }
             "--replay" => {
                 let path = std::path::PathBuf::from(value("--replay")?);
                 let text = std::fs::read_to_string(&path)
@@ -162,6 +185,15 @@ fn parse(args: &[String]) -> Result<Options, String> {
     }
     options.session.scene()?;
     Ok(options)
+}
+
+/// The names of a comma-separated list.
+fn listed(text: &str) -> Vec<String> {
+    text.split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// The window's clock: seconds since the Player started.
@@ -212,6 +244,10 @@ struct Player {
     /// Whether an input method is composing: the keys go to it, and its
     /// commit is the text typed.
     composing: bool,
+    /// The inputs and outputs a folder chosen with Cmd+O takes, and what
+    /// it is allowed besides reads (`--folder`, `--folder-allow`).
+    folder: Vec<String>,
+    folder_allow: Vec<String>,
 }
 
 impl entelechy_protocol::Served for Player {
@@ -475,7 +511,35 @@ impl Player {
                 .graph()
                 .map(|graph| graph.name.clone())
                 .unwrap_or_else(|| "no scene".into());
-            window.set_title(&format!("Entelechy Player: {name}"));
+            let folder = self
+                .session
+                .chosen_folder()
+                .and_then(|dir| dir.file_name())
+                .map(|name| format!(" — {}", name.to_string_lossy()))
+                .unwrap_or_default();
+            window.set_title(&format!("Entelechy Player: {name}{folder}"));
+        }
+    }
+
+    /// The system's dialog for a folder, and the scene's `--folder`
+    /// inputs and outputs placed in the one chosen, with the
+    /// `--folder-allow` grants there; cancelled, nothing changes.
+    fn choose_folder(&mut self) {
+        let Some(dir) = rfd::FileDialog::new()
+            .set_title("Choose a folder for the scene")
+            .pick_folder()
+        else {
+            return;
+        };
+        match self
+            .session
+            .choose_folder(&self.folder, &dir, &self.folder_allow)
+        {
+            Ok(()) => {
+                eprintln!("folder: {}", dir.display());
+                self.update_title();
+            }
+            Err(why) => eprintln!("folder {}: {why}", dir.display()),
         }
     }
 
@@ -665,6 +729,22 @@ impl ApplicationHandler for Player {
             } => {
                 let down = state == ElementState::Pressed;
                 let shortcut = self.modifiers.control_key() || self.modifiers.super_key();
+                // Cmd+O (Ctrl+O off macOS) chooses a folder, where the
+                // scene names what one takes; the scene never sees it.
+                let opener = if cfg!(target_os = "macos") {
+                    self.modifiers.super_key()
+                } else {
+                    self.modifiers.control_key()
+                };
+                if !self.folder.is_empty()
+                    && opener
+                    && matches!(&logical_key, Key::Character(c) if c.eq_ignore_ascii_case("o"))
+                {
+                    if down && !repeat {
+                        self.choose_folder();
+                    }
+                    return;
+                }
                 if down
                     && !self.composing
                     && !shortcut
@@ -809,6 +889,8 @@ fn main() -> ExitCode {
         held: None,
         modifiers: ModifiersState::empty(),
         composing: false,
+        folder: options.folder.clone(),
+        folder_allow: options.folder_allow.clone(),
     };
     if let Some(replay) = &options.replay {
         player.play.replay(replay, &mut player.session);

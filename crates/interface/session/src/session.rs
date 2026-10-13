@@ -55,6 +55,9 @@ pub struct Session {
     node_clock: crate::clocked::NodeClock,
     /// The externals bound to files by the caller's overrides, as bound.
     bound: BTreeMap<String, PathBuf>,
+    /// The folder last chosen ([`Session::choose_folder`]) and what it was
+    /// allowed.
+    chosen: Option<(PathBuf, Vec<crate::Allowance>)>,
 }
 
 /// A request's claim on the scene it wrote, from asked to landed. A scene
@@ -140,6 +143,7 @@ impl Session {
             pins: Vec::new(),
             node_clock: crate::clocked::NodeClock::default(),
             bound: BTreeMap::new(),
+            chosen: None,
         }
     }
 
@@ -506,6 +510,72 @@ impl Session {
     /// Where the caller places the scene's inputs and outputs.
     pub fn overrides(&self) -> &crate::overrides::Overrides {
         self.scene.overrides()
+    }
+
+    /// A folder the person chose for the scene: each of `names`, an input
+    /// or an output that reads or writes a directory (`files`, `checks`,
+    /// `outline`, `to files`), placed there, and the folder given each of
+    /// `grants` (`file.read`, `file.write`, `file.delete`), reads always.
+    /// A folder chosen before gives back what it was given. Refused,
+    /// nothing changes.
+    pub fn choose_folder(
+        &mut self,
+        names: &[String],
+        dir: &Path,
+        grants: &[String],
+    ) -> Result<(), String> {
+        if self.scene.graph().is_none() {
+            return Err("no scene runs to take a folder".into());
+        }
+        if !self.store().is_dir(dir) {
+            return Err(format!("{} is not a directory", dir.display()));
+        }
+        let mut overrides = self.scene.overrides().clone();
+        for name in names {
+            match crate::overrides::kind_of(self.scene.written(), name) {
+                Some(crate::overrides::Kind::Directory) => {}
+                Some(crate::overrides::Kind::File) => {
+                    return Err(format!(
+                        "`{name}` reads or writes a file, not a directory: a folder cannot be chosen for it"
+                    ));
+                }
+                None => {
+                    return Err(format!(
+                        "the scene reads and writes nothing named `{name}` from files"
+                    ));
+                }
+            }
+            if self
+                .scene
+                .written()
+                .writes
+                .iter()
+                .any(|w| &w.output == name)
+            {
+                overrides.outputs.insert(name.clone(), dir.to_path_buf());
+            } else {
+                overrides.inputs.insert(name.clone(), dir.to_path_buf());
+            }
+        }
+        let allowances = std::iter::once("file.read")
+            .chain(grants.iter().map(String::as_str))
+            .map(|grant| crate::parse_allow(&format!("{grant}={}", dir.display())))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.scene.place(overrides)?;
+        if let Some((before, _)) = self.chosen.take() {
+            self.writes.revoke(self.scene.store().as_ref(), &before);
+            crate::reads::lock(&self.reads).revoke(self.scene.store().as_ref(), &before);
+        }
+        for allowance in &allowances {
+            self.allow(allowance)?;
+        }
+        self.chosen = Some((dir.to_path_buf(), allowances));
+        Ok(())
+    }
+
+    /// The folder last chosen ([`Session::choose_folder`]).
+    pub fn chosen_folder(&self) -> Option<&Path> {
+        self.chosen.as_ref().map(|(dir, _)| dir.as_path())
     }
 
     /// Grants what a command line's `--allow` said.

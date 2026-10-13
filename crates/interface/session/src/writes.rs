@@ -65,6 +65,15 @@ impl Writes {
         Ok(())
     }
 
+    /// Takes back writes, removals and renames in `dir` that
+    /// [`Writes::allow`] and [`Writes::allow_deletes`] gave.
+    pub(crate) fn revoke(&mut self, store: &dyn Store, dir: &Path) {
+        if let Ok(resolved) = store.canonical(dir) {
+            self.allowed.retain(|allowed| *allowed != resolved);
+            self.deletes.retain(|allowed| *allowed != resolved);
+        }
+    }
+
     /// Allows a write to the one file `path`, wherever it is.
     pub(crate) fn allow_file(&mut self, store: &dyn Store, path: &Path) -> Result<(), String> {
         let resolved = resolve(store, path)?;

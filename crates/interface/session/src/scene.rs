@@ -204,6 +204,11 @@ impl Scene {
         &self.files
     }
 
+    /// The scene's file inputs and outputs as its documents write them.
+    pub(crate) fn written(&self) -> &entelechy_scene::Files {
+        &self.written
+    }
+
     /// Externals the caller binds to files ([`crate::overrides::Overrides`]).
     pub(crate) fn bound(&self) -> &[(String, PathBuf)] {
         &self.bound

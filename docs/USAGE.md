@@ -303,8 +303,8 @@ entelechy player examples/life/scene.esn
 Opens a scene in a window and keeps it live, watching files as `--watch`
 does; a changed Kernel compiles on a worker thread and swaps in when
 ready, so a republish never stalls a frame. It takes `run`'s
-`--library`, `--input`, `--backend`, `--memory`, `--work`, `--small`,
-`--allow` and `--grant`, and:
+`--library`, `--input`, `--output`, `--backend`, `--memory`, `--work`,
+`--small`, `--allow` and `--grant`, and:
 
 - `--scale <n>` sets the initial magnification; `--window <w>x<h>` the
   initial logical size.
@@ -313,6 +313,19 @@ ready, so a republish never stalls a frame. It takes `run`'s
   the system's cursor is locked and hidden, and the scene's `pointer()`
   moves with the mouse and stays inside the window (the scene draws it).
   The window losing the focus lets it go.
+- `--folder <name,...>` lets Cmd+O (Ctrl+O elsewhere) choose a folder
+  in the system's dialog for those inputs and outputs, each one that
+  reads or writes a directory (`files`, `checks`, `outline`, `to files`):
+  they read and write there at once, the window's title names it, and
+  the folder is allowed reads and what `--folder-allow
+  <file.write,file.delete>` says; a folder chosen before gives its grants
+  back. Cancelled, nothing changes; without `--folder` the keys are the
+  scene's.
+
+  ```sh
+  entelechy-player editor.esn --folder disk,checks,defined,disk_ops \
+    --folder-allow file.write,file.delete
+  ```
 - `--replay <file>` plays a replay in the window (see
   [Replay tests](#replay-tests)).
 - `--serve`, `--listen <host:port>` and `--allow-origin <origin>` serve
