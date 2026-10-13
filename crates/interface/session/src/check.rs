@@ -260,6 +260,23 @@ fn placed(line: &str) -> (String, (u32, u32), String) {
 /// Kernel's ports ([`entelechy_graph::binding_fault`]), and orders its graph.
 /// `show_ir` also reports each Kernel's accounted IR.
 pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked {
+    check_document_with(
+        store,
+        path,
+        show_ir,
+        &crate::overrides::Overrides::default(),
+    )
+}
+
+/// [`check_document`], the scene's inputs and outputs placed as
+/// `overrides` say (`--input`, `--output`): a name it does not read or
+/// write from a file is a problem.
+pub fn check_document_with(
+    store: &dyn Store,
+    path: &Path,
+    show_ir: bool,
+    overrides: &crate::overrides::Overrides,
+) -> Checked {
     let mut checked = Checked::default();
     let file = path.display().to_string();
     let file = file.as_str();
@@ -306,6 +323,9 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                 return checked;
             }
         };
+    if let Err(error) = overrides.apply(&mut lowered.files.clone(), &lowered.graph.externals) {
+        say!(problem, "{file}: {error}");
+    }
     let mut document = document;
     if let Ok((structs, types, functions)) = declarations_for(
         store,

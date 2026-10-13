@@ -1,5 +1,5 @@
 //! The flags every session-opening command shares, read in one place:
-//! scene, library, inputs, params, backend, fusion, limits, allowances
+//! scene, library, inputs and outputs, params, backend, fusion, limits, allowances
 //! and grants. Commands read their own flags beside these.
 
 use std::path::{Path, PathBuf};
@@ -15,8 +15,11 @@ pub struct SessionOptions {
     pub scene: Option<PathBuf>,
     /// A directory or file of Kernels the scene uses beside its own.
     pub library: Option<PathBuf>,
-    /// Inputs bound to files, by name.
-    pub inputs: Vec<(String, PathBuf)>,
+    /// Where the scene's inputs read and its outputs write, by name
+    /// (`--input`, `--output`): a file-backed input or output placed at
+    /// the path given, an external the scene leaves to its caller bound
+    /// to the file.
+    pub overrides: crate::overrides::Overrides,
     /// Graph parameters set, by name.
     pub params: Vec<(String, Value)>,
     /// The backend asked for; the command's own default otherwise.
@@ -39,7 +42,7 @@ impl Default for SessionOptions {
         Self {
             scene: None,
             library: None,
-            inputs: Vec::new(),
+            overrides: crate::overrides::Overrides::default(),
             params: Vec::new(),
             backend: None,
             fusion: true,
@@ -125,11 +128,12 @@ impl SessionOptions {
                 self.params.push((name.to_owned(), literal));
             }
             "--input" => {
-                let binding = value(arg)?;
-                let (name, path) = binding
-                    .split_once('=')
-                    .ok_or_else(|| "--input needs <name>=<file.ppm>".to_string())?;
-                self.inputs.push((name.to_owned(), PathBuf::from(path)));
+                let (name, path) = crate::overrides::parse_binding(arg, &value(arg)?)?;
+                self.overrides.inputs.insert(name, path);
+            }
+            "--output" => {
+                let (name, path) = crate::overrides::parse_binding(arg, &value(arg)?)?;
+                self.overrides.outputs.insert(name, path);
             }
             flag if flag.starts_with("--") => return Ok(false),
             scene => {
@@ -166,11 +170,7 @@ impl SessionOptions {
             self.library.as_deref(),
             runtime,
         );
-        for (name, path) in &self.inputs {
-            session
-                .bind_external(name, path)
-                .map_err(|e| e.to_string())?;
-        }
+        session.place(self.overrides.clone())?;
         for (name, value) in &self.params {
             session.set_param(name, value.clone())?;
         }

@@ -29,6 +29,7 @@ mod inputs;
 mod kernels;
 mod observe;
 mod options;
+pub mod overrides;
 pub mod package;
 pub mod play;
 mod reads;
@@ -166,7 +167,7 @@ pub enum Allowance {
     FileDelete(PathBuf),
 }
 
-pub use check::{Checked, LARGE, check_document, large, large_past};
+pub use check::{Checked, LARGE, check_document, check_document_with, large, large_past};
 
 /// A runtime built for a session ([`Session::build`]).
 pub struct Built {

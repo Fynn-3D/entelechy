@@ -79,6 +79,9 @@ running session (the Player, `serve`, a replay) says these as they
 come: a large Kernel with each version it publishes, the unused ones and
 the nodes that leave elements unrun when the scene loads. A node that
 binds a Kernel its document could not publish says why it was refused.
+`--input <name>=<path>` and `--output <name>=<path>` place a scene's
+inputs and outputs as `run` does (below); a name the scene does not read
+or write from a file is a problem.
 
 ## Run a scene
 
@@ -89,9 +92,19 @@ entelechy run examples/grayscale/scene.esn --out output.ppm
 Evaluates a `.esn` scene once. Flags:
 
 - `--library <dir|file>` adds Kernel sources beyond the scene's `use`.
-- `--input <name>=<file>` binds an external Field the scene declares with
-  `input`; an input may instead name its own file, `bytes`, or `frames`
-  (see [DOCUMENTS](DOCUMENTS.md)).
+- `--input <name>=<path>` reads the scene's input `name` from `path`
+  in place of the file or directory the scene names (a file, `bytes`,
+  `frames`, `files`, `checks`, `outline`; see [DOCUMENTS](DOCUMENTS.md)),
+  followed as it changes; an external the scene leaves to its caller is
+  bound to a picture file. `--output <name>=<path>` writes the output
+  `name` there in place of its `to` file or `to files` directory; a write
+  still needs `--allow`. A name the scene does not read or write from a
+  file is refused with the names it does. The scene's text is unchanged:
+
+  ```sh
+  entelechy-player editor.esn --input disk=~/code/thing/ --output done=~/code/thing/ \
+    --allow file.write=~/code/thing
+  ```
 - `--param <name>=<literal>` overrides a graph parameter the scene
   declares with `param`; naming a node's own value is refused with why.
 - `--window <w>x<h>[@<scale>]` is the window a scene sized by

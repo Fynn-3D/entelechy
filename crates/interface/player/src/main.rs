@@ -25,7 +25,8 @@ use winit::window::{CursorGrabMode, Window, WindowId};
 
 const USAGE: &str = "\
 usage:
-  entelechy-player <scene.esn> [--library <dir|file>] [--input <name>=<file.ppm>]... [--scale <n>]
+  entelechy-player <scene.esn> [--library <dir|file>] [--input <name>=<path>]...
+              [--output <name>=<path>]... [--scale <n>]
               [--replay <file.replay>]
               [--window <w>x<h>] [--backend gpu|cpu|jit|best] [--memory <MB>] [--work <M>]
               [--allow file.read|file.write|file.delete=<dir>]... [--grant <capability,...>]
@@ -38,6 +39,8 @@ usage:
       F6 cycles the preview through the graph's nodes and back to the output;
       F10 shows a line of frame data over the picture, naming the port shown.
       Tab, Escape and every other key are the scene's.
+      --input and --output read and write the scene's input or output at the
+      path given in place of the one it names.
       --hold-pointer holds the pointer in the window once it is clicked:
       the system's cursor is locked and hidden, the scene's pointer moves
       with the mouse and stays inside the window (the scene draws it);

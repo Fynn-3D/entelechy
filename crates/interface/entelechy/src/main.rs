@@ -113,8 +113,26 @@ fn main() -> ExitCode {
 }
 
 fn check(args: &[String]) -> Result<(), String> {
-    let show_ir = args.iter().any(|arg| arg == "--ir");
-    let files: Vec<&String> = args.iter().filter(|arg| *arg != "--ir").collect();
+    let mut show_ir = false;
+    let mut overrides = entelechy_session::overrides::Overrides::default();
+    let mut files: Vec<&String> = Vec::new();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--ir" => show_ir = true,
+            "--input" | "--output" => {
+                let binding = iter.next().ok_or_else(|| format!("{arg} needs a value"))?;
+                let (name, path) = entelechy_session::overrides::parse_binding(arg, binding)?;
+                let into = if arg == "--input" {
+                    &mut overrides.inputs
+                } else {
+                    &mut overrides.outputs
+                };
+                into.insert(name, path);
+            }
+            _ => files.push(arg),
+        }
+    }
     if files.is_empty() {
         return Err("check needs at least one document".into());
     }
@@ -122,7 +140,8 @@ fn check(args: &[String]) -> Result<(), String> {
         entelechy_session::Disk::with_packages(entelechy_session::environment_packages());
     let mut failures = 0;
     for file in files {
-        let checked = entelechy_session::check_document(&packages, Path::new(file), show_ir);
+        let checked =
+            entelechy_session::check_document_with(&packages, Path::new(file), show_ir, &overrides);
         for (_, line) in &checked.lines {
             println!("{line}");
         }

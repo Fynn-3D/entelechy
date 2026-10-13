@@ -53,6 +53,8 @@ pub struct Session {
     pins: Vec<entelechy_graph::NodeId>,
     /// Each clocked frame's nodes' runs, until the device tells the frame.
     node_clock: crate::clocked::NodeClock,
+    /// The externals bound to files by the caller's overrides, as bound.
+    bound: BTreeMap<String, PathBuf>,
 }
 
 /// A request's claim on the scene it wrote, from asked to landed. A scene
@@ -137,6 +139,7 @@ impl Session {
             claim: Claim::None,
             pins: Vec::new(),
             node_clock: crate::clocked::NodeClock::default(),
+            bound: BTreeMap::new(),
         }
     }
 
@@ -393,6 +396,26 @@ impl Session {
         let readable = |path: &Path| crate::reads::lock(&reads).check(store.as_ref(), path);
         self.scene
             .sync(&mut self.kernels, &mut self.runtime, &mut events, &readable);
+        // Externals the caller's overrides bind to files, bound when new.
+        for (name, path) in self.scene.bound().to_vec() {
+            if self.bound.get(&name) == Some(&path) {
+                continue;
+            }
+            match self.bind_external(&name, &path) {
+                Ok(()) => {
+                    events.push(Event::Loaded {
+                        name: name.clone(),
+                        path: path.clone(),
+                        detail: "bound by the caller".into(),
+                    });
+                    self.bound.insert(name, path);
+                }
+                Err(error) => events.push(Event::Rejected {
+                    path: path.clone(),
+                    error: crate::Diagnostic::new(error.to_string()),
+                }),
+            }
+        }
         // The first-loaded scene's own documents and input files, worked
         // out only while reads wait for them.
         let read_from: Vec<std::path::PathBuf> = if crate::reads::lock(&reads).wants_directories() {
@@ -470,6 +493,19 @@ impl Session {
     /// the session (`--save`, `--out`). Its directory stays closed.
     pub fn allow_write_to(&mut self, path: &Path) -> Result<(), String> {
         self.writes.allow_file(self.scene.store().as_ref(), path)
+    }
+
+    /// Places the scene's inputs and outputs where `overrides` say: the
+    /// running scene's at once (read again at the next sync), every scene
+    /// read after. A name the scene does not read or write from a file is
+    /// refused, and nothing changes.
+    pub fn place(&mut self, overrides: crate::overrides::Overrides) -> Result<(), String> {
+        self.scene.place(overrides)
+    }
+
+    /// Where the caller places the scene's inputs and outputs.
+    pub fn overrides(&self) -> &crate::overrides::Overrides {
+        self.scene.overrides()
     }
 
     /// Grants what a command line's `--allow` said.

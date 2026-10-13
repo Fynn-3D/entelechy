@@ -40,8 +40,14 @@ pub(crate) struct Scene {
     types: Vec<entelechy_language::TypeAlias>,
     functions: Vec<entelechy_language::FnDecl>,
     graph: Option<Graph>,
-    /// The lowered document's file inputs and outputs.
+    /// The lowered document's file inputs and outputs, as the caller's
+    /// overrides place them; and as the document writes them.
     files: entelechy_scene::Files,
+    written: entelechy_scene::Files,
+    /// Where the caller places the scene's inputs and outputs.
+    overrides: crate::overrides::Overrides,
+    /// Externals the caller binds to files, from its overrides.
+    bound: Vec<(String, PathBuf)>,
     /// The root's text as last lowered: the structure that runs.
     text: Option<String>,
     /// Caller overrides of graph parameters.
@@ -71,6 +77,8 @@ pub(crate) struct Kept {
     declared: Declared,
     graph: Option<Graph>,
     files: entelechy_scene::Files,
+    written: entelechy_scene::Files,
+    bound: Vec<(String, PathBuf)>,
     text: Option<String>,
     params: BTreeMap<String, Value>,
 }
@@ -80,6 +88,8 @@ struct Staged {
     graph: Graph,
     text: String,
     files: entelechy_scene::Files,
+    written: entelechy_scene::Files,
+    bound: Vec<(String, PathBuf)>,
     uses: Vec<(PathBuf, bool)>,
     sub_graphs: BTreeMap<PathBuf, Option<Stamp>>,
     /// Graph documents only the running scene places; their Kernels
@@ -122,6 +132,9 @@ impl Scene {
             functions: Vec::new(),
             graph: None,
             files: entelechy_scene::Files::default(),
+            written: entelechy_scene::Files::default(),
+            overrides: crate::overrides::Overrides::default(),
+            bound: Vec::new(),
             text: None,
             params: BTreeMap::new(),
             staged: None,
@@ -186,9 +199,31 @@ impl Scene {
             .map(|(path, stamp)| (path.as_path(), *stamp))
     }
 
-    /// The scene's file inputs and outputs.
+    /// The scene's file inputs and outputs, where the caller places them.
     pub(crate) fn files(&self) -> &entelechy_scene::Files {
         &self.files
+    }
+
+    /// Externals the caller binds to files ([`crate::overrides::Overrides`]).
+    pub(crate) fn bound(&self) -> &[(String, PathBuf)] {
+        &self.bound
+    }
+
+    pub(crate) fn overrides(&self) -> &crate::overrides::Overrides {
+        &self.overrides
+    }
+
+    /// Places the scene's inputs and outputs as `overrides` say, the
+    /// running scene's at once and every scene read after; refused,
+    /// nothing changes. Before a scene is read, kept for its first read.
+    pub(crate) fn place(&mut self, overrides: crate::overrides::Overrides) -> Result<(), String> {
+        if let Some(graph) = &self.graph {
+            let mut files = self.written.clone();
+            self.bound = overrides.apply(&mut files, &graph.externals)?;
+            self.files = files;
+        }
+        self.overrides = overrides;
+        Ok(())
     }
 
     pub(crate) fn graph(&self) -> Option<&Graph> {
@@ -509,10 +544,22 @@ impl Scene {
                 return;
             }
         };
-        let (document, lowered) = match self.lower(&text, readable) {
+        let (document, mut lowered) = match self.lower(&text, readable) {
             Ok(read) => read,
             Err(error) => {
                 events.push(Event::SceneRejected(error));
+                return;
+            }
+        };
+        // The inputs and outputs where the caller places them.
+        let written = lowered.files.clone();
+        let bound = match self
+            .overrides
+            .apply(&mut lowered.files, &lowered.graph.externals)
+        {
+            Ok(bound) => bound,
+            Err(error) => {
+                events.push(Event::SceneRejected(Diagnostic::new(error)));
                 return;
             }
         };
@@ -639,6 +686,8 @@ impl Scene {
             graph: lowered.graph,
             text,
             files: lowered.files,
+            written,
+            bound,
             uses: lowered.uses,
             sub_graphs,
             gone,
@@ -689,6 +738,8 @@ impl Scene {
                 self.graph = Some(graph);
                 self.text = Some(staged.text);
                 self.files = staged.files;
+                self.written = staged.written;
+                self.bound = staged.bound;
                 events.push(Event::SceneLoaded);
             }
         }
@@ -708,6 +759,8 @@ impl Scene {
             ),
             graph: self.graph.clone(),
             files: self.files.clone(),
+            written: self.written.clone(),
+            bound: self.bound.clone(),
             text: self.text.clone(),
             params: self.params.clone(),
         }
@@ -723,6 +776,8 @@ impl Scene {
         (self.structs, self.types, self.functions) = kept.declared;
         self.graph = kept.graph;
         self.files = kept.files;
+        self.written = kept.written;
+        self.bound = kept.bound;
         self.text = kept.text;
         self.params = kept.params;
     }

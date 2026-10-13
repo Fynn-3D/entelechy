@@ -91,8 +91,13 @@ pub fn session_flags() -> Vec<Flag> {
         ),
         repeated(
             "--input",
-            "<name>=<file.ppm>",
-            "Binds the scene's input to a file.",
+            "<name>=<path>",
+            "Reads the scene's input from the path given, a file or a directory as the input reads; an external the scene leaves to its caller bound to a picture file.",
+        ),
+        repeated(
+            "--output",
+            "<name>=<path>",
+            "Writes the scene's output to the path given, a file or a directory as the output writes.",
         ),
         repeated("--param", "<name>=<literal>", "Sets a graph parameter."),
         valued("--backend", "cpu|gpu|jit", "The backend the scene runs on."),
@@ -147,10 +152,19 @@ pub fn commands() -> Vec<Command> {
 Parse documents, compile their Kernels, and print manifests or diagnostics.
 --ir prints each Kernel's IR as a backend runs it: where its work is
 counted (`work spend`) and looked at (`work look`) included.",
-            flags: vec![switch(
-                "--ir",
-                "Prints each Kernel's IR as a backend runs it.",
-            )],
+            flags: vec![
+                switch("--ir", "Prints each Kernel's IR as a backend runs it."),
+                repeated(
+                    "--input",
+                    "<name>=<path>",
+                    "Places the scene's input there, as run does: a name it does not read from a file is a problem.",
+                ),
+                repeated(
+                    "--output",
+                    "<name>=<path>",
+                    "Places the scene's output there, as run does: a name it does not write to a file is a problem.",
+                ),
+            ],
             passes: false,
         },
         Command {
