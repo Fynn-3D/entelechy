@@ -43,15 +43,18 @@ impl Filter {
     }
 }
 
-/// What a GLB carries beyond the rows: how its texture is sampled, and
-/// its joints' names in skeleton order (`joint0`, `joint1`, ... when
-/// none are given).
+/// What a GLB carries beyond the rows: how its texture is sampled, its
+/// joints' names in skeleton order (`joint0`, `joint1`, ... when none are
+/// given), and whether its material is seen from both sides.
 #[derive(Clone, Debug, Default)]
 pub struct Options {
     /// The texture's sampling.
     pub filter: Filter,
     /// One name a skeleton row, or none.
     pub joints: Vec<String>,
+    /// Both sides of each triangle drawn and lit (glTF's `doubleSided`):
+    /// a leaf, a sheet, anything one layer thick.
+    pub double_sided: bool,
 }
 
 /// A GLB's pictures, each a PNG: the base color, the normal map (in the
@@ -564,6 +567,16 @@ pub fn write_rig(
         }
         document["materials"] = json!([material]);
         document["meshes"][0]["primitives"][0]["material"] = json!(0);
+    }
+    if options.double_sided {
+        if document["materials"].is_null() {
+            document["materials"] = json!([{
+                "name": name,
+                "pbrMetallicRoughness": { "metallicFactor": 0.0, "roughnessFactor": 0.8 }
+            }]);
+            document["meshes"][0]["primitives"][0]["material"] = json!(0);
+        }
+        document["materials"][0]["doubleSided"] = json!(true);
     }
     let mut text = serde_json::to_vec(&document).map_err(|e| e.to_string())?;
     while !text.len().is_multiple_of(4) {

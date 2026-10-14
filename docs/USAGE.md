@@ -509,7 +509,8 @@ any other the base color;
 with a rig's rows, a skin and its animations,
 `--rate` 30 by default; `--filter nearest` samples the PNG texel by texel,
 as pixel art wants, where `linear` blends; `--joints a,b,...` names the
-joints in the skeleton's order); rows of one or two floats as a WAV (`--rate` 48000
+joints in the skeleton's order; `--double-sided` marks the material seen
+from both sides, as a leaf or a sheet wants); rows of one or two floats as a WAV (`--rate` 48000
 by default); a grid of pixels or floats as a PNG; rows of notes as MIDI
 (`--beats` a minute, 120 by default). What `entelechy-import` read is written
 back bit for bit.

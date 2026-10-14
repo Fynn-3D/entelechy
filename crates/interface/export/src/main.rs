@@ -13,6 +13,7 @@ const USAGE: &str = "\
 usage:
   entelechy-export <file>... --out <target> [--rate <hz>] [--beats <n>]
               [--filter linear|nearest] [--joints <name>,<name>,...]
+              [--double-sided]
       To .glb: a vertices .field (rows of position, normal, uv, and a
       tangent where a normal map is read along one), a triangles .field
       (rows of three ints), and PNGs: the base color, a normal map named
@@ -24,7 +25,8 @@ usage:
       --filter says how the PNG is sampled: linear (blended, with mipmaps,
       the default) or nearest (flat texels, for pixel art and palettes).
       --joints names the skeleton's joints in its rows' order, one name a
-      row; without it they are joint0, joint1 and on.
+      row; without it they are joint0, joint1 and on. --double-sided
+      draws and lights both sides of each triangle (a leaf, a sheet).
       To .wav: a .field of one or two floats per row; --rate says its
       frames per second, 48000 by default (ffmpeg makes an MP3 or OGG of the
       WAV). To .png: a .field grid of pixels or floats, or a .ppm or .pgm.
@@ -100,6 +102,7 @@ fn export(args: &[String]) -> Result<String, String> {
                     .map(|name| name.trim().to_owned())
                     .collect();
             }
+            "--double-sided" => options.double_sided = true,
             other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
             other => inputs.push(PathBuf::from(other)),
         }
@@ -183,8 +186,11 @@ fn export(args: &[String]) -> Result<String, String> {
             Ok(format!("wrote {}{extra}", out.display()))
         }
         format @ ("wav" | "mid" | "midi" | "png") => {
-            if options.filter != gltf::Filter::Linear || !options.joints.is_empty() {
-                return Err("--filter and --joints are for a .glb".into());
+            if options.filter != gltf::Filter::Linear
+                || !options.joints.is_empty()
+                || options.double_sided
+            {
+                return Err("--filter, --joints and --double-sided are for a .glb".into());
             }
             let [input] = inputs.as_slice() else {
                 return Err(format!("a .{format} comes from one file"));

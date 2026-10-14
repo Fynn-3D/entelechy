@@ -310,6 +310,7 @@ fn a_texture_is_sampled_linear_or_nearest_as_asked() {
             &entelechy_export::gltf::Options {
                 filter,
                 joints: Vec::new(),
+                double_sided: false,
             },
         )
         .unwrap();
@@ -349,6 +350,7 @@ fn joints_take_the_names_given_in_skeleton_order() {
             &entelechy_export::gltf::Options {
                 filter: entelechy_export::gltf::Filter::Linear,
                 joints: joints.iter().map(|name| (*name).to_owned()).collect(),
+                double_sided: false,
             },
         )
     };
@@ -507,5 +509,42 @@ fn tangents_and_maps_go_with_the_material() {
         &entelechy_export::gltf::Options::default(),
     );
     assert!(twice.unwrap_err().contains("a second normal map"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A material asked double-sided says so, with maps or without; one not
+/// asked says nothing (glTF's default: one side).
+#[test]
+fn a_material_is_double_sided_when_asked() {
+    let dir = scratch("double_sided");
+    cube(&dir);
+    let texture = dir.join("crate.albedo.png");
+    let material = |textures: &[&Path], double_sided: bool, name: &str| {
+        let out = dir.join(name);
+        entelechy_export::gltf::export_rig(
+            &dir.join("crate.vertices.field"),
+            &dir.join("crate.triangles.field"),
+            textures,
+            &[],
+            &[],
+            30.0,
+            &out,
+            &entelechy_export::gltf::Options {
+                double_sided,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        document(&out)["materials"][0].clone()
+    };
+    assert_eq!(
+        material(&[&texture], true, "leaf.glb")["doubleSided"],
+        serde_json::json!(true)
+    );
+    assert_eq!(
+        material(&[], true, "plain.glb")["doubleSided"],
+        serde_json::json!(true)
+    );
+    assert!(material(&[&texture], false, "one.glb")["doubleSided"].is_null());
     let _ = std::fs::remove_dir_all(&dir);
 }
