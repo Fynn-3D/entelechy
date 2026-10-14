@@ -345,8 +345,9 @@ Escape; its sticks, triggers and buttons are `stick()` and `button()`,
 and `pads()` is how many are connected.
 
 Keys: F6 cycles the preview through the nodes and back to the output;
-F5 resets Graph state; F10 shows the frame's data, a line a matter, each
-value in its column and made again four times a second: `frame` (its
+F5 resets Graph state; F10 shows the frame's data, its groups laid left
+to right as the window has room, each number in a fixed width, made again
+four times a second and never narrowing: `frame` (its
 interval and rate; `cpu`, the processor's work on a frame, its waits left
 out; `gpu`, how long the device was busy with a frame, as it tells each run
 done, without waiting for it; present time); `device` (backend, window and

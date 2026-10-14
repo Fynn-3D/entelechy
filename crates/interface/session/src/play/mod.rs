@@ -741,8 +741,9 @@ impl Play {
         }
     }
 
-    /// The F10 panel, a line a matter, each value in its column, made
-    /// again four times a second (`hud::Stats::held`): the smoothed
+    /// The F10 panel: groups laid left to right as the window has room,
+    /// each number in a fixed width, made again four times a second
+    /// (`hud::Stats::held`), the panel never narrowing: the smoothed
     /// times; backend, window and the image shown; what ran; the Host's
     /// memory and what a frame let go to make room; presenting; then the
     /// nodes that kept the device busiest.
@@ -762,7 +763,7 @@ impl Play {
             .sum();
         let view = self.showing(report, shown);
         let sound = match &self.sound {
-            Some(sound) => format!("   sound {sound}"),
+            Some(sound) => format!(" | sound {sound}"),
             None => String::new(),
         };
         // Nodes routed off the main backend, and the bytes carried.
@@ -783,66 +784,54 @@ impl Play {
                     .map(|p| p.uploaded)
                     .sum::<u64>();
             format!(
-                "   off {} {:>3} ({})",
+                " | off {} {:>3} ({})",
                 routed[0].backend,
                 routed.len(),
                 crate::bench::bytes_text(carried)
             )
         };
-        let mib = |bytes: u64| format!("{:>7.1} MiB", bytes as f64 / (1024.0 * 1024.0));
+        let mib = |bytes: u64| format!("{:>6.1} MiB", bytes as f64 / (1024.0 * 1024.0));
         let used = host.used_words() as u64 * 4;
         let budget = host.budget_words() as u64 * 4;
         let share = if budget > 0 { used * 100 / budget } else { 0 };
-        let rows = [
-            hud::labelled(
-                "device",
-                &format!(
-                    "{}   window {}x{} x{:.0}   {view} {width}x{height}",
-                    session.runtime().backend_name(),
-                    context.window[0],
-                    context.window[1],
-                    context.scale,
-                ),
+        let groups = [
+            format!(
+                "{}{off} | window {}x{} x{:.0} | {view} {width}x{height}",
+                session.runtime().backend_name(),
+                context.window[0],
+                context.window[1],
+                context.scale,
             ),
-            hud::labelled(
-                "nodes",
-                &format!(
-                    "ran {:>4}   reused {:>4}   fused {fused:>3}   async {:>2}{off}",
-                    report.executed.len(),
-                    report.reused.len(),
-                    report.pending.len(),
-                ),
+            format!(
+                "ran {:>4} reused {:>4} fused {fused:>3} | async {:>2}",
+                report.executed.len(),
+                report.reused.len(),
+                report.pending.len(),
             ),
-            hud::labelled(
-                "memory",
-                &format!(
-                    "{} of {} {share:>3}%   let go {:>3}{}",
-                    mib(used),
-                    mib(budget),
-                    report.let_go,
-                    if report.let_go > 0 {
-                        "  past the budget"
-                    } else {
-                        ""
-                    }
-                ),
+            format!(
+                "mem {} / {} ({share:>3}%){}",
+                mib(used),
+                mib(budget),
+                if report.let_go > 0 {
+                    format!(" let go {:>3} past the budget", report.let_go)
+                } else {
+                    String::new()
+                }
             ),
-            hud::labelled(
-                "present",
-                &format!(
-                    "{}   downloads {:>5}{sound}   t {:>8.1} s",
-                    self.path, self.downloads, context.time
-                ),
-            ),
+            format!("{} | downloads {:>5}{sound}", self.path, self.downloads),
+            format!("t {:>8.1} s", context.time),
         ];
+        // As many groups to a line as the window has room for.
+        let scale = context.scale.round().max(1.0) as u32;
+        let columns = ((context.window[0] * context.scale) as u32 / (6 * scale)).max(40) as usize;
         let said = self.stats.held(|stats| {
-            let mut said = vec![stats.times()];
-            said.extend(rows);
-            said.push(String::new());
-            said.extend(stats.busiest(12));
+            let mut first = vec![stats.times()];
+            first.extend(groups);
+            let mut said = hud::flow(&first, columns);
+            said.extend(hud::flow(&stats.busiest(12), columns));
             said
         });
-        hud::lines(&said, context.scale.round() as u32)
+        hud::lines_at_least(&said, scale, self.stats.widest())
     }
 }
 
