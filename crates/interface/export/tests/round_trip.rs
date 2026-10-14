@@ -455,6 +455,45 @@ fn tangents_and_maps_go_with_the_material() {
         "position, normal and uv came back bit for bit"
     );
 
+    // An ORM map: the metallic-roughness texture, and the occlusion where
+    // none is given apart.
+    std::fs::write(
+        dir.join("lit.orm.png"),
+        entelechy_formats::png::encode(2, 2, &[[0.7, 0.5, 0.0, 1.0]; 4]),
+    )
+    .unwrap();
+    let orm = dir.join("orm.glb");
+    entelechy_export::gltf::export_rig(
+        &dir.join("lit.vertices.field"),
+        &dir.join("crate.triangles.field"),
+        &[
+            &dir.join("crate.albedo.png"),
+            &dir.join("lit.normal.png"),
+            &dir.join("lit.orm.png"),
+        ],
+        &[],
+        &[],
+        30.0,
+        &orm,
+        &entelechy_export::gltf::Options::default(),
+    )
+    .unwrap();
+    let json = document(&orm);
+    let pbr = &json["materials"][0]["pbrMetallicRoughness"];
+    assert_eq!(pbr["metallicRoughnessTexture"]["index"].as_u64(), Some(2));
+    assert_eq!(
+        (
+            pbr["metallicFactor"].as_f64(),
+            pbr["roughnessFactor"].as_f64()
+        ),
+        (Some(1.0), Some(1.0))
+    );
+    assert_eq!(
+        json["materials"][0]["occlusionTexture"]["index"].as_u64(),
+        Some(2)
+    );
+    assert_eq!(json["images"].as_array().map(Vec::len), Some(3));
+
     // Two normal maps are one too many.
     std::fs::copy(dir.join("lit.normal.png"), dir.join("other.normal.png")).unwrap();
     let twice = entelechy_export::gltf::export_rig(

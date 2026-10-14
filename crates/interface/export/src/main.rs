@@ -16,7 +16,8 @@ usage:
       To .glb: a vertices .field (rows of position, normal, uv, and a
       tangent where a normal map is read along one), a triangles .field
       (rows of three ints), and PNGs: the base color, a normal map named
-      <stem>.normal.png and an occlusion map named <stem>.occlusion.png;
+      <stem>.normal.png, an occlusion map named <stem>.occlusion.png and an
+      ORM map (occlusion, roughness, metalness) named <stem>.orm.png;
       a rig's weights, skeleton and clip
       .fields beside them write a skin and an animation apiece, --rate naming
       the frames a second the clips were sampled at (30 by default).

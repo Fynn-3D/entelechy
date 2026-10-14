@@ -55,13 +55,16 @@ pub struct Options {
 }
 
 /// A GLB's pictures, each a PNG: the base color, the normal map (in the
-/// tangent space the vertices' tangents give) and the occlusion (read
-/// from its red).
+/// tangent space the vertices' tangents give), the occlusion (read from
+/// its red), and an ORM map packing occlusion, roughness and metalness in
+/// its red, green and blue (glTF's metallic-roughness texture, its
+/// occlusion where no occlusion map is given).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Textures<'a> {
     pub color: Option<&'a [u8]>,
     pub normal: Option<&'a [u8]>,
     pub occlusion: Option<&'a [u8]>,
+    pub orm: Option<&'a [u8]>,
 }
 
 /// The inverse of an affine column-major matrix.
@@ -275,6 +278,7 @@ pub fn write_rig(
         ("color", textures.color),
         ("normal", textures.normal),
         ("occlusion", textures.occlusion),
+        ("orm", textures.orm),
     ]
     .into_iter()
     .filter_map(|(role, png)| png.map(|png| (role, view(&mut bin, png, None))))
@@ -545,6 +549,16 @@ pub fn write_rig(
                     material["pbrMetallicRoughness"]["baseColorTexture"] = json!({ "index": index })
                 }
                 "normal" => material["normalTexture"] = json!({ "index": index }),
+                "orm" => {
+                    // The map's roughness and metalness are the surface's own.
+                    let pbr = &mut material["pbrMetallicRoughness"];
+                    pbr["metallicRoughnessTexture"] = json!({ "index": index });
+                    pbr["metallicFactor"] = json!(1.0);
+                    pbr["roughnessFactor"] = json!(1.0);
+                    if textures.occlusion.is_none() {
+                        material["occlusionTexture"] = json!({ "index": index });
+                    }
+                }
                 _ => material["occlusionTexture"] = json!({ "index": index }),
             }
         }
@@ -591,7 +605,8 @@ pub fn export(
 /// The same, with `weights`, `skeleton` and clip files, each clip named
 /// by its file name before `.clip.field`, and `options`. A PNG named
 /// `<stem>.normal.png` is the normal map, `<stem>.occlusion.png` the
-/// occlusion, any other the base color; one of each at most.
+/// occlusion, `<stem>.orm.png` the occlusion, roughness and metalness,
+/// any other the base color; one of each at most.
 #[allow(clippy::too_many_arguments)]
 pub fn export_rig(
     vertices: &Path,
@@ -607,18 +622,20 @@ pub fn export_rig(
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
         entelechy_formats::file::decode(&bytes).map_err(|e| format!("{}: {e}", path.display()))
     };
-    let mut pngs: [Option<Vec<u8>>; 3] = [None, None, None];
+    let mut pngs: [Option<Vec<u8>>; 4] = [None, None, None, None];
     for path in textures {
         let file = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
         let role = if file.ends_with(".normal.png") {
             1
         } else if file.ends_with(".occlusion.png") {
             2
+        } else if file.ends_with(".orm.png") {
+            3
         } else {
             0
         };
         if pngs[role].is_some() {
-            let what = ["base color", "normal map", "occlusion map"][role];
+            let what = ["base color", "normal map", "occlusion map", "ORM map"][role];
             return Err(format!("{}: a second {what}; give one", path.display()));
         }
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -688,6 +705,7 @@ pub fn export_rig(
             color: pngs[0].as_deref(),
             normal: pngs[1].as_deref(),
             occlusion: pngs[2].as_deref(),
+            orm: pngs[3].as_deref(),
         },
         rig.as_ref(),
         name,

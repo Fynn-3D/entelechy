@@ -497,7 +497,10 @@ entelechy export song.notes.field --out song.mid --beats 100
 `entelechy-export` writes Host files as other software's formats: vertex,
 triangle and PNG as a GLB (vertices with a tangent after their uv carry
 it as the mesh's tangents; a PNG named `<stem>.normal.png` is the normal
-map, `<stem>.occlusion.png` the occlusion, any other the base color;
+map, `<stem>.occlusion.png` the occlusion, `<stem>.orm.png` occlusion,
+roughness and metalness in its red, green and blue (glTF's
+metallic-roughness texture, and the occlusion where none is given apart),
+any other the base color;
 with a rig's rows, a skin and its animations,
 `--rate` 30 by default; `--filter nearest` samples the PNG texel by texel,
 as pixel art wants, where `linear` blends; `--joints a,b,...` names the
