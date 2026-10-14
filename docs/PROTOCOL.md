@@ -71,7 +71,7 @@ through:
 
 | op | fields | answer |
 | --- | --- | --- |
-| `status` |  | backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, loaded (whether a scene is), refused (why not, when not), revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, versions (`entelechy`, `api`, `language`, `ir`, `package`) |
+| `status` |  | backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, loaded (whether a scene is), refused (why not, when not), revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, memory (`used` and `budget`, the Host's bytes), versions (`entelechy`, `api`, `language`, `ir`, `package`) |
 | `kernels` |  | a list of manifests, each with its generation, which `publish`'s `expect` names |
 | `kernel` | `kernel`?: string, `generation`?: integer | manifest, generation, source, as `publish` takes it |
 | `graph` |  | inputs, params, nodes, outputs, fonts (each font node: id, path, codes, its outputs and the inputs they are in) |
@@ -83,7 +83,7 @@ through:
 | `publish` | `source`: string, `expect`?: "absent" \| "any" \| integer | id, generation; and when it computes a `<~` port's initial source, `keeps` (those `node.port`s, which keep what they committed) and `reset` (the requests that start them from the new law) |
 | `retire` | `kernel`?: string | retired |
 | `param` | `name`: string, `value`: value | name, value, events; a node's own value is refused, and changes by `compose` |
-| `evaluate` | `nodes`?: [string], `settle`?: bool, `measure`?: bool, `clock`?: bool, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `pads`?: integer, `keys`?: [integer], `text`?: string, `window`?: [w, h], `scale`?: number | executed, reused, committed, outputs, timings, measured, device; in the Player, ignored (the context fields it gave, which the window's own input stands in for) and a note |
+| `evaluate` | `nodes`?: [string], `settle`?: bool, `measure`?: bool, `clock`?: bool, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `pads`?: integer, `keys`?: [integer], `text`?: string, `window`?: [w, h], `scale`?: number | executed, reused, committed, outputs, timings, measured, device, let_go (nodes let go to make room in the Host); in the Player, ignored (the context fields it gave, which the window's own input stands in for) and a note |
 | `read` | `output`?: string, `node`?: string, `port`?: string, `format`?: "png" \| "rgba32f" \| "ppm" \| "summary" \| "words" \| "field", `from`?: integer, `count`?: integer | a picture: width, height, format, data (base64). Any other Field: shape, extent, count, schema, `fields` (each number's name in an element of several, `hp`, `pos.x`), and its summary (each number's min, max, sum, mean, how many were not zero, and how many were not finite), or `values` from `from` (a number, or a list for an element of several), or format and data (base64) |
 | `write` | `node`: string, `port`?: string, `data`: string, `format`?: "words" \| "field" | the state replaced |
 | `snapshot` | `to`?: string | the world's revision and frame (the frames committed since it), every Kernel with its generation and source, every port's committed state; or the file written |
@@ -295,7 +295,11 @@ An evaluation's report carries:
 - `landed`, those whose run landed before this evaluation's nodes ran;
 - `refused`, `{node, members, reason}` for every group the backend took
   Kernel by Kernel but refused fused, said once: its members run apart
-  until one of their Kernels changes.
+  until one of their Kernels changes;
+- `let_go`, how many nodes had their cached outputs let go to make room
+  in the Host: a later frame that asks for one runs it again, so above
+  zero frame after frame the scene holds more than `--memory` allows
+  (`status` answers `memory`, the bytes held of the budget).
 
 A failed evaluation names its `node` when the failure is one node's; a
 failed migration names its `port` and `migration` too. An element that

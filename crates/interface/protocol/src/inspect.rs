@@ -24,6 +24,10 @@ pub(crate) fn status(session: &Session) -> Result<Json, Json> {
         "revision": session.position().0,
         "frame": session.position().1,
         "grants": session.runtime().grants().iter().map(|c| c.name()).collect::<Vec<_>>(),
+        "memory": {
+            "used": session.runtime().host().used_words() as u64 * 4,
+            "budget": session.runtime().host().budget_words() as u64 * 4,
+        },
     }))
 }
 

@@ -350,7 +350,9 @@ and rate; `cpu`, the processor's work on a frame, its waits left out;
 `gpu`, how long the device was busy with a frame, as it tells each run
 done, without waiting for it; present time; backend, window and scale, the
 port shown, what ran, was reused and was fused, `async` runs,
-presentation path and downloads, the sound device's rate, block size and
+`mem`, the Host's bytes held of its `--memory` budget, and `let go`
+where this frame let go of cached nodes to make room (a scene past its
+budget, which runs them again), presentation path and downloads, the sound device's rate, block size and
 dry callbacks) and under it the nodes that kept the device busiest, each
 its milliseconds averaged over half a second and held until the next
 half, then what ran between nodes. Tab, Escape and every other key are the scene's; closing

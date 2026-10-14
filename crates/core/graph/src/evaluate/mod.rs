@@ -106,6 +106,10 @@ pub struct Report {
     /// Groups a backend refused to run fused, found since the last
     /// report: they run apart until one of their Kernels changes.
     pub refused: Vec<Refused>,
+    /// Nodes whose cached outputs were let go to make room in the Host:
+    /// a later frame that asks for one runs it again. Above zero frame
+    /// after frame, the scene holds more than the Host's budget.
+    pub let_go: usize,
 }
 
 /// A group a backend took Kernel by Kernel but refused fused: the node
@@ -778,6 +782,7 @@ impl Evaluator {
             let mut executed = Vec::new();
             let mut reused = Vec::new();
             let mut fused = Vec::new();
+            let mut let_go = 0usize;
             let mut timings = Vec::new();
             let mut clocked = Vec::new();
             let mut placements = Vec::new();
@@ -898,7 +903,8 @@ impl Evaluator {
                     Err(error)
                         if short_of_room(&error)
                             && self.forget_runs_for_room(runtime)
-                                + self.make_room(
+                                + self.make_room_counted(
+                                    &mut let_go,
                                     Room {
                                         at,
                                         running: &node.id,
@@ -1023,6 +1029,7 @@ impl Evaluator {
                 pending,
                 landed,
                 refused: std::mem::take(&mut self.refused),
+                let_go,
             }))
         })();
         match evaluated {

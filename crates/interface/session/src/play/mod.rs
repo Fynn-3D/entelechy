@@ -742,7 +742,8 @@ impl Play {
     }
 
     /// The F10 line: smoothed times, backend, window, shown image, what
-    /// ran, and what waits off the frame.
+    /// ran, what waits off the frame, and the Host's memory: what it holds
+    /// of its budget, and the nodes let go this frame to make room.
     fn panel_for(
         &self,
         session: &Session,
@@ -786,8 +787,18 @@ impl Play {
                 crate::bench::bytes_text(carried)
             )
         };
+        let memory = format!(
+            "mem {}/{}{}",
+            crate::bench::bytes_text(host.used_words() as u64 * 4),
+            crate::bench::bytes_text(host.budget_words() as u64 * 4),
+            if report.let_go > 0 {
+                format!(" let go {}", report.let_go)
+            } else {
+                String::new()
+            }
+        );
         let rest = format!(
-            "{}{off} | window {}x{} x{:.0} | {view} {width}x{height} | ran {} reused {} fused {fused} | async {} | {} | downloads {}{sound} | t {:.1} s",
+            "{}{off} | window {}x{} x{:.0} | {view} {width}x{height} | ran {} reused {} fused {fused} | async {} | {memory} | {} | downloads {}{sound} | t {:.1} s",
             session.runtime().backend_name(),
             context.window[0],
             context.window[1],

@@ -268,6 +268,19 @@ impl Evaluator {
     /// `async` node's last output, is read as it is.
     /// What `held` names stays. Answers how many nodes
     /// let go; a later frame that asks for one runs its node again.
+    /// [`Evaluator::make_room`], the nodes let go added to `count`.
+    pub(super) fn make_room_counted<'n>(
+        &mut self,
+        count: &mut usize,
+        room: Room<'_>,
+        ran: impl Iterator<Item = &'n NodeId>,
+        runtime: &mut Runtime,
+    ) -> usize {
+        let done = self.make_room(room, ran, runtime);
+        *count += done;
+        done
+    }
+
     pub(super) fn make_room<'n>(
         &mut self,
         room: Room<'_>,

@@ -119,6 +119,7 @@ pub fn report_json(session: &Session, report: &entelechy_graph::Report) -> Json 
         "pending": report.pending.iter().map(ToString::to_string).collect::<Vec<_>>(),
         "landed": report.landed.iter().map(ToString::to_string).collect::<Vec<_>>(),
         "refused": report.refused.iter().map(|refused| json!({ "node": refused.node.to_string(), "members": refused.members.iter().map(ToString::to_string).collect::<Vec<_>>(), "reason": refused.reason })).collect::<Vec<_>>(),
+        "let_go": report.let_go,
     })
 }
 

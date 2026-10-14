@@ -324,7 +324,7 @@ pub fn operations() -> Vec<Operation> {
             "status",
             "The session at a glance.",
             vec![],
-            "backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, loaded (whether a scene is), refused (why not, when not), revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, versions (`entelechy`, `api`, `language`, `ir`, `package`)",
+            "backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, loaded (whether a scene is), refused (why not, when not), revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, memory (`used` and `budget`, the Host's bytes), versions (`entelechy`, `api`, `language`, `ir`, `package`)",
         ),
         op(
             "kernels",
@@ -487,7 +487,7 @@ pub fn operations() -> Vec<Operation> {
                     "time the frames on the device as they run, waiting for nothing, from this evaluation on (false stops); `device` is the latest one done, node by node",
                 ),
             ]),
-            "executed, reused, committed, outputs, timings, measured, device; in the Player, ignored (the context fields it gave, which the window's own input stands in for) and a note",
+            "executed, reused, committed, outputs, timings, measured, device, let_go (nodes let go to make room in the Host); in the Player, ignored (the context fields it gave, which the window's own input stands in for) and a note",
         ),
         op(
             "read",
