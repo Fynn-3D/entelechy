@@ -90,7 +90,12 @@ pub fn lines(texts: &[String], scale: u32) -> Panel {
         .iter()
         .map(|text| text.chars().map(|c| c.to_ascii_lowercase()).collect())
         .collect();
-    let longest = rows.iter().map(Vec::len).max().unwrap_or(0) as u32;
+    let longest = rows
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap_or(0)
+        .max(if rows.len() > 1 { PANEL_COLUMNS } else { 0 }) as u32;
     let width = (longest * CELL.0 + 1) * scale;
     let height = CELL.1 * scale * rows.len().max(1) as u32;
     let mut pixels = vec![PAPER; (width * height) as usize];
@@ -159,6 +164,28 @@ pub struct Stats {
     summed_frames: u32,
     /// The latest clocked frame told.
     told: Option<u64>,
+    /// The latest frame's start, and the lines shown since `held_at`:
+    /// numbers that change every frame cannot be read, so the lines are
+    /// made again [`HELD_FOR`] seconds apart.
+    now: f64,
+    held: Vec<String>,
+    held_at: f64,
+}
+
+/// Seconds the shown lines are held before they are made again.
+pub const HELD_FOR: f64 = 0.25;
+
+/// Columns the panel is at least: its lines hold their places as they
+/// change, the panel its width.
+pub const PANEL_COLUMNS: usize = 72;
+
+/// The width a line's label takes, so the values of every line start in
+/// one column.
+const LABEL: usize = 9;
+
+/// A line: its label, then its values.
+pub fn labelled(label: &str, values: &str) -> String {
+    format!("{label:<LABEL$}{values}")
 }
 
 /// The clocked frames each shown line of nodes averages, about half a
@@ -179,6 +206,9 @@ impl Default for Stats {
             summed_between: 0.0,
             summed_frames: 0,
             told: None,
+            now: 0.0,
+            held: Vec::new(),
+            held_at: f64::NEG_INFINITY,
         }
     }
 }
@@ -196,6 +226,7 @@ fn smooth(average: &mut f64, sample: Duration) {
 impl Stats {
     /// Marks a frame's start; the time since the last one is its interval.
     pub fn begin(&mut self, now: f64) {
+        self.now = now;
         if let Some(last) = self.last_start.replace(now) {
             smooth(
                 &mut self.interval,
@@ -246,33 +277,59 @@ impl Stats {
         }
     }
 
-    /// The nodes that kept the device busiest, `most` of them, a line of
-    /// `a_line` each, then what ran between nodes.
-    pub fn busiest(&self, most: usize, a_line: usize) -> Vec<String> {
-        if self.told.is_none() {
-            return Vec::new();
-        }
+    /// The nodes that kept the device busiest, `most` of them, a line
+    /// each, name and milliseconds in their columns, then what ran between
+    /// nodes: always `most + 2` lines (a heading first), blank where fewer
+    /// ran, so the panel keeps its height.
+    pub fn busiest(&self, most: usize) -> Vec<String> {
         let mut nodes = self.nodes.clone();
         nodes.sort_by(|a, b| b.1.total_cmp(&a.1));
         nodes.truncate(most);
-        let mut said: Vec<String> = nodes
-            .chunks(a_line.max(1))
-            .map(|chunk| {
-                chunk
-                    .iter()
-                    .map(|(name, ms)| format!("{name} {ms:.2}"))
-                    .collect::<Vec<_>>()
-                    .join(" | ")
-            })
-            .collect();
-        match said.first_mut() {
-            Some(first) => *first = format!("gpu by node: {first}"),
-            None => said.push("gpu by node:".into()),
+        let name_width = PANEL_COLUMNS - LABEL - 11;
+        let mut said = vec![labelled("gpu", "by node (ms, averaged over half a second)")];
+        for k in 0..most {
+            said.push(match nodes.get(k) {
+                Some((name, ms)) => {
+                    let name = if name.chars().count() > name_width {
+                        let tail: String = name
+                            .chars()
+                            .rev()
+                            .take(name_width - 1)
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .rev()
+                            .collect();
+                        format!("~{tail}")
+                    } else {
+                        name.clone()
+                    };
+                    labelled("", &format!("{name:<name_width$}{ms:>9.2}"))
+                }
+                None => String::new(),
+            });
         }
-        if let Some(last) = said.last_mut() {
-            last.push_str(&format!(" | between nodes {:.2}", self.between));
+        if self.told.is_some() {
+            said.push(labelled(
+                "",
+                &format!("{:<name_width$}{:>9.2}", "between nodes", self.between),
+            ));
+        } else {
+            said.push(labelled(
+                "",
+                "no device clock: F10 times each node where the device keeps one",
+            ));
         }
         said
+    }
+
+    /// `make`'s lines, made again only [`HELD_FOR`] seconds after the
+    /// last were.
+    pub fn held(&mut self, make: impl FnOnce(&Self) -> Vec<String>) -> Vec<String> {
+        if self.held.is_empty() || self.now - self.held_at >= HELD_FOR || self.now < self.held_at {
+            self.held = make(self);
+            self.held_at = self.now;
+        }
+        self.held.clone()
     }
 
     /// Records this frame's presenting time.
@@ -280,20 +337,23 @@ impl Stats {
         smooth(&mut self.present, present);
     }
 
-    /// The smoothed times, then `rest`.
-    pub fn line(&self, rest: &str) -> String {
+    /// The smoothed times, each in its column.
+    pub fn times(&self) -> String {
         let fps = if self.interval > 0.0 {
             1000.0 / self.interval
         } else {
             0.0
         };
         let gpu = match self.gpu {
-            Some(gpu) => format!("gpu {gpu:.2} ms | "),
-            None => String::new(),
+            Some(gpu) => format!("{gpu:>7.2}"),
+            None => format!("{:>7}", "--"),
         };
-        format!(
-            "frame {:.1} ms ({fps:.0} fps) | cpu {:.2} ms | {gpu}present {:.2} ms | {rest}",
-            self.interval, self.cpu, self.present
+        labelled(
+            "frame",
+            &format!(
+                "{:>6.1} ms {fps:>4.0} fps   cpu {:>6.2}   gpu {gpu}   present {:>6.2}",
+                self.interval, self.cpu, self.present
+            ),
         )
     }
 }
@@ -325,25 +385,31 @@ mod tests {
         stats.begin(0.0);
         stats.record(Duration::from_millis(2), None);
         stats.presented(Duration::from_micros(500));
-        assert!(
-            stats
-                .line("x")
-                .starts_with("frame 0.0 ms (0 fps) | cpu 2.00 ms | present 0.50 ms | x"),
-            "a backend with no device has no time of its own: {}",
-            stats.line("x")
+        assert_eq!(
+            stats.times(),
+            "frame       0.0 ms    0 fps   cpu   2.00   gpu      --   present   0.50",
+            "a backend with no device has no time of its own"
         );
-        // A device with a clock reports its busy time apart from presenting.
+        // A device with a clock reports its busy time apart from presenting;
+        // the columns stay where they were.
         let mut stats = Stats::default();
         stats.begin(0.0);
         stats.record(Duration::from_millis(2), Some(Duration::from_micros(1450)));
         stats.presented(Duration::from_micros(500));
-        assert!(
-            stats.line("x").starts_with(
-                "frame 0.0 ms (0 fps) | cpu 2.00 ms | gpu 1.45 ms | present 0.50 ms | x"
-            ),
-            "{}",
-            stats.line("x")
+        assert_eq!(
+            stats.times(),
+            "frame       0.0 ms    0 fps   cpu   2.00   gpu    1.45   present   0.50"
         );
+        // Lines are held a quarter of a second.
+        let mut made = 0;
+        for (now, want) in [(0.0, 1), (0.1, 1), (0.2, 1), (0.3, 2), (0.4, 2), (0.6, 3)] {
+            stats.begin(now);
+            stats.held(|_| {
+                made += 1;
+                vec![format!("{made}")]
+            });
+            assert_eq!(made, want, "at {now}");
+        }
     }
 
     #[test]
@@ -351,7 +417,11 @@ mod tests {
         let id = |n: &str| entelechy_graph::NodeId(n.to_owned());
         let ms = Duration::from_millis;
         let mut stats = Stats::default();
-        assert!(stats.busiest(3, 2).is_empty(), "nothing told, nothing said");
+        assert_eq!(
+            stats.busiest(3).len(),
+            5,
+            "a heading, three rows, and the last, told or not"
+        );
         stats.told(&crate::DeviceTimes {
             frame: 1,
             busy: ms(7),
@@ -362,12 +432,19 @@ mod tests {
             ],
             between: Duration::ZERO,
         });
+        let rows = stats.busiest(4);
+        assert_eq!(rows.len(), 6);
+        assert!(
+            rows[1].starts_with("         look") && rows[1].ends_with("     4.00"),
+            "{rows:?}"
+        );
+        assert!(rows[2].contains("raster.drawn") && rows[2].ends_with("2.00"));
+        assert_eq!(rows[4], "", "a blank row where fewer ran");
+        assert!(rows[5].contains("between nodes"));
         assert_eq!(
-            stats.busiest(3, 2),
-            vec![
-                "gpu by node: look 4.00 | raster.drawn 2.00".to_string(),
-                "hud_top 1.00 | between nodes 0.00".to_string()
-            ]
+            rows[1].len(),
+            rows[2].len(),
+            "the milliseconds in one column"
         );
         // The same frame told again changes nothing; later ones are held
         // until as many as a shown line averages are told, a frame without
@@ -378,7 +455,7 @@ mod tests {
             nodes: Vec::new(),
             between: Duration::ZERO,
         });
-        assert!(stats.busiest(1, 1)[0].contains("look 4.00"));
+        assert!(stats.busiest(1)[1].ends_with("4.00"));
         for frame in 2..2 + u64::from(SHOWN_EVERY) {
             let look = if frame % 2 == 0 { ms(1) } else { ms(3) };
             stats.told(&crate::DeviceTimes {
@@ -388,18 +465,17 @@ mod tests {
                 between: Duration::ZERO,
             });
             if frame < 1 + u64::from(SHOWN_EVERY) {
-                assert!(stats.busiest(1, 1)[0].contains("look 4.00"), "held");
+                assert!(stats.busiest(1)[1].ends_with("4.00"), "held");
             }
         }
-        assert_eq!(
-            stats.busiest(2, 2)[0],
-            "gpu by node: look 2.00 | raster.drawn 2.00 | between nodes 0.00",
-        );
-        // Lines stack, each as wide as the longest.
+        assert!(stats.busiest(2)[1].ends_with("2.00"));
+        // Lines stack, the panel as wide as the longest or as
+        // `PANEL_COLUMNS`, whichever is more, so it keeps its width.
         let two = lines(&["1".to_string(), "_".to_string()], 1);
-        assert_eq!((two.width, two.height), (7, 18));
+        let wide = PANEL_COLUMNS as u32 * CELL.0 + 1;
+        assert_eq!((two.width, two.height), (wide, 18));
         assert_eq!(
-            two.pixels[(16 * 7 + 1) as usize],
+            two.pixels[(16 * wide + 1) as usize],
             INK,
             "the underscore, on the second line's last row"
         );

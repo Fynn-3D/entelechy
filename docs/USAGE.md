@@ -345,17 +345,19 @@ Escape; its sticks, triggers and buttons are `stick()` and `button()`,
 and `pads()` is how many are connected.
 
 Keys: F6 cycles the preview through the nodes and back to the output;
-F5 resets Graph state; F10 shows a line of frame data (frame interval
-and rate; `cpu`, the processor's work on a frame, its waits left out;
-`gpu`, how long the device was busy with a frame, as it tells each run
-done, without waiting for it; present time; backend, window and scale, the
-port shown, what ran, was reused and was fused, `async` runs,
-`mem`, the Host's bytes held of its `--memory` budget, and `let go`
-where this frame let go of cached nodes to make room (a scene past its
-budget, which runs them again), presentation path and downloads, the sound device's rate, block size and
-dry callbacks) and under it the nodes that kept the device busiest, each
-its milliseconds averaged over half a second and held until the next
-half, then what ran between nodes. Tab, Escape and every other key are the scene's; closing
+F5 resets Graph state; F10 shows the frame's data, a line a matter, each
+value in its column and made again four times a second: `frame` (its
+interval and rate; `cpu`, the processor's work on a frame, its waits left
+out; `gpu`, how long the device was busy with a frame, as it tells each run
+done, without waiting for it; present time); `device` (backend, window and
+scale, the port shown); `nodes` (what ran, was reused and was fused, `async`
+runs, those routed off the device); `memory` (the Host's bytes held of its
+`--memory` budget, and `let go`, nodes this frame let go to make room, which
+a scene past its budget runs again); `present` (presentation path,
+downloads, the sound device's rate, block size and dry callbacks); and
+under them the nodes that kept the device busiest, each its milliseconds
+averaged over half a second and held until the next half, then what ran
+between nodes. Tab, Escape and every other key are the scene's; closing
 the window, or Cmd+Q, quits.
 
 ## Replay tests

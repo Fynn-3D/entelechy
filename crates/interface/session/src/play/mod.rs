@@ -741,11 +741,13 @@ impl Play {
         }
     }
 
-    /// The F10 line: smoothed times, backend, window, shown image, what
-    /// ran, what waits off the frame, and the Host's memory: what it holds
-    /// of its budget, and the nodes let go this frame to make room.
+    /// The F10 panel, a line a matter, each value in its column, made
+    /// again four times a second (`hud::Stats::held`): the smoothed
+    /// times; backend, window and the image shown; what ran; the Host's
+    /// memory and what a frame let go to make room; presenting; then the
+    /// nodes that kept the device busiest.
     fn panel_for(
-        &self,
+        &mut self,
         session: &Session,
         report: &Report,
         shown: Handle,
@@ -760,7 +762,7 @@ impl Play {
             .sum();
         let view = self.showing(report, shown);
         let sound = match &self.sound {
-            Some(sound) => format!(" | sound {sound}"),
+            Some(sound) => format!("   sound {sound}"),
             None => String::new(),
         };
         // Nodes routed off the main backend, and the bytes carried.
@@ -781,37 +783,65 @@ impl Play {
                     .map(|p| p.uploaded)
                     .sum::<u64>();
             format!(
-                " | off {} {} ({})",
+                "   off {} {:>3} ({})",
                 routed[0].backend,
                 routed.len(),
                 crate::bench::bytes_text(carried)
             )
         };
-        let memory = format!(
-            "mem {}/{}{}",
-            crate::bench::bytes_text(host.used_words() as u64 * 4),
-            crate::bench::bytes_text(host.budget_words() as u64 * 4),
-            if report.let_go > 0 {
-                format!(" let go {}", report.let_go)
-            } else {
-                String::new()
-            }
-        );
-        let rest = format!(
-            "{}{off} | window {}x{} x{:.0} | {view} {width}x{height} | ran {} reused {} fused {fused} | async {} | {memory} | {} | downloads {}{sound} | t {:.1} s",
-            session.runtime().backend_name(),
-            context.window[0],
-            context.window[1],
-            context.scale,
-            report.executed.len(),
-            report.reused.len(),
-            report.pending.len(),
-            self.path,
-            self.downloads,
-            context.time,
-        );
-        let mut said = vec![self.stats.line(&rest)];
-        said.extend(self.stats.busiest(12, 6));
+        let mib = |bytes: u64| format!("{:>7.1} MiB", bytes as f64 / (1024.0 * 1024.0));
+        let used = host.used_words() as u64 * 4;
+        let budget = host.budget_words() as u64 * 4;
+        let share = if budget > 0 { used * 100 / budget } else { 0 };
+        let rows = [
+            hud::labelled(
+                "device",
+                &format!(
+                    "{}   window {}x{} x{:.0}   {view} {width}x{height}",
+                    session.runtime().backend_name(),
+                    context.window[0],
+                    context.window[1],
+                    context.scale,
+                ),
+            ),
+            hud::labelled(
+                "nodes",
+                &format!(
+                    "ran {:>4}   reused {:>4}   fused {fused:>3}   async {:>2}{off}",
+                    report.executed.len(),
+                    report.reused.len(),
+                    report.pending.len(),
+                ),
+            ),
+            hud::labelled(
+                "memory",
+                &format!(
+                    "{} of {} {share:>3}%   let go {:>3}{}",
+                    mib(used),
+                    mib(budget),
+                    report.let_go,
+                    if report.let_go > 0 {
+                        "  past the budget"
+                    } else {
+                        ""
+                    }
+                ),
+            ),
+            hud::labelled(
+                "present",
+                &format!(
+                    "{}   downloads {:>5}{sound}   t {:>8.1} s",
+                    self.path, self.downloads, context.time
+                ),
+            ),
+        ];
+        let said = self.stats.held(|stats| {
+            let mut said = vec![stats.times()];
+            said.extend(rows);
+            said.push(String::new());
+            said.extend(stats.busiest(12));
+            said
+        });
         hud::lines(&said, context.scale.round() as u32)
     }
 }
