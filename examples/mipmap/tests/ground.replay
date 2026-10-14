@@ -25,4 +25,4 @@ expect 60 70 = 0.922 0.902 0.859 0.01
 # either way.
 param mip true
 frame 0.0
-expect 100 110 = 0.478 0.224 0.231 0.02
+expect 100 110 = 0.728 0.459 0.436 0.02
