@@ -196,3 +196,15 @@ fn the_players_frames_give_the_glyphs_a_frame_later() {
     assert_eq!(codes, vec![111, -1, 73]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_session_started_over_gives_the_glyphs_of_no_codes_until_it_is_given_codes_again() {
+    let dir = scratch("over");
+    let mut session = open(&dir);
+    codes(&mut session);
+    assert_eq!(codes(&mut session), vec![111, -1, 73]);
+    session.start_over();
+    assert_eq!(codes(&mut session), vec![-1]);
+    assert_eq!(codes(&mut session), vec![111, -1, 73]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

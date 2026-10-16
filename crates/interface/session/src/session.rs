@@ -363,7 +363,9 @@ impl Session {
     /// Starts the world over as the scene opened it, the Kernels and the
     /// documents kept: every `async` run landed, every pin dropped, every
     /// port's committed state forgotten, every parameter back at its
-    /// default, and the documents read again. What a replay needs before
+    /// default, what the frames gave the font and files nodes forgotten
+    /// (their codes, their paths and the files read for them), and the
+    /// documents read again. What a replay needs before
     /// it plays on a session another played on: the session's Kernels,
     /// prepared and compiled, and the outputs no state feeds, stay as
     /// they were.
@@ -375,6 +377,8 @@ impl Session {
             }
         }
         self.reset_state();
+        self.inputs
+            .start_fed_over(self.scene.files(), self.runtime.host_mut());
         let overridden: Vec<String> = self.scene.params().keys().cloned().collect();
         self.scene.clear_params();
         for name in overridden {

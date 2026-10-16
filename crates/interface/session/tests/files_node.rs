@@ -250,3 +250,15 @@ fn a_files_node_lists_the_directory_given_for_it_by_name() {
     assert_eq!(listing(&mut session), vec![("only.md".to_owned(), 1)]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_session_started_over_reads_no_file_until_it_is_given_paths_again() {
+    let dir = scratch("over", &["notes.md"], &[]);
+    let mut session = open(&dir);
+    opened(&mut session);
+    assert_eq!(opened(&mut session).len(), 1);
+    session.start_over();
+    assert_eq!(opened(&mut session), vec![]);
+    assert_eq!(opened(&mut session).len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}

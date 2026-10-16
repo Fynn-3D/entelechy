@@ -681,6 +681,30 @@ impl Inputs {
         }
     }
 
+    /// Forgets what the frames gave the font and files nodes, as a scene
+    /// just opened holds them: each font node the glyphs of no codes; each
+    /// files node no paths, its directory listed again and its `opened`
+    /// empty at the next sync.
+    pub(crate) fn start_fed_over(&mut self, files: &entelechy_scene::Files, host: &mut Host) {
+        self.file_nodes.clear();
+        for font in &files.fonts {
+            let Some(known) = self.fonts.get_mut(&font.node) else {
+                continue;
+            };
+            known.seen = None;
+            if known.codes.is_empty() {
+                continue;
+            }
+            known.codes.clear();
+            if let Err(why) = self.give_glyphs(font, host) {
+                self.frame_events.push(Event::Rejected {
+                    path: font.path.clone(),
+                    error: Diagnostic::new(format!("font node `{}`: {why}", font.node)),
+                });
+            }
+        }
+    }
+
     /// Whether files node `node` last read its paths from `handle`.
     pub(crate) fn file_node_saw(&self, node: &entelechy_scene::FilesNode, handle: Handle) -> bool {
         self.file_nodes
