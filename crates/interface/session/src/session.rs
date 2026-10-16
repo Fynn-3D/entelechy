@@ -464,7 +464,7 @@ impl Session {
             tables: &tables,
         };
         self.inputs.sync(
-            store.as_ref(),
+            &store,
             &declared,
             &readable,
             self.runtime.host_mut(),
@@ -1115,9 +1115,12 @@ impl Session {
     }
 
     /// Prepares replacements of Kernels and fused groups on a worker
-    /// thread; each publishes on the first sync after it is ready.
+    /// thread, each publishing on the first sync after it is ready; and
+    /// makes a `checks` input's checks after its first off the frames,
+    /// each taken in by the first sync after it is done.
     pub fn set_background(&mut self, enabled: bool) {
         self.runtime.set_background(enabled);
+        self.inputs.set_background(enabled);
     }
 
     /// Whether replacements prepare on a worker thread.

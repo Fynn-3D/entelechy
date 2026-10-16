@@ -458,7 +458,10 @@ changes:
   a problem: `file:line:column: message`, the file relative to the
   directory, a problem with no place at line and column 0, each once, in
   order; a newline alone when there is none. Checked again on sync when
-  one of them changes, or which there are.
+  one of them changes, or which there are: while the session prepares in
+  the background (the Player, a served session) a check after the first is
+  made off the frames and taken in by the first sync after it is done,
+  the last text held until then; a replay or a run takes each in at once.
 - `input defined: Rows<Int> = outline "src/";`: what the documents of a
   file or a directory define (every `.ent` and `.esn` under it), as
   text, a line a definition: `file:line:column: kind name: signature`,
@@ -469,7 +472,8 @@ changes:
   input's or a param's type, a node's Kernel, graph or type (none for an
   output); in order of file and place. A document that does not parse
   defines nothing; a newline alone when nothing is defined. Read again on
-  sync when one of them changes, or which there are.
+  sync when one of them changes, or which there are, off the frames as a
+  `checks` input is checked.
 - `input disk: Rows<Int> = files "project/";`: every file under a
   directory (hidden ones and those under hidden directories left out),
   in path order, a word each count, path byte and file byte: `[n,

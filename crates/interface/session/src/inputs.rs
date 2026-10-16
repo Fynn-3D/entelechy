@@ -120,7 +120,19 @@ struct Sequence {
 struct Checks {
     path: PathBuf,
     outline: bool,
+    /// The documents, with their stamps, of the text held.
     documents: Vec<(PathBuf, Option<Stamp>)>,
+    /// A check of them as they are now, made off the frames while the
+    /// session prepares in the background ([`Inputs::set_background`]):
+    /// taken in by the first sync after it is done.
+    running: Option<Running>,
+}
+
+/// A check made off the frames: the documents, with their stamps, it
+/// checks, and where its text comes back.
+struct Running {
+    documents: Vec<(PathBuf, Option<Stamp>)>,
+    text: std::sync::mpsc::Receiver<String>,
 }
 
 /// A font node's font as last read, and the characters it was last given
@@ -315,9 +327,20 @@ pub(crate) struct Inputs {
     texts: BTreeMap<String, String>,
     /// Frame selection failures, reported by the next sync.
     frame_events: Vec<Event>,
+    /// Whether checks after the first are made off the frames, as Kernels
+    /// prepare while the session prepares in the background.
+    background: bool,
 }
 
 impl Inputs {
+    /// Makes checks after an input's first off the frames: each is taken
+    /// in by the first sync after it is done, the text held until then. As
+    /// the session's replacements, never in a replay or a run, which take
+    /// every check in at once.
+    pub(crate) fn set_background(&mut self, enabled: bool) {
+        self.background = enabled;
+    }
+
     /// The Field each input holds, by name.
     pub(crate) fn handles(&self) -> &BTreeMap<String, Handle> {
         &self.handles
@@ -356,17 +379,17 @@ impl Inputs {
     /// files, lists directories, writes texts, forgets undeclared inputs.
     pub(crate) fn sync(
         &mut self,
-        store: &dyn Store,
+        store: &std::sync::Arc<dyn Store>,
         declared: &Declared,
         readable: &dyn Fn(&Path) -> Result<(), String>,
         host: &mut Host,
         events: &mut Vec<Event>,
     ) {
-        self.sync_assets(store, declared, readable, host, events);
-        self.sync_sequences(store, declared.files, readable, host, events);
+        self.sync_assets(store.as_ref(), declared, readable, host, events);
+        self.sync_sequences(store.as_ref(), declared.files, readable, host, events);
         self.sync_checks(store, declared.files, readable, host, events);
-        self.sync_files(store, declared.files, readable, host, events);
-        self.sync_fonts(store, declared.files, readable, host, events);
+        self.sync_files(store.as_ref(), declared.files, readable, host, events);
+        self.sync_fonts(store.as_ref(), declared.files, readable, host, events);
         self.sync_texts(declared.graph, host, events);
     }
 
@@ -786,7 +809,7 @@ impl Inputs {
     /// [`crate::check::outline_text`]); forgets undeclared ones.
     fn sync_checks(
         &mut self,
-        store: &dyn Store,
+        store: &std::sync::Arc<dyn Store>,
         files: &entelechy_scene::Files,
         readable: &dyn Fn(&Path) -> Result<(), String>,
         host: &mut Host,
@@ -814,28 +837,55 @@ impl Inputs {
             .map(|(name, path)| (name, path, false))
             .chain(files.outlines.iter().map(|(name, path)| (name, path, true)));
         for (name, path, outline) in wanted {
-            let documents = documents_under(store, path);
+            // A check made off the frames, done, is taken in first.
+            let finished = self.checks.get_mut(name).and_then(|checks| {
+                let running = checks.running.as_ref()?;
+                match running.text.try_recv() {
+                    Ok(text) => Some(Some((text, checks.running.take()?.documents))),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        checks.running = None;
+                        Some(None)
+                    }
+                }
+            });
+            if let Some(Some((text, documents))) = finished {
+                let checks = self.checks.get_mut(name).expect("a check ran for it");
+                checks.documents = documents.clone();
+                self.take_check(host, name, path, outline, &text, documents.len(), events);
+            }
+            let documents = documents_under(store.as_ref(), path);
             let stamps: Vec<(PathBuf, Option<Stamp>)> = documents
                 .iter()
                 .map(|document| (document.clone(), store.stamp(document)))
                 .collect();
-            if self.checks.get(name).is_some_and(|checks| {
-                checks.path == *path && checks.outline == outline && checks.documents == stamps
+            let held = self
+                .checks
+                .get(name)
+                .filter(|checks| checks.path == *path && checks.outline == outline);
+            // As they are, or being checked as they are.
+            if held.is_some_and(|checks| {
+                checks.documents == stamps
+                    || checks
+                        .running
+                        .as_ref()
+                        .is_some_and(|running| running.documents == stamps)
             }) {
                 continue;
             }
-            self.checks.insert(
-                name.clone(),
-                Checks {
-                    path: path.clone(),
-                    outline,
-                    documents: stamps,
-                },
-            );
             if let Some(why) = std::iter::once(path.as_path())
                 .chain(documents.iter().map(PathBuf::as_path))
                 .find_map(|path| readable(path).err())
             {
+                self.checks.insert(
+                    name.clone(),
+                    Checks {
+                        path: path.clone(),
+                        outline,
+                        documents: stamps,
+                        running: None,
+                    },
+                );
                 self.forget(host, name);
                 events.push(Event::Rejected {
                     path: path.clone(),
@@ -843,33 +893,67 @@ impl Inputs {
                 });
                 continue;
             }
-            let text = if outline {
-                crate::check::outline_text(store, path, &documents)
-            } else {
-                crate::check::problems_text(store, path, &documents)
-            };
-            let lines = text.lines().filter(|line| !line.is_empty()).count();
-            let found = if outline {
-                "definition(s)"
-            } else {
-                "problem(s)"
-            };
-            let read = entelechy_formats::decode_bytes(text.as_bytes())
-                .and_then(|(data, _)| host.adopt(data).map_err(|error| error.to_string()));
-            match read {
-                Ok(handle) => {
-                    self.hold(host, name, handle);
-                    events.push(Event::Loaded {
-                        name: name.clone(),
-                        path: path.clone(),
-                        detail: format!("{lines} {found} in {} document(s)", documents.len()),
-                    });
-                }
-                Err(error) => events.push(Event::Rejected {
-                    path: path.clone(),
-                    error: Diagnostic::new(error),
-                }),
+            // Off the frames once the input holds a check (the first is
+            // taken in at once, so the scene never reads it absent).
+            if self.background && held.is_some() && self.holds(name) {
+                let (answer, text) = std::sync::mpsc::channel();
+                let (store, root) = (std::sync::Arc::clone(store), path.clone());
+                std::thread::spawn(move || {
+                    let _ = answer.send(checked_text(store.as_ref(), &root, &documents, outline));
+                });
+                self.checks.get_mut(name).expect("held").running = Some(Running {
+                    documents: stamps,
+                    text,
+                });
+                continue;
             }
+            let text = checked_text(store.as_ref(), path, &documents, outline);
+            self.checks.insert(
+                name.clone(),
+                Checks {
+                    path: path.clone(),
+                    outline,
+                    documents: stamps,
+                    running: None,
+                },
+            );
+            self.take_check(host, name, path, outline, &text, documents.len(), events);
+        }
+    }
+
+    /// Holds a check's text as input `name`, said loaded (or rejected).
+    #[allow(clippy::too_many_arguments)]
+    fn take_check(
+        &mut self,
+        host: &mut Host,
+        name: &str,
+        path: &Path,
+        outline: bool,
+        text: &str,
+        documents: usize,
+        events: &mut Vec<Event>,
+    ) {
+        let lines = text.lines().filter(|line| !line.is_empty()).count();
+        let found = if outline {
+            "definition(s)"
+        } else {
+            "problem(s)"
+        };
+        let read = entelechy_formats::decode_bytes(text.as_bytes())
+            .and_then(|(data, _)| host.adopt(data).map_err(|error| error.to_string()));
+        match read {
+            Ok(handle) => {
+                self.hold(host, name, handle);
+                events.push(Event::Loaded {
+                    name: name.to_owned(),
+                    path: path.to_path_buf(),
+                    detail: format!("{lines} {found} in {documents} document(s)"),
+                });
+            }
+            Err(error) => events.push(Event::Rejected {
+                path: path.to_path_buf(),
+                error: Diagnostic::new(error),
+            }),
         }
     }
 
@@ -1021,4 +1105,14 @@ fn kept_as(data: FieldData, ty: &str) -> Result<FieldData, String> {
         .with_encoding(encoding)
         .map_err(|why| format!("what the file holds ({}) {why}", data.schema().describe()))?;
     FieldData::from_values(schema, data.domain(), &data.values()).map_err(|e| e.to_string())
+}
+
+/// What a `checks` input holds of `documents` under `root`: what the
+/// language finds wrong in them, or what they define (`outline`).
+fn checked_text(store: &dyn Store, root: &Path, documents: &[PathBuf], outline: bool) -> String {
+    if outline {
+        crate::check::outline_text(store, root, documents)
+    } else {
+        crate::check::problems_text(store, root, documents)
+    }
 }

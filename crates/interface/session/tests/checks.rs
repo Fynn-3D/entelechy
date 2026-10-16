@@ -111,6 +111,47 @@ fn what_a_check_finds_is_text() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// What `session` holds once a check made off the frames is taken in:
+/// synced until the text is `want`, or what it was when time ran out.
+fn text_once(session: &mut Session, want: &str) -> String {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        session.sync();
+        let now = text(session);
+        if now == want || std::time::Instant::now() > until {
+            return now;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn checks_after_the_first_are_made_off_the_frames_while_the_session_prepares_in_the_background() {
+    let dir = scratch("aside");
+    let mut session = open(&dir);
+    session.set_background(true);
+    // The first check is taken in at once: the scene never reads it absent.
+    assert_eq!(
+        text(&mut session),
+        "lib/warm.ent:2:12: `vec3` takes 3 components, found 2 in (Float, Float)\n"
+    );
+    // Mended, the check is made off the frames: the sync that sees the
+    // change does not wait for it, and the text held is the last one until
+    // a later sync takes the new one in.
+    std::fs::write(
+        dir.join("src/lib/warm.ent"),
+        "fn warm(x: Float) -> Vec3 {\n    return vec3(x, 0.0, 0.0);\n}\n",
+    )
+    .unwrap();
+    session.sync();
+    assert_eq!(
+        text(&mut session),
+        "lib/warm.ent:2:12: `vec3` takes 3 components, found 2 in (Float, Float)\n"
+    );
+    assert_eq!(text_once(&mut session, "\n"), "\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_fault_moved_down_its_document_is_said_where_it_now_is() {
     let dir = scratch("moved");
