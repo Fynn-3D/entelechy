@@ -146,6 +146,37 @@ impl DomainExpr {
         out
     }
 
+    /// The ports it measures, each once: `count(port)` and `size(port)`,
+    /// with the word that measures it.
+    pub fn ports_measured(&self) -> Vec<(&'static str, String)> {
+        let mut out = Vec::new();
+        self.collect_measured(&mut out);
+        out
+    }
+
+    fn collect_measured(&self, out: &mut Vec<(&'static str, String)>) {
+        let mut push = |word: &'static str, port: &String| {
+            if !out.iter().any(|(w, p)| *w == word && p == port) {
+                out.push((word, port.clone()));
+            }
+        };
+        match self {
+            Self::Count(port) => push("count", port),
+            Self::Size(port) => push("size", port),
+            Self::Int(_) | Self::Float(_) | Self::Name(_) | Self::Value(..) | Self::Context(_) => {}
+            Self::Vector(parts) | Self::Call(_, parts) => {
+                for part in parts {
+                    part.collect_measured(out);
+                }
+            }
+            Self::Neg(inner) => inner.collect_measured(out),
+            Self::Binary(_, a, b) => {
+                a.collect_measured(out);
+                b.collect_measured(out);
+            }
+        }
+    }
+
     fn collect_values(&self, out: &mut Vec<(String, u32)>) {
         match self {
             Self::Value(port, index) => {

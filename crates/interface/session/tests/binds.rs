@@ -89,6 +89,16 @@ fn a_binding_its_kernel_refuses_is_said_by_the_check_as_the_evaluation_says_it()
             "node `a` port `fit`: expects an element of one float but is bound to a Field of two floats",
         ),
         (
+            "count",
+            "node f: t.fill@1 { domain = 3; }\nnode a: t.sized@1 { fit <- f.result; domain = count(lines); }\noutput result <- a.result;\n",
+            "`count(lines)`: `lines` is not an input of this Kernel",
+        ),
+        (
+            "size",
+            "node f: t.fill@1 { domain = 3; }\nnode a: t.sized@1 { fit <- f.result; domain = size(fits); }\noutput result <- a.result;\n",
+            "`size(fits)`: `fits` is not an input of this Kernel; did you mean `size(fit)`?",
+        ),
+        (
             "domain read",
             "node f: t.fill@1 { domain = 3; }\nnode a: t.sized@1 { fit <- f.result; domain = vec2(count(fit), 2); }\noutput result <- a.result;\n",
             "output is a Rows but the domain is a Grid",

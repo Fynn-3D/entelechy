@@ -108,6 +108,7 @@ pub fn binding_fault(
         for (port, _) in expr.values_read() {
             value_slot(node, manifest, &port)?;
         }
+        measured(node, manifest, expr)?;
     }
     Ok(())
 }
@@ -239,6 +240,28 @@ fn param_value(
             }
         }),
     }
+}
+
+/// Whether each port a node's domain counts or sizes is an input of its
+/// Kernel.
+fn measured(
+    node: &Node,
+    manifest: &entelechy_kernel::Manifest,
+    expr: &DomainExpr,
+) -> Result<(), EvaluateError> {
+    for (word, port) in expr.ports_measured() {
+        if !manifest.inputs.iter().any(|input| input.name == port) {
+            let known = manifest.inputs.iter().map(|input| input.name.as_str());
+            let near = entelechy_abi::names::nearest(&port, known)
+                .map(|near| format!("; did you mean `{word}({near})`?"))
+                .unwrap_or_default();
+            return Err(EvaluateError::Domain {
+                node: node.id.clone(),
+                message: format!("`{word}({port})`: `{port}` is not an input of this Kernel{near}"),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// The input slot `value(port)` reads: an input of the Kernel whose
@@ -383,6 +406,7 @@ impl Evaluator {
             match (&node.domain, inputs.first()) {
                 (Some(DomainSpec::Literal(domain)), _) => *domain,
                 (Some(DomainSpec::Expr(expr)), _) => {
+                    measured(node, manifest, expr)?;
                     // Values are read from Fields: those let go cold are
                     // made again first.
                     let read_cold: Vec<NodeId> = expr
