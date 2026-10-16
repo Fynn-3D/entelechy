@@ -1,0 +1,15 @@
+language 1
+// files_node
+input disk.listing: Image;
+input disk.opened: Image;
+
+node wanted: image.show@1 {
+}
+
+node edit: image.show@1 {
+    listing <- disk.listing;
+    opened <- disk.opened;
+}
+
+output result <- edit.result;
+// files node disk project paths from wanted.result, read as disk.listing, disk.opened

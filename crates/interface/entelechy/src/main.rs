@@ -570,6 +570,19 @@ fn graph(args: &[String]) -> Result<(), String> {
         .ok_or_else(|| "the scene did not load".to_string())?
         .clone();
     print!("{}", entelechy_scene::print(&graph));
+    for node in session.file_nodes() {
+        println!(
+            "// files node {}: \"{}\", paths from {}, read as {}",
+            node.node,
+            node.dir.display(),
+            node.paths,
+            node.outputs
+                .iter()
+                .map(|(_, input)| input.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
     for font in session.fonts() {
         println!(
             "// font node {}: \"{}\", codes from {}, read as {}",

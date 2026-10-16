@@ -960,6 +960,25 @@ impl Parser {
                 members,
             });
         }
+        if self.is_keyword("files") && !dotted {
+            self.next();
+            let (token, span) = self.next();
+            let Token::Str(path) = token else {
+                return Err(ParseError {
+                    span,
+                    message: format!(
+                        "`files` needs a quoted path to a directory, found {}",
+                        token.describe()
+                    ),
+                });
+            };
+            let members = self.node_members()?;
+            return Ok(NodeDecl {
+                name,
+                kind: NodeKind::Files(Spanned { value: path, span }),
+                members,
+            });
+        }
         let mut kernel = self.dotted_name("a kernel id")?;
         self.expect_punct("@")?;
         match self.next() {

@@ -3,7 +3,8 @@
 //! holds and what `output y <- z to files "dir/";` carries.
 //!
 //! Files, in path order: `[n, (path_len, size, path.., bytes..)*]`, a word
-//! a count, a path's UTF-8 byte or a file's byte. Operations:
+//! a count, a path's UTF-8 byte or a file's byte; a listing of them
+//! without their bytes: `[n, (path_len, size, path..)*]`. Operations:
 //! `[n, (kind, path_len, size, path.., data..)*]`, kind 0 writing `data`
 //! as the file (made when absent), 1 removing the file (`size` 0), 2
 //! renaming it to the path `data` spells; words after the `n`th are
@@ -86,6 +87,27 @@ pub fn pack(files: &[(String, Vec<u8>)]) -> Result<FieldData, String> {
         words.push(len(bytes.len())?);
         words.extend(path.bytes().map(u32::from));
         words.extend(bytes.iter().map(|byte| u32::from(*byte)));
+    }
+    FieldData::from_storage(
+        Schema::new(vec![Scalar::Int]),
+        Domain::Rows(len(words.len())?),
+        words,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// The files listed, each its path and size in bytes, in the order given:
+/// `[n, (path_len, size, path..)*]`.
+pub fn pack_listing(files: &[(String, u64)]) -> Result<FieldData, String> {
+    let mut words: Vec<u32> =
+        Vec::with_capacity(1 + files.iter().map(|(path, _)| 2 + path.len()).sum::<usize>());
+    words.push(len(files.len())?);
+    for (path, size) in files {
+        words.push(len(path.len())?);
+        words.push(len(
+            usize::try_from(*size).map_err(|_| format!("{path}: too large to list"))?
+        )?);
+        words.extend(path.bytes().map(u32::from));
     }
     FieldData::from_storage(
         Schema::new(vec![Scalar::Int]),

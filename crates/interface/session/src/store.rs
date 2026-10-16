@@ -20,6 +20,17 @@ pub enum Kind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stamp(Seen);
 
+impl Stamp {
+    /// The file's length in bytes, where the stamp holds it (a file on
+    /// disk's does).
+    pub(crate) fn length(&self) -> Option<u64> {
+        match self.0 {
+            Seen::Disk(_, length) => Some(length),
+            Seen::Memory(_) => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Seen {
     /// A file on disk: its modification time and length.

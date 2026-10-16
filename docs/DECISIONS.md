@@ -850,6 +850,42 @@ words' layout in
 tests](../crates/interface/session/tests/files.rs) and the scene
 surface's `directory.esn`.
 
+## A directory is listed, and its files read as a graph asks
+
+A scene may place a directory as a node: `node d: files "dir/" { paths <-
+p.result; }`. `d.listing` is every file under it that git would track (its
+`.gitignore` files followed), each path and size without its bytes;
+`d.opened` is the files the graph named in `paths` when last evaluated,
+their bytes. The owner chose this form, and git's ignore rules with no
+syntax of their own (2026-10-16).
+
+**Why.** A `files` input reads every byte under its directory: an editor
+opening a project with its built assets (a thousand and more files, a
+hundred and seventy megabytes) is refused by the Host's room before it
+draws a frame, though it shows a few files at a time. Editors list a
+folder's names and sizes and read a file when it is opened, leaving out
+what the project's `.gitignore` leaves out; a scene does the same. Which
+files are opened is the scene's to say, as it runs, so the paths come
+from the graph, read a frame late as a font node's characters are: the
+one existing form for the Host filling Fields from what a graph computes,
+so no lifecycle or keyword is added and the node lowers to two externals
+as a font node does. Ignoring is git's rules from the project's own
+files: one rule set every tool already keeps, data rather than syntax,
+the same in every scene that lists the folder; hidden names were left out
+already. An ignored file named is read: the listing is what is shown, not
+what may be opened. The `files` input stays as it was for scenes that do
+want every byte.
+
+**Where.** `files` after `node x:` in the parser
+([parser](../crates/frontend/language/src/parser.rs)), `FilesNode`
+([scene](../crates/frontend/scene/src/lib.rs)); the rules in
+[ignore](../crates/interface/session/src/ignore.rs); the listing's
+layout in [directory](../crates/interface/formats/src/directory.rs);
+`sync_file_nodes`, `give_paths` ([inputs](../crates/interface/session/src/inputs.rs))
+and `feed_file_nodes` ([session](../crates/interface/session/src/session.rs)).
+Held by [the files node tests](../crates/interface/session/tests/files_node.rs),
+the ignore rules' own tests and the scene surface's `files_node.esn`.
+
 ## A graph says what its parameters must hold
 
 `require name: a <= b;` is a scene's statement of what its parameters

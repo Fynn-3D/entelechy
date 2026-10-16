@@ -35,7 +35,8 @@ impl Overrides {
     }
 
     /// `files` with each input and output given here reading and writing
-    /// the path given. An input given that no file-backed input is named
+    /// the path given; a `files` node is given its directory by its id.
+    /// An input given that no file-backed input is named
     /// must be one of `externals` (the caller binds it); returned so.
     /// Any other name given is refused, naming the scene's file-backed
     /// inputs and outputs.
@@ -59,6 +60,8 @@ impl Overrides {
                 .find(|(named, _)| named == name)
             {
                 entry.1 = path;
+            } else if let Some(node) = files.file_nodes.iter_mut().find(|n| &n.node == name) {
+                node.dir = path;
             } else if externals.iter().any(|external| external == name) {
                 bound.push((name.clone(), path));
             } else {
@@ -91,7 +94,10 @@ pub fn kind_of(files: &entelechy_scene::Files, name: &str) -> Option<Kind> {
     if files.assets.iter().any(|a| a.name == name) {
         return Some(Kind::File);
     }
-    if files.sequences.iter().any(|s| s.0 == name) || files.files.iter().any(|(n, _)| n == name) {
+    if files.sequences.iter().any(|s| s.0 == name)
+        || files.files.iter().any(|(n, _)| n == name)
+        || files.file_nodes.iter().any(|n| n.node == name)
+    {
         return Some(Kind::Directory);
     }
     if let Some((_, path)) = files
@@ -137,6 +143,7 @@ fn inputs_said(files: &entelechy_scene::Files) -> String {
                 .chain(&files.outlines)
                 .map(|(n, _)| n.as_str()),
         )
+        .chain(files.file_nodes.iter().map(|n| n.node.as_str()))
         .collect();
     if names.is_empty() {
         "it reads no input from a file".into()

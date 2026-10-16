@@ -405,6 +405,10 @@ pub enum NodeKind {
     /// "x.ttf" { codes <- c.result; }`, its outputs `glyphs`, `outlines`
     /// and `metrics` for the characters `codes` holds.
     Font(Spanned<String>),
+    /// A directory's files as the Host lists and reads them: `node d:
+    /// files "dir/" { paths <- p.result; }`, its outputs `listing` (every
+    /// file's path and size) and `opened` (the files `paths` names).
+    Files(Spanned<String>),
 }
 
 /// One line inside a reference node's block.
@@ -1096,6 +1100,7 @@ pub fn definitions(document: &Document) -> Vec<Definition> {
                 .map_or_else(String::new, |id| id.value.clone()),
             NodeKind::SubGraph(path) => format!("graph \"{}\"", path.value),
             NodeKind::Font(path) => format!("font \"{}\"", path.value),
+            NodeKind::Files(path) => format!("files \"{}\"", path.value),
             NodeKind::Fill(ty) => ty.value.clone(),
         };
         found.push(Definition {

@@ -841,6 +841,23 @@ be keywords.
    that cannot be read gives that row, one zero segment and zero
    metrics, and is reported. The font file is read like any input
    file, from wherever its path names.
+   A directory is placed as a node too: `node d: files "dir/" { paths <-
+   wanted.result; }`. `d.listing` is every file under the directory but
+   hidden ones, those under hidden directories and those a `.gitignore` on
+   the way leaves out (git's rules, each `.gitignore` held to its own
+   directory; a directory left out is not walked), each its path and size
+   and none of its bytes: `[n, (path_len, size, path..)*]`, in path order,
+   listed again on sync when a file comes, goes or changes. `d.opened` is
+   the files `paths` named when last evaluated, so a frame later: `paths`
+   is a `Rows<Int>` of each path's UTF-8 bytes ended by a 0 (an empty one
+   no path), and `d.opened` those files in the order named, as `files`
+   holds them (`[n, (path_len, size, path.., bytes..)*]`), a path naming no
+   file left out, an ignored file read all the same; read again when
+   `paths` or one of the files changes. A path out of the directory or
+   one not readable refuses the paths whole and is reported, what was read
+   staying. A files node takes no domain or params. It lists a folder as
+   an editor does, reading only what is opened, where `files` reads every
+   byte.
 10. `times = N;` on a Kernel node or placed graph stands for `name/1` to
     `name/N`, each wired as written; `carry port <- output;` feeds the
     port from the previous time's output from the second time on.

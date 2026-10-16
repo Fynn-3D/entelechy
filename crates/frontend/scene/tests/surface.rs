@@ -1,7 +1,7 @@
 //! A scene document's surface is a contract with every written scene.
 //! `tests/surface/` holds documents covering every scene form (wiring,
 //! values, state, inline Kernels, extents, Field nodes, native operations,
-//! placed graphs, repetition, Host inputs), each beside the Graph it
+//! placed graphs, repetition, Host inputs and nodes), each beside the Graph it
 //! lowers to at `LANGUAGE_VERSION`.
 //!
 //! A changed lowering waits for a new `LANGUAGE_VERSION`. Every Kernel a
@@ -81,6 +81,19 @@ fn lowered(path: &Path) -> Result<String, String> {
     }
     for (name, dir) in &lowered.files.files {
         out.push_str(&format!("// directory {name} {}\n", relative(dir, &base)));
+    }
+    for node in &lowered.files.file_nodes {
+        out.push_str(&format!(
+            "// files node {} {} paths from {}, read as {}\n",
+            node.node,
+            relative(&node.dir, &base),
+            node.paths,
+            node.outputs
+                .iter()
+                .map(|(_, external)| external.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
     for write in &lowered.files.writes {
         let kind = if write.files {

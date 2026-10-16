@@ -309,6 +309,11 @@ impl Session {
         &self.scene.files().fonts
     }
 
+    /// The scene's files nodes, at every level.
+    pub fn file_nodes(&self) -> &[entelechy_scene::FilesNode] {
+        &self.scene.files().file_nodes
+    }
+
     /// The scene document.
     pub fn root(&self) -> &Path {
         self.scene.root()
@@ -452,6 +457,7 @@ impl Session {
                         .iter()
                         .filter_map(|font| font.path.parent().map(Path::to_path_buf)),
                 )
+                .chain(files.file_nodes.iter().map(|node| node.dir.clone()))
                 .collect()
         } else {
             Vec::new()
@@ -1444,6 +1450,7 @@ impl Session {
         };
         self.history.ran();
         self.feed_fonts();
+        self.feed_file_nodes();
         // The frame's runs are all given: a clocked frame ends here, its
         // nodes' runs kept until the device tells it.
         if let Some(frame) = self.runtime.end_frame() {
@@ -1499,10 +1506,10 @@ impl Session {
             context.time,
         );
         self.repin();
-        // The font nodes' characters are read after every frame, whatever
-        // it asks for.
+        // The font nodes' characters and the files nodes' paths are read
+        // after every frame, whatever it asks for.
         let mut demand = demand.clone();
-        demand.extend(self.font_codes());
+        demand.extend(self.fed_sources());
         let demand = &demand;
         let graph = self.scene.graph().ok_or_else(no_scene)?;
         let report = self
@@ -1518,6 +1525,7 @@ impl Session {
             .map_err(|error| self.with_refusal(error))?;
         self.history.ran();
         self.feed_fonts();
+        self.feed_file_nodes();
         Ok(report)
     }
 
@@ -1674,23 +1682,75 @@ impl Session {
                 self.evaluator.pin(node);
             }
         }
-        // What a font node reads its characters from stays materialized.
-        for node in self.font_codes() {
+        // What a font node reads its characters from, and a files node its
+        // paths, stays materialized.
+        for node in self.fed_sources() {
             self.evaluator.pin(node);
         }
     }
 
-    /// The nodes that produce the font nodes' characters.
-    fn font_codes(&self) -> Vec<entelechy_graph::NodeId> {
-        self.scene
-            .files()
+    /// The nodes that produce the font nodes' characters and the files
+    /// nodes' paths: read after every frame, whatever it asks for.
+    fn fed_sources(&self) -> Vec<entelechy_graph::NodeId> {
+        let files = self.scene.files();
+        files
             .fonts
             .iter()
-            .filter_map(|font| match &font.codes {
+            .map(|font| &font.codes)
+            .chain(files.file_nodes.iter().map(|node| &node.paths))
+            .filter_map(|source| match source {
                 entelechy_graph::Source::Node { node, port } => Some(self.producer(node, port).0),
                 entelechy_graph::Source::External(_) => None,
             })
             .collect()
+    }
+
+    /// Gives each files node the paths its `paths` held when last
+    /// evaluated, reading the Field only when it is another than it last
+    /// read; the files they name are read for the next evaluation.
+    fn feed_file_nodes(&mut self) {
+        let nodes = self.scene.files().file_nodes.clone();
+        if nodes.is_empty() {
+            return;
+        }
+        let store = Arc::clone(self.scene.store());
+        let reads = Arc::clone(&self.reads);
+        let readable = |path: &Path| crate::reads::lock(&reads).check(store.as_ref(), path);
+        for node in &nodes {
+            let handle = match &node.paths {
+                entelechy_graph::Source::Node { node, port } => self.cached(node, port),
+                entelechy_graph::Source::External(name) => self.inputs.handles().get(name).copied(),
+            };
+            let Some(handle) = handle else {
+                continue;
+            };
+            if self.inputs.file_node_saw(node, handle) {
+                continue;
+            }
+            let paths = self
+                .runtime
+                .materialize(handle)
+                .map_err(|e| e.to_string())
+                .and_then(|()| self.runtime.host().data(handle).map_err(|e| e.to_string()))
+                .and_then(|data| {
+                    if data.schema().scalars() == [entelechy_kernel::Scalar::Int] {
+                        crate::inputs::paths_spelled(data.storage())
+                    } else {
+                        Err(
+                            "its `paths` are a `Rows<Int>` of each path's bytes, ended by a 0"
+                                .to_owned(),
+                        )
+                    }
+                });
+            self.inputs.give_paths(
+                store.as_ref(),
+                &readable,
+                node,
+                handle,
+                paths,
+                self.runtime.host_mut(),
+            );
+        }
     }
 
     /// Gives each font node the characters its `codes` held when last

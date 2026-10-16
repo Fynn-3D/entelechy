@@ -1,0 +1,11 @@
+// A directory listed (what its `.gitignore` files leave out left out),
+// and the files a node names read: `listing` and `opened`.
+node wanted: image.show@1 { }
+node disk: files "project/" { paths <- wanted.result; }
+
+node edit: image.show@1 {
+    listing <- disk.listing;
+    opened <- disk.opened;
+}
+
+output result <- edit.result;

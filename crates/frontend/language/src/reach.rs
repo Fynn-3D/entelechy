@@ -195,7 +195,10 @@ impl Document {
             match &node.kind {
                 NodeKind::Inline(kernel) => kernel_names(kernel, &mut out),
                 NodeKind::Fill(ty) => words(&ty.value, &mut out),
-                NodeKind::Reference(_) | NodeKind::SubGraph(_) | NodeKind::Font(_) => {}
+                NodeKind::Reference(_)
+                | NodeKind::SubGraph(_)
+                | NodeKind::Font(_)
+                | NodeKind::Files(_) => {}
             }
             for member in &node.members {
                 if let NodeMember::Set(_, value) = member {

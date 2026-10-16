@@ -26,6 +26,7 @@ mod check;
 mod clipboard;
 mod clocked;
 pub mod history;
+mod ignore;
 mod inputs;
 mod kernels;
 mod observe;

@@ -353,7 +353,7 @@ pub fn operations() -> Vec<Operation> {
             "graph",
             "The running scene's structure.",
             vec![],
-            "inputs, params, nodes, outputs, fonts (each font node: id, path, codes, its outputs and the inputs they are in)",
+            "inputs, params, nodes, outputs, fonts (each font node: id, path, codes, its outputs and the inputs they are in), files (each files node: id, path, paths, its outputs and the inputs they are in)",
         ),
         op(
             "document",

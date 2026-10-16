@@ -201,6 +201,9 @@ pub struct Files {
     /// gives each the glyphs of the characters its `codes` held when last
     /// evaluated.
     pub fonts: Vec<FontNode>,
+    /// Files nodes, at every level: the session lists their directories
+    /// and gives each the files its `paths` named when last evaluated.
+    pub file_nodes: Vec<FilesNode>,
 }
 
 /// A `font` node: `node g: font "x.ttf" { codes <- c.result; }`. It is
@@ -221,6 +224,26 @@ pub struct FontNode {
 
 /// A font node's outputs, in order.
 pub const FONT_OUTPUTS: [&str; 3] = ["glyphs", "outlines", "metrics"];
+
+/// A `files` node: `node d: files "dir/" { paths <- p.result; }`. It is two
+/// externals the session fills: `listing`, every file under the directory
+/// that is not ignored, its path and size, and `opened`, the files `paths`
+/// named when last evaluated, their bytes, in the layouts of
+/// `entelechy_formats::directory`; read as `d.listing` and `d.opened`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FilesNode {
+    /// The node's id, placed.
+    pub node: String,
+    /// The directory, resolved against the document's directory.
+    pub dir: PathBuf,
+    /// Where the paths wanted come from, read as last evaluated.
+    pub paths: Source,
+    /// Each output's port and the external that holds it.
+    pub outputs: Vec<(String, String)>,
+}
+
+/// A files node's outputs, in order.
+pub const FILES_OUTPUTS: [&str; 2] = ["listing", "opened"];
 
 /// A lowered document: the graph plus everything the loader must publish
 /// and watch.
@@ -495,7 +518,8 @@ fn lower(
         located: BTreeMap::new(),
     };
     let level = lowering.level(document, text, name, base, &PathBuf::from(name), None)?;
-    // The root's inputs, then the font nodes' Fields, every level's.
+    // The root's inputs, then the font and files nodes' Fields, every
+    // level's.
     let fonts: Vec<String> = std::mem::take(&mut lowering.out.graph.externals);
     lowering.out.graph.externals = level.externals;
     lowering.out.graph.externals.extend(fonts);
@@ -1533,6 +1557,7 @@ impl Lowering<'_, '_> {
         let mut aliases: BTreeMap<String, Vec<(String, Source)>> = BTreeMap::new();
         let first_node = self.out.graph.nodes.len();
         let mut fonts: Vec<FontNode> = Vec::new();
+        let mut file_nodes: Vec<FilesNode> = Vec::new();
         // Each file input's fallback while the file is absent, renamed
         // with the nodes it may name.
         let mut fallback_refs: Vec<SourceRef> = document
@@ -1818,6 +1843,57 @@ impl Lowering<'_, '_> {
                         outputs,
                     });
                 }
+                NodeKind::Files(dir_path) => {
+                    if domain.is_some() || is_async || !node_params.is_empty() {
+                        return Err(error(
+                            dir_path.span,
+                            "a files node takes no `domain`, `async` or parameters: its outputs are as long as what it lists and reads",
+                        ));
+                    }
+                    if let Some(other) = inputs.keys().find(|port| port.as_str() != "paths") {
+                        return Err(error(
+                            dir_path.span,
+                            format!("a files node's one input is `paths`, not `{other}`"),
+                        ));
+                    }
+                    let paths = match inputs.remove("paths") {
+                        Some(Binding::Now(source)) => source,
+                        Some(Binding::Previous { .. }) => {
+                            return Err(error(
+                                dir_path.span,
+                                "a files node reads `paths` as last evaluated already: write `paths <- node.port;`",
+                            ));
+                        }
+                        None => {
+                            return Err(error(
+                                dir_path.span,
+                                "a files node needs `paths <- node.port;`, the files it reads (each path's bytes ended by a 0)",
+                            ));
+                        }
+                    };
+                    let outputs: Vec<(String, String)> = FILES_OUTPUTS
+                        .iter()
+                        .map(|port| ((*port).to_owned(), format!("{}.{port}", id.0)))
+                        .collect();
+                    for (_, external) in &outputs {
+                        self.out.graph.externals.push(external.clone());
+                    }
+                    aliases.insert(
+                        id.0.clone(),
+                        outputs
+                            .iter()
+                            .map(|(port, external)| {
+                                (port.clone(), Source::External(external.clone()))
+                            })
+                            .collect(),
+                    );
+                    file_nodes.push(FilesNode {
+                        node: id.0.clone(),
+                        dir: base.join(&dir_path.value),
+                        paths,
+                        outputs,
+                    });
+                }
                 NodeKind::SubGraph(sub_path) => {
                     if domain.is_some() {
                         return Err(error(
@@ -1881,6 +1957,10 @@ impl Lowering<'_, '_> {
             resolve(&mut font.codes)?;
         }
         self.out.files.fonts.extend(fonts);
+        for files in &mut file_nodes {
+            resolve(&mut files.paths)?;
+        }
+        self.out.files.file_nodes.extend(file_nodes);
         for node in &mut self.out.graph.nodes[first_node..] {
             for binding in node.inputs.values_mut() {
                 match binding {

@@ -555,7 +555,7 @@ fn check_in(
             }
             entelechy_graph::Source::External(name) => {
                 // What a check finds is text, as bytes are, and a
-                // directory's files are words.
+                // directory's files, listed or read, are words.
                 if lowered
                     .files
                     .checks
@@ -563,6 +563,12 @@ fn check_in(
                     .chain(&lowered.files.files)
                     .chain(&lowered.files.outlines)
                     .any(|(checked, _)| checked == name)
+                    || lowered
+                        .files
+                        .file_nodes
+                        .iter()
+                        .flat_map(|node| &node.outputs)
+                        .any(|(_, external)| external == name)
                 {
                     return Some((
                         entelechy_ir::Shape::Rows,
@@ -638,14 +644,15 @@ fn check_in(
         }
     }
     // A frame runs what something reads: a node nothing reads (no output,
-    // state, input's fallback while its file is absent, or font node's
-    // codes) never runs.
+    // state, input's fallback while its file is absent, font node's codes
+    // or files node's paths) never runs.
     let fallbacks = lowered
         .graph
         .fallbacks
         .iter()
         .map(|(_, source)| source)
         .chain(lowered.files.fonts.iter().map(|font| &font.codes))
+        .chain(lowered.files.file_nodes.iter().map(|node| &node.paths))
         .filter_map(|source| match source {
             entelechy_graph::Source::Node { node, .. } => Some(node.clone()),
             entelechy_graph::Source::External(_) => None,
