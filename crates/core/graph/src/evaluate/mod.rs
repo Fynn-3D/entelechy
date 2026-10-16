@@ -249,6 +249,59 @@ struct Running {
     output_names: Vec<String>,
 }
 
+/// A node whose outputs are made once, and its readers.
+type MadeOnce = (NodeId, Vec<NodeId>);
+
+/// The nodes of a plan whose outputs are made once, each with its readers:
+/// a settled node's (one that reads no clock, input, window or state,
+/// runs in its turn, and reads only settled nodes), read only by settled
+/// nodes.
+fn made_once(groups: &[Group]) -> Vec<MadeOnce> {
+    let at: BTreeMap<&NodeId, usize> = groups
+        .iter()
+        .enumerate()
+        .map(|(at, group)| (&group.node.id, at))
+        .collect();
+    // Groups come producers first.
+    let mut moving = vec![false; groups.len()];
+    let mut readers: BTreeMap<&NodeId, Vec<usize>> = BTreeMap::new();
+    for (index, group) in groups.iter().enumerate() {
+        let requires = &group.manifest().requires;
+        let mut moves = group.node.is_async
+            || requires.contains(Capability::TimeRead)
+            || requires.contains(Capability::InputRead)
+            || matches!(&group.node.domain, Some(DomainSpec::Expr(expr)) if expr.reads_context());
+        for binding in group.node.inputs.values() {
+            match binding {
+                Binding::Previous { .. } => moves = true,
+                Binding::Now(Source::Node { node, .. }) => {
+                    moves |= at.get(node).is_some_and(|producer| moving[*producer]);
+                    readers.entry(node).or_default().push(index);
+                }
+                Binding::Now(Source::External(_)) => {}
+            }
+        }
+        moving[index] = moves;
+    }
+    groups
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !moving[*index])
+        .filter_map(|(_, group)| {
+            let readers = readers.get(&group.node.id)?;
+            readers.iter().all(|reader| !moving[*reader]).then(|| {
+                (
+                    group.node.id.clone(),
+                    readers
+                        .iter()
+                        .map(|reader| groups[*reader].node.id.clone())
+                        .collect(),
+                )
+            })
+        })
+        .collect()
+}
+
 /// The smallest outputs let go cold once made ([`Evaluator::chill_made_once`]):
 /// smaller ones cost more to make again than they hold.
 const COLD_LEAST: usize = 1 << 20;
@@ -431,6 +484,9 @@ pub struct Evaluator {
     /// Small nodes this evaluation found unchanged; see
     /// [`Evaluator::weigh_alike`].
     alike: Vec<NodeId>,
+    /// The plan last asked which of its nodes' outputs are made once, and
+    /// those nodes with their readers ([`made_once`]).
+    made_once: Option<(Arc<Vec<Group>>, Vec<MadeOnce>)>,
 }
 
 /// When a node that runs for its state alone, or whose outputs are small
@@ -1311,68 +1367,41 @@ impl Evaluator {
         Ok(())
     }
 
-    /// Lets go cold, once the frame is done, the outputs made once: a
-    /// settled node's (one that reads no clock, input, window or state,
-    /// runs in its turn, and reads only settled nodes), larger than
-    /// [`COLD_LEAST`], read only by settled nodes that hold what they made
-    /// from them. Nothing reads them again until something upstream, or a
-    /// reader's Kernel or parameters, change; then they are made again
-    /// ([`Evaluator::warm`]). What `held` names stays.
+    /// Lets go cold, once the frame is done, the outputs made once
+    /// ([`made_once`]) whose readers all hold what they made of them,
+    /// larger than [`COLD_LEAST`]. Nothing reads them again until
+    /// something upstream, or a reader's Kernel or parameters, change; then
+    /// they are made again ([`Evaluator::warm`]). What `held` names stays.
     fn chill_made_once(
         &mut self,
-        groups: &[Group],
+        groups: &Arc<Vec<Group>>,
         held: &BTreeSet<NodeId>,
         runtime: &mut Runtime,
     ) {
-        let at: BTreeMap<&NodeId, usize> = groups
-            .iter()
-            .enumerate()
-            .map(|(at, group)| (&group.node.id, at))
-            .collect();
-        // Groups come producers first.
-        let mut moving = vec![false; groups.len()];
-        let mut readers: BTreeMap<&NodeId, Vec<usize>> = BTreeMap::new();
-        for (index, group) in groups.iter().enumerate() {
-            let requires = &group.manifest().requires;
-            let mut moves = group.node.is_async
-                || requires.contains(Capability::TimeRead)
-                || requires.contains(Capability::InputRead)
-                || matches!(&group.node.domain, Some(DomainSpec::Expr(expr)) if expr.reads_context());
-            for binding in group.node.inputs.values() {
-                match binding {
-                    Binding::Previous { .. } => moves = true,
-                    Binding::Now(Source::Node { node, .. }) => {
-                        moves |= at.get(node).is_some_and(|producer| moving[*producer]);
-                        readers.entry(node).or_default().push(index);
-                    }
-                    Binding::Now(Source::External(_)) => {}
-                }
-            }
-            moving[index] = moves;
+        // Which they are is the plan's, found once a plan.
+        if !self
+            .made_once
+            .as_ref()
+            .is_some_and(|(plan, _)| Arc::ptr_eq(plan, groups))
+        {
+            self.made_once = Some((Arc::clone(groups), made_once(groups)));
         }
-        let made_once: Vec<NodeId> = groups
-            .iter()
-            .enumerate()
-            .filter(|(index, group)| {
-                let id = &group.node.id;
-                !moving[*index]
-                    && !held.contains(id)
-                    && self
-                        .ledger
-                        .entry(id)
-                        .is_some_and(|cached| outputs_bytes(runtime, &cached.outputs) >= COLD_LEAST)
-                    && readers.get(id).is_some_and(|readers| {
-                        readers.iter().all(|reader| {
-                            let reader = &groups[*reader].node.id;
-                            !moving[at[reader]]
-                                && (self.ledger.entry(reader).is_some()
-                                    || self.ledger.cold(reader).is_some())
+        let Some((_, made)) = &self.made_once else {
+            return;
+        };
+        let has = |id: &NodeId| self.ledger.entry(id).is_some() || self.ledger.cold(id).is_some();
+        let chilled: Vec<NodeId> =
+            made.iter()
+                .filter(|(id, readers)| {
+                    !held.contains(id)
+                        && self.ledger.entry(id).is_some_and(|cached| {
+                            outputs_bytes(runtime, &cached.outputs) >= COLD_LEAST
                         })
-                    })
-            })
-            .map(|(_, group)| group.node.id.clone())
-            .collect();
-        for id in made_once {
+                        && readers.iter().all(has)
+                })
+                .map(|(id, _)| id.clone())
+                .collect();
+        for id in chilled {
             self.chill(&id, runtime);
         }
     }
