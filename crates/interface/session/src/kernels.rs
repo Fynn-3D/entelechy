@@ -920,6 +920,32 @@ impl Written {
 /// documents through the store as one before does not compile them again.
 pub(crate) type Compiled = std::collections::HashMap<(PathBuf, String, String, String), Validated>;
 
+/// A Kernel of the document at `path`, written in `text` and resolved
+/// against its declarations, compiled as a session compiles it
+/// ([`compiled`]: by its id, its own text and the declarations it
+/// reaches), so a check and a session reading the same documents through
+/// the store compile it once. One without an id is compiled as it is, and
+/// says why.
+pub(crate) fn compiled_in(
+    store: &dyn Store,
+    path: &Path,
+    text: &str,
+    kernel: &Kernel,
+) -> Result<Validated, entelechy_compiler::CompileError> {
+    let Ok(id) = crate::sources::named_id(kernel) else {
+        return entelechy_compiler::compile_kernel(kernel, None);
+    };
+    let own = &text[entelechy_language::doc::with_doc(text, kernel.range.clone())];
+    compiled(
+        store,
+        path,
+        &id,
+        own,
+        &crate::sources::reached_key(store, kernel),
+        kernel,
+    )
+}
+
 /// A Kernel compiled, or the module it compiled to before from the same
 /// document, id, text and declarations. A refusal is not kept.
 fn compiled(

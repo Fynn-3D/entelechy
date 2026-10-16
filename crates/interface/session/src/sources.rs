@@ -359,11 +359,7 @@ fn resolve_package(store: &dyn Store, path: &Path) -> PathBuf {
 pub(crate) fn package_files(store: &dyn Store, dir: &Path) -> Result<Vec<PathBuf>, String> {
     let manifest = dir.join("package.esn");
     let declared = package_manifest(store, &manifest)?;
-    let text = store
-        .read_text(&manifest)
-        .map_err(|e| format!("{}: {e}", manifest.display()))?;
-    let document = entelechy_language::parse_document(&text)
-        .map_err(|e| format!("{}:{e}", manifest.display()))?;
+    let document = store.document(&manifest)?;
     let mut files = Vec::new();
     for item in &document.uses {
         let path = dir.join(&item.path.value);
@@ -386,12 +382,9 @@ pub fn package_manifest(
     store: &dyn Store,
     manifest: &Path,
 ) -> Result<entelechy_language::PackageDecl, String> {
-    let text = store
-        .read_text(manifest)
-        .map_err(|e| format!("{}: {e}", manifest.display()))?;
-    let document = entelechy_language::parse_document(&text)
-        .map_err(|e| format!("{}:{e}", manifest.display()))?;
-    let Some(declared) = document.package else {
+    // Parsed once per stamp: every `use` of the package reads its manifest.
+    let document = store.document(manifest)?;
+    let Some(declared) = document.package.clone() else {
         return Err(format!(
             "{}: a package manifest begins `package name@version {{ language = N; ir = N; }}`",
             manifest.display()
@@ -557,6 +550,21 @@ pub fn declarations_within(
     uses: &[entelechy_language::Use],
     own: entelechy_language::Own<'_>,
 ) -> Result<Declarations, String> {
+    declarations_keyed(store, origin, base, uses, own).map(|(declarations, _)| declarations)
+}
+
+/// [`declarations_within`], with what they are named from: where the
+/// `use` items are written and what they say, the own declarations, and
+/// every document reached with its stamp ([`scope_key`]). What is worked
+/// out of a document and its declarations alone is the same while this
+/// key is; none when a document reached has no stamp.
+pub(crate) fn declarations_keyed(
+    store: &dyn Store,
+    origin: Option<&Path>,
+    base: &Path,
+    uses: &[entelechy_language::Use],
+    own: entelechy_language::Own<'_>,
+) -> Result<(Declarations, Option<String>), String> {
     /// The documents `uses` names directly, after walking each one.
     fn gather(
         store: &dyn Store,
@@ -652,12 +660,12 @@ pub fn declarations_within(
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(key)
     {
-        return named.clone();
+        return named.clone().map(|named| (named, Some(key.clone())));
     }
     let named = entelechy_language::scope(&sources, &direct, own, &|name| {
         builtin_names().contains(name)
     });
-    if let (Some(parsed), Some(key)) = (store.parsed(), key) {
+    if let (Some(parsed), Some(key)) = (store.parsed(), &key) {
         let mut scoped = parsed
             .scoped
             .lock()
@@ -667,9 +675,9 @@ pub fn declarations_within(
         if scoped.len() >= 4096 {
             scoped.clear();
         }
-        scoped.insert(key, named.clone());
+        scoped.insert(key.clone(), named.clone());
     }
-    named
+    named.map(|named| (named, key))
 }
 
 /// What a scope is named from: where the `use` items are written and

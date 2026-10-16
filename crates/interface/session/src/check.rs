@@ -3,9 +3,7 @@
 use std::path::Path;
 
 use crate::sources::{held, located, said, written_in};
-use crate::{
-    Store, declarations_for, declarations_within, locate_document, read_document, used_documents,
-};
+use crate::{Store, declarations_for, locate_document, read_document, used_documents};
 
 /// The words a Kernel may carry through its branches before it is said
 /// to be large ([`entelechy_ir::carried`]): a device's compiler takes long over
@@ -150,8 +148,18 @@ pub(crate) fn problems_text(
     let named = |path: &Path| store.canonical(path).unwrap_or_else(|_| store.whole(path));
     let base = named(base);
     let mut found = std::collections::BTreeSet::new();
+    // The documents are checked against one file system: what each used
+    // one was found to be, by whichever used it first, holds for all.
+    let pass = Pass::default();
     for document in documents {
-        for (problem, line) in check_document(store, document, false).lines {
+        let checked = check_in(
+            store,
+            document,
+            false,
+            &crate::overrides::Overrides::default(),
+            Some(&pass),
+        );
+        for (problem, line) in checked.lines {
             if !problem {
                 continue;
             }
@@ -208,11 +216,8 @@ pub(crate) fn outline_text(
             .unwrap_or(&file)
             .display()
             .to_string();
-        let Ok(source) = store.read(document) else {
-            continue;
-        };
-        let source = String::from_utf8_lossy(&source);
-        let Ok(parsed) = entelechy_language::parse_document(&source) else {
+        // Parsed once per stamp: a document unchanged is not parsed again.
+        let Ok(parsed) = store.document(document) else {
             continue;
         };
         for d in entelechy_language::definitions(&parsed) {
@@ -277,6 +282,26 @@ pub fn check_document_with(
     show_ir: bool,
     overrides: &crate::overrides::Overrides,
 ) -> Checked {
+    check_in(store, path, show_ir, overrides, None)
+}
+
+/// What a check of many documents at once ([`problems_text`]) found of
+/// each document they use, by the document and whether its Kernels were
+/// published: the file system holds still while it runs, so a document
+/// used by many is looked at once.
+#[derive(Default)]
+struct Pass {
+    used: std::sync::Mutex<std::collections::HashMap<(std::path::PathBuf, bool), UsedChecked>>,
+}
+
+/// [`check_document_with`], within `pass` when it is one of many.
+fn check_in(
+    store: &dyn Store,
+    path: &Path,
+    show_ir: bool,
+    overrides: &crate::overrides::Overrides,
+    pass: Option<&Pass>,
+) -> Checked {
     let mut checked = Checked::default();
     let file = path.display().to_string();
     let file = file.as_str();
@@ -327,15 +352,20 @@ pub fn check_document_with(
         say!(problem, "{file}: {error}");
     }
     let mut document = document;
-    if let Ok((structs, types, functions)) = declarations_for(
+    if let Ok(((structs, types, functions), reach)) = crate::sources::declarations_keyed(
         store,
+        None,
         base,
         &document.uses,
         entelechy_language::Own::of(&document),
     ) {
-        for error in
-            entelechy_compiler::check_functions_each(&document, (&structs, &types, &functions))
-        {
+        for error in functions_checked(
+            store,
+            path,
+            reach.as_deref(),
+            &document,
+            (&structs, &types, &functions),
+        ) {
             let held = held((&structs, &types, &functions));
             let at = written_in(path, held, &error);
             let said = located(store, said(held, &error), &at, path, &[]);
@@ -358,7 +388,13 @@ pub fn check_document_with(
             .map(|inline| (Some(inline.id.clone()), &inline.kernel)),
     );
     for (id, kernel) in kernels {
-        match entelechy_compiler::compile_kernel(kernel, id.as_ref()) {
+        // The document's own Kernels as a session compiles them; an inline
+        // one, which no session reads from a document, as it is.
+        let module = match &id {
+            Some(id) => entelechy_compiler::compile_kernel(kernel, Some(id)),
+            None => crate::kernels::compiled_in(store, path, &text, kernel),
+        };
+        match module {
             Ok(module) => {
                 manifests.push((
                     module.manifest.clone(),
@@ -445,7 +481,25 @@ pub fn check_document_with(
             // Each used document checked on its own, all at once; what
             // each found is said in their order.
             let found = crate::spread::map(&used, |used_path| {
-                check_used(store, used_path, root, publishes(used_path), show_ir)
+                let published = publishes(used_path);
+                let Some(pass) = pass else {
+                    return check_used(store, used_path, root, published, show_ir);
+                };
+                let key = (used_path.to_path_buf(), published);
+                let kept = pass
+                    .used
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .get(&key)
+                    .cloned();
+                kept.unwrap_or_else(|| {
+                    let found = check_used(store, used_path, root, published, show_ir);
+                    pass.used
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .insert(key, found.clone());
+                    found
+                })
             });
             for (lines, modules) in found {
                 manifests.extend(modules);
@@ -697,7 +751,10 @@ pub fn check_document_with(
 /// A compiled Kernel's manifest, the structs its ports name, and whether
 /// it weighs its element against its first input's count
 /// ([`first_counted_against`]).
-type Compiled = (entelechy_ir::Manifest, Vec<entelechy_ir::StructDef>, bool);
+pub(crate) type Compiled = (entelechy_ir::Manifest, Vec<entelechy_ir::StructDef>, bool);
+/// What checking a used document found ([`check_used`]): its lines, and its
+/// Kernels compiled.
+pub(crate) type UsedChecked = (Vec<(bool, String)>, Vec<Compiled>);
 
 /// Whether `module` compares its element with its first input's count
 /// (`element() < count(first)`, as a join of two rows does): a test that,
@@ -762,13 +819,70 @@ pub(crate) fn defaulted_domain(
     ))
 }
 
+/// What the compiler finds wrong in `document`'s functions (the one at
+/// `path`), its inherited declarations given: kept by the document's
+/// stamp and its reach's key (every document it reaches with its stamp,
+/// [`crate::sources::declarations_keyed`]) where the store keeps what it
+/// works out, so a check of many documents using one checks its functions
+/// once, and a document unchanged since the last check, with all it
+/// reaches, is not checked again.
+fn functions_checked(
+    store: &dyn Store,
+    path: &Path,
+    reach: Option<&str>,
+    document: &entelechy_language::Document,
+    inherited: (
+        &[entelechy_language::StructDecl],
+        &[entelechy_language::TypeAlias],
+        &[entelechy_language::FnDecl],
+    ),
+) -> Vec<entelechy_compiler::CompileError> {
+    let key = store
+        .stamp(path)
+        .zip(reach)
+        .map(|(stamp, reach)| format!("{}@{stamp:?}|{reach}", path.display()));
+    let kept = |parsed: &crate::store::Parsed, key: &String| {
+        parsed
+            .functions_checked
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(key)
+            .cloned()
+    };
+    if let (Some(parsed), Some(key)) = (store.parsed(), &key)
+        && let Some(errors) = kept(parsed, key)
+    {
+        return errors;
+    }
+    let errors = entelechy_compiler::check_functions_each(document, inherited);
+    if let (Some(parsed), Some(key)) = (store.parsed(), key) {
+        let mut checked = parsed
+            .functions_checked
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A long session's edits leave keys behind; they go when there
+        // are many.
+        if checked.len() >= 4096 {
+            checked.clear();
+        }
+        checked.insert(key, errors.clone());
+    }
+    errors
+}
+
+/// What checking `path`, a document a checked document uses, finds: what
+/// the compiler finds wrong in its functions and, when `published`, its
+/// Kernels, said from `root`. Kept where the store keeps what it works out,
+/// by the document, its stamp, its reach's key and how it is said, so a
+/// document used by many is checked once, and again only when it or what
+/// it reaches changes.
 fn check_used(
     store: &dyn Store,
     path: &Path,
     root: &Path,
     published: bool,
     show_ir: bool,
-) -> (Vec<(bool, String)>, Vec<Compiled>) {
+) -> UsedChecked {
     let mut lines = Vec::new();
     let mut compiled = Vec::new();
     let text = match store.read_text(path) {
@@ -778,19 +892,44 @@ fn check_used(
             return (lines, compiled);
         }
     };
-    let Ok(mut used_document) = entelechy_language::parse_document(&text) else {
+    // Parsed once per stamp, however many documents use it.
+    let Ok(parsed) = store.document(path) else {
         return (lines, compiled); // reported by `used_documents`
     };
+    let mut used_document = (*parsed).clone();
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    match declarations_within(
+    let mut key = None;
+    match crate::sources::declarations_keyed(
         store,
         Some(path),
         dir,
         &used_document.uses,
         entelechy_language::Own::of(&used_document),
     ) {
-        Ok((structs, types, functions)) => {
-            for error in entelechy_compiler::check_functions_each(
+        Ok(((structs, types, functions), reach)) => {
+            key = store
+                .stamp(path)
+                .zip(reach.as_deref())
+                .map(|(stamp, reach)| {
+                    format!(
+                        "{}@{stamp:?}|{reach}|{}|{published}|{show_ir}",
+                        path.display(),
+                        root.display()
+                    )
+                });
+            if let (Some(parsed), Some(key)) = (store.parsed(), &key)
+                && let Some(found) = parsed
+                    .used_checked
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .get(key)
+            {
+                return found.clone();
+            }
+            for error in functions_checked(
+                store,
+                path,
+                reach.as_deref(),
                 &used_document,
                 (&structs, &types, &functions),
             ) {
@@ -809,7 +948,7 @@ fn check_used(
         &[]
     };
     for kernel in kernels {
-        match entelechy_compiler::compile_kernel(kernel, None) {
+        match crate::kernels::compiled_in(store, path, &text, kernel) {
             Ok(module) => {
                 compiled.push((
                     module.manifest.clone(),
@@ -833,6 +972,18 @@ fn check_used(
                 lines.push((true, format!("{}:{said}", at.display())));
             }
         }
+    }
+    if let (Some(parsed), Some(key)) = (store.parsed(), key) {
+        let mut kept = parsed
+            .used_checked
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A long session's edits leave keys behind; they go when there
+        // are many.
+        if kept.len() >= 4096 {
+            kept.clear();
+        }
+        kept.insert(key, (lines.clone(), compiled.clone()));
     }
     (lines, compiled)
 }

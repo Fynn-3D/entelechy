@@ -98,6 +98,20 @@ pub struct Parsed {
     pub(crate) scoped: std::sync::Arc<
         Mutex<std::collections::HashMap<String, Result<entelechy_language::Declarations, String>>>,
     >,
+    /// What the compiler found wrong in a document's functions, by the
+    /// document, its stamp and the declarations it inherits
+    /// ([`crate::check`]): a check of many documents sharing one checks it
+    /// once.
+    pub(crate) functions_checked: std::sync::Arc<
+        Mutex<std::collections::HashMap<String, Vec<entelechy_compiler::CompileError>>>,
+    >,
+    /// What checking a document a checked document uses found, by the
+    /// document, its stamp, its reach's key
+    /// ([`crate::sources::declarations_keyed`]) and how it is said
+    /// ([`crate::check`]): each document used by many is checked once a
+    /// sync, and again only when it or what it reaches changes.
+    pub(crate) used_checked:
+        std::sync::Arc<Mutex<std::collections::HashMap<String, crate::check::UsedChecked>>>,
 }
 
 /// A document as parsed, and the stamp of the text it was parsed from.
@@ -198,6 +212,7 @@ pub struct Disk {
 /// What a sync found of the file system, by path.
 #[derive(Debug, Default)]
 struct Found {
+    lists: std::collections::HashMap<PathBuf, Vec<PathBuf>>,
     kinds: std::collections::HashMap<PathBuf, Option<Kind>>,
     stamps: std::collections::HashMap<PathBuf, Option<Stamp>>,
     resolved: std::collections::HashMap<PathBuf, PathBuf>,
@@ -358,10 +373,27 @@ impl Store for Disk {
     }
 
     fn list(&self, dir: &Path) -> io::Result<Vec<PathBuf>> {
-        Ok(std::fs::read_dir(dir)?
+        // What a directory holds, as its kind and stamp, is looked at once
+        // a sync; a failed read is not kept.
+        let lock = || {
+            self.found
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        };
+        if let Some(listed) = lock()
+            .as_ref()
+            .and_then(|found| found.lists.get(dir).cloned())
+        {
+            return Ok(listed);
+        }
+        let listed: Vec<PathBuf> = std::fs::read_dir(dir)?
             .filter_map(Result::ok)
             .map(|entry| entry.path())
-            .collect())
+            .collect();
+        if let Some(found) = lock().as_mut() {
+            found.lists.insert(dir.to_path_buf(), listed.clone());
+        }
+        Ok(listed)
     }
 
     fn stamp(&self, path: &Path) -> Option<Stamp> {

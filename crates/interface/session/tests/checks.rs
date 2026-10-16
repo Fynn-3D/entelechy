@@ -110,3 +110,60 @@ fn what_a_check_finds_is_text() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_fault_moved_down_its_document_is_said_where_it_now_is() {
+    let dir = scratch("moved");
+    let mut session = open(&dir);
+    assert!(text(&mut session).starts_with("lib/warm.ent:2:12: "));
+    // Two lines above the function: its body is as it was, its fault two
+    // lines down.
+    std::fs::write(
+        dir.join("src/lib/warm.ent"),
+        "// a note\n// another\nfn warm(x: Float) -> Vec3 {\n    return vec3(x, 0.0);\n}\n",
+    )
+    .unwrap();
+    session.sync();
+    assert!(text(&mut session).starts_with("lib/warm.ent:4:12: "));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn what_a_session_keeps_between_checks_finds_what_a_fresh_one_finds() {
+    let dir = scratch("kept");
+    std::fs::write(
+        dir.join("src/glow.ent"),
+        "use \"lib/warm.ent\";\nkernel q.glow@1 { requires { field.write; } output result: Image; compute { return vec4(warm(2.0), oops); } }\n",
+    )
+    .unwrap();
+    let mut session = open(&dir);
+    let edits: [(&str, &str); 4] = [
+        (
+            "src/lib/warm.ent",
+            "fn warm(x: Float) -> Vec3 {\n    return vec3(x, 0.0, 0.0);\n}\n",
+        ),
+        (
+            "src/glow.ent",
+            "use \"lib/warm.ent\";\n\nkernel q.glow@1 { requires { field.write; } output result: Image; compute { return vec4(warm(2.0), 1.0); } }\n",
+        ),
+        (
+            "src/lib/warm.ent",
+            "// moved\nfn warm(x: Float) -> Vec3 {\n    return vec3(x, 0.0);\n}\n",
+        ),
+        (
+            "src/ramp.ent",
+            "use \"lib/warm.ent\";\nkernel q.ramp@1 { requires { field.write; } output result: Image; compute { return vec4(warm(1.0), nope); } }\n",
+        ),
+    ];
+    for (file, written) in edits {
+        // A stamp is a modification time and a length: a write lands in a
+        // later moment.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(dir.join(file), written).unwrap();
+        session.sync();
+        let kept = text(&mut session);
+        let fresh = text(&mut open(&dir));
+        assert_eq!(kept, fresh, "after writing {file}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
