@@ -907,6 +907,55 @@ output result <- view.result;
 ";
 
 #[test]
+fn a_trace_follows_the_version_running_not_the_one_its_document_wrote() {
+    let dir = std::env::temp_dir().join(format!(
+        "entelechy-protocol-trace-published-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("k.ent"),
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { let a = float(element()); return a * 2.0; } }\n",
+    )
+    .unwrap();
+    let scene = dir.join("scene.esn");
+    std::fs::write(
+        &scene,
+        "use \"k.ent\";\nnode n: t.k@1 { domain = 4; }\noutput result <- n.result;\n",
+    )
+    .unwrap();
+    // A source published apart replaces the document's Kernel: the trace
+    // computes what runs.
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "evaluate" }),
+            json!({ "id": 2, "op": "trace", "node": "n", "element": 3 }),
+            json!({ "id": 3, "op": "publish", "expect": "any", "source": "kernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { let b = float(element()) + 100.0; return b * 3.0; } }" }),
+            json!({ "id": 4, "op": "evaluate" }),
+            json!({ "id": 5, "op": "trace", "node": "n", "element": 3 }),
+        ],
+    );
+    assert_eq!(
+        responses[1]["ok"]["results"][0]["value"], 6.0,
+        "{}",
+        responses[1]
+    );
+    let after = &responses[4]["ok"];
+    assert_eq!(after["results"][0]["value"], 309.0, "{after}");
+    assert!(
+        after["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["name"] == "b"),
+        "the published source's own values: {after}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_trace_shows_one_element_of_a_node_and_reports_carry_timings() {
     let dir = std::env::temp_dir().join(format!("entelechy-protocol-trace-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

@@ -852,22 +852,18 @@ impl Kernels {
         }
     }
 
-    /// The Kernel's source compiled unoptimized, where each value is
-    /// written, and the document it is written in; `None` when no document
-    /// owns it or it fails to compile alone.
-    pub(crate) fn unoptimized(&self, id: &KernelId) -> Option<Written> {
-        let (path, kernel) = self
-            .documents
-            .iter()
-            .find_map(|(path, state)| state.asts.get(id).map(|kernel| (path, kernel)))?;
-        let (module, places) =
-            entelechy_compiler::compile_kernel_unoptimized(kernel, Some(id)).ok()?;
-        Some(Written {
-            module,
-            places,
-            path: path.clone(),
-            kernel: kernel.clone(),
-        })
+    /// The Kernel its document holds compiled unoptimized, where each
+    /// value is written, and the document it is written in, when the
+    /// version running is the one the document wrote (`source`, the
+    /// version's); `None` when no document owns it, a source published
+    /// apart replaced it, or it fails to compile alone.
+    pub(crate) fn unoptimized(&self, id: &KernelId, source: &str) -> Option<Written> {
+        let (path, kernel) = self.documents.iter().find_map(|(path, state)| {
+            (state.kernels.get(id).map(String::as_str) == Some(source))
+                .then(|| state.asts.get(id).map(|kernel| (path, kernel)))
+                .flatten()
+        })?;
+        Written::compiled(kernel, id, Some(path.clone()))
     }
 }
 
@@ -876,7 +872,9 @@ impl Kernels {
 pub(crate) struct Written {
     pub(crate) module: entelechy_kernel::Validated,
     pub(crate) places: entelechy_compiler::SourcePlaces,
-    pub(crate) path: PathBuf,
+    /// The document it is written in; `None` for a source published apart,
+    /// which no file holds.
+    pub(crate) path: Option<PathBuf>,
     /// The Kernel, what it holds knowing where each was written.
     pub(crate) kernel: entelechy_language::Kernel,
 }
@@ -884,10 +882,27 @@ pub(crate) struct Written {
 impl Written {
     /// Where the failure a trace found is written: its value in the
     /// function it failed in (`None` the entry).
+    /// `kernel`, published as `id`, compiled unoptimized, written in
+    /// `path`.
+    pub(crate) fn compiled(
+        kernel: &entelechy_language::Kernel,
+        id: &KernelId,
+        path: Option<PathBuf>,
+    ) -> Option<Written> {
+        let (module, places) =
+            entelechy_compiler::compile_kernel_unoptimized(kernel, Some(id)).ok()?;
+        Some(Written {
+            module,
+            places,
+            path,
+            kernel: kernel.clone(),
+        })
+    }
+
     pub(crate) fn place_of(&self, fault: &crate::TraceFault) -> Option<crate::SourcePlace> {
         let value = fault.value?;
         let (places, path) = match &fault.function {
-            None => (&self.places.entry, self.path.clone()),
+            None => (&self.places.entry, self.path.clone()?),
             Some(name) => {
                 let index = self.module.functions.iter().position(|f| &f.name == name)?;
                 (
@@ -896,8 +911,8 @@ impl Written {
                         .origin_of(name)
                         .map_or_else(
                             || self.path.clone(),
-                            |origin| PathBuf::from(&*origin.document),
-                        ),
+                            |origin| Some(PathBuf::from(&*origin.document)),
+                        )?,
                 )
             }
         };

@@ -1904,7 +1904,15 @@ impl Session {
             ),
             None => Err(no_scene()),
         };
-        let written = self.kernels.unoptimized(&target.kernel);
+        // The version running, as its document wrote it, or as published
+        // apart.
+        let written = self
+            .kernels
+            .unoptimized(&target.kernel, version.source())
+            .or_else(|| {
+                let kernel = self.scene.resolve_source(version.source()).ok()?;
+                crate::kernels::Written::compiled(&kernel, &target.kernel, None)
+            });
         let traced = tried.map_err(|error| error.to_string()).and_then(|_| {
             let graph = self.scene.graph().ok_or("no scene is loaded")?;
             observe::trace_element(

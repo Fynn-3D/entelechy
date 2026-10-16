@@ -998,6 +998,23 @@ impl Scene {
         source: &str,
         kernels: &Kernels,
     ) -> Result<entelechy_kernel::Validated, Diagnostic> {
+        let kernel = self.resolve_source(source)?;
+        entelechy_compiler::compile_kernel(&kernel, None).map_err(|e| {
+            kernels.located(
+                self.store.as_ref(),
+                Diagnostic::from(&e),
+                &self.root,
+                &self.root,
+            )
+        })
+    }
+
+    /// `source`, one Kernel, as [`Scene::compile_source`] reads it: its own
+    /// and `use`d declarations, then the scene's shared ones.
+    pub(crate) fn resolve_source(
+        &self,
+        source: &str,
+    ) -> Result<entelechy_language::Kernel, Diagnostic> {
         let mut document =
             entelechy_language::parse_document(source).map_err(|e| Diagnostic::from(&e))?;
         if document.kernels.len() != 1 {
@@ -1049,14 +1066,7 @@ impl Scene {
             }
         }
         document.resolve((&structs, &types, &functions));
-        entelechy_compiler::compile_kernel(&document.kernels[0], None).map_err(|e| {
-            kernels.located(
-                self.store.as_ref(),
-                Diagnostic::from(&e),
-                &self.root,
-                &self.root,
-            )
-        })
+        Ok(document.kernels.swap_remove(0))
     }
 }
 
