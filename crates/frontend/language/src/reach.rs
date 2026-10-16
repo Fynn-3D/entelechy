@@ -135,6 +135,24 @@ impl Kernel {
     }
 }
 
+impl Kernel {
+    /// This Kernel holding only the declarations it reaches
+    /// ([`Kernel::reached`]): it compiles to what it compiled to, and keeps
+    /// none of the rest of its document.
+    pub fn trimmed(&self) -> Kernel {
+        let reached = self.reached();
+        let functions = reached.functions.into_iter().cloned().collect();
+        let structs = reached.structs.into_iter().cloned().collect();
+        let types = reached.types.into_iter().cloned().collect();
+        Kernel {
+            functions,
+            structs,
+            types,
+            ..self.clone()
+        }
+    }
+}
+
 fn function_names(function: &FnDecl, out: &mut Vec<String>) {
     visit_block(&function.body, &mut |name, _| out.push(name.to_owned()));
     for (_, ty) in &function.args {
@@ -247,6 +265,17 @@ kernel t.k@1 { requires { field.read; field.write; } input hits: Hits; output re
             names(reached.types.iter().map(|d| &d.name.value).collect()),
             ["Hits"]
         );
+        // Trimmed, it holds those alone, its own parts as they were.
+        let trimmed = kernel.trimmed();
+        assert_eq!(
+            names(trimmed.functions.iter().map(|f| &f.name.value).collect()),
+            ["deep", "mid"]
+        );
+        assert_eq!(
+            names(trimmed.structs.iter().map(|d| &d.name.value).collect()),
+            ["Hit", "Inner"]
+        );
+        assert_eq!(trimmed.compute, kernel.compute);
     }
 
     #[test]

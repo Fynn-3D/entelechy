@@ -31,7 +31,8 @@ pub(crate) struct Defined {
 struct DocumentState {
     stamp: Option<Stamp>,
     kernels: BTreeMap<KernelId, String>,
-    /// Parsed Kernels, which a trace compiles unoptimized.
+    /// Parsed Kernels, which a trace compiles unoptimized, each holding
+    /// only the declarations it reaches ([`Kernel::trimmed`]).
     asts: BTreeMap<KernelId, Kernel>,
     /// Each Kernel's key of the declarations it reaches
     /// ([`crate::sources::reached_key`]); a Kernel whose text and key
@@ -618,7 +619,7 @@ impl Kernels {
                 }
                 None => {}
             }
-            asts.insert(id.clone(), kernel.clone());
+            asts.insert(id.clone(), kernel.trimmed());
             if let Some(owner) = self.owners.get(&id)
                 && owner != path
             {
