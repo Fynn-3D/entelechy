@@ -218,7 +218,7 @@ Kernels (`.ent`) compute; scenes (`.esn`) compose them into a running world. Who
 
 ## protocol: the operations a session answers
 
-- **status**: `status` {} The session at a glance. Answers backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, loaded (whether a scene is), refused (why not, when not), revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, memory (`used` and `budget`, the Host's bytes), versions (`entelechy`, `api`, `language`, `ir`, `package`).
+- **status**: `status` {} The session at a glance. Answers backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, loaded (whether a scene is), refused (why not, when not), revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, memory (`used` and `budget`, the Host's bytes; `cold`, the nodes whose outputs are let go, made again when read), versions (`entelechy`, `api`, `language`, `ir`, `package`).
 - **kernels**: `kernels` {} Every published Kernel, with its generation. Answers a list of manifests, each with its generation, which `publish`'s `expect` names.
 - **kernel**: `kernel` {`kernel`?: string, `generation`?: integer} One Kernel's manifest and source. Answers manifest, generation, source, as `publish` takes it.
 - **graph**: `graph` {} The running scene's structure. Answers inputs, params, nodes, outputs, fonts (each font node: id, path, codes, its outputs and the inputs they are in), files (each files node: id, path, paths, its outputs and the inputs they are in).

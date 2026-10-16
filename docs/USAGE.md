@@ -354,7 +354,7 @@ done, without waiting for it; present time); `device` (backend, window and
 scale, the port shown); `nodes` (what ran, was reused and was fused, `async`
 runs, those routed off the device); `memory` (the Host's bytes held of its
 `--memory` budget, and `let go`, nodes this frame let go to make room, which
-a scene past its budget runs again); `present` (presentation path,
+a scene past its budget makes again for the readers that run); `present` (presentation path,
 downloads, the sound device's rate, block size and dry callbacks); and
 under them the nodes that kept the device busiest, each its milliseconds
 averaged over half a second and held until the next half, then what ran

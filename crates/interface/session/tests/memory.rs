@@ -1,6 +1,8 @@
 //! A scene holding more than the Host's budget lets go of cached nodes to
 //! make room and says how many in its report; one within its budget lets
-//! go of none.
+//! go of none. Outputs made once, which nothing reads again until
+//! something changes, are let go cold after their frame: passed by unrun
+//! while unchanged, made again for a reader that runs, or to be read.
 
 use std::path::PathBuf;
 
@@ -47,4 +49,115 @@ fn a_scene_past_its_budget_says_what_it_let_go() {
     let (gone, ran) = let_go(1 << 20, "narrow");
     assert_eq!(ran, 4);
     assert!(gone > 0, "none let go");
+}
+
+fn opened(budget_words: usize, name: &str, text: &str) -> (Session, PathBuf) {
+    let path = scene(name);
+    std::fs::write(&path, text).unwrap();
+    let mut session = Session::open(&path, None, budget_words);
+    let events = session.sync();
+    assert!(session.graph().is_some(), "{events:?}");
+    session.set_fusion(false);
+    (session, path)
+}
+
+fn first_word(session: &Session) -> f32 {
+    let handle = session.output(None).unwrap();
+    f32::from_bits(session.runtime().host().element(handle, 0).unwrap()[0])
+}
+
+fn names(nodes: &[entelechy_graph::NodeId]) -> Vec<&str> {
+    nodes.iter().map(|node| node.0.as_str()).collect()
+}
+
+#[test]
+fn outputs_made_once_are_let_go_cold_and_passed_by() {
+    let (mut session, path) = opened(1 << 24, "once", SCENE);
+    let context = entelechy_kernel::Context::default();
+    let first = session.evaluate(&context).unwrap();
+    assert_eq!(first.executed.len(), 4);
+    // The chain's three outputs of 400 000 words are made once: let go,
+    // the output kept.
+    let mut cold = session.cold_nodes();
+    cold.sort();
+    assert_eq!(names(&cold), ["a", "b", "c"]);
+    assert!(
+        session.runtime().host().used_words() < 400_000,
+        "{} words held",
+        session.runtime().host().used_words()
+    );
+    // Unchanged, nothing runs again.
+    let second = session.evaluate(&context).unwrap();
+    assert!(second.executed.is_empty(), "{:?}", second.executed);
+    assert_eq!(first_word(&session), 2.0);
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn a_reader_that_runs_has_what_it_reads_made_again() {
+    let (mut session, path) = opened(1 << 24, "reader", SCENE);
+    let context = entelechy_kernel::Context::default();
+    session.evaluate(&context).unwrap();
+    assert_eq!(session.cold_nodes().len(), 3);
+    // The reader's Kernel changes: the chain it reads is made again.
+    std::fs::write(&path, SCENE.replace("return at(a, 0);", "return at(a, 5);")).unwrap();
+    session.sync();
+    let after = session.evaluate(&context).unwrap();
+    assert_eq!(names(&after.executed), ["a", "b", "c", "sum"]);
+    assert_eq!(first_word(&session), 7.0);
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn a_reader_of_the_clock_keeps_what_it_reads() {
+    // `sum` reads the clock and runs each frame: `c`, which it reads,
+    // stays; what only `c`'s makers read is let go.
+    let text = SCENE
+        .replace(
+            "kernel t.sum@1 { requires { field.read; field.write; }",
+            "kernel t.sum@1 { requires { field.read; field.write; time.read; }",
+        )
+        .replace("return at(a, 0);", "return at(a, 0) + time() * 0.0;");
+    let (mut session, path) = opened(1 << 24, "clock", &text);
+    let mut context = entelechy_kernel::Context::default();
+    session.evaluate(&context).unwrap();
+    let mut cold = session.cold_nodes();
+    cold.sort();
+    assert_eq!(names(&cold), ["a", "b"]);
+    context.time = 1.0;
+    let next = session.evaluate(&context).unwrap();
+    assert_eq!(names(&next.executed), ["sum"]);
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn past_its_budget_a_scene_made_once_is_not_made_again_each_frame() {
+    let (mut session, path) = opened(1 << 20, "tight", SCENE);
+    let context = entelechy_kernel::Context::default();
+    let first = session.evaluate(&context).unwrap();
+    assert!(first.let_go > 0, "none let go");
+    // What was let go to make room is passed by while unchanged.
+    for _ in 0..3 {
+        let next = session.evaluate(&context).unwrap();
+        assert!(next.executed.is_empty(), "{:?}", next.executed);
+    }
+    assert_eq!(first_word(&session), 2.0);
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn an_output_let_go_cold_is_made_again_to_be_read() {
+    let (mut session, path) = opened(1 << 24, "read", SCENE);
+    let context = entelechy_kernel::Context::default();
+    session.evaluate(&context).unwrap();
+    let b = entelechy_graph::NodeId("b".to_owned());
+    assert!(session.cached(&b, "result").is_none());
+    session.warm(&b, "result").unwrap();
+    let handle = session.cached(&b, "result").expect("made again");
+    let host = session.runtime().host();
+    assert_eq!(f32::from_bits(host.element(handle, 9).unwrap()[0]), 10.0);
+    // Reading commits nothing: the next frame runs nothing.
+    let next = session.evaluate(&context).unwrap();
+    assert!(next.executed.is_empty(), "{:?}", next.executed);
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }

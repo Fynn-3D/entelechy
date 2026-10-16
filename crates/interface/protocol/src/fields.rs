@@ -127,7 +127,7 @@ pub(crate) fn write(session: &mut Session, request: &Request) -> Result<Json, Js
 
 /// Reads an output or a node's port: pixels, words, or a Field file.
 pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Json> {
-    let graph = session
+    session
         .graph()
         .ok_or_else(|| failure("no scene is loaded"))?;
     let handle = if let Some(node) = request.get("node").and_then(Json::as_str) {
@@ -135,6 +135,13 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
             .get("port")
             .and_then(Json::as_str)
             .unwrap_or("result");
+        // Outputs let go cold are made again to be read.
+        session
+            .warm(&entelechy_graph::NodeId(node.to_owned()), port)
+            .map_err(|e| failure(e.to_string()))?;
+        let graph = session
+            .graph()
+            .ok_or_else(|| failure("no scene is loaded"))?;
         session
             .cached(&entelechy_graph::NodeId(node.to_owned()), port)
             .ok_or_else(|| {

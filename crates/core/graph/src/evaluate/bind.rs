@@ -270,6 +270,25 @@ fn value_slot(
     Ok(slot)
 }
 
+/// What a source is bound to: a Field, or outputs let go cold, of which
+/// the producer, extent and layout are known.
+#[derive(Clone)]
+pub(super) enum Held {
+    Field(Handle),
+    Cold(NodeId, Domain, entelechy_abi::Schema),
+}
+
+/// A node's binding: its invocation and key; or its key alone, with the
+/// producers let go cold it reads, to be made again before it runs; or,
+/// when its domain reads the value of outputs let go cold, those
+/// producers alone. The ready binding is the common one, kept unboxed.
+#[allow(clippy::large_enum_variant)]
+pub(super) enum Bind {
+    Ready(Invocation, CacheKey),
+    Keyed(CacheKey, Vec<NodeId>),
+    Unkeyed(Vec<NodeId>),
+}
+
 impl Evaluator {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn bind(
@@ -281,7 +300,7 @@ impl Evaluator {
         externals: &BTreeMap<String, Handle>,
         context: &Context,
         overrides: &BTreeMap<String, Value>,
-    ) -> Result<(Invocation, CacheKey), EvaluateError> {
+    ) -> Result<Bind, EvaluateError> {
         let manifest = version.manifest();
         let structs = version.module().map_or(&[][..], |module| &module.structs);
         undeclared(node, manifest)?;
@@ -295,7 +314,7 @@ impl Evaluator {
                         node: node.id.clone(),
                         port: input.name.clone(),
                     })?;
-            let (handle, key) = match binding {
+            let (held, key) = match binding {
                 Binding::Now(source) => self.resolve(node, source, externals)?,
                 Binding::Previous {
                     source:
@@ -306,11 +325,12 @@ impl Evaluator {
                     initial,
                     ..
                 } => match self.ledger.committed(&(producer.clone(), port.clone())) {
-                    Some(handle) => (handle, InputKey::State(handle)),
-                    None => {
-                        let (handle, _) = self.resolve(node, initial, externals)?;
-                        (handle, InputKey::State(handle))
-                    }
+                    Some(handle) => (Held::Field(handle), InputKey::State(handle)),
+                    // A first value is held, never let go cold.
+                    None => match self.resolve(node, initial, externals)? {
+                        (Held::Field(handle), _) => (Held::Field(handle), InputKey::State(handle)),
+                        (Held::Cold(producer, ..), _) => return Ok(Bind::Unkeyed(vec![producer])),
+                    },
                 },
                 Binding::Previous { .. } => {
                     return Err(EvaluateError::Graph(GraphError::FeedbackNeedsNode {
@@ -321,10 +341,18 @@ impl Evaluator {
             };
             // The bound resource must have the port's shape and layout,
             // however either is spelled.
-            let bound_shape = runtime.host().domain(handle)?.shape();
-            let bound_schema = runtime.host().schema(handle)?;
-            let message =
-                entelechy_kernel::input_type_fault(&input.ty, bound_shape, Some(bound_schema));
+            let (bound_domain, bound_schema) = match &held {
+                Held::Field(handle) => (
+                    runtime.host().domain(*handle)?,
+                    runtime.host().schema(*handle)?.clone(),
+                ),
+                Held::Cold(_, domain, schema) => (*domain, schema.clone()),
+            };
+            let message = entelechy_kernel::input_type_fault(
+                &input.ty,
+                bound_domain.shape(),
+                Some(&bound_schema),
+            );
             if let Some(message) = message {
                 return Err(EvaluateError::PortKind {
                     node: node.id.clone(),
@@ -332,9 +360,16 @@ impl Evaluator {
                     message,
                 });
             }
-            inputs.push(handle);
+            inputs.push((held, bound_domain));
             input_keys.push(key);
         }
+        let cold: Vec<NodeId> = inputs
+            .iter()
+            .filter_map(|(held, _)| match held {
+                Held::Cold(producer, ..) => Some(producer.clone()),
+                Held::Field(_) => None,
+            })
+            .collect();
         let mut params = Vec::with_capacity(manifest.params.len());
         for param in &manifest.params {
             params.push(param_value(graph, node, param, overrides, structs)?);
@@ -348,7 +383,30 @@ impl Evaluator {
             match (&node.domain, inputs.first()) {
                 (Some(DomainSpec::Literal(domain)), _) => *domain,
                 (Some(DomainSpec::Expr(expr)), _) => {
-                    let read = Self::domain_values(node, manifest, expr, runtime, &inputs)?;
+                    // Values are read from Fields: those let go cold are
+                    // made again first.
+                    let read_cold: Vec<NodeId> = expr
+                        .values_read()
+                        .iter()
+                        .filter_map(|(port, _)| {
+                            let slot = manifest.inputs.iter().position(|i| &i.name == port)?;
+                            match &inputs[slot].0 {
+                                Held::Cold(producer, ..) => Some(producer.clone()),
+                                Held::Field(_) => None,
+                            }
+                        })
+                        .collect();
+                    if !read_cold.is_empty() {
+                        return Ok(Bind::Unkeyed(read_cold));
+                    }
+                    let fields: Vec<Option<Handle>> = inputs
+                        .iter()
+                        .map(|(held, _)| match held {
+                            Held::Field(handle) => Some(*handle),
+                            Held::Cold(..) => None,
+                        })
+                        .collect();
+                    let read = Self::domain_values(node, manifest, expr, runtime, &fields)?;
                     let element =
                         |name: &str, index: u32| read.get(&(name.to_owned(), index)).cloned();
                     let port = |name: &str| {
@@ -356,7 +414,7 @@ impl Evaluator {
                             .inputs
                             .iter()
                             .position(|input| input.name == name)
-                            .and_then(|index| runtime.host().domain(inputs[index]).ok())
+                            .map(|index| inputs[index].1)
                     };
                     let param = |name: &str| {
                         manifest
@@ -372,7 +430,7 @@ impl Evaluator {
                             message: e.message,
                         })?
                 }
-                (None, Some(first)) => runtime.host().domain(*first)?,
+                (None, Some((_, first))) => *first,
                 (None, None) => return Err(EvaluateError::NoDomain(node.id.clone())),
             }
         };
@@ -387,7 +445,17 @@ impl Evaluator {
                 .then_some(context.time.to_bits() ^ context.rate.to_bits().rotate_left(7)),
             input: reads_input.then_some(context.input_fingerprint()),
         };
-        Ok((
+        if !cold.is_empty() {
+            return Ok(Bind::Keyed(key, cold));
+        }
+        let inputs = inputs
+            .into_iter()
+            .map(|(held, _)| match held {
+                Held::Field(handle) => handle,
+                Held::Cold(..) => unreachable!("cold inputs are answered above"),
+            })
+            .collect();
+        Ok(Bind::Ready(
             Invocation {
                 inputs,
                 params,
@@ -406,7 +474,7 @@ impl Evaluator {
         manifest: &entelechy_kernel::Manifest,
         expr: &DomainExpr,
         runtime: &mut Runtime,
-        inputs: &[Handle],
+        inputs: &[Option<Handle>],
     ) -> Result<BTreeMap<(String, u32), Value>, EvaluateError> {
         let mut read = BTreeMap::new();
         for (port, index) in expr.values_read() {
@@ -415,9 +483,10 @@ impl Evaluator {
                 message,
             };
             let slot = value_slot(node, manifest, &port)?;
-            let handle = *inputs
-                .get(slot)
-                .ok_or_else(|| fail(format!("`value({port})`: `{port}` is not a bound input")))?;
+            let handle =
+                inputs.get(slot).copied().flatten().ok_or_else(|| {
+                    fail(format!("`value({port})`: `{port}` is not a bound input"))
+                })?;
             let element = manifest.inputs[slot].ty.element;
             let count = runtime.host().domain(handle)?.count();
             if count > VALUE_MAX_ELEMENTS {
@@ -445,13 +514,13 @@ impl Evaluator {
         Ok(read)
     }
 
-    /// Resolves a `Now` source to a handle and its cache key.
+    /// Resolves a `Now` source to what holds it and its cache key.
     pub(super) fn resolve(
         &self,
         node: &Node,
         source: &Source,
         externals: &BTreeMap<String, Handle>,
-    ) -> Result<(Handle, InputKey), EvaluateError> {
+    ) -> Result<(Held, InputKey), EvaluateError> {
         match source {
             Source::External(name) => {
                 let handle =
@@ -461,22 +530,33 @@ impl Evaluator {
                             node: node.id.clone(),
                             name: name.clone(),
                         })?;
-                Ok((handle, InputKey::External(handle)))
+                Ok((Held::Field(handle), InputKey::External(handle)))
             }
             Source::Node {
                 node: producer,
                 port,
             } => {
+                let unknown = || EvaluateError::UnknownOutput {
+                    node: producer.clone(),
+                    port: port.clone(),
+                    near: None,
+                };
+                // Let go cold: bound by its key, extent and layout.
+                if let Some(cold) = self.ledger.cold(producer) {
+                    let index = cold
+                        .output_names
+                        .iter()
+                        .position(|name| name == port)
+                        .ok_or_else(unknown)?;
+                    let (domain, schema) = cold.laid[index].clone();
+                    return Ok((
+                        Held::Cold(producer.clone(), domain, schema),
+                        InputKey::Node(producer.clone(), index, cold.epoch),
+                    ));
+                }
                 // The producer runs first, so a missing entry means it
                 // never produced this port.
-                let cached =
-                    self.ledger
-                        .entry(producer)
-                        .ok_or_else(|| EvaluateError::UnknownOutput {
-                            node: producer.clone(),
-                            port: port.clone(),
-                            near: None,
-                        })?;
+                let cached = self.ledger.entry(producer).ok_or_else(unknown)?;
                 let index = cached
                     .output_names
                     .iter()
@@ -487,7 +567,7 @@ impl Evaluator {
                         near: None,
                     })?;
                 Ok((
-                    cached.outputs[index],
+                    Held::Field(cached.outputs[index]),
                     InputKey::Node(producer.clone(), index, cached.epoch),
                 ))
             }

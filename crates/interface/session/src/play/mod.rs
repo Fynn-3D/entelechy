@@ -524,6 +524,10 @@ impl Play {
                     self.said
                         .extend(report.refused.iter().map(ToString::to_string));
                 }
+                // A preview let go cold is made again to be shown.
+                if let Some(node) = &self.preview {
+                    let _ = session.warm(node, "result");
+                }
                 let picture = self
                     .preview
                     .as_ref()

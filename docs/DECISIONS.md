@@ -119,8 +119,9 @@ more after the evaluation lets go of the cached outputs no later run of
 the frame reads: those read last before it, and those downstream of a
 node run this frame, which run again when reached. The scene's outputs,
 the state's sources and the pinned stay. A frame of many steps holds
-what its next steps read, not every step it took; a later frame that
-asks for an output let go runs its node again.
+what its next steps read, not every step it took; an output let go keeps
+its key, and a later frame makes it again only for a reader that runs
+(*What is made once is let go once made*).
 
 **Why.** The Host owns memory as it owns work. An element that emits in
 a loop holds as much as its work bound lets it, and that bound is on
@@ -1407,3 +1408,41 @@ count, its ties and `without_ports`
 Held by [the fusion tests](../crates/backends/cpu/tests/fusion.rs) and,
 on the processor, the JIT and the device,
 [the offset tests](../crates/interface/session/tests/offset.rs).
+
+## What is made once is let go once made
+
+A node is settled when its key can change only by a change: it reads no
+clock, no input and no state, its domain reads no window, it runs in its
+turn, and what it reads through `<-` is settled. A settled node's
+outputs of a mebibyte or more, read only by settled nodes, are let go at
+the end of the frame once every reader holds what it made of them. What
+stays of them is what a reader binds by: their key and epoch, and each
+output's extent and layout. A later frame computes each node's key as it
+always does; a node let go whose key is unchanged is passed by unrun, and
+so are its readers, whose keys name its epoch. A reader that runs for any
+other reason (its Kernel, its parameters, another input) first has what
+it reads made again, and what that reads in turn; made under the key it
+was let go under, on a backend that repeats exactly, it keeps its epoch,
+so nothing else it feeds runs. A read of it (`read`, the Player's
+preview, the C interface) makes it again under the last frame's context,
+committing nothing. Outputs let go to make room in the Host are let go
+the same way, so a scene past its budget no longer makes everything again
+each frame. `status` names the nodes let go.
+
+**Why.** The cache held every output it ever made, so a scene paid in
+memory, all its life, for each step of each thing it made once: a rock's
+fields, a terrain's bakes, the joins of a library. Their readers did not
+need them again until something changed upstream, which runs the node
+anyway. Settled is a fact of the graph and the Kernels' declared
+capabilities, not a guess from how often a node ran, so what is let go
+does not depend on timing, and nothing a reader reads every frame is let
+go. The key already names everything an output depends on, and the epoch
+is what readers are keyed by, so keeping the key and epoch is enough to
+pass the chain by and to make it again faithfully.
+
+**Where.** `chill`, `Cold` and `make_room` ([ledger](../crates/core/graph/src/evaluate/ledger.rs)),
+`Bind` and `Held` ([bind](../crates/core/graph/src/evaluate/bind.rs)),
+`chill_made_once`, `warm`, `ready` and `warm_for_reading`
+([evaluator](../crates/core/graph/src/evaluate/mod.rs)), `Session::warm`
+([session](../crates/interface/session/src/session.rs)). Held by
+[the memory tests](../crates/interface/session/tests/memory.rs).

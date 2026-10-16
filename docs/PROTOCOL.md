@@ -71,7 +71,7 @@ through:
 
 | op | fields | answer |
 | --- | --- | --- |
-| `status` |  | backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, loaded (whether a scene is), refused (why not, when not), revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, memory (`used` and `budget`, the Host's bytes), versions (`entelechy`, `api`, `language`, `ir`, `package`) |
+| `status` |  | backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, loaded (whether a scene is), refused (why not, when not), revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, memory (`used` and `budget`, the Host's bytes; `cold`, the nodes whose outputs are let go, made again when read), versions (`entelechy`, `api`, `language`, `ir`, `package`) |
 | `kernels` |  | a list of manifests, each with its generation, which `publish`'s `expect` names |
 | `kernel` | `kernel`?: string, `generation`?: integer | manifest, generation, source, as `publish` takes it |
 | `graph` |  | inputs, params, nodes, outputs, fonts (each font node: id, path, codes, its outputs and the inputs they are in), files (each files node: id, path, paths, its outputs and the inputs they are in) |
@@ -297,9 +297,10 @@ An evaluation's report carries:
   Kernel by Kernel but refused fused, said once: its members run apart
   until one of their Kernels changes;
 - `let_go`, how many nodes had their cached outputs let go to make room
-  in the Host: a later frame that asks for one runs it again, so above
-  zero frame after frame the scene holds more than `--memory` allows
-  (`status` answers `memory`, the bytes held of the budget).
+  in the Host: a later frame passes one by while its key is unchanged and
+  makes it again for a reader that runs, so above zero frame after frame
+  the scene holds more than `--memory` allows (`status` answers `memory`,
+  the bytes held of the budget, and the nodes let go).
 
 A failed evaluation names its `node` when the failure is one node's; a
 failed migration names its `port` and `migration` too. An element that

@@ -761,6 +761,10 @@ pub unsafe extern "C" fn entelechy_node(
     guarded(&mut session, |s| {
         s.clear();
         let id = entelechy_graph::NodeId(node.clone());
+        // Outputs let go cold are made again to be read.
+        if let Err(error) = s.session.warm(&id, &port) {
+            return s.fail(error.to_string());
+        }
         let Some(handle) = s.session.cached(&id, &port) else {
             let why = s.session.why_no_value(&id, &port);
             return s.fail(why);

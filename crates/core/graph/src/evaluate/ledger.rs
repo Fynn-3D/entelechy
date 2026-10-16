@@ -1,5 +1,7 @@
 //! The evaluator's holdings: cached node outputs and committed state, each
-//! counted per handle, so a Field is released when nothing refers to it.
+//! counted per handle, so a Field is released when nothing refers to it;
+//! and the outputs let go cold, of which the key, epoch and layout stay
+//! (see [`Cold`]).
 
 use super::*;
 
@@ -61,6 +63,46 @@ impl Evaluator {
             || self.held_back(handle)
     }
 
+    /// Lets go of a node's cached outputs, keeping what a reader binds by:
+    /// its key and epoch, and each output's extent and layout. A frame
+    /// that finds the key unchanged passes the node by unrun; a reader
+    /// that runs has it made again first ([`Evaluator::warm`]). Answers
+    /// whether it had outputs to let go.
+    pub(super) fn chill(&mut self, id: &NodeId, runtime: &mut Runtime) -> bool {
+        let Some(cached) = self.ledger.cache_take(id) else {
+            return false;
+        };
+        let host = runtime.host();
+        let laid: Option<Vec<(Domain, entelechy_abi::Schema)>> = cached
+            .outputs
+            .iter()
+            .map(|handle| {
+                Some((
+                    host.domain(*handle).ok()?,
+                    host.schema(*handle).ok()?.clone(),
+                ))
+            })
+            .collect();
+        for output in &cached.outputs {
+            if !self.ledger.is_cached(*output) && !self.is_kept(*output) {
+                release(runtime, *output);
+            }
+        }
+        // A handle the Host no longer describes leaves nothing to bind by.
+        if let Some(laid) = laid {
+            self.ledger.cold_put(
+                id.clone(),
+                Cold {
+                    key: cached.key,
+                    output_names: cached.output_names,
+                    epoch: cached.epoch,
+                    laid,
+                },
+            );
+        }
+        true
+    }
+
     pub(super) fn drop_cache(&mut self, id: &NodeId, runtime: &mut Runtime) {
         if let Some(cached) = self.ledger.cache_take(id) {
             for output in cached.outputs {
@@ -79,6 +121,7 @@ impl Evaluator {
         let stale: Vec<NodeId> = self
             .ledger
             .cached_nodes()
+            .chain(self.ledger.cold_nodes())
             .filter(|id| gone_from(id))
             .cloned()
             .collect();
@@ -121,6 +164,8 @@ impl Evaluator {
 #[derive(Default)]
 pub(super) struct Ledger {
     cache: BTreeMap<NodeId, Cached>,
+    /// Nodes whose outputs were let go cold; none of them is in `cache`.
+    cold: BTreeMap<NodeId, Cold>,
     /// How many cached entries hold each handle.
     cached_handles: BTreeMap<Handle, usize>,
     /// State as of the last successful evaluation, by producing node and
@@ -130,7 +175,33 @@ pub(super) struct Ledger {
     committed_handles: BTreeMap<Handle, usize>,
 }
 
+/// What stays of outputs let go cold: the key they were made under, their
+/// names and epoch, and each one's extent and layout, which is all a
+/// reader's key and binding read of them before it runs.
+#[derive(Clone, Debug)]
+pub(super) struct Cold {
+    pub(super) key: CacheKey,
+    pub(super) output_names: Vec<String>,
+    pub(super) epoch: u64,
+    pub(super) laid: Vec<(Domain, entelechy_abi::Schema)>,
+}
+
 impl Ledger {
+    /// A node's outputs let go cold.
+    pub(super) fn cold(&self, id: &NodeId) -> Option<&Cold> {
+        self.cold.get(id)
+    }
+
+    /// The nodes whose outputs are cold.
+    pub(super) fn cold_nodes(&self) -> impl Iterator<Item = &NodeId> {
+        self.cold.keys()
+    }
+
+    fn cold_put(&mut self, id: NodeId, cold: Cold) {
+        self.cache.remove(&id);
+        self.cold.insert(id, cold);
+    }
+
     /// A node's cache entry.
     pub(super) fn entry(&self, id: &NodeId) -> Option<&Cached> {
         self.cache.get(id)
@@ -162,6 +233,7 @@ impl Ledger {
     ) -> (BTreeMap<NodeId, Cached>, BTreeMap<(NodeId, String), Handle>) {
         self.cached_handles.clear();
         self.committed_handles.clear();
+        self.cold.clear();
         (
             std::mem::take(&mut self.cache),
             std::mem::take(&mut self.committed),
@@ -169,8 +241,9 @@ impl Ledger {
     }
 
     /// Puts a node's outputs in the cache, keeping the count; answers what
-    /// was there.
+    /// was there. Outputs it had let go cold are forgotten.
     pub(super) fn cache_put(&mut self, id: NodeId, fresh: Cached) -> Option<Cached> {
+        self.cold.remove(&id);
         for output in &fresh.outputs {
             *self.cached_handles.entry(*output).or_default() += 1;
         }
@@ -181,8 +254,10 @@ impl Ledger {
         gone
     }
 
-    /// Takes a node's entry out of the cache, keeping the count.
+    /// Takes a node's entry out of the cache, keeping the count, and
+    /// forgets any outputs it let go cold.
     pub(super) fn cache_take(&mut self, id: &NodeId) -> Option<Cached> {
+        self.cold.remove(id);
         let gone = self.cache.remove(id);
         if let Some(gone) = &gone {
             forget(&mut self.cached_handles, gone.outputs.iter().copied());
@@ -260,14 +335,15 @@ pub(super) struct Room<'a> {
 }
 
 impl Evaluator {
-    /// Lets go of cached outputs no later run of this frame reads, to make
-    /// room in the Host: those read last before the group running, and
-    /// those of nodes still to be reached downstream of one run this frame
-    /// (`ran`), which run again when reached, and the running node's own,
-    /// which it replaces. A node passed without running, reused or an
-    /// `async` node's last output, is read as it is.
-    /// What `held` names stays. Answers how many nodes
-    /// let go; a later frame that asks for one runs its node again.
+    /// Lets go cold ([`Evaluator::chill`]) cached outputs no later run of
+    /// this frame reads, to make room in the Host: those read last before
+    /// the group running, and those of nodes still to be reached
+    /// downstream of one run this frame (`ran`), which run again when
+    /// reached, and the running node's own, which it replaces. A node
+    /// passed without running, reused or an `async` node's last output, is
+    /// read as it is. What `held` names stays. Answers how many nodes let
+    /// go; a later frame passes one by while its key is unchanged, and
+    /// makes it again for a reader that runs.
     /// [`Evaluator::make_room`], the nodes let go added to `count`.
     pub(super) fn make_room_counted<'n>(
         &mut self,
@@ -310,8 +386,10 @@ impl Evaluator {
             })
             .cloned()
             .collect();
+        // Let go cold: a later frame that finds a key unchanged passes the
+        // node by, and makes it again only for a reader that runs.
         for id in &done {
-            self.drop_cache(id, runtime);
+            self.chill(id, runtime);
         }
         done.len()
     }

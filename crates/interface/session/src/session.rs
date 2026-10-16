@@ -60,6 +60,9 @@ pub struct Session {
     chosen: Option<(PathBuf, Vec<crate::Allowance>)>,
     /// The clipboard: the session's own, or the system's given.
     board: crate::clipboard::Board,
+    /// The context the last frame was evaluated under, which outputs let
+    /// go cold are made again under when read ([`Session::warm`]).
+    last_context: Context,
 }
 
 /// A request's claim on the scene it wrote, from asked to landed. A scene
@@ -147,6 +150,7 @@ impl Session {
             bound: BTreeMap::new(),
             chosen: None,
             board: crate::clipboard::Board::default(),
+            last_context: Context::default(),
         }
     }
 
@@ -1274,6 +1278,37 @@ impl Session {
             .unwrap_or_else(|| (node.clone(), port.to_owned()))
     }
 
+    /// Makes again what `node.port` names when its outputs were let go
+    /// cold ([`entelechy_graph::Evaluator::is_cold`]), under the last
+    /// frame's context, committing nothing; [`Session::cached`] then has
+    /// it.
+    pub fn warm(
+        &mut self,
+        node: &entelechy_graph::NodeId,
+        port: &str,
+    ) -> Result<(), EvaluateError> {
+        let (node, _) = self.producer(node, port);
+        if !self.evaluator.is_cold(&node) {
+            return Ok(());
+        }
+        let graph = self.scene.graph().ok_or_else(no_scene)?;
+        let context = self.last_context;
+        self.evaluator.warm_for_reading(
+            graph,
+            &mut self.runtime,
+            self.inputs.handles(),
+            &context,
+            self.scene.params(),
+            &node,
+        )
+    }
+
+    /// The nodes whose outputs were let go cold
+    /// ([`entelechy_graph::Evaluator::is_cold`]).
+    pub fn cold_nodes(&self) -> Vec<entelechy_graph::NodeId> {
+        self.evaluator.cold_nodes()
+    }
+
     /// The Field last evaluated for what `node.port` names, if any.
     pub fn cached(&self, node: &entelechy_graph::NodeId, port: &str) -> Option<Handle> {
         let (node, port) = self.producer(node, port);
@@ -1437,6 +1472,7 @@ impl Session {
             context.time,
         );
         self.repin();
+        self.last_context = *context;
         let graph = self.scene.graph().ok_or_else(no_scene)?;
         let evaluated = self.evaluator.evaluate(
             graph,
@@ -1515,6 +1551,7 @@ impl Session {
         let mut demand = demand.clone();
         demand.extend(self.fed_sources());
         let demand = &demand;
+        self.last_context = *context;
         let graph = self.scene.graph().ok_or_else(no_scene)?;
         let report = self
             .evaluator

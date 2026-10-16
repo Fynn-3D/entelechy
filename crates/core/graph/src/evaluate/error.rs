@@ -65,6 +65,9 @@ pub enum EvaluateError {
     },
     /// A node has no image inputs and no explicit domain.
     NoDomain(NodeId),
+    /// A node reads outputs let go to make room in the Host, and they were
+    /// let go again as soon as they were made.
+    NoRoomToMakeAgain(NodeId),
     /// The Kernel failed while executing.
     Execution {
         /// The node.
@@ -144,6 +147,7 @@ impl EvaluateError {
             | Self::ParamType { node, .. }
             | Self::UnknownOutput { node, .. }
             | Self::NoDomain(node)
+            | Self::NoRoomToMakeAgain(node)
             | Self::Execution { node, .. }
             | Self::Domain { node, .. }
             | Self::NotState { node, .. }
@@ -206,6 +210,10 @@ impl fmt::Display for EvaluateError {
             Self::UnknownOutput { node, port, near } => {
                 write!(f, "node `{node}` has no output `{port}`{}", suggest(near))
             }
+            Self::NoRoomToMakeAgain(node) => write!(
+                f,
+                "node `{node}` reads outputs let go to make room in the Host, and the Host has no room to make them again; give the scene a larger `--memory`"
+            ),
             Self::NoDomain(node) => write!(
                 f,
                 "node `{node}` has no image inputs; add `domain = vec2(width, height);`"

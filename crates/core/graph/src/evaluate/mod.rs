@@ -15,6 +15,11 @@
 //! evaluation commits atomically at its end, and a failed one commits
 //! nothing.
 //!
+//! Outputs made once, a settled node's read only by settled nodes, are let
+//! go cold once their readers hold what they made of them: their key and
+//! epoch stay, a frame passes them by while the key is unchanged, and a
+//! reader that runs has them made again first.
+//!
 //! Fusion inlines a producer into its one consumer when its single output
 //! is read only through `sample`, over the same domain, and it is not a
 //! graph output, state source or pinned node. The group executes as one
@@ -41,6 +46,7 @@ mod plan;
 mod recall;
 mod state;
 
+use bind::Bind;
 pub use bind::{Bound, binding_fault, borrowed_domain, type_fault};
 pub use error::EvaluateError;
 use ledger::Room;
@@ -241,6 +247,82 @@ struct Running {
     run: Run,
     key: CacheKey,
     output_names: Vec<String>,
+}
+
+/// The smallest outputs let go cold once made ([`Evaluator::chill_made_once`]):
+/// smaller ones cost more to make again than they hold.
+const COLD_LEAST: usize = 1 << 20;
+
+/// What a frame's runs gather, and where it is, for making room.
+struct Frame {
+    executed: Vec<NodeId>,
+    timings: Vec<(NodeId, std::time::Duration)>,
+    clocked: Vec<(NodeId, std::ops::Range<usize>)>,
+    /// Every node run on the frame, in order, with its device status,
+    /// checked before anything commits.
+    checks: Vec<(NodeId, Vec<Box<dyn entelechy_kernel::Check>>)>,
+    placements: Vec<Placed>,
+    let_go: usize,
+    /// The group each node runs in, where each node's outputs are last
+    /// read, and who reads each.
+    runs_at: BTreeMap<NodeId, usize>,
+    last_read: BTreeMap<NodeId, usize>,
+    readers: BTreeMap<NodeId, Vec<NodeId>>,
+    /// What is never let go: the scene's outputs, the state's sources and
+    /// the pinned.
+    held: BTreeSet<NodeId>,
+}
+
+impl Frame {
+    fn new(groups: &[Group], held: BTreeSet<NodeId>) -> Self {
+        let mut last_read: BTreeMap<NodeId, usize> = BTreeMap::new();
+        let mut readers: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+        let mut runs_at: BTreeMap<NodeId, usize> = BTreeMap::new();
+        for (at, group) in groups.iter().enumerate() {
+            runs_at.insert(group.node.id.clone(), at);
+            for binding in group.node.inputs.values() {
+                if let Binding::Now(Source::Node { node, .. }) = binding {
+                    last_read.insert(node.clone(), at);
+                    readers
+                        .entry(node.clone())
+                        .or_default()
+                        .push(group.node.id.clone());
+                }
+            }
+        }
+        Self {
+            executed: Vec::new(),
+            timings: Vec::new(),
+            clocked: Vec::new(),
+            checks: Vec::new(),
+            placements: Vec::new(),
+            let_go: 0,
+            runs_at,
+            last_read,
+            readers,
+            held,
+        }
+    }
+}
+
+/// What a frame evaluates: the graph, its plan, and what it is given.
+struct Scene<'a> {
+    graph: &'a Graph,
+    groups: &'a [Group],
+    externals: &'a BTreeMap<String, Handle>,
+    context: &'a Context,
+    params: &'a BTreeMap<String, Value>,
+}
+
+/// The names of what a group's Kernel outputs.
+fn output_names(group: &Group) -> Vec<String> {
+    group
+        .version
+        .manifest()
+        .outputs
+        .iter()
+        .map(|port| port.name.clone())
+        .collect()
 }
 
 /// One executing unit: a node, a node with producers inlined, or a run
@@ -644,6 +726,49 @@ impl Evaluator {
         .and_then(reported)
     }
 
+    /// Whether `node`'s outputs were let go cold: its key and epoch kept,
+    /// its Fields made again when read ([`Evaluator::warm_for_reading`]).
+    pub fn is_cold(&self, node: &NodeId) -> bool {
+        self.ledger.cold(node).is_some()
+    }
+
+    /// The nodes whose outputs were let go cold.
+    pub fn cold_nodes(&self) -> Vec<NodeId> {
+        self.ledger.cold_nodes().cloned().collect()
+    }
+
+    /// Makes `node`'s outputs again when they were let go cold, for
+    /// reading: a trial of it and what it reads, which commits nothing.
+    pub fn warm_for_reading(
+        &mut self,
+        graph: &Graph,
+        runtime: &mut Runtime,
+        externals: &BTreeMap<String, Handle>,
+        context: &Context,
+        params: &BTreeMap<String, Value>,
+        node: &NodeId,
+    ) -> Result<(), EvaluateError> {
+        if !self.is_cold(node) {
+            return Ok(());
+        }
+        self.recover(runtime);
+        self.confirm(runtime)?;
+        self.trial = true;
+        let demand = BTreeSet::from([node.clone()]);
+        let warmed = self
+            .evaluate_with(
+                graph,
+                runtime,
+                externals,
+                context,
+                params,
+                Demand::For(&demand),
+            )
+            .map(|_| ());
+        self.trial = false;
+        warmed
+    }
+
     /// The unfused invocation `node` would execute with now, resolved as
     /// an evaluation resolves it; valid after an evaluation produced
     /// what the node reads.
@@ -658,8 +783,14 @@ impl Evaluator {
         context: &Context,
         params: &BTreeMap<String, Value>,
     ) -> Result<Invocation, EvaluateError> {
-        self.bind(graph, node, version, runtime, externals, context, params)
-            .map(|(invocation, _)| invocation)
+        match self.bind(graph, node, version, runtime, externals, context, params)? {
+            Bind::Ready(invocation, _) => Ok(invocation),
+            Bind::Keyed(_, cold) | Bind::Unkeyed(cold) => Err(EvaluateError::UnknownOutput {
+                node: cold[0].clone(),
+                port: "result".to_owned(),
+                near: None,
+            }),
+        }
     }
 
     /// The nodes an evaluation under `demand` must run: see
@@ -779,38 +910,24 @@ impl Evaluator {
             for id in stale {
                 self.drop_cache(&id, runtime);
             }
-            let mut executed = Vec::new();
             let mut reused = Vec::new();
             let mut fused = Vec::new();
-            let mut let_go = 0usize;
-            let mut timings = Vec::new();
-            let mut clocked = Vec::new();
-            let mut placements = Vec::new();
-            // Every node run on the frame, in order, with its device
-            // status, checked before anything commits.
-            let mut checks: Vec<(NodeId, Vec<Box<dyn entelechy_kernel::Check>>)> = Vec::new();
             runtime.take_checks();
             runtime.begin_evaluation();
             let mut pending = Vec::new();
-            // Where each node's outputs are last read on this frame, for
-            // making room; what is never let go: the scene's outputs, the
-            // state's sources and the pinned.
-            let mut last_read: BTreeMap<NodeId, usize> = BTreeMap::new();
-            let mut readers: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
-            let mut runs_at: BTreeMap<NodeId, usize> = BTreeMap::new();
-            for (at, group) in groups.iter().enumerate() {
-                runs_at.insert(group.node.id.clone(), at);
-                for binding in group.node.inputs.values() {
-                    if let Binding::Now(Source::Node { node, .. }) = binding {
-                        last_read.insert(node.clone(), at);
-                        readers
-                            .entry(node.clone())
-                            .or_default()
-                            .push(group.node.id.clone());
-                    }
-                }
+            // What is asked for by name is made, though let go cold.
+            let mut held = held_nodes(graph, &self.pinned);
+            if let Demand::For(demand) = demand {
+                held.extend(demand.iter().cloned());
             }
-            let held = held_nodes(graph, &self.pinned);
+            let mut frame = Frame::new(&groups, held);
+            let scene = Scene {
+                graph,
+                groups: &groups,
+                externals,
+                context,
+                params,
+            };
             for (at, group) in groups.iter().enumerate() {
                 let node = &group.node;
                 if needed
@@ -819,7 +936,7 @@ impl Evaluator {
                 {
                     continue;
                 }
-                let (invocation, key) = self.bind(
+                let mut bound = self.bind(
                     graph,
                     node,
                     &group.version,
@@ -828,6 +945,25 @@ impl Evaluator {
                     context,
                     params,
                 )?;
+                // A domain read from outputs let go cold waits for them.
+                while let Bind::Unkeyed(cold) = &bound {
+                    for producer in cold.clone() {
+                        self.warm(&producer, at, &scene, &mut frame, runtime)?;
+                    }
+                    bound = self.bind(
+                        graph,
+                        node,
+                        &group.version,
+                        runtime,
+                        externals,
+                        context,
+                        params,
+                    )?;
+                }
+                let key = match &bound {
+                    Bind::Ready(_, key) | Bind::Keyed(key, _) => key.clone(),
+                    Bind::Unkeyed(_) => unreachable!("waited for above"),
+                };
                 if !group.absorbed.is_empty() {
                     fused.push((node.id.clone(), group.absorbed.clone()));
                 }
@@ -836,6 +972,17 @@ impl Evaluator {
                     .entry(&node.id)
                     .is_some_and(|cached| cached.key == key)
                 {
+                    reused.push(node.id.clone());
+                    continue;
+                }
+                // Let go cold under the same key: passed by unrun, unless
+                // held, which is made again.
+                let cold_epoch = self
+                    .ledger
+                    .cold(&node.id)
+                    .filter(|cold| cold.key == key)
+                    .map(|cold| cold.epoch);
+                if cold_epoch.is_some() && !frame.held.contains(&node.id) {
                     reused.push(node.id.clone());
                     continue;
                 }
@@ -850,20 +997,19 @@ impl Evaluator {
                         continue;
                     }
                     Some(recall::Offer::Rerun(epoch)) => Some(epoch),
-                    None => None,
+                    None => cold_epoch,
                 };
-                let output_names: Vec<String> = group
-                    .version
-                    .manifest()
-                    .outputs
-                    .iter()
-                    .map(|port| port.name.clone())
-                    .collect();
+                // What it reads let go cold is made again before it runs.
+                let (invocation, key) = match bound {
+                    Bind::Ready(invocation, key) => (invocation, key),
+                    _ => self.ready(at, at, &scene, &mut frame, runtime)?,
+                };
                 // A restore's trial runs every node on the frame, leaving
                 // no run in flight.
                 if node.is_async && !self.trial && self.ledger.entry(&node.id).is_some() {
                     // One run at a time; the frame carries the last output.
                     if !self.running.contains_key(&node.id) {
+                        let output_names = output_names(group);
                         let run = runtime.execute_later(&group.version, &invocation).map_err(
                             |error| EvaluateError::Execution {
                                 node: node.id.clone(),
@@ -882,82 +1028,28 @@ impl Evaluator {
                     pending.push(node.id.clone());
                     continue;
                 }
-                // A first run, or one with nothing cached, is on the frame
-                // and drops any run in flight.
-                if let Some(running) = self.running.remove(&node.id) {
-                    runtime.discard_run(running.run);
-                }
-                runtime.take_moved();
-                let started = entelechy_kernel::clock::now();
-                let first_run = runtime.clock_mark();
-                let run = |runtime: &mut Runtime| match group.chain {
-                    Some(chain) => {
-                        runtime.execute_repeated(&group.version, &invocation, group.repeat, chain)
-                    }
-                    None => runtime.execute(&group.version, &invocation),
-                };
-                // A run the Host has no room for runs again once remembered
-                // runs and the outputs this frame has done with are let go;
-                // they are made again when a later frame asks.
-                let outputs = match run(runtime) {
-                    Err(error)
-                        if short_of_room(&error)
-                            && self.forget_runs_for_room(runtime)
-                                + self.make_room_counted(
-                                    &mut let_go,
-                                    Room {
-                                        at,
-                                        running: &node.id,
-                                        runs_at: &runs_at,
-                                        last_read: &last_read,
-                                        readers: &readers,
-                                        held: &held,
-                                    },
-                                    executed.iter(),
-                                    runtime,
-                                )
-                                > 0 =>
-                    {
-                        run(runtime)
-                    }
-                    ran => ran,
-                }
-                .map_err(|error| EvaluateError::Execution {
-                    node: node.id.clone(),
-                    error,
-                })?;
-                // What the device says it took, when it measures; the call's
-                // own time otherwise.
-                let took = runtime
-                    .last_measured()
-                    .unwrap_or_else(|| entelechy_kernel::clock::since(started));
-                timings.push((node.id.clone(), took));
-                clocked.push((node.id.clone(), first_run..runtime.clock_mark()));
-                checks.push((node.id.clone(), runtime.take_checks()));
-                // Where it ran, which a run's size may decide.
-                let placement = runtime
-                    .last_placement()
-                    .cloned()
-                    .unwrap_or_else(|| runtime.placement(&group.version));
-                let moved = runtime.take_moved();
-                placements.push(Placed {
-                    node: node.id.clone(),
-                    backend: placement.backend,
-                    routed: placement.routed,
-                    uploaded: moved.uploaded,
-                    downloaded: moved.downloaded,
-                });
-                // A run made again under a remembered key is the run
-                // remembered only on a backend that repeats exactly; else
-                // its readers find a new epoch and run.
-                match rerun.filter(|_| runtime.last_repeats_exactly()) {
-                    Some(epoch) => {
-                        self.store_as(&node.id, key, outputs, output_names, epoch, runtime);
-                    }
-                    None => self.store(&node.id, key, outputs, output_names, runtime),
-                }
-                executed.push(node.id.clone());
+                self.execute_group(
+                    at,
+                    at,
+                    invocation,
+                    key,
+                    rerun,
+                    &[],
+                    &scene,
+                    &mut frame,
+                    runtime,
+                )?;
             }
+            let Frame {
+                executed,
+                timings,
+                clocked,
+                checks,
+                placements,
+                let_go,
+                held,
+                ..
+            } = frame;
             self.weigh_alike(graph, &executed);
             if matches!(demand, Demand::Read(_)) {
                 self.wait_for_checks(checks, runtime)?;
@@ -1007,11 +1099,13 @@ impl Evaluator {
             } else if self.overlap && matches!(demand, Demand::Every | Demand::Frame) {
                 let committed = self.commit_in_flight(graph, runtime, checks, executed.clone())?;
                 self.remember_frame(executed.iter().chain(&reused), runtime);
+                self.chill_made_once(&groups, &held, runtime);
                 committed
             } else {
                 self.wait_for_checks(checks, runtime)?;
                 let committed = self.commit(graph, runtime)?;
                 self.remember_frame(executed.iter().chain(&reused), runtime);
+                self.chill_made_once(&groups, &held, runtime);
                 committed
             };
             Ok(Some(Report {
@@ -1041,6 +1135,245 @@ impl Evaluator {
                 self.restore_replaced(runtime);
                 Err(error)
             }
+        }
+    }
+
+    /// Binds the group at `at` ready to run: each producer it reads let go
+    /// cold is made again first ([`Evaluator::warm`]), for a reader whose
+    /// turn is `turn`.
+    fn ready(
+        &mut self,
+        at: usize,
+        turn: usize,
+        scene: &Scene<'_>,
+        frame: &mut Frame,
+        runtime: &mut Runtime,
+    ) -> Result<(Invocation, CacheKey), EvaluateError> {
+        let group = &scene.groups[at];
+        // Each round makes at least one producer again; a producer let go
+        // again at once, for want of room, ends it.
+        for _ in 0..=group.node.inputs.len() {
+            match self.bind(
+                scene.graph,
+                &group.node,
+                &group.version,
+                runtime,
+                scene.externals,
+                scene.context,
+                scene.params,
+            )? {
+                Bind::Ready(invocation, key) => return Ok((invocation, key)),
+                Bind::Keyed(_, cold) | Bind::Unkeyed(cold) => {
+                    for producer in cold {
+                        self.warm(&producer, turn, scene, frame, runtime)?;
+                    }
+                }
+            }
+        }
+        Err(EvaluateError::NoRoomToMakeAgain(group.node.id.clone()))
+    }
+
+    /// Makes again a producer let go cold, for a reader that runs at
+    /// `turn`: its own producers let go cold first. Made under the key it
+    /// was let go under, on a backend that repeats exactly, it keeps its
+    /// epoch, and what else reads it stays as it was.
+    fn warm(
+        &mut self,
+        id: &NodeId,
+        turn: usize,
+        scene: &Scene<'_>,
+        frame: &mut Frame,
+        runtime: &mut Runtime,
+    ) -> Result<(), EvaluateError> {
+        if self.ledger.entry(id).is_some() {
+            return Ok(());
+        }
+        let missing = || EvaluateError::UnknownOutput {
+            node: id.clone(),
+            port: "result".to_owned(),
+            near: None,
+        };
+        let cold = self.ledger.cold(id).cloned().ok_or_else(missing)?;
+        let at = *frame.runs_at.get(id).ok_or_else(missing)?;
+        let (invocation, key) = self.ready(at, turn, scene, frame, runtime)?;
+        let rerun = (cold.key == key).then_some(cold.epoch);
+        // What it reads stays while it runs.
+        let reads: Vec<NodeId> = scene.groups[at]
+            .node
+            .inputs
+            .values()
+            .filter_map(|binding| match binding {
+                Binding::Now(Source::Node { node, .. }) => Some(node.clone()),
+                _ => None,
+            })
+            .collect();
+        self.execute_group(
+            at, turn, invocation, key, rerun, &reads, scene, frame, runtime,
+        )
+    }
+
+    /// Runs the group at `at` with `invocation`, on the frame at `turn`
+    /// (its own place, or the reader's it is made again for), and caches
+    /// what it gives: under `rerun`'s epoch when made again under the key
+    /// that epoch was made under, on a backend that repeats exactly.
+    /// Short of room in the Host, remembered runs and the outputs the
+    /// frame is done with are let go and it runs again, `keep` staying.
+    #[allow(clippy::too_many_arguments)]
+    fn execute_group(
+        &mut self,
+        at: usize,
+        turn: usize,
+        invocation: Invocation,
+        key: CacheKey,
+        rerun: Option<u64>,
+        keep: &[NodeId],
+        scene: &Scene<'_>,
+        frame: &mut Frame,
+        runtime: &mut Runtime,
+    ) -> Result<(), EvaluateError> {
+        let group = &scene.groups[at];
+        let node = &group.node;
+        // A first run, or one with nothing cached, is on the frame and
+        // drops any run in flight.
+        if let Some(running) = self.running.remove(&node.id) {
+            runtime.discard_run(running.run);
+        }
+        runtime.take_moved();
+        let started = entelechy_kernel::clock::now();
+        let first_run = runtime.clock_mark();
+        let run = |runtime: &mut Runtime| match group.chain {
+            Some(chain) => {
+                runtime.execute_repeated(&group.version, &invocation, group.repeat, chain)
+            }
+            None => runtime.execute(&group.version, &invocation),
+        };
+        // A run the Host has no room for runs again once remembered runs
+        // and the outputs this frame has done with are let go; they are
+        // made again when a later frame asks.
+        let outputs = match run(runtime) {
+            Err(error) if short_of_room(&error) => {
+                let mut held = frame.held.clone();
+                held.extend(keep.iter().cloned());
+                let made = self.forget_runs_for_room(runtime)
+                    + self.make_room_counted(
+                        &mut frame.let_go,
+                        Room {
+                            at: turn,
+                            running: &node.id,
+                            runs_at: &frame.runs_at,
+                            last_read: &frame.last_read,
+                            readers: &frame.readers,
+                            held: &held,
+                        },
+                        frame.executed.iter(),
+                        runtime,
+                    );
+                if made > 0 { run(runtime) } else { Err(error) }
+            }
+            ran => ran,
+        }
+        .map_err(|error| EvaluateError::Execution {
+            node: node.id.clone(),
+            error,
+        })?;
+        // What the device says it took, when it measures; the call's own
+        // time otherwise.
+        let took = runtime
+            .last_measured()
+            .unwrap_or_else(|| entelechy_kernel::clock::since(started));
+        frame.timings.push((node.id.clone(), took));
+        frame
+            .clocked
+            .push((node.id.clone(), first_run..runtime.clock_mark()));
+        frame.checks.push((node.id.clone(), runtime.take_checks()));
+        // Where it ran, which a run's size may decide.
+        let placement = runtime
+            .last_placement()
+            .cloned()
+            .unwrap_or_else(|| runtime.placement(&group.version));
+        let moved = runtime.take_moved();
+        frame.placements.push(Placed {
+            node: node.id.clone(),
+            backend: placement.backend,
+            routed: placement.routed,
+            uploaded: moved.uploaded,
+            downloaded: moved.downloaded,
+        });
+        // A run made again under a remembered key is the run remembered
+        // only on a backend that repeats exactly; else its readers find a
+        // new epoch and run.
+        let output_names = output_names(group);
+        match rerun.filter(|_| runtime.last_repeats_exactly()) {
+            Some(epoch) => self.store_as(&node.id, key, outputs, output_names, epoch, runtime),
+            None => self.store(&node.id, key, outputs, output_names, runtime),
+        }
+        frame.executed.push(node.id.clone());
+        Ok(())
+    }
+
+    /// Lets go cold, once the frame is done, the outputs made once: a
+    /// settled node's (one that reads no clock, input, window or state,
+    /// runs in its turn, and reads only settled nodes), larger than
+    /// [`COLD_LEAST`], read only by settled nodes that hold what they made
+    /// from them. Nothing reads them again until something upstream, or a
+    /// reader's Kernel or parameters, change; then they are made again
+    /// ([`Evaluator::warm`]). What `held` names stays.
+    fn chill_made_once(
+        &mut self,
+        groups: &[Group],
+        held: &BTreeSet<NodeId>,
+        runtime: &mut Runtime,
+    ) {
+        let at: BTreeMap<&NodeId, usize> = groups
+            .iter()
+            .enumerate()
+            .map(|(at, group)| (&group.node.id, at))
+            .collect();
+        // Groups come producers first.
+        let mut moving = vec![false; groups.len()];
+        let mut readers: BTreeMap<&NodeId, Vec<usize>> = BTreeMap::new();
+        for (index, group) in groups.iter().enumerate() {
+            let requires = &group.manifest().requires;
+            let mut moves = group.node.is_async
+                || requires.contains(Capability::TimeRead)
+                || requires.contains(Capability::InputRead)
+                || matches!(&group.node.domain, Some(DomainSpec::Expr(expr)) if expr.reads_context());
+            for binding in group.node.inputs.values() {
+                match binding {
+                    Binding::Previous { .. } => moves = true,
+                    Binding::Now(Source::Node { node, .. }) => {
+                        moves |= at.get(node).is_some_and(|producer| moving[*producer]);
+                        readers.entry(node).or_default().push(index);
+                    }
+                    Binding::Now(Source::External(_)) => {}
+                }
+            }
+            moving[index] = moves;
+        }
+        let made_once: Vec<NodeId> = groups
+            .iter()
+            .enumerate()
+            .filter(|(index, group)| {
+                let id = &group.node.id;
+                !moving[*index]
+                    && !held.contains(id)
+                    && self
+                        .ledger
+                        .entry(id)
+                        .is_some_and(|cached| outputs_bytes(runtime, &cached.outputs) >= COLD_LEAST)
+                    && readers.get(id).is_some_and(|readers| {
+                        readers.iter().all(|reader| {
+                            let reader = &groups[*reader].node.id;
+                            !moving[at[reader]]
+                                && (self.ledger.entry(reader).is_some()
+                                    || self.ledger.cold(reader).is_some())
+                        })
+                    })
+            })
+            .map(|(_, group)| group.node.id.clone())
+            .collect();
+        for id in made_once {
+            self.chill(&id, runtime);
         }
     }
 
