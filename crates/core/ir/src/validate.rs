@@ -6,20 +6,24 @@
 
 use std::fmt;
 use std::ops::Deref;
+use std::sync::Arc;
 
 use crate::{
     Block, Capability, Combine, Function, Instruction, MAX_LOOP_COUNT, Manifest, Mode, Module, Op,
     Port, PortType, Shape, ShapeIndex, StructDef, Type, UnaryOp, ValueId, schema_of,
 };
 
-/// A module that passed [`validate`].
+/// A module that passed [`validate`]. It is never changed, so its copies
+/// share one module: a cache, the running version and each backend's
+/// preparation hold the same one.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Validated(Module);
+pub struct Validated(Arc<Module>);
 
 impl Validated {
-    /// Gives the module back.
+    /// Gives the module back: this one when nothing else shares it, a copy
+    /// otherwise.
     pub fn into_module(self) -> Module {
-        self.0
+        Arc::try_unwrap(self.0).unwrap_or_else(|shared| (*shared).clone())
     }
 }
 
@@ -345,7 +349,7 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
             "writing an output requires `field.write`".to_owned(),
         ));
     }
-    Ok(Validated(module))
+    Ok(Validated(Arc::new(module)))
 }
 
 /// Whether a type is numbers all the way down: floats and ints, no Bool.
