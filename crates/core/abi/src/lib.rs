@@ -641,6 +641,61 @@ impl Value {
         out
     }
 
+    /// Whether this value is made of `scalars`, in order, a word each: the
+    /// layout a parameter of that type holds. Nothing is gathered to answer.
+    pub fn matches_scalars(&self, scalars: &[Scalar]) -> bool {
+        let mut at = 0;
+        let mut fits = true;
+        self.each_number(&mut |number| {
+            let kind = number.kind();
+            for _ in 0..kind.words() {
+                fits &= scalars.get(at) == Some(&kind);
+                at += 1;
+            }
+        });
+        fits && at == scalars.len()
+    }
+
+    /// Calls `f` with each of this value's numbers, in order, as
+    /// [`Value::numbers`] lists them.
+    fn each_number(&self, f: &mut impl FnMut(Number)) {
+        let mut floats = |v: &[f32]| v.iter().for_each(|x| f(Number::Float(*x)));
+        match self {
+            Self::Vec2(v) => return floats(v),
+            Self::Vec3(v) => return floats(v),
+            Self::Vec4(v) => return floats(v),
+            Self::Mat2(v) => return floats(v),
+            Self::Mat3(v) => return floats(v),
+            Self::Mat4(v) => return floats(v),
+            _ => {}
+        }
+        match self {
+            Self::Float(v) => f(Number::Float(*v)),
+            Self::Int(v) => f(Number::Int(*v)),
+            Self::Bool(v) => f(Number::Bool(*v)),
+            Self::Double(v) => f(Number::Double(*v)),
+            Self::Long(v) => f(Number::Long(*v)),
+            Self::IVec2(v) => v.iter().for_each(|x| f(Number::Int(*x))),
+            Self::IVec3(v) => v.iter().for_each(|x| f(Number::Int(*x))),
+            Self::IVec4(v) => v.iter().for_each(|x| f(Number::Int(*x))),
+            Self::DVec2(v) => v.iter().for_each(|x| f(Number::Double(*x))),
+            Self::DVec3(v) => v.iter().for_each(|x| f(Number::Double(*x))),
+            Self::DVec4(v) => v.iter().for_each(|x| f(Number::Double(*x))),
+            Self::DMat2(v) => v.iter().for_each(|x| f(Number::Double(*x))),
+            Self::DMat3(v) => v.iter().for_each(|x| f(Number::Double(*x))),
+            Self::DMat4(v) => v.iter().for_each(|x| f(Number::Double(*x))),
+            Self::LVec2(v) => v.iter().for_each(|x| f(Number::Long(*x))),
+            Self::LVec3(v) => v.iter().for_each(|x| f(Number::Long(*x))),
+            Self::Record(members) => members.iter().for_each(|member| member.each_number(f)),
+            _ => {
+                // Every other value is a list of numbers of its own.
+                let mut out = Vec::new();
+                self.push_numbers(&mut out);
+                out.into_iter().for_each(f);
+            }
+        }
+    }
+
     fn push_numbers(&self, out: &mut Vec<Number>) {
         let floats =
             |out: &mut Vec<Number>, v: &[f32]| out.extend(v.iter().map(|x| Number::Float(*x)));

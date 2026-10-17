@@ -728,15 +728,20 @@ pub fn check_invocation(
             actual: invocation.inputs.len(),
         });
     }
-    let mut bound = Vec::with_capacity(invocation.inputs.len());
+    // Every input is a live Field before any is held to its port's type,
+    // as `check_input_types` holds them; nothing is gathered.
     for handle in &invocation.inputs {
-        bound.push(scope.bound(*handle)?);
+        scope.bound(*handle)?;
     }
-    let bound: Vec<Option<(Shape, Option<&Schema>)>> = bound
-        .iter()
-        .map(|(shape, schema)| Some((*shape, Some(schema))))
-        .collect();
-    check_input_types(manifest, &bound)?;
+    for (port, handle) in manifest.inputs.iter().zip(&invocation.inputs) {
+        let (shape, schema) = scope.bound(*handle)?;
+        if let Some(message) = input_type_fault(&port.ty, shape, Some(&schema)) {
+            return Err(ExecutionError::InputType {
+                name: port.name.clone(),
+                message,
+            });
+        }
+    }
     if invocation.params.len() != manifest.params.len() {
         return Err(ExecutionError::ParamCount {
             expected: manifest.params.len(),
@@ -744,10 +749,16 @@ pub fn check_invocation(
         });
     }
     // A value is its type's words, scalar for scalar.
-    for (param, value) in manifest.params.iter().zip(&invocation.params) {
-        let wanted =
-            entelechy_ir::schema_of(param.ty, &module.structs).map(|s| s.scalars().to_vec());
-        if wanted.as_deref() != Some(value.scalars().as_slice()) {
+    for ((param, value), wanted) in manifest
+        .params
+        .iter()
+        .zip(&invocation.params)
+        .zip(module.param_scalars())
+    {
+        if !wanted
+            .as_deref()
+            .is_some_and(|wanted| value.matches_scalars(wanted))
+        {
             return Err(ExecutionError::ParamType {
                 name: param.name.clone(),
                 expected: entelechy_ir::type_name(param.ty, &module.structs),

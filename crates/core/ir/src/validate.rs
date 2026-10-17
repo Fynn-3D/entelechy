@@ -8,6 +8,8 @@ use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use crate::Scalar;
+
 use crate::{
     Block, Capability, Combine, Function, Instruction, MAX_LOOP_COUNT, Manifest, Mode, Module, Op,
     Port, PortType, Shape, ShapeIndex, StructDef, Type, UnaryOp, ValueId, schema_of,
@@ -16,10 +18,40 @@ use crate::{
 /// A module that passed [`validate`]. It is never changed, so its copies
 /// share one module: a cache, the running version and each backend's
 /// preparation hold the same one.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Validated(Arc<Module>);
+#[derive(Clone)]
+pub struct Validated(
+    Arc<Module>,
+    Arc<std::sync::OnceLock<Vec<Option<Vec<Scalar>>>>>,
+);
+
+impl fmt::Debug for Validated {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Validated").field(&self.0).finish()
+    }
+}
+
+impl PartialEq for Validated {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
 
 impl Validated {
+    /// The scalars each parameter is made of, in order (`None` for a type
+    /// with no layout): found once, as a run checks its parameters by them.
+    pub fn param_scalars(&self) -> &[Option<Vec<Scalar>>] {
+        self.1.get_or_init(|| {
+            self.0
+                .manifest
+                .params
+                .iter()
+                .map(|param| {
+                    crate::schema_of(param.ty, &self.0.structs).map(|s| s.scalars().to_vec())
+                })
+                .collect()
+        })
+    }
+
     /// Gives the module back: this one when nothing else shares it, a copy
     /// otherwise.
     pub fn into_module(self) -> Module {
@@ -349,7 +381,7 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
             "writing an output requires `field.write`".to_owned(),
         ));
     }
-    Ok(Validated(Arc::new(module)))
+    Ok(Validated(Arc::new(module), Arc::default()))
 }
 
 /// Whether a type is numbers all the way down: floats and ints, no Bool.
