@@ -141,7 +141,7 @@ fn state_at_a_fixed_point_on_the_device_stops_advancing() {
     // that alone, gives the same words, and keeps its Field.
     let second = frame();
     assert_eq!(names(&second.executed), ["kept"]);
-    assert_eq!(names(&second.reused), ["seed", "twice"]);
+    assert_eq!(names(&second.reused.to_vec()), ["seed", "twice"]);
     assert_eq!(second.output, first.output);
     let third = frame();
     assert!(third.executed.is_empty(), "the state is at rest");

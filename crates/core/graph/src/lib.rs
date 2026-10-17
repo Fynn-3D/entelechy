@@ -15,8 +15,8 @@ pub use domain::{Compare, DomainError, DomainExpr, DomainOp, DomainSpec, Require
 pub use entelechy_abi::{Context, Domain, InputState, Value};
 pub use entelechy_ir::KernelId;
 pub use evaluate::{
-    Bound, EvaluateError, Evaluator, Placed, PlanEntry, Refused, Report, binding_fault,
-    borrowed_domain, type_fault,
+    Bound, EvaluateError, Evaluator, Fusions, Placed, PlanEntry, Refused, Report, Reused,
+    binding_fault, borrowed_domain, type_fault,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;

@@ -74,6 +74,94 @@ fn reported(report: Option<Report>) -> Result<Report, EvaluateError> {
     report.ok_or(EvaluateError::Graph(GraphError::NoOutput))
 }
 
+/// The nodes an evaluation reused: those of its plan it reached, in order,
+/// but the ones it ran or left running off the frame. The plan's names are
+/// shared, so a frame that reuses most of a large graph lists them without
+/// copying them.
+#[derive(Clone)]
+pub struct Reused {
+    names: Arc<Vec<NodeId>>,
+    /// Places in `names` not reused, in order.
+    absent: Vec<u32>,
+}
+
+impl Reused {
+    fn new(names: Arc<Vec<NodeId>>, absent: Vec<u32>) -> Self {
+        Self { names, absent }
+    }
+
+    /// How many nodes were reused.
+    pub fn len(&self) -> usize {
+        self.names.len() - self.absent.len()
+    }
+
+    /// Whether none was.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The nodes reused, in evaluation order.
+    pub fn iter(&self) -> impl Iterator<Item = &NodeId> + '_ {
+        let mut absent = self.absent.iter().copied().peekable();
+        self.names.iter().enumerate().filter_map(move |(at, id)| {
+            if absent.peek() == Some(&(at as u32)) {
+                absent.next();
+                None
+            } else {
+                Some(id)
+            }
+        })
+    }
+
+    /// Whether `id` was reused.
+    pub fn contains(&self, id: &NodeId) -> bool {
+        self.iter().any(|node| node == id)
+    }
+
+    /// The nodes reused, as a list of their own.
+    pub fn to_vec(&self) -> Vec<NodeId> {
+        self.iter().cloned().collect()
+    }
+}
+
+impl fmt::Debug for Reused {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+impl PartialEq for Reused {
+    fn eq(&self, other: &Self) -> bool {
+        self.iter().eq(other.iter())
+    }
+}
+
+impl Eq for Reused {}
+
+impl PartialEq<Vec<NodeId>> for Reused {
+    fn eq(&self, other: &Vec<NodeId>) -> bool {
+        self.iter().eq(other.iter())
+    }
+}
+
+/// The groups that ran as one Kernel, each the executing node and the nodes
+/// it absorbed: the plan's, shared, read as a slice.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Fusions(Arc<Vec<(NodeId, Vec<NodeId>)>>);
+
+impl std::ops::Deref for Fusions {
+    type Target = [(NodeId, Vec<NodeId>)];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl PartialEq<Vec<(NodeId, Vec<NodeId>)>> for Fusions {
+    fn eq(&self, other: &Vec<(NodeId, Vec<NodeId>)>) -> bool {
+        *self.0 == *other
+    }
+}
+
 /// What one evaluation did.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Report {
@@ -82,14 +170,14 @@ pub struct Report {
     /// Nodes that executed, in evaluation order.
     pub executed: Vec<NodeId>,
     /// Nodes whose cached outputs were reused.
-    pub reused: Vec<NodeId>,
+    pub reused: Reused,
     /// Sources whose state advanced in this evaluation's commit.
     pub committed: Vec<(NodeId, String)>,
     /// Every declared output by name.
     pub outputs: Vec<(String, Handle)>,
     /// Groups that ran as one Kernel: the executing node and the nodes it
     /// absorbed.
-    pub fused: Vec<(NodeId, Vec<NodeId>)>,
+    pub fused: Fusions,
     /// Each executed node's Kernel time, in evaluation order: the execute
     /// call (a GPU submission), or the device clock under a measured
     /// profile.
@@ -371,10 +459,16 @@ struct Layout {
     /// a scene's output or a state reads ([`Evaluator::weigh_alike`]).
     graph_readers: BTreeMap<NodeId, Vec<NodeId>>,
     kept: BTreeSet<NodeId>,
-    /// The groups each group reads `<-`, by place.
-    deps: Vec<Vec<usize>>,
     /// The nodes fused into others, each once, in order.
     absorbed: Vec<NodeId>,
+    /// The nodes of the groups a frame runs, in order, and each group's
+    /// place among them.
+    names: Arc<Vec<NodeId>>,
+    place: Vec<u32>,
+    /// Each running group that fused others, with them.
+    fused: Arc<Vec<(NodeId, Vec<NodeId>)>>,
+    /// The groups that read each group `<-`, by place.
+    readers_at: Vec<Vec<usize>>,
     /// Whether a group's key may change with nothing it reads `<-`
     /// changing: it reads the clock, input, state or a caller's Field, runs
     /// off the frame, takes its domain from an expression, or reads a node
@@ -456,6 +550,25 @@ impl Layout {
             moving.push(moves);
         }
         let absorbed: BTreeSet<&NodeId> = groups.iter().flat_map(|g| g.absorbed.iter()).collect();
+        let running = |at: usize| runs.as_ref().is_none_or(|runs: &Vec<bool>| runs[at]);
+        let mut names = Vec::new();
+        let mut place = vec![u32::MAX; groups.len()];
+        let mut fused = Vec::new();
+        for (at, group) in groups.iter().enumerate() {
+            if running(at) {
+                place[at] = names.len() as u32;
+                names.push(group.node.id.clone());
+                if !group.absorbed.is_empty() {
+                    fused.push((group.node.id.clone(), group.absorbed.clone()));
+                }
+            }
+        }
+        let mut readers_at = vec![Vec::new(); groups.len()];
+        for (at, reads) in deps.iter().enumerate() {
+            for read in reads {
+                readers_at[*read].push(at);
+            }
+        }
         Self {
             runs_at,
             last_read,
@@ -464,8 +577,11 @@ impl Layout {
             runs,
             graph_readers,
             kept,
-            deps,
             absorbed: absorbed.into_iter().cloned().collect(),
+            names: Arc::new(names),
+            place,
+            fused: Arc::new(fused),
+            readers_at,
             moving,
         }
     }
@@ -473,6 +589,13 @@ impl Layout {
     /// Whether group `at` runs.
     fn runs(&self, at: usize) -> bool {
         self.runs.as_ref().is_none_or(|runs| runs[at])
+    }
+
+    /// Marks the groups reading group `at` to bind: its outputs changed.
+    fn touch_readers(&self, at: usize, dirty: &mut [bool]) {
+        for reader in &self.readers_at[at] {
+            dirty[*reader] = true;
+        }
     }
 }
 
@@ -1192,8 +1315,9 @@ impl Evaluator {
             for id in stale {
                 self.drop_cache(&id, runtime);
             }
-            let mut reused = Vec::new();
-            let mut fused = Vec::new();
+            // Where in the plan's names a group ran or was left running:
+            // every other group it reached was reused.
+            let mut absent: Vec<u32> = Vec::new();
             runtime.take_checks();
             runtime.begin_evaluation();
             let mut pending = Vec::new();
@@ -1219,7 +1343,15 @@ impl Evaluator {
                 Some(last) if lean => last.steady,
                 _ => vec![false; groups.len()],
             };
-            let mut changed = vec![false; groups.len()];
+            // A group binds when it moves, was not left as its key was
+            // found, or reads a group whose outputs changed on this frame.
+            let mut dirty: Vec<bool> = if lean {
+                (0..groups.len())
+                    .map(|at| layout.moving[at] || !steady[at])
+                    .collect()
+            } else {
+                vec![true; groups.len()]
+            };
             let mut frame = Frame::new(layout, asked);
             let scene = Scene {
                 graph,
@@ -1233,15 +1365,7 @@ impl Evaluator {
                 if !frame.layout.runs(at) {
                     continue;
                 }
-                if lean
-                    && steady[at]
-                    && !frame.layout.moving[at]
-                    && frame.layout.deps[at].iter().all(|read| !changed[*read])
-                {
-                    if !group.absorbed.is_empty() {
-                        fused.push((node.id.clone(), group.absorbed.clone()));
-                    }
-                    reused.push(node.id.clone());
+                if lean && !dirty[at] {
                     continue;
                 }
                 let before = self.output_epoch(&node.id);
@@ -1276,16 +1400,12 @@ impl Evaluator {
                     Bind::Ready(_, key) | Bind::Keyed(key, _) => key,
                     Bind::Unkeyed(_) => unreachable!("waited for above"),
                 };
-                if !group.absorbed.is_empty() {
-                    fused.push((node.id.clone(), group.absorbed.clone()));
-                }
                 if self
                     .ledger
                     .entry(&node.id)
                     .is_some_and(|cached| cached.key == *key)
                 {
                     steady[at] = true;
-                    reused.push(node.id.clone());
                     continue;
                 }
                 // Let go cold under the same key: passed by unrun, unless
@@ -1297,7 +1417,6 @@ impl Evaluator {
                     .map(|cold| cold.epoch);
                 if cold_epoch.is_some() && !frame.holds(&node.id) {
                     steady[at] = true;
-                    reused.push(node.id.clone());
                     continue;
                 }
                 // What this frame of the remembered run left under the
@@ -1307,8 +1426,7 @@ impl Evaluator {
                     .flatten()
                 {
                     Some(recall::Offer::Taken) => {
-                        changed[at] = true;
-                        reused.push(node.id.clone());
+                        frame.layout.touch_readers(at, &mut dirty);
                         continue;
                     }
                     Some(recall::Offer::Rerun(epoch)) => Some(epoch),
@@ -1343,7 +1461,8 @@ impl Evaluator {
                             },
                         );
                     }
-                    changed[at] = true;
+                    frame.layout.touch_readers(at, &mut dirty);
+                    absent.push(frame.layout.place[at]);
                     pending.push(node.id.clone());
                     continue;
                 }
@@ -1360,7 +1479,10 @@ impl Evaluator {
                 )?;
                 // Outputs equal to the last, word for word, keep its epoch:
                 // what reads them finds nothing changed.
-                changed[at] = self.output_epoch(&node.id) != before;
+                if self.output_epoch(&node.id) != before {
+                    frame.layout.touch_readers(at, &mut dirty);
+                }
+                absent.push(frame.layout.place[at]);
                 steady[at] = true;
             }
             let Frame {
@@ -1374,6 +1496,8 @@ impl Evaluator {
                 asked,
                 ..
             } = frame;
+            let reused = Reused::new(Arc::clone(&layout.names), absent);
+            let fused = Fusions(Arc::clone(&layout.fused));
             let held: std::borrow::Cow<'_, BTreeSet<NodeId>> = if asked.is_empty() {
                 std::borrow::Cow::Borrowed(&layout.held)
             } else {
@@ -1427,13 +1551,13 @@ impl Evaluator {
                 Vec::new()
             } else if self.overlap && matches!(demand, Demand::Every | Demand::Frame) {
                 let committed = self.commit_in_flight(graph, runtime, checks, executed.clone())?;
-                self.remember_frame(executed.iter().chain(&reused), runtime);
+                self.remember_frame(executed.iter().chain(reused.iter()), runtime);
                 self.chill_made_once(&groups, &held, runtime);
                 committed
             } else {
                 self.wait_for_checks(checks, runtime)?;
                 let committed = self.commit(graph, runtime)?;
-                self.remember_frame(executed.iter().chain(&reused), runtime);
+                self.remember_frame(executed.iter().chain(reused.iter()), runtime);
                 self.chill_made_once(&groups, &held, runtime);
                 committed
             };
