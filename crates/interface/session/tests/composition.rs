@@ -2861,3 +2861,62 @@ output result <- field.result;",
     assert_eq!(names(&field.new_state), ["fight", "world"]);
     assert!(field.committed.is_empty());
 }
+
+/// A frame passes by unbound what reads nothing that changed, and runs
+/// what reads a changed output: a clock-reading source and the chain
+/// after it, frame after frame.
+#[test]
+fn a_frame_runs_what_reads_a_changed_output_and_passes_the_rest_by() {
+    const SECOND: &str = "kernel t.second@1 { requires { field.write; time.read; } output result: Rows<Float>; compute { return floor(time()); } }";
+    const TWICE: &str = "kernel t.twice@1 { requires { field.read; field.write; } input a: Rows<Float>; output result: Rows<Float>; compute { return sample(a) * 2.0; } }";
+    // Each frame: what ran, what was passed by, and the output's first value.
+    fn frame(
+        evaluator: &mut Evaluator,
+        runtime: &mut Runtime,
+        graph: &Graph,
+        time: f64,
+    ) -> (entelechy_graph::Report, f32) {
+        let report = evaluator
+            .evaluate(
+                graph,
+                runtime,
+                &BTreeMap::new(),
+                &at(time),
+                &BTreeMap::new(),
+            )
+            .unwrap();
+        let value = f32::from_bits(runtime.host().element(report.output, 0).unwrap()[0]);
+        (report, value)
+    }
+    let graph = entelechy_scene::parse(
+        "node clock: t.second@1 { domain = 4; }
+node once: t.twice@1 { a <- clock.result; }
+node twice: t.twice@1 { a <- once.result; }
+output result <- twice.result;",
+    )
+    .unwrap();
+    let mut runtime = cpu(1024);
+    load(&mut runtime, SECOND);
+    load(&mut runtime, TWICE);
+    let mut evaluator = Evaluator::new();
+    evaluator.set_fusion(false);
+    let (first, _) = frame(&mut evaluator, &mut runtime, &graph, 0.0);
+    assert_eq!(first.executed, ids(&["clock", "once", "twice"]));
+    let (same, _) = frame(&mut evaluator, &mut runtime, &graph, 0.0);
+    assert!(same.executed.is_empty(), "{same:?}");
+    assert_eq!(same.reused, ids(&["clock", "once", "twice"]));
+    // The clock's key moves; what it gives does not, or does.
+    let _ = frame(&mut evaluator, &mut runtime, &graph, 0.5);
+    let (later, value) = frame(&mut evaluator, &mut runtime, &graph, 1.0);
+    assert!(
+        later.executed.contains(&NodeId("twice".into())),
+        "{later:?}"
+    );
+    assert_eq!(value, 4.0);
+    let (still, value) = frame(&mut evaluator, &mut runtime, &graph, 1.0);
+    assert!(still.executed.is_empty(), "{still:?}");
+    assert_eq!(value, 4.0);
+    let (next, value) = frame(&mut evaluator, &mut runtime, &graph, 2.0);
+    assert_eq!(next.executed, ids(&["clock", "once", "twice"]));
+    assert_eq!(value, 8.0);
+}

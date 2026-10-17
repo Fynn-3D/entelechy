@@ -159,6 +159,11 @@ impl Evaluator {
 
     /// Forgets every remembered run when `graph` is not the one they were
     /// remembered for.
+    /// Whether this evaluation is a frame of a named run.
+    pub(super) fn recalling(&self) -> bool {
+        self.recalled.current.is_some()
+    }
+
     pub(super) fn recall_for(&mut self, graph: &Graph, runtime: &mut Runtime) {
         if self.recalled.current.is_none() && self.recalled.runs.is_empty() {
             return;

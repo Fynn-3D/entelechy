@@ -176,6 +176,9 @@ pub(super) struct Ledger {
     committed: BTreeMap<(NodeId, String), Handle>,
     /// How many committed ports hold each handle.
     committed_handles: BTreeMap<Handle, usize>,
+    /// Moved by every change to the cache, its cold outputs or the
+    /// committed state.
+    version: u64,
 }
 
 /// What stays of outputs let go cold: the key they were made under, their
@@ -201,6 +204,7 @@ impl Ledger {
     }
 
     fn cold_put(&mut self, id: NodeId, cold: Cold) {
+        self.version += 1;
         self.cache.remove(&id);
         self.cold.insert(id, cold);
     }
@@ -225,6 +229,11 @@ impl Ledger {
         self.committed.iter().map(|(key, handle)| (key, *handle))
     }
 
+    /// What every change to the ledger moves.
+    pub(super) fn version(&self) -> u64 {
+        self.version
+    }
+
     /// How many cache entries and committed ports there are.
     pub(super) fn sizes(&self) -> (usize, usize) {
         (self.cache.len(), self.committed.len())
@@ -234,6 +243,7 @@ impl Ledger {
     pub(super) fn take_all(
         &mut self,
     ) -> (BTreeMap<NodeId, Cached>, BTreeMap<(NodeId, String), Handle>) {
+        self.version += 1;
         self.cached_handles.clear();
         self.committed_handles.clear();
         self.cold.clear();
@@ -246,6 +256,7 @@ impl Ledger {
     /// Puts a node's outputs in the cache, keeping the count; answers what
     /// was there. Outputs it had let go cold are forgotten.
     pub(super) fn cache_put(&mut self, id: NodeId, fresh: Cached) -> Option<Cached> {
+        self.version += 1;
         self.cold.remove(&id);
         for output in &fresh.outputs {
             *self.cached_handles.entry(*output).or_default() += 1;
@@ -260,6 +271,7 @@ impl Ledger {
     /// Takes a node's entry out of the cache, keeping the count, and
     /// forgets any outputs it let go cold.
     pub(super) fn cache_take(&mut self, id: &NodeId) -> Option<Cached> {
+        self.version += 1;
         self.cold.remove(id);
         let gone = self.cache.remove(id);
         if let Some(gone) = &gone {
@@ -270,6 +282,7 @@ impl Ledger {
 
     /// Commits a port's state, keeping the count; answers what was there.
     pub(super) fn commit_put(&mut self, key: (NodeId, String), handle: Handle) -> Option<Handle> {
+        self.version += 1;
         *self.committed_handles.entry(handle).or_default() += 1;
         let gone = self.committed.insert(key, handle);
         if let Some(gone) = gone {
@@ -280,6 +293,7 @@ impl Ledger {
 
     /// Takes a port's committed state, keeping the count.
     pub(super) fn commit_take(&mut self, key: &(NodeId, String)) -> Option<Handle> {
+        self.version += 1;
         let gone = self.committed.remove(key);
         if let Some(gone) = gone {
             forget(&mut self.committed_handles, std::iter::once(gone));

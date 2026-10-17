@@ -369,6 +369,13 @@ struct Layout {
     /// a scene's output or a state reads ([`Evaluator::weigh_alike`]).
     graph_readers: BTreeMap<NodeId, Vec<NodeId>>,
     kept: BTreeSet<NodeId>,
+    /// The groups each group reads `<-`, by place.
+    deps: Vec<Vec<usize>>,
+    /// Whether a group's key may change with nothing it reads `<-`
+    /// changing: it reads the clock, input, state or a caller's Field, runs
+    /// off the frame, takes its domain from an expression, or reads a node
+    /// the plan does not run.
+    moving: Vec<bool>,
 }
 
 impl Layout {
@@ -423,6 +430,27 @@ impl Layout {
                 }
             }
         }
+        let mut deps = Vec::with_capacity(groups.len());
+        let mut moving = Vec::with_capacity(groups.len());
+        for group in groups {
+            let requires = &group.manifest().requires;
+            let mut moves = group.node.is_async
+                || requires.contains(Capability::TimeRead)
+                || requires.contains(Capability::InputRead)
+                || matches!(&group.node.domain, Some(DomainSpec::Expr(_)));
+            let mut reads = Vec::new();
+            for binding in group.node.inputs.values() {
+                match binding {
+                    Binding::Now(Source::Node { node, .. }) => match runs_at.get(node) {
+                        Some(at) => reads.push(*at),
+                        None => moves = true,
+                    },
+                    Binding::Now(Source::External(_)) | Binding::Previous { .. } => moves = true,
+                }
+            }
+            deps.push(reads);
+            moving.push(moves);
+        }
         Self {
             runs_at,
             last_read,
@@ -431,6 +459,8 @@ impl Layout {
             runs,
             graph_readers,
             kept,
+            deps,
+            moving,
         }
     }
 
@@ -438,6 +468,29 @@ impl Layout {
     fn runs(&self, at: usize) -> bool {
         self.runs.as_ref().is_none_or(|runs| runs[at])
     }
+}
+
+impl Evaluator {
+    /// The epoch of `id`'s outputs, cached or let go cold.
+    fn output_epoch(&self, id: &NodeId) -> Option<u64> {
+        self.ledger
+            .entry(id)
+            .map(|cached| cached.epoch)
+            .or_else(|| self.ledger.cold(id).map(|cold| cold.epoch))
+    }
+}
+
+/// What a frame of the graph left that the next may lean on: its plan's
+/// layout, the ledger as the frame left it, the parameters and Fields it was
+/// given, and which groups' entries are as their keys were found. A group
+/// that does not move ([`Layout::moving`]) and none of whose reads changed
+/// is passed by unbound while all of it holds.
+struct Quiet {
+    layout: Arc<Layout>,
+    ledger: u64,
+    params: BTreeMap<String, Value>,
+    externals: BTreeMap<String, Handle>,
+    steady: Vec<bool>,
 }
 
 /// A plan's layout, with the plan and the reach it was found for.
@@ -590,6 +643,8 @@ pub struct Evaluator {
     /// The layout of the last plan run, with the plan and the reach it
     /// was found for.
     layout: Option<LayoutFor>,
+    /// What the last frame left for the next to lean on.
+    quiet: Option<Quiet>,
     /// Whether what left the graph in `shape` is let go: nodes leave only
     /// with a changed graph, and a pin, a restore or a reset may leave
     /// something to let go.
@@ -1128,6 +1183,24 @@ impl Evaluator {
                 _ => BTreeSet::new(),
             };
             let layout = self.layout_of(graph, &groups, needed.as_ref());
+            // A frame leans on the last when nothing it was made from moved
+            // but the clock and input: the same plan, ledger, parameters and
+            // Fields. Then a group that does not move, none of whose reads
+            // changed, keeps its entry unbound.
+            let leans = matches!(demand, Demand::Frame) && !self.trial && !self.recalling();
+            let last = if leans { self.quiet.take() } else { None };
+            let ledger_now = self.ledger.version();
+            let mut lean = last.as_ref().is_some_and(|last| {
+                Arc::ptr_eq(&last.layout, &layout)
+                    && last.ledger == ledger_now
+                    && last.params == *params
+                    && last.externals == *externals
+            });
+            let mut steady = match last {
+                Some(last) if lean => last.steady,
+                _ => vec![false; groups.len()],
+            };
+            let mut changed = vec![false; groups.len()];
             let mut frame = Frame::new(layout, asked);
             let scene = Scene {
                 graph,
@@ -1141,6 +1214,18 @@ impl Evaluator {
                 if !frame.layout.runs(at) {
                     continue;
                 }
+                if lean
+                    && steady[at]
+                    && !frame.layout.moving[at]
+                    && frame.layout.deps[at].iter().all(|read| !changed[*read])
+                {
+                    if !group.absorbed.is_empty() {
+                        fused.push((node.id.clone(), group.absorbed.clone()));
+                    }
+                    reused.push(node.id.clone());
+                    continue;
+                }
+                let before = self.output_epoch(&node.id);
                 let mut bound = self.bind(
                     graph,
                     node,
@@ -1152,6 +1237,9 @@ impl Evaluator {
                 )?;
                 // A domain read from outputs let go cold waits for them.
                 while let Bind::Unkeyed(cold) = &bound {
+                    // What is made again may take a new epoch: the rest of
+                    // the frame binds every group.
+                    lean = false;
                     for producer in cold.clone() {
                         self.warm(&producer, at, &scene, &mut frame, runtime)?;
                     }
@@ -1177,6 +1265,7 @@ impl Evaluator {
                     .entry(&node.id)
                     .is_some_and(|cached| cached.key == *key)
                 {
+                    steady[at] = true;
                     reused.push(node.id.clone());
                     continue;
                 }
@@ -1188,6 +1277,7 @@ impl Evaluator {
                     .filter(|cold| cold.key == *key)
                     .map(|cold| cold.epoch);
                 if cold_epoch.is_some() && !frame.holds(&node.id) {
+                    steady[at] = true;
                     reused.push(node.id.clone());
                     continue;
                 }
@@ -1198,6 +1288,7 @@ impl Evaluator {
                     .flatten()
                 {
                     Some(recall::Offer::Taken) => {
+                        changed[at] = true;
                         reused.push(node.id.clone());
                         continue;
                     }
@@ -1207,7 +1298,10 @@ impl Evaluator {
                 // What it reads let go cold is made again before it runs.
                 let (invocation, key) = match bound {
                     Bind::Ready(invocation, key) => (invocation, key),
-                    _ => self.ready(at, at, &scene, &mut frame, runtime)?,
+                    _ => {
+                        lean = false;
+                        self.ready(at, at, &scene, &mut frame, runtime)?
+                    }
                 };
                 // A restore's trial runs every node on the frame, leaving
                 // no run in flight.
@@ -1230,6 +1324,7 @@ impl Evaluator {
                             },
                         );
                     }
+                    changed[at] = true;
                     pending.push(node.id.clone());
                     continue;
                 }
@@ -1244,6 +1339,10 @@ impl Evaluator {
                     &mut frame,
                     runtime,
                 )?;
+                // Outputs equal to the last, word for word, keep its epoch:
+                // what reads them finds nothing changed.
+                changed[at] = self.output_epoch(&node.id) != before;
+                steady[at] = true;
             }
             let Frame {
                 executed,
@@ -1319,6 +1418,15 @@ impl Evaluator {
                 self.chill_made_once(&groups, &held, runtime);
                 committed
             };
+            if leans {
+                self.quiet = Some(Quiet {
+                    layout: Arc::clone(&layout),
+                    ledger: self.ledger.version(),
+                    params: params.clone(),
+                    externals: externals.clone(),
+                    steady,
+                });
+            }
             Ok(Some(Report {
                 output,
                 executed,
