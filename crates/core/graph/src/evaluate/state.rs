@@ -287,36 +287,31 @@ impl Evaluator {
     > {
         let mut advanced = Vec::new();
         let mut replaced = Vec::new();
-        // A set for the membership test; the list keeps binding order
-        // for the answer.
-        let mut already: BTreeSet<(NodeId, String)> = BTreeSet::new();
         // Every port's new state is found before any commits, so a
         // missing one fails the commit whole.
+        let keys = self.state_keys.take().unwrap_or_else(|| state_keys(graph));
         let mut staged = Vec::new();
-        for node in &graph.nodes {
-            for binding in node.inputs.values() {
-                let Binding::Previous {
-                    source: Source::Node { node, port },
-                    ..
-                } = binding
-                else {
-                    continue;
-                };
-                let key = (node.clone(), port.clone());
-                // A run off the frame keeps its state until it lands.
-                if already.contains(&key) || self.running.contains_key(node) {
-                    continue;
-                }
-                let current =
-                    self.cached(node, port)
-                        .ok_or_else(|| EvaluateError::UnknownOutput {
-                            node: node.clone(),
-                            port: port.clone(),
-                            near: None,
-                        })?;
-                already.insert(key.clone());
-                staged.push((key, current));
+        let mut missing = None;
+        for (node, port) in &keys {
+            // A run off the frame keeps its state until it lands.
+            if self.running.contains_key(node) {
+                continue;
             }
+            match self.cached(node, port) {
+                Some(current) => staged.push(((node.clone(), port.clone()), current)),
+                None => {
+                    missing = Some(EvaluateError::UnknownOutput {
+                        node: node.clone(),
+                        port: port.clone(),
+                        near: None,
+                    });
+                    break;
+                }
+            }
+        }
+        self.state_keys = Some(keys);
+        if let Some(missing) = missing {
+            return Err(missing);
         }
         for (key, current) in staged {
             let previous = self.ledger.commit_put(key.clone(), current);
@@ -519,4 +514,26 @@ fn downstream_of_state(graph: &Graph, node: &NodeId, port: &str) -> BTreeSet<Nod
         }
     }
     reached
+}
+
+/// The ports holding state in `graph`, each once, in binding order: the
+/// order a commit answers in.
+fn state_keys(graph: &Graph) -> Vec<(NodeId, String)> {
+    let mut already: BTreeSet<(NodeId, String)> = BTreeSet::new();
+    let mut keys = Vec::new();
+    for node in &graph.nodes {
+        for binding in node.inputs.values() {
+            if let Binding::Previous {
+                source: Source::Node { node, port },
+                ..
+            } = binding
+            {
+                let key = (node.clone(), port.clone());
+                if already.insert(key.clone()) {
+                    keys.push(key);
+                }
+            }
+        }
+    }
+    keys
 }

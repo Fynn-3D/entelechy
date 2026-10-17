@@ -35,6 +35,7 @@ impl Evaluator {
         self.last_plan = None;
         self.planned_from = None;
         self.state_ports = None;
+        self.state_keys = None;
         self.frame_needed = None;
         self.pruned = false;
         let order = Arc::new(graph.order()?);

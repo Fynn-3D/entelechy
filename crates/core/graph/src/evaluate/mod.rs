@@ -373,6 +373,8 @@ struct Layout {
     kept: BTreeSet<NodeId>,
     /// The groups each group reads `<-`, by place.
     deps: Vec<Vec<usize>>,
+    /// The nodes fused into others, each once, in order.
+    absorbed: Vec<NodeId>,
     /// Whether a group's key may change with nothing it reads `<-`
     /// changing: it reads the clock, input, state or a caller's Field, runs
     /// off the frame, takes its domain from an expression, or reads a node
@@ -453,6 +455,7 @@ impl Layout {
             deps.push(reads);
             moving.push(moves);
         }
+        let absorbed: BTreeSet<&NodeId> = groups.iter().flat_map(|g| g.absorbed.iter()).collect();
         Self {
             runs_at,
             last_read,
@@ -462,6 +465,7 @@ impl Layout {
             graph_readers,
             kept,
             deps,
+            absorbed: absorbed.into_iter().cloned().collect(),
             moving,
         }
     }
@@ -644,6 +648,8 @@ pub struct Evaluator {
     /// The ports holding state in the graph in `shape`, with the nodes and
     /// ports they hold.
     state_ports: Option<Vec<((NodeId, String), String)>>,
+    /// The ports holding state in the graph in `shape`, in binding order.
+    state_keys: Option<Vec<(NodeId, String)>>,
     /// What a frame of the graph in `shape` reads, and the pins it was
     /// found under.
     frame_needed: Option<(BTreeSet<NodeId>, Arc<BTreeSet<NodeId>>)>,
@@ -1175,13 +1181,13 @@ impl Evaluator {
         // From here to the commit, a failure leaves state as it was: a
         // migration's replaced state is put back.
         let evaluated = (|| -> Result<Option<Report>, EvaluateError> {
+            let layout = self.layout_of(graph, &groups, needed.as_ref());
             // Absorbed nodes release their cached outputs.
-            let absorbed: BTreeSet<&NodeId> =
-                groups.iter().flat_map(|g| g.absorbed.iter()).collect();
-            let stale: Vec<NodeId> = absorbed
+            let stale: Vec<NodeId> = layout
+                .absorbed
                 .iter()
                 .filter(|id| self.ledger.entry(id).is_some())
-                .map(|id| (*id).clone())
+                .cloned()
                 .collect();
             for id in stale {
                 self.drop_cache(&id, runtime);
@@ -1196,7 +1202,6 @@ impl Evaluator {
                 Demand::For(demand) => demand.clone(),
                 _ => BTreeSet::new(),
             };
-            let layout = self.layout_of(graph, &groups, needed.as_ref());
             // A frame leans on the last when nothing it was made from moved
             // but the clock and input: the same plan, ledger, parameters and
             // Fields. Then a group that does not move, none of whose reads
