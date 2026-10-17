@@ -24,9 +24,12 @@ fn tau() -> Float { return 6.2831853; }
 /// A voice with nothing to play.
 fn quiet() -> Cue { return Cue { kind: 0, param: 0, start: 0l, pan: 0.0, gain: 0.0, head: 0 }; }
 
-/// White noise, -1 to 1, at sample `n` (its low 31 bits: the noise
-/// repeats every half day of samples).
-fn white(n: Long, s: Int) -> Float { return hash1(int(n & 2147483647l), s) * 2.0 - 1.0; }
+/// Sample `n`'s low 31 bits, an Int a hash takes: what is made from them
+/// repeats every half day of samples.
+fn low_bits(n: Long) -> Int { return int(n & 2147483647l); }
+
+/// White noise, -1 to 1, at sample `n`.
+fn white(n: Long, s: Int) -> Float { return hash1(low_bits(n), s) * 2.0 - 1.0; }
 
 /// Noise smoothed between random values `x` apart: its pitch rises with
 /// how fast x runs.
