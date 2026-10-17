@@ -994,7 +994,7 @@ impl Runtime {
         Preparer {
             backend: Arc::clone(&self.backend),
             ordered: self.ordered.clone(),
-            grants: self.grants.clone(),
+            grants: self.grants,
         }
     }
 

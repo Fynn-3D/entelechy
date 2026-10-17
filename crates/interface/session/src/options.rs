@@ -162,7 +162,7 @@ impl SessionOptions {
     pub fn open_over(&self, runtime: Runtime) -> Result<Session, String> {
         let mut runtime = runtime;
         if let Some(grants) = &self.grants {
-            runtime.set_grants(grants.clone());
+            runtime.set_grants(grants);
         }
         let mut session = Session::open_in(
             self.store(),

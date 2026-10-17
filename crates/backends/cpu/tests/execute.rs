@@ -450,7 +450,7 @@ fn fields_carry_struct_elements_with_exact_integers() {
     let fields: Capabilities = [Capability::FieldRead, Capability::FieldWrite]
         .into_iter()
         .collect();
-    let mut scope = Scope::new(&mut host, fields.clone());
+    let mut scope = Scope::new(&mut host, fields);
     let seeded = CpuBackend.execute(&seed, &invocation, &mut scope).unwrap()[0];
     assert_eq!(host.schema(seeded).unwrap().to_string(), "f,f,i,b");
     assert_eq!(

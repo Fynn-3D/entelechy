@@ -604,7 +604,7 @@ fn fuse_links(
         let shape = producer_manifest.outputs[links[0].1 as usize].shape();
         extent_pair(&mut params, prefix, shape)
     });
-    let mut requires: Capabilities = consumer_manifest.requires.clone();
+    let mut requires: Capabilities = consumer_manifest.requires;
     for capability in producer_manifest.requires.iter() {
         requires.insert(capability);
     }

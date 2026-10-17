@@ -316,7 +316,7 @@ fn run_on(
         .and_then(|ordered| Some((ordered, version.on_ordered(ordered)?)));
     let (backend, prepared) = off.unwrap_or((main, prepared.as_ref()));
     let outputs = {
-        let mut scope = Scope::new(host, granted.clone());
+        let mut scope = Scope::new(host, granted);
         backend.execute(prepared, run, invocation, &mut scope)
     };
     // The main backend could not build it as this run needed it: the run is
