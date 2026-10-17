@@ -278,7 +278,6 @@ fn summed(
         .prepare(&module)
         .map_err(entelechy_rules::ExecutionError::Device)?;
     let outputs = backend.execute(prepared.as_ref(), &module, &invocation, &mut scope)?;
-    drop(scope);
     // What stays on the device is brought home as the Host keeps it.
     match host.resident(outputs[0]).unwrap() {
         Some(device) => {
