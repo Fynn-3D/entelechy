@@ -39,7 +39,7 @@ pub(crate) struct Scene {
     structs: Vec<entelechy_language::StructDecl>,
     types: Vec<entelechy_language::TypeAlias>,
     functions: Vec<entelechy_language::FnDecl>,
-    graph: Option<Graph>,
+    graph: Option<Arc<Graph>>,
     /// The lowered document's file inputs and outputs, as the caller's
     /// overrides place them; and as the document writes them.
     files: entelechy_scene::Files,
@@ -75,7 +75,7 @@ pub(crate) struct Kept {
     uses: Vec<(PathBuf, bool)>,
     sub_graphs: BTreeMap<PathBuf, Option<Stamp>>,
     declared: Declared,
-    graph: Option<Graph>,
+    graph: Option<Arc<Graph>>,
     files: entelechy_scene::Files,
     written: entelechy_scene::Files,
     bound: Vec<(String, PathBuf)>,
@@ -232,6 +232,12 @@ impl Scene {
     }
 
     pub(crate) fn graph(&self) -> Option<&Graph> {
+        self.graph.as_deref()
+    }
+
+    /// The running graph, shared: the evaluator knows it unchanged while it
+    /// holds it.
+    pub(crate) fn shared_graph(&self) -> Option<&Arc<Graph>> {
         self.graph.as_ref()
     }
 
@@ -245,7 +251,7 @@ impl Scene {
         self.staged
             .as_ref()
             .map(|staged| &staged.graph)
-            .or(self.graph.as_ref())
+            .or(self.graph.as_deref())
     }
 
     /// The param `name` a loaded scene declares; one it does not is
@@ -740,7 +746,7 @@ impl Scene {
                 let graph = staged.graph;
                 self.params
                     .retain(|name, _| graph.params.iter().any(|p| &p.name == name));
-                self.graph = Some(graph);
+                self.graph = Some(Arc::new(graph));
                 self.text = Some(staged.text);
                 self.files = staged.files;
                 self.written = staged.written;

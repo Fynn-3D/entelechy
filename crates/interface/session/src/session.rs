@@ -1473,7 +1473,7 @@ impl Session {
         );
         self.repin();
         self.last_context = *context;
-        let graph = self.scene.graph().ok_or_else(no_scene)?;
+        let graph = self.scene.shared_graph().ok_or_else(no_scene)?;
         let evaluated = self.evaluator.evaluate(
             graph,
             &mut self.runtime,
@@ -1673,7 +1673,7 @@ impl Session {
     /// What would execute right now, in order, with fusion applied.
     pub fn plan(&mut self) -> Result<Vec<entelechy_graph::PlanEntry>, EvaluateError> {
         self.repin();
-        let graph = self.scene.graph().ok_or_else(no_scene)?;
+        let graph = self.scene.shared_graph().ok_or_else(no_scene)?;
         self.evaluator.plan_summary(
             graph,
             &mut self.runtime,
@@ -1893,7 +1893,7 @@ impl Session {
         );
         self.repin();
         let readers = std::collections::BTreeSet::from([target.id.clone()]);
-        let tried = match self.scene.graph() {
+        let tried = match self.scene.shared_graph() {
             Some(graph) => self.evaluator.evaluate_trial_reading(
                 graph,
                 &mut self.runtime,

@@ -12,18 +12,34 @@ impl Evaluator {
     /// The order `graph` runs in, kept while the graph is the one before.
     /// A changed graph forgets the plan made for the one before, so a plan
     /// is reused only for the graph it was made from.
-    pub(super) fn order_of(&mut self, graph: &Graph) -> Result<Arc<Vec<usize>>, GraphError> {
-        if let Some((known, order)) = &self.shape
-            && known == graph
-        {
-            return Ok(Arc::clone(order));
+    pub(super) fn order_of(
+        &mut self,
+        graph: &Graph,
+        shared: Option<&Arc<Graph>>,
+    ) -> Result<Arc<Vec<usize>>, GraphError> {
+        if let Some((known, order)) = &self.shape {
+            // Held, it is the one before; else it is compared whole, and
+            // the same graph shared is held from here on.
+            if shared.is_some_and(|shared| Arc::ptr_eq(shared, known)) {
+                return Ok(Arc::clone(order));
+            }
+            if **known == *graph {
+                let order = Arc::clone(order);
+                if let Some(shared) = shared {
+                    self.shape = Some((Arc::clone(shared), Arc::clone(&order)));
+                }
+                return Ok(order);
+            }
         }
         self.shape = None;
         self.last_plan = None;
+        self.planned_from = None;
+        self.state_ports = None;
         self.frame_needed = None;
         self.pruned = false;
         let order = Arc::new(graph.order()?);
-        self.shape = Some((graph.clone(), Arc::clone(&order)));
+        let held = shared.map_or_else(|| Arc::new(graph.clone()), Arc::clone);
+        self.shape = Some((held, Arc::clone(&order)));
         Ok(order)
     }
 
@@ -31,6 +47,71 @@ impl Evaluator {
     /// folded into their sole pointwise consumers when fusion is on.
     /// `order` is [`Evaluator::order_of`] this graph.
     pub(super) fn plan(
+        &mut self,
+        graph: &Graph,
+        order: &[usize],
+        runtime: &mut Runtime,
+        externals: &BTreeMap<String, Handle>,
+        overrides: &BTreeMap<String, Value>,
+        context: &Context,
+    ) -> Result<Arc<Vec<Group>>, EvaluateError> {
+        // What a plan is made from besides the graph, each small: the last
+        // plan stands while all of it is the same.
+        let inputs = PlanInputs {
+            kernels: runtime.revision(),
+            externals: externals.clone(),
+            overrides: overrides.clone(),
+            window: context.window,
+            scale: context.scale,
+            states: self.state_extents(graph, runtime),
+            pinned: self.pinned.clone(),
+            fusion: self.fusion,
+        };
+        if let Some((last, executing)) = &self.planned_from
+            && *last == inputs
+        {
+            return Ok(Arc::clone(executing));
+        }
+        let made = self.plan_anew(graph, order, runtime, externals, overrides, context)?;
+        // A fused version still preparing joins a later plan: until none
+        // is, each frame plans again.
+        self.planned_from = self.pending.is_empty().then(|| (inputs, Arc::clone(&made)));
+        Ok(made)
+    }
+
+    /// The extent each port holding state has now, in order of node and
+    /// port: a plan reads it for what reads the state.
+    fn state_extents(&mut self, graph: &Graph, runtime: &Runtime) -> Vec<Option<Domain>> {
+        let ports = self.state_ports.get_or_insert_with(|| {
+            let mut ports = Vec::new();
+            for node in &graph.nodes {
+                for (port, binding) in &node.inputs {
+                    if let Binding::Previous {
+                        source: Source::Node { node, port: from },
+                        ..
+                    } = binding
+                    {
+                        ports.push(((node.clone(), from.clone()), port.clone()));
+                    }
+                }
+            }
+            ports.sort();
+            ports.dedup();
+            ports
+        });
+        ports
+            .iter()
+            .map(|(key, _)| {
+                self.ledger
+                    .committed(key)
+                    .and_then(|handle| runtime.host().domain(handle).ok())
+            })
+            .collect()
+    }
+
+    /// Decides what executes, as [`Evaluator::plan`] says, for inputs it
+    /// has not planned for.
+    fn plan_anew(
         &mut self,
         graph: &Graph,
         order: &[usize],
@@ -949,6 +1030,22 @@ impl Evaluator {
             None => None,
         }
     }
+}
+
+/// What a plan reads besides the graph, each small to compare: the
+/// published Kernels' revision, the caller's Fields and parameters, the
+/// window, the extent of each port holding state, the pins and whether
+/// fusion is on. The same graph and the same inputs make the same plan.
+#[derive(PartialEq)]
+pub(super) struct PlanInputs {
+    kernels: u64,
+    externals: BTreeMap<String, Handle>,
+    overrides: BTreeMap<String, Value>,
+    window: [f32; 2],
+    scale: f32,
+    states: Vec<Option<Domain>>,
+    pinned: BTreeSet<NodeId>,
+    fusion: bool,
 }
 
 /// What a plan was made from besides the graph: each node's law and

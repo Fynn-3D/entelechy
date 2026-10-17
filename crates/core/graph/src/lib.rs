@@ -20,6 +20,34 @@ pub use evaluate::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::Arc;
+
+/// A graph as an evaluation takes it: borrowed, or shared. A shared graph
+/// the evaluator still holds is known unchanged by its identity alone, as
+/// none can change it while held; a borrowed one is compared whole.
+pub trait AsGraph {
+    /// The graph.
+    fn graph(&self) -> &Graph;
+    /// The graph shared, when it is.
+    fn shared(&self) -> Option<&Arc<Graph>> {
+        None
+    }
+}
+
+impl AsGraph for Graph {
+    fn graph(&self) -> &Graph {
+        self
+    }
+}
+
+impl AsGraph for Arc<Graph> {
+    fn graph(&self) -> &Graph {
+        self
+    }
+    fn shared(&self) -> Option<&Arc<Graph>> {
+        Some(self)
+    }
+}
 
 /// Name of a node within a graph.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

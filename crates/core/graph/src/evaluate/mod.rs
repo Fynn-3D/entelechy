@@ -36,7 +36,9 @@ use entelechy_kernel::{
 };
 
 use crate::domain::VALUE_MAX_ELEMENTS;
-use crate::{Binding, DomainExpr, DomainSpec, Graph, GraphError, Node, NodeId, ParamValue, Source};
+use crate::{
+    AsGraph, Binding, DomainExpr, DomainSpec, Graph, GraphError, Node, NodeId, ParamValue, Source,
+};
 
 mod bind;
 mod error;
@@ -634,9 +636,14 @@ pub struct Evaluator {
     pending: BTreeMap<NodeId, Pending>,
     /// The last graph planned and its order. A plan is kept for this
     /// graph only: a changed graph forgets it.
-    shape: Option<(Graph, Arc<Vec<usize>>)>,
+    shape: Option<(Arc<Graph>, Arc<Vec<usize>>)>,
     /// The last plan and what it was made from, besides the graph.
     last_plan: Option<(plan::PlanKey, Arc<Vec<Group>>)>,
+    /// The last plan and its inputs besides the graph ([`plan::PlanInputs`]).
+    planned_from: Option<(plan::PlanInputs, Arc<Vec<Group>>)>,
+    /// The ports holding state in the graph in `shape`, with the nodes and
+    /// ports they hold.
+    state_ports: Option<Vec<((NodeId, String), String)>>,
     /// What a frame of the graph in `shape` reads, and the pins it was
     /// found under.
     frame_needed: Option<(BTreeSet<NodeId>, Arc<BTreeSet<NodeId>>)>,
@@ -851,12 +858,13 @@ impl Evaluator {
     /// fused versions; executes nothing.
     pub fn plan_summary(
         &mut self,
-        graph: &Graph,
+        graph: &impl AsGraph,
         runtime: &mut Runtime,
         externals: &BTreeMap<String, Handle>,
         overrides: &BTreeMap<String, Value>,
     ) -> Result<Vec<PlanEntry>, EvaluateError> {
-        let order = self.order_of(graph)?;
+        let (graph, shared) = (graph.graph(), graph.shared());
+        let order = self.order_of(graph, shared)?;
         let groups = self.plan(
             graph,
             &order,
@@ -883,7 +891,7 @@ impl Evaluator {
     /// name; unlisted ones use their defaults.
     pub fn evaluate(
         &mut self,
-        graph: &Graph,
+        graph: &impl AsGraph,
         runtime: &mut Runtime,
         externals: &BTreeMap<String, Handle>,
         context: &Context,
@@ -893,8 +901,16 @@ impl Evaluator {
         if !self.overlap {
             self.confirm(runtime)?;
         }
-        self.evaluate_with(graph, runtime, externals, context, params, Demand::Frame)
-            .and_then(reported)
+        self.evaluate_with(
+            graph.graph(),
+            graph.shared(),
+            runtime,
+            externals,
+            context,
+            params,
+            Demand::Frame,
+        )
+        .and_then(reported)
     }
 
     /// Evaluates as [`Evaluator::evaluate`] does, every node of the graph,
@@ -903,7 +919,7 @@ impl Evaluator {
     /// for reading; runs off the frame are not started.
     pub fn evaluate_trial(
         &mut self,
-        graph: &Graph,
+        graph: &impl AsGraph,
         runtime: &mut Runtime,
         externals: &BTreeMap<String, Handle>,
         context: &Context,
@@ -913,7 +929,15 @@ impl Evaluator {
         self.confirm(runtime)?;
         self.trial = true;
         let tried = self
-            .evaluate_with(graph, runtime, externals, context, params, Demand::Every)
+            .evaluate_with(
+                graph.graph(),
+                graph.shared(),
+                runtime,
+                externals,
+                context,
+                params,
+                Demand::Every,
+            )
             .and_then(reported);
         self.trial = false;
         tried
@@ -925,7 +949,7 @@ impl Evaluator {
     /// results stay cached for reading.
     pub fn evaluate_trial_reading(
         &mut self,
-        graph: &Graph,
+        graph: &impl AsGraph,
         runtime: &mut Runtime,
         externals: &BTreeMap<String, Handle>,
         context: &Context,
@@ -937,7 +961,8 @@ impl Evaluator {
         self.trial = true;
         let tried = self
             .evaluate_with(
-                graph,
+                graph.graph(),
+                graph.shared(),
                 runtime,
                 externals,
                 context,
@@ -954,7 +979,7 @@ impl Evaluator {
     /// produced. Everything else keeps its last value.
     pub fn evaluate_for(
         &mut self,
-        graph: &Graph,
+        graph: &impl AsGraph,
         runtime: &mut Runtime,
         externals: &BTreeMap<String, Handle>,
         context: &Context,
@@ -964,7 +989,8 @@ impl Evaluator {
         self.recover(runtime);
         self.confirm(runtime)?;
         self.evaluate_with(
-            graph,
+            graph.graph(),
+            graph.shared(),
             runtime,
             externals,
             context,
@@ -1005,7 +1031,8 @@ impl Evaluator {
         let demand = BTreeSet::from([node.clone()]);
         let warmed = self
             .evaluate_with(
-                graph,
+                graph.graph(),
+                graph.shared(),
                 runtime,
                 externals,
                 context,
@@ -1129,6 +1156,7 @@ impl Evaluator {
     fn evaluate_with(
         &mut self,
         graph: &Graph,
+        shared: Option<&Arc<Graph>>,
         runtime: &mut Runtime,
         externals: &BTreeMap<String, Handle>,
         context: &Context,
@@ -1138,6 +1166,8 @@ impl Evaluator {
         // An external the caller supplies nothing for reads its fallback,
         // written into a copy of the graph only when one is in use.
         let substituted = substitute_fallbacks(graph, externals);
+        // A graph with fallbacks written in is a new one, not the caller's.
+        let shared = if substituted.is_some() { None } else { shared };
         let graph = substituted.as_ref().unwrap_or(graph);
         // What the parameters must hold, before anything runs.
         for requirement in &graph.requirements {
@@ -1148,7 +1178,7 @@ impl Evaluator {
                 )
                 .map_err(|error| EvaluateError::Requirement(error.message))?;
         }
-        let order = self.order_of(graph)?;
+        let order = self.order_of(graph, shared)?;
         self.recall_for(graph, runtime);
         if !self.pruned {
             self.prune(graph, runtime);

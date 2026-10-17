@@ -625,6 +625,8 @@ pub struct Runtime {
     ordered: Option<Arc<dyn Backend>>,
     kernels: BTreeMap<KernelId, Arc<KernelVersion>>,
     next_generation: u64,
+    /// Moved by every change to what is published.
+    revision: u64,
     /// Kernels being prepared, on a worker or inline.
     preparer: prepare::Preparer,
     /// What executions answered besides their outputs.
@@ -667,6 +669,7 @@ impl Runtime {
             ordered: ordered.map(Arc::from),
             kernels: BTreeMap::new(),
             next_generation: 1,
+            revision: 0,
             preparer: prepare::Preparer::default(),
             telemetry: Telemetry::default(),
             runs: later::Runs::new(),
@@ -1197,6 +1200,7 @@ impl Runtime {
     /// an id had none: the undo of a [`Runtime::publish_all`] whose change
     /// was refused. An agent's expectation of what runs holds again.
     pub fn reinstate(&mut self, versions: Vec<(KernelId, Option<Arc<KernelVersion>>)>) {
+        self.revision += 1;
         for (id, version) in versions {
             match version {
                 Some(version) => {
@@ -1236,6 +1240,7 @@ impl Runtime {
         self.next_generation += 1;
         let version = Arc::new(candidate.into_version(id.clone(), generation));
         self.kernels.insert(id, Arc::clone(&version));
+        self.revision += 1;
         version
     }
 
@@ -1274,7 +1279,14 @@ impl Runtime {
         {
             return None;
         }
+        self.revision += 1;
         self.kernels.remove(id)
+    }
+
+    /// What every change to the published Kernels moves: the same revision,
+    /// the same Kernels.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Executes one Kernel `repeat` times, each time reading input `input`

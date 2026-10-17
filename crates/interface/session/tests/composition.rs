@@ -2920,3 +2920,39 @@ output result <- twice.result;",
     assert_eq!(next.executed, ids(&["clock", "once", "twice"]));
     assert_eq!(value, 8.0);
 }
+
+/// A shared graph the evaluator holds is known unchanged by its identity;
+/// one changed through `Arc::make_mut` is a copy, and is planned anew.
+#[test]
+fn a_shared_graph_changed_is_planned_again_and_one_unchanged_is_not() {
+    let mut graph = std::sync::Arc::new(entelechy_scene::parse(DOCUMENT).unwrap());
+    let mut runtime = runtime();
+    let mut evaluator = Evaluator::new();
+    evaluator.set_fusion(false);
+    let frame =
+        |evaluator: &mut Evaluator, runtime: &mut Runtime, graph: &std::sync::Arc<Graph>| {
+            evaluator
+                .evaluate(
+                    graph,
+                    runtime,
+                    &BTreeMap::new(),
+                    &Context::default(),
+                    &BTreeMap::new(),
+                )
+                .unwrap()
+        };
+    let first = frame(&mut evaluator, &mut runtime, &graph);
+    assert_eq!(first.executed, ids(&["source", "gray", "final"]));
+    std::sync::Arc::make_mut(&mut graph).nodes[1].params.insert(
+        "amount".into(),
+        entelechy_graph::ParamValue::Literal(entelechy_graph::Value::Int(0)),
+    );
+    let changed = frame(&mut evaluator, &mut runtime, &graph);
+    assert_eq!(changed.executed, ids(&["gray", "final"]));
+    near(
+        runtime.host().read_pixel(changed.output, 2, 0).unwrap(),
+        [0.0, 1.0, 1.0, 1.0],
+    );
+    let same = frame(&mut evaluator, &mut runtime, &graph);
+    assert!(same.executed.is_empty(), "{same:?}");
+}

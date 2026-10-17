@@ -233,7 +233,15 @@ impl Evaluator {
         }
         self.trial = true;
         let proved = self
-            .evaluate_with(graph, runtime, externals, context, params, Demand::Every)
+            .evaluate_with(
+                graph,
+                None,
+                runtime,
+                externals,
+                context,
+                params,
+                Demand::Every,
+            )
             .and_then(reported);
         self.trial = false;
         // An evaluation that failed early leaves this replaced state to
