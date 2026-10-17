@@ -173,6 +173,7 @@ impl Evaluator {
         params: &BTreeMap<String, Value>,
         states: Vec<(NodeId, String, Handle)>,
     ) -> Result<Report, EvaluateError> {
+        self.pruned = false;
         self.confirm(runtime)?;
         let ports: BTreeSet<(NodeId, String)> = graph
             .nodes
@@ -337,6 +338,7 @@ impl Evaluator {
         node: &NodeId,
         port: &str,
     ) -> Result<(), EvaluateError> {
+        self.pruned = false;
         if !is_state(graph, node, port) {
             return Err(EvaluateError::NotState {
                 node: node.clone(),
@@ -376,6 +378,7 @@ impl Evaluator {
         port: &str,
         words: Vec<u32>,
     ) -> Result<(), EvaluateError> {
+        self.pruned = false;
         if !is_state(graph, node, port) {
             return Err(EvaluateError::NotState {
                 node: node.clone(),

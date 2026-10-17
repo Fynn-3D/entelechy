@@ -20,6 +20,8 @@ impl Evaluator {
         }
         self.shape = None;
         self.last_plan = None;
+        self.frame_needed = None;
+        self.pruned = false;
         let order = Arc::new(graph.order()?);
         self.shape = Some((graph.clone(), Arc::clone(&order)));
         Ok(order)

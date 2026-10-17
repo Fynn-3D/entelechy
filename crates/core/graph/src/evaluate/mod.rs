@@ -317,18 +317,63 @@ struct Frame {
     checks: Vec<(NodeId, Vec<Box<dyn entelechy_kernel::Check>>)>,
     placements: Vec<Placed>,
     let_go: usize,
-    /// The group each node runs in, where each node's outputs are last
-    /// read, and who reads each.
-    runs_at: BTreeMap<NodeId, usize>,
-    last_read: BTreeMap<NodeId, usize>,
-    readers: BTreeMap<NodeId, Vec<NodeId>>,
-    /// What is never let go: the scene's outputs, the state's sources and
-    /// the pinned.
-    held: BTreeSet<NodeId>,
+    /// Where each node runs and is read in the plan, what it holds, and
+    /// which of its groups this frame runs.
+    layout: Arc<Layout>,
+    /// Held besides the layout's: what is asked for by name.
+    asked: BTreeSet<NodeId>,
 }
 
 impl Frame {
-    fn new(groups: &[Group], held: BTreeSet<NodeId>) -> Self {
+    fn new(layout: Arc<Layout>, asked: BTreeSet<NodeId>) -> Self {
+        Self {
+            executed: Vec::new(),
+            timings: Vec::new(),
+            clocked: Vec::new(),
+            checks: Vec::new(),
+            placements: Vec::new(),
+            let_go: 0,
+            layout,
+            asked,
+        }
+    }
+
+    /// Whether `id`'s outputs are never let go on this frame.
+    fn holds(&self, id: &NodeId) -> bool {
+        self.layout.held.contains(id) || self.asked.contains(id)
+    }
+
+    /// Everything never let go on this frame.
+    fn held(&self) -> BTreeSet<NodeId> {
+        self.layout
+            .held
+            .iter()
+            .chain(&self.asked)
+            .cloned()
+            .collect()
+    }
+}
+
+/// What a plan's frames share, found once a plan: the group each node runs
+/// in, where each node's outputs are last read and who reads each, what is
+/// never let go (the scene's outputs, the state's sources and the pinned),
+/// and, for the nodes a demand reaches, which groups run.
+struct Layout {
+    runs_at: BTreeMap<NodeId, usize>,
+    last_read: BTreeMap<NodeId, usize>,
+    readers: BTreeMap<NodeId, Vec<NodeId>>,
+    held: BTreeSet<NodeId>,
+    /// Whether each group runs; every group when `None`.
+    runs: Option<Vec<bool>>,
+}
+
+impl Layout {
+    fn new(
+        graph: &Graph,
+        groups: &[Group],
+        pinned: &BTreeSet<NodeId>,
+        needed: Option<&BTreeSet<NodeId>>,
+    ) -> Self {
         let mut last_read: BTreeMap<NodeId, usize> = BTreeMap::new();
         let mut readers: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
         let mut runs_at: BTreeMap<NodeId, usize> = BTreeMap::new();
@@ -344,18 +389,65 @@ impl Frame {
                 }
             }
         }
+        let runs = needed.map(|needed| {
+            groups
+                .iter()
+                .map(|group| needed.contains(&group.node.id))
+                .collect()
+        });
         Self {
-            executed: Vec::new(),
-            timings: Vec::new(),
-            clocked: Vec::new(),
-            checks: Vec::new(),
-            placements: Vec::new(),
-            let_go: 0,
             runs_at,
             last_read,
             readers,
-            held,
+            held: held_nodes(graph, pinned),
+            runs,
         }
+    }
+
+    /// Whether group `at` runs.
+    fn runs(&self, at: usize) -> bool {
+        self.runs.as_ref().is_none_or(|runs| runs[at])
+    }
+}
+
+/// A plan's layout, with the plan and the reach it was found for.
+struct LayoutFor {
+    groups: Arc<Vec<Group>>,
+    needed: Option<Arc<BTreeSet<NodeId>>>,
+    layout: Arc<Layout>,
+}
+
+impl Evaluator {
+    /// The layout of plan `groups` for the nodes `needed` reaches, kept
+    /// while both are the ones it was found for.
+    fn layout_of(
+        &mut self,
+        graph: &Graph,
+        groups: &Arc<Vec<Group>>,
+        needed: Option<&Arc<BTreeSet<NodeId>>>,
+    ) -> Arc<Layout> {
+        if let Some(known) = &self.layout
+            && Arc::ptr_eq(&known.groups, groups)
+            && match (&known.needed, needed) {
+                (None, None) => true,
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                _ => false,
+            }
+        {
+            return Arc::clone(&known.layout);
+        }
+        let layout = Arc::new(Layout::new(
+            graph,
+            groups,
+            &self.pinned,
+            needed.map(|needed| needed.as_ref()),
+        ));
+        self.layout = Some(LayoutFor {
+            groups: Arc::clone(groups),
+            needed: needed.cloned(),
+            layout: Arc::clone(&layout),
+        });
+        layout
     }
 }
 
@@ -462,6 +554,16 @@ pub struct Evaluator {
     shape: Option<(Graph, Arc<Vec<usize>>)>,
     /// The last plan and what it was made from, besides the graph.
     last_plan: Option<(plan::PlanKey, Arc<Vec<Group>>)>,
+    /// What a frame of the graph in `shape` reads, and the pins it was
+    /// found under.
+    frame_needed: Option<(BTreeSet<NodeId>, Arc<BTreeSet<NodeId>>)>,
+    /// The layout of the last plan run, with the plan and the reach it
+    /// was found for.
+    layout: Option<LayoutFor>,
+    /// Whether what left the graph in `shape` is let go: nodes leave only
+    /// with a changed graph, and a pin, a restore or a reset may leave
+    /// something to let go.
+    pruned: bool,
     running: BTreeMap<NodeId, Running>,
     /// State an evaluation replaced before its nodes ran (a migration, a
     /// restart), held until the commit or put back on failure.
@@ -570,6 +672,7 @@ impl Evaluator {
 
     /// Keeps a node materialized so its image can be observed.
     pub fn pin(&mut self, node: NodeId) {
+        self.pruned = false;
         self.pinned.insert(node);
     }
 
@@ -591,11 +694,13 @@ impl Evaluator {
 
     /// Lets fusion have `node` back.
     pub fn unpin(&mut self, node: &NodeId) {
+        self.pruned = false;
         self.pinned.remove(node);
     }
 
     /// Releases every cached image and all committed state.
     pub fn clear(&mut self, runtime: &mut Runtime) {
+        self.pruned = false;
         // What only remembered runs hold goes first; the rest below.
         self.forget_runs(runtime);
         let mut released = BTreeSet::new();
@@ -626,6 +731,7 @@ impl Evaluator {
     /// next evaluation. Cached outputs stay; runs off the frame are
     /// dropped, since they began from the forgotten state.
     pub fn reset_state(&mut self, runtime: &mut Runtime) {
+        self.pruned = false;
         self.recover(runtime);
         // A frame in flight that failed leaves the state it began from,
         // which is forgotten here all the same.
@@ -853,13 +959,24 @@ impl Evaluator {
     /// The nodes an evaluation under `demand` must run: see
     /// [`Evaluator::evaluate_for`] and [`Evaluator::evaluate_trial_reading`];
     /// `None` every node.
-    fn needed(&self, graph: &Graph, demand: Demand<'_>) -> Option<BTreeSet<NodeId>> {
-        let at = graph.index();
+    fn needed(&mut self, graph: &Graph, demand: Demand<'_>) -> Option<Arc<BTreeSet<NodeId>>> {
         let demand = match demand {
             Demand::Every => return None,
-            Demand::Frame => return Some(graph.read_through(self.pinned.iter().cloned())),
+            // A frame reads what the graph's outputs, state and pins reach:
+            // found once for the graph in `shape` and its pins.
+            Demand::Frame => {
+                if let Some((pins, read)) = &self.frame_needed
+                    && *pins == self.pinned
+                {
+                    return Some(Arc::clone(read));
+                }
+                let read = Arc::new(graph.read_through(self.pinned.iter().cloned()));
+                self.frame_needed = Some((self.pinned.clone(), Arc::clone(&read)));
+                return Some(read);
+            }
             Demand::For(demand) => demand,
             Demand::Read(readers) => {
+                let at = graph.index();
                 let mut needed = BTreeSet::new();
                 let mut frontier: Vec<NodeId> = readers.iter().cloned().collect();
                 while let Some(id) = frontier.pop() {
@@ -878,9 +995,10 @@ impl Evaluator {
                         }
                     }
                 }
-                return Some(needed);
+                return Some(Arc::new(needed));
             }
         };
+        let at = graph.index();
         let mut needed: BTreeSet<NodeId> = demand.clone();
         // State: its producer must run, and its initial source is read
         // until the first commit.
@@ -918,7 +1036,7 @@ impl Evaluator {
                 }
             }
         }
-        Some(needed)
+        Some(Arc::new(needed))
     }
 
     /// Evaluates what `demand` asks; the report is `None` only for a
@@ -947,7 +1065,10 @@ impl Evaluator {
         }
         let order = self.order_of(graph)?;
         self.recall_for(graph, runtime);
-        self.prune(graph, runtime);
+        if !self.pruned {
+            self.prune(graph, runtime);
+            self.pruned = true;
+        }
         let landed = self.land(runtime)?;
         let needed = self.needed(graph, demand);
         let groups = self.plan(graph, &order, runtime, externals, params, context)?;
@@ -958,12 +1079,15 @@ impl Evaluator {
             // Absorbed nodes release their cached outputs.
             let absorbed: BTreeSet<&NodeId> =
                 groups.iter().flat_map(|g| g.absorbed.iter()).collect();
-            let stale: Vec<NodeId> = self
-                .ledger
-                .cached_nodes()
-                .filter(|id| absorbed.contains(id))
-                .cloned()
-                .collect();
+            let stale: Vec<NodeId> = if absorbed.is_empty() {
+                Vec::new()
+            } else {
+                self.ledger
+                    .cached_nodes()
+                    .filter(|id| absorbed.contains(id))
+                    .cloned()
+                    .collect()
+            };
             for id in stale {
                 self.drop_cache(&id, runtime);
             }
@@ -973,11 +1097,12 @@ impl Evaluator {
             runtime.begin_evaluation();
             let mut pending = Vec::new();
             // What is asked for by name is made, though let go cold.
-            let mut held = held_nodes(graph, &self.pinned);
-            if let Demand::For(demand) = demand {
-                held.extend(demand.iter().cloned());
-            }
-            let mut frame = Frame::new(&groups, held);
+            let asked = match demand {
+                Demand::For(demand) => demand.clone(),
+                _ => BTreeSet::new(),
+            };
+            let layout = self.layout_of(graph, &groups, needed.as_ref());
+            let mut frame = Frame::new(layout, asked);
             let scene = Scene {
                 graph,
                 groups: &groups,
@@ -987,10 +1112,7 @@ impl Evaluator {
             };
             for (at, group) in groups.iter().enumerate() {
                 let node = &group.node;
-                if needed
-                    .as_ref()
-                    .is_some_and(|needed| !needed.contains(&node.id))
-                {
+                if !frame.layout.runs(at) {
                     continue;
                 }
                 let mut bound = self.bind(
@@ -1018,7 +1140,7 @@ impl Evaluator {
                     )?;
                 }
                 let key = match &bound {
-                    Bind::Ready(_, key) | Bind::Keyed(key, _) => key.clone(),
+                    Bind::Ready(_, key) | Bind::Keyed(key, _) => key,
                     Bind::Unkeyed(_) => unreachable!("waited for above"),
                 };
                 if !group.absorbed.is_empty() {
@@ -1027,7 +1149,7 @@ impl Evaluator {
                 if self
                     .ledger
                     .entry(&node.id)
-                    .is_some_and(|cached| cached.key == key)
+                    .is_some_and(|cached| cached.key == *key)
                 {
                     reused.push(node.id.clone());
                     continue;
@@ -1037,9 +1159,9 @@ impl Evaluator {
                 let cold_epoch = self
                     .ledger
                     .cold(&node.id)
-                    .filter(|cold| cold.key == key)
+                    .filter(|cold| cold.key == *key)
                     .map(|cold| cold.epoch);
-                if cold_epoch.is_some() && !frame.held.contains(&node.id) {
+                if cold_epoch.is_some() && !frame.holds(&node.id) {
                     reused.push(node.id.clone());
                     continue;
                 }
@@ -1104,9 +1226,15 @@ impl Evaluator {
                 checks,
                 placements,
                 let_go,
-                held,
+                layout,
+                asked,
                 ..
             } = frame;
+            let held: std::borrow::Cow<'_, BTreeSet<NodeId>> = if asked.is_empty() {
+                std::borrow::Cow::Borrowed(&layout.held)
+            } else {
+                std::borrow::Cow::Owned(layout.held.iter().chain(&asked).cloned().collect())
+            };
             self.weigh_alike(graph, &executed);
             if matches!(demand, Demand::Read(_)) {
                 self.wait_for_checks(checks, runtime)?;
@@ -1251,7 +1379,7 @@ impl Evaluator {
             near: None,
         };
         let cold = self.ledger.cold(id).cloned().ok_or_else(missing)?;
-        let at = *frame.runs_at.get(id).ok_or_else(missing)?;
+        let at = *frame.layout.runs_at.get(id).ok_or_else(missing)?;
         let (invocation, key) = self.ready(at, turn, scene, frame, runtime)?;
         let rerun = (cold.key == key).then_some(cold.epoch);
         // What it reads stays while it runs.
@@ -1309,7 +1437,7 @@ impl Evaluator {
         // made again when a later frame asks.
         let outputs = match run(runtime) {
             Err(error) if short_of_room(&error) => {
-                let mut held = frame.held.clone();
+                let mut held = frame.held();
                 held.extend(keep.iter().cloned());
                 let made = self.forget_runs_for_room(runtime)
                     + self.make_room_counted(
@@ -1317,9 +1445,9 @@ impl Evaluator {
                         Room {
                             at: turn,
                             running: &node.id,
-                            runs_at: &frame.runs_at,
-                            last_read: &frame.last_read,
-                            readers: &frame.readers,
+                            runs_at: &frame.layout.runs_at,
+                            last_read: &frame.layout.last_read,
+                            readers: &frame.layout.readers,
                             held: &held,
                         },
                         frame.executed.iter(),

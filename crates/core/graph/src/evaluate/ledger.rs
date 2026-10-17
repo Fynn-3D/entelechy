@@ -4,6 +4,7 @@
 //! (see [`Cold`]).
 
 use super::*;
+use std::collections::HashMap;
 
 impl Evaluator {
     /// Every port's committed state, by producing node and port, as the
@@ -163,9 +164,11 @@ impl Evaluator {
 /// Field is released once, when neither refers to it.
 #[derive(Default)]
 pub(super) struct Ledger {
-    cache: BTreeMap<NodeId, Cached>,
+    /// Looked up for every node of every frame, so hashed; walked in order
+    /// of node ([`Ledger::cached_nodes`]).
+    cache: HashMap<NodeId, Cached>,
     /// Nodes whose outputs were let go cold; none of them is in `cache`.
-    cold: BTreeMap<NodeId, Cold>,
+    cold: HashMap<NodeId, Cold>,
     /// How many cached entries hold each handle.
     cached_handles: BTreeMap<Handle, usize>,
     /// State as of the last successful evaluation, by producing node and
@@ -192,9 +195,9 @@ impl Ledger {
         self.cold.get(id)
     }
 
-    /// The nodes whose outputs are cold.
+    /// The nodes whose outputs are cold, in order.
     pub(super) fn cold_nodes(&self) -> impl Iterator<Item = &NodeId> {
-        self.cold.keys()
+        in_order(self.cold.keys())
     }
 
     fn cold_put(&mut self, id: NodeId, cold: Cold) {
@@ -207,9 +210,9 @@ impl Ledger {
         self.cache.get(id)
     }
 
-    /// The nodes the cache holds an entry for.
+    /// The nodes the cache holds an entry for, in order.
     pub(super) fn cached_nodes(&self) -> impl Iterator<Item = &NodeId> {
-        self.cache.keys()
+        in_order(self.cache.keys())
     }
 
     /// A port's committed state.
@@ -235,7 +238,7 @@ impl Ledger {
         self.committed_handles.clear();
         self.cold.clear();
         (
-            std::mem::take(&mut self.cache),
+            std::mem::take(&mut self.cache).into_iter().collect(),
             std::mem::take(&mut self.committed),
         )
     }
@@ -308,6 +311,13 @@ impl Ledger {
         );
         held
     }
+}
+
+/// `ids` in order.
+fn in_order<'a>(ids: impl Iterator<Item = &'a NodeId>) -> std::vec::IntoIter<&'a NodeId> {
+    let mut ids: Vec<&NodeId> = ids.collect();
+    ids.sort_unstable();
+    ids.into_iter()
 }
 
 /// Decrements each handle's count, removing it at zero.

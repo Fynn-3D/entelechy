@@ -367,14 +367,14 @@ impl Evaluator {
             let (bound_domain, bound_schema) = match &held {
                 Held::Field(handle) => (
                     runtime.host().domain(*handle)?,
-                    runtime.host().schema(*handle)?.clone(),
+                    runtime.host().schema(*handle)?,
                 ),
-                Held::Cold(_, domain, schema) => (*domain, schema.clone()),
+                Held::Cold(_, domain, schema) => (*domain, schema),
             };
             let message = entelechy_kernel::input_type_fault(
                 &input.ty,
                 bound_domain.shape(),
-                Some(&bound_schema),
+                Some(bound_schema),
             );
             if let Some(message) = message {
                 return Err(EvaluateError::PortKind {
