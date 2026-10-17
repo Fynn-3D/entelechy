@@ -773,6 +773,8 @@ pub struct Evaluator {
     state_ports: Option<Vec<((NodeId, String), String)>>,
     /// The ports holding state in the graph in `shape`, in binding order.
     state_keys: Option<Vec<(NodeId, String)>>,
+    /// The state reads of the last plan reconciled.
+    state_reads: Option<(Arc<Vec<Group>>, Arc<state::StateReads>)>,
     /// What a frame of the graph in `shape` reads, and the pins it was
     /// found under.
     frame_needed: Option<(BTreeSet<NodeId>, Arc<BTreeSet<NodeId>>)>,

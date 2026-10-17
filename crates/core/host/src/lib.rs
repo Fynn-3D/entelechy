@@ -87,14 +87,30 @@ impl Scalar {
 /// Elements are packed little-endian, scalar after scalar and element
 /// after element. Every scalar sits at a multiple of its own size, so
 /// none crosses a 32-bit word.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Schema {
+/// Shared: a copy is the same layout, at no cost.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Schema(std::sync::Arc<Laid>);
+
+/// What a [`Schema`] holds.
+#[derive(PartialEq, Eq, Hash)]
+struct Laid {
     scalars: Vec<Scalar>,
     encodings: Vec<Encoding>,
     /// Each scalar's byte offset in the element.
     offsets: Vec<usize>,
     /// Bytes an element takes.
     bytes: usize,
+}
+
+impl fmt::Debug for Schema {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Schema")
+            .field("scalars", &self.0.scalars)
+            .field("encodings", &self.0.encodings)
+            .field("offsets", &self.0.offsets)
+            .field("bytes", &self.0.bytes)
+            .finish()
+    }
 }
 
 impl Schema {
@@ -150,17 +166,17 @@ impl Schema {
                 "an element of {bytes} bytes would leave the next one's scalars off their size"
             ));
         }
-        Ok(Self {
+        Ok(Self(std::sync::Arc::new(Laid {
             scalars,
             encodings,
             offsets,
             bytes,
-        })
+        })))
     }
 
     /// The same scalars, every one kept as `encoding`.
     pub fn with_encoding(&self, encoding: Encoding) -> Result<Self, String> {
-        Self::encoded(self.scalars.clone(), vec![encoding; self.scalars.len()])
+        Self::encoded(self.0.scalars.clone(), vec![encoding; self.0.scalars.len()])
     }
 
     /// The layout of a pixel: four floats.
@@ -170,61 +186,67 @@ impl Schema {
 
     /// The scalars in order, as a Kernel sees them.
     pub fn scalars(&self) -> &[Scalar] {
-        &self.scalars
+        &self.0.scalars
     }
 
     /// How each scalar is kept.
     pub fn encodings(&self) -> &[Encoding] {
-        &self.encodings
+        &self.0.encodings
     }
 
     /// Each scalar's byte offset within an element.
     pub fn offsets(&self) -> &[usize] {
-        &self.offsets
+        &self.0.offsets
     }
 
     /// The one encoding every scalar is kept in, when there is one.
     pub fn uniform_encoding(&self) -> Option<Encoding> {
-        let first = *self.encodings.first()?;
-        self.encodings.iter().all(|e| *e == first).then_some(first)
+        let first = *self.0.encodings.first()?;
+        self.0
+            .encodings
+            .iter()
+            .all(|e| *e == first)
+            .then_some(first)
     }
 
     /// Words a Kernel sees per element: one per scalar.
     pub fn value_words(&self) -> usize {
-        self.scalars.len()
+        self.0.scalars.len()
     }
 
     /// Bytes an element takes in memory.
     pub fn element_bytes(&self) -> usize {
-        self.bytes
+        self.0.bytes
     }
 
     /// Whether every scalar is kept as a whole word.
     pub fn is_wide(&self) -> bool {
-        self.encodings.iter().all(|e| *e == Encoding::Word)
+        self.0.encodings.iter().all(|e| *e == Encoding::Word)
     }
 
     /// Words of memory `count` elements take, rounded up to a whole word.
     pub fn storage_words(&self, count: usize) -> usize {
         // Counted in 64 bits, so a 32-bit `usize` cannot overflow.
-        let words = (count as u64).saturating_mul(self.bytes as u64).div_ceil(4);
+        let words = (count as u64)
+            .saturating_mul(self.0.bytes as u64)
+            .div_ceil(4);
         usize::try_from(words).unwrap_or(usize::MAX)
     }
 
     /// The Kernel's word for scalar `scalar` of element `element`, widened.
     #[inline]
     pub fn load(&self, storage: &[u32], element: usize, scalar: usize) -> u32 {
-        let encoding = self.encodings[scalar];
-        let byte = element * self.bytes + self.offsets[scalar];
+        let encoding = self.0.encodings[scalar];
+        let byte = element * self.0.bytes + self.0.offsets[scalar];
         let bits = encoding::load(storage, byte, encoding.bytes());
-        encoding.decode(self.scalars[scalar], bits)
+        encoding.decode(self.0.scalars[scalar], bits)
     }
 
     /// Narrows `word` into scalar `scalar` of element `element`.
     #[inline]
     pub fn store(&self, storage: &mut [u32], element: usize, scalar: usize, word: u32) {
-        let encoding = self.encodings[scalar];
-        let byte = element * self.bytes + self.offsets[scalar];
+        let encoding = self.0.encodings[scalar];
+        let byte = element * self.0.bytes + self.0.offsets[scalar];
         encoding::store(storage, byte, encoding.bytes(), encoding.encode(word));
     }
 
@@ -260,7 +282,7 @@ impl Schema {
 
     /// Whether elements are pixels: four floats, however they are kept.
     pub fn is_pixel(&self) -> bool {
-        self.scalars.len() == 4 && self.scalars.iter().all(|s| *s == Scalar::Float)
+        self.0.scalars.len() == 4 && self.0.scalars.iter().all(|s| *s == Scalar::Float)
     }
 
     /// Whether a Field of this layout over `domain` is a picture: a Grid
@@ -281,11 +303,11 @@ impl Schema {
         if self.is_pixel() {
             return format!("four floats (a pixel){kept}");
         }
-        if self.scalars.is_empty() {
+        if self.0.scalars.is_empty() {
             return "nothing".to_owned();
         }
         let mut runs: Vec<(Scalar, usize)> = Vec::new();
-        for scalar in &self.scalars {
+        for scalar in &self.0.scalars {
             match runs.last_mut() {
                 Some((last, count)) if last == scalar => *count += 1,
                 _ => runs.push((*scalar, 1)),
@@ -362,8 +384,8 @@ impl std::str::FromStr for Schema {
 impl fmt::Display for Schema {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut k = 0;
-        while k < self.scalars.len() {
-            let (scalar, encoding) = (self.scalars[k], self.encodings[k]);
+        while k < self.0.scalars.len() {
+            let (scalar, encoding) = (self.0.scalars[k], self.0.encodings[k]);
             if k > 0 {
                 f.write_str(",")?;
             }

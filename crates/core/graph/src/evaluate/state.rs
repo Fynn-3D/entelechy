@@ -13,7 +13,7 @@ impl Evaluator {
     /// this call changed.
     pub(super) fn reconcile_state(
         &mut self,
-        groups: &[Group],
+        groups: &Arc<Vec<Group>>,
         runtime: &mut Runtime,
         context: &Context,
     ) -> Result<(Migrated, Reset), EvaluateError> {
@@ -26,45 +26,23 @@ impl Evaluator {
 
     pub(super) fn reconcile_into(
         &mut self,
-        groups: &[Group],
+        groups: &Arc<Vec<Group>>,
         runtime: &mut Runtime,
         context: &Context,
     ) -> Result<(Migrated, Reset), EvaluateError> {
         let mut migrated = Vec::new();
         let mut reset = Vec::new();
-        // A state's migration is the one any of its readers names
-        // (`Graph::order` refuses two).
-        let named: BTreeMap<(NodeId, String), KernelId> = groups
-            .iter()
-            .flat_map(|group| group.node.inputs.values())
-            .filter_map(|binding| match binding {
-                Binding::Previous {
-                    source: Source::Node { node, port },
-                    migration: Some(kernel),
-                    ..
-                } => Some(((node.clone(), port.clone()), kernel.clone())),
-                _ => None,
-            })
-            .collect();
-        for group in groups {
-            let manifest = group.version.manifest();
-            for (name, binding) in &group.node.inputs {
-                let Binding::Previous {
-                    source:
-                        Source::Node {
-                            node: producer,
-                            port,
-                        },
-                    migration,
-                    ..
-                } = binding
-                else {
-                    continue;
-                };
+        let reads = self.state_reads(groups);
+        for read in reads.reads.iter() {
+            let group = &groups[read.group];
+            let name = &read.port;
+            let migration = &read.migration;
+            {
+                let manifest = group.version.manifest();
                 let Some(input) = manifest.inputs.iter().find(|input| &input.name == name) else {
                     continue;
                 };
-                let key = (producer.clone(), port.clone());
+                let key = read.key.clone();
                 let Some(current) = self.ledger.committed(&key) else {
                     continue;
                 };
@@ -83,7 +61,7 @@ impl Evaluator {
                         schema.describe()
                     )
                 };
-                let carried = match migration.as_ref().or_else(|| named.get(&key)) {
+                let carried = match migration.as_ref().or_else(|| reads.named.get(&key)) {
                     Some(kernel) => {
                         let fail = |message: String| EvaluateError::Migration {
                             node: group.node.id.clone(),
@@ -536,4 +514,56 @@ fn state_keys(graph: &Graph) -> Vec<(NodeId, String)> {
         }
     }
     keys
+}
+
+/// The ports of a plan that read state `<~`: each group's place, the port,
+/// the state it reads, and the migration it names; and, by state, the
+/// migration any of its readers names (`Graph::order` refuses two).
+pub(super) struct StateReads {
+    reads: Vec<StateRead>,
+    named: BTreeMap<(NodeId, String), KernelId>,
+}
+
+pub(super) struct StateRead {
+    group: usize,
+    port: String,
+    key: (NodeId, String),
+    migration: Option<KernelId>,
+}
+
+impl Evaluator {
+    /// The state reads of plan `groups`, found once a plan.
+    fn state_reads(&mut self, groups: &Arc<Vec<Group>>) -> Arc<StateReads> {
+        if let Some((plan, reads)) = &self.state_reads
+            && Arc::ptr_eq(plan, groups)
+        {
+            return Arc::clone(reads);
+        }
+        let mut reads = Vec::new();
+        let mut named = BTreeMap::new();
+        for (at, group) in groups.iter().enumerate() {
+            for (port, binding) in &group.node.inputs {
+                if let Binding::Previous {
+                    source: Source::Node { node, port: from },
+                    migration,
+                    ..
+                } = binding
+                {
+                    let key = (node.clone(), from.clone());
+                    if let Some(kernel) = migration {
+                        named.insert(key.clone(), kernel.clone());
+                    }
+                    reads.push(StateRead {
+                        group: at,
+                        port: port.clone(),
+                        key,
+                        migration: migration.clone(),
+                    });
+                }
+            }
+        }
+        let reads = Arc::new(StateReads { reads, named });
+        self.state_reads = Some((Arc::clone(groups), Arc::clone(&reads)));
+        reads
+    }
 }
