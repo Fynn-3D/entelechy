@@ -901,16 +901,8 @@ impl Evaluator {
         if !self.overlap {
             self.confirm(runtime)?;
         }
-        self.evaluate_with(
-            graph.graph(),
-            graph.shared(),
-            runtime,
-            externals,
-            context,
-            params,
-            Demand::Frame,
-        )
-        .and_then(reported)
+        self.evaluate_with(graph, runtime, externals, context, params, Demand::Frame)
+            .and_then(reported)
     }
 
     /// Evaluates as [`Evaluator::evaluate`] does, every node of the graph,
@@ -929,15 +921,7 @@ impl Evaluator {
         self.confirm(runtime)?;
         self.trial = true;
         let tried = self
-            .evaluate_with(
-                graph.graph(),
-                graph.shared(),
-                runtime,
-                externals,
-                context,
-                params,
-                Demand::Every,
-            )
+            .evaluate_with(graph, runtime, externals, context, params, Demand::Every)
             .and_then(reported);
         self.trial = false;
         tried
@@ -961,8 +945,7 @@ impl Evaluator {
         self.trial = true;
         let tried = self
             .evaluate_with(
-                graph.graph(),
-                graph.shared(),
+                graph,
                 runtime,
                 externals,
                 context,
@@ -989,8 +972,7 @@ impl Evaluator {
         self.recover(runtime);
         self.confirm(runtime)?;
         self.evaluate_with(
-            graph.graph(),
-            graph.shared(),
+            graph,
             runtime,
             externals,
             context,
@@ -1031,8 +1013,7 @@ impl Evaluator {
         let demand = BTreeSet::from([node.clone()]);
         let warmed = self
             .evaluate_with(
-                graph.graph(),
-                graph.shared(),
+                graph,
                 runtime,
                 externals,
                 context,
@@ -1155,8 +1136,7 @@ impl Evaluator {
     /// [`Demand::Read`].
     fn evaluate_with(
         &mut self,
-        graph: &Graph,
-        shared: Option<&Arc<Graph>>,
+        graph: &dyn AsGraph,
         runtime: &mut Runtime,
         externals: &BTreeMap<String, Handle>,
         context: &Context,
@@ -1165,10 +1145,14 @@ impl Evaluator {
     ) -> Result<Option<Report>, EvaluateError> {
         // An external the caller supplies nothing for reads its fallback,
         // written into a copy of the graph only when one is in use.
-        let substituted = substitute_fallbacks(graph, externals);
+        let substituted = substitute_fallbacks(graph.graph(), externals);
         // A graph with fallbacks written in is a new one, not the caller's.
-        let shared = if substituted.is_some() { None } else { shared };
-        let graph = substituted.as_ref().unwrap_or(graph);
+        let shared = if substituted.is_some() {
+            None
+        } else {
+            graph.shared()
+        };
+        let graph = substituted.as_ref().unwrap_or(graph.graph());
         // What the parameters must hold, before anything runs.
         for requirement in &graph.requirements {
             requirement
