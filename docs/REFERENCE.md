@@ -116,7 +116,8 @@ Kernels (`.ent`) compute; scenes (`.esn`) compose them into a running world. Who
 - **domain**: `domain() -> Int`; `domain() -> Vec2`; `domain() -> Vec3` The output's extent in its shape.
 - **idomain**: `idomain() -> Int`; `idomain() -> IVec2`; `idomain() -> IVec3` The output's extent as integers.
 - **index**: `index() -> Int` The iteration of the innermost loop, or a scan's step outside every loop.
-- **time**: `time() -> Float` The session's time in seconds. Needs `time.read`.
+- **time**: `time() -> Float` The session's time in seconds, rounded to a Float: finer than a millisecond for the first hours, a quarter second after a month. A session meant to run long times with clock(). Needs `time.read`.
+- **clock**: `clock() -> Double` The session's time in seconds, whole: the same clock as time(), exact for years. Its Kernel runs where Doubles run. Needs `time.read`.
 - **rate**: `rate() -> Float` The sound device's samples per second, zero without one. Needs `time.read`.
 - **window**: `window() -> Vec2` The window's size in physical pixels, zero by zero without one; a node's domain may take it. Needs `input.read`.
 - **scale**: `scale() -> Float` The window's physical pixels per logical pixel, one without a window. Needs `input.read`.
