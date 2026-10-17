@@ -55,7 +55,7 @@ fn play(session: &mut Session) -> (Vec<BTreeSet<String>>, (f32, f32)) {
     let mut executed = Vec::new();
     for frame in 0..4 {
         let context = Context {
-            time: frame as f32 * 0.1,
+            time: f64::from(frame) * 0.1,
             ..Context::default()
         };
         let report = session.evaluate_for(&context, &demand).unwrap();

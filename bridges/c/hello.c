@@ -51,7 +51,7 @@ int main(int argc, char **argv) {
     const char *reply = entelechy_request(session,
         "{\"op\":\"publish\",\"expect\":\"any\",\"source\":\"kernel scene.back@1 { requires { field.write; } output result: Image; compute { return vec4(0.3, 0.1, 0.1, 1.0); } }\"}");
     printf("publish: %.80s\n", reply);
-    input.time = 0.1f;
+    input.time = 0.1;
     if (entelechy_evaluate(session, &input) != 0 || entelechy_output(session, NULL, &picture) != 0) {
         fprintf(stderr, "%s\n", entelechy_error(session));
         return 1;

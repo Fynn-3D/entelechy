@@ -21,12 +21,13 @@ extern "C" {
 #endif
 
 /* The version of this header's contract. */
-#define ENTELECHY_ABI_VERSION 1
+#define ENTELECHY_ABI_VERSION 2
 
 /* A running scene: its runtime, its documents, its state. */
 typedef struct EntelechySession EntelechySession;
 
-/* What an evaluation sees: time, the sound device's rate (zero without
+/* What an evaluation sees: the time in seconds, whole (`clock()` reads
+ * it, `time()` rounded to a float), the sound device's rate (zero without
  * one), the pointer in output pixels, what the wheel scrolled since the
  * last evaluation (x sideways, y positive away from the person), the
  * window in physical pixels (zero by zero for none, then the session's
@@ -34,7 +35,7 @@ typedef struct EntelechySession EntelechySession;
  * bits (0 left, 1 right, 2 middle), and the keys held as one bit per
  * code 0..255, the codes `key()` reads (`entelechy help key`). */
 typedef struct EntelechyInput {
-    float time;
+    double time;
     float rate;
     float pointer[2];
     float wheel[2];

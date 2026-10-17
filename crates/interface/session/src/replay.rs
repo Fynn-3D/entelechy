@@ -196,8 +196,8 @@ pub fn forms_table() -> String {
 /// One scripted step.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
-    /// Evaluate at a session time.
-    Frame(f32),
+    /// Evaluate at a session time, in seconds.
+    Frame(f64),
     /// Wait for every `async` node's run to land.
     Settle,
     /// Move the pointer and set the button.
@@ -427,15 +427,15 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
             text.parse::<f32>()
                 .map_err(|_| error(format!("{what} `{text}` is not a number")))
         };
+        let wide = |text: &str, what: &str| {
+            text.parse::<f64>()
+                .map_err(|_| error(format!("{what} `{text}` is not a number")))
+        };
         match words.as_slice() {
             ["scene", path] => scene = Some(base.join(path)),
             ["library" | "kernels", path] => kernels = Some(base.join(path)),
-            ["frame", time] => steps.push(Step::Frame(number(time, "time")?)),
+            ["frame", time] => steps.push(Step::Frame(wide(time, "time")?)),
             ["frame", from, "to", last, "every", step] => {
-                let wide = |text: &str, what: &str| {
-                    text.parse::<f64>()
-                        .map_err(|_| error(format!("{what} `{text}` is not a number")))
-                };
                 let (from, last, step) = (
                     wide(from, "time")?,
                     wide(last, "time")?,
@@ -454,7 +454,7 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
                         "{count} frames in one line; a line holds at most {MAX_FRAMES}"
                     )));
                 }
-                steps.extend((0..count).map(|i| Step::Frame((from + i as f64 * step) as f32)));
+                steps.extend((0..count).map(|i| Step::Frame(from + i as f64 * step)));
             }
             ["settle"] => steps.push(Step::Settle),
             ["alike"] => alike = true,
@@ -1071,7 +1071,7 @@ impl Replayer {
     }
 
     /// The time of the next frame, when there is one.
-    pub fn next_time(&self) -> Option<f32> {
+    pub fn next_time(&self) -> Option<f64> {
         self.steps[self.next..].iter().find_map(|step| match step {
             Step::Frame(time) => Some(*time),
             _ => None,
@@ -1561,7 +1561,7 @@ mod tests {
     #[test]
     fn a_range_of_frames_is_a_frame_at_each_step() {
         let replay = parse("scene s.esn\nframe 0.1 to 1.0 every 0.1\n", Path::new(".")).unwrap();
-        let times: Vec<f32> = replay
+        let times: Vec<f64> = replay
             .steps
             .iter()
             .map(|step| match step {
@@ -1569,8 +1569,10 @@ mod tests {
                 other => panic!("{other:?}"),
             })
             .collect();
-        let written: Vec<f32> = (1..=10).map(|i| (i as f64 / 10.0) as f32).collect();
-        assert_eq!(times, written);
+        assert_eq!(times.len(), 10);
+        for (i, time) in (1..=10).zip(&times) {
+            assert!((time - f64::from(i) / 10.0).abs() < 1e-12, "{times:?}");
+        }
         let error = parse("scene s.esn\nframe 1 to 0 every 0.1\n", Path::new(".")).unwrap_err();
         assert!(
             error.message.contains("frames run forward"),

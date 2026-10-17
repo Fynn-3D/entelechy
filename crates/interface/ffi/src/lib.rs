@@ -19,13 +19,13 @@ use entelechy_abi::{Context, Handle, InputState, Shape};
 use entelechy_session::Session;
 
 /// The version of the header's contract, `ENTELECHY_ABI_VERSION`.
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 
 /// What an evaluation sees; the layout of `EntelechyInput` in the header.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct EntelechyInput {
-    pub time: f32,
+    pub time: f64,
     pub rate: f32,
     pub pointer: [f32; 2],
     pub wheel: [f32; 2],

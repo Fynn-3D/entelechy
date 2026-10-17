@@ -1116,6 +1116,10 @@ impl<'a> Checker<'a> {
                 self.require(Capability::TimeRead, position)?;
                 Type::Float
             }
+            Op::Clock => {
+                self.require(Capability::TimeRead, position)?;
+                Type::Double
+            }
             Op::Rate => {
                 self.require(Capability::TimeRead, position)?;
                 Type::Float

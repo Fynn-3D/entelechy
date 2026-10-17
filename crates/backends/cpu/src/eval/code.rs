@@ -411,6 +411,9 @@ pub(super) enum Instr {
     Time {
         dst: usize,
     },
+    Clock {
+        dst: usize,
+    },
     Rate {
         dst: usize,
     },

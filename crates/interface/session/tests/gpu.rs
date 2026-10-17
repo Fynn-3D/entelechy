@@ -239,7 +239,7 @@ fn a_small_output_found_unchanged_on_the_device_spares_what_reads_it() {
         (1..=4)
             .map(|k| {
                 let context = Context {
-                    time: k as f32,
+                    time: k as f64,
                     ..Context::default()
                 };
                 let report = evaluator
@@ -384,7 +384,7 @@ fn a_small_output_found_unchanged_while_sparing_nothing_rests() {
             std::collections::BTreeMap::new();
         for k in 1..=40 {
             let context = Context {
-                time: k as f32,
+                time: k as f64,
                 ..Context::default()
             };
             evaluator
@@ -459,7 +459,7 @@ fn a_clocked_frame_gives_the_devices_busy_time_without_waiting_for_it() {
     let mut busy = None;
     for k in 0..200 {
         let context = Context {
-            time: k as f32 * 0.1,
+            time: k as f64 * 0.1,
             ..Context::default()
         };
         evaluator
@@ -516,7 +516,7 @@ kernel t.blur@1 { requires { field.read; field.write; } input picture: Image; ou
     let mut told = None;
     for k in 0..300 {
         let context = Context {
-            time: k as f32 * 0.1,
+            time: k as f64 * 0.1,
             ..Context::default()
         };
         session.evaluate(&context).unwrap();

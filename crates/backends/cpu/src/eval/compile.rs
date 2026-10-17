@@ -896,6 +896,9 @@ impl FunctionCompiler<'_> {
             Op::Time => Instr::Time {
                 dst: define(self).at,
             },
+            Op::Clock => Instr::Clock {
+                dst: define(self).at,
+            },
             Op::Rate => Instr::Rate {
                 dst: define(self).at,
             },

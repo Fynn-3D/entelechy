@@ -545,8 +545,9 @@ pub fn context() -> Context {
     input.set_button(entelechy_abi::pad::START, true);
     input.pads = 2;
     input.type_text("你a");
+    // A month in: `time()` reads the clock rounded, `clock()` reads it whole.
     Context {
-        time: 1.5,
+        time: 2_592_000.123,
         rate: 48000.0,
         input,
         window: [320.0, 200.0],
@@ -704,6 +705,11 @@ pub fn wide_features() -> Vec<(&'static str, &'static str, &'static str)> {
             "Wide { d: picked + s.at.y - origin.y + moved.at.x + table[i % 3] + table[i - 40] + each_one[i % 3], l: moved.id + longs[i % 3] + longs[i + 10], w: dvec3(s.at, 1.0) - dvec3(origin.xy, 0.0), b: s.id > 0l, i: int(s.id % 1000l) }",
         ),
         (
+            "the clock",
+            "let c = clock() + x; let rounded = double(time()); let since = c - 2592000.0;",
+            "Wide { d: since, l: long(since * 1000000.0), w: dvec3(c - rounded, rounded, clock()), b: c > rounded && clock() == clock(), i: int(since * 1000.0) }",
+        ),
+        (
             "64-bit field reads and control",
             "let r = at(rows, i % 16) + at(rows, i + 100) + at(rows, -5); let id = at(ids, i % 16) * 3l; let pick = if r > 0.5 { r * 2.0 } else { -r }; let arm = match i % 3 { 0 => id, 1 => -id, _ => 7l }; let walked = loop 5 with acc = x { acc * 0.5 + r }; let counted = loop 4 with acc = n { if acc > 100l { break acc; } acc * 3l };",
             "Wide { d: r + pick + walked, l: id + arm + counted, w: dvec3(r, at(rows, 3), walked), b: r > 0.0, i: int(id % 100l) }",
@@ -711,7 +717,7 @@ pub fn wide_features() -> Vec<(&'static str, &'static str, &'static str)> {
     ]
 }
 
-const WIDE_HEAD: &str = "requires { field.read; field.write; }
+const WIDE_HEAD: &str = "requires { field.read; field.write; time.read; }
     struct Wide { d: Double; l: Long; w: DVec3; b: Bool; i: Int; }
     struct Site { at: DVec2; id: Long; }
     param big: Long = 5000000000l;

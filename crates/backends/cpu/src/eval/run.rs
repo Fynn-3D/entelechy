@@ -1043,7 +1043,8 @@ impl<'p, 's> Machine<'p, 's> {
                 let domain = program.domain;
                 s[fp + dst] = (z * domain.height() + y) * domain.width() + x;
             }
-            Instr::Time { dst } => s[fp + dst] = program.context.time.to_bits(),
+            Instr::Time { dst } => s[fp + dst] = program.context.float_time().to_bits(),
+            Instr::Clock { dst } => put_wide(s, fp + dst, program.context.time.to_bits()),
             Instr::Rate { dst } => s[fp + dst] = program.context.rate.to_bits(),
             Instr::Pointer { dst } => {
                 let [x, y] = program.context.input.pointer;

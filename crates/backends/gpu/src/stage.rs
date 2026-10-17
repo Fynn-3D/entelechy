@@ -311,7 +311,7 @@ impl GpuBackend {
         let mut context = vec![
             f32::from_bits(domain.width()),
             f32::from_bits(domain.height()),
-            invocation.context.time,
+            invocation.context.float_time(),
             input.button_bits() as f32,
             input.pointer[0],
             input.pointer[1],

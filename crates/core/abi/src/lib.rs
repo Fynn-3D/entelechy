@@ -1073,8 +1073,9 @@ impl InputState {
 /// through builtins behind `time.read` and `input.read`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Context {
-    /// Session time in seconds.
-    pub time: f32,
+    /// Session time in seconds, whole: `clock()` reads it as a `Double`,
+    /// `time()` rounded to a `Float`.
+    pub time: f64,
     /// The driving sound device's samples per second; zero without one.
     pub rate: f32,
     /// Pointer and key state.
@@ -1099,6 +1100,12 @@ impl Default for Context {
 }
 
 impl Context {
+    /// What `time()` reads: the clock rounded to the nearest `Float`. Every
+    /// backend reads it from here.
+    pub fn float_time(&self) -> f32 {
+        self.time as f32
+    }
+
     /// Whether a window is open: both sides of `window` are positive.
     pub fn has_window(&self) -> bool {
         self.window[0] > 0.0 && self.window[1] > 0.0

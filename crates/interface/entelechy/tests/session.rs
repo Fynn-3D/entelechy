@@ -1978,7 +1978,7 @@ fn a_frames_input_brings_in_the_frame_of_the_moment_and_wraps() {
         events.iter().any(|event| matches!(event, Event::Loaded { name, detail, .. } if name == "clip" && detail == "2 frame(s) at 1 a second")),
         "{events:?}"
     );
-    let red = |session: &mut Session, time: f32| {
+    let red = |session: &mut Session, time: f64| {
         let report = session
             .evaluate(&Context {
                 time,

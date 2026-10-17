@@ -191,8 +191,9 @@ struct CacheKey {
     params: Vec<Value>,
     inputs: Vec<InputKey>,
     domain: Domain,
-    /// Present only for Kernels that read the clock.
-    time: Option<u32>,
+    /// Present only for Kernels that read the clock: the time's whole
+    /// bits with the rate's.
+    time: Option<u64>,
     /// Present only for Kernels that read input.
     input: Option<u64>,
 }

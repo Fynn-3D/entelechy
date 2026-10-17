@@ -1219,8 +1219,12 @@ pub enum Op {
     /// The output domain's extent: `Int` for rows, `Vec2` for a grid,
     /// `Vec3` for a volume. Entry point only.
     Domain,
-    /// Session time in seconds as `Float`. Context: `time.read`.
+    /// Session time in seconds as `Float`, the clock rounded to it.
+    /// Context: `time.read`.
     Time,
+    /// Session time in seconds as `Double`, the clock whole. Context:
+    /// `time.read`.
+    Clock,
     /// The sound device's clock in samples per second as `Float`, zero
     /// without a device. Context: `time.read`.
     Rate,

@@ -85,7 +85,7 @@ output result <- count.result;
     let _ = session.sync();
     for frame in 0..3 {
         let context = entelechy_graph::Context {
-            time: frame as f32 * 0.1,
+            time: f64::from(frame) * 0.1,
             ..entelechy_graph::Context::default()
         };
         log.lock().unwrap().clear();

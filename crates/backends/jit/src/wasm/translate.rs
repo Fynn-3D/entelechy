@@ -1289,6 +1289,7 @@ impl<'a> Fx<'a> {
             }
             Op::Element => vec![self.element_index()],
             Op::Time => vec![self.ctx_load(Val::F32, offsets::TIME)],
+            Op::Clock => vec![self.ctx_load(Val::F64, offsets::CLOCK)],
             Op::Rate => vec![self.ctx_load(Val::F32, offsets::RATE)],
             Op::Pointer => vec![
                 self.ctx_load(Val::F32, offsets::POINTER),

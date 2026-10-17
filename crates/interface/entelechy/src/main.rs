@@ -393,7 +393,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 &mut session,
                 options.out.as_deref(),
                 &options.saves,
-                clock.elapsed().as_secs_f32(),
+                clock.elapsed().as_secs_f64(),
                 window,
                 options.profile,
             );
@@ -1122,7 +1122,7 @@ fn trace(args: &[String]) -> Result<(), String> {
     let mut rest = Vec::new();
     let mut node = None;
     let mut at: Option<[u32; 3]> = None;
-    let mut time = 0.0f32;
+    let mut time = 0.0f64;
     let mut iter = args.iter().peekable();
     let number = |text: &str, flag: &str| -> Result<u32, String> {
         text.parse::<u32>()
@@ -1278,7 +1278,7 @@ fn evaluate_and_export(
     session: &mut Session,
     out: Option<&Path>,
     saves: &[(String, String, PathBuf)],
-    time: f32,
+    time: f64,
     window: Option<([f32; 2], f32)>,
     profile: bool,
 ) -> bool {

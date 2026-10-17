@@ -514,6 +514,7 @@ impl Emitter<'_> {
                 Shape::Volume => "vec3<f32>(vec2<f32>(bitcast<vec2<u32>>(ctx[0].xy)), f32(bitcast<u32>(ctx[1].z)))".to_owned(),
             },
             Op::Time => "ctx[0].z".to_owned(),
+            Op::Clock => unreachable!("the GPU refuses a module holding a Double"),
             Op::Rate => "ctx[1].w".to_owned(),
             Op::Pointer => "ctx[1].xy".to_owned(),
             Op::PointerDown => "button_down(0)".to_owned(),

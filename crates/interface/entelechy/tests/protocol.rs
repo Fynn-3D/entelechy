@@ -2919,7 +2919,7 @@ fn a_refused_restore_puts_back_the_scene_that_ran_whatever_is_on_disk() {
     let scene = tally_world("put-back", 3);
     let strict = std::fs::read_to_string(&scene).unwrap();
     let relaxed = strict.replace("- 3)", "- 1000000)");
-    let context = |time: f32| Context {
+    let context = |time: f64| Context {
         time,
         ..Context::default()
     };

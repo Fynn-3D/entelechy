@@ -130,7 +130,7 @@ output result <- count.result;
     (session, dir)
 }
 
-fn at(time: f32) -> entelechy_graph::Context {
+fn at(time: f64) -> entelechy_graph::Context {
     entelechy_graph::Context {
         time,
         ..entelechy_graph::Context::default()

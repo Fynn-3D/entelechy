@@ -98,6 +98,8 @@ builtin clamp
   clamp(x: Vec3, low: Vec3, high: Vec3) -> Vec3
   clamp(x: Vec4, low: Float, high: Float) -> Vec4
   clamp(x: Vec4, low: Vec4, high: Vec4) -> Vec4
+builtin clock requires time.read
+  clock() -> Double
 builtin clz
   clz(x: Int) -> Int
 builtin coord entry

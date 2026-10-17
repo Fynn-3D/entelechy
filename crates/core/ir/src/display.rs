@@ -237,6 +237,7 @@ impl fmt::Display for Op {
             Self::Coord => f.write_str("coord"),
             Self::Domain => f.write_str("domain"),
             Self::Time => f.write_str("context time"),
+            Self::Clock => f.write_str("context clock"),
             Self::Rate => f.write_str("context rate"),
             Self::Window => f.write_str("context window"),
             Self::Scale => f.write_str("context scale"),

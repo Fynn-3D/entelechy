@@ -170,7 +170,7 @@ pub fn render(
     let (size, scale) = options.window.unwrap_or(([0.0, 0.0], 1.0));
     for index in 0..options.frames {
         let context = Context {
-            time: index as f32 / options.rate,
+            time: f64::from(index) / f64::from(options.rate),
             rate: options.sound_rate as f32,
             window: size,
             scale,

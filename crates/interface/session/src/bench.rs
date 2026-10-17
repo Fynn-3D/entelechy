@@ -130,7 +130,7 @@ pub fn measure(
     };
     let options = &options;
     let context = |frame: u32| Context {
-        time: base.time + frame as f32 / rate,
+        time: base.time + f64::from(frame) / f64::from(rate),
         ..base
     };
     // The first frame compiles and allocates, left out of the runs and

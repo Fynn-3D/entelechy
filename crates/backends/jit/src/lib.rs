@@ -71,6 +71,8 @@ struct Changed {
 pub struct Ctx {
     views: *const View,
     params: *const u32,
+    /// The clock whole (`clock()`); `time` is it rounded (`time()`).
+    clock: f64,
     time: f32,
     rate: f32,
     pointer: [f32; 2],
@@ -422,7 +424,8 @@ fn shared(
     let template = Ctx {
         views: views.as_ptr(),
         params: params.as_ptr(),
-        time: invocation.context.time,
+        clock: invocation.context.time,
+        time: invocation.context.float_time(),
         rate: invocation.context.rate,
         pointer: input.pointer,
         wheel: input.wheel,
@@ -517,6 +520,7 @@ fn compute_into(
     let fresh = |t: &Ctx| Ctx {
         views: t.views,
         params: t.params,
+        clock: t.clock,
         time: t.time,
         rate: t.rate,
         pointer: t.pointer,
@@ -1572,6 +1576,7 @@ pub(crate) mod offsets {
     use super::{Ctx, View};
     pub const VIEWS: i32 = std::mem::offset_of!(Ctx, views) as i32;
     pub const PARAMS: i32 = std::mem::offset_of!(Ctx, params) as i32;
+    pub const CLOCK: i32 = std::mem::offset_of!(Ctx, clock) as i32;
     pub const TIME: i32 = std::mem::offset_of!(Ctx, time) as i32;
     pub const RATE: i32 = std::mem::offset_of!(Ctx, rate) as i32;
     pub const POINTER: i32 = std::mem::offset_of!(Ctx, pointer) as i32;

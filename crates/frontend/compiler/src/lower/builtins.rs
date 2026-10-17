@@ -364,6 +364,11 @@ impl Builder<'_> {
                 self.arity(name, args, 0, span)?;
                 Ok(self.emit(Type::Float, Op::Time))
             }
+            "clock" => {
+                self.require(name, Capability::TimeRead, span)?;
+                self.arity(name, args, 0, span)?;
+                Ok(self.emit(Type::Double, Op::Clock))
+            }
             "rate" => {
                 self.require(name, Capability::TimeRead, span)?;
                 self.arity(name, args, 0, span)?;

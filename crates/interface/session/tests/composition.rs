@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use entelechy_graph::{Context, EvaluateError, Evaluator, Graph, GraphError, NodeId};
 use entelechy_kernel::{ExecutionError, Runtime};
 
-fn at(time: f32) -> Context {
+fn at(time: f64) -> Context {
     Context {
         time,
         ..Context::default()
@@ -423,7 +423,7 @@ fn a_node_whose_outputs_are_unchanged_spares_what_reads_them() {
     let graph = entelechy_scene::parse("node second: test.second@1 { domain = vec2(2, 2); }\nnode final: image.invert@1 { source <- second.result; }\noutput r <- final.result;").unwrap();
     let mut evaluator = Evaluator::new();
     evaluator.set_fusion(false);
-    let mut frame = |time: f32| {
+    let mut frame = |time: f64| {
         evaluator
             .evaluate(
                 &graph,

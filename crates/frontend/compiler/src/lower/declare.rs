@@ -491,7 +491,7 @@ fn column_matrix(kind: Type, n: usize) -> Option<Type> {
 /// The builtins a function cannot be named after: the Field, memory,
 /// context and construction ones, whose forms the language owns. A
 /// function named after a math builtin stands for it in its document.
-pub(super) const RESERVED_BUILTINS: [&str; 47] = [
+pub(super) const RESERVED_BUILTINS: [&str; 48] = [
     "put",
     "emit",
     "sample",
@@ -507,6 +507,7 @@ pub(super) const RESERVED_BUILTINS: [&str; 47] = [
     "domain",
     "idomain",
     "time",
+    "clock",
     "rate",
     "window",
     "scale",

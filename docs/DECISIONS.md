@@ -1446,3 +1446,31 @@ pass the chain by and to make it again faithfully.
 ([evaluator](../crates/core/graph/src/evaluate/mod.rs)), `Session::warm`
 ([session](../crates/interface/session/src/session.rs)). Held by
 [the memory tests](../crates/interface/session/tests/memory.rs).
+
+## The clock crosses whole
+
+The session's time is a `Double` of seconds from the Host's clock to the
+Kernel: in the context every backend reads, in the protocol's and the
+replay's frame times, and in the C interface's input. `clock()` reads it
+whole. `time()` reads it rounded to the nearest `Float`, the one rounding,
+done by the context for every backend. A Kernel that reads `clock()` holds
+a `Double`, and runs where Doubles run. The cache keys a node that reads
+the clock by the time's whole bits.
+
+**Why.** A `Float` of seconds is finer than a millisecond for the first
+hours and a quarter of a second a month in: a session left running stepped
+its motion in jumps and saw no time pass between most frames. Precision
+lost before the Kernel cannot be found again inside it, so the clock
+crosses the boundary whole, and a Kernel chooses what it needs: `time()`
+for the many that animate over minutes, at no cost on any device,
+`clock()` for those that run for days. One rounding rule, in one place,
+keeps `time()` the same word on every backend.
+
+**Where.** `Context::float_time` in the
+[ABI](../crates/core/abi/src/lib.rs), `Op::Clock` in the
+[IR](../crates/core/ir/src/lib.rs), `EntelechyInput` at
+`ENTELECHY_ABI_VERSION` 2 in the
+[C header](../crates/interface/ffi/include/entelechy.h). Held by
+[the interpreter's test](../crates/backends/cpu/tests/execute.rs) of a
+month's clock, the [conformance matrix](../crates/backends/conformance/src/lib.rs)
+run a month in, and the [language surface](../crates/frontend/compiler/tests/surface.txt).

@@ -1087,7 +1087,7 @@ impl Inputs {
     /// Loads frame `floor(time * rate)`, wrapping, for each `frames`
     /// input. An unreadable frame is reported by the next sync and the
     /// input keeps its frame.
-    pub(crate) fn select_frames(&mut self, store: &dyn Store, host: &mut Host, time: f32) {
+    pub(crate) fn select_frames(&mut self, store: &dyn Store, host: &mut Host, time: f64) {
         let names: Vec<String> = self.sequences.keys().cloned().collect();
         for name in names {
             let Some(sequence) = self.sequences.get(&name) else {
@@ -1097,7 +1097,8 @@ impl Inputs {
                 continue;
             }
             let count = sequence.files.len() as i64;
-            let index = ((time * sequence.rate as f32).floor() as i64).rem_euclid(count) as usize;
+            let index =
+                ((time * f64::from(sequence.rate)).floor() as i64).rem_euclid(count) as usize;
             if sequence.current == Some(index) {
                 continue;
             }

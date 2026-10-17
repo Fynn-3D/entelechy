@@ -54,6 +54,7 @@ fn functions(text: &str, before: &str) -> Vec<String> {
 fn rust_of(c: &str) -> String {
     match c {
         "float" => "f32",
+        "double" => "f64",
         "uint32_t" => "u32",
         "const uint32_t *" => "*const u32",
         "const char *" => "*const c_char",

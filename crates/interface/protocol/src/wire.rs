@@ -38,7 +38,7 @@ pub fn context_of(session: &Session, request: &Json) -> Result<Context, Json> {
         None => session.window().unwrap_or(([0.0, 0.0], 1.0)),
     };
     let mut context = Context {
-        time: request.get("time").and_then(Json::as_f64).unwrap_or(0.0) as f32,
+        time: request.get("time").and_then(Json::as_f64).unwrap_or(0.0),
         rate: request.get("rate").and_then(Json::as_f64).unwrap_or(0.0) as f32,
         input: InputState::default(),
         window,

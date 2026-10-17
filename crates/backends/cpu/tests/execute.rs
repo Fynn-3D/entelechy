@@ -660,6 +660,40 @@ fn the_device_rate_reaches_kernels_as_context() {
     assert_eq!(f32::from_bits(host.element(output, 0).unwrap()[0]), 48000.0);
 }
 
+/// A month in, `clock()` reads the session's time whole and `time()` the
+/// nearest `Float` to it.
+#[test]
+fn the_clock_reaches_kernels_whole_and_time_rounded() {
+    let module = compile(
+        "kernel test.clock@1 { requires { field.write; time.read; } struct Read { whole: Double; rounded: Float; } output result: Rows<Read>; compute { return Read { whole: clock(), rounded: time() }; } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let mut host = Host::new(64);
+    let month = 2_592_000.123;
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(1),
+        context: Context {
+            time: month,
+            ..Context::default()
+        },
+    };
+    let mut scope = Scope::new(
+        &mut host,
+        [Capability::FieldWrite, Capability::TimeRead]
+            .into_iter()
+            .collect(),
+    );
+    let output = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    let words = host.element(output, 0).unwrap();
+    let whole = f64::from_bits(u64::from(words[0]) | (u64::from(words[1]) << 32));
+    assert_eq!(whole, month);
+    assert_eq!(f32::from_bits(words[2]), 2_592_000.0);
+}
+
 #[test]
 fn linear_interpolation_blends_neighbours_and_clamps() {
     // A 2x2 image: pixel centres are exact, halfway blends, beyond the edge

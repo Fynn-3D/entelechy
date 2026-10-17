@@ -297,8 +297,8 @@ impl Play {
     }
 
     /// Seconds since the play began.
-    pub fn time(&self) -> f32 {
-        ((self.clock)() - self.began) as f32
+    pub fn time(&self) -> f64 {
+        (self.clock)() - self.began
     }
 
     /// The context of the person's frame on `view`.
@@ -705,7 +705,7 @@ impl Play {
         let Some((replayer, since)) = &mut self.replaying else {
             return Replayed::Not;
         };
-        let clock = (now - *since.get_or_insert(now)) as f32;
+        let clock = now - *since.get_or_insert(now);
         if replayer.next_time().is_some_and(|time| time > clock) {
             return Replayed::Wait;
         }

@@ -1931,6 +1931,13 @@ impl<'a, 'b> Fx<'a, 'b> {
                     .ins()
                     .load(types::F32, self.settled, self.ctx, offsets::TIME),
             ],
+            Op::Clock => {
+                vec![
+                    self.b
+                        .ins()
+                        .load(types::F64, self.settled, self.ctx, offsets::CLOCK),
+                ]
+            }
             Op::Rate => vec![
                 self.b
                     .ins()

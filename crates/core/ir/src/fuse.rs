@@ -231,6 +231,7 @@ impl<'a> Reads<'a> {
                 | Op::Size(_)
                 | Op::Domain
                 | Op::Time
+                | Op::Clock
                 | Op::Rate
                 | Op::Window
                 | Op::Scale
@@ -1116,6 +1117,7 @@ impl<'a> Renumber<'a> {
             | Op::Coord
             | Op::Domain
             | Op::Time
+            | Op::Clock
             | Op::Rate
             | Op::Pointer
             | Op::PointerDown
