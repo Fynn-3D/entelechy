@@ -27,6 +27,8 @@ blank ────────────────────────�
 
 The skirmish replay asserts on the state rows through a selection, a
 strike, and an enemy turn.
+The paced replay holds the synth package's clock kept to the time
+(`synth.paced`) to its count of samples thirteen hours in.
 
 ```sh
 entelechy player examples/slg/scene.esn --scale 3

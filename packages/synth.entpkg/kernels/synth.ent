@@ -5,13 +5,14 @@
 // events into cues and its cues into sound.
 use "noise.entpkg";
 
-/// The samples played before this frame's block.
-struct Clock { n: Int; }
+/// The samples played before this frame's block, a `Long`: it counts on
+/// for as long as the scene runs.
+struct Clock { n: Long; }
 type Clocks = Rows<Clock>;
 /// A sound set going: what it is, which of its kind, the sample it starts
 /// at, where it is heard (-1 left to 1 right), how loud; `head` the voice
 /// the next cue takes.
-struct Cue { kind: Int; param: Int; start: Int; pan: Float; gain: Float; head: Int; }
+struct Cue { kind: Int; param: Int; start: Long; pan: Float; gain: Float; head: Int; }
 type Cues = Rows<Cue>;
 
 /// The samples a frame, the voices, the samples a second (the device's,
@@ -21,10 +22,11 @@ fn voices() -> Int { return 8; }
 fn hz() -> Float { return if rate() > 0.0 { rate() } else { 48000.0 }; }
 fn tau() -> Float { return 6.2831853; }
 /// A voice with nothing to play.
-fn quiet() -> Cue { return Cue { kind: 0, param: 0, start: 0, pan: 0.0, gain: 0.0, head: 0 }; }
+fn quiet() -> Cue { return Cue { kind: 0, param: 0, start: 0l, pan: 0.0, gain: 0.0, head: 0 }; }
 
-/// White noise, -1 to 1, at sample `n`.
-fn white(n: Int, s: Int) -> Float { return hash1(n, s) * 2.0 - 1.0; }
+/// White noise, -1 to 1, at sample `n` (its low 31 bits: the noise
+/// repeats every half day of samples).
+fn white(n: Long, s: Int) -> Float { return hash1(int(n & 2147483647l), s) * 2.0 - 1.0; }
 
 /// Noise smoothed between random values `x` apart: its pitch rises with
 /// how fast x runs.
@@ -68,7 +70,7 @@ fn horn(f: Float, t: Float, len: Float) -> Float {
 }
 
 /// A drum: a skin's low boom and the stick's slap.
-fn drum(t: Float, n: Int, base: Float) -> Float {
+fn drum(t: Float, n: Long, base: Float) -> Float {
     if t < 0.0 { return 0.0; }
     return thud(t, base) + white(n, 7) * exp(-t * 45.0) * 0.35;
 }
@@ -78,7 +80,7 @@ fn drum(t: Float, n: Int, base: Float) -> Float {
 kernel synth.clock_start@1 {
     requires { field.write; }
     output result: Clocks;
-    compute { return Clock { n: -block() }; }
+    compute { return Clock { n: -long(block()) }; }
 }
 
 /// The clock a block on.
@@ -86,7 +88,7 @@ kernel synth.clock@1 {
     requires { field.read; field.write; }
     input previous: Clocks;
     output result: Clocks;
-    compute { return Clock { n: sample(previous).n + block() }; }
+    compute { return Clock { n: sample(previous).n + long(block()) }; }
 }
 
 /// A clock kept to the time rather than to the frames: the samples
@@ -98,7 +100,7 @@ kernel synth.clock@1 {
 /// blocks by the first (four of it), and a block over half the ring could
 /// not be queued.
 /// The sound is then rendered over `value(size, 0)` samples (`synth.paced_size`).
-struct Paced { n: Int; block: Int; }
+struct Paced { n: Long; block: Int; }
 type Paceds = Rows<Paced>;
 fn paced_step() -> Int { return 400; }
 fn paced_first() -> Int { return 1600; }
@@ -107,7 +109,7 @@ fn paced_most() -> Int { return 3200; }
 kernel synth.paced_start@1 {
     requires { field.write; }
     output result: Paceds;
-    compute { return Paced { n: -1, block: paced_first() }; }
+    compute { return Paced { n: -1l, block: paced_first() }; }
 }
 
 kernel synth.paced@1 {
@@ -116,12 +118,14 @@ kernel synth.paced@1 {
     output result: Paceds;
     compute {
         let p = sample(previous);
-        let want = int(floor(time() * hz()));
-        if p.n < 0 { return Paced { n: max(want - paced_first(), 0), block: paced_first() }; }
-        let n = p.n + p.block;
+        // The sample the time has reached, from the clock whole.
+        let want = long(floor(clock() * double(hz())));
+        let first = long(paced_first());
+        if p.n < 0l { return Paced { n: max(want - first, 0l), block: paced_first() }; }
+        let n = p.n + long(p.block);
         let owed = want - n;
-        if owed > paced_most() * 4 { return Paced { n: max(want - paced_first(), n), block: paced_first() }; }
-        let steps = clamp((owed + paced_step() / 2) / paced_step(), 1, paced_most() / paced_step());
+        if owed > long(paced_most() * 4) { return Paced { n: max(want - first, n), block: paced_first() }; }
+        let steps = int(clamp((owed + long(paced_step() / 2)) / long(paced_step()), 1l, long(paced_most() / paced_step())));
         return Paced { n: n, block: steps * paced_step() };
     }
 }
@@ -132,7 +136,7 @@ kernel synth.paced_clock@1 {
     requires { field.read; field.write; }
     input paced: Paceds;
     output result: Clocks;
-    compute { return Clock { n: max(at(paced, 0).n, 0) }; }
+    compute { return Clock { n: max(at(paced, 0).n, 0l) }; }
 }
 kernel synth.paced_size@1 {
     requires { field.read; field.write; }

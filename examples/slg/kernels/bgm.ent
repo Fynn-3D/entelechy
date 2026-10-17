@@ -8,13 +8,13 @@
 use "slg.ent";
 use "../../../packages/synth.entpkg";
 
-struct Tone { left: Float; right: Float; count: Int; lead: Float; bass: Float; hit: Float; }
+struct Tone { left: Float; right: Float; count: Long; lead: Float; bass: Float; hit: Float; }
 type Music = Rows<Tone>;
 
 kernel bgm.silence@1 {
     requires { field.write; }
     output result: Music;
-    compute { return Tone { left: 0.0, right: 0.0, count: -1, lead: 0.0, bass: 0.0, hit: 0.0 }; }
+    compute { return Tone { left: 0.0, right: 0.0, count: -1l, lead: 0.0, bass: 0.0, hit: 0.0 }; }
 }
 
 kernel bgm.play@1 {
@@ -42,7 +42,7 @@ kernel bgm.play@1 {
 
     compute {
         let last = at(previous, count(previous) - 1);
-        let n = at(clock, 0).n + element();
+        let n = at(clock, 0).n + long(element());
         let t = float(n) / hz();
         let step = int(floor(t * tempo));
         let within = fract(t * tempo);
