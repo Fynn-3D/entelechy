@@ -8,7 +8,6 @@
 
 pub mod names;
 
-use std::collections::BTreeSet;
 use std::fmt;
 use std::str::FromStr;
 
@@ -96,9 +95,10 @@ impl FromStr for Capability {
     }
 }
 
-/// An explicit set of capabilities.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Capabilities(BTreeSet<Capability>);
+/// An explicit set of capabilities: a bit a capability, in the order of
+/// [`Capability::ALL`].
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub struct Capabilities(u8);
 
 impl Capabilities {
     /// The empty set: no access at all.
@@ -106,30 +106,55 @@ impl Capabilities {
         Self::default()
     }
 
+    fn bit(capability: Capability) -> u8 {
+        1 << (capability as u8)
+    }
+
     /// Whether the set grants `capability`.
     pub fn contains(&self, capability: Capability) -> bool {
-        self.0.contains(&capability)
+        self.0 & Self::bit(capability) != 0
     }
 
     /// Adds a capability.
     pub fn insert(&mut self, capability: Capability) {
-        self.0.insert(capability);
+        self.0 |= Self::bit(capability);
     }
 
     /// Iterates capabilities in stable order.
     pub fn iter(&self) -> impl Iterator<Item = Capability> + '_ {
-        self.0.iter().copied()
+        Capability::ALL
+            .into_iter()
+            .filter(move |capability| self.contains(*capability))
     }
 
     /// Whether every capability in `self` is also in `other`.
     pub fn is_subset(&self, other: &Capabilities) -> bool {
-        self.0.is_subset(&other.0)
+        self.0 & !other.0 == 0
+    }
+}
+
+impl fmt::Debug for Capabilities {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Capabilities").field(&Listed(self)).finish()
+    }
+}
+
+/// A set's capabilities as a set reads in `Debug`.
+struct Listed<'a>(&'a Capabilities);
+
+impl fmt::Debug for Listed<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_set().entries(self.0.iter()).finish()
     }
 }
 
 impl FromIterator<Capability> for Capabilities {
     fn from_iter<I: IntoIterator<Item = Capability>>(iter: I) -> Self {
-        Self(iter.into_iter().collect())
+        let mut set = Self::none();
+        for capability in iter {
+            set.insert(capability);
+        }
+        set
     }
 }
 

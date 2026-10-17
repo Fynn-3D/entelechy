@@ -154,7 +154,7 @@ impl Runtime {
             .name(format!("entelechy run {run}"))
             .spawn(move || {
                 let work = theirs.lock().ok().and_then(|mut work| work.take());
-                if let Some(work) = work {
+                if let Some(mut work) = work {
                     let _ = landed.send(Landed {
                         run,
                         outcome: work(),
@@ -165,7 +165,7 @@ impl Runtime {
             let work = shared.lock().ok().and_then(|mut work| work.take());
             let outcome = work.map_or_else(
                 || Err(ExecutionError::Device("the run was lost".into())),
-                |work| work(),
+                |mut work| work(),
             );
             self.runs.ready.insert(run, outcome);
             return Ok(run);
