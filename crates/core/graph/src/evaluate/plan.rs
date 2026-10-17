@@ -561,7 +561,7 @@ impl Evaluator {
                     let module = group.module().expect("checked above");
                     let prefixed: Vec<(u32, String)> = inputs
                         .iter()
-                        .map(|(input, _)| (*input, producer_id.0.clone()))
+                        .map(|(input, _)| (*input, producer_id.0.to_string()))
                         .collect();
                     let module = entelechy_ir::counted(module, &prefixed).map_err(|error| {
                         EvaluateError::Fusion {

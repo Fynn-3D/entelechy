@@ -27,7 +27,7 @@ pub(crate) fn status(session: &Session) -> Result<Json, Json> {
         "memory": {
             "used": session.runtime().host().used_words() as u64 * 4,
             "budget": session.runtime().host().budget_words() as u64 * 4,
-            "cold": session.cold_nodes().iter().map(|node| node.0.clone()).collect::<Vec<_>>(),
+            "cold": session.cold_nodes().iter().map(|node| node.0.to_string()).collect::<Vec<_>>(),
         },
     }))
 }

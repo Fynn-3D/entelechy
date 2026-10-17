@@ -50,9 +50,112 @@ impl AsGraph for Arc<Graph> {
     }
 }
 
-/// Name of a node within a graph.
+/// Name of a node within a graph. A copy is a count, not a copy of its text.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct NodeId(pub String);
+pub struct NodeId(pub Name);
+
+/// A node's name: text shared by every copy, read as a `str`, ordered,
+/// hashed and compared as one.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Name(Arc<str>);
+
+impl Name {
+    /// The name as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for Name {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for Name {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&*self.0, f)
+    }
+}
+
+impl fmt::Display for Name {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for Name {
+    fn from(text: String) -> Self {
+        Self(Arc::from(text))
+    }
+}
+
+impl From<&str> for Name {
+    fn from(text: &str) -> Self {
+        Self(Arc::from(text))
+    }
+}
+
+impl From<&String> for Name {
+    fn from(text: &String) -> Self {
+        Self(Arc::from(text.as_str()))
+    }
+}
+
+impl PartialEq<str> for Name {
+    fn eq(&self, other: &str) -> bool {
+        &*self.0 == other
+    }
+}
+
+impl PartialEq<&str> for Name {
+    fn eq(&self, other: &&str) -> bool {
+        &*self.0 == *other
+    }
+}
+
+impl PartialEq<String> for Name {
+    fn eq(&self, other: &String) -> bool {
+        *self.0 == **other
+    }
+}
+
+impl PartialEq<Name> for String {
+    fn eq(&self, other: &Name) -> bool {
+        **self == *other.0
+    }
+}
+
+impl PartialEq<Name> for str {
+    fn eq(&self, other: &Name) -> bool {
+        *self == *other.0
+    }
+}
+
+impl PartialEq<Name> for &str {
+    fn eq(&self, other: &Name) -> bool {
+        **self == *other.0
+    }
+}
+
+impl std::borrow::Borrow<str> for Name {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for NodeId {
+    fn from(text: String) -> Self {
+        Self(Name::from(text))
+    }
+}
+
+impl From<&str> for NodeId {
+    fn from(text: &str) -> Self {
+        Self(Name::from(text))
+    }
+}
 
 impl fmt::Display for NodeId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -67,7 +170,7 @@ pub fn split_port(text: &str) -> Option<(NodeId, String)> {
     if node.is_empty() || port.is_empty() {
         return None;
     }
-    Some((NodeId(node.to_owned()), port.to_owned()))
+    Some((NodeId(node.to_owned().into()), port.to_owned()))
 }
 
 /// Where an input port receives its image.
@@ -469,10 +572,11 @@ impl Graph {
         for name in self
             .externals
             .iter()
-            .chain(self.nodes.iter().map(|node| &node.id.0))
+            .map(String::as_str)
+            .chain(self.nodes.iter().map(|node| node.id.0.as_str()))
         {
             if !names.insert(name) {
-                return Err(GraphError::DuplicateName(name.clone()));
+                return Err(GraphError::DuplicateName(name.to_owned()));
             }
         }
         let index = self.index();

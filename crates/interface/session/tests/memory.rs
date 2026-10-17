@@ -150,7 +150,7 @@ fn an_output_let_go_cold_is_made_again_to_be_read() {
     let (mut session, path) = opened(1 << 24, "read", SCENE);
     let context = entelechy_kernel::Context::default();
     session.evaluate(&context).unwrap();
-    let b = entelechy_graph::NodeId("b".to_owned());
+    let b = entelechy_graph::NodeId::from("b");
     assert!(session.cached(&b, "result").is_none());
     session.warm(&b, "result").unwrap();
     let handle = session.cached(&b, "result").expect("made again");

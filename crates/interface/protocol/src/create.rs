@@ -409,7 +409,7 @@ pub(crate) fn published_json(
         let resets: Vec<Json> = kept
             .iter()
             .filter_map(|at| entelechy_graph::split_port(at))
-            .map(|(node, port)| json!({ "op": "reset", "node": node.0, "port": port }))
+            .map(|(node, port)| json!({ "op": "reset", "node": *node.0, "port": port }))
             .collect();
         answer["keeps"] = json!(kept);
         answer["reset"] = Json::Array(resets);

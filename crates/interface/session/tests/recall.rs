@@ -59,7 +59,7 @@ fn play(session: &mut Session) -> (Vec<BTreeSet<String>>, (f32, f32)) {
             ..Context::default()
         };
         let report = session.evaluate_for(&context, &demand).unwrap();
-        executed.push(report.executed.iter().map(|n| n.0.clone()).collect());
+        executed.push(report.executed.iter().map(|n| n.0.to_string()).collect());
     }
     let read = |session: &mut Session, node: &str| {
         let handle = session

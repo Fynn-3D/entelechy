@@ -1523,7 +1523,7 @@ impl Evaluator {
                         *externals
                             .get(external)
                             .ok_or_else(|| EvaluateError::MissingExternal {
-                                node: NodeId(format!("output {name}")),
+                                node: NodeId(format!("output {name}").into()),
                                 name: external.clone(),
                             })?
                     }

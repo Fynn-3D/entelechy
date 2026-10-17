@@ -785,7 +785,7 @@ impl Place<'_> {
         }
         match &reference.node {
             Some(node) => Ok(Binding::Now(Source::Node {
-                node: NodeId(format!("{prefix}{node}")),
+                node: NodeId(format!("{prefix}{node}").into()),
                 port: reference.name.clone(),
             })),
             None => match self.placement {
@@ -840,7 +840,7 @@ impl Place<'_> {
         };
         Ok(Binding::Previous {
             source: Source::Node {
-                node: NodeId(format!("{prefix}{node}")),
+                node: NodeId(format!("{prefix}{node}").into()),
                 port: source.name.clone(),
             },
             initial,
@@ -1568,11 +1568,15 @@ impl Lowering<'_, '_> {
         let (nodes, declared_outputs, repeated) =
             self.expand_times(document, placement, &params, &mut fallback_refs)?;
         // A repeated node's name stays readable as its last time's.
-        self.out.graph.repeated.extend(
-            repeated
-                .into_iter()
-                .map(|(name, last)| (format!("{prefix}{name}"), NodeId(format!("{prefix}{last}")))),
-        );
+        self.out
+            .graph
+            .repeated
+            .extend(repeated.into_iter().map(|(name, last)| {
+                (
+                    format!("{prefix}{name}"),
+                    NodeId(format!("{prefix}{last}").into()),
+                )
+            }));
         for decl in &nodes {
             self.placed += 1;
             if self.placed > MAX_PLACED {
@@ -1581,7 +1585,7 @@ impl Lowering<'_, '_> {
                     format!("the scene places more than {MAX_PLACED} nodes, every level together"),
                 ));
             }
-            let id = NodeId(format!("{prefix}{}", decl.name.value));
+            let id = NodeId(format!("{prefix}{}", decl.name.value).into());
             let mut inputs = BTreeMap::new();
             let mut node_params = BTreeMap::new();
             let mut domain = None;
@@ -1828,7 +1832,7 @@ impl Lowering<'_, '_> {
                         self.out.graph.externals.push(external.clone());
                     }
                     aliases.insert(
-                        id.0.clone(),
+                        id.0.to_string(),
                         outputs
                             .iter()
                             .map(|(port, external)| {
@@ -1837,7 +1841,7 @@ impl Lowering<'_, '_> {
                             .collect(),
                     );
                     fonts.push(FontNode {
-                        node: id.0.clone(),
+                        node: id.0.to_string(),
                         path: base.join(&font_path.value),
                         codes,
                         outputs,
@@ -1879,7 +1883,7 @@ impl Lowering<'_, '_> {
                         self.out.graph.externals.push(external.clone());
                     }
                     aliases.insert(
-                        id.0.clone(),
+                        id.0.to_string(),
                         outputs
                             .iter()
                             .map(|(port, external)| {
@@ -1888,7 +1892,7 @@ impl Lowering<'_, '_> {
                             .collect(),
                     );
                     file_nodes.push(FilesNode {
-                        node: id.0.clone(),
+                        node: id.0.to_string(),
                         dir: base.join(&dir_path.value),
                         paths,
                         outputs,
@@ -1908,15 +1912,18 @@ impl Lowering<'_, '_> {
                         ));
                     }
                     let outputs = self.place(sub_path, base, &id, inputs, node_params)?;
-                    self.out.graph.placed.push((id.0.clone(), outputs.clone()));
-                    aliases.insert(id.0.clone(), outputs);
+                    self.out
+                        .graph
+                        .placed
+                        .push((id.0.to_string(), outputs.clone()));
+                    aliases.insert(id.0.to_string(), outputs);
                 }
             }
         }
         // Sources that named a placed sub-graph now point at its outputs.
         let resolve = |source: &mut Source| -> Result<(), DocumentError> {
             if let Source::Node { node, port } = source
-                && let Some(outputs) = aliases.get(&node.0)
+                && let Some(outputs) = aliases.get(node.0.as_str())
             {
                 *source = outputs
                     .iter()
@@ -2707,7 +2714,7 @@ output result <- show.result;
 ";
 
     fn ids(graph: &Graph) -> Vec<String> {
-        graph.nodes.iter().map(|n| n.id.0.clone()).collect()
+        graph.nodes.iter().map(|n| n.id.0.to_string()).collect()
     }
 
     #[test]

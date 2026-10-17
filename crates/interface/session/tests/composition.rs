@@ -2583,7 +2583,7 @@ output result <- check.result;
     let committed: BTreeMap<String, entelechy_kernel::Handle> = evaluator
         .committed_states()
         .into_iter()
-        .map(|(node, _, handle)| (node.0, handle))
+        .map(|(node, _, handle)| (node.0.to_string(), handle))
         .collect();
     let (ha, hb) = (committed["a"], committed["b"]);
     assert_eq!((int_at(&runtime, ha), int_at(&runtime, hb)), (2, 20));
@@ -2603,7 +2603,7 @@ output result <- check.result;
     let after: BTreeMap<String, entelechy_kernel::Handle> = evaluator
         .committed_states()
         .into_iter()
-        .map(|(node, _, handle)| (node.0, handle))
+        .map(|(node, _, handle)| (node.0.to_string(), handle))
         .collect();
     assert_eq!(
         (int_at(&runtime, after["a"]), int_at(&runtime, after["b"])),
@@ -2775,7 +2775,7 @@ fn a_fused_chain_is_one_version_run_by_its_last_node() {
             .unwrap();
         for i in 1..31 {
             assert_eq!(
-                evaluator.fused_into(&NodeId(format!("n{i:02}"))),
+                evaluator.fused_into(&NodeId(format!("n{i:02}").into())),
                 Some(&NodeId("n31".into())),
                 "n{i:02}"
             );

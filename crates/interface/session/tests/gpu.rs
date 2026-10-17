@@ -133,8 +133,9 @@ fn state_at_a_fixed_point_on_the_device_stops_advancing() {
             )
             .unwrap()
     };
-    let names =
-        |nodes: &[entelechy_graph::NodeId]| nodes.iter().map(|n| n.0.clone()).collect::<Vec<_>>();
+    let names = |nodes: &[entelechy_graph::NodeId]| {
+        nodes.iter().map(|n| n.0.to_string()).collect::<Vec<_>>()
+    };
     let first = frame();
     assert_eq!(names(&first.executed), ["seed", "kept", "twice"]);
     // Its state changed from the seed to its own first Field: it runs for
@@ -219,8 +220,9 @@ fn a_small_output_found_unchanged_on_the_device_spares_what_reads_it() {
         &mut runtime,
         "kernel test.costly@1 { requires { field.read; field.write; } input pick: Rows<Int>; output result: Image; compute { return vec4(float(at(pick, 0)) + coord().x, 0.0, 0.0, 1.0); } }",
     );
-    let names =
-        |nodes: &[entelechy_graph::NodeId]| nodes.iter().map(|n| n.0.clone()).collect::<Vec<_>>();
+    let names = |nodes: &[entelechy_graph::NodeId]| {
+        nodes.iter().map(|n| n.0.to_string()).collect::<Vec<_>>()
+    };
     let mut run = |every: f32| {
         let graph = entelechy_scene::parse(&format!(
             "node zero: test.zero@1 {{ domain = 1; }}

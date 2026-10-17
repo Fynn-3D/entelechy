@@ -536,7 +536,10 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
             ["reset", target] => {
                 let (node, port) = entelechy_graph::split_port(target)
                     .ok_or_else(|| error("`reset` takes nothing or `node.port`".to_owned()))?;
-                steps.push(Step::ResetPort { node: node.0, port });
+                steps.push(Step::ResetPort {
+                    node: node.0.to_string(),
+                    port,
+                });
             }
             ["param", name, value @ ..] if !value.is_empty() => {
                 let text = value.join(" ");
@@ -553,7 +556,7 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
                 let (node, port) = entelechy_graph::split_port(target)
                     .ok_or_else(|| error("`expect count` takes `node.port`".to_owned()))?;
                 steps.push(Step::ExpectCount {
-                    node: node.0,
+                    node: node.0.to_string(),
                     port,
                     count: count.parse::<usize>().map_err(|_| {
                         error(format!("`{count}` is not a whole number of elements"))
@@ -792,7 +795,7 @@ fn reaching(
     let mut seen = std::collections::BTreeSet::new();
     let mut open: Vec<entelechy_graph::NodeId> = asked.iter().cloned().collect();
     while let Some(id) = open.pop() {
-        if !seen.insert(id.0.clone()) {
+        if !seen.insert(id.0.to_string()) {
             continue;
         }
         let Some(node) = graph.node(&id) else {
@@ -967,7 +970,7 @@ impl Resident {
             return true;
         };
         touched.iter().any(|name| {
-            let Some(node) = graph.node(&entelechy_graph::NodeId(name.clone())) else {
+            let Some(node) = graph.node(&entelechy_graph::NodeId(name.clone().into())) else {
                 return true;
             };
             change.kernels.contains(&node.kernel.to_string())
@@ -1035,7 +1038,7 @@ impl Replayer {
                 | Step::ExpectCount { node, port, .. }
                 | Step::Show { node, port, .. } => Some(
                     session
-                        .producer(&entelechy_graph::NodeId(node.clone()), port)
+                        .producer(&entelechy_graph::NodeId(node.clone().into()), port)
                         .0,
                 ),
                 _ => None,
@@ -1164,7 +1167,7 @@ impl Replayer {
             Step::Reset => session.reset_state(),
             Step::ResetPort { node, port } => {
                 session
-                    .reset_port(&entelechy_graph::NodeId(node.clone()), port)
+                    .reset_port(&entelechy_graph::NodeId(node.clone().into()), port)
                     .map_err(|error| format!("reset {node}.{port}: {error}"))?;
             }
             Step::Param { name, value } => {
@@ -1226,7 +1229,7 @@ impl Replayer {
                     return Err(format!("line {line}: expect before any frame"));
                 }
                 outcome.checks += 1;
-                match session.element_count(&entelechy_graph::NodeId(node.clone()), port) {
+                match session.element_count(&entelechy_graph::NodeId(node.clone().into()), port) {
                     Ok(actual) if actual == *count => {}
                     Ok(actual) => outcome.failures.push(format!(
                         "line {line}: {node}.{port} holds {actual} element(s), expected {count}"
@@ -1378,7 +1381,7 @@ fn shown(
     index: u32,
     path: &[String],
 ) -> Result<String, String> {
-    let node_id = entelechy_graph::NodeId(node.to_owned());
+    let node_id = entelechy_graph::NodeId(node.to_owned().into());
     let (ty, words) = session.element_field(&node_id, port, index, path)?;
     if matches!(ty, entelechy_ir::Type::Struct(_)) {
         let fields = session.element_fields(&node_id, port, path)?;
@@ -1411,7 +1414,7 @@ fn check_element(
     values: &[String],
 ) -> Result<Option<String>, String> {
     use entelechy_ir::{Number, Type};
-    let node_id = entelechy_graph::NodeId(node.to_owned());
+    let node_id = entelechy_graph::NodeId(node.to_owned().into());
     let (ty, words) = session.element_field(&node_id, port, index, path)?;
     if matches!(ty, Type::Struct(_)) {
         return Err("name a field of the struct; whole structs are not compared".into());

@@ -1168,7 +1168,7 @@ output result <- blocks.result;
         .unwrap()
         .nodes
         .iter()
-        .map(|n| n.id.0.clone())
+        .map(|n| n.id.0.to_string())
         .collect();
     assert_eq!(ids, ["seed", "gray/1", "gray/2", "gray/3", "blocks"]);
     let report = session

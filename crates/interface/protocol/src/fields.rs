@@ -58,7 +58,7 @@ pub(crate) fn trace(session: &mut Session, request: &Request) -> Result<Json, Js
     };
     known_node(session, &node)?;
     let context = context_of(session, request.json())?;
-    let id = entelechy_graph::NodeId(node.clone());
+    let id = entelechy_graph::NodeId(node.clone().into());
     let entelechy_session::Traced {
         trace,
         kernel,
@@ -88,7 +88,7 @@ pub(crate) fn write(session: &mut Session, request: &Request) -> Result<Json, Js
         // A Field file: its layout and extent must be the port's.
         let data = entelechy_formats::file::decode(&bytes).map_err(|e| failure(e.to_string()))?;
         let current = session
-            .cached(&entelechy_graph::NodeId(node.clone()), &port)
+            .cached(&entelechy_graph::NodeId(node.clone().into()), &port)
             .ok_or_else(|| failure(format!("`{node}.{port}` has no value yet; evaluate first")))?;
         let host = session.runtime().host();
         let (schema, domain) = (
@@ -120,7 +120,7 @@ pub(crate) fn write(session: &mut Session, request: &Request) -> Result<Json, Js
     };
     let count = words.len();
     session
-        .write(&entelechy_graph::NodeId(node.clone()), &port, words)
+        .write(&entelechy_graph::NodeId(node.clone().into()), &port, words)
         .map_err(|e| failure(e.to_string()))?;
     Ok(json!({ "node": node, "port": port, "words": count }))
 }
@@ -137,13 +137,13 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
             .unwrap_or("result");
         // Outputs let go cold are made again to be read.
         session
-            .warm(&entelechy_graph::NodeId(node.to_owned()), port)
+            .warm(&entelechy_graph::NodeId(node.to_owned().into()), port)
             .map_err(|e| failure(e.to_string()))?;
         let graph = session
             .graph()
             .ok_or_else(|| failure("no scene is loaded"))?;
         session
-            .cached(&entelechy_graph::NodeId(node.to_owned()), port)
+            .cached(&entelechy_graph::NodeId(node.to_owned().into()), port)
             .ok_or_else(|| {
                 // An unknown node name is reported before the pin hint.
                 if !graph.nodes.iter().any(|n| n.id.0 == node) {
@@ -151,7 +151,7 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
                 }
                 // Folded into its reader, it keeps a value only pinned;
                 // otherwise evaluating gives it one.
-                let id = entelechy_graph::NodeId(node.to_owned());
+                let id = entelechy_graph::NodeId(node.to_owned().into());
                 let why = failure(session.why_no_value(&id, port));
                 match session.fused_into(&id) {
                     Some(_) => why,
@@ -197,7 +197,7 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
             "result".to_owned(),
         ),
     };
-    if let Ok(names) = session.element_names(&entelechy_graph::NodeId(named.0), &named.1)
+    if let Ok(names) = session.element_names(&entelechy_graph::NodeId(named.0.into()), &named.1)
         && names.len() > 1
     {
         described["fields"] = json!(names);
@@ -384,7 +384,7 @@ fn summary(
 pub(crate) fn pin(session: &mut Session, request: &Request) -> Result<Json, Json> {
     let node = request.text("node")?;
     known_node(session, &node)?;
-    session.pin(entelechy_graph::NodeId(node.clone()));
+    session.pin(entelechy_graph::NodeId(node.clone().into()));
     Ok(json!({ "pinned": node }))
 }
 
@@ -392,7 +392,7 @@ pub(crate) fn pin(session: &mut Session, request: &Request) -> Result<Json, Json
 pub(crate) fn unpin(session: &mut Session, request: &Request) -> Result<Json, Json> {
     let node = request.text("node")?;
     known_node(session, &node)?;
-    session.unpin(&entelechy_graph::NodeId(node.clone()));
+    session.unpin(&entelechy_graph::NodeId(node.clone().into()));
     Ok(json!({ "unpinned": node }))
 }
 

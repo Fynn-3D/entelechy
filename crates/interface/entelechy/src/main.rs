@@ -185,10 +185,10 @@ fn parse_save(binding: &str) -> Result<(String, String, PathBuf), String> {
         .ok_or_else(|| "--save needs <node.port>=<file>".to_string())?;
     let (node, port) = entelechy_graph::split_port(target)
         .map(|(node, port)| (node.0, port))
-        .unwrap_or_else(|| (target.to_owned(), "result".to_owned()));
+        .unwrap_or_else(|| (target.to_owned().into(), "result".to_owned()));
     let path = PathBuf::from(path);
     entelechy_formats::writable(&path).map_err(|why| format!("--save: {why}"))?;
-    Ok((node, port, path))
+    Ok((node.to_string(), port, path))
 }
 
 fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
@@ -250,7 +250,7 @@ fn render(args: &[String]) -> Result<(), String> {
     let mut session = options.session.open("jit")?;
     // A file named on the command line is the person's own allowance.
     for (node, _, path) in &options.saves {
-        session.pin(entelechy_graph::NodeId(node.clone()));
+        session.pin(entelechy_graph::NodeId(node.clone().into()));
         session.allow_write_to(path)?;
     }
     let events = session.sync();
@@ -286,7 +286,7 @@ fn render(args: &[String]) -> Result<(), String> {
     report_events(&session.sync());
     for (node, port, path) in &options.saves {
         session
-            .save(&entelechy_graph::NodeId(node.clone()), port, path)
+            .save(&entelechy_graph::NodeId(node.clone().into()), port, path)
             .map_err(|error| format!("cannot save {node}.{port}: {error}"))?;
         eprintln!(
             "saved {node}.{port} after the last frame -> {}",
@@ -337,7 +337,7 @@ fn run(args: &[String]) -> Result<(), String> {
     session.set_measured(options.profile);
     // A file named on the command line is the person's own allowance.
     for (node, _, path) in &options.saves {
-        session.pin(entelechy_graph::NodeId(node.clone()));
+        session.pin(entelechy_graph::NodeId(node.clone().into()));
         session.allow_write_to(path)?;
     }
     if let Some(out) = &options.out {
@@ -1169,7 +1169,7 @@ fn trace(args: &[String]) -> Result<(), String> {
         scale,
         ..Context::default()
     };
-    let id = entelechy_graph::NodeId(node.clone());
+    let id = entelechy_graph::NodeId(node.clone().into());
     let entelechy_session::Traced {
         trace: traced,
         kernel,
@@ -1350,7 +1350,7 @@ fn evaluate_and_export(
                 );
             }
             for (node, port, path) in saves {
-                match session.save(&entelechy_graph::NodeId(node.clone()), port, path) {
+                match session.save(&entelechy_graph::NodeId(node.clone().into()), port, path) {
                     Ok(()) => eprintln!("saved {node}.{port} -> {}", path.display()),
                     Err(error) => {
                         eprintln!("error: cannot save {node}.{port}: {error}");

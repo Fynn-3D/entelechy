@@ -246,7 +246,7 @@ impl Profile {
     pub fn add(&mut self, report: &entelechy_graph::Report) {
         self.frames += 1;
         for ((node, took), placed) in report.timings.iter().zip(&report.placements) {
-            let total = self.totals.entry(node.0.clone()).or_default();
+            let total = self.totals.entry(node.0.to_string()).or_default();
             total.ms += took.as_secs_f64() * 1000.0;
             total.backend = placed.backend.to_owned();
             total.routed.clone_from(&placed.routed);

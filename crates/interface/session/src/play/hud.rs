@@ -412,7 +412,7 @@ mod tests {
 
     #[test]
     fn the_busiest_nodes_follow_the_line_averaged_and_held_half_a_second() {
-        let id = |n: &str| entelechy_graph::NodeId(n.to_owned());
+        let id = |n: &str| entelechy_graph::NodeId(n.to_owned().into());
         let ms = Duration::from_millis;
         let mut stats = Stats::default();
         assert!(stats.busiest(3).is_empty(), "nothing told, nothing said");

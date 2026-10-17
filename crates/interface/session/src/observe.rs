@@ -51,7 +51,7 @@ pub fn parse_target(text: &str) -> Result<(String, String, u32, Vec<String>), St
         .filter(|part| !part.is_empty())
         .map(str::to_owned)
         .collect();
-    Ok((node.0, port, index, path))
+    Ok((node.0.to_string(), port, index, path))
 }
 
 /// Why a node's output has no value: the name is a placed graph without

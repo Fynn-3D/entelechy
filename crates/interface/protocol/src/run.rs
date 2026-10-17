@@ -26,7 +26,7 @@ pub(crate) fn evaluate(session: &mut Session, request: &Request) -> Result<Json,
             let demand = nodes
                 .iter()
                 .filter_map(Json::as_str)
-                .map(|node| entelechy_graph::NodeId(node.to_owned()))
+                .map(|node| entelechy_graph::NodeId(node.to_owned().into()))
                 .collect();
             session.evaluate_for(&context, &demand)
         }
@@ -97,7 +97,7 @@ pub(crate) fn reset(session: &mut Session, request: &Request) -> Result<Json, Js
             .ok_or_else(|| failure("`port` must be a string"))?,
     };
     session
-        .reset_port(&entelechy_graph::NodeId(node.clone()), port)
+        .reset_port(&entelechy_graph::NodeId(node.clone().into()), port)
         .map_err(|e| failure(e.to_string()))?;
     Ok(json!({ "reset": true, "node": node, "port": port }))
 }

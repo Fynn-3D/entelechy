@@ -760,7 +760,7 @@ pub unsafe extern "C" fn entelechy_node(
     let port = unsafe { text(port) }.unwrap_or("result").to_owned();
     guarded(&mut session, |s| {
         s.clear();
-        let id = entelechy_graph::NodeId(node.clone());
+        let id = entelechy_graph::NodeId(node.clone().into());
         // Outputs let go cold are made again to be read.
         if let Err(error) = s.session.warm(&id, &port) {
             return s.fail(error.to_string());

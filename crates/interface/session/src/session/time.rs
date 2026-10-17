@@ -308,7 +308,7 @@ impl Session {
             match adopted {
                 Ok(handle) => {
                     states.push((
-                        entelechy_graph::NodeId(copy.node.clone()),
+                        entelechy_graph::NodeId(copy.node.clone().into()),
                         copy.port.clone(),
                         handle,
                     ));
