@@ -735,6 +735,11 @@ impl Value {
         }
     }
 
+    /// Appends the Kernel's words to `out`, as [`Value::words`] gives them.
+    pub fn push_words(&self, out: &mut Vec<u32>) {
+        self.each_number(&mut |number| number.push_words(out));
+    }
+
     /// The Kernel's words, one per 32-bit scalar and two per 64-bit one,
     /// in layout order.
     pub fn words(&self) -> Vec<u32> {

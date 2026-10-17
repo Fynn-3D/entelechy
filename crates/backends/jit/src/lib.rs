@@ -326,11 +326,6 @@ impl Backend for JitBackend {
     }
 }
 
-/// Words of a parameter, as the CPU lays them out.
-fn param_words(value: &entelechy_abi::Value) -> Vec<u32> {
-    value.words()
-}
-
 /// Read-only data the threads' contexts point into, and the context
 /// they start from. The vectors live here to outlive the run and are
 /// read through the context's pointers.
@@ -342,10 +337,10 @@ struct Shared {
     /// input index; views point here. Boxed so a view's pointer stays good.
     #[allow(clippy::type_complexity)]
     memories: Vec<(usize, Vec<u32>, Box<Changed>)>,
-    /// The layouts of the inputs kept narrow; the views point at them.
-    /// Boxed so a view's pointer stays good while the vector grows.
-    #[allow(clippy::vec_box)]
-    schemas: Vec<Box<entelechy_abi::Schema>>,
+    /// The layouts of the inputs kept narrow; the views point at them. The
+    /// vector holds room for every input from the start, so it never moves
+    /// what it holds.
+    schemas: Vec<entelechy_abi::Schema>,
     template: Ctx,
     /// The loop iterations an element may run, for naming a failure.
     budget: u32,
@@ -372,7 +367,7 @@ fn shared(
 ) -> Result<Shared, ExecutionError> {
     let mut views = Vec::with_capacity(invocation.inputs.len());
     let mut memories = Vec::new();
-    let mut schemas = Vec::new();
+    let mut schemas = Vec::with_capacity(invocation.inputs.len());
     for (index, handle) in invocation.inputs.iter().enumerate() {
         let port = &module.manifest.inputs[index];
         let extent = scope.size(*handle)?;
@@ -395,13 +390,12 @@ fn shared(
             let words = scope.storage(*handle)?;
             (words.as_ptr(), words.len(), std::ptr::null_mut())
         };
-        // A box does not move when the vector of them grows.
+        // The vector has room for every input: what it holds stays put.
         let schema = if layout.is_wide() {
             std::ptr::null()
         } else {
-            let boxed = Box::new(layout);
-            let pointer: *const entelechy_abi::Schema = &*boxed;
-            schemas.push(boxed);
+            schemas.push(layout);
+            let pointer: *const entelechy_abi::Schema = schemas.last().expect("just pushed");
             pointer
         };
         views.push(View {
@@ -416,7 +410,10 @@ fn shared(
             changed,
         });
     }
-    let params: Vec<u32> = invocation.params.iter().flat_map(param_words).collect();
+    let mut params: Vec<u32> = Vec::new();
+    for value in &invocation.params {
+        value.push_words(&mut params);
+    }
     let input = &invocation.context.input;
     let run = Box::new(entelechy_rules::Run::new(scope.work()));
     let held = Box::new(entelechy_rules::Held::new(scope.room()));
