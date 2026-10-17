@@ -1168,7 +1168,7 @@ impl Evaluator {
                 // What this frame of the remembered run left under the
                 // same key: its outputs, or the epoch to run again under.
                 let rerun = match (!node.is_async)
-                    .then(|| self.recall(&node.id, &key, runtime))
+                    .then(|| self.recall(&node.id, key, runtime))
                     .flatten()
                 {
                     Some(recall::Offer::Taken) => {
