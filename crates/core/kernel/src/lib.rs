@@ -81,7 +81,7 @@ enum Body {
         prepared: Box<dyn Prepared>,
         /// Why the main backend left it to the ordered one, decided when it
         /// was prepared; `None` when it runs on the main backend.
-        routed: Option<String>,
+        routed: Option<Arc<str>>,
         /// The operations one element takes as a rule
         /// ([`Validated::typical_work`]), for sizing a run.
         typical: u64,
@@ -91,7 +91,7 @@ enum Body {
         /// Why the main backend left it at a run, having prepared it (its
         /// device's own compiler failed on it when the run needed it
         /// built): the runs from then on go to the ordered backend.
-        left: std::sync::OnceLock<String>,
+        left: std::sync::OnceLock<Arc<str>>,
         /// Whether a run went to the main backend, so a replacement is
         /// finished there ([`Backend::finish`]) before it takes this one's
         /// place.
@@ -154,11 +154,9 @@ impl KernelVersion {
 
     /// Why the main backend left this version to the ordered one, when it
     /// did: in preparing it, or at a run.
-    pub(crate) fn routed(&self) -> Option<&str> {
+    pub(crate) fn routed(&self) -> Option<&Arc<str>> {
         match &self.body {
-            Body::Kernel { routed, left, .. } => {
-                routed.as_deref().or_else(|| left.get().map(String::as_str))
-            }
+            Body::Kernel { routed, left, .. } => routed.as_ref().or_else(|| left.get()),
             Body::Native(_) => None,
         }
     }
@@ -216,7 +214,7 @@ impl KernelVersion {
         }
         match main.declines(run) {
             Some(why) => {
-                let _ = left.set(why);
+                let _ = left.set(why.into());
                 true
             }
             None => false,
@@ -272,7 +270,7 @@ impl Candidate {
                 module: Box::new(self.module),
                 run: Box::new(self.run),
                 prepared: self.prepared,
-                routed: self.routed,
+                routed: self.routed.map(Arc::from),
                 on_ordered: {
                     let on = std::sync::OnceLock::new();
                     if let Some(ahead) = self.ordered_ahead {
@@ -1031,7 +1029,10 @@ impl Runtime {
         match (version.routed(), &self.ordered) {
             (Some(why), Some(ordered)) => Placement {
                 backend: ordered.name(),
-                routed: Some(format!("not on {}: {why}", self.backend.name())),
+                routed: Some(Routed::new(Why::Declined {
+                    main: self.backend.name(),
+                    why: Arc::clone(why),
+                })),
             },
             _ => Placement {
                 backend: self.backend.name(),
@@ -1073,7 +1074,7 @@ impl Runtime {
     /// by its size, or `None`: its elements times its typical work are at
     /// most `small`, and it reads no Field the main backend made in this
     /// evaluation. The choice reads the run and nothing of time.
-    fn sized_off(&self, run: &Validated, typical: u64, invocation: &Invocation) -> Option<String> {
+    fn sized_off(&self, run: &Validated, typical: u64, invocation: &Invocation) -> Option<Why> {
         if self.small == 0 || self.ordered.is_none() || !self.backend.has_device() {
             return None;
         }
@@ -1119,14 +1120,12 @@ impl Runtime {
         let few = elements.max(carried) <= FEW_ELEMENTS
             && (fresh == 0 || (work > FEW_LONG_WORK && fresh <= FEW_FRESH_BYTES));
         if few {
-            return Some(format!(
-                "few: {elements} elements, which a device runs a thread each"
-            ));
+            return Some(Why::Few { elements });
         }
         if fresh > 0 {
             return None;
         }
-        (work <= self.small).then(|| format!("small: {elements} elements, about {work} operations"))
+        (work <= self.small).then_some(Why::Small { elements, work })
     }
 
     /// The checks executions answered since the last call, in run order.
@@ -1394,14 +1393,17 @@ impl Runtime {
                     Some(_) => None,
                     None => self.sized_off(run, *typical, invocation),
                 };
-                let off: Option<(Arc<dyn Backend>, &dyn Prepared, String)> =
+                let off: Option<(Arc<dyn Backend>, &dyn Prepared, Why)> =
                     match (&self.ordered, version.routed(), sized) {
                         (Some(ordered), Some(why), _) => {
                             version.on_ordered(ordered.as_ref()).map(|on| {
                                 (
                                     Arc::clone(ordered),
                                     on,
-                                    format!("not on {}: {why}", self.backend.name()),
+                                    Why::Declined {
+                                        main: self.backend.name(),
+                                        why: Arc::clone(why),
+                                    },
                                 )
                             })
                         }
@@ -1426,7 +1428,7 @@ impl Runtime {
                             on,
                             Placement {
                                 backend: name,
-                                routed: Some(why),
+                                routed: Some(Routed::new(why)),
                             },
                         )
                     }
@@ -1522,7 +1524,69 @@ pub struct Placement {
     /// The backend that runs it.
     pub backend: &'static str,
     /// Why the main backend does not run it, when it does not.
-    pub routed: Option<String>,
+    pub routed: Option<Routed>,
+}
+
+/// Why a run left the main backend, read as text. The text is written
+/// the first time it is read: a run records its reason, a report reads it.
+#[derive(Clone)]
+pub struct Routed {
+    why: Why,
+    text: std::sync::OnceLock<String>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum Why {
+    /// The main backend declined the Kernel.
+    Declined { main: &'static str, why: Arc<str> },
+    /// Too few elements for a device's groups.
+    Few { elements: u64 },
+    /// Too little work for a device's dispatch.
+    Small { elements: u64, work: u64 },
+}
+
+impl Routed {
+    fn new(why: Why) -> Self {
+        Self {
+            why,
+            text: std::sync::OnceLock::new(),
+        }
+    }
+}
+
+impl std::ops::Deref for Routed {
+    type Target = str;
+    fn deref(&self) -> &str {
+        self.text.get_or_init(|| match &self.why {
+            Why::Declined { main, why } => format!("not on {main}: {why}"),
+            Why::Few { elements } => {
+                format!("few: {elements} elements, which a device runs a thread each")
+            }
+            Why::Small { elements, work } => {
+                format!("small: {elements} elements, about {work} operations")
+            }
+        })
+    }
+}
+
+impl PartialEq for Routed {
+    fn eq(&self, other: &Self) -> bool {
+        self.why == other.why
+    }
+}
+
+impl Eq for Routed {}
+
+impl fmt::Debug for Routed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
+
+impl fmt::Display for Routed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self)
+    }
 }
 
 /// Bytes carried between Host memory and a device.

@@ -1328,7 +1328,7 @@ fn evaluate_and_export(
                         node: name.clone(),
                         ms,
                         backend: placed.backend.to_owned(),
-                        routed: placed.routed.clone(),
+                        routed: placed.routed.as_deref().map(str::to_owned),
                         uploaded: placed.uploaded,
                         downloaded: placed.downloaded,
                     };

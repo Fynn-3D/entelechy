@@ -236,7 +236,7 @@ pub struct Profile {
 struct Total {
     ms: f64,
     backend: String,
-    routed: Option<String>,
+    routed: Option<entelechy_kernel::Routed>,
     uploaded: u64,
     downloaded: u64,
 }
@@ -276,7 +276,7 @@ impl Profile {
                         node: String::new(),
                         ms: 0.0,
                         backend: total.backend.clone(),
-                        routed: total.routed.clone(),
+                        routed: total.routed.as_deref().map(str::to_owned),
                         uploaded: 0,
                         downloaded: 0,
                     },

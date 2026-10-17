@@ -113,7 +113,7 @@ pub fn report_json(session: &Session, report: &entelechy_graph::Report) -> Json 
         "fused": report.fused.iter().map(|(node, absorbed)| json!({ "node": node.to_string(), "absorbed": absorbed.iter().map(ToString::to_string).collect::<Vec<_>>() })).collect::<Vec<_>>(),
         "outputs": outputs,
         "timings": report.timings.iter().map(|(node, took)| json!({ "node": node.to_string(), "millis": took.as_secs_f64() * 1000.0 })).collect::<Vec<_>>(),
-        "placements": report.placements.iter().map(|placed| json!({ "node": placed.node.to_string(), "backend": placed.backend, "routed": placed.routed, "uploaded": placed.uploaded, "downloaded": placed.downloaded })).collect::<Vec<_>>(),
+        "placements": report.placements.iter().map(|placed| json!({ "node": placed.node.to_string(), "backend": placed.backend, "routed": placed.routed.as_deref(), "uploaded": placed.uploaded, "downloaded": placed.downloaded })).collect::<Vec<_>>(),
         "migrated": report.migrated.iter().map(|(node, port, kernel)| json!({ "node": node.to_string(), "port": port, "kernel": kernel.to_string() })).collect::<Vec<_>>(),
         "reset": report.reset.iter().map(|(node, port, reason)| json!({ "node": node.to_string(), "port": port, "reason": reason })).collect::<Vec<_>>(),
         "pending": report.pending.iter().map(ToString::to_string).collect::<Vec<_>>(),
@@ -374,7 +374,7 @@ pub(crate) fn graph_json(
             "id": node.id.to_string(),
             "kernel": node.kernel.to_string(),
             "backend": placed(&node.id.to_string()).map(|p| p.backend),
-            "routed": placed(&node.id.to_string()).and_then(|p| p.routed.clone()),
+            "routed": placed(&node.id.to_string()).and_then(|p| p.routed.as_deref().map(str::to_owned)),
             "inputs": node.inputs.iter().map(|(port, binding)| (port.clone(), match binding {
                 Binding::Now(s) => json!({ "kind": "now", "source": source(s) }),
                 Binding::Previous { source: s, initial, migration } => json!({ "kind": "previous", "source": source(s), "initial": source(initial), "migrate": migration.as_ref().map(ToString::to_string) }),

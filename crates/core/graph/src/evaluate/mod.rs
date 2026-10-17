@@ -244,7 +244,7 @@ pub struct Placed {
     /// The backend that ran it.
     pub backend: &'static str,
     /// Why the main backend did not run it, if so.
-    pub routed: Option<String>,
+    pub routed: Option<entelechy_kernel::Routed>,
     /// Bytes moved from Host memory to a device.
     pub uploaded: u64,
     /// Bytes moved from a device to Host memory.

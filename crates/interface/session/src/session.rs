@@ -29,7 +29,7 @@ pub struct Session {
     runtime: Runtime,
     evaluator: Evaluator,
     /// Where each node was last said to run, so a change is said once.
-    placed: BTreeMap<String, Option<String>>,
+    placed: BTreeMap<String, Option<entelechy_kernel::Routed>>,
     /// The Kernels last said to be published and used by no node, by
     /// document ([`Event::Idle`]).
     idle: BTreeMap<PathBuf, Vec<KernelId>>,
@@ -1118,7 +1118,7 @@ impl Session {
                 events.push(Event::Routed {
                     node: node.clone(),
                     backend: placement.backend,
-                    why: why.clone(),
+                    why: why.to_string(),
                 });
             }
         }
