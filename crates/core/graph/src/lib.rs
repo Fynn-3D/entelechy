@@ -56,8 +56,22 @@ pub struct NodeId(pub Name);
 
 /// A node's name: text shared by every copy, read as a `str`, ordered,
 /// hashed and compared as one.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Eq, PartialOrd, Ord)]
 pub struct Name(Arc<str>);
+
+/// Two copies of one name are the same text without reading it.
+impl PartialEq for Name {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0) || *self.0 == *other.0
+    }
+}
+
+/// Hashed as its text, as equal names are equal text.
+impl std::hash::Hash for Name {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
 
 impl Name {
     /// The name as text.
