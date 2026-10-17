@@ -802,7 +802,7 @@ pub struct Evaluator {
     trial: bool,
     /// Nodes running for their state alone whose Fields on a device were
     /// found changed; see [`Rest`].
-    rest: BTreeMap<NodeId, Rest>,
+    rest: crate::hash::QuickMap<NodeId, Rest>,
     /// Runs remembered frame by frame; see [`recall`].
     recalled: recall::Recalled,
     /// Whether a frame commits without waiting for its device; see
