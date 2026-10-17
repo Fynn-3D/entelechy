@@ -10,6 +10,7 @@
 
 mod domain;
 mod evaluate;
+mod hash;
 
 pub use domain::{Compare, DomainError, DomainExpr, DomainOp, DomainSpec, Requirement};
 pub use entelechy_abi::{Context, Domain, InputState, Value};

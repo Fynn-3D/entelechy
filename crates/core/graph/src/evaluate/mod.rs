@@ -308,7 +308,7 @@ impl CacheKey {
 struct Cached {
     key: CacheKey,
     outputs: Vec<Handle>,
-    output_names: Vec<String>,
+    output_names: Arc<Vec<String>>,
     epoch: u64,
 }
 
@@ -337,7 +337,7 @@ struct Pending {
 struct Running {
     run: Run,
     key: CacheKey,
-    output_names: Vec<String>,
+    output_names: Arc<Vec<String>>,
 }
 
 /// A node whose outputs are made once, and its readers.
@@ -673,14 +673,18 @@ struct Scene<'a> {
 }
 
 /// The names of what a group's Kernel outputs.
-fn output_names(group: &Group) -> Vec<String> {
-    group
-        .version
-        .manifest()
-        .outputs
-        .iter()
-        .map(|port| port.name.clone())
-        .collect()
+fn output_names(group: &Group) -> Arc<Vec<String>> {
+    Arc::clone(group.names.get_or_init(|| {
+        Arc::new(
+            group
+                .version
+                .manifest()
+                .outputs
+                .iter()
+                .map(|port| port.name.clone())
+                .collect(),
+        )
+    }))
 }
 
 /// One executing unit: a node, a node with producers inlined, or a run
@@ -702,6 +706,8 @@ struct Group {
     /// While the plan is made, the fused module of the producers inlined
     /// so far; prepared once the group is known to execute.
     fused: Option<Arc<entelechy_ir::Validated>>,
+    /// Its outputs' names, found when first asked, once the plan is made.
+    names: std::sync::OnceLock<Arc<Vec<String>>>,
 }
 
 impl Group {
@@ -1823,7 +1829,7 @@ impl Evaluator {
         id: &NodeId,
         key: CacheKey,
         outputs: Vec<Handle>,
-        output_names: Vec<String>,
+        output_names: Arc<Vec<String>>,
         runtime: &mut Runtime,
     ) {
         let by_state = self
@@ -1855,7 +1861,7 @@ impl Evaluator {
                 output_names,
                 epoch,
             };
-            if let Some(previous) = self.ledger.cache_put(id.clone(), fresh) {
+            if let Some(previous) = self.ledger.cache_put(id, fresh) {
                 for output in previous.outputs {
                     if !self.ledger.is_cached(output) && !self.is_kept(output) {
                         release(runtime, output);
@@ -1884,7 +1890,7 @@ impl Evaluator {
                 }
             }
             self.ledger.cache_put(
-                id.clone(),
+                id,
                 Cached {
                     key,
                     outputs: kept,
@@ -1904,7 +1910,7 @@ impl Evaluator {
             output_names,
             epoch: self.epoch,
         };
-        if let Some(previous) = self.ledger.cache_put(id.clone(), fresh) {
+        if let Some(previous) = self.ledger.cache_put(id, fresh) {
             for output in previous.outputs {
                 if !self.is_kept(output) {
                     release(runtime, output);

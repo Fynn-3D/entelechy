@@ -4,7 +4,7 @@
 //! (see [`Cold`]).
 
 use super::*;
-use std::collections::HashMap;
+use crate::hash::QuickMap;
 
 impl Evaluator {
     /// Every port's committed state, by producing node and port, as the
@@ -166,16 +166,16 @@ impl Evaluator {
 pub(super) struct Ledger {
     /// Looked up for every node of every frame, so hashed; walked in order
     /// of node ([`Ledger::cached_nodes`]).
-    cache: HashMap<NodeId, Cached>,
+    cache: QuickMap<NodeId, Cached>,
     /// Nodes whose outputs were let go cold; none of them is in `cache`.
-    cold: HashMap<NodeId, Cold>,
+    cold: QuickMap<NodeId, Cold>,
     /// How many cached entries hold each handle.
-    cached_handles: BTreeMap<Handle, usize>,
+    cached_handles: QuickMap<Handle, usize>,
     /// State as of the last successful evaluation, by producing node and
     /// port; a handle may also be a cached output.
     committed: BTreeMap<(NodeId, String), Handle>,
     /// How many committed ports hold each handle.
-    committed_handles: BTreeMap<Handle, usize>,
+    committed_handles: QuickMap<Handle, usize>,
     /// Moved by every change to the cache, its cold outputs or the
     /// committed state.
     version: u64,
@@ -187,7 +187,7 @@ pub(super) struct Ledger {
 #[derive(Clone, Debug)]
 pub(super) struct Cold {
     pub(super) key: CacheKey,
-    pub(super) output_names: Vec<String>,
+    pub(super) output_names: Arc<Vec<String>>,
     pub(super) epoch: u64,
     pub(super) laid: Vec<(Domain, entelechy_abi::Schema)>,
 }
@@ -255,13 +255,21 @@ impl Ledger {
 
     /// Puts a node's outputs in the cache, keeping the count; answers what
     /// was there. Outputs it had let go cold are forgotten.
-    pub(super) fn cache_put(&mut self, id: NodeId, fresh: Cached) -> Option<Cached> {
+    pub(super) fn cache_put(&mut self, id: &NodeId, fresh: Cached) -> Option<Cached> {
         self.version += 1;
-        self.cold.remove(&id);
+        self.cold.remove(id);
         for output in &fresh.outputs {
             *self.cached_handles.entry(*output).or_default() += 1;
         }
-        let gone = self.cache.insert(id, fresh);
+        // An entry replaced keeps its name: the name is copied only for a
+        // node new to the cache.
+        let gone = match self.cache.get_mut(id) {
+            Some(slot) => Some(std::mem::replace(slot, fresh)),
+            None => {
+                self.cache.insert(id.clone(), fresh);
+                None
+            }
+        };
         if let Some(gone) = &gone {
             forget(&mut self.cached_handles, gone.outputs.iter().copied());
         }
@@ -335,9 +343,9 @@ fn in_order<'a>(ids: impl Iterator<Item = &'a NodeId>) -> std::vec::IntoIter<&'a
 }
 
 /// Decrements each handle's count, removing it at zero.
-fn forget(counts: &mut BTreeMap<Handle, usize>, handles: impl Iterator<Item = Handle>) {
+fn forget(counts: &mut QuickMap<Handle, usize>, handles: impl Iterator<Item = Handle>) {
     for handle in handles {
-        if let std::collections::btree_map::Entry::Occupied(mut at) = counts.entry(handle) {
+        if let std::collections::hash_map::Entry::Occupied(mut at) = counts.entry(handle) {
             *at.get_mut() -= 1;
             if *at.get() == 0 {
                 at.remove();

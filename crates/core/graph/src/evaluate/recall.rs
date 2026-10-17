@@ -36,7 +36,7 @@ pub const RECALL_HOLD: usize = 1 << 20;
 #[derive(Clone)]
 pub(super) struct Remembered {
     key: CacheKey,
-    output_names: Vec<String>,
+    output_names: Arc<Vec<String>>,
     epoch: u64,
     outputs: Option<Vec<Handle>>,
 }
@@ -272,7 +272,7 @@ impl Evaluator {
             output_names: recalled.output_names,
             epoch: recalled.epoch,
         };
-        if let Some(previous) = self.ledger.cache_put(id.clone(), taken) {
+        if let Some(previous) = self.ledger.cache_put(id, taken) {
             for output in previous.outputs {
                 if !self.ledger.is_cached(output) && !self.is_kept(output) {
                     release(runtime, output);
@@ -289,7 +289,7 @@ impl Evaluator {
         id: &NodeId,
         key: CacheKey,
         outputs: Vec<Handle>,
-        output_names: Vec<String>,
+        output_names: Arc<Vec<String>>,
         epoch: u64,
         runtime: &mut Runtime,
     ) {
@@ -299,7 +299,7 @@ impl Evaluator {
             output_names,
             epoch,
         };
-        if let Some(previous) = self.ledger.cache_put(id.clone(), fresh) {
+        if let Some(previous) = self.ledger.cache_put(id, fresh) {
             for output in previous.outputs {
                 if !self.ledger.is_cached(output) && !self.is_kept(output) {
                     release(runtime, output);
@@ -319,7 +319,7 @@ impl Evaluator {
     ) -> Option<(Vec<Handle>, u64)> {
         let recalled = self.recalled.entry(id)?;
         let outputs = recalled.outputs.as_ref()?;
-        (recalled.output_names == output_names && same_words(runtime, outputs, fresh, true))
+        (*recalled.output_names == output_names && same_words(runtime, outputs, fresh, true))
             .then(|| (outputs.clone(), recalled.epoch))
     }
 }

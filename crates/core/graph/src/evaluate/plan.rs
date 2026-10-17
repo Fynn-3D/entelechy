@@ -193,6 +193,7 @@ impl Evaluator {
                     repeat: 1,
                     chain: None,
                     fused: None,
+                    names: std::sync::OnceLock::new(),
                 }
             })
             .collect();
@@ -732,6 +733,7 @@ impl Evaluator {
                 repeat: previous.repeat + 1,
                 chain: Some((input, output)),
                 fused: None,
+                names: std::sync::OnceLock::new(),
             });
         }
         out
