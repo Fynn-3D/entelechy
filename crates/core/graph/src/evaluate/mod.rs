@@ -365,6 +365,10 @@ struct Layout {
     held: BTreeSet<NodeId>,
     /// Whether each group runs; every group when `None`.
     runs: Option<Vec<bool>>,
+    /// Who reads each node `<-` in the graph, fused or not, and the nodes
+    /// a scene's output or a state reads ([`Evaluator::weigh_alike`]).
+    graph_readers: BTreeMap<NodeId, Vec<NodeId>>,
+    kept: BTreeSet<NodeId>,
 }
 
 impl Layout {
@@ -395,12 +399,38 @@ impl Layout {
                 .map(|group| needed.contains(&group.node.id))
                 .collect()
         });
+        let mut graph_readers: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+        let mut kept: BTreeSet<NodeId> = BTreeSet::new();
+        for (_, source) in &graph.outputs {
+            if let Source::Node { node, .. } = source {
+                kept.insert(node.clone());
+            }
+        }
+        for reader in &graph.nodes {
+            for binding in reader.inputs.values() {
+                match binding {
+                    Binding::Now(Source::Node { node, .. }) => graph_readers
+                        .entry(node.clone())
+                        .or_default()
+                        .push(reader.id.clone()),
+                    Binding::Previous {
+                        source: Source::Node { node, .. },
+                        ..
+                    } => {
+                        kept.insert(node.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
         Self {
             runs_at,
             last_read,
             readers,
             held: held_nodes(graph, pinned),
             runs,
+            graph_readers,
+            kept,
         }
     }
 
@@ -1079,15 +1109,11 @@ impl Evaluator {
             // Absorbed nodes release their cached outputs.
             let absorbed: BTreeSet<&NodeId> =
                 groups.iter().flat_map(|g| g.absorbed.iter()).collect();
-            let stale: Vec<NodeId> = if absorbed.is_empty() {
-                Vec::new()
-            } else {
-                self.ledger
-                    .cached_nodes()
-                    .filter(|id| absorbed.contains(id))
-                    .cloned()
-                    .collect()
-            };
+            let stale: Vec<NodeId> = absorbed
+                .iter()
+                .filter(|id| self.ledger.entry(id).is_some())
+                .map(|id| (*id).clone())
+                .collect();
             for id in stale {
                 self.drop_cache(&id, runtime);
             }
@@ -1235,7 +1261,7 @@ impl Evaluator {
             } else {
                 std::borrow::Cow::Owned(layout.held.iter().chain(&asked).cloned().collect())
             };
-            self.weigh_alike(graph, &executed);
+            self.weigh_alike(&layout, &executed);
             if matches!(demand, Demand::Read(_)) {
                 self.wait_for_checks(checks, runtime)?;
                 return Ok(None);
@@ -1669,25 +1695,15 @@ impl Evaluator {
     /// device for nothing and rests as one that found a change does
     /// ([`Rest`]). A node read as state, or as a graph's output, is kept
     /// compared: what it spares shows after this evaluation.
-    fn weigh_alike(&mut self, graph: &Graph, executed: &[NodeId]) {
+    fn weigh_alike(&mut self, layout: &Layout, executed: &[NodeId]) {
+        if self.alike.is_empty() {
+            return;
+        }
+        let ran: std::collections::HashSet<&NodeId> = executed.iter().collect();
         for id in std::mem::take(&mut self.alike) {
-            let from_it =
-                |source: &Source| matches!(source, Source::Node { node, .. } if *node == id);
-            let mut readers = Vec::new();
-            let mut held = graph.outputs.iter().any(|(_, source)| from_it(source));
-            for reader in &graph.nodes {
-                for binding in reader.inputs.values() {
-                    match binding {
-                        Binding::Now(source) if from_it(source) => readers.push(&reader.id),
-                        Binding::Previous { source, .. } if from_it(source) => held = true,
-                        _ => {}
-                    }
-                }
-            }
-            if !held
-                && !readers.is_empty()
-                && readers.iter().all(|reader| executed.contains(reader))
-            {
+            let readers = layout.graph_readers.get(&id).map_or(&[][..], Vec::as_slice);
+            let held = layout.kept.contains(&id);
+            if !held && !readers.is_empty() && readers.iter().all(|reader| ran.contains(reader)) {
                 self.rest.entry(id).or_default().found_changed();
             } else {
                 self.rest.remove(&id);
