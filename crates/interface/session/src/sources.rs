@@ -1247,6 +1247,18 @@ pub(crate) fn unpublished(
     own: &[KernelId],
 ) -> Vec<(entelechy_graph::NodeId, KernelId, Option<String>)> {
     let files = Expanded::of(store, uses.to_vec()).files;
+    // What the used documents write, gathered once for every node.
+    let written: std::collections::HashSet<KernelId> = files
+        .iter()
+        .filter_map(|file| store.document(file).ok())
+        .flat_map(|parsed| {
+            parsed
+                .kernels
+                .iter()
+                .filter_map(|k| named_id(k).ok())
+                .collect::<Vec<_>>()
+        })
+        .collect();
     let writes = |path: &Path, id: &KernelId| {
         store.document(path).is_ok_and(|parsed| {
             parsed
@@ -1262,7 +1274,7 @@ pub(crate) fn unpublished(
         .iter()
         .filter(|node| !node.kernel.name().starts_with("native."))
         .filter(|node| !own.contains(&node.kernel))
-        .filter(|node| !files.iter().any(|file| writes(file, &node.kernel)))
+        .filter(|node| !written.contains(&node.kernel))
         .map(|node| {
             let through = files.iter().find_map(|file| {
                 let parsed = store.document(file).ok()?;
