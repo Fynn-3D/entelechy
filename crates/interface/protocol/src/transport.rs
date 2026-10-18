@@ -128,6 +128,9 @@ pub fn listen(
             let origins = origins.clone();
             let number = number + 1;
             std::thread::spawn(move || {
+                // Answers are whole lines written at once: none waits on
+                // the one before it being acknowledged.
+                let _ = stream.set_nodelay(true);
                 let mut opening = [0u8; 8];
                 let peeked = stream.peek(&mut opening).unwrap_or(0);
                 let opening = &opening[..peeked];
@@ -239,11 +242,12 @@ fn serve_lines(stream: std::net::TcpStream, sink: std::sync::mpsc::Sender<Incomi
         for line in answers {
             // An empty line, sent after a quit's answer, closes the
             // connection.
-            if line.is_empty()
-                || writeln!(writer, "{line}")
-                    .and_then(|_| writer.flush())
-                    .is_err()
-            {
+            if line.is_empty() {
+                break;
+            }
+            let mut bytes = line.into_bytes();
+            bytes.push(b'\n');
+            if writer.write_all(&bytes).is_err() {
                 break;
             }
             paying.paid();
