@@ -42,13 +42,13 @@ fn kernels_prepared_in_turns_wait_then_run_as_at_once() {
 
     let mut session = Session::open(&dir.join("scene.esn"), None, 1 << 20);
     session.prepare_in_turns();
-    // The first sync queues the scene's five Kernels and prepares a couple.
-    session.sync();
+    // The first turn queues the scene's five Kernels and prepares a couple.
+    session.sync_a_turn();
     assert!(session.scene_waiting(), "the scene waits for its Kernels");
     assert!(session.preparing_left() > 0);
     let mut syncs = 1;
     while session.scene_waiting() {
-        session.sync();
+        session.sync_a_turn();
         syncs += 1;
         assert!(syncs < 20, "the turns never finish");
     }
@@ -65,7 +65,7 @@ fn a_replacement_prepared_in_turns_lands_on_a_later_sync() {
     let mut session = Session::open(&dir.join("scene.esn"), None, 1 << 20);
     session.prepare_in_turns();
     while {
-        session.sync();
+        session.sync_a_turn();
         session.scene_waiting()
     } {}
     let before = result(&mut session);
@@ -77,7 +77,7 @@ fn a_replacement_prepared_in_turns_lands_on_a_later_sync() {
     // The running version runs until the replacement is prepared.
     let mut syncs = 0;
     loop {
-        session.sync();
+        session.sync_a_turn();
         syncs += 1;
         let now = result(&mut session);
         if now != before {
@@ -107,14 +107,14 @@ fn kernels_of_used_documents_are_waited_for_too() {
 
     let mut session = Session::open(&dir.join("scene.esn"), None, 1 << 20);
     session.prepare_in_turns();
-    session.sync();
+    session.sync_a_turn();
     assert!(
         session.scene_waiting(),
         "the scene waits for the Kernels it uses"
     );
     let mut syncs = 1;
     while session.scene_waiting() {
-        session.sync();
+        session.sync_a_turn();
         syncs += 1;
         assert!(syncs < 20, "the turns never finish");
     }
@@ -161,7 +161,7 @@ fn held_reads_settle_when_a_first_load_in_turns_lands() {
     session.prepare_in_turns();
     let mut syncs = 0;
     loop {
-        let events = session.sync();
+        let events = session.sync_a_turn();
         let said: Vec<String> = events.iter().map(ToString::to_string).collect();
         assert!(
             !said.iter().any(|line| line.contains("rejected")),
@@ -181,5 +181,19 @@ fn held_reads_settle_when_a_first_load_in_turns_lands() {
             .allowed_read(&std::env::temp_dir().join("elsewhere.txt"))
             .is_err()
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_asked_for_sync_lands_what_it_read_at_once() {
+    // Turns are for loading frame by frame; a sync asked for (the protocol's
+    // `sync`) answers with what it read in place, as it always has.
+    let dir = scene("asked");
+    let mut session = Session::open(&dir.join("scene.esn"), None, 1 << 20);
+    session.prepare_in_turns();
+    session.sync();
+    assert!(!session.scene_waiting());
+    assert_eq!(session.preparing_left(), 0);
+    assert_eq!(result(&mut session).len(), 6);
     let _ = std::fs::remove_dir_all(&dir);
 }
