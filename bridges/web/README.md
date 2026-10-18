@@ -87,7 +87,10 @@ OffscreenCanvas, which Entelechy's present finds by its id in the worker's
 `entelechy_canvases`), and the page keeps only its events, the pads and the
 sound card, handed to the worker as messages, with `onpreparing` hearing
 how many Kernels still wait. Its `call(op, fields)` is the same protocol,
-answered in the worker between frames.
+answered in the worker between frames. With `trace: true` the console is
+told each pipeline the browser is asked to compile, its size before and
+its time after: when a device's own compiler takes the browser's device
+process down, the last one told without its answer is the one.
 
 `entelechy.js` is the client on its own: `EntelechyClient` (a request, its answer;
 the session answers in order, so answers are matched first in, first

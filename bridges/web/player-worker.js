@@ -146,7 +146,9 @@ function run() {
   next(loop);
 }
 
-async function open({ glue, host, files, scene, replay, backend, canvas, id }) {
+async function open({ glue, host, files, scene, replay, backend, canvas, id, trace }) {
+  // Entelechy's device tells the console each pipeline it compiles.
+  self.entelechy_trace = !!trace;
   entelechy = await EntelechyInPage.load(glue, host);
   x = entelechy.x;
   const promising = (name) =>

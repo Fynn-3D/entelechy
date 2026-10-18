@@ -27,10 +27,40 @@ pub(crate) fn compile_beside(
         return;
     };
     let device: &JsValue = device.as_ref();
+    let traced = traced();
+    if traced {
+        tell(&format!(
+            "compiling {label} ({} KiB of WGSL)",
+            source.len().div_ceil(1024)
+        ));
+    }
+    let started = entelechy_rules::clock::now();
     let Ok(asked) = ask(device, label, source, entries) else {
         return;
     };
-    let _ = wait.block_on(wasm_bindgen_futures::JsFuture::from(asked));
+    let answer = wait.block_on(wasm_bindgen_futures::JsFuture::from(asked));
+    if traced {
+        let took = entelechy_rules::clock::since(started).as_secs_f64() * 1000.0;
+        let how = if answer.is_ok() {
+            "compiled"
+        } else {
+            "refused"
+        };
+        tell(&format!("{how} {label} in {took:.0} ms"));
+    }
+}
+
+/// Whether the page asked to be told each pipeline (`entelechy_trace`).
+fn traced() -> bool {
+    Reflect::get(&js_sys::global(), &"entelechy_trace".into()).is_ok_and(|on| on.is_truthy())
+}
+
+/// A line on the console, named Entelechy's.
+fn tell(line: &str) {
+    let Ok(console) = Reflect::get(&js_sys::global(), &"console".into()) else {
+        return;
+    };
+    let _ = call(&console, "log", &format!("entelechy: {line}").into());
 }
 
 /// The browser's promise of the pipeline.

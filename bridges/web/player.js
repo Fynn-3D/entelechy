@@ -383,9 +383,11 @@ class EntelechyWorkerPlayer {
 
   /// Opens a scene or a replay in a new worker, as `EntelechyPlayer.open`
   /// opens one in the page; `worker` is the URL of player-worker.js,
-  /// `onpreparing` hears how many Kernels still wait to prepare. Resolves
-  /// once the scene has loaded and its frames run.
-  static openInWorker({ worker, glue, files, scene, replay, backend, canvas, shown, onpreparing }) {
+  /// `onpreparing` hears how many Kernels still wait to prepare; `trace`
+  /// has the console told each pipeline the device is asked to compile,
+  /// before and after. Resolves once the scene has loaded and its frames
+  /// run.
+  static openInWorker({ worker, glue, files, scene, replay, backend, canvas, shown, onpreparing, trace }) {
     const at = new URL(worker || "player-worker.js", location.href);
     const host = new URL("entelechy-host.mjs", at).href;
     const player = new EntelechyWorkerPlayer(new Worker(at), canvas, shown);
@@ -398,7 +400,7 @@ class EntelechyWorkerPlayer {
       const buffers = files.map(([, bytes]) => bytes.buffer);
       player.worker.postMessage(
         {
-          open: { glue: new URL(glue, location.href).href, host, files, scene, replay, backend, canvas: offscreen, id: shown.id },
+          open: { glue: new URL(glue, location.href).href, host, files, scene, replay, backend, canvas: offscreen, id: shown.id, trace: !!trace },
           size: player.fit(),
         },
         [offscreen, ...buffers],
