@@ -445,6 +445,10 @@ fn opened(
     opening: Opening<'_>,
     backend: &str,
 ) -> *mut EntelechySession {
+    // A page's Entelechy times by the page's clock.
+    if cfg!(all(target_arch = "wasm32", target_os = "unknown")) {
+        entelechy_kernel::clock::give(clock);
+    }
     let set_error = |message: String| {
         OPEN_ERROR.with(|slot| *slot.borrow_mut() = c_string(&message));
         std::ptr::null_mut()

@@ -159,7 +159,7 @@ impl GpuBackend {
         output: wgpu::Buffer,
         element_count: usize,
         output_words: usize,
-        timing: Option<&wgpu::QuerySet>,
+        timing: Option<&Timing>,
         failure: Option<&wgpu::Buffer>,
     ) -> wgpu::Buffer {
         let count = element_count.max(1);
@@ -232,13 +232,8 @@ impl GpuBackend {
             let last = index + 1 == passes.len();
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("entelechy prefix"),
-                timestamp_writes: timing.and_then(|query_set| {
-                    last.then_some(wgpu::ComputePassTimestampWrites {
-                        query_set,
-                        beginning_of_pass_write_index: None,
-                        end_of_pass_write_index: Some(1),
-                    })
-                }),
+                timestamp_writes: timing
+                    .and_then(|timing| last.then(|| timing.compute(None, Some(1)))),
             });
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &group, &[]);
@@ -269,7 +264,7 @@ impl GpuBackend {
         mapped: wgpu::Buffer,
         element_count: usize,
         output_words: usize,
-        timing: Option<&wgpu::QuerySet>,
+        timing: Option<&Timing>,
         failure: Option<&wgpu::Buffer>,
     ) -> wgpu::Buffer {
         let (reduce_pipeline, reduce_layout) = reduce;
@@ -340,11 +335,7 @@ impl GpuBackend {
             // the end of the node's work.
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("entelechy reduce"),
-                timestamp_writes: timing.map(|query_set| wgpu::ComputePassTimestampWrites {
-                    query_set,
-                    beginning_of_pass_write_index: None,
-                    end_of_pass_write_index: Some(1),
-                }),
+                timestamp_writes: timing.map(|timing| timing.compute(None, Some(1))),
             });
             pass.set_pipeline(reduce_pipeline);
             pass.set_bind_group(0, &group, &[]);
@@ -469,7 +460,7 @@ impl GpuBackend {
         target_count: usize,
         element_count: usize,
         output_words: usize,
-        timing: Option<&wgpu::QuerySet>,
+        timing: Option<&Timing>,
     ) -> wgpu::Buffer {
         let final_buffer = pairs;
         // Ready already when the entry emitted into it; the entry then landed
@@ -538,11 +529,7 @@ impl GpuBackend {
                         groups: u32| {
             let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("entelechy scatter"),
-                timestamp_writes: timing.map(|query_set| wgpu::ComputePassTimestampWrites {
-                    query_set,
-                    beginning_of_pass_write_index: None,
-                    end_of_pass_write_index: Some(1),
-                }),
+                timestamp_writes: timing.map(|timing| timing.compute(None, Some(1))),
             });
             compute.set_pipeline(&pass.0);
             compute.set_bind_group(0, group, offsets);
@@ -638,13 +625,7 @@ impl GpuBackend {
                 {
                     let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                         label: Some("entelechy scatter sort"),
-                        timestamp_writes: timing.map(|query_set| {
-                            wgpu::ComputePassTimestampWrites {
-                                query_set,
-                                beginning_of_pass_write_index: None,
-                                end_of_pass_write_index: Some(1),
-                            }
-                        }),
+                        timestamp_writes: timing.map(|timing| timing.compute(None, Some(1))),
                     });
                     compute.set_pipeline(&step.0);
                     for index in 1..records.len() {

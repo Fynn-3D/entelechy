@@ -18,14 +18,12 @@ pub(crate) struct Spent(Arc<std::sync::atomic::AtomicU64>);
 
 impl Spent {
     /// `wait`'s answer, its time counted.
-    /// A page has no clock to ask: there nothing is counted.
     pub(crate) fn time<T>(&self, wait: impl FnOnce() -> T) -> T {
-        if cfg!(all(target_arch = "wasm32", target_os = "unknown")) {
-            return wait();
-        }
-        let started = std::time::Instant::now();
+        let started = entelechy_rules::clock::now();
         let answer = wait();
-        let nanos = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        let nanos = entelechy_rules::clock::since(started)
+            .as_nanos()
+            .min(u128::from(u64::MAX)) as u64;
         self.0
             .fetch_add(nanos, std::sync::atomic::Ordering::Relaxed);
         answer

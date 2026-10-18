@@ -1,10 +1,11 @@
 #![warn(missing_docs)]
 //! The rules of Kernel execution every backend keeps: invocation
 //! checks, scan and scatter sizing, scatter placement and combining,
-//! the reduction tree, float ordering, the rasterizer's contract, and
-//! the [`Backend`] trait. The backends execute; this crate rules.
+//! the reduction tree, float ordering, the rasterizer's contract, the
+//! machine's clock, and the [`Backend`] trait. The backends execute; this crate rules.
 
 pub mod backend;
+pub mod clock;
 pub mod placement;
 pub mod raster;
 pub mod reduce;

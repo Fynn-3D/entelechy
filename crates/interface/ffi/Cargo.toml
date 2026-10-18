@@ -17,6 +17,7 @@ entelechy-session = { path = "../../interface/session" }
 entelechy-protocol = { path = "../../interface/protocol" }
 entelechy-abi = { path = "../../core/abi" }
 entelechy-graph = { path = "../../core/graph" }
+entelechy-kernel = { path = "../../core/kernel" }
 entelechy-gpu = { path = "../../backends/gpu" }
 
 # Where Entelechy is WebAssembly, the program that loads it (a page) is the

@@ -136,9 +136,7 @@ impl GpuBackend {
     /// a wait is marked by goes through here, so a clocked frame counts
     /// each.
     pub(crate) fn submit(&self, commands: wgpu::CommandBuffer) -> wgpu::SubmissionIndex {
-        let submission = self.queue.submit(Some(commands));
-        self.frames.submitted(&self.queue);
-        submission
+        self.frames.submit(&self.queue, commands)
     }
 
     /// Opens the default adapter, blocking to wait for the device; a page
@@ -337,7 +335,7 @@ impl Backend for GpuBackend {
     }
 
     fn set_clocked(&self, on: bool) {
-        self.frames.set_clocked(on, &self.device);
+        self.frames.set_clocked(on, &self.device, self.timestamps);
     }
 
     fn clock_mark(&self) -> usize {
@@ -345,7 +343,7 @@ impl Backend for GpuBackend {
     }
 
     fn end_frame(&self) -> Option<u64> {
-        self.frames.end_frame()
+        self.frames.end_frame(&self.device, &self.queue)
     }
 
     fn clocked_frame(&self) -> Option<entelechy_rules::ClockedFrame> {

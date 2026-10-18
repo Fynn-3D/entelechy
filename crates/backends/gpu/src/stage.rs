@@ -302,7 +302,7 @@ impl GpuBackend {
         invocation: &Invocation,
         scope: &mut Scope<'_>,
         domain: entelechy_abi::Domain,
-        timing: Option<&wgpu::QuerySet>,
+        timing: Option<&Timing>,
     ) -> Result<Staged, ExecutionError> {
         let element_count = domain.count();
         // Context head (see `wgsl::CONTEXT_HEAD`), then one [w, h, d, 0] per
@@ -569,11 +569,7 @@ impl GpuBackend {
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("entelechy kernel"),
-                timestamp_writes: timing.map(|query_set| wgpu::ComputePassTimestampWrites {
-                    query_set,
-                    beginning_of_pass_write_index: Some(0),
-                    end_of_pass_write_index: Some(1),
-                }),
+                timestamp_writes: timing.map(|timing| timing.compute(Some(0), Some(1))),
             });
             pass.set_pipeline(&pipeline.main.0);
             pass.set_bind_group(0, &bind_group, &[]);

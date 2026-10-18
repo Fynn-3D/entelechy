@@ -486,13 +486,9 @@ pub(crate) fn rasterize(
                 }),
                 stencil_ops: None,
             }),
-            timestamp_writes: timing_set.as_ref().map(|query_set| {
-                wgpu::RenderPassTimestampWrites {
-                    query_set,
-                    beginning_of_pass_write_index: Some(0),
-                    end_of_pass_write_index: Some(1),
-                }
-            }),
+            timestamp_writes: timing_set
+                .as_ref()
+                .map(|timing| timing.render(Some(0), Some(1))),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -503,13 +499,9 @@ pub(crate) fn rasterize(
     {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("entelechy compact"),
-            timestamp_writes: timing_set.as_ref().map(|query_set| {
-                wgpu::ComputePassTimestampWrites {
-                    query_set,
-                    beginning_of_pass_write_index: Some(2),
-                    end_of_pass_write_index: Some(3),
-                }
-            }),
+            timestamp_writes: timing_set
+                .as_ref()
+                .map(|timing| timing.compute(Some(2), Some(3))),
         });
         pass.set_pipeline(&pipelines.compact);
         pass.set_bind_group(0, &compact_group, &[]);

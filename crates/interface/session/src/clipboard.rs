@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use entelechy_graph::Report;
 use entelechy_kernel::{Domain, FieldData, Handle, Host, Runtime, Scalar, Schema};
@@ -56,7 +56,7 @@ pub(crate) struct Board {
     write: bool,
     /// The text the inputs hold, `None` before the first read.
     held: Option<String>,
-    looked: Option<Instant>,
+    looked: Option<entelechy_kernel::clock::Moment>,
     /// Per output, the Field last read and its text.
     put: BTreeMap<String, (Handle, String)>,
     /// Refusals said, each once.
@@ -126,7 +126,7 @@ impl Board {
         if fresh && names.iter().all(|name| inputs.holds(name)) {
             return;
         }
-        // A page has no clock: there the clipboard is looked at each time.
+        // Where there is no clock the clipboard is looked at each time.
         self.looked = entelechy_kernel::clock::now();
         let text = if !self.system || self.read {
             self.device.text().unwrap_or_default()

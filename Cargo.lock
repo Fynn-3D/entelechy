@@ -1011,6 +1011,7 @@ dependencies = [
  "entelechy-gpu",
  "entelechy-graph",
  "entelechy-jit",
+ "entelechy-kernel",
  "entelechy-protocol",
  "entelechy-session",
  "js-sys",

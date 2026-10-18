@@ -15,6 +15,42 @@ pub(crate) mod clock {
     pub const SILENT: u8 = 2;
 }
 
+/// Where a run writes the device's clock at its passes' edges: a query set
+/// and the run's first stamp in it; index 0 opens the run's first pass, the
+/// last index closes its last.
+pub(crate) struct Timing {
+    set: wgpu::QuerySet,
+    base: u32,
+}
+
+impl Timing {
+    /// A compute pass's stamps, at the run's indices `begin` and `end`.
+    pub(crate) fn compute(
+        &self,
+        begin: Option<u32>,
+        end: Option<u32>,
+    ) -> wgpu::ComputePassTimestampWrites<'_> {
+        wgpu::ComputePassTimestampWrites {
+            query_set: &self.set,
+            beginning_of_pass_write_index: begin.map(|at| self.base + at),
+            end_of_pass_write_index: end.map(|at| self.base + at),
+        }
+    }
+
+    /// A render pass's stamps, as [`Timing::compute`].
+    pub(crate) fn render(
+        &self,
+        begin: Option<u32>,
+        end: Option<u32>,
+    ) -> wgpu::RenderPassTimestampWrites<'_> {
+        wgpu::RenderPassTimestampWrites {
+            query_set: &self.set,
+            beginning_of_pass_write_index: begin.map(|at| self.base + at),
+            end_of_pass_write_index: end.map(|at| self.base + at),
+        }
+    }
+}
+
 impl GpuBackend {
     /// Whether executions wait for the device; see
     /// [`Backend::set_measured`].
@@ -35,14 +71,19 @@ impl GpuBackend {
     /// The query set a measured call writes its passes' edges into; `None`
     /// when nothing is measured or the adapter has no timestamps. Made before
     /// the encoder so the opening timestamp is its first command.
-    pub(crate) fn timing_set(&self, count: u32) -> Option<wgpu::QuerySet> {
+    /// A page's clocked frame times each run by such a set too ([`Frames`]).
+    pub(crate) fn timing_set(&self, count: u32) -> Option<Timing> {
+        if !self.measured() && PAGE && self.frames.clocked() {
+            return self.frames.run_timing(&self.device);
+        }
         let worth_asking = self.clock.load(std::sync::atomic::Ordering::Relaxed) != clock::SILENT;
-        (self.measured() && self.timestamps && worth_asking).then(|| {
-            self.device.create_query_set(&wgpu::QuerySetDescriptor {
+        (self.measured() && self.timestamps && worth_asking).then(|| Timing {
+            set: self.device.create_query_set(&wgpu::QuerySetDescriptor {
                 label: Some("entelechy timing"),
                 ty: wgpu::QueryType::Timestamp,
                 count,
-            })
+            }),
+            base: 0,
         })
     }
 
@@ -51,10 +92,16 @@ impl GpuBackend {
     pub(crate) fn resolve_timing(
         &self,
         encoder: &mut wgpu::CommandEncoder,
-        set: Option<&wgpu::QuerySet>,
+        timing: Option<&Timing>,
         count: u32,
     ) -> Option<wgpu::Buffer> {
-        set.map(|set| {
+        if !self.measured() && PAGE && self.frames.clocked() {
+            if timing.is_some() {
+                self.frames.stamped_run(count);
+            }
+            return None;
+        }
+        timing.map(|Timing { set, .. }| {
             let bytes = u64::from(count) * 8;
             let resolved = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("entelechy timing resolve"),
@@ -120,10 +167,6 @@ impl GpuBackend {
     /// empty submission polled to completion, the least of sixteen. Every
     /// node a profile times carries it before its own work.
     pub fn wait_floor(&self) -> std::time::Duration {
-        // A page has no clock to ask: nothing is counted there.
-        if cfg!(all(target_arch = "wasm32", target_os = "unknown")) {
-            return std::time::Duration::ZERO;
-        }
         let mut least = std::time::Duration::MAX;
         for _ in 0..16 {
             let encoder = self
@@ -131,10 +174,10 @@ impl GpuBackend {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("entelechy floor"),
                 });
-            let started = std::time::Instant::now();
+            let started = entelechy_rules::clock::now();
             self.queue.submit(Some(encoder.finish()));
             let _ = self.wait.drain(&self.device, &self.queue);
-            least = least.min(started.elapsed());
+            least = least.min(entelechy_rules::clock::since(started));
         }
         least
     }
@@ -148,12 +191,22 @@ impl GpuBackend {
     }
 }
 
-/// Frames clocked as they run: each run's submission and the moment the
-/// device tells it done, kept by frame; nothing waits for them. The device
-/// runs its queue in order, so a run kept it busy from its submission, or
-/// the run before's end if later, to its own end: a frame's busy time is
-/// its runs' summed. A waiter on its own thread hears the device as soon as
-/// it is done, so the ends are told when they happen, not when next asked.
+/// Frames clocked as they run: each run's busy time, kept by frame; nothing
+/// waits for them.
+///
+/// The Host's clock times a run from its submission, or the run before's
+/// end if later, to the moment the device tells it done: the device runs
+/// its queue in order, so that is how long it kept the device busy. A
+/// waiter on its own thread hears the device as soon as it is done, so the
+/// ends are told when they happen, not when next asked.
+///
+/// A page has no thread to hear the device on: it is told a run is done
+/// only when its own work pauses, which may be long after. There the
+/// device's own clock times each run instead, by the stamps a measured run
+/// writes at its passes' edges ([`GpuBackend::timing_set`]), resolved in
+/// the run and read back once the device has done the frame. A run with no
+/// pass (a copy) counts as none; a device without timestamps clocks no
+/// frame there.
 pub(crate) struct Frames {
     on: Arc<std::sync::atomic::AtomicBool>,
     /// Runs told submitted and not yet done, which the waiter waits on.
@@ -171,9 +224,18 @@ pub(crate) struct Frames {
     last_end: Mutex<Option<std::time::Instant>>,
     /// The latest frame done.
     last: Mutex<Option<entelechy_rules::ClockedFrame>>,
+    /// A page's frames, timed by the device's stamps.
+    stamped: Mutex<Stamped>,
 }
 
 type Run = Arc<Mutex<(std::time::Instant, Option<std::time::Instant>)>>;
+
+/// Whether Entelechy runs in a page, where frames are timed by the device's
+/// stamps.
+const PAGE: bool = cfg!(all(target_arch = "wasm32", target_os = "unknown"));
+
+/// The runs a page's frame stamps; later runs in it are counted as none.
+const STAMPED_RUNS: u32 = 512;
 
 impl Default for Frames {
     fn default() -> Self {
@@ -186,6 +248,7 @@ impl Default for Frames {
             frames: std::sync::atomic::AtomicU64::new(0),
             last_end: Mutex::new(None),
             last: Mutex::new(None),
+            stamped: Mutex::new(Stamped::default()),
         }
     }
 }
@@ -200,15 +263,16 @@ impl Frames {
     }
 
     /// Clocks frames from now, or no longer; on, a waiter hears the device.
-    /// A page has no clock to ask: there no frame is clocked.
-    pub(crate) fn set_clocked(&self, on: bool, device: &wgpu::Device) {
-        let on = on && !cfg!(all(target_arch = "wasm32", target_os = "unknown"));
+    /// A page clocks them only where the device has `timestamps`.
+    pub(crate) fn set_clocked(&self, on: bool, device: &wgpu::Device, timestamps: bool) {
+        let on = on && (!PAGE || timestamps);
         self.on.store(on, std::sync::atomic::Ordering::Relaxed);
         if !on {
             lock(&self.open).clear();
             lock(&self.ended).clear();
             *lock(&self.last_end) = None;
             *lock(&self.last) = None;
+            *lock(&self.stamped) = Stamped::default();
             return;
         }
         if cfg!(target_arch = "wasm32")
@@ -239,12 +303,19 @@ impl Frames {
             });
     }
 
-    /// A run just submitted, work or copy, for the open frame: its end is
-    /// told when the device has done it.
-    pub(crate) fn submitted(&self, queue: &wgpu::Queue) {
+    /// Gives the device a run, work or copy, counted for the open frame.
+    pub(crate) fn submit(
+        &self,
+        queue: &wgpu::Queue,
+        commands: wgpu::CommandBuffer,
+    ) -> wgpu::SubmissionIndex {
         if !self.clocked() {
-            return;
+            return queue.submit(Some(commands));
         }
+        if PAGE {
+            return lock(&self.stamped).submit(queue, commands);
+        }
+        let submission = queue.submit(Some(commands));
         let run: Run = Arc::new(Mutex::new((std::time::Instant::now(), None)));
         lock(&self.open).push(Arc::clone(&run));
         let pending = Arc::clone(&self.pending);
@@ -253,21 +324,29 @@ impl Frames {
             lock(&run).1 = Some(std::time::Instant::now());
             pending.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         });
+        submission
     }
 
     /// How many runs the open frame has been given.
     pub(crate) fn mark(&self) -> usize {
+        if PAGE {
+            return lock(&self.stamped).runs();
+        }
         lock(&self.open).len()
     }
 
     /// Ends the open frame, answering its number; `None` unclocked.
-    pub(crate) fn end_frame(&self) -> Option<u64> {
+    pub(crate) fn end_frame(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<u64> {
         if !self.clocked() {
             return None;
         }
         let number = self
             .frames
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if PAGE {
+            lock(&self.stamped).end_frame(number, device, queue);
+            return Some(number);
+        }
         let runs = std::mem::take(&mut *lock(&self.open));
         let mut ended = lock(&self.ended);
         ended.push_back((number, runs));
@@ -279,6 +358,12 @@ impl Frames {
 
     /// The latest frame whose runs are all done, each run's busy time.
     pub(crate) fn done(&self) -> Option<entelechy_rules::ClockedFrame> {
+        if PAGE {
+            if let Some(frame) = lock(&self.stamped).done() {
+                *lock(&self.last) = Some(frame);
+            }
+            return lock(&self.last).clone();
+        }
         let mut ended = lock(&self.ended);
         let mut last_end = lock(&self.last_end);
         while let Some((number, runs)) = ended.front() {
@@ -305,6 +390,192 @@ impl Frames {
             ended.pop_front();
         }
         lock(&self.last).clone()
+    }
+}
+
+/// A page's frames, each run timed by the stamps at its passes' edges, all
+/// in one query set (a device keeps few).
+#[derive(Default)]
+struct Stamped {
+    /// The set every run of a frame writes its stamps into, from its base.
+    set: Option<wgpu::QuerySet>,
+    /// The open frame's runs: each its stamps' count, none for a run
+    /// unstamped.
+    counts: Vec<u32>,
+    /// The stamps of the run being made, once resolved.
+    resolving: Option<u32>,
+    /// Ended frames being read back, oldest first: each its number, runs'
+    /// counts and stamps; a frame that stamped nothing has none.
+    ended: std::collections::VecDeque<(u64, Vec<u32>, Option<Stamps>)>,
+    /// Stamps read and free for a later frame.
+    spare: Vec<Stamps>,
+    /// Nanoseconds a tick of the device's clock lasts.
+    period: f64,
+}
+
+/// One frame's stamps, resolved and copied to be read.
+struct Stamps {
+    resolved: wgpu::Buffer,
+    read: wgpu::Buffer,
+    /// The read's mapping: `WAITING`, `MAPPED` or `FAILED`.
+    state: Arc<std::sync::atomic::AtomicU8>,
+}
+
+const WAITING: u8 = 0;
+const MAPPED: u8 = 1;
+const FAILED: u8 = 2;
+
+/// The stamps a run writes at most (a native operation's two passes).
+const RUN_STAMPS: u32 = 4;
+
+impl Stamps {
+    fn new(device: &wgpu::Device) -> Self {
+        let bytes = u64::from(STAMPED_RUNS * RUN_STAMPS) * 8;
+        Self {
+            resolved: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("entelechy frame stamps resolve"),
+                size: bytes,
+                usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }),
+            read: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("entelechy frame stamps read"),
+                size: bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }),
+            state: Arc::new(std::sync::atomic::AtomicU8::new(WAITING)),
+        }
+    }
+}
+
+impl Frames {
+    /// Where the open frame's next run writes its stamps; `None` past the
+    /// runs a frame stamps.
+    pub(crate) fn run_timing(&self, device: &wgpu::Device) -> Option<Timing> {
+        let mut stamped = lock(&self.stamped);
+        let at = stamped.counts.len() as u32;
+        if at >= STAMPED_RUNS {
+            return None;
+        }
+        let set = stamped.set.get_or_insert_with(|| {
+            device.create_query_set(&wgpu::QuerySetDescriptor {
+                label: Some("entelechy frame stamps"),
+                ty: wgpu::QueryType::Timestamp,
+                count: STAMPED_RUNS * RUN_STAMPS,
+            })
+        });
+        Some(Timing {
+            set: set.clone(),
+            base: at * RUN_STAMPS,
+        })
+    }
+
+    /// The run being made wrote `count` stamps from its base.
+    pub(crate) fn stamped_run(&self, count: u32) {
+        lock(&self.stamped).resolving = Some(count.min(RUN_STAMPS));
+    }
+}
+
+impl Stamped {
+    fn submit(
+        &mut self,
+        queue: &wgpu::Queue,
+        commands: wgpu::CommandBuffer,
+    ) -> wgpu::SubmissionIndex {
+        let count = self.resolving.take().unwrap_or(0);
+        self.counts.push(count);
+        queue.submit(Some(commands))
+    }
+
+    fn runs(&self) -> usize {
+        self.counts.len()
+    }
+
+    fn end_frame(&mut self, number: u64, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let counts = std::mem::take(&mut self.counts);
+        let stamped = (counts.len() as u32).min(STAMPED_RUNS) * RUN_STAMPS;
+        let (Some(set), true) = (&self.set, counts.iter().any(|&count| count > 0)) else {
+            self.ended.push_back((number, counts, None));
+            return;
+        };
+        let stamps = self.spare.pop().unwrap_or_else(|| Stamps::new(device));
+        let bytes = u64::from(stamped) * 8;
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("entelechy frame stamps"),
+        });
+        encoder.resolve_query_set(set, 0..stamped, &stamps.resolved, 0);
+        encoder.copy_buffer_to_buffer(&stamps.resolved, 0, &stamps.read, 0, bytes);
+        queue.submit(Some(encoder.finish()));
+        self.period = f64::from(queue.get_timestamp_period());
+        stamps
+            .state
+            .store(WAITING, std::sync::atomic::Ordering::Relaxed);
+        let state = Arc::clone(&stamps.state);
+        stamps
+            .read
+            .slice(..bytes)
+            .map_async(wgpu::MapMode::Read, move |mapped| {
+                let to = if mapped.is_ok() { MAPPED } else { FAILED };
+                state.store(to, std::sync::atomic::Ordering::Relaxed);
+            });
+        self.ended.push_back((number, counts, Some(stamps)));
+        // A frame left waiting too long is let go uncounted.
+        while self.ended.len() > FRAMES_WAITING {
+            self.ended.pop_front();
+        }
+    }
+
+    /// The latest frame read back, if one has been since last asked: each
+    /// run its first stamp to its last.
+    fn done(&mut self) -> Option<entelechy_rules::ClockedFrame> {
+        let mut latest = None;
+        while let Some((_, _, stamps)) = self.ended.front() {
+            let state = stamps.as_ref().map_or(MAPPED, |s| {
+                s.state.load(std::sync::atomic::Ordering::Relaxed)
+            });
+            if state == WAITING {
+                break;
+            }
+            let Some((number, counts, stamps)) = self.ended.pop_front() else {
+                break;
+            };
+            if state == FAILED {
+                continue;
+            }
+            let mut busy = vec![std::time::Duration::ZERO; counts.len()];
+            if let Some(stamps) = stamps {
+                let stamped = counts.len().min(STAMPED_RUNS as usize);
+                let bytes = (stamped * RUN_STAMPS as usize * 8) as u64;
+                if let Ok(read) = stamps.read.slice(..bytes).get_mapped_range() {
+                    let tick = |at: usize| {
+                        u64::from_le_bytes(read[at * 8..at * 8 + 8].try_into().unwrap_or([0; 8]))
+                    };
+                    for (run, (took, &count)) in
+                        busy.iter_mut().zip(&counts).take(stamped).enumerate()
+                    {
+                        if count < 2 {
+                            continue;
+                        }
+                        let base = run * RUN_STAMPS as usize;
+                        let (first, last) = (tick(base), tick(base + count as usize - 1));
+                        // A stamp left unwritten reads zero: then the run says nothing.
+                        if first > 0 && last > first {
+                            *took = std::time::Duration::from_nanos(
+                                ((last - first) as f64 * self.period) as u64,
+                            );
+                        }
+                    }
+                }
+                stamps.read.unmap();
+                self.spare.push(stamps);
+            }
+            latest = Some(entelechy_rules::ClockedFrame {
+                frame: number,
+                runs: busy,
+            });
+        }
+        latest
     }
 }
 
