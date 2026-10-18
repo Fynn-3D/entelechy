@@ -12,6 +12,8 @@
 mod failure;
 mod later;
 mod modes;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+mod page;
 mod pool;
 mod prepare;
 pub mod present;

@@ -311,7 +311,9 @@ layer may depend on everything.
 Keep core, frontend, the interpreter and the conformance matrix free of
 external dependencies. Two backends take the one dependency their machine
 needs and keep it behind the `Backend` boundary: `entelechy-gpu` takes wgpu (and
-pollster to wait on it) to reach a device, and `entelechy-jit` takes Cranelift to
+pollster to wait on it) to reach a device, and in a page the crates wgpu
+reaches the browser with (js-sys, wasm-bindgen and its futures) to ask the
+browser for a pipeline off the thread that answers the device; and `entelechy-jit` takes Cranelift to
 generate native code. The interface layer (`entelechy-session`, `entelechy-protocol`,
 the `entelechy` CLI, the Player, `entelechy-import`, `entelechy-export`, `entelechy-ffi`) is the
 only other place that may take them, for devices, for formats that are not

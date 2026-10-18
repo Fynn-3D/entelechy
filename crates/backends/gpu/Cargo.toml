@@ -21,9 +21,15 @@ pollster = "0.4"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "metal", "vulkan", "dx12"] }
 
-# In a page the device is the browser's WebGPU, reached from one thread.
+# In a page the device is the browser's WebGPU, reached from one thread;
+# its pipelines are asked of the browser first, to be compiled off the
+# thread that answers the device (js-sys, wasm-bindgen and its futures,
+# which wgpu itself takes there).
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "webgpu", "fragile-send-sync-non-atomic-wasm"] }
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
 
 # Under WASI there is no device to reach.
 [target.'cfg(all(target_arch = "wasm32", not(target_os = "unknown")))'.dependencies]

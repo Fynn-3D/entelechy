@@ -12,9 +12,19 @@ use std::path::{Path, PathBuf};
 const LAYERS: [&str; 4] = ["core", "frontend", "backends", "interface"];
 
 /// The external dependencies a non-interface crate may take: a backend's
-/// machine.
+/// machine, and for the device in a page the crates wgpu reaches the
+/// browser with.
 const MACHINES: [(&str, &[&str]); 2] = [
-    ("entelechy-gpu", &["wgpu", "pollster"]),
+    (
+        "entelechy-gpu",
+        &[
+            "wgpu",
+            "pollster",
+            "js-sys",
+            "wasm-bindgen",
+            "wasm-bindgen-futures",
+        ],
+    ),
     (
         "entelechy-jit",
         &[

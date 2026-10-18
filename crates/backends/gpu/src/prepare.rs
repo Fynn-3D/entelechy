@@ -81,12 +81,22 @@ pub(crate) struct Shader {
     label: String,
     shader: wgpu::ShaderModule,
     layout: wgpu::BindGroupLayout,
+    /// In a page, the source and bindings the browser compiles the
+    /// pipeline from first, off the thread that answers the device.
+    beside: Option<(String, Vec<wgpu::BindGroupLayoutEntry>)>,
 }
 
 impl Shader {
     /// The pipeline, from the device's own compiler: the long part of
     /// preparing, and the part a device's compiler can fail in.
     fn built(self, device: &wgpu::Device, wait: Wait) -> Result<Pass, Unbuilt> {
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        if let Some((source, entries)) = &self.beside {
+            crate::page::compile_beside(device, wait, &self.label, source, entries);
+        }
+        // Elsewhere the device compiles beside the thread by itself.
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+        let _ = &self.beside;
         let scopes = Scopes::push(device);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(&self.label),
@@ -427,6 +437,10 @@ impl GpuBackend {
             label: label.to_owned(),
             shader,
             layout,
+            beside: self
+                .wait
+                .parks_with_host()
+                .then(|| (source.to_owned(), entries.to_vec())),
         })
     }
 

@@ -1039,7 +1039,10 @@ dependencies = [
  "entelechy-ir",
  "entelechy-kernel",
  "entelechy-rules",
+ "js-sys",
  "pollster",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wgpu",
 ]
 
