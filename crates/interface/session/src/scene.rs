@@ -67,6 +67,9 @@ pub(crate) struct Scene {
     /// Library documents being read and their Kernels compiled on another
     /// thread ([`Scene::sync_libraries`]).
     compiling: Option<Compiling>,
+    /// The root being lowered on another thread, a scene already running
+    /// meanwhile ([`Scene::read_root`]).
+    lowering: Option<Lowering>,
 }
 
 /// The running scene, kept to be put back whole ([`Scene::put_back`]).
@@ -142,6 +145,7 @@ impl Scene {
             expanded: None,
             refusal: None,
             compiling: None,
+            lowering: None,
         }
     }
 
@@ -306,13 +310,16 @@ impl Scene {
 
     /// Reads every changed document the root reaches and hands their
     /// Kernels to `kernels`. A changed library rereads the root, whose
-    /// Kernels inherit its declarations.
+    /// Kernels inherit its declarations. `apart` lets a changed root be
+    /// lowered on another thread, said by a later sync; otherwise it is
+    /// lowered here, and one lowered apart is waited for.
     pub(crate) fn sync(
         &mut self,
         kernels: &mut Kernels,
         runtime: &mut Runtime,
         events: &mut Vec<Event>,
         readable: &dyn Fn(&Path) -> Result<(), String>,
+        apart: bool,
     ) {
         let from = events.len();
         // The worker's finished changes publish first.
@@ -324,10 +331,10 @@ impl Scene {
         if self.sync_libraries(kernels, runtime, events) {
             self.stamp = None;
         }
-        self.sync_root(kernels, runtime, events, readable);
+        self.sync_root(kernels, runtime, events, readable, apart);
         if self.sync_libraries(kernels, runtime, events) {
             self.stamp = None;
-            self.sync_root(kernels, runtime, events, readable);
+            self.sync_root(kernels, runtime, events, readable, apart);
         }
         // A scene that loaded, however many times this sync: each node
         // bound to a Kernel a document it reaches only through another
@@ -393,10 +400,19 @@ impl Scene {
         text: &str,
         readable: &dyn Fn(&Path) -> Result<(), String>,
     ) -> Result<(entelechy_language::Document, entelechy_scene::Lowered), Diagnostic> {
+        let document = self.parse_readable(text, readable)?;
+        self.lowering_of(document, text).lower(store)
+    }
+
+    /// The root's text parsed, every document it uses or places having
+    /// passed `readable` before any is read.
+    fn parse_readable(
+        &self,
+        text: &str,
+        readable: &dyn Fn(&Path) -> Result<(), String>,
+    ) -> Result<entelechy_language::Document, Diagnostic> {
         let document =
             entelechy_language::parse_document(text).map_err(|e| Diagnostic::from(&e))?;
-        // Every used or placed document passes `readable` before any is
-        // read.
         let base = self.base();
         let placed = document.nodes.iter().filter_map(|node| match &node.kind {
             entelechy_language::NodeKind::SubGraph(path) => Some(path),
@@ -406,6 +422,49 @@ impl Scene {
             readable(&base.join(&path.value))
                 .map_err(|why| Diagnostic::new(format!("`{}` is not read: {why}", path.value)))?;
         }
+        Ok(document)
+    }
+
+    /// What lowering the parsed root needs, apart from the scene.
+    fn lowering_of(&self, document: entelechy_language::Document, text: &str) -> ToLower {
+        ToLower {
+            document,
+            text: text.to_owned(),
+            name: self.document_name(),
+            base: self.base(),
+            params: self.params.clone(),
+            first: self.graph.is_none(),
+            store: Arc::clone(&self.store),
+        }
+    }
+}
+
+/// A parsed root and what lowering it reads: on this thread or another.
+struct ToLower {
+    document: entelechy_language::Document,
+    text: String,
+    name: String,
+    base: PathBuf,
+    params: BTreeMap<String, Value>,
+    first: bool,
+    store: Arc<dyn Store>,
+}
+
+impl ToLower {
+    /// The root lowered: its graph ordered, its params known.
+    fn lower(
+        self,
+        store: &dyn Store,
+    ) -> Result<(entelechy_language::Document, entelechy_scene::Lowered), Diagnostic> {
+        let Self {
+            document,
+            text,
+            name,
+            base,
+            params,
+            first,
+            ..
+        } = self;
         let mut loader = |path: &Path| locate_document(store, path);
         let mut declare =
             |base: &Path, uses: &[entelechy_language::Use], own: entelechy_language::Own<'_>| {
@@ -413,12 +472,12 @@ impl Scene {
             };
         let lowered = entelechy_scene::load_with_params(
             &document,
-            text,
-            &self.document_name(),
-            &self.base(),
+            &text,
+            &name,
+            &base,
             &mut loader,
             &mut declare,
-            &self.params,
+            &params,
         )
         .map_err(|e| Diagnostic::from(&e))?;
         // A graph with a missing source or a cycle is refused here,
@@ -428,9 +487,8 @@ impl Scene {
             .order()
             .map_err(|e| graph_diagnostic(&document, &e))?;
         // A held param the first scene does not declare is refused.
-        if self.graph.is_none()
-            && let Some(name) = self
-                .params
+        if first
+            && let Some(name) = params
                 .keys()
                 .find(|name| !lowered.graph.params.iter().any(|p| &p.name == *name))
         {
@@ -438,7 +496,9 @@ impl Scene {
         }
         Ok((document, lowered))
     }
+}
 
+impl Scene {
     /// Whether `text` as the root lowers to a complete graph and all its
     /// own Kernels compile and are granted. Writes, publishes and runs
     /// nothing; see [`crate::Session::check_scene`].
@@ -498,6 +558,7 @@ impl Scene {
         runtime: &mut Runtime,
         events: &mut Vec<Event>,
         readable: &dyn Fn(&Path) -> Result<(), String>,
+        apart: bool,
     ) {
         // The scene is read once the library documents being compiled
         // land, so it never names a Kernel they are about to publish.
@@ -506,7 +567,7 @@ impl Scene {
         }
         let from = events.len();
         let unchanged = self.stamp.is_some() && self.store.stamp(&self.root) == self.stamp;
-        self.read_root(kernels, runtime, events, readable);
+        self.read_root(kernels, runtime, events, readable, apart);
         let refused = events[from..]
             .iter()
             .any(|event| matches!(event, Event::SceneRejected(_)));
@@ -527,7 +588,70 @@ impl Scene {
         runtime: &mut Runtime,
         events: &mut Vec<Event>,
         readable: &dyn Fn(&Path) -> Result<(), String>,
+        apart: bool,
     ) {
+        // A root lowered on another thread reads on once it lands, unless
+        // the root changed since: then it is read again. A sync that is
+        // not apart waits for it.
+        if !apart && let Some(lowering) = &mut self.lowering {
+            lowering.wait();
+        }
+        let landed = match &mut self.lowering {
+            None => None,
+            Some(lowering) => match lowering.landed() {
+                Some(read) => Some(read),
+                None if lowering.lost => {
+                    self.lowering = None;
+                    self.stamp = None;
+                    return;
+                }
+                None => return,
+            },
+        };
+        let (text, read) = match landed {
+            Some(read) => {
+                let lowering = self.lowering.take().expect("a lowering landed");
+                // What it read must still be so: the root, the graphs it
+                // placed, and no library change since asking it read again.
+                let still = self.stamp == lowering.stamp
+                    && self.store.stamp(&self.root) == lowering.stamp
+                    && lowering
+                        .placed
+                        .iter()
+                        .all(|(path, stamp)| self.store.stamp(path) == *stamp);
+                if !still {
+                    self.stamp = None;
+                    return;
+                }
+                (lowering.text, read)
+            }
+            None => match self.read_root_text(kernels, runtime, events, readable, apart) {
+                Some(read) => read,
+                None => return,
+            },
+        };
+        let (document, lowered) = match read {
+            Ok(read) => read,
+            Err(error) => {
+                events.push(Event::SceneRejected(error));
+                return;
+            }
+        };
+        self.read_lowered(text, document, lowered, kernels, runtime, events);
+    }
+
+    /// Reads the root's text when it or a graph it places changed, and
+    /// lowers it: here, or, on a sync apart where replacements prepare off
+    /// the frames and a scene runs meanwhile, on another thread (`None`
+    /// until it lands).
+    fn read_root_text(
+        &mut self,
+        kernels: &mut Kernels,
+        runtime: &mut Runtime,
+        events: &mut Vec<Event>,
+        readable: &dyn Fn(&Path) -> Result<(), String>,
+        apart: bool,
+    ) -> Option<(String, Lowered)> {
         let current = self.store.stamp(&self.root);
         // The newest read: staged, else running.
         let read = self
@@ -539,7 +663,7 @@ impl Scene {
             .any(|(path, loaded)| self.store.stamp(path) != *loaded);
         let loaded = self.graph.is_some() || self.staged.is_some();
         if current == self.stamp && loaded && !sub_graph_changed {
-            return;
+            return None;
         }
         self.stamp = current;
         // A newer change supersedes a staged one.
@@ -552,16 +676,41 @@ impl Scene {
             Ok(text) => text,
             Err(error) => {
                 events.push(Event::SceneRejected(Diagnostic::new(error.to_string())));
-                return;
+                return None;
             }
         };
-        let (document, mut lowered) = match self.lower(&text, readable) {
-            Ok(read) => read,
-            Err(error) => {
-                events.push(Event::SceneRejected(error));
-                return;
+        if apart && runtime.background() && self.graph.is_some() {
+            let document = match self.parse_readable(&text, readable) {
+                Ok(document) => document,
+                Err(error) => return Some((text, Err(error))),
+            };
+            match Lowering::start(self.lowering_of(document, &text), current, text) {
+                Ok(lowering) => {
+                    self.lowering = Some(lowering);
+                    return None;
+                }
+                Err(text) => {
+                    let read = self.lower(&text, readable);
+                    return Some((text, read));
+                }
             }
-        };
+        }
+        let read = self.lower(&text, readable);
+        Some((text, read))
+    }
+
+    /// Reads on from the root's text lowered: its Kernels staged, and the
+    /// scene staged to replace the running one once they publish.
+    fn read_lowered(
+        &mut self,
+        text: String,
+        document: entelechy_language::Document,
+        mut lowered: entelechy_scene::Lowered,
+        kernels: &mut Kernels,
+        runtime: &mut Runtime,
+        events: &mut Vec<Event>,
+    ) {
+        let current = self.stamp;
         // The inputs and outputs where the caller places them.
         let written = lowered.files.clone();
         let bound = match self
@@ -801,7 +950,7 @@ impl Scene {
     /// Whether a staged scene waits for its Kernels, or documents it uses
     /// compile off the frames before it is read again.
     pub(crate) fn waiting(&self) -> bool {
-        self.staged.is_some() || self.compiling.is_some()
+        self.staged.is_some() || self.compiling.is_some() || self.lowering.is_some()
     }
 
     /// Whether the running or staged scene places `path` as a graph.
@@ -828,14 +977,33 @@ impl Scene {
     /// Whether library documents are being read and compiled on another
     /// thread, to publish at a later sync.
     pub(crate) fn compiling(&self) -> bool {
-        self.compiling.is_some()
+        self.compiling.is_some() || self.lowering.is_some()
     }
 
-    /// Waits until the library documents being compiled are done, for
-    /// the next sync to publish.
+    /// Waits for a root being lowered on another thread and reads it on,
+    /// so what is judged by the newest scene read does not hang on the
+    /// thread's timing.
+    pub(crate) fn land_lowering(
+        &mut self,
+        kernels: &mut Kernels,
+        runtime: &mut Runtime,
+        events: &mut Vec<Event>,
+    ) {
+        if let Some(lowering) = &mut self.lowering {
+            lowering.wait();
+            // A landed lowering is read on without reading the root again.
+            self.read_root(kernels, runtime, events, &|_| Ok(()), false);
+        }
+    }
+
+    /// Waits until the library documents being compiled, and the root
+    /// being lowered, are done, for the next sync to publish.
     pub(crate) fn wait_compiled(&mut self) {
         if let Some(compiling) = &mut self.compiling {
             compiling.wait();
+        }
+        if let Some(lowering) = &mut self.lowering {
+            lowering.wait();
         }
     }
 
@@ -1280,6 +1448,93 @@ fn read_library(store: &dyn Store, path: PathBuf, current: Option<Stamp>) -> (Re
         },
         depends,
     )
+}
+
+/// The root lowered on another thread ([`ToLower`]), for a later sync to
+/// read on with.
+struct Lowering {
+    done: std::sync::mpsc::Receiver<(Lowered, Placed)>,
+    ready: Option<Lowered>,
+    /// Whether its thread ended without an answer (it panicked): the root
+    /// is read again.
+    lost: bool,
+    /// The root's stamp and text it lowered, and the stamps of the graphs
+    /// it placed as it lowered them.
+    stamp: Option<Stamp>,
+    text: String,
+    placed: Placed,
+}
+
+/// The root parsed and lowered, or why not.
+type Lowered = Result<(entelechy_language::Document, entelechy_scene::Lowered), Diagnostic>;
+/// The graphs a lowering placed, each with its stamp as it was read.
+type Placed = Vec<(PathBuf, Option<Stamp>)>;
+
+impl Lowering {
+    /// Starts lowering on a thread, or gives the text back where no thread
+    /// can start.
+    fn start(to_lower: ToLower, stamp: Option<Stamp>, text: String) -> Result<Self, String> {
+        let (send, done) = std::sync::mpsc::channel();
+        let started = std::thread::Builder::new()
+            .name("entelechy-lower".into())
+            // Room for the language's nesting bound (entelechy_language::DEEP_STACK).
+            .stack_size(256 << 20)
+            .spawn(move || {
+                let store = Arc::clone(&to_lower.store);
+                let lowered = to_lower.lower(store.as_ref());
+                let placed = match &lowered {
+                    Ok((_, lowered)) => lowered
+                        .documents
+                        .iter()
+                        .map(|path| (path.clone(), store.stamp(path)))
+                        .collect(),
+                    Err(_) => Vec::new(),
+                };
+                let _ = send.send((lowered, placed));
+            });
+        match started {
+            Ok(_) => Ok(Self {
+                done,
+                ready: None,
+                lost: false,
+                stamp,
+                text,
+                placed: Vec::new(),
+            }),
+            Err(_) => Err(text),
+        }
+    }
+
+    /// The root lowered, once done.
+    fn landed(&mut self) -> Option<Lowered> {
+        if let Some(ready) = self.ready.take() {
+            return Some(ready);
+        }
+        match self.done.try_recv() {
+            Ok((lowered, placed)) => {
+                self.placed = placed;
+                Some(lowered)
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.lost = true;
+                None
+            }
+        }
+    }
+
+    /// Waits until it is done.
+    fn wait(&mut self) {
+        if self.ready.is_none() {
+            match self.done.recv() {
+                Ok((lowered, placed)) => {
+                    self.placed = placed;
+                    self.ready = Some(lowered);
+                }
+                Err(_) => self.lost = true,
+            }
+        }
+    }
 }
 
 /// Library documents read and their Kernels primed on another thread

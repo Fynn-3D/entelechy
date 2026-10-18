@@ -48,6 +48,9 @@ pub struct Session {
     /// The request whose change the scene being read is
     /// ([`Session::claim_scene`]).
     claim: Claim,
+    /// What reading on a scene lowered on another thread said outside a
+    /// sync ([`Session::settle_lowering`]), said by the next sync.
+    later: Vec<Event>,
     /// The names asked to stay materialized ([`Session::pin`]), resolved
     /// against the running graph before each evaluation.
     pins: Vec<entelechy_graph::NodeId>,
@@ -145,6 +148,7 @@ impl Session {
             history: crate::history::History::default(),
             origin: crate::Origin::Local,
             claim: Claim::None,
+            later: Vec::new(),
             pins: Vec::new(),
             node_clock: crate::clocked::NodeClock::default(),
             bound: BTreeMap::new(),
@@ -326,7 +330,8 @@ impl Session {
     /// The type of the param `name` the scene declares, as written; an
     /// undeclared one is refused, saying where it lives instead. `None`
     /// before a scene loads, which holds any name.
-    pub fn param_type(&self, name: &str) -> Result<Option<String>, String> {
+    pub fn param_type(&mut self, name: &str) -> Result<Option<String>, String> {
+        self.settle_lowering();
         self.scene
             .declared_param(name)
             .map(|param| param.map(|param| param.ty.to_string()))
@@ -336,6 +341,7 @@ impl Session {
     /// its declared type (`[[1, 0], [0, 1]]` for a `Mat2`); another layout
     /// is refused. Unknown names are kept for a later declaration.
     pub fn set_param(&mut self, name: &str, value: Value) -> Result<(), String> {
+        self.settle_lowering();
         self.scene.set_param(name, value)?;
         self.history.changed(
             crate::Change::Param {
@@ -344,6 +350,16 @@ impl Session {
             self.origin.clone(),
         );
         Ok(())
+    }
+
+    /// Reads on a scene being lowered on another thread, waiting for it:
+    /// a param is judged by the newest scene read, whatever the thread's
+    /// timing. What it says is said by the next sync.
+    fn settle_lowering(&mut self) {
+        let mut events = Vec::new();
+        self.scene
+            .land_lowering(&mut self.kernels, &mut self.runtime, &mut events);
+        self.later.extend(events);
     }
 
     /// Current graph parameter overrides.
@@ -383,6 +399,7 @@ impl Session {
         self.reset_state();
         self.inputs
             .start_fed_over(self.scene.files(), self.runtime.host_mut());
+        self.settle_lowering();
         let overridden: Vec<String> = self.scene.params().keys().cloned().collect();
         self.scene.clear_params();
         for name in overridden {
@@ -411,17 +428,34 @@ impl Session {
     }
 
     /// Reconciles the runtime with its store and reports what changed, in
-    /// order: finished replacements, documents, inputs, placements.
+    /// order: finished replacements, documents, inputs, placements. A
+    /// changed scene is read and said by this sync.
     pub fn sync(&mut self) -> Vec<Event> {
-        let mut events = Vec::new();
+        self.sync_apart(false)
+    }
+
+    /// [`Session::sync`] for a frame: where replacements prepare off the
+    /// frames, a changed scene is lowered on another thread while the
+    /// running one goes on, and said by the sync it lands on.
+    pub fn sync_on_frame(&mut self) -> Vec<Event> {
+        self.sync_apart(true)
+    }
+
+    fn sync_apart(&mut self, apart: bool) -> Vec<Event> {
+        let mut events = std::mem::take(&mut self.later);
         let store = Arc::clone(self.scene.store());
         // Every document walks the files it reaches; a path is looked at
         // once a sync.
         store.sync_begins();
         let reads = Arc::clone(&self.reads);
         let readable = |path: &Path| crate::reads::lock(&reads).check(store.as_ref(), path);
-        self.scene
-            .sync(&mut self.kernels, &mut self.runtime, &mut events, &readable);
+        self.scene.sync(
+            &mut self.kernels,
+            &mut self.runtime,
+            &mut events,
+            &readable,
+            apart,
+        );
         // Externals the caller's overrides bind to files, bound when new.
         for (name, path) in self.scene.bound().to_vec() {
             if self.bound.get(&name) == Some(&path) {

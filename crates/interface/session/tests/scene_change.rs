@@ -602,3 +602,104 @@ fn every_document_a_scene_loads_is_remembered_by_its_version() {
         .count();
     assert_eq!(named, 2);
 }
+
+/// A root whose one Kernel fills the picture with red `red`.
+fn red(red: &str) -> String {
+    format!(
+        "node src: kernel k.red@1 {{ requires {{ field.write; }} output result: Image; domain = vec2(2, 2); compute {{ return vec4({red}, 0.0, 0.0, 1.0); }} }}\n\
+         output result <- src.result;\n"
+    )
+}
+
+/// The red of the picture a frame shows.
+fn shown_red(session: &mut Session) -> f32 {
+    let report = session.evaluate(&Context::default()).expect("a frame runs");
+    session
+        .runtime()
+        .host()
+        .read_pixel(report.output, 0, 0)
+        .unwrap()[0]
+}
+
+/// Where replacements prepare off the frames, a changed root is lowered
+/// on another thread while the old scene runs, and lands whole.
+#[test]
+fn a_root_lowered_off_the_frame_lands_while_the_old_scene_runs() {
+    let files = Arc::new(Memory::default());
+    put(&files, "scene.esn", &red("0.25"));
+    let mut session = open(
+        &files,
+        entelechy_session::Session::runtime_for("cpu", Default::default()).unwrap(),
+    );
+    session.sync();
+    session.set_background(true);
+    assert_eq!(shown_red(&mut session), 0.25);
+
+    put(&files, "scene.esn", &red("0.75"));
+    let mut loaded = false;
+    for _ in 0..5_000 {
+        let events = session.sync_on_frame();
+        let red = shown_red(&mut session);
+        assert!(red == 0.25 || red == 0.75, "a frame shows one whole scene");
+        if events.iter().any(|e| matches!(e, Event::SceneLoaded)) {
+            loaded = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(loaded, "the change lands");
+    assert_eq!(shown_red(&mut session), 0.75);
+}
+
+/// A root changed again while its last change is lowered on another
+/// thread is read again: what lands is the newest text, never the one
+/// overtaken.
+#[test]
+fn a_root_changed_while_it_is_lowered_lands_its_newest_text() {
+    let files = Arc::new(Memory::default());
+    put(&files, "scene.esn", &red("0.25"));
+    let mut session = open(
+        &files,
+        entelechy_session::Session::runtime_for("cpu", Default::default()).unwrap(),
+    );
+    session.sync();
+    session.set_background(true);
+    assert_eq!(shown_red(&mut session), 0.25);
+
+    put(&files, "scene.esn", &red("0.5"));
+    session.sync_on_frame();
+    put(&files, "scene.esn", &red("0.75"));
+    for _ in 0..5_000 {
+        session.sync_on_frame();
+        let red = shown_red(&mut session);
+        assert_ne!(red, 0.5, "the overtaken text never lands");
+        if red == 0.75 {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    panic!("the newest text lands");
+}
+
+/// A plain sync says a changed root itself, even where its Kernels
+/// prepare off the frames: it does not leave the root to another thread.
+#[test]
+fn a_plain_sync_reads_a_changed_root_itself() {
+    let files = Arc::new(Memory::default());
+    put(&files, "scene.esn", &red("0.25"));
+    let mut session = open(
+        &files,
+        entelechy_session::Session::runtime_for("cpu", Default::default()).unwrap(),
+    );
+    session.sync();
+    session.set_background(true);
+    assert_eq!(shown_red(&mut session), 0.25);
+    put(&files, "scene.esn", &red("0.75"));
+    let events = session.sync();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::Preparing { .. } | Event::SceneLoaded)),
+        "{events:?}"
+    );
+}

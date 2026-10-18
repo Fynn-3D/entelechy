@@ -484,7 +484,7 @@ impl Play {
         let due = self.replaying.is_some() || self.synced.is_none_or(|at| begun - at >= SYNC_EVERY);
         if due {
             self.synced = Some(begun);
-            for event in session.sync() {
+            for event in session.sync_on_frame() {
                 self.said.push(event.to_string());
             }
         }
