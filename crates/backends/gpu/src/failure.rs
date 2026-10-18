@@ -17,6 +17,8 @@ pub(crate) struct FailureCheck {
     /// came before, not for what was submitted after.
     pub(crate) submitted: wgpu::SubmissionIndex,
     pub(crate) pile: Arc<Mutex<Vec<(wgpu::Buffer, wgpu::Buffer)>>>,
+    /// What the device said by itself ([`crate::told`]).
+    pub(crate) heard: Arc<Mutex<Vec<String>>>,
     /// The mapped domain's width, which turns an element's number into the
     /// reference's column and row.
     pub(crate) width: u32,
@@ -38,7 +40,7 @@ impl Check for FailureCheck {
                 self.wait
                     .map_read_after(&self.device, &self.queue, slice, &self.submitted)
             })
-            .map_err(ExecutionError::Device)?;
+            .map_err(|error| ExecutionError::Device(crate::told(&self.heard, error)))?;
         let (word, blocks, left, total) = {
             let bytes = slice
                 .get_mapped_range()

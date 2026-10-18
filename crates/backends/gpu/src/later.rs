@@ -14,15 +14,19 @@ pub(crate) struct Coming {
     pub(crate) byte_len: usize,
     /// The copy's submission: taking waits for it alone.
     pub(crate) after: wgpu::SubmissionIndex,
+    /// What the device said by itself ([`crate::told`]).
+    pub(crate) heard: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl entelechy_rules::Downloading for Coming {
     fn take(self: Box<Self>) -> Result<Vec<u8>, String> {
         let slice = self.staging.slice(..);
-        self.spent.time(|| {
-            self.wait
-                .map_read_after(&self.device, &self.queue, slice, &self.after)
-        })?;
+        self.spent
+            .time(|| {
+                self.wait
+                    .map_read_after(&self.device, &self.queue, slice, &self.after)
+            })
+            .map_err(|error| crate::told(&self.heard, error))?;
         let bytes = slice
             .get_mapped_range()
             .map_err(|error| error.to_string())?[..self.byte_len]

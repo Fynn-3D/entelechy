@@ -109,6 +109,20 @@ pub struct GpuBackend {
     last_nanos: std::sync::atomic::AtomicU64,
     /// Frames clocked as they run; see [`Backend::set_clocked`].
     frames: timing::Frames,
+    /// What the device said by itself: an error no scope caught, its loss.
+    /// A readback that fails says it too, as the cause is most often there.
+    heard: Arc<Mutex<Vec<String>>>,
+}
+
+/// `error` with what the device said by itself before it, when it said
+/// anything: a page's mapping fails with a bare "error occurred".
+pub(crate) fn told(heard: &Mutex<Vec<String>>, error: String) -> String {
+    let heard = heard.lock().map(|h| h.join("; ")).unwrap_or_default();
+    if heard.is_empty() {
+        error
+    } else {
+        format!("{error} (the device said: {heard})")
+    }
 }
 
 impl fmt::Debug for GpuBackend {
@@ -198,6 +212,33 @@ impl GpuBackend {
             }))
             .map_err(|error| GpuError(error.to_string()))?;
         let adapter_name = adapter.get_info().name;
+        let heard: Arc<Mutex<Vec<String>>> = Arc::default();
+        let keep = |heard: &Arc<Mutex<Vec<String>>>, line: String| {
+            if let Ok(mut heard) = heard.lock() {
+                // The first few: the cause comes first, its echoes after.
+                if heard.len() < 4 {
+                    heard.push(line);
+                }
+            }
+        };
+        // In a page, an error no scope caught is kept to be told; elsewhere it
+        // stops the program, as it always has.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let heard = Arc::clone(&heard);
+            device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
+                keep(&heard, error.to_string())
+            }));
+        }
+        {
+            let heard = Arc::clone(&heard);
+            device.set_device_lost_callback(move |reason, message| {
+                keep(
+                    &heard,
+                    format!("the device was lost ({reason:?}): {message}"),
+                )
+            });
+        }
         Ok(Self {
             wait,
             spent: Spent::default(),
@@ -223,6 +264,7 @@ impl GpuBackend {
             last_nanos: std::sync::atomic::AtomicU64::new(u64::MAX),
             clock: std::sync::atomic::AtomicU8::new(clock::UNTRIED),
             frames: timing::Frames::default(),
+            heard,
         })
     }
 
@@ -521,6 +563,7 @@ impl Backend for GpuBackend {
                 pair: Some(pair),
                 submitted,
                 pile: Arc::clone(&self.failures),
+                heard: Arc::clone(&self.heard),
                 width: domain.width(),
                 totals_width: output_domain.width(),
                 budget: module.manifest.budget,
@@ -614,10 +657,12 @@ impl Backend for GpuBackend {
             });
         encoder.copy_buffer_to_buffer(&image.buffer, 0, &staging, 0, size);
         self.submit(encoder.finish());
-        self.spent.time(|| {
-            self.wait
-                .map_read(&self.device, &self.queue, staging.slice(..))
-        })?;
+        self.spent
+            .time(|| {
+                self.wait
+                    .map_read(&self.device, &self.queue, staging.slice(..))
+            })
+            .map_err(|error| told(&self.heard, error))?;
         let bytes: Vec<u8> = {
             let view = staging
                 .slice(..)
@@ -662,6 +707,7 @@ impl Backend for GpuBackend {
             staging,
             byte_len,
             after,
+            heard: Arc::clone(&self.heard),
         }))
     }
 

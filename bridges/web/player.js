@@ -258,7 +258,11 @@ class EntelechyPlayer {
       await this.show();
       await this.play();
     } else if (framed < 0) {
-      document.title = `Entelechy: ${this.entelechy.text(this.x.entelechy_error(this.session))}`;
+      // The title holds what the page has room for; the console the whole.
+      const error = this.entelechy.text(this.x.entelechy_error(this.session));
+      document.title = `Entelechy: ${error}`;
+      if (error !== this.failed) console.error(`Entelechy: ${error}`);
+      this.failed = error;
     }
   }
 
