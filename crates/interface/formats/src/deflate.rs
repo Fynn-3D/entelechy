@@ -60,6 +60,55 @@ fn distance_code(distance: u16) -> usize {
 }
 
 /// The bytes as literals and matches.
+/// How many leading bytes two equally long runs share, eight at a time.
+fn common(a: &[u8], b: &[u8]) -> usize {
+    let mut length = 0;
+    for (x, y) in a.chunks_exact(8).zip(b.chunks_exact(8)) {
+        let x = u64::from_le_bytes(x.try_into().expect("eight bytes"));
+        let y = u64::from_le_bytes(y.try_into().expect("eight bytes"));
+        if x != y {
+            return length + ((x ^ y).trailing_zeros() / 8) as usize;
+        }
+        length += 8;
+    }
+    length
+        + a[length..]
+            .iter()
+            .zip(&b[length..])
+            .take_while(|(x, y)| x == y)
+            .count()
+}
+
+/// The fewest bytes a part gets: below twice this, all are one part.
+const PART: usize = 1 << 20;
+
+/// The tokens of `bytes` cut into parts, one a core, matched each on its
+/// own thread and joined in order: a match never reaches into the part
+/// before it, so a long stream loses only the matches across the cuts.
+/// Where no thread starts (WebAssembly), a part is matched where it is.
+fn tokens_apart(bytes: &[u8]) -> Vec<Token> {
+    let cores = std::thread::available_parallelism().map_or(1, usize::from);
+    let part = PART.max(bytes.len().div_ceil(cores));
+    if cores < 2 || bytes.len() < 2 * part {
+        return tokens(bytes);
+    }
+    let parts: Vec<&[u8]> = bytes.chunks(part).collect();
+    std::thread::scope(|scope| {
+        let running: Vec<_> = parts
+            .iter()
+            .map(|part| std::thread::Builder::new().spawn_scoped(scope, move || tokens(part)))
+            .collect();
+        let mut out = Vec::with_capacity(bytes.len() / 2 + 16);
+        for (running, part) in running.into_iter().zip(&parts) {
+            match running.map(|thread| thread.join()) {
+                Ok(Ok(tokens)) => out.extend(tokens),
+                _ => out.extend(tokens(part)),
+            }
+        }
+        out
+    })
+}
+
 fn tokens(bytes: &[u8]) -> Vec<Token> {
     let n = bytes.len();
     let mut out = Vec::with_capacity(n / 2 + 16);
@@ -87,10 +136,7 @@ fn tokens(bytes: &[u8]) -> Vec<Token> {
         let mut tries = CHAIN;
         while candidate != usize::MAX && i - candidate <= WINDOW && tries > 0 {
             if bytes[candidate + best.min(most - 1)] == bytes[i + best.min(most - 1)] {
-                let mut length = 0;
-                while length < most && bytes[candidate + length] == bytes[i + length] {
-                    length += 1;
-                }
+                let length = common(&bytes[candidate..candidate + most], &bytes[i..i + most]);
                 if length > best {
                     best = length;
                     at = i - candidate;
@@ -396,7 +442,7 @@ fn block(bits: &mut Bits, tokens: &[Token], last: bool) {
 
 /// Bytes as a DEFLATE stream of compressed blocks.
 pub fn deflate(bytes: &[u8]) -> Vec<u8> {
-    let tokens = tokens(bytes);
+    let tokens = tokens_apart(bytes);
     let mut bits = Bits {
         out: Vec::with_capacity(bytes.len() / 4 + 64),
         acc: 0,
@@ -463,6 +509,26 @@ mod tests {
     /// Streams of every shape come back as they went: empty, one byte,
     /// text, runs longer than a match, noise, and more than a window and
     /// a block of symbols.
+    #[test]
+    fn a_stream_cut_into_parts_round_trips() {
+        // Long enough to be matched in parts: repetition, noise and runs.
+        let mut seed = 7u32;
+        let bytes: Vec<u8> = (0..5 * PART + 12345)
+            .map(|i| {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                match (i / 4096) % 3 {
+                    0 => (i % 251) as u8,
+                    1 => (seed >> 24) as u8,
+                    _ => 9,
+                }
+            })
+            .collect();
+        assert_eq!(
+            crate::inflate::unzlib(&zlib(&bytes), bytes.len()).unwrap(),
+            bytes
+        );
+    }
+
     #[test]
     fn streams_round_trip() {
         round_trip(b"");
