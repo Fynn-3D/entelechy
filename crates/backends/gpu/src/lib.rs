@@ -368,6 +368,7 @@ impl Backend for GpuBackend {
             device: self.device.clone(),
             queue: self.queue.clone(),
             after,
+            asked: self.wait.ask_done(&self.queue),
         }))
     }
 
@@ -540,9 +541,16 @@ impl Backend for GpuBackend {
         // One queue runs submissions in order, so only observation waits; under
         // `set_measured` this call waits, so its time is the work.
         self.settle_measured(submission, timing);
-        scopes
-            .pop(self.wait, "")
-            .map_err(|error| ExecutionError::Device(error.said()))?;
+        // A page answers a scope by a round trip: there what it caught is
+        // answered with the run's check, not before the next run.
+        let scoped = if self.wait.parks_with_host() && !self.measured() {
+            Some(Box::new(scopes.pop_later(self.wait, self.spent.clone())) as Box<dyn Check>)
+        } else {
+            scopes
+                .pop(self.wait, "")
+                .map_err(|error| ExecutionError::Device(error.said()))?;
+            None
+        };
         let outputs = adopt_outputs(
             scope,
             module,
@@ -553,7 +561,9 @@ impl Backend for GpuBackend {
             Some(self.spare.clone()),
         )?;
         let check = failure.map(|pair| {
+            let asked = self.wait.ask_map(&self.queue, pair.1.slice(..));
             Box::new(FailureCheck {
+                asked,
                 wait: self.wait,
                 spent: self.spent.clone(),
                 device: self.device.clone(),
@@ -568,6 +578,12 @@ impl Backend for GpuBackend {
                 run: entelechy_rules::Run::new(scope.work()),
             }) as Box<dyn Check>
         });
+        let check = match (scoped, check) {
+            (Some(scoped), Some(check)) => {
+                Some(Box::new(Checks(vec![scoped, check])) as Box<dyn Check>)
+            }
+            (scoped, check) => scoped.or(check),
+        };
         Ok((outputs, check))
     }
 
@@ -697,7 +713,9 @@ impl Backend for GpuBackend {
             });
         encoder.copy_buffer_to_buffer(&image.buffer, 0, &staging, 0, byte_len as u64);
         let after = self.submit(encoder.finish());
+        let asked = self.wait.ask_map(&self.queue, staging.slice(..));
         Ok(Box::new(Coming {
+            asked,
             wait: self.wait,
             spent: self.spent.clone(),
             device: self.device.clone(),

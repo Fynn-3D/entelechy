@@ -170,6 +170,48 @@ impl Wait {
         self.until(device, || receiver.try_recv().ok())
     }
 
+    /// Asks for `slice` mapped for reading now, to be answered later
+    /// ([`Wait::answer`]): `None` where the thread blocks, which asks when
+    /// it waits. A page answers a map only once everything submitted before
+    /// the asking is done, so a run's readback is asked for as the run is
+    /// submitted, not when it is wanted: by then the next frame's work is
+    /// queued, and asking would wait for it too.
+    pub(crate) fn ask_map(
+        self,
+        queue: &wgpu::Queue,
+        slice: wgpu::BufferSlice<'_>,
+    ) -> Option<Asked<Result<(), wgpu::BufferAsyncError>>> {
+        self.parks_with_host().then(|| {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let wake = self.wake();
+            slice.map_async(wgpu::MapMode::Read, move |result| {
+                let _ = sender.send(result);
+                wake();
+            });
+            queue.submit(std::iter::empty());
+            Asked(receiver)
+        })
+    }
+
+    /// Asks to be told when everything submitted so far is done, as
+    /// [`Wait::ask_map`] asks for a map.
+    pub(crate) fn ask_done(self, queue: &wgpu::Queue) -> Option<Asked<()>> {
+        self.parks_with_host().then(|| {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let wake = self.wake();
+            queue.on_submitted_work_done(move || {
+                let _ = sender.send(());
+                wake();
+            });
+            Asked(receiver)
+        })
+    }
+
+    /// The answer to what was asked, once it comes.
+    pub(crate) fn answer<T>(self, device: &wgpu::Device, asked: Asked<T>) -> Result<T, String> {
+        self.until(device, || asked.0.try_recv().ok())
+    }
+
     /// What wakes the host, or nothing when the thread blocks.
     fn wake(self) -> fn() {
         fn nothing() {}
@@ -222,3 +264,6 @@ impl Wait {
         }
     }
 }
+
+/// What the device was asked for and has yet to answer: [`Wait::ask_map`].
+pub(crate) struct Asked<T>(std::sync::mpsc::Receiver<T>);

@@ -16,6 +16,9 @@ pub(crate) struct FailureCheck {
     /// The run's submission: waiting for its word waits for it and what
     /// came before, not for what was submitted after.
     pub(crate) submitted: wgpu::SubmissionIndex,
+    /// The word's readback, asked for as the run was submitted where the
+    /// device answers only for everything before ([`Wait::ask_map`]).
+    pub(crate) asked: Option<crate::wait::Asked<Result<(), wgpu::BufferAsyncError>>>,
     pub(crate) pile: Arc<Mutex<Vec<(wgpu::Buffer, wgpu::Buffer)>>>,
     /// What the device said by itself ([`crate::told`]).
     pub(crate) heard: Arc<Mutex<Vec<String>>>,
@@ -35,10 +38,16 @@ impl Check for FailureCheck {
     fn wait(mut self: Box<Self>) -> Result<(), ExecutionError> {
         let (word_buffer, back) = self.pair.take().expect("a check is waited on once");
         let slice = back.slice(..);
+        let asked = self.asked.take();
         self.spent
-            .time(|| {
-                self.wait
-                    .map_read_after(&self.device, &self.queue, slice, &self.submitted)
+            .time(|| match asked {
+                Some(asked) => self
+                    .wait
+                    .answer(&self.device, asked)?
+                    .map_err(|error| error.to_string()),
+                None => self
+                    .wait
+                    .map_read_after(&self.device, &self.queue, slice, &self.submitted),
             })
             .map_err(|error| ExecutionError::Device(crate::told(&self.heard, error)))?;
         let (word, blocks, left, total) = {
@@ -151,18 +160,114 @@ impl Scopes {
         let ours = wait.block_on(self.validation.pop());
         let short = wait.block_on(self.memory.pop());
         let theirs = wait.block_on(self.internal.pop());
-        if let Some(error) = ours {
-            let said = device_error(&error);
-            return Err(Unbuilt::Ours(if source.is_empty() {
-                said
-            } else {
-                format!("{said}\n--- emitted WGSL ---\n{source}")
-            }));
+        caught(ours, short, theirs, source)
+    }
+
+    /// Pops the scopes now and answers what they caught later, with the
+    /// run's other checks: where the device answers by a round trip (a
+    /// page), a frame then waits for none. The answers cannot leave the
+    /// thread, so they wait on it ([`POPPED`]), by the check's number.
+    pub(crate) fn pop_later(self, wait: Wait, spent: Spent) -> ScopeCheck {
+        let popped: Popped = [
+            Box::pin(self.validation.pop()),
+            Box::pin(self.memory.pop()),
+            Box::pin(self.internal.pop()),
+        ];
+        let number = POPPED.with(|all| {
+            let mut all = all.borrow_mut();
+            let number = all.0;
+            all.0 += 1;
+            all.1.insert(number, popped);
+            number
+        });
+        ScopeCheck {
+            number,
+            wait,
+            spent,
         }
-        match short.or(theirs) {
-            Some(error) => Err(Unbuilt::Device(device_error(&error))),
-            None => Ok(()),
+    }
+}
+
+/// The answers of a run's scopes, in the order they were popped.
+type Popped = [std::pin::Pin<Box<dyn std::future::Future<Output = Option<wgpu::Error>>>>; 3];
+
+thread_local! {
+    /// The scopes popped and not yet answered, by number, and the next number.
+    static POPPED: std::cell::RefCell<(u64, std::collections::BTreeMap<u64, Popped>)> =
+        std::cell::RefCell::default();
+}
+
+/// What a run's scopes caught, answered when the run is checked
+/// ([`Scopes::pop_later`]).
+pub(crate) struct ScopeCheck {
+    number: u64,
+    wait: Wait,
+    /// The time its answers are waited for is counted in.
+    spent: Spent,
+}
+
+impl Check for ScopeCheck {
+    fn wait(self: Box<Self>) -> Result<(), ExecutionError> {
+        let Some([ours, short, theirs]) =
+            POPPED.with(|all| all.borrow_mut().1.remove(&self.number))
+        else {
+            return Ok(());
+        };
+        let wait = self.wait;
+        self.spent
+            .time(|| {
+                caught(
+                    wait.block_on(ours),
+                    wait.block_on(short),
+                    wait.block_on(theirs),
+                    "",
+                )
+            })
+            .map_err(|error| ExecutionError::Device(error.said()))
+    }
+}
+
+impl Drop for ScopeCheck {
+    fn drop(&mut self) {
+        POPPED.with(|all| all.borrow_mut().1.remove(&self.number));
+    }
+}
+
+/// A run's checks, waited in order; the first failure is the answer.
+pub(crate) struct Checks(pub(crate) Vec<Box<dyn Check>>);
+
+impl Check for Checks {
+    fn wait(self: Box<Self>) -> Result<(), ExecutionError> {
+        let mut first = Ok(());
+        for check in self.0 {
+            let answer = check.wait();
+            if first.is_ok() {
+                first = answer;
+            }
         }
+        first
+    }
+}
+
+/// What a run's three scopes caught: a validation error is the backend's
+/// own, said with the `source` it emitted; the rest, the device's.
+fn caught(
+    ours: Option<wgpu::Error>,
+    short: Option<wgpu::Error>,
+    theirs: Option<wgpu::Error>,
+    source: &str,
+) -> Result<(), Unbuilt> {
+    if let Some(error) = ours {
+        let said = device_error(&error);
+        return Err(Unbuilt::Ours(if source.is_empty() {
+            said
+        } else {
+            format!("{said}\n--- emitted WGSL ---\n{source}")
+        }));
+    }
+    match short.or(theirs) {
+        Some(error) => Err(Unbuilt::Device(device_error(&error))),
+        None => Ok(()),
     }
 }
 
