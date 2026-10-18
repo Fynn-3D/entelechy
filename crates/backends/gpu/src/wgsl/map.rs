@@ -10,9 +10,14 @@ pub fn emit(module: &Module) -> String {
 /// Emits the module's shader with the `packed` inputs read from one
 /// buffer; see [`packed_inputs`].
 pub fn emit_packed(module: &Module, packed: &[usize]) -> String {
+    emit_packed_longs(module, packed, Longs::Native)
+}
+
+/// [`emit_packed`] with the module's Longs computed as `longs` says.
+pub fn emit_packed_longs(module: &Module, packed: &[usize], longs: Longs) -> String {
     let manifest = &module.manifest;
     let mut out = String::new();
-    emit_preamble(&mut out, module, true, packed);
+    emit_preamble(&mut out, module, true, packed, longs);
     // One store per written output; a scatter stores the entry's pairs.
     let scattering = matches!(manifest.mode, Mode::Scatter { .. });
     for (k, port) in manifest
@@ -52,15 +57,24 @@ pub fn emit_packed(module: &Module, packed: &[usize]) -> String {
             &function_name(index),
             false,
             packed,
+            longs,
         );
         out.push('\n');
     }
-    emit_function(&mut out, module, &module.entry, "entry", true, packed);
+    emit_function(
+        &mut out,
+        module,
+        &module.entry,
+        "entry",
+        true,
+        packed,
+        longs,
+    );
     if let Some(merge) = &module.merge {
-        emit_function(&mut out, module, merge, "merge", false, packed);
+        emit_function(&mut out, module, merge, "merge", false, packed, longs);
     }
     if let Some(init) = &module.init {
-        emit_function(&mut out, module, init, "init", false, packed);
+        emit_function(&mut out, module, init, "init", false, packed, longs);
         // Ordered work: one invocation walks the rows, carrying the value.
         let _ = writeln!(
             out,

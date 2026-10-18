@@ -9,6 +9,7 @@ pub(crate) fn emit_function(
     name: &str,
     entry: bool,
     packed: &[usize],
+    longs: Longs,
 ) {
     let args = if entry && module.manifest.mode == Mode::Scan {
         format!(
@@ -43,6 +44,7 @@ pub(crate) fn emit_function(
         function,
         packed,
         loops: Vec::new(),
+        pairs: longs == Longs::Pairs,
     };
     emitter.instructions(&function.body, 1);
     if stores {
@@ -99,6 +101,9 @@ pub(crate) struct Emitter<'a> {
     loops: Vec<ValueId>,
     /// Every value's type by id, gathered once.
     types: std::collections::HashMap<u32, Type>,
+    /// Whether a Long is a pair of words, every operation on it a helper
+    /// (`LONG_PAIR_HELPERS`).
+    pairs: bool,
 }
 
 /// Every value `body` defines, with its type, in nested blocks too.
@@ -131,6 +136,10 @@ impl Emitter<'_> {
         let v = |id: &ValueId| format!("v{}", id.0);
         let ty_name = wgsl_type(*ty);
         let expression = match op {
+            Op::Const(Value::Long(l)) if self.pairs => {
+                let bits = *l as u64;
+                format!("vec2<u32>({}u, {}u)", bits as u32, (bits >> 32) as u32)
+            }
             Op::Const(value) => literal(value),
             Op::Param(index) => {
                 // The parameter built from its words in the uniform.
@@ -239,6 +248,32 @@ impl Emitter<'_> {
                     BinaryOp::Rem => Some("rem"),
                     _ => None,
                 };
+                // A Long in pairs: comparisons, shifts and the rest by helper.
+                if self.pairs && long {
+                    let count = |id: &ValueId| {
+                        if self.type_of(*id) == Type::Long {
+                            format!("{}.x", v(id))
+                        } else {
+                            format!("u32({})", v(id))
+                        }
+                    };
+                    let pair = match op {
+                        BinaryOp::Less => Some(format!("long_lt({}, {})", v(a), v(b))),
+                        BinaryOp::LessEqual => Some(format!("long_le({}, {})", v(a), v(b))),
+                        BinaryOp::Greater => Some(format!("long_gt({}, {})", v(a), v(b))),
+                        BinaryOp::GreaterEqual => Some(format!("long_ge({}, {})", v(a), v(b))),
+                        BinaryOp::Equal => Some(format!("long_eq({}, {})", v(a), v(b))),
+                        BinaryOp::NotEqual => Some(format!("(!long_eq({}, {}))", v(a), v(b))),
+                        BinaryOp::Shl => Some(format!("shl_i64({}, {})", v(a), count(b))),
+                        BinaryOp::Shr => Some(format!("sar_i64({}, {})", v(a), count(b))),
+                        BinaryOp::Ushr => Some(format!("shr_ulong({}, {})", v(a), count(b))),
+                        _ => None,
+                    };
+                    if let Some(text) = pair {
+                        self.line(depth, &format!("let v{}: {ty_name} = {text};", id.0));
+                        return;
+                    }
+                }
                 if let Some(name) = checked
                     && ty.is_int_kind()
                 {
@@ -629,6 +664,29 @@ impl Emitter<'_> {
             Some(n) => format!("{base}{n}"),
             None => base.to_owned(),
         };
+        let long_args = args.iter().any(|arg| self.type_of(*arg) == Type::Long);
+        if self.pairs && (ty == Type::Long || long_args) {
+            let a = |k: usize| v(&args[k]);
+            return match intrinsic {
+                Intrinsic::ToFloat => format!("long_to_f32({})", a(0)),
+                Intrinsic::ToInt => format!("bitcast<i32>({}.x)", a(0)),
+                Intrinsic::ToLong => match self.type_of(args[0]) {
+                    Type::Long => a(0),
+                    Type::Float => format!("to_long({})", a(0)),
+                    Type::Bool => format!("long_from_bool({})", a(0)),
+                    _ => format!("long_from_int({})", a(0)),
+                },
+                Intrinsic::Sign => format!("sign_i64({})", a(0)),
+                Intrinsic::Abs => format!("abs_i64({})", a(0)),
+                Intrinsic::Min => format!("min_i64({}, {})", a(0), a(1)),
+                Intrinsic::Max => format!("max_i64({}, {})", a(0), a(1)),
+                Intrinsic::Clamp => format!("clamp_i64({}, {}, {})", a(0), a(1), a(2)),
+                Intrinsic::AddWrap => format!("add_wrap_i64({}, {})", a(0), a(1)),
+                Intrinsic::SubWrap => format!("sub_wrap_i64({}, {})", a(0), a(1)),
+                Intrinsic::MulWrap => format!("mul_wrap_i64({}, {})", a(0), a(1)),
+                other => unreachable!("pairs_take refuses `{}` on a Long", other.name()),
+            };
+        }
         match intrinsic {
             Intrinsic::ToFloat => format!("{}({list})", wgsl_type(ty)),
             // A long keeps its low 32 bits.

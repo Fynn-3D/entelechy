@@ -45,6 +45,104 @@ pub const INPUT_BINDING: u32 = 3;
 /// ([`entelechy_rules::Run`]).
 pub const FAILURE_BINDING: u32 = 90;
 
+/// How a shader computes a `Long`: as the device's own 64-bit integer, or,
+/// on a device without one (a page's WebGPU), as a pair of 32-bit words
+/// with every operation a helper ([`pairs_take`] says which modules can).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Longs {
+    /// The device's own 64-bit integer, `i64`.
+    Native,
+    /// Two 32-bit words, low first, every operation a helper.
+    Pairs,
+}
+
+/// Whether a module runs with its Longs in pairs of words: a map or a
+/// reduction whose Longs are all scalars (no Long vector or matrix), whose
+/// `match` never chooses by a Long, and whose intrinsics on Longs are the
+/// conversions, `sign`, `abs`, `min`, `max`, `clamp` and the wrapping
+/// arithmetic. Anything else still goes to the ordered backend.
+pub fn pairs_take(module: &Module) -> bool {
+    if !matches!(module.manifest.mode, Mode::Map | Mode::Reduce) {
+        return false;
+    }
+    let long_lanes = |ty: Type| {
+        matches!(
+            ty,
+            Type::Vector(Scalar::Long, _) | Type::Matrix(Scalar::Long, _)
+        )
+    };
+    let manifest = &module.manifest;
+    if manifest
+        .inputs
+        .iter()
+        .chain(&manifest.outputs)
+        .any(|port| long_lanes(port.element()))
+        || manifest.params.iter().any(|param| long_lanes(param.ty))
+        || module
+            .structs
+            .iter()
+            .any(|def| def.fields.iter().any(|field| long_lanes(field.ty)))
+    {
+        return false;
+    }
+    fn takes(function: &Function, long_lanes: &dyn Fn(Type) -> bool) -> bool {
+        let mut types = std::collections::HashMap::new();
+        fn gather(body: &[Instruction], out: &mut std::collections::HashMap<u32, Type>) {
+            for instruction in body {
+                out.insert(instruction.id.0, instruction.ty);
+                for block in instruction.op.blocks() {
+                    gather(&block.body, out);
+                }
+            }
+        }
+        gather(&function.body, &mut types);
+        let long = |id: &ValueId| types.get(&id.0) == Some(&Type::Long);
+        fn walk(
+            body: &[Instruction],
+            long: &dyn Fn(&ValueId) -> bool,
+            long_lanes: &dyn Fn(Type) -> bool,
+        ) -> bool {
+            body.iter().all(|instruction| {
+                let fits = !long_lanes(instruction.ty)
+                    && match &instruction.op {
+                        Op::Match { scrutinee, .. } => !long(scrutinee),
+                        Op::Intrinsic(intrinsic, args) => {
+                            !(instruction.ty == Type::Long || args.iter().any(long))
+                                || matches!(
+                                    intrinsic,
+                                    Intrinsic::ToFloat
+                                        | Intrinsic::ToInt
+                                        | Intrinsic::ToLong
+                                        | Intrinsic::Sign
+                                        | Intrinsic::Abs
+                                        | Intrinsic::Min
+                                        | Intrinsic::Max
+                                        | Intrinsic::Clamp
+                                        | Intrinsic::AddWrap
+                                        | Intrinsic::SubWrap
+                                        | Intrinsic::MulWrap
+                                )
+                        }
+                        _ => true,
+                    };
+                fits && instruction
+                    .op
+                    .blocks()
+                    .iter()
+                    .all(|block| walk(&block.body, long, long_lanes))
+            })
+        }
+        !function.args.iter().any(|ty| long_lanes(*ty)) && walk(&function.body, &long, long_lanes)
+    }
+    module
+        .functions
+        .iter()
+        .chain([&module.entry])
+        .chain(module.merge.iter())
+        .chain(module.init.iter())
+        .all(|function| takes(function, &long_lanes))
+}
+
 /// The deepest brace nesting WGSL compiles.
 pub const BRACE_LIMIT: usize = 127;
 

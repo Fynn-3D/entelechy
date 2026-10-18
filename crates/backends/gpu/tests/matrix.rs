@@ -47,6 +47,115 @@ fn every_long_feature_matches_the_interpreter_where_the_device_has_longs() {
     );
 }
 
+/// On a device without 64-bit integers, as a page's WebGPU, a scalar Long
+/// is a pair of words: every scalar Long feature runs there and matches the
+/// interpreter, the same work for each run there as on a device with them.
+#[test]
+fn every_scalar_long_feature_in_word_pairs_matches_the_interpreter() {
+    let Some(gpu) = GpuBackend::new().ok().map(GpuBackend::with_long_pairs) else {
+        return;
+    };
+    let cases = entelechy_conformance::long_scalar_cases();
+    for case in &cases {
+        let module = compile(&case.source).unwrap();
+        assert_eq!(gpu.declines(&module), None, "{}", case.name);
+        // The shader holds no 64-bit integer of the device's own.
+        let shader =
+            entelechy_gpu::wgsl::emit_packed_longs(&module, &[], entelechy_gpu::wgsl::Longs::Pairs);
+        assert!(
+            shader.starts_with("alias i64 = vec2<u32>;"),
+            "{}",
+            case.name
+        );
+        let native: Vec<&str> = shader
+            .lines()
+            .filter(|l| l.contains("u64") || l.contains("li)") || l.contains("li;"))
+            .collect();
+        assert!(
+            native.is_empty(),
+            "{}: {:?}",
+            case.name,
+            &native[..native.len().min(5)]
+        );
+    }
+    let failures = differences(&gpu, &cases);
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases differ:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
+}
+
+/// What word pairs do not compute, Long vectors among them, goes to another
+/// backend rather than running wrong.
+#[test]
+fn long_vectors_in_word_pairs_go_elsewhere() {
+    let Some(gpu) = GpuBackend::new().ok().map(GpuBackend::with_long_pairs) else {
+        return;
+    };
+    for case in entelechy_conformance::long_cases() {
+        let module = compile(&case.source).unwrap();
+        assert!(gpu.declines(&module).is_some(), "{}", case.name);
+    }
+}
+
+/// A Long that overflows, or is divided by zero, fails in word pairs where
+/// and as the interpreter fails.
+#[test]
+fn long_failures_in_word_pairs_are_the_interpreters() {
+    let Some(gpu) = GpuBackend::new().ok().map(GpuBackend::with_long_pairs) else {
+        return;
+    };
+    let map = |body: &str| {
+        format!(
+            "kernel t.f@1 {{ requires {{ field.write; }} output result: Rows<Long>; compute {{ {body} }} }}"
+        )
+    };
+    let sources = [
+        map("return 3000000000000000000l * long(element());"),
+        map("return -3000000000000000000l * long(element());"),
+        map("return long(element()) * -3074457345618258603l;"),
+        map("return 9223372036854775807l / (long(element()) - 6) + 1;"),
+        map("return (-9223372036854775807l - 1l) / (long(element()) - 7) + 1l;"),
+        map("return 9223372036854775000l + long(element()) * 100l;"),
+        map("return -9223372036854775000l - long(element()) * 100l;"),
+        map("return 1000l % (long(element()) - 3);"),
+        map("return -(-9223372036854775807l - 1l + long(element()) * 0);"),
+    ];
+    let run = |backend: &dyn Backend, source: &str| -> Result<Vec<u32>, String> {
+        let module = compile(source).unwrap();
+        let mut host = Host::new(1 << 20);
+        let invocation = Invocation {
+            inputs: Vec::new(),
+            params: Vec::new(),
+            domain: entelechy_abi::Domain::Rows(16),
+            context: entelechy_abi::Context::default(),
+        };
+        let mut scope = Scope::new(&mut host, all());
+        let prepared = backend
+            .prepare(&module)
+            .map_err(|error| error.to_string())?;
+        let outputs = backend
+            .execute(prepared.as_ref(), &module, &invocation, &mut scope)
+            .map_err(|error| error.to_string())?;
+        let out = outputs[0];
+        Ok(match host.resident(out).unwrap() {
+            Some(device) => backend
+                .download(device, 16 * 8)
+                .unwrap()
+                .chunks_exact(4)
+                .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect(),
+            None => host.data(out).unwrap().values().into_owned(),
+        })
+    };
+    for source in &sources {
+        assert_eq!(run(&gpu, source), run(&CpuBackend, source), "{source}");
+    }
+}
+
 /// Each case's GPU run against the interpreter's: integers and booleans
 /// exact, floats to rounding.
 fn differences(gpu: &GpuBackend, cases: &[entelechy_conformance::Case]) -> Vec<String> {

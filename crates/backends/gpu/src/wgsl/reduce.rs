@@ -18,6 +18,11 @@ pub fn emit_reduce(module: &Module) -> String {
 
 /// The fold pass with the `packed` inputs read from one buffer.
 pub fn emit_reduce_packed(module: &Module, packed: &[usize]) -> String {
+    emit_reduce_packed_longs(module, packed, Longs::Native)
+}
+
+/// [`emit_reduce_packed`] with the module's Longs computed as `longs` says.
+pub fn emit_reduce_packed_longs(module: &Module, packed: &[usize], longs: Longs) -> String {
     debug_assert_eq!(module.manifest.mode, Mode::Reduce);
     let Some(merge) = &module.merge else {
         return String::new();
@@ -27,7 +32,7 @@ pub fn emit_reduce_packed(module: &Module, packed: &[usize]) -> String {
     let (count_binding, in_binding, out_binding) = reduce_bindings(module);
     let mut out = String::new();
     // The map shader's context, params and inputs, which `merge` may read.
-    emit_preamble(&mut out, module, false, packed);
+    emit_preamble(&mut out, module, false, packed, longs);
     let _ = writeln!(
         out,
         "@group(0) @binding({count_binding}) var<uniform> level: vec4<u32>;"
@@ -68,10 +73,11 @@ pub fn emit_reduce_packed(module: &Module, packed: &[usize]) -> String {
             &function_name(index),
             false,
             packed,
+            longs,
         );
         out.push('\n');
     }
-    emit_function(&mut out, module, merge, "merge", false, packed);
+    emit_function(&mut out, module, merge, "merge", false, packed, longs);
     let fold = entelechy_rules::reduce::FOLD;
     let element = wgsl_type(element);
     let _ = writeln!(

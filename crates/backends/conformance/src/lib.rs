@@ -983,6 +983,109 @@ pub fn long_cases() -> Vec<Case> {
     out
 }
 
+/// Every `Long` feature with scalar Longs only (no `LVec2` or `LVec3`):
+/// what a device without 64-bit integers computes as pairs of words.
+/// Each as `(feature, lets, result)` over `i`, `n = long(i)`, the `big`
+/// and `steps` params and the `ids` input, into an `Ls`.
+pub fn long_scalar_features() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
+        (
+            "scalar long arithmetic",
+            "let a = big * n + 7 - n * n * 1000000007l; let q = a / 97l + a % 97 + (0l - a) / 5; let bits = (((a << 20) ^ (a >> 3)) | (n & 5l)) & 0xFFFFFFFFFFl; let u = a >>> 40; let wrapped = (add_wrap(9223372036854775807l, n) >>> 60) + (sub_wrap(-9223372036854775807l, n) >>> 60) + (mul_wrap(big, big) >>> 40); let e = 5000000000 + n; let s = (n << 63) >>> 63; let big_q = (-9223372036854775807l - 1) / (n + 1) + 9223372036854775807l % (n + 2); let wide = (a << 33) >> 35; let far = mul_wrap(a, -7l) + (-n) * 3000000007l;",
+            "Ls { l: q + bits + u + wrapped + e + s + steps[i % 3] + abs(-n) + sign(a) + sign(-a) + min(a, 3l) + max(n, 2l) + clamp(a, -5l, 5l) + big_q / 1000000000l + (wide >>> 8) + far % 1000000l, f: float(a) * 0.5, i: int(a % 1000l), b: a > big && a != 0l && n <= 40 && a >= -a }",
+        ),
+        (
+            "scalar long conversions",
+            // Floats with exact products, so contraction keeps every
+            // truncation.
+            "let f = float(i) * 0.25 + 0.5; let back = int(big) + int(n * 3l) + int(-big * 7l); let lng = long(f * 1024.0) + long(i) + long(-i) + long(i > 2) + long(-f) + long(f * 1099511627776.0) - long(-f * 4294967296.0); let zero = f - f; let ledge = long(1.0 / zero) / 8 + long(zero / zero) + long(-1.0 / zero) / 8 + long(9.3e18) / 16 + long(-9.3e18) / 16; let rounded = float(9223372036854775807l) + float(-big * 1000000l) + float(n * 100000000007l) + float(16777217l + n) + float(-33554435l * n);",
+            "Ls { l: lng + ledge, f: rounded + float(big) + float(n * 123456789l), i: back, b: f > 1.0 }",
+        ),
+        (
+            "scalar long structs, arrays and params",
+            "let s = Spot { at: n - 3l, id: n * big }; let longs = [n, big, -n]; let picked = longs[i % 3] + longs[i + 10] + steps[i % 3]; let moved = Spot { ..s, id: s.id + 1l }; let each_one = [each 3 { long(index()) * n }];",
+            "Ls { l: picked + moved.id + each_one[i % 3] + s.at, f: 0.0, i: int(s.id % 1000l), b: s.id > 0l }",
+        ),
+        (
+            "scalar long reads and control",
+            "let id = at(ids, i % 16) * 3l; let arm = match i % 3 { 0 => id, 1 => -id, _ => 7l }; let counted = loop 4 with acc = n { if acc > 100l { break acc; } acc * 3l }; let picked = if id > 0 { id / 7 } else { id % 7 };",
+            "Ls { l: id + arm + counted + picked, f: float(id), i: int(id % 100l), b: id > 0l }",
+        ),
+    ]
+}
+
+const LONG_SCALAR_HEAD: &str = "requires { field.read; field.write; }
+    struct Ls { l: Long; f: Float; i: Int; b: Bool; }
+    struct Spot { at: Long; id: Long; }
+    param big: Long = 5000000000l;
+    param steps: [Long; 3] = [1l, -2l, 3l];
+";
+
+/// Every scalar `Long` feature in a map over rows, a map over a grid,
+/// and a reduction.
+pub fn long_scalar_cases() -> Vec<Case> {
+    fn map_rows(lets: &str, out: &str) -> String {
+        format!(
+            "kernel long.scalar_rows@1 {{ {LONG_SCALAR_HEAD} input ids: Rows<Long>;
+    output result: Rows<Ls>;
+    compute {{ let i = element(); let n = long(i); {lets} return {out}; }} }}"
+        )
+    }
+    fn map_grid(lets: &str, out: &str) -> String {
+        format!(
+            "kernel long.scalar_grid@1 {{ {LONG_SCALAR_HEAD} input ids: Rows<Long>;
+    output result: Grid<Ls>;
+    compute {{ let c0 = icoord(); let i = c0.x + c0.y * idomain().x; let n = long(i); {lets} return {out}; }} }}"
+        )
+    }
+    fn reduce(lets: &str, out: &str) -> String {
+        format!(
+            "kernel long.scalar_reduce@1 {{ {LONG_SCALAR_HEAD} input ids: Rows<Long>;
+    output result: Rows<Ls>;
+    compute {{ let i = element(); let n = long(i); {lets} return {out}; }}
+    merge(a, b) {{ return Ls {{ l: add_wrap(a.l, b.l), f: a.f + b.f, i: (a.i & 0xFFFF) + (b.i & 0xFFFF), b: a.b || b.b }}; }} }}"
+        )
+    }
+    let modes: [(&str, Wrapper); 3] = [
+        ("map over rows", map_rows),
+        ("map over a grid", map_grid),
+        ("reduce", reduce),
+    ];
+    let mut out = Vec::new();
+    for (feature, lets, result) in long_scalar_features() {
+        for (mode, wrap) in modes {
+            let domain = match mode {
+                "map over rows" => Domain::Rows(COUNT),
+                "map over a grid" => Domain::Grid(16, 3),
+                _ => Domain::Rows(1),
+            };
+            let ids = if mode == "reduce" {
+                let values =
+                    (0..COUNT as i64).map(|i| Value::Long(i * 3_000_000_019 - 20_000_000_000));
+                (
+                    Schema::new(vec![Scalar::Long; 2]),
+                    Domain::Rows(COUNT),
+                    values.flat_map(|v| v.words()).collect(),
+                )
+            } else {
+                wide_ids()
+            };
+            out.push(Case {
+                name: format!("{feature} in {mode}"),
+                source: wrap(lets, result),
+                inputs: vec![ids],
+                params: vec![
+                    Value::Long(5_000_000_001),
+                    Value::Record(vec![Value::Long(4), Value::Long(-5), Value::Long(6)]),
+                ],
+                domain,
+                context: context(),
+            });
+        }
+    }
+    out
+}
+
 /// Compares two outputs word by word under a layout: an Int or Bool word
 /// must match exactly, a Float word within `relative` of the larger
 /// magnitude plus `absolute` (NaN matches NaN). Returns the first

@@ -207,6 +207,201 @@ fn to_long3(v: vec3<f32>) -> vec3<i64> {
 }
 ";
 
+/// `Long` on a device without 64-bit integers: `i64` is a pair of words,
+/// `vec2<u32>(low, high)`, two's complement, and every operation the
+/// emitter writes on a scalar Long is a helper here, by the same rules as
+/// [`LONG_HELPERS`]. The words in memory are the same as the device's own.
+pub(crate) const LONG_PAIR_HELPERS: &str = "
+fn long_of(low: u32, high: u32) -> i64 { return vec2<u32>(low, high); }
+fn long_low(x: i64) -> u32 { return x.x; }
+fn long_high(x: i64) -> u32 { return x.y; }
+fn long_negative(a: i64) -> bool { return (a.y >> 31u) != 0u; }
+fn long_is_min(a: i64) -> bool { return a.x == 0u && a.y == 0x80000000u; }
+fn long_from_int(i: i32) -> i64 { return vec2<u32>(bitcast<u32>(i), select(0u, 0xFFFFFFFFu, i < 0)); }
+fn long_from_bool(b: bool) -> i64 { return vec2<u32>(select(0u, 1u, b), 0u); }
+fn long_eq(a: i64, b: i64) -> bool { return a.x == b.x && a.y == b.y; }
+fn long_lt(a: i64, b: i64) -> bool {
+    if (a.y != b.y) { return bitcast<i32>(a.y) < bitcast<i32>(b.y); }
+    return a.x < b.x;
+}
+fn long_le(a: i64, b: i64) -> bool { return !long_lt(b, a); }
+fn long_gt(a: i64, b: i64) -> bool { return long_lt(b, a); }
+fn long_ge(a: i64, b: i64) -> bool { return !long_lt(a, b); }
+// Unsigned order, for magnitudes.
+fn ulong_lt(a: i64, b: i64) -> bool {
+    if (a.y != b.y) { return a.y < b.y; }
+    return a.x < b.x;
+}
+fn add_wrap_i64(a: i64, b: i64) -> i64 {
+    let low = a.x + b.x;
+    return vec2<u32>(low, a.y + b.y + select(0u, 1u, low < a.x));
+}
+fn sub_wrap_i64(a: i64, b: i64) -> i64 {
+    return vec2<u32>(a.x - b.x, a.y - b.y - select(0u, 1u, a.x < b.x));
+}
+fn neg_wrap_i64(a: i64) -> i64 { return sub_wrap_i64(vec2<u32>(0u, 0u), a); }
+// The full product of two words.
+fn wide_mul_u32(a: u32, b: u32) -> vec2<u32> {
+    let a0 = a & 0xFFFFu;
+    let a1 = a >> 16u;
+    let b0 = b & 0xFFFFu;
+    let b1 = b >> 16u;
+    let p00 = a0 * b0;
+    let p01 = a0 * b1;
+    let p10 = a1 * b0;
+    let middle = (p00 >> 16u) + (p01 & 0xFFFFu) + (p10 & 0xFFFFu);
+    let low = (p00 & 0xFFFFu) | (middle << 16u);
+    return vec2<u32>(low, a1 * b1 + (p01 >> 16u) + (p10 >> 16u) + (middle >> 16u));
+}
+fn mul_wrap_i64(a: i64, b: i64) -> i64 {
+    let p = wide_mul_u32(a.x, b.x);
+    return vec2<u32>(p.x, p.y + a.x * b.y + a.y * b.x);
+}
+fn add_i64(a: i64, b: i64) -> i64 {
+    let r = add_wrap_i64(a, b);
+    if ((((a.y ^ r.y) & (b.y ^ r.y)) >> 31u) != 0u) { fail(1u); }
+    return r;
+}
+fn sub_i64(a: i64, b: i64) -> i64 {
+    let r = sub_wrap_i64(a, b);
+    if ((((a.y ^ b.y) & (a.y ^ r.y)) >> 31u) != 0u) { fail(1u); }
+    return r;
+}
+fn neg_i64(a: i64) -> i64 {
+    if (long_is_min(a)) { fail(1u); }
+    return neg_wrap_i64(a);
+}
+// The magnitude as an unsigned pair (the most negative's is 2^63).
+fn ulong_abs(a: i64) -> i64 {
+    if (long_negative(a)) { return neg_wrap_i64(a); }
+    return a;
+}
+// Whether the product of magnitudes fits under 2^64, and fits the sign.
+fn mul_i64(a: i64, b: i64) -> i64 {
+    let r = mul_wrap_i64(a, b);
+    let x = ulong_abs(a);
+    let y = ulong_abs(b);
+    // The high 64 bits of the 128-bit product of magnitudes, by words.
+    let p00 = wide_mul_u32(x.x, y.x);
+    let p01 = wide_mul_u32(x.x, y.y);
+    let p10 = wide_mul_u32(x.y, y.x);
+    let p11 = wide_mul_u32(x.y, y.y);
+    let w1 = add_wrap_i64(vec2<u32>(p00.y, 0u), vec2<u32>(p01.x, 0u));
+    let w1b = add_wrap_i64(w1, vec2<u32>(p10.x, 0u));
+    let high = add_wrap_i64(add_wrap_i64(add_wrap_i64(p11, vec2<u32>(p01.y, 0u)), vec2<u32>(p10.y, 0u)), vec2<u32>(w1b.y, 0u));
+    let magnitude = vec2<u32>(p00.x, w1b.x);
+    let negative = long_negative(a) != long_negative(b) && !(magnitude.x == 0u && magnitude.y == 0u);
+    var over = high.x != 0u || high.y != 0u;
+    if (negative) {
+        over = over || ulong_lt(vec2<u32>(0u, 0x80000000u), magnitude);
+    } else {
+        over = over || (magnitude.y >> 31u) != 0u;
+    }
+    if (over) { fail(1u); }
+    return r;
+}
+fn shl_i64(a: i64, count: u32) -> i64 {
+    let n = count & 63u;
+    if (n == 0u) { return a; }
+    if (n >= 32u) { return vec2<u32>(0u, a.x << (n - 32u)); }
+    return vec2<u32>(a.x << n, (a.y << n) | (a.x >> (32u - n)));
+}
+fn shr_ulong(a: i64, count: u32) -> i64 {
+    let n = count & 63u;
+    if (n == 0u) { return a; }
+    if (n >= 32u) { return vec2<u32>(a.y >> (n - 32u), 0u); }
+    return vec2<u32>((a.x >> n) | (a.y << (32u - n)), a.y >> n);
+}
+fn sar_i64(a: i64, count: u32) -> i64 {
+    let n = count & 63u;
+    if (n == 0u) { return a; }
+    let fill = bitcast<u32>(bitcast<i32>(a.y) >> 31u);
+    if (n >= 32u) { return vec2<u32>(bitcast<u32>(bitcast<i32>(a.y) >> (n - 32u)), fill); }
+    return vec2<u32>((a.x >> n) | (a.y << (32u - n)), bitcast<u32>(bitcast<i32>(a.y) >> n));
+}
+// The quotient and remainder of magnitudes, a bit at a time.
+fn udivmod_pair(n: i64, d: i64) -> vec4<u32> {
+    var q = vec2<u32>(0u, 0u);
+    var r = vec2<u32>(0u, 0u);
+    for (var i: i32 = 63; i >= 0; i = i - 1) {
+        r = shl_i64(r, 1u) | (shr_ulong(n, u32(i)) & vec2<u32>(1u, 0u));
+        if (!ulong_lt(r, d)) {
+            r = sub_wrap_i64(r, d);
+            q = q | shl_i64(vec2<u32>(1u, 0u), u32(i));
+        }
+    }
+    return vec4<u32>(q, r);
+}
+fn div_i64(a: i64, b: i64) -> i64 {
+    if (long_eq(b, vec2<u32>(0u, 0u))) { fail(2u); return a; }
+    if (long_eq(b, vec2<u32>(0xFFFFFFFFu, 0xFFFFFFFFu))) {
+        if (long_is_min(a)) { fail(1u); }
+        return neg_wrap_i64(a);
+    }
+    let q = udivmod_pair(ulong_abs(a), ulong_abs(b)).xy;
+    if (long_negative(a) != long_negative(b)) { return neg_wrap_i64(q); }
+    return q;
+}
+fn rem_i64(a: i64, b: i64) -> i64 {
+    if (long_eq(b, vec2<u32>(0u, 0u))) { fail(2u); return vec2<u32>(0u, 0u); }
+    if (long_eq(b, vec2<u32>(0xFFFFFFFFu, 0xFFFFFFFFu))) {
+        if (long_is_min(a)) { fail(1u); }
+        return vec2<u32>(0u, 0u);
+    }
+    let r = udivmod_pair(ulong_abs(a), ulong_abs(b)).zw;
+    if (long_negative(a)) { return neg_wrap_i64(r); }
+    return r;
+}
+fn sign_i64(x: i64) -> i64 {
+    if (long_negative(x)) { return vec2<u32>(0xFFFFFFFFu, 0xFFFFFFFFu); }
+    if (x.x == 0u && x.y == 0u) { return vec2<u32>(0u, 0u); }
+    return vec2<u32>(1u, 0u);
+}
+fn abs_i64(x: i64) -> i64 { return ulong_abs(x); }
+fn min_i64(a: i64, b: i64) -> i64 { if (long_lt(b, a)) { return b; } return a; }
+fn max_i64(a: i64, b: i64) -> i64 { if (long_lt(a, b)) { return b; } return a; }
+fn clamp_i64(x: i64, low: i64, high: i64) -> i64 { return min_i64(max_i64(x, low), high); }
+// An unsigned pair to the nearest Float, ties to even.
+fn ulong_to_f32(m: i64) -> f32 {
+    if (m.y == 0u && m.x < 0x1000000u) { return f32(m.x); }
+    var top: u32;
+    if (m.y != 0u) { top = 63u - countLeadingZeros(m.y); } else { top = 31u - countLeadingZeros(m.x); }
+    let shift = top - 23u;
+    var mantissa = shr_ulong(m, shift).x;
+    let rest = m & sub_wrap_i64(shl_i64(vec2<u32>(1u, 0u), shift), vec2<u32>(1u, 0u));
+    let half = shl_i64(vec2<u32>(1u, 0u), shift - 1u);
+    var exponent = top;
+    if (ulong_lt(half, rest) || (long_eq(rest, half) && (mantissa & 1u) == 1u)) {
+        mantissa = mantissa + 1u;
+        if (mantissa == 0x1000000u) { mantissa = 0x800000u; exponent = exponent + 1u; }
+    }
+    return bitcast<f32>(((exponent + 127u) << 23u) | (mantissa & 0x7FFFFFu));
+}
+fn long_to_f32(x: i64) -> f32 {
+    let f = ulong_to_f32(ulong_abs(x));
+    if (long_negative(x)) { return -f; }
+    return f;
+}
+// A Float to a Long as the reference converts it: truncated, saturating
+// at the ends, and zero for what is not a number.
+fn to_long(x: f32) -> i64 {
+    if (is_nan(x)) { return vec2<u32>(0u, 0u); }
+    if (x >= 9223372036854775808.0) { return vec2<u32>(0xFFFFFFFFu, 0x7FFFFFFFu); }
+    if (x <= -9223372036854775808.0) { return vec2<u32>(0u, 0x80000000u); }
+    let a = abs(x);
+    var m: i64;
+    if (a < 4294967296.0) {
+        m = vec2<u32>(u32(a), 0u);
+    } else {
+        let bits = bitcast<u32>(a);
+        let exponent = (bits >> 23u) - 127u;
+        m = shl_i64(vec2<u32>((bits & 0x7FFFFFu) | 0x800000u, 0u), exponent - 23u);
+    }
+    if (x < 0.0) { return neg_wrap_i64(m); }
+    return m;
+}
+";
+
 /// A Long's words, also used by the scatter passes.
 pub(crate) const LONG_WORDS: &str = "
 // The words of a Long, the low one first.
@@ -223,14 +418,19 @@ fn long_of(low: u32, high: u32) -> i64 {
 
 /// The preamble of the map and fold shaders: uniforms, outputs when
 /// `with_output`, inputs, structs, input readers and addresses, helpers,
-/// mixers, linear readers and memory writers.
+/// mixers, linear readers and memory writers. With `longs` in pairs, a
+/// Long is a pair of words (`i64` an alias of `vec2<u32>`).
 pub(crate) fn emit_preamble(
     out: &mut String,
     module: &Module,
     with_output: bool,
     packed: &[usize],
+    longs: Longs,
 ) {
     let manifest = &module.manifest;
+    if longs == Longs::Pairs && module.holds(Type::Long) {
+        out.push_str("alias i64 = vec2<u32>;\n");
+    }
     let context_len = CONTEXT_HEAD + manifest.inputs.len();
     // Packed input offsets follow the parameters, four per slot.
     let params_len = (param_slots(module).1 + packed.len().div_ceil(4)).max(1);
@@ -503,8 +703,12 @@ fn settle_left() {{
         out.push_str("fn fail(code: u32) {}\n");
     }
     if module.holds(Type::Long) {
-        out.push_str(LONG_HELPERS);
-        out.push_str(LONG_WORDS);
+        if longs == Longs::Pairs {
+            out.push_str(LONG_PAIR_HELPERS);
+        } else {
+            out.push_str(LONG_HELPERS);
+            out.push_str(LONG_WORDS);
+        }
     }
     for (index, port) in manifest.inputs.iter().enumerate() {
         let element = port.element();

@@ -220,6 +220,24 @@ impl GpuBackend {
         })
     }
 
+    /// This backend computing every `Long` as a pair of 32-bit words, as on
+    /// a device without 64-bit integers (a page's WebGPU): what a test runs
+    /// that path by on a device that has them.
+    pub fn with_long_pairs(mut self) -> Self {
+        self.int64 = false;
+        self.int64_atomics = false;
+        self
+    }
+
+    /// How its shaders compute a `Long`.
+    pub(crate) fn longs(&self) -> wgsl::Longs {
+        if self.int64 {
+            wgsl::Longs::Native
+        } else {
+            wgsl::Longs::Pairs
+        }
+    }
+
     /// The adapter's name, for diagnostics.
     pub fn adapter_name(&self) -> &str {
         &self.adapter_name

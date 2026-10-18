@@ -319,7 +319,12 @@ impl GpuBackend {
             return None;
         }
         if !self.int64 {
-            return Some("it holds a Long, and the device has no 64-bit integers".to_owned());
+            // Without the device's own, a Long is a pair of words where the
+            // module allows it.
+            return (!wgsl::pairs_take(module)).then(|| {
+                "it holds a Long the device, which has no 64-bit integers, computes only as scalars in a map or a reduction"
+                    .to_owned()
+            });
         }
         match module.manifest.mode {
             entelechy_ir::Mode::Map | entelechy_ir::Mode::Reduce => None,
@@ -490,7 +495,8 @@ impl GpuBackend {
         }
         let written = wgsl::written_outputs(module);
         let packed = self.packing(module);
-        let source = wgsl::emit_packed(module, &packed);
+        let longs = self.longs();
+        let source = wgsl::emit_packed_longs(module, &packed, longs);
         let mut entries = vec![
             uniform_entry(wgsl::CONTEXT_BINDING),
             uniform_entry(wgsl::PARAMS_BINDING),
@@ -522,7 +528,7 @@ impl GpuBackend {
         }
         let main = self.pass(&module.manifest.id.to_string(), &source, &entries)?;
         let reduce = if module.manifest.mode == entelechy_ir::Mode::Reduce {
-            let reduce_source = wgsl::emit_reduce_packed(module, &packed);
+            let reduce_source = wgsl::emit_reduce_packed_longs(module, &packed, longs);
             // The map pass's bindings, then the fold's own.
             let (count_binding, in_binding, out_binding) = wgsl::reduce_bindings(module);
             let mut entries = vec![
