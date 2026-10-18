@@ -139,11 +139,17 @@ impl GpuBackend {
         Self::with_wait(Wait::blocking())
     }
 
-    /// Opens the default adapter, waiting for the device as `wait` says.
+    /// Opens the fastest adapter, waiting for the device as `wait` says.
     pub fn with_wait(wait: Wait) -> Result<Self, GpuError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = wait
-            .block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            // The fast device where there are two: a machine with a discrete
+            // card beside the processor's own is otherwise often given the
+            // processor's, in a page above all.
+            .block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                ..wgpu::RequestAdapterOptions::default()
+            }))
             .map_err(|error| GpuError(error.to_string()))?;
         let adapter_limits = adapter.limits();
         // Every buffer binding the adapter offers: a Kernel binds one buffer
