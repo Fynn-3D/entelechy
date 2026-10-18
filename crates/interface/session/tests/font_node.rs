@@ -208,3 +208,47 @@ fn a_session_started_over_gives_the_glyphs_of_no_codes_until_it_is_given_codes_a
     assert_eq!(codes(&mut session), vec![111, -1, 73]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_font_through_a_package_name_is_read_from_the_package() {
+    let dir = scratch("package");
+    // The font only in a package kept elsewhere, named in the scene by the
+    // package's name, as an input's file is.
+    let packages = dir.join("packages");
+    std::fs::create_dir_all(packages.join("glyphs.entpkg/fonts")).unwrap();
+    std::fs::write(
+        packages.join("glyphs.entpkg/package.esn"),
+        "package glyphs@1 { language = 1; ir = 1; }\n",
+    )
+    .unwrap();
+    std::fs::rename(
+        dir.join("fonts/sample.ttf"),
+        packages.join("glyphs.entpkg/fonts/sample.ttf"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.esn"),
+        SCENE.replace("fonts/sample.ttf", "glyphs.entpkg/fonts/sample.ttf"),
+    )
+    .unwrap();
+    let store = std::sync::Arc::new(entelechy_session::Disk::with_packages(vec![packages]));
+    let mut session = Session::open_in(
+        store,
+        &dir.join("scene.esn"),
+        None,
+        entelechy_kernel::Runtime::with_backend(1 << 22, Box::new(entelechy_cpu::CpuBackend)),
+    );
+    // Reads held to the scene's own directories and its packages, as the
+    // Player's are.
+    session.restrict_reads().unwrap();
+    let events = session.sync();
+    assert!(session.graph().is_some(), "{events:?}");
+    let said: Vec<String> = events.iter().map(ToString::to_string).collect();
+    assert!(
+        !said.iter().any(|line| line.contains("rejected")),
+        "{said:?}"
+    );
+    codes(&mut session);
+    assert_eq!(codes(&mut session), vec![111, -1, 73]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

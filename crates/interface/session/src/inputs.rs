@@ -503,16 +503,18 @@ impl Inputs {
             }
         }
         for font in &files.fonts {
-            let stamp = store.stamp(&font.path);
+            // Found as an input's file is: there, else through a package's
+            // name (`cjk.entpkg/fonts/x.ttf`).
+            let path = crate::sources::file_at(store, &font.path);
+            let stamp = store.stamp(&path);
             if self
                 .fonts
                 .get(&font.node)
-                .is_some_and(|known| known.path == font.path && known.stamp == stamp)
+                .is_some_and(|known| known.path == path && known.stamp == stamp)
             {
                 continue;
             }
-            let bytes = readable(&font.path)
-                .and_then(|()| store.read(&font.path).map_err(|e| e.to_string()));
+            let bytes = readable(&path).and_then(|()| store.read(&path).map_err(|e| e.to_string()));
             let bytes = match bytes {
                 Ok(bytes) => bytes,
                 Err(why) => {
@@ -537,13 +539,13 @@ impl Inputs {
             let codes = self
                 .fonts
                 .remove(&font.node)
-                .filter(|known| known.path == font.path)
+                .filter(|known| known.path == path)
                 .map(|known| known.codes)
                 .unwrap_or_default();
             self.fonts.insert(
                 font.node.clone(),
                 Font {
-                    path: font.path.clone(),
+                    path: path.clone(),
                     stamp,
                     bytes,
                     codes,
