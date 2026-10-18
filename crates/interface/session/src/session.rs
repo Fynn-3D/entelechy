@@ -106,6 +106,10 @@ type Display = entelechy_gpu::present::Display;
 /// Backends opened, and the main one's display when it has one.
 type Opened = (Box<dyn Backend>, Option<Box<dyn Backend>>, Option<Display>);
 
+/// The Kernels prepared a sync where no thread can start: a few, so one
+/// sync holds the page, and the device it shares, only briefly.
+const TURN: usize = 2;
+
 impl Session {
     /// Creates a CPU-backed session; [`Session::sync`] loads files.
     /// `library` is an extra directory or file of Kernels.
@@ -243,8 +247,18 @@ impl Session {
             if hold_reads {
                 session.restrict_reads()?;
             }
-            let events = session.sync();
-            if session.graph().is_some() {
+            // In a page (no thread can start) the Kernels prepare in turns
+            // from the first load: it is opened waiting for them, and the
+            // frames prepare them a few at a time instead of one long sync.
+            let turns = cfg!(all(target_arch = "wasm32", target_os = "unknown"));
+            if turns {
+                session.set_background(true);
+            }
+            let events = session.sync_a_turn();
+            let refused = events
+                .iter()
+                .any(|event| matches!(event, Event::SceneRejected(_) | Event::Rejected { .. }));
+            if session.graph().is_some() || (turns && session.scene_waiting() && !refused) {
                 return Ok(crate::Loaded {
                     session,
                     display: built.display,
@@ -431,6 +445,21 @@ impl Session {
     /// order: finished replacements, documents, inputs, placements. A
     /// changed scene is read and said by this sync.
     pub fn sync(&mut self) -> Vec<Event> {
+        let mut events = self.sync_apart(false);
+        // Asked for, a sync lands what it read: in turns (a page), what
+        // waits is prepared now. Frames and loading take a turn at a time
+        // ([`Session::sync_a_turn`]).
+        if self.runtime.prepares_in_turns() && self.preparing_left() > 0 {
+            self.runtime.prepare_turn(usize::MAX);
+            events.extend(self.sync_apart(false));
+        }
+        events
+    }
+
+    /// A sync that, where Kernels prepare in turns (a page), prepares only
+    /// a turn's few: what loading a scene, frame by frame, gives the page
+    /// between. Elsewhere it is [`Session::sync`].
+    pub fn sync_a_turn(&mut self) -> Vec<Event> {
         self.sync_apart(false)
     }
 
@@ -443,6 +472,10 @@ impl Session {
 
     fn sync_apart(&mut self, apart: bool) -> Vec<Event> {
         let mut events = std::mem::take(&mut self.later);
+        // Where no thread can start (a page), a couple of the Kernels
+        // waiting are prepared each sync, so the page and its device get
+        // their turns between them; elsewhere the workers do.
+        self.runtime.prepare_turn(TURN);
         let store = Arc::clone(self.scene.store());
         // Every document walks the files it reaches; a path is looked at
         // once a sync.
@@ -477,34 +510,40 @@ impl Session {
             }
         }
         // The first-loaded scene's own documents and input files, worked
-        // out only while reads wait for them.
-        let read_from: Vec<std::path::PathBuf> = if crate::reads::lock(&reads).wants_directories() {
-            let files = self.scene.files();
-            self.scene
-                .read_from()
-                .into_iter()
-                .chain(
-                    files
-                        .assets
-                        .iter()
-                        .filter_map(|asset| asset.path.parent().map(Path::to_path_buf)),
-                )
-                .chain(files.sequences.iter().map(|(_, dir, ..)| dir.clone()))
-                .chain(files.checks.iter().map(|(_, path)| path.clone()))
-                .chain(files.files.iter().map(|(_, dir)| dir.clone()))
-                .chain(files.outlines.iter().map(|(_, path)| path.clone()))
-                .chain(
-                    files
-                        .fonts
-                        .iter()
-                        .filter_map(|font| font.path.parent().map(Path::to_path_buf)),
-                )
-                .chain(files.file_nodes.iter().map(|node| node.dir.clone()))
-                .collect()
-        } else {
-            Vec::new()
-        };
-        crate::reads::lock(&reads).settle(store.as_ref(), &read_from);
+        // out only while reads wait for them. A first load whose Kernels
+        // still prepare in turns (a page) has no scene running yet: it reads
+        // freely until it lands, and is fixed then.
+        let landing = self.scene.graph().is_none() && self.scene_waiting();
+        let read_from: Vec<std::path::PathBuf> =
+            if crate::reads::lock(&reads).wants_directories() && !landing {
+                let files = self.scene.files();
+                self.scene
+                    .read_from()
+                    .into_iter()
+                    .chain(
+                        files
+                            .assets
+                            .iter()
+                            .filter_map(|asset| asset.path.parent().map(Path::to_path_buf)),
+                    )
+                    .chain(files.sequences.iter().map(|(_, dir, ..)| dir.clone()))
+                    .chain(files.checks.iter().map(|(_, path)| path.clone()))
+                    .chain(files.files.iter().map(|(_, dir)| dir.clone()))
+                    .chain(files.outlines.iter().map(|(_, path)| path.clone()))
+                    .chain(
+                        files
+                            .fonts
+                            .iter()
+                            .filter_map(|font| font.path.parent().map(Path::to_path_buf)),
+                    )
+                    .chain(files.file_nodes.iter().map(|node| node.dir.clone()))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+        if !landing {
+            crate::reads::lock(&reads).settle(store.as_ref(), &read_from);
+        }
         let tables = crate::inputs::table_elements(self.scene.graph(), &self.runtime);
         let declared = crate::inputs::Declared {
             graph: self.scene.graph(),
@@ -1176,6 +1215,32 @@ impl Session {
         self.runtime.background()
     }
 
+    /// Prepares Kernels a few each sync instead of on workers, as where no
+    /// thread can start (a page): for a test to run that way elsewhere.
+    pub fn prepare_in_turns(&mut self) {
+        self.runtime.prepare_in_turns();
+        self.inputs.set_background(true);
+    }
+
+    /// One wait for a preparation to finish: where Kernels prepare in
+    /// turns (a page, where no thread sleeps), what waits is prepared now;
+    /// elsewhere a millisecond's sleep while the workers do.
+    pub fn wait_a_turn(&mut self) {
+        if self.runtime.prepares_in_turns() {
+            self.runtime.prepare_turn(usize::MAX);
+        } else {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    /// The Kernels still waiting their turn to prepare where no thread can
+    /// start, and one more while what they prepare for has yet to land; zero
+    /// elsewhere.
+    pub fn preparing_left(&self) -> usize {
+        let landing = self.runtime.prepares_in_turns() && self.scene_waiting();
+        self.runtime.prepare_queued() + usize::from(landing)
+    }
+
     /// Whether the scene last read waits for its Kernels before it
     /// replaces the running one, for the documents it uses, compiling off
     /// the frames, before it is read again, or for a Kernel they changed,
@@ -1270,7 +1335,7 @@ impl Session {
             if let Some(published) = self.publishing(&publishing) {
                 return published;
             }
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            self.wait_a_turn();
         }
     }
 

@@ -390,3 +390,35 @@ pub unsafe extern "C" fn entelechy_play_said(session: *mut EntelechySession) -> 
 pub unsafe extern "C" fn entelechy_play_replaying(session: *const EntelechySession) -> c_int {
     unsafe { enter(session) }.is_some_and(|s| s.play.replaying()) as c_int
 }
+
+/// The Kernels still waiting their turn to prepare (a page prepares a few
+/// each frame, and a frame waits until the scene's are all prepared): what
+/// a page shows while it loads. Zero once they are, or where they prepare
+/// on threads.
+///
+/// # Safety
+/// `session` is NULL or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn entelechy_play_preparing(session: *const EntelechySession) -> c_int {
+    unsafe { enter(session) }.map_or(0, |s| {
+        c_int::try_from(s.session.preparing_left()).unwrap_or(c_int::MAX)
+    })
+}
+
+/// A turn of loading: one sync that prepares a few of the Kernels waiting
+/// (a page prepares them in turns), its messages kept for
+/// `entelechy_play_said`. The Kernels still waiting, as
+/// `entelechy_play_preparing` counts them; -1 for a session that is not.
+///
+/// # Safety
+/// `session` is a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn entelechy_play_turn(session: *mut EntelechySession) -> c_int {
+    let Some(mut s) = (unsafe { enter(session) }) else {
+        return -1;
+    };
+    for event in s.session.sync_a_turn() {
+        s.play.say(event.to_string());
+    }
+    c_int::try_from(s.session.preparing_left()).unwrap_or(c_int::MAX)
+}

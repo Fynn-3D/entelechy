@@ -133,6 +133,9 @@ pub(crate) struct Ledger {
     running: BTreeMap<KernelId, Arc<KernelVersion>>,
     preparer: entelechy_kernel::Preparer,
     worker: bool,
+    /// Whether Kernels prepare in turns (a page): then priming only
+    /// compiles, and staging queues the new ones for their turn.
+    turns: bool,
 }
 
 /// Kernels primed from a [`Ledger`], for the ledger to take
@@ -172,10 +175,11 @@ impl Ledger {
                 reaches: reaches_now,
             };
         }
-        let (preparer, worker) = (&self.preparer, self.worker);
+        let (preparer, worker, turns) = (&self.preparer, self.worker, self.turns);
         let made = crate::spread::map(&jobs, |(path, d, reaches, running)| {
             let module = compiled(store, path, &d.id, &d.text, reaches, &d.kernel).ok()?;
             let candidate = match running {
+                None if turns => None,
                 None => preparer.prepare(module.clone(), &d.text).ok(),
                 Some(running) if !worker => preparer
                     .prepare_replacing(module.clone(), &d.text, running)
@@ -243,6 +247,7 @@ impl Kernels {
                 .collect(),
             preparer: runtime.preparer(),
             worker: runtime.background(),
+            turns: runtime.prepares_in_turns(),
         }
     }
 
@@ -349,6 +354,10 @@ impl Kernels {
         events: &mut Vec<Event>,
     ) -> Option<bool> {
         let mut scene = None;
+        // A scene publishes after the documents' changes queued before it,
+        // whose Kernels it may bind: where those still prepare (in turns, in
+        // a page), it waits with them.
+        let mut before_waiting = false;
         for mut change in std::mem::take(&mut self.pending) {
             let mut failed = Vec::new();
             let mut waiting = false;
@@ -380,7 +389,8 @@ impl Kernels {
             let outcome = if !failed.is_empty() {
                 events.extend(failed);
                 self.abandon(change, false, runtime, events)
-            } else if waiting {
+            } else if waiting || (change.scene && before_waiting) {
+                before_waiting |= !change.scene;
                 self.pending.push(change);
                 continue;
             } else {
@@ -403,7 +413,13 @@ impl Kernels {
         while !self.pending.is_empty() {
             scene = scene.or(self.collect(runtime, events));
             if !self.pending.is_empty() {
-                std::thread::sleep(std::time::Duration::from_millis(1));
+                // In turns (a page, where no thread sleeps), what is waited
+                // for is prepared now.
+                if runtime.prepares_in_turns() {
+                    runtime.prepare_turn(usize::MAX);
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
             }
         }
         scene
@@ -717,6 +733,22 @@ impl Kernels {
                         id,
                         prep: Prep::Waiting(ticket),
                         expect: Expect::Generation(running.generation()),
+                    });
+                    continue;
+                }
+                // A new Kernel, where Kernels prepare in turns (a page),
+                // waits its turn too: a scene's first load is never one
+                // long preparation.
+                None if runtime.prepares_in_turns()
+                    && !candidate
+                        .as_ref()
+                        .is_some_and(|candidate| candidate.module() == &module) =>
+                {
+                    let ticket = runtime.prepare_later(module, text);
+                    items.push(Item {
+                        id,
+                        prep: Prep::Waiting(ticket),
+                        expect: Expect::Absent,
                     });
                     continue;
                 }

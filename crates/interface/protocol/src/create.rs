@@ -361,7 +361,7 @@ pub(crate) fn publish(session: &mut Session, request: &Request) -> Result<Json, 
         if let Some(published) = session.publishing(&publishing) {
             return published_json(session, published);
         }
-        std::thread::sleep(std::time::Duration::from_millis(1));
+        session.wait_a_turn();
     }
 }
 

@@ -179,6 +179,7 @@ class EntelechyInPage {
     this.open_replay = promising("entelechy_open_replay");
     this.request = promising("entelechy_request");
     this.presenting = promising("entelechy_present");
+    this.turn = promising("entelechy_play_turn");
     this.files = exports.entelechy_files();
     this.session = 0;
     this.onclose = null;
@@ -253,12 +254,28 @@ class EntelechyInPage {
 
   /// Opens `scene`, a path among the files put: on the JIT, whose code
   /// this page loads, or on `gpu`, the browser's WebGPU, or `cpu`.
+  /// Resolves once it has loaded: in a page its Kernels prepare a few a
+  /// sync, the page given a turn between syncs.
   async open(scene, backend = "jit") {
     if (this.session) this.x.entelechy_close(this.session);
     this.session = await this.withText(scene, (name) =>
       this.withText(backend, (on) => this.open_files(this.files, name, on)),
     );
     if (!this.session) throw new Error(this.text(this.x.entelechy_open_error()));
+    await this.loaded();
+  }
+
+  /// Takes turns of loading until no Kernel waits to prepare, giving the
+  /// page a turn between them; `onpreparing`, when set, hears how many wait.
+  async loaded() {
+    let left = this.x.entelechy_play_preparing(this.session);
+    while (left > 0) {
+      if (this.onpreparing) this.onpreparing(left);
+      await new Promise((turn) => setTimeout(turn, 0));
+      left = await this.turn(this.session);
+      if (left < 0) throw new Error(this.text(this.x.entelechy_error(this.session)));
+    }
+    if (this.onpreparing) this.onpreparing(0);
   }
 
   /// Opens the scene the replay at `path` (among the files put) names,
@@ -269,6 +286,7 @@ class EntelechyInPage {
       this.withText(backend, (on) => this.open_replay(this.files, name, on)),
     );
     if (!this.session) throw new Error(this.text(this.x.entelechy_open_error()));
+    await this.loaded();
   }
 
   /// One request, answered in place; the same promise a connection's

@@ -714,6 +714,32 @@ impl Runtime {
         self.preparer.running()
     }
 
+    /// Where no thread can start, prepares at most `most` of the queued
+    /// modules; elsewhere the workers do and this does nothing. The modules
+    /// still waiting.
+    pub fn prepare_turn(&mut self, most: usize) -> usize {
+        self.preparer.turn(most)
+    }
+
+    /// Prepares in turns ([`Runtime::prepare_turn`]) instead of on workers,
+    /// as where no thread can start: what a page does, for a test.
+    pub fn prepare_in_turns(&mut self) {
+        self.preparer
+            .start_turns(Arc::clone(&self.backend), self.ordered.clone());
+    }
+
+    /// Whether it prepares in turns ([`Runtime::prepare_turn`]): where no
+    /// thread can start, a new Kernel too waits its turn rather than holding
+    /// the sync that found it.
+    pub fn prepares_in_turns(&self) -> bool {
+        self.preparer.in_turns()
+    }
+
+    /// The modules waiting their turn ([`Runtime::prepare_turn`]).
+    pub fn prepare_queued(&self) -> usize {
+        self.preparer.queued()
+    }
+
     /// Hands a validated module to the worker, or prepares it now when
     /// there is none. `source` is kept for inspection. A replacement is
     /// made ready where the version it replaces ran: finished on the main

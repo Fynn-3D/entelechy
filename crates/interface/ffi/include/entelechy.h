@@ -155,6 +155,14 @@ void entelechy_play_sound_opened(EntelechySession *session, const char *descript
 const char *entelechy_play_said(EntelechySession *session);
 /* Whether a replay is playing, 1 or 0. */
 int entelechy_play_replaying(const EntelechySession *session);
+/* The Kernels still waiting their turn to prepare (a page prepares a few a
+ * frame, and frames wait until the scene's are prepared); 0 once they are,
+ * or where they prepare on threads. */
+int entelechy_play_preparing(const EntelechySession *session);
+/* A turn of loading: one sync preparing a few of the Kernels waiting. The
+ * Kernels still waiting, as entelechy_play_preparing counts them; -1 on
+ * failure. */
+int entelechy_play_turn(EntelechySession *session);
 /* Room for `size` bytes in Entelechy's memory, for a caller that shares no
  * allocator with it (a page, where Entelechy is WebAssembly) to write a
  * string or a file into before a call; NULL when there is none. */

@@ -243,6 +243,9 @@ pub struct Play {
     said: Vec<String>,
     /// When the disk was last looked at, `None` before the first frame.
     synced: Option<f64>,
+    /// Whether a frame has been shown: before the first, a scene still
+    /// waiting for its Kernels (prepared in turns, in a page) is waited for.
+    shown: bool,
 }
 
 /// How long a pad button's release waits, in seconds: a press within it
@@ -280,6 +283,7 @@ impl Play {
             status: "starting".into(),
             said: Vec::new(),
             synced: None,
+            shown: false,
         }
     }
 
@@ -481,12 +485,22 @@ impl Play {
     pub fn frame(&mut self, session: &mut Session, view: View) -> Frame {
         let begun = (self.clock)();
         let waited_before = session.device_waited();
-        let due = self.replaying.is_some() || self.synced.is_none_or(|at| begun - at >= SYNC_EVERY);
+        // Kernels waiting their turn (a page) are prepared by syncs: every
+        // frame then, so the turns go on.
+        let due = self.replaying.is_some()
+            || session.preparing_left() > 0
+            || self.synced.is_none_or(|at| begun - at >= SYNC_EVERY);
         if due {
             self.synced = Some(begun);
             for event in session.sync_on_frame() {
                 self.said.push(event.to_string());
             }
+        }
+        // A first load still waiting for its Kernels has nothing to run
+        // yet; once a frame is shown, a replacement waits behind the
+        // version running.
+        if !self.shown && session.scene_waiting() {
+            return Frame::Wait;
         }
         // While a replay plays, it is the whole input.
         let replayed = match self.replay_frame(session) {
@@ -563,6 +577,7 @@ impl Play {
                     self.said.push("evaluating again".into());
                 }
                 self.status = "running".into();
+                self.shown = true;
                 Frame::Shown(Box::new(Shown {
                     report,
                     picture,
