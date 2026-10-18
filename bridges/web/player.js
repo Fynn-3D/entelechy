@@ -361,5 +361,188 @@ class EntelechyPlayer {
   }
 }
 
+/// The Player with Entelechy in a worker (player-worker.js): the page keeps
+/// its events, the pads and the sound card, and hands them over; loading,
+/// preparing and every frame run in the worker, so they never hold the
+/// page. The device draws on `shown`, handed to the worker; a frame drawn
+/// on the CPU comes back to be put on `canvas`.
+class EntelechyWorkerPlayer {
+  constructor(worker, canvas, shown) {
+    this.worker = worker;
+    this.canvas = canvas;
+    this.shown = shown;
+    this.context = canvas.getContext("2d");
+    this.said = [];
+    this.onsaid = (line) => console.log(line);
+    this.onpreparing = null;
+    this.audio = null;
+    this.asked = new Map();
+    this.next = 0;
+    this.pads = "";
+  }
+
+  /// Opens a scene or a replay in a new worker, as `EntelechyPlayer.open`
+  /// opens one in the page; `worker` is the URL of player-worker.js,
+  /// `onpreparing` hears how many Kernels still wait to prepare. Resolves
+  /// once the scene has loaded and its frames run.
+  static openInWorker({ worker, glue, files, scene, replay, backend, canvas, shown, onpreparing }) {
+    const at = new URL(worker || "player-worker.js", location.href);
+    const host = new URL("entelechy-host.mjs", at).href;
+    const player = new EntelechyWorkerPlayer(new Worker(at), canvas, shown);
+    player.onpreparing = onpreparing || null;
+    const offscreen = shown.transferControlToOffscreen();
+    shown.style.display = "block";
+    return new Promise((resolve, reject) => {
+      player.worker.onmessage = ({ data }) => player.heard(data, resolve, reject);
+      player.worker.onerror = (event) => reject(new Error(event.message || "the worker failed"));
+      const buffers = files.map(([, bytes]) => bytes.buffer);
+      player.worker.postMessage(
+        {
+          open: { glue: new URL(glue, location.href).href, host, files, scene, replay, backend, canvas: offscreen, id: shown.id },
+          size: player.fit(),
+        },
+        [offscreen, ...buffers],
+      );
+      player.listen();
+    });
+  }
+
+  /// The window's size in device pixels: both canvases, and the worker's.
+  fit() {
+    const scale = window.devicePixelRatio || 1;
+    const width = Math.max(1, Math.round(this.canvas.clientWidth * scale));
+    const height = Math.max(1, Math.round(this.canvas.clientHeight * scale));
+    this.canvas.width = width;
+    this.canvas.height = height;
+    return { width, height, scale };
+  }
+
+  heard(data, opened, refused) {
+    if (data.said !== undefined) {
+      this.said.push(data.said);
+      this.onsaid(data.said);
+    } else if (data.preparing !== undefined) {
+      if (this.onpreparing) this.onpreparing(data.preparing);
+    } else if (data.opened) {
+      opened(this);
+    } else if (data.presented !== undefined) {
+      this.shown.style.display = data.presented ? "block" : "none";
+    } else if (data.pixels) {
+      const image = this.context.createImageData(data.width, data.height);
+      for (let i = 0; i < data.pixels.length; i++) {
+        const word = data.pixels[i];
+        image.data[i * 4] = (word >> 16) & 255;
+        image.data[i * 4 + 1] = (word >> 8) & 255;
+        image.data[i * 4 + 2] = word & 255;
+        image.data[i * 4 + 3] = 255;
+      }
+      this.context.putImageData(image, 0, 0);
+    } else if (data.failed !== undefined) {
+      // The title holds what the page has room for; the console the whole.
+      document.title = `Entelechy: ${data.failed}`;
+      console.error(`Entelechy: ${data.failed}`);
+      if (data.fatal) refused(new Error(data.failed));
+    } else if (data.stopped !== undefined) {
+      this.onsaid(`stopped: ${data.stopped}`);
+    } else if (data.answer !== undefined) {
+      const asked = this.asked.get(data.answer);
+      this.asked.delete(data.answer);
+      if (!asked) return;
+      if (data.error) {
+        const error = new Error(data.error.message);
+        error.line = data.error.line;
+        error.column = data.error.column;
+        asked.reject(error);
+      } else {
+        asked.resolve(data.ok);
+      }
+    }
+  }
+
+  /// One request of the creation protocol, answered between frames in
+  /// the worker; the same promise `EntelechyPlayer.call` gives.
+  call(op, fields = {}) {
+    const id = this.next++;
+    return new Promise((resolve, reject) => {
+      this.asked.set(id, { resolve, reject });
+      this.worker.postMessage({ call: { id, op, fields } });
+    });
+  }
+
+  /// Hands a file in again, as one changed on disk: the next sync reads it.
+  put(path, bytes) {
+    this.worker.postMessage({ put: path, bytes });
+  }
+
+  listen() {
+    const send = (message) => this.worker.postMessage(message);
+    window.addEventListener("keydown", (event) => {
+      if (event.repeat) return;
+      if (HELD.has(event.key)) event.preventDefault();
+      this.startSound().catch(() => {});
+      send({ key: event.key, down: true });
+    });
+    window.addEventListener("keyup", (event) => {
+      if (HELD.has(event.key)) event.preventDefault();
+      send({ key: event.key, down: false });
+    });
+    const scale = () => window.devicePixelRatio || 1;
+    // The page's canvas takes the pointer; the worker's draws over it.
+    for (const target of [this.canvas, this.shown]) {
+      target.addEventListener("pointermove", (event) => send({ pointer: [event.offsetX * scale(), event.offsetY * scale()] }));
+      target.addEventListener("pointerdown", (event) => {
+        this.startSound().catch(() => {});
+        target.setPointerCapture(event.pointerId);
+        send({ button: BUTTON[event.button] ?? 0, down: true });
+      });
+      target.addEventListener("pointerup", (event) => send({ button: BUTTON[event.button] ?? 0, down: false }));
+      target.addEventListener("contextmenu", (event) => event.preventDefault());
+      target.addEventListener("wheel", (event) => {
+        event.preventDefault();
+        const unit = event.deltaMode === 1 ? 1 : 1 / 40;
+        send({ wheel: [event.deltaX * unit, -event.deltaY * unit] });
+      }, { passive: false });
+    }
+    new ResizeObserver(() => send({ size: this.fit() })).observe(this.canvas);
+    // The pads, read each time the page draws, handed over when they change.
+    const poll = () => {
+      const seen = [];
+      for (const pad of navigator.getGamepads ? navigator.getGamepads() : []) {
+        if (!pad || pad.mapping !== "standard") continue;
+        seen.push({
+          index: pad.index,
+          buttons: pad.buttons.map((button) => button.pressed),
+          // A page's stick reads down as positive; the play's up is.
+          axes: [pad.axes[0] ?? 0, -(pad.axes[1] ?? 0), pad.axes[2] ?? 0, -(pad.axes[3] ?? 0), pad.buttons[6]?.value ?? 0, pad.buttons[7]?.value ?? 0],
+        });
+      }
+      const now = JSON.stringify(seen);
+      if (now !== this.pads) {
+        this.pads = now;
+        send({ pads: seen });
+      }
+      requestAnimationFrame(poll);
+    };
+    requestAnimationFrame(poll);
+  }
+
+  /// Opens the sound card at the person's first touch, as a page may, and
+  /// hands its worklet's port to the worker, which plays into it.
+  async startSound() {
+    if (this.audio) return;
+    const context = new AudioContext();
+    this.audio = { context };
+    const url = URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" }));
+    await context.audioWorklet.addModule(url);
+    const node = new AudioWorkletNode(context, "entelechy-sound", { outputChannelCount: [2] });
+    node.connect(context.destination);
+    this.audio.node = node;
+    this.worker.postMessage({ sound: node.port, rate: context.sampleRate }, [node.port]);
+  }
+}
+
+EntelechyPlayer.openInWorker = (options) => EntelechyWorkerPlayer.openInWorker(options);
+
 globalThis.EntelechyPlayer = EntelechyPlayer;
+globalThis.EntelechyWorkerPlayer = EntelechyWorkerPlayer;
 })();

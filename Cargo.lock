@@ -1013,6 +1013,7 @@ dependencies = [
  "entelechy-jit",
  "entelechy-protocol",
  "entelechy-session",
+ "js-sys",
  "wasm-bindgen",
  "web-sys",
  "wgpu",

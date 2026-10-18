@@ -77,6 +77,18 @@ creation protocol answered between frames as the Player's window
 answers `--serve`: `write` a volume into the voxel editor's `world` and
 the next frame carries on from it.
 
+A page loads a scene's Kernels in turns: the session prepares a few each
+sync and the frames wait until the scene's are prepared, so loading never
+holds the page, or the device process every tab shares, in one long task.
+`EntelechyPlayer.openInWorker` goes further and runs Entelechy in a worker
+(`player-worker.js`): loading, preparing and every frame happen off the
+page's thread, the device draws on the canvas the page hands over (an
+OffscreenCanvas, which Entelechy's present finds by its id in the worker's
+`entelechy_canvases`), and the page keeps only its events, the pads and the
+sound card, handed to the worker as messages, with `onpreparing` hearing
+how many Kernels still wait. Its `call(op, fields)` is the same protocol,
+answered in the worker between frames.
+
 `entelechy.js` is the client on its own: `EntelechyClient` (a request, its answer;
 the session answers in order, so answers are matched first in, first
 out), `decodePpm` and `decodeWords` (a frame, a Field's words), and

@@ -21,7 +21,8 @@ names:
 with `on=gpu|jit|cpu` for what runs it (the GPU, else the JIT, else the
 interpreter, when none is named), `roots=a,b` for the directories handed
 in and watched (the scene's example and the packages when none are
-named), and `glue=` for where Entelechy built for a page is. F5 resets the
+named), `glue=` for where Entelechy built for a page is, and `worker=1` to
+run Entelechy in a worker (player-worker.js), off the page's thread. F5 resets the
 state, F6 moves the preview, F10 shows the line of frame data; Tab,
 Escape and the other keys are the scene's; what the play says is on the
 page's console.
@@ -47,7 +48,7 @@ page's console.
     const files = await Promise.all(
       list.map(async (path) => [path, new Uint8Array(await (await fetch(`/${path}`)).arrayBuffer())]),
     );
-    const player = await EntelechyPlayer.open({
+    const options = {
       glue: query.get("glue") || "../../target/page/entelechy_ffi.js",
       files,
       scene,
@@ -55,7 +56,13 @@ page's console.
       backend: query.get("on"),
       canvas: document.getElementById("view"),
       shown: document.getElementById("shown"),
-    });
+    };
+    if (query.get("worker")) {
+      globalThis.player = await EntelechyPlayer.openInWorker({ ...options, worker: "player-worker.js" });
+      document.getElementById("view").focus();
+      return;
+    }
+    const player = await EntelechyPlayer.open(options);
     globalThis.player = player;
     player.say();
     player.watch(roots);

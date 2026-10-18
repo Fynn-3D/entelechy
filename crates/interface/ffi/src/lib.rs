@@ -211,15 +211,40 @@ impl Held {
         let Some((device, width, height)) = self.session.on_device(handle) else {
             return Ok(None);
         };
-        let element: web_sys::HtmlCanvasElement = web_sys::window()
+        // The page's canvas element; in a worker, which has no page, the
+        // OffscreenCanvas the page handed over, kept by the worker under
+        // the canvas's id in `entelechy_canvases`.
+        let (target, window_width, window_height) = match web_sys::window()
             .and_then(|window| window.document())
-            .and_then(|document| document.get_element_by_id(canvas))
-            .ok_or_else(|| format!("no element `{canvas}` on the page"))?
-            .dyn_into()
-            .map_err(|_| format!("`{canvas}` is not a canvas"))?;
-        let (window_width, window_height) = (element.width(), element.height());
+        {
+            Some(document) => {
+                let element: web_sys::HtmlCanvasElement = document
+                    .get_element_by_id(canvas)
+                    .ok_or_else(|| format!("no element `{canvas}` on the page"))?
+                    .dyn_into()
+                    .map_err(|_| format!("`{canvas}` is not a canvas"))?;
+                let (width, height) = (element.width(), element.height());
+                (wgpu::SurfaceTarget::Canvas(element), width, height)
+            }
+            None => {
+                let held = js_sys::Reflect::get(&js_sys::global(), &"entelechy_canvases".into())
+                    .ok()
+                    .filter(wasm_bindgen::JsValue::is_object)
+                    .ok_or("a worker presents on a canvas the page handed over, kept in `entelechy_canvases`")?;
+                let offscreen: web_sys::OffscreenCanvas =
+                    js_sys::Reflect::get(&held, &canvas.into())
+                        .ok()
+                        .and_then(|value| value.dyn_into().ok())
+                        .ok_or_else(|| format!("no canvas `{canvas}` in `entelechy_canvases`"))?;
+                let (width, height) = (offscreen.width(), offscreen.height());
+                (
+                    wgpu::SurfaceTarget::OffscreenCanvas(offscreen),
+                    width,
+                    height,
+                )
+            }
+        };
         if self.presenter.as_ref().is_none_or(|(id, _)| id != canvas) {
-            let target = wgpu::SurfaceTarget::Canvas(element);
             let presenter = display.presenter(target, window_width, window_height)?;
             self.presenter = Some((canvas.to_owned(), presenter));
         }
@@ -455,8 +480,9 @@ fn opened(
         )?;
         let (mut session, display, passed_over) =
             (loaded.session, loaded.display, loaded.passed_over);
-        // The first load publishes inline; later replacements are prepared
-        // off the caller's thread so frames go on (in place in a page).
+        // The first load publishes inline (in a page, it waits for its
+        // Kernels, which prepare in turns); later replacements are prepared
+        // off the caller's thread so frames go on.
         session.set_background(true);
         let mut play = entelechy_session::play::Play::new(clock);
         for passed in passed_over {

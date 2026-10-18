@@ -249,6 +249,17 @@ try {
     const ok = /previewing/.test(keys);
     console.log(`play.html keys: ${ok ? "F5 and F6 reached the play, and the protocol was answered between frames" : keys}`);
     if (!ok) log = log.replace("RESULT: ok", "RESULT: failed: play.html keys");
+    // Entelechy in a worker: the scene loads and plays off the page's thread,
+    // and the protocol is answered in the worker.
+    const worked = await play("scene=examples/ant/scene.esn&on=jit&worker=1", async ({ said, run }) => {
+      await until(said, /scene loaded/, 30);
+      const backend = await run("player.call('status').then((s) => s.backend)");
+      const frames = await run("new Promise((done) => setTimeout(() => player.call('status').then((s) => done(s.frame)), 500))");
+      return backend === "jit" && frames > 0 ? "answered" : `the protocol in the worker answered ${backend} at frame ${frames}`;
+    });
+    const inWorker = worked === "answered";
+    console.log(`play.html in a worker: ${inWorker ? "the scene loaded and played in the worker, and the protocol was answered there" : worked}`);
+    if (!inWorker) log = log.replace("RESULT: ok", "RESULT: failed: play.html in a worker");
   }
   for (const problem of devtools.problems) console.log(`page: ${problem}`);
   if (!log.includes("RESULT:")) console.log("RESULT: timed out");
