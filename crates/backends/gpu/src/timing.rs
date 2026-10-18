@@ -120,6 +120,10 @@ impl GpuBackend {
     /// empty submission polled to completion, the least of sixteen. Every
     /// node a profile times carries it before its own work.
     pub fn wait_floor(&self) -> std::time::Duration {
+        // A page has no clock to ask: nothing is counted there.
+        if cfg!(all(target_arch = "wasm32", target_os = "unknown")) {
+            return std::time::Duration::ZERO;
+        }
         let mut least = std::time::Duration::MAX;
         for _ in 0..16 {
             let encoder = self
@@ -196,7 +200,9 @@ impl Frames {
     }
 
     /// Clocks frames from now, or no longer; on, a waiter hears the device.
+    /// A page has no clock to ask: there no frame is clocked.
     pub(crate) fn set_clocked(&self, on: bool, device: &wgpu::Device) {
+        let on = on && !cfg!(all(target_arch = "wasm32", target_os = "unknown"));
         self.on.store(on, std::sync::atomic::Ordering::Relaxed);
         if !on {
             lock(&self.open).clear();

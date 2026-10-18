@@ -126,7 +126,8 @@ impl Board {
         if fresh && names.iter().all(|name| inputs.holds(name)) {
             return;
         }
-        self.looked = Some(Instant::now());
+        // A page has no clock: there the clipboard is looked at each time.
+        self.looked = entelechy_kernel::clock::now();
         let text = if !self.system || self.read {
             self.device.text().unwrap_or_default()
         } else {
