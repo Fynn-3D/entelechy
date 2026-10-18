@@ -454,7 +454,8 @@ impl Session {
                 let landed = self.composable(&store.whole(path)).ok()?;
                 let text = store.read_text(path).ok()?;
                 let unchanged = store.stamp(path) == stamp;
-                let parses = entelechy_language::parse_document(&text).is_ok();
+                // Parsed once a stamp: the store keeps what it parsed.
+                let parses = store.document(path).is_ok();
                 (unchanged && parses).then_some((landed, text))
             })
             .collect();
