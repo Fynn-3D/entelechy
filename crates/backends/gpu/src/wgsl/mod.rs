@@ -496,10 +496,11 @@ fn per_column(ty: Type, f: impl Fn(usize) -> String) -> String {
 }
 
 fn literal(value: &Value) -> String {
-    // WGSL rejects non-finite constant expressions: a NaN or infinity is
-    // written as its bits.
+    // WGSL rejects non-finite constant expressions, and a strict compiler
+    // (a page's) a decimal past the largest finite f32, which the shortest
+    // decimal of a float near it is: those are written as their bits.
     let f = |v: f32| {
-        if v.is_finite() {
+        if v.is_finite() && v.abs() < 1.0e38 {
             format!("{v:?}")
         } else {
             format!("bitcast<f32>({:#010x}u)", v.to_bits())

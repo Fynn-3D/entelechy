@@ -440,3 +440,47 @@ fn every_case_run_twice_writes_the_same_words() {
         failures.join("\n")
     );
 }
+
+/// The largest finite floats are written as their bits: a strict shader
+/// compiler (a page's) refuses their shortest decimal, which lies just past
+/// the largest f32. They run as the interpreter computes them.
+#[test]
+fn the_largest_floats_reach_the_shader_as_bits() {
+    let source = "kernel t.big@1 { requires { field.write; } output result: Rows<Float>;
+        compute { let i = element(); return if i == 0 { 3.4028235e38 } else if i == 1 { -3.4028235e38 } else if i == 2 { 1.0e38 } else { 0.5 * 3.4028235e38 }; } }";
+    let module = compile(source).unwrap();
+    let shader = entelechy_gpu::wgsl::emit(&module);
+    assert!(
+        shader.contains("bitcast<f32>(0x7f7fffffu)")
+            && shader.contains("bitcast<f32>(0xff7fffffu)"),
+        "{shader}"
+    );
+    assert!(!shader.contains("e38"), "a decimal past 1e38 is left");
+    let Some(gpu) = GpuBackend::new().ok() else {
+        return;
+    };
+    let run = |backend: &dyn Backend| -> Vec<u32> {
+        let mut host = Host::new(1 << 20);
+        let invocation = Invocation {
+            inputs: Vec::new(),
+            params: Vec::new(),
+            domain: entelechy_abi::Domain::Rows(4),
+            context: entelechy_abi::Context::default(),
+        };
+        let mut scope = Scope::new(&mut host, all());
+        let prepared = backend.prepare(&module).unwrap();
+        let out = backend
+            .execute(prepared.as_ref(), &module, &invocation, &mut scope)
+            .unwrap()[0];
+        match host.resident(out).unwrap() {
+            Some(device) => backend
+                .download(device, 16)
+                .unwrap()
+                .chunks_exact(4)
+                .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect(),
+            None => host.data(out).unwrap().values().into_owned(),
+        }
+    };
+    assert_eq!(run(&gpu), run(&CpuBackend));
+}
