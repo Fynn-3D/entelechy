@@ -6,7 +6,9 @@ use std::io::{BufRead, Write};
 
 use entelechy_session::Session;
 
-use crate::respond_line;
+use serde_json::Value as Json;
+
+use crate::{parse_request, respond_line};
 
 /// Serves requests from `input` until EOF or `quit`, writing responses to
 /// `output`.
@@ -30,11 +32,12 @@ pub fn serve(
     Ok(())
 }
 
-/// One request line and where its answer goes. Transports feed these to
+/// One request and where its answer goes. Transports feed these to
 /// whatever serves the session, a loop or a window.
 pub struct Incoming {
-    /// The request line.
-    pub line: String,
+    /// The request line as read once, where it arrived: its echoed id and
+    /// the request, or why it is not JSON.
+    pub parsed: Result<(Json, Json), Json>,
     /// Where the response line goes.
     pub reply: Reply,
     /// Whether it came on standard input, where `quit` ends the process;
@@ -43,6 +46,24 @@ pub struct Incoming {
     /// The channel it came on (`stdin`, `socket 3`, `websocket 4`, numbered
     /// in opening order), recorded as the origin of its changes.
     pub from: String,
+}
+
+impl Incoming {
+    /// A request line read where it arrived, so whoever answers it does not
+    /// read it again.
+    pub fn new(line: &str, reply: Reply, local: bool, from: String) -> Self {
+        Self {
+            parsed: parse_request(line),
+            reply,
+            local,
+            from,
+        }
+    }
+
+    /// The operation it names, when it names one.
+    pub fn op(&self) -> Option<&str> {
+        self.parsed.as_ref().ok()?.1.get("op")?.as_str()
+    }
 }
 
 /// Where an answer goes.
@@ -98,12 +119,7 @@ pub fn stdin_lines() -> impl Iterator<Item = Incoming> {
         .lines()
         .map_while(Result::ok)
         .filter(|line| !line.trim().is_empty())
-        .map(|line| Incoming {
-            line,
-            reply: Reply::Stdout,
-            local: true,
-            from: "stdin".into(),
-        })
+        .map(|line| Incoming::new(&line, Reply::Stdout, true, "stdin".into()))
 }
 
 /// Listens on `address` (`127.0.0.1:7788`, or port 0 for any), feeds every
@@ -276,12 +292,7 @@ fn serve_lines(stream: std::net::TcpStream, sink: std::sync::mpsc::Sender<Incomi
         if line.trim().is_empty() {
             continue;
         }
-        let incoming = Incoming {
-            line,
-            reply: Reply::Connection(reply.clone()),
-            local: false,
-            from: from.clone(),
-        };
+        let incoming = Incoming::new(&line, Reply::Connection(reply.clone()), false, from.clone());
         if !owed.owe() || sink.send(incoming).is_err() {
             break;
         }
@@ -343,12 +354,8 @@ fn serve_websocket(
                 if line.trim().is_empty() {
                     continue;
                 }
-                let incoming = Incoming {
-                    line,
-                    reply: Reply::Connection(reply.clone()),
-                    local: false,
-                    from: from.clone(),
-                };
+                let incoming =
+                    Incoming::new(&line, Reply::Connection(reply.clone()), false, from.clone());
                 if !owed.owe() || sink.send(incoming).is_err() {
                     break;
                 }

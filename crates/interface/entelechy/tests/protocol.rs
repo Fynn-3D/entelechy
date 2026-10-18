@@ -3565,12 +3565,12 @@ fn a_change_is_answered_once_it_stands_and_nothing_waits_for_it() {
                from: &str,
                to: &std::sync::mpsc::Sender<String>,
                request: Json| {
-        let incoming = Incoming {
-            line: request.to_string(),
-            reply: Reply::Connection(to.clone()),
-            local: false,
-            from: from.to_owned(),
-        };
+        let incoming = Incoming::new(
+            &request.to_string(),
+            Reply::Connection(to.clone()),
+            false,
+            from.to_owned(),
+        );
         answers.answer(session, incoming);
     };
     let heard = |receiver: &Receiver<String>| -> Option<Json> {

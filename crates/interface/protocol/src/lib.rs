@@ -58,19 +58,24 @@ pub fn answer(session: &mut Session, incoming: Incoming) -> bool {
 /// request's channel.
 pub fn respond_from(session: &mut Session, incoming: &Incoming) -> (String, bool) {
     let before = session.act_for(entelechy_session::Origin::Protocol(incoming.from.clone()));
-    let answered = respond_line(session, &incoming.line);
+    let answered = respond_parsed(session, &incoming.parsed);
     session.act_for(before);
     answered
 }
 
 /// Answers one request line; the flag says whether it asked to quit.
 pub fn respond_line(session: &mut Session, line: &str) -> (String, bool) {
-    match parse_request(line) {
+    respond_parsed(session, &parse_request(line))
+}
+
+/// Answers a request line already read ([`parse_request`]).
+fn respond_parsed(session: &mut Session, parsed: &Result<(Json, Json), Json>) -> (String, bool) {
+    match parsed {
         Ok((id, request)) => {
             let quit = request.get("op").and_then(Json::as_str) == Some("quit");
-            (envelope(&id, handle(session, &request)), quit)
+            (envelope(id, handle(session, request)), quit)
         }
-        Err(error) => (envelope(&Json::Null, Err(error)), false),
+        Err(error) => (envelope(&Json::Null, Err(error.clone())), false),
     }
 }
 

@@ -15,7 +15,7 @@ use crate::create;
 use crate::request::Request;
 use crate::transport::Incoming;
 use crate::wire::events_json;
-use crate::{envelope, parse_request, respond_from};
+use crate::{envelope, respond_from};
 
 /// What serves a session to the protocol: the session, and the requests
 /// it answers itself first (a window answers `evaluate` with its frame).
@@ -72,19 +72,19 @@ impl Answers {
     /// Answers `incoming` now, or after the answer it queues behind; true
     /// when the process should end (a `quit` on standard input).
     pub fn answer(&mut self, served: &mut dyn Served, incoming: Incoming) -> bool {
-        if let Ok((id, request)) = parse_request(&incoming.line)
-            && let Err(error) = crate::ops::check(&request)
+        if let Ok((id, request)) = &incoming.parsed
+            && let Err(error) = crate::ops::check(request)
         {
-            return send(&incoming, envelope(&id, Err(error)), false);
+            return send(&incoming, envelope(id, Err(error)), false);
         }
-        let changes = matches!(op_of(&incoming).as_deref(), Some("compose" | "publish"));
+        let changes = matches!(incoming.op(), Some("compose" | "publish"));
         if let Some(waiting) = &self.waiting
             && (changes || waiting.incoming.from == incoming.from)
         {
             self.queued.push_back(incoming);
             return false;
         }
-        match op_of(&incoming).as_deref() {
+        match incoming.op() {
             Some("compose" | "publish") => self.begin(served.session(), incoming),
             _ => {
                 let (response, quit) = served
@@ -142,12 +142,12 @@ impl Answers {
     /// Begins a `compose` or `publish`: answered now when it lands at once,
     /// otherwise kept waiting.
     fn begin(&mut self, session: &mut Session, incoming: Incoming) -> bool {
-        let (id, request) = match parse_request(&incoming.line) {
-            Ok(parsed) => parsed,
-            Err(error) => return send(&incoming, envelope(&Json::Null, Err(error)), false),
+        let (id, request) = match &incoming.parsed {
+            Ok((id, request)) => (id.clone(), request),
+            Err(error) => return send(&incoming, envelope(&Json::Null, Err(error.clone())), false),
         };
         let before = session.act_for(Origin::Protocol(incoming.from.clone()));
-        let begun = match Request::new(&request) {
+        let begun = match Request::new(request) {
             Err(error) => Begun::Answered(Err(error)),
             Ok(request) if request.op() == "compose" => {
                 match create::compose_with(session, &request, false) {
@@ -178,12 +178,6 @@ impl Answers {
 enum Begun {
     Answered(Result<Json, Json>),
     Waits(On),
-}
-
-/// The operation a request line names, when it names one.
-fn op_of(incoming: &Incoming) -> Option<String> {
-    let (_, request) = parse_request(&incoming.line).ok()?;
-    request.get("op").and_then(Json::as_str).map(str::to_owned)
 }
 
 /// Sends an answer to its request's channel; the return is as

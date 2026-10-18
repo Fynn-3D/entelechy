@@ -279,11 +279,11 @@ impl entelechy_protocol::Served for Player {
     /// `evaluate` runs one window frame under the person's input;
     /// measured, each of its nodes waits for the device.
     fn own(&mut self, incoming: &entelechy_protocol::Incoming) -> Option<(String, bool)> {
-        let (id, request) = entelechy_protocol::parse_request(&incoming.line).ok()?;
+        let (id, request) = incoming.parsed.as_ref().ok()?;
         if request.get("op").and_then(Json::as_str) != Some("evaluate") {
             return None;
         }
-        let measured = entelechy_protocol::measure_asked(&request);
+        let measured = entelechy_protocol::measure_asked(request);
         self.session.set_measured(measured);
         let frame = self.frame();
         if measured {
@@ -292,7 +292,7 @@ impl entelechy_protocol::Served for Player {
         // The frame answered is confirmed: what it committed holds. Its
         // input and clock are the person's; context the request gave is
         // named as not read, so a caller is not misled.
-        let ignored = entelechy_protocol::context_given(&request);
+        let ignored = entelechy_protocol::context_given(request);
         let result = match frame {
             Some(report) if self.confirm() => {
                 let mut answer =
@@ -307,7 +307,7 @@ impl entelechy_protocol::Served for Player {
             }
             _ => Err(serde_json::json!({ "message": self.play.status() })),
         };
-        Some((entelechy_protocol::envelope(&id, result), false))
+        Some((entelechy_protocol::envelope(id, result), false))
     }
 }
 
