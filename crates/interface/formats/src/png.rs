@@ -291,28 +291,49 @@ fn filtered(kind: u8, row: &[u8], above: &[u8], i: usize) -> u8 {
     row[i].wrapping_sub(predicted)
 }
 
-/// Encodes RGBA pixels (`0..=1`) as a compressed 8-bit PNG: each row
-/// filtered as whichever of PNG's filters leaves it the smallest bytes
-/// (their sum as signed values), then deflated.
-pub fn encode(width: u32, height: u32, pixels: &[[f32; 4]]) -> Vec<u8> {
-    let stride = width as usize * 4;
-    let mut raw = Vec::with_capacity((stride + 1) * height as usize);
-    let mut above = vec![0u8; stride];
-    for row in pixels.chunks(width as usize) {
-        let bytes: Vec<u8> = row
-            .iter()
-            .flat_map(|pixel| pixel.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
-            .collect();
-        let cost = |kind: u8| -> u64 {
-            (0..stride)
-                .map(|i| (filtered(kind, &bytes, &above, i) as i8).unsigned_abs() as u64)
-                .sum()
+/// The colors of an image in order of first sight, and each pixel's
+/// index among them; `None` past 256 colors.
+fn palette(bytes: &[[u8; 4]]) -> Option<(Vec<[u8; 4]>, Vec<u8>)> {
+    let mut colors: Vec<[u8; 4]> = Vec::new();
+    let mut index = std::collections::HashMap::new();
+    let mut last = None;
+    let mut indices = Vec::with_capacity(bytes.len());
+    for pixel in bytes {
+        // Runs of one color are common: the last one is asked first.
+        let at = match last {
+            Some((color, at)) if color == *pixel => at,
+            _ => {
+                let at = match index.get(pixel) {
+                    Some(at) => *at,
+                    None => {
+                        if colors.len() == 256 {
+                            return None;
+                        }
+                        colors.push(*pixel);
+                        index.insert(*pixel, (colors.len() - 1) as u8);
+                        (colors.len() - 1) as u8
+                    }
+                };
+                last = Some((*pixel, at));
+                at
+            }
         };
-        let kind = (0..5u8).min_by_key(|&kind| cost(kind)).unwrap_or(0);
-        raw.push(kind);
-        raw.extend((0..stride).map(|i| filtered(kind, &bytes, &above, i)));
-        above = bytes;
+        indices.push(at);
     }
+    Some((colors, indices))
+}
+
+/// Encodes RGBA pixels (`0..=1`) as a compressed PNG of 8-bit samples.
+/// An image of at most 256 colors is written as their palette and an
+/// index a pixel, packed into as few bits as hold the palette, rows
+/// unfiltered; any other as RGBA, each row filtered as whichever of PNG's
+/// filters leaves it the smallest bytes (their sum as signed values).
+/// Either decodes to the same pixels.
+pub fn encode(width: u32, height: u32, pixels: &[[f32; 4]]) -> Vec<u8> {
+    let bytes: Vec<[u8; 4]> = pixels
+        .iter()
+        .map(|pixel| pixel.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
+        .collect();
     let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
     let mut chunk = |kind: &[u8], body: &[u8]| {
         out.extend_from_slice(&(body.len() as u32).to_be_bytes());
@@ -322,12 +343,60 @@ pub fn encode(width: u32, height: u32, pixels: &[[f32; 4]]) -> Vec<u8> {
         let crc = crc32(&out[start..]);
         out.extend_from_slice(&crc.to_be_bytes());
     };
-    let mut ihdr = Vec::new();
-    ihdr.extend_from_slice(&width.to_be_bytes());
-    ihdr.extend_from_slice(&height.to_be_bytes());
-    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
-    chunk(b"IHDR", &ihdr);
-    chunk(b"IDAT", &zlib(&raw));
+    let header = |depth: u8, color: u8| {
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&width.to_be_bytes());
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        ihdr.extend_from_slice(&[depth, color, 0, 0, 0]);
+        ihdr
+    };
+    let width = width as usize;
+    if let Some((colors, indices)) = palette(&bytes).filter(|(colors, _)| !colors.is_empty()) {
+        let depth: u8 = match colors.len() {
+            0..=2 => 1,
+            3..=4 => 2,
+            5..=16 => 4,
+            _ => 8,
+        };
+        let per_byte = 8 / depth as usize;
+        let mut raw = Vec::with_capacity((width.div_ceil(per_byte) + 1) * height as usize);
+        for row in indices.chunks(width.max(1)) {
+            raw.push(0);
+            for group in row.chunks(per_byte) {
+                let mut byte = 0u8;
+                for (k, index) in group.iter().enumerate() {
+                    byte |= index << (8 - depth as usize * (k + 1));
+                }
+                raw.push(byte);
+            }
+        }
+        chunk(b"IHDR", &header(depth, 3));
+        let rgb: Vec<u8> = colors.iter().flat_map(|c| [c[0], c[1], c[2]]).collect();
+        chunk(b"PLTE", &rgb);
+        // Alpha for every color, opaque or not, so the file decodes to
+        // four samples a pixel as an RGBA one does.
+        let alpha: Vec<u8> = colors.iter().map(|c| c[3]).collect();
+        chunk(b"tRNS", &alpha);
+        chunk(b"IDAT", &zlib(&raw));
+    } else {
+        let stride = width * 4;
+        let mut raw = Vec::with_capacity((stride + 1) * height as usize);
+        let mut above = vec![0u8; stride];
+        for row in bytes.chunks(width.max(1)) {
+            let row: Vec<u8> = row.iter().flatten().copied().collect();
+            let cost = |kind: u8| -> u64 {
+                (0..stride)
+                    .map(|i| (filtered(kind, &row, &above, i) as i8).unsigned_abs() as u64)
+                    .sum()
+            };
+            let kind = (0..5u8).min_by_key(|&kind| cost(kind)).unwrap_or(0);
+            raw.push(kind);
+            raw.extend((0..stride).map(|i| filtered(kind, &row, &above, i)));
+            above = row;
+        }
+        chunk(b"IHDR", &header(8, 6));
+        chunk(b"IDAT", &zlib(&raw));
+    }
     chunk(b"IEND", &[]);
     out
 }
@@ -435,5 +504,66 @@ mod tests {
         assert_eq!(decoded.channels, 4);
         assert_eq!(decoded.samples[7], 128.0 / 255.0);
         assert_eq!(decoded.samples[2], 0.0);
+    }
+
+    /// The samples an RGBA file of `pixels` decodes to: each value as 8 bits.
+    fn as_rgba(pixels: &[[f32; 4]]) -> Vec<f32> {
+        pixels
+            .iter()
+            .flatten()
+            .map(|v| (v.clamp(0.0, 1.0) * 255.0).round() / 255.0)
+            .collect()
+    }
+
+    #[test]
+    fn few_colors_are_written_as_a_palette_and_decode_the_same() {
+        let mut seed = 3u32;
+        for (colors, width, translucent) in [
+            (2, 13, false),
+            (4, 7, true),
+            (16, 33, false),
+            (200, 31, true),
+            (257, 40, false),
+        ] {
+            let palette: Vec<[f32; 4]> = (0..colors)
+                .map(|k| {
+                    let k = k as f32;
+                    [
+                        k / 300.0,
+                        (k * 7.0 % 256.0) / 255.0,
+                        1.0 - k / 300.0,
+                        if translucent && (k as usize).is_multiple_of(3) {
+                            0.5
+                        } else {
+                            1.0
+                        },
+                    ]
+                })
+                .collect();
+            // Every color at least once, then at random.
+            let pixels: Vec<[f32; 4]> = (0..width * 9)
+                .map(|i| {
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    palette[if i < colors {
+                        i
+                    } else {
+                        (seed >> 8) as usize % colors
+                    }]
+                })
+                .collect();
+            let file = encode(width as u32, 9, &pixels);
+            let decoded = decode(&file).unwrap();
+            assert_eq!(
+                (decoded.width, decoded.height, decoded.channels),
+                (width as u32, 9, 4)
+            );
+            assert_eq!(decoded.samples, as_rgba(&pixels), "{colors} colors");
+            // IHDR's color type: 3 a palette, 6 RGBA past 256 colors.
+            assert_eq!(
+                file[25],
+                if colors <= 256 { 3 } else { 6 },
+                "{colors} colors"
+            );
+        }
     }
 }
