@@ -1479,10 +1479,47 @@ fn block_work(instructions: &[Instruction], functions: &[u64]) -> u64 {
 /// is read at run time or that may stop early.
 pub const TYPICAL_OPEN_LOOP: u32 = 4;
 
-fn typical_block(instructions: &[Instruction], functions: &[u64]) -> u64 {
+fn typical_block(instructions: &[Instruction], functions: &[u64], params: &[Value]) -> u64 {
     let mut defined = std::collections::HashMap::new();
     defining(instructions, &mut defined);
-    typical_in(instructions, functions, &defined)
+    typical_in(instructions, functions, &defined, params)
+}
+
+/// The count a loop read at run time takes when it is a parameter given
+/// in `params`, clamped to the loop's `bound`.
+fn param_count(
+    bound: Option<ValueId>,
+    count: u32,
+    defined: &std::collections::HashMap<ValueId, &Op>,
+    params: &[Value],
+) -> Option<u32> {
+    let Some(Op::Param(index)) = defined.get(&bound?) else {
+        return None;
+    };
+    match params.get(*index as usize)? {
+        Value::Int(n) => Some((*n).clamp(0, count as i32) as u32),
+        _ => None,
+    }
+}
+
+/// Whether a loop in `instructions` counts a parameter, without stopping
+/// early: [`Module::typical_work_given`] counts it at the parameter's value.
+fn counts_param(
+    instructions: &[Instruction],
+    defined: &std::collections::HashMap<ValueId, &Op>,
+) -> bool {
+    instructions.iter().any(|instruction| {
+        let own = matches!(
+            &instruction.op,
+            Op::Loop { bound: Some(bound), until: None, .. }
+                if matches!(defined.get(bound), Some(Op::Param(_)))
+        );
+        own || instruction
+            .op
+            .blocks()
+            .into_iter()
+            .any(|block| counts_param(&block.body, defined))
+    })
 }
 
 /// Every value's defining operation, nested blocks included.
@@ -1512,6 +1549,7 @@ fn typical_in(
     instructions: &[Instruction],
     functions: &[u64],
     defined: &std::collections::HashMap<ValueId, &Op>,
+    params: &[Value],
 ) -> u64 {
     instructions.iter().fold(0u64, |sum, instruction| {
         let work = match &instruction.op {
@@ -1522,12 +1560,18 @@ fn typical_in(
                 body,
                 ..
             } => {
-                let inner = typical_in(&body.body, functions, defined).saturating_add(
+                let inner = typical_in(&body.body, functions, defined, params).saturating_add(
                     until
                         .as_ref()
-                        .map_or(0, |b| typical_in(&b.body, functions, defined)),
+                        .map_or(0, |b| typical_in(&b.body, functions, defined, params)),
                 );
-                let runs = if bound.is_some_and(|bound| counts_rounds(bound, defined)) {
+                let given = until
+                    .is_none()
+                    .then(|| param_count(*bound, *count, defined, params))
+                    .flatten();
+                let runs = if let Some(given) = given {
+                    given
+                } else if bound.is_some_and(|bound| counts_rounds(bound, defined)) {
                     1
                 } else if bound.is_some() || until.is_some() {
                     (*count).min(TYPICAL_OPEN_LOOP)
@@ -1538,17 +1582,21 @@ fn typical_in(
             }
             Op::If {
                 then, otherwise, ..
-            } => typical_in(&then.body, functions, defined).max(typical_in(
+            } => typical_in(&then.body, functions, defined, params).max(typical_in(
                 &otherwise.body,
                 functions,
                 defined,
+                params,
             )),
             Op::Match {
                 arms, otherwise, ..
             } => arms
                 .iter()
-                .map(|(_, block)| typical_in(&block.body, functions, defined))
-                .fold(typical_in(&otherwise.body, functions, defined), u64::max),
+                .map(|(_, block)| typical_in(&block.body, functions, defined, params))
+                .fold(
+                    typical_in(&otherwise.body, functions, defined, params),
+                    u64::max,
+                ),
             Op::Call(index, _) => functions.get(*index as usize).copied().unwrap_or(0),
             _ => 0,
         };
@@ -1613,18 +1661,40 @@ impl Module {
     /// what its function takes. An estimate of size, for choosing where a
     /// run goes, never a bound.
     pub fn typical_work(&self) -> u64 {
+        self.typical_work_given(&[])
+    }
+
+    /// [`Module::typical_work`] for a run given `params`: a loop that
+    /// counts a parameter, and does not stop early, runs its body that
+    /// parameter's value of times, clamped to its bound.
+    pub fn typical_work_given(&self, params: &[Value]) -> u64 {
         let mut per_function: Vec<u64> = Vec::with_capacity(self.functions.len());
         for function in &self.functions {
-            let work = typical_block(&function.body, &per_function);
+            let work = typical_block(&function.body, &per_function, params);
             per_function.push(work);
         }
         std::iter::once(&self.entry)
             .chain(&self.merge)
             .chain(&self.init)
-            .map(|function| typical_block(&function.body, &per_function))
+            .map(|function| typical_block(&function.body, &per_function, params))
             .max()
             .unwrap_or(0)
             .max(1)
+    }
+
+    /// Whether a run's [`Module::typical_work_given`] depends on its
+    /// parameters: some loop counts one.
+    pub fn typical_reads_params(&self) -> bool {
+        self.functions
+            .iter()
+            .chain(std::iter::once(&self.entry))
+            .chain(&self.merge)
+            .chain(&self.init)
+            .any(|function| {
+                let mut defined = std::collections::HashMap::new();
+                defining(&function.body, &mut defined);
+                counts_param(&function.body, &defined)
+            })
     }
 
     /// Whether [`account()`] has placed the module's work checks.

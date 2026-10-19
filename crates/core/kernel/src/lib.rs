@@ -16,7 +16,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub use entelechy_abi::pad;
 pub use entelechy_abi::{
@@ -53,6 +53,39 @@ pub const FEW_FRESH_BYTES: u64 = 1 << 20;
 /// device costs; fewer stay, the device's work kept whole.
 pub const FEW_LONG_WORK: u64 = 100_000;
 
+/// The operations one element of a Kernel's run takes as a rule, for
+/// sizing it: [`Validated::typical_work`], or, where a loop counts a
+/// parameter, [`Validated::typical_work_given`] the run's own.
+#[derive(Debug)]
+struct Typical {
+    work: u64,
+    by_params: bool,
+    /// The last parameters a run was sized by, and their work: a run's
+    /// parameters seldom change from frame to frame.
+    given: Mutex<Option<(Vec<Value>, u64)>>,
+}
+
+impl Typical {
+    /// The work one element of a run given `params` takes.
+    fn of(&self, run: &Validated, params: &[Value]) -> u64 {
+        if !self.by_params {
+            return self.work;
+        }
+        let mut given = self
+            .given
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((last, work)) = given.as_ref()
+            && last.as_slice() == params
+        {
+            return *work;
+        }
+        let work = run.typical_work_given(params);
+        *given = Some((params.to_vec(), work));
+        work
+    }
+}
+
 pub mod clock;
 mod later;
 mod prepare;
@@ -84,7 +117,7 @@ enum Body {
         routed: Option<Arc<str>>,
         /// The operations one element takes as a rule
         /// ([`Validated::typical_work`]), for sizing a run.
-        typical: u64,
+        typical: Typical,
         /// The module prepared on the ordered backend, the first time a run
         /// small enough goes there; `None` when that backend refuses it.
         on_ordered: std::sync::OnceLock<Option<Box<dyn Prepared>>>,
@@ -266,7 +299,11 @@ impl Candidate {
             manifest: self.module.manifest.clone(),
             source: self.source,
             body: Body::Kernel {
-                typical: self.run.typical_work(),
+                typical: Typical {
+                    work: self.run.typical_work(),
+                    by_params: self.run.typical_reads_params(),
+                    given: Mutex::new(None),
+                },
                 module: Box::new(self.module),
                 run: Box::new(self.run),
                 prepared: self.prepared,
@@ -1100,10 +1137,16 @@ impl Runtime {
     /// by its size, or `None`: its elements times its typical work are at
     /// most `small`, and it reads no Field the main backend made in this
     /// evaluation. The choice reads the run and nothing of time.
-    fn sized_off(&self, run: &Validated, typical: u64, invocation: &Invocation) -> Option<Why> {
+    fn sized_off(
+        &self,
+        run: &Validated,
+        typical: &Typical,
+        invocation: &Invocation,
+    ) -> Option<Why> {
         if self.small == 0 || self.ordered.is_none() || !self.backend.has_device() {
             return None;
         }
+        let typical = typical.of(run, &invocation.params);
         let elements = match run.manifest.mode {
             entelechy_ir::Mode::Reduce | entelechy_ir::Mode::Prefix { .. } => invocation
                 .inputs
@@ -1334,7 +1377,7 @@ impl Runtime {
             ..
         } = &version.body
             && version.routed().is_none()
-            && self.sized_off(run, *typical, invocation).is_none()
+            && self.sized_off(run, typical, invocation).is_none()
         {
             let granted = self.scope_grants(version);
             let backend = Arc::clone(&self.backend);
@@ -1417,7 +1460,7 @@ impl Runtime {
                 // it or the run is small enough; the main one otherwise.
                 let sized = match version.routed() {
                     Some(_) => None,
-                    None => self.sized_off(run, *typical, invocation),
+                    None => self.sized_off(run, typical, invocation),
                 };
                 let off: Option<(Arc<dyn Backend>, &dyn Prepared, Why)> =
                     match (&self.ordered, version.routed(), sized) {
