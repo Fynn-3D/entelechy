@@ -465,8 +465,12 @@ impl Evaluator {
             params: params.clone(),
             inputs: input_keys,
             domain,
+            // Everything `time.read` reads: the clock, the sound device's
+            // rate and what it holds.
             time: reads_clock.then_some(
-                context.time.to_bits() ^ u64::from(context.rate.to_bits()).rotate_left(7),
+                context.time.to_bits()
+                    ^ u64::from(context.rate.to_bits()).rotate_left(7)
+                    ^ u64::from(context.queued).rotate_left(39),
             ),
             input: reads_input.then_some(context.input_fingerprint()),
         };

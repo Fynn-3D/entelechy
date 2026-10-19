@@ -3022,3 +3022,42 @@ output r <- final.result;",
         .unwrap();
     assert!(again.executed.is_empty(), "{:?}", again.executed);
 }
+
+#[test]
+fn what_the_sound_device_holds_moves_a_clock_readers_key() {
+    // At the same time, a node reading queued() runs again when the
+    // device holds another count.
+    let mut runtime = runtime();
+    load(
+        &mut runtime,
+        "kernel test.ahead@1 { requires { field.write; time.read; } output result: Rows<Int>; compute { return queued(); } }",
+    );
+    let graph = entelechy_scene::parse(
+        "node ahead: test.ahead@1 { domain = 1; }\noutput r <- ahead.result;",
+    )
+    .unwrap();
+    let mut evaluator = Evaluator::new();
+    let mut frame = |queued: u32| {
+        let context = Context {
+            time: 1.0,
+            queued,
+            ..Context::default()
+        };
+        let report = evaluator
+            .evaluate(
+                &graph,
+                &mut runtime,
+                &BTreeMap::new(),
+                &context,
+                &BTreeMap::new(),
+            )
+            .unwrap();
+        (
+            report.executed.len(),
+            runtime.host().element(report.output, 0).unwrap()[0],
+        )
+    };
+    assert_eq!(frame(100), (1, 100));
+    assert_eq!(frame(100).0, 0, "the same count, nothing runs");
+    assert_eq!(frame(250), (1, 250), "another count runs it again");
+}
