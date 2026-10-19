@@ -92,6 +92,18 @@ pub(crate) fn selectable(ty: Type) -> bool {
     matches!(ty, Type::Scalar(_) | Type::Vector(..)) && !ty.is_64bit()
 }
 
+/// Whether a block holds a loop whose count is read at run time.
+pub(crate) fn counts_at_run_time(body: &[Instruction]) -> bool {
+    body.iter().any(|instruction| {
+        matches!(instruction.op, Op::Loop { bound: Some(_), .. })
+            || instruction
+                .op
+                .blocks()
+                .iter()
+                .any(|block| counts_at_run_time(&block.body))
+    })
+}
+
 /// The most elements an `each` writes each at a place named in the
 /// source; a longer one writes at the counter's place.
 const WRITTEN_PLACES: u32 = 64;
@@ -541,6 +553,21 @@ impl Emitter<'_> {
                 // The array a variable, each run of the body writing its
                 // element at the counter's place.
                 self.line(depth, &format!("var v{}: {ty_name};", id.0));
+                if counts_at_run_time(&body.body) {
+                    // Written out, a block per element with its counter a
+                    // literal: as a loop, a browser's compiler (Chrome's
+                    // WebGPU) computes such a body wrong.
+                    self.loops.push((*id, false));
+                    for place in 0..*count {
+                        self.line(depth, "{");
+                        self.line(depth + 1, &format!("let it{}: i32 = {place}i;", id.0));
+                        let element = self.block(body, depth + 1);
+                        self.line(depth + 1, &format!("v{}[{place}] = {element};", id.0));
+                        self.line(depth, "}");
+                    }
+                    self.loops.pop();
+                    return;
+                }
                 self.line(
                     depth,
                     &format!(
