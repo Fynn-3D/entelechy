@@ -2745,3 +2745,50 @@ fn a_scatter_gives_its_pairs_back_to_the_pile() {
     );
     host.release(out).unwrap();
 }
+
+#[test]
+fn a_frame_that_needs_one_buffer_at_a_time_keeps_one() {
+    // Two outputs of one size, released one after the other, each before
+    // the next is made: the last kept goes round, the other ages out.
+    let Some(gpu) = gpu() else { return };
+    let module = compile(
+        "kernel t.fill@1 { requires { field.write; } output result: Image; compute { return vec4(1.0, 0.0, 0.0, 1.0); } }",
+    )
+    .unwrap();
+    let prepared = gpu.prepare(&module).unwrap();
+    let mut host = Host::new(1 << 24);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Grid(64, 64),
+        context: Context::default(),
+    };
+    let spare = |gpu: &GpuBackend| {
+        gpu.memory()
+            .into_iter()
+            .find(|(part, _)| *part == "spare buffers")
+            .map_or(0, |(_, bytes)| bytes)
+    };
+    let run = |host: &mut Host| {
+        let mut scope = Scope::new(host, all());
+        Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0]
+    };
+    gpu.evaluation_begun();
+    let (a, b) = (run(&mut host), run(&mut host));
+    host.release(a).unwrap();
+    host.release(b).unwrap();
+    let one = spare(&gpu) / 2;
+    assert!(one >= 64 * 64 * 16, "both buffers are kept");
+    for _ in 0..3 {
+        gpu.evaluation_begun();
+        for _ in 0..2 {
+            let out = run(&mut host);
+            host.release(out).unwrap();
+        }
+    }
+    assert_eq!(
+        spare(&gpu),
+        one,
+        "one buffer goes round, the other aged out"
+    );
+}

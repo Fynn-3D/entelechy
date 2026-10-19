@@ -160,12 +160,15 @@ impl Spare {
                 && buffer.size() <= size.saturating_mul(2).max(256)
         };
         // An unmarked buffer first, so marked ones wait for the Fields made
-        // from theirs.
+        // from theirs; of equals the last kept, so the few a frame needs at
+        // once go round and the rest age out ([`Spare::evaluation_begun`]).
         if let Some(index) = held
             .iter()
             .enumerate()
             .filter(|(_, (buffer, _, _))| fits(buffer))
-            .min_by_key(|(_, (buffer, holds, _))| (holds.is_some(), buffer.size()))
+            .min_by_key(|(index, (buffer, holds, _))| {
+                (holds.is_some(), buffer.size(), std::cmp::Reverse(*index))
+            })
             .map(|(index, _)| index)
         {
             return held.remove(index).0;
