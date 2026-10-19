@@ -42,7 +42,8 @@ fn kernels_prepared_in_turns_wait_then_run_as_at_once() {
 
     let mut session = Session::open(&dir.join("scene.esn"), None, 1 << 20);
     session.prepare_in_turns();
-    // The first turn queues the scene's five Kernels and prepares a couple.
+    // The first turn queues the scene's five Kernels and prepares them
+    // for a moment.
     session.sync_a_turn();
     assert!(session.scene_waiting(), "the scene waits for its Kernels");
     assert!(session.preparing_left() > 0);
@@ -52,8 +53,8 @@ fn kernels_prepared_in_turns_wait_then_run_as_at_once() {
         syncs += 1;
         assert!(syncs < 20, "the turns never finish");
     }
-    // More than one sync: never all at once.
-    assert!(syncs > 2, "{syncs} syncs");
+    // More than one sync: never inside the sync that found them.
+    assert!(syncs >= 2, "{syncs} syncs");
     assert_eq!(session.preparing_left(), 0);
     assert_eq!(result(&mut session), expected);
     let _ = std::fs::remove_dir_all(&dir);
@@ -118,7 +119,7 @@ fn kernels_of_used_documents_are_waited_for_too() {
         syncs += 1;
         assert!(syncs < 20, "the turns never finish");
     }
-    assert!(syncs > 2, "{syncs} syncs");
+    assert!(syncs >= 2, "{syncs} syncs");
     assert_eq!(result(&mut session), expected);
     let _ = std::fs::remove_dir_all(&dir);
 }

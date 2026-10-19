@@ -109,9 +109,11 @@ type Display = entelechy_gpu::present::Display;
 /// Backends opened, and the main one's display when it has one.
 type Opened = (Box<dyn Backend>, Option<Box<dyn Backend>>, Option<Display>);
 
-/// The Kernels prepared a sync where no thread can start: a few, so one
-/// sync holds the page, and the device it shares, only briefly.
-const TURN: usize = 2;
+/// How long a sync prepares Kernels where no thread can start, at least
+/// one each: briefly, so one sync holds the page, and the device it
+/// shares, only a moment, while a scene's hundreds of Kernels need few
+/// syncs.
+const TURN: std::time::Duration = std::time::Duration::from_millis(12);
 
 impl Session {
     /// Creates a CPU-backed session; [`Session::sync`] loads files.
@@ -476,10 +478,11 @@ impl Session {
 
     fn sync_apart(&mut self, apart: bool) -> Vec<Event> {
         let mut events = std::mem::take(&mut self.later);
-        // Where no thread can start (a page), a couple of the Kernels
-        // waiting are prepared each sync, so the page and its device get
-        // their turns between them; elsewhere the workers do.
-        self.runtime.prepare_turn(TURN);
+        // Where no thread can start (a page), the Kernels waiting are
+        // prepared for a moment each sync ([`TURN`]), so the page and its
+        // device get their turns between them; elsewhere the workers do.
+        let began = entelechy_kernel::clock::now();
+        while self.runtime.prepare_turn(1) > 0 && entelechy_kernel::clock::since(began) < TURN {}
         let store = Arc::clone(self.scene.store());
         // Every document walks the files it reaches; a path is looked at
         // once a sync.
