@@ -2652,3 +2652,42 @@ fn a_field_made_from_another_is_uploaded_on_its_changed_pages() {
         .unwrap();
     assert_eq!(run(&mut host, after), (words, len as u64 * 4));
 }
+
+#[test]
+fn the_pile_lets_go_what_an_evaluation_went_without() {
+    // A released output's buffer waits on the pile for the next output of
+    // its size; once a whole evaluation has passed without taking it, the
+    // next lets it go.
+    let Some(gpu) = gpu() else { return };
+    let module = compile(
+        "kernel t.fill@1 { requires { field.write; } output result: Image; compute { return vec4(1.0, 0.0, 0.0, 1.0); } }",
+    )
+    .unwrap();
+    let prepared = gpu.prepare(&module).unwrap();
+    let mut host = Host::new(1 << 24);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Grid(64, 64),
+        context: Context::default(),
+    };
+    let spare = |gpu: &GpuBackend| {
+        gpu.memory()
+            .into_iter()
+            .find(|(part, _)| *part == "spare buffers")
+            .map_or(0, |(_, bytes)| bytes)
+    };
+    gpu.evaluation_begun();
+    let mut scope = Scope::new(&mut host, all());
+    let out =
+        Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
+    host.release(out).unwrap();
+    assert!(
+        spare(&gpu) >= 64 * 64 * 16,
+        "the released output's buffer is kept"
+    );
+    gpu.evaluation_begun();
+    assert!(spare(&gpu) > 0, "an evaluation may still take it");
+    gpu.evaluation_begun();
+    assert_eq!(spare(&gpu), 0, "a whole evaluation went without it");
+}

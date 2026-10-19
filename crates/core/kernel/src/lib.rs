@@ -1129,6 +1129,10 @@ impl Runtime {
     /// Starts an evaluation: no Field is yet the main backend's own of it.
     pub fn begin_evaluation(&mut self) {
         self.fresh.clear();
+        self.backend.evaluation_begun();
+        if let Some(ordered) = &self.ordered {
+            ordered.evaluation_begun();
+        }
     }
 
     /// Where the last execution ran, and why when off the main backend.

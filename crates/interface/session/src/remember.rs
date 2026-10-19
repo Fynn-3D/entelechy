@@ -144,6 +144,9 @@ impl Backend for Remembered {
     fn memory(&self) -> Vec<(&'static str, u64)> {
         self.inner.memory()
     }
+    fn evaluation_begun(&self) {
+        self.inner.evaluation_begun();
+    }
     fn execute_repeated(
         &self,
         prepared: &dyn Prepared,

@@ -356,6 +356,10 @@ impl Backend for GpuBackend {
         self.frames.done()
     }
 
+    fn evaluation_begun(&self) {
+        self.spare.evaluation_begun();
+    }
+
     fn memory(&self) -> Vec<(&'static str, u64)> {
         let failures = self
             .failures

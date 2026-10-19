@@ -15,8 +15,9 @@ pub(crate) struct DeviceImage {
     pub(crate) holds: Option<Held>,
 }
 
-/// A buffer on the pile, and what it holds where that is known.
-pub(crate) type Kept = (wgpu::Buffer, Option<Held>);
+/// A buffer on the pile, what it holds where that is known, and the
+/// evaluation it was kept in ([`Spare::evaluation_begun`]).
+pub(crate) type Kept = (wgpu::Buffer, Option<Held>, u64);
 
 /// What an uploaded buffer holds: a Field's words, and, where that Field
 /// was made from other words, those and the storage words it may differ
@@ -33,6 +34,8 @@ pub(crate) struct Held {
 #[derive(Clone, Default)]
 pub(crate) struct Spare {
     pub(crate) held: Arc<Mutex<Vec<Kept>>>,
+    /// The evaluations begun, by which what the pile keeps is aged.
+    evaluations: Arc<std::sync::atomic::AtomicU64>,
     /// Buffers let go, destroyed once the next run is given to the device
     /// ([`Spare::bury`]): a command of a run being made may still bind
     /// one. Destroyed, not dropped: a page's device frees a buffer dropped
@@ -44,7 +47,7 @@ pub(crate) struct Spare {
 /// How many buffers the pile holds, and how many bytes; beyond that they
 /// return to the driver. The byte bound holds a frame of ten million
 /// triangles drawn at 4K.
-pub(crate) const SPARE_BUFFERS: usize = 12;
+pub(crate) const SPARE_BUFFERS: usize = 256;
 
 pub(crate) const SPARE_BYTES: u64 = 1024 * 1024 * 1024;
 
@@ -161,8 +164,8 @@ impl Spare {
         if let Some(index) = held
             .iter()
             .enumerate()
-            .filter(|(_, (buffer, _))| fits(buffer))
-            .min_by_key(|(_, (buffer, holds))| (holds.is_some(), buffer.size()))
+            .filter(|(_, (buffer, _, _))| fits(buffer))
+            .min_by_key(|(_, (buffer, holds, _))| (holds.is_some(), buffer.size()))
             .map(|(index, _)| index)
         {
             return held.remove(index).0;
@@ -186,10 +189,11 @@ impl Spare {
             return;
         }
         let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
-        held.push((buffer, holds));
-        let mut bytes: u64 = held.iter().map(|(buffer, _)| buffer.size()).sum();
+        let now = self.evaluations.load(std::sync::atomic::Ordering::Relaxed);
+        held.push((buffer, holds, now));
+        let mut bytes: u64 = held.iter().map(|(buffer, _, _)| buffer.size()).sum();
         while held.len() > SPARE_BUFFERS || bytes > SPARE_BYTES {
-            let (gone, _) = held.remove(0);
+            let (gone, _, _) = held.remove(0);
             bytes -= gone.size();
             lock_gone(&self.gone).push(gone);
         }
@@ -198,7 +202,27 @@ impl Spare {
     /// The bytes of the buffers kept.
     pub(crate) fn bytes(&self) -> u64 {
         let held = self.held.lock().unwrap_or_else(|p| p.into_inner());
-        held.iter().map(|(buffer, _)| buffer.size()).sum()
+        held.iter().map(|(buffer, _, _)| buffer.size()).sum()
+    }
+
+    /// An evaluation begins: what was kept before the last one began and
+    /// went untaken through it is let go ([`Spare::let_go`]), as a scene's
+    /// frames ask for the same buffers frame after frame and those no
+    /// frame took will not be asked for again soon.
+    pub(crate) fn evaluation_begun(&self) {
+        let now = self
+            .evaluations
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
+        let mut gone = lock_gone(&self.gone);
+        held.retain(|(buffer, _, kept)| {
+            let fresh = kept + 1 >= now;
+            if !fresh {
+                gone.push(buffer.clone());
+            }
+            fresh
+        });
     }
 
     /// A buffer nothing reads after the run being made: destroyed once that
@@ -250,8 +274,8 @@ impl Spare {
         let (index, spans) = held
             .iter()
             .enumerate()
-            .filter(|(_, (buffer, _))| buffer.size() >= size)
-            .filter_map(|(index, (_, holds))| Some((index, spans_for(holds.as_ref()?)?)))
+            .filter(|(_, (buffer, _, _))| buffer.size() >= size)
+            .filter_map(|(index, (_, holds, _))| Some((index, spans_for(holds.as_ref()?)?)))
             .min_by_key(|(_, spans)| spans.iter().map(ExactSizeIterator::len).sum::<usize>())?;
         Some((held.remove(index).0, spans))
     }

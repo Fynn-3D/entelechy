@@ -399,6 +399,10 @@ pub trait Backend: Send + Sync {
         None
     }
 
+    /// An evaluation begins: a backend that keeps memory between runs may
+    /// let go what the evaluations before went without. Nothing by default.
+    fn evaluation_begun(&self) {}
+
     /// What the backend holds of its own between runs, apart from the
     /// Fields it keeps resident: each part by name, in bytes, for a map of
     /// where memory is. None by default.

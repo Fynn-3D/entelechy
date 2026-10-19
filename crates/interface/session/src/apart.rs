@@ -291,6 +291,9 @@ impl Backend for Apart {
     fn memory(&self) -> Vec<(&'static str, u64)> {
         self.inner.memory()
     }
+    fn evaluation_begun(&self) {
+        self.inner.evaluation_begun();
+    }
     fn submitted(&self) -> Option<Box<dyn entelechy_rules::Check>> {
         self.inner.submitted()
     }
