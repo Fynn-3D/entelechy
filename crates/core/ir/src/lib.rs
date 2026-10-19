@@ -28,7 +28,7 @@ pub use fuse::{
     FuseError, InputUse, counted, counts_only, extent_params, fuse, fuse_indexed, fuse_outputs,
     fused_name, input_use, offset_read, samples_only,
 };
-pub use optimize::{optimize, renumbered};
+pub use optimize::{carried_builders, optimize, renumbered};
 pub use validate::{Validated, ValidationError, linear_index_type, validate};
 
 /// The IR version, raised when a module's validity or meaning changes.

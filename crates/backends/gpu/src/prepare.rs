@@ -467,6 +467,14 @@ impl GpuBackend {
     /// `module` as the device takes it, every pass validated and none
     /// built ([`Lazy`]), or why it cannot run here.
     pub(crate) fn prepare_kernel(&self, module: &Validated) -> Result<Lazy, Unbuilt> {
+        // A long builder holding a loop counted at run time runs as a loop
+        // carrying its array: as a builder's loop, Chrome's WebGPU (its
+        // robustness on) computes it wrong.
+        let carried = entelechy_ir::carried_builders(module)
+            .map(entelechy_ir::validate)
+            .transpose()
+            .map_err(|error| Unbuilt::from(format!("`{}`: {error}", module.manifest.id)))?;
+        let module = carried.as_ref().unwrap_or(module);
         let shaders = self.shaders(module)?;
         Ok(Lazy {
             id: module.manifest.id.to_string(),

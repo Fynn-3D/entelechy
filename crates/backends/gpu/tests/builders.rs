@@ -1,5 +1,6 @@
 //! A builder's shader, without a device: a long body is written once, however
-//! many elements it builds, and a short array is written at named places.
+//! many elements it builds, a short array is written at named places, and a
+//! long builder holding a loop counted at run time runs as the GPU takes it.
 
 use entelechy_compiler::compile;
 use entelechy_gpu::wgsl::emit;
@@ -46,7 +47,9 @@ fn a_builder_holding_a_loop_counted_at_run_time_runs_as_a_loop_carrying_its_arra
         } }",
     )
     .unwrap_or_else(|error| panic!("{error}"));
-    let shader = emit(&module);
+    // The IR keeps the builder; the GPU runs it as the pass writes it.
+    let carried = entelechy_ir::carried_builders(&module).expect("a long builder holding one");
+    let shader = emit(&entelechy_ir::validate(carried).unwrap_or_else(|error| panic!("{error}")));
     // A loop carrying the array: the body once, no element at a computed
     // place.
     assert_eq!(shader.matches("exp(").count(), 1, "{shader}");

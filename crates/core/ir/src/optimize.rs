@@ -40,9 +40,8 @@ const BIG_ARG_WORDS: usize = 32;
 const INLINE_BIG_LIMIT: usize = 1024;
 /// An `each` builder whose elements together hold at most this many
 /// instructions, nested blocks counted, is written out element by
-/// element; a longer one runs as a builder's loop, or, holding a loop
-/// counted at run time, as a loop carrying its array
-/// ([`counts_at_run_time`]).
+/// element; a longer one runs as a builder's loop (or, for a backend that
+/// asks, as [`carried_builders`] writes it).
 const UNROLL_LIMIT: usize = 512;
 
 /// Optimizes every function of a module. The result computes the same
@@ -89,6 +88,54 @@ pub fn optimize(module: Module) -> Module {
         entry,
         merge,
         init,
+    })
+}
+
+/// `module` with each long `each` builder that holds a loop counted at
+/// run time run as a loop carrying its array, or written out element by
+/// element where its element has no zero to start the array from; `None`
+/// when it holds no such builder. It is for a backend whose device
+/// computes such a builder wrong as a builder's loop, and takes the
+/// module as it is handed one, its work accounted: the loop it makes
+/// counts no work, as the builder counted none, and nothing else moves.
+/// The result computes the same words and validates whenever `module`
+/// does.
+pub fn carried_builders(module: &Module) -> Option<Module> {
+    fn holds(body: &[Instruction]) -> bool {
+        body.iter().any(|instruction| {
+            matches!(&instruction.op, Op::Each { count, body }
+                if *count as usize * size(&body.body) > UNROLL_LIMIT
+                    && counts_at_run_time(&body.body))
+                || instruction
+                    .op
+                    .blocks()
+                    .iter()
+                    .any(|block| holds(&block.body))
+        })
+    }
+    let functions = module
+        .functions
+        .iter()
+        .chain(std::iter::once(&module.entry))
+        .chain(&module.merge)
+        .chain(&module.init);
+    if !functions.clone().any(|function| holds(&function.body)) {
+        return None;
+    }
+    let carried = |function: &Function| {
+        let mut next = highest(&function.body) + 1;
+        renumbered(Function {
+            body: unrolled(&function.body, &module.structs, &mut next, true),
+            ..function.clone()
+        })
+    };
+    Some(Module {
+        manifest: module.manifest.clone(),
+        structs: module.structs.clone(),
+        functions: module.functions.iter().map(carried).collect(),
+        entry: carried(&module.entry),
+        merge: module.merge.as_ref().map(carried),
+        init: module.init.as_ref().map(carried),
     })
 }
 
@@ -652,21 +699,35 @@ fn highest(body: &[Instruction]) -> u32 {
 /// `body` with each short `each` builder written out, innermost first:
 /// its body once per element under fresh ids, the body's own `Index`
 /// that element's position, and the array built from the elements.
-fn unrolled(body: &[Instruction], structs: &[StructDef], next: &mut u32) -> Vec<Instruction> {
+///
+/// With `carry`, only the long builders that hold a loop counted at run
+/// time are rewritten: each as a loop carrying its array, or written out
+/// where its element has no zero ([`carried_builders`]).
+fn unrolled(
+    body: &[Instruction],
+    structs: &[StructDef],
+    next: &mut u32,
+    carry: bool,
+) -> Vec<Instruction> {
     let mut out = Vec::with_capacity(body.len());
     for instruction in body {
         let mut instruction = instruction.clone();
         for block in instruction.op.blocks_mut() {
-            block.body = unrolled(&block.body, structs, next);
+            block.body = unrolled(&block.body, structs, next, carry);
         }
+        let long_and_timed = |count: u32, body: &Block| {
+            count as usize * size(&body.body) > UNROLL_LIMIT && counts_at_run_time(&body.body)
+        };
         match &instruction.op {
             Op::Each { count, body }
-                if *count as usize * size(&body.body) > UNROLL_LIMIT
-                    && counts_at_run_time(&body.body)
+                if carry
+                    && long_and_timed(*count, body)
                     && carried_loop(&instruction, *count, body, structs, next, &mut out) => {}
             Op::Each { count, body }
-                if *count as usize * size(&body.body) <= UNROLL_LIMIT
-                    || counts_at_run_time(&body.body) =>
+                if match carry {
+                    true => long_and_timed(*count, body),
+                    false => *count as usize * size(&body.body) <= UNROLL_LIMIT,
+                } =>
             {
                 let mut elements = Vec::with_capacity(*count as usize);
                 for position in 0..*count {
@@ -686,10 +747,7 @@ fn unrolled(body: &[Instruction], structs: &[StructDef], next: &mut u32) -> Vec<
     out
 }
 
-/// Whether a block holds a loop whose count is read at run time. A
-/// builder holding one runs as a loop carrying its array
-/// ([`carried_loop`]): Chrome's WebGPU computes such a builder wrong as
-/// a builder's loop.
+/// Whether a block holds a loop whose count is read at run time.
 fn counts_at_run_time(body: &[Instruction]) -> bool {
     body.iter().any(|instruction| {
         matches!(instruction.op, Op::Loop { bound: Some(_), .. })
@@ -1256,7 +1314,7 @@ impl Ctx<'_> {
     fn function(&self, function: &Function) -> Function {
         // Short builders are written out first, so their positions fold.
         let mut next = highest(&function.body) + 1;
-        let body = unrolled(&function.body, self.structs, &mut next);
+        let body = unrolled(&function.body, self.structs, &mut next, false);
         // Short-circuits fold first, so a loop may lift what they compute.
         let body = self.folded(&body);
         let body = self.hoisted(&body);
