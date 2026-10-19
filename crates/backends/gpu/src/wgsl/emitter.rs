@@ -551,6 +551,7 @@ impl Emitter<'_> {
             Op::Time => "ctx[0].z".to_owned(),
             Op::Clock => unreachable!("the GPU refuses a module holding a Double"),
             Op::Rate => "ctx[1].w".to_owned(),
+            Op::Queued => "i32(bitcast<u32>(ctx[7].w))".to_owned(),
             Op::Pointer => "ctx[1].xy".to_owned(),
             Op::PointerDown => "button_down(0)".to_owned(),
             Op::Button(code) => format!("button_down({})", v(code)),

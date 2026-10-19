@@ -178,6 +178,11 @@ impl Audio {
         self.rate
     }
 
+    /// The samples per channel the device holds and has not yet played.
+    pub fn queued(&self) -> u32 {
+        (self.ring.len() / self.channels.max(1)) as u32
+    }
+
     /// Whether the ring has room for a frame's worth of sound at 60 Hz, so
     /// a frame may make another block. A frame's worth, not room for a
     /// block the size of the last: a sound whose blocks are as long as the

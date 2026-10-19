@@ -213,7 +213,7 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
         (
             "context",
             "let t = time() + rate() + window().x + window().y + scale() + pointer().x + pointer().y + wheel().x + wheel().y; let keys = int(key(65)) + int(key(37)) * 2 + int(pointer_down()) * 4 + int(button(1)) * 8 + int(button(2)) * 16; let pad = stick(0) + stick(1) * 2.0 + stick(2) * 4.0 + stick(9); let held = int(button(8)) + int(button(11)) * 2 + int(button(16)) * 4 + int(button(23)) * 8; let chars = typed(0) * 3 + typed(1) + typed(2) + typed(-1) + typed(40) + typed(i % 3);",
-            "Out { f: t + pad.x + pad.y, i: keys + held * 32 + pads() * 1024 + chars, b: key(32), v: vec3(window().x, scale(), pad.y) }",
+            "Out { f: t + pad.x + pad.y, i: keys + held * 32 + pads() * 1024 + chars + queued() * 7, b: key(32), v: vec3(window().x, scale(), pad.y) }",
         ),
         (
             "params",
@@ -549,6 +549,7 @@ pub fn context() -> Context {
     Context {
         time: 2_592_000.123,
         rate: 48000.0,
+        queued: 2_400,
         input,
         window: [320.0, 200.0],
         scale: 2.0,

@@ -1228,6 +1228,9 @@ pub enum Op {
     /// The sound device's clock in samples per second as `Float`, zero
     /// without a device. Context: `time.read`.
     Rate,
+    /// The samples (per channel) the sound device holds and has not yet
+    /// played, as `Int`, zero without a device. Context: `time.read`.
+    Queued,
     /// Pointer position in output pixels as `Vec2`. Context: `input.read`.
     Pointer,
     /// Whether the pointer button is held, as `Bool`. Context: `input.read`.

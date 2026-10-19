@@ -1163,6 +1163,9 @@ pub struct Context {
     pub time: f64,
     /// The driving sound device's samples per second; zero without one.
     pub rate: f32,
+    /// The samples (per channel) the sound device holds and has not yet
+    /// played; zero without one.
+    pub queued: u32,
     /// Pointer and key state.
     pub input: InputState,
     /// The window's size in physical pixels; zero by zero without one.
@@ -1177,6 +1180,7 @@ impl Default for Context {
         Self {
             time: 0.0,
             rate: 0.0,
+            queued: 0,
             input: InputState::default(),
             window: [0.0, 0.0],
             scale: 1.0,

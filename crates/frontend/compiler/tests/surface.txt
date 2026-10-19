@@ -481,6 +481,8 @@ builtin put requires field.write
   put(memory: Rows<T>, index: Int, value: T) -> T
   put(memory: Volume<T>, at: IVec3, value: T) -> T
   put(memory: Volume<T>, at: Vec3, value: T) -> T
+builtin queued requires time.read
+  queued() -> Int
 builtin radians
   radians(x: Float) -> Float
   radians(x: Vec2) -> Vec2

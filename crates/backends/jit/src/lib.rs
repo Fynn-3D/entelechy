@@ -75,6 +75,8 @@ pub struct Ctx {
     clock: f64,
     time: f32,
     rate: f32,
+    /// The samples the sound device holds (`queued()`), at most `i32::MAX`.
+    queued: u32,
     pointer: [f32; 2],
     wheel: [f32; 2],
     /// A pad's axis pairs: the left stick, the right, the triggers.
@@ -424,6 +426,7 @@ fn shared(
         clock: invocation.context.time,
         time: invocation.context.float_time(),
         rate: invocation.context.rate,
+        queued: invocation.context.queued.min(i32::MAX as u32),
         pointer: input.pointer,
         wheel: input.wheel,
         sticks: input.sticks,
@@ -520,6 +523,7 @@ fn compute_into(
         clock: t.clock,
         time: t.time,
         rate: t.rate,
+        queued: t.queued,
         pointer: t.pointer,
         wheel: t.wheel,
         sticks: t.sticks,
@@ -1576,6 +1580,7 @@ pub(crate) mod offsets {
     pub const CLOCK: i32 = std::mem::offset_of!(Ctx, clock) as i32;
     pub const TIME: i32 = std::mem::offset_of!(Ctx, time) as i32;
     pub const RATE: i32 = std::mem::offset_of!(Ctx, rate) as i32;
+    pub const QUEUED: i32 = std::mem::offset_of!(Ctx, queued) as i32;
     pub const POINTER: i32 = std::mem::offset_of!(Ctx, pointer) as i32;
     pub const WHEEL: i32 = std::mem::offset_of!(Ctx, wheel) as i32;
     pub const STICKS: i32 = std::mem::offset_of!(Ctx, sticks) as i32;

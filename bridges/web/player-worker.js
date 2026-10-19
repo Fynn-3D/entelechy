@@ -93,6 +93,8 @@ async function step() {
   // frame is made while its ring has room for a frame's worth at 60 Hz,
   // and asked again soon (`AHEAD`) while it has not.
   if (sounding && ring && held + sounding.rate / 60 > ring) return AHEAD;
+  // What the card holds, which the frame's `queued()` reads.
+  x.entelechy_play_sound_queued(session, sounding ? held : 0);
   const framed = await frame(session, size.width, size.height, size.scale, sounding ? sounding.rate : 0);
   say();
   if (framed === 0) {

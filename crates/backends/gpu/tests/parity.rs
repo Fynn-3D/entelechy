@@ -251,6 +251,7 @@ fn input_context_matches_between_backends() {
         context: Context {
             time: 0.5,
             rate: 0.0,
+            queued: 0,
             input,
             window: [6.0, 3.0],
             scale: 2.0,

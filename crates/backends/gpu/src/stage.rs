@@ -326,10 +326,16 @@ impl GpuBackend {
         // (`wgsl::OPAQUE_ONE`); the fourth is spare.
         context.extend_from_slice(&[invocation.context.scale, f32::from_bits(fold), 1.0, 0.0]);
         // The pad: two sticks in one vec4, the triggers and how many pads
-        // are connected in the next.
+        // are connected in the next, with the samples the sound device
+        // holds, the bits of a `u32`.
         let sticks = input.sticks;
         context.extend_from_slice(&[sticks[0][0], sticks[0][1], sticks[1][0], sticks[1][1]]);
-        context.extend_from_slice(&[sticks[2][0], sticks[2][1], input.pads as f32, 0.0]);
+        context.extend_from_slice(&[
+            sticks[2][0],
+            sticks[2][1],
+            input.pads as f32,
+            f32::from_bits(invocation.context.queued.min(i32::MAX as u32)),
+        ]);
         // The characters typed, four a slot.
         context.extend(input.typed_words().iter().map(|c| f32::from_bits(*c)));
         // Inputs: bind resident buffers directly; upload the rest once and

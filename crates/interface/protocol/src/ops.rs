@@ -246,6 +246,11 @@ fn context() -> Vec<Field> {
             "the sound clock, frames a second, which Kernels read as rate()",
         ),
         may(
+            "queued",
+            Ty::Num,
+            "the samples (per channel) the sound device holds and has not played, which Kernels read as queued(); 0 when not given",
+        ),
+        may(
             "pointer",
             Ty::Numbers(&["x", "y"]),
             "the pointer in the output's pixels from its top left, as a Kernel's `pointer()` reads it",

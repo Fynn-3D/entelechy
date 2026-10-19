@@ -332,6 +332,7 @@ impl Player {
             window,
             scale,
             rate: self.audio.as_ref().map_or(0.0, |audio| audio.rate() as f32),
+            queued: self.audio.as_ref().map_or(0, Audio::queued),
         }
     }
 

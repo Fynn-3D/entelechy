@@ -9,9 +9,9 @@ use serde_json::{Value as Json, json};
 use entelechy_session::{Event, Session};
 
 /// The fields of a request that describe its context: what [`context_of`] reads.
-pub const CONTEXT_FIELDS: [&str; 12] = [
-    "time", "rate", "pointer", "down", "buttons", "wheel", "sticks", "pads", "keys", "text",
-    "window", "scale",
+pub const CONTEXT_FIELDS: [&str; 13] = [
+    "time", "rate", "queued", "pointer", "down", "buttons", "wheel", "sticks", "pads", "keys",
+    "text", "window", "scale",
 ];
 
 /// Which of [`CONTEXT_FIELDS`] a request gives.
@@ -40,6 +40,10 @@ pub fn context_of(session: &Session, request: &Json) -> Result<Context, Json> {
     let mut context = Context {
         time: request.get("time").and_then(Json::as_f64).unwrap_or(0.0),
         rate: request.get("rate").and_then(Json::as_f64).unwrap_or(0.0) as f32,
+        queued: request
+            .get("queued")
+            .and_then(Json::as_u64)
+            .map_or(0, |queued| queued.min(i32::MAX as u64) as u32),
         input: InputState::default(),
         window,
         scale,

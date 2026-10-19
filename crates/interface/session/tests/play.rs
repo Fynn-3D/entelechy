@@ -57,6 +57,7 @@ const VIEW: View = View {
     window: [8.0, 4.0],
     scale: 1.0,
     rate: 0.0,
+    queued: 0,
 };
 
 fn shown(play: &mut Play, session: &mut Session) -> Box<entelechy_session::play::Shown> {

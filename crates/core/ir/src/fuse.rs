@@ -233,6 +233,7 @@ impl<'a> Reads<'a> {
                 | Op::Time
                 | Op::Clock
                 | Op::Rate
+                | Op::Queued
                 | Op::Window
                 | Op::Scale
                 | Op::Pads,
@@ -1119,6 +1120,7 @@ impl<'a> Renumber<'a> {
             | Op::Time
             | Op::Clock
             | Op::Rate
+            | Op::Queued
             | Op::Pointer
             | Op::PointerDown
             | Op::Wheel

@@ -150,6 +150,9 @@ const uint32_t *entelechy_play_pixels(EntelechySession *session, uint32_t width,
  * call: the frame before's while frames overlap the device's. 0 and
  * `field` filled, 1 when there is none, -1 on failure. */
 int entelechy_play_sound(EntelechySession *session, EntelechyField *field);
+/* The samples (per channel) the host's sound device holds and has not
+ * yet played, which the next frame's queued() reads. */
+void entelechy_play_sound_queued(EntelechySession *session, uint32_t samples);
 /* The sound device is open, as the host describes it. */
 void entelechy_play_sound_opened(EntelechySession *session, const char *description);
 /* What the play said since the last call, a line each; "" for nothing. */

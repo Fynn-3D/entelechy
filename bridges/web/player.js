@@ -260,6 +260,8 @@ class EntelechyPlayer {
     if (this.audio && this.ring && this.held + this.audio.context.sampleRate / 60 > this.ring) return AHEAD;
     const rate = this.audio ? this.audio.context.sampleRate : 0;
     const scale = window.devicePixelRatio || 1;
+    // What the card holds, which the frame's `queued()` reads.
+    this.x.entelechy_play_sound_queued(this.session, this.audio ? this.held : 0);
     const framed = await this.frame(this.session, this.canvas.width, this.canvas.height, scale, rate);
     this.say();
     if (framed === 0) {

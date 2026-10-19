@@ -417,6 +417,9 @@ pub(super) enum Instr {
     Rate {
         dst: usize,
     },
+    Queued {
+        dst: usize,
+    },
     Pointer {
         dst: usize,
     },

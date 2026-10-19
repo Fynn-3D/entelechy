@@ -182,6 +182,7 @@ fn the_players_frames_give_the_glyphs_a_frame_later() {
         window: [8.0, 4.0],
         scale: 1.0,
         rate: 0.0,
+        queued: 0,
     };
     for _ in 0..2 {
         assert!(

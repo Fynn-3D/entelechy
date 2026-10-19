@@ -1943,6 +1943,13 @@ impl<'a, 'b> Fx<'a, 'b> {
                     .ins()
                     .load(types::F32, self.settled, self.ctx, offsets::RATE),
             ],
+            Op::Queued => {
+                vec![
+                    self.b
+                        .ins()
+                        .load(types::I32, self.settled, self.ctx, offsets::QUEUED),
+                ]
+            }
             Op::Pointer => vec![
                 self.b
                     .ins()

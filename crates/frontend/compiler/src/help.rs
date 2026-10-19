@@ -159,6 +159,7 @@ pub fn builtins() -> Vec<Builtin> {
         fixed("time", "context", &["time() -> Float"], "The session's time in seconds, rounded to a Float: finer than a millisecond for the first hours, a quarter second after a month. A session meant to run long times with clock().", Some(Capability::TimeRead), false),
         fixed("clock", "context", &["clock() -> Double"], "The session's time in seconds, whole: the same clock as time(), exact for years. Its Kernel runs where Doubles run.", Some(Capability::TimeRead), false),
         fixed("rate", "context", &["rate() -> Float"], "The sound device's samples per second, zero without one.", Some(Capability::TimeRead), false),
+        fixed("queued", "context", &["queued() -> Int"], "The samples (per channel) the sound device holds and has not yet played, zero without one: a sound made to the time can keep the device this far ahead.", Some(Capability::TimeRead), false),
         fixed("window", "context", &["window() -> Vec2"], "The window's size in physical pixels, zero by zero without one; a node's domain may take it.", Some(Capability::InputRead), false),
         fixed("scale", "context", &["scale() -> Float"], "The window's physical pixels per logical pixel, one without a window.", Some(Capability::InputRead), false),
         fixed("pointer", "context", &["pointer() -> Vec2"], "The pointer in the output's pixels from its top left; a player maps its window's into them.", Some(Capability::InputRead), false),

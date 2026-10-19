@@ -1099,7 +1099,9 @@ impl Replayer {
                 self.typing = input.type_text(&self.typing).to_owned();
                 let context = Context {
                     time: *time,
+                    // A replay has no sound device: nothing is queued.
                     rate: 0.0,
+                    queued: 0,
                     input,
                     window: self.window.0,
                     scale: self.window.1,

@@ -239,6 +239,7 @@ impl fmt::Display for Op {
             Self::Time => f.write_str("context time"),
             Self::Clock => f.write_str("context clock"),
             Self::Rate => f.write_str("context rate"),
+            Self::Queued => f.write_str("context queued"),
             Self::Window => f.write_str("context window"),
             Self::Scale => f.write_str("context scale"),
             Self::Pointer => f.write_str("context pointer"),

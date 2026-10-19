@@ -147,6 +147,9 @@ struct Held {
     /// The sound heard now ([`entelechy_session::play::Play::heard`]), for
     /// `entelechy_play_sound`.
     sound: Vec<u32>,
+    /// The samples the host's sound device holds, as it last said
+    /// (`entelechy_play_sound_queued`), for the next frame's `queued()`.
+    queued: u32,
 }
 
 mod play;
@@ -519,6 +522,7 @@ fn opened(
                 pixels: Vec::new(),
                 picture: (Vec::new(), (0, 0)),
                 sound: Vec::new(),
+                queued: 0,
             }),
         })),
         Ok(Err(message)) => set_error(message),
@@ -685,9 +689,11 @@ pub unsafe extern "C" fn entelechy_evaluate(
                 state.set_key(code as i32, true);
             }
         }
+        // A host evaluating on its own keeps no sound device's queue.
         let context = Context {
             time: input.time,
             rate: input.rate,
+            queued: 0,
             input: state,
             window,
             scale,

@@ -204,6 +204,7 @@ pub unsafe extern "C" fn entelechy_play_frame(
         window: [width, height],
         scale,
         rate,
+        queued: s.queued,
     };
     guarded(&mut s, |s| {
         s.clear();
@@ -369,6 +370,18 @@ pub unsafe extern "C" fn entelechy_play_sound(
         };
         0
     })
+}
+
+/// Tells the play how many samples (per channel) the host's sound device
+/// holds and has not yet played: what the next frame's `queued()` reads.
+///
+/// # Safety
+/// `session` is a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn entelechy_play_sound_queued(session: *mut EntelechySession, samples: u32) {
+    if let Some(mut s) = unsafe { enter(session) } {
+        s.queued = samples;
+    }
 }
 
 /// Reports the sound device open, as the host describes it, for the frame

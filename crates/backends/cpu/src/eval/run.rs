@@ -1046,6 +1046,7 @@ impl<'p, 's> Machine<'p, 's> {
             Instr::Time { dst } => s[fp + dst] = program.context.float_time().to_bits(),
             Instr::Clock { dst } => put_wide(s, fp + dst, program.context.time.to_bits()),
             Instr::Rate { dst } => s[fp + dst] = program.context.rate.to_bits(),
+            Instr::Queued { dst } => s[fp + dst] = program.context.queued.min(i32::MAX as u32),
             Instr::Pointer { dst } => {
                 let [x, y] = program.context.input.pointer;
                 s[fp + dst] = x.to_bits();

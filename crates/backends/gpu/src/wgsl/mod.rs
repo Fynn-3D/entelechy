@@ -372,9 +372,9 @@ pub const WORKGROUP: u32 = 8;
 /// where `fold` is the elements per unit of `gid.y` for a `Rows` domain,
 /// which is dispatched as a grid (else zero), the pad's two slots
 /// (`[left.x, left.y, right.x, right.y]`, `[triggers.x, triggers.y, pads,
-/// 0]`), and eight slots of the characters typed, four a slot. Each input
-/// then has `[width, height, depth, 0]`. Extents, the fold, the key bits
-/// and the characters are the bits of `u32`s, read with `bitcast`, so
+/// queued]`), and eight slots of the characters typed, four a slot. Each input
+/// then has `[width, height, depth, 0]`. Extents, the fold, the key bits,
+/// the samples queued and the characters are the bits of `u32`s, read with `bitcast`, so
 /// every one is exact.
 pub const CONTEXT_HEAD: usize = 16;
 

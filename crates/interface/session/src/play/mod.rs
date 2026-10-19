@@ -181,6 +181,9 @@ pub struct View {
     pub scale: f32,
     /// Sound sample rate; zero without a sound device.
     pub rate: f32,
+    /// The samples (per channel) the sound device holds and has not yet
+    /// played (`queued()`); zero without one.
+    pub queued: u32,
 }
 
 /// A frame to show.
@@ -314,6 +317,7 @@ impl Play {
         Context {
             time: self.time(),
             rate: view.rate,
+            queued: view.queued,
             input: self.input,
             window: view.window,
             scale: view.scale,

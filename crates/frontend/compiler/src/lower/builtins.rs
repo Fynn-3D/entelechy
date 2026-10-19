@@ -374,6 +374,11 @@ impl Builder<'_> {
                 self.arity(name, args, 0, span)?;
                 Ok(self.emit(Type::Float, Op::Rate))
             }
+            "queued" => {
+                self.require(name, Capability::TimeRead, span)?;
+                self.arity(name, args, 0, span)?;
+                Ok(self.emit(Type::Int, Op::Queued))
+            }
             "window" => {
                 self.require(name, Capability::InputRead, span)?;
                 self.arity(name, args, 0, span)?;

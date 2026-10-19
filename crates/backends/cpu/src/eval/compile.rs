@@ -902,6 +902,9 @@ impl FunctionCompiler<'_> {
             Op::Rate => Instr::Rate {
                 dst: define(self).at,
             },
+            Op::Queued => Instr::Queued {
+                dst: define(self).at,
+            },
             Op::Pointer => Instr::Pointer {
                 dst: define(self).at,
             },

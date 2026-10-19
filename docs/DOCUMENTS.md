@@ -318,8 +318,11 @@ Fields and context:
   linear index, `coord()` and `domain()` the address and extent over a
   grid or volume.
 - `clock()` (the session's time in seconds, a `Double`, whole), `time()`
-  (the same clock rounded to a `Float`) and `rate()` (sound device clock,
-  samples per second, zero without a device) need `time.read`. A Kernel
+  (the same clock rounded to a `Float`), `rate()` (sound device clock,
+  samples per second, zero without a device) and `queued()` (the samples
+  per channel the sound device holds and has not yet played, an `Int`,
+  zero without one: a sound made to the device keeps it that far ahead)
+  need `time.read`. A Kernel
   meant to run for days times with `clock()`
   ([why](DECISIONS.md#the-clock-crosses-whole)).
 - `pointer()`, `pointer_down()`, `button(n)` (0 left, 1 right, 2
