@@ -257,6 +257,19 @@ impl Display {
             overlay.map_or(0.0, |o| o.height as f32),
             0.0,
         ];
+        let texture = match presenter.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(texture)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return Ok(None);
+            }
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                presenter.surface.configure(gpu_device, &presenter.config);
+                return Ok(None);
+            }
+            other => return Err(format!("no surface texture: {other:?}")),
+        };
+        // Made once the frame has a texture, so each is destroyed.
         let bytes: Vec<u8> = frame.iter().flat_map(|v| v.to_le_bytes()).collect();
         let uniform = self.buffer("blit frame", &bytes, wgpu::BufferUsages::UNIFORM);
         let overlay_bytes: Vec<u8> = overlay
@@ -282,18 +295,6 @@ impl Display {
                 },
             ],
         });
-        let texture = match presenter.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(texture)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                return Ok(None);
-            }
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                presenter.surface.configure(gpu_device, &presenter.config);
-                return Ok(None);
-            }
-            other => return Err(format!("no surface texture: {other:?}")),
-        };
         let view = texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());

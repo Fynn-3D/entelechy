@@ -361,7 +361,7 @@ pub(crate) fn rasterize(
     };
     let mask_buffer = match mask {
         Some(mask) => gpu.bind_input(scope, mask)?,
-        None => gpu.buffer(
+        None => gpu.run_buffer(
             "rasterize mask",
             &[0u8; 16],
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
@@ -378,7 +378,7 @@ pub(crate) fn rasterize(
         0,
     ];
     let frame_bytes: Vec<u8> = frame.iter().flat_map(|v| v.to_le_bytes()).collect();
-    let frame_buffer = gpu.buffer("rasterize frame", &frame_bytes, wgpu::BufferUsages::UNIFORM);
+    let frame_buffer = gpu.run_buffer("rasterize frame", &frame_bytes, wgpu::BufferUsages::UNIFORM);
     let render_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("entelechy rasterize"),
         layout: &pipelines.render_layout,
@@ -416,7 +416,8 @@ pub(crate) fn rasterize(
     );
     let compact_frame: [u32; 4] = [width, height, 0, 0];
     let compact_bytes: Vec<u8> = compact_frame.iter().flat_map(|v| v.to_le_bytes()).collect();
-    let compact_uniform = gpu.buffer("compact frame", &compact_bytes, wgpu::BufferUsages::UNIFORM);
+    let compact_uniform =
+        gpu.run_buffer("compact frame", &compact_bytes, wgpu::BufferUsages::UNIFORM);
     let compact_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("entelechy compact"),
         layout: &pipelines.compact_layout,

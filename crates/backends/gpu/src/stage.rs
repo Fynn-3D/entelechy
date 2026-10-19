@@ -259,6 +259,11 @@ impl GpuBackend {
                     && params_buffer.size() >= params.len().max(16) as u64
             });
         if !big_enough {
+            // The smaller pair goes once the run is given to the device.
+            if let Some((context_buffer, params_buffer)) = held.take() {
+                self.spare.let_go(context_buffer);
+                self.spare.let_go(params_buffer);
+            }
             *held = Some((
                 self.empty(
                     "context",

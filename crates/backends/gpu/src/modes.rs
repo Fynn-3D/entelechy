@@ -173,7 +173,7 @@ impl GpuBackend {
         let blocks = count.div_ceil(per_block);
         let plan: [u32; 4] = [count as u32, per_block as u32, blocks as u32, 0];
         let plan_bytes: Vec<u8> = plan.iter().flat_map(|v| v.to_le_bytes()).collect();
-        let plan_buffer = self.buffer("prefix plan", &plan_bytes, wgpu::BufferUsages::UNIFORM);
+        let plan_buffer = self.run_buffer("prefix plan", &plan_bytes, wgpu::BufferUsages::UNIFORM);
         let sums = self.spare.take(
             &self.device,
             ((blocks * output_words * 4) as u64).max(16).div_ceil(16) * 16,
@@ -294,7 +294,7 @@ impl GpuBackend {
             let level: [u32; 4] = [count as u32, 0, 0, 0];
             let level_bytes: Vec<u8> = level.iter().flat_map(|v| v.to_le_bytes()).collect();
             let level_buffer =
-                self.buffer("reduce count", &level_bytes, wgpu::BufferUsages::UNIFORM);
+                self.run_buffer("reduce count", &level_bytes, wgpu::BufferUsages::UNIFORM);
             let (count_binding, in_binding, out_binding) = wgsl::reduce_bindings(module);
             let mut fold_entries = vec![
                 wgpu::BindGroupEntry {
@@ -580,7 +580,7 @@ impl GpuBackend {
                     }
                 }
                 let params =
-                    self.buffer("scatter sort params", &bytes, wgpu::BufferUsages::UNIFORM);
+                    self.run_buffer("scatter sort params", &bytes, wgpu::BufferUsages::UNIFORM);
                 let params_entry = wgpu::BindGroupEntry {
                     binding: wgsl::SCATTER_SORT_PARAMS_BINDING,
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
@@ -702,6 +702,12 @@ impl GpuBackend {
                     dispatch(encoder, &totals.check, &group, &[], over_target);
                 }
             }
+        }
+        // The pairs and the high words go back to the pile: what read them
+        // was recorded before whatever writes them next.
+        self.spare.keep(final_buffer, None);
+        if let Some(highs) = highs {
+            self.spare.keep(highs, None);
         }
         target
     }

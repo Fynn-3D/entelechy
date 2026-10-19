@@ -333,6 +333,21 @@ impl GpuBackend {
         buffer
     }
 
+    /// [`GpuBackend::buffer`] read by the run being made alone: destroyed
+    /// once that run is given to the device ([`Spare::let_go`]). Made while
+    /// the run holds the backend's lock, so no other run's submission
+    /// destroys it first.
+    pub(crate) fn run_buffer(
+        &self,
+        label: &str,
+        contents: &[u8],
+        usage: wgpu::BufferUsages,
+    ) -> wgpu::Buffer {
+        let buffer = self.buffer(label, contents, usage);
+        self.spare.let_go(buffer.clone());
+        buffer
+    }
+
     /// A scatter's target, `count` elements of `words` words, from the pile:
     /// it is copied over whole before anything reads it.
     pub(crate) fn target_buffer(&self, count: usize, words: usize) -> wgpu::Buffer {

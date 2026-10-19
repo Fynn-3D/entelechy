@@ -2691,3 +2691,57 @@ fn the_pile_lets_go_what_an_evaluation_went_without() {
     gpu.evaluation_begun();
     assert_eq!(spare(&gpu), 0, "a whole evaluation went without it");
 }
+
+#[test]
+fn a_scatter_gives_its_pairs_back_to_the_pile() {
+    // The pairs a scatter's entry writes are read by its combine alone:
+    // they wait on the pile for the next run, not for a collector.
+    let Some(gpu) = gpu() else { return };
+    let module = compile(
+        "kernel t.splat@1 { requires { field.read; field.write; } input drops: Rows<Float>; input grid: Grid<Float>; output result: Grid<Float>; struct Splat { cell: Vec2; value: Float; } scatter into grid with sum { return Splat { cell: vec2(float(element() % 4), 0.0), value: sample(drops) }; } }",
+    )
+    .unwrap();
+    let prepared = gpu.prepare(&module).unwrap();
+    let mut host = Host::new(1 << 24);
+    let count = 4096;
+    let drops = host
+        .adopt(
+            entelechy_abi::FieldData::from_storage(
+                entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float]),
+                Domain::Rows(count),
+                (0..count).map(|i| (i as f32 * 0.25).to_bits()).collect(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let grid = host
+        .adopt(
+            entelechy_abi::FieldData::from_storage(
+                entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float]),
+                Domain::Grid(4, 1),
+                vec![0; 4],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let invocation = Invocation {
+        inputs: vec![drops, grid],
+        params: vec![],
+        domain: Domain::Rows(count),
+        context: Context::default(),
+    };
+    gpu.evaluation_begun();
+    let mut scope = Scope::new(&mut host, all());
+    let out =
+        Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
+    let spare = gpu
+        .memory()
+        .into_iter()
+        .find(|(part, _)| *part == "spare buffers")
+        .map_or(0, |(_, bytes)| bytes);
+    assert!(
+        spare >= (count * 3 * 4) as u64,
+        "the pairs are kept: {spare} bytes"
+    );
+    host.release(out).unwrap();
+}
