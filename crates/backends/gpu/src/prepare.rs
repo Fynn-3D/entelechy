@@ -426,11 +426,15 @@ impl GpuBackend {
     ) -> Result<Shader, Unbuilt> {
         // Only what the entry point reaches goes to the device.
         let source = &wgsl::pruned(source);
-        let scopes = Scopes::push(&self.device);
+        // A page asks nothing back here: each answer is a round trip to a
+        // device process busy compiling, and what is made here is checked
+        // again where the pipeline is built from it.
+        let page = self.wait.parks_with_host();
+        let scopes = (!page).then(|| Scopes::push(&self.device));
         // Validated as the device takes it, and let go ([`Shader`]). A page
         // cannot let a module go but to its collector: there the source is
         // validated as the pipeline is built.
-        if !self.wait.parks_with_host() {
+        if !page {
             drop(
                 self.device
                     .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -445,7 +449,12 @@ impl GpuBackend {
                 label: Some(label),
                 entries,
             });
-        scopes.pop(self.wait, source)?;
+        if let Some(scopes) = scopes {
+            scopes.pop(self.wait, source)?;
+        }
+        // A page's browser starts compiling it now, beside the others.
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        crate::page::ask_ahead(&self.device, label, source, entries);
         Ok(Shader {
             label: label.to_owned(),
             source: source.to_owned(),

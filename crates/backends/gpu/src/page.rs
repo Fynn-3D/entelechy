@@ -13,9 +13,49 @@ use wasm_bindgen::{JsCast, JsValue};
 
 use crate::wait::Wait;
 
+thread_local! {
+    /// Pipelines asked of the browser ahead ([`ask_ahead`]) and not yet
+    /// waited for, by what they are made of.
+    static ASKED: std::cell::RefCell<std::collections::HashMap<u64, js_sys::Promise>> =
+        std::cell::RefCell::default();
+}
+
+/// What a pipeline is made of, as [`ASKED`] keeps it.
+fn made_of(label: &str, source: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    label.hash(&mut hasher);
+    source.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Asks the browser to start compiling a pipeline as a Kernel is
+/// prepared, and goes on: the browser compiles the pipelines a scene asks
+/// for side by side, and [`compile_beside`] waits for this one when it is
+/// first built.
+pub(crate) fn ask_ahead(
+    device: &wgpu::Device,
+    label: &str,
+    source: &str,
+    entries: &[wgpu::BindGroupLayoutEntry],
+) {
+    let Some(device) = device.as_webgpu() else {
+        return;
+    };
+    let device: &JsValue = device.as_ref();
+    if let Ok(asked) = ask(device, label, source, entries) {
+        ASKED.with(|asked_ahead| {
+            asked_ahead
+                .borrow_mut()
+                .insert(made_of(label, source), asked)
+        });
+    }
+}
+
 /// Asks the browser to compile the pipeline of `source`'s `main` with one
-/// group of `entries`, and waits until it has, parked. Whatever the browser
-/// says against it is said again, and caught, when the pipeline is made.
+/// group of `entries` (or takes what [`ask_ahead`] asked), and waits until
+/// it has, parked. Whatever the browser says against it is said again,
+/// and caught, when the pipeline is made.
 pub(crate) fn compile_beside(
     device: &wgpu::Device,
     wait: Wait,
@@ -35,8 +75,13 @@ pub(crate) fn compile_beside(
         ));
     }
     let started = entelechy_rules::clock::now();
-    let Ok(asked) = ask(device, label, source, entries) else {
-        return;
+    let ahead = ASKED.with(|asked_ahead| asked_ahead.borrow_mut().remove(&made_of(label, source)));
+    let asked = match ahead {
+        Some(asked) => asked,
+        None => match ask(device, label, source, entries) {
+            Ok(asked) => asked,
+            Err(_) => return,
+        },
     };
     let answer = wait.block_on(wasm_bindgen_futures::JsFuture::from(asked));
     if traced {
