@@ -356,6 +356,18 @@ impl Backend for GpuBackend {
         self.frames.done()
     }
 
+    fn memory(&self) -> Vec<(&'static str, u64)> {
+        let failures = self
+            .failures
+            .lock()
+            .map_or(0, |pairs| pairs.len() as u64 * wgsl::FAILURE_BYTES * 2);
+        vec![
+            ("spare buffers", self.spare.bytes()),
+            ("spare targets", self.targets.bytes()),
+            ("failure words", failures),
+        ]
+    }
+
     /// Waits for the queue to run dry. Dispatches are submitted without a
     /// wait, so a caller timing a frame calls this; a Player gets it from
     /// presenting.

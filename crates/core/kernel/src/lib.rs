@@ -20,8 +20,9 @@ use std::sync::{Arc, Mutex};
 
 pub use entelechy_abi::pad;
 pub use entelechy_abi::{
-    ABI_VERSION, Capabilities, Capability, Context, Domain, Encoding, FieldData, Handle, Host,
-    HostError, Image, InputState, Invocation, Number, Pixel, Scalar, Schema, Scope, Shape, Value,
+    ABI_VERSION, Capabilities, Capability, Census, Context, Domain, Encoding, FieldBytes,
+    FieldData, Handle, Host, HostError, Image, InputState, Invocation, Number, Pixel, Scalar,
+    Schema, Scope, Shape, Value,
 };
 pub use entelechy_abi::{DEFAULT_WORK, MAX_WORK, TYPED, encoding};
 pub use entelechy_ir::{KernelId, Manifest, Validated};
@@ -875,6 +876,21 @@ impl Runtime {
     /// ([`Backend::clocked_frame`]).
     pub fn clocked_frame(&self) -> Option<ClockedFrame> {
         self.backend().clocked_frame()
+    }
+
+    /// What the backends hold of their own between runs
+    /// ([`Backend::memory`]): each part named after its backend, in bytes.
+    pub fn backend_memory(&self) -> Vec<(String, u64)> {
+        std::iter::once(&self.backend)
+            .chain(self.ordered.as_ref())
+            .flat_map(|backend| {
+                let name = backend.name();
+                backend
+                    .memory()
+                    .into_iter()
+                    .map(move |(part, bytes)| (format!("{name} {part}"), bytes))
+            })
+            .collect()
     }
 
     /// The device's busy time for the latest clocked frame it has done.

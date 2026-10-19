@@ -11,11 +11,11 @@ pub mod names;
 use std::fmt;
 use std::str::FromStr;
 
-pub use entelechy_host::{DEFAULT_WORK, MAX_WORK, encoding};
 pub use entelechy_host::{
-    Domain, Encoding, FieldData, Handle, Host, HostError, Image, MadeFrom, PAGE_WORDS, Pages,
-    Pixel, Scalar, Schema, Shape, Version,
+    Census, Domain, Encoding, FieldBytes, FieldData, Handle, Host, HostError, Image, MadeFrom,
+    PAGE_WORDS, Pages, Pixel, Scalar, Schema, Shape, Version,
 };
+pub use entelechy_host::{DEFAULT_WORK, MAX_WORK, encoding};
 
 /// A named authority a Kernel may declare and be granted; what each
 /// grants is [`Capability::doc`].

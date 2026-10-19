@@ -36,6 +36,18 @@ impl Evaluator {
         Ok(())
     }
 
+    /// The state the frame in flight replaced, held to be put back should
+    /// it fail: each port and the Field it held.
+    pub(super) fn held_back_ports(&self) -> Vec<((NodeId, String), Handle)> {
+        self.unconfirmed.as_ref().map_or_else(Vec::new, |frame| {
+            frame
+                .replaced
+                .iter()
+                .filter_map(|(port, held)| held.map(|held| (port.clone(), held)))
+                .collect()
+        })
+    }
+
     /// Whether evaluations overlap ([`Evaluator::set_overlap`]).
     pub fn overlaps(&self) -> bool {
         self.overlap

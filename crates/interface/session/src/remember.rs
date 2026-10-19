@@ -141,6 +141,9 @@ impl Backend for Remembered {
     fn clocked_frame(&self) -> Option<entelechy_rules::ClockedFrame> {
         self.inner.clocked_frame()
     }
+    fn memory(&self) -> Vec<(&'static str, u64)> {
+        self.inner.memory()
+    }
     fn execute_repeated(
         &self,
         prepared: &dyn Prepared,

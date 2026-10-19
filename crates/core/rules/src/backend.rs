@@ -399,6 +399,13 @@ pub trait Backend: Send + Sync {
         None
     }
 
+    /// What the backend holds of its own between runs, apart from the
+    /// Fields it keeps resident: each part by name, in bytes, for a map of
+    /// where memory is. None by default.
+    fn memory(&self) -> Vec<(&'static str, u64)> {
+        Vec::new()
+    }
+
     /// Runs a map `repeat` times, feeding input `chain.0` from output
     /// `chain.1` each time, and answers with the last outputs. `None`
     /// (the default) leaves the caller to run the times one by one.

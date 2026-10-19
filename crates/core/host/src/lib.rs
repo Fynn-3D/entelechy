@@ -1000,6 +1000,54 @@ enum Storage {
     },
 }
 
+/// Where one Field's bytes are ([`Host::field_bytes`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FieldBytes {
+    /// Its words in Host memory: all of them, or a resident one's kept copy.
+    pub host: u64,
+    /// Its words on a device.
+    pub device: u64,
+}
+
+/// Where the memory the Host holds is ([`Host::census`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Census {
+    /// Live Fields.
+    pub fields: u64,
+    /// Bytes of Fields in Host memory only.
+    pub host: u64,
+    /// Bytes of resident Fields on their devices.
+    pub device: u64,
+    /// Bytes resident Fields also keep in Host memory, the words they were
+    /// uploaded from.
+    pub kept: u64,
+    /// Bytes of word buffers released Fields left for reuse.
+    pub spare: u64,
+}
+
+impl Storage {
+    fn bytes(&self) -> FieldBytes {
+        match self {
+            Storage::Free => FieldBytes::default(),
+            Storage::Data(data) => FieldBytes {
+                host: data.storage().len() as u64 * 4,
+                device: 0,
+            },
+            Storage::Resident {
+                schema,
+                domain,
+                kept,
+                ..
+            } => FieldBytes {
+                host: kept
+                    .as_ref()
+                    .map_or(0, |data| data.storage().len() as u64 * 4),
+                device: schema.storage_words(domain.count()) as u64 * 4,
+            },
+        }
+    }
+}
+
 struct Slot {
     generation: u32,
     storage: Storage,
@@ -1093,6 +1141,36 @@ impl Host {
     /// Words currently allocated.
     pub fn used_words(&self) -> usize {
         self.used_words
+    }
+
+    /// Where a live Field's bytes are: in Host memory, on a device, or both
+    /// (a resident Field keeps the words it was uploaded from).
+    pub fn field_bytes(&self, handle: Handle) -> Result<FieldBytes, HostError> {
+        Ok(self.slot(handle)?.storage.bytes())
+    }
+
+    /// Every live Field's bytes, and the Host's spare buffers': where the
+    /// memory the Host holds is.
+    pub fn census(&self) -> Census {
+        let mut census = Census::default();
+        for slot in &self.slots {
+            let bytes = slot.storage.bytes();
+            match &slot.storage {
+                Storage::Free => continue,
+                Storage::Data(_) => census.host += bytes.host,
+                Storage::Resident { .. } => {
+                    census.device += bytes.device;
+                    census.kept += bytes.host;
+                }
+            }
+            census.fields += 1;
+        }
+        census.spare = self
+            .spare
+            .iter()
+            .map(|spare| spare.words.len() as u64 * 4)
+            .sum();
+        census
     }
 
     /// Total word budget.

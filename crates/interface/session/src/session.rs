@@ -1408,6 +1408,16 @@ impl Session {
         self.evaluator.cold_nodes()
     }
 
+    /// The scene's inputs, by name, and the Fields they are now.
+    pub(crate) fn input_handles(&self) -> &std::collections::BTreeMap<String, Handle> {
+        self.inputs.handles()
+    }
+
+    /// Every Field the evaluator holds ([`entelechy_graph::Evaluator::holdings`]).
+    pub(crate) fn holdings(&self) -> Vec<entelechy_graph::Holding> {
+        self.evaluator.holdings()
+    }
+
     /// The Field last evaluated for what `node.port` names, if any.
     pub fn cached(&self, node: &entelechy_graph::NodeId, port: &str) -> Option<Handle> {
         let (node, port) = self.producer(node, port);

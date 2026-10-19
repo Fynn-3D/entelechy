@@ -304,6 +304,30 @@ impl CacheKey {
     }
 }
 
+/// A Field the evaluator holds ([`Evaluator::holdings`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Holding {
+    /// The node whose output or state port holds it.
+    pub node: NodeId,
+    /// The port.
+    pub port: String,
+    /// The Field.
+    pub handle: Handle,
+    /// What it is held as.
+    pub held: Held,
+}
+
+/// What a Field is held as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Held {
+    /// A node's cached output.
+    Output,
+    /// A port's committed state.
+    State,
+    /// State the frame in flight replaced, held until it is confirmed.
+    Back,
+}
+
 #[derive(Clone, Debug)]
 struct Cached {
     key: CacheKey,
@@ -981,6 +1005,42 @@ impl Evaluator {
     /// Whether any state has been committed.
     pub fn has_state(&self) -> bool {
         self.ledger.sizes().1 > 0
+    }
+
+    /// Every Field the evaluator holds and for what: a node's cached
+    /// output, a port's committed state, or the state the frame in flight
+    /// replaced, held to be put back. A Field may be held more than once.
+    pub fn holdings(&self) -> Vec<Holding> {
+        let mut holdings = Vec::new();
+        for node in self.ledger.cached_nodes() {
+            if let Some(cached) = self.ledger.entry(node) {
+                for (port, handle) in cached.output_names.iter().zip(&cached.outputs) {
+                    holdings.push(Holding {
+                        node: node.clone(),
+                        port: port.clone(),
+                        handle: *handle,
+                        held: Held::Output,
+                    });
+                }
+            }
+        }
+        for ((node, port), handle) in self.ledger.committed_ports() {
+            holdings.push(Holding {
+                node: node.clone(),
+                port: port.clone(),
+                handle,
+                held: Held::State,
+            });
+        }
+        for ((node, port), handle) in self.held_back_ports() {
+            holdings.push(Holding {
+                node,
+                port,
+                handle,
+                held: Held::Back,
+            });
+        }
+        holdings
     }
 
     /// The cached image for a node's output port, if it was evaluated and

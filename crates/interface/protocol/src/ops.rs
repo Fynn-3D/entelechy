@@ -329,7 +329,7 @@ pub fn operations() -> Vec<Operation> {
             "status",
             "The session at a glance.",
             vec![],
-            "backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, loaded (whether a scene is), refused (why not, when not), revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, memory (`used` and `budget`, the Host's bytes; `cold`, the nodes whose outputs are let go, made again when read), versions (`entelechy`, `api`, `language`, `ir`, `package`)",
+            "backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, loaded (whether a scene is), refused (why not, when not), revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, memory (`used` and `budget`, the Host's bytes; `cold`, the nodes whose outputs are let go, made again when read; where the bytes are: `host`, `device`, `kept` (resident Fields' Host copies), `spare`, `loose` (Fields nothing holds), `backends` (what each keeps of its own) and `top`, the largest Fields with what holds each), versions (`entelechy`, `api`, `language`, `ir`, `package`)",
         ),
         op(
             "kernels",

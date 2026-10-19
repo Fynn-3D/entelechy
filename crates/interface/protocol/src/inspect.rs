@@ -24,12 +24,35 @@ pub(crate) fn status(session: &Session) -> Result<Json, Json> {
         "revision": session.position().0,
         "frame": session.position().1,
         "grants": session.runtime().grants().iter().map(|c| c.name()).collect::<Vec<_>>(),
-        "memory": {
-            "used": session.runtime().host().used_words() as u64 * 4,
-            "budget": session.runtime().host().budget_words() as u64 * 4,
-            "cold": session.cold_nodes().iter().map(|node| node.0.to_string()).collect::<Vec<_>>(),
-        },
+        "memory": memory_json(session),
     }))
+}
+
+/// How many of the largest held Fields `status` names.
+const MEMORY_TOP: usize = 20;
+
+/// Where the session's memory is ([`Session::memory_map`]): the Host's
+/// budget and use, its bytes in Host memory, on devices and kept beside
+/// them, its spare buffers, the backends' own parts, and the largest
+/// Fields held, each with what holds it.
+fn memory_json(session: &Session) -> Json {
+    let host = session.runtime().host();
+    let map = session.memory_map();
+    json!({
+        "used": host.used_words() as u64 * 4,
+        "budget": host.budget_words() as u64 * 4,
+        "cold": session.cold_nodes().iter().map(|node| node.0.to_string()).collect::<Vec<_>>(),
+        "fields": map.census.fields,
+        "host": map.census.host,
+        "device": map.census.device,
+        "kept": map.census.kept,
+        "spare": map.census.spare,
+        "loose": { "host": map.loose.host, "device": map.loose.device },
+        "backends": map.backends.iter().map(|(part, bytes)| json!({ "part": part, "bytes": bytes })).collect::<Vec<_>>(),
+        "top": map.held.iter().take(MEMORY_TOP).map(|entry| json!({
+            "owner": entry.owner, "kind": entry.kind, "host": entry.bytes.host, "device": entry.bytes.device,
+        })).collect::<Vec<_>>(),
+    })
 }
 
 /// A published version's manifest with its structs, from a Kernel's

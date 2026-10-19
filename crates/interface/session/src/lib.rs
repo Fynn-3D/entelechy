@@ -29,6 +29,7 @@ pub mod history;
 mod ignore;
 mod inputs;
 mod kernels;
+mod memory;
 mod observe;
 mod options;
 pub mod overrides;
@@ -107,6 +108,7 @@ pub struct StateCopy {
     pub words: Vec<u32>,
 }
 pub use clocked::DeviceTimes;
+pub use memory::{HeldBytes, MemoryMap};
 pub use remember::Warm;
 pub use session::Session;
 

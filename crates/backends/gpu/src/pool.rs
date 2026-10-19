@@ -115,6 +115,17 @@ impl SpareTextures {
         }
     }
 
+    /// The bytes of the targets kept.
+    pub(crate) fn bytes(&self) -> u64 {
+        let held = self.held.lock().unwrap_or_else(|p| p.into_inner());
+        held.iter()
+            .map(|texture| {
+                let size = texture.format().target_pixel_byte_cost().unwrap_or(16) as u64;
+                u64::from(texture.width()) * u64::from(texture.height()) * size
+            })
+            .sum()
+    }
+
     /// Destroys the targets let go: called once a run is given to the
     /// device, which frees them when the work before has run.
     pub(crate) fn bury(&self) {
@@ -182,6 +193,12 @@ impl Spare {
             bytes -= gone.size();
             lock_gone(&self.gone).push(gone);
         }
+    }
+
+    /// The bytes of the buffers kept.
+    pub(crate) fn bytes(&self) -> u64 {
+        let held = self.held.lock().unwrap_or_else(|p| p.into_inner());
+        held.iter().map(|(buffer, _)| buffer.size()).sum()
     }
 
     /// A buffer nothing reads after the run being made: destroyed once that
