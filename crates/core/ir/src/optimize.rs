@@ -13,8 +13,9 @@
 //!   holding one, or a name a trace shows;
 //! - a call to a short function is written out in place;
 //! - loop-invariant work that cannot fail moves before the loop;
-//! - an `each` builder short enough, or holding a loop counted at run
-//!   time, is written out, its `Index` the element's position.
+//! - an `each` builder short enough is written out, its `Index` the
+//!   element's position; a longer one holding a loop counted at run time
+//!   runs as a loop carrying its array.
 //!
 //! Values are then renumbered in pre-order. Floats keep their order and
 //! a run reports the same failure.
@@ -39,8 +40,9 @@ const BIG_ARG_WORDS: usize = 32;
 const INLINE_BIG_LIMIT: usize = 1024;
 /// An `each` builder whose elements together hold at most this many
 /// instructions, nested blocks counted, is written out element by
-/// element; a longer one runs as a loop, unless it holds a loop counted
-/// at run time ([`counts_at_run_time`]).
+/// element; a longer one runs as a builder's loop, or, holding a loop
+/// counted at run time, as a loop carrying its array
+/// ([`counts_at_run_time`]).
 const UNROLL_LIMIT: usize = 512;
 
 /// Optimizes every function of a module. The result computes the same
@@ -650,14 +652,18 @@ fn highest(body: &[Instruction]) -> u32 {
 /// `body` with each short `each` builder written out, innermost first:
 /// its body once per element under fresh ids, the body's own `Index`
 /// that element's position, and the array built from the elements.
-fn unrolled(body: &[Instruction], next: &mut u32) -> Vec<Instruction> {
+fn unrolled(body: &[Instruction], structs: &[StructDef], next: &mut u32) -> Vec<Instruction> {
     let mut out = Vec::with_capacity(body.len());
     for instruction in body {
         let mut instruction = instruction.clone();
         for block in instruction.op.blocks_mut() {
-            block.body = unrolled(&block.body, next);
+            block.body = unrolled(&block.body, structs, next);
         }
         match &instruction.op {
+            Op::Each { count, body }
+                if *count as usize * size(&body.body) > UNROLL_LIMIT
+                    && counts_at_run_time(&body.body)
+                    && carried_loop(&instruction, *count, body, structs, next, &mut out) => {}
             Op::Each { count, body }
                 if *count as usize * size(&body.body) <= UNROLL_LIMIT
                     || counts_at_run_time(&body.body) =>
@@ -681,9 +687,9 @@ fn unrolled(body: &[Instruction], next: &mut u32) -> Vec<Instruction> {
 }
 
 /// Whether a block holds a loop whose count is read at run time. A
-/// builder holding one is written out however long: its copies' work
-/// folds and is shared, and Chrome's WebGPU computes such a builder
-/// wrong as a loop.
+/// builder holding one runs as a loop carrying its array
+/// ([`carried_loop`]): Chrome's WebGPU computes such a builder wrong as
+/// a builder's loop.
 fn counts_at_run_time(body: &[Instruction]) -> bool {
     body.iter().any(|instruction| {
         matches!(instruction.op, Op::Loop { bound: Some(_), .. })
@@ -693,6 +699,231 @@ fn counts_at_run_time(body: &[Instruction]) -> bool {
                 .iter()
                 .any(|block| counts_at_run_time(&block.body))
     })
+}
+
+/// `builder`, an `each` of `count` elements, as a loop carrying its
+/// array: the body once a turn, its element taking the turn's place, the
+/// rest kept. The enclosing loop's value, which the body read as
+/// `Carried`, is read before it. False, writing nothing, for an element
+/// with no zero to start the array from.
+fn carried_loop(
+    builder: &Instruction,
+    count: u32,
+    body: &Block,
+    structs: &[StructDef],
+    next: &mut u32,
+    out: &mut Vec<Instruction>,
+) -> bool {
+    let fresh = |next: &mut u32| {
+        let id = ValueId(*next);
+        *next += 1;
+        id
+    };
+    let Type::Struct(index) = builder.ty else {
+        return false;
+    };
+    let Some(element) = structs.get(index as usize).and_then(|def| def.element) else {
+        return false;
+    };
+    let mut before = Vec::new();
+    let mark = *next;
+    let Some(zero) = zero_of(element, structs, next, &mut before) else {
+        *next = mark;
+        return false;
+    };
+    let init = fresh(next);
+    before.push(Instruction {
+        id: init,
+        ty: builder.ty,
+        op: Op::Construct(vec![zero; count as usize]),
+    });
+    let outer = fresh(next);
+    let mut outer_ty = None;
+    let mut map = HashMap::new();
+    let mut turn = rehoisted(&body.body, true, outer, &mut map, &mut outer_ty);
+    if let Some(ty) = outer_ty {
+        before.push(Instruction {
+            id: outer,
+            ty,
+            op: Op::Carried,
+        });
+    }
+    let made = *map.get(&body.result.0).unwrap_or(&body.result);
+    let index = fresh(next);
+    turn.push(Instruction {
+        id: index,
+        ty: Type::Int,
+        op: Op::Index,
+    });
+    let held = fresh(next);
+    turn.push(Instruction {
+        id: held,
+        ty: builder.ty,
+        op: Op::Carried,
+    });
+    let mut parts = Vec::with_capacity(count as usize);
+    for place in 0..count {
+        let at = fresh(next);
+        turn.push(Instruction {
+            id: at,
+            ty: Type::Int,
+            op: Op::Const(Value::Int(place as i32)),
+        });
+        let here = fresh(next);
+        turn.push(Instruction {
+            id: here,
+            ty: Type::Bool,
+            op: Op::Binary(BinaryOp::Equal, index, at),
+        });
+        let kept = fresh(next);
+        let part = fresh(next);
+        turn.push(Instruction {
+            id: part,
+            ty: element,
+            op: Op::If {
+                condition: here,
+                then: Block {
+                    body: Vec::new(),
+                    result: made,
+                },
+                otherwise: Block {
+                    body: vec![Instruction {
+                        id: kept,
+                        ty: element,
+                        op: Op::Extract(held, place),
+                    }],
+                    result: kept,
+                },
+            },
+        });
+        parts.push(part);
+    }
+    let array = fresh(next);
+    turn.push(Instruction {
+        id: array,
+        ty: builder.ty,
+        op: Op::Construct(parts),
+    });
+    out.extend(before);
+    out.push(Instruction {
+        id: builder.id,
+        ty: builder.ty,
+        op: Op::Loop {
+            count,
+            bound: None,
+            init,
+            until: None,
+            body: Block {
+                body: turn,
+                result: array,
+            },
+        },
+    });
+    true
+}
+
+/// `body` with its own `Carried` (outside any loop in it) read as
+/// `outer`, whose type is recorded; uses of them renamed.
+fn rehoisted(
+    body: &[Instruction],
+    own: bool,
+    outer: ValueId,
+    map: &mut HashMap<u32, ValueId>,
+    outer_ty: &mut Option<Type>,
+) -> Vec<Instruction> {
+    let mut out = Vec::with_capacity(body.len());
+    for instruction in body {
+        if own && matches!(instruction.op, Op::Carried) {
+            *outer_ty = Some(instruction.ty);
+            map.insert(instruction.id.0, outer);
+            continue;
+        }
+        let named = map.clone();
+        let renamed = |id: ValueId| *named.get(&id.0).unwrap_or(&id);
+        let mut op = instruction.op.clone();
+        match &mut op {
+            Op::If { condition, .. } => *condition = renamed(*condition),
+            Op::Match { scrutinee, .. } => *scrutinee = renamed(*scrutinee),
+            Op::Loop { init, bound, .. } => {
+                *init = renamed(*init);
+                if let Some(bound) = bound {
+                    *bound = renamed(*bound);
+                }
+            }
+            other => rename(other, &renamed),
+        }
+        let inner = own && !matches!(op, Op::Loop { .. });
+        for block in op.blocks_mut() {
+            block.body = rehoisted(&block.body, inner, outer, map, outer_ty);
+            block.result = *map.get(&block.result.0).unwrap_or(&block.result);
+        }
+        out.push(Instruction {
+            id: instruction.id,
+            ty: instruction.ty,
+            op,
+        });
+    }
+    out
+}
+
+/// A value of `ty` with every word zero, made in `out`; `None` for a type
+/// with no such literal.
+fn zero_of(
+    ty: Type,
+    structs: &[StructDef],
+    next: &mut u32,
+    out: &mut Vec<Instruction>,
+) -> Option<ValueId> {
+    use crate::Scalar::{Bool, Double, Float, Int, Long};
+    let value = match ty {
+        Type::Scalar(Float) => Value::Float(0.0),
+        Type::Scalar(Int) => Value::Int(0),
+        Type::Scalar(Bool) => Value::Bool(false),
+        Type::Scalar(Double) => Value::Double(0.0),
+        Type::Scalar(Long) => Value::Long(0),
+        Type::Vector(Float, 2) => Value::Vec2([0.0; 2]),
+        Type::Vector(Float, 3) => Value::Vec3([0.0; 3]),
+        Type::Vector(Float, 4) => Value::Vec4([0.0; 4]),
+        Type::Vector(Int, 2) => Value::IVec2([0; 2]),
+        Type::Vector(Int, 3) => Value::IVec3([0; 3]),
+        Type::Vector(Int, 4) => Value::IVec4([0; 4]),
+        Type::Vector(Double, 2) => Value::DVec2([0.0; 2]),
+        Type::Vector(Double, 3) => Value::DVec3([0.0; 3]),
+        Type::Vector(Double, 4) => Value::DVec4([0.0; 4]),
+        Type::Vector(Long, 2) => Value::LVec2([0; 2]),
+        Type::Vector(Long, 3) => Value::LVec3([0; 3]),
+        Type::Matrix(Float, 2) => Value::Mat2([0.0; 4]),
+        Type::Matrix(Float, 3) => Value::Mat3([0.0; 9]),
+        Type::Matrix(Float, 4) => Value::Mat4([0.0; 16]),
+        Type::Matrix(Double, 2) => Value::DMat2([0.0; 4]),
+        Type::Matrix(Double, 3) => Value::DMat3([0.0; 9]),
+        Type::Matrix(Double, 4) => Value::DMat4([0.0; 16]),
+        Type::Struct(index) => {
+            let def = structs.get(index as usize)?;
+            let parts = def
+                .fields
+                .iter()
+                .map(|field| zero_of(field.ty, structs, next, out))
+                .collect::<Option<Vec<_>>>()?;
+            let id = ValueId(*next);
+            *next += 1;
+            out.push(Instruction {
+                id,
+                ty,
+                op: Op::Construct(parts),
+            });
+            return Some(id);
+        }
+        _ => return None,
+    };
+    let id = ValueId(*next);
+    *next += 1;
+    out.push(Instruction {
+        id,
+        ty,
+        op: Op::Const(value),
+    });
+    Some(id)
 }
 
 /// A copy of `body` under fresh ids, recorded in `ids`; where `own`, an
@@ -1025,7 +1256,7 @@ impl Ctx<'_> {
     fn function(&self, function: &Function) -> Function {
         // Short builders are written out first, so their positions fold.
         let mut next = highest(&function.body) + 1;
-        let body = unrolled(&function.body, &mut next);
+        let body = unrolled(&function.body, self.structs, &mut next);
         // Short-circuits fold first, so a loop may lift what they compute.
         let body = self.folded(&body);
         let body = self.hoisted(&body);

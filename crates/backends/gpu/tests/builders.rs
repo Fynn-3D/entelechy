@@ -37,7 +37,7 @@ fn a_long_body_is_written_once_however_many_elements_it_builds() {
 }
 
 #[test]
-fn a_builder_holding_a_loop_counted_at_run_time_is_written_out() {
+fn a_builder_holding_a_loop_counted_at_run_time_runs_as_a_loop_carrying_its_array() {
     let module = compile(
         "kernel test.held@1 { requires { field.read; field.write; } input rows: Rows<Float>; output result: Rows<Float>;
         compute {
@@ -47,8 +47,11 @@ fn a_builder_holding_a_loop_counted_at_run_time_is_written_out() {
     )
     .unwrap_or_else(|error| panic!("{error}"));
     let shader = emit(&module);
+    // A loop carrying the array: the body once, no element at a computed
+    // place.
+    assert_eq!(shader.matches("exp(").count(), 1, "{shader}");
     assert!(
-        !shader.contains("< 32i; it"),
-        "the builder is written out: {shader}"
+        !shader.contains("switch it") && !shader.contains("[it"),
+        "{shader}"
     );
 }
