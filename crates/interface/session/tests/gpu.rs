@@ -554,3 +554,51 @@ kernel t.blur@1 { requires { field.read; field.write; } input picture: Image; ou
     session.evaluate(&Context::default()).unwrap();
     assert_eq!(session.device_times(), None, "unclocked, nothing is told");
 }
+
+#[test]
+fn a_large_input_on_the_device_lets_its_host_copy_go_once() {
+    // An input of a megabyte or more, once on the device, keeps no copy in
+    // Host memory; read on the processor, it comes back and stays.
+    let Some(gpu) = gpu() else { return };
+    let dir = std::env::temp_dir().join(format!("entelechy-input-copy-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("big.bin"), vec![7u8; 300_000]).unwrap();
+    std::fs::write(
+        dir.join("scene.esn"),
+        "input big: Rows<Int> = bytes \"big.bin\";
+kernel t.twice@1 { requires { field.read; field.write; time.read; } input x: Rows<Int>; output result: Rows<Int>; compute { return sample(x) * 2 + int(time()); } }
+node twice: t.twice@1 { x <- big; }
+output result <- twice.result;
+",
+    )
+    .unwrap();
+    let backend: Box<dyn Backend> = Box::new(gpu);
+    let mut runtime = entelechy_kernel::Runtime::with_backend(1 << 26, backend);
+    runtime.set_small(0);
+    let mut session = entelechy_session::Session::open_with(&dir.join("scene.esn"), None, runtime);
+    session.sync();
+    let input = |session: &entelechy_session::Session| {
+        session
+            .memory_map()
+            .held
+            .into_iter()
+            .find(|entry| entry.owner == "big")
+            .expect("the input is held")
+            .bytes
+    };
+    session.evaluate(&Context::default()).unwrap();
+    let bytes = input(&session);
+    assert_eq!(bytes.device, 300_000 * 4, "on the device");
+    assert_eq!(bytes.host, 0, "its Host copy let go");
+    // Read on the processor, the words come back and stay.
+    let handle = session.external("big").expect("an input");
+    assert_eq!(session.field(handle).unwrap().values()[0], 7);
+    session
+        .evaluate(&Context {
+            time: 1.0,
+            ..Context::default()
+        })
+        .unwrap();
+    assert_eq!(input(&session).host, 300_000 * 4, "brought back once, kept");
+}

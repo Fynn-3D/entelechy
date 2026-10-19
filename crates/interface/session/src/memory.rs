@@ -41,7 +41,35 @@ impl HeldBytes {
     }
 }
 
+/// The fewest bytes of an input's Host copy that are let go once the
+/// input is on a device ([`Session::let_go_of_input_copies`]).
+pub const COPY_LEAST: u64 = 1 << 20;
+
 impl Session {
+    /// Lets go of the Host copies of the inputs on a device, each once and
+    /// each of [`COPY_LEAST`] bytes or more: an input does not change from
+    /// frame to frame, so the device's words serve every frame, and what
+    /// reads it on the processor brings them back, once, and keeps them.
+    pub(crate) fn let_go_of_input_copies(&mut self) {
+        let handles: Vec<Handle> = self.input_handles().values().copied().collect();
+        self.copies_let_go.retain(|handle| handles.contains(handle));
+        for handle in handles {
+            if self.copies_let_go.contains(&handle) {
+                continue;
+            }
+            let host = self.host_mut();
+            let on_device = host.resident(handle).is_ok_and(|device| device.is_some());
+            if on_device
+                && host
+                    .field_bytes(handle)
+                    .is_ok_and(|bytes| bytes.host >= COPY_LEAST)
+                && host.let_go_of_copy(handle).is_ok()
+            {
+                self.copies_let_go.insert(handle);
+            }
+        }
+    }
+
     /// Where the session's memory is now.
     pub fn memory_map(&self) -> MemoryMap {
         let host = self.runtime().host();

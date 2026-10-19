@@ -1514,6 +1514,19 @@ impl Host {
         Ok(())
     }
 
+    /// Lets go of the Host copy a resident Field keeps of its words; the
+    /// device's stay, and [`Host::materialize`] brings them back when
+    /// something on the processor reads them. Answers the bytes let go.
+    pub fn let_go_of_copy(&mut self, handle: Handle) -> Result<u64, HostError> {
+        let slot = self.slot_mut(handle)?;
+        Ok(match &mut slot.storage {
+            Storage::Resident { kept, .. } => kept
+                .take()
+                .map_or(0, |data| data.storage().len() as u64 * 4),
+            _ => 0,
+        })
+    }
+
     /// Releases a Field, resident or not. The handle is invalid afterwards.
     pub fn release(&mut self, handle: Handle) -> Result<(), HostError> {
         let slot = self.slot_mut(handle)?;

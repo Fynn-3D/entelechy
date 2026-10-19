@@ -23,6 +23,9 @@ pub struct Session {
     scene: scene::Scene,
     kernels: kernels::Kernels,
     inputs: inputs::Inputs,
+    /// The inputs whose Host copies were let go once on a device
+    /// ([`Session::let_go_of_input_copies`]).
+    pub(crate) copies_let_go: std::collections::BTreeSet<Handle>,
     /// What the session may read; its store reads only there.
     reads: Arc<std::sync::Mutex<crate::reads::Reads>>,
     writes: writes::Writes,
@@ -140,6 +143,7 @@ impl Session {
             scene: scene::Scene::new(store, scene, library),
             kernels: kernels::Kernels::default(),
             inputs: inputs::Inputs::default(),
+            copies_let_go: std::collections::BTreeSet::new(),
             reads,
             writes: writes::Writes::default(),
             runtime,
@@ -1408,6 +1412,11 @@ impl Session {
         self.evaluator.cold_nodes()
     }
 
+    /// The Host, to let go of what it keeps ([`crate::memory`]).
+    pub(crate) fn host_mut(&mut self) -> &mut entelechy_kernel::Host {
+        self.runtime.host_mut()
+    }
+
     /// The scene's inputs, by name, and the Fields they are now.
     pub(crate) fn input_handles(&self) -> &std::collections::BTreeMap<String, Handle> {
         self.inputs.handles()
@@ -1600,6 +1609,7 @@ impl Session {
         self.history.ran();
         self.feed_fonts();
         self.feed_file_nodes();
+        self.let_go_of_input_copies();
         // The frame's runs are all given: a clocked frame ends here, its
         // nodes' runs kept until the device tells it.
         if let Some(frame) = self.runtime.end_frame() {
