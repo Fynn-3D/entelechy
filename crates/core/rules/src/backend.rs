@@ -296,6 +296,15 @@ pub trait Backend: Send + Sync {
         0
     }
 
+    /// Gives a Field a copy on this backend's device ahead of the runs
+    /// that read it, as the first of them would, so the Host's copy can be
+    /// let go before they run. Answers whether the Field is on the device;
+    /// a backend that computes in Host memory has nowhere to put it.
+    fn upload(&self, handle: Handle, scope: &mut Scope<'_>) -> Result<bool, ExecutionError> {
+        let _ = (handle, scope);
+        Ok(false)
+    }
+
     /// Builds backend state for a validated module.
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String>;
 

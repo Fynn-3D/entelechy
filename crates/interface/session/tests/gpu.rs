@@ -557,8 +557,9 @@ kernel t.blur@1 { requires { field.read; field.write; } input picture: Image; ou
 
 #[test]
 fn a_large_input_on_the_device_lets_its_host_copy_go_once() {
-    // An input of a megabyte or more, once on the device, keeps no copy in
-    // Host memory; read on the processor, it comes back and stays.
+    // An input of a megabyte or more goes on the device as it is read and
+    // keeps no copy in Host memory, before any frame runs; read on the
+    // processor, it comes back and stays.
     let Some(gpu) = gpu() else { return };
     let dir = std::env::temp_dir().join(format!("entelechy-input-copy-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -587,10 +588,13 @@ output result <- twice.result;
             .expect("the input is held")
             .bytes
     };
+    let bytes = input(&session);
+    assert_eq!(bytes.device, 300_000 * 4, "on the device as it is read");
+    assert_eq!(bytes.host, 0, "its Host copy let go");
     session.evaluate(&Context::default()).unwrap();
     let bytes = input(&session);
-    assert_eq!(bytes.device, 300_000 * 4, "on the device");
-    assert_eq!(bytes.host, 0, "its Host copy let go");
+    assert_eq!(bytes.device, 300_000 * 4, "the frame reads it there");
+    assert_eq!(bytes.host, 0, "and keeps no copy");
     // Read on the processor, the words come back and stay.
     let handle = session.external("big").expect("an input");
     assert_eq!(session.field(handle).unwrap().values()[0], 7);

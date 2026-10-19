@@ -557,13 +557,10 @@ impl Session {
             files: self.scene.files(),
             tables: &tables,
         };
-        self.inputs.sync(
-            &store,
-            &declared,
-            &readable,
-            self.runtime.host_mut(),
-            &mut events,
-        );
+        let on_device =
+            self.inputs
+                .sync(&store, &declared, &readable, &mut self.runtime, &mut events);
+        self.copies_let_go.extend(on_device);
         let clipboards = self.scene.files().clipboards.clone();
         self.board.sync(
             &clipboards,

@@ -319,6 +319,21 @@ fn room(host: &Host) -> usize {
     host.budget_words().saturating_sub(host.used_words())
 }
 
+/// Puts an input just read on the device, when there is one and its words
+/// take [`COPY_LEAST`](crate::memory::COPY_LEAST) bytes or more, and lets
+/// go of its Host copy: a load then holds one big input's words at a time
+/// beside its documents, not all of them. What reads it on the processor
+/// brings the words back once. Answers whether its copy went.
+fn put_on_device(runtime: &mut Runtime, handle: Handle) -> bool {
+    runtime.has_device()
+        && runtime
+            .host()
+            .field_bytes(handle)
+            .is_ok_and(|bytes| bytes.host >= crate::memory::COPY_LEAST)
+        && runtime.upload(handle).unwrap_or(false)
+        && runtime.host_mut().let_go_of_copy(handle).is_ok()
+}
+
 /// A data table's rows as the element the Kernel reading input `name`
 /// lays out; refused when no Kernel reads it.
 fn read_table(
@@ -462,21 +477,33 @@ impl Inputs {
 
     /// Syncs inputs to what the scene declares: reads new or changed
     /// files, lists directories, writes texts, forgets undeclared inputs.
+    /// Answers the inputs read now that went on the device as they were
+    /// read, their Host copies let go ([`put_on_device`]).
     pub(crate) fn sync(
         &mut self,
         store: &std::sync::Arc<dyn Store>,
         declared: &Declared,
         readable: &dyn Fn(&Path) -> Result<(), String>,
-        host: &mut Host,
+        runtime: &mut Runtime,
         events: &mut Vec<Event>,
-    ) {
-        self.sync_assets(store.as_ref(), declared, readable, host, events);
+    ) -> Vec<Handle> {
+        let mut on_device = Vec::new();
+        self.sync_assets(
+            store.as_ref(),
+            declared,
+            readable,
+            runtime,
+            events,
+            &mut on_device,
+        );
+        let host = runtime.host_mut();
         self.sync_sequences(store.as_ref(), declared.files, readable, host, events);
         self.sync_checks(store, declared.files, readable, host, events);
         self.sync_files(store.as_ref(), declared.files, readable, host, events);
         self.sync_fonts(store.as_ref(), declared.files, readable, host, events);
         self.sync_file_nodes(store.as_ref(), declared.files, readable, host, events);
         self.sync_texts(declared.graph, host, events);
+        on_device
     }
 
     /// Reads each font node's font when it is new or changed and gives the
@@ -893,8 +920,9 @@ impl Inputs {
         store: &dyn Store,
         declared: &Declared,
         readable: &dyn Fn(&Path) -> Result<(), String>,
-        host: &mut Host,
+        runtime: &mut Runtime,
         events: &mut Vec<Event>,
+        on_device: &mut Vec<Handle>,
     ) {
         let Declared {
             graph,
@@ -910,7 +938,7 @@ impl Inputs {
             .collect();
         for name in stale {
             self.assets.remove(&name);
-            self.forget(host, &name);
+            self.forget(runtime.host_mut(), &name);
         }
         for entelechy_scene::Asset {
             name,
@@ -947,14 +975,14 @@ impl Inputs {
             );
             // Checked at read time, so a refusal reports once per change.
             if let Err(why) = readable(&path) {
-                self.forget(host, &name);
+                self.forget(runtime.host_mut(), &name);
                 events.push(Event::Rejected {
                     path,
                     error: Diagnostic::new(why),
                 });
                 continue;
             }
-            let read = read_within(store, &path, room(host));
+            let read = read_within(store, &path, room(runtime.host()));
             let extension = entelechy_formats::extension(&path);
             let noted = std::cell::RefCell::new(Vec::new());
             let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
@@ -966,10 +994,10 @@ impl Inputs {
                     &extension,
                     &name,
                     table.as_ref(),
-                    room(host),
+                    room(runtime.host()),
                     &tables,
                 ),
-                false => entelechy_formats::decode(&found, &path, Some(&ty), room(host)),
+                false => entelechy_formats::decode(&found, &path, Some(&ty), room(runtime.host())),
             });
             if let Some(asset) = self.assets.get_mut(&name) {
                 asset.named = noted.into_inner();
@@ -991,7 +1019,7 @@ impl Inputs {
                     if !store.exists(&path)
                         && graph.is_some_and(|g| g.fallback(&name).is_some()) =>
                 {
-                    self.forget(host, &name);
+                    self.forget(runtime.host_mut(), &name);
                     events.push(Event::Absent { name, path });
                     continue;
                 }
@@ -1003,9 +1031,12 @@ impl Inputs {
                     continue;
                 }
             };
-            match host.adopt(data) {
+            match runtime.host_mut().adopt(data) {
                 Ok(handle) => {
-                    self.hold(host, &name, handle);
+                    self.hold(runtime.host_mut(), &name, handle);
+                    if put_on_device(runtime, handle) {
+                        on_device.push(handle);
+                    }
                     events.push(Event::Loaded { name, path, detail });
                 }
                 Err(error) => events.push(Event::Rejected {

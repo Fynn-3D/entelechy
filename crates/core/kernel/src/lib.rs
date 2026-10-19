@@ -927,6 +927,17 @@ impl Runtime {
         self.bring_home(handle).map(|_| ())
     }
 
+    /// Gives a Field a copy on the main backend's device ahead of the runs
+    /// that read it ([`Backend::upload`]); answers whether it is there.
+    pub fn upload(&mut self, handle: Handle) -> Result<bool, ExecutionError> {
+        let backend = Arc::clone(&self.backend);
+        let before = backend.uploaded();
+        let granted = [Capability::FieldRead].into_iter().collect();
+        let uploaded = backend.upload(handle, &mut Scope::new(&mut self.host, granted));
+        self.telemetry.carried(backend.as_ref(), before);
+        uploaded
+    }
+
     /// Whether two Fields hold the same words: compared in Host memory
     /// when both are there, on the device when both are resident on it.
     /// Fields of different extents or layouts, or apart, are not.

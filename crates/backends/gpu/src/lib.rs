@@ -428,6 +428,10 @@ impl Backend for GpuBackend {
         self.uploaded.load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    fn upload(&self, handle: Handle, scope: &mut Scope<'_>) -> Result<bool, ExecutionError> {
+        self.bind_input(scope, handle).map(|_| true)
+    }
+
     /// Validates `module` as the device takes it; its pipelines are built
     /// when a run first needs them ([`Lazy`]).
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
