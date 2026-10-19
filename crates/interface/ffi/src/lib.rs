@@ -479,10 +479,7 @@ fn opened(
         // Every session here answers `entelechy_request`, so its reads are held
         // from the start to the directories of the scene as first loaded,
         // plus what `entelechy_allow` allows.
-        let mut limits = entelechy_session::Limits::default();
-        if cfg!(all(target_arch = "wasm32", target_os = "unknown")) {
-            limits.small = entelechy_kernel::PAGE_SMALL;
-        }
+        let limits = entelechy_session::Limits::default();
         let loaded = Session::open_loaded(
             store,
             &scene,
