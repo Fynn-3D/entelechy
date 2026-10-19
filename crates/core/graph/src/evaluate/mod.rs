@@ -498,6 +498,11 @@ struct Layout {
     /// off the frame, takes its domain from an expression, or reads a node
     /// the plan does not run.
     moving: Vec<bool>,
+    /// The nodes whose outputs group `at` reads last, which a frame lets go
+    /// cold once it has run when they are new frame after frame
+    /// ([`CHILL_STREAK`]). What is never let go, and what an `async` node
+    /// reads, is not among them.
+    chill_after: Vec<Vec<NodeId>>,
 }
 
 impl Layout {
@@ -573,6 +578,22 @@ impl Layout {
             deps.push(reads);
             moving.push(moves);
         }
+        let held = held_nodes(graph, pinned);
+        let mut chill_after = vec![Vec::new(); groups.len()];
+        for (at, group) in groups.iter().enumerate() {
+            let id = &group.node.id;
+            let read_by_async = groups
+                .iter()
+                .enumerate()
+                .any(|(reader, g)| g.node.is_async && deps[reader].contains(&at));
+            if !held.contains(id)
+                && !kept.contains(id)
+                && !read_by_async
+                && let Some(last) = last_read.get(id)
+            {
+                chill_after[*last].push(id.clone());
+            }
+        }
         let absorbed: BTreeSet<&NodeId> = groups.iter().flat_map(|g| g.absorbed.iter()).collect();
         let running = |at: usize| runs.as_ref().is_none_or(|runs: &Vec<bool>| runs[at]);
         let mut names = Vec::new();
@@ -597,7 +618,7 @@ impl Layout {
             runs_at,
             last_read,
             readers,
-            held: held_nodes(graph, pinned),
+            held,
             runs,
             graph_readers,
             kept,
@@ -607,6 +628,7 @@ impl Layout {
             fused: Arc::new(fused),
             readers_at,
             moving,
+            chill_after,
         }
     }
 
@@ -843,7 +865,18 @@ pub struct Evaluator {
     /// The plan last asked which of its nodes' outputs are made once, and
     /// those nodes with their readers ([`made_once`]).
     made_once: Option<(Arc<Vec<Group>>, Vec<MadeOnce>)>,
+    /// How many frames in a row each node's outputs came out new.
+    changing: crate::hash::QuickMap<NodeId, u32>,
 }
+
+/// The frames in a row a node's outputs must come out new for a frame to
+/// let them go cold once their last reader has run. The next frame makes
+/// them anew whatever it finds, so holding them from frame to frame keeps
+/// memory nothing reads again; let go as soon as read, their memory serves
+/// what runs after them. A node whose outputs come out the same on some
+/// frames keeps them, for they spare what reads them then (and a frame
+/// at the same time as the last runs nothing).
+const CHILL_STREAK: u32 = 8;
 
 /// When a node that runs for its state alone, or whose outputs are small
 /// ([`SMALL_COMPARED`]), has its Fields on a device compared with its
@@ -1428,8 +1461,29 @@ impl Evaluator {
                 context,
                 params,
             };
+            // What every-frame outputs a frame lets go as their last reader
+            // has run ([`Layout::chill_after`]): a frame that commits only.
+            let chills = !self.trial && matches!(demand, Demand::Every | Demand::Frame);
             for (at, group) in groups.iter().enumerate() {
+                if chills && at > 0 {
+                    for id in &frame.layout.chill_after[at - 1] {
+                        if self
+                            .changing
+                            .get(id)
+                            .is_some_and(|run| *run >= CHILL_STREAK)
+                        {
+                            self.chill(id, runtime);
+                        }
+                    }
+                }
                 let node = &group.node;
+                // A node's run of new outputs ends unless it runs and
+                // makes new ones again on this frame.
+                let streak = if chills {
+                    self.changing.remove(&node.id).unwrap_or(0)
+                } else {
+                    0
+                };
                 if !frame.layout.runs(at) {
                     continue;
                 }
@@ -1547,11 +1601,27 @@ impl Evaluator {
                 )?;
                 // Outputs equal to the last, word for word, keep its epoch:
                 // what reads them finds nothing changed.
-                if self.output_epoch(&node.id) != before {
+                let new = self.output_epoch(&node.id) != before;
+                if new {
                     frame.layout.touch_readers(at, &mut dirty);
+                }
+                if chills && new {
+                    self.changing
+                        .insert(node.id.clone(), streak.saturating_add(1));
                 }
                 absent.push(frame.layout.place[at]);
                 steady[at] = true;
+            }
+            if chills && let Some(last) = frame.layout.chill_after.last() {
+                for id in last {
+                    if self
+                        .changing
+                        .get(id)
+                        .is_some_and(|run| *run >= CHILL_STREAK)
+                    {
+                        self.chill(id, runtime);
+                    }
+                }
             }
             let Frame {
                 executed,

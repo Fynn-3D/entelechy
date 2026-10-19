@@ -2956,3 +2956,69 @@ fn a_shared_graph_changed_is_planned_again_and_one_unchanged_is_not() {
     let same = frame(&mut evaluator, &mut runtime, &graph);
     assert!(same.executed.is_empty(), "{same:?}");
 }
+
+#[test]
+fn outputs_new_frame_after_frame_go_cold_once_read_and_the_others_stay() {
+    // `moving` makes new outputs every frame; `second` only once a second;
+    // `final` is the scene's output. After eight frames of new outputs in
+    // a row, a frame lets `moving`'s go once `mix` has read them.
+    let mut runtime = runtime();
+    load(
+        &mut runtime,
+        "kernel test.moving@1 { requires { field.write; time.read; } output result: Image; compute { return vec4(time(), 0.0, 0.0, 1.0); } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.second@1 { requires { field.write; time.read; } output result: Image; compute { return vec4(floor(time()), 0.0, 0.0, 1.0); } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.mix@1 { requires { field.read; field.write; } input a: Image; input b: Image; output result: Image; compute { return sample(a) + sample(b); } }",
+    );
+    let graph = entelechy_scene::parse(
+        "node moving: test.moving@1 { domain = vec2(2, 2); }
+node second: test.second@1 { domain = vec2(2, 2); }
+node mix: test.mix@1 { a <- moving.result; b <- second.result; }
+node final: image.invert@1 { source <- mix.result; }
+output r <- final.result;",
+    )
+    .unwrap();
+    let mut evaluator = Evaluator::new();
+    evaluator.set_fusion(false);
+    let cold =
+        |evaluator: &Evaluator, name: &str| evaluator.cold_nodes().contains(&NodeId(name.into()));
+    for frame in 0..12 {
+        let report = evaluator
+            .evaluate(
+                &graph,
+                &mut runtime,
+                &BTreeMap::new(),
+                &at(0.25 + f64::from(frame) / 60.0),
+                &BTreeMap::new(),
+            )
+            .unwrap();
+        assert!(report.executed.contains(&NodeId("moving".into())));
+        // What reads them still finds them on the frames before.
+        assert!(!cold(&evaluator, "moving") || frame >= 7, "frame {frame}");
+    }
+    assert!(
+        cold(&evaluator, "moving"),
+        "new eight frames in a row, then let go once read"
+    );
+    assert!(!cold(&evaluator, "second"), "the same on most frames: kept");
+    assert!(
+        !cold(&evaluator, "final"),
+        "the scene's output is never let go"
+    );
+    // The same time again runs nothing that need not run.
+    let again = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &at(0.25 + 11.0 / 60.0),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert!(again.executed.is_empty(), "{:?}", again.executed);
+}

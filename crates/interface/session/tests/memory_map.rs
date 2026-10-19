@@ -35,11 +35,23 @@ fn the_map_names_every_field_by_what_holds_it() {
             .unwrap_or_else(|| panic!("{owner} is held: {:#?}", map.held))
     };
     assert_eq!(bytes_of("word").kind, "input");
-    assert_eq!(bytes_of("word").bytes.host, 6 * 4, "six characters, a word each");
+    assert_eq!(
+        bytes_of("word").bytes.host,
+        6 * 4,
+        "six characters, a word each"
+    );
     // `wide` runs fused into `both`, which holds the thousand words.
     assert_eq!(bytes_of("both.result").bytes.host, 1000 * 4);
-    assert_eq!(bytes_of("tally.result").kind, "state", "state claims it before the output");
-    assert_eq!(map.held[0].owner, "both.result", "the largest first: {:#?}", map.held);
+    assert_eq!(
+        bytes_of("tally.result").kind,
+        "state",
+        "state claims it before the output"
+    );
+    assert_eq!(
+        map.held[0].owner, "both.result",
+        "the largest first: {:#?}",
+        map.held
+    );
     let owners: Vec<&str> = map.held.iter().map(|entry| entry.owner.as_str()).collect();
     let mut unique = owners.clone();
     unique.sort_unstable();
@@ -51,5 +63,8 @@ fn the_map_names_every_field_by_what_holds_it() {
         map.census.host + map.census.kept,
         "what is held and what is loose make up the Host's count"
     );
-    assert_eq!(map.census.device, 0, "the processor keeps no Field on a device");
+    assert_eq!(
+        map.census.device, 0,
+        "the processor keeps no Field on a device"
+    );
 }
