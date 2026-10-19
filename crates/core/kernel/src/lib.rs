@@ -37,6 +37,13 @@ pub use entelechy_rules::{
 /// processor instead.
 pub const DEFAULT_SMALL: u64 = 400_000;
 
+/// [`DEFAULT_SMALL`] in a page, where each run handed to the device costs
+/// a round trip to the browser's device process. With fewer small runs
+/// on the device, xianxia's page loaded every time where it otherwise
+/// lost its device about half the time (Metal: insufficient memory), at
+/// the same frame rate.
+pub const PAGE_SMALL: u64 = 3_000_000;
+
 /// The elements a run may have and go to the ordered backend however much
 /// each takes: fewer than one of a device's groups holds, which the device
 /// runs a thread each.
