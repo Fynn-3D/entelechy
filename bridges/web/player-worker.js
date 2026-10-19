@@ -33,9 +33,16 @@ let requests = [];
 let pads = new Map();
 let sounding = null;
 let held = 0;
-let block = 0;
+// The samples the card may hold, as the Player's ring: four of the first
+// block (`BLOCKS_AHEAD`), set when it comes.
+let ring = 0;
 let failed = "";
 let running = false;
+
+/// The blocks the card holds at most, as the Player's ring.
+const BLOCKS_AHEAD = 4;
+/// What a step answers when the card is still ahead: no frame was made.
+const AHEAD = "ahead";
 
 const post = (message, transfer) => self.postMessage(message, transfer || []);
 
@@ -82,8 +89,10 @@ async function step() {
   for (const hand of hands.splice(0)) hand();
   await answer();
   say();
-  // With sound, the card sets the pace, as the Player's ring does.
-  if (sounding && block && held > block * 3) return;
+  // With sound, the card sets the pace, as the Player's ring does: a
+  // frame is made while its ring has room for a frame's worth at 60 Hz,
+  // and asked again soon (`AHEAD`) while it has not.
+  if (sounding && ring && held + sounding.rate / 60 > ring) return AHEAD;
   const framed = await frame(session, size.width, size.height, size.scale, sounding ? sounding.rate : 0);
   say();
   if (framed === 0) {
@@ -120,7 +129,9 @@ async function play() {
     if ((await sound(entelechy.session, field)) !== 0) return;
     const [words, , , , count, stride] = new Uint32Array(x.memory.buffer, field, 9);
     const samples = new Float32Array(new Float32Array(x.memory.buffer, words, count * stride));
-    block = count;
+    // The block it is sized by is at least two frames' worth at 60 Hz,
+    // as the Player's: a first block that came short leaves room.
+    if (!ring) ring = Math.max(count, Math.floor(sounding.rate / 30), 64) * BLOCKS_AHEAD;
     sounding.port.postMessage({ samples, channels: stride }, [samples.buffer]);
   } finally {
     x.entelechy_free(field, 36);
@@ -134,14 +145,16 @@ function run() {
   if (running) return;
   running = true;
   const loop = async () => {
+    let stepped;
     try {
-      await entelechy.inTurn(step);
+      stepped = await entelechy.inTurn(step);
     } catch (error) {
       post({ stopped: error.message });
       running = false;
       return;
     }
-    next(loop);
+    if (stepped === AHEAD) setTimeout(loop, 1);
+    else next(loop);
   };
   next(loop);
 }

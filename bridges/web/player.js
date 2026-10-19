@@ -21,6 +21,11 @@ const PAD_BUTTONS = [
 const BUTTON = { 0: 0, 1: 2, 2: 1 };
 
 /// Keys the page would act on itself, which the scene has instead.
+/// The blocks the card holds at most, as the Player's ring.
+const BLOCKS_AHEAD = 4;
+/// What a step answers when the card is still ahead: no frame was made.
+const AHEAD = "ahead";
+
 const HELD = new Set(["Tab", "Escape", "F5", "F6", "F10", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " "]);
 
 /// The sound card: a worklet that plays the blocks it is handed, in
@@ -77,7 +82,9 @@ class EntelechyPlayer {
     this.pads = new Map();
     this.audio = null;
     this.held = 0;
-    this.block = 0;
+    // The samples the card may hold, as the Player's ring: four of the
+    // first block (`BLOCKS_AHEAD`), set when it comes.
+    this.ring = 0;
     this.said = [];
     this.onsaid = (line) => console.log(line);
     // What the person did, handed to the play between frames: a frame
@@ -247,9 +254,10 @@ class EntelechyPlayer {
     this.pollPads();
     await this.answerNow();
     this.say();
-    // With sound, the card sets the pace: a block is made when it has
-    // room, as the Player's ring does.
-    if (this.audio && this.block && this.held > this.block * 3) return;
+    // With sound, the card sets the pace, as the Player's ring does: a
+    // frame is made while its ring has room for a frame's worth at 60 Hz,
+    // and asked again soon while it has not.
+    if (this.audio && this.ring && this.held + this.audio.context.sampleRate / 60 > this.ring) return AHEAD;
     const rate = this.audio ? this.audio.context.sampleRate : 0;
     const scale = window.devicePixelRatio || 1;
     const framed = await this.frame(this.session, this.canvas.width, this.canvas.height, scale, rate);
@@ -295,7 +303,9 @@ class EntelechyPlayer {
       const at = new Uint32Array(this.x.memory.buffer, field, 9);
       const [words, , , , count, stride] = at;
       const samples = new Float32Array(new Float32Array(this.x.memory.buffer, words, count * stride));
-      this.block = count;
+      // The block it is sized by is at least two frames' worth at 60 Hz,
+      // as the Player's: a first block that came short leaves room.
+      if (!this.ring) this.ring = Math.max(count, Math.floor(this.audio.context.sampleRate / 30), 64) * BLOCKS_AHEAD;
       this.audio.node.port.postMessage({ samples, channels: stride }, [samples.buffer]);
     } finally {
       this.x.entelechy_free(field, 36);
@@ -324,14 +334,15 @@ class EntelechyPlayer {
     this.running = true;
     document.title = "Entelechy Player";
     while (this.running) {
+      let stepped;
       try {
-        await this.step();
+        stepped = await this.step();
       } catch (error) {
         this.onsaid(`stopped: ${error.message}`);
         this.running = false;
         return;
       }
-      await new Promise((done) => requestAnimationFrame(done));
+      await new Promise((done) => (stepped === AHEAD ? setTimeout(done, 1) : requestAnimationFrame(done)));
     }
   }
 

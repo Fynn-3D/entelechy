@@ -96,14 +96,21 @@ impl Ring {
 /// How many blocks the ring holds ahead of the device.
 const BLOCKS_AHEAD: usize = 4;
 
+/// The block a ring is sized by: the first, and at least two frames' worth
+/// at 60 Hz, so a first block that came short (the time since a frame
+/// that was quick) leaves room for the frames after it.
+fn sized(first: usize, rate: u32) -> usize {
+    first.max(rate as usize / 30).max(64)
+}
+
 /// An open output device fed from a ring.
 pub struct Audio {
     _stream: cpal::Stream,
     ring: Arc<Ring>,
     rate: u32,
     channels: usize,
-    /// Samples per channel of the last block, sizing the ring.
-    block: usize,
+    /// Samples per channel of the first block, which sized the ring.
+    first: usize,
     dropped: usize,
 }
 
@@ -138,9 +145,10 @@ impl Audio {
             sample_rate: rate,
             buffer_size: cpal::BufferSize::Default,
         };
-        let ring = Arc::new(Ring::new(block.max(64) * channels * BLOCKS_AHEAD));
+        let first = sized(block, rate);
+        let ring = Arc::new(Ring::new(first * channels * BLOCKS_AHEAD));
         // One block of silence ahead covers the first block's computation.
-        ring.push(&vec![0.0; block.max(64) * channels]);
+        ring.push(&vec![0.0; first * channels]);
         let consumer = Arc::clone(&ring);
         let stream = device
             .build_output_stream(
@@ -160,7 +168,7 @@ impl Audio {
             ring,
             rate,
             channels,
-            block,
+            first,
             dropped: 0,
         })
     }
@@ -170,9 +178,14 @@ impl Audio {
         self.rate
     }
 
-    /// Whether the ring has room for another block of the last size.
+    /// Whether the ring has room for a frame's worth of sound at 60 Hz, so
+    /// a frame may make another block. A frame's worth, not room for a
+    /// block the size of the last: a sound whose blocks are as long as the
+    /// time since the frame before (`synth.paced`) would otherwise keep,
+    /// after a stall, the long blocks and slow frames it left. Frames that
+    /// each make one block of a fixed size are held to the device's pace.
     pub fn has_room(&self) -> bool {
-        self.ring.room() >= self.block.max(1) * self.channels
+        self.ring.room() >= (self.rate as usize / 60).max(1) * self.channels
     }
 
     /// Queues one block of frames of `words_per_frame` floats (1 mono,
@@ -194,7 +207,6 @@ impl Audio {
             self.dropped += 1;
             return false;
         }
-        self.block = frames;
         self.ring.push(&interleaved);
         true
     }
@@ -205,7 +217,7 @@ impl Audio {
             "audio {} Hz {} ch, block {}, {} underruns, {} dropped",
             self.rate,
             self.channels,
-            self.block,
+            self.first,
             self.ring.underruns(),
             self.dropped
         )
