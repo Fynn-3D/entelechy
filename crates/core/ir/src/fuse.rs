@@ -184,6 +184,8 @@ impl<'a> Reads<'a> {
                     }
                     self.walk(&body.body, true);
                 }
+                // An each's body runs once for each position, as a loop's.
+                Op::Each { body, .. } => self.walk(&body.body, true),
                 op => {
                     for block in op.blocks() {
                         self.walk(&block.body, looped);
@@ -1053,6 +1055,10 @@ impl<'a> Renumber<'a> {
                     until: until.as_ref().map(|block| self.nested(block)),
                     body: self.nested(body),
                 },
+                Op::Each { count, body } => Op::Each {
+                    count: *count,
+                    body: self.nested(body),
+                },
                 other => {
                     let mut op = (self.ops)(other);
                     self.map_operands(&mut op);
@@ -1131,7 +1137,7 @@ impl<'a> Renumber<'a> {
             | Op::Sample(_)
             | Op::Count(_)
             | Op::Size(_) => {}
-            Op::If { .. } | Op::Match { .. } | Op::Loop { .. } => {
+            Op::If { .. } | Op::Match { .. } | Op::Loop { .. } | Op::Each { .. } => {
                 unreachable!("blocks are rewritten separately")
             }
         }

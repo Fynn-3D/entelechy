@@ -869,10 +869,11 @@ struct Builder<'a> {
     types: Vec<Type>,
     /// Carried types of enclosing loops, innermost last.
     loops: Vec<Type>,
-    /// Open `[each ...]` builders: the element's position and the loop
-    /// depth at the builder, so `index()` is that position unless a loop
-    /// opened since.
-    each: Vec<(u32, usize)>,
+    /// Open `[each ...]` builders: the element's position where the
+    /// body is written out per element (`None` where it runs once per
+    /// element) and the loop depth at the builder, so `index()` is the
+    /// builder's position unless a loop opened since.
+    each: Vec<(Option<u32>, usize)>,
     /// Every `let`, in source order, with its value: what a trace shows.
     bindings: Vec<(ValueId, String)>,
     /// Unnamed numbers written without a width, exact (a float as a
@@ -984,6 +985,18 @@ impl<'a> Builder<'a> {
     }
 
     /// Reserves the next value id; `place` emits into it.
+    /// Forgets the values from `mark` on, lowered and set aside.
+    fn forget_from(&mut self, mark: usize) {
+        let kept = |id: u32| (id as usize) < mark;
+        self.types.truncate(mark);
+        self.literals.retain(|id, _| kept(*id));
+        self.aggregates.retain(|id| kept(*id));
+        self.truncated.retain(|id| kept(*id));
+        self.too_large.retain(|id, _| kept(*id));
+        self.places.retain(|id, _| kept(id.0));
+        self.bindings.retain(|(id, _)| kept(id.0));
+    }
+
     fn reserve(&mut self, ty: Type) -> ValueId {
         self.types.push(ty);
         ValueId((self.types.len() - 1) as u32)

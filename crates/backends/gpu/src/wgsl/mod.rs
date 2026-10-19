@@ -162,6 +162,7 @@ pub fn brace_depth(module: &Module) -> usize {
                 Op::Loop { until, body, .. } => {
                     1 + nest(&body.body).max(until.as_ref().map_or(0, |until| nest(&until.body)))
                 }
+                Op::Each { body, .. } => 1 + nest(&body.body).max(2),
                 Op::Match {
                     arms, otherwise, ..
                 } => {

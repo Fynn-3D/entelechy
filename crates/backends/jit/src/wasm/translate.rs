@@ -1255,6 +1255,7 @@ impl<'a> Fx<'a> {
                 until,
                 body,
             } => self.loop_(ty, id, *count, *bound, *init, until.as_ref(), body),
+            Op::Each { count, body } => self.each(ty, *count, body),
             Op::Carried => self
                 .loops
                 .last()
@@ -1640,6 +1641,48 @@ impl<'a> Fx<'a> {
             self.ran.insert(id.0, ran);
         }
         carried
+    }
+
+    /// An array built in its own slot: each run of the body stores its
+    /// element at its position, and the words are read back once all are
+    /// made. Its position is the innermost index; what it reads as
+    /// carried is the enclosing loop's (or the scan's).
+    fn each(&mut self, ty: Type, count: u32, body: &entelechy_ir::Block) -> Vec<W> {
+        let array_types = word_types(self.module, ty);
+        let element_types = array_types[..array_types.len() / count as usize].to_vec();
+        let stride = byte_size(&element_types) as i32;
+        let offset = self.shared.reserve(byte_size(&array_types));
+        let base = self.slot(offset);
+        let index = self.local(Val::I32);
+        self.push_i32(0);
+        self.set(index);
+        let carried = self
+            .loops
+            .last()
+            .or(self.scan.as_ref())
+            .map(|(carried, _)| carried.clone())
+            .unwrap_or_default();
+        // loop $each { ... }
+        self.byte(LOOP);
+        self.byte(0x40);
+        self.loops.push((carried, index));
+        self.block(&body.body);
+        let element = self.words(&body.result);
+        let scaled = self.mul_imm(index, stride);
+        let at = self.bin(base, scaled, I32_ADD, Val::I32);
+        self.stores(&element, at);
+        self.get(index);
+        self.push_i32(1);
+        self.byte(I32_ADD);
+        self.set(index);
+        self.get(index);
+        self.push_i32(count as i32);
+        self.byte(I32_LT_U);
+        self.byte(BR_IF);
+        self.uleb(0);
+        self.loops.pop();
+        self.byte(END);
+        self.loads(&array_types, base, 0)
     }
 
     /// Checked `x op y` on integers: the result wraps; overflow is

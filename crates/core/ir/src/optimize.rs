@@ -12,7 +12,9 @@
 //! - an unread value is dropped, except a `put`, a writing call, a block
 //!   holding one, or a name a trace shows;
 //! - a call to a short function is written out in place;
-//! - loop-invariant work that cannot fail moves before the loop.
+//! - loop-invariant work that cannot fail moves before the loop;
+//! - an `each` builder short enough is written out, its `Index` the
+//!   element's position.
 //!
 //! Values are then renumbered in pre-order. Floats keep their order and
 //! a run reports the same failure.
@@ -35,6 +37,10 @@ const BIG_ARG_WORDS: usize = 32;
 /// The most instructions of a function taking a wide argument that is
 /// still written out where it is called.
 const INLINE_BIG_LIMIT: usize = 1024;
+/// An `each` builder whose elements together hold at most this many
+/// instructions, nested blocks counted, is written out element by
+/// element; a longer one runs as a loop.
+const UNROLL_LIMIT: usize = 512;
 
 /// Optimizes every function of a module. The result computes the same
 /// words and validates whenever the input does.
@@ -640,6 +646,81 @@ fn highest(body: &[Instruction]) -> u32 {
         .unwrap_or(0)
 }
 
+/// `body` with each short `each` builder written out, innermost first:
+/// its body once per element under fresh ids, the body's own `Index`
+/// that element's position, and the array built from the elements.
+fn unrolled(body: &[Instruction], next: &mut u32) -> Vec<Instruction> {
+    let mut out = Vec::with_capacity(body.len());
+    for instruction in body {
+        let mut instruction = instruction.clone();
+        for block in instruction.op.blocks_mut() {
+            block.body = unrolled(&block.body, next);
+        }
+        match &instruction.op {
+            Op::Each { count, body } if *count as usize * size(&body.body) <= UNROLL_LIMIT => {
+                let mut elements = Vec::with_capacity(*count as usize);
+                for position in 0..*count {
+                    let mut ids = HashMap::new();
+                    out.extend(copied(&body.body, position as i32, true, &mut ids, next));
+                    elements.push(*ids.get(&body.result.0).unwrap_or(&body.result));
+                }
+                out.push(Instruction {
+                    id: instruction.id,
+                    ty: instruction.ty,
+                    op: Op::Construct(elements),
+                });
+            }
+            _ => out.push(instruction),
+        }
+    }
+    out
+}
+
+/// A copy of `body` under fresh ids, recorded in `ids`; where `own`, an
+/// `Index` is `position`, and inside a nested loop or builder it is that
+/// one's.
+fn copied(
+    body: &[Instruction],
+    position: i32,
+    own: bool,
+    ids: &mut HashMap<u32, ValueId>,
+    next: &mut u32,
+) -> Vec<Instruction> {
+    let mut copy = Vec::with_capacity(body.len());
+    for instruction in body {
+        let fresh = ValueId(*next);
+        *next += 1;
+        let map = |ids: &HashMap<u32, ValueId>, id: ValueId| *ids.get(&id.0).unwrap_or(&id);
+        let mut op = match &instruction.op {
+            Op::Index if own => Op::Const(Value::Int(position)),
+            other => other.clone(),
+        };
+        match &mut op {
+            Op::If { condition, .. } => *condition = map(ids, *condition),
+            Op::Match { scrutinee, .. } => *scrutinee = map(ids, *scrutinee),
+            Op::Loop { init, bound, .. } => {
+                *init = map(ids, *init);
+                if let Some(bound) = bound {
+                    *bound = map(ids, *bound);
+                }
+            }
+            other => rename(other, &|id| map(ids, id)),
+        }
+        let inner = own && !matches!(op, Op::Loop { .. } | Op::Each { .. });
+        for block in op.blocks_mut() {
+            block.body = copied(&block.body, position, inner, ids, next);
+            block.result = map(ids, block.result);
+        }
+        ids.insert(instruction.id.0, fresh);
+        copy.push(Instruction {
+            id: fresh,
+            ty: instruction.ty,
+            op,
+        });
+    }
+    copy
+}
+
 /// `function` with its calls to short functions written out: callee
 /// values take fresh ids, `Arg(i)` reads become the call's operands, and
 /// the return value takes the call's place.
@@ -769,6 +850,10 @@ impl Inline<'_> {
                     until: until.as_ref().map(|block| self.nested(block)),
                     body: self.nested(body),
                 },
+                Op::Each { count, body } => Op::Each {
+                    count: *count,
+                    body: self.nested(body),
+                },
                 other => {
                     let mut op = other.clone();
                     rename(&mut op, &|id| self.map(id));
@@ -854,6 +939,7 @@ impl Inline<'_> {
                         .map(|block| self.written_block(block, operands, ids));
                     *body = self.written_block(body, operands, ids);
                 }
+                Op::Each { body, .. } => *body = self.written_block(body, operands, ids),
                 other => rename(other, &|value| take(value, ids)),
             }
             ids.insert(instruction.id.0, id);
@@ -918,8 +1004,11 @@ struct Read {
 
 impl Ctx<'_> {
     fn function(&self, function: &Function) -> Function {
+        // Short builders are written out first, so their positions fold.
+        let mut next = highest(&function.body) + 1;
+        let body = unrolled(&function.body, &mut next);
         // Short-circuits fold first, so a loop may lift what they compute.
-        let body = self.folded(&function.body);
+        let body = self.folded(&body);
         let body = self.hoisted(&body);
         let (body, narrowed) = self.narrowed(&body);
         // A narrowed-away read loses its binding name, so a trace shows
@@ -1099,6 +1188,10 @@ impl Ctx<'_> {
                         .map(|block| self.narrow_block(block, reads, narrowed)),
                     body: self.narrow_block(body, reads, narrowed),
                 },
+                Op::Each { count, body } => Op::Each {
+                    count: *count,
+                    body: self.narrow_block(body, reads, narrowed),
+                },
                 other => other.clone(),
             };
             out.push(Instruction {
@@ -1144,7 +1237,11 @@ impl Ctx<'_> {
                 && block.body.iter().all(|instruction| {
                     !matches!(
                         instruction.op,
-                        Op::If { .. } | Op::Match { .. } | Op::Loop { .. } | Op::Call(..)
+                        Op::If { .. }
+                            | Op::Match { .. }
+                            | Op::Loop { .. }
+                            | Op::Each { .. }
+                            | Op::Call(..)
                     ) && !self.has_effects(&instruction.op)
                         && self.cse_safe(&instruction.op)
                         && !can_fail(instruction.ty, &instruction.op)
@@ -1201,6 +1298,10 @@ impl Ctx<'_> {
                     bound: *bound,
                     init: *init,
                     until: until.as_ref().map(|block| self.folded_block(block)),
+                    body: self.folded_block(body),
+                },
+                Op::Each { count, body } => Op::Each {
+                    count: *count,
                     body: self.folded_block(body),
                 },
                 other => other.clone(),
@@ -1270,7 +1371,11 @@ impl Ctx<'_> {
                             && !can_fail(instruction.ty, &instruction.op)
                             && !matches!(
                                 instruction.op,
-                                Op::If { .. } | Op::Match { .. } | Op::Loop { .. } | Op::Call(..)
+                                Op::If { .. }
+                                    | Op::Match { .. }
+                                    | Op::Loop { .. }
+                                    | Op::Each { .. }
+                                    | Op::Call(..)
                             )
                             && operands(&instruction.op)
                                 .iter()
@@ -1287,6 +1392,42 @@ impl Ctx<'_> {
                         bound: *bound,
                         init: *init,
                         until: until.as_ref().map(|block| self.hoisted_block(block)),
+                        body: Block {
+                            body: kept,
+                            result: inner.result,
+                        },
+                    }
+                }
+                Op::Each { count, body } => {
+                    // As a loop's: what is the same for every element is
+                    // made once, before it.
+                    let inner = self.hoisted_block(body);
+                    let mut kept = Vec::with_capacity(inner.body.len());
+                    let mut within: HashSet<u32> = defined(&inner.body);
+                    for instruction in inner.body {
+                        let liftable = !self.has_effects(&instruction.op)
+                            && self.cse_safe(&instruction.op)
+                            && !can_fail(instruction.ty, &instruction.op)
+                            && !matches!(
+                                instruction.op,
+                                Op::If { .. }
+                                    | Op::Match { .. }
+                                    | Op::Loop { .. }
+                                    | Op::Each { .. }
+                                    | Op::Call(..)
+                            )
+                            && operands(&instruction.op)
+                                .iter()
+                                .all(|operand| !within.contains(&operand.0));
+                        if liftable {
+                            within.remove(&instruction.id.0);
+                            out.push(instruction);
+                        } else {
+                            kept.push(instruction);
+                        }
+                    }
+                    Op::Each {
+                        count: *count,
                         body: Block {
                             body: kept,
                             result: inner.result,
@@ -1332,7 +1473,7 @@ impl Ctx<'_> {
     fn cse_safe(&self, op: &Op) -> bool {
         match op {
             Op::Put(..) | Op::Emit(_) | Op::Spend(_) | Op::Look | Op::Carried | Op::Index => false,
-            Op::If { .. } | Op::Match { .. } | Op::Loop { .. } => false,
+            Op::If { .. } | Op::Match { .. } | Op::Loop { .. } | Op::Each { .. } => false,
             Op::Call(callee, _) => !self.writers.get(*callee as usize).copied().unwrap_or(false),
             Op::Sample(input)
             | Op::At(input, _)
@@ -1399,6 +1540,10 @@ impl Ctx<'_> {
                         body: self.sweep_block(body, used),
                     }
                 }
+                Op::Each { count, body } => Op::Each {
+                    count,
+                    body: self.sweep_block(body, used),
+                },
                 other => {
                     for operand in operands(&other) {
                         used.insert(operand.0, ());
@@ -1527,7 +1672,11 @@ impl Simplify<'_> {
                 && block.body.iter().all(|instruction| {
                     !matches!(
                         instruction.op,
-                        Op::If { .. } | Op::Match { .. } | Op::Loop { .. } | Op::Call(..)
+                        Op::If { .. }
+                            | Op::Match { .. }
+                            | Op::Loop { .. }
+                            | Op::Each { .. }
+                            | Op::Call(..)
                     ) && !ctx.has_effects(&instruction.op)
                         && ctx.cse_safe(&instruction.op)
                         && !can_fail(instruction.ty, &instruction.op)
@@ -1616,6 +1765,10 @@ impl Simplify<'_> {
                         None => loop_op,
                     }
                 }
+                Op::Each { count, body } => Op::Each {
+                    count: *count,
+                    body: self.nested(body),
+                },
                 other => {
                     let mut op = other.clone();
                     rename(&mut op, &|id| self.map(id));
@@ -2175,6 +2328,10 @@ impl Renumber {
                     bound: bound.map(|bound| self.map(bound)),
                     init: self.map(*init),
                     until: until.as_ref().map(|block| self.nested(block)),
+                    body: self.nested(body),
+                },
+                Op::Each { count, body } => Op::Each {
+                    count: *count,
                     body: self.nested(body),
                 },
                 other => {

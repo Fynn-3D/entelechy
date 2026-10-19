@@ -586,8 +586,9 @@ struct Checker<'a> {
     visible: Vec<bool>,
     /// Next expected pre-order id.
     next: u32,
-    /// Carried type of each enclosing loop, innermost last.
-    loops: Vec<Type>,
+    /// Each enclosing loop's carried type, and `None` for an enclosing
+    /// [`Op::Each`], which carries none; innermost last.
+    loops: Vec<Option<Type>>,
 }
 
 impl<'a> Checker<'a> {
@@ -957,7 +958,7 @@ impl<'a> Checker<'a> {
                     );
                 }
                 let carried = self.operand(*init, position)?;
-                self.loops.push(carried);
+                self.loops.push(Some(carried));
                 if let Some(until) = until
                     && self.block(until)? != Type::Bool
                 {
@@ -975,8 +976,31 @@ impl<'a> Checker<'a> {
                 }
                 carried
             }
-            Op::Carried => match self.loops.last() {
-                Some(carried) => *carried,
+            Op::Each { count, body } => {
+                if *count == 0 || *count > MAX_LOOP_COUNT {
+                    return Err(self.fail(format!(
+                        "{position} builds {count} elements; the count must be 1..={MAX_LOOP_COUNT}"
+                    )));
+                }
+                self.loops.push(None);
+                let element = self.block(body);
+                self.loops.pop();
+                let element = element?;
+                let built = match ty {
+                    Type::Struct(index) => self.module.structs.get(*index as usize),
+                    _ => None,
+                };
+                if !built.is_some_and(|def| {
+                    def.element == Some(element) && def.fields.len() == *count as usize
+                }) {
+                    return Err(self.fail(format!(
+                        "{position} builds {count} elements of {element}, which is not its type {ty}"
+                    )));
+                }
+                *ty
+            }
+            Op::Carried => match self.loops.iter().rev().find_map(|carried| *carried) {
+                Some(carried) => carried,
                 None => self.scan_carry().ok_or_else(|| {
                     self.fail(format!("{position} reads a carried value outside a loop"))
                 })?,
@@ -1540,6 +1564,50 @@ mod tests {
         module.entry.body[2].id = ValueId(7);
         let error = validate(module).unwrap_err();
         assert!(error.message.contains("out of order"), "{error}");
+    }
+
+    #[test]
+    fn a_builder_makes_its_array_type_and_carries_nothing() {
+        let mut module = sample_module(&[Capability::FieldRead, Capability::FieldWrite]);
+        let array = |count: usize| StructDef {
+            name: format!("[Vec4; {count}]"),
+            fields: (0..count)
+                .map(|i| crate::Field {
+                    name: i.to_string(),
+                    ty: Type::Vec4,
+                })
+                .collect(),
+            element: Some(Type::Vec4),
+        };
+        let built = |op: Op| {
+            vec![
+                instruction(
+                    0,
+                    Type::Struct(0),
+                    Op::Each {
+                        count: 4,
+                        body: Block {
+                            body: vec![instruction(1, Type::Vec4, op)],
+                            result: ValueId(1),
+                        },
+                    },
+                ),
+                instruction(2, Type::Vec4, Op::Extract(ValueId(0), 3)),
+            ]
+        };
+        module.entry.results = vec![ValueId(2)];
+        module.structs = vec![array(4)];
+        module.entry.body = built(Op::Sample(0));
+        assert!(validate(module.clone()).is_ok());
+
+        module.structs = vec![array(3)];
+        let error = validate(module.clone()).unwrap_err();
+        assert!(error.message.contains("which is not its type"), "{error}");
+
+        module.structs = vec![array(4)];
+        module.entry.body = built(Op::Carried);
+        let error = validate(module).unwrap_err();
+        assert!(error.message.contains("outside a loop"), "{error}");
     }
 
     #[test]

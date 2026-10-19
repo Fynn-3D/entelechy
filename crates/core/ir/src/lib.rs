@@ -1108,6 +1108,7 @@ impl Op {
                 .chain(std::iter::once(otherwise))
                 .collect(),
             Op::Loop { until, body, .. } => until.iter().chain(std::iter::once(body)).collect(),
+            Op::Each { body, .. } => vec![body],
             _ => Vec::new(),
         }
     }
@@ -1126,6 +1127,7 @@ impl Op {
                 .chain(std::iter::once(otherwise))
                 .collect(),
             Op::Loop { until, body, .. } => until.iter_mut().chain(std::iter::once(body)).collect(),
+            Op::Each { body, .. } => vec![body],
             _ => Vec::new(),
         }
     }
@@ -1207,11 +1209,23 @@ pub enum Op {
         /// The body, yielding the next carried value.
         body: Block,
     },
-    /// The carried value of the innermost enclosing loop, or, outside any
-    /// loop in a scan's entry, the scan's carried value.
+    /// Build an array of `count` elements: `body` runs once for each, in
+    /// order, [`Op::Index`] its position, and yields that element. An
+    /// `[each]` not written out: its runs are not loop iterations, and
+    /// count as no work but what their own loops do.
+    Each {
+        /// How many elements, at most [`MAX_LOOP_COUNT`].
+        count: u32,
+        /// The body, yielding one element.
+        body: Block,
+    },
+    /// The carried value of the innermost enclosing loop (an [`Op::Each`]
+    /// carries none), or, outside any loop in a scan's entry, the scan's
+    /// carried value.
     Carried,
-    /// The iteration index of the innermost enclosing loop as `Int`, or,
-    /// outside any loop in a scan's entry, the element index.
+    /// The iteration index of the innermost enclosing loop or position of
+    /// the innermost enclosing [`Op::Each`] as `Int`, or, outside both in
+    /// a scan's entry, the element index.
     Index,
     /// The current element's coordinate: `Vec2` over a grid, `Vec3` over a
     /// volume; rows have `element()` instead. Entry point only.
@@ -1462,6 +1476,10 @@ fn block_work(instructions: &[Instruction], functions: &[u64]) -> u64 {
                     .saturating_add(until.as_ref().map_or(0, |b| block_work(&b.body, functions)));
                 u64::from(*count).saturating_mul(inner.saturating_add(1))
             }
+            // Its runs are not iterations: the loops in it, each run.
+            Op::Each { count, body } => {
+                u64::from(*count).saturating_mul(block_work(&body.body, functions))
+            }
             Op::If {
                 then, otherwise, ..
             } => block_work(&then.body, functions).max(block_work(&otherwise.body, functions)),
@@ -1582,6 +1600,9 @@ fn typical_in(
                     *count
                 };
                 u64::from(runs).saturating_mul(inner.saturating_add(1))
+            }
+            Op::Each { count, body } => {
+                u64::from(*count).saturating_mul(typical_in(&body.body, functions, defined, params))
             }
             Op::If {
                 then, otherwise, ..

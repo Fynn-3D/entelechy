@@ -193,8 +193,8 @@ Inside `compute`, a body is `let` bindings and a result.
 argument or result, a loop's carried value or a Field's element. `[a, b,
 c]` builds one, `[v; 8]` eight copies, `a[i]` takes an element: a literal
 index is checked at compile time, a computed `Int` is clamped into the
-array. `[each N { body }]` builds one element by element, unrolled, with
-`index()` its position (a loop inside has its own `index()`):
+array. `[each N { body }]` builds one element by element, the body run
+once per element with `index()` its position (a loop inside has its own `index()`):
 `[each 32 { unit(w, x, index()) }]`, or `[each 4 { if index() == k { v }
 else { a[index()] } }]` for `a` with element `k` replaced. An array has
 1 to 4096 elements, laid out in order. A value of any type holds at most

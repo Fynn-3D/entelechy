@@ -389,6 +389,16 @@ pub(super) enum Instr {
         body: Vec<Instr>,
         body_result: usize,
     },
+    /// An array built element by element: `body` runs `count` times, its
+    /// position the innermost index, and its `n`-word result is element
+    /// `k` at `dst + k * n`.
+    Each {
+        count: u32,
+        dst: usize,
+        n: usize,
+        body: Vec<Instr>,
+        body_result: usize,
+    },
     Index {
         dst: usize,
     },

@@ -150,7 +150,7 @@ fn deepest<'a>(module: &'a Module, measured: Option<&Measured>) -> Vec<Frame<'a>
 
 fn frame<'a>(module: &Module, function: &'a Function) -> Frame<'a> {
     // Each value's words twice (held and spilled), and the words of each
-    // array subscripted from a stack slot; by type, how many values and
+    // array subscripted from or built in a stack slot; by type, how many values and
     // their words; and the functions called.
     fn walk(
         module: &Module,
@@ -177,6 +177,8 @@ fn frame<'a>(module: &Module, function: &'a Function) -> Frame<'a> {
                         total += words(&module.structs, *ty);
                     }
                 }
+                // An each builds its array in a stack slot.
+                Op::Each { .. } => total += words(&module.structs, instruction.ty),
                 Op::Call(callee, _) => {
                     if !calls.contains(&(*callee as usize)) {
                         calls.push(*callee as usize);

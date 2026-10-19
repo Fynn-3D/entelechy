@@ -469,7 +469,12 @@ impl Builder<'_> {
                 if let Some((position, depth)) = self.each.last().copied()
                     && depth == self.loops.len()
                 {
-                    return Ok(self.emit(Type::Int, Op::Const(Value::Int(position as i32))));
+                    return Ok(match position {
+                        Some(position) => {
+                            self.emit(Type::Int, Op::Const(Value::Int(position as i32)))
+                        }
+                        None => self.emit(Type::Int, Op::Index),
+                    });
                 }
                 let scanning = self.is_entry && self.manifest.mode == Mode::Scan;
                 if self.loops.is_empty() && !scanning {

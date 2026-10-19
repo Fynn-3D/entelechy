@@ -384,7 +384,7 @@ it allowed; nothing over the wire widens it.
   requires of those.
 - What an agent sends is bounded before it costs anything: a domain is
   charged against the Host's budget before allocation, on the frame or
-  off it; an `[each]` and a `times` before they are written out; a socket
+  off it; an `[each]` and a `times` before they are written out or run; a socket
   request before it is held; a rejected scene never reaches the disk.
 
 A scene a person runs themselves (`run`, `render`, `replay`) reads what

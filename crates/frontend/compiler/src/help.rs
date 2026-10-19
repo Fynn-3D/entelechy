@@ -406,7 +406,7 @@ pub fn forms() -> Vec<Form> {
             "each",
             "expression",
             "[each n { body }]",
-            "An array built element by element, unrolled, with `index()` its position; a loop inside the body has its own `index()`.",
+            "An array built element by element, the body run once per element with `index()` its position; a loop inside the body has its own `index()`.",
         ),
         form(
             "array",

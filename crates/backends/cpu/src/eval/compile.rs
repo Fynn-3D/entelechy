@@ -382,6 +382,7 @@ pub(super) fn use_counts(function: &Function, slots: usize) -> Vec<u32> {
                     }
                     note(&body.result);
                 }
+                Op::Each { body, .. } => note(&body.result),
                 Op::At(_, a)
                 | Op::AtLinear(_, a)
                 | Op::Key(a)
@@ -867,6 +868,19 @@ impl FunctionCompiler<'_> {
                     carried: dst.at,
                     n: dst.n,
                     until,
+                    body: body_code,
+                    body_result,
+                }
+            }
+            // An each carries nothing: what its body reads as carried is
+            // the enclosing loop's.
+            Op::Each { count, body } => {
+                let dst = define(self);
+                let (body_code, body_result) = self.nested(body);
+                Instr::Each {
+                    count: *count,
+                    dst: dst.at,
+                    n: dst.n / (*count as usize).max(1),
                     body: body_code,
                     body_result,
                 }

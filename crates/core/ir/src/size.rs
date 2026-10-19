@@ -195,7 +195,7 @@ fn merged(module: &Module, body: &[Instruction], times: u64, structs: &mut [u64]
         .map(|instruction| {
             let own = match (&instruction.op, instruction.ty) {
                 (
-                    Op::If { .. } | Op::Match { .. } | Op::Loop { .. },
+                    Op::If { .. } | Op::Match { .. } | Op::Loop { .. } | Op::Each { .. },
                     entelechy_abi::Type::Struct(s),
                 ) => {
                     if let Some(count) = structs.get_mut(s as usize) {

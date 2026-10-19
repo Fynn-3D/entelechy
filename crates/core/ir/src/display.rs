@@ -191,6 +191,11 @@ fn write_instruction(
             write_block(f, body, depth + 1)?;
             writeln!(f, "{indent}}}")
         }
+        Op::Each { count, body } => {
+            writeln!(f, "{indent}{id}: {ty} = each {count} {{")?;
+            write_block(f, body, depth + 1)?;
+            writeln!(f, "{indent}}}")
+        }
         other => writeln!(f, "{indent}{id}: {ty} = {other}"),
     }
 }
@@ -232,6 +237,7 @@ impl fmt::Display for Op {
             Self::If { condition, .. } => write!(f, "if {condition} {{ ... }}"),
             Self::Match { scrutinee, .. } => write!(f, "match {scrutinee} {{ ... }}"),
             Self::Loop { count, init, .. } => write!(f, "loop {count} carrying {init} {{ ... }}"),
+            Self::Each { count, .. } => write!(f, "each {count} {{ ... }}"),
             Self::Carried => f.write_str("carried"),
             Self::Index => f.write_str("index"),
             Self::Coord => f.write_str("coord"),

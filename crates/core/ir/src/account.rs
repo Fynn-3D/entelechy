@@ -183,6 +183,11 @@ fn block(instructions: &[Instruction], functions: &[u64], next: &mut u32) -> Vec
                     body: nested(body, next),
                 }
             }
+            // Not a loop: the loops in its body are accounted as anywhere.
+            Op::Each { count, body } => Op::Each {
+                count: *count,
+                body: nested(body, next),
+            },
             other => other.clone(),
         };
         let is_loop = matches!(op, Op::Loop { .. });

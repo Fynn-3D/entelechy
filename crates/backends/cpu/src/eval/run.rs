@@ -972,6 +972,24 @@ impl<'p, 's> Machine<'p, 's> {
                 self.loops.pop();
                 self.ran = ran;
             }
+            Instr::Each {
+                count,
+                dst,
+                n,
+                body,
+                body_result,
+            } => {
+                // Its position is the innermost index, as a loop's is.
+                self.loops.push(0);
+                for index in 0..*count {
+                    *self.loops.last_mut().expect("each is open") = index as i32;
+                    self.run(body, fp)?;
+                    let to = fp + dst + index as usize * n;
+                    self.stack
+                        .copy_within(fp + body_result..fp + body_result + n, to);
+                }
+                self.loops.pop();
+            }
             Instr::Index { dst } => {
                 s[fp + dst] = *self.loops.last().expect("validation guarantees a loop") as u32;
             }

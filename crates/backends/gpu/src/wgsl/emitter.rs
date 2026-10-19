@@ -66,6 +66,7 @@ pub(crate) fn speculable(block: &Block) -> bool {
             !matches!(
                 instruction.op,
                 Op::Loop { .. }
+                    | Op::Each { .. }
                     | Op::If { .. }
                     | Op::Match { .. }
                     | Op::Put(..)
@@ -91,14 +92,19 @@ pub(crate) fn selectable(ty: Type) -> bool {
     matches!(ty, Type::Scalar(_) | Type::Vector(..)) && !ty.is_64bit()
 }
 
+/// The most elements an `each` writes each at a place named in the
+/// source; a longer one writes at the counter's place.
+const WRITTEN_PLACES: u32 = 64;
+
 pub(crate) struct Emitter<'a> {
     out: &'a mut String,
     module: &'a Module,
     function: &'a Function,
     /// The inputs read from the pack.
     packed: &'a [usize],
-    /// Ids of enclosing loop instructions, innermost last.
-    loops: Vec<ValueId>,
+    /// The enclosing loops and eaches, innermost last: each its id and
+    /// whether it carries a value (an each does not).
+    loops: Vec<(ValueId, bool)>,
     /// Every value's type by id, gathered once.
     types: std::collections::HashMap<u32, Type>,
     /// Whether a Long is a pair of words, every operation on it a helper
@@ -520,7 +526,7 @@ impl Emitter<'_> {
                         ),
                     );
                 }
-                self.loops.push(*id);
+                self.loops.push((*id, true));
                 if let Some(until) = until {
                     let done = self.block(until, depth + 1);
                     self.line(depth + 1, &format!("if ({done}) {{ break; }}"));
@@ -531,12 +537,49 @@ impl Emitter<'_> {
                 self.line(depth, "}");
                 return;
             }
-            Op::Carried => match self.loops.last() {
-                Some(id) => format!("v{}", id.0),
+            Op::Each { count, body } => {
+                // The array a variable, each run of the body writing its
+                // element at the counter's place.
+                self.line(depth, &format!("var v{}: {ty_name};", id.0));
+                self.line(
+                    depth,
+                    &format!(
+                        "for (var it{0}: i32 = 0; it{0} < {count}i; it{0} = it{0} + 1) {{",
+                        id.0
+                    ),
+                );
+                self.loops.push((*id, false));
+                let element = self.block(body, depth + 1);
+                if *count <= WRITTEN_PLACES {
+                    // Each place written by name, so a driver may keep
+                    // the array in registers: a computed place puts it in
+                    // memory every thread reserves.
+                    self.line(depth + 1, &format!("switch it{} {{", id.0));
+                    for place in 0..*count {
+                        let case = if place + 1 == *count {
+                            "default".to_owned()
+                        } else {
+                            format!("case {place}i")
+                        };
+                        self.line(
+                            depth + 2,
+                            &format!("{case}: {{ v{}[{place}] = {element}; }}", id.0),
+                        );
+                    }
+                    self.line(depth + 1, "}");
+                } else {
+                    self.line(depth + 1, &format!("v{0}[it{0}] = {element};", id.0));
+                }
+                self.loops.pop();
+                self.line(depth, "}");
+                return;
+            }
+            Op::Carried => match self.loops.iter().rev().find(|(_, carries)| *carries) {
+                Some((id, _)) => format!("v{}", id.0),
                 None => "carried".to_owned(),
             },
             Op::Index => match self.loops.last() {
-                Some(id) => format!("it{}", id.0),
+                Some((id, _)) => format!("it{}", id.0),
                 None => "i32(element)".to_owned(),
             },
             Op::Coord => match self.output_shape() {

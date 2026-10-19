@@ -1884,6 +1884,66 @@ impl<'a, 'b> Fx<'a, 'b> {
                 }
                 params[..carried_types.len()].to_vec()
             }
+            Op::Each { count, body } => {
+                // The array in a stack slot: each run of the body stores
+                // its element at its position, and the words are read
+                // back once all are made.
+                let array_types = word_types(self.module, ty);
+                let element_types = array_types[..array_types.len() / *count as usize].to_vec();
+                let stride = byte_size(&element_types) as i64;
+                let slot = self.b.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    byte_size(&array_types).max(4) as u32,
+                    3,
+                ));
+                let base = self.b.ins().stack_addr(self.ptr, slot, 0);
+                let header = self.b.create_block();
+                let body_block = self.b.create_block();
+                let exit = self.b.create_block();
+                self.b.append_block_param(header, types::I32);
+                let zero = self.i32c(0);
+                self.b.ins().jump(header, &[zero.into()]);
+                self.b.switch_to_block(header);
+                let index = self.b.block_params(header)[0];
+                // Its position is the innermost index; what it reads as
+                // carried is the enclosing loop's (or the scan's).
+                let carried = self
+                    .loops
+                    .last()
+                    .or(self.scan.as_ref())
+                    .map(|(carried, _)| carried.clone())
+                    .unwrap_or_default();
+                self.loops.push((carried, index));
+                self.b.ins().jump(body_block, &[]);
+                self.b.switch_to_block(body_block);
+                self.b.seal_block(body_block);
+                self.block(&body.body);
+                let element = self.words(&body.result);
+                let wide = self.b.ins().uextend(self.ptr, index);
+                let offset = self.b.ins().imul_imm(wide, stride);
+                let at = self.b.ins().iadd(base, offset);
+                for (word, offset) in element.iter().zip(byte_offsets(&element_types)) {
+                    self.b.ins().store(self.flags, *word, at, offset as i32);
+                }
+                let next = self.b.ins().iadd_imm(index, 1);
+                let last = self.i32c(i64::from(*count));
+                let done = self
+                    .b
+                    .ins()
+                    .icmp(IntCC::UnsignedGreaterThanOrEqual, next, last);
+                self.b.ins().brif(done, exit, &[], header, &[next.into()]);
+                self.b.seal_block(header);
+                self.loops.pop();
+                self.b.switch_to_block(exit);
+                self.b.seal_block(exit);
+                array_types
+                    .iter()
+                    .zip(byte_offsets(&array_types))
+                    .map(|(word_type, offset)| {
+                        self.b.ins().stack_load(*word_type, slot, offset as i32)
+                    })
+                    .collect()
+            }
             Op::Carried => self
                 .loops
                 .last()

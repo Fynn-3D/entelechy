@@ -427,6 +427,7 @@ fn ran_values(
                     }
                     walk(&body.body, live, w, ran);
                 }
+                entelechy_ir::Op::Each { body, .. } => walk(&body.body, live, w, ran),
                 _ => {}
             }
         }

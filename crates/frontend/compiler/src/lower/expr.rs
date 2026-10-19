@@ -338,10 +338,43 @@ impl Builder<'_> {
                 // running total of copies as they are written, since
                 // nested builders multiply.
                 super::check_array_count(count.value, count.span)?;
-                // Unrolled: the body once per element, `index()` a literal.
+                // The body once, run per element; the optimizer writes a
+                // short one out.
+                let mark = self.types.len();
+                let id = self.reserve(Type::Int);
+                self.each.push((None, self.loops.len()));
+                let once = self.nested(body);
+                self.each.pop();
+                let once = once?;
+                if !self.is_written(once.result) {
+                    // Its runs are no loop's iterations, so it is held to
+                    // what writing it out would hold.
+                    let runs = u64::from(count.value).saturating_mul(written_out(&once.body));
+                    if runs > super::MAX_UNROLLED_VALUES as u64 {
+                        return Err(super::semantic(
+                            count.span,
+                            format!(
+                                "this `[each ...]` writes its body out past {} values; nest fewer or smaller builders, or use a loop",
+                                super::MAX_UNROLLED_VALUES
+                            ),
+                        ));
+                    }
+                    let ty = self.array_type(self.ty(once.result), count.value, count.span)?;
+                    return Ok(self.place(
+                        id,
+                        ty,
+                        Op::Each {
+                            count: count.value,
+                            body: once,
+                        },
+                    ));
+                }
+                // Written numbers take their kind from the whole array, so
+                // the body is written out here, `index()` a literal.
+                self.forget_from(mark);
                 let mut ids = Vec::with_capacity(count.value as usize);
                 for position in 0..count.value {
-                    self.each.push((position, self.loops.len()));
+                    self.each.push((Some(position), self.loops.len()));
                     let id = self.block(body);
                     self.each.pop();
                     ids.push(id?);
@@ -1151,4 +1184,17 @@ fn breaks(block: &Block) -> bool {
         }
     }
     of(&block.result)
+}
+
+/// The values a block holds with its `each` builders written out.
+fn written_out(body: &[entelechy_ir::Instruction]) -> u64 {
+    body.iter().fold(0u64, |sum, instruction| {
+        let nested = match &instruction.op {
+            Op::Each { count, body } => u64::from(*count).saturating_mul(written_out(&body.body)),
+            op => op.blocks().iter().fold(0u64, |sum, block| {
+                sum.saturating_add(written_out(&block.body))
+            }),
+        };
+        sum.saturating_add(1).saturating_add(nested)
+    })
 }
