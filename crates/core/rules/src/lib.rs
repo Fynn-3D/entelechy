@@ -138,6 +138,10 @@ pub struct Run {
 }
 
 impl Run {
+    /// The partial-block work a thread gathers before handing it to
+    /// [`Run::settle`], so the shared total is touched rarely.
+    pub const LEFT_HANDED: u64 = 64 * entelechy_ir::WORK_BLOCK as u64;
+
     /// A run that may take `work` iterations ([`entelechy_abi::Scope::work`]).
     pub fn new(work: u64) -> Self {
         let blocks = (work / u64::from(entelechy_ir::WORK_BLOCK)).min(u64::from(u32::MAX / 2));
@@ -377,6 +381,16 @@ pub fn output_domain(mode: Mode, domain: Domain, inputs: &[Domain]) -> Domain {
 pub fn cores() -> usize {
     static CORES: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *CORES.get_or_init(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
+}
+
+/// The pieces of work a processor's thread takes at the least: fewer, and
+/// starting the thread costs more than they do.
+const PARALLEL_THRESHOLD: usize = 4096;
+
+/// How many of the processor's threads `items` pieces of work are worth:
+/// every core, but no fewer than [`PARALLEL_THRESHOLD`] pieces a thread.
+pub fn workers(items: usize) -> usize {
+    cores().min(items.div_ceil(PARALLEL_THRESHOLD)).max(1)
 }
 
 /// Words an address into a domain takes in a scatter's pair.

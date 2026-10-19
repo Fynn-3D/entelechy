@@ -25,9 +25,6 @@ pub use entelechy_rules::{
     combine_words, float_order_key, scatter_index,
 };
 
-/// Elements per thread below which the backend stays single-threaded.
-const PARALLEL_THRESHOLD: usize = 4096;
-
 /// The CPU backend. Stateless; one instance can execute any module.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CpuBackend;
@@ -808,10 +805,7 @@ fn compute_pairs(
     let width = domain.width() as usize;
     let height = domain.height();
     let element_count = width * height as usize * domain.depth() as usize;
-    let threads = entelechy_rules::cores()
-        .min(element_count.max(1))
-        .min(element_count.div_ceil(PARALLEL_THRESHOLD))
-        .max(1);
+    let threads = entelechy_rules::workers(element_count);
     let per_thread = element_count.div_ceil(threads).max(1);
     if !held.take(element_count * (pair_words + 1)) {
         return Err(held.over());
@@ -875,10 +869,7 @@ fn compute(program: &eval::Program<'_>, strides: &[usize]) -> Result<Vec<u32>, E
     let mut results = vec![0u32; rows * row_words];
     let element_count = width * rows;
     // Split by elements: a `Rows` domain is a single row.
-    let threads = entelechy_rules::cores()
-        .min(element_count.max(1))
-        .min(element_count.div_ceil(PARALLEL_THRESHOLD))
-        .max(1);
+    let threads = entelechy_rules::workers(element_count);
     let per_thread = element_count.div_ceil(threads).max(1);
     let run_elements = |first: usize, chunk: &mut [u32]| -> Result<(), ExecutionError> {
         let mut machine = eval::Machine::new(program);

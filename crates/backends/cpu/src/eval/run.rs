@@ -19,10 +19,6 @@ pub(crate) struct CallRecord {
 /// How many calls a trace records before it stops recording.
 pub(crate) const CALL_RECORDS: usize = 256;
 
-/// The partial-block work a thread gathers before handing it to the
-/// run's shared total.
-const LEFT_HANDED: u64 = 64 * entelechy_ir::WORK_BLOCK as u64;
-
 /// Interpreter state for one thread: a stack of words holding every
 /// frame, and the loop indices of the running element.
 pub(crate) struct Machine<'p, 's> {
@@ -353,12 +349,12 @@ impl<'p, 's> Machine<'p, 's> {
     }
 
     /// Keeps the running element's partial block; hands the thread's sum
-    /// on at `LEFT_HANDED`.
+    /// on at [`Run::LEFT_HANDED`](entelechy_rules::Run::LEFT_HANDED).
     fn keep_left(&mut self) -> Result<(), ExecutionError> {
         self.left += u64::from(self.work % entelechy_ir::WORK_BLOCK);
         self.work = 0;
         self.looked = 0;
-        if self.left >= LEFT_HANDED {
+        if self.left >= entelechy_rules::Run::LEFT_HANDED {
             self.hand_left()?;
         }
         Ok(())

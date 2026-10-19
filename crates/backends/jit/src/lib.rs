@@ -33,9 +33,6 @@ use entelechy_ir::{Combine, Mode, Validated};
 use entelechy_rules::{ArithmeticError, ExecutionError, check_invocation};
 use entelechy_rules::{Backend, NativeOp, Prepared};
 
-/// Elements per thread below which the run stays single-threaded.
-const PARALLEL_THRESHOLD: usize = 4096;
-
 /// One input as the compiled code sees it: its memory and its extent.
 #[repr(C)]
 pub struct View {
@@ -487,14 +484,6 @@ fn compute_emitting(
     Ok((results, emitted))
 }
 
-/// How many threads `items` pieces of work are worth: every core, but
-/// no fewer than `PARALLEL_THRESHOLD` pieces a thread.
-fn workers(items: usize) -> usize {
-    entelechy_rules::cores()
-        .min(items.div_ceil(PARALLEL_THRESHOLD))
-        .max(1)
-}
-
 /// A run of elements' first element, the element after its last, and
 /// the pairs its elements emitted, each after the element it came from.
 type Emitted = (usize, usize, Vec<u32>);
@@ -512,10 +501,7 @@ fn compute_into(
     let rows = height as usize * domain.depth() as usize;
     let element_count = width * rows;
     // Split by elements: a `Rows` domain is one long row.
-    let threads = entelechy_rules::cores()
-        .min(element_count.max(1))
-        .min(element_count.div_ceil(PARALLEL_THRESHOLD))
-        .max(1);
+    let threads = entelechy_rules::workers(element_count);
     let per_thread = element_count.div_ceil(threads).max(1);
     let fresh = |t: &Ctx| Ctx {
         views: t.views,
@@ -580,7 +566,7 @@ fn compute_into(
                     shared,
                 ));
             }
-            hand_left(&mut ctx, shared, LEFT_HANDED)?;
+            hand_left(&mut ctx, shared, entelechy_rules::Run::LEFT_HANDED)?;
             done += run;
         }
         hand_left(&mut ctx, shared, 1)?;
@@ -706,7 +692,7 @@ fn run_reduce(
     while count > 1 {
         let pairs = count / 2;
         let mut next = vec![0u32; count.div_ceil(2) * stride];
-        let per = pairs.div_ceil(workers(pairs)).max(1);
+        let per = pairs.div_ceil(entelechy_rules::workers(pairs)).max(1);
         let merge_run = |first: usize, outs: &mut [u32]| -> Result<(), (usize, ExecutionError)> {
             let mut ctx = Ctx { ..shared.template };
             for (k, out) in outs.chunks_exact_mut(stride).enumerate() {
@@ -849,7 +835,7 @@ fn fold_prefix<E: Send>(
         }
         Ok(())
     };
-    let per = count.div_ceil(workers(count)).max(1);
+    let per = count.div_ceil(entelechy_rules::workers(count)).max(1);
     if count <= 1 || per >= count {
         return walk(values, None, 0);
     }
@@ -957,7 +943,7 @@ fn run_scatter(
             .iter()
             .map(|(_, _, emitted)| emitted.len() / (pair_words + 1))
             .sum::<usize>();
-    let parts = workers(pair_count).min(count.max(1));
+    let parts = entelechy_rules::workers(pair_count).min(count.max(1));
     let span = count.div_ceil(parts).max(1);
     // A record: where the pair lands, the element it came from, the value.
     let record = stride + 2;
@@ -1082,10 +1068,6 @@ fn run_scatter(
     Ok(vec![output])
 }
 
-/// Partial-block work a thread holds before handing it to the run, so
-/// the shared total is touched rarely.
-const LEFT_HANDED: u64 = 64 * entelechy_ir::WORK_BLOCK as u64;
-
 /// Hands a context's held partial-block work to the run once it is
 /// `at_least`; fails once the run is past its total.
 fn hand_left(ctx: &mut Ctx, shared: &Shared, at_least: u64) -> Result<(), ExecutionError> {
@@ -1104,7 +1086,7 @@ fn keep_left(ctx: &mut Ctx, shared: &Shared) -> Result<(), ExecutionError> {
     ctx.left += u64::from(ctx.work % entelechy_ir::WORK_BLOCK);
     ctx.work = 0;
     ctx.looked = 0;
-    hand_left(ctx, shared, LEFT_HANDED)
+    hand_left(ctx, shared, entelechy_rules::Run::LEFT_HANDED)
 }
 
 /// Runs a scan on one thread: `init` for the first carried words, then
