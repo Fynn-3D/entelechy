@@ -469,7 +469,8 @@ impl GpuBackend {
     pub(crate) fn prepare_kernel(&self, module: &Validated) -> Result<Lazy, Unbuilt> {
         // A long builder holding a loop counted at run time runs as a loop
         // carrying its array: as a builder's loop, Chrome's WebGPU (its
-        // robustness on) computes it wrong.
+        // robustness on) computes it wrong; taken back once it does not
+        // (HANDOFF.md).
         let carried = entelechy_ir::carried_builders(module)
             .map(entelechy_ir::validate)
             .transpose()

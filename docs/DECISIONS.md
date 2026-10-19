@@ -298,7 +298,10 @@ thirds of a millisecond a thread at a time on the device, at 6.6 ns an
 operation, more than the wait), unless what it would bring back passes a
 mebibyte. A Field made before, state or an input, comes back once. A Field uploaded from memory keeps its words in memory
 beside the device's copy, as a Field is a value, so neither side sends
-it back again. The report says where each run went and why; `--small 0`
+it back again; an input of a mebibyte or more is put on the device as it
+is read (`Backend::upload`) and its copy in memory let go, since it does
+not change from frame to frame and a page's memory stays at its peak,
+and what reads it on the processor brings it back once and keeps it. The report says where each run went and why; `--small 0`
 keeps every run on the device.
 
 **Why.** A device's dispatch costs about the same whatever it does:
@@ -321,7 +324,9 @@ made in one (see *The rasterizer is a package*).
 
 **Where.** `Runtime::execute` in [`entelechy-kernel`](../crates/core/kernel/src/lib.rs),
 the estimate in [`entelechy-ir`](../crates/core/ir/src/lib.rs), the kept
-words in [`entelechy-host`](../crates/core/host/src/lib.rs);
+words in [`entelechy-host`](../crates/core/host/src/lib.rs), an input's
+copy let go in the session's [inputs](../crates/interface/session/src/inputs.rs)
+and [memory](../crates/interface/session/src/memory.rs);
 [`routing.rs`](../crates/interface/session/tests/routing.rs) holds a
 scene of every kind of work to the JIT's alone with small runs placed
 off a main backend, and the verify recipe replays every example on the

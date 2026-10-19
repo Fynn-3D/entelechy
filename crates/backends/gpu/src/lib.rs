@@ -414,7 +414,8 @@ impl Backend for GpuBackend {
             .or_else(|| {
                 // Chrome's WebGPU on Apple GPUs loses its device (Metal:
                 // insufficient memory) now and then running a prefix's
-                // passes over a count that changes frame to frame.
+                // passes over a count that changes frame to frame; taken
+                // back once it does not (HANDOFF.md).
                 (self.wait.parks_with_host()
                     && matches!(module.manifest.mode, entelechy_ir::Mode::Prefix { .. }))
                 .then(|| "a page's device runs no prefix".to_owned())

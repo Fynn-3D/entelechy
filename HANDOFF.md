@@ -7,8 +7,7 @@
 | Fact | What follows from it |
 | --- | --- |
 | The interpreter is the reference; the JIT matches it bit for bit, the GPU to rounding. | Where three answers differ, `--backend cpu` is the right one. |
-| A new Kernel's cost on the GPU is its pipeline's compile: 40 to 120 ms for the voxel example's Kernels on Metal, nearly all of preparing it; one compiled before comes from the driver's cache in under a millisecond. | Natively it is paid off the frame (the preparation worker). A page has no thread: a Kernel changed while a page plays stops its frames for the compile. Data, params and structure (`write`, `param`, a `compose` that changes no Kernel) never compile. Scenes are built in the native Player; a page shows them. |
-| Making a page's compile smooth needs the browser's `createComputePipelineAsync`, which wgpu does not expose; reaching it takes `wasm-bindgen` and `js-sys` in `entelechy-gpu` for the page, which AGENTS.md does not allow. | Not done by choice (2026-09-26). Taken up only if Kernels are to be changed live in a page, and then with that rule changed first. |
+| A new Kernel's cost on the GPU is its pipeline's compile: 40 to 120 ms for the voxel example's Kernels on Metal, nearly all of preparing it; one compiled before comes from the driver's cache in under a millisecond. | Natively it is paid off the frame (the preparation worker). A page asks its browser for each pipeline as the Kernel prepares (`createComputePipelineAsync`, through `js-sys` and `wasm-bindgen` in `entelechy-gpu`), compiled off the thread that answers the device; a frame that needs one not yet compiled waits for it. Data, params and structure (`write`, `param`, a `compose` that changes no Kernel) never compile. Scenes are built in the native Player; a page shows them. |
 | The session holds the world (scene, ledger, sources, history, inputs, writes) and also opens backends; only its `lib.rs`, `session.rs` and `observe.rs` may name one (`crates/interface/entelechy/tests/layers.rs`). | A world part that needs a backend is the sign to move the world into its own crate below the session, which Cargo then holds, not to lengthen that list. |
 
 Verified surface, as of `main`:
@@ -32,54 +31,28 @@ Verified surface, as of `main`:
 
 ## Next
 
-`main` holds, since `v0.0.2-alpha.3`, scaling, hot-reload and runtime
-performance work. A Kernel
-lowers only the functions it calls and republishes only when its IR
-changes; a changed library function republishes every Kernel that uses
-it; an `if` or `match` on a literal compiles to the block it takes. A
-fused chain is prepared once; a plan is reused, uncopied, while its
-graph and inputs hold; a sub-graph placed many times is read once; a
-document is parsed once per stamp and a `use` expanded again only when a
-directory or manifest it read changed. The
-JIT reads a grid or volume at a float address inline and blends linear
-reads in place; the GPU runs a repeated map's times in one pass and fills
-whole workgroups over rows. Two faults are fixed: an extent past 2^24
-elements on the GPU, and an `async` Kernel run on a backend other than
-the one it was prepared on. `IVec4` is new.
+No release is planned; `v0.0.2-rc.3` is the last tag.
 
-The language writes a float with an exponent (`1e30`, `2.5e-3`, `3e2d`)
-and names Ints with enums (`type Mode = enum { Idle, Walk = 10 };`), a
-scene writing a variant where it writes a number. The runtime holds to
-its own rules on every path an agent or a file reaches: a JIT frame is
-bounded (a module past it is left to the interpreter, or refused where
-the JIT is alone) and a float address clamps in integers; every held
-read is judged where its path lands, at the store; a value's type is
-bounded in size and depth; a file decodes only what it holds, within
-the Host's room; every placed node counts against the scene's bound; a
-connection is read no further while 64 of its answers wait; a narrow
-Field read through the C ABI stays until the next evaluate, request or
-close; a file is written new at its working name.
+Open:
 
-It is released as `v0.0.2-rc.3`, a pre-release; `v0.0.2` follows once
-the user accepts it. The release notes name what changed for a caller
-since `v0.0.2-rc.2`:
-- New: the noise package (integer hashes the same on every backend,
-  value, gradient, fractal, ridged, Worley and curl noise) and the image
-  package (colour spaces, blend modes and compositing, filters, tone,
-  LUTs, histograms, signed distance, sampling, and the looks a scene
-  places last); the `nebula` and `darkroom` examples.
-- Changed: the `picture` and `pixelfx` packages are the image package,
-  their Kernels `image.*` (`mip.first` is `image.mip_first`,
-  `pixelfx.pixelate` is `image.pixelate`).
-- The language: functions call one another in any order, a chain of
-  calls back to one refused naming it; a function, a struct and a type
-  are scoped by the document that declares them; a repeated node's
-  name is its last time's wherever a port is named.
-- Replays: `frame <from> to <last> every <step>`, `show`, and `--out` on
-  `replay` and `render` naming a directory of frames or a `.wav`.
-- A failing element is traced to where it is written; `pads()`; a PNG is
-  compressed; a refusal of an unchanged scene is said once; a package
-  outside a served scene's reach is refused naming `ENTELECHY_PACKAGES`.
+1. A page on Windows (an RTX 4090) did not open a large scene that a
+   page on the M4 opens; nothing is known of why until that machine's
+   browser console is read.
+2. A page's WebAssembly memory stays at its peak, about 256 MB for a
+   large scene: some 67 MB are Fields kept both in memory and on the
+   device because the processor reads them each frame, some 60 MB the
+   allocator's gaps.
+
+What a page does only because one browser fails otherwise, each to be
+taken back once that browser no longer fails:
+
+- A page's device declines prefix passes: Chrome's WebGPU on Apple GPUs
+  loses the device running them over a count that changes frame to
+  frame (`GpuBackend::declines`).
+- The GPU runs a long builder holding a loop counted at run time as a
+  loop carrying its array: Chrome's WebGPU, its robustness on, computes
+  it wrong as a builder's loop (`entelechy_ir::carried_builders`, applied
+  in the GPU's `prepare_kernel`).
 
 Measured on a 53-Kernel game (21 documents, 318 functions): `check`
 0.3 s, a first frame 1.8 s on the JIT, an idle sync 0.23 ms. Left by
