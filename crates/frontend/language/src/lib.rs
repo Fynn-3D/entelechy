@@ -360,12 +360,6 @@ impl<'a> Own<'a> {
             document: Some(document),
         }
     }
-
-    /// Whether it declares a struct or a type named `name`.
-    pub fn declares_type(&self, name: &str) -> bool {
-        self.structs.iter().any(|d| d.name.value == name)
-            || self.types.iter().any(|d| d.name.value == name)
-    }
 }
 
 /// `use "path";`: a file of Kernels, or a directory when it ends with `/`.

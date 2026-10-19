@@ -24,7 +24,7 @@
 
 use super::*;
 
-/// The bytes runs may hold, all told, unless set otherwise.
+/// The bytes runs may hold, all told; frames past it are not remembered.
 pub const RECALL_BUDGET: usize = 1 << 30;
 
 /// The most bytes of one node's outputs a run holds; larger ones are
@@ -58,8 +58,6 @@ pub(super) struct Recalled {
     held: BTreeMap<Handle, (usize, usize)>,
     /// The bytes the held handles take.
     bytes: usize,
-    /// The bytes runs may hold.
-    budget: usize,
     /// The run being evaluated and its next frame.
     current: Option<(String, usize)>,
     /// The graph the runs were remembered for.
@@ -67,13 +65,6 @@ pub(super) struct Recalled {
 }
 
 impl Recalled {
-    pub(super) fn new() -> Self {
-        Self {
-            budget: RECALL_BUDGET,
-            ..Self::default()
-        }
-    }
-
     /// Whether a remembered run holds `handle`.
     pub(super) fn holds(&self, handle: Handle) -> bool {
         self.held.contains_key(&handle)
@@ -122,12 +113,6 @@ impl Evaluator {
     /// nothing and takes nothing.
     pub fn recall_as(&mut self, name: Option<String>) {
         self.recalled.current = name.map(|name| (name, 0));
-    }
-
-    /// The bytes remembered runs may hold, all told; frames past it are not
-    /// remembered.
-    pub fn set_recall_budget(&mut self, bytes: usize) {
-        self.recalled.budget = bytes;
     }
 
     /// The bytes remembered runs hold.
@@ -228,7 +213,7 @@ impl Evaluator {
                 frames.resize_with(frame + 1, BTreeMap::new);
             }
         }
-        if self.recalled.bytes > self.recalled.budget {
+        if self.recalled.bytes > RECALL_BUDGET {
             return;
         }
         for remembered in kept.values() {

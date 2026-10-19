@@ -7,15 +7,6 @@ pub const REDUCE_WORKGROUP: u32 = 64;
 /// Threads a row of reduce workgroups covers; see [`folded`].
 pub const REDUCE_SPAN: u32 = MAX_GROUPS * REDUCE_WORKGROUP;
 
-/// Emits a reduce module's fold pass: output element `i` is the run of
-/// at most [`entelechy_rules::reduce::FOLD`] elements from `i * FOLD`, folded
-/// by the shared pairwise tree ([`entelechy_rules::reduce::LEVELS_AT_ONCE`]
-/// levels per pass). Run with the level's count in the uniform until one
-/// element is left.
-pub fn emit_reduce(module: &Module) -> String {
-    emit_reduce_packed(module, &[])
-}
-
 /// The fold pass with the `packed` inputs read from one buffer.
 pub fn emit_reduce_packed(module: &Module, packed: &[usize]) -> String {
     emit_reduce_packed_longs(module, packed, Longs::Native)

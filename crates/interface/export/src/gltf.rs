@@ -182,28 +182,6 @@ fn decompose(m: &[f32; 16]) -> ([f32; 3], [f32; 4], [f32; 3]) {
     ([m[12], m[13], m[14]], turn, scale)
 }
 
-/// Writes `vertices` (eight floats a row, or twelve with a tangent) and
-/// `triangles` (three ints a row) as a GLB, with `texture` as the base
-/// color when given.
-pub fn write_glb(
-    vertices: &FieldData,
-    triangles: &FieldData,
-    texture: Option<&[u8]>,
-    name: &str,
-) -> Result<Vec<u8>, String> {
-    write_rig(
-        vertices,
-        triangles,
-        &Textures {
-            color: texture,
-            ..Textures::default()
-        },
-        None,
-        name,
-        &Options::default(),
-    )
-}
-
 /// The same, with a skin and one animation per clip.
 pub fn write_rig(
     vertices: &FieldData,

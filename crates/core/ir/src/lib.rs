@@ -327,11 +327,6 @@ impl Mode {
             Self::Prefix { .. } => "prefix",
         }
     }
-
-    /// Whether the entry maps over the first input rather than the output.
-    pub fn maps_over_input(self) -> bool {
-        !matches!(self, Self::Map)
-    }
 }
 
 /// How a scattered value combines with the element at its address.
@@ -1744,12 +1739,6 @@ impl Module {
     pub fn counts_work(&self) -> bool {
         let worst = self.worst_work();
         worst > u64::from(self.manifest.budget) || worst >= u64::from(WORK_BLOCK)
-    }
-
-    /// Whether any port, parameter, struct field or computed value is 64-bit;
-    /// a backend without 64-bit arithmetic refuses such a module.
-    pub fn holds_64bit(&self) -> bool {
-        self.holds(Type::Double) || self.holds(Type::Long)
     }
 
     /// Whether any port, parameter, struct field or computed value is made

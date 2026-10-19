@@ -258,7 +258,6 @@ impl GpuBackend {
     /// alternating, in the same pairwise tree as the CPU reference.
     /// Returns the buffer holding the one element.
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn fold(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -362,7 +361,6 @@ impl GpuBackend {
     /// The target made ready for pairs: the base copied into it, or,
     /// where the plan compares its words with atomics, the base's words
     /// turned into ordered keys as they are written into it.
-    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare_target(
         &self,

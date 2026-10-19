@@ -126,11 +126,6 @@ impl Capabilities {
             .into_iter()
             .filter(move |capability| self.contains(*capability))
     }
-
-    /// Whether every capability in `self` is also in `other`.
-    pub fn is_subset(&self, other: &Capabilities) -> bool {
-        self.0 & !other.0 == 0
-    }
 }
 
 impl fmt::Debug for Capabilities {
@@ -412,11 +407,6 @@ impl Type {
             Self::Vector(Scalar::Int, n) => Self::vector(Self::Float, n),
             _ => None,
         }
-    }
-
-    /// Whether values of this type can cross the ABI (every non-struct).
-    pub fn is_value(self) -> bool {
-        !matches!(self, Self::Struct(_))
     }
 }
 

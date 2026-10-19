@@ -1769,26 +1769,6 @@ impl Host {
         Ok(())
     }
 
-    /// Replaces every pixel of a Field of pixels; the length must match.
-    pub fn write_image(&mut self, handle: Handle, pixels: &[Pixel]) -> Result<(), HostError> {
-        let data = self.data(handle)?;
-        if !data.schema.is_pixel() {
-            return Err(HostError::NotPixels);
-        }
-        let count = data.domain.count();
-        if pixels.len() != count {
-            return Err(HostError::PixelCount {
-                expected: count,
-                actual: pixels.len(),
-            });
-        }
-        let values: Vec<u32> = pixels
-            .iter()
-            .flat_map(|p| p.iter().map(|v| v.to_bits()))
-            .collect();
-        self.write_values(handle, &values)
-    }
-
     fn slot(&self, handle: Handle) -> Result<&Slot, HostError> {
         self.slots
             .get(handle.index as usize)

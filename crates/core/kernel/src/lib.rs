@@ -1247,18 +1247,6 @@ impl Runtime {
         self.ordered.as_ref().map(|backend| backend.name())
     }
 
-    /// Prepares a module not compiled from source (a fused group, say)
-    /// inline, as a detached version; see [`Runtime::detach`].
-    pub fn prepare_detached(
-        &mut self,
-        module: Validated,
-        id: KernelId,
-        source: String,
-    ) -> Result<Arc<KernelVersion>, PrepareError> {
-        let candidate = self.prepare_module(module, &source)?;
-        Ok(self.detach(candidate, id))
-    }
-
     /// Atomically publishes a candidate if `expect` matches the registry.
     /// Existing `Arc<KernelVersion>` holders keep their pinned version.
     pub fn publish(

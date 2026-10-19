@@ -891,6 +891,8 @@ struct Rest {
     changed: u32,
 }
 
+/// The most doublings of a [`Rest`]'s wait: a node compared at least
+/// once in 1024 of its runs.
 const REST_WAIT_MOST: u32 = 10;
 
 /// The most bytes of a node's outputs compared on the device when fresh
@@ -941,7 +943,7 @@ impl Evaluator {
     pub fn new() -> Self {
         Self {
             fusion: true,
-            recalled: recall::Recalled::new(),
+            recalled: recall::Recalled::default(),
             ..Self::default()
         }
     }
@@ -1033,11 +1035,6 @@ impl Evaluator {
         for key in ports {
             self.forget_state(&key, runtime);
         }
-    }
-
-    /// Whether any state has been committed.
-    pub fn has_state(&self) -> bool {
-        self.ledger.sizes().1 > 0
     }
 
     /// Every Field the evaluator holds and for what: a node's cached
@@ -1133,28 +1130,6 @@ impl Evaluator {
         }
         self.evaluate_with(graph, runtime, externals, context, params, Demand::Frame)
             .and_then(reported)
-    }
-
-    /// Evaluates as [`Evaluator::evaluate`] does, every node of the graph,
-    /// and commits nothing: `<~`
-    /// readers keep the state last committed, and the results stay cached
-    /// for reading; runs off the frame are not started.
-    pub fn evaluate_trial(
-        &mut self,
-        graph: &impl AsGraph,
-        runtime: &mut Runtime,
-        externals: &BTreeMap<String, Handle>,
-        context: &Context,
-        params: &BTreeMap<String, Value>,
-    ) -> Result<Report, EvaluateError> {
-        self.recover(runtime);
-        self.confirm(runtime)?;
-        self.trial = true;
-        let tried = self
-            .evaluate_with(graph, runtime, externals, context, params, Demand::Every)
-            .and_then(reported);
-        self.trial = false;
-        tried
     }
 
     /// A trial of only what `readers` read: the nodes they read through
