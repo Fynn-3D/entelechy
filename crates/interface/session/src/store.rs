@@ -499,8 +499,54 @@ enum Content {
 /// The files, each with the number of the write that made it (its stamp).
 #[derive(Debug, Default)]
 struct Held {
-    files: BTreeMap<PathBuf, (Content, u64)>,
+    /// By [`key`]: a string compares far faster than a path, and the
+    /// files under a directory lie together in its order.
+    files: BTreeMap<String, (Content, u64)>,
+    /// Each directory some file is under, with how many files are: what
+    /// `kind` answers without walking the files.
+    dirs: std::collections::HashMap<String, usize>,
     writes: u64,
+}
+
+/// A path as the store keys it: folded, its parts joined by `/`.
+fn key(path: &Path) -> String {
+    folded(path).to_string_lossy().replace('\\', "/")
+}
+
+/// The directories `key` lies under, innermost first.
+fn dirs_of(key: &str) -> impl Iterator<Item = &str> {
+    key.match_indices('/')
+        .rev()
+        .map(|(at, _)| &key[..at])
+        .filter(|dir| !dir.is_empty())
+}
+
+impl Held {
+    /// Puts `content` at `key` as a new write.
+    fn put(&mut self, key: String, content: Content) {
+        self.writes += 1;
+        let version = self.writes;
+        for dir in dirs_of(&key) {
+            if !self.files.contains_key(&key) {
+                *self.dirs.entry(dir.to_owned()).or_default() += 1;
+            }
+        }
+        self.files.insert(key, (content, version));
+    }
+
+    /// Takes the file at `key` out.
+    fn take(&mut self, key: &str) -> Option<Content> {
+        let (content, _) = self.files.remove(key)?;
+        for dir in dirs_of(key) {
+            if let Some(count) = self.dirs.get_mut(dir) {
+                *count -= 1;
+                if *count == 0 {
+                    self.dirs.remove(dir);
+                }
+            }
+        }
+        Some(content)
+    }
 }
 
 impl Memory {
@@ -525,21 +571,19 @@ impl Memory {
     }
 
     fn insert(&self, path: &Path, content: Content) {
-        let mut held = self.held();
-        held.writes += 1;
-        let version = held.writes;
-        held.files.insert(folded(path), (content, version));
+        self.held().put(key(path), content);
     }
 
     /// The first `bytes` bytes of the file (or all of it), wherever kept.
     fn read_up_to(&self, path: &Path, bytes: usize) -> io::Result<Vec<u8>> {
-        let elsewhere = match self.held().files.get(&folded(path)) {
+        let key = key(path);
+        let elsewhere = match self.held().files.get(&key) {
             Some((Content::Bytes(held), _)) => return Ok(held[..held.len().min(bytes)].to_vec()),
             Some((Content::Elsewhere(count), _)) => (*count).min(bytes),
             None => return Err(io::ErrorKind::NotFound.into()),
         };
         match &self.fetch {
-            Some(Fetch(fetch)) => fetch(&folded(path), elsewhere),
+            Some(Fetch(fetch)) => fetch(Path::new(&key), elsewhere),
             None => Err(io::Error::other(
                 "the file is kept elsewhere and the store reads nothing there",
             )),
@@ -704,21 +748,15 @@ impl Store for Memory {
 
     fn remove(&self, path: &Path) -> io::Result<()> {
         self.held()
-            .files
-            .remove(&folded(path))
+            .take(&key(path))
             .map(drop)
             .ok_or_else(|| io::ErrorKind::NotFound.into())
     }
 
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
         let mut held = self.held();
-        let (bytes, _) = held
-            .files
-            .remove(&folded(from))
-            .ok_or(io::ErrorKind::NotFound)?;
-        held.writes += 1;
-        let version = held.writes;
-        held.files.insert(folded(to), (bytes, version));
+        let content = held.take(&key(from)).ok_or(io::ErrorKind::NotFound)?;
+        held.put(key(to), content);
         Ok(())
     }
 
@@ -728,30 +766,43 @@ impl Store for Memory {
     }
 
     fn kind(&self, path: &Path) -> Option<Kind> {
-        let path = folded(path);
+        let key = key(path);
         let held = self.held();
-        if held.files.contains_key(&path) {
+        if held.files.contains_key(&key) {
             return Some(Kind::File);
         }
-        let empty = path.as_os_str().is_empty();
-        held.files
-            .keys()
-            .any(|file| empty || file.starts_with(&path))
-            .then_some(Kind::Dir)
+        let dir = if key.is_empty() {
+            !held.files.is_empty()
+        } else {
+            held.dirs.contains_key(&key)
+        };
+        dir.then_some(Kind::Dir)
     }
 
     fn list(&self, dir: &Path) -> io::Result<Vec<PathBuf>> {
-        let dir = folded(dir);
+        let dir = key(dir);
+        let prefix = if dir.is_empty() {
+            dir
+        } else {
+            format!("{dir}/")
+        };
         let held = self.held();
+        // The files under `dir` lie together in the map's order.
         let mut found: Vec<PathBuf> = held
             .files
-            .keys()
+            .range::<str, _>((
+                std::ops::Bound::Included(prefix.as_str()),
+                std::ops::Bound::Unbounded,
+            ))
+            .map(|(file, _)| file)
+            .take_while(|file| file.starts_with(&prefix))
             .filter_map(|file| {
-                let rest = file.strip_prefix(&dir).ok()?;
-                let first = rest.components().next()?;
-                Some(dir.join(first))
+                let first = file[prefix.len()..].split('/').next()?;
+                Some(PathBuf::from(format!("{prefix}{first}")))
             })
             .collect();
+        // In a path's order, which a string's differs from.
+        found.sort();
         found.dedup();
         if found.is_empty() {
             return Err(io::ErrorKind::NotFound.into());
@@ -762,7 +813,7 @@ impl Store for Memory {
     fn stamp(&self, path: &Path) -> Option<Stamp> {
         self.held()
             .files
-            .get(&folded(path))
+            .get(&key(path))
             .map(|(_, version)| Stamp(Seen::Memory(*version)))
     }
 
@@ -781,6 +832,52 @@ impl Store for Memory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memory_knows_its_directories_as_files_come_and_go() {
+        let files = Memory::default();
+        files.put(Path::new("a/b/one.ent"), b"1".to_vec());
+        files.put(Path::new("a/b-x/two.ent"), b"2".to_vec());
+        files.put(Path::new("a/three.ent"), b"3".to_vec());
+        assert_eq!(files.kind(Path::new("a")), Some(Kind::Dir));
+        assert_eq!(files.kind(Path::new("a/b")), Some(Kind::Dir));
+        assert_eq!(files.kind(Path::new("a/b/one.ent")), Some(Kind::File));
+        assert_eq!(files.kind(Path::new("a/c")), None);
+        assert_eq!(files.kind(Path::new("")), Some(Kind::Dir));
+        assert_eq!(
+            files.list(Path::new("a")).unwrap(),
+            vec![
+                PathBuf::from("a/b"),
+                PathBuf::from("a/b-x"),
+                PathBuf::from("a/three.ent")
+            ]
+        );
+        assert_eq!(
+            files.list(Path::new("a/b")).unwrap(),
+            vec![PathBuf::from("a/b/one.ent")]
+        );
+        assert!(files.list(Path::new("a/three.ent")).is_err());
+        files
+            .rename(Path::new("a/b/one.ent"), Path::new("c/one.ent"))
+            .unwrap();
+        assert_eq!(
+            files.kind(Path::new("a/b")),
+            None,
+            "nothing is under it now"
+        );
+        assert_eq!(files.kind(Path::new("c")), Some(Kind::Dir));
+        files.remove(Path::new("a/b-x/two.ent")).unwrap();
+        files.remove(Path::new("a/three.ent")).unwrap();
+        assert_eq!(files.kind(Path::new("a")), None);
+        files.put(Path::new("c/one.ent"), b"again".to_vec());
+        files.remove(Path::new("c/one.ent")).unwrap();
+        assert_eq!(
+            files.kind(Path::new("c")),
+            None,
+            "a file put twice is counted once"
+        );
+        assert_eq!(files.kind(Path::new("")), None);
+    }
 
     #[test]
     fn a_file_kept_elsewhere_is_read_through_the_fetch_each_time() {
