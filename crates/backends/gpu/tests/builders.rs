@@ -35,3 +35,20 @@ fn a_long_body_is_written_once_however_many_elements_it_builds() {
         "a long one at the counter's place, its body once"
     );
 }
+
+#[test]
+fn a_builder_holding_a_loop_counted_at_run_time_is_written_out() {
+    let module = compile(
+        "kernel test.held@1 { requires { field.read; field.write; } input rows: Rows<Float>; output result: Rows<Float>;
+        compute {
+            let a = [each 32 { let k = index(); let s = loop count(rows) with t = 0.0 { t + at(rows, index()) * float(k) }; s * s + float(k) * sin(s) - cos(s * 0.5) + abs(s - 1.0) * 0.25 + sqrt(abs(s)) * float(k + 1) + exp(-s * s) }];
+            return a[element() % 32] + a[3];
+        } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let shader = emit(&module);
+    assert!(
+        !shader.contains("< 32i; it"),
+        "the builder is written out: {shader}"
+    );
+}

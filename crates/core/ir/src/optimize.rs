@@ -13,8 +13,8 @@
 //!   holding one, or a name a trace shows;
 //! - a call to a short function is written out in place;
 //! - loop-invariant work that cannot fail moves before the loop;
-//! - an `each` builder short enough is written out, its `Index` the
-//!   element's position.
+//! - an `each` builder short enough, or holding a loop counted at run
+//!   time, is written out, its `Index` the element's position.
 //!
 //! Values are then renumbered in pre-order. Floats keep their order and
 //! a run reports the same failure.
@@ -39,7 +39,8 @@ const BIG_ARG_WORDS: usize = 32;
 const INLINE_BIG_LIMIT: usize = 1024;
 /// An `each` builder whose elements together hold at most this many
 /// instructions, nested blocks counted, is written out element by
-/// element; a longer one runs as a loop.
+/// element; a longer one runs as a loop, unless it holds a loop counted
+/// at run time ([`counts_at_run_time`]).
 const UNROLL_LIMIT: usize = 512;
 
 /// Optimizes every function of a module. The result computes the same
@@ -657,7 +658,10 @@ fn unrolled(body: &[Instruction], next: &mut u32) -> Vec<Instruction> {
             block.body = unrolled(&block.body, next);
         }
         match &instruction.op {
-            Op::Each { count, body } if *count as usize * size(&body.body) <= UNROLL_LIMIT => {
+            Op::Each { count, body }
+                if *count as usize * size(&body.body) <= UNROLL_LIMIT
+                    || counts_at_run_time(&body.body) =>
+            {
                 let mut elements = Vec::with_capacity(*count as usize);
                 for position in 0..*count {
                     let mut ids = HashMap::new();
@@ -674,6 +678,21 @@ fn unrolled(body: &[Instruction], next: &mut u32) -> Vec<Instruction> {
         }
     }
     out
+}
+
+/// Whether a block holds a loop whose count is read at run time. A
+/// builder holding one is written out however long: its copies' work
+/// folds and is shared, and Chrome's WebGPU computes such a builder
+/// wrong as a loop.
+fn counts_at_run_time(body: &[Instruction]) -> bool {
+    body.iter().any(|instruction| {
+        matches!(instruction.op, Op::Loop { bound: Some(_), .. })
+            || instruction
+                .op
+                .blocks()
+                .iter()
+                .any(|block| counts_at_run_time(&block.body))
+    })
 }
 
 /// A copy of `body` under fresh ids, recorded in `ids`; where `own`, an
