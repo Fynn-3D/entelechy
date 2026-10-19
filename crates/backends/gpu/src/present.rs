@@ -322,6 +322,9 @@ impl Display {
             pass.draw(0..3, 0..1);
         }
         queue.submit(Some(encoder.finish()));
+        // Read by this frame's blit alone.
+        uniform.destroy();
+        overlay_buffer.destroy();
         queue.present(texture);
         Ok(Some(placement))
     }

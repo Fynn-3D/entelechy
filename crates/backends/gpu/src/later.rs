@@ -41,6 +41,7 @@ impl entelechy_rules::Downloading for Coming {
             .map_err(|error| error.to_string())?[..self.byte_len]
             .to_vec();
         self.staging.unmap();
+        self.staging.destroy();
         Ok(bytes)
     }
 }

@@ -137,8 +137,12 @@ impl GpuBackend {
     /// Gives the device a run, work or copy: every run but the empty ones
     /// a wait is marked by goes through here, so a clocked frame counts
     /// each.
+    /// What was let go before it is destroyed after it ([`Spare::bury`]).
     pub(crate) fn submit(&self, commands: wgpu::CommandBuffer) -> wgpu::SubmissionIndex {
-        self.frames.submit(&self.queue, commands)
+        let submission = self.frames.submit(&self.queue, commands);
+        self.spare.bury();
+        self.targets.bury();
+        submission
     }
 
     /// Opens the default adapter, blocking to wait for the device; a page
@@ -536,6 +540,12 @@ impl Backend for GpuBackend {
         if let Some((word, back)) = &failure {
             encoder.copy_buffer_to_buffer(word, 0, back, 0, wgsl::FAILURE_BYTES);
         }
+        // The packed inputs' copy is read by this run alone.
+        for (binding, buffer) in &bound_inputs {
+            if *binding == wgsl::PACKED_BINDING {
+                self.spare.let_go(buffer.clone());
+            }
+        }
         let scopes = Scopes::push(&self.device);
         let timing = self.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
         let submission = self.submit(encoder.finish());
@@ -687,6 +697,7 @@ impl Backend for GpuBackend {
             view[..byte_len].to_vec()
         };
         staging.unmap();
+        staging.destroy();
         Ok(bytes)
     }
 

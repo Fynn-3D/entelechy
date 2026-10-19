@@ -33,6 +33,12 @@ pub(crate) struct Held {
 #[derive(Clone, Default)]
 pub(crate) struct Spare {
     pub(crate) held: Arc<Mutex<Vec<Kept>>>,
+    /// Buffers let go, destroyed once the next run is given to the device
+    /// ([`Spare::bury`]): a command of a run being made may still bind
+    /// one. Destroyed, not dropped: a page's device frees a buffer dropped
+    /// only once the page's collector finds its object, which it may not
+    /// look for in a long while.
+    gone: Arc<Mutex<Vec<wgpu::Buffer>>>,
 }
 
 /// How many buffers the pile holds, and how many bytes; beyond that they
@@ -47,6 +53,8 @@ pub(crate) const SPARE_BYTES: u64 = 1024 * 1024 * 1024;
 #[derive(Clone, Default)]
 pub(crate) struct SpareTextures {
     pub(crate) held: Arc<Mutex<Vec<wgpu::Texture>>>,
+    /// Targets let go, destroyed as [`Spare`]'s buffers are.
+    gone: Arc<Mutex<Vec<wgpu::Texture>>>,
 }
 
 /// How many targets the pile holds, and how many bytes: three per shape,
@@ -102,8 +110,22 @@ impl SpareTextures {
         let held_bytes: u64 = held.iter().map(bytes).sum();
         if held.len() < SPARE_TEXTURES && held_bytes + bytes(&texture) <= SPARE_TEXTURE_BYTES {
             held.push(texture);
+        } else {
+            lock_gone(&self.gone).push(texture);
         }
     }
+
+    /// Destroys the targets let go: called once a run is given to the
+    /// device, which frees them when the work before has run.
+    pub(crate) fn bury(&self) {
+        for texture in lock_gone(&self.gone).drain(..) {
+            texture.destroy();
+        }
+    }
+}
+
+fn lock_gone<T>(gone: &Mutex<Vec<T>>) -> std::sync::MutexGuard<'_, Vec<T>> {
+    gone.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl Spare {
@@ -146,15 +168,33 @@ impl Spare {
     /// Keeps a buffer its Field released, marked with the Field whose
     /// words it holds where it was uploaded; the oldest beyond the pile's
     /// bounds go.
+    /// What goes is let go ([`Spare::let_go`]).
     pub(crate) fn keep(&self, buffer: wgpu::Buffer, holds: Option<Held>) {
         if buffer.size() > SPARE_BYTES {
+            self.let_go(buffer);
             return;
         }
         let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
         held.push((buffer, holds));
         let mut bytes: u64 = held.iter().map(|(buffer, _)| buffer.size()).sum();
         while held.len() > SPARE_BUFFERS || bytes > SPARE_BYTES {
-            bytes -= held.remove(0).0.size();
+            let (gone, _) = held.remove(0);
+            bytes -= gone.size();
+            lock_gone(&self.gone).push(gone);
+        }
+    }
+
+    /// A buffer nothing reads after the run being made: destroyed once that
+    /// run is given to the device ([`Spare::bury`]).
+    pub(crate) fn let_go(&self, buffer: wgpu::Buffer) {
+        lock_gone(&self.gone).push(buffer);
+    }
+
+    /// Destroys the buffers let go: called once a run is given to the
+    /// device, which frees them when the work before has run.
+    pub(crate) fn bury(&self) {
+        for buffer in lock_gone(&self.gone).drain(..) {
+            buffer.destroy();
         }
     }
 

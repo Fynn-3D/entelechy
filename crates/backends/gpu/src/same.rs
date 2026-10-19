@@ -158,6 +158,9 @@ impl GpuBackend {
             pass.dispatch_workgroups(words.div_ceil(256).clamp(1, 65535), 1, 1);
         }
         encoder.copy_buffer_to_buffer(&differs, 0, &back, 0, 4);
+        // Read by this comparison alone.
+        self.spare.let_go(differs);
+        self.spare.let_go(count);
         self.submit(encoder.finish());
         self.spent
             .time(|| {
@@ -173,6 +176,7 @@ impl GpuBackend {
             u32::from_le_bytes([view[0], view[1], view[2], view[3]])
         };
         back.unmap();
+        back.destroy();
         Ok(word == 0)
     }
 }

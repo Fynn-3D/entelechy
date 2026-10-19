@@ -125,8 +125,14 @@ impl GpuBackend {
                 pass.dispatch_workgroups(groups_x, groups_y, groups_z);
             }
         }
-        let last = if times % 2 == 1 { spare } else { output_buffer };
+        let (last, other) = if times % 2 == 1 {
+            (spare, output_buffer)
+        } else {
+            (output_buffer, spare)
+        };
         self.submit(encoder.finish());
+        // The other of the two goes to the pile for a later output.
+        self.spare.keep(other, None);
         let _ = self.device.poll(wgpu::PollType::Poll);
         scopes
             .pop(self.wait, "")
@@ -546,6 +552,9 @@ impl GpuBackend {
                 let padded = element_count.next_power_of_two().max(1);
                 let keys_buffer = storage("scatter sort keys", padded);
                 let order_buffer = storage("scatter sort order", padded);
+                // Read by this run alone.
+                self.spare.let_go(keys_buffer.clone());
+                self.spare.let_go(order_buffer.clone());
                 // One parameter record per dispatch, at the alignment
                 // dynamic offsets need: the padded count, then k and j.
                 let mut records: Vec<[u32; 4]> = vec![[padded as u32, 0, 0, 0]];
@@ -648,6 +657,7 @@ impl GpuBackend {
                     "scatter winners",
                     if gather.is_some() { target_count } else { 1 },
                 );
+                self.spare.let_go(winners.clone());
                 let with_winners: Vec<wgpu::BindGroupEntry> = common
                     .iter()
                     .cloned()
