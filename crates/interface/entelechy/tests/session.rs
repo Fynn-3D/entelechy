@@ -2375,7 +2375,7 @@ fn a_scene_that_does_not_load_stops_a_command_with_why() {
 }
 
 /// A thousand republishes leave one version, nothing awaiting collection,
-/// and only the frame's Fields held.
+/// and no more Fields held than the first frame's.
 #[test]
 fn a_session_that_republishes_a_thousand_times_keeps_one_of_each() {
     let dir = scratch("long");
@@ -2409,10 +2409,11 @@ fn a_session_that_republishes_a_thousand_times_keeps_one_of_each() {
         0,
         "nothing prepared and left uncollected"
     );
-    assert_eq!(
-        session.runtime().host().live(),
-        live,
-        "the Host holds what the frame needs and no more"
+    // At most: an output new frame after frame goes cold once read.
+    let held = session.runtime().host().live();
+    assert!(
+        held <= live,
+        "the Host holds what the frame needs and no more: {held} of {live}"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
