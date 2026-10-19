@@ -76,28 +76,33 @@ pub(crate) enum Scatter<P = Pass> {
 }
 
 /// A pass validated as the device takes it, its pipeline not yet built:
-/// its shader and its bindings.
+/// its source and its bindings. The shader module the device made of the
+/// source to validate it is not kept: a module holds the device's whole
+/// reading of its shader, many times the source, and a scene prepares
+/// many Kernels it runs late, rarely or only fused into others. One is
+/// made again for the pipeline, and let go once it is built.
 pub(crate) struct Shader {
     label: String,
-    shader: wgpu::ShaderModule,
+    source: String,
+    /// The bindings, which a page's browser compiles the pipeline with.
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    entries: Vec<wgpu::BindGroupLayoutEntry>,
     layout: wgpu::BindGroupLayout,
-    /// In a page, the source and bindings the browser compiles the
-    /// pipeline from first, off the thread that answers the device.
-    beside: Option<(String, Vec<wgpu::BindGroupLayoutEntry>)>,
 }
 
 impl Shader {
     /// The pipeline, from the device's own compiler: the long part of
     /// preparing, and the part a device's compiler can fail in.
     fn built(self, device: &wgpu::Device, wait: Wait) -> Result<Pass, Unbuilt> {
+        // A page's browser compiles it first, beside the thread that
+        // answers the device; elsewhere the device does by itself.
         #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-        if let Some((source, entries)) = &self.beside {
-            crate::page::compile_beside(device, wait, &self.label, source, entries);
-        }
-        // Elsewhere the device compiles beside the thread by itself.
-        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-        let _ = &self.beside;
+        crate::page::compile_beside(device, wait, &self.label, &self.source, &self.entries);
         let scopes = Scopes::push(device);
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(&self.label),
+            source: wgpu::ShaderSource::Wgsl(self.source.as_str().into()),
+        });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(&self.label),
             bind_group_layouts: &[Some(&self.layout)],
@@ -106,12 +111,12 @@ impl Shader {
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some(&self.label),
             layout: Some(&pipeline_layout),
-            module: &self.shader,
+            module: &shader,
             entry_point: Some("main"),
             compilation_options: Default::default(),
             cache: None,
         });
-        scopes.pop(wait, "")?;
+        scopes.pop(wait, &self.source)?;
         Ok((pipeline, self.layout))
     }
 }
@@ -419,13 +424,21 @@ impl GpuBackend {
         source: &str,
         entries: &[wgpu::BindGroupLayoutEntry],
     ) -> Result<Shader, Unbuilt> {
+        // Only what the entry point reaches goes to the device.
+        let source = &wgsl::pruned(source);
         let scopes = Scopes::push(&self.device);
-        let shader = self
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(label),
-                source: wgpu::ShaderSource::Wgsl(source.into()),
-            });
+        // Validated as the device takes it, and let go ([`Shader`]). A page
+        // cannot let a module go but to its collector: there the source is
+        // validated as the pipeline is built.
+        if !self.wait.parks_with_host() {
+            drop(
+                self.device
+                    .create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: Some(label),
+                        source: wgpu::ShaderSource::Wgsl(source.into()),
+                    }),
+            );
+        }
         let layout = self
             .device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -435,12 +448,10 @@ impl GpuBackend {
         scopes.pop(self.wait, source)?;
         Ok(Shader {
             label: label.to_owned(),
-            shader,
+            source: source.to_owned(),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            entries: entries.to_vec(),
             layout,
-            beside: self
-                .wait
-                .parks_with_host()
-                .then(|| (source.to_owned(), entries.to_vec())),
         })
     }
 
