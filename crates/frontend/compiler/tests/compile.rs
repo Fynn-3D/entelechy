@@ -484,6 +484,19 @@ fn rate_is_context_under_time_read() {
 }
 
 #[test]
+fn queued_is_context_under_time_read() {
+    let module = compile(
+        "kernel test.ahead@1 { requires { field.write; time.read; } output result: Rows<Int>; compute { return queued() + 1; } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert!(module.to_string().contains("context queued"), "{module}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Int>; compute { return queued(); } }",
+    );
+    assert!(message.contains("needs `time.read`"), "{message}");
+}
+
+#[test]
 fn functions_with_field_parameters_are_instantiated_per_port() {
     // The lowering is inspected; the optimizer inlines short functions.
     let module = entelechy_compiler::compile_unoptimized(
