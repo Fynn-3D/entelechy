@@ -99,11 +99,16 @@ class EntelechyPlayer {
   }
 
   /// Opens a scene or a replay (paths among `files`, [path, bytes]
-  /// pairs), on `backend`, or as the Player does when none is named: the
-  /// GPU, else the JIT, else the interpreter.
+  /// pairs, or [path, length] for a file the page's server keeps, read
+  /// from there when it is read), on `backend`, or as the Player does
+  /// when none is named: the GPU, else the JIT, else the interpreter.
   static async open({ glue, files, scene, replay, backend, canvas, shown }) {
     const entelechy = await EntelechyInPage.load(glue);
-    for (const [path, bytes] of files) entelechy.put(path, bytes);
+    globalThis.entelechy_files_base = new URL(".", location.href).href;
+    for (const [path, bytes] of files) {
+      if (typeof bytes === "number") entelechy.putElsewhere(path, bytes);
+      else entelechy.put(path, bytes);
+    }
     // "best" is Entelechy's to decide, as for the Player: the backends it
     // passed over are among what the play says.
     const on = backend || "best";
@@ -410,10 +415,12 @@ class EntelechyWorkerPlayer {
     return new Promise((resolve, reject) => {
       player.worker.onmessage = ({ data }) => player.heard(data, resolve, reject);
       player.worker.onerror = (event) => reject(new Error(event.message || "the worker failed"));
-      const buffers = files.map(([, bytes]) => bytes.buffer);
+      // A file given as its length stays with the page's server; the
+      // worker reads it from there when it is read.
+      const buffers = files.filter(([, bytes]) => typeof bytes !== "number").map(([, bytes]) => bytes.buffer);
       player.worker.postMessage(
         {
-          open: { glue: new URL(glue, location.href).href, host, files, scene, replay, backend, canvas: offscreen, id: shown.id, trace: !!trace },
+          open: { glue: new URL(glue, location.href).href, host, files, base: new URL(".", location.href).href, scene, replay, backend, canvas: offscreen, id: shown.id, trace: !!trace },
           size: player.fit(),
         },
         [offscreen, ...buffers],

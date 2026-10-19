@@ -604,7 +604,10 @@ node bridges/web/serve.mjs     # then http://127.0.0.1:7789/bridges/web/index.ht
 
 In a page, Entelechy is the C ABI with `wasm-bindgen`'s glue. Its documents
 are files the page hands in (`entelechy_files`, `entelechy_files_put`,
-`entelechy_open_files`) and it answers the protocol through `entelechy_request`.
+`entelechy_open_files`); a large one may stay on the page's server
+(`entelechy_files_put_elsewhere`, read through `entelechy.fetch` whenever it
+is read), so its bytes are not held in the page. It answers the protocol
+through `entelechy_request`.
 It runs on its JIT, which writes WebAssembly the page loads
 (`entelechy.load`), or on the browser's WebGPU, waiting for the device by
 suspending (`entelechy.wait`, JavaScript Promise Integration: Chrome and Edge

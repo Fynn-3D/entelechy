@@ -112,7 +112,9 @@ function parking() {
 /// `entelechy.unload`, which gives their slots back; `entelechy.wait`, which
 /// suspends Entelechy (JavaScript Promise Integration) until `entelechy.wake`,
 /// which the device's answer calls, which is how Entelechy waits for a
-/// device; and `entelechy.now`, the page's clock in milliseconds.
+/// device; `entelechy.now`, the page's clock in milliseconds; and
+/// `entelechy.fetch`, which reads a file the page keeps (put elsewhere)
+/// from where `globalThis.entelechy_files_base` says the files are.
 /// `instance()` answers the Entelechy instance, once there is one.
 function host(instance) {
   const free = [];
@@ -147,6 +149,34 @@ function host(instance) {
       }
     },
     now: () => performance.now(),
+    fetch(path, length, out, bytes) {
+      const exports = instance().exports;
+      const name = new TextDecoder().decode(new Uint8Array(exports.memory.buffer, path, length));
+      const base = globalThis.entelechy_files_base;
+      if (!base) return -1;
+      try {
+        // Asked of the page's own server, which keeps them, as they are read.
+        const request = new XMLHttpRequest();
+        request.open("GET", new URL(name, base).href, false);
+        const worker = typeof WorkerGlobalScope !== "undefined";
+        if (worker) request.responseType = "arraybuffer";
+        else request.overrideMimeType("text/plain; charset=x-user-defined");
+        request.send();
+        if (request.status !== 200) return -1;
+        let got;
+        if (worker) got = new Uint8Array(request.response, 0, Math.min(bytes, request.response.byteLength));
+        else {
+          const text = request.responseText;
+          got = new Uint8Array(Math.min(bytes, text.length));
+          for (let i = 0; i < got.length; i++) got[i] = text.charCodeAt(i) & 0xff;
+        }
+        new Uint8Array(exports.memory.buffer, out, got.length).set(got);
+        return got.length;
+      } catch (error) {
+        if (globalThis.console) console.error(`entelechy.fetch: ${name}: ${error.message}`);
+        return -1;
+      }
+    },
     wake: () => parked.wake(),
     wait:
       typeof WebAssembly.Suspending === "function"
@@ -262,6 +292,13 @@ class EntelechyInPage {
     this.withText(path, (name) =>
       this.withBytes(bytes, (data, length) => this.x.entelechy_files_put(this.files, name, data, length)),
     );
+  }
+
+  /// Puts a file of `length` bytes the page keeps at `path` under
+  /// `globalThis.entelechy_files_base`: read from there whenever it is
+  /// read, never held here.
+  putElsewhere(path, length) {
+    this.withText(path, (name) => this.x.entelechy_files_put_elsewhere(this.files, name, length));
   }
 
   /// Opens `scene`, a path among the files put: on the JIT, whose code

@@ -94,6 +94,11 @@ EntelechyFiles *entelechy_files(void);
  * on these files reads the change on its next evaluate, as it reads a
  * file changed on disk. Returns 0, or -1 for a NULL argument. */
 int entelechy_files_put(EntelechyFiles *files, const char *path, const uint8_t *data, size_t len);
+/* Puts a file of `len` bytes at `path` whose bytes the caller keeps. In
+ * a page they are read through `entelechy.fetch` whenever the file is
+ * read, so they are not held twice; elsewhere such a file cannot be
+ * read. Returns 0, or -1 for a NULL argument. */
+int entelechy_files_put_elsewhere(EntelechyFiles *files, const char *path, size_t len);
 /* Lets go of the caller's hold; a session opened on the files keeps its
  * own. */
 void entelechy_files_free(EntelechyFiles *files);

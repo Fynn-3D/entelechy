@@ -536,12 +536,60 @@ pub struct EntelechyFiles {
     files: std::sync::Arc<entelechy_session::Memory>,
 }
 
-/// A new, empty set of files.
+/// A new, empty set of files. In a page, a file put elsewhere
+/// ([`entelechy_files_put_elsewhere`]) is read through `entelechy.fetch`.
 #[unsafe(no_mangle)]
 pub extern "C" fn entelechy_files() -> *mut EntelechyFiles {
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    let files = entelechy_session::Memory::with_fetch(std::sync::Arc::new(page_fetch));
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    let files = entelechy_session::Memory::default();
     Box::into_raw(Box::new(EntelechyFiles {
-        files: std::sync::Arc::default(),
+        files: std::sync::Arc::new(files),
     }))
+}
+
+// In a page, a file kept by the page: `entelechy.fetch` copies its first
+// `bytes` bytes to `out` and answers how many, or -1.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[link(wasm_import_module = "entelechy")]
+unsafe extern "C" {
+    fn fetch(path: *const u8, path_len: usize, out: *mut u8, bytes: usize) -> isize;
+}
+
+/// The first `bytes` bytes of a file the page keeps.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+fn page_fetch(path: &Path, bytes: usize) -> std::io::Result<Vec<u8>> {
+    let name = path.to_string_lossy();
+    let mut out = vec![0u8; bytes];
+    let got = unsafe { fetch(name.as_ptr(), name.len(), out.as_mut_ptr(), bytes) };
+    if got < 0 {
+        return Err(std::io::Error::other(format!(
+            "the page could not fetch `{name}`"
+        )));
+    }
+    out.truncate(got as usize);
+    Ok(out)
+}
+
+/// Puts a file of `len` bytes at `path` whose bytes the caller keeps: in a
+/// page, read through `entelechy.fetch` whenever the file is read, so they
+/// are not held twice. Elsewhere such a file cannot be read.
+///
+/// # Safety
+/// `files` is a pointer `entelechy_files` returned, not freed yet; `path` is a
+/// NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn entelechy_files_put_elsewhere(
+    files: *mut EntelechyFiles,
+    path: *const c_char,
+    len: usize,
+) -> c_int {
+    let (Some(files), Some(path)) = (unsafe { files.as_ref() }, unsafe { text(path) }) else {
+        return -1;
+    };
+    files.files.put_elsewhere(Path::new(path), len);
+    0
 }
 
 /// Puts a file's bytes at `path`, replacing what was there.

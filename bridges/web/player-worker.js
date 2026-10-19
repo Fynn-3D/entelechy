@@ -161,7 +161,7 @@ function run() {
   next(loop);
 }
 
-async function open({ glue, host, files, scene, replay, backend, canvas, id, trace }) {
+async function open({ glue, host, files, base, scene, replay, backend, canvas, id, trace }) {
   // Entelechy's device tells the console each pipeline it compiles.
   self.entelechy_trace = !!trace;
   entelechy = await EntelechyInPage.load(glue, host);
@@ -176,7 +176,12 @@ async function open({ glue, host, files, scene, replay, backend, canvas, id, tra
   self.entelechy_canvases[id] = canvas;
   canvas.width = size.width;
   canvas.height = size.height;
-  for (const [path, bytes] of files) entelechy.put(path, bytes);
+  // A file given as its length stays with the page, read from `base`.
+  self.entelechy_files_base = base;
+  for (const [path, bytes] of files) {
+    if (typeof bytes === "number") entelechy.putElsewhere(path, bytes);
+    else entelechy.put(path, bytes);
+  }
   entelechy.onpreparing = (left) => post({ preparing: left });
   const on = backend || "best";
   if (replay) await entelechy.openReplay(replay, on);

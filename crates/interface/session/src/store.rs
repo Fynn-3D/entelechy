@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// What is at a path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -471,19 +471,79 @@ impl Disk {
 pub struct Memory {
     held: Mutex<Held>,
     parsed: Parsed,
+    /// Where the files kept elsewhere are read from.
+    fetch: Option<Fetch>,
+}
+
+/// Reads a file kept elsewhere: its first `bytes` bytes (all of them when
+/// it has no more), or an error.
+pub type FetchFn = dyn Fn(&Path, usize) -> io::Result<Vec<u8>> + Send + Sync;
+
+/// A [`FetchFn`], shown by name alone.
+struct Fetch(Arc<FetchFn>);
+
+impl std::fmt::Debug for Fetch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Fetch")
+    }
+}
+
+/// What a file holds: its bytes, or the count of them, kept elsewhere
+/// and read through the store's [`FetchFn`] each time.
+#[derive(Debug)]
+enum Content {
+    Bytes(Vec<u8>),
+    Elsewhere(usize),
 }
 
 /// The files, each with the number of the write that made it (its stamp).
 #[derive(Debug, Default)]
 struct Held {
-    files: BTreeMap<PathBuf, (Vec<u8>, u64)>,
+    files: BTreeMap<PathBuf, (Content, u64)>,
     writes: u64,
 }
 
 impl Memory {
+    /// A store whose files may be kept elsewhere, read through `fetch`.
+    pub fn with_fetch(fetch: Arc<FetchFn>) -> Self {
+        Self {
+            fetch: Some(Fetch(fetch)),
+            ..Self::default()
+        }
+    }
+
     /// Puts a file at `path`; the next sync reads it as a changed file.
     pub fn put(&self, path: &Path, bytes: Vec<u8>) {
-        let _ = self.write(path, &bytes);
+        self.insert(path, Content::Bytes(bytes));
+    }
+
+    /// Puts a file of `bytes` bytes at `path` whose bytes stay where they
+    /// are kept, read through the store's fetch whenever the file is; the
+    /// next sync reads it as a changed file.
+    pub fn put_elsewhere(&self, path: &Path, bytes: usize) {
+        self.insert(path, Content::Elsewhere(bytes));
+    }
+
+    fn insert(&self, path: &Path, content: Content) {
+        let mut held = self.held();
+        held.writes += 1;
+        let version = held.writes;
+        held.files.insert(folded(path), (content, version));
+    }
+
+    /// The first `bytes` bytes of the file (or all of it), wherever kept.
+    fn read_up_to(&self, path: &Path, bytes: usize) -> io::Result<Vec<u8>> {
+        let elsewhere = match self.held().files.get(&folded(path)) {
+            Some((Content::Bytes(held), _)) => return Ok(held[..held.len().min(bytes)].to_vec()),
+            Some((Content::Elsewhere(count), _)) => (*count).min(bytes),
+            None => return Err(io::ErrorKind::NotFound.into()),
+        };
+        match &self.fetch {
+            Some(Fetch(fetch)) => fetch(&folded(path), elsewhere),
+            None => Err(io::Error::other(
+                "the file is kept elsewhere and the store reads nothing there",
+            )),
+        }
     }
 
     fn held(&self) -> std::sync::MutexGuard<'_, Held> {
@@ -630,18 +690,15 @@ impl Store for Memory {
     }
 
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
-        self.held()
-            .files
-            .get(&folded(path))
-            .map(|(bytes, _)| bytes.clone())
-            .ok_or_else(|| io::ErrorKind::NotFound.into())
+        self.read_up_to(path, usize::MAX)
+    }
+
+    fn read_start(&self, path: &Path, bytes: usize) -> io::Result<Vec<u8>> {
+        self.read_up_to(path, bytes)
     }
 
     fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
-        let mut held = self.held();
-        held.writes += 1;
-        let version = held.writes;
-        held.files.insert(folded(path), (bytes.to_vec(), version));
+        self.insert(path, Content::Bytes(bytes.to_vec()));
         Ok(())
     }
 
@@ -724,6 +781,43 @@ impl Store for Memory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_kept_elsewhere_is_read_through_the_fetch_each_time() {
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&asked);
+        let files = Memory::with_fetch(Arc::new(move |path: &Path, bytes: usize| {
+            seen.lock().unwrap().push((path.to_path_buf(), bytes));
+            Ok(b"0123456789"[..bytes.min(10)].to_vec())
+        }));
+        files.put_elsewhere(Path::new("a/../big.field"), 10);
+        assert_eq!(files.kind(Path::new("big.field")), Some(Kind::File));
+        assert_eq!(files.read(Path::new("big.field")).unwrap(), b"0123456789");
+        assert_eq!(
+            files.read_start(Path::new("big.field"), 4).unwrap(),
+            b"0123"
+        );
+        assert_eq!(
+            *asked.lock().unwrap(),
+            vec![
+                (PathBuf::from("big.field"), 10),
+                (PathBuf::from("big.field"), 4)
+            ]
+        );
+        let before = files.stamp(Path::new("big.field"));
+        files.put_elsewhere(Path::new("big.field"), 10);
+        assert_ne!(
+            files.stamp(Path::new("big.field")),
+            before,
+            "a new put is a change"
+        );
+        let plain = Memory::default();
+        plain.put_elsewhere(Path::new("big.field"), 10);
+        assert!(
+            plain.read(Path::new("big.field")).is_err(),
+            "nothing reads it there"
+        );
+    }
 
     #[test]
     fn a_files_start_is_read_alone() {

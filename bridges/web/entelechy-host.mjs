@@ -12,6 +12,7 @@ export const unload = hosted.unload;
 export const wait = hosted.wait;
 export const wake = hosted.wake;
 export const now = hosted.now;
+export const fetch = hosted.fetch;
 
 /// Names the instance the functions work on.
 export function bind(made) {
