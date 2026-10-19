@@ -246,6 +246,9 @@ pub struct Play {
     /// Whether a frame has been shown: before the first, a scene still
     /// waiting for its Kernels (prepared in turns, in a page) is waited for.
     shown: bool,
+    /// The sound fetched behind the frame in flight, heard the frame after
+    /// ([`Play::heard`]); a frame found failed lets it go unheard.
+    sound_behind: Option<entelechy_kernel::Fetch>,
 }
 
 /// How long a pad button's release waits, in seconds: a press within it
@@ -284,6 +287,7 @@ impl Play {
             said: Vec::new(),
             synced: None,
             shown: false,
+            sound_behind: None,
         }
     }
 
@@ -502,6 +506,14 @@ impl Play {
         if !self.shown && session.scene_waiting() {
             return Frame::Wait;
         }
+        // A window's frames overlap the device's: the next is made while
+        // the device draws this one.
+        if !session.overlaps()
+            && let Err(error) = session.set_overlap(true)
+        {
+            self.failed(&error);
+            return Frame::Failed;
+        }
         // While a replay plays, it is the whole input.
         let replayed = match self.replay_frame(session) {
             Replayed::Wait => return Frame::Wait,
@@ -604,8 +616,35 @@ impl Play {
         }
     }
 
-    /// Says a failed evaluation once, and keeps it as the status.
+    /// The sound to hear now, as words, `sound` being the frame's sound
+    /// output ([`Shown::sound`]). Overlapping, it is the frame before's,
+    /// confirmed by now and fetched behind its own work alone, while this
+    /// frame's is fetched for the next: hearing never waits for the frame
+    /// just made. Otherwise this frame's, brought back now.
+    pub fn heard(
+        &mut self,
+        session: &mut Session,
+        sound: entelechy_kernel::Handle,
+    ) -> Option<Vec<u32>> {
+        if session.overlaps() {
+            let fetch = session.fetch(sound).ok()?;
+            return match self
+                .sound_behind
+                .replace(fetch)
+                .map(entelechy_kernel::Fetch::take)
+            {
+                Some(Ok(data)) => Some(data.values().to_vec()),
+                _ => None,
+            };
+        }
+        session.field(sound).ok().map(|data| data.values().to_vec())
+    }
+
+    /// Says a failed evaluation once, and keeps it as the status. The
+    /// sound fetched behind the frame before is not heard: that frame is
+    /// taken back with it.
     fn failed(&mut self, error: &entelechy_graph::EvaluateError) {
+        self.sound_behind = None;
         let message = format!("evaluation failed: {error}");
         if self.reported.failed(&message) {
             self.said.push(format!("{message}; last frame is kept"));

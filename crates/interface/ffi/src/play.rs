@@ -325,9 +325,10 @@ pub unsafe extern "C" fn entelechy_play_pixels(
     }
 }
 
-/// The frame's sound block (one or two floats per sample frame), read in
-/// place. 0 and `field` filled when there is one, 1 when none, -1 with
-/// `entelechy_error()` set on failure.
+/// The sound block to hear now (one or two floats per sample frame): the
+/// frame before's while frames overlap the device's, so hearing never waits
+/// for the frame just made. 0 and `field` filled when there is one, 1 when
+/// none, -1 with `entelechy_error()` set on failure.
 ///
 /// # Safety
 /// `session` is a live session; `field` points to an `EntelechyField` to fill.
@@ -344,10 +345,29 @@ pub unsafe extern "C" fn entelechy_play_sound(
         let Some((_, Some(sound))) = s.shown else {
             return 1;
         };
-        match s.field(sound, field) {
-            Ok(()) => 0,
-            Err(message) => s.fail(message),
-        }
+        let Ok(schema) = s.session.runtime().host().schema(sound) else {
+            return 1;
+        };
+        let channels = schema.value_words();
+        let values = entelechy_abi::Schema::new(schema.scalars().to_vec());
+        let Some(words) = s.play.heard(&mut s.session, sound) else {
+            return 1;
+        };
+        s.sound = words;
+        s.schema = c_string(&values.to_string());
+        let count = (s.sound.len() / channels.max(1)) as u32;
+        *field = EntelechyField {
+            words: s.sound.as_ptr(),
+            width: count,
+            height: 1,
+            depth: 1,
+            count,
+            stride: channels as u32,
+            shape: 0,
+            pixels: 0,
+            schema: s.schema.as_ptr(),
+        };
+        0
     })
 }
 

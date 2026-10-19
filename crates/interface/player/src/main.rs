@@ -252,7 +252,7 @@ struct Player {
     audio_failed: bool,
     /// The sound of the frame in flight, fetched to be heard next frame
     /// ([`Session::overlaps`]).
-    sound_behind: Option<entelechy_kernel::Fetch>,
+
     /// Whether the pointer is held once the window is clicked, where the
     /// system's cursor last was, and the held pointer while it is held
     /// ([`entelechy_player::pointer`]).
@@ -352,9 +352,6 @@ impl Player {
     /// its sound is not heard.
     fn confirm(&mut self) -> bool {
         let confirmed = self.play.confirm(&mut self.session);
-        if !confirmed {
-            self.sound_behind = None;
-        }
         self.say();
         confirmed
     }
@@ -369,9 +366,6 @@ impl Player {
         match frame {
             Frame::Wait => None,
             Frame::Failed => {
-                // A failed frame takes back the one before: its sound
-                // is not heard.
-                self.sound_behind = None;
                 let placement = self.blit();
                 self.play.landed(placement, self.last_size);
                 None
@@ -499,26 +493,9 @@ impl Player {
             }
         }
         // Materializing is the observation boundary: on the frame thread,
-        // never in the device callback. Overlapping, the sound heard is
-        // the frame before's, confirmed by now and fetched behind its work
-        // alone: this frame's is fetched for the next.
-        let words: Vec<u32> = if self.session.overlaps() {
-            let Ok(fetch) = self.session.fetch(handle) else {
-                return;
-            };
-            match self
-                .sound_behind
-                .replace(fetch)
-                .map(entelechy_kernel::Fetch::take)
-            {
-                Some(Ok(data)) => data.values().to_vec(),
-                _ => return,
-            }
-        } else {
-            match self.session.field(handle) {
-                Ok(data) => data.values().to_vec(),
-                Err(_) => return,
-            }
+        // never in the device callback ([`Play::heard`]).
+        let Some(words) = self.play.heard(&mut self.session, handle) else {
+            return;
         };
         if let Some(audio) = &mut self.audio {
             audio.push(&words, words_per_frame);
@@ -882,11 +859,6 @@ fn main() -> ExitCode {
     }
     // The first load published inline; replacements prepare off the frame.
     session.set_background(true);
-    // The window's frames overlap the device's: the next is made while
-    // the device draws this one.
-    if let Err(error) = session.set_overlap(true) {
-        eprintln!("evaluation failed: {error}");
-    }
     let mut player = Player {
         session,
         play: Play::new(clock),
@@ -904,7 +876,6 @@ fn main() -> ExitCode {
         gamepad,
         audio_allowed: !options.no_audio,
         audio_failed: false,
-        sound_behind: None,
         hold_pointer: options.hold_pointer,
         cursor: (0.0, 0.0),
         held: None,

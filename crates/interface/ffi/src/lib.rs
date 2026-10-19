@@ -144,6 +144,9 @@ struct Held {
     /// The last picture read back, and its size; shown again when a frame
     /// fails or a picture cannot be read back.
     picture: (Vec<[f32; 4]>, (u32, u32)),
+    /// The sound heard now ([`entelechy_session::play::Play::heard`]), for
+    /// `entelechy_play_sound`.
+    sound: Vec<u32>,
 }
 
 mod play;
@@ -515,6 +518,7 @@ fn opened(
                 said: CString::default(),
                 pixels: Vec::new(),
                 picture: (Vec::new(), (0, 0)),
+                sound: Vec::new(),
             }),
         })),
         Ok(Err(message)) => set_error(message),

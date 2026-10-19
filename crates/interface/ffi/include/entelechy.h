@@ -146,7 +146,8 @@ int entelechy_play_present(EntelechySession *session, const char *canvas);
  * 0x00RRGGBB pixels, row after row, valid until the next call. NULL
  * with entelechy_error() set on failure. */
 const uint32_t *entelechy_play_pixels(EntelechySession *session, uint32_t width, uint32_t height);
-/* The frame's sound, rows of one or two floats, read in place: 0 and
+/* The sound to hear now, rows of one or two floats, valid until the next
+ * call: the frame before's while frames overlap the device's. 0 and
  * `field` filled, 1 when there is none, -1 on failure. */
 int entelechy_play_sound(EntelechySession *session, EntelechyField *field);
 /* The sound device is open, as the host describes it. */
