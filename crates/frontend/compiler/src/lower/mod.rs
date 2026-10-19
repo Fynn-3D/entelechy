@@ -61,6 +61,11 @@ fn semantic(span: Span, message: impl Into<String>) -> CompileError {
 
 fn parse_type(name: &Spanned<String>) -> Result<Type, CompileError> {
     Type::from_str(&name.value).map_err(|error| {
+        // Asked whether a name is a value type at all, a failure says no
+        // more; one that is told is made whole by `resolve_type`.
+        if QUIET.get() {
+            return semantic(name.span, error.to_string());
+        }
         let known: Vec<&str> = Type::NAMED.iter().map(|(_, name)| *name).collect();
         semantic(
             name.span,
@@ -190,6 +195,20 @@ fn variant_in(
                 ),
             )
         })
+}
+
+thread_local! {
+    /// Set while [`names_value_type`] asks, so a failure builds no
+    /// suggestion it would only drop.
+    static QUIET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether `name` names a value type (not a Field's).
+fn names_value_type(name: &Spanned<String>, structs: &Structs) -> bool {
+    QUIET.set(true);
+    let named = resolve_type(name, structs).is_ok();
+    QUIET.set(false);
+    named
 }
 
 /// Resolves a type name: a plain type, a struct, or `[Type; N]`
@@ -403,7 +422,7 @@ pub(crate) fn check_templates(kernel: &Kernel, checked: &[String]) -> Vec<Compil
         }
         let mut ports = Vec::new();
         for (param, ty) in &declaration.args {
-            if resolve_type(ty, &structs).is_err()
+            if !names_value_type(ty, &structs)
                 && let Ok(ty) = port_type(ty, &structs, &aliases)
             {
                 ports.push(Port {
@@ -654,7 +673,7 @@ fn shared_of<'a>(
             if declaration.generics.iter().any(|g| g.value == ty.value) {
                 continue;
             }
-            if resolve_type(ty, structs).is_err() {
+            if !names_value_type(ty, structs) {
                 port_type(ty, structs, aliases).map_err(|_| {
                     semantic(ty.span, format!("`{}` is not a type", ty.value))
                         .in_declaration(&declaration.name.value)
