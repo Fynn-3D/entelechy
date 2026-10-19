@@ -73,7 +73,7 @@ impl GpuBackend {
     /// the encoder so the opening timestamp is its first command.
     /// A page's clocked frame times each run by such a set too ([`Frames`]).
     pub(crate) fn timing_set(&self, count: u32) -> Option<Timing> {
-        if !self.measured() && PAGE && self.frames.clocked() {
+        if !self.measured() && crate::PAGE && self.frames.clocked() {
             return self.frames.run_timing(&self.device);
         }
         let worth_asking = self.clock.load(std::sync::atomic::Ordering::Relaxed) != clock::SILENT;
@@ -95,7 +95,7 @@ impl GpuBackend {
         timing: Option<&Timing>,
         count: u32,
     ) -> Option<wgpu::Buffer> {
-        if !self.measured() && PAGE && self.frames.clocked() {
+        if !self.measured() && crate::PAGE && self.frames.clocked() {
             if timing.is_some() {
                 self.frames.stamped_run(count);
             }
@@ -230,10 +230,6 @@ pub(crate) struct Frames {
 
 type Run = Arc<Mutex<(std::time::Instant, Option<std::time::Instant>)>>;
 
-/// Whether Entelechy runs in a page, where frames are timed by the device's
-/// stamps.
-const PAGE: bool = cfg!(all(target_arch = "wasm32", target_os = "unknown"));
-
 /// The runs a page's frame stamps; later runs in it are counted as none.
 const STAMPED_RUNS: u32 = 512;
 
@@ -265,7 +261,7 @@ impl Frames {
     /// Clocks frames from now, or no longer; on, a waiter hears the device.
     /// A page clocks them only where the device has `timestamps`.
     pub(crate) fn set_clocked(&self, on: bool, device: &wgpu::Device, timestamps: bool) {
-        let on = on && (!PAGE || timestamps);
+        let on = on && (!crate::PAGE || timestamps);
         self.on.store(on, std::sync::atomic::Ordering::Relaxed);
         if !on {
             lock(&self.open).clear();
@@ -275,6 +271,8 @@ impl Frames {
             *lock(&self.stamped) = Stamped::default();
             return;
         }
+        // WebAssembly starts no thread to wait for the device; a page
+        // reads its stamps as it gets its turns.
         if cfg!(target_arch = "wasm32")
             || self
                 .waiting
@@ -312,7 +310,7 @@ impl Frames {
         if !self.clocked() {
             return queue.submit(Some(commands));
         }
-        if PAGE {
+        if crate::PAGE {
             return lock(&self.stamped).submit(queue, commands);
         }
         let submission = queue.submit(Some(commands));
@@ -329,7 +327,7 @@ impl Frames {
 
     /// How many runs the open frame has been given.
     pub(crate) fn mark(&self) -> usize {
-        if PAGE {
+        if crate::PAGE {
             return lock(&self.stamped).runs();
         }
         lock(&self.open).len()
@@ -343,7 +341,7 @@ impl Frames {
         let number = self
             .frames
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if PAGE {
+        if crate::PAGE {
             lock(&self.stamped).end_frame(number, device, queue);
             return Some(number);
         }
@@ -358,7 +356,7 @@ impl Frames {
 
     /// The latest frame whose runs are all done, each run's busy time.
     pub(crate) fn done(&self) -> Option<entelechy_rules::ClockedFrame> {
-        if PAGE {
+        if crate::PAGE {
             if let Some(frame) = lock(&self.stamped).done() {
                 *lock(&self.last) = Some(frame);
             }

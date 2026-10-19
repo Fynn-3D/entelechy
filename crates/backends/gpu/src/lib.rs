@@ -27,6 +27,12 @@ pub mod wgsl;
 use wait::Spent;
 pub use wait::Wait;
 
+/// Whether Entelechy runs in a page: its device is the browser's WebGPU,
+/// answered only when the page gets a turn, and its frames are timed by
+/// the device's stamps. Code that only a page has is gated by the same
+/// `cfg`; how a wait is made is the [`Wait`] the host hands in.
+pub(crate) const PAGE: bool = cfg!(all(target_arch = "wasm32", target_os = "unknown"));
+
 use failure::*;
 use later::*;
 use pool::*;
@@ -145,8 +151,9 @@ impl GpuBackend {
         submission
     }
 
-    /// Opens the default adapter, blocking to wait for the device; a page
-    /// opens it with [`GpuBackend::with_wait`].
+    /// Opens the default adapter, blocking to wait for the device. Where
+    /// Entelechy is WebAssembly nothing blocks: a page opens it with
+    /// [`GpuBackend::with_wait`].
     pub fn new() -> Result<Self, GpuError> {
         if cfg!(target_arch = "wasm32") {
             return Err(GpuError(
@@ -226,8 +233,8 @@ impl GpuBackend {
             }
         };
         // In a page, an error no scope caught is kept to be told; elsewhere it
-        // stops the program, as it always has.
-        #[cfg(target_arch = "wasm32")]
+        // stops the program.
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
         {
             let heard = Arc::clone(&heard);
             device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
