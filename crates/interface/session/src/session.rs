@@ -1097,8 +1097,15 @@ impl Session {
     /// ([`entelechy_kernel::Preparer::finish`]), so the frame after waits for
     /// none of them in turn. A replacement was finished in preparing it
     /// where the version it replaced ran there ([`Runtime::prepare_later`]),
-    /// and a Kernel no node uses is left for a run that needs it.
+    /// and a Kernel no node uses is left for a run that needs it. Where
+    /// Kernels prepare in turns (a page), none is finished while others
+    /// still wait their turn: the device compiles what the turns asked of
+    /// it while the next turns prepare, and the turn the last one prepares
+    /// in waits for what is left, as the first frame would.
     fn finish_used(&mut self) {
+        if self.runtime.prepares_in_turns() && self.runtime.prepare_queued() > 0 {
+            return;
+        }
         let Some(graph) = self.scene.graph() else {
             return;
         };
