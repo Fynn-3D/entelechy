@@ -250,6 +250,7 @@ pub unsafe extern "C" fn entelechy_play_present(
             pixels: &panel.pixels,
             width: panel.width,
             height: panel.height,
+            top: 0,
         });
         match s.present_on(&canvas, picture, overlay) {
             Ok(Some((placement, size))) => {
@@ -436,6 +437,43 @@ pub unsafe extern "C" fn entelechy_play_preparing(session: *const EntelechySessi
     unsafe { enter(session) }.map_or(0, |s| {
         c_int::try_from(s.session.preparing_left()).unwrap_or(c_int::MAX)
     })
+}
+
+/// The scene's Kernels preparing, drawn into a `width` by `height` window
+/// at `scale` device pixels to the logical one, `seconds` into loading
+/// ([`entelechy_session::play::loading`]): `0x00RRGGBB`, row after row,
+/// valid until the next call on the session. NULL for a session that is
+/// not.
+///
+/// # Safety
+/// `session` is a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn entelechy_play_loading(
+    session: *mut EntelechySession,
+    width: u32,
+    height: u32,
+    scale: f64,
+    seconds: f64,
+) -> *const u32 {
+    let Some(mut s) = (unsafe { enter(session) }) else {
+        return std::ptr::null();
+    };
+    let band = entelechy_session::play::loading::band(
+        &s.session.progress().now(),
+        seconds,
+        width,
+        height,
+        scale,
+    );
+    s.pixels.clear();
+    s.pixels.resize(width as usize * height as usize, 0);
+    let row = band.panel.width.min(width) as usize;
+    for y in 0..band.panel.height.min(height.saturating_sub(band.top)) as usize {
+        let from = y * band.panel.width as usize;
+        let to = (band.top as usize + y) * width as usize;
+        s.pixels[to..to + row].copy_from_slice(&band.panel.pixels[from..from + row]);
+    }
+    s.pixels.as_ptr()
 }
 
 /// A turn of loading: one sync that prepares a few of the Kernels waiting

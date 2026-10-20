@@ -101,7 +101,9 @@ async function step() {
     await show();
     await play();
   } else if (framed === 1) {
-    post({ preparing: x.entelechy_play_preparing(session) });
+    const left = x.entelechy_play_preparing(session);
+    post({ preparing: left });
+    if (left > 0) showLoading();
   } else if (framed < 0) {
     const error = entelechy.text(x.entelechy_error(session));
     if (error !== failed) post({ failed: error });
@@ -119,6 +121,19 @@ async function show() {
   const pointer = await pixels(session, size.width, size.height);
   if (!pointer) return;
   const words = new Uint32Array(x.memory.buffer, pointer, size.width * size.height).slice();
+  post({ pixels: words, width: size.width, height: size.height }, [words.buffer]);
+}
+
+/// The Kernels preparing, drawn on the CPU and handed to the page, at most
+/// thirty times a second.
+let loadingDrawn = 0;
+function showLoading() {
+  const now = performance.now();
+  if (now - loadingDrawn < 33 || !entelechy.session) return;
+  loadingDrawn = now;
+  const words = entelechy.loading(size.width, size.height, size.scale);
+  if (!words) return;
+  post({ presented: false });
   post({ pixels: words, width: size.width, height: size.height }, [words.buffer]);
 }
 
@@ -182,7 +197,10 @@ async function open({ glue, host, files, base, scene, replay, backend, canvas, i
     if (typeof bytes === "number") entelechy.putElsewhere(path, bytes);
     else entelechy.put(path, bytes);
   }
-  entelechy.onpreparing = (left) => post({ preparing: left });
+  entelechy.onpreparing = (left) => {
+    post({ preparing: left });
+    showLoading();
+  };
   const on = backend || "best";
   if (replay) await entelechy.openReplay(replay, on);
   else await entelechy.open(scene, on);

@@ -1124,6 +1124,7 @@ impl Session {
         }
         if !first.is_empty() {
             let preparer = self.runtime.preparer();
+            preparer.expect(first.iter().map(|version| version.id()));
             crate::spread::map(&first, |version| preparer.finish(version));
         }
         self.used = now;
@@ -1248,6 +1249,12 @@ impl Session {
         } else {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
+    }
+
+    /// What preparing the scene's Kernels is doing, readable from any
+    /// thread while a sync prepares them ([`entelechy_kernel::Progress`]).
+    pub fn progress(&self) -> entelechy_kernel::Progress {
+        self.runtime.progress()
     }
 
     /// The Kernels still waiting their turn to prepare where no thread can

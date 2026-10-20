@@ -614,6 +614,16 @@ expect 1 1 = 0.5 0.5 0.25 0.02
         frame[..400 * 9].contains(&0x00E0_E0E0),
         "the line's ink in the top rows"
     );
+    // The scene's Kernels, prepared, drawn as a loading window shows them:
+    // black, and a lit line across the middle.
+    let loading = unsafe { entelechy_ffi::entelechy_play_loading(session, 400, 300, 1.0, 0.5) };
+    assert!(!loading.is_null());
+    let window = unsafe { std::slice::from_raw_parts(loading, 400 * 300) };
+    assert_eq!(window[0], 0, "black around the line");
+    assert!(
+        window[150 * 400..160 * 400].iter().any(|&pixel| pixel != 0),
+        "the line in the middle"
+    );
     // Escape is the scene's: nothing to stop.
     assert_eq!(
         unsafe { entelechy_ffi::entelechy_play_key(session, c("Escape").as_ptr(), 1) },

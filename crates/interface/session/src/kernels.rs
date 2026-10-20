@@ -176,6 +176,11 @@ impl Ledger {
             };
         }
         let (preparer, worker, turns) = (&self.preparer, self.worker, self.turns);
+        preparer.expect(jobs.iter().filter_map(|(_, d, _, running)| match running {
+            None if turns => None,
+            Some(_) if worker => None,
+            _ => Some(&d.id),
+        }));
         let made = crate::spread::map(&jobs, |(path, d, reaches, running)| {
             let module = compiled(store, path, &d.id, &d.text, reaches, &d.kernel).ok()?;
             let candidate = match running {

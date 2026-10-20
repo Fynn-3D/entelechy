@@ -47,7 +47,7 @@ struct Frame {
     // placement x, y, width, height
     place: vec4<f32>,
     // 1 when the surface encodes sRGB itself (values are written linear);
-    // then the overlay's width and height, zero for none
+    // then the overlay's width and height, zero for none, and its top row
     flags: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -72,8 +72,9 @@ fn encode(c: vec3<f32>) -> vec4<f32> {
 
 @fragment
 fn fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    if (position.x < frame.flags.y && position.y < frame.flags.z) {
-        let o = overlay[u32(position.y) * u32(frame.flags.y) + u32(position.x)];
+    let row = position.y - frame.flags.w;
+    if (position.x < frame.flags.y && row >= 0.0 && row < frame.flags.z) {
+        let o = overlay[u32(row) * u32(frame.flags.y) + u32(position.x)];
         let c = vec3<f32>(f32((o >> 16u) & 255u), f32((o >> 8u) & 255u), f32(o & 255u)) / 255.0;
         return encode(c);
     }
@@ -90,8 +91,8 @@ fn fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
 }
 ";
 
-/// Pixels drawn over the window's top-left corner: `0x00RRGGBB`, `width`
-/// per row.
+/// Pixels drawn over the window from its left edge, `top` rows down:
+/// `0x00RRGGBB`, `width` per row.
 #[derive(Clone, Copy, Debug)]
 pub struct Overlay<'a> {
     /// The pixels, row by row.
@@ -100,6 +101,8 @@ pub struct Overlay<'a> {
     pub width: u32,
     /// Height in window pixels.
     pub height: u32,
+    /// The window row its first row lies on.
+    pub top: u32,
 }
 
 /// A window surface a [`Display`] draws resident images into.
@@ -216,9 +219,9 @@ impl Display {
     }
 
     /// Draws a resident image (`device`, the Host's resident object) into the
-    /// surface, with `overlay` over its top-left corner. Returns where the
-    /// image was placed, or `None` when the window takes no frame now
-    /// (occluded, or the surface timed out). Nothing is read back.
+    /// surface, with `overlay` over it. Returns where the image was placed,
+    /// or `None` when the window takes no frame now (occluded, or the
+    /// surface timed out). Nothing is read back.
     #[allow(clippy::too_many_arguments)]
     pub fn present(
         &self,
@@ -233,6 +236,57 @@ impl Display {
         let image = device
             .downcast_ref::<DeviceImage>()
             .ok_or_else(|| "image is resident on a different backend".to_string())?;
+        let placement = placement(width, height, window_width, window_height);
+        let drawn = self.draw(
+            presenter,
+            &image.buffer,
+            (width, height),
+            placement,
+            (window_width, window_height),
+            overlay,
+        )?;
+        Ok(drawn.then_some(placement))
+    }
+
+    /// Draws `overlay` alone on black: what a window shows before it has
+    /// an image. Whether the window took the frame.
+    pub fn present_overlay(
+        &self,
+        presenter: &mut Presenter,
+        window_width: u32,
+        window_height: u32,
+        overlay: Overlay<'_>,
+    ) -> Result<bool, String> {
+        let nothing = self.buffer("no image", &[0; 16], wgpu::BufferUsages::STORAGE);
+        let empty = Placement {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        };
+        let drawn = self.draw(
+            presenter,
+            &nothing,
+            (1, 1),
+            empty,
+            (window_width, window_height),
+            Some(overlay),
+        );
+        nothing.destroy();
+        drawn
+    }
+
+    /// One frame on the surface: the image in `buffer` (`size` pixels) at
+    /// `placement`, `overlay` over it. Whether the window took the frame.
+    fn draw(
+        &self,
+        presenter: &mut Presenter,
+        buffer: &wgpu::Buffer,
+        (width, height): (u32, u32),
+        placement: Placement,
+        (window_width, window_height): (u32, u32),
+        overlay: Option<Overlay<'_>>,
+    ) -> Result<bool, String> {
         let (gpu_device, queue) = (&self.device, &self.queue);
         if (presenter.config.width, presenter.config.height) != (window_width, window_height)
             && window_width > 0
@@ -242,7 +296,6 @@ impl Display {
             presenter.config.height = window_height;
             presenter.surface.configure(gpu_device, &presenter.config);
         }
-        let placement = placement(width, height, window_width, window_height);
         let frame: [f32; 12] = [
             window_width as f32,
             window_height as f32,
@@ -255,17 +308,17 @@ impl Display {
             presenter.srgb as u8 as f32,
             overlay.map_or(0.0, |o| o.width as f32),
             overlay.map_or(0.0, |o| o.height as f32),
-            0.0,
+            overlay.map_or(0.0, |o| o.top as f32),
         ];
         let texture = match presenter.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture)
             | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                return Ok(None);
+                return Ok(false);
             }
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 presenter.surface.configure(gpu_device, &presenter.config);
-                return Ok(None);
+                return Ok(false);
             }
             other => return Err(format!("no surface texture: {other:?}")),
         };
@@ -287,7 +340,7 @@ impl Display {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: image.buffer.as_entire_binding(),
+                    resource: buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -327,7 +380,7 @@ impl Display {
         uniform.destroy();
         overlay_buffer.destroy();
         queue.present(texture);
-        Ok(Some(placement))
+        Ok(true)
     }
 
     /// A buffer of `contents`, as the backend makes one.

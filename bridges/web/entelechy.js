@@ -365,16 +365,27 @@ class EntelechyInPage {
   }
 
   /// Takes turns of loading until no Kernel waits to prepare, giving the
-  /// page a turn between them; `onpreparing`, when set, hears how many wait.
+  /// page a turn between them; `onpreparing`, when set, hears how many wait
+  /// (and may draw them, `loading`), and is waited for.
   async loaded() {
+    this.began = performance.now();
     let left = this.x.entelechy_play_preparing(this.session);
     while (left > 0) {
-      if (this.onpreparing) this.onpreparing(left);
+      if (this.onpreparing) await this.onpreparing(left);
       await new Promise((turn) => setTimeout(turn, 0));
       left = await this.turn(this.session);
       if (left < 0) throw new Error(this.text(this.x.entelechy_error(this.session)));
     }
-    if (this.onpreparing) this.onpreparing(0);
+    if (this.onpreparing) await this.onpreparing(0);
+  }
+
+  /// The scene's Kernels preparing, drawn into a `width` by `height`
+  /// window at `scale`: a copy of its `0x00RRGGBB` words, or null.
+  loading(width, height, scale) {
+    const seconds = (performance.now() - (this.began ?? performance.now())) / 1000;
+    const pointer = this.x.entelechy_play_loading(this.session, width, height, scale, seconds);
+    if (!pointer) return null;
+    return new Uint32Array(this.x.memory.buffer, pointer, width * height).slice();
   }
 
   /// Opens the scene the replay at `path` (among the files put) names,

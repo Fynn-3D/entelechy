@@ -335,6 +335,15 @@ ready, so a republish never stalls a frame. It takes `run`'s
 - `--serve`, `--listen <host:port>` and `--allow-origin <origin>` serve
   the protocol from the window (see [Creation protocol](#creation-protocol)).
 
+While the scene first loads, the window shows its Kernels preparing: a
+seed for each on a line across black, faint while waiting, gold and
+breathing while its device builds it, gold once built, and under the
+line how many are built and the one taking longest. A device keeps what
+it built, so a scene opened again unchanged loads at once. In a
+terminal, `run`, `render`, `serve`, `graph` and `trace` show the same as
+a line of seeds once preparing takes longer than a moment, and say what
+it took when it took a second or more.
+
 The window shows the first output that is a grid of pixels; the sound
 card plays the first that is rows of one or two floats, one block a
 frame, and paces evaluation while it plays. The window's size and scale

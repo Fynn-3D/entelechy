@@ -90,7 +90,9 @@ impl Typical {
 pub mod clock;
 mod later;
 mod prepare;
+pub mod progress;
 pub use later::Run;
+pub use progress::{Preparing, Progress, Seed, Stage};
 
 /// Monotonic counter identifying one published version, unique across
 /// all Kernels in a runtime.
@@ -474,6 +476,7 @@ pub struct Preparer {
     backend: Arc<dyn Backend>,
     ordered: Option<Arc<dyn Backend>>,
     grants: Capabilities,
+    progress: Progress,
 }
 
 impl Preparer {
@@ -486,13 +489,21 @@ impl Preparer {
         if let Body::Kernel { prepared, .. } = &version.body
             && version.routed().is_none()
         {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.backend.finish(prepared.as_ref())
-            }));
+            self.progress.step(version.id(), true, || {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.backend.finish(prepared.as_ref())
+                }));
+            });
             if self.ordered.is_some() {
                 version.leaves(self.backend.as_ref());
             }
         }
+    }
+
+    /// Says the Kernels `ids` are about to be prepared or finished here, so
+    /// what is watched ([`Runtime::progress`]) counts them before they begin.
+    pub fn expect<'a>(&self, ids: impl IntoIterator<Item = &'a KernelId>) {
+        self.progress.expect(ids);
     }
 
     /// Prepares `module` to replace `running` as [`Runtime::prepare_later`]
@@ -510,6 +521,7 @@ impl Preparer {
             module,
             source.to_owned(),
             running.ahead(),
+            &self.progress,
         )
     }
 
@@ -521,11 +533,25 @@ impl Preparer {
             self.ordered.as_deref(),
             module,
             source.to_owned(),
+            &self.progress,
         )
     }
 }
 
 fn prepare_on(
+    main: &dyn Backend,
+    ordered: Option<&dyn Backend>,
+    module: Validated,
+    source: String,
+    progress: &Progress,
+) -> Result<Candidate, PrepareError> {
+    let id = module.manifest.id.clone();
+    progress.step(&id, false, || {
+        prepare_unrecorded(main, ordered, module, source)
+    })
+}
+
+fn prepare_unrecorded(
     main: &dyn Backend,
     ordered: Option<&dyn Backend>,
     module: Validated,
@@ -580,17 +606,20 @@ pub(crate) fn prepare_finished(
     module: Validated,
     source: String,
     ahead: Ahead,
+    progress: &Progress,
 ) -> Result<Candidate, PrepareError> {
-    let mut candidate = prepare_on(main, ordered, module, source)?;
+    let mut candidate = prepare_on(main, ordered, module, source, progress)?;
     if candidate.routed.is_some() {
         return Ok(candidate);
     }
     if ahead.main {
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            main.finish(candidate.prepared.as_ref())
-        }));
+        progress.step(&candidate.module.manifest.id, true, || {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                main.finish(candidate.prepared.as_ref())
+            }));
+        });
         if ordered.is_some() && main.declines(&candidate.run).is_some() {
-            return prepare_on(main, ordered, candidate.module, candidate.source);
+            return prepare_on(main, ordered, candidate.module, candidate.source, progress);
         }
     }
     if let Some(ordered) = ordered.filter(|_| ahead.ordered) {
@@ -665,6 +694,8 @@ pub struct Runtime {
     revision: u64,
     /// Kernels being prepared, on a worker or inline.
     preparer: prepare::Preparer,
+    /// What preparing is doing ([`Runtime::progress`]).
+    progress: Progress,
     /// What executions answered besides their outputs.
     telemetry: Telemetry,
     runs: later::Runs,
@@ -707,6 +738,7 @@ impl Runtime {
             next_generation: 1,
             revision: 0,
             preparer: prepare::Preparer::default(),
+            progress: Progress::default(),
             telemetry: Telemetry::default(),
             runs: later::Runs::new(),
             grants: Capability::ALL.into_iter().collect(),
@@ -740,8 +772,11 @@ impl Runtime {
             return;
         }
         if enabled {
-            self.preparer
-                .start(Arc::clone(&self.backend), self.ordered.clone());
+            self.preparer.start(
+                Arc::clone(&self.backend),
+                self.ordered.clone(),
+                self.progress.clone(),
+            );
         } else {
             self.preparer.stop();
         }
@@ -762,8 +797,11 @@ impl Runtime {
     /// Prepares in turns ([`Runtime::prepare_turn`]) instead of on workers,
     /// as where no thread can start: what a page does, for a test.
     pub fn prepare_in_turns(&mut self) {
-        self.preparer
-            .start_turns(Arc::clone(&self.backend), self.ordered.clone());
+        self.preparer.start_turns(
+            Arc::clone(&self.backend),
+            self.ordered.clone(),
+            self.progress.clone(),
+        );
     }
 
     /// Whether it prepares in turns ([`Runtime::prepare_turn`]): where no
@@ -790,6 +828,7 @@ impl Runtime {
             self.preparer.finish(ticket, Err(refused));
             return ticket;
         }
+        self.progress.expect([&module.manifest.id]);
         let ahead = self
             .kernels
             .get(&module.manifest.id)
@@ -802,6 +841,7 @@ impl Runtime {
                 module,
                 source,
                 ahead,
+                &self.progress,
             );
             self.preparer.finish(ticket, result);
         }
@@ -1129,6 +1169,7 @@ impl Runtime {
             self.ordered.as_deref(),
             module,
             source.to_owned(),
+            &self.progress,
         )
     }
 
@@ -1158,7 +1199,13 @@ impl Runtime {
             backend: Arc::clone(&self.backend),
             ordered: self.ordered.clone(),
             grants: self.grants,
+            progress: self.progress.clone(),
         }
+    }
+
+    /// What preparing is doing, readable from any thread while it runs.
+    pub fn progress(&self) -> Progress {
+        self.progress.clone()
     }
 
     /// What a version runs with: what it requires, of what is granted.

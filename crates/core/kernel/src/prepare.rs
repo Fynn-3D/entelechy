@@ -12,7 +12,7 @@ use std::thread::JoinHandle;
 use entelechy_ir::Validated;
 use entelechy_rules::Backend;
 
-use crate::{Ahead, Candidate, PrepareError, Ticket, prepare_finished};
+use crate::{Ahead, Candidate, PrepareError, Progress, Ticket, prepare_finished};
 
 /// A module handed to the worker.
 struct Job {
@@ -42,6 +42,7 @@ struct Worker {
 struct Turns {
     backend: Arc<dyn Backend>,
     ordered: Option<Arc<dyn Backend>>,
+    progress: Progress,
     jobs: VecDeque<Job>,
 }
 
@@ -61,7 +62,12 @@ impl Preparer {
     /// `backend` declines: as many as there are cores but one, which the
     /// frames keep. Where no thread can start (WebAssembly), the jobs are
     /// queued and prepared in turns ([`Preparer::turn`]).
-    pub(crate) fn start(&mut self, backend: Arc<dyn Backend>, ordered: Option<Arc<dyn Backend>>) {
+    pub(crate) fn start(
+        &mut self,
+        backend: Arc<dyn Backend>,
+        ordered: Option<Arc<dyn Backend>>,
+        progress: Progress,
+    ) {
         let (jobs, inbox) = channel::<Job>();
         let (outbox, done) = channel::<Done>();
         let inbox = Arc::new(Mutex::new(inbox));
@@ -71,6 +77,7 @@ impl Preparer {
             let outbox = outbox.clone();
             let backend = Arc::clone(&backend);
             let ordered = ordered.clone();
+            let progress = progress.clone();
             let Ok(handle) = std::thread::Builder::new()
                 .name(format!("entelechy-prepare-{k}"))
                 // Room for the language's nesting bound
@@ -92,6 +99,7 @@ impl Preparer {
                             job.module,
                             job.source,
                             job.ahead,
+                            &progress,
                         );
                         if outbox
                             .send(Done {
@@ -113,6 +121,7 @@ impl Preparer {
             self.turns = Some(Turns {
                 backend,
                 ordered,
+                progress,
                 jobs: VecDeque::new(),
             });
             return;
@@ -135,11 +144,13 @@ impl Preparer {
         &mut self,
         backend: Arc<dyn Backend>,
         ordered: Option<Arc<dyn Backend>>,
+        progress: Progress,
     ) {
         self.stop();
         self.turns = Some(Turns {
             backend,
             ordered,
+            progress,
             jobs: VecDeque::new(),
         });
     }
@@ -162,6 +173,7 @@ impl Preparer {
                 job.module,
                 job.source,
                 job.ahead,
+                &turns.progress,
             );
             made.push(Done {
                 ticket: job.ticket,
