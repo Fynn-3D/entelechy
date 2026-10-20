@@ -491,9 +491,11 @@ fn column_matrix(kind: Type, n: usize) -> Option<Type> {
 /// The builtins a function cannot be named after: the Field, memory,
 /// context and construction ones, whose forms the language owns. A
 /// function named after a math builtin stands for it in its document.
-pub(super) const RESERVED_BUILTINS: [&str; 49] = [
+pub(super) const RESERVED_BUILTINS: [&str; 51] = [
     "put",
     "emit",
+    "lane",
+    "exchange",
     "sample",
     "at",
     "fetch",
@@ -932,6 +934,10 @@ pub(super) fn manifest(
         }
         drop(structs);
         Mode::Prefix { combine }
+    } else if let Some(group) = &kernel.group {
+        Mode::Group {
+            size: group.size.value,
+        }
     } else if let Some(carry) = &kernel.carry {
         match (inputs.first(), outputs.first()) {
             (Some(first), Some(port))
@@ -972,9 +978,9 @@ pub(super) fn manifest(
             "writing an output needs `field.write`; add it to `requires`",
         ));
     }
-    // Only a map or a scan writes a narrow output, an element at a time;
-    // the other modes fold in place.
-    if !matches!(mode, Mode::Map | Mode::Scan)
+    // Only a map, a group or a scan writes a narrow output, an element at
+    // a time; the other modes fold in place.
+    if !matches!(mode, Mode::Map | Mode::Group { .. } | Mode::Scan)
         && let Some((decl, _)) = kernel
             .outputs
             .iter()
@@ -990,10 +996,10 @@ pub(super) fn manifest(
             ),
         ));
     }
-    // Only a map has several outputs, each its own Field over one domain;
-    // other modes give several results as one struct.
+    // Only a map or a group has several outputs, each its own Field over
+    // one domain; other modes give several results as one struct.
     if let Some(second) = kernel.outputs.get(1) {
-        if mode != Mode::Map {
+        if !matches!(mode, Mode::Map | Mode::Group { .. }) {
             let (what, form) = match mode {
                 Mode::Reduce => ("a reduction folds one element", "its output's element"),
                 Mode::Scan => ("a scan carries one value", "the carried value"),

@@ -257,6 +257,8 @@ impl fmt::Display for Op {
             Self::Pads => f.write_str("context pads"),
             Self::Stick(which) => write!(f, "context stick {which}"),
             Self::Element => f.write_str("element"),
+            Self::Lane => f.write_str("lane"),
+            Self::Exchange(value, lane) => write!(f, "exchange {value} {lane}"),
             Self::Sample(input) => write!(f, "host sample input{input}"),
             Self::At(input, index) => write!(f, "host at input{input} {index}"),
             Self::Part { input, at, path } => {

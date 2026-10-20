@@ -128,7 +128,36 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
                 ));
             }
         }
-        (Mode::Map | Mode::Scan | Mode::Scatter { .. } | Mode::Prefix { .. }, Some(_)) => {
+        (Mode::Group { size }, None) => {
+            if !(1..=crate::MAX_GROUP).contains(&size) {
+                return Err(error(
+                    "manifest",
+                    format!(
+                        "a group holds 1 to {} lanes, found {size}",
+                        crate::MAX_GROUP
+                    ),
+                ));
+            }
+            if let Some(first) = outputs.first()
+                && outputs.iter().any(|port| port.shape() != first.shape())
+            {
+                return Err(error(
+                    "manifest",
+                    "a group writes all its outputs over one domain, so they share a shape",
+                ));
+            }
+            if let Some((at, why)) = crate::group_fault(&module) {
+                return Err(error(&entry.name, format!("{at}: {why}")));
+            }
+        }
+        (
+            Mode::Map
+            | Mode::Scan
+            | Mode::Scatter { .. }
+            | Mode::Prefix { .. }
+            | Mode::Group { .. },
+            Some(_),
+        ) => {
             return Err(error("manifest", "only a reduce Kernel has a `merge`"));
         }
         (Mode::Scatter { base, combine }, None) => {
@@ -343,9 +372,12 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
             ));
         }
     }
-    // Only a map or a scan writes a narrow output (one element at a time);
-    // the other modes fold in place at full width.
-    if !matches!(module.manifest.mode, Mode::Map | Mode::Scan) {
+    // Only a map, a group or a scan writes a narrow output (one element at
+    // a time); the other modes fold in place at full width.
+    if !matches!(
+        module.manifest.mode,
+        Mode::Map | Mode::Group { .. } | Mode::Scan
+    ) {
         let narrow = outputs
             .iter()
             .chain(match module.manifest.mode {
@@ -357,7 +389,7 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
             return Err(error(
                 "manifest",
                 format!(
-                    "a {} folds into `{}` in place and keeps it in whole words; only a map or a scan writes a narrow output",
+                    "a {} folds into `{}` in place and keeps it in whole words; only a map, a group or a scan writes a narrow output",
                     module.manifest.mode.name(),
                     port.name
                 ),
@@ -631,7 +663,9 @@ impl<'a> Checker<'a> {
             Mode::Reduce | Mode::Scan | Mode::Scatter { .. } | Mode::Prefix { .. } => {
                 manifest.inputs.first().map_or(Shape::Rows, Port::shape)
             }
-            Mode::Map => manifest.outputs.first().map_or(Shape::Grid, Port::shape),
+            Mode::Map | Mode::Group { .. } => {
+                manifest.outputs.first().map_or(Shape::Grid, Port::shape)
+            }
         }
     }
 
@@ -1187,6 +1221,27 @@ impl<'a> Checker<'a> {
             Op::Element => {
                 self.entry_only(position)?;
                 Type::Int
+            }
+            Op::Lane | Op::Exchange(..) => {
+                if !self.is_entry {
+                    return Err(self.fail(format!(
+                        "{position} meets the lanes of a group from a function; only the entry does"
+                    )));
+                }
+                if !matches!(self.module.manifest.mode, Mode::Group { .. }) {
+                    return Err(self.fail(format!(
+                        "{position} meets the lanes of a group, which only a group Kernel has"
+                    )));
+                }
+                match op {
+                    Op::Exchange(value, lane) => {
+                        if self.operand(*lane, position)? != Type::Int {
+                            return Err(self.fail(format!("{position} takes the lane as an Int")));
+                        }
+                        self.operand(*value, position)?
+                    }
+                    _ => Type::Int,
+                }
             }
             Op::Sample(input) => {
                 self.entry_only(position)?;

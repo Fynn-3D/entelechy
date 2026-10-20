@@ -326,11 +326,11 @@ fn describe(ty: Type, structs: &[StructDef]) -> String {
     entelechy_ir::type_name(ty, structs)
 }
 
-/// Registers the record of a map's several outputs: a struct named
-/// `{ color, depth }` whose fields are their elements in declaration
-/// order, laid out as every backend writes an element.
+/// Registers the record of a map's or a group's several outputs: a
+/// struct named `{ color, depth }` whose fields are their elements in
+/// declaration order, laid out as every backend writes an element.
 fn outputs_record(manifest: &Manifest, structs: &Structs) -> Option<u32> {
-    if manifest.outputs.len() < 2 || manifest.mode != Mode::Map {
+    if manifest.outputs.len() < 2 || !matches!(manifest.mode, Mode::Map | Mode::Group { .. }) {
         return None;
     }
     let names: Vec<&str> = manifest
@@ -609,17 +609,26 @@ pub(crate) fn lower_placed(
     } = shared;
     places.functions = function_places.into_inner();
     let functions: Vec<Function> = functions.into_inner().into_iter().map(|(_, f)| f).collect();
-    Ok((
-        Module {
-            manifest,
-            structs: structs.into_inner(),
-            functions,
-            entry,
-            merge,
-            init,
-        },
-        places,
-    ))
+    let module = Module {
+        manifest,
+        structs: structs.into_inner(),
+        functions,
+        entry,
+        merge,
+        init,
+    };
+    // A group's exchanges, each where every lane reaches it alike, said
+    // where the exchange is written.
+    if let Some((at, why)) = entelechy_ir::group_fault(&module) {
+        let span = places
+            .entry
+            .get(&at)
+            .copied()
+            .or_else(|| kernel.group.as_ref().map(|group| group.span))
+            .unwrap_or_default();
+        return Err(semantic(span, why));
+    }
+    Ok((module, places))
 }
 
 /// What every block of `kernel` resolves names against: its functions
@@ -1523,7 +1532,7 @@ impl<'a> Builder<'a> {
                 .inputs
                 .first()
                 .map_or(Shape::Rows, Port::shape),
-            Mode::Map => self
+            Mode::Map | Mode::Group { .. } => self
                 .manifest
                 .outputs
                 .first()

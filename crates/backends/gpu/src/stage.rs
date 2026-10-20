@@ -81,7 +81,7 @@ pub(crate) fn execution_domain(
             entelechy_rules::check_scatter(invocation, scope, base as usize)?;
             invocation.domain
         }
-        Mode::Map => invocation.domain,
+        Mode::Map | Mode::Group { .. } => invocation.domain,
     })
 }
 
@@ -336,7 +336,10 @@ impl GpuBackend {
         context.extend(input.key_words().iter().map(|word| f32::from_bits(*word)));
         let window = invocation.context.window;
         context.extend_from_slice(&[input.wheel[0], input.wheel[1], window[0], window[1]]);
-        let (groups_x, groups_y, groups_z, fold) = wgsl::dispatch(domain);
+        let (groups_x, groups_y, groups_z, fold) = match module.manifest.mode {
+            Mode::Group { size } => wgsl::group_dispatch(domain, size),
+            _ => wgsl::dispatch(domain),
+        };
         // The third word is a one the shader compiler cannot see through
         // (`wgsl::OPAQUE_ONE`); the fourth is spare.
         context.extend_from_slice(&[invocation.context.scale, f32::from_bits(fold), 1.0, 0.0]);

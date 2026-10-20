@@ -194,6 +194,8 @@ builtin element entry
   element() -> Int
 builtin emit requires field.write entry
   emit(pair: P) -> P
+builtin exchange entry
+  exchange(value: T, lane: Int) -> T
 builtin exp
   exp(x: DVec2) -> DVec2
   exp(x: DVec3) -> DVec3
@@ -315,6 +317,8 @@ builtin ivec4
   ivec4(xyz: IVec3, w: Int) -> IVec4
 builtin key requires input.read
   key(code: Int) -> Bool
+builtin lane entry
+  lane() -> Int
 builtin length
   length(v: DVec3) -> Double
   length(v: Vec2) -> Float
@@ -744,6 +748,8 @@ form font
   node g: font "fonts/x.ttf" { codes <- wanted.result; }
 form graph
   node name: graph "other.esn" { source <- src; param = 2; }
+form group
+  group 64 { let mine = f(element()); return exchange(mine, lane() ^ 1); }
 form if
   if condition { a } else { b }   if condition { return a; }
 form inline

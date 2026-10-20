@@ -1578,3 +1578,49 @@ law's template with numbers. Held by [the genesis
 tests](../crates/interface/session/tests/genesis.rs) and
 [the genesis example](../examples/genesis/README.md), whose replay
 watches a world rewrite its law of growth until its life is in balance.
+
+## A group's lanes meet at exchanges
+
+A `group N` Kernel is a map run `N` elements at a time, and
+`exchange(v, k)` hands each lane the value lane `k` holds at the same
+point. That is the whole of what a group shares: no shared array, no
+barrier, no atomic is written. Every lane reaches each exchange alike,
+which the IR checks (`group_fault`): an exchange under control that
+turns on what a lane holds alone is refused where it is written, and an
+exchange is written in the body, never in a function. The owner chose
+this form (2026-10-20).
+
+The interpreter and the JIT, which run one element at a time, meet the
+lanes by running them again: each lane runs to the next exchange it has
+not met and stops, giving its value; when all have stopped, the group
+keeps what they gave and runs each again from the start, the exchanges
+met answered from what was kept. Only the run that finishes is counted
+toward the work bound. A device runs the group as a workgroup, an
+exchange as a write to shared memory, a barrier, a read and a barrier.
+
+**Why.** Elements that see one another inside a pass are what an FFT,
+a block sum or a sort network need, and a map alone takes a pass per
+step for each. A shared array with barriers is the device's own form:
+it lets a lane read a slot no lane wrote yet, race on one, or wait at a
+barrier the others never reach, and no reference interpreter can hold
+those to one answer. An exchange is a value, as a call is, so the
+program stays one of values: the IR proves every lane reaches it, every
+backend computes the same words, and a race cannot be written.
+Running again is the interpreter's simplest faithful form: the
+element's code is the map's, no continuation is kept, and what a lane
+computes before an exchange it computes again identically, as a pure
+function does.
+
+**Where.** `Mode::Group`, `Op::Lane`, `Op::Exchange` and `group_fault`
+([group](../crates/core/ir/src/group.rs)) in the
+[IR](../crates/core/ir/src/lib.rs); `run_group` in the
+[interpreter](../crates/backends/cpu/src/lib.rs), `Meeting` in its
+[machine](../crates/backends/cpu/src/eval/run.rs); `compute_group_into`
+and `Meeting` in the [JIT](../crates/backends/jit/src/lib.rs);
+`emit_group_main` ([map](../crates/backends/gpu/src/wgsl/map.rs)) on the
+GPU. Held by the [conformance matrix](../crates/backends/conformance/src/lib.rs)'s
+group mode on every backend, the parity tests of the
+[JIT](../crates/backends/jit/tests/parity.rs) and the
+[GPU](../crates/backends/gpu/tests/parity.rs), the
+[compiler's refusals](../crates/frontend/compiler/tests/compile.rs) and
+the [language surface](../crates/frontend/compiler/tests/surface.txt).

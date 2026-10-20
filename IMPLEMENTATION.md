@@ -121,6 +121,7 @@ the [conformance matrix](crates/backends/conformance/src/lib.rs).
 | scan (`scan with`) | element order; memory copied, committed only on success | [rules](crates/core/rules/src/lib.rs) |
 | scatter (`scatter into … with`) | as if applied in source order; outside addresses drop | [WGSL](crates/backends/gpu/src/wgsl/scatter.rs), [parity](crates/backends/gpu/tests/parity.rs) |
 | prefix (`prefix with`) | integer `sum`, `min`, `max` only | [block](crates/core/rules/src/lib.rs), [JIT](crates/backends/jit/src/lib.rs) |
+| group (`group N`) | lanes meet at `exchange`, reached alike; re-run to each exchange off the device | [check](crates/core/ir/src/group.rs), [interpreter](crates/backends/cpu/src/lib.rs), [JIT parity](crates/backends/jit/tests/parity.rs), [GPU parity](crates/backends/gpu/tests/parity.rs) |
 
 A GPU session hands scans and every module the GPU does not take
 ([`Backend::takes`](crates/core/rules/src/backend.rs)) to the JIT; inputs
@@ -153,7 +154,7 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   counted), [planner](crates/core/graph/src/evaluate/plan.rs);
   bit-identical ([test](crates/backends/cpu/tests/fusion.rs), on every
   backend [offset](crates/interface/session/tests/offset.rs)). A reduce,
-  scan, scatter, async or native node is never fused.
+  scan, scatter, prefix, group, async or native node is never fused.
 - One Field per declared output or the execution fails
   ([`held_to`](crates/core/kernel/src/lib.rs), [test](crates/interface/session/tests/hot_swap.rs)).
 - Repetition: one Kernel over its own output is one group, one GPU

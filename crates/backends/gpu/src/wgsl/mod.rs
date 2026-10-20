@@ -428,6 +428,14 @@ pub fn dispatch(domain: entelechy_abi::Domain) -> (u32, u32, u32, u32) {
     }
 }
 
+/// A group's dispatch over `domain`: a workgroup a group of `size` lanes,
+/// rows of at most [`MAX_GROUPS`] workgroups ([`folded`]).
+pub fn group_dispatch(domain: entelechy_abi::Domain, size: u32) -> (u32, u32, u32, u32) {
+    let groups = u32::try_from(domain.count().div_ceil(size as usize)).unwrap_or(u32::MAX);
+    let (x, y) = folded(groups);
+    (x, y, 1, 0)
+}
+
 /// The shader's name for helper function `index`. Source names stay out
 /// of the shader; `fn_<digits>` matches no WGSL reserved or predeclared
 /// word.

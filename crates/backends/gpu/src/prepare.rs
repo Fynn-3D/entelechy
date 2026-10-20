@@ -351,6 +351,20 @@ impl GpuBackend {
         if module.holds(entelechy_abi::Type::Double) {
             return Some("it holds a Double, which the device does not compute".to_owned());
         }
+        if let entelechy_ir::Mode::Group { .. } = module.manifest.mode {
+            if module.manifest.outputs.len() > 1 {
+                return Some(
+                    "it is a group of several outputs, written from every lane, and a lane past the domain's end would write past them"
+                        .to_owned(),
+                );
+            }
+            if module.accounted() {
+                return Some(
+                    "it is a group whose loops count their work, which stops a device's lanes one by one where they meet together"
+                        .to_owned(),
+                );
+            }
+        }
 
         if !module.holds(entelechy_abi::Type::Long) {
             return None;
@@ -531,7 +545,7 @@ impl GpuBackend {
         }
         if !matches!(
             manifest.mode,
-            entelechy_ir::Mode::Map | entelechy_ir::Mode::Scan
+            entelechy_ir::Mode::Map | entelechy_ir::Mode::Group { .. } | entelechy_ir::Mode::Scan
         ) && manifest
             .outputs
             .iter()

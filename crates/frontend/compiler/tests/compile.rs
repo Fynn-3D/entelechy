@@ -427,7 +427,7 @@ fn scan_carries_a_value_and_is_checked() {
     assert!(
         error
             .to_string()
-            .contains("one of `compute`, `scan`, `scatter`, or `prefix`"),
+            .contains("one of `compute`, `scan`, `scatter`, `prefix`, or `group`"),
         "{error}"
     );
 }
@@ -2064,4 +2064,49 @@ fn a_call_to_a_function_hiding_a_builtin_says_so() {
     )
     .unwrap_err();
     assert!(!error.to_string().contains("hides"), "{error}");
+}
+
+/// A group's exchanges are reached by every lane alike: one under a
+/// branch or a loop that turns on what a lane holds alone is refused
+/// where it is written, as is one in a function, and `lane` and
+/// `exchange` outside a group.
+#[test]
+fn a_group_refuses_exchanges_its_lanes_may_not_all_reach() {
+    let group = |body: &str| {
+        format!(
+            "kernel t.g@1 {{ requires {{ field.read; field.write; }} input rows: Rows<Int>; param n: Int = 2; output result: Rows<Int>;
+            fn give(v: Int) -> Int {{ return exchange(v, 0); }}
+            group 8 {{ {body} }} }}"
+        )
+    };
+    let varying = [
+        "return if lane() < 4 { exchange(1, 0) } else { 2 };",
+        "let i = element() % 3; return loop i with s = 0 { s + exchange(s, 1) };",
+        "return loop 4 with s = 0 until sample(rows) > s { exchange(s, 1) };",
+        "let h = exchange(lane(), 1); return match h { 0 => exchange(1, 0), _ => 2 };",
+    ];
+    for body in varying {
+        let source = group(body).replace("fn give(v: Int) -> Int { return exchange(v, 0); }", "");
+        let (_, message) = semantic(&source);
+        assert!(
+            message.contains("by every lane of a group alike"),
+            "{body}: {message}"
+        );
+    }
+    // What the whole group holds may steer one.
+    let uniform =
+        group("return if n > 1 { loop n with s = element() { s + exchange(s, 1) } } else { 0 };")
+            .replace("fn give(v: Int) -> Int { return exchange(v, 0); }", "");
+    compile(&uniform).unwrap_or_else(|error| panic!("{error}"));
+    let (_, message) = semantic(&group("return give(element());"));
+    assert!(message.contains("never in a function"), "{message}");
+    let map = "kernel t.m@1 { requires { field.write; } output result: Rows<Int>; compute { return lane(); } }";
+    let (_, message) = semantic(map);
+    assert!(message.contains("only a `group` Kernel"), "{message}");
+    for size in ["0", "257", "1.5"] {
+        let source = format!(
+            "kernel t.g@1 {{ requires {{ field.write; }} output result: Rows<Int>; group {size} {{ return lane(); }} }}"
+        );
+        assert!(compile(&source).is_err(), "group {size}");
+    }
 }

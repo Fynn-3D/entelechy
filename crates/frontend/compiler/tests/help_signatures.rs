@@ -77,10 +77,16 @@ fn every_signature_of_values_compiles_to_its_result() {
                 .map(|c| format!(" {};", c.name()))
                 .unwrap_or_default();
             // A context builtin answers for the Kernel's shape: the
-            // signature holds over one of them.
+            // signature holds over one of them. A group's builtins are
+            // called in a group.
+            let mode = if builtin.kind == "group" {
+                "group 8"
+            } else {
+                "compute"
+            };
             let source = |shape: &str, requires: &str| {
                 format!(
-                    "kernel t.probe@1 {{\n    requires {{ field.write;{requires} }}\n    output result: {shape}<Float>;\n    fn probe(x: {result}) -> Float {{ return 0.0; }}\n    compute {{ return probe({name}({})); }}\n}}",
+                    "kernel t.probe@1 {{\n    requires {{ field.write;{requires} }}\n    output result: {shape}<Float>;\n    fn probe(x: {result}) -> Float {{ return 0.0; }}\n    {mode} {{ return probe({name}({})); }}\n}}",
                     args.join(", ")
                 )
             };

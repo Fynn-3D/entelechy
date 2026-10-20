@@ -89,7 +89,10 @@ impl CpuBackend {
         }
         entelechy_rules::outputs_fit_words(module, invocation.domain, scope)?;
         let program = eval::Program::with(code, module, invocation, scope, invocation.domain)?;
-        let results = compute(&program, &strides)?;
+        let results = match module.manifest.mode {
+            Mode::Group { size } => compute_group(&program, &strides, size as usize)?,
+            _ => compute(&program, &strides)?,
+        };
         program.outcome()?;
         drop(program);
         let domain = invocation.domain;
@@ -487,7 +490,7 @@ pub fn trace(
     check_invocation(module, invocation, scope)?;
     let mode = module.manifest.mode;
     let domain = match mode {
-        Mode::Map => invocation.domain,
+        Mode::Map | Mode::Group { .. } => invocation.domain,
         Mode::Reduce | Mode::Prefix { .. } => scope.size(invocation.inputs[0])?,
         Mode::Scan => check_scan(invocation, scope)?,
         Mode::Scatter { base, .. } => {
@@ -536,6 +539,24 @@ pub fn trace(
             }
             carried.copy_from_slice(&out);
         }
+    } else if let Mode::Group { size } = mode {
+        // A lane takes what its group gave: the group runs first, then
+        // the lane is traced taking it.
+        let size = size as usize;
+        let element = linear(at, domain);
+        let mut slots = vec![0u32; size * stride];
+        let met = run_group(
+            &mut machine,
+            domain,
+            size,
+            element / size,
+            stride,
+            &mut slots,
+        )?;
+        machine.record_calls();
+        ran = machine
+            .run_entry_in_group(at, element % size, size, &met, &mut out)
+            .map(|_| ());
     } else {
         machine.record_calls();
         ran = machine.run_entry_words(at, &mut out);
@@ -904,6 +925,113 @@ fn compute(program: &eval::Program<'_>, strides: &[usize]) -> Result<Vec<u32>, E
     for outcome in outcomes {
         outcome?;
     }
+    Ok(results)
+}
+
+/// The linear index of the element at `at` in `domain`, `x` fastest: what
+/// `element()` reads, past the end too.
+fn linear(at: [u32; 3], domain: Domain) -> usize {
+    let [x, y, z] = at.map(|c| c as usize);
+    (z * domain.height() as usize + y) * domain.width() as usize + x
+}
+
+/// The place of element `element` in `domain`, `x` fastest; past the end
+/// the place [`linear`] reads back as that element.
+fn place(element: usize, domain: Domain) -> [u32; 3] {
+    let width = (domain.width() as usize).max(1);
+    let height = (domain.height() as usize).max(1);
+    let row = element / width;
+    [
+        (element % width) as u32,
+        (row % height) as u32,
+        (row / height) as u32,
+    ]
+}
+
+/// Runs group `group` of `size` lanes to the end, `stride` words a lane
+/// into `slots`: every lane runs to its next exchange, and the group
+/// keeps what each gave there before any runs on, until they all finish.
+/// Answers what the lanes gave at every exchange. Lanes that reach
+/// different exchanges, which a group's checks keep from happening, fail.
+fn run_group(
+    machine: &mut eval::Machine<'_, '_>,
+    domain: Domain,
+    size: usize,
+    group: usize,
+    stride: usize,
+    slots: &mut [u32],
+) -> Result<std::sync::Arc<Vec<Vec<u32>>>, ExecutionError> {
+    let mut met: std::sync::Arc<Vec<Vec<u32>>> = std::sync::Arc::default();
+    loop {
+        let mut given: Vec<u32> = Vec::new();
+        let mut stopped = 0;
+        for lane in 0..size {
+            let element = group * size + lane;
+            let slot = &mut slots[lane * stride..(lane + 1) * stride];
+            if let Some(value) =
+                machine.run_entry_in_group(place(element, domain), lane, size, &met, slot)?
+            {
+                stopped += 1;
+                given.extend(value);
+            }
+        }
+        match stopped {
+            0 => return Ok(met),
+            n if n == size => std::sync::Arc::make_mut(&mut met).push(given),
+            _ => {
+                return Err(ExecutionError::Device(format!(
+                    "the lanes of group {group} reached different exchanges"
+                )));
+            }
+        }
+    }
+}
+
+/// Every element's words, `strides` an output, run a group of `size` at
+/// a time ([`run_group`]); a group past the domain's end runs whole and
+/// its lanes past the end write nothing.
+fn compute_group(
+    program: &eval::Program<'_>,
+    strides: &[usize],
+    size: usize,
+) -> Result<Vec<u32>, ExecutionError> {
+    let domain = program.domain;
+    let count = domain.count();
+    let stride: usize = strides.iter().sum();
+    let groups = count.div_ceil(size);
+    let mut results = vec![0u32; groups * size * stride];
+    let threads = entelechy_rules::workers(count);
+    let per_thread = groups.div_ceil(threads).max(1);
+    let run_groups = |first: usize, chunk: &mut [u32]| -> Result<(), ExecutionError> {
+        let mut machine = eval::Machine::new(program);
+        for (offset, slots) in chunk.chunks_exact_mut(size * stride.max(1)).enumerate() {
+            run_group(&mut machine, domain, size, first + offset, stride, slots)?;
+        }
+        machine.finish()
+    };
+    if threads == 1 || stride == 0 {
+        run_groups(0, &mut results)?;
+    } else {
+        let chunk_len = per_thread * size * stride;
+        let outcomes: Vec<Result<(), ExecutionError>> = std::thread::scope(|s| {
+            let handles: Vec<_> = results
+                .chunks_mut(chunk_len)
+                .enumerate()
+                .map(|(index, chunk)| {
+                    let run_groups = &run_groups;
+                    s.spawn(move || run_groups(index * per_thread, chunk))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("group worker panicked"))
+                .collect()
+        });
+        for outcome in outcomes {
+            outcome?;
+        }
+    }
+    results.truncate(count * stride);
     Ok(results)
 }
 

@@ -498,7 +498,7 @@ changes:
 
 ### Execution modes
 
-A Kernel runs in one of five modes. `emit`, `put` and several outputs
+A Kernel runs in one of six modes. `emit`, `put` and several outputs
 belong to the modes named below.
 
 **Map** (`compute`): once per element of the output domain. A map may
@@ -523,8 +523,8 @@ kernel shade.surface@1 {
 `{ albedo: .., normal: .., depth: .. }` gives every output once, in any
 order; the record is a value (an `if` or `match` arm may give one, a
 `let` may hold one, `r.depth` reads a field). A graph reads
-`node.albedo`. Only a map writes several outputs; other modes give one
-struct. When one consumer is the only reader of every output of a map
+`node.albedo`. Only a map, and a group, writes several outputs; other
+modes give one struct. When one consumer is the only reader of every output of a map
 and reads them all by `sample`, the two fuse and no output is written;
 otherwise the map writes them all.
 
@@ -666,6 +666,44 @@ is `last`. A device folds in passes over blocks; the interpreter and the
 JIT walk in order, the reference grouping. An integer `sum` that
 overflows fails where the reference walks it and is not reported on a
 device; the words that come out are the same.
+
+**Group** (`group N`): a map whose elements run `N` at a time (1 to 256)
+and meet at each `exchange`.
+
+```text
+kernel fft.row@1 {
+    requires { field.read; field.write; }
+    input line: Rows<Vec2>;
+    output result: Rows<Vec2>;
+    group 64 {                          // one row of 64 per group
+        let x = sample(line);
+        let pair = exchange(x, lane() ^ 1);
+        return if lane() % 2 == 0 { x + pair } else { pair - x };
+    }
+}
+```
+
+Element `e` is lane `e % N` (`lane()`) of group `e / N`; it reads and
+writes its outputs as a map does. `exchange(v, k)` is
+the `v` lane `k` holds at that same exchange, `k` wrapped into the group
+(`lane() + 1` and `-1` go round). Every lane of a group reaches each
+exchange alike, so one stands under no branch, `match`, loop count or
+`until` that turns on what a lane holds alone: its lane, its element,
+what it reads, or what an exchange handed it, and anything made from
+those. What the whole group holds (params, literals, the domain) may
+steer one: `loop rounds with s = x { s + exchange(s, lane() ^ (1 <<
+index())) }` sums a group of eight in three rounds. `exchange` is
+written in the body, never in a function. The last group runs whole
+when the domain is not a multiple of `N`: its lanes past the end give at
+exchanges, fail as any element fails (placed as the domain lays elements
+out), and write nothing.
+
+On a device a group is a workgroup and an exchange a pass through its
+shared memory between barriers. The interpreter and the JIT run each
+lane to its next exchange and run the group again from the start with
+what every lane gave there, until all finish; only the finished run's
+work counts ([decision](DECISIONS.md)). The GPU runs groups of one
+output whose work is not counted; others run on the JIT.
 
 ## Graph
 

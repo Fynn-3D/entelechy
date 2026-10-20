@@ -1107,7 +1107,7 @@ impl<'a> Renumber<'a> {
                     }
                 }
             }
-            Op::Put(_, address, value) => {
+            Op::Put(_, address, value) | Op::Exchange(address, value) => {
                 *address = self.map(*address);
                 *value = self.map(*value);
             }
@@ -1134,6 +1134,7 @@ impl<'a> Renumber<'a> {
             | Op::Window
             | Op::Scale
             | Op::Element
+            | Op::Lane
             | Op::Sample(_)
             | Op::Count(_)
             | Op::Size(_) => {}

@@ -1671,6 +1671,20 @@ fn a_failure_on_the_device_is_the_reference_failure() {
         (map("return ivec2(element(), 1) * 1073741824;", "Rows<IVec2>"), Domain::Rows(8)),
         (map("return 3000000000000000000l * long(element());", "Rows<Long>"), Domain::Rows(8)),
         (map("return 9223372036854775807l / (long(element()) - 6) + 1;", "Rows<Long>"), Domain::Rows(8)),
+        // After an exchange; and in a lane past the domain's end, which
+        // runs to give at exchanges.
+        (
+            "kernel t.g@1 { requires { field.write; } output result: Rows<Int>;
+                group 4 { return exchange(element(), lane() + 1) * 1000000000; } }"
+                .to_owned(),
+            Domain::Rows(8),
+        ),
+        (
+            "kernel t.g@1 { requires { field.write; } output result: Rows<Int>;
+                group 4 { let x = exchange(element(), lane() + 1); return 100 / (element() - 7) + x; } }"
+                .to_owned(),
+            Domain::Rows(6),
+        ),
         // A guarded division fails nowhere.
         (map("let i = element(); return if i != 0 { 100 / i } else { 0 };", "Rows<Int>"), Domain::Rows(8)),
         (
@@ -2728,4 +2742,68 @@ fn a_frame_that_needs_one_buffer_at_a_time_keeps_one() {
         one,
         "one buffer goes round, the other aged out"
     );
+}
+
+/// A group's lanes meet at each exchange on the device as in the
+/// interpreter: in a loop a param bounds, under an `if` on a param, and
+/// in a last group past the domain's end.
+#[test]
+fn groups_meet_at_exchanges_as_the_interpreter_does() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let source = "kernel test.group@1 { requires { field.write; } param rounds: Int = 3; param flip: Bool = true; output result: Rows<IVec2>;
+        group 8 {
+            let i = element();
+            let total = loop rounds with s = i { s + exchange(s, lane() ^ (1 << index())) };
+            let turned = if flip { exchange(i * 10, 7 - lane()) } else { i };
+            return ivec2(total, turned);
+        } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    for (count, rounds, flip) in [(20, 3, true), (8, 2, false), (1000, 3, true)] {
+        let mut host = Host::new(1 << 20);
+        let invocation = Invocation {
+            inputs: vec![],
+            params: vec![Value::Int(rounds), Value::Bool(flip)],
+            domain: Domain::Rows(count),
+            context: Context::default(),
+        };
+        let mut scope = Scope::new(&mut host, all());
+        let cpu = CpuBackend
+            .execute(&module, &invocation, &mut scope)
+            .unwrap()[0];
+        let cpu_words = host.data(cpu).unwrap().storage().to_vec();
+        let prepared = Backend::prepare(&gpu, &module).unwrap();
+        let mut scope = Scope::new(&mut host, all());
+        let out =
+            Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
+        let device = host.resident(out).unwrap().expect("resident");
+        let words = Backend::download(&gpu, device, cpu_words.len() * 4).unwrap();
+        assert_eq!(words, cpu_words, "{count} rows");
+    }
+    // A narrow output, two elements a word, the last word half outside.
+    let narrow = compile(
+        "kernel test.narrow@1 { requires { field.write; } output result: Rows<Float as f16>;
+            group 4 { return exchange(float(element()) * 0.5, lane() + 1); } }",
+    )
+    .unwrap();
+    let mut host = Host::new(1 << 20);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(11),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, all());
+    let cpu = CpuBackend
+        .execute(&narrow, &invocation, &mut scope)
+        .unwrap()[0];
+    let cpu_words = host.data(cpu).unwrap().storage().to_vec();
+    let prepared = Backend::prepare(&gpu, &narrow).unwrap();
+    let mut scope = Scope::new(&mut host, all());
+    let out =
+        Backend::execute(&gpu, prepared.as_ref(), &narrow, &invocation, &mut scope).unwrap()[0];
+    let device = host.resident(out).unwrap().expect("resident");
+    let words = Backend::download(&gpu, device, cpu_words.len() * 4).unwrap();
+    assert_eq!(words, cpu_words, "narrow");
 }

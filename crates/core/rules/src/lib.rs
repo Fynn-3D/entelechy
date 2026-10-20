@@ -360,7 +360,7 @@ pub enum Extent {
 /// the elements the entry runs over; an output's is what its readers see.
 pub fn extent(mode: Mode) -> Extent {
     match mode {
-        Mode::Map | Mode::Scan => Extent::Invocation,
+        Mode::Map | Mode::Scan | Mode::Group { .. } => Extent::Invocation,
         Mode::Reduce => Extent::OneRow,
         Mode::Prefix { .. } => Extent::Input(0),
         Mode::Scatter { base, .. } => Extent::Input(base as usize),

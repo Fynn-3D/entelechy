@@ -252,6 +252,45 @@ impl Builder<'_> {
                 let ty = self.ty(pair);
                 Ok(self.emit(ty, Op::Emit(pair)))
             }
+            "lane" => {
+                self.entry_only(name, span)?;
+                self.arity(name, args, 0, span)?;
+                let Mode::Group { .. } = self.manifest.mode else {
+                    return Err(semantic(
+                        span,
+                        "`lane()` is an element's place in its group, which only a `group` Kernel has",
+                    ));
+                };
+                Ok(self.emit(Type::Int, Op::Lane))
+            }
+            "exchange" => {
+                if !self.is_entry {
+                    return Err(semantic(
+                        span,
+                        "`exchange` meets every lane of a group where the entry reaches it, so it is written in `group`'s body, never in a function it calls",
+                    ));
+                }
+                self.arity(name, args, 2, span)?;
+                let Mode::Group { .. } = self.manifest.mode else {
+                    return Err(semantic(
+                        span,
+                        "`exchange` hands a value between the lanes of a group, which only a `group` Kernel has",
+                    ));
+                };
+                let value = self.value(&args[0])?;
+                let lane = self.value(&args[1])?;
+                if self.ty(lane) != Type::Int {
+                    return Err(semantic(
+                        args[1].span,
+                        format!(
+                            "`exchange(value, lane)` takes the lane as an Int, not {}",
+                            self.describe(self.ty(lane))
+                        ),
+                    ));
+                }
+                let ty = self.ty(value);
+                Ok(self.emit(ty, Op::Exchange(value, lane)))
+            }
             "sample" => {
                 self.entry_only(name, span)?;
                 self.require(name, Capability::FieldRead, span)?;

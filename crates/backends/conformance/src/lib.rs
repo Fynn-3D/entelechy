@@ -15,7 +15,8 @@
 //! of the output's shape), the params `k`, `n`, `flag` and `v`, and
 //! three functions. The modes are a map over rows, a map over a grid, a
 //! reduction, a scan with a memory, a scatter, an emitting scatter, a
-//! prefix, and a map writing four named outputs.
+//! prefix, a map writing four named outputs, and a group whose lanes
+//! exchange their results.
 
 use entelechy_abi::{Context, Domain, Encoding, InputState, Scalar, Schema, Value};
 
@@ -299,6 +300,7 @@ pub fn modes() -> Vec<(&'static str, Wrapper)> {
         ("scatter emitting", scatter_emitting),
         ("prefix", prefix),
         ("map into several outputs", map_several),
+        ("group", group),
     ]
 }
 
@@ -363,6 +365,19 @@ fn map_several(lets: &str, out: &str) -> String {
     input rows: Rows<Float>; input ints: Rows<Int>; input cells: Grid<Cell>; input parts: Rows<Patch>; input patches: Grid<Patch>;
     output result: Grid<Out>; output lane: Grid<Vec3>; output bits: Grid<Int>; output seen: Grid<Bool>;
     compute {{ let c0 = icoord(); let i = c0.x + c0.y * idomain().x; {GRID_ENV} {lets} let out = {out}; return {{ lane: out.v * 2.0 + vec3(x, 0.0, 1.0), seen: out.b != (i % 2 == 0), result: out, bits: out.i ^ 5 }}; }} }}"
+    )
+}
+
+/// A group of eight over rows: each lane takes another lane's whole
+/// `Out`, then an `Int` from a lane named below zero, both wrapping.
+fn group(lets: &str, out: &str) -> String {
+    format!(
+        "kernel matrix.group@1 {{ {HEAD}
+    input rows: Rows<Float>; input ints: Rows<Int>; input cells: Grid<Cell>; input parts: Rows<Patch>; input patches: Grid<Patch>;
+    output result: Rows<Out>;
+    group 8 {{ let i = element(); {ENV} {lets} let out = {out};
+        let met = exchange(out, lane() * 3 + 1); let met_back = exchange(met.i, -1 - lane());
+        return Out {{ f: met.f, i: met_back ^ lane(), b: met.b, v: met.v }}; }} }}"
     )
 }
 
@@ -578,7 +593,7 @@ pub fn cases() -> Vec<Case> {
 /// context.
 fn case_in(feature: &str, mode: &str, source: String) -> Case {
     let (inputs, domain) = match mode {
-        "map over rows" => (
+        "map over rows" | "group" => (
             vec![rows(), ints(), cells(), parts_input(), patches_input()],
             Domain::Rows(COUNT),
         ),

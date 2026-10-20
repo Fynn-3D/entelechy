@@ -113,6 +113,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         );
         return out;
     }
+    if let Mode::Group { size } = manifest.mode {
+        emit_group_main(&mut out, module, size);
+        return out;
+    }
     // A map of several outputs stores them from the entry. An emitting
     // scatter combines its returned pair into the target at once, as its
     // emitted ones: its rule is order-free.
@@ -195,6 +199,59 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 }}"
     );
     out
+}
+
+/// A group's entry point: a workgroup a group, a lane an invocation, each
+/// meeting array declared once for the types exchanged. Every lane runs
+/// the entry, the lanes past the domain's end too (their exchanges are
+/// met by all), and only the lanes inside store.
+fn emit_group_main(out: &mut String, module: &Module, size: u32) {
+    let _ = writeln!(out, "var<private> group_lane: u32;");
+    let mut met: Vec<Type> = Vec::new();
+    exchanged(&module.entry.body, &mut met);
+    for ty in met {
+        let _ = writeln!(
+            out,
+            "var<workgroup> {}: array<{}, {size}>;",
+            super::emitter::meet_name(ty),
+            wgsl_type(ty)
+        );
+    }
+    let _ = writeln!(
+        out,
+        "
+@compute @workgroup_size({size}, 1, 1)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {{
+    let w = bitcast<u32>(ctx[0].x);
+    let h = bitcast<u32>(ctx[0].y);
+    let d = bitcast<u32>(ctx[1].z);
+    let element = (wid.x + wid.y * {span}u) * {size}u + lid;
+    group_lane = lid;
+    current = element;
+    begin_work();
+    let row = element / w;
+    let coord = vec3<f32>(f32(element % w), f32(row % h), f32(row / h));
+    let v = entry(coord, element);
+    if (element < w * h * d) {{
+        store_out0(element, v);
+    }}
+}}",
+        span = MAX_GROUPS,
+    );
+}
+
+/// The types of the values exchanged in `body`, each once, in order.
+fn exchanged(body: &[entelechy_ir::Instruction], out: &mut Vec<Type>) {
+    for instruction in body {
+        if let Op::Exchange(..) = instruction.op
+            && !out.contains(&instruction.ty)
+        {
+            out.push(instruction.ty);
+        }
+        for block in instruction.op.blocks() {
+            exchanged(&block.body, out);
+        }
+    }
 }
 
 /// Words a value of a type takes in a buffer.

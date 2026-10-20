@@ -399,7 +399,7 @@ pub(super) fn use_counts(function: &Function, slots: usize) -> Vec<u32> {
                         }
                     }
                 }
-                Op::Put(_, a, v) => {
+                Op::Put(_, a, v) | Op::Exchange(a, v) => {
                     note(a);
                     note(v);
                 }
@@ -956,6 +956,19 @@ impl FunctionCompiler<'_> {
             Op::Element => Instr::Element {
                 dst: define(self).at,
             },
+            Op::Lane => Instr::Lane {
+                dst: define(self).at,
+            },
+            Op::Exchange(value, lane) => {
+                let value = self.loc(value);
+                let lane = self.loc(lane).at;
+                Instr::Exchange {
+                    dst: define(self).at,
+                    value: value.at,
+                    lane,
+                    n: value.n,
+                }
+            }
             Op::Count(input) => Instr::Count {
                 dst: define(self).at,
                 input: *input as usize,

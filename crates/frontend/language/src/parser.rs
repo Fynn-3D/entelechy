@@ -2,10 +2,11 @@
 
 use crate::lexer::{Lexeme, Token, tokenize};
 use crate::{
-    BinaryOp, BindingDecl, Block, CarryDecl, Document, Expr, ExprKind, FnDecl, FramesDecl, Kernel,
-    MatchArm, MergeDecl, NodeBlock, NodeDecl, NodeKind, NodeMember, NodeMemberAt, Outline,
-    PackageDecl, ParamDecl, ParseError, PortDecl, PrefixDecl, RequireDecl, ScatterDecl, SourceRef,
-    Span, Spanned, Statement, StatementKind, StructDecl, TypeAlias, Use, WriteDecl,
+    BinaryOp, BindingDecl, Block, CarryDecl, Document, Expr, ExprKind, FnDecl, FramesDecl,
+    GroupDecl, Kernel, MatchArm, MergeDecl, NodeBlock, NodeDecl, NodeKind, NodeMember,
+    NodeMemberAt, Outline, PackageDecl, ParamDecl, ParseError, PortDecl, PrefixDecl, RequireDecl,
+    ScatterDecl, SourceRef, Span, Spanned, Statement, StatementKind, StructDecl, TypeAlias, Use,
+    WriteDecl,
 };
 
 /// Parses a document: `use`, `kernel`, `input`, `output`, and `node` items.
@@ -462,6 +463,7 @@ impl Parser {
         let mut carry = None;
         let mut scatter = None;
         let mut prefix = None;
+        let mut group = None;
         while !self.is_punct("}") {
             let span = self.span();
             let Token::Ident(keyword) = self.peek().clone() else {
@@ -551,7 +553,7 @@ impl Parser {
                     if compute.is_some() {
                         return Err(self.error(
                             if carry.is_some() || scatter.is_some() || prefix.is_some() {
-                                "a kernel has one of `compute`, `scan`, `scatter`, or `prefix`"
+                                "a kernel has one of `compute`, `scan`, `scatter`, `prefix`, or `group`"
                             } else {
                                 "`compute` is declared twice"
                             },
@@ -563,7 +565,7 @@ impl Parser {
                 "scatter" => {
                     if compute.is_some() {
                         return Err(self.error(
-                            "a kernel has one of `compute`, `scan`, `scatter`, or `prefix`",
+                            "a kernel has one of `compute`, `scan`, `scatter`, `prefix`, or `group`",
                         ));
                     }
                     self.next();
@@ -581,7 +583,7 @@ impl Parser {
                 "prefix" => {
                     if compute.is_some() {
                         return Err(self.error(
-                            "a kernel has one of `compute`, `scan`, `scatter`, or `prefix`",
+                            "a kernel has one of `compute`, `scan`, `scatter`, `prefix`, or `group`",
                         ));
                     }
                     self.next();
@@ -590,10 +592,21 @@ impl Parser {
                     compute = Some(self.block()?);
                     prefix = Some(PrefixDecl { combine, span });
                 }
+                "group" => {
+                    if compute.is_some() {
+                        return Err(self.error(
+                            "a kernel has one of `compute`, `scan`, `scatter`, `prefix`, or `group`",
+                        ));
+                    }
+                    self.next();
+                    let size = self.group_size()?;
+                    compute = Some(self.block()?);
+                    group = Some(GroupDecl { size, span });
+                }
                 "scan" => {
                     if compute.is_some() {
                         return Err(self.error(
-                            "a kernel has one of `compute`, `scan`, `scatter`, or `prefix`",
+                            "a kernel has one of `compute`, `scan`, `scatter`, `prefix`, or `group`",
                         ));
                     }
                     self.next();
@@ -653,7 +666,7 @@ impl Parser {
             }
         }
         let compute = compute.ok_or_else(|| {
-            self.error("kernel has no `compute`, `scan`, `scatter`, or `prefix` block")
+            self.error("kernel has no `compute`, `scan`, `scatter`, `prefix`, or `group` block")
         })?;
         self.expect_punct("}")?;
         let end = self.previous_end();
@@ -676,6 +689,33 @@ impl Parser {
             carry,
             scatter,
             prefix,
+            group,
+        })
+    }
+
+    /// A group's lane count after `group`: a whole number from 1 to 256.
+    fn group_size(&mut self) -> Result<Spanned<u32>, ParseError> {
+        let (token, span) = self.next();
+        let size = match token {
+            Token::Int(n) => n,
+            _ => {
+                return Err(ParseError {
+                    span,
+                    message: "`group` takes how many elements a group holds, a whole number from 1 to 256: `group 64 { ... }`".into(),
+                });
+            }
+        };
+        if !(1..=256).contains(&size) {
+            return Err(ParseError {
+                span,
+                message: format!(
+                    "a group holds 1 to 256 elements, as every device runs them together; `{size}` is not"
+                ),
+            });
+        }
+        Ok(Spanned {
+            value: size as u32,
+            span,
         })
     }
 
@@ -2256,9 +2296,9 @@ impl Parser {
 
 /// What a Kernel's body holds, each item begun by its word; `domain`
 /// only in a Kernel written in place.
-const KERNEL_ITEMS: [&str; 15] = [
+const KERNEL_ITEMS: [&str; 16] = [
     "requires", "budget", "domain", "input", "param", "output", "memory", "struct", "type", "fn",
-    "compute", "scan", "scatter", "prefix", "merge",
+    "compute", "scan", "scatter", "prefix", "group", "merge",
 ];
 
 /// The words the language keeps for itself: each begins a statement or an

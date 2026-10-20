@@ -1763,7 +1763,9 @@ impl Ctx<'_> {
     /// Whether an instruction must run for what it does, not for its value.
     fn has_effects(&self, op: &Op) -> bool {
         match op {
-            Op::Put(..) | Op::Emit(_) | Op::Spend(_) | Op::Look => true,
+            // An exchange is where every lane of a group meets: kept where
+            // it is written, never moved into a branch or shared.
+            Op::Put(..) | Op::Emit(_) | Op::Spend(_) | Op::Look | Op::Exchange(..) => true,
             Op::Call(callee, _) => self.writers.get(*callee as usize).copied().unwrap_or(false),
             other => other
                 .blocks()
@@ -1780,7 +1782,13 @@ impl Ctx<'_> {
     /// same value: pure operations outside blocks, loop state and memories.
     fn cse_safe(&self, op: &Op) -> bool {
         match op {
-            Op::Put(..) | Op::Emit(_) | Op::Spend(_) | Op::Look | Op::Carried | Op::Index => false,
+            Op::Put(..)
+            | Op::Emit(_)
+            | Op::Spend(_)
+            | Op::Look
+            | Op::Carried
+            | Op::Index
+            | Op::Exchange(..) => false,
             Op::If { .. } | Op::Match { .. } | Op::Loop { .. } | Op::Each { .. } => false,
             Op::Call(callee, _) => !self.writers.get(*callee as usize).copied().unwrap_or(false),
             Op::Sample(input)
@@ -1904,7 +1912,7 @@ fn can_fail(ty: Type, op: &Op) -> bool {
 }
 
 /// The values an operation reads, blocks aside.
-fn operands(op: &Op) -> Vec<ValueId> {
+pub(crate) fn operands(op: &Op) -> Vec<ValueId> {
     match op {
         Op::Unary(_, a) => vec![*a],
         Op::Binary(_, a, b) => vec![*a, *b],
@@ -1928,7 +1936,7 @@ fn operands(op: &Op) -> Vec<ValueId> {
                 Step::Field(_) => None,
             }))
             .collect(),
-        Op::Put(_, address, value) => vec![*address, *value],
+        Op::Put(_, address, value) | Op::Exchange(address, value) => vec![*address, *value],
         Op::Spend(counted) | Op::Emit(counted) => vec![*counted],
         _ => Vec::new(),
     }
@@ -2392,7 +2400,7 @@ fn rename(op: &mut Op, map: &dyn Fn(ValueId) -> ValueId) {
                 }
             }
         }
-        Op::Put(_, address, value) => {
+        Op::Put(_, address, value) | Op::Exchange(address, value) => {
             *address = map(*address);
             *value = map(*value);
         }

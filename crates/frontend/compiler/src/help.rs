@@ -10,7 +10,8 @@ use entelechy_ir::{Capability, Intrinsic, Type};
 pub struct Builtin {
     /// The name a Kernel calls.
     pub name: &'static str,
-    /// What kind of builtin: "math", "field", "memory", "context", "construction".
+    /// What kind of builtin: "math", "field", "memory", "scatter", "group",
+    /// "context", "construction".
     pub kind: &'static str,
     /// Every accepted signature, `name(arg: Type, ...) -> Type`; a generic
     /// element type is written `T`.
@@ -19,7 +20,8 @@ pub struct Builtin {
     pub doc: &'static str,
     /// The capability a Kernel must declare to call it, if any.
     pub requires: Option<Capability>,
-    /// Whether only the entry (`compute`, `scan`, `scatter`) may call it.
+    /// Whether only the entry (`compute`, `scan`, `scatter`, `group`) may
+    /// call it.
     pub entry_only: bool,
 }
 
@@ -150,6 +152,9 @@ pub fn builtins() -> Vec<Builtin> {
             "Writes an element of a memory port in step order (scan only; from the entry or a function with the memory as a parameter); an address outside is dropped, never clamped. Yields the value written.", Some(Capability::FieldWrite), false),
         fixed("emit", "scatter", &["emit(pair: P) -> P"],
             "Gives a scatter one more pair, a struct of an address into its target and a value of its element, as it returns one: an element's pairs are the ones it emits, in order, then the one it returns, and an address outside the target is dropped. Scatter only, from its body, under `min`, `max`, or a `sum` of integers, whose answer is the same in any order.", Some(Capability::FieldWrite), true),
+        fixed("lane", "group", &["lane() -> Int"], "This element's place in its group, from 0 to the group's size less one: element() % the size.", None, true),
+        fixed("exchange", "group", &["exchange(value: T, lane: Int) -> T"],
+            "What lane `lane` of the group (wrapped into it, so lane() + 1 and -1 go round) holds as `value` at this exchange. Every lane of the group meets there, so an exchange stands under no branch, loop count or `until` that turns on what a lane holds alone (its lane, its element, what it reads or was handed): what the whole group holds (params, literals, the domain) may steer one. Group only, from its body.", None, true),
         fixed("element", "context", &["element() -> Int"], "This element's index over rows; a scan's step.", None, true),
         fixed("coord", "context", &["coord() -> Vec2", "coord() -> Vec3"], "This element's column and row (and layer) over a grid or a volume, whole numbers from 0 with row 0 at the top; the element's centre is coord() + 0.5. Rows have element().", None, true),
         fixed("icoord", "context", &["icoord() -> IVec2", "icoord() -> IVec3"], "This element's coordinates as integers, for arithmetic on cells.", None, true),
@@ -430,7 +435,7 @@ pub fn forms() -> Vec<Form> {
             "kernel",
             "kernel",
             "kernel id@version { requires { ... } input ... output ... compute { ... } }",
-            "A Kernel: what it needs, its ports and parameters, and one of `compute`, `scan`, `scatter` or `prefix`.",
+            "A Kernel: what it needs, its ports and parameters, and one of `compute`, `scan`, `scatter`, `prefix` or `group`.",
         ),
         form(
             "budget",
@@ -467,6 +472,12 @@ pub fn forms() -> Vec<Form> {
             "kernel",
             "scatter into target with sum { return Pair { at: address, value: v }; }",
             "The scatter mode: the body runs once per element of the node's domain, which has its first input's shape (`element()` and `coord()` read it), and gives a struct the document declares, of two fields, an address into the target and a value of its element (`struct Pair { at: Int; value: Float; }`); the value is combined into the target at the address with `sum`, `min`, `max` or `last`, in element order.",
+        ),
+        form(
+            "group",
+            "kernel",
+            "group 64 { let mine = f(element()); return exchange(mine, lane() ^ 1); }",
+            "The group mode: a map whose elements run in groups of the size written (1 to 256), element e lane e % size of group e / size, the lanes of a group meeting at each `exchange`. The last group runs whole past the domain's end, its lanes there giving at exchanges, failing as any element fails, and writing nothing.",
         ),
         form(
             "memory",

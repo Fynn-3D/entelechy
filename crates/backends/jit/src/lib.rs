@@ -112,6 +112,21 @@ pub struct Ctx {
     emitted: *mut Pieces,
     /// The run's hold against the Host's room, covering emitted pairs.
     held: *const entelechy_rules::Held,
+    /// The group the element runs in; null outside a group.
+    meeting: *mut Meeting,
+}
+
+/// A group's lanes as they meet, as the interpreter has them: the element
+/// runs as lane `lane` of `size`, every exchange before the `met.len()`th
+/// takes what the lanes gave there (each exchange's lanes' words in lane
+/// order), and at that exchange the element gives its value and stops
+/// ([`failure::MET`]), for the group to run every lane that far.
+pub(crate) struct Meeting {
+    size: u32,
+    lane: u32,
+    met: Vec<Vec<u32>>,
+    passed: usize,
+    given: Option<Vec<u32>>,
 }
 
 /// A map entry's native signature: the context, a run's first element
@@ -284,7 +299,8 @@ impl Backend for JitBackend {
         };
         check_invocation(module, invocation, scope)?;
         match module.manifest.mode {
-            Mode::Map => run(compiled.entry, module, invocation, scope),
+            Mode::Group { size } => run(compiled.entry, module, invocation, scope, Some(size)),
+            Mode::Map => run(compiled.entry, module, invocation, scope, None),
             Mode::Scan => {
                 let init = compiled.init.expect("a scan compiles its init");
                 run_scan(compiled.entry, init, module, invocation, scope)
@@ -445,6 +461,7 @@ fn shared(
         error_at: 0,
         emitted: std::ptr::null_mut(),
         held: &*held,
+        meeting: std::ptr::null_mut(),
     };
     Ok(Shared {
         views,
@@ -530,22 +547,10 @@ impl Pieces {
     }
 }
 
-/// The same, into words the caller owns, such as a new Field's.
-fn compute_into(
-    entry: Entry,
-    shared: &Shared,
-    domain: Domain,
-    stride: usize,
-    results: &mut [u32],
-) -> Result<Vec<Emitted>, ExecutionError> {
-    let width = domain.width() as usize;
-    let height = domain.height();
-    let rows = height as usize * domain.depth() as usize;
-    let element_count = width * rows;
-    // Split by elements: a `Rows` domain is one long row.
-    let threads = entelechy_rules::workers(element_count);
-    let per_thread = element_count.div_ceil(threads).max(1);
-    let fresh = |t: &Ctx| Ctx {
+/// A context for a thread's run, from the run's template: nothing failed,
+/// nothing counted, nothing emitted.
+fn fresh(t: &Ctx) -> Ctx {
+    Ctx {
         views: t.views,
         params: t.params,
         clock: t.clock,
@@ -573,7 +578,158 @@ fn compute_into(
         error_at: 0,
         emitted: std::ptr::null_mut(),
         held: t.held,
+        meeting: std::ptr::null_mut(),
+    }
+}
+
+/// The place of element `element` in `domain`, `x` fastest; past the end
+/// the place whose linear index is that element.
+fn place(element: usize, domain: Domain) -> (u32, u32, u32) {
+    let width = (domain.width() as usize).max(1);
+    let height = (domain.height() as usize).max(1);
+    let row = element / width;
+    (
+        (element % width) as u32,
+        (row % height) as u32,
+        (row / height) as u32,
+    )
+}
+
+/// A group Kernel's elements into `results`, `stride` words each, a
+/// group of `size` at a time, as the interpreter runs them: every lane to
+/// its next exchange, what each gave kept, until every lane finishes. A
+/// run that stops at an exchange counts no work (its count goes to a
+/// total of its own and is let go); one that finishes hands its count to
+/// the run's. A group past the domain's end runs whole; its lanes past
+/// the end write nothing.
+fn compute_group_into(
+    entry: Entry,
+    shared: &Shared,
+    domain: Domain,
+    stride: usize,
+    size: usize,
+    results: &mut [u32],
+) -> Result<(), ExecutionError> {
+    let count = domain.count();
+    let groups = count.div_ceil(size);
+    let threads = entelechy_rules::workers(count);
+    let per_thread = groups.div_ceil(threads).max(1);
+    let run_groups = |first: usize, chunk: &mut [u32]| -> Result<(), ExecutionError> {
+        let mut ctx = fresh(&shared.template);
+        let quiet = std::sync::atomic::AtomicU32::new(0);
+        ctx.run_blocks = &quiet;
+        ctx.run_limit = u32::MAX;
+        let mut meeting = Meeting {
+            size: size as u32,
+            lane: 0,
+            met: Vec::new(),
+            passed: 0,
+            given: None,
+        };
+        ctx.meeting = &mut meeting;
+        let mut past_end = vec![0u32; stride.max(1)];
+        let groups_here = chunk.len().div_ceil(size * stride.max(1));
+        for offset in 0..groups_here {
+            let group = first + offset;
+            unsafe { &mut *ctx.meeting }.met.clear();
+            loop {
+                let mut given = Vec::new();
+                let mut stopped = 0;
+                for lane in 0..size {
+                    let element = group * size + lane;
+                    let (x, y, z) = place(element, domain);
+                    let local = (offset * size + lane) * stride;
+                    let out = if element < count && local + stride <= chunk.len() {
+                        chunk[local..].as_mut_ptr()
+                    } else {
+                        past_end.as_mut_ptr()
+                    };
+                    let kept = (ctx.work, ctx.looked, ctx.left);
+                    quiet.store(0, std::sync::atomic::Ordering::Relaxed);
+                    {
+                        let meeting = unsafe { &mut *ctx.meeting };
+                        meeting.lane = lane as u32;
+                        meeting.passed = 0;
+                        meeting.given = None;
+                    }
+                    // The entry writes `stride` words at `out` for its one
+                    // element, reads the inputs through the views, and
+                    // writes nothing else.
+                    unsafe { entry(&mut ctx, x, y, z, 1, out) };
+                    match ctx.error {
+                        failure::MET => {
+                            stopped += 1;
+                            let meeting = unsafe { &mut *ctx.meeting };
+                            given.extend(meeting.given.take().unwrap_or_default());
+                            (ctx.work, ctx.looked, ctx.left) = kept;
+                            ctx.error = 0;
+                        }
+                        0 => {
+                            let spent = quiet.load(std::sync::atomic::Ordering::Relaxed);
+                            if shared.run.spend(spent) {
+                                return Err(shared.run.overrun());
+                            }
+                        }
+                        code => {
+                            return Err(failure::failure(
+                                code,
+                                ctx.error_at,
+                                z * domain.height() + y,
+                                shared,
+                            ));
+                        }
+                    }
+                }
+                match stopped {
+                    0 => break,
+                    n if n == size => unsafe { &mut *ctx.meeting }.met.push(given),
+                    _ => {
+                        return Err(ExecutionError::Device(format!(
+                            "the lanes of group {group} reached different exchanges"
+                        )));
+                    }
+                }
+            }
+            hand_left(&mut ctx, shared, entelechy_rules::Run::LEFT_HANDED)?;
+        }
+        hand_left(&mut ctx, shared, 1)
     };
+    let chunk_len = per_thread * size * stride.max(1);
+    if threads == 1 || stride == 0 {
+        return run_groups(0, results);
+    }
+    let outcomes: Vec<Result<(), ExecutionError>> = std::thread::scope(|s| {
+        let handles: Vec<_> = results
+            .chunks_mut(chunk_len)
+            .enumerate()
+            .map(|(index, chunk)| {
+                let run_groups = &run_groups;
+                s.spawn(move || run_groups(index * per_thread, chunk))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("group worker panicked"))
+            .collect()
+    });
+    outcomes.into_iter().collect()
+}
+
+/// The same, into words the caller owns, such as a new Field's.
+fn compute_into(
+    entry: Entry,
+    shared: &Shared,
+    domain: Domain,
+    stride: usize,
+    results: &mut [u32],
+) -> Result<Vec<Emitted>, ExecutionError> {
+    let width = domain.width() as usize;
+    let height = domain.height();
+    let rows = height as usize * domain.depth() as usize;
+    let element_count = width * rows;
+    // Split by elements: a `Rows` domain is one long row.
+    let threads = entelechy_rules::workers(element_count);
+    let per_thread = element_count.div_ceil(threads).max(1);
     // One call per run of elements sharing a row.
     let run_elements = |first: usize, chunk: &mut [u32]| -> Result<Emitted, ExecutionError> {
         let mut ctx = fresh(&shared.template);
@@ -644,6 +800,7 @@ fn run(
     module: &Validated,
     invocation: &Invocation,
     scope: &mut Scope<'_>,
+    group: Option<u32>,
 ) -> Result<Vec<Handle>, ExecutionError> {
     let entry: Entry = unsafe { std::mem::transmute::<usize, Entry>(entry) };
     let domain = invocation.domain;
@@ -666,7 +823,12 @@ fn run(
         let outcome = scope
             .storage_mut(handle)
             .map_err(ExecutionError::from)
-            .and_then(|words| compute_into(entry, &shared, domain, stride, words))
+            .and_then(|words| match group {
+                Some(size) => {
+                    compute_group_into(entry, &shared, domain, stride, size as usize, words)
+                }
+                None => compute_into(entry, &shared, domain, stride, words).map(|_| ()),
+            })
             .and_then(|_| shared.run.outcome());
         return match outcome {
             Ok(()) => Ok(vec![handle]),
@@ -677,7 +839,14 @@ fn run(
         };
     }
     entelechy_rules::outputs_fit_words(module, domain, scope)?;
-    let results = compute(entry, &shared, domain, stride)?;
+    let results = match group {
+        Some(size) => {
+            let mut results = vec![0u32; domain.count() * stride];
+            compute_group_into(entry, &shared, domain, stride, size as usize, &mut results)?;
+            results
+        }
+        None => compute(entry, &shared, domain, stride)?,
+    };
     shared.run.outcome()?;
     let mut outputs = Vec::with_capacity(module.manifest.outputs.len());
     let mut offset = 0;
@@ -1449,6 +1618,40 @@ unsafe extern "C" fn entelechy_jit_emit(ctx: *mut Ctx, element: u32, pair: *cons
     });
 }
 
+/// `lane()`: the element's place in its group.
+unsafe extern "C" fn entelechy_jit_lane(ctx: *const Ctx) -> u32 {
+    let ctx = unsafe { &*ctx };
+    if ctx.meeting.is_null() {
+        return 0;
+    }
+    unsafe { &*ctx.meeting }.lane
+}
+
+/// `exchange`: the `n` words at `value` given to the group, and what lane
+/// `lane` gave left there in their place; at the exchange the group has
+/// not yet met at, the element gives them and stops ([`Meeting`]).
+unsafe extern "C" fn entelechy_jit_exchange(ctx: *mut Ctx, value: *mut u32, n: u32, lane: i32) {
+    let ctx = unsafe { &mut *ctx };
+    if ctx.meeting.is_null() || ctx.error != 0 {
+        return;
+    }
+    let meeting = unsafe { &mut *ctx.meeting };
+    let words = unsafe { std::slice::from_raw_parts_mut(value, n as usize) };
+    let at = meeting.passed;
+    meeting.passed += 1;
+    match meeting.met.get(at) {
+        Some(given) => {
+            let k = i64::from(lane).rem_euclid(i64::from(meeting.size)) as usize;
+            let n = n as usize;
+            words.copy_from_slice(&given[k * n..(k + 1) * n]);
+        }
+        None => {
+            meeting.given = Some(words.to_vec());
+            ctx.error = failure::MET;
+        }
+    }
+}
+
 /// `put` into a rows memory: the element's words replaced; an index
 /// outside the memory is dropped.
 unsafe extern "C" fn entelechy_jit_put_rows(
@@ -1617,6 +1820,11 @@ pub(crate) fn symbols() -> Vec<(&'static str, *const u8)> {
             entelechy_jit_put_rows as *const u8,
         ),
         ("entelechy_jit_emit", entelechy_jit_emit as *const u8),
+        ("entelechy_jit_lane", entelechy_jit_lane as *const u8),
+        (
+            "entelechy_jit_exchange",
+            entelechy_jit_exchange as *const u8,
+        ),
         ("entelechy_jit_fail", entelechy_jit_fail as *const u8),
         ("entelechy_jit_sinf", entelechy_jit_sinf as *const u8),
         ("entelechy_jit_cosf", entelechy_jit_cosf as *const u8),

@@ -15,6 +15,9 @@ pub(crate) const EXHAUSTED: u32 = 3;
 pub(crate) const OVERRUN: u32 = 4;
 /// An element that emitted past the room held for it.
 pub(crate) const HELD_OVER: u32 = 5;
+/// A lane of a group stopped at an exchange for the group to meet there:
+/// no failure, and never said beyond the group ([`crate::Meeting`]).
+pub(crate) const MET: u32 = 6;
 
 /// The failure `code` names, at the element `x`, `y`.
 pub(crate) fn failure(code: u32, x: u32, y: u32, shared: &Shared) -> ExecutionError {

@@ -43,6 +43,8 @@ struct Imports {
     put: FuncId,
     put_rows: FuncId,
     emit: FuncId,
+    lane: FuncId,
+    exchange: FuncId,
     unary: Vec<(Intrinsic, FuncId)>,
     powf: FuncId,
     atan2f: FuncId,
@@ -140,6 +142,8 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
     let put_sig = sig(&[ptr, i, f, f, f, ptr], &[]);
     let put_rows_sig = sig(&[ptr, i, i, ptr], &[]);
     let emit_sig = sig(&[ptr, i, ptr, i], &[]);
+    let lane_sig = sig(&[ptr], &[i]);
+    let exchange_sig = sig(&[ptr, ptr, i, i], &[]);
     let unary_sig = sig(&[f], &[f]);
     let binary_sig = sig(&[f, f], &[f]);
     let unary64_sig = sig(&[types::F64], &[types::F64]);
@@ -152,6 +156,8 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
         put: declare(&mut jit, "entelechy_jit_put", &put_sig)?,
         put_rows: declare(&mut jit, "entelechy_jit_put_rows", &put_rows_sig)?,
         emit: declare(&mut jit, "entelechy_jit_emit", &emit_sig)?,
+        lane: declare(&mut jit, "entelechy_jit_lane", &lane_sig)?,
+        exchange: declare(&mut jit, "entelechy_jit_exchange", &exchange_sig)?,
         unary: [
             (Intrinsic::Sin, "entelechy_jit_sinf"),
             (Intrinsic::Cos, "entelechy_jit_cosf"),
@@ -430,6 +436,8 @@ struct Fx<'a, 'b> {
     put: FuncRef,
     put_rows: FuncRef,
     emit: FuncRef,
+    lane: FuncRef,
+    exchange: FuncRef,
     unary: Vec<(Intrinsic, FuncRef)>,
     powf: FuncRef,
     atan2f: FuncRef,
@@ -487,6 +495,8 @@ impl<'a, 'b> Fx<'a, 'b> {
         let put = import(jit, &mut b, imports.put);
         let put_rows = import(jit, &mut b, imports.put_rows);
         let emit = import(jit, &mut b, imports.emit);
+        let lane = import(jit, &mut b, imports.lane);
+        let exchange = import(jit, &mut b, imports.exchange);
         let unary = imports
             .unary
             .iter()
@@ -541,6 +551,8 @@ impl<'a, 'b> Fx<'a, 'b> {
             put,
             put_rows,
             emit,
+            lane,
+            exchange,
             unary,
             powf,
             atan2f,
@@ -1521,6 +1533,21 @@ impl<'a, 'b> Fx<'a, 'b> {
         let ty = instruction.ty;
         let id = instruction.id;
         match &instruction.op {
+            Op::Lane => {
+                let call = self.b.ins().call(self.lane, &[self.ctx]);
+                vec![self.b.inst_results(call)[0]]
+            }
+            Op::Exchange(value, lane) => {
+                // The value's words go to a slot of their own; the helper
+                // hands them to the group and leaves there what lane
+                // `lane` gave ([`crate::Meeting`]).
+                let tys = word_types(self.module, ty);
+                let slot = self.store_words(*value);
+                let n = self.i32c((byte_size(&tys) / 4) as i64);
+                let lane = self.words(lane)[0];
+                self.b.ins().call(self.exchange, &[self.ctx, slot, n, lane]);
+                self.loads(&tys, self.flags, slot, 0)
+            }
             Op::Const(value) => {
                 // A constant is its scalars, each as the type lays it out.
                 let _ = ty;

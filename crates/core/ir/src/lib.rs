@@ -12,6 +12,7 @@ mod display;
 pub use display::{NamedManifest, port_type_name, type_name};
 pub use size::{Carried, Sizes, carried, sizes};
 mod fuse;
+mod group;
 mod optimize;
 mod size;
 mod validate;
@@ -28,6 +29,7 @@ pub use fuse::{
     FuseError, InputUse, counted, counts_only, extent_params, fuse, fuse_indexed, fuse_outputs,
     fused_name, input_use, offset_read, samples_only,
 };
+pub use group::group_fault;
 pub use optimize::{carried_builders, optimize, renumbered};
 pub use validate::{Validated, ValidationError, linear_index_type, validate};
 
@@ -314,7 +316,20 @@ pub enum Mode {
         /// How a value meets everything before it.
         combine: Combine,
     },
+    /// The entry runs once per element of the output domain, as a map
+    /// does, the elements in groups of `size` (by linear index: element
+    /// `e` is lane `e % size` of group `e / size`). Lanes of a group hand
+    /// each other values through [`Op::Exchange`], which every lane
+    /// reaches alike; a group past the domain's end runs whole, and its
+    /// lanes past the end write nothing.
+    Group {
+        /// Lanes in a group, 1 to [`MAX_GROUP`].
+        size: u32,
+    },
 }
+
+/// The most lanes a group holds: what every device runs together.
+pub const MAX_GROUP: u32 = 256;
 
 impl Mode {
     /// Stable spelling used in manifests.
@@ -325,6 +340,7 @@ impl Mode {
             Self::Scan => "scan",
             Self::Scatter { .. } => "scatter",
             Self::Prefix { .. } => "prefix",
+            Self::Group { .. } => "group",
         }
     }
 }
@@ -1271,6 +1287,15 @@ pub enum Op {
     Typed(ValueId),
     /// The current element's linear index as `Int`. Entry point only.
     Element,
+    /// The current element's place in its group, `0` to the group's size
+    /// less one, as `Int`. A group's entry only.
+    Lane,
+    /// The value (the first operand) lane `lane` of this group gave at
+    /// this point, the lane wrapped round the group's size: every lane
+    /// gives its own and takes another's, so no two write one place. Every
+    /// lane reaches it alike (its control flow depends on nothing a lane
+    /// holds alone), in a group's entry only, and in no function it calls.
+    Exchange(ValueId, ValueId),
     /// The element of an input at the current coordinate, clamped to the
     /// input's extent, as its element type. The input's shape must match
     /// the output's. Host call: `field.read`. Entry point only.

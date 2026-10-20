@@ -21,8 +21,30 @@ pub(crate) const CALL_RECORDS: usize = 256;
 
 /// Interpreter state for one thread: a stack of words holding every
 /// frame, and the loop indices of the running element.
+/// A group's lanes as they meet: the element runs as lane `lane` of
+/// `size`, every exchange before the `given`th takes what the lanes gave
+/// there (`met`, each exchange's lanes' words in lane order), and at that
+/// exchange the element gives its value and stops, for the group to run
+/// every lane that far before any goes on. A run that stops so is quiet:
+/// its work is not counted, as the run that finishes counts it all.
+pub(crate) struct Meeting {
+    pub(crate) size: usize,
+    pub(crate) lane: usize,
+    pub(crate) met: std::sync::Arc<Vec<Vec<u32>>>,
+    /// Exchanges passed in this run.
+    pub(crate) passed: usize,
+    /// The value given at the exchange the run stopped at.
+    pub(crate) given: Option<Vec<u32>>,
+}
+
+/// What a stopped run says in place of a failure, never seen beyond the
+/// group that stopped it.
+const MET: &str = "a group's lane stopped at an exchange";
+
 pub(crate) struct Machine<'p, 's> {
     pub(super) program: &'p Program<'s>,
+    /// The group this element runs in, when it runs in one.
+    pub(crate) meeting: Option<Meeting>,
     /// The calls made while recording, for a trace; `None` when not.
     pub(super) calls: Option<Vec<CallRecord>>,
     /// Whether more calls happened than were recorded.
@@ -114,6 +136,7 @@ impl<'p, 's> Machine<'p, 's> {
             .collect();
         Self {
             program,
+            meeting: None,
             calls: None,
             calls_truncated: false,
             spent: None,
@@ -167,6 +190,41 @@ impl<'p, 's> Machine<'p, 's> {
             cursor += result.n;
         }
         Ok(())
+    }
+
+    /// Runs the entry as lane `lane` of a group of `size` whose lanes gave
+    /// `met` at its exchanges so far: `Ok(Some(value))` when it stops at the
+    /// next exchange, having given `value` there, its work uncounted;
+    /// `Ok(None)` when it finishes, its results in `out`.
+    pub(crate) fn run_entry_in_group(
+        &mut self,
+        at: [u32; 3],
+        lane: usize,
+        size: usize,
+        met: &std::sync::Arc<Vec<Vec<u32>>>,
+        out: &mut [u32],
+    ) -> Result<Option<Vec<u32>>, ExecutionError> {
+        self.meeting = Some(Meeting {
+            size,
+            lane,
+            met: std::sync::Arc::clone(met),
+            passed: 0,
+            given: None,
+        });
+        let ran = self.run_entry_words(at, out);
+        let meeting = self.meeting.take().expect("set above");
+        match (ran, meeting.given) {
+            (_, Some(given)) => {
+                self.work = 0;
+                self.looked = 0;
+                Ok(Some(given))
+            }
+            (Ok(()), None) => {
+                self.look()?;
+                Ok(None)
+            }
+            (Err(error), None) => Err(error),
+        }
     }
 
     /// Runs the entry for element `index` of a scan with the carried value
@@ -382,6 +440,11 @@ impl<'p, 's> Machine<'p, 's> {
         let (Some(budget), Some(run)) = (self.program.budget, &self.program.run) else {
             return Ok(());
         };
+        // A lane of a group counts its work once its run finishes: a run
+        // the group stops at an exchange counts none.
+        if self.meeting.is_some() {
+            return Ok(());
+        }
         if self.work > budget {
             return Err(self.exhausted(budget));
         }
@@ -1056,6 +1119,33 @@ impl<'p, 's> Machine<'p, 's> {
                 let [x, y, z] = self.at;
                 let domain = program.domain;
                 s[fp + dst] = (z * domain.height() + y) * domain.width() + x;
+            }
+            Instr::Lane { dst } => {
+                s[fp + dst] = self.meeting.as_ref().map_or(0, |m| m.lane as u32);
+            }
+            Instr::Exchange {
+                dst,
+                value,
+                lane,
+                n,
+            } => {
+                let Some(meeting) = self.meeting.as_mut() else {
+                    s.copy_within(fp + value..fp + value + n, fp + dst);
+                    return Ok(());
+                };
+                let at = meeting.passed;
+                meeting.passed += 1;
+                match meeting.met.get(at) {
+                    Some(given) => {
+                        let size = meeting.size as i64;
+                        let k = (i64::from(s[fp + lane] as i32)).rem_euclid(size) as usize;
+                        s[fp + dst..fp + dst + n].copy_from_slice(&given[k * n..(k + 1) * n]);
+                    }
+                    None => {
+                        meeting.given = Some(s[fp + value..fp + value + n].to_vec());
+                        return Err(ExecutionError::Device(MET.into()));
+                    }
+                }
             }
             Instr::Time { dst } => s[fp + dst] = program.context.float_time().to_bits(),
             Instr::Clock { dst } => put_wide(s, fp + dst, program.context.time.to_bits()),

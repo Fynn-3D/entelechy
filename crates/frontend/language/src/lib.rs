@@ -543,6 +543,19 @@ pub struct Kernel {
     pub scatter: Option<ScatterDecl>,
     /// `prefix with combine { ... }`: a prefix fold.
     pub prefix: Option<PrefixDecl>,
+    /// `group N { ... }`: elements in groups of `N` that hand each other
+    /// values through `exchange`.
+    pub group: Option<GroupDecl>,
+}
+
+/// `group N { ... }`: how many elements a group holds, each a lane of it,
+/// `lane()` its place, `exchange(v, k)` lane `k`'s `v` at that point.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupDecl {
+    /// The lanes in a group, 1 to 256.
+    pub size: Spanned<u32>,
+    /// Where `group` was written.
+    pub span: Span,
 }
 
 /// `prefix with combine { ... }`: the rule an element's value meets

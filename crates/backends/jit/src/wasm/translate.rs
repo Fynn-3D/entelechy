@@ -1433,6 +1433,31 @@ impl<'a> Fx<'a> {
                 self.helper("entelechy_jit_emit", &[ctx, element, slot, n], None);
                 words
             }
+            Op::Lane => {
+                let ctx = self.ctx;
+                vec![
+                    self.helper("entelechy_jit_lane", &[ctx], Some(Val::I32))
+                        .expect("lane returns its index"),
+                ]
+            }
+            Op::Exchange(value, lane) => {
+                // The value's words go to a slot of their own; the helper
+                // hands them to the group and leaves there what lane
+                // `lane` gave ([`crate::Meeting`]).
+                let words = self.words(value);
+                let tys: Vec<Val> = words.iter().map(|word| word.1).collect();
+                let bytes = byte_size(&tys);
+                let offset = self.shared.reserve(bytes);
+                let slot = self.slot(offset);
+                for (word, at) in words.iter().zip(byte_offsets(&tys)) {
+                    self.store(slot, at, *word);
+                }
+                let n = self.i32c((bytes / 4) as i32);
+                let lane = self.words(lane)[0];
+                let ctx = self.ctx;
+                self.helper("entelechy_jit_exchange", &[ctx, slot, n, lane], None);
+                self.loads(&tys, slot, 0)
+            }
             Op::Put(input, address, value) => {
                 let words = self.words(value);
                 let slot = self.scratch_addr();

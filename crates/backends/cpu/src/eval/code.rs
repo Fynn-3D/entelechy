@@ -418,6 +418,18 @@ pub(super) enum Instr {
     Element {
         dst: usize,
     },
+    /// The element's place in its group.
+    Lane {
+        dst: usize,
+    },
+    /// The `n` words at `value` handed to the group, and lane `lane`'s
+    /// taken at `dst` ([`Meeting`](super::run::Meeting)).
+    Exchange {
+        dst: usize,
+        value: usize,
+        lane: usize,
+        n: usize,
+    },
     Time {
         dst: usize,
     },

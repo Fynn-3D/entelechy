@@ -1365,3 +1365,87 @@ fn two_functions_of_one_name_each_keep_their_tables() {
     };
     assert_eq!(run(&module), run(&alone));
 }
+
+/// A group's lanes meet at each exchange, in a loop a param bounds and
+/// under an `if` on a param, and the last group, past the domain's end,
+/// runs whole: its lanes past the end give at exchanges and write
+/// nothing.
+#[test]
+fn groups_meet_at_exchanges_as_the_interpreter_does() {
+    let source = "kernel test.group@1 { requires { field.write; } param rounds: Int = 3; param flip: Bool = true; output result: Rows<IVec2>;
+        group 8 {
+            let i = element();
+            let total = loop rounds with s = i { s + exchange(s, lane() ^ (1 << index())) };
+            let turned = if flip { exchange(i * 10, 7 - lane()) } else { i };
+            return ivec2(total, turned);
+        } }";
+    let (cpu, jit) = both(
+        source,
+        &[],
+        vec![Value::Int(3), Value::Bool(true)],
+        Domain::Rows(20),
+        Context::default(),
+    );
+    assert_eq!(cpu, jit);
+    let words: Vec<i32> = cpu.iter().map(|w| *w as i32).collect();
+    let at = |e: usize| (words[2 * e], words[2 * e + 1]);
+    // Each group's sum, past-end lanes 20..24 counted; lane l takes lane
+    // 7 - l's element.
+    assert_eq!(at(0), (28, 70));
+    assert_eq!(at(9), (92, 140));
+    assert_eq!(at(16), (156, 230));
+    assert_eq!(at(19), (156, 200));
+    assert_eq!(words.len(), 40);
+}
+
+/// What fails after an exchange fails at its element, as in the
+/// interpreter; a lane past the domain's end runs to give at exchanges,
+/// and what fails there fails the run.
+#[test]
+fn a_failure_after_an_exchange_names_its_element() {
+    let cases = [
+        // Lane 2 takes element 3: three billion overflows.
+        (
+            "group 4 { return exchange(element(), lane() + 1) * 1000000000; }",
+            8,
+            ExecutionError::Arithmetic {
+                x: 2,
+                y: 0,
+                error: ArithmeticError::Overflow,
+            },
+        ),
+        // Element 7, past the end of six, is placed as the domain lays
+        // its elements out: (1, 1).
+        (
+            "group 4 { let x = exchange(element(), lane() + 1); return 100 / (element() - 7) + x; }",
+            6,
+            ExecutionError::Arithmetic {
+                x: 1,
+                y: 1,
+                error: ArithmeticError::DivisionByZero,
+            },
+        ),
+    ];
+    let jit = JitBackend::new().unwrap();
+    for (body, count, expected) in cases {
+        let source = format!(
+            "kernel test.group_fail@1 {{ requires {{ field.write; }} output result: Rows<Int>; {body} }}"
+        );
+        let module = compile(&source).unwrap();
+        let invocation = Invocation {
+            inputs: vec![],
+            params: vec![],
+            domain: Domain::Rows(count),
+            context: Context::default(),
+        };
+        let mut host = Host::new(1 << 16);
+        let mut scope = Scope::new(&mut host, all());
+        let cpu = CpuBackend.execute(&module, &invocation, &mut scope);
+        let prepared = jit.prepare(&module).unwrap();
+        let mut scope = Scope::new(&mut host, all());
+        let out = jit.execute(prepared.as_ref(), &module, &invocation, &mut scope);
+        assert_eq!(cpu.unwrap_err(), expected, "{body}");
+        assert_eq!(out.unwrap_err(), expected, "{body}");
+        assert_eq!(host.live(), 0, "a failed run leaks nothing");
+    }
+}

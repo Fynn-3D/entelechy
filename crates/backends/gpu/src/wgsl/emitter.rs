@@ -122,6 +122,15 @@ fn types_in(body: &[entelechy_ir::Instruction], out: &mut std::collections::Hash
     }
 }
 
+/// The workgroup array a group's lanes meet in for values of `ty`.
+pub(crate) fn meet_name(ty: Type) -> String {
+    let spelled: String = wgsl_type(ty)
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("meet_{spelled}")
+}
+
 impl Emitter<'_> {
     fn line(&mut self, depth: usize, text: &str) {
         let _ = writeln!(self.out, "{}{text}", "    ".repeat(depth));
@@ -147,6 +156,29 @@ impl Emitter<'_> {
                 format!("vec2<u32>({}u, {}u)", bits as u32, (bits >> 32) as u32)
             }
             Op::Const(value) => literal(value),
+            Op::Lane => "i32(group_lane)".to_owned(),
+            Op::Exchange(value, lane) => {
+                // Every lane writes its own place, all meet, each reads the
+                // one it asked for, and all meet again before the places are
+                // written anew.
+                let size = match self.module.manifest.mode {
+                    Mode::Group { size } => size,
+                    _ => 1,
+                };
+                let meet = meet_name(*ty);
+                self.line(depth, &format!("{meet}[group_lane] = {};", v(value)));
+                self.line(depth, "workgroupBarrier();");
+                self.line(
+                    depth,
+                    &format!(
+                        "let v{}: {ty_name} = {meet}[u32((({} % {size}) + {size}) % {size})];",
+                        id.0,
+                        v(lane)
+                    ),
+                );
+                self.line(depth, "workgroupBarrier();");
+                return;
+            }
             Op::Param(index) => {
                 // The parameter built from its words in the uniform.
                 let (starts, _) = param_slots(self.module);
@@ -839,7 +871,9 @@ impl Emitter<'_> {
             Mode::Reduce | Mode::Scan | Mode::Scatter { .. } | Mode::Prefix { .. } => {
                 manifest.inputs.first().map_or(Shape::Rows, |p| p.shape())
             }
-            Mode::Map => manifest.outputs.first().map_or(Shape::Grid, |p| p.shape()),
+            Mode::Map | Mode::Group { .. } => {
+                manifest.outputs.first().map_or(Shape::Grid, |p| p.shape())
+            }
         }
     }
 
