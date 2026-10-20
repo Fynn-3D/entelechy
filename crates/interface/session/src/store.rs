@@ -107,12 +107,13 @@ pub trait Store: Send + Sync {
     fn stamps_directories(&self) -> bool {
         false
     }
-    /// A sync begins: until it ends, the store may answer a path's kind,
-    /// stamp and resolved path as it first found them, for a sync walks
-    /// the same files from every document. A file changed meanwhile is
-    /// seen by the next sync.
+    /// A sync begins, or another run that walks the same files from every
+    /// document (a check): until it ends, the store may answer a path's
+    /// kind, stamp and resolved path as it first found them. A file
+    /// changed meanwhile is seen by the next run. Runs nest; the last to
+    /// end ends them.
     fn sync_begins(&self) {}
-    /// The sync ends: every path is looked at afresh.
+    /// The run ends: every path is looked at afresh.
     fn sync_ends(&self) {}
 }
 
@@ -128,11 +129,6 @@ pub struct Parsed {
     /// Kernels compiled, by what they were compiled from
     /// ([`crate::kernels::Compiled`]).
     pub(crate) compiled: std::sync::Arc<Mutex<crate::kernels::Compiled>>,
-    /// What the language named of a document's reach, by what it was
-    /// named from ([`crate::sources::declarations_within`]).
-    pub(crate) scoped: std::sync::Arc<
-        Mutex<std::collections::HashMap<String, Result<entelechy_language::Declarations, String>>>,
-    >,
     /// What the compiler found wrong in a document's functions, by the
     /// document, its stamp and the declarations it inherits
     /// ([`crate::check`]): a check of many documents sharing one checks it
@@ -242,6 +238,8 @@ pub struct Disk {
     parsed: Parsed,
     /// What a sync found of each path, while one runs.
     found: std::sync::Arc<Mutex<Option<Found>>>,
+    /// The runs open ([`Store::sync_begins`]).
+    runs: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// What a sync found of the file system, by path.
@@ -295,6 +293,7 @@ impl Disk {
             packages,
             parsed: Parsed::default(),
             found: Default::default(),
+            runs: Default::default(),
         }
     }
 }
@@ -314,17 +313,26 @@ impl Store for Disk {
     }
 
     fn sync_begins(&self) {
-        *self
-            .found
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Found::default());
+        if self.runs.fetch_add(1, std::sync::atomic::Ordering::AcqRel) == 0 {
+            *self
+                .found
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Found::default());
+        }
     }
 
     fn sync_ends(&self) {
-        *self
-            .found
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        let ended = self.runs.fetch_update(
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+            |runs| runs.checked_sub(1),
+        );
+        if ended == Ok(1) {
+            *self
+                .found
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        }
     }
 
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {

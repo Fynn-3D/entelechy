@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use crate::sources::{held, located, said, written_in};
-use crate::{Store, declarations_for, locate_document, read_document, used_documents};
+use crate::{Store, locate_document, read_document, used_documents};
 
 /// The words a Kernel may carry through its branches before it is said
 /// to be large ([`entelechy_ir::carried`]): a device's compiler takes long over
@@ -302,6 +302,16 @@ fn check_in(
     overrides: &crate::overrides::Overrides,
     pass: Option<&Pass>,
 ) -> Checked {
+    // A check walks the same files from every document it reaches: a run
+    // of the store's ([`Store::sync_begins`]), whichever way it returns.
+    struct Run<'a>(&'a dyn Store);
+    impl Drop for Run<'_> {
+        fn drop(&mut self) {
+            self.0.sync_ends();
+        }
+    }
+    store.sync_begins();
+    let _run = Run(store);
     let mut checked = Checked::default();
     let file = path.display().to_string();
     let file = file.as_str();
@@ -336,9 +346,12 @@ fn check_in(
         .unwrap_or("scene");
     let base = path.parent().unwrap_or_else(|| Path::new("."));
     let mut loader = |path: &Path| locate_document(store, path);
+    // The scene's own reach, which its functions are checked against
+    // below, is named once with its places'.
+    let naming = crate::sources::Naming::new(store);
     let mut declare =
         |base: &Path, uses: &[entelechy_language::Use], own: entelechy_language::Own<'_>| {
-            declarations_for(store, base, uses, own)
+            naming.declare(base, uses, own)
         };
     let lowered =
         match entelechy_scene::load_with(&document, &text, name, base, &mut loader, &mut declare) {
@@ -352,13 +365,8 @@ fn check_in(
         say!(problem, "{file}: {error}");
     }
     let mut document = document;
-    if let Ok(((structs, types, functions), reach)) = crate::sources::declarations_keyed(
-        store,
-        None,
-        base,
-        &document.uses,
-        entelechy_language::Own::of(&document),
-    ) {
+    let keyed = naming.keyed(base, &document.uses, entelechy_language::Own::of(&document));
+    if let Ok(((structs, types, functions), reach)) = keyed {
         for error in functions_checked(
             store,
             path,
@@ -903,8 +911,34 @@ fn check_used(
     let Ok(parsed) = store.document(path) else {
         return (lines, compiled); // reported by `used_documents`
     };
-    let mut used_document = (*parsed).clone();
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let checked_key = |reach: &str| {
+        store.stamp(path).map(|stamp| {
+            format!(
+                "{}@{stamp:?}|{reach}|{}|{published}|{show_ir}",
+                path.display(),
+                root.display()
+            )
+        })
+    };
+    // Found before anything is named: what is named of an unchanged
+    // reach is worked out again only where it is not kept.
+    if let Ok(Some(reach)) = crate::sources::reach_key(
+        store,
+        Some(path),
+        dir,
+        &parsed.uses,
+        entelechy_language::Own::of(&parsed),
+    ) && let (Some(stored), Some(key)) = (store.parsed(), checked_key(&reach))
+        && let Some(found) = stored
+            .used_checked
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&key)
+    {
+        return found.clone();
+    }
+    let mut used_document = (*parsed).clone();
     let mut key = None;
     match crate::sources::declarations_keyed(
         store,
@@ -914,25 +948,7 @@ fn check_used(
         entelechy_language::Own::of(&used_document),
     ) {
         Ok(((structs, types, functions), reach)) => {
-            key = store
-                .stamp(path)
-                .zip(reach.as_deref())
-                .map(|(stamp, reach)| {
-                    format!(
-                        "{}@{stamp:?}|{reach}|{}|{published}|{show_ir}",
-                        path.display(),
-                        root.display()
-                    )
-                });
-            if let (Some(parsed), Some(key)) = (store.parsed(), &key)
-                && let Some(found) = parsed
-                    .used_checked
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .get(key)
-            {
-                return found.clone();
-            }
+            key = reach.as_deref().and_then(checked_key);
             for error in functions_checked(
                 store,
                 path,

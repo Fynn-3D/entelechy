@@ -569,6 +569,118 @@ pub(crate) fn declarations_keyed(
     uses: &[entelechy_language::Use],
     own: entelechy_language::Own<'_>,
 ) -> Result<(Declarations, Option<String>), String> {
+    let (reach, direct) = reached(store, origin, base, uses)?;
+    // The names are the language's: it is handed the documents and which
+    // uses which.
+    let place = |path: &Path| reach.documents.iter().position(|(p, _)| p == path);
+    let sources: Vec<entelechy_language::Source<'_>> = reach
+        .documents
+        .iter()
+        .map(|(path, document)| entelechy_language::Source {
+            name: path.display().to_string(),
+            functions: &document.functions,
+            structs: &document.structs,
+            types: &document.types,
+            uses: reach
+                .uses
+                .get(path)
+                .map_or(&[][..], Vec::as_slice)
+                .iter()
+                .filter_map(|p| place(p))
+                .collect(),
+        })
+        .collect();
+    let direct: Vec<usize> = direct.iter().filter_map(|p| place(p)).collect();
+    let key = scope_key(store, base, uses, own, &reach.documents);
+    let named = entelechy_language::scope(&sources, &direct, own, &|name| {
+        builtin_names().contains(name)
+    });
+    named.map(|named| (named, key))
+}
+
+/// What a scene's lowerings name ([`declarations_for`]) for its places,
+/// by the key of each reach ([`reach_key`]), while they share it: places
+/// reaching the same documents the same way are named once, and what is
+/// named is let go with the last of them.
+pub(crate) type Named = std::sync::Arc<Mutex<std::collections::HashMap<String, Declarations>>>;
+
+/// A lowering naming through [`Named`].
+pub(crate) struct Naming<'a> {
+    store: &'a dyn Store,
+    named: Named,
+}
+
+impl<'a> Naming<'a> {
+    /// Naming kept for this lowering alone.
+    pub(crate) fn new(store: &'a dyn Store) -> Self {
+        Self::sharing(store, Named::default())
+    }
+
+    /// Naming kept in `named`, with the lowerings sharing it.
+    pub(crate) fn sharing(store: &'a dyn Store, named: Named) -> Self {
+        Self { store, named }
+    }
+
+    fn named(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<String, Declarations>> {
+        self.named
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// [`declarations_for`], named once a reach.
+    pub(crate) fn declare(
+        &self,
+        base: &Path,
+        uses: &[entelechy_language::Use],
+        own: entelechy_language::Own<'_>,
+    ) -> Result<Declarations, String> {
+        self.keyed(base, uses, own)
+            .map(|(declarations, _)| declarations)
+    }
+
+    /// [`declarations_keyed`], named once a reach.
+    pub(crate) fn keyed(
+        &self,
+        base: &Path,
+        uses: &[entelechy_language::Use],
+        own: entelechy_language::Own<'_>,
+    ) -> Result<(Declarations, Option<String>), String> {
+        if let Ok(Some(key)) = reach_key(self.store, None, base, uses, own)
+            && let Some(declarations) = self.named().get(&key)
+        {
+            return Ok((declarations.clone(), Some(key)));
+        }
+        let (declarations, key) = declarations_keyed(self.store, None, base, uses, own)?;
+        if let Some(key) = &key {
+            self.named().insert(key.clone(), declarations.clone());
+        }
+        Ok((declarations, key))
+    }
+}
+
+/// The key [`declarations_keyed`] answers, without naming anything: what
+/// a cache of what is worked out of a document's declarations looks up
+/// before it works anything out.
+pub(crate) fn reach_key(
+    store: &dyn Store,
+    origin: Option<&Path>,
+    base: &Path,
+    uses: &[entelechy_language::Use],
+    own: entelechy_language::Own<'_>,
+) -> Result<Option<String>, String> {
+    let (reach, _) = reached(store, origin, base, uses)?;
+    Ok(scope_key(store, base, uses, own, &reach.documents))
+}
+
+/// Every document `uses` reaches from `base`, each walked once, and the
+/// ones it names directly; a `use` back to `origin`, or any ring of
+/// uses, is refused.
+fn reached(
+    store: &dyn Store,
+    origin: Option<&Path>,
+    base: &Path,
+    uses: &[entelechy_language::Use],
+) -> Result<(Reach, Vec<PathBuf>), String> {
     /// The documents `uses` names directly, after walking each one.
     fn gather(
         store: &dyn Store,
@@ -632,56 +744,7 @@ pub(crate) fn declarations_keyed(
         .unwrap_or_default();
     let mut reach = Reach::default();
     let direct = gather(store, base, uses, &mut visited, &mut stack, &mut reach)?;
-    // The names are the language's: it is handed the documents and which
-    // uses which.
-    let place = |path: &Path| reach.documents.iter().position(|(p, _)| p == path);
-    let sources: Vec<entelechy_language::Source<'_>> = reach
-        .documents
-        .iter()
-        .map(|(path, document)| entelechy_language::Source {
-            name: path.display().to_string(),
-            functions: &document.functions,
-            structs: &document.structs,
-            types: &document.types,
-            uses: reach
-                .uses
-                .get(path)
-                .map_or(&[][..], Vec::as_slice)
-                .iter()
-                .filter_map(|p| place(p))
-                .collect(),
-        })
-        .collect();
-    let direct: Vec<usize> = direct.iter().filter_map(|p| place(p)).collect();
-    // What the language makes of these documents depends on them alone:
-    // a reach whose every document is as it was, from the same `use`
-    // items and own declarations, is named as it was before.
-    let key = scope_key(store, base, uses, own, &reach.documents);
-    if let (Some(parsed), Some(key)) = (store.parsed(), &key)
-        && let Some(named) = parsed
-            .scoped
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(key)
-    {
-        return named.clone().map(|named| (named, Some(key.clone())));
-    }
-    let named = entelechy_language::scope(&sources, &direct, own, &|name| {
-        builtin_names().contains(name)
-    });
-    if let (Some(parsed), Some(key)) = (store.parsed(), &key) {
-        let mut scoped = parsed
-            .scoped
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // A long session's edits leave keys behind; they go when there
-        // are many.
-        if scoped.len() >= 4096 {
-            scoped.clear();
-        }
-        scoped.insert(key.clone(), named.clone());
-    }
-    named.map(|named| (named, key))
+    Ok((reach, direct))
 }
 
 /// What a scope is named from: where the `use` items are written and

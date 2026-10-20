@@ -70,6 +70,10 @@ pub(crate) struct Scene {
     /// The root being lowered on another thread, a scene already running
     /// meanwhile ([`Scene::read_root`]).
     lowering: Option<Lowering>,
+    /// What the root's lowerings named within a sync, shared by them: a
+    /// sync that reads its libraries lowers the root again
+    /// ([`crate::sources::Naming`]).
+    named: crate::sources::Named,
 }
 
 /// The running scene, kept to be put back whole ([`Scene::put_back`]).
@@ -146,6 +150,7 @@ impl Scene {
             refusal: None,
             compiling: None,
             lowering: None,
+            named: Default::default(),
         }
     }
 
@@ -345,6 +350,7 @@ impl Scene {
         {
             self.say_unpublished(kernels, events);
         }
+        self.named = Default::default();
     }
 
     /// Says each node of the running scene bound to a Kernel written in a
@@ -385,11 +391,7 @@ impl Scene {
 
     /// Parses and lowers the root's text with its placed documents;
     /// publishes nothing.
-    fn lower(
-        &self,
-        text: &str,
-        readable: &dyn Fn(&Path) -> Result<(), String>,
-    ) -> Result<(entelechy_language::Document, entelechy_scene::Lowered), Diagnostic> {
+    fn lower(&self, text: &str, readable: &dyn Fn(&Path) -> Result<(), String>) -> Lowered {
         self.lower_in(self.store.as_ref(), text, readable)
     }
 
@@ -399,7 +401,7 @@ impl Scene {
         store: &dyn Store,
         text: &str,
         readable: &dyn Fn(&Path) -> Result<(), String>,
-    ) -> Result<(entelechy_language::Document, entelechy_scene::Lowered), Diagnostic> {
+    ) -> Lowered {
         let document = self.parse_readable(text, readable)?;
         self.lowering_of(document, text).lower(store)
     }
@@ -435,6 +437,7 @@ impl Scene {
             params: self.params.clone(),
             first: self.graph.is_none(),
             store: Arc::clone(&self.store),
+            named: Arc::clone(&self.named),
         }
     }
 }
@@ -448,14 +451,12 @@ struct ToLower {
     params: BTreeMap<String, Value>,
     first: bool,
     store: Arc<dyn Store>,
+    named: crate::sources::Named,
 }
 
 impl ToLower {
     /// The root lowered: its graph ordered, its params known.
-    fn lower(
-        self,
-        store: &dyn Store,
-    ) -> Result<(entelechy_language::Document, entelechy_scene::Lowered), Diagnostic> {
+    fn lower(self, store: &dyn Store) -> Lowered {
         let Self {
             document,
             text,
@@ -463,12 +464,14 @@ impl ToLower {
             base,
             params,
             first,
+            named,
             ..
         } = self;
         let mut loader = |path: &Path| locate_document(store, path);
+        let naming = crate::sources::Naming::sharing(store, named);
         let mut declare =
             |base: &Path, uses: &[entelechy_language::Use], own: entelechy_language::Own<'_>| {
-                declarations_for(store, base, uses, own)
+                naming.declare(base, uses, own)
             };
         let lowered = entelechy_scene::load_with_params(
             &document,
@@ -494,7 +497,15 @@ impl ToLower {
         {
             return Err(Diagnostic::new(undeclared(&lowered.graph, name)));
         }
-        Ok((document, lowered))
+        // What the root's own reach names, named with its places'.
+        let named = naming
+            .keyed(
+                &base,
+                &document.uses,
+                entelechy_language::Own::of(&document),
+            )
+            .map(|(declarations, _)| declarations);
+        Ok((document, lowered, named))
     }
 }
 
@@ -519,14 +530,8 @@ impl Scene {
         readable: &dyn Fn(&Path) -> Result<(), String>,
         granted: &dyn Fn(&entelechy_ir::Validated) -> Result<(), Diagnostic>,
     ) -> Result<(), Diagnostic> {
-        let (mut document, lowered) = self.lower_in(store, text, readable)?;
-        let (structs, types, functions) = declarations_for(
-            store,
-            &self.base(),
-            &document.uses,
-            entelechy_language::Own::of(&document),
-        )
-        .map_err(Diagnostic::new)?;
+        let (mut document, lowered, named) = self.lower_in(store, text, readable)?;
+        let (structs, types, functions) = named.map_err(Diagnostic::new)?;
         functions_checked(&self.root, &document, (&structs, &types, &functions))?;
         document.resolve((&structs, &types, &functions));
         let root_key = PathBuf::from(self.document_name());
@@ -630,14 +635,14 @@ impl Scene {
                 None => return,
             },
         };
-        let (document, lowered) = match read {
+        let (document, lowered, named) = match read {
             Ok(read) => read,
             Err(error) => {
                 events.push(Event::SceneRejected(error));
                 return;
             }
         };
-        self.read_lowered(text, document, lowered, kernels, runtime, events);
+        self.read_lowered(text, document, lowered, named, kernels, runtime, events);
     }
 
     /// Reads the root's text when it or a graph it places changed, and
@@ -699,13 +704,16 @@ impl Scene {
         Some((text, read))
     }
 
-    /// Reads on from the root's text lowered: its Kernels staged, and the
-    /// scene staged to replace the running one once they publish.
+    /// Reads on from the root's text lowered, with what its reach names:
+    /// its Kernels staged, and the scene staged to replace the running one
+    /// once they publish.
+    #[allow(clippy::too_many_arguments)]
     fn read_lowered(
         &mut self,
         text: String,
         document: entelechy_language::Document,
         mut lowered: entelechy_scene::Lowered,
+        named: Result<entelechy_language::Declarations, String>,
         kernels: &mut Kernels,
         runtime: &mut Runtime,
         events: &mut Vec<Event>,
@@ -731,19 +739,13 @@ impl Scene {
             self.functions.clone(),
         );
         let name = self.document_name();
-        let base = self.base();
         // Kernels by owning document: the root owns its top-level and
         // node-inline Kernels; a sub-graph owns its inline ones.
         let mut by_document: BTreeMap<PathBuf, Vec<Defined>> = BTreeMap::new();
         let root = self.root.clone();
         let root_key = PathBuf::from(&name);
         let mut document = document;
-        match declarations_for(
-            self.store.as_ref(),
-            &base,
-            &document.uses,
-            entelechy_language::Own::of(&document),
-        ) {
+        match named {
             Ok((structs, types, functions)) => {
                 if let Err(error) =
                     functions_checked(&root, &document, (&structs, &types, &functions))
@@ -1466,7 +1468,14 @@ struct Lowering {
 }
 
 /// The root parsed and lowered, or why not.
-type Lowered = Result<(entelechy_language::Document, entelechy_scene::Lowered), Diagnostic>;
+type Lowered = Result<
+    (
+        entelechy_language::Document,
+        entelechy_scene::Lowered,
+        Result<entelechy_language::Declarations, String>,
+    ),
+    Diagnostic,
+>;
 /// The graphs a lowering placed, each with its stamp as it was read.
 type Placed = Vec<(PathBuf, Option<Stamp>)>;
 
@@ -1483,7 +1492,7 @@ impl Lowering {
                 let store = Arc::clone(&to_lower.store);
                 let lowered = to_lower.lower(store.as_ref());
                 let placed = match &lowered {
-                    Ok((_, lowered)) => lowered
+                    Ok((_, lowered, _)) => lowered
                         .documents
                         .iter()
                         .map(|path| (path.clone(), store.stamp(path)))
