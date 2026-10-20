@@ -956,27 +956,33 @@ impl Lowering<'_, '_> {
                     }
                     match placement.and_then(|p| p.params.get(param)) {
                         Some(ParamValue::Literal(v)) => v.clone(),
-                        Some(ParamValue::Graph(root)) => self
-                            .overrides
-                            .get(root)
-                            .cloned()
-                            .or_else(|| {
-                                self.out
-                                    .graph
-                                    .params
-                                    .iter()
-                                    .find(|p| &p.name == root)
-                                    .map(|p| p.default.clone())
-                            })
-                            .unwrap_or_else(|| {
-                                params
-                                    .iter()
-                                    .find(|p| &p.name == param)
-                                    .map(|p| p.default.clone())
-                                    .unwrap()
-                            }),
+                        Some(ParamValue::Graph(root)) => {
+                            // The root param it is passed from sizes the
+                            // graph too, however deep it is placed.
+                            if !self.out.graph.times_params.contains(root) {
+                                self.out.graph.times_params.push(root.clone());
+                            }
+                            self.overrides
+                                .get(root)
+                                .cloned()
+                                .or_else(|| {
+                                    self.out
+                                        .graph
+                                        .params
+                                        .iter()
+                                        .find(|p| &p.name == root)
+                                        .map(|p| p.default.clone())
+                                })
+                                .unwrap_or_else(|| {
+                                    params
+                                        .iter()
+                                        .find(|p| &p.name == param)
+                                        .map(|p| p.default.clone())
+                                        .unwrap()
+                                })
+                        }
                         None => {
-                            if placement.is_none() {
+                            if placement.is_none() && !self.out.graph.times_params.contains(param) {
                                 self.out.graph.times_params.push(param.clone());
                             }
                             self.overrides
@@ -2870,6 +2876,59 @@ output result <- show.result;
         )
         .unwrap();
         assert_eq!(ids(&lowered.graph), ["seed", "step", "show"]);
+    }
+
+    /// A root param passed down through placed graphs to a `times` sizes
+    /// the graph as one the root reads itself: it is recorded, so changing
+    /// it lowers the document again, and the copies follow its value.
+    #[test]
+    fn a_root_param_sizes_a_times_placed_graphs_down() {
+        let root = "param level: Int = 2;
+node seed: test.zero@1 { domain = 4; }
+node outer: graph \"outer.esn\" { source <- seed.result; level = level; }
+output result <- outer.result;
+";
+        let document = entelechy_language::parse_document(root).unwrap();
+        let mut none: Box<Declare<'_>> =
+            Box::new(|_, _, _| Ok((Vec::new(), Vec::new(), Vec::new())));
+        let mut loader: Box<Loader<'_>> = Box::new(|path: &Path| {
+            let text = if path.ends_with("outer.esn") {
+                "input source: Rows<Int>;
+param level: Int = 5;
+node inner: graph \"inner.esn\" { source <- source; level = level; }
+output result <- inner.result;
+"
+            } else {
+                "input source: Rows<Int>;
+param level: Int = 5;
+node step: test.inc@1 { times = level; carry previous <- result; previous <- source; }
+output result <- step.result;
+"
+            };
+            Ok((path.to_path_buf(), text.to_owned()))
+        });
+        for (level, copies) in [(None, 2), (Some(3), 3)] {
+            let overrides: BTreeMap<String, Value> = level
+                .map(|l| ("level".to_owned(), Value::Int(l)))
+                .into_iter()
+                .collect();
+            let lowered = load_with_params(
+                &document,
+                root,
+                "g",
+                Path::new("."),
+                &mut loader,
+                &mut none,
+                &overrides,
+            )
+            .unwrap();
+            assert_eq!(lowered.graph.times_params, ["level"]);
+            let steps = ids(&lowered.graph)
+                .iter()
+                .filter(|id| id.contains("step"))
+                .count();
+            assert_eq!(steps, copies, "{:?}", ids(&lowered.graph));
+        }
     }
 
     /// `times = 0` places no node: a carried output is what its port is
