@@ -1,0 +1,12 @@
+# The world rewrites its law of growth until its life is in balance:
+# crowded under the law it starts with, it writes another every twenty
+# frames while it stays crowded, and once in balance the law stands.
+# What it writes is kept for the run; laws/grow.ent stays the seed.
+scene ../scene.esn
+allow file.write ../laws/
+frame 0.0 to 2.0 every 0.05
+expect tuning.result[2] >= 1
+frame 2.05 to 9.0 every 0.05
+expect tuning.result[2] >= 4
+expect census.result[0] >= 4800
+expect census.result[0] <= 5952

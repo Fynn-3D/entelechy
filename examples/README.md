@@ -45,6 +45,7 @@ entelechy run examples/<example>/scene.esn --out output.ppm --watch
 
 ## Simulation and learning
 
+- [genesis](genesis/README.md): a world that rewrites its own law of growth until its life is in balance, writing each law through an output `to files`.
 - [million](million/README.md): a million bodies stepped by a map and drawn by a scatter.
 - [neighbours](neighbours/README.md): sixty-five thousand bodies finding neighbours through a grid built by scatter `sum` and `prefix with sum`.
 - [physics](physics/README.md): boxes and balls that fall, stack, slide and bounce, stepped by the physics package; a sensor, a ray, a click drops a ball.

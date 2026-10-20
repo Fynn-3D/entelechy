@@ -100,6 +100,13 @@ its interface is held to.
   what it counted; `owner` finds an entry's owner, `rounds` and
   `round_of` walk more than one loop counts. The vector, physics and font
   packages build their lists with it.
+- **genesis** — laws a world writes itself. A law is a document; a
+  world writes one through an output `to files` where the person
+  running it allowed, and the session puts it in its law's place or
+  refuses it and keeps the last. `graphs/law.esn` fills a law's
+  template, its holes `$0` to `$9` written as numbers the world
+  computed, and gives the operation that writes it. The genesis example
+  rewrites its law of growth with it.
 - **sort** — the permutation that orders a row of integer keys, stable,
   one pass a bit: a `prefix with sum` for the rank and a scatter for the
   placement. What moves is the permutation, never the elements, so a

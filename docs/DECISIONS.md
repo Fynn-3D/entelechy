@@ -1527,3 +1527,54 @@ keeps `time()` the same word on every backend.
 [the interpreter's test](../crates/backends/cpu/tests/execute.rs) of a
 month's clock, the [conformance matrix](../crates/backends/conformance/src/lib.rs)
 run a month in, and the [language surface](../crates/frontend/compiler/tests/surface.txt).
+
+## A world may write its own laws
+
+A scene may write the documents its Kernels are published from: an
+output `to files "laws/"` writes a law's text where the person running
+the scene allowed (`--allow file.write=laws/`), and the session reads
+it, compiles it, validates it and puts it in its law's place, as it
+does a law a person or an agent edited. Nothing new is added to the
+language or to the runtime's lifecycle. A law the world gets wrong is
+refused and the last one runs on; an input `= checks "laws/"` tells the
+world why. The history names a law the world wrote as the world's own,
+its origin the output that wrote it (`{"output": "laws"}`), while the
+document is as the output wrote it. The owner chose this form, the
+runner's allowance and replays that may allow (2026-10-20).
+
+A frame's effects are carried out after every committed frame, the
+whole scene's or the part a caller asked for: what a scene writes is
+read by the Host, so a frame evaluates it whatever else it asks. A
+replay may allow its scene to write, `allow file.write <dir>`: what the
+scene writes is kept for the run in a store laid over the disk
+([`Kept`](../crates/interface/session/src/store.rs)) and never reaches
+it, and before each frame the replay reads what the scene wrote after
+the last, so a law the world wrote is in its place a frame later, on
+every backend alike.
+
+**Why.** A world whose laws only an outside author can change is made,
+not alive; the step from one to the other is a law written from inside.
+A law is a document, so writing one from inside is writing a file: the
+safe path the Host already has, checked by its allowance, carried out
+after a commit, compiled and swapped atomically by hot reload, which
+keeps a failed law from harming the running world. The person running
+a world, never the world, gives it the right to rewrite itself, and
+only where they say. A world writes text, not IR: what it writes is
+read, checked and held to the language as every author's law is, and
+a person can read what the world made of itself. Where a law came from
+is how a history is read, so a world's own law says so. A replay is a
+test, and a test that changed the files it tests would not start from
+the same world twice.
+
+**Where.** `Origin::Output` in the
+[history](../crates/interface/session/src/history.rs), `Writes::author`
+([writes](../crates/interface/session/src/writes.rs)); `Kept`
+([store](../crates/interface/session/src/store.rs)); `allow`,
+`store_for` and `allow_on` ([replay](../crates/interface/session/src/replay.rs));
+`written_sources` and `written_after`
+([session](../crates/interface/session/src/session.rs)); the
+[genesis package](../packages/genesis.entpkg/package.esn), which fills a
+law's template with numbers. Held by [the genesis
+tests](../crates/interface/session/tests/genesis.rs) and
+[the genesis example](../examples/genesis/README.md), whose replay
+watches a world rewrite its law of growth until its life is in balance.

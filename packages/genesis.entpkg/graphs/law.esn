@@ -1,0 +1,26 @@
+//! A law written from its template: the template's holes `$0` to `$9`
+//! filled with `values`, to `places` decimals, and the operation an
+//! output `to files` takes to write it at `path` under its directory:
+//!
+//!   input template: Rows<Int> = bytes "templates/rule.tmpl";
+//!   input path: Rows<Int> = text "rule.ent";
+//!   node law: graph "genesis.entpkg/graphs/law.esn" { template <- template; values <- tuned.result; path <- path; }
+//!   output laws <- law.writing to files "laws/";
+//!
+//! `text` is the law as filled, for a scene to show or check.
+use "../kernels/";
+use "compact.entpkg";
+
+input template: Rows<Int>;
+input values: Rows<Float>;
+input path: Rows<Int>;
+param places: Int = 3;
+
+node widths: genesis.widths@1 { template <- template; values <- values; places = places; }
+node ends: compact.ends@1 { counts <- widths.result; }
+node total: compact.entries@1 { ends <- ends.result; domain = 1; }
+node text: genesis.spliced@1 { template <- template; values <- values; ends <- ends.result; total <- total.result; places = places; domain = value(total); }
+node writing: genesis.writing@1 { path <- path; text <- text.result; domain = 4 + count(path) + count(text); }
+
+output text <- text.result;
+output writing <- writing.result;

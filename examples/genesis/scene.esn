@@ -1,0 +1,25 @@
+// A world that rewrites its own law. `life` grows by `world.grow@1`,
+// the law in laws/grow.ent; `tuning` watches what lives and, when life
+// is dying out or choking, retunes the law's numbers; `law` fills the
+// law's template with them, and the output `laws` writes it, where the
+// person running the world allowed (`--allow file.write=laws/`). The
+// session reads it, compiles it and puts it in its law's place; a law
+// that fails stays out, the last one runs on, and `problems` says why.
+use "kernels/";
+use "laws/grow.ent";
+use "../../packages/genesis.entpkg";
+
+input template: Rows<Int> = bytes "templates/grow.tmpl";
+input law_path: Rows<Int> = text "grow.ent";
+input problems: Rows<Int> = checks "laws/";
+
+node seed: world.seed@1 { domain = vec2(160, 120); }
+node life: world.grow@1 { life <~ life.result from seed.result; }
+node census: world.census@1 { life <- life.result; }
+node first: world.first_tuning@1 { domain = 4; }
+node tuning: world.tuning@1 { before <~ tuning.result from first.result; census <- census.result; }
+node law: graph "../../packages/genesis.entpkg/graphs/law.esn" { template <- template; values <- tuning.result; path <- law_path; places = 4; }
+node paint: world.paint@1 { life <- life.result; tuning <- tuning.result; problems <- problems; }
+
+output result <- paint.result;
+output laws <- law.writing to files "laws/";

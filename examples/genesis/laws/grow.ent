@@ -1,0 +1,16 @@
+/// The law of growth, as the world wrote it: a cell grows where the life
+/// around it is near 0.3000, within 0.0600, and fades elsewhere.
+kernel world.grow@1 {
+    requires { field.read; field.write; }
+    input life: Grid<Float>;
+    output result: Grid<Float>;
+    compute {
+        let c = coord();
+        let around = loop 25 with sum = 0.0 {
+            sum + at(life, c + vec2(float(index() % 5) - 2.0, float(index() / 5) - 2.0))
+        } / 25.0;
+        let off = (around - 0.3000) / 0.0600;
+        let growth = 2.0 * exp(-0.5 * off * off) - 1.0;
+        return clamp(sample(life) + 0.08 * growth, 0.0, 1.0);
+    }
+}

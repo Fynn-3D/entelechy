@@ -1,0 +1,13 @@
+//! The genesis package: laws a world writes itself. A law is a document
+//! like any other; a world writes one as an output `to files` into a
+//! directory the person running it allowed, and the session reads it,
+//! compiles it and puts it in its law's place, or refuses it and keeps
+//! the law before it running (an input `= checks` says why).
+//!
+//! A world rarely writes a law letter by letter: it fills one written
+//! beforehand. A template is a law's text with holes, `$0` to `$9`,
+//! each filled with a number the world computed; `graphs/law.esn`
+//! fills one and gives the operation that writes it.
+package genesis@1 { language = 1; ir = 1; }
+
+use "kernels/";
