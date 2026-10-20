@@ -1562,7 +1562,7 @@ fn a_parameter_is_any_value_a_kernel_can_hold() {
     for k in 0..4 {
         identity[k * 5] = 1.0;
     }
-    assert_eq!(params[0].default, Value::Mat4(identity));
+    assert_eq!(params[0].default, Value::Mat4(Box::new(identity)));
     assert_eq!(params[1].default, Value::Mat2([0.0, 1.0, -1.0, 0.0]));
     assert_eq!(params[2].default, Value::IVec2([-3, -4]));
     // Fields in declaration order, integers widened where floats are.

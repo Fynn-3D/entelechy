@@ -444,7 +444,9 @@ impl FromStr for Type {
 }
 
 /// A value crossing the Kernel boundary: a parameter, a constant; structs
-/// and arrays as a [`Value::Record`].
+/// and arrays as a [`Value::Record`]. A value wider than 16 bytes is kept
+/// apart, so every value, and every IR instruction holding a constant, is
+/// as small as the common ones and not as the widest.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     /// A float.
@@ -468,9 +470,9 @@ pub enum Value {
     /// A 2x2 matrix, column by column.
     Mat2([f32; 4]),
     /// A 3x3 matrix, column by column.
-    Mat3([f32; 9]),
+    Mat3(Box<[f32; 9]>),
     /// A 4x4 matrix, column by column.
-    Mat4([f32; 16]),
+    Mat4(Box<[f32; 16]>),
     /// A 64-bit float.
     Double(f64),
     /// A 64-bit integer.
@@ -478,19 +480,19 @@ pub enum Value {
     /// Two doubles.
     DVec2([f64; 2]),
     /// Three doubles.
-    DVec3([f64; 3]),
+    DVec3(Box<[f64; 3]>),
     /// Four doubles.
-    DVec4([f64; 4]),
+    DVec4(Box<[f64; 4]>),
     /// Two longs.
     LVec2([i64; 2]),
     /// Three longs.
-    LVec3([i64; 3]),
+    LVec3(Box<[i64; 3]>),
     /// A 2x2 matrix of doubles, column by column.
-    DMat2([f64; 4]),
+    DMat2(Box<[f64; 4]>),
     /// A 3x3 matrix of doubles, column by column.
-    DMat3([f64; 9]),
+    DMat3(Box<[f64; 9]>),
     /// A 4x4 matrix of doubles, column by column.
-    DMat4([f64; 16]),
+    DMat4(Box<[f64; 16]>),
     /// A struct's fields or an array's elements in order, matched by
     /// layout, never by name.
     Record(Vec<Value>),
@@ -655,8 +657,8 @@ impl Value {
             Self::Vec3(v) => return floats(v),
             Self::Vec4(v) => return floats(v),
             Self::Mat2(v) => return floats(v),
-            Self::Mat3(v) => return floats(v),
-            Self::Mat4(v) => return floats(v),
+            Self::Mat3(v) => return floats(&v[..]),
+            Self::Mat4(v) => return floats(&v[..]),
             _ => {}
         }
         match self {
@@ -704,19 +706,19 @@ impl Value {
             Self::Vec3(v) => floats(out, v),
             Self::Vec4(v) => floats(out, v),
             Self::Mat2(v) => floats(out, v),
-            Self::Mat3(v) => floats(out, v),
-            Self::Mat4(v) => floats(out, v),
+            Self::Mat3(v) => floats(out, &v[..]),
+            Self::Mat4(v) => floats(out, &v[..]),
             Self::IVec2(v) => ints(out, v),
             Self::IVec3(v) => ints(out, v),
             Self::IVec4(v) => ints(out, v),
             Self::DVec2(v) => doubles(out, v),
-            Self::DVec3(v) => doubles(out, v),
-            Self::DVec4(v) => doubles(out, v),
-            Self::DMat2(v) => doubles(out, v),
-            Self::DMat3(v) => doubles(out, v),
-            Self::DMat4(v) => doubles(out, v),
+            Self::DVec3(v) => doubles(out, &v[..]),
+            Self::DVec4(v) => doubles(out, &v[..]),
+            Self::DMat2(v) => doubles(out, &v[..]),
+            Self::DMat3(v) => doubles(out, &v[..]),
+            Self::DMat4(v) => doubles(out, &v[..]),
             Self::LVec2(v) => longs(out, v),
-            Self::LVec3(v) => longs(out, v),
+            Self::LVec3(v) => longs(out, &v[..]),
             Self::Record(members) => {
                 for member in members {
                     member.push_numbers(out);
@@ -791,18 +793,18 @@ impl Value {
             Self::IVec3(_) => Self::IVec3(lanes!(3, 0, int)),
             Self::IVec4(_) => Self::IVec4(lanes!(4, 0, int)),
             Self::Mat2(_) => Self::Mat2(lanes!(4, 0.0, float)),
-            Self::Mat3(_) => Self::Mat3(lanes!(9, 0.0, float)),
-            Self::Mat4(_) => Self::Mat4(lanes!(16, 0.0, float)),
+            Self::Mat3(_) => Self::Mat3(Box::new(lanes!(9, 0.0, float))),
+            Self::Mat4(_) => Self::Mat4(Box::new(lanes!(16, 0.0, float))),
             Self::Double(_) => Self::Double(double(&mut next)),
             Self::Long(_) => Self::Long(long(&mut next)),
             Self::DVec2(_) => Self::DVec2(lanes!(2, 0.0, double)),
-            Self::DVec3(_) => Self::DVec3(lanes!(3, 0.0, double)),
-            Self::DVec4(_) => Self::DVec4(lanes!(4, 0.0, double)),
+            Self::DVec3(_) => Self::DVec3(Box::new(lanes!(3, 0.0, double))),
+            Self::DVec4(_) => Self::DVec4(Box::new(lanes!(4, 0.0, double))),
             Self::LVec2(_) => Self::LVec2(lanes!(2, 0, long)),
-            Self::LVec3(_) => Self::LVec3(lanes!(3, 0, long)),
-            Self::DMat2(_) => Self::DMat2(lanes!(4, 0.0, double)),
-            Self::DMat3(_) => Self::DMat3(lanes!(9, 0.0, double)),
-            Self::DMat4(_) => Self::DMat4(lanes!(16, 0.0, double)),
+            Self::LVec3(_) => Self::LVec3(Box::new(lanes!(3, 0, long))),
+            Self::DMat2(_) => Self::DMat2(Box::new(lanes!(4, 0.0, double))),
+            Self::DMat3(_) => Self::DMat3(Box::new(lanes!(9, 0.0, double))),
+            Self::DMat4(_) => Self::DMat4(Box::new(lanes!(16, 0.0, double))),
             Self::Record(members) => {
                 Self::Record(members.iter().map(|member| member.rebuilt(words)).collect())
             }
@@ -858,16 +860,16 @@ impl fmt::Display for Value {
             Self::IVec3(v) => list(f, "ivec3", numbers(v)),
             Self::IVec4(v) => list(f, "ivec4", numbers(v)),
             Self::Mat2(v) => list(f, "mat2", columns(v, 2, "vec")),
-            Self::Mat3(v) => list(f, "mat3", columns(v, 3, "vec")),
-            Self::Mat4(v) => list(f, "mat4", columns(v, 4, "vec")),
+            Self::Mat3(v) => list(f, "mat3", columns(&v[..], 3, "vec")),
+            Self::Mat4(v) => list(f, "mat4", columns(&v[..], 4, "vec")),
             Self::DVec2(v) => list(f, "dvec2", numbers(v)),
-            Self::DVec3(v) => list(f, "dvec3", numbers(v)),
-            Self::DVec4(v) => list(f, "dvec4", numbers(v)),
+            Self::DVec3(v) => list(f, "dvec3", numbers(&v[..])),
+            Self::DVec4(v) => list(f, "dvec4", numbers(&v[..])),
             Self::LVec2(v) => list(f, "lvec2", numbers(v)),
-            Self::LVec3(v) => list(f, "lvec3", numbers(v)),
-            Self::DMat2(v) => list(f, "dmat2", columns(v, 2, "dvec")),
-            Self::DMat3(v) => list(f, "dmat3", columns(v, 3, "dvec")),
-            Self::DMat4(v) => list(f, "dmat4", columns(v, 4, "dvec")),
+            Self::LVec3(v) => list(f, "lvec3", numbers(&v[..])),
+            Self::DMat2(v) => list(f, "dmat2", columns(&v[..], 2, "dvec")),
+            Self::DMat3(v) => list(f, "dmat3", columns(&v[..], 3, "dvec")),
+            Self::DMat4(v) => list(f, "dmat4", columns(&v[..], 4, "dvec")),
             Self::Record(members) => write!(
                 f,
                 "[{}]",

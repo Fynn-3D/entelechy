@@ -210,7 +210,7 @@ fn a_value_given_is_taken_in_the_width_it_is_given_to() {
     assert_eq!(Value::Double(0.1).to_string(), "0.1d");
     assert_eq!(Value::Long(-5).to_string(), "-5l");
     assert_eq!(
-        Value::DMat2([1.0, 0.0, 0.0, 1.0]).to_string(),
+        Value::DMat2(Box::new([1.0, 0.0, 0.0, 1.0])).to_string(),
         "dmat2(dvec2(1.0, 0.0), dvec2(0.0, 1.0))"
     );
 }

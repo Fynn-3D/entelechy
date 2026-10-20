@@ -323,9 +323,9 @@ mod tests {
             Value::Double(0.1),
             Value::Long(5),
             Value::Long(-(1 << 60) - 3),
-            Value::DVec3([0.1, -4000000.987654321, 2.0]),
+            Value::DVec3(Box::new([0.1, -4000000.987654321, 2.0])),
             Value::LVec2([1 << 62, -7]),
-            Value::DMat2([1.0, 0.1, -0.1, 1.0]),
+            Value::DMat2(Box::new([1.0, 0.1, -0.1, 1.0])),
             Value::Record(vec![Value::DVec2([0.25, 0.5]), Value::Long(1 << 40)]),
         ] {
             // JSON is untyped; what the value is read as is its shape.

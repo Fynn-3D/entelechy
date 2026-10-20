@@ -490,9 +490,9 @@ pub fn value_json(value: &Value) -> Json {
         Value::DVec4(v) => json!(v),
         Value::LVec2(v) => json!(v.iter().map(|x| long(*x)).collect::<Vec<_>>()),
         Value::LVec3(v) => json!(v.iter().map(|x| long(*x)).collect::<Vec<_>>()),
-        Value::DMat2(v) => dcolumns(v, 2),
-        Value::DMat3(v) => dcolumns(v, 3),
-        Value::DMat4(v) => dcolumns(v, 4),
+        Value::DMat2(v) => dcolumns(&v[..], 2),
+        Value::DMat3(v) => dcolumns(&v[..], 3),
+        Value::DMat4(v) => dcolumns(&v[..], 4),
         Value::Float(v) => float_json(*v),
         Value::Int(v) => json!(v),
         Value::Bool(v) => json!(v),
@@ -503,8 +503,8 @@ pub fn value_json(value: &Value) -> Json {
         Value::IVec3(v) => json!(v),
         Value::IVec4(v) => json!(v),
         Value::Mat2(v) => columns(v, 2),
-        Value::Mat3(v) => columns(v, 3),
-        Value::Mat4(v) => columns(v, 4),
+        Value::Mat3(v) => columns(&v[..], 3),
+        Value::Mat4(v) => columns(&v[..], 4),
         Value::Record(members) => json!(members.iter().map(value_json).collect::<Vec<_>>()),
     }
 }

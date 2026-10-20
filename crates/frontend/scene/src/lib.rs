@@ -64,8 +64,8 @@ fn zero_of(ty: &str) -> Option<Value> {
         "Double" => Some(Value::Double(0.0)),
         "Long" => Some(Value::Long(0)),
         "DVec2" => Some(Value::DVec2([0.0; 2])),
-        "DVec3" => Some(Value::DVec3([0.0; 3])),
-        "DVec4" => Some(Value::DVec4([0.0; 4])),
+        "DVec3" => Some(Value::DVec3(Box::new([0.0; 3]))),
+        "DVec4" => Some(Value::DVec4(Box::new([0.0; 4]))),
         _ => None,
     }
 }

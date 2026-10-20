@@ -537,11 +537,11 @@ fn literal(value: &Value) -> String {
         Value::IVec3(v) => format!("vec3<i32>({})", ints(v)),
         Value::IVec4(v) => format!("vec4<i32>({})", ints(v)),
         Value::Mat2(v) => format!("mat2x2<f32>({})", floats(v)),
-        Value::Mat3(v) => format!("mat3x3<f32>({})", floats(v)),
-        Value::Mat4(v) => format!("mat4x4<f32>({})", floats(v)),
+        Value::Mat3(v) => format!("mat3x3<f32>({})", floats(&v[..])),
+        Value::Mat4(v) => format!("mat4x4<f32>({})", floats(&v[..])),
         Value::Long(v) => long_literal(*v),
         Value::LVec2(v) => format!("vec2<i64>({})", longs(v)),
-        Value::LVec3(v) => format!("vec3<i64>({})", longs(v)),
+        Value::LVec3(v) => format!("vec3<i64>({})", longs(&v[..])),
         // Records are built by `Construct`; the validator refuses
         // record constants.
         Value::Record(_) => unreachable!("a constant of the IR is never a record"),

@@ -518,7 +518,7 @@ fn params() -> Vec<Value> {
         Value::Bool(true),
         Value::Vec3([1.0, 2.0, 3.0]),
         // Not the defaults, so a backend that read the defaults shows.
-        Value::Mat3([1.0, 2.0, 0.0, -1.0, 0.5, 0.0, 0.25, 0.0, 1.0]),
+        Value::Mat3(Box::new([1.0, 2.0, 0.0, -1.0, 0.5, 0.0, 0.25, 0.0, 1.0])),
         Value::IVec2([3, -2]),
         Value::Record(vec![Value::IVec2([5, 7]), Value::Int(-4)]),
         Value::Record(vec![
@@ -823,9 +823,9 @@ fn wide_params() -> Vec<Value> {
     vec![
         Value::Long(5_000_000_001),
         // Not the defaults, so a backend that read the defaults shows.
-        Value::DVec3([500000.1234567, -4000000.0625, 12.5]),
+        Value::DVec3(Box::new([500000.1234567, -4000000.0625, 12.5])),
         Value::Double(0.0011),
-        Value::DMat3([1.0, 0.5, 0.0, -0.5, 1.0, 0.0, 0.25, 0.0, 1.0]),
+        Value::DMat3(Box::new([1.0, 0.5, 0.0, -0.5, 1.0, 0.0, 0.25, 0.0, 1.0])),
         Value::Record(vec![Value::Long(4), Value::Long(-5), Value::Long(6)]),
     ]
 }
