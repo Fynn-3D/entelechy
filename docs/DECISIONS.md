@@ -325,7 +325,7 @@ made in one (see *The rasterizer is a package*).
 **Where.** `Runtime::execute` in [`entelechy-kernel`](../crates/core/kernel/src/lib.rs),
 the estimate in [`entelechy-ir`](../crates/core/ir/src/lib.rs), the kept
 words in [`entelechy-host`](../crates/core/host/src/lib.rs), an input's
-copy let go in the session's [inputs](../crates/interface/session/src/inputs.rs)
+copy let go in the session's [inputs](../crates/interface/session/src/inputs/mod.rs)
 and [memory](../crates/interface/session/src/memory.rs);
 [`routing.rs`](../crates/interface/session/tests/routing.rs) holds a
 scene of every kind of work to the JIT's alone with small runs placed
@@ -400,7 +400,7 @@ person visits can reach a socket on their machine. A scene the person
 runs has no channel back out but its allowed writes.
 
 **Where.** The session's
-[inputs](../crates/interface/session/src/inputs.rs) and
+[inputs](../crates/interface/session/src/inputs/mod.rs) and
 [writes](../crates/interface/session/src/writes.rs); the protocol's
 [transport](../crates/interface/protocol/src/transport.rs) and
 [WebSocket](../crates/interface/protocol/src/websocket.rs); the Host's
@@ -792,7 +792,7 @@ checked once it is written.
 **Where.** `checks` in the parser
 ([parser](../crates/frontend/language/src/parser.rs)) and `Files::checks`
 ([scene](../crates/frontend/scene/src/lib.rs)); `sync_checks`
-([inputs](../crates/interface/session/src/inputs.rs)) and
+([inputs](../crates/interface/session/src/inputs/checks.rs)) and
 `problems_text` ([check](../crates/interface/session/src/check.rs)). Held
 by [the checks tests](../crates/interface/session/tests/checks.rs) and
 the scene surface's `checks.esn`.
@@ -820,7 +820,7 @@ that would put the compiler under the runtime, which the layers forbid.
 ([parser](../crates/frontend/language/src/parser.rs)),
 `definitions` ([language](../crates/frontend/language/src/lib.rs)),
 `Files::outlines` ([scene](../crates/frontend/scene/src/lib.rs)),
-`sync_checks` ([inputs](../crates/interface/session/src/inputs.rs)) and
+`sync_checks` ([inputs](../crates/interface/session/src/inputs/checks.rs)) and
 `outline_text` ([check](../crates/interface/session/src/check.rs)). Held
 by [the outline tests](../crates/interface/session/tests/outline.rs)
 and the scene surface's `outline.esn`.
@@ -851,7 +851,7 @@ reads them as it reads any `Rows<Int>`.
 `Write::files` ([scene](../crates/frontend/scene/src/lib.rs)); the
 words' layout in
 [directory](../crates/interface/formats/src/directory.rs); `sync_files`
-([inputs](../crates/interface/session/src/inputs.rs)) and `operate`
+([inputs](../crates/interface/session/src/inputs/listed.rs)) and `operate`
 ([writes](../crates/interface/session/src/writes.rs)). Held by [the files
 tests](../crates/interface/session/tests/files.rs) and the scene
 surface's `directory.esn`.
@@ -887,7 +887,7 @@ want every byte.
 ([scene](../crates/frontend/scene/src/lib.rs)); the rules in
 [ignore](../crates/interface/session/src/ignore.rs); the listing's
 layout in [directory](../crates/interface/formats/src/directory.rs);
-`sync_file_nodes`, `give_paths` ([inputs](../crates/interface/session/src/inputs.rs))
+`sync_file_nodes`, `give_paths` ([inputs](../crates/interface/session/src/inputs/file_nodes.rs))
 and `feed_file_nodes` ([session](../crates/interface/session/src/session.rs)).
 Held by [the files node tests](../crates/interface/session/tests/files_node.rs),
 the ignore rules' own tests and the scene surface's `files_node.esn`.
@@ -932,7 +932,7 @@ Host joins them.
 ([store](../crates/interface/session/src/store.rs)), on a page through
 `entelechy.fetch_start` ([ffi](../crates/interface/ffi/src/lib.rs),
 [bridge](../bridges/web/entelechy.js)); `sync_field_nodes`,
-`give_field_paths` ([inputs](../crates/interface/session/src/inputs.rs))
+`give_field_paths` ([inputs](../crates/interface/session/src/inputs/field_nodes.rs))
 and `feed_field_nodes` ([session](../crates/interface/session/src/session.rs));
 `Runtime::join` ([kernel](../crates/core/kernel/src/lib.rs)) and
 `Backend::join` ([rules](../crates/core/rules/src/backend.rs),
