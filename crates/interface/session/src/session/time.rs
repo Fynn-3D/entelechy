@@ -399,7 +399,13 @@ impl Session {
         };
         let scene_origin =
             claimant.unwrap_or_else(|| crate::Origin::Document(self.scene.root().to_path_buf()));
-        let document = |path: &Path| crate::Origin::Document(path.to_path_buf());
+        // A document as the scene's own output wrote it is the scene's.
+        let store = std::sync::Arc::clone(self.scene.store());
+        let writes = &self.writes;
+        let document = |path: &Path| match writes.author(store.as_ref(), path) {
+            Some(output) => crate::Origin::Output(output.to_owned()),
+            None => crate::Origin::Document(path.to_path_buf()),
+        };
         let mut scene_loaded = false;
         for event in events {
             match event {

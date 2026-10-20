@@ -1635,19 +1635,25 @@ impl Session {
         if let Some(frame) = self.runtime.end_frame() {
             self.node_clock.ended(frame, report.clocked.clone());
         }
-        // Committed: changed outputs may now be written, once confirmed.
-        if self.writes.due(&self.scene.files().writes, &report) {
+        self.written_after(&report)?;
+        Ok(report)
+    }
+
+    /// Writes what the committed frame behind `report` changed of the
+    /// outputs written to files and to the clipboard, once confirmed.
+    fn written_after(&mut self, report: &Report) -> Result<(), EvaluateError> {
+        if self.writes.due(&self.scene.files().writes, report) {
             self.confirm()?;
         }
         self.writes.after(
             self.scene.store().as_ref(),
             &self.scene.files().writes,
-            &report,
+            report,
             &mut self.runtime,
         );
         self.board
-            .after(&self.scene.files().writes, &report, &mut self.runtime);
-        Ok(report)
+            .after(&self.scene.files().writes, report, &mut self.runtime);
+        Ok(())
     }
 
     /// A Kernel not published, told why its document refused it.
@@ -1686,9 +1692,11 @@ impl Session {
         );
         self.repin();
         // The font nodes' characters and the files nodes' paths are read
-        // after every frame, whatever it asks for.
+        // after every frame, whatever it asks for, and what the scene
+        // writes is written.
         let mut demand = demand.clone();
         demand.extend(self.fed_sources());
+        demand.extend(self.written_sources());
         let demand = &demand;
         self.last_context = *context;
         let graph = self.scene.graph().ok_or_else(no_scene)?;
@@ -1707,6 +1715,7 @@ impl Session {
         self.feed_fonts();
         self.feed_file_nodes();
         self.feed_field_nodes();
+        self.written_after(&report)?;
         Ok(report)
     }
 
@@ -1863,9 +1872,9 @@ impl Session {
                 self.evaluator.pin(node);
             }
         }
-        // What a font node reads its characters from, and a files node its
-        // paths, stays materialized.
-        for node in self.fed_sources() {
+        // What a font node reads its characters from, a files node its
+        // paths, and what the scene writes stays materialized.
+        for node in self.fed_sources().into_iter().chain(self.written_sources()) {
             self.evaluator.pin(node);
         }
     }
@@ -1883,6 +1892,31 @@ impl Session {
             .filter_map(|source| match source {
                 entelechy_graph::Source::Node { node, port } => Some(self.producer(node, port).0),
                 entelechy_graph::Source::External(_) => None,
+            })
+            .collect()
+    }
+
+    /// The nodes that produce the outputs the scene writes, to files or to
+    /// the clipboard: what the Host reads after every frame.
+    fn written_sources(&self) -> Vec<entelechy_graph::NodeId> {
+        let Some(graph) = self.scene.graph() else {
+            return Vec::new();
+        };
+        self.scene
+            .files()
+            .writes
+            .iter()
+            .filter_map(|write| {
+                match graph
+                    .outputs
+                    .iter()
+                    .find(|(name, _)| name == &write.output)?
+                {
+                    (_, entelechy_graph::Source::Node { node, port }) => {
+                        Some(self.producer(node, port).0)
+                    }
+                    (_, entelechy_graph::Source::External(_)) => None,
+                }
             })
             .collect()
     }

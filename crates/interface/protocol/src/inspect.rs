@@ -140,6 +140,7 @@ pub(crate) fn history(session: &Session, request: &Request) -> Result<Json, Json
         }
         entelechy_session::Origin::Protocol(channel) => json!({ "protocol": channel }),
         entelechy_session::Origin::Local => json!("local"),
+        entelechy_session::Origin::Output(output) => json!({ "output": output }),
     };
     let generation = |g: &Option<entelechy_kernel::Generation>| g.map(|g| g.0);
     let versions = |documents: &[(std::path::PathBuf, u64)]| {

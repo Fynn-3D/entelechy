@@ -764,6 +764,205 @@ impl Memory {
     }
 }
 
+/// Where `path` lands in `base`: its nearest directory that exists by its
+/// one name, and the rest of the path after it, so every spelling of a
+/// file not yet written names it alike.
+fn landed(base: &dyn Store, path: &Path) -> PathBuf {
+    let mut existing = base.whole(path);
+    let mut rest = Vec::new();
+    while base.kind(&existing).is_none() {
+        let (Some(up), Some(name)) = (existing.parent(), existing.file_name()) else {
+            break;
+        };
+        rest.push(name.to_owned());
+        existing = up.to_path_buf();
+    }
+    let mut at = base.canonical(&existing).unwrap_or(existing);
+    for name in rest.iter().rev() {
+        at.push(name);
+    }
+    at
+}
+
+/// What a [`Kept`] store holds, by where each path lands: a file written,
+/// with the number of the write, or `None` for one removed.
+type KeptFiles = BTreeMap<PathBuf, Option<(Vec<u8>, u64)>>;
+
+/// A store whose writes are kept beside `base` and never reach it: each
+/// file written, removed or renamed through it is held here, everything
+/// else read as `base` has it. What a replay that allows writes runs
+/// over, so a run changes nothing on disk and every run starts from the
+/// same files.
+pub struct Kept {
+    base: Arc<dyn Store>,
+    /// By where each path lands ([`landed`]).
+    held: Mutex<KeptFiles>,
+    writes: std::sync::atomic::AtomicU64,
+}
+
+impl Kept {
+    /// `base`, its writes to be kept.
+    pub fn new(base: Arc<dyn Store>) -> Self {
+        Self {
+            base,
+            held: Mutex::default(),
+            // Above every number a store hands out itself, so a file
+            // written here never takes a stamp it had in `base`.
+            writes: std::sync::atomic::AtomicU64::new(1 << 63),
+        }
+    }
+
+    fn held(&self) -> std::sync::MutexGuard<'_, KeptFiles> {
+        self.held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn landed(&self, path: &Path) -> PathBuf {
+        landed(self.base.as_ref(), path)
+    }
+
+    /// What is held for `path`: `Some(Some(..))` a file written here,
+    /// `Some(None)` one removed here, `None` none, read from `base`.
+    fn found(&self, path: &Path) -> Option<Option<(Vec<u8>, u64)>> {
+        self.held().get(&self.landed(path)).cloned()
+    }
+
+    fn put(&self, path: &Path, bytes: Option<Vec<u8>>) {
+        let write = self
+            .writes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let at = self.landed(path);
+        self.held().insert(at, bytes.map(|bytes| (bytes, write)));
+    }
+}
+
+impl Store for Kept {
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        match self.found(path) {
+            Some(Some((bytes, _))) => Ok(bytes),
+            Some(None) => Err(io::ErrorKind::NotFound.into()),
+            None => self.base.read(path),
+        }
+    }
+
+    fn read_words(&self, path: &Path, from: usize) -> io::Result<(Vec<u32>, usize)> {
+        match self.found(path) {
+            Some(Some((bytes, _))) => {
+                let body = bytes.get(from..).unwrap_or_default();
+                let mut words = Vec::with_capacity(body.len().div_ceil(4));
+                extend_words(&mut words, body);
+                Ok((words, body.len()))
+            }
+            Some(None) => Err(io::ErrorKind::NotFound.into()),
+            None => self.base.read_words(path, from),
+        }
+    }
+
+    fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+        self.put(path, Some(bytes.to_vec()));
+        Ok(())
+    }
+
+    fn remove(&self, path: &Path) -> io::Result<()> {
+        if self.kind(path) != Some(Kind::File) {
+            return Err(io::ErrorKind::NotFound.into());
+        }
+        self.put(path, None);
+        Ok(())
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        let bytes = self.read(from)?;
+        self.put(to, Some(bytes));
+        self.put(from, None);
+        Ok(())
+    }
+
+    fn remove_empty(&self, _: &Path) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn kind(&self, path: &Path) -> Option<Kind> {
+        match self.found(path) {
+            Some(Some(_)) => return Some(Kind::File),
+            Some(None) => return None,
+            None => {}
+        }
+        self.base.kind(path).or_else(|| {
+            let at = self.landed(path);
+            self.held()
+                .iter()
+                .any(|(file, held)| held.is_some() && file.starts_with(&at))
+                .then_some(Kind::Dir)
+        })
+    }
+
+    fn list(&self, dir: &Path) -> io::Result<Vec<PathBuf>> {
+        let at = self.landed(dir);
+        let mut found = self.base.list(dir).unwrap_or_default();
+        found.retain(|entry| !matches!(self.found(entry), Some(None)));
+        for (file, held) in self.held().iter() {
+            if held.is_none() {
+                continue;
+            }
+            if let Ok(rest) = file.strip_prefix(&at)
+                && let Some(first) = rest.components().next()
+            {
+                let entry = dir.join(first);
+                if !found.contains(&entry) {
+                    found.push(entry);
+                }
+            }
+        }
+        if found.is_empty() && self.kind(dir).is_none() {
+            return Err(io::ErrorKind::NotFound.into());
+        }
+        Ok(found)
+    }
+
+    fn stamp(&self, path: &Path) -> Option<Stamp> {
+        match self.found(path) {
+            Some(Some((_, write))) => Some(Stamp(Seen::Memory(write))),
+            Some(None) => None,
+            None => self.base.stamp(path),
+        }
+    }
+
+    fn canonical(&self, path: &Path) -> io::Result<PathBuf> {
+        match self.found(path) {
+            Some(Some(_)) => Ok(self.landed(path)),
+            Some(None) => Err(io::ErrorKind::NotFound.into()),
+            None => self.base.canonical(path),
+        }
+    }
+
+    fn whole(&self, path: &Path) -> PathBuf {
+        self.base.whole(path)
+    }
+
+    fn packages(&self) -> &[PathBuf] {
+        self.base.packages()
+    }
+
+    fn parsed(&self) -> Option<&Parsed> {
+        self.base.parsed()
+    }
+
+    fn stamps_directories(&self) -> bool {
+        // A file written here changes no directory's stamp in `base`.
+        false
+    }
+
+    fn sync_begins(&self) {
+        self.base.sync_begins();
+    }
+
+    fn sync_ends(&self) {
+        self.base.sync_ends();
+    }
+}
+
 /// A store seen through texts not yet written: each of `texts` read as
 /// if it stood at its path (new files and the directories they would
 /// make included), everything else as `base` has it. What a compose of
@@ -790,24 +989,8 @@ impl<'a> Overlay<'a> {
         overlay
     }
 
-    /// Where `path` lands in `base`: its nearest directory that exists by
-    /// its one name, and the rest of the path after it, so every spelling
-    /// of a file not yet written names it alike.
     fn landed(&self, path: &Path) -> PathBuf {
-        let mut existing = self.base.whole(path);
-        let mut rest = Vec::new();
-        while self.base.kind(&existing).is_none() {
-            let (Some(up), Some(name)) = (existing.parent(), existing.file_name()) else {
-                break;
-            };
-            rest.push(name.to_owned());
-            existing = up.to_path_buf();
-        }
-        let mut at = self.base.canonical(&existing).unwrap_or(existing);
-        for name in rest.iter().rev() {
-            at.push(name);
-        }
-        at
+        landed(self.base, path)
     }
 
     fn held(&self, path: &Path) -> Option<&(Vec<u8>, u64)> {

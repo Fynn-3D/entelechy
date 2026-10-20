@@ -160,16 +160,21 @@ impl SessionOptions {
 
     /// Opens the described session over `runtime`, unsynced.
     pub fn open_over(&self, runtime: Runtime) -> Result<Session, String> {
+        self.open_over_in(runtime, self.store())
+    }
+
+    /// [`SessionOptions::open_over`], its documents in `store`: the
+    /// options' own, or one over it ([`crate::replay::store_for`]).
+    pub fn open_over_in(
+        &self,
+        runtime: Runtime,
+        store: std::sync::Arc<dyn crate::Store>,
+    ) -> Result<Session, String> {
         let mut runtime = runtime;
         if let Some(grants) = &self.grants {
             runtime.set_grants(*grants);
         }
-        let mut session = Session::open_in(
-            self.store(),
-            self.scene()?,
-            self.library.as_deref(),
-            runtime,
-        );
+        let mut session = Session::open_in(store, self.scene()?, self.library.as_deref(), runtime);
         session.place(self.overrides.clone())?;
         for (name, value) in &self.params {
             session.set_param(name, value.clone())?;

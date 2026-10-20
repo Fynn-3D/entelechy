@@ -28,6 +28,9 @@ pub(crate) struct Writes {
     deletes: Vec<PathBuf>,
     /// Per file: the Field last written, and a digest of its bytes.
     written: BTreeMap<PathBuf, (Handle, u64)>,
+    /// Each file an output wrote, where it landed: the output, and the
+    /// file's stamp once written.
+    authored: BTreeMap<PathBuf, (String, Option<crate::store::Stamp>)>,
     /// Refusals reported, each once until it changes.
     said: BTreeSet<(PathBuf, String)>,
     events: Vec<Event>,
@@ -154,6 +157,7 @@ impl Writes {
             {
                 Ok(()) => {
                     self.written.insert(write.path.clone(), (handle, digest));
+                    self.authored(store, &target, &write.output);
                     self.said.retain(|(path, _)| path != &write.path);
                     self.events.push(Event::Wrote {
                         output: write.output.clone(),
@@ -222,13 +226,19 @@ impl Writes {
         let output = write.output.clone();
         match op {
             Op::Write { path, bytes } => {
-                let target = self.place_in(store, &write.path.join(path), false)?;
-                if store.read(&target).is_ok_and(|found| found == *bytes) {
+                // A file holding the bytes already is left as it is, allowed
+                // or not: nothing is written.
+                let named = write.path.join(path);
+                if resolve(store, &named)
+                    .is_ok_and(|at| store.read(&at).is_ok_and(|found| found == *bytes))
+                {
                     return Ok(());
                 }
+                let target = self.place_in(store, &named, false)?;
                 store
                     .write(&target, bytes)
                     .map_err(|e| format!("{}: {e}", target.display()))?;
+                self.authored(store, &target, &output);
                 self.events.push(Event::Wrote {
                     output,
                     path: write.path.join(path),
@@ -300,6 +310,25 @@ impl Writes {
     }
 
     /// What was written or refused since the last call.
+    /// Notes that output `output` wrote the file at `target`, as it now
+    /// stands.
+    fn authored(&mut self, store: &dyn Store, target: &Path, output: &str) {
+        self.authored.insert(
+            target.to_path_buf(),
+            (output.to_owned(), store.stamp(target)),
+        );
+    }
+
+    /// The output that wrote the file at `path`, while the file is as it
+    /// wrote it.
+    pub(crate) fn author(&self, store: &dyn Store, path: &Path) -> Option<&str> {
+        let at = store.canonical(path).ok()?;
+        self.authored
+            .get(&at)
+            .filter(|(_, stamp)| stamp.is_some() && store.stamp(&at) == *stamp)
+            .map(|(output, _)| output.as_str())
+    }
+
     pub(crate) fn take_events(&mut self) -> Vec<Event> {
         std::mem::take(&mut self.events)
     }

@@ -36,6 +36,9 @@ pub enum Origin {
     Protocol(String),
     /// The program running the session: a command line, a window's keys.
     Local,
+    /// The scene itself: its output of this name wrote the document after
+    /// a committed evaluation, and the document is as it wrote it.
+    Output(String),
 }
 
 /// What changed.

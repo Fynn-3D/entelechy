@@ -46,6 +46,12 @@ pub fn forms() -> Vec<Form> {
             &["library ../kernels/"],
         ),
         form(
+            "allow",
+            "allow file.write <dir> | allow file.delete <dir>",
+            "lets the scene's outputs write (or remove and rename) files under the directory, relative to the replay file, as `--allow` does; what they write is kept for the run and never reaches the disk, so every run starts from the same files",
+            &["allow file.write ../laws/"],
+        ),
+        form(
             "alike",
             "alike",
             "its checks hold two forms of one computation equal word for word, which they are only where every Kernel rounds alike, so `--round-apart` leaves the replay out",
@@ -337,6 +343,9 @@ pub struct Replay {
     pub kernels: Option<PathBuf>,
     /// Steps in order.
     pub steps: Vec<Step>,
+    /// The directories its scene's outputs may write files in, or remove
+    /// and rename them in, resolved ([`store_for`]).
+    pub allowed: Vec<crate::Allowance>,
     /// Whether its checks hold two forms of one computation equal word
     /// for word: `--round-apart` leaves it out.
     pub alike: bool,
@@ -404,6 +413,7 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
     let mut kernels = None;
     let mut steps = Vec::new();
     let mut alike = false;
+    let mut allowed = Vec::new();
     for (index, raw) in text.lines().enumerate() {
         let line = index as u32 + 1;
         let error = |message: String| ReplayError { line, message };
@@ -458,6 +468,12 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
             }
             ["settle"] => steps.push(Step::Settle),
             ["alike"] => alike = true,
+            ["allow", "file.write", dir] => {
+                allowed.push(crate::Allowance::FileWrite(base.join(dir)));
+            }
+            ["allow", "file.delete", dir] => {
+                allowed.push(crate::Allowance::FileDelete(base.join(dir)));
+            }
             ["pointer", state @ ("down" | "up")] => steps.push(Step::Pointer {
                 position: None,
                 down: *state == "down",
@@ -654,6 +670,7 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
         })?,
         kernels,
         steps,
+        allowed,
         alike,
     })
 }
@@ -728,10 +745,39 @@ pub fn run_each(
     fusion: bool,
     each: Option<&mut Each<'_>>,
 ) -> Result<Outcome, String> {
+    let store = store_for(replay, store);
     let mut session = Session::open_in(store, &replay.scene, replay.kernels.as_deref(), runtime);
     session.set_fusion(fusion);
     let events = session.sync();
+    allow_on(replay, &mut session)?;
     played_on(replay, &mut session, events, each)
+}
+
+/// The store a replay's session reads and writes: `store`, or, where the
+/// replay allows its outputs to write, `store` with every write kept
+/// beside it ([`crate::Kept`]): a run changes nothing on disk, and every
+/// run starts from the same files.
+pub fn store_for(
+    replay: &Replay,
+    store: std::sync::Arc<dyn crate::Store>,
+) -> std::sync::Arc<dyn crate::Store> {
+    if replay.allowed.is_empty() {
+        store
+    } else {
+        std::sync::Arc::new(crate::Kept::new(store))
+    }
+}
+
+/// Gives `session` what `replay` allows ([`Replay::allowed`]).
+pub fn allow_on(replay: &Replay, session: &mut Session) -> Result<(), String> {
+    for allowance in &replay.allowed {
+        match allowance {
+            crate::Allowance::FileWrite(dir) => session.allow_writes(dir)?,
+            crate::Allowance::FileDelete(dir) => session.allow_deletes(dir)?,
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Whether the session's documents loaded: the rejections said, if any.
@@ -766,6 +812,11 @@ fn played_on(
     let mut asked: std::collections::BTreeSet<entelechy_graph::NodeId> =
         std::collections::BTreeSet::new();
     while let Some(frame) = replayer.next_frame(session)? {
+        // A scene allowed to write reads before each frame what it wrote
+        // after the last: a law it wrote is in its place a frame later.
+        if !replay.allowed.is_empty() {
+            let _ = session.sync();
+        }
         let at = frame.context.time;
         asked.extend(frame.demand.iter().cloned());
         let mut demand = frame.demand;
@@ -876,19 +927,34 @@ impl Resident {
         replay: &Replay,
         split: Option<u32>,
     ) -> Result<Outcome, String> {
+        let runtime = |warm: &crate::Warm| match split {
+            Some(split) => warm.runtime_apart(split),
+            None => warm.runtime(),
+        };
+        // What a replay that writes wrote is its run's alone: it plays on
+        // a session of its own, from the files as they are.
+        if !replay.allowed.is_empty() {
+            let store = store_for(replay, std::sync::Arc::clone(&self.store));
+            let mut session = Session::open_in(
+                store,
+                &replay.scene,
+                replay.kernels.as_deref(),
+                runtime(&self.warm),
+            );
+            session.set_fusion(self.fusion);
+            let events = session.sync();
+            allow_on(replay, &mut session)?;
+            return played_on(replay, &mut session, events, None);
+        }
         let key = (replay.scene.clone(), replay.kernels.clone(), split);
         let events = match self.sessions.get_mut(&key) {
             Some(session) => session.start_over(),
             None => {
-                let runtime = match split {
-                    Some(split) => self.warm.runtime_apart(split),
-                    None => self.warm.runtime(),
-                };
                 let mut session = Session::open_in(
                     std::sync::Arc::clone(&self.store),
                     &replay.scene,
                     replay.kernels.as_deref(),
-                    runtime,
+                    runtime(&self.warm),
                 );
                 session.set_fusion(self.fusion);
                 let events = session.sync();

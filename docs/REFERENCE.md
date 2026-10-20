@@ -275,6 +275,7 @@ Kernels (`.ent`) compute; scenes (`.esn`) compose them into a running world. Who
 
 - **scene**: `scene <path>` the scene to test, relative to the replay file; required
 - **library**: `library <path>` Kernels beyond the scene's `use`
+- **allow**: `allow file.write <dir> | allow file.delete <dir>` lets the scene's outputs write (or remove and rename) files under the directory, relative to the replay file, as `--allow` does; what they write is kept for the run and never reaches the disk, so every run starts from the same files
 - **alike**: `alike` its checks hold two forms of one computation equal word for word, which they are only where every Kernel rounds alike, so `--round-apart` leaves the replay out
 - **frame**: `frame <seconds> [to <seconds> every <seconds>]` evaluates one frame at this session time; with `to` and `every`, a frame at each step from the first time to the last, both included
 - **settle**: `settle` waits for every `async` run to land

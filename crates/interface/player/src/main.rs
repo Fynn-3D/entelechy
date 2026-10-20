@@ -839,7 +839,22 @@ fn main() -> ExitCode {
             None => "unavailable",
         }
     );
-    let mut session = match options.session.open_over(runtime) {
+    // A replay that lets its scene write keeps what it writes for the
+    // play alone.
+    let store = match &options.replay {
+        Some(replay) => entelechy_session::replay::store_for(replay, options.session.store()),
+        None => options.session.store(),
+    };
+    let opened = options
+        .session
+        .open_over_in(runtime, store)
+        .and_then(|mut session| {
+            if let Some(replay) = &options.replay {
+                entelechy_session::replay::allow_on(replay, &mut session)?;
+            }
+            Ok(session)
+        });
+    let mut session = match opened {
         Ok(session) => session,
         Err(error) => {
             eprintln!("error: {error}");

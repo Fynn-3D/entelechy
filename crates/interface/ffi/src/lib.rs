@@ -476,6 +476,12 @@ fn opened(
                 (replay.scene.clone(), replay.kernels.clone(), Some(replay))
             }
         };
+        // A replay that lets its scene write keeps what it writes for the
+        // play alone.
+        let store = match &replay {
+            Some(replay) => entelechy_session::replay::store_for(replay, store),
+            None => store,
+        };
         // Every session here answers `entelechy_request`, so its reads are held
         // from the start to the directories of the scene as first loaded,
         // plus what `entelechy_allow` allows.
@@ -500,6 +506,7 @@ fn opened(
             play.say(format!("backend passed over: {passed}"));
         }
         if let Some(replay) = &replay {
+            entelechy_session::replay::allow_on(replay, &mut session)?;
             play.replay(replay, &mut session);
         }
         Ok((session, display, play))

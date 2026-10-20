@@ -386,7 +386,9 @@ again, a param set, state written or reset); `frame` counts evaluations
 committed since.
 
 `history` (`since` a revision) says what made each later revision and
-its origin: a document on disk, or the protocol and its channel
+its origin: a document on disk; the scene itself, `{"output": name}`,
+for a document its output `name` wrote and that is as it wrote it (a
+law the world wrote); or the protocol and its channel
 (`stdin`, `socket 3`, `websocket 4`, `entelechy_request`). The origin is how
 a change arrived, not who sent it: an edit found on disk while a request
 is answered is its document's; the scene a `compose` or `param` loads is
