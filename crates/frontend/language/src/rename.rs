@@ -69,6 +69,25 @@ impl FnDecl {
             ..self.clone()
         }
     }
+
+    /// [`FnDecl::retyped`] in its signature alone, the body shared as it
+    /// is: for a function held where nothing calls it, whose body is
+    /// never lowered.
+    pub(crate) fn signature_retyped(&self, rename: &dyn Fn(&str) -> Option<String>) -> FnDecl {
+        let retype = |ty: &Spanned<String>| Spanned {
+            value: renamed_type(&ty.value, rename),
+            span: ty.span,
+        };
+        FnDecl {
+            args: self
+                .args
+                .iter()
+                .map(|(name, ty)| (name.clone(), retype(ty)))
+                .collect(),
+            ret: retype(&self.ret),
+            ..self.clone()
+        }
+    }
 }
 
 /// A type as written, `Rows<Ray>` or `[Ray; 4]`, with each name in it

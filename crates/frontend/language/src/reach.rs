@@ -4,7 +4,7 @@
 //! cannot change what it compiles to, so a session that knows what a
 //! Kernel reaches compiles it again only when that changes.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::rename::{visit, visit_block};
 use crate::{Document, FnDecl, Kernel, NodeKind, NodeMember, StructDecl, TypeAlias};
@@ -153,6 +153,103 @@ impl Kernel {
     }
 }
 
+/// Each name a type as written may hold, scoped ones (`Ray@a.ent`) whole
+/// and in their words: more than [`words`] finds, never less.
+fn type_names(ty: &str, out: &mut Vec<String>) {
+    out.extend(
+        ty.split(|c: char| c.is_whitespace() || "<>[];,()".contains(c))
+            .filter(|word| !word.is_empty())
+            .map(str::to_owned),
+    );
+    words(ty, out);
+}
+
+/// The declarations of `outer` reached by name from `names`, in the order
+/// `outer` holds them: each declaration a name names, and what its
+/// signature, body, fields or target name in turn. A name more than one
+/// declaration holds is followed into each, so what is reached holds all
+/// a Kernel naming only `names` reaches ([`Kernel::reached`]), whichever
+/// of them its names come to stand for.
+pub(crate) fn reached_by_name<'a>(
+    names: Vec<String>,
+    outer: (&'a [StructDecl], &'a [TypeAlias], &'a [FnDecl]),
+) -> (Vec<&'a StructDecl>, Vec<&'a TypeAlias>, Vec<&'a FnDecl>) {
+    let (structs, types, functions) = outer;
+    fn index<'a, T>(
+        decls: &'a [T],
+        name: impl Fn(&'a T) -> &'a str,
+    ) -> HashMap<&'a str, Vec<usize>> {
+        let mut by: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (i, decl) in decls.iter().enumerate() {
+            by.entry(name(decl)).or_default().push(i);
+        }
+        by
+    }
+    let by_struct = index(structs, |d| d.name.value.as_str());
+    let by_type = index(types, |d| d.name.value.as_str());
+    let by_function = index(functions, |d| d.name.value.as_str());
+    let (mut found_structs, mut found_types, mut found_functions) =
+        (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
+    let mut followed: HashSet<String> = HashSet::new();
+    let mut pending = names;
+    while let Some(name) = pending.pop() {
+        if followed.contains(&name) {
+            continue;
+        }
+        for &i in by_function.get(name.as_str()).into_iter().flatten() {
+            if found_functions.insert(i) {
+                let function = &functions[i];
+                visit_block(&function.body, &mut |name, _| pending.push(name.to_owned()));
+                for (_, ty) in &function.args {
+                    type_names(&ty.value, &mut pending);
+                }
+                type_names(&function.ret.value, &mut pending);
+                pending.extend(function.generics.iter().map(|g| g.value.clone()));
+            }
+        }
+        for &i in by_struct.get(name.as_str()).into_iter().flatten() {
+            if found_structs.insert(i) {
+                for (_, ty) in &structs[i].fields {
+                    type_names(&ty.value, &mut pending);
+                }
+            }
+        }
+        for &i in by_type.get(name.as_str()).into_iter().flatten() {
+            if found_types.insert(i) {
+                type_names(&types[i].target.value, &mut pending);
+            }
+        }
+        followed.insert(name);
+    }
+    (
+        found_structs.into_iter().map(|i| &structs[i]).collect(),
+        found_types.into_iter().map(|i| &types[i]).collect(),
+        found_functions.into_iter().map(|i| &functions[i]).collect(),
+    )
+}
+
+impl Kernel {
+    /// Every name this Kernel's own code mentions, called or named: its
+    /// parts ([`Kernel::roots`]) and every declaration it holds, whether
+    /// its parts reach it or not.
+    pub(crate) fn names(&self, out: &mut Vec<String>) {
+        let mut named = Vec::new();
+        self.roots(out, &mut named);
+        out.append(&mut named);
+        for function in &self.functions {
+            function_names(function, out);
+        }
+        for decl in &self.structs {
+            for (_, ty) in &decl.fields {
+                words(&ty.value, out);
+            }
+        }
+        for decl in &self.types {
+            words(&decl.target.value, out);
+        }
+    }
+}
+
 fn function_names(function: &FnDecl, out: &mut Vec<String>) {
     visit_block(&function.body, &mut |name, _| out.push(name.to_owned()));
     for (_, ty) in &function.args {
@@ -180,22 +277,7 @@ impl Document {
         for decl in &self.types {
             words(&decl.target.value, &mut out);
         }
-        let kernel_names = |kernel: &Kernel, out: &mut Vec<String>| {
-            let mut named = Vec::new();
-            kernel.roots(out, &mut named);
-            out.append(&mut named);
-            for function in &kernel.functions {
-                function_names(function, out);
-            }
-            for decl in &kernel.structs {
-                for (_, ty) in &decl.fields {
-                    words(&ty.value, out);
-                }
-            }
-            for decl in &kernel.types {
-                words(&decl.target.value, out);
-            }
-        };
+        let kernel_names = |kernel: &Kernel, out: &mut Vec<String>| kernel.names(out);
         for kernel in &self.kernels {
             kernel_names(kernel, &mut out);
         }

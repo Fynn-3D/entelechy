@@ -738,8 +738,21 @@ fn for_each_kernel(document: &mut Document, change: &dyn Fn(&mut Kernel)) {
 
 /// `outer`'s declarations put in front of `kernel`'s own; one of a name
 /// the Kernel declares itself is renamed `name@suffix` out of its way,
-/// and the declarations that name it follow it.
+/// and the declarations that name it follow it. Every declaration is
+/// put, so a fault in one is found wherever it is written; a function
+/// the Kernel does not reach by name ([`crate::reach::reached_by_name`])
+/// is put with its name and signature renamed and its body as it was: nothing
+/// the Kernel holds calls it, so its body is never lowered, and renaming
+/// a body is what putting costs.
 fn put_before(kernel: &mut Kernel, outer: (&[StructDecl], &[TypeAlias], &[FnDecl]), suffix: &str) {
+    let mut names = Vec::new();
+    kernel.names(&mut names);
+    let reached: std::collections::HashSet<*const FnDecl> =
+        crate::reach::reached_by_name(names, outer)
+            .2
+            .into_iter()
+            .map(std::ptr::from_ref)
+            .collect();
     let (structs, types, functions) = outer;
     let own_fns: Vec<String> = kernel
         .functions
@@ -808,6 +821,13 @@ fn put_before(kernel: &mut Kernel, outer: (&[StructDecl], &[TypeAlias], &[FnDecl
     let mut shared: Vec<FnDecl> = functions
         .iter()
         .map(|f| {
+            if !reached.contains(&std::ptr::from_ref(f)) {
+                let mut unreached = f.signature_retyped(&ty);
+                if let Some(name) = call(&f.name.value) {
+                    unreached.name.value = name;
+                }
+                return unreached;
+            }
             f.renamed(
                 call(&f.name.value).unwrap_or_else(|| f.name.value.clone()),
                 &call,
