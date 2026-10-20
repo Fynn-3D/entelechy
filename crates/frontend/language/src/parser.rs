@@ -918,6 +918,29 @@ impl Parser {
             )
         {
             let ty = self.port_type()?;
+            // `Rows<E> fields "dir/"`: Field files of that element.
+            if self.is_keyword("fields") {
+                self.next();
+                let (token, span) = self.next();
+                let Token::Str(path) = token else {
+                    return Err(ParseError {
+                        span,
+                        message: format!(
+                            "`fields` needs a quoted path to a directory, found {}",
+                            token.describe()
+                        ),
+                    });
+                };
+                let members = self.node_members()?;
+                return Ok(NodeDecl {
+                    name,
+                    kind: NodeKind::Fields {
+                        ty,
+                        dir: Spanned { value: path, span },
+                    },
+                    members,
+                });
+            }
             let members = self.node_members()?;
             return Ok(NodeDecl {
                 name,

@@ -182,6 +182,12 @@ impl Store for Held {
         self.check(path)?;
         self.inner.read_words(path, from)
     }
+    fn read_later(&self, path: &Path) -> Box<dyn crate::store::Later> {
+        match self.check(path) {
+            Ok(()) => self.inner.read_later(path),
+            Err(why) => crate::store::read_now(Err(why)),
+        }
+    }
     fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
         self.inner.write(path, bytes)
     }

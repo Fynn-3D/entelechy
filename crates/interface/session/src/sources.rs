@@ -104,6 +104,10 @@ impl Store for Watching<'_> {
         self.note(path);
         self.store.read_words(path, from)
     }
+    fn read_later(&self, path: &Path) -> Box<dyn crate::store::Later> {
+        self.note(path);
+        self.store.read_later(path)
+    }
     fn write(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         self.store.write(path, bytes)
     }

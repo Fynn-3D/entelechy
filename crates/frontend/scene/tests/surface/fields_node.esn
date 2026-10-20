@@ -1,0 +1,13 @@
+// The Field files of one element a node names, read off the frames:
+// `result`, their elements in the order named, and `ranges`, where each
+// path's are.
+type Spot = Vec4;
+node wanted: image.show@1 { }
+node near: Rows<Spot> fields "chunks/" { paths <- wanted.result; }
+
+node draw: image.show@1 {
+    spots <- near.result;
+    spans <- near.ranges;
+}
+
+output result <- draw.result;

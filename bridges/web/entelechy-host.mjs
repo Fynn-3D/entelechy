@@ -13,6 +13,10 @@ export const wait = hosted.wait;
 export const wake = hosted.wake;
 export const now = hosted.now;
 export const fetch = hosted.fetch;
+export const fetch_start = hosted.fetch_start;
+export const fetch_state = hosted.fetch_state;
+export const fetch_copy = hosted.fetch_copy;
+export const fetch_end = hosted.fetch_end;
 
 /// Names the instance the functions work on.
 export function bind(made) {

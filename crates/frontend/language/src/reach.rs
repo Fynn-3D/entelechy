@@ -212,7 +212,7 @@ impl Document {
         for node in &self.nodes {
             match &node.kind {
                 NodeKind::Inline(kernel) => kernel_names(kernel, &mut out),
-                NodeKind::Fill(ty) => words(&ty.value, &mut out),
+                NodeKind::Fill(ty) | NodeKind::Fields { ty, .. } => words(&ty.value, &mut out),
                 NodeKind::Reference(_)
                 | NodeKind::SubGraph(_)
                 | NodeKind::Font(_)

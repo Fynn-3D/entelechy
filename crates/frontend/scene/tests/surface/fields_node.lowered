@@ -1,0 +1,15 @@
+language 1
+// fields_node
+input near.result: Image;
+input near.ranges: Image;
+
+node wanted: image.show@1 {
+}
+
+node draw: image.show@1 {
+    spans <- near.ranges;
+    spots <- near.result;
+}
+
+output result <- draw.result;
+// fields node near Rows<Spot> chunks paths from wanted.result, read as near.result, near.ranges

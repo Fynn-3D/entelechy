@@ -865,6 +865,25 @@ be keywords.
    staying. A files node takes no domain or params. It lists a folder as
    an editor does, reading only what is opened, where `files` reads every
    byte.
+   Field files of one element are placed as a node too: `node near:
+   Rows<Spot> fields "chunks/" { paths <- want.result; }`, `paths` as a
+   files node's. `near.result` is the elements of the files `paths` named
+   when last evaluated that are in, one file after another in the order
+   named (each a `.field` file of any extent, its elements in order),
+   and `near.ranges` a `Rows<IVec2>`, a row a path: where its elements
+   start in `near.result` and how many there are, `-1` and `0` for a path
+   whose file is not in: on its way, absent, or refused (another element,
+   past the memory budget), which is reported. Before any are in,
+   `near.result` is one zero element, and with no path `near.ranges` one
+   row of `-1` and `0`. A file is asked for when first named and let go
+   when no longer named; one that changes is read again. Where the
+   session prepares in the background (the Player, a served session, a
+   page) a file is read off the frames, taken in by the first sync after
+   it is in, the frames going on with what was in meanwhile; a replay or
+   a run takes each in a frame later, as a files node does. Its type is a
+   `Rows` of the element; a fields node takes no domain or params. It is
+   how a world larger than memory keeps in it only what its frames are
+   near ([why](DECISIONS.md#a-world-larger-than-memory-is-read-by-what-it-asks-for)).
 10. `times = N;` on a Kernel node or placed graph stands for `name/1` to
     `name/N`, each wired as written; `carry port <- output;` feeds the
     port from the previous time's output from the second time on.

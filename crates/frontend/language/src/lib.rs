@@ -403,6 +403,17 @@ pub enum NodeKind {
     /// files "dir/" { paths <- p.result; }`, its outputs `listing` (every
     /// file's path and size) and `opened` (the files `paths` names).
     Files(Spanned<String>),
+    /// A directory's Field files of one element as the Host reads them
+    /// off the frames: `node near: Rows<Vertex> fields "chunks/" { paths
+    /// <- p.result; }`, its outputs `result` (the files `paths` names that
+    /// are in, their elements in the order named) and `ranges` (where
+    /// each path's are).
+    Fields {
+        /// The type its `result` is, as written.
+        ty: Spanned<String>,
+        /// The directory.
+        dir: Spanned<String>,
+    },
 }
 
 /// One line inside a reference node's block.
@@ -1095,6 +1106,7 @@ pub fn definitions(document: &Document) -> Vec<Definition> {
             NodeKind::SubGraph(path) => format!("graph \"{}\"", path.value),
             NodeKind::Font(path) => format!("font \"{}\"", path.value),
             NodeKind::Files(path) => format!("files \"{}\"", path.value),
+            NodeKind::Fields { ty, dir } => format!("{} fields \"{}\"", ty.value, dir.value),
             NodeKind::Fill(ty) => ty.value.clone(),
         };
         found.push(Definition {

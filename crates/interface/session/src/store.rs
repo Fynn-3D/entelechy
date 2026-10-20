@@ -52,6 +52,65 @@ fn extend_words(words: &mut Vec<u32>, bytes: &[u8]) {
     }));
 }
 
+/// A file being read off the caller's thread ([`Store::read_later`]).
+pub trait Later: Send {
+    /// The file once it is in, or why it is not; `None` while it is
+    /// still on its way. Answers once.
+    fn poll(&mut self) -> Option<io::Result<Box<dyn Arrived>>>;
+}
+
+/// A file read whole, held where it was read into, its bytes taken as
+/// they are needed.
+pub trait Arrived: Send {
+    /// Its length in bytes.
+    fn len(&self) -> usize;
+    /// Whether it holds no bytes.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    /// Its first `bytes` bytes, or all of it when it is shorter.
+    fn start(&self, bytes: usize) -> Vec<u8>;
+    /// Its bytes from `from` on as little-endian words, the last padded
+    /// with zeros, and how many bytes they are.
+    fn words(&self, from: usize) -> (Vec<u32>, usize);
+}
+
+/// A file's bytes in hand, as an [`Arrived`].
+struct Bytes(Vec<u8>);
+
+impl Arrived for Bytes {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn start(&self, bytes: usize) -> Vec<u8> {
+        self.0[..bytes.min(self.0.len())].to_vec()
+    }
+
+    fn words(&self, from: usize) -> (Vec<u32>, usize) {
+        let body = self.0.get(from..).unwrap_or_default();
+        let mut words = Vec::with_capacity(body.len().div_ceil(4));
+        extend_words(&mut words, body);
+        (words, body.len())
+    }
+}
+
+/// A file read already: a [`Later`] that answers at once.
+struct Now(Option<io::Result<Box<dyn Arrived>>>);
+
+impl Later for Now {
+    fn poll(&mut self) -> Option<io::Result<Box<dyn Arrived>>> {
+        self.0.take()
+    }
+}
+
+/// A [`Later`] of a read finished now.
+pub(crate) fn read_now(read: io::Result<Vec<u8>>) -> Box<dyn Later> {
+    Box::new(Now(Some(
+        read.map(|bytes| Box::new(Bytes(bytes)) as Box<dyn Arrived>),
+    )))
+}
+
 /// Files by path, read and written whole.
 pub trait Store: Send + Sync {
     /// The file's bytes.
@@ -73,6 +132,11 @@ pub trait Store: Send + Sync {
         let mut words = Vec::with_capacity(body.len().div_ceil(4));
         extend_words(&mut words, body);
         Ok((words, body.len()))
+    }
+    /// Reads the file off the caller's thread where the store can, else
+    /// now: what the caller asks after says when it is in.
+    fn read_later(&self, path: &Path) -> Box<dyn Later> {
+        read_now(self.read(path))
     }
     /// Replaces the file atomically, making the directories it needs.
     fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()>;
@@ -348,6 +412,29 @@ impl Store for Disk {
         Ok(start)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_later(&self, path: &Path) -> Box<dyn Later> {
+        /// A read on a thread of its own.
+        struct Reading(std::sync::mpsc::Receiver<io::Result<Vec<u8>>>);
+        impl Later for Reading {
+            fn poll(&mut self) -> Option<io::Result<Box<dyn Arrived>>> {
+                match self.0.try_recv() {
+                    Ok(read) => read_now(read).poll(),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        Some(Err(io::Error::other("the read stopped")))
+                    }
+                }
+            }
+        }
+        let (sent, read) = std::sync::mpsc::channel();
+        let path = path.to_path_buf();
+        std::thread::spawn(move || {
+            let _ = sent.send(std::fs::read(path));
+        });
+        Box::new(Reading(read))
+    }
+
     fn read_words(&self, path: &Path, from: usize) -> io::Result<(Vec<u32>, usize)> {
         use std::io::{Read, Seek};
         let mut file = std::fs::File::open(path)?;
@@ -523,6 +610,8 @@ pub struct Memory {
     parsed: Parsed,
     /// Where the files kept elsewhere are read from.
     fetch: Option<Fetch>,
+    /// Where they are read from off the caller's thread, if anywhere.
+    fetch_later: Option<FetchLater>,
 }
 
 /// Reads a file kept elsewhere into `out` from byte `from` on, answering
@@ -532,8 +621,21 @@ pub struct Memory {
 /// change.
 pub type FetchFn = dyn Fn(&Path, usize, &mut [u8]) -> io::Result<usize> + Send + Sync;
 
+/// Starts reading a file kept elsewhere off the caller's thread
+/// ([`Store::read_later`]).
+pub type FetchLaterFn = dyn Fn(&Path) -> Box<dyn Later> + Send + Sync;
+
 /// A [`FetchFn`], shown by name alone.
 struct Fetch(Arc<FetchFn>);
+
+/// A [`FetchLaterFn`], shown by name alone.
+struct FetchLater(Arc<FetchLaterFn>);
+
+impl std::fmt::Debug for FetchLater {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FetchLater")
+    }
+}
 
 impl std::fmt::Debug for Fetch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -609,6 +711,13 @@ impl Memory {
             fetch: Some(Fetch(fetch)),
             ..Self::default()
         }
+    }
+
+    /// This store reading its files kept elsewhere off the caller's thread
+    /// through `later` ([`Store::read_later`]).
+    pub fn fetching_later(mut self, later: Arc<FetchLaterFn>) -> Self {
+        self.fetch_later = Some(FetchLater(later));
+        self
     }
 
     /// Puts a file at `path`; the next sync reads it as a changed file.
@@ -809,6 +918,18 @@ impl Store for Memory {
 
     fn read_start(&self, path: &Path, bytes: usize) -> io::Result<Vec<u8>> {
         self.read_up_to(path, bytes)
+    }
+
+    fn read_later(&self, path: &Path) -> Box<dyn Later> {
+        let key = key(path);
+        let elsewhere = matches!(
+            self.held().files.get(&key),
+            Some((Content::Elsewhere(_), _))
+        );
+        match &self.fetch_later {
+            Some(FetchLater(later)) if elsewhere => later(Path::new(&key)),
+            _ => read_now(self.read(path)),
+        }
     }
 
     fn read_words(&self, path: &Path, from: usize) -> io::Result<(Vec<u32>, usize)> {

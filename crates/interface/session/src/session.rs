@@ -342,6 +342,11 @@ impl Session {
         &self.scene.files().file_nodes
     }
 
+    /// The scene's fields nodes, at every level.
+    pub fn field_nodes(&self) -> &[entelechy_scene::FieldsNode] {
+        &self.scene.files().field_nodes
+    }
+
     /// The scene document.
     pub fn root(&self) -> &Path {
         self.scene.root()
@@ -544,6 +549,7 @@ impl Session {
                             .filter_map(|font| font.path.parent().map(Path::to_path_buf)),
                     )
                     .chain(files.file_nodes.iter().map(|node| node.dir.clone()))
+                    .chain(files.field_nodes.iter().map(|node| node.dir.clone()))
                     .collect()
             } else {
                 Vec::new()
@@ -1609,6 +1615,7 @@ impl Session {
         self.history.ran();
         self.feed_fonts();
         self.feed_file_nodes();
+        self.feed_field_nodes();
         self.let_go_of_input_copies();
         // The frame's runs are all given: a clocked frame ends here, its
         // nodes' runs kept until the device tells it.
@@ -1686,6 +1693,7 @@ impl Session {
         self.history.ran();
         self.feed_fonts();
         self.feed_file_nodes();
+        self.feed_field_nodes();
         Ok(report)
     }
 
@@ -1849,8 +1857,8 @@ impl Session {
         }
     }
 
-    /// The nodes that produce the font nodes' characters and the files
-    /// nodes' paths: read after every frame, whatever it asks for.
+    /// The nodes that produce the font nodes' characters and the files and
+    /// fields nodes' paths: read after every frame, whatever it asks for.
     fn fed_sources(&self) -> Vec<entelechy_graph::NodeId> {
         let files = self.scene.files();
         files
@@ -1858,11 +1866,61 @@ impl Session {
             .iter()
             .map(|font| &font.codes)
             .chain(files.file_nodes.iter().map(|node| &node.paths))
+            .chain(files.field_nodes.iter().map(|node| &node.paths))
             .filter_map(|source| match source {
                 entelechy_graph::Source::Node { node, port } => Some(self.producer(node, port).0),
                 entelechy_graph::Source::External(_) => None,
             })
             .collect()
+    }
+
+    /// Gives each fields node the paths its `paths` held when last
+    /// evaluated, reading the Field only when it is another than it last
+    /// read; the files they name are asked for, each taken in by the sync
+    /// after it is in.
+    fn feed_field_nodes(&mut self) {
+        let nodes = self.scene.files().field_nodes.clone();
+        if nodes.is_empty() {
+            return;
+        }
+        let store = Arc::clone(self.scene.store());
+        let reads = Arc::clone(&self.reads);
+        let readable = |path: &Path| crate::reads::lock(&reads).check(store.as_ref(), path);
+        for node in &nodes {
+            let handle = match &node.paths {
+                entelechy_graph::Source::Node { node, port } => self.cached(node, port),
+                entelechy_graph::Source::External(name) => self.inputs.handles().get(name).copied(),
+            };
+            let Some(handle) = handle else {
+                continue;
+            };
+            if self.inputs.field_node_saw(node, handle) {
+                continue;
+            }
+            let paths = self
+                .runtime
+                .materialize(handle)
+                .map_err(|e| e.to_string())
+                .and_then(|()| self.runtime.host().data(handle).map_err(|e| e.to_string()))
+                .and_then(|data| {
+                    if data.schema().scalars() == [entelechy_kernel::Scalar::Int] {
+                        crate::inputs::paths_spelled(data.storage())
+                    } else {
+                        Err(
+                            "its `paths` are a `Rows<Int>` of each path's bytes, ended by a 0"
+                                .to_owned(),
+                        )
+                    }
+                });
+            self.inputs.give_field_paths(
+                store.as_ref(),
+                &readable,
+                node,
+                handle,
+                paths,
+                self.runtime.host_mut(),
+            );
+        }
     }
 
     /// Gives each files node the paths its `paths` held when last

@@ -362,6 +362,7 @@ pub(crate) fn graph_json(
     placements: &[(String, entelechy_kernel::Placement)],
     fonts: &[entelechy_scene::FontNode],
     file_nodes: &[entelechy_scene::FilesNode],
+    field_nodes: &[entelechy_scene::FieldsNode],
 ) -> Json {
     let source = |source: &Source| source.to_string();
     let placed = |node: &str| placements.iter().find(|(id, _)| id == node).map(|(_, p)| p);
@@ -406,6 +407,14 @@ pub(crate) fn graph_json(
         "files": file_nodes.iter().map(|node| json!({
             "id": node.node,
             "kind": "files",
+            "path": node.dir.display().to_string(),
+            "paths": source(&node.paths),
+            "outputs": node.outputs.iter().map(|(port, input)| json!({ "port": port, "input": input })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+        "fields": field_nodes.iter().map(|node| json!({
+            "id": node.node,
+            "kind": "fields",
+            "type": node.ty,
             "path": node.dir.display().to_string(),
             "paths": source(&node.paths),
             "outputs": node.outputs.iter().map(|(port, input)| json!({ "port": port, "input": input })).collect::<Vec<_>>(),

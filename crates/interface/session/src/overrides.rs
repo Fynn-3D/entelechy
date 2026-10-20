@@ -62,6 +62,8 @@ impl Overrides {
                 entry.1 = path;
             } else if let Some(node) = files.file_nodes.iter_mut().find(|n| &n.node == name) {
                 node.dir = path;
+            } else if let Some(node) = files.field_nodes.iter_mut().find(|n| &n.node == name) {
+                node.dir = path;
             } else if externals.iter().any(|external| external == name) {
                 bound.push((name.clone(), path));
             } else {
@@ -97,6 +99,7 @@ pub fn kind_of(files: &entelechy_scene::Files, name: &str) -> Option<Kind> {
     if files.sequences.iter().any(|s| s.0 == name)
         || files.files.iter().any(|(n, _)| n == name)
         || files.file_nodes.iter().any(|n| n.node == name)
+        || files.field_nodes.iter().any(|n| n.node == name)
     {
         return Some(Kind::Directory);
     }
@@ -144,6 +147,7 @@ fn inputs_said(files: &entelechy_scene::Files) -> String {
                 .map(|(n, _)| n.as_str()),
         )
         .chain(files.file_nodes.iter().map(|n| n.node.as_str()))
+        .chain(files.field_nodes.iter().map(|n| n.node.as_str()))
         .collect();
     if names.is_empty() {
         "it reads no input from a file".into()

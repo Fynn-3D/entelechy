@@ -194,6 +194,145 @@ struct FileNode {
     seen: Option<Handle>,
 }
 
+/// A `fields` node: its directory, the paths it was last given, each file
+/// they name as it stands, the Field it last read its paths from, and
+/// whether what it holds changed since its outputs were last made.
+struct FieldNode {
+    dir: PathBuf,
+    paths: Vec<String>,
+    files: BTreeMap<String, Chunk>,
+    seen: Option<Handle>,
+    changed: bool,
+    /// The element as the Kernel reading the result lays it out, as the
+    /// last sync found it.
+    element: Option<Schema>,
+}
+
+/// A Field file a `fields` node names, with the stamp it was asked at.
+enum Chunk {
+    /// On its way.
+    Coming(Box<dyn crate::store::Later>, Option<Stamp>),
+    /// In: its elements as the Kernel's words, how many, and their layout.
+    In(Vec<u32>, usize, Schema, Option<Stamp>),
+    /// Not in: no such file, or one refused and reported.
+    Out(Option<Stamp>),
+}
+
+impl Chunk {
+    fn stamp(&self) -> Option<Stamp> {
+        match self {
+            Self::Coming(_, stamp) | Self::In(.., stamp) | Self::Out(stamp) => *stamp,
+        }
+    }
+}
+
+/// Starts reading `file` for a `fields` node: off the frames where the
+/// session prepares in the background, else now.
+fn ask(store: &dyn Store, file: &Path, background: bool) -> Box<dyn crate::store::Later> {
+    if background {
+        store.read_later(file)
+    } else {
+        crate::store::read_now(store.read(file))
+    }
+}
+
+/// A Field file as it came in for a `fields` node whose element is
+/// `element` (where a Kernel reads it): its elements as the Kernel's
+/// words, how many and their layout, within `room` words.
+fn taken(
+    arrived: &dyn crate::store::Arrived,
+    element: Option<&Schema>,
+    room: usize,
+) -> Result<(Vec<u32>, usize, Schema), String> {
+    let mut want = entelechy_formats::file::HEADER_BYTES;
+    let start = loop {
+        let start = arrived.start(want);
+        if start.len() < want || entelechy_formats::file::header_whole(&start) {
+            break start;
+        }
+        want = want.saturating_mul(2);
+    };
+    let (schema, domain, from) =
+        entelechy_formats::file::layout(&start).map_err(|e| e.to_string())?;
+    if let Some(element) = element
+        && schema.scalars() != element.scalars()
+    {
+        return Err(format!(
+            "its elements are {schema}, where the node's are {element}"
+        ));
+    }
+    let needed = schema.storage_words(domain.count());
+    if needed > room {
+        return Err(entelechy_kernel::HostError::BudgetExceeded {
+            requested: needed,
+            available: room,
+        }
+        .to_string());
+    }
+    let (words, bytes) = arrived.words(from);
+    let data = entelechy_formats::file::from_words(schema, domain, words, bytes)
+        .map_err(|e| e.to_string())?;
+    let wide = Schema::new(data.schema().scalars().to_vec());
+    Ok((data.values().into_owned(), domain.count(), wide))
+}
+
+/// A fields node's outputs from what it holds: `result`, the elements of
+/// the files in, in the order named (one zero element where none is), in
+/// `element`'s layout, else the first file's; `ranges`, a row a path,
+/// where its elements start and how many there are, -1 and 0 for one not
+/// in (one such row where no path is named).
+fn made_of(
+    node: &FieldNode,
+    element: Option<&Schema>,
+) -> Vec<(&'static str, Result<FieldData, String>)> {
+    let schema = element.cloned().or_else(|| {
+        node.files.values().find_map(|chunk| match chunk {
+            Chunk::In(_, _, schema, _) => Some(schema.clone()),
+            _ => None,
+        })
+    });
+    let mut words = Vec::new();
+    let mut ranges = Vec::with_capacity(node.paths.len().max(1) * 2);
+    let mut start = 0usize;
+    for path in &node.paths {
+        match node.files.get(path) {
+            Some(Chunk::In(chunk, count, _, _)) => {
+                words.extend_from_slice(chunk);
+                ranges.extend([start as u32, *count as u32]);
+                start += count;
+            }
+            _ => ranges.extend([-1i32 as u32, 0]),
+        }
+    }
+    if ranges.is_empty() {
+        ranges.extend([-1i32 as u32, 0]);
+    }
+    let mut made = vec![(
+        "ranges",
+        FieldData::from_storage(
+            Schema::new(vec![entelechy_kernel::Scalar::Int; 2]),
+            entelechy_kernel::Domain::Rows((ranges.len() / 2) as u32),
+            ranges,
+        )
+        .map_err(|e| e.to_string()),
+    )];
+    if let Some(schema) = schema {
+        if start == 0 {
+            words = vec![0; schema.value_words()];
+        }
+        made.push((
+            "result",
+            FieldData::from_storage(
+                schema,
+                entelechy_kernel::Domain::Rows(start.max(1) as u32),
+                words,
+            )
+            .map_err(|e| e.to_string()),
+        ));
+    }
+    made
+}
+
 /// Every file under `dir` a listing shows: hidden ones, those under hidden
 /// directories and those a `.gitignore` on the way leaves out are not
 /// ([`crate::ignore`]); each by its path under `dir`, parted by `/`, with
@@ -442,6 +581,8 @@ pub(crate) struct Inputs {
     fonts: BTreeMap<String, Font>,
     /// Files nodes' listings and the files they read, by node.
     file_nodes: BTreeMap<String, FileNode>,
+    /// Fields nodes' files, by node.
+    field_nodes: BTreeMap<String, FieldNode>,
     /// Text inputs with their text.
     texts: BTreeMap<String, String>,
     /// Frame selection failures, reported by the next sync.
@@ -475,6 +616,7 @@ impl Inputs {
             .chain(self.listed.values().map(|listed| listed.dir.clone()))
             .chain(self.fonts.values().map(|font| font.path.clone()))
             .chain(self.file_nodes.values().map(|node| node.dir.clone()))
+            .chain(self.field_nodes.values().map(|node| node.dir.clone()))
     }
 
     /// Makes `handle` what input `name` holds, releasing what it held.
@@ -522,6 +664,7 @@ impl Inputs {
         self.sync_files(store.as_ref(), declared.files, readable, host, events);
         self.sync_fonts(store.as_ref(), declared.files, readable, host, events);
         self.sync_file_nodes(store.as_ref(), declared.files, readable, host, events);
+        self.sync_field_nodes(store.as_ref(), declared, host, events);
         self.sync_texts(declared.graph, host, events);
         on_device
     }
@@ -730,12 +873,224 @@ impl Inputs {
         }
     }
 
+    /// Takes in the files each fields node named that came in, asks again
+    /// for those that changed since they were read, and makes its outputs
+    /// again where what it holds changed; forgets undeclared ones.
+    fn sync_field_nodes(
+        &mut self,
+        store: &dyn Store,
+        declared: &Declared,
+        host: &mut Host,
+        events: &mut Vec<Event>,
+    ) {
+        let files = declared.files;
+        let stale: Vec<String> = self
+            .field_nodes
+            .keys()
+            .filter(|node| !files.field_nodes.iter().any(|wanted| &wanted.node == *node))
+            .cloned()
+            .collect();
+        for node in stale {
+            self.field_nodes.remove(&node);
+            for port in entelechy_scene::FIELDS_OUTPUTS {
+                self.forget(host, &format!("{node}.{port}"));
+            }
+        }
+        let background = self.background;
+        for node in &files.field_nodes {
+            if self
+                .field_nodes
+                .get(&node.node)
+                .is_none_or(|known| known.dir != node.dir)
+            {
+                self.field_nodes.insert(
+                    node.node.clone(),
+                    FieldNode {
+                        dir: node.dir.clone(),
+                        paths: Vec::new(),
+                        files: BTreeMap::new(),
+                        seen: None,
+                        changed: true,
+                        element: None,
+                    },
+                );
+            }
+            // The element as the Kernel reading the result lays it out.
+            let element = node
+                .outputs
+                .iter()
+                .find(|(port, _)| port == "result")
+                .and_then(|(_, external)| declared.tables.get(external))
+                .map(|table| table.schema.clone());
+            let known = self.field_nodes.get_mut(&node.node).expect("just placed");
+            if known.element != element {
+                known.element = element;
+                known.changed = true;
+            }
+            // A file that changed since it was asked is asked again.
+            for (path, chunk) in &mut known.files {
+                let file = node.dir.join(path);
+                let stamp = store.stamp(&file);
+                if !matches!(chunk, Chunk::Coming(..)) && stamp != chunk.stamp() {
+                    *chunk = Chunk::Coming(ask(store, &file, background), stamp);
+                }
+            }
+            self.settle_field_node(node, host, events);
+        }
+    }
+
+    /// Takes in the files fields node `node` named that came in, and makes
+    /// its outputs again where what it holds changed.
+    fn settle_field_node(
+        &mut self,
+        node: &entelechy_scene::FieldsNode,
+        host: &mut Host,
+        events: &mut Vec<Event>,
+    ) {
+        let room = room(host);
+        let Some(known) = self.field_nodes.get_mut(&node.node) else {
+            return;
+        };
+        for (path, chunk) in &mut known.files {
+            let Chunk::Coming(later, stamp) = chunk else {
+                continue;
+            };
+            let Some(read) = later.poll() else {
+                continue;
+            };
+            let stamp = *stamp;
+            let file = node.dir.join(path);
+            known.changed = true;
+            *chunk = match read {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Chunk::Out(stamp),
+                Err(error) => {
+                    events.push(Event::Rejected {
+                        path: file,
+                        error: Diagnostic::new(format!("fields node `{}`: {error}", node.node)),
+                    });
+                    Chunk::Out(stamp)
+                }
+                Ok(arrived) => match taken(arrived.as_ref(), known.element.as_ref(), room) {
+                    Ok((words, count, schema)) => Chunk::In(words, count, schema, stamp),
+                    Err(why) => {
+                        events.push(Event::Rejected {
+                            path: file,
+                            error: Diagnostic::new(format!(
+                                "fields node `{}`: {path}: {why}",
+                                node.node
+                            )),
+                        });
+                        Chunk::Out(stamp)
+                    }
+                },
+            };
+        }
+        if !known.changed {
+            return;
+        }
+        known.changed = false;
+        let made = made_of(known, known.element.as_ref());
+        for (port, data) in made {
+            if let Err(why) = self.hold_field_output(node, port, data, host) {
+                events.push(Event::Rejected {
+                    path: node.dir.clone(),
+                    error: Diagnostic::new(format!("fields node `{}`: {why}", node.node)),
+                });
+            }
+        }
+    }
+
+    /// Holds `data` as fields node `node`'s output `port`.
+    fn hold_field_output(
+        &mut self,
+        node: &entelechy_scene::FieldsNode,
+        port: &str,
+        data: Result<FieldData, String>,
+        host: &mut Host,
+    ) -> Result<(), String> {
+        let Some((_, external)) = node.outputs.iter().find(|(name, _)| name == port) else {
+            return Ok(());
+        };
+        let handle = host.adopt(data?).map_err(|e| e.to_string())?;
+        self.hold(host, external, handle);
+        Ok(())
+    }
+
+    /// Whether fields node `node` last read its paths from `handle`.
+    pub(crate) fn field_node_saw(
+        &self,
+        node: &entelechy_scene::FieldsNode,
+        handle: Handle,
+    ) -> bool {
+        self.field_nodes
+            .get(&node.node)
+            .is_none_or(|known| known.seen == Some(handle))
+    }
+
+    /// Gives fields node `node` the paths `paths` spell (read from the
+    /// Field `handle`): a file no longer named is let go, one newly named
+    /// asked for, taken in by a sync once it is in. Refused whole, the
+    /// paths before staying, where a path is not one under the directory or
+    /// is not readable; reported by the next sync.
+    pub(crate) fn give_field_paths(
+        &mut self,
+        store: &dyn Store,
+        readable: &dyn Fn(&Path) -> Result<(), String>,
+        node: &entelechy_scene::FieldsNode,
+        handle: Handle,
+        paths: Result<Vec<String>, String>,
+        host: &mut Host,
+    ) {
+        let background = self.background;
+        let Some(known) = self.field_nodes.get_mut(&node.node) else {
+            return;
+        };
+        known.seen = Some(handle);
+        let checked = paths.and_then(|paths| {
+            for path in &paths {
+                entelechy_formats::directory::checked_path(path)?;
+                readable(&node.dir.join(path))?;
+            }
+            Ok(paths)
+        });
+        let paths = match checked {
+            Ok(paths) if known.paths == paths => return,
+            Ok(paths) => paths,
+            Err(why) => {
+                self.frame_events.push(Event::Rejected {
+                    path: node.dir.clone(),
+                    error: Diagnostic::new(format!("fields node `{}`: {why}", node.node)),
+                });
+                return;
+            }
+        };
+        known.files.retain(|path, _| paths.contains(path));
+        for path in &paths {
+            if !known.files.contains_key(path) {
+                let file = node.dir.join(path);
+                let stamp = store.stamp(&file);
+                known.files.insert(
+                    path.clone(),
+                    Chunk::Coming(ask(store, &file, background), stamp),
+                );
+            }
+        }
+        known.paths = paths;
+        known.changed = true;
+        // What is in already (all of it, where nothing is read off the
+        // frames) is held for the next evaluation.
+        let mut events = Vec::new();
+        self.settle_field_node(node, host, &mut events);
+        self.frame_events.append(&mut events);
+    }
+
     /// Forgets what the frames gave the font and files nodes, as a scene
     /// just opened holds them: each font node the glyphs of no codes; each
     /// files node no paths, its directory listed again and its `opened`
-    /// empty at the next sync.
+    /// empty at the next sync; each fields node no paths.
     pub(crate) fn start_fed_over(&mut self, files: &entelechy_scene::Files, host: &mut Host) {
         self.file_nodes.clear();
+        self.field_nodes.clear();
         for font in &files.fonts {
             let Some(known) = self.fonts.get_mut(&font.node) else {
                 continue;

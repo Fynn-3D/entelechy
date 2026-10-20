@@ -95,6 +95,20 @@ fn lowered(path: &Path) -> Result<String, String> {
                 .join(", ")
         ));
     }
+    for node in &lowered.files.field_nodes {
+        out.push_str(&format!(
+            "// fields node {} {} {} paths from {}, read as {}\n",
+            node.node,
+            node.ty,
+            relative(&node.dir, &base),
+            node.paths,
+            node.outputs
+                .iter()
+                .map(|(_, external)| external.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     for write in &lowered.files.writes {
         let kind = if write.files {
             " files"

@@ -218,6 +218,7 @@ pub(crate) fn graph(session: &Session) -> Result<Json, Json> {
         &session.placements(),
         session.fonts(),
         session.file_nodes(),
+        session.field_nodes(),
     ))
 }
 

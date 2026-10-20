@@ -542,7 +542,8 @@ pub struct EntelechyFiles {
 #[unsafe(no_mangle)]
 pub extern "C" fn entelechy_files() -> *mut EntelechyFiles {
     #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-    let files = entelechy_session::Memory::with_fetch(std::sync::Arc::new(page_fetch));
+    let files = entelechy_session::Memory::with_fetch(std::sync::Arc::new(page_fetch))
+        .fetching_later(std::sync::Arc::new(page_fetch_later));
     #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     let files = entelechy_session::Memory::default();
     Box::into_raw(Box::new(EntelechyFiles {
@@ -557,6 +558,100 @@ pub extern "C" fn entelechy_files() -> *mut EntelechyFiles {
 #[link(wasm_import_module = "entelechy")]
 unsafe extern "C" {
     fn fetch(path: *const u8, path_len: usize, from: usize, out: *mut u8, bytes: usize) -> isize;
+}
+
+// In a page, a file kept by the page read off the frames: `fetch_start`
+// asks for it and answers a ticket; `fetch_state` answers -2 while it is
+// on its way, -1 when it could not be read, else its length;
+// `fetch_copy` copies up to `bytes` of it from byte `from` on to `out` and
+// answers how many; `fetch_end` lets it go.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[link(wasm_import_module = "entelechy")]
+unsafe extern "C" {
+    fn fetch_start(path: *const u8, path_len: usize) -> u32;
+    fn fetch_state(ticket: u32) -> isize;
+    fn fetch_copy(ticket: u32, from: usize, out: *mut u8, bytes: usize) -> isize;
+    fn fetch_end(ticket: u32);
+}
+
+/// A file the page keeps, on its way ([`entelechy_session::Later`]).
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+struct PageLater(Option<u32>);
+
+/// A file the page keeps, in, held by the page until let go
+/// ([`entelechy_session::Arrived`]).
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+struct PageArrived {
+    ticket: u32,
+    len: usize,
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+impl entelechy_session::Later for PageLater {
+    fn poll(&mut self) -> Option<std::io::Result<Box<dyn entelechy_session::Arrived>>> {
+        let ticket = self.0?;
+        let state = unsafe { fetch_state(ticket) };
+        if state == -2 {
+            return None;
+        }
+        self.0 = None;
+        if state < 0 {
+            unsafe { fetch_end(ticket) };
+            return Some(Err(std::io::ErrorKind::NotFound.into()));
+        }
+        Some(Ok(Box::new(PageArrived {
+            ticket,
+            len: state as usize,
+        })))
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+impl Drop for PageLater {
+    fn drop(&mut self) {
+        if let Some(ticket) = self.0 {
+            unsafe { fetch_end(ticket) };
+        }
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+impl entelechy_session::Arrived for PageArrived {
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn start(&self, bytes: usize) -> Vec<u8> {
+        let mut out = vec![0u8; bytes.min(self.len)];
+        let got = unsafe { fetch_copy(self.ticket, 0, out.as_mut_ptr(), out.len()) };
+        out.truncate(got.max(0) as usize);
+        out
+    }
+
+    fn words(&self, from: usize) -> (Vec<u32>, usize) {
+        // Copied straight into the words: little-endian, as a page is.
+        let bytes = self.len.saturating_sub(from);
+        let mut words = vec![0u32; bytes.div_ceil(4)];
+        let got = unsafe { fetch_copy(self.ticket, from, words.as_mut_ptr().cast::<u8>(), bytes) };
+        (words, got.max(0) as usize)
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+impl Drop for PageArrived {
+    fn drop(&mut self) {
+        unsafe { fetch_end(self.ticket) };
+    }
+}
+
+/// A file the page keeps, asked for off the frames
+/// ([`entelechy_session::FetchLaterFn`]).
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+fn page_fetch_later(path: &Path) -> Box<dyn entelechy_session::Later> {
+    let name = path.to_string_lossy();
+    Box::new(PageLater(Some(unsafe {
+        fetch_start(name.as_ptr(), name.len())
+    })))
 }
 
 /// A file the page keeps, from byte `from` on into `out`

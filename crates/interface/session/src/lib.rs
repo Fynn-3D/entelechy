@@ -55,7 +55,7 @@ use entelechy_kernel::{Generation, KernelId};
 pub use entelechy_gpu::Wait;
 pub use history::{Attempt, Change, Origin, Record};
 pub use options::{SessionOptions, environment_packages};
-pub use store::{Disk, FetchFn, Memory, Parsed, Store};
+pub use store::{Arrived, Disk, FetchFn, FetchLaterFn, Later, Memory, Parsed, Store};
 
 /// The world at one moment, taken for its caller to keep
 /// ([`Session::snapshot`]).

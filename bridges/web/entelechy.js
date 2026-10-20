@@ -115,13 +115,18 @@ function parking() {
 /// device; `entelechy.now`, the page's clock in milliseconds; and
 /// `entelechy.fetch`, which reads a file the page keeps (put elsewhere),
 /// from a byte on, from where `globalThis.entelechy_files_base` says the
-/// files are.
+/// files are; and `entelechy.fetch_start`, `fetch_state`, `fetch_copy` and
+/// `fetch_end`, which read one off the frames, as the browser fetches it.
 /// `instance()` answers the Entelechy instance, once there is one.
 function host(instance) {
   const free = [];
   const parked = parking();
   // The file `entelechy.fetch` last read, while reads go on through it.
   let fetched = null;
+  // Files asked for off the frames (`entelechy.fetch_start`), by ticket:
+  // -2 while on their way, -1 when not read, else their bytes.
+  const coming = new Map();
+  let tickets = 0;
   const table = () => instance().exports.__indirect_function_table;
   return {
     load(bytes, length, slots, most) {
@@ -188,6 +193,39 @@ function host(instance) {
         if (globalThis.console) console.error(`entelechy.fetch: ${name}: ${error.message}`);
         return -1;
       }
+    },
+    fetch_start(path, length) {
+      const exports = instance().exports;
+      const name = new TextDecoder().decode(new Uint8Array(exports.memory.buffer, path, length));
+      const ticket = ++tickets;
+      const base = globalThis.entelechy_files_base;
+      if (!base) {
+        coming.set(ticket, -1);
+        return ticket;
+      }
+      coming.set(ticket, -2);
+      globalThis
+        .fetch(new URL(name, base).href)
+        .then((response) => (response.ok ? response.arrayBuffer() : Promise.reject(new Error(String(response.status)))))
+        .then(
+          (buffer) => coming.has(ticket) && coming.set(ticket, new Uint8Array(buffer)),
+          () => coming.has(ticket) && coming.set(ticket, -1),
+        );
+      return ticket;
+    },
+    fetch_state(ticket) {
+      const held = coming.get(ticket);
+      return held === undefined ? -1 : typeof held === "number" ? held : held.length;
+    },
+    fetch_copy(ticket, from, out, bytes) {
+      const held = coming.get(ticket);
+      if (!(held instanceof Uint8Array)) return -1;
+      const got = held.subarray(Math.min(from, held.length), Math.min(from + bytes, held.length));
+      new Uint8Array(instance().exports.memory.buffer, out, got.length).set(got);
+      return got.length;
+    },
+    fetch_end(ticket) {
+      coming.delete(ticket);
     },
     wake: () => parked.wake(),
     wait:

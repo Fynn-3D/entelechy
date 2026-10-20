@@ -583,6 +583,20 @@ fn graph(args: &[String]) -> Result<(), String> {
                 .join(", ")
         );
     }
+    for node in session.field_nodes() {
+        println!(
+            "// fields node {}: {} \"{}\", paths from {}, read as {}",
+            node.node,
+            node.ty,
+            node.dir.display(),
+            node.paths,
+            node.outputs
+                .iter()
+                .map(|(_, input)| input.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
     for font in session.fonts() {
         println!(
             "// font node {}: \"{}\", codes from {}, read as {}",

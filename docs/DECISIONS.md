@@ -892,6 +892,44 @@ and `feed_file_nodes` ([session](../crates/interface/session/src/session.rs)).
 Held by [the files node tests](../crates/interface/session/tests/files_node.rs),
 the ignore rules' own tests and the scene surface's `files_node.esn`.
 
+## A world larger than memory is read by what it asks for
+
+A scene may place a directory of Field files of one element as a node:
+`node near: Rows<Spot> fields "chunks/" { paths <- want.result; }`.
+`near.result` is the elements of the files `paths` named when last
+evaluated that are in, in the order named; `near.ranges` is where each
+path's are, or `-1` for one not in. Where the session prepares in the
+background a file is read off the frames and taken in by the sync after
+it is in. The owner chose this form (2026-10-20).
+
+**Why.** A world larger than memory, or than what a page can download
+before its first frame, keeps only what its frames are near, and only
+the scene knows what that is, as it runs: so the paths come from the
+graph, a frame late, as a files node's do. A files node gives bytes, one
+a word, for a Kernel to parse: four times the memory, and a parse in
+every scene. A Field file already carries its layout, so the node gives
+the elements as the reading Kernel lays them out, refusing a file of
+another element. Files of one element follow one another in one Field,
+which a Kernel walks by `ranges`, as a scene's meshes already share one
+Field; a Field per file would make the graph's shape depend on what is
+in. Reading a file never holds a frame where the session prepares in the
+background (a page's file comes over the network): the frames go on
+with what was in, as an `async` node's readers take its last output. A
+replay or a run reads at once, so what a frame sees does not depend on
+how fast a disk or a network is. Holding no file it no longer names, the
+Host keeps nothing beyond what the frames ask for.
+
+**Where.** `Rows<E> fields` after `node x:` in the parser
+([parser](../crates/frontend/language/src/parser.rs)), `FieldsNode`
+([scene](../crates/frontend/scene/src/lib.rs)); `Store::read_later`
+([store](../crates/interface/session/src/store.rs)), on a page through
+`entelechy.fetch_start` ([ffi](../crates/interface/ffi/src/lib.rs),
+[bridge](../bridges/web/entelechy.js)); `sync_field_nodes`,
+`give_field_paths` ([inputs](../crates/interface/session/src/inputs.rs))
+and `feed_field_nodes` ([session](../crates/interface/session/src/session.rs)).
+Held by [the fields node tests](../crates/interface/session/tests/fields_node.rs)
+and the scene surface's `fields_node.esn`.
+
 ## A graph says what its parameters must hold
 
 `require name: a <= b;` is a scene's statement of what its parameters

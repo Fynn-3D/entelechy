@@ -583,6 +583,27 @@ fn check_in(
                         entelechy_ir::schema_of(entelechy_ir::Type::Int, &[]),
                     ));
                 }
+                // A fields node's ranges, two Ints a path, and its result,
+                // rows of its element.
+                if let Some((node, port)) = lowered.files.field_nodes.iter().find_map(|node| {
+                    let (port, _) = node.outputs.iter().find(|(_, external)| external == name)?;
+                    Some((node, port))
+                }) {
+                    let element = if port == "ranges" {
+                        "IVec2"
+                    } else {
+                        node.ty
+                            .split_once('<')
+                            .and_then(|(_, rest)| rest.strip_suffix('>'))
+                            .unwrap_or("")
+                            .trim()
+                    };
+                    let schema = element
+                        .parse::<entelechy_ir::Type>()
+                        .ok()
+                        .and_then(|element| entelechy_ir::schema_of(element, &[]));
+                    return Some((entelechy_ir::Shape::Rows, schema));
+                }
                 let asset = lowered.files.assets.iter().find(|a| a.name == *name)?;
                 let ty = asset.ty.trim();
                 let shape = if asset.bytes || ty.starts_with("Rows<") {
@@ -661,6 +682,7 @@ fn check_in(
         .map(|(_, source)| source)
         .chain(lowered.files.fonts.iter().map(|font| &font.codes))
         .chain(lowered.files.file_nodes.iter().map(|node| &node.paths))
+        .chain(lowered.files.field_nodes.iter().map(|node| &node.paths))
         .filter_map(|source| match source {
             entelechy_graph::Source::Node { node, .. } => Some(node.clone()),
             entelechy_graph::Source::External(_) => None,
