@@ -393,6 +393,13 @@ fn table_names(
 /// longer than the bytes first read is read in twice as many until it is
 /// whole or the file ends.
 fn read_within(store: &dyn Store, path: &Path, room: usize) -> Result<Vec<u8>, String> {
+    head_within(store, path, room)?;
+    store.read(path).map_err(|e| e.to_string())
+}
+
+/// A file's first bytes, its whole header where it has one, once what
+/// they say fits in `room` words.
+fn head_within(store: &dyn Store, path: &Path, room: usize) -> Result<Vec<u8>, String> {
     let mut want = entelechy_formats::file::HEADER_BYTES;
     let start = loop {
         let start = store.read_start(path, want).map_err(|e| e.to_string())?;
@@ -402,7 +409,20 @@ fn read_within(store: &dyn Store, path: &Path, room: usize) -> Result<Vec<u8>, S
         want = want.saturating_mul(2);
     };
     entelechy_formats::fits(&start, path, room)?;
-    store.read(path).map_err(|e| e.to_string())
+    Ok(start)
+}
+
+/// A Field file's Field and its line, its header read first and its
+/// elements then as words, never held as bytes beside them.
+fn read_field(store: &dyn Store, path: &Path, room: usize) -> Result<(FieldData, String), String> {
+    let start = head_within(store, path, room)?;
+    let (schema, domain, from) =
+        entelechy_formats::file::layout(&start).map_err(|e| e.to_string())?;
+    let (words, bytes) = store.read_words(path, from).map_err(|e| e.to_string())?;
+    let data = entelechy_formats::file::from_words(schema, domain, words, bytes)
+        .map_err(|e| e.to_string())?;
+    let detail = entelechy_formats::describe(&data);
+    Ok((data, detail))
 }
 
 /// The inputs of a scene and the Fields they hold.
@@ -982,23 +1002,32 @@ impl Inputs {
                 });
                 continue;
             }
-            let read = read_within(store, &path, room(runtime.host()));
             let extension = entelechy_formats::extension(&path);
             let noted = std::cell::RefCell::new(Vec::new());
             let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
             let tables = |table: &str| table_names(store, readable, &dir, table, &noted);
-            let read = read.and_then(|found| match bytes {
-                true => entelechy_formats::decode_bytes(&found),
-                false if entelechy_formats::table::is_table(&extension) => read_table(
-                    &found,
-                    &extension,
-                    &name,
-                    table.as_ref(),
-                    room(runtime.host()),
-                    &tables,
-                ),
-                false => entelechy_formats::decode(&found, &path, Some(&ty), room(runtime.host())),
-            });
+            let read = match bytes {
+                false if extension == "field" => read_field(store, &path, room(runtime.host())),
+                _ => {
+                    read_within(store, &path, room(runtime.host())).and_then(|found| match bytes {
+                        true => entelechy_formats::decode_bytes(&found),
+                        false if entelechy_formats::table::is_table(&extension) => read_table(
+                            &found,
+                            &extension,
+                            &name,
+                            table.as_ref(),
+                            room(runtime.host()),
+                            &tables,
+                        ),
+                        false => entelechy_formats::decode(
+                            &found,
+                            &path,
+                            Some(&ty),
+                            room(runtime.host()),
+                        ),
+                    })
+                }
+            };
             if let Some(asset) = self.assets.get_mut(&name) {
                 asset.named = noted.into_inner();
             }

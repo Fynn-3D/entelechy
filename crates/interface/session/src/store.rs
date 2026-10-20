@@ -39,6 +39,19 @@ enum Seen {
     Memory(u64),
 }
 
+/// The bytes a file read as words is read in at a time
+/// ([`Store::read_words`]).
+const WORDS_PIECE: usize = 1 << 20;
+
+/// Appends little-endian words of `bytes`, the last padded with zeros.
+fn extend_words(words: &mut Vec<u32>, bytes: &[u8]) {
+    words.extend(bytes.chunks(4).map(|w| {
+        let mut word = [0u8; 4];
+        word[..w.len()].copy_from_slice(w);
+        u32::from_le_bytes(word)
+    }));
+}
+
 /// Files by path, read and written whole.
 pub trait Store: Send + Sync {
     /// The file's bytes.
@@ -49,6 +62,17 @@ pub trait Store: Send + Sync {
         let mut all = self.read(path)?;
         all.truncate(bytes);
         Ok(all)
+    }
+    /// The file's bytes from `from` on as little-endian words, the last
+    /// padded with zeros, and how many bytes they are: a body of words
+    /// read as words, never held as bytes beside them where the store
+    /// can read it a piece at a time.
+    fn read_words(&self, path: &Path, from: usize) -> io::Result<(Vec<u32>, usize)> {
+        let all = self.read(path)?;
+        let body = all.get(from..).unwrap_or_default();
+        let mut words = Vec::with_capacity(body.len().div_ceil(4));
+        extend_words(&mut words, body);
+        Ok((words, body.len()))
     }
     /// Replaces the file atomically, making the directories it needs.
     fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()>;
@@ -316,6 +340,24 @@ impl Store for Disk {
         Ok(start)
     }
 
+    fn read_words(&self, path: &Path, from: usize) -> io::Result<(Vec<u32>, usize)> {
+        use std::io::{Read, Seek};
+        let mut file = std::fs::File::open(path)?;
+        let length = file.metadata()?.len() as usize;
+        let body = length.saturating_sub(from);
+        file.seek(io::SeekFrom::Start(from as u64))?;
+        let mut words = Vec::with_capacity(body.div_ceil(4));
+        let mut piece = vec![0u8; body.min(WORDS_PIECE)];
+        let mut read = 0;
+        while read < body {
+            let want = (body - read).min(WORDS_PIECE);
+            file.read_exact(&mut piece[..want])?;
+            extend_words(&mut words, &piece[..want]);
+            read += want;
+        }
+        Ok((words, body))
+    }
+
     fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
         let parent = path
             .parent()
@@ -475,9 +517,12 @@ pub struct Memory {
     fetch: Option<Fetch>,
 }
 
-/// Reads a file kept elsewhere: its first `bytes` bytes (all of them when
-/// it has no more), or an error.
-pub type FetchFn = dyn Fn(&Path, usize) -> io::Result<Vec<u8>> + Send + Sync;
+/// Reads a file kept elsewhere into `out` from byte `from` on, answering
+/// the bytes read (fewer where the file ends first), or an error. A read
+/// from the start reads the file anew; one further on may be answered
+/// from what the last read of that file found, as such a file does not
+/// change.
+pub type FetchFn = dyn Fn(&Path, usize, &mut [u8]) -> io::Result<usize> + Send + Sync;
 
 /// A [`FetchFn`], shown by name alone.
 struct Fetch(Arc<FetchFn>);
@@ -583,7 +628,12 @@ impl Memory {
             None => return Err(io::ErrorKind::NotFound.into()),
         };
         match &self.fetch {
-            Some(Fetch(fetch)) => fetch(Path::new(&key), elsewhere),
+            Some(Fetch(fetch)) => {
+                let mut out = vec![0u8; elsewhere];
+                let got = fetch(Path::new(&key), 0, &mut out)?;
+                out.truncate(got);
+                Ok(out)
+            }
             None => Err(io::Error::other(
                 "the file is kept elsewhere and the store reads nothing there",
             )),
@@ -653,6 +703,18 @@ impl Store for Overlay<'_> {
         match self.held(path) {
             Some((bytes, _)) => Ok(bytes.clone()),
             None => self.base.read(path),
+        }
+    }
+
+    fn read_words(&self, path: &Path, from: usize) -> io::Result<(Vec<u32>, usize)> {
+        match self.held(path) {
+            Some((bytes, _)) => {
+                let body = bytes.get(from..).unwrap_or_default();
+                let mut words = Vec::with_capacity(body.len().div_ceil(4));
+                extend_words(&mut words, body);
+                Ok((words, body.len()))
+            }
+            None => self.base.read_words(path, from),
         }
     }
 
@@ -739,6 +801,40 @@ impl Store for Memory {
 
     fn read_start(&self, path: &Path, bytes: usize) -> io::Result<Vec<u8>> {
         self.read_up_to(path, bytes)
+    }
+
+    fn read_words(&self, path: &Path, from: usize) -> io::Result<(Vec<u32>, usize)> {
+        let key = key(path);
+        let length = match self.held().files.get(&key) {
+            Some((Content::Bytes(held), _)) => {
+                let body = held.get(from..).unwrap_or_default();
+                let mut words = Vec::with_capacity(body.len().div_ceil(4));
+                extend_words(&mut words, body);
+                return Ok((words, body.len()));
+            }
+            Some((Content::Elsewhere(count), _)) => *count,
+            None => return Err(io::ErrorKind::NotFound.into()),
+        };
+        let Some(Fetch(fetch)) = &self.fetch else {
+            return Err(io::Error::other(
+                "the file is kept elsewhere and the store reads nothing there",
+            ));
+        };
+        // A piece at a time, each into the words as it comes.
+        let body = length.saturating_sub(from);
+        let mut words = Vec::with_capacity(body.div_ceil(4));
+        let mut piece = vec![0u8; body.min(WORDS_PIECE)];
+        let mut at = from;
+        while at < length {
+            let want = (length - at).min(WORDS_PIECE);
+            let got = fetch(Path::new(&key), at, &mut piece[..want])?;
+            if got < want {
+                return Err(io::ErrorKind::UnexpectedEof.into());
+            }
+            extend_words(&mut words, &piece[..want]);
+            at += want;
+        }
+        Ok((words, body))
     }
 
     fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -883,10 +979,15 @@ mod tests {
     fn a_file_kept_elsewhere_is_read_through_the_fetch_each_time() {
         let asked = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&asked);
-        let files = Memory::with_fetch(Arc::new(move |path: &Path, bytes: usize| {
-            seen.lock().unwrap().push((path.to_path_buf(), bytes));
-            Ok(b"0123456789"[..bytes.min(10)].to_vec())
-        }));
+        let files =
+            Memory::with_fetch(Arc::new(move |path: &Path, from: usize, out: &mut [u8]| {
+                seen.lock()
+                    .unwrap()
+                    .push((path.to_path_buf(), from, out.len()));
+                let got = &b"0123456789"[from.min(10)..(from + out.len()).min(10)];
+                out[..got.len()].copy_from_slice(got);
+                Ok(got.len())
+            }));
         files.put_elsewhere(Path::new("a/../big.field"), 10);
         assert_eq!(files.kind(Path::new("big.field")), Some(Kind::File));
         assert_eq!(files.read(Path::new("big.field")).unwrap(), b"0123456789");
@@ -894,11 +995,19 @@ mod tests {
             files.read_start(Path::new("big.field"), 4).unwrap(),
             b"0123"
         );
+        // Read as words from a byte on, the last padded with zeros.
+        let (words, bytes) = files.read_words(Path::new("big.field"), 3).unwrap();
+        assert_eq!(bytes, 7);
+        assert_eq!(
+            words,
+            [u32::from_le_bytes(*b"3456"), u32::from_le_bytes(*b"789\0")]
+        );
         assert_eq!(
             *asked.lock().unwrap(),
             vec![
-                (PathBuf::from("big.field"), 10),
-                (PathBuf::from("big.field"), 4)
+                (PathBuf::from("big.field"), 0, 10),
+                (PathBuf::from("big.field"), 0, 4),
+                (PathBuf::from("big.field"), 3, 7)
             ]
         );
         let before = files.stamp(Path::new("big.field"));

@@ -550,27 +550,27 @@ pub extern "C" fn entelechy_files() -> *mut EntelechyFiles {
     }))
 }
 
-// In a page, a file kept by the page: `entelechy.fetch` copies its first
-// `bytes` bytes to `out` and answers how many, or -1.
+// In a page, a file kept by the page: `entelechy.fetch` copies up to
+// `bytes` of its bytes from byte `from` on to `out` and answers how many,
+// or -1.
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 #[link(wasm_import_module = "entelechy")]
 unsafe extern "C" {
-    fn fetch(path: *const u8, path_len: usize, out: *mut u8, bytes: usize) -> isize;
+    fn fetch(path: *const u8, path_len: usize, from: usize, out: *mut u8, bytes: usize) -> isize;
 }
 
-/// The first `bytes` bytes of a file the page keeps.
+/// A file the page keeps, from byte `from` on into `out`
+/// ([`entelechy_session::FetchFn`]).
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-fn page_fetch(path: &Path, bytes: usize) -> std::io::Result<Vec<u8>> {
+fn page_fetch(path: &Path, from: usize, out: &mut [u8]) -> std::io::Result<usize> {
     let name = path.to_string_lossy();
-    let mut out = vec![0u8; bytes];
-    let got = unsafe { fetch(name.as_ptr(), name.len(), out.as_mut_ptr(), bytes) };
+    let got = unsafe { fetch(name.as_ptr(), name.len(), from, out.as_mut_ptr(), out.len()) };
     if got < 0 {
         return Err(std::io::Error::other(format!(
             "the page could not fetch `{name}`"
         )));
     }
-    out.truncate(got as usize);
-    Ok(out)
+    Ok(got as usize)
 }
 
 /// Puts a file of `len` bytes at `path` whose bytes the caller keeps: in a

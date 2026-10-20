@@ -178,6 +178,10 @@ impl Store for Held {
         self.check(path)?;
         self.inner.read_start(path, bytes)
     }
+    fn read_words(&self, path: &Path, from: usize) -> io::Result<(Vec<u32>, usize)> {
+        self.check(path)?;
+        self.inner.read_words(path, from)
+    }
     fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
         self.inner.write(path, bytes)
     }

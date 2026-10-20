@@ -91,6 +91,31 @@ pub fn header_whole(start: &[u8]) -> bool {
     start.iter().filter(|b| **b == b'\n').take(2).count() == 2
 }
 
+/// A Field file's layout and extent, and the byte its elements start at,
+/// from its first bytes (its whole header, [`header_whole`]).
+pub fn layout(start: &[u8]) -> Result<(Schema, Domain, usize), FileError> {
+    header(start)
+}
+
+/// A Field file's Field from its elements read as little-endian words
+/// ([`layout`] says from where), the last padded with zeros, and how
+/// many bytes they were.
+pub fn from_words(
+    schema: Schema,
+    domain: Domain,
+    words: Vec<u32>,
+    bytes: usize,
+) -> Result<FieldData, FileError> {
+    let expected = domain.count().saturating_mul(schema.element_bytes());
+    if bytes != expected {
+        return Err(FileError::Length {
+            expected,
+            found: bytes,
+        });
+    }
+    FieldData::from_storage(schema, domain, words).map_err(FileError::Host)
+}
+
 /// Decodes a Field file.
 pub fn decode(bytes: &[u8]) -> Result<FieldData, FileError> {
     let (schema, domain, start) = header(bytes)?;

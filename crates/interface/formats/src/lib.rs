@@ -118,6 +118,17 @@ pub fn fits(start: &[u8], path: &Path, words: usize) -> Result<(), String> {
     Ok(())
 }
 
+/// The line a Field read from a file is described by: its shape, its
+/// count and its layout.
+pub fn describe(data: &FieldData) -> String {
+    format!(
+        "{} {} {}",
+        data.domain().shape(),
+        data.domain().count(),
+        data.schema()
+    )
+}
+
 /// [`read`] on bytes already read; `path`'s extension names the format.
 /// A compressed picture that would hold more than `words` words is
 /// refused before it is inflated.
@@ -128,14 +139,6 @@ pub fn decode(
     words: usize,
 ) -> Result<(FieldData, String), String> {
     let gray = want.is_some_and(|ty| without_encoding(ty) == "Grid<Float>");
-    let describe = |data: &FieldData| {
-        format!(
-            "{} {} {}",
-            data.domain().shape(),
-            data.domain().count(),
-            data.schema()
-        )
-    };
     match extension(path).as_str() {
         "field" => {
             fits(bytes, path, words)?;

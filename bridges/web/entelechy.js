@@ -113,12 +113,15 @@ function parking() {
 /// suspends Entelechy (JavaScript Promise Integration) until `entelechy.wake`,
 /// which the device's answer calls, which is how Entelechy waits for a
 /// device; `entelechy.now`, the page's clock in milliseconds; and
-/// `entelechy.fetch`, which reads a file the page keeps (put elsewhere)
-/// from where `globalThis.entelechy_files_base` says the files are.
+/// `entelechy.fetch`, which reads a file the page keeps (put elsewhere),
+/// from a byte on, from where `globalThis.entelechy_files_base` says the
+/// files are.
 /// `instance()` answers the Entelechy instance, once there is one.
 function host(instance) {
   const free = [];
   const parked = parking();
+  // The file `entelechy.fetch` last read, while reads go on through it.
+  let fetched = null;
   const table = () => instance().exports.__indirect_function_table;
   return {
     load(bytes, length, slots, most) {
@@ -149,28 +152,37 @@ function host(instance) {
       }
     },
     now: () => performance.now(),
-    fetch(path, length, out, bytes) {
+    fetch(path, length, from, out, bytes) {
       const exports = instance().exports;
       const name = new TextDecoder().decode(new Uint8Array(exports.memory.buffer, path, length));
       const base = globalThis.entelechy_files_base;
       if (!base) return -1;
       try {
-        // Asked of the page's own server, which keeps them, as they are read.
-        const request = new XMLHttpRequest();
-        request.open("GET", new URL(name, base).href, false);
-        const worker = typeof WorkerGlobalScope !== "undefined";
-        if (worker) request.responseType = "arraybuffer";
-        else request.overrideMimeType("text/plain; charset=x-user-defined");
-        request.send();
-        if (request.status !== 200) return -1;
-        let got;
-        if (worker) got = new Uint8Array(request.response, 0, Math.min(bytes, request.response.byteLength));
-        else {
-          const text = request.responseText;
-          got = new Uint8Array(Math.min(bytes, text.length));
-          for (let i = 0; i < got.length; i++) got[i] = text.charCodeAt(i) & 0xff;
+        // Asked of the page's own server, which keeps them, as they are
+        // read: anew from the start, and further on from what the last
+        // read of the file found, kept until a read reaches its end.
+        if (from === 0 || fetched?.name !== name) {
+          fetched = null;
+          const request = new XMLHttpRequest();
+          request.open("GET", new URL(name, base).href, false);
+          const worker = typeof WorkerGlobalScope !== "undefined";
+          if (worker) request.responseType = "arraybuffer";
+          else request.overrideMimeType("text/plain; charset=x-user-defined");
+          request.send();
+          if (request.status !== 200) return -1;
+          let data;
+          if (worker) data = new Uint8Array(request.response);
+          else {
+            const text = request.responseText;
+            data = new Uint8Array(text.length);
+            for (let i = 0; i < data.length; i++) data[i] = text.charCodeAt(i) & 0xff;
+          }
+          fetched = { name, data };
         }
+        const { data } = fetched;
+        const got = data.subarray(Math.min(from, data.length), Math.min(from + bytes, data.length));
         new Uint8Array(exports.memory.buffer, out, got.length).set(got);
+        if (from + bytes >= data.length) fetched = null;
         return got.length;
       } catch (error) {
         if (globalThis.console) console.error(`entelechy.fetch: ${name}: ${error.message}`);
