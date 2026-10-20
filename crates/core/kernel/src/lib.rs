@@ -931,6 +931,85 @@ impl Runtime {
         uploaded
     }
 
+    /// A new Field of the elements of `parts`, each a Field's range of
+    /// elements kept as `schema` keeps them, one part's after another's,
+    /// as `Rows`: joined on the main backend's device where it has one and
+    /// an element is whole words ([`Backend::join`]), else in Host memory,
+    /// each part brought home.
+    pub fn join(
+        &mut self,
+        parts: &[(Handle, std::ops::Range<usize>)],
+        schema: &Schema,
+    ) -> Result<Handle, ExecutionError> {
+        let abi = |e: HostError| ExecutionError::Abi(e.into());
+        let mut count = 0usize;
+        for (part, range) in parts {
+            if self.host.schema(*part).map_err(abi)? != schema {
+                return Err(ExecutionError::Device(format!(
+                    "a part joined is not kept as {schema}"
+                )));
+            }
+            let has = self.host.domain(*part).map_err(abi)?.count();
+            if range.start > range.end || range.end > has {
+                return Err(ExecutionError::Device(format!(
+                    "a part joined has {has} elements, not {range:?}"
+                )));
+            }
+            count += range.len();
+        }
+        // More rows than a `Rows` counts are more than any budget holds.
+        let domain = Domain::Rows(u32::try_from(count).unwrap_or(u32::MAX));
+        let whole_words = schema.element_bytes().is_multiple_of(4);
+        if whole_words && !parts.is_empty() && self.backend.has_device() {
+            let backend = Arc::clone(&self.backend);
+            let before = backend.uploaded();
+            let granted = [Capability::FieldRead, Capability::FieldWrite]
+                .into_iter()
+                .collect();
+            let joined = backend.join(
+                parts,
+                schema,
+                domain,
+                &mut Scope::new(&mut self.host, granted),
+            );
+            self.telemetry.carried(backend.as_ref(), before);
+            if let Some(handle) = joined? {
+                return Ok(handle);
+            }
+        }
+        for (part, _) in parts {
+            self.bring_home(*part)?;
+        }
+        let handle = self
+            .host
+            .create_for_fill(schema.clone(), domain)
+            .map_err(abi)?;
+        let mut words = Vec::new();
+        if !whole_words {
+            let each = schema.value_words();
+            for (part, range) in parts {
+                let values = self.host.data(*part).map_err(abi)?.values();
+                words.extend_from_slice(&values[range.start * each..range.end * each]);
+            }
+            self.host.write_values(handle, &words).map_err(abi)?;
+            return Ok(handle);
+        }
+        // A part's words at a time: the Host lends one Field's at once.
+        let each = schema.element_bytes() / 4;
+        let mut at = 0;
+        for (part, range) in parts {
+            words.clear();
+            words.extend_from_slice(
+                &self.host.data(*part).map_err(abi)?.storage()
+                    [range.start * each..range.end * each],
+            );
+            self.host.storage_mut(handle).map_err(abi)?[at..at + words.len()]
+                .copy_from_slice(&words);
+            at += words.len();
+        }
+        Ok(handle)
+    }
+
     /// Whether two Fields hold the same words: compared in Host memory
     /// when both are there, on the device when both are resident on it.
     /// Fields of different extents or layouts, or apart, are not.

@@ -450,6 +450,64 @@ impl Backend for GpuBackend {
         self.bind_input(scope, handle).map(|_| true)
     }
 
+    /// The parts' ranges of their buffers copied one after another into
+    /// one taken from the pile, in a submission of its own: what was
+    /// written to a part before lands first, and a part let go afterwards
+    /// is not reused before it.
+    fn join(
+        &self,
+        parts: &[(Handle, std::ops::Range<usize>)],
+        schema: &entelechy_abi::Schema,
+        domain: entelechy_abi::Domain,
+        scope: &mut Scope<'_>,
+    ) -> Result<Option<Handle>, ExecutionError> {
+        let element = schema.element_bytes() as u64;
+        let mut pieces = Vec::with_capacity(parts.len());
+        for (part, range) in parts {
+            let from = range.start as u64 * element;
+            let bytes = range.len() as u64 * element;
+            pieces.push((self.bind_input(scope, *part)?, from, bytes));
+        }
+        let total: u64 = pieces.iter().map(|(_, _, bytes)| bytes).sum();
+        if total != schema.storage_words(domain.count()) as u64 * 4 {
+            return Err(ExecutionError::Device(format!(
+                "the parts joined hold {total} bytes, where {} over {domain} takes {}",
+                schema,
+                schema.storage_words(domain.count()) * 4
+            )));
+        }
+        scope.can_hold(&[(schema, domain)])?;
+        let usage = wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST;
+        let buffer = self
+            .spare
+            .take(&self.device, total.max(4).div_ceil(16) * 16, usage);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("joined"),
+            });
+        let mut at = 0;
+        for (piece, from, bytes) in &pieces {
+            if *bytes > 0 {
+                encoder.copy_buffer_to_buffer(piece, *from, &buffer, at, *bytes);
+            }
+            at += bytes;
+        }
+        self.submit(encoder.finish());
+        let device = Box::new(DeviceImage {
+            buffer,
+            spare: Some(self.spare.clone()),
+            holds: None,
+        });
+        Ok(Some(scope.adopt_resident(
+            schema.clone(),
+            domain,
+            device,
+        )?))
+    }
+
     /// Validates `module` as the device takes it; its pipelines are built
     /// when a run first needs them ([`Lazy`]).
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {

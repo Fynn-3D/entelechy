@@ -305,6 +305,23 @@ pub trait Backend: Send + Sync {
         Ok(false)
     }
 
+    /// A new Field on this backend's device holding the elements of
+    /// `parts`, each a Field's range of elements kept as `schema` keeps
+    /// them (whole words an element), one part's after another's, over
+    /// `domain`; each Field is put on the device first where it is not,
+    /// and no Host copy is made. `None` for a backend that computes in
+    /// Host memory, which has nowhere to join them.
+    fn join(
+        &self,
+        parts: &[(Handle, std::ops::Range<usize>)],
+        schema: &entelechy_abi::Schema,
+        domain: entelechy_abi::Domain,
+        scope: &mut Scope<'_>,
+    ) -> Result<Option<Handle>, ExecutionError> {
+        let _ = (parts, schema, domain, scope);
+        Ok(None)
+    }
+
     /// Builds backend state for a validated module.
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String>;
 

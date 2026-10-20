@@ -26,7 +26,8 @@ pub struct MemoryMap {
 /// One Field and what holds it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeldBytes {
-    /// An input's name, or `node.port`.
+    /// An input's name, `node.port`, or `node: path` for a file a fields
+    /// node holds.
     pub owner: String,
     /// `input`, `state`, `output` or `back`.
     pub kind: &'static str,
@@ -85,6 +86,9 @@ impl Session {
         };
         for (name, handle) in self.input_handles() {
             claim(name.clone(), "input", *handle);
+        }
+        for (name, handle) in self.chunk_handles() {
+            claim(name, "input", handle);
         }
         let mut holdings = self.holdings();
         holdings.sort_by_key(|holding| match holding.held {

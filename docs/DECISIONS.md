@@ -917,7 +917,14 @@ background (a page's file comes over the network): the frames go on
 with what was in, as an `async` node's readers take its last output. A
 replay or a run reads at once, so what a frame sees does not depend on
 how fast a disk or a network is. Holding no file it no longer names, the
-Host keeps nothing beyond what the frames ask for.
+Host keeps nothing beyond what the frames ask for. A file that comes in
+is a Field of its own, on the device where the session has one, until
+the result is joined; then its elements are found in the result, and
+the next result is joined from that one and the files come in since.
+A device copies each part's words after the one before's, so neither
+a file coming in nor one going puts a word in Host memory or keeps a
+file twice; elsewhere, or for an element narrower than whole words, the
+Host joins them.
 
 **Where.** `Rows<E> fields` after `node x:` in the parser
 ([parser](../crates/frontend/language/src/parser.rs)), `FieldsNode`
@@ -926,7 +933,10 @@ Host keeps nothing beyond what the frames ask for.
 `entelechy.fetch_start` ([ffi](../crates/interface/ffi/src/lib.rs),
 [bridge](../bridges/web/entelechy.js)); `sync_field_nodes`,
 `give_field_paths` ([inputs](../crates/interface/session/src/inputs.rs))
-and `feed_field_nodes` ([session](../crates/interface/session/src/session.rs)).
+and `feed_field_nodes` ([session](../crates/interface/session/src/session.rs));
+`Runtime::join` ([kernel](../crates/core/kernel/src/lib.rs)) and
+`Backend::join` ([rules](../crates/core/rules/src/backend.rs),
+[gpu](../crates/backends/gpu/src/lib.rs)).
 Held by [the fields node tests](../crates/interface/session/tests/fields_node.rs)
 and the scene surface's `fields_node.esn`.
 

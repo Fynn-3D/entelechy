@@ -1428,6 +1428,12 @@ impl Session {
         self.inputs.handles()
     }
 
+    /// The Fields fields nodes hold of the files in, by node and path
+    /// ([`crate::inputs::Inputs::chunk_handles`]).
+    pub(crate) fn chunk_handles(&self) -> Vec<(String, Handle)> {
+        self.inputs.chunk_handles().collect()
+    }
+
     /// Every Field the evaluator holds ([`entelechy_graph::Evaluator::holdings`]).
     pub(crate) fn holdings(&self) -> Vec<entelechy_graph::Holding> {
         self.evaluator.holdings()
@@ -1918,7 +1924,7 @@ impl Session {
                 node,
                 handle,
                 paths,
-                self.runtime.host_mut(),
+                &mut self.runtime,
             );
         }
     }

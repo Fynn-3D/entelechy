@@ -240,3 +240,115 @@ fn off_the_frames_a_file_comes_in_by_a_later_sync_and_frames_go_on_meanwhile() {
     assert_eq!(in_at_last.0, vec![10, 11, 12, 1, 2]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_narrow_element_is_joined_as_the_kernel_keeps_it() {
+    let dir = scratch("narrow", &[], &[]);
+    std::fs::create_dir_all(dir.join("bytes")).unwrap();
+    for (name, ints) in [("a", vec![7u32, 8]), ("b", vec![1, 2, 3])] {
+        std::fs::write(
+            dir.join(format!("bytes/{name}.field")),
+            entelechy_formats::file::encode(
+                &Schema::new(vec![Scalar::Int]),
+                Domain::Rows(ints.len() as u32),
+                &ints,
+            ),
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        dir.join("scene.esn"),
+        format!(
+            "kernel t.paths@1 {{ requires {{ field.write; }} output result: Rows<Int>; compute {{ return {}[element()]; }} }}
+kernel t.ints@1 {{ requires {{ field.read; field.write; }} input ints: Rows<Int as u8>; output result: Rows<Int>; compute {{ return sample(ints); }} }}
+node paths: t.paths@1 {{ domain = 16; }}
+node near: Rows<Int> fields \"bytes/\" {{ paths <- paths.result; }}
+node ints: t.ints@1 {{ ints <- near.result; }}
+output ints <- ints.result;
+",
+            spelled(&["b.field", "a.field"], 16)
+        ),
+    )
+    .unwrap();
+    let mut session = open(&dir);
+    session.evaluate(&Context::default()).unwrap();
+    session.evaluate(&Context::default()).unwrap();
+    assert_eq!(words(&mut session, "ints"), vec![1, 2, 3, 7, 8]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn on_a_device_the_files_are_joined_there_and_none_kept_but_the_result() {
+    let gpu = match entelechy_gpu::GpuBackend::new() {
+        Ok(gpu) => gpu,
+        Err(error) => {
+            eprintln!("skipping: {error}");
+            return;
+        }
+    };
+    let dir = scratch("device", &["b.field", "a.field"], &["b.field"]);
+    let mut runtime = entelechy_kernel::Runtime::with_backend(1 << 22, Box::new(gpu));
+    runtime.set_small(0);
+    let mut session = Session::open_with(&dir.join("scene.esn"), None, runtime);
+    session.sync();
+    held(&mut session);
+    assert_eq!(held(&mut session).0, vec![10, 11, 12, 1, 2]);
+    let chunks = |session: &Session| -> Vec<(String, u64, u64)> {
+        session
+            .memory_map()
+            .held
+            .into_iter()
+            .filter(|entry| entry.owner.starts_with("near: "))
+            .map(|entry| (entry.owner, entry.bytes.host, entry.bytes.device))
+            .collect()
+    };
+    let result = |session: &Session| {
+        session
+            .memory_map()
+            .held
+            .into_iter()
+            .find(|entry| entry.owner == "near.result")
+            .map(|entry| (entry.bytes.host, entry.bytes.device))
+            .expect("the result is held")
+    };
+    assert_eq!(chunks(&session), vec![], "joined, no file keeps a Field");
+    assert_eq!(result(&session), (0, 5 * 12), "joined on the device");
+    // Named alone, `b.field`'s elements come from the result before.
+    let fields = session.runtime().host().census().fields;
+    session.set_param("which", Value::Int(1)).unwrap();
+    held(&mut session);
+    assert_eq!(held(&mut session), (vec![10, 11, 12], vec![(0, 3)]));
+    assert_eq!(result(&session), (0, 3 * 12));
+    assert_eq!(chunks(&session), vec![]);
+    assert!(session.runtime().host().census().fields <= fields);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_result_read_again_after_a_scene_left_it_holds_the_files_again() {
+    let dir = scratch("unread", &["b.field", "a.field"], &[]);
+    let mut session = open(&dir);
+    held(&mut session);
+    assert_eq!(held(&mut session).0, vec![10, 11, 12, 1, 2]);
+    // The scene reads only the ranges for a while, then the result again.
+    let full = std::fs::read_to_string(dir.join("scene.esn")).unwrap();
+    let ranges_only = full
+        .replace("node spots: t.spots@1 { spots <- near.result; }\n", "")
+        .replace("output spots <- spots.result;\n", "");
+    for text in [ranges_only, full] {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(dir.join("scene.esn"), text).unwrap();
+        let events = session.sync();
+        assert!(session.graph().is_some(), "{events:?}");
+        session.evaluate(&Context::default()).unwrap();
+    }
+    for _ in 0..3 {
+        session.sync();
+        session.evaluate(&Context::default()).unwrap();
+    }
+    assert_eq!(
+        held(&mut session),
+        (vec![10, 11, 12, 1, 2], vec![(0, 3), (3, 2)])
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

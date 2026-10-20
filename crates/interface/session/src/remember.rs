@@ -67,6 +67,18 @@ impl Backend for Remembered {
     fn uploaded(&self) -> u64 {
         self.inner.uploaded()
     }
+    fn upload(&self, handle: Handle, scope: &mut Scope<'_>) -> Result<bool, ExecutionError> {
+        self.inner.upload(handle, scope)
+    }
+    fn join(
+        &self,
+        parts: &[(Handle, std::ops::Range<usize>)],
+        schema: &entelechy_kernel::Schema,
+        domain: entelechy_kernel::Domain,
+        scope: &mut Scope<'_>,
+    ) -> Result<Option<Handle>, ExecutionError> {
+        self.inner.join(parts, schema, domain, scope)
+    }
     fn repeats_exactly(&self) -> bool {
         self.inner.repeats_exactly()
     }

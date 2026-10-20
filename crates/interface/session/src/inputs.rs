@@ -24,11 +24,13 @@ struct Asset {
 }
 
 /// The element a data table input is read as: the name of each number it
-/// holds and the layout, as the Kernel reading the input lays them out.
+/// holds and the layout, as the Kernel reading the input lays them out;
+/// and how its port keeps them, narrow where it says so (`Int as u8`).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TableElement {
     names: Vec<String>,
     schema: Schema,
+    kept: Schema,
 }
 
 /// What a scene declares of its inputs: its graph, the files and
@@ -97,7 +99,15 @@ pub(crate) fn table_elements(
                 entelechy_ir::number_names(ty, structs),
                 entelechy_ir::schema_of(ty, structs),
             ) {
-                found.insert(name.clone(), TableElement { names, schema });
+                let kept = declared.ty.schema.clone();
+                found.insert(
+                    name.clone(),
+                    TableElement {
+                        names,
+                        schema,
+                        kept,
+                    },
+                );
             }
         }
     }
@@ -206,24 +216,62 @@ struct FieldNode {
     /// The element as the Kernel reading the result lays it out, as the
     /// last sync found it.
     element: Option<Schema>,
+    /// The result it last joined, which its `result` holds until the next
+    /// is joined: [`made_in`] alone makes and holds one.
+    joined: Option<Handle>,
+}
+
+impl FieldNode {
+    /// Lets go of the Field of every file in.
+    fn let_go(self, host: &mut Host) {
+        for (_, chunk) in self.files {
+            chunk.let_go(host);
+        }
+    }
 }
 
 /// A Field file a `fields` node names, with the stamp it was asked at.
 enum Chunk {
     /// On its way.
     Coming(Box<dyn crate::store::Later>, Option<Stamp>),
-    /// In: its elements as the Kernel's words, how many, and their layout.
-    In(Vec<u32>, usize, Schema, Option<Stamp>),
+    /// In, laid out as the node's elements ([`FieldNode::element`]).
+    In(Piece, Option<Stamp>),
     /// Not in: no such file, or one refused and reported.
     Out(Option<Stamp>),
+}
+
+/// Where the elements of a file in are.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Piece {
+    /// A Field of their own, on the device where the session has one, not
+    /// yet joined.
+    Own(Handle),
+    /// How many there are from where, in the result the node last joined:
+    /// joined, a file keeps no Field of its own.
+    Joined(usize, usize),
 }
 
 impl Chunk {
     fn stamp(&self) -> Option<Stamp> {
         match self {
-            Self::Coming(_, stamp) | Self::In(.., stamp) | Self::Out(stamp) => *stamp,
+            Self::Coming(_, stamp) | Self::In(_, stamp) | Self::Out(stamp) => *stamp,
         }
     }
+
+    /// Lets go of the Field of a file in not yet joined.
+    fn let_go(self, host: &mut Host) {
+        if let Self::In(Piece::Own(handle), _) = self {
+            let _ = host.release(handle);
+        }
+    }
+}
+
+/// The layout a fields node joins its files in: the element as the Kernel
+/// reading the result lays it out, else each file's scalars a word each.
+fn joined_as(element: Option<&Schema>, scalars: &[entelechy_kernel::Scalar]) -> Schema {
+    element
+        .cloned()
+        .unwrap_or_else(|| Schema::new(scalars.to_vec()))
 }
 
 /// Starts reading `file` for a `fields` node: off the frames where the
@@ -237,13 +285,13 @@ fn ask(store: &dyn Store, file: &Path, background: bool) -> Box<dyn crate::store
 }
 
 /// A Field file as it came in for a `fields` node whose element is
-/// `element` (where a Kernel reads it): its elements as the Kernel's
-/// words, how many and their layout, within `room` words.
+/// `element` (where a Kernel reads it): its elements laid out as the node
+/// joins them ([`joined_as`]), within `room` words.
 fn taken(
     arrived: &dyn crate::store::Arrived,
     element: Option<&Schema>,
     room: usize,
-) -> Result<(Vec<u32>, usize, Schema), String> {
+) -> Result<FieldData, String> {
     let mut want = entelechy_formats::file::HEADER_BYTES;
     let start = loop {
         let start = arrived.start(want);
@@ -272,68 +320,110 @@ fn taken(
     let (words, bytes) = arrived.words(from);
     let data = entelechy_formats::file::from_words(schema, domain, words, bytes)
         .map_err(|e| e.to_string())?;
-    let wide = Schema::new(data.schema().scalars().to_vec());
-    Ok((data.values().into_owned(), domain.count(), wide))
+    let joined = joined_as(element, data.schema().scalars());
+    if *data.schema() == joined {
+        return Ok(data);
+    }
+    FieldData::from_values(joined, domain, &data.values()).map_err(|e| e.to_string())
 }
 
-/// A fields node's outputs from what it holds, made in `host`: `result`,
-/// the elements of the files in, in the order named (one zero element
-/// where none is), in `element`'s layout, else the first file's, filled
-/// into words the Host has spare where it has them; `ranges`, a row a
-/// path, where its elements start and how many there are, -1 and 0 for
-/// one not in (one such row where no path is named).
-fn made_in(node: &FieldNode, host: &mut Host) -> Vec<(&'static str, Result<Handle, String>)> {
+/// A fields node's outputs from what it holds, those of `ports` its
+/// scene reads: `result`, the elements of the files in, in the order
+/// named, joined from where they are ([`Runtime::join`]), one zero
+/// element where none is; `ranges`, a row a path, where its elements start
+/// and how many there are, -1 and 0 for one not in (one such row where no
+/// path is named). Joined, a file's own Field is let go and its elements
+/// are found in the result.
+fn made_in(
+    node: &mut FieldNode,
+    runtime: &mut Runtime,
+    ports: &[&str],
+) -> Vec<(&'static str, Result<Handle, String>)> {
+    let host = runtime.host_mut();
     let schema = node.element.clone().or_else(|| {
         node.files.values().find_map(|chunk| match chunk {
-            Chunk::In(_, _, schema, _) => Some(schema.clone()),
+            Chunk::In(Piece::Own(handle), _) => host.schema(*handle).ok().cloned(),
+            Chunk::In(Piece::Joined(..), _) => node
+                .joined
+                .and_then(|joined| host.schema(joined).ok().cloned()),
             _ => None,
         })
     });
     let mut ranges = Vec::with_capacity(node.paths.len().max(1) * 2);
+    let mut parts = Vec::new();
     let mut placed = Vec::new();
     let mut start = 0usize;
     for path in &node.paths {
-        match node.files.get(path) {
-            Some(Chunk::In(chunk, count, _, _)) => {
-                ranges.extend([start as u32, *count as u32]);
-                placed.push(chunk);
+        let part = match node.files.get(path) {
+            Some(Chunk::In(Piece::Own(handle), _)) => host
+                .domain(*handle)
+                .ok()
+                .map(|domain| (*handle, 0..domain.count())),
+            Some(Chunk::In(Piece::Joined(from, count), _)) => {
+                node.joined.map(|joined| (joined, *from..from + count))
+            }
+            _ => None,
+        };
+        match part {
+            Some((handle, range)) => {
+                let count = range.len();
+                ranges.extend([start as u32, count as u32]);
+                placed.push((path.clone(), start, count));
+                parts.push((handle, range));
                 start += count;
             }
-            _ => ranges.extend([-1i32 as u32, 0]),
+            None => ranges.extend([-1i32 as u32, 0]),
         }
     }
     if ranges.is_empty() {
         ranges.extend([-1i32 as u32, 0]);
     }
-    let mut made = vec![(
-        "ranges",
-        FieldData::from_storage(
-            Schema::new(vec![entelechy_kernel::Scalar::Int; 2]),
-            entelechy_kernel::Domain::Rows((ranges.len() / 2) as u32),
-            ranges,
-        )
-        .and_then(|data| host.adopt(data))
-        .map_err(|e| e.to_string()),
-    )];
-    if let Some(schema) = schema {
-        let result = host
-            .create_for_fill(schema, entelechy_kernel::Domain::Rows(start.max(1) as u32))
-            .and_then(|handle| {
-                let out = host.storage_mut(handle)?;
-                if placed.is_empty() {
-                    out.fill(0);
-                }
-                let mut at = 0;
-                for chunk in placed {
-                    out[at..at + chunk.len()].copy_from_slice(chunk);
-                    at += chunk.len();
-                }
-                Ok(handle)
-            })
-            .map_err(|e| e.to_string());
-        made.push(("result", result));
+    let mut made = Vec::new();
+    if ports.contains(&"ranges") {
+        made.push((
+            "ranges",
+            FieldData::from_storage(
+                Schema::new(vec![entelechy_kernel::Scalar::Int; 2]),
+                entelechy_kernel::Domain::Rows((ranges.len() / 2) as u32),
+                ranges,
+            )
+            .and_then(|data| host.adopt(data))
+            .map_err(|e| e.to_string()),
+        ));
     }
+    let Some(schema) = schema.filter(|_| ports.contains(&"result")) else {
+        return made;
+    };
+    let result = if parts.is_empty() {
+        host.create(schema, entelechy_kernel::Domain::Rows(1))
+            .map_err(|e| e.to_string())
+    } else {
+        runtime.join(&parts, &schema).map_err(|e| e.to_string())
+    };
+    if let Ok(result) = result {
+        for (path, start, count) in placed {
+            if let Some(Chunk::In(piece, _)) = node.files.get_mut(&path)
+                && let Piece::Own(handle) = std::mem::replace(piece, Piece::Joined(start, count))
+            {
+                let _ = runtime.host_mut().release(handle);
+            }
+        }
+        node.joined = Some(result);
+    }
+    made.push(("result", result));
     made
+}
+
+/// A file's elements as a Field of a fields node's: put on the device
+/// where the session has one and their words join there, the Host copy
+/// let go, so the node keeps none of a file's words in memory.
+fn kept_in(runtime: &mut Runtime, data: FieldData) -> Result<Handle, String> {
+    let whole_words = data.schema().element_bytes().is_multiple_of(4);
+    let handle = runtime.host_mut().adopt(data).map_err(|e| e.to_string())?;
+    if whole_words && runtime.has_device() && runtime.upload(handle).unwrap_or(false) {
+        let _ = runtime.host_mut().let_go_of_copy(handle);
+    }
+    Ok(handle)
 }
 
 /// Every file under `dir` a listing shows: hidden ones, those under hidden
@@ -609,6 +699,20 @@ impl Inputs {
         &self.handles
     }
 
+    /// The Field of each file in that a fields node holds to join, by the
+    /// node and the file's path: `near: b.field`.
+    pub(crate) fn chunk_handles(&self) -> impl Iterator<Item = (String, Handle)> + '_ {
+        self.field_nodes.iter().flat_map(|(node, known)| {
+            known
+                .files
+                .iter()
+                .filter_map(move |(path, chunk)| match chunk {
+                    Chunk::In(Piece::Own(handle), _) => Some((format!("{node}: {path}"), *handle)),
+                    _ => None,
+                })
+        })
+    }
+
     /// The files and directories the inputs are read from.
     pub(crate) fn watched(&self) -> impl Iterator<Item = PathBuf> + '_ {
         self.assets
@@ -667,8 +771,8 @@ impl Inputs {
         self.sync_files(store.as_ref(), declared.files, readable, host, events);
         self.sync_fonts(store.as_ref(), declared.files, readable, host, events);
         self.sync_file_nodes(store.as_ref(), declared.files, readable, host, events);
-        self.sync_field_nodes(store.as_ref(), declared, host, events);
-        self.sync_texts(declared.graph, host, events);
+        self.sync_field_nodes(store.as_ref(), declared, runtime, events);
+        self.sync_texts(declared.graph, runtime.host_mut(), events);
         on_device
     }
 
@@ -883,7 +987,7 @@ impl Inputs {
         &mut self,
         store: &dyn Store,
         declared: &Declared,
-        host: &mut Host,
+        runtime: &mut Runtime,
         events: &mut Vec<Event>,
     ) {
         let files = declared.files;
@@ -894,9 +998,11 @@ impl Inputs {
             .cloned()
             .collect();
         for node in stale {
-            self.field_nodes.remove(&node);
+            if let Some(known) = self.field_nodes.remove(&node) {
+                known.let_go(runtime.host_mut());
+            }
             for port in entelechy_scene::FIELDS_OUTPUTS {
-                self.forget(host, &format!("{node}.{port}"));
+                self.forget(runtime.host_mut(), &format!("{node}.{port}"));
             }
         }
         let background = self.background;
@@ -906,7 +1012,7 @@ impl Inputs {
                 .get(&node.node)
                 .is_none_or(|known| known.dir != node.dir)
             {
-                self.field_nodes.insert(
+                let before = self.field_nodes.insert(
                     node.node.clone(),
                     FieldNode {
                         dir: node.dir.clone(),
@@ -915,30 +1021,37 @@ impl Inputs {
                         seen: None,
                         changed: true,
                         element: None,
+                        joined: None,
                     },
                 );
+                if let Some(before) = before {
+                    before.let_go(runtime.host_mut());
+                }
             }
-            // The element as the Kernel reading the result lays it out.
+            // The element as the Kernel reading the result keeps it.
             let element = node
                 .outputs
                 .iter()
                 .find(|(port, _)| port == "result")
                 .and_then(|(_, external)| declared.tables.get(external))
-                .map(|table| table.schema.clone());
+                .map(|table| table.kept.clone());
             let known = self.field_nodes.get_mut(&node.node).expect("just placed");
-            if known.element != element {
+            let relaid = known.element != element;
+            if relaid {
                 known.element = element;
                 known.changed = true;
             }
-            // A file that changed since it was asked is asked again.
+            // A file that changed since it was asked, or whose elements are
+            // laid out anew, is asked again.
             for (path, chunk) in &mut known.files {
                 let file = node.dir.join(path);
                 let stamp = store.stamp(&file);
-                if !matches!(chunk, Chunk::Coming(..)) && stamp != chunk.stamp() {
-                    *chunk = Chunk::Coming(ask(store, &file, background), stamp);
+                if !matches!(chunk, Chunk::Coming(..)) && (relaid || stamp != chunk.stamp()) {
+                    let asked = Chunk::Coming(ask(store, &file, background), stamp);
+                    std::mem::replace(chunk, asked).let_go(runtime.host_mut());
                 }
             }
-            self.settle_field_node(node, host, events);
+            self.settle_field_node(node, runtime, events);
         }
     }
 
@@ -947,10 +1060,10 @@ impl Inputs {
     fn settle_field_node(
         &mut self,
         node: &entelechy_scene::FieldsNode,
-        host: &mut Host,
+        runtime: &mut Runtime,
         events: &mut Vec<Event>,
     ) {
-        let room = room(host);
+        let room = room(runtime.host());
         let Some(known) = self.field_nodes.get_mut(&node.node) else {
             return;
         };
@@ -973,8 +1086,10 @@ impl Inputs {
                     });
                     Chunk::Out(stamp)
                 }
-                Ok(arrived) => match taken(arrived.as_ref(), known.element.as_ref(), room) {
-                    Ok((words, count, schema)) => Chunk::In(words, count, schema, stamp),
+                Ok(arrived) => match taken(arrived.as_ref(), known.element.as_ref(), room)
+                    .and_then(|data| kept_in(runtime, data))
+                {
+                    Ok(handle) => Chunk::In(Piece::Own(handle), stamp),
                     Err(why) => {
                         events.push(Event::Rejected {
                             path: file,
@@ -992,11 +1107,12 @@ impl Inputs {
             return;
         }
         known.changed = false;
-        let made = made_in(known, host);
+        let ports: Vec<&str> = node.outputs.iter().map(|(port, _)| port.as_str()).collect();
+        let made = made_in(known, runtime, &ports);
         for (port, handle) in made {
             let held = handle.map(|handle| {
                 if let Some((_, external)) = node.outputs.iter().find(|(name, _)| name == port) {
-                    self.hold(host, external, handle);
+                    self.hold(runtime.host_mut(), external, handle);
                 }
             });
             if let Err(why) = held {
@@ -1031,7 +1147,7 @@ impl Inputs {
         node: &entelechy_scene::FieldsNode,
         handle: Handle,
         paths: Result<Vec<String>, String>,
-        host: &mut Host,
+        runtime: &mut Runtime,
     ) {
         let background = self.background;
         let Some(known) = self.field_nodes.get_mut(&node.node) else {
@@ -1056,7 +1172,17 @@ impl Inputs {
                 return;
             }
         };
-        known.files.retain(|path, _| paths.contains(path));
+        let gone: Vec<String> = known
+            .files
+            .keys()
+            .filter(|path| !paths.contains(path))
+            .cloned()
+            .collect();
+        for path in gone {
+            if let Some(chunk) = known.files.remove(&path) {
+                chunk.let_go(runtime.host_mut());
+            }
+        }
         for path in &paths {
             if !known.files.contains_key(path) {
                 let file = node.dir.join(path);
@@ -1072,7 +1198,7 @@ impl Inputs {
         // What is in already (all of it, where nothing is read off the
         // frames) is held for the next evaluation.
         let mut events = Vec::new();
-        self.settle_field_node(node, host, &mut events);
+        self.settle_field_node(node, runtime, &mut events);
         self.frame_events.append(&mut events);
     }
 
@@ -1082,7 +1208,9 @@ impl Inputs {
     /// empty at the next sync; each fields node no paths.
     pub(crate) fn start_fed_over(&mut self, files: &entelechy_scene::Files, host: &mut Host) {
         self.file_nodes.clear();
-        self.field_nodes.clear();
+        for (_, known) in std::mem::take(&mut self.field_nodes) {
+            known.let_go(host);
+        }
         for font in &files.fonts {
             let Some(known) = self.fonts.get_mut(&font.node) else {
                 continue;
