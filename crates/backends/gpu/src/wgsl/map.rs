@@ -309,6 +309,68 @@ fn exchanged(body: &[entelechy_ir::Instruction], out: &mut Vec<Type>) {
     }
 }
 
+/// The bytes a group's workgroup holds at once: an array of a value for
+/// each lane, of every type its lanes exchange, laid out as the shader
+/// lays them, and the flags its lanes meet on.
+pub fn group_memory(module: &Module) -> u64 {
+    let Mode::Group { size } = module.manifest.mode else {
+        return 0;
+    };
+    let mut met: Vec<Type> = Vec::new();
+    exchanged(&module.entry.body, &mut met);
+    let arrays: u64 = met
+        .into_iter()
+        .map(|ty| {
+            let (bytes, align) = layout(module, ty);
+            bytes.next_multiple_of(align) * u64::from(size)
+        })
+        .sum();
+    // The flag of a failure met, and a counted group's gate and sum.
+    let flags = if module.accounted() { 12 } else { 4 };
+    arrays + flags
+}
+
+/// A value's size and alignment in a shader's memory, by WGSL's layout:
+/// a three-vector aligned as a four, a struct to its widest field.
+fn layout(module: &Module, ty: Type) -> (u64, u64) {
+    let scalar = |kind: entelechy_abi::Scalar| -> u64 {
+        if matches!(
+            kind,
+            entelechy_abi::Scalar::Long | entelechy_abi::Scalar::Double
+        ) {
+            8
+        } else {
+            4
+        }
+    };
+    let vector = |kind, n: u8| {
+        let c = scalar(kind);
+        match n {
+            2 => (2 * c, 2 * c),
+            3 => (3 * c, 4 * c),
+            _ => (4 * c, 4 * c),
+        }
+    };
+    match ty {
+        Type::Scalar(kind) => (scalar(kind), scalar(kind)),
+        Type::Vector(kind, n) => vector(kind, n),
+        Type::Matrix(kind, n) => {
+            let (column, align) = vector(kind, n);
+            (u64::from(n) * column.next_multiple_of(align), align)
+        }
+        Type::Struct(index) => {
+            let mut offset = 0u64;
+            let mut widest = 1u64;
+            for field in &module.structs[index as usize].fields {
+                let (bytes, align) = layout(module, field.ty);
+                offset = offset.next_multiple_of(align) + bytes;
+                widest = widest.max(align);
+            }
+            (offset.next_multiple_of(widest), widest)
+        }
+    }
+}
+
 /// Words a value of a type takes in a buffer.
 pub fn type_words(module: &Module, ty: Type) -> usize {
     match ty {

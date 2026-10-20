@@ -709,9 +709,11 @@ stretch between exchanges once for each lane in turn
 array of the lanes' values, so a value that crosses one holds at most
 what a value may, its words times the group's size, which is refused
 where the group is written. The GPU runs every group a map could run,
-its outputs several or narrow, its work counted or not: a loop holding
-an exchange stops for the whole group once a lane has failed, at the
-next look after the lanes have met.
+its outputs several or narrow, its work counted or not, so long as what
+its lanes exchange fits the memory a workgroup holds (tens of thousands
+of bytes: each type exchanged, times the group's size); a group past it
+runs on the JIT. A loop holding an exchange stops for the whole group
+once a lane has failed, at the next look after the lanes have met.
 
 ## Graph
 

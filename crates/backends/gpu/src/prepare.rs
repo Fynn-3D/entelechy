@@ -351,6 +351,14 @@ impl GpuBackend {
         if module.holds(entelechy_abi::Type::Double) {
             return Some("it holds a Double, which the device does not compute".to_owned());
         }
+        // A group's exchanges are arrays in its workgroup's memory.
+        let memory = wgsl::group_memory(module);
+        let most = u64::from(self.device.limits().max_compute_workgroup_storage_size);
+        if memory > most {
+            return Some(format!(
+                "it is a group whose lanes exchange {memory} bytes at once, and the device's workgroups hold {most}"
+            ));
+        }
         if !module.holds(entelechy_abi::Type::Long) {
             return None;
         }

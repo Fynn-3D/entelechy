@@ -148,6 +148,12 @@ impl fmt::Debug for GpuBackend {
 }
 
 impl GpuBackend {
+    /// The bytes a workgroup of this device holds at once: what a group's
+    /// exchanges may take.
+    pub fn workgroup_memory(&self) -> u32 {
+        self.device.limits().max_compute_workgroup_storage_size
+    }
+
     /// Gives the device a run, work or copy: every run but the empty ones
     /// a wait is marked by goes through here, so a clocked frame counts
     /// each.
@@ -199,6 +205,9 @@ impl GpuBackend {
                 .max_uniform_buffers_per_shader_stage,
             max_buffers_and_acceleration_structures_per_shader_stage: adapter_limits
                 .max_buffers_and_acceleration_structures_per_shader_stage,
+            // A group's exchanges, in its workgroup's memory: all the
+            // adapter offers.
+            max_compute_workgroup_storage_size: adapter_limits.max_compute_workgroup_storage_size,
             ..wgpu::Limits::default()
         };
         // Timestamps at a pass's edges, when offered: what a profile reads.

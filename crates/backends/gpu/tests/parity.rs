@@ -2922,3 +2922,50 @@ fn a_counted_group_stops_together_where_its_lanes_meet() {
     assert!(reference.contains("(1, 0)"), "{reference}");
     assert_eq!(run(&gpu).unwrap_err(), reference);
 }
+
+/// A group's exchanges are arrays in its workgroup's memory: one that
+/// fits runs on the device and gives the interpreter's words; one past
+/// what the device's workgroups hold goes elsewhere rather than run
+/// wrong.
+#[test]
+fn a_group_exchanges_on_the_device_what_its_workgroup_holds() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let source = |count: u32| {
+        format!(
+            "kernel t.big@1 {{ requires {{ field.write; }} output result: Rows<Vec4>;
+                group 256 {{ let many = [vec4(float(element()), 1.0, 0.0, 1.0); {count}];
+                    let other = exchange(many, lane() + 1); return other[{count} - 1]; }} }}"
+        )
+    };
+    let most = u64::from(gpu.workgroup_memory());
+    // A `Vec4` is 16 bytes: the most that fits, and one more.
+    let fits = ((most - 4) / (16 * 256)) as u32;
+    let fitting = compile(&source(fits)).unwrap();
+    assert_eq!(gpu.declines(&fitting), None);
+    let past = compile(&source(fits + 1)).unwrap();
+    let why = gpu.declines(&past).expect("past the workgroup's memory");
+    assert!(why.contains("workgroups hold"), "{why}");
+    let mut host = Host::new(1 << 22);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(1000),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, all());
+    let cpu = CpuBackend
+        .execute(&fitting, &invocation, &mut scope)
+        .unwrap()[0];
+    let words = host.data(cpu).unwrap().storage().to_vec();
+    let prepared = Backend::prepare(&gpu, &fitting).unwrap();
+    let mut scope = Scope::new(&mut host, all());
+    let out =
+        Backend::execute(&gpu, prepared.as_ref(), &fitting, &invocation, &mut scope).unwrap()[0];
+    let device = host.resident(out).unwrap().expect("resident");
+    assert_eq!(
+        Backend::download(&gpu, device, words.len() * 4).unwrap(),
+        words
+    );
+}
