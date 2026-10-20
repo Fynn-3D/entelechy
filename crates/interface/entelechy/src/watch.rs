@@ -105,7 +105,7 @@ fn run(progress: &Progress, stop: &AtomicBool) {
 fn line(now: &Preparing, elapsed: Duration) -> String {
     let n = now.seeds.len();
     let cells = n.clamp(1, SEEDS);
-    let beat = (elapsed.as_millis() / 400) % 2 == 0;
+    let beat = (elapsed.as_millis() / 400).is_multiple_of(2);
     let mut out = String::from("  ");
     for cell in 0..cells {
         let seeds =
