@@ -122,6 +122,14 @@ pub struct GpuBackend {
     heard: Arc<Mutex<Vec<String>>>,
 }
 
+/// The little-endian words a mapped readback holds, copied once.
+pub(crate) fn words_of(bytes: &[u8]) -> Vec<u32> {
+    bytes
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
 /// `error` with what the device said by itself before it, when it said
 /// anything: a page's mapping fails with a bare "error occurred".
 pub(crate) fn told(heard: &Mutex<Vec<String>>, error: String) -> String {
@@ -697,7 +705,7 @@ impl Backend for GpuBackend {
         &self,
         device: &(dyn Any + Send + Sync),
         byte_len: usize,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Vec<u32>, String> {
         let image = device
             .downcast_ref::<DeviceImage>()
             .ok_or_else(|| "image is resident on a different backend".to_string())?;
@@ -725,16 +733,16 @@ impl Backend for GpuBackend {
                     .map_read(&self.device, &self.queue, staging.slice(..))
             })
             .map_err(|error| told(&self.heard, error))?;
-        let bytes: Vec<u8> = {
+        let words = {
             let view = staging
                 .slice(..)
                 .get_mapped_range()
                 .map_err(|error| error.to_string())?;
-            view[..byte_len].to_vec()
+            words_of(&view[..byte_len])
         };
         staging.unmap();
         staging.destroy();
-        Ok(bytes)
+        Ok(words)
     }
 
     fn download_later(

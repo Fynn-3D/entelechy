@@ -132,7 +132,7 @@ impl Backend for Owned {
         &self,
         device: &(dyn Any + Send + Sync),
         byte_len: usize,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Vec<u32>, String> {
         self.inner.download(device, byte_len)
     }
 }

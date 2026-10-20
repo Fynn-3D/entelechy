@@ -4,6 +4,26 @@
 
 use super::*;
 
+/// The most words written to the device from one copy of them as bytes:
+/// a large Field goes up in pieces, never copied whole.
+const WRITE_WORDS: usize = 1 << 18;
+
+impl GpuBackend {
+    /// Writes `words` to `buffer` from word `at` on, queued for the next
+    /// submission; the queue copies each piece as it is written.
+    pub(crate) fn write_words(&self, buffer: &wgpu::Buffer, at: usize, words: &[u32]) {
+        let mut bytes = Vec::with_capacity(words.len().min(WRITE_WORDS) * 4);
+        for (k, piece) in words.chunks(WRITE_WORDS).enumerate() {
+            bytes.clear();
+            bytes.extend(piece.iter().flat_map(|w| w.to_le_bytes()));
+            self.uploaded
+                .fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            let offset = (at + k * WRITE_WORDS) as u64 * 4;
+            self.queue.write_buffer(buffer, offset, &bytes);
+        }
+    }
+}
+
 pub(crate) fn param_bytes(params: &[Value]) -> Vec<u8> {
     // Each parameter's words from a `vec4<u32>` slot of its own, as many
     // slots as they fill (`wgsl::param_slots`).
@@ -182,17 +202,7 @@ impl GpuBackend {
         };
         let storage = scope.storage(handle)?;
         for span in spans {
-            let bytes = storage[span.clone()]
-                .iter()
-                .flat_map(|w| w.to_le_bytes())
-                .collect::<Vec<u8>>();
-            if bytes.is_empty() {
-                continue;
-            }
-            self.uploaded
-                .fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);
-            self.queue
-                .write_buffer(&buffer, span.start as u64 * 4, &bytes);
+            self.write_words(&buffer, span.start, &storage[span]);
         }
         let holds = Held {
             words: scope.version(handle)?,

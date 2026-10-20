@@ -1013,14 +1013,10 @@ impl Runtime {
             .map_err(|e| ExecutionError::Abi(e.into()))?
             .storage_words(domain.count())
             * 4;
-        let bytes = self
+        let words = self
             .backend
             .download(device, byte_len)
             .map_err(ExecutionError::Device)?;
-        let words: Vec<u32> = bytes
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect();
         self.host
             .materialize(handle, words)
             .map_err(|e| ExecutionError::Abi(e.into()))?;
@@ -1712,11 +1708,7 @@ impl Fetch {
                 domain,
                 coming,
             } => {
-                let bytes = coming.take().map_err(ExecutionError::Device)?;
-                let words = bytes
-                    .chunks_exact(4)
-                    .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                    .collect();
+                let words = coming.take().map_err(ExecutionError::Device)?;
                 FieldData::from_storage(schema, domain, words)
                     .map_err(|e| ExecutionError::Abi(e.into()))
             }

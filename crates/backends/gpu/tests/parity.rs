@@ -18,11 +18,7 @@ fn materialized(gpu: &GpuBackend, host: &mut Host, handle: entelechy_abi::Handle
         .resident(handle)
         .unwrap()
         .expect("gpu outputs are resident");
-    let bytes = Backend::download(gpu, device, byte_len).unwrap();
-    let words: Vec<u32> = bytes
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
+    let words = Backend::download(gpu, device, byte_len).unwrap();
     host.materialize(handle, words).unwrap();
     host.image(handle).unwrap().pixels().to_vec()
 }
@@ -504,11 +500,7 @@ fn reductions_match_between_backends() {
         .storage_words(host.domain(gpu_out).unwrap().count())
         * 4;
     let device = host.resident(gpu_out).unwrap().expect("resident");
-    let bytes = Backend::download(&gpu, device, byte_len).unwrap();
-    let gpu_stats: Vec<u32> = bytes
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
+    let gpu_stats = Backend::download(&gpu, device, byte_len).unwrap();
     assert_eq!(host.domain(gpu_out).unwrap(), Domain::Rows(1));
     assert_eq!(cpu_stats[0], gpu_stats[0], "bright counts are exact");
     for k in 1..6 {
@@ -625,11 +617,7 @@ fn on_both(
         .storage_words(host.domain(gpu_out).unwrap().count())
         * 4;
     let device = host.resident(gpu_out).unwrap().expect("resident");
-    let bytes = Backend::download(gpu, device, byte_len).unwrap();
-    let gpu_words: Vec<u32> = bytes
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
+    let gpu_words = Backend::download(gpu, device, byte_len).unwrap();
     (cpu_words, gpu_words)
 }
 
@@ -677,11 +665,7 @@ fn scans_match_between_backends() {
         .storage_words(host.domain(gpu_out).unwrap().count())
         * 4;
     let device = host.resident(gpu_out).unwrap().expect("resident");
-    let bytes = Backend::download(&gpu, device, byte_len).unwrap();
-    let gpu_words: Vec<u32> = bytes
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
+    let gpu_words = Backend::download(&gpu, device, byte_len).unwrap();
     assert_eq!(host.domain(gpu_out).unwrap(), Domain::Rows(count));
     for i in 0..count as usize {
         assert_eq!(cpu_words[i * 2], gpu_words[i * 2], "total at {i}");
@@ -760,10 +744,10 @@ fn linear_interpolation_matches_between_backends() {
     let mut scope = Scope::new(&mut host, all());
     let gpu_out =
         Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
-    let bytes =
+    let words =
         Backend::download(&gpu, host.resident(gpu_out).unwrap().unwrap(), 9 * 3 * 4).unwrap();
-    for (k, chunk) in bytes.chunks_exact(4).enumerate() {
-        let g = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    for (k, word) in words.iter().enumerate() {
+        let g = f32::from_bits(*word);
         let c = f32::from_bits(cpu_words[k]);
         assert!((c - g).abs() <= 1e-5, "word {k}: cpu {c}, gpu {g}");
     }
@@ -875,11 +859,7 @@ fn scatters_match_between_backends() {
             .storage_words(host.domain(gpu_out).unwrap().count())
             * 4;
         let device = host.resident(gpu_out).unwrap().expect("resident");
-        let bytes = Backend::download(&gpu, device, byte_len).unwrap();
-        let gpu_words: Vec<u32> = bytes
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect();
+        let gpu_words = Backend::download(&gpu, device, byte_len).unwrap();
         assert_eq!(cpu_words, gpu_words, "scatter with {combine} differs");
         if combine == "sum" {
             let total: f32 = cpu_words
@@ -963,11 +943,7 @@ fn scatters_match_between_backends() {
             .storage_words(host.domain(gpu_out).unwrap().count())
             * 4;
         let device = host.resident(gpu_out).unwrap().expect("resident");
-        let bytes = Backend::download(&gpu, device, byte_len).unwrap();
-        let gpu_words: Vec<u32> = bytes
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect();
+        let gpu_words = Backend::download(&gpu, device, byte_len).unwrap();
         assert_eq!(cpu_words, gpu_words, "{label} differs");
         if label == "int sum" {
             let hits: u32 = cpu_words.chunks_exact(2).map(|c| c[0]).sum();
@@ -1027,11 +1003,7 @@ fn scatters_match_between_backends() {
     let gpu_out =
         Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
     let device = host.resident(gpu_out).unwrap().expect("resident");
-    let bytes = Backend::download(&gpu, device, 24 * 2 * 4).unwrap();
-    let gpu_words: Vec<u32> = bytes
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
+    let gpu_words = Backend::download(&gpu, device, 24 * 2 * 4).unwrap();
     assert_eq!(
         cpu_words, gpu_words,
         "a hundred thousand drops summed in order differ"
@@ -1080,11 +1052,7 @@ fn scatters_match_between_backends() {
         let gpu_out =
             Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
         let device = host.resident(gpu_out).unwrap().expect("resident");
-        let bytes = Backend::download(&gpu, device, 24 * 4).unwrap();
-        let gpu_words: Vec<u32> = bytes
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect();
+        let gpu_words = Backend::download(&gpu, device, 24 * 4).unwrap();
         assert_eq!(cpu_words, gpu_words, "float {combine} with NaN differs");
         let nans = cpu_words
             .iter()
@@ -1160,11 +1128,7 @@ fn memories_match_between_backends() {
         );
         let byte_len = cpu_words.len() * 4;
         let device = host.resident(*gpu_out).unwrap().expect("resident");
-        let bytes = Backend::download(&gpu, device, byte_len).unwrap();
-        let gpu_words: Vec<u32> = bytes
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect();
+        let gpu_words = Backend::download(&gpu, device, byte_len).unwrap();
         assert_eq!(cpu_words, gpu_words, "output {which} differs");
     }
     let screen_words = host.data(cpu_outputs[1]).unwrap().storage().to_vec();
@@ -1206,11 +1170,7 @@ fn integer_arithmetic_matches_between_backends() {
     let out =
         Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
     let device = host.resident(out).unwrap().expect("resident");
-    let bytes = Backend::download(&gpu, device, cpu_words.len() * 4).unwrap();
-    let gpu_words: Vec<u32> = bytes
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
+    let gpu_words = Backend::download(&gpu, device, cpu_words.len() * 4).unwrap();
     assert_eq!(cpu_words, gpu_words);
     assert!(
         cpu_words[6..].iter().any(|w| *w as i32 > 0)
@@ -1248,11 +1208,7 @@ fn a_step_reads_what_the_step_before_wrote_even_when_it_reads_first() {
         Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap();
     let words = |handle: entelechy_abi::Handle, n: usize| -> Vec<u32> {
         let device = host.resident(handle).unwrap().expect("resident");
-        let bytes = Backend::download(&gpu, device, n * 4).unwrap();
-        bytes
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect()
+        Backend::download(&gpu, device, n * 4).unwrap()
     };
     assert_eq!(words(outputs[0], 5), [0, 2, 4, 6, 8]);
     assert_eq!(words(outputs[1], 17)[15], 10);
@@ -1278,11 +1234,11 @@ fn rows_of_every_length_are_every_element() {
         let out =
             Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
         let device = host.resident(out).unwrap().expect("resident");
-        let bytes = Backend::download(&gpu, device, count as usize * 4).unwrap();
-        let wrong = bytes
-            .chunks_exact(4)
+        let words = Backend::download(&gpu, device, count as usize * 4).unwrap();
+        let wrong = words
+            .iter()
             .enumerate()
-            .filter(|(i, c)| f32::from_le_bytes([c[0], c[1], c[2], c[3]]) != *i as f32 * 2.0 + 1.0)
+            .filter(|(i, w)| f32::from_bits(**w) != *i as f32 * 2.0 + 1.0)
             .count();
         assert_eq!(wrong, 0, "{count} rows");
     }
@@ -1308,11 +1264,7 @@ fn long_rows_are_dispatched_as_a_grid() {
     let out =
         Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
     let device = host.resident(out).unwrap().expect("resident");
-    let bytes = Backend::download(&gpu, device, count as usize * 4).unwrap();
-    let words: Vec<u32> = bytes
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
+    let words = Backend::download(&gpu, device, count as usize * 4).unwrap();
     for probe in [
         0u32,
         7,
@@ -1355,11 +1307,7 @@ fn a_match_is_a_switch_on_the_gpu() {
     let out =
         Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
     let device = host.resident(out).unwrap().expect("resident");
-    let bytes = Backend::download(&gpu, device, cpu_words.len() * 4).unwrap();
-    let gpu_words: Vec<u32> = bytes
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
+    let gpu_words = Backend::download(&gpu, device, cpu_words.len() * 4).unwrap();
     assert_eq!(cpu_words, gpu_words);
     assert_eq!(cpu_words[3] as i32, 100_022);
 }
@@ -1418,8 +1366,8 @@ fn a_merge_may_read_inputs_params_and_the_context() {
     let out =
         Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
     let device = host.resident(out).unwrap().expect("resident");
-    let bytes = Backend::download(&gpu, device, 4).unwrap();
-    let gpu_value = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    let words = Backend::download(&gpu, device, 4).unwrap();
+    let gpu_value = f32::from_bits(words[0]);
     let cpu_value = f32::from_bits(cpu_words[0]);
     assert!(
         (cpu_value - gpu_value).abs() <= cpu_value.abs() * 1e-5,
@@ -1819,11 +1767,7 @@ fn on_both_inputs(
         .storage_words(host.domain(gpu_out).unwrap().count())
         * 4;
     let device = host.resident(gpu_out).unwrap().expect("resident");
-    let bytes = Backend::download(gpu, device, byte_len).unwrap();
-    let gpu_words = bytes
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
+    let gpu_words = Backend::download(gpu, device, byte_len).unwrap();
     (cpu_words, gpu_words)
 }
 
@@ -1893,11 +1837,7 @@ fn repeated_runs_are_the_interpreters_runs_in_turn() {
             };
             let byte_len = schema.storage_words(count as usize) * 4;
             let device = host.resident(out).unwrap().expect("resident");
-            let bytes = Backend::download(&gpu, device, byte_len).unwrap();
-            let words = bytes
-                .chunks_exact(4)
-                .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                .collect();
+            let words = Backend::download(&gpu, device, byte_len).unwrap();
             host.materialize(out, words).unwrap();
             let gpu_values = host.data(out).unwrap().values().into_owned();
             let far = cpu
@@ -2556,13 +2496,10 @@ fn a_field_made_from_another_is_uploaded_on_its_changed_pages() {
             gpu.execute(prepared.as_ref(), &module, &invocation, &mut scope)
                 .unwrap()
         };
-        let bytes =
+        let words =
             Backend::download(&gpu, host.resident(out[0]).unwrap().unwrap(), len * 4).unwrap();
         host.release(out[0]).unwrap();
-        let words = bytes
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]) / 2)
-            .collect();
+        let words = words.into_iter().map(|w| w / 2).collect();
         (words, gpu.uploaded() - before)
     };
     let field = |words: &Vec<u32>| {

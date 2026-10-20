@@ -261,7 +261,7 @@ impl Backend for Apart {
         &self,
         device: &(dyn std::any::Any + Send + Sync),
         byte_len: usize,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Vec<u32>, String> {
         self.inner.download(device, byte_len)
     }
     fn last_device_time(&self) -> Option<std::time::Duration> {

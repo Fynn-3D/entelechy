@@ -88,11 +88,7 @@ fn random_programs_give_the_interpreters_integers_on_the_device() {
             let candidate: Vec<u32> = match host.resident(*b).unwrap() {
                 Some(device) => {
                     let storage: Vec<u32> =
-                        Backend::download(&gpu, device, schema.storage_words(count) * 4)
-                            .unwrap()
-                            .chunks_exact(4)
-                            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                            .collect();
+                        Backend::download(&gpu, device, schema.storage_words(count) * 4).unwrap();
                     schema.unpack(&storage, count)
                 }
                 None => host.data(*b).unwrap().values().into_owned(),

@@ -1873,11 +1873,7 @@ pub fn unrepeated(
         let schema = host.schema(handle).map_err(|e| e.to_string())?;
         let count = host.domain(handle).map_err(|e| e.to_string())?.count();
         match host.resident(handle).map_err(|e| e.to_string())? {
-            Some(device) => Ok(backend
-                .download(device, schema.storage_words(count) * 4)?
-                .chunks_exact(4)
-                .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                .collect()),
+            Some(device) => backend.download(device, schema.storage_words(count) * 4),
             None => Ok(host
                 .data(handle)
                 .map_err(|e| e.to_string())?

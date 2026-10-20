@@ -249,16 +249,16 @@ pub trait Check: Send {
 /// Words on their way from a device: the copy is queued behind the work
 /// before it, and taking them waits for that work alone.
 pub trait Downloading: Send {
-    /// The bytes, once the copy has run.
-    fn take(self: Box<Self>) -> Result<Vec<u8>, String>;
+    /// The words, once the copy has run.
+    fn take(self: Box<Self>) -> Result<Vec<u32>, String>;
 }
 
-/// Bytes already in hand: [`Downloading`] where a download is done when
+/// Words already in hand: [`Downloading`] where a download is done when
 /// it returns.
-struct Downloaded(Vec<u8>);
+struct Downloaded(Vec<u32>);
 
 impl Downloading for Downloaded {
-    fn take(self: Box<Self>) -> Result<Vec<u8>, String> {
+    fn take(self: Box<Self>) -> Result<Vec<u32>, String> {
         Ok(self.0)
     }
 }
@@ -451,13 +451,13 @@ pub trait Backend: Send + Sync {
         false
     }
 
-    /// Downloads `byte_len` bytes of little-endian words of a resource
+    /// Downloads the words in the first `byte_len` bytes of a resource
     /// this backend left resident.
     fn download(
         &self,
         device: &(dyn Any + Send + Sync),
         byte_len: usize,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Vec<u32>, String> {
         let _ = (device, byte_len);
         Err("this backend keeps no resident resources".into())
     }

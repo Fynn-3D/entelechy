@@ -142,12 +142,7 @@ fn long_failures_in_word_pairs_are_the_interpreters() {
             .map_err(|error| error.to_string())?;
         let out = outputs[0];
         Ok(match host.resident(out).unwrap() {
-            Some(device) => backend
-                .download(device, 16 * 8)
-                .unwrap()
-                .chunks_exact(4)
-                .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                .collect(),
+            Some(device) => backend.download(device, 16 * 8).unwrap(),
             None => host.data(out).unwrap().values().into_owned(),
         })
     };
@@ -231,11 +226,7 @@ fn differences(gpu: &GpuBackend, cases: &[entelechy_conformance::Case]) -> Vec<S
             let candidate: Vec<u32> = match host.resident(*b).unwrap() {
                 Some(device) => {
                     let storage: Vec<u32> =
-                        Backend::download(gpu, device, schema.storage_words(count) * 4)
-                            .unwrap()
-                            .chunks_exact(4)
-                            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                            .collect();
+                        Backend::download(gpu, device, schema.storage_words(count) * 4).unwrap();
                     // Narrow storage widened by the Host's rule gives the
                     // same bits.
                     if !schema.is_wide() {
@@ -394,10 +385,7 @@ fn summed(
             let words = host.schema(outputs[0]).unwrap().storage_words(count);
             Ok(backend
                 .download(device, words * 4)
-                .map_err(entelechy_rules::ExecutionError::Device)?
-                .chunks_exact(4)
-                .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                .collect())
+                .map_err(entelechy_rules::ExecutionError::Device)?)
         }
         None => Ok(host.data(outputs[0]).unwrap().values().into_owned()),
     }
@@ -473,12 +461,7 @@ fn the_largest_floats_reach_the_shader_as_bits() {
             .execute(prepared.as_ref(), &module, &invocation, &mut scope)
             .unwrap()[0];
         match host.resident(out).unwrap() {
-            Some(device) => backend
-                .download(device, 16)
-                .unwrap()
-                .chunks_exact(4)
-                .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                .collect(),
+            Some(device) => backend.download(device, 16).unwrap(),
             None => host.data(out).unwrap().values().into_owned(),
         }
     };

@@ -319,7 +319,7 @@ impl Backend for Counted {
         &self,
         device: &(dyn std::any::Any + Send + Sync),
         byte_len: usize,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Vec<u32>, String> {
         self.gpu.download(device, byte_len)
     }
     fn same_resident(

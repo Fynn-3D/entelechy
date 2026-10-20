@@ -169,7 +169,7 @@ impl Backend for Remembered {
         &self,
         device: &(dyn Any + Send + Sync),
         byte_len: usize,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Vec<u32>, String> {
         self.inner.download(device, byte_len)
     }
     fn submitted(&self) -> Option<Box<dyn entelechy_rules::Check>> {

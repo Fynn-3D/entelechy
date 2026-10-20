@@ -22,7 +22,7 @@ pub(crate) struct Coming {
 }
 
 impl entelechy_rules::Downloading for Coming {
-    fn take(mut self: Box<Self>) -> Result<Vec<u8>, String> {
+    fn take(mut self: Box<Self>) -> Result<Vec<u32>, String> {
         let asked = self.asked.take();
         let slice = self.staging.slice(..);
         self.spent
@@ -36,13 +36,14 @@ impl entelechy_rules::Downloading for Coming {
                     .map_read_after(&self.device, &self.queue, slice, &self.after),
             })
             .map_err(|error| crate::told(&self.heard, error))?;
-        let bytes = slice
-            .get_mapped_range()
-            .map_err(|error| error.to_string())?[..self.byte_len]
-            .to_vec();
+        let words = crate::words_of(
+            &slice
+                .get_mapped_range()
+                .map_err(|error| error.to_string())?[..self.byte_len],
+        );
         self.staging.unmap();
         self.staging.destroy();
-        Ok(bytes)
+        Ok(words)
     }
 }
 

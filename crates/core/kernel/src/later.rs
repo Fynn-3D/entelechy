@@ -331,13 +331,9 @@ fn run_on(
             if let Some(device) = host.resident(handle).map_err(abi)? {
                 let count = host.domain(handle).map_err(abi)?.count();
                 let byte_len = host.schema(handle).map_err(abi)?.storage_words(count) * 4;
-                let bytes = backend
+                let words = backend
                     .download(device, byte_len)
                     .map_err(ExecutionError::Device)?;
-                let words = bytes
-                    .chunks_exact(4)
-                    .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                    .collect();
                 host.materialize(handle, words).map_err(abi)?;
             }
             host.data(handle).cloned().map_err(abi)
