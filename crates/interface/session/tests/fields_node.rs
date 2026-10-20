@@ -232,7 +232,8 @@ fn off_the_frames_a_file_comes_in_by_a_later_sync_and_frames_go_on_meanwhile() {
     let in_at_last = loop {
         session.sync();
         let now = held(&mut session);
-        if now.0 != vec![0] || began.elapsed().as_secs() > 10 {
+        let all_in = now.1.len() == 2 && now.1.iter().all(|range| range.0 >= 0);
+        if all_in || began.elapsed().as_secs() > 10 {
             break now;
         }
     };

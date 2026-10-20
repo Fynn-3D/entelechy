@@ -276,29 +276,27 @@ fn taken(
     Ok((data.values().into_owned(), domain.count(), wide))
 }
 
-/// A fields node's outputs from what it holds: `result`, the elements of
-/// the files in, in the order named (one zero element where none is), in
-/// `element`'s layout, else the first file's; `ranges`, a row a path,
-/// where its elements start and how many there are, -1 and 0 for one not
-/// in (one such row where no path is named).
-fn made_of(
-    node: &FieldNode,
-    element: Option<&Schema>,
-) -> Vec<(&'static str, Result<FieldData, String>)> {
-    let schema = element.cloned().or_else(|| {
+/// A fields node's outputs from what it holds, made in `host`: `result`,
+/// the elements of the files in, in the order named (one zero element
+/// where none is), in `element`'s layout, else the first file's, filled
+/// into words the Host has spare where it has them; `ranges`, a row a
+/// path, where its elements start and how many there are, -1 and 0 for
+/// one not in (one such row where no path is named).
+fn made_in(node: &FieldNode, host: &mut Host) -> Vec<(&'static str, Result<Handle, String>)> {
+    let schema = node.element.clone().or_else(|| {
         node.files.values().find_map(|chunk| match chunk {
             Chunk::In(_, _, schema, _) => Some(schema.clone()),
             _ => None,
         })
     });
-    let mut words = Vec::new();
     let mut ranges = Vec::with_capacity(node.paths.len().max(1) * 2);
+    let mut placed = Vec::new();
     let mut start = 0usize;
     for path in &node.paths {
         match node.files.get(path) {
             Some(Chunk::In(chunk, count, _, _)) => {
-                words.extend_from_slice(chunk);
                 ranges.extend([start as u32, *count as u32]);
+                placed.push(chunk);
                 start += count;
             }
             _ => ranges.extend([-1i32 as u32, 0]),
@@ -314,21 +312,26 @@ fn made_of(
             entelechy_kernel::Domain::Rows((ranges.len() / 2) as u32),
             ranges,
         )
+        .and_then(|data| host.adopt(data))
         .map_err(|e| e.to_string()),
     )];
     if let Some(schema) = schema {
-        if start == 0 {
-            words = vec![0; schema.value_words()];
-        }
-        made.push((
-            "result",
-            FieldData::from_storage(
-                schema,
-                entelechy_kernel::Domain::Rows(start.max(1) as u32),
-                words,
-            )
-            .map_err(|e| e.to_string()),
-        ));
+        let result = host
+            .create_for_fill(schema, entelechy_kernel::Domain::Rows(start.max(1) as u32))
+            .and_then(|handle| {
+                let out = host.storage_mut(handle)?;
+                if placed.is_empty() {
+                    out.fill(0);
+                }
+                let mut at = 0;
+                for chunk in placed {
+                    out[at..at + chunk.len()].copy_from_slice(chunk);
+                    at += chunk.len();
+                }
+                Ok(handle)
+            })
+            .map_err(|e| e.to_string());
+        made.push(("result", result));
     }
     made
 }
@@ -989,31 +992,20 @@ impl Inputs {
             return;
         }
         known.changed = false;
-        let made = made_of(known, known.element.as_ref());
-        for (port, data) in made {
-            if let Err(why) = self.hold_field_output(node, port, data, host) {
+        let made = made_in(known, host);
+        for (port, handle) in made {
+            let held = handle.map(|handle| {
+                if let Some((_, external)) = node.outputs.iter().find(|(name, _)| name == port) {
+                    self.hold(host, external, handle);
+                }
+            });
+            if let Err(why) = held {
                 events.push(Event::Rejected {
                     path: node.dir.clone(),
                     error: Diagnostic::new(format!("fields node `{}`: {why}", node.node)),
                 });
             }
         }
-    }
-
-    /// Holds `data` as fields node `node`'s output `port`.
-    fn hold_field_output(
-        &mut self,
-        node: &entelechy_scene::FieldsNode,
-        port: &str,
-        data: Result<FieldData, String>,
-        host: &mut Host,
-    ) -> Result<(), String> {
-        let Some((_, external)) = node.outputs.iter().find(|(name, _)| name == port) else {
-            return Ok(());
-        };
-        let handle = host.adopt(data?).map_err(|e| e.to_string())?;
-        self.hold(host, external, handle);
-        Ok(())
     }
 
     /// Whether fields node `node` last read its paths from `handle`.
