@@ -109,7 +109,7 @@ pub struct Ctx {
     error_at: u32,
     /// Where a scatter's `emit` keeps its pairs, each after its element;
     /// null where nothing emits.
-    emitted: *mut Vec<u32>,
+    emitted: *mut Pieces,
     /// The run's hold against the Host's room, covering emitted pairs.
     held: *const entelechy_rules::Held,
 }
@@ -486,7 +486,49 @@ fn compute_emitting(
 
 /// A run of elements' first element, the element after its last, and
 /// the pairs its elements emitted, each after the element it came from.
-type Emitted = (usize, usize, Vec<u32>);
+type Emitted = (usize, usize, Pieces);
+
+/// Records of words kept in blocks of a bounded size, each record whole
+/// in one block: what a scatter's elements emit, however many, kept
+/// without being copied as it grows or held in one piece.
+#[derive(Default)]
+struct Pieces {
+    blocks: Vec<Vec<u32>>,
+    words: usize,
+}
+
+impl Pieces {
+    /// The words a block is made for.
+    const BLOCK: usize = 1 << 16;
+
+    /// Keeps a record: `first`, then `rest`.
+    fn push(&mut self, first: u32, rest: &[u32]) {
+        let n = rest.len() + 1;
+        if self
+            .blocks
+            .last()
+            .is_none_or(|block| block.capacity() - block.len() < n)
+        {
+            self.blocks.push(Vec::with_capacity(Self::BLOCK.max(n)));
+        }
+        let block = self.blocks.last_mut().expect("a block with room");
+        block.push(first);
+        block.extend_from_slice(rest);
+        self.words += n;
+    }
+
+    /// The words kept.
+    fn len(&self) -> usize {
+        self.words
+    }
+
+    /// The records in order, each `n` words.
+    fn records(&self, n: usize) -> impl Iterator<Item = &[u32]> {
+        self.blocks
+            .iter()
+            .flat_map(move |block| block.chunks_exact(n))
+    }
+}
 
 /// The same, into words the caller owns, such as a new Field's.
 fn compute_into(
@@ -535,7 +577,7 @@ fn compute_into(
     // One call per run of elements sharing a row.
     let run_elements = |first: usize, chunk: &mut [u32]| -> Result<Emitted, ExecutionError> {
         let mut ctx = fresh(&shared.template);
-        let mut emitted: Vec<u32> = Vec::new();
+        let mut emitted = Pieces::default();
         ctx.emitted = &mut emitted;
         let elements = chunk.len() / stride.max(1);
         let mut done = 0usize;
@@ -960,23 +1002,68 @@ fn run_scatter(
         return Err(shared.held.over());
     }
     drop(shared);
-    let sort = |(first, end, emitted): &Emitted| -> Vec<Vec<u32>> {
-        let mut buckets = vec![Vec::new(); parts];
-        let mut put = |pair: &[u32], index: usize| {
-            if let Some(at) = entelechy_rules::scatter_index(target, &pair[..address]) {
-                let bucket = &mut buckets[at / span];
-                bucket.push(at as u32);
-                bucket.push(index as u32);
-                bucket.extend_from_slice(&pair[address..]);
-            }
+    // Each pair of a run where it lands, in element order (emitted before
+    // returned, as the interpreter does): the target element, the source
+    // element and the value. A pair landing outside is dropped.
+    type Landed<'a> = dyn FnMut(usize, usize, &[u32]) -> Result<(), (usize, ArithmeticError)> + 'a;
+    let landed = |(first, end, emitted): &Emitted, put: &mut Landed<'_>| {
+        let mut land = |pair: &[u32], index: usize| match entelechy_rules::scatter_index(
+            target,
+            &pair[..address],
+        ) {
+            Some(at) => put(at, index, &pair[address..]),
+            None => Ok(()),
         };
-        let mut kept = emitted.chunks_exact(pair_words + 1).peekable();
+        let mut kept = emitted.records(pair_words + 1).peekable();
         for index in *first..*end {
             while let Some(emitted) = kept.next_if(|emitted| emitted[0] as usize == index) {
-                put(&emitted[1..], index);
+                land(&emitted[1..], index)?;
             }
-            put(&pairs[index * pair_words..(index + 1) * pair_words], index);
+            land(&pairs[index * pair_words..(index + 1) * pair_words], index)?;
         }
+        Ok(())
+    };
+    // One part takes each run's pairs where they land, the copies of
+    // them kept for sorting made only where there are parts to sort for.
+    if parts == 1 {
+        let outcome = if summed {
+            let mut sums = entelechy_rules::Sums::new(scalars, &words);
+            runs.iter()
+                .try_for_each(|run| {
+                    landed(run, &mut |at, _, value| {
+                        sums.add(&mut words, at, value);
+                        Ok(())
+                    })
+                })
+                .and_then(|()| sums.finish(&mut words))
+        } else {
+            runs.iter().try_for_each(|run| {
+                landed(run, &mut |at, index, value| {
+                    entelechy_rules::combine_words(
+                        combine,
+                        scalars,
+                        &mut words[at * stride..(at + 1) * stride],
+                        value,
+                    )
+                    .map_err(|error| (index, error))
+                })
+            })
+        };
+        return scattered(scope, port, target, sources, summed, words, outcome.err());
+    }
+    let sort = |run: &Emitted| -> Vec<Vec<u32>> {
+        // Made at their size, a part's share of the run's records.
+        let records = (run.1 - run.0 + run.2.len() / (pair_words + 1)) * record;
+        let mut buckets: Vec<Vec<u32>> = (0..parts)
+            .map(|_| Vec::with_capacity(records.div_ceil(parts)))
+            .collect();
+        let _ = landed(run, &mut |at, index, value| {
+            let bucket = &mut buckets[at / span];
+            bucket.push(at as u32);
+            bucket.push(index as u32);
+            bucket.extend_from_slice(value);
+            Ok(())
+        });
         buckets
     };
     let sorted: Vec<Vec<Vec<u32>>> = if runs.len() == 1 {
@@ -1024,31 +1111,41 @@ fn run_scatter(
         }
         Ok(())
     };
-    let outcomes: Vec<Result<(), (usize, ArithmeticError)>> = if parts == 1 {
-        vec![apply(0, &mut words)]
-    } else {
-        std::thread::scope(|s| {
-            let handles: Vec<_> = words
-                .chunks_mut(span * stride)
-                .enumerate()
-                .map(|(part, slice)| {
-                    let apply = &apply;
-                    s.spawn(move || apply(part, slice))
-                })
-                .collect();
-            handles
-                .into_iter()
-                .map(|handle| handle.join().expect("scatter worker panicked"))
-                .collect()
-        })
-    };
+    let outcomes: Vec<Result<(), (usize, ArithmeticError)>> = std::thread::scope(|s| {
+        let handles: Vec<_> = words
+            .chunks_mut(span * stride)
+            .enumerate()
+            .map(|(part, slice)| {
+                let apply = &apply;
+                s.spawn(move || apply(part, slice))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("scatter worker panicked"))
+            .collect()
+    });
     // The failure is the one the sequential order meets first: the
     // earliest source element's, or under a sum the target's.
-    if let Some((index, error)) = outcomes
+    let failure = outcomes
         .into_iter()
         .filter_map(Result::err)
-        .min_by_key(|(index, _)| *index)
-    {
+        .min_by_key(|(index, _)| *index);
+    scattered(scope, port, target, sources, summed, words, failure)
+}
+
+/// A scatter's end: its first failure in the sequential order, or the
+/// target as written, kept as its own words where they are kept whole.
+fn scattered(
+    scope: &mut Scope<'_>,
+    port: &entelechy_ir::Port,
+    target: Domain,
+    sources: Domain,
+    summed: bool,
+    words: Vec<u32>,
+    failure: Option<(usize, ArithmeticError)>,
+) -> Result<Vec<Handle>, ExecutionError> {
+    if let Some((index, error)) = failure {
         let width = if summed {
             target.width()
         } else {
@@ -1060,7 +1157,11 @@ fn run_scatter(
             error,
         });
     }
-    let output = scope.create(port.ty.schema.clone(), target)?;
+    let schema = port.ty.schema.clone();
+    if schema.is_wide() {
+        return Ok(vec![scope.adopt_storage(schema, target, words)?]);
+    }
+    let output = scope.create(schema, target)?;
     if let Err(error) = scope.write_values(output, &words) {
         let _ = scope.release(output);
         return Err(error.into());
@@ -1343,8 +1444,9 @@ unsafe extern "C" fn entelechy_jit_emit(ctx: *mut Ctx, element: u32, pair: *cons
         return;
     }
     let emitted = unsafe { &mut *ctx.emitted };
-    emitted.push(element);
-    emitted.extend_from_slice(unsafe { std::slice::from_raw_parts(pair, n as usize) });
+    emitted.push(element, unsafe {
+        std::slice::from_raw_parts(pair, n as usize)
+    });
 }
 
 /// `put` into a rows memory: the element's words replaced; an index
