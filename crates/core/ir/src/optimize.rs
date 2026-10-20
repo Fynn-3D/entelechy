@@ -1938,6 +1938,7 @@ pub(crate) fn operands(op: &Op) -> Vec<ValueId> {
             .collect(),
         Op::Put(_, address, value) | Op::Exchange(address, value) => vec![*address, *value],
         Op::Spend(counted) | Op::Emit(counted) => vec![*counted],
+        Op::Meet(given) => given.iter().copied().collect(),
         _ => Vec::new(),
     }
 }

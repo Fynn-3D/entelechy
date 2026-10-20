@@ -129,6 +129,7 @@ const LOOP: u8 = 0x03;
 const IF: u8 = 0x04;
 const ELSE: u8 = 0x05;
 const END: u8 = 0x0b;
+const RETURN: u8 = 0x0f;
 const BR: u8 = 0x0c;
 const BR_IF: u8 = 0x0d;
 const BR_TABLE: u8 = 0x0e;
@@ -152,6 +153,8 @@ const I32_GE_U: u8 = 0x4f;
 const I32_ADD: u8 = 0x6a;
 const I32_SUB: u8 = 0x6b;
 const I32_MUL: u8 = 0x6c;
+const I32_DIV_U: u8 = 0x6e;
+const I32_REM_U: u8 = 0x70;
 const I32_AND: u8 = 0x71;
 const I32_OR: u8 = 0x72;
 const I32_XOR: u8 = 0x73;
@@ -202,6 +205,24 @@ pub struct Fx<'a> {
     work: Option<(W, W, W)>,
     ran: HashMap<u32, W>,
     helpers: &'a HashMap<&'static str, u32>,
+    /// A group's entry running its lanes: where each lane's state is.
+    group: Option<GroupSlots>,
+    /// In a group's lanes, the lane running.
+    running: Option<W>,
+}
+
+/// A group's lanes in slots of the module's memory, lane after lane: each
+/// lane's work and work at its last look, whether it failed (a word
+/// each), and the lowest lane failed in the stretch with its failure's
+/// code and element (three words); and lane 0's element.
+#[derive(Clone, Copy)]
+struct GroupSlots {
+    size: u32,
+    work: u32,
+    seen: u32,
+    failed: u32,
+    held: u32,
+    first: W,
 }
 
 impl<'a> Fx<'a> {
@@ -235,6 +256,8 @@ impl<'a> Fx<'a> {
             work: None,
             ran: HashMap::new(),
             helpers,
+            group: None,
+            running: None,
         }
     }
 
@@ -464,6 +487,184 @@ impl<'a> Fx<'a> {
         self.un(v, F32_CONVERT_I32_U, Val::F32)
     }
 
+    // --- A group's lanes ---
+
+    /// The address of word `index` of the slot at `offset`.
+    fn lane_word(&mut self, offset: u32, index: W) -> W {
+        let base = self.slot(offset);
+        let scaled = self.mul_imm(index, 4);
+        self.bin(base, scaled, I32_ADD, Val::I32)
+    }
+
+    /// Runs `each` once for every lane of `size`, its index a local.
+    fn over_lanes(&mut self, size: u32, each: impl FnOnce(&mut Self, W)) {
+        let lane = self.local(Val::I32);
+        self.push_i32(0);
+        self.set(lane);
+        self.byte(LOOP);
+        self.byte(0x40);
+        each(self, lane);
+        self.get(lane);
+        self.push_i32(1);
+        self.byte(I32_ADD);
+        self.set(lane);
+        self.get(lane);
+        self.push_i32(size as i32);
+        self.byte(I32_LT_U);
+        self.byte(BR_IF);
+        self.uleb(0);
+        self.byte(END);
+    }
+
+    /// A group's lanes laid out for its entry: none has worked or failed,
+    /// none is held; lane 0 is the element the entry was called at.
+    fn open_lanes(&mut self, size: u32) {
+        let work = self.shared.reserve(size * 4);
+        let seen = self.shared.reserve(size * 4);
+        let failed = self.shared.reserve(size * 4);
+        let held = self.shared.reserve(12);
+        let first = self.element_index();
+        self.over_lanes(size, |fx, lane| {
+            let zero = fx.i32c(0);
+            for offset in [work, seen, failed] {
+                let at = fx.lane_word(offset, lane);
+                fx.store(at, 0, zero);
+            }
+        });
+        let none = self.i32c(size as i32);
+        let at = self.slot(held);
+        self.store(at, 0, none);
+        self.group = Some(GroupSlots {
+            size,
+            work,
+            seen,
+            failed,
+            held,
+            first,
+        });
+    }
+
+    /// Each lane's work short of a block, handed to the run as an
+    /// element's is when it ends.
+    fn settle_lanes(&mut self) {
+        let Some(group) = self.group else {
+            return;
+        };
+        if self.work.is_none() {
+            return;
+        }
+        self.over_lanes(group.size, |fx, lane| {
+            let at = fx.lane_word(group.work, lane);
+            let work = fx.load(Val::I32, at, 0);
+            let mask = fx.i32c((entelechy_ir::WORK_BLOCK - 1) as i32);
+            let short = fx.bin(work, mask, I32_AND, Val::I32);
+            let short = fx.un(short, I64_EXTEND_I32_U, Val::I64);
+            let left = fx.ctx_load(Val::I64, offsets::LEFT);
+            let left = fx.bin(left, short, I64_ADD, Val::I64);
+            fx.ctx_store(offsets::LEFT, left);
+        });
+    }
+
+    /// [`Op::Lanes`]: the body once for each lane not failed, as that lane
+    /// (its element's place, its work), its result the lane's element of
+    /// the array; a lane that fails is marked, the lowest held with its
+    /// failure, and the context's failure cleared for the next.
+    fn lanes(&mut self, ty: Type, body: &entelechy_ir::Block) -> Vec<W> {
+        let group = self.group.expect("lanes run in a group's entry");
+        let size = group.size;
+        let array_types = word_types(self.module, ty);
+        let element_types = array_types[..array_types.len() / size as usize].to_vec();
+        let stride = byte_size(&element_types) as i32;
+        let array = self.shared.reserve(byte_size(&array_types));
+        let around = self.coords;
+        let counted = self.work.is_some();
+        self.over_lanes(size, |fx, lane| {
+            let flag_at = fx.lane_word(group.failed, lane);
+            let flag = fx.load(Val::I32, flag_at, 0);
+            fx.get(flag);
+            fx.byte(I32_EQZ);
+            fx.byte(IF);
+            fx.byte(0x40);
+            // The lane's place: its element in the domain, `x` fastest.
+            let element = fx.bin(group.first, lane, I32_ADD, Val::I32);
+            let width = fx.ctx_load(Val::I32, offsets::WIDTH);
+            let height = fx.ctx_load(Val::I32, offsets::HEIGHT);
+            let x = fx.bin(element, width, I32_REM_U, Val::I32);
+            let row = fx.bin(element, width, I32_DIV_U, Val::I32);
+            let y = fx.bin(row, height, I32_REM_U, Val::I32);
+            let z = fx.bin(row, height, I32_DIV_U, Val::I32);
+            let out = around.expect("the entry's place").3;
+            fx.coords = Some((x, y, z, out));
+            fx.running = Some(lane);
+            let kept = counted.then(|| {
+                let work_at = fx.lane_word(group.work, lane);
+                let seen_at = fx.lane_word(group.seen, lane);
+                let work = fx.load(Val::I32, work_at, 0);
+                let seen = fx.load(Val::I32, seen_at, 0);
+                fx.count_from(work, seen);
+                (work_at, seen_at)
+            });
+            fx.block(&body.body);
+            let words = fx.words(&body.result);
+            let base = fx.slot(array);
+            let scaled = fx.mul_imm(lane, stride);
+            let at = fx.bin(base, scaled, I32_ADD, Val::I32);
+            for (word, offset) in words.iter().zip(byte_offsets(&element_types)) {
+                fx.store(at, offset, *word);
+            }
+            if let (Some((work_at, seen_at)), Some((count, _, seen))) = (kept, fx.work) {
+                fx.store(work_at, 0, count);
+                fx.store(seen_at, 0, seen);
+            }
+            let error = fx.ctx_load(Val::I32, offsets::ERROR);
+            fx.get(error);
+            fx.byte(IF);
+            fx.byte(0x40);
+            {
+                let one = fx.i32c(1);
+                fx.store(flag_at, 0, one);
+                let held = fx.slot(group.held);
+                let held_lane = fx.load(Val::I32, held, 0);
+                let held_code = fx.load(Val::I32, held, 4);
+                let held_element = fx.load(Val::I32, held, 8);
+                let lower = fx.compare(lane, held_lane, [I32_LT_U, 0, 0, 0]);
+                let lane_kept = fx.select(lower, lane, held_lane);
+                let code_kept = fx.select(lower, error, held_code);
+                let element_kept = fx.select(lower, element, held_element);
+                fx.store(held, 0, lane_kept);
+                fx.store(held, 4, code_kept);
+                fx.store(held, 8, element_kept);
+                let clear = fx.i32c(0);
+                fx.ctx_store(offsets::ERROR, clear);
+            }
+            fx.byte(END);
+            fx.byte(END);
+        });
+        self.coords = around;
+        self.running = None;
+        let base = self.slot(array);
+        self.loads(&array_types, base, 0)
+    }
+
+    /// [`Op::Meet`]: once a lane is held, the run fails with it, its
+    /// element named, and the entry returns.
+    fn meet(&mut self) -> Vec<W> {
+        let group = self.group.expect("a group's entry meets");
+        let held = self.slot(group.held);
+        let held_lane = self.load(Val::I32, held, 0);
+        let any = self.compare_imm(held_lane, i64::from(group.size), [I32_LT_U, 0, 0, 0]);
+        self.get(any);
+        self.byte(IF);
+        self.byte(0x40);
+        let code = self.load(Val::I32, held, 4);
+        let element = self.load(Val::I32, held, 8);
+        self.ctx_store(offsets::ERROR, code);
+        self.ctx_store(offsets::ERROR_AT, element);
+        self.byte(RETURN);
+        self.byte(END);
+        vec![self.i32c(1)]
+    }
+
     // --- The work count ---
 
     fn count_from(&mut self, work: W, looked: W) {
@@ -644,7 +845,15 @@ impl<'a> Fx<'a> {
 
     fn map_run(mut self, function: &Function, params: &[W]) -> Body {
         let (x0, y, z, count, out0) = (params[1], params[2], params[3], params[4], params[5]);
-        self.settle_views(y, z);
+        // A group's lanes are elements in rows of their own: each reads
+        // at its own place.
+        let group = match self.module.manifest.mode {
+            entelechy_ir::Mode::Group { size } => Some(size),
+            _ => None,
+        };
+        if group.is_none() {
+            self.settle_views(y, z);
+        }
         let taken = self.i32c(0);
         let out = self.local(Val::I32);
         self.get(out0);
@@ -670,6 +879,9 @@ impl<'a> Fx<'a> {
                 let zero = self.i32c(0);
                 self.count_from(zero, zero);
             }
+            if let Some(size) = group {
+                self.open_lanes(size);
+            }
             self.block(&function.body);
             let mut offset = 0u32;
             for result in &function.results {
@@ -678,7 +890,9 @@ impl<'a> Fx<'a> {
                     offset += word.1.bytes();
                 }
             }
-            if let Some((count, _, _)) = self.work {
+            if group.is_some() {
+                self.settle_lanes();
+            } else if let Some((count, _, _)) = self.work {
                 let mask = self.i32c((entelechy_ir::WORK_BLOCK - 1) as i32);
                 let short = self.bin(count, mask, I32_AND, Val::I32);
                 let short = self.un(short, I64_EXTEND_I32_U, Val::I64);
@@ -686,12 +900,15 @@ impl<'a> Fx<'a> {
                 let left = self.bin(left, short, I64_ADD, Val::I64);
                 self.ctx_store(offsets::LEFT, left);
             }
-            // A failure stops the run where it happened.
+            // A failure stops the run where it happened; a group's names
+            // its element where its lanes met.
             let error = self.ctx_load(Val::I32, offsets::ERROR);
             self.get(error);
             self.byte(IF);
             self.byte(0x40);
-            self.ctx_store(offsets::ERROR_AT, x);
+            if group.is_none() {
+                self.ctx_store(offsets::ERROR_AT, x);
+            }
             self.byte(BR);
             self.uleb(2);
             self.byte(END);
@@ -1433,31 +1650,10 @@ impl<'a> Fx<'a> {
                 self.helper("entelechy_jit_emit", &[ctx, element, slot, n], None);
                 words
             }
-            Op::Lane => {
-                let ctx = self.ctx;
-                vec![
-                    self.helper("entelechy_jit_lane", &[ctx], Some(Val::I32))
-                        .expect("lane returns its index"),
-                ]
-            }
-            Op::Exchange(value, lane) => {
-                // The value's words go to a slot of their own; the helper
-                // hands them to the group and leaves there what lane
-                // `lane` gave ([`crate::Meeting`]).
-                let words = self.words(value);
-                let tys: Vec<Val> = words.iter().map(|word| word.1).collect();
-                let bytes = byte_size(&tys);
-                let offset = self.shared.reserve(bytes);
-                let slot = self.slot(offset);
-                for (word, at) in words.iter().zip(byte_offsets(&tys)) {
-                    self.store(slot, at, *word);
-                }
-                let n = self.i32c((bytes / 4) as i32);
-                let lane = self.words(lane)[0];
-                let ctx = self.ctx;
-                self.helper("entelechy_jit_exchange", &[ctx, slot, n, lane], None);
-                self.loads(&tys, slot, 0)
-            }
+            Op::Lane => vec![self.running.expect("a lane is read in a group's lanes")],
+            Op::Exchange(..) => unreachable!("a group's entry runs its lanes, its exchanges taken"),
+            Op::Lanes { body } => self.lanes(ty, body),
+            Op::Meet(_) => self.meet(),
             Op::Put(input, address, value) => {
                 let words = self.words(value);
                 let slot = self.scratch_addr();

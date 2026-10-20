@@ -1526,4 +1526,29 @@ fn a_counted_group_fails_where_a_lane_first_passes_its_budget() {
     };
     assert_eq!(run(&CpuBackend, 100).unwrap_err(), expected);
     assert_eq!(run(&jit, 100).unwrap_err(), expected);
+    // Lane 1 overflows later in the stretch lane 7 passed its budget in:
+    // the lowest that failed in it is named.
+    let source = source.replace(
+        "(s + exchange(s, lane() ^ 1)) % 9973 + spent",
+        "let boom = if lane() == 1 && index() == 63 { 2147483647 + s % 2 + 1 } else { 0 }; (s + exchange(s, lane() ^ 1)) % 9973 + spent + boom",
+    );
+    let module = entelechy_ir::account(&compile(&source).unwrap()).unwrap();
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![Value::Int(100)],
+        domain: Domain::Rows(36),
+        context: Context::default(),
+    };
+    let expected = ExecutionError::Arithmetic {
+        x: 1,
+        y: 0,
+        error: ArithmeticError::Overflow,
+    };
+    for backend in [&CpuBackend as &dyn Backend, &jit] {
+        let mut host = Host::new(1 << 20);
+        let prepared = backend.prepare(&module).unwrap();
+        let mut scope = Scope::new(&mut host, all());
+        let failed = backend.execute(prepared.as_ref(), &module, &invocation, &mut scope);
+        assert_eq!(failed.unwrap_err(), expected, "{}", backend.name());
+    }
 }

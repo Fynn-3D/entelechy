@@ -13,6 +13,7 @@ pub use display::{NamedManifest, port_type_name, type_name};
 pub use size::{Carried, Sizes, carried, sizes};
 mod fuse;
 mod group;
+mod lanes;
 mod optimize;
 mod size;
 mod validate;
@@ -30,6 +31,7 @@ pub use fuse::{
     fused_name, input_use, offset_read, samples_only,
 };
 pub use group::group_fault;
+pub use lanes::lanes;
 pub use optimize::{carried_builders, optimize, renumbered};
 pub use validate::{Validated, ValidationError, linear_index_type, validate};
 
@@ -1119,7 +1121,7 @@ impl Op {
                 .chain(std::iter::once(otherwise))
                 .collect(),
             Op::Loop { until, body, .. } => until.iter().chain(std::iter::once(body)).collect(),
-            Op::Each { body, .. } => vec![body],
+            Op::Each { body, .. } | Op::Lanes { body } => vec![body],
             _ => Vec::new(),
         }
     }
@@ -1138,7 +1140,7 @@ impl Op {
                 .chain(std::iter::once(otherwise))
                 .collect(),
             Op::Loop { until, body, .. } => until.iter_mut().chain(std::iter::once(body)).collect(),
-            Op::Each { body, .. } => vec![body],
+            Op::Each { body, .. } | Op::Lanes { body } => vec![body],
             _ => Vec::new(),
         }
     }
@@ -1344,6 +1346,22 @@ pub enum Op {
     /// the [`WORK_BLOCK`]s filled since the last check. Placed only by
     /// [`account()`].
     Look,
+    /// Runs `body` once for each lane of the group, in lane order, as that
+    /// lane: its element, place, reads, [`Op::Lane`], work and failures
+    /// are the lane's. Yields the array of the lanes' results. A lane that
+    /// fails is held, the lowest one held, until the next [`Op::Meet`],
+    /// and runs no more. Not a loop: [`Op::Index`] and [`Op::Carried`] in
+    /// it are those of the loop around it. Placed only by [`lanes()`].
+    Lanes {
+        /// The body, yielding one lane's element.
+        body: Block,
+    },
+    /// The end of a stretch of the group between exchanges: once a lane
+    /// has failed, the run fails here with the lowest lane held. At an
+    /// exchange, the operand is the array of what the lanes give there, for
+    /// a trace to answer a lane's exchanges from; at the entry's end there
+    /// is none. Yields `Bool` `true`. Placed only by [`lanes()`].
+    Meet(Option<ValueId>),
 }
 
 /// One step from a whole value towards a part, as [`Op::Part`] takes it.
@@ -1500,6 +1518,8 @@ fn block_work(instructions: &[Instruction], functions: &[u64]) -> u64 {
             Op::Each { count, body } => {
                 u64::from(*count).saturating_mul(block_work(&body.body, functions))
             }
+            // A group's lanes: each lane's own.
+            Op::Lanes { body } => block_work(&body.body, functions),
             Op::If {
                 then, otherwise, ..
             } => block_work(&then.body, functions).max(block_work(&otherwise.body, functions)),
@@ -1624,6 +1644,7 @@ fn typical_in(
             Op::Each { count, body } => {
                 u64::from(*count).saturating_mul(typical_in(&body.body, functions, defined, params))
             }
+            Op::Lanes { body } => typical_in(&body.body, functions, defined, params),
             Op::If {
                 then, otherwise, ..
             } => typical_in(&then.body, functions, defined, params).max(typical_in(
@@ -1746,7 +1767,14 @@ impl Module {
         std::iter::once(&self.entry)
             .chain(&self.merge)
             .chain(&self.init)
-            .any(|function| matches!(function.body.last(), Some(i) if i.op == Op::Look))
+            .any(|function| match function.body.last() {
+                Some(i) if i.op == Op::Look => true,
+                // A group's entry its lanes run in looks in its last lanes.
+                Some(i) if i.op == Op::Meet(None) => function.body.iter().any(|i| {
+                    matches!(&i.op, Op::Lanes { body } if body.body.iter().any(|i| i.op == Op::Look))
+                }),
+                _ => false,
+            })
     }
 
     /// For each function, the most loop iterations one call may run.

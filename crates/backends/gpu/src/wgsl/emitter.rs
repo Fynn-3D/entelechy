@@ -486,6 +486,9 @@ impl Emitter<'_> {
                 self.line(depth, &format!("let v{}: i32 = it{};", id.0, counted.0));
                 return;
             }
+            Op::Lanes { .. } | Op::Meet(_) => {
+                unreachable!("a device runs a group's lanes together, its entry as written")
+            }
             Op::Look => {
                 let look = if self.group_look { "group_look" } else { "look" };
                 self.line(depth, &format!("let v{}: bool = {look}();", id.0));

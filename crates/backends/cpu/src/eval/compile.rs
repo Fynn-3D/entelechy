@@ -382,7 +382,8 @@ pub(super) fn use_counts(function: &Function, slots: usize) -> Vec<u32> {
                     }
                     note(&body.result);
                 }
-                Op::Each { body, .. } => note(&body.result),
+                Op::Each { body, .. } | Op::Lanes { body } => note(&body.result),
+                Op::Meet(Some(given)) => note(given),
                 Op::At(_, a)
                 | Op::AtLinear(_, a)
                 | Op::Key(a)
@@ -885,6 +886,36 @@ impl FunctionCompiler<'_> {
                     body_result,
                 }
             }
+            Op::Lanes { body } => {
+                let dst = define(self);
+                let (body_code, body_result) = self.nested(body);
+                let lanes = match self.shared.records[match instruction.ty {
+                    Type::Struct(index) => index as usize,
+                    _ => unreachable!("lanes give an array"),
+                }]
+                .fields
+                .len()
+                {
+                    0 => 1,
+                    lanes => lanes,
+                };
+                Instr::Lanes {
+                    dst: dst.at,
+                    n: dst.n / lanes,
+                    body: body_code,
+                    body_result,
+                }
+            }
+            Op::Meet(given) => {
+                let given = given.map(|given| {
+                    let loc = self.loc(&given);
+                    (loc.at, loc.n)
+                });
+                Instr::Meet {
+                    dst: define(self).at,
+                    given,
+                }
+            }
             Op::Carried => {
                 self.locs[slot] = self
                     .loops
@@ -960,13 +991,12 @@ impl FunctionCompiler<'_> {
                 dst: define(self).at,
             },
             Op::Exchange(value, lane) => {
-                let value = self.loc(value);
+                let n = self.loc(value).n;
                 let lane = self.loc(lane).at;
                 Instr::Exchange {
                     dst: define(self).at,
-                    value: value.at,
                     lane,
-                    n: value.n,
+                    n,
                 }
             }
             Op::Count(input) => Instr::Count {

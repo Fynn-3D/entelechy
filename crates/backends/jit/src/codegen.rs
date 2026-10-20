@@ -43,8 +43,6 @@ struct Imports {
     put: FuncId,
     put_rows: FuncId,
     emit: FuncId,
-    lane: FuncId,
-    exchange: FuncId,
     unary: Vec<(Intrinsic, FuncId)>,
     powf: FuncId,
     atan2f: FuncId,
@@ -142,8 +140,6 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
     let put_sig = sig(&[ptr, i, f, f, f, ptr], &[]);
     let put_rows_sig = sig(&[ptr, i, i, ptr], &[]);
     let emit_sig = sig(&[ptr, i, ptr, i], &[]);
-    let lane_sig = sig(&[ptr], &[i]);
-    let exchange_sig = sig(&[ptr, ptr, i, i], &[]);
     let unary_sig = sig(&[f], &[f]);
     let binary_sig = sig(&[f, f], &[f]);
     let unary64_sig = sig(&[types::F64], &[types::F64]);
@@ -156,8 +152,6 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
         put: declare(&mut jit, "entelechy_jit_put", &put_sig)?,
         put_rows: declare(&mut jit, "entelechy_jit_put_rows", &put_rows_sig)?,
         emit: declare(&mut jit, "entelechy_jit_emit", &emit_sig)?,
-        lane: declare(&mut jit, "entelechy_jit_lane", &lane_sig)?,
-        exchange: declare(&mut jit, "entelechy_jit_exchange", &exchange_sig)?,
         unary: [
             (Intrinsic::Sin, "entelechy_jit_sinf"),
             (Intrinsic::Cos, "entelechy_jit_cosf"),
@@ -436,8 +430,6 @@ struct Fx<'a, 'b> {
     put: FuncRef,
     put_rows: FuncRef,
     emit: FuncRef,
-    lane: FuncRef,
-    exchange: FuncRef,
     unary: Vec<(Intrinsic, FuncRef)>,
     powf: FuncRef,
     atan2f: FuncRef,
@@ -468,6 +460,24 @@ struct Fx<'a, 'b> {
     /// Each finished loop's body iterations, by the loop's value, added
     /// by the spend after it.
     ran: HashMap<u32, Value>,
+    /// A group's entry running its lanes: where each lane's state is.
+    group: Option<GroupSlots>,
+    /// In a group's lanes, the lane running.
+    running: Option<Value>,
+}
+
+/// A group's lanes in stack slots, lane after lane: each lane's work and
+/// work at its last look (a word each), whether it failed (a word), and
+/// the lowest lane failed in the stretch with its failure's code and
+/// element (three words); and lane 0's element.
+#[derive(Clone, Copy)]
+struct GroupSlots {
+    size: u32,
+    work: StackSlot,
+    seen: StackSlot,
+    failed: StackSlot,
+    held: StackSlot,
+    first: Value,
 }
 
 impl<'a, 'b> Fx<'a, 'b> {
@@ -495,8 +505,6 @@ impl<'a, 'b> Fx<'a, 'b> {
         let put = import(jit, &mut b, imports.put);
         let put_rows = import(jit, &mut b, imports.put_rows);
         let emit = import(jit, &mut b, imports.emit);
-        let lane = import(jit, &mut b, imports.lane);
-        let exchange = import(jit, &mut b, imports.exchange);
         let unary = imports
             .unary
             .iter()
@@ -551,8 +559,6 @@ impl<'a, 'b> Fx<'a, 'b> {
             put,
             put_rows,
             emit,
-            lane,
-            exchange,
             unary,
             powf,
             atan2f,
@@ -569,6 +575,8 @@ impl<'a, 'b> Fx<'a, 'b> {
             budget: module.accounted().then_some(module.manifest.budget),
             work: None,
             ran: HashMap::new(),
+            group: None,
+            running: None,
         }
     }
 
@@ -616,6 +624,251 @@ impl<'a, 'b> Fx<'a, 'b> {
         let looked = self.b.declare_var(types::I32);
         self.work = Some((count, next, looked));
         self.load_count();
+    }
+
+    /// The address of word `index` of a lane slot.
+    fn lane_word(&mut self, slot: StackSlot, index: Value) -> Value {
+        let base = self.b.ins().stack_addr(self.ptr, slot, 0);
+        let wide = self.b.ins().uextend(self.ptr, index);
+        let offset = self.b.ins().imul_imm(wide, 4);
+        self.b.ins().iadd(base, offset)
+    }
+
+    /// A word stack slot of `words`.
+    fn word_slot(&mut self, words: u32) -> StackSlot {
+        self.b.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            words * 4,
+            2,
+        ))
+    }
+
+    /// Runs `each` once for every lane, its index the block's parameter:
+    /// a loop over the group's lanes.
+    fn over_lanes(&mut self, size: u32, each: impl FnOnce(&mut Self, Value)) {
+        let header = self.b.create_block();
+        let exit = self.b.create_block();
+        self.b.append_block_param(header, types::I32);
+        let zero = self.i32c(0);
+        self.b.ins().jump(header, &[zero.into()]);
+        self.b.switch_to_block(header);
+        let lane = self.b.block_params(header)[0];
+        each(self, lane);
+        let next = self.b.ins().iadd_imm(lane, 1);
+        let last = self.i32c(i64::from(size));
+        let done = self
+            .b
+            .ins()
+            .icmp(IntCC::UnsignedGreaterThanOrEqual, next, last);
+        self.b.ins().brif(done, exit, &[], header, &[next.into()]);
+        self.b.seal_block(header);
+        self.b.switch_to_block(exit);
+        self.b.seal_block(exit);
+    }
+
+    /// A group's lanes laid out for its entry: none has worked or failed,
+    /// none is held; lane 0 is the element the entry was called at.
+    fn open_lanes(&mut self, size: u32) {
+        let work = self.word_slot(size);
+        let seen = self.word_slot(size);
+        let failed = self.word_slot(size);
+        let held = self.word_slot(3);
+        let first = self.element_index();
+        self.over_lanes(size, |fx, lane| {
+            let zero = fx.i32c(0);
+            for slot in [work, seen, failed] {
+                let at = fx.lane_word(slot, lane);
+                fx.b.ins().store(fx.flags, zero, at, 0);
+            }
+        });
+        let none = self.i32c(i64::from(size));
+        self.b.ins().stack_store(none, held, 0);
+        self.group = Some(GroupSlots {
+            size,
+            work,
+            seen,
+            failed,
+            held,
+            first,
+        });
+    }
+
+    /// Each lane's work short of a block, handed to the run as an
+    /// element's is when it ends.
+    fn settle_lanes(&mut self) {
+        let Some(group) = self.group else {
+            return;
+        };
+        if self.work.is_none() {
+            return;
+        }
+        let mask = i64::from(entelechy_ir::WORK_BLOCK - 1);
+        self.over_lanes(group.size, |fx, lane| {
+            let at = fx.lane_word(group.work, lane);
+            let work = fx.b.ins().load(types::I32, fx.flags, at, 0);
+            let short = fx.b.ins().band_imm(work, mask);
+            let short = fx.b.ins().uextend(types::I64, short);
+            let left = fx.b.ins().load(types::I64, fx.flags, fx.ctx, offsets::LEFT);
+            let left = fx.b.ins().iadd(left, short);
+            fx.b.ins().store(fx.flags, left, fx.ctx, offsets::LEFT);
+        });
+    }
+
+    /// [`Op::Lanes`]: the body once for each lane not failed, as that lane
+    /// (its element's place, its work), its result the lane's element of
+    /// the array; a lane that fails is marked, the lowest held with its
+    /// failure, and the context's failure cleared for the next.
+    fn lanes(
+        &mut self,
+        id: entelechy_ir::ValueId,
+        ty: Type,
+        body: &entelechy_ir::Block,
+    ) -> Vec<Value> {
+        let group = self.group.expect("lanes run in a group's entry");
+        let size = group.size;
+        let array_types = word_types(self.module, ty);
+        let element_types = array_types[..array_types.len() / size as usize].to_vec();
+        let stride = byte_size(&element_types) as i64;
+        let slot = self.b.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            byte_size(&array_types).max(4) as u32,
+            3,
+        ));
+        let header = self.b.create_block();
+        let run = self.b.create_block();
+        let failed = self.b.create_block();
+        let latch = self.b.create_block();
+        let exit = self.b.create_block();
+        self.b.append_block_param(header, types::I32);
+        self.b.append_block_param(latch, types::I32);
+        let zero = self.i32c(0);
+        self.b.ins().jump(header, &[zero.into()]);
+        self.b.switch_to_block(header);
+        let lane = self.b.block_params(header)[0];
+        let flag_at = self.lane_word(group.failed, lane);
+        let flag = self.b.ins().load(types::I32, self.flags, flag_at, 0);
+        self.b.ins().brif(flag, latch, &[lane.into()], run, &[]);
+        self.b.switch_to_block(run);
+        self.b.seal_block(run);
+        // The lane's place: its element in the domain, `x` fastest.
+        let element = self.b.ins().iadd(group.first, lane);
+        let width = self
+            .b
+            .ins()
+            .load(types::I32, self.settled, self.ctx, offsets::WIDTH);
+        let height = self
+            .b
+            .ins()
+            .load(types::I32, self.settled, self.ctx, offsets::HEIGHT);
+        let x = self.b.ins().urem(element, width);
+        let row = self.b.ins().udiv(element, width);
+        let y = self.b.ins().urem(row, height);
+        let z = self.b.ins().udiv(row, height);
+        let around = self.coords;
+        let out = around.expect("the entry's place").3;
+        self.coords = Some((x, y, z, out));
+        let running = self.running.replace(lane);
+        let counted = self.work.is_some();
+        let (work_at, seen_at) = if counted {
+            let work_at = self.lane_word(group.work, lane);
+            let seen_at = self.lane_word(group.seen, lane);
+            let work = self.b.ins().load(types::I32, self.flags, work_at, 0);
+            let seen = self.b.ins().load(types::I32, self.flags, seen_at, 0);
+            self.count_from(work, seen);
+            (Some(work_at), Some(seen_at))
+        } else {
+            (None, None)
+        };
+        self.block(&body.body);
+        let words = self.words(&body.result);
+        let base = self.b.ins().stack_addr(self.ptr, slot, 0);
+        let wide = self.b.ins().uextend(self.ptr, lane);
+        let offset = self.b.ins().imul_imm(wide, stride);
+        let at = self.b.ins().iadd(base, offset);
+        for (word, offset) in words.iter().zip(byte_offsets(&element_types)) {
+            self.b.ins().store(self.flags, *word, at, offset as i32);
+        }
+        if let (Some((count, _, seen)), Some(work_at), Some(seen_at)) =
+            (self.work, work_at, seen_at)
+        {
+            let work = self.b.use_var(count);
+            let looked = self.b.use_var(seen);
+            self.b.ins().store(self.flags, work, work_at, 0);
+            self.b.ins().store(self.flags, looked, seen_at, 0);
+        }
+        let error = self
+            .b
+            .ins()
+            .load(types::I32, self.flags, self.ctx, offsets::ERROR);
+        self.b.ins().brif(error, failed, &[], latch, &[lane.into()]);
+        self.b.switch_to_block(failed);
+        self.b.seal_block(failed);
+        let one = self.i32c(1);
+        self.b.ins().store(self.flags, one, flag_at, 0);
+        let held_lane = self.b.ins().stack_load(types::I32, group.held, 0);
+        let held_code = self.b.ins().stack_load(types::I32, group.held, 4);
+        let held_element = self.b.ins().stack_load(types::I32, group.held, 8);
+        let lower = self.b.ins().icmp(IntCC::UnsignedLessThan, lane, held_lane);
+        let lane_kept = self.b.ins().select(lower, lane, held_lane);
+        let code_kept = self.b.ins().select(lower, error, held_code);
+        let element_kept = self.b.ins().select(lower, element, held_element);
+        self.b.ins().stack_store(lane_kept, group.held, 0);
+        self.b.ins().stack_store(code_kept, group.held, 4);
+        self.b.ins().stack_store(element_kept, group.held, 8);
+        let clear = self.i32c(0);
+        self.b
+            .ins()
+            .store(self.flags, clear, self.ctx, offsets::ERROR);
+        self.b.ins().jump(latch, &[lane.into()]);
+        self.b.switch_to_block(latch);
+        self.b.seal_block(latch);
+        let lane = self.b.block_params(latch)[0];
+        let next = self.b.ins().iadd_imm(lane, 1);
+        let last = self.i32c(i64::from(size));
+        let done = self
+            .b
+            .ins()
+            .icmp(IntCC::UnsignedGreaterThanOrEqual, next, last);
+        self.b.ins().brif(done, exit, &[], header, &[next.into()]);
+        self.b.seal_block(header);
+        self.b.switch_to_block(exit);
+        self.b.seal_block(exit);
+        self.coords = around;
+        self.running = running;
+        // Indexed where the lanes left it.
+        let base = self.b.ins().stack_addr(self.ptr, slot, 0);
+        self.stored.insert(id.0, base);
+        array_types
+            .iter()
+            .zip(byte_offsets(&array_types))
+            .map(|(word_type, offset)| self.b.ins().stack_load(*word_type, slot, offset as i32))
+            .collect()
+    }
+
+    /// [`Op::Meet`]: once a lane is held, the run fails with it, its
+    /// element named, and the entry returns.
+    fn meet(&mut self) -> Vec<Value> {
+        let group = self.group.expect("a group's entry meets");
+        let held_lane = self.b.ins().stack_load(types::I32, group.held, 0);
+        let last = self.i32c(i64::from(group.size));
+        let any = self.b.ins().icmp(IntCC::UnsignedLessThan, held_lane, last);
+        let fail = self.b.create_block();
+        let go_on = self.b.create_block();
+        self.b.ins().brif(any, fail, &[], go_on, &[]);
+        self.b.switch_to_block(fail);
+        self.b.seal_block(fail);
+        let code = self.b.ins().stack_load(types::I32, group.held, 4);
+        let element = self.b.ins().stack_load(types::I32, group.held, 8);
+        self.b
+            .ins()
+            .store(self.flags, code, self.ctx, offsets::ERROR);
+        self.b
+            .ins()
+            .store(self.flags, element, self.ctx, offsets::ERROR_AT);
+        self.b.ins().return_(&[]);
+        self.b.switch_to_block(go_on);
+        self.b.seal_block(go_on);
+        vec![self.i32c(1)]
     }
 
     /// [`Op::Spend`]: adds the finished loop's body iterations to the
@@ -781,7 +1034,15 @@ impl<'a, 'b> Fx<'a, 'b> {
     /// with loop-invariant reads hoisted.
     fn map_run(mut self, function: &Function, params: &[Value]) {
         let (x0, y, z, count, out0) = (params[1], params[2], params[3], params[4], params[5]);
-        self.settle_views(y, z);
+        // A group's lanes are elements in rows of their own: each reads
+        // at its own place.
+        let group = match self.module.manifest.mode {
+            entelechy_ir::Mode::Group { size } => Some(size),
+            _ => None,
+        };
+        if group.is_none() {
+            self.settle_views(y, z);
+        }
         let header = self.b.create_block();
         let body_block = self.b.create_block();
         let failed = self.b.create_block();
@@ -825,6 +1086,9 @@ impl<'a, 'b> Fx<'a, 'b> {
             let zero = self.i32c(0);
             self.count_from(zero, zero);
         }
+        if let Some(size) = group {
+            self.open_lanes(size);
+        }
         self.block(&function.body);
         let mut offset = 0i32;
         for result in &function.results {
@@ -834,8 +1098,10 @@ impl<'a, 'b> Fx<'a, 'b> {
             }
         }
         // The element's partial block after its last look is held for the
-        // run.
-        if let Some((count, _, _)) = self.work {
+        // run; a group's, each lane's.
+        if group.is_some() {
+            self.settle_lanes();
+        } else if let Some((count, _, _)) = self.work {
             let held = self.b.use_var(count);
             let short = self
                 .b
@@ -875,10 +1141,13 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.b.seal_block(header);
         self.b.switch_to_block(failed);
         self.b.seal_block(failed);
-        let at = self.b.block_params(failed)[0];
-        self.b
-            .ins()
-            .store(self.flags, at, self.ctx, offsets::ERROR_AT);
+        // A group's failure names its element where its lanes met.
+        if group.is_none() {
+            let at = self.b.block_params(failed)[0];
+            self.b
+                .ins()
+                .store(self.flags, at, self.ctx, offsets::ERROR_AT);
+        }
         self.b.ins().jump(exit, &[]);
         self.b.switch_to_block(exit);
         self.b.seal_block(exit);
@@ -893,10 +1162,11 @@ impl<'a, 'b> Fx<'a, 'b> {
             self.values[instruction.id.0 as usize] = words;
             self.note_constant(instruction);
             let id = instruction.id.0;
-            if self.indexed.contains(&id)
-                && !self.pointers.contains_key(&id)
-                && !(self.constants.contains_key(&id) && matches!(instruction.ty, Type::Struct(_)))
-            {
+            // In memory already: a table, a constant record, or stored.
+            let in_memory = self.pointers.contains_key(&id)
+                || self.stored.contains_key(&id)
+                || (self.constants.contains_key(&id) && matches!(instruction.ty, Type::Struct(_)));
+            if self.indexed.contains(&id) && !in_memory {
                 let address = self.store_words(instruction.id);
                 self.stored.insert(id, address);
             }
@@ -1533,21 +1803,10 @@ impl<'a, 'b> Fx<'a, 'b> {
         let ty = instruction.ty;
         let id = instruction.id;
         match &instruction.op {
-            Op::Lane => {
-                let call = self.b.ins().call(self.lane, &[self.ctx]);
-                vec![self.b.inst_results(call)[0]]
-            }
-            Op::Exchange(value, lane) => {
-                // The value's words go to a slot of their own; the helper
-                // hands them to the group and leaves there what lane
-                // `lane` gave ([`crate::Meeting`]).
-                let tys = word_types(self.module, ty);
-                let slot = self.store_words(*value);
-                let n = self.i32c((byte_size(&tys) / 4) as i64);
-                let lane = self.words(lane)[0];
-                self.b.ins().call(self.exchange, &[self.ctx, slot, n, lane]);
-                self.loads(&tys, self.flags, slot, 0)
-            }
+            Op::Lane => vec![self.running.expect("a lane is read in a group's lanes")],
+            Op::Exchange(..) => unreachable!("a group's entry runs its lanes, its exchanges taken"),
+            Op::Lanes { body } => self.lanes(instruction.id, ty, body),
+            Op::Meet(_) => self.meet(),
             Op::Const(value) => {
                 // A constant is its scalars, each as the type lays it out.
                 let _ = ty;

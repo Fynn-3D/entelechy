@@ -2895,4 +2895,30 @@ fn a_counted_group_stops_together_where_its_lanes_meet() {
     let reference = run(&CpuBackend, 100).unwrap_err();
     assert!(reference.contains("(7, 0)"), "{reference}");
     assert_eq!(run(&gpu, 100).unwrap_err(), reference);
+    // Where lane 7 passes its budget, lane 1 overflows later in the same
+    // stretch: the lowest that failed in it is named, lane 7 running on
+    // with its group to the stretch's end.
+    let source = source.replace(
+        "(s + exchange(s, lane() ^ 1)) % 9973 + spent",
+        "let boom = if lane() == 1 && index() == 63 { 2147483647 + s % 2 + 1 } else { 0 }; (s + exchange(s, lane() ^ 1)) % 9973 + spent + boom",
+    );
+    let module = entelechy_ir::account(&compile(&source).unwrap()).unwrap();
+    let run = |backend: &dyn Backend| {
+        let mut host = Host::new(1 << 20);
+        let invocation = Invocation {
+            inputs: vec![],
+            params: vec![Value::Int(100)],
+            domain: Domain::Rows(36),
+            context: Context::default(),
+        };
+        let prepared = backend.prepare(&module).unwrap();
+        let mut scope = Scope::new(&mut host, all());
+        backend
+            .execute(prepared.as_ref(), &module, &invocation, &mut scope)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    };
+    let reference = run(&CpuBackend).unwrap_err();
+    assert!(reference.contains("(1, 0)"), "{reference}");
+    assert_eq!(run(&gpu).unwrap_err(), reference);
 }

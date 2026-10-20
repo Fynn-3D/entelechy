@@ -35,9 +35,11 @@ pub struct CpuBackend;
 pub struct Code(std::sync::Arc<eval::Compiled>);
 
 impl Code {
-    /// Compiles a module.
-    pub fn of(module: &Validated) -> Self {
-        Self(std::sync::Arc::new(eval::Program::compile(module)))
+    /// Compiles a module; a group's entry is first rewritten to run its
+    /// lanes ([`entelechy_ir::lanes`]).
+    pub fn of(module: &Validated) -> Result<Self, String> {
+        let lowered = entelechy_ir::lanes(module).map_err(|error| error.to_string())?;
+        Ok(Self(std::sync::Arc::new(eval::Program::compile(&lowered))))
     }
 }
 
@@ -64,7 +66,7 @@ impl CpuBackend {
         check_invocation(module, invocation, scope)?;
         let code = match code {
             Some(code) => code.0.clone(),
-            None => Code::of(module).0,
+            None => Code::of(module).map_err(ExecutionError::Device)?.0,
         };
         let strides = output_strides(module);
         if module.manifest.mode == Mode::Reduce {
@@ -540,23 +542,28 @@ pub fn trace(
             carried.copy_from_slice(&out);
         }
     } else if let Mode::Group { size } = mode {
-        // A lane takes what its group gave: the group runs first, then
-        // the lane is traced taking it.
+        // A lane takes what its group gave: the group runs its lanes
+        // first, keeping what they gave at each exchange, then the lane
+        // is traced taking it.
         let size = size as usize;
         let element = linear(at, domain);
+        let lowered = Code::of(module).map_err(ExecutionError::Device)?;
+        let group = eval::Program::with(lowered.0, module, invocation, scope, domain)?;
+        let mut lanes = eval::Machine::new(&group);
         let mut slots = vec![0u32; size * stride];
-        let met = run_group(
-            &mut machine,
-            domain,
+        let given = lanes
+            .run_group(element / size, size, &mut slots, true)?
+            .expect("kept");
+        drop(lanes);
+        drop(group);
+        machine.answers = Some(eval::Answers {
             size,
-            element / size,
-            stride,
-            &mut slots,
-        )?;
+            lane: element % size,
+            given,
+            passed: 0,
+        });
         machine.record_calls();
-        ran = machine
-            .run_entry_in_group(at, element % size, size, &met, &mut out)
-            .map(|_| ());
+        ran = machine.run_entry_words(at, &mut out);
     } else {
         machine.record_calls();
         ran = machine.run_entry_words(at, &mut out);
@@ -935,61 +942,10 @@ fn linear(at: [u32; 3], domain: Domain) -> usize {
     (z * domain.height() as usize + y) * domain.width() as usize + x
 }
 
-/// The place of element `element` in `domain`, `x` fastest; past the end
-/// the place [`linear`] reads back as that element.
-fn place(element: usize, domain: Domain) -> [u32; 3] {
-    let width = (domain.width() as usize).max(1);
-    let height = (domain.height() as usize).max(1);
-    let row = element / width;
-    [
-        (element % width) as u32,
-        (row % height) as u32,
-        (row / height) as u32,
-    ]
-}
-
-/// Runs group `group` of `size` lanes to the end, `stride` words a lane
-/// into `slots`: every lane runs to its next exchange, and the group
-/// keeps what each gave there before any runs on, until they all finish.
-/// Answers what the lanes gave at every exchange. Lanes that reach
-/// different exchanges, which a group's checks keep from happening, fail.
-fn run_group(
-    machine: &mut eval::Machine<'_, '_>,
-    domain: Domain,
-    size: usize,
-    group: usize,
-    stride: usize,
-    slots: &mut [u32],
-) -> Result<std::sync::Arc<Vec<Vec<u32>>>, ExecutionError> {
-    let mut met: std::sync::Arc<Vec<Vec<u32>>> = std::sync::Arc::default();
-    loop {
-        let mut given: Vec<u32> = Vec::new();
-        let mut stopped = 0;
-        for lane in 0..size {
-            let element = group * size + lane;
-            let slot = &mut slots[lane * stride..(lane + 1) * stride];
-            if let Some(value) =
-                machine.run_entry_in_group(place(element, domain), lane, size, &met, slot)?
-            {
-                stopped += 1;
-                given.extend(value);
-            }
-        }
-        match stopped {
-            0 => return Ok(met),
-            n if n == size => std::sync::Arc::make_mut(&mut met).push(given),
-            _ => {
-                return Err(ExecutionError::Device(format!(
-                    "the lanes of group {group} reached different exchanges"
-                )));
-            }
-        }
-    }
-}
-
 /// Every element's words, `strides` an output, run a group of `size` at
-/// a time ([`run_group`]); a group past the domain's end runs whole and
-/// its lanes past the end write nothing.
+/// a time, the entry running its lanes ([`entelechy_ir::lanes`]); a group
+/// past the domain's end runs whole and its lanes past the end write
+/// nothing.
 fn compute_group(
     program: &eval::Program<'_>,
     strides: &[usize],
@@ -1004,8 +960,26 @@ fn compute_group(
     let per_thread = groups.div_ceil(threads).max(1);
     let run_groups = |first: usize, chunk: &mut [u32]| -> Result<(), ExecutionError> {
         let mut machine = eval::Machine::new(program);
+        // Several outputs come out an array of lanes each, laid here and
+        // then element after element.
+        let mut lanes = vec![0u32; if strides.len() > 1 { size * stride } else { 0 }];
         for (offset, slots) in chunk.chunks_exact_mut(size * stride.max(1)).enumerate() {
-            run_group(&mut machine, domain, size, first + offset, stride, slots)?;
+            if strides.len() == 1 {
+                machine.run_group(first + offset, size, slots, false)?;
+                continue;
+            }
+            machine.run_group(first + offset, size, &mut lanes, false)?;
+            let mut base = 0;
+            let mut within = 0;
+            for words in strides {
+                for lane in 0..size {
+                    let from = base + lane * words;
+                    let to = lane * stride + within;
+                    slots[to..to + words].copy_from_slice(&lanes[from..from + words]);
+                }
+                base += size * words;
+                within += words;
+            }
         }
         machine.finish()
     };
@@ -1064,7 +1038,7 @@ impl Backend for CpuBackend {
     }
 
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
-        Ok(Box::new(CpuCode(Code::of(module))))
+        Ok(Box::new(CpuCode(Code::of(module)?)))
     }
 
     fn execute(

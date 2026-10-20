@@ -19,32 +19,61 @@ pub(crate) struct CallRecord {
 /// How many calls a trace records before it stops recording.
 pub(crate) const CALL_RECORDS: usize = 256;
 
-/// Interpreter state for one thread: a stack of words holding every
-/// frame, and the loop indices of the running element.
-/// A group's lanes as they meet: the element runs as lane `lane` of
-/// `size`, every exchange before the `given`th takes what the lanes gave
-/// there (`met`, each exchange's lanes' words in lane order), and at that
-/// exchange the element gives its value and stops, for the group to run
-/// every lane that far before any goes on. A run that stops so is quiet:
-/// its work is not counted, as the run that finishes counts it all.
-pub(crate) struct Meeting {
-    pub(crate) size: usize,
-    pub(crate) lane: usize,
-    pub(crate) met: std::sync::Arc<Vec<Vec<u32>>>,
-    /// Exchanges passed in this run.
-    pub(crate) passed: usize,
-    /// The value given at the exchange the run stopped at.
-    pub(crate) given: Option<Vec<u32>>,
+/// A group running its lanes ([`Instr::Lanes`]): the lane running, each
+/// lane's work and work at its last look, the lanes that failed and the
+/// lowest of them, held until the stretch ends ([`Instr::Meet`]).
+pub(crate) struct Group {
+    size: usize,
+    /// The element of lane 0.
+    first: usize,
+    lane: usize,
+    work: Vec<u32>,
+    looked: Vec<u32>,
+    failed: Vec<bool>,
+    held: Option<Held>,
+    /// What the lanes gave at each exchange, when kept for a trace.
+    given: Option<Vec<Vec<u32>>>,
 }
 
-/// What a stopped run says in place of a failure, never seen beyond the
-/// group that stopped it.
-const MET: &str = "a group's lane stopped at an exchange";
+/// The lowest lane failed in a stretch, its failure and the word it was
+/// writing.
+struct Held {
+    lane: usize,
+    error: ExecutionError,
+    failed_at: Option<usize>,
+}
 
+/// A traced lane's answers: what the lanes of its group gave at each
+/// exchange, in order, `size` lanes each.
+pub(crate) struct Answers {
+    pub(crate) size: usize,
+    pub(crate) lane: usize,
+    pub(crate) given: Vec<Vec<u32>>,
+    /// Exchanges passed.
+    pub(crate) passed: usize,
+}
+
+/// The place of element `element` in `domain`, `x` fastest; past the end
+/// the place a linear index reads back as that element.
+pub(crate) fn place(element: usize, domain: entelechy_abi::Domain) -> [u32; 3] {
+    let width = (domain.width() as usize).max(1);
+    let height = (domain.height() as usize).max(1);
+    let row = element / width;
+    [
+        (element % width) as u32,
+        (row % height) as u32,
+        (row / height) as u32,
+    ]
+}
+
+/// Interpreter state for one thread: a stack of words holding every
+/// frame, and the loop indices of the running element.
 pub(crate) struct Machine<'p, 's> {
     pub(super) program: &'p Program<'s>,
-    /// The group this element runs in, when it runs in one.
-    pub(crate) meeting: Option<Meeting>,
+    /// The group whose lanes run, when the entry runs a group's.
+    group: Option<Group>,
+    /// A traced lane's answers at its exchanges.
+    pub(crate) answers: Option<Answers>,
     /// The calls made while recording, for a trace; `None` when not.
     pub(super) calls: Option<Vec<CallRecord>>,
     /// Whether more calls happened than were recorded.
@@ -136,7 +165,8 @@ impl<'p, 's> Machine<'p, 's> {
             .collect();
         Self {
             program,
-            meeting: None,
+            group: None,
+            answers: None,
             calls: None,
             calls_truncated: false,
             spent: None,
@@ -192,39 +222,39 @@ impl<'p, 's> Machine<'p, 's> {
         Ok(())
     }
 
-    /// Runs the entry as lane `lane` of a group of `size` whose lanes gave
-    /// `met` at its exchanges so far: `Ok(Some(value))` when it stops at the
-    /// next exchange, having given `value` there, its work uncounted;
-    /// `Ok(None)` when it finishes, its results in `out`.
-    pub(crate) fn run_entry_in_group(
+    /// Runs group `group` of `size` lanes, the entry rewritten to run them
+    /// ([`entelechy_ir::lanes`]): each output's array of lanes, output
+    /// after output, in `out`. Each lane's partial block goes to the run as
+    /// an element's does. With `keep`, answers what the lanes gave at each
+    /// exchange, for a trace.
+    pub(crate) fn run_group(
         &mut self,
-        at: [u32; 3],
-        lane: usize,
+        group: usize,
         size: usize,
-        met: &std::sync::Arc<Vec<Vec<u32>>>,
         out: &mut [u32],
-    ) -> Result<Option<Vec<u32>>, ExecutionError> {
-        self.meeting = Some(Meeting {
+        keep: bool,
+    ) -> Result<Option<Vec<Vec<u32>>>, ExecutionError> {
+        let first = group * size;
+        self.work = 0;
+        self.looked = 0;
+        self.group = Some(Group {
             size,
-            lane,
-            met: std::sync::Arc::clone(met),
-            passed: 0,
-            given: None,
+            first,
+            lane: 0,
+            work: vec![0; size],
+            looked: vec![0; size],
+            failed: vec![false; size],
+            held: None,
+            given: keep.then(Vec::new),
         });
-        let ran = self.run_entry_words(at, out);
-        let meeting = self.meeting.take().expect("set above");
-        match (ran, meeting.given) {
-            (_, Some(given)) => {
-                self.work = 0;
-                self.looked = 0;
-                Ok(Some(given))
-            }
-            (Ok(()), None) => {
-                self.look()?;
-                Ok(None)
-            }
-            (Err(error), None) => Err(error),
+        let ran = self.run_entry_words(place(first, self.program.domain), out);
+        let group = self.group.take().expect("set above");
+        ran?;
+        for work in group.work {
+            self.work = work;
+            self.keep_left()?;
         }
+        Ok(group.given)
     }
 
     /// Runs the entry for element `index` of a scan with the carried value
@@ -442,12 +472,6 @@ impl<'p, 's> Machine<'p, 's> {
         };
         if self.work > budget {
             return Err(self.exhausted(budget));
-        }
-        // A lane of a group hands the run its work once its run finishes:
-        // a run the group stops at an exchange hands none, its element
-        // held to its budget all the same.
-        if self.meeting.is_some() {
-            return Ok(());
         }
         let filled = self.work / entelechy_ir::WORK_BLOCK - self.looked / entelechy_ir::WORK_BLOCK;
         self.looked = self.work;
@@ -1122,31 +1146,96 @@ impl<'p, 's> Machine<'p, 's> {
                 s[fp + dst] = (z * domain.height() + y) * domain.width() + x;
             }
             Instr::Lane { dst } => {
-                s[fp + dst] = self.meeting.as_ref().map_or(0, |m| m.lane as u32);
-            }
-            Instr::Exchange {
-                dst,
-                value,
-                lane,
-                n,
-            } => {
-                let Some(meeting) = self.meeting.as_mut() else {
-                    s.copy_within(fp + value..fp + value + n, fp + dst);
-                    return Ok(());
+                s[fp + dst] = match (&self.group, &self.answers) {
+                    (Some(group), _) => group.lane as u32,
+                    (None, Some(answers)) => answers.lane as u32,
+                    (None, None) => 0,
                 };
-                let at = meeting.passed;
-                meeting.passed += 1;
-                match meeting.met.get(at) {
-                    Some(given) => {
-                        let size = meeting.size as i64;
-                        let k = (i64::from(s[fp + lane] as i32)).rem_euclid(size) as usize;
-                        s[fp + dst..fp + dst + n].copy_from_slice(&given[k * n..(k + 1) * n]);
+            }
+            Instr::Exchange { dst, lane, n } => {
+                // A traced lane takes what its group's run gave here.
+                let answers = self
+                    .answers
+                    .as_mut()
+                    .expect("a group's entry runs its lanes; only a traced lane exchanges");
+                let at = answers.passed;
+                answers.passed += 1;
+                let Some(given) = answers.given.get(at) else {
+                    return Err(ExecutionError::Device(
+                        "a traced lane passed more exchanges than its group".into(),
+                    ));
+                };
+                let size = answers.size as i64;
+                let k = (i64::from(s[fp + lane] as i32)).rem_euclid(size) as usize;
+                s[fp + dst..fp + dst + n].copy_from_slice(&given[k * n..(k + 1) * n]);
+            }
+            Instr::Lanes {
+                dst,
+                n,
+                body,
+                body_result,
+            } => {
+                // Each lane as itself; one that fails is held and runs no
+                // more, the lowest held failing the run where the stretch
+                // ends.
+                let at = self.at;
+                let ran = self.ran;
+                let size = self.group.as_ref().expect("lanes run in a group").size;
+                for lane in 0..size {
+                    let group = self.group.as_mut().expect("lanes run in a group");
+                    if group.failed[lane] {
+                        continue;
                     }
-                    None => {
-                        meeting.given = Some(s[fp + value..fp + value + n].to_vec());
-                        return Err(ExecutionError::Device(MET.into()));
+                    group.lane = lane;
+                    self.work = group.work[lane];
+                    self.looked = group.looked[lane];
+                    self.at = place(group.first + lane, program.domain);
+                    self.ran = ran;
+                    self.failed_at.set(None);
+                    let outcome = self.run(body, fp);
+                    let group = self.group.as_mut().expect("lanes run in a group");
+                    group.work[lane] = self.work;
+                    group.looked[lane] = self.looked;
+                    match outcome {
+                        Ok(()) => {
+                            let to = fp + dst + lane * n;
+                            self.stack
+                                .copy_within(fp + body_result..fp + body_result + n, to);
+                        }
+                        Err(
+                            error @ (ExecutionError::Arithmetic { .. }
+                            | ExecutionError::Exhausted { .. }),
+                        ) => {
+                            group.failed[lane] = true;
+                            if group.held.as_ref().is_none_or(|held| lane < held.lane) {
+                                group.held = Some(Held {
+                                    lane,
+                                    error,
+                                    failed_at: self.failed_at.get(),
+                                });
+                            }
+                        }
+                        Err(error) => {
+                            self.at = at;
+                            return Err(error);
+                        }
                     }
                 }
+                self.at = at;
+                self.work = 0;
+                self.looked = 0;
+            }
+            Instr::Meet { dst, given } => {
+                let group = self.group.as_mut().expect("a group meets");
+                if let (Some(kept), Some((at, n))) = (group.given.as_mut(), given) {
+                    kept.push(self.stack[fp + at..fp + at + n].to_vec());
+                }
+                if let Some(held) = group.held.take() {
+                    self.failed_at.set(held.failed_at);
+                    self.at = place(group.first + held.lane, program.domain);
+                    return Err(held.error);
+                }
+                self.stack[fp + dst] = 1;
             }
             Instr::Time { dst } => s[fp + dst] = program.context.float_time().to_bits(),
             Instr::Clock { dst } => put_wide(s, fp + dst, program.context.time.to_bits()),

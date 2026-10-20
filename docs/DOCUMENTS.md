@@ -702,13 +702,16 @@ the lowest of them: a lane that fails later is not named, whatever its
 element.
 
 On a device a group is a workgroup and an exchange a pass through its
-shared memory between barriers. The interpreter and the JIT run each
-lane to its next exchange and run the group again from the start with
-what every lane gave there, until all finish; only the finished run's
-work counts ([decision](DECISIONS.md)). The GPU runs every group a map
-could run, its outputs several or narrow, its work counted or not: a
-loop holding an exchange checks the budget for the whole group, and
-once a lane has failed every lane leaves it together.
+shared memory between barriers. The interpreter and the JIT run the
+group's own branches and loops round its exchanges once, and each
+stretch between exchanges once for each lane in turn
+([decision](DECISIONS.md)); what crosses an exchange is held as the
+array of the lanes' values, so a value that crosses one holds at most
+what a value may, its words times the group's size, which is refused
+where the group is written. The GPU runs every group a map could run,
+its outputs several or narrow, its work counted or not: a loop holding
+an exchange stops for the whole group once a lane has failed, at the
+next look after the lanes have met.
 
 ## Graph
 

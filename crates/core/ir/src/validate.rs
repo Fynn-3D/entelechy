@@ -356,12 +356,29 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
         ));
     }
     let scattering = matches!(module.manifest.mode, Mode::Scatter { .. });
+    // A group's entry its lanes run in gives each output's lanes.
+    let lanes = match module.manifest.mode {
+        Mode::Group { size } if runs_lanes(&entry.body) => Some(size),
+        _ => None,
+    };
     for (result, output) in entry.results.iter().zip(outputs) {
         if scattering {
             break;
         }
         let actual = types[result.0 as usize];
         let expected = output.element();
+        if let Some(size) = lanes {
+            if !is_array_of(&module, actual, expected, size) {
+                return Err(error(
+                    &entry.name,
+                    format!(
+                        "output `{}` expects {size} lanes of {expected} but the entry returns {actual}",
+                        output.name
+                    ),
+                ));
+            }
+            continue;
+        }
         if actual != expected {
             return Err(error(
                 &entry.name,
@@ -621,11 +638,23 @@ struct Checker<'a> {
     /// Each enclosing loop's carried type, and `None` for an enclosing
     /// [`Op::Each`], which carries none; innermost last.
     loops: Vec<Option<Type>>,
+    /// Whether the function is a group's entry its lanes run in
+    /// ([`Op::Lanes`]), and whether the instruction checked is in them.
+    lowered: bool,
+    in_lanes: bool,
+    /// The loop right before the [`Op::Lanes`] being checked, which a
+    /// spend first in it counts.
+    lanes_after: Option<ValueId>,
 }
 
 impl<'a> Checker<'a> {
     fn fail(&self, message: impl Into<String>) -> ValidationError {
         error(&self.function.name, message)
+    }
+
+    /// Whether `ty` is the array of `count` elements of `element`.
+    fn is_array(&self, ty: Type, element: Type, count: u32) -> bool {
+        is_array_of(self.module, ty, element, count)
     }
 
     fn operand(&self, id: ValueId, position: ValueId) -> Result<Type, ValidationError> {
@@ -701,14 +730,26 @@ impl<'a> Checker<'a> {
     fn instructions(&mut self, instructions: &[Instruction]) -> Result<(), ValidationError> {
         let mut before: Option<&Instruction> = None;
         for instruction in instructions {
-            // A spend counts the loop right before it.
+            // A spend counts the loop right before it, or first in a
+            // group's lanes, the loop right before them.
+            let after_lanes = if before.is_none() {
+                self.lanes_after.take()
+            } else {
+                None
+            };
             if let Op::Spend(counted) = instruction.op
                 && !before.is_some_and(|b| b.id == counted && matches!(b.op, Op::Loop { .. }))
+                && after_lanes != Some(counted)
             {
                 return Err(self.fail(format!(
                     "{} spends {counted}, which is not the loop right before it",
                     instruction.id
                 )));
+            }
+            if let Op::Lanes { .. } = instruction.op {
+                self.lanes_after = before
+                    .filter(|b| matches!(b.op, Op::Loop { .. }))
+                    .map(|b| b.id);
             }
             self.instruction(instruction)?;
             before = Some(instruction);
@@ -727,6 +768,26 @@ impl<'a> Checker<'a> {
         }
         self.next += 1;
         let manifest = &self.module.manifest;
+        // In a group's entry its lanes run in, what is a lane's is read in
+        // them alone.
+        if self.lowered
+            && !self.in_lanes
+            && matches!(
+                op,
+                Op::Element
+                    | Op::Coord
+                    | Op::Lane
+                    | Op::Exchange(..)
+                    | Op::Sample(_)
+                    | Op::Part { at: None, .. }
+                    | Op::Spend(_)
+                    | Op::Look
+            )
+        {
+            return Err(self.fail(format!(
+                "{position} reads a lane's own outside the group's lanes"
+            )));
+        }
         let actual = match op {
             Op::Spend(counted) => {
                 self.operand(*counted, position)?;
@@ -1222,6 +1283,37 @@ impl<'a> Checker<'a> {
                 self.entry_only(position)?;
                 Type::Int
             }
+            Op::Lanes { body } => {
+                let size = match manifest.mode {
+                    Mode::Group { size } if self.is_entry && !self.in_lanes => size,
+                    _ => {
+                        return Err(self.fail(format!(
+                            "{position} runs a group's lanes outside a group's entry, or in them"
+                        )));
+                    }
+                };
+                self.in_lanes = true;
+                let element = self.block(body);
+                self.in_lanes = false;
+                let element = element?;
+                if !self.is_array(*ty, element, size) {
+                    return Err(self.fail(format!(
+                        "{position} gives {size} lanes of {element}, which is not its type {ty}"
+                    )));
+                }
+                *ty
+            }
+            Op::Meet(given) => {
+                if !matches!(manifest.mode, Mode::Group { .. }) || !self.is_entry || self.in_lanes {
+                    return Err(self.fail(format!(
+                        "{position} meets a group's lanes outside a group's entry, or in them"
+                    )));
+                }
+                if let Some(given) = given {
+                    self.operand(*given, position)?;
+                }
+                Type::Bool
+            }
             Op::Lane | Op::Exchange(..) => {
                 if !self.is_entry {
                     return Err(self.fail(format!(
@@ -1423,6 +1515,29 @@ fn first_writing_call(instructions: &[Instruction], writers: &[bool]) -> Option<
         })
 }
 
+/// Whether `ty` is the array of `count` elements of `element`.
+fn is_array_of(module: &Module, ty: Type, element: Type, count: u32) -> bool {
+    let Type::Struct(index) = ty else {
+        return false;
+    };
+    module
+        .structs
+        .get(index as usize)
+        .is_some_and(|def| def.element == Some(element) && def.fields.len() == count as usize)
+}
+
+/// Whether a body runs a group's lanes ([`Op::Lanes`]), at any depth.
+pub(crate) fn runs_lanes(body: &[Instruction]) -> bool {
+    body.iter().any(|instruction| {
+        matches!(instruction.op, Op::Lanes { .. })
+            || instruction
+                .op
+                .blocks()
+                .iter()
+                .any(|block| runs_lanes(&block.body))
+    })
+}
+
 /// Checks one function and returns the type of every slot.
 fn validate_function(
     module: &Module,
@@ -1440,6 +1555,9 @@ fn validate_function(
         visible: vec![false; slots],
         next: 0,
         loops: Vec::new(),
+        lowered: is_entry && runs_lanes(&function.body),
+        in_lanes: false,
+        lanes_after: None,
     };
     checker.instructions(&function.body)?;
     for result in &function.results {

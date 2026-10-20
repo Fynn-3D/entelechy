@@ -1116,6 +1116,11 @@ impl<'a> Renumber<'a> {
             }
             Op::Spend(counted) | Op::Emit(counted) => *counted = self.map(*counted),
             Op::Look => {}
+            Op::Meet(given) => {
+                if let Some(given) = given {
+                    *given = self.map(*given);
+                }
+            }
             Op::Const(_)
             | Op::Param(_)
             | Op::Arg(_)
@@ -1138,7 +1143,11 @@ impl<'a> Renumber<'a> {
             | Op::Sample(_)
             | Op::Count(_)
             | Op::Size(_) => {}
-            Op::If { .. } | Op::Match { .. } | Op::Loop { .. } | Op::Each { .. } => {
+            Op::If { .. }
+            | Op::Match { .. }
+            | Op::Loop { .. }
+            | Op::Each { .. }
+            | Op::Lanes { .. } => {
                 unreachable!("blocks are rewritten separately")
             }
         }

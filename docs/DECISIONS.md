@@ -1590,22 +1590,27 @@ turns on what a lane holds alone is refused where it is written, and an
 exchange is written in the body, never in a function. The owner chose
 this form (2026-10-20).
 
-The interpreter and the JIT, which run one element at a time, meet the
-lanes by running them again: each lane runs to the next exchange it has
-not met and stops, giving its value; when all have stopped, the group
-keeps what they gave and runs each again from the start, the exchanges
-met answered from what was kept. Only the run that finishes is counted
-toward the work bound, while every run is held to the element's budget.
-A device runs the group as a workgroup, an exchange as a write to shared
-memory, a barrier, a read and a barrier.
+The interpreter and the JIT, which run one element at a time, run the
+group's entry rewritten (`lanes`): the branches, matches and loops that
+hold an exchange run once for the group, and each stretch between
+exchanges runs once for each lane in turn (`Op::Lanes`), as that lane:
+its element, its reads, its work and its failures are its own. A value
+that crosses a stretch is the array of the lanes' values, an exchange
+takes for each lane the element its lane names, and the group's own
+branch, count or test is lane 0's, which every lane holds alike. Each
+lane's work is counted once, as an element's. A device runs the group
+as a workgroup, an exchange as a write to shared memory, a barrier, a
+read and a barrier.
 
 A failure is the group's: it is named in the first stretch between
 exchanges in which a lane failed, at the lowest lane that failed there.
-The reference reaches that naturally, running the lanes in order to each
-exchange; a device carries a flag through every exchange, so a lane that
-fails later records nothing. Where a group's work is counted, a loop
-holding an exchange checks the budget for the whole group at once: once
-a lane has failed, every lane leaves the loop together.
+The reference holds a lane that fails, runs it no more, and fails the
+run where the stretch ends (`Op::Meet`) with the lowest held; a device
+carries a flag through every exchange, so a lane that fails later
+records nothing. Where a group's work is counted, a loop holding an
+exchange stops for the whole group at its next look once the lanes have
+met after a failure: every lane runs the stretch it is in to its end,
+so the lowest lane to fail in it is the one named.
 
 **Why.** Elements that see one another inside a pass are what an FFT,
 a block sum or a sort network need, and a map alone takes a pass per
@@ -1619,17 +1624,21 @@ that stopped alone where the others meet would leave them waiting at a
 barrier, so a group stops as one; naming its failure by the stretch it
 met in keeps the device's answer the reference's, however its lanes
 interleave.
-Running again is the interpreter's simplest faithful form: the
-element's code is the map's, no continuation is kept, and what a lane
-computes before an exchange it computes again identically, as a pure
-function does.
+Because every lane reaches each exchange alike, the group's control
+round its exchanges is the group's own, and the entry can be cut into
+stretches run lane by lane with nothing kept but values: each lane's
+work is done once, so a group costs what its elements cost, however many
+exchanges it passes. A trace of one lane answers its exchanges from what
+the group's run gave there (`Op::Meet`'s operand).
 
-**Where.** `Mode::Group`, `Op::Lane`, `Op::Exchange` and `group_fault`
-([group](../crates/core/ir/src/group.rs)) in the
-[IR](../crates/core/ir/src/lib.rs); `run_group` in the
-[interpreter](../crates/backends/cpu/src/lib.rs), `Meeting` in its
-[machine](../crates/backends/cpu/src/eval/run.rs); `compute_group_into`
-and `Meeting` in the [JIT](../crates/backends/jit/src/lib.rs);
+**Where.** `Mode::Group`, `Op::Lane`, `Op::Exchange`, `Op::Lanes`, `Op::Meet` and
+`group_fault` ([group](../crates/core/ir/src/group.rs)) in the
+[IR](../crates/core/ir/src/lib.rs), `lanes`
+([lanes](../crates/core/ir/src/lanes.rs)); `compute_group` in the
+[interpreter](../crates/backends/cpu/src/lib.rs), `Group` and `Answers`
+in its [machine](../crates/backends/cpu/src/eval/run.rs);
+`compute_group_into` in the [JIT](../crates/backends/jit/src/lib.rs),
+`lanes` and `meet` in its [code](../crates/backends/jit/src/codegen.rs);
 `emit_group_main` ([map](../crates/backends/gpu/src/wgsl/map.rs)) on the
 GPU. Held by the [conformance matrix](../crates/backends/conformance/src/lib.rs)'s
 group mode on every backend, the parity tests of the

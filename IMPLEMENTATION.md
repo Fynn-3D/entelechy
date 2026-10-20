@@ -121,7 +121,7 @@ the [conformance matrix](crates/backends/conformance/src/lib.rs).
 | scan (`scan with`) | element order; memory copied, committed only on success | [rules](crates/core/rules/src/lib.rs) |
 | scatter (`scatter into … with`) | as if applied in source order; outside addresses drop | [WGSL](crates/backends/gpu/src/wgsl/scatter.rs), [parity](crates/backends/gpu/tests/parity.rs) |
 | prefix (`prefix with`) | integer `sum`, `min`, `max` only | [block](crates/core/rules/src/lib.rs), [JIT](crates/backends/jit/src/lib.rs) |
-| group (`group N`) | lanes meet at `exchange`, reached alike; re-run to each exchange off the device | [check](crates/core/ir/src/group.rs), [interpreter](crates/backends/cpu/src/lib.rs), [JIT parity](crates/backends/jit/tests/parity.rs), [GPU parity](crates/backends/gpu/tests/parity.rs) |
+| group (`group N`) | lanes meet at `exchange`, reached alike; off the device, each stretch run lane by lane ([lanes](crates/core/ir/src/lanes.rs)) | [check](crates/core/ir/src/group.rs), [interpreter](crates/backends/cpu/src/lib.rs), [JIT parity](crates/backends/jit/tests/parity.rs), [GPU parity](crates/backends/gpu/tests/parity.rs) |
 
 A GPU session hands scans and every module the GPU does not take
 ([`Backend::takes`](crates/core/rules/src/backend.rs)) to the JIT; inputs

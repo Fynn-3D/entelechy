@@ -2103,6 +2103,20 @@ fn a_group_refuses_exchanges_its_lanes_may_not_all_reach() {
     let map = "kernel t.m@1 { requires { field.write; } output result: Rows<Int>; compute { return lane(); } }";
     let (_, message) = semantic(map);
     assert!(message.contains("only a `group` Kernel"), "{message}");
+    // What crosses an exchange is held as the array of the lanes: one past
+    // what a value may hold is refused where the group is written.
+    let (_, message) = semantic(
+        "kernel t.g@1 { requires { field.write; } output result: Rows<Vec4>;
+            group 256 { let many = [vec4(float(element()), 0.0, 0.0, 1.0); 100];
+                let other = exchange(many, lane() + 1); return other[3]; } }",
+    );
+    assert!(message.contains("does not fit"), "{message}");
+    compile(
+        "kernel t.g@1 { requires { field.write; } output result: Rows<Vec4>;
+            group 16 { let many = [vec4(float(element()), 0.0, 0.0, 1.0); 100];
+                let other = exchange(many, lane() + 1); return other[3]; } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
     for size in ["0", "257", "1.5"] {
         let source = format!(
             "kernel t.g@1 {{ requires {{ field.write; }} output result: Rows<Int>; group {size} {{ return lane(); }} }}"

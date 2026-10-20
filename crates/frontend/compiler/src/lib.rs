@@ -115,7 +115,21 @@ pub fn compile_kernel(
     // Every pass below walks the tree or the IR by recursion.
     entelechy_language::on_a_deep_stack(|| {
         let module = lower::lower(kernel, id, &[])?;
-        Ok(entelechy_ir::validate(entelechy_ir::optimize(module))?)
+        let module = entelechy_ir::validate(entelechy_ir::optimize(module))?;
+        // A backend that runs a group's lanes one at a time holds what
+        // crosses an exchange as an array of its lanes: one past what a
+        // value may hold is refused here, where the group is written.
+        if let (Some(group), Err(error)) = (&kernel.group, entelechy_ir::lanes(&module)) {
+            return Err(CompileError::Semantic {
+                span: group.span,
+                message: format!(
+                    "a group of {} lanes holds each value that crosses an exchange as the array of its lanes, and here one does not fit ({error}); exchange less, or make the group smaller",
+                    group.size.value
+                ),
+                declaration: None,
+            });
+        }
+        Ok(module)
     })
 }
 

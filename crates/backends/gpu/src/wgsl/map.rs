@@ -258,24 +258,22 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     }
     // A group whose work is counted opens together, while the run is within
     // the Host's bound, as one lane read it. A look its lanes meet at (in
-    // the `until` of a loop holding an exchange) stops them all once any
-    // has failed: the one past its budget fails, and the others leave with
-    // it, so none waits at an exchange the others never reach. The flag is
-    // read between two barriers, so no lane writes it while another reads.
-    // Every lane adds its remainder short of a block, the lanes past the
+    // the `until` of a loop holding an exchange) checks the lane's own
+    // work, a lane past its budget failing there, and stops every lane
+    // together once the group knew of a failure where its lanes last met:
+    // each lane runs the stretch it is in to its end, as the reference
+    // does, so the failure named is the lowest in the first stretch that
+    // failed, and none waits at an exchange the others never reach. The
+    // flag is written at exchanges and read between two barriers. Every
+    // lane adds its remainder short of a block, the lanes past the
     // domain's end too, and one settles the sum.
     let _ = writeln!(
         out,
         "var<workgroup> group_open: u32;
 fn group_look() -> bool {{
-    if (look() || failed_here) {{
-        group_failed = 1u;
-    }}
+    _ = look();
     let stop = workgroupUniformLoad(&group_failed) != 0u;
     workgroupBarrier();
-    if (stop) {{
-        failed_here = true;
-    }}
     return stop;
 }}
 {head}

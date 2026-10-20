@@ -13,4 +13,4 @@ mod compile;
 mod run;
 
 pub(crate) use compile::{Compiled, Program};
-pub(crate) use run::{CALL_RECORDS, Machine};
+pub(crate) use run::{Answers, CALL_RECORDS, Machine};

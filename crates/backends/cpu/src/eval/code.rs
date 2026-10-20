@@ -402,6 +402,21 @@ pub(super) enum Instr {
     Index {
         dst: usize,
     },
+    /// `body` run for each lane of the group as that lane
+    /// ([`Group`](super::run::Group)), its `n`-word result lane `k`'s
+    /// element at `dst + k * n`.
+    Lanes {
+        dst: usize,
+        n: usize,
+        body: Vec<Instr>,
+        body_result: usize,
+    },
+    /// The end of a stretch of the group: a lane held fails the run; the
+    /// `n` words at `given`, the lanes' at an exchange, kept for a trace.
+    Meet {
+        dst: usize,
+        given: Option<(usize, usize)>,
+    },
     Call {
         function: usize,
         args: Vec<Loc>,
@@ -422,11 +437,10 @@ pub(super) enum Instr {
     Lane {
         dst: usize,
     },
-    /// The `n` words at `value` handed to the group, and lane `lane`'s
-    /// taken at `dst` ([`Meeting`](super::run::Meeting)).
+    /// A traced lane's exchange: lane `lane`'s `n` words where the
+    /// group's run gave them ([`Answers`](super::run::Answers)).
     Exchange {
         dst: usize,
-        value: usize,
         lane: usize,
         n: usize,
     },

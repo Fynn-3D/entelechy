@@ -196,6 +196,11 @@ fn write_instruction(
             write_block(f, body, depth + 1)?;
             writeln!(f, "{indent}}}")
         }
+        Op::Lanes { body } => {
+            writeln!(f, "{indent}{id}: {ty} = lanes {{")?;
+            write_block(f, body, depth + 1)?;
+            writeln!(f, "{indent}}}")
+        }
         other => writeln!(f, "{indent}{id}: {ty} = {other}"),
     }
 }
@@ -238,6 +243,7 @@ impl fmt::Display for Op {
             Self::Match { scrutinee, .. } => write!(f, "match {scrutinee} {{ ... }}"),
             Self::Loop { count, init, .. } => write!(f, "loop {count} carrying {init} {{ ... }}"),
             Self::Each { count, .. } => write!(f, "each {count} {{ ... }}"),
+            Self::Lanes { .. } => f.write_str("lanes { ... }"),
             Self::Carried => f.write_str("carried"),
             Self::Index => f.write_str("index"),
             Self::Coord => f.write_str("coord"),
@@ -259,6 +265,8 @@ impl fmt::Display for Op {
             Self::Element => f.write_str("element"),
             Self::Lane => f.write_str("lane"),
             Self::Exchange(value, lane) => write!(f, "exchange {value} {lane}"),
+            Self::Meet(Some(given)) => write!(f, "meet {given}"),
+            Self::Meet(None) => f.write_str("meet"),
             Self::Sample(input) => write!(f, "host sample input{input}"),
             Self::At(input, index) => write!(f, "host at input{input} {index}"),
             Self::Part { input, at, path } => {
