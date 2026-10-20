@@ -267,7 +267,9 @@ impl Downloading for Downloaded {
 pub type Checked = (Vec<Handle>, Option<Box<dyn Check>>);
 
 /// An execution backend. `prepare` does all expensive work so that
-/// publishing is a pointer swap.
+/// publishing is a pointer swap. A backend wrapping another writes every
+/// method, passing it through where it changes nothing: a default answers
+/// as a backend with no device would.
 pub trait Backend: Send + Sync {
     /// Short backend name for diagnostics, e.g. `cpu`.
     fn name(&self) -> &'static str;
