@@ -1,7 +1,8 @@
 //! What preparing Kernels is doing, readable from any thread while it
 //! runs: each Kernel of the work at hand, from expected to compiled
 //! (`prepare`) to built on its device (`finish`), and how long its
-//! current step has taken. An interface draws it while a scene loads.
+//! current step has taken; and which of them feed which in the scene. An
+//! interface draws it while a scene loads.
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -42,6 +43,9 @@ pub struct Seed {
 pub struct Preparing {
     /// Each Kernel of it.
     pub seeds: Vec<Seed>,
+    /// Seeds that feed each other in the scene, by their place in `seeds`,
+    /// each pair once, the lower first.
+    pub links: Vec<(usize, usize)>,
 }
 
 impl Preparing {
@@ -84,14 +88,31 @@ struct Entry {
 
 /// The shared record; cloned handles see the same work.
 #[derive(Clone, Default, Debug)]
-pub struct Progress(Arc<Mutex<Vec<Entry>>>);
+pub struct Progress(Arc<Mutex<State>>);
+
+#[derive(Default, Debug)]
+struct State {
+    entries: Vec<Entry>,
+    links: Vec<(KernelId, KernelId)>,
+}
 
 impl Progress {
     /// The work at hand now.
     pub fn now(&self) -> Preparing {
-        let entries = self.lock();
+        let state = self.lock();
+        let place = |id: &KernelId| state.entries.iter().position(|entry| entry.id == *id);
+        let mut links: Vec<(usize, usize)> = state
+            .links
+            .iter()
+            .filter_map(|(a, b)| Some((place(a)?, place(b)?)))
+            .filter(|(a, b)| a != b)
+            .map(|(a, b)| (a.min(b), a.max(b)))
+            .collect();
+        links.sort_unstable();
+        links.dedup();
         Preparing {
-            seeds: entries
+            seeds: state
+                .entries
                 .iter()
                 .map(|entry| Seed {
                     id: entry.id.clone(),
@@ -102,7 +123,14 @@ impl Progress {
                     },
                 })
                 .collect(),
+            links,
         }
+    }
+
+    /// Says which Kernels feed which in the scene now, each pair a
+    /// Kernel and one it reads from; what was said before goes.
+    pub fn link(&self, links: impl IntoIterator<Item = (KernelId, KernelId)>) {
+        self.lock().links = links.into_iter().collect();
     }
 
     /// Says `ids` are to be prepared or built. Where nothing waits or runs,
@@ -110,7 +138,8 @@ impl Progress {
     /// let go.
     pub(crate) fn expect<'a>(&self, ids: impl IntoIterator<Item = &'a KernelId>) {
         let ids: Vec<&KernelId> = ids.into_iter().collect();
-        let mut entries = self.lock();
+        let mut state = self.lock();
+        let entries = &mut state.entries;
         if !entries.iter().any(|entry| entry.stage.busy()) {
             entries.retain(|entry| ids.contains(&&entry.id));
         }
@@ -143,7 +172,8 @@ impl Progress {
     }
 
     fn set(&self, id: &KernelId, stage: Stage, since: Option<Moment>, took: Duration) {
-        let mut entries = self.lock();
+        let mut state = self.lock();
+        let entries = &mut state.entries;
         match entries.iter_mut().find(|entry| entry.id == *id) {
             Some(entry) => {
                 entry.stage = stage;
@@ -159,7 +189,7 @@ impl Progress {
         }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Entry>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -193,5 +223,12 @@ mod tests {
         progress.expect([&b]);
         progress.expect([&a]);
         assert_eq!(progress.now().seeds.len(), 2);
+        // Links name seeds by place, once, and only seeds there are.
+        progress.link([
+            (b.clone(), a.clone()),
+            (a.clone(), b.clone()),
+            (a, id("t.z")),
+        ]);
+        assert_eq!(progress.now().links, vec![(0, 1)]);
     }
 }

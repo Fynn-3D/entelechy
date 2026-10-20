@@ -88,7 +88,7 @@ OffscreenCanvas, which Entelechy's present finds by its id in the worker's
 sound card, handed to the worker as messages, with `onpreparing` hearing
 how many Kernels still wait. Both players show the Kernels preparing
 while they do, as the Player's window does: `entelechy_play_loading`
-draws them, a seed each on a line across black. Its `call(op, fields)` is the same protocol,
+draws them, a star each in a nebula. Its `call(op, fields)` is the same protocol,
 answered in the worker between frames. With `trace: true` the console is
 told each pipeline the browser is asked to compile, its size before and
 its time after: when a device's own compiler takes the browser's device

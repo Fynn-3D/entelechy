@@ -838,6 +838,7 @@ struct Loading {
     thread: Option<std::thread::JoinHandle<(Session, Vec<entelechy_session::Event>)>>,
     loaded: Option<(Session, Vec<entelechy_session::Event>)>,
     progress: entelechy_kernel::Progress,
+    sky: play::loading::Sky,
     began: Instant,
     landed: Option<Instant>,
     drawn: Option<Instant>,
@@ -864,7 +865,7 @@ impl Loading {
             return;
         }
         self.drawn = Some(Instant::now());
-        let band = play::loading::band(
+        let picture = self.sky.draw(
             &self.progress.now(),
             self.began.elapsed().as_secs_f64(),
             size.width,
@@ -873,10 +874,10 @@ impl Loading {
         );
         if let (Some(display), Some(presenter)) = (&self.display, &mut opened.presenter) {
             let overlay = Overlay {
-                pixels: &band.panel.pixels,
-                width: band.panel.width,
-                height: band.panel.height,
-                top: band.top,
+                pixels: &picture.pixels,
+                width: picture.width,
+                height: picture.height,
+                top: 0,
             };
             if let Err(error) = display.present_overlay(presenter, size.width, size.height, overlay)
             {
@@ -898,13 +899,7 @@ impl Loading {
         let Ok(mut buffer) = surface.buffer_mut() else {
             return;
         };
-        buffer.fill(0);
-        let width = band.panel.width.min(size.width) as usize;
-        for y in 0..band.panel.height.min(size.height.saturating_sub(band.top)) as usize {
-            let from = y * band.panel.width as usize;
-            let to = (band.top as usize + y) * size.width as usize;
-            buffer[to..to + width].copy_from_slice(&band.panel.pixels[from..from + width]);
-        }
+        buffer.copy_from_slice(&picture.pixels);
         let _ = buffer.present();
     }
 
@@ -1190,6 +1185,7 @@ fn main() -> ExitCode {
             thread: Some(thread),
             loaded: None,
             progress,
+            sky: play::loading::Sky::default(),
             began: Instant::now(),
             landed: None,
             drawn: None,

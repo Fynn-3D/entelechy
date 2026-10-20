@@ -458,21 +458,11 @@ pub unsafe extern "C" fn entelechy_play_loading(
     let Some(mut s) = (unsafe { enter(session) }) else {
         return std::ptr::null();
     };
-    let band = entelechy_session::play::loading::band(
-        &s.session.progress().now(),
-        seconds,
-        width,
-        height,
-        scale,
-    );
+    let now = s.session.progress().now();
+    let s = &mut *s;
+    let picture = s.sky.draw(&now, seconds, width, height, scale);
     s.pixels.clear();
-    s.pixels.resize(width as usize * height as usize, 0);
-    let row = band.panel.width.min(width) as usize;
-    for y in 0..band.panel.height.min(height.saturating_sub(band.top)) as usize {
-        let from = y * band.panel.width as usize;
-        let to = (band.top as usize + y) * width as usize;
-        s.pixels[to..to + row].copy_from_slice(&band.panel.pixels[from..from + row]);
-    }
+    s.pixels.extend_from_slice(&picture.pixels);
     s.pixels.as_ptr()
 }
 

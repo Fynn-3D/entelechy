@@ -170,8 +170,8 @@ int entelechy_play_replaying(const EntelechySession *session);
 int entelechy_play_preparing(const EntelechySession *session);
 /* The scene's Kernels preparing, drawn into a window of `width` by
  * `height` at `scale` device pixels to the logical one, `seconds` into
- * loading: a seed for each on a line across black, gold once built.
- * 0x00RRGGBB pixels, row after row, valid until the next call; NULL for no
+ * loading: a nebula, a star for each, gathered by what feeds what, gold
+ * once built. 0x00RRGGBB pixels, row after row, valid until the next call; NULL for no
  * session. */
 const uint32_t *entelechy_play_loading(EntelechySession *session, uint32_t width, uint32_t height, double scale, double seconds);
 /* A turn of loading: one sync preparing a few of the Kernels waiting. The

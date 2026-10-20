@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use entelechy_graph::{Graph, GraphParam};
+use entelechy_ir::KernelId;
 use entelechy_kernel::{Runtime, Value};
 
 use crate::kernels::{Batch, Change, Defined, Kernels};
@@ -719,6 +720,7 @@ impl Scene {
         events: &mut Vec<Event>,
     ) {
         let current = self.stamp;
+        runtime.progress().link(kernel_links(&lowered.graph));
         // The inputs and outputs where the caller places them.
         let written = lowered.files.clone();
         let bound = match self
@@ -1544,6 +1546,34 @@ impl Lowering {
             }
         }
     }
+}
+
+/// Each node's Kernel with the Kernel of each node it reads from, for
+/// the picture of a scene preparing ([`entelechy_kernel::Progress::link`]).
+fn kernel_links(graph: &Graph) -> Vec<(KernelId, KernelId)> {
+    let kernel: BTreeMap<&entelechy_graph::NodeId, &KernelId> = graph
+        .nodes
+        .iter()
+        .map(|node| (&node.id, &node.kernel))
+        .collect();
+    let mut links = Vec::new();
+    for node in &graph.nodes {
+        for binding in node.inputs.values() {
+            let source = match binding {
+                entelechy_graph::Binding::Now(source) => source,
+                entelechy_graph::Binding::Previous { source, .. } => source,
+            };
+            if let entelechy_graph::Source::Node { node: from, .. } = source
+                && let Some(from) = kernel.get(from)
+                && **from != node.kernel
+            {
+                links.push((node.kernel.clone(), (*from).clone()));
+            }
+        }
+    }
+    links.sort_unstable();
+    links.dedup();
+    links
 }
 
 /// Library documents read and their Kernels primed on another thread

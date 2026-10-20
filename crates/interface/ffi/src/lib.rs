@@ -141,6 +141,9 @@ struct Held {
     said: CString,
     /// A frame drawn on the CPU, `0x00RRGGBB`, for `entelechy_play_pixels`.
     pixels: Vec<u32>,
+    /// The picture while the scene's Kernels prepare, kept between calls of
+    /// `entelechy_play_loading`.
+    sky: entelechy_session::play::loading::Sky,
     /// The last picture read back, and its size; shown again when a frame
     /// fails or a picture cannot be read back.
     picture: (Vec<[f32; 4]>, (u32, u32)),
@@ -528,6 +531,7 @@ fn opened(
                 shown: None,
                 said: CString::default(),
                 pixels: Vec::new(),
+                sky: Default::default(),
                 picture: (Vec::new(), (0, 0)),
                 sound: Vec::new(),
                 queued: 0,

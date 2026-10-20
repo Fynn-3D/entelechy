@@ -335,10 +335,12 @@ ready, so a republish never stalls a frame. It takes `run`'s
 - `--serve`, `--listen <host:port>` and `--allow-origin <origin>` serve
   the protocol from the window (see [Creation protocol](#creation-protocol)).
 
-While the scene first loads, the window shows its Kernels preparing: a
-seed for each on a line across black, faint while waiting, gold and
-breathing while its device builds it, gold once built, and under the
-line how many are built and the one taking longest. A device keeps what
+While the scene first loads, the window shows its Kernels preparing as
+a nebula: a star for each, drawn together with the Kernels it feeds or
+reads from in the scene, dust while waiting, pale once compiled, gold and
+breathing while its device builds it, gold once built, the threads
+between built ones lit; under it, how many are built and the one taking
+longest. A device keeps what
 it built, so a scene opened again unchanged loads at once. In a
 terminal, `run`, `render`, `serve`, `graph` and `trace` show the same as
 a line of seeds once preparing takes longer than a moment, and say what
