@@ -206,7 +206,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 /// the entry, the lanes past the domain's end too (their exchanges are
 /// met by all), and only the lanes inside store.
 fn emit_group_main(out: &mut String, module: &Module, size: u32) {
-    let _ = writeln!(out, "var<private> group_lane: u32;");
+    // Whether a lane of the group has failed, as the lanes last met.
+    let _ = writeln!(
+        out,
+        "var<private> group_lane: u32;\nvar<workgroup> group_failed: u32;"
+    );
     let mut met: Vec<Type> = Vec::new();
     exchanged(&module.entry.body, &mut met);
     for ty in met {
@@ -217,8 +221,7 @@ fn emit_group_main(out: &mut String, module: &Module, size: u32) {
             wgsl_type(ty)
         );
     }
-    let _ = writeln!(
-        out,
+    let head = format!(
         "
 @compute @workgroup_size({size}, 1, 1)
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {{
@@ -228,15 +231,63 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     let element = (wid.x + wid.y * {span}u) * {size}u + lid;
     group_lane = lid;
     current = element;
-    begin_work();
     let row = element / w;
-    let coord = vec3<f32>(f32(element % w), f32(row % h), f32(row / h));
+    let coord = vec3<f32>(f32(element % w), f32(row % h), f32(row / h));",
+        span = MAX_GROUPS,
+    );
+    let store = "if (element < w * h * d) {
+            store_out0(element, v);
+        }";
+    if !module.accounted() {
+        let _ = writeln!(
+            out,
+            "{head}
+    begin_work();
     let v = entry(coord, element);
-    if (element < w * h * d) {{
-        store_out0(element, v);
+    {store}
+}}"
+        );
+        return;
+    }
+    // A group whose work is counted opens together, while the run is within
+    // the Host's bound, as one lane read it. A look its lanes meet at (in
+    // the `until` of a loop holding an exchange) stops them all once any
+    // has failed: the one past its budget fails, and the others leave with
+    // it, so none waits at an exchange the others never reach. The flag is
+    // read between two barriers, so no lane writes it while another reads.
+    // Every lane adds its remainder short of a block, the lanes past the
+    // domain's end too, and one settles the sum.
+    let _ = writeln!(
+        out,
+        "var<workgroup> group_open: u32;
+fn group_look() -> bool {{
+    if (look() || failed_here) {{
+        group_failed = 1u;
+    }}
+    let stop = workgroupUniformLoad(&group_failed) != 0u;
+    workgroupBarrier();
+    if (stop) {{
+        failed_here = true;
+    }}
+    return stop;
+}}
+{head}
+    if (lid == 0u) {{
+        group_open = u32(atomicLoad(&failure.blocks) <= failure.limit);
+    }}
+    if (workgroupUniformLoad(&group_open) != 0u) {{
+        begin_work();
+        let v = entry(coord, element);
+        {store}
+        atomicAdd(&leftover, work & {mask}u);
+    }}
+    workgroupBarrier();
+    if (lid == 0u) {{
+        owed = atomicLoad(&leftover);
+        settle_left();
     }}
 }}",
-        span = MAX_GROUPS,
+        mask = entelechy_ir::WORK_BLOCK - 1,
     );
 }
 

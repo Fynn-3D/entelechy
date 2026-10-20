@@ -440,13 +440,14 @@ impl<'p, 's> Machine<'p, 's> {
         let (Some(budget), Some(run)) = (self.program.budget, &self.program.run) else {
             return Ok(());
         };
-        // A lane of a group counts its work once its run finishes: a run
-        // the group stops at an exchange counts none.
-        if self.meeting.is_some() {
-            return Ok(());
-        }
         if self.work > budget {
             return Err(self.exhausted(budget));
+        }
+        // A lane of a group hands the run its work once its run finishes:
+        // a run the group stops at an exchange hands none, its element
+        // held to its budget all the same.
+        if self.meeting.is_some() {
+            return Ok(());
         }
         let filled = self.work / entelechy_ir::WORK_BLOCK - self.looked / entelechy_ir::WORK_BLOCK;
         self.looked = self.work;

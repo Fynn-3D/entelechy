@@ -1423,8 +1423,10 @@ fn groups_meet_at_exchanges_as_the_interpreter_does() {
 }
 
 /// What fails after an exchange fails at its element, as in the
-/// interpreter; a lane past the domain's end runs to give at exchanges,
-/// and what fails there fails the run.
+/// interpreter; a group's failure is named among the lanes that failed
+/// before the first exchange the group met with a failure, the lowest; a
+/// lane past the domain's end runs to give at exchanges, and what fails
+/// there fails the run.
 #[test]
 fn a_failure_after_an_exchange_names_its_element() {
     let cases = [
@@ -1434,6 +1436,19 @@ fn a_failure_after_an_exchange_names_its_element() {
             8,
             ExecutionError::Arithmetic {
                 x: 2,
+                y: 0,
+                error: ArithmeticError::Overflow,
+            },
+        ),
+        // Lane 7 fails before the first exchange, lane 0 after the last:
+        // the group's failure is lane 7's, the first it met with.
+        (
+            "group 8 { let a = if lane() == 7 { 2147483647 + element() % 8 } else { 0 };
+                let b = exchange(exchange(a, lane()), lane());
+                return b + if lane() == 0 { 2147483647 + element() % 8 + 1 } else { 0 }; }",
+            8,
+            ExecutionError::Arithmetic {
+                x: 7,
                 y: 0,
                 error: ArithmeticError::Overflow,
             },
@@ -1472,4 +1487,43 @@ fn a_failure_after_an_exchange_names_its_element() {
         assert_eq!(out.unwrap_err(), expected, "{body}");
         assert_eq!(host.live(), 0, "a failed run leaks nothing");
     }
+}
+
+/// A counted group whose lanes run unequal work between exchanges: the
+/// lane that passes its budget first, in the stretch the group runs
+/// before an exchange, names the failure, as the interpreter checks every
+/// lane's budget in a run the group stops too.
+#[test]
+fn a_counted_group_fails_where_a_lane_first_passes_its_budget() {
+    let source = "kernel test.counted@1 { requires { field.write; } budget 50000; param rounds: Int = 3; output result: Rows<Int>;
+        group 8 {
+            return loop rounds with s = element() {
+                let spent = loop 1000 with a = 0 until index() >= (lane() + 1) * 100 { a + 1 };
+                (s + exchange(s, lane() ^ 1)) % 9973 + spent
+            };
+        } }";
+    let module = entelechy_ir::account(&compile(source).unwrap()).unwrap();
+    let jit = JitBackend::new().unwrap();
+    let run = |backend: &dyn Backend, rounds: i32| {
+        let mut host = Host::new(1 << 20);
+        let invocation = Invocation {
+            inputs: vec![],
+            params: vec![Value::Int(rounds)],
+            domain: Domain::Rows(36),
+            context: Context::default(),
+        };
+        let prepared = backend.prepare(&module).unwrap();
+        let mut scope = Scope::new(&mut host, all());
+        let out = backend.execute(prepared.as_ref(), &module, &invocation, &mut scope)?[0];
+        Ok::<Vec<u32>, ExecutionError>(host.data(out).unwrap().storage().to_vec())
+    };
+    assert_eq!(run(&jit, 3).unwrap(), run(&CpuBackend, 3).unwrap());
+    // Lane 7 passes its budget in round 63, lane 4 would in round 100.
+    let expected = ExecutionError::Exhausted {
+        x: 7,
+        y: 0,
+        budget: 50000,
+    };
+    assert_eq!(run(&CpuBackend, 100).unwrap_err(), expected);
+    assert_eq!(run(&jit, 100).unwrap_err(), expected);
 }

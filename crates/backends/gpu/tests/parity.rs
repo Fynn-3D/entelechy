@@ -1681,6 +1681,14 @@ fn a_failure_on_the_device_is_the_reference_failure() {
         ),
         (
             "kernel t.g@1 { requires { field.write; } output result: Rows<Int>;
+                group 8 { let a = if lane() == 7 { 2147483647 + element() % 8 } else { 0 };
+                    let b = exchange(exchange(a, lane()), lane());
+                    return b + if lane() == 0 { 2147483647 + element() % 8 + 1 } else { 0 }; } }"
+                .to_owned(),
+            Domain::Rows(8),
+        ),
+        (
+            "kernel t.g@1 { requires { field.write; } output result: Rows<Int>;
                 group 4 { let x = exchange(element(), lane() + 1); return 100 / (element() - 7) + x; } }"
                 .to_owned(),
             Domain::Rows(6),
@@ -2764,15 +2772,6 @@ fn groups_meet_at_exchanges_as_the_interpreter_does() {
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let module = entelechy_ir::account(&module).unwrap();
     assert_eq!(gpu.declines(&module), None);
-    // A loop whose count is a param counts its work, and such a group
-    // runs off the device.
-    let counted = compile(&source.replace(
-        "loop 8 with s = i until index() >= rounds",
-        "loop rounds with s = i",
-    ))
-    .unwrap();
-    let counted = entelechy_ir::account(&counted).unwrap();
-    assert!(gpu.declines(&counted).is_some());
     for (count, rounds, flip) in [(20, 3, true), (8, 2, false), (1000, 3, true)] {
         let mut host = Host::new(1 << 20);
         let invocation = Invocation {
@@ -2819,4 +2818,57 @@ fn groups_meet_at_exchanges_as_the_interpreter_does() {
     let device = host.resident(out).unwrap().expect("resident");
     let words = Backend::download(&gpu, device, cpu_words.len() * 4).unwrap();
     assert_eq!(words, cpu_words, "narrow");
+}
+
+/// A group whose work is counted runs on the device: its words are the
+/// interpreter's, and where its lanes run unequal work between exchanges
+/// and one passes its budget inside a loop holding an exchange, the
+/// whole group stops there together, the run failing at the element the
+/// interpreter names, and no lane waits at an exchange the others left.
+#[test]
+fn a_counted_group_stops_together_where_its_lanes_meet() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let source = "kernel test.counted@1 { requires { field.write; } budget 50000; param rounds: Int = 3; output result: Rows<Int>;
+        group 8 {
+            return loop rounds with s = element() {
+                let spent = loop 1000 with a = 0 until index() >= (lane() + 1) * 100 { a + 1 };
+                (s + exchange(s, lane() ^ 1)) % 9973 + spent
+            };
+        } }";
+    let module = entelechy_ir::account(&compile(source).unwrap()).unwrap();
+    assert!(module.accounted());
+    assert_eq!(gpu.declines(&module), None);
+    let run = |backend: &dyn Backend, rounds: i32| {
+        let mut host = Host::new(1 << 20);
+        let invocation = Invocation {
+            inputs: vec![],
+            params: vec![Value::Int(rounds)],
+            domain: Domain::Rows(36),
+            context: Context::default(),
+        };
+        let prepared = backend.prepare(&module).unwrap();
+        let mut scope = Scope::new(&mut host, all());
+        let out = backend
+            .execute(prepared.as_ref(), &module, &invocation, &mut scope)
+            .map_err(|error| error.to_string())?[0];
+        let words = match host.resident(out).unwrap() {
+            Some(device) => {
+                let bytes = host.schema(out).unwrap().storage_words(36) * 4;
+                Backend::download(backend, device, bytes).unwrap()
+            }
+            None => host.data(out).unwrap().storage().to_vec(),
+        };
+        Ok::<Vec<u32>, String>(words)
+    };
+    // Within its budget: the interpreter's words.
+    let reference = run(&CpuBackend, 3).unwrap();
+    assert_eq!(run(&gpu, 3).unwrap(), reference);
+    // Lanes 4 to 7 pass their budget, lane 7 first, in round 63: it
+    // stops its group, and the run fails at element 7, not at lane 4,
+    // which would pass its budget in the last round.
+    let reference = run(&CpuBackend, 100).unwrap_err();
+    assert!(reference.contains("(7, 0)"), "{reference}");
+    assert_eq!(run(&gpu, 100).unwrap_err(), reference);
 }

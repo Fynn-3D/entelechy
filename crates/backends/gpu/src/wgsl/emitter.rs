@@ -45,6 +45,7 @@ pub(crate) fn emit_function(
         packed,
         loops: Vec::new(),
         pairs: longs == Longs::Pairs,
+        group_look: false,
     };
     emitter.instructions(&function.body, 1);
     if stores {
@@ -110,6 +111,23 @@ pub(crate) struct Emitter<'a> {
     /// Whether a Long is a pair of words, every operation on it a helper
     /// (`LONG_PAIR_HELPERS`).
     pairs: bool,
+    /// Whether a look emitted now is one a group's lanes meet at: the one
+    /// in the `until` of a loop holding an exchange, which every lane
+    /// reaches alike and which stops them all together once one has
+    /// failed.
+    group_look: bool,
+}
+
+/// Whether `body` holds an exchange, in nested blocks too.
+pub(crate) fn meets(body: &[Instruction]) -> bool {
+    body.iter().any(|instruction| {
+        matches!(instruction.op, Op::Exchange(..))
+            || instruction
+                .op
+                .blocks()
+                .iter()
+                .any(|block| meets(&block.body))
+    })
 }
 
 /// Every value `body` defines, with its type, in nested blocks too.
@@ -160,14 +178,19 @@ impl Emitter<'_> {
             Op::Exchange(value, lane) => {
                 // Every lane writes its own place, all meet, each reads the
                 // one it asked for, and all meet again before the places are
-                // written anew.
+                // written anew. A lane that failed since the last exchange
+                // says so: from here the group's failure is named, as the
+                // reference names it, among the lanes that failed first,
+                // and no lane records a later one.
                 let size = match self.module.manifest.mode {
                     Mode::Group { size } => size,
                     _ => 1,
                 };
                 let meet = meet_name(*ty);
                 self.line(depth, &format!("{meet}[group_lane] = {};", v(value)));
+                self.line(depth, "if (failed_here) { group_failed = 1u; }");
                 self.line(depth, "workgroupBarrier();");
+                self.line(depth, "if (group_failed != 0u) { failed_here = true; }");
                 self.line(
                     depth,
                     &format!(
@@ -452,7 +475,8 @@ impl Emitter<'_> {
                 return;
             }
             Op::Look => {
-                self.line(depth, &format!("let v{}: bool = look();", id.0));
+                let look = if self.group_look { "group_look" } else { "look" };
+                self.line(depth, &format!("let v{}: bool = {look}();", id.0));
                 return;
             }
             Op::Emit(pair) => {
@@ -559,11 +583,16 @@ impl Emitter<'_> {
                     );
                 }
                 self.loops.push((*id, true));
+                let enclosing = self.group_look;
                 if let Some(until) = until {
+                    self.group_look = matches!(self.module.manifest.mode, Mode::Group { .. })
+                        && meets(&body.body);
                     let done = self.block(until, depth + 1);
+                    self.group_look = false;
                     self.line(depth + 1, &format!("if ({done}) {{ break; }}"));
                 }
                 let next = self.block(body, depth + 1);
+                self.group_look = enclosing;
                 self.line(depth + 1, &format!("v{} = {next};", id.0));
                 self.loops.pop();
                 self.line(depth, "}");

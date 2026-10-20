@@ -1595,8 +1595,17 @@ lanes by running them again: each lane runs to the next exchange it has
 not met and stops, giving its value; when all have stopped, the group
 keeps what they gave and runs each again from the start, the exchanges
 met answered from what was kept. Only the run that finishes is counted
-toward the work bound. A device runs the group as a workgroup, an
-exchange as a write to shared memory, a barrier, a read and a barrier.
+toward the work bound, while every run is held to the element's budget.
+A device runs the group as a workgroup, an exchange as a write to shared
+memory, a barrier, a read and a barrier.
+
+A failure is the group's: it is named in the first stretch between
+exchanges in which a lane failed, at the lowest lane that failed there.
+The reference reaches that naturally, running the lanes in order to each
+exchange; a device carries a flag through every exchange, so a lane that
+fails later records nothing. Where a group's work is counted, a loop
+holding an exchange checks the budget for the whole group at once: once
+a lane has failed, every lane leaves the loop together.
 
 **Why.** Elements that see one another inside a pass are what an FFT,
 a block sum or a sort network need, and a map alone takes a pass per
@@ -1605,7 +1614,11 @@ it lets a lane read a slot no lane wrote yet, race on one, or wait at a
 barrier the others never reach, and no reference interpreter can hold
 those to one answer. An exchange is a value, as a call is, so the
 program stays one of values: the IR proves every lane reaches it, every
-backend computes the same words, and a race cannot be written.
+backend computes the same words, and a race cannot be written. A lane
+that stopped alone where the others meet would leave them waiting at a
+barrier, so a group stops as one; naming its failure by the stretch it
+met in keeps the device's answer the reference's, however its lanes
+interleave.
 Running again is the interpreter's simplest faithful form: the
 element's code is the map's, no continuation is kept, and what a lane
 computes before an exchange it computes again identically, as a pure

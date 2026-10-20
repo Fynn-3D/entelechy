@@ -696,18 +696,20 @@ index())) }` sums a group of eight in three rounds. `exchange` is
 written in the body, never in a function. The last group runs whole
 when the domain is not a multiple of `N`: its lanes past the end give at
 exchanges, fail as any element fails (placed as the domain lays elements
-out), and write nothing.
+out), and write nothing. A group's failure, its budget's included, is
+named in the stretch between exchanges where its lanes first failed, at
+the lowest of them: a lane that fails later is not named, whatever its
+element.
 
 On a device a group is a workgroup and an exchange a pass through its
 shared memory between barriers. The interpreter and the JIT run each
 lane to its next exchange and run the group again from the start with
 what every lane gave there, until all finish; only the finished run's
 work counts ([decision](DECISIONS.md)). The GPU runs groups of one
-output whose work is not counted; others run on the JIT, where every
-exchange costs a run of the group again. A loop whose count is not a
-literal counts its work, so a group meant for the device bounds its
-loops by a literal and stops them with a uniform `until`: `loop 8 with
-s = x until index() >= bits { .. }`.
+output, their work counted or not: a loop holding an exchange checks the
+budget for the whole group, and once a lane has failed every lane leaves
+it together. A group of several outputs runs on the JIT, where every
+exchange costs a run of the group again.
 
 ## Graph
 
