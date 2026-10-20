@@ -13,8 +13,15 @@ pub fn emit_packed(module: &Module, packed: &[usize]) -> String {
     emit_packed_longs(module, packed, Longs::Native)
 }
 
-/// [`emit_packed`] with the module's Longs computed as `longs` says.
+/// [`emit_packed`] with the module's Longs computed as `longs` says; a
+/// scatter landing its Longs by halves lands the high ones
+/// ([`by_halves`]).
 pub fn emit_packed_longs(module: &Module, packed: &[usize], longs: Longs) -> String {
+    emit_packed_half(module, packed, longs, first_half(module, longs))
+}
+
+/// [`emit_packed_longs`], an emitting scatter landing `half`.
+pub fn emit_packed_half(module: &Module, packed: &[usize], longs: Longs, half: Half) -> String {
     let manifest = &module.manifest;
     let mut out = String::new();
     emit_preamble(&mut out, module, true, packed, longs);
@@ -48,7 +55,7 @@ pub fn emit_packed_longs(module: &Module, packed: &[usize], longs: Longs) -> Str
             wgsl_type(element)
         );
     }
-    emit_functions(module, &mut out);
+    emit_functions(module, half, &mut out);
     for (index, function) in module.functions.iter().enumerate() {
         emit_function(
             &mut out,

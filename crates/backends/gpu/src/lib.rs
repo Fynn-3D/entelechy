@@ -296,9 +296,11 @@ impl GpuBackend {
         self
     }
 
-    /// How its shaders compute a `Long`.
-    pub(crate) fn longs(&self) -> wgsl::Longs {
-        if self.int64 {
+    /// How `module`'s shaders compute a `Long`: as the device's own, unless
+    /// it has none, or scatters Longs under `min` or `max` with no 64-bit
+    /// atomics to land them, which pairs of words land by halves.
+    pub(crate) fn longs(&self, module: &Validated) -> wgsl::Longs {
+        if self.int64 && (self.int64_atomics || !wgsl::long_extremes(module)) {
             wgsl::Longs::Native
         } else {
             wgsl::Longs::Pairs

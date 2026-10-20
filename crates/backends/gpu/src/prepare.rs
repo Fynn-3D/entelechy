@@ -66,13 +66,25 @@ pub(crate) enum Scatter<P = Pass> {
     },
     /// An order-free rule: the parallel apply; the gather after `last`; for
     /// `min` and `max` over floats and longs, the key transform in place
-    /// after, and before from the base into the target, sparing a base copy.
+    /// after, and before from the base into the target, sparing a base copy;
+    /// Longs in pairs of words landed a half at a time.
     Parallel {
         apply: P,
         gather: Option<P>,
         keys: Option<Keys<P>>,
         totals: Option<Totals<P>>,
+        halves: Option<Halves<P>>,
     },
+}
+
+/// The landing of a scatter's Longs' low words, after the apply (or the
+/// emitting entry) landed the high ones ([`wgsl::Half`]): the low words
+/// set aside where their high word moved, then the returned pairs' low
+/// words, or the emitting entry run again landing its own.
+pub(crate) struct Halves<P = Pass> {
+    pub(crate) lows: P,
+    pub(crate) apply: P,
+    pub(crate) entry: Option<P>,
 }
 
 /// A pass validated as the device takes it, its pipeline not yet built:
@@ -168,6 +180,7 @@ impl<P> Scatter<P> {
                 gather,
                 keys,
                 totals,
+                halves,
             } => Scatter::Parallel {
                 apply: make(apply)?,
                 gather: gather.map(&mut *make).transpose()?,
@@ -184,6 +197,15 @@ impl<P> Scatter<P> {
                         Ok(Totals {
                             from_base: make(t.from_base)?,
                             check: make(t.check)?,
+                        })
+                    })
+                    .transpose()?,
+                halves: halves
+                    .map(|h| -> Result<Halves<Q>, Unbuilt> {
+                        Ok(Halves {
+                            lows: make(h.lows)?,
+                            apply: make(h.apply)?,
+                            entry: h.entry.map(&mut *make).transpose()?,
                         })
                     })
                     .transpose()?,
@@ -333,20 +355,17 @@ impl GpuBackend {
         if !module.holds(entelechy_abi::Type::Long) {
             return None;
         }
-        if !self.int64 {
+        if self.longs(module) == wgsl::Longs::Pairs {
             // Without the device's own, a Long is a pair of words where the
             // module allows it.
             return (!wgsl::pairs_take(module)).then(|| {
-                "it holds a Long the device, which has no 64-bit integers, computes only as scalars in a map or a reduction"
+                "it holds a Long the device, which has no 64-bit integers, computes only as scalars in a map, a reduction, or a scatter of Longs under min or max"
                     .to_owned()
             });
         }
         match module.manifest.mode {
             entelechy_ir::Mode::Map | entelechy_ir::Mode::Reduce => None,
-            entelechy_ir::Mode::Scatter { .. } if wgsl::long_extremes(module) => (!self.int64_atomics)
-                .then(|| {
-                    "it scatters Longs, and the device has no 64-bit atomic min and max".to_owned()
-                }),
+            entelechy_ir::Mode::Scatter { .. } if wgsl::long_extremes(module) => None,
             _ => Some(
                 "it holds a Long, which the device computes in a map, a reduction, or a scatter of Longs under min or max only"
                     .to_owned(),
@@ -538,7 +557,7 @@ impl GpuBackend {
         }
         let written = wgsl::written_outputs(module);
         let packed = self.packing(module);
-        let longs = self.longs();
+        let longs = self.longs(module);
         let source = wgsl::emit_packed_longs(module, &packed, longs);
         let mut entries = vec![
             uniform_entry(wgsl::CONTEXT_BINDING),
@@ -635,6 +654,17 @@ impl GpuBackend {
             None
         };
         let scatter = if matches!(module.manifest.mode, entelechy_ir::Mode::Scatter { .. }) {
+            let apply_entries: Vec<wgpu::BindGroupLayoutEntry> = [
+                uniform_entry(wgsl::CONTEXT_BINDING),
+                storage_entry(wgsl::SCATTER_PAIRS_BINDING, true),
+                storage_entry(wgsl::SCATTER_OUT_BINDING, false),
+                storage_entry(wgsl::SCATTER_WINNER_BINDING, false),
+            ]
+            .into_iter()
+            .chain(
+                wgsl::sums_whole(module).then(|| storage_entry(wgsl::SCATTER_HIGHS_BINDING, false)),
+            )
+            .collect();
             let scatter = match wgsl::scatter_plan(module) {
                 wgsl::ScatterPlan::Sorted => Scatter::Sorted {
                     keys: self.pass(
@@ -682,20 +712,43 @@ impl GpuBackend {
                 wgsl::ScatterPlan::Parallel { last, keys } => Scatter::Parallel {
                     apply: self.pass(
                         "scatter apply",
-                        &wgsl::emit_scatter_parallel(module),
-                        &[
-                            uniform_entry(wgsl::CONTEXT_BINDING),
-                            storage_entry(wgsl::SCATTER_PAIRS_BINDING, true),
-                            storage_entry(wgsl::SCATTER_OUT_BINDING, false),
-                            storage_entry(wgsl::SCATTER_WINNER_BINDING, false),
-                        ]
-                        .into_iter()
-                        .chain(
-                            wgsl::sums_whole(module)
-                                .then(|| storage_entry(wgsl::SCATTER_HIGHS_BINDING, false)),
-                        )
-                        .collect::<Vec<_>>(),
+                        &wgsl::emit_scatter_half(module, wgsl::first_half(module, longs)),
+                        &apply_entries,
                     )?,
+                    halves: wgsl::by_halves(module, longs)
+                        .then(|| -> Result<Halves<Shader>, Unbuilt> {
+                            Ok(Halves {
+                                lows: self.pass(
+                                    "scatter lows",
+                                    &wgsl::emit_scatter_lows(module),
+                                    &[
+                                        uniform_entry(wgsl::CONTEXT_BINDING),
+                                        storage_entry(wgsl::SCATTER_PAIRS_BINDING, true),
+                                        storage_entry(wgsl::SCATTER_OUT_BINDING, false),
+                                    ],
+                                )?,
+                                apply: self.pass(
+                                    "scatter apply lows",
+                                    &wgsl::emit_scatter_half(module, wgsl::Half::Low),
+                                    &apply_entries,
+                                )?,
+                                entry: emits
+                                    .then(|| {
+                                        self.pass(
+                                            &format!("{} lows", module.manifest.id),
+                                            &wgsl::emit_packed_half(
+                                                module,
+                                                &packed,
+                                                longs,
+                                                wgsl::Half::Low,
+                                            ),
+                                            &entries,
+                                        )
+                                    })
+                                    .transpose()?,
+                            })
+                        })
+                        .transpose()?,
                     totals: wgsl::sums_whole(module)
                         .then(|| -> Result<Totals<Shader>, Unbuilt> {
                             Ok(Totals {
@@ -735,7 +788,8 @@ impl GpuBackend {
                             )
                         })
                         .transpose()?,
-                    keys: keys
+                    // Halves compare words in their own order, kept as they are.
+                    keys: (keys && !wgsl::by_halves(module, longs))
                         .then(|| -> Result<Keys<Shader>, Unbuilt> {
                             let entries = [
                                 uniform_entry(wgsl::CONTEXT_BINDING),

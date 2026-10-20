@@ -279,10 +279,11 @@ products, `inverse` and the rest; longs take arithmetic (overflow and
 zero divisor fail as for `Int`), bit operators, shifts (count modulo
 64), `abs`, `sign`, `min`, `max`, `clamp`, `add_wrap`, `sub_wrap`,
 `mul_wrap`. The interpreter and the JIT compute as Rust's `f64` and
-`i64`. A GPU computes a `Long` in a map or a reduction where the device
-has 64-bit integers, and in a scatter whose target is all `Long`s under
-`min` or `max` where it also has 64-bit atomics; it never computes a
-`Double`. A GPU session runs such a node on the JIT
+`i64`. A GPU computes a `Long` in a map, a reduction, and a scatter
+whose target is all `Long`s under `min` or `max`: as the device's own
+64-bit integer where it has one, and else (a page's WebGPU) as a pair
+of 32-bit words, scalars alone; it never computes a `Double`. A GPU
+session runs any other node holding them on the JIT
 ([`examples/data`](../examples/data/README.md)).
 
 ### Builtins

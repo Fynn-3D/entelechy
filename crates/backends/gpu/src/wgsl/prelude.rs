@@ -207,14 +207,21 @@ fn to_long3(v: vec3<f32>) -> vec3<i64> {
 }
 ";
 
-/// `Long` on a device without 64-bit integers: `i64` is a pair of words,
-/// `vec2<u32>(low, high)`, two's complement, and every operation the
-/// emitter writes on a scalar Long is a helper here, by the same rules as
-/// [`LONG_HELPERS`]. The words in memory are the same as the device's own.
-pub(crate) const LONG_PAIR_HELPERS: &str = "
+/// A Long's words where it is a pair of them, `i64` the pair: as
+/// [`LONG_WORDS`], also used by the scatter passes.
+pub(crate) const LONG_PAIR_WORDS: &str = "
+alias i64 = vec2<u32>;
 fn long_of(low: u32, high: u32) -> i64 { return vec2<u32>(low, high); }
 fn long_low(x: i64) -> u32 { return x.x; }
 fn long_high(x: i64) -> u32 { return x.y; }
+";
+
+/// `Long` on a device without 64-bit integers: `i64` is a pair of words,
+/// `vec2<u32>(low, high)`, two's complement ([`LONG_PAIR_WORDS`]), and
+/// every operation the emitter writes on a scalar Long is a helper here,
+/// by the same rules as [`LONG_HELPERS`]. The words in memory are the
+/// same as the device's own.
+pub(crate) const LONG_PAIR_HELPERS: &str = "
 fn long_negative(a: i64) -> bool { return (a.y >> 31u) != 0u; }
 fn long_is_min(a: i64) -> bool { return a.x == 0u && a.y == 0x80000000u; }
 fn long_from_int(i: i32) -> i64 { return vec2<u32>(bitcast<u32>(i), select(0u, 0xFFFFFFFFu, i < 0)); }
@@ -429,7 +436,7 @@ pub(crate) fn emit_preamble(
 ) {
     let manifest = &module.manifest;
     if longs == Longs::Pairs && module.holds(Type::Long) {
-        out.push_str("alias i64 = vec2<u32>;\n");
+        out.push_str(LONG_PAIR_WORDS.trim_start());
     }
     let context_len = CONTEXT_HEAD + manifest.inputs.len();
     // Packed input offsets follow the parameters, four per slot.

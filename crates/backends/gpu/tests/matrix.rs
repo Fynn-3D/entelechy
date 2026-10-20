@@ -252,9 +252,8 @@ fn differences(gpu: &GpuBackend, cases: &[entelechy_conformance::Case]) -> Vec<S
     failures
 }
 
-/// Every scatter target element shape runs on the device except Longs; of
-/// those it takes all-Long targets under `min` or `max` where it has
-/// 64-bit atomics.
+/// Every scatter target element shape runs on the device but Longs other
+/// than under `min` or `max`.
 #[test]
 fn every_element_shape_a_scatter_holds_matches_the_interpreter() {
     let Some(gpu) = GpuBackend::new().ok() else {
@@ -269,8 +268,7 @@ fn every_element_shape_a_scatter_holds_matches_the_interpreter() {
             Some(why) => assert!(
                 case.name.contains("Long")
                     && !case.name.contains("with min")
-                    && !case.name.contains("with max")
-                    || !gpu_takes_long_extremes(&gpu),
+                    && !case.name.contains("with max"),
                 "{}: declined: {why}",
                 case.name
             ),
@@ -286,16 +284,39 @@ fn every_element_shape_a_scatter_holds_matches_the_interpreter() {
     );
 }
 
-/// Whether the device takes the smallest Long `min`/`max` scatter.
-fn gpu_takes_long_extremes(gpu: &GpuBackend) -> bool {
-    let module = compile(
-        "kernel probe.low@1 { requires { field.read; field.write; }
-         input keys: Rows<Int>; input target: Rows<Long>; output result: Rows<Long>;
-         struct Pair { at: Int; value: Long; }
-         scatter into target with min { return Pair { at: sample(keys), value: 0l }; } }",
-    )
-    .unwrap();
-    gpu.declines(&module).is_none()
+/// On a device without 64-bit integers, as a page's WebGPU, a scatter of
+/// Longs under `min` or `max` lands their high words, then the low words
+/// of the pairs whose high word won: every such target, returned pairs
+/// and emitted ones, is the interpreter's.
+#[test]
+fn long_extremes_in_word_pairs_land_by_halves_as_the_interpreter() {
+    let Some(gpu) = GpuBackend::new().ok().map(GpuBackend::with_long_pairs) else {
+        return;
+    };
+    let cases: Vec<_> = entelechy_conformance::shape_cases()
+        .into_iter()
+        .filter(|case| {
+            case.name.contains("Long")
+                && (case.name.contains("with min") || case.name.contains("with max"))
+        })
+        .collect();
+    assert_eq!(
+        cases.len(),
+        16,
+        "a Long and two Longs, two targets, two rules, emitting or not"
+    );
+    for case in &cases {
+        let module = compile(&case.source).unwrap();
+        assert_eq!(gpu.declines(&module), None, "{}", case.name);
+    }
+    let failures = differences(&gpu, &cases);
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases differ:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
 }
 
 #[test]

@@ -601,6 +601,69 @@ impl GpuBackend {
                 pass.dispatch_workgroups(groups_x, groups_y, groups_z);
             }
         }
+        // An emitting scatter of Longs by halves landed the high words: the
+        // low ones are landed by the entry run again over the same inputs,
+        // emitting the same pairs. Its work is counted on a record of its
+        // own, never read, as the first run's counts the run's.
+        if let (
+            Some((base, count, buffer)),
+            Some(Scatter::Parallel {
+                halves:
+                    Some(Halves {
+                        lows,
+                        entry: Some(entry),
+                        ..
+                    }),
+                ..
+            }),
+        ) = (&target, &pipeline.scatter)
+        {
+            self.lows(
+                &mut encoder,
+                lows,
+                &context_buffer,
+                &input_buffers[*base as usize],
+                buffer,
+                count * output_words,
+            );
+            let counted = failure.as_ref().map(|_| {
+                let counted = self.spare.take(
+                    &self.device,
+                    wgsl::FAILURE_BYTES,
+                    wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                );
+                let limit = entelechy_rules::Run::new(scope.work()).limit();
+                let record: Vec<u8> = [0u32, 0, limit, 0, 0, 0, 0, 0]
+                    .iter()
+                    .flat_map(|word| word.to_le_bytes())
+                    .collect();
+                self.queue.write_buffer(&counted, 0, &record);
+                self.spare.let_go(counted.clone());
+                counted
+            });
+            let entries: Vec<wgpu::BindGroupEntry> = entries
+                .iter()
+                .map(|entry| match (&counted, entry.binding) {
+                    (Some(counted), wgsl::FAILURE_BINDING) => wgpu::BindGroupEntry {
+                        binding: wgsl::FAILURE_BINDING,
+                        resource: counted.as_entire_binding(),
+                    },
+                    _ => entry.clone(),
+                })
+                .collect();
+            let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("entelechy kernel lows"),
+                layout: &entry.1,
+                entries: &entries,
+            });
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("entelechy kernel lows"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&entry.0);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(groups_x, groups_y, groups_z);
+        }
         Ok(Staged {
             encoder,
             context_buffer,

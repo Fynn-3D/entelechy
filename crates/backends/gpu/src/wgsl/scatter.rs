@@ -175,13 +175,44 @@ pub fn long_extremes(module: &Module) -> bool {
             .all(|s| matches!(s, entelechy_abi::Scalar::Long))
 }
 
-/// The scatter target's atomic array type: words, or longs under
-/// [`long_extremes`].
-pub(crate) fn atomic_target(module: &Module) -> &'static str {
-    if long_extremes(module) {
-        "array<atomic<u64>>"
+/// Which words of its Longs a scatter's atomics land. Where a Long is a
+/// pair of words and the device has no 64-bit atomics, a `min` or `max`
+/// of Longs lands every high word first, compared signed, then the low
+/// word of each pair whose high word won, compared unsigned: the order of
+/// the Longs, in two landings, with a low word set aside between them
+/// where its high word moved ([`emit_scatter_lows`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Half {
+    /// The whole value: every scatter but those [`by_halves`] says.
+    Whole,
+    /// The high words.
+    High,
+    /// The low words of the pairs whose high word won.
+    Low,
+}
+
+/// Whether a scatter lands its Longs a half at a time ([`Half`]): a
+/// `min` or `max` of Longs in pairs of words.
+pub fn by_halves(module: &Module, longs: Longs) -> bool {
+    longs == Longs::Pairs && long_extremes(module)
+}
+
+/// The half a scatter's first landing lands.
+pub fn first_half(module: &Module, longs: Longs) -> Half {
+    if by_halves(module, longs) {
+        Half::High
     } else {
-        "array<atomic<i32>>"
+        Half::Whole
+    }
+}
+
+/// The scatter target's atomic array type: words, longs under
+/// [`long_extremes`], or a half's words, high ones signed.
+pub(crate) fn atomic_target(module: &Module, half: Half) -> &'static str {
+    match half {
+        Half::Whole if long_extremes(module) => "array<atomic<u64>>",
+        Half::Whole | Half::High => "array<atomic<i32>>",
+        Half::Low => "array<atomic<u32>>",
     }
 }
 
@@ -242,9 +273,14 @@ pub(crate) fn value_scalars(
 }
 
 /// The scatter passes' header: context, pairs, the target when `target`
-/// is `Some` (atomic when `Some(true)`), `extra` bindings, structs, the
-/// float key and the pair loader.
-pub(crate) fn scatter_header(module: &Module, target: Option<bool>, extra: &str) -> String {
+/// is `Some` (atomic when `Some(true)`, landing `half`), `extra`
+/// bindings, structs, the float key and the pair loader.
+pub(crate) fn scatter_header(
+    module: &Module,
+    target: Option<bool>,
+    half: Half,
+    extra: &str,
+) -> String {
     let manifest = &module.manifest;
     let context_len = CONTEXT_HEAD + manifest.inputs.len();
     let mut out = String::new();
@@ -258,7 +294,7 @@ pub(crate) fn scatter_header(module: &Module, target: Option<bool>, extra: &str)
     );
     if let Some(atomic) = target {
         let ty = if atomic {
-            atomic_target(module)
+            atomic_target(module, half)
         } else {
             "array<u32>"
         };
@@ -273,7 +309,10 @@ pub(crate) fn scatter_header(module: &Module, target: Option<bool>, extra: &str)
     }
     // Long pairs load and land through the long helpers.
     if long_extremes(module) {
-        out.push_str(LONG_WORDS);
+        out.push_str(match half {
+            Half::Whole => LONG_WORDS,
+            Half::High | Half::Low => LONG_PAIR_WORDS,
+        });
     }
     // Float keys in total order, an involution on the bits: negatives
     // below positives, NaN beyond the infinities.
@@ -362,6 +401,11 @@ pub(crate) fn scatter_address(module: &Module, exit: &str) -> String {
 /// the target with atomics, or recording the greatest source per element
 /// for `last`. Order-free, so it equals the sequential result.
 pub fn emit_scatter_parallel(module: &Module) -> String {
+    emit_scatter_half(module, Half::Whole)
+}
+
+/// [`emit_scatter_parallel`], landing `half` of the target's Longs.
+pub fn emit_scatter_half(module: &Module, half: Half) -> String {
     let Mode::Scatter { base, combine } = module.manifest.mode else {
         return String::new();
     };
@@ -372,10 +416,10 @@ pub fn emit_scatter_parallel(module: &Module) -> String {
     if highs_beside(module) {
         extra.push_str(&highs_binding(SCATTER_HIGHS_BINDING, "highs"));
     }
-    let mut out = scatter_header(module, Some(true), &extra);
+    let mut out = scatter_header(module, Some(true), half, &extra);
     let lines = match combine {
         Combine::Last => vec!["    atomicMax(&winner[at], i + 1u);".to_owned()],
-        _ => atomic_lines(module, element, combine, "out0", "highs"),
+        _ => atomic_lines(module, element, combine, half, "out0", "highs"),
     };
     let _ = writeln!(
         out,
@@ -399,11 +443,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 }
 
 /// Atomics combining a pair's value into `target` at word `b` under an
-/// order-free rule; floats and longs compare as keys.
+/// order-free rule; floats and longs compare as keys, and Longs in pairs
+/// of words land `half` of them.
 pub(crate) fn atomic_lines(
     module: &Module,
     element: Type,
     combine: Combine,
+    half: Half,
     target: &str,
     highs: &str,
 ) -> Vec<String> {
@@ -419,10 +465,21 @@ pub(crate) fn atomic_lines(
         return scalars
             .iter()
             .enumerate()
-            .map(|(k, (expr, _))| {
-                format!(
+            .map(|(k, (expr, _))| match half {
+                Half::Whole => format!(
                     "    {op}(&{target}[b / 2u + {k}u], bitcast<u64>({expr}) ^ 0x8000000000000000lu);"
-                )
+                ),
+                Half::High => format!(
+                    "    {op}(&{target}[b + {high}u], bitcast<i32>(long_high({expr})));",
+                    high = 2 * k + 1
+                ),
+                Half::Low => format!(
+                    "    if (atomicLoad(&{target}[b + {high}u]) == long_high({expr})) {{
+        {op}(&{target}[b + {low}u], long_low({expr}));
+    }}",
+                    high = 2 * k + 1,
+                    low = 2 * k
+                ),
             })
             .collect();
     }
@@ -486,9 +543,49 @@ pub fn emitted_pairs(module: &Module) -> Vec<Type> {
     found
 }
 
+/// The pass between a scatter's two landings of its Longs' halves: where
+/// an element's high word is no longer the base's, a pair's won, and its
+/// low word is set to what every low word passes, so the low landing
+/// keeps the winning pairs' alone.
+pub fn emit_scatter_lows(module: &Module) -> String {
+    let Mode::Scatter { base, combine } = module.manifest.mode else {
+        return String::new();
+    };
+    // Two words a Long, low first.
+    let longs = module.manifest.inputs[base as usize]
+        .ty
+        .schema
+        .value_words()
+        / 2;
+    let none = if combine == Combine::Min {
+        "0xFFFFFFFFu"
+    } else {
+        "0u"
+    };
+    let context_len = CONTEXT_HEAD + module.manifest.inputs.len();
+    format!(
+        "@group(0) @binding({CONTEXT_BINDING}) var<uniform> ctx: array<vec4<f32>, {context_len}>;
+@group(0) @binding({SCATTER_PAIRS_BINDING}) var<storage, read> base: array<u32>;
+@group(0) @binding({SCATTER_OUT_BINDING}) var<storage, read_write> out0: array<u32>;
+@compute @workgroup_size({SCATTER_WORKGROUP}, 1, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let i = gid.x + gid.y * {SCATTER_SPAN}u;
+    if (i >= {count} * {longs}u) {{
+        return;
+    }}
+    if (out0[i * 2u + 1u] != base[i * 2u + 1u]) {{
+        out0[i * 2u] = {none};
+    }}
+}}
+",
+        count = target_count(module)
+    )
+}
+
 /// The emit target binding and one function per pair type: the address
-/// checked as in the apply pass, then the words combined atomically.
-pub(crate) fn emit_functions(module: &Module, out: &mut String) {
+/// checked as in the apply pass, then the words combined atomically,
+/// `half` of them where a Long's words land a half at a time.
+pub(crate) fn emit_functions(module: &Module, half: Half, out: &mut String) {
     let Mode::Scatter { base, combine } = module.manifest.mode else {
         return;
     };
@@ -507,7 +604,7 @@ pub(crate) fn emit_functions(module: &Module, out: &mut String) {
         out,
         "@group(0) @binding({EMIT_BINDING}) var<storage, read_write> emitted: {};
 fn key_of(b: i32) -> i32 {{ return select(b ^ 0x7fffffff, b, b >= 0); }}",
-        atomic_target(module)
+        atomic_target(module, half)
     );
     if highs_beside(module) {
         out.push_str(&highs_binding(EMIT_HIGHS_BINDING, "emitted_highs"));
@@ -527,6 +624,7 @@ fn key_of(b: i32) -> i32 {{ return select(b ^ 0x7fffffff, b, b >= 0); }}",
                 module,
                 target.element(),
                 combine,
+                half,
                 "emitted",
                 "emitted_highs"
             )
@@ -552,7 +650,7 @@ pub fn emit_scatter_gather(module: &Module) -> String {
     let target = &module.manifest.inputs[base as usize];
     let stride = target.ty.schema.value_words();
     let slot = CONTEXT_HEAD + base as usize;
-    let mut out = scatter_header(module, Some(false), &winners_binding(true));
+    let mut out = scatter_header(module, Some(false), Half::Whole, &winners_binding(true));
     let mut words = Vec::new();
     value_words(
         module,
@@ -599,7 +697,7 @@ pub fn emit_scatter_keys(module: &Module, from_base: bool) -> String {
     let target = &module.manifest.inputs[base as usize];
     let stride = target.ty.schema.value_words();
     let slot = CONTEXT_HEAD + base as usize;
-    let mut out = scatter_header(module, Some(false), "");
+    let mut out = scatter_header(module, Some(false), Half::Whole, "");
     // The key transform is an involution, serving both ways. A float's
     // key is `key_of` of its word; a long's flips its high word's sign.
     // The schema lists a scalar per word, a long twice.
@@ -651,7 +749,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 /// Emits the sort's first pass: per padded slot, the source's target
 /// index as key (all ones outside or for a pad) and its index as order.
 pub fn emit_scatter_sort_keys(module: &Module) -> String {
-    let mut out = scatter_header(module, None, &sort_bindings(false));
+    let mut out = scatter_header(module, None, Half::Whole, &sort_bindings(false));
     let _ = writeln!(
         out,
         "
@@ -755,7 +853,7 @@ pub fn emit_scatter_fold(module: &Module) -> String {
             )
         })
         .collect();
-    let mut out = scatter_header(module, Some(false), &bindings);
+    let mut out = scatter_header(module, Some(false), Half::Whole, &bindings);
     let (expr, _) = load_expr(module, element, "out0", "b", 0, Encoding::Word);
     let _ = writeln!(
         out,

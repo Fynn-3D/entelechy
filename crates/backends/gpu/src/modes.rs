@@ -445,6 +445,46 @@ impl GpuBackend {
         compute.dispatch_workgroups(x, y, 1);
     }
 
+    /// Between the landings of a scatter's Longs' halves: each low word of
+    /// the target's `words` set aside where its high word is no longer the
+    /// base's ([`wgsl::emit_scatter_lows`]).
+    pub(crate) fn lows(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        lows: &Pass,
+        context_buffer: &wgpu::Buffer,
+        base_buffer: &wgpu::Buffer,
+        target: &wgpu::Buffer,
+        words: usize,
+    ) {
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("entelechy scatter lows"),
+            layout: &lows.1,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: wgsl::CONTEXT_BINDING,
+                    resource: context_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: wgsl::SCATTER_PAIRS_BINDING,
+                    resource: base_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: wgsl::SCATTER_OUT_BINDING,
+                    resource: target.as_entire_binding(),
+                },
+            ],
+        });
+        let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("entelechy scatter lows"),
+            timestamp_writes: None,
+        });
+        compute.set_pipeline(&lows.0);
+        compute.set_bind_group(0, &group, &[]);
+        let (x, y) = wgsl::folded(((words / 2) as u32).div_ceil(wgsl::SCATTER_WORKGROUP));
+        compute.dispatch_workgroups(x, y, 1);
+    }
+
     /// A scatter's combine: the target made ready (unless the emitting entry
     /// did), then the pairs applied by the plan. A float sum sorts pairs by
     /// target and source (bitonic, one small dispatch per step) and folds each
@@ -648,6 +688,7 @@ impl GpuBackend {
                 gather,
                 keys,
                 totals,
+                halves,
             } => {
                 // Winners for `last`, zeroed as every new buffer is; a
                 // token buffer where the pass has none to record.
@@ -671,6 +712,19 @@ impl GpuBackend {
                 if !landed {
                     let group = bind(&apply.1, &with_winners);
                     dispatch(encoder, apply, &group, &[], over_sources);
+                    // The high words in, the low ones of the pairs that won.
+                    if let Some(halves) = halves {
+                        self.lows(
+                            encoder,
+                            &halves.lows,
+                            context_buffer,
+                            base_buffer,
+                            &target,
+                            target_count * output_words,
+                        );
+                        let group = bind(&halves.apply.1, &with_winners);
+                        dispatch(encoder, &halves.apply, &group, &[], over_sources);
+                    }
                 }
                 if let Some(gather) = gather {
                     let group = bind(&gather.1, &with_winners);
