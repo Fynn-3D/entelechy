@@ -38,13 +38,12 @@ Open:
 1. A page on Windows (an RTX 4090) did not open a large scene that a
    page on the M4 opens; nothing is known of why until that machine's
    browser console is read.
-2. A page's WebAssembly memory stays at its peak, about 170 MB for a
-   large scene whose live heap is about 115 MB. Some 30 MB are Fields
-   kept both in memory and on the device, as runs the device cannot take
-   read and write them each frame between its own: a scatter of Longs
-   (a raster's depth keys) and, on a page, a prefix pass. Most of the
-   rest are the allocator's gaps: loading leaves holes too small for the
-   Fields the first frames make.
+2. A page's WebAssembly memory stays at its peak, about 140 MB for a
+   large scene. Some 15 MB are Fields kept both in memory and on the
+   device, as the prefix passes a page's device declines (below) run on
+   the processor between its own. Most of the rest are the allocator's
+   gaps: loading leaves holes too small for the Fields the first frames
+   make.
 
 What a page does only because one browser fails otherwise, each to be
 taken back once that browser no longer fails:
