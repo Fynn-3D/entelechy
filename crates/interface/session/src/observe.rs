@@ -245,8 +245,9 @@ pub(crate) fn trace_sources(target: &Node) -> Vec<NodeId> {
 }
 
 /// Runs element `at` of `target` on the interpreter with the current
-/// invocation. `written` is the owning document's unoptimized module;
-/// without it the running module is traced.
+/// invocation, and gives the module it ran, which the trace's types
+/// name structs of. `written` is the owning document's unoptimized
+/// module; without it the running module is traced.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn trace_element(
     graph: &Graph,
@@ -258,7 +259,7 @@ pub(crate) fn trace_element(
     (target, version): (&Node, &Arc<KernelVersion>),
     context: &Context,
     at: [u32; 3],
-) -> Result<entelechy_cpu::Trace, String> {
+) -> Result<(entelechy_cpu::Trace, Validated), String> {
     let invocation = evaluator
         .invocation(graph, target, version, runtime, inputs, context, params)
         .map_err(|error| error.to_string())?;
@@ -295,7 +296,7 @@ pub(crate) fn trace_element(
             .entry_value
             .and_then(|value| renumbering.given(None, value));
     }
-    Ok(trace)
+    Ok((trace, module))
 }
 
 /// Where a field of a node's output element is: its type, the word it

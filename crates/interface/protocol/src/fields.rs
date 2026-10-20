@@ -61,17 +61,11 @@ pub(crate) fn trace(session: &mut Session, request: &Request) -> Result<Json, Js
     let id = entelechy_graph::NodeId(node.clone().into());
     let entelechy_session::Traced {
         trace,
+        module,
         kernel,
         place,
     } = session.trace(&id, at, &context).map_err(failure)?;
-    let version = session
-        .runtime()
-        .kernel(&kernel)
-        .ok_or_else(|| failure(format!("`{kernel}` is not published")))?;
-    let module = version
-        .module()
-        .ok_or_else(|| failure("a native operation has no trace"))?;
-    Ok(trace_json(module, &node, &kernel, &trace, place.as_ref()))
+    Ok(trace_json(&module, &node, &kernel, &trace, place.as_ref()))
 }
 
 /// Replaces a node's committed state.

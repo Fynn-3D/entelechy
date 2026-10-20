@@ -1186,14 +1186,11 @@ fn trace(args: &[String]) -> Result<(), String> {
     let id = entelechy_graph::NodeId(node.clone().into());
     let entelechy_session::Traced {
         trace: traced,
+        module,
         kernel,
         place: written_at,
     } = session.trace(&id, at, &context)?;
-    let version = session
-        .runtime()
-        .kernel(&kernel)
-        .ok_or_else(|| format!("`{kernel}` is not published"))?;
-    let module = version.module().ok_or("a native operation has no trace")?;
+    let module = &module;
     let scan = module.manifest.mode == entelechy_ir::Mode::Scan;
     let place = if scan {
         format!("step {}", traced.at[0])

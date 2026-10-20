@@ -2154,13 +2154,14 @@ impl Session {
         for source in pinned {
             self.evaluator.unpin(&source);
         }
-        traced.map(|trace| Traced {
+        traced.map(|(trace, module)| Traced {
             place: trace
                 .fault
                 .as_ref()
                 .zip(written.as_ref())
                 .and_then(|(fault, written)| written.place_of(fault)),
             trace,
+            module,
             kernel: target.kernel.clone(),
         })
     }

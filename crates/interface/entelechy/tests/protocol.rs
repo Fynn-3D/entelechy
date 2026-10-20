@@ -955,6 +955,58 @@ fn a_trace_follows_the_version_running_not_the_one_its_document_wrote() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A trace names its values' structs by the module it ran: the document's
+/// unoptimized one, whose struct table the running module need not share
+/// (here it leaves out `Spare`, which nothing uses, and so numbers the
+/// others apart).
+#[test]
+fn a_trace_names_structs_by_the_module_it_ran() {
+    let dir = std::env::temp_dir().join(format!(
+        "entelechy-protocol-trace-structs-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("k.ent"),
+        "struct Spare { a: Int; }\n\
+         struct Folded { a: Float; b: Float; c: Float; }\n\
+         struct Pair { x: Int; y: Int; }\n\
+         kernel t.k@1 { requires { field.write; } output result: Rows<Int>; compute {\n\
+             let folded = Folded { a: 1.0, b: 2.0, c: 3.0 };\n\
+             let pair = Pair { x: element(), y: int(folded.c) };\n\
+             return pair.x + pair.y;\n\
+         } }\n",
+    )
+    .unwrap();
+    let scene = dir.join("scene.esn");
+    std::fs::write(
+        &scene,
+        "use \"k.ent\";\nnode n: t.k@1 { domain = 4; }\noutput result <- n.result;\n",
+    )
+    .unwrap();
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "evaluate" }),
+            json!({ "id": 2, "op": "trace", "node": "n", "element": 2 }),
+        ],
+    );
+    let trace = &responses[1]["ok"];
+    let bindings = trace["bindings"].as_array().unwrap();
+    let binding = |name: &str| bindings.iter().find(|b| b["name"] == name).unwrap().clone();
+    assert_eq!(binding("folded")["type"], "Folded", "{trace}");
+    assert_eq!(binding("folded")["value"]["c"], 3.0, "{trace}");
+    assert_eq!(binding("pair")["type"], "Pair", "{trace}");
+    assert_eq!(
+        binding("pair")["value"],
+        json!({ "x": 2, "y": 3 }),
+        "{trace}"
+    );
+    assert_eq!(trace["results"][0]["value"], 5, "{trace}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_trace_shows_one_element_of_a_node_and_reports_carry_timings() {
     let dir = std::env::temp_dir().join(format!("entelechy-protocol-trace-{}", std::process::id()));

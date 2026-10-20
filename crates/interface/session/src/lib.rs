@@ -49,7 +49,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use entelechy_formats::ppm;
-use entelechy_kernel::{Generation, KernelId};
+use entelechy_kernel::{Generation, KernelId, Validated};
 
 /// How a device is waited for: blocking, or giving a page turns.
 pub use entelechy_gpu::Wait;
@@ -151,6 +151,8 @@ impl fmt::Display for SourcePlace {
 pub struct Traced {
     /// What the interpreter recorded.
     pub trace: Trace,
+    /// The module it ran: the trace's types name its structs.
+    pub module: Validated,
     /// The node's Kernel.
     pub kernel: KernelId,
     /// Where the element's failure is written, when it failed and a
