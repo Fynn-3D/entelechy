@@ -209,7 +209,7 @@ fn emit_group_main(out: &mut String, module: &Module, size: u32) {
     // Whether a lane of the group has failed, as the lanes last met.
     let _ = writeln!(
         out,
-        "var<private> group_lane: u32;\nvar<workgroup> group_failed: u32;"
+        "var<private> group_lane: u32;\nvar<private> group_inside: bool;\nvar<workgroup> group_failed: u32;"
     );
     let mut met: Vec<Type> = Vec::new();
     exchanged(&module.entry.body, &mut met);
@@ -230,20 +230,27 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     let d = bitcast<u32>(ctx[1].z);
     let element = (wid.x + wid.y * {span}u) * {size}u + lid;
     group_lane = lid;
+    group_inside = element < w * h * d;
     current = element;
     let row = element / w;
     let coord = vec3<f32>(f32(element % w), f32(row % h), f32(row / h));",
         span = MAX_GROUPS,
     );
-    let store = "if (element < w * h * d) {
+    // One output comes back from the entry; several the entry stores
+    // itself, each where the lane is inside.
+    let store = if written_outputs(module) > 1 {
+        "entry(coord, element);"
+    } else {
+        "let v = entry(coord, element);
+        if (group_inside) {
             store_out0(element, v);
-        }";
+        }"
+    };
     if !module.accounted() {
         let _ = writeln!(
             out,
             "{head}
     begin_work();
-    let v = entry(coord, element);
     {store}
 }}"
         );
@@ -277,7 +284,6 @@ fn group_look() -> bool {{
     }}
     if (workgroupUniformLoad(&group_open) != 0u) {{
         begin_work();
-        let v = entry(coord, element);
         {store}
         atomicAdd(&leftover, work & {mask}u);
     }}

@@ -2793,31 +2793,55 @@ fn groups_meet_at_exchanges_as_the_interpreter_does() {
         let words = Backend::download(&gpu, device, cpu_words.len() * 4).unwrap();
         assert_eq!(words, cpu_words, "{count} rows");
     }
-    // A narrow output, two elements a word, the last word half outside.
-    let narrow = compile(
+    // A group writes as a map does: a narrow output, two elements a word,
+    // the last word half outside; several outputs, the lanes past the end
+    // storing none; Longs, the device's own and in pairs of words.
+    let shapes = [
         "kernel test.narrow@1 { requires { field.write; } output result: Rows<Float as f16>;
             group 4 { return exchange(float(element()) * 0.5, lane() + 1); } }",
-    )
-    .unwrap();
-    let mut host = Host::new(1 << 20);
-    let invocation = Invocation {
-        inputs: vec![],
-        params: vec![],
-        domain: Domain::Rows(11),
-        context: Context::default(),
-    };
-    let mut scope = Scope::new(&mut host, all());
-    let cpu = CpuBackend
-        .execute(&narrow, &invocation, &mut scope)
-        .unwrap()[0];
-    let cpu_words = host.data(cpu).unwrap().storage().to_vec();
-    let prepared = Backend::prepare(&gpu, &narrow).unwrap();
-    let mut scope = Scope::new(&mut host, all());
-    let out =
-        Backend::execute(&gpu, prepared.as_ref(), &narrow, &invocation, &mut scope).unwrap()[0];
-    let device = host.resident(out).unwrap().expect("resident");
-    let words = Backend::download(&gpu, device, cpu_words.len() * 4).unwrap();
-    assert_eq!(words, cpu_words, "narrow");
+        "kernel test.several@1 { requires { field.write; } output half: Rows<Float as f16>; output whole: Rows<Int>; output both: Rows<Vec2>;
+            group 4 {
+                let x = exchange(float(element()) * 0.5, lane() + 1);
+                let k = exchange(element(), 3 - lane());
+                return { whole: k, both: vec2(x, float(k)), half: x };
+            } }",
+        "kernel test.long@1 { requires { field.write; } output result: Rows<Long>;
+            group 4 { return exchange(long(element()) * 3000000000l, lane() - 1) + 1l; } }",
+    ];
+    for (source, pairs) in shapes.iter().flat_map(|s| [(*s, false), (*s, true)]) {
+        let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+        let device = if pairs {
+            if !source.contains("Long") {
+                continue;
+            }
+            GpuBackend::new().unwrap().with_long_pairs()
+        } else {
+            GpuBackend::new().unwrap()
+        };
+        assert_eq!(device.declines(&module), None, "{source}");
+        let mut host = Host::new(1 << 20);
+        let invocation = Invocation {
+            inputs: vec![],
+            params: vec![],
+            domain: Domain::Rows(11),
+            context: Context::default(),
+        };
+        let mut scope = Scope::new(&mut host, all());
+        let cpu = CpuBackend
+            .execute(&module, &invocation, &mut scope)
+            .unwrap();
+        let prepared = Backend::prepare(&device, &module).unwrap();
+        let mut scope = Scope::new(&mut host, all());
+        let out =
+            Backend::execute(&device, prepared.as_ref(), &module, &invocation, &mut scope).unwrap();
+        assert_eq!(out.len(), cpu.len(), "{source}");
+        for (reference, made) in cpu.iter().zip(&out) {
+            let words = host.data(*reference).unwrap().storage().to_vec();
+            let resident = host.resident(*made).unwrap().expect("resident");
+            let made = Backend::download(&device, resident, words.len() * 4).unwrap();
+            assert_eq!(made, words, "{source}, pairs {pairs}");
+        }
+    }
 }
 
 /// A group whose work is counted runs on the device: its words are the

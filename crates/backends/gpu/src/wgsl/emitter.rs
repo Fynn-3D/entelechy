@@ -27,7 +27,8 @@ pub(crate) fn emit_function(
             .collect::<Vec<_>>()
             .join(", ")
     };
-    // A map entry with several outputs stores each one itself.
+    // A map's or a group's entry with several outputs stores each one
+    // itself.
     let stores = entry && written_outputs(module) > 1;
     if stores {
         let _ = writeln!(out, "fn {name}({args}) {{");
@@ -49,8 +50,19 @@ pub(crate) fn emit_function(
     };
     emitter.instructions(&function.body, 1);
     if stores {
+        // A group's lanes past the domain's end store nothing.
+        let group = matches!(module.manifest.mode, Mode::Group { .. });
+        let indent = if group {
+            let _ = writeln!(out, "    if (group_inside) {{");
+            "        "
+        } else {
+            "    "
+        };
         for (k, result) in function.results.iter().enumerate() {
-            let _ = writeln!(out, "    store_out{k}(element, v{});", result.0);
+            let _ = writeln!(out, "{indent}store_out{k}(element, v{});", result.0);
+        }
+        if group {
+            let _ = writeln!(out, "    }}");
         }
     } else {
         let _ = writeln!(out, "    return v{};", function.results[0].0);

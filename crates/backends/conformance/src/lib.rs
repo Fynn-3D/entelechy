@@ -16,7 +16,7 @@
 //! three functions. The modes are a map over rows, a map over a grid, a
 //! reduction, a scan with a memory, a scatter, an emitting scatter, a
 //! prefix, a map writing four named outputs, and a group whose lanes
-//! exchange their results.
+//! exchange their results, into one output and into four.
 
 use entelechy_abi::{Context, Domain, Encoding, InputState, Scalar, Schema, Value};
 
@@ -301,6 +301,7 @@ pub fn modes() -> Vec<(&'static str, Wrapper)> {
         ("prefix", prefix),
         ("map into several outputs", map_several),
         ("group", group),
+        ("group into several outputs", group_several),
     ]
 }
 
@@ -378,6 +379,19 @@ fn group(lets: &str, out: &str) -> String {
     group 8 {{ let i = element(); {ENV} {lets} let out = {out};
         let met = exchange(out, lane() * 3 + 1); let met_back = exchange(met.i, -1 - lane());
         return Out {{ f: met.f, i: met_back ^ lane(), b: met.b, v: met.v }}; }} }}"
+    )
+}
+
+/// A group of eight over a grid writing four outputs, as
+/// [`map_several`] does, from what other lanes hold.
+fn group_several(lets: &str, out: &str) -> String {
+    format!(
+        "kernel matrix.group_several@1 {{ {HEAD}
+    input rows: Rows<Float>; input ints: Rows<Int>; input cells: Grid<Cell>; input parts: Rows<Patch>; input patches: Grid<Patch>;
+    output result: Grid<Out>; output lane: Grid<Vec3>; output bits: Grid<Int>; output seen: Grid<Bool>;
+    group 8 {{ let c0 = icoord(); let i = c0.x + c0.y * idomain().x; {GRID_ENV} {lets} let out = {out};
+        let met = exchange(out, 7 - lane());
+        return {{ lane: met.v * 2.0 + vec3(x, 0.0, 1.0), seen: met.b != (i % 2 == 0), result: met, bits: exchange(met.i, lane() + 3) ^ 5 }}; }} }}"
     )
 }
 
@@ -601,7 +615,7 @@ fn case_in(feature: &str, mode: &str, source: String) -> Case {
             vec![rows(), ints(), cells(), parts_input(), patches_input()],
             Domain::Grid(16, 3),
         ),
-        "map into several outputs" => (
+        "map into several outputs" | "group into several outputs" => (
             vec![rows(), ints(), cells(), parts_input(), patches_input()],
             Domain::Grid(16, 3),
         ),

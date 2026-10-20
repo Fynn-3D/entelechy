@@ -157,9 +157,9 @@ fn differences(gpu: &GpuBackend, cases: &[entelechy_conformance::Case]) -> Vec<S
     let mut failures = Vec::new();
     for case in cases {
         // A NaN made by arithmetic on the GPU is not promised: fast math
-        // folds `x - x` to zero, and in the group's shader the driver
+        // folds `x - x` to zero, and in the groups' shaders the driver
         // does.
-        if case.name == "not a number through in group" {
+        if case.name.starts_with("not a number through in group") {
             continue;
         }
         let module = match compile(&case.source) {

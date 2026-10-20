@@ -351,14 +351,6 @@ impl GpuBackend {
         if module.holds(entelechy_abi::Type::Double) {
             return Some("it holds a Double, which the device does not compute".to_owned());
         }
-        if matches!(module.manifest.mode, entelechy_ir::Mode::Group { .. })
-            && module.manifest.outputs.len() > 1
-        {
-            return Some(
-                "it is a group of several outputs, written from every lane, and a lane past the domain's end would write past them"
-                    .to_owned(),
-            );
-        }
         if !module.holds(entelechy_abi::Type::Long) {
             return None;
         }
@@ -366,15 +358,17 @@ impl GpuBackend {
             // Without the device's own, a Long is a pair of words where the
             // module allows it.
             return (!wgsl::pairs_take(module)).then(|| {
-                "it holds a Long the device, which has no 64-bit integers, computes only as scalars in a map, a reduction, or a scatter of Longs under min or max"
+                "it holds a Long the device, which has no 64-bit integers, computes only as scalars in a map, a group, a reduction, or a scatter of Longs under min or max"
                     .to_owned()
             });
         }
         match module.manifest.mode {
-            entelechy_ir::Mode::Map | entelechy_ir::Mode::Reduce => None,
+            entelechy_ir::Mode::Map
+            | entelechy_ir::Mode::Group { .. }
+            | entelechy_ir::Mode::Reduce => None,
             entelechy_ir::Mode::Scatter { .. } if wgsl::long_extremes(module) => None,
             _ => Some(
-                "it holds a Long, which the device computes in a map, a reduction, or a scatter of Longs under min or max only"
+                "it holds a Long, which the device computes in a map, a group, a reduction, or a scatter of Longs under min or max only"
                     .to_owned(),
             ),
         }

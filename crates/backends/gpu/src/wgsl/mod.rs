@@ -58,7 +58,7 @@ pub enum Longs {
     Pairs,
 }
 
-/// Whether a module runs with its Longs in pairs of words: a map, a
+/// Whether a module runs with its Longs in pairs of words: a map, a group, a
 /// reduction or a scatter of Longs under `min` or `max` ([`Half`]) whose
 /// Longs are all scalars (no Long vector or matrix), whose
 /// `match` never chooses by a Long, and whose intrinsics on Longs are the
@@ -66,7 +66,11 @@ pub enum Longs {
 /// arithmetic. Anything else still goes to the ordered backend.
 pub fn pairs_take(module: &Module) -> bool {
     // A scatter of Longs under `min` or `max` lands them by halves.
-    if !(matches!(module.manifest.mode, Mode::Map | Mode::Reduce) || long_extremes(module)) {
+    if !(matches!(
+        module.manifest.mode,
+        Mode::Map | Mode::Group { .. } | Mode::Reduce
+    ) || long_extremes(module))
+    {
         return false;
     }
     let long_lanes = |ty: Type| {
@@ -350,11 +354,11 @@ fn fails(op: &Op, ty: Type) -> bool {
     }
 }
 
-/// Outputs the main pass writes: every output of a map, each in its own
-/// buffer; one for other modes.
+/// Outputs the main pass writes: every output of a map or a group, each
+/// in its own buffer; one for other modes.
 pub fn written_outputs(module: &Module) -> usize {
     match module.manifest.mode {
-        Mode::Map => module.manifest.outputs.len().max(1),
+        Mode::Map | Mode::Group { .. } => module.manifest.outputs.len().max(1),
         _ => 1,
     }
 }

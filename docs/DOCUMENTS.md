@@ -279,7 +279,7 @@ products, `inverse` and the rest; longs take arithmetic (overflow and
 zero divisor fail as for `Int`), bit operators, shifts (count modulo
 64), `abs`, `sign`, `min`, `max`, `clamp`, `add_wrap`, `sub_wrap`,
 `mul_wrap`. The interpreter and the JIT compute as Rust's `f64` and
-`i64`. A GPU computes a `Long` in a map, a reduction, and a scatter
+`i64`. A GPU computes a `Long` in a map, a group, a reduction, and a scatter
 whose target is all `Long`s under `min` or `max`: as the device's own
 64-bit integer where it has one, and else (a page's WebGPU) as a pair
 of 32-bit words, scalars alone; it never computes a `Double`. A GPU
@@ -705,11 +705,10 @@ On a device a group is a workgroup and an exchange a pass through its
 shared memory between barriers. The interpreter and the JIT run each
 lane to its next exchange and run the group again from the start with
 what every lane gave there, until all finish; only the finished run's
-work counts ([decision](DECISIONS.md)). The GPU runs groups of one
-output, their work counted or not: a loop holding an exchange checks the
-budget for the whole group, and once a lane has failed every lane leaves
-it together. A group of several outputs runs on the JIT, where every
-exchange costs a run of the group again.
+work counts ([decision](DECISIONS.md)). The GPU runs every group a map
+could run, its outputs several or narrow, its work counted or not: a
+loop holding an exchange checks the budget for the whole group, and
+once a lane has failed every lane leaves it together.
 
 ## Graph
 
