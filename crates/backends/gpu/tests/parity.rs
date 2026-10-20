@@ -2755,11 +2755,24 @@ fn groups_meet_at_exchanges_as_the_interpreter_does() {
     let source = "kernel test.group@1 { requires { field.write; } param rounds: Int = 3; param flip: Bool = true; output result: Rows<IVec2>;
         group 8 {
             let i = element();
-            let total = loop rounds with s = i { s + exchange(s, lane() ^ (1 << index())) };
+            let total = loop 8 with s = i until index() >= rounds { s + exchange(s, lane() ^ (1 << index())) };
             let turned = if flip { exchange(i * 10, 7 - lane()) } else { i };
             return ivec2(total, turned);
         } }";
+    // Accounted as the Kernel runtime accounts it: its loops' literal
+    // counts are too few to count, and the device takes it.
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let module = entelechy_ir::account(&module).unwrap();
+    assert_eq!(gpu.declines(&module), None);
+    // A loop whose count is a param counts its work, and such a group
+    // runs off the device.
+    let counted = compile(&source.replace(
+        "loop 8 with s = i until index() >= rounds",
+        "loop rounds with s = i",
+    ))
+    .unwrap();
+    let counted = entelechy_ir::account(&counted).unwrap();
+    assert!(gpu.declines(&counted).is_some());
     for (count, rounds, flip) in [(20, 3, true), (8, 2, false), (1000, 3, true)] {
         let mut host = Host::new(1 << 20);
         let invocation = Invocation {

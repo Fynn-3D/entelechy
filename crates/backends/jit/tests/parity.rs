@@ -1396,6 +1396,30 @@ fn groups_meet_at_exchanges_as_the_interpreter_does() {
     assert_eq!(at(16), (156, 230));
     assert_eq!(at(19), (156, 200));
     assert_eq!(words.len(), 40);
+    // Accounted as the Kernel runtime accounts it, a param's count among
+    // its loops: a stopped run's work is given back, the finished one's
+    // counted, and the words are the same.
+    let counted = entelechy_ir::account(&compile(source).unwrap()).unwrap();
+    assert!(counted.accounted());
+    let jit_backend = JitBackend::new().unwrap();
+    let mut host = Host::new(1 << 20);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![Value::Int(3), Value::Bool(true)],
+        domain: Domain::Rows(20),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, all());
+    let out = CpuBackend
+        .execute(&counted, &invocation, &mut scope)
+        .unwrap()[0];
+    assert_eq!(host.data(out).unwrap().storage(), &cpu[..]);
+    let prepared = jit_backend.prepare(&counted).unwrap();
+    let mut scope = Scope::new(&mut host, all());
+    let out = jit_backend
+        .execute(prepared.as_ref(), &counted, &invocation, &mut scope)
+        .unwrap()[0];
+    assert_eq!(host.data(out).unwrap().storage(), &cpu[..]);
 }
 
 /// What fails after an exchange fails at its element, as in the

@@ -703,7 +703,11 @@ shared memory between barriers. The interpreter and the JIT run each
 lane to its next exchange and run the group again from the start with
 what every lane gave there, until all finish; only the finished run's
 work counts ([decision](DECISIONS.md)). The GPU runs groups of one
-output whose work is not counted; others run on the JIT.
+output whose work is not counted; others run on the JIT, where every
+exchange costs a run of the group again. A loop whose count is not a
+literal counts its work, so a group meant for the device bounds its
+loops by a literal and stops them with a uniform `until`: `loop 8 with
+s = x until index() >= bits { .. }`.
 
 ## Graph
 
