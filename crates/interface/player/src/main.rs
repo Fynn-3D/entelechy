@@ -29,7 +29,7 @@ usage:
   entelechy-player <scene.esn> [--library <dir|file>] [--input <name>=<path>]...
               [--output <name>=<path>]... [--scale <n>]
               [--folder <name,...> [--folder-allow <file.write,file.delete>]]
-              [--replay <file.replay>]
+              [--replay <file.replay>] [--show-while-building]
               [--window <w>x<h>] [--backend gpu|cpu|jit|best] [--memory <MB>] [--work <M>]
               [--allow file.read|file.write|file.delete=<dir>]...
               [--allow clipboard.read|clipboard.write]... [--grant <capability,...>]
@@ -45,6 +45,9 @@ usage:
       F6 cycles the preview through the graph's nodes and back to the output;
       F10 shows a line of frame data over the picture, naming the port shown.
       Tab, Escape and every other key are the scene's.
+      --show-while-building opens the window once what state and kept
+      outputs read is built, what only shows drawn by the processor until
+      the device has built it: a sooner window, slower frames meanwhile.
       --folder <name,...> lets Cmd+O (Ctrl+O elsewhere) choose a folder in the
       system's dialog for those inputs and outputs, each one that reads or
       writes a directory (files, checks, outline, to files): placed there at
@@ -113,6 +116,9 @@ struct Options {
     origins: Vec<String>,
     /// Leave the sound card closed even when the scene has a sound output.
     no_audio: bool,
+    /// Show what only shows from the processor while the device's compiler
+    /// builds it, instead of waiting for every Kernel before the window.
+    show_while_building: bool,
     /// A replay driving the scene frame by frame at its own times; the
     /// person takes over when it ends.
     replay: Option<entelechy_session::replay::Replay>,
@@ -133,6 +139,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         listen: None,
         origins: Vec::new(),
         no_audio: false,
+        show_while_building: false,
         replay: None,
         hold_pointer: false,
         folder: Vec::new(),
@@ -152,6 +159,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
             }
             "--allow-origin" => options.origins.push(value("--allow-origin")?),
             "--no-audio" => options.no_audio = true,
+            "--show-while-building" => options.show_while_building = true,
             "--hold-pointer" => options.hold_pointer = true,
             "--folder" => options.folder.extend(listed(&value("--folder")?)),
             "--folder-allow" => {
@@ -872,9 +880,11 @@ fn main() -> ExitCode {
         eprintln!("error: {error}");
         return ExitCode::FAILURE;
     }
-    // What only shows is shown from the processor while the device's
-    // compiler builds it; a replay played here waits, as its test does.
-    session.show_while_building(options.replay.is_none());
+    // The window opens on a scene whose every Kernel is built, so play
+    // starts smooth; asked, what only shows is shown from the processor
+    // while the device's compiler builds it, but for a replay played
+    // here, which waits as its test does.
+    session.show_while_building(options.show_while_building && options.replay.is_none());
     // The first load prepares before the window opens, its Kernels seen
     // preparing in the terminal; replacements prepare off the frame.
     let events = {

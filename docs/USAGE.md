@@ -313,6 +313,11 @@ ready, so a republish never stalls a frame. It takes `run`'s
 - `--scale <n>` sets the initial magnification; `--window <w>x<h>` the
   initial logical size.
 - `--no-audio` leaves the sound card closed.
+- `--show-while-building` opens the window once what state and kept
+  outputs read is built: what only shows is drawn by the processor until
+  the device's compiler has built it, a sooner window with slower frames
+  meanwhile. Without it the window opens on a scene whose every Kernel is
+  built.
 - `--hold-pointer` holds the pointer in the window once it is clicked:
   the system's cursor is locked and hidden, and the scene's `pointer()`
   moves with the mouse and stays inside the window (the scene draws it).

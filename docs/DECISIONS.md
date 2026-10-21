@@ -1202,8 +1202,9 @@ held by [the lazy test](../crates/interface/session/tests/lazy.rs) and
 A node whose outputs reach only what an interface presents (the first
 output, the picture, and the sound), through no state (a `<~` source or
 its initial value) and no other output, only shows (`Graph::shown_only`).
-Where a session shows while building (the Player but for a replay it
-plays, a served session), a Kernel every node of which only shows is
+Where a session shows while building (a served session, and the Player
+asked with `--show-while-building`, but for a replay it plays), a Kernel
+every node of which only shows is
 built on threads of its own; until the device has built it, its runs go
 to the ordered backend, and from the run after, to the device. Only what
 is handed to those threads is shown so: a Kernel whose runs are too few
@@ -1220,7 +1221,12 @@ over what a Kernel computes once its calls are written out: emitting
 fewer calls written out or loops it cannot unroll leaves it the same.
 Showing from the processor meanwhile is what engines do with a fallback
 shader; it is held to what only shows because a backend's rounding then
-depends on how long the compiler takes, which nothing kept may.
+depends on how long the compiler takes, which nothing kept may. The
+Player waits unless asked: shown from the processor, a whole-screen draw
+takes frames of a tenth of a second or more until the device has built
+it, and play is smooth no sooner than if the window had waited; a person
+playing takes a longer wait better than slow frames, while an agent or
+a person editing takes the sooner picture.
 
 **Where.** `Graph::shown_only` ([graph](../crates/core/graph/src/lib.rs));
 `Backend::finished` ([backend](../crates/core/rules/src/backend.rs)) and
