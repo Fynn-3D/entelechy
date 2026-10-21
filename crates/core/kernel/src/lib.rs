@@ -827,17 +827,44 @@ impl Runtime {
     /// the size sends there; so the runs after it takes that version's
     /// place do not wait for it.
     pub fn prepare_later(&mut self, module: Validated, source: String) -> Ticket {
+        let ahead = self
+            .kernels
+            .get(&module.manifest.id)
+            .map(|running| running.ahead())
+            .unwrap_or_default();
+        self.prepare_later_ahead(module, source, ahead)
+    }
+
+    /// Prepares `module` as [`Runtime::prepare_later`] does, to run in
+    /// `beside`'s place (a fused group in its consumer's): made ready on
+    /// the main backend where `beside` ran there or was built there, so
+    /// its first run waits for no compiler; on the ordered one where
+    /// `beside` ran there.
+    pub fn prepare_later_beside(
+        &mut self,
+        module: Validated,
+        source: String,
+        beside: &KernelVersion,
+    ) -> Ticket {
+        let mut ahead = beside.ahead();
+        if let Body::Kernel {
+            prepared,
+            routed: None,
+            ..
+        } = &beside.body
+        {
+            ahead.main |= self.backend.has_device() && self.backend.finished(prepared.as_ref());
+        }
+        self.prepare_later_ahead(module, source, ahead)
+    }
+
+    fn prepare_later_ahead(&mut self, module: Validated, source: String, ahead: Ahead) -> Ticket {
         let ticket = self.preparer.ticket();
         if let Err(refused) = self.granted(&module) {
             self.preparer.finish(ticket, Err(refused));
             return ticket;
         }
         self.progress.expect([&module.manifest.id]);
-        let ahead = self
-            .kernels
-            .get(&module.manifest.id)
-            .map(|running| running.ahead())
-            .unwrap_or_default();
         if let Some((module, source)) = self.preparer.send(ticket, module, source, ahead) {
             let result = prepare_finished(
                 self.backend.as_ref(),

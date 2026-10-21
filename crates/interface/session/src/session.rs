@@ -75,6 +75,9 @@ pub struct Session {
     /// Whether what only shows is shown from the processor while the
     /// device's compiler builds it ([`Session::show_while_building`]).
     shown_while_building: bool,
+    /// The Kernels handed to threads of their own to be built there
+    /// ([`Session::finish_used`]).
+    handed: BTreeSet<entelechy_kernel::KernelId>,
 }
 
 /// A request's claim on the scene it wrote, from asked to landed. A scene
@@ -173,6 +176,7 @@ impl Session {
             watched: crate::preparing::Watched::default(),
             last_context: Context::default(),
             shown_while_building: false,
+            handed: BTreeSet::new(),
         }
     }
 
@@ -1164,12 +1168,14 @@ impl Session {
         let (later, now_first): (Vec<_>, Vec<_>) = first
             .into_iter()
             .partition(|version| shown.contains(version.id()));
-        self.runtime.set_shown_while_building(shown);
         let preparer = self.runtime.preparer();
         if !now_first.is_empty() {
             preparer.expect(now_first.iter().map(|version| version.id()));
             crate::spread::map(&now_first, |version| preparer.finish(version));
         }
+        // Only what is handed to the threads is shown meanwhile: a Kernel
+        // nothing builds would otherwise stay off the device for good.
+        let handed_now: Vec<_> = later.iter().map(|version| version.id().clone()).collect();
         if !later.is_empty() {
             preparer.expect(later.iter().map(|version| version.id()));
             let started = std::thread::Builder::new()
@@ -1177,11 +1183,12 @@ impl Session {
                 .spawn(move || {
                     crate::spread::map(&later, |version| preparer.finish(version));
                 });
-            // Where no thread starts, the frames wait for it after all.
-            if let Err(error) = started {
-                let _ = error;
+            if started.is_ok() {
+                self.handed.extend(handed_now);
             }
         }
+        self.runtime
+            .set_shown_while_building(shown.intersection(&self.handed).cloned().collect());
         self.used = now;
     }
 

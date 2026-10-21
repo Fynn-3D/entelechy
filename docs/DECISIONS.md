@@ -1172,6 +1172,8 @@ anything runs: over a few elements (64 or fewer), reading only the
 caller's Fields, state, and such nodes' outputs (`Evaluator::runs_few`); a replacement for a version that ran on the device
 is built before it is ready, and one for a version whose runs the size
 sent to the ordered backend is prepared there before it is ready too,
+and a fused group is built as it is prepared where the Kernel of the
+node it stands in for is built or ran on the device,
 so the running version keeps the frames
 until the new one can take them without a wait, replacements prepared on
 every core but one, which the frames keep; any other Kernel is built
@@ -1203,7 +1205,9 @@ its initial value) and no other output, only shows (`Graph::shown_only`).
 Where a session shows while building (the Player but for a replay it
 plays, a served session), a Kernel every node of which only shows is
 built on threads of its own; until the device has built it, its runs go
-to the ordered backend, and from the run after, to the device. What
+to the ordered backend, and from the run after, to the device. Only what
+is handed to those threads is shown so: a Kernel whose runs are too few
+for the device to build it runs where its size sends it. What
 state or a kept output reads, the first frame waits for as before. Tests,
 renders and replays keep it off, and every frame waits for every Kernel
 it runs.
@@ -1223,7 +1227,8 @@ depends on how long the compiler takes, which nothing kept may.
 the GPU's `Lazy::is_built`; the runtime's `set_shown_while_building`
 ([kernel](../crates/core/kernel/src/lib.rs)); the session's `finish_used`
 and `show_while_building` ([session](../crates/interface/session/src/session.rs));
-held by [the shown while building test](../crates/interface/session/tests/shown_while_building.rs).
+held by [the shown while building test](../crates/interface/session/tests/shown_while_building.rs)
+and [the fused built ahead test](../crates/interface/session/tests/fused_built_ahead.rs).
 
 ## A changed document compiles off the frames
 

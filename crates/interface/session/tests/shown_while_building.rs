@@ -221,3 +221,43 @@ fn off_every_node_waits_for_the_device() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A Kernel that only shows but whose runs are so few that nothing builds
+/// it on the device is not shown "while building": nothing builds it, and
+/// its runs go where their size sends them.
+#[test]
+fn what_only_shows_but_nothing_builds_is_not_held_off_the_device() {
+    let dir = scene("few");
+    let device = Device::holding();
+    let mut runtime = Runtime::with_backends(
+        1 << 20,
+        Box::new(device),
+        Some(Box::new(entelechy_cpu::CpuBackend)),
+    );
+    // Runs as small as these go to the ordered backend, so the device
+    // never builds what only they run.
+    runtime.set_small(entelechy_kernel::DEFAULT_SMALL);
+    let mut session = Session::open_with(&dir.join("scene.esn"), None, runtime);
+    session.show_while_building(true);
+    session.sync();
+    let report = session.evaluate(&Context::default()).unwrap();
+    for node in ["paint", "tone"] {
+        assert!(
+            !placed(&session, node)
+                .1
+                .unwrap_or_default()
+                .contains("builds it"),
+            "{node}"
+        );
+        let ran = report.placements.iter().find(|p| p.node.0 == node).unwrap();
+        assert_eq!(ran.backend, "cpu", "{node}");
+        let why = ran
+            .routed
+            .as_ref()
+            .map(|why| why.to_string())
+            .unwrap_or_default();
+        assert!(!why.contains("builds it"), "{node}: {why}");
+    }
+    device.release();
+    let _ = std::fs::remove_dir_all(&dir);
+}

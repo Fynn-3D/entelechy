@@ -646,7 +646,8 @@ impl Evaluator {
             };
             let id = group.node.id.clone();
             let members = group.members();
-            match self.fused_version(runtime, &id, members, || Ok((*module).clone()))? {
+            let beside = Arc::clone(&group.version);
+            match self.fused_version(runtime, &id, members, &beside, || Ok((*module).clone()))? {
                 Some(version) => group.version = version,
                 None => {
                     settled = false;
@@ -818,6 +819,7 @@ impl Evaluator {
         runtime: &mut Runtime,
         consumer: &NodeId,
         members: Members,
+        beside: &KernelVersion,
         fuse: impl FnOnce() -> Result<entelechy_ir::Validated, entelechy_ir::FuseError>,
     ) -> Result<Option<Arc<KernelVersion>>, EvaluateError> {
         if let Some(existing) = self.fused.get(consumer)
@@ -864,7 +866,7 @@ impl Evaluator {
                         .collect::<Vec<_>>()
                         .join(" + ")
                 );
-                let ticket = runtime.prepare_later(module, source);
+                let ticket = runtime.prepare_later_beside(module, source, beside);
                 self.pending.insert(
                     consumer.clone(),
                     Pending {
