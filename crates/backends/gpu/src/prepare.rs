@@ -232,6 +232,12 @@ pub(crate) struct Lazy {
 }
 
 impl Lazy {
+    /// Whether the pipelines are built, or failed to be: a run would wait
+    /// for nothing.
+    pub(crate) fn is_built(&self) -> bool {
+        self.built.get().is_some()
+    }
+
     /// The pipelines, built now if they are not yet; a second caller waits
     /// for the first.
     pub(crate) fn built(&self) -> Result<&Pipeline, ExecutionError> {

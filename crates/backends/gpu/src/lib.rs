@@ -532,6 +532,14 @@ impl Backend for GpuBackend {
         }
     }
 
+    /// Whether `prepared`'s pipelines are built, or failed to be.
+    fn finished(&self, prepared: &dyn Prepared) -> bool {
+        prepared
+            .as_any()
+            .downcast_ref::<Lazy>()
+            .is_none_or(Lazy::is_built)
+    }
+
     fn execute(
         &self,
         prepared: &dyn Prepared,

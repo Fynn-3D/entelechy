@@ -198,6 +198,9 @@ impl Backend for Apart {
     fn finish(&self, prepared: &dyn Prepared) {
         self.inner.finish(prepared);
     }
+    fn finished(&self, prepared: &dyn Prepared) -> bool {
+        self.inner.finished(prepared)
+    }
     fn uploaded(&self) -> u64 {
         self.inner.uploaded()
     }

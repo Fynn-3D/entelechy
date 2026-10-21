@@ -726,6 +726,9 @@ fn serve(args: &[String]) -> Result<(), String> {
     // client.
     let mut session = options.open("jit")?;
     let _watch = entelechy_session::watch::watch(session.progress());
+    // What only shows is shown from the processor while the device's
+    // compiler builds it.
+    session.show_while_building(true);
     session.set_window(window);
     // Reads are held to the scene's documents' directories and the
     // allowances.

@@ -872,6 +872,9 @@ fn main() -> ExitCode {
         eprintln!("error: {error}");
         return ExitCode::FAILURE;
     }
+    // What only shows is shown from the processor while the device's
+    // compiler builds it; a replay played here waits, as its test does.
+    session.show_while_building(options.replay.is_none());
     // The first load prepares before the window opens, its Kernels seen
     // preparing in the terminal; replacements prepare off the frame.
     let events = {

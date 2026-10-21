@@ -334,6 +334,13 @@ pub trait Backend: Send + Sync {
         let _ = prepared;
     }
 
+    /// Whether what [`Backend::prepare`] left is done, so a run would wait
+    /// for nothing; asked without waiting. The default left nothing.
+    fn finished(&self, prepared: &dyn Prepared) -> bool {
+        let _ = prepared;
+        true
+    }
+
     /// Executes a prepared module over the invocation's domain, returning one
     /// image handle per manifest output, owned by the scope's Host. Outputs
     /// may be left resident on the backend's device.

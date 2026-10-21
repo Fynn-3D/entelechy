@@ -14,7 +14,7 @@
 //! [`Ticket`]; [`Runtime::poll`] collects the [`Candidate`]. Without a
 //! worker the same calls prepare inline, deterministically.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
@@ -715,6 +715,9 @@ pub struct Runtime {
     fresh: std::collections::HashSet<Handle>,
     /// Where the last execution ran, and why when off the main backend.
     last_placement: Option<Placement>,
+    /// The Kernels whose runs go to the ordered backend while the main one
+    /// has not finished them ([`Runtime::set_shown_while_building`]).
+    shown_while_building: BTreeSet<KernelId>,
 }
 
 impl Runtime {
@@ -745,6 +748,7 @@ impl Runtime {
             small: DEFAULT_SMALL,
             fresh: std::collections::HashSet::new(),
             last_placement: None,
+            shown_while_building: BTreeSet::new(),
         };
         // Native operations are published at generation zero, so graphs
         // bind to them like any Kernel.
@@ -1238,6 +1242,15 @@ impl Runtime {
     /// Where a version executes and, off the main backend, why: shown beside
     /// each node in a report.
     pub fn placement(&self, version: &KernelVersion) -> Placement {
+        if let (Body::Kernel { prepared, .. }, Some(ordered), None) =
+            (&version.body, &self.ordered, version.routed())
+            && let Some(why) = self.building(version, prepared.as_ref())
+        {
+            return Placement {
+                backend: ordered.name(),
+                routed: Some(Routed::new(why)),
+            };
+        }
         match (version.routed(), &self.ordered) {
             (Some(why), Some(ordered)) => Placement {
                 backend: ordered.name(),
@@ -1264,6 +1277,27 @@ impl Runtime {
     /// backend (see [`DEFAULT_SMALL`]); zero keeps every run on the main one.
     pub fn set_small(&mut self, operations: u64) {
         self.small = operations;
+    }
+
+    /// Sets the Kernels whose runs go to the ordered backend while the
+    /// main one has not finished them ([`Backend::finished`]), and to the
+    /// main one from the run after it has: what a device's compiler still
+    /// builds is shown from the processor meanwhile. Which backend runs one
+    /// then depends on how long the compiler takes, so only Kernels whose
+    /// outputs no state and no written file reads belong here.
+    pub fn set_shown_while_building(&mut self, ids: BTreeSet<KernelId>) {
+        self.shown_while_building = ids;
+    }
+
+    /// Why a run of `version` goes to the ordered backend because the main
+    /// one is still building it ([`Runtime::set_shown_while_building`]).
+    fn building(&self, version: &KernelVersion, prepared: &dyn Prepared) -> Option<Why> {
+        (self.ordered.is_some()
+            && self.shown_while_building.contains(version.id())
+            && !self.backend.finished(prepared))
+        .then(|| Why::Building {
+            main: self.backend.name(),
+        })
     }
 
     /// Starts an evaluation: no Field is yet the main backend's own of it.
@@ -1525,6 +1559,7 @@ impl Runtime {
             ..
         } = &version.body
             && version.routed().is_none()
+            && self.building(version, prepared.as_ref()).is_none()
             && self.sized_off(run, typical, invocation).is_none()
         {
             let granted = self.scope_grants(version);
@@ -1608,7 +1643,9 @@ impl Runtime {
                 // it or the run is small enough; the main one otherwise.
                 let sized = match version.routed() {
                     Some(_) => None,
-                    None => self.sized_off(run, typical, invocation),
+                    None => self
+                        .building(version, prepared.as_ref())
+                        .or_else(|| self.sized_off(run, typical, invocation)),
                 };
                 let off: Option<(Arc<dyn Backend>, &dyn Prepared, Why)> =
                     match (&self.ordered, version.routed(), sized) {
@@ -1760,6 +1797,8 @@ enum Why {
     Few { elements: u64 },
     /// Too little work for a device's dispatch.
     Small { elements: u64, work: u64 },
+    /// The main backend's device is still building it.
+    Building { main: &'static str },
 }
 
 impl Routed {
@@ -1782,6 +1821,7 @@ impl std::ops::Deref for Routed {
             Why::Small { elements, work } => {
                 format!("small: {elements} elements, about {work} operations")
             }
+            Why::Building { main } => format!("shown here while {main} builds it"),
         })
     }
 }

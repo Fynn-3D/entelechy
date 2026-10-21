@@ -2,7 +2,7 @@
 //! order. Its fields are private to this module; a part reaches only what
 //! the session hands it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -72,6 +72,9 @@ pub struct Session {
     /// The context the last frame was evaluated under, which outputs let
     /// go cold are made again under when read ([`Session::warm`]).
     last_context: Context,
+    /// Whether what only shows is shown from the processor while the
+    /// device's compiler builds it ([`Session::show_while_building`]).
+    shown_while_building: bool,
 }
 
 /// A request's claim on the scene it wrote, from asked to landed. A scene
@@ -169,6 +172,7 @@ impl Session {
             board: crate::clipboard::Board::default(),
             watched: crate::preparing::Watched::default(),
             last_context: Context::default(),
+            shown_while_building: false,
         }
     }
 
@@ -1150,12 +1154,46 @@ impl Session {
                 first.push(version);
             }
         }
-        if !first.is_empty() {
-            let preparer = self.runtime.preparer();
-            preparer.expect(first.iter().map(|version| version.id()));
-            crate::spread::map(&first, |version| preparer.finish(version));
+        // What only shows is finished on threads of its own, and runs on
+        // the ordered backend until it is; the rest the frame waits for.
+        let shown = if self.shown_while_building && !self.runtime.prepares_in_turns() {
+            shown_kernels(graph, &self.runtime)
+        } else {
+            BTreeSet::new()
+        };
+        let (later, now_first): (Vec<_>, Vec<_>) = first
+            .into_iter()
+            .partition(|version| shown.contains(version.id()));
+        self.runtime.set_shown_while_building(shown);
+        let preparer = self.runtime.preparer();
+        if !now_first.is_empty() {
+            preparer.expect(now_first.iter().map(|version| version.id()));
+            crate::spread::map(&now_first, |version| preparer.finish(version));
+        }
+        if !later.is_empty() {
+            preparer.expect(later.iter().map(|version| version.id()));
+            let started = std::thread::Builder::new()
+                .name("entelechy-finish".into())
+                .spawn(move || {
+                    crate::spread::map(&later, |version| preparer.finish(version));
+                });
+            // Where no thread starts, the frames wait for it after all.
+            if let Err(error) = started {
+                let _ = error;
+            }
         }
         self.used = now;
+    }
+
+    /// Shows what only shows from the processor while the device's
+    /// compiler builds it, so a first frame waits for the compiler only
+    /// where state or a written file reads the Kernel; off, every frame
+    /// waits for every Kernel it runs. On, which backend shows such a
+    /// Kernel depends on how long its compiler takes, so what is shown in
+    /// the first frames may differ by a device's rounding: interfaces a
+    /// person watches turn it on, and tests and renders keep it off.
+    pub fn show_while_building(&mut self, on: bool) {
+        self.shown_while_building = on;
     }
 
     /// Says what shapes the scene's Kernels as a device's compiler meets
@@ -2530,4 +2568,52 @@ fn placed(
             diagnostic: crate::Diagnostic::new(line),
         },
     }
+}
+
+/// The Kernels every node of which only shows ([`Graph::shown_only`]):
+/// what reaches only the outputs interfaces present, the picture (the
+/// first output) and the sound ([`Session::sound_of`]).
+fn shown_kernels(
+    graph: &entelechy_graph::Graph,
+    runtime: &Runtime,
+) -> BTreeSet<entelechy_kernel::KernelId> {
+    let mut presented: BTreeSet<String> = graph
+        .outputs
+        .iter()
+        .take(1)
+        .map(|(name, _)| name.clone())
+        .collect();
+    let sound = graph.outputs.iter().find(|(_, source)| {
+        let entelechy_graph::Source::Node { node, port } = source else {
+            return false;
+        };
+        let Some(version) = graph
+            .node(node)
+            .and_then(|node| runtime.kernel(&node.kernel))
+        else {
+            return false;
+        };
+        version.manifest().outputs.iter().any(|out| {
+            out.name == *port
+                && out.ty.shape == entelechy_kernel::Shape::Rows
+                && out
+                    .ty
+                    .schema
+                    .scalars()
+                    .iter()
+                    .all(|c| *c == entelechy_kernel::Scalar::Float)
+                && (1..=2).contains(&out.ty.schema.value_words())
+        })
+    });
+    presented.extend(sound.map(|(name, _)| name.clone()));
+    let shown = graph.shown_only(&presented);
+    let mut kernels: BTreeMap<&entelechy_kernel::KernelId, bool> = BTreeMap::new();
+    for node in &graph.nodes {
+        *kernels.entry(&node.kernel).or_insert(true) &= shown.contains(&node.id);
+    }
+    kernels
+        .into_iter()
+        .filter(|(_, only)| *only)
+        .map(|(id, _)| id.clone())
+        .collect()
 }

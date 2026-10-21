@@ -1195,6 +1195,36 @@ runtime's `prepare_finished`, `Preparer::finish` and a version's `leaves`
 held by [the lazy test](../crates/interface/session/tests/lazy.rs) and
 [the few test](../crates/interface/session/tests/few.rs).
 
+## What only shows is shown while the device builds it
+
+A node whose outputs reach only what an interface presents (the first
+output, the picture, and the sound), through no state (a `<~` source or
+its initial value) and no other output, only shows (`Graph::shown_only`).
+Where a session shows while building (the Player but for a replay it
+plays, a served session), a Kernel every node of which only shows is
+built on threads of its own; until the device has built it, its runs go
+to the ordered backend, and from the run after, to the device. What
+state or a kept output reads, the first frame waits for as before. Tests,
+renders and replays keep it off, and every frame waits for every Kernel
+it runs.
+
+**Why.** A device's compiler takes seconds on a Kernel that draws a whole
+screen (seconds more than the processor's compiler on the same IR), and
+its cache is evicted by other programs' shaders, so a first frame waited
+for the slowest one. The time goes to the device's register allocator
+over what a Kernel computes once its calls are written out: emitting
+fewer calls written out or loops it cannot unroll leaves it the same.
+Showing from the processor meanwhile is what engines do with a fallback
+shader; it is held to what only shows because a backend's rounding then
+depends on how long the compiler takes, which nothing kept may.
+
+**Where.** `Graph::shown_only` ([graph](../crates/core/graph/src/lib.rs));
+`Backend::finished` ([backend](../crates/core/rules/src/backend.rs)) and
+the GPU's `Lazy::is_built`; the runtime's `set_shown_while_building`
+([kernel](../crates/core/kernel/src/lib.rs)); the session's `finish_used`
+and `show_while_building` ([session](../crates/interface/session/src/session.rs));
+held by [the shown while building test](../crates/interface/session/tests/shown_while_building.rs).
+
 ## A changed document compiles off the frames
 
 Where replacements prepare off the frames (a Player, a served session),

@@ -579,6 +579,59 @@ impl Graph {
         Some(reads)
     }
 
+    /// The nodes whose outputs reach only what is shown: no state reads
+    /// them, through any chain of nodes (a `<~` source or its initial
+    /// value), nor any output outside `presented`, the outputs an
+    /// interface shows or plays and keeps nothing of. What such a node
+    /// computes is seen and not kept, so a run of it may differ from the
+    /// next by a device's rounding and nothing that follows depends on
+    /// which.
+    pub fn shown_only(&self, presented: &BTreeSet<String>) -> BTreeSet<NodeId> {
+        let mut kept: BTreeSet<NodeId> = BTreeSet::new();
+        let mut frontier: Vec<NodeId> = Vec::new();
+        let keep = |source: &Source, kept: &mut BTreeSet<NodeId>, frontier: &mut Vec<NodeId>| {
+            if let Source::Node { node, .. } = source
+                && kept.insert(node.clone())
+            {
+                frontier.push(node.clone());
+            }
+        };
+        for node in &self.nodes {
+            for binding in node.inputs.values() {
+                if let Binding::Previous {
+                    source, initial, ..
+                } = binding
+                {
+                    keep(source, &mut kept, &mut frontier);
+                    keep(initial, &mut kept, &mut frontier);
+                }
+            }
+        }
+        let kept_outputs = self
+            .outputs
+            .iter()
+            .filter(|(name, _)| !presented.contains(name));
+        for (_, source) in kept_outputs.chain(&self.fallbacks) {
+            keep(source, &mut kept, &mut frontier);
+        }
+        let index = self.index();
+        while let Some(id) = frontier.pop() {
+            let Some(&at) = index.get(&id) else {
+                continue;
+            };
+            for binding in self.nodes[at].inputs.values() {
+                if let Binding::Now(source) = binding {
+                    keep(source, &mut kept, &mut frontier);
+                }
+            }
+        }
+        self.nodes
+            .iter()
+            .map(|node| node.id.clone())
+            .filter(|id| !kept.contains(id))
+            .collect()
+    }
+
     /// Checks names and dependencies and returns node indices in an order
     /// where every producer precedes its consumers.
     pub fn order(&self) -> Result<Vec<usize>, GraphError> {

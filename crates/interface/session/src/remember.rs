@@ -64,6 +64,9 @@ impl Backend for Remembered {
     fn finish(&self, prepared: &dyn Prepared) {
         self.inner.finish(made(prepared));
     }
+    fn finished(&self, prepared: &dyn Prepared) -> bool {
+        self.inner.finished(made(prepared))
+    }
     fn uploaded(&self) -> u64 {
         self.inner.uploaded()
     }
