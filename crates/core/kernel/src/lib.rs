@@ -1253,6 +1253,13 @@ impl Runtime {
         }
     }
 
+    /// Whether a run of [`FEW_ELEMENTS`] or fewer that reads nothing the
+    /// device made in its evaluation goes to the ordered backend: there is
+    /// one beside a device, and sizing is on.
+    pub fn routes_few(&self) -> bool {
+        self.small != 0 && self.ordered.is_some() && self.backend.has_device()
+    }
+
     /// Sets the most operations a run may take and go to the ordered
     /// backend (see [`DEFAULT_SMALL`]); zero keeps every run on the main one.
     pub fn set_small(&mut self, operations: u64) {

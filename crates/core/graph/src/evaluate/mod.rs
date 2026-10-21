@@ -1081,6 +1081,69 @@ impl Evaluator {
         Some(cached.outputs[index])
     }
 
+    /// The nodes the runtime will give its ordered backend however the
+    /// graph is placed, as far as is known before anything runs: each runs
+    /// over [`entelechy_kernel::FEW_ELEMENTS`] or fewer elements, and what
+    /// it reads now is the caller's, state, or such a node's, nothing a
+    /// device made in the evaluation. None where the runtime keeps every run
+    /// on its main backend. A Kernel only these run needs nothing built on
+    /// the main backend's device.
+    pub fn runs_few(
+        &mut self,
+        graph: &impl AsGraph,
+        runtime: &Runtime,
+        externals: &BTreeMap<String, Handle>,
+        overrides: &BTreeMap<String, Value>,
+        context: &Context,
+    ) -> BTreeSet<NodeId> {
+        let mut few = BTreeSet::new();
+        let (graph, shared) = (graph.graph(), graph.shared());
+        if !runtime.routes_few() {
+            return few;
+        }
+        let Ok(order) = self.order_of(graph, shared) else {
+            return few;
+        };
+        let nodes: BTreeMap<&NodeId, usize> = graph
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(at, node)| (&node.id, at))
+            .collect();
+        let mut domains = BTreeMap::new();
+        for &at in order.iter() {
+            let node = &graph.nodes[at];
+            let Some(version) = runtime.kernel(&node.kernel) else {
+                continue;
+            };
+            let planned = self.planned(
+                graph, &nodes, node, &version, runtime, externals, &domains, overrides, context,
+            );
+            if let Some(extent) = planned.extent {
+                domains.insert(node.id.clone(), extent);
+            }
+            // A reduction, a prefix and a scatter run over more than their
+            // output says: only a map's and a scan's runs are counted here.
+            let counted = matches!(
+                version.manifest().mode,
+                entelechy_ir::Mode::Map | entelechy_ir::Mode::Scan
+            );
+            let reads_device = node.inputs.values().any(|binding| match binding {
+                Binding::Now(Source::Node { node, .. }) => !few.contains(node),
+                _ => false,
+            });
+            if counted
+                && !reads_device
+                && planned
+                    .runs
+                    .is_some_and(|runs| runs.count() as u64 <= entelechy_kernel::FEW_ELEMENTS)
+            {
+                few.insert(node.id.clone());
+            }
+        }
+        few
+    }
+
     /// What would execute for `graph` now, in evaluation order. Prepares
     /// fused versions; executes nothing.
     pub fn plan_summary(

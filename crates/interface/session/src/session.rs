@@ -1116,9 +1116,26 @@ impl Session {
         if self.runtime.prepares_in_turns() && self.runtime.prepare_queued() > 0 {
             return;
         }
+        let Some(shared) = self.scene.shared_graph() else {
+            return;
+        };
+        // What only the ordered backend will run needs nothing built on the
+        // device: a Kernel all of whose nodes run so is left unbuilt, and
+        // built when a run there first wants it.
+        let few = self.evaluator.runs_few(
+            shared,
+            &self.runtime,
+            self.inputs.handles(),
+            self.scene.params(),
+            &self.last_context,
+        );
         let Some(graph) = self.scene.graph() else {
             return;
         };
+        let mut wanted: BTreeMap<entelechy_ir::KernelId, bool> = BTreeMap::new();
+        for node in &graph.nodes {
+            *wanted.entry(node.kernel.clone()).or_default() |= !few.contains(&node.id);
+        }
         let mut now = BTreeMap::new();
         let mut first = Vec::new();
         for node in &graph.nodes {
@@ -1128,6 +1145,7 @@ impl Session {
             let id = version.id().clone();
             if now.insert(id.clone(), version.generation()).is_none()
                 && !self.used.contains_key(&id)
+                && wanted.get(&node.kernel).copied().unwrap_or(true)
             {
                 first.push(version);
             }

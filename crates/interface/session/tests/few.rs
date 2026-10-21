@@ -2,7 +2,8 @@
 //! goes to the processor however much each takes, as the device runs them
 //! a thread each; many elements of the same work stay on the device. One
 //! that reads what the device made in the same evaluation goes only when
-//! it is long, the device's work kept whole otherwise.
+//! it is long, the device's work kept whole otherwise. A Kernel only such
+//! runs use is left unbuilt on the device as the scene loads.
 
 use entelechy_abi::{Handle, Invocation, Scope};
 use entelechy_ir::Validated;
@@ -128,4 +129,59 @@ output marked_small <- mark_small.result;
     assert_eq!(placed("mark"), None);
     assert!(placed("mark_small").is_some_and(|why| why.contains("few")));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+const STEPS: &str = "
+kernel t.zero@1 { requires { field.write; } output result: Rows<Int>; compute { return 0; } }
+kernel t.step@1 { requires { field.read; field.write; } input previous: Rows<Int>; output result: Rows<Int>; compute { return sample(previous) + 1; } }
+kernel t.paint@1 { requires { field.read; field.write; } input count: Rows<Int>; output result: Image; compute { return vec4(float(at(count, 0)) * 0.25, 0.0, 0.0, 1.0); } }
+node zero: t.zero@1 { domain = 1; }
+node step: t.step@1 { previous <~ step.result from zero.result; }
+node paint: t.paint@1 { count <- step.result; domain = vec2(64, 64); }
+output result <- paint.result;
+";
+
+#[test]
+fn a_kernel_only_few_runs_use_is_not_built_on_the_device() {
+    let dir = std::env::temp_dir().join(format!("entelechy-few-unbuilt-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("scene.esn"), STEPS).unwrap();
+    let Ok(runtime) = Session::runtime_for("gpu", entelechy_session::Limits::default()) else {
+        eprintln!("skipping: no GPU");
+        return;
+    };
+    let mut session = Session::open_with(&dir.join("scene.esn"), None, runtime);
+    let events = session.sync_settled();
+    assert!(session.graph().is_some(), "{events:?}");
+    let stage = |name: &str| {
+        session
+            .progress()
+            .now()
+            .seeds
+            .iter()
+            .find(|seed| seed.id.name() == name)
+            .map(|seed| seed.stage)
+    };
+    // The picture is built on the device; the one-element step is not.
+    assert_eq!(stage("t.paint"), Some(entelechy_kernel::Stage::Built));
+    assert_ne!(stage("t.step"), Some(entelechy_kernel::Stage::Built));
+    // It runs all the same, where it was always going to.
+    for _ in 0..2 {
+        session
+            .evaluate(&entelechy_abi::Context::default())
+            .unwrap();
+        session.confirm().unwrap();
+    }
+    let report = session
+        .evaluate(&entelechy_abi::Context::default())
+        .unwrap();
+    let step = report
+        .placements
+        .iter()
+        .find(|placed| placed.node.0.as_str() == "step")
+        .map(|placed| placed.backend);
+    assert_eq!(step, Some("jit"));
+    let picture = session.picture(report.output).unwrap();
+    assert!((picture.pixels()[0][0] - 0.75).abs() < 1e-6);
 }

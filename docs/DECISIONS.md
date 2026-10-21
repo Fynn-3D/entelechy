@@ -1166,7 +1166,10 @@ shaders, its bindings) and builds nothing: the device's own compiler, the
 long part and the part that fails, runs when the Kernel is needed there.
 A session builds the Kernels its graph's nodes use for the first time as
 it publishes them, on every core at once, so the first frame waits for
-none of them in turn; a replacement for a version that ran on the device
+none of them in turn, but for a Kernel whose every node will run on the
+ordered backend whatever happens, as far as the graph says before
+anything runs: over a few elements (64 or fewer), reading only the
+caller's Fields, state, and such nodes' outputs (`Evaluator::runs_few`); a replacement for a version that ran on the device
 is built before it is ready, and one for a version whose runs the size
 sent to the ordered backend is prepared there before it is ready too,
 so the running version keeps the frames
@@ -1186,9 +1189,11 @@ from stalling a frame.
 **Where.** The GPU's [`Lazy`](../crates/backends/gpu/src/prepare.rs) and
 `Backend::finish` ([backend](../crates/core/rules/src/backend.rs)); the
 runtime's `prepare_finished`, `Preparer::finish` and a version's `leaves`
-([kernel](../crates/core/kernel/src/lib.rs)); the session's `finish_used`
-([session](../crates/interface/session/src/session.rs)); held by
-[the lazy test](../crates/interface/session/tests/lazy.rs).
+([kernel](../crates/core/kernel/src/lib.rs)); `Evaluator::runs_few`
+([evaluate](../crates/core/graph/src/evaluate/mod.rs)); the session's
+`finish_used` ([session](../crates/interface/session/src/session.rs));
+held by [the lazy test](../crates/interface/session/tests/lazy.rs) and
+[the few test](../crates/interface/session/tests/few.rs).
 
 ## A changed document compiles off the frames
 
