@@ -6,12 +6,14 @@
 //! longest. Once they are, the line goes and one line says what it took.
 //! Where standard error is no terminal, only that last line is written.
 
+use std::collections::BTreeMap;
 use std::io::{IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use entelechy_ir::KernelId;
 use entelechy_kernel::{Preparing, Progress, Stage};
 
 /// How long preparing goes unseen.
@@ -65,6 +67,9 @@ impl Drop for Watch {
 fn run(progress: &Progress, stop: &AtomicBool) {
     let terminal = std::io::stderr().is_terminal();
     let mut began: Option<Instant> = None;
+    // Every Kernel seen while it prepares, and the longest step each took:
+    // one preparing may be several pieces of work, each letting the last go.
+    let mut seen: BTreeMap<KernelId, Duration> = BTreeMap::new();
     // Samples idle in a row: one step's end and the next's start are one
     // preparing, not two.
     let mut idle: u32 = 0;
@@ -73,6 +78,12 @@ fn run(progress: &Progress, stop: &AtomicBool) {
         let now = progress.now();
         let busy = now.busy() && !stopping;
         idle = if busy { 0 } else { idle.saturating_add(1) };
+        if began.is_some() || busy {
+            for seed in &now.seeds {
+                let took = seen.entry(seed.id.clone()).or_default();
+                *took = (*took).max(seed.took);
+            }
+        }
         if busy {
             let since = *began.get_or_insert_with(Instant::now);
             if terminal && since.elapsed() >= QUIET {
@@ -90,9 +101,10 @@ fn run(progress: &Progress, stop: &AtomicBool) {
         {
             let mut err = std::io::stderr().lock();
             let took = since.elapsed();
-            if took >= SAID && !now.seeds.is_empty() {
-                let _ = writeln!(err, "{}", done(&now, took));
+            if took >= SAID && !seen.is_empty() {
+                let _ = writeln!(err, "{}", done(&seen, took));
             }
+            seen.clear();
             let _ = err.flush();
         }
         if stopping {
@@ -146,19 +158,15 @@ fn line(now: &Preparing, elapsed: Duration) -> String {
     out
 }
 
-/// What preparing took, and the Kernel that took longest.
-fn done(now: &Preparing, took: Duration) -> String {
+/// What preparing took, and the Kernel that took longest of those `seen`.
+fn done(seen: &BTreeMap<KernelId, Duration>, took: Duration) -> String {
     let mut said = format!(
         "prepared {} Kernel(s) in {:.1} s",
-        now.seeds.len(),
+        seen.len(),
         took.as_secs_f64()
     );
-    if let Some(seed) = now.seeds.iter().max_by_key(|seed| seed.took) {
-        said.push_str(&format!(
-            "; longest {} {:.1} s",
-            seed.id,
-            seed.took.as_secs_f64()
-        ));
+    if let Some((id, longest)) = seen.iter().max_by_key(|(_, took)| **took) {
+        said.push_str(&format!("; longest {id} {:.1} s", longest.as_secs_f64()));
     }
     said
 }
