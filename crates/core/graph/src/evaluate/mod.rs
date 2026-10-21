@@ -878,6 +878,25 @@ pub struct Evaluator {
 /// at the same time as the last runs nothing).
 const CHILL_STREAK: u32 = 8;
 
+/// The frames between two that keep a node's new outputs to compare the
+/// next ones with ([`lets_go`]).
+const CHILL_CHECK: u32 = 32;
+
+/// Whether node `id`, whose outputs came out new `run` frames in a row,
+/// lets them go cold once their last reader has run. Let go, the next
+/// frame has nothing to compare its outputs with and finds them new, so
+/// the run would never end: one frame in [`CHILL_CHECK`] keeps them, and
+/// the next finds whether they settled. Outputs that settle are found so
+/// within that many frames, and kept from then on. Which frame is the
+/// node's own, so nodes that began changing together keep theirs on
+/// different frames, and no frame holds them all at once.
+fn lets_go(id: &NodeId, run: u32) -> bool {
+    let own =
+        id.0.bytes()
+            .fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b)));
+    run >= CHILL_STREAK && run.wrapping_add(own) % CHILL_CHECK != 0
+}
+
 /// When a node that runs for its state alone, or whose outputs are small
 /// ([`SMALL_COMPARED`]), has its Fields on a device compared with its
 /// last: comparing waits for the device, so each time they are found
@@ -1505,11 +1524,7 @@ impl Evaluator {
             for (at, group) in groups.iter().enumerate() {
                 if chills && at > 0 {
                     for id in &frame.layout.chill_after[at - 1] {
-                        if self
-                            .changing
-                            .get(id)
-                            .is_some_and(|run| *run >= CHILL_STREAK)
-                        {
+                        if self.changing.get(id).is_some_and(|run| lets_go(id, *run)) {
                             self.chill(id, runtime);
                         }
                     }
@@ -1652,11 +1667,7 @@ impl Evaluator {
             }
             if chills && let Some(last) = frame.layout.chill_after.last() {
                 for id in last {
-                    if self
-                        .changing
-                        .get(id)
-                        .is_some_and(|run| *run >= CHILL_STREAK)
-                    {
+                    if self.changing.get(id).is_some_and(|run| lets_go(id, *run)) {
                         self.chill(id, runtime);
                     }
                 }

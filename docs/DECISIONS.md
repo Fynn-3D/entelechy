@@ -1546,6 +1546,28 @@ pass the chain by and to make it again faithfully.
 ([session](../crates/interface/session/src/session.rs)). Held by
 [the memory tests](../crates/interface/session/tests/memory.rs).
 
+## What comes out new frame after frame is let go once read
+
+A node whose outputs came out new eight frames in a row has them let go
+cold as soon as the last group that reads them has run, and their buffers
+serve what runs after; the scene's outputs, the state's sources, the
+pinned and what an `async` node reads are never let go. One frame in 32
+keeps them all the same, the node's own frame by its name, and the next
+frame compares its outputs with them: found the same, they are kept from
+then on and spare what reads them.
+
+**Why.** The next frame makes such outputs anew whatever it finds, so
+holding them keeps memory nothing reads again. But let go, the next
+frame has nothing to compare with and finds them new, and a node that
+settles (a simulation that has finished) would be made, and its readers
+with it, every frame for good. The frames that keep them bound how long
+settled outputs are taken for new; each node keeps them on a frame of its
+own, so nodes that began changing together never hold theirs at once.
+
+**Where.** `lets_go` and `chill_after`
+([evaluator](../crates/core/graph/src/evaluate/mod.rs)). Held by
+[the composition tests](../crates/interface/session/tests/composition.rs).
+
 ## The clock crosses whole
 
 The session's time is a `Double` of seconds from the Host's clock to the

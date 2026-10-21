@@ -3061,3 +3061,50 @@ fn what_the_sound_device_holds_moves_a_clock_readers_key() {
     assert_eq!(frame(100).0, 0, "the same count, nothing runs");
     assert_eq!(frame(250), (1, 250), "another count runs it again");
 }
+
+#[test]
+fn outputs_let_go_cold_that_settle_are_found_settled_and_spare_their_readers() {
+    // `until` makes new outputs every frame for twenty frames, long enough
+    // to be let go once read, then the same outputs for good. A frame that
+    // lets them go has nothing to compare the next with, so some frames
+    // keep them: within that many frames of settling, `shown` no longer runs.
+    let mut runtime = runtime();
+    load(
+        &mut runtime,
+        "kernel test.until@1 { requires { field.write; time.read; } output result: Image; compute { return vec4(min(time(), 0.6), 0.0, 0.0, 1.0); } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.shown@1 { requires { field.read; field.write; } input a: Image; output result: Image; compute { return sample(a) * 2.0; } }",
+    );
+    let graph = entelechy_scene::parse(
+        "node until: test.until@1 { domain = vec2(2, 2); }
+node shown: test.shown@1 { a <- until.result; }
+node final: image.invert@1 { source <- shown.result; }
+output r <- final.result;",
+    )
+    .unwrap();
+    let mut evaluator = Evaluator::new();
+    evaluator.set_fusion(false);
+    let mut last_run = 0;
+    for frame in 0..120 {
+        let report = evaluator
+            .evaluate(
+                &graph,
+                &mut runtime,
+                &BTreeMap::new(),
+                &at(0.25 + f64::from(frame) / 60.0),
+                &BTreeMap::new(),
+            )
+            .unwrap();
+        if report.executed.contains(&NodeId("shown".into())) {
+            last_run = frame;
+        }
+    }
+    // The time passes 0.6 on frame 21: settled from frame 22 on.
+    assert!(last_run >= 21, "shown ran while until changed: {last_run}");
+    assert!(
+        last_run <= 22 + 33,
+        "settled outputs are found so within the frames between checks: {last_run}"
+    );
+}
