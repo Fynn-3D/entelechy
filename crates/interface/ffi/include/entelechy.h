@@ -168,12 +168,6 @@ int entelechy_play_replaying(const EntelechySession *session);
  * frame, and frames wait until the scene's are prepared); 0 once they are,
  * or where they prepare on threads. */
 int entelechy_play_preparing(const EntelechySession *session);
-/* The scene's Kernels preparing, drawn into a window of `width` by
- * `height` at `scale` device pixels to the logical one, `seconds` into
- * loading: a nebula, a star for each, gathered by what feeds what, gold
- * once built. 0x00RRGGBB pixels, row after row, valid until the next call; NULL for no
- * session. */
-const uint32_t *entelechy_play_loading(EntelechySession *session, uint32_t width, uint32_t height, double scale, double seconds);
 /* A turn of loading: one sync preparing a few of the Kernels waiting. The
  * Kernels still waiting, as entelechy_play_preparing counts them; -1 on
  * failure. */

@@ -493,6 +493,17 @@ changes:
   with `--allow clipboard.read` (empty without), looked at again at most
   four times a second; elsewhere it is the session's own, which a
   replay's `clipboard "text"` fills.
+- `input work: Rows<Int> = progress;`: the Kernels being prepared and
+  the scene they are for, as words: the nodes' count `n`, the links'
+  count `m`, the Kernels' count, how many are built, 1 while any waits
+  or runs (else 0), the milliseconds of the step running longest; then
+  each node's stage (0 waiting, 1 compiling, 2 compiled, 3 building, 4
+  built; a node whose Kernel is not being prepared is built, and one
+  compiled is done once nothing waits or runs); then each link's two
+  nodes, by place, each pair once, the lower first; then the name of the
+  Kernel running longest, a character a word, and a 0. Read again each
+  evaluation; a scene's own inputs only. A scene watches its own Kernels,
+  unless the caller gives it another's (`Session::watch`).
 - `input saved: Rows<Tally> = "saves/tally.field" else fresh.result;`
   reads `fresh.result` until the file exists (`examples/data/parts/save`).
 

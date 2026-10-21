@@ -1,4 +1,5 @@
-//! Preparing seen from the terminal: while a session's Kernels take longer
+//! Preparing seen from the terminal (the CLI's commands, and the Player
+//! before its window opens): while a session's Kernels take longer
 //! than a moment to prepare, a line of seeds, one for each Kernel (or a few
 //! where there are many), waiting `·`, compiled `•`, built `●` in gold, the
 //! ones building glowing; then how many are built and the one taking

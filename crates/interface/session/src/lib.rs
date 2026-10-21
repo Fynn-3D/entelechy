@@ -35,6 +35,7 @@ mod options;
 pub mod overrides;
 pub mod package;
 pub mod play;
+pub mod preparing;
 mod reads;
 pub mod remember;
 pub mod replay;
@@ -43,6 +44,7 @@ mod session;
 mod sources;
 mod spread;
 pub mod store;
+pub mod watch;
 mod writes;
 
 use std::fmt;

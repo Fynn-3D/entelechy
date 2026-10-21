@@ -720,7 +720,8 @@ impl Scene {
         events: &mut Vec<Event>,
     ) {
         let current = self.stamp;
-        runtime.progress().link(kernel_links(&lowered.graph));
+        let (nodes, links) = shape(&lowered.graph);
+        runtime.progress().shape(nodes, links);
         // The inputs and outputs where the caller places them.
         let written = lowered.files.clone();
         let bound = match self
@@ -1548,32 +1549,32 @@ impl Lowering {
     }
 }
 
-/// Each node's Kernel with the Kernel of each node it reads from, for
-/// the picture of a scene preparing ([`entelechy_kernel::Progress::link`]).
-fn kernel_links(graph: &Graph) -> Vec<(KernelId, KernelId)> {
-    let kernel: BTreeMap<&entelechy_graph::NodeId, &KernelId> = graph
+/// The graph's nodes, each by its Kernel, and each node with each it
+/// reads from, for the picture of a scene preparing
+/// ([`entelechy_kernel::Progress::shape`]).
+fn shape(graph: &Graph) -> (Vec<KernelId>, Vec<(usize, usize)>) {
+    let place: BTreeMap<&entelechy_graph::NodeId, usize> = graph
         .nodes
         .iter()
-        .map(|node| (&node.id, &node.kernel))
+        .enumerate()
+        .map(|(i, node)| (&node.id, i))
         .collect();
     let mut links = Vec::new();
-    for node in &graph.nodes {
+    for (i, node) in graph.nodes.iter().enumerate() {
         for binding in node.inputs.values() {
             let source = match binding {
                 entelechy_graph::Binding::Now(source) => source,
                 entelechy_graph::Binding::Previous { source, .. } => source,
             };
             if let entelechy_graph::Source::Node { node: from, .. } = source
-                && let Some(from) = kernel.get(from)
-                && **from != node.kernel
+                && let Some(&from) = place.get(from)
             {
-                links.push((node.kernel.clone(), (*from).clone()));
+                links.push((i, from));
             }
         }
     }
-    links.sort_unstable();
-    links.dedup();
-    links
+    let nodes = graph.nodes.iter().map(|node| node.kernel.clone()).collect();
+    (nodes, links)
 }
 
 /// Library documents read and their Kernels primed on another thread

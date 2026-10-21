@@ -5,7 +5,6 @@
 //! choice, replay driving and the frame-data line.
 
 pub mod hud;
-pub mod loading;
 pub mod pad;
 
 use entelechy_graph::{NodeId, Report};

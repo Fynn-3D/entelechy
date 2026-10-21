@@ -7,8 +7,6 @@ use std::time::{Duration, Instant};
 use entelechy_kernel::Context;
 use entelechy_session::{Event, Session};
 
-mod watch;
-
 /// Runs `entelechy-<tool>` with `args`: the one beside this `entelechy`, else the
 /// one on `PATH`. Its exit status is `entelechy`'s.
 fn beside(tool: &str, args: &[String]) -> ExitCode {
@@ -250,7 +248,7 @@ fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
 fn render(args: &[String]) -> Result<(), String> {
     let options = parse_render(args)?;
     let mut session = options.session.open("jit")?;
-    let _watch = watch::watch(session.progress());
+    let _watch = entelechy_session::watch::watch(session.progress());
     // A file named on the command line is the person's own allowance.
     for (node, _, path) in &options.saves {
         session.pin(entelechy_graph::NodeId(node.clone().into()));
@@ -336,7 +334,7 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
 fn run(args: &[String]) -> Result<(), String> {
     let options = parse_run(args)?;
     let mut session = options.session.open("jit")?;
-    let _watch = watch::watch(session.progress());
+    let _watch = entelechy_session::watch::watch(session.progress());
     // A profile waits for the device after each node.
     session.set_measured(options.profile);
     // A file named on the command line is the person's own allowance.
@@ -563,7 +561,7 @@ fn graph(args: &[String]) -> Result<(), String> {
         .scene()
         .map_err(|_| "graph needs a scene file".to_string())?;
     let mut session = options.open("cpu")?;
-    let _watch = watch::watch(session.progress());
+    let _watch = entelechy_session::watch::watch(session.progress());
     let events = session.sync();
     for event in &events {
         if matches!(event, Event::Rejected { .. } | Event::SceneRejected(_)) {
@@ -727,7 +725,7 @@ fn serve(args: &[String]) -> Result<(), String> {
     // Allowances come from whoever started the server, never from a
     // client.
     let mut session = options.open("jit")?;
-    let _watch = watch::watch(session.progress());
+    let _watch = entelechy_session::watch::watch(session.progress());
     session.set_window(window);
     // Reads are held to the scene's documents' directories and the
     // allowances.
@@ -1179,7 +1177,7 @@ fn trace(args: &[String]) -> Result<(), String> {
     let at = at.ok_or("trace needs --element <i> or --at <x> <y> [<z>]")?;
     let options = parse_run(&rest)?;
     let mut session = options.session.open("jit")?;
-    let _watch = watch::watch(session.progress());
+    let _watch = entelechy_session::watch::watch(session.progress());
     let events = session.sync();
     report_events(&events);
     loaded(&session, &events)?;
@@ -1269,7 +1267,7 @@ fn trace(args: &[String]) -> Result<(), String> {
 
 fn report_events(events: &[Event]) {
     if !events.is_empty() {
-        watch::clear();
+        entelechy_session::watch::clear();
     }
     for event in events {
         eprintln!("{event}");

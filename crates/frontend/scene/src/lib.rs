@@ -194,6 +194,10 @@ pub struct Files {
     /// and a 0 after the last (`= clipboard`): the session reads it again
     /// when it changes.
     pub clipboards: Vec<String>,
+    /// Externals holding the Kernels the session watches preparing and
+    /// the scene they are for, as words (`= progress`): the session holds
+    /// them again when they change.
+    pub progresses: Vec<String>,
     /// The root document's file outputs, written after a committed
     /// evaluation that changed them.
     pub writes: Vec<Write>,
@@ -556,6 +560,7 @@ fn lower(
     lowering.out.files.files = level.files;
     lowering.out.files.outlines = level.outlines;
     lowering.out.files.clipboards = level.clipboards;
+    lowering.out.files.progresses = level.progresses;
     lowering.out.graph.params = level.params;
     lowering.out.graph.outputs = level.outputs;
     lowering.out.graph.fallbacks = level.fallbacks;
@@ -591,6 +596,7 @@ struct Level {
     files: Vec<(String, PathBuf)>,
     outlines: Vec<(String, PathBuf)>,
     clipboards: Vec<String>,
+    progresses: Vec<String>,
     params: Vec<GraphParam>,
     /// Outputs in declaration order; the first is the primary.
     outputs: Vec<(String, Source)>,
@@ -670,6 +676,7 @@ struct Inputs {
     files: Vec<(String, PathBuf)>,
     outlines: Vec<(String, PathBuf)>,
     clipboards: Vec<String>,
+    progresses: Vec<String>,
 }
 
 /// Where a document is lowered: its node prefix, what its placing graph
@@ -1202,6 +1209,7 @@ impl Lowering<'_, '_> {
         let mut files = Vec::new();
         let mut outlines = Vec::new();
         let mut clipboards = Vec::new();
+        let mut progresses = Vec::new();
         for input in &document.inputs {
             // What arrives is checked by shape and layout where it binds.
             if input.binding.is_some() {
@@ -1339,6 +1347,22 @@ impl Lowering<'_, '_> {
                 }
                 clipboards.push(input.name.value.clone());
             }
+            if let Some(span) = input.progress {
+                if placement.is_some() {
+                    return Err(error(
+                        span,
+                        "a placed graph's input is wired by the placing graph; it cannot read Kernels preparing",
+                    ));
+                }
+                let ty = resolved(&input.ty.value, &self.aliases);
+                if ty != "Rows<Int>" {
+                    return Err(error(
+                        input.ty.span,
+                        format!("Kernels preparing are read as words: `Rows<Int>`, not `{ty}`"),
+                    ));
+                }
+                progresses.push(input.name.value.clone());
+            }
             externals.push(input.name.value.clone());
         }
         Ok(Inputs {
@@ -1350,6 +1374,7 @@ impl Lowering<'_, '_> {
             files,
             outlines,
             clipboards,
+            progresses,
         })
     }
 
@@ -1558,6 +1583,7 @@ impl Lowering<'_, '_> {
             files,
             outlines,
             clipboards,
+            progresses,
         } = self.inputs(document, base, placement)?;
         let params = self.params(document)?;
         // The root's params, read before any sub-graph: a sub-graph's
@@ -2178,6 +2204,7 @@ impl Lowering<'_, '_> {
             files,
             outlines,
             clipboards,
+            progresses,
             params,
             outputs,
             fallbacks,

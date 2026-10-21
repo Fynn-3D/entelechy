@@ -335,16 +335,12 @@ ready, so a republish never stalls a frame. It takes `run`'s
 - `--serve`, `--listen <host:port>` and `--allow-origin <origin>` serve
   the protocol from the window (see [Creation protocol](#creation-protocol)).
 
-While the scene first loads, the window shows its Kernels preparing as
-a nebula: a star for each, drawn together with the Kernels it feeds or
-reads from in the scene, dust while waiting, pale once compiled, gold and
-breathing while its device builds it, gold once built, the threads
-between built ones lit; under it, how many are built and the one taking
-longest. A device keeps what
-it built, so a scene opened again unchanged loads at once. In a
-terminal, `run`, `render`, `serve`, `graph` and `trace` show the same as
-a line of seeds once preparing takes longer than a moment, and say what
-it took when it took a second or more.
+The Player prepares the scene's Kernels before its window opens, then
+opens it on the scene. In a terminal, the Player, `run`, `render`,
+`serve`, `graph` and `trace` show them preparing as a line of seeds once
+it takes longer than a moment, and say what it took when it took a
+second or more. A device keeps what it built, so a scene
+opened again unchanged loads at once.
 
 The window shows the first output that is a grid of pixels; the sound
 card plays the first that is rows of one or two floats, one block a

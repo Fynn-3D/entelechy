@@ -33,8 +33,9 @@ usage:
               [--window <w>x<h>] [--backend gpu|cpu|jit|best] [--memory <MB>] [--work <M>]
               [--allow file.read|file.write|file.delete=<dir>]...
               [--allow clipboard.read|clipboard.write]... [--grant <capability,...>]
-      Open a window showing the scene output; while its Kernels first prepare,
-      the window shows them, a seed each on a line. Kernel files are republished as
+      Open a window showing the scene output once its Kernels have first
+      prepared, the terminal showing them preparing as `run` does: a line of
+      seeds, one for each Kernel. Kernel files are republished as
       they change, the disk looked at four times a second; a rejected change
       keeps the running version. The pointer
       and keys reach Kernels that declare `input.read`, and so do the
@@ -430,7 +431,6 @@ impl Player {
                         pixels: &panel.pixels,
                         width: panel.width,
                         height: panel.height,
-                        top: 0,
                     });
                     match display.present(
                         presenter,
@@ -622,14 +622,46 @@ impl ApplicationHandler for Player {
         } else {
             self.last_size
         };
-        let logical = self
+        let (logical_width, logical_height) = self
             .requested
             .unwrap_or((width * self.scale, height * self.scale));
-        let Some(opened) = open_window(event_loop, logical, self.display.as_ref()) else {
-            return;
+        let attributes = Window::default_attributes()
+            .with_title("Entelechy Player")
+            .with_inner_size(LogicalSize::new(logical_width, logical_height));
+        let window = match event_loop.create_window(attributes) {
+            Ok(window) => Arc::new(window),
+            Err(error) => {
+                eprintln!("cannot create a window: {error}");
+                event_loop.exit();
+                return;
+            }
         };
-        (self.window, self.presenter, self.surface) =
-            (Some(opened.window), opened.presenter, opened.surface);
+        let size = window.inner_size();
+        if let Some(display) = &self.display {
+            match display.presenter(window.clone(), size.width, size.height) {
+                Ok(presenter) => {
+                    self.presenter = Some(presenter);
+                    eprintln!("presenting on the device");
+                }
+                Err(error) => eprintln!("device presentation unavailable ({error}); blitting"),
+            }
+        }
+        if self.presenter.is_none() {
+            let context = softbuffer::Context::new(window.clone());
+            let surface =
+                context.and_then(|context| softbuffer::Surface::new(&context, window.clone()));
+            match surface {
+                Ok(surface) => self.surface = Some(surface),
+                Err(error) => {
+                    eprintln!("cannot present to the window: {error}");
+                    event_loop.exit();
+                    return;
+                }
+            }
+        }
+        // Input methods (Chinese among them) commit text to `typed()`.
+        window.set_ime_allowed(true);
+        self.window = Some(window);
         self.update_title();
     }
 
@@ -770,327 +802,6 @@ impl ApplicationHandler for Player {
     }
 }
 
-/// A window and what draws into it.
-struct Opened {
-    window: Arc<Window>,
-    presenter: Option<Presenter>,
-    surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
-}
-
-/// Opens a window `logical` points in size, presenting from `display`'s
-/// device where it can, else blitting; `None`, said, when it cannot open
-/// one, and the event loop ends.
-fn open_window(
-    event_loop: &ActiveEventLoop,
-    (logical_width, logical_height): (u32, u32),
-    display: Option<&Display>,
-) -> Option<Opened> {
-    let attributes = Window::default_attributes()
-        .with_title("Entelechy Player")
-        .with_inner_size(LogicalSize::new(logical_width, logical_height));
-    let window = match event_loop.create_window(attributes) {
-        Ok(window) => Arc::new(window),
-        Err(error) => {
-            eprintln!("cannot create a window: {error}");
-            event_loop.exit();
-            return None;
-        }
-    };
-    let size = window.inner_size();
-    let mut presenter = None;
-    if let Some(display) = display {
-        match display.presenter(window.clone(), size.width, size.height) {
-            Ok(made) => {
-                presenter = Some(made);
-                eprintln!("presenting on the device");
-            }
-            Err(error) => eprintln!("device presentation unavailable ({error}); blitting"),
-        }
-    }
-    let mut surface = None;
-    if presenter.is_none() {
-        let context = softbuffer::Context::new(window.clone());
-        match context.and_then(|context| softbuffer::Surface::new(&context, window.clone())) {
-            Ok(made) => surface = Some(made),
-            Err(error) => {
-                eprintln!("cannot present to the window: {error}");
-                event_loop.exit();
-                return None;
-            }
-        }
-    }
-    // Input methods (Chinese among them) commit text to `typed()`.
-    window.set_ime_allowed(true);
-    Some(Opened {
-        window,
-        presenter,
-        surface,
-    })
-}
-
-/// How long a finished loading that took a while stays on the window,
-/// every seed lit, before the scene shows.
-const LANDING: Duration = Duration::from_millis(400);
-
-/// The scene's first load, on a thread of its own, while the window shows
-/// its Kernels preparing ([`play::loading`]).
-struct Loading {
-    thread: Option<std::thread::JoinHandle<(Session, Vec<entelechy_session::Event>)>>,
-    loaded: Option<(Session, Vec<entelechy_session::Event>)>,
-    progress: entelechy_kernel::Progress,
-    sky: play::loading::Sky,
-    began: Instant,
-    landed: Option<Instant>,
-    drawn: Option<Instant>,
-    opened: Option<Opened>,
-    options: Options,
-    display: Option<Display>,
-    gamepad: Option<Gamepad>,
-}
-
-impl Loading {
-    /// Draws the Kernels preparing, at most thirty times a second.
-    fn draw(&mut self) {
-        if self
-            .drawn
-            .is_some_and(|drawn| drawn.elapsed() < Duration::from_millis(33))
-        {
-            return;
-        }
-        let Some(opened) = &mut self.opened else {
-            return;
-        };
-        let size = opened.window.inner_size();
-        if size.width == 0 || size.height == 0 {
-            return;
-        }
-        self.drawn = Some(Instant::now());
-        let picture = self.sky.draw(
-            &self.progress.now(),
-            self.began.elapsed().as_secs_f64(),
-            size.width,
-            size.height,
-            opened.window.scale_factor(),
-        );
-        if let (Some(display), Some(presenter)) = (&self.display, &mut opened.presenter) {
-            let overlay = Overlay {
-                pixels: &picture.pixels,
-                width: picture.width,
-                height: picture.height,
-                top: 0,
-            };
-            if let Err(error) = display.present_overlay(presenter, size.width, size.height, overlay)
-            {
-                eprintln!("present failed: {error}");
-            }
-            return;
-        }
-        let Some(surface) = &mut opened.surface else {
-            return;
-        };
-        let (Some(width), Some(height)) =
-            (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
-        else {
-            return;
-        };
-        if surface.resize(width, height).is_err() {
-            return;
-        }
-        let Ok(mut buffer) = surface.buffer_mut() else {
-            return;
-        };
-        buffer.copy_from_slice(&picture.pixels);
-        let _ = buffer.present();
-    }
-
-    /// Whether the scene is in and has been seen to land.
-    fn done(&mut self) -> bool {
-        if self
-            .thread
-            .as_ref()
-            .is_some_and(|thread| thread.is_finished())
-            && let Some(thread) = self.thread.take()
-        {
-            match thread.join() {
-                Ok(loaded) => self.loaded = Some(loaded),
-                Err(_) => {
-                    eprintln!("error: loading the scene panicked");
-                    std::process::exit(1);
-                }
-            }
-            self.landed = Some(Instant::now());
-        }
-        let Some(landed) = self.landed else {
-            return false;
-        };
-        // A load that took a moment goes straight to the scene.
-        let took = landed.duration_since(self.began);
-        took < Duration::from_secs(1) || landed.elapsed() >= LANDING
-    }
-
-    /// The Player over the loaded scene, in the window already open.
-    fn play(mut self) -> Result<Player, String> {
-        let (session, events) = self.loaded.take().ok_or("the scene is not loaded")?;
-        for event in events {
-            eprintln!("{event}");
-        }
-        let options = self.options;
-        let (window, presenter, surface) = match self.opened {
-            Some(opened) => (Some(opened.window), opened.presenter, opened.surface),
-            None => (None, None, None),
-        };
-        let mut player = Player {
-            session,
-            play: Play::new(clock),
-            scale: options.scale,
-            requested: options.window,
-            window,
-            surface,
-            display: self.display,
-            presenter,
-            last_frame: None,
-            last_size: (0, 0),
-            requests: None,
-            answers: entelechy_protocol::Answers::new(),
-            audio: None,
-            gamepad: self.gamepad,
-            audio_allowed: !options.no_audio,
-            audio_failed: false,
-            hold_pointer: options.hold_pointer,
-            cursor: (0.0, 0.0),
-            held: None,
-            modifiers: ModifiersState::empty(),
-            composing: false,
-            folder: options.folder.clone(),
-            folder_allow: options.folder_allow.clone(),
-        };
-        if let Some(replay) = &options.replay {
-            player.play.replay(replay, &mut player.session);
-            player.say();
-        }
-        if options.serve {
-            let (sender, receiver) = channel();
-            if let Some(address) = &options.listen {
-                let origins = entelechy_protocol::websocket::Origins::with(options.origins.clone());
-                let bound = entelechy_protocol::listen(address, sender.clone(), origins)
-                    .map_err(|error| format!("cannot listen on {address}: {error}"))?;
-                eprintln!("listening on {bound}");
-            }
-            entelechy_protocol::stdin_into(sender)
-                .map_err(|error| format!("cannot read standard input: {error}"))?;
-            player.requests = Some(receiver);
-            eprintln!("serving the creation protocol on stdin/stdout");
-        }
-        // Evaluate once so the window takes the output's size; a replay
-        // owns its window and every frame, so it skips this.
-        let context = player.play.context(player.view());
-        let probed = (!player.play.replaying()).then(|| player.session.evaluate(&context));
-        match probed {
-            Some(Ok(report)) => {
-                if let Ok((width, height)) =
-                    player.session.runtime().host().image_size(report.output)
-                {
-                    player.last_size = (width, height);
-                }
-            }
-            Some(Err(error)) => {
-                eprintln!("evaluation failed: {error}; the window opens when it succeeds");
-            }
-            None => {}
-        }
-        if player.requested.is_none()
-            && player.last_size != (0, 0)
-            && let Some(window) = &player.window
-        {
-            let (width, height) = player.last_size;
-            let _ = window.request_inner_size(LogicalSize::new(
-                width * player.scale,
-                height * player.scale,
-            ));
-        }
-        player.update_title();
-        Ok(player)
-    }
-}
-
-/// The Player's two lives: the scene loading, then playing.
-enum Life {
-    Loading(Box<Loading>),
-    Playing(Box<Player>),
-    /// Between the two, for the moment one becomes the other.
-    Turning,
-}
-
-struct App {
-    life: Life,
-    failed: bool,
-}
-
-impl ApplicationHandler for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        match &mut self.life {
-            Life::Loading(loading) => {
-                if loading.opened.is_none() {
-                    let logical = loading.options.window.unwrap_or(DEFAULT_WINDOW);
-                    loading.opened = open_window(event_loop, logical, loading.display.as_ref());
-                    if let Some(opened) = &loading.opened {
-                        opened.window.set_title("Entelechy Player");
-                    }
-                }
-            }
-            Life::Playing(player) => player.resumed(event_loop),
-            Life::Turning => {}
-        }
-    }
-
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-        match &mut self.life {
-            Life::Loading(loading) => match event {
-                WindowEvent::CloseRequested => event_loop.exit(),
-                WindowEvent::RedrawRequested => loading.draw(),
-                _ => {}
-            },
-            Life::Playing(player) => player.window_event(event_loop, id, event),
-            Life::Turning => {}
-        }
-    }
-
-    fn device_event(&mut self, event_loop: &ActiveEventLoop, id: DeviceId, event: DeviceEvent) {
-        if let Life::Playing(player) = &mut self.life {
-            player.device_event(event_loop, id, event);
-        }
-    }
-
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if let Life::Loading(loading) = &mut self.life {
-            if !loading.done() {
-                if let Some(opened) = &loading.opened {
-                    opened.window.request_redraw();
-                }
-                // The window is drawn thirty times a second; between them
-                // the loop rests.
-                std::thread::sleep(Duration::from_millis(8));
-                return;
-            }
-            let Life::Loading(loading) = std::mem::replace(&mut self.life, Life::Turning) else {
-                return;
-            };
-            match loading.play() {
-                Ok(player) => self.life = Life::Playing(Box::new(player)),
-                Err(error) => {
-                    eprintln!("error: {error}");
-                    self.failed = true;
-                    event_loop.exit();
-                    return;
-                }
-            }
-        }
-        if let Life::Playing(player) = &mut self.life {
-            player.about_to_wait(event_loop);
-        }
-    }
-}
-
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
@@ -1161,41 +872,79 @@ fn main() -> ExitCode {
         eprintln!("error: {error}");
         return ExitCode::FAILURE;
     }
-    // The first load is prepared on a thread of its own while the window
-    // shows it; replacements prepare off the frame.
-    let progress = session.progress();
-    let thread = std::thread::Builder::new()
-        .name("entelechy-load".into())
-        // Room for the language's nesting bound, as preparing has.
-        .stack_size(256 << 20)
-        .spawn(move || {
-            let events = session.sync();
-            session.set_background(true);
-            (session, events)
-        });
-    let thread = match thread {
-        Ok(thread) => thread,
-        Err(error) => {
-            eprintln!("error: cannot start loading: {error}");
+    // The first load prepares before the window opens, its Kernels seen
+    // preparing in the terminal; replacements prepare off the frame.
+    let events = {
+        let _watch = entelechy_session::watch::watch(session.progress());
+        session.sync()
+    };
+    for event in events {
+        eprintln!("{event}");
+    }
+    session.set_background(true);
+    let mut player = Player {
+        session,
+        play: Play::new(clock),
+        scale: options.scale,
+        requested: options.window,
+        window: None,
+        surface: None,
+        display,
+        presenter: None,
+        last_frame: None,
+        last_size: (0, 0),
+        requests: None,
+        answers: entelechy_protocol::Answers::new(),
+        audio: None,
+        gamepad,
+        audio_allowed: !options.no_audio,
+        audio_failed: false,
+        hold_pointer: options.hold_pointer,
+        cursor: (0.0, 0.0),
+        held: None,
+        modifiers: ModifiersState::empty(),
+        composing: false,
+        folder: options.folder.clone(),
+        folder_allow: options.folder_allow.clone(),
+    };
+    if let Some(replay) = &options.replay {
+        player.play.replay(replay, &mut player.session);
+        player.say();
+    }
+    if options.serve {
+        let (sender, receiver) = channel();
+        if let Some(address) = &options.listen {
+            let origins = entelechy_protocol::websocket::Origins::with(options.origins.clone());
+            match entelechy_protocol::listen(address, sender.clone(), origins) {
+                Ok(bound) => eprintln!("listening on {bound}"),
+                Err(error) => {
+                    eprintln!("error: cannot listen on {address}: {error}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        if let Err(error) = entelechy_protocol::stdin_into(sender) {
+            eprintln!("error: cannot read standard input: {error}");
             return ExitCode::FAILURE;
         }
-    };
-    let mut app = App {
-        life: Life::Loading(Box::new(Loading {
-            thread: Some(thread),
-            loaded: None,
-            progress,
-            sky: play::loading::Sky::default(),
-            began: Instant::now(),
-            landed: None,
-            drawn: None,
-            opened: None,
-            options,
-            display,
-            gamepad,
-        })),
-        failed: false,
-    };
+        player.requests = Some(receiver);
+        eprintln!("serving the creation protocol on stdin/stdout");
+    }
+    // Evaluate once so the window opens at the output size; a replay
+    // owns its window and every frame, so it skips this.
+    let context = player.play.context(player.view());
+    let probed = (!player.play.replaying()).then(|| player.session.evaluate(&context));
+    match probed {
+        Some(Ok(report)) => {
+            if let Ok((width, height)) = player.session.runtime().host().image_size(report.output) {
+                player.last_size = (width, height);
+            }
+        }
+        Some(Err(error)) => {
+            eprintln!("evaluation failed: {error}; the window opens when it succeeds");
+        }
+        None => {}
+    }
     let event_loop = match EventLoop::new() {
         Ok(event_loop) => event_loop,
         Err(error) => {
@@ -1204,8 +953,7 @@ fn main() -> ExitCode {
         }
     };
     event_loop.set_control_flow(ControlFlow::Poll);
-    match event_loop.run_app(&mut app) {
-        Ok(()) if app.failed => ExitCode::FAILURE,
+    match event_loop.run_app(&mut player) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("error: {error}");

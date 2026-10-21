@@ -1,8 +1,8 @@
 //! What preparing Kernels is doing, readable from any thread while it
 //! runs: each Kernel of the work at hand, from expected to compiled
 //! (`prepare`) to built on its device (`finish`), and how long its
-//! current step has taken; and which of them feed which in the scene. An
-//! interface draws it while a scene loads.
+//! current step has taken; and the scene's nodes, each with its Kernel,
+//! and which feed which. An interface draws it while a scene loads.
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -43,8 +43,10 @@ pub struct Seed {
 pub struct Preparing {
     /// Each Kernel of it.
     pub seeds: Vec<Seed>,
-    /// Seeds that feed each other in the scene, by their place in `seeds`,
-    /// each pair once, the lower first.
+    /// The scene's nodes, each by its Kernel, once the scene is read.
+    pub nodes: Vec<KernelId>,
+    /// Nodes that feed each other, by their place in `nodes`, each pair
+    /// once, the lower first.
     pub links: Vec<(usize, usize)>,
 }
 
@@ -93,23 +95,14 @@ pub struct Progress(Arc<Mutex<State>>);
 #[derive(Default, Debug)]
 struct State {
     entries: Vec<Entry>,
-    links: Vec<(KernelId, KernelId)>,
+    nodes: Vec<KernelId>,
+    links: Vec<(usize, usize)>,
 }
 
 impl Progress {
     /// The work at hand now.
     pub fn now(&self) -> Preparing {
         let state = self.lock();
-        let place = |id: &KernelId| state.entries.iter().position(|entry| entry.id == *id);
-        let mut links: Vec<(usize, usize)> = state
-            .links
-            .iter()
-            .filter_map(|(a, b)| Some((place(a)?, place(b)?)))
-            .filter(|(a, b)| a != b)
-            .map(|(a, b)| (a.min(b), a.max(b)))
-            .collect();
-        links.sort_unstable();
-        links.dedup();
         Preparing {
             seeds: state
                 .entries
@@ -123,14 +116,25 @@ impl Progress {
                     },
                 })
                 .collect(),
-            links,
+            nodes: state.nodes.clone(),
+            links: state.links.clone(),
         }
     }
 
-    /// Says which Kernels feed which in the scene now, each pair a
-    /// Kernel and one it reads from; what was said before goes.
-    pub fn link(&self, links: impl IntoIterator<Item = (KernelId, KernelId)>) {
-        self.lock().links = links.into_iter().collect();
+    /// Says the scene's nodes now, each by its Kernel, and which feed
+    /// which, by their place in `nodes`; what was said before goes.
+    pub fn shape(&self, nodes: Vec<KernelId>, links: impl IntoIterator<Item = (usize, usize)>) {
+        let n = nodes.len();
+        let mut links: Vec<(usize, usize)> = links
+            .into_iter()
+            .filter(|&(a, b)| a != b && a < n && b < n)
+            .map(|(a, b)| (a.min(b), a.max(b)))
+            .collect();
+        links.sort_unstable();
+        links.dedup();
+        let mut state = self.lock();
+        state.nodes = nodes;
+        state.links = links;
     }
 
     /// Says `ids` are to be prepared or built. Where nothing waits or runs,
@@ -223,12 +227,9 @@ mod tests {
         progress.expect([&b]);
         progress.expect([&a]);
         assert_eq!(progress.now().seeds.len(), 2);
-        // Links name seeds by place, once, and only seeds there are.
-        progress.link([
-            (b.clone(), a.clone()),
-            (a.clone(), b.clone()),
-            (a, id("t.z")),
-        ]);
+        // The scene's links name its nodes by place, once, only nodes there are.
+        progress.shape(vec![a.clone(), b, a], [(1, 0), (0, 1), (2, 7), (2, 2)]);
+        assert_eq!(progress.now().nodes.len(), 3);
         assert_eq!(progress.now().links, vec![(0, 1)]);
     }
 }

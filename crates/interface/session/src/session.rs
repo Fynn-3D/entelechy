@@ -66,6 +66,9 @@ pub struct Session {
     chosen: Option<(PathBuf, Vec<crate::Allowance>)>,
     /// The clipboard: the session's own, or the system's given.
     board: crate::clipboard::Board,
+    /// The Kernels an input `= progress` reads: the session's own, or
+    /// another's given.
+    watched: crate::preparing::Watched,
     /// The context the last frame was evaluated under, which outputs let
     /// go cold are made again under when read ([`Session::warm`]).
     last_context: Context,
@@ -164,6 +167,7 @@ impl Session {
             bound: BTreeMap::new(),
             chosen: None,
             board: crate::clipboard::Board::default(),
+            watched: crate::preparing::Watched::default(),
             last_context: Context::default(),
         }
     }
@@ -703,6 +707,12 @@ impl Session {
     /// `--allow clipboard.write`.
     pub fn give_clipboard(&mut self, device: Box<dyn crate::Clipboard>) {
         self.board.give(device);
+    }
+
+    /// The Kernels `progress` watches, for the scene's `= progress`
+    /// inputs, in the session's own stead: another scene's, preparing.
+    pub fn watch(&mut self, progress: entelechy_kernel::Progress) {
+        self.watched.give(progress);
     }
 
     /// Puts `text` on the clipboard, as a person copying elsewhere would,
@@ -1615,6 +1625,7 @@ impl Session {
             self.runtime.host_mut(),
             context.time,
         );
+        self.hold_progress();
         self.repin();
         self.last_context = *context;
         let graph = self.scene.shared_graph().ok_or_else(no_scene)?;
@@ -1697,6 +1708,7 @@ impl Session {
             self.runtime.host_mut(),
             context.time,
         );
+        self.hold_progress();
         self.repin();
         // The font nodes' characters and the files nodes' paths are read
         // after every frame, whatever it asks for, and what the scene
@@ -1724,6 +1736,21 @@ impl Session {
         self.feed_field_nodes();
         self.written_after(&report)?;
         Ok(report)
+    }
+
+    /// Holds the Kernels watched preparing in the scene's `= progress`
+    /// inputs: read each evaluation, as the clock is.
+    fn hold_progress(&mut self) {
+        let progresses = self.scene.files().progresses.clone();
+        let mut events = Vec::new();
+        self.watched.sync(
+            &progresses,
+            &self.runtime.progress(),
+            &mut self.inputs,
+            self.runtime.host_mut(),
+            &mut events,
+        );
+        self.later.extend(events);
     }
 
     /// Replaces the committed state of `node.port` with `words`; see
@@ -2122,6 +2149,7 @@ impl Session {
             self.runtime.host_mut(),
             context.time,
         );
+        self.hold_progress();
         self.repin();
         let readers = std::collections::BTreeSet::from([target.id.clone()]);
         let tried = match self.scene.shared_graph() {

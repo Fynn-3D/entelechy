@@ -250,7 +250,6 @@ pub unsafe extern "C" fn entelechy_play_present(
             pixels: &panel.pixels,
             width: panel.width,
             height: panel.height,
-            top: 0,
         });
         match s.present_on(&canvas, picture, overlay) {
             Ok(Some((placement, size))) => {
@@ -437,33 +436,6 @@ pub unsafe extern "C" fn entelechy_play_preparing(session: *const EntelechySessi
     unsafe { enter(session) }.map_or(0, |s| {
         c_int::try_from(s.session.preparing_left()).unwrap_or(c_int::MAX)
     })
-}
-
-/// The scene's Kernels preparing, drawn into a `width` by `height` window
-/// at `scale` device pixels to the logical one, `seconds` into loading
-/// ([`entelechy_session::play::loading`]): `0x00RRGGBB`, row after row,
-/// valid until the next call on the session. NULL for a session that is
-/// not.
-///
-/// # Safety
-/// `session` is a live session.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn entelechy_play_loading(
-    session: *mut EntelechySession,
-    width: u32,
-    height: u32,
-    scale: f64,
-    seconds: f64,
-) -> *const u32 {
-    let Some(mut s) = (unsafe { enter(session) }) else {
-        return std::ptr::null();
-    };
-    let now = s.session.progress().now();
-    let s = &mut *s;
-    let picture = s.sky.draw(&now, seconds, width, height, scale);
-    s.pixels.clear();
-    s.pixels.extend_from_slice(&picture.pixels);
-    s.pixels.as_ptr()
 }
 
 /// A turn of loading: one sync that prepares a few of the Kernels waiting

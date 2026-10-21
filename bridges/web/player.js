@@ -62,20 +62,6 @@ class EntelechySound extends AudioWorkletProcessor {
 registerProcessor("entelechy-sound", EntelechySound);
 `;
 
-/// `0x00RRGGBB` words, `width` by `height`, put on a 2D canvas's context.
-function paint(context, words, width, height) {
-  if (!words) return;
-  const image = context.createImageData(width, height);
-  for (let i = 0; i < words.length; i++) {
-    const word = words[i];
-    image.data[i * 4] = (word >> 16) & 255;
-    image.data[i * 4 + 1] = (word >> 8) & 255;
-    image.data[i * 4 + 2] = word & 255;
-    image.data[i * 4 + 3] = 255;
-  }
-  context.putImageData(image, 0, 0);
-}
-
 class EntelechyPlayer {
   /// Plays `entelechy` (an EntelechyInPage with its scene open) on `canvas`, the
   /// page's window, with `shown` a canvas over it that takes no pointer,
@@ -126,18 +112,8 @@ class EntelechyPlayer {
     // "best" is Entelechy's to decide, as for the Player: the backends it
     // passed over are among what the play says.
     const on = backend || "best";
-    // While its Kernels prepare, the window shows them.
-    const context = canvas.getContext("2d");
-    let drawn = 0;
-    entelechy.onpreparing = () => {
-      if (performance.now() - drawn < 33) return;
-      drawn = performance.now();
-      if (shown) shown.style.display = "none";
-      paint(context, entelechy.loading(canvas.width, canvas.height, window.devicePixelRatio || 1), canvas.width, canvas.height);
-    };
     if (replay) await entelechy.openReplay(replay, on);
     else await entelechy.open(scene, on);
-    entelechy.onpreparing = null;
     return new EntelechyPlayer(entelechy, canvas, shown);
   }
 
@@ -296,10 +272,6 @@ class EntelechyPlayer {
     if (framed === 0) {
       await this.show();
       await this.play();
-    } else if (framed === 1 && this.x.entelechy_play_preparing(this.session) > 0) {
-      const { width, height } = this.canvas;
-      this.shown.style.display = "none";
-      paint(this.context, this.entelechy.loading(width, height, scale), width, height);
     } else if (framed < 0) {
       // The title holds what the page has room for; the console the whole.
       const error = this.entelechy.text(this.x.entelechy_error(this.session));
@@ -317,7 +289,16 @@ class EntelechyPlayer {
     const { width, height } = this.canvas;
     const pointer = await this.pixels(this.session, width, height);
     if (!pointer) return;
-    paint(this.context, new Uint32Array(this.x.memory.buffer, pointer, width * height), width, height);
+    const words = new Uint32Array(this.x.memory.buffer, pointer, width * height);
+    const image = this.context.createImageData(width, height);
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i];
+      image.data[i * 4] = (word >> 16) & 255;
+      image.data[i * 4 + 1] = (word >> 8) & 255;
+      image.data[i * 4 + 2] = word & 255;
+      image.data[i * 4 + 3] = 255;
+    }
+    this.context.putImageData(image, 0, 0);
   }
 
   /// The frame's sound, to the card once it is open.
@@ -469,7 +450,15 @@ class EntelechyWorkerPlayer {
     } else if (data.presented !== undefined) {
       this.shown.style.display = data.presented ? "block" : "none";
     } else if (data.pixels) {
-      paint(this.context, data.pixels, data.width, data.height);
+      const image = this.context.createImageData(data.width, data.height);
+      for (let i = 0; i < data.pixels.length; i++) {
+        const word = data.pixels[i];
+        image.data[i * 4] = (word >> 16) & 255;
+        image.data[i * 4 + 1] = (word >> 8) & 255;
+        image.data[i * 4 + 2] = word & 255;
+        image.data[i * 4 + 3] = 255;
+      }
+      this.context.putImageData(image, 0, 0);
     } else if (data.failed !== undefined) {
       // The title holds what the page has room for; the console the whole.
       document.title = `Entelechy: ${data.failed}`;

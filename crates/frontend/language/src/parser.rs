@@ -1267,9 +1267,12 @@ impl Parser {
         let mut files = None;
         let mut outline = None;
         let mut clipboard = None;
+        let mut progress = None;
         if !wired && self.eat_punct("=") {
             if self.is_keyword("clipboard") {
                 clipboard = Some(self.next().1);
+            } else if self.is_keyword("progress") {
+                progress = Some(self.next().1);
             } else {
                 let as_text = self.is_keyword("text");
                 let as_frames = self.is_keyword("frames");
@@ -1285,7 +1288,7 @@ impl Parser {
                     return Err(ParseError {
                         span,
                         message: format!(
-                            "an input's value is a quoted path, `text` and a quoted string, `frames`, a quoted directory and `at` a rate, `bytes` and a quoted path, `checks` or `outline` and a quoted path, `files` and a quoted directory, or `clipboard`, found {}",
+                            "an input's value is a quoted path, `text` and a quoted string, `frames`, a quoted directory and `at` a rate, `bytes` and a quoted path, `checks` or `outline` and a quoted path, `files` and a quoted directory, `clipboard`, or `progress`, found {}",
                             token.describe()
                         ),
                     });
@@ -1343,6 +1346,7 @@ impl Parser {
             files,
             outline,
             clipboard,
+            progress,
             otherwise,
             binding_range,
         })

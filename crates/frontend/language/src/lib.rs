@@ -687,6 +687,9 @@ pub struct PortDecl {
     pub outline: Option<Spanned<String>>,
     /// Document inputs only: the system clipboard's text, `= clipboard`.
     pub clipboard: Option<Span>,
+    /// Document inputs only: Kernels preparing and the scene they are
+    /// for, as words, `= progress`.
+    pub progress: Option<Span>,
     /// What a file input reads while its file is unreadable:
     /// `... else fresh.result`.
     pub otherwise: Option<SourceRef>,

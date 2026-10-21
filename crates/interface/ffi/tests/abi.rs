@@ -614,19 +614,6 @@ expect 1 1 = 0.5 0.5 0.25 0.02
         frame[..400 * 9].contains(&0x00E0_E0E0),
         "the line's ink in the top rows"
     );
-    // The scene's Kernels, prepared, drawn as a loading window shows them:
-    // dark sky, and a star lit about the middle.
-    let loading = unsafe { entelechy_ffi::entelechy_play_loading(session, 400, 300, 1.0, 0.5) };
-    assert!(!loading.is_null());
-    let window = unsafe { std::slice::from_raw_parts(loading, 400 * 300) };
-    let red = |pixel: u32| (pixel >> 16) & 255;
-    assert!(red(window[0]) < 40, "dark at the corner");
-    assert!(
-        window[100 * 400..180 * 400]
-            .iter()
-            .any(|&pixel| red(pixel) > 200),
-        "a star in the middle"
-    );
     // Escape is the scene's: nothing to stop.
     assert_eq!(
         unsafe { entelechy_ffi::entelechy_play_key(session, c("Escape").as_ptr(), 1) },
