@@ -211,7 +211,9 @@ presets cut a box larger than a tile across a pool of invocations, for
 scenes of large triangles; the surface is the same to the bit where
 every Kernel rounds alike, as on the interpreter and the JIT. A
 triangle with two corners at one point is skipped by that test alone.
-Each triangle's box is found once, and every step reads it.
+A one-pass preset's triangle finds its own box as it covers it, and
+nothing else reads that box; a tiled preset finds each box once, and
+every step reads it.
 
 **Why.** As Kernels, rasterization is typed, traced, hot-reloaded, the
 same on every backend, and changeable by an author. A native operation
@@ -219,8 +221,14 @@ is a package's Rust fast path, written where its Kernels are not fast
 enough: each one is a preset of the package, its ports the preset's, so
 every native has a Kernel definition it is held to. The native path is
 an acceleration of the package, not a second definition: on the
-interpreter and the JIT it is exact to the rule, on a GPU it is the
-device's rasterizer, approximate at edges. The Graph does not know that
+interpreter and the JIT it is exact to the rule. On a GPU a compute pass
+drops what the rule draws nothing of, draws a triangle a few pixels
+across by the rule itself, a 64-bit atomic a pixel where the device has
+them, and hands the rest, in row order, to the device's rasterizer,
+approximate at edges; each pixel then takes the nearer of the two and is
+given the rule's depth and attributes at its centre. A tile-binning
+rasterizer spends as much on a triangle of one pixel as on one of many,
+and most of a dense mesh is small triangles. The Graph does not know that
 a placed graph and a native operation are one computation, so the scene
 chooses. A device may compute one expression to different last bits in
 two Kernels, as its compiler fuses a multiply into an add where it
@@ -233,7 +241,10 @@ Kernels as another device might.
 [`ten_million.esn`](../examples/mesh/tests/ten_million.esn) is the scale
 scene. On the interpreter and the JIT the fast path is
 `entelechy_rules::raster`, held bit for bit to the rule by a test that writes
-the rule plainly. `examples/mesh/tests/edges.replay` pins the package's
+the rule plainly. On a GPU, [`parity.rs`](../crates/backends/gpu/tests/parity.rs)
+holds the surface to the rule inside drawn triangles, with small ones
+drawn by the rule or all by the device's rasterizer, and the indexed and
+pulled draws to each other to the bit. `examples/mesh/tests/edges.replay` pins the package's
 surface at edge pixels on all three backends and `native.replay` the fast
 path's inside them; `degenerate.replay` holds that a triangle with two
 corners at one point draws nothing and the tiled presets draw what the

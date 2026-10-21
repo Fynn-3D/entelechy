@@ -147,8 +147,9 @@ its interface is held to.
   a device and a mesh of small ones pays for. It
   is the rasterizer every example places; `native.rasterize@1` in its
   place is the fast path (`@2` the cutout presets', `@3` the canvas
-  preset's), bit for bit the same on the interpreter and the JIT and the
-  device's approximate rasterizer on a GPU
+  preset's), bit for bit the same on the interpreter and the JIT, and on a
+  GPU the rule for small triangles and the device's rasterizer,
+  approximate at edges, for the rest
   ([why](../docs/DECISIONS.md)).
 - **voxel** — worlds of voxels drawn by walking rays through them, as
   functions: a ray walked voxel by voxel through a volume to the first

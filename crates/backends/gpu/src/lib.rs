@@ -104,6 +104,10 @@ pub struct GpuBackend {
     /// Whether it takes 64-bit min and max atomically, as a scatter of `Long`s
     /// under `min` or `max` needs.
     int64_atomics: bool,
+    /// Whether a fragment knows its primitive's index: the rasterizer then
+    /// draws its triangles indexed, each vertex shaded once for all of
+    /// them; without it, a vertex is pulled a triangle at a time.
+    primitive_index: bool,
     /// Failure words and their readback buffers, for reuse: a checked node
     /// takes a pair each run.
     failures: Arc<Mutex<Vec<(wgpu::Buffer, wgpu::Buffer)>>>,
@@ -231,6 +235,10 @@ impl GpuBackend {
         if int64_atomics {
             features |= wgpu::Features::SHADER_INT64_ATOMIC_MIN_MAX;
         }
+        let primitive_index = adapter.features().contains(wgpu::Features::PRIMITIVE_INDEX);
+        if primitive_index {
+            features |= wgpu::Features::PRIMITIVE_INDEX;
+        }
         let (device, queue) = wait
             .block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("entelechy"),
@@ -287,6 +295,7 @@ impl GpuBackend {
             timestamps,
             int64,
             int64_atomics,
+            primitive_index,
             uploaded: std::sync::atomic::AtomicU64::new(0),
             failures: Arc::new(Mutex::new(Vec::new())),
             last_nanos: std::sync::atomic::AtomicU64::new(u64::MAX),
@@ -302,6 +311,15 @@ impl GpuBackend {
     pub fn with_long_pairs(mut self) -> Self {
         self.int64 = false;
         self.int64_atomics = false;
+        self
+    }
+
+    /// This backend drawing triangles a vertex pulled at a time, as on a
+    /// device whose fragments do not know their primitive: what a test runs
+    /// that path by on a device that has it.
+    pub fn with_pulled_vertices(mut self) -> Self {
+        self.primitive_index = false;
+        self.raster = OnceLock::new();
         self
     }
 

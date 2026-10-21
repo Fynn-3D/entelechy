@@ -455,6 +455,134 @@ fn the_rasterizer_matches_the_reference_on_interior_pixels() {
     assert_eq!(runtime.host().data(drawn).unwrap().storage(), &device[..]);
 }
 
+/// Many triangles over many blocks of the sorting pass, some a rule must
+/// skip (a corner behind the eye, one not finite, no area) and many too
+/// small to hold a pixel centre: on interior pixels the device draws what
+/// the reference draws, small triangles drawn by the sorting pass or all by
+/// the device's rasterizer, and indexed or pulled, it draws the same words.
+#[test]
+fn a_soup_of_triangles_rasterizes_as_the_reference_does_either_way() {
+    use entelechy_rules::raster::{SURFACE_WORDS, rasterize_words, triangle_schema, vertex_schema};
+    let Some(indexed) = gpu() else { return };
+    let Some(pulled) = gpu() else { return };
+    let pulled = pulled.with_pulled_vertices();
+    let Some(device_only) = gpu() else { return };
+    // Without 64-bit atomics the device's rasterizer draws every triangle.
+    let device_only = device_only.with_long_pairs();
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let mut unit = move || (next() % 1_000_000) as f32 / 1_000_000.0;
+    let (width, height) = (96u32, 64u32);
+    let count = 3000u32;
+    let mut vertices = Vec::new();
+    for t in 0..count {
+        // Each triangle at its own depth after the divide, so the nearest
+        // one is never a matter of rounding.
+        let depth = 0.05 + 0.9 * t as f32 / count as f32;
+        let small = t % 40 != 0;
+        let (cx, cy) = (unit() * 2.4 - 1.2, unit() * 2.4 - 1.2);
+        let reach = if small { 0.004 } else { 1.0 };
+        for k in 0..3 {
+            let w = 0.5 + unit() * 2.0;
+            let (x, y) = (cx + (unit() - 0.5) * reach, cy + (unit() - 0.5) * reach);
+            let mut clip = [x * w, y * w, depth * w, w];
+            match (t % 97, k) {
+                (5, 1) => clip[3] = -0.5,
+                (6, 2) => clip[0] = f32::NAN,
+                (7, 1) => clip = [0.0; 4],
+                _ => {}
+            }
+            vertices.extend(clip.iter().map(|v| v.to_bits()));
+            vertices.extend([unit(), unit(), unit(), unit(), unit()].map(f32::to_bits));
+        }
+    }
+    let mut triangles: Vec<u32> = (0..count * 3).collect();
+    // Out of range both ways: clamped.
+    triangles[30] = (-4i32) as u32;
+    triangles[61] = count * 3 + 9;
+    let reference = rasterize_words(&vertices, &triangles, width, height);
+    let draw = |gpu: GpuBackend| -> Vec<u32> {
+        let mut runtime = entelechy_kernel::Runtime::with_backend(1 << 26, Box::new(gpu));
+        let host = runtime.host_mut();
+        let vertex_rows = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    vertex_schema(),
+                    Domain::Rows(count * 3),
+                    vertices.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let triangle_rows = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    triangle_schema(),
+                    Domain::Rows(count),
+                    triangles.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let raster = runtime
+            .kernel(&"native.rasterize@1".parse().unwrap())
+            .unwrap();
+        let invocation = entelechy_abi::Invocation {
+            inputs: vec![vertex_rows, triangle_rows],
+            params: vec![],
+            domain: Domain::Grid(width, height),
+            context: entelechy_abi::Context::default(),
+        };
+        let surface = runtime.execute(&raster, &invocation).unwrap()[0];
+        runtime.materialize(surface).unwrap();
+        runtime.host().data(surface).unwrap().storage().to_vec()
+    };
+    let device = draw(indexed);
+    assert_eq!(
+        draw(pulled),
+        device,
+        "indexed and pulled draw the same words"
+    );
+    let all_by_device = draw(device_only);
+    let id_at =
+        |words: &[u32], x: u32, y: u32| words[(y * width + x) as usize * SURFACE_WORDS + 6] as i32;
+    let mut compared = 0;
+    for y in 1..height - 1 {
+        for x in 1..width - 1 {
+            let id = id_at(&reference, x, y);
+            // Inside a drawn triangle: a sliver the reference's centres
+            // miss may still be drawn by the device's own coverage rule.
+            let interior = id >= 0
+                && (0..3)
+                    .all(|dy| (0..3).all(|dx| id_at(&reference, x + dx - 1, y + dy - 1) == id));
+            if !interior {
+                continue;
+            }
+            compared += 1;
+            let base = (y * width + x) as usize * SURFACE_WORDS;
+            for device in [&device, &all_by_device] {
+                assert_eq!(id_at(device, x, y), id, "id at ({x}, {y})");
+                for k in 0..6 {
+                    let (r, d) = (
+                        f32::from_bits(reference[base + k]),
+                        f32::from_bits(device[base + k]),
+                    );
+                    assert!(
+                        (r - d).abs() <= 1e-4 * r.abs().max(1.0),
+                        "word {k} at ({x}, {y}): cpu {r}, gpu {d}"
+                    );
+                }
+            }
+        }
+    }
+    assert!(compared > 500, "{compared} compared");
+}
+
 #[test]
 fn reductions_match_between_backends() {
     let Some(gpu) = gpu() else { return };
