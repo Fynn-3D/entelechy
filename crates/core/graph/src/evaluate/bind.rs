@@ -30,34 +30,31 @@ pub fn borrowed_domain(
     if own(&first.name).is_some() {
         return None;
     }
-    if made_from_itself(graph, node, &first.name) {
-        return None;
-    }
     // A memory keeps its own size, whatever the domain.
     let memory = |port: &str| manifest.memories.iter().any(|m| m == port);
-    manifest
+    let carried = manifest
         .inputs
         .iter()
         .skip(1)
         .filter(|input| !memory(&input.name))
         .find_map(|input| {
             own(&input.name).map(|output| (input.name.clone(), output, first.name.clone()))
-        })
+        })?;
+    (!made_from_itself(graph, node, &first.name)).then_some(carried)
 }
 
 /// Whether `node`'s input `port` is made, through the nodes upstream of
 /// it, from what `node` carried out of the last evaluation.
 fn made_from_itself(graph: &Graph, node: &Node, port: &str) -> bool {
-    let mut seen: Vec<&NodeId> = Vec::new();
+    let mut seen: std::collections::HashSet<&NodeId> = std::collections::HashSet::new();
     let mut open: Vec<&NodeId> = match node.inputs.get(port) {
         Some(Binding::Now(Source::Node { node: from, .. })) => vec![from],
         _ => return false,
     };
     while let Some(id) = open.pop() {
-        if seen.contains(&id) {
+        if !seen.insert(id) {
             continue;
         }
-        seen.push(id);
         let Some(upstream) = graph.node(id) else {
             continue;
         };
