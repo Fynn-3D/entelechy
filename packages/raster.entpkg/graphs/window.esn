@@ -6,7 +6,7 @@
 //!       triangles <- faces.result;
 //!   }
 //! and read `raster.surface`.
-use "../kernels/raster.ent";
+use "../kernels/";
 
 input vertices: Rows<Corner>;
 input triangles: Rows<Face>;

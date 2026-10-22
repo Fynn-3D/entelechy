@@ -307,7 +307,7 @@ fn shape(path: &usvg::Path, opacity: f32, drawing: &mut Drawing) {
                 made.paint = 2;
                 made.gradient = [g.cx(), g.cy(), g.r().get(), 0.0];
                 if (g.fx(), g.fy()) != (g.cx(), g.cy()) || g.fr().get() > 0.0 {
-                    drawing.note("a radial gradient's focal point is taken at its centre");
+                    drawing.note("a radial gradient's focal point is taken at its center");
                 }
                 gradient(&mut made, g, transform, drawing);
             }
@@ -349,7 +349,7 @@ fn gradient(
     if let Some(back) = to_document.invert() {
         shape.inverse = [back.sx, back.ky, back.kx, back.sy, back.tx, back.ty];
     }
-    // A gradient of no stops paints nothing; of one, its colour.
+    // A gradient of no stops paints nothing; of one, its color.
     if shape.stops.1 == 0 {
         shape.color[3] = 0.0;
     }
@@ -449,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn a_rectangle_is_four_segments_in_its_colour() {
+    fn a_rectangle_is_four_segments_in_its_color() {
         let (f, i) = fields(
             r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50"><rect x="10" y="20" width="30" height="10" fill="#ff8000"/></svg>"##,
         );

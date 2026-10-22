@@ -1,8 +1,6 @@
-//! The raster package: triangles turned into the surface a camera sees,
-//! as Kernels. It is the rasterizer's law written where every backend runs
-//! it alike — the same pixel centres, the same edges, the same nearest
-//! fragment — so a surface is the same on the interpreter, the JIT and
-//! the GPU, and anything about it can be changed without Rust.
+//! Triangles turned into the surface a camera sees, drawn alike on every
+//! backend: plain, tiled and through a cutout mask. `native.rasterize` is
+//! its fast path.
 package raster@1 { language = 1; ir = 1; }
 
 use "kernels/";

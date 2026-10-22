@@ -3342,7 +3342,7 @@ fn save_and_export_write_only_where_the_session_may() {
         "{refused}"
     );
     assert!(!out.exists() && !field.exists(), "nothing was written");
-    // Named, the file is written; its neighbour is not.
+    // Named, the file is written; its neighbor is not.
     session.allow_write_to(&out).unwrap();
     session.export(report.output, &out).unwrap();
     assert!(out.exists());

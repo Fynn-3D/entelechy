@@ -62,7 +62,7 @@ kernel level.draw@1 {
         let w = width(data);
         let h = height(data);
         let map = vec2(float(w), float(h));
-        // The map, centred and scaled to fit, a tile a square.
+        // The map, centered and scaled to fit, a tile a square.
         let side = min(res.x / map.x, res.y / map.y) * zoom;
         let origin = (res - map * side) * 0.5;
         let cell = (coord() + 0.5 - origin) / side;

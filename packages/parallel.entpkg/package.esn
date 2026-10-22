@@ -1,0 +1,6 @@
+//! The data-parallel algorithms other packages build on: a stable sort of
+//! integer keys, the compaction of flagged rows, and runs of entries laid
+//! out by owner.
+package parallel@1 { language = 1; ir = 1; }
+
+use "kernels/";

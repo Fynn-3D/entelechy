@@ -1,7 +1,7 @@
 # Vector
 
 A drawing read from SVG and drawn by the
-[vector package](../../packages/vector.entpkg/kernels/vector.ent), sharp
+[vector package](../../packages/vector.entpkg/kernels/fill.ent), sharp
 at any size. `entelechy import` turns `source/garden.svg` into the four Fields
 in `assets/`:
 
@@ -25,7 +25,7 @@ The drawing uses the SVG this reads:
   own box and a stroke;
 - leaves in a group drawn half clear.
 
-The replay pins, on all three backends, the colour the SVG's rules give
+The replay pins, on all three backends, the color the SVG's rules give
 at eight points (worked out by hand, not read back), the wheel's zoom
 about the pointer and a drag. `tiled.replay` holds the tiled drawing to
 the plain `vector.draw` word for word through four looks, as it

@@ -1,9 +1,9 @@
 // The synth package's clock kept to the time (`synth.paced`), alone: the
 // samples played before each frame's block, counted from the clock.
-use "../../../packages/synth.entpkg";
+use "../../../packages/audio.entpkg";
 
-node paced0: synth.paced_start@1 { domain = 1; }
-node paced: synth.paced@1 { previous <~ paced.result from paced0.result; domain = 1; }
-node clock: synth.paced_clock@1 { paced <- paced.result; domain = 1; }
+node paced0: audio.paced_start@1 { domain = 1; }
+node paced: audio.paced@1 { previous <~ paced.result from paced0.result; domain = 1; }
+node clock: audio.paced_clock@1 { paced <- paced.result; domain = 1; }
 
 output result <- clock.result;

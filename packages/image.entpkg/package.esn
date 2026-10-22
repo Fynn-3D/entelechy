@@ -1,25 +1,6 @@
-//! The image package: what Entelechy does to pictures, as `Image`s (rgb and
-//! alpha, linear light unless a Kernel says otherwise).
-//! - Colour: luminance, sRGB's transfer, HSV and Oklab, the glow of heat
-//!   and the wheel's hues, as functions; `image.encode` and
-//!   `image.decode` for a window or a file.
-//! - Blending: the usual modes, as a function and as a Kernel compositing
-//!   one picture over another.
-//! - Filters: Gaussian blur, a box shrink, any convolution, unsharp
-//!   sharpening, Sobel edges, dilation and erosion, bicubic resizing.
-//! - Tone: exposure, contrast, saturation and hue; levels; curves; 3D
-//!   LUTs, and the neutral LUT a grade is baked into; ACES.
-//! - Histograms: counting, the cumulative count, and equalization.
-//! - Distance: the distance from every pixel to a shape, signed, by jump
-//!   flooding.
-//! - Sampling: wrapped addressing for a tile, and mip levels for a
-//!   surface running away from the eye.
-//! - Looks, as graphs a scene places last: `display.esn` (tone and
-//!   gamma), `finish.esn` (a camera's: glow, depth of field, ACES,
-//!   fringing, vignette, grain), `nes.esn` (pixels and four colours).
-//! `graphs/` also places the operations that take several Kernels:
-//! `blur.esn`, `sharpen.esn`, `equalize.esn`, `flood.esn`,
-//! `distance.esn`, `bloom.esn` and `mip.esn`.
+//! What Entelechy does to pictures: color spaces, blending, filters, tone
+//! and its curves, histograms, distance fields, mipmaps, pixel art,
+//! sprite sheets and a camera's finish.
 package image@1 { language = 1; ir = 1; }
 
 use "kernels/";

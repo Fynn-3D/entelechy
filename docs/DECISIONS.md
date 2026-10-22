@@ -196,13 +196,13 @@ dropping or tightening anything a source could write is refused until
 
 ## The rasterizer is a package; the native one is its fast path
 
-A scene places `packages/raster.entpkg` to turn triangles into a
+A scene places `packages/render.entpkg` to turn triangles into a
 surface (`raster.esn` or `window.esn`; `cutout.esn` or
 `cutout_window.esn` where a mask's alpha cuts fragments away;
 `canvas.esn` over an empty canvas another node sized) and binds the
 preset's fast path in its place, one node for another, where it wants
 speed: `native.rasterize@1` for `raster.esn` and `window.esn`, `@2` for
-the cutout presets, `@3` for `canvas.esn`. Both keep one rule: a pixel is covered where its centre is inside the
+the cutout presets, `@3` for `canvas.esn`. Both keep one rule: a pixel is covered where its center is inside the
 triangle's box and on or inside all three edges, holds the nearest
 fragment in `[0, 1)`, the earlier triangle on a tie, with
 attributes interpolated by `1 / w`; with a cutout, a fragment whose alpha
@@ -226,7 +226,7 @@ drops what the rule draws nothing of, draws a triangle a few pixels
 across by the rule itself, a 64-bit atomic a pixel where the device has
 them, and hands the rest, in row order, to the device's rasterizer,
 approximate at edges; each pixel then takes the nearer of the two and is
-given the rule's depth and attributes at its centre. A tile-binning
+given the rule's depth and attributes at its center. A tile-binning
 rasterizer spends as much on a triangle of one pixel as on one of many,
 and most of a dense mesh is small triangles. The Graph does not know that
 a placed graph and a native operation are one computation, so the scene
@@ -266,7 +266,7 @@ sinks into itself does not depend on how many manifolds share a body.
 
 **Why.** Solving contacts one after another, as a sequential solver
 does, needs an order that a pass over every manifold does not have;
-colouring them into independent sets costs a pass a colour, each a
+coloring them into independent sets costs a pass a color, each a
 dispatch. Solved at once with split masses, a pass converges where the
 one-by-one order would, its answer is independent of order (a float
 sum of pushes is folded in source order), and the same on every
@@ -275,7 +275,7 @@ once needs more passes, which is why a step takes eight substeps, and
 carrying the impulses from step to step is what lets a resting stack
 stand still.
 
-**Where.** [`physics.ent`](../packages/physics.entpkg/kernels/physics.ent)
+**Where.** [`physics.ent`](../packages/physics.entpkg/kernels/solve.ent)
 and its [step](../packages/physics.entpkg/graphs/step.esn);
 [`rest.replay`](../examples/physics/tests/rest.replay) holds a column
 of boxes still for seconds, [`motion.replay`](../examples/physics/tests/motion.replay)
@@ -743,7 +743,7 @@ that fails on legitimate code is rewritten, never widened with
 exceptions.
 
 **Why.** A rule with two owners drifts until they disagree, and tests
-hold behaviour, not ownership. A guard per broken rule is few and
+hold behavior, not ownership. A guard per broken rule is few and
 precise, each proven by the bug it catches; a guard per rule is fragile
 patterns readers learn to silence.
 
@@ -1003,7 +1003,7 @@ every demo in seconds, and a new one joins by being written.
 ## A name is one package; its name qualifies the names it declares
 
 A package is found by its name, and the name is a fact the manifest
-declares and its directory carries: `voxel@1` is `voxel.entpkg`. A
+declares and its directory carries: `voxel@1` is `render.voxel_entpkg`. A
 scene reaches one package of a name; two, as two editions of one, are
 refused, naming both. A package names the packages it uses by name and
 finds them beside itself. A document's functions, structs and types are
@@ -1297,7 +1297,7 @@ an agent above all, who finds writing hard meets it with what the
 language already has: a function, a package, or an example that shows
 the way. A proposal to grow the language is put to the owner, answering:
 
-1. It lowers to the IR there is: no instruction, backend behaviour,
+1. It lowers to the IR there is: no instruction, backend behavior,
    budget rule or runtime concept is new.
 2. How often sources in and beside the repository write what it stands
    for, counted, not felt while writing one demo.
@@ -1669,7 +1669,7 @@ the same world twice.
 `store_for` and `allow_on` ([replay](../crates/interface/session/src/replay.rs));
 `written_sources` and `written_after`
 ([session](../crates/interface/session/src/session.rs)); the
-[genesis package](../packages/genesis.entpkg/package.esn), which fills a
+[composer package](../packages/genesis.entpkg/package.esn), which fills a
 law's template with numbers. Held by [the genesis
 tests](../crates/interface/session/tests/genesis.rs) and
 [the genesis example](../examples/genesis/README.md), whose replay

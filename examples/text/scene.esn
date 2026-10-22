@@ -4,7 +4,7 @@
 // atlas, a file the Host watches.
 use "../../packages/text.entpkg";
 
-input font: Grid<Float> = "../../packages/text.entpkg/font.png";
+input font: Grid<Float> = "../../packages/text.entpkg/assets/font.png";
 // A string is an input of the document: the characters' codes as rows.
 input title: Rows<Int> = text "ENTELECHY";
 

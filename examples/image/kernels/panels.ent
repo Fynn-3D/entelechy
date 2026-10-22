@@ -1,5 +1,5 @@
 // Five pictures laid out as a grid of panels, three across and two
-// down; each is scaled whole into its panel, centred, nearest texel.
+// down; each is scaled whole into its panel, centered, nearest texel.
 
 /// The panel a picture of extent `s` takes in a cell of extent `cell`:
 /// where its top left sits and how many pixels one of its texels spans.

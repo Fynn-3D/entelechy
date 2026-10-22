@@ -1,0 +1,15 @@
+// A wave once round a cube of 8 along x, through the signal package's
+// transform and back: its energy in the first wave number and its
+// mirror, and the wave again.
+use "../../../packages/signal.entpkg";
+
+node wave: kernel {
+    requires { field.write; }
+    output result: Rows<Vec2>;
+    domain = 512;
+    compute { return vec2(cos(6.2831853 * float(element() % 8) / 8.0), 0.0); }
+}
+node spectrum: graph "../../../packages/signal.entpkg/graphs/fourier_forward.esn" { data <- wave.result; bits = 3; }
+node again: graph "../../../packages/signal.entpkg/graphs/fourier_inverse.esn" { data <- spectrum.result; bits = 3; }
+
+output result <- again.result;

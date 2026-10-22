@@ -9,7 +9,7 @@ param levels: Int = 7;
 param mip: Bool = true;
 
 node texture: ground.texture@1 { side = side; domain = vec2(side, side); }
-node strip: graph "../../packages/image.entpkg/graphs/mip.esn" { source <- texture.result; side = side; levels = levels; }
+node strip: graph "../../packages/image.entpkg/graphs/mipmap.esn" { source <- texture.result; side = side; levels = levels; }
 
 node quad: ground.quad@1 { domain = 4; }
 node faces: ground.faces@1 { domain = 2; }

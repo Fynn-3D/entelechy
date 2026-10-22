@@ -37,7 +37,7 @@ node faces: kernel {
 }
 node mask: Image { domain = vec2(8, 8); value = vec4(1.0, 1.0, 1.0, 1.0); }
 
-node whole: graph "../../../packages/raster.entpkg/graphs/raster.esn" {
+node whole: graph "../../../packages/raster.entpkg/graphs/surface.esn" {
     vertices <- corners.result; triangles <- faces.result; width = 320; height = 240;
 }
 node tiled: graph "../../../packages/raster.entpkg/graphs/tiled.esn" {

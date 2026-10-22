@@ -1,0 +1,76 @@
+// Asking the world: what a ray meets.
+use "parallel.entpkg";
+use "body.ent";
+
+// Where a ray along `d` from `o` first enters a circle, as a fraction of
+// `d`; past one for none, and none from inside.
+fn ray_circle(o: Vec2, d: Vec2, c: Vec2, r: Float) -> Float {
+    let m = o - c;
+    let a = dot(d, d);
+    let b = dot(m, d);
+    let k = dot(m, m) - r * r;
+    let disc = b * b - a * k;
+    if k <= 0.0 || disc < 0.0 || a == 0.0 { return 2.0; }
+    let t = (-b - sqrt(disc)) / a;
+    return if t >= 0.0 { t } else { 2.0 };
+}
+
+// Where a ray first enters a box of half extents `h` at the origin, and
+// the face's normal: past one for none, and none from inside.
+fn ray_box(o: Vec2, d: Vec2, h: Vec2) -> Vec3 {
+    let tx1 = if d.x != 0.0 { (-h.x - o.x) / d.x } else { if abs(o.x) <= h.x { -1000000000.0 } else { 1000000000.0 } };
+    let tx2 = if d.x != 0.0 { (h.x - o.x) / d.x } else { if abs(o.x) <= h.x { 1000000000.0 } else { -1000000000.0 } };
+    let ty1 = if d.y != 0.0 { (-h.y - o.y) / d.y } else { if abs(o.y) <= h.y { -1000000000.0 } else { 1000000000.0 } };
+    let ty2 = if d.y != 0.0 { (h.y - o.y) / d.y } else { if abs(o.y) <= h.y { 1000000000.0 } else { -1000000000.0 } };
+    let inx = min(tx1, tx2);
+    let iny = min(ty1, ty2);
+    let enter = max(inx, iny);
+    let leave = min(max(tx1, tx2), max(ty1, ty2));
+    if enter > leave || enter < 0.0 { return vec3(2.0, 0.0, 0.0); }
+    return if inx > iny { vec3(enter, if d.x > 0.0 { -1.0 } else { 1.0 }, 0.0) } else { vec3(enter, 0.0, if d.y > 0.0 { -1.0 } else { 1.0 }) };
+}
+
+/// The nearest body each ray meets: sensors are passed through.
+kernel physics.ray@1 {
+    requires { field.read; field.write; }
+    input rays: Rows<Ray>;
+    input bodies: Rows<Body>;
+    output result: Rows<Hit>;
+    compute {
+        let ray = sample(rays);
+        let d = ray.direction * ray.length;
+        let n = count(bodies);
+        let none = Hit { body: -1, fraction: 1.0, point: ray.origin + d, normal: vec2(0.0, 0.0) };
+        return loop rounds(n) with best = none {
+            let r = index();
+            loop round_of(n, r) with near = best {
+                let i = r * 65536 + index();
+                let b = at(bodies, i);
+                if b.sensor != 0 || (b.layer & ray.mask) == 0 { near } else {
+                    let o = unturn(ray.origin - b.position, b.angle);
+                    let dl = unturn(d, b.angle);
+                    let found = if b.shape == BodyShape.Circle {
+                        let t = ray_circle(o, dl, vec2(0.0, 0.0), b.size.x);
+                        vec3(t, normalize(o + dl * t))
+                    } else { ray_box(o, dl, b.size) };
+                    if found.x > 1.0 || found.x >= near.fraction { near } else {
+                        Hit { body: i, fraction: found.x, point: ray.origin + d * found.x, normal: turn(found.yz, b.angle) }
+                    }
+                }
+            }
+        };
+    }
+}
+
+/// No manifolds: what a world's `held` starts from.
+kernel physics.no_contacts@1 {
+    requires { field.read; field.write; }
+    output result: Rows<Manifold>;
+    compute {
+        let none = Contact { anchor_a: vec2(0.0, 0.0), anchor_b: vec2(0.0, 0.0), base: 0.0, approach: 0.0, normal: 0.0, tangent: 0.0 };
+        return Manifold {
+            a: -1, b: -1, count: 0, sensor: 0, normal: vec2(0.0, 1.0), p1: none, p2: none,
+            friction: 0.0, restitution: 0.0, push_a: vec3(0.0, 0.0, 0.0), push_b: vec3(0.0, 0.0, 0.0),
+        };
+    }
+}

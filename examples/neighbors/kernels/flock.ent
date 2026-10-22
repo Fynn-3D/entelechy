@@ -1,0 +1,257 @@
+// Bodies that push each other apart, and the grid that makes it
+// affordable.
+//
+// Every body is repelled by every other body within `radius`. Asking
+// that of every pair is the whole row per body; asking it of a grid is
+// the nine cells around it. The grid is rebuilt every frame out of
+// three things the language already has: a scatter with `sum` counts
+// what is in each cell, `prefix with sum` turns those counts into where
+// each cell's run begins, and the math package's permutation puts the
+// bodies of a cell side by side in it.
+//
+// `--param grid=false` asks every pair instead. The picture is the same
+// to rounding — the same forces summed in a different order — and the
+// frame is not.
+struct Body { at: Vec2; go: Vec2; }
+type Bodies = Rows<Body>;
+
+// What the neighbors came to: where they push, where they are, where
+// they are going, and how many of them there were.
+struct Push { push: Vec2; toward: Vec2; flow: Vec2; seen: Int; }
+
+fn mix32(x: Int) -> Int {
+    let a = mul_wrap(x ^ (x >>> 16), 0x7FEB352D);
+    let b = mul_wrap(a ^ (a >>> 15), 0x846CA68B);
+    return b ^ (b >>> 16);
+}
+
+// A hash as a float in 0..1.
+fn unit(x: Int) -> Float {
+    return float(mix32(x) & 0xFFFFFF) / 16777216.0;
+}
+
+fn wrap01(v: Vec2) -> Vec2 {
+    return v - floor(v);
+}
+
+// The shortest way from one point to another on a world that wraps:
+// never more than half a turn.
+fn wrap_diff(v: Vec2) -> Vec2 {
+    return v - round(v);
+}
+
+// The cell a point is in, row-major over a `cols` by `cols` grid.
+fn cell_of(p: Vec2, cols: Int) -> Int {
+    let c = clamp(int(wrap01(p) * float(cols)), ivec2(0, 0), ivec2(cols - 1, cols - 1));
+    return c.y * cols + c.x;
+}
+
+/// The bodies before the first frame: scattered, drifting.
+kernel flock.start@1 {
+    requires { field.write; }
+    output result: Bodies;
+    compute {
+        let i = element();
+        let turn = unit(i * 5 + 31) * 6.2831853;
+        return Body {
+            at: vec2(unit(i * 2 + 1), unit(i * 2 + 7717)),
+            go: vec2(cos(turn), sin(turn)) * 0.0015,
+        };
+    }
+}
+
+/// One cell number per body: the key the sort orders by.
+kernel flock.cell@1 {
+    requires { field.read; field.write; }
+    input bodies: Bodies;
+    param cols: Int = 64;
+    output result: Rows<Int>;
+    compute { return cell_of(sample(bodies).at, cols); }
+}
+
+/// How many bodies are in each cell.
+kernel flock.counts@1 {
+    requires { field.read; field.write; }
+    input cells: Rows<Int>;
+    input blank: Rows<Int>;
+    output result: Rows<Int>;
+    struct One { cell: Int; one: Int; }
+    scatter into blank with sum { return One { cell: sample(cells), one: 1 }; }
+}
+
+/// Where each cell's run ends in the sorted order: an inclusive sum of
+/// the counts, which is what a prefix fold is. A cell's run begins where
+/// the cell before it ended.
+kernel flock.ends@1 {
+    requires { field.read; field.write; }
+    input counts: Rows<Int>;
+    output result: Rows<Int>;
+    prefix with sum { return sample(counts); }
+}
+
+/// The step: every neighbor within `radius` pushes, the push is
+/// damped, and the body moves and wraps.
+kernel flock.step@1 {
+    requires { field.read; field.write; time.read; }
+    input bodies: Bodies;
+    input order: Rows<Int>;
+    input ends: Rows<Int>;
+    param cols: Int = 64;
+    param radius: Float = 0.015625;
+    /// Close in, bodies push apart; further out, they draw together.
+    /// `near` is where one becomes the other, in parts of the radius.
+    param near: Float = 0.38;
+    param repel: Float = 0.00035;
+    param cohere: Float = 0.012;
+    param align: Float = 0.05;
+    param drag: Float = 0.90;
+    param speed: Float = 0.0035;
+    /// A kick a frame, so the drops keep wandering into each other
+    /// instead of settling into a lattice and stopping.
+    param jitter: Float = 0.00022;
+    param dt: Float = 1.0;
+    /// How many of a cell's bodies a body will look at. A cell holding
+    /// more than this is reported by `flock.crowded@1`.
+    param cap: Int = 64;
+    /// `false` asks every pair, which is the same forces in another
+    /// order and no grid at all.
+    param grid: Bool = true;
+    output result: Bodies;
+
+    fn from(other: Body, me: Vec2, radius: Float, near: Float, acc: Push) -> Push {
+        let away = wrap_diff(me - other.at);
+        let d2 = dot(away, away);
+        if d2 >= radius * radius || d2 <= 0.0 {
+            return acc;
+        }
+        let d = sqrt(d2);
+        let close = radius * near;
+        // A unit vector faded out at `close`, so one neighbor pushes
+        // at most as hard as one neighbor pulls.
+        let pushed = if d < close { (away / d) * ((close - d) / close) } else { vec2(0.0, 0.0) };
+        return Push {
+            push: acc.push + pushed,
+            toward: acc.toward - away,
+            flow: acc.flow + other.go,
+            seen: acc.seen + 1,
+        };
+    }
+
+    // The bodies of one cell, through the permutation.
+    fn in_cell(bodies: Bodies, order: Rows<Int>, ends: Rows<Int>,
+               cell: Int, cap: Int, me: Vec2, radius: Float, near: Float, acc: Push) -> Push {
+        let to = at(ends, cell);
+        let from_slot = if cell == 0 { 0 } else { at(ends, cell - 1) };
+        let take = min(to - from_slot, cap);
+        return loop cap with a = acc until index() >= take {
+            from(at(bodies, at(order, from_slot + index())), me, radius, near, a)
+        };
+    }
+
+    compute {
+        let me = sample(bodies);
+        let empty = Push {
+            push: vec2(0.0, 0.0),
+            toward: vec2(0.0, 0.0),
+            flow: vec2(0.0, 0.0),
+            seen: 0,
+        };
+        let met = if grid {
+            let home = cell_of(me.at, cols);
+            let hx = home % cols;
+            let hy = home / cols;
+            loop 9 with acc = empty {
+                let x = (hx + index() % 3 - 1 + cols) % cols;
+                let y = (hy + index() / 3 - 1 + cols) % cols;
+                in_cell(bodies, order, ends, y * cols + x, cap, me.at, radius, near, acc)
+            }
+        } else {
+            // A loop's bound is at most 65536, which is what asking
+            // every pair is worth anyway: it is the reference, not the
+            // way to run a crowd.
+            loop 65536 with acc = empty until index() >= count(bodies) {
+                from(at(bodies, index()), me.at, radius, near, acc)
+            }
+        };
+        let n = float(max(met.seen, 1));
+        let pulled = me.go
+            + (met.push / n) * repel
+            + (met.toward / n) * cohere
+            + (met.flow / n - me.go) * align;
+        let moment = int(time() * 61.0);
+        let kick = vec2(unit(element() * 7 + moment) - 0.5,
+                        unit(element() * 13 + 977 + moment) - 0.5) * jitter;
+        let held = (pulled + kick) * drag;
+        let fast = length(held);
+        let go = if fast > speed { held * (speed / fast) } else { held };
+        return Body { at: wrap01(me.at + go * dt), go: go };
+    }
+}
+
+/// A cell holding more bodies than `cap`, which is the one thing that
+/// would make the grid answer differently from every pair.
+kernel flock.crowded@1 {
+    requires { field.read; field.write; }
+    input counts: Rows<Int>;
+    param cap: Int = 64;
+    output result: Rows<Int>;
+    compute { return int(sample(counts) > cap); }
+    merge(a, b) { return a + b; }
+}
+
+/// Every pair of neighbors in the sorted order that is out of order, or
+/// equal and swapped: a stable sort leaves none of either.
+kernel flock.unsorted@1 {
+    requires { field.read; field.write; }
+    input cells: Rows<Int>;
+    input order: Rows<Int>;
+    output result: Rows<Int>;
+    compute {
+        let i = element();
+        if i == 0 { return 0; }
+        let a = at(order, i - 1);
+        let b = at(order, i);
+        if at(cells, b) < at(cells, a) { return 1; }
+        if at(cells, b) == at(cells, a) && b < a { return 1; }
+        return 0;
+    }
+    merge(a, b) { return a + b; }
+}
+
+/// The picture: one count per cell of the canvas, tone-mapped.
+kernel flock.splat@1 {
+    requires { field.read; field.write; }
+    input bodies: Bodies;
+    input canvas: Grid<Int>;
+    output result: Grid<Int>;
+    struct Hit { cell: Vec2; one: Int; }
+    scatter into canvas with sum {
+        return Hit { cell: floor(wrap01(sample(bodies).at) * size(canvas)), one: 1 };
+    }
+}
+
+/// A scatter counts in integers, since integers add the same way in
+/// every order; reading the counts as a field wants floats.
+kernel flock.soften@1 {
+    requires { field.read; field.write; }
+    input heat: Grid<Int>;
+    output result: Grid<Float>;
+    compute { return float(sample(heat)); }
+}
+
+/// The counts read as a field rather than as the cells they are stored
+/// in, so a crowd is a shape and not a dusting of pixels.
+kernel flock.view@1 {
+    requires { field.read; field.write; }
+    input heat: Grid<Float>;
+    /// How bright one body is, so a picture of any crowd can be read.
+    param bright: Float = 0.30;
+    output result: Image;
+    compute {
+        let p = (coord() + 0.5) / domain() * size(heat);
+        let n = at_linear(heat, p);
+        let lit = 1.0 - exp(-n * bright);
+        let tint = mix(vec3(0.10, 0.13, 0.26), vec3(0.99, 0.86, 0.52), lit);
+        return vec4(tint * (0.10 + 0.90 * lit), 1.0);
+    }
+}

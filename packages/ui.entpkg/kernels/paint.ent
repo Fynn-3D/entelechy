@@ -1,13 +1,13 @@
-// What a pixel of a screen is painted: a colour and how much it covers,
-// a `Vec4` of straight colour and coverage, laid one over another. Shapes
+// What a pixel of a screen is painted: a color and how much it covers,
+// a `Vec4` of straight color and coverage, laid one over another. Shapes
 // say their cover of a pixel from their signed distance to its middle,
 // so their edges are smooth at any size; `q` is a pixel's middle.
 use "layout.ent";
 
-/// Nothing: no colour, no cover.
+/// Nothing: no color, no cover.
 fn clear() -> Vec4 { return vec4(0.0, 0.0, 0.0, 0.0); }
 
-/// A colour covering as much as `a`.
+/// A color covering as much as `a`.
 fn paint(c: Vec3, a: Float) -> Vec4 { return vec4(c, a); }
 
 /// `p` with its cover times `k`.

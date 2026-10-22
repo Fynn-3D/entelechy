@@ -1,7 +1,7 @@
-// Blending: how a colour laid over another combines with it, by the
+// Blending: how a color laid over another combines with it, by the
 // modes painting programs share (as the W3C's compositing spec defines
 // them, on values 0 to 1), and compositing one picture over another.
-use "colour.ent";
+use "color.ent";
 
 type Blend = enum { Normal, Multiply, Screen, Overlay, SoftLight, Add, Difference, Darken, Lighten };
 
@@ -33,10 +33,10 @@ fn blend(mode: Blend, base: Vec3, top: Vec3) -> Vec3 {
 type Space = enum { Encoded, Linear };
 
 /// `top` composited over `base`, as the W3C's compositing spec does it:
-/// where `top` covers (its alpha times `opacity`), its colour is
+/// where `top` covers (its alpha times `opacity`), its color is
 /// blended with `base`'s by `mode`, as much as `base` is there; then
 /// laid over `base`, the alphas joined as one sheet over another, the
-/// colour weighed by both. `space` is where the arithmetic is done: on
+/// color weighed by both. `space` is where the arithmetic is done: on
 /// sRGB's stored values (`Encoded`), as painting programs blend and
 /// the modes are defined, or on light itself (`Linear`). `top` is
 /// stretched over `base` whatever its size.

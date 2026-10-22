@@ -1,4 +1,4 @@
-// A product showcase: a gamepad modelled as a signed-distance field,
+// A product showcase: a gamepad modeled as a signed-distance field,
 // shaded with a physically based model, on a reflective floor, with a
 // minimal toolbar. One row of state (the camera, the choices, the
 // pointer's last position) and one image. Drag to orbit; the bar at the
@@ -18,7 +18,7 @@ struct Mat { albedo: Vec3; rough: Float; metal: Float; glow: Vec3; }
 type Item = enum { None = -1, Color, Finish, Turntable, Reset };
 struct Hit { t: Float; id: Float; }
 
-/// The toolbar: four items of 64 pixels with 12 between, centred at the
+/// The toolbar: four items of 64 pixels with 12 between, centered at the
 /// bottom of a 1280-wide frame.
 kernel show.begin@1 {
     requires { field.write; }
@@ -287,10 +287,10 @@ kernel show.render@1 {
 
     // ---- the toolbar: a translucent bar with four icons ----
     fn icon(item: Item, u: Vec2, scheme: Int, finish: Int, spin: Bool) -> Float {
-        // `u` is the pixel within the 64x48 item, centred on zero.
+        // `u` is the pixel within the 64x48 item, centered on zero.
         let r = length(u);
         return match item {
-            // The colour: a disc.
+            // The color: a disc.
             Item.Color => float(r < 9.0),
             // The finish: a ball lit as glossy as it is.
             Item.Finish => if r < 10.0 { 0.35 + 0.65 * pow(saturate(1.0 - length(u - -3.0) / (4.0 + float(finish) * 4.0)), 2.0) } else { 0.0 },
@@ -337,7 +337,7 @@ kernel show.render@1 {
         let e = color * exposure;
         let mapped = saturate((e * (e * 2.51 + 0.03)) / (e * (e * 2.43 + 0.59) + 0.14));
         let srgb = pow(mapped, 1.0 / 2.2);
-        // The toolbar over everything, centred at the bottom; laid out in
+        // The toolbar over everything, centered at the bottom; laid out in
         // logical pixels, the window's scale factor being the unit.
         let unit = scale();
         let q = (c + 0.5) / unit;

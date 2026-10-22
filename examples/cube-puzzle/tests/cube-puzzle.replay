@@ -9,7 +9,7 @@ frame 0.0000
 expect stickers.result[0] = 0
 expect stickers.result[53] = 5
 expect game.result[0].count = 0
-expect 129 138 = 0.055 0.357 0.11 0.06       # the front face's centre: green
+expect 129 138 = 0.055 0.357 0.11 0.06       # the front face's center: green
 expect 129 91 = 0.055 0.357 0.11 0.06        # the front face's top row: green
 expect loss.result[0].sum = 653.0 40.0        # the untrained network
 key 85 down

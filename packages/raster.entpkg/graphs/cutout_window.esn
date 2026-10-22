@@ -1,6 +1,6 @@
 //! The cutout preset at the window's size, as `window.esn` is the plain
 //! one's: the surface follows the window when it is resized.
-use "../kernels/raster.ent";
+use "../kernels/";
 
 input vertices: Rows<Corner>;
 input triangles: Rows<Face>;

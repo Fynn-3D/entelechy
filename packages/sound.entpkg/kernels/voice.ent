@@ -1,0 +1,92 @@
+// What each cast's layers are as sound: a voice for each, the sound its
+// form makes, in its element's voice, when it begins and ends on the
+// cast's clock, how big, where it is. Worked out once a frame, so the
+// block's samples only sum their voices.
+use "effects.entpkg";
+
+/// An element's voice: the pitch its tones are about (Hz); how bright
+/// its noise; how much it crackles, rings (metal, glass, bells), weighs
+/// (the low of it), grates; how it turns (a howl, a wobble), splashes and
+/// bubbles, drones low; how loud.
+struct Timbre { pitch: Float; bright: Float; crackle: Float; ring: Float; body: Float; grit: Float; swirl: Float; wet: Float; drone: Float; gain: Float; }
+type Timbres = Rows<Timbre>;
+
+// The sounds a layer makes, by its form.
+fn sound_none() -> Int { return 0; }
+fn sound_whoosh() -> Int { return 1; }   // a missile thrown, its flight
+fn sound_boom() -> Int { return 2; }     // a burst on what it strikes
+fn sound_roar() -> Int { return 3; }     // a body held: a beam, a breath, a column, a wall, a flame
+fn sound_chime() -> Int { return 4; }    // a circle written, a shell, a sign
+fn sound_sparkle() -> Int { return 5; }  // motes
+fn sound_crackle() -> Int { return 6; }  // sparks
+fn sound_crack() -> Int { return 7; }    // crystals grown, stones out of the ground
+fn sound_thunder() -> Int { return 8; }  // jagged strokes
+fn sound_swish() -> Int { return 9; }    // a blade's arc
+fn sound_rumble() -> Int { return 10; }  // a ring running over the ground
+fn sound_flash() -> Int { return 11; }   // the picture lit
+fn sound_volley() -> Int { return 12; }  // darts, each whizzing and striking
+
+/// The sound a layer makes.
+fn sound_of(l: Layer) -> Int {
+    let f = l.form;
+    let moving = l.move == move_fly() || l.move == move_arc() || l.move == move_fall();
+    if f == form_orb() { return if moving { sound_whoosh() } else if l.at == at_target() || l.at == at_target_ground() { sound_boom() } else { sound_roar() }; }
+    if f == form_beam() || f == form_cone() || f == form_pillar() || f == form_funnel() || f == form_aura() { return sound_roar(); }
+    if f == form_shell() || f == form_sigil() || f == form_glyph() { return sound_chime(); }
+    if f == form_motes() { return sound_sparkle(); }
+    if f == form_sparks() { return sound_crackle(); }
+    if f == form_shards() { return sound_crack(); }
+    if f == form_bolts() { return sound_thunder(); }
+    if f == form_slash() { return sound_swish(); }
+    if f == form_wave() { return sound_rumble(); }
+    if f == form_flash() { return sound_flash(); }
+    if f == form_darts() { return sound_volley(); }
+    return sound_none();
+}
+
+/// A layer as a voice: its sound, element, tier and seed; when its cast
+/// began and the clock now (the cast's clock), when in the cast the layer
+/// begins and ends, and the cast's length when it loops (else 0); how
+/// big, how far it reaches, how many; where it is heard from (where it
+/// begins, and where it goes).
+struct Voice {
+    sound: Int; element: Int; tier: Int; seed: Int;
+    begin: Float; now: Float; start: Float; end: Float; looped: Float;
+    size: Float; reach: Float; count: Int;
+    from: Vec3; to: Vec3;
+}
+type Voices = Rows<Voice>;
+
+fn no_voice() -> Voice {
+    return Voice { sound: 0, element: 0, tier: 1, seed: 0, begin: 0.0, now: 0.0, start: 0.0, end: 0.0, looped: 0.0, size: 0.0, reach: 0.0, count: 0,
+        from: vec3(0.0, 0.0, 0.0), to: vec3(0.0, 0.0, 0.0) };
+}
+
+kernel sound.voices@1 {
+    requires { field.read; field.write; }
+    input casts: Casts;
+    input effects: Effects;
+    input layers: Layers;
+    output result: Voices;
+    compute {
+        let ci = element() / layers_most();
+        let k = element() % layers_most();
+        let c = at(casts, ci);
+        if c.on == 0 || c.effect < 0 || c.effect >= count(effects) || ((c.hide >> k) & 1) == 1 { return no_voice(); }
+        let e = at(effects, c.effect);
+        let li = layer_of(layers, c.effect, k);
+        if li < 0 { return no_voice(); }
+        let l = at(layers, li);
+        let sound = sound_of(l);
+        if sound == sound_none() { return no_voice(); }
+        let tier = if c.tier > 0 { c.tier } else { max(e.tier, 1) };
+        let el = if l.element >= 0 { l.element } else if c.element >= 0 { c.element } else { e.element };
+        let on_caster = l.at == at_caster() || l.at == at_caster_ground();
+        let here = if on_caster { c.from } else if l.at == at_between() || l.at == at_between_ground() { mix(c.from, c.to, 0.5) } else { c.to };
+        let moving = l.move == move_fly() || l.move == move_arc() || l.form == form_darts();
+        return Voice { sound: sound, element: el, tier: tier, seed: c.seed * 131 + l.seed + k * 17,
+            begin: c.start, now: c.now, start: l.start, end: l.end, looped: if e.looped == 1 { e.length } else { 0.0 },
+            size: l.size * tier_size(tier), reach: l.reach, count: max(int(float(l.count) * tier_count(tier) + 0.5), l.count),
+            from: here + vec3(0.0, 1.0, 0.0), to: (if moving { c.to } else { here }) + vec3(0.0, 1.0, 0.0) };
+    }
+}

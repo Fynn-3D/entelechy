@@ -573,7 +573,7 @@ pub fn context() -> Context {
     input.set_key(65, true);
     input.set_key(37, true);
     input.set_key(32, true);
-    // Pad: sticks off centre, a trigger half down, three buttons held.
+    // Pad: sticks off center, a trigger half down, three buttons held.
     input.sticks = [[0.625, -0.375], [-0.8125, 0.25], [0.5, 0.0]];
     input.set_button(entelechy_abi::pad::SOUTH, true);
     input.set_button(entelechy_abi::pad::NORTH, true);

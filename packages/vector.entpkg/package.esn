@@ -1,9 +1,6 @@
-//! The vector package: drawings `entelechy import` reads from SVG, filled
-//! pixel by pixel on every backend alike. `graphs/draw.esn` draws the
-//! shapes through a look, tiled, so each pixel asks only the shapes and
-//! segments near it; `vector.draw@1` is the same rule asked of every
-//! shape, the reference the tiled form is tested against.
-//! `graphs/drawing.esn` draws one whole, fitted to the window.
+//! Drawings filled pixel by pixel: the shapes `entelechy import` reads
+//! from SVG, their fill rules, paints and gradients, drawn whole or
+//! tiled.
 package vector@1 { language = 1; ir = 1; }
 
 use "kernels/";

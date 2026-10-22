@@ -1,0 +1,15 @@
+//! A spectrum's cube again, along z, then y, then x, each axis divided
+//! by `n`, so it undoes `fourier_forward.esn`:
+//!
+//!   node cube: graph "signal.entpkg/graphs/fourier_inverse.esn" { data <- spectrum.result; bits = 7; }
+use "../kernels/";
+
+input data: Rows<Vec2>;
+param bits: Int = 6;
+
+node turns: signal.fourier_turns@1 { bits = bits; domain = 1 << bits; }
+node z: signal.fourier_rows@1 { data <- data; turns <- turns.result; bits = bits; sign = 1.0; scaled = true; }
+node y: signal.fourier_rows@1 { data <- z.result; turns <- turns.result; bits = bits; sign = 1.0; scaled = true; }
+node x: signal.fourier_rows@1 { data <- y.result; turns <- turns.result; bits = bits; sign = 1.0; scaled = true; }
+
+output result <- x.result;

@@ -211,7 +211,7 @@ evaluation too. The protocol's `trace` is the same as JSON.
 ## Packages and versions
 
 ```sh
-entelechy package packages/text.entpkg
+entelechy package packages/widgets.entpkg
 ```
 
 `entelechy package <dir.entpkg>` checks a package as `entelechy check` checks a
@@ -328,7 +328,7 @@ ready, so a republish never stalls a frame. It takes `run`'s
   they read and write there at once, the window's title names it, and
   the folder is allowed reads and what `--folder-allow
   <file.write,file.delete>` says; a folder chosen before gives its grants
-  back. Cancelled, nothing changes; without `--folder` the keys are the
+  back. Canceled, nothing changes; without `--folder` the keys are the
   scene's.
 
   ```sh
@@ -476,14 +476,14 @@ entelechy import font.ttf --out assets --chars "Hello, world."
   skipped. A skin adds `<stem>.weights.field`, `<stem>.skeleton.field`
   and one `<stem>.<name>.clip.field` per animation, sampled at `--rate`
   frames a second (30 by default), per [the rig contract](RIGS.md),
-  which the [`skin` package](../packages/skin.entpkg) poses.
+  which the [`animation` package](../packages/animation.entpkg) poses.
 - MP3, OGG Vorbis, FLAC, AAC in MP4, Matroska audio: a WAV at the file's
   rate, one or two channels.
 - Standard MIDI: `<stem>.notes.field`, a row a note (start and length in
   seconds, key, velocity 0 to 1, channel).
 - SVG: what the [`vector` package](../packages/vector.entpkg) draws, as four
   Fields: `<stem>.segments.field` (each path's curves cut into segments,
-  a stroke as the outline it paints), `<stem>.shapes.field` (colour or
+  a stroke as the outline it paints), `<stem>.shapes.field` (color or
   linear or radial gradient, fill rule, box, in paint order),
   `<stem>.stops.field` and `<stem>.view.field` (the document's size).
   Text, images, patterns, clip paths, masks and filters are reported and

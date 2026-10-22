@@ -1,7 +1,7 @@
 # UI
 
 A settings screen and a hero's panel drawn with the
-[ui package](../../packages/ui.entpkg/package.esn). The options are a
+[widgets package](../../packages/ui.entpkg/README.md). The options are a
 difficulty, a volume, subtitles, hints and a button to apply them; the
 hero's panel holds two meters, the health falling every few seconds with
 its trail after it, a purse and a journal scrolled a line a second.

@@ -1,0 +1,103 @@
+// Clips: sampled at a moment, blended by a weight a joint, and laid over
+// a pose.
+use "geometry.entpkg";
+use "skeleton.ent";
+
+/// The clock a clip is read at, as a row of one second: the simple case,
+/// where a clip plays at its own speed from the start of the session.
+kernel animation.clock@1 {
+    requires { field.write; time.read; }
+    param speed: Float = 1.0;
+    output result: Rows<Float>;
+    compute { return time() * speed; }
+}
+
+/// Every joint's local transform at the moment the clock says, blended
+/// between the two frames it falls between. A clip ends where its rows
+/// end: `repeat` wraps round to the start, and otherwise the last frame
+/// holds.
+///
+/// A node sized `instances * count(skeleton)` poses a crowd instead of
+/// one: element `e` is joint `e % joints` of instance `e / joints`, and
+/// each instance reads its own row of `at`, so a hundred of them walk
+/// the same clip out of step. Sized for one — which is what a node with
+/// no `domain` of its own is — it is the same Kernel doing the same
+/// thing.
+kernel animation.sample@1 {
+    requires { field.read; field.write; }
+    input skeleton: Skeleton;
+    input clip: Clip;
+    input at: Rows<Float>;
+    /// Frames a second the clip was written at, which `entelechy import`
+    /// prints and the bridge writes.
+    param rate: Float = 30.0;
+    param repeat: Bool = true;
+    output result: Rows<Pose>;
+
+    compute {
+        let joints = count(skeleton);
+        let frames = count(clip) / joints;
+        let moment = at(at, element() / joints) * rate;
+        let last = float(frames - 1);
+        let held = if repeat {
+            mod(moment, float(frames))
+        } else {
+            clamp(moment, 0.0, last)
+        };
+        let first = int(floor(held));
+        let next = if repeat { (first + 1) % frames } else { min(first + 1, frames - 1) };
+        let t = fract(held);
+        let joint = element() % joints;
+        return mixing(at(clip, first * joints + joint), at(clip, next * joints + joint), t);
+    }
+}
+
+/// Two poses of one skeleton, blended: a walk into a run, a turn laid
+/// over either. A Kernel or the graph decides `mix`, so it can move every
+/// frame.
+///
+/// `mix` of one row is the whole skeleton. A row a joint is a mask: an
+/// upper body running while the legs walk is the same blend with ones
+/// down the arms and zeros down the legs.
+kernel animation.blend@1 {
+    requires { field.read; field.write; }
+    input first: Rows<Pose>;
+    input second: Rows<Pose>;
+    input mix: Rows<Float>;
+    output result: Rows<Pose>;
+    compute {
+        let masked = count(mix) > 1;
+        let joints = count(mix);
+        let how = if masked { at(mix, element() % joints) } else { at(mix, 0) };
+        return mixing(sample(first), sample(second), saturate(how));
+    }
+}
+
+/// A pose laid over another: what `add` does differently from `rest` is
+/// done to `base`, by `weight`. A clip authored as a difference — a
+/// flinch, a lean, a breath — plays over whatever the body is already
+/// doing, which is what a game blends on top of a walk.
+///
+/// `rest` is the frame the difference is measured from, which is the
+/// additive clip's own first frame: sample it at zero.
+kernel animation.add@1 {
+    requires { field.read; field.write; }
+    input base: Rows<Pose>;
+    input add: Rows<Pose>;
+    input rest: Rows<Pose>;
+    input weight: Rows<Float>;
+    output result: Rows<Pose>;
+    compute {
+        let joints = count(weight);
+        let how = saturate(if joints > 1 { at(weight, element() % joints) } else { at(weight, 0) });
+        let b = sample(base);
+        let over = sample(add);
+        let was = sample(rest);
+        let turned = between(vec4(0.0, 0.0, 0.0, 1.0), after(back(was.turn), over.turn), how);
+        return Pose {
+            at: b.at + (over.at - was.at) * how,
+            turn: after(b.turn, turned),
+            grow: b.grow * mix(vec3(1.0, 1.0, 1.0), over.grow / was.grow, how),
+        };
+    }
+}

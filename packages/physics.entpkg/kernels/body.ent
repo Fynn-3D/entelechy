@@ -1,0 +1,169 @@
+// Rigid bodies in the plane: circles and turned boxes that fall, collide,
+// rest, slide and bounce, stepped by Kernels a frame at a time.
+//
+// A step (`graphs/step.esn`):
+//
+// - Finds the pairs of bodies whose boxes overlap through a grid of
+//   cells: each body is entered in the cells its box, grown by how far it
+//   may move this step, covers; the entries are sorted by cell; a pair
+//   is taken in the one cell its boxes' overlap begins in.
+// - Collides each pair into a manifold: the normal from its first body
+//   to its second and up to two points, each held by both bodies where
+//   they touch, with the separation then. Points up to a margin apart
+//   are kept, so a body closing on another is stopped where it touches.
+// - Solves the manifolds over substeps. Each substep adds gravity, solves
+//   each manifold against its own copy of its bodies, moves the bodies,
+//   and solves once more without pushing apart; then the impulses the
+//   manifolds hold push again, to warm the next substep, as the step's
+//   first is warmed by the impulses they start from. The last warm,
+//   which no substep follows, is taken back in a pass of its own. A
+//   manifold pushes a body with its mass split among the manifolds
+//   touching it, and the pushes
+//   on a body are summed, so every manifold is solved at once and the
+//   sum settles where solving them one by one would.
+// - Bounces what closed faster than `threshold`, by the larger
+//   restitution of the two.
+//
+// A body of no inverse mass is static; given a velocity, it is
+// kinematic: it moves and is not moved. A sensor collides but pushes
+// nothing, so its manifolds say what touches it. Two bodies meet only
+// where each one's `layer` shares a bit with the other's `mask`.
+//
+// Units are the scene's; the defaults suit meters and seconds.
+
+// Lists are runs of the `math` package; an entry finds its owner by
+// its `owner`.
+
+/// What a body is: a circle of radius `size.x`, or a box of half
+/// extents `size`.
+type BodyShape = enum { Circle, Box };
+
+struct Body {
+    position: Vec2;
+    angle: Float;
+    velocity: Vec2;
+    spin: Float;
+    // A `BodyShape`: 0 a circle, 1 a box.
+    shape: Int;
+    size: Vec2;
+    inverse_mass: Float;
+    inverse_inertia: Float;
+    friction: Float;
+    restitution: Float;
+    // How much of the world's gravity pulls it.
+    gravity: Float;
+    layer: Int;
+    mask: Int;
+    // 1 for a sensor.
+    sensor: Int;
+}
+
+// A box on the plane, least and most corners, and the first and last
+// cells of the grid it covers, found once so every Kernel that asks where
+// a body is in the grid reads one answer wherever it runs.
+struct Bounds { lo: Vec2; hi: Vec2; first: IVec2; last: IVec2; }
+
+// Two bodies that may touch, the first the lower index.
+struct Pair { a: Int; b: Int; }
+
+struct Counted { at: Int; value: Int; }
+
+// Where two bodies touch, held by each: the point in each one's own
+// frame, the separation when found, the speed they closed at along the
+// normal then, and the normal and friction impulses it last pushed with.
+struct Contact {
+    anchor_a: Vec2;
+    anchor_b: Vec2;
+    base: Float;
+    approach: Float;
+    normal: Float;
+    tangent: Float;
+}
+
+// A pair's manifold. `push_a` and `push_b` are the velocity and spin its
+// last solve gives each body.
+struct Manifold {
+    a: Int;
+    b: Int;
+    count: Int;
+    sensor: Int;
+    normal: Vec2;
+    p1: Contact;
+    p2: Contact;
+    friction: Float;
+    restitution: Float;
+    push_a: Vec3;
+    push_b: Vec3;
+}
+
+struct Push { at: Int; value: Vec3; }
+
+// A ray from `origin` along `direction` for `length` of it, meeting the
+// bodies whose layer shares a bit with its mask.
+struct Ray { origin: Vec2; direction: Vec2; length: Float; mask: Int; }
+
+// The nearest body a ray meets (-1 for none), how far along it, where,
+// and the body's normal there.
+struct Hit { body: Int; fraction: Float; point: Vec2; normal: Vec2; }
+
+/// A circle of `density` per unit area; no density makes it static.
+fn circle(position: Vec2, radius: Float, density: Float) -> Body {
+    let mass = density * 3.14159265 * radius * radius;
+    let inertia = 0.5 * mass * radius * radius;
+    return Body {
+        position: position, angle: 0.0, velocity: vec2(0.0, 0.0), spin: 0.0,
+        shape: BodyShape.Circle, size: vec2(radius, radius),
+        inverse_mass: if mass > 0.0 { 1.0 / mass } else { 0.0 },
+        inverse_inertia: if inertia > 0.0 { 1.0 / inertia } else { 0.0 },
+        friction: 0.6, restitution: 0.0, gravity: 1.0, layer: 1, mask: -1, sensor: 0,
+    };
+}
+
+/// A box of half extents `half`, turned by `angle`, of `density` per
+/// unit area; no density makes it static.
+fn box(position: Vec2, half: Vec2, angle: Float, density: Float) -> Body {
+    let mass = density * 4.0 * half.x * half.y;
+    let inertia = mass * (half.x * half.x + half.y * half.y) / 3.0;
+    return Body {
+        position: position, angle: angle, velocity: vec2(0.0, 0.0), spin: 0.0,
+        shape: BodyShape.Box, size: half,
+        inverse_mass: if mass > 0.0 { 1.0 / mass } else { 0.0 },
+        inverse_inertia: if inertia > 0.0 { 1.0 / inertia } else { 0.0 },
+        friction: 0.6, restitution: 0.0, gravity: 1.0, layer: 1, mask: -1, sensor: 0,
+    };
+}
+
+/// Whether a manifold's bodies touch rather than only close on each
+/// other: a point within `slop` of touching.
+fn touching(m: Manifold, slop: Float) -> Bool {
+    return m.count > 0 && (m.p1.base <= slop || (m.count > 1 && m.p2.base <= slop));
+}
+
+fn turn(v: Vec2, angle: Float) -> Vec2 {
+    let c = cos(angle);
+    let s = sin(angle);
+    return vec2(c * v.x - s * v.y, s * v.x + c * v.y);
+}
+
+fn unturn(v: Vec2, angle: Float) -> Vec2 {
+    let c = cos(angle);
+    let s = sin(angle);
+    return vec2(c * v.x + s * v.y, c * v.y - s * v.x);
+}
+
+// The plane's cross product, and a spin crossed with an arm.
+fn wedge(a: Vec2, b: Vec2) -> Float { return a.x * b.y - a.y * b.x; }
+
+fn swirl(w: Float, r: Vec2) -> Vec2 { return vec2(-w * r.y, w * r.x); }
+
+// The angle a point a body holds turns with: a box's own; none for a
+// circle, whose point of contact stays where it touches as it rolls.
+fn arm_angle(b: Body) -> Float { return if b.shape == BodyShape.Circle { 0.0 } else { b.angle }; }
+
+// How far a body reaches from its center.
+fn extent(b: Body) -> Float { return if b.shape == BodyShape.Circle { b.size.x } else { length(b.size) }; }
+
+// How far a body may move in a step of `dt`.
+fn sweep(b: Body, dt: Float) -> Float {
+    return (length(b.velocity) + abs(b.spin) * extent(b)) * dt;
+}

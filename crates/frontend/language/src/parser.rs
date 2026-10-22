@@ -373,7 +373,7 @@ impl Parser {
         self.name(what)
     }
 
-    /// A name used here, plain or qualified by a package (`hash_noise::Ray`).
+    /// A name used here, plain or qualified by a package (`random::Ray`).
     fn name(&mut self, what: &str) -> Result<Spanned<String>, ParseError> {
         match self.peek() {
             Token::Ident(name) if !RESERVED.contains(&name.as_str()) => {
@@ -2352,7 +2352,7 @@ mod tests {
     #[test]
     fn a_name_qualified_by_its_package_is_one_name_where_it_is_used() {
         let document = parse_document(
-            "fn f(m: [ui_panel::Mark; 2]) -> ui_panel::Mark { return hash_noise::fbm2(ui_panel::Mark { b: m[0].b }); }",
+            "fn f(m: [ui_panel::Mark; 2]) -> ui_panel::Mark { return random::fbm2(ui_panel::Mark { b: m[0].b }); }",
         )
         .unwrap();
         let f = &document.functions[0];
@@ -2361,13 +2361,13 @@ mod tests {
         let ExprKind::Call(name, args) = &f.body.result.kind else {
             panic!("{:?}", f.body.result);
         };
-        assert_eq!(name, "hash_noise::fbm2");
+        assert_eq!(name, "random::fbm2");
         assert!(
             matches!(&args[0].kind, ExprKind::Struct { name, .. } if name.value == "ui_panel::Mark")
         );
         for (text, says) in [
             (
-                "fn hash_noise::fbm2() -> Int { return 1; }",
+                "fn random::fbm2() -> Int { return 1; }",
                 "a plain word, `fbm2`",
             ),
             (

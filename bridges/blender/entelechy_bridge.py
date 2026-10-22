@@ -585,11 +585,11 @@ class ENTELECHY_OT_push(bpy.types.Operator):
         obj = context.active_object
         if obj is None or obj.type != "MESH":
             self.report({"ERROR"}, "select a mesh object")
-            return {"CANCELLED"}
+            return {"CANCELED"}
         settings = context.scene.entelechy
         if not settings.assets_dir:
             self.report({"ERROR"}, "set the assets directory")
-            return {"CANCELLED"}
+            return {"CANCELED"}
         paths = push_object(obj, bpy.path.abspath(settings.assets_dir), context.evaluated_depsgraph_get(), settings.axes)
         self.report({"INFO"}, "wrote " + ", ".join(os.path.basename(p) for p in paths))
         return {"FINISHED"}
@@ -604,16 +604,16 @@ class ENTELECHY_OT_push_rig(bpy.types.Operator):
         obj = context.active_object
         if obj is None or obj.type != "MESH":
             self.report({"ERROR"}, "select a mesh object")
-            return {"CANCELLED"}
+            return {"CANCELED"}
         settings = context.scene.entelechy
         if not settings.assets_dir:
             self.report({"ERROR"}, "set the assets directory")
-            return {"CANCELLED"}
+            return {"CANCELED"}
         try:
             paths = push_rig(obj, bpy.path.abspath(settings.assets_dir), settings.axes)
         except ValueError as error:
             self.report({"ERROR"}, str(error))
-            return {"CANCELLED"}
+            return {"CANCELED"}
         self.report({"INFO"}, "wrote " + ", ".join(os.path.basename(p) for p in paths))
         return {"FINISHED"}
 
@@ -631,7 +631,7 @@ class ENTELECHY_OT_pull_mesh(bpy.types.Operator):
             client.close()
         except Exception as error:
             self.report({"ERROR"}, str(error))
-            return {"CANCELLED"}
+            return {"CANCELED"}
         self.report({"INFO"}, f"pulled {obj.name}: {len(obj.data.vertices)} vertices")
         return {"FINISHED"}
 
@@ -666,7 +666,7 @@ class ENTELECHY_OT_pull_image(bpy.types.Operator):
             client.close()
         except Exception as error:
             self.report({"ERROR"}, str(error))
-            return {"CANCELLED"}
+            return {"CANCELED"}
         self.report({"INFO"}, f"pulled {image.name} {image.size[0]}x{image.size[1]}")
         return {"FINISHED"}
 
@@ -684,7 +684,7 @@ class ENTELECHY_OT_param(bpy.types.Operator):
             client.close()
         except Exception as error:
             self.report({"ERROR"}, str(error))
-            return {"CANCELLED"}
+            return {"CANCELED"}
         return {"FINISHED"}
 
 
@@ -697,14 +697,14 @@ class ENTELECHY_OT_publish(bpy.types.Operator):
         text = next((area.spaces.active.text for area in context.screen.areas if area.type == "TEXT_EDITOR" and area.spaces.active.text), None)
         if text is None:
             self.report({"ERROR"}, "open a Kernel in the text editor")
-            return {"CANCELLED"}
+            return {"CANCELED"}
         try:
             client = connect(context)
             published = client.call("publish", source=text.as_string(), expect="any")
             client.close()
         except Exception as error:
             self.report({"ERROR"}, str(error))
-            return {"CANCELLED"}
+            return {"CANCELED"}
         self.report({"INFO"}, f"published {published['id']} generation {published['generation']}")
         return {"FINISHED"}
 

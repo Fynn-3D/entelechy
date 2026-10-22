@@ -1,6 +1,6 @@
 // A drift through a nebula made of noise, finished as film. The noise
-// package gives the cloud, its colour and the stars; the image package
-// gives the colours of heat and the wheel, and the finish: glow, depth
+// package gives the cloud, its color and the stars; the image package
+// gives the colors of heat and the wheel, and the finish: glow, depth
 // of field, tone, fringing, corners and grain. `pixel` is how many
 // window pixels a ray covers.
 use "kernels/";

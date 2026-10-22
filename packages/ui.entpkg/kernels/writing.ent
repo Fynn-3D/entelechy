@@ -1,0 +1,117 @@
+// Text drawn: a row of a text's letters (`letters.ent`), `width` cells
+// a row, from a top left, `scale` pixels a texel; its length and width
+// to align it in a rectangle; a number. A cell is 6 texels across and a
+// line 8 down; a wide letter over two cells may stand out of the line by
+// a few texels, which a line's cover takes in.
+use "layout.ent";
+use "paint.ent";
+use "text.entpkg";
+
+/// How far above and below its 8 texels a line's letters may reach.
+fn line_reach() -> Float { return 4.0; }
+
+/// The cover at `local`, in texels from the cell's top left, of cell
+/// `col` of the row of letters from `first`: its letter, or the right
+/// half of the wide letter before it.
+fn cell_cover(letters: Grid<Float>, cells: Rows<Int>, first: Int, col: Int, local: Vec2) -> Float {
+    let code = at(cells, first + col);
+    return if code == -1 && col > 0 { letter_cover(letters, at(cells, first + col - 1), local + vec2(6.0, 0.0)) } else { letter_cover(letters, code, local) };
+}
+
+/// How many cells of row `row` hold letters, its trailing spaces left off.
+fn row_length(cells: Rows<Int>, row: Int, width: Int) -> Int {
+    return loop width with n = 0 { if at(cells, row * width + index()) != 32 { index() + 1 } else { n } };
+}
+
+/// How wide row `row` is drawn, in pixels at `scale`.
+fn row_width(cells: Rows<Int>, row: Int, width: Int, scale: Float) -> Float {
+    return float(row_length(cells, row, width)) * 6.0 * scale;
+}
+
+/// The size a row is drawn at, its 8 texels high.
+fn row_size(cells: Rows<Int>, row: Int, width: Int, scale: Float) -> Vec2 {
+    return vec2(row_width(cells, row, width, scale), 8.0 * scale);
+}
+
+/// The cover at `q` of row `row` drawn from `origin`, its top left.
+fn row_cover(letters: Grid<Float>, cells: Rows<Int>, row: Int, width: Int, q: Vec2, origin: Vec2, scale: Float) -> Float {
+    let l = (q - origin) / scale;
+    if l.y < -line_reach() || l.y >= 8.0 + line_reach() || l.x < 0.0 || l.x >= float(width) * 6.0 { return 0.0; }
+    let col = int(floor(l.x / 6.0));
+    return cell_cover(letters, cells, row * width, col, vec2(l.x - float(col) * 6.0, l.y));
+}
+
+/// Row `row` in `color`, from `origin`.
+fn written(letters: Grid<Float>, cells: Rows<Int>, row: Int, width: Int, q: Vec2, origin: Vec2, scale: Float, color: Vec4) -> Vec4 {
+    return faded(color, row_cover(letters, cells, row, width, q, origin, scale));
+}
+
+/// Row `row` in `color` over its shadow, a texel down and right, of
+/// `shade` cover.
+fn shadowed(letters: Grid<Float>, cells: Rows<Int>, row: Int, width: Int, q: Vec2, origin: Vec2, scale: Float, color: Vec4, shade: Float) -> Vec4 {
+    let under = row_cover(letters, cells, row, width, q, origin + scale, scale);
+    return over(paint(vec3(0.0, 0.0, 0.0), under * shade * color.w), written(letters, cells, row, width, q, origin, scale, color));
+}
+
+/// Where a row is drawn from to stand in `r` as `align` says (0 left or
+/// top, 0.5 middle, 1 right or bottom).
+fn row_origin(cells: Rows<Int>, row: Int, width: Int, scale: Float, r: Rect, align: Vec2) -> Vec2 {
+    return placed(r, row_size(cells, row, width, scale), align).lo;
+}
+
+/// Row `row` in `color` aligned in `r`, with its shadow; cut at `r`'s
+/// sides, and nothing above or below it but the letters' reach.
+fn label(letters: Grid<Float>, cells: Rows<Int>, row: Int, width: Int, r: Rect, align: Vec2, scale: Float, color: Vec4, q: Vec2) -> Vec4 {
+    if q.x < r.lo.x || q.x >= r.hi.x + scale || q.y < r.lo.y - line_reach() * scale || q.y >= r.hi.y + (line_reach() + 1.0) * scale { return clear(); }
+    return shadowed(letters, cells, row, width, q, row_origin(cells, row, width, scale, r, align), scale, color, 0.7);
+}
+
+// ---------------------------------------------------------------- numbers
+
+/// How many characters `v` is written with: its digits, `-` first when
+/// it is below zero.
+fn figures(v: Int) -> Int {
+    // The digits counted, and the power of ten the next would start at.
+    let d = loop 9 with d = ivec2(1, 10) { if abs(v) >= d.y { ivec2(d.x + 1, if d.y < 1000000000 { d.y * 10 } else { d.y }) } else { d } };
+    return if v < 0 { d.x + 1 } else { d.x };
+}
+
+/// The code of character `i` of `v` written out, most significant first.
+fn figure_code(v: Int, i: Int) -> Int {
+    let n = figures(v);
+    if v < 0 && i == 0 { return 45; }
+    let place = n - 1 - i;
+    let p = loop min(place, 9) with m = 1 { m * 10 };
+    return 48 + (abs(v) / p) % 10;
+}
+
+/// The size `v` is drawn at.
+fn number_size(v: Int, scale: Float) -> Vec2 { return vec2(float(figures(v)) * 6.0 * scale, 8.0 * scale); }
+
+/// The cover at `q` of `v` written from `origin`, its top left.
+fn number_cover(letters: Grid<Float>, v: Int, q: Vec2, origin: Vec2, scale: Float) -> Float {
+    let l = (q - origin) / scale;
+    let n = figures(v);
+    if l.y < 0.0 || l.y >= 8.0 || l.x < 0.0 || l.x >= float(n) * 6.0 { return 0.0; }
+    let col = int(floor(l.x / 6.0));
+    return letter_cover(letters, figure_code(v, col), vec2(l.x - float(col) * 6.0, l.y));
+}
+
+/// `v` in `color` aligned in `r`, with its shadow.
+fn number(letters: Grid<Float>, v: Int, r: Rect, align: Vec2, scale: Float, color: Vec4, q: Vec2) -> Vec4 {
+    if !near_rect(r, q, scale) { return clear(); }
+    let at_ = placed(r, number_size(v, scale), align).lo;
+    let under = number_cover(letters, v, q, at_ + scale, scale);
+    return over(paint(vec3(0.0, 0.0, 0.0), under * 0.7 * color.w), faded(color, number_cover(letters, v, q, at_, scale)));
+}
+
+/// A name and a number on one row: the name at its left in `name_ink`,
+/// the number at its right in `value_ink`; a stat, a price, a count.
+fn named_number(letters: Grid<Float>, cells: Rows<Int>, name: Int, width: Int, v: Int, r: Rect, scale: Float, name_ink: Vec4, value_ink: Vec4, q: Vec2) -> Vec4 {
+    return over(label(letters, cells, name, width, r, vec2(0.0, 0.5), scale, name_ink, q), number(letters, v, r, vec2(1.0, 0.5), scale, value_ink, q));
+}
+
+/// One letter's cover at `q`, its top left at `origin`.
+fn letter_at(letters: Grid<Float>, code: Int, q: Vec2, origin: Vec2, scale: Float) -> Float {
+    return letter_cover(letters, code, (q - origin) / scale);
+}

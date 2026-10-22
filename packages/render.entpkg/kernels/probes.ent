@@ -1,0 +1,469 @@
+// Light probes: a lattice of probes through the scene (from the proxy's `lo`, one every `spacing` meters), each keeping
+// the light from six directions (+x -x +y -y +z -z) (radiance averaged by cosine; times albedo it is
+// the diffuse). Each frame each face traces a few coarse rays into its hemisphere (the contract's proxies): one reaching the sky
+// takes the sky's light, one meeting something takes it as the sun lights it, with the probes there (so light bounces between probes),
+// times its color; averaged in, stopping after `most`. Probes inside rock or under the ground are not used.
+use "random.entpkg";
+use "geometry.entpkg";
+use "brdf.ent";
+use "camera.ent";
+use "sky.ent";
+use "transmission.ent";
+
+/// Which way face `face` looks: 0 +x, 1 -x, 2 +y, 3 -y, 4 +z, 5 -z.
+fn face_dir(face: Int) -> Vec3 {
+    let s = if face % 2 == 0 { 1.0 } else { -1.0 };
+    return if face < 2 { vec3(s, 0.0, 0.0) } else if face < 4 { vec3(0.0, s, 0.0) } else { vec3(0.0, 0.0, s) };
+}
+/// Where probe `cell` is.
+fn probe_pos(fr: Proxy, cell: Vec3, spacing: Float) -> Vec3 { return fr.lo + cell * spacing; }
+
+/// The sky light and bounced light a surface at `p` facing `n` receives: the eight probes round it, weighted trilinearly, by whether
+/// they are used and whether they lie before the surface; each probe's three faces toward `n` mixed by `n`. Outside the lattice (or where none
+/// round it is usable), it turns gradually to the light of open ground (`open_light`).
+fn probe_light(probes: Volume<Vec4>, fr: Proxy, spacing: Float, p: Vec3, n: Vec3, s: SkyLook) -> Vec3 {
+    let dims = vec3(size(probes).x / 6.0, size(probes).y, size(probes).z);
+    let g = (p - fr.lo) / spacing;
+    let base = floor(g);
+    let f = g - base;
+    let nn = n * n;
+    let fx = if n.x >= 0.0 { 0.0 } else { 1.0 };
+    let fy = if n.y >= 0.0 { 2.0 } else { 3.0 };
+    let fz = if n.z >= 0.0 { 4.0 } else { 5.0 };
+    let acc = loop 8 with acc = vec4(0.0, 0.0, 0.0, 0.0) {
+        let o = vec3(float(index() & 1), float((index() >> 1) & 1), float((index() >> 2) & 1));
+        let cell = clamp(base + o, vec3(0.0, 0.0, 0.0), dims - vec3(1.0, 1.0, 1.0));
+        let w3 = mix(vec3(1.0, 1.0, 1.0) - f, f, o);
+        let to = normalize(probe_pos(fr, cell, spacing) - p + n * 0.001);
+        let facing = pow((dot(to, n) + 1.0) * 0.5, 2.0) + 0.05;
+        let ax = at(probes, vec3(cell.x * 6.0 + fx, cell.y, cell.z));
+        let ay = at(probes, vec3(cell.x * 6.0 + fy, cell.y, cell.z));
+        let az = at(probes, vec3(cell.x * 6.0 + fz, cell.y, cell.z));
+        let valid = if ax.w > 0.5 { 1.0 } else { 0.0 };
+        let w = w3.x * w3.y * w3.z * facing * valid;
+        acc + vec4((ax.xyz * nn.x + ay.xyz * nn.y + az.xyz * nn.z) * w, w)
+    };
+    let off = max(max(vec3(0.0, 0.0, 0.0) - g, g - (dims - vec3(1.0, 1.0, 1.0))), vec3(0.0, 0.0, 0.0));
+    let away = max(smoothstep(0.0, 1.5, max(max(off.x, off.y), off.z)), 1.0 - smoothstep(0.0, 0.02, acc.w));
+    return mix(acc.xyz / max(acc.w, 0.0001), open_light(fr, n, s), away);
+}
+
+/// The light a surface facing `n` receives on open flat ground: up, the sky round about; down, what the ground lit by sun and sky
+/// (the proxies' ground color) throws back.
+fn open_light(fr: Proxy, n: Vec3, s: SkyLook) -> Vec3 {
+    let ground = fr.ground * (s.sun_color * max(s.sun.y, 0.0) / 3.14159 + s.ambient);
+    return mix(ground, s.ambient, 0.5 + 0.5 * n.y);
+}
+
+/// A probe's signature, what is round it: the ground's height at it and four places round it (weighted by distance),
+/// the distance to rock from it in six directions, and the sun's direction; it changes when the scene or the light does. Computed only when the ground,
+/// rock or sky changes.
+kernel render.probes_sign@1 {
+    requires { field.read; field.write; }
+    input proxy: Volume<Vec4>;
+    input land: Grid<Float>;
+    input frame: Proxies;
+    input sky: SkyLooks;
+    param spacing: Float = 1.2;
+    output result: Volume<Vec2>;
+    compute {
+        let fr = at(frame, 0);
+        let pos = probe_pos(fr, coord(), spacing);
+        let r = spacing;
+        let ground = land_at(land, fr, pos.x, pos.z) * 2.0 + land_at(land, fr, pos.x + r, pos.z) + land_at(land, fr, pos.x - r, pos.z)
+            + land_at(land, fr, pos.x, pos.z + r) + land_at(land, fr, pos.x, pos.z - r);
+        let rock = loop 7 with d = 0.0 {
+            let o = if index() == 0 { vec3(0.0, 0.0, 0.0) } else { face_dir(index() - 1) * r };
+            d + min(proxy_at(proxy, fr, pos + o, 4.0).x, 4.0) * float(index() + 1)
+        };
+        let sun = at(sky, 0).sun;
+        return vec2(ground, rock + (sun.x * 3.1 + sun.y * 5.3 + sun.z * 7.7));
+    }
+}
+/// The probes' signature at their last gathering: kept up with the present one while gathering (while the lit picture shows), held
+/// while not; shown again, the gathering sees whether the scene changed while it was away.
+kernel render.probes_seen@1 {
+    requires { field.read; field.write; }
+    input previous: Volume<Vec2>;
+    input sign: Volume<Vec2>;
+    input surface: Grid<Vec4>;
+    output result: Volume<Vec2>;
+    compute { return if size(surface).x * size(surface).y < 65536.0 { at(previous, coord()) } else { at(sign, coord()) }; }
+}
+
+/// The probes gathering light: each cell is one face of a probe (six cells across a probe); rgb the light gathered, w
+/// how many times (-1: inside rock or under the ground, unused). While the lit picture (`surface`) is too small to count as shown
+/// (under 256 by 256, as an output an editor has not chosen) nothing is gathered, and it is kept as it is, resting. Where a probe's
+/// signature (`sign`) differs from that of its last gathering (`seen`) (the ground, rock or light round it changed):
+/// it gathers again, the old light kept only as a little start (counted as 4), and whether it lies in rock is looked at again.
+kernel render.probes_gather@1 {
+    requires { field.read; field.write; }
+    input previous: Volume<Vec4>;
+    input surface: Grid<Vec4>;
+    input sign: Volume<Vec2>;
+    input seen: Volume<Vec2>;
+    input proxy: Volume<Vec4>;
+    input land: Grid<Float>;
+    input frame: Proxies;
+    input sky: SkyLooks;
+    param spacing: Float = 1.2;
+    param rays: Int = 2;
+    param most: Int = 256;
+    output result: Volume<Vec4>;
+    compute {
+        let c = coord();
+        let held = at(previous, c);
+        if size(surface).x * size(surface).y < 65536.0 { return held; }
+        let cell = vec3(floor(c.x / 6.0), c.y, c.z);
+        let now = at(sign, cell);
+        let was = at(seen, cell);
+        let changed = abs(now.x - was.x) > 0.005 || abs(now.y - was.y) > 0.005;
+        let old = if changed { vec4(held.x, held.y, held.z, if held.w < 0.0 { 0.0 } else { min(held.w, 4.0) }) } else { held };
+        if old.w < -0.5 || old.w >= float(most) { return old; }
+        let fr = at(frame, 0);
+        let s = at(sky, 0);
+        let face = int(c.x) % 6;
+        let pos = probe_pos(fr, vec3(floor(c.x / 6.0), c.y, c.z), spacing);
+        if proxy_at(proxy, fr, pos, 4.0).x < 0.05 || pos.y < land_at(land, fr, pos.x, pos.z) + 0.05 { return vec4(0.0, 0.0, 0.0, -1.0); }
+        let axis = face_dir(face);
+        let round_ = int(old.w);
+        let sum = loop 8 with acc = vec3(0.0, 0.0, 0.0) until index() >= rays {
+            let h = hash_int2(int(c.x) + int(c.y) * 4099 + int(c.z) * 524287, round_ * 8 + index(), 171);
+            let dir = cosine_dir(axis, unit_of(h), unit_of(hash_int(h, 1)));
+            let hit = rough_trace(proxy, land, fr, pos, dir, 0.05, 60.0, 64);
+            let came = if hit.y < -0.5 { sky_radiance(dir, s, false) } else {
+                let hp = pos + dir * hit.x;
+                let hn = rough_normal(proxy, land, fr, hp, hit.y);
+                let ha = rough_albedo(proxy, fr, hp, hit.y);
+                let sl = max(dot(hn, s.sun), 0.0);
+                let sun_in = if sl > 0.0 { s.sun_color * sl * rough_shadow(proxy, land, fr, hp + hn * 0.1, s.sun, 0.1, 40.0, 24) / 3.14159 } else { vec3(0.0, 0.0, 0.0) };
+                ha * (sun_in + probe_light(previous, fr, spacing, hp + hn * 0.3, hn, s))
+            };
+            acc + came
+        };
+        return vec4(mix(old.xyz, sum / float(rays), 1.0 / (old.w + 1.0)), old.w + 1.0);
+    }
+}
+
+/// Contact occlusion on the screen: how much of the hemisphere the things in the G-buffer hide within `reach` meters of `p` (normal `n`),
+/// by eight points; 1 all open.
+fn screen_ao(surface: Grid<Vec4>, q: Vec2, extent: Vec2, l: Lens, p: Vec3, n: Vec3, depth: Float, reach: Float) -> Float {
+    let r = clamp(reach * l.focal * extent.y / max(depth, 0.01), 2.0, 80.0);
+    let occ = loop 8 with s = 0.0 {
+        let a = float(index()) * 2.39996 + 0.5;
+        let sq = clamp(q + vec2(cos(a), sin(a)) * r * (float(index()) + 1.0) / 8.0, vec2(0.0, 0.0), extent - vec2(1.0, 1.0));
+        let o = at(surface, sq);
+        let ps = l.eye + ray(l, sq, extent) * o.w;
+        let vv = ps - p;
+        let dist = length(vv);
+        if o.w > no_hit() * 0.5 || dist < 0.0001 { s } else { s + max(dot(n, vv / dist) - 0.15, 0.0) * (1.0 - smoothstep(0.3, 1.0, dist / reach)) }
+    };
+    return saturate(1.0 - occ / 8.0 * 1.6);
+}
+
+/// The `k`th direction about the normal `n`, distributed by cosine (`u` and `v` random numbers from 0 to 1).
+fn cosine_around(n: Vec3, u: Float, v: Float) -> Vec3 {
+    let t = normalize(cross(n, if abs(n.y) < 0.9 { vec3(0.0, 1.0, 0.0) } else { vec3(1.0, 0.0, 0.0) }));
+    let b = cross(n, t);
+    let r = sqrt(u);
+    let a = v * 6.2831853;
+    return normalize(t * (r * cos(a)) + b * (r * sin(a)) + n * sqrt(max(1.0 - u, 0.0)));
+}
+
+/// The diffuse light each pixel receives (a final gather, as Lumen does): a few rays cast by cosine into the hemisphere,
+/// walked on the screen first (a thing met gives its look without reflections, `lit`, which is itself lit by
+/// the probes: so light bounces again and again); a ray meeting nothing on the screen walks the proxies (the coarse distance field) a few
+/// meters further, and meeting something takes it as the sun lights it plus its probe light; meeting nothing still, up it takes the sky, down
+/// the probe light in that direction. This
+/// frame's random numbers change with the lens (as temporal antialiasing jitters the lens, each frame's rays differ, and blended they are even).
+kernel render.probes_screen_gather@1 {
+    requires { field.read; field.write; }
+    input surface: Grid<Vec4>;
+    input lit: Image;
+    input probes: Volume<Vec4>;
+    input proxy: Volume<Vec4>;
+    input land: Grid<Float>;
+    input frame: Proxies;
+    input sky: SkyLooks;
+    input lens: Lenses;
+    param spacing: Float = 1.2;
+    param rays: Int = 4;
+    /// The furthest walked along the proxies (meters).
+    param far: Float = 6.0;
+    output result: Image;
+    compute {
+        // Each of its pixels stands for the surface pixel at its top left
+        // (it may be smaller than the surface: the blur after fills in).
+        let q = min(coord() * gather_step(size(surface), domain()), size(surface) - 1.0);
+        let extent = size(surface);
+        let l = at(lens, 0);
+        let su = at(surface, q);
+        if su.w > no_hit() * 0.5 { return vec4(0.0, 0.0, 0.0, 0.0); }
+        let s = at(sky, 0);
+        let fr = at(frame, 0);
+        let dir = ray(l, q, extent);
+        let p = l.eye + dir * su.w;
+        let n = su.xyz;
+        // No rays: the probes' light alone (steady, without grain).
+        if rays <= 0 { let pl = probe_light(probes, fr, spacing, p + n * 0.3, n, s); return vec4(pl.x, pl.y, pl.z, 1.0); }
+        let frame_seed = int(fract(dot(l.ahead, vec3(12.9898, 78.233, 37.719)) * 43758.547) * 65536.0);
+        let reach = 1.2 + su.w * 0.08;
+        let sum = loop 8 with acc = vec3(0.0, 0.0, 0.0) {
+            let k = index();
+            if k >= rays { acc } else {
+                let h = hash_int2(int(q.x) + int(q.y) * 4099, k, frame_seed);
+                let d = cosine_around(n, unit_of(h), unit_of(hash_int(h, 1)));
+                let hit = screen_march(surface, l, extent, p + n * 0.01, d, reach, 16, reach * 0.5, unit_of(hash_int(h, 2)));
+                // Off the screen: along the coarse field (clear of the
+                // ground's own margin and the coarse shape it lies in).
+                let came = if hit.z >= 0.0 { at(lit, vec2(hit.x, hit.y)).xyz } else { rough_seen(proxy, land, probes, fr, spacing, p + n * 0.08, p, n, d, far, s) };
+                acc + came
+            }
+        };
+        let e = sum / float(max(rays, 1));
+        return vec4(e.x, e.y, e.z, 1.0);
+    }
+}
+
+/// The gathered light denoised: the 5 × 5 pixels round it, those near in distance and facing alone counted.
+/// The diffuse light gathered on the screen, accumulated frame by frame (as temporal antialiasing does): this frame's (`gathered`,
+/// already denoised) blended with the last frame's carried by the lens, the last frame's held within the range round it
+/// this frame (a change of light does not smear); where the place carried from lies at a different distance (hidden, newly uncovered) this
+/// frame's alone. w keeps how far it lies, for the next frame to compare.
+kernel render.probes_gather_keep@1 {
+    requires { field.read; field.write; }
+    input gathered: Image;
+    input surface: Grid<Vec4>;
+    input previous: Image;
+    input lens: Lenses;
+    input was_lens: Lenses;
+    /// The share of each frame this frame takes.
+    param fresh: Float = 0.08;
+    output result: Image;
+    compute {
+        let q = icoord();
+        let ext = domain();
+        let su = at(surface, q);
+        let now = at(gathered, q);
+        if su.w > no_hit() * 0.5 { return vec4(now.x, now.y, now.z, su.w); }
+        if isize(previous) != isize(surface) { return vec4(now.x, now.y, now.z, su.w); }
+        let l = at(lens, 0);
+        let wl = at(was_lens, 0);
+        // The camera as it was: the same pixel, not one found again.
+        let held = l.eye == wl.eye && l.ahead == wl.ahead && l.right == wl.right && l.up == wl.up && l.focal == wl.focal;
+        let p = l.eye + ray(l, coord(), ext) * su.w;
+        let pw = if held { vec3(coord().x + 0.5, coord().y + 0.5, su.w) } else { project(wl, p, ext) };
+        let back = pw.xy - 0.5;
+        let inside = pw.z > 0.0 && back.x >= 0.0 && back.y >= 0.0 && back.x <= ext.x - 1.0 && back.y <= ext.y - 1.0;
+        if !inside { return vec4(now.x, now.y, now.z, su.w); }
+        let was = if held { at(previous, q) } else { at_linear(previous, back + 0.5) };
+        // The same surface? (as far from the eye as it was, within a few per cent)
+        let same = abs(was.w - pw.z) < 0.04 * pw.z + 0.05;
+        if !same { return vec4(now.x, now.y, now.z, su.w); }
+        let box = loop 9 with b = [vec3(1000000.0, 1000000.0, 1000000.0), vec3(-1000000.0, -1000000.0, -1000000.0)] {
+            let o = ivec2(index() % 3 - 1, index() / 3 - 1);
+            let v = at(gathered, clamp(q + o, ivec2(0, 0), isize(gathered) - ivec2(1, 1))).xyz;
+            [min(b[0], v), max(b[1], v)]
+        };
+        let spread = (box[1] - box[0]) * 0.5;
+        let kept = clamp(was.xyz, box[0] - spread, box[1] + spread);
+        let mixed = mix(kept, now.xyz, fresh);
+        // Settled (a step under a thousandth): the last frame's to the bit, so
+        // the picture rests and what reads it is not drawn again.
+        let step = abs(mixed - was.xyz);
+        let settled = step.x <= abs(was.x) * 0.001 + 0.00001 && step.y <= abs(was.y) * 0.001 + 0.00001 && step.z <= abs(was.z) * 0.001 + 0.00001;
+        if settled { return vec4(was.x, was.y, was.z, su.w); }
+        return vec4(mixed.x, mixed.y, mixed.z, su.w);
+    }
+}
+/// How many pixels a side of the full picture (`full` large) each pixel of the gathered map (`small` large) stands for: a whole
+/// multiple (the size was rounded up, so it need not divide evenly).
+fn gather_step(full: Vec2, small: Vec2) -> Float { return max(floor(full.x / max(small.x, 1.0) + 0.5), 1.0); }
+
+kernel render.probes_gather_blur@1 {
+    requires { field.read; field.write; }
+    input gathered: Image;
+    input surface: Grid<Vec4>;
+    output result: Image;
+    compute {
+        let q = icoord();
+        let su = at(surface, q);
+        if su.w > no_hit() * 0.5 { return vec4(0.0, 0.0, 0.0, 0.0); }
+        // `gathered` may be smaller (each of its pixels gathered at the
+        // surface pixel at its top left): the five by five of it about here,
+        // each by how alike the surface it stands for is to this one.
+        let step_ = int(gather_step(size(surface), size(gathered)));
+        let g = ivec2(q.x / step_, q.y / step_);
+        let ext = isize(gathered) - ivec2(1, 1);
+        let sext = isize(surface) - ivec2(1, 1);
+        let acc = loop 25 with a = vec4(0.0, 0.0, 0.0, 0.0) {
+            let o = ivec2(index() % 5 - 2, index() / 5 - 2);
+            let c = clamp(g + o, ivec2(0, 0), ext);
+            let sv = at(surface, clamp(c * step_, ivec2(0, 0), sext));
+            let w = pow(max(dot(sv.xyz, su.xyz), 0.0), 8.0) * (1.0 - smoothstep(0.0, 0.05 * su.w + 0.01, abs(sv.w - su.w))) * (if sv.w > no_hit() * 0.5 { 0.0 } else { 1.0 });
+            a + vec4(at(gathered, c).xyz * w, w)
+        };
+        let e = acc.xyz / max(acc.w, 0.0001);
+        return vec4(e.x, e.y, e.z, 1.0);
+    }
+}
+
+/// The light seen from `o` along `d` through the proxies (the coarse distance field): meeting something, it as the sun lights it
+/// plus the probe light there; meeting nothing, up the sky, down the probe light in that direction (gathered at `p`).
+fn rough_seen(proxy: Volume<Vec4>, land: Grid<Float>, probes: Volume<Vec4>, fr: Proxy, spacing: Float, o: Vec3, p: Vec3, n: Vec3, d: Vec3, far: Float, s: SkyLook) -> Vec3 {
+    let start = rough_leave(proxy, fr, o, d, 0.02, fr.cell * 4.0);
+    let tr = rough_trace(proxy, land, fr, o, d, start, far, 24);
+    if tr.y >= 0.0 {
+        let hp = o + d * tr.x;
+        let hn = rough_normal(proxy, land, fr, hp, tr.y);
+        let sun = normalize(s.sun);
+        let shade = rough_shadow(proxy, land, fr, hp + hn * 0.05, sun, 0.05, 20.0, 24);
+        return rough_albedo(proxy, fr, hp, tr.y) * (s.sun_color * max(dot(hn, sun), 0.0) * shade / 3.14159265 + probe_light(probes, fr, spacing, hp + hn * 0.3, hn, s));
+    }
+    return if d.y > 0.0 { sky_radiance(d, s, false) } else { probe_light(probes, fr, spacing, p + n * 0.3, d, s) };
+}
+
+/// The light at the point seen through (transmissive pixels only): its diffuse light is the probes' there.
+kernel render.probes_behind@1 {
+    requires { field.read; field.write; }
+    input more: Grid<Vec4>;
+    input behind_at: Grid<Vec4>;
+    input behind_dir: Grid<Vec4>;
+    input behind_paint: Grid<Vec4>;
+    input behind_normal: Grid<Vec4>;
+    input probes: Volume<Vec4>;
+    input frame: Proxies;
+    input sky: SkyLooks;
+    param spacing: Float = 1.2;
+    output result: Image;
+    compute {
+        let q = coord();
+        if at(more, q).y <= 0.0 { return vec4(0.0, 0.0, 0.0, 1.0); }
+        let a = at(behind_at, q);
+        let nm = at(behind_normal, q);
+        let n = vec3(nm.x, nm.y, nm.z);
+        let e = if a.w > 0.5 { probe_light(probes, at(frame, 0), spacing, vec3(a.x, a.y, a.z) + n * 0.3, n, at(sky, 0)) } else { vec3(0.0, 0.0, 0.0) };
+        return vec4(behind_radiance(at(sky, 0), a, at(behind_dir, q), at(behind_paint, q), nm, e), 1.0);
+    }
+}
+
+/// The picture without reflections (which screen-space reflections read): the sky; things are the sun's light, the probes' diffuse light
+/// (times contact occlusion) and emission.
+kernel render.probes_lit@1 {
+    requires { field.read; field.write; }
+    input surface: Grid<Vec4>;
+    input paint: Grid<Vec4>;
+    input extra: Grid<Vec4>;
+    input layers: Grid<Vec4>;
+    input more: Grid<Vec4>;
+    input probes: Volume<Vec4>;
+    input frame: Proxies;
+    input sky: SkyLooks;
+    input lens: Lenses;
+    param spacing: Float = 1.2;
+    param reach: Float = 0.7;
+    output result: Image;
+    compute {
+        let q = coord();
+        let extent = domain();
+        let l = at(lens, 0);
+        let s = at(sky, 0);
+        let dir = ray(l, q, extent);
+        let su = at(surface, q);
+        if su.w > no_hit() * 0.5 { return vec4(sky_radiance(dir, s, true), 1.0); }
+        let p = l.eye + dir * su.w;
+        let n = su.xyz;
+        let ex = at(extra, q);
+        let m = pbr_of(at(paint, q), ex, at(layers, q), at(more, q));
+        let v = vec3(0.0, 0.0, 0.0) - dir;
+        let e = probe_light(probes, at(frame, 0), spacing, p + n * 0.3, n, s) * screen_ao(surface, q, extent, l, p, n, su.w, reach) * baked_occlusion(ex);
+        return vec4(lit_by(m, n, v, s.sun, s.sun_color * ex.x) + m.albedo * (1.0 - m.metal) * (1.0 - m.transmission) * e + m.glow, 1.0);
+    }
+}
+
+/// Shading (standard PBR, `brdf.ent`): the sky drawn where it is; things: the sun's light (by the scene's
+/// visibility), plus the environment: the diffuse light is what each pixel gathered (`gathered`); reflected light is looked for first on the screen along the reflected
+/// direction (screen-space reflections: where it meets something, that pixel of the picture without reflections, `lit`), and where not found or
+/// off the screen, through the proxies (the coarse distance field), falling back to the sky (down, the probes round it); a rough surface's is the diffuse light round it, a
+/// clearcoat's by its own roughness; all times contact occlusion; transmissive surfaces add the light let through (`transmission.ent`); plus emission; air laid over distance.
+/// Light as a painting has it (`render.probes_shade`'s `style` 1): the sunward side and the shade split on one
+/// soft step (`shadow` how much sun reaches it), the shade only the gathered diffuse light `e`, cooler;
+/// a rim of light on the edge against the light, and a small hard highlight on smooth surfaces.
+fn toon(m: Pbr, n: Vec3, v: Vec3, s: SkyLook, shadow: Float, e: Vec3) -> Vec3 {
+    let kd = (1.0 - m.metal) * (1.0 - m.transmission);
+    let lightness = smoothstep(-0.03, 0.16, dot(n, s.sun)) * smoothstep(0.2, 0.55, shadow);
+    let sun = m.albedo * kd * s.sun_color * (0.75 / 3.14159265 * lightness);
+    let gray = dot(e, vec3(0.2126, 0.7152, 0.0722));
+    let flat_ = mix(vec3(gray, gray, gray), e, 0.6) * vec3(0.85, 0.95, 1.2);
+    let ambient = m.albedo * kd * flat_;
+    let edge = pow(1.0 - clamp(dot(n, v), 0.0, 1.0), 4.0);
+    let rim = s.sun_color * (edge * (0.25 + 0.75 * lightness) * 0.012);
+    let h = normalize(s.sun + v);
+    let blob = smoothstep(0.965, 0.985, max(dot(n, h), 0.0)) * (1.0 - m.rough) * lightness;
+    return sun + ambient + rim + s.sun_color * (blob * 0.03);
+}
+
+kernel render.probes_shade@1 {
+    requires { field.read; field.write; }
+    input surface: Grid<Vec4>;
+    input paint: Grid<Vec4>;
+    input extra: Grid<Vec4>;
+    input layers: Grid<Vec4>;
+    input more: Grid<Vec4>;
+    input beyond: Image;
+    input through: Grid<Vec4>;
+    input lit: Image;
+    /// The diffuse light each pixel gathered (`render.probes_screen_gather`, denoised).
+    input gathered: Image;
+    input probes: Volume<Vec4>;
+    input proxy: Volume<Vec4>;
+    input land: Grid<Float>;
+    input frame: Proxies;
+    input sky: SkyLooks;
+    input lens: Lenses;
+    param spacing: Float = 1.2;
+    param reach: Float = 0.7;
+    /// Only surfaces smoother than this look for reflections on the screen (on rough ones they would not show, and the time is wasted).
+    param mirror_below: Float = 0.6;
+    /// 0 lights it as it is; 1 as a painting does (`toon`): light and shade one soft step, the shade cool and flat,
+    /// a rim of light on the edge against the light, the highlight a small patch.
+    param style: Int = 0;
+    output result: Image;
+    compute {
+        let q = coord();
+        let extent = domain();
+        let l = at(lens, 0);
+        let s = at(sky, 0);
+        let dir = ray(l, q, extent);
+        let su = at(surface, q);
+        if su.w > no_hit() * 0.5 { return vec4(sky_radiance(dir, s, true), 1.0); }
+        let p = l.eye + dir * su.w;
+        let n = su.xyz;
+        let ex = at(extra, q);
+        let m = pbr_of(at(paint, q), ex, at(layers, q), at(more, q));
+        let v = vec3(0.0, 0.0, 0.0) - dir;
+        let fr = at(frame, 0);
+        let direct = lit_by(m, n, v, s.sun, s.sun_color * ex.x);
+        // The diffuse light gathered for this pixel already knows what
+        // stands close round it; the baked occlusion is finer still.
+        let ao = baked_occlusion(ex);
+        let e = at(gathered, q).xyz * ao;
+        let r = reflect(dir, n);
+        // Off the screen the reflection follows the coarse field (only for
+        // surfaces smooth enough to show it).
+        let fallback = if m.rough < 0.75 { rough_seen(proxy, land, probes, fr, spacing, p + n * 0.08, p, n, r, 30.0, s) }
+            else if r.y > 0.0 { sky_radiance(r, s, false) } else { probe_light(probes, fr, spacing, p + n * 0.3, r, s) };
+        // Screen-space reflections: looked for on smooth surfaces alone (the roughest layer no rougher than `mirror_below`).
+        let sharpest = min(m.rough, if m.clearcoat > 0.0 { m.coat_rough } else { 1.0 });
+        let jitter = fract(sin(dot(q, vec2(12.9898, 78.233))) * 43758.5453);
+        let hit = if sharpest < mirror_below { screen_march(surface, l, extent, p + n * 0.02, r, 4.0 + su.w * 0.5, 32, 0.6, jitter) } else { vec3(0.0, 0.0, -1.0) };
+        let edge = if hit.z >= 0.0 { saturate(min(min(hit.x, hit.y), min(extent.x - hit.x, extent.y - hit.y)) / 40.0) } else { 0.0 };
+        let seen = if hit.z >= 0.0 { at(lit, vec2(hit.x, hit.y)).xyz } else { fallback };
+        let mirrored = mix(fallback, seen, edge);
+        let spec_light = mix(mirrored, e, sqrt(m.rough)) * ao;
+        let coat_light = mix(mirrored, e, sqrt(m.coat_rough)) * ao;
+        let clear = if m.transmission > 0.0 { transmitted(m, n, v, at(through, q), frosted(beyond, q, m.rough)) } else { vec3(0.0, 0.0, 0.0) };
+        let shown = if style == 1 { toon(m, n, v, s, ex.x, e) + spec_light * env_brdf(pbr_f0(m), m.rough, max(dot(n, v), 0.001)) * (1.0 - m.rough) } else { direct + ambient_by(m, n, v, e, spec_light, coat_light) };
+        return vec4(aerial(shown + clear + m.glow, dir, su.w, s), 1.0);
+    }
+}

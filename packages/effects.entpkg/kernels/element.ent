@@ -1,0 +1,415 @@
+// The elements' magick as light: fire, arcane, ice, thunder, tinted
+// orbs, wind blades and the tornado, miasma, abyss, holy
+// light, inferno, shockwaves.
+use "random.entpkg";
+use "geometry.entpkg";
+use "glow.ent";
+
+/// Fire's color by its heat: smoke, red, orange, yellow, white.
+fn fire_hue(h: Float) -> Vec3 {
+    let a = mix(vec3(0.05, 0.04, 0.035), vec3(0.85, 0.12, 0.02), smoothstep(0.08, 0.3, h));
+    let b = mix(a, vec3(1.0, 0.45, 0.05), smoothstep(0.3, 0.55, h));
+    let c = mix(b, vec3(1.0, 0.85, 0.3), smoothstep(0.55, 0.78, h));
+    return mix(c, vec3(1.0, 1.0, 0.92), smoothstep(0.78, 1.0, h));
+}
+
+/// Fire through a sphere at `c` of radius `r`: its heat `heat` at the
+/// heart, a tail `tail` meters back along `back`, rolling with `t`; `rise`
+/// lifts its smoke. Marched in 16 steps to the nearer of its far side and
+/// the picture.
+fn fire(from: Vec3, dir: Vec3, scene: Float, c: Vec3, r: Float, back: Vec3, tail: Float, heat: Float, t: Float, seed: Int) -> Glow {
+    let bound = r + tail;
+    let mid = c + back * (tail * 0.5);
+    let span = sphere_span(from, dir, mid, bound);
+    let far = min(span.y, scene);
+    if far <= span.x { return no_glow(); }
+    let step = (far - span.x) / 16.0;
+    return loop 16 with g = no_glow() {
+        let p = from + dir * (span.x + (float(index()) + 0.5) * step);
+        let q = p - c;
+        let s = clamp(dot(q, back), 0.0, tail);
+        let width = r * (1.0 - 0.75 * s / max(tail, 0.001));
+        let radial = length(q - back * s) / max(width, 0.001);
+        let n = fbm3(q * (3.2 / r) + vec3(0.0, 0.0 - t * 3.0, 0.0) - back * (t * 5.0), 3, seed);
+        let dens = clamp((1.0 - radial) * 1.5 + n * 0.55, 0.0, 1.0);
+        let hot = clamp(dens * heat * (1.0 - 0.7 * s / max(tail, 0.001)) * (1.25 - 0.5 * radial), 0.0, 1.0);
+        let absorb = dens * step * (2.0 + 6.0 * (1.0 - hot));
+        let lit = fire_hue(hot) * (0.3 + 3.5 * hot * hot) * dens * step * 6.0 / r;
+        Glow { light: g.light + lit * g.through, through: g.through * exp(0.0 - absorb / r), near: if absorb > 0.0001 { min(g.near, span.x + float(index()) * step) } else { g.near } }
+    };
+}
+
+/// Violet magick through a sphere: a swirl brightest at its heart.
+fn arcane(from: Vec3, dir: Vec3, scene: Float, c: Vec3, r: Float, back: Vec3, tail: Float, power: Float, t: Float, seed: Int) -> Glow {
+    let mid = c + back * (tail * 0.5);
+    let span = sphere_span(from, dir, mid, r + tail);
+    let far = min(span.y, scene);
+    if far <= span.x { return no_glow(); }
+    let step = (far - span.x) / 12.0;
+    return loop 12 with g = no_glow() {
+        let p = from + dir * (span.x + (float(index()) + 0.5) * step);
+        let q = p - c;
+        let s = clamp(dot(q, back), 0.0, tail);
+        let radial = length(q - back * s) / max(r * (1.0 - 0.8 * s / max(tail, 0.001)), 0.001);
+        let swirl = ridged3(q * (4.0 / r) + vec3(t * 2.0, t * 3.0, 0.0 - t * 2.0), 2, seed);
+        let dens = clamp(1.0 - radial, 0.0, 1.0);
+        let core = pow(dens, 3.0);
+        let hue = mix(vec3(0.55, 0.25, 1.0), vec3(0.95, 0.9, 1.0), core);
+        let lit = hue * (dens * (0.4 + swirl * 0.8) + core * 3.0) * power * step * 5.0 / r;
+        Glow { light: g.light + lit * g.through, through: g.through * exp(0.0 - dens * step * 0.6 / r), near: g.near }
+    };
+}
+
+/// A crystal of ice: six-sided, pointed at both ends, `len` long and `w`
+/// wide along `a`; how far `q` is from it.
+fn crystal(q: Vec3, a: Vec3, len: Float, w: Float) -> Float {
+    let x = dot(q, a);
+    let side = q - a * x;
+    let radial = length(side);
+    let up = if abs(a.y) < 0.9 { vec3(0.0, 1.0, 0.0) } else { vec3(1.0, 0.0, 0.0) };
+    let u = normalize(cross(a, up));
+    let v = cross(a, u);
+    let ang = atan2(dot(side, v), dot(side, u));
+    let facet = 1.0472;
+    let k = ang - facet * floor(ang / facet + 0.5);
+    let hex = radial * cos(k) / 0.866;
+    let taper = w * clamp(1.0 - abs(x) / (len * 0.5), 0.0, 1.0);
+    return max(hex - taper, abs(x) - len * 0.5) * 0.7;
+}
+
+/// Ice: crystals at `c` (a lance along `a`, or spikes out of the ground
+/// `spikes` grown), traced to their surface; cold within, bright at the
+/// edges; and a mist about them.
+fn ice(from: Vec3, dir: Vec3, scene: Float, c: Vec3, a: Vec3, spikes: Float, fade: Float, t: Float, seed: Int, scale: Float) -> Glow {
+    let bound = (if spikes > 0.0 { 2.4 } else { 0.7 }) * scale;
+    let center = if spikes > 0.0 { c + vec3(0.0, 0.7 * scale, 0.0) } else { c };
+    let span = sphere_span(from, dir, center, bound);
+    let far = min(span.y, scene);
+    if far <= span.x { return no_glow(); }
+    let hit = loop 36 with m = vec2(span.x, -1.0) until m.y >= 0.0 || m.x > far {
+        let p = from + dir * m.x;
+        let d = ice_shape((p - c) / scale, a, spikes, seed) * scale;
+        if d < 0.002 { vec2(m.x, 1.0) } else { vec2(m.x + max(d, 0.01), -1.0) }
+    };
+    let mist = (1.0 - smoothstep(0.0, bound, length(from + dir * (span.x + far) * 0.5 - center))) * 0.25 * fade;
+    let mist_glow = Glow { light: vec3(0.7, 0.9, 1.0) * mist * 0.6, through: 1.0 - mist * 0.5, near: 100000.0 };
+    if hit.y < 0.0 { return mist_glow; }
+    let p = from + dir * hit.x;
+    let e = 0.004;
+    let n = normalize(vec3(ice_shape((p - c + vec3(e, 0.0, 0.0)) / scale, a, spikes, seed) - ice_shape((p - c - vec3(e, 0.0, 0.0)) / scale, a, spikes, seed),
+        ice_shape((p - c + vec3(0.0, e, 0.0)) / scale, a, spikes, seed) - ice_shape((p - c - vec3(0.0, e, 0.0)) / scale, a, spikes, seed),
+        ice_shape((p - c + vec3(0.0, 0.0, e)) / scale, a, spikes, seed) - ice_shape((p - c - vec3(0.0, 0.0, e)) / scale, a, spikes, seed)));
+    let edge = pow(1.0 - abs(dot(n, dir)), 3.0);
+    let inner = 0.5 + 0.5 * fbm3((p - c) * 9.0 + vec3(t, 0.0, 0.0), 2, seed);
+    let light = (vec3(0.35, 0.72, 1.0) * (0.35 + 0.5 * inner) + vec3(0.9, 0.97, 1.0) * edge * 1.8) * fade;
+    return behind(mist_glow, Glow { light: light, through: 1.0 - 0.85 * fade, near: hit.x });
+}
+
+/// The ice's shape: one lance along `a`, or seven spikes out of the
+/// ground grown by `spikes`.
+fn ice_shape(q: Vec3, a: Vec3, spikes: Float, seed: Int) -> Float {
+    if spikes <= 0.0 { return crystal(q, a, 0.9, 0.09); }
+    return loop 7 with d = 100.0 {
+        let k = index();
+        let ang = float(k) * 0.8976 + hash1(k, seed) * 0.6;
+        let lean = 0.25 + 0.45 * hash1(k + 9, seed);
+        let way = normalize(vec3(cos(ang) * lean, 1.0, sin(ang) * lean));
+        let len = (0.9 + 0.9 * hash1(k + 17, seed)) * spikes;
+        let base = vec3(cos(ang), 0.0, sin(ang)) * (0.55 + 0.35 * hash1(k + 29, seed));
+        min(d, crystal(q - base - way * (len * 0.5), way, len, 0.12 + 0.05 * hash1(k + 23, seed)))
+    };
+}
+
+/// Thunder falling on `c`: the stroke from the sky with two forks, arcs
+/// over the ground, bright as it falls and gone in moments, flickering.
+fn thunder(from: Vec3, dir: Vec3, scene: Float, c: Vec3, age: Float, t: Float, seed: Int) -> Glow {
+    let frame = int(t * 24.0);
+    let flicker = if hash1(frame, seed + 7) > 0.25 { 1.0 } else { 0.25 };
+    let fade = (1.0 - age) * (1.0 - age) * flicker;
+    let sky = c + vec3((hash1(seed, 3) - 0.5) * 6.0, 28.0, (hash1(seed, 5) - 0.5) * 6.0);
+    let main = loop 14 with g = 0.0 {
+        let i = index();
+        max(g, stroke(from, dir, scene, jag(sky, c, i, 14, frame, seed, 1.6), jag(sky, c, i + 1, 14, frame, seed, 1.6), 0.05))
+    };
+    let forks = loop 8 with g = 0.0 {
+        let k = index() / 4;
+        let i = index() % 4;
+        let root = jag(sky, c, 5 + k * 4, 14, frame, seed, 1.6);
+        let tip = root + vec3((hash1(k + frame * 7, seed + 11) - 0.5) * 8.0, -5.0 - 3.0 * hash1(k, seed + 13), (hash1(k + frame * 7, seed + 17) - 0.5) * 8.0);
+        max(g, stroke(from, dir, scene, jag(root, tip, i, 4, frame, seed + 19 + k, 0.6), jag(root, tip, i + 1, 4, frame, seed + 19 + k, 0.6), 0.03) * 0.7)
+    };
+    let arcs = loop 18 with g = 0.0 {
+        let k = index() / 3;
+        let i = index() % 3;
+        let ang = float(k) * 1.047 + hash1(k + frame, seed + 23) * 0.8;
+        let tip = c + vec3(cos(ang), 0.05, sin(ang)) * (1.4 + hash1(k + frame, seed + 29));
+        max(g, stroke(from, dir, scene, jag(c, tip, i, 3, frame, seed + 31 + k, 0.35), jag(c, tip, i + 1, 3, frame, seed + 31 + k, 0.35), 0.025) * 0.8)
+    };
+    let bright = max(main, max(forks, arcs)) * fade;
+    let hue = mix(vec3(0.55, 0.6, 1.0), vec3(1.0, 1.0, 1.0), clamp(bright * 0.4, 0.0, 1.0));
+    return Glow { light: hue * bright, through: 1.0, near: 100000.0 };
+}
+
+
+// ---------------------------------------------------------------- the elements
+
+/// A glob of magick in flight, its color `hue` brightening to `core` at
+/// its heart; `dark`, a heart of black that hides what is behind (a
+/// shadow's orb).
+fn tinted_orb(from: Vec3, dir: Vec3, scene: Float, c: Vec3, r: Float, back: Vec3, tail: Float, hue: Vec3, core_hue: Vec3, dark: Bool, t: Float, seed: Int) -> Glow {
+    let mid = c + back * (tail * 0.5);
+    let span = sphere_span(from, dir, mid, r + tail);
+    let far = min(span.y, scene);
+    if far <= span.x { return no_glow(); }
+    let step = (far - span.x) / 12.0;
+    let swirl_glow = loop 12 with g = no_glow() {
+        let p = from + dir * (span.x + (float(index()) + 0.5) * step);
+        let q = p - c;
+        let s = clamp(dot(q, back), 0.0, tail);
+        let radial = length(q - back * s) / max(r * (1.0 - 0.8 * s / max(tail, 0.001)), 0.001);
+        let swirl = ridged3(q * (4.0 / r) + vec3(t * 2.0, t * 3.0, 0.0 - t * 2.0), 2, seed);
+        let dens = clamp(1.0 - radial, 0.0, 1.0);
+        let core = pow(dens, 3.0);
+        let lit = mix(hue, core_hue, core) * (dens * (0.4 + swirl * 0.9) + (if dark { 0.0 } else { core * 3.0 })) * step * 5.0 / r;
+        Glow { light: g.light + lit * g.through, through: g.through * exp(0.0 - dens * step * (if dark { 2.5 } else { 0.6 }) / r), near: g.near }
+    };
+    if !dark { return swirl_glow; }
+    // A shadow's orb: a ball of black, its rim violet.
+    let ball_ = sphere_span(from, dir, c, r * 0.55);
+    if ball_.y < ball_.x || ball_.x > scene { return swirl_glow; }
+    let n = normalize(from + dir * ball_.x - c);
+    let rim = pow(1.0 - abs(dot(n, dir)), 2.5);
+    return behind(Glow { light: hue * rim * 2.2, through: 0.0, near: ball_.x }, swirl_glow);
+}
+
+/// A blade of wind in flight: a crescent across the way it goes, two
+/// fainter after it.
+fn wind_blade(from: Vec3, dir: Vec3, scene: Float, c: Vec3, way: Vec3, s: Float, t: Float) -> Glow {
+    let span = sphere_span(from, dir, c - way * 0.4 * s, 1.2 * s);
+    if span.y < span.x || span.x > scene { return no_glow(); }
+    let side0 = cross(way, vec3(0.0, 1.0, 0.0));
+    let side = if length(side0) > 0.01 { normalize(side0) } else { vec3(1.0, 0.0, 0.0) };
+    let tilt = normalize(side + vec3(0.0, 0.35, 0.0));
+    let R = 0.55 * s;
+    let lit = loop 18 with g = 0.0 {
+        let arc = index() / 6;
+        let i = index() % 6;
+        let back = way * (0.0 - float(arc) * 0.3 * s);
+        let a0 = -1.15 + 2.3 * float(i) / 6.0;
+        let a1 = -1.15 + 2.3 * float(i + 1) / 6.0;
+        let p0 = c + back + tilt * (sin(a0) * R) + way * ((cos(a0) - 1.0) * R * 0.55);
+        let p1 = c + back + tilt * (sin(a1) * R) + way * ((cos(a1) - 1.0) * R * 0.55);
+        let w = 0.022 * s * (1.0 - abs(a0 + 1.15 / 6.0) / 1.4);
+        max(g, stroke(from, dir, scene, p0, p1, max(w, 0.004)) * (1.0 - float(arc) * 0.35))
+    };
+    return Glow { light: vec3(0.72, 1.0, 0.9) * lit * 0.6, through: 1.0, near: 100000.0 };
+}
+
+/// A tornado on `c`, `s` its size: a funnel widening as it rises, its
+/// wall streaked and turning fast, swaying; dust rising round its foot.
+fn tornado(from: Vec3, dir: Vec3, scene: Float, c: Vec3, s: Float, age: Float, t: Float, seed: Int) -> Glow {
+    let H = 5.5 * s;
+    let r0 = 0.3 * s;
+    let r1 = 2.1 * s;
+    let mid = c + vec3(0.0, H * 0.5, 0.0);
+    let span = sphere_span(from, dir, mid, max(H * 0.56, r1 * 1.1));
+    let far = min(span.y, scene);
+    if far <= span.x { return no_glow(); }
+    let life = smoothstep(0.0, 0.06, age) * (1.0 - smoothstep(0.85, 1.0, age));
+    let step = (far - span.x) / 18.0;
+    let funnel = loop 18 with g = no_glow() {
+        let p = from + dir * (span.x + (float(index()) + 0.5) * step);
+        let q = p - c;
+        let y = q.y / H;
+        if y < 0.0 || y > 1.0 { g } else {
+            let sway = vec2(sin(t * 1.3 + y * 2.5), cos(t * 1.1 + y * 2.1)) * (0.3 * s * y);
+            let R = (r0 + (r1 - r0) * pow(y, 1.5)) * life;
+            let qx = q.x - sway.x;
+            let qz = q.z - sway.y;
+            let d = sqrt(qx * qx + qz * qz);
+            let wall = exp(0.0 - pow((d - R * 0.8) / (0.3 * R + 0.06), 2.0));
+            let ang = atan2(qz, qx);
+            let n = fbm3(vec3(qx, q.y, qz) * (1.6 / s) + vec3(0.0, 0.0 - t * 2.0, 0.0), 2, seed);
+            let band = 0.5 + 0.5 * sin(ang * 4.0 - t * 11.0 + y * 9.0 + n * 3.0);
+            let streak = band * band * band;
+            let dens = wall * (0.35 + 0.65 * streak) * life * (1.0 - 0.4 * y);
+            // Dust: dark below and on its shaded side, pale streaks over it.
+            let shade = 0.55 + 0.45 * clamp(dot(normalize(vec3(qx, 0.0, qz) + vec3(0.0001, 0.0, 0.0)), normalize(vec3(-0.5, 0.0, -0.4))), -1.0, 1.0);
+            let hue = mix(vec3(0.32, 0.29, 0.24), vec3(0.62, 0.66, 0.6), y) * shade + vec3(0.8, 0.9, 0.88) * streak * 0.6;
+            let lit = hue * dens * step * 2.6 / s;
+            Glow { light: g.light + lit * g.through, through: g.through * exp(0.0 - dens * step * 4.0 / s), near: if dens > 0.2 { min(g.near, span.x + float(index()) * step) } else { g.near } }
+        }
+    };
+    // Dust thrown round its foot, where the picture's ground is.
+    let gp = from + dir * scene;
+    let gd = length(vec2(gp.x - c.x, gp.z - c.z));
+    let dust = if scene < 1000.0 && abs(gp.y - c.y) < 0.3 + 0.15 * length(vec2(gp.x - c.x, gp.z - c.z)) && gd < r1 * 1.4 {
+        let a = atan2(gp.z - c.z, gp.x - c.x);
+        let swirl = 0.5 + 0.5 * sin(a * 6.0 + log(gd + 0.2) * 4.0 - t * 7.0);
+        exp(0.0 - pow((gd - r0 * 2.5) / (r0 * 1.8), 2.0)) * (0.4 + 0.6 * swirl) * life * 0.35
+    } else { 0.0 };
+    // Debris flung round it, rising.
+    let debris = loop 12 with m = 0.0 {
+        let i = index();
+        let rise = fract(t * 0.35 + float(i) / 12.0 + hash1(i, seed));
+        let a = float(i) * 2.4 + t * (3.0 + 2.0 * hash1(i, seed + 3));
+        let rr = (r0 + (r1 - r0) * pow(rise, 1.5)) * 1.05 * life;
+        let p = c + vec3(cos(a) * rr, rise * H, sin(a) * rr);
+        let d = ray_segment(from, dir, p, p);
+        max(m, if d.y < scene { exp(0.0 - pow(d.x / (0.07 * s), 2.0)) } else { 0.0 })
+    };
+    let chunks = Glow { light: vec3(0.12, 0.1, 0.08) * debris, through: 1.0 - debris * 0.9, near: 100000.0 };
+    return behind(behind(chunks, funnel), Glow { light: vec3(0.6, 0.55, 0.45) * dust, through: 1.0 - dust * 0.5, near: 100000.0 });
+}
+
+/// A miasma on `c`, `r` wide: a low dome of venom rolling, sickly green
+/// and bruise purple, bubbles rising and bursting in it.
+fn miasma(from: Vec3, dir: Vec3, scene: Float, c: Vec3, r: Float, age: Float, t: Float, seed: Int) -> Glow {
+    let mid = c + vec3(0.0, r * 0.25, 0.0);
+    let span = sphere_span(from, dir, mid, r * 1.05);
+    let far = min(span.y, scene);
+    if far <= span.x { return no_glow(); }
+    let life = smoothstep(0.0, 0.1, age) * (1.0 - smoothstep(0.8, 1.0, age));
+    let step = (far - span.x) / 16.0;
+    let fog = loop 16 with g = no_glow() {
+        let p = from + dir * (span.x + (float(index()) + 0.5) * step);
+        let q = p - mid;
+        let flat = vec3(q.x, q.y * 1.8, q.z) / r;
+        let e = 1.0 - length(flat);
+        let n = fbm3(q * (2.2 / r) + vec3(t * 0.25, t * 0.45, 0.0 - t * 0.2), 3, seed);
+        let dens = clamp(e * 1.4 + n * 0.8, 0.0, 1.0) * life;
+        let hue = mix(vec3(0.28, 0.62, 0.12), vec3(0.45, 0.16, 0.5), clamp(n * 1.2 + 0.5, 0.0, 1.0));
+        let lit = hue * dens * step * 2.6 / r * (0.7 + 0.6 * clamp(n + 0.5, 0.0, 1.0));
+        Glow { light: g.light + lit * g.through, through: g.through * exp(0.0 - dens * step * 2.2 / r), near: g.near }
+    };
+    let bubbles = loop 8 with m = 0.0 {
+        let i = index();
+        let rise = fract(t * 0.45 + float(i) / 8.0 + hash1(i, seed));
+        let a = hash1(i, seed + 3) * 6.2832;
+        let p = c + vec3(cos(a), 0.0, sin(a)) * (r * 0.6 * hash1(i, seed + 5)) + vec3(0.0, rise * r * 0.6, 0.0);
+        let d = ray_segment(from, dir, p, p);
+        let br = 0.06 + 0.08 * rise;
+        m + exp(0.0 - pow((d.x - br) / 0.012, 2.0)) * (1.0 - rise) * (if d.y < scene { 1.0 } else { 0.0 })
+    };
+    return behind(Glow { light: vec3(0.6, 1.0, 0.35) * bubbles * life * 0.8, through: 1.0, near: 100000.0 }, fog);
+}
+
+/// An abyss on `c`, `r` wide: a heart of black hanging over it, its rim
+/// violet; a disc of shadow on the ground turning in toward it, the world
+/// dimmed within; motes drawn in along its arms.
+fn abyss(from: Vec3, dir: Vec3, scene: Float, c: Vec3, r: Float, age: Float, t: Float, seed: Int) -> Glow {
+    let span = sphere_span(from, dir, c + vec3(0.0, 1.0, 0.0), r * 1.2 + 1.0);
+    if span.y < span.x || span.x > scene { return no_glow(); }
+    let life = smoothstep(0.0, 0.08, age) * (1.0 - smoothstep(0.85, 1.0, age));
+    let heart = c + vec3(0.0, 0.9 + r * 0.15, 0.0);
+    let rc = (0.25 + r * 0.12) * life;
+    let core_span = sphere_span(from, dir, heart, rc);
+    let core = if core_span.y >= core_span.x && core_span.x < scene {
+        let n = normalize(from + dir * core_span.x - heart);
+        let rim = pow(1.0 - abs(dot(n, dir)), 4.0);
+        Glow { light: vec3(0.75, 0.35, 1.0) * rim * 3.0, through: 0.0, near: core_span.x }
+    } else { no_glow() };
+    let ray = ray_segment(from, dir, heart, heart);
+    // A ring of violet fire turning about the heart.
+    let halo = if ray.y < scene { exp(0.0 - pow((ray.x - rc * 1.25) / (rc * 0.18 + 0.01), 2.0)) * (0.7 + 0.3 * sin(t * 12.0)) * 1.4 + exp(0.0 - ray.x / (rc * 4.0 + 0.01)) * 0.18 } else { 0.0 };
+    let gp = from + dir * scene;
+    let gd = length(vec2(gp.x - c.x, gp.z - c.z));
+    let on_ground = scene < 1000.0 && abs(gp.y - c.y) < 0.3 + 0.15 * length(vec2(gp.x - c.x, gp.z - c.z)) && gd < r * 1.15;
+    let disc = if on_ground {
+        let a = atan2(gp.z - c.z, gp.x - c.x);
+        let arms = pow(0.5 + 0.5 * sin(a * 3.0 + log(gd + 0.08) * 6.0 + t * 6.0), 5.0);
+        arms * smoothstep(r * 1.1, r * 0.25, gd) * life
+    } else { 0.0 };
+    let dim = if on_ground { smoothstep(r * 1.15, r * 0.3, gd) * 0.45 * life } else { 0.0 };
+    let motes = loop 14 with m = 0.0 {
+        let i = index();
+        let ph = fract(t * 0.6 + float(i) / 14.0);
+        let a = float(i) * 2.399 + ph * 5.0 + t;
+        let p = c + vec3(cos(a) * r * (1.0 - ph), 0.15 + 0.9 * ph * ph, sin(a) * r * (1.0 - ph));
+        let d = ray_segment(from, dir, p, p);
+        m + exp(0.0 - pow(d.x / 0.03, 2.0)) * ph * (if d.y < scene { 1.0 } else { 0.0 })
+    };
+    let glow = Glow { light: vec3(0.55, 0.2, 0.9) * (disc * 1.3 + halo * life + motes * life * 1.2), through: 1.0 - dim, near: 100000.0 };
+    return behind(core, glow);
+}
+
+/// Holy light on `c`, `r` wide: a pillar of light out of the sky (tall for
+/// judgement, short for the mage's), white at its heart, gold about it;
+/// rings of light running out over the ground, rays between them; sparks
+/// rising in it; a flash as it falls.
+fn holy(from: Vec3, dir: Vec3, scene: Float, c: Vec3, r: Float, age: Float, t: Float, seed: Int, big: Bool) -> Glow {
+    let tall = if big { 30.0 } else { 7.0 };
+    let w = r * (if big { 0.45 } else { 0.35 }) * (1.0 - 0.45 * age);
+    let fade = pow(1.0 - age, 1.5);
+    let flash = 1.0 - smoothstep(0.0, 0.18, age);
+    let rs = ray_segment(from, dir, c, c + vec3(0.0, tall, 0.0));
+    let pillar = if rs.y < scene + 0.5 {
+        let hp = clamp(((from + dir * rs.y).y - c.y) / tall, 0.0, 1.0);
+        (exp(0.0 - pow(rs.x / (w * 0.25), 2.0)) * 1.1 + exp(0.0 - pow(rs.x / w, 2.0)) * 0.35 + exp(0.0 - rs.x / (w * 2.5)) * 0.06) * (1.0 - hp * 0.5) * fade * (1.0 + flash * 0.8)
+    } else { 0.0 };
+    let gp = from + dir * scene;
+    let gd = length(vec2(gp.x - c.x, gp.z - c.z));
+    let ground = if scene < 1000.0 && abs(gp.y - c.y) < 0.3 + 0.15 * length(vec2(gp.x - c.x, gp.z - c.z)) && gd < r * 2.0 {
+        let a = atan2(gp.z - c.z, gp.x - c.x);
+        let ring1 = exp(0.0 - pow((gd - r * (0.25 + age * 1.4)) / (0.05 * r), 2.0));
+        let ring2 = exp(0.0 - pow((gd - r * (0.12 + age * 0.9)) / (0.04 * r), 2.0)) * 0.7;
+        let spokes = pow(0.5 + 0.5 * cos(a * 12.0 + t * 0.8), 10.0) * smoothstep(r * 1.5, 0.0, gd) * 0.6;
+        (ring1 + ring2 + spokes) * fade
+    } else { 0.0 };
+    let sparks = loop 12 with m = 0.0 {
+        let i = index();
+        let rise = fract(t * 0.5 + float(i) / 12.0 + hash1(i, seed));
+        let a = hash1(i, seed + 7) * 6.2832;
+        let p = c + vec3(cos(a) * w * 0.8, rise * tall * 0.4, sin(a) * w * 0.8);
+        let d = ray_segment(from, dir, p, p);
+        m + exp(0.0 - pow(d.x / 0.025, 2.0)) * (1.0 - rise) * (if d.y < scene { 1.0 } else { 0.0 })
+    };
+    let hue = mix(vec3(1.0, 0.78, 0.35), vec3(1.0, 1.0, 0.92), clamp(pillar * 0.5, 0.0, 1.0));
+    return Glow { light: hue * (pillar + ground * 0.8 + sparks * fade * 1.2), through: 1.0, near: 100000.0 };
+}
+
+/// An inferno on `c`, `r` wide: a ring burning on the ground, six columns
+/// of fire standing on it, roaring and leaning.
+fn inferno(from: Vec3, dir: Vec3, scene: Float, c: Vec3, r: Float, age: Float, t: Float, seed: Int) -> Glow {
+    let span = sphere_span(from, dir, c + vec3(0.0, 1.5, 0.0), r + 3.2);
+    if span.y < span.x || span.x > scene { return no_glow(); }
+    let life = smoothstep(0.0, 0.08, age) * (1.0 - smoothstep(0.8, 1.0, age));
+    let gp = from + dir * scene;
+    let gd = length(vec2(gp.x - c.x, gp.z - c.z));
+    let ring = if scene < 1000.0 && abs(gp.y - c.y) < 0.3 + 0.15 * length(vec2(gp.x - c.x, gp.z - c.z)) {
+        exp(0.0 - pow((gd - r) / 0.3, 2.0)) * 1.4 + smoothstep(r, 0.0, gd) * 0.12
+    } else { 0.0 };
+    let base = Glow { light: fire_hue(0.75) * ring * life, through: 1.0, near: 100000.0 };
+    return loop 6 with g = base {
+        let k = index();
+        let a = float(k) * 1.0472 + t * 0.3;
+        let p = c + vec3(cos(a) * r, 0.25, sin(a) * r);
+        let tall = (2.4 + 0.7 * sin(t * 3.0 + float(k) * 1.7)) * life * (0.8 + 0.2 * r / 3.5);
+        behind(g, fire(from, dir, scene, p, 0.75 * life + 0.05, normalize(vec3(cos(a) * 0.15, 1.0, sin(a) * 0.15)), tall, 0.95 * life, t, seed + k * 7))
+    };
+}
+
+/// A burst's shock on the ground about `c`: a ring running out to `r`
+/// and fading, a flash at its heart as it begins, embers flung up and
+/// falling; `hue` its color.
+fn shockwave(from: Vec3, dir: Vec3, scene: Float, c: Vec3, r: Float, age: Float, hue: Vec3, t: Float, seed: Int) -> Glow {
+    let span = sphere_span(from, dir, c + vec3(0.0, 0.8, 0.0), r * 1.3 + 1.5);
+    if span.y < span.x || span.x > scene { return no_glow(); }
+    let gp = from + dir * scene;
+    let gd = length(vec2(gp.x - c.x, gp.z - c.z));
+    let front = r * (0.2 + 1.1 * sqrt(age));
+    let ring = if scene < 1000.0 && abs(gp.y - c.y) < 0.3 + 0.15 * length(vec2(gp.x - c.x, gp.z - c.z)) { exp(0.0 - pow((gd - front) / (0.08 * r + 0.05), 2.0)) * (1.0 - age) * 1.6 } else { 0.0 };
+    let flash_ray = ray_segment(from, dir, c + vec3(0.0, 0.6, 0.0), c + vec3(0.0, 0.6, 0.0));
+    let flash = if flash_ray.y < scene { exp(0.0 - pow(flash_ray.x / (r * 0.5), 2.0)) * pow(1.0 - smoothstep(0.0, 0.2, age), 2.0) * 1.5 } else { 0.0 };
+    let embers = loop 16 with m = 0.0 {
+        let i = index();
+        let a = hash1(i, seed) * 6.2832;
+        let sp = (0.5 + hash1(i, seed + 3)) * r * 0.9;
+        let up = 3.0 + 4.0 * hash1(i, seed + 5);
+        let tt = age * 1.2;
+        let p = c + vec3(cos(a) * sp * tt, up * tt - 6.0 * tt * tt + 0.3, sin(a) * sp * tt);
+        let d = ray_segment(from, dir, p, p);
+        m + (if d.y < scene && p.y > c.y { exp(0.0 - pow(d.x / 0.035, 2.0)) } else { 0.0 }) * (1.0 - age)
+    };
+    return Glow { light: hue * (ring + flash) + mix(hue, vec3(1.0, 0.95, 0.7), 0.5) * embers * 1.4, through: 1.0, near: 100000.0 };
+}

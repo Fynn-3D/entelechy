@@ -2,12 +2,12 @@
 
 A world of ten million triangles; a frame places only the chunks it can
 see. The world is `cols` by `cols` chunks, each a `side` by `side` patch.
-`world.visible` writes one flag per chunk, the compact package turns the
+`world.visible` writes one flag per chunk, the math package turns the
 flags into kept indices and a count, and every geometry node is sized by
 that count:
 
 ```
-node kept: graph "../../packages/compact.entpkg/graphs/compact.esn" {
+node kept: graph "../../packages/parallel.entpkg/graphs/compact.esn" {
     flags <- visible.result;
 }
 node ground: world.ground@1 {

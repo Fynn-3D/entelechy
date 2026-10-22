@@ -1,0 +1,6 @@
+//! A game's actions read from the keyboard, the mouse and a pad alike,
+//! from a table of actions: held, pressed and released, the ways to move
+//! and look, and the stick's flicks.
+package controls@1 { language = 1; ir = 1; }
+
+use "kernels/";

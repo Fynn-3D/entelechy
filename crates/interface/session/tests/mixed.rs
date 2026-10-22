@@ -224,7 +224,7 @@ impl Backend for Clocked {
 }
 
 #[test]
-fn a_node_the_backend_did_not_time_is_not_given_its_neighbours_number() {
+fn a_node_the_backend_did_not_time_is_not_given_its_neighbors_number() {
     let mut runtime = Runtime::with_backend(
         1 << 22,
         Box::new(Clocked {

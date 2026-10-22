@@ -167,7 +167,7 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Lexeme>, ParseError> {
                 };
             word(&mut index, &mut byte, &mut advance);
             // A package's name and a name it declares, written together:
-            // `hash_noise::fbm2` is one name.
+            // `random::fbm2` is one name.
             if chars.get(index) == Some(&':')
                 && chars.get(index + 1) == Some(&':')
                 && chars
@@ -198,7 +198,7 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Lexeme>, ParseError> {
         if c == ':' && chars.get(index + 1) == Some(&':') {
             return Err(ParseError {
                 span,
-                message: "`::` joins a package's name and a name it declares, written together: `hash_noise::fbm2`".into(),
+                message: "`::` joins a package's name and a name it declares, written together: `random::fbm2`".into(),
             });
         }
         // A number's suffix, `d` (`Double`) or `l` (`Long`), standing alone.

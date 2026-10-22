@@ -1,0 +1,151 @@
+// The rows an effect is made of. An effect is a few layers in time; each
+// layer is a form (`form_*`) placed at an anchor (`at_*`), moving its own
+// way (`move_*`), sized and brightened by four keys over its life. What a
+// layer is made of comes from its element: the element's colors and its
+// ways (rising, swirling, jagged, faceted, flickering, falling, dark), so
+// one effect drawn in another element is another spell, and its tier and
+// seed vary it again.
+
+/// What a layer is made of: its colors from the heart out (`core`,
+/// `body`, `edge`), how much light it gives (`glow`) and how much it hides
+/// (`smoke`); whether its heart is dark; how fast it rises and swirls; how
+/// jagged its strokes, how faceted its noise, how it flickers; how hard
+/// its sparks fall; how fine its grain. And what its small things are:
+/// its sparks (`chips_*`), its motes (`specks_*`) and the mark it leaves
+/// on the ground (`ground_*`), so fire flings sparks, stone flings rocks
+/// and cracks the ground, water splashes and ripples.
+struct Element {
+    core: Vec3; body: Vec3; edge: Vec3;
+    glow: Float; smoke: Float; dark: Float;
+    rise: Float; swirl: Float; jag: Float; facet: Float; flicker: Float;
+    fall: Float; grain: Float;
+    chips: Int; specks: Int; ground: Int;
+}
+
+fn chips_streaks() -> Int { return 0; }
+fn chips_rocks() -> Int { return 1; }
+fn chips_arcs() -> Int { return 2; }
+fn chips_bubbles() -> Int { return 3; }
+fn chips_leaves() -> Int { return 4; }
+fn chips_drops() -> Int { return 5; }
+
+fn specks_dots() -> Int { return 0; }
+fn specks_flakes() -> Int { return 1; }
+fn specks_embers() -> Int { return 2; }
+fn specks_bubbles() -> Int { return 3; }
+fn specks_leaves() -> Int { return 4; }
+fn specks_dust() -> Int { return 5; }
+
+fn ground_ring() -> Int { return 0; }
+fn ground_cracks() -> Int { return 1; }
+fn ground_frost() -> Int { return 2; }
+fn ground_ripples() -> Int { return 3; }
+fn ground_scorch() -> Int { return 4; }
+type Elements = Rows<Element>;
+
+/// One effect: how long it lasts, whether it loops (an aura, a state),
+/// the element and tier it has unless a cast says another, its cue, and
+/// when it strikes (seconds in), so a game begins it that much before
+/// its blow lands.
+struct Effect { length: Float; looped: Int; element: Int; tier: Int; cue: Int; hit: Float; }
+type Effects = Rows<Effect>;
+
+/// One layer of an effect, `effect` the effect's place. From `start` to
+/// `end` seconds into it, a `form` at an anchor `at`, moving `move`;
+/// `size` meters across, scaled over its life by the keys `grow`, its
+/// light by the keys `shine`; `reach` its length (a tail, a beam, a
+/// pillar's height); `count` and `spread` for the forms of many (motes,
+/// sparks, shards, strokes); `lift` above its anchor; `tint` -1 to 1
+/// toward the element's core or edge; `element` -1 for the cast's; `seed`
+/// added to the cast's; `a` and `b` the form's own.
+struct Layer {
+    effect: Int; form: Int; at: Int; move: Int;
+    start: Float; end: Float;
+    size: Float; grow: Vec4; shine: Vec4;
+    reach: Float; count: Int; spread: Float; lift: Float;
+    tint: Float; element: Int; seed: Int; a: Float; b: Float;
+}
+type Layers = Rows<Layer>;
+
+/// An effect cast: which, in which element and tier (-1 for the effect's
+/// own), its seed; from whom to where; when it began and the moment it is
+/// drawn at (a game's time, an editor's clock); `hide` a bit for each of
+/// its layers not drawn; `on` while it is.
+struct Cast { on: Int; effect: Int; element: Int; tier: Int; seed: Int; from: Vec3; to: Vec3; start: Float; now: Float; hide: Int; }
+type Casts = Rows<Cast>;
+
+/// A named spell or skill: an effect drawn in an element at a tier.
+struct Spell { effect: Int; element: Int; tier: Int; }
+type Spells = Rows<Spell>;
+
+/// A layer as it is now: its form, element, where it is (`p`) and where it
+/// reaches (`q`), the way it faces (`way`), its size, reach and light, how far
+/// through its life (`age`), the time, seed, count, spread and its own
+/// `a` and `b`; `bound` the sphere it lies in, w its radius, 0 when off.
+struct Live {
+    form: Int; element: Int; tint: Float;
+    p: Vec3; q: Vec3; way: Vec3;
+    size: Float; reach: Float; shine: Float; age: Float; t: Float; seed: Int;
+    count: Int; spread: Float; a: Float; b: Float;
+    bound: Vec4;
+}
+type Lives = Rows<Live>;
+
+/// How many layers an effect may have; a cast's layers are its rows of
+/// the `Lives`, this many to a cast.
+fn layers_most() -> Int { return 8; }
+
+// The forms.
+fn form_orb() -> Int { return 0; }       // a ball of the element, its tail behind it
+fn form_beam() -> Int { return 1; }      // a body of it from p to q (a beam, a breath, a lance)
+fn form_pillar() -> Int { return 2; }    // a column from the ground up `reach`
+fn form_cone() -> Int { return 3; }      // a cone from p along way, `reach` long, `a` its spread
+fn form_shell() -> Int { return 4; }     // a shell `size` across: a barrier, a dome
+fn form_funnel() -> Int { return 5; }    // a turning funnel `reach` tall
+fn form_wave() -> Int { return 6; }      // a ring running out over the ground
+fn form_sigil() -> Int { return 7; }     // a circle written on the ground, `count` its marks
+fn form_motes() -> Int { return 8; }     // `count` motes rising, falling (a < 0) or drawn in (b > 0)
+fn form_sparks() -> Int { return 9; }    // `count` sparks flung out and falling
+fn form_shards() -> Int { return 10; }   // `count` crystals out of the ground or flying
+fn form_bolts() -> Int { return 11; }    // `count` jagged strokes from p to q
+fn form_slash() -> Int { return 12; }    // an arc swept about p, `a` its turn, `b` its tilt
+fn form_flash() -> Int { return 13; }    // the whole picture lit or darkened
+fn form_aura() -> Int { return 14; }     // a flame about a body standing at p, `reach` tall
+fn form_glyph() -> Int { return 15; }    // a sign over a head: `a` which (stars, sleep, bubbles, ring)
+fn form_darts() -> Int { return 16; }    // `count` missiles from p to q, `spread` apart, `a` seconds after each other
+
+/// How many forms there are.
+fn forms_count() -> Int { return 17; }
+
+// Where a layer is.
+fn at_caster() -> Int { return 0; }
+fn at_target() -> Int { return 1; }
+fn at_target_ground() -> Int { return 2; }
+fn at_caster_ground() -> Int { return 3; }
+fn at_between() -> Int { return 4; }
+fn at_sky() -> Int { return 5; }
+fn at_between_ground() -> Int { return 6; }
+
+// How it moves over its life.
+fn move_still() -> Int { return 0; }
+fn move_fly() -> Int { return 1; }       // from the caster to the target
+fn move_arc() -> Int { return 2; }       // as fly, arcing `a` meters high
+fn move_fall() -> Int { return 3; }      // down from `reach` above to its anchor
+fn move_rise() -> Int { return 4; }      // up from its anchor `reach`
+fn move_orbit() -> Int { return 5; }     // round its anchor `spread` out, `a` turns a second
+fn move_drift() -> Int { return 6; }     // from the caster toward the target, stopping short by `a`
+
+/// A tier's measure: how much bigger, how many more, how much brighter.
+fn tier_size(tier: Int) -> Float { return if tier <= 1 { 1.0 } else if tier == 2 { 1.45 } else { 2.1 }; }
+fn tier_count(tier: Int) -> Float { return if tier <= 1 { 1.0 } else if tier == 2 { 1.5 } else { 2.2 }; }
+fn tier_shine(tier: Int) -> Float { return if tier <= 1 { 1.0 } else if tier == 2 { 1.2 } else { 1.5 }; }
+
+/// Four keys at the start, a third, two thirds and the end of a life,
+/// read at `s` (0 to 1) smoothly between them.
+fn keys(k: Vec4, s: Float) -> Float {
+    let u = clamp(s, 0.0, 1.0) * 3.0;
+    let a = if u < 1.0 { k.x } else if u < 2.0 { k.y } else { k.z };
+    let b = if u < 1.0 { k.y } else if u < 2.0 { k.z } else { k.w };
+    let f = u - floor(min(u, 2.999));
+    return mix(a, b, f * f * (3.0 - 2.0 * f));
+}

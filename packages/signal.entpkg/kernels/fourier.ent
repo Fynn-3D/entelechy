@@ -1,0 +1,91 @@
+//! Fast Fourier transforms of a cube of complex numbers (`Vec2`, real
+//! then imaginary), `n = 1 << bits` a side, element `x + n * (y + n * z)`.
+
+/// The product of two complex numbers.
+fn cmul(a: Vec2, b: Vec2) -> Vec2 {
+    return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+
+/// The cell of element `e` in a cube `n` a side.
+fn cube_cell(e: Int, n: Int) -> IVec3 {
+    return ivec3(e % n, (e / n) % n, e / (n * n));
+}
+
+/// The element of cell `c`, wrapped round the cube's sides.
+fn cube_index(c: IVec3, n: Int) -> Int {
+    let w = ((c % n) + n) % n;
+    return w.x + n * (w.y + n * w.z);
+}
+
+/// The signed wave number of index `i` along a side `n` long: `0` to
+/// `n / 2 - 1`, then `-n / 2` to `-1`.
+fn wave_number(i: Int, n: Int) -> Int {
+    return if i < n / 2 { i } else { i - n };
+}
+
+/// `i`'s lowest `bits` bits in the other order.
+fn reversed_bits(i: Int, bits: Int) -> Int {
+    return loop bits with r = 0 { (r << 1) | ((i >> index()) & 1) };
+}
+
+/// The turns a transform `1 << bits` long multiplies by: `(cos, sin)` of
+/// `2 pi k / n`; a node sets `domain = 1 << bits`.
+kernel signal.fourier_turns@1 {
+    requires { field.write; }
+    param bits: Int = 6;
+    output result: Rows<Vec2>;
+    compute {
+        let angle = 6.28318530718 * float(element()) / float(1 << bits);
+        return vec2(cos(angle), sin(angle));
+    }
+}
+
+/// A real cube as complex numbers, the imaginary parts zero.
+kernel signal.fourier_complex@1 {
+    requires { field.read; field.write; }
+    input real: Rows<Float>;
+    output result: Rows<Vec2>;
+    compute { return vec2(sample(real), 0.0); }
+}
+
+/// The real parts of a complex cube.
+kernel signal.fourier_real@1 {
+    requires { field.read; field.write; }
+    input data: Rows<Vec2>;
+    output result: Rows<Float>;
+    compute { return sample(data).x; }
+}
+
+/// A cube transformed along its slowest axis, `1 << bits` a side (at most
+/// 256): element `k + n * (u + n * v)` of the result is wave number `k`
+/// of the row at `(u, v)` of the input's two faster axes, so the axis
+/// transformed comes out fastest and the other two follow in order. Three
+/// passes transform a cube along every axis and leave it laid as it came.
+/// A group holds `256 / n` whole rows: each lane reads its row's element
+/// in bit-reversed order, then `bits` rounds of butterflies (radix 2,
+/// Cooley and Tukey), each lane swapping with the lane `1 << round` away
+/// and the odd one turned by `e^(sign 2 pi i r / width)`, `sign` -1
+/// forward; `scaled`, divided by `n`.
+kernel signal.fourier_rows@1 {
+    requires { field.read; field.write; }
+    input data: Rows<Vec2>;
+    input turns: Rows<Vec2>;
+    param bits: Int = 6;
+    param sign: Float = -1.0;
+    param scaled: Bool = false;
+    output result: Rows<Vec2>;
+    group 256 {
+        let n = 1 << bits;
+        let e = element();
+        let k = e % n;
+        let first = at(data, e / n + n * n * reversed_bits(k, bits));
+        let done = loop bits with mine = first {
+            let h = 1 << index();
+            let other = exchange(mine, lane() ^ h);
+            let w = at(turns, (k % h) * (n / (2 * h)));
+            let turn = vec2(w.x, sign * w.y);
+            if (k & h) == 0 { mine + cmul(other, turn) } else { other - cmul(mine, turn) }
+        };
+        return if scaled { done / float(n) } else { done };
+    }
+}

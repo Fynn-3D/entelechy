@@ -4,7 +4,7 @@
 // the window at the window's resolution.
 use "kernels/";
 
-input font: Grid<Float> = "../../packages/text.entpkg/font.png";
+input font: Grid<Float> = "../../packages/text.entpkg/assets/font.png";
 input names: Rows<Int> = text "place erase paint colorundo  reset ";
 
 node seed: voxel.seed@1 { domain = vec3(48, 48, 48); }

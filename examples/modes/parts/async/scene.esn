@@ -29,13 +29,13 @@ node clock: kernel {
     input picture: Image <- view.result;
     output result: Image;
     compute {
-        let centre = domain() * 0.5;
-        let p = coord() + vec2(0.5, 0.5) - centre;
+        let center = domain() * 0.5;
+        let p = coord() + vec2(0.5, 0.5) - center;
         let angle = time() * 6.2831853;
         let hand = vec2(sin(angle), -cos(angle));
         let along = dot(p, hand);
         let across = abs(p.x * hand.y - p.y * hand.x);
-        let radius = min(centre.x, centre.y) * 0.9;
+        let radius = min(center.x, center.y) * 0.9;
         let on_hand = along > 0.0 && along < radius && across < 1.5;
         let c = sample(picture);
         return if on_hand { vec4(1.0, 1.0, 1.0, 1.0) } else { c };

@@ -1,0 +1,118 @@
+// Film: a cinematic finish, made over a finished picture as it is shown. A grade (exposure, white balance, saturation,
+// a split of cyan shadows and orange highlights, an S-shaped contrast), a red glow round highlights (film's halation),
+// the lens's fringe (red and blue apart toward the edges), darkened corners, grain (new each frame, heaviest in the
+// midtones, coarse or fine), a widescreen's bars. The fringe, darkened corners, grain and sRGB are
+// `image.entpkg`'s. A few looks are preset (`film_look`); 0 is the parameters' own.
+use "image.entpkg";
+
+/// One film's look.
+struct Film {
+    exposure: Float; temperature: Float; tint: Float; saturation: Float; split: Float; contrast: Float;
+    halation: Float; fringe: Float; vignette: Float; grain: Float; grain_size: Float; letterbox: Float;
+}
+
+/// The presets: 1 cinema (a cyan and orange split, soft contrast, halation, fine grain, 2.39 widescreen), 2 a warm film
+/// as Kodak's, 3 bleach bypass (desaturated, hard contrast, 1.85 bars), 4 black and white (coarse grain), 5 clean (nothing
+/// added). Any other is `own`.
+fn film_look(preset: Int, own: Film) -> Film {
+    return if preset == 1 { Film { exposure: 0.0, temperature: 0.1, tint: 0.0, saturation: 0.95, split: 0.6, contrast: 0.45,
+            halation: 0.35, fringe: 0.0015, vignette: 0.35, grain: 0.035, grain_size: 1.3, letterbox: 2.39 } }
+        else if preset == 2 { Film { exposure: 0.1, temperature: 0.35, tint: 0.05, saturation: 1.1, split: 0.2, contrast: 0.35,
+            halation: 0.5, fringe: 0.001, vignette: 0.3, grain: 0.045, grain_size: 1.6, letterbox: 0.0 } }
+        else if preset == 3 { Film { exposure: 0.0, temperature: -0.05, tint: 0.0, saturation: 0.45, split: 0.15, contrast: 0.8,
+            halation: 0.1, fringe: 0.001, vignette: 0.45, grain: 0.04, grain_size: 1.2, letterbox: 1.85 } }
+        else if preset == 4 { Film { exposure: 0.1, temperature: 0.0, tint: 0.0, saturation: 0.0, split: 0.0, contrast: 0.7,
+            halation: 0.2, fringe: 0.0, vignette: 0.5, grain: 0.07, grain_size: 2.0, letterbox: 0.0 } }
+        else if preset == 5 { Film { exposure: 0.0, temperature: 0.0, tint: 0.0, saturation: 1.0, split: 0.0, contrast: 0.0,
+            halation: 0.0, fringe: 0.0, vignette: 0.0, grain: 0.0, grain_size: 1.0, letterbox: 0.0 } }
+        else { own };
+}
+
+/// The preset first used (`preset`).
+kernel render.film_start@1 {
+    requires { field.write; }
+    param preset: Int = 1;
+    output result: Rows<Int>;
+    compute { return preset * 2; }
+}
+
+/// The film changed over the picture: G steps through presets 1 to 5, then to the parameters' own (0). The row is the preset times two,
+/// plus whether G was held the last frame.
+kernel render.film_keys@1 {
+    requires { field.read; field.write; input.read; }
+    input previous: Rows<Int>;
+    output result: Rows<Int>;
+    compute {
+        let p = at(previous, 0);
+        let preset = p / 2;
+        let held = p % 2 == 1;
+        let down = key(71);
+        let next = if down && !held { (preset + 1) % 6 } else { preset };
+        return next * 2 + (if down { 1 } else { 0 });
+    }
+}
+
+// The lightness a color shows.
+fn film_light(c: Vec3) -> Float { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+/// Film (see the file's head) over `image`: the preset's look (`choice`, `render.film_keys`),
+/// or for 0 these parameters: `exposure` (stops), `temperature` (warm positive, cool negative), `tint` (magenta positive, green negative),
+/// `saturation`, `split` (how much the shadows go cyan and the highlights orange), `contrast` (how much S), `halation`
+/// (the highlights' red glow), `fringe` (red and blue apart at the edges, a fraction of the picture's width), `vignette` (how much darker the corners),
+/// `grain` (how heavy), `grain_size` (pixels a grain), `letterbox` (the widescreen's aspect,
+/// 0 no bars). `on` 0 leaves it as it is.
+kernel render.film@1 {
+    requires { field.read; field.write; time.read; }
+    input image: Image;
+    input choice: Rows<Int>;
+    param on: Int = 1;
+    param exposure: Float = 0.0;
+    param temperature: Float = 0.0;
+    param tint: Float = 0.0;
+    param saturation: Float = 1.0;
+    param split: Float = 0.0;
+    param contrast: Float = 0.0;
+    param halation: Float = 0.0;
+    param fringe: Float = 0.002;
+    param vignette: Float = 0.0;
+    param grain: Float = 0.03;
+    param grain_size: Float = 1.0;
+    param letterbox: Float = 0.0;
+    output result: Image;
+    compute {
+        let q = coord();
+        let here = at(image, q);
+        if on == 0 { return here; }
+        let f = film_look(at(choice, 0) / 2, Film { exposure: exposure, temperature: temperature, tint: tint, saturation: saturation, split: split,
+            contrast: contrast, halation: halation, fringe: fringe, vignette: vignette, grain: grain, grain_size: grain_size, letterbox: letterbox });
+        let ext = domain();
+        let uv = (q + 0.5) / ext;
+        // Wide-screen bars.
+        let bar = if f.letterbox > 0.0 { max((1.0 - ext.x / ext.y / f.letterbox) * 0.5, 0.0) } else { 0.0 };
+        if uv.y < bar || uv.y > 1.0 - bar { return vec4(0.0, 0.0, 0.0, here.w); }
+        let shown = if f.fringe > 0.0 { fringed(image, uv, f.fringe) } else { here.xyz };
+        // Halation: what is bright round the pixel, a red glow over it.
+        let k = max(ext.y / 720.0, 1.0);
+        let glow = if f.halation > 0.0 {
+            loop 8 with a = vec3(0.0, 0.0, 0.0) {
+                let t = float(index()) * 0.785398;
+                let s = at(image, clamp(q + vec2(cos(t), sin(t)) * 4.0 * k, vec2(0.0, 0.0), ext - 1.0)).xyz;
+                a + max(s - vec3(0.75, 0.75, 0.75), vec3(0.0, 0.0, 0.0))
+            } / 8.0
+        } else { vec3(0.0, 0.0, 0.0) };
+        // Graded in light, not in the picture's encoding.
+        let lin0 = srgb_to_linear(shown) + glow * vec3(1.0, 0.35, 0.15) * (f.halation * 2.0);
+        let lin1 = lin0 * exp2(f.exposure) * vec3(1.0 + 0.12 * f.temperature + 0.04 * f.tint, 1.0 - 0.06 * f.tint, 1.0 - 0.12 * f.temperature + 0.04 * f.tint);
+        let l = film_light(lin1);
+        let lin2 = mix(vec3(l, l, l), lin1, f.saturation);
+        let tone = mix(vec3(0.88, 1.0, 1.1), vec3(1.1, 1.0, 0.86), smoothstep(0.02, 0.5, l));
+        let lin3 = lin2 * mix(vec3(1.0, 1.0, 1.0), tone, f.split);
+        let d = linear_to_srgb(max(lin3, vec3(0.0, 0.0, 0.0)));
+        let s_curve = d * d * (vec3(3.0, 3.0, 3.0) - d * 2.0);
+        let curved = mix(d, clamp(s_curve, vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0)), f.contrast);
+        // Grain in clumps `grain_size` pixels wide, heaviest in the middle tones.
+        let g = film_grain(floor(q / max(f.grain_size, 1.0)), time(), f.grain) * (1.0 - abs(film_light(curved) - 0.5) * 1.2);
+        let out = curved * vignetted(uv, f.vignette) + vec3(g, g, g);
+        return vec4(out.x, out.y, out.z, here.w);
+    }
+}

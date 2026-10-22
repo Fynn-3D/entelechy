@@ -1,0 +1,58 @@
+//! The light-probe renderer (`kernels/probes.ent`): takes the scene's G-buffer and proxies
+//! (the contract) and gives the HDR picture `hdr`. `nx` by `ny` by `nz` probes,
+//! one every `spacing` meters from the proxy's `lo`, covering the proxy; each face traces `rays` rays a frame,
+//! and stops after `most`.
+use "../kernels/";
+
+input lens: Lenses;
+input sky: SkyLooks;
+input surface: Grid<Vec4>;
+input paint: Grid<Vec4>;
+input extra: Grid<Vec4>;
+input layers: Grid<Vec4>;
+input more: Grid<Vec4>;
+input behind_at: Grid<Vec4>;
+input behind_dir: Grid<Vec4>;
+input behind_paint: Grid<Vec4>;
+input behind_normal: Grid<Vec4>;
+input through: Grid<Vec4>;
+input proxy: Volume<Vec4>;
+input land: Grid<Float>;
+input frame: Proxies;
+param spacing: Float = 1.2;
+param nx: Int = 32;
+param ny: Int = 16;
+param nz: Int = 32;
+param rays: Int = 2;
+param most: Int = 256;
+/// The rays each pixel traces on the screen (fewer is noisier, smoothed by temporal antialiasing and denoising; 0 uses the probes alone, without noise).
+param screen_rays: Int = 4;
+/// Screen rays are traced every this many pixels a side (1 every pixel; 2 one in four, filled in by denoising).
+param gather_every: Int = 1;
+/// Only surfaces smoother than this look for reflections on the screen.
+param mirror_below: Float = 0.6;
+/// 0 lights it as it is; 1 as a painting does (`render.probes_shade`'s `style`).
+param style: Int = 0;
+
+node blank: Volume<Vec4> { domain = vec3(nx * 6, ny, nz); }
+// The probes' signatures, and those of their last gathering: where the scene changed, light is gathered again.
+node sign: render.probes_sign@1 { proxy <- proxy; land <- land; frame <- frame; sky <- sky; spacing = spacing; domain = vec3(nx, ny, nz); }
+node seen: render.probes_seen@1 { previous <~ seen.result from sign.result; sign <- sign.result; surface <- surface; }
+node light: render.probes_gather@1 { previous <~ light.result from blank.result; surface <- surface; sign <- sign.result; seen <~ seen.result from sign.result; proxy <- proxy; land <- land; frame <- frame; sky <- sky;
+    spacing = spacing; rays = rays; most = most; domain = vec3(nx * 6, ny, nz); }
+node beyond: render.probes_behind@1 { more <- more; behind_at <- behind_at; behind_dir <- behind_dir; behind_paint <- behind_paint; behind_normal <- behind_normal;
+    probes <- light.result; frame <- frame; sky <- sky; spacing = spacing; domain = size(more); }
+// The picture without reflections, which screen-space reflections read.
+node lit: render.probes_lit@1 { surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; probes <- light.result; frame <- frame; sky <- sky; lens <- lens;
+    spacing = spacing; domain = size(surface); }
+// Each pixel's diffuse light: traced on the screen, the probes where a ray finds nothing; denoised.
+node gather: render.probes_screen_gather@1 { surface <- surface; lit <- lit.result; probes <- light.result; proxy <- proxy; land <- land; frame <- frame; sky <- sky; lens <- lens; spacing = spacing; rays = screen_rays; domain = ceil(size(surface) / gather_every); }
+node gathered: render.probes_gather_blur@1 { gathered <- gather.result; surface <- surface; domain = size(surface); }
+// ... gathered frame by frame (the last frame's moved to where it is now).
+node now_lens: render.same_lens@1 { lens <- lens; domain = 1; }
+node blank_kept: Image { domain = vec2(1, 1); }
+node kept: render.probes_gather_keep@1 { gathered <- gathered.result; surface <- surface; previous <~ kept.result from blank_kept.result; lens <- lens; was_lens <~ now_lens.result from now_lens.result; domain = size(surface); }
+node shade: render.probes_shade@1 { surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; beyond <- beyond.result; through <- through; lit <- lit.result; gathered <- kept.result; proxy <- proxy; land <- land; probes <- light.result; frame <- frame; sky <- sky; lens <- lens;
+    spacing = spacing; mirror_below = mirror_below; style = style; domain = size(surface); }
+
+output hdr <- shade.result;

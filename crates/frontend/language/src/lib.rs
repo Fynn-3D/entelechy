@@ -265,7 +265,7 @@ impl Document {
     }
 
     /// Each name this document writes qualified by a package
-    /// (`hash_noise::fbm2`) written by the name the declaration it
+    /// (`random::fbm2`) written by the name the declaration it
     /// reaches holds, as [`scope`] found it: done before its functions are
     /// checked or it is resolved.
     pub fn unqualify(&mut self, qualified: &Qualified) {

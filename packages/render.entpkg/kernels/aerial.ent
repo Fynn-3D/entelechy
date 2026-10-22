@@ -1,0 +1,58 @@
+// Aerial perspective after the real atmosphere: air thins with height (Rayleigh's molecules by e every eight kilometers, Mie's haze
+// every twelve hundred meters), and the air passed along a view ray is integrated; molecules scatter blue the most (far things
+// turn blue and lose contrast), haze scatters forward (a bright ring toward the sun). The sun and the sky round it light the air
+// passed, scattered once.
+use "camera.ent";
+use "sky.ent";
+
+// How much air of the ground's density a ray from height `h` (meters above
+// the ground) going `dy` up a meter passes through in `d` meters, the air
+// thinning by e every `scale` meters up.
+fn air_through(h: Float, dy: Float, d: Float, scale: Float) -> Float {
+    let at_eye = exp(0.0 - clamp(h / scale, -20.0, 20.0));
+    if abs(dy) < 0.0001 { return d * at_eye; }
+    let k = clamp(d * dy / scale, -20.0, 20.0);
+    return at_eye * scale / dy * (1.0 - exp(0.0 - k));
+}
+
+/// Aerial perspective (see the file's head) over a picture (`hdr`, HDR), the sky left as it is (it has its own look).
+/// `on` 0 leaves it as it is; `density` scales the air's density (1 is a clear day's atmosphere made visible across a scene of
+/// a few kilometers), `haze` scales the haze, `ground` is the ground's height (meters).
+kernel render.air@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    input surface: Grid<Vec4>;
+    input lens: Lenses;
+    input sky: SkyLooks;
+    param on: Int = 1;
+    param density: Float = 1.0;
+    param haze: Float = 1.0;
+    param ground: Float = 0.0;
+    output result: Image;
+    compute {
+        let c = sample(hdr);
+        if on == 0 { return c; }
+        let su = sample(surface);
+        if su.w > no_hit() * 0.5 || su.w <= 0.0 { return c; }
+        let l = at(lens, 0);
+        let s = at(sky, 0);
+        let dir = ray(l, coord(), domain());
+        let h = l.eye.y - ground;
+        let rayleigh = air_through(h, dir.y, su.w, 8000.0);
+        let mie = air_through(h, dir.y, su.w, 1200.0);
+        let beta_r = vec3(5.8, 13.5, 33.1) * (0.000006 * density);
+        let beta_m = vec3(21.0, 21.0, 21.0) * (0.000006 * density * haze);
+        let spent = beta_r * rayleigh + beta_m * (mie * 1.1);
+        let kept = vec3(exp(0.0 - spent.x), exp(0.0 - spent.y), exp(0.0 - spent.z));
+        // Phase: Rayleigh's, and Mie's forward lobe (Henyey-Greenstein, g 0.76).
+        let mu = dot(dir, normalize(s.sun));
+        let phase_r = 0.0597 * (1.0 + mu * mu);
+        let g = 0.76;
+        let phase_m = 0.0796 * (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * mu, 0.0001), 1.5);
+        let lit = beta_r * (rayleigh * phase_r) + beta_m * (mie * phase_m);
+        let share = lit / max(spent, vec3(0.000001, 0.000001, 0.000001));
+        let scattered = s.sun_color * share * 1.2 + (s.horizon * 0.75 + s.zenith * 0.25) * 0.45;
+        let shown = c.xyz * kept + scattered * (vec3(1.0, 1.0, 1.0) - kept);
+        return vec4(shown.x, shown.y, shown.z, c.w);
+    }
+}

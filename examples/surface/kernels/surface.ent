@@ -3,7 +3,7 @@
 //
 // The volume is `size` cells on a side — a couple of million of them at
 // the default — and the blob's surface touches about one in a hundred.
-// `surface.flags` writes one flag per cell, the compact package turns
+// `surface.flags` writes one flag per cell, the math package turns
 // those flags into the cells that are on the surface and how many there
 // are, and the geometry nodes are `domain = max(value(count), 1) * <per
 // cell>`. A cell the surface misses is not skipped: it is never placed.
@@ -31,8 +31,8 @@ fn bounce(t: Int, low: Int, high: Int, speed: Int) -> Int {
     return low + (if p < span { p } else { period - p });
 }
 
-fn near(c: IVec3, centre: IVec3, radius: Int) -> Int {
-    let d = c - centre;
+fn near(c: IVec3, center: IVec3, radius: Int) -> Int {
+    let d = c - center;
     return max(radius * radius - (d.x * d.x + d.y * d.y + d.z * d.z), 0);
 }
 

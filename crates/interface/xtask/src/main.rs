@@ -4,7 +4,8 @@
 //! `target/verify-<step>.out`. Steps that need nothing of one another run
 //! at once; the first group with a failure stops the run, the failing
 //! output's end in the log. The log begins with the commit it verifies,
-//! so a log is never mistaken for a later run's.
+//! so a log is never mistaken for a later run's. `cargo xtask packages`
+//! holds the packages to their names alone.
 
 use std::fs::{self, File};
 use std::io::Write;
@@ -13,12 +14,25 @@ use std::process::{Command, ExitCode, Stdio};
 use std::sync::Mutex;
 use std::time::Instant;
 
+mod packages;
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("verify") => verify(),
+        Some("packages") => {
+            let faults = packages::faults(&root().join("packages"));
+            for fault in &faults {
+                eprintln!("{fault}");
+            }
+            if faults.is_empty() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
         _ => {
-            eprintln!("usage: cargo xtask verify");
+            eprintln!("usage: cargo xtask verify | packages");
             ExitCode::FAILURE
         }
     }
@@ -79,6 +93,7 @@ fn verify() -> ExitCode {
     log.line(&format!("verifying {}", head.trim()));
     let groups: Vec<Vec<Step>> = vec![
         vec![cargo("fmt", &["fmt", "--all"])],
+        vec![("packages", Box::new(named_packages))],
         vec![cargo(
             "clippy",
             &[
@@ -329,6 +344,22 @@ fn replays(out: &Out) -> Result<(), String> {
             .arg("check")
             .arg(together.join("scene.esn")),
     )
+}
+
+/// The repository's packages held to their names ([`packages`]).
+fn named_packages(out: &Out) -> Result<(), String> {
+    let faults = packages::faults(Path::new("packages"));
+    let mut file = out
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for fault in &faults {
+        let _ = writeln!(file, "{fault}");
+    }
+    if faults.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("{} fault(s) in the packages' names", faults.len()))
+    }
 }
 
 /// Every replay by the WebAssembly build under WASI, on the processor;

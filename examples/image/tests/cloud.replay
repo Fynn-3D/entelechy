@@ -1,7 +1,7 @@
 scene ../parts/volume/scene.esn
 
 # The density fades to nothing toward the cube's edges, so the image
-# corners show the sky gradient alone: exact on both backends. The centre
+# corners show the sky gradient alone: exact on both backends. The center
 # holds cloud, which is brighter and whiter than the sky behind it; noise
 # differs slightly between backends, hence the wide tolerance.
 frame 0.0

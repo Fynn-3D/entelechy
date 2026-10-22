@@ -1,0 +1,105 @@
+// An instrument's note: its pitch, `t` seconds after it began, held for
+// `held` seconds; and the drums of each kit.
+use "random.entpkg";
+use "audio.entpkg";
+use "theory.ent";
+
+fn tau_() -> Float { return 6.2831853; }
+
+/// How loud a note is `t` seconds in, held `held`: its attack, its decay to
+/// its sustain, its release after it is let go.
+fn note_level(ins: Instrument, t: Float, held: Float) -> Float {
+    if t < 0.0 { return 0.0; }
+    let a = max(ins.attack, 0.002);
+    let on = if t < a { t / a } else { ins.sustain + (1.0 - ins.sustain) * exp(0.0 - (t - a) / max(ins.decay, 0.01)) };
+    let off = if t > held { exp(0.0 - (t - held) / max(ins.release, 0.01)) } else { 1.0 };
+    return on * off;
+}
+
+/// How long after it is let go a note is still heard.
+fn note_tail(ins: Instrument) -> Float { return ins.release * 5.0 + 0.02; }
+
+/// One voice of an instrument at pitch `f`, `t` seconds in.
+fn timbre(ins: Instrument, f: Float, t: Float, seed: Int) -> Float {
+    let o = ins.osc;
+    if o == osc_square() {
+        let p = fract(f * t);
+        return if p < ins.duty { 0.6 } else { -0.6 };
+    }
+    if o == osc_triangle() {
+        let p = fract(f * t);
+        return (4.0 * abs(p - 0.5) - 1.0) * 0.8;
+    }
+    if o == osc_bell() {
+        return sin(tau_() * fract(f * t) + 1.6 * exp(0.0 - t * 3.0) * sin(tau_() * fract(f * 2.756 * t))) * 0.7;
+    }
+    let h = clamp(ins.harmonics, 1, 10);
+    if o == osc_pluck() {
+        let sum = loop h with acc = vec2(0.0, 0.0) {
+            let k = float(index() + 1);
+            let w = exp(0.0 - t * (1.5 + k * k * 0.5 * ins.roll)) / k;
+            vec2(acc.x + sin(tau_() * fract(f * k * t)) * w, acc.y + 1.0 / k)
+        };
+        return sum.x / max(sum.y, 0.5) * 1.6;
+    }
+    if o == osc_breath() {
+        let tone_ = sin(tau_() * fract(f * t)) + 0.25 * sin(tau_() * fract(f * 2.0 * t)) + 0.08 * sin(tau_() * fract(f * 3.0 * t));
+        return tone_ * 0.75 + soft_noise(t * 2600.0, seed) * 0.06;
+    }
+    // Harmonics, each a little quieter than the one below as `roll` says.
+    let sum = loop h with acc = vec2(0.0, 0.0) {
+        let k = float(index() + 1);
+        let w = 1.0 / pow(k, ins.roll);
+        vec2(acc.x + sin(tau_() * fract(f * k * t)) * w, acc.y + w)
+    };
+    return sum.x / max(sum.y, 0.5) * 1.2;
+}
+
+/// A note of an instrument at `semis` (semitones above the C below middle
+/// C), `t` seconds in, held `held`: its two voices, a little apart, its
+/// vibrato coming in after the attack.
+fn play_note(ins: Instrument, semis: Float, t: Float, held: Float, seed: Int) -> Float {
+    if t < 0.0 || t > held + note_tail(ins) { return 0.0; }
+    let f0 = pitch_of(semis);
+    let vib = 1.0 + ins.vibrato * smoothstep(0.12, 0.4, t) * sin(tau_() * ins.rate * t);
+    let f = f0 * vib;
+    let one = timbre(ins, f, t, seed);
+    let two = if ins.detune > 0.0 { timbre(ins, f * (1.0 + ins.detune), t + 0.0013, seed + 1) } else { one };
+    return (one + two) * 0.5 * note_level(ins, t, held) * ins.gain;
+}
+
+// The drums.
+fn drum_kick() -> Int { return 0; }
+fn drum_snare() -> Int { return 1; }
+fn drum_hat() -> Int { return 2; }
+fn drum_low() -> Int { return 3; }      // a timpani, a taiko, a frame drum's low
+
+/// A drum of a kit, `t` seconds after it is struck, at sample `n`, `hard`
+/// how hard (0 to 1).
+fn kit_drum(kit: Int, which: Int, t: Float, n: Long, hard: Float) -> Float {
+    if t < 0.0 || t > 1.5 { return 0.0; }
+    if kit == kit_chip() {
+        if which == drum_kick() || which == drum_low() { return sin(tau_() * fract((60.0 + 200.0 * exp(0.0 - t * 40.0)) * t)) * exp(0.0 - t * 14.0) * 0.6 * hard; }
+        let crush = float(int(hash1(low_bits(n / 4l), 17) * 8.0)) / 4.0 - 1.0;
+        return crush * exp(0.0 - t * (if which == drum_hat() { 60.0 } else { 18.0 })) * (if which == drum_hat() { 0.25 } else { 0.45 }) * hard;
+    }
+    if which == drum_kick() {
+        let f = 45.0 + 110.0 * exp(0.0 - t * 30.0);
+        return sin(tau_() * f * t) * exp(0.0 - t * 9.0) * 0.8 * hard;
+    }
+    if which == drum_low() {
+        // Timpani, taiko, frame drum: a deep skin, long or short.
+        let long_ = if kit == kit_taiko() { 3.0 } else if kit == kit_folk() { 9.0 } else { 4.0 };
+        let base = if kit == kit_taiko() { 55.0 } else if kit == kit_folk() { 110.0 } else { 73.4 };
+        return (sin(tau_() * fract(base * t + 20.0 * (1.0 - exp(0.0 - t * 20.0)) / 20.0)) + 0.4 * sin(tau_() * fract(base * 1.5 * t))) * exp(0.0 - t * long_) * 0.55 * hard
+            + soft_noise(t * 1200.0, 3) * exp(0.0 - t * 40.0) * 0.2 * hard;
+    }
+    if which == drum_snare() {
+        let rattle = if kit == kit_folk() { 0.0 } else { 1.0 };
+        let tambourine = if kit == kit_folk() { soft_noise(t * 9000.0, 5) * exp(0.0 - t * 14.0) * 0.4 } else { 0.0 };
+        let wood = if kit == kit_taiko() { sin(tau_() * 880.0 * t) * exp(0.0 - t * 60.0) * 0.4 } else { 0.0 };
+        return ((hash1(low_bits(n), 9) * 2.0 - 1.0) * exp(0.0 - t * 16.0) * 0.4 * rattle + sin(tau_() * 185.0 * t) * exp(0.0 - t * 22.0) * 0.25 * rattle + tambourine + wood) * hard;
+    }
+    // A hat or a cymbal's tick.
+    return soft_noise(t * 11000.0, 7) * exp(0.0 - t * (if kit == kit_orchestra() { 9.0 } else { 45.0 })) * 0.18 * hard;
+}

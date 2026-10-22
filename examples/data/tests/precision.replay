@@ -5,9 +5,9 @@ scene ../parts/precision/scene.esn
 expect placed ring ordered
 expect placed edges ordered
 
-# Half a million metres out: the part's edges in doubles are its size to
-# a few picometres, in floats they are nothing at all, and in whole
-# nanometres they are exact.
+# Half a million meters out: the part's edges in doubles are its size to
+# a few picometers, in floats they are nothing at all, and in whole
+# nanometers they are exact.
 frame 0
 expect edges.result[0].nm = 2500000
 expect edges.result[1].nm = 1200000
@@ -18,10 +18,10 @@ expect edges.result[1].narrow = 0
 expect corners.result[2].nm = 500000125956789 4000000988854321
 expect corners.result[2].at = 500000.125956789 4000000.988854321 0.000000001
 
-# The ring in doubles: inside near the centre, outside in the corner.
+# The ring in doubles: inside near the center, outside in the corner.
 expect 85 45 = 1.0 0.55 0.1
 expect 155 5 = 0.08 0.1 0.14
-# The same question in floats: every pixel is the centre, so every
+# The same question in floats: every pixel is the center, so every
 # pixel is inside.
 expect 5 5 = 1.0 0.55 0.1
 expect 75 45 = 1.0 0.55 0.1

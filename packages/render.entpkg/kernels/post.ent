@@ -1,0 +1,70 @@
+// Post-processing: from a renderer's HDR picture to the picture seen. Glow (bright parts shrunk and blurred), ACES tone,
+// vividness, warm highlights, slightly dark corners, and sRGB at last (what a display wants). The HDR picture may be smaller than the window, read to scale.
+use "image.entpkg";
+
+/// A picture all black (the start of an accumulation and the like).
+kernel render.blank@1 {
+    requires { field.write; }
+    output result: Image;
+    compute { return vec4(0.0, 0.0, 0.0, 1.0); }
+}
+/// The glow's source: what is brighter than `threshold`, shrunk to an eighth.
+kernel render.bright@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    param threshold: Float = 2.0;
+    output result: Image;
+    compute {
+        let step_ = size(hdr) / domain() / 4.0;
+        let q = coord() * size(hdr) / domain();
+        return vec4(loop 16 with acc = vec3(0.0, 0.0, 0.0) { acc + max(at(hdr, q + vec2(float(index() % 4), float(index() / 4)) * step_).xyz - vec3(threshold, threshold, threshold), vec3(0.0, 0.0, 0.0)) } / 16.0, 1.0);
+    }
+}
+/// The glow's blur: nine points along `axis` (0 across, 1 down).
+kernel render.spread@1 {
+    requires { field.read; field.write; }
+    input image: Image;
+    param axis: Int = 0;
+    output result: Image;
+    compute {
+        let d = if axis == 0 { vec2(1.0, 0.0) } else { vec2(0.0, 1.0) };
+        let w = [0.05, 0.09, 0.12, 0.15, 0.18, 0.15, 0.12, 0.09, 0.05];
+        return loop 9 with acc = vec4(0.0, 0.0, 0.0, 0.0) { acc + at(image, coord() + d * float(index() - 4)) * w[index()] };
+    }
+}
+/// The picture seen: glow added, ACES tone (`exposure`), vividness (`vivid`, 1 unchanged), shadows toward
+/// cyan and highlights warm (`warmth`, 0 none), corners slightly darker (`vignette`, 0 none), encoded as sRGB.
+kernel render.view@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    input bloom: Image;
+    param exposure: Float = 1.0;
+    param vivid: Float = 1.15;
+    param warmth: Float = 1.0;
+    param vignette: Float = 0.35;
+    /// How much it is sharpened (0 not at all): pulled apart from the mean of its four neighbors by this much; where the contrast is
+    /// already high, pulled less (no white rims). The history temporal antialiasing blends in is always softer.
+    param sharpen: Float = 0.0;
+    output result: Image;
+    compute {
+        let q = coord();
+        let extent = domain();
+        let halo = at_linear(bloom, (q + 0.5) / extent * size(bloom)).xyz;
+        let ph = (q + 0.5) / extent * size(hdr);
+        let c = at_linear(hdr, ph).xyz;
+        let seen = if sharpen <= 0.0 { c } else {
+            let n4 = (at_linear(hdr, ph + vec2(1.0, 0.0)).xyz + at_linear(hdr, ph - vec2(1.0, 0.0)).xyz + at_linear(hdr, ph + vec2(0.0, 1.0)).xyz + at_linear(hdr, ph - vec2(0.0, 1.0)).xyz) * 0.25;
+            let lc = dot(c, vec3(0.2126, 0.7152, 0.0722));
+            let ln = dot(n4, vec3(0.2126, 0.7152, 0.0722));
+            let k = sharpen / (1.0 + 6.0 * abs(lc - ln) / (ln + 0.05));
+            max(c + (c - n4) * k, vec3(0.0, 0.0, 0.0))
+        };
+        let graded = aces((seen + halo * 0.6) * exposure);
+        let gray = dot(graded, vec3(0.2126, 0.7152, 0.0722));
+        let rich = max(mix(vec3(gray, gray, gray), graded, vivid), vec3(0.0, 0.0, 0.0));
+        let tint = mix(vec3(0.97, 1.0, 1.04), vec3(1.05, 1.0, 0.93), smoothstep(0.1, 0.6, gray));
+        let toned = rich * mix(vec3(1.0, 1.0, 1.0), tint, warmth);
+        let uv = (q + 0.5) / extent - 0.5;
+        return vec4(linear_to_srgb(saturate(toned * (1.0 - vignette * dot(uv, uv)))), 1.0);
+    }
+}

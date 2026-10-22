@@ -20,7 +20,7 @@ fn noise(n: Float) -> Float {
     return fract((r + r) * q);
 }
 
-// The sticker color, centred, as the network sees it.
+// The sticker color, centered, as the network sees it.
 fn seen(color: Int) -> Float { return float(color) / 5.0 - 0.5; }
 
 // How many turns cube `cube` of frame `frame` is given, 0 to 8.

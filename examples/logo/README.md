@@ -23,7 +23,7 @@ holds the seed.
   uses `kernels/logo.ent`), so it cannot disagree with it: change the
   lattice or a measure and the mark and its sheet move together.
 - **One Kernel, every version.** `light`, `ink`, `alone` and `clear` choose
-  dark or light, colour or one ink (`ink = 2` pure black or white), the
+  dark or light, color or one ink (`ink = 2` pure black or white), the
   lockup or the mark alone, on a ground or on nothing.
 
 ```sh
@@ -38,7 +38,7 @@ The front page's two logos are this scene at 1200 by 360 with `clear=1`,
 `light=0` and `light=1`.
 
 `tests/logo.replay` holds the seed, the first node, a hollow ring, a letter
-and the C's seed to their colours, on dark, on light and in one ink;
+and the C's seed to their colors, on dark, on light and in one ink;
 `tests/construction.replay` holds the sheet's guide at the seed's middle
 and its outline at the seed's radius over the faint seed, and the
 diamond's edge.

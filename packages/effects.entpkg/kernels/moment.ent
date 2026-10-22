@@ -1,0 +1,108 @@
+// Each cast's layers as they are now: placed, moved, sized and lit for
+// this moment, and the sphere each lies in, so a picture's pixels look
+// only at the layers their ray passes.
+use "effect.ent";
+
+/// The `k`th layer of effect `e`, -1 if it has fewer.
+fn layer_of(layers: Layers, e: Int, k: Int) -> Int {
+    let n = count(layers);
+    let found = loop n with f = vec2(-1.0, 0.0) {
+        let l = at(layers, index());
+        if f.x >= 0.0 || l.effect != e { f } else if int(f.y) == k { vec2(float(index()), f.y) } else { vec2(-1.0, f.y + 1.0) }
+    };
+    return int(found.x);
+}
+
+/// Where an anchor is, for a cast from `from` to `to`.
+fn anchor(at_: Int, from: Vec3, to: Vec3) -> Vec3 {
+    if at_ == at_caster() { return from + vec3(0.0, 1.0, 0.0); }
+    if at_ == at_target() { return to + vec3(0.0, 1.0, 0.0); }
+    if at_ == at_target_ground() { return to; }
+    if at_ == at_caster_ground() { return from; }
+    if at_ == at_between() { return mix(from, to, 0.5) + vec3(0.0, 1.0, 0.0); }
+    if at_ == at_between_ground() { return mix(from, to, 0.5); }
+    return to + vec3(0.0, 12.0, 0.0);
+}
+
+/// The ground's way from caster to target, level.
+fn level_way(from: Vec3, to: Vec3) -> Vec3 {
+    let d = vec3(to.x - from.x, 0.0, to.z - from.z);
+    return if length(d) > 0.001 { normalize(d) } else { vec3(0.0, 0.0, 1.0) };
+}
+
+/// How far out from its center a form reaches, for its bounding sphere.
+fn form_reach(form: Int, size: Float, reach: Float, spread: Float) -> Float {
+    if form == form_orb() { return size + reach; }
+    if form == form_pillar() || form == form_funnel() || form == form_aura() { return max(size, reach) * 1.1 + size + spread * 0.5; }
+    if form == form_cone() { return reach + size; }
+    if form == form_wave() || form == form_sigil() { return size * 1.3 + 0.6; }
+    if form == form_motes() || form == form_sparks() || form == form_shards() { return spread + size + reach + 0.5; }
+    if form == form_slash() { return size * 1.2; }
+    if form == form_glyph() { return 0.9; }
+    return size + reach;
+}
+
+kernel effects.now@1 {
+    requires { field.read; field.write; }
+    input casts: Casts;
+    input effects: Effects;
+    input layers: Layers;
+    output result: Lives;
+    compute {
+        let off = Live { form: -1, element: 0, tint: 0.0, p: vec3(0.0, 0.0, 0.0), q: vec3(0.0, 0.0, 0.0), way: vec3(0.0, 0.0, 1.0), size: 0.0, reach: 0.0, shine: 0.0, age: 0.0, t: 0.0, seed: 0, count: 0, spread: 0.0, a: 0.0, b: 0.0, bound: vec4(0.0, 0.0, 0.0, 0.0) };
+        let ci = element() / layers_most();
+        let k = element() % layers_most();
+        let c = at(casts, ci);
+        if c.on == 0 || c.effect < 0 || c.effect >= count(effects) { return off; }
+        let e = at(effects, c.effect);
+        let li = layer_of(layers, c.effect, k);
+        if li < 0 || ((c.hide >> k) & 1) == 1 { return off; }
+        let l = at(layers, li);
+        let now = c.now;
+        let since = now - c.start;
+        let tau = if e.looped == 1 { since - floor(since / max(e.length, 0.01)) * e.length } else { since };
+        if since < 0.0 || tau < l.start || tau >= l.end { return off; }
+        let age = (tau - l.start) / max(l.end - l.start, 0.001);
+        let tier = if c.tier > 0 { c.tier } else { max(e.tier, 1) };
+        let el = if l.element >= 0 { l.element } else if c.element >= 0 { c.element } else { e.element };
+        let size = l.size * tier_size(tier) * keys(l.grow, age);
+        let shine = tier_shine(tier) * keys(l.shine, age);
+        let n = max(int(float(l.count) * tier_count(tier) + 0.5), if l.count > 0 { 1 } else { 0 });
+        let way = level_way(c.from, c.to);
+        let home = anchor(l.at, c.from, c.to) + vec3(0.0, l.lift, 0.0);
+        let start = anchor(at_caster(), c.from, c.to) + vec3(0.0, l.lift, 0.0);
+        let goal = anchor(if l.at == at_caster() { at_target() } else { l.at }, c.from, c.to) + vec3(0.0, l.lift, 0.0);
+        let s = smoothstep(0.0, 1.0, age);
+        let p = if l.move == move_fly() { mix(start, goal, age) }
+            else if l.move == move_arc() { mix(start, goal, age) + vec3(0.0, sin(age * 3.14159) * l.a, 0.0) }
+            else if l.move == move_fall() { home + vec3(0.0, l.reach * (1.0 - age * age), 0.0) }
+            else if l.move == move_rise() { home + vec3(0.0, l.reach * s, 0.0) }
+            else if l.move == move_orbit() { home + vec3(cos(tau * l.a * 6.2832), 0.0, sin(tau * l.a * 6.2832)) * l.spread }
+            else if l.move == move_drift() { mix(start, goal - way * l.a, s) }
+            else { home };
+        // A body from p to where it reaches: a beam to its goal, else along
+        // the way the cast goes (or back along it, behind a flying form).
+        let flying = l.move == move_fly() || l.move == move_arc();
+        let ahead = if l.move == move_arc() { normalize(goal - start + vec3(0.0, cos(age * 3.14159) * l.a * 3.0, 0.0)) } else { normalize(goal - start + vec3(0.0, 0.0001, 0.0)) };
+        let face = if flying { ahead } else if l.move == move_fall() { vec3(0.0, -1.0, 0.0) } else { way };
+        // A beam or a bolt reaches the target from the caster, the ground
+        // from the sky, else `reach` along its way.
+        // Darts from the target go back to the caster (a drain).
+        let struck = if l.at == at_caster() { goal } else if l.at == at_sky() { c.to }
+            else if l.form == form_darts() && l.at == at_target() { start } else { p + face * l.reach };
+        // Falling or rising, `reach` is how far: its tail is short.
+        let tail = if l.move == move_fall() || l.move == move_rise() { min(l.reach * 0.12, 2.0) } else { l.reach };
+        let q = if l.form == form_beam() || l.form == form_bolts() || l.form == form_darts() { struck } else { p - face * tail };
+        let center = if l.form == form_beam() || l.form == form_bolts() || l.form == form_darts() { mix(p, q, 0.5) }
+            else if l.form == form_pillar() || l.form == form_funnel() || l.form == form_aura() { p + vec3(0.0, max(l.reach, size) * 0.5, 0.0) }
+            else if l.form == form_cone() { p + face * (l.reach * 0.5) }
+            else if l.form == form_glyph() { p + vec3(0.0, 1.2, 0.0) }
+            else { p };
+        let r = if l.form == form_beam() || l.form == form_bolts() || l.form == form_darts() { length(q - p) * 0.5 + size + l.spread + l.b + l.reach }
+            else { form_reach(l.form, size, l.reach * tier_size(tier), l.spread * tier_size(tier)) };
+        return Live { form: l.form, element: el, tint: l.tint, p: p, q: q, way: face,
+            size: size, reach: l.reach * tier_size(tier), shine: shine, age: age, t: now, seed: c.seed * 131 + l.seed + k * 17,
+            count: n, spread: l.spread * tier_size(tier), a: l.a, b: l.b,
+            bound: vec4(center.x, center.y, center.z, if l.form == form_flash() { 1000000.0 } else { r }) };
+    }
+}

@@ -1,6 +1,6 @@
 scene ../scene.esn
 
-# One frame is 250 steps from the centre of a blank grid. The first step
+# One frame is 250 steps from the center of a blank grid. The first step
 # flips (48, 32) and turns the ant right, to (49, 32); the second flips
 # (49, 32) and turns it down. Where 250 and 500 steps leave the ant, and
 # a few cells of the trail, are pinned so the three backends walk alike.

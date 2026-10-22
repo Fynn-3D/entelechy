@@ -1,13 +1,13 @@
-// Tone and colour grading: changes to each pixel by its own colour.
-use "colour.ent";
+// Tone and color grading: changes to each pixel by its own color.
+use "color.ent";
 
-/// Exposure in stops; contrast round middle grey (0.18), as a power of
+/// Exposure in stops; contrast round middle gray (0.18), as a power of
 /// the light, so it suits light brighter than white too; saturation and
-/// hue turned in Oklab, so a change looks even across colours.
+/// hue turned in Oklab, so a change looks even across colors.
 fn adjusted(c: Vec3, exposure: Float, contrast: Float, saturation: Float, hue: Float) -> Vec3 {
     let lit = max(c * exp2(exposure), 0.0);
-    let grey = vec3(0.18, 0.18, 0.18);
-    let shaped = pow(lit / 0.18, contrast) * grey;
+    let gray = vec3(0.18, 0.18, 0.18);
+    let shaped = pow(lit / 0.18, contrast) * gray;
     let lab = linear_to_oklab(shaped);
     let turn = hue * 6.2831853;
     let a = (lab.y * cos(turn) - lab.z * sin(turn)) * saturation;
@@ -16,7 +16,7 @@ fn adjusted(c: Vec3, exposure: Float, contrast: Float, saturation: Float, hue: F
 }
 
 /// The picture adjusted: `exposure` stops, `contrast` (1 none),
-/// `saturation` (1 none, 0 grey), `hue` turned (a whole turn is 1).
+/// `saturation` (1 none, 0 gray), `hue` turned (a whole turn is 1).
 kernel image.adjust@1 {
     requires { field.read; field.write; }
     input source: Image;
@@ -65,7 +65,7 @@ kernel image.curve@1 {
     }
 }
 
-/// A 3D LUT's colour for `c`: the LUT is a strip of `n` squares side by
+/// A 3D LUT's color for `c`: the LUT is a strip of `n` squares side by
 /// side, n*n wide and n high, red across each square, green down it,
 /// blue square by square; blended between squares and within them.
 fn lut_at(lut: Image, c: Vec3) -> Vec3 {
@@ -78,7 +78,7 @@ fn lut_at(lut: Image, c: Vec3) -> Vec3 {
     return mix(lower, upper, q.z - slice);
 }
 
-/// The neutral LUT of side `n` (`domain = vec2(n * n, n)`): each colour
+/// The neutral LUT of side `n` (`domain = vec2(n * n, n)`): each color
 /// itself. Grade it as a picture and `image.lut` applies that grade.
 kernel image.neutral@1 {
     requires { field.write; }

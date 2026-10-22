@@ -147,7 +147,7 @@ fn to_segment(p: Vec2, a: Vec2, b: Vec2) -> Float {
     return length(p - (a + ab * t));
 }
 
-/// Each body's centre and reach, the little a pixel reads of it to pass
+/// Each body's center and reach, the little a pixel reads of it to pass
 /// it by.
 kernel world.marks@1 {
     requires { field.read; field.write; }
@@ -163,7 +163,7 @@ fn tile() -> Float { return 32.0; }
 fn tile_columns(res: Vec2) -> Int { return int(ceil(res.x / tile())); }
 fn tile_rows(res: Vec2) -> Int { return int(ceil(res.y / tile())); }
 
-// The world box of tile `t`'s pixel centres in a `res` window, least
+// The world box of tile `t`'s pixel centers in a `res` window, least
 // and most corners, a pixel wider on every side than a pixel's own test
 // and grown by the pixel's reach, so a body a pixel of it paints reaches
 // the box.

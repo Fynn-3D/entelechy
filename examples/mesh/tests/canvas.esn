@@ -32,7 +32,7 @@ node native: native.rasterize@3 {
     canvas <- canvas.result;
     domain = size(canvas);
 }
-node plain: graph "../../../packages/raster.entpkg/graphs/raster.esn" {
+node plain: graph "../../../packages/raster.entpkg/graphs/surface.esn" {
     vertices <- project.result;
     triangles <- subdivided.triangles;
     width = 320;

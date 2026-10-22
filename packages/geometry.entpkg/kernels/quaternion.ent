@@ -1,0 +1,56 @@
+// Rotations as unit quaternions, held in a `Vec4` as `x y z w`, the
+// order glTF and Blender write.
+
+// A turn of `angle` radians about `axis`, which need not be of unit
+// length. No axis is no turn.
+fn turn_about(axis: Vec3, angle: Float) -> Vec4 {
+    let magnitude = sqrt(dot(axis, axis));
+    if magnitude == 0.0 { return vec4(0.0, 0.0, 0.0, 1.0); }
+    let a = axis / magnitude * sin(angle * 0.5);
+    return vec4(a, cos(angle * 0.5));
+}
+
+// One rotation after another: `after(a, b)` turns by `b`, then by `a`.
+fn after(a: Vec4, b: Vec4) -> Vec4 {
+    return vec4(
+        a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+        a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z);
+}
+
+// The way back from a rotation.
+fn back(q: Vec4) -> Vec4 {
+    return vec4(-q.x, -q.y, -q.z, q.w);
+}
+
+// The shorter way round between two rotations, `t` of the way from `a`
+// to `b`, normalized: what a blend of two poses takes.
+fn between(a: Vec4, b: Vec4, t: Float) -> Vec4 {
+    let same = if dot(a, b) < 0.0 { vec4(0.0, 0.0, 0.0, 0.0) - b } else { b };
+    let mixed = a * (1.0 - t) + same * t;
+    let magnitude = sqrt(dot(mixed, mixed));
+    return if magnitude > 0.0 { mixed / magnitude } else { a };
+}
+
+// A vector turned by a rotation.
+fn rotating(q: Vec4, v: Vec3) -> Vec3 {
+    let u = q.xyz;
+    let t = cross(u, v) * 2.0;
+    return v + t * q.w + cross(u, t);
+}
+
+// The shortest rotation that takes direction `a` to direction `b`, both
+// of unit length. Opposite directions turn half way round an axis at
+// right angles to `a`.
+fn arc(a: Vec3, b: Vec3) -> Vec4 {
+    let d = dot(a, b);
+    if d < -0.999999 {
+        let side = if abs(a.x) < 0.9 { cross(a, vec3(1.0, 0.0, 0.0)) } else { cross(a, vec3(0.0, 1.0, 0.0)) };
+        let n = normalize(side);
+        return vec4(n, 0.0);
+    }
+    let c = cross(a, b);
+    let q = vec4(c, 1.0 + d);
+    return q / sqrt(dot(q, q));
+}

@@ -9,7 +9,7 @@ ten turns; enter resets.
 - The picture casts two boxes per pixel: the cube without the turning
   layer, and the turning layer in its own frame.
 - A 54-32-1 perceptron trains every frame on 64 cubes scrambled 0 to 8
-  turns, labelled by the count: hidden units (map), output error (map),
+  turns, labeled by the count: hidden units (map), output error (map),
   gradient (scatter), update (map), weights carried through `<~`.
 - `guess` shows `net` (the network's estimate), `you` (turns made) and
   `err` (half the batch's mean squared error).

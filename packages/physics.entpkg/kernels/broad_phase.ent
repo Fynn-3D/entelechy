@@ -1,0 +1,226 @@
+// Finding pairs: each body entered in the cells its grown box covers,
+// the entries sorted by cell, a pair taken in the one cell its boxes'
+// overlap begins in.
+use "parallel.entpkg";
+use "body.ent";
+
+/// Each body's box, grown by `margin` and by how far it may move in the
+/// step.
+kernel physics.bounds@1 {
+    requires { field.read; field.write; }
+    input bodies: Rows<Body>;
+    param dt: Float = 0.0166667;
+    param margin: Float = 0.02;
+    param origin: Vec2 = vec2(0.0, 0.0);
+    param cell: Float = 1.0;
+    param columns: Int = 64;
+    param rows: Int = 64;
+    output result: Rows<Bounds>;
+    compute {
+        let b = sample(bodies);
+        let c = abs(cos(b.angle));
+        let s = abs(sin(b.angle));
+        let e = if b.shape == BodyShape.Circle { b.size } else { vec2(c * b.size.x + s * b.size.y, s * b.size.x + c * b.size.y) };
+        let grow = margin + sweep(b, dt);
+        let lo = b.position - e - grow;
+        let hi = b.position + e + grow;
+        return Bounds { lo: lo, hi: hi, first: cell_at(lo, origin, cell, columns, rows), last: cell_at(hi, origin, cell, columns, rows) };
+    }
+}
+
+// The cell a point is in, held to the grid's edge.
+fn cell_at(p: Vec2, origin: Vec2, cell: Float, columns: Int, rows: Int) -> IVec2 {
+    let q = floor((p - origin) / cell);
+    return ivec2(clamp(int(clamp(q.x, -1.0, float(columns))), 0, columns - 1), clamp(int(clamp(q.y, -1.0, float(rows))), 0, rows - 1));
+}
+
+/// How many cells each body's box covers.
+kernel physics.spans@1 {
+    requires { field.read; field.write; }
+    input bounds: Rows<Bounds>;
+    output result: Rows<Int>;
+    compute {
+        let b = sample(bounds);
+        return (b.last.x - b.first.x + 1) * (b.last.y - b.first.y + 1);
+    }
+}
+
+/// The body each entry is.
+kernel physics.owners@1 {
+    requires { field.read; field.write; }
+    input total: Rows<Int>;
+    input ends: Rows<Int>;
+    output result: Rows<Int>;
+    compute { return owner(element(), ends); }
+}
+
+/// The cell each entry is, a body's cells in rows.
+kernel physics.cells@1 {
+    requires { field.read; field.write; }
+    input owners: Rows<Int>;
+    input spans: Rows<Int>;
+    input ends: Rows<Int>;
+    input bounds: Rows<Bounds>;
+    param columns: Int = 64;
+    output result: Rows<Int>;
+    compute {
+        let i = sample(owners);
+        let b = at(bounds, i);
+        let lo = b.first;
+        let hi = b.last;
+        let local = element() - (at(ends, i) - at(spans, i));
+        let wide = hi.x - lo.x + 1;
+        return (lo.y + local / wide) * columns + lo.x + local % wide;
+    }
+}
+
+/// A zero for each cell.
+kernel physics.no_cells@1 {
+    requires { field.read; field.write; }
+    param columns: Int = 64;
+    param rows: Int = 64;
+    output result: Rows<Int>;
+    compute { return 0; }
+}
+
+/// How many entries each cell holds.
+kernel physics.cell_counts@1 {
+    requires { field.read; field.write; }
+    input keys: Rows<Int>;
+    input zeros: Rows<Int>;
+    output result: Rows<Int>;
+    scatter into zeros with sum { return Counted { at: sample(keys), value: 1 }; }
+}
+
+// Whether two bodies meet: each one's layer in the other's mask, and one
+// of them moved or a sensor.
+fn meets(a: Body, b: Body) -> Bool {
+    return (a.layer & b.mask) != 0 && (b.layer & a.mask) != 0
+        && (a.inverse_mass > 0.0 || b.inverse_mass > 0.0 || a.sensor != 0 || b.sensor != 0);
+}
+
+// Whether bodies `i` and `j`, both entered in cell `c`, are a pair taken
+// there: they meet, their boxes overlap, and the overlap begins in `c`.
+fn paired(i: Int, j: Int, c: Int, bodies: Rows<Body>, bounds: Rows<Bounds>, columns: Int) -> Bool {
+    let a = at(bounds, i);
+    let b = at(bounds, j);
+    if a.hi.x < b.lo.x || b.hi.x < a.lo.x || a.hi.y < b.lo.y || b.hi.y < a.lo.y { return false; }
+    let begins = max(a.first, b.first);
+    return begins.y * columns + begins.x == c && meets(at(bodies, i), at(bodies, j));
+}
+
+/// Where each entry is in the sorted order.
+kernel physics.places@1 {
+    requires { field.read; field.write; }
+    input order: Rows<Int>;
+    input zeros: Rows<Int>;
+    output result: Rows<Int>;
+    scatter into zeros with max { return Counted { at: sample(order), value: element() }; }
+}
+
+/// A zero for each entry.
+kernel physics.no_entries@1 {
+    requires { field.read; field.write; }
+    input order: Rows<Int>;
+    output result: Rows<Int>;
+    compute { return 0; }
+}
+
+// Where the run an entry is in starts, and the entry's place in it.
+fn before(e: Int, places: Rows<Int>, keys: Rows<Int>, cell_ends: Rows<Int>, cell_counts: Rows<Int>) -> IVec3 {
+    let c = at(keys, e);
+    let k = at(places, e);
+    let first = at(cell_ends, c) - at(cell_counts, c);
+    return ivec3(c, first, k - first);
+}
+
+/// How many pairs each body is the higher of.
+kernel physics.pair_counts@1 {
+    requires { field.read; field.write; }
+    input bodies: Rows<Body>;
+    input spans: Rows<Int>;
+    input span_ends: Rows<Int>;
+    input order: Rows<Int>;
+    input places: Rows<Int>;
+    input keys: Rows<Int>;
+    input owners: Rows<Int>;
+    input cell_counts: Rows<Int>;
+    input cell_ends: Rows<Int>;
+    input bounds: Rows<Bounds>;
+    param columns: Int = 64;
+    output result: Rows<Int>;
+    compute {
+        let j = element();
+        let n = at(spans, j);
+        let e0 = at(span_ends, j) - n;
+        return loop rounds(n) with t0 = 0 {
+            let q = index();
+            loop round_of(n, q) with total = t0 {
+                let run = before(e0 + q * 65536 + index(), places, keys, cell_ends, cell_counts);
+                loop rounds(run.z) with t1 = total {
+                    let r = index();
+                    loop round_of(run.z, r) with t2 = t1 {
+                        let i = at(owners, at(order, run.y + r * 65536 + index()));
+                        if paired(i, j, run.x, bodies, bounds, columns) { t2 + 1 } else { t2 }
+                    }
+                }
+            }
+        };
+    }
+}
+
+/// Pairs of nothing, to be filled.
+kernel physics.no_pairs@1 {
+    requires { field.read; field.write; }
+    input total: Rows<Int>;
+    output result: Rows<Pair>;
+    compute { return Pair { a: -1, b: -1 }; }
+}
+
+/// The pairs, each body's in its part of the list, so the list is in
+/// order of the higher body: the walk `physics.pair_counts@1` counts.
+kernel physics.pairs@1 {
+    requires { field.read; field.write; }
+    input bodies: Rows<Body>;
+    input counts: Rows<Int>;
+    input ends: Rows<Int>;
+    input spans: Rows<Int>;
+    input span_ends: Rows<Int>;
+    input order: Rows<Int>;
+    input places: Rows<Int>;
+    input keys: Rows<Int>;
+    input owners: Rows<Int>;
+    input cell_counts: Rows<Int>;
+    input cell_ends: Rows<Int>;
+    input bounds: Rows<Bounds>;
+    input slots: Rows<Pair>;
+    param columns: Int = 64;
+    output result: Rows<Pair>;
+    struct Placed { at: Int; value: Pair; }
+    scatter into slots with max {
+        let j = element();
+        let room = at(counts, j);
+        let start = at(ends, j) - room;
+        let n = at(spans, j);
+        let e0 = at(span_ends, j) - n;
+        if room > 0 {
+            loop rounds(n) with t0 = 0 {
+                let q = index();
+                loop round_of(n, q) with total = t0 {
+                    let run = before(e0 + q * 65536 + index(), places, keys, cell_ends, cell_counts);
+                    loop rounds(run.z) with t1 = total {
+                        let r = index();
+                        loop round_of(run.z, r) with t2 = t1 {
+                            let i = at(owners, at(order, run.y + r * 65536 + index()));
+                            if t2 < room && paired(i, j, run.x, bodies, bounds, columns) {
+                                emit(Placed { at: start + t2, value: Pair { a: i, b: j } });
+                                t2 + 1
+                            } else { t2 }
+                        }
+                    }
+                }
+            };
+        }
+        return Placed { at: -1, value: Pair { a: -1, b: -1 } };
+    }
+}

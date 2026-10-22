@@ -42,7 +42,7 @@ node marks: world.marks@1 { bodies <- world.result; }
 // The bodies each tile of the picture walks.
 node tiles: world.tiles@1 { domain = 1; }
 node reach: world.reach@1 { tiles <- tiles.result; marks <- marks.result; domain = value(tiles); }
-node lists: graph "../../packages/compact.entpkg/graphs/runs.esn" { counts <- reach.result; }
+node lists: graph "../../packages/parallel.entpkg/graphs/runs.esn" { counts <- reach.result; }
 node binned: world.binned@1 {
     counts <- reach.result;
     ends <- lists.ends;

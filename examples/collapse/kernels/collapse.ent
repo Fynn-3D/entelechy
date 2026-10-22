@@ -1,7 +1,7 @@
 // Wave function collapse, as Fields: a grid where every cell holds the
 // set of tiles it could still be, one bit a tile. A step picks the cell
 // with the fewest possibilities left, collapses it to one of them, and
-// spreads what that rules out to its neighbours; a frame takes several
+// spreads what that rules out to its neighbors; a frame takes several
 // steps, and the picture is whatever the grid has settled into so far.
 //
 // A tile is four bits, one a side, bit `Side`: up towards -y, right
@@ -25,11 +25,11 @@ fn side_mask(side: Int, value: Int) -> Int {
     };
 }
 
-// What a neighbour leaves possible here: whichever of open and closed
+// What a neighbor leaves possible here: whichever of open and closed
 // it can still be on the side we share.
-fn allowed(neighbour: Int, theirs: Int, mine: Int) -> Int {
-    let open = (neighbour & side_mask(theirs, 1)) != 0;
-    let closed = (neighbour & side_mask(theirs, 0)) != 0;
+fn allowed(neighbor: Int, theirs: Int, mine: Int) -> Int {
+    let open = (neighbor & side_mask(theirs, 1)) != 0;
+    let closed = (neighbor & side_mask(theirs, 0)) != 0;
     return (if open { side_mask(mine, 1) } else { 0 })
          | (if closed { side_mask(mine, 0) } else { 0 });
 }
@@ -112,7 +112,7 @@ kernel collapse.step@1 {
     }
 }
 
-/// What the neighbours rule out, one cell at a time: placed several
+/// What the neighbors rule out, one cell at a time: placed several
 /// times, the news travels that many cells. The grid's edge is a closed
 /// side, so no pipe runs off it, and a cell left with nothing melts
 /// rather than sticking, which is this collapse's whole backtracking.
@@ -150,7 +150,7 @@ kernel collapse.view@1 {
     output result: Image;
     // How far a point in the cell is from the tile's pipe: a hub in the
     // middle and a stub to each side the tile is open on, which meets
-    // the neighbour's stub exactly at the edge.
+    // the neighbor's stub exactly at the edge.
     fn pipe(tile: Int, p: Vec2) -> Float {
         return loop 4 with d = length(p - 0.5) - 0.17 {
             if ((tile >>> index()) & 1) == 0 { d } else {

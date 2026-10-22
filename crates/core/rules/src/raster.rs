@@ -1,6 +1,6 @@
 //! The native `rasterize` operation's contract, and the CPU rasterizer
 //! the interpreter and the JIT each run. It is the fast path of the
-//! `raster` package's rule and gives its surface bit for bit. It is
+//! `render` package's rule and gives its surface bit for bit. It is
 //! device emulation; shading, projection and geometry live in Kernels.
 //!
 //! Contract:
@@ -11,7 +11,7 @@
 //! - input 1, `triangles`: rows of three `Int` vertex indices, clamped
 //!   into range.
 //! - output, `surface`: a grid laid out as `depth: Float, normal: Vec3,
-//!   uv: Vec2, id: Int`, the nearest fragment at each pixel centre with
+//!   uv: Vec2, id: Int`, the nearest fragment at each pixel center with
 //!   perspective-correct attributes and the triangle's row index as `id`.
 //!   Pixels nothing covers hold depth `1.0`, zeros, and id `-1`.
 //!
@@ -22,7 +22,7 @@
 //! nearer fragment replaces a farther one, and an equal depth keeps the
 //! earlier triangle.
 //!
-//! A pixel is covered where its centre, at `x + 0.5, y + 0.5`, is inside
+//! A pixel is covered where its center, at `x + 0.5, y + 0.5`, is inside
 //! the triangle's box and on or inside all three of its edges, the edge
 //! functions taken in floats. The box test is part of the rule.
 //!
@@ -368,7 +368,7 @@ struct Point {
 
 /// A triangle ready to draw: corners in pixels, wound so the edge
 /// functions are positive inside, with their vertex rows, its area, its
-/// row, and the pixel centres its box holds. Normals and uvs are read
+/// row, and the pixel centers its box holds. Normals and uvs are read
 /// from the vertex rows when a fragment is kept.
 struct Drawn {
     a: Point,
@@ -389,7 +389,7 @@ fn edge(a: &Point, b: &Point, px: f32, py: f32) -> f32 {
     (b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x)
 }
 
-/// Every triangle that may cover a pixel centre, in row order, as runs
+/// Every triangle that may cover a pixel center, in row order, as runs
 /// of the setup threads. Triangles that draw nothing are left out.
 fn set_up(vertices: &[u32], triangles: &[u32], width: u32, height: u32) -> Vec<Vec<Drawn>> {
     let vertex_count = vertices.len() / VERTEX_WORDS;
@@ -424,7 +424,7 @@ fn set_up(vertices: &[u32], triangles: &[u32], width: u32, height: u32) -> Vec<V
         if area.is_nan() || area <= 0.0 {
             return None;
         }
-        // The first and last pixel whose centre, at `x + 0.5`, is in the
+        // The first and last pixel whose center, at `x + 0.5`, is in the
         // box.
         let x0 = (a.x.min(b.x).min(c.x) - 0.5).ceil().max(0.0);
         let y0 = (a.y.min(b.y).min(c.y) - 0.5).ceil().max(0.0);
@@ -665,7 +665,7 @@ mod tests {
             for y in min_y..=max_y as u32 {
                 for x in min_x..=max_x as u32 {
                     let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
-                    // A centre outside the triangle's box is outside the
+                    // A center outside the triangle's box is outside the
                     // triangle.
                     if px < a.x.min(b.x).min(c.x)
                         || px > a.x.max(b.x).max(c.x)
@@ -766,7 +766,7 @@ mod tests {
             (320, 240, 5000),
         ] {
             // Tiny triangles among large ones: most of a far-off mesh
-            // covers no pixel centre at all.
+            // covers no pixel center at all.
             let vertex_count = 3 * count / 2 + 3;
             let mut vertices = Vec::new();
             for k in 0..vertex_count {

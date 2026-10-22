@@ -1,0 +1,86 @@
+// A game's actions from the keyboard and a pad alike (`../package.esn`).
+
+/// An action: a key, a second key and a pad button that each do it (-1 none).
+struct ActionBinding { key: Int; key2: Int; pad: Int; }
+
+/// The controls after a frame: actions held, pressed and released this
+/// frame (a bit each, the table's order); the way to move and to look
+/// (each at most length one, y ahead); the zoom (-1 out to 1 in); the
+/// left stick's steps this frame (up 1, down 2, left 4, right 8) and the
+/// way it was held, and when it began and last repeated; whether the pad
+/// was the last touched (1) or the keyboard and mouse (0); the time.
+struct ActionControls { held: Int; pressed: Int; released: Int; move: Vec2; look: Vec2; zoom: Float; steps: Int; way: Int;
+                  way_t: Float; step_t: Float; pad: Int; t: Float; }
+
+/// How far a stick goes before it counts, and how its travel past that
+/// is spread over 0 to 1.
+fn action_dead_zone() -> Float { return 0.2; }
+
+fn action_past_dead_zone(v: Vec2) -> Vec2 {
+    let l = length(v);
+    if l <= action_dead_zone() { return vec2(0.0, 0.0); }
+    return v / l * min((l - action_dead_zone()) / (1.0 - action_dead_zone()), 1.0);
+}
+
+/// A step held repeats after `action_step_delay()` seconds, every `action_step_every()`.
+fn action_step_delay() -> Float { return 0.4; }
+fn action_step_every() -> Float { return 0.13; }
+
+fn action_bit(on: Bool, k: Int) -> Int { return if on { 1 << k } else { 0 }; }
+
+fn action_key_down(code: Int) -> Bool { return code >= 0 && key(code); }
+
+/// Whether action `k` is held, pressed this frame, released this frame.
+fn action_held(c: ActionControls, k: Int) -> Bool { return (c.held & (1 << k)) != 0; }
+fn action_pressed(c: ActionControls, k: Int) -> Bool { return (c.pressed & (1 << k)) != 0; }
+fn action_released(c: ActionControls, k: Int) -> Bool { return (c.released & (1 << k)) != 0; }
+
+/// Whether the left stick (or the arrows) stepped `way` this frame: 1 up,
+/// 2 down, 4 left, 8 right.
+fn action_stick_stepped(c: ActionControls, way: Int) -> Bool { return (c.steps & way) != 0; }
+
+kernel controls.start@1 {
+    requires { field.write; }
+    output result: Rows<ActionControls>;
+    compute {
+        return ActionControls { held: 0, pressed: 0, released: 0, move: vec2(0.0, 0.0), look: vec2(0.0, 0.0), zoom: 0.0, steps: 0, way: 0, way_t: 0.0, step_t: 0.0, pad: 0, t: 0.0 };
+    }
+}
+
+/// The controls this frame, from the ones before.
+kernel controls.read@1 {
+    requires { field.read; field.write; input.read; time.read; }
+    input previous: Rows<ActionControls>;
+    input actions: Rows<ActionBinding>;
+    output result: Rows<ActionControls>;
+    compute {
+        let c = sample(previous);
+        let t = time();
+        let n = min(count(actions), 32);
+        let keys_held = loop n with h = 0 { let a = at(actions, index()); h | action_bit(action_key_down(a.key) || action_key_down(a.key2), index()) };
+        let pad_held = loop n with h = 0 { let a = at(actions, index()); h | action_bit(a.pad >= 8 && button(a.pad), index()) };
+        let held_now = keys_held | pad_held;
+        // Moving: W A S D or the arrows, and the left stick.
+        let keys_move = vec2((if key(68) || key(39) { 1.0 } else { 0.0 }) - (if key(65) || key(37) { 1.0 } else { 0.0 }),
+                             (if key(87) || key(38) { 1.0 } else { 0.0 }) - (if key(83) || key(40) { 1.0 } else { 0.0 }));
+        let stick_move = action_past_dead_zone(stick(0));
+        let both = keys_move + stick_move;
+        let move = if length(both) > 1.0 { normalize(both) } else { both };
+        let look = action_past_dead_zone(stick(1));
+        let triggers = stick(2);
+        let zoom = triggers.y - triggers.x;
+        // The left stick's flicks (and the arrows) as steps: once pushed, then repeating while held.
+        let raw = stick(0);
+        let way = (if raw.y > 0.5 || key(38) { 1 } else { 0 }) | (if raw.y < -0.5 || key(40) { 2 } else { 0 })
+                | (if raw.x < -0.5 || key(37) { 4 } else { 0 }) | (if raw.x > 0.5 || key(39) { 8 } else { 0 });
+        let fresh = way != 0 && way != c.way;
+        let again = way != 0 && way == c.way && t - c.way_t > action_step_delay() && t - c.step_t > action_step_every();
+        let steps = if fresh || again { way } else { 0 };
+        // The pad was the last touched when anything on it moved; the keyboard or mouse when they did.
+        let pad_touched = pad_held != 0 || length(stick_move) > 0.0 || length(look) > 0.0 || triggers.x > 0.2 || triggers.y > 0.2;
+        let desk_touched = keys_held != 0 || length(keys_move) > 0.0 || button(0) || button(1);
+        let pad = if pads() == 0 { 0 } else if pad_touched { 1 } else if desk_touched { 0 } else { c.pad };
+        return ActionControls { held: held_now, pressed: held_now & (c.held ^ -1), released: c.held & (held_now ^ -1), move: move, look: look, zoom: zoom, steps: steps, way: way,
+                          way_t: if fresh { t } else if way == 0 { 0.0 } else { c.way_t }, step_t: if steps != 0 { t } else { c.step_t }, pad: pad, t: t };
+    }
+}

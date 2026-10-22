@@ -5,7 +5,7 @@
 //! It draws the words `vector.draw@1` draws, at the cost of a few passes
 //! over shapes and segments, so a large drawing (a map, a page of type)
 //! draws in time.
-use "../kernels/vector.ent";
+use "../kernels/";
 
 input shapes: Rows<Shape>;
 input segments: Rows<Vec4>;
@@ -36,7 +36,7 @@ node tile_counts: vector.tile_counts@1 {
     tiles <- tiles.result;
     domain = count(tiles);
 }
-node tile_lists: graph "compact.entpkg/graphs/runs.esn" { counts <- tile_counts.result; }
+node tile_lists: graph "parallel.entpkg/graphs/runs.esn" { counts <- tile_counts.result; }
 node tile_shapes: vector.tile_fill@1 {
     reach <- reach.result;
     chunks <- shape_chunks.result;
@@ -54,7 +54,7 @@ node segment_chunks: vector.segment_chunks@1 { placed <- placed.result; domain =
 // Each cell's units, a chunk of its shape's segments to each; the
 // segments each unit gives its cell; the cells' lists of them.
 node units: vector.units@1 { total <- tile_lists.entries; tile_shapes <- tile_shapes.result; shapes <- shapes; domain = value(total); }
-node unit_lists: graph "compact.entpkg/graphs/runs.esn" { counts <- units.result; }
+node unit_lists: graph "parallel.entpkg/graphs/runs.esn" { counts <- units.result; }
 node kept: vector.kept@1 {
     total <- unit_lists.entries;
     units <- units.result;
@@ -67,7 +67,7 @@ node kept: vector.kept@1 {
     chunks <- segment_chunks.result;
     domain = value(total);
 }
-node kept_lists: graph "compact.entpkg/graphs/runs.esn" { counts <- kept.result; }
+node kept_lists: graph "parallel.entpkg/graphs/runs.esn" { counts <- kept.result; }
 node cell_segments: vector.keep@1 {
     total <- unit_lists.entries;
     kept <- kept.result;

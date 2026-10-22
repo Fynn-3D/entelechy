@@ -4,7 +4,7 @@
 // the palette alone — the joint's matrix in the skin's space is its
 // palette row undone by its inverse bind — so the check does not share
 // the arithmetic it checks.
-use "../../../packages/skin.entpkg";
+use "../../../packages/animation.entpkg";
 
 input skeleton: Skeleton = "../../skin/assets/arm.skeleton.field";
 input curl: Clip = "../../skin/assets/arm.curl.clip.field";
@@ -27,16 +27,16 @@ node reach: kernel {
     compute { return weight; }
 }
 
-node clock: skin.clock@1 { domain = 1; }
-node curling: skin.sample@1 { skeleton <- skeleton; clip <- curl; at <- clock.result; }
-node aimed: skin.aim@1 {
+node clock: animation.clock@1 { domain = 1; }
+node curling: animation.sample@1 { skeleton <- skeleton; clip <- curl; at <- clock.result; }
+node aimed: animation.aim@1 {
     poses <- curling.result;
     skeleton <- skeleton;
     target <- target.result;
     weight <- reach.result;
     joint = 1;
 }
-node palette: skin.palette@1 { poses <- aimed.result; skeleton <- skeleton; }
+node palette: animation.palette@1 { poses <- aimed.result; skeleton <- skeleton; }
 
 // Row 0: how nearly the elbow's y points at the target, as the cosine
 // of the angle between them (one when it does). Row 1: how far the

@@ -532,7 +532,7 @@ impl Player {
 
     /// The system's dialog for a folder, and the scene's `--folder`
     /// inputs and outputs placed in the one chosen, with the
-    /// `--folder-allow` grants there; cancelled, nothing changes.
+    /// `--folder-allow` grants there; canceled, nothing changes.
     fn choose_folder(&mut self) {
         let Some(dir) = rfd::FileDialog::new()
             .set_title("Choose a folder for the scene")

@@ -148,7 +148,7 @@ static func bool_at(words: PackedByteArray, index: int) -> bool:
 
 
 ## Where a frame of `size` lands in a `target` rectangle, aspect kept,
-## centred: the Player's placement.
+## centered: the Player's placement.
 static func placement(size: Vector2i, target: Vector2i) -> Rect2i:
 	if size.x <= 0 or size.y <= 0 or target.x <= 0 or target.y <= 0:
 		return Rect2i()

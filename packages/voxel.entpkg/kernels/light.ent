@@ -1,0 +1,50 @@
+// What a ray meets, lit: the sky and a sun with shadows, lights that fade
+// with distance and flicker, light kept to a few steps, haze and the dark.
+use "ray.ent";
+
+/// The light of a sky and a sun on a face: the sky's light `sky` by the
+/// share of the sky the face sees, all of it facing up, half facing
+/// sideways, none facing down; the sun's light `sun` by how square the
+/// face turns to it (`toward` a unit direction toward it), unless
+/// `shaded`. A look keeps it to steps (`voxel_stepped`) as it chooses.
+fn voxel_daylight(face: Vec3, toward: Vec3, shaded: Bool, sky: Vec3, sun: Vec3) -> Vec3 {
+    let direct = if shaded { 0.0 } else { max(dot(face, toward), 0.0) };
+    return sky * (0.5 + 0.5 * face.y) + sun * direct;
+}
+
+/// Whether a place, `from` in a box's voxels, is shaded from a sun along
+/// `sun` (a unit direction toward it, in the box's frame): a walk toward
+/// it meets a voxel, those numbered `pass.x` to `pass.y` seen through.
+fn voxel_shaded(vox: Voxels, from: Vec3, sun: Vec3, base: Vec3, n: Vec3, pass: IVec2) -> Bool {
+    return voxel_walk_past(vox, from + sun * 0.02, sun, base, n, pass).id > 0;
+}
+
+/// A light at `at`, of `color`, reaching `reach` world units, falling off
+/// with the square of the share of that it has come.
+struct VoxelLight { at: Vec3; reach: Float; color: Vec3; }
+
+/// A light's color on a face at `p`: falling off with distance, brighter
+/// on faces turned to it.
+fn voxel_light(p: Vec3, face: Vec3, l: VoxelLight) -> Vec3 {
+    let to = l.at - p;
+    let d = length(to);
+    let fall = saturate(1.0 - d / l.reach);
+    let facing = 0.35 + 0.65 * max(dot(face, to / max(d, 0.001)), 0.0);
+    return l.color * fall * fall * facing;
+}
+
+/// A flame's flicker at a place and time, 0.8 to 1.
+fn voxel_flicker(time: Float, p: Vec3) -> Float { return 0.9 + 0.1 * sin(time * 13.0 + p.x) * sin(time * 7.0 + p.z); }
+
+/// Light kept to `steps` steps a channel, as pixel art keeps it.
+fn voxel_stepped(light: Vec3, steps: Float) -> Vec3 { return floor(light * steps + 0.5) / steps; }
+
+/// A color seen through haze to `color_of_haze`, the more the farther
+/// (`thickness` a world unit).
+fn voxel_haze(color: Vec3, distance: Float, thickness: Float, color_of_haze: Vec3) -> Vec3 {
+    return mix(color, color_of_haze, saturate(1.0 - exp(-distance * thickness)));
+}
+
+/// A color swallowed by the dark: kept by e to the minus `distance` over
+/// `depth`, so at `depth` world units a little over a third is left.
+fn voxel_dark(color: Vec3, distance: Float, depth: Float) -> Vec3 { return color * exp(-distance / depth); }

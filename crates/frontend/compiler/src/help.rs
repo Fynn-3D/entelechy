@@ -139,7 +139,7 @@ pub fn builtins() -> Vec<Builtin> {
         fixed("fetch", "field", &["fetch(field: Rows<T>, index: Int) -> T", "fetch(field: Grid<T>, at: Vec2) -> T", "fetch(field: Grid<T>, at: IVec2) -> T", "fetch(field: Volume<T>, at: Vec3) -> T", "fetch(field: Volume<T>, at: IVec3) -> T"],
             "Another name for at.", Some(Capability::FieldRead), false),
         fixed("at_linear", "field", &["at_linear(field: Rows<T>, position: Float) -> T", "at_linear(field: Grid<T>, position: Vec2) -> T", "at_linear(field: Volume<T>, position: Vec3) -> T"],
-            "The neighbouring elements blended by the fractional position (element centres at .5), T of floats only; clamped at the edges.", Some(Capability::FieldRead), false),
+            "The neighboring elements blended by the fractional position (element centers at .5), T of floats only; clamped at the edges.", Some(Capability::FieldRead), false),
         fixed("sample", "field", &["sample(field: Rows<T>) -> T", "sample(field: Grid<T>) -> T", "sample(field: Volume<T>) -> T"],
             "The input's element at this element's own coordinates, clamped into the input.", Some(Capability::FieldRead), true),
         fixed("count", "field", &["count(field: Rows<T>) -> Int", "count(field: Grid<T>) -> Int", "count(field: Volume<T>) -> Int"],
@@ -156,7 +156,7 @@ pub fn builtins() -> Vec<Builtin> {
         fixed("exchange", "group", &["exchange(value: T, lane: Int) -> T"],
             "What lane `lane` of the group (wrapped into it, so lane() + 1 and -1 go round) holds as `value` at this exchange. Every lane of the group meets there, so an exchange stands under no branch, loop count or `until` that turns on what a lane holds alone (its lane, its element, what it reads or was handed): what the whole group holds (params, literals, the domain) may steer one. Group only, from its body.", None, true),
         fixed("element", "context", &["element() -> Int"], "This element's index over rows; a scan's step.", None, true),
-        fixed("coord", "context", &["coord() -> Vec2", "coord() -> Vec3"], "This element's column and row (and layer) over a grid or a volume, whole numbers from 0 with row 0 at the top; the element's centre is coord() + 0.5. Rows have element().", None, true),
+        fixed("coord", "context", &["coord() -> Vec2", "coord() -> Vec3"], "This element's column and row (and layer) over a grid or a volume, whole numbers from 0 with row 0 at the top; the element's center is coord() + 0.5. Rows have element().", None, true),
         fixed("icoord", "context", &["icoord() -> IVec2", "icoord() -> IVec3"], "This element's coordinates as integers, for arithmetic on cells.", None, true),
         fixed("domain", "context", &["domain() -> Int", "domain() -> Vec2", "domain() -> Vec3"], "The output's extent in its shape.", None, true),
         fixed("idomain", "context", &["idomain() -> Int", "idomain() -> IVec2", "idomain() -> IVec3"], "The output's extent as integers.", None, true),
@@ -554,7 +554,7 @@ pub fn forms() -> Vec<Form> {
         form(
             "qualified",
             "document",
-            "let n = hash_noise::fbm2(p);   let m = ui_panel::Mark { b: 1 };   input marks: Rows<ui_panel::Mark>;",
+            "let n = random::fbm2(p);   let m = ui_panel::Mark { b: 1 };   input marks: Rows<ui_panel::Mark>;",
             "A name a used package declares, written with the package's name before it: the one declaration of that name in that package. Two packages a document uses may declare one name; the document names each by its package. A name declared or bound here is a plain word.",
         ),
     ]

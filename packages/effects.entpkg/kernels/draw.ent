@@ -1,0 +1,197 @@
+// The live layers drawn over a picture whose alpha holds how far each
+// pixel is (1 + the distance; 0 for the sky), as `glow.ent` draws:
+// each pixel's ray looks only at the layers whose sphere it passes
+// before the picture, and gathers their light.
+use "effect.ent";
+use "form.ent";
+use "glow.ent";
+use "matter.ent";
+
+/// Where the picture is seen from: the eye, the way it looks, its right
+/// and up, and its focal length (in picture heights).
+struct Eye { from: Vec3; fwd: Vec3; right: Vec3; up: Vec3; focal: Float; }
+type Eyes = Rows<Eye>;
+
+/// An eye at `from` looking at `target`.
+fn eye_looking(from: Vec3, target: Vec3, focal: Float) -> Eye {
+    let fwd = normalize(target - from);
+    let right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
+    return Eye { from: from, fwd: fwd, right: right, up: cross(right, fwd), focal: focal };
+}
+
+/// The eye's ray through the pixel at `pixel` of a picture `size` across.
+fn eye_ray(e: Eye, pixel: Vec2, size: Vec2) -> Vec3 {
+    let u = (pixel.x - size.x * 0.5) / size.y;
+    let v = (size.y * 0.5 - pixel.y) / size.y;
+    return normalize(e.fwd * e.focal + e.right * u + e.up * v);
+}
+
+/// One live layer's light along a ray.
+fn layer_light(from: Vec3, dir: Vec3, scene: Float, lv: Live, el: Element, jitter: Float) -> Glow {
+    if is_body(lv.form) { return body(from, dir, scene, lv, el, jitter); }
+    if lv.form == form_wave() { return wave(from, dir, scene, lv, el); }
+    if lv.form == form_sigil() { return sigil(from, dir, scene, lv, el); }
+    if lv.form == form_motes() { return motes(from, dir, scene, lv, el); }
+    if lv.form == form_sparks() { return sparks(from, dir, scene, lv, el); }
+    if lv.form == form_shards() { return shards(from, dir, scene, lv, el); }
+    if lv.form == form_bolts() { return bolts(from, dir, scene, lv, el); }
+    if lv.form == form_slash() { return slash(from, dir, scene, lv, el); }
+    if lv.form == form_glyph() { return glyph(from, dir, scene, lv, el); }
+    if lv.form == form_darts() { return darts(from, dir, scene, lv, el); }
+    return no_glow();
+}
+
+/// The casts' light over the picture, `shrink` times coarser than it: a
+/// pixel's ray gathers what the layers it passes give (rgb) and how much
+/// they hide (w), up to the picture's depth at its middle.
+kernel effects.light@1 {
+    requires { field.read; field.write; }
+    param shrink: Float = 2.0;
+    input picture: Image;
+    input eye: Eyes;
+    input lives: Lives;
+    input elements: Elements;
+    output result: Grid<Vec4>;
+    output depth: Grid<Float>;
+    compute {
+        let full = size(picture);
+        let px = coord();
+        let middle = (px + 0.5) * shrink;
+        let seen = at(picture, min(middle, full - 1.0));
+        let e = at(eye, 0);
+        let from = e.from;
+        let dir = eye_ray(e, middle, full);
+        let scene = if seen.w > 0.0 { seen.w - 1.0 } else { 100000.0 };
+        let n = count(lives);
+        // A pixel's own shift of the first step (interleaved gradient noise).
+        let jitter = 0.5 + (fract(52.9829189 * fract(0.06711056 * px.x + 0.00583715 * px.y)) - 0.5) * 0.5;
+        let all = loop n with acc = vec4(0.0, 0.0, 0.0, 0.0) {
+            let lv = at(lives, index());
+            if lv.form < 0 { acc } else if lv.form == form_flash() {
+                // A flash lights the whole picture, or a dark one dims it.
+                // It lights what is near where it is: the ground and bodies
+                // within some meters, the sky beyond them a little.
+                let el = at(elements, lv.element);
+                let lit_at = from + dir * min(scene, length(lv.p - from));
+                let near = exp(0.0 - pow(length(lit_at - lv.p) / (3.5 + lv.size * 2.5), 2.0));
+                let f = lv.shine * (1.0 - lv.age) * (1.0 - lv.age) * near;
+                let lit = el.core * f * (1.0 - el.dark) * 0.35 * min(el.glow, 1.0);
+                vec4(acc.x + lit.x, acc.y + lit.y, acc.z + lit.z, acc.w + f * el.dark * 0.5)
+            } else {
+                let span = sphere_span(from, dir, lv.bound.xyz, lv.bound.w);
+                if span.y < span.x || span.x > scene { acc } else {
+                    let g = layer_light(from, dir, scene, lv, at(elements, lv.element), jitter);
+                    // Light adds; what a layer hides darkens what is behind it.
+                    vec4(acc.x + g.light.x, acc.y + g.light.y, acc.z + g.light.z, acc.w + (1.0 - g.through))
+                }
+            }
+        };
+        return { result: all, depth: scene };
+    }
+}
+
+/// The light about the full picture's pixel `px` (its center), blended up
+/// from the coarser grid: of the four coarse pixels about it, those
+/// gathered to about `here`, its depth, count, so light stops at the edge
+/// of what stands in front.
+fn gathered(light: Grid<Vec4>, depth: Grid<Float>, px: Vec2, here: Float, shrink: Float) -> Vec4 {
+    let at_ = px / shrink - 0.5;
+    let base = floor(at_);
+    let f = at_ - base;
+    let most = size(light) - 1.0;
+    let sum = loop 4 with acc = vec4(0.0, 0.0, 0.0, 0.0) {
+        let k = index();
+        let c = clamp(base + vec2(float(k % 2), float(k / 2)), vec2(0.0, 0.0), most);
+        let w = (if k % 2 == 1 { f.x } else { 1.0 - f.x }) * (if k / 2 == 1 { f.y } else { 1.0 - f.y });
+        let ww = w * exp(0.0 - abs(at(depth, c) - here) / (0.04 * min(here, 1000.0) + 0.05)) + 0.0001 * w;
+        acc + at(light, c) * ww
+    };
+    let weights = loop 4 with acc = 0.0 {
+        let k = index();
+        let c = clamp(base + vec2(float(k % 2), float(k / 2)), vec2(0.0, 0.0), most);
+        let w = (if k % 2 == 1 { f.x } else { 1.0 - f.x }) * (if k / 2 == 1 { f.y } else { 1.0 - f.y });
+        acc + w * exp(0.0 - abs(at(depth, c) - here) / (0.04 * min(here, 1000.0) + 0.05)) + 0.0001 * w
+    };
+    return sum / weights;
+}
+
+/// How far a pixel of the picture is (its alpha 1 + the distance).
+fn depth_of(seen: Vec4) -> Float { return if seen.w > 0.0 { seen.w - 1.0 } else { 100000.0 }; }
+
+/// The light laid over the picture, blended up from its coarser grid.
+kernel effects.draw@1 {
+    requires { field.read; field.write; }
+    param shrink: Float = 2.0;
+    input picture: Image;
+    input light: Grid<Vec4>;
+    input depth: Grid<Float>;
+    output result: Image;
+    compute {
+        let seen = sample(picture);
+        let all = gathered(light, depth, coord() + 0.5, depth_of(seen), shrink);
+        let through = exp(0.0 - all.w * 1.2);
+        let lit = seen.xyz * through + (vec3(1.0, 1.0, 1.0) - exp(vec3(0.0, 0.0, 0.0) - all.xyz * 1.2));
+        return vec4(lit.x, lit.y, lit.z, seen.w);
+    }
+}
+
+/// Which of the cel's bands a light's brightness falls in: 0 none, 1 its
+/// body, 2 its bright, 3 its white heart.
+fn cel_band(l: Float) -> Int { return if l < 0.22 { 0 } else if l < 0.52 { 1 } else if l < 0.86 { 2 } else { 3 }; }
+
+/// The light as painted for a cartoon (`style`'s first element 8 set): in
+/// three flat bands of its own hue, its heart white, inked about where it
+/// begins and lightly between its bands; and what stands in the picture
+/// outlined where it stands before what is behind it. Else as `effects.draw`.
+kernel effects.cel@1 {
+    requires { field.read; field.write; }
+    param shrink: Float = 2.0;
+    /// How dark the ink is, and how wide in pixels.
+    param ink: Float = 0.9;
+    param width: Float = 1.5;
+    input picture: Image;
+    input light: Grid<Vec4>;
+    input depth: Grid<Float>;
+    input style: Rows<Int>;
+    output result: Image;
+    compute {
+        let seen = sample(picture);
+        let here = depth_of(seen);
+        let px = coord() + 0.5;
+        let all = gathered(light, depth, px, here, shrink);
+        let through = exp(0.0 - all.w * 1.2);
+        let toned = vec3(1.0, 1.0, 1.0) - exp(vec3(0.0, 0.0, 0.0) - all.xyz * 1.2);
+        if (at(style, 0) & 8) == 0 {
+            let lit = seen.xyz * through + toned;
+            return vec4(lit.x, lit.y, lit.z, seen.w);
+        }
+        let lum = max(toned.x, max(toned.y, toned.z));
+        let hue = toned / max(lum, 0.001);
+        let rich = clamp(vec3(lum, lum, lum) + (hue * lum - vec3(lum, lum, lum)) * 1.35, 0.0, 1.0) / max(lum, 0.001);
+        let band = cel_band(lum);
+        // The bands about this pixel, and the depths, a width away.
+        let w = width * max(1.0, size(picture).y / 720.0);
+        let edges = loop 4 with e = vec4(0.0, 0.0, 0.0, 0.0) {
+            let k = index();
+            let o = if k == 0 { vec2(w, 0.0) } else if k == 1 { vec2(0.0 - w, 0.0) } else if k == 2 { vec2(0.0, w) } else { vec2(0.0, 0.0 - w) };
+            let q = clamp(px + o, vec2(0.5, 0.5), size(picture) - 0.5);
+            let seen_q = at(picture, floor(q));
+            let d_q = depth_of(seen_q);
+            let l_q = gathered(light, depth, q, d_q, shrink);
+            let t_q = vec3(1.0, 1.0, 1.0) - exp(vec3(0.0, 0.0, 0.0) - l_q.xyz * 1.2);
+            let b_q = cel_band(max(t_q.x, max(t_q.y, t_q.z)));
+            // x: an edge where the light begins; y: between its bands;
+            // z: what stands before what is behind it.
+            let begins = if band == 0 && b_q > 0 { 1.0 } else { 0.0 };
+            let between = if band > 0 && b_q > band { 1.0 } else { 0.0 };
+            let before = if d_q > here * 1.08 + 0.3 && here < 1000.0 { 1.0 } else { 0.0 };
+            vec4(max(e.x, begins), max(e.y, between), max(e.z, before), e.w)
+        };
+        let paint = if band == 1 { rich * 0.42 } else if band == 2 { rich * 0.85 } else if band == 3 { mix(rich, vec3(1.0, 1.0, 1.0), 0.8) } else { vec3(0.0, 0.0, 0.0) };
+        let cover = if band > 0 { 1.0 } else { 0.0 };
+        let under = seen.xyz * through;
+        let painted = mix(under, paint, cover * 0.92);
+        let inked = painted * (1.0 - ink * max(edges.x, edges.z)) * (1.0 - ink * 0.35 * edges.y);
+        return vec4(inked.x, inked.y, inked.z, seen.w);
+    }
+}

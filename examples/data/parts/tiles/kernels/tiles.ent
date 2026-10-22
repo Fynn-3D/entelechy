@@ -31,7 +31,7 @@ kernel tiles.generate@1 {
     }
 }
 
-/// Water spreads to the four passable neighbours every frame.
+/// Water spreads to the four passable neighbors every frame.
 kernel tiles.flood@1 {
     requires { field.read; field.write; }
     input previous: Map;
@@ -44,8 +44,8 @@ kernel tiles.flood@1 {
     compute {
         let c = coord();
         let me = sample(previous);
-        let neighbour = wet(c - vec2(1.0, 0.0)) || wet(c + vec2(1.0, 0.0)) || wet(c - vec2(0.0, 1.0)) || wet(c + vec2(0.0, 1.0));
-        return if me.passable && neighbour { Tile { ..me, kind: Kind.Water } } else { me };
+        let neighbor = wet(c - vec2(1.0, 0.0)) || wet(c + vec2(1.0, 0.0)) || wet(c - vec2(0.0, 1.0)) || wet(c + vec2(0.0, 1.0));
+        return if me.passable && neighbor { Tile { ..me, kind: Kind.Water } } else { me };
     }
 }
 

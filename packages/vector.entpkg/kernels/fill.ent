@@ -1,0 +1,187 @@
+// Drawing as Kernels: the shapes `entelechy import` writes from an SVG,
+// filled pixel by pixel. The rule, at a pixel's center:
+//
+// - The shapes are drawn in their order, each over what is beneath it.
+// - A shape covers the center by its winding number: a ray to the right
+//   crosses its segments, one upward adding one and one downward taking
+//   one away. Under the nonzero rule (0) a winding other than zero is
+//   inside; under even-odd (1) an odd one.
+// - Its edge is smoothed over a pixel: a center half a pixel inside its
+//   nearest segment is covered whole, half a pixel outside not at all.
+// - Its paint is a color (0), or a linear (1) or radial (2) gradient read
+//   in the gradient's own space, its stops blended in order and spread by
+//   padding (0), reflecting (1) or repeating (2).
+//
+// A drawing is looked at through a `Look`: the point of the drawing at
+// the middle of the picture and how many times larger than fitting the
+// drawing to the picture it is shown.
+//
+// `vector.draw@1` is the rule written plainly: every pixel asks every
+// shape and every segment. The tiled form (`graphs/draw.esn`) asks the
+// same questions of fewer: the canvas is cut into tiles of 16 pixels,
+// each tile keeps the shapes whose boxes reach it, and each shape in a
+// tile keeps the segments that reach the tile and, a row at a time, the
+// winding of those wholly past it to the right. A segment that could
+// change a pixel's winding or its smoothing is always among them, so the
+// two forms draw the same words where every Kernel rounds alike, as on
+// the interpreter and the JIT. Shapes and segments are walked in
+// chunks, a chunk whose box misses passed over whole, and every loop
+// over shapes or segments is two deep, so neither count is bounded by
+// one loop's.
+
+// Lists are runs of the `math` package; an entry finds its owner by
+// its `owner`.
+use "parallel.entpkg";
+use "shape.ent";
+
+// The distance from `p` to the segment from `a` to `b`.
+fn to_segment(p: Vec2, a: Vec2, b: Vec2) -> Float {
+    let ab = b - a;
+    let t = saturate(dot(p - a, ab) / max(dot(ab, ab), 0.0000001));
+    return length(p - (a + ab * t));
+}
+
+// Where a gradient is at `t`, spread past its ends.
+fn spread_by(t: Float, spread: Int) -> Float {
+    return match spread {
+        Spread.Reflect => 1.0 - abs(fract(t * 0.5) * 2.0 - 1.0),
+        Spread.Repeat => fract(t),
+        _ => saturate(t),
+    };
+}
+
+// A gradient's color at `t`: the stops about it blended.
+fn stops_at(stops: Rows<Stop>, first: Int, n: Int, t: Float) -> Vec4 {
+    let found = loop n with pick = at(stops, first).color {
+        let s = at(stops, first + index());
+        let before = at(stops, first + max(index() - 1, 0));
+        let span = s.offset - before.offset;
+        if t >= s.offset {
+            s.color
+        } else {
+            if index() > 0 && t > before.offset {
+                let k = if span > 0.0 { (t - before.offset) / span } else { 1.0 };
+                break mix(before.color, s.color, k);
+            }
+            break pick;
+        }
+    };
+    return found;
+}
+
+// A shape's paint at the drawing's point `p`.
+fn paint_at(shape: Shape, stops: Rows<Stop>, p: Vec2) -> Vec4 {
+    if shape.paint == Paint.Color { return shape.color; }
+    let m = shape.inverse;
+    let q = vec2(m.x * p.x + m.z * p.y + shape.shift.x, m.y * p.x + m.w * p.y + shape.shift.y);
+    let g = shape.gradient;
+    let t = if shape.paint == Paint.Linear {
+        let d = g.zw - g.xy;
+        dot(q - g.xy, d) / max(dot(d, d), 0.0000001)
+    } else {
+        length(q - g.xy) / max(g.z, 0.0000001)
+    };
+    let c = stops_at(stops, shape.stops, shape.stop_count, spread_by(t, shape.spread));
+    return vec4(c.xyz, c.w * shape.color.w);
+}
+
+// One segment's part in a pixel: its crossing of the ray to the right
+// and its distance, gathered into `w` (winding, nearest).
+fn crossed(w: Vec2, seg: Vec4, p: Vec2) -> Vec2 {
+    let a = seg.xy;
+    let b = seg.zw;
+    let crosses = (a.y <= p.y) != (b.y <= p.y);
+    let x = a.x + (p.y - a.y) * (b.x - a.x) / (b.y - a.y);
+    let turn = if crosses && x > p.x { if b.y > a.y { 1.0 } else { -1.0 } } else { 0.0 };
+    return vec2(w.x + turn, min(w.y, to_segment(p, a, b)));
+}
+
+// Whether a shape's box, grown by a pixel, holds `p`.
+fn near(s: Shape, p: Vec2, pixel: Float) -> Bool {
+    return p.x >= s.lo.x - pixel && p.x <= s.hi.x + pixel && p.y >= s.lo.y - pixel && p.y <= s.hi.y + pixel;
+}
+
+// A shape laid over `below`, given its winding and nearest segment.
+fn laid(below: Vec4, s: Shape, stops: Rows<Stop>, p: Vec2, pixel: Float, hit: Vec2) -> Vec4 {
+    let winding = int(hit.x);
+    let inside = if s.rule == FillRule.NonZero { winding != 0 } else { winding % 2 != 0 };
+    let signed = if inside { hit.y } else { -hit.y };
+    let cover = saturate(0.5 + signed / pixel);
+    let c = paint_at(s, stops, p);
+    let a = c.w * cover;
+    return vec4(below.xyz * (1.0 - a) + c.xyz * a, below.w * (1.0 - a) + a);
+}
+
+/// Where the look puts each pixel's center in the drawing, and a pixel's
+/// size there: the x of each of `across`'s columns, then the y of each of
+/// `down`'s rows, then the size; `domain = count(across) + count(down) +
+/// 1`. Every Kernel that asks where a pixel is reads it here, so they
+/// agree to the bit wherever each runs.
+kernel vector.frame@1 {
+    requires { field.read; field.write; }
+    input across: Grid<Int>;
+    input down: Grid<Int>;
+    input view: Rows<Vec2>;
+    input look: Rows<Look>;
+    output result: Rows<Float>;
+    compute {
+        let res = vec2(size(across).x, size(down).y);
+        let wide = int(res.x);
+        let size = at(view, 0);
+        let eye = at(look, 0);
+        let pixel = 1.0 / fitted(size, eye, res);
+        let i = element();
+        if i < wide { return eye.center.x + (float(i) + 0.5 - res.x * 0.5) * pixel; }
+        if i < wide + int(res.y) { return eye.center.y + (float(i - wide) + 0.5 - res.y * 0.5) * pixel; }
+        return pixel;
+    }
+}
+
+// A pixel's center in the drawing and a pixel's size, from the frame of a
+// canvas `wide` pixels across.
+fn seen(frame: Rows<Float>, wide: Int, pixel_at: Vec2) -> Vec3 {
+    let x = at(frame, int(pixel_at.x));
+    let y = at(frame, wide + int(pixel_at.y));
+    return vec3(x, y, at(frame, count(frame) - 1));
+}
+
+/// A look at the whole drawing: its middle, fitted to the picture.
+kernel vector.whole@1 {
+    requires { field.read; field.write; }
+    input view: Rows<Vec2>;
+    output result: Rows<Look>;
+    compute { return Look { center: at(view, 0) * 0.5, zoom: 1.0 }; }
+}
+
+/// The drawing over `background`, through `frame`, at the node's domain:
+/// every pixel asks every shape and segment.
+kernel vector.draw@1 {
+    requires { field.read; field.write; }
+    input shapes: Rows<Shape>;
+    input segments: Rows<Vec4>;
+    input stops: Rows<Stop>;
+    input frame: Rows<Float>;
+    param background: Vec4 = vec4(1.0, 1.0, 1.0, 1.0);
+    output result: Image;
+    compute {
+        let v = seen(frame, int(domain().x), coord());
+        let p = v.xy;
+        let pixel = v.z;
+        let n = count(shapes);
+        return loop rounds(n) with over = background {
+            let r = index();
+            loop round_of(n, r) with below = over {
+                let s = at(shapes, r * 65536 + index());
+                if !near(s, p, pixel) { below } else {
+                    let hit = loop rounds(s.count) with w = vec2(0.0, 1000000000.0) {
+                        let q = index();
+                        loop round_of(s.count, q) with w2 = w {
+                            crossed(w2, at(segments, s.first + q * 65536 + index()), p)
+                        }
+                    };
+                    laid(below, s, stops, p, pixel, hit)
+                }
+            }
+        };
+    }
+}

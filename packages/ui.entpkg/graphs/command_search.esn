@@ -1,0 +1,24 @@
+// The command search (`ui.command_search`) over `names`, a command a line:
+// the names read as lines once, the lines holding what is typed found all
+// at once and put in order, then chosen from. `result` is the search's row
+// (`Search`); `lines`, where each line ends, is what `ui.command_overlay`
+// draws the names by; `first`, the row before any frame, starts what reads
+// the search `<~`.
+use "../kernels/";
+
+input names: Rows<Int>;
+
+node newlines: ui.command_newlines@1 { names <- names; }
+node line_count: ui.command_line_count@1 { names <- names; }
+node blank: ui.command_no_lines@1 { count <- line_count.result; domain = max(value(count), 1); }
+node lines: ui.command_line_ends@1 { names <- names; newlines <- newlines.result; blank <- blank.result; }
+node start: ui.command_start@1 { domain = 1; }
+node query: ui.command_query@1 { previous <~ search.result from start.result; }
+node matched: ui.command_matched@1 { ends <- lines.result; names <- names; query <- query.result; domain = count(ends); }
+node ranks: ui.command_ranks@1 { matched <- matched.result; }
+node ordered: ui.command_ordered@1 { matched <- matched.result; ranks <- ranks.result; blank <- blank.result; }
+node search: ui.command_search@2 { previous <~ search.result from start.result; ranks <- ranks.result; ordered <- ordered.result; }
+
+output result <- search.result;
+output lines <- lines.result;
+output first <- start.result;

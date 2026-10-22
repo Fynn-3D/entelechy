@@ -1,0 +1,97 @@
+// Things are scattered over cells round a center (the camera, often) (`scatter.around`): cells are numbered by world
+// coordinates and a cell's points follow from its number, so as the center moves the cells change, and one place always grows the same
+// things, never jumping. Each cell holds a few slots (stratified jitter, no clumps), each slot picking one layer by the layers' density
+// there, or none: the layers' densities summed are the density scattered.
+//
+// Far from the center things thin with distance and those left grow larger, covering the same area (grass and small things far off
+// show as a stretch, not as tufts). The ground's height comes from a height map.
+use "random.entpkg";
+use "parallel.entpkg";
+
+/// One thing scattered: where (its root), turned about up how far (radians), how large (times), which item (the `ScatterLayer`'s
+/// `item`), its own number. A slot left empty has `size` zero, deep under the ground.
+struct Placed { at: Vec3; turn: Float; size: Float; item: Int; seed: Int; }
+type Placements = Rows<Placed>;
+
+/// A layer: the item scattered, how many a square meter, its size (from, to), how large its patches of noise are (meters, 0 even),
+/// the fraction covered (0 to 1), the slope (height over width) past which it does not grow, its own seed.
+struct ScatterLayer { item: Int; density: Float; size: Vec2; patch: Float; cover: Float; steep: Float; seed: Int; }
+type ScatterLayers = Rows<ScatterLayer>;
+
+/// How high the ground (the height map `ground`, covering `side` meters square from `lo`) is at (`x`, `z`).
+fn ground_height(ground: Grid<Float>, lo: Vec2, side: Float, x: Float, z: Float) -> Float {
+    let n = size(ground);
+    return at_linear(ground, clamp((vec2(x, z) - lo) / side * n, vec2(0.5, 0.5), n - 0.5));
+}
+
+/// How much layer `l` wants at `p` (patches, slope): 0 to 1.
+fn layer_here(l: ScatterLayer, p: Vec2, slope: Float) -> Float {
+    let patches = if l.patch > 0.0 {
+        let n = fbm2(p / l.patch, 3, l.seed + 31) * 0.5 + 0.5;
+        smoothstep(1.0 - l.cover - 0.12, 1.0 - l.cover + 0.12, n)
+    } else { l.cover };
+    return patches * (1.0 - smoothstep(l.steep * 0.8, l.steep, slope));
+}
+
+/// Scattered round the center (`center`'s first row): `cells` × `cells` cells of `cell`
+/// meters, `slots` slots a cell; full within `full` meters, thinning with the square of the distance beyond, as far as `far`.
+/// The ground's height map (and the map of where things grow) covers `ground_side` meters from (`ground_x`, `ground_z`).
+///
+kernel scatter.around@1 {
+    requires { field.read; field.write; }
+    input center: Rows<Vec3>;
+    input layers: Rows<ScatterLayer>;
+    input ground: Grid<Float>;
+    /// Where things grow (0 to 1, multiplying each layer's density; covering the same ground as the height map; 1 × 1 is the same
+    /// everywhere).
+    input mask: Grid<Float>;
+    param cell: Float = 2.0;
+    param cells: Int = 32;
+    param slots: Int = 64;
+    param full: Float = 10.0;
+    param far: Float = 40.0;
+    /// Nothing nearer than this is scattered (left to a finer ring).
+    param near: Float = 0.0;
+    param ground_x: Float = -100.0;
+    param ground_z: Float = -100.0;
+    param ground_side: Float = 200.0;
+    output result: Rows<Placed>;
+    compute {
+        let e = element();
+        let none = Placed { at: vec3(0.0, -100000.0, 0.0), turn: 0.0, size: 0.0, item: -1, seed: 0 };
+        let c0 = at(center, 0);
+        let k = e % slots;
+        let c = e / slots;
+        let home = ivec2(int(floor(c0.x / cell)), int(floor(c0.z / cell)));
+        let wc = home + ivec2(c % cells - cells / 2, c / cells - cells / 2);
+        // Stratified: the cell split into a square of slots, each jittered.
+        let side = max(int(sqrt(float(slots))), 1);
+        let h = hash_int2(hash_int2(wc.x, wc.y, 401), k, 402);
+        let j = vec2(unit_of(hash_int(h, 1)), unit_of(hash_int(h, 2)));
+        let p = (vec2(float(wc.x), float(wc.y)) + (vec2(float(k % side), float(k / side)) + j) / float(side)) * cell;
+        let d = length(p - vec2(c0.x, c0.z));
+        if d > far || d < near || k >= side * side { return none; }
+        // Thinner far off, each the larger.
+        let keep = if d < full { 1.0 } else { full * full / (d * d) };
+        if unit_of(hash_int(h, 3)) > keep { return none; }
+        let lo = vec2(ground_x, ground_z);
+        let y = ground_height(ground, lo, ground_side, p.x, p.y);
+        let e2 = 0.5;
+        let slope = length(vec2(ground_height(ground, lo, ground_side, p.x + e2, p.y) - ground_height(ground, lo, ground_side, p.x - e2, p.y),
+            ground_height(ground, lo, ground_side, p.x, p.y + e2) - ground_height(ground, lo, ground_side, p.x, p.y - e2))) / (2.0 * e2);
+        // Which layer this slot is: by each one's density here, or none.
+        let fertile = ground_height(mask, lo, ground_side, p.x, p.y);
+        if fertile <= 0.0 { return none; }
+        let per_slot = float(side * side) / (cell * cell) / fertile;
+        let r = unit_of(hash_int(h, 4)) * per_slot;
+        let pick = loop 16 with a = vec2(0.0, -1.0) until index() >= count(layers) || a.y >= 0.0 {
+            let l = at(layers, index());
+            let next = a.x + l.density * layer_here(l, p, slope);
+            if r < next { vec2(next, float(index())) } else { vec2(next, -1.0) }
+        };
+        if pick.y < 0.0 { return none; }
+        let l = at(layers, int(pick.y));
+        let size = mix(l.size.x, l.size.y, unit_of(hash_int(h, 5))) * min(1.0 / sqrt(keep), 2.5);
+        return Placed { at: vec3(p.x, y, p.y), turn: unit_of(hash_int(h, 6)) * 6.2831853, size: size, item: l.item, seed: hash_int(h, 7) & 0xffff };
+    }
+}

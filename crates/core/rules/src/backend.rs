@@ -201,7 +201,7 @@ impl NativeOp {
 //   input triangles: Rows<{ a: Int; b: Int; c: Int; }>
 //   output surface: Grid<{ depth: Float; normal: Vec3; uv: Vec2; id: Int; }>
 // `clip` is a clip-space position (x, y in [-1, 1] after the divide by w,
-// z in [0, 1]); the nearest fragment at each pixel centre is written with
+// z in [0, 1]); the nearest fragment at each pixel center is written with
 // perspective-correct attributes and its triangle's row as `id`; empty
 // pixels hold depth 1, zeros, and id -1. No culling, no clipping: a
 // triangle with a vertex at w <= 0, or a clip component that is not

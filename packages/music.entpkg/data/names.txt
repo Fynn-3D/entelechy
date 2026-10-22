@@ -1,0 +1,34 @@
+title
+town
+field
+dungeon
+battle
+boss
+castle
+night
+shop
+inn
+shrine
+sorrow
+sea
+snow
+desert
+forest
+council
+march
+our turn
+their turn
+last boss
+ending
+victory
+defeat
+level up
+fanfare
+orchestral
+chiptune
+folk
+ambient
+eastern
+gothic
+celtic
+military

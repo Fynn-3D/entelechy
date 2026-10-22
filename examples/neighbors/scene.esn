@@ -1,0 +1,53 @@
+// Sixty-five thousand bodies pushing each other apart, on a grid
+// rebuilt every frame.
+//
+// `cell` gives each body its cell, the math package orders the bodies
+// by it, `counts` and `ends` say where each cell's run is, and `step`
+// reads the nine cells around its own. Every piece of that is a Kernel:
+// a scatter counts, a prefix sums the counts, and the sort is a prefix
+// and a scatter once a bit.
+use "kernels/";
+
+param count: Int = 65536;
+param cols: Int = 32;          // cells across the world: cols * cols of them
+param bits: Int = 10;          // bits the cell number takes: cols * cols <= 2^bits
+param radius: Float = 0.03125; // one cell, so the nine cells hold every neighbor
+param cap: Int = 256;          // bodies of a cell a body will look at
+// `--param grid=false` asks every pair instead of the nine cells.
+param grid: Bool = true;
+param bright: Float = 0.30;
+
+node first: flock.start@1 { domain = count; }
+node bodies: flock.step@1 {
+    bodies <~ bodies.result from first.result;
+    order <- order.result;
+    ends <- ends.result;
+    cols = cols;
+    radius = radius;
+    cap = cap;
+    grid = grid;
+}
+
+// The grid is built from the state the step is stepping — the bodies
+// as the last evaluation committed them — so every node of a frame
+// sees one world and the graph has no cycle in it.
+node cell: flock.cell@1 { bodies <~ bodies.result from first.result; cols = cols; }
+node order: graph "../../packages/parallel.entpkg/graphs/sort.esn" {
+    keys <- cell.result;
+    bits = bits;
+}
+node blank: Rows<Int> { domain = cols * cols; }
+node counts: flock.counts@1 { cells <- cell.result; blank <- blank.result; }
+node ends: flock.ends@1 { counts <- counts.result; }
+
+node crowded: flock.crowded@1 { counts <- counts.result; cap = cap; }
+node unsorted: flock.unsorted@1 { cells <- cell.result; order <- order.result; }
+
+// Half the window each way, floored: a window is any size a hand
+// drags it to, and a side of a domain is a whole number.
+node canvas: Grid<Int> { domain = max(floor(window() / 2), 1); }
+node heat: flock.splat@1 { bodies <- bodies.result; canvas <- canvas.result; }
+node soft: flock.soften@1 { heat <- heat.result; }
+node view: flock.view@1 { heat <- soft.result; bright = bright; domain = window(); }
+
+output result <- view.result;

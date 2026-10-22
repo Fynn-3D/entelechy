@@ -1,7 +1,7 @@
 // An island made of shapes and sculpted by hand: the left button digs
 // where the pointer points, the right raises earth there. The brush picks
 // against the world as last drawn, the world is painted over by what the
-// brush gives each frame, and the voxel package's view draws it.
+// brush gives each frame, and the render package's view draws it.
 use "../../packages/voxel.entpkg";
 use "kernels/";
 

@@ -2,7 +2,7 @@
 
 Six plucked strings (Karplus-Strong), played with keys `1` to `6`. Each
 string is a delay line: a key fills it with noise, and each pass of the
-head averages neighbouring samples and writes them back slightly
+head averages neighboring samples and writes them back slightly
 quieter, so the pitch is the line's length and the high partials fade
 first.
 

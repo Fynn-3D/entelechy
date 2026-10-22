@@ -10,7 +10,7 @@ clip ─ skin.sample ─ skin.aim ─ skin.palette ─ skin.apply ─ raster
             the point, the weight
 ```
 
-[`skin.aim@1`](../../packages/skin.entpkg/kernels/skin.ent) turns the
+[`animation.aim@1`](../../packages/animation.entpkg/kernels/skin.ent) turns the
 joint's own axis (y, as in Blender) the shortest way onto the point, in
 skin space, and lays the turn over the clip's pose; joints below follow.
 Any joint may reach, each instance of a crowd toward its own point, and

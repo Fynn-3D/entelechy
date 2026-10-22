@@ -1,12 +1,12 @@
 // The music: a chiptune loop and a hit sound, as one row of stereo frames
-// per evaluation. The sequencer's step comes from the synth package's
+// per evaluation. The sequencer's step comes from the audio package's
 // clock, carried across blocks through Graph state, so the tune never
 // skips; the hit sound starts when the rules issue a strike, so the sound
 // follows the game rather than the picture.
 // The game's state row is declared once, in slg.ent; `use` brings the
 // declaration here so `order` is read from the same layout.
 use "slg.ent";
-use "../../../packages/synth.entpkg";
+use "../../../packages/audio.entpkg";
 
 struct Tone { left: Float; right: Float; count: Long; lead: Float; bass: Float; hit: Float; }
 type Music = Rows<Tone>;

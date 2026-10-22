@@ -1306,7 +1306,7 @@ fn read_shows_a_picture_and_sums_up_any_other_field() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A picture whose every pixel differs from its neighbours, so an effect
+/// A picture whose every pixel differs from its neighbors, so an effect
 /// on it can be measured.
 const PICTURE_KERNEL: &str = "kernel picture.draw@1 {
     requires { field.write; }

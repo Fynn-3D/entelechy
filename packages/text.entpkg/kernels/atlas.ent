@@ -1,0 +1,56 @@
+// The wide glyphs a project's words use (Chinese, Japanese), as `entelechy
+// import` reads them from a font of ten pixels (`--chars` the words; the
+// study's `tools/fonts.py` imports and checks them), drawn into the atlas
+// the ui package's letters read (`ui.letters`): square glyphs ten pixels
+// a side, nine a row, in order of code, and the codes they are.
+
+/// A glyph as `entelechy import` writes a font's glyphs: its code, its advance
+/// in the font's units, its outline's segments, its box in ems.
+struct Letterform { code: Int; advance: Int; first: Int; count: Int; lo: Vec2; hi: Vec2; }
+
+fn atlas_side() -> Int { return 10; }
+fn glyph_ascent() -> Float { return 9.0; }
+fn atlas_columns() -> Int { return 9; }
+
+/// The atlas: each glyph's pixels, ink where its outline winds round the
+/// pixel's middle. A node sets `domain = vec2(96.0, 10.0 *
+/// floor((count(glyphs) + 8) / 9))`.
+kernel text.glyph_atlas@1 {
+    requires { field.read; field.write; }
+    input glyphs: Rows<Letterform>;
+    input outlines: Rows<Vec4>;
+    output result: Grid<Float>;
+    compute {
+        let p = icoord();
+        let n = atlas_side();
+        if p.x >= atlas_columns() * n { return 0.0; }
+        let k = p.y / n * atlas_columns() + p.x / n;
+        if k >= count(glyphs) { return 0.0; }
+        let g = at(glyphs, k);
+        let e = vec2((float(p.x % n) + 0.5) / float(n), (glyph_ascent() - float(p.y % n) - 0.5) / float(n));
+        let winding = loop g.count with w = 0 {
+            let s = at(outlines, g.first + index());
+            let crosses = (s.y <= e.y) != (s.w <= e.y);
+            let x = s.x + (e.y - s.y) * (s.z - s.x) / (s.w - s.y);
+            if crosses && x > e.x { if s.w > s.y { w + 1 } else { w - 1 } } else { w }
+        };
+        return if winding != 0 { 1.0 } else { 0.0 };
+    }
+}
+
+/// The codes the atlas holds, a slot each, in its order.
+kernel text.glyph_codes@1 {
+    requires { field.read; field.write; }
+    input glyphs: Rows<Letterform>;
+    output result: Rows<Int>;
+    compute { return at(glyphs, element()).code; }
+}
+
+/// How many cells of the screen's words show a `?` for a character the
+/// atlas lacks; none, while every word is lettered (a project's check).
+kernel text.unlettered@1 {
+    requires { field.read; field.write; }
+    input letters: Rows<Int>;
+    output result: Rows<Int>;
+    compute { return loop count(letters) with n = 0 { if at(letters, index()) == 63 { n + 1 } else { n } }; }
+}

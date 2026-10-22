@@ -21,7 +21,7 @@ and changes both while the world keeps running.
 
 <table>
   <tr>
-    <td width="33%"><a href="examples/showcase/README.md"><img src="docs/media/gallery-showcase.jpg" alt="A gamepad"></a><br><sub><b>A product shot,</b> modelled by signed distances and lit by physically based shading.</sub></td>
+    <td width="33%"><a href="examples/showcase/README.md"><img src="docs/media/gallery-showcase.jpg" alt="A gamepad"></a><br><sub><b>A product shot,</b> modeled by signed distances and lit by physically based shading.</sub></td>
     <td width="33%"><a href="examples/path/README.md"><img src="docs/media/gallery-path.jpg" alt="A path-traced scene"></a><br><sub><b>Light, traced.</b> A progressive path tracer: samples and bounces are graph parameters.</sub></td>
     <td width="33%"><a href="examples/nebula/README.md"><img src="docs/media/gallery-nebula.jpg" alt="A nebula"></a><br><sub><b>A nebula from noise,</b> finished as film: glow, depth of field, grain.</sub></td>
   </tr>
@@ -130,10 +130,10 @@ entelechy help                                       # the syntax and API of eve
 | | |
 | --- | --- |
 | **Rendering** | path tracing, ray marching, deferred shading, a rasterizer written as Kernels, ten million culled triangles, volumes, vectors, text |
-| **Simulation** | a million bodies, smoke by Navier-Stokes, neighbour search, rigid bodies, wave function collapse |
+| **Simulation** | a million bodies, smoke by Navier-Stokes, neighbor search, rigid bodies, wave function collapse |
 | **Learning** | networks trained by gradient descent, one learning how far a cube puzzle is scrambled |
 | **Sound** | a synthesizer, plucked strings, a sampler, a spectrum, MIDI in and out |
-| **Rigs** | glTF and Blender rigs posed, blended, aimed and walked by the `skin` package |
+| **Rigs** | glTF and Blender rigs posed, blended, aimed and walked by the `animation` package |
 | **Games and machines** | Snake, falling blocks, a tactics game, a voxel editor, a CHIP-8 interpreter, an ARM Thumb core |
 
 Each is a scene, its Kernels and its replay tests: browse them in [`examples/`](examples/README.md).

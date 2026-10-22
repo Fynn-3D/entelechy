@@ -1,0 +1,6 @@
+//! A game's music made, not recorded: a mood played by a band from a
+//! seed, the seed making the tune's motif, so one seed through every mood
+//! is one score.
+package music@1 { language = 1; ir = 1; }
+
+use "kernels/";

@@ -110,7 +110,7 @@ kernel fluid.advect@1 {
         let on_v = vec2(c.x + 0.5, c.y);
         let u = carried(on_u, dt).x + force(on_u, ext, h).x * dt;
         let v = carried(on_v, dt).y + force(on_v, ext, h).y * dt;
-        // Vorticity confinement: a push toward the centre of each eddy,
+        // Vorticity confinement: a push toward the center of each eddy,
         // which keeps the small swirls the grid would otherwise smooth away.
         let w = curl(c);
         let g = vec2(abs(curl(c + vec2(1.0, 0.0))) - abs(curl(c - vec2(1.0, 0.0))),
@@ -137,7 +137,7 @@ kernel fluid.divergence@1 {
 }
 
 /// One Jacobi step of the Poisson equation for pressure: the average of
-/// the neighbours less the divergence. A neighbour in the wall counts as
+/// the neighbors less the divergence. A neighbor in the wall counts as
 /// this cell's own pressure, so no pressure difference drives flow into
 /// the wall.
 kernel fluid.relax@1 {

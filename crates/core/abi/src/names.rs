@@ -35,7 +35,7 @@ pub fn suggestion(near: Option<&str>) -> String {
 }
 
 /// How many single-character insertions, deletions, replacements and
-/// swaps of two neighbours turn one string into the other; a swap
+/// swaps of two neighbors turn one string into the other; a swap
 /// (`resutl` for `result`) counts as one.
 pub fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();

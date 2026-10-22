@@ -1,10 +1,10 @@
 // A flight through a nebula, all of it noise. The cloud's density is a
 // fractal sum of gradient noise, carved into filaments by ridged noise;
-// its colour turns round the wheel with another; stars are the cells of
+// its color turns round the wheel with another; stars are the cells of
 // a hash, the hottest white and the coolest red. The camera drifts
 // forward through it. The picture is light with, in w, how far away what
 // each pixel shows is, for the image package's finish.
-use "../../../packages/noise.entpkg";
+use "../../../packages/random.entpkg";
 use "../../../packages/image.entpkg";
 
 /// How thick the cloud is at `p`, 0 upward.
@@ -14,7 +14,7 @@ fn cloud(p: Vec3) -> Float {
     return max(body * veins - 0.42, 0.0) * 4.0;
 }
 
-/// The cloud's colour at `p`: round the wheel, slowly across space.
+/// The cloud's color at `p`: round the wheel, slowly across space.
 fn tint(p: Vec3) -> Vec3 {
     return hue(0.75 + 0.6 * fbm3(p * 0.03 + vec3(0.0, 9.0, 0.0), 2, 3));
 }
@@ -38,9 +38,9 @@ fn camera(t: Float) -> Eye {
     return Eye { at: at_eye, fwd: fwd, right: right, up: cross(right, fwd) };
 }
 
-/// Each pixel's ray through the cloud, `steps` samples a metre and a half
+/// Each pixel's ray through the cloud, `steps` samples a meter and a half
 /// apart: light gathered, the stars behind what it lets through, and the
-/// depth where it grew half opaque (or 200 metres).
+/// depth where it grew half opaque (or 200 meters).
 kernel nebula.look@1 {
     requires { field.write; time.read; }
     param steps: Int = 64;
@@ -74,7 +74,7 @@ kernel nebula.lens@1 {
     compute { return distance; }
 }
 
-/// What the noise package gives at a few points, for the tests: a hash of
+/// What the math package gives at a few points, for the tests: a hash of
 /// whole numbers (x), value noise (y), gradient noise (z), and the
 /// distance to the nearest Worley point (w).
 kernel nebula.probe@1 {

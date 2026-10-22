@@ -112,7 +112,7 @@ fn placed(r: Rect, size: Vec2, align: Vec2) -> Rect {
 }
 
 /// A rectangle `size` big with its middle at `middle`, on whole pixels.
-fn centred(middle: Vec2, size: Vec2) -> Rect {
+fn centered(middle: Vec2, size: Vec2) -> Rect {
     let lo = floor(middle - size * 0.5 + 0.5);
     return Rect { lo: lo, hi: lo + size };
 }

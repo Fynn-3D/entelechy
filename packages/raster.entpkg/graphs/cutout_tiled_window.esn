@@ -4,7 +4,7 @@
 //! camera, a quad filling the screen) draws in parallel on a device. It
 //! costs a pass over every triangle, a prefix and a pass more, so a mesh
 //! of small triangles draws faster with `cutout_window.esn`.
-use "../kernels/raster.ent";
+use "../kernels/";
 
 input vertices: Rows<Corner>;
 input triangles: Rows<Face>;

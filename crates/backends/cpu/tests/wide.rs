@@ -44,7 +44,7 @@ fn longs(words: &[u32]) -> Vec<i64> {
 
 #[test]
 fn a_double_is_the_double_rust_computes() {
-    // Survey coordinates: a tenth of a millimetre half a million metres
+    // Survey coordinates: a tenth of a millimeter half a million meters
     // out, visible to a double and not to a float.
     let source = "kernel wide.d@1 {
         requires { field.write; }

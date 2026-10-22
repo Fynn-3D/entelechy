@@ -9,7 +9,7 @@
 //!   }
 //! and read `view.result`. A Kernel that picks what the picture shows
 //! asks `voxel_view_camera` and `voxel_view_box` for the same view.
-use "../kernels/voxel.ent";
+use "../kernels/";
 
 input volume: Voxels;
 input colors: Rows<Vec3>;

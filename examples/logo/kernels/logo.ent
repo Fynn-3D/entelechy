@@ -1,7 +1,7 @@
 // Entelechy's logo: the mark (a gold seed on the ground growing a graph,
 // one, two, three, then the ten thousand things) beside its name, drawn
 // letter by letter in strokes, no font: E N T E L E C H Y, the C holding
-// the seed. On dark or on light, in colour or in one ink.
+// the seed. On dark or on light, in color or in one ink.
 //
 // The mark is constructed. Its step is the lattice `a`, the diamond's
 // half-diagonal; every radius and width is a whole number of modules
@@ -56,7 +56,7 @@ fn tip_hue(light: Int) -> Vec3 { return if light == 1 { vec3(0.42, 0.2, 0.85) } 
 
 /// The one ink: near black on light, near white on dark; `ink` 2 pure
 /// black or pure white.
-fn ink_colour(light: Int, ink: Int) -> Vec3 {
+fn ink_color(light: Int, ink: Int) -> Vec3 {
     if ink == 2 { return if light == 1 { vec3(0.0, 0.0, 0.0) } else { vec3(1.0, 1.0, 1.0) }; }
     return if light == 1 { vec3(0.08, 0.09, 0.16) } else { vec3(0.93, 0.95, 1.0) };
 }
@@ -95,7 +95,7 @@ fn lattice() -> Float { return 0.32; }
 fn module() -> Float { return lattice() / 40.0; }
 
 /// The seed's middle: two and a quarter steps below the diamond's.
-fn seed_centre() -> Vec2 { return vec2(0.0, -2.25 * lattice()); }
+fn seed_center() -> Vec2 { return vec2(0.0, -2.25 * lattice()); }
 
 /// The nodes: the one (0), the two (1, 2), the three (3 to 5).
 fn lattice_node(i: Int) -> Vec2 {
@@ -112,20 +112,20 @@ fn node_radius(i: Int) -> Float {
 }
 
 /// The crown circle's middle: half a step below the diamond's.
-fn crown_centre() -> Vec2 { return vec2(0.0, -0.5 * lattice()); }
+fn crown_center() -> Vec2 { return vec2(0.0, -0.5 * lattice()); }
 
 /// The crown's `i`th ring (of nine), every fifteen degrees from sixty left
 /// to sixty right, the outermost on the line of the three.
 fn lattice_crown(i: Int) -> Vec2 {
     let t = (float(i) - 4.0) * 0.26179939;
-    return crown_centre() + vec2(sin(t), cos(t)) * (3.0 * lattice());
+    return crown_center() + vec2(sin(t), cos(t)) * (3.0 * lattice());
 }
 
 /// The ground's line: its height, ten modules below the seed, and its
 /// half-length, thirty modules.
-fn ground_line() -> Vec2 { return vec2(seed_centre().y - 26.0 * module(), 30.0 * module()); }
+fn ground_line() -> Vec2 { return vec2(seed_center().y - 26.0 * module(), 30.0 * module()); }
 
-/// The mark at `p` (the diamond's middle at the origin, y up): its colour
+/// The mark at `p` (the diamond's middle at the origin, y up): its color
 /// and how much of it covers (w), on a `light` ground or dark, in one ink
 /// if `ink` is 1 or 2, `px` a pixel. The Way begets one, one two, two
 /// three, three the ten thousand things: a gold seed on the ground (the
@@ -134,9 +134,9 @@ fn ground_line() -> Vec2 { return vec2(seed_centre().y - 26.0 * module(), 30.0 *
 fn seed_mark(p: Vec2, light: Int, ink: Int, px: Float) -> Vec4 {
     let a = lattice();
     let m = module();
-    let s = seed_centre();
-    let ink_c = ink_colour(light, ink);
-    let top = crown_centre().y + 3.0 * a;
+    let s = seed_center();
+    let ink_c = ink_color(light, ink);
+    let top = crown_center().y + 3.0 * a;
     let f = saturate((p.y - s.y) / (top - s.y));
     let hue = if ink >= 1 { ink_c } else { mix(root_hue(light), tip_hue(light), f) };
     let tip = if ink >= 1 { ink_c } else { tip_hue(light) };
@@ -190,7 +190,7 @@ fn seed_mark_reach() -> Vec4 {
     let a = lattice();
     let m = module();
     let side = 3.0 * a * sin(1.04719755) + 7.0 * m;
-    let up = crown_centre().y + 3.0 * a + 7.0 * m;
+    let up = crown_center().y + 3.0 * a + 7.0 * m;
     let down = -(ground_line().x - 3.0 * m);
     return vec4(side, side, up, down);
 }
@@ -199,7 +199,7 @@ kernel logo.draw@1 {
     requires { field.write; }
     /// 1 on a light ground; 1 in one ink (2 pure black or white); 1 the
     /// mark alone, on nothing; 1 the lockup on nothing, for a page of
-    /// either colour.
+    /// either color.
     param light: Int = 0;
     param ink: Int = 0;
     param alone: Int = 0;
@@ -243,7 +243,7 @@ kernel logo.draw@1 {
         let text = 1.0 - smoothstep(weight - 1.2 / cap, weight + 1.2 / cap, min(d_here, d_next));
         // The C holds the seed.
         let seed = 1.0 - smoothstep(0.1 - 1.2 / cap, 0.1 + 1.2 / cap, length(lp - vec2(6.0 * advance + 0.31, 0.5)));
-        let ink_c = ink_colour(light, ink);
+        let ink_c = ink_color(light, ink);
         let gold = if ink >= 1 { ink_c } else { seed_gold() };
         if clear == 1 {
             // On nothing: the mark, the name and its seed, each where it covers.

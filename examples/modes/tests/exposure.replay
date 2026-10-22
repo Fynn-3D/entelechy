@@ -1,6 +1,6 @@
 scene ../parts/exposure/scene.esn
 
-# At time 0 the sun sits at the top centre. Auto-exposure pulls the frame
+# At time 0 the sun sits at the top center. Auto-exposure pulls the frame
 # to a mean luma of 0.3 before the roll-off, so the sun's core tone-maps
 # to about 0.8 and the ground stays dark. Both backends agree exactly.
 frame 0.0

@@ -1,0 +1,5 @@
+//! Rotations as quaternions and rigid transforms as matrices: turning,
+//! composing, interpolating and moving points and directions.
+package geometry@1 { language = 1; ir = 1; }
+
+use "kernels/";

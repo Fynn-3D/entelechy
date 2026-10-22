@@ -32,7 +32,7 @@ kernel logo.construction@1 {
         let px = 1.0 / unit;
         let a = lattice();
         let m = module();
-        let s = seed_centre();
+        let s = seed_center();
         let hair = 0.55 * px;
         let fine = 0.9 * px;
         // The grid of whole steps, and the lattice's diagonals between them.
@@ -46,7 +46,7 @@ kernel logo.construction@1 {
         let c2 = paint(c1, mk.xyz, mk.w * 0.42);
         // Guides: the axis; the lines of the three, the two, the one; the
         // crown's middle, the seed's, the ground's, the crown's top.
-        let cc = crown_centre();
+        let cc = crown_center();
         let ground_y = ground_line().x;
         let rows = [a, 0.0, -a, cc.y, s.y, ground_y, cc.y + 3.0 * a];
         let hz = loop 7 with d = 100.0 { min(d, abs(p.y - rows[index()])) };
@@ -87,7 +87,7 @@ kernel logo.construction@1 {
         let c11 = paint(c10, build(), stroke(outline, fine, px));
         // The lattice's points the nodes stand on, and the seed's middle.
         let pts = loop 6 with d = 100.0 { min(d, length(p - lattice_node(index()))) };
-        let c12 = paint(c11, guide(), stroke(min(min(pts, length(p - s)), length(p - crown_centre())), 2.2 * px, px));
+        let c12 = paint(c11, guide(), stroke(min(min(pts, length(p - s)), length(p - crown_center())), 2.2 * px, px));
         return vec4(c12, 1.0);
     }
 }

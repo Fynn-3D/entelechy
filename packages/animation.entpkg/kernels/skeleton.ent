@@ -1,0 +1,53 @@
+// A skeleton, the clips that pose it, and the mesh that follows.
+//
+// Nothing here is an engine feature: a joint palette is a `Rows<Mat4>`,
+// a clip is rows of local transforms, and skinning is a map. What that
+// buys is that a pose is data all the way through, so a scene can blend
+// two clips, scrub one from the pointer, or write a joint itself
+// between sampling and the palette — which is what a game does and a
+// baked palette cannot.
+//
+// The rows, which `entelechy import` writes and the Blender bridge writes the
+// same way:
+//
+//   skeleton  Rows<Joint>   one per joint, parents before children
+//   clip      Rows<Pose>    frames * joints, a frame's joints together
+//   weights   Rows<Bound>   one per vertex, in the mesh's own row order
+//   mesh      Rows<Point>   position, normal, uv — the rest pose
+//
+// Rotations and transforms are the `math` package's.
+use "geometry.entpkg";
+
+// A joint's `parent` is its place in this same row, or -1 at the root.
+// `bind` is the inverse bind matrix: where the joint was when the mesh
+// was bound to it.
+struct Joint { parent: Int; bind: Mat4; }
+
+// A local transform: where a joint sits in its parent, as a translation,
+// a rotation (a quaternion, x y z w) and a scale.
+struct Pose { at: Vec3; turn: Vec4; grow: Vec3; }
+
+// What a vertex is bound to: four joints and how much of each.
+struct Bound { joints: [Int; 4]; weights: Vec4; }
+
+// What the rasterizer's projection takes, and what a mesh comes in as.
+struct Point { position: Vec3; normal: Vec3; uv: Vec2; }
+
+type Skeleton = Rows<Joint>;
+
+type Clip = Rows<Pose>;
+
+type Palette = Rows<Mat4>;
+
+// A pose as the matrix it stands for: scale, then turn, then move.
+fn posing(p: Pose) -> Mat4 {
+    return transform(p.at, p.turn, p.grow);
+}
+
+fn mixing(a: Pose, b: Pose, t: Float) -> Pose {
+    return Pose {
+        at: mix(a.at, b.at, t),
+        turn: between(a.turn, b.turn, t),
+        grow: mix(a.grow, b.grow, t),
+    };
+}

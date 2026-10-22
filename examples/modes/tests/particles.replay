@@ -1,6 +1,6 @@
 scene particles.esn
 
-# The particle starts at the centre and moves less than a pixel in the
+# The particle starts at the center and moves less than a pixel in the
 # first step, so the scatter puts its tint in canvas cell (16, 16) and
 # nowhere else. Its seeded age is about 1.56, so the tint is about a
 # quarter of the way from the warm color to the cool one; the pixel
@@ -16,7 +16,7 @@ expect 16 24 = 0.05 0.06 0.1
 # Eight frames of gravity move it about 4.6 pixels down and 0.8 right,
 # into cell (16, 20), and its age has grown a little, so the tint has
 # cooled a little; the canvas forgets each frame (fade is zero), so the
-# centre is background again.
+# center is background again.
 frame 0.1
 frame 0.2
 frame 0.3

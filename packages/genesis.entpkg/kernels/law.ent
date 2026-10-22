@@ -1,0 +1,115 @@
+//! Filling a law's template with numbers, and the operation that writes
+//! the law: a template's text and the law it fills are rows of
+//! character codes, as `= text` and `= bytes` inputs give them.
+
+use "parallel.entpkg";
+
+/// How many digits the whole part of `scaled / unit` is written with.
+fn whole_digits(whole: Int) -> Int {
+    return loop 10 with k = ivec2(whole / 10, 1) until k.x == 0 { ivec2(k.x / 10, k.y + 1) }.y;
+}
+
+/// `10` to the power `places`, `places` from 0 to 9.
+fn decimal_unit(places: Int) -> Int {
+    return loop clamp(places, 0, 9) with p = 1 { p * 10 };
+}
+
+/// `v` scaled to `places` decimals and rounded, its magnitude: what its
+/// digits are read from, held below 2^31.
+fn scaled_of(v: Float, places: Int) -> Int {
+    return int(round(min(abs(v) * float(decimal_unit(places)), 2000000000.0)));
+}
+
+/// How many characters `v` is written with to `places` decimals: a `-`
+/// when it is below zero and rounds to something, the whole part, and
+/// a `.` and the decimals when there are any.
+fn number_width(v: Float, places: Int) -> Int {
+    let scaled = scaled_of(v, places);
+    let unit = decimal_unit(places);
+    let sign = int(v < 0.0 && scaled > 0);
+    let point = if places > 0 { places + 1 } else { 0 };
+    return sign + whole_digits(scaled / unit) + point;
+}
+
+/// The code of character `i` of `v` written to `places` decimals.
+fn number_code(v: Float, places: Int, i: Int) -> Int {
+    let scaled = scaled_of(v, places);
+    let unit = decimal_unit(places);
+    let sign = int(v < 0.0 && scaled > 0);
+    if sign == 1 && i == 0 { return 45; }
+    let whole = scaled / unit;
+    let digits = whole_digits(whole);
+    let k = i - sign;
+    if k < digits {
+        return 48 + (whole / decimal_unit(digits - 1 - k)) % 10;
+    }
+    if k == digits { return 46; }
+    return 48 + (scaled % unit / decimal_unit(places - 1 - (k - digits - 1))) % 10;
+}
+
+/// The hole a template's character `i` opens, `$` followed by a digit:
+/// the digit, else -1.
+fn hole_at(template: Rows<Int>, i: Int) -> Int {
+    let next = if i + 1 < count(template) { at(template, i + 1) } else { 0 };
+    return if at(template, i) == 36 && next >= 48 && next <= 57 { next - 48 } else { -1 };
+}
+
+/// How many characters each of a template's characters is written as
+/// once filled: a hole's `$` the number it holds, the digit after it
+/// none, any other character itself. Laid end to end by `compact.ends`.
+kernel genesis.widths@1 {
+    requires { field.read; field.write; }
+    input template: Rows<Int>;
+    input values: Rows<Float>;
+    param places: Int = 3;
+    output result: Rows<Int>;
+    compute {
+        let i = element();
+        let hole = hole_at(template, i);
+        if hole >= 0 { return number_width(at(values, hole), places); }
+        if i > 0 && hole_at(template, i - 1) >= 0 { return 0; }
+        return 1;
+    }
+}
+
+/// The template filled: each hole `$d` written as `values[d]` to
+/// `places` decimals, every other character as it is. `ends` are the
+/// widths laid end to end, `total` their sum (`compact.entries`); a node
+/// sets `domain = value(total)`.
+kernel genesis.spliced@1 {
+    requires { field.read; field.write; }
+    input template: Rows<Int>;
+    input values: Rows<Float>;
+    input ends: Rows<Int>;
+    input total: Rows<Int>;
+    param places: Int = 3;
+    output result: Rows<Int>;
+    compute {
+        let e = element();
+        let j = owner(e, ends);
+        let start = if j > 0 { at(ends, j - 1) } else { 0 };
+        let hole = hole_at(template, j);
+        if hole < 0 { return at(template, j); }
+        return number_code(at(values, hole), places, e - start);
+    }
+}
+
+/// The operation an output `to files` takes to write `text` at `path`
+/// under its directory, both rows of character codes; a node sets
+/// `domain = 4 + count(path) + count(text)`.
+kernel genesis.writing@1 {
+    requires { field.read; field.write; }
+    input path: Rows<Int>;
+    input text: Rows<Int>;
+    output result: Rows<Int>;
+    compute {
+        let e = element();
+        let p = count(path);
+        if e == 0 { return 1; }
+        if e == 1 { return 0; }
+        if e == 2 { return p; }
+        if e == 3 { return count(text); }
+        if e < 4 + p { return at(path, e - 4); }
+        return at(text, e - 4 - p);
+    }
+}

@@ -1,0 +1,21 @@
+// Rows of material balls on a checkered floor (`graphs/balls.esn`), lit
+// by the render package's renderer and finished by the
+// render package's glow and tone. The left button drags to turn,
+// the right or middle to pan, the wheel dollies, a double-click or F
+// flies to the ball under the pointer, W A S D Q E walk (Shift fast), R
+// goes home. Another renderer is another `light` node:
+// `tests/traced.esn` path-traces the same balls, `tests/bench.esn` shows
+// them in the render package's view.
+use "../../packages/render.entpkg";
+
+node scene: graph "graphs/balls.esn" { }
+node light: graph "../../packages/render.entpkg/graphs/probes.esn" { lens <- scene.lens; sky <- scene.sky; surface <- scene.surface; paint <- scene.paint; extra <- scene.extra; layers <- scene.layers; more <- scene.more;
+    behind_at <- scene.behind_at; behind_dir <- scene.behind_dir; behind_paint <- scene.behind_paint; behind_normal <- scene.behind_normal; through <- scene.through;
+    proxy <- scene.proxy; land <- scene.land; frame <- scene.frame; nx = 21; ny = 6; nz = 14; spacing = 0.5; }
+
+node bright: render.bright@1 { hdr <- light.hdr; domain = ceil(window() / 8); }
+node bloom_x: render.spread@1 { image <- bright.result; axis = 0; }
+node bloom: render.spread@1 { image <- bloom_x.result; axis = 1; }
+node view: render.view@1 { hdr <- light.hdr; bloom <- bloom.result; exposure = 0.8; vivid = 1.0; domain = window(); }
+
+output result <- view.result;

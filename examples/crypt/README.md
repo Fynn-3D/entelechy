@@ -1,6 +1,6 @@
 # Crypt
 
-A crypt drawn with the voxel package (`packages/voxel.entpkg`): a
+A crypt drawn with the render package (`packages/render.voxel_entpkg`): a
 chamber of 48 by 24 by 48 voxels of a quarter meter, baked once, and a
 statue in a box of voxels of its own at the middle, turning. A ray a
 pixel walks the chamber and the statue's box (`voxel_meet`, the box's

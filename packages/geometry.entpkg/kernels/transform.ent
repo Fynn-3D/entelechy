@@ -1,0 +1,37 @@
+// Rigid transforms: a `Mat4` by columns, as the ABI lays one out, taking a
+// point with w = 1 and a direction with w = 0; and turns about an axis as
+// a `Mat3`.
+
+// A rotation as the matrix it stands for.
+fn turning(q: Vec4) -> Mat4 {
+    let { x, y, z, w } = q;
+    return mat4(
+        vec4(1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + z * w), 2.0 * (x * z - y * w), 0.0),
+        vec4(2.0 * (x * y - z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z + x * w), 0.0),
+        vec4(2.0 * (x * z + y * w), 2.0 * (y * z - x * w), 1.0 - 2.0 * (x * x + y * y), 0.0),
+        vec4(0.0, 0.0, 0.0, 1.0));
+}
+
+// A move, a turn and a scale as one matrix: scale, then turn, then move.
+fn transform(at: Vec3, turn: Vec4, grow: Vec3) -> Mat4 {
+    let r = turning(turn);
+    return mat4(
+        r[0] * grow.x,
+        r[1] * grow.y,
+        r[2] * grow.z,
+        vec4(at, 1.0));
+}
+
+// A turn of `a` radians about one axis, as a `Mat3`: what a camera
+// orbiting its subject is written with.
+fn rotate_x(a: Float) -> Mat3 {
+    return mat3(vec3(1.0, 0.0, 0.0), vec3(0.0, cos(a), sin(a)), vec3(0.0, -sin(a), cos(a)));
+}
+
+fn rotate_y(a: Float) -> Mat3 {
+    return mat3(vec3(cos(a), 0.0, -sin(a)), vec3(0.0, 1.0, 0.0), vec3(sin(a), 0.0, cos(a)));
+}
+
+fn rotate_z(a: Float) -> Mat3 {
+    return mat3(vec3(cos(a), sin(a), 0.0), vec3(-sin(a), cos(a), 0.0), vec3(0.0, 0.0, 1.0));
+}

@@ -1,13 +1,13 @@
 # Mesh
 
-A subdivided torus drawn by the raster package.
+A subdivided torus drawn by the render package.
 
 - `mesh.torus` and `mesh.torus_faces` build the vertex and triangle rows.
 - `mesh.split_vertices` and `mesh.split_faces` split each triangle into
   four, one level per placement of the sub-graph `level.esn`, placed
   `level` times with `carry` (`--param level=2` is two levels).
 - `mesh.project` projects the vertices into clip space.
-- The [raster package](../../packages/raster.entpkg/kernels/raster.ent)
+- The [render package](../../packages/raster.entpkg/kernels/triangle.ent)
   turns the rows into a `Grid<Surface>` of depth, normal, uv and triangle
   id, the same on all three backends (`tests/edges.replay`).
 - `mesh.shade` lights the surface.

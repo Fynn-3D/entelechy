@@ -36,7 +36,7 @@ Sorting as two map Kernels: `sort.rank` counts, for each value, the
 values below it (ties by index), and `sort.gather` picks the value of
 each rank. Each is a bounded `loop` over `count(values)`, so the work is
 quadratic. `sort.bars` draws the values before and after; they reshuffle
-every half second. The [`sort` package](../../packages/sort.entpkg) is
+every half second. The [`parallel` package](../../packages/parallel.entpkg) is
 a radix sort, built from `prefix` and `scatter`.
 
 ## Several outputs: deferred
@@ -50,7 +50,7 @@ a G-buffer by name, `albedo: Image`, `normal: Grid<Vec3>` and
 ```
 
 `light` samples the color and normal; `outline` reads the depth at each
-pixel's neighbours by address and marks silhouette edges. The `turn`
+pixel's neighbors by address and marks silhouette edges. The `turn`
 parameter orbits the camera.
 
 ## Scatter: particles

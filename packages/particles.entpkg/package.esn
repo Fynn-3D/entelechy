@@ -1,0 +1,5 @@
+//! Particles stepped on the device, binned into the screen's tiles and
+//! drawn over a picture with its depth.
+package particles@1 { language = 1; ir = 1; }
+
+use "kernels/";

@@ -1,0 +1,15 @@
+scene fireflies.esn
+window 160 90
+
+# Sixty-four fireflies born in their box above the floor, each its own
+# life; drawn glowing over the dark where they fall on the picture.
+frame 0.0
+expect flies.result[0].life = 3.3574 0.001
+expect flies.result[0].at = -0.1785 0.8303 -1.9920 0.001
+expect 118 39 = 1.665 1.509 0.780 0.01
+expect 2 2 = 0.020 0.020 0.030 0.001
+
+# A frame on they have drifted, and aged.
+frame 0.5
+expect flies.result[0].at = -0.1811 0.8307 -1.9902 0.001
+expect flies.result[5].age = 1.1329 0.001

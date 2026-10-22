@@ -1,0 +1,120 @@
+// The workbench's light and backdrop, and its renderer on the standard
+// contract (this package's).
+use "brdf.ent";
+use "camera.ent";
+
+/// Light leaving a surface `m` facing `n`, seen along `v` (toward the
+/// eye): a key light, a fill and a rim set about the camera (`right`,
+/// `up`, `ahead` its axes), and a studio's soft light from above; by the
+/// standard BRDF (`brdf.ent`).
+fn studio_light(m: Pbr, n: Vec3, v: Vec3, right: Vec3, up: Vec3, ahead: Vec3) -> Vec3 {
+    let key = normalize(right * -0.55 + up * 0.75 - ahead * 0.5);
+    let fill = normalize(right * 0.8 + up * 0.1 - ahead * 0.6);
+    let rim = normalize(up * 0.4 + ahead * 0.9);
+    let lights = lit_by(m, n, v, key, vec3(1.5, 1.5, 1.5)) + lit_by(m, n, v, fill, vec3(0.45, 0.45, 0.45)) + lit_by(m, n, v, rim, vec3(0.6, 0.6, 0.6));
+    let sky = mix(vec3(0.16, 0.15, 0.14), vec3(0.42, 0.44, 0.48), n.y * 0.5 + 0.5);
+    return lights + ambient_by(m, n, v, sky * 0.55, sky * 0.4, sky * 0.4);
+}
+
+/// The backdrop at `up` of the picture's height (0 top, 1 bottom), as
+/// shown (no tone).
+fn backdrop(up: Float) -> Vec3 { return mix(vec3(0.24, 0.245, 0.26), vec3(0.15, 0.155, 0.165), up); }
+
+/// The floor's lines (y 0) and its axes along a ray `o`, `d`, over the
+/// backdrop: rgb as shown, `w` how much of them, by how far a pixel spans
+/// (`tall` the picture's height in pixels; `focal` the lens's, or
+/// `across` the height an orthographic view spans, 0 for none), fading
+/// out by `reach`.
+fn floor_grid(o: Vec3, d: Vec3, tall: Float, focal: Float, across: Float, reach: Float) -> Vec4 {
+    if abs(d.y) < 0.00001 { return vec4(0.0, 0.0, 0.0, 0.0); }
+    let t = (0.0 - o.y) / d.y;
+    if t <= 0.0 { return vec4(0.0, 0.0, 0.0, 0.0); }
+    let p = o + d * t;
+    // A pixel's width on the floor, and a step of lines that keeps them
+    // some pixels apart.
+    let pixel = (if across > 0.0 { across } else { t / focal }) / tall / max(abs(d.y), 0.15);
+    let step = pow(10.0, floor(log(max(pixel * 12.0, 0.0001)) / 2.302585));
+    let minor = min(abs(fract(p.x / step + 0.5) - 0.5), abs(fract(p.z / step + 0.5) - 0.5)) * step / pixel;
+    let major = min(abs(fract(p.x / (step * 10.0) + 0.5) - 0.5), abs(fract(p.z / (step * 10.0) + 0.5) - 0.5)) * step * 10.0 / pixel;
+    let fade = clamp(1.0 - t / reach, 0.0, 1.0);
+    let line = max((1.0 - smoothstep(0.3, 1.1, minor)) * 0.18, (1.0 - smoothstep(0.4, 1.3, major)) * 0.38) * fade;
+    // The x axis red, the z axis green.
+    let on_x = (1.0 - smoothstep(0.5, 1.5, abs(p.z) / pixel)) * fade;
+    let on_z = (1.0 - smoothstep(0.5, 1.5, abs(p.x) / pixel)) * fade;
+    let gray = vec4(0.42, 0.42, 0.42, line);
+    let with_x = mix(gray, vec4(0.85, 0.25, 0.28, 0.9), on_x);
+    return mix(with_x, vec4(0.45, 0.75, 0.2, 0.9), on_z * (1.0 - on_x));
+}
+
+/// Linear light as the workbench shows it: a soft shoulder, then encoded
+/// for the screen.
+fn workbench_tone(c: Vec3) -> Vec3 {
+    let toned = c / (c + vec3(0.8, 0.8, 0.8)) * 1.8;
+    return pow(clamp(toned, 0.0, 1.0), vec3(0.4545, 0.4545, 0.4545));
+}
+
+/// How far along the ray the G-buffer's pixel `q` is (`no_hit()` off it).
+fn surface_depth_at(surface: Grid<Vec4>, q: Vec2) -> Float {
+    let n = size(surface);
+    if q.x < 0.0 || q.y < 0.0 || q.x >= n.x || q.y >= n.y { return no_hit(); }
+    return at(surface, q).w;
+}
+
+/// The workbench on the standard contract's first three maps (`surface`,
+/// `paint`, `extra`; it needs no more): each pixel of the G-buffer
+/// under the studio's lights (`light` 0) or flat, its color alone
+/// (`light` 1); the material's color (`color` 0) or clay (`color` 1);
+/// ridges lit and valleys darkened (`cavity`, from how the normal bends
+/// between neighbors), an outline where the distance jumps (`outline`);
+/// the backdrop and the floor's lines where nothing is (`grid`). The
+/// result is as shown (toned and encoded); the domain is the surface's.
+kernel render.workbench_shade@1 {
+    requires { field.read; field.write; }
+    input lens: Lenses;
+    input surface: Grid<Vec4>;
+    input paint: Grid<Vec4>;
+    input extra: Grid<Vec4>;
+    param light: Int = 0;
+    param color: Int = 0;
+    param cavity: Float = 1.0;
+    param outline: Float = 1.0;
+    param grid: Bool = true;
+    /// Whether an outline is drawn where a surface meets nothing (the
+    /// backdrop); off where what lies past the picture's surfaces is drawn
+    /// after (a world's far land).
+    param sky_outline: Bool = true;
+    output result: Image;
+    compute {
+        let q = coord();
+        let size = domain();
+        let l = at(lens, 0);
+        let s = at(surface, q);
+        let d = ray(l, q, size);
+        if s.w >= no_hit() * 0.5 || s.w < 0.0 {
+            let back = backdrop((q.y + 0.5) / size.y);
+            let fl = if grid { floor_grid(l.eye, d, size.y, max(l.focal, 0.01), 0.0, 300.0) } else { vec4(0.0, 0.0, 0.0, 0.0) };
+            let shown = mix(back, fl.xyz, fl.w);
+            return vec4(shown.x, shown.y, shown.z, 1.0);
+        }
+        let n = normalize(s.xyz + vec3(0.0, 0.0, 0.000001));
+        let v = vec3(0.0, 0.0, 0.0) - d;
+        let m0 = pbr_of(at(paint, q), at(extra, q), vec4(0.0, 0.0, 0.0, 0.0), vec4(0.0, 0.0, 0.0, 0.0));
+        let m = if color == 1 { pbr(vec3(0.62, 0.6, 0.57), 0.55, 0.0) } else { m0 };
+        let base = if light == 1 { m.albedo } else { studio_light(m, n, v, l.right, l.up, l.ahead) * mix(1.0, baked_occlusion(at(extra, q)), 0.6) };
+        let lit = base + m.glow;
+        // Cavity: the normal across the view turning apart (a ridge) or
+        // together (a valley) between the neighbors either side.
+        let nr = at(surface, min(q + vec2(1.0, 0.0), size - vec2(1.0, 1.0))).xyz;
+        let nl = at(surface, max(q - vec2(1.0, 0.0), vec2(0.0, 0.0))).xyz;
+        let nd = at(surface, min(q + vec2(0.0, 1.0), size - vec2(1.0, 1.0))).xyz;
+        let nu = at(surface, max(q - vec2(0.0, 1.0), vec2(0.0, 0.0))).xyz;
+        let bend = (dot(nr, l.right) - dot(nl, l.right)) + (dot(nu, l.up) - dot(nd, l.up));
+        let curved = lit * clamp(1.0 + bend * 0.6 * cavity, 0.45, 1.6);
+        // Outline: a neighbor much farther or nearer.
+        let far0 = max(max(surface_depth_at(surface, q + vec2(1.0, 0.0)), surface_depth_at(surface, q - vec2(1.0, 0.0))), max(surface_depth_at(surface, q + vec2(0.0, 1.0)), surface_depth_at(surface, q - vec2(0.0, 1.0))));
+        let far = if !sky_outline && far0 >= no_hit() * 0.5 { s.w } else { far0 };
+        let jump = smoothstep(0.04, 0.12, (min(far, s.w * 4.0) - s.w) / max(s.w, 0.001));
+        let shown = mix(workbench_tone(curved), vec3(0.03, 0.03, 0.035), jump * outline * 0.85);
+        return vec4(shown.x, shown.y, shown.z, 1.0);
+    }
+}

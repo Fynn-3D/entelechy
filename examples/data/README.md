@@ -53,12 +53,12 @@ entelechy run examples/data/parts/packed/bake.esn --save picture.result=examples
 
 ## Precision
 
-Survey coordinates, half a million metres east and four million north,
-in `Double` and `Long`. `ring` draws a ring half a millimetre across at
+Survey coordinates, half a million meters east and four million north,
+in `Double` and `Long`. `ring` draws a ring half a millimeter across at
 `origin`: the right half tests inside-ness in doubles, the left in
 floats, where every pixel collapses to one point and the half is solid.
-`corners` places a 2.5 x 1.2 mm part in whole nanometres (`LVec2`);
-`edges` measures each edge in doubles, floats and nanometres.
+`corners` places a 2.5 x 1.2 mm part in whole nanometers (`LVec2`);
+`edges` measures each edge in doubles, floats and nanometers.
 
 ![the ring: floats on the left, doubles on the right](parts/precision/ring.png)
 
@@ -74,7 +74,7 @@ entelechy player examples/data/parts/precision/scene.esn
 
 A tile map as `Grid<Tile>`, each element `{ kind: Int, height: Float,
 passable: Bool }`. `generate` lays out the map; `flood` spreads water to
-passable neighbours each frame through `<~`; `render` draws each pixel
+passable neighbors each frame through `<~`; `render` draws each pixel
 from the map and a sprite atlas, at `domain = size(map) * tile`. The
 atlas is `assets/atlas.png`, an input the Host reads and watches, so
 edits to it show while the Player runs; `bake.esn` draws it.

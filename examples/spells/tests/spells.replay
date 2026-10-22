@@ -1,0 +1,23 @@
+scene ../scene.esn
+window 640 360
+
+# The first page: thirty spells cast at once, each on its own square.
+# The fireball's warm core and the orange of its flame above it; a
+# lightning wheel's pale light; a square of the dim ground; the thirty
+# casts heard together, each placed where it is from the eye.
+frame 0.0
+expect count casts.result = 30
+expect casts.result[0].start = 0
+expect count heard.sound = 1600
+expect heard.sound[400] = -0.05068 -0.04389 0.0005
+expect 378 70 = 0.944 0.859 0.696 0.01
+expect 378 60 = 0.607 0.300 0.074 0.01
+expect 300 312 = 0.444 0.451 0.486 0.01
+expect 100 300 = 0.074 0.077 0.096 0.01
+
+# A second on, the fireball has flown from where it was cast and the
+# wheel has faded to the ground's dark.
+frame 1.0
+expect 378 70 = 0.000 0.000 0.000 0.01
+expect 300 312 = 0.016 0.016 0.019 0.01
+expect heard.sound[400] = -0.33781 -0.37410 0.0005

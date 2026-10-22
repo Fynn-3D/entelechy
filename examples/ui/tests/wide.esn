@@ -3,7 +3,7 @@
 // a box ten pixels square, rimmed, 0.1 to 0.8 across.
 use "../../../packages/ui.entpkg";
 
-input font: Grid<Float> = "../../../packages/text.entpkg/font.png";
+input font: Grid<Float> = "../../../packages/text.entpkg/assets/font.png";
 input line: Rows<Int> = text "A中B文";
 
 node codes: kernel {
@@ -22,8 +22,8 @@ node atlas: kernel {
         return float(inside && (p.x == 1 || p.x == 8 || p.y == 0 || p.y == 9));
     }
 }
-node letters: graph "../../../packages/ui.entpkg/graphs/letters.esn" { font <- font; atlas <- atlas.result; side = 10; }
-node cells: graph "../../../packages/ui.entpkg/graphs/text.esn" { text <- line; codes <- codes.result; width = 8; utf8 = 0; }
+node letters: graph "../../../packages/text.entpkg/graphs/letters.esn" { font <- font; atlas <- atlas.result; side = 10; }
+node cells: graph "../../../packages/text.entpkg/graphs/decode.esn" { text <- line; codes <- codes.result; width = 8; utf8 = 0; }
 node view: kernel {
     requires { field.read; field.write; }
     input letters: Grid<Float> <- letters.letters;

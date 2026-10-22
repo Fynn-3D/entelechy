@@ -4,6 +4,7 @@
 // grows back through the hole.
 use "kernels/";
 use "../../packages/text.entpkg";
+use "../../packages/ui.entpkg";
 
 input caption: Rows<Int> = text "settled";
 
@@ -22,7 +23,7 @@ node label: text.label@1 { caption <- caption; values <- tally.result; index = 0
 node glyphs: text.layout@1 { codes <- label.result; origin = vec2(12.0, 12.0); scale = 2.0; }
 node shown: text.draw@1 { under <- view.result; glyphs <- glyphs.result; font <- font; }
 
-input font: Grid<Float> = "../../packages/text.entpkg/font.png";
+input font: Grid<Float> = "../../packages/text.entpkg/assets/font.png";
 
 output result <- shown.result;
 output settled <- tally.result;

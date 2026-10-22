@@ -1,0 +1,21 @@
+// Cues: what a program's events set going, each a voice's until another
+// takes it.
+
+/// A sound set going: what it is, which of its kind, the sample it starts
+/// at, where it is heard (-1 left to 1 right), how loud; `head` the voice
+/// the next cue takes.
+struct Cue { kind: Int; param: Int; start: Long; pan: Float; gain: Float; head: Int; }
+
+type Cues = Rows<Cue>;
+
+fn voices() -> Int { return 8; }
+
+/// A voice with nothing to play.
+fn quiet() -> Cue { return Cue { kind: 0, param: 0, start: 0l, pan: 0.0, gain: 0.0, head: 0 }; }
+
+/// The voices, quiet.
+kernel audio.cues_start@1 {
+    requires { field.write; }
+    output result: Cues;
+    compute { return quiet(); }
+}

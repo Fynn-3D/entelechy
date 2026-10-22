@@ -1,0 +1,49 @@
+// A drawing's shapes as `entelechy import` writes them from an SVG: each
+// a run of segments, a fill rule, a paint and its stops; the look a
+// drawing is seen through.
+
+// A shape as `entelechy import` writes it, `<stem>.shapes.field`.
+struct Shape {
+    color: Vec4;
+    first: Int;
+    count: Int;
+    rule: Int;
+    paint: Int;
+    lo: Vec2;
+    hi: Vec2;
+    gradient: Vec4;
+    inverse: Vec4;
+    shift: Vec2;
+    stops: Int;
+    stop_count: Int;
+    spread: Int;
+}
+
+// A shape's fill rule, its paint and its gradient's spread, as its
+// `rule`, `paint` and `spread` hold them.
+type FillRule = enum { NonZero, EvenOdd };
+
+type Paint = enum { Color, Linear, Radial };
+
+type Spread = enum { Pad, Reflect, Repeat };
+
+// A gradient's stop, `<stem>.stops.field`: where it is, its color.
+struct Stop { offset: Float; color: Vec4; }
+
+// Where the picture looks: the drawing's point at its middle, and the
+// zoom over fitting the whole drawing.
+struct Look { center: Vec2; zoom: Float; }
+
+// Pixels to a unit of the drawing through a look: the whole drawing
+// fitted, times the zoom; a zoom of none or less, or a drawing of no
+// size, the least there is, so every Kernel sees one frame.
+fn fitted(size: Vec2, eye: Look, res: Vec2) -> Float {
+    let fit = min(res.x / size.x, res.y / size.y) * eye.zoom;
+    return if fit > 0.000000000000000000000000000001 { fit } else { 0.000000000000000000000000000001 };
+}
+
+// The tiles a shape's box reaches, inclusive; none when `x1 < x0`.
+struct Reach { x0: Int; y0: Int; x1: Int; y1: Int; }
+
+// An index written into a list at a slot.
+struct Slot { at: Int; value: Int; }

@@ -1,9 +1,9 @@
 // A stone golem of six joints, its body made at rest of voxel shapes,
-// its skeleton and walk the skin package's rows, posed into voxels by
-// the voxel package. A voxel is 5 cm; the skin's units are meters.
+// its skeleton and walk the skeleton package's rows, posed into voxels by
+// the render package. A voxel is 5 cm; the skin's units are meters.
 use "../../../packages/voxel.entpkg";
-use "../../../packages/skin.entpkg";
-use "../../../packages/transform.entpkg";
+use "../../../packages/animation.entpkg";
+use "../../../packages/geometry.entpkg";
 
 fn grain() -> Float { return 0.05; }
 

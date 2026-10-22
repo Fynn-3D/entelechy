@@ -27,9 +27,9 @@ kernel mesh.torus@1 {
         let v = float(ring) / float(rings);
         let a = u * 6.2831853;
         let b = v * 6.2831853;
-        let centre = vec3(cos(a), 0.0, sin(a)) * major;
+        let center = vec3(cos(a), 0.0, sin(a)) * major;
         let radial = vec3(cos(a) * cos(b), sin(b), sin(a) * cos(b));
-        let p = centre + radial * minor;
+        let p = center + radial * minor;
         return Vertex { clip: vec4(p, 1.0), normal: radial, uv: vec2(u, v) };
     }
 }

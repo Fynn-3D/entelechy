@@ -2,9 +2,9 @@
 //! [`entelechy_rules::raster`], as a visibility buffer drawn two ways:
 //!
 //! 1. A compute pass sorts the triangles. One the rule would not draw (a
-//!    corner not usable, no area, no pixel centre in its box) is dropped.
+//!    corner not usable, no area, no pixel center in its box) is dropped.
 //!    One whose box is a few pixels across is drawn there and then, by the
-//!    rule itself: each pixel centre it covers takes the least key of its
+//!    rule itself: each pixel center it covers takes the least key of its
 //!    depth and its row, one 64-bit atomic apiece, where the device has
 //!    them. The rest are kept in row order, as an index buffer and the
 //!    rows they came from: a block of triangles marks its own, one pass
@@ -16,7 +16,7 @@
 //!    shaded once; otherwise a vertex pulled for each triangle that uses it.
 //! 3. A compute pass takes, at each pixel, the nearer of the two, the
 //!    earlier row of two at one depth, and gives its depth and attributes
-//!    by the rule's own sums at the pixel centre, into the Host's word
+//!    by the rule's own sums at the pixel center, into the Host's word
 //!    layout as a resident grid.
 //!
 //! A tile-binning rasterizer spends as much on a triangle of one pixel as
@@ -146,7 +146,7 @@ fn usable(v: u32) -> bool {
 }
 
 // How a triangle is drawn: 0 not at all (a corner not usable, no area,
-// no pixel centre inside its box on the canvas), 1 by the device's
+// no pixel center inside its box on the canvas), 1 by the device's
 // rasterizer, 2 here and now, its box being small.
 fn sort(t: u32) -> u32 {
     let ia = corner(t, 0u);
@@ -274,7 +274,7 @@ fn place(@builtin(local_invocation_index) local: u32, @builtin(workgroup_id) gro
 ";
 
 /// Step 1's own drawing, where the device takes 64-bit atomics: every
-/// pixel centre a small triangle covers, by the rule's edges and depth,
+/// pixel center a small triangle covers, by the rule's edges and depth,
 /// keeps the greatest complement of the key `depth << 32 | row`, so the
 /// nearest fragment and, of two at one depth, the earlier row, and a
 /// cleared zero is none.
@@ -432,7 +432,7 @@ fn word_of(v: u32, k: u32) -> f32 {
     return bitcast<f32>(vertices[v * 9u + k]);
 }
 
-// Triangle `t`'s fragment at the pixel centre `p`, as the rule gives it.
+// Triangle `t`'s fragment at the pixel center `p`, as the rule gives it.
 fn fragment(t: u32, p: vec2<f32>) -> Fragment {
     let ia = corner(t, 0u);
     var ib = corner(t, 1u);
@@ -514,7 +514,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 ";
 
-/// The widest box, in pixel centres, of a triangle the sorting pass draws
+/// The widest box, in pixel centers, of a triangle the sorting pass draws
 /// itself rather than handing to the device's rasterizer.
 const SMALL: u32 = 8;
 /// Triangles a block of the keeping pass marks.

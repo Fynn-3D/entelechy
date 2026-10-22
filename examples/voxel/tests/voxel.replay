@@ -1,7 +1,7 @@
 scene voxel.esn
 
 # A 240 by 135 window at a quarter of the scale: a sixteenth of the
-# pixels, the bar laid out at a quarter size, so its items are centred
+# pixels, the bar laid out at a quarter size, so its items are centered
 # at x 72.5, 91.5, 110.5, 129.5, 148.5, 167.5 and y 127; the middle of
 # the picture, (120, 78), looks down on the top of the tree, voxel
 # (27, 11, 27).

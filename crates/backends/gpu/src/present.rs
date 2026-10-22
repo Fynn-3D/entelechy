@@ -3,7 +3,7 @@
 //! The Player takes a [`Display`] from the backend before the backend goes
 //! to a runtime, and hands it a window. The display draws the output image
 //! with one fullscreen triangle sampling its storage buffer, letterboxed
-//! and nearest-neighbour scaled, with an optional `0x00RRGGBB` overlay in
+//! and nearest-neighbor scaled, with an optional `0x00RRGGBB` overlay in
 //! the window's top-left corner.
 
 use std::any::Any;
@@ -351,7 +351,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn placement_fits_and_centres() {
+    fn placement_fits_and_centers() {
         assert_eq!(
             placement(2, 1, 8, 2),
             Placement {

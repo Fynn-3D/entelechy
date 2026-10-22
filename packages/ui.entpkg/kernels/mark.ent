@@ -1,0 +1,31 @@
+// Marks over a 3D picture: a number rising from where something struck,
+// as games show damage and healing.
+use "paint.ent";
+use "writing.ent";
+
+/// A number `n` (up to three digits; below 0 none) rising over `at_` (its
+/// middle, in the screen's units) `age` seconds after it was struck,
+/// popping as it appears, fading at the end of its second; `row` a word
+/// above it (-1 none); `digits` the row of the words that is "0", the next
+/// nine "1" to "9"; `width` the words' cells a row; `big` its scale.
+fn rising_number(font: Grid<Float>, words: Rows<Int>, width: Int, digits: Int, n: Int, row: Int, big: Float, color: Vec4, at_: Vec2, age: Float, q: Vec2) -> Vec4 {
+    let pop = 1.0 + 0.35 * (1.0 - smoothstep(0.0, 0.12, age));
+    let scale = floor(big * pop + 0.5);
+    let fade = 1.0 - smoothstep(0.6, 0.95, age);
+    let faded = vec4(color.x, color.y, color.z, color.w * fade);
+    let up = at_ - vec2(0.0, 26.0 * age);
+    let count = if n >= 100 { 3.0 } else if n >= 10 { 2.0 } else { 1.0 };
+    let wide = count * 6.0 * scale;
+    let word = if row >= 0 { row_width(words, row, width, 2.0) } else { 0.0 };
+    let lead = if row >= 0 { shadowed(font, words, row, width, q, up - vec2(word * 0.5, 22.0), 2.0, faded, 0.5 * fade) } else { clear() };
+    let figures = if n >= 0 {
+        loop 3 with acc = clear() {
+            let k = index();
+            if float(k) >= count { acc } else {
+                let place = [100, 10, 1][3 - int(count) + k];
+                over(acc, shadowed(font, words, digits + (n / place) % 10, width, q, up + vec2(float(k) * 6.0 * scale - wide * 0.5, 0.0), scale, faded, 0.6 * fade))
+            }
+        }
+    } else { clear() };
+    return over(lead, figures);
+}

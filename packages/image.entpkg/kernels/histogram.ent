@@ -1,13 +1,13 @@
 // Histograms: how many pixels fall at each brightness, and the
 // equalization that spreads them evenly. Brightness is Oklab's
-// lightness of the linear colour, clamped 0 to 1, so bins of equal
+// lightness of the linear color, clamped 0 to 1, so bins of equal
 // width are steps the eye sees as equal; `count(bins)` of them.
-use "colour.ent";
+use "color.ent";
 
-/// How bright a linear colour looks, 0 for black to 1 for white.
+/// How bright a linear color looks, 0 for black to 1 for white.
 fn lightness(c: Vec3) -> Float { return saturate(linear_to_oklab(max(c, 0.0)).x); }
 
-/// The bin a colour falls in, of `bins`.
+/// The bin a color falls in, of `bins`.
 fn bin_of(c: Vec3, bins: Int) -> Int {
     return min(int(lightness(c) * float(bins)), bins - 1);
 }
@@ -42,7 +42,7 @@ kernel image.cumulate@1 {
 /// The picture equalized: each pixel's lightness moved to the share
 /// of the pixels darker than it (`cumulative`, from `image.cumulate`),
 /// read between the counts below and through its bin by where in the
-/// bin it falls, so a smooth gradient stays smooth. The colour is
+/// bin it falls, so a smooth gradient stays smooth. The color is
 /// scaled to reach it: lightness grows as the cube root of a scale, so
 /// the cube of the ratio, which keeps the hue. `amount` mixes it with
 /// the source.

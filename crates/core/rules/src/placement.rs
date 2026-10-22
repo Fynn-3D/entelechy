@@ -1,5 +1,5 @@
 //! Where a picture lands in a window: fitted whole, aspect kept,
-//! centred. Presenters, CPU blits and pointer mapping share this rule.
+//! centered. Presenters, CPU blits and pointer mapping share this rule.
 
 /// The image's rectangle inside the window, in window pixels.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -14,7 +14,7 @@ pub struct Placement {
     pub height: u32,
 }
 
-/// Fits `width x height` into `target_width x target_height`, centred.
+/// Fits `width x height` into `target_width x target_height`, centered.
 pub fn placement(width: u32, height: u32, target_width: u32, target_height: u32) -> Placement {
     if width == 0 || height == 0 || target_width == 0 || target_height == 0 {
         return Placement::default();

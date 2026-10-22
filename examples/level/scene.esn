@@ -3,9 +3,10 @@
 // and level.draw walks the header, the tiles and the entity list.
 use "kernels/";
 use "../../packages/text.entpkg";
+use "../../packages/ui.entpkg";
 
 input level: Rows<Int> = bytes "level.bin";
-input font: Grid<Float> = "../../packages/text.entpkg/font.png";
+input font: Grid<Float> = "../../packages/text.entpkg/assets/font.png";
 input caption: Rows<Int> = text "entities";
 
 param zoom: Float = 0.92;

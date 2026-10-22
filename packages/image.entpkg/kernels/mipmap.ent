@@ -1,0 +1,108 @@
+// A mip strip: a texture and its halvings, one under another in one
+// Field, with the reads that pick a level and blend between two.
+//
+// `at_linear` blends four texels of one Field, which is right for a
+// surface the size of the screen and wrong for one running away from
+// it: past the point where a pixel covers more than a texel, the blend
+// samples a moving subset of them and the picture crawls. The answer is
+// the old one — keep the texture at several scales and read the scale
+// the pixel asks for — and it needs nothing a Kernel cannot write: the
+// strip is built by `mipmap.esn`, and the level comes from the pixel next
+// door, since a surface a rasterizer left carries its uv at every pixel
+// and the difference between neighbors is what a derivative would say.
+//
+// The strip is `side` wide and `2 * side` tall: level 0 fills the top
+// square, level 1 the half-square under it, and so on down.
+
+// Where level `k` begins down the strip, in texels.
+fn mip_start(k: Int, side: Int) -> Float {
+    return float(loop 14 with y = 0 until index() >= k { y + (side >> index()) });
+}
+
+// One level, read where `at_linear` would read it, the blend kept
+// inside that level's own block so it cannot reach the next one.
+fn mip_level(strip: Grid<Vec4>, uv: Vec2, k: Int, side: Int) -> Vec4 {
+    let wide = float(side >> k);
+    let y0 = mip_start(k, side);
+    let p = clamp(fract(uv) * wide, 0.5, wide - 0.5);
+    return at_linear(strip, vec2(p.x, y0 + p.y));
+}
+
+// The level a pixel asks for, from how far the uv moves to the pixel
+// beside it and the one below: a texel a pixel is level 0, twice that
+// is level 1, and so on.
+fn mip_wanted(du: Vec2, dv: Vec2, side: Int, levels: Int) -> Float {
+    let texels = float(side);
+    let span = max(length(du * texels), length(dv * texels));
+    return clamp(log(max(span, 1.0)) / log(2.0), 0.0, float(levels - 1));
+}
+
+// The strip read at that level, blended with the next one so the
+// change of level is not a line across the picture.
+fn mip_at(strip: Grid<Vec4>, uv: Vec2, wanted: Float, side: Int, levels: Int) -> Vec4 {
+    let k = int(wanted);
+    let next = min(k + 1, levels - 1);
+    return mix(mip_level(strip, uv, k, side),
+               mip_level(strip, uv, next, side),
+               wanted - float(k));
+}
+
+/// The strip before any halving: the texture in the top square and
+/// nothing under it.
+kernel image.mip_first@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    param side: Int = 256;
+    output result: Image;
+    compute {
+        let c = icoord();
+        return if c.x < side && c.y < side {
+            at(source, c)
+        } else {
+            vec4(0.0, 0.0, 0.0, 1.0)
+        };
+    }
+}
+
+/// The level being written, which starts at one.
+kernel image.mip_one@1 {
+    requires { field.write; }
+    output result: Rows<Int>;
+    compute { return 1; }
+}
+
+kernel image.mip_next@1 {
+    requires { field.read; field.write; }
+    input previous: Rows<Int>;
+    output result: Rows<Int>;
+    compute { return at(previous, 0) + 1; }
+}
+
+/// One halving: four texels of the level above averaged into one of the
+/// level named, everything else carried over.
+kernel image.mip_halve@1 {
+    requires { field.read; field.write; }
+    input strip: Image;
+    input step: Rows<Int>;
+    param side: Int = 256;
+    output result: Image;
+    compute {
+        let level = at(step, 0);
+        let c = icoord();
+        let here = int(mip_start(level, side));
+        let wide = side >> level;
+        let inside = c.y >= here && c.y < here + wide && c.x < wide;
+        return if !inside {
+            sample(strip)
+        } else {
+            let above = int(mip_start(level - 1, side));
+            let x = c.x * 2;
+            let y = (c.y - here) * 2 + above;
+            let a = at(strip, ivec2(x, y));
+            let b = at(strip, ivec2(x + 1, y));
+            let d = at(strip, ivec2(x, y + 1));
+            let e = at(strip, ivec2(x + 1, y + 1));
+            (a + b + d + e) * 0.25
+        };
+    }
+}

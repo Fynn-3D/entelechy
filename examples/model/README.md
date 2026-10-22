@@ -10,7 +10,7 @@ input faces: Triangles = "assets/crate.triangles.field";
 input albedo: Image = "assets/crate.albedo.png";
 ```
 
-`model.project` orbits and projects the vertices, the raster package
+`model.project` orbits and projects the vertices, the render package
 lands the triangles, and `model.shade` samples the texture at each
 pixel's uv with `at_linear`. The runtime does not read glTF; the importer
 is a tool that speaks the Host's formats. It reports and skips skins,

@@ -2,7 +2,7 @@
 // a sixteenth of the pixels at a quarter of the scale.
 use "../kernels/";
 
-input font: Grid<Float> = "../../../packages/text.entpkg/font.png";
+input font: Grid<Float> = "../../../packages/text.entpkg/assets/font.png";
 input names: Rows<Int> = text "place erase paint colorundo  reset ";
 
 node seed: voxel.seed@1 { domain = vec3(48, 48, 48); }

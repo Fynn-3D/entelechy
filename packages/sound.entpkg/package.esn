@@ -1,0 +1,5 @@
+//! Sound effects: a game's events in a material or a style, and the casts
+//! of the effects package heard as they are drawn.
+package sound@1 { language = 1; ir = 1; }
+
+use "kernels/";

@@ -1,0 +1,22 @@
+// Curl noise: a swirl with no sources and no sinks, for pushing smoke
+// about.
+use "noise.ent";
+
+/// Curl noise: the curl of three gradient noises, a swirling field with
+/// no sources and no sinks; carried by it, smoke keeps its volume.
+fn curl3(p: Vec3, seed: Int) -> Vec3 {
+    let e = 0.1;
+    let dx = vec3(e, 0.0, 0.0);
+    let dy = vec3(0.0, e, 0.0);
+    let dz = vec3(0.0, 0.0, e);
+    let a = seed;
+    let b = seed + 101;
+    let c = seed + 202;
+    let dcy = gradient3(p + dy, c) - gradient3(p - dy, c);
+    let dbz = gradient3(p + dz, b) - gradient3(p - dz, b);
+    let daz = gradient3(p + dz, a) - gradient3(p - dz, a);
+    let dcx = gradient3(p + dx, c) - gradient3(p - dx, c);
+    let dbx = gradient3(p + dx, b) - gradient3(p - dx, b);
+    let day = gradient3(p + dy, a) - gradient3(p - dy, a);
+    return vec3(dcy - dbz, daz - dcx, dbx - day) / (2.0 * e);
+}

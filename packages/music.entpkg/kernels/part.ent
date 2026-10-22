@@ -1,0 +1,314 @@
+// A song's parts at a moment: where it is (its bar, its chord, the
+// section of its form), and what each part plays then: the tune (its
+// seed's motif, sequenced, answered, brought to rest), its counter-tune a
+// third below, the chords, the arpeggio, the bass, the drums and their
+// fill at a section's end; or a short tune's notes, played once.
+use "random.entpkg";
+use "theory.ent";
+use "instrument.ent";
+
+/// How long a song plays before its tune comes in (bars).
+fn intro_bars() -> Int { return 2; }
+
+// A song's form, after its intro: A (its theme), B (the answer), A' (the
+// theme again, a counter-tune under it), a bridge (the drums low, the
+// tune in fragments), and round again from A.
+fn section_intro() -> Int { return 0; }
+fn section_a() -> Int { return 1; }
+fn section_b() -> Int { return 2; }
+fn section_again() -> Int { return 3; }
+fn section_bridge() -> Int { return 4; }
+fn form_bars() -> Int { return 28; }
+
+/// The section bar `bar` is in (x) and its bar in it (y).
+fn section_at(bar: Int) -> IVec2 {
+    if bar < intro_bars() { return ivec2(section_intro(), bar); }
+    let b = (bar - intro_bars()) % form_bars();
+    return if b < 8 { ivec2(section_a(), b) } else if b < 16 { ivec2(section_b(), b - 8) } else if b < 24 { ivec2(section_again(), b - 16) } else { ivec2(section_bridge(), b - 24) };
+}
+
+/// Where a song is `s` seconds in: x its bar, y the beat in the bar, z
+/// seconds a beat.
+fn where_in(m: Mood, s: Float) -> Vec3 {
+    let beat = 60.0 / max(m.tempo, 20.0);
+    let b = max(s, 0.0) / beat;
+    let bar = floor(b / float(max(m.meter, 2)));
+    return vec3(bar, b - bar * float(max(m.meter, 2)), beat);
+}
+
+/// The chord (its root degree) of bar `bar`.
+fn chord_root(m: Mood, bar: Int) -> Int { return m.chords[(bar / max(m.chord_bars, 1)) % 8]; }
+
+/// A note found: when it began (seconds), how long it is held, its pitch
+/// (semitones), whether there is one (w 1).
+fn found(start: Float, held: Float, semis: Float) -> Vec4 { return vec4(start, held, semis, 1.0); }
+fn none() -> Vec4 { return vec4(0.0, 0.0, 0.0, 0.0); }
+
+/// A seed's draw `k`, 0 to 1.
+fn gene(seed: Int, k: Int) -> Float { return hash1(k * 7919 + 13, seed * 31 + 7); }
+
+/// The rhythm cells a tune's bars are made of, a bit for each eighth of a
+/// bar, from the sparest to the busiest.
+fn rhythm_cell(k: Int) -> Int { return [1, 17, 73, 21, 85, 89, 43, 93, 87, 245, 95, 255][clamp(k, 0, 11)]; }
+
+/// The cell bar `b` (0 or 1) of a seed's motif uses, as busy as the mood.
+fn motif_cell(m: Mood, seed: Int, b: Int) -> Int {
+    let base = int(round(m.busy * 9.0));
+    return rhythm_cell(clamp(base - 2 + int(gene(seed, 20 + b) * 5.0), 0, 11));
+}
+
+/// A seed's tune's shape over a phrase, at `u` (0 to 1): rising, falling,
+/// an arch, a valley or a wave.
+fn contour(seed: Int, u: Float) -> Float {
+    let shape = int(gene(seed, 1) * 5.0);
+    let pi = 3.14159;
+    return if shape == 0 { u } else if shape == 1 { 1.0 - u } else if shape == 2 { sin(pi * u) } else if shape == 3 { 1.0 - sin(pi * u) } else { 0.5 + 0.5 * sin(pi * 3.0 * u) };
+}
+
+/// The motif's eighth `i` of a phrase `steps` long: (whether a note begins
+/// on it, its degree before it is fitted to the chord): its rhythm the
+/// seed's cells, its pitch the seed's shape from where it starts across
+/// its range, now and then a step off it.
+fn motif_at(m: Mood, seed: Int, i: Int, steps: Int) -> IVec2 {
+    let per_bar = steps / 2;
+    let cell = motif_cell(m, seed, i / per_bar);
+    let begins = ((cell >> (i % per_bar)) & 1) == 1;
+    let u = float(i) / float(max(steps - 1, 1));
+    let start = 0.5 + gene(seed, 2) * 4.0;
+    let range = 3.0 + gene(seed, 3) * 6.0;
+    let off = floor((hash1(i, seed + 5) - 0.5) * 2.4);
+    return ivec2(if begins { 1 } else { 0 }, int(round(start + range * (contour(seed, u) - 0.35) + off)));
+}
+
+/// What a phrase (0 to 3) of a period's half plays: the motif (0), it a
+/// step up or down (1), a motif of its own (2), a cadence (3); as the
+/// seed's plan says.
+fn plan_of(seed: Int, half: Int, phrase: Int) -> Int {
+    let plan = int(gene(seed, 30 + half) * 4.0);
+    let plans = [0, 1, 0, 3, 0, 2, 0, 3, 0, 0, 2, 3, 0, 1, 2, 3];
+    return plans[clamp(plan, 0, 3) * 4 + clamp(phrase, 0, 3)];
+}
+
+/// A mood as a seed plays it: a little faster or slower, a little higher or
+/// lower, its chords drawn afresh from its own (beginning on its first, its
+/// half and its end as they are), its arpeggio and bass of the same kind
+/// another way.
+fn varied(m: Mood, seed: Int) -> Mood {
+    let chords = [each 8 {
+        let k = index();
+        if k == 0 || k == 3 || k == 7 { m.chords[k] } else { m.chords[int(gene(seed, 40 + k) * 7.99)] }
+    }];
+    let arp = if m.arp == arp_none() { arp_none() } else { 1 + int(gene(seed, 50) * 2.99) };
+    let bass = if m.bass == bass_roots() || m.bass == bass_fifths() || m.bass == bass_walk() { 1 + int(gene(seed, 51) * 2.99) } else { m.bass };
+    return Mood { ..m, tempo: m.tempo * (0.9 + 0.2 * gene(seed, 52)), key: m.key + int(gene(seed, 53) * 4.99) - 2,
+        chords: chords, arp: arp, bass: bass };
+}
+
+/// The tune at song time `s`: the note sounding then, `below` degrees
+/// under it (a counter-tune's third is 2).
+fn tune_note(m: Mood, st: Band, seed: Int, s: Float, below: Int) -> Vec4 {
+    let w = where_in(m, s);
+    let sec = section_at(int(w.x));
+    if sec.x == section_intro() { return none(); }
+    let meter = max(m.meter, 2);
+    let steps = meter * 4;
+    let eighth = w.z * 0.5;
+    let phrase = sec.y / 2;
+    // The bridge plays the B motif's first bars alone.
+    if sec.x == section_bridge() && sec.y % 2 == 1 { return none(); }
+    let half = if sec.x == section_b() || sec.x == section_bridge() { 1 } else { 0 };
+    let v = if sec.x == section_bridge() { 0 } else { plan_of(seed, half, phrase % 4) };
+    // The second half's motif is the first's answer: its own rhythm and shape.
+    let mseed = if v == 2 || half == 1 { seed * 7 + 97 + half * 13 } else { seed };
+    let phrase_start_bar = int(w.x) - (sec.y % 2);
+    let pos = ((w.x - float(phrase_start_bar)) * float(meter) + w.y) * 2.0;
+    let i_now = int(floor(pos));
+    let shift = if v == 1 { if gene(seed, 60 + half) < 0.5 { 2 } else { -1 } } else { 0 };
+    let found_ = loop steps with acc = ivec3(-1, 0, -1) {
+        // x the last onset at or before now, y its degree, z the first after.
+        let i = index();
+        let mo = motif_at(m, mseed, i, steps);
+        let cadence = v == 3 && i >= meter * 2;
+        let begins = (if cadence { i == meter * 2 } else { mo.x == 1 }) && (sec.x != section_bridge() || i < meter * 2);
+        let root = chord_root(m, phrase_start_bar + i / (meter * 2));
+        let raw = if cadence { 0 } else { mo.y + shift };
+        let fitted = if i % meter == 0 || cadence { nearest_chord_degree(m.mode, root, raw) } else { raw };
+        if !begins { acc }
+        else if i <= i_now { ivec3(i, fitted, acc.z) }
+        else if acc.z < 0 { ivec3(acc.x, acc.y, i) }
+        else { acc }
+    };
+    if found_.x < 0 { return none(); }
+    let swing = if found_.x % 2 == 1 { st.swing * eighth * 0.33 } else { 0.0 };
+    let start = float(phrase_start_bar) * float(meter) * w.z + float(found_.x) * eighth + swing;
+    let next = if found_.z >= 0 { float(found_.z) } else { float(steps) };
+    let held = (next - float(found_.x)) * eighth * st.legato;
+    let semis = float(m.key + 12 + 12 * m.high + scale_step(m.mode, found_.y - below));
+    return found(start, held, semis);
+}
+
+/// The counter-tune at song time `s`: the tune a third below, in the
+/// theme's return.
+fn counter_note(m: Mood, st: Band, seed: Int, s: Float) -> Vec4 {
+    let sec = section_at(int(where_in(m, s).x));
+    if sec.x != section_again() { return none(); }
+    return tune_note(m, st, seed, s, 2);
+}
+
+/// Whether a part plays in a section: the chords and the arpeggio always,
+/// the bass and the drums once the intro is done.
+fn bass_plays(m: Mood, s: Float) -> Bool { return section_at(int(where_in(m, s).x)).x != section_intro(); }
+
+/// A short tune's notes: (degree, beats) after each other, `count` of them.
+fn jingle_degrees(j: Int) -> [Int; 10] {
+    if j == jingle_victory() { return [4, 4, 4, 4, 2, 3, 4, 3, 4, 0]; }
+    if j == jingle_defeat() { return [4, 3, 2, 1, 0, 0, 0, 0, 0, 0]; }
+    if j == jingle_levelup() { return [0, 2, 4, 7, 4, 7, 0, 0, 0, 0]; }
+    return [0, 0, 0, 4, 2, 4, 7, 0, 0, 0];
+}
+fn jingle_beats(j: Int) -> [Float; 10] {
+    if j == jingle_victory() { return [0.33, 0.33, 0.33, 1.0, 1.0, 1.0, 0.67, 0.33, 2.5, 0.0]; }
+    if j == jingle_defeat() { return [1.0, 1.0, 1.0, 1.0, 3.5, 0.0, 0.0, 0.0, 0.0, 0.0]; }
+    if j == jingle_levelup() { return [0.25, 0.25, 0.25, 0.5, 0.25, 2.0, 0.0, 0.0, 0.0, 0.0]; }
+    return [0.5, 0.25, 0.25, 1.0, 0.5, 0.5, 2.5, 0.0, 0.0, 0.0];
+}
+fn jingle_count(j: Int) -> Int { return if j == jingle_victory() { 9 } else if j == jingle_defeat() { 5 } else if j == jingle_levelup() { 6 } else { 7 }; }
+
+/// How long a short tune lasts (seconds), its last note let ring.
+fn jingle_length(m: Mood) -> Float {
+    let beats = jingle_beats(m.jingle);
+    let total = loop jingle_count(m.jingle) with acc = 0.0 { acc + beats[index()] };
+    return total * 60.0 / max(m.tempo, 20.0) + 1.5;
+}
+
+/// A short tune's note at time `s`, none after its last.
+fn jingle_note(m: Mood, s: Float) -> Vec4 {
+    let beat = 60.0 / max(m.tempo, 20.0);
+    let degrees = jingle_degrees(m.jingle);
+    let beats = jingle_beats(m.jingle);
+    let n = jingle_count(m.jingle);
+    let found_ = loop n with acc = vec3(0.0, -1.0, 0.0) {
+        // x when this note begins, y the note sounding (its index), z its start.
+        let i = index();
+        let begins = acc.x;
+        let ends = begins + beats[i] * beat;
+        if s >= begins && s < ends || (i == n - 1 && s >= begins) { vec3(ends, float(i), begins) } else { vec3(ends, acc.y, acc.z) }
+    };
+    if found_.y < 0.0 { return none(); }
+    let i = int(found_.y);
+    let held = if i == n - 1 { beats[i] * beat + 0.6 } else { beats[i] * beat * 0.92 };
+    return found(found_.z, held, float(m.key + 12 + scale_step(m.mode, degrees[i])));
+}
+
+/// The chords at song time `s`: tone `k` (0 to 2) of the chord sounding,
+/// voiced near the middle; a plucked style strums it, a beat apart.
+fn chord_note(m: Mood, st: Band, plucked: Bool, k: Int, s: Float) -> Vec4 {
+    let w = where_in(m, s);
+    let bar = int(w.x);
+    let span = max(m.chord_bars, 1);
+    let first = (bar / span) * span;
+    let root = chord_root(m, bar);
+    let per = degrees_of(m.mode);
+    let d0 = chord_degree(m.mode, root, k);
+    // Voiced about the scale's third degree, so the chords move little.
+    let d = d0 - (if d0 > 4 { per } else { 0 });
+    let semis = float(m.key + scale_step(m.mode, d));
+    let meter = max(m.meter, 2);
+    if plucked {
+        let beat = int(floor(w.y));
+        let start = (float(bar) * float(meter) + float(beat)) * w.z + float(k) * 0.025;
+        return found(start, w.z * 0.9, semis);
+    }
+    let start = float(first) * float(meter) * w.z;
+    return found(start, float(span * meter) * w.z, semis);
+}
+
+/// The arpeggio at song time `s`: a sixteenth each, through the chord's tones.
+fn arp_note(m: Mood, s: Float) -> Vec4 {
+    if m.arp == arp_none() { return none(); }
+    let w = where_in(m, s);
+    let bar = int(w.x);
+    let sixteenth = w.z * 0.25;
+    let i = int(floor(w.y * 4.0));
+    let pattern = if m.arp == arp_up() { [0, 1, 2, 3, 0, 1, 2, 3] } else if m.arp == arp_updown() { [0, 1, 2, 3, 2, 1, 0, 1] } else { [0, 2, 1, 2, 3, 2, 1, 2] };
+    let k = pattern[i % 8];
+    let root = chord_root(m, bar);
+    let per = degrees_of(m.mode);
+    let d = if k == 3 { root + per } else { chord_degree(m.mode, root, k) };
+    let start = (float(bar) * float(max(m.meter, 2)) * 4.0 + float(i)) * sixteenth;
+    return found(start, sixteenth * 1.4, float(m.key + 12 + scale_step(m.mode, d)));
+}
+
+/// The bass at song time `s`.
+fn bass_note(m: Mood, s: Float) -> Vec4 {
+    if m.bass == bass_none() { return none(); }
+    let w = where_in(m, s);
+    let bar = int(w.x);
+    let meter = max(m.meter, 2);
+    let root = chord_root(m, bar);
+    let low = m.key - 12;
+    let beat = int(floor(w.y));
+    let bar_start = float(bar) * float(meter) * w.z;
+    if m.bass == bass_roots() || m.bass == bass_waltz() {
+        let held = if m.bass == bass_waltz() { w.z * 0.9 } else { float(meter) * w.z * 0.95 };
+        return found(bar_start, held, float(low + scale_step(m.mode, root)));
+    }
+    if m.bass == bass_fifths() {
+        let half = if beat * 2 >= meter { 1 } else { 0 };
+        let d = if half == 1 { chord_degree(m.mode, root, 2) - degrees_of(m.mode) } else { root };
+        return found(bar_start + float(half * meter / 2) * w.z, float(meter / 2) * w.z * 0.9, float(low + scale_step(m.mode, d)));
+    }
+    if m.bass == bass_walk() {
+        let next = chord_root(m, bar + 1);
+        let d = if beat == 0 { root } else if beat == meter - 1 { next - 1 } else { chord_degree(m.mode, root, beat % 3) };
+        return found(bar_start + float(beat) * w.z, w.z * 0.85, float(low + scale_step(m.mode, d)));
+    }
+    // Driving eighths, the octave on every other.
+    let e = int(floor(w.y * 2.0));
+    let up = if e % 4 == 3 { 12 } else { 0 };
+    return found(bar_start + float(e) * w.z * 0.5, w.z * 0.4, float(low + up + scale_step(m.mode, root)));
+}
+
+/// Which drums a groove strikes on sixteenth `i` of a bar: kick, snare,
+/// hat, low drum (bits 1, 2, 4, 8).
+fn groove_hits(groove: Int, i: Int, meter: Int) -> Int {
+    if groove == groove_march() { return [5, 0, 4, 0, 6, 0, 4, 0, 5, 0, 4, 0, 6, 0, 6, 2][i % 16]; }
+    if groove == groove_battle() { return [13, 4, 4, 5, 6, 4, 5, 4, 13, 4, 4, 5, 6, 4, 6, 6][i % 16]; }
+    if groove == groove_waltz() { return [9, 0, 4, 0, 6, 0, 4, 0, 6, 0, 4, 0][i % 12]; }
+    if groove == groove_soft() { return [8, 0, 0, 0, 0, 0, 4, 0, 8, 0, 8, 0, 0, 0, 4, 0][i % 16]; }
+    if groove == groove_ritual() { return [8, 0, 0, 0, 0, 0, 8, 0, 8, 0, 0, 0, 2, 0, 0, 0][i % 16]; }
+    return 0;
+}
+
+/// The drums at song time `s`, at sample `n`: each drum struck in this
+/// sixteenth or the few before it, still ringing.
+fn drums_at(m: Mood, st: Band, s: Float, n: Long) -> Float {
+    if m.groove == groove_none() || st.kit == kit_none() { return 0.0; }
+    let w = where_in(m, s);
+    if int(w.x) < intro_bars() - 1 { return 0.0; }
+    let sec = section_at(int(w.x));
+    let bridge = sec.x == section_bridge();
+    // A section's last bar ends with a fill: the snare on every sixteenth
+    // of its last two beats, growing.
+    let fill_bar = (sec.x == section_a() || sec.x == section_b() || sec.x == section_again()) && sec.y == 7 && m.drive > 0.25;
+    let meter = max(m.meter, 2);
+    let steps = meter * 4;
+    let sixteenth = w.z * 0.25;
+    let now = int(floor((w.x * float(meter) + w.y) * 4.0));
+    return loop 6 with acc = 0.0 {
+        let j = now - index();
+        let i = j % steps;
+        let in_fill = fill_bar && i >= steps - 8;
+        let groove = groove_hits(m.groove, i, meter);
+        // The bridge keeps only its kick and low drum.
+        let hits = if in_fill { 2 | (if i == steps - 1 { 1 } else { 0 }) } else if bridge { groove & 9 } else { groove };
+        let t = s - float(j) * sixteenth;
+        let accent = if in_fill { 0.5 + 0.5 * float(i - (steps - 8)) / 8.0 } else if i % 4 == 0 { 1.0 } else { 0.7 };
+        let hard = (0.55 + 0.45 * m.drive) * accent;
+        let k = if (hits & 1) != 0 { kit_drum(st.kit, drum_kick(), t, n, hard) } else { 0.0 };
+        let sn = if (hits & 2) != 0 { kit_drum(st.kit, drum_snare(), t, n, hard) } else { 0.0 };
+        let h = if (hits & 4) != 0 && m.drive > 0.3 { kit_drum(st.kit, drum_hat(), t, n, hard * m.drive) } else { 0.0 };
+        let lo = if (hits & 8) != 0 { kit_drum(st.kit, drum_low(), t, n, hard) } else { 0.0 };
+        acc + k + sn + h + lo
+    };
+}

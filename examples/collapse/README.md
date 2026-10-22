@@ -8,7 +8,7 @@ grid's edge is a closed side. A cell left with no tile forgets.
 ```text
 start ─ steps (×8) ─┬─ pick (the fewest left: a reduce)
                     ├─ settled (one tile, or melted under the pointer)
-                    └─ spread (×6: what the neighbours rule out)
+                    └─ spread (×6: what the neighbors rule out)
                                    └─ tally ─ label ─ glyphs ─ draw
 ```
 

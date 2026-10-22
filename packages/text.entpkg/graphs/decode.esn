@@ -1,0 +1,19 @@
+//! A text's rows as letters, `width` cells a row: its rows counted,
+//! where each begins, and each cell's letter (`kernels/letters.ent`).
+//! The text is UTF-8 bytes (`bytes "file.txt"`), a row a line, or codes
+//! with `utf8 = 0` (`text "..."`); its wide letters those of the atlas's
+//! `codes` (`ui.no_codes` for none).
+//!
+//!   node words: graph "text.entpkg/graphs/decode.esn" { text <- words; codes <- none.result; width = 16; }
+use "../kernels/letters.ent";
+
+input text: Rows<Int>;
+input codes: Rows<Int>;
+param width: Int = 12;
+param utf8: Int = 1;
+
+node rows: text.rows@1 { text <- text; domain = 1; }
+node starts: text.starts@1 { text <- text; rows <- rows.result; domain = value(rows, 0); }
+node cells: text.lettered@1 { width = width; utf8 = utf8; text <- text; starts <- starts.result; codes <- codes; domain = width * count(starts); }
+
+output letters <- cells.result;

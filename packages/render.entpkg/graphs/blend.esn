@@ -1,0 +1,19 @@
+//! Temporal antialiasing and upscaling: this frame (`hdr`, drawn through the jittered camera `jlens`, possibly
+//! smaller than the window) blended with the last frame carried over, at the window's size (`render.taa`). `surface` is the G-buffer's
+//! surface (w the distance along the view ray), `lens` the camera unjittered. Small moving things (particles) are drawn after
+//! it, or they smear; walking figures are carried by `motion`.
+use "../kernels/";
+
+input hdr: Image;
+input surface: Grid<Vec4>;
+input lens: Lenses;
+input jlens: Lenses;
+/// How far each pixel's thing moved this frame (in the world; 1 × 1 when nothing moved).
+input motion: Grid<Vec4>;
+
+node blank_hdr: Image { domain = vec2(1, 1); }
+node now: render.same_lens@1 { lens <- lens; domain = 1; }
+node taa: render.taa@1 { hdr <- hdr; surface <- surface; lens <- lens; jlens <- jlens; motion <- motion; was_lens <~ now.result from now.result;
+    history <~ taa.result from blank_hdr.result; domain = window(); }
+
+output result <- taa.result;

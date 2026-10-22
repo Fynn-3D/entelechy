@@ -1,0 +1,36 @@
+// Fireflies over the balls, by the particles package: born in a box
+// above the floor, drifting up on a still evening, binned into the
+// picture's tiles and drawn over its depth, glowing.
+use "../../../packages/particles.entpkg";
+use "../../../packages/render.entpkg";
+
+node scene: graph "../graphs/balls.esn" { }
+node emitters: kernel {
+    requires { field.write; }
+    output result: Rows<Emitter>;
+    domain = 1;
+    compute {
+        return Emitter { at: vec3(0.0, 0.8, -1.5), half: vec3(3.0, 0.3, 1.5), first: 0, count: 64, life: vec2(3.0, 4.0),
+            speed: vec3(0.0, 0.2, 0.0), jitter: 0.2, size: vec2(0.04, 0.06), kind: kind_firefly(), lift: 0.05, drag: 1.0 };
+    }
+}
+node still: Rows<Vec4> { domain = 1; }
+node flat: Grid<Float> { domain = vec2(2, 2); }
+node none: particles.none@1 { domain = 64; }
+node flies: particles.step@1 { previous <~ flies.result from none.result; emitters <- emitters.result; wind <- still.result; ground <- flat.result; domain = 64; }
+node size: kernel {
+    requires { field.write; input.read; }
+    output result: Rows<Vec2>;
+    domain = 1;
+    compute { return window(); }
+}
+node dark: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = window();
+    compute { return vec4(0.02, 0.02, 0.03, 1.0); }
+}
+node bins: particles.bin@1 { particles <- flies.result; lens <- scene.lens; size <- size.result; domain = ceil(window() / 16) * vec2(4, 1); }
+node drawn: particles.draw@1 { hdr <- dark.result; surface <- scene.surface; bins <- bins.result; particles <- flies.result; lens <- scene.lens; sky <- scene.sky; domain = window(); }
+
+output result <- drawn.result;

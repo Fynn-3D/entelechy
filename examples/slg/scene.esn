@@ -1,7 +1,7 @@
 // map, spawn, blank seed the world; game and units feed back; two ranges
 // are relaxation passes placed from passes.esn; draw is the last node.
 use "kernels/";
-use "../../packages/synth.entpkg";
+use "../../packages/audio.entpkg";
 
 node map: slg.map@1 { domain = vec2(16, 12); }
 node spawn: slg.spawn@1 { domain = 8; }
@@ -47,8 +47,8 @@ node view: slg.draw@1 {
 // package's clock, and the stereo the sound card takes; 800 frames a
 // block is 48 kHz at sixty evaluations.
 node quiet: bgm.silence@1 { domain = 800; }
-node clock0: synth.clock_start@1 { domain = 1; }
-node clock: synth.clock@1 { previous <~ clock.result from clock0.result; }
+node clock0: audio.clock_start@1 { domain = 1; }
+node clock: audio.clock@1 { previous <~ clock.result from clock0.result; }
 node music: bgm.play@1 { previous <~ music.result from quiet.result; clock <- clock.result; game <- game.result; }
 node sound: bgm.stereo@1 { music <- music.result; }
 

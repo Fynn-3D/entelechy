@@ -1,0 +1,14 @@
+//! One halving of a mip strip: the level the counter names is written
+//! from the level above it, every other texel carried over unchanged.
+//! `mipmap.esn` places this `levels` times.
+use "../kernels/mipmap.ent";
+
+input strip: Image;
+input step: Rows<Int>;
+param side: Int = 256;
+
+node next: image.mip_next@1 { previous <- step; domain = 1; }
+node result: image.mip_halve@1 { strip <- strip; step <- step; side = side; domain = size(strip); }
+
+output result <- result.result;
+output step <- next.result;

@@ -1,5 +1,6 @@
-// A settings screen and a hero's panel drawn with the ui package: the
+// A settings screen and a hero's panel drawn with the widgets package: the
 // options moved through by keys, a pad or the pointer.
+use "../../../packages/text.entpkg";
 use "../../../packages/ui.entpkg";
 
 /// The options: the difficulty (0 to 2), the volume (0 to 1), subtitles

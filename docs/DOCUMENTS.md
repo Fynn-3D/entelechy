@@ -312,8 +312,8 @@ Fields and context:
 - `sample(f)` reads an input at this element's own address (its shape
   must match the output's). `sample` is only in `compute`.
 - `at(f, address)` reads anywhere, clamped (`fetch` is the same for
-  grids). `at_linear(f, position)` blends neighbours (bilinear over a
-  grid, trilinear over a volume, a `Float` position over rows; centres at
+  grids). `at_linear(f, position)` blends neighbors (bilinear over a
+  grid, trilinear over a volume, a `Float` position over rows; centers at
   half-integers, edges clamp), only where the layout is all floats.
 - `count(f)` the element count, `size(f)` the extent, `element()` the
   linear index, `coord()` and `domain()` the address and extent over a
@@ -434,7 +434,7 @@ changes:
   `at_linear`); `.mid` as rows of `{start, duration, pitch, velocity,
   channel}`, ticks and tempo read as seconds; `.field`, any Field, the
   Host's format. A path through a package's name
-  (`"text.entpkg/font.png"`) reads the file inside that package, as a
+  (`"text.entpkg/assets/font.png"`) reads the file inside that package, as a
   `use` of it does. `run --save` and the protocol's `read` write all of them.
 - `input skills: Rows<Skill> = "data/skills.csv";`: a data table, `.csv`
   or `.json`, read as rows of the element the Kernel reading the input
@@ -860,7 +860,7 @@ be keywords.
    `native.rasterize@1` takes `vertices` (rows of `clip: Vec4; normal:
    Vec3; uv: Vec2`) and `triangles` (rows of three `Int`s) and writes
    `surface`, a grid of `depth: Float; normal: Vec3; uv: Vec2; id: Int`
-   over the node's `domain`: bit for bit the raster package's surface on
+   over the node's `domain`: bit for bit the render package's surface on
    the interpreter and the JIT, the device's rasterizer, approximate at
    edges, on a GPU ([decision](DECISIONS.md)). `native.rasterize@3`
    takes a `canvas` (a `Grid<Long>`, the empty canvas the package's
@@ -1005,7 +1005,7 @@ is named for the package it holds, and a name is one package: a scene
 reaching two packages of one name, two editions of it, is refused. A
 `use` naming nothing beside the document is looked for by name beside
 the package the document is in, so a package names the packages it uses
-(`use "compact.entpkg";`) wherever they are kept together, then in the
+(`use "math.entpkg";`) wherever they are kept together, then in the
 directories `ENTELECHY_PACKAGES` lists. `entelechy pack` writes a package as one `.entpkg`
 file, `entelechy unpack` reads it back, `entelechy package` says what one holds. A
 Kernel reached by two paths is one file and one owner.

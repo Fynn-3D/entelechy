@@ -1,0 +1,128 @@
+// Triangles drawn through a mask: a fragment whose alpha there is below
+// `cutout` is left out, as leaves and fences are drawn.
+use "tile.ent";
+use "triangle.ent";
+
+/// The same pair with a cutout: a fragment whose alpha in `mask`, read at
+/// its own uv as `at_linear(mask, uv * size(mask))` reads it, is below
+/// `cutout` is not drawn — it emits no key, so it settles no depth and
+/// what is behind a leaf's edge is seen through it.
+kernel raster.cover_cutout@3 {
+    requires { field.read; field.write; }
+    input triangles: Rows<Face>;
+    input vertices: Rows<Corner>;
+    input boxes: Rows<Box>;
+    input mask: Image;
+    input keys: Grid<Long>;
+    param cutout: Float = 0.5;
+    param tile: Int = 0;
+    output result: Grid<Long>;
+    struct Hit { pixel: Vec2; key: Long; }
+    scatter into keys with min {
+        let t = element();
+        let k = corners(sample(triangles), vertices, size(keys));
+        let b = at(boxes, t);
+        let none = Hit { pixel: vec2(-1.0, -1.0), key: 0l };
+        if b.w == 0 || large(b, tile) { return none; }
+        let va = at(vertices, k.ia);
+        let vb = at(vertices, k.ib);
+        let vc = at(vertices, k.ic);
+        let texels = size(mask);
+        loop b.h with dy = 0 {
+            loop b.w with dx = 0 {
+                let px = b.x0 + dx;
+                let py = b.y0 + dy;
+                let z = depth_at(k, px, py);
+                if z >= 0.0 && at_linear(mask, uv_at(k, va, vb, vc, px, py) * texels).a >= cutout {
+                    emit(Hit { pixel: vec2(px, py), key: key_of(z, t) });
+                }
+                dx + 1
+            };
+            dy + 1
+        };
+        return none;
+    }
+}
+
+/// The same with a cutout and no tiles: each triangle finds its own box,
+/// as `raster.cover@4` does.
+kernel raster.cover_cutout@4 {
+    requires { field.read; field.write; }
+    input triangles: Rows<Face>;
+    input vertices: Rows<Corner>;
+    input mask: Image;
+    input keys: Grid<Long>;
+    param cutout: Float = 0.5;
+    output result: Grid<Long>;
+    struct Hit { pixel: Vec2; key: Long; }
+    scatter into keys with min {
+        let t = element();
+        let k = corners(sample(triangles), vertices, size(keys));
+        let b = boxed(k, size(keys));
+        let none = Hit { pixel: vec2(-1.0, -1.0), key: 0l };
+        if b.w == 0 { return none; }
+        let va = at(vertices, k.ia);
+        let vb = at(vertices, k.ib);
+        let vc = at(vertices, k.ic);
+        let texels = size(mask);
+        loop b.h with dy = 0 {
+            loop b.w with dx = 0 {
+                let px = b.x0 + dx;
+                let py = b.y0 + dy;
+                let z = depth_at(k, px, py);
+                if z >= 0.0 && at_linear(mask, uv_at(k, va, vb, vc, px, py) * texels).a >= cutout {
+                    emit(Hit { pixel: vec2(px, py), key: key_of(z, t) });
+                }
+                dx + 1
+            };
+            dy + 1
+        };
+        return none;
+    }
+}
+
+kernel raster.cover_cutout_tiles@2 {
+    requires { field.read; field.write; }
+    input triangles: Rows<Face>;
+    input vertices: Rows<Corner>;
+    input boxes: Rows<Box>;
+    input counts: Rows<Int>;
+    input offsets: Rows<Int>;
+    input total: Rows<Int>;
+    input mask: Image;
+    input keys: Grid<Long>;
+    param cutout: Float = 0.5;
+    param tile: Int = 16;
+    output result: Grid<Long>;
+    struct Hit { pixel: Vec2; key: Long; }
+    scatter into keys with min {
+        let none = Hit { pixel: vec2(-1.0, -1.0), key: 0l };
+        let size = size(keys);
+        let texels = size(mask);
+        let n = idomain();
+        let e = element();
+        let total = at(total, 0);
+        let rounds = if e < total { (total - e + n - 1) / n } else { 0 };
+        loop rounds with j = 0 {
+            let at_ = tile_place(e + j * n, counts, offsets, boxes, tile);
+            let k = corners(at(triangles, at_.t), vertices, size);
+            let va = at(vertices, k.ia);
+            let vb = at(vertices, k.ib);
+            let vc = at(vertices, k.ic);
+            loop at_.h with dy = 0 {
+                loop at_.w with dx = 0 {
+                    let px = at_.x0 + dx;
+                    let py = at_.y0 + dy;
+                    let z = depth_at(k, px, py);
+                    if z >= 0.0 && at_linear(mask, uv_at(k, va, vb, vc, px, py) * texels).a >= cutout {
+                        emit(Hit { pixel: vec2(px, py), key: key_of(z, at_.t) });
+                    }
+                    dx + 1
+                };
+                dy + 1
+            };
+            j + 1
+        };
+        return none;
+    }
+}

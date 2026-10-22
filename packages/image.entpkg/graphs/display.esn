@@ -2,7 +2,7 @@
 //!   node display: graph "image.entpkg/graphs/display.esn" {
 //!       source <- x.result; exposure = 1.2;
 //!   }
-use "../kernels/tonemap.ent";
+use "../kernels/tone_map.ent";
 
 input source: Image;
 param exposure: Float = 1.0;

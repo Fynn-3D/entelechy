@@ -1,7 +1,7 @@
 scene ../scene.esn
 window 400 300
 
-# At its own size the drawing lands a unit to a pixel. Each colour is
+# At its own size the drawing lands a unit to a pixel. Each color is
 # the one the SVG's rules give, worked out by hand: the sky's gradient
 # between its stops, the sun's heart, the ring of light over the sky and
 # the hole the even-odd rule leaves in it, the hills, a petal's gradient

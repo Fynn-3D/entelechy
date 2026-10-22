@@ -14,7 +14,7 @@ node subdivided: graph "../level.esn" {
     faces <- faces.result;
 }
 node project: mesh.project@1 { mesh <- subdivided.vertices; }
-node raster: graph "../../../packages/raster.entpkg/graphs/raster.esn" {
+node raster: graph "../../../packages/raster.entpkg/graphs/surface.esn" {
     vertices <- project.result;
     triangles <- subdivided.triangles;
     width = 320;

@@ -1,5 +1,5 @@
 // Five pictures of any size in one window: a grid of three columns and
-// two rows, each picture fitted whole into its cell and centred, the
+// two rows, each picture fitted whole into its cell and centered, the
 // sixth cell left empty.
 
 /// The pixel of `picture` under a point of a cell, fitted by its aspect:

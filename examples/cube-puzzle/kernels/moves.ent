@@ -1,6 +1,5 @@
 // What the cube and its network share: the twelve turns as sticker
 // permutations, and the shape of a loss.
-use "../../../packages/text.entpkg";
 
 struct Loss { sum: Float; count: Int; }
 type Losses = Rows<Loss>;

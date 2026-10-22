@@ -129,7 +129,7 @@ fn line(now: &Preparing, elapsed: Duration) -> String {
             stage(Stage::Building) + stage(Stage::Compiling),
         );
         let compiled = stage(Stage::Compiled);
-        let (colour, glyph) = if building > 0 {
+        let (color, glyph) = if building > 0 {
             (
                 if beat {
                     "38;2;255;214;120"
@@ -145,7 +145,7 @@ fn line(now: &Preparing, elapsed: Duration) -> String {
         } else {
             ("38;2;90;86;110", "·")
         };
-        out.push_str(&format!("\x1b[{colour}m{glyph}"));
+        out.push_str(&format!("\x1b[{color}m{glyph}"));
     }
     out.push_str(&format!("\x1b[0m  {}/{n}", now.built()));
     if let Some(seed) = now.longest() {

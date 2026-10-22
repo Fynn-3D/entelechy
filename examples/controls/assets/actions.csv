@@ -1,0 +1,4 @@
+#name,key,key2,pad
+jump,32,-1,8
+fire,70,74,10
+menu,27,-1,16

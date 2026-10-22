@@ -1,0 +1,34 @@
+scene command.esn
+window 320 180
+# Closed until Space opens it, listing all four.
+frame 0.0
+expect commands.search.result[0].open = 0
+key 32 down
+frame 0.1
+key 32 up
+frame 0.15
+expect commands.search.result[0].open = 1
+expect commands.search.result[0].total = 4
+
+# "sa" typed: the two saves found, the first chosen; the search's
+# panel drawn over the picture, the picture round it as it was.
+key 83 down
+frame 0.2
+key 83 up
+key 65 down
+frame 0.25
+key 65 up
+frame 0.3
+expect commands.search.result[0].typed_n = 2
+expect commands.search.result[0].total = 2
+expect commands.search.result[0].found.0 = 1
+expect 160 60 = 0.350 0.360 0.400 0.001
+expect 5 175 = 0.050 0.050 0.060 0.001
+
+# Enter runs the chosen command, the second line, and closes the search.
+key 13 down
+frame 0.35
+key 13 up
+expect commands.search.result[0].run = 1
+expect commands.search.result[0].open = 0
+frame 0.4

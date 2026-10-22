@@ -17,7 +17,7 @@ begin ┘                                                └─ backup (feeds ba
   returning the backup on undo and the seed on reset.
 - `voxel.keep`: the backup, the volume as it stood before each stroke.
 - `voxel.label`: the hovered item or tool name and the voxel's
-  coordinates, as glyph rows from the text package.
+  coordinates, as glyph rows from the widgets package.
 - `voxel.draw`: the volume per pixel with the same camera and walk,
   shaded faces, the hovered voxel outlined, a floor grid, an axis
   compass, the toolbar (place, erase, paint, color, undo, reset), and

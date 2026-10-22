@@ -1,0 +1,539 @@
+// The forms as light along a ray. The bodies (an orb, a beam, a pillar,
+// a cone, a shell, a funnel, an aura) are marched through their matter;
+// the rest are drawn: rings and circles on the ground, motes, sparks,
+// shards, jagged bolts, a blade's arc, a sign over a head, a flash.
+use "random.entpkg";
+use "blast.ent";
+use "effect.ent";
+use "element.ent";
+use "glow.ent";
+use "matter.ent";
+
+fn is_body(form: Int) -> Bool {
+    return form == form_orb() || form == form_beam() || form == form_pillar() || form == form_cone() || form == form_shell() || form == form_funnel() || form == form_aura();
+}
+
+/// How hot a body is at `x` (0 outside, 1 at its heart), and where `x`
+/// is in it, in sizes (yzw).
+fn body_heat(lv: Live, x: Vec3) -> Vec4 {
+    let r = max(lv.size * 0.5, 0.01);
+    if lv.form == form_orb() || lv.form == form_beam() {
+        let ax = lv.q - lv.p;
+        let len = max(length(ax), 0.0001);
+        let u = ax / len;
+        let s = clamp(dot(x - lv.p, u), 0.0, len);
+        // An orb narrows along its tail; a beam keeps its width, rounded at its ends.
+        let w = if lv.form == form_orb() { r * (1.0 - 0.8 * s / max(len, r)) } else { r * (0.75 + 0.25 * sin(s * 3.0 - lv.t * 8.0)) };
+        let radial = length(x - lv.p - u * s) / max(w, 0.001);
+        let q = (x - lv.p) / r;
+        return vec4(clamp(1.0 - radial, 0.0, 1.0), q.x, q.y, q.z);
+    }
+    if lv.form == form_pillar() || lv.form == form_aura() {
+        let h = x.y - lv.p.y;
+        let tall = max(lv.reach, 0.1);
+        let up = clamp(h / tall, 0.0, 1.0);
+        // An aura hugs a body: widest at its middle, thin at its head.
+        let w = if lv.form == form_aura() { r * (0.55 + 0.45 * sin(up * 3.14159)) } else { r };
+        // Pillars of a count stand side by side across the way: a wall.
+        let across = normalize(vec3(lv.way.z, 0.0, 0.0 - lv.way.x));
+        let half = if lv.form == form_pillar() && lv.count > 1 { lv.spread * 0.5 } else { 0.0 };
+        let along = clamp(dot(x - lv.p, across), 0.0 - half, half);
+        let foot = lv.p + across * along;
+        let radial = length(vec2(x.x - foot.x, x.z - foot.z)) / w;
+        // A wall's top is tongues of it, rising and falling along its length.
+        let tongues = if half > 0.0 { 0.55 + 0.45 * sin(along * 2.6 + lv.t * 3.0 + sin(along * 1.3 - lv.t * 2.0) * 1.5) } else { 1.0 };
+        let ends = smoothstep(-0.05, 0.08, h / tall) * (1.0 - smoothstep(0.45 * tongues, 0.95 * tongues + 0.05, up))
+            * (if half > 0.0 { 1.0 - smoothstep(half * 0.7, half + r, abs(dot(x - lv.p, across))) } else { 1.0 });
+        // An aura is a skin of flame: thin, so its noise makes tongues of it.
+        let shellish = if lv.form == form_aura() { (1.0 - abs(radial - 0.85) * 3.0) * 0.6 } else if half > 0.0 { (1.0 - radial) * 0.7 } else { 1.0 - radial };
+        let q = (x - lv.p) / r;
+        return vec4(clamp(shellish, 0.0, 1.0) * ends, q.x, q.y, q.z);
+    }
+    if lv.form == form_cone() {
+        let s = dot(x - lv.p, lv.way);
+        let len = max(lv.reach, 0.1);
+        if s < 0.0 || s > len { return vec4(0.0, 0.0, 0.0, 0.0); }
+        let w = r * 0.25 + s * max(lv.a, 0.05);
+        let radial = length(x - lv.p - lv.way * s) / w;
+        let q = (x - lv.p) / (r + s * 0.35);
+        return vec4(clamp(1.0 - radial, 0.0, 1.0) * (1.0 - 0.6 * s / len), q.x, q.y, q.z);
+    }
+    if lv.form == form_shell() {
+        let d = length(x - lv.p);
+        let q = (x - lv.p) / r;
+        let skin = exp(0.0 - pow((d - r) / (0.05 * r + 0.02), 2.0)) * 0.6;
+        return vec4(skin, q.x, q.y, q.z);
+    }
+    // A funnel: a turning wall widening as it rises.
+    let h = x.y - lv.p.y;
+    let tall = max(lv.reach, 0.1);
+    let up = clamp(h / tall, 0.0, 1.0);
+    let wall = r * (0.15 + 0.85 * pow(up, 1.4)) + sin(lv.t * 3.0 + up * 4.0) * r * 0.08;
+    let radial = length(vec2(x.x - lv.p.x, x.z - lv.p.z));
+    let inside = (h >= 0.0 && h <= tall);
+    let q = (x - lv.p) / (wall + 0.2);
+    let ang = atan2(x.z - lv.p.z, x.x - lv.p.x);
+    let streaks = 0.35 + 0.65 * pow(0.5 + 0.5 * sin(ang * 3.0 + up * 5.0 - lv.t * 9.0), 2.0);
+    return vec4(if inside { exp(0.0 - pow((radial - wall) / (wall * 0.22 + 0.03), 2.0)) * streaks } else { 0.0 }, q.x, q.y, q.z);
+}
+
+/// Where a ray passes through an upright cylinder about `c`, `r` across
+/// (y below x: it misses).
+fn upright_span(from: Vec3, dir: Vec3, c: Vec3, r: Float) -> Vec2 {
+    let o = vec2(from.x - c.x, from.z - c.z);
+    let d = vec2(dir.x, dir.z);
+    let a = dot(d, d);
+    if a < 0.000001 { return if dot(o, o) < r * r { vec2(0.0, 100000.0) } else { vec2(1.0, -1.0) }; }
+    let b = dot(o, d);
+    let h = b * b - a * (dot(o, o) - r * r);
+    if h < 0.0 { return vec2(1.0, -1.0); }
+    let s = sqrt(h);
+    return vec2(max((0.0 - b - s) / a, 0.0), (0.0 - b + s) / a);
+}
+
+/// A shell `size` across about `p`, met where the ray crosses it: bright
+/// as it is seen edge on, its grain moving over it; the far side dimmer.
+fn shell(from: Vec3, dir: Vec3, scene: Float, lv: Live, el: Element) -> Glow {
+    let r = max(lv.size * 0.5, 0.05);
+    let o = from - lv.p;
+    let b = dot(o, dir);
+    let h = b * b - (dot(o, o) - r * r);
+    if h < 0.0 { return no_glow(); }
+    let sq = sqrt(h);
+    let fl = flicker_of(el, lv.t, lv.seed);
+    let lit = loop 2 with acc = vec3(0.0, 0.0, 0.0) {
+        let t = if index() == 0 { 0.0 - b - sq } else { 0.0 - b + sq };
+        if t < 0.0 || t > scene { acc } else {
+            let x = from + dir * t;
+            let n = (x - lv.p) / r;
+            let edge = pow(1.0 - abs(dot(n, dir)), 2.5);
+            let grain = grain_of(el, n * 1.5, lv.t, lv.seed);
+            let hexes = 0.5 + 0.5 * grain;
+            acc + ramp(el, 0.6 + 0.4 * edge, lv.tint) * (edge * 1.6 + hexes * 0.25 + 0.05) * (if index() == 0 { 1.0 } else { 0.45 })
+        }
+    };
+    return Glow { light: lit * el.glow * lv.shine * fl * 0.6, through: 1.0, near: 100000.0 };
+}
+
+/// A body marched through, from the ray's entry into its bounds to the
+/// nearer of its exit and the picture; the first step shifted by `jitter`
+/// (0 to 1, a pixel's own), so the steps' slices blur into grain.
+fn body(from: Vec3, dir: Vec3, scene: Float, lv: Live, el: Element, jitter: Float) -> Glow {
+    let round = sphere_span(from, dir, lv.bound.xyz, lv.bound.w);
+    let upright = (lv.form == form_pillar() && lv.count <= 1) || lv.form == form_aura() || lv.form == form_funnel();
+    let wall = lv.form == form_pillar() && lv.count > 1;
+    let wide = if lv.form == form_funnel() { lv.size * 0.6 + 0.3 } else { lv.size * 0.5 + 0.1 };
+    // A wall is marched only through the box it stands in.
+    let across = normalize(vec3(lv.way.z, 0.0, 0.0 - lv.way.x));
+    let along = normalize(vec3(lv.way.x, 0.0, lv.way.z));
+    let tall = max(lv.reach, lv.size);
+    let column = if upright { upright_span(from, dir, lv.p, wide) }
+        else if wall { box_span(from, dir, lv.p + vec3(0.0, tall * 0.5, 0.0), across, along, vec3(lv.spread * 0.5 + wide, tall * 0.5 + 0.1, wide)) }
+        else { vec2(0.0, 100000.0) };
+    let span = vec2(max(round.x, column.x), min(round.y, column.y));
+    let far = min(span.y, scene);
+    if far <= span.x { return no_glow(); }
+    if lv.form == form_shell() { return shell(from, dir, scene, lv, el); }
+    // A thin beam is a line of light: drawn, not marched.
+    if lv.form == form_beam() && lv.size < 0.3 {
+        let rs = ray_segment(from, dir, lv.p, lv.q);
+        if rs.y > scene { return no_glow(); }
+        let w = max(lv.size * 0.5, 0.01);
+        let flow = 0.75 + 0.25 * sin(length(from + dir * rs.y - lv.p) * 6.0 - lv.t * 20.0);
+        let m = (exp(0.0 - pow(rs.x / w, 2.0)) * 3.0 + exp(0.0 - pow(rs.x / (w * 5.0), 2.0)) * 0.5) * flow;
+        return Glow { light: ramp(el, 0.9, lv.tint) * m * el.glow * lv.shine * flicker_of(el, lv.t, lv.seed), through: 1.0, near: 100000.0 };
+    }
+    let step = (far - span.x) / 18.0;
+    let fl = flicker_of(el, lv.t, lv.seed);
+    return loop 18 with g = no_glow() {
+        let x = from + dir * (span.x + (float(index()) + jitter) * step);
+        let hq = body_heat(lv, x);
+        if hq.x <= 0.001 { g } else {
+            let n = grain_of(el, hq.yzw, lv.t, lv.seed);
+            let m = matter(el, hq.x, n, lv.shine * fl, lv.tint, lv.size * 0.5);
+            Glow { light: g.light + m.xyz * step * g.through * 7.0, through: g.through * exp(0.0 - m.w * step * 3.0), near: if m.w * step > 0.02 { min(g.near, span.x + float(index()) * step) } else { g.near } }
+        }
+    };
+}
+
+/// The mark a burst leaves on the ground about `p`, its front running out
+/// with `age`, and a flash at its heart as it begins: as the element
+/// marks it, a ring of light, cracks (glowing as the element gives light),
+/// frost, ripples, or a scorch.
+fn wave(from: Vec3, dir: Vec3, scene: Float, lv: Live, el: Element) -> Glow {
+    let r = lv.size;
+    let front = r * (0.15 + 0.85 * sqrt(lv.age));
+    let fl = on_floor(from, dir, scene, lv.p, r * 1.3);
+    let ray = ray_segment(from, dir, lv.p + vec3(0.0, 0.5, 0.0), lv.p + vec3(0.0, 0.5, 0.0));
+    let flash = if ray.y < scene { exp(0.0 - pow(ray.x / (r * 0.4), 2.0)) * pow(1.0 - smoothstep(0.0, 0.25, lv.age), 2.0) * 1.2 } else { 0.0 };
+    let kind = el.ground;
+    let fade = 1.0 - lv.age;
+    let ring = if fl.x >= 0.0 { exp(0.0 - pow((fl.x - front) / (0.06 * r + 0.04), 2.0)) * fade * 1.8 } else { 0.0 };
+    let d = fl.x;
+    let a = fl.y;
+    let inside = if fl.x >= 0.0 { 1.0 - smoothstep(front * 0.85, front, d) } else { 0.0 };
+    let mark = if fl.x < 0.0 { vec2(0.0, 0.0) }
+        else if kind == ground_cracks() {
+            // Nine cracks out from the heart, wandering as they go.
+            let k = 9.0;
+            let wander = (fbm2(vec2(d * 2.0, float(lv.seed)), 2, lv.seed) * 0.35) / max(d, 0.3);
+            let sector = 6.2832 / k;
+            let aa = a + wander;
+            let local = aa - floor(aa / sector) * sector - sector * 0.5;
+            let line = exp(0.0 - pow(local * d / (0.03 + 0.02 * d), 2.0)) * inside;
+            vec2(line * (0.6 + 0.4 * fade), line * 0.6)
+        }
+        else if kind == ground_frost() {
+            // Frost: thin veins grown out over the ground, a pale sheen under them.
+            let q = vec2(cos(a), sin(a)) * d;
+            let veins = ridged3(vec3(q.x * 0.9, 0.0, q.y * 0.9), 2, lv.seed);
+            let f = smoothstep(0.82, 0.95, veins) * inside;
+            vec2(f * 0.45 + inside * 0.04, 0.0)
+        }
+        else if kind == ground_ripples() {
+            let rip = loop 3 with acc = 0.0 {
+                let f2 = r * (0.15 + 0.85 * sqrt(clamp(lv.age - float(index()) * 0.12, 0.0, 1.0)));
+                acc + exp(0.0 - pow((d - f2) / (0.04 * r + 0.03), 2.0)) * (1.0 - float(index()) * 0.3)
+            };
+            vec2(rip * fade, 0.0)
+        }
+        else if kind == ground_scorch() {
+            let burnt = inside * (0.6 + 0.4 * fbm2(vec2(cos(a), sin(a)) * d * 3.0, 2, lv.seed));
+            let edge = exp(0.0 - pow((d - front * 0.9) / (0.05 * r + 0.03), 2.0)) * fade;
+            vec2(edge, burnt * 0.6)
+        }
+        else { vec2(0.0, 0.0) };
+    let glow_of = if kind == ground_ring() { ring } else { mark.x + ring * 0.35 };
+    let light = ramp(el, 0.7, lv.tint) * (glow_of * el.glow + flash) * lv.shine;
+    let dim = clamp(mark.y + el.dark * ring * 0.4, 0.0, 0.85);
+    return Glow { light: light * (1.0 - el.dark * 0.7), through: 1.0 - dim, near: 100000.0 };
+}
+
+/// A circle written on the ground about `p`: two rings, `count` marks
+/// between them and a star of chords, turning; risen in and faded out.
+fn sigil(from: Vec3, dir: Vec3, scene: Float, lv: Live, el: Element) -> Glow {
+    let r = lv.size * 0.5;
+    let fl = on_floor(from, dir, scene, lv.p, r * 1.15);
+    if fl.x < 0.0 { return no_glow(); }
+    let life = smoothstep(0.0, 0.15, lv.age) * (1.0 - smoothstep(0.8, 1.0, lv.age));
+    let d = fl.x / r;
+    let a = fl.y + lv.t * (0.4 + lv.a);
+    let w = 0.025;
+    let rings = exp(0.0 - pow((d - 1.0) / w, 2.0)) + exp(0.0 - pow((d - 0.82) / w, 2.0)) * 0.8 + exp(0.0 - pow((d - 0.3) / w, 2.0)) * 0.6;
+    let n = float(max(lv.count, 3));
+    let marks = if d > 0.83 && d < 0.99 { pow(0.5 + 0.5 * cos(a * n * 2.0), 18.0) * 0.9 } else { 0.0 };
+    // A star of chords: the lines between every other of n points.
+    let sector = 6.2832 / n;
+    let local = a - floor(a / sector) * sector - sector * 0.5;
+    let chord = abs(d * cos(local) - 0.82 * cos(sector)) ;
+    let star = if d < 0.82 { exp(0.0 - pow(chord / 0.02, 2.0)) * 0.7 } else { 0.0 };
+    let glow = (rings + marks + star) * life * lv.shine * el.glow;
+    return Glow { light: ramp(el, 0.8, lv.tint) * glow, through: 1.0, near: 100000.0 };
+}
+
+/// `count` motes about `p`, `spread` out: rising `reach` (a >= 0),
+/// falling from it (a < 0), or drawn in to `p` (b > 0); what they are is
+/// the element's: points of light, flakes glinting, embers flickering,
+/// bubbles, leaves, dust that dims.
+fn motes(from: Vec3, dir: Vec3, scene: Float, lv: Live, el: Element) -> Glow {
+    let n = min(lv.count, 48);
+    let w = max(lv.size, 0.01);
+    let kind = el.specks;
+    let frame = int(floor(lv.t * 12.0));
+    let m = loop n with acc = 0.0 {
+        let i = index();
+        let ph = fract(lv.t * (0.35 + 0.3 * hash1(i, lv.seed + 9)) * max(abs(el.rise), 0.4) + hash1(i, lv.seed));
+        let ang = hash1(i, lv.seed + 3) * 6.2832 + lv.t * el.swirl;
+        let rr = lv.spread * sqrt(hash1(i, lv.seed + 5));
+        let sway = if kind == specks_leaves() || kind == specks_flakes() { vec3(sin(lv.t * 2.0 + float(i)) * 0.25, 0.0, 0.0) } else { vec3(0.0, 0.0, 0.0) };
+        let pos = sway + (if lv.b > 0.0 {
+            let k = 1.0 - ph;
+            lv.p + vec3(cos(ang + ph * 3.0) * lv.spread * k, (hash1(i, lv.seed + 7) - 0.3) * lv.reach * k, sin(ang + ph * 3.0) * lv.spread * k)
+        } else if lv.a < 0.0 {
+            lv.p + vec3(cos(ang) * rr, lv.reach * (1.0 - ph), sin(ang) * rr)
+        } else {
+            lv.p + vec3(cos(ang) * rr, lv.reach * ph, sin(ang) * rr)
+        });
+        let d = ray_segment(from, dir, pos, pos);
+        let fade = if lv.b > 0.0 { ph } else { sin(ph * 3.14159) };
+        let shape = if d.y >= scene { 0.0 }
+            else if kind == specks_flakes() {
+                // A flake: a point and a glinting cross about it.
+                let off = from + dir * d.y - pos;
+                let turn = lv.t * 2.0 + float(i);
+                let u = vec3(cos(turn), sin(turn), 0.0);
+                let a1 = abs(dot(off, u));
+                let a2 = abs(dot(off, vec3(0.0 - u.y, u.x, 0.0)));
+                exp(0.0 - pow(d.x / w, 2.0)) + exp(0.0 - pow(min(a1, a2) / (w * 0.25), 2.0)) * exp(0.0 - d.x / (w * 3.0)) * 0.8
+            }
+            else if kind == specks_embers() { exp(0.0 - pow(d.x / (w * 0.7), 2.0)) * (0.4 + 1.2 * hash1(i + frame * 13, lv.seed)) }
+            else if kind == specks_bubbles() { exp(0.0 - pow((d.x - w * 2.0) / (w * 0.5), 2.0)) }
+            else if kind == specks_leaves() { exp(0.0 - pow(d.x / (w * 1.2), 2.0)) * 0.6 }
+            else { exp(0.0 - pow(d.x / w, 2.0)) };
+        acc + shape * fade
+    };
+    let life = smoothstep(0.0, 0.1, lv.age) * (1.0 - smoothstep(0.85, 1.0, lv.age));
+    // Dust and leaves are things lit, not lights; dust dims what it is over.
+    let hue = if kind == specks_dust() { el.body * 0.3 } else if kind == specks_leaves() { el.body * 0.5 } else { ramp(el, 0.85, lv.tint) * el.glow * flicker_of(el, lv.t, lv.seed) };
+    let dim = if kind == specks_dust() { clamp(m * life * 0.5, 0.0, 0.8) } else { 0.0 };
+    return Glow { light: hue * m * life * lv.shine, through: 1.0 - dim, near: 100000.0 };
+}
+
+/// `count` small things flung out of `p` as `age` runs, `spread` their
+/// speed, falling by the element's weight: what they are is the
+/// element's: streaks of light, rocks, crackling arcs, bubbles rising,
+/// leaves fluttering, drops.
+fn sparks(from: Vec3, dir: Vec3, scene: Float, lv: Live, el: Element) -> Glow {
+    let n = min(lv.count, 48);
+    let tt = lv.age * max(lv.a, 0.4);
+    let kind = el.chips;
+    let frame = int(floor(lv.t * 24.0));
+    let sun = normalize(vec3(-0.4, 0.8, 0.45));
+    let rising = kind == chips_bubbles();
+    let heavy = if kind == chips_rocks() || kind == chips_drops() { 1.6 } else if kind == chips_leaves() { 0.12 } else { 1.0 };
+    let all = loop n with g = vec4(0.0, 0.0, 0.0, 1.0) {
+        let i = index();
+        let ang = hash1(i, lv.seed) * 6.2832;
+        let up = 0.2 + hash1(i, lv.seed + 3) * 0.9;
+        let sp = lv.spread * (0.4 + hash1(i, lv.seed + 5)) * (if rising { 0.3 } else { 1.0 });
+        let v = vec3(cos(ang) * sp, up * sp * 1.2, sin(ang) * sp);
+        let gy = if rising { 1.5 } else { 0.0 - 9.0 * el.fall * heavy };
+        let sway = if kind == chips_leaves() { vec3(sin(lv.t * 4.0 + float(i)), 0.0, cos(lv.t * 3.0 + float(i))) * 0.3 } else { vec3(0.0, 0.0, 0.0) };
+        let pos0 = lv.p + v * tt + vec3(0.0, gy * tt * tt * 0.5, 0.0) + sway;
+        let pos = vec3(pos0.x, max(pos0.y, lv.p.y - 1.0), pos0.z);
+        let vel = v + vec3(0.0, gy * tt, 0.0);
+        let fade = (1.0 - lv.age) * (0.5 + 0.5 * hash1(i, lv.seed + 7));
+        let w = lv.size * (0.5 + hash1(i, lv.seed + 9));
+        if kind == chips_rocks() {
+            // A rock: a small lit ball of the element's body, hiding what is behind.
+            let sp2 = sphere_span(from, dir, pos, w * 1.4);
+            if sp2.y < sp2.x || sp2.x > scene || sp2.x > g.w * 100000.0 { g } else {
+                let nrm = normalize(from + dir * sp2.x - pos);
+                let lit = el.body * (0.25 + 0.75 * max(dot(nrm, sun), 0.0)) * 0.9;
+                vec4(g.x + lit.x * g.w, g.y + lit.y * g.w, g.z + lit.z * g.w, 0.0)
+            }
+        } else if kind == chips_arcs() {
+            // An arc: a short jagged crack of light, struck anew each frame.
+            let o = vec3(hash1(i + frame * 7, lv.seed) - 0.5, hash1(i + frame * 7, lv.seed + 1) - 0.5, hash1(i + frame * 7, lv.seed + 2) - 0.5) * 0.7;
+            let a0 = pos;
+            let a1 = pos + o * 0.5 + vec3(0.0, 0.05, 0.0);
+            let a2 = pos + o;
+            let m = (stroke(from, dir, scene, a0, a1, w * 0.3) + stroke(from, dir, scene, a1, a2, w * 0.3)) * fade * 0.4;
+            let c = ramp(el, 0.95, lv.tint) * m;
+            vec4(g.x + c.x * g.w, g.y + c.y * g.w, g.z + c.z * g.w, g.w)
+        } else if kind == chips_bubbles() {
+            let d = ray_segment(from, dir, pos, pos);
+            let rr = w * 2.5;
+            let m = if d.y < scene { exp(0.0 - pow((d.x - rr) / (rr * 0.25 + 0.003), 2.0)) * fade } else { 0.0 };
+            let c = ramp(el, 0.8, lv.tint) * m * 0.8;
+            vec4(g.x + c.x * g.w, g.y + c.y * g.w, g.z + c.z * g.w, g.w)
+        } else if kind == chips_leaves() {
+            // A leaf: a small flat thing turning as it flutters, lit, no glow about it.
+            let d = ray_segment(from, dir, pos, pos + vec3(cos(lv.t * 5.0 + float(i)), 0.3, sin(lv.t * 5.0 + float(i))) * w * 1.6);
+            let m = if d.y < scene { exp(0.0 - pow(d.x / (w * 0.9), 2.0)) * fade } else { 0.0 };
+            let c = el.body * m * 0.9;
+            vec4(g.x + c.x * g.w, g.y + c.y * g.w, g.z + c.z * g.w, g.w * (1.0 - m * 0.5))
+        } else {
+            // A streak along its flight; drops longer.
+            let stretch = if kind == chips_drops() { 0.06 } else { 0.035 };
+            let tail = pos - vel * stretch;
+            let m = stroke(from, dir, scene, tail, pos, w * 0.5) * fade;
+            let hue = ramp(el, 0.7, lv.tint) * 0.35;
+            let c = hue * m;
+            vec4(g.x + c.x * g.w, g.y + c.y * g.w, g.z + c.z * g.w, g.w)
+        }
+    };
+    let lit_things = kind == chips_rocks() || kind == chips_leaves();
+    return Glow { light: vec3(all.x, all.y, all.z) * lv.shine * (if lit_things { 1.0 } else { el.glow * flicker_of(el, lv.t, lv.seed) }), through: all.w, near: 100000.0 };
+}
+
+/// Where shard `i` of a layer stands, the way it leans, and how long it
+/// is now (xyz, w the length; the length's sign is its own).
+/// With `b` above nought the shards stand in a line across the way (a
+/// wall), else about `p`.
+fn shard_base(lv: Live, i: Int) -> Vec4 {
+    let grown = smoothstep(0.0, 0.2, lv.age) * (1.0 - smoothstep(0.8, 1.0, lv.age));
+    if lv.b > 0.0 {
+        let across = normalize(vec3(lv.way.z, 0.0, 0.0 - lv.way.x));
+        let s = (float(i) + 0.5) / float(max(lv.count, 1)) - 0.5 + (hash1(i, lv.seed + 3) - 0.5) * 0.08;
+        let at_ = lv.p + across * (s * lv.spread) + lv.way * ((hash1(i, lv.seed + 4) - 0.5) * 0.5);
+        let len = lv.reach * (0.65 + 0.35 * hash1(i, lv.seed + 5)) * smoothstep(0.0, 0.15, lv.age - abs(s) * 0.15) * (1.0 - smoothstep(0.8, 1.0, lv.age));
+        return vec4(at_.x, at_.y, at_.z, len);
+    }
+    let ang = hash1(i, lv.seed) * 6.2832;
+    let rr = if i == 0 { 0.0 } else { lv.spread * (0.35 + 0.65 * hash1(i, lv.seed + 3)) };
+    let len = lv.reach * (if i == 0 { 1.0 } else { 0.4 + 0.4 * hash1(i, lv.seed + 5) }) * grown;
+    return vec4(lv.p.x + cos(ang) * rr, lv.p.y, lv.p.z + sin(ang) * rr, len);
+}
+
+fn shard_lean(lv: Live, i: Int) -> Vec3 {
+    if lv.b > 0.0 {
+        let tilt = vec3(hash1(i, lv.seed + 6) - 0.5, 0.0, hash1(i, lv.seed + 7) - 0.5) * 0.35;
+        return normalize(vec3(0.0, 1.0, 0.0) + tilt);
+    }
+    let ang = hash1(i, lv.seed) * 6.2832;
+    let rr = if i == 0 { 0.0 } else { lv.spread * (0.35 + 0.65 * hash1(i, lv.seed + 3)) };
+    let lean = 0.12 + min(rr, 1.6) * 0.35;
+    return normalize(vec3(cos(ang) * lean, 1.0, sin(ang) * lean));
+}
+
+/// How far `x` is from the nearest of the layer's crystals the ray passes
+/// (`mask`, a bit each).
+fn shards_distance(lv: Live, x: Vec3, n: Int, mask: Int) -> Float {
+    return loop n with d = 100000.0 {
+        let i = index();
+        let b = shard_base(lv, i);
+        if ((mask >> i) & 1) == 0 { d } else {
+        let w = lv.size * 0.5 * (if i == 0 || lv.b > 0.0 { 1.0 } else { 0.6 }) * clamp(b.w / max(lv.reach * 0.3, 0.01), 0.0, 1.0);
+        // Half in the ground: its upper half rises to a point.
+        if b.w < 0.01 { d } else { min(d, crystal(x - b.xyz, shard_lean(lv, i), b.w * 2.0, w)) }
+        }
+    };
+}
+
+/// `count` crystals about `p`, `spread` out: out of the ground, grown by
+/// the life's first fifth and sinking in its last; solid, lit, their
+/// edges bright as the element gives light (ice glints, stone does not).
+fn shards(from: Vec3, dir: Vec3, scene: Float, lv: Live, el: Element) -> Glow {
+    let n = min(lv.count, 16);
+    let span = sphere_span(from, dir, lv.bound.xyz, lv.bound.w);
+    let far = min(span.y, scene);
+    if far <= span.x { return no_glow(); }
+    // Only the crystals whose spheres the ray passes are traced.
+    let mask = loop n with m = 0 {
+        let b = shard_base(lv, index());
+        let mid = b.xyz + shard_lean(lv, index()) * (b.w * 0.5);
+        let sp = sphere_span(from, dir, mid, b.w * 0.5 + lv.size * 0.5);
+        if b.w > 0.01 && sp.y >= sp.x && sp.x < scene { m | (1 << index()) } else { m }
+    };
+    if mask == 0 { return no_glow(); }
+    let hit = loop 28 with t = vec2(span.x, -1.0) {
+        if t.y != -1.0 { t } else {
+            let d = shards_distance(lv, from + dir * t.x, n, mask);
+            if d < 0.004 { vec2(t.x, t.x) } else if t.x > far { vec2(t.x, -2.0) } else { vec2(t.x + max(d * 1.15, 0.012), -1.0) }
+        }
+    };
+    if hit.y < 0.0 { return no_glow(); }
+    let x = from + dir * hit.y;
+    let e = 0.01;
+    let nrm = normalize(vec3(
+        shards_distance(lv, x + vec3(e, 0.0, 0.0), n, mask) - shards_distance(lv, x - vec3(e, 0.0, 0.0), n, mask),
+        shards_distance(lv, x + vec3(0.0, e, 0.0), n, mask) - shards_distance(lv, x - vec3(0.0, e, 0.0), n, mask),
+        shards_distance(lv, x + vec3(0.0, 0.0, e), n, mask) - shards_distance(lv, x - vec3(0.0, 0.0, e), n, mask)));
+    let sun = normalize(vec3(-0.4, 0.8, 0.45));
+    let lit = 0.3 + 0.7 * max(dot(nrm, sun), 0.0);
+    let rim = pow(1.0 - abs(dot(nrm, dir)), 3.0);
+    let spec = pow(max(dot(reflect(dir, nrm), sun), 0.0), 24.0);
+    let col = el.body * lit * (0.55 + 0.25 * el.smoke) + ramp(el, 0.9, lv.tint) * (rim * 1.4 + spec * 1.2 + 0.15) * el.glow * lv.shine;
+    return Glow { light: col, through: 0.0, near: hit.y };
+}
+
+/// `count` jagged strokes from `p` to `q`, thrown aside as the element is
+/// jagged, struck anew 24 times a second, bright as they fall and gone.
+fn bolts(from: Vec3, dir: Vec3, scene: Float, lv: Live, el: Element) -> Glow {
+    let n = min(max(lv.count, 1), 6);
+    let frame = int(floor(lv.t * 24.0));
+    let wild = el.jag * length(lv.q - lv.p) * 0.045 + lv.spread;
+    let m = loop n with acc = 0.0 {
+        let k = index();
+        let seed = lv.seed + k * 31;
+        // The forks leave the main stroke part way down.
+        let top = if k == 0 { lv.p } else { mix(lv.p, lv.q, 0.25 + 0.2 * hash1(k, seed)) };
+        let end = if k == 0 { lv.q } else { mix(lv.p, lv.q, 0.75) + vec3(hash1(k, seed + 1) - 0.5, 0.0, hash1(k, seed + 2) - 0.5) * 2.5 };
+        let line = loop 14 with s = 0.0 {
+            let a = jag(top, end, index(), 14, frame, seed, wild);
+            let b = jag(top, end, index() + 1, 14, frame, seed, wild);
+            s + stroke(from, dir, scene, a, b, lv.size * 0.12)
+        };
+        acc + line * (if k == 0 { 1.0 } else { 0.45 })
+    };
+    let strike = flicker_of(el, lv.t, lv.seed) * (1.0 - lv.age * 0.6);
+    return Glow { light: ramp(el, 0.95, lv.tint) * m * 0.12 * lv.shine * el.glow * strike, through: 1.0, near: 100000.0 };
+}
+
+/// A blade's arc about `p`: `size` its radius, swept through `a` radians
+/// as the life's first half runs, tilted `b` from level; its edge
+/// brightest at the head, a fading wake behind.
+fn slash(from: Vec3, dir: Vec3, scene: Float, lv: Live, el: Element) -> Glow {
+    let sweep = smoothstep(0.0, 0.45, lv.age);
+    let fade = 1.0 - smoothstep(0.3, 1.0, lv.age);
+    let side = normalize(cross(lv.way, vec3(0.0, 1.0, 0.0)));
+    let up = normalize(vec3(0.0, cos(lv.b), 0.0) + side * sin(lv.b));
+    let across = normalize(cross(up, lv.way));
+    let turn = lv.a;
+    // Enough pieces that a whole turn is round.
+    let pieces = if abs(turn) > 3.5 { 36 } else { 14 };
+    let m = loop pieces with acc = 0.0 {
+        let i = index();
+        let s0 = float(i) / float(pieces);
+        let s1 = float(i + 1) / float(pieces);
+        if s1 > sweep { acc } else {
+            let a0 = (s0 - 0.5) * turn;
+            let a1 = (s1 - 0.5) * turn;
+            let p0 = lv.p + (lv.way * cos(a0) + across * sin(a0)) * lv.size;
+            let p1 = lv.p + (lv.way * cos(a1) + across * sin(a1)) * lv.size;
+            let head = 1.0 - clamp((sweep - s1) * 3.0, 0.0, 1.0) * 0.75;
+            let rs = ray_segment(from, dir, p0, p1);
+            let w = 0.02 + 0.035 * head;
+            acc + (if rs.y < scene { exp(0.0 - pow(rs.x / w, 2.0)) * 4.0 + exp(0.0 - pow(rs.x / (w * 3.0), 2.0)) * 0.4 } else { 0.0 }) * head
+        }
+    };
+    return Glow { light: ramp(el, 0.9, lv.tint) * m * 0.9 * fade * lv.shine * el.glow, through: 1.0, near: 100000.0 };
+}
+
+/// A sign over a head at `p`: stars turning (a 0), sleep's z rising (1),
+/// bubbles rising (2), a ring of hearts or swirls (3).
+fn glyph(from: Vec3, dir: Vec3, scene: Float, lv: Live, el: Element) -> Glow {
+    let kind = int(lv.a + 0.5);
+    let top = lv.p + vec3(0.0, 1.05, 0.0);
+    let n = if kind == 1 { 3 } else { 5 };
+    let m = loop n with acc = 0.0 {
+        let i = index();
+        let ph = float(i) / float(n);
+        let pos = if kind == 1 {
+            let rise = fract(lv.t * 0.5 + ph);
+            top + vec3(rise * 0.3, rise * 0.6, 0.0)
+        } else if kind == 2 {
+            let rise = fract(lv.t * 0.7 + ph + hash1(i, lv.seed) * 0.3);
+            top + vec3(cos(ph * 6.2832) * 0.18, rise * 0.5 - 0.3, sin(ph * 6.2832) * 0.18)
+        } else {
+            let a = ph * 6.2832 + lv.t * 3.0;
+            top + vec3(cos(a) * 0.3, 0.05 * sin(a * 2.0), sin(a) * 0.3)
+        };
+        let d = ray_segment(from, dir, pos, pos);
+        let w = lv.size * (if kind == 1 { 0.6 + fract(lv.t * 0.5 + ph) } else { 1.0 });
+        let shape = if kind == 1 {
+            // A z: its three strokes, small, about the mote.
+            let s = w * 0.12;
+            stroke(from, dir, scene, pos + vec3(0.0 - s, s, 0.0), pos + vec3(s, s, 0.0), s * 0.18)
+                + stroke(from, dir, scene, pos + vec3(s, s, 0.0), pos + vec3(0.0 - s, 0.0 - s, 0.0), s * 0.18)
+                + stroke(from, dir, scene, pos + vec3(0.0 - s, 0.0 - s, 0.0), pos + vec3(s, 0.0 - s, 0.0), s * 0.18)
+        } else if d.y < scene { exp(0.0 - pow(d.x / (w * 0.4), 2.0)) * 2.0 + exp(0.0 - pow(d.x / (w * 1.5), 2.0)) * 0.3 } else { 0.0 };
+        acc + shape
+    };
+    return Glow { light: ramp(el, 0.9, lv.tint) * m * 0.25 * lv.shine * el.glow, through: 1.0, near: 100000.0 };
+}
+
+/// `count` missiles from `p` to `q`, each `spread` aside of the others,
+/// each a little after the one before (`a`, a share of the flight): solid
+/// shafts in the element's body, glowing as it gives light.
+fn darts(from: Vec3, dir: Vec3, scene: Float, lv: Live, el: Element) -> Glow {
+    let n = min(max(lv.count, 1), 16);
+    let lag = clamp(lv.a, 0.0, 1.0);
+    let flight = 1.0 / (1.0 + lag * float(n - 1));
+    let way = normalize(lv.q - lv.p + vec3(0.0, 0.0001, 0.0));
+    return loop n with g = no_glow() {
+        let i = index();
+        let s = clamp((lv.age - lag * flight * float(i)) / flight, 0.0, 1.0);
+        if s <= 0.0 || s >= 1.0 { g } else {
+            let off0 = vec3(hash1(i, lv.seed) - 0.5, (hash1(i, lv.seed + 1) - 0.5) * 0.4, hash1(i, lv.seed + 2) - 0.5) * lv.spread;
+            let off1 = vec3(hash1(i, lv.seed + 3) - 0.5, 0.0, hash1(i, lv.seed + 4) - 0.5) * lv.spread;
+            let a0 = lv.p + off0 * 0.4;
+            let b0 = lv.q + off1;
+            let lift = vec3(0.0, sin(s * 3.14159) * lv.b, 0.0);
+            let at_ = mix(a0, b0, s) + lift;
+            let ahead = normalize(b0 - a0 + vec3(0.0, cos(s * 3.14159) * lv.b * 3.0, 0.0));
+            behind(g, shaft(from, dir, scene, at_, ahead, max(lv.reach, 0.3), lv.size * 0.5, el.body * 0.6 + ramp(el, 0.6, lv.tint) * 0.2, ramp(el, 0.9, lv.tint) * el.glow * lv.shine * 0.25))
+        }
+    };
+}

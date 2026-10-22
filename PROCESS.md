@@ -100,7 +100,7 @@ until a release spans platforms. Commit as the repository's configured
 identity. The conversation may be in any language; everything written into
 the repository is English.
 
-Resolve a conflict by understanding both intended behaviours, then verify the
+Resolve a conflict by understanding both intended behaviors, then verify the
 combined result. Never take one side blindly.
 
 Releases use semantic versioning, are tagged within release authorization, and
@@ -184,7 +184,7 @@ How the work is done, verified and committed is this document's, not the
 handoff's.
 
 Replace what is stale; never append a diary. Git records history, code and
-tests establish behaviour, the other documents hold contracts — the handoff
+tests establish behavior, the other documents hold contracts — the handoff
 holds only what none of them can supply. Keep failures or environment
 constraints there only while the next session needs them.
 

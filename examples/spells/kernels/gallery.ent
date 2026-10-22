@@ -1,0 +1,170 @@
+// The gallery: every spell at once, each on its own ground in a grid,
+// cast again each time it ends, its name over it. The right button
+// turns the eye, the wheel brings it near, the arrows move it over the
+// grid, Q and E turn the page (thirty spells a page); `element` and
+// `tier` draw every spell in one element or tier.
+use "../../../packages/effects.entpkg";
+use "../../../packages/text.entpkg";
+use "../../../packages/ui.entpkg";
+use "stage.ent";
+
+/// How many grounds to a row, and how far apart they are.
+fn gallery_columns() -> Int { return 6; }
+fn gallery_gap() -> Vec2 { return vec2(13.0, 11.0); }
+
+/// The middle of spell `i`'s ground.
+fn ground_of(i: Int) -> Vec3 {
+    let g = gallery_gap();
+    return vec3(float(i % gallery_columns()) * g.x, 0.0, float(i / gallery_columns()) * g.y);
+}
+
+struct Look { yaw: Float; pitch: Float; dist: Float; at: Vec3; buttons: Int; pointer: Vec2; last: Float; page: Int; keys: Int; }
+
+/// How many spells a page shows.
+fn page_size() -> Int { return 30; }
+type Looks = Rows<Look>;
+
+kernel gallery.start@1 {
+    requires { field.write; }
+    output result: Looks;
+    compute {
+        let mid = vec3(float(gallery_columns() - 1) * gallery_gap().x * 0.5, 0.0, 2.0 * gallery_gap().y);
+        return Look { yaw: 0.0, pitch: 0.75, dist: 70.0, at: mid, buttons: 0, pointer: vec2(0.0, 0.0), last: -1.0, page: 0, keys: 0 };
+    }
+}
+
+kernel gallery.look@1 {
+    requires { field.read; field.write; input.read; time.read; }
+    input previous: Looks;
+    input spells: Spells;
+    output result: Looks;
+    compute {
+        let w = sample(previous);
+        let keys = (if key(81) { 1 } else { 0 }) | (if key(69) { 2 } else { 0 });
+        let edges = keys & (-1 ^ w.keys);
+        let pages = (count(spells) + page_size() - 1) / page_size();
+        let page = if (edges & 1) == 1 { (w.page + pages - 1) % pages } else if (edges & 2) == 2 { (w.page + 1) % pages } else { w.page };
+        let dt = if w.last < 0.0 { 0.0 } else { clamp(time() - w.last, 0.0, 0.1) };
+        let right = if button(1) { 1 } else { 0 };
+        let moved = (pointer() - w.pointer) / max(scale(), 1.0);
+        let turning = right == 1 && (w.buttons & 2) == 2;
+        let ahead = vec3(0.0 - sin(w.yaw), 0.0, 0.0 - cos(w.yaw));
+        let side = vec3(cos(w.yaw), 0.0, 0.0 - sin(w.yaw));
+        let speed = w.dist * 0.8 * dt;
+        let go = ahead * ((if key(38) { 1.0 } else { 0.0 }) - (if key(40) { 1.0 } else { 0.0 })) + side * ((if key(39) { 1.0 } else { 0.0 }) - (if key(37) { 1.0 } else { 0.0 }));
+        return Look { yaw: if turning { w.yaw - moved.x * 0.006 } else { w.yaw },
+            pitch: if turning { clamp(w.pitch + moved.y * 0.004, 0.1, 1.4) } else { w.pitch },
+            dist: clamp(w.dist * exp(0.0 - wheel().y * 0.08), 6.0, 160.0),
+            at: w.at + go * speed, buttons: right << 1, pointer: pointer(), last: time(), page: page, keys: keys };
+    }
+}
+
+kernel gallery.eye@1 {
+    requires { field.read; field.write; }
+    input look: Looks;
+    output result: Eyes;
+    compute {
+        let w = at(look, 0);
+        let target = w.at + vec3(0.0, 1.0, 0.0);
+        return eye_looking(target + vec3(sin(w.yaw) * cos(w.pitch), sin(w.pitch), cos(w.yaw) * cos(w.pitch)) * w.dist, target, 1.3);
+    }
+}
+
+kernel gallery.casts@1 {
+    requires { field.read; field.write; time.read; }
+    param element: Int = -1;
+    param tier: Int = 0;
+    input spells: Spells;
+    input effects: Effects;
+    input look: Looks;
+    output result: Casts;
+    compute {
+        let i = element();
+        let k = at(look, 0).page * page_size() + i;
+        let s = at(spells, min(k, count(spells) - 1));
+        let len = shown_for(at(effects, s.effect));
+        // Each spell begins its round a little after the one before.
+        let now = time() + float(i) * 0.37;
+        let g = ground_of(i);
+        let shown = Cast { on: 1, effect: s.effect, element: if element >= 0 { element } else { s.element },
+            tier: if tier > 0 { tier } else { s.tier }, seed: i + 1,
+            from: g + caster_at(), to: g + target_at(), start: floor(now / len) * len, now: now, hide: 0 };
+        return Cast { ..shown, on: if k < count(spells) { 1 } else { 0 } };
+    }
+}
+
+/// The grounds: a black floor faintly ruled in meters, each ground's
+/// square a little lighter, a disc where each caster and target stands.
+kernel gallery.view@1 {
+    requires { field.read; field.write; }
+    input eye: Eyes;
+    param spells: Int = 30;
+    input look: Looks;
+    input all: Spells;
+    output result: Image;
+    compute {
+        let e = at(eye, 0);
+        let dir = eye_ray(e, coord() + 0.5, domain());
+        let sky = vec3(0.0, 0.0, 0.0);
+        if dir.y > -0.0001 { return vec4(sky.x, sky.y, sky.z, 0.0); }
+        let t = (0.0 - e.from.y) / dir.y;
+        let p = e.from + dir * t;
+        let g = gallery_gap();
+        let col = int(floor(p.x / g.x + 0.5));
+        let row = int(floor(p.z / g.y + 0.5));
+        let i = row * gallery_columns() + col;
+        let on_page = min(spells, count(all) - at(look, 0).page * page_size());
+        let mine = col >= 0 && col < gallery_columns() && row >= 0 && i < on_page;
+        let local = p - ground_of(clamp(i, 0, spells - 1));
+        let square = mine && abs(local.x) < g.x * 0.45 && abs(local.z) < g.y * 0.42;
+        let stand = mine && (length(vec2(local.x - caster_at().x, local.z)) < 0.45 || length(vec2(local.x - target_at().x, local.z)) < 0.45);
+        let cell = abs(fract(p.xz + 0.5) - 0.5);
+        let line = 1.0 - smoothstep(0.0, 0.02 * (1.0 + t * 0.05), min(cell.x, cell.y));
+        let fog = exp(0.0 - t * 0.008);
+        let ground = if stand { vec3(0.12, 0.12, 0.14) } else if square { vec3(0.025, 0.025, 0.03) } else { vec3(0.0, 0.0, 0.0) };
+        let shade = mix(sky, ground + vec3(0.02, 0.02, 0.025) * line, fog);
+        return vec4(shade.x, shade.y, shade.z, 1.0 + t);
+    }
+}
+
+/// Each spell's name over its ground, seen where it is.
+kernel gallery.names@1 {
+    requires { field.read; field.write; input.read; }
+    input picture: Image;
+    input eye: Eyes;
+    input names: Rows<Int>;
+    input font: Atlas;
+    input look: Looks;
+    input spells: Spells;
+    output result: Image;
+    compute {
+        let seen = sample(picture);
+        let e = at(eye, 0);
+        let full = domain();
+        let px = coord() + 0.5;
+        let fs = 2.0 * max(scale(), 1.0);
+        let first = at(look, 0).page * page_size();
+        let shown = min(page_size(), count(spells) - first);
+        let ink = loop shown with acc = 0.0 {
+            let i = index();
+            let p = ground_of(i) + vec3(0.0, 0.0, 0.0 - gallery_gap().y * 0.42);
+            let d = p - e.from;
+            let ahead = dot(d, e.fwd);
+            if acc > 0.5 || ahead < 0.5 { acc } else {
+                let k = e.focal / ahead;
+                let at_ = vec2(full.x * 0.5 + dot(d, e.right) * k * full.y, full.y * 0.5 - dot(d, e.up) * k * full.y);
+                let local = (px - at_) / fs + vec2(48.0, 0.0);
+                if local.x < 0.0 || local.x >= 96.0 || local.y < 0.0 || local.y >= 8.0 { acc } else {
+                    let j = int(floor(local.x / 6.0));
+                    let code = name_byte(names, first + i, j);
+                    let glyph = match code { 32..=126 => code - 32, _ => 31 };
+                    let lx = local.x - float(j) * 6.0;
+                    let texel = vec2(float(glyph % 16) * 6.0 + floor(lx), float(glyph / 16) * 8.0 + floor(local.y));
+                    if code != 32 && at(font, texel) > 0.5 { 1.0 } else { acc }
+                }
+            }
+        };
+        let c = mix(seen.xyz, vec3(0.92, 0.88, 0.75), ink);
+        return vec4(c.x, c.y, c.z, seen.w);
+    }
+}

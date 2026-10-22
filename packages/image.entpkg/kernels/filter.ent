@@ -1,7 +1,7 @@
 // Filters: each output pixel from the source pixels round it. A Kernel
 // that reads its source at another size maps the source over its own
 // domain, so one that writes fewer pixels than it reads also shrinks.
-use "colour.ent";
+use "color.ent";
 
 /// A running weighted sum.
 struct Weighed { sum: Vec4; weight: Float; }
@@ -48,7 +48,7 @@ kernel image.shrink@1 {
     }
 }
 
-/// Any convolution: `weights` holds n by n numbers, row by row, centred
+/// Any convolution: `weights` holds n by n numbers, row by row, centered
 /// on the pixel (n odd). The weights are used as given, not normalized.
 kernel image.convolve@1 {
     requires { field.read; field.write; }
@@ -97,7 +97,7 @@ fn sobel(source: Image, c: Vec2) -> Vec2 {
     return vec2((d + 2.0 * f + k) - (a + 2.0 * e + g), (g + 2.0 * h + k) - (a + 2.0 * b + d));
 }
 
-/// Edges: the strength of the Sobel gradient, grey, opaque.
+/// Edges: the strength of the Sobel gradient, gray, opaque.
 kernel image.edges@1 {
     requires { field.read; field.write; }
     input source: Image;

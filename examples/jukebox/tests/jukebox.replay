@@ -1,0 +1,28 @@
+scene ../scene.esn
+window 320 40
+
+# The first block: the clock paced to the frame, the words written over
+# the dark band in the font's color.
+frame 0.0
+expect count music.result = 1600
+expect juke.result[0].mood = 0
+expect 7 7 = 0.900 0.850 0.700
+expect 5 5 = 0.020 0.020 0.030
+
+# Down a mood and right a style: the town, by the second band; the track
+# begins again from the frame it changed on.
+key 40 down
+frame 0.1
+key 40 up
+key 39 down
+frame 0.2
+key 39 up
+frame 0.3
+expect juke.result[0].mood = 1
+expect juke.result[0].style = 1
+expect track.result[0].mood = 1
+
+# Two seconds into the town's song it is sounding.
+frame 2.3
+expect music.result[400] = 0.00821 0.01435 0.0001
+expect music.result[1000] = -0.02772 -0.02735 0.0001

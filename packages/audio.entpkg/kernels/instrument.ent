@@ -1,0 +1,55 @@
+// The sounds a cue is made of, as functions of time: noise white and
+// smoothed, an envelope, a tone, a thud, a metal clang, a bell, a pluck,
+// a horn, a drum.
+use "random.entpkg";
+use "clock.ent";
+
+/// White noise, -1 to 1, at sample `n`.
+fn white(n: Long, s: Int) -> Float { return hash1(low_bits(n), s) * 2.0 - 1.0; }
+
+/// Noise smoothed between random values `x` apart: its pitch rises with
+/// how fast x runs.
+fn soft_noise(x: Float, s: Int) -> Float {
+    let i = floor(x);
+    let f = x - i;
+    return mix(hash1(int(i), s) * 2.0 - 1.0, hash1(int(i) + 1, s) * 2.0 - 1.0, f * f * (3.0 - 2.0 * f));
+}
+
+fn envelope(t: Float, a: Float, d: Float) -> Float { return if t < 0.0 { 0.0 } else if t < a { t / a } else { exp(-(t - a) / d) }; }
+
+fn tone(f: Float, t: Float) -> Float { return sin(tau() * fract(f * t)); }
+
+/// A thud: a low tone falling from `base` + 150 Hz to `base`.
+fn thud(t: Float, base: Float) -> Float {
+    if t < 0.0 { return 0.0; }
+    return sin(tau() * fract(base * t + 150.0 * (1.0 - exp(-t * 30.0)) / 30.0)) * exp(-t * 12.0);
+}
+
+/// A metal ring: a tone at `f` rung by one at `ratio` times it.
+fn clang(f: Float, ratio: Float, t: Float, d: Float) -> Float {
+    if t < 0.0 { return 0.0; }
+    return sin(tau() * fract(f * t) + 3.0 * exp(-t * 8.0) * sin(tau() * fract(f * ratio * t))) * exp(-t / d);
+}
+
+fn bell(f: Float, t: Float) -> Float {
+    if t < 0.0 { return 0.0; }
+    return sin(tau() * fract(f * t) + 1.2 * exp(-t * 4.0) * sin(tau() * fract(f * 2.76 * t))) * exp(-t * 4.0);
+}
+
+fn pluck(f: Float, t: Float) -> Float {
+    if t < 0.0 { return 0.0; }
+    return (tone(f, t) * exp(-t * 3.0) + tone(f * 2.0, t) * 0.5 * exp(-t * 6.0) + tone(f * 3.0, t) * 0.25 * exp(-t * 10.0)) * 0.5;
+}
+
+/// A horn's note: a few harmonics swelling in, held, let go at `len`.
+fn horn(f: Float, t: Float, len: Float) -> Float {
+    if t < 0.0 || t > len + 0.3 { return 0.0; }
+    let swell = smoothstep(0.0, 0.06, t) * (1.0 - smoothstep(len, len + 0.3, t));
+    return (tone(f, t) + tone(f * 2.0, t) * 0.5 + tone(f * 3.0, t) * 0.3 + tone(f * 4.0, t) * 0.12) * swell * 0.3;
+}
+
+/// A drum: a skin's low boom and the stick's slap.
+fn drum(t: Float, n: Long, base: Float) -> Float {
+    if t < 0.0 { return 0.0; }
+    return thud(t, base) + white(n, 7) * exp(-t * 45.0) * 0.35;
+}

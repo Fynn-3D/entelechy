@@ -1,0 +1,112 @@
+// Sound made from tones and noise, a block of stereo samples a frame: the
+// clock counting the samples played, the cues a program's events set going
+// (each a voice's until another takes it), and the tones, noises and
+// envelopes their sounds are made of. A project's own Kernels turn its
+// events into cues and its cues into sound.
+
+/// The samples played before this frame's block, a `Long`: it counts on
+/// for as long as the scene runs.
+struct Clock { n: Long; }
+
+type Clocks = Rows<Clock>;
+
+/// The samples a frame, the voices, the samples a second (the device's,
+/// 48000 without one).
+fn block() -> Int { return 800; }
+
+fn hz() -> Float { return if rate() > 0.0 { rate() } else { 48000.0 }; }
+
+fn tau() -> Float { return 6.2831853; }
+
+/// Sample `n`'s low 31 bits, an Int a hash takes: what is made from them
+/// repeats every half day of samples.
+fn low_bits(n: Long) -> Int { return int(n & 2147483647l); }
+
+/// The clock before the first block, which `synth.clock` counts on from:
+/// the first block begins at sample 0.
+kernel audio.clock_start@1 {
+    requires { field.write; }
+    output result: Clocks;
+    compute { return Clock { n: -long(block()) }; }
+}
+
+/// The clock a block on.
+kernel audio.clock@1 {
+    requires { field.read; field.write; }
+    input previous: Clocks;
+    output result: Clocks;
+    compute { return Clock { n: sample(previous).n + long(block()) }; }
+}
+
+/// A clock kept to the sound device rather than to the frames: the
+/// samples played before this frame's block and how many the block holds.
+/// With a device, as many as keep it `paced_ahead` samples ahead of what
+/// it plays (`queued()` and the block before, which a player hears after
+/// this frame is made; in steps of `paced_step`, at least one, at most
+/// `paced_most`): a stall it played through is not made up, and what a
+/// stall left queued drains a step a frame. Without one (a render, a
+/// replay), as many as the time since the last frame asks, the shortfall
+/// a slow frame left made up in the next; after a long stall it takes up
+/// the time again. The first block is the longest but one: a player
+/// sizes its ring of blocks by the first (four of it), and a block over
+/// half the ring could not be queued.
+/// The sound is then rendered over `value(size, 0)` samples (`synth.paced_size`).
+struct Paced { n: Long; block: Int; }
+
+type Paceds = Rows<Paced>;
+
+fn paced_step() -> Int { return 400; }
+
+fn paced_first() -> Int { return 1600; }
+
+fn paced_most() -> Int { return 3200; }
+
+fn paced_ahead() -> Int { return 4000; }
+
+kernel audio.paced_start@1 {
+    requires { field.write; }
+    output result: Paceds;
+    compute { return Paced { n: -1l, block: paced_first() }; }
+}
+
+kernel audio.paced@1 {
+    requires { field.read; field.write; time.read; }
+    input previous: Paceds;
+    output result: Paceds;
+    compute {
+        let p = sample(previous);
+        // The sample the time has reached, from the clock whole.
+        let want = long(floor(clock() * double(hz())));
+        let first = long(paced_first());
+        if p.n < 0l { return Paced { n: max(want - first, 0l), block: paced_first() }; }
+        let n = p.n + long(p.block);
+        let most = paced_most() / paced_step();
+        if rate() > 0.0 {
+            // The block before is heard after this frame is made: it is
+            // queued already, though the device does not hold it yet.
+            let short = paced_ahead() - queued() - p.block;
+            let steps = clamp((short + paced_step() / 2) / paced_step(), 1, most);
+            return Paced { n: n, block: steps * paced_step() };
+        }
+        let owed = want - n;
+        if owed > long(paced_most() * 4) { return Paced { n: max(want - first, n), block: paced_first() }; }
+        let steps = int(clamp((owed + long(paced_step() / 2)) / long(paced_step()), 1l, long(most)));
+        return Paced { n: n, block: steps * paced_step() };
+    }
+}
+
+/// The paced clock as the voices and the sound read it, and the block's
+/// size for the sound's domain.
+kernel audio.paced_clock@1 {
+    requires { field.read; field.write; }
+    input paced: Paceds;
+    output result: Clocks;
+    compute { return Clock { n: max(at(paced, 0).n, 0l) }; }
+}
+
+kernel audio.paced_size@1 {
+    requires { field.read; field.write; }
+    input paced: Paceds;
+    output result: Rows<Float>;
+    compute { return float(at(paced, 0).block); }
+}

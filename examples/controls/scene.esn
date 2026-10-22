@@ -1,0 +1,13 @@
+// A dot walked by the keyboard or a pad alike (`kernels/controls.ent`).
+use "../../packages/controls.entpkg";
+use "kernels/controls.ent";
+
+input actions: Rows<ActionBinding> = "assets/actions.csv";
+
+node controls0: controls.start@1 { domain = 1; }
+node controls: controls.read@1 { previous <~ controls.result from controls0.result; actions <- actions; domain = 1; }
+node walker0: walk.start@1 { domain = 1; }
+node walker: walk.step@1 { previous <~ walker.result from walker0.result; controls <- controls.result; domain = 1; }
+node view: walk.view@1 { walker <- walker.result; controls <- controls.result; domain = vec2(160, 120); }
+
+output result <- view.result;

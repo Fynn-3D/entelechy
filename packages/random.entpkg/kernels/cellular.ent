@@ -1,0 +1,19 @@
+// Worley's cells: the distances to the nearest points scattered one to
+// a cell.
+use "hash.ent";
+
+/// Worley's cells: a random point in each cell of space; how far `p` is
+/// from the nearest (x) and the next nearest (y), and the nearest's hash
+/// (z), 0 to 1.
+fn worley3(p: Vec3, seed: Int) -> Vec3 {
+    let i = floor(p);
+    return loop 27 with best = vec3(10.0, 10.0, 0.0) {
+        let k = index();
+        let cell = i + float(ivec3(k % 3, (k / 3) % 3, k / 9) - 1);
+        let { x, y, z } = int(cell);
+        let at_point = cell + vec3(unit_of(hash_int3(x, y, z, seed)), unit_of(hash_int3(x, y, z, seed + 1)), unit_of(hash_int3(x, y, z, seed + 2)));
+        let d = length(p - at_point);
+        if d < best.x { vec3(d, best.x, unit_of(hash_int3(x, y, z, seed + 3))) }
+        else if d < best.y { vec3(best.x, d, best.z) } else { best }
+    };
+}

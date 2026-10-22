@@ -2,7 +2,7 @@
 // which the surface touches about twenty thousand, and only those are
 // ever a Field.
 //
-// `surface.flags` writes one flag a cell, the compact package ranks
+// `surface.flags` writes one flag a cell, the math package ranks
 // them — a prefix sum over every cell in the volume — and the geometry
 // nodes are sized by the count it gives back.
 use "kernels/";
@@ -35,7 +35,7 @@ node flags: surface.flags@1 {
     domain = size * size * size;
 }
 
-node kept: graph "../../packages/compact.entpkg/graphs/compact.esn" {
+node kept: graph "../../packages/parallel.entpkg/graphs/compact.esn" {
     flags <- flags.result;
 }
 

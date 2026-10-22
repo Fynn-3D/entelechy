@@ -1,0 +1,120 @@
+// Triangles larger than a tile cut across many: each triangle's box found
+// once (`raster.boxes@1`), counted into tiles, and each tile's share
+// covered by an invocation of its own.
+use "triangle.ent";
+
+/// Each triangle's box on the canvas, found once: none for one that is
+/// skipped. Every later step reads it.
+kernel raster.boxes@1 {
+    requires { field.read; field.write; }
+    input triangles: Rows<Face>;
+    input vertices: Rows<Corner>;
+    input canvas: Grid<Long>;
+    output result: Rows<Box>;
+    compute { return boxed(corners(sample(triangles), vertices, size(canvas)), size(canvas)); }
+}
+
+/// How many tiles each triangle's box is cut into: none for one of a
+/// tile or less, which `raster.cover@3` covers whole.
+kernel raster.tiles@2 {
+    requires { field.read; field.write; }
+    input boxes: Rows<Box>;
+    param tile: Int = 16;
+    output result: Rows<Int>;
+    compute {
+        let b = sample(boxes);
+        if !large(b, tile) { return 0; }
+        return ((b.w + tile - 1) / tile) * ((b.h + tile - 1) / tile);
+    }
+}
+
+/// Where each triangle's tiles begin: an inclusive prefix of the counts,
+/// so triangle `t`'s tiles end before `offsets[t]`.
+kernel raster.offsets@1 {
+    requires { field.read; field.write; }
+    input counts: Rows<Int>;
+    output result: Rows<Int>;
+    prefix with sum { return sample(counts); }
+}
+
+/// How many tiles there are, which sizes the next node: the last offset.
+kernel raster.total@1 {
+    requires { field.read; field.write; }
+    input offsets: Rows<Int>;
+    output result: Rows<Int>;
+    compute { return at(offsets, count(offsets) - 1); }
+}
+
+// The triangle and the tile of its box an element covers: the first
+// triangle whose offset passes it, by bisection, and its place among
+// that triangle's tiles.
+struct TilePlace { t: Int; x0: Int; y0: Int; w: Int; h: Int; }
+
+// The box is the one the tiles were counted from, so a triangle given
+// tiles has a box to cut them from; one given none (a box of no width)
+// is placed nowhere.
+fn tile_place(e: Int, counts: Rows<Int>, offsets: Rows<Int>, boxes: Rows<Box>, tile: Int) -> TilePlace {
+    let span = loop 32 with r = ivec2(0, count(offsets)) until r.x >= r.y {
+        let mid = (r.x + r.y) / 2;
+        if at(offsets, mid) > e { ivec2(r.x, mid) } else { ivec2(mid + 1, r.y) }
+    };
+    let t = span.x;
+    let b = at(boxes, t);
+    if b.w == 0 { return TilePlace { t: t, x0: 0, y0: 0, w: 0, h: 0 }; }
+    let local = e - (at(offsets, t) - at(counts, t));
+    let across = (b.w + tile - 1) / tile;
+    let x0 = b.x0 + local % across * tile;
+    let y0 = b.y0 + local / across * tile;
+    return TilePlace {
+        t: t, x0: x0, y0: y0,
+        w: min(tile, b.x0 + b.w - x0),
+        h: min(tile, b.y0 + b.h - y0),
+    };
+}
+
+/// Every pixel's nearest fragment as one key, of the large triangles, a
+/// tile of one's box at a time, so a triangle that fills the canvas is
+/// covered by as many invocations as it has tiles rather than by one. The
+/// node's domain is a pool of invocations sized by the canvas, each taking
+/// every `n`th tile, so how many tiles there are this frame is read on the
+/// device and never waited for. It starts from the keys `raster.cover@3`
+/// left, and keeps the least.
+kernel raster.cover_tiles@2 {
+    requires { field.read; field.write; }
+    input triangles: Rows<Face>;
+    input vertices: Rows<Corner>;
+    input boxes: Rows<Box>;
+    input counts: Rows<Int>;
+    input offsets: Rows<Int>;
+    input total: Rows<Int>;
+    input keys: Grid<Long>;
+    param tile: Int = 16;
+    output result: Grid<Long>;
+    struct Hit { pixel: Vec2; key: Long; }
+    scatter into keys with min {
+        let none = Hit { pixel: vec2(-1.0, -1.0), key: 0l };
+        let size = size(keys);
+        // A pool of invocations, the node's own domain, each taking every
+        // `n`th tile from its own.
+        let n = idomain();
+        let e = element();
+        let total = at(total, 0);
+        let rounds = if e < total { (total - e + n - 1) / n } else { 0 };
+        loop rounds with j = 0 {
+            let at_ = tile_place(e + j * n, counts, offsets, boxes, tile);
+            let k = corners(at(triangles, at_.t), vertices, size);
+            loop at_.h with dy = 0 {
+                loop at_.w with dx = 0 {
+                    let z = depth_at(k, at_.x0 + dx, at_.y0 + dy);
+                    if z >= 0.0 {
+                        emit(Hit { pixel: vec2(at_.x0 + dx, at_.y0 + dy), key: key_of(z, at_.t) });
+                    }
+                    dx + 1
+                };
+                dy + 1
+            };
+            j + 1
+        };
+        return none;
+    }
+}

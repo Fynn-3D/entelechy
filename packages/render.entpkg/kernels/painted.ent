@@ -1,0 +1,45 @@
+// A painted look: a pixel much nearer than its neighbor is the edge of the nearer thing,
+// drawn with a thin dark line fading with distance; then colors as watercolour: a little more vivid, shadows
+// cool, highlights warm. Distance is read from the G-buffer's surface (`surface`'s w), never from the picture's alpha.
+
+/// How far `surface` lies along the view ray at pixel `p` (the sky very far).
+fn npr_depth(surface: Grid<Vec4>, p: Vec2) -> Float {
+    let n = size(surface);
+    return min(at(surface, clamp(p, vec2(0.0, 0.0), n - 1.0)).w, 100000.0);
+}
+
+/// The HDR picture `image` with edges drawn and colors graded (the same size); `surface` is its G-buffer surface.
+kernel render.npr@1 {
+    requires { field.read; field.write; }
+    input image: Image;
+    input surface: Grid<Vec4>;
+    /// How dark the line is (0 none), and how far it fades out (meters).
+    param ink: Float = 0.8;
+    param ink_reach: Float = 90.0;
+    /// How much color is graded (0 none).
+    param tone: Float = 1.0;
+    /// 0: the picture passes on as it is.
+    param style: Int = 1;
+    output result: Image;
+    compute {
+        let p = coord();
+        let c = at(image, p);
+        if style != 1 { return c; }
+        let d = npr_depth(surface, p);
+        // Before a neighbor by a share of the distance: the near side of
+        // an edge.
+        let behind = max(max(npr_depth(surface, p + vec2(1.0, 0.0)), npr_depth(surface, p - vec2(1.0, 0.0))),
+            max(npr_depth(surface, p + vec2(0.0, 1.0)), npr_depth(surface, p - vec2(0.0, 1.0))));
+        let gap = (behind - d) / (d * 0.06 + 0.12);
+        let line = smoothstep(1.0, 2.0, gap) * (1.0 - smoothstep(ink_reach * 0.5, ink_reach, d));
+        let inked = mix(c.xyz, c.xyz * vec3(0.22, 0.2, 0.27), line * ink);
+        // A watercolour's colors, judged on the light as shown (HDR squeezed).
+        let gray = dot(inked, vec3(0.299, 0.587, 0.114));
+        let seen = gray / (1.0 + gray);
+        let soft = mix(vec3(gray, gray, gray), inked, 1.12);
+        let shade = 1.0 - smoothstep(0.15, 0.55, seen);
+        let toned = soft * mix(vec3(1.03, 1.0, 0.95), vec3(0.93, 0.98, 1.08), shade) + vec3(0.012, 0.016, 0.03) * shade * gray;
+        let out = mix(inked, toned, tone);
+        return vec4(out.x, out.y, out.z, c.w);
+    }
+}

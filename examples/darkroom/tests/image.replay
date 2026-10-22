@@ -1,17 +1,17 @@
 scene known.esn
 
-# Colour: HSV of (0.25, 0.5, 0.75); the HSV and Oklab round trips land
+# Color: HSV of (0.25, 0.5, 0.75); the HSV and Oklab round trips land
 # where they started; white's luminance is one; sRGB's transfer undoes
 # itself, and a stored half is 0.214 of the light.
 frame 0.0
-expect colour.result[0] = 0.5833333 0.6666667 0.75 0.0 0.00001
-expect colour.result[1].x < 0.00001
-expect colour.result[1].y < 0.0001
-expect colour.result[1].z = 1.0 0.00001
-expect colour.result[2] = 0.25 0.5 0.75 0.21404114 0.00001
+expect color.result[0] = 0.5833333 0.6666667 0.75 0.0 0.00001
+expect color.result[1].x < 0.00001
+expect color.result[1].y < 0.0001
+expect color.result[1].z = 1.0 0.00001
+expect color.result[2] = 0.25 0.5 0.75 0.21404114 0.00001
 
-# Blending (0.5 grey over 0.25, 0.5, 0.75), on light itself: multiply
-# halves, screen lifts, overlay keeps a middle grey's base; half opacity
+# Blending (0.5 gray over 0.25, 0.5, 0.75), on light itself: multiply
+# halves, screen lifts, overlay keeps a middle gray's base; half opacity
 # is half way.
 expect multiply.result[0] = 0.125 0.25 0.375 1.0 0.00001
 expect screen.result[0] = 0.625 0.75 0.875 1.0 0.00001
@@ -19,16 +19,16 @@ expect overlay.result[0] = 0.25 0.5 0.75 1.0 0.00001
 expect half.result[0] = 0.375 0.5 0.625 1.0 0.00001
 
 # Encoded, as painting programs blend: multiply on sRGB's stored values,
-# decoded again. Over a base half there, half a grey is weighed by both
+# decoded again. Over a base half there, half a gray is weighed by both
 # alphas, and the alphas join to three quarters.
 expect multiply_encoded.result[0] = 0.1293629 0.2537159 0.3771142 1.0 0.00001
 expect over_thin.result[0] = 0.4166667 0.5 0.5833333 0.75 0.00001
 
-# Filters: a blur leaves one colour as it is and spreads a dot by
-# Gaussian weights (0.399 each way at the centre); a shrink takes the
-# mean; a one at the centre convolves to the source, a box to the mean
+# Filters: a blur leaves one color as it is and spreads a dot by
+# Gaussian weights (0.399 each way at the center); a shrink takes the
+# mean; a one at the center convolves to the source, a box to the mean
 # of a ramp, which is its middle; bicubic enlarging keeps a ramp
-# straight; one colour has no edges.
+# straight; one color has no edges.
 expect flat_blur.result[100] = 0.3 0.6 0.9 1.0 0.00001
 expect dot_blur.result[40].x = 0.15925 0.0001
 expect dot_blur.result[39].x = 0.0965846 0.00001
@@ -47,18 +47,18 @@ expect grown.result[60].x = 0.0
 expect worn.result[31].x = 1.0
 expect worn.result[30].x = 0.0
 
-# Tone: a stop doubles; no saturation is grey; a whole turn of hue is
+# Tone: a stop doubles; no saturation is gray; a whole turn of hue is
 # none; levels from 0.2 to 0.8; a straight curve and the neutral LUT
 # change nothing.
 expect brighter.result[0] = 0.6 1.2 1.8 1.0 0.0001
 expect greyed.result[0] = 0.5511478 0.5511478 0.5511478 1.0 0.00001
 expect turned.result[0] = 0.3 0.6 0.9 1.0 0.0001
-expect levelled.result[0] = 0.1666667 0.6666667 1.0 1.0 0.00001
+expect leveled.result[0] = 0.1666667 0.6666667 1.0 1.0 0.00001
 expect curved.result[0] = 0.3 0.6 0.9 1.0 0.00001
 expect looked_up.result[0] = 0.3 0.6 0.9 1.0 0.00001
 
-# Equalization of two greys, half the pixels each, by Oklab lightness
-# (a grey's is its cube root): 32 in the bin of 0.2. A pixel's
+# Equalization of two grays, half the pixels each, by Oklab lightness
+# (a gray's is its cube root): 32 in the bin of 0.2. A pixel's
 # lightness goes to the share darker than it, read through its bin:
 # 0.355 for 0.2 and 0.825 for 0.8, its light the cube of the ratio.
 expect even.counts[149] = 32
@@ -86,7 +86,7 @@ expect ramped.result[7] = 1.0 1.0 1.0 1.0 0.00001
 # 2.2 would give 0.687 0.835 0.894.
 expect mapped.result[0] = 0.69329 0.83968 0.89652 1.0 0.0001
 
-# Dithering a grey of Oklab lightness 0.4 between black and white: it
+# Dithering a gray of Oklab lightness 0.4 between black and white: it
 # lies 0.4 of the way to white, so the Bayer cells under 0.4 (0 to 5 of
 # 16) are white: (0, 0) 0, (2, 0) 2, (1, 1) 4; (1, 0) 8 and (3, 0) 10
 # stay black.

@@ -654,7 +654,7 @@ fn clip_of(
 ///
 /// A skinned model also writes `<stem>.weights.field`,
 /// `<stem>.skeleton.field`, and one `<stem>.<name>.clip.field` per
-/// animation sampled at `rate` frames a second, which the `skin` package
+/// animation sampled at `rate` frames a second, which the `animation` package
 /// reads.
 pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String> {
     let model = Model::open(path)?;

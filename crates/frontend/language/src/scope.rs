@@ -11,7 +11,7 @@
 //! its own document sees. A function of a builtin's name stands for it in
 //! its own document only.
 //!
-//! A name qualified by a package, `hash_noise::fbm2`, reaches the one
+//! A name qualified by a package, `random::fbm2`, reaches the one
 //! declaration of that name in the documents of that package the writing
 //! document uses: two packages may declare one name, and a document using
 //! both names each by its package. The qualified name is written by the
@@ -46,7 +46,7 @@ impl Declarations {
     }
 }
 
-/// Names a document writes qualified by a package (`hash_noise::fbm2`),
+/// Names a document writes qualified by a package (`random::fbm2`),
 /// each with the name of the declaration it reaches: a function called,
 /// or a struct or type named.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -78,7 +78,7 @@ impl Qualified {
 /// reaches holds.
 type QualifiedNames = Vec<(String, String)>;
 
-/// A name qualified by a package, `hash_noise::fbm2`, as the package's name
+/// A name qualified by a package, `random::fbm2`, as the package's name
 /// and the name it declares.
 pub fn qualified(name: &str) -> Option<(&str, &str)> {
     name.split_once("::")
@@ -137,7 +137,7 @@ pub struct Source<'a> {
     /// The sources it uses directly.
     pub uses: Vec<usize>,
     /// The package it belongs to, by name; none outside a package. A name
-    /// qualified by a package (`hash_noise::fbm2`) reaches what that
+    /// qualified by a package (`random::fbm2`) reaches what that
     /// package's documents declare.
     pub package: Option<String>,
 }

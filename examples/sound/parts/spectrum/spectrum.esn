@@ -4,6 +4,7 @@
 // The font and the caption are wired by the graph that places this one.
 use "kernels/";
 use "../../../../packages/text.entpkg";
+use "../../../../packages/ui.entpkg";
 
 input font: Grid<Float>;
 input caption: Rows<Int>;

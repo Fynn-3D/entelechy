@@ -407,8 +407,8 @@ pub fn clamp_axis(value: f32, limit: u32) -> u32 {
     (floored as u32).min(limit.saturating_sub(1))
 }
 
-/// One axis of a linear read at `value`: element centres sit at
-/// half-integers, so the position less a half gives the lower neighbour,
+/// One axis of a linear read at `value`: element centers sit at
+/// half-integers, so the position less a half gives the lower neighbor,
 /// the upper one, each clamped as [`clamp_axis`] clamps, and the upper
 /// one's weight, none before the first element.
 pub fn linear_axis(value: f32, limit: u32) -> (u32, u32, f32) {

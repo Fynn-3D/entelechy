@@ -26,7 +26,7 @@ fn hash(n: Float) -> Float {
     return fract((r + r) * q);
 }
 
-/// The training set: points on the plane, labelled by a circle they are
+/// The training set: points on the plane, labeled by a circle they are
 /// in or out of, which no line separates.
 kernel learn.points@1 {
     requires { field.write; }

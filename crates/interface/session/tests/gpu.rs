@@ -192,7 +192,7 @@ fn fields_flow_through_the_gpu_exactly() {
     // Element 2 after one step: position (2,1)+(3,1.5), life 6-1+8,
     // alive flipped.
     assert_eq!(image.pixels()[2], [5.0, 2.5, 13.0, 0.0]);
-    // Element 7 reads its clamped neighbour (itself).
+    // Element 7 reads its clamped neighbor (itself).
     assert_eq!(image.pixels()[7], [14.0, 7.0, 28.0, 1.0]);
 }
 

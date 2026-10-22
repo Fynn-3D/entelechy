@@ -5,7 +5,7 @@ can read it.
 
 A rig is five kinds of row. `entelechy import` writes them from a glTF, the
 Blender bridge from an armature, and the
-[`skin` package](../packages/skin.entpkg) reads them. They are Fields
+[`animation` package](../packages/animation.entpkg) reads them. They are Fields
 like any other; the runtime has no notion of a joint, and posing is
 Kernels.
 
@@ -23,7 +23,7 @@ Kernels.
 out. A vertex may carry a tangent after its uv (`f×12`), the way a normal
 map is read along: its `w` is the handedness, the bitangent
 `cross(normal, tangent) * w`; `entelechy export` writes it as the mesh's
-tangents, and `entelechy import` reads the position, normal and uv. The `skin` package declares them as `Point`, `Tri`, `Bound`,
+tangents, and `entelechy import` reads the position, normal and uv. The `animation` package declares them as `Point`, `Tri`, `Bound`,
 `Joint` and `Pose`.
 
 ## What the numbers mean
@@ -41,12 +41,12 @@ tangents, and `entelechy import` reads the position, normal and uv. The `skin` p
   frame after frame. A pose is local, in its parent's space; a root's is
   in the skin's. The rotation is a quaternion, `x y z w`. The rows carry
   no sample rate: `entelechy import` prints it, the bridge uses the scene's,
-  and a scene passes it to `skin.sample@1` as `rate`.
+  and a scene passes it to `animation.sample@1` as `rate`.
 - **Travel.** A clip whose root travels closes on itself: its last frame
   is its first with the root moved on by one stride, so it loops every
-  `frames - 1` frames. `skin.stride@1` plays it in place and
-  `skin.travel@1` gives the travel for a scene to carry; a clip that
-  does not travel is played by `skin.sample@1`, looping every `frames`.
+  `frames - 1` frames. `animation.stride@1` plays it in place and
+  `animation.travel@1` gives the travel for a scene to carry; a clip that
+  does not travel is played by `animation.sample@1`, looping every `frames`.
 - **Weights.** At most four, summing to one. All four zero binds the
   vertex to nothing, and the package leaves it in place, so skinned and
   unskinned meshes mix.
@@ -65,7 +65,7 @@ texture).
 [`crates/interface/entelechy/tests/rigs.rs`](../crates/interface/entelechy/tests/rigs.rs) is the
 contract as a test: one table of layouts, checked against what `entelechy
 import` writes of a rig `entelechy export` wrote, and by a scene posing the
-fresh rows and evaluating. The `skin` package reads the same rows in
+fresh rows and evaluating. The `animation` package reads the same rows in
 [`examples/skin`](../examples/skin), whose replays hold it. The Blender bridge's push
 is held to the same table in
 [`crates/interface/entelechy/tests/bridges.rs`](../crates/interface/entelechy/tests/bridges.rs),

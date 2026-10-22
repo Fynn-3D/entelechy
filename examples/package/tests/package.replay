@@ -1,8 +1,8 @@
 scene ../scene.esn
 
-# Eight-pixel cells, each one of the scene's four colours by its Oklab
+# Eight-pixel cells, each one of the scene's four colors by its Oklab
 # lightness: two pixels of one cell agree; the disc, brightest, takes the
-# lightest colour; the background's left edge, nearly black, the darkest;
+# lightest color; the background's left edge, nearly black, the darkest;
 # the dim blue beside it the second; the far side of the background,
 # brighter, the third.
 frame 0.0

@@ -1,6 +1,6 @@
-//! The raster preset over a canvas: as `raster.esn`, the surface the
+//! The raster preset over a canvas: as `surface.esn`, the surface the
 //! extent of `canvas`, an empty canvas (every key
-//! `9223372036854775807l`, as `raster.esn`'s `empty` makes) another node
+//! `9223372036854775807l`, as `surface.esn`'s `empty` makes) another node
 //! sized, so a surface follows a size the scene computes. Place it with
 //!   node raster: graph "../../packages/raster.entpkg/graphs/canvas.esn" {
 //!       vertices <- project.result;
@@ -8,7 +8,7 @@
 //!       canvas <- empty.result;
 //!   }
 //! and read `raster.surface` where `native.rasterize@3` gave `surface`.
-use "../kernels/raster.ent";
+use "../kernels/";
 
 input vertices: Rows<Corner>;
 input triangles: Rows<Face>;

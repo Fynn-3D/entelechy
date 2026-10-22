@@ -25,8 +25,9 @@ type Stickers = Rows<Int>;
 struct Hit { t: Float; n: Vec3; p: Vec3; }
 use "moves.ent";
 use "../../../packages/text.entpkg";
+use "../../../packages/ui.entpkg";
 
-// The sticker at cubelet centre c (each coordinate -1, 0 or 1) under
+// The sticker at cubelet center c (each coordinate -1, 0 or 1) under
 // the face whose normal is n: 9 per face, rows by the second free axis.
 fn sticker(c: Vec3, n: Vec3) -> Int {
     let face = if n.y > 0.5 { Face.Up } else if n.x > 0.5 { Face.Right } else if n.z > 0.5 { Face.Front }
@@ -160,10 +161,10 @@ kernel cube.draw@1 {
     fn color_at(hit: Hit, stickers: Stickers, shade: Vec3) -> Vec3 {
         let { p, n } = hit;
         let c = clamp(floor(p + 1.5), 0.0, 2.0) - 1.0;
-        let centre = vec3(if abs(n.x) > 0.5 { n.x } else { c.x }, if abs(n.y) > 0.5 { n.y } else { c.y }, if abs(n.z) > 0.5 { n.z } else { c.z });
-        let local = abs(p - centre) * (1.0 - abs(n));
+        let center = vec3(if abs(n.x) > 0.5 { n.x } else { c.x }, if abs(n.y) > 0.5 { n.y } else { c.y }, if abs(n.z) > 0.5 { n.z } else { c.z });
+        let local = abs(p - center) * (1.0 - abs(n));
         let edge = max(local.x, max(local.y, local.z)) > 0.43;
-        let base = palette(at(stickers, sticker(centre, n)));
+        let base = palette(at(stickers, sticker(center, n)));
         let lit = 0.55 + 0.45 * max(dot(shade, vec3(0.4, 0.8, 0.45)), 0.0);
         return if edge { vec3(0.05, 0.05, 0.06) } else { base * lit };
     }

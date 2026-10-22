@@ -1,0 +1,33 @@
+//! The permutation that orders `keys`, least significant bit first.
+//! Place it with
+//!   node order: graph "parallel.entpkg/graphs/sort.esn" {
+//!       keys <- cell.result; bits = 12;
+//!   }
+//! and read a row through it: `at(bodies, at(order, slot))`.
+//!
+//! `bits` is how many bits of the key matter, 1 to 31; the keys must be
+//! non-negative and below `2^bits`.
+use "../kernels/sort.ent";
+
+input keys: Rows<Int>;
+param bits: Int = 16;
+
+// A pass a bit, over an `Int`'s bits below its sign.
+require some_bits: bits >= 1;
+require key_bits: bits <= 31;
+
+node start: parallel.sort_identity@1 { keys <- keys; }
+node zero: parallel.sort_first_bit@1 { domain = 1; }
+node slots: parallel.sort_blank@1 { keys <- keys; }
+
+node sorted: graph "sort_pass.esn" {
+    times = bits;
+    carry order <- result;
+    carry bit <- step;
+    order <- start.result;
+    bit <- zero.result;
+    keys <- keys;
+    slots <- slots.result;
+}
+
+output result <- sorted.result;

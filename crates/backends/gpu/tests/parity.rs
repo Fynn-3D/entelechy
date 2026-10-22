@@ -397,7 +397,7 @@ fn the_rasterizer_matches_the_reference_on_interior_pixels() {
         "f,f,f,f,f,f,i"
     );
     let reference = rasterize_words(&vertices, &triangles, width, height);
-    // Only pixels whose eight neighbours carry the same triangle on the
+    // Only pixels whose eight neighbors carry the same triangle on the
     // CPU are compared: coverage rules at edges may differ.
     let id_at =
         |words: &[u32], x: u32, y: u32| words[(y * width + x) as usize * SURFACE_WORDS + 6] as i32;
@@ -457,7 +457,7 @@ fn the_rasterizer_matches_the_reference_on_interior_pixels() {
 
 /// Many triangles over many blocks of the sorting pass, some a rule must
 /// skip (a corner behind the eye, one not finite, no area) and many too
-/// small to hold a pixel centre: on interior pixels the device draws what
+/// small to hold a pixel center: on interior pixels the device draws what
 /// the reference draws, small triangles drawn by the sorting pass or all by
 /// the device's rasterizer, and indexed or pulled, it draws the same words.
 #[test]
@@ -555,7 +555,7 @@ fn a_soup_of_triangles_rasterizes_as_the_reference_does_either_way() {
     for y in 1..height - 1 {
         for x in 1..width - 1 {
             let id = id_at(&reference, x, y);
-            // Inside a drawn triangle: a sliver the reference's centres
+            // Inside a drawn triangle: a sliver the reference's centers
             // miss may still be drawn by the device's own coverage rule.
             let interior = id >= 0
                 && (0..3)

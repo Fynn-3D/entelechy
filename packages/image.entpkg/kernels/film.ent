@@ -1,10 +1,10 @@
 // A camera's finish, as Kernels over a picture of light (rgb, which may be far
 // brighter than white) that keeps in w how far away what each pixel
 // shows is.
-use "tonemap.ent";
-use "colour.ent";
+use "tone_map.ent";
+use "color.ent";
 use "filter.ent";
-use "noise.entpkg";
+use "random.entpkg";
 
 /// The picture smaller, each pixel the mean of four samples: all its
 /// light (`over` 0), or only what is past `over`. w, the depth, is kept.
@@ -24,7 +24,7 @@ kernel image.bright@1 {
     }
 }
 
-/// A lens's colour fringe at `uv` (0 to 1 across the picture): red read
+/// A lens's color fringe at `uv` (0 to 1 across the picture): red read
 /// `fringe` of the picture's width outward from the middle, blue as far
 /// inward, green where it is, so the split grows toward the edges.
 fn fringed(source: Grid<Vec4>, uv: Vec2, fringe: Float) -> Vec3 {
@@ -57,7 +57,7 @@ fn film_grain(px: Vec2, time: Float, amount: Float) -> Float {
 /// The finished picture: depth of field between the sharp picture and
 /// its soft copy, by how far each pixel's depth is from `focus` (the
 /// first row); the glow added, `near` and `far` of each; then exposure,
-/// ACES, sRGB's transfer, colour fringing toward the edges (`fringe`),
+/// ACES, sRGB's transfer, color fringing toward the edges (`fringe`),
 /// darkened corners (`vignette`) and grain (`grain`), new every frame.
 /// Each step is a function a Kernel of another look composes as it
 /// chooses.

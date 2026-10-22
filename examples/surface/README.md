@@ -6,11 +6,11 @@ cells its surface passes through.
 The volume is `size` cells on a side (128 by default) holding an
 integer field: three balls on integer paths, offset so the surface is
 where the field changes sign. `surface.flags` writes one flag per cell,
-the compact package ranks them with `prefix with sum`, and the geometry
+the math package ranks them with `prefix with sum`, and the geometry
 nodes are sized by the count:
 
 ```
-node kept: graph "../../packages/compact.entpkg/graphs/compact.esn" {
+node kept: graph "../../packages/parallel.entpkg/graphs/compact.esn" {
     flags <- flags.result;
 }
 node corners: surface.corners@1 {

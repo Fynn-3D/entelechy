@@ -17,7 +17,7 @@ node picture: kernel {
     }
 }
 
-// Four colours from dark to light, as an old console's palette.
+// Four colors from dark to light, as an old console's palette.
 node colors: kernel {
     requires { field.write; }
     output result: Rows<Vec3>;

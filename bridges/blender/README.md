@@ -27,7 +27,7 @@ window. This path needs no connection.
 
 **Rigs**: *Push rig* writes what a posed mesh needs — [the same five
 rows](../../docs/RIGS.md) `entelechy import` writes out of a rigged glTF and
-the [`skin` package](../../packages/skin.entpkg) reads: `<name>.vertices.field`
+the [`animation` package](../../packages/animation.entpkg) reads: `<name>.vertices.field`
 (the mesh at rest, in its armature's space, since the joints place it),
 `<name>.weights.field` (the four heaviest vertex groups that name a bone,
 normalized), `<name>.skeleton.field` (each bone's parent and inverse bind

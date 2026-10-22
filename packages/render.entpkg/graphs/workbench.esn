@@ -1,0 +1,20 @@
+//! The workbench renderer (`render.workbench_shade`) on a scene's G-buffer
+//! (the contract, its first three maps): its picture, as
+//! shown.
+use "../kernels/";
+
+input lens: Lenses;
+input surface: Grid<Vec4>;
+input paint: Grid<Vec4>;
+input extra: Grid<Vec4>;
+param light: Int = 0;
+param color: Int = 0;
+param cavity: Float = 1.0;
+param outline: Float = 1.0;
+param grid: Bool = true;
+param sky_outline: Bool = true;
+
+node shade: render.workbench_shade@1 { lens <- lens; surface <- surface; paint <- paint; extra <- extra;
+    light = light; color = color; cavity = cavity; outline = outline; grid = grid; sky_outline = sky_outline; domain = size(surface); }
+
+output result <- shade.result;

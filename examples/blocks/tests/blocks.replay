@@ -2,7 +2,7 @@ scene ../scene.esn
 
 # Seed 7 deals an I piece first: at time zero it lies across row 1 at
 # columns 3 to 6 of the well; the bottom row is prefilled but for its
-# last cell, for the clearing below. Cells are 12 pixels, centres at
+# last cell, for the clearing below. Cells are 12 pixels, centers at
 # 12x + 6.
 param prefill 1
 frame 0.0

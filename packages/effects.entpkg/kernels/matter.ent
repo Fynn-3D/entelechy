@@ -1,0 +1,44 @@
+// What a layer is made of, at a point: its element's noise moving the
+// element's way (rising, swirling, faceted), thickened where the form is
+// hot, colored from edge to core by its heat, flickering; the light it
+// gives and how much it hides.
+use "random.entpkg";
+use "effect.ent";
+
+/// The element's color at heat `h` (0 to 1), leaned by `tint` (-1 toward
+/// its edge, 1 toward its core).
+fn ramp(el: Element, h: Float, tint: Float) -> Vec3 {
+    let k = clamp(h + tint * 0.3, 0.0, 1.0);
+    let lo = mix(el.edge, el.body, smoothstep(0.0, 0.5, k));
+    return mix(lo, el.core, smoothstep(0.45, 1.0, k));
+}
+
+/// How it flickers this moment: 1 when steady.
+fn flicker_of(el: Element, t: Float, seed: Int) -> Float {
+    let f = int(floor(t * 24.0));
+    return 1.0 + el.flicker * (hash1(f, seed) * 1.6 - 0.8);
+}
+
+/// The element's grain at `q` (in sizes of the form) moving with `t`:
+/// risen, turned about the up axis, faceted; about -1 to 1.
+fn grain_of(el: Element, q: Vec3, t: Float, seed: Int) -> Float {
+    let turn = t * el.swirl * 2.0;
+    let r = vec3(q.x * cos(turn) - q.z * sin(turn), q.y, q.x * sin(turn) + q.z * cos(turn));
+    let p = r * (2.6 * el.grain) + vec3(0.0, 0.0 - t * el.rise * 2.5, 0.0);
+    let soft = fbm3(p, 3, seed);
+    let hard = ridged3(p, 2, seed) * 2.0 - 1.0;
+    return mix(soft, hard, el.facet);
+}
+
+/// The matter at a point where the form's heat is `heat` (0 outside, 1 at
+/// its heart): (the light it gives, how thick it is) per meter, `shine`
+/// its brightness, `size` its scale.
+fn matter(el: Element, heat: Float, n: Float, shine: Float, tint: Float, size: Float) -> Vec4 {
+    let dens = clamp(heat * 1.5 + n * 0.6 - 0.25, 0.0, 1.0);
+    let hot = clamp(dens * heat * 1.25, 0.0, 1.0);
+    // A dark element's heart gives no light: only its rim does.
+    let lit_part = mix(1.0, smoothstep(0.75, 0.2, hot), el.dark);
+    let light = ramp(el, hot, tint) * (0.25 + 3.0 * hot * hot) * dens * el.glow * shine * lit_part;
+    let thick = dens * (el.smoke * (1.0 - hot * 0.6) + el.dark * hot * 4.0 + 0.15);
+    return vec4(light.x, light.y, light.z, thick) / max(size, 0.05);
+}

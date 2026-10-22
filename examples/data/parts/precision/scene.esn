@@ -1,6 +1,6 @@
 use "kernels/";
 
-// Where the part sits, in metres for the drawing and in nanometres for
+// Where the part sits, in meters for the drawing and in nanometers for
 // the geometry; the ring is drawn around the one, the part measured at
 // the other.
 param origin: DVec2 = dvec2(500000.123456789, 4000000.987654321);

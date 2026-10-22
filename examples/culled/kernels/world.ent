@@ -98,11 +98,11 @@ kernel world.visible@1 {
         let cam = at(camera, 0);
         let half = float(cols) * cell * 0.5;
         let i = element();
-        let centre = (float(ivec2(i % cols, i / cols)) + 0.5) * cell - half;
+        let center = (float(ivec2(i % cols, i / cols)) + 0.5) * cell - half;
         let radius = cell * 0.75;
         let forward = vec2(sin(cam.heading), cos(cam.heading));
         let right = vec2(cos(cam.heading), -sin(cam.heading));
-        let away = centre - vec2(cam.x, cam.z);
+        let away = center - vec2(cam.x, cam.z);
         let ahead = dot(away, forward);
         let aside = abs(dot(away, right));
         return int(ahead > -radius && ahead < reach + radius
@@ -144,7 +144,7 @@ kernel world.ground@1 {
 }
 
 /// Two triangles per cell of every kept chunk, indexing that chunk's own
-/// block of vertices. The seams do not crack: neighbouring chunks share
+/// block of vertices. The seams do not crack: neighboring chunks share
 /// the edge's coordinates, so they compute the same height.
 kernel world.faces@1 {
     requires { field.read; field.write; }

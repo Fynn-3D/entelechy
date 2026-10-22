@@ -39,7 +39,7 @@ frequency bins, one map over `count(block)`; `peak` finds the loudest
 bin; `draw` paints the bars and `text.label` names the frequency.
 
 `spectrum.esn` is the graph, its font and caption wired by whoever
-places it; `scene.esn` reads them from the text package and places it,
+places it; `scene.esn` reads them from the widgets package and places it,
 and the whole places it beside the synth with `across = 2`, so its
 picture takes half the window.
 

@@ -1,7 +1,7 @@
-//! Coarse pixels held to a few colours: the picture pixelated into cells
-//! of `cell` pixels, then each cell the colour of `colors`, rows from
-//! dark to light, its lightness falls to. Four colours make the look of
-//! an old console; the colours are the scene's.
+//! Coarse pixels held to a few colors: the picture pixelated into cells
+//! of `cell` pixels, then each cell the color of `colors`, rows from
+//! dark to light, its lightness falls to. Four colors make the look of
+//! an old console; the colors are the scene's.
 use "../kernels/";
 
 input source: Image;

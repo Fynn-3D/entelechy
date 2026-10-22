@@ -1,0 +1,265 @@
+// Colliding: each pair into a manifold, its normal and up to two points
+// held by both bodies.
+use "body.ent";
+
+// Where two bodies touch in the world: the normal from the first to the
+// second, and up to two points with their separations.
+struct Touch { normal: Vec2; count: Int; c1: Vec2; s1: Float; c2: Vec2; s2: Float; }
+
+fn apart() -> Touch {
+    return Touch { normal: vec2(0.0, 1.0), count: 0, c1: vec2(0.0, 0.0), s1: 0.0, c2: vec2(0.0, 0.0), s2: 0.0 };
+}
+
+// Two circles; the point is midway between their surfaces.
+fn circles(a: Body, b: Body) -> Touch {
+    let d = b.position - a.position;
+    let dist = length(d);
+    let n = if dist > 0.000001 { d / dist } else { vec2(0.0, 1.0) };
+    let s = dist - a.size.x - b.size.x;
+    let c = a.position + n * (a.size.x + 0.5 * s);
+    return Touch { normal: n, count: 1, c1: c, s1: s, c2: c, s2: s };
+}
+
+// A box `a` and a circle `b`: the box's nearest point to the circle's
+// center, or, a center inside the box, its nearest face.
+fn box_circle(a: Body, b: Body) -> Touch {
+    let h = a.size;
+    let r = b.size.x;
+    let c = unturn(b.position - a.position, a.angle);
+    let q = clamp(c, -h, h);
+    let inside = q.x == c.x && q.y == c.y;
+    let dx = h.x - abs(c.x);
+    let dy = h.y - abs(c.y);
+    let sx = if c.x < 0.0 { -1.0 } else { 1.0 };
+    let sy = if c.y < 0.0 { -1.0 } else { 1.0 };
+    let across = dx < dy;
+    let n = if inside { if across { vec2(sx, 0.0) } else { vec2(0.0, sy) } } else { normalize(c - q) };
+    let s = if inside { -min(dx, dy) - r } else { length(c - q) - r };
+    let surface = if inside { if across { vec2(sx * h.x, c.y) } else { vec2(c.x, sy * h.y) } } else { q };
+    let mid = a.position + turn(surface + n * (0.5 * s), a.angle);
+    return Touch { normal: turn(n, a.angle), count: 1, c1: mid, s1: s, c2: mid, s2: s };
+}
+
+// A segment clipped to the side of a line: the points of it behind, then
+// where it crosses.
+struct Clipped { v0: Vec2; v1: Vec2; n: Int; }
+
+fn clip(v0: Vec2, v1: Vec2, normal: Vec2, offset: Float) -> Clipped {
+    let d0 = dot(normal, v0) - offset;
+    let d1 = dot(normal, v1) - offset;
+    if d0 <= 0.0 && d1 <= 0.0 { return Clipped { v0: v0, v1: v1, n: 2 }; }
+    let crossing = v0 + (v1 - v0) * (d0 / (d0 - d1));
+    if d0 <= 0.0 { return Clipped { v0: v0, v1: crossing, n: 2 }; }
+    if d1 <= 0.0 { return Clipped { v0: v1, v1: crossing, n: 2 }; }
+    return Clipped { v0: v0, v1: v1, n: 0 };
+}
+
+// The edge of a box, of half extents `h` at `p` with axes `x` and `y`,
+// whose face most opposes `normal`.
+fn incident(h: Vec2, p: Vec2, x: Vec2, y: Vec2, normal: Vec2) -> Clipped {
+    let n = -vec2(dot(x, normal), dot(y, normal));
+    let along = abs(n.x) > abs(n.y);
+    let c0 = if along {
+        if n.x >= 0.0 { vec2(h.x, -h.y) } else { vec2(-h.x, h.y) }
+    } else {
+        if n.y >= 0.0 { h } else { -h }
+    };
+    let c1 = if along {
+        if n.x >= 0.0 { h } else { -h }
+    } else {
+        if n.y >= 0.0 { vec2(-h.x, h.y) } else { vec2(h.x, -h.y) }
+    };
+    return Clipped { v0: p + x * c0.x + y * c0.y, v1: p + x * c1.x + y * c1.y, n: 2 };
+}
+
+// Two boxes: the axis they are least apart along, preferring a face of
+// the first, the other's edge facing it clipped to the face's sides, and
+// the points of it within `margin` of the face.
+fn boxes(a: Body, b: Body, margin: Float) -> Touch {
+    let ha = a.size;
+    let hb = b.size;
+    let a1 = vec2(cos(a.angle), sin(a.angle));
+    let a2 = vec2(-a1.y, a1.x);
+    let b1 = vec2(cos(b.angle), sin(b.angle));
+    let b2 = vec2(-b1.y, b1.x);
+    let dp = b.position - a.position;
+    let da = vec2(dot(a1, dp), dot(a2, dp));
+    let db = vec2(dot(b1, dp), dot(b2, dp));
+    let c11 = abs(dot(a1, b1));
+    let c12 = abs(dot(a1, b2));
+    let c21 = abs(dot(a2, b1));
+    let c22 = abs(dot(a2, b2));
+    let face_a = abs(da) - ha - vec2(c11 * hb.x + c12 * hb.y, c21 * hb.x + c22 * hb.y);
+    let face_b = abs(db) - vec2(c11 * ha.x + c21 * ha.y, c12 * ha.x + c22 * ha.y) - hb;
+    if max(max(face_a.x, face_a.y), max(face_b.x, face_b.y)) > margin { return apart(); }
+    // 0, 1: a face of `a` along its x or y; 2, 3: of `b`.
+    let s0 = face_a.x;
+    let axis1 = int(face_a.y > 0.95 * s0 + 0.01 * ha.y);
+    let s1 = if axis1 == 1 { face_a.y } else { s0 };
+    let axis2 = if face_b.x > 0.95 * s1 + 0.01 * hb.x { 2 } else { axis1 };
+    let s2 = if axis2 == 2 { face_b.x } else { s1 };
+    let axis = if face_b.y > 0.95 * s2 + 0.01 * hb.y { 3 } else { axis2 };
+    let normal = match axis {
+        0 => if da.x > 0.0 { a1 } else { -a1 },
+        1 => if da.y > 0.0 { a2 } else { -a2 },
+        2 => if db.x > 0.0 { b1 } else { -b1 },
+        _ => if db.y > 0.0 { b2 } else { -b2 },
+    };
+    let on_a = axis < 2;
+    let front_normal = if on_a { normal } else { -normal };
+    let owner_p = if on_a { a.position } else { b.position };
+    let reach = [ha.x, ha.y, hb.x, hb.y][axis];
+    let side_normal = [a2, a1, b2, b1][axis];
+    let side_reach = [ha.y, ha.x, hb.y, hb.x][axis];
+    let front = dot(owner_p, front_normal) + reach;
+    let side = dot(owner_p, side_normal);
+    let edge = if on_a { incident(hb, b.position, b1, b2, front_normal) } else { incident(ha, a.position, a1, a2, front_normal) };
+    let one = clip(edge.v0, edge.v1, -side_normal, -side + side_reach);
+    if one.n < 2 { return apart(); }
+    let two = clip(one.v0, one.v1, side_normal, side + side_reach);
+    if two.n < 2 { return apart(); }
+    let t0 = dot(front_normal, two.v0) - front;
+    let t1 = dot(front_normal, two.v1) - front;
+    let m0 = two.v0 - front_normal * (0.5 * t0);
+    let m1 = two.v1 - front_normal * (0.5 * t1);
+    let keep0 = t0 <= margin;
+    let keep1 = t1 <= margin;
+    let count = int(keep0) + int(keep1);
+    return Touch {
+        normal: normal,
+        count: count,
+        c1: if keep0 { m0 } else { m1 },
+        s1: if keep0 { t0 } else { t1 },
+        c2: m1,
+        s2: t1,
+    };
+}
+
+// Any two bodies, the points within `margin` kept.
+fn touch(a: Body, b: Body, margin: Float) -> Touch {
+    if a.shape == BodyShape.Box && b.shape == BodyShape.Box { return boxes(a, b, margin); }
+    let t = if a.shape == BodyShape.Circle && b.shape == BodyShape.Circle { circles(a, b) } else {
+        if a.shape == BodyShape.Box { box_circle(a, b) } else {
+            let f = box_circle(b, a);
+            Touch { ..f, normal: -f.normal }
+        }
+    };
+    return Touch { ..t, count: int(t.s1 <= margin) };
+}
+
+// A point held by both bodies where they touch.
+fn holding(a: Body, b: Body, c: Vec2, s: Float, n: Vec2) -> Contact {
+    let ra = c - a.position;
+    let rb = c - b.position;
+    let dv = b.velocity + swirl(b.spin, rb) - a.velocity - swirl(a.spin, ra);
+    return Contact {
+        anchor_a: unturn(ra, arm_angle(a)),
+        anchor_b: unturn(rb, arm_angle(b)),
+        base: s,
+        approach: dot(dv, n),
+        normal: 0.0,
+        tangent: 0.0,
+    };
+}
+
+// Where the same pair is among the last step's manifolds, which are in
+// order of their higher body: -1 for nowhere.
+fn last_of(held: Rows<Manifold>, a: Int, b: Int) -> Int {
+    let n = count(held);
+    let first = loop 32 with r = ivec2(0, n) until r.x >= r.y {
+        let mid = (r.x + r.y) / 2;
+        if at(held, mid).b >= b { ivec2(r.x, mid) } else { ivec2(mid + 1, r.y) }
+    };
+    let found = loop 65536 with f = ivec2(first.x, -1) until f.y >= 0 || f.x >= n || at(held, f.x).b != b {
+        if at(held, f.x).a == a { ivec2(f.x, f.x) } else { ivec2(f.x + 1, -1) }
+    };
+    return found.y;
+}
+
+// A point given the impulses of the last step's point it is: a circle's
+// one point is always its one point, which rolls; a box's is the point
+// nearest it, when that one is within `near` on the first body. Neither
+// is carried where the normal has turned.
+fn carried(p: Contact, last: Manifold, n: Vec2, near: Float, round: Bool) -> Contact {
+    if last.count == 0 || dot(last.normal, n) < 0.95 { return p; }
+    if round { return Contact { ..p, normal: last.p1.normal, tangent: last.p1.tangent }; }
+    let d1 = length(last.p1.anchor_a - p.anchor_a);
+    let d2 = if last.count > 1 { length(last.p2.anchor_a - p.anchor_a) } else { 1000000000.0 };
+    if d1 <= d2 && d1 < near { return Contact { ..p, normal: last.p1.normal, tangent: last.p1.tangent }; }
+    if d2 < near { return Contact { ..p, normal: last.p2.normal, tangent: last.p2.tangent }; }
+    return p;
+}
+
+/// Each pair's manifold. A pair keeps points up to `margin` apart and as
+/// far as the two may close in the step; a sensor's only where they
+/// touch. A point starts from the impulses the pair's point there held
+/// in the last step, `held`, so a resting stack is pushed as hard as it
+/// was a step ago.
+kernel physics.collide@1 {
+    requires { field.read; field.write; }
+    input pairs: Rows<Pair>;
+    input bodies: Rows<Body>;
+    input held: Rows<Manifold>;
+    param dt: Float = 0.0166667;
+    param margin: Float = 0.02;
+    output result: Rows<Manifold>;
+    compute {
+        let pair = sample(pairs);
+        let a = at(bodies, max(pair.a, 0));
+        let b = at(bodies, max(pair.b, 0));
+        let sensor = a.sensor != 0 || b.sensor != 0;
+        let reach = if sensor { 0.0 } else { margin + sweep(a, dt) + sweep(b, dt) };
+        let t = if pair.a < 0 { apart() } else { touch(a, b, reach) };
+        let n = t.normal;
+        let found = if pair.a < 0 || sensor { -1 } else { last_of(held, pair.a, pair.b) };
+        let last = at(held, max(found, 0));
+        let was = if found >= 0 { last } else { Manifold { ..last, count: 0 } };
+        let near = 0.25 * min(extent(a), extent(b));
+        let round = a.shape == BodyShape.Circle || b.shape == BodyShape.Circle;
+        return Manifold {
+            a: pair.a,
+            b: pair.b,
+            count: t.count,
+            sensor: int(sensor),
+            normal: n,
+            p1: carried(holding(a, b, t.c1, t.s1, n), was, n, near, round),
+            p2: carried(holding(a, b, t.c2, t.s2, n), was, n, near, round),
+            friction: sqrt(a.friction * b.friction),
+            restitution: max(a.restitution, b.restitution),
+            push_a: vec3(0.0, 0.0, 0.0),
+            push_b: vec3(0.0, 0.0, 0.0),
+        };
+    }
+}
+
+// Whether a manifold pushes its bodies.
+fn solid(m: Manifold) -> Bool { return m.count > 0 && m.sensor == 0; }
+
+/// How many manifolds push each body, among which its mass is split.
+kernel physics.shared@1 {
+    requires { field.read; field.write; }
+    input manifolds: Rows<Manifold>;
+    input zeros: Rows<Int>;
+    output result: Rows<Int>;
+    scatter into zeros with sum {
+        let m = at(manifolds, element() / 2);
+        let body = if element() % 2 == 0 { m.a } else { m.b };
+        return Counted { at: if solid(m) { body } else { -1 }, value: 1 };
+    }
+}
+
+/// A zero for each body.
+kernel physics.no_counts@1 {
+    requires { field.read; field.write; }
+    input bodies: Rows<Body>;
+    output result: Rows<Int>;
+    compute { return 0; }
+}
+
+/// No push for each body.
+kernel physics.no_pushes@1 {
+    requires { field.read; field.write; }
+    input bodies: Rows<Body>;
+    output result: Rows<Vec3>;
+    compute { return vec3(0.0, 0.0, 0.0); }
+}

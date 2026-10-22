@@ -18,7 +18,7 @@
 //! finds contacts where the bodies are at its start, so a box turning
 //! much of a turn in one step (150 radians a second at 30 m/s) may pass
 //! through a thin wall a corner swings across.
-use "../kernels/physics.ent";
+use "../kernels/";
 
 input bodies: Rows<Body>;
 input held: Rows<Manifold>;
@@ -47,7 +47,7 @@ node bounds: physics.bounds@1 {
     dt = dt; margin = margin; origin = origin; cell = cell; columns = columns; rows = rows;
 }
 node spans: physics.spans@1 { bounds <- bounds.result; }
-node span_lists: graph "compact.entpkg/graphs/runs.esn" { counts <- spans.result; }
+node span_lists: graph "parallel.entpkg/graphs/runs.esn" { counts <- spans.result; }
 node owners: physics.owners@1 { total <- span_lists.entries; ends <- span_lists.ends; domain = value(total); }
 node cells: physics.cells@1 {
     owners <- owners.result;
@@ -56,10 +56,10 @@ node cells: physics.cells@1 {
     bounds <- bounds.result;
     columns = columns;
 }
-node order: graph "sort.entpkg/graphs/sort.esn" { keys <- cells.result; bits = bits; }
+node order: graph "parallel.entpkg/graphs/sort.esn" { keys <- cells.result; bits = bits; }
 node no_cells: physics.no_cells@1 { columns = columns; rows = rows; domain = columns * rows; }
 node cell_counts: physics.cell_counts@1 { keys <- cells.result; zeros <- no_cells.result; }
-node cell_ends: compact.ends@1 { counts <- cell_counts.result; }
+node cell_ends: parallel.runs_ends@1 { counts <- cell_counts.result; }
 node no_entries: physics.no_entries@1 { order <- order.result; }
 node places: physics.places@1 { order <- order.result; zeros <- no_entries.result; }
 
@@ -78,7 +78,7 @@ node pair_counts: physics.pair_counts@1 {
     bounds <- bounds.result;
     columns = columns;
 }
-node pair_lists: graph "compact.entpkg/graphs/runs.esn" { counts <- pair_counts.result; }
+node pair_lists: graph "parallel.entpkg/graphs/runs.esn" { counts <- pair_counts.result; }
 node no_pairs: physics.no_pairs@1 { total <- pair_lists.entries; domain = value(total); }
 node pairs: physics.pairs@1 {
     bodies <- bodies;

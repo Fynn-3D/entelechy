@@ -50,7 +50,7 @@ kernel blur.pass@1 {
 }
 
 /// An emboss: the 3 by 3 kernel is a matrix, read column by column with
-/// the same offsets that fetch the neighbours.
+/// the same offsets that fetch the neighbors.
 kernel blur.emboss@1 {
     requires { field.read; field.write; }
     input source: Picture;
@@ -63,8 +63,8 @@ kernel blur.emboss@1 {
             let d = ivec2(index() % 3 - 1, index() / 3 - 1);
             acc + at(source, mirror(c + d, n)) * stencil[d.x + 1][d.y + 1]
         };
-        let grey = saturate(dot(sum.rgb, vec3(0.299, 0.587, 0.114)) + 0.5);
-        return vec4(vec3(grey, grey, grey), 1.0);
+        let gray = saturate(dot(sum.rgb, vec3(0.299, 0.587, 0.114)) + 0.5);
+        return vec4(vec3(gray, gray, gray), 1.0);
     }
 }
 

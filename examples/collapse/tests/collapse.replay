@@ -2,7 +2,7 @@ scene ../scene.esn
 
 # A 320 by 200 window over a 32 by 20 grid, ten pixels a cell. Eight
 # cells settle a frame and the count is exactly that: with sixteen
-# tiles a neighbour rarely forces the last choice, so what spreading
+# tiles a neighbor rarely forces the last choice, so what spreading
 # does is rule tiles out, not finish cells. Once the grid is decided a
 # spot of it forgets a few times a second and grows back, which is why
 # the count dips; holding the pointer down melts what is under it.

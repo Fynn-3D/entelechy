@@ -9,7 +9,7 @@ blender -b --python bridges/blender/make_rig.py -- --out examples/skin/source/ar
 entelechy import examples/skin/source/arm.glb --out examples/skin/assets
 ```
 
-The [`skin` package](../../packages/skin.entpkg) does the posing, each
+The [`animation` package](../../packages/animation.entpkg) does the posing, each
 step a Kernel over a Field: sample each clip at the clock, blend the
 two, compose joint transforms up the parent chain through the inverse
 bind, and move each vertex by the four joints it is bound to. Held, the

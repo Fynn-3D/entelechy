@@ -1,0 +1,69 @@
+// One way of drawing (a renderer) is chosen at a time, numbered: 0 lit, 1 painted
+// (`render.daylight`, standard real-time lighting or a painting's), 2 light probes
+// (`graphs/probes.esn`), 3 path tracing (`graphs/path_trace.esn`), 6 workbench (`graphs/workbench.esn`).
+// The ways not chosen take a small piece of the G-buffer (16 × 16 as `render.way_extent` gives,
+// cut by `render.way_pass`): they draw at their surface's size, so they hardly draw. At last
+// `render.way_pick` takes the chosen way's picture.
+
+/// The way first chosen (`way`).
+kernel render.way_start@1 {
+    requires { field.write; }
+    param way: Int = 2;
+    output result: Rows<Int>;
+    compute { return way; }
+}
+
+/// The way changed over the picture: number keys 1 lit, 2 painted, 3 light probes, 4 path tracing, 5 workbench.
+kernel render.way_keys@1 {
+    requires { field.read; field.write; input.read; }
+    input previous: Rows<Int>;
+    output result: Rows<Int>;
+    compute {
+        return if key(49) { 0 } else if key(50) { 1 } else if key(51) { 2 } else if key(52) { 3 } else if key(53) { 6 } else { at(previous, 0) };
+    }
+}
+
+/// How large way `way` draws (two elements, width and height): `extent` when chosen (`chosen`), otherwise
+/// `off` square (16: small enough to hardly draw, more than 64 pixels, so it stays on the device). A node sets
+/// `domain = 2`.
+kernel render.way_extent@1 {
+    requires { field.read; field.write; }
+    input extent: Rows<Int>;
+    input chosen: Rows<Int>;
+    param way: Int = 0;
+    param off: Int = 16;
+    output result: Rows<Int>;
+    compute { return if at(chosen, 0) == way { at(extent, element()) } else { off }; }
+}
+
+/// One of the G-buffer's maps cut to the size a way draws at (`render.way_extent`): the whole when chosen,
+/// a small piece at the top left otherwise. A node sets `domain = vec2(value(extent, 0), value(extent, 1))`.
+kernel render.way_pass@1 {
+    requires { field.read; field.write; }
+    input grid: Grid<Vec4>;
+    input extent: Rows<Int>;
+    output result: Grid<Vec4>;
+    compute { return at(grid, min(coord(), size(grid) - vec2(1.0, 1.0))); }
+}
+
+/// The chosen way's picture, at `domain`'s size (the picture's).
+kernel render.way_pick@1 {
+    requires { field.read; field.write; }
+    input lit: Image;
+    input painted: Image;
+    input probes: Image;
+    input path: Image;
+    input workbench: Image;
+    input chosen: Rows<Int>;
+    input extent: Rows<Int>;
+    output result: Image;
+    compute {
+        let w = at(chosen, 0);
+        let uv = (coord() + 0.5) / domain();
+        return if w == 0 { at(lit, min(floor(uv * size(lit)), size(lit) - 1.0)) }
+            else if w == 1 { at(painted, min(floor(uv * size(painted)), size(painted) - 1.0)) }
+            else if w == 3 { at(path, min(floor(uv * size(path)), size(path) - 1.0)) }
+            else if w == 6 { at(workbench, min(floor(uv * size(workbench)), size(workbench) - 1.0)) }
+            else { at(probes, min(floor(uv * size(probes)), size(probes) - 1.0)) };
+    }
+}

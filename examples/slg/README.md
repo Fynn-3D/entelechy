@@ -16,18 +16,18 @@ blank ────────────────────────�
   order, last frame's keys); it issues orders.
 - `slg.units`: applies the order to the soldiers: move, strike, wait,
   new turn.
-- `grid.relax` from the grid package, placed repeatedly through
+- `grid.relax` from the math package, placed repeatedly through
   `passes.esn` over `slg.costs` (a tile's cost, or none where a foe
   stands): movement range, and the distance field the enemy follows to
   the fords.
 - `slg.draw`: tiles, sprites, cursor, health bars, status bar.
-- `bgm.play`: a sixteen-step chiptune sequencer on the synth package's
+- `bgm.play`: a sixteen-step chiptune sequencer on the audio package's
   clock, with a noise hit on each strike; `bgm.stereo` feeds the `sound`
   output.
 
 The skirmish replay asserts on the state rows through a selection, a
 strike, and an enemy turn.
-The paced replay holds the synth package's clock kept to the time
+The paced replay holds the audio package's clock kept to the time
 (`synth.paced`) to its count of samples thirteen hours in.
 
 ```sh

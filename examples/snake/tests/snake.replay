@@ -1,6 +1,6 @@
 scene snake.esn
 
-# Eight ticks per second; cells are 10 pixels, centres at (10x + 5, 10y + 5).
+# Eight ticks per second; cells are 10 pixels, centers at (10x + 5, 10y + 5).
 # The snake starts at (5..8, 12) heading right with food at (20, 12).
 frame 0.0
 expect 85 125 = 0.7 1.0 0.6 0.05      # head (8, 12)

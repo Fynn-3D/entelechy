@@ -1,7 +1,7 @@
 //! A world of growing life that rewrites its own law of growth. The
 //! law is `laws/grow.ent`; the world counts what lives, and when its
 //! life is dying out or choking it fills `templates/grow.tmpl` with
-//! another centre and width, and writes the law again.
+//! another center and width, and writes the law again.
 
 /// The first life: noise, deterministic on every backend.
 kernel world.seed@1 {
@@ -32,7 +32,7 @@ kernel world.census@1 {
 }
 
 /// The law's numbers the world starts from, as `laws/grow.ent` holds
-/// them: centre, width, the law's generation, frames since it was
+/// them: center, width, the law's generation, frames since it was
 /// written.
 kernel world.first_tuning@1 {
     requires { field.write; }
@@ -42,7 +42,7 @@ kernel world.first_tuning@1 {
 
 /// The law's numbers, retuned while the world's life is out of balance,
 /// once the last law has had `patience` frames: too crowded, a lower
-/// centre and a narrower law thin it; too sparse, a higher centre and a
+/// center and a narrower law thin it; too sparse, a higher center and a
 /// wider one let it grow. Its generation counts the laws written; in
 /// balance, the law stands.
 kernel world.tuning@1 {
@@ -53,7 +53,7 @@ kernel world.tuning@1 {
     param patience: Float = 20.0;
     output result: Rows<Float>;
     compute {
-        let centre = at(before, 0);
+        let center = at(before, 0);
         let width = at(before, 1);
         let generation = at(before, 2);
         let rest = at(before, 3);
@@ -62,17 +62,17 @@ kernel world.tuning@1 {
         let crowded = share > 0.31;
         let retune = rest >= patience && (sparse || crowded);
         let tuned = [
-            clamp(centre + if sparse { 0.02 } else { -0.02 }, 0.1, 0.5),
+            clamp(center + if sparse { 0.02 } else { -0.02 }, 0.1, 0.5),
             clamp(width * if sparse { 1.05 } else { 0.95 }, 0.01, 0.08),
             generation + 1.0,
             0.0
         ];
-        let kept = [centre, width, generation, rest + 1.0];
+        let kept = [center, width, generation, rest + 1.0];
         return if retune { tuned[element()] } else { kept[element()] };
     }
 }
 
-/// The life, coloured by the generation of the law it lives under; a
+/// The life, colored by the generation of the law it lives under; a
 /// red frame while the world reads a problem in its laws.
 kernel world.paint@1 {
     requires { field.read; field.write; }

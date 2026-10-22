@@ -1,6 +1,6 @@
 // The noise package at a few points, for noise.replay.
 use "../kernels/";
-use "../../../packages/noise.entpkg";
+use "../../../packages/random.entpkg";
 
 node probe: nebula.probe@1 { domain = 4; }
 node spread: nebula.spread@1 { domain = 4; }

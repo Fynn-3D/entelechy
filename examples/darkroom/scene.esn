@@ -1,5 +1,5 @@
 // The darkroom: a raw photograph developed with the image package. Its
-// histogram is spread, its colour graded, its detail sharpened; a mark's
+// histogram is spread, its color graded, its detail sharpened; a mark's
 // signed distance draws a neon outline screened over it; the corners
 // are darkened; and the light is encoded for the window. `view` shows a
 // stage: 0 the raw photograph, 1 equalized, 2 graded, 3 sharpened, 4

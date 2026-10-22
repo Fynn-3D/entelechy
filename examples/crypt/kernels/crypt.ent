@@ -1,4 +1,4 @@
-// A crypt drawn with the voxel package: a chamber of 48 by 24 by 48
+// A crypt drawn with the render package: a chamber of 48 by 24 by 48
 // voxels of a quarter meter, baked once (flagstones, brick walls, four
 // pillars, a vault, torches on the walls, a pool of water in a corner),
 // and a statue in a box of its own at the middle, turning. A ray a pixel

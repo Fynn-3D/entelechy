@@ -14,7 +14,7 @@ expect 320 200 = 0.03 0.03 0.04
 expect 161 101 = 0.299 0.270 0.253
 
 # Top right, precision: floats find every pixel inside the ring, at its
-# (5, 5); doubles find the centre inside, at (85, 45), and the corner
+# (5, 5); doubles find the center inside, at (85, 45), and the corner
 # outside, at (155, 5).
 expect 338 25 = 1.0 0.55 0.1
 expect 490 101 = 1.0 0.55 0.1

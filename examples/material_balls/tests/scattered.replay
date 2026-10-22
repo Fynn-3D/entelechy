@@ -1,0 +1,10 @@
+scene scattered.esn
+
+# Within eight meters of the center: the pebbles in patches over half the
+# ground, the tufts even and twice as dense; a slot out of reach is
+# empty, deep under the ground.
+frame 0.0
+expect kept.result[0] = 131
+expect kept.result[1] = 365
+expect scatter.result[0].item = -1
+expect scatter.result[0].at = 0 -100000 0

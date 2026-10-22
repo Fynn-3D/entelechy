@@ -2,11 +2,11 @@
 // and Tan). Each pixel keeps the nearest seed it has heard of; each
 // pass asks the eight pixels a step away, the step halving from half the
 // picture down to one, and one pass more at one.
-use "colour.ent";
+use "color.ent";
 
 /// Seeds: where the mask is on (its luminance times alpha past
 /// `threshold`, or not past it when `inside` is false), the pixel's own
-/// centre, else none. A seed is (x, y, 1, 0); none is all zeros.
+/// center, else none. A seed is (x, y, 1, 0); none is all zeros.
 kernel image.seeds@1 {
     requires { field.read; field.write; }
     input mask: Image;
@@ -62,7 +62,7 @@ kernel image.flood@1 {
     }
 }
 
-/// The signed distance, in pixels, from each pixel's centre to the
+/// The signed distance, in pixels, from each pixel's center to the
 /// shape's edge: from the nearest pixel of the shape when outside it
 /// (`inside`'s flood), less the distance to the nearest pixel outside
 /// it when within (`outside`'s flood); half a pixel taken off each, so

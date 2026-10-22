@@ -695,8 +695,8 @@ fn the_clock_reaches_kernels_whole_and_time_rounded() {
 }
 
 #[test]
-fn linear_interpolation_blends_neighbours_and_clamps() {
-    // A 2x2 image: pixel centres are exact, halfway blends, beyond the edge
+fn linear_interpolation_blends_neighbors_and_clamps() {
+    // A 2x2 image: pixel centers are exact, halfway blends, beyond the edge
     // clamps.
     let module = compile(
         "kernel test.lerp@1 { requires { field.read; field.write; } input source: Image; param at: Vec2 = vec2(0.5, 0.5); output result: Rows<Vec4>; compute { return at_linear(source, at); } }",
@@ -761,7 +761,7 @@ fn linear_interpolation_blends_neighbours_and_clamps() {
     assert_eq!(
         values,
         [1.0, 3.0, 4.0],
-        "halfway between neighbours, clamped at the end"
+        "halfway between neighbors, clamped at the end"
     );
     let error = compile(
         "kernel test.bad@1 { requires { field.read; field.write; } input ids: Rows<Int>; output result: Rows<Int>; compute { return at_linear(ids, 0.5); } }",

@@ -1,0 +1,50 @@
+scene ../scene.esn
+
+# Nothing touched: the dot at the middle, no lamp lit, the keyboard's.
+frame 0.0
+expect walker.result[0].at = 80 60
+expect controls.result[0].held = 0
+expect 80 60 = 0.950 0.800 0.300
+expect 9 5 = 0.200 0.220 0.250
+
+# D held walks the dot right, sixty pixels a second, a frame at most a
+# tenth of one; Space lights the jump's lamp while held, pressed on its
+# first frame only.
+key 68 down
+key 32 down
+frame 0.1
+expect controls.result[0].pressed = 1
+expect controls.result[0].held = 1
+frame 0.6
+expect controls.result[0].pressed = 0
+expect walker.result[0].at = 92 60 0.01
+expect 9 5 = 0.300 0.900 0.400
+key 68 up
+key 32 up
+frame 0.7
+expect controls.result[0].released = 1
+expect controls.result[0].held = 0
+
+# A pad: the left stick pulled back steps the cursor down once, then
+# again after the delay while held, and the pad is the last touched.
+# West fires; F on the keyboard makes the keyboard the last touched.
+pads 1
+stick left 0 -1
+frame 0.8
+expect controls.result[0].pad = 1
+expect walker.result[0].row = 1
+frame 1.0
+expect walker.result[0].row = 1
+frame 1.25
+expect walker.result[0].row = 2
+stick left 0 0
+button west down
+frame 1.3
+expect controls.result[0].held = 2
+expect 21 5 = 0.300 0.900 0.400
+button west up
+key 70 down
+frame 1.35
+expect controls.result[0].pad = 0
+key 70 up
+frame 1.4

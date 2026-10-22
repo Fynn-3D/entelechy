@@ -4,7 +4,7 @@
 //!   node picture: graph "../../packages/vector.entpkg/graphs/drawing.esn" {
 //!       shapes <- shapes; segments <- segments; stops <- stops; view <- view;
 //!   }
-use "../kernels/vector.ent";
+use "../kernels/";
 
 input shapes: Rows<Shape>;
 input segments: Rows<Vec4>;

@@ -84,7 +84,7 @@ pub fn to_output(
 }
 
 /// CPU presentation: converts linear float pixels to `0x00RRGGBB`,
-/// scales them nearest-neighbour into the target frame at their aspect
+/// scales them nearest-neighbor into the target frame at their aspect
 /// ratio, letterboxes with black, and returns the placement.
 pub fn present(
     pixels: &[[f32; 4]],

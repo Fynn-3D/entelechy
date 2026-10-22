@@ -1,0 +1,5 @@
+//! Many things scattered over the ground by layers, round a center, one
+//! place always growing the same things.
+package scatter@1 { language = 1; ir = 1; }
+
+use "kernels/";

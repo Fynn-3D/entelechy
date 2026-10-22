@@ -1,15 +1,6 @@
-//! The ui package: a screen's widgets drawn per pixel, the text on them,
-//! and the navigation that moves through them by keys, pad or pointer.
-//!
-//! Every widget is a function of a rectangle and the pixel asked for,
-//! and is nothing outside its rectangle, so a screen is the widgets laid
-//! over one another and a pixel near none of them costs a test each. A
-//! scene binds the letters' grid, the text package's bitmap font or that
-//! font with an atlas of wide glyphs the scene draws (`ui.letters`), as
-//! an input of the Kernel that draws, and the rows of letters its text
-//! decodes to (`graphs/text.esn`):
-//!   use "../../packages/ui.entpkg";
-//!   input font: Grid<Float> = "../../packages/text.entpkg/font.png";
+//! A screen's widgets drawn per pixel: layout, paint, widgets over a
+//! theme, writing, navigation by keys, pad or pointer, a command search,
+//! and marks over a 3D picture.
 package ui@1 { language = 1; ir = 1; }
 
 use "kernels/";

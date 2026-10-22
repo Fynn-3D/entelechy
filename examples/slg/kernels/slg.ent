@@ -1,6 +1,6 @@
 // A small tactics game in the NES manner. One row of state holds the turn
 // machine, one row of units holds the armies, a grid holds the terrain,
-// and the movement range is six of the grid package's passes over it. The
+// and the movement range is six of the math package's passes over it. The
 // rules only issue orders; the unit row applies them; the picture is the
 // last node. Arrows move the cursor, Z confirms, X cancels, Enter ends
 // the turn.
@@ -112,7 +112,7 @@ kernel slg.seed@1 {
     }
 }
 
-/// What each cell costs to enter, for the grid package's passes: its
+/// What each cell costs to enter, for the math package's passes: its
 /// tile's cost, or 999, not entered, where a unit of the other team
 /// stands; friends may be passed through. Water costs 99, so a walk to the
 /// prey crosses a river where it has to.

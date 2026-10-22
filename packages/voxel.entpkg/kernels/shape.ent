@@ -1,0 +1,68 @@
+// Shapes as data, a sphere, a rounded cuboid or a capsule, each painting a
+// number or carving, baked into a volume or painted over one.
+use "ray.ent";
+
+/// The forms a shape takes.
+type VoxelForm = enum { Sphere, Cuboid, Capsule };
+
+/// A shape in a volume's voxels, as data: a sphere about `a` of radius
+/// `r`; a cuboid about `a` reaching `b` along each axis, its edges rounded
+/// by `r`; a capsule from `a` to `b` of radius `r`. Painted, the voxels
+/// whose middles it holds take `id`, and 0 carves them out.
+struct VoxelShape { form: VoxelForm; a: Vec3; b: Vec3; r: Float; id: Int; }
+
+fn voxel_sphere(at: Vec3, r: Float, id: Int) -> VoxelShape {
+    return VoxelShape { form: VoxelForm.Sphere, a: at, b: at, r: r, id: id };
+}
+
+fn voxel_cuboid(at: Vec3, half: Vec3, round: Float, id: Int) -> VoxelShape {
+    return VoxelShape { form: VoxelForm.Cuboid, a: at, b: half, r: round, id: id };
+}
+
+fn voxel_capsule(from: Vec3, to: Vec3, r: Float, id: Int) -> VoxelShape {
+    return VoxelShape { form: VoxelForm.Capsule, a: from, b: to, r: r, id: id };
+}
+
+/// How far `p` is outside a shape, in voxels; less than 0 inside.
+fn voxel_distance(s: VoxelShape, p: Vec3) -> Float {
+    if s.form == VoxelForm.Sphere { return length(p - s.a) - s.r; }
+    if s.form == VoxelForm.Cuboid {
+        let q = abs(p - s.a) - s.b + s.r;
+        return length(max(q, vec3(0.0, 0.0, 0.0))) + min(max(q.x, max(q.y, q.z)), 0.0) - s.r;
+    }
+    let ab = s.b - s.a;
+    let h = saturate(dot(p - s.a, ab) / max(dot(ab, ab), 0.000001));
+    return length(p - s.a - ab * h) - s.r;
+}
+
+/// The voxel at cell `c`, holding `id`, painted over by each of `shapes`
+/// in order: the last holding its middle gives it its number.
+fn voxel_painted(id: Int, c: IVec3, shapes: Rows<VoxelShape>) -> Int {
+    let p = float(c) + 0.5;
+    return loop count(shapes) with v = id {
+        let s = at(shapes, index());
+        if voxel_distance(s, p) <= 0.0 { s.id } else { v }
+    };
+}
+
+/// A volume of shapes: each voxel the number of the last of `shapes`
+/// holding its middle, empty where none does. Its `domain` is the
+/// volume's size.
+kernel voxel.shapes@1 {
+    requires { field.read; field.write; }
+    input shapes: Rows<VoxelShape>;
+    output result: Voxels;
+    compute { return voxel_painted(0, icoord(), shapes); }
+}
+
+/// A volume painted over by `shapes`, in order, as `voxel.shapes@1`
+/// paints an empty one. Fed back (`volume <~ world.result from ...`) it
+/// is a world edited a frame at a time; given no shapes, it is the
+/// volume as it was, and what reads it does not run again.
+kernel voxel.paint@1 {
+    requires { field.read; field.write; }
+    input volume: Voxels;
+    input shapes: Rows<VoxelShape>;
+    output result: Voxels;
+    compute { return voxel_painted(sample(volume), icoord(), shapes); }
+}

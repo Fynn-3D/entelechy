@@ -43,7 +43,7 @@ node face: kernel {
     }
 }
 
-node raster: graph "../../../packages/raster.entpkg/graphs/raster.esn" {
+node raster: graph "../../../packages/raster.entpkg/graphs/surface.esn" {
     vertices <- points.result;
     triangles <- face.result;
     width = 64;

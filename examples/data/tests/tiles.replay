@@ -1,6 +1,6 @@
 scene tiles.esn
 
-# Tile centres are 8 pixels in from a tile's corner. Sprites are flat there,
+# Tile centers are 8 pixels in from a tile's corner. Sprites are flat there,
 # and the height shade is at most 15%, so colors are checked loosely.
 # Rock lies where (3x + 5y) mod 7 == 1: tile (5, 0) is rock, (0..4, 0) are
 # not. The first frame floods one step from the spring at (0, 0).

@@ -15,7 +15,7 @@ usage:
       and, when it has one in PNG, <stem>.albedo.png. A model with a skin also
       becomes <stem>.weights.field and <stem>.skeleton.field, and one
       <stem>.<name>.clip.field per animation, sampled at --rate frames a second
-      (30 by default), which the `skin` package poses a mesh from; a sound (.mp3, .ogg, .flac,
+      (30 by default), which the `animation` package poses a mesh from; a sound (.mp3, .ogg, .flac,
       .m4a, .aac, .mka, .wav) becomes <stem>.wav at its own rate; a score (.mid,
       .midi) becomes <stem>.notes.field, a row a note with its seconds, its key,
       how hard it was struck and its channel; a drawing (.svg) becomes
@@ -121,7 +121,7 @@ fn import(args: &[String]) -> Result<(), String> {
                     if clips.is_empty() {
                         ""
                     } else {
-                        "; a scene reads a clip through the `skin` package"
+                        "; a scene reads a clip through the `animation` package"
                     }
                 );
             }

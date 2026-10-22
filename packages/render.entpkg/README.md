@@ -1,0 +1,193 @@
+# render
+
+The rendering contract and its renderers: a scene hands over a G-buffer
+and proxies, and a renderer owns the light — light probes, a path
+tracer, daylight, a workbench — with physically based shading, the sky,
+a camera, temporal antialiasing and upscaling, depth of field, film and
+a painted look.
+
+**Layer:** Graphics. **Uses:** [`geometry`](../geometry.entpkg/README.md), [`image`](../image.entpkg/README.md), [`random`](../random.entpkg/README.md), [`raster`](../raster.entpkg/README.md).
+
+```text
+use "render.entpkg";
+```
+
+## Kernels
+
+- `kernels/aerial.ent` — Aerial perspective after the real atmosphere.
+  Kernels: `render.air@1`.
+- `kernels/antialias.ent` — Antialiasing within one frame (FXAA).
+  Kernels: `render.fxaa@1`.
+- `kernels/brdf.ent` — Standard PBR.
+- `kernels/camera.ent` — The lens, and the proxies (the coarse scene a
+  renderer traces shadows and bounces through). Kernels:
+  `render.cam_start@1`, `render.cam@1`, `render.settled@1`,
+  `render.depths@1`, `render.settle@1`, `render.lens@1`.
+- `kernels/contact_shadow.ent` — Contact shadows. Kernels:
+  `render.contact@1`.
+- `kernels/daylight.ent` — Daylight. Kernels: `render.daylight@1`.
+- `kernels/depth_of_field.ent` — Depth of field. Kernels:
+  `render.dof_start@1`, `render.dof_control@1`, `render.focus@1`,
+  `render.focused@1`.
+- `kernels/film.ent` — Film. Kernels: `render.film_start@1`,
+  `render.film_keys@1`, `render.film@1`.
+- `kernels/merge.ent` — Two G-buffers of one view made one. Kernels:
+  `render.nearer@1`.
+- `kernels/painted.ent` — A painted look. Kernels: `render.npr@1`.
+- `kernels/path_trace.ent` — Path tracing (standard PBR, `brdf.ent`).
+  Kernels: `render.path_count_start@1`, `render.path_count@1`,
+  `render.path_trace@1`, `render.path_blank@1`, `render.path_accum@1`,
+  `render.path_atrous@1`, `render.path_behind@1`, `render.path_shade@1`.
+- `kernels/post.ent` — Post-processing. Kernels: `render.blank@1`,
+  `render.bright@1`, `render.spread@1`, `render.view@1`.
+- `kernels/probes.ent` — Light probes. Kernels: `render.probes_sign@1`,
+  `render.probes_seen@1`, `render.probes_gather@1`,
+  `render.probes_screen_gather@1`, `render.probes_gather_keep@1`,
+  `render.probes_gather_blur@1`, `render.probes_behind@1`,
+  `render.probes_lit@1`, `render.probes_shade@1`.
+- `kernels/sky.ent` — The sky.
+- `kernels/super_resolution.ent` — Temporal super-resolution (TSR).
+  Kernels: `render.tsr@1`, `render.keep_surface@1`.
+- `kernels/switch.ent` — One way of drawing (a renderer) is chosen at a
+  time, numbered. Kernels: `render.way_start@1`, `render.way_keys@1`,
+  `render.way_extent@1`, `render.way_pass@1`, `render.way_pick@1`.
+- `kernels/temporal.ent` — Temporal antialiasing (TAA). Kernels:
+  `render.jitter@1`, `render.taa@1`, `render.same_lens@1`.
+- `kernels/transmission.ent` — Transmission (glass, water, ice).
+  Kernels: `render.settle_behind@1`.
+- `kernels/upscale.ent` — The picture is computed at an inner resolution
+  with a ceiling and scaled to the window at last. Kernels:
+  `render.dynamic_start@1`, `render.dynamic@1`, `render.extent@1`,
+  `render.extent_size@1`, `render.canvas@1`, `render.upscale@1`,
+  `render.sharpen@1`.
+- `kernels/workbench.ent` — The workbench's light and backdrop, and its
+  renderer on the standard contract (this package's). Kernels:
+  `render.workbench_shade@1`.
+
+## Graph presets
+
+- `graphs/blend.esn` — Temporal antialiasing and upscaling.
+- `graphs/finish.esn` — The finish.
+- `graphs/finish_inner.esn` — The finish at the picture's own size
+  (`finish.esn` works at the window's).
+- `graphs/path_trace.esn` — The path tracer (`kernels/path_trace.ent`).
+- `graphs/picture.esn` — The picture's raster.
+- `graphs/probes.esn` — The light-probe renderer (`kernels/probes.ent`).
+- `graphs/super_resolution.esn` — Temporal super-resolution
+  (`render.tsr`).
+- `graphs/upscale.esn` — A finished picture (tone-mapped, sRGB) scaled
+  to the window's size.
+- `graphs/workbench.esn` — The workbench renderer
+  (`render.workbench_shade`) on a scene's G-buffer (the contract, its
+  first three maps).
+
+## Tested by
+
+[material_balls](../../examples/material_balls/README.md), whose replays hold it on every backend.
+
+## The contract
+
+The contract between a scene and a renderer, and what every renderer shares.
+A scene owns geometry and materials; a renderer owns light. A scene built on
+this contract takes any renderer package by changing a few graph lines.
+
+### What a scene hands over
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `lens` | `Lenses` | The camera this frame (`render.cam` drives one); `focal` 0 sees nothing (a renderer not shown), and a renderer rests on it. |
+| `sky` | `SkyLooks` | The sun, the sky's colors, clouds, far silhouettes, air. |
+| `surface` | `Grid<Vec4>` | Per pixel: world normal (xyz), distance along the view ray (w; `no_hit()` for sky). |
+| `paint` | `Grid<Vec4>` | Per pixel: albedo (rgb, linear), roughness (w). |
+| `extra` | `Grid<Vec4>` | Per pixel: sun visibility (x, 0 to 1, from the scene's exact geometry), metalness (y), emission strength (z; emission is albedo times it), baked ambient occlusion (w; the scene's own, finer than a renderer finds; 0 means none given, `baked_occlusion`). |
+| `layers` | `Grid<Vec4>` | Per pixel: clearcoat (x), clearcoat roughness (y; 0 means 0.05), sheen (z), subsurface (w). All zero for plain surfaces. |
+| `more` | `Grid<Vec4>` | Per pixel: anisotropy (x), transmission (y), index of refraction (z; 0 means 1.5); w spare. All zero for plain surfaces. |
+| `behind_at` | `Grid<Vec4>` | Where a transmissive pixel's refracted path lands: world position (xyz), 1 if it hit something (w; 0: it left for the sky). |
+| `behind_dir` | `Grid<Vec4>` | The path's last direction (xyz), the sun's visibility there (w). |
+| `behind_paint` | `Grid<Vec4>` | What it landed on: albedo (rgb), roughness (w). |
+| `behind_normal` | `Grid<Vec4>` | Its normal (xyz) and metalness (w). |
+| `through` | `Grid<Vec4>` | Transmittance along the path inside (rgb, absorption); w spare. All five zero where nothing transmits. |
+| `proxy` | `Volume<Vec4>` | Coarse scene for secondary rays: signed distance (x), albedo (yzw), on the `Proxy` frame's lattice. Ground excluded. |
+| `land` | `Grid<Float>` | Ground height on the `Proxy` frame's ground lattice. |
+| `frame` | `Proxies` | Where `proxy` and `land` lie in the world, and the ground's albedo. |
+
+The G-buffer is the scene's own full-precision view; `proxy` and `land` are
+what a renderer traces shadows and bounces through.
+
+A scene may hand over its G-buffer twice, through `render.settle`: a reduced
+one while the camera moves, and a full one, computed once, when it stops
+(`render.settled` gates it).
+
+### What a renderer gives
+
+`hdr: Image`, linear HDR, sky included. `render.bright`, `render.spread` and
+`render.view` turn it into the picture.
+
+### Transmission
+
+Refraction is geometry, so the scene traces it: where the view ray meets a
+transmissive surface it refracts in, finds the far side, refracts out and
+follows the path to what lies behind, handing that over as the `behind_*`
+layer with the absorption along the way. A renderer lights that point
+(`behind_radiance` in `kernels/transmission.ent`, its diffuse light from the
+renderer's own means), blurs it by the glass's roughness (`frosted`) and adds
+what Fresnel lets through (`transmitted`) under the surface's reflection.
+
+### Shading
+
+Every scene and renderer shades with `kernels/brdf.ent`, the standard
+metallic-roughness model (the glTF, Unreal and Principled BSDF convention):
+a base of Lambert diffuse (with subsurface wrap and translucency) and GGX
+specular (optionally anisotropic; Smith geometry, Schlick Fresnel with F0 from
+the index of refraction), a Charlie sheen lobe, and a clearcoat on top.
+`pbr` makes a plain surface, `lit_by` is one light, `ambient_by` the
+environment (split-sum, Karis' analytic fit; base and clearcoat reflections
+given apart), `ggx_sample` and `ggx_weight` a path tracer's glossy bounce,
+`pbr_of` a G-buffer pixel's `Pbr`. Transmission is carried for renderers that
+refract. `render.view` tone maps with `image.entpkg`'s `aces` and encodes sRGB.
+
+### Pieces
+
+- `kernels/camera.ent`: `Lens`, `ray`, the orbit camera (`render.cam`), the
+  `Proxy` frame and its rough tracing (`rough_trace`, `rough_shadow`,
+  `rough_normal`), `cosine_dir`.
+- `kernels/sky.ent`: `SkyLook`, `sky_radiance`, `aerial`.
+- `kernels/brdf.ent`: `Pbr` and the standard BRDF.
+- `kernels/post.ent`: bloom and tone mapping.
+- `kernels/upscale.ent`: a resolution of the scene's own, brought to the
+  window at the end, so the window's size costs little. `render.extent`
+  is the window scaled down to at most `pixels` pixels, times the share
+  `render.dynamic` sets from the frame time to keep `fps` (dynamic
+  resolution); `render.canvas` is an empty raster canvas of that size.
+  `upscaled` (and `render.upscale`) is an edge-aware upscale (FSR 1's EASU),
+  `render.sharpen` a sharpening that cannot overshoot (RCAS), both in display
+  space and each frame on its own. `graphs/finish_inner.esn` finishes at the
+  picture's size; `graphs/upscale.esn` upscales and sharpens to the window.
+  A scene that draws its HUD at the window's size reads the picture through
+  `upscaled` in that pass instead, so the window is written once.
+  `render.extent`'s `samples` supersamples (2: four points a pixel), and
+  `upscaled` then averages each pixel's block.
+- `kernels/aerial.ent`: `render.air`, aerial perspective as the air is: it
+  thins with height (Rayleigh's by 8 km, Mie's haze by 1.2 km), integrated
+  along the ray; Rayleigh scatters blue (far things bluer, flatter), Mie
+  forward (bright toward the sun); lit once by the sun and the sky. A scene
+  that uses it sets its `SkyLook`'s `air` to 0.
+- `kernels/depth_of_field.ent`: depth of field. `render.focus` follows the distance
+  at the middle of the picture (a camera's focus); `render.focused` blurs
+  by each pixel's circle of confusion, gathering 24 points on a Vogel disc,
+  a point counted where its own circle reaches, a farther one only where
+  the pixel is blurred too, so a sharp foreground takes no background.
+  `render.dof_start` / `render.dof_control` (a `<~` state) let the window
+  turn it: V off, to the middle, to the pointer; `[` `]` the aperture.
+- `kernels/film.ent`: `render.film`, a cinematic finish on the finished
+  picture: a grade in light (exposure, white balance, saturation, teal and
+  orange split, an S curve), halation, the lens's color fringe, vignette,
+  grain in clumps heaviest in the middle tones, wide-screen bars; presets
+  (`film_look`) or its own params, G in the window (`render.film_keys`).
+- `kernels/switch.ent`: one renderer at a time on the standard contract,
+  numbered (0 lit, 1 painted, 2 probes, 3 path, 6
+  workbench), keys 1 to 5; a way not chosen gets a 16 × 16 square of the
+  G-buffer (`render.way_extent`, `render.way_pass`), `render.way_pick` the
+  chosen picture.
+- `kernels/merge.ent`: two G-buffers of one view made one, each pixel the
+  nearer surface's (`render.nearer`), for a scene that draws its parts apart.

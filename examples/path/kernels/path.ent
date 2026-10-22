@@ -36,15 +36,15 @@ fn bounce_dir(n: Vec3, seed: Float) -> Vec3 {
 }
 
 // A ray against a sphere: the nearer root ahead of it, or nothing.
-fn sphere(ray: Ray, centre: Vec3, radius: Float, albedo: Vec3, light: Vec3) -> Hit {
-    let to = ray.origin - centre;
+fn sphere(ray: Ray, center: Vec3, radius: Float, albedo: Vec3, light: Vec3) -> Hit {
+    let to = ray.origin - center;
     let b = dot(to, ray.direction);
     let c = dot(to, to) - radius * radius;
     let discriminant = b * b - c;
     let root = if discriminant > 0.0 { -b - sqrt(discriminant) } else { -1.0 };
     let t = if root > 0.001 { root } else { -1.0 };
     let point = ray.origin + ray.direction * t;
-    return Hit { t: t, normal: (point - centre) / radius, albedo: albedo, light: light };
+    return Hit { t: t, normal: (point - center) / radius, albedo: albedo, light: light };
 }
 
 fn nearer(a: Hit, b: Hit) -> Hit {

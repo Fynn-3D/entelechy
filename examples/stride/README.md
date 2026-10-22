@@ -13,11 +13,11 @@ clip ─ skin.stride ─ skin.palette ─ skin.apply ─ skin.place ─ raster
    clock, and the clock as it was last evaluation (<~)
 ```
 
-- [`skin.stride@1`](../../packages/skin.entpkg/kernels/skin.ent) loops
+- [`animation.stride@1`](../../packages/animation.entpkg/kernels/skin.ent) loops
   the clip with the root's ground travel removed.
-- `skin.travel@1` gives the root's travel between the previous clock
+- `animation.travel@1` gives the root's travel between the previous clock
   and now, loops counted.
-- `stand` accumulates it through `<~`; `skin.place@1` puts the posed arm
+- `stand` accumulates it through `<~`; `animation.place@1` puts the posed arm
   there. The position is independent of how often the scene is
   evaluated.
 

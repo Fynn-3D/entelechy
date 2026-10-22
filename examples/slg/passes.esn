@@ -1,9 +1,9 @@
-// Six of the grid package's relaxation passes over a seeded range, one
+// Six of the math package's relaxation passes over a seeded range, one
 // node placed six times, each pass carrying the range on, over what each
 // cell costs this frame: placed once for how far the acting unit can go,
 // twice more for how far every cell is from the prey.
 use "kernels/";
-use "../../packages/grid.entpkg";
+use "../../packages/navigation.entpkg";
 
 input start: Grid<Int>;
 input map: Grid<Tile>;
@@ -11,7 +11,7 @@ input units: Rows<Unit>;
 input game: Rows<Game>;
 
 node cost: slg.costs@1 { map <- map; units <- units; game <- game; }
-node pass: grid.relax@1 {
+node pass: navigation.relax@1 {
     times = 6;
     blocked = 999;
     carry previous <- result;

@@ -2,7 +2,7 @@
 // flat, as a raw picture is, and the few Kernels the scene needs beside
 // the canvas package's: a mark to draw an outline round, the neon that
 // outline glows with, a vignette, and a switch between the stages.
-use "../../../packages/noise.entpkg";
+use "../../../packages/random.entpkg";
 use "../../../packages/image.entpkg";
 
 /// The sky and hills seen at `p` (x across in heights, y down), `y` the

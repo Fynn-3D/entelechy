@@ -989,7 +989,7 @@ pub(crate) fn emit_memory_writer(
 }
 
 /// Emits `linear_in{i}(c)`: the input interpolated at a fractional
-/// position, element centres at half-integers, clamped at the edges.
+/// position, element centers at half-integers, clamped at the edges.
 pub(crate) fn emit_linear(
     out: &mut String,
     module: &Module,

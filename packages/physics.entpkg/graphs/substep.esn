@@ -1,7 +1,7 @@
 //! One substep of `step.esn`: gravity, the manifolds solved, the bodies
 //! moved, and the manifolds solved once more without pushing apart, the
 //! impulses they then hold pushed again to warm the next substep.
-use "../kernels/physics.ent";
+use "../kernels/";
 
 input bodies: Rows<Body>;
 input manifolds: Rows<Manifold>;

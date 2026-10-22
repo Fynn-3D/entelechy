@@ -59,7 +59,7 @@ kernel ground.faces@1 {
 /// The picture. A surface a rasterizer left carries its uv at every
 /// pixel, so the pixel next door says how fast the texture is moving:
 /// that difference is the derivative a level is chosen by, and the
-/// triangle's own id says whether the neighbour is on the same surface.
+/// triangle's own id says whether the neighbor is on the same surface.
 kernel ground.shade@1 {
     requires { field.read; field.write; }
     input surface: Grid<Surface>;

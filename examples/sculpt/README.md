@@ -1,7 +1,7 @@
 # Sculpt
 
 An island of 64 by 32 by 64 voxels made of shapes as data and sculpted
-by hand, with the voxel package (`packages/voxel.entpkg`). Ten rows of
+by hand, with the render package (`packages/render.voxel_entpkg`). Ten rows of
 `VoxelShape` (rounded cuboids of sand, grass and earth, a sphere of
 stone, a pond dug out and filled, two trees of a capsule and a ball) are
 baked into a volume by `voxel.shapes@1`.

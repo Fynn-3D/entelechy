@@ -1,0 +1,6 @@
+//! A skeleton, the clips that pose it and the mesh that follows: sampling
+//! and blending clips, walking, aiming, and skinning by the joint
+//! palette.
+package animation@1 { language = 1; ir = 1; }
+
+use "kernels/";

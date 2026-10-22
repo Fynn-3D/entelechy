@@ -500,7 +500,7 @@ function decodeWords(base64) {
 }
 
 /// Where a frame of `width` by `height` lands in a `targetWidth` by
-/// `targetHeight` canvas, aspect kept, centred: the Player's placement.
+/// `targetHeight` canvas, aspect kept, centered: the Player's placement.
 function placement(width, height, targetWidth, targetHeight) {
   if (!width || !height || !targetWidth || !targetHeight) {
     return { x: 0, y: 0, width: 0, height: 0 };

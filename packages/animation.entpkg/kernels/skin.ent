@@ -1,0 +1,92 @@
+// Skinning: the joint palette, each joint's parents composed with its
+// pose and its inverse bind, and the mesh moved by the four joints each
+// vertex hangs off.
+use "aim.ent";
+use "skeleton.ent";
+
+/// The palette: each joint's local transform composed up the parent
+/// chain and taken through its inverse bind, which is the matrix a
+/// vertex bound to that joint is moved by.
+kernel animation.palette@1 {
+    requires { field.read; field.write; }
+    input poses: Rows<Pose>;
+    input skeleton: Skeleton;
+    /// How deep a skeleton may be. A joint's walk stops at the root long
+    /// before this unless someone built a chain of them.
+    param depth: Int = 64;
+    output result: Palette;
+
+    compute {
+        // Up the chain, each parent applied on the left of what the
+        // walk has so far. `until` is asked before a step, so a root
+        // stops it having applied only its own. An instance's joints
+        // are a block of their own, so a walk stays inside it.
+        let joints = count(skeleton);
+        let block = element() / joints * joints;
+        let mine = element() % joints;
+        let walked = loop depth with w = Walk { matrix: posing(sample(poses)), joint: mine }
+            until at(skeleton, w.joint).parent < 0 {
+            let up = at(skeleton, w.joint).parent;
+            Walk { matrix: posing(at(poses, block + up)) * w.matrix, joint: up }
+        };
+        return walked.matrix * at(skeleton, mine).bind;
+    }
+}
+
+/// The mesh in the pose the palette says: four joints a vertex,
+/// weighted. A node sized `instances * count(mesh)` poses a crowd out of
+/// one mesh, each instance reading its own block of the palette.
+///
+/// A vertex bound to nothing — all four weights zero, which is what a
+/// model that mixes skinned and unskinned meshes writes — is left where
+/// it is.
+kernel animation.apply@1 {
+    requires { field.read; field.write; }
+    input mesh: Rows<Point>;
+    input weights: Rows<Bound>;
+    input palette: Palette;
+    /// Bound for its count: how many joints an instance's palette holds.
+    input skeleton: Skeleton;
+    output result: Rows<Point>;
+
+    compute {
+        let vertices = count(mesh);
+        let block = element() / vertices * count(skeleton);
+        let v = at(mesh, element() % vertices);
+        let b = at(weights, element() % vertices);
+        if b.weights.x + b.weights.y + b.weights.z + b.weights.w == 0.0 { return v; }
+        let m = at(palette, block + b.joints[0]) * b.weights.x
+              + at(palette, block + b.joints[1]) * b.weights.y
+              + at(palette, block + b.joints[2]) * b.weights.z
+              + at(palette, block + b.joints[3]) * b.weights.w;
+        let moved = m * vec4(v.position, 1.0);
+        let turned = m * vec4(v.normal, 0.0);
+        return Point {
+            position: moved.xyz,
+            normal: normalize(turned.xyz),
+            uv: v.uv,
+        };
+    }
+}
+
+/// Where each instance stands: one `Pose` a instance, applied to the
+/// mesh it posed. A crowd is this over `animation.apply@1`'s output.
+kernel animation.place@1 {
+    requires { field.read; field.write; }
+    input mesh: Rows<Point>;
+    input places: Rows<Pose>;
+    /// Bound for its count: how many vertices one instance has.
+    input one: Rows<Point>;
+    output result: Rows<Point>;
+    compute {
+        let v = sample(mesh);
+        let place = posing(at(places, element() / count(one)));
+        let moved = place * vec4(v.position, 1.0);
+        let turned = place * vec4(v.normal, 0.0);
+        return Point {
+            position: moved.xyz,
+            normal: normalize(turned.xyz),
+            uv: v.uv,
+        };
+    }
+}

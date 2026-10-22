@@ -1,0 +1,121 @@
+// A track's music, a block of stereo samples: the song it plays and the
+// one before it, faded across; each song its parts, each part's note and
+// the one before it (so a note rings on as the next begins), the tune
+// echoed left and right, the chords spread, the drums under all.
+use "audio.entpkg";
+use "theory.ent";
+use "instrument.ent";
+use "part.ent";
+
+/// What a track plays: a song (a mood, a style, a seed) from sample
+/// `start`; the song before it (`was_*`) from `was_start`, fading out
+/// from `start`. A mood of -1 is quiet.
+struct Track { mood: Int; style: Int; seed: Int; start: Long; was_mood: Int; was_style: Int; was_seed: Int; was_start: Long; }
+type Tracks = Rows<Track>;
+
+/// How long one song fades into another (seconds).
+fn fade_time() -> Float { return 2.0; }
+
+/// A part's note and the note before it, played on `ins`.
+fn part(ins: Instrument, note: Vec4, before: Vec4, s: Float, seed: Int) -> Float {
+    let a = if note.w > 0.0 { play_note(ins, note.z, s - note.x, note.y, seed) } else { 0.0 };
+    let b = if before.w > 0.0 && before.x < note.x { play_note(ins, before.z, s - before.x, before.y, seed + 3) } else { 0.0 };
+    return a + b;
+}
+
+/// A short tune `s` seconds in: its notes on the tune's instrument, the
+/// tonic's chord under them, a drum on its first and last notes; quiet
+/// once it is done.
+fn jingle_song(m: Mood, st: Band, instruments: Instruments, s: Float, n: Long) -> Vec2 {
+    if s > jingle_length(m) + 2.0 { return vec2(0.0, 0.0); }
+    let tune_i = at(instruments, st.tune);
+    let chord_i = at(instruments, st.chords);
+    let note = jingle_note(m, s);
+    let before = jingle_note(m, note.x - 0.002);
+    let tune = part(tune_i, note, before, s, 7);
+    let held = jingle_length(m) - 1.2;
+    let chords = loop 3 with acc = 0.0 {
+        let k = index();
+        acc + play_note(chord_i, float(m.key + scale_step(m.mode, chord_degree(m.mode, 0, k))), s, held, 30 + k)
+    };
+    let bass_i = at(instruments, st.bass);
+    let bass = play_note(bass_i, float(m.key - 12), s, held, 50);
+    let hit = kit_drum(st.kit, drum_low(), s, n, 0.9) + kit_drum(st.kit, drum_low(), s - (jingle_length(m) - 1.5), n, 1.0);
+    let x = tune * st.tune_gain * 1.2 + chords * st.chords_gain * 0.4 + bass * st.bass_gain * 0.8 + hit * st.drums_gain * 0.6;
+    return vec2(x, x) * 0.27;
+}
+
+/// A song `s` seconds in, at sample `n`.
+fn song(home: Mood, st: Band, instruments: Instruments, seed: Int, s: Float, n: Long) -> Vec2 {
+    if home.jingle > 0 { return jingle_song(home, st, instruments, s, n); }
+    let m = varied(home, seed);
+    let tune_i = at(instruments, st.tune);
+    let chord_i = at(instruments, st.chords);
+    let arp_i = at(instruments, st.arp);
+    let bass_i = at(instruments, st.bass);
+    // The tune, and its echoes a dotted eighth and two apart, left then right.
+    let delay = where_in(m, 0.0).z * 0.75;
+    let tune_at = loop 3 with acc = vec3(0.0, 0.0, 0.0) {
+        let k = float(index());
+        let t = s - delay * k;
+        let note = tune_note(m, st, seed, t, 0);
+        let before = tune_note(m, st, seed, note.x - 0.002, 0);
+        let x = part(tune_i, note, before, t, seed);
+        let g = if index() == 0 { 1.0 } else { st.echo * (if index() == 1 { 1.0 } else { 0.45 }) };
+        vec3(acc.x + x * g * (if index() == 2 { 0.3 } else { 1.0 }), acc.y + x * g * (if index() == 1 { 0.3 } else { 1.0 }), 0.0)
+    };
+    let plucked = chord_i.osc == osc_pluck() || chord_i.osc == osc_bell();
+    let chords = loop 3 with acc = vec2(0.0, 0.0) {
+        let k = index();
+        let note = chord_note(m, st, plucked, k, s);
+        let before = chord_note(m, st, plucked, k, note.x - 0.002);
+        let x = part(chord_i, note, before, s, seed + 20 + k);
+        let side = float(k - 1) * 0.5;
+        vec2(acc.x + x * (1.0 - side), acc.y + x * (1.0 + side))
+    };
+    let arp_n = arp_note(m, s);
+    let arp = if arp_n.w > 0.0 { part(arp_i, arp_n, arp_note(m, arp_n.x - 0.002), s, seed + 40) } else { 0.0 };
+    // The counter-tune, in the theme's return, on its own instrument.
+    let counter_i = at(instruments, st.counter);
+    let cn = counter_note(m, st, seed, s);
+    let counter = if cn.w > 0.0 { part(counter_i, cn, counter_note(m, st, seed, cn.x - 0.002), s, seed + 60) } else { 0.0 };
+    let bass_n = if bass_plays(m, s) { bass_note(m, s) } else { none() };
+    let bass = if bass_n.w > 0.0 { part(bass_i, bass_n, bass_note(m, bass_n.x - 0.002), s, seed + 50) } else { 0.0 };
+    let drums = drums_at(m, st, s, n);
+    let l = tune_at.x * st.tune_gain + counter * st.tune_gain * 0.45 + chords.x * st.chords_gain * 0.45 + arp * st.arp_gain * 0.7 + bass * st.bass_gain + drums * st.drums_gain;
+    let r = tune_at.y * st.tune_gain + counter * st.tune_gain * 0.3 + chords.y * st.chords_gain * 0.45 + arp * st.arp_gain * 1.0 + bass * st.bass_gain + drums * st.drums_gain;
+    return vec2(l, r) * 0.27;
+}
+
+/// A sample held under full scale: untouched below 0.7, bent softly
+/// above it, so the music is never squashed.
+fn held_under(x: Float) -> Float {
+    let a = abs(x);
+    if a <= 0.7 { return x; }
+    let y = (a - 0.7) / 0.3;
+    return sign(x) * (0.7 + 0.3 * y / (1.0 + y));
+}
+
+kernel music.play@1 {
+    requires { field.read; field.write; time.read; }
+    /// How loud.
+    param volume: Float = 1.0;
+    input track: Tracks;
+    input moods: Moods;
+    input bands: Bands;
+    input instruments: Instruments;
+    input clock: Clocks;
+    /// The block's size (its domain).
+    input block: Rows<Float>;
+    output result: Rows<Vec2>;
+    compute {
+        let n = at(clock, 0).n + long(element());
+        let tr = at(track, 0);
+        let s = float(n - tr.start) / hz();
+        let fade = clamp(s / fade_time(), 0.0, 1.0);
+        let now = if tr.mood >= 0 && s >= 0.0 { song(at(moods, tr.mood), at(bands, tr.style), instruments, tr.seed, s, n) * fade } else { vec2(0.0, 0.0) };
+        let was = if tr.was_mood >= 0 && fade < 1.0 { song(at(moods, tr.was_mood), at(bands, tr.was_style), instruments, tr.was_seed, float(n - tr.was_start) / hz(), n) * (1.0 - fade) } else { vec2(0.0, 0.0) };
+        let out = (now + was) * volume;
+        return vec2(held_under(out.x), held_under(out.y));
+    }
+}

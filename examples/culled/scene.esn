@@ -1,5 +1,5 @@
 // Ten million triangles of world, of which a frame places what it can
-// see. `world.visible` writes a flag per chunk, the compact package
+// see. `world.visible` writes a flag per chunk, the math package
 // turns those flags into the kept chunk indices and how many there are,
 // and every node that builds geometry is sized by that number.
 use "kernels/";
@@ -33,7 +33,7 @@ node visible: world.visible@1 {
     domain = cols * cols;
 }
 
-node kept: graph "../../packages/compact.entpkg/graphs/compact.esn" {
+node kept: graph "../../packages/parallel.entpkg/graphs/compact.esn" {
     flags <- visible.result;
 }
 

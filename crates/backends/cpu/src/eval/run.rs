@@ -1382,8 +1382,8 @@ impl<'p, 's> Machine<'p, 's> {
                 let view = &program.inputs[*input];
                 let address = read_address(s, fp + position, *kind, 0.5);
                 let domain = view.domain;
-                // Element centres sit at half-integers: the position less
-                // a half splits into the lower neighbour and a weight,
+                // Element centers sit at half-integers: the position less
+                // a half splits into the lower neighbor and a weight,
                 // each axis clamped at the edges.
                 let axis = |v: f32, limit: u32| -> (usize, usize, f32) {
                     let (lower, upper, weight) = entelechy_rules::linear_axis(v, limit);

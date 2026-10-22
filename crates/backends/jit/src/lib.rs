@@ -1470,7 +1470,7 @@ unsafe extern "C" fn entelechy_jit_sample(
     unsafe { copy_out(view, index, out) };
 }
 
-/// `at_linear`: the CPU interpreter's blend of the neighbouring elements.
+/// `at_linear`: the CPU interpreter's blend of the neighboring elements.
 unsafe extern "C" fn entelechy_jit_linear(
     ctx: *const Ctx,
     input: u32,
