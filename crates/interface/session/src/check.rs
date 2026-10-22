@@ -366,7 +366,17 @@ fn check_in(
     }
     let mut document = document;
     let keyed = naming.keyed(base, &document.uses, entelechy_language::Own::of(&document));
-    if let Ok(((structs, types, functions), reach)) = keyed {
+    if let Ok((
+        entelechy_language::Declarations {
+            structs,
+            types,
+            functions,
+            qualified,
+        },
+        reach,
+    )) = keyed
+    {
+        document.unqualify(&qualified);
         for error in functions_checked(
             store,
             path,
@@ -969,7 +979,16 @@ fn check_used(
         &used_document.uses,
         entelechy_language::Own::of(&used_document),
     ) {
-        Ok(((structs, types, functions), reach)) => {
+        Ok((
+            entelechy_language::Declarations {
+                structs,
+                types,
+                functions,
+                qualified,
+            },
+            reach,
+        )) => {
+            used_document.unqualify(&qualified);
             key = reach.as_deref().and_then(checked_key);
             for error in functions_checked(
                 store,

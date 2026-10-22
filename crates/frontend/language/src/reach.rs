@@ -23,7 +23,7 @@ pub struct Reached<'a> {
 /// Each word of a type as written, `Rows<Ray>` or `[Ray; 4]`.
 fn words(ty: &str, out: &mut Vec<String>) {
     out.extend(
-        ty.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        ty.split(|c: char| !crate::rename::in_name(c))
             .filter(|word| !word.is_empty())
             .map(str::to_owned),
     );

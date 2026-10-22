@@ -1000,31 +1000,48 @@ every demo in seconds, and a new one joins by being written.
 **Where.** The recipe's `replays` step in [PROCESS](../PROCESS.md); the
 `alike` line in [`replay`](../crates/interface/session/src/replay.rs).
 
-## A name is one package; a package's names carry its name
+## A name is one package; its name qualifies the names it declares
 
 A package is found by its name, and the name is a fact the manifest
 declares and its directory carries: `voxel@1` is `voxel.entpkg`. A
 scene reaches one package of a name; two, as two editions of one, are
 refused, naming both. A package names the packages it uses by name and
-finds them beside itself. There are no qualified names: a document's
-functions, structs and types are scoped by their document, so two
-packages keep a helper of one name each, and only a name the scene
-calls must answer once. A package's public names carry its name
-(`voxel_walk`, `VoxelBox`), so a scene using many calls each plainly.
+finds them beside itself. A document's functions, structs and types are
+scoped by their document, so two packages keep a helper of one name
+each, and a name a document writes plainly must answer once among what
+it uses. Where two packages it uses declare one name, it writes the
+package's name before it, `cast_fx::clear` and `ui_panel::clear`: a
+qualified name reaches the one declaration of that name in that
+package's documents the writer uses. A package uses the form too, for
+the packages it uses. A name declared or bound is a plain word. The
+owner chose this form (2026-10-22).
+
+The qualified name is the language's alone: scope finds the declaration
+it reaches and writes the name that declaration holds in its place, so
+the IR, the protocol's reads and every message past the language see
+the names they always did. A clash between packages is said with the
+qualified names that settle it.
 
 **Why.** A name that is checked is one a reader and a `use` agree on;
 two editions of one package in one reach meet as near-alike
 declarations, and refusing them by package says what an author can fix.
-A qualified name would be a second form of every name, through the
-language, the IR's function names, the protocol's reads and every
-message; scoping by document already keeps packages apart, and a prefix
-costs a few characters a public name.
+Words are what a library is made of, and a short word (`clear`,
+`pressed`) is one two packages want alike; renaming one, or prefixing
+every public name, moved a clash the author did not make into a name
+the reader must carry. The package's name already says whose word it
+is, so the clash is settled where it is met, by the document meeting
+it, and resolving it to a declaration before lowering keeps it out of
+every later layer.
 
 **Where.** `package_manifest` and `one_package_of_its_name` in
 [`sources.rs`](../crates/interface/session/src/sources.rs), with
-`resolve_package` for the search beside a package; the scoping of names
-in [`scope.rs`](../crates/frontend/language/src/scope.rs); the recipe's
-check of every package in one scene in [PROCESS](../PROCESS.md).
+`resolve_package` for the search beside a package; the scoping of names,
+`Qualified` and `unqualify`, in
+[`scope.rs`](../crates/frontend/language/src/scope.rs); the qualified
+word in the [lexer](../crates/frontend/language/src/lexer.rs);
+`a_name_qualified_by_its_package_reaches_that_packages` in
+[`sources` tests](../crates/interface/session/tests/sources.rs); the
+recipe's check of every package in one scene in [PROCESS](../PROCESS.md).
 
 ## A document sees what it uses itself
 

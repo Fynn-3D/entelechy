@@ -39,7 +39,7 @@ fn lowered(path: &Path) -> Result<String, String> {
             .map_err(|e| e.to_string())
     };
     let mut declare = |_: &Path, _: &[entelechy_language::Use], _: entelechy_language::Own<'_>| {
-        Ok((Vec::new(), Vec::new(), Vec::new()))
+        Ok(entelechy_language::Declarations::default())
     };
     let lowered = entelechy_scene::load_with_params(
         &document,

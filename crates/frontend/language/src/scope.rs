@@ -10,6 +10,12 @@
 //! name is renamed `name@source`, each gathered declaration naming what
 //! its own document sees. A function of a builtin's name stands for it in
 //! its own document only.
+//!
+//! A name qualified by a package, `hash_noise::fbm2`, reaches the one
+//! declaration of that name in the documents of that package the writing
+//! document uses: two packages may declare one name, and a document using
+//! both names each by its package. The qualified name is written by the
+//! name the declaration it reaches holds, so it never reaches the IR.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -17,9 +23,104 @@ use crate::{
     Document, FnDecl, Kernel, NodeKind, Origin, Own, Spanned, StructDecl, TypeAlias, renamed_type,
 };
 
-/// What a document's `use` items bring in: structs, type aliases,
-/// functions.
-pub type Declarations = (Vec<StructDecl>, Vec<TypeAlias>, Vec<FnDecl>);
+/// What a document's `use` items bring in: structs, type aliases and
+/// functions, each under the name the using document's view gives it; and
+/// the names the using document writes qualified by a package, each with
+/// the name the declaration it reaches holds.
+#[derive(Clone, Debug, Default)]
+pub struct Declarations {
+    /// The structs.
+    pub structs: Vec<StructDecl>,
+    /// The type aliases.
+    pub types: Vec<TypeAlias>,
+    /// The functions.
+    pub functions: Vec<FnDecl>,
+    /// The qualified names the using document writes.
+    pub qualified: Qualified,
+}
+
+impl Declarations {
+    /// The structs, types and functions, as a Kernel holds them.
+    pub fn held(&self) -> (&[StructDecl], &[TypeAlias], &[FnDecl]) {
+        (&self.structs, &self.types, &self.functions)
+    }
+}
+
+/// Names a document writes qualified by a package (`hash_noise::fbm2`),
+/// each with the name of the declaration it reaches: a function called,
+/// or a struct or type named.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Qualified {
+    /// Functions called.
+    pub calls: Vec<(String, String)>,
+    /// Structs and types named.
+    pub types: Vec<(String, String)>,
+}
+
+impl Qualified {
+    /// The name the declaration `name` reaches holds, called (`call`) or
+    /// named as a type; none for a name not qualified.
+    pub fn of(&self, name: &str, call: bool) -> Option<String> {
+        let names = if call { &self.calls } else { &self.types };
+        names
+            .iter()
+            .find(|(written, _)| written == name)
+            .map(|(_, held)| held.clone())
+    }
+
+    /// Whether it holds no name.
+    pub fn is_empty(&self) -> bool {
+        self.calls.is_empty() && self.types.is_empty()
+    }
+}
+
+/// Qualified names as written, each with the name the declaration it
+/// reaches holds.
+type QualifiedNames = Vec<(String, String)>;
+
+/// A name qualified by a package, `hash_noise::fbm2`, as the package's name
+/// and the name it declares.
+pub fn qualified(name: &str) -> Option<(&str, &str)> {
+    name.split_once("::")
+}
+
+/// Why the qualified `name`, written by `writer` (a document as a message
+/// writes it) that uses `uses`, reaches no declaration of its `kind`:
+/// the document uses no package of that name, or the package declares
+/// none, the nearest of what it declares (`declared`) said.
+fn unreached(
+    sources: &[Source<'_>],
+    uses: &BTreeSet<usize>,
+    writer: &str,
+    name: &str,
+    declared: &dyn Fn(&Source<'_>) -> Vec<String>,
+) -> String {
+    let (package, plain) = qualified(name).unwrap_or(("", name));
+    let theirs: Vec<&Source<'_>> = uses
+        .iter()
+        .map(|&f| &sources[f])
+        .filter(|source| source.package.as_deref() == Some(package))
+        .collect();
+    if theirs.is_empty() {
+        return format!(
+            "`{name}` names the package `{package}`, which {writer} does not use: `use \"{package}.entpkg\";` brings it in"
+        );
+    }
+    let known: Vec<String> = theirs.iter().flat_map(|source| declared(source)).collect();
+    let near = crate::did_you_mean(plain, known.iter().map(String::as_str));
+    format!("`{name}`: the package `{package}` declares no `{plain}`{near}")
+}
+
+/// Every name a source declares, functions, structs and types.
+fn every_name(source: &Source<'_>) -> Vec<String> {
+    source
+        .functions
+        .iter()
+        .map(|d| d.name.value.clone())
+        .chain(source.structs.iter().map(|d| d.name.value.clone()))
+        .chain(source.types.iter().map(|d| d.name.value.clone()))
+        .collect()
+}
 
 /// A document reached through `use`, as the loader found it: the name a
 /// message and a scoped name write it by, what it declares, and the
@@ -35,6 +136,10 @@ pub struct Source<'a> {
     pub types: &'a [TypeAlias],
     /// The sources it uses directly.
     pub uses: Vec<usize>,
+    /// The package it belongs to, by name; none outside a package. A name
+    /// qualified by a package (`hash_noise::fbm2`) reaches what that
+    /// package's documents declare.
+    pub package: Option<String>,
 }
 
 /// The name a declaration of the source written `source` takes where
@@ -77,19 +182,45 @@ pub fn scope(
         Some(document) => mentioned.get_or_init(|| document.mentions()).contains(name),
         None => true,
     };
-    let (structs, types) = scoped_types(&mut reach, sources, direct, own, &mentions)?;
-    Ok((
+    // The names the using document writes qualified by a package.
+    let written: Vec<String> = match own.document {
+        Some(document) => mentioned
+            .get_or_init(|| document.mentions())
+            .iter()
+            .filter(|name| qualified(name).is_some())
+            .cloned()
+            .collect(),
+        None => Vec::new(),
+    };
+    let (structs, types, qualified_types) =
+        scoped_types(&mut reach, sources, direct, own, &mentions, &written)?;
+    let (functions, qualified_calls) = scoped(
+        &reach,
+        sources,
+        direct,
+        own.functions,
+        is_builtin,
+        &mentions,
+        &written,
+    )?;
+    // Each qualified name reaches a function, or a struct or type.
+    if let Some(name) = written.iter().find(|name| {
+        !qualified_calls.iter().any(|(q, _)| q == *name)
+            && !qualified_types.iter().any(|(q, _)| q == *name)
+    }) {
+        let mut top = BTreeSet::new();
+        closure(direct, &mut top);
+        return Err(unreached(sources, &top, "this document", name, &every_name));
+    }
+    Ok(Declarations {
         structs,
         types,
-        scoped(
-            &reach,
-            sources,
-            direct,
-            own.functions,
-            is_builtin,
-            &mentions,
-        )?,
-    ))
+        functions,
+        qualified: Qualified {
+            calls: qualified_calls,
+            types: qualified_types,
+        },
+    })
 }
 
 /// A struct or a type a document declares.
@@ -368,7 +499,8 @@ fn scoped_types(
     direct: &[usize],
     own: Own<'_>,
     mentions: &dyn Fn(&str) -> bool,
-) -> Result<(Vec<StructDecl>, Vec<TypeAlias>), String> {
+    written: &[String],
+) -> Result<(Vec<StructDecl>, Vec<TypeAlias>, QualifiedNames), String> {
     let named = |name: &str| {
         reach
             .declared
@@ -435,6 +567,38 @@ fn scoped_types(
             })
             .collect()
     };
+    // The declarations a name qualified by a package reaches from a set of
+    // documents: those of its name in that package's documents among them.
+    let reaching_qualified = |name: &str, reached: &BTreeSet<usize>| -> Vec<usize> {
+        let Some((package, plain)) = qualified(name) else {
+            return Vec::new();
+        };
+        (0..declared.len())
+            .filter(|&i| {
+                declared[i].0.name() == plain
+                    && declared[i].1.iter().any(|&file| {
+                        reached.contains(&file) && sources[file].package.as_deref() == Some(package)
+                    })
+            })
+            .collect()
+    };
+    // A gathered declaration or function naming a type qualified by a package.
+    let names_qualified = {
+        let found = std::cell::Cell::new(false);
+        let look = |name: &str| {
+            if qualified(name).is_some() {
+                found.set(true);
+            }
+            None
+        };
+        for (decl, _) in declared {
+            let _ = decl.renamed(decl.name().to_owned(), &look);
+        }
+        for (decl, _) in &reach.functions {
+            let _ = decl.retyped(&look);
+        }
+        found.get()
+    };
     // A name a gathered document declares, which a gathered declaration
     // or function names from a document that neither declares nor sees it.
     let unseen = |file: usize, name: &str| {
@@ -465,12 +629,14 @@ fn scoped_types(
     };
     let seen = |files: &Vec<usize>| files.iter().any(|file| top.contains(file));
     if !names_unseen
+        && !names_qualified
+        && written.is_empty()
         && !reach
             .declared
             .iter()
             .any(|(d, files)| clashing(d.name()) || (!seen(files) && mentions(d.name())))
     {
-        return Ok(split(
+        let (structs, types) = split(
             reach
                 .declared
                 .iter()
@@ -478,7 +644,8 @@ fn scoped_types(
                 .filter(|&(at, _)| !own_alike(at))
                 .map(|(_, (d, _))| d.clone())
                 .collect(),
-        ));
+        );
+        return Ok((structs, types, Vec::new()));
     }
     // Plain: the one the using document sees by its name, or the only
     // one of its name, which the document neither declares nor mentions.
@@ -500,6 +667,27 @@ fn scoped_types(
     let mut refused: Option<String> = None;
     let mut reaches: HashMap<usize, BTreeSet<usize>> = HashMap::new();
     let mut view = |file: usize, name: &str, refused: &mut Option<String>| -> Option<String> {
+        // A qualified name: the one declaration of its name in that
+        // package's documents this one uses.
+        if qualified(name).is_some() {
+            let reached = reaches.entry(file).or_insert_with(|| reached_from(file));
+            return match reaching_qualified(name, reached).as_slice() {
+                [one] => Some(out_name(*one)),
+                _ => {
+                    refused.get_or_insert_with(|| {
+                        unreached(sources, reached, &sources[file].name, name, &|source| {
+                            source
+                                .structs
+                                .iter()
+                                .map(|d| d.name.value.clone())
+                                .chain(source.types.iter().map(|d| d.name.value.clone()))
+                                .collect()
+                        })
+                    });
+                    None
+                }
+            };
+        }
         let target = match (0..declared.len())
             .find(|&i| declared[i].0.name() == name && declared[i].1.contains(&file))
         {
@@ -553,11 +741,33 @@ fn scoped_types(
             (decl.retyped(&rename), *file)
         })
         .collect();
+    // The using document's own qualified names: the declaration each
+    // reaches from what it uses, by the name it holds there.
+    let mut qualified_names = Vec::new();
+    for name in written {
+        match reaching_qualified(name, &top).as_slice() {
+            [one] => qualified_names.push((name.clone(), out_name(*one))),
+            [] => {}
+            many => {
+                let files: Vec<&str> = many
+                    .iter()
+                    .map(|&i| sources[declared[i].1[0]].name.as_str())
+                    .collect();
+                refused.get_or_insert_with(|| {
+                    format!(
+                        "`{name}` is declared differently by {}, of one package",
+                        files.join(" and ")
+                    )
+                });
+            }
+        }
+    }
     if let Some(refused) = refused {
         return Err(refused);
     }
     reach.functions = functions;
-    Ok(split(out))
+    let (structs, types) = split(out);
+    Ok((structs, types, qualified_names))
 }
 
 /// The gathered functions, each under one name in the using document's
@@ -575,7 +785,8 @@ fn scoped(
     own: &[FnDecl],
     is_builtin: &dyn Fn(&str) -> bool,
     mentions: &dyn Fn(&str) -> bool,
-) -> Result<Vec<FnDecl>, String> {
+    written: &[String],
+) -> Result<(Vec<FnDecl>, QualifiedNames), String> {
     // Which documents declare each name.
     let mut declaring: HashMap<&str, Vec<usize>> = HashMap::new();
     for (decl, file) in &reach.functions {
@@ -630,17 +841,59 @@ fn scoped(
         });
         found
     });
+    let calls_qualified = reach.functions.iter().any(|(decl, _)| {
+        let mut found = false;
+        crate::rename::visit_block(&decl.body, &mut |name, call| {
+            found = found || (call && qualified(name).is_some());
+        });
+        found
+    });
     if !calls_unseen
+        && !calls_qualified
+        && written.is_empty()
         && !reach.functions.iter().any(|(decl, file)| {
             clashing(&decl.name.value) || (!top.contains(file) && mentions(&decl.name.value))
         })
     {
-        return Ok(reach
+        return Ok((
+            reach
+                .functions
+                .iter()
+                .map(|(decl, _)| decl.clone())
+                .collect(),
+            Vec::new(),
+        ));
+    }
+    // The document a qualified call reaches from `reached`: the one of
+    // that package's documents among them declaring its name; `Err` when
+    // none or several do.
+    let resolve_qualified = |name: &str, reached: &BTreeSet<usize>| -> Result<usize, Vec<usize>> {
+        let (package, plain) = qualified(name).unwrap_or(("", name));
+        let files: Vec<usize> = declaring
+            .get(plain)
+            .map(|files| {
+                files
+                    .iter()
+                    .copied()
+                    .filter(|&file| {
+                        reached.contains(&file) && sources[file].package.as_deref() == Some(package)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        match files.as_slice() {
+            [one] => Ok(*one),
+            _ => Err(files),
+        }
+    };
+    let functions_of = |source: &Source<'_>| -> Vec<String> {
+        source
             .functions
             .iter()
-            .map(|(decl, _)| decl.clone())
-            .collect());
-    }
+            .map(|d| d.name.value.clone())
+            .collect()
+    };
+    let refused: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
     let seen_by_user = |name: &str, file: usize| {
         !hides(name)
             && !own.iter().any(|f| f.name.value == name)
@@ -672,6 +925,17 @@ fn scoped(
                 .is_some_and(|files| files.contains(&file))
         };
         let rename = |name: &str| -> Option<String> {
+            if let Some((_, plain)) = qualified(name) {
+                return match resolve_qualified(name, reached) {
+                    Ok(target) => Some(internal(plain, target)),
+                    Err(_) => {
+                        refused.borrow_mut().get_or_insert_with(|| {
+                            unreached(sources, reached, &sources[file].name, name, &functions_of)
+                        });
+                        None
+                    }
+                };
+            }
             let target = if declares(name) {
                 file
             } else if hides(name) {
@@ -686,7 +950,29 @@ fn scoped(
         };
         out.push(decl.renamed(internal(&decl.name.value, file), &rename));
     }
-    Ok(out)
+    if let Some(refused) = refused.into_inner() {
+        return Err(refused);
+    }
+    // The using document's own qualified calls, by the name each function
+    // it reaches holds.
+    let mut calls = Vec::new();
+    for name in written {
+        match resolve_qualified(name, &top) {
+            Ok(target) => {
+                let plain = qualified(name).map_or(name.as_str(), |(_, plain)| plain);
+                calls.push((name.clone(), internal(plain, target)));
+            }
+            Err(files) if files.len() > 1 => {
+                let names: Vec<&str> = files.iter().map(|&f| sources[f].name.as_str()).collect();
+                return Err(format!(
+                    "`{name}` is declared by {}, of one package",
+                    names.join(" and ")
+                ));
+            }
+            Err(_) => {}
+        }
+    }
+    Ok((out, calls))
 }
 /// A document's own declarations, put in front of each of its Kernels'
 /// own: every Kernel of a document sees what its document declares, with
@@ -720,9 +1006,61 @@ pub(crate) fn resolve(document: &mut Document, used: (&[StructDecl], &[TypeAlias
         return;
     }
     for_each_kernel(document, &|kernel| {
-        put_before(kernel, (structs, types, functions), "shared")
+        put_before(kernel, (structs, types, functions), SHARED)
     });
 }
+
+/// Each name `document` writes qualified by a package written by the name
+/// the declaration it reaches holds (see [`Qualified`]).
+pub(crate) fn unqualify(document: &mut Document, qualified: &Qualified) {
+    if qualified.is_empty() {
+        return;
+    }
+    // A Kernel declaring a name itself holds the shared declaration of
+    // that name as `name@shared` ([`resolve`]): what it writes qualified
+    // reaches that one.
+    let kernel = |kernel: &mut Kernel| {
+        let own = |held: String, declared: bool| {
+            if declared {
+                format!("{held}@{SHARED}")
+            } else {
+                held
+            }
+        };
+        let functions: Vec<String> = kernel
+            .functions
+            .iter()
+            .map(|f| f.name.value.clone())
+            .collect();
+        let types: Vec<String> = kernel
+            .structs
+            .iter()
+            .map(|d| d.name.value.clone())
+            .chain(kernel.types.iter().map(|d| d.name.value.clone()))
+            .collect();
+        kernel.rename_all(
+            &|name| {
+                qualified.of(name, true).map(|held| {
+                    let declared = functions.contains(&held);
+                    own(held, declared)
+                })
+            },
+            &|name| {
+                qualified.of(name, false).map(|held| {
+                    let declared = types.contains(&held);
+                    own(held, declared)
+                })
+            },
+        );
+    };
+    for_each_kernel(document, &kernel);
+    document.rename_all(&|name| qualified.of(name, true), &|name| {
+        qualified.of(name, false)
+    });
+}
+
+/// The suffix a shared declaration takes in a Kernel declaring its name.
+const SHARED: &str = "shared";
 
 /// `change` made to every Kernel of `document`, its inline ones too.
 fn for_each_kernel(document: &mut Document, change: &dyn Fn(&mut Kernel)) {

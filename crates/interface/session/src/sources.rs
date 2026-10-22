@@ -592,6 +592,10 @@ pub(crate) fn declarations_keyed(
                 .iter()
                 .filter_map(|p| place(p))
                 .collect(),
+            package: package_holding(store, &file_at(store, path)).and_then(|dir| {
+                dir.file_stem()
+                    .map(|stem| stem.to_string_lossy().into_owned())
+            }),
         })
         .collect();
     let direct: Vec<usize> = direct.iter().filter_map(|p| place(p)).collect();
@@ -1252,9 +1256,26 @@ pub(crate) fn located(
             .iter()
             .map(|path| relative_to(store, path, base))
             .collect();
+        // Declared in packages, each is named by its package.
+        let qualified: Vec<String> = declaring
+            .iter()
+            .filter_map(|path| package_holding(store, &file_at(store, path)))
+            .filter_map(|dir| {
+                dir.file_stem()
+                    .map(|stem| format!("`{}::{name}`", stem.to_string_lossy()))
+            })
+            .collect();
+        let way = if qualified.len() == declaring.len() {
+            format!(
+                "name each by its package, {}, or declare `{name}` in this document",
+                qualified.join(" or ")
+            )
+        } else {
+            format!("declare `{name}` in this document, or rename one of them")
+        };
         return crate::Diagnostic {
             message: format!(
-                "{}; {what} `{name}` is declared by {}, which this document uses, and a name reaches one declaration: declare `{name}` in this document, or rename one of them",
+                "{}; {what} `{name}` is declared by {}, which this document uses, and a name reaches one declaration: {way}",
                 error.message,
                 names.join(" and ")
             ),

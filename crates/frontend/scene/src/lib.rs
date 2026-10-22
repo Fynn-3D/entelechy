@@ -107,19 +107,14 @@ pub type Loader<'a> = dyn FnMut(&Path) -> Result<(PathBuf, String), String> + 'a
 
 /// Resolves a document's `use` items, given its directory and what it
 /// declares itself, to the structs, type aliases and functions every
-/// Kernel of the document sees. The caller reads the files.
+/// Kernel of the document sees, and the names it writes qualified by a
+/// package. The caller reads the files.
 pub type Declare<'a> = dyn FnMut(
         &Path,
         &[entelechy_language::Use],
         entelechy_language::Own<'_>,
-    ) -> Result<
-        (
-            Vec<entelechy_language::StructDecl>,
-            Vec<entelechy_language::TypeAlias>,
-            Vec<entelechy_language::FnDecl>,
-        ),
-        String,
-    > + 'a;
+    ) -> Result<entelechy_language::Declarations, String>
+    + 'a;
 
 /// A Kernel written inside a node, for the loader to publish.
 #[derive(Clone, Debug, PartialEq)]
@@ -507,9 +502,14 @@ fn lower(
     overrides: &BTreeMap<String, Value>,
 ) -> Result<Lowered, DocumentError> {
     let mut document = document.clone();
-    let (structs, types, functions) =
-        declare(base, &document.uses, entelechy_language::Own::of(&document))
-            .map_err(|message| error(Span::default(), message))?;
+    let entelechy_language::Declarations {
+        structs,
+        types,
+        functions,
+        qualified,
+    } = declare(base, &document.uses, entelechy_language::Own::of(&document))
+        .map_err(|message| error(Span::default(), message))?;
+    document.unqualify(&qualified);
     document.resolve((&structs, &types, &functions));
     let document = &document;
     let mut lowering = Lowering {
@@ -1495,12 +1495,18 @@ impl Lowering<'_, '_> {
                 let mut document = entelechy_language::parse_document(&text)
                     .map_err(|e| error(sub_path.span, format!("{}:{e}", sub_path.value)))?;
                 let sub_base = resolved.parent().unwrap_or_else(|| Path::new("."));
-                let (structs, types, functions) = (self.declare)(
+                let entelechy_language::Declarations {
+                    structs,
+                    types,
+                    functions,
+                    qualified,
+                } = (self.declare)(
                     sub_base,
                     &document.uses,
                     entelechy_language::Own::of(&document),
                 )
                 .map_err(|m| error(sub_path.span, format!("{}: {m}", sub_path.value)))?;
+                document.unqualify(&qualified);
                 document.resolve((&structs, &types, &functions));
                 let read = std::rc::Rc::new(Read {
                     aliases: types.iter().chain(&document.types).cloned().collect(),
@@ -2268,7 +2274,8 @@ pub fn parse(text: &str) -> Result<Graph, DocumentError> {
             path.display()
         ))
     };
-    let mut none: Box<Declare<'_>> = Box::new(|_, _, _| Ok((Vec::new(), Vec::new(), Vec::new())));
+    let mut none: Box<Declare<'_>> =
+        Box::new(|_, _, _| Ok(entelechy_language::Declarations::default()));
     let lowered = lower(
         &document,
         text,
@@ -2308,7 +2315,8 @@ pub fn from_document(
             path.display()
         ))
     };
-    let mut none: Box<Declare<'_>> = Box::new(|_, _, _| Ok((Vec::new(), Vec::new(), Vec::new())));
+    let mut none: Box<Declare<'_>> =
+        Box::new(|_, _, _| Ok(entelechy_language::Declarations::default()));
     lower(
         document,
         "",
@@ -2331,7 +2339,8 @@ pub fn load(
     base: &std::path::Path,
     loader: &mut Loader<'_>,
 ) -> Result<Lowered, DocumentError> {
-    let mut none: Box<Declare<'_>> = Box::new(|_, _, _| Ok((Vec::new(), Vec::new(), Vec::new())));
+    let mut none: Box<Declare<'_>> =
+        Box::new(|_, _, _| Ok(entelechy_language::Declarations::default()));
     lower(
         document,
         text,
@@ -2874,7 +2883,7 @@ output result <- show.result;
         // The caller's value sizes the graph; one time keeps the plain name.
         let document = entelechy_language::parse_document(REPEATED).unwrap();
         let mut none: Box<Declare<'_>> =
-            Box::new(|_, _, _| Ok((Vec::new(), Vec::new(), Vec::new())));
+            Box::new(|_, _, _| Ok(entelechy_language::Declarations::default()));
         let mut loader: Box<Loader<'_>> = Box::new(|_| Err("no files".into()));
         let overrides = BTreeMap::from([("level".to_owned(), Value::Int(4))]);
         let lowered = load_with_params(
@@ -2917,7 +2926,7 @@ output result <- outer.result;
 ";
         let document = entelechy_language::parse_document(root).unwrap();
         let mut none: Box<Declare<'_>> =
-            Box::new(|_, _, _| Ok((Vec::new(), Vec::new(), Vec::new())));
+            Box::new(|_, _, _| Ok(entelechy_language::Declarations::default()));
         let mut loader: Box<Loader<'_>> = Box::new(|path: &Path| {
             let text = if path.ends_with("outer.esn") {
                 "input source: Rows<Int>;

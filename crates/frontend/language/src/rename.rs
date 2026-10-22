@@ -2,7 +2,9 @@
 //! they see, and naming the structs and types they see, when another
 //! document in the same reach declares the same name.
 
-use crate::{Block, Expr, ExprKind, FnDecl, MatchArm, Spanned};
+use crate::{
+    Block, Document, Expr, ExprKind, FnDecl, Kernel, MatchArm, NodeKind, NodeMember, Spanned,
+};
 
 /// What a rename maps: a function's name when it is called, or a struct's
 /// or type's name wherever a type is named.
@@ -90,6 +92,12 @@ impl FnDecl {
     }
 }
 
+/// Whether `c` is part of a name in a type as written: a word's letters,
+/// digits and `_`, and the `::` of a name qualified by its package.
+pub(crate) fn in_name(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == ':'
+}
+
 /// A type as written, `Rows<Ray>` or `[Ray; 4]`, with each name in it
 /// that `rename` maps written by the new name instead.
 pub fn renamed_type(ty: &str, rename: &dyn Fn(&str) -> Option<String>) -> String {
@@ -105,7 +113,7 @@ pub fn renamed_type(ty: &str, rename: &dyn Fn(&str) -> Option<String>) -> String
         }
     };
     for c in ty.chars() {
-        if c.is_alphanumeric() || c == '_' {
+        if in_name(c) {
             word.push(c);
         } else {
             flush(&mut word, &mut out);
@@ -299,4 +307,127 @@ fn expr(e: &Expr, rename: Renames<'_>) -> Expr {
         ExprKind::Name(name) => ExprKind::Name((rename.ty)(name).unwrap_or_else(|| name.clone())),
     };
     Expr { kind, span: e.span }
+}
+
+/// A type as written, renamed in place by `ty`.
+fn retype(written: &mut Spanned<String>, ty: &dyn Fn(&str) -> Option<String>) {
+    written.value = renamed_type(&written.value, ty);
+}
+
+/// `function` with each call `call` maps and each type `ty` maps named by
+/// the new name.
+fn function(
+    function: &FnDecl,
+    call: &dyn Fn(&str) -> Option<String>,
+    ty: &dyn Fn(&str) -> Option<String>,
+) -> FnDecl {
+    let name = function.name.value.clone();
+    function.renamed(name, call).retyped(ty)
+}
+
+impl Kernel {
+    /// This Kernel with each call `call` maps and each struct or type `ty`
+    /// maps, in every part and declaration it holds, named by the new name.
+    pub(crate) fn rename_all(
+        &mut self,
+        call: &dyn Fn(&str) -> Option<String>,
+        ty: &dyn Fn(&str) -> Option<String>,
+    ) {
+        let renames = Renames { call, ty };
+        self.compute = block(&self.compute, renames);
+        if let Some(domain) = &mut self.domain {
+            *domain = expr(domain, renames);
+        }
+        if let Some(merge) = &mut self.merge {
+            merge.body = block(&merge.body, renames);
+        }
+        if let Some(carry) = &mut self.carry {
+            carry.init = expr(&carry.init, renames);
+        }
+        for port in self
+            .inputs
+            .iter_mut()
+            .chain(&mut self.outputs)
+            .chain(&mut self.memories)
+        {
+            retype(&mut port.ty, ty);
+        }
+        for param in &mut self.params {
+            retype(&mut param.ty, ty);
+            param.default = expr(&param.default, renames);
+        }
+        if let Some(scatter) = &mut self.scatter {
+            retype(&mut scatter.into, ty);
+            if let Some(new) = call(&scatter.combine.value) {
+                scatter.combine.value = new;
+            }
+        }
+        if let Some(prefix) = &mut self.prefix
+            && let Some(new) = call(&prefix.combine.value)
+        {
+            prefix.combine.value = new;
+        }
+        for f in &mut self.functions {
+            *f = function(f, call, ty);
+        }
+        for decl in &mut self.structs {
+            for (_, field) in &mut decl.fields {
+                retype(field, ty);
+            }
+        }
+        for decl in &mut self.types {
+            retype(&mut decl.target, ty);
+        }
+    }
+}
+
+impl Document {
+    /// This document with each call `call` maps and each struct or type
+    /// `ty` maps, wherever its own code outside its Kernels names it (see
+    /// [`Document::mentions`]), named by the new name.
+    pub(crate) fn rename_all(
+        &mut self,
+        call: &dyn Fn(&str) -> Option<String>,
+        ty: &dyn Fn(&str) -> Option<String>,
+    ) {
+        let renames = Renames { call, ty };
+        for f in &mut self.functions {
+            *f = function(f, call, ty);
+        }
+        for decl in &mut self.structs {
+            for (_, field) in &mut decl.fields {
+                retype(field, ty);
+            }
+        }
+        for decl in &mut self.types {
+            retype(&mut decl.target, ty);
+        }
+        for port in &mut self.inputs {
+            retype(&mut port.ty, ty);
+        }
+        for param in &mut self.params {
+            retype(&mut param.ty, ty);
+            param.default = expr(&param.default, renames);
+        }
+        for require in &mut self.requires {
+            require.condition = expr(&require.condition, renames);
+        }
+        for node in &mut self.nodes {
+            match &mut node.kind {
+                NodeKind::Fill(written) | NodeKind::Fields { ty: written, .. } => {
+                    retype(written, ty)
+                }
+                NodeKind::Inline(_)
+                | NodeKind::Reference(_)
+                | NodeKind::SubGraph(_)
+                | NodeKind::Font(_)
+                | NodeKind::Files(_) => {}
+            }
+            for member in &mut node.members {
+                if let NodeMember::Set(_, value) = member {
+                    *value = expr(value, renames);
+                }
+            }
+        }
+    }
 }

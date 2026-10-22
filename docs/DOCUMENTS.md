@@ -396,7 +396,11 @@ said with the `use` that would bring it. The same struct or `type` declared alik
 A function may take a math builtin's name and stands for it in its own
 document only: a document that uses it keeps the builtin.
 A name two used documents answer differently is refused where it is
-named, naming both. Two documents that `use` each other are refused by
+named, naming both; where they are packages, the document names each by
+its package, `cast_fx::clear(p)`, `ui_panel::Mark { b: 1 }`,
+`Rows<ui_panel::Mark>`: a qualified name reaches the one declaration of
+that name in that package's documents it uses, past its own of that
+name. A name declared or bound is a plain word. Two documents that `use` each other are refused by
 name. A name a Kernel
 cannot find is looked for beside it and beside the scene, and the
 diagnostic names the declaring document and the `use` to add.

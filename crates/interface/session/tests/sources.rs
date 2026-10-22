@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 
+use entelechy_language::Declarations;
 use entelechy_session::declarations_for;
 
 fn scratch(name: &str, files: &[(&str, &str)]) -> PathBuf {
@@ -40,7 +41,7 @@ fn one_declaration_written_in_two_files_is_one() {
             ),
         ],
     );
-    let (structs, _, _) = declarations_for(
+    let Declarations { structs, .. } = declarations_for(
         &entelechy_session::Disk::default(),
         &dir,
         &uses("use \"a.ent\";\nuse \"b.ent\";"),
@@ -65,7 +66,12 @@ fn two_declarations_of_one_name_are_each_their_documents() {
             ("b.ent", "struct Surface { depth: Float; }\n"),
         ],
     );
-    let (structs, types, functions) = declarations_for(
+    let Declarations {
+        structs,
+        types,
+        functions,
+        ..
+    } = declarations_for(
         &entelechy_session::Disk::default(),
         &dir,
         &uses("use \"a.ent\";\nuse \"b.ent\";"),
@@ -119,7 +125,7 @@ fn a_name_two_used_documents_declare_is_refused_where_named() {
     );
 
     let own = entelechy_language::parse_document("struct Surface { id: Int; }\n").unwrap();
-    let (structs, _, _) = declarations_for(
+    let Declarations { structs, .. } = declarations_for(
         &entelechy_session::Disk::default(),
         &dir,
         &uses("use \"a.ent\";"),
@@ -149,7 +155,9 @@ fn a_declaration_made_alike_by_the_user_is_one() {
         )],
     );
     let own = entelechy_language::parse_document("type Cells = Volume<Int>;\n").unwrap();
-    let (_, types, functions) = declarations_for(
+    let Declarations {
+        types, functions, ..
+    } = declarations_for(
         &entelechy_session::Disk::default(),
         &dir,
         &uses("use \"a.ent\";"),
@@ -1220,5 +1228,75 @@ fn a_package_not_found_is_said_with_where_it_was_looked_for() {
         "{said}"
     );
     assert!(said.contains("to `ENTELECHY_PACKAGES`"), "{said}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Two packages declaring one name: a document using both names each by
+/// its package, `cast_fx::clear` and `ui_panel::clear`, a struct as a
+/// function; each package keeps calling its own, and names the other's by
+/// its package; a document's or Kernel's own declaration of a name does
+/// not hide the one a qualified name reaches; a qualified name the
+/// document's uses do not reach is refused, saying why.
+#[test]
+fn a_name_qualified_by_its_package_reaches_that_packages() {
+    let manifest =
+        |name: &str| format!("package {name}@1 {{ language = 1; ir = 1; }}\nuse \"kernels/\";\n");
+    let dir = scratch("qualified", &[]);
+    for sub in ["cast_fx.entpkg/kernels", "ui_panel.entpkg/kernels"] {
+        std::fs::create_dir_all(dir.join(sub)).unwrap();
+    }
+    let scene = |body: &str| {
+        format!(
+            "use \"cast_fx.entpkg\";\nuse \"ui_panel.entpkg\";\nfn made() -> cast_fx::Mark {{ return cast_fx::Mark {{ a: 7 }}; }}\nfn cast_twice() -> Int {{ return 4; }}\nkernel t.both@1 {{ requires {{ field.write; }} output result: Rows<Int>; struct Mark {{ z: Int; }} fn panel_mark() -> Int {{ return 6; }} compute {{ {body} }} }}\nnode a: t.both@1 {{ domain = 1; }}\noutput result <- a.result;\n"
+        )
+    };
+    for (file, text) in [
+        ("cast_fx.entpkg/package.esn", manifest("cast_fx")),
+        (
+            "cast_fx.entpkg/kernels/cast_fx.ent",
+            "struct Mark { a: Int; }\nfn clear() -> Int { return 1; }\nfn cast_twice() -> Int { return clear() * 2; }\n".into(),
+        ),
+        ("ui_panel.entpkg/package.esn", manifest("ui_panel")),
+        (
+            "ui_panel.entpkg/kernels/ui_panel.ent",
+            "use \"cast_fx.entpkg\";\nstruct Mark { b: Int; c: Int; }\nfn clear() -> Int { return 3; }\nfn panel_mark() -> Mark { return Mark { b: clear() + cast_fx::clear() * 10, c: 0 }; }\n".into(),
+        ),
+        (
+            "scene.esn",
+            scene("let m = ui_panel::Mark { b: 5, c: 0 }; let n = made(); let z = Mark { z: 0 }; return cast_fx::clear() * 1000 + ui_panel::clear() * 100 + cast_fx::cast_twice() * 10 + m.b + n.a + ui_panel::panel_mark().b + cast_twice() * 100000 + panel_mark() * 10000 + z.z;"),
+        ),
+    ] {
+        std::fs::write(dir.join(file), text).unwrap();
+    }
+    let mut session = entelechy_session::Session::open(&dir.join("scene.esn"), None, 1 << 20);
+    let events = session.sync();
+    assert!(session.graph().is_some(), "{events:?}");
+    session
+        .evaluate(&entelechy_kernel::Context::default())
+        .unwrap();
+    let (_, words) = session
+        .element_field(&entelechy_graph::NodeId("a".into()), "result", 0, &[])
+        .unwrap();
+    assert_eq!(words, vec![1000 + 300 + 20 + 5 + 7 + 13 + 400000 + 60000]);
+    let checked = |body: &str| {
+        std::fs::write(dir.join("scene.esn"), scene(body)).unwrap();
+        entelechy_session::check_document(
+            &entelechy_session::Disk::default(),
+            &dir.join("scene.esn"),
+            false,
+        )
+    };
+    let said = |checked: &entelechy_session::Checked, words: &str| {
+        checked
+            .lines
+            .iter()
+            .any(|(problem, line)| *problem && line.contains(words))
+    };
+    let unqualified = checked("return clear();");
+    assert!(said(&unqualified, "cast_fx::clear"), "{unqualified:?}");
+    let unused = checked("return hash_noise::fbm2();");
+    assert!(said(&unused, "use \"hash_noise.entpkg\""), "{unused:?}");
+    let undeclared = checked("return ui_panel::clean();");
+    assert!(said(&undeclared, "declares no `clean`"), "{undeclared:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }

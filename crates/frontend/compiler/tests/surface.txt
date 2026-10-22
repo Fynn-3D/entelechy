@@ -782,6 +782,8 @@ form prefix
   prefix with sum { return value; }
 form previous
   port <~ node.output from initial [migrate id@v];
+form qualified
+  let n = hash_noise::fbm2(p);   let m = ui_panel::Mark { b: 1 };   input marks: Rows<ui_panel::Mark>;
 form require
   require cells: columns * rows <= 1 << bits;
 form requires

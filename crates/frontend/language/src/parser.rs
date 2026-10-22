@@ -357,7 +357,24 @@ impl Parser {
         }
     }
 
+    /// A name declared or bound here: a plain word, never qualified.
     fn ident(&mut self, what: &str) -> Result<Spanned<String>, ParseError> {
+        if let Token::Ident(name) = self.peek()
+            && let Some((package, plain)) = name.split_once("::")
+        {
+            let message = format!(
+                "expected {what}; `{name}` names what the package `{package}` declares, and a name declared or bound here is a plain word, `{plain}`"
+            );
+            return Err(ParseError {
+                span: self.span(),
+                message,
+            });
+        }
+        self.name(what)
+    }
+
+    /// A name used here, plain or qualified by a package (`hash_noise::Ray`).
+    fn name(&mut self, what: &str) -> Result<Spanned<String>, ParseError> {
         match self.peek() {
             Token::Ident(name) if !RESERVED.contains(&name.as_str()) => {
                 let (Token::Ident(value), span) = self.next() else {
@@ -823,7 +840,7 @@ impl Parser {
         if self.is_punct("[") {
             return self.type_name();
         }
-        let mut ty = self.ident("a type")?;
+        let mut ty = self.name("a type")?;
         if self.is_punct("<") {
             self.next();
             let element = self.type_name()?;
@@ -845,7 +862,7 @@ impl Parser {
     /// (`[Int; 16]`).
     fn type_name(&mut self) -> Result<Spanned<String>, ParseError> {
         if !self.is_punct("[") {
-            return self.ident("a type");
+            return self.name("a type");
         }
         let span = self.next().1;
         let element = self.nested(|p| {
@@ -1517,7 +1534,7 @@ impl Parser {
 
     /// An enum's variant as a `match` arm names it: `Phase.Walk`.
     fn variant(&mut self) -> Result<(Spanned<String>, Spanned<String>), ParseError> {
-        let name = self.ident("an enum's name")?;
+        let name = self.name("an enum's name")?;
         self.expect_punct(".")?;
         let variant = self.ident("a variant's name")?;
         Ok((name, variant))
@@ -2184,8 +2201,12 @@ impl Parser {
             Token::Ident(name) if RESERVED.contains(&name.as_str()) => {
                 Err(self.unexpected("an expression"))
             }
+            // A struct built, its name plain or qualified (`noise::Ray { .. }`).
             Token::Ident(name)
-                if name.starts_with(|c: char| c.is_ascii_uppercase())
+                if name
+                    .rsplit("::")
+                    .next()
+                    .is_some_and(|plain| plain.starts_with(|c: char| c.is_ascii_uppercase()))
                     && matches!(
                         self.tokens.get(self.position + 1).map(|l| &l.token),
                         Some(Token::Punct("{"))
@@ -2324,6 +2345,48 @@ fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A name qualified by a package is one name where a name is used
+    /// (called, built, named as a type); a name declared or bound is a
+    /// plain word; a name is qualified once; `::` stands between two words.
+    #[test]
+    fn a_name_qualified_by_its_package_is_one_name_where_it_is_used() {
+        let document = parse_document(
+            "fn f(m: [ui_panel::Mark; 2]) -> ui_panel::Mark { return hash_noise::fbm2(ui_panel::Mark { b: m[0].b }); }",
+        )
+        .unwrap();
+        let f = &document.functions[0];
+        assert_eq!(f.args[0].1.value, "[ui_panel::Mark; 2]");
+        assert_eq!(f.ret.value, "ui_panel::Mark");
+        let ExprKind::Call(name, args) = &f.body.result.kind else {
+            panic!("{:?}", f.body.result);
+        };
+        assert_eq!(name, "hash_noise::fbm2");
+        assert!(
+            matches!(&args[0].kind, ExprKind::Struct { name, .. } if name.value == "ui_panel::Mark")
+        );
+        for (text, says) in [
+            (
+                "fn hash_noise::fbm2() -> Int { return 1; }",
+                "a plain word, `fbm2`",
+            ),
+            (
+                "fn f() -> Int { let a::b = 1; return 1; }",
+                "a plain word, `b`",
+            ),
+            (
+                "fn f() -> Int { return a::b::c(); }",
+                "qualifies a name once",
+            ),
+            (
+                "fn f() -> Int { return a :: b(); }",
+                "`::` joins a package's name",
+            ),
+        ] {
+            let error = parse_document(text).unwrap_err();
+            assert!(error.message.contains(says), "{text}: {error}");
+        }
+    }
 
     /// A word a Kernel's body does not begin an item with is refused with
     /// every word it does, and each of those is taken as one.

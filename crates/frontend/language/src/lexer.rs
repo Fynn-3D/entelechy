@@ -155,10 +155,36 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Lexeme>, ParseError> {
             continue;
         }
         if c.is_ascii_alphabetic() || c == '_' {
-            while index < chars.len()
-                && (chars[index].is_ascii_alphanumeric() || chars[index] == '_')
+            let word =
+                |index: &mut usize,
+                 byte: &mut usize,
+                 advance: &mut dyn FnMut(usize, &mut usize, &mut usize)| {
+                    while *index < chars.len()
+                        && (chars[*index].is_ascii_alphanumeric() || chars[*index] == '_')
+                    {
+                        advance(1, index, byte);
+                    }
+                };
+            word(&mut index, &mut byte, &mut advance);
+            // A package's name and a name it declares, written together:
+            // `hash_noise::fbm2` is one name.
+            if chars.get(index) == Some(&':')
+                && chars.get(index + 1) == Some(&':')
+                && chars
+                    .get(index + 2)
+                    .is_some_and(|c| c.is_ascii_alphabetic() || *c == '_')
             {
-                advance(1, &mut index, &mut byte);
+                advance(2, &mut index, &mut byte);
+                word(&mut index, &mut byte, &mut advance);
+                if chars.get(index) == Some(&':') && chars.get(index + 1) == Some(&':') {
+                    return Err(ParseError {
+                        span,
+                        message: format!(
+                            "`{}::` qualifies a name once: a package's name, `::`, and a name it declares",
+                            &source[start..byte]
+                        ),
+                    });
+                }
             }
             let text: String = source[start..byte].to_owned();
             tokens.push(Lexeme {
@@ -168,6 +194,12 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Lexeme>, ParseError> {
                 end: byte,
             });
             continue;
+        }
+        if c == ':' && chars.get(index + 1) == Some(&':') {
+            return Err(ParseError {
+                span,
+                message: "`::` joins a package's name and a name it declares, written together: `hash_noise::fbm2`".into(),
+            });
         }
         // A number's suffix, `d` (`Double`) or `l` (`Long`), standing alone.
         let suffix = |at: usize, letters: &[char]| {

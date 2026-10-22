@@ -1065,13 +1065,19 @@ impl Session {
                 .map(|document| (*document).clone())
                 .map_err(|why| refused(path.clone(), why))?;
             let dir = path.parent().unwrap_or_else(|| Path::new("."));
-            let (structs, types, functions) = crate::sources::declarations_for(
+            let entelechy_language::Declarations {
+                structs,
+                types,
+                functions,
+                qualified,
+            } = crate::sources::declarations_for(
                 &overlay,
                 dir,
                 &document.uses,
                 entelechy_language::Own::of(&document),
             )
             .map_err(|why| refused(path.clone(), why))?;
+            document.unqualify(&qualified);
             document.resolve((&structs, &types, &functions));
             for kernel in &document.kernels {
                 let id = crate::sources::named_id(kernel).map_err(|diagnostic| crate::Refusal {

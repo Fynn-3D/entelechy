@@ -551,6 +551,12 @@ pub fn forms() -> Vec<Form> {
             "package name@1 { language = 1; ir = 1; }",
             "The manifest of a package directory: what it is called and the least language and IR it needs.",
         ),
+        form(
+            "qualified",
+            "document",
+            "let n = hash_noise::fbm2(p);   let m = ui_panel::Mark { b: 1 };   input marks: Rows<ui_panel::Mark>;",
+            "A name a used package declares, written with the package's name before it: the one declaration of that name in that package. Two packages a document uses may declare one name; the document names each by its package. A name declared or bound here is a plain word.",
+        ),
     ]
 }
 

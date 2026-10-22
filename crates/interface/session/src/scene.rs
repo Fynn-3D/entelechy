@@ -532,7 +532,13 @@ impl Scene {
         granted: &dyn Fn(&entelechy_ir::Validated) -> Result<(), Diagnostic>,
     ) -> Result<(), Diagnostic> {
         let (mut document, lowered, named) = self.lower_in(store, text, readable)?;
-        let (structs, types, functions) = named.map_err(Diagnostic::new)?;
+        let entelechy_language::Declarations {
+            structs,
+            types,
+            functions,
+            qualified,
+        } = named.map_err(Diagnostic::new)?;
+        document.unqualify(&qualified);
         functions_checked(&self.root, &document, (&structs, &types, &functions))?;
         document.resolve((&structs, &types, &functions));
         let root_key = PathBuf::from(self.document_name());
@@ -749,7 +755,13 @@ impl Scene {
         let root_key = PathBuf::from(&name);
         let mut document = document;
         match named {
-            Ok((structs, types, functions)) => {
+            Ok(entelechy_language::Declarations {
+                structs,
+                types,
+                functions,
+                qualified,
+            }) => {
+                document.unqualify(&qualified);
                 if let Err(error) =
                     functions_checked(&root, &document, (&structs, &types, &functions))
                 {
@@ -1203,8 +1215,13 @@ impl Scene {
             )));
         }
         let base = self.root.parent().unwrap_or_else(|| Path::new("."));
-        let (mut structs, mut types, mut functions) = if document.uses.is_empty() {
-            (Vec::new(), Vec::new(), Vec::new())
+        let entelechy_language::Declarations {
+            mut structs,
+            mut types,
+            mut functions,
+            qualified,
+        } = if document.uses.is_empty() {
+            entelechy_language::Declarations::default()
         } else {
             declarations_for(
                 self.store.as_ref(),
@@ -1214,6 +1231,7 @@ impl Scene {
             )
             .map_err(Diagnostic::new)?
         };
+        document.unqualify(&qualified);
         // Shared declarations fill in names the source does not declare;
         // the source's own win, so a Kernel may redefine a shared struct
         // and change a state's layout while it runs.
@@ -1385,7 +1403,13 @@ fn read_library(store: &dyn Store, path: PathBuf, current: Option<Stamp>) -> (Re
         &document.uses,
         entelechy_language::Own::of(&document),
     ) {
-        Ok((structs, types, functions)) => {
+        Ok(entelechy_language::Declarations {
+            structs,
+            types,
+            functions,
+            qualified,
+        }) => {
+            document.unqualify(&qualified);
             let used = used_documents(store, &dir, &document.uses)
                 .unwrap_or_default()
                 .into_iter()

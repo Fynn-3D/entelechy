@@ -63,7 +63,7 @@ pub use entelechy_abi::names::{did_you_mean, edit_distance, nearest, suggestion}
 pub use parser::{RESERVED, outline, parse, parse_document, parse_literal};
 pub use reach::Reached;
 pub use rename::renamed_type;
-pub use scope::{Declarations, Source, scope, written_name};
+pub use scope::{Declarations, Qualified, Source, qualified, scope, written_name};
 
 /// The version of the Kernel language and the document format.
 pub const LANGUAGE_VERSION: u32 = 1;
@@ -262,6 +262,14 @@ impl Document {
     /// Kernel's own the innermost: see [`scope::resolve`].
     pub fn resolve(&mut self, used: (&[StructDecl], &[TypeAlias], &[FnDecl])) {
         scope::resolve(self, used);
+    }
+
+    /// Each name this document writes qualified by a package
+    /// (`hash_noise::fbm2`) written by the name the declaration it
+    /// reaches holds, as [`scope`] found it: done before its functions are
+    /// checked or it is resolved.
+    pub fn unqualify(&mut self, qualified: &Qualified) {
+        scope::unqualify(self, qualified);
     }
 }
 
