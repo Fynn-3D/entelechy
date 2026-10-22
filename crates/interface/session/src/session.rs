@@ -2326,8 +2326,15 @@ impl Session {
             _ => return None,
         };
         // A volume's row counts its layers through: past the first layer
-        // the element is outside `[x, y, 0]` and nothing is placed.
-        self.trace(node, [x, y, 0], context).ok()?.place
+        // the element is outside `[x, y, 0]` and nothing is placed. A node
+        // that ran others fused into it failed in any of them: each is
+        // traced, the first in the group first (traced alone, the node's
+        // own trace fails in them before it runs).
+        let fused = self.evaluator.fused_parts(node);
+        fused
+            .iter()
+            .chain(std::iter::once(node))
+            .find_map(|traced| self.trace(traced, [x, y, 0], context).ok()?.place)
     }
 
     /// One element field of a node's output: its type and words. Named

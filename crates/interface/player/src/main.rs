@@ -974,7 +974,11 @@ fn main() -> ExitCode {
             }
         }
         Some(Err(error)) => {
-            eprintln!("evaluation failed: {error}; the window opens when it succeeds");
+            let told = player.session.told(&error);
+            eprintln!("evaluation failed: {told}; the window opens when it succeeds");
+            if let Some(place) = player.session.failure_place(&error, &context) {
+                eprintln!("  the failing operation is written at {place}");
+            }
         }
         None => {}
     }

@@ -33,7 +33,17 @@ fn a_read_after_a_failed_frame_is_told_why_the_frame_failed() {
         "{before}"
     );
     let failed = session.evaluate(&Context::default());
-    let error = failed.expect_err("`bad` divides by zero").to_string();
+    let failure = failed.expect_err("`bad` divides by zero");
+    let error = failure.to_string();
+    // Where it failed is found though `shown`, which failed, ran `bad`
+    // fused into it: `bad` is traced.
+    let place = session
+        .failure_place(&failure, &Context::default())
+        .expect("the failing operation is placed");
+    assert_eq!(
+        place.line, 2,
+        "`t.far` is the library's second line: {place}"
+    );
     let why = session.why_no_value(&shown, "result");
     assert!(why.contains("the last evaluation failed"), "{why}");
     assert!(why.contains(&error), "the failure itself is said: {why}");

@@ -1443,7 +1443,8 @@ fn evaluate_and_export(
                 .and_then(|node| session.graph()?.node(node)?.at.clone())
                 .map(|at| format!("{at}: "))
                 .unwrap_or_default();
-            eprintln!("{at}evaluation failed: {error}; last output is kept");
+            let told = session.told(&error);
+            eprintln!("{at}evaluation failed: {told}; last output is kept");
             // Where in the Kernel an element failed, traced again.
             if let Some(place) = session.failure_place(&error, &context) {
                 eprintln!("  the failing operation is written at {place}");

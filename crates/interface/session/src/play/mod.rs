@@ -574,7 +574,7 @@ impl Play {
         if !session.overlaps()
             && let Err(error) = session.set_overlap(true)
         {
-            self.failed(&session.told(&error));
+            self.failed(&session.told(&error), || None);
             return Frame::Failed;
         }
         // While a replay plays, it is the whole input.
@@ -660,7 +660,10 @@ impl Play {
                 }))
             }
             Err(error) => {
-                self.failed(&session.told(&error));
+                // Where in a Kernel it failed, traced again only when the
+                // failure is news: a scene failing every frame is traced once.
+                let told = session.told(&error);
+                self.failed(&told, || session.failure_place(&error, &context));
                 Frame::Failed
             }
         }
@@ -673,7 +676,7 @@ impl Play {
         match session.confirm() {
             Ok(()) => true,
             Err(error) => {
-                self.failed(&session.told(&error));
+                self.failed(&session.told(&error), || None);
                 false
             }
         }
@@ -706,11 +709,15 @@ impl Play {
     /// Says a failed evaluation once, and keeps it as the status. The
     /// sound fetched behind the frame before is not heard: that frame is
     /// taken back with it.
-    fn failed(&mut self, told: &str) {
+    fn failed(&mut self, told: &str, place: impl FnOnce() -> Option<crate::SourcePlace>) {
         self.sound_behind = None;
         let message = format!("evaluation failed: {told}");
         if self.reported.failed(&message) {
             self.said.push(format!("{message}; last frame is kept"));
+            if let Some(place) = place() {
+                self.said
+                    .push(format!("  the failing operation is written at {place}"));
+            }
         }
         self.status = message;
     }
