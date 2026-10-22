@@ -1,0 +1,10 @@
+scene song.esn
+
+# Two seconds into the town's song it is sounding; another seed plays
+# another theme at the same moment.
+frame 0.0
+expect count music.result = 1600
+frame 2.0
+expect music.result[400] = -0.0625 -0.0815 0.001
+expect music.result[1000] = -0.0231 -0.0252 0.001
+expect theme.result[400] = -0.0459 -0.0483 0.001

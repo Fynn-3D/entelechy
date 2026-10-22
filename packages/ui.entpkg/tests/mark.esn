@@ -1,0 +1,44 @@
+// A number rising where a blow landed, as games show damage, its figures
+// read from the text package's letters.
+use "../kernels/";
+use "text.entpkg";
+
+input font: Grid<Float> = "text.entpkg/assets/font.png";
+input digits: Rows<Int> = text "0\n1\n2\n3\n4\n5\n6\n7\n8\n9";
+
+node glyphs: kernel {
+    requires { field.write; }
+    output result: Rows<Letterform>;
+    domain = 1;
+    compute { return Letterform { code: 20013, advance: 1000, first: 0, count: 4, lo: vec2(0.2, 0.2), hi: vec2(0.8, 0.8) }; }
+}
+node outlines: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 4;
+    compute {
+        let c = [vec2(0.2, 0.2), vec2(0.8, 0.2), vec2(0.8, 0.8), vec2(0.2, 0.8)];
+        let a = c[element()];
+        let b = c[(element() + 1) % 4];
+        return vec4(a.x, a.y, b.x, b.y);
+    }
+}
+node atlas: text.glyph_atlas@1 { glyphs <- glyphs.result; outlines <- outlines.result; domain = vec2(96.0, 10.0); }
+node codes: text.glyph_codes@1 { glyphs <- glyphs.result; domain = count(glyphs); }
+node letters: graph "text.entpkg/graphs/letters.esn" { font <- font; atlas <- atlas.result; side = 10; }
+node numbers: graph "text.entpkg/graphs/decode.esn" { text <- digits; codes <- codes.result; width = 1; utf8 = 0; }
+node view: kernel {
+    requires { field.read; field.write; }
+    input letters: Grid<Float> <- letters.letters;
+    input numbers: Rows<Int> <- numbers.letters;
+    output result: Image;
+    domain = vec2(80, 40);
+    compute {
+        let q = coord() + vec2(0.5, 0.5);
+        let back = vec4(0.1, 0.1, 0.12, 1.0);
+        let mark = rising_number(letters, numbers, 1, 0, 42, -1, 2.0, vec4(1.0, 0.3, 0.2, 1.0), vec2(40.0, 30.0), 0.3, q);
+        return over(back, mark);
+    }
+}
+
+output result <- view.result;

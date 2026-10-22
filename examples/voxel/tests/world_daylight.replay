@@ -1,0 +1,15 @@
+scene ../parts/world/scene.esn
+
+# By day, the vault open: the floor in a pillar's shadow is lit by the
+# sky alone, blue and darker; in the sun it is brighter and even. The
+# statue's box has turned by two seconds, and the same pixel meets a
+# face of the statue turned more to the sun.
+window 160 90
+param open 1
+frame 0.0
+expect 5 85 = 0.296 0.302 0.353 0.03
+expect 120 70 = 0.494 0.488 0.499 0.03
+expect 80 45 = 0.553 0.561 0.565 0.03
+expect 74 40 = 0.449 0.469 0.51 0.03
+frame 2.0
+expect 74 40 = 0.55 0.557 0.583 0.03

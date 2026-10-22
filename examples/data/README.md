@@ -98,3 +98,7 @@ the fixture `tests/save.esn`, which writes nothing.
 ```sh
 entelechy player examples/data/parts/save/scene.esn --allow file.write=examples/data/parts/save/saves
 ```
+
+## Parts that run alone
+
+- [clip](parts/clip/README.md): an input read frame by frame from a directory with `frames`; `entelechy player examples/data/parts/clip/scene.esn`, its replays `tests/clip*.replay`.

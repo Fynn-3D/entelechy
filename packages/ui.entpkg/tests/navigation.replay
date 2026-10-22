@@ -1,0 +1,28 @@
+scene navigation.esn
+window 120 100
+
+# Down moves a row; held, it repeats after its delay to the last row and
+# stops there; Enter confirms; the pointer moved onto the second row
+# lights it.
+frame 0.0
+expect nav.result[0].row = 0
+key 40 down
+frame 0.1
+key 40 up
+frame 0.15
+expect nav.result[0].row = 1
+key 40 down
+frame 0.2
+frame 0.8
+frame 0.9
+key 40 up
+frame 0.95
+expect nav.result[0].row = 3
+key 13 down
+frame 1.0
+expect nav.result[0].confirm = true
+key 13 up
+pointer 50 38 up
+frame 1.1
+expect nav.result[0].row = 1
+expect nav.result[0].pointed = 1

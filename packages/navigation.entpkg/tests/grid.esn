@@ -1,0 +1,26 @@
+// Ways over a 5 by 5 grid: the seed at the top left, a wall down the
+// middle column but for its bottom cell, each cell costing 1 to enter.
+use "../kernels/";
+
+node costs: kernel {
+    requires { field.write; }
+    output result: Grid<Int>;
+    domain = vec2(5, 5);
+    compute { let c = icoord(); return if c.x == 2 && c.y < 4 { 99 } else { 1 }; }
+}
+node seed: kernel {
+    requires { field.write; }
+    output result: Grid<Int>;
+    domain = vec2(5, 5);
+    compute { return if icoord() == ivec2(0, 0) { 0 } else { grid_far() }; }
+}
+node pass: navigation.relax@1 { times = 16; carry previous <- result; previous <- seed.result; cost <- costs.result; }
+node walk: kernel {
+    requires { field.read; field.write; }
+    input dist: Grid<Int> <- pass.result;
+    output result: Rows<IVec2>;
+    domain = 1;
+    compute { return grid_step(dist, ivec2(4, 0)); }
+}
+
+output result <- walk.result;

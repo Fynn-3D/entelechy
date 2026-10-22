@@ -1,0 +1,39 @@
+// The jukebox (`kernels/jukebox.ent` has the keys): a song of the music
+// package, a mood in a style from a seed.
+use "kernels/jukebox.ent";
+use "../../../../packages/audio.entpkg";
+use "../../../../packages/music.entpkg";
+use "../../../../packages/text.entpkg";
+
+param mood: Int = 0;
+param style: Int = 0;
+param seed: Int = 1;
+
+input moods: Moods = "../../../../packages/music.entpkg/data/moods.csv";
+input bands: Bands = "../../../../packages/music.entpkg/data/bands.csv";
+input instruments: Instruments = "../../../../packages/music.entpkg/data/instruments.csv";
+input names: Rows<Int> = bytes "../../../../packages/music.entpkg/data/names.txt";
+input font: Grid<Float> = "../../../../packages/text.entpkg/assets/font.png";
+input help: Rows<Int> = text "Up/Down mood  Left/Right style\nR new theme  S again  A the whole score";
+
+node paced0: audio.paced_start@1 { domain = 1; }
+node paced: audio.paced@1 { previous <~ paced.result from paced0.result; domain = 1; }
+node clock: audio.paced_clock@1 { paced <- paced.result; domain = 1; }
+node block: audio.paced_size@1 { paced <- paced.result; domain = 1; }
+node juke0: juke.start@1 { mood = mood; style = style; seed = seed; domain = 1; }
+node juke: juke.step@1 { previous <~ juke.result from juke0.result; clock <- clock.result; moods <- moods; bands <- bands; domain = 1; }
+node track: juke.track@1 { juke <- juke.result; domain = 1; }
+node music: music.play@1 { track <- track.result; moods <- moods; bands <- bands; instruments <- instruments; clock <- clock.result; block <- block.result; domain = value(block, 0); }
+
+node back: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = vec2(320, 40);
+    compute { return vec4(0.02, 0.02, 0.03, 1.0); }
+}
+node said: juke.words@1 { juke <- juke.result; names <- names; moods <- moods; help <- help; domain = 144; }
+node laid: text.layout@1 { codes <- said.result; origin = vec2(6.0, 6.0); wrap = 48; }
+node shown: text.draw@1 { under <- back.result; glyphs <- laid.result; font <- font; color = vec3(0.9, 0.85, 0.7); }
+
+output result <- shown.result;
+output sound <- music.result;

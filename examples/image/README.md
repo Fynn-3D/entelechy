@@ -18,8 +18,8 @@ entelechy replay examples/image/tests/image.replay
 Each part runs and is tested on its own:
 
 ```sh
-entelechy player examples/image/parts/<part>/scene.esn
-entelechy replay examples/image/tests/<part>.replay
+entelechy player examples/image/parts<part>/scene.esn
+entelechy replay examples/image/tests<part>.replay
 ```
 
 ## Blur

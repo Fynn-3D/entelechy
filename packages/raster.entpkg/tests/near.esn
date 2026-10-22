@@ -1,0 +1,63 @@
+// The rasterizer's contract at the edges, where the three backends have
+// to agree: a triangle with a vertex at `w <= 0` is skipped whole — not
+// clipped — and a triangle whose three corners are one vertex is
+// skipped too, which is the only way a Kernel can say "not this one"
+// while the row keeps its length.
+struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }
+struct Tri { a: Int; b: Int; c: Int; }
+struct Surface { depth: Float; normal: Vec3; uv: Vec2; id: Int; }
+
+param w: Float = 1.0;       // the third corner's clip w
+param bad: Int = 0;         // 1 = that corner not a number, 2 = infinite
+param collapse: Int = 0;    // 1 = all three corners on one vertex
+
+node points: kernel {
+    requires { field.write; }
+    param w: Float = w;
+    param bad: Int = bad;
+    output result: Rows<Vertex>;
+    domain = 3;
+    compute {
+        let i = element();
+        // Not a literal: a backend's shader compiler folds `1.0 / 0.0`
+        // and refuses the kernel.
+        let zero = float(i) * 0.0;
+        let wrecked = if bad == 1 { sqrt(zero - 1.0) } else { 1.0 / zero };
+        // The third corner scales with `w`, so every `w > 0` projects to
+        // the same point and the picture is the same one.
+        let p = if i == 2 && bad != 0 { vec4(wrecked, 0.8, 0.2, 1.0) }
+            else if i == 0 { vec4(-0.8, -0.8, 0.2, 1.0) }
+            else if i == 1 { vec4(0.8, -0.8, 0.2, 1.0) }
+            else { vec4(0.0 * w, 0.8 * w, 0.2 * w, w) };
+        return Vertex { clip: p, normal: vec3(0.0, 0.0, 1.0), uv: vec2(0.0, 0.0) };
+    }
+}
+
+node face: kernel {
+    requires { field.write; }
+    param collapse: Int = collapse;
+    output result: Rows<Tri>;
+    domain = 1;
+    compute {
+        return if collapse == 1 { Tri { a: 0, b: 0, c: 0 } } else { Tri { a: 0, b: 1, c: 2 } };
+    }
+}
+
+node raster: graph "../graphs/surface.esn" {
+    vertices <- points.result;
+    triangles <- face.result;
+    width = 64;
+    height = 64;
+}
+
+node view: kernel {
+    requires { field.read; field.write; }
+    input surface: Grid<Surface> <- raster.surface;
+    output result: Image;
+    compute {
+        let s = sample(surface);
+        return if s.id < 0 { vec4(0.0, 0.0, 0.0, 1.0) } else { vec4(1.0, 1.0, 1.0, 1.0) };
+    }
+}
+
+output result <- view.result;

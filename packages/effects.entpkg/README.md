@@ -34,6 +34,9 @@ use "effects.entpkg";
 
 `data/effects.csv`, `data/elements.csv`, `data/layers.csv`, `data/names.bin`, `data/spells.csv`
 
-## Tested by
+## Tests
 
-[spells](../../examples/spells/README.md), whose replays hold it on every backend.
+`tests/` holds scenes and their replays, run on every backend:
+`cast.replay`. Every Kernel of the package is reached by one of them.
+
+Used by the [spells](../../examples/spells/README.md) example.

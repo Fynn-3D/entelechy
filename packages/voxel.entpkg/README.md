@@ -28,6 +28,9 @@ use "voxel.entpkg";
   look a scene may take or write its own of from the package's
   functions.
 
-## Tested by
+## Tests
 
-[crypt](../../examples/crypt/README.md), [golem](../../examples/golem/README.md), [sculpt](../../examples/sculpt/README.md), [voxel](../../examples/voxel/README.md), whose replays hold it on every backend.
+`tests/` holds scenes and their replays, run on every backend:
+`world.replay`. Every Kernel of the package is reached by one of them.
+
+Used by the [voxel](../../examples/voxel/README.md) example.

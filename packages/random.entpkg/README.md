@@ -21,6 +21,9 @@ use "random.entpkg";
   dimensions, interpolated between hashed corners, and their fractal
   sums.
 
-## Tested by
+## Tests
 
-[darkroom](../../examples/darkroom/README.md), [nebula](../../examples/nebula/README.md), [stride](../../examples/stride/README.md), whose replays hold it on every backend.
+`tests/` holds scenes and their replays, run on every backend:
+`noise.replay`. Every Kernel of the package is reached by one of them.
+
+Used by the [animation](../../examples/animation/README.md), [darkroom](../../examples/darkroom/README.md), [nebula](../../examples/nebula/README.md) examples.

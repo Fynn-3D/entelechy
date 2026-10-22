@@ -1,0 +1,48 @@
+// A game's events heard: a step on stone and a coin's chime, set going
+// as cues at the first sample; and two effects cast before an eye, each
+// layer heard as its form sounds, placed where it is from the eye.
+use "../kernels/";
+use "audio.entpkg";
+use "effects.entpkg";
+
+input materials: Materials = "../data/materials.csv";
+input styles: Styles = "../data/styles.csv";
+input timbres: Timbres = "../data/timbres.csv";
+input effects: Effects = "effects.entpkg/data/effects.csv";
+input layers: Layers = "effects.entpkg/data/layers.csv";
+
+node paced0: audio.paced_start@1 { domain = 1; }
+node paced: audio.paced@1 { previous <~ paced.result from paced0.result; domain = 1; }
+node clock: audio.paced_clock@1 { paced <- paced.result; domain = 1; }
+node block: audio.paced_size@1 { paced <- paced.result; domain = 1; }
+
+node cues: kernel {
+    requires { field.write; }
+    output result: Cues;
+    domain = 2;
+    compute {
+        return if element() == 0 { Cue { kind: event_step(), param: event_param(1, step_how(0, 1)), start: 0l, pan: -0.5, gain: 1.0, head: 0 } }
+            else { Cue { kind: event_coin(), param: event_param(0, 0), start: 0l, pan: 0.5, gain: 1.0, head: 1 } };
+    }
+}
+node heard: sound.events@1 { cues <- cues.result; clock <- clock.result; materials <- materials; styles <- styles; block <- block.result; domain = value(block, 0); }
+
+node eye: kernel {
+    requires { field.write; }
+    output result: Eyes;
+    domain = 1;
+    compute { return eye_looking(vec3(0.0, 2.0, -8.0), vec3(0.0, 1.0, 0.0), 1.3); }
+}
+node casts: kernel {
+    requires { field.write; time.read; }
+    output result: Casts;
+    domain = 2;
+    compute {
+        let i = element();
+        return Cast { on: 1, effect: i, element: i, tier: 1, seed: 7 + i, from: vec3(float(i) * 3.0 - 1.5, 1.0, 0.0), to: vec3(float(i) * 3.0 - 1.5, 1.0, 4.0),
+            start: 0.0, now: time(), hide: 0 };
+    }
+}
+node cast: graph "../graphs/cast.esn" { casts <- casts.result; effects <- effects; layers <- layers; timbres <- timbres; eye <- eye.result; clock <- clock.result; block <- block.result; }
+
+output sound <- heard.result;

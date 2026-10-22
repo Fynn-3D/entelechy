@@ -1,0 +1,31 @@
+scene noise.esn
+
+# A hash of whole numbers is the same bits on every backend; value noise
+# stays within -1 and 1 and gradient noise near them; a Worley distance
+# is never more than a cell's diagonal; and curl noise neither gathers
+# nor spreads.
+frame 0.0
+expect probe.result[0].x = 0.0077651143 0.0000001
+expect probe.result[1].x = 0.5820252 0.0000001
+expect probe.result[2].x = 0.10791439 0.0000001
+expect probe.result[0] = 0.0077651143 0.3442049 0.29118812 0.38863346 0.0001
+expect probe.result[2] = 0.10791439 -0.53633076 -0.42905104 0.5868549 0.0001
+expect probe.result[3].y > -1.0
+expect probe.result[3].y < 1.0
+expect probe.result[3].w < 1.8
+expect spread.result[0] < 0.0001
+expect spread.result[0] > -0.0001
+expect spread.result[2] < 0.0001
+expect spread.result[2] > -0.0001
+
+# Whole numbers from hashes, 0 to 5, never below zero, the hashes with
+# their top bit set (2, 3, 7) included.
+expect pick.result[0] = 0
+expect pick.result[1] = 2
+expect pick.result[2] = 3
+expect pick.result[3] = 5
+expect pick.result[7] = 4
+
+# The fractal sums, ridged noise, and the float hashes.
+expect sums.result[0] = -0.0057 -0.2633 0.4452 0.3387 0.001
+expect sums.result[1] = 0.1356 -0.2391 0.6071 0.8043 0.001

@@ -15,6 +15,7 @@ use "scatter.entpkg";
   center (the camera, often) (`scatter.around`). Kernels:
   `scatter.around@1`.
 
-## Tested by
+## Tests
 
-[material_balls](../../examples/material_balls/README.md), whose replays hold it on every backend.
+`tests/` holds scenes and their replays, run on every backend:
+`ground.replay`. Every Kernel of the package is reached by one of them.

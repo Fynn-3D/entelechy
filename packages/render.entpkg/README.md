@@ -81,9 +81,13 @@ use "render.entpkg";
   (`render.workbench_shade`) on a scene's G-buffer (the contract, its
   first three maps).
 
-## Tested by
+## Tests
 
-[material_balls](../../examples/material_balls/README.md), whose replays hold it on every backend.
+`tests/` holds scenes and their replays, run on every backend:
+`lit.replay`, `path_trace.replay`, `probes.replay`, `temporal.replay`.
+Every Kernel of the package is reached by one of them.
+
+Used by the [material_balls](../../examples/material_balls/README.md) example.
 
 ## The contract
 

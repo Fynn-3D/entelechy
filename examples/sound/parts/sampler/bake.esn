@@ -1,0 +1,7 @@
+// Bakes the kick: half a second of frames at 48 kHz, saved as a WAV.
+//   entelechy run examples/sound/parts/sampler/bake.esn --save kick=examples/sound/parts/sampler/assets/kick.wav
+use "kernels/";
+
+node kick: sampler.kick@1 { domain = 24000; }
+
+output result <- kick.result;

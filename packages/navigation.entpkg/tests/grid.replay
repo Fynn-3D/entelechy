@@ -1,0 +1,11 @@
+scene grid.esn
+
+# Down the left, through the gap at the bottom and up: the top right
+# cell is twelve steps from the seed, the wall never entered, the bottom
+# right eight; the first step from the top right is to its left, as near
+# as the cell below and first of the ways in order.
+frame 0.0
+expect pass.result[4] = 12
+expect pass.result[2] = 9999
+expect pass.result[24] = 8
+expect walk.result[0] = 3 0

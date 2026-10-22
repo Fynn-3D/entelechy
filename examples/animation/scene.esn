@@ -1,0 +1,13 @@
+// A skeleton, its clips and the mesh that follows, through the animation
+// package; this scene places `parts/blend/arm.esn` over the arm it reads, and
+// each part runs alone.
+input mesh: Rows<Point> = "parts/blend/assets/arm.vertices.field";
+input faces: Triangles = "parts/blend/assets/arm.triangles.field";
+input weights: Rows<Bound> = "parts/blend/assets/arm.weights.field";
+input skeleton: Skeleton = "parts/blend/assets/arm.skeleton.field";
+input swing: Clip = "parts/blend/assets/arm.swing.clip.field";
+input curl: Clip = "parts/blend/assets/arm.curl.clip.field";
+
+node blend: graph "parts/blend/arm.esn" { mesh <- mesh; faces <- faces; weights <- weights; skeleton <- skeleton; swing <- swing; curl <- curl; }
+
+output result <- blend.result;

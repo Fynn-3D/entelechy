@@ -1,0 +1,16 @@
+// Three actions read from the keyboard and a pad alike: jump on Space or
+// a pad's south, fire on F, J or west, menu on Esc or start.
+use "../kernels/";
+
+node actions: kernel {
+    requires { field.write; }
+    output result: Rows<ActionBinding>;
+    domain = 3;
+    compute {
+        return [ActionBinding { key: 32, key2: -1, pad: 8 }, ActionBinding { key: 70, key2: 74, pad: 10 }, ActionBinding { key: 27, key2: -1, pad: 16 }][element()];
+    }
+}
+node start: controls.start@1 { domain = 1; }
+node read: controls.read@1 { previous <~ read.result from start.result; actions <- actions.result; domain = 1; }
+
+output result <- read.result;

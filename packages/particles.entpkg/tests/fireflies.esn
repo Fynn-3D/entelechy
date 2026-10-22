@@ -1,0 +1,50 @@
+// Fireflies born in a box above a flat floor, drifting on a still
+// evening, binned into the picture's tiles and drawn glowing over the
+// dark, seen through a lens a few meters back.
+use "../kernels/";
+use "render.entpkg";
+
+node emitters: kernel {
+    requires { field.write; }
+    output result: Rows<Emitter>;
+    domain = 1;
+    compute {
+        return Emitter { at: vec3(0.0, 0.8, -1.5), half: vec3(3.0, 0.3, 1.5), first: 0, count: 64, life: vec2(3.0, 4.0),
+            speed: vec3(0.0, 0.2, 0.0), jitter: 0.2, size: vec2(0.04, 0.06), kind: kind_firefly(), lift: 0.05, drag: 1.0 };
+    }
+}
+node still: Rows<Vec4> { domain = 1; }
+node flat: Grid<Float> { domain = vec2(2, 2); }
+node none: particles.none@1 { domain = 64; }
+node flies: particles.step@1 { previous <~ flies.result from none.result; emitters <- emitters.result; wind <- still.result; ground <- flat.result; domain = 64; }
+
+node home: render.cam_start@1 { x = 0.0; y = 0.45; z = -1.9; yaw = 0.0; pitch = 0.42; dist = 8.5; domain = 1; }
+node lens: render.lens@1 { cam <- home.result; domain = 1; }
+node sky: kernel {
+    requires { field.write; }
+    output result: SkyLooks;
+    domain = 1;
+    compute { return plain_sky(vec3(0.3, 0.2, 0.9), vec3(0.6, 0.4, 0.3), vec3(0.05, 0.05, 0.08)); }
+}
+node far: kernel {
+    requires { field.write; }
+    output result: Grid<Vec4>;
+    domain = window();
+    compute { return vec4(0.0, 1.0, 0.0, no_hit()); }
+}
+node size: kernel {
+    requires { field.write; input.read; }
+    output result: Rows<Vec2>;
+    domain = 1;
+    compute { return window(); }
+}
+node dark: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = window();
+    compute { return vec4(0.02, 0.02, 0.03, 1.0); }
+}
+node bins: particles.bin@1 { particles <- flies.result; lens <- lens.result; size <- size.result; domain = ceil(window() / 16) * vec2(4, 1); }
+node drawn: particles.draw@1 { hdr <- dark.result; surface <- far.result; bins <- bins.result; particles <- flies.result; lens <- lens.result; sky <- sky.result; domain = window(); }
+
+output result <- drawn.result;

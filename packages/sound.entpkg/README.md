@@ -28,6 +28,9 @@ use "sound.entpkg";
 
 `data/materials.csv`, `data/styles.csv`, `data/timbres.csv`
 
-## Tested by
+## Tests
 
-[soundboard](../../examples/soundboard/README.md), [spells](../../examples/spells/README.md), whose replays hold it on every backend.
+`tests/` holds scenes and their replays, run on every backend:
+`sounds.replay`. Every Kernel of the package is reached by one of them.
+
+Used by the [sound](../../examples/sound/README.md), [spells](../../examples/spells/README.md) examples.

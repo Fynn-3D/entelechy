@@ -277,11 +277,11 @@ stand still.
 
 **Where.** [`physics.ent`](../packages/physics.entpkg/kernels/solve.ent)
 and its [step](../packages/physics.entpkg/graphs/step.esn);
-[`rest.replay`](../examples/physics/tests/rest.replay) holds a column
-of boxes still for seconds, [`motion.replay`](../examples/physics/tests/motion.replay)
+[`rest.replay`](../packages/physics.entpkg/tests/rest.replay) holds a column
+of boxes still for seconds, [`motion.replay`](../packages/physics.entpkg/tests/motion.replay)
 a bounce, friction on a slope and a kinematic platform to their
-closed forms, [`many.replay`](../examples/physics/tests/many.replay)
-the grid's pairs to every pair asked, and [`pile.replay`](../examples/physics/tests/pile.replay)
+closed forms, [`many.replay`](../packages/physics.entpkg/tests/many.replay)
+the grid's pairs to every pair asked, and [`pile.replay`](../packages/physics.entpkg/tests/pile.replay)
 a pile some twenty deep settled in four substeps, none pushed out, on
 all three backends. A pass that pushes every body reads bodies every
 manifold has pushed: a warm is taken back in a pass of its own, not in
@@ -989,21 +989,27 @@ reads, lists or names a file under `examples/` or `packages/`. A demo or
 a package holds itself: its replays, run by the release `entelechy replay` on
 every backend, with nothing left to the processor by its size, with
 nothing fused, and rounded apart. A replay whose checks hold two forms
-equal word for word says `alike`, and rounding apart leaves it out.
+equal word for word says `alike`, and rounding apart leaves it out. A
+package's replays are its own, under its `tests/`, and reach every
+Kernel it declares; a demo's replays test the program it is, not the
+packages it uses.
 
 **Why.** A demo is written in `.ent` and `.esn`, and its author needs
 no Rust to validate it. Rust tests that walk the demos tie the framework
 to them: every demo added makes the framework's tests slower, and every
 exception a demo needs lands in Rust. Replays in the release build hold
-every demo in seconds, and a new one joins by being written.
+every demo in seconds, and a new one joins by being written. A package
+carried alone by `entelechy pack` takes its tests with it, and a demo is
+free to change or go without a package losing what proves it.
 
 **Where.** The recipe's `replays` step in [PROCESS](../PROCESS.md); the
-`alike` line in [`replay`](../crates/interface/session/src/replay.rs).
+`alike` line in [`replay`](../crates/interface/session/src/replay.rs);
+`tested` in [the packages' check](../crates/interface/xtask/src/packages.rs).
 
 ## A name is one package; its name qualifies the names it declares
 
 A package is found by its name, and the name is a fact the manifest
-declares and its directory carries: `voxel@1` is `render.voxel_entpkg`. A
+declares and its directory carries: `voxel@1` is `voxel.entpkg`. A
 scene reaches one package of a name; two, as two editions of one, are
 refused, naming both. A package names the packages it uses by name and
 finds them beside itself. A document's functions, structs and types are

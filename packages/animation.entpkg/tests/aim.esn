@@ -1,0 +1,66 @@
+// The reach held to what it promises on a joint that is not the root:
+// the elbow turned onto a point while the clip moves the shoulder under
+// it. What the joint's axis ends up pointing at is worked out here from
+// the palette alone — the joint's matrix in the skin's space is its
+// palette row undone by its inverse bind — so the check does not share
+// the arithmetic it checks.
+use "../kernels/";
+
+input skeleton: Skeleton = "data/arm.skeleton.field";
+input curl: Clip = "data/arm.curl.clip.field";
+
+param weight: Float = 1.0;
+
+// A point to the side and above, which the elbow can face from wherever
+// the clip puts it.
+node target: kernel {
+    requires { field.write; }
+    output result: Rows<Vec3>;
+    domain = 1;
+    compute { return vec3(0.9, 1.1, -0.4); }
+}
+node reach: kernel {
+    requires { field.write; }
+    param weight: Float = weight;
+    output result: Rows<Float>;
+    domain = 1;
+    compute { return weight; }
+}
+
+node clock: animation.clock@1 { domain = 1; }
+node curling: animation.sample@1 { skeleton <- skeleton; clip <- curl; at <- clock.result; }
+node aimed: animation.aim@1 {
+    poses <- curling.result;
+    skeleton <- skeleton;
+    target <- target.result;
+    weight <- reach.result;
+    joint = 1;
+}
+node palette: animation.palette@1 { poses <- aimed.result; skeleton <- skeleton; }
+
+// Row 0: how nearly the elbow's y points at the target, as the cosine
+// of the angle between them (one when it does). Row 1: how far the
+// aimed pose's turn is from the clip's own, as one less the cosine of
+// half the angle between them (zero when the reach leaves it alone).
+node check: kernel {
+    requires { field.read; field.write; }
+    input palette: Rows<Mat4> <- palette.result;
+    input skeleton: Rows<Joint> <- skeleton;
+    input target: Rows<Vec3> <- target.result;
+    input aimed: Rows<Pose> <- aimed.result;
+    input clip: Rows<Pose> <- curling.result;
+    output result: Rows<Float>;
+    domain = 2;
+    compute {
+        if element() == 1 {
+            return 1.0 - abs(dot(at(aimed, 1).turn, at(clip, 1).turn));
+        }
+        let world = at(palette, 1) * inverse(at(skeleton, 1).bind);
+        let origin = world * vec4(0.0, 0.0, 0.0, 1.0);
+        let along = world * vec4(0.0, 1.0, 0.0, 0.0);
+        let to = at(target, 0) - origin.xyz;
+        return dot(normalize(along.xyz), normalize(to));
+    }
+}
+
+output result <- check.result;

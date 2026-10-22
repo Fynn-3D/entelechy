@@ -1,0 +1,14 @@
+// A list of four rows moved through by the keys, a pad and the pointer.
+use "../kernels/";
+
+// The list: its top left, its width and a row's height, rows 4 apart.
+node rows: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 1;
+    compute { return vec4(10.0, 10.0, 100.0, 16.0); }
+}
+node start: ui.navigation_start@1 { row = 0; domain = 1; }
+node nav: ui.navigate@1 { previous <~ nav.result from start.result; list <- rows.result; rows = 4; gap = 4.0; domain = 1; }
+
+output result <- nav.result;

@@ -1,0 +1,17 @@
+scene clips.esn
+
+# A joint of the swing and of the curl at the moment, and the blend half
+# way between; the curl laid over the swing; a vertex skinned by hand from
+# the blend and by the preset from the swing; the arm's root, fixed, so
+# the walk carries nothing; the second instance's first vertex two units
+# along x.
+frame 0.0
+expect swinging.result[1].turn = 0.5314 0 0 0.8471 0.001
+expect curling.result[1].turn = 0.6964 0 0 0.7176 0.001
+expect blended.result[1].turn = 0.6173 0 0 0.7867 0.001
+expect added.result[1].turn = 0.6906 0 0 0.7233 0.001
+expect skinned.result[40].position = -0.11 -0.0192 -0.9019 0.001
+expect preset.result[40].position = -0.11 -0.357 -0.8252 0.001
+expect strode.result[0].at = 0 0 0
+expect travelled.result[0] = 0 0 0
+expect placed.result[3].position = 2 0 0

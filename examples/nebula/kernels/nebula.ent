@@ -73,32 +73,3 @@ kernel nebula.lens@1 {
     output result: Rows<Float>;
     compute { return distance; }
 }
-
-/// What the math package gives at a few points, for the tests: a hash of
-/// whole numbers (x), value noise (y), gradient noise (z), and the
-/// distance to the nearest Worley point (w).
-kernel nebula.probe@1 {
-    requires { field.write; }
-    output result: Rows<Vec4>;
-    compute {
-        let i = element();
-        let p = float(i) * vec3(1.37, 0.71, 2.13) + vec3(0.2, -3.1, 5.7);
-        return vec4(unit_of(hash_int3(i, i * 3, i * 7, 1)), value3(p, 2), gradient3(p, 3), worley3(p, 4).x);
-    }
-}
-
-/// How much curl noise spreads or gathers at a few points: its
-/// divergence, taken across the step the curl itself takes, so the
-/// differences cancel; none, up to rounding.
-kernel nebula.spread@1 {
-    requires { field.write; }
-    output result: Rows<Float>;
-    compute {
-        let f = float(element());
-        let p = vec3(f * 0.93 + 0.31, 1.7, f * 0.41 - 2.2);
-        let e = 0.1;
-        return (curl3(p + vec3(e, 0.0, 0.0), 9).x - curl3(p - vec3(e, 0.0, 0.0), 9).x
-              + curl3(p + vec3(0.0, e, 0.0), 9).y - curl3(p - vec3(0.0, e, 0.0), 9).y
-              + curl3(p + vec3(0.0, 0.0, e), 9).z - curl3(p - vec3(0.0, 0.0, e), 9).z) / (2.0 * e);
-    }
-}

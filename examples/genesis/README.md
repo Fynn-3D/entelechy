@@ -5,7 +5,7 @@ A world that writes its own law. Life grows on a grid by the law in
 is near the law's center, within its width, and fades elsewhere. The
 world counts what lives; while its life is too crowded or too sparse,
 it fills the law's template, `templates/grow.tmpl`, with another center
-and width (`composer.entpkg`) and writes the law again through its
+and width (`genesis.entpkg`) and writes the law again through its
 output `laws`. The session reads the law it wrote, compiles it and puts
 it in the old one's place a frame later; a law that fails stays out,
 the last one runs on, and the input `problems` (`= checks "laws/"`)

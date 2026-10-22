@@ -20,6 +20,9 @@ use "audio.entpkg";
 - `kernels/instrument.ent` — The sounds a cue is made of, as functions
   of time.
 
-## Tested by
+## Tests
 
-[jukebox](../../examples/jukebox/README.md), [slg](../../examples/slg/README.md), [soundboard](../../examples/soundboard/README.md), [spells](../../examples/spells/README.md), whose replays hold it on every backend.
+`tests/` holds scenes and their replays, run on every backend:
+`clock.replay`. Every Kernel of the package is reached by one of them.
+
+Used by the [slg](../../examples/slg/README.md), [sound](../../examples/sound/README.md), [spells](../../examples/spells/README.md) examples.

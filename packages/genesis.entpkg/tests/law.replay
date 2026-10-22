@@ -1,0 +1,13 @@
+scene law.esn
+
+# The holes filled to three decimals, 0.125 and -2.500 in place of $0
+# and $1: the text seven bytes longer than its template, the first
+# number's point and the statement's end where they fall; one write,
+# its path eight bytes and its text seventy-four.
+frame 0.0
+expect count law.text = 74
+expect law.text[29] = 46
+expect law.text[33] = 59
+expect law.writing[0] = 1
+expect law.writing[2] = 8
+expect law.writing[3] = 74

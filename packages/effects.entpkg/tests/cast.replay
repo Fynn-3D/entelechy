@@ -1,0 +1,17 @@
+scene cast.esn
+
+# The moment the casts begin, the bolt's first layer is alive and the
+# pixel it will light is still the dark ground.
+frame 0.0
+expect 97 31 = 0.030 0.030 0.040 0.01
+expect drawn.lives[0].form = 7
+
+# Half a second on, the fire bolt's core and its glow over the dark, the
+# far corner still dark, the first layer over; the cel look's flat light
+# at its core.
+frame 0.5
+expect 97 31 = 1.011 1.011 1.011 0.01
+expect 97 33 = 0.511 0.192 0.062 0.01
+expect 5 85 = 0.030 0.030 0.040 0.01
+expect inked.result[5057] = 1.0111 1.0108 1.0109 101 0.001
+expect drawn.lives[0].form = -1

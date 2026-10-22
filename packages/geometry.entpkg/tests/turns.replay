@@ -1,0 +1,18 @@
+scene turns.esn
+
+# A quarter turn about up (its axis not of unit length) carries x to -z.
+frame 0.0
+expect quarter.result[0] = 0 0 -1 0.0001
+
+# A turn after its way back is no turn; halfway between none and two
+# radians is one radian about up; turns compose; the shortest turn from
+# x to y is a quarter turn about z.
+expect composed.result[0] = 0 0 0 1 0.0001
+expect composed.result[1] = 0 0.4794 0 0.8776 0.001
+expect composed.result[2] = 0.4623 0.2439 0.2519 0.8144 0.001
+expect composed.result[3] = 0 0 0.7071 0.7071 0.0001
+
+# A point moved, turned a quarter about z and scaled twice: x lands at
+# (1, 4, 3); and matrices of turns about x, y and z.
+expect moved.result[0] = 1 4 3 1 0.0001
+expect moved.result[1] = 1.4525 0.559 0.58 0 0.001

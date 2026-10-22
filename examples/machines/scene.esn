@@ -1,0 +1,4 @@
+// Processors written as a `scan` over their memory, running real programs, in two parts; this scene places `parts/thumb/`, and each part runs alone.
+node thumb: graph "parts/thumb/scene.esn" { }
+
+output result <- thumb.result;

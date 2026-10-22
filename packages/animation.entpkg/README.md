@@ -25,6 +25,10 @@ use "animation.entpkg";
 
 - `graphs/pose.esn` — One clip playing on one skeleton, as one node.
 
-## Tested by
+## Tests
 
-[crowd](../../examples/crowd/README.md), [golem](../../examples/golem/README.md), [reach](../../examples/reach/README.md), [skin](../../examples/skin/README.md), [stride](../../examples/stride/README.md), whose replays hold it on every backend.
+`tests/` holds scenes and their replays, run on every backend:
+`aim.replay`, `clips.replay`. Every Kernel of the package is reached by
+one of them.
+
+Used by the [animation](../../examples/animation/README.md), [voxel](../../examples/voxel/README.md) examples.

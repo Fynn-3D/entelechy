@@ -1,0 +1,12 @@
+// The scene with the clip read from the baked file.
+use "../parts/sampler/kernels/";
+
+input kick: Rows<Float> = "../parts/sampler/assets/kick.wav";
+
+node begin: sampler.begin@1 { domain = 1; }
+node state: sampler.state@1 { previous <~ state.result from begin.result; clip <- kick; }
+node block: sampler.block@1 { state <- state.result; clip <- kick; domain = 800; }
+node scope: sampler.scope@1 { block <- block.result; domain = vec2(320, 120); }
+
+output view <- scope.result;
+output sound <- block.result;

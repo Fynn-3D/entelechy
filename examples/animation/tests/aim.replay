@@ -1,0 +1,22 @@
+scene ../parts/aim/scene.esn
+window 320 180
+
+# A third of a second in: the curl has the elbow bent, and the shoulder,
+# which the clip would have pointing away, is turned onto the point in
+# front of it. The first joint's matrix is the reach, the second's the
+# reach and the curl together. The ring is drawn where the point is, and
+# the arm crosses the window towards it.
+frame 0.35
+expect palette.result[0] = 0.87755 -0.34222 0.33584 0  -0.18014 0.41379 0.89237 0  -0.44435 -0.84360 0.30148 0  0 0 0 1 0.0005
+expect palette.result[1] = 0.87755 -0.34222 0.33584 0  -0.47699 -0.69429 0.53893 0  0.04874 -0.63313 -0.77251 0  0.49309 0.21047 -1.07399 1 0.0005
+expect 179 81 = 0.950 0.350 0.250 0.02
+expect 167 97 = 0.552 0.445 0.337 0.02
+expect 20 20 = 0.093 0.112 0.159 0.02
+
+# Two seconds in, the point has swung out to the right and the shoulder
+# has followed it there; the elbow is at another moment of its curl.
+frame 2.0
+expect palette.result[0] = 0.39783 -0.42929 0.81083 0  -0.32860 0.75847 0.56280 0  -0.85659 -0.49034 0.16068 0  0 0 0 1 0.0005
+expect palette.result[1] = 0.39783 -0.42929 0.81083 0  -0.62227 0.52316 0.58230 0  -0.67417 -0.73622 -0.05900 0  0.18242 -0.24588 -0.21968 1 0.0005
+expect 219 79 = 0.950 0.350 0.250 0.02
+expect 188 96 = 0.299 0.241 0.183 0.02

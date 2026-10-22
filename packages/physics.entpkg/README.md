@@ -31,6 +31,11 @@ use "physics.entpkg";
 - `graphs/step.esn` — One step of a world of bodies, `dt` long.
 - `graphs/substep.esn` — One substep of `step.esn`.
 
-## Tested by
+## Tests
 
-[physics](../../examples/physics/README.md), whose replays hold it on every backend.
+`tests/` holds scenes and their replays, run on every backend:
+`many.replay`, `motion.replay`, `pile.replay`, `rest.replay`,
+`roll.replay`, `wide.replay`. Every Kernel of the package is reached by
+one of them.
+
+Used by the [physics](../../examples/physics/README.md) example.

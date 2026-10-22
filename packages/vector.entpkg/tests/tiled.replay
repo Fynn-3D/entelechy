@@ -1,0 +1,46 @@
+scene tiled.esn
+alike
+window 400 300
+
+# The tiled drawing is the plain one word for word, whole, zoomed into
+# an edge, zoomed out, and at a window no whole number of tiles.
+frame 0.0
+expect differ.result[0] = 0
+expect 120 170 = 1.0 0.8275 0.302 0.005
+# Fitted whole by `drawing.esn`: the drawing's middle at the window's,
+# a unit to a pixel.
+expect fitted.look.result[0].zoom = 1
+expect fitted.look.result[0].center = 200 150
+
+param center vec2(300.0, 60.0)
+param zoom 23.0
+frame 0.1
+expect differ.result[0] = 0
+
+param center vec2(120.0, 150.0)
+param zoom 0.3
+frame 0.2
+expect differ.result[0] = 0
+
+window 333 217
+param center vec2(250.0, 200.0)
+param zoom 3.7
+frame 0.3
+expect differ.result[0] = 0
+
+# Zoomed until the drawing's edges lie past what a whole number holds:
+# the rows a segment crosses are only the tile's, so it still draws.
+window 400 300
+param center vec2(300.0, 60.0)
+param zoom 1000000000.0
+frame 0.4
+expect differ.result[0] = 0
+
+# A zoom of none or less is the least zoom there is, the same to every
+# Kernel.
+param zoom 0.0
+frame 0.5
+expect differ.result[0] = 0
+param zoom -1.0
+frame 0.6
+expect differ.result[0] = 0

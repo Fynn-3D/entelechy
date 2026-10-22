@@ -36,3 +36,8 @@ protocol with `--serve`.
 entelechy player examples/voxel/scene.esn --scale 1
 entelechy replay examples/voxel/tests/voxel.replay --backend gpu
 ```
+
+## Parts that run alone
+
+- [world](parts/world/README.md): a crypt by firelight or by day, a statue turning in a box of its own; `entelechy player examples/voxel/parts/world/scene.esn`, its replays `tests/world*.replay`.
+- [body](parts/body/README.md): a body of voxel shapes baked at rest, walked by the animation package's rows and posed into voxels; `entelechy player examples/voxel/parts/body/scene.esn`, its replays `tests/body*.replay`.

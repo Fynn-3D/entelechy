@@ -15,6 +15,9 @@ use "geometry.entpkg";
   `Vec4` as `x y z w`, the order glTF and Blender write.
 - `kernels/transform.ent` — Rigid transforms.
 
-## Tested by
+## Tests
 
-[crowd](../../examples/crowd/README.md), [golem](../../examples/golem/README.md), [model](../../examples/model/README.md), [skin](../../examples/skin/README.md), [stride](../../examples/stride/README.md), whose replays hold it on every backend.
+`tests/` holds scenes and their replays, run on every backend:
+`turns.replay`. Every Kernel of the package is reached by one of them.
+
+Used by the [animation](../../examples/animation/README.md), [mesh](../../examples/mesh/README.md), [voxel](../../examples/voxel/README.md) examples.

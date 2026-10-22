@@ -1,0 +1,47 @@
+// The arm's two clips at a moment: swung and curled, blended half and
+// half, the curl laid over the swing, the arm skinned by the pose preset
+// and by hand; the walk a clip carries the body (stride and travel); and
+// a mesh placed at a few poses.
+use "../kernels/";
+
+input mesh: Rows<Point> = "data/arm.vertices.field";
+input weights: Rows<Bound> = "data/arm.weights.field";
+input skeleton: Skeleton = "data/arm.skeleton.field";
+input swing: Clip = "data/arm.swing.clip.field";
+input curl: Clip = "data/arm.curl.clip.field";
+
+node at: Rows<Float> { domain = 1; value = 0.4; }
+node was: Rows<Float> { domain = 1; value = 0.3; }
+node half: Rows<Float> { domain = 1; value = 0.5; }
+node swinging: animation.sample@1 { skeleton <- skeleton; clip <- swing; at <- at.result; rate = 30.0; }
+node curling: animation.sample@1 { skeleton <- skeleton; clip <- curl; at <- at.result; rate = 30.0; }
+node rest: animation.sample@1 { skeleton <- skeleton; clip <- swing; at <- was.result; rate = 30.0; }
+node blended: animation.blend@1 { first <- swinging.result; second <- curling.result; mix <- half.result; }
+node added: animation.add@1 { base <- swinging.result; add <- curling.result; rest <- rest.result; weight <- half.result; }
+node palette: animation.palette@1 { poses <- blended.result; skeleton <- skeleton; }
+node skinned: animation.apply@1 { mesh <- mesh; weights <- weights; palette <- palette.result; skeleton <- skeleton; }
+node preset: graph "../graphs/pose.esn" { mesh <- mesh; weights <- weights; skeleton <- skeleton; clip <- swing; at <- at.result; }
+node strode: animation.stride@1 { skeleton <- skeleton; clip <- swing; at <- at.result; rate = 30.0; joint = 0; }
+node travelled: animation.travel@1 { skeleton <- skeleton; clip <- swing; at <- at.result; was <- was.result; rate = 30.0; joint = 0; }
+node places: kernel {
+    requires { field.write; }
+    output result: Rows<Pose>;
+    domain = 2;
+    compute { return Pose { at: vec3(float(element()) * 2.0, 0.0, 0.0), turn: vec4(0.0, 0.0, 0.0, 1.0), grow: vec3(1.0, 1.0, 1.0) }; }
+}
+node one: kernel {
+    requires { field.write; }
+    output result: Rows<Point>;
+    domain = 3;
+    compute { return Point { position: vec3(float(element()), 0.0, 0.0), normal: vec3(0.0, 1.0, 0.0), uv: vec2(0.0, 0.0) }; }
+}
+node two: kernel {
+    requires { field.read; field.write; }
+    input one: Rows<Point> <- one.result;
+    output result: Rows<Point>;
+    domain = 6;
+    compute { return at(one, element() % 3); }
+}
+node placed: animation.place@1 { mesh <- two.result; places <- places.result; one <- one.result; }
+
+output result <- skinned.result;

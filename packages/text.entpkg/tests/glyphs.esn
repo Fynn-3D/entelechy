@@ -1,0 +1,33 @@
+// A wide glyph drawn into the letters' atlas from its outline, as
+// `entelechy import` writes a font's glyphs: 中 as a square from 0.2 to
+// 0.8 of an em; the codes the atlas holds; a line's letters the atlas
+// lacks counted.
+use "../kernels/";
+
+input font: Grid<Float> = "../assets/font.png";
+input line: Rows<Int> = text "A中B文";
+
+node glyphs: kernel {
+    requires { field.write; }
+    output result: Rows<Letterform>;
+    domain = 1;
+    compute { return Letterform { code: 20013, advance: 1000, first: 0, count: 4, lo: vec2(0.2, 0.2), hi: vec2(0.8, 0.8) }; }
+}
+node outlines: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 4;
+    compute {
+        let c = [vec2(0.2, 0.2), vec2(0.8, 0.2), vec2(0.8, 0.8), vec2(0.2, 0.8)];
+        let a = c[element()];
+        let b = c[(element() + 1) % 4];
+        return vec4(a.x, a.y, b.x, b.y);
+    }
+}
+node atlas: text.glyph_atlas@1 { glyphs <- glyphs.result; outlines <- outlines.result; domain = vec2(96.0, 10.0); }
+node codes: text.glyph_codes@1 { glyphs <- glyphs.result; domain = count(glyphs); }
+node letters: graph "../graphs/letters.esn" { font <- font; atlas <- atlas.result; side = 10; }
+node cells: graph "../graphs/decode.esn" { text <- line; codes <- codes.result; width = 8; utf8 = 0; }
+node lacking: text.unlettered@1 { letters <- cells.letters; domain = 1; }
+
+output result <- atlas.result;

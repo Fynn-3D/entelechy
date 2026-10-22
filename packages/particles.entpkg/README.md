@@ -16,6 +16,8 @@ use "particles.entpkg";
   `particles.none@1`, `particles.step@1`, `particles.bin@1`,
   `particles.draw@1`.
 
-## Tested by
+## Tests
 
-[material_balls](../../examples/material_balls/README.md), whose replays hold it on every backend.
+`tests/` holds scenes and their replays, run on every backend:
+`fireflies.replay`. Every Kernel of the package is reached by one of
+them.

@@ -1,0 +1,4 @@
+// Many bodies at once, in two parts; this scene places `parts/million/`, and each part runs alone.
+node million: graph "parts/million/scene.esn" { }
+
+output result <- million.result;

@@ -24,12 +24,13 @@ probe ─ digits ─ layout ─┘        (font.png feeds every draw)
 
 The replay pins pixels of the title, the specimen, and the readout
 before and after the pointer moves.
-`tests/write.replay` pins what a Kernel draws with `write.ent`'s
-functions: two codes of a `text` input, a negative number, a character
-at twice the size, and the lengths a message is put together with.
+The text package's own tests
+([`packages/text.entpkg/tests`](../../packages/text.entpkg/tests/)) pin
+what a Kernel draws with its ink functions, its glyph rows, letters and
+atlases.
 
 ```sh
 entelechy run examples/text/bake.esn --save font=packages/text.entpkg/assets/font.png
 entelechy player examples/text/scene.esn --scale 4
-entelechy replay examples/text/tests/text.replay examples/text/tests/write.replay
+entelechy replay examples/text/tests/text.replay
 ```

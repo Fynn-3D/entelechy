@@ -66,7 +66,7 @@ texture).
 contract as a test: one table of layouts, checked against what `entelechy
 import` writes of a rig `entelechy export` wrote, and by a scene posing the
 fresh rows and evaluating. The `animation` package reads the same rows in
-[`examples/skin`](../examples/skin), whose replays hold it. The Blender bridge's push
+[`examples/animation/parts/blend`](../examples/animation/parts/blend), whose replays hold it. The Blender bridge's push
 is held to the same table in
 [`crates/interface/entelechy/tests/bridges.rs`](../crates/interface/entelechy/tests/bridges.rs),
 which also poses a pushed rig and its own glTF and checks they land in
@@ -89,6 +89,6 @@ count that is not the skeleton's is refused. Names are the GLB's, and the
 rows it came from are the same whatever they are called.
 
 ```sh
-entelechy-export examples/skin/assets/arm.*.field --out arm.glb --rate 30
-entelechy-export examples/skin/assets/arm.*.field --out arm.glb --rate 30 --joints shoulder,elbow
+entelechy-export examples/animation/parts/blend/assets/arm.*.field --out arm.glb --rate 30
+entelechy-export examples/animation/parts/blend/assets/arm.*.field --out arm.glb --rate 30 --joints shoulder,elbow
 ```

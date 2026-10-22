@@ -860,7 +860,7 @@ be keywords.
    `native.rasterize@1` takes `vertices` (rows of `clip: Vec4; normal:
    Vec3; uv: Vec2`) and `triangles` (rows of three `Int`s) and writes
    `surface`, a grid of `depth: Float; normal: Vec3; uv: Vec2; id: Int`
-   over the node's `domain`: bit for bit the render package's surface on
+   over the node's `domain`: bit for bit the raster package's surface on
    the interpreter and the JIT, the device's rasterizer, approximate at
    edges, on a GPU ([decision](DECISIONS.md)). `native.rasterize@3`
    takes a `canvas` (a `Grid<Long>`, the empty canvas the package's
@@ -1005,7 +1005,7 @@ is named for the package it holds, and a name is one package: a scene
 reaching two packages of one name, two editions of it, is refused. A
 `use` naming nothing beside the document is looked for by name beside
 the package the document is in, so a package names the packages it uses
-(`use "math.entpkg";`) wherever they are kept together, then in the
+(`use "parallel.entpkg";`) wherever they are kept together, then in the
 directories `ENTELECHY_PACKAGES` lists. `entelechy pack` writes a package as one `.entpkg`
 file, `entelechy unpack` reads it back, `entelechy package` says what one holds. A
 Kernel reached by two paths is one file and one owner.

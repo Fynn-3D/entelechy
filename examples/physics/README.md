@@ -16,23 +16,14 @@ is cut into tiles, each listing the bodies that reach it with the
 larger window costs its pixels, not its pixels times every body.
 `--param steps` steps more than one sixtieth of a second a frame.
 
-The replays, on all three backends:
-
-- `rest.replay`: a ball rests on the ground, a column of five boxes
-  stands still for seconds, and rays meet the tops of both.
-- `motion.replay`: a bounce, a box held by friction on a slope and one
-  sliding down it, and a box carried by a kinematic platform, each to
-  its closed form.
-- `many.replay`: the pairs the grid finds among four hundred circles
-  are every pair asked one by one, and none gets out of the box they are
-  poured into.
-- `pile.replay`: three hundred circles poured into a narrow box settle
-  some twenty deep in four substeps, none pushed out, none overlapping
-  another by a tenth of a unit.
-- `physics.replay`: the pyramid stands, the sensor is touched, the ray
-  stops on the pyramid, and a click drops a ball that falls.
+`tests/physics.replay` holds, on every backend, the pyramid standing,
+the sensor touched, the ray stopped on the pyramid, and a click dropping
+a ball that falls. The package's own tests
+([`packages/physics.entpkg/tests`](../../packages/physics.entpkg/tests/))
+hold resting, bouncing, sliding, rolling and carried bodies to their
+closed forms, the pairs the grid finds, and piles that settle.
 
 ```sh
 entelechy player examples/physics/scene.esn
-entelechy replay examples/physics/tests/*.replay --backend gpu
+entelechy replay examples/physics/tests/physics.replay --backend gpu
 ```

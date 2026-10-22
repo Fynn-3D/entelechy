@@ -304,7 +304,8 @@ const ENTELECHY: &str = "./target/release/entelechy";
 /// two forms alike says so and is left out). Then every package used in
 /// one scene beside every other: none declares a name another does.
 fn replays(out: &Out) -> Result<(), String> {
-    let all = listed("examples", Some("tests"), ".replay");
+    let mut all = listed("examples", Some("tests"), ".replay");
+    all.extend(listed("packages", Some("tests"), ".replay"));
     let modes: [&[&str]; 6] = [
         &["--backend", "gpu"],
         &["--backend", "cpu"],
@@ -376,7 +377,8 @@ fn wasi(out: &Out) -> Result<(), String> {
             "wasm32-wasip1",
         ]),
     )?;
-    let all = listed("examples", Some("tests"), ".replay");
+    let mut all = listed("examples", Some("tests"), ".replay");
+    all.extend(listed("packages", Some("tests"), ".replay"));
     let passed = pool(&all, 8, |replay| {
         run(
             out,

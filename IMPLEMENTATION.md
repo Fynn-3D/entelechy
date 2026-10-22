@@ -56,17 +56,17 @@ Packages built from existing modes, with no engine feature of their own.
 | Library | Built from | Evidence |
 | --- | --- | --- |
 | [Stream compaction](packages/parallel.entpkg/kernels/compact.ent) | `prefix with sum`, reduce, scatter, `value(port)` | [culled replay](examples/culled/tests/culled.replay) |
-| [Radix sort](packages/parallel.entpkg/kernels/sort.ent) | prefix and scatter | [neighbors replay](examples/neighbors/tests/neighbors.replay) |
+| [Radix sort](packages/parallel.entpkg/kernels/sort.ent) | prefix and scatter | [neighbors replay](examples/swarm/tests/neighbors.replay) |
 | [Mip levels](packages/image.entpkg/graphs/mipmap.esn) | `times`, `carry`, the rasterizer's `uv` | [mipmap replay](examples/mipmap/tests/ground.replay) |
 | [Text](packages/text.entpkg/kernels/glyph.ent) | `Rows<Glyph>`, a `Grid<Float>` atlas | [text replay](examples/text/tests/text.replay) |
-| [Skinning](packages/animation.entpkg/kernels/skin.ent), [rig contract](docs/RIGS.md) | maps over rows, `<~` | [rig tests](crates/interface/entelechy/tests/rigs.rs); [skin](examples/skin/tests/skin.replay), [crowd](examples/crowd/tests/crowd.replay), [reach](examples/reach/tests/reach.replay), [elbow](examples/reach/tests/elbow.replay), [stride](examples/stride/tests/stride.replay) replays |
+| [Skinning](packages/animation.entpkg/kernels/skin.ent), [rig contract](docs/RIGS.md) | maps over rows, `<~` | [rig tests](crates/interface/entelechy/tests/rigs.rs); [skin](examples/animation/tests/blend.replay), [crowd](examples/animation/tests/crowd.replay), [reach](examples/animation/tests/aim.replay), [elbow](packages/animation.entpkg/tests/aim.replay), [stride](examples/animation/tests/stride.replay) replays |
 | [Rasterization](packages/raster.entpkg/kernels/triangle.ent) | scatter `min` of `Long` keys with `emit` | [edges](examples/mesh/tests/edges.replay) and [cutout](examples/mesh/tests/cutout.replay) replays on three backends, [session test](crates/interface/entelechy/tests/session.rs); [ten million triangles](examples/mesh/tests/ten_million.esn) for `bench` |
 | [Vector drawing](packages/vector.entpkg/kernels/fill.ent) | `prefix with sum`, scatter `max` with `emit`, `value(port)` | [vector replays](examples/vector/tests/) on three backends |
 | [Rigid bodies](packages/physics.entpkg/kernels/solve.ent), [decision](docs/DECISIONS.md#contacts-are-solved-all-at-once-each-against-its-own-share-of-a-body) | the math package, scatter `sum` of pushes, `times` with two `carry`s, `<~` | [physics replays](examples/physics/tests/) on three backends |
 | [Widgets and letters](packages/ui.entpkg/README.md) | maps over grids, `<~` navigation state, `value(port)` and `count(port)` extents | [ui replay](examples/ui/tests/ui.replay) on three backends |
 | [Font import](crates/interface/import/src/font.rs) | glyph outlines as `Rows` of segments | [importer tests](crates/interface/import/src/font.rs), on a font the tests build from the format's tables |
-| [Image](packages/image.entpkg/package.esn) | maps, scatter `sum` and prefix `sum` (histograms), `times` with a carried step (jump flooding) | [image replay](examples/darkroom/tests/image.replay) on three backends |
-| [Noise](packages/random.entpkg/kernels/noise.ent) | functions over `Int` bits (`mul_wrap`, `>>>`) | [noise replay](examples/nebula/tests/noise.replay) on three backends |
+| [Image](packages/image.entpkg/package.esn) | maps, scatter `sum` and prefix `sum` (histograms), `times` with a carried step (jump flooding) | [image replay](packages/image.entpkg/tests/operations.replay) on three backends |
+| [Noise](packages/random.entpkg/kernels/noise.ent) | functions over `Int` bits (`mul_wrap`, `>>>`) | [noise replay](packages/random.entpkg/tests/noise.replay) on three backends |
 | [Camera finish](packages/image.entpkg/graphs/finish.esn) | maps over grids, `size(port)` domains, the math package | [nebula replay](examples/nebula/tests/nebula.replay) on three backends |
 | [Ways over a grid](packages/navigation.entpkg/kernels/grid_path.ent) | `times` with a carried pass over a cost grid | [skirmish replay](examples/slg/tests/skirmish.replay) on three backends |
 | [Synthesis](packages/audio.entpkg/kernels/clock.ent) | a clock carried by `<~`, `rate()`, functions of time | [skirmish replay](examples/slg/tests/skirmish.replay) on three backends |
@@ -162,7 +162,7 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
 - Native operations are versions at generation zero
   ([`NativeOp`](crates/core/rules/src/backend.rs)). The rasterizer skips a
   triangle with any `w <= 0` whole
-  ([rules](crates/core/rules/src/raster.rs), [near-plane replay](examples/mesh/tests/near.replay));
+  ([rules](crates/core/rules/src/raster.rs), [near-plane replay](packages/raster.entpkg/tests/near.replay));
   its ports are read by field ([native replay](examples/mesh/tests/native.replay)).
 
 ### Graph, state and composition

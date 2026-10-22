@@ -1,0 +1,46 @@
+// The stand by the light renderer and through every step of a finish:
+// contact shadows laid into the sun's visibility; daylight lit as it is
+// and as a painting has it; the workbench's view; aerial perspective and
+// painted edges; one renderer chosen by number at its extent, the rest
+// kept small; a film's look; depth of field focused on the middle; and
+// the stand's G-buffer merged with itself, nearer surface by surface.
+node stand: graph "stand_scene.esn" { }
+node shadowed: render.contact@1 { surface <- stand.surface; extra <- stand.extra; layers <- stand.layers; lens <- stand.lens; sky <- stand.sky; domain = size(surface); }
+node lit: render.daylight@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
+    sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; painted = 0; domain = window(); }
+node painted: render.daylight@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
+    sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; painted = 1; domain = window(); }
+node bench: graph "../graphs/workbench.esn" { lens <- stand.lens; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; }
+node aired: render.air@1 { hdr <- lit.result; surface <- stand.surface; lens <- stand.lens; sky <- stand.sky; on = 1; }
+node inked: render.npr@1 { image <- painted.result; surface <- stand.surface; }
+
+// The extent a renderer draws at, by dynamic resolution, and the way chosen.
+node dynamic0: render.dynamic_start@1 { domain = 1; }
+node dynamic: render.dynamic@1 { previous <~ dynamic.result from dynamic0.result; domain = 1; }
+node extent: render.extent@1 { dynamic <- dynamic.result; domain = 2; }
+node size: render.extent_size@1 { extent <- extent.result; domain = 1; }
+node canvas: render.canvas@1 { extent <- extent.result; domain = vec2(value(extent, 0), value(extent, 1)); }
+node way0: render.way_start@1 { way = 0; domain = 1; }
+node way: render.way_keys@1 { previous <~ way.result from way0.result; domain = 1; }
+node painted_extent: render.way_extent@1 { extent <- extent.result; chosen <- way.result; way = 1; domain = 2; }
+node painted_surface: render.way_pass@1 { grid <- stand.surface; extent <- painted_extent.result; domain = vec2(value(extent, 0), value(extent, 1)); }
+node picked: render.way_pick@1 { lit <- aired.result; painted <- inked.result; probes <- lit.result; path <- lit.result; workbench <- bench.result;
+    chosen <- way.result; extent <- extent.result; domain = window(); }
+
+node seen: graph "../graphs/finish.esn" { hdr <- picked.result; exposure = 0.8; }
+node film0: render.film_start@1 { preset = 1; domain = 1; }
+node film_choice: render.film_keys@1 { previous <~ film_choice.result from film0.result; domain = 1; }
+node filmed: render.film@1 { image <- seen.result; choice <- film_choice.result; grain = 0.0; }
+node dof0: render.dof_start@1 { on = 1; aperture = 6.0; domain = 1; }
+node dof: render.dof_control@1 { previous <~ dof.result from dof0.result; domain = 1; }
+node focus0: Rows<Float> { domain = 1; value = 8.0; }
+node focus: render.focus@1 { previous <~ focus.result from focus0.result; surface <- stand.surface; control <- dof.result; domain = 1; }
+node focused: render.focused@1 { image <- filmed.result; surface <- stand.surface; focus <- focus.result; control <- dof.result; }
+
+node fit: Rows<Float> { domain = 1; value = 1.0; }
+node merged: render.nearer@1 { a_surface <- stand.surface; a_paint <- stand.paint; a_extra <- stand.extra; a_layers <- stand.layers; a_more <- stand.more;
+    a_behind_at <- stand.behind_at; a_behind_dir <- stand.behind_dir; a_behind_paint <- stand.behind_paint; a_behind_normal <- stand.behind_normal; a_through <- stand.through;
+    b_surface <- stand.surface; b_paint <- stand.paint; b_extra <- stand.extra; b_layers <- stand.layers; b_more <- stand.more; fit <- fit.result; domain = size(a_surface); }
+node nothing: render.blank@1 { domain = vec2(4, 4); }
+
+output result <- focused.result;

@@ -18,7 +18,7 @@ element or at one tier.
 
 ```sh
 entelechy player examples/spells/scene.esn
-entelechy replay examples/spells/tests/*.replay --backend gpu
+entelechy replay examples/spells/tests*.replay --backend gpu
 ```
 
 `tests/spells.replay` checks, on every backend, a fireball's core and

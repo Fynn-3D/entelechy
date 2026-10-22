@@ -1,0 +1,33 @@
+// A Kernel decides how much geometry the frame places, and the graph
+// places that much: `domain = value(detail) * value(detail)`.
+use "kernels/";
+
+node start: decided.start@1 { domain = 1; }
+node camera: decided.fly@1 {
+    previous <~ camera.result from start.result;
+    domain = 1;
+}
+node detail: decided.detail@1 { camera <- camera.result; domain = 1; }
+
+node ground: decided.ground@1 {
+    detail <- detail.result;
+    domain = value(detail) * value(detail);
+}
+node faces: decided.faces@1 {
+    detail <- detail.result;
+    domain = 2 * (value(detail) - 1) * (value(detail) - 1);
+}
+node project: decided.project@1 {
+    mesh <- ground.result;
+    camera <- camera.result;
+}
+node raster: graph "../../../../packages/raster.entpkg/graphs/window.esn" {
+    vertices <- project.result;
+    triangles <- faces.result;
+}
+node view: decided.shade@1 {
+    surface <- raster.surface;
+    detail <- detail.result;
+}
+
+output result <- view.result;

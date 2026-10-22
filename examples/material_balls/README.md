@@ -24,11 +24,9 @@ D Q E walk (Shift fast), R goes home.
 
 ```sh
 entelechy player examples/material_balls/scene.esn
-entelechy replay examples/material_balls/tests/*.replay --backend gpu
+entelechy replay examples/material_balls/tests*.replay --backend gpu
 ```
 
 `tests/balls.replay`, `tests/traced.replay` and `tests/bench.replay`
 hold each renderer's picture of the same balls to its pixels on every
-backend. `tests/scattered.replay` scatters pebbles and tufts by the
-[scatter package](../../packages/scatter.entpkg/package.esn)
-round a center and counts each layer's.
+backend.

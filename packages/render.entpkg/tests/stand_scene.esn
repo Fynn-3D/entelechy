@@ -1,0 +1,43 @@
+//! The test stand, as the contract asks (`stand.ent`): the lens a person
+//! drives, the sky, the G-buffer settled from a rough one while the lens
+//! moves and a fine one once it rests, and the proxies.
+use "stand.ent";
+use "../kernels/";
+
+node sky: stand.sky@1 { domain = 1; }
+node frame: stand.frame@1 { domain = 1; }
+node land: Grid<Float> { domain = vec2(2, 2); }
+node shape: stand.bake@1 { domain = vec3(100, 25, 60); }
+
+node home: render.cam_start@1 { x = 0.0; y = 0.45; z = -1.9; yaw = 0.0; pitch = 0.42; dist = 8.5; domain = 1; }
+node depths0: Grid<Float> { domain = ceil(window() / 8); }
+node cam: render.cam@1 { previous <~ cam.result from home.result; home <- home.result; depths <~ depths.result from depths0.result;
+    land <- land.result; frame <- frame.result; domain = 1; }
+node lens: render.lens@1 { cam <- cam.result; domain = 1; }
+
+node settled: render.settled@1 { cam <- cam.result; domain = 1; }
+node g_fine: stand.gbuffer@1 { lens <- lens.result; sky <- sky.result; domain = window(); }
+node g_rough: stand.gbuffer@1 { lens <- lens.result; sky <- sky.result; domain = ceil(window() / 2); }
+node g: render.settle@1 { fine_surface <- g_fine.surface; fine_paint <- g_fine.paint; fine_extra <- g_fine.extra; fine_layers <- g_fine.layers; fine_more <- g_fine.more;
+    rough_surface <- g_rough.surface; rough_paint <- g_rough.paint; rough_extra <- g_rough.extra; rough_layers <- g_rough.layers; rough_more <- g_rough.more;
+    settled <- settled.result; shrink = 2; domain = window(); }
+node behind: render.settle_behind@1 { fine_at <- g_fine.behind_at; fine_dir <- g_fine.behind_dir; fine_paint <- g_fine.behind_paint; fine_normal <- g_fine.behind_normal; fine_through <- g_fine.through;
+    rough_at <- g_rough.behind_at; rough_dir <- g_rough.behind_dir; rough_paint <- g_rough.behind_paint; rough_normal <- g_rough.behind_normal; rough_through <- g_rough.through;
+    settled <- settled.result; shrink = 2; domain = window(); }
+node depths: render.depths@1 { surface <- g.surface; domain = ceil(window() / 8); }
+
+output lens <- lens.result;
+output sky <- sky.result;
+output surface <- g.surface;
+output paint <- g.paint;
+output extra <- g.extra;
+output layers <- g.layers;
+output more <- g.more;
+output behind_at <- behind.behind_at;
+output behind_dir <- behind.behind_dir;
+output behind_paint <- behind.behind_paint;
+output behind_normal <- behind.behind_normal;
+output through <- behind.through;
+output proxy <- shape.result;
+output land <- land.result;
+output frame <- frame.result;

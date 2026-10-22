@@ -1,0 +1,38 @@
+// Quaternions and transforms at a few known turns: a quarter turn about
+// up carries x to -z, two halves make a whole, the way back undoes, a
+// slerp halfway is the half turn, and a transform moves, turns and
+// scales a point.
+use "../kernels/";
+
+node quarter: kernel {
+    requires { field.write; }
+    output result: Rows<Vec3>;
+    domain = 1;
+    compute { return rotating(turn_about(vec3(0.0, 2.0, 0.0), 1.5707963), vec3(1.0, 0.0, 0.0)); }
+}
+node composed: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 4;
+    compute {
+        let q = turn_about(vec3(0.0, 0.0, 1.0), 0.6);
+        let r = turn_about(vec3(1.0, 1.0, 0.0), 1.1);
+        return if element() == 0 { after(q, back(q)) }
+            else if element() == 1 { between(turn_about(vec3(0.0, 1.0, 0.0), 0.0), turn_about(vec3(0.0, 1.0, 0.0), 2.0), 0.5) }
+            else if element() == 2 { after(r, q) }
+            else { arc(vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0)) };
+    }
+}
+node moved: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 2;
+    compute {
+        let m = transform(vec3(1.0, 2.0, 3.0), turn_about(vec3(0.0, 0.0, 1.0), 1.5707963), vec3(2.0, 2.0, 2.0));
+        let r = rotate_x(0.3) * rotate_y(0.4) * rotate_z(0.5);
+        let t = turning(turn_about(vec3(0.0, 1.0, 0.0), 0.7));
+        return if element() == 0 { m * vec4(1.0, 0.0, 0.0, 1.0) } else { vec4(r * vec3(1.0, 0.0, 0.0), 0.0) + t * vec4(0.0, 0.0, 1.0, 0.0) };
+    }
+}
+
+output result <- quarter.result;

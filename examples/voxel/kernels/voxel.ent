@@ -54,7 +54,7 @@ fn ray_at(fwd: Vec3, x: Float, y: Float, width: Float, height: Float) -> Vec3 {
     return normalize(fwd * 1.5 + right * u + up * v);
 }
 
-// The walk through the box: the render package's, from the eye to the
+// The walk through the box: the voxel package's, from the eye to the
 // first colored voxel.
 fn cast(voxels: Voxels, eye: Vec3, dir: Vec3, n: Float) -> VoxelStep {
     return voxel_walk(voxels, eye, dir, vec3(0.0, 0.0, 0.0), vec3(n, n, n));

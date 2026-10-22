@@ -188,7 +188,7 @@ scene reads back (`input weights: Rows<Float> = "weights.field";`).
 ## Trace one element
 
 ```sh
-entelechy trace examples/thumb/scene.esn --node machine --element 9352 --window 128x128
+entelechy trace examples/machines/parts/thumb/scene.esn --node machine --element 9352 --window 128x128
 entelechy trace examples/life/scene.esn --node life --at 3 4
 ```
 
@@ -211,7 +211,7 @@ evaluation too. The protocol's `trace` is the same as JSON.
 ## Packages and versions
 
 ```sh
-entelechy package packages/widgets.entpkg
+entelechy package packages/ui.entpkg
 ```
 
 `entelechy package <dir.entpkg>` checks a package as `entelechy check` checks a
@@ -444,7 +444,7 @@ in a picture, so what fails is a value two Kernels each compute and must
 hold equal: compute it in one and read it in the other
 ([why](DECISIONS.md#the-rasterizer-is-a-package-the-native-one-is-its-fast-path)).
 An expectation that holds two forms of one computation to each other
-word for word, as `examples/vector/tests/tiled.replay` holds the tiled
+word for word, as `packages/vector.entpkg/tests/tiled.replay` holds the tiled
 drawing to the plain one, would fail rounded apart as it should: the two
 agree to the bit only where every Kernel rounds alike. Such a replay says
 `alike`, and `--round-apart` leaves it out, saying so.
@@ -459,10 +459,10 @@ replay, as without a device; the WAV is written at `--sound-rate`
 ## Import and export
 
 ```sh
-entelechy import examples/model/source/crate.glb --out examples/model/assets
-entelechy import examples/skin/source/arm.glb --out examples/skin/assets
+entelechy import examples/mesh/parts/model/source/crate.glb --out examples/mesh/parts/model/assets
+entelechy import examples/animation/parts/blend/source/arm.glb --out examples/animation/parts/blend/assets
 entelechy import song.ogg --out assets   # writes assets/song.wav
-entelechy import examples/score/song.mid --out examples/score/assets
+entelechy import examples/sound/parts/score/song.mid --out examples/sound/parts/score/assets
 entelechy import examples/vector/source/garden.svg --out examples/vector/assets
 entelechy import font.ttf --out assets --chars "Hello, world."
 ```

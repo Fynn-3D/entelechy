@@ -16,6 +16,9 @@ use "controls.entpkg";
   alike (`../package.esn`). Kernels: `controls.start@1`,
   `controls.read@1`.
 
-## Tested by
+## Tests
 
-[controls](../../examples/controls/README.md), whose replays hold it on every backend.
+`tests/` holds scenes and their replays, run on every backend:
+`actions.replay`. Every Kernel of the package is reached by one of them.
+
+Used by the [controls](../../examples/controls/README.md) example.

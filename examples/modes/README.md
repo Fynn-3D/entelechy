@@ -15,8 +15,8 @@ scatter (particles)    off_frame (async)
 ```sh
 entelechy player examples/modes/scene.esn
 entelechy run examples/modes/scene.esn --window 640x400 --out modes.ppm
-entelechy replay examples/modes/tests/*.replay
-entelechy player examples/modes/parts/<part>/scene.esn
+entelechy replay examples/modes/tests*.replay
+entelechy player examples/modes/parts<part>/scene.esn
 ```
 
 `tests/modes.replay` checks each panel of the whole and a value inside

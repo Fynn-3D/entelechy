@@ -14,6 +14,9 @@ use "navigation.entpkg";
 - `kernels/grid_path.ent` — Ways over a grid of cells. Kernels:
   `navigation.relax@1`.
 
-## Tested by
+## Tests
 
-[slg](../../examples/slg/README.md), whose replays hold it on every backend.
+`tests/` holds scenes and their replays, run on every backend:
+`grid.replay`. Every Kernel of the package is reached by one of them.
+
+Used by the [slg](../../examples/slg/README.md) example.

@@ -1,0 +1,49 @@
+scene actions.esn
+
+# Nothing touched. Space pressed: jump held and pressed its first frame,
+# held only the next, released when let go; D and W move ahead and
+# right at most one long.
+frame 0.0
+expect read.result[0].held = 0
+key 32 down
+key 68 down
+key 87 down
+frame 0.1
+expect read.result[0].pressed = 1
+expect read.result[0].held = 1
+expect read.result[0].move = 0.7071 0.7071 0.001
+frame 0.2
+expect read.result[0].pressed = 0
+expect read.result[0].held = 1
+key 32 up
+key 68 up
+key 87 up
+frame 0.3
+expect read.result[0].released = 1
+
+# A pad: J and west both fire; the right stick looks, the triggers zoom;
+# the left stick pulled back steps down once, then again after the
+# delay; the pad is the last touched.
+pads 1
+button west down
+stick right 0.6 0
+stick triggers 0 1
+stick left 0 -1
+frame 0.4
+expect read.result[0].held = 2
+expect read.result[0].look = 0.5 0 0.001
+expect read.result[0].zoom = 1 0.001
+expect read.result[0].steps = 2
+expect read.result[0].pad = 1
+frame 0.5
+expect read.result[0].steps = 0
+frame 0.85
+expect read.result[0].steps = 2
+button west up
+stick left 0 0
+stick right 0 0
+stick triggers 0 0
+key 74 down
+frame 0.9
+expect read.result[0].held = 2
+expect read.result[0].pad = 0

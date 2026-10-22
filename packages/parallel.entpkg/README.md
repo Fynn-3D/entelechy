@@ -31,6 +31,9 @@ use "parallel.entpkg";
   significant bit first.
 - `graphs/sort_pass.esn` — One bit of the sort.
 
-## Tested by
+## Tests
 
-[culled](../../examples/culled/README.md), [neighbors](../../examples/neighbors/README.md), [physics](../../examples/physics/README.md), [surface](../../examples/surface/README.md), whose replays hold it on every backend.
+`tests/` holds scenes and their replays, run on every backend:
+`rows.replay`. Every Kernel of the package is reached by one of them.
+
+Used by the [culled](../../examples/culled/README.md), [physics](../../examples/physics/README.md), [surface](../../examples/surface/README.md), [swarm](../../examples/swarm/README.md) examples.

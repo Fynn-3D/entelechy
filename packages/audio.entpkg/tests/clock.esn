@@ -1,0 +1,24 @@
+// The clocks, alone: the one counting the samples played before each
+// frame's block, and the one kept to the time; a block's length; the
+// cues no event has set going yet; and the instruments at a moment.
+use "../kernels/";
+
+node counted0: audio.clock_start@1 { domain = 1; }
+node counted: audio.clock@1 { previous <~ counted.result from counted0.result; domain = 1; }
+node paced0: audio.paced_start@1 { domain = 1; }
+node paced: audio.paced@1 { previous <~ paced.result from paced0.result; domain = 1; }
+node clock: audio.paced_clock@1 { paced <- paced.result; domain = 1; }
+node block: audio.paced_size@1 { paced <- paced.result; domain = 1; }
+node cues: audio.cues_start@1 { domain = 8; }
+node voices: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 2;
+    compute {
+        let t = 0.05 + float(element()) * 0.1;
+        let noise = white(long(element()) + 77l, 3) * 0.1 + soft_noise(t * 100.0, 5) * 0.1;
+        return vec4(tone(441.0, t) * envelope(t, 0.01, 0.3) + noise, bell(660.0, t), pluck(220.0, t) + thud(t, 80.0), horn(330.0, t, 0.5) + clang(500.0, 1.4, t, 0.4) + drum(t, 1000l, 90.0));
+    }
+}
+
+output result <- clock.result;

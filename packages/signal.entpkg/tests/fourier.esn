@@ -1,0 +1,17 @@
+// A wave once round a cube of 8 along x, made complex, through the
+// transform and back to real numbers: its energy in the first wave
+// number and its mirror, and the wave again.
+use "../kernels/";
+
+node wave: kernel {
+    requires { field.write; }
+    output result: Rows<Float>;
+    domain = 512;
+    compute { return cos(6.2831853 * float(element() % 8) / 8.0); }
+}
+node complex: signal.fourier_complex@1 { real <- wave.result; }
+node spectrum: graph "../graphs/fourier_forward.esn" { data <- complex.result; bits = 3; }
+node again: graph "../graphs/fourier_inverse.esn" { data <- spectrum.result; bits = 3; }
+node real: signal.fourier_real@1 { data <- again.result; }
+
+output result <- real.result;

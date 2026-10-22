@@ -1,0 +1,48 @@
+// The package at a few points: hashes as bits, value, gradient, fractal
+// and Worley noise, and curl noise's divergence.
+use "../kernels/";
+
+node probe: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 4;
+    compute {
+        let i = element();
+        let p = float(i) * vec3(1.37, 0.71, 2.13) + vec3(0.2, -3.1, 5.7);
+        return vec4(unit_of(hash_int3(i, i * 3, i * 7, 1)), value3(p, 2), gradient3(p, 3), worley3(p, 4).x);
+    }
+}
+// Divergence of curl noise across the step the curl takes: none, up to rounding.
+node spread: kernel {
+    requires { field.write; }
+    output result: Rows<Float>;
+    domain = 4;
+    compute {
+        let f = float(element());
+        let p = vec3(f * 0.93 + 0.31, 1.7, f * 0.41 - 2.2);
+        let e = 0.1;
+        return (curl3(p + vec3(e, 0.0, 0.0), 9).x - curl3(p - vec3(e, 0.0, 0.0), 9).x
+              + curl3(p + vec3(0.0, e, 0.0), 9).y - curl3(p - vec3(0.0, e, 0.0), 9).y
+              + curl3(p + vec3(0.0, 0.0, e), 9).z - curl3(p - vec3(0.0, 0.0, e), 9).z) / (2.0 * e);
+    }
+}
+// Whole numbers from hashes, 0 to 5.
+node pick: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    domain = 8;
+    compute { return below_of(hash_int(element(), 5), 6); }
+}
+// The fractal sums and the float hashes.
+node sums: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 2;
+    compute {
+        let f = float(element()) + 0.37;
+        let p = vec3(f, f * 0.5, 2.0 - f);
+        return vec4(fbm2(p.xy, 4, 7), fbm3(p, 4, 7), ridged3(p, 4, 7), value2(p.xz, 3) + hash1(element(), 2) + hash2(p.xy * 3.0, 4) + hash3(p * 2.0, 5));
+    }
+}
+
+output result <- probe.result;

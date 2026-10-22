@@ -15,20 +15,11 @@ A darkroom: a raw photograph developed with the image package.
 
 ```sh
 entelechy player examples/darkroom/scene.esn --window 1280x720
-entelechy replay examples/darkroom/tests/image.replay examples/darkroom/tests/darkroom.replay --backend gpu
+entelechy replay examples/darkroom/tests/darkroom.replay --backend gpu
 ```
 
-`tests/image.replay` runs every part of the package on small pictures whose answers are worked by hand. It covers:
-- color round trips;
-- the blend modes on known values;
-- a blur's Gaussian weights;
-- a shrink's mean;
-- convolution;
-- bicubic enlarging of a ramp;
-- dilation and erosion of a dot;
-- each tone change;
-- the neutral LUT;
-- equalization of two grays;
-- the distance from a dot.
+Every part of the image package is held on small pictures whose answers
+are worked by hand by the package's own tests
+([`packages/image.entpkg/tests`](../../packages/image.entpkg/tests/)).
 
 `tests/darkroom.replay` holds the scene to the window, the mark's distance and the histogram's bins.

@@ -1,0 +1,21 @@
+scene temporal.esn
+window 160 90
+
+# The jittered lens stands where the lens does; the first frame's blend is the
+# frame itself, the super-resolved picture its antialiased frame.
+frame 0.0
+expect jlens.result[0].eye = 0 3.916 5.8613 0.001
+expect 23 59 = 0.234 0.231 0.232 0.01
+expect blended.result[9463] = 0.2338 0.2308 0.2323 1 0.001
+
+# Two frames on, history blended in, the picture as still as the stand.
+frame 0.0333
+frame 0.0667
+expect 23 59 = 0.232 0.229 0.232 0.01
+expect blended.result[9463] = 0.2336 0.2307 0.2324 1 0.001
+expect built.result[9463] = 0.2316 0.2295 0.2324 1 0.001
+
+# The triangle through the picture's raster: covered at its middle, the
+# corner of the canvas empty.
+expect drawn.surface[7280].id = 0
+expect drawn.surface[0].id = -1

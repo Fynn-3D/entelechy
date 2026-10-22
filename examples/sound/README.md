@@ -55,3 +55,11 @@ entelechy replay examples/sound/tests/sound.replay
 entelechy replay examples/sound/tests/scope.replay
 entelechy replay examples/sound/tests/spectrum.replay
 ```
+
+## Parts that run alone
+
+- [strings](parts/strings/README.md): six plucked strings, each a delay line in a `memory`; `entelechy player examples/sound/parts/strings/scene.esn`, its replays `tests/strings*.replay`.
+- [sampler](parts/sampler/README.md): a drum WAV baked by a Kernel, played and resampled with `at_linear`; `entelechy player examples/sound/parts/sampler/scene.esn`, its replays `tests/sampler*.replay`.
+- [score](parts/score/README.md): a MIDI file imported, played and drawn as a piano roll, exported back as MIDI; `entelechy player examples/sound/parts/score/scene.esn`, its replays `tests/score*.replay`.
+- [music](parts/music/README.md): a game's music made from a mood, a band and a seed by the music package; `entelechy player examples/sound/parts/music/scene.esn`, its replays `tests/music*.replay`.
+- [effects](parts/effects/README.md): every event sound of the sound package, in each material and style; `entelechy player examples/sound/parts/effects/scene.esn`, its replays `tests/effects*.replay`.

@@ -1300,3 +1300,40 @@ fn a_name_qualified_by_its_package_reaches_that_packages() {
     assert!(said(&undeclared, "declares no `clean`"), "{undeclared:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A scene inside a package, opened by its file name from its own
+/// directory, finds the packages beside its package by name, as one
+/// opened by a longer path does.
+#[test]
+fn a_scene_opened_where_it_lies_finds_the_packages_beside_its_own() {
+    let manifest =
+        |name: &str| format!("package {name}@1 {{ language = 1; ir = 1; }}\nuse \"kernels/\";\n");
+    let dir = scratch("opened-where-it-lies", &[]);
+    for sub in [
+        "home.entpkg/kernels",
+        "home.entpkg/tests",
+        "beside.entpkg/kernels",
+    ] {
+        std::fs::create_dir_all(dir.join(sub)).unwrap();
+    }
+    for (file, text) in [
+        ("home.entpkg/package.esn", manifest("home")),
+        ("home.entpkg/kernels/home.ent", "fn home_one() -> Int { return 1; }\n".into()),
+        ("beside.entpkg/package.esn", manifest("beside")),
+        ("beside.entpkg/kernels/beside.ent", "fn beside_two() -> Int { return 2; }\n".into()),
+        (
+            "home.entpkg/tests/scene.esn",
+            "use \"../kernels/\";\nuse \"beside.entpkg\";\nnode n: kernel { requires { field.write; } output result: Rows<Int>; domain = 1; compute { return home_one() + beside_two(); } }\noutput result <- n.result;\n".into(),
+        ),
+    ] {
+        std::fs::write(dir.join(file), text).unwrap();
+    }
+    let was = std::env::current_dir().unwrap();
+    std::env::set_current_dir(dir.join("home.entpkg/tests")).unwrap();
+    let mut session =
+        entelechy_session::Session::open(std::path::Path::new("scene.esn"), None, 1 << 20);
+    let events = session.sync();
+    std::env::set_current_dir(was).unwrap();
+    assert!(session.graph().is_some(), "{events:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

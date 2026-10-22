@@ -1,0 +1,26 @@
+// The package's three presets over small rows: eight keys sorted stably,
+// ten flags compacted, and four owners' runs laid out.
+node keys: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    domain = 8;
+    compute { return [5, 3, 7, 3, 0, 6, 3, 1][element()]; }
+}
+node flags: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    domain = 10;
+    compute { return [0, 1, 1, 0, 0, 1, 0, 1, 0, 1][element()]; }
+}
+node counts: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    domain = 4;
+    compute { return [2, 0, 3, 1][element()]; }
+}
+
+node order: graph "../graphs/sort.esn" { keys <- keys.result; bits = 3; }
+node kept: graph "../graphs/compact.esn" { flags <- flags.result; }
+node lists: graph "../graphs/runs.esn" { counts <- counts.result; }
+
+output result <- order.result;

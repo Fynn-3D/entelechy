@@ -16,7 +16,7 @@ last.
 
 ```sh
 entelechy player examples/controls/scene.esn
-entelechy replay examples/controls/tests/*.replay --backend gpu
+entelechy replay examples/controls/tests*.replay --backend gpu
 ```
 
 `tests/controls.replay` walks the dot by a held key, presses and

@@ -64,6 +64,7 @@ pub(crate) fn faults(dir: &Path) -> Vec<String> {
         kernel_files(&path, &path, &mut files);
         faults.extend(owned_ids(stem, &files));
         faults.extend(laid_out(stem, &path));
+        faults.extend(tested(stem, &path, &files));
         uses.insert(stem.to_owned(), used_packages(&path));
         packages.push((stem.to_owned(), files));
     }
@@ -105,6 +106,89 @@ fn laid_out(package: &str, path: &Path) -> Vec<String> {
             if stem == package {
                 faults.push(format!(
                     "{package}.entpkg/{dir}/{name}: a file is named for its topic, not for its package"
+                ));
+            }
+        }
+    }
+    faults
+}
+
+/// Each Kernel of a package no test of its own reaches: a package holds
+/// `tests/`, scenes and their replays, and every Kernel it declares is
+/// bound by a test scene or by a graph preset of the package a test scene
+/// places, however deep.
+fn tested(package: &str, path: &Path, files: &[(String, String)]) -> Vec<String> {
+    let tests = path.join("tests");
+    let scenes: Vec<String> = fs::read_dir(&tests)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|e| e == "esn"))
+                .map(|p| fs::read_to_string(p).unwrap_or_default())
+                .collect()
+        })
+        .unwrap_or_default();
+    let replays = fs::read_dir(&tests).map_or(0, |entries| {
+        entries
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "replay"))
+            .count()
+    });
+    if scenes.is_empty() || replays == 0 {
+        return vec![format!(
+            "{package}.entpkg: no tests/ of scenes and their replays"
+        )];
+    }
+    // What the test scenes reach: their own text and every preset of the
+    // package they place, and the presets those place.
+    let mut reached = scenes.join("\n");
+    let mut placed = BTreeSet::new();
+    loop {
+        let mut more = Vec::new();
+        for (at, _) in reached.match_indices("graphs/") {
+            let name: String = reached[at + 7..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if !name.is_empty() && placed.insert(name.clone()) {
+                more.push(name);
+            }
+        }
+        for (at, _) in reached.match_indices("graph \"") {
+            let name: String = reached[at + 7..]
+                .chars()
+                .take_while(|c| *c != '"')
+                .collect();
+            if let Some(stem) = name.rsplit('/').next().and_then(|n| n.strip_suffix(".esn"))
+                && !name.contains(".entpkg/")
+                && placed.insert(stem.to_owned())
+            {
+                more.push(stem.to_owned());
+            }
+        }
+        if more.is_empty() {
+            break;
+        }
+        for name in more {
+            if let Ok(text) = fs::read_to_string(path.join("graphs").join(format!("{name}.esn"))) {
+                reached.push('\n');
+                reached.push_str(&text);
+            }
+        }
+    }
+    let mut faults = Vec::new();
+    for (file, text) in files {
+        let Ok(document) = entelechy_language::parse_document(text) else {
+            continue;
+        };
+        for kernel in &document.kernels {
+            if let Some(id) = &kernel.id
+                && !reached.contains(&id.value)
+            {
+                faults.push(format!(
+                    "{package}.entpkg/{file}: `{}` is reached by no test of the package",
+                    id.value
                 ));
             }
         }
@@ -174,6 +258,10 @@ fn kernel_files(package: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
     entries.sort();
     for path in entries {
         if path.is_dir() {
+            // A package's tests hold their own scenes and helpers, not its interface.
+            if path.parent() == Some(package) && path.file_name().is_some_and(|n| n == "tests") {
+                continue;
+            }
             kernel_files(package, &path, out);
         } else if path.extension().is_some_and(|e| e == "ent") {
             let inside = path.strip_prefix(package).unwrap_or(&path);

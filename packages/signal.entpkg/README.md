@@ -27,6 +27,7 @@ use "signal.entpkg";
   y, then x, each axis divided by `n`, so it undoes
   `fourier_forward.esn`.
 
-## Tested by
+## Tests
 
-[sound](../../examples/sound/README.md), whose replays hold it on every backend.
+`tests/` holds scenes and their replays, run on every backend:
+`fourier.replay`. Every Kernel of the package is reached by one of them.

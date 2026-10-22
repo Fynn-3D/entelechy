@@ -1,0 +1,108 @@
+// The sound board: every event of the sound package, one at a time, in a
+// material and a style. Up and Down the event, Left and Right its
+// material (a step's, a blow's, the world's) or style (the menus', the
+// tunes'), T how (a step's gait and weight, a blow's strength), Space
+// plays it, A plays them all one after another.
+use "../../../../../packages/audio.entpkg";
+use "../../../../../packages/sound.entpkg";
+
+/// The events, in the board's order.
+fn board_kinds() -> Int { return 40; }
+fn board_kind(i: Int) -> Int {
+    let kinds = [1, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 30, 31, 32, 33, 34, 35, 36, 37,
+        50, 51, 52, 53, 54, 55, 56, 57, 58, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79];
+    return kinds[clamp(i, 0, 39)];
+}
+
+/// Whether an event sounds in a style (else in a material).
+fn styled(kind: Int) -> Bool { return (kind >= 10 && kind < 30) || kind >= 70; }
+
+struct Board { k: Int; material: Int; style: Int; how: Int; auto: Int; keys: Int; start: Long; plays: Int; }
+type Boards = Rows<Board>;
+
+kernel board.start@1 {
+    requires { field.write; }
+    output result: Boards;
+    compute { return Board { k: 0, material: 1, style: 0, how: 0, auto: 0, keys: 0, start: -1000000l, plays: 0 }; }
+}
+
+kernel board.step@1 {
+    requires { field.read; field.write; input.read; time.read; }
+    input previous: Boards;
+    input clock: Clocks;
+    input materials: Materials;
+    input styles: Styles;
+    output result: Boards;
+    compute {
+        let w = sample(previous);
+        let codes = [38, 40, 37, 39, 84, 32, 65];
+        let keys = loop 7 with b = 0 { if key(codes[index()]) { b | (1 << index()) } else { b } };
+        let e = keys & (-1 ^ w.keys);
+        let now = at(clock, 0).n;
+        let kind = board_kind(w.k);
+        let done = float(now - w.start) / hz() > event_length(kind) + 0.4;
+        let next = w.auto == 1 && done;
+        let k = if (e & 1) != 0 { (w.k + board_kinds() - 1) % board_kinds() } else if (e & 2) != 0 || next { (w.k + 1) % board_kinds() } else { w.k };
+        let st = styled(board_kind(k));
+        let mats = count(materials);
+        let stys = count(styles);
+        let material = if !st && (e & 4) != 0 { (w.material + mats - 1) % mats } else if !st && (e & 8) != 0 { (w.material + 1) % mats } else { w.material };
+        let style = if st && (e & 4) != 0 { (w.style + stys - 1) % stys } else if st && (e & 8) != 0 { (w.style + 1) % stys } else { w.style };
+        let how = if (e & 16) != 0 { (w.how + 1) % 9 } else { w.how };
+        let auto = if (e & 64) != 0 { 1 - w.auto } else { w.auto };
+        let play = (e & 32) != 0 || next || ((e & 3) != 0) || ((e & 12) != 0) || ((e & 16) != 0);
+        return Board { k: k, material: material, style: style, how: how, auto: auto, keys: keys,
+            start: if play { now } else { w.start }, plays: if play { w.plays + 1 } else { w.plays } };
+    }
+}
+
+/// The event played, as a cue.
+kernel board.cue@1 {
+    requires { field.read; field.write; }
+    input board: Boards;
+    output result: Cues;
+    compute {
+        let w = at(board, 0);
+        let kind = board_kind(w.k);
+        let which = if styled(kind) { w.style } else { w.material };
+        let how = if kind == event_step() { step_how(w.how % 3, w.how / 3) } else { w.how % 4 };
+        return Cue { kind: kind, param: event_param(which, how), start: w.start, pan: 0.0, gain: 1.0, head: 0 };
+    }
+}
+
+/// Line `k` of `text`: its byte `j`, a space past its end.
+fn line_byte(text: Rows<Int>, k: Int, j: Int) -> Int {
+    let n = count(text);
+    let s = loop n with r = ivec3(0, 0, -1) {
+        if r.z >= 0 { r } else {
+            let c = at(text, index());
+            if c == 10 { if r.y == k { ivec3(r.x, r.y, index()) } else { ivec3(index() + 1, r.y + 1, -1) } } else { r }
+        }
+    };
+    let end = if s.z >= 0 { s.z } else { n };
+    return if j >= 0 && s.x + j < end { at(text, s.x + j) } else { 32 };
+}
+
+/// The board's words: the event, its material or style and how, the help.
+kernel board.words@1 {
+    requires { field.read; field.write; }
+    input board: Boards;
+    input kinds: Rows<Int>;
+    input materials_names: Rows<Int>;
+    input styles_names: Rows<Int>;
+    input help: Rows<Int>;
+    output result: Rows<Int>;
+    compute {
+        let w = at(board, 0);
+        let i = element();
+        let line = i / 40;
+        let j = i % 40;
+        let kind = board_kind(w.k);
+        if line == 0 { return line_byte(kinds, w.k, j); }
+        if line == 1 { return if styled(kind) { line_byte(styles_names, w.style, j) } else { line_byte(materials_names, w.material, j) }; }
+        if line == 2 {
+            return if j == 0 { 48 + w.how } else if j == 2 && w.auto == 1 { 65 } else { 32 };
+        }
+        return line_byte(help, line - 3, j);
+    }
+}

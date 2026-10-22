@@ -28,6 +28,10 @@ use "vector.entpkg";
 - `graphs/drawing.esn` — A drawing, whole and fitted to the window, over
   `background`.
 
-## Tested by
+## Tests
 
-[vector](../../examples/vector/README.md), whose replays hold it on every backend.
+`tests/` holds scenes and their replays, run on every backend:
+`many.replay`, `tiled.replay`. Every Kernel of the package is reached by
+one of them.
+
+Used by the [vector](../../examples/vector/README.md) example.

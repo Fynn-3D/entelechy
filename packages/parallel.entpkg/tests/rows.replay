@@ -1,0 +1,23 @@
+scene rows.esn
+
+# The permutation ordering 5 3 7 3 0 6 3 1: 0 at 4, 1 at 7, the three
+# 3s in the order they came (1, 3, 6), then 5, 6 and 7.
+frame 0.0
+expect order.result[0] = 4
+expect order.result[1] = 7
+expect order.result[2] = 1
+expect order.result[3] = 3
+expect order.result[4] = 6
+expect order.result[7] = 2
+
+# Five of ten flags kept, their indices gathered to the front.
+expect kept.count[0] = 5
+expect kept.indices[0] = 1
+expect kept.indices[4] = 9
+
+# Runs of 2, 0, 3 and 1 entries end at 2, 2, 5 and 6; six in all.
+expect lists.ends[0] = 2
+expect lists.ends[2] = 5
+expect lists.ends[3] = 6
+expect lists.entries[0] = 6
+expect count lists.slots = 6

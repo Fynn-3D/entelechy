@@ -14,12 +14,13 @@ sets the volume where it falls on the slider. The words are
 
 ```sh
 entelechy player examples/ui/scene.esn
-entelechy replay examples/ui/tests/*.replay --backend gpu
+entelechy replay examples/ui/tests*.replay --backend gpu
 ```
 
 `tests/ui.replay` checks, on all three backends, each option changed by
 the keys, a row held repeating after its delay, the pointer lighting a
 row and a click setting the volume, and the slider's fill and a key's
-cap by their pixels. `tests/wide.replay` draws a line with a wide letter
-from an atlas its scene draws itself, a box, and a character the atlas
-does not hold as a `?`.
+cap by their pixels. The packages' own tests hold the parts on their
+own: the [ui package's](../../packages/ui.entpkg/tests/) navigation,
+command search and marks, the [text package's](../../packages/text.entpkg/tests/)
+letters, wide glyphs and atlases.

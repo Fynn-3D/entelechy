@@ -1,5 +1,5 @@
-//! The picture's raster: the backend's own rasterizer (`native.rasterize@3`, the render package's fast path: on a GPU
-//! the device's rasterizer, on the processor bit for bit the render package's rule), drawn on a canvas of one pixel a window point
+//! The picture's raster: the backend's own rasterizer (`native.rasterize@3`, the raster package's fast path: on a GPU
+//! the device's rasterizer, on the processor bit for bit the raster package's rule), drawn on a canvas of one pixel a window point
 //! times `inner` (a window is that many times larger where a screen has more pixels than points).
 //! The corners are the clip coordinates `lens_clip` gives.
 use "raster.entpkg";

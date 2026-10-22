@@ -1,0 +1,26 @@
+// Text as glyph rows: "HP 42.5" laid out from a caption and a value,
+// drawn over a dark picture in the baked font; and one of two texts
+// chosen by a number, letter by letter.
+use "../kernels/";
+
+input font: Grid<Float> = "../assets/font.png";
+input caption: Rows<Int> = text "HP ";
+input first: Rows<Int> = text "one";
+input second: Rows<Int> = text "two";
+
+node values: Rows<Float> { domain = 1; value = 42.5; }
+node number: text.digits@1 { values <- values.result; places = 2; domain = 2; }
+node labeled: text.label@1 { caption <- caption; values <- values.result; places = 2; decimals = 1; domain = count(caption) + 2 + 1 + 2; }
+node laid: text.layout@1 { codes <- labeled.result; origin = vec2(4.0, 4.0); scale = 1.0; }
+node dark: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = vec2(64, 16);
+    compute { return vec4(0.05, 0.05, 0.06, 1.0); }
+}
+node shown: text.draw@1 { under <- dark.result; glyphs <- laid.result; font <- font; color = vec3(1.0, 0.9, 0.6); }
+node none: text.no_codes@1 { domain = 1; }
+node pick: Rows<Int> { domain = 1; value = 1; }
+node chosen: text.either@1 { first <- first; second <- second; chosen <- pick.result; when = 1; }
+
+output result <- shown.result;

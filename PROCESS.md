@@ -129,7 +129,10 @@ cargo xtask verify
 
 [`xtask`](crates/interface/xtask/src/main.rs) runs, in this order:
 
-- `fmt`, then `clippy` over the workspace with every target, then
+- `fmt`, then `packages` (`cargo xtask packages`: every package named,
+  laid out and layered as [packages](packages/README.md) says, and every
+  Kernel it declares reached by its own tests), then `clippy` over the
+  workspace with every target, then
   `clippy-wasm` (the JIT writing WebAssembly and the FFI) and
   `clippy-page` (the device and the session in a page), warnings denied;
 - `test-build`, the workspace's tests built;
@@ -137,7 +140,7 @@ cargo xtask verify
   which wait on the programs they drive;
 - `release`, the release build;
 - `replays`, `wasi` and `against_main` at once. `replays` runs every
-  example's replays by the release build, four at a time, on each
+  example's and every package's replays by the release build, four at a time, on each
   backend in turn; then on the device with nothing left to the processor
   by its size (`--small 0`), with nothing fused (`--no-fusion`), and
   rounded apart (`--round-apart`; a replay whose checks hold two forms

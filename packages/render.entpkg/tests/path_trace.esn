@@ -1,0 +1,10 @@
+// The stand path-traced, finished at the picture's size and scaled to the
+// window by the edge-aware upscale.
+node stand: graph "stand_scene.esn" { }
+node light: graph "../graphs/path_trace.esn" { lens <- stand.lens; sky <- stand.sky; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
+    behind_at <- stand.behind_at; behind_dir <- stand.behind_dir; behind_paint <- stand.behind_paint; behind_normal <- stand.behind_normal; through <- stand.through;
+    proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; bounces = 2; }
+node inner: graph "../graphs/finish_inner.esn" { hdr <- light.hdr; exposure = 0.8; }
+node shown: graph "../graphs/upscale.esn" { picture <- inner.result; amount = 0.3; }
+
+output result <- shown.result;

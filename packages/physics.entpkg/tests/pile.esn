@@ -1,0 +1,55 @@
+// Circles poured into a narrow box, some twenty deep: the deepest overlap
+// between two, and how many got out of the box.
+use "../kernels/";
+
+param count: Int = 300;
+
+node start: kernel {
+    requires { field.read; field.write; }
+    param count: Int = count;
+    output result: Rows<Body>;
+    compute {
+        let i = element();
+        if i == 0 { return box(vec2(0.0, -0.5), vec2(4.0, 0.5), 0.0, 0.0); }
+        if i == 1 { return box(vec2(-3.5, 15.0), vec2(0.5, 15.5), 0.0, 0.0); }
+        if i == 2 { return box(vec2(3.5, 15.0), vec2(0.5, 15.5), 0.0, 0.0); }
+        let k = i - 3;
+        let x = -2.75 + float(k % 12) * 0.47 + float((k * 7919) % 101) * 0.0005;
+        return Body { ..circle(vec2(x, 0.5 + float(k / 12) * 0.47), 0.22, 1.0), restitution: 0.1 };
+    }
+    domain = count + 3;
+}
+
+node none: physics.no_contacts@1 { domain = 1; }
+node world: graph "../graphs/step.esn" {
+    bodies <~ world.result from start.result;
+    held <~ world.contacts from none.result;
+    origin = vec2(-4.0, -1.0);
+    columns = 16;
+    rows = 64;
+    cell = 0.5;
+    bits = 10;
+    // Four substeps, the fewest a pile settles in, where a fault in the
+    // solve shows first.
+    substeps = 4;
+}
+
+node deepest: kernel {
+    requires { field.read; field.write; }
+    input contacts: Rows<Manifold> <- world.contacts;
+    output result: Rows<Float>;
+    compute { let m = sample(contacts); return if m.count > 0 && m.sensor == 0 { -m.p1.base } else { 0.0 }; }
+    merge(a, b) { return max(a, b); }
+}
+node out: kernel {
+    requires { field.read; field.write; }
+    input bodies: Rows<Body> <- world.result;
+    output result: Rows<Int>;
+    compute {
+        let b = sample(bodies);
+        return int(b.shape == 0 && (b.position.y < 0.0 || abs(b.position.x) > 3.0));
+    }
+    merge(a, b) { return a + b; }
+}
+
+output left <- out.result;

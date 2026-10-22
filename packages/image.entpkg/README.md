@@ -59,6 +59,10 @@ use "image.entpkg";
 - `graphs/nes.esn` — Coarse pixels held to a few colors.
 - `graphs/sharpen.esn` — Unsharp masking as a sub-graph.
 
-## Tested by
+## Tests
 
-[darkroom](../../examples/darkroom/README.md), [image](../../examples/image/README.md), [mipmap](../../examples/mipmap/README.md), [nebula](../../examples/nebula/README.md), [package](../../examples/package/README.md), whose replays hold it on every backend.
+`tests/` holds scenes and their replays, run on every backend:
+`looks.replay`, `operations.replay`. Every Kernel of the package is
+reached by one of them.
+
+Used by the [darkroom](../../examples/darkroom/README.md), [image](../../examples/image/README.md), [mipmap](../../examples/mipmap/README.md), [nebula](../../examples/nebula/README.md) examples.

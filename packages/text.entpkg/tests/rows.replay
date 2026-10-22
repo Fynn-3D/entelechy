@@ -1,0 +1,21 @@
+scene rows.esn
+
+# 42.5 as two digit codes, "43" rounded, the first a 4; a caption, a
+# space and the value to one decimal, eight codes; laid a glyph a six
+# pixel cell from (4, 4), the P second; the H drawn in the color given,
+# both its sides and its bar, the dark inside and round it; the codes
+# nothing holds; the second of two texts of one length chosen by 1.
+frame 0.0
+expect count number.result = 2
+expect number.result[0] = 52
+expect count labeled.result = 8
+expect laid.result[1].code = 80
+expect laid.result[1].origin = 10 4 0.001
+expect 4 4 = 1.000 0.900 0.600 0.01
+expect 8 4 = 1.000 0.900 0.600 0.01
+expect 6 7 = 1.000 0.900 0.600 0.01
+expect 6 5 = 0.050 0.050 0.060 0.01
+expect 2 2 = 0.050 0.050 0.060 0.01
+expect none.result[0] = -1
+expect count chosen.result = 3
+expect chosen.result[0] = 116

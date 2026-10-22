@@ -1,0 +1,44 @@
+scene ../parts/thumb/scene.esn
+
+# A frame is 9363 instructions: the program paints its 32 by 32 picture
+# with t = 0, ticks (t becomes 1, counted into RAM at 0x0FF0, 2t stored
+# as a halfword at the end of row 1), and stops just before the pop that
+# returns. Every value here is what a reference simulator of the same
+# program gives after the same count of instructions.
+window 128 128
+frame 0.0
+expect machine.regs[15] = 66          # pc at the pop
+expect machine.regs[6] = 1            # t
+expect machine.regs[0] = 2            # 2t through r8
+expect machine.regs[8] = 1
+expect machine.regs[4] = 32
+expect machine.regs[5] = 32
+expect machine.regs[13] = 4056        # sp after push {r0, lr}
+expect machine.regs[14] = 37          # lr: the return address with bit 0
+expect machine.regs[16] = 8           # N, from mvns
+expect machine.ram[1020] = 1          # the count at 0x0FF0
+expect machine.ram[1024] = 50462976   # row 0: 0, 1, 2, 3
+expect machine.ram[1039] = 138269     # row 1's end: 29, 28, then the halfword 2
+expect machine.ram[1014] = 0          # the pushed r0
+expect machine.ram[1015] = 37         # the pushed lr
+expect 2 2 = 0.0 0.2 1.0 0.02         # cell (0, 0) is 0
+
+frame 0.02
+expect machine.regs[6] = 2
+expect machine.regs[0] = 4
+expect machine.ram[1020] = 2
+expect machine.ram[1024] = 67305985   # 1, 2, 3, 4
+expect machine.ram[1039] = 269598     # 30, 29, then 4
+expect 126 126 = 0.004 0.209 0.996 0.02   # cell (31, 31) is 1
+
+frame 0.04
+frame 0.06
+expect machine.regs[6] = 4
+expect machine.regs[0] = 8
+expect machine.regs[8] = 4
+expect machine.regs[15] = 66
+expect machine.ram[1020] = 4
+expect machine.ram[1024] = 100992003  # 3, 4, 5, 6
+expect machine.ram[1039] = 532256     # 32, 31, then 8
+expect machine.ram[1014] = 3          # the pushed r0: cell (31, 31) of frame 4
+expect 22 14 = 0.035 0.285 0.965 0.02     # cell (5, 3) is 9

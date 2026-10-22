@@ -4,7 +4,7 @@ Text: a 5 by 7 bitmap font, glyph rows laid out and drawn, text decoded
 into rows of letters, and the wide glyphs a project's words use drawn
 into an atlas.
 
-**Layer:** Interaction. **Uses:** no other package.
+**Layer:** Interaction. **Uses:** [`ui`](../ui.entpkg/README.md).
 
 ```text
 use "text.entpkg";
@@ -36,6 +36,10 @@ use "text.entpkg";
 
 `assets/font.png`
 
-## Tested by
+## Tests
 
-[collapse](../../examples/collapse/README.md), [cube-puzzle](../../examples/cube-puzzle/README.md), [jukebox](../../examples/jukebox/README.md), [level](../../examples/level/README.md), [sound](../../examples/sound/README.md), [soundboard](../../examples/soundboard/README.md), [spells](../../examples/spells/README.md), [text](../../examples/text/README.md), [ui](../../examples/ui/README.md), [voxel](../../examples/voxel/README.md), whose replays hold it on every backend.
+`tests/` holds scenes and their replays, run on every backend:
+`glyphs.replay`, `rows.replay`, `wide.replay`, `write.replay`. Every
+Kernel of the package is reached by one of them.
+
+Used by the [collapse](../../examples/collapse/README.md), [cube-puzzle](../../examples/cube-puzzle/README.md), [level](../../examples/level/README.md), [sound](../../examples/sound/README.md), [spells](../../examples/spells/README.md), [text](../../examples/text/README.md), [ui](../../examples/ui/README.md), [voxel](../../examples/voxel/README.md) examples.

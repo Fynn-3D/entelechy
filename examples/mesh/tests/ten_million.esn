@@ -1,5 +1,5 @@
 // Ten million triangles at 4K: the torus at `level = 6` (9.4 million)
-// drawn by the render package at 3840 by 2160, the measure of the
+// drawn by the raster package at 3840 by 2160, the measure of the
 // rasterizer's decision in `docs/DECISIONS.md`. No replay runs it: it is
 // for `bench`, and the interpreter takes seconds a frame. Time 0 fixes
 // the rotation.

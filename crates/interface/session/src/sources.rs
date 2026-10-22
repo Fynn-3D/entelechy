@@ -352,8 +352,17 @@ fn resolve_package(store: &dyn Store, path: &Path) -> PathBuf {
     let Some(name) = path.file_name() else {
         return path.to_path_buf();
     };
+    // A path written from the working directory, as `scene.esn` run where
+    // it lies, is anchored first, so the package it is in is found.
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let anchored = store
+        .canonical(parent)
+        .map_or_else(|_| path.to_path_buf(), |p| p.join(name));
     let beside =
-        package_holding(store, path).and_then(|package| Some(package.parent()?.to_path_buf()));
+        package_holding(store, &anchored).and_then(|package| Some(package.parent()?.to_path_buf()));
     for dir in beside.iter().chain(store.packages()) {
         let candidate = dir.join(name);
         if store.is_file(&candidate.join("package.esn")) {

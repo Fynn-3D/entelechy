@@ -9,7 +9,7 @@ the panel is in the 3D view's sidebar (N), tab "Entelechy". Preferences hold
 the host and port of a running session:
 
 ```sh
-entelechy player examples/model/scene.esn --serve --listen 127.0.0.1:7788
+entelechy player examples/mesh/parts/model/scene.esn --serve --listen 127.0.0.1:7788
 ```
 
 **Axes**: Blender is z-up and Entelechy's scenes, like glTF, are y-up; the

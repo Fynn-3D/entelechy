@@ -1,0 +1,14 @@
+scene sounds.esn
+
+# The step and the coin a block in, each in its own place left and
+# right; the casts heard together.
+frame 0.0
+expect count heard.result = 1600
+expect heard.result[400] = 0.0948 0.0726 0.001
+expect heard.result[1200] = -0.0511 -0.0662 0.001
+expect cast.sound[400] = 0.039 0.0091 0.001
+
+# Half a second on, the step over, the coin ringing on, the bolt flying.
+frame 0.5
+expect heard.result[400] = 0.0003 0.001 0.001
+expect cast.sound[400] = -0.128 -0.1528 0.001

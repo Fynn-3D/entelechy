@@ -1,10 +1,10 @@
-"""Authors the rigged, animated arm `examples/skin` is built from.
+"""Authors the rigged, animated arm `examples/animation/parts/blend` is built from.
 
 Two bones, a box weighted to them, and two actions to blend between.
 Run it headless and import what it writes:
 
-    blender -b --python bridges/blender/make_rig.py -- --out examples/skin/source/arm.glb
-    entelechy import examples/skin/source/arm.glb --out examples/skin/assets
+    blender -b --python bridges/blender/make_rig.py -- --out examples/animation/parts/blend/source/arm.glb
+    entelechy import examples/animation/parts/blend/source/arm.glb --out examples/animation/parts/blend/assets
 
 It is here rather than beside the example because it is Blender's
 language, not Entelechy's, and because it is the shortest statement of what a

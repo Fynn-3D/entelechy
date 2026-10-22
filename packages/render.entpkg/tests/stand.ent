@@ -1,0 +1,218 @@
+// The render package's test stand: rows of balls on a checkered floor
+// under a studio's sun and sky. The first row is a gray ball of 18%, a
+// car's paint under its clearcoat, velvet's sheen, wax lit through by
+// subsurface scattering, brushed steel's anisotropic highlight, a ball
+// that glows and a chrome mirror; the second row a red plastic from
+// mirror-smooth to fully rough, the third gold the same way, the fourth
+// clear things (glass, frosted glass, green bottle glass, water, ice,
+// diamond), each ray through them refracted in and out on the sphere's
+// exact chord and absorbed by the way it went. Geometry and materials
+// alone, as the render package's contract asks: a G-buffer and
+// proxies are handed over, and the light is the renderer's the graph
+// places.
+use "../kernels/";
+
+struct Hit { d: Float; what: Int; }
+fn nearer(a: Hit, b: Hit) -> Hit { return if b.d < a.d { b } else { a }; }
+
+// ------------------------------------------------------------------ the stand
+
+/// A ball's radius.
+fn ball_r() -> Float { return 0.4; }
+/// How many balls there are.
+fn balls() -> Int { return 25; }
+/// Where ball `k` stands: 0 to 6 the first row, 7 to 12 the red, 13 to 18
+/// the gold, 19 to 24 the clear.
+fn ball_c(k: Int) -> Vec3 {
+    if k < 7 { return vec3((float(k) - 3.0) * 1.1, ball_r(), 0.0); }
+    let j = k - 7;
+    return vec3((float(j % 6) - 2.5) * 1.1, ball_r(), -1.3 - float(j / 6) * 1.3);
+}
+/// The clear balls (`j` 0 to 5): what is left of light after a meter
+/// (absorption), roughness, index of refraction.
+fn clear_tint(j: Int) -> Vec3 { return [vec3(0.96, 0.99, 0.97), vec3(0.96, 0.99, 0.97), vec3(0.3, 0.72, 0.42), vec3(0.7, 0.9, 0.93), vec3(0.85, 0.95, 1.0), vec3(0.99, 0.99, 0.99)][clamp(j, 0, 5)]; }
+fn clear_rough(j: Int) -> Float { return [0.0, 0.35, 0.02, 0.02, 0.12, 0.0][clamp(j, 0, 5)]; }
+fn clear_ior(j: Int) -> Float { return [1.5, 1.5, 1.52, 1.33, 1.31, 2.42][clamp(j, 0, 5)]; }
+fn is_clear(k: Int) -> Bool { return k >= 19 && k < 25; }
+
+/// The nearest thing to `p`: 0 the floor, 100 + k ball k. Without
+/// `clear` the clear balls are left out (a shadow counts them apart).
+fn world_of(p: Vec3, clear: Bool) -> Hit {
+    let b = loop balls() with b = vec2(1000.0, -1.0) {
+        let d = length(p - ball_c(index())) - ball_r();
+        if d < b.x && (clear || !is_clear(index())) { vec2(d, float(index())) } else { b }
+    };
+    return nearer(Hit { d: p.y, what: 0 }, Hit { d: b.x, what: 100 + int(b.y) });
+}
+fn world(p: Vec3) -> Hit { return world_of(p, true); }
+/// A view ray walked through the distance field; `what` -1 is the sky.
+fn trace(o: Vec3, dir: Vec3, far: Float, steps: Int) -> Hit {
+    let m = loop 160 with m = vec2(0.0, 0.0) until m.y > 0.5 || m.x > far || index() >= steps {
+        let w = world(o + dir * m.x);
+        if w.d < 0.0004 * (1.0 + m.x) { vec2(m.x, 1.0) } else { vec2(m.x + w.d, 0.0) }
+    };
+    if m.y < 0.5 { return if dir.y < 0.0 { Hit { d: -o.y / dir.y, what: 0 } } else { Hit { d: far, what: -1 } }; }
+    return Hit { d: m.x, what: world(o + dir * m.x).what };
+}
+fn normal_of(p: Vec3, what: Int) -> Vec3 {
+    return if what >= 100 { normalize(p - ball_c(what - 100)) } else { vec3(0.0, 1.0, 0.0) };
+}
+/// How much of the sun reaches `p` along `dir` (1 all, soft at the edges):
+/// opaque things cast soft shadows; a clear ball takes away a share, by its
+/// color (no caustics are traced).
+fn shadow(p: Vec3, dir: Vec3) -> Float {
+    let r = loop 48 with r = vec2(0.02, 1.0) until r.x > 12.0 || r.y < 0.01 {
+        let d = world_of(p + dir * r.x, false).d;
+        vec2(r.x + clamp(d, 0.01, 0.5), min(r.y, 12.0 * d / r.x))
+    };
+    let glass = loop 6 with g = 1.0 {
+        let c = ball_c(19 + index());
+        let oc = p - c;
+        let b = dot(oc, dir);
+        let h = b * b - (dot(oc, oc) - ball_r() * ball_r());
+        if h > 0.0 && -b - sqrt(h) > 0.0 { g * (0.45 + 0.4 * dot(clear_tint(index()), vec3(0.33, 0.34, 0.33))) } else { g }
+    };
+    return saturate(r.y) * glass;
+}
+
+// ------------------------------------------------------------------ materials
+
+/// A surface: color and roughness, metalness and emission (`extra`'s y
+/// and z), layers (`layers`: clearcoat, its roughness, sheen,
+/// subsurface), the rest (`more`: anisotropy, transmission, index of
+/// refraction).
+struct Surf { paint: Vec4; metal: Float; glow: Float; layers: Vec4; more: Vec4; }
+fn plain(paint: Vec4, metal: Float) -> Surf { return Surf { paint: paint, metal: metal, glow: 0.0, layers: vec4(0.0, 0.0, 0.0, 0.0), more: vec4(0.0, 0.0, 0.0, 0.0) }; }
+/// A sweep's roughness, 0 to 1 from left to right.
+fn sweep_rough(k: Int) -> Float { return float((k - 7) % 6) / 5.0; }
+/// The floor is a checker of two grays (18% and 50%) half a meter a
+/// square, fading to their mean far off so it does not flicker.
+fn surf_at(p: Vec3, what: Int) -> Surf {
+    if what == 0 {
+        let cell = floor(vec2(p.x, p.z) * 2.0);
+        let odd = (int(cell.x) + int(cell.y)) % 2 != 0;
+        let g = mix(if odd { 0.5 } else { 0.18 }, 0.34, smoothstep(6.0, 18.0, length(vec2(p.x, p.z + 1.9))));
+        return plain(vec4(g, g, g, 0.55), 0.0);
+    }
+    let k = what - 100;
+    let none = vec4(0.0, 0.0, 0.0, 0.0);
+    if k == 0 { return plain(vec4(0.18, 0.18, 0.18, 0.5), 0.0); }
+    if k == 1 { return Surf { paint: vec4(0.5, 0.03, 0.03, 0.45), metal: 0.0, glow: 0.0, layers: vec4(1.0, 0.03, 0.0, 0.0), more: none }; }
+    if k == 2 { return Surf { paint: vec4(0.2, 0.03, 0.11, 0.9), metal: 0.0, glow: 0.0, layers: vec4(0.0, 0.0, 1.0, 0.0), more: none }; }
+    if k == 3 { return Surf { paint: vec4(0.85, 0.7, 0.5, 0.4), metal: 0.0, glow: 0.0, layers: vec4(0.0, 0.0, 0.0, 1.0), more: none }; }
+    if k == 4 { return Surf { paint: vec4(0.56, 0.57, 0.58, 0.35), metal: 1.0, glow: 0.0, layers: none, more: vec4(0.8, 0.0, 0.0, 0.0) }; }
+    if k == 5 { return Surf { paint: vec4(1.0, 0.35, 0.08, 0.6), metal: 0.0, glow: 4.0, layers: none, more: none }; }
+    if k == 6 { return plain(vec4(0.95, 0.95, 0.95, 0.03), 1.0); }
+    if k < 13 { return plain(vec4(0.62, 0.08, 0.05, sweep_rough(k)), 0.0); }
+    if k < 19 { return plain(vec4(1.0, 0.77, 0.34, sweep_rough(k - 6)), 1.0); }
+    return Surf { paint: vec4(clear_tint(k - 19), clear_rough(k - 19)), metal: 0.0, glow: 0.0, layers: none, more: vec4(0.0, 1.0, clear_ior(k - 19), 0.0) };
+}
+/// A ball's mean color (the proxies': the color light bounces with).
+fn mean_albedo(k: Int) -> Vec3 {
+    if k < 7 { return [vec3(0.18, 0.18, 0.18), vec3(0.5, 0.03, 0.03), vec3(0.2, 0.03, 0.11), vec3(0.85, 0.7, 0.5), vec3(0.56, 0.57, 0.58), vec3(1.0, 0.35, 0.08), vec3(0.95, 0.95, 0.95)][k]; }
+    if k < 13 { return vec3(0.62, 0.08, 0.05); }
+    if k < 19 { return vec3(1.0, 0.77, 0.34); }
+    return vec3(0.9, 0.9, 0.9);
+}
+
+// ------------------------------------------------------------------ handed over
+
+/// A studio's sky: the sun from the front left and above, a soft and
+/// nearly neutral sky light (so it colors no material), a few clouds.
+kernel stand.sky@1 {
+    requires { field.write; }
+    param turn: Float = -0.6;
+    param high: Float = 0.75;
+    output result: SkyLooks;
+    compute {
+        return SkyLook { sun: vec3(sin(turn) * cos(high), sin(high), cos(turn) * cos(high)), sun_color: vec3(3.4, 3.25, 3.05), ambient: vec3(0.45, 0.46, 0.5),
+            horizon: vec3(0.82, 0.82, 0.84), zenith: vec3(0.42, 0.48, 0.6), clouds: 0.25, far_land: 0.0, far_color: vec3(0.5, 0.5, 0.5), air: 0.004, air_from: 30.0 };
+    }
+}
+
+/// The proxies: the balls' distance and mean color, x from -5 to 5, y
+/// from -0.5 to 2, z from -5 to 1, ten centimeters a cell; the floor is
+/// flat (y = 0).
+fn vol_lo() -> Vec3 { return vec3(-5.0, -0.5, -5.0); }
+fn vox() -> Float { return 0.1; }
+fn vol_n() -> Vec3 { return vec3(100.0, 25.0, 60.0); }
+kernel stand.frame@1 {
+    requires { field.write; }
+    output result: Proxies;
+    compute { return Proxy { lo: vol_lo(), cell: vox(), cells: vol_n(), land_lo: vec2(-200.0, -200.0), land_cell: 400.0, ground: vec3(0.34, 0.34, 0.34) }; }
+}
+kernel stand.bake@1 {
+    requires { field.read; field.write; }
+    output result: Volume<Vec4>;
+    compute {
+        let p = vol_lo() + coord() * vox();
+        let b = loop balls() with b = vec2(1000.0, 0.0) {
+            let d = length(p - ball_c(index())) - ball_r();
+            if d < b.x { vec2(d, float(index())) } else { b }
+        };
+        let a = mean_albedo(int(b.y));
+        return vec4(b.x, a.x, a.y, a.z);
+    }
+}
+
+/// The G-buffer (the render package's contract): normal and depth,
+/// color and roughness, the sun's visibility with metalness and emission,
+/// layers, the rest; a clear ball hands over the layer seen through it as
+/// well (`behind_*`, `through`).
+kernel stand.gbuffer@1 {
+    requires { field.read; field.write; }
+    input lens: Lenses;
+    input sky: SkyLooks;
+    output surface: Grid<Vec4>;
+    output paint: Grid<Vec4>;
+    output extra: Grid<Vec4>;
+    output layers: Grid<Vec4>;
+    output more: Grid<Vec4>;
+    output behind_at: Grid<Vec4>;
+    output behind_dir: Grid<Vec4>;
+    output behind_paint: Grid<Vec4>;
+    output behind_normal: Grid<Vec4>;
+    output through: Grid<Vec4>;
+    compute {
+        let none = vec4(0.0, 0.0, 0.0, 0.0);
+        let l = at(lens, 0);
+        let s = at(sky, 0);
+        let dir = ray(l, coord(), domain());
+        let hit = trace(l.eye, dir, 200.0, 160);
+        if hit.what < 0 { return { surface: vec4(0.0, 1.0, 0.0, no_hit()), paint: vec4(0.0, 0.0, 0.0, 1.0), extra: vec4(1.0, 0.0, 0.0, 0.0), layers: none, more: none,
+            behind_at: none, behind_dir: none, behind_paint: none, behind_normal: none, through: none }; }
+        let p = l.eye + dir * hit.d;
+        let n = normal_of(p, hit.what);
+        let sf = surf_at(p, hit.what);
+        let vis = if dot(n, s.sun) > 0.0 { shadow(p + n * 0.01, s.sun) } else { 0.0 };
+        let k = hit.what - 100;
+        if !(hit.what >= 100 && is_clear(k)) {
+            return { surface: vec4(n.x, n.y, n.z, hit.d), paint: sf.paint, extra: vec4(vis, sf.metal, sf.glow, 0.0), layers: sf.layers, more: sf.more,
+                behind_at: none, behind_dir: none, behind_paint: none, behind_normal: none, through: none };
+        }
+        // A clear ball: refracted in, along the chord to the far side, out
+        // (along the reflection where it is wholly reflected), then traced
+        // on to what is behind; absorbed by the chord's length.
+        let c = ball_c(k);
+        let ior = clear_ior(k - 19);
+        let r1a = refract(dir, n, 1.0 / ior);
+        let r1 = if length(r1a) < 0.001 { reflect(dir, n) } else { normalize(r1a) };
+        let chord = max(2.0 * dot(c - p, r1), 0.0);
+        let p1 = p + r1 * chord;
+        let n2 = normalize(p1 - c);
+        let r2a = refract(r1, vec3(0.0, 0.0, 0.0) - n2, ior);
+        let r2 = if length(r2a) < 0.001 { reflect(r1, vec3(0.0, 0.0, 0.0) - n2) } else { normalize(r2a) };
+        let tint = clear_tint(k - 19);
+        let absorbed = vec3(pow(tint.x, chord), pow(tint.y, chord), pow(tint.z, chord));
+        let start = p1 + r2 * 0.003;
+        let bh = trace(start, r2, 200.0, 120);
+        let bp = start + r2 * bh.d;
+        let bn = normal_of(bp, bh.what);
+        let bs = surf_at(bp, bh.what);
+        let bvis = if bh.what >= 0 && dot(bn, s.sun) > 0.0 { shadow(bp + bn * 0.01, s.sun) } else { 0.0 };
+        let landed = if bh.what >= 0 { 1.0 } else { 0.0 };
+        return { surface: vec4(n.x, n.y, n.z, hit.d), paint: sf.paint, extra: vec4(vis, sf.metal, sf.glow, 0.0), layers: sf.layers, more: sf.more,
+            behind_at: vec4(bp.x, bp.y, bp.z, landed), behind_dir: vec4(r2.x, r2.y, r2.z, bvis), behind_paint: bs.paint, behind_normal: vec4(bn.x, bn.y, bn.z, bs.metal),
+            through: vec4(absorbed.x, absorbed.y, absorbed.z, 0.0) };
+    }
+}

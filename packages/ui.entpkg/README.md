@@ -31,6 +31,10 @@ use "ui.entpkg";
 - `graphs/command_search.esn` — The command search (`ui.command_search`)
   over `names`, a command a line.
 
-## Tested by
+## Tests
 
-[collapse](../../examples/collapse/README.md), [cube-puzzle](../../examples/cube-puzzle/README.md), [level](../../examples/level/README.md), [sound](../../examples/sound/README.md), [spells](../../examples/spells/README.md), [ui](../../examples/ui/README.md), [voxel](../../examples/voxel/README.md), whose replays hold it on every backend.
+`tests/` holds scenes and their replays, run on every backend:
+`command.replay`, `mark.replay`, `navigation.replay`. Every Kernel of
+the package is reached by one of them.
+
+Used by the [collapse](../../examples/collapse/README.md), [cube-puzzle](../../examples/cube-puzzle/README.md), [level](../../examples/level/README.md), [sound](../../examples/sound/README.md), [spells](../../examples/spells/README.md), [ui](../../examples/ui/README.md), [voxel](../../examples/voxel/README.md) examples.

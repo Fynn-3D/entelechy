@@ -8,8 +8,10 @@ scene, an example or another package uses it whole, `use "…/name.entpkg";`,
 never a file inside it, so the manifest's versions hold; a preset, a table
 or an asset is reached by its path inside it
 (`input font: Grid<Float> = "text.entpkg/assets/font.png";`). Every package
-has a README and is used by an example whose replays test it on every
-backend. `entelechy pack` carries one as a single `.entpkg` file and
+has a README and its own `tests/`: scenes and their replays, run on every
+backend, that reach every Kernel it declares, so a package carried alone
+is proved alone. Examples show what a whole program does with packages;
+they are not what tests them. `entelechy pack` carries one as a single `.entpkg` file and
 `entelechy unpack` opens it again; `entelechy package <dir>` prints what
 one holds.
 
@@ -22,6 +24,10 @@ one holds.
 - **Files.** `kernels/<topic>.ent` and `graphs/<product>.esn`, singular
   nouns in snake_case, never the package's own name: `color.ent`,
   `tone_map.ent`, `broad_phase.ent`.
+- **Tests.** `tests/<topic>.esn` and its `<topic>.replay`, with whatever
+  data they read under `tests/data/`; a test uses the package by
+  `use "../kernels/";` and its presets by `graph "../graphs/…"`, and other
+  packages by name.
 - **Kernels.** An id begins with the package's name and says what it
   makes or does: `raster.cover@4`, `parallel.sort_place@1`,
   `render.probes_gather@1`.

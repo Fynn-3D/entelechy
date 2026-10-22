@@ -35,6 +35,10 @@ use "raster.entpkg";
 - `graphs/tiled_window.esn` — The tiled form of `window.esn`.
 - `graphs/window.esn` — The raster preset at the window's size.
 
-## Tested by
+## Tests
 
-[crowd](../../examples/crowd/README.md), [culled](../../examples/culled/README.md), [decided](../../examples/decided/README.md), [mesh](../../examples/mesh/README.md), [mipmap](../../examples/mipmap/README.md), [model](../../examples/model/README.md), [reach](../../examples/reach/README.md), [skin](../../examples/skin/README.md), [stride](../../examples/stride/README.md), [surface](../../examples/surface/README.md), [voxel](../../examples/voxel/README.md), whose replays hold it on every backend.
+`tests/` holds scenes and their replays, run on every backend:
+`degenerate.replay`, `near.replay`. Every Kernel of the package is
+reached by one of them.
+
+Used by the [animation](../../examples/animation/README.md), [culled](../../examples/culled/README.md), [mesh](../../examples/mesh/README.md), [mipmap](../../examples/mipmap/README.md), [surface](../../examples/surface/README.md), [voxel](../../examples/voxel/README.md) examples.

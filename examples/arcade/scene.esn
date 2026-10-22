@@ -1,0 +1,4 @@
+// Small games written as a few Kernels, in two parts; this scene places `parts/blocks/`, and each part runs alone.
+node blocks: graph "parts/blocks/scene.esn" { }
+
+output result <- blocks.result;
