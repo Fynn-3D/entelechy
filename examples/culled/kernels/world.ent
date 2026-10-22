@@ -7,11 +7,9 @@
 // <per chunk>`. A chunk nobody can see is not skipped — it is never
 // placed.
 use "../../../packages/geometry.entpkg";
+use "../../../packages/raster.entpkg";
+use "../../../packages/mesh.entpkg";
 struct Camera { x: Float; z: Float; heading: Float; height: Float; }
-struct Point { position: Vec3; normal: Vec3; uv: Vec2; }
-struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }
-struct Tri { a: Int; b: Int; c: Int; }
-struct Surface { depth: Float; normal: Vec3; uv: Vec2; id: Int; }
 
 // The height of the world at a point, the one function the ground and
 // the camera both read.
@@ -123,7 +121,7 @@ kernel world.ground@1 {
     param cols: Int = 64;
     param cell: Float = 0.03125;
     param side: Int = 36;
-    output result: Rows<Point>;
+    output result: Rows<MeshPoint>;
 
     compute {
         let per = side * side;
@@ -140,7 +138,7 @@ kernel world.ground@1 {
             ground_at(x - e, z) - ground_at(x + e, z),
             2.0 * e,
             ground_at(x, z - e) - ground_at(x, z + e)));
-        return Point { position: vec3(x, h, z), normal: n, uv: vec2(x, z) };
+        return MeshPoint { position: vec3(x, h, z), normal: n, uv: vec2(x, z) };
     }
 }
 
@@ -156,28 +154,24 @@ kernel world.faces@1 {
     /// the block is the same wherever the chunk was.
     input count: Rows<Int>;
     param side: Int = 36;
-    output result: Rows<Tri>;
+    output result: Rows<Face>;
 
     compute {
         let per_chunk = 2 * (side - 1) * (side - 1);
         let t = element();
         let base = (t / per_chunk) * side * side;
         let within = t % per_chunk;
-        let cell = within / 2;
-        let x = cell % (side - 1);
-        let z = cell / (side - 1);
-        let a = base + z * side + x;
-        return if within % 2 == 0 { Tri { a: a, b: a + side, c: a + 1 } }
-            else { Tri { a: a + 1, b: a + side, c: a + side + 1 } };
+        let f = mesh_lattice_face(within, side, side, false, false);
+        return Face { a: base + f.a, b: base + f.b, c: base + f.c };
     }
 }
 
 kernel world.project@1 {
     requires { field.read; field.write; }
-    input mesh: Rows<Point>;
+    input mesh: Rows<MeshPoint>;
     input camera: Rows<Camera>;
     param aspect: Float = 1.7778;
-    output result: Rows<Vertex>;
+    output result: Rows<Corner>;
 
     compute {
         let cam = at(camera, 0);
@@ -186,7 +180,7 @@ kernel world.project@1 {
         let forward = vec2(sin(cam.heading), cos(cam.heading));
         let right = vec2(cos(cam.heading), -sin(cam.heading));
         let view = vec3(dot(away, right), v.position.y - cam.height, dot(away, forward));
-        return Vertex {
+        return Corner {
             // `view` looks down +z; the projection looks down -z.
             clip: clip_point(perspective_focal(1.2, aspect, 0.02, 2.0), vec3(view.x, view.y, -view.z)),
             normal: v.normal,

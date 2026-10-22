@@ -10,13 +10,15 @@
 // The rows, which `entelechy import` writes and the Blender bridge writes the
 // same way:
 //
-//   skeleton  Rows<Joint>   one per joint, parents before children
-//   clip      Rows<Pose>    frames * joints, a frame's joints together
-//   weights   Rows<Bound>   one per vertex, in the mesh's own row order
-//   mesh      Rows<Point>   position, normal, uv — the rest pose
+//   skeleton  Rows<Joint>       one per joint, parents before children
+//   clip      Rows<Pose>        frames * joints, a frame's joints together
+//   weights   Rows<Bound>       one per vertex, in the mesh's own row order
+//   mesh      Rows<MeshPoint>   position, normal, uv — the rest pose
 //
-// Rotations and transforms are the `math` package's.
+// Rotations and transforms are the `geometry` package's, mesh points the
+// `mesh` package's.
 use "geometry.entpkg";
+use "mesh.entpkg";
 
 // A joint's `parent` is its place in this same row, or -1 at the root.
 // `bind` is the inverse bind matrix: where the joint was when the mesh
@@ -29,9 +31,6 @@ struct Pose { at: Vec3; turn: Vec4; grow: Vec3; }
 
 // What a vertex is bound to: four joints and how much of each.
 struct Bound { joints: [Int; 4]; weights: Vec4; }
-
-// What the rasterizer's projection takes, and what a mesh comes in as.
-struct Point { position: Vec3; normal: Vec3; uv: Vec2; }
 
 type Skeleton = Rows<Joint>;
 

@@ -89,6 +89,8 @@ Pictures and what a camera sees.
 | [`raster`](raster.entpkg/README.md) | Triangles rasterized alike on every backend, plain, tiled or cut out |
 | [`voxel`](voxel.entpkg/README.md) | Rays walked through voxels, shapes as data, bodies posed by joints |
 | [`vector`](vector.entpkg/README.md) | SVG drawings filled pixel by pixel, whole or tiled |
+| [`mesh`](mesh.entpkg/README.md) | Triangle meshes as points and faces: lattices, primitives and subdivision |
+| [`terrain`](terrain.entpkg/README.md) | Ground as heights: sampled, ray-marched, sculpted, eroded and meshed |
 | [`render`](render.entpkg/README.md) | The G-buffer contract, physically based shading and its renderers |
 | [`particles`](particles.entpkg/README.md) | Particles stepped, binned and drawn over a picture's depth |
 | [`scatter`](scatter.entpkg/README.md) | Things scattered over the ground by layers |

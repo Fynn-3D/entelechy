@@ -1,0 +1,16 @@
+// The lattices and a level of subdivision: a wrapped torus and its faces,
+// an open sphere from pole to pole, a plane, and the sphere's faces split
+// in four once.
+use "../kernels/";
+
+node torus: mesh.torus_points@1 { columns = 8; rows = 4; domain = 32; }
+node torus_faces: mesh.lattice_faces@1 { columns = 8; rows = 4; wrap_columns = true; wrap_rows = true; domain = 64; }
+node sphere: mesh.sphere_points@1 { columns = 9; rows = 5; domain = 45; }
+node sphere_faces: mesh.lattice_faces@1 { columns = 9; rows = 5; domain = 64; }
+node plane: mesh.plane_points@1 { size = vec2(4.0, 2.0); columns = 3; rows = 3; domain = 9; }
+node split: graph "../graphs/subdivision.esn" {
+    points <- sphere.result;
+    faces <- sphere_faces.result;
+}
+
+output result <- split.faces;

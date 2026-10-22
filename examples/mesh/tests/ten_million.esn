@@ -7,22 +7,22 @@ use "../kernels/";
 
 param level: Int = 6;
 
-node torus: mesh.torus@1 { domain = 1152; }
-node faces: mesh.torus_faces@1 { domain = 2304; }
-node subdivided: graph "../level.esn" {
+node torus: mesh.torus_points@1 { domain = 1152; }
+node faces: mesh.lattice_faces@1 { columns = 48; rows = 24; wrap_columns = true; wrap_rows = true; domain = 2304; }
+node subdivided: graph "../../../packages/mesh.entpkg/graphs/subdivision.esn" {
     times = level;
-    carry mesh <- vertices;
-    carry faces <- triangles;
-    mesh <- torus.result;
+    carry points <- points;
+    carry faces <- faces;
+    points <- torus.result;
     faces <- faces.result;
 }
-node project: mesh.project@1 { mesh <- subdivided.vertices; }
+node project: torus.project@1 { mesh <- subdivided.points; }
 node raster: graph "../../../packages/raster.entpkg/graphs/surface.esn" {
     vertices <- project.result;
-    triangles <- subdivided.triangles;
+    triangles <- subdivided.faces;
     width = 3840;
     height = 2160;
 }
-node view: mesh.shade@1 { surface <- raster.surface; }
+node view: torus.shade@1 { surface <- raster.surface; }
 
 output result <- view.result;

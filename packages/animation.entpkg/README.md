@@ -3,7 +3,7 @@
 A skeleton, the clips that pose it and the mesh that follows: sampling
 and blending clips, walking, aiming, and skinning by the joint palette.
 
-**Layer:** Simulation. **Uses:** [`geometry`](../geometry.entpkg/README.md).
+**Layer:** Simulation. **Uses:** [`geometry`](../geometry.entpkg/README.md), [`mesh`](../mesh.entpkg/README.md).
 
 ```text
 use "animation.entpkg";

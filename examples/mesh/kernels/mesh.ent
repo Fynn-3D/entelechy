@@ -1,133 +1,23 @@
-// A torus as two rows: vertices and triangles. A Kernel builds it, a
-// Kernel projects it, the backend's native rasterizer turns it into a
-// surface grid, and a Kernel shades that. Geometry never becomes pixels
-// until the last step.
+// A torus as two rows: points and faces. The mesh package builds and
+// subdivides it, a Kernel here projects it, the backend's native
+// rasterizer turns it into a surface grid, and a Kernel shades that.
+// Geometry never becomes pixels until the last step.
 use "../../../packages/geometry.entpkg";
-struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }
-struct Tri { a: Int; b: Int; c: Int; }
-struct Surface { depth: Float; normal: Vec3; uv: Vec2; id: Int; }
-type Vertices = Rows<Vertex>;
-type Triangles = Rows<Tri>;
+use "../../../packages/mesh.entpkg";
+use "../../../packages/raster.entpkg";
+
 type GBuffer = Grid<Surface>;
-
-/// One vertex per element over a segments x rings lattice, in object
-/// space (`clip.w` is 1 until projection).
-kernel mesh.torus@1 {
-    requires { field.write; }
-    param major: Float = 1.0;
-    param minor: Float = 0.4;
-    param segments: Int = 48;
-    param rings: Int = 24;
-    output result: Vertices;
-
-    compute {
-        let i = element();
-        let ring = i / segments;
-        let seg = i % segments;
-        let u = float(seg) / float(segments);
-        let v = float(ring) / float(rings);
-        let a = u * 6.2831853;
-        let b = v * 6.2831853;
-        let center = vec3(cos(a), 0.0, sin(a)) * major;
-        let radial = vec3(cos(a) * cos(b), sin(b), sin(a) * cos(b));
-        let p = center + radial * minor;
-        return Vertex { clip: vec4(p, 1.0), normal: radial, uv: vec2(u, v) };
-    }
-}
-
-/// Two triangles per lattice cell, wrapping in both directions.
-kernel mesh.torus_faces@1 {
-    requires { field.write; }
-    param segments: Int = 48;
-    param rings: Int = 24;
-    output result: Triangles;
-
-    compute {
-        let cell = element() / 2;
-        let ring = cell / segments;
-        let seg = cell % segments;
-        let seg1 = (seg + 1) % segments;
-        let ring1 = (ring + 1) % rings;
-        let v00 = ring * segments + seg;
-        let v10 = ring * segments + seg1;
-        let v01 = ring1 * segments + seg;
-        let v11 = ring1 * segments + seg1;
-        return if element() % 2 == 0 {
-            Tri { a: v00, b: v10, c: v11 }
-        } else {
-            Tri { a: v00, b: v11, c: v01 }
-        };
-    }
-}
-
-/// Midpoint subdivision, the topology-changing step: every triangle
-/// becomes four. The new vertex rows hold the originals followed by three
-/// edge midpoints per triangle, so the graph sizes them from the inputs:
-/// `domain = count(mesh) + 3 * count(faces);` and `domain = 4 * count(faces);`.
-kernel mesh.split_vertices@1 {
-    requires { field.read; field.write; }
-    input mesh: Vertices;
-    input faces: Triangles;
-    output result: Vertices;
-
-    fn midpoint(a: Vertex, b: Vertex) -> Vertex {
-        return Vertex {
-            clip: (a.clip + b.clip) * 0.5,
-            normal: normalize(a.normal + b.normal),
-            uv: (a.uv + b.uv) * 0.5
-        };
-    }
-
-    compute {
-        let i = element();
-        let originals = count(mesh);
-        return if i < originals {
-            at(mesh, i)
-        } else {
-            let k = i - originals;
-            let t = at(faces, k / 3);
-            match k % 3 {
-                0 => midpoint(at(mesh, t.a), at(mesh, t.b)),
-                1 => midpoint(at(mesh, t.b), at(mesh, t.c)),
-                _ => midpoint(at(mesh, t.c), at(mesh, t.a)),
-            }
-        };
-    }
-}
-
-kernel mesh.split_faces@1 {
-    requires { field.read; field.write; }
-    input mesh: Vertices;
-    input faces: Triangles;
-    output result: Triangles;
-
-    compute {
-        let i = element();
-        let t = at(faces, i / 4);
-        let base = count(mesh) + (i / 4) * 3;   // this triangle's midpoints
-        let ab = base;
-        let bc = base + 1;
-        let ca = base + 2;
-        // Three corners and the middle.
-        return match i % 4 {
-            0 => Tri { a: t.a, b: ab, c: ca },
-            1 => Tri { a: ab, b: t.b, c: bc },
-            2 => Tri { a: ca, b: bc, c: t.c },
-            _ => Tri { a: ab, b: bc, c: ca },
-        };
-    }
-}
 
 /// Rotate with time, look from `distance` down the z axis, and project
 /// with a perspective whose depth spans [0, 1] from `near` to `far`.
-kernel mesh.project@1 {
+kernel torus.project@1 {
     requires { field.read; field.write; time.read; }
-    input mesh: Vertices;
+    input mesh: Rows<MeshPoint>;
     param aspect: Float = 1.3333;
     param distance: Float = 3.2;
     param tilt: Float = 0.55;
     param spin: Float = 0.6;
-    output result: Vertices;
+    output result: Rows<Corner>;
 
     fn rotate_y(p: Vec3, a: Float) -> Vec3 {
         return vec3(p.x * cos(a) + p.z * sin(a), p.y, p.z * cos(a) - p.x * sin(a));
@@ -140,16 +30,16 @@ kernel mesh.project@1 {
     compute {
         let v = sample(mesh);
         let angle = time() * spin;
-        let p = rotate_x(rotate_y(v.clip.xyz, angle), tilt);
+        let p = rotate_x(rotate_y(v.position, angle), tilt);
         let n = rotate_x(rotate_y(v.normal, angle), tilt);
         let clip = clip_point(perspective_focal(2.1445, aspect, 0.1, 10.0), p - vec3(0.0, 0.0, distance));
-        return Vertex { clip: clip, normal: n, uv: v.uv };
+        return Corner { clip: clip, normal: n, uv: v.uv };
     }
 }
 
 /// Lambert plus a highlight over a checker from the uv; the background
 /// where no triangle landed.
-kernel mesh.shade@1 {
+kernel torus.shade@1 {
     requires { field.read; field.write; }
     input surface: GBuffer;
     param light: Vec3 = vec3(0.4, 0.8, 0.5);

@@ -11,16 +11,16 @@ use "../kernels/";
 param level: Int = 1;
 param cutout: Float = 0.5;
 
-node torus: mesh.torus@1 { domain = 1152; }
-node faces: mesh.torus_faces@1 { domain = 2304; }
-node subdivided: graph "../level.esn" {
+node torus: mesh.torus_points@1 { domain = 1152; }
+node faces: mesh.lattice_faces@1 { columns = 48; rows = 24; wrap_columns = true; wrap_rows = true; domain = 2304; }
+node subdivided: graph "../../../packages/mesh.entpkg/graphs/subdivision.esn" {
     times = level;
-    carry mesh <- vertices;
-    carry faces <- triangles;
-    mesh <- torus.result;
+    carry points <- points;
+    carry faces <- faces;
+    points <- torus.result;
     faces <- faces.result;
 }
-node project: mesh.project@1 { mesh <- subdivided.vertices; }
+node project: torus.project@1 { mesh <- subdivided.points; }
 
 // A checker of eight texels a square: alpha one, then zero.
 node mask: kernel {
@@ -36,7 +36,7 @@ node mask: kernel {
 
 node package: graph "../../../packages/raster.entpkg/graphs/cutout.esn" {
     vertices <- project.result;
-    triangles <- subdivided.triangles;
+    triangles <- subdivided.faces;
     mask <- mask.result;
     cutout = cutout;
     width = 320;
@@ -44,14 +44,14 @@ node package: graph "../../../packages/raster.entpkg/graphs/cutout.esn" {
 }
 node native: native.rasterize@2 {
     vertices <- project.result;
-    triangles <- subdivided.triangles;
+    triangles <- subdivided.faces;
     mask <- mask.result;
     cutout = cutout;
     domain = vec2(320, 240);
 }
 node whole: graph "../../../packages/raster.entpkg/graphs/surface.esn" {
     vertices <- project.result;
-    triangles <- subdivided.triangles;
+    triangles <- subdivided.faces;
     width = 320;
     height = 240;
 }
@@ -61,7 +61,7 @@ node whole: graph "../../../packages/raster.entpkg/graphs/surface.esn" {
 // must draw the same surface to the bit on every backend.
 node tiled: graph "../../../packages/raster.entpkg/graphs/cutout_tiled.esn" {
     vertices <- project.result;
-    triangles <- subdivided.triangles;
+    triangles <- subdivided.faces;
     mask <- mask.result;
     cutout = cutout;
     width = 320;
@@ -70,7 +70,7 @@ node tiled: graph "../../../packages/raster.entpkg/graphs/cutout_tiled.esn" {
 }
 node tiled_whole: graph "../../../packages/raster.entpkg/graphs/tiled.esn" {
     vertices <- project.result;
-    triangles <- subdivided.triangles;
+    triangles <- subdivided.faces;
     width = 320;
     height = 240;
     tile = 2;
@@ -136,6 +136,6 @@ node taken: kernel {
     merge(a, b) { return a + b; }
 }
 
-node view: mesh.shade@1 { surface <- package.surface; }
+node view: torus.shade@1 { surface <- package.surface; }
 
 output result <- view.result;

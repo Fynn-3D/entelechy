@@ -2,9 +2,10 @@
 // half, the curl laid over the swing, the arm skinned by the pose preset
 // and by hand; the walk a clip carries the body (stride and travel); and
 // a mesh placed at a few poses.
+use "mesh.entpkg";
 use "../kernels/";
 
-input mesh: Rows<Point> = "data/arm.vertices.field";
+input mesh: Rows<MeshPoint> = "data/arm.vertices.field";
 input weights: Rows<Bound> = "data/arm.weights.field";
 input skeleton: Skeleton = "data/arm.skeleton.field";
 input swing: Clip = "data/arm.swing.clip.field";
@@ -31,14 +32,14 @@ node places: kernel {
 }
 node one: kernel {
     requires { field.write; }
-    output result: Rows<Point>;
+    output result: Rows<MeshPoint>;
     domain = 3;
-    compute { return Point { position: vec3(float(element()), 0.0, 0.0), normal: vec3(0.0, 1.0, 0.0), uv: vec2(0.0, 0.0) }; }
+    compute { return MeshPoint { position: vec3(float(element()), 0.0, 0.0), normal: vec3(0.0, 1.0, 0.0), uv: vec2(0.0, 0.0) }; }
 }
 node two: kernel {
     requires { field.read; field.write; }
-    input one: Rows<Point> <- one.result;
-    output result: Rows<Point>;
+    input one: Rows<MeshPoint> <- one.result;
+    output result: Rows<MeshPoint>;
     domain = 6;
     compute { return at(one, element() % 3); }
 }

@@ -1,0 +1,68 @@
+// Ground whose answers are known: a slope rising half a meter a meter
+// eastward over 16 by 16 cells 2 meters apart, read between its cells,
+// hit by a ray straight down and laid out as a mesh; a spike worn down by
+// erosion, its sum kept; a brush raising its middle; and hills from noise.
+use "mesh.entpkg";
+use "../kernels/";
+
+node slope: kernel {
+    requires { field.write; }
+    output result: Grid<Float>;
+    domain = vec2(16, 16);
+    compute { return (coord().x + 0.5) * 2.0 * 0.5; }
+}
+node spike: kernel {
+    requires { field.write; }
+    output result: Grid<Float>;
+    domain = vec2(8, 8);
+    compute { return if int(coord().x) == 4 && int(coord().y) == 4 { 8.0 } else { 0.0 }; }
+}
+node brush: kernel {
+    requires { field.write; }
+    output result: Rows<TerrainBrush>;
+    domain = 1;
+    compute { return TerrainBrush { center: vec2(16.0, 16.0), radius: 6.0, amount: 1.0, level: 0.0, mode: terrain_brush_raise() }; }
+}
+node read: kernel {
+    requires { field.read; field.write; }
+    input heights: Grid<Float> <- slope.result;
+    output result: Rows<Float>;
+    domain = 5;
+    compute {
+        let p = vec2(9.0, 13.0);
+        let n = terrain_normal(heights, 2.0, p);
+        return [
+            terrain_height(heights, 2.0, p),
+            n.x,
+            n.y,
+            terrain_hit(heights, 2.0, vec3(10.0, 20.0, 10.0), vec3(0.0, -1.0, 0.0), -5.0, 40.0),
+            terrain_hit(heights, 2.0, vec3(-10.0, 20.0, 10.0), vec3(0.0, -1.0, 0.0), -5.0, 40.0),
+        ][element()];
+    }
+}
+node points: terrain.points@1 { heights <- slope.result; cell = 2.0; domain = 256; }
+node worn: terrain.erode@1 { previous <- spike.result; talus = 0.5; rate = 1.0; }
+node sums: kernel {
+    requires { field.read; field.write; }
+    input before: Grid<Float> <- spike.result;
+    input after: Grid<Float> <- worn.result;
+    output result: Rows<Float>;
+    domain = 2;
+    compute {
+        let total = loop 64 with s = 0.0 {
+            let c = vec2(float(index() % 8), float(index() / 8));
+            s + if element() == 0 { at(before, c) } else { at(after, c) }
+        };
+        return total;
+    }
+}
+node flat: kernel {
+    requires { field.write; }
+    output result: Grid<Float>;
+    domain = vec2(16, 16);
+    compute { return 1.0; }
+}
+node raised: terrain.sculpt@1 { previous <- flat.result; brush <- brush.result; cell = 2.0; }
+node hills: terrain.hills@1 { domain = vec2(32, 32); }
+
+output result <- read.result;

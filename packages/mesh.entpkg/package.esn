@@ -1,0 +1,7 @@
+//! Triangle meshes as two rows, points and faces: lattices that make the
+//! torus, the sphere and the plane, and midpoint subdivision. The faces
+//! are the raster package's, so a mesh projected point by point is drawn
+//! as it is.
+package mesh@1 { language = 1; ir = 1; }
+
+use "kernels/";

@@ -1,0 +1,67 @@
+// Ground as a `Grid<Float>` of heights, one a cell, the cells `cell`
+// meters apart: cell (i, j)'s height stands at ((i + 0.5) * cell,
+// (j + 0.5) * cell) across the ground, and between cells the heights are
+// blended. `p` is a place across the ground, x and z, in meters.
+
+/// The height at `p`, blended between cells.
+fn terrain_height(h: Grid<Float>, cell: Float, p: Vec2) -> Float { return at_linear(h, p / cell); }
+
+/// The ground's normal at `p`, from the heights a cell either side.
+fn terrain_normal(h: Grid<Float>, cell: Float, p: Vec2) -> Vec3 {
+    let dx = terrain_height(h, cell, p + vec2(cell, 0.0)) - terrain_height(h, cell, p - vec2(cell, 0.0));
+    let dz = terrain_height(h, cell, p + vec2(0.0, cell)) - terrain_height(h, cell, p - vec2(0.0, cell));
+    return normalize(vec3(0.0 - dx, 2.0 * cell, 0.0 - dz));
+}
+
+/// A ray's walk to the ground: how far it has gone, how far it was a step
+/// before, and whether it has gone under.
+struct TerrainMarch { t: Float; last: Float; met: Bool; }
+
+fn terrain_nonzero(x: Float) -> Float { return if abs(x) < 0.000001 { if x < 0.0 { -0.000001 } else { 0.000001 } } else { x }; }
+
+/// How far along `dir` (of unit length) from `from` the ray first meets
+/// the ground, or -1 when it does not within the ground's box: across
+/// the grid, and from `low` to `high` meters up.
+fn terrain_hit(h: Grid<Float>, cell: Float, from: Vec3, dir: Vec3, low: Float, high: Float) -> Float {
+    let extent = size(h) * cell;
+    let lo = vec3(0.0, low, 0.0);
+    let hi = vec3(extent.x, high, extent.y);
+    // A direction along an axis is nudged off it: a device need not keep
+    // the infinity one over nothing would be.
+    let inv = vec3(1.0 / terrain_nonzero(dir.x), 1.0 / terrain_nonzero(dir.y), 1.0 / terrain_nonzero(dir.z));
+    let a = (lo - from) * inv;
+    let b = (hi - from) * inv;
+    let near = max(max(min(a.x, b.x), min(a.y, b.y)), min(a.z, b.z));
+    let far = min(min(max(a.x, b.x), max(a.y, b.y)), max(a.z, b.z));
+    if far < max(near, 0.0) { return -1.0; }
+    let start = max(near, 0.0);
+    // Steps as long as the height above allows, and never under a tenth
+    // of a cell; then halved between the last step above and the first
+    // under.
+    let w = loop 400 with s = TerrainMarch { t: start, last: start, met: false } until s.met || s.t > far {
+        let p = from + dir * s.t;
+        let above = p.y - terrain_height(h, cell, vec2(p.x, p.z));
+        if above < 0.0 { TerrainMarch { ..s, met: true } }
+        else { TerrainMarch { t: s.t + max(above * 0.4, cell * 0.1), last: s.t, met: false } }
+    };
+    if !w.met { return -1.0; }
+    let r = loop 8 with lr = vec2(w.last, w.t) {
+        let mid = (lr.x + lr.y) * 0.5;
+        let q = from + dir * mid;
+        if q.y > terrain_height(h, cell, vec2(q.x, q.z)) { vec2(mid, lr.y) } else { vec2(lr.x, mid) }
+    };
+    return (r.x + r.y) * 0.5;
+}
+
+/// How open the sky is over `p`, whose normal is `n`, 0.25 to 1: the
+/// ground standing above it at twelve places round it, out to `reach`
+/// meters, closes it.
+fn terrain_open(h: Grid<Float>, cell: Float, p: Vec3, n: Vec3, reach: Float) -> Float {
+    let closed = loop 12 with c = 0.0 {
+        let angle = float(index()) * 2.3999;
+        let far = reach * (1.0 + float(index() % 3) * 3.5) / 8.0;
+        let q = vec2(p.x, p.z) + vec2(cos(angle), sin(angle)) * far;
+        c + max(terrain_height(h, cell, q) - p.y, 0.0) / far
+    };
+    return clamp(1.0 - closed * 0.12, 0.25, 1.0) * (0.75 + 0.25 * n.y);
+}

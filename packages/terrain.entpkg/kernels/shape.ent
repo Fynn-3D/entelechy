@@ -1,0 +1,121 @@
+// Making the ground and changing it: rolling hills from noise; a brush
+// that raises, lowers, smooths, flattens, heaps mountains and breaks
+// cliffs; and erosion that lets what is steeper than it can stand slide
+// down. Each Kernel takes the heights and gives them back changed, so a
+// scene carries them from frame to frame with `<~`.
+use "random.entpkg";
+
+/// Rolling hills: noise `scale` waves a meter, `octaves` of it, from 0 to
+/// `height` meters.
+kernel terrain.hills@1 {
+    requires { field.write; }
+    param cell: Float = 1.0;
+    param scale: Float = 0.012;
+    param octaves: Int = 5;
+    param height: Float = 12.0;
+    param seed: Int = 7;
+    output result: Grid<Float>;
+    compute {
+        let p = (coord() + 0.5) * cell;
+        return clamp(fbm2(p * scale, octaves, seed) * 0.5 + 0.5, 0.0, 1.0) * height;
+    }
+}
+
+/// A mountain's shape under a brush `r` meters wide, at `p`, `d` from its
+/// middle: a broad swell with ridges on it that fork and fall away, 0 at
+/// the rim and up to about 1 at the middle.
+fn terrain_mountain(p: Vec2, d: Float, r: Float) -> Float {
+    let fall = 1.0 - smoothstep(0.0, 1.0, d / r);
+    let warp = vec2(fbm2(p * 0.02, 3, 41), fbm2(p * 0.02 + 5.2, 3, 42)) * r * 0.3;
+    let q = (p + warp) / max(r * 0.9, 1.0);
+    let ridges = ridged3(vec3(q.x, 0.0, q.y), 5, 43);
+    return fall * fall * (0.45 + 0.8 * ridges * ridges);
+}
+
+/// Height `h` at `p` broken into terraces `step` meters apart: each flat
+/// holds most of a step and a sheer face rises to the next; the edges
+/// wander with `p`.
+fn terrain_terraced(h: Float, p: Vec2, step: Float) -> Float {
+    let wander = fbm2(p * 0.12, 3, 44) * step * 0.45 + fbm2(p * 0.6, 2, 45) * step * 0.08;
+    let k = (h + wander) / step;
+    return (floor(k) + smoothstep(0.62, 0.8, fract(k))) * step - wander;
+}
+
+/// A stroke of the brush this frame: where its middle is across the
+/// ground, how wide it reaches, how much it does this frame (its strength
+/// times the frame's time), the height it flattens toward, and what it
+/// does.
+struct TerrainBrush { center: Vec2; radius: Float; amount: Float; level: Float; mode: Int; }
+
+fn terrain_brush_raise() -> Int { return 0; }
+fn terrain_brush_lower() -> Int { return 1; }
+fn terrain_brush_smooth() -> Int { return 2; }
+fn terrain_brush_flatten() -> Int { return 3; }
+fn terrain_brush_mountain() -> Int { return 4; }
+fn terrain_brush_cliff() -> Int { return 5; }
+
+/// The heights under the brush's first row changed by it, more at its
+/// middle and nothing at its rim; a mountain is raised no steeper than
+/// `steepest` meters over the lowest neighbor; nothing goes over `top`.
+/// A brush with no reach changes nothing.
+kernel terrain.sculpt@1 {
+    requires { field.read; field.write; }
+    input previous: Grid<Float>;
+    input brush: Rows<TerrainBrush>;
+    param cell: Float = 1.0;
+    param steepest: Float = 0.7;
+    param top: Float = 1000.0;
+    output result: Grid<Float>;
+    compute {
+        let here = sample(previous);
+        let b = at(brush, 0);
+        let c = coord();
+        let p = (c + 0.5) * cell;
+        let d = length(p - b.center);
+        if d >= b.radius { return here; }
+        let fall = 1.0 - smoothstep(0.0, 1.0, d / b.radius);
+        let amount = b.amount * fall;
+        let last = size(previous) - 1.0;
+        let east = at(previous, min(c + vec2(1.0, 0.0), last));
+        let west = at(previous, max(c - vec2(1.0, 0.0), vec2(0.0, 0.0)));
+        let south = at(previous, min(c + vec2(0.0, 1.0), last));
+        let north = at(previous, max(c - vec2(0.0, 1.0), vec2(0.0, 0.0)));
+        return match b.mode {
+            0 => min(here + amount, top),
+            1 => here - amount,
+            2 => mix(here, (east + west + south + north) * 0.25, clamp(amount, 0.0, 1.0)),
+            3 => mix(here, b.level, clamp(amount, 0.0, 1.0)),
+            4 => {
+                let raised = here + b.amount * terrain_mountain(p, d, b.radius) * b.radius;
+                min(max(min(raised, min(min(east, west), min(south, north)) + steepest), here), top)
+            },
+            _ => mix(here, terrain_terraced(here, p, 3.0 + b.radius * 0.12), clamp(amount, 0.0, 1.0)),
+        };
+    }
+}
+
+/// One step of thermal erosion: between each cell and its four neighbors,
+/// what one stands over the other beyond `talus` meters slides down by
+/// `rate` (at most 1) of a quarter of it. What a cell gives its neighbor
+/// that neighbor takes, so the ground's sum is kept.
+kernel terrain.erode@1 {
+    requires { field.read; field.write; }
+    input previous: Grid<Float>;
+    param talus: Float = 0.6;
+    param rate: Float = 0.5;
+    output result: Grid<Float>;
+    fn slide(here: Float, there: Float, talus: Float) -> Float {
+        return max(there - here - talus, 0.0) - max(here - there - talus, 0.0);
+    }
+    compute {
+        let here = sample(previous);
+        let c = coord();
+        let last = size(previous) - 1.0;
+        let east = at(previous, min(c + vec2(1.0, 0.0), last));
+        let west = at(previous, max(c - vec2(1.0, 0.0), vec2(0.0, 0.0)));
+        let south = at(previous, min(c + vec2(0.0, 1.0), last));
+        let north = at(previous, max(c - vec2(0.0, 1.0), vec2(0.0, 0.0)));
+        let moved = slide(here, east, talus) + slide(here, west, talus) + slide(here, south, talus) + slide(here, north, talus);
+        return here + moved * 0.25 * clamp(rate, 0.0, 1.0);
+    }
+}

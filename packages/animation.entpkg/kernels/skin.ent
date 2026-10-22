@@ -2,6 +2,7 @@
 // pose and its inverse bind, and the mesh moved by the four joints each
 // vertex hangs off.
 use "aim.ent";
+use "mesh.entpkg";
 use "skeleton.ent";
 
 /// The palette: each joint's local transform composed up the parent
@@ -42,12 +43,12 @@ kernel animation.palette@1 {
 /// it is.
 kernel animation.apply@1 {
     requires { field.read; field.write; }
-    input mesh: Rows<Point>;
+    input mesh: Rows<MeshPoint>;
     input weights: Rows<Bound>;
     input palette: Palette;
     /// Bound for its count: how many joints an instance's palette holds.
     input skeleton: Skeleton;
-    output result: Rows<Point>;
+    output result: Rows<MeshPoint>;
 
     compute {
         let vertices = count(mesh);
@@ -61,7 +62,7 @@ kernel animation.apply@1 {
               + at(palette, block + b.joints[3]) * b.weights.w;
         let moved = m * vec4(v.position, 1.0);
         let turned = m * vec4(v.normal, 0.0);
-        return Point {
+        return MeshPoint {
             position: moved.xyz,
             normal: normalize(turned.xyz),
             uv: v.uv,
@@ -73,17 +74,17 @@ kernel animation.apply@1 {
 /// mesh it posed. A crowd is this over `animation.apply@1`'s output.
 kernel animation.place@1 {
     requires { field.read; field.write; }
-    input mesh: Rows<Point>;
+    input mesh: Rows<MeshPoint>;
     input places: Rows<Pose>;
     /// Bound for its count: how many vertices one instance has.
-    input one: Rows<Point>;
-    output result: Rows<Point>;
+    input one: Rows<MeshPoint>;
+    output result: Rows<MeshPoint>;
     compute {
         let v = sample(mesh);
         let place = posing(at(places, element() / count(one)));
         let moved = place * vec4(v.position, 1.0);
         let turned = place * vec4(v.normal, 0.0);
-        return Point {
+        return MeshPoint {
             position: moved.xyz,
             normal: normalize(turned.xyz),
             uv: v.uv,

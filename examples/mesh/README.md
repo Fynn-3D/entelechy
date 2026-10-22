@@ -1,16 +1,18 @@
 # Mesh
 
-A subdivided torus drawn by the raster package.
+A torus made and subdivided by the mesh package, drawn by the raster
+package.
 
-- `mesh.torus` and `mesh.torus_faces` build the vertex and triangle rows.
-- `mesh.split_vertices` and `mesh.split_faces` split each triangle into
-  four, one level per placement of the sub-graph `level.esn`, placed
-  `level` times with `carry` (`--param level=2` is two levels).
-- `mesh.project` projects the vertices into clip space.
+- The [mesh package](../../packages/mesh.entpkg/README.md)'s
+  `mesh.torus_points` and `mesh.lattice_faces` build the point and face
+  rows, and its `graphs/subdivision.esn` splits each face into four, one
+  level a placement, placed `level` times with `carry`
+  (`--param level=2` is two levels).
+- `torus.project` projects the points into clip space.
 - The [raster package](../../packages/raster.entpkg/kernels/triangle.ent)
   turns the rows into a `Grid<Surface>` of depth, normal, uv and triangle
   id, the same on all three backends (`tests/edges.replay`).
-- `mesh.shade` lights the surface.
+- `torus.shade` lights the surface.
 
 `tests/native.esn` puts `native.rasterize@1` in the package's place: bit
 for bit on the interpreter and the JIT; on the GPU the device's

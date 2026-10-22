@@ -4,12 +4,11 @@
 use "../../../../../packages/animation.entpkg";
 use "../../../../../packages/random.entpkg";
 use "../../../../../packages/geometry.entpkg";
+use "../../../../../packages/raster.entpkg";
+use "../../../../../packages/mesh.entpkg";
 
-struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }
-struct Tri { a: Int; b: Int; c: Int; }
-struct Surface { depth: Float; normal: Vec3; uv: Vec2; id: Int; }
-type Vertices = Rows<Vertex>;
-type Triangles = Rows<Tri>;
+type Vertices = Rows<Corner>;
+type Triangles = Rows<Face>;
 type GBuffer = Grid<Surface>;
 
 /// An inchworm's stride for the arm's two joints: the forearm curls and
@@ -74,14 +73,14 @@ fn view_of(p: Vec3, eye: Vec3, aspect: Float) -> Vec4 {
 
 kernel stride.project@1 {
     requires { field.read; field.write; }
-    input mesh: Rows<Point>;
+    input mesh: Rows<MeshPoint>;
     input stand: Rows<Pose>;
     param aspect: Float = 1.7778;
     output result: Vertices;
     compute {
         let v = sample(mesh);
         let eye = eye_of(at(stand, 0).at);
-        return Vertex { clip: view_of(v.position, eye, aspect), normal: v.normal, uv: v.uv };
+        return Corner { clip: view_of(v.position, eye, aspect), normal: v.normal, uv: v.uv };
     }
 }
 

@@ -1,0 +1,7 @@
+//! Ground as heights on a grid of cells: read back as a smooth surface,
+//! its normal, where a ray first meets it and how open the sky is over
+//! it; made from noise, sculpted by a brush, worn down by erosion, and
+//! laid out as a mesh.
+package terrain@1 { language = 1; ir = 1; }
+
+use "kernels/";

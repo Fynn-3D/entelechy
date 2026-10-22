@@ -16,11 +16,9 @@
 // integer paths — so every backend flags exactly the same cells and the
 // replay pins the count with no tolerance at all.
 use "../../../packages/geometry.entpkg";
+use "../../../packages/raster.entpkg";
+use "../../../packages/mesh.entpkg";
 struct Camera { angle: Float; height: Float; distance: Float; }
-struct Point { position: Vec3; normal: Vec3; uv: Vec2; }
-struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }
-struct Tri { a: Int; b: Int; c: Int; }
-struct Surface { depth: Float; normal: Vec3; uv: Vec2; id: Int; }
 type Field = Volume<Int>;
 
 // A ball's coordinate at step `t`: a triangle wave between `low` and
@@ -117,7 +115,7 @@ kernel surface.corners@1 {
     /// `domain` does, with `value(count)`.
     input count: Rows<Int>;
     input field: Field;
-    output result: Rows<Point>;
+    output result: Rows<MeshPoint>;
 
     fn place(c: IVec3, corners: IVec3) -> Vec3 {
         let side = float(max(corners.x - 1, 1));
@@ -128,14 +126,14 @@ kernel surface.corners@1 {
         let i = element();
         let corners = isize(field);
         let c = cell_at(at(kept, i / 8), corners);
-        if !straddles(field, c) { return Point { position: place(c, corners), normal: vec3(0.0, 1.0, 0.0), uv: vec2(0.0, 0.0) }; }
+        if !straddles(field, c) { return MeshPoint { position: place(c, corners), normal: vec3(0.0, 1.0, 0.0), uv: vec2(0.0, 0.0) }; }
         let corner = c + corner_of(i & 7);
         let gradient = vec3(
             float(at(field, corner + ivec3(1, 0, 0)) - at(field, corner - ivec3(1, 0, 0))),
             float(at(field, corner + ivec3(0, 1, 0)) - at(field, corner - ivec3(0, 1, 0))),
             float(at(field, corner + ivec3(0, 0, 1)) - at(field, corner - ivec3(0, 0, 1))));
         let p = place(corner, corners);
-        return Point { position: p, normal: normalize(-gradient), uv: p.xz };
+        return MeshPoint { position: p, normal: normalize(-gradient), uv: p.xz };
     }
 }
 
@@ -146,7 +144,7 @@ kernel surface.faces@1 {
     /// Kernel. Which cells they are does not matter here, since a
     /// triangle indexes its own cell's block of corners.
     input count: Rows<Int>;
-    output result: Rows<Tri>;
+    output result: Rows<Face>;
     compute {
         // A corner is `x + 2y + 4z`, as `corner_of` reads it; the six
         // faces, two triangles each.
@@ -156,7 +154,7 @@ kernel surface.faces@1 {
         let t = element();
         let base = (t / 12) * 8;
         let k = (t % 12) * 3;
-        return Tri { a: base + cube[k], b: base + cube[k + 1], c: base + cube[k + 2] };
+        return Face { a: base + cube[k], b: base + cube[k + 1], c: base + cube[k + 2] };
     }
 }
 
@@ -194,17 +192,17 @@ kernel surface.orbit@1 {
 
 kernel surface.project@1 {
     requires { field.read; field.write; }
-    input mesh: Rows<Point>;
+    input mesh: Rows<MeshPoint>;
     input camera: Rows<Camera>;
     param aspect: Float = 1.7778;
-    output result: Rows<Vertex>;
+    output result: Rows<Corner>;
 
     compute {
         let cam = at(camera, 0);
         let v = sample(mesh);
         let eye = vec3(sin(cam.angle) * cam.distance, cam.height, cos(cam.angle) * cam.distance);
         let camera = perspective_focal(1.6, aspect, 0.02, 6.0) * look_at(eye, vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0));
-        return Vertex {
+        return Corner {
             clip: clip_point(camera, v.position),
             normal: v.normal,
             uv: v.uv,

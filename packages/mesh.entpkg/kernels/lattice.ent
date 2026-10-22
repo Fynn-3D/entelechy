@@ -1,0 +1,104 @@
+// A lattice of points, `columns` a row and `rows` of them, and two faces
+// to each of its cells. A lattice wraps round in a direction when its last
+// column (or row) joins its first, as a torus does; an open one stops at
+// its last, whose points then lie on the seam, as a sphere's do. The
+// coordinate across is `column / columns` wrapped and
+// `column / (columns - 1)` open, so an open lattice spans 0 to 1 whole.
+//
+// Points: `domain = columns * rows;`. Faces: `domain = 2 * across * down;`,
+// across being `columns` wrapped and `columns - 1` open, down the same for
+// `rows`.
+use "raster.entpkg";
+
+/// A point of a mesh in its own space: as `entelechy import` writes one.
+struct MeshPoint { position: Vec3; normal: Vec3; uv: Vec2; }
+
+/// Point `i`'s coordinates on the lattice, each 0 to 1.
+fn mesh_lattice_uv(i: Int, columns: Int, rows: Int, wrap_columns: Bool, wrap_rows: Bool) -> Vec2 {
+    let across = if wrap_columns { columns } else { columns - 1 };
+    let down = if wrap_rows { rows } else { rows - 1 };
+    return vec2(float(i % columns) / float(max(across, 1)), float(i / columns) / float(max(down, 1)));
+}
+
+/// Face `t`: of cell `t / 2`, the corner and its two neighbors along,
+/// then the corner, the far corner and the neighbor down.
+fn mesh_lattice_face(t: Int, columns: Int, rows: Int, wrap_columns: Bool, wrap_rows: Bool) -> Face {
+    let across = if wrap_columns { columns } else { columns - 1 };
+    let cell = t / 2;
+    let c = cell % across;
+    let r = cell / across;
+    let c1 = (c + 1) % columns;
+    let r1 = (r + 1) % rows;
+    let v00 = r * columns + c;
+    let v10 = r * columns + c1;
+    let v01 = r1 * columns + c;
+    let v11 = r1 * columns + c1;
+    return if t % 2 == 0 { Face { a: v00, b: v10, c: v11 } } else { Face { a: v00, b: v11, c: v01 } };
+}
+
+/// The faces of a lattice.
+kernel mesh.lattice_faces@1 {
+    requires { field.write; }
+    param columns: Int = 32;
+    param rows: Int = 16;
+    param wrap_columns: Bool = false;
+    param wrap_rows: Bool = false;
+    output result: Rows<Face>;
+    compute { return mesh_lattice_face(element(), columns, rows, wrap_columns, wrap_rows); }
+}
+
+/// A torus about up: its ring's radius `ring`, its tube's `tube`; columns
+/// go round the ring and rows round the tube. Wrapped both ways it has no
+/// seam in its points, and its coordinates jump from near 1 back to 0
+/// across the last cells; open both ways, with a column and a row more,
+/// its seams lie twice over and its coordinates run 0 to 1 whole.
+kernel mesh.torus_points@1 {
+    requires { field.write; }
+    param ring: Float = 1.0;
+    param tube: Float = 0.4;
+    param columns: Int = 48;
+    param rows: Int = 24;
+    param wrap_columns: Bool = true;
+    param wrap_rows: Bool = true;
+    output result: Rows<MeshPoint>;
+    compute {
+        let uv = mesh_lattice_uv(element(), columns, rows, wrap_columns, wrap_rows);
+        let a = uv.x * 6.2831853;
+        let b = uv.y * 6.2831853;
+        let center = vec3(cos(a), 0.0, sin(a)) * ring;
+        let radial = vec3(cos(a) * cos(b), sin(b), sin(a) * cos(b));
+        return MeshPoint { position: center + radial * tube, normal: radial, uv: uv };
+    }
+}
+
+/// A sphere of `radius` about the origin, an open lattice: columns round
+/// its middle, rows from the pole below to the pole above.
+kernel mesh.sphere_points@1 {
+    requires { field.write; }
+    param radius: Float = 1.0;
+    param columns: Int = 33;
+    param rows: Int = 17;
+    output result: Rows<MeshPoint>;
+    compute {
+        let uv = mesh_lattice_uv(element(), columns, rows, false, false);
+        let a = uv.x * 6.2831853;
+        let b = (uv.y - 0.5) * 3.14159265;
+        let n = vec3(cos(a) * cos(b), sin(b), sin(a) * cos(b));
+        return MeshPoint { position: n * radius, normal: n, uv: uv };
+    }
+}
+
+/// A flat sheet facing up, `size` across in x and z about the origin, an
+/// open lattice.
+kernel mesh.plane_points@1 {
+    requires { field.write; }
+    param size: Vec2 = vec2(2.0, 2.0);
+    param columns: Int = 16;
+    param rows: Int = 16;
+    output result: Rows<MeshPoint>;
+    compute {
+        let uv = mesh_lattice_uv(element(), columns, rows, false, false);
+        let p = (uv - 0.5) * size;
+        return MeshPoint { position: vec3(p.x, 0.0, p.y), normal: vec3(0.0, 1.0, 0.0), uv: uv };
+    }
+}

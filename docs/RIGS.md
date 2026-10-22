@@ -23,7 +23,9 @@ Kernels.
 out. A vertex may carry a tangent after its uv (`f×12`), the way a normal
 map is read along: its `w` is the handedness, the bitangent
 `cross(normal, tangent) * w`; `entelechy export` writes it as the mesh's
-tangents, and `entelechy import` reads the position, normal and uv. The `animation` package declares them as `Point`, `Tri`, `Bound`,
+tangents, and `entelechy import` reads the position, normal and uv. The
+`mesh` package declares a vertex as `MeshPoint`, the `raster` package a
+triangle as `Face`, and the `animation` package the rest as `Bound`,
 `Joint` and `Pose`.
 
 ## What the numbers mean

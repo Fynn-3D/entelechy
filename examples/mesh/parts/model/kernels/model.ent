@@ -3,14 +3,12 @@
 // space under an orbit, the native rasterizer lands the triangles, and
 // shade reads the texture at each pixel's uv.
 use "../../../../../packages/geometry.entpkg";
+use "../../../../../packages/raster.entpkg";
+use "../../../../../packages/mesh.entpkg";
 
-struct Point { position: Vec3; normal: Vec3; uv: Vec2; }   // as import writes it
-struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }      // what the rasterizer takes
-struct Tri { a: Int; b: Int; c: Int; }
-struct Surface { depth: Float; normal: Vec3; uv: Vec2; id: Int; }
-type Model = Rows<Point>;
-type Vertices = Rows<Vertex>;
-type Triangles = Rows<Tri>;
+type Model = Rows<MeshPoint>;   // as import writes it
+type Vertices = Rows<Corner>;
+type Triangles = Rows<Face>;
 type GBuffer = Grid<Surface>;
 
 /// Rotations as matrices, by columns: where each axis lands.
@@ -29,7 +27,7 @@ kernel model.project@1 {
         let p = orbit * v.position;
         let n = orbit * v.normal;
         let clip = clip_point(perspective_focal(2.1445, aspect, 0.1, 10.0), p - vec3(0.0, 0.0, distance));
-        return Vertex { clip: clip, normal: n, uv: v.uv };
+        return Corner { clip: clip, normal: n, uv: v.uv };
     }
 }
 

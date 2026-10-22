@@ -2,10 +2,8 @@
 // mip library: the same plane, the same texture, read once at the top
 // level always and once at the level each pixel asks for.
 use "../../../packages/image.entpkg";
+use "../../../packages/raster.entpkg";
 
-struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }
-struct Tri { a: Int; b: Int; c: Int; }
-struct Surface { depth: Float; normal: Vec3; uv: Vec2; id: Int; }
 
 /// The texture: a fine checker under a grid of red lines, which is the
 /// pattern that crawls worst.
@@ -28,7 +26,7 @@ kernel ground.texture@1 {
 kernel ground.quad@1 {
     requires { field.write; }
     param reach: Float = 900.0;
-    output result: Rows<Vertex>;
+    output result: Rows<Corner>;
     compute {
         let i = element();
         let near = i < 2;
@@ -39,7 +37,7 @@ kernel ground.quad@1 {
         let f = 1.9;
         let far = reach;
         let near_plane = 0.2;
-        return Vertex {
+        return Corner {
             clip: vec4(x * f / 1.7778, -f,
                        z * far / (far - near_plane) - near_plane * far / (far - near_plane), z),
             normal: vec3(0.0, 1.0, 0.0),
@@ -50,9 +48,9 @@ kernel ground.quad@1 {
 
 kernel ground.faces@1 {
     requires { field.write; }
-    output result: Rows<Tri>;
+    output result: Rows<Face>;
     compute {
-        return if element() == 0 { Tri { a: 0, b: 2, c: 1 } } else { Tri { a: 1, b: 2, c: 3 } };
+        return if element() == 0 { Face { a: 0, b: 2, c: 1 } } else { Face { a: 1, b: 2, c: 3 } };
     }
 }
 

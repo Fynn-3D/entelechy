@@ -1,0 +1,26 @@
+// The ground as a mesh: a point at every cell, on an open lattice the
+// mesh package lays its faces over with `mesh.lattice_faces@1` at the
+// grid's size. `domain = width * depth` points, and
+// `2 * (width - 1) * (depth - 1)` faces.
+use "mesh.entpkg";
+use "height.ent";
+
+/// Cell i's point: its place and height, the ground's normal there, and
+/// its place on the lattice, 0 to 1 across.
+kernel terrain.points@1 {
+    requires { field.read; field.write; }
+    input heights: Grid<Float>;
+    param cell: Float = 1.0;
+    output result: Rows<MeshPoint>;
+    compute {
+        let i = element();
+        let grid = int(size(heights));
+        let c = vec2(float(i % grid.x), float(i / grid.x));
+        let p = (c + 0.5) * cell;
+        return MeshPoint {
+            position: vec3(p.x, at(heights, c), p.y),
+            normal: terrain_normal(heights, cell, p),
+            uv: mesh_lattice_uv(i, grid.x, grid.y, false, false),
+        };
+    }
+}

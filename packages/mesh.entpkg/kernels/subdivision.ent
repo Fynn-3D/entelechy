@@ -1,0 +1,59 @@
+// Midpoint subdivision, the step that changes a mesh's topology: every
+// face becomes four. The new points are the old ones followed by three
+// edge midpoints a face, so the graph sizes the rows from the inputs:
+// `domain = count(points) + 3 * count(faces);` and
+// `domain = 4 * count(faces);`. `graphs/subdivision.esn` is one level.
+use "raster.entpkg";
+use "lattice.ent";
+
+fn mesh_midpoint(a: MeshPoint, b: MeshPoint) -> MeshPoint {
+    return MeshPoint {
+        position: (a.position + b.position) * 0.5,
+        normal: normalize(a.normal + b.normal),
+        uv: (a.uv + b.uv) * 0.5
+    };
+}
+
+/// The old points, then each face's midpoints of its edges ab, bc and ca.
+kernel mesh.split_points@1 {
+    requires { field.read; field.write; }
+    input points: Rows<MeshPoint>;
+    input faces: Rows<Face>;
+    output result: Rows<MeshPoint>;
+    compute {
+        let i = element();
+        let originals = count(points);
+        return if i < originals {
+            at(points, i)
+        } else {
+            let k = i - originals;
+            let t = at(faces, k / 3);
+            match k % 3 {
+                0 => mesh_midpoint(at(points, t.a), at(points, t.b)),
+                1 => mesh_midpoint(at(points, t.b), at(points, t.c)),
+                _ => mesh_midpoint(at(points, t.c), at(points, t.a)),
+            }
+        };
+    }
+}
+
+/// Each face's three corners and its middle, over the split points.
+kernel mesh.split_faces@1 {
+    requires { field.read; field.write; }
+    input points: Rows<MeshPoint>;
+    input faces: Rows<Face>;
+    output result: Rows<Face>;
+    compute {
+        let i = element();
+        let t = at(faces, i / 4);
+        let ab = count(points) + (i / 4) * 3;   // this face's midpoints
+        let bc = ab + 1;
+        let ca = ab + 2;
+        return match i % 4 {
+            0 => Face { a: t.a, b: ab, c: ca },
+            1 => Face { a: ab, b: t.b, c: bc },
+            2 => Face { a: ca, b: bc, c: t.c },
+            _ => Face { a: ab, b: bc, c: ca },
+        };
+    }
+}

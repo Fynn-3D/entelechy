@@ -17,5 +17,5 @@ expect 160 200 = 0.345 0.212 0.094 0.04
 # surface, so the picture is the same.
 param level 2
 frame 0.0
-expect subdivided/2.triangles.result[9216].a = 288
+expect subdivided/2.quartered.result[9216].a = 288
 expect 60 120 = 0.698 0.427 0.196 0.04

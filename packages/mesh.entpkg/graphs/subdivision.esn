@@ -1,0 +1,14 @@
+// One level of midpoint subdivision: the rows grow by what the inputs
+// say. A scene places this `times = n` to subdivide n times, carrying the
+// points and the faces from one level to the next:
+// `carry points <- points; carry faces <- faces;`.
+use "../kernels/";
+
+input points: Rows<MeshPoint>;
+input faces: Rows<Face>;
+
+node split: mesh.split_points@1 { points <- points; faces <- faces; domain = count(points) + 3 * count(faces); }
+node quartered: mesh.split_faces@1 { points <- points; faces <- faces; domain = 4 * count(faces); }
+
+output points <- split.result;
+output faces <- quartered.result;

@@ -1,0 +1,33 @@
+scene lattice.esn
+
+# The torus's first point on the ring's outside, a quarter round its
+# tube the top; its last cell's faces wrap back to the first column and
+# row.
+frame 0.0
+expect torus.result[0].position = 1.4 0 0 0.0001
+expect torus.result[2].position = 0 0 1.4 0.0001
+expect torus.result[8].position = 1 0.4 0 0.0001
+expect torus_faces.result[62].a = 31
+expect torus_faces.result[62].b = 24
+expect torus_faces.result[62].c = 0
+expect torus_faces.result[63].a = 31
+expect torus_faces.result[63].b = 0
+expect torus_faces.result[63].c = 7
+
+# The sphere's first row its pole below, its last the pole above, its
+# coordinates 0 to 1 whole; the plane's corners at its size.
+expect sphere.result[0].position = 0 -1 0 0.0001
+expect sphere.result[44].position = 0 1 0 0.0001
+expect sphere.result[44].uv = 1 1 0.0001
+expect sphere.result[22].normal = -1 0 0 0.0001
+expect plane.result[0].position = -2 0 -1 0.0001
+expect plane.result[8].position = 2 0 1 0.0001
+
+# Split once: 45 points and 64 faces become 45 + 192 and 256; a new
+# point halfway along its edge, and a face's middle the three midpoints.
+expect count split.split.result = 237
+expect count split.quartered.result = 256
+expect split.split.result[45].uv = 0.0625 0 0.0001
+expect split.quartered.result[3].a = 45
+expect split.quartered.result[3].b = 46
+expect split.quartered.result[3].c = 47

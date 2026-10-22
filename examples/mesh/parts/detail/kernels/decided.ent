@@ -4,11 +4,9 @@
 // mesh exactly that big. The number never passes through the Host as a
 // parameter: it is a Field one Kernel wrote and the graph read.
 use "../../../../../packages/geometry.entpkg";
+use "../../../../../packages/raster.entpkg";
+use "../../../../../packages/mesh.entpkg";
 struct Flight { height: Float; along: Float; }
-struct Point { position: Vec3; normal: Vec3; uv: Vec2; }
-struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }
-struct Tri { a: Int; b: Int; c: Int; }
-struct Surface { depth: Float; normal: Vec3; uv: Vec2; id: Int; }
 
 /// Where the camera is, carried from frame to frame: it climbs and dives
 /// on a slow cycle and drifts forward.
@@ -52,50 +50,38 @@ kernel decided.detail@1 {
 kernel decided.ground@1 {
     requires { field.read; field.write; }
     input detail: Rows<Int>;
-    output result: Rows<Point>;
+    output result: Rows<MeshPoint>;
 
     compute {
         let side = at(detail, 0);
-        let i = element();
-        let u = float(i % side) / float(side - 1);
-        let v = float(i / side) / float(side - 1);
-        let x = u - 0.5;
-        let z = v - 0.5;
+        let uv = mesh_lattice_uv(element(), side, side, false, false);
+        let x = uv.x - 0.5;
+        let z = uv.y - 0.5;
         let h = sin(x * 11.0) * cos(z * 9.0) * 0.05 + sin(x * 27.0 + z * 19.0) * 0.012;
         let dx = cos(x * 11.0) * 11.0 * 0.05 + cos(x * 27.0 + z * 19.0) * 27.0 * 0.012;
         let dz = -sin(z * 9.0) * 9.0 * 0.05 + cos(x * 27.0 + z * 19.0) * 19.0 * 0.012;
-        return Point {
+        return MeshPoint {
             position: vec3(x, h, z),
             normal: normalize(vec3(-dx, 1.0, -dz)),
-            uv: vec2(u, v),
+            uv: uv,
         };
     }
 }
 
-/// Two triangles per cell of the same lattice.
+/// Two faces a cell of the same lattice.
 kernel decided.faces@1 {
     requires { field.read; field.write; }
     input detail: Rows<Int>;
-    output result: Rows<Tri>;
-
-    compute {
-        let side = at(detail, 0);
-        let t = element();
-        let cell = t / 2;
-        let x = cell % (side - 1);
-        let z = cell / (side - 1);
-        let a = z * side + x;
-        return if t % 2 == 0 { Tri { a: a, b: a + side, c: a + 1 } }
-            else { Tri { a: a + 1, b: a + side, c: a + side + 1 } };
-    }
+    output result: Rows<Face>;
+    compute { return mesh_lattice_face(element(), at(detail, 0), at(detail, 0), false, false); }
 }
 
 kernel decided.project@1 {
     requires { field.read; field.write; }
-    input mesh: Rows<Point>;
+    input mesh: Rows<MeshPoint>;
     input camera: Rows<Flight>;
     param aspect: Float = 1.7778;
-    output result: Rows<Vertex>;
+    output result: Rows<Corner>;
 
     compute {
         let cam = at(camera, 0);
@@ -104,7 +90,7 @@ kernel decided.project@1 {
         // The camera looks down +z with x to the right: its own z turned
         // round for the projection, which looks down -z.
         let view = p - vec3(0.0, cam.height * 0.4, -0.85);
-        return Vertex {
+        return Corner {
             clip: clip_point(perspective_focal(2.0, aspect, 0.05, 10.0), vec3(view.x, view.y, -view.z)),
             normal: v.normal,
             uv: v.uv,

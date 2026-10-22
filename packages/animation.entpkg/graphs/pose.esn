@@ -8,7 +8,7 @@
 //! `animation.palette@1`.
 use "../kernels/skin.ent";
 
-input mesh: Rows<Point>;
+input mesh: Rows<MeshPoint>;
 input weights: Rows<Bound>;
 input skeleton: Skeleton;
 input clip: Clip;
