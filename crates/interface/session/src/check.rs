@@ -493,9 +493,17 @@ fn check_in(
             }
         }
     }
-    // The used documents, each with its own declarations.
+    // The used documents, each with its own declarations: those the
+    // scene's `use` items reach, and those the graphs it places use,
+    // whose Kernels a session publishes as it publishes the scene's.
     match used_documents(store, base, &document.uses) {
-        Ok(used) => {
+        Ok(mut used) => {
+            for file in &published {
+                let key = canonical(file);
+                if !used.iter().any(|reached| canonical(reached) == key) {
+                    used.push(file.clone());
+                }
+            }
             // Each used document checked on its own, all at once; what
             // each found is said in their order.
             let found = crate::spread::map(&used, |used_path| {
@@ -627,15 +635,18 @@ fn check_in(
                 };
                 // A layout too where the element is one of the language's
                 // own, kept as its words: a struct's is its document's.
-                let element = if asset.bytes {
-                    "Int"
-                } else if ty == "Image" {
+                // Bytes are Ints unless the input says how they are kept
+                // (`Rows<Int as u8>`), which the declared element carries.
+                let declared = ty
+                    .split_once('<')
+                    .and_then(|(_, rest)| rest.strip_suffix('>'))
+                    .map(str::trim);
+                let element = if ty == "Image" {
                     "Vec4"
+                } else if asset.bytes {
+                    declared.unwrap_or("Int")
                 } else {
-                    ty.split_once('<')
-                        .and_then(|(_, rest)| rest.strip_suffix('>'))
-                        .unwrap_or("")
-                        .trim()
+                    declared.unwrap_or("")
                 };
                 let schema = element
                     .parse::<entelechy_ir::Type>()
