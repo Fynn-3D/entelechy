@@ -54,3 +54,28 @@ fn arc(a: Vec3, b: Vec3) -> Vec4 {
     let q = vec4(c, 1.0 + d);
     return q / sqrt(dot(q, q));
 }
+
+/// `v` turned `angle` radians about `axis` (Rodrigues' rotation), the
+/// axis not of unit length needed; no axis is no turn.
+fn rotated(v: Vec3, axis: Vec3, angle: Float) -> Vec3 {
+    let l = length(axis);
+    if l == 0.0 { return v; }
+    let k = axis / l;
+    let c = cos(angle);
+    let s = sin(angle);
+    return v * c + cross(k, v) * s + k * dot(k, v) * (1.0 - c);
+}
+
+/// `v` turned `angle` radians about up, +z toward +x.
+fn rotated_yaw(v: Vec3, angle: Float) -> Vec3 {
+    let c = cos(angle);
+    let s = sin(angle);
+    return vec3(v.x * c + v.z * s, v.y, v.z * c - v.x * s);
+}
+
+/// `v` turned `angle` radians in the plane, x toward y.
+fn rotated2(v: Vec2, angle: Float) -> Vec2 {
+    let c = cos(angle);
+    let s = sin(angle);
+    return vec2(v.x * c - v.y * s, v.x * s + v.y * c);
+}

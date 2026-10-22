@@ -15,6 +15,7 @@
 // The field is integer arithmetic — squared distances to three balls on
 // integer paths — so every backend flags exactly the same cells and the
 // replay pins the count with no tolerance at all.
+use "../../../packages/geometry.entpkg";
 struct Camera { angle: Float; height: Float; distance: Float; }
 struct Point { position: Vec3; normal: Vec3; uv: Vec2; }
 struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }
@@ -202,18 +203,9 @@ kernel surface.project@1 {
         let cam = at(camera, 0);
         let v = sample(mesh);
         let eye = vec3(sin(cam.angle) * cam.distance, cam.height, cos(cam.angle) * cam.distance);
-        let forward = normalize(-eye);
-        let right = normalize(cross(forward, vec3(0.0, 1.0, 0.0)));
-        let up = cross(right, forward);
-        let d = v.position - eye;
-        let view = vec3(dot(d, right), dot(d, up), dot(d, forward));
-        let f = 1.6;
-        let near_plane = 0.02;
-        let far = 6.0;
+        let camera = perspective_focal(1.6, aspect, 0.02, 6.0) * look_at(eye, vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0));
         return Vertex {
-            clip: vec4(view.x * f / aspect, view.y * f,
-                       view.z * far / (far - near_plane) - near_plane * far / (far - near_plane),
-                       view.z),
+            clip: clip_point(camera, v.position),
             normal: v.normal,
             uv: v.uv,
         };

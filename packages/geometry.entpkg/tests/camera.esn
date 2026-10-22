@@ -1,0 +1,32 @@
+// A camera at (0, 1, 5) looking at (0, 1, 0), fifty degrees tall, a
+// picture 200 by 100: the target lands at the picture's middle, points
+// on the near and far planes at depth 0 and 1, the ray through a pixel
+// leads back to the point that landed there, and the eye is found again
+// from the view; a camera orbiting the target stands where it should.
+use "../kernels/";
+
+node probe: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 6;
+    compute {
+        let view = look_at(vec3(0.0, 1.0, 5.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 1.0, 0.0));
+        let proj = perspective(0.8727, 2.0, 0.5, 50.0);
+        let size = vec2(200.0, 100.0);
+        let k = element();
+        let target = screen_point(clip_point(proj * view, vec3(0.0, 1.0, 0.0)), size);
+        let near_ = screen_point(clip_point(proj * view, vec3(0.0, 1.0, 4.5)), size);
+        let far_ = screen_point(clip_point(proj * view, vec3(0.0, 1.0, -45.0)), size);
+        let off = screen_point(clip_point(proj * view, vec3(1.0, 1.5, 0.0)), size);
+        let back = pixel_ray(view, 0.8727, off.xy, size);
+        let orbiting = orbit_eye(vec3(0.0, 1.0, 0.0), 0.0, 0.0, 5.0);
+        return if k == 0 { vec4(target.x, target.y, target.z, 0.0) }
+            else if k == 1 { vec4(near_.z, far_.z, 0.0, 0.0) }
+            else if k == 2 { vec4(off.x, off.y, off.z, 0.0) }
+            else if k == 3 { vec4(back.x, back.y, back.z, 0.0) - vec4(normalize(vec3(1.0, 0.5, -5.0)), 0.0) }
+            else if k == 4 { vec4(view_eye(view), 0.0) }
+            else { vec4(orbiting, 0.0) - vec4(view_eye(orbit_view(vec3(0.0, 1.0, 0.0), 0.0, 0.0, 5.0)), 0.0) };
+    }
+}
+
+output result <- probe.result;

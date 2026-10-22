@@ -74,7 +74,7 @@ Arithmetic and the algorithms everything else builds on.
 | Package | Holds |
 | --- | --- |
 | [`random`](random.entpkg/README.md) | Hashes and noise a Kernel can repeat, the same bits on every backend |
-| [`geometry`](geometry.entpkg/README.md) | Quaternions and rigid transforms |
+| [`geometry`](geometry.entpkg/README.md) | Quaternions, transforms, camera projection and signed distances |
 | [`parallel`](parallel.entpkg/README.md) | Sorting, compaction and runs over rows |
 | [`signal`](signal.entpkg/README.md) | Fast Fourier transforms, forward and inverse |
 | [`navigation`](navigation.entpkg/README.md) | Ways over a grid of costs |

@@ -1,0 +1,13 @@
+scene camera.esn
+
+# The target at the middle of the picture; the near plane at depth 0 and
+# the far at 1; a point up and to the right lands up and to the right;
+# the ray through its pixel is the way to it from the eye; the eye found
+# from the view; an orbit at no turn stands where its view's eye is.
+frame 0.0
+expect probe.result[0] = 100 50 0.9091 0 0.001
+expect probe.result[1] = 0 1 0 0 0.0001
+expect probe.result[2] = 121.4441 39.278 0.9091 0 0.001
+expect probe.result[3] = 0 0 0 0 0.0001
+expect probe.result[4] = 0 1 5 0 0.0001
+expect probe.result[5] = 0 0 0 0 0.0001

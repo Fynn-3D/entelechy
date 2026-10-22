@@ -28,16 +28,7 @@ kernel model.project@1 {
         let orbit = rotate_x(tilt) * rotate_y(angle);   // one matrix for both
         let p = orbit * v.position;
         let n = orbit * v.normal;
-        let view = p - vec3(0.0, 0.0, distance);
-        let f = 2.1445;
-        let near = 0.1;
-        let far = 10.0;
-        let clip = vec4(
-            view.x * f / aspect,
-            view.y * f,
-            view.z * far / (near - far) + near * far / (near - far),
-            -view.z
-        );
+        let clip = clip_point(perspective_focal(2.1445, aspect, 0.1, 10.0), p - vec3(0.0, 0.0, distance));
         return Vertex { clip: clip, normal: n, uv: v.uv };
     }
 }

@@ -1,6 +1,7 @@
 // What the reach scene decides for itself: the point the arm reaches
 // for, how much it reaches, where the camera stands, and how the arm
 // and the point are lit. The posing is the `animation` package.
+use "../../../../../packages/geometry.entpkg";
 use "../../../../../packages/animation.entpkg";
 
 struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }
@@ -14,12 +15,7 @@ type GBuffer = Grid<Surface>;
 // above, the shoulder at the middle of the window.
 fn view_of(p: Vec3, aspect: Float) -> Vec4 {
     let eye = vec3(0.0, 0.6, 4.2);
-    let v = p - eye;
-    let f = 1.7321;
-    let near = 0.1;
-    let far = 20.0;
-    return vec4(v.x * f / aspect, v.y * f,
-                v.z * far / (near - far) + near * far / (near - far), -v.z);
+    return clip_point(perspective_focal(1.7321, aspect, 0.1, 20.0) * look_at(eye, eye - vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0)), p);
 }
 
 /// The point the shoulder turns to, in the rig's own space: a slow loop

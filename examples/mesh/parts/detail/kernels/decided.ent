@@ -3,6 +3,7 @@
 // resolution, and `domain = value(detail) * value(detail)` makes the
 // mesh exactly that big. The number never passes through the Host as a
 // parameter: it is a Field one Kernel wrote and the graph read.
+use "../../../../../packages/geometry.entpkg";
 struct Flight { height: Float; along: Float; }
 struct Point { position: Vec3; normal: Vec3; uv: Vec2; }
 struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }
@@ -100,13 +101,11 @@ kernel decided.project@1 {
         let cam = at(camera, 0);
         let v = sample(mesh);
         let p = vec3(v.position.x, v.position.y, v.position.z + fract(cam.along) - 0.5);
+        // The camera looks down +z with x to the right: its own z turned
+        // round for the projection, which looks down -z.
         let view = p - vec3(0.0, cam.height * 0.4, -0.85);
-        let f = 2.0;
-        let near = 0.05;
-        let far = 10.0;
         return Vertex {
-            clip: vec4(view.x * f / aspect, view.y * f,
-                       view.z * far / (far - near) - near * far / (far - near), view.z),
+            clip: clip_point(perspective_focal(2.0, aspect, 0.05, 10.0), vec3(view.x, view.y, -view.z)),
             normal: v.normal,
             uv: v.uv,
         };

@@ -1,0 +1,25 @@
+scene distances.esn
+
+# Two out along x: a unit sphere and a unit box one away, a capsule
+# about the y axis 1.5, and a torus of ring 2 half inside its tube. Near
+# the middle all inside; at (3, 4) the sphere four away and the rest as
+# their corners and ends give; a rounded box, a cylinder, a plane; the
+# flat shapes alike.
+frame 0.0
+expect solids.result[0] = 1 1 1.5 -0.5 0.0001
+expect solids.result[1] = -0.5 -0.5 -0.5 1.5616 0.001
+expect solids.result[2] = 4 3.6056 3.7426 3.6231 0.001
+expect more.result[0] = 2.3239 2.2361 2 0 0.001
+expect more.result[1] = -1 -1 -1 0
+expect flats.result[0] = 2 2 2 2
+expect flats.result[1] = 1.8284 1.4142 1.6213 2.2361 0.001
+
+# A sharp union is the nearer; two at 0.2 blended over 0.4 meet nearer
+# than either; a cut and a meeting.
+expect joins.result[0] = 0.2 0.1 0.5 0.5 0.001
+
+# x turned a quarter about z is y; z turned a quarter about up is x; in
+# the plane, x turned a quarter is y; no axis is no turn.
+expect turns.result[0] = 0 1 0 0 0.0001
+expect turns.result[1] = 1 0 0 0 0.0001
+expect turns.result[2] = 0 1 2 3 0.0001

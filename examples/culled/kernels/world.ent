@@ -6,6 +6,7 @@
 // and every node that builds geometry is `domain = value(count) *
 // <per chunk>`. A chunk nobody can see is not skipped — it is never
 // placed.
+use "../../../packages/geometry.entpkg";
 struct Camera { x: Float; z: Float; heading: Float; height: Float; }
 struct Point { position: Vec3; normal: Vec3; uv: Vec2; }
 struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }
@@ -185,12 +186,9 @@ kernel world.project@1 {
         let forward = vec2(sin(cam.heading), cos(cam.heading));
         let right = vec2(cos(cam.heading), -sin(cam.heading));
         let view = vec3(dot(away, right), v.position.y - cam.height, dot(away, forward));
-        let f = 1.2;
-        let near = 0.02;
-        let far = 2.0;
         return Vertex {
-            clip: vec4(view.x * f / aspect, view.y * f,
-                       view.z * far / (far - near) - near * far / (far - near), view.z),
+            // `view` looks down +z; the projection looks down -z.
+            clip: clip_point(perspective_focal(1.2, aspect, 0.02, 2.0), vec3(view.x, view.y, -view.z)),
             normal: v.normal,
             uv: v.uv,
         };

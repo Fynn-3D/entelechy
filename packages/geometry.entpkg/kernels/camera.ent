@@ -1,0 +1,75 @@
+// A camera's matrices and the ways between the world, the clip space a
+// rasterizer takes and the picture. The camera looks down its -z; clip
+// space is the one `raster` takes: after the divide by w, x and y span
+// [-1, 1] with y up and z spans [0, 1], near to far; w is the distance
+// in front of the camera.
+
+/// A perspective projection: `fov_y` radians from the bottom of the
+/// picture to its top, `aspect` its width over its height, the near and
+/// far planes at those distances.
+fn perspective(fov_y: Float, aspect: Float, near: Float, far: Float) -> Mat4 {
+    return perspective_focal(1.0 / tan(fov_y * 0.5), aspect, near, far);
+}
+
+/// A perspective projection by its focal length `f`, how far the picture
+/// is from the eye in half heights of it (`1 / tan(fov_y / 2)`).
+fn perspective_focal(f: Float, aspect: Float, near: Float, far: Float) -> Mat4 {
+    let depth = far / (near - far);
+    return mat4(
+        vec4(f / aspect, 0.0, 0.0, 0.0),
+        vec4(0.0, f, 0.0, 0.0),
+        vec4(0.0, 0.0, depth, -1.0),
+        vec4(0.0, 0.0, near * depth, 0.0));
+}
+
+/// The view from `eye` toward `target`, `up` the way that stays up in the
+/// picture: a matrix taking the world into the camera's space.
+fn look_at(eye: Vec3, target: Vec3, up: Vec3) -> Mat4 {
+    let f = normalize(target - eye);
+    let s = normalize(cross(f, up));
+    let u = cross(s, f);
+    return mat4(
+        vec4(s.x, u.x, -f.x, 0.0),
+        vec4(s.y, u.y, -f.y, 0.0),
+        vec4(s.z, u.z, -f.z, 0.0),
+        vec4(-dot(s, eye), -dot(u, eye), dot(f, eye), 1.0));
+}
+
+/// Where a camera orbiting `target` stands: `distance` away, turned `yaw`
+/// radians about up from +z and raised `pitch` radians above the horizon.
+fn orbit_eye(target: Vec3, yaw: Float, pitch: Float, distance: Float) -> Vec3 {
+    return target + vec3(sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch)) * distance;
+}
+
+/// The view of a camera orbiting `target` (see `orbit_eye`), up kept up.
+fn orbit_view(target: Vec3, yaw: Float, pitch: Float, distance: Float) -> Mat4 {
+    return look_at(orbit_eye(target, yaw, pitch, distance), target, vec3(0.0, 1.0, 0.0));
+}
+
+/// A point carried by a matrix into clip space.
+fn clip_point(m: Mat4, p: Vec3) -> Vec4 {
+    return m * vec4(p.x, p.y, p.z, 1.0);
+}
+
+/// Where a point in clip space lands on a picture `size` large: its pixel
+/// (x right, y down) and its depth, 0 at the near plane to 1 at the far.
+fn screen_point(clip: Vec4, size: Vec2) -> Vec3 {
+    let ndc = clip.xyz / clip.w;
+    return vec3((ndc.x + 1.0) * 0.5 * size.x, (1.0 - ndc.y) * 0.5 * size.y, ndc.z);
+}
+
+/// The direction in the world through pixel `pixel` of a picture `size`
+/// large, seen by a camera of view `view` and field `fov_y`.
+fn pixel_ray(view: Mat4, fov_y: Float, pixel: Vec2, size: Vec2) -> Vec3 {
+    let t = tan(fov_y * 0.5);
+    let ndc = vec2(pixel.x / size.x * 2.0 - 1.0, 1.0 - pixel.y / size.y * 2.0);
+    let inside = vec3(ndc.x * t * size.x / size.y, ndc.y * t, -1.0);
+    let world = transpose(view) * vec4(inside.x, inside.y, inside.z, 0.0);
+    return normalize(world.xyz);
+}
+
+/// Where the camera of view `view` stands in the world.
+fn view_eye(view: Mat4) -> Vec3 {
+    let at = inverse(view) * vec4(0.0, 0.0, 0.0, 1.0);
+    return at.xyz;
+}

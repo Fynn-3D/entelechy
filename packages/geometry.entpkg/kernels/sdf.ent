@@ -1,0 +1,73 @@
+// Signed distance functions: how far a point is from a shape, negative
+// inside, each exact for its shape; and the ways shapes are joined, cut
+// and blended. A scene marches a ray by them, or bakes them into a
+// volume; `p` is the point in the shape's own space.
+
+/// A sphere of radius `r` about the origin.
+fn sd_sphere(p: Vec3, r: Float) -> Float { return length(p) - r; }
+
+/// A box of half sizes `half` about the origin.
+fn sd_box(p: Vec3, half: Vec3) -> Float {
+    let q = abs(p) - half;
+    return length(max(q, vec3(0.0, 0.0, 0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
+}
+
+/// A box of half sizes `half`, its edges rounded by `r` (within its half
+/// sizes).
+fn sd_round_box(p: Vec3, half: Vec3, r: Float) -> Float { return sd_box(p, half - r) - r; }
+
+/// A capsule: the segment from `a` to `b` grown by `r`.
+fn sd_capsule(p: Vec3, a: Vec3, b: Vec3, r: Float) -> Float {
+    let pa = p - a;
+    let ba = b - a;
+    let h = clamp(dot(pa, ba) / max(dot(ba, ba), 0.0000001), 0.0, 1.0);
+    return length(pa - ba * h) - r;
+}
+
+/// A torus about up: its ring's radius `ring` and its tube's `tube`.
+fn sd_torus(p: Vec3, ring: Float, tube: Float) -> Float {
+    let q = vec2(length(p.xz) - ring, p.y);
+    return length(q) - tube;
+}
+
+/// A cylinder about up: radius `r`, half height `half`.
+fn sd_cylinder(p: Vec3, r: Float, half: Float) -> Float {
+    let d = abs(vec2(length(p.xz), p.y)) - vec2(r, half);
+    return min(max(d.x, d.y), 0.0) + length(max(d, vec2(0.0, 0.0)));
+}
+
+/// A plane of unit normal `n`, `offset` from the origin along it.
+fn sd_plane(p: Vec3, n: Vec3, offset: Float) -> Float { return dot(p, n) - offset; }
+
+/// A circle of radius `r` in the plane.
+fn sd_circle(p: Vec2, r: Float) -> Float { return length(p) - r; }
+
+/// A rectangle of half sizes `half` in the plane.
+fn sd_rect(p: Vec2, half: Vec2) -> Float {
+    let q = abs(p) - half;
+    return length(max(q, vec2(0.0, 0.0))) + min(max(q.x, q.y), 0.0);
+}
+
+/// A rectangle of half sizes `half`, its corners rounded by `r`.
+fn sd_round_rect(p: Vec2, half: Vec2, r: Float) -> Float { return sd_rect(p, half - r) - r; }
+
+/// The segment from `a` to `b` in the plane.
+fn sd_segment(p: Vec2, a: Vec2, b: Vec2) -> Float {
+    let pa = p - a;
+    let ba = b - a;
+    let h = clamp(dot(pa, ba) / max(dot(ba, ba), 0.0000001), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+/// Two shapes as one, blended over `k` where they meet (0 a sharp join).
+fn smooth_union(a: Float, b: Float, k: Float) -> Float {
+    if k <= 0.0 { return min(a, b); }
+    let h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+/// `b` cut out of `a`, the cut's edge blended over `k`.
+fn smooth_subtract(a: Float, b: Float, k: Float) -> Float { return -smooth_union(-a, b, k); }
+
+/// Where both shapes are, blended over `k`.
+fn smooth_intersect(a: Float, b: Float, k: Float) -> Float { return -smooth_union(-a, -b, k); }

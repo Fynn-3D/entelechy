@@ -60,11 +60,8 @@ fn screen_march(surface: Grid<Vec4>, l: Lens, extent: Vec2, p: Vec3, dir: Vec3, 
 /// last went down; and how many frames the lens has not moved (`still`, for accumulating).
 struct Orbit { target: Vec3; goal: Vec3; gliding: Bool; yaw: Float; pitch: Float; dist: Float; pointer_at: Vec2; held: Int; clicked_t: Float; still: Int; }
 type Orbits = Rows<Orbit>;
-fn orbit_eye(c: Orbit) -> Vec3 {
-    return c.target + vec3(sin(c.yaw) * cos(c.pitch), sin(c.pitch), cos(c.yaw) * cos(c.pitch)) * c.dist;
-}
 fn orbit_lens(c: Orbit, focal: Float) -> Lens {
-    let eye = orbit_eye(c);
+    let eye = orbit_eye(c.target, c.yaw, c.pitch, c.dist);
     let ahead = normalize(c.target - eye);
     let right = normalize(cross(ahead, vec3(0.0, 1.0, 0.0)));
     return Lens { eye: eye, ahead: ahead, right: right, up: cross(right, ahead), focal: focal };
