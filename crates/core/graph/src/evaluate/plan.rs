@@ -190,6 +190,7 @@ impl Evaluator {
                     version,
                     absorbed: Vec::new(),
                     counted: Vec::new(),
+                    links: Vec::new(),
                     repeat: 1,
                     chain: None,
                     fused: None,
@@ -457,11 +458,17 @@ impl Evaluator {
                 parts.extend(producer.parts.iter().cloned());
                 let mut counted = consumer.counted.clone();
                 counted.extend(producer.counted.iter().cloned());
+                let pairs: Vec<(u32, u32)> = links.iter().map(|link| (link.1, link.2)).collect();
+                // Which ports were joined is part of what the fused version
+                // is: the same members joined otherwise fuse anew.
+                let mut fused_links = consumer.links.clone();
+                fused_links.extend(producer.links.iter().cloned());
+                fused_links.push((producer.node.id.clone(), pairs.clone()));
                 let members = Members {
                     parts: parts.clone(),
                     counted: counted.clone(),
+                    links: fused_links.clone(),
                 };
-                let pairs: Vec<(u32, u32)> = links.iter().map(|link| (link.1, link.2)).collect();
                 // The IR fuses here; only a group that executes is
                 // prepared, once the plan is made.
                 if self.declined.get(&consumer.node.id) == Some(&members) {
@@ -582,6 +589,7 @@ impl Evaluator {
                 group.fused = Some(module);
                 group.parts = parts;
                 group.counted = counted;
+                group.links = fused_links;
                 group.absorbed = absorbed;
                 group.node.inputs = inputs;
                 group.node.params = params;
@@ -725,12 +733,15 @@ impl Evaluator {
             node.inputs = previous.node.inputs;
             let mut counted = previous.counted;
             counted.extend(group.counted);
+            let mut links = previous.links;
+            links.extend(group.links);
             out.push(Group {
                 node,
                 version: group.version,
                 parts,
                 absorbed,
                 counted,
+                links,
                 repeat: previous.repeat + 1,
                 chain: Some((input, output)),
                 fused: None,

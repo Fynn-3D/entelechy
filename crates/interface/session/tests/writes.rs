@@ -253,3 +253,37 @@ output kept <- next.result to \"saves/w.field\";
     assert_eq!(saved(&file)[0], 7, "the file was read back");
     assert_eq!(saved(&file)[200], 199);
 }
+
+/// The input's fallback node read on a second port of the same consumer:
+/// while the file is absent both ports read the node, once it is back
+/// only one does, and the consumer then runs with the port the file feeds.
+#[test]
+fn a_consumer_reading_the_fallback_twice_runs_on_once_the_file_is_back() {
+    let dir = scratch(
+        "fallback-twice",
+        "
+use \"k.ent\";
+input saved: Rows<Int> = \"saves/n.field\" else start.result;
+node start: t.start@1 { domain = 1; }
+node both: t.both@1 { last <- saved; first <- start.result; }
+output kept <- both.result to \"saves/n.field\";
+",
+    );
+    std::fs::write(
+        dir.join("k.ent"),
+        format!(
+            "{KERNELS}kernel t.both@1 {{ requires {{ field.read; field.write; }} input last: Rows<Int>; input first: Rows<Int>; output result: Rows<Int>; compute {{ return sample(last) + sample(first); }} }}"
+        ),
+    )
+    .unwrap();
+    let file = dir.join("saves/n.field");
+    let mut session = open(&dir);
+    session.allow_writes(&dir.join("saves")).unwrap();
+    let context = Context::default();
+    session.evaluate(&context).unwrap();
+    assert_eq!(saved(&file), [10]);
+    let events = session.sync();
+    assert_eq!(wrote(&events), 1, "{events:?}");
+    session.evaluate(&context).unwrap();
+    assert_eq!(saved(&file), [15], "the file was read back");
+}

@@ -342,7 +342,12 @@ struct Cached {
 struct Members {
     parts: Vec<(NodeId, Generation)>,
     counted: Vec<NodeId>,
+    links: Vec<Link>,
 }
+
+/// One fusion in a group: the producer inlined, and the pairs of the
+/// consumer's input it fed and the producer's output that fed it.
+type Link = (NodeId, Vec<(u32, u32)>);
 
 /// A fused version kept while its constituents are unchanged.
 struct Fused {
@@ -744,6 +749,8 @@ struct Group {
     /// The producers no longer stored for it, whose count or size it reads
     /// from params instead.
     counted: Vec<NodeId>,
+    /// Each producer inlined and the ports it fed, in the order fused.
+    links: Vec<Link>,
     /// How many times the Kernel runs, each feeding `chain` from the one
     /// before: 1, or N for `times = N` over the node's own output.
     repeat: u32,
@@ -775,6 +782,7 @@ impl Group {
         Members {
             parts: self.parts.clone(),
             counted: self.counted.clone(),
+            links: self.links.clone(),
         }
     }
 }
