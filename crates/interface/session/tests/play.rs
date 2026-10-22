@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use entelechy_session::Session;
-use entelechy_session::play::{Frame, Placement, Play, View};
+use entelechy_session::play::{Frame, Placement, Play, STEP, View};
 
 const KERNELS: &str = "
 kernel t.zero@1 { requires { field.write; } output result: Rows<Int>; compute { return 0; } }
@@ -361,5 +361,64 @@ kernel t.blank@1 { requires { field.write; } output result: Image; compute { ret
     assert_eq!(read(&mut session), [97, 20320, 0]);
     shown(&mut play, &mut session);
     assert_eq!(read(&mut session), [0, 0, 0]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The host's clock for the pause test: what it reads is set by the test,
+/// in thousandths of a second.
+static NOW: AtomicU64 = AtomicU64::new(0);
+
+fn set_now(seconds: f64) {
+    NOW.store((seconds * 1000.0).round() as u64, Ordering::Relaxed);
+}
+
+fn now() -> f64 {
+    NOW.load(Ordering::Relaxed) as f64 / 1000.0
+}
+
+/// F8 holds the scene's time still and lets it run on from there; F9
+/// and F7 step it a frame on and back, never before the start, pausing
+/// first; those keys are the Player's, not the scene's; frames go on while
+/// it is held.
+#[test]
+fn f8_holds_the_time_and_f9_and_f7_step_it() {
+    let dir = scratch("pause");
+    let mut session = open(&dir);
+    set_now(10.0);
+    let mut play = Play::new(now);
+    set_now(12.5);
+    assert!((play.time() - 2.5).abs() < 1e-9);
+
+    play.key(&mut session, "F8", true);
+    play.key(&mut session, "F8", false);
+    assert!(play.paused());
+    set_now(20.0);
+    assert!((play.time() - 2.5).abs() < 1e-9, "the time is held");
+    shown(&mut play, &mut session);
+    shown(&mut play, &mut session);
+    assert!(
+        (play.context(VIEW).time - 2.5).abs() < 1e-9,
+        "frames go on under the held time"
+    );
+
+    play.key(&mut session, "F9", true);
+    assert!((play.time() - (2.5 + STEP)).abs() < 1e-9);
+    play.key(&mut session, "F7", true);
+    play.key(&mut session, "F7", true);
+    assert!((play.time() - (2.5 - STEP)).abs() < 1e-9);
+
+    play.key(&mut session, "F8", true);
+    assert!(!play.paused());
+    set_now(21.0);
+    assert!(
+        (play.time() - (2.5 - STEP + 1.0)).abs() < 1e-9,
+        "it runs on from where it was held"
+    );
+
+    // A step from running pauses there first; a step back stops at 0.
+    play.step(1);
+    assert!(play.paused());
+    play.step(-1_000_000);
+    assert_eq!(play.time(), 0.0);
     let _ = std::fs::remove_dir_all(&dir);
 }

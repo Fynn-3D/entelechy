@@ -44,6 +44,10 @@ usage:
       instead of the output's size times --scale. F5 resets state;
       F6 cycles the preview through the graph's nodes and back to the output;
       F10 shows a line of frame data over the picture, naming the port shown.
+      F8 holds the scene's time still or lets it run on; F9 steps it a
+      frame (1/60 s) on, F7 a frame back. Frames go on while it is held,
+      so the scene still takes the keys and pointer: what it draws from
+      its time stands still.
       Tab, Escape and every other key are the scene's.
       --show-while-building opens the window once what state and kept
       outputs read is built, what only shows drawn by the processor until
@@ -290,6 +294,22 @@ impl entelechy_protocol::Served for Player {
     /// measured, each of its nodes waits for the device.
     fn own(&mut self, incoming: &entelechy_protocol::Incoming) -> Option<(String, bool)> {
         let (id, request) = incoming.parsed.as_ref().ok()?;
+        // The window's clock: held, let run, stepped.
+        if request.get("op").and_then(Json::as_str) == Some("pause") {
+            if let Err(error) = entelechy_protocol::ops::check(request) {
+                return Some((entelechy_protocol::envelope(id, Err(error)), false));
+            }
+            if let Some(paused) = request.get("paused").and_then(Json::as_bool) {
+                self.play.pause(paused);
+            }
+            if let Some(step) = request.get("step").and_then(Json::as_i64) {
+                self.play.step(step.clamp(-100_000, 100_000) as i32);
+            }
+            self.say();
+            let answer =
+                serde_json::json!({ "paused": self.play.paused(), "time": self.play.time() });
+            return Some((entelechy_protocol::envelope(id, Ok(answer)), false));
+        }
         if request.get("op").and_then(Json::as_str) != Some("evaluate") {
             return None;
         }

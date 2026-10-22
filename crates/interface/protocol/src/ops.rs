@@ -576,6 +576,23 @@ pub fn operations() -> Vec<Operation> {
             "revision, frame, report",
         ),
         op(
+            "pause",
+            "Holds a window's scene time still, lets it run, or steps it a frame (F8, F9 and F7 in the window).",
+            vec![
+                may(
+                    "paused",
+                    Ty::Bool,
+                    "hold the time still (true) or let it run (false); as it is when not given",
+                ),
+                may(
+                    "step",
+                    Ty::Int,
+                    "frames of 1/60 s to move the held time, back when below zero; pauses first",
+                ),
+            ],
+            "paused, time (the scene's, in seconds); refused where the caller gives the time (`serve`: `evaluate`'s `time`)",
+        ),
+        op(
             "reset",
             "Forgets committed state; `<~` readers start from their initial sources.",
             vec![
@@ -645,7 +662,7 @@ pub fn names() -> Vec<&'static str> {
 /// Refuses a request that carries a field its operation does not take, or
 /// lacks one it needs, naming the fields it takes. An unknown operation is
 /// left to [`crate::handle`].
-pub(crate) fn check(request: &Json) -> Result<(), Json> {
+pub fn check(request: &Json) -> Result<(), Json> {
     let Some(object) = request.as_object() else {
         return Err(failure("a request is a JSON object"));
     };

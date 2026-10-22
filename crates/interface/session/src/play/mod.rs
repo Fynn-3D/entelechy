@@ -1,8 +1,10 @@
 //! The Player's frame, device-free. Every interface that plays a scene
 //! hands its keys, pointer, wheel and pads here, asks for a frame, and
 //! shows the picture and plays the sound it names. This module owns the
-//! meaning of F5, Tab and F10, the pad mapping, the picture and sound
-//! choice, replay driving and the frame-data line.
+//! meaning of F5, Tab and F10, of F7, F8 and F9 (the scene's clock held
+//! still and stepped a frame at a time), the pad
+//! mapping, the picture and sound choice, replay driving and the
+//! frame-data line.
 
 pub mod hud;
 pub mod pad;
@@ -213,6 +215,9 @@ pub struct Play {
     /// The host's clock, in seconds.
     clock: fn() -> f64,
     began: f64,
+    /// The scene's time held still at this, while paused; frames go on
+    /// under it, so the scene still takes the person's input.
+    held: Option<f64>,
     input: InputState,
     pad: Pad,
     /// Presses since the last frame, and releases a frame has not seen
@@ -262,12 +267,17 @@ const PAD_SETTLE: f64 = 0.04;
 /// input files are found within it, and frames between do not stat them.
 const SYNC_EVERY: f64 = 0.25;
 
+/// How far one step moves the scene's held time, in seconds: a frame at
+/// sixty a second.
+pub const STEP: f64 = 1.0 / 60.0;
+
 impl Play {
     /// A play timed by `clock`, the host's clock in seconds.
     pub fn new(clock: fn() -> f64) -> Self {
         Self {
             clock,
             began: clock(),
+            held: None,
             input: InputState::default(),
             pad: Pad::default(),
             pressed: Vec::new(),
@@ -307,9 +317,43 @@ impl Play {
         self.replaying.is_some()
     }
 
-    /// Seconds since the play began.
+    /// The scene's time: seconds since the play began, less the time it
+    /// was paused; while paused, the time it is held at.
     pub fn time(&self) -> f64 {
-        (self.clock)() - self.began
+        self.held.unwrap_or_else(|| (self.clock)() - self.began)
+    }
+
+    /// Whether the scene's time is held still.
+    pub fn paused(&self) -> bool {
+        self.held.is_some()
+    }
+
+    /// Holds the scene's time still, or lets it run on from where it was
+    /// held. Frames go on while it is held: what the scene draws from its
+    /// time stands still, and it still takes the person's input; a scene
+    /// that steps every frame without reading its time steps on.
+    pub fn pause(&mut self, paused: bool) {
+        match (paused, self.held) {
+            (true, None) => {
+                let at = self.time();
+                self.held = Some(at);
+                self.said.push(format!("paused at {at:.3} s"));
+            }
+            (false, Some(at)) => {
+                self.began = (self.clock)() - at;
+                self.held = None;
+                self.said.push(format!("playing on from {at:.3} s"));
+            }
+            _ => {}
+        }
+    }
+
+    /// Moves the held time `frames` steps of [`STEP`] (back when below
+    /// zero, never before the start), pausing first if it was running.
+    pub fn step(&mut self, frames: i32) {
+        let at = (self.time() + f64::from(frames) * STEP).max(0.0);
+        self.held = Some(at);
+        self.said.push(format!("paused at {at:.3} s"));
     }
 
     /// The context of the person's frame on `view`.
@@ -325,9 +369,24 @@ impl Play {
     }
 
     /// A key by name (`a`, `ArrowLeft`, `F5`). F5 resets state, F6
-    /// moves the preview, F10 toggles the frame-data line; every other
-    /// key goes to the scene, Tab and Escape among them.
+    /// moves the preview, F10 toggles the frame-data line; F8 holds the
+    /// scene's time still or lets it run, F9 steps it a frame on and F7 a
+    /// frame back (while a replay plays, its inputs keep the time). Every
+    /// other key goes to the scene, Tab and Escape among them.
     pub fn key(&mut self, session: &mut Session, name: &str, down: bool) {
+        match name {
+            "F7" | "F8" | "F9" => {
+                if down && self.replaying.is_none() {
+                    match name {
+                        "F8" => self.pause(!self.paused()),
+                        "F9" => self.step(1),
+                        _ => self.step(-1),
+                    }
+                }
+                return;
+            }
+            _ => {}
+        }
         match name {
             "F5" => {
                 if down {
@@ -881,7 +940,11 @@ impl Play {
                 }
             ),
             format!("{} | downloads {:>5}{sound}", self.path, self.downloads),
-            format!("t {:>8.1} s", context.time),
+            format!(
+                "t {:>8.1} s{}",
+                context.time,
+                if self.paused() { " paused" } else { "" }
+            ),
         ];
         // As many groups to a line as the window has room for.
         let scale = context.scale.round().max(1.0) as u32;

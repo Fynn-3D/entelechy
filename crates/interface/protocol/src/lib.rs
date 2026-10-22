@@ -112,6 +112,11 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         "param" => create::param(session, &request),
         "evaluate" => run::evaluate(session, &request),
         "reset" => run::reset(session, &request),
+        // A window's clock is its own (the Player answers this); a serve's
+        // is its caller's.
+        "pause" => Err(wire::failure(
+            "`pause` holds a window's clock, and here the caller gives the time: `evaluate` with the same `time` holds it, a later one steps it".to_owned(),
+        )),
         "read" => fields::read(session, &request),
         "snapshot" => fields::snapshot(session, &request),
         "restore" => fields::restore(session, &request),

@@ -357,7 +357,11 @@ Escape; its sticks, triggers and buttons are `stick()` and `button()`,
 and `pads()` is how many are connected.
 
 Keys: F6 cycles the preview through the nodes and back to the output;
-F5 resets Graph state; F10 shows the frame's data, its groups laid left
+F5 resets Graph state; F8 holds the scene's time still or lets it run on
+from there, and F9 or F7 steps it a frame (1/60 s) on or back (frames go
+on meanwhile, so the scene still
+takes the keys and pointer, and what it draws from its time stands still;
+the protocol's `pause` does the same for an agent); F10 shows the frame's data, its groups laid left
 to right as the window has room, each number in a fixed width, made again
 four times a second and never narrowing: `frame` (its
 interval and rate; `cpu`, the processor's work on a frame, its waits left
