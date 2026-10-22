@@ -100,7 +100,7 @@ Sound and music.
 
 | Package | Holds |
 | --- | --- |
-| [`audio`](audio.entpkg/README.md) | Clocks, cues and instruments for blocks of samples |
+| [`audio`](audio.entpkg/README.md) | Clocks, cues, instruments, filters and delay lines for blocks of samples |
 | [`music`](music.entpkg/README.md) | Music made from a mood, a band and a seed |
 | [`sound`](sound.entpkg/README.md) | Event sounds and the sounds of effects |
 

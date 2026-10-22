@@ -1,0 +1,34 @@
+// The filters, measured: a one-pole's coefficient, and a tenth of a
+// second through each biquad, read at its end. A low-pass passes a steady
+// level and a high-pass blocks it; at the corner a band-pass passes a
+// tone and a notch takes it out.
+use "../kernels/";
+
+node filters: kernel {
+    requires { field.write; }
+    output result: Rows<Float>;
+    domain = 5;
+    compute {
+        let i = element();
+        if i == 0 { return one_pole_coefficient(1000.0, 48000.0); }
+        let corner = 1000.0;
+        let f = match i {
+            1 => biquad_low_pass(corner, 0.7071, 48000.0),
+            2 => biquad_high_pass(corner, 0.7071, 48000.0),
+            3 => biquad_band_pass(corner, 2.0, 48000.0),
+            _ => biquad_notch(corner, 2.0, 48000.0),
+        };
+        // A steady 1 for the first two, the corner's tone for the others:
+        // at the corner a band-pass gives the tone back as it came, so
+        // what it gives less what went in is nothing.
+        let n = 4800;
+        let end = loop n with s = biquad_quiet() {
+            let x = if i < 3 { 1.0 } else { tone(corner, float(index()) / 48000.0) };
+            biquad_step(f, s, x)
+        };
+        let last = tone(corner, float(n - 1) / 48000.0);
+        return if i == 3 { end.y1 - last } else { end.y1 };
+    }
+}
+
+output result <- filters.result;

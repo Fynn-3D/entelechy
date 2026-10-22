@@ -1,0 +1,11 @@
+scene filters.esn
+
+# The one-pole's coefficient for a 1 kHz corner at 48 kHz; a steady level
+# through the low-pass and none through the high-pass; the corner's tone
+# through the band-pass unchanged and through the notch gone.
+frame 0.0
+expect filters.result[0] = 0.1227 0.001
+expect filters.result[1] = 1 0.001
+expect filters.result[2] = 0 0.001
+expect filters.result[3] = 0 0.001
+expect filters.result[4] = 0 0.001

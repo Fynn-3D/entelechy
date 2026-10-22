@@ -1,0 +1,13 @@
+// Delay lines, an echo and a plucked string, sixteen samples of each.
+use "lines.ent";
+
+node block: Rows<Int> { domain = 16; }
+node quiet: Rows<Float> { domain = 16; }
+node heads: Rows<Int> { domain = 1; }
+node lines: lines.run@1 {
+    block <- block.result;
+    line <~ lines.line from quiet.result;
+    head <~ lines.head from heads.result;
+}
+
+output result <- lines.result;

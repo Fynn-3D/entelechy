@@ -22,12 +22,12 @@ spectrum.result ─┴─ side ── (the picture)
 
 A synthesizer as rows:
 
-- `audio.voice` produces a block of 800 frames as `Rows<Voice>`,
+- `synth.voice` produces a block of 800 frames as `Rows<Voice>`,
   continuing the phase through the Graph's `<~` state.
-- `audio.filter` is a one-pole low-pass written as a `scan`, its memory
+- `synth.filter` is the audio package's one-pole low-pass in a `scan`, its memory
   carried across blocks through `<~` as the phase is.
-- `audio.mix` pans the result into `Rows<Vec2>`.
-- `audio.scope` draws the block.
+- `synth.mix` pans the result into `Rows<Vec2>`.
+- `synth.scope` draws the block.
 
 Hold the pointer to bend the pitch with x and pan with y.
 

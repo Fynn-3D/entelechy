@@ -1,0 +1,47 @@
+// Delay lines in a memory carried from frame to frame: a line is `length`
+// samples of a `Rows<Float>` from `base` on, written at a head that moves
+// on one sample a step, so what was written `length` steps ago is what the
+// head reads. Many lines share one memory end to end, each with its own
+// base. The functions write, so they run in a scan of a Kernel that holds
+// the memory.
+use "random.entpkg";
+
+/// What the line held `back` samples before the head, 1 being the last
+/// sample written.
+fn delay_tap(line: Rows<Float>, base: Int, length: Int, head: Int, back: Int) -> Float {
+    return at(line, base + ((head - back) % length + length) % length);
+}
+
+/// Writes `x` at the head; yields the head one sample on.
+fn delay_push(line: Rows<Float>, base: Int, length: Int, head: Int, x: Float) -> Int {
+    let _ = put(line, base + head, x);
+    return (head + 1) % length;
+}
+
+/// A feedback echo: what the line gives back `length` samples late, after
+/// `x` and that much of the echo have gone in at the head. The head moves
+/// on with `delay_push`'s rule, `(head + 1) % length`.
+fn delay_echo(line: Rows<Float>, base: Int, length: Int, head: Int, x: Float, feedback: Float) -> Float {
+    let late = at(line, base + head);
+    let _ = put(line, base + head, x + late * feedback);
+    return late;
+}
+
+/// Fills a line with a burst of noise from seed `seed`, which is what
+/// plucks a string.
+fn string_pluck(line: Rows<Float>, base: Int, length: Int, seed: Int) -> Int {
+    return loop length with k = 0 {
+        let _ = put(line, base + index(), hash1(index(), seed) * 2.0 - 1.0);
+        k + 1
+    };
+}
+
+/// A plucked string, one sample on: what the head holds comes out, and
+/// its average with the next one goes back in `decay` quieter, so the high
+/// partials fade first. The head moves on as `delay_push`'s does.
+fn string_step(line: Rows<Float>, base: Int, length: Int, head: Int, decay: Float) -> Float {
+    let here = at(line, base + head);
+    let next = at(line, base + (head + 1) % length);
+    let _ = put(line, base + head, (here + next) * 0.5 * decay);
+    return here;
+}

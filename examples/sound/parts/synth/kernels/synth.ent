@@ -2,11 +2,13 @@
 // Graph state so the phase never breaks, mixed to stereo, and drawn as an
 // oscilloscope. The sound card claims the stereo rows; the window claims
 // the scope image. Nothing here knows a device exists.
+use "../../../../../packages/audio.entpkg";
+
 struct Voice { sample: Float; phase: Float; }
 type Block = Rows<Voice>;
 type Stereo = Rows<Vec2>;
 
-kernel audio.silence@1 {
+kernel synth.silence@1 {
     requires { field.write; }
     output result: Block;
     compute { return Voice { sample: 0.0, phase: 0.0 }; }
@@ -14,7 +16,7 @@ kernel audio.silence@1 {
 
 /// Continues the phase from the last frame of the previous block, at the
 /// sound device's rate. Holding the pointer bends the pitch with x.
-kernel audio.voice@1 {
+kernel synth.voice@1 {
     requires { field.read; field.write; input.read; time.read; }
     input previous: Block;
     param frequency: Float = 220.0;
@@ -26,8 +28,7 @@ kernel audio.voice@1 {
         let bend = if pointer_down() { pow(2.0, pointer().x / 320.0 * 2.0) } else { 1.0 };
         // The device's clock is context; without a device (a replay, a
         // render to file) the block is laid out at 48 kHz.
-        let hz = if rate() > 0.0 { rate() } else { 48000.0 };
-        let phase = fract(last + float(element() + 1) * frequency * bend / hz);
+        let phase = fract(last + float(element() + 1) * frequency * bend / hz());
         let tone = sin(phase * 6.2831853) + 0.3 * sin(phase * 12.566371);
         return Voice { sample: tone * gain, phase: phase };
     }
@@ -37,7 +38,7 @@ kernel audio.voice@1 {
 /// `scan` walks the block in order; the carried value starts from the last
 /// output of the previous block, so the filter's memory crosses blocks as
 /// the oscillator's phase does.
-kernel audio.filter@1 {
+kernel synth.filter@1 {
     requires { field.read; field.write; }
     input voice: Block;
     input previous: Block;
@@ -46,12 +47,12 @@ kernel audio.filter@1 {
 
     scan with y = at(previous, count(previous) - 1) {
         let x = sample(voice);
-        return Voice { sample: y.sample + (x.sample - y.sample) * cutoff, phase: x.phase };
+        return Voice { sample: one_pole_low(y.sample, x.sample, cutoff), phase: x.phase };
     }
 }
 
 /// Pans the voice into two channels; the pointer's y pans while held.
-kernel audio.mix@1 {
+kernel synth.mix@1 {
     requires { field.read; field.write; input.read; }
     input voice: Block;
     param pan: Float = 0.0;
@@ -65,7 +66,7 @@ kernel audio.mix@1 {
 }
 
 /// The block as a trace: each column shows one frame of the block.
-kernel audio.scope@1 {
+kernel synth.scope@1 {
     requires { field.read; field.write; }
     input block: Stereo;
     param amplitude: Float = 90.0;

@@ -1,0 +1,66 @@
+// Filters, sample by sample: a scan carries the state from one sample to
+// the next, and from the last sample of one block to the first of the
+// next when the block before is fed back.
+use "clock.ent";
+
+/// The one-pole coefficient that puts a filter's corner at `corner` Hz,
+/// at `rate` samples a second.
+fn one_pole_coefficient(corner: Float, rate: Float) -> Float {
+    return 1.0 - exp(-tau() * corner / rate);
+}
+
+/// A one-pole low-pass: the last output `y` moved toward `x` by `a`, 0 to 1.
+fn one_pole_low(y: Float, x: Float, a: Float) -> Float { return y + (x - y) * a; }
+
+/// A biquad's coefficients, normalized so the output's own is 1.
+struct Biquad { b0: Float; b1: Float; b2: Float; a1: Float; a2: Float; }
+
+/// A biquad's memory: the last two inputs and outputs. `y1` is its output.
+struct BiquadState { x1: Float; x2: Float; y1: Float; y2: Float; }
+
+fn biquad_quiet() -> BiquadState { return BiquadState { x1: 0.0, x2: 0.0, y1: 0.0, y2: 0.0 }; }
+
+// The angle of the corner and the bandwidth term every response shares.
+fn biquad_corner(corner: Float, rate: Float) -> Float { return tau() * corner / rate; }
+fn biquad_alpha(w: Float, q: Float) -> Float { return sin(w) / (2.0 * q); }
+
+fn biquad_scaled(b0: Float, b1: Float, b2: Float, a0: Float, a1: Float, a2: Float) -> Biquad {
+    return Biquad { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0 };
+}
+
+/// Passes what is below `corner` Hz; `q` 0.7071 is flat to the corner.
+fn biquad_low_pass(corner: Float, q: Float, rate: Float) -> Biquad {
+    let w = biquad_corner(corner, rate);
+    let a = biquad_alpha(w, q);
+    let c = cos(w);
+    return biquad_scaled((1.0 - c) * 0.5, 1.0 - c, (1.0 - c) * 0.5, 1.0 + a, -2.0 * c, 1.0 - a);
+}
+
+/// Passes what is above `corner` Hz.
+fn biquad_high_pass(corner: Float, q: Float, rate: Float) -> Biquad {
+    let w = biquad_corner(corner, rate);
+    let a = biquad_alpha(w, q);
+    let c = cos(w);
+    return biquad_scaled((1.0 + c) * 0.5, -(1.0 + c), (1.0 + c) * 0.5, 1.0 + a, -2.0 * c, 1.0 - a);
+}
+
+/// Passes a band around `corner` Hz, at full gain at its middle.
+fn biquad_band_pass(corner: Float, q: Float, rate: Float) -> Biquad {
+    let w = biquad_corner(corner, rate);
+    let a = biquad_alpha(w, q);
+    return biquad_scaled(a, 0.0, -a, 1.0 + a, -2.0 * cos(w), 1.0 - a);
+}
+
+/// Takes out a band around `corner` Hz.
+fn biquad_notch(corner: Float, q: Float, rate: Float) -> Biquad {
+    let w = biquad_corner(corner, rate);
+    let a = biquad_alpha(w, q);
+    let c = cos(w);
+    return biquad_scaled(1.0, -2.0 * c, 1.0, 1.0 + a, -2.0 * c, 1.0 - a);
+}
+
+/// One sample through the filter: the memory after `x`, its output in `y1`.
+fn biquad_step(f: Biquad, s: BiquadState, x: Float) -> BiquadState {
+    let y = f.b0 * x + f.b1 * s.x1 + f.b2 * s.x2 - f.a1 * s.y1 - f.a2 * s.y2;
+    return BiquadState { x1: x, x2: s.x1, y1: y, y2: s.y1 };
+}
