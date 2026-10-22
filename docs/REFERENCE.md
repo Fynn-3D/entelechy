@@ -193,6 +193,7 @@ Kernels (`.ent`) compute; scenes (`.esn`) compose them into a running world. Who
 - **require**: `require cells: columns * rows <= 1 << bits;` What the scene's parameters must hold to run: two counts over its params, numbers, `window()` and `scale()`, compared. It is checked as the scene loads (`check` and `compose` refuse one the given params break) and before every evaluation, which stops before anything runs; each says what the sides came to. A placed graph's come with it, under its node's name.
 - **use**: `use "kernels/";   use "name.entpkg";` The documents whose Kernels and declarations this one brings in: a file, a directory, or a package; what those use in turn is theirs.
 - **package**: `package name@1 { language = 1; ir = 1; }` The manifest of a package directory: what it is called and the least language and IR it needs.
+- **qualified**: `let n = hash_noise::fbm2(p);   let m = ui_panel::Mark { b: 1 };   input marks: Rows<ui_panel::Mark>;` A name a used package declares, written with the package's name before it: the one declaration of that name in that package. Two packages a document uses may declare one name; the document names each by its package. A name declared or bound here is a plain word.
 - **vec2**: `vec2(w, h)` A grid's extent.
 - **vec3**: `vec3(w, h, d)` A volume's extent.
 - **count**: `count(port)` How many elements an input port of this node holds.
