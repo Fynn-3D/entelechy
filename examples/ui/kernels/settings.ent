@@ -122,7 +122,7 @@ fn hero(t: Theme, letters: Grid<Float>, words: Rows<Int>, now: Float, q: Vec2) -
     if !near_rect(r, q, 6.0) { return clear(); }
     let w = text_width();
     let base = titled_panel(t, letters, words, Word.Hero, w, r, 1.0, q);
-    if !holds(r, q) { return base; }
+    if !contains(r, q) { return base; }
     let inner = inset(r, 8.0);
     let cycle = fract(now / 4.0) * 4.0;
     let hit = cycle >= 2.0;
@@ -139,7 +139,7 @@ fn hero(t: Theme, letters: Grid<Float>, words: Rows<Int>, now: Float, q: Vec2) -
     let first = int(floor(now)) % (journal_lines() - 2);
     let lines = Rect { lo: vec2(inner.lo.x, 114.0), hi: vec2(inner.hi.x - 6.0, 150.0) };
     let k = int(floor((q.y - lines.lo.y) / 12.0));
-    let line = if holds(lines, q) && k < 3 { label(letters, words, Word.Entries + first + k, w, list_row(lines, k, 12.0, 0.0), vec2(0.0, 0.5), t.scale, t.ink, q) } else { clear() };
+    let line = if contains(lines, q) && k < 3 { label(letters, words, Word.Entries + first + k, w, list_row(lines, k, 12.0, 0.0), vec2(0.0, 0.5), t.scale, t.ink, q) } else { clear() };
     let bar = scrollbar(t, Rect { lo: vec2(inner.hi.x - 3.0, 114.0), hi: vec2(inner.hi.x, 150.0) }, first, 3, journal_lines(), q);
     return over(over(over(over(over(over(base, health), magick), gold), journal_head), line), bar);
 }

@@ -64,7 +64,7 @@ fn panel(t: Theme, r: Rect, q: Vec2) -> Vec4 {
 /// rule under it.
 fn titled_panel(t: Theme, letters: Grid<Float>, cells: Rows<Int>, title: Int, width: Int, r: Rect, scale: Float, q: Vec2) -> Vec4 {
     let base = panel(t, r, q);
-    if !holds(r, q) { return base; }
+    if !contains(r, q) { return base; }
     let s = t.scale * scale;
     let band = top_of(inset(r, 8.0), 8.0 * s + 6.0);
     let name = label(letters, cells, title, width, band, vec2(0.0, 0.5), s, t.accent, q);
@@ -195,7 +195,7 @@ fn switch_choice(t: Theme, letters: Grid<Float>, cells: Rows<Int>, name: Int, wi
 
 /// A scroll bar down `r`: `shown` rows of `total` from `first`.
 fn scrollbar(t: Theme, r: Rect, first: Int, shown: Int, total: Int, q: Vec2) -> Vec4 {
-    if !holds(r, q) || total <= shown { return clear(); }
+    if !contains(r, q) || total <= shown { return clear(); }
     let h = r.hi.y - r.lo.y;
     let n = float(max(total, 1));
     let thumb = Rect { lo: vec2(r.lo.x, r.lo.y + h * float(first) / n), hi: vec2(r.hi.x, r.lo.y + h * float(min(first + shown, total)) / n) };
@@ -206,7 +206,7 @@ fn scrollbar(t: Theme, r: Rect, first: Int, shown: Int, total: Int, q: Vec2) -> 
 /// A line across `r`'s middle.
 fn rule(t: Theme, r: Rect, q: Vec2) -> Vec4 {
     let y = floor(rect_middle(r).y);
-    return if holds(r, q) && floor(q.y) == y { faded(t.rim, 0.5) } else { clear() };
+    return if contains(r, q) && floor(q.y) == y { faded(t.rim, 0.5) } else { clear() };
 }
 
 // ---------------------------------------------------------------- prompts

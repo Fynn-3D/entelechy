@@ -2,12 +2,15 @@ scene clock.esn
 
 # 48000 samples a second, no device. The first block starts a first
 # block's length (1600) behind the time; the counting clock has played
-# nothing yet; no cue sounds.
+# nothing yet; no cue sounds; a cue set going at full gain.
 frame 0.0167
 expect clock.result[0].n = 0
 expect block.result[0] = 1600
 expect counted.result[0].n = 0
 expect cues.result[0].kind = 0
+expect set.result[0].kind = 18
+expect set.result[0].param = 3
+expect set.result[0].gain = 1 0.0001
 
 # The instruments at a moment, the same on every backend.
 expect voices.result[0] = 0.2143 0.3732 -0.3646 0.3922 0.001

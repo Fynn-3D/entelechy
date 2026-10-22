@@ -17,8 +17,8 @@ fn rect_at(origin: Vec2, size: Vec2) -> Rect { return Rect { lo: origin, hi: ori
 fn rect_size(r: Rect) -> Vec2 { return r.hi - r.lo; }
 fn rect_middle(r: Rect) -> Vec2 { return (r.lo + r.hi) * 0.5; }
 
-/// Whether `q` is inside.
-fn holds(r: Rect, q: Vec2) -> Bool { return q.x >= r.lo.x && q.y >= r.lo.y && q.x < r.hi.x && q.y < r.hi.y; }
+/// Whether the rectangle contains `q`: its low edges in, its high edges out.
+fn contains(r: Rect, q: Vec2) -> Bool { return q.x >= r.lo.x && q.y >= r.lo.y && q.x < r.hi.x && q.y < r.hi.y; }
 
 /// Whether `q` is within `by` of it: a widget's shadow or glow.
 fn near_rect(r: Rect, q: Vec2, by: Float) -> Bool {
@@ -73,7 +73,7 @@ fn list_row(r: Rect, k: Int, h: Float, gap: Float) -> Rect {
 /// Which of the list's rows `q` falls in, `h` high and `gap` apart from
 /// the top; -1 outside them and in a gap.
 fn list_row_at(r: Rect, q: Vec2, h: Float, gap: Float, n: Int) -> Int {
-    if !holds(r, q) { return -1; }
+    if !contains(r, q) { return -1; }
     let t = (q.y - r.lo.y) / (h + gap);
     let k = int(floor(t));
     return if k >= 0 && k < n && (t - float(k)) * (h + gap) < h { k } else { -1 };

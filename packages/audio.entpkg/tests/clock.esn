@@ -10,6 +10,12 @@ node paced: audio.paced@1 { previous <~ paced.result from paced0.result; domain 
 node clock: audio.paced_clock@1 { paced <- paced.result; domain = 1; }
 node block: audio.paced_size@1 { paced <- paced.result; domain = 1; }
 node cues: audio.cues_start@1 { domain = 8; }
+node set: kernel {
+    requires { field.write; }
+    output result: Cues;
+    domain = 1;
+    compute { return cue(18, 3, 4800l); }
+}
 node voices: kernel {
     requires { field.write; }
     output result: Rows<Vec4>;

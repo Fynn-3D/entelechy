@@ -11,4 +11,14 @@ node rows: kernel {
 node start: ui.navigation_start@1 { row = 0; domain = 1; }
 node nav: ui.navigate@1 { previous <~ nav.result from start.result; list <- rows.result; rows = 4; gap = 4.0; domain = 1; }
 
+node inside: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    domain = 3;
+    compute {
+        let r = Rect { lo: vec2(10.0, 10.0), hi: vec2(20.0, 20.0) };
+        return int(contains(r, [vec2(10.0, 10.0), vec2(20.0, 15.0), vec2(15.0, 15.0)][element()]));
+    }
+}
+
 output result <- nav.result;

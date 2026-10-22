@@ -6,6 +6,11 @@ window 120 100
 # lights it.
 frame 0.0
 expect nav.result[0].row = 0
+
+# A rectangle contains its low edges and not its high ones.
+expect inside.result[0] = 1
+expect inside.result[1] = 0
+expect inside.result[2] = 1
 key 40 down
 frame 0.1
 key 40 up
