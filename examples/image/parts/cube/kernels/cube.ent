@@ -1,13 +1,8 @@
 // A cube: a solid, ray-marched in its own space through the inverse of
 // its model matrix, with its edges drawn over it from a corner table and
-// an edge table projected by a model-view-projection matrix.
-fn rot_y(a: Float) -> Mat3 {
-    return mat3(vec3(cos(a), 0.0, -sin(a)), vec3(0.0, 1.0, 0.0), vec3(sin(a), 0.0, cos(a)));
-}
-
-fn rot_x(a: Float) -> Mat3 {
-    return mat3(vec3(1.0, 0.0, 0.0), vec3(0.0, cos(a), sin(a)), vec3(0.0, -sin(a), cos(a)));
-}
+// an edge table projected by a model-view-projection matrix; the box's distance, the
+// rotations and the edges' distance are the geometry package's.
+use "../../../../../packages/geometry.entpkg";
 
 // A rotation and a translation as one Mat4, by columns.
 fn placed(r: Mat3, t: Vec3) -> Mat4 {
@@ -23,17 +18,6 @@ struct Style { ground: Vec3; edge: Vec3; width: Float; }
 fn project(mvp: Mat4, p: Vec3, half: Vec2) -> Vec2 {
     let q = mvp * vec4(p, 1.0);
     return half + vec2(q.x / q.w, -q.y / q.w) * half.y;
-}
-
-fn segment(p: Vec2, a: Vec2, b: Vec2) -> Float {
-    let ab = b - a;
-    let t = saturate(dot(p - a, ab) / dot(ab, ab));
-    return length(p - (a + ab * t));
-}
-
-fn box(p: Vec3, b: Vec3) -> Float {
-    let q = abs(p) - b;
-    return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
 }
 
 kernel cube.draw@1 {
@@ -58,7 +42,7 @@ kernel cube.draw@1 {
         let c = coord() + 0.5;
         // The focal length is the lens's first entry.
         let f = lens[0].x;
-        let r = rot_y(time() * spin) * rot_x(tilt);
+        let r = rotate_y(time() * spin) * rotate_x(tilt);
         let model = placed(r, vec3(0.0, 0.0, -4.5));
         let mvp = lens * model;
 
@@ -71,16 +55,16 @@ kernel cube.draw@1 {
         let ro = (inv * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
         let rdo = (inv * vec4(rd, 0.0)).xyz;
         let side = vec3(1.0, 1.0, 1.0);
-        let march = loop 80 with s = 0.0 until box(ro + rdo * s, side) < 0.002 || s > 12.0 {
-            s + box(ro + rdo * s, side)
+        let march = loop 80 with s = 0.0 until sd_box(ro + rdo * s, side) < 0.002 || s > 12.0 {
+            s + sd_box(ro + rdo * s, side)
         };
         let hit = march < 12.0;
         let p = ro + rdo * march;
         let e = 0.003;
         let n = normalize(vec3(
-            box(p + vec3(e, 0.0, 0.0), side) - box(p - vec3(e, 0.0, 0.0), side),
-            box(p + vec3(0.0, e, 0.0), side) - box(p - vec3(0.0, e, 0.0), side),
-            box(p + vec3(0.0, 0.0, e), side) - box(p - vec3(0.0, 0.0, e), side)
+            sd_box(p + vec3(e, 0.0, 0.0), side) - sd_box(p - vec3(e, 0.0, 0.0), side),
+            sd_box(p + vec3(0.0, e, 0.0), side) - sd_box(p - vec3(0.0, e, 0.0), side),
+            sd_box(p + vec3(0.0, 0.0, e), side) - sd_box(p - vec3(0.0, 0.0, e), side)
         ));
         let world_n = r * n;
         let light = normalize(vec3(0.4, 0.8, 0.6));
@@ -98,7 +82,7 @@ kernel cube.draw@1 {
             let edge = edges[index()];
             let a = project(mvp, corners[edge.x], half);
             let b = project(mvp, corners[edge.y], half);
-            min(best, segment(c, a, b))
+            min(best, sd_segment(c, a, b))
         };
         let line = 1.0 - smoothstep(0.6 * style.width, 1.4 * style.width, nearest);
         let color = mix(base, style.edge, line * 0.9);

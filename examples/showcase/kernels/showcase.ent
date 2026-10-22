@@ -3,7 +3,10 @@
 // minimal toolbar. One row of state (the camera, the choices, the
 // pointer's last position) and one image. Drag to orbit; the bar at the
 // bottom cycles the color and the finish, toggles the turntable, and
-// resets the view; keys or a pad light the buttons they press.
+// resets the view; keys or a pad light the buttons they press. The
+// shapes and their blend are the geometry package's distances.
+use "../../../packages/geometry.entpkg";
+
 struct Show {
     yaw: Float; pitch: Float;
     dragging: Bool; px: Float; py: Float;   // pointer, last frame
@@ -84,29 +87,6 @@ kernel show.render@1 {
     output result: Image;
 
     // ---- geometry: a gamepad as distances, with a part id in y ----
-    fn box(p: Vec3, b: Vec3, r: Float) -> Float {
-        let q = abs(p) - b;
-        return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0) - r;
-    }
-
-    fn capsule(p: Vec3, a: Vec3, b: Vec3, r: Float) -> Float {
-        let pa = p - a;
-        let ba = b - a;
-        let h = saturate(dot(pa, ba) / dot(ba, ba));
-        return length(pa - ba * h) - r;
-    }
-
-    fn cylinder(p: Vec3, c: Vec3, r: Float, h: Float) -> Float {
-        let q = p - c;
-        let d = vec2(length(q.xz) - r, abs(q.y) - h);
-        return min(max(d.x, d.y), 0.0) + length(max(d, 0.0));
-    }
-
-    fn smin(a: Float, b: Float, k: Float) -> Float {
-        let h = saturate(0.5 + 0.5 * (b - a) / k);
-        return mix(b, a, h) - k * h * (1.0 - h);
-    }
-
     fn nearer(a: Vec2, b: Vec2) -> Vec2 {
         return if a.x < b.x { a } else { b };
     }
@@ -127,32 +107,32 @@ kernel show.render@1 {
     // steps creeping along the floor it started from.
     fn pad(p: Vec3) -> Vec2 {
         // Body: a rounded slab with two grips flowing out of it.
-        let body = box(p, vec3(0.78, 0.09, 0.32), 0.14);
-        let left_grip = capsule(p, vec3(-0.62, 0.0, 0.05), vec3(-0.86, -0.2, -0.78), 0.2);
-        let right_grip = capsule(p, vec3(0.62, 0.0, 0.05), vec3(0.86, -0.2, -0.78), 0.2);
-        let shell = smin(smin(body, left_grip, 0.16), right_grip, 0.16);
+        let body = sd_box(p, vec3(0.78, 0.09, 0.32)) - 0.14;
+        let left_grip = sd_capsule(p, vec3(-0.62, 0.0, 0.05), vec3(-0.86, -0.2, -0.78), 0.2);
+        let right_grip = sd_capsule(p, vec3(0.62, 0.0, 0.05), vec3(0.86, -0.2, -0.78), 0.2);
+        let shell = smooth_union(smooth_union(body, left_grip, 0.16), right_grip, 0.16);
         let top = 0.23;
         // Sticks: a ring, a stalk, a rubber cap.
         let ls = vec3(-0.5, top, 0.12);
         let rs = vec3(0.3, top, -0.28);
-        let ring = min(cylinder(p, ls, 0.17, 0.02), cylinder(p, rs, 0.17, 0.02));
-        let stalk = min(cylinder(p, ls + vec3(0.0, 0.1, 0.0), 0.06, 0.1), cylinder(p, rs + vec3(0.0, 0.1, 0.0), 0.06, 0.1));
+        let ring = min(sd_cylinder(p - ls, 0.17, 0.02), sd_cylinder(p - rs, 0.17, 0.02));
+        let stalk = min(sd_cylinder(p - ls - vec3(0.0, 0.1, 0.0), 0.06, 0.1), sd_cylinder(p - rs - vec3(0.0, 0.1, 0.0), 0.06, 0.1));
         let cap = min(length(p - ls - vec3(0.0, 0.24, 0.0)) - 0.13, length(p - rs - vec3(0.0, 0.24, 0.0)) - 0.13);
         // Face buttons in a diamond, pressed ones sunk.
         let fc = vec3(0.55, top, 0.14);
-        let a = cylinder(p - vec3(0.0, -depth(10), 0.0), fc + vec3(0.0, 0.0, -0.14), 0.07, 0.035);
-        let b = cylinder(p - vec3(0.0, -depth(11), 0.0), fc + vec3(0.14, 0.0, 0.0), 0.07, 0.035);
-        let x = cylinder(p - vec3(0.0, -depth(12), 0.0), fc + vec3(-0.14, 0.0, 0.0), 0.07, 0.035);
-        let y = cylinder(p - vec3(0.0, -depth(13), 0.0), fc + vec3(0.0, 0.0, 0.14), 0.07, 0.035);
+        let a = sd_cylinder(p - vec3(0.0, -depth(10), 0.0) - fc - vec3(0.0, 0.0, -0.14), 0.07, 0.035);
+        let b = sd_cylinder(p - vec3(0.0, -depth(11), 0.0) - fc - vec3(0.14, 0.0, 0.0), 0.07, 0.035);
+        let x = sd_cylinder(p - vec3(0.0, -depth(12), 0.0) - fc - vec3(-0.14, 0.0, 0.0), 0.07, 0.035);
+        let y = sd_cylinder(p - vec3(0.0, -depth(13), 0.0) - fc - vec3(0.0, 0.0, 0.14), 0.07, 0.035);
         // The pad: a cross, each arm sinking when held.
         let dc = vec3(-0.3, top, -0.3);
-        let arm_ns = box(p - dc - vec3(0.0, -max(depth(14), depth(15)), 0.0), vec3(0.055, 0.02, 0.19), 0.015);
-        let arm_ew = box(p - dc - vec3(0.0, -max(depth(16), depth(17)), 0.0), vec3(0.19, 0.02, 0.055), 0.015);
+        let arm_ns = sd_box(p - dc - vec3(0.0, -max(depth(14), depth(15)), 0.0), vec3(0.055, 0.02, 0.19)) - 0.015;
+        let arm_ew = sd_box(p - dc - vec3(0.0, -max(depth(16), depth(17)), 0.0), vec3(0.19, 0.02, 0.055)) - 0.015;
         // Start and select pills, and two bumpers on the far edge.
-        let start = capsule(p - vec3(0.0, -depth(18), 0.0), vec3(0.1, top, -0.04), vec3(0.16, top, -0.04), 0.03);
-        let select = capsule(p, vec3(-0.16, top, -0.04), vec3(-0.1, top, -0.04), 0.03);
+        let start = sd_capsule(p - vec3(0.0, -depth(18), 0.0), vec3(0.1, top, -0.04), vec3(0.16, top, -0.04), 0.03);
+        let select = sd_capsule(p, vec3(-0.16, top, -0.04), vec3(-0.1, top, -0.04), 0.03);
         // Shoulder bumpers on the far edge, standing a little proud of the shell.
-        let bumpers = min(box(p - vec3(-0.5, 0.17, -0.44), vec3(0.18, 0.03, 0.05), 0.03), box(p - vec3(0.5, 0.17, -0.44), vec3(0.18, 0.03, 0.05), 0.03));
+        let bumpers = min(sd_box(p - vec3(-0.5, 0.17, -0.44), vec3(0.18, 0.03, 0.05)) - 0.03, sd_box(p - vec3(0.5, 0.17, -0.44), vec3(0.18, 0.03, 0.05)) - 0.03);
         let d = nearer(vec2(shell, 1.0), vec2(ring, 2.0));
         let d2 = nearer(d, nearer(vec2(stalk, 3.0), vec2(cap, 3.0)));
         let d3 = nearer(d2, nearer(nearer(vec2(a, 10.0), vec2(b, 11.0)), nearer(vec2(x, 12.0), vec2(y, 13.0))));

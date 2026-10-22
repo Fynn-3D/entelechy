@@ -25,4 +25,4 @@ use "geometry.entpkg";
 `camera.replay`, `distances.replay`, `turns.replay`. Every Kernel of the
 package is reached by one of them.
 
-Used by the [animation](../../examples/animation/README.md), [culled](../../examples/culled/README.md), [mesh](../../examples/mesh/README.md), [surface](../../examples/surface/README.md), [voxel](../../examples/voxel/README.md) examples.
+Used by the [animation](../../examples/animation/README.md), [culled](../../examples/culled/README.md), [image](../../examples/image/README.md), [mesh](../../examples/mesh/README.md), [showcase](../../examples/showcase/README.md), [surface](../../examples/surface/README.md), [voxel](../../examples/voxel/README.md) examples.
