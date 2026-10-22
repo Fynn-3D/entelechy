@@ -60,6 +60,7 @@ pub fn parse_target(text: &str) -> Result<(String, String, u32, Vec<String>), St
 pub(crate) fn why_no_value(
     graph: Option<&Graph>,
     evaluator: &Evaluator,
+    failing: Option<&str>,
     node: &NodeId,
     port: &str,
 ) -> String {
@@ -99,9 +100,15 @@ pub(crate) fn why_no_value(
         Some(reader) => format!(
             "node `{node}` runs fused into `{reader}` and keeps no `{port}` of its own; pin it and evaluate again"
         ),
-        None => format!(
-            "node `{node}` has no `{port}` yet: it has not run since it was placed; evaluate"
-        ),
+        // A frame that fails keeps nothing: the failure is why.
+        None => match failing {
+            Some(failure) => format!(
+                "node `{node}` has no `{port}` yet: it has not run since it was placed, and the last evaluation failed: {failure}"
+            ),
+            None => format!(
+                "node `{node}` has no `{port}` yet: it has not run since it was placed; evaluate"
+            ),
+        },
     }
 }
 
@@ -122,7 +129,7 @@ pub(crate) fn save(
         .unwrap_or_else(|| (node.clone(), port.to_owned()));
     let (node, port) = (&node, port.as_str());
     let Some(handle) = evaluator.cached(node, port) else {
-        return Err(why_no_value(graph, evaluator, node, port));
+        return Err(why_no_value(graph, evaluator, None, node, port));
     };
     write(store, runtime, handle, path).map_err(|why| match why {
         Written::Unfit(what) => format!("`{node}.{port}` is {what}; save it as .field"),

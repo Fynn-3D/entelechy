@@ -574,7 +574,7 @@ impl Play {
         if !session.overlaps()
             && let Err(error) = session.set_overlap(true)
         {
-            self.failed(&error);
+            self.failed(&session.told(&error));
             return Frame::Failed;
         }
         // While a replay plays, it is the whole input.
@@ -660,7 +660,7 @@ impl Play {
                 }))
             }
             Err(error) => {
-                self.failed(&error);
+                self.failed(&session.told(&error));
                 Frame::Failed
             }
         }
@@ -673,7 +673,7 @@ impl Play {
         match session.confirm() {
             Ok(()) => true,
             Err(error) => {
-                self.failed(&error);
+                self.failed(&session.told(&error));
                 false
             }
         }
@@ -706,9 +706,9 @@ impl Play {
     /// Says a failed evaluation once, and keeps it as the status. The
     /// sound fetched behind the frame before is not heard: that frame is
     /// taken back with it.
-    fn failed(&mut self, error: &entelechy_graph::EvaluateError) {
+    fn failed(&mut self, told: &str) {
         self.sound_behind = None;
-        let message = format!("evaluation failed: {error}");
+        let message = format!("evaluation failed: {told}");
         if self.reported.failed(&message) {
             self.said.push(format!("{message}; last frame is kept"));
         }

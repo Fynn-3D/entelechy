@@ -72,6 +72,9 @@ pub struct Session {
     /// The context the last frame was evaluated under, which outputs let
     /// go cold are made again under when read ([`Session::warm`]).
     last_context: Context,
+    /// Why the last evaluation failed, until one succeeds: what a read of
+    /// a value it kept from being made is told.
+    failing: Option<String>,
     /// Whether what only shows is shown from the processor while the
     /// device's compiler builds it ([`Session::show_while_building`]).
     shown_while_building: bool,
@@ -175,6 +178,7 @@ impl Session {
             board: crate::clipboard::Board::default(),
             watched: crate::preparing::Watched::default(),
             last_context: Context::default(),
+            failing: None,
             shown_while_building: false,
             handed: BTreeSet::new(),
         }
@@ -1600,7 +1604,13 @@ impl Session {
     /// several, folded into its reader, or not run since it was placed.
     pub fn why_no_value(&self, node: &entelechy_graph::NodeId, port: &str) -> String {
         let (node, port) = self.producer(node, port);
-        observe::why_no_value(self.scene.graph(), &self.evaluator, &node, &port)
+        observe::why_no_value(
+            self.scene.graph(),
+            &self.evaluator,
+            self.failing.as_deref(),
+            &node,
+            &port,
+        )
     }
 
     /// Waits for every `async` node's run and takes it in; see
@@ -1709,9 +1719,12 @@ impl Session {
             Ok(report) => report,
             Err(error) => {
                 self.tally();
-                return Err(self.with_refusal(error));
+                let error = self.with_refusal(error);
+                self.failing = Some(self.told(&error));
+                return Err(error);
             }
         };
+        self.failing = None;
         self.history.ran();
         self.feed_fonts();
         self.feed_file_nodes();
@@ -1741,6 +1754,24 @@ impl Session {
         self.board
             .after(&self.scene.files().writes, report, &mut self.runtime);
         Ok(())
+    }
+
+    /// A failed evaluation as it is said: a node that ran others fused
+    /// into it names them, as the fault may be any of theirs.
+    pub fn told(&self, error: &EvaluateError) -> String {
+        let said = error.to_string();
+        let EvaluateError::Execution { node, .. } = error else {
+            return said;
+        };
+        let parts = self.evaluator.fused_parts(node);
+        if parts.is_empty() {
+            return said;
+        }
+        let parts: Vec<String> = parts.iter().map(|part| format!("`{part}`")).collect();
+        format!(
+            "{said} (it ran {} fused into it: the fault may be any of theirs)",
+            parts.join(", ")
+        )
     }
 
     /// A Kernel not published, told why its document refused it.
@@ -1798,7 +1829,9 @@ impl Session {
                 self.scene.params(),
                 demand,
             )
-            .map_err(|error| self.with_refusal(error))?;
+            .map_err(|error| self.with_refusal(error));
+        self.failing = report.as_ref().err().map(|error| self.told(error));
+        let report = report?;
         self.history.ran();
         self.feed_fonts();
         self.feed_file_nodes();
@@ -2169,6 +2202,11 @@ impl Session {
     ) -> Result<(), String> {
         let path = self.allowed_write(path)?;
         self.confirm().map_err(|error| error.to_string())?;
+        // A value a failed frame kept from being made: said with why.
+        let (producer, out) = self.producer(node, port);
+        if self.evaluator.cached(&producer, &out).is_none() {
+            return Err(self.why_no_value(node, port));
+        }
         observe::save(
             self.scene.store().as_ref(),
             self.scene.graph(),

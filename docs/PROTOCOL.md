@@ -346,7 +346,8 @@ word count must match. Words are the Kernel's, one per scalar (two for a
 `Double` or `Long`, low first); a narrow Field is read widened and
 written narrowed by the Host's rule, and only the `field` format carries
 its packed bytes. After a failed evaluation, `read` shows the output it
-computed.
+computed, and a read of one it kept from being made is told the failure:
+the node that failed, why, and the nodes run fused into it.
 
 `reset` forgets committed state; the next evaluation's `<~` readers
 restart from their initial sources. With a `node` (and a `port`,

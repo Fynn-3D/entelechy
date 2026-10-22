@@ -1007,6 +1007,18 @@ impl Evaluator {
             .map(|(consumer, _)| consumer)
     }
 
+    /// The nodes run fused into `consumer`, itself left out, in their
+    /// order: a fault said of `consumer` may be any of theirs.
+    pub fn fused_parts(&self, consumer: &NodeId) -> Vec<NodeId> {
+        self.fused
+            .iter()
+            .filter(|(fused_into, _)| *fused_into == consumer)
+            .flat_map(|(_, fused)| fused.members.parts.iter().map(|(part, _)| part))
+            .filter(|part| *part != consumer)
+            .cloned()
+            .collect()
+    }
+
     /// Lets fusion have `node` back.
     pub fn unpin(&mut self, node: &NodeId) {
         self.pruned = false;
