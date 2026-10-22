@@ -155,12 +155,19 @@ kernel ui.command_newlines@1 {
     }
 }
 
-/// How many lines the names hold: their new lines.
+/// Whether the character at `i` ends a line: a new line, or the last
+/// character of names whose last line has none.
+fn command_ends_line(names: Rows<Int>, i: Int) -> Bool {
+    return at(names, i) == 10 || i == count(names) - 1;
+}
+
+/// How many lines the names hold: their new lines, and a last line
+/// without one.
 kernel ui.command_line_count@1 {
     requires { field.read; field.write; }
     input names: Rows<Int>;
     output result: Rows<Int>;
-    compute { return if sample(names) == 10 { 1 } else { 0 }; }
+    compute { return if command_ends_line(names, element()) { 1 } else { 0 }; }
     merge(a, b) { return a + b; }
 }
 
@@ -175,7 +182,8 @@ kernel ui.command_no_lines@1 {
 
 struct NameEnd { at: Int; end: Int; }
 /// Where each line ends, before its new line: each new line writes its
-/// place at its line's number (`blank` holds a row a line).
+/// place at its line's number, and a last line without one ends after its
+/// last character (`blank` holds a row a line).
 kernel ui.command_line_ends@1 {
     requires { field.read; field.write; }
     input names: Rows<Int>;
@@ -183,8 +191,10 @@ kernel ui.command_line_ends@1 {
     input blank: Rows<Int>;
     output result: Rows<Int>;
     scatter into blank with last {
-        let line = if sample(names) == 10 { sample(newlines) - 1 } else { -1 };
-        return NameEnd { at: line, end: element() };
+        let i = element();
+        let unended = sample(names) != 10 && i == count(names) - 1;
+        let line = if sample(names) == 10 { sample(newlines) - 1 } else if unended { sample(newlines) } else { -1 };
+        return NameEnd { at: line, end: if unended { i + 1 } else { i } };
     }
 }
 

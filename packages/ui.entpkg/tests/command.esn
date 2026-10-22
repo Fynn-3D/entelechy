@@ -1,12 +1,15 @@
-// The ui package's command search over four commands: Space opens it,
+// The ui package's command search over four commands, the last line
+// with a new line after it or without: Space opens it,
 // typing filters, Enter runs the chosen one, drawn over a dark picture.
 use "../kernels/";
 use "text.entpkg";
 
 input font: Grid<Float> = "text.entpkg/assets/font.png";
-input names: Rows<Int> = text "open file\nsave file\nquit\nsave all\n";
+input names: Rows<Int> = text "open file\nsave file\nquit\nsave all";
+input ended: Rows<Int> = text "open file\nsave file\nquit\nsave all\n";
 
 node commands: graph "../graphs/command_search.esn" { names <- names; }
+node listed: graph "../graphs/command_search.esn" { names <- ended; }
 node dark: kernel {
     requires { field.write; }
     output result: Image;

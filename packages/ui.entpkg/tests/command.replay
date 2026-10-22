@@ -1,6 +1,7 @@
 scene command.esn
 window 320 180
-# Closed until Space opens it, listing all four.
+# Closed until Space opens it, listing all four whether the last line
+# ends with a new line or not.
 frame 0.0
 expect commands.search.result[0].open = 0
 key 32 down
@@ -9,6 +10,9 @@ key 32 up
 frame 0.15
 expect commands.search.result[0].open = 1
 expect commands.search.result[0].total = 4
+expect listed.search.result[0].total = 4
+expect count commands.lines = 4
+expect commands.lines[3] = 33
 
 # "sa" typed: the two saves found, the first chosen; the search's
 # panel drawn over the picture, the picture round it as it was.
