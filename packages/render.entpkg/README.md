@@ -28,7 +28,8 @@ use "render.entpkg";
 - `kernels/camera.ent` — The lens, and the proxies (the coarse scene a
   renderer traces shadows and bounces through). Kernels:
   `render.cam_start@1`, `render.cam@1`, `render.settled@1`,
-  `render.depths@1`, `render.settle@1`, `render.lens@1`.
+  `render.depths@1`, `render.settle@1`, `render.lens@1`, `render.lens_clip_plane@1`
+  (a world plane through the lens's clip space: a mirror's pass cut at its water).
 - `kernels/clay.ent` — Clay: a modeler's preview, a studio light and
   backdrop over the standard contract. Kernels: `render.clay@1`.
 - `kernels/cluster.ent` — Clustered meshes drawn (as Nanite draws): each
@@ -264,7 +265,7 @@ use "render.entpkg";
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`bounce.replay`, `cluster.replay`, `decals.replay`, `field.replay`, `fog_volumes.replay`, `lamp_looks.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `proxy_detail.replay`, `proxy_stream.replay`, `reflection.replay`, `shadow.replay`,
+`bounce.replay`, `clip_plane.replay`, `cluster.replay`, `decals.replay`, `field.replay`, `fog_volumes.replay`, `lamp_looks.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `proxy_detail.replay`, `proxy_stream.replay`, `reflection.replay`, `shadow.replay`,
 `sky.replay`, `stream.replay`, `temporal.replay`, `translucent.replay`.
 Every Kernel of the package is reached by one of them.
 

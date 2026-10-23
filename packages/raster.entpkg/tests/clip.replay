@@ -26,3 +26,12 @@ expect 50 56 = 0.0 0.0 0.0 0.01
 param behind 0
 frame 0.0
 expect 32 12 = 1.0 0.9 0.0 0.11
+
+# Cut instead by a plane through clip space keeping clip x not below 0:
+# the right half drawn, its v as it was; nothing left of the middle.
+param by_plane 1
+frame 0.0
+expect 48 40 = 1.0 0.33 0.0 0.11
+expect 40 56 = 1.0 0.02 0.0 0.11
+expect 16 40 = 0.0 0.0 0.0 0.01
+expect 30 56 = 0.0 0.0 0.0 0.01

@@ -1,4 +1,4 @@
-// Triangles cut at the near plane, before the rasterizer, which skips whole
+// Triangles cut at the near plane (or at any plane through clip space), before the rasterizer, which skips whole
 // a triangle with a corner at `w <= 0` (`kernels/triangle.ent`): each
 // triangle's part in front of the plane where depth is 0 (clip `z >= 0`),
 // cut where its edges cross it, the corners' attributes taken along the
@@ -19,9 +19,30 @@ fn raster_clip_between(a: Corner, b: Corner, t: Float) -> Corner {
     return Corner { clip: mix(a.clip, b.clip, t), normal: mix(a.normal, b.normal, t), uv: mix(a.uv, b.uv, t) };
 }
 
-/// Where the edge from `a` to `b` crosses the near plane.
-fn raster_clip_cut(a: Corner, b: Corner) -> Corner {
-    return raster_clip_between(a, b, a.clip.z / (a.clip.z - b.clip.z));
+/// Corner `k` (0 to 3) of what of the triangle `a`, `b`, `c` lies where a plane's signed distance (`da`, `db`, `dc` at its
+/// corners, linear across it) is not below 0: the whole, a triangle or a quad in the triangle's winding (a triangle's
+/// fourth corner its third), or nothing (corners at `w` -1, which the rasterizer skips); a cut edge's corner taken where
+/// the distance is 0.
+fn raster_clip_kept(a: Corner, b: Corner, c: Corner, da: Float, db: Float, dc: Float, k: Int) -> Corner {
+    let ina = da >= 0.0;
+    let inb = db >= 0.0;
+    let inc = dc >= 0.0;
+    let n = (if ina { 1 } else { 0 }) + (if inb { 1 } else { 0 }) + (if inc { 1 } else { 0 });
+    let none = Corner { clip: vec4(0.0, 0.0, 0.0, -1.0), normal: vec3(0.0, 0.0, 1.0), uv: vec2(0.0, 0.0) };
+    // Turned so the corner that differs (the one in front, or the one behind) comes first, winding kept.
+    let first = if n == 1 { if ina { 0 } else if inb { 1 } else { 2 } } else { if !ina { 0 } else if !inb { 1 } else { 2 } };
+    let p = [a, b, c][first];
+    let q = [a, b, c][(first + 1) % 3];
+    let r = [a, b, c][(first + 2) % 3];
+    let dp = [da, db, dc][first];
+    let dq = [da, db, dc][(first + 1) % 3];
+    let dr = [da, db, dc][(first + 2) % 3];
+    let pq = raster_clip_between(p, q, dp / (dp - dq));
+    let rp = raster_clip_between(r, p, dr / (dr - dp));
+    return if n == 3 { [a, b, c, c][k] }
+        else if n == 0 { none }
+        else if n == 1 { [p, pq, rp, rp][k] }
+        else { [q, r, rp, pq][k] };
 }
 
 /// Each triangle's four corners after the cut (`domain = count(triangles) * 4`): the polygon in front of the near plane
@@ -35,23 +56,31 @@ kernel raster.clip_near@1 {
     compute {
         let e = element();
         let f = at(triangles, e / 4);
-        let k = e % 4;
         let a = at(vertices, f.a);
         let b = at(vertices, f.b);
         let c = at(vertices, f.c);
-        let ina = a.clip.z >= 0.0;
-        let inb = b.clip.z >= 0.0;
-        let inc = c.clip.z >= 0.0;
-        let n = (if ina { 1 } else { 0 }) + (if inb { 1 } else { 0 }) + (if inc { 1 } else { 0 });
-        let none = Corner { clip: vec4(0.0, 0.0, 0.0, -1.0), normal: vec3(0.0, 0.0, 1.0), uv: vec2(0.0, 0.0) };
-        // Turned so the corner that differs (the one in front, or the one behind) comes first, winding kept.
-        let p = if n == 1 { if ina { a } else if inb { b } else { c } } else { if !ina { a } else if !inb { b } else { c } };
-        let q = if n == 1 { if ina { b } else if inb { c } else { a } } else { if !ina { b } else if !inb { c } else { a } };
-        let r = if n == 1 { if ina { c } else if inb { a } else { b } } else { if !ina { c } else if !inb { a } else { b } };
-        return if n == 3 { if k == 0 { a } else if k == 1 { b } else { c } }
-            else if n == 0 { none }
-            else if n == 1 { if k == 0 { p } else if k == 1 { raster_clip_cut(p, q) } else { raster_clip_cut(r, p) } }
-            else { if k == 0 { q } else if k == 1 { r } else if k == 2 { raster_clip_cut(r, p) } else { raster_clip_cut(p, q) } };
+        return raster_clip_kept(a, b, c, a.clip.z, b.clip.z, c.clip.z, e % 4);
+    }
+}
+
+/// Each triangle's four corners cut by a plane (`domain = count(triangles) * 4`), as `raster.clip_near` cuts at the near
+/// plane: what lies on the side of `plane` (its first row, in clip space: a corner is kept where `dot(plane, clip)` is not
+/// below 0) a world plane drawn through the lens has (`render.entpkg`'s `render.lens_clip_plane`); a mirror's pass keeps
+/// what stands over the water, not the bed under it.
+kernel raster.clip_plane@1 {
+    requires { field.read; field.write; }
+    input vertices: Rows<Corner>;
+    input triangles: Rows<Face>;
+    input plane: Rows<Vec4>;
+    output result: Rows<Corner>;
+    compute {
+        let e = element();
+        let f = at(triangles, e / 4);
+        let a = at(vertices, f.a);
+        let b = at(vertices, f.b);
+        let c = at(vertices, f.c);
+        let pl = at(plane, 0);
+        return raster_clip_kept(a, b, c, dot(pl, a.clip), dot(pl, b.clip), dot(pl, c.clip), e % 4);
     }
 }
 

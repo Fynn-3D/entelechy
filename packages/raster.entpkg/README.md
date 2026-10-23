@@ -14,7 +14,7 @@ use "raster.entpkg";
 
 - `kernels/clip.ent` — Triangles cut at the near plane, before the
   rasterizer, which skips whole a triangle reaching behind it. Kernels:
-  `raster.clip_near@1`, `raster.clip_faces@1`.
+  `raster.clip_near@1`, `raster.clip_plane@1`, `raster.clip_faces@1`.
 - `kernels/cutout.ent` — Triangles drawn through a mask. Kernels:
   `raster.cover_cutout@3`, `raster.cover_cutout@4`,
   `raster.cover_cutout_tiles@2`.

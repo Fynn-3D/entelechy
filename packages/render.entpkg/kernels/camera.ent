@@ -34,6 +34,32 @@ fn lens_clip(l: Lens, extent: Vec2, p: Vec3, near: Float, far: Float) -> Vec4 {
     return vec4(dot(d, l.right) * l.focal * 2.0 / aspect, dot(d, l.up) * l.focal * 2.0, (ahead - near) * far / (far - near), ahead);
 }
 
+/// A world plane (what lies where `dot(normal, p)` is not below `level`) as a plane through `lens_clip`'s clip space, for
+/// `raster.entpkg`'s `raster.clip_plane` (`domain = 1`): `dot(result, clip)` is the world plane's distance (times a share
+/// of a point's own `w`) for every point drawn through `lens` onto `canvas` between `near` and `far`.
+kernel render.lens_clip_plane@1 {
+    requires { field.read; field.write; }
+    input lens: Lenses;
+    input canvas: Grid<Long>;
+    param normal: Vec3 = vec3(0.0, 1.0, 0.0);
+    param level: Float = 0.0;
+    param near: Float = 0.05;
+    param far: Float = 20000.0;
+    output result: Rows<Vec4>;
+    compute {
+        let l = at(lens, 0);
+        let ext = size(canvas);
+        let aspect = ext.x / max(ext.y, 1.0);
+        let sx = l.focal * 2.0 / aspect;
+        let sy = l.focal * 2.0;
+        let k = far / (far - near);
+        // A point's world distance is c0 + (n.right) x + (n.up) y + (n.ahead) z in its view's terms; x, y and z are clip's
+        // x / sx, y / sy and w, and 1 is (k w - z) / (k near).
+        let c0 = dot(normal, l.eye) - level;
+        return vec4(dot(normal, l.right) / sx, dot(normal, l.up) / sy, 0.0 - c0 / (k * near), dot(normal, l.ahead) + c0 / near);
+    }
+}
+
 /// How far along view ray `dir` a depth the rasterizer drew lies, the depth of a point `lens_clip` placed between `near` and
 /// `far`.
 fn lens_distance(l: Lens, dir: Vec3, depth: Float, near: Float, far: Float) -> Float {

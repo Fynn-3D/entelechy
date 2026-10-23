@@ -1,11 +1,13 @@
 // Triangles cut at the near plane (`kernels/clip.ent`): one with a corner
 // behind it, drawn whole by the rasterizer only as what lies in front, its
 // uv taken along the cut edges; the same triangle uncut is skipped whole.
-// `behind` 2 puts two corners behind, `behind` 0 none.
+// `behind` 2 puts two corners behind, `behind` 0 none. `by_plane` 1 cuts instead by a plane through clip space
+// (`raster.clip_plane`), keeping the right half of the picture (clip x not below 0).
 use "../kernels/";
 
 param behind: Int = 1;
 param cut: Int = 1;
+param by_plane: Int = 0;
 
 node points: kernel {
     requires { field.write; }
@@ -26,7 +28,18 @@ node face: kernel {
     domain = 1;
     compute { return Face { a: 0, b: 1, c: 2 }; }
 }
-node cut_points: raster.clip_near@1 { vertices <- points.result; triangles <- face.result; domain = count(triangles) * 4; }
+node near_points: raster.clip_near@1 { vertices <- points.result; triangles <- face.result; domain = count(triangles) * 4; }
+node plane: Rows<Vec4> { domain = 1; value = vec4(1.0, 0.0, 0.0, 0.0); }
+node plane_points: raster.clip_plane@1 { vertices <- points.result; triangles <- face.result; plane <- plane.result; domain = count(triangles) * 4; }
+node cut_points: kernel {
+    requires { field.read; field.write; }
+    input near: Rows<Corner> <- near_points.result;
+    input by: Rows<Corner> <- plane_points.result;
+    param by_plane: Int = by_plane;
+    output result: Rows<Corner>;
+    domain = count(near);
+    compute { return if by_plane == 1 { sample(by) } else { sample(near) }; }
+}
 node cut_faces: raster.clip_faces@1 { triangles <- face.result; domain = count(triangles) * 2; }
 node chosen: kernel {
     requires { field.read; field.write; }

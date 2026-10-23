@@ -20,7 +20,8 @@ fn reflection_edge(q: Vec2, extent: Vec2, edge: Float) -> Float {
 /// on surfaces smoother than `below`, the mirror ray walked `steps` steps out to `far` meters (no farther than 4 meters
 /// and `span` times the surface's own distance), a thing met no thicker than `thick` meters; sure fully up to `sure` of
 /// `below`'s roughness, and within `edge` of the picture's edges less so. With `to_sky` 1, a ray that meets nothing and
-/// goes on toward sky the picture shows (as `hdr` has it: its mist and its glow laid over) takes that sky.
+/// goes on toward sky the picture shows (as `hdr` has it: its mist and its glow laid over) takes that sky. With `mirrors` 1,
+/// a pixel a planar mirror covers (`more` w, `render.mirror_mix`'s) is left to it.
 kernel render.reflections@1 {
     requires { field.read; field.write; }
     input hdr: Image;
@@ -40,12 +41,14 @@ kernel render.reflections@1 {
     param edge: Float = 0.08;
     param span: Float = 1.0;
     param to_sky: Int = 0;
+    param mirrors: Int = 0;
     output result: Image;
     compute {
         let q = coord();
         let picture = sample(hdr);
         let su = sample(surface);
         if su.w > no_hit() * 0.5 { return picture; }
+        if mirrors == 1 && sample(more).w > 0.0 { return picture; }
         let ex = sample(extra);
         let m = pbr_of(sample(paint), ex, sample(layers), sample(more));
         if m.rough >= below { return picture; }
