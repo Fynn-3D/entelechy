@@ -53,3 +53,5 @@ node beyond: render.path_behind@1 { more <- more; behind_at <- behind_at; behind
 node shade: render.path_shade@1 { lamped <- lamped.result; beyond <- beyond.result; through <- through; diffuse <- pass3.result; specular <- gloss2.result; coat <- coat1.result; surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; sky <- sky; lens <- lens; domain = size(surface); }
 
 output hdr <- shade.result;
+/// The share of `hdr` that scatters under subsurface surfaces (`graphs/subsurface.esn` spreads it).
+output scatter <- shade.scatter;

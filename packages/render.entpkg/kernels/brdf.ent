@@ -119,6 +119,15 @@ fn glossy_by(m: Pbr, n: Vec3, v: Vec3, l: Vec3, light: Vec3) -> Vec3 {
 fn matte_by(m: Pbr, n: Vec3, v: Vec3, l: Vec3, light: Vec3) -> Vec3 {
     return lit_by(m, n, v, l, light) - glossy_by(m, n, v, l, light);
 }
+/// The light that goes under a subsurface surface, to be spread across it
+/// (`graphs/subsurface.esn`): its matte light from the sun along `sun`
+/// (irradiance `sun_light`) and from round about (`diffuse_light`, the
+/// diffuse light reaching it), as much as it scatters; 0 for a surface
+/// that does not.
+fn scattered_share(m: Pbr, n: Vec3, v: Vec3, sun: Vec3, sun_light: Vec3, diffuse_light: Vec3) -> Vec3 {
+    if m.subsurface <= 0.0 { return vec3(0.0, 0.0, 0.0); }
+    return (matte_by(m, n, v, sun, sun_light) + m.albedo * ((1.0 - m.metal) * (1.0 - m.transmission)) * diffuse_light) * m.subsurface;
+}
 /// How much the environment's specular reflects in all (the split-sum BRDF term, Karis's analytic approximation).
 fn env_brdf(f0: Vec3, rough: Float, nv: Float) -> Vec3 {
     let r = rough * vec4(-1.0, -0.0275, -0.572, 0.022) + vec4(1.0, 0.0425, 1.04, -0.04);

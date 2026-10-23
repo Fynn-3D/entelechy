@@ -8,3 +8,7 @@ expect 40 57 = 0.851 0.502 0.506 0.01
 expect 118 59 = 1.000 0.935 0.724 0.01
 expect 10 85 = 0.537 0.540 0.555 0.01
 expect 80 10 = 0.718 0.704 0.688 0.01
+
+# The wax ball's light under its skin, and spread.
+expect light.shade.scatter[9840] = 1.0221 0.8456 0.6230 0 0.01
+expect skin.down.result[9840] = 1.0432 0.8666 0.6256 0 0.01

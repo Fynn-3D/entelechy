@@ -57,13 +57,15 @@ kernel render.daylight@1 {
     param painted: Int = 0;
     param bounce: Int = 1;
     output result: Image;
+    /// The share of `result` that scatters under subsurface surfaces (`graphs/subsurface.esn` spreads it); 0 elsewhere and when painted.
+    output scatter: Image;
     compute {
         let q = coord();
         let l = at(lens, 0);
         let s = at(sky, 0);
         let dir = ray(l, q, domain());
         let su = sample(surface);
-        if su.w > no_hit() * 0.5 { return vec4(sky_radiance(dir, s, true), 1.0); }
+        if su.w > no_hit() * 0.5 { return { result: vec4(sky_radiance(dir, s, true), 1.0), scatter: vec4(0.0, 0.0, 0.0, 0.0) }; }
         let n = su.xyz;
         let ex = sample(extra);
         let m = pbr_of(sample(paint), ex, sample(layers), sample(more));
@@ -74,6 +76,11 @@ kernel render.daylight@1 {
         let spec_light = mix(seen_along(reflect(dir, n), s), e, sqrt(m.rough)) * ao * on;
         let shown = if painted == 0 { lit_by(m, n, v, s.sun, s.sun_color * ex.x) + ambient_by(m, n, v, e, spec_light, spec_light) }
             else { toon(m, n, v, s, ex.x, e) + spec_light * env_brdf(pbr_f0(m), m.rough, max(dot(n, v), 0.001)) * (1.0 - m.rough) };
-        return vec4(aerial(shown + m.glow, dir, su.w, s), 1.0);
+        let all = shown + m.glow;
+        let shaded = aerial(all, dir, su.w, s);
+        // The light under the skin, through the air as the rest (the air's mix is linear).
+        let under = if painted == 0 { scattered_share(m, n, v, s.sun, s.sun_color * ex.x, e) } else { vec3(0.0, 0.0, 0.0) };
+        let kept = aerial(all - under, dir, su.w, s);
+        return { result: vec4(shaded, 1.0), scatter: vec4(shaded.x - kept.x, shaded.y - kept.y, shaded.z - kept.z, 0.0) };
     }
 }

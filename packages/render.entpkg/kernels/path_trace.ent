@@ -236,6 +236,8 @@ kernel render.path_shade@1 {
     input lens: Lenses;
     input lamped: Image;
     output result: Image;
+    /// The share of `result` that scatters under subsurface surfaces (`graphs/subsurface.esn` spreads it); 0 elsewhere.
+    output scatter: Image;
     compute {
         let q = coord();
         let extent = domain();
@@ -243,7 +245,7 @@ kernel render.path_shade@1 {
         let s = at(sky, 0);
         let dir = ray(l, q, extent);
         let su = at(surface, q);
-        if su.w > no_hit() * 0.5 { return vec4(sky_radiance(dir, s, true), 1.0); }
+        if su.w > no_hit() * 0.5 { return { result: vec4(sky_radiance(dir, s, true), 1.0), scatter: vec4(0.0, 0.0, 0.0, 0.0) }; }
         let n = su.xyz;
         let ex = at(extra, q);
         let m = pbr_of(at(paint, q), ex, at(layers, q), at(more, q));
@@ -257,6 +259,9 @@ kernel render.path_shade@1 {
         let coat_light = if m.clearcoat > 0.0 { at(coat, q).xyz } else { spec_light };
         let clear = if m.transmission > 0.0 { transmitted(m, n, v, at(through, q), frosted(beyond, q, m.rough)) } else { vec3(0.0, 0.0, 0.0) };
         let color = lit_by(m, n, v, s.sun, s.sun_color * ex.x) + ambient_by(m, n, v, e, spec_light, coat_light) + clear + m.glow + at(lamped, q).xyz;
-        return vec4(aerial(color, dir, su.w, s), 1.0);
+        let shaded = aerial(color, dir, su.w, s);
+        // The light under the skin, through the air as the rest (the air's mix is linear).
+        let kept = aerial(color - scattered_share(m, n, v, s.sun, s.sun_color * ex.x, e), dir, su.w, s);
+        return { result: vec4(shaded, 1.0), scatter: vec4(shaded.x - kept.x, shaded.y - kept.y, shaded.z - kept.z, 0.0) };
     }
 }

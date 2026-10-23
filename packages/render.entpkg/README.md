@@ -116,12 +116,13 @@ use "render.entpkg";
 - `graphs/lamps.esn` — The lamps added to a renderer's picture, for one
   that does not take them in itself.
 - `graphs/path_trace.esn` — The path tracer (`kernels/path_trace.ent`),
-  the lamps shown and bounced.
+  the lamps shown and bounced; its `scatter` for light under the skin.
 - `graphs/picture.esn` — The picture's raster.
 - `graphs/probes.esn` — The light-probe renderer (`kernels/probes.ent`),
   the lamps shown, reflected and bounced; the light gathered on the screen
   drawn anew each frame and averaged while the lens rests (up to
-  `settle_frames`, then it rests too).
+  `settle_frames`, then it rests too); its `scatter` for light under the
+  skin.
 - `graphs/subsurface.esn` — Light under the skin: a renderer's `scatter`
   spread across then down and laid back over its `hdr`.
 - `graphs/super_resolution.esn` — Temporal super-resolution
@@ -264,11 +265,12 @@ What every renderer shares, in this order:
   a light) and its own detail: bright and dark neighborhoods are brought
   toward the mean (`highlights`, `shadows`), the detail kept (`detail`); 1
   for all three leaves the picture as it is.
-- **Light under the skin** (`graphs/subsurface.esn`). The probes
-  renderer gives, beside `hdr`, the share of it that scatters under
-  subsurface surfaces (`scatter`: their matte light, `matte_by` and the
-  light from all round, times the subsurface, through the air as the
-  rest); `render.subsurface_blur` spreads it across then down (Jimenez's
+- **Light under the skin** (`graphs/subsurface.esn`). The probes renderer,
+  the path tracer and daylight each give, beside `hdr`, the share of it
+  that scatters under subsurface surfaces (`scatter`: `scattered_share`,
+  their matte light from the sun and from round about times the
+  subsurface, through the air as the rest; none when daylight paints);
+  `render.subsurface_blur` spreads it across then down (Jimenez's
   separable way), red farthest and blue nearest, as far as the material
   carries light (`reach` meters at full subsurface) and only over the same
   surface; `render.subsurface_apply` lays the spread share back in place

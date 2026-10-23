@@ -2,7 +2,8 @@
 // shadows from cascaded shadow maps as well as the stand's own: the
 // light scattered more than once, the look a renderer lights by, the sky
 // round the eye as a table, the daylight renderer lighting the stand by it
-// and the sky's pixels painted from the table, with the sun's disc;
+// (the light under its wax ball spread), and the sky's pixels painted from
+// the table, with the sun's disc;
 // metered and toned.
 use "../kernels/";
 
@@ -15,7 +16,8 @@ node sun_depth: stand.sun_depth@1 { views <- sun_views.result; size = 256.0; dom
 node sunlit: render.sun_shadow@1 { extra <- stand.extra; surface <- stand.surface; lens <- stand.lens; views <- sun_views.result; atlas <- sun_depth.result; domain = size(extra); }
 node lit: render.daylight@1 { surface <- stand.surface; paint <- stand.paint; extra <- sunlit.result; layers <- stand.layers; more <- stand.more;
     sky <- air.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; domain = size(surface); }
-node skied: render.atmosphere_sky@1 { hdr <- lit.result; surface <- stand.surface; lens <- stand.lens; sky <- air.sky; view <- air.view; domain = size(hdr); }
+node skin: graph "../graphs/subsurface.esn" { hdr <- lit.result; scatter <- lit.scatter; surface <- stand.surface; layers <- stand.layers; lens <- stand.lens; reach = 0.08; }
+node skied: render.atmosphere_sky@1 { hdr <- skin.hdr; surface <- stand.surface; lens <- stand.lens; sky <- air.sky; view <- air.view; domain = size(hdr); }
 node exposed: graph "../graphs/exposure.esn" { hdr <- skied.result; highlights = 0.7; shadows = 0.9; }
 node glow: graph "../graphs/bloom.esn" { hdr <- exposed.hdr; }
 node view: render.view@1 { hdr <- exposed.hdr; bloom <- glow.bloom; exposure = 1.0; domain = window(); }

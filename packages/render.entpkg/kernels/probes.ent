@@ -507,9 +507,7 @@ kernel render.probes_shade@1 {
         // The light that goes under the skin: the matte light (the sun's and
         // all round), as much as the surface scatters it; through the air as
         // the rest (the air's mix is linear, so its share is the difference).
-        let under = if m.subsurface > 0.0 && style == 0 {
-            (matte_by(m, n, v, s.sun, s.sun_color * ex.x) + m.albedo * ((1.0 - m.metal) * (1.0 - m.transmission)) * e) * m.subsurface
-        } else { vec3(0.0, 0.0, 0.0) };
+        let under = if style == 0 { scattered_share(m, n, v, s.sun, s.sun_color * ex.x, e) } else { vec3(0.0, 0.0, 0.0) };
         let kept = aerial(all - under, dir, su.w, s);
         return { result: vec4(shaded, 1.0), scatter: vec4(shaded.x - kept.x, shaded.y - kept.y, shaded.z - kept.z, 0.0) };
     }
