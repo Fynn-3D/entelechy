@@ -26,6 +26,7 @@ pub(crate) const LAYERS: &[(&str, &[&str])] = &[
             "vector",
             "mesh",
             "terrain",
+            "texture",
             "render",
             "particles",
             "scatter",

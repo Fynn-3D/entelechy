@@ -1,0 +1,40 @@
+// Layers and normals: one material laid over another where a mask says,
+// blended by their heights (moss in the hollows first, paint off the high
+// points first); a surface's normal bent by a height's slope (bumps,
+// reveals, grooves), a normal from a height's differences, from a face's
+// frame to the world, and two normals of a face joined.
+
+/// How much of the upper layer shows (0 to 1) where the lower stands
+/// `low` high and the upper `high` (0 to 1 each), the mask `mask` asking
+/// for the upper: the higher of them wins over a band `contrast` wide.
+fn texture_height_blend(low: Float, high: Float, mask: Float, contrast: Float) -> Float {
+    let a = low + (1.0 - mask);
+    let b = high + mask;
+    let top = max(a, b) - max(contrast, 0.0001);
+    let wa = max(a - top, 0.0);
+    let wb = max(b - top, 0.0);
+    return wb / max(wa + wb, 0.000001);
+}
+
+/// A surface facing `n` bent by a height's slope `slope` (the height's
+/// change a meter, along the world's axes), `strength` of it: the slope's
+/// part along the surface tilts it.
+fn texture_bump(n: Vec3, slope: Vec3, strength: Float) -> Vec3 {
+    return normalize(n - (slope - n * dot(slope, n)) * strength);
+}
+
+/// A face's normal in its own frame (x across, y up, z out of it) from a
+/// height's change across it (`dx`) and up it (`dy`) a unit, `strength` of
+/// it.
+fn texture_slope_normal(dx: Float, dy: Float, strength: Float) -> Vec3 { return normalize(vec3(-dx * strength, -dy * strength, 1.0)); }
+
+/// A normal in a face's own frame (`t`, x across, y up, z out) taken to the
+/// world, the face facing `n`, its across `across`.
+fn texture_to_world(t: Vec3, n: Vec3, across: Vec3) -> Vec3 {
+    let up = cross(n, across);
+    return normalize(across * t.x + up * t.y + n * t.z);
+}
+
+/// Two normals in a face's own frame joined (a detail's over a base's): the
+/// slopes added, the result still facing out.
+fn texture_normal_blend(base: Vec3, detail: Vec3) -> Vec3 { return normalize(vec3(base.x + detail.x, base.y + detail.y, base.z * detail.z)); }

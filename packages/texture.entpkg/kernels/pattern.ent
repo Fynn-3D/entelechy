@@ -1,0 +1,106 @@
+// Patterns on a surface's plane, each a point's place in it: a grid's
+// cells, courses of bricks or boards (each course shifted on the one
+// below), panels split from a grid's cells by a hash, an opening inset in
+// a cell; and drawing them so they hold still on screen: a line, a stripe
+// or any signed distance covered over the pixel it falls in (`pix`, the
+// pixel's width there in the pattern's units), and detail let go where it
+// would crowd closer than a few pixels.
+use "random.entpkg";
+
+/// A point's place in a pattern's cell: where in the cell (`at`, 0 to 1
+/// across and up), which cell (`id`, whole numbers, or more for a cell split
+/// from one), how big the cell is (`size`), and how far the point is from
+/// the cell's nearest side (`edge`, in the pattern's units).
+struct TextureCell { at: Vec2; id: Vec2; size: Vec2; edge: Float; }
+
+/// The cell of a grid of cells `size` big that holds `uv`.
+fn texture_grid(uv: Vec2, size: Vec2) -> TextureCell {
+    let g = uv / size;
+    let id = floor(g);
+    let at_ = g - id;
+    let e = min(at_, vec2(1.0, 1.0) - at_) * size;
+    return TextureCell { at: at_, id: id, size: size, edge: min(e.x, e.y) };
+}
+
+/// The cell of courses `size.y` high of cells `size.x` long that holds
+/// `uv`, each course shifted `shift` of a cell on the one below (0.5 a
+/// running bond), and by up to `jitter` of a cell more by its hash (`seed`):
+/// bricks, stones, boards.
+fn texture_courses(uv: Vec2, size: Vec2, shift: Float, jitter: Float, seed: Int) -> TextureCell {
+    let row = floor(uv.y / size.y);
+    let moved = row * shift + (hash1(int(row), seed) - 0.5) * jitter;
+    let c = texture_grid(vec2(uv.x / size.x - moved, uv.y / size.y), vec2(1.0, 1.0));
+    let e = min(c.at, vec2(1.0, 1.0) - c.at) * size;
+    return TextureCell { at: c.at, id: c.id, size: size, edge: min(e.x, e.y) };
+}
+
+/// The panel that holds `uv` of a grid `size` big whose cells are split up
+/// to `splits` times, each time in two across their longer side at a
+/// hashed place (`seed`), so panels of a few sizes fit together: the hull of
+/// a ship, a facade's cladding.
+fn texture_panels(uv: Vec2, size: Vec2, splits: Int, seed: Int) -> TextureCell {
+    let g = texture_grid(uv, size);
+    // The panel's corners in its grid cell (low x, low y, high x, high y), split in turn.
+    let box = loop splits with b = vec4(0.0, 0.0, 1.0, 1.0) {
+        let h = hash2(g.id * 7.0 + vec2(b.x * 13.0 + b.z * 5.0, b.y * 11.0 + b.w * 3.0) + float(index()) * 17.0, seed);
+        let wide = (b.z - b.x) * size.x >= (b.w - b.y) * size.y;
+        let cut = 0.3 + 0.4 * fract(h * 7.31);
+        if h < 0.25 { b } else if wide {
+            let x = mix(b.x, b.z, cut);
+            if g.at.x < x { vec4(b.x, b.y, x, b.w) } else { vec4(x, b.y, b.z, b.w) }
+        } else {
+            let y = mix(b.y, b.w, cut);
+            if g.at.y < y { vec4(b.x, b.y, b.z, y) } else { vec4(b.x, y, b.z, b.w) }
+        }
+    };
+    let span = vec2(box.z - box.x, box.w - box.y);
+    let at_ = (g.at - vec2(box.x, box.y)) / span;
+    let e = min(at_, vec2(1.0, 1.0) - at_) * span * size;
+    return TextureCell { at: at_, id: g.id + vec2(box.x, box.y), size: span * size, edge: min(e.x, e.y) };
+}
+
+/// How far a point in cell `c` is from the opening inset in it from `low`
+/// to `high` (shares of the cell across and up), in the pattern's units,
+/// negative inside: a window in a bay, a light in a panel.
+fn texture_inset(c: TextureCell, low: Vec2, high: Vec2) -> Float {
+    let half = (high - low) * c.size * 0.5;
+    let q = abs((c.at - (low + high) * 0.5) * c.size) - half;
+    return length(max(q, vec2(0.0, 0.0))) + min(max(q.x, q.y), 0.0);
+}
+
+/// How much of a pixel `pix` wide the shape a signed distance `d` gives
+/// (negative inside) covers: its edge drawn smooth over the pixel.
+fn texture_cover(d: Float, pix: Float) -> Float { return saturate(0.5 - d / max(pix, 0.000001)); }
+
+/// How much of a pixel `pix` wide a line `width` pixels wide covers, `edge`
+/// from it (a line thinner than a pixel drawn fainter, not thinner).
+fn texture_line(edge: Float, width: Float, pix: Float) -> Float {
+    let p = max(pix, 0.000001);
+    return saturate((max(width, 1.0) * p * 0.5 + p * 0.5 - edge) / p) * min(width, 1.0);
+}
+
+/// How much detail `spacing` apart is kept where a pixel is `pix` wide: all
+/// of it until it crowds closer than five pixels, none by two.
+fn texture_fade(spacing: Float, pix: Float) -> Float { return saturate((spacing / max(pix, 0.000001) - 2.0) / 3.0); }
+
+/// The joints of cell `c` (mortar, seams, a mesh's edges), `width` pixels
+/// wide where a pixel is `pix` wide, let go where the cells crowd.
+fn texture_joint(c: TextureCell, width: Float, pix: Float) -> Float {
+    return texture_line(c.edge, width, pix) * texture_fade(min(c.size.x, c.size.y), pix);
+}
+
+/// Stripes across `x` every `period`, `duty` of each one on, the share of a
+/// pixel `pix` wide they cover (averaged over the pixel exactly: no
+/// shimmer however fine).
+fn texture_stripes(x: Float, period: Float, duty: Float, pix: Float) -> Float {
+    let w = max(pix / period, 0.000001);
+    let a = x / period - w * 0.5;
+    let b = x / period + w * 0.5;
+    let fa = floor(a) * duty + min(a - floor(a), duty);
+    let fb = floor(b) * duty + min(b - floor(b), duty);
+    return saturate((fb - fa) / w);
+}
+
+/// A color varied by a hash `k` (0 to 1), up to `amount` lighter or darker:
+/// no two bricks, panels or boards quite alike.
+fn texture_vary(c: Vec3, k: Float, amount: Float) -> Vec3 { return c * (1.0 + amount * (k * 2.0 - 1.0)); }

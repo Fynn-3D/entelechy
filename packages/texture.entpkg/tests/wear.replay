@@ -1,0 +1,15 @@
+scene wear.esn
+
+# Facing up is all up-facing, a wall none; at an edge worn, a fifth off
+# it not. Open, no dirt; shut half (as deep as dirt goes), all of it;
+# shut a quarter, half. Grime twice as high as it reaches: none. Wetted,
+# a mid gray darkens to 0.325 and smooths to water's 0.04; dry, as it is;
+# above its opening, no drip.
+frame 0.0
+expect marks.result[0] = 1 0 1 0 0.0001
+expect marks.result[1] = 0 1 0.5 0 0.0001
+expect marks.result[2] = 0.325 0.04 0.5 0 0.0001
+
+expect noisy.result[0] = 1 1 1 1
+expect noisy.result[101] = 1 1 1 1
+expect noisy.result[255] = 1 1 1 1

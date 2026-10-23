@@ -1,0 +1,10 @@
+//! What a surface is drawn with, point by point as a shader asks: patterns
+//! (grids, courses of bricks and boards, panels, openings in a cell, lines
+//! and stripes filtered over a pixel), the ways a pattern is laid on a
+//! surface (three planes, the face it is on, parallax, a room behind a
+//! window), layers blended by height and normals bent and joined, and the
+//! marks of age (streaks, grime, drips, dust, worn edges, dirt in hollows,
+//! puddles, wetness).
+package texture@1 { language = 1; ir = 1; }
+
+use "kernels/";

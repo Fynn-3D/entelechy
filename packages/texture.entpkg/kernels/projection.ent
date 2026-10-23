@@ -1,0 +1,64 @@
+// A pattern laid on a surface: a point of the world taken to the plane a
+// pattern is drawn on. Three planes blended by how the surface faces
+// (triplanar), the one face it is on (a box's, a building's), a pattern
+// moved for a view so it seems to lie deeper (parallax), and the room seen
+// through a window (an interior: its back wall, its sides, its floor and
+// ceiling, found by the view's ray, no geometry behind the glass).
+
+/// A point's places on the three planes square to the axes (`x` the plane
+/// facing along x: across z, up y; `y` facing up: x, z; `z` facing along
+/// z: x, up y), and how much each counts for a surface facing `n` (summing
+/// to 1, `sharp` higher keeping each to the faces it fronts).
+struct TexturePlanes { x: Vec2; y: Vec2; z: Vec2; weight: Vec3; }
+fn texture_planes(p: Vec3, n: Vec3, sharp: Float) -> TexturePlanes {
+    let a = pow(abs(n) + vec3(0.000001, 0.000001, 0.000001), vec3(sharp, sharp, sharp));
+    return TexturePlanes { x: vec2(p.z, p.y), y: vec2(p.x, p.z), z: vec2(p.x, p.y), weight: a / (a.x + a.y + a.z) };
+}
+
+/// The face a surface facing `n` is on, as a box's or a building's: where on
+/// it `p` is (x across it, y up it, or along z on a floor or roof) and which
+/// face (z: 0 facing along x, 1 up or down, 2 along z).
+fn texture_face(p: Vec3, n: Vec3) -> Vec3 {
+    let a = abs(n);
+    return if a.x > a.y && a.x > a.z { vec3(p.z, p.y, 0.0) } else if a.y > a.z { vec3(p.x, p.z, 1.0) } else { vec3(p.x, p.y, 2.0) };
+}
+
+/// The axes across the face a surface facing `n` is on (1 for each the face
+/// spans): where a lattice's lines are drawn on it.
+fn texture_face_axes(n: Vec3) -> Vec3 {
+    let a = abs(n);
+    return if a.x > a.y && a.x > a.z { vec3(0.0, 1.0, 1.0) } else if a.y > a.z { vec3(1.0, 0.0, 1.0) } else { vec3(1.0, 1.0, 0.0) };
+}
+
+/// A view's direction `view` taken into a face's own frame (x across the
+/// face, y up it, z into it), the face facing `n`, its across `across`.
+fn texture_into(view: Vec3, n: Vec3, across: Vec3) -> Vec3 {
+    let up = cross(n, across);
+    return vec3(dot(view, across), dot(view, up), -dot(view, n));
+}
+
+/// Where on a pattern a view (`view`, the face's own frame, `texture_into`)
+/// meets it when it lies `depth` behind the surface, from `uv` on the
+/// surface: a pattern set back (a recess, a reveal).
+fn texture_parallax(uv: Vec2, view: Vec3, depth: Float) -> Vec2 {
+    return uv + vec2(view.x, view.y) * (depth / max(view.z, 0.05));
+}
+
+/// The room behind a window seen along a view (`view`, the face's own
+/// frame), from `at` on the window (0 to 1 across and up), the room as wide
+/// and as high as the window's cell and `depth` of that deep: where the view
+/// meets it (x, y across the wall it meets, 0 to 1), which wall (z: 0 the
+/// back, 1 a side, 2 the floor or the ceiling) and how far in it is (w,
+/// shares of the depth).
+fn texture_room(at: Vec2, view: Vec3, depth: Float) -> Vec4 {
+    let d = vec3(view.x, view.y, max(view.z, 0.0001));
+    let tx = if d.x > 0.0 { (1.0 - at.x) / d.x } else { -at.x / min(d.x, -0.000001) };
+    let ty = if d.y > 0.0 { (1.0 - at.y) / d.y } else { -at.y / min(d.y, -0.000001) };
+    let tz = depth / d.z;
+    let t = min(tz, min(tx, ty));
+    let hit = vec3(at.x, at.y, 0.0) + d * t;
+    let back = vec4(hit.x, hit.y, 0.0, 1.0);
+    let side = vec4(hit.z / depth, hit.y, 1.0, hit.z / depth);
+    let flat = vec4(hit.x, hit.z / depth, 2.0, hit.z / depth);
+    return if t >= tz { back } else if tx <= ty { side } else { flat };
+}

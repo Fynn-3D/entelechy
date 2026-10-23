@@ -1,0 +1,45 @@
+// Patterns laid on surfaces and layers joined, at points whose answers are
+// known by hand.
+use "../kernels/";
+
+node laid: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 4;
+    compute {
+        let k = element();
+        let up = texture_planes(vec3(1.0, 2.0, 3.0), vec3(0.0, 1.0, 0.0), 4.0);
+        let slant = texture_planes(vec3(1.0, 2.0, 3.0), vec3(0.70710678, 0.70710678, 0.0), 1.0);
+        return if k == 0 { vec4(up.weight, up.y.x + up.y.y) }
+            else if k == 1 { vec4(slant.weight, slant.x.x + slant.x.y) }
+            else if k == 2 { vec4(texture_face(vec3(1.0, 2.0, 3.0), vec3(0.0, 0.0, -1.0)), texture_face(vec3(1.0, 2.0, 3.0), vec3(0.9, 0.1, 0.0)).x) }
+            else { vec4(texture_face_axes(vec3(0.0, 1.0, 0.0)), texture_face(vec3(1.0, 2.0, 3.0), vec3(0.0, -1.0, 0.0)).z) };
+    }
+}
+node behind: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 4;
+    compute {
+        let k = element();
+        let into = texture_into(vec3(0.0, 0.0, -1.0), vec3(0.0, 0.0, 1.0), vec3(1.0, 0.0, 0.0));
+        return if k == 0 { vec4(into, texture_parallax(vec2(0.5, 0.5), vec3(0.5, 0.0, 1.0), 0.2).x) }
+            else if k == 1 { texture_room(vec2(0.5, 0.5), vec3(0.0, 0.0, 1.0), 1.0) }
+            else if k == 2 { texture_room(vec2(0.5, 0.5), vec3(1.0, 0.0, 1.0), 1.0) }
+            else { texture_room(vec2(0.5, 0.5), vec3(0.0, -1.0, 0.5), 1.0) };
+    }
+}
+node layered: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 4;
+    compute {
+        let k = element();
+        return if k == 0 { vec4(texture_height_blend(0.2, 0.8, 0.5, 0.2), texture_height_blend(0.0, 0.0, 0.0, 0.2), texture_height_blend(0.5, 0.5, 0.5, 0.2), 0.0) }
+            else if k == 1 { vec4(texture_bump(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), 1.0), texture_bump(vec3(0.0, 1.0, 0.0), vec3(0.0, 1.0, 0.0), 1.0).y) }
+            else if k == 2 { vec4(texture_slope_normal(1.0, 0.0, 1.0), texture_to_world(vec3(1.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0), vec3(1.0, 0.0, 0.0)).x) }
+            else { vec4(texture_normal_blend(vec3(0.0, 0.0, 1.0), vec3(0.6, 0.0, 0.8)), texture_to_world(vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0), vec3(1.0, 0.0, 0.0)).y) };
+    }
+}
+
+output result <- laid.result;

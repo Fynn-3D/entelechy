@@ -1,0 +1,27 @@
+scene patterns.esn
+
+# (2.5, 1.25) on a grid of 1 by 0.5 is the middle of cell 2, a quarter
+# from its nearest sides; on courses a quarter high, each a half shifted,
+# (0.1, 0.3) is 0.6 along brick -1 of course 1, 0.05 above its bed.
+frame 0.0
+expect cells.result[0] = 0.5 0.5 2 0.25 0.0001
+expect cells.result[1] = 0.6 0.2 -1 0.05 0.0001
+
+# An opening the middle half of a 2 meter cell: its middle half a meter
+# inside, the cell's side half a meter off; a distance of 0 half covers a
+# pixel, -1 all of it.
+expect openings.result[0] = -0.5 0.5 0.5 1 0.0001
+
+# A pixel-wide line covers its pixel at it, none a pixel off, half at
+# half a pixel; half a pixel wide, half as strong. Detail ten pixels apart
+# kept, three and a half half kept, two let go; a color varied all the way
+# up by a fifth. Stripes half on seen whole a period wide are half; at a
+# point, on at a quarter and off at three quarters; a quarter on every 2
+# seen 0.4 wide from 0.2 to 0.6 cover three quarters of it.
+expect drawn.result[0] = 1 0 0.5 0.5 0.0001
+expect drawn.result[1] = 1 0.5 0 0.6 0.0001
+expect drawn.result[2] = 0.5 1 0 0.75 0.0001
+
+expect panels.result[0] = 1 1 0 0
+expect panels.result[17] = 1 1 0 0
+expect panels.result[63] = 1 1 0 0

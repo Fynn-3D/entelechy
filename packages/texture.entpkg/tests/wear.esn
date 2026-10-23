@@ -1,0 +1,35 @@
+// The marks of age at points whose answers are known by hand, and the
+// noisy ones held to their bounds.
+use "../kernels/";
+
+node marks: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 3;
+    compute {
+        let k = element();
+        return if k == 0 { vec4(texture_facing(vec3(0.0, 1.0, 0.0), vec3(0.0, 1.0, 0.0), 0.5, 0.9), texture_facing(vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), 0.5, 0.9),
+                texture_edge_wear(0.0, 0.1, 0.5), texture_edge_wear(0.2, 0.1, 0.5)) }
+            else if k == 1 { vec4(texture_cavity(1.0, 0.5), texture_cavity(0.5, 0.5), texture_cavity(0.75, 0.5), texture_grime(2.0, 1.0, vec2(3.0, 4.0), 1)) }
+            else { vec4(texture_wet(vec3(0.5, 0.5, 0.5), 0.8, 1.0).x, texture_wet(vec3(0.5, 0.5, 0.5), 0.8, 1.0).w, texture_wet(vec3(0.5, 0.5, 0.5), 0.8, 0.0).x,
+                texture_drip(0.0, -0.1, 1.0, 2.0, vec2(0.0, 0.0), 1)) };
+    }
+}
+node noisy: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 256;
+    compute {
+        // Over many points: each mask within 0 and 1; no puddles where none are asked for, all but none where all
+        // are; no drip beside its opening.
+        let p = vec2(float(element()) * 0.731, float(element()) * 0.377);
+        let m = vec4(texture_streaks(p.x, p.y, 1.0, 20.0, 2), texture_grime(p.y * 0.1, 1.0, p, 3), texture_drip(p.x - 10.0, p.y * 0.05, 1.0, 2.0, p, 4), texture_puddles(p, 3.0, 0.5, 5));
+        let held = m.x >= 0.0 && m.x <= 1.0 && m.y >= 0.0 && m.y <= 1.0 && m.z >= 0.0 && m.z <= 1.0 && m.w >= 0.0 && m.w <= 1.0;
+        let dry = texture_puddles(p, 3.0, 0.0, 5) == 0.0;
+        let flooded = texture_puddles(p, 3.0, 1.0, 5) > 0.99;
+        let beside = texture_drip(3.0, 0.5, 1.0, 2.0, p, 4) == 0.0;
+        return vec4(if held { 1.0 } else { 0.0 }, if dry { 1.0 } else { 0.0 }, if flooded { 1.0 } else { 0.0 }, if beside { 1.0 } else { 0.0 });
+    }
+}
+
+output result <- marks.result;

@@ -91,6 +91,7 @@ Pictures and what a camera sees.
 | [`vector`](vector.entpkg/README.md) | SVG drawings filled pixel by pixel, whole or tiled |
 | [`mesh`](mesh.entpkg/README.md) | Triangle meshes as points and faces: lattices, primitives and subdivision |
 | [`terrain`](terrain.entpkg/README.md) | Ground as heights: sampled, ray-marched, sculpted, eroded and meshed |
+| [`texture`](texture.entpkg/README.md) | Patterns, projections, layers, normals and the marks of age a material is drawn with |
 | [`render`](render.entpkg/README.md) | The G-buffer contract, physically based shading and its renderers |
 | [`particles`](particles.entpkg/README.md) | Particles stepped, binned and drawn over a picture's depth |
 | [`scatter`](scatter.entpkg/README.md) | Things scattered over the ground by layers |

@@ -1,0 +1,30 @@
+scene surfaces.esn
+
+# Facing up, the plane facing up is all of it, (1, 2, 3) on it at x 1
+# and z 3; half way between x and up, those two halves, (3, 2) on the
+# plane facing x. On a face along z, x across and y up, face 2; on one
+# facing mostly x, z across; a floor spans x and z; facing down, face 1.
+frame 0.0
+expect laid.result[0] = 0 1 0 4 0.0001
+expect laid.result[1] = 0.5 0.5 0 5 0.0001
+expect laid.result[2] = 1 2 2 3 0.0001
+expect laid.result[3] = 1 0 1 1 0.0001
+
+# Looking straight in at a face along z is looking along its depth; set
+# 0.2 back, a view half across moves the pattern a tenth. In a room as
+# deep as its window is wide, straight in meets the back wall's middle;
+# half across, the side wall half way in; down at a slant, the floor a
+# quarter in.
+expect behind.result[0] = 0 0 1 0.6 0.0001
+expect behind.result[1] = 0.5 0.5 0 1 0.0001
+expect behind.result[2] = 0.5 0.5 1 0.5 0.0001
+expect behind.result[3] = 0.5 0.25 2 0.25 0.0001
+
+# The higher layer wins outright; with no mask and both flat, the lower;
+# alike, half and half. A slope along x tilts up toward -x; a slope along
+# the normal tilts nothing. A unit rise across tilts a face's normal 45
+# degrees; a face's across is the world's x; a blended detail as it is.
+expect layered.result[0] = 1 0 0.5 0 0.0001
+expect layered.result[1] = -0.7071 0.7071 0 1 0.0001
+expect layered.result[2] = -0.7071 0 0.7071 1 0.0001
+expect layered.result[3] = 0.6 0 0.8 1 0.0001

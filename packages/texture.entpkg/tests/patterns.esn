@@ -1,0 +1,53 @@
+// Patterns at points whose answers are known by hand: a grid's cell, a
+// running bond's brick, an opening in a cell, and the ways they are drawn
+// over a pixel.
+use "../kernels/";
+
+node cells: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 2;
+    compute {
+        let g = texture_grid(vec2(2.5, 1.25), vec2(1.0, 0.5));
+        let b = texture_courses(vec2(0.1, 0.3), vec2(1.0, 0.25), 0.5, 0.0, 1);
+        return if element() == 0 { vec4(g.at.x, g.at.y, g.id.x, g.edge) } else { vec4(b.at.x, b.at.y, b.id.x, b.edge) };
+    }
+}
+node openings: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 1;
+    compute {
+        let inside = texture_inset(texture_grid(vec2(1.0, 1.0), vec2(2.0, 2.0)), vec2(0.25, 0.25), vec2(0.75, 0.75));
+        let beside = texture_inset(texture_grid(vec2(0.0, 1.0), vec2(2.0, 2.0)), vec2(0.25, 0.25), vec2(0.75, 0.75));
+        return vec4(inside, beside, texture_cover(0.0, 1.0), texture_cover(-1.0, 1.0));
+    }
+}
+node drawn: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 3;
+    compute {
+        let k = element();
+        return if k == 0 { vec4(texture_line(0.0, 1.0, 1.0), texture_line(1.0, 1.0, 1.0), texture_line(0.5, 1.0, 1.0), texture_line(0.0, 0.5, 1.0)) }
+            else if k == 1 { vec4(texture_fade(10.0, 1.0), texture_fade(3.5, 1.0), texture_fade(2.0, 1.0), texture_vary(vec3(0.5, 0.5, 0.5), 1.0, 0.2).x) }
+            else { vec4(texture_stripes(0.25, 1.0, 0.5, 1.0), texture_stripes(0.25, 1.0, 0.5, 0.001), texture_stripes(0.75, 1.0, 0.5, 0.001), texture_stripes(0.4, 2.0, 0.25, 0.4)) };
+    }
+}
+node panels: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 64;
+    compute {
+        // Unsplit, a panel is the grid's cell; split, each still holds its point, no bigger than the cell.
+        let uv = vec2(float(element()) * 0.37, float(element()) * 0.23);
+        let g = texture_grid(uv, vec2(3.0, 2.0));
+        let a = texture_panels(uv, vec2(3.0, 2.0), 0, 5);
+        let b = texture_panels(uv, vec2(3.0, 2.0), 3, 5);
+        let same = abs(a.at.x - g.at.x) + abs(a.at.y - g.at.y) + abs(a.edge - g.edge) < 0.0001;
+        let held = b.at.x >= 0.0 && b.at.x <= 1.0 && b.at.y >= 0.0 && b.at.y <= 1.0 && b.size.x <= 3.0 && b.size.y <= 2.0 && b.edge >= 0.0;
+        return vec4(if same { 1.0 } else { 0.0 }, if held { 1.0 } else { 0.0 }, 0.0, 0.0);
+    }
+}
+
+output result <- cells.result;
