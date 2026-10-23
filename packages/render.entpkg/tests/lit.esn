@@ -1,9 +1,9 @@
 // The stand by the light renderers and through every step of a finish:
 // contact shadows laid into the sun's visibility; lit as it is and as a
 // painting has it; clay; haze and stylized edges; lit deep inside the
-// coarse shape; ray traced; the extent a renderer draws at; a film's look;
-// depth of field focused on the middle; and the stand's G-buffer merged
-// with itself, nearer surface by surface.
+// coarse shape; ray traced, and over a polished floor; the extent a
+// renderer draws at; a film's look; depth of field focused on the middle;
+// and the stand's G-buffer merged with itself, nearer surface by surface.
 node stand: graph "stand_scene.esn" { }
 node shadowed: render.contact@1 { surface <- stand.surface; extra <- stand.extra; layers <- stand.layers; lens <- stand.lens; sky <- stand.sky; domain = size(surface); }
 node lit: render.lit@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
@@ -27,6 +27,18 @@ node lit_dark: render.lit@1 { surface <- stand.surface; paint <- stand.paint; ex
 // Ray traced: the G-buffer's shadow, each thing's own occlusion, smooth
 // surfaces' mirror rays traced through the proxies.
 node traced: render.raytraced@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
+    sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; domain = window(); }
+// The floor polished: ray traced, its mirror rays leave it clear of the
+// ground before they count what they meet.
+node polished: kernel {
+    requires { field.read; field.write; }
+    input paint: Grid<Vec4> <- stand.paint;
+    input surface: Grid<Vec4> <- stand.surface;
+    output result: Grid<Vec4>;
+    domain = size(paint);
+    compute { let c = sample(paint); return if sample(surface).y > 0.9 { vec4(c.x, c.y, c.z, 0.05) } else { c }; }
+}
+node traced_floor: render.raytraced@1 { surface <- stand.surface; paint <- polished.result; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
     sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; domain = window(); }
 node aired: render.haze@1 { hdr <- lit.result; surface <- stand.surface; lens <- stand.lens; sky <- stand.sky; on = 1; }
 node inked: render.stylized@1 { image <- painted.result; surface <- stand.surface; }

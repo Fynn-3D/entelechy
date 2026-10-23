@@ -40,3 +40,8 @@ expect traced.result[12880] = 0.2318 0.2365 0.2513 1 0.002
 # Lit as a painting has it with stylized edges, and clay: the gray ball.
 expect inked.result[9463] = 0.2422 0.2618 0.3218 1 0.002
 expect clay.result[9463] = 0.5058 0.5087 0.5150 1 0.002
+
+# Ray traced over a polished floor: the floor's mirror rays leave it clear
+# of the ground before they count what they meet, so a floor pixel shows
+# what stands round it, not the floor it left.
+expect traced_floor.result[11200] = 0.2405 0.2471 0.2655 1 0.0005
