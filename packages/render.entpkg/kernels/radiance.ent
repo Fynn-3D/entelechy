@@ -199,19 +199,118 @@ kernel render.radiance@1 {
     }
 }
 
-/// The light bounced off the things round each pixel, gathered at a coarser grid (`domain = ceil(size(surface) / every)`): five
-/// cones about the normal of the surface a cell's middle pixel shows (one along it, four leaning out) gather what the cache
-/// holds (`radiance_cone`), the cosine's share each (rgb), and its distance (w; the sky's for none); and `mirror`, one cone
-/// along its mirror direction, as wide as its roughness makes it (rgb), and how much of it the cache's things shut (w).
-/// Each cell's cones set off a little nearer or farther (interleaved gradient noise), so neighbors' steps do not land on
-/// the same distances and draw the proxy's level sets as rings; `render.bounce` averages them out. Each of the five is
-/// first followed on the screen, `screen_reach` meters at most (0 none): where it meets what the screen shows, the light
-/// leaving that (`screen`, the picture lit before the bounce, `render.bounce_screen`'s, averaged as wide as a cone is
-/// near) is what comes back along it, as fine as the screen holds it (a chair's leg, the floor under a desk), and the
-/// cache is read only past the screen (Lumen's screen traces).
-kernel render.bounce_gather@1 {
+/// The light coming into each probe of the screen (`domain = ceil(size(surface) / probe)`, a probe in the middle of each
+/// `probe` by `probe` pixels; Lumen's screen probes): `rays` rays over the hemisphere about the surface it stands on, laid
+/// evenly (a Fibonacci spiral in the cosine, uniform over the hemisphere, turned by the probe's own hash so neighbors do not
+/// line up), each first followed on the screen `screen_reach` meters (where it meets what the screen shows, the light
+/// leaving that, `screen`'s, comes back along it), then through the cache as a cone `spread` meters a meter wide; what comes
+/// in kept as first-order spherical harmonics, a color each (`red`, `green`, `blue`: the constant x, the linear yzw along
+/// world x, y, z), and where the probe stands (`place`: its normal xyz, its distance w; the sky's for none).
+kernel render.bounce_probes@1 {
     requires { field.read; field.write; }
     input screen: Image;
+    input surface: Grid<Vec4>;
+    input lens: Lenses;
+    input radiance: Volume<Vec4>;
+    input rframe: Proxies;
+    input proxy: Volume<Vec4>;
+    input frame: Proxies;
+    param probe: Int = 8;
+    param rays: Int = 32;
+    param spread: Float = 0.35;
+    param reach: Float = 30.0;
+    param steps: Int = 10;
+    param screen_reach: Float = 1.0;
+    param screen_steps: Int = 12;
+    output red: Image;
+    output green: Image;
+    output blue: Image;
+    output place: Image;
+    compute {
+        let none = vec4(0.0, 0.0, 0.0, 0.0);
+        let q = min(floor(coord()) * float(probe) + float(probe / 2), size(surface) - 1.0);
+        let su = at(surface, q);
+        if su.w > no_hit() * 0.5 { return { red: none, green: none, blue: none, place: vec4(0.0, 1.0, 0.0, no_hit()) }; }
+        let l = at(lens, 0);
+        let dir = ray(l, q, size(surface));
+        let n = su.xyz;
+        let p = l.eye + dir * su.w + n * 0.05;
+        let pv = proxy_levels(frame);
+        let rv = proxy_levels(rframe);
+        let t = normalize(if abs(n.y) < 0.9 { cross(n, vec3(0.0, 1.0, 0.0)) } else { cross(n, vec3(1.0, 0.0, 0.0)) });
+        let b = cross(n, t);
+        let own = fract(52.9829189 * fract(0.06711056 * coord().x + 0.00583715 * coord().y));
+        let start = pv.rows[0].cell * (1.0 + own);
+        let k = max(rays, 1);
+        let share = 6.2831853 / float(k);
+        let sums = loop 64 with a = [none, none, none] until index() >= k {
+            let c = 1.0 - (float(index()) + 0.5) / float(k);
+            let s = sqrt(max(1.0 - c * c, 0.0));
+            let phi = float(index()) * 2.3999632 + own * 6.2831853;
+            let way = normalize(t * (s * cos(phi)) + b * (s * sin(phi)) + n * c);
+            let hit = if screen_reach > 0.0 { screen_march(surface, l, size(surface), p, way, screen_reach, screen_steps, 0.3, own) } else { vec3(0.0, 0.0, -1.0) };
+            let seen = if hit.z >= 0.0 { at_linear(screen, (hit.xy + 0.5) * size(screen) / size(surface)).xyz } else { radiance_cone(radiance, rv, proxy, pv, p, way, spread, start, reach, steps).xyz };
+            let y = vec4(0.282095, way.x * 0.488603, way.y * 0.488603, way.z * 0.488603) * share;
+            [a[0] + y * seen.x, a[1] + y * seen.y, a[2] + y * seen.z]
+        };
+        return { red: sums[0], green: sums[1], blue: sums[2], place: vec4(n.x, n.y, n.z, su.w) };
+    }
+}
+
+/// How much a probe standing at `pl` (its normal, its distance) speaks for a surface facing `n` at distance `d`: alike in
+/// distance and in facing.
+fn bounce_probe_alike(pl: Vec4, n: Vec3, d: Float) -> Float {
+    if pl.w > no_hit() * 0.5 { return 0.0; }
+    let near = exp(0.0 - abs(pl.w - d) / (d * 0.03 + 0.05));
+    let facing = pow(saturate(dot(pl.xyz, n)), 4.0);
+    return near * facing;
+}
+
+/// The cosine-weighted mean of the light a probe's harmonics `r`, `g`, `b` hold, for a surface facing `n` (the
+/// irradiance over pi: first-order harmonics convolved with the cosine, Ramamoorthi and Hanrahan's).
+fn bounce_probe_light(r: Vec4, g: Vec4, b: Vec4, n: Vec3) -> Vec3 {
+    let y = vec4(0.282095, n.x * 0.325735, n.y * 0.325735, n.z * 0.325735);
+    return vec3(dot(r, y), dot(g, y), dot(b, y));
+}
+
+/// The probes smoothed (`domain` the probes'): each the mean of the three by three round it, each by how alike it stands
+/// (`bounce_probe_alike`), so a probe's few rays are helped by its neighbors' on the same surface and not by another's.
+kernel render.bounce_probe_filter@1 {
+    requires { field.read; field.write; }
+    input red: Image;
+    input green: Image;
+    input blue: Image;
+    input place: Image;
+    output r: Image;
+    output g: Image;
+    output b: Image;
+    compute {
+        let c = coord();
+        let me = sample(place);
+        if me.w > no_hit() * 0.5 { return { r: sample(red), g: sample(green), b: sample(blue) }; }
+        let top = size(place) - 1.0;
+        let sum = loop 9 with a = [vec4(0.0, 0.0, 0.0, 0.0), vec4(0.0, 0.0, 0.0, 0.0), vec4(0.0, 0.0, 0.0, 0.0), vec4(0.0, 0.0, 0.0, 0.0)] {
+            let o = clamp(c + vec2(float(index() % 3) - 1.0, float(index() / 3) - 1.0), vec2(0.0, 0.0), top);
+            let w = bounce_probe_alike(at(place, o), me.xyz, me.w) * (if index() == 4 { 2.0 } else { 1.0 });
+            [a[0] + at(red, o) * w, a[1] + at(green, o) * w, a[2] + at(blue, o) * w, a[3] + vec4(w, 0.0, 0.0, 0.0)]
+        };
+        let w = max(sum[3].x, 0.000001);
+        return { r: sum[0] / w, g: sum[1] / w, b: sum[2] / w };
+    }
+}
+
+/// The light bounced off the things round each pixel, at a coarser grid (`domain = ceil(size(surface) / every)`): the
+/// probes round a cell's middle pixel (`render.bounce_probe_filter`'s, laid every `probe` pixels), each by how near and how
+/// alike it stands, their harmonics read for the cell's own normal (rgb; the nearest alike probe where none of the four is,
+/// none where no probe of the nine round it is), and its distance (w; the sky's for none); and `mirror`, one cone along
+/// its mirror direction through the cache, as wide as its roughness makes it (rgb), and how much of it the cache's things
+/// shut (w).
+kernel render.bounce_gather@1 {
+    requires { field.read; field.write; }
+    input red: Image;
+    input green: Image;
+    input blue: Image;
+    input place: Image;
     input surface: Grid<Vec4>;
     input paint: Grid<Vec4>;
     input lens: Lenses;
@@ -220,11 +319,9 @@ kernel render.bounce_gather@1 {
     input proxy: Volume<Vec4>;
     input frame: Proxies;
     param every: Int = 2;
-    param spread: Float = 0.6;
+    param probe: Int = 8;
     param reach: Float = 30.0;
     param steps: Int = 10;
-    param screen_reach: Float = 1.0;
-    param screen_steps: Int = 12;
     output result: Image;
     output mirror: Image;
     compute {
@@ -234,21 +331,32 @@ kernel render.bounce_gather@1 {
         let l = at(lens, 0);
         let dir = ray(l, q, size(surface));
         let n = su.xyz;
-        let p = l.eye + dir * su.w + n * 0.05;
+        // The probes round q: their grid's coordinates, the probe in each cell standing at its middle.
+        let g = (q + 0.5) / float(probe) - 0.5;
+        let base = floor(g);
+        let f = g - base;
+        let top = size(place) - 1.0;
+        let four = loop 4 with a = vec4(0.0, 0.0, 0.0, 0.0) {
+            let o = vec2(float(index() % 2), float(index() / 2));
+            let cell = clamp(base + o, vec2(0.0, 0.0), top);
+            let near = (if o.x > 0.5 { f.x } else { 1.0 - f.x }) * (if o.y > 0.5 { f.y } else { 1.0 - f.y });
+            let w = (near + 0.001) * bounce_probe_alike(at(place, cell), n, su.w);
+            let light = bounce_probe_light(at(red, cell), at(green, cell), at(blue, cell), n);
+            vec4(a.x + light.x * w, a.y + light.y * w, a.z + light.z * w, a.w + w)
+        };
+        let nine = if four.w > 0.0001 { four } else {
+            loop 9 with a = vec4(0.0, 0.0, 0.0, 0.0) {
+                let cell = clamp(floor(g + 0.5) + vec2(float(index() % 3) - 1.0, float(index() / 3) - 1.0), vec2(0.0, 0.0), top);
+                let w = bounce_probe_alike(at(place, cell), n, su.w);
+                if w > a.w { let light = bounce_probe_light(at(red, cell), at(green, cell), at(blue, cell), n); vec4(light.x * w, light.y * w, light.z * w, w) } else { a }
+            }
+        };
+        let gathered = if nine.w > 0.0 { max(nine.xyz / nine.w, vec3(0.0, 0.0, 0.0)) } else { vec3(0.0, 0.0, 0.0) };
         let pv = proxy_levels(frame);
         let rv = proxy_levels(rframe);
-        let t = normalize(if abs(n.y) < 0.9 { cross(n, vec3(0.0, 1.0, 0.0)) } else { cross(n, vec3(1.0, 0.0, 0.0)) });
-        let b = cross(n, t);
+        let p = l.eye + dir * su.w + n * 0.05;
         let jitter = fract(52.9829189 * fract(0.06711056 * coord().x + 0.00583715 * coord().y));
         let start = pv.rows[0].cell * (1.0 + jitter);
-        let gathered = loop 5 with g = vec3(0.0, 0.0, 0.0) {
-            let a = float(index() - 1) * 1.5707963;
-            let way = if index() == 0 { n } else { normalize(n + (t * cos(a) + b * sin(a))) };
-            let share = if index() == 0 { 0.28 } else { 0.18 };
-            let hit = if screen_reach > 0.0 { screen_march(surface, l, size(surface), p, way, screen_reach, screen_steps, 0.3, jitter) } else { vec3(0.0, 0.0, -1.0) };
-            let seen = if hit.z >= 0.0 { at_linear(screen, (hit.xy + 0.5) * size(screen) / size(surface)).xyz } else { radiance_cone(radiance, rv, proxy, pv, p, way, spread, start, reach, steps).xyz };
-            g + seen * share
-        };
         let rough = at(paint, q).w;
         let r = reflect(dir, n);
         let seen = radiance_cone(radiance, rv, proxy, pv, p, r, 0.05 + rough * 0.9, start, reach, steps);

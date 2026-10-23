@@ -115,15 +115,21 @@ use "render.entpkg";
   in; each pixel's bounced light gathered through cones read in the levels
   as wide as they are, light taken only from surfaces facing back along a
   cone (so a thin wall's far side does not leak through), the cones set
-  off at jittered distances and averaged over sixteen cells, each first
-  followed on the screen a meter (`screen_reach`): where it meets what the
-  screen shows, the lit picture's light there, averaged over a patch as
-  wide as a near cone (`render.bounce_screen`), the cache only past it, so
-  the light and shade nearer than its cells (under a desk, beside a chair's
-  leg) come from the screen. Kernels:
+  off at jittered distances and averaged over sixteen cells. The light a
+  pixel takes is gathered by probes of the screen (Lumen's screen probes),
+  one every `probe` pixels, `rays` rays each over the hemisphere, each ray
+  first followed on the screen a meter (`screen_reach`: where it meets
+  what the screen shows, the lit picture's light there, averaged over a
+  patch as wide as a near cone, `render.bounce_screen`), the cache only
+  past it, so the light and shade nearer than its cells (under a desk,
+  beside a chair's leg) come from the screen; each probe keeps what comes
+  in as first-order spherical harmonics, smoothed among its alike
+  neighbors (`render.bounce_probe_filter`), and each pixel reads the
+  probes round it for its own normal. Kernels:
   `render.radiance_frame@1`, `render.radiance_size@1`,
   `render.radiance_turn@1`, `render.radiance@1`,
-  `render.bounce_screen@1`, `render.bounce_gather@1`, `render.bounce@1`.
+  `render.bounce_screen@1`, `render.bounce_probes@1`, `render.bounce_probe_filter@1`,
+  `render.bounce_gather@1`, `render.bounce@1`.
 - `kernels/reflection.ent` — Reflections on the screen in place of a
   renderer's own (`reflection`) where the screen shows what a mirror ray
   meets. Kernels: `render.reflections@1`.
