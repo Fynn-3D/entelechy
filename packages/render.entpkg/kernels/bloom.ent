@@ -21,6 +21,8 @@ kernel render.bloom_down@1 {
     param first: Int = 0;
     param threshold: Float = 1.0;
     param knee: Float = 0.5;
+    /// How hard the brightest points are held down before they glow (0 not at all; fireflies otherwise flash).
+    param calm: Float = 0.05;
     output result: Image;
     compute {
         let ratio = size(image) / domain();
@@ -47,8 +49,8 @@ kernel render.bloom_down@1 {
         let kept = max(soft * soft / (4.0 * knee + 0.00001), bright - threshold) / max(bright, 0.00001);
         let out = sum * max(kept, 0.0);
         // Fireflies: a level's sample weighed down by its own brightness.
-        let calm = out / (1.0 + max(out.x, max(out.y, out.z)) * 0.05);
-        return vec4(calm.x, calm.y, calm.z, 1.0);
+        let held = out / (1.0 + max(out.x, max(out.y, out.z)) * calm);
+        return vec4(held.x, held.y, held.z, 1.0);
     }
 }
 

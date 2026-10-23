@@ -11,9 +11,15 @@ input jlens: Lenses;
 /// How far each pixel's thing moved this frame (in the world; 1 × 1 when nothing moved).
 input motion: Grid<Vec4>;
 
+/// The most of each frame taken, and how far the history may stray from this frame's neighborhood, held still and moving
+/// (`render.taa`).
+param fresh: Float = 0.12;
+param clamp_still: Float = 2.0;
+param clamp_moving: Float = 1.5;
+
 node blank_hdr: Image { domain = vec2(1, 1); }
 node now: render.same_lens@1 { lens <- lens; domain = 1; }
 node taa: render.taa@1 { hdr <- hdr; surface <- surface; lens <- lens; jlens <- jlens; motion <- motion; was_lens <~ now.result from now.result;
-    history <~ taa.result from blank_hdr.result; domain = window(); }
+    history <~ taa.result from blank_hdr.result; fresh = fresh; clamp_still = clamp_still; clamp_moving = clamp_moving; domain = window(); }
 
 output result <- taa.result;

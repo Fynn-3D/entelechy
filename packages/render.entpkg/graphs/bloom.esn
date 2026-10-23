@@ -9,8 +9,10 @@ input hdr: Image;
 param threshold: Float = 1.0;
 /// How much the larger glows count against the smaller.
 param spread: Float = 0.8;
+/// How hard the brightest points are held down before they glow.
+param calm: Float = 0.05;
 
-node d1: render.bloom_down@1 { image <- hdr; first = 1; threshold = threshold; domain = ceil(size(image) / 2); }
+node d1: render.bloom_down@1 { image <- hdr; first = 1; threshold = threshold; calm = calm; domain = ceil(size(image) / 2); }
 node d2: render.bloom_down@1 { image <- d1.result; domain = ceil(size(image) / 2); }
 node d3: render.bloom_down@1 { image <- d2.result; domain = ceil(size(image) / 2); }
 node d4: render.bloom_down@1 { image <- d3.result; domain = ceil(size(image) / 2); }

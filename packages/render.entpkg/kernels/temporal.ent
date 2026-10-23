@@ -69,6 +69,10 @@ kernel render.taa@1 {
     input motion: Grid<Vec4>;
     /// The most of each frame this frame takes (when a sample falls right on the pixel).
     param fresh: Float = 0.12;
+    /// How far the history may stray from this frame's neighborhood, in its spreads, held still and moving (wider keeps more
+    /// detail and smears more; narrower flickers more).
+    param clamp_still: Float = 2.0;
+    param clamp_moving: Float = 1.5;
     output result: Image;
     compute {
         let q = icoord();
@@ -116,7 +120,7 @@ kernel render.taa@1 {
         let travel = length(back - vec2(float(q.x), float(q.y)));
         let moving = smoothstep(0.25, 3.0, travel);
         let was = squeeze(max(catmull_rom(history, back + 0.5), vec3(0.0, 0.0, 0.0)));
-        let reach = mix(2.0, 1.5, moving);
+        let reach = mix(clamp_still, clamp_moving, moving);
         let kept = clamp(was, mean - sigma * reach, mean + sigma * reach);
         let share = clamp(fresh * (0.3 + 0.7 * near) + 0.15 * moving, 0.03, 0.5);
         let mixed = unsqueeze(mix(kept, cur, share));

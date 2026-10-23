@@ -20,6 +20,8 @@ fn exposure_log(c: Vec3) -> Float {
 kernel render.exposure_tiles@1 {
     requires { field.read; field.write; }
     input hdr: Image;
+    /// How much less the picture's edges count than its middle (0 all alike).
+    param center: Float = 0.6;
     output result: Grid<Vec2>;
     compute {
         let ext = size(hdr);
@@ -29,7 +31,7 @@ kernel render.exposure_tiles@1 {
             vec2(sum.x + exposure_log(at(hdr, q).xyz), sum.y + 1.0)
         };
         let mid = (lo + exposure_tile() * 0.5) / ext - 0.5;
-        let weight = 1.0 - 0.6 * smoothstep(0.1, 0.7, length(mid * vec2(1.0, 1.4)));
+        let weight = 1.0 - center * smoothstep(0.1, 0.7, length(mid * vec2(1.0, 1.4)));
         return vec2(sum.x / max(sum.y, 1.0), weight);
     }
 }
