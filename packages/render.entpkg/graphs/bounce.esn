@@ -29,6 +29,8 @@ param strength: Float = 1.0;
 param spread: Float = 0.6;
 param reach: Float = 30.0;
 param steps: Int = 10;
+/// How far (meters) each gathering cone is first followed on the screen (0 none).
+param screen_reach: Float = 1.0;
 /// The bounce is gathered once every this many pixels a side, and spread back over them by distance.
 param every: Int = 2;
 param ground: Vec3 = vec3(0.34, 0.29, 0.22);
@@ -47,8 +49,9 @@ node cache: render.radiance@1 { previous <~ cache.result from none.result; previ
     sky <- sky; lamps <- lamps; turn <- turn.result; size <- cells.result; parts = parts; bounce = bounce; spread = spread; reach = reach;
     ground = ground; ground_light = ground_light; sky_light = sky_light; open_reach = open_reach; open_strength = open_strength; open_least = open_least;
     domain = vec3(value(size, 0), value(size, 1), value(size, 2)); }
-node gathered: render.bounce_gather@1 { surface <- surface; paint <- paint; lens <- lens; radiance <- cache.result; rframe <- rframe.result; proxy <- proxy; frame <- frame;
-    every = every; spread = spread; reach = reach; steps = steps; domain = ceil(size(surface) / every); }
+node screen: render.bounce_screen@1 { hdr <- hdr; surface <- surface; domain = ceil(size(surface) / 4); }
+node gathered: render.bounce_gather@1 { screen <- screen.result; surface <- surface; paint <- paint; lens <- lens; radiance <- cache.result; rframe <- rframe.result; proxy <- proxy; frame <- frame;
+    every = every; spread = spread; reach = reach; steps = steps; screen_reach = screen_reach; domain = ceil(size(surface) / every); }
 node bounced: render.bounce@1 { hdr <- hdr; gathered <- gathered.result; mirror <- gathered.mirror; reflection <- reflection; surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; lens <- lens; sky <- sky;
     every = every; strength = strength; domain = size(hdr); }
 

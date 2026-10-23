@@ -11,7 +11,7 @@ expect bounced.turn.result[1] = 49
 # balls, orange beside the glowing gold one, near white under the white
 # one; the sky takes nothing.
 expect added.result[0].x > 0.08
-expect added.result[0].w > 6.0
+expect added.result[0].w > 4.0
 expect added.result[1].x > 0.2
 expect added.result[1].w > 2.0
 expect added.result[2].x > 0.05

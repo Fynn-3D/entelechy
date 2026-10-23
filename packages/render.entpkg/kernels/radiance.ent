@@ -204,9 +204,14 @@ kernel render.radiance@1 {
 /// holds (`radiance_cone`), the cosine's share each (rgb), and its distance (w; the sky's for none); and `mirror`, one cone
 /// along its mirror direction, as wide as its roughness makes it (rgb), and how much of it the cache's things shut (w).
 /// Each cell's cones set off a little nearer or farther (interleaved gradient noise), so neighbors' steps do not land on
-/// the same distances and draw the proxy's level sets as rings; `render.bounce` averages them out.
+/// the same distances and draw the proxy's level sets as rings; `render.bounce` averages them out. Each of the five is
+/// first followed on the screen, `screen_reach` meters at most (0 none): where it meets what the screen shows, the light
+/// leaving that (`screen`, the picture lit before the bounce, `render.bounce_screen`'s, averaged as wide as a cone is
+/// near) is what comes back along it, as fine as the screen holds it (a chair's leg, the floor under a desk), and the
+/// cache is read only past the screen (Lumen's screen traces).
 kernel render.bounce_gather@1 {
     requires { field.read; field.write; }
+    input screen: Image;
     input surface: Grid<Vec4>;
     input paint: Grid<Vec4>;
     input lens: Lenses;
@@ -218,6 +223,8 @@ kernel render.bounce_gather@1 {
     param spread: Float = 0.6;
     param reach: Float = 30.0;
     param steps: Int = 10;
+    param screen_reach: Float = 1.0;
+    param screen_steps: Int = 12;
     output result: Image;
     output mirror: Image;
     compute {
@@ -234,16 +241,38 @@ kernel render.bounce_gather@1 {
         let b = cross(n, t);
         let jitter = fract(52.9829189 * fract(0.06711056 * coord().x + 0.00583715 * coord().y));
         let start = pv.rows[0].cell * (1.0 + jitter);
-        let along = radiance_cone(radiance, rv, proxy, pv, p, n, spread, start, reach, steps).xyz * 0.28;
-        let gathered = loop 4 with g = along {
-            let a = float(index()) * 1.5707963;
-            let way = normalize(n + (t * cos(a) + b * sin(a)));
-            g + radiance_cone(radiance, rv, proxy, pv, p, way, spread, start, reach, steps).xyz * 0.18
+        let gathered = loop 5 with g = vec3(0.0, 0.0, 0.0) {
+            let a = float(index() - 1) * 1.5707963;
+            let way = if index() == 0 { n } else { normalize(n + (t * cos(a) + b * sin(a))) };
+            let share = if index() == 0 { 0.28 } else { 0.18 };
+            let hit = if screen_reach > 0.0 { screen_march(surface, l, size(surface), p, way, screen_reach, screen_steps, 0.3, jitter) } else { vec3(0.0, 0.0, -1.0) };
+            let seen = if hit.z >= 0.0 { at_linear(screen, (hit.xy + 0.5) * size(screen) / size(surface)).xyz } else { radiance_cone(radiance, rv, proxy, pv, p, way, spread, start, reach, steps).xyz };
+            g + seen * share
         };
         let rough = at(paint, q).w;
         let r = reflect(dir, n);
         let seen = radiance_cone(radiance, rv, proxy, pv, p, r, 0.05 + rough * 0.9, start, reach, steps);
         return { result: vec4(gathered.x, gathered.y, gathered.z, su.w), mirror: seen };
+    }
+}
+
+/// The picture lit before the bounce as the bounce's screen traces read it (`domain = ceil(size(surface) / 4)`): each
+/// cell the mean of the four by four pixels it covers that show something, the sky left out, so a trace meets the light
+/// of a patch as wide as a near cone, not one sunlit pixel's.
+kernel render.bounce_screen@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    input surface: Grid<Vec4>;
+    output result: Image;
+    compute {
+        let o = floor(coord()) * 4.0;
+        let top = size(surface) - 1.0;
+        let sum = loop 16 with a = vec4(0.0, 0.0, 0.0, 0.0) {
+            let q = min(o + vec2(float(index() % 4), float(index() / 4)), top);
+            if at(surface, q).w > no_hit() * 0.5 { a } else { a + vec4(at(hdr, q).xyz, 1.0) }
+        };
+        let c = sum.xyz / max(sum.w, 1.0);
+        return vec4(c.x, c.y, c.z, 1.0);
     }
 }
 
