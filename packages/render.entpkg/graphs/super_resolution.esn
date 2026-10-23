@@ -10,6 +10,11 @@ input surface: Grid<Vec4>;
 input lens: Lenses;
 input jlens: Lenses;
 input motion: Grid<Vec4>;
+/// How narrow the bell this frame's samples are weighed by is (`render.tsr`).
+param filter: Float = 6.0;
+/// The most frames a pixel gathers, still and moving fast (`render.tsr`).
+param most: Float = 32.0;
+param least: Float = 10.0;
 
 node aa: render.fxaa@1 { image <- hdr; }
 node blank_hdr: Image { domain = vec2(1, 1); }
@@ -17,8 +22,9 @@ node blank_meta: Grid<Vec4> { domain = vec2(1, 1); }
 node shown: render.keep_surface@1 { surface <- surface; }
 node shown_motion: render.keep_surface@1 { surface <- motion; }
 node now: render.same_lens@1 { lens <- lens; domain = 1; }
+node rests: render.lens_rests@1 { lens <- lens; jlens <- jlens; was_lens <~ now.result from now.result; domain = 1; }
 node tsr: render.tsr@1 { hdr <- hdr; aa <- aa.result; surface <- surface; was_surface <~ shown.result from shown.result; lens <- lens; jlens <- jlens;
-    was_lens <~ now.result from now.result; motion <- motion; was_motion <~ shown_motion.result from shown_motion.result;
-    history <~ tsr.result from blank_hdr.result; meta <~ tsr.meta_out from blank_meta.result; domain = window(); }
+    was_lens <~ now.result from now.result; motion <- motion; rests <- rests.result; was_motion <~ shown_motion.result from shown_motion.result;
+    history <~ tsr.result from blank_hdr.result; meta <~ tsr.meta_out from blank_meta.result; filter = filter; most = most; least = least; domain = window(); }
 
 output result <- tsr.result;

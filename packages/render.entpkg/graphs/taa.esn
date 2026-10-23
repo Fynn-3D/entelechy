@@ -19,7 +19,8 @@ param clamp_moving: Float = 1.5;
 
 node blank_hdr: Image { domain = vec2(1, 1); }
 node now: render.same_lens@1 { lens <- lens; domain = 1; }
-node taa: render.taa@1 { hdr <- hdr; surface <- surface; lens <- lens; jlens <- jlens; motion <- motion; was_lens <~ now.result from now.result;
+node rests: render.lens_rests@1 { lens <- lens; jlens <- jlens; was_lens <~ now.result from now.result; domain = 1; }
+node taa: render.taa@1 { hdr <- hdr; surface <- surface; lens <- lens; jlens <- jlens; motion <- motion; rests <- rests.result; was_lens <~ now.result from now.result;
     history <~ taa.result from blank_hdr.result; fresh = fresh; clamp_still = clamp_still; clamp_moving = clamp_moving; domain = window(); }
 
 output result <- taa.result;

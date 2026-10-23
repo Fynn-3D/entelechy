@@ -1,12 +1,21 @@
 // The stand drawn through a jittered lens frame after frame: blended with
 // the history carried over (temporal antialiasing), and built up to the
-// window's size from a smaller picture (super-resolution); and a
-// triangle through the picture's own raster.
+// window's size from a smaller picture (super-resolution), both held once
+// the picture rests (`rest`); and a triangle through the picture's own
+// raster.
 use "../kernels/";
 use "raster.entpkg";
 
 node stand: graph "stand_scene.esn" { }
-node calm: Rows<Int> { domain = 1; value = 0; }
+/// How many frames the picture has rested (the scene's count; 16 and more: jittered no more).
+param rest: Int = 0;
+node calm: kernel {
+    requires { field.write; }
+    param rest: Int = rest;
+    output result: Rows<Int>;
+    domain = 1;
+    compute { return rest; }
+}
 node size: kernel {
     requires { field.write; input.read; }
     output result: Rows<Vec2>;

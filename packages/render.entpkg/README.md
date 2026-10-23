@@ -175,7 +175,7 @@ use "render.entpkg";
 - `kernels/super_resolution.ent` — Temporal super-resolution (TSR).
   Kernels: `render.tsr@1`, `render.keep_surface@1`.
 - `kernels/temporal.ent` — Temporal antialiasing (TAA). Kernels:
-  `render.jitter@1`, `render.taa@1`, `render.same_lens@1`.
+  `render.jitter@1`, `render.taa@1`, `render.lens_rests@1`, `render.same_lens@1`.
 - `kernels/tonemap.ent` — Glow and tone mapping. Kernels: `render.blank@1`,
   `render.bright@1`, `render.spread@1`, `render.tonemap@1`.
 - `kernels/translucent.ent` — Translucent layers over a renderer's

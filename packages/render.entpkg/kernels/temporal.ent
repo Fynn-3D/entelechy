@@ -17,6 +17,11 @@ fn halton(i: Int, base: Int) -> Float {
 /// How many frames are jittered once the picture rests.
 fn jitter_frames() -> Int { return 16; }
 
+/// Whether two lenses are one: the same eye, the same way, the same focal length.
+fn lens_alike(a: Lens, b: Lens) -> Bool {
+    return length(a.eye - b.eye) < 0.000001 && length(a.ahead - b.ahead) < 0.000001 && length(a.up - b.up) < 0.000001 && abs(a.focal - b.focal) < 0.000001;
+}
+
 /// How far the lens is jittered this frame (pixels, -0.5 to 0.5): by time while moving; once resting, the frame's own
 /// in turn, and 0 once enough are jittered.
 fn jitter_at(calm: Int, t: Float) -> Vec2 {
@@ -56,8 +61,9 @@ kernel render.jitter@1 {
 ///
 /// This frame's color is taken where it truly falls through the jittered lens; the nearer the nearest sample falls
 /// to this pixel, the larger its share (a small picture jittered frame by frame builds a large one, without shaking). The last
-/// frame is read by Catmull-Rom (not blurred), held between the mean of the colors round it this frame plus and minus a few standard deviations
-/// (moving and newly uncovered things do not smear).
+/// frame is read by Catmull-Rom (not blurred), held within a few standard deviations of the mean of the colors round it this
+/// frame, as luma and chroma (moving and newly uncovered things do not smear); once the picture rests unjittered, held as
+/// gathered.
 kernel render.taa@1 {
     requires { field.read; field.write; }
     input hdr: Image;
@@ -67,6 +73,8 @@ kernel render.taa@1 {
     input was_lens: Lenses;
     input history: Image;
     input motion: Grid<Vec4>;
+    /// Whether the picture rests unjittered (`render.lens_rests`).
+    input rests: Rows<Int>;
     /// The most of each frame this frame takes (when a sample falls right on the pixel).
     param fresh: Float = 0.12;
     /// How far the history may stray from this frame's neighborhood, in its spreads, held still and moving (wider keeps more
@@ -104,24 +112,33 @@ kernel render.taa@1 {
         // again after): a sparkle on the water or a lit leaf then weighs
         // like any color, and does not flash on and off.
         let cur = squeeze(mix(now.xyz, nearest, near * 0.25));
-        // The colors about it this frame: their mean and spread.
+        // The colors about it this frame (as luma and chroma): their mean and spread.
         let center = floor(at_small);
         let m = loop 9 with a = [vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0)] {
             let o = vec2(float(index() % 3 - 1), float(index() / 3 - 1));
-            let v = squeeze(at(hdr, clamp(center + o, vec2(0.0, 0.0), small - 1.0)).xyz);
+            let v = ycocg(squeeze(at(hdr, clamp(center + o, vec2(0.0, 0.0), small - 1.0)).xyz));
             [a[0] + v, a[1] + v * v]
         };
         let mean = m[0] / 9.0;
-        let sigma = sqrt(max(m[1] / 9.0 - mean * mean, vec3(0.0, 0.0, 0.0)));
+        // Never narrower than a shade the eye can tell: a flat wall's own grain does not turn its history away.
+        let sigma = sqrt(max(m[1] / 9.0 - mean * mean, vec3(0.0, 0.0, 0.0))) + 0.006;
         // Moving across the picture, the history is less to be trusted
         // (each carry softens it, and it smears like motion blur): the
         // further it came, the tighter it is held to this frame's colors
         // and the more of this frame is taken.
         let travel = length(back - vec2(float(q.x), float(q.y)));
         let moving = smoothstep(0.25, 3.0, travel);
-        let was = squeeze(max(catmull_rom(history, back + 0.5), vec3(0.0, 0.0, 0.0)));
+        let was = ycocg(squeeze(max(catmull_rom(history, back + 0.5), vec3(0.0, 0.0, 0.0))));
+        // At rest and no longer jittered (`render.jitter`), a frame adds nothing the history lacks: it is held (only kept
+        // among this frame's colors), and the picture settles as gathered.
+        if at(rests, 0) == 1 && length(moved) == 0.0 {
+            let kept = clip_toward(was, mean, sigma * 3.0);
+            // Within this frame's colors: the history as it is, bit for bit (the picture rests).
+            let held = if length(kept - was) == 0.0 { at(history, coord()).xyz } else { unsqueeze(ycocg_rgb(kept)) };
+            return vec4(held.x, held.y, held.z, now.w);
+        }
         let reach = mix(clamp_still, clamp_moving, moving);
-        let kept = clamp(was, mean - sigma * reach, mean + sigma * reach);
+        let kept = ycocg_rgb(clip_toward(was, mean, sigma * reach));
         let share = clamp(fresh * (0.3 + 0.7 * near) + 0.15 * moving, 0.03, 0.5);
         let mixed = unsqueeze(mix(kept, cur, share));
         return vec4(mixed.x, mixed.y, mixed.z, now.w);
@@ -131,6 +148,19 @@ kernel render.taa@1 {
 /// A color's brightness pressed into 0 to 1 (`unsqueeze` gives it back).
 fn squeeze(c: Vec3) -> Vec3 { return c / (1.0 + max(c.x, max(c.y, c.z))); }
 fn unsqueeze(c: Vec3) -> Vec3 { return c / max(1.0 - max(c.x, max(c.y, c.z)), 0.0001); }
+
+/// A color as luma and two chroma (YCoCg; `ycocg_rgb` gives it back): a history is held among this frame's colors there,
+/// where a colored ghost on a gray ground is far off even when its brightness is not.
+fn ycocg(c: Vec3) -> Vec3 { return vec3(c.x * 0.25 + c.y * 0.5 + c.z * 0.25, c.x * 0.5 - c.z * 0.5, c.y * 0.5 - c.x * 0.25 - c.z * 0.25); }
+fn ycocg_rgb(c: Vec3) -> Vec3 { return vec3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z); }
+/// `c` drawn toward `mean` until it lies within `reach` of it on each axis (clipped, not clamped: its hue kept as it
+/// comes in).
+fn clip_toward(c: Vec3, mean: Vec3, reach: Vec3) -> Vec3 {
+    let v = c - mean;
+    let u = abs(v) / max(reach, vec3(0.000001, 0.000001, 0.000001));
+    let most = max(u.x, max(u.y, u.z));
+    return if most > 1.0 { mean + v / most } else { c };
+}
 
 /// An image read at `c` (texel centers on half texels) by Catmull-Rom: nine bilinear reads (not blurred, and not blurring more
 /// as it is carried frame after frame).
@@ -149,6 +179,17 @@ fn catmull_rom(img: Image, c: Vec2) -> Vec3 {
         + at_linear(img, vec2(t0.x, t12.y)).xyz * (w0.x * w12.y) + at_linear(img, vec2(t12.x, t12.y)).xyz * (w12.x * w12.y) + at_linear(img, vec2(t3.x, t12.y)).xyz * (w3.x * w12.y)
         + at_linear(img, vec2(t0.x, t3.y)).xyz * (w0.x * w3.y) + at_linear(img, vec2(t12.x, t3.y)).xyz * (w12.x * w3.y) + at_linear(img, vec2(t3.x, t3.y)).xyz * (w3.x * w3.y);
     return max(r, vec3(0.0, 0.0, 0.0));
+}
+
+/// Whether the picture rests unjittered (`domain = 1`): 1 where the lens is the last frame's (`was_lens`) and its jitter
+/// has stopped (`jlens` is it), 0 otherwise. A history taken then gains nothing new and is held.
+kernel render.lens_rests@1 {
+    requires { field.read; field.write; }
+    input lens: Lenses;
+    input jlens: Lenses;
+    input was_lens: Lenses;
+    output result: Rows<Int>;
+    compute { let l = at(lens, 0); return if lens_alike(at(jlens, 0), l) && lens_alike(l, at(was_lens, 0)) { 1 } else { 0 }; }
 }
 
 /// The lens copied (where a graph must remember the last frame's lens: a graph's inputs remember nothing).
