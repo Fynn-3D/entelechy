@@ -474,7 +474,7 @@ impl ToLower {
             |base: &Path, uses: &[entelechy_language::Use], own: entelechy_language::Own<'_>| {
                 naming.declare(base, uses, own)
             };
-        let lowered = entelechy_scene::load_with_params(
+        let mut lowered = entelechy_scene::load_with_params(
             &document,
             &text,
             &name,
@@ -484,6 +484,8 @@ impl ToLower {
             &params,
         )
         .map_err(|e| Diagnostic::from(&e))?;
+        // Each read where it is: through a package's name, inside it.
+        crate::sources::placed_reads(store, &mut lowered.files);
         // A graph with a missing source or a cycle is refused here,
         // while the running scene stays.
         lowered

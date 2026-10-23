@@ -435,7 +435,10 @@ changes:
   channel}`, ticks and tempo read as seconds; `.field`, any Field, the
   Host's format. A path through a package's name
   (`"text.entpkg/assets/font.png"`) reads the file inside that package, as a
-  `use` of it does. `run --save` and the protocol's `read` write all of them.
+  `use` of it does; so does every path a scene reads, a file or a directory
+  (frames, checks, outlines, a font, a `files` or `fields` node's
+  directory: `fields "world.entpkg/chunks/points/"`). What a scene writes is
+  written where its path says, never into a package. `run --save` and the protocol's `read` write all of them.
 - `input skills: Rows<Skill> = "data/skills.csv";`: a data table, `.csv`
   or `.json`, read as rows of the element the Kernel reading the input
   lays out, and read again when that layout changes. Each number is named

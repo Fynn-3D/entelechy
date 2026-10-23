@@ -262,3 +262,45 @@ fn a_session_started_over_reads_no_file_until_it_is_given_paths_again() {
     assert_eq!(opened(&mut session).len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_directory_named_through_a_package_is_listed_and_read_inside_that_package() {
+    // The directory only in a package kept elsewhere, the scene naming it by
+    // the package's name, as an input's file is.
+    let dir = scratch("package", &["notes.md"], &[]);
+    let packages = dir.join("packages");
+    std::fs::create_dir_all(packages.join("notes.entpkg")).unwrap();
+    std::fs::write(
+        packages.join("notes.entpkg/package.esn"),
+        "package notes@1 { language = 1; ir = 1; }\n",
+    )
+    .unwrap();
+    std::fs::rename(dir.join("proj"), packages.join("notes.entpkg/proj")).unwrap();
+    std::fs::write(
+        dir.join("scene.esn"),
+        scene(&["notes.md"], &[]).replace("files \"proj/\"", "files \"notes.entpkg/proj/\""),
+    )
+    .unwrap();
+    let store = std::sync::Arc::new(entelechy_session::Disk::with_packages(vec![packages]));
+    let mut session = Session::open_in(
+        store,
+        &dir.join("scene.esn"),
+        None,
+        entelechy_kernel::Runtime::with_backend(1 << 22, Box::new(entelechy_cpu::CpuBackend)),
+    );
+    // Reads held to the scene's own directories and its packages, as the
+    // Player's are.
+    session.restrict_reads().unwrap();
+    let events = session.sync();
+    assert!(session.graph().is_some(), "{events:?}");
+    assert!(
+        listing(&mut session)
+            .iter()
+            .any(|(path, _)| path == "notes.md")
+    );
+    assert_eq!(
+        opened(&mut session),
+        vec![("notes.md".to_owned(), "# notes\n".to_owned())]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

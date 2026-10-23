@@ -23,14 +23,14 @@ node lens: kernel {
 }
 node wanted: render.stream_wanted@1 { lens <- lens.result; lo = vec2(0.0, 0.0); side = 4.0; cells_x = 2; cells_z = 2; near = 1.0; far = 8.0; domain = 8; }
 node paths: render.stream_paths@1 { chunks <- wanted.result; domain = count(chunks) * 16; }
-node points: Rows<MeshPoint> fields "../../mesh.entpkg/tests/stream/points/" { paths <- paths.result; }
-node up: Rows<Int> fields "../../mesh.entpkg/tests/stream/up/" { paths <- paths.result; }
-node faces: Rows<Face> fields "../../mesh.entpkg/tests/stream/faces/" { paths <- paths.result; }
-node clusters: Rows<Cluster> fields "../../mesh.entpkg/tests/stream/clusters/" { paths <- paths.result; }
-node meshes: Rows<ClusterMesh> fields "../../mesh.entpkg/tests/stream/meshes/" { paths <- paths.result; }
-node errors: Rows<Float> fields "../../mesh.entpkg/tests/stream/errors/" { paths <- paths.result; }
-node sources: Rows<Int> fields "../../mesh.entpkg/tests/stream/sources/" { paths <- paths.result; }
-node parts: Rows<Int> fields "../../mesh.entpkg/tests/stream/parts/" { paths <- paths.result; }
+node points: Rows<MeshPoint> fields "mesh.entpkg/tests/stream/points/" { paths <- paths.result; }
+node up: Rows<Int> fields "mesh.entpkg/tests/stream/up/" { paths <- paths.result; }
+node faces: Rows<Face> fields "mesh.entpkg/tests/stream/faces/" { paths <- paths.result; }
+node clusters: Rows<Cluster> fields "mesh.entpkg/tests/stream/clusters/" { paths <- paths.result; }
+node meshes: Rows<ClusterMesh> fields "mesh.entpkg/tests/stream/meshes/" { paths <- paths.result; }
+node errors: Rows<Float> fields "mesh.entpkg/tests/stream/errors/" { paths <- paths.result; }
+node sources: Rows<Int> fields "mesh.entpkg/tests/stream/sources/" { paths <- paths.result; }
+node parts: Rows<Int> fields "mesh.entpkg/tests/stream/parts/" { paths <- paths.result; }
 node library: graph "mesh.entpkg/graphs/streamed.esn" { points <- points.result; point_ranges <- points.ranges; up <- up.result; up_ranges <- up.ranges;
     faces <- faces.result; face_ranges <- faces.ranges; clusters <- clusters.result; cluster_ranges <- clusters.ranges; meshes <- meshes.result; mesh_ranges <- meshes.ranges;
     errors <- errors.result; error_ranges <- errors.ranges; sources <- sources.result; source_ranges <- sources.ranges; part_ranges <- parts.ranges; }

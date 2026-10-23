@@ -307,14 +307,46 @@ pub fn locate_document(store: &dyn Store, path: &Path) -> Result<(PathBuf, Strin
     Ok((said, text))
 }
 
-/// Where a file named by `path` is: there, else, for a path through a
-/// package's name (`text.entpkg/font.png`), inside that package; a
-/// document's and an input's file alike.
+/// Where a file or directory named by `path` is: there, else, for a path
+/// through a package's name (`text.entpkg/font.png`), inside that package;
+/// a document's and every read's alike (`placed_reads`).
 pub(crate) fn file_at(store: &dyn Store, path: &Path) -> PathBuf {
     if store.exists(path) {
         return path.to_path_buf();
     }
     in_package(store, path).unwrap_or_else(|| path.to_path_buf())
+}
+
+/// The scene's reads placed (`file_at`): each file and directory it reads
+/// (an asset, a sequence of frames, what checks or outlines read, a
+/// `files` input, a font, a `files` or `fields` node's directory) where
+/// it is, a path through a package's name inside that package, so every
+/// read takes a path alike. Its writes are left as written: nothing is
+/// written into a package.
+pub(crate) fn placed_reads(store: &dyn Store, files: &mut entelechy_scene::Files) {
+    for asset in &mut files.assets {
+        asset.path = file_at(store, &asset.path);
+    }
+    for sequence in &mut files.sequences {
+        sequence.1 = file_at(store, &sequence.1);
+    }
+    for (_, path) in files
+        .checks
+        .iter_mut()
+        .chain(files.files.iter_mut())
+        .chain(files.outlines.iter_mut())
+    {
+        *path = file_at(store, path);
+    }
+    for font in &mut files.fonts {
+        font.path = file_at(store, &font.path);
+    }
+    for node in &mut files.file_nodes {
+        node.dir = file_at(store, &node.dir);
+    }
+    for node in &mut files.field_nodes {
+        node.dir = file_at(store, &node.dir);
+    }
 }
 
 /// Resolves a path through a package name

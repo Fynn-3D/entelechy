@@ -353,7 +353,7 @@ fn check_in(
         |base: &Path, uses: &[entelechy_language::Use], own: entelechy_language::Own<'_>| {
             naming.declare(base, uses, own)
         };
-    let lowered =
+    let mut lowered =
         match entelechy_scene::load_with(&document, &text, name, base, &mut loader, &mut declare) {
             Ok(lowered) => lowered,
             Err(error) => {
@@ -361,6 +361,8 @@ fn check_in(
                 return checked;
             }
         };
+    // Each read where it is: through a package's name, inside it.
+    crate::sources::placed_reads(store, &mut lowered.files);
     if let Err(error) = overrides.apply(&mut lowered.files.clone(), &lowered.graph.externals) {
         say!(problem, "{file}: {error}");
     }

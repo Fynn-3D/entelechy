@@ -44,9 +44,8 @@ impl Inputs {
             }
         }
         for font in &files.fonts {
-            // Found as an input's file is: there, else through a package's
-            // name (`cjk.entpkg/fonts/x.ttf`).
-            let path = crate::sources::file_at(store, &font.path);
+            // Placed as every read is (`sources::placed_reads`).
+            let path = font.path.clone();
             let stamp = store.stamp(&path);
             if self
                 .fonts
