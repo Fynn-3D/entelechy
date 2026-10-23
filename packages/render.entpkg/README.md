@@ -91,9 +91,11 @@ use "render.entpkg";
   `render.probes_gather_blur@1`, `render.probes_behind@1`,
   `render.probes_lit@1`, `render.probes_shade@1`.
 - `kernels/proxy_bake.ent` — A mesh baked into a proxy: each cell the
-  nearest face's distance within a band and its color, the faces' boxes
-  cut into tiles of cells. Kernels: `render.proxy_bake_tiles@1`,
-  `render.proxy_bake_faces@1`, `render.proxy_baked@1`.
+  nearest face's distance and its color, found exactly within a band (the
+  faces' boxes cut into tiles of cells) and spread past it by jump
+  flooding. Kernels: `render.proxy_bake_tiles@1`,
+  `render.proxy_bake_faces@1`, `render.proxy_seeds@1`,
+  `render.proxy_flood@1`, `render.proxy_baked@1`.
 - `kernels/radiance.ent` — Light kept on the proxies (as Lumen keeps its
   surface cache): each cell near a surface the light leaving it, the sun
   and the lamps through the proxies, the sky they leave open and the light the cache

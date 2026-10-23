@@ -1,13 +1,17 @@
 scene proxy_bake.esn
 
 # Cells are numbered x first, then y, then z, 32 a side, 3/32 of a meter
-# each from -1.5. The ball's middle and the volume's corner lie farther
-# than three cells from any face: three cells, gray. A cell at the ball's
-# side just above its middle lies on a red face, half a cell inside it; one
-# below it, on a blue face.
+# each from -1.5. Every cell knows how far the nearest face is, near ones
+# exactly, far ones by the points spread to them, less half a cell: the
+# ball's middle about its radius in, the volume's corner a half meter and
+# more out, the cell under the ball's bottom pole the way to it (blue,
+# the lower half's). A cell at the ball's side just above its middle lies
+# on a red face, half a cell inside it; one below it, on a blue face.
 frame 0.0
-expect baked.proxy[16912] = 0.28125 0.5 0.5 0.5 0.0001
-expect baked.proxy[0] = 0.28125 0.5 0.5 0.5 0.0001
+expect baked.proxy[16912].x = 0.867 0.01
+expect baked.proxy[0].x = 1.471 0.01
+expect baked.proxy[0].w = 0.8 0.0001
+expect baked.proxy[16400] = 0.411 0.1 0.1 0.8 0.01
 expect baked.proxy[27152] = -0.0405 0.8 0.1 0.1 0.002
 expect baked.proxy[5648] = -0.0405 0.8 0.1 0.1 0.002
 expect baked.proxy[16560].y = 0.1 0.0001
