@@ -18,8 +18,8 @@ use "sky.ent";
 /// The air: the ground's radius and the air's top (meters from the
 /// Earth's center), how thick haze is (1 a clear day), and the sun's light
 /// above the air (linear HDR, the irradiance it gives).
-struct Air { ground: Float; top: Float; haze: Float; sun: Float; }
-fn earth_air(haze: Float, sun: Float) -> Air { return Air { ground: 6360000.0, top: 6460000.0, haze: haze, sun: sun }; }
+struct AirShell { ground: Float; top: Float; haze: Float; sun: Float; }
+fn earth_air(haze: Float, sun: Float) -> AirShell { return AirShell { ground: 6360000.0, top: 6460000.0, haze: haze, sun: sun }; }
 
 /// What scatters and takes light at height `h` meters: Rayleigh's
 /// scattering (rgb, per meter), haze's scattering (x) and taking (y), and
@@ -52,7 +52,7 @@ fn air_meet_ground(p: Vec3, dir: Vec3, r: Float) -> Float {
 
 /// What is left of light coming from `dir` to `p` through the air (rgb):
 /// 0 where the ground is in the way.
-fn air_transmittance(a: Air, p: Vec3, dir: Vec3) -> Vec3 {
+fn air_transmittance(a: AirShell, p: Vec3, dir: Vec3) -> Vec3 {
     if air_meet_ground(p, dir, a.ground) > 0.0 { return vec3(0.0, 0.0, 0.0); }
     let far = air_leave(p, dir, a.top);
     let dt = far / 12.0;
@@ -69,7 +69,7 @@ fn rayleigh_phase(c: Float) -> Float { return 0.0596831 * (1.0 + c * c); }
 /// The light scattered more than once reaching a point `h` meters up, the
 /// sun at cosine `mu` from overhead, per unit of sunlight and of scattering
 /// there (`render.atmosphere_spread`'s table).
-fn air_spread_at(spread: Image, a: Air, h: Float, mu: Float) -> Vec3 {
+fn air_spread_at(spread: Image, a: AirShell, h: Float, mu: Float) -> Vec3 {
     let ext = size(spread);
     let q = vec2((mu * 0.5 + 0.5) * ext.x, saturate(h / (a.top - a.ground)) * ext.y);
     return at_linear(spread, clamp(q, vec2(0.5, 0.5), ext - vec2(0.5, 0.5))).xyz;
@@ -80,7 +80,7 @@ fn air_spread_at(spread: Image, a: Air, h: Float, mu: Float) -> Vec3 {
 /// the air and haze, each point's sunlight what the air above left of it,
 /// and scattered more than once (`spread`, the table). Under the horizon,
 /// the air between the eye and the ground, and the sunlit ground beyond it.
-fn air_radiance(a: Air, spread: Image, eye_h: Float, dir: Vec3, sun: Vec3) -> Vec3 {
+fn air_radiance(a: AirShell, spread: Image, eye_h: Float, dir: Vec3, sun: Vec3) -> Vec3 {
     let p = vec3(0.0, a.ground + max(eye_h, 1.0), 0.0);
     let ground_t = air_meet_ground(p, dir, a.ground);
     let far = if ground_t > 0.0 { ground_t } else { air_leave(p, dir, a.top) };

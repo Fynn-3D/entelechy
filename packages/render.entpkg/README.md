@@ -189,7 +189,7 @@ squares seen down the sunlight, larger with distance, each moving only in
 steps of a quarter of its width (whole texels: the shadows hold still, and
 are drawn again only a step on); the scene draws each cascade's depth
 toward the sun side by side in one atlas (a raster scene through
-`sun_clip`, a distance-field scene marching `sun_ray` to a fixed
+`sun_view_clip`, a distance-field scene marching `sun_ray` to a fixed
 tolerance, `sun_depth_of` what it met); `render.sun_shadow` multiplies the
 shadow into the sun's visibility (`extra` x), each pixel by the finest
 cascade holding it, its blockers' distance making the penumbra as wide as

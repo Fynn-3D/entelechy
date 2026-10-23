@@ -2,7 +2,7 @@
 // into cascades, each a square seen straight down the sunlight, larger with
 // distance (`render.sun_views`), its center held to its own texels so the
 // shadows do not swim as the lens moves. The scene draws each cascade's
-// depth toward the sun into one atlas (a raster scene through `sun_clip`,
+// depth toward the sun into one atlas (a raster scene through `sun_view_clip`,
 // a distance-field scene by marching `sun_ray`); `render.sun_shadow` then
 // shades the G-buffer's sun visibility: each pixel in the finest cascade
 // holding it, softened as far as the sun's disc makes a shadow soft from its
@@ -25,7 +25,7 @@ fn sun_at(v: SunView, p: Vec3) -> Vec3 {
 /// A raster's clip coordinates for `p` in cascade `v` (x, y in -1 to 1,
 /// depth 0 nearest the sun to 1, w 1): what a raster scene draws its sun
 /// depth with.
-fn sun_clip(v: SunView, p: Vec3) -> Vec4 {
+fn sun_view_clip(v: SunView, p: Vec3) -> Vec4 {
     let a = sun_at(v, p);
     return vec4(a.x * 2.0 - 1.0, a.y * 2.0 - 1.0, 0.5 - a.z / (2.0 * v.depth), 1.0);
 }
