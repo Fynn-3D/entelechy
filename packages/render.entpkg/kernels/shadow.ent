@@ -2,8 +2,8 @@
 // before and `size` texels a side, seen straight down the sunlight. A level's texel (u, v) of the world's lattice is always
 // kept at (u mod size, v mod size), so a level moved on keeps all it still holds. Each level is cut into pages: each frame
 // the G-buffer marks the pages its pixels read, each pixel in the finest level whose texel is as large as it is
-// (`render.shadow_marks`); a page marked that its slot does not hold yet, or held under another sun, is cleared and drawn
-// (`render.shadow_pages`, `render.shadow_clear`): the clustered meshes' faces over it, each thing at the level of its
+// (`render.shadow_marks`); a page marked that its slot does not hold yet, or held under another sun, is cleared and drawn,
+// at most so many a frame, finest first (`render.shadow_wanted`, `render.shadow_pages`, `render.shadow_clear`): the clustered meshes' faces over it, each thing at the level of its
 // clusters a texel asks for (`cluster_flat_view`), cut into tiles of 16 by 16 texels so a face many texels wide is drawn by
 // many (`render.shadow_pick`, `render.shadow_cull`, `render.shadow_kept`, `render.shadow_faces`, `render.shadow_draw`). So
 // the map is drawn where it is read and once. A texel holds the height toward the sun of the nearest thing over it, as a
@@ -41,16 +41,18 @@ fn shadow_lattice(v: ShadowLevel, p: Vec3) -> Vec2 {
     return vec2(dot(p, v.right), dot(p, v.up)) / v.texel;
 }
 
-/// The slot of the level `i`'s page `pw` (on the world's lattice of pages) in the table of all levels' slots.
+/// The slot of the level `i`'s page `pw` (on the world's lattice of pages) in the table of all levels' slots (a level's
+/// pages a side a power of two, so the wrap is the low bits).
 fn shadow_slot(v: ShadowLevel, i: Int, pw: IVec2) -> Int {
     let n = shadow_pages_across(v);
-    let s = ((pw % n) + n) % n;
+    let s = pw & (n - 1);
     return i * n * n + s.y * n + s.x;
 }
 
-/// Where texel `g` (on the world's lattice) of level `i` is kept in the map.
+/// Where texel `g` (on the world's lattice) of level `i` is kept in the map (`size` a power of two, so the wrap is the low
+/// bits).
 fn shadow_kept_at(v: ShadowLevel, i: Int, g: IVec2) -> IVec2 {
-    let s = ((g % v.size) + v.size) % v.size;
+    let s = g & (v.size - 1);
     return ivec2(s.x, s.y + i * v.size);
 }
 
@@ -79,7 +81,7 @@ fn shadow_right(toward: Vec3) -> Vec3 {
 }
 
 /// The levels round the lens for the sun of `sky` (`domain` how many): level i `nearest` meters across times 2 to the i,
-/// `size` texels a side, `page` a page, its window held to whole pages round the eye.
+/// `size` texels a side and `page` a page (both powers of two), its window held to whole pages round the eye.
 kernel render.shadow_levels@1 {
     requires { field.read; field.write; }
     input lens: Lenses;
@@ -150,29 +152,62 @@ kernel render.shadow_marks@1 {
     }
 }
 
-/// Each slot's page (`domain` the slots): the page of the level's window it is to hold now; `held` what it holds (the
-/// page on the world's lattice, the sun it was drawn under, 1 once drawn), `dirty` 1 for a page marked that it does not
-/// hold yet, drawn this frame.
-kernel render.shadow_pages@1 {
+/// The page slot `e` is to hold now: the page of its level's window (on the world's lattice) it falls to.
+fn shadow_page_now(levels: ShadowLevels, e: Int) -> IVec2 {
+    let v = at(levels, 0);
+    let n = shadow_pages_across(v);
+    let lv = at(levels, e / (n * n));
+    let s = ivec2(e % n, (e / n) % n);
+    let lo = lv.lo / lv.page;
+    return lo + ((s - lo) & (n - 1));
+}
+
+/// What slot `e` holds (`previous`, the last frame's; none at first).
+fn shadow_was(previous: Rows<IVec4>, marks: Rows<Int>, e: Int) -> IVec4 {
+    return if count(previous) == count(marks) { at(previous, e) } else { ivec4(0, 0, 0, 0) };
+}
+
+/// The sun level `e`'s slot is drawn under.
+fn shadow_sun_of(levels: ShadowLevels, e: Int) -> Int {
+    let n = shadow_pages_across(at(levels, 0));
+    return at(levels, e / (n * n)).sun;
+}
+
+/// 1 for each slot marked whose page it does not hold yet (under this sun), 0 for the rest.
+kernel render.shadow_wanted@1 {
     requires { field.read; field.write; }
     input previous: Rows<IVec4>;
     input marks: Rows<Int>;
     input levels: ShadowLevels;
+    output result: Rows<Int>;
+    compute {
+        let e = element();
+        let pw = shadow_page_now(levels, e);
+        let was = shadow_was(previous, marks, e);
+        return int(at(marks, e) > 0 && !(was.x == pw.x && was.y == pw.y && was.z == shadow_sun_of(levels, e) && was.w == 1));
+    }
+}
+
+/// Each slot's page (`domain` the slots): `dirty` 1 for a page wanted that is among the first `most` wanted (`ranks`, an
+/// inclusive count of `wanted`; the finest levels' first), drawn this frame; `held` what each slot holds after (the page on
+/// the world's lattice, the sun it was drawn under, 1 once drawn). A page wanted past `most` waits for a later frame, a
+/// coarser level's page read in its place.
+kernel render.shadow_pages@1 {
+    requires { field.read; field.write; }
+    input previous: Rows<IVec4>;
+    input marks: Rows<Int>;
+    input wanted: Rows<Int>;
+    input ranks: Rows<Int>;
+    input levels: ShadowLevels;
+    param most: Int = 96;
     output held: Rows<IVec4>;
     output dirty: Rows<Int>;
     compute {
         let e = element();
-        let v = at(levels, 0);
-        let n = shadow_pages_across(v);
-        let i = e / (n * n);
-        let lv = at(levels, i);
-        let s = ivec2(e % n, (e / n) % n);
-        let lo = lv.lo / lv.page;
-        let pw = lo + ((((s - lo) % n) + n) % n);
-        let was = if count(previous) == count(marks) { at(previous, e) } else { ivec4(0, 0, 0, 0) };
-        let same = was.x == pw.x && was.y == pw.y && was.z == lv.sun && was.w == 1;
-        let draw = at(marks, e) > 0 && !same;
-        return { held: if draw { ivec4(pw.x, pw.y, lv.sun, 1) } else { was }, dirty: int(draw) };
+        let pw = shadow_page_now(levels, e);
+        let was = shadow_was(previous, marks, e);
+        let draw = at(wanted, e) > 0 && at(ranks, e) <= most;
+        return { held: if draw { ivec4(pw.x, pw.y, shadow_sun_of(levels, e), 1) } else { was }, dirty: int(draw) };
     }
 }
 
@@ -393,7 +428,7 @@ fn shadow_height_at(map: Grid<Int>, v: ShadowLevel, i: Int, g: IVec2) -> Float {
 
 /// How much sun reaches `p` (facing `n`) by level `i`: blockers looked for within `search` texels round it, their mean
 /// height above it making the penumbra as wide as the sun's disc (`sun_size`, its angular radius) makes it from there (no
-/// wider than `search`), then that much filtered (16 points of a spiral turned by `turn`).
+/// wider than `search`), then that much filtered (12 points of a spiral turned by `turn`, 8 looking for blockers).
 fn shadow_soft(map: Grid<Int>, levels: ShadowLevels, i: Int, p: Vec3, n: Vec3, sun_size: Float, turn: Float, search: Float) -> Float {
     let v = at(levels, i);
     let c = clamp(abs(dot(n, v.toward)), 0.05, 1.0);
@@ -401,9 +436,9 @@ fn shadow_soft(map: Grid<Int>, levels: ShadowLevels, i: Int, p: Vec3, n: Vec3, s
     let lifted = p + n * v.texel;
     let g = shadow_lattice(v, lifted) - 0.5;
     let h = dot(lifted, v.toward) + rise;
-    let blockers = loop 12 with b = vec2(0.0, 0.0) {
+    let blockers = loop 8 with b = vec2(0.0, 0.0) {
         let k = float(index());
-        let r = sqrt((k + 0.5) / 12.0) * search;
+        let r = sqrt((k + 0.5) / 8.0) * search;
         let ang = k * 2.3999632 + turn;
         let q = g + vec2(cos(ang), sin(ang)) * r;
         let d = shadow_height_at(map, v, i, ivec2(int(floor(q.x + 0.5)), int(floor(q.y + 0.5))));
@@ -411,24 +446,26 @@ fn shadow_soft(map: Grid<Int>, levels: ShadowLevels, i: Int, p: Vec3, n: Vec3, s
     };
     if blockers.y < 0.5 { return 1.0; }
     let wide = clamp(blockers.x / blockers.y * 2.0 * sun_size / v.texel, 1.0, search);
-    let lit = loop 16 with l = 0.0 {
+    let lit = loop 12 with l = 0.0 {
         let k = float(index());
-        let r = sqrt((k + 0.5) / 16.0) * wide;
+        let r = sqrt((k + 0.5) / 12.0) * wide;
         let ang = k * 2.3999632 + turn;
         let q = g + vec2(cos(ang), sin(ang)) * r;
         let d = shadow_height_at(map, v, i, ivec2(int(floor(q.x + 0.5)), int(floor(q.y + 0.5))));
         l + if d > h { 0.0 } else { 1.0 }
     };
-    return lit / 16.0;
+    return lit / 12.0;
 }
 
 /// The G-buffer's `extra` with the sun's shadow from the map multiplied into the sun's visibility (x), before a renderer:
-/// each pixel in the level its size asks for, as the marks chose it, where its page is held under this sun; lit where
-/// none holds it.
+/// each pixel in the level its size asks for, as the marks chose it, or the first coarser one whose page is held under
+/// this sun where its own is not yet; lit where none holds it. A surface facing away from the sun (and not letting light
+/// through, `layers`' w) is left as it is: the sun lights none of it.
 kernel render.shadow_sun@1 {
     requires { field.read; field.write; }
     input extra: Grid<Vec4>;
     input surface: Grid<Vec4>;
+    input layers: Grid<Vec4>;
     input lens: Lenses;
     input levels: ShadowLevels;
     input held: Rows<IVec4>;
@@ -445,13 +482,22 @@ kernel render.shadow_sun@1 {
         let l = at(lens, 0);
         let p = l.eye + ray(l, coord(), size(surface)) * s.w;
         let footprint = s.w / (l.focal * size(surface).y);
-        let i = shadow_level_for(levels, p, footprint, sharpness, reach + 1.0);
+        if dot(s.xyz, at(levels, 0).toward) <= 0.0 && sample(layers).w <= 0.0 { return e; }
+        // The finest level holding the point whose texel is as large as the pixel (the last one holding it, whatever its
+        // texel), whose page is held under this sun.
+        let last = count(levels) - 1;
+        let i = loop count(levels) with k = -1 {
+            let j = index();
+            let v = at(levels, j);
+            let g = shadow_lattice(v, p);
+            let wide = v.texel >= footprint * sharpness || j == last;
+            let pw = ivec2(int(floor(g.x / float(v.page))), int(floor(g.y / float(v.page))));
+            let h = at(held, shadow_slot(v, j, pw));
+            let ok = wide && shadow_inside(v, g, reach + 1.0) && h.x == pw.x && h.y == pw.y && h.z == v.sun && h.w == 1;
+            if k >= 0 { break k; }
+            if ok { j } else { k }
+        };
         if i < 0 { return e; }
-        let v = at(levels, i);
-        let g = shadow_lattice(v, p);
-        let pw = ivec2(int(floor(g.x / float(v.page))), int(floor(g.y / float(v.page))));
-        let h = at(held, shadow_slot(v, i, pw));
-        if h.x != pw.x || h.y != pw.y || h.z != v.sun || h.w != 1 { return e; }
         let turn = fract(52.982919 * fract(dot(coord(), vec2(0.06711056, 0.00583715)))) * 6.2831853;
         return vec4(e.x * shadow_soft(map, levels, i, p, s.xyz, sun_size, turn, reach), e.y, e.z, e.w);
     }

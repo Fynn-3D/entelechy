@@ -52,23 +52,24 @@ node none: Grid<Float> { domain = vec2(1, 1); }
 node drawn: graph "../graphs/cluster.esn" { points <- library.points; up <- library.up; faces <- library.faces; clusters <- library.clusters; meshes <- library.meshes;
     errors <- library.errors; insts <- insts.result; lens <- lens.result; canvas <- canvas.result; hzb <- none.result; near = 0.1; far = 500.0; }
 node raster: native.rasterize@3 { vertices <- drawn.corners; triangles <- drawn.faces; canvas <- canvas.result; domain = size(canvas); }
-/// The G-buffer's surface (normal, distance) and a sun's visibility of 1 before the shadow.
+/// The G-buffer's surface (normal, distance), a sun's visibility of 1 before the shadow, and no layers.
 node g: kernel {
     requires { field.read; field.write; }
     input raster: Grid<Surface> <- raster.surface;
     input lens: Lenses <- lens.result;
     output surface: Grid<Vec4>;
     output extra: Grid<Vec4>;
+    output layers: Grid<Vec4>;
     domain = size(raster);
     compute {
         let s = sample(raster);
-        if s.id < 0 { return { surface: vec4(0.0, 1.0, 0.0, no_hit()), extra: vec4(1.0, 0.0, 0.0, 0.0) }; }
+        if s.id < 0 { return { surface: vec4(0.0, 1.0, 0.0, no_hit()), extra: vec4(1.0, 0.0, 0.0, 0.0), layers: vec4(0.0, 0.0, 0.0, 0.0) }; }
         let l = at(lens, 0);
         let n = normalize(s.normal);
-        return { surface: vec4(n.x, n.y, n.z, lens_distance(l, ray(l, coord(), domain()), s.depth, 0.1, 500.0)), extra: vec4(1.0, 0.0, 0.0, 0.0) };
+        return { surface: vec4(n.x, n.y, n.z, lens_distance(l, ray(l, coord(), domain()), s.depth, 0.1, 500.0)), extra: vec4(1.0, 0.0, 0.0, 0.0), layers: vec4(0.0, 0.0, 0.0, 0.0) };
     }
 }
-node shadow: graph "../graphs/shadow.esn" { extra <- g.extra; surface <- g.surface; lens <- lens.result; sky <- sky.result;
+node shadow: graph "../graphs/shadow.esn" { extra <- g.extra; surface <- g.surface; layers <- g.layers; lens <- lens.result; sky <- sky.result;
     points <- library.points; up <- library.up; faces <- library.faces; clusters <- library.clusters; meshes <- library.meshes; errors <- library.errors; insts <- insts.result;
     levels = 6; nearest = 8.0; size = 256; page = 32; }
 /// The sun's visibility on the ground in the first ball's shadow (its middle moved on away from the sun, past where the

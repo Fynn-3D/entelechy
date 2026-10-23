@@ -1,6 +1,6 @@
 //! The sun's shadow as a virtual shadow map (`kernels/shadow.ent`) multiplied into the G-buffer's sun visibility (`extra`
 //! x): `levels` levels round the eye, the first `nearest` meters across, each twice the one before, `size` texels a side
-//! and `page` a page; drawn from a library of clustered meshes (`mesh.entpkg`'s `graphs/cluster.esn`) and the things placed
+//! and `page` a page (both powers of two); drawn from a library of clustered meshes (`mesh.entpkg`'s `graphs/cluster.esn`) and the things placed
 //! (`insts`) where the pixels read it and it is not held yet, each thing at the level of its clusters whose error spans at
 //! most `error` texels.
 use "parallel.entpkg";
@@ -9,6 +9,7 @@ use "../kernels/";
 
 input extra: Grid<Vec4>;
 input surface: Grid<Vec4>;
+input layers: Grid<Vec4>;
 input lens: Lenses;
 input sky: SkyLooks;
 input points: Rows<MeshPoint>;
@@ -30,13 +31,18 @@ param every: Int = 2;
 /// How far (texels) round a pixel its pages are marked, blockers looked for and a penumbra spreads.
 param reach: Float = 4.0;
 param sun_size: Float = 0.01;
+/// The most pages drawn a frame (the finest levels' first); the rest wait, a coarser level read in their place.
+param most: Int = 96;
 
 node rows: render.shadow_levels@1 { lens <- lens; sky <- sky; nearest = nearest; size = size; page = page; domain = levels; }
 node none: render.shadow_none@1 { levels <- rows.result; domain = levels * (size / page) * (size / page); }
 node marks: render.shadow_marks@1 { surface <- surface; lens <- lens; levels <- rows.result; blank <- none.result; every = every; sharpness = sharpness; reach = reach;
     domain = ceil(size(surface) / every); }
 node table0: render.shadow_unheld@1 { domain = 1; }
-node pages: render.shadow_pages@1 { previous <~ pages.held from table0.result; marks <- marks.result; levels <- rows.result; domain = count(marks); }
+node wanted: render.shadow_wanted@1 { previous <~ pages.held from table0.result; marks <- marks.result; levels <- rows.result; domain = count(marks); }
+node ranks: parallel.compact_offsets@1 { flags <- wanted.result; }
+node pages: render.shadow_pages@1 { previous <~ pages.held from table0.result; marks <- marks.result; wanted <- wanted.result; ranks <- ranks.result; levels <- rows.result;
+    most = most; domain = count(marks); }
 node map0: Grid<Int> { domain = vec2(1, 1); }
 node cleared: render.shadow_clear@1 { previous <~ drawn.result from map0.result; dirty <- pages.dirty; size = size; page = page; domain = vec2(size, size * levels); }
 node picks: render.shadow_pick@1 { insts <- insts; meshes <- meshes; levels <- rows.result; dirty <- pages.dirty; error = error; domain = count(levels) * count(insts); }
@@ -51,7 +57,7 @@ node laid: render.shadow_faces@1 { kept <- chosen.result; insts <- insts; points
 node runs: graph "parallel.entpkg/graphs/runs.esn" { counts <- laid.tiles; }
 node drawn: render.shadow_draw@1 { faces <- laid.face; tiles <- laid.tiles; ends <- runs.ends; dirty <- pages.dirty; levels <- rows.result; map <- cleared.result;
     entries <- runs.entries; domain = value(entries); }
-node sun: render.shadow_sun@1 { extra <- extra; surface <- surface; lens <- lens; levels <- rows.result; held <- pages.held; map <- drawn.result;
+node sun: render.shadow_sun@1 { extra <- extra; surface <- surface; layers <- layers; lens <- lens; levels <- rows.result; held <- pages.held; map <- drawn.result;
     sharpness = sharpness; sun_size = sun_size; reach = reach; domain = size(extra); }
 
 output extra <- sun.result;
