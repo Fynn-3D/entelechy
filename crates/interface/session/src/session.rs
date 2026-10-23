@@ -1917,6 +1917,12 @@ impl Session {
         self.window
     }
 
+    /// The context the last frame was evaluated under: in a window, its
+    /// size, scene time and input as that frame saw them.
+    pub fn last_context(&self) -> Context {
+        self.last_context
+    }
+
     /// Makes the backend wait for its device after every node, so a
     /// profile measures the work, not the submission.
     pub fn set_measured(&mut self, on: bool) {

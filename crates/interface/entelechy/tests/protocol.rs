@@ -955,6 +955,49 @@ fn a_trace_follows_the_version_running_not_the_one_its_document_wrote() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A trace that names no context runs under the last frame's: its time
+/// and window, as a Player's frame saw them; one that names any runs
+/// under the request's.
+#[test]
+fn a_trace_without_context_sees_the_last_frame() {
+    let dir = std::env::temp_dir().join(format!(
+        "entelechy-protocol-trace-last-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("k.ent"),
+        "kernel t.k@1 { requires { field.write; time.read; input.read; } output result: Rows<Float>; compute { let t = time(); let w = window().x; return t + w; } }\n",
+    )
+    .unwrap();
+    let scene = dir.join("scene.esn");
+    std::fs::write(
+        &scene,
+        "use \"k.ent\";\nnode n: t.k@1 { domain = 4; }\noutput result <- n.result;\n",
+    )
+    .unwrap();
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "evaluate", "time": 2.5, "window": [64, 32] }),
+            json!({ "id": 2, "op": "trace", "node": "n", "element": 0 }),
+            json!({ "id": 3, "op": "trace", "node": "n", "element": 0, "time": 1.0 }),
+        ],
+    );
+    assert_eq!(
+        responses[1]["ok"]["results"][0]["value"], 66.5,
+        "{}",
+        responses[1]
+    );
+    assert_eq!(
+        responses[2]["ok"]["results"][0]["value"], 1.0,
+        "{}",
+        responses[2]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A trace names its values' structs by the module it ran: the document's
 /// unoptimized one, whose struct table the running module need not share
 /// (here it leaves out `Spare`, which nothing uses, and so numbers the

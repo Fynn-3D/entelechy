@@ -613,7 +613,7 @@ pub fn operations() -> Vec<Operation> {
         ),
         op(
             "trace",
-            "Runs one element of a node's Kernel and shows every step of it.",
+            "Runs one element of a node's Kernel and shows every step of it; with no context fields, under the last frame's context.",
             with_context(vec![
                 needs("node", Ty::Str, "the node"),
                 may(

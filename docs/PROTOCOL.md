@@ -313,7 +313,9 @@ and `column` come with the error.
 `trace` runs one element of a node on the interpreter, compiled without
 the optimizer so calls and `let`s are the source's. It takes `node`, and
 `at` (`[x, y, z]`, a map element) or `element` (a scan step), with
-`evaluate`'s context fields. What the node reads is evaluated first
+`evaluate`'s context fields; with none of them, the context the last
+frame was evaluated under (a window's size, scene time and input as that
+frame saw them). What the node reads is evaluated first
 under that context, its sources pinned and the node itself not run; the
 trace is of the evaluation that would follow (its `<~` inputs the state
 last committed), and commits nothing. The answer: `kernel`, `at`, `bindings` and `results` (each a

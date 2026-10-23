@@ -9,7 +9,7 @@ use entelechy_formats::ppm;
 use entelechy_session::Session;
 
 use crate::request::Request;
-use crate::wire::{context_of, failure, trace_json};
+use crate::wire::{context_given, context_of, failure, trace_json};
 
 /// Refuses a name that is not a node of the loaded scene, naming the near
 /// miss where there is one.
@@ -57,7 +57,12 @@ pub(crate) fn trace(session: &mut Session, request: &Request) -> Result<Json, Js
         }
     };
     known_node(session, &node)?;
-    let context = context_of(session, request.json())?;
+    // No context named: the element as the last frame made it.
+    let context = if context_given(request.json()).is_empty() {
+        session.last_context()
+    } else {
+        context_of(session, request.json())?
+    };
     let id = entelechy_graph::NodeId(node.clone().into());
     let entelechy_session::Traced {
         trace,
