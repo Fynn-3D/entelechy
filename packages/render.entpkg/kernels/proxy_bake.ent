@@ -47,8 +47,9 @@ fn proxy_triangle_distance(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Float {
     return length(p - proxy_triangle_nearest(p, a, b, c));
 }
 
-/// The middle of cell `g` of the proxy `fr`.
-fn proxy_bake_middle(fr: Proxy, g: IVec3) -> Vec3 { return fr.lo + (float(g) + 0.5) * fr.cell; }
+/// Where cell `g` of the proxy `fr` holds its distance: its point of the lattice, `cell` meters a step from `lo` (as
+/// `proxy_at` reads it).
+fn proxy_bake_point(fr: Proxy, g: IVec3) -> Vec3 { return fr.lo + float(g) * fr.cell; }
 
 /// The cells face `f`'s box spans, widened by `band` cells, within the proxy (lower corner xyz, inclusive; upper corner
 /// past it, `hi`).
@@ -113,7 +114,7 @@ kernel render.proxy_bake_faces@1 {
         let reach = band * fr.cell;
         let done = loop span.x * span.y * span.z with z = 0 {
             let g = o + ivec3(index() % span.x, (index() / span.x) % span.y, index() / (span.x * span.y));
-            let d = proxy_triangle_distance(proxy_bake_middle(fr, g), a, b, c);
+            let d = proxy_triangle_distance(proxy_bake_point(fr, g), a, b, c);
             if d <= reach { emit(Near { cell: g, key: (long(bits(d)) << 32l) | long(fi) }); }
             z + 1
         };
@@ -135,15 +136,15 @@ kernel render.proxy_seeds@1 {
         if key == 9223372036854775807l { return vec4(0.0, 0.0, 0.0, -1.0); }
         let fi = int(key & 4294967295l);
         let f = at(faces, fi);
-        let q = proxy_triangle_nearest(proxy_bake_middle(at(frame, 0), icoord()), at(points, f.a).position, at(points, f.b).position, at(points, f.c).position);
+        let q = proxy_triangle_nearest(proxy_bake_point(at(frame, 0), icoord()), at(points, f.a).position, at(points, f.b).position, at(points, f.c).position);
         return vec4(q.x, q.y, q.z, float(fi));
     }
 }
 
-/// A pass of jump flooding at cell `g`: the nearest to its middle of the points it and its 26 neighbors `step` cells off
+/// A pass of jump flooding at cell `g`: the nearest to its point of the points it and its 26 neighbors `step` cells off
 /// keep in `seeds`.
 fn proxy_flood_at(seeds: Volume<Vec4>, fr: Proxy, g: IVec3, step: Int) -> Vec4 {
-    let p = proxy_bake_middle(fr, g);
+    let p = proxy_bake_point(fr, g);
     let top = isize(seeds) - 1;
     return loop 27 with best = at(seeds, g) {
         let o = ivec3(index() % 3, (index() / 3) % 3, index() / 9) - 1;
@@ -155,7 +156,7 @@ fn proxy_flood_at(seeds: Volume<Vec4>, fr: Proxy, g: IVec3, step: Int) -> Vec4 {
     };
 }
 
-/// A pass of jump flooding: each cell the nearest to its middle of the points it and its 26 neighbors `step` cells off keep.
+/// A pass of jump flooding: each cell the nearest to its point of the points it and its 26 neighbors `step` cells off keep.
 kernel render.proxy_flood@1 {
     requires { field.read; field.write; }
     input seeds: Volume<Vec4>;
@@ -218,7 +219,7 @@ fn proxy_baked_at(seeds: Volume<Vec4>, colors: Rows<Vec4>, fr: Proxy, g: IVec3, 
     let s = at(seeds, g);
     if s.w < 0.0 { return vec4(1000.0, gray.x, gray.y, gray.z); }
     let c = at(colors, int(s.w));
-    return vec4(length(s.xyz - proxy_bake_middle(fr, g)) - fr.cell * 0.5, c.x, c.y, c.z);
+    return vec4(length(s.xyz - proxy_bake_point(fr, g)) - fr.cell * 0.5, c.x, c.y, c.z);
 }
 
 /// The proxy (`domain` its cells): each cell its nearest point's distance less half a cell, and that point's face's color
@@ -248,5 +249,104 @@ kernel render.proxy_published@1 {
     compute {
         let held = isize(previous) == idomain();
         return if at(stage, 0) == 9 || !held { proxy_baked_at(work, colors, at(frame, 0), icoord(), gray) } else { sample(previous) };
+    }
+}
+
+/// The frame the proxy in use was made over (`domain = 1`): `frame` when the proxy is made (stage 9, or before any is held),
+/// the last one (`previous`) the rest of the time, so the proxy and its frame change together.
+kernel render.proxy_published_frame@1 {
+    requires { field.read; field.write; }
+    input frame: Proxies;
+    input previous: Proxies;
+    input stage: Rows<Int>;
+    input work: Volume<Vec4>;
+    output result: Proxies;
+    compute {
+        let held = count(previous) == 1 && isize(work) == ivec3(int(at(frame, 0).cells.x), int(at(frame, 0).cells.y), int(at(frame, 0).cells.z));
+        return if at(stage, 0) == 9 || !held { at(frame, 0) } else { at(previous, 0) };
+    }
+}
+
+/// Whether a proxy has been made whole yet (`domain = 1`): 1 from the first stage 9 on (`previous` the last frame's), 0
+/// while the first one floods.
+kernel render.proxy_made@1 {
+    requires { field.read; field.write; }
+    input previous: Rows<Int>;
+    input stage: Rows<Int>;
+    output result: Rows<Int>;
+    compute { return if at(stage, 0) >= 9 || at(previous, 0) == 1 { 1 } else { 0 }; }
+}
+
+// ------------------------------------------------------------------ a fine level round the lens
+
+/// A fine level of the proxy round the lens (`domain = 1`): `nx` by `ny` by `nz` cells of `cell` meters, its middle across the
+/// ground ahead of the eye (a quarter of its width on), its foot `below` of its height under the eye (most of what is near and
+/// lit lies down there: tables, chairs, the floor), held within the scene's own proxy (`frame`'s first level) and moved in
+/// steps of `hold` of its width, so it is baked again only a step on; the ground as the scene has it.
+kernel render.proxy_detail_frame@1 {
+    requires { field.read; field.write; }
+    input lens: Lenses;
+    input frame: Proxies;
+    param nx: Int = 112;
+    param ny: Int = 80;
+    param nz: Int = 112;
+    param cell: Float = 0.025;
+    param below: Float = 0.75;
+    param hold: Float = 0.25;
+    output result: Proxies;
+    compute {
+        let l = at(lens, 0);
+        let b = at(frame, 0);
+        let cells = vec3(float(nx), float(ny), float(nz));
+        let span = cells * cell;
+        let ahead = normalize(vec2(l.ahead.x, l.ahead.z) + vec2(0.0001, 0.0));
+        let middle = vec2(l.eye.x, l.eye.z) + ahead * span.x * 0.25;
+        let step = max(span.x * hold, cell);
+        let want = vec3(middle.x - span.x * 0.5, l.eye.y - span.y * below, middle.y - span.z * 0.5);
+        let snapped = floor(want / step) * step;
+        let top = b.lo + b.cells * b.cell - span;
+        let lo = clamp(snapped, b.lo, max(top, b.lo));
+        return Proxy { ..b, lo: lo, cell: cell, cells: cells };
+    }
+}
+
+/// A level that holds only what lies inside its block, joined with what lies beyond (`domain = size(proxy)`): each cell's
+/// distance the nearer of its own and what lies past the block, no nearer than the block's edge (as `beyond`, the next
+/// level, `beyond_frame`, has it), so a ray stepping through it never steps past the edge over a thing beyond; its color
+/// as it is. Until the level is first made whole (`made`), `beyond`'s distance alone: a level half flooded knows too little.
+kernel render.proxy_within@1 {
+    requires { field.read; field.write; }
+    input proxy: Volume<Vec4>;
+    input frame: Proxies;
+    input beyond: Volume<Vec4>;
+    input beyond_frame: Proxies;
+    input made: Rows<Int>;
+    output result: Volume<Vec4>;
+    compute {
+        let v = sample(proxy);
+        let fr = at(frame, 0);
+        let c = coord();
+        let m = min(c, fr.cells - 1.0 - c);
+        let edge = min(m.x, min(m.y, m.z)) * fr.cell;
+        let far = proxy_at(beyond, beyond_frame, fr.lo + c * fr.cell, 1000.0).x;
+        return vec4(if at(made, 0) == 1 { min(v.x, max(far, edge)) } else { far }, v.y, v.z, v.w);
+    }
+}
+
+/// Two levels of a proxy as one volume, `b`'s cells up the depth after `a`'s, each level as wide and high as its own
+/// (`domain = max(size(a), size(b)) * vec3(1.0, 1.0, 0.0) + (size(a) + size(b)) * vec3(0.0, 0.0, 1.0)`): the volume as wide
+/// and high as the widest, a level's cells past its own width empty (no level reads them).
+kernel render.proxy_stack@1 {
+    requires { field.read; field.write; }
+    input a: Volume<Vec4>;
+    input b: Volume<Vec4>;
+    output result: Volume<Vec4>;
+    compute {
+        let q = coord();
+        let za = size(a).z;
+        let inside_a = q.x < size(a).x && q.y < size(a).y;
+        let inside_b = q.x < size(b).x && q.y < size(b).y;
+        return if q.z < za { if inside_a { at(a, q) } else { vec4(1000.0, 0.0, 0.0, 0.0) } }
+            else if inside_b { at(b, vec3(q.x, q.y, q.z - za)) } else { vec4(1000.0, 0.0, 0.0, 0.0) };
     }
 }

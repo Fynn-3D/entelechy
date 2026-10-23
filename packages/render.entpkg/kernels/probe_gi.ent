@@ -17,15 +17,18 @@ fn face_dir(face: Int) -> Vec3 {
     let s = if face % 2 == 0 { 1.0 } else { -1.0 };
     return if face < 2 { vec3(s, 0.0, 0.0) } else if face < 4 { vec3(0.0, s, 0.0) } else { vec3(0.0, 0.0, s) };
 }
+/// Where the probes' lattice starts: the corner of the proxies' coarsest level, the scene's own (a finer level near the eye
+/// moves with it; the lattice holds still).
+fn probe_origin(frame: Proxies) -> Vec3 { return at(frame, count(frame) - 1).lo; }
 /// Where probe `cell` is.
-fn probe_pos(frame: Proxies, cell: Vec3, spacing: Float) -> Vec3 { return at(frame, 0).lo + cell * spacing; }
+fn probe_pos(frame: Proxies, cell: Vec3, spacing: Float) -> Vec3 { return probe_origin(frame) + cell * spacing; }
 
 /// The sky light and bounced light a surface at `p` facing `n` receives: the eight probes round it, weighted trilinearly, by whether
 /// they are used and whether they lie before the surface; each probe's three faces toward `n` mixed by `n`. Outside the lattice (or where none
 /// round it is usable), it turns gradually to the light of open ground (`open_light`).
 fn probe_light(probes: Volume<Vec4>, frame: Proxies, spacing: Float, p: Vec3, n: Vec3, s: SkyLook) -> Vec3 {
     let dims = vec3(size(probes).x / 6.0, size(probes).y, size(probes).z);
-    let g = (p - at(frame, 0).lo) / spacing;
+    let g = (p - probe_origin(frame)) / spacing;
     let base = floor(g);
     let f = g - base;
     let nn = n * n;

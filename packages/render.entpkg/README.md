@@ -105,13 +105,17 @@ use "render.entpkg";
   `render.probes_screen_gather@1`, `render.probes_gather_keep@1`,
   `render.probes_gather_blur@1`, `render.probes_behind@1`,
   `render.probes_lit@1`, `render.probes_shade@1`.
-- `kernels/proxy_bake.ent` — A mesh baked into a proxy: each cell the
-  nearest face's distance and its color, found exactly within a band (the
-  faces' boxes cut into tiles of cells) and spread past it by jump
-  flooding. Kernels: `render.proxy_bake_tiles@1`,
-  `render.proxy_bake_faces@1`, `render.proxy_seeds@1`,
-  `render.proxy_flood@1`, `render.proxy_baked@1`, `render.proxy_stage@1`,
-  `render.proxy_flood_staged@1`, `render.proxy_published@1`.
+- `kernels/proxy_bake.ent` — A mesh baked into a proxy: each cell (a
+  point of the frame's lattice, as `proxy_at` reads it) the nearest face's
+  distance and its color, found exactly within a band (the faces' boxes
+  cut into tiles of cells) and spread past it by jump flooding; a pass a
+  frame for geometry that streams; a fine level of it round the lens.
+  Kernels: `render.proxy_bake_tiles@1`, `render.proxy_bake_faces@1`,
+  `render.proxy_seeds@1`, `render.proxy_flood@1`, `render.proxy_baked@1`,
+  `render.proxy_stage@1`, `render.proxy_flood_staged@1`,
+  `render.proxy_published@1`, `render.proxy_published_frame@1`,
+  `render.proxy_made@1`, `render.proxy_detail_frame@1`,
+  `render.proxy_within@1`, `render.proxy_stack@1`.
 - `kernels/radiance.ent` — Light kept on the proxies (as Lumen keeps its
   surface cache): each cell near a surface the light leaving it, the sun
   and the lamps through the proxies (each lamp that casts shadows walked
@@ -234,8 +238,13 @@ use "render.entpkg";
 - `graphs/proxy_bake.esn` — A mesh baked into a proxy
   (`kernels/proxy_bake.ent`), for a scene drawn as one mesh rather than
   placed things.
+- `graphs/proxy_detail.esn` — A fine level of the proxy round the lens,
+  baked from the mesh a pass a frame as the eye moves a step, joined with
+  what lies past it and stacked before the scene's proxy (finest first), so
+  rays near the eye meet thin things the scene's cells are too coarse for.
 - `graphs/proxy_stream.esn` — A mesh baked into a proxy a pass a frame, the
-  last one made in use until the new one is: for geometry that streams.
+  last one made in use until the new one is (with the frame it was made
+  over): for geometry that streams.
 - `graphs/shadow.esn` — The sun's shadow from a virtual shadow map
   (`kernels/shadow.ent`) multiplied into the G-buffer's sun visibility,
   for a scene of clustered meshes.
@@ -255,7 +264,7 @@ use "render.entpkg";
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`bounce.replay`, `cluster.replay`, `decals.replay`, `field.replay`, `fog_volumes.replay`, `lamp_looks.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `proxy_stream.replay`, `reflection.replay`, `shadow.replay`,
+`bounce.replay`, `cluster.replay`, `decals.replay`, `field.replay`, `fog_volumes.replay`, `lamp_looks.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `proxy_detail.replay`, `proxy_stream.replay`, `reflection.replay`, `shadow.replay`,
 `sky.replay`, `stream.replay`, `temporal.replay`, `translucent.replay`.
 Every Kernel of the package is reached by one of them.
 
@@ -283,9 +292,9 @@ this contract takes any renderer package by changing a few graph lines.
 | `behind_paint` | `Grid<Vec4>` | What it landed on: albedo (rgb), roughness (w). |
 | `behind_normal` | `Grid<Vec4>` | Its normal (xyz) and metalness (w). |
 | `through` | `Grid<Vec4>` | Transmittance along the path inside (rgb, absorption); w spare. All five zero where nothing transmits. |
-| `proxy` | `Volume<Vec4>` | Coarse scene for secondary rays: signed distance (x), albedo (yzw), on the `Proxy` frame's lattice. Ground excluded. |
+| `proxy` | `Volume<Vec4>` | Coarse scene for secondary rays: signed distance (x), albedo (yzw), each cell a point of the `Proxy` frame's lattice (`lo` plus whole steps of `cell`). Ground excluded. |
 | `land` | `Grid<Float>` | Ground height on the `Proxy` frame's ground lattice. |
-| `frame` | `Proxies` | Where `proxy` and `land` lie in the world, and the ground's albedo. |
+| `frame` | `Proxies` | Where `proxy` and `land` lie in the world, and the ground's albedo: a row a level, finest first, the levels up the volume's depth one after another (`graphs/field.esn`'s round the lens; `graphs/proxy_detail.esn`'s fine one before the scene's own); the last, coarsest, the scene's own. |
 | `lamps` | `Lamps` | The lamps beside the sun, at most 128: each where it is, its reach, intensity, bulb size, a spotlight's aim and beam, a panel's half width and height, whether it casts shadows (`point_lamp`, `spot_lamp`, `panel_lamp`), and where its cookie and profile lie in `lamp_looks` (`lamp_with_cookie`, `lamp_with_profile`). A scene with none hands over `render.lamps_none`. |
 | `lamp_looks` | `LampLooks` | The lamps' cookies and profiles, a picture of the scene's own (its kernels draw it, still or moving): a cookie, the light's filter laid across a spotlight's beam or round a point light; a profile, a row of the share of a lamp's light from its aim to straight behind it, as a `.ies` file read as an input gives it. A scene with none hands over `render.lamp_looks_none`. |
 
@@ -484,19 +493,23 @@ What every renderer shares, in this order:
 - **Bounced light** (`graphs/bounce.esn`). Lit and ray traced light each
   pixel by the sun and the sky alone; `render.radiance` keeps, in a
   volume laid as the proxy is (a level for each of its levels, `scale`
-  times coarser), the light leaving each surface the proxy holds: its
+  times coarser, its cells no finer than `cache_least`), the light leaving
+  each surface the proxy and the ground hold: its
   color times the sun and the lamps through the proxies, the sky they
   leave open (lit's
   own `hemisphere` and `proxy_open`) and what four cones gather from the
   cache as the last frame left it, so light bounces once more each time a
   cell is lit. A `parts`th of its cells is lit anew each frame, the rest
   kept from the last frame's where they lie (a block moved on keeps what
-  it held), and `render.radiance_turn` stops it `settle` frames after the
-  block or the sun last moved. `render.bounce_gather` traces five cones
+  it held), and `render.radiance_turn` stops each level `settle` frames
+  after its own block, the sun or the lamps last moved (a fine level moving
+  with the eye is lit again alone; the scene's own rest), the whole once
+  none is lit. `render.bounce_gather` traces five cones
   about each normal every `every` pixels (`radiance_cone`: each step read
   in the first level as wide as the cone, shut by how near the proxy's
-  things are against its width, what the cache holds laid behind what is
-  nearer), and `render.bounce` lays it over each pixel by distance, times
+  things or the ground are against its width, what the cache holds laid
+  behind what is nearer; it starts as far out as the cells of the level it
+  leaves are wide), and `render.bounce` lays it over each pixel by distance, times
   its diffuse color and baked occlusion. One more cone along each mirror
   direction, as wide as the surface is rough, takes the things it meets in
   place of the renderer's `reflection` from all round, as much as they

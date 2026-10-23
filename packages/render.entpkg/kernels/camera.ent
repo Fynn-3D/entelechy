@@ -215,8 +215,9 @@ struct Proxy { lo: Vec3; cell: Float; cells: Vec3; land_lo: Vec2; land_cell: Flo
 type Proxies = Rows<Proxy>;
 
 /// How high the ground is at (`x`, `z`); past the map, its edge (the ground map is every level's, the first's frame says where).
-fn land_at(land: Grid<Float>, frame: Proxies, x: Float, z: Float) -> Float {
-    let fr = at(frame, 0);
+fn land_at(land: Grid<Float>, frame: Proxies, x: Float, z: Float) -> Float { return land_at_row(land, at(frame, 0), x, z); }
+/// How high the ground is at (`x`, `z`), as the level `fr` says where the ground map lies (the first level's is every level's).
+fn land_at_row(land: Grid<Float>, fr: Proxy, x: Float, z: Float) -> Float {
     let c = (vec2(x, z) - fr.land_lo) / fr.land_cell;
     return at_linear(land, clamp(c, vec2(0.0, 0.0), size(land) - vec2(1.0, 1.0)) + 0.5);
 }

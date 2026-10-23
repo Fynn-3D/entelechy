@@ -188,7 +188,7 @@ kernel render.translucent_splat@1 {
                         let jitter = fract(52.9829189 * fract(dot(q, vec2(0.06711056, 0.00583715))));
                         let hit = screen_march(surface, l, size(surface), p + n * 0.01, r, 12.0, 24, 0.5, jitter);
                         let edge = if hit.z >= 0.0 { saturate(min(min(hit.x, ext.x - 1.0 - hit.x), min(hit.y, ext.y - 1.0 - hit.y)) / (ext.y * 0.08)) } else { 0.0 };
-                        let met = radiance_cone(cache, rv, proxy, pv, p + n * 0.03, r, 0.02 + ro, pv.rows[0].cell, 14.0, 12);
+                        let met = radiance_cone(cache, rv, proxy, pv, land, p + n * 0.03, r, 0.02 + ro, proxy_levels_cell(pv, p), 14.0, 12);
                         let far_seen = met.xyz + sky_radiance(r, s, false) * (1.0 - saturate(met.w));
                         let screen_seen = if hit.z >= 0.0 { at(picture, hit.xy).xyz } else { vec3(0.0, 0.0, 0.0) };
                         let env = mix(far_seen, screen_seen, edge * (1.0 - ro));
