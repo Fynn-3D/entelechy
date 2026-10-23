@@ -1,9 +1,10 @@
 // The stand by the light renderer and through every step of a finish:
 // contact shadows laid into the sun's visibility; daylight lit as it is
 // and as a painting has it; the workbench's view; aerial perspective and
-// painted edges; daylight deep inside the coarse shape; one renderer chosen by number at its extent, the rest
-// kept small; a film's look; depth of field focused on the middle; and
-// the stand's G-buffer merged with itself, nearer surface by surface.
+// painted edges; daylight deep inside the coarse shape; traced light; one
+// renderer chosen by number at its extent, the rest kept small; a film's
+// look; depth of field focused on the middle; and the stand's G-buffer
+// merged with itself, nearer surface by surface.
 node stand: graph "stand_scene.esn" { }
 node shadowed: render.contact@1 { surface <- stand.surface; extra <- stand.extra; layers <- stand.layers; lens <- stand.lens; sky <- stand.sky; domain = size(surface); }
 node lit: render.daylight@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
@@ -24,6 +25,10 @@ node lit_deep: render.daylight@1 { surface <- stand.surface; paint <- stand.pain
     sky <- stand.sky; lens <- stand.lens; proxy <- deep.result; frame <- stand.frame; domain = window(); }
 node lit_dark: render.daylight@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
     sky <- stand.sky; lens <- stand.lens; proxy <- deep.result; frame <- stand.frame; inside_sky = 0.0; domain = window(); }
+// Traced light: the G-buffer's shadow, each thing's own occlusion, smooth
+// surfaces' mirror rays traced through the proxies.
+node traced: render.traced@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
+    sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; domain = window(); }
 node aired: render.air@1 { hdr <- lit.result; surface <- stand.surface; lens <- stand.lens; sky <- stand.sky; on = 1; }
 node inked: render.npr@1 { image <- painted.result; surface <- stand.surface; }
 

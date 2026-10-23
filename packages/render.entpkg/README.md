@@ -89,6 +89,8 @@ use "render.entpkg";
   `render.way_extent@1`, `render.way_pass@1`, `render.way_pick@1`.
 - `kernels/temporal.ent` — Temporal antialiasing (TAA). Kernels:
   `render.jitter@1`, `render.taa@1`, `render.same_lens@1`.
+- `kernels/traced.ent` — Traced light: shadow and reflection traced in
+  one pass. Kernels: `render.traced@1`.
 - `kernels/transmission.ent` — Transmission (glass, water, ice).
   Kernels: `render.settle_behind@1`.
 - `kernels/upscale.ent` — The picture is computed at an inner resolution

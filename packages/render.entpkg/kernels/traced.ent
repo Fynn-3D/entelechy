@@ -1,0 +1,78 @@
+// Traced light: each pixel lit in one pass with its shadow and its reflection traced, not gathered. A scene whose things are
+// distances (a distance-field city) marches its own rays and lights what they meet with `traced_shade`: the sun's light as far as its
+// shadow ray let it through, the light all round as open as the place is, and what its mirror ray saw, as much as the surface
+// reflects it at that angle. A scene drawn into a G-buffer takes `render.traced`: the shadow the G-buffer holds, the light all round
+// by each thing's baked occlusion, and the mirror ray of a smooth surface traced through the proxies (`traced_seen`).
+use "brdf.ent";
+use "camera.ent";
+use "daylight.ent";
+use "sky.ent";
+
+/// What surface `m` facing `n` sends toward `v` under sky `s`: the sun's light times `visible` (0 to 1, what its shadow ray found) as
+/// a highlight that rolls off rather than clipping (a near mirror shows the sun as a hard glint with a falling edge, not a white
+/// patch), the sky's and the ground's light all round times `open` (0 to 1, how much of it the place lets in), and `reflected` (what
+/// the mirror ray saw) times the share the surface reflects at this angle, less where the place is closed in.
+fn traced_shade(m: Pbr, n: Vec3, v: Vec3, s: SkyLook, visible: Float, reflected: Vec3, open: Float) -> Vec3 {
+    let lit = lit_by(m, n, v, s.sun, s.sun_color * visible);
+    let direct = lit / (vec3(1.0, 1.0, 1.0) + lit / 1.6);
+    let f0 = pbr_f0(m);
+    let nv = max(dot(n, v), 0.0);
+    let fres = f0 + (max(vec3(1.0 - m.rough, 1.0 - m.rough, 1.0 - m.rough), f0) - f0) * pow(1.0 - nv, 5.0);
+    let ambient = m.albedo * ((1.0 - m.metal) * (1.0 - m.transmission)) * hemisphere(n, s) * open;
+    // The sun's disc a mirror ray finds is the glint above already: held under it, a few rays that hit the disc do not flare.
+    let mirrored = min(reflected, vec3(2.0, 2.0, 2.0));
+    return direct + ambient + mirrored * fres * (0.35 + 0.65 * open) + m.glow;
+}
+
+/// What a ray from `o` along `dir` sees through the coarse scene within `far` meters: what it meets, lit by the sun as it faces it and
+/// by the light all round (its own shadow not traced), through the air; the sky, or looking down the ground's light, where it meets
+/// nothing.
+fn traced_seen(proxy: Volume<Vec4>, land: Grid<Float>, fr: Proxy, o: Vec3, dir: Vec3, far: Float, s: SkyLook) -> Vec3 {
+    let hit = rough_trace(proxy, land, fr, o, dir, fr.cell * 0.5, far, 48);
+    if hit.y < 0.0 { return seen_along(dir, s); }
+    let p = o + dir * hit.x;
+    let n = rough_normal(proxy, land, fr, p, hit.y);
+    let a = rough_albedo(proxy, fr, p, hit.y);
+    let light = s.sun_color * max(dot(n, s.sun), 0.0) / 3.14159265 + hemisphere(n, s);
+    return aerial(a * light, dir, hit.x, s);
+}
+
+/// Traced light (see the file's head) over a G-buffer: the sky where nothing was met; each thing lit by `traced_shade` with the
+/// G-buffer's sun visibility, the light all round times its baked occlusion (a leaf, subsurface, keeps `leaf_sky` of it inside its
+/// crown), and, on a surface smoother than `mirror_below`, its mirror ray traced through the proxies up to `far` meters (the sky
+/// in its direction on a rougher one); the air laid over distance.
+kernel render.traced@1 {
+    requires { field.read; field.write; }
+    input surface: Grid<Vec4>;
+    input paint: Grid<Vec4>;
+    input extra: Grid<Vec4>;
+    input layers: Grid<Vec4>;
+    input more: Grid<Vec4>;
+    input sky: SkyLooks;
+    input lens: Lenses;
+    input proxy: Volume<Vec4>;
+    input land: Grid<Float>;
+    input frame: Proxies;
+    param mirror_below: Float = 0.4;
+    param far: Float = 200.0;
+    param leaf_sky: Float = 0.8;
+    output result: Image;
+    compute {
+        let l = at(lens, 0);
+        let s = at(sky, 0);
+        let dir = ray(l, coord(), domain());
+        let su = sample(surface);
+        if su.w > no_hit() * 0.5 { return vec4(sky_radiance(dir, s, true), 1.0); }
+        let n = su.xyz;
+        let ex = sample(extra);
+        let m = pbr_of(sample(paint), ex, sample(layers), sample(more));
+        let v = vec3(0.0, 0.0, 0.0) - dir;
+        let open = baked_occlusion(ex) * (if m.subsurface > 0.0 { leaf_sky } else { 1.0 });
+        let r = reflect(dir, n);
+        let p = l.eye + dir * su.w + n * 0.05;
+        let mirrored = if m.rough < mirror_below { traced_seen(proxy, land, at(frame, 0), p, r, far, s) } else { seen_along(r, s) };
+        // A rough surface's reflection is the light all round it.
+        let reflected = mix(mirrored, hemisphere(n, s) * open, sqrt(m.rough));
+        return vec4(aerial(traced_shade(m, n, v, s, ex.x, reflected, open), dir, su.w, s), 1.0);
+    }
+}
