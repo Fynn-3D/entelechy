@@ -113,6 +113,12 @@ fn glossy_by(m: Pbr, n: Vec3, v: Vec3, l: Vec3, light: Vec3) -> Vec3 {
     let coat = fc * ggx_d(nh, pbr_alpha(m.coat_rough)) * smith_g(nl, nv, m.coat_rough) / (4.0 * nl * nv) * nl;
     return (spec * (1.0 - fc) + vec3(coat, coat, coat)) * light;
 }
+/// The rest of `lit_by` without its specular part (`glossy_by`): the diffuse
+/// light, sheen and light wrapped and let through by subsurface scattering
+/// — what screen-space subsurface scattering spreads under the skin.
+fn matte_by(m: Pbr, n: Vec3, v: Vec3, l: Vec3, light: Vec3) -> Vec3 {
+    return lit_by(m, n, v, l, light) - glossy_by(m, n, v, l, light);
+}
 /// How much the environment's specular reflects in all (the split-sum BRDF term, Karis's analytic approximation).
 fn env_brdf(f0: Vec3, rough: Float, nv: Float) -> Vec3 {
     let r = rough * vec4(-1.0, -0.0275, -0.572, 0.022) + vec4(1.0, 0.0425, 1.04, -0.04);

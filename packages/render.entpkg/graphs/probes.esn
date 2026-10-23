@@ -67,3 +67,5 @@ node shade: render.probes_shade@1 { surface <- surface; paint <- paint; extra <-
     lamps <- lamps; lamped <- lamped.result; spacing = spacing; mirror_below = mirror_below; style = style; domain = size(surface); }
 
 output hdr <- shade.result;
+/// The share of `hdr` that scatters under subsurface surfaces (`graphs/subsurface.esn` spreads it).
+output scatter <- shade.scatter;

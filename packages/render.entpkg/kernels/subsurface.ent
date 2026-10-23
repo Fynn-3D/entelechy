@@ -1,0 +1,74 @@
+// Light under the skin: a subsurface surface (skin, wax, marble, a leaf)
+// takes light in at one point and gives it out round about, red farthest,
+// blue nearest. The renderer gives the share of its picture that scatters
+// (the probes renderer's `scatter`: the matte light of subsurface pixels);
+// it is spread across the screen as far as the material carries light
+// (`render.subsurface_blur`, across then down, Jimenez's separable way),
+// each color by its own reach, only over the same surface; and laid back in
+// place of the unspread share (`render.subsurface_apply`).
+use "camera.ent";
+
+/// How far the light under a surface carries, red, green and blue, as
+/// shares of the surface's reach: skin's (red farthest).
+fn subsurface_reach() -> Vec3 { return vec3(1.0, 0.45, 0.25); }
+
+/// The scattering share `scatter` spread along `axis` (0 across, 1 down):
+/// eleven samples, each color weighted by a bell as wide as its reach (the
+/// material's subsurface times `reach` meters, as many pixels as that is
+/// at the pixel's distance), a sample counted only on the same surface
+/// (a subsurface pixel within the reach in depth).
+kernel render.subsurface_blur@1 {
+    requires { field.read; field.write; }
+    input scatter: Image;
+    input surface: Grid<Vec4>;
+    input layers: Grid<Vec4>;
+    input lens: Lenses;
+    param axis: Int = 0;
+    /// How far light carries under a fully subsurface surface (meters).
+    param reach: Float = 0.012;
+    output result: Image;
+    compute {
+        let own = sample(scatter);
+        let sss = sample(layers).w;
+        if sss <= 0.0 { return own; }
+        let q = coord();
+        let ext = size(surface);
+        let s = sample(surface);
+        let l = at(lens, 0);
+        let meters = reach * sss;
+        let pixels = meters * l.focal * ext.y / max(s.w, 0.001);
+        if pixels < 0.5 { return own; }
+        let width = subsurface_reach() * pixels;
+        let step_dir = if axis == 0 { vec2(1.0, 0.0) } else { vec2(0.0, 1.0) };
+        // Samples spread over three times the widest color's width.
+        let spacing = width.x * 3.0 / 5.0;
+        let sum = loop 11 with acc = SubsurfaceSum { light: vec3(0.0, 0.0, 0.0), weight: vec3(0.0, 0.0, 0.0) } {
+            let k = float(index()) - 5.0;
+            let off = k * spacing;
+            let qq = clamp(q + step_dir * off, vec2(0.0, 0.0), ext - vec2(1.0, 1.0));
+            let other = at(surface, qq);
+            let same = at(layers, qq).w > 0.0 && abs(other.w - s.w) < meters * 4.0 + s.w * 0.002;
+            let w = if same || k == 0.0 { vec3(exp(0.0 - 0.5 * off * off / (width.x * width.x)), exp(0.0 - 0.5 * off * off / (width.y * width.y)), exp(0.0 - 0.5 * off * off / (width.z * width.z))) } else { vec3(0.0, 0.0, 0.0) };
+            SubsurfaceSum { light: acc.light + at(scatter, qq).xyz * w, weight: acc.weight + w }
+        };
+        let spread = sum.light / max(sum.weight, vec3(0.0001, 0.0001, 0.0001));
+        return vec4(spread.x, spread.y, spread.z, own.w);
+    }
+}
+/// A blur's running sums, by color.
+struct SubsurfaceSum { light: Vec3; weight: Vec3; }
+
+/// The picture with its scattering share spread: `hdr` less the share as it
+/// was (`scatter`) plus the share spread (`spread`).
+kernel render.subsurface_apply@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    input scatter: Image;
+    input spread: Image;
+    output result: Image;
+    compute {
+        let c = sample(hdr);
+        let d = sample(spread).xyz - sample(scatter).xyz;
+        return vec4(c.x + d.x, c.y + d.y, c.z + d.z, c.w);
+    }
+}

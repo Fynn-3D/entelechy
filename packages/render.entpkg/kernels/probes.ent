@@ -462,6 +462,9 @@ kernel render.probes_shade@1 {
     /// a rim of light on the edge against the light, the highlight a small patch.
     param style: Int = 0;
     output result: Image;
+    /// The share of `result` that scatters under a subsurface surface (its
+    /// matte light times its subsurface scattering), for `render.subsurface_blur`; 0 elsewhere.
+    output scatter: Image;
     compute {
         let q = coord();
         let extent = domain();
@@ -469,7 +472,7 @@ kernel render.probes_shade@1 {
         let s = at(sky, 0);
         let dir = ray(l, q, extent);
         let su = at(surface, q);
-        if su.w > no_hit() * 0.5 { return vec4(sky_radiance(dir, s, true), 1.0); }
+        if su.w > no_hit() * 0.5 { return { result: vec4(sky_radiance(dir, s, true), 1.0), scatter: vec4(0.0, 0.0, 0.0, 0.0) }; }
         let p = l.eye + dir * su.w;
         let n = su.xyz;
         let ex = at(extra, q);
@@ -499,6 +502,15 @@ kernel render.probes_shade@1 {
         let coat_light = mix(mirrored, e, sqrt(m.coat_rough)) * ao;
         let clear = if m.transmission > 0.0 { transmitted(m, n, v, at(through, q), frosted(beyond, q, m.rough)) } else { vec3(0.0, 0.0, 0.0) };
         let shown = if style == 1 { toon(m, n, v, s, ex.x, e) + spec_light * env_brdf(pbr_f0(m), m.rough, max(dot(n, v), 0.001)) * (1.0 - m.rough) } else { direct + ambient_by(m, n, v, e, spec_light, coat_light) };
-        return vec4(aerial(shown + clear + m.glow + sample(lamped).xyz, dir, su.w, s), 1.0);
+        let all = shown + clear + m.glow + sample(lamped).xyz;
+        let shaded = aerial(all, dir, su.w, s);
+        // The light that goes under the skin: the matte light (the sun's and
+        // all round), as much as the surface scatters it; through the air as
+        // the rest (the air's mix is linear, so its share is the difference).
+        let under = if m.subsurface > 0.0 && style == 0 {
+            (matte_by(m, n, v, s.sun, s.sun_color * ex.x) + m.albedo * ((1.0 - m.metal) * (1.0 - m.transmission)) * e) * m.subsurface
+        } else { vec3(0.0, 0.0, 0.0) };
+        let kept = aerial(all - under, dir, su.w, s);
+        return { result: vec4(shaded, 1.0), scatter: vec4(shaded.x - kept.x, shaded.y - kept.y, shaded.z - kept.z, 0.0) };
     }
 }

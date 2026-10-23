@@ -75,6 +75,10 @@ use "render.entpkg";
 - `kernels/scattering.ent` — Light scattered in the air: the phase and
   each pixel's step offset, shared by fog, clouds and the sky.
 - `kernels/sky.ent` — The sky.
+- `kernels/subsurface.ent` — Light under the skin: the share of a
+  picture that scatters under subsurface surfaces spread, each color as
+  far as it carries. Kernels: `render.subsurface_blur@1`,
+  `render.subsurface_apply@1`.
 - `kernels/sun.ent` — The sun's shadows for any scene: cascaded shadow
   maps, soft as far as the sun's disc makes them. Kernels:
   `render.sun_views@1`, `render.sun_shadow@1`.
@@ -118,6 +122,8 @@ use "render.entpkg";
   the lamps shown, reflected and bounced; the light gathered on the screen
   drawn anew each frame and averaged while the lens rests (up to
   `settle_frames`, then it rests too).
+- `graphs/subsurface.esn` — Light under the skin: a renderer's `scatter`
+  spread across then down and laid back over its `hdr`.
 - `graphs/super_resolution.esn` — Temporal super-resolution
   (`render.tsr`).
 - `graphs/upscale.esn` — A finished picture (tone-mapped, sRGB) scaled
@@ -258,6 +264,15 @@ What every renderer shares, in this order:
   a light) and its own detail: bright and dark neighborhoods are brought
   toward the mean (`highlights`, `shadows`), the detail kept (`detail`); 1
   for all three leaves the picture as it is.
+- **Light under the skin** (`graphs/subsurface.esn`). The probes
+  renderer gives, beside `hdr`, the share of it that scatters under
+  subsurface surfaces (`scatter`: their matte light, `matte_by` and the
+  light from all round, times the subsurface, through the air as the
+  rest); `render.subsurface_blur` spreads it across then down (Jimenez's
+  separable way), red farthest and blue nearest, as far as the material
+  carries light (`reach` meters at full subsurface) and only over the same
+  surface; `render.subsurface_apply` lays the spread share back in place
+  of the share as it was.
 - **Glow** (`graphs/bloom.esn`): the bright parts shrunk by halves six
   times and grown back, every level adding the larger glow below it.
 
