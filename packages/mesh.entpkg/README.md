@@ -61,7 +61,8 @@ use "mesh.entpkg";
   `mesh.chunk_clip@1`, `mesh.chunk_points@1`, `mesh.chunk_faces@1`,
   `mesh.far_flags@1`, `mesh.far_cluster_faces@1`, `mesh.far_point_flags@1`,
   `mesh.far_points@1`, `mesh.far_faces@1`, `mesh.far_clusters@1`,
-  `mesh.far_errors@1`, `mesh.far_meshes@1`.
+  `mesh.far_errors@1`, `mesh.far_meshes@1`, `mesh.finest_counts@1`,
+  `mesh.finest_faces@1`.
 - `kernels/subdivision.ent` — Midpoint subdivision, the step that
   changes a mesh's topology. Kernels: `mesh.split_points@1`,
   `mesh.split_faces@1`.
@@ -79,6 +80,8 @@ use "mesh.entpkg";
 - `graphs/cluster_grouped.esn` — The same with each point in a group of
   its own (`groups`): parts kept apart on every level, so letters on a
   board or a frame on a wall do not merge into what they lie on.
+- `graphs/finest.esn` — A library's faces at each mesh's finest level, for
+  what is baked from a mesh as it is (a streamed world's proxy).
 - `graphs/library.esn` — Two built meshes or libraries as one.
 - `graphs/cluster_level.esn` — One level up.
 - `graphs/streamed.esn` — A world's streamed chunks as one clustered

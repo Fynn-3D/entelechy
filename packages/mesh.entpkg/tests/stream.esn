@@ -58,4 +58,7 @@ node held: kernel {
     }
 }
 
+// The joined library's faces at each chunk's finest level, for what bakes the world as it is.
+node finest: graph "../graphs/finest.esn" { meshes <- library.meshes; clusters <- library.clusters; faces <- library.faces; sources <- library.sources; }
+
 output result <- held.result;

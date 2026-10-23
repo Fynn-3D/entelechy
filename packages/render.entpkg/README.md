@@ -506,7 +506,10 @@ array, and `mesh.entpkg`'s `graphs/streamed.esn` joins what is in into
 one library the cluster draw, the shadows and the lamps' maps take as any
 other; a chunk with an array on its way is not drawn
 (`render.stream_insts`). A `fields` node reads the paths a frame behind,
-so the instances pair with the last frame's chunks. A far chunk is the
+so the instances pair with the last frame's chunks. The proxy the light
+is traced through is baked from the chunks too (`graphs/proxy_bake.esn` over
+`mesh.entpkg`'s `graphs/finest.esn`: each chunk's finest level), again
+whenever the chunks in change. A far chunk is the
 smaller the farther it stands in: in a room seen from inside nearly every
 cluster is still needed four meters off.
 

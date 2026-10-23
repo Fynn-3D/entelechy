@@ -24,3 +24,8 @@ expect held.result[4] < 1.0
 expect held.result[5] > 0.95
 expect held.result[5] < 1.0
 expect held.result[9] = 3072
+
+# The faces at each chunk's finest level, for what bakes the world as it
+# is: each chunk's 768 faces, some in the cluster of more than one brick,
+# 3720 of the library's 6256.
+expect count finest.finest.result = 3720

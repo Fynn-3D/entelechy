@@ -409,3 +409,48 @@ kernel mesh.far_meshes@1 {
         return ClusterMesh { ..m, levels: [each 9 { if m.levels[index()] == 0 { 0 } else { at(ranks, m.levels[index()] - 1) } }] };
     }
 }
+
+// ------------------------------------------------------------------ the finest faces of a library
+
+/// How many faces each mesh of a library holds at its finest level (`domain = count(meshes)`): a run of its faces, the
+/// faces of its finest level's clusters lying one after another (a face in the cluster of each brick its corners lie in,
+/// so some more than once).
+kernel mesh.finest_counts@1 {
+    requires { field.read; field.write; }
+    input meshes: Rows<ClusterMesh>;
+    input clusters: Rows<Cluster>;
+    output result: Rows<Int>;
+    compute {
+        let m = sample(meshes);
+        let k = mesh_cluster_first(m);
+        let c0 = m.levels[k];
+        let c1 = m.levels[k + 1];
+        if c1 <= c0 || c1 > count(clusters) { return 0; }
+        let last = at(clusters, c1 - 1);
+        return last.first + last.count - at(clusters, c0).first;
+    }
+}
+
+/// The library's faces at each mesh's finest level, and the face each came from (`domain = value(entries)`, laid by
+/// `ends` over `counts`): for what is baked or traced from the mesh as it is, not from its coarser levels.
+kernel mesh.finest_faces@1 {
+    requires { field.read; field.write; }
+    input meshes: Rows<ClusterMesh>;
+    input clusters: Rows<Cluster>;
+    input faces: Rows<Face>;
+    input sources: Rows<Int>;
+    input counts: Rows<Int>;
+    input ends: Rows<Int>;
+    /// How many faces (sizes the node).
+    input entries: Rows<Int>;
+    output result: Rows<Face>;
+    output source: Rows<Int>;
+    compute {
+        let e = element();
+        if e >= at(ends, count(ends) - 1) { return { result: Face { a: 0, b: 0, c: 0 }, source: 0 }; }
+        let k = owner(e, ends);
+        let m = at(meshes, k);
+        let i = at(clusters, m.levels[mesh_cluster_first(m)]).first + e - (at(ends, k) - at(counts, k));
+        return { result: at(faces, i), source: at(sources, i) };
+    }
+}

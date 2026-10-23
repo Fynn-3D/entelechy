@@ -1,0 +1,18 @@
+//! A library's faces at each mesh's finest level (`kernels/stream.ent`), and the face of its own each came from: what a
+//! scene bakes or traces from the mesh as it is (a streamed world's proxy from the chunks that are in).
+use "parallel.entpkg";
+use "raster.entpkg";
+use "../kernels/";
+
+input meshes: Rows<ClusterMesh>;
+input clusters: Rows<Cluster>;
+input faces: Rows<Face>;
+input sources: Rows<Int>;
+
+node counts: mesh.finest_counts@1 { meshes <- meshes; clusters <- clusters; domain = count(meshes); }
+node runs: graph "parallel.entpkg/graphs/runs.esn" { counts <- counts.result; }
+node finest: mesh.finest_faces@1 { meshes <- meshes; clusters <- clusters; faces <- faces; sources <- sources; counts <- counts.result; ends <- runs.ends;
+    entries <- runs.entries; domain = max(value(entries), 1); }
+
+output faces <- finest.result;
+output sources <- finest.source;
