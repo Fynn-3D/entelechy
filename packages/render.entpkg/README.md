@@ -63,9 +63,12 @@ use "render.entpkg";
   `render.field_bake@1`.
 - `kernels/film.ent` — Film. Kernels: `render.film_start@1`,
   `render.film_keys@1`, `render.film@1`.
-- `kernels/fog.ent` — Height fog the sun and the lamps light, their beams
-  cut into shafts by what stands in them and by the clouds. Kernels:
-  `render.fog_march@1`, `render.fog_blur@1`, `render.fog_apply@1`.
+- `kernels/fog.ent` — Height fog and fog volumes the sun and the lamps
+  light, their beams cut into shafts by what stands in them and by the
+  clouds, in a grid of cells over the view. Kernels:
+  `render.fog_volumes_none@1`, `render.froxel_light@1`, `render.froxel_scan@1`,
+  `render.froxel_furthest@1`, `render.froxel_view@1`, `render.fog_blur@1`,
+  `render.fog_apply@1`.
 - `kernels/haze.ent` — Haze: aerial perspective after the real atmosphere.
   Kernels: `render.haze@1`.
 - `kernels/lamp_map.ent` — Lamps' shadow maps: a cube of distances for
@@ -92,8 +95,8 @@ use "render.entpkg";
   Kernels: `render.path_count_start@1`, `render.path_count@1`,
   `render.path_trace@1`, `render.path_blank@1`, `render.path_accum@1`,
   `render.path_atrous@1`, `render.path_behind@1`, `render.path_shade@1`.
-- `kernels/phase.ent` — Light scattered in the air: the phase and
-  each pixel's step offset, shared by fog, clouds and the sky.
+- `kernels/phase.ent` — Light scattered in the air: the phase, shared by
+  fog, clouds and the sky.
 - `kernels/probe_gi.ent` — Global illumination by light probes. Kernels: `render.probes_sign@1`,
   `render.probes_seen@1`, `render.probes_gather@1`,
   `render.probes_screen_gather@1`, `render.probes_gather_keep@1`,
@@ -247,7 +250,7 @@ use "render.entpkg";
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`bounce.replay`, `cluster.replay`, `field.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `proxy_stream.replay`, `reflection.replay`, `shadow.replay`,
+`bounce.replay`, `cluster.replay`, `field.replay`, `fog_volumes.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `proxy_stream.replay`, `reflection.replay`, `shadow.replay`,
 `sky.replay`, `stream.replay`, `temporal.replay`, `translucent.replay`.
 Every Kernel of the package is reached by one of them.
 
@@ -393,25 +396,33 @@ What every renderer shares, in this order:
   (`mirror_start` says where a ray reaches the plane), a renderer lights
   that, and `render.mirror_mix` lays it over the pixels `more` w marks, by
   Fresnel, moved by the surface's normal (waves) and drawn out downward.
-- **The air** (`graphs/volumetrics.esn`). `render.fog_march` walks each view ray
-  at a quarter of the size through height fog the sun (shadowed by the
+- **The air** (`graphs/volumetrics.esn`). The air is a grid of cells over
+  the view (froxels: `columns` by `rows` across the picture, `slices` out
+  from the eye, each slice the same share deeper than the last from `near`
+  to `far`). `render.froxel_light` lights each cell where its column shows
+  (`render.froxel_furthest`): height fog (its density averaged exactly
+  through the cell) and the scene's fog volumes (`volumes`, `FogVolume`:
+  boxes and balls of their own density and tint, soft at the edge;
+  `render.fog_volumes_none` for none), lit by the sun (shadowed by the
   sun's cascades where they hold the point, `sun_view_lit`, through the
   proxies elsewhere, and by the clouds' deck: shafts behind what stands in
   the light and between the clouds; a scene without cascades gives
   `render.sun_none`), the sky, a glow of the scene's own and the lamps
-  light: the lamps of each pixel's tile (`render.lamps_tiles` with
+  light: the lamps of each column's tile (`render.lamps_tiles` with
   `through`, cut for the whole view ray, not the surface), each one's
-  light summed exactly along each step (a beam beside a bulb has no
-  spikes) and cut by the proxies toward it into shafts; `render.fog_blur`
-  smooths it by depth; `render.clouds_march` walks a deck of clouds for
+  light summed exactly through the cell in `lamp_steps` pieces (a beam
+  beside a bulb has no spikes, its forward glow no gaps) and cut by the
+  proxies toward it into shafts. `render.froxel_scan` sums the cells from
+  the eye in two passes; `render.froxel_view` reads the sum at each
+  quarter pixel's depth, the slice it falls in taken in part exactly;
+  `render.fog_blur` smooths it by depth; `render.clouds_march` walks a deck of clouds for
   the sky at an eighth of the size, lit through the cloud toward the sun
   with light scattered again and again, dark at a sunlit edge, lit from
   below by `below`; the sky's share of the fog's light (`sky_share`, not
   shadowed) and the steps toward the sun (`sun_steps`) are the scene's to
   set, a room taking less sky and more steps past its thin walls;
   `render.fog_apply` lays both over the picture,
-  upsampled by depth. Each pixel's steps start at a fixed offset of its
-  own, so nothing needs history to settle.
+  upsampled by depth. Nothing needs history to settle.
 - **The sky** (`graphs/atmosphere.esn`). Sunlight through a sphere of
   air round the ground (Hillaire's model): Rayleigh's scattering, haze
   and ozone; light scattered more than once a table by height and the

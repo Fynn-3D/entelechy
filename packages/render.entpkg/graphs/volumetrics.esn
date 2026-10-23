@@ -1,9 +1,10 @@
 //! Fog and clouds over a picture (`kernels/fog.ent`, `kernels/clouds.ent`):
-//! height fog the sun (its shafts cut by the sun's cascades, and between
-//! the clouds), the sky, `glow` and the lamps light, walked at a quarter of
-//! the size and smoothed by depth; a deck of clouds over the sky at an
-//! eighth; both laid over `hdr`. The deck is given back for the shadows it
-//! casts (`render.clouds_shadow`).
+//! height fog and the scene's own fog volumes, in a grid of cells over the
+//! view the sun (its shafts cut by the sun's cascades, and between the
+//! clouds), the sky, `glow` and the lamps light, summed from the eye, read
+//! at a quarter of the size and smoothed by depth; a deck of clouds over the
+//! sky at an eighth; both laid over `hdr`. The deck is given back for the
+//! shadows it casts (`render.clouds_shadow`).
 use "../kernels/";
 
 input hdr: Image;
@@ -17,6 +18,8 @@ input lamps: Lamps;
 /// The sun's cascades and their depths (`render.sun_views`; a scene without them gives `render.sun_none` and a 1 by 1 atlas).
 input views: SunViews;
 input atlas: Grid<Float>;
+/// The scene's own fog volumes (`render.fog_volumes_none` for none).
+input volumes: FogVolumes;
 /// The fog: how thick at `base` and below, thinning by e every `falloff` meters up.
 param density: Float = 0.002;
 param base: Float = 0.0;
@@ -27,10 +30,19 @@ param glow: Vec3 = vec3(0.0, 0.0, 0.0);
 param lamp_share: Float = 1.0;
 /// The sky's light in the fog, times this (less in a room).
 param sky_share: Float = 1.0;
+/// The air's grid: `columns` across and `rows` down the picture, `slices` deep (at most 64) from `near` to `far` meters, finer near
+/// the eye.
+param columns: Int = 160;
+param rows: Int = 90;
+param slices: Int = 64;
+param near: Float = 0.2;
+param far: Float = 2000.0;
 /// The steps toward the sun through the proxies where no cascade holds a point (more where walls are thin and near).
 param sun_steps: Int = 8;
 /// The steps toward a lamp that cut its beam into shafts (0 none).
 param shafts: Int = 8;
+/// The pieces each lamp's light is taken in through a cell (more where a lamp's forward glow is strong).
+param lamp_steps: Int = 4;
 /// The clouds: their deck, how much of the sky, and the light from below.
 param low: Float = 1500.0;
 param high: Float = 2600.0;
@@ -51,8 +63,15 @@ param cloud_sky: Float = 1.0;
 // The lamps each tile's view rays pass by, as far as the fog reaches.
 node lamp_depth: render.lamps_depth@1 { surface <- surface; domain = ceil(size(surface) / 16); }
 node lamp_tiles: render.lamps_tiles@1 { depth <- lamp_depth.result; lamps <- lamps; lens <- lens; surface <- surface; through = 2000.0; domain = size(depth); }
-node fog: render.fog_march@1 { tiles <- lamp_tiles.result; views <- views; atlas <- atlas; surface <- surface; lens <- lens; sky <- sky; lamps <- lamps; proxy <- proxy; land <- land; frame <- frame; deck <- deck.result;
-    density = density; base = base; falloff = falloff; forward = forward; glow = glow; lamp_share = lamp_share; sky_share = sky_share; sun_steps = sun_steps; shafts = shafts; domain = ceil(size(surface) / 4); }
+// The air in a grid over the view: lit cell by cell where its column shows, summed from the eye, read at each quarter
+// pixel's depth.
+node furthest: render.froxel_furthest@1 { surface <- surface; far = far; domain = vec2(columns, rows); }
+node air: render.froxel_light@1 { tiles <- lamp_tiles.result; views <- views; atlas <- atlas; surface <- surface; lens <- lens; sky <- sky; lamps <- lamps; proxy <- proxy; land <- land; frame <- frame;
+    deck <- deck.result; volumes <- volumes; furthest <- furthest.result; density = density; base = base; falloff = falloff; forward = forward; glow = glow; lamp_share = lamp_share;
+    sky_share = sky_share; sun_steps = sun_steps; shafts = shafts; near = near; far = far; domain = vec3(columns, rows, slices); }
+node within: render.froxel_scan@1 { air <- air.result; step = 1; domain = size(air); }
+node summed: render.froxel_scan@1 { air <- within.result; step = 8; domain = size(air); }
+node fog: render.froxel_view@1 { summed <- summed.result; air <- air.result; surface <- surface; lens <- lens; near = near; far = far; domain = ceil(size(surface) / 4); }
 node across: render.fog_blur@1 { fog <- fog.result; surface <- surface; axis = 0; domain = size(fog); }
 node down: render.fog_blur@1 { fog <- across.result; surface <- surface; axis = 1; domain = size(fog); }
 // Clouds are soft: an eighth of the size is enough.

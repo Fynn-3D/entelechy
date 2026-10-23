@@ -56,10 +56,11 @@ node no_maps: render.lamp_maps_none@1 { domain = vec2(1, 1); }
 node mirrored: render.mirror_mix@1 { hdr <- lit.hdr; mirror <- mirror_lit.hdr; surface <- stand.surface; paint <- stand.paint; more <- marks.result; lens <- stand.lens; domain = size(hdr); }
 
 // The moon's cascades, for its shafts in the fog.
+node no_volumes: render.fog_volumes_none@1 { domain = 1; }
 node sun_views: render.sun_views@1 { lens <- stand.lens; sky <- night.result; nearest = 8.0; spread = 4.0; reach = 20.0; size = 256.0; domain = 2; }
 node sun_depth: stand.sun_depth@1 { views <- sun_views.result; size = 256.0; domain = vec2(512, 256); }
 node aired: graph "../graphs/volumetrics.esn" { views <- sun_views.result; atlas <- sun_depth.result; hdr <- mirrored.result; lens <- stand.lens; sky <- night.result; surface <- stand.surface; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; lamps <- lamps.result;
-    density = 0.05; falloff = 2.0; glow = vec3(0.002, 0.002, 0.002); low = 40.0; high = 70.0; cover = 0.75; scale = 60.0; below = vec3(0.03, 0.02, 0.01); }
+    volumes <- no_volumes.result; density = 0.05; falloff = 2.0; glow = vec3(0.002, 0.002, 0.002); low = 40.0; high = 70.0; cover = 0.75; scale = 60.0; below = vec3(0.03, 0.02, 0.01); }
 node exposed: graph "../graphs/exposure.esn" { hdr <- aired.hdr; }
 node glow: graph "../graphs/bloom.esn" { hdr <- exposed.hdr; threshold = 1.0; }
 node view: render.tonemap@1 { hdr <- exposed.hdr; bloom <- glow.bloom; exposure = 1.0; domain = window(); }
