@@ -13,14 +13,20 @@ kernel render.bright@1 {
     requires { field.read; field.write; }
     input hdr: Image;
     param threshold: Float = 2.0;
+    /// How hard the brightest points are held down before they glow (0 not at all): a sun many times the threshold glows
+    /// round, its glow fading out within the blur, not burning its square edge.
+    param calm: Float = 0.0;
     output result: Image;
     compute {
         let step_ = size(hdr) / domain() / 4.0;
         let q = coord() * size(hdr) / domain();
-        return vec4(loop 16 with acc = vec3(0.0, 0.0, 0.0) { acc + max(at(hdr, q + vec2(float(index() % 4), float(index() / 4)) * step_).xyz - vec3(threshold, threshold, threshold), vec3(0.0, 0.0, 0.0)) } / 16.0, 1.0);
+        let over = loop 16 with acc = vec3(0.0, 0.0, 0.0) { acc + max(at(hdr, q + vec2(float(index() % 4), float(index() / 4)) * step_).xyz - vec3(threshold, threshold, threshold), vec3(0.0, 0.0, 0.0)) } / 16.0;
+        let held = over / (1.0 + max(over.x, max(over.y, over.z)) * calm);
+        return vec4(held.x, held.y, held.z, 1.0);
     }
 }
-/// The glow's blur: nine points along `axis` (0 across, 1 down).
+/// The glow's blur: nine points along `axis` (0 across, 1 down), weighed by a Gaussian of two texels: the blur across
+/// then down is a Gaussian all round, so a bright point glows round.
 kernel render.spread@1 {
     requires { field.read; field.write; }
     input image: Image;
@@ -28,7 +34,7 @@ kernel render.spread@1 {
     output result: Image;
     compute {
         let d = if axis == 0 { vec2(1.0, 0.0) } else { vec2(0.0, 1.0) };
-        let w = [0.05, 0.09, 0.12, 0.15, 0.18, 0.15, 0.12, 0.09, 0.05];
+        let w = [0.0276, 0.0663, 0.1238, 0.1802, 0.2042, 0.1802, 0.1238, 0.0663, 0.0276];
         return loop 9 with acc = vec4(0.0, 0.0, 0.0, 0.0) { acc + at(image, coord() + d * float(index() - 4)) * w[index()] };
     }
 }
