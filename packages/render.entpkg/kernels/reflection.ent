@@ -17,8 +17,10 @@ fn reflection_edge(q: Vec2, extent: Vec2, edge: Float) -> Float {
 }
 
 /// The picture `hdr` with reflections on the screen in place of the renderer's own (`reflection`, as the renderer gives it):
-/// on surfaces smoother than `below`, the mirror ray walked `steps` steps out to `far` meters, a thing met no thicker than
-/// `thick` meters; sure fully up to `sure` of `below`'s roughness, and within `edge` of the picture's edges less so.
+/// on surfaces smoother than `below`, the mirror ray walked `steps` steps out to `far` meters (no farther than 4 meters
+/// and `span` times the surface's own distance), a thing met no thicker than `thick` meters; sure fully up to `sure` of
+/// `below`'s roughness, and within `edge` of the picture's edges less so. With `to_sky` 1, a ray that meets nothing and
+/// goes on toward sky the picture shows (as `hdr` has it: its mist and its glow laid over) takes that sky.
 kernel render.reflections@1 {
     requires { field.read; field.write; }
     input hdr: Image;
@@ -36,6 +38,8 @@ kernel render.reflections@1 {
     param far: Float = 60.0;
     param thick: Float = 0.6;
     param edge: Float = 0.08;
+    param span: Float = 1.0;
+    param to_sky: Int = 0;
     output result: Image;
     compute {
         let q = coord();
@@ -51,18 +55,32 @@ kernel render.reflections@1 {
         let n = su.xyz;
         let r = reflect(dir, n);
         let p = l.eye + dir * su.w + n * 0.02;
-        let hit = screen_march(surface, l, extent, p, r, min(far, 4.0 + su.w), steps, thick, 0.5);
-        if hit.z < 0.0 { return picture; }
+        let reach = min(far, 4.0 + su.w * span);
+        let hit = screen_march(surface, l, extent, p, r, reach, steps, thick, 0.5);
+        let mine_ = env_reflectance(m, n, vec3(0.0, 0.0, 0.0) - dir);
+        if hit.z < 0.0 {
+            // Gone on toward the sky: where its way far off shows, if the picture shows the sky there.
+            if to_sky == 0 { return picture; }
+            let away = project(l, p + r * 100000.0, extent);
+            let inside = away.z > 0.0 && away.x >= 0.0 && away.y >= 0.0 && away.x < extent.x && away.y < extent.y;
+            if !inside { return picture; }
+            let at_sky = floor(away.xy);
+            if at(surface, at_sky).w < no_hit() * 0.5 { return picture; }
+            let smooth_ = saturate((below - m.rough) / max(below * (1.0 - sure), 0.0001));
+            let sure_sky = reflection_edge(at_sky, extent, edge) * smooth_;
+            let s_ = at(sky, 0);
+            let taken_ = aerial(at(hdr, at_sky).xyz * mine_, dir, su.w, s_) - aerial(vec3(0.0, 0.0, 0.0), dir, su.w, s_);
+            return vec4(picture.xyz + (taken_ - sample(reflection).xyz) * sure_sky, picture.w);
+        }
         let met = at(surface, hit.xy);
         // A ray that met a surface facing away from it saw its back: unsure.
         let facing = saturate(0.0 - dot(met.xyz, r) * 4.0);
         let smooth = saturate((below - m.rough) / max(below * (1.0 - sure), 0.0001));
-        let along = 1.0 - smoothstep(0.6, 1.0, hit.z / min(far, 4.0 + su.w));
+        let along = 1.0 - smoothstep(0.6, 1.0, hit.z / reach);
         let sure_of = reflection_edge(hit.xy, extent, edge) * facing * smooth * along;
         let seen = at(hdr, hit.xy).xyz;
-        let mine = env_reflectance(m, n, vec3(0.0, 0.0, 0.0) - dir);
         let s = at(sky, 0);
-        let taken = aerial(seen * mine, dir, su.w, s) - aerial(vec3(0.0, 0.0, 0.0), dir, su.w, s);
+        let taken = aerial(seen * mine_, dir, su.w, s) - aerial(vec3(0.0, 0.0, 0.0), dir, su.w, s);
         let shown = sample(reflection).xyz;
         return vec4(picture.xyz + (taken - shown) * sure_of, picture.w);
     }
