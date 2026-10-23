@@ -152,8 +152,9 @@ kernel mesh.chunk_point_flags@1 {
     }
 }
 
-/// The chunk's points (`domain` the kept points), its faces with their corners renumbered among them (`faces`), each
-/// face's part (`parts`, from the mesh's `face_parts`), and each point's group (`groups`, the mesh's).
+/// The chunk's points (`domain` the kept points, one at least), its faces with their corners renumbered among them
+/// (`faces`), each face's part (`parts`, from the mesh's `face_parts`), and each point's group (`groups`, the mesh's); a
+/// chunk with no face keeps one point at the origin and one face of it alone, which nothing draws.
 kernel mesh.chunk_points@1 {
     requires { field.read; field.write; }
     input points: Rows<MeshPoint>;
@@ -163,7 +164,11 @@ kernel mesh.chunk_points@1 {
     input count: Rows<Int>;
     output result: Rows<MeshPoint>;
     output group: Rows<Int>;
-    compute { let p = at(kept, element()); return { result: at(points, p), group: at(groups, p) }; }
+    compute {
+        if element() >= at(count, 0) { return { result: MeshPoint { position: vec3(0.0, 0.0, 0.0), normal: vec3(0.0, 1.0, 0.0), uv: vec2(0.0, 0.0) }, group: 0 }; }
+        let p = at(kept, element());
+        return { result: at(points, p), group: at(groups, p) };
+    }
 }
 kernel mesh.chunk_faces@1 {
     requires { field.read; field.write; }
@@ -176,8 +181,18 @@ kernel mesh.chunk_faces@1 {
     output result: Rows<Face>;
     output part: Rows<Int>;
     compute {
+        if element() >= at(count, 0) { return { result: Face { a: 0, b: 0, c: 0 }, part: 0 }; }
         let i = at(kept, element());
         let f = at(faces, i);
         return { result: Face { a: at(renumbered, f.a) - 1, b: at(renumbered, f.b) - 1, c: at(renumbered, f.c) - 1 }, part: at(face_parts, i) };
     }
+}
+
+/// Each merged face's part (`domain = count(sources)`): the part of the chunk's face it came from.
+kernel mesh.chunk_parts@1 {
+    requires { field.read; field.write; }
+    input parts: Rows<Int>;
+    input sources: Rows<Int>;
+    output result: Rows<Int>;
+    compute { return at(parts, sample(sources)); }
 }

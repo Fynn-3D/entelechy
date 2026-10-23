@@ -56,7 +56,8 @@ use "mesh.entpkg";
   Kernels: `mesh.stream_up@1`, `mesh.stream_faces@1`,
   `mesh.stream_clusters@1`, `mesh.stream_sources@1`,
   `mesh.stream_meshes@1`, `mesh.stream_ready@1`, `mesh.chunk_flags@1`,
-  `mesh.chunk_point_flags@1`, `mesh.chunk_points@1`, `mesh.chunk_faces@1`.
+  `mesh.chunk_point_flags@1`, `mesh.chunk_points@1`, `mesh.chunk_faces@1`,
+  `mesh.chunk_parts@1`.
 - `kernels/subdivision.ent` — Midpoint subdivision, the step that
   changes a mesh's topology. Kernels: `mesh.split_points@1`,
   `mesh.split_faces@1`.
@@ -64,7 +65,8 @@ use "mesh.entpkg";
 ## Graph presets
 
 - `graphs/chunk.esn` — One chunk of a world out of a mesh, built as a
-  clustered library with its parts, for a scene to save and stream.
+  clustered library with its parts, near as it is and far merged on a
+  wider lattice first, for a scene to save and stream.
 - `graphs/cluster_brick.esn` — A level's clusters.
 - `graphs/cluster.esn` — A mesh built as levels and cut into clusters:
   the library a renderer draws from (`render.entpkg`'s

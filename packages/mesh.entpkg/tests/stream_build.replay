@@ -8,8 +8,22 @@ expect count chunk.chunk_faces.part = 768
 expect chunk.chunk_faces.part[0] = 0
 expect chunk.chunk_faces.part[767] = 1
 
+# Afar, merged on a lattice a meter wide first: 38 faces for the chunk's
+# 768.
+expect count chunk.far_parts.result = 38
+
 # The last chunk holds as many.
 param cell_x 1
 param cell_z 1
 frame 0.0
 expect chunk.kept.total.result[0] = 768
+
+# A cell past the world: no face, the one face kept of a single corner,
+# which nothing draws.
+param cell_x 5
+param cell_z 5
+frame 0.0
+expect chunk.kept.total.result[0] = 0
+expect chunk.chunk_faces.result[0].a = 0
+expect chunk.chunk_faces.result[0].b = 0
+expect chunk.chunk_faces.result[0].c = 0
