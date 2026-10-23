@@ -45,3 +45,9 @@ expect clay.result[9463] = 0.5058 0.5087 0.5150 1 0.002
 # of the ground before they count what they meet, so a floor pixel shows
 # what stands round it, not the floor it left.
 expect traced_floor.result[11200] = 0.2405 0.2471 0.2655 1 0.0005
+
+# A scene's own look, set in the scene: lit with half the sky's light (a
+# shaded floor pixel about half as bright), ray traced with its mirrors
+# held at 0.1 (the mirror ball dark).
+expect lit_tuned.result[7280] = 0.0098 0.0105 0.0124 1 0.0005
+expect traced_tuned.result[9539] = 0.0800 0.0804 0.0804 1 0.001

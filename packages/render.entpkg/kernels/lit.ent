@@ -10,31 +10,35 @@ use "camera.ent";
 use "probe_gi.ent";
 use "sky.ent";
 
-/// The color of light the ground throws back (the ground's mean color, warmer).
-fn ground_bounce_albedo() -> Vec3 { return vec3(0.34, 0.29, 0.22); }
+/// How the light from all round is drawn, a scene's to tune: the color the sunlit ground throws back (`ground`, its mean color,
+/// warmer) and how strongly (`ground_light`, times the sun on it), and the sky's strength (`sky_light`).
+struct Surround { ground: Vec3; ground_light: Float; sky_light: Float; }
+/// How the coarse scene shuts out the light from all round, a scene's to tune: looked at the three distances of `reach` (meters) up
+/// along the normal, what is nearer than the way walked summed `strength` times, never darker than `least`.
+struct Openness { reach: Vec3; strength: Float; least: Float; }
 
 /// The diffuse light from all round a surface facing `n` receives: the sky's half and the ground's half mixed by its facing.
-fn hemisphere(n: Vec3, s: SkyLook) -> Vec3 {
+fn hemisphere(n: Vec3, s: SkyLook, look: Surround) -> Vec3 {
     let up = clamp(n.y, -1.0, 1.0);
-    let sky = (mix(s.horizon, s.zenith, smoothstep(0.0, 1.0, up)) * 0.55 + s.ambient * 0.45) * 1.15;
-    let ground = ground_bounce_albedo() * s.sun_color * (max(s.sun.y, 0.0) / 3.14159265) * 1.6 + s.ambient * 0.25;
+    let sky = (mix(s.horizon, s.zenith, smoothstep(0.0, 1.0, up)) * 0.55 + s.ambient * 0.45) * look.sky_light;
+    let ground = look.ground * s.sun_color * (max(s.sun.y, 0.0) / 3.14159265) * look.ground_light + s.ambient * 0.25;
     return mix(ground, sky, smoothstep(-0.6, 0.6, up));
 }
 
 /// How much of the light from all round the coarse scene (the proxies' distances) hides from a surface at `p` facing `n` (1 none hidden):
-/// how far things are 0.4, 1.2 and 2.5 meters up along the normal (no farther than a quarter of the proxy's width), darker where nearer
+/// how far things are at `o`'s three distances up along the normal (no farther than a quarter of the proxy's width), darker where nearer
 /// than the way walked. A point in a crown of leaves lies inside its coarse shape, its distance negative, much darker.
-fn proxy_open(proxy: Volume<Vec4>, frame: Proxies, p: Vec3, n: Vec3) -> Float {
+fn proxy_open(proxy: Volume<Vec4>, frame: Proxies, p: Vec3, n: Vec3, o: Openness) -> Float {
     let d = normalize(n + vec3(0.0, 0.6, 0.0));
     // A proxy drawn close round one thing (an asset) is read no farther than a quarter of its width (its coarsest level's).
     let wide = at(frame, count(frame) - 1);
     let reach = max(max(wide.cells.x, wide.cells.y), wide.cells.z) * wide.cell * 0.25;
     let shut = loop 3 with a = 0.0 {
-        let k = min(if index() == 0 { 0.4 } else if index() == 1 { 1.2 } else { 2.5 }, reach);
+        let k = min(if index() == 0 { o.reach.x } else if index() == 1 { o.reach.y } else { o.reach.z }, reach);
         let near = proxy_near(proxy, frame, p + d * k);
         a + clamp((k - near) / k, 0.0, 1.0) * (if index() == 0 { 0.45 } else if index() == 1 { 0.35 } else { 0.2 })
     };
-    return clamp(1.0 - shut * 1.6, 0.1, 1.0);
+    return clamp(1.0 - shut * o.strength, o.least, 1.0);
 }
 
 /// About how far `p` is from things in the coarse scene, past its edge too: there, the way to the coarsest level's edge and
@@ -51,8 +55,8 @@ fn proxy_near(proxy: Volume<Vec4>, frame: Proxies, p: Vec3) -> Float {
 }
 
 /// What the reflected direction `r` sees: the sky, or looking down, the ground's light.
-fn seen_along(r: Vec3, s: SkyLook) -> Vec3 {
-    return if r.y > 0.0 { sky_radiance(r, s, false) } else { hemisphere(vec3(0.0, -1.0, 0.0), s) };
+fn seen_along(r: Vec3, s: SkyLook, look: Surround) -> Vec3 {
+    return if r.y > 0.0 { sky_radiance(r, s, false) } else { hemisphere(vec3(0.0, -1.0, 0.0), s, look) };
 }
 
 /// Lit (see the file's head): an HDR picture: the sky drawn where it is; things lit by `painted` (1 as a painting
@@ -77,6 +81,16 @@ kernel render.lit@1 {
     /// what the coarse scene hides; a translucent surface keeps at least this
     /// times its subsurface share wherever it is.
     param inside_sky: Float = 0.8;
+    /// The light all round (`Surround`): the color the sunlit ground throws
+    /// back, how strongly, and the sky's strength.
+    param ground: Vec3 = vec3(0.34, 0.29, 0.22);
+    param ground_light: Float = 1.6;
+    param sky_light: Float = 1.15;
+    /// How the coarse scene shuts it out (`Openness`): the three distances
+    /// looked at (meters), how strongly, and the darkest it makes a surface.
+    param open_reach: Vec3 = vec3(0.4, 1.2, 2.5);
+    param open_strength: Float = 1.6;
+    param open_least: Float = 0.1;
     output result: Image;
     /// The share of `result` that scatters under subsurface surfaces (`graphs/subsurface.esn` spreads it); 0 elsewhere and when painted.
     output scatter: Image;
@@ -92,6 +106,7 @@ kernel render.lit@1 {
         let m = pbr_of(sample(paint), ex, sample(layers), sample(more));
         let v = vec3(0.0, 0.0, 0.0) - dir;
         let on = if bounce != 0 { 1.0 } else { 0.0 };
+        let look = Surround { ground: ground, ground_light: ground_light, sky_light: sky_light };
         // Deep inside the coarse shape (a leaf in its crown, more than half a
         // cell in) the coarse scene says nothing of the sky seen through it:
         // the baked occlusion does.
@@ -99,10 +114,10 @@ kernel render.lit@1 {
         let deep = saturate((0.0 - proxy_at(proxy, frame, at_p, 1.0).x) / proxy_cell_at(frame, at_p) - 0.5);
         // A translucent thing (a leaf) lets the sky through itself: those round it
         // shut out no more than its subsurface share of `inside_sky` lets in.
-        let open = max(mix(proxy_open(proxy, frame, at_p, n), inside_sky, deep), inside_sky * m.subsurface);
+        let open = max(mix(proxy_open(proxy, frame, at_p, n, Openness { reach: open_reach, strength: open_strength, least: open_least }), inside_sky, deep), inside_sky * m.subsurface);
         let ao = if bounce != 0 { baked_occlusion(ex) * open } else { 0.0 };
-        let e = hemisphere(n, s) * ao;
-        let spec_light = mix(seen_along(reflect(dir, n), s), e, sqrt(m.rough)) * ao * on;
+        let e = hemisphere(n, s, look) * ao;
+        let spec_light = mix(seen_along(reflect(dir, n), s, look), e, sqrt(m.rough)) * ao * on;
         let shown = if painted == 0 { lit_by(m, n, v, s.sun, s.sun_color * ex.x) + ambient_by(m, n, v, e, spec_light, spec_light) }
             else { toon(m, n, v, s, ex.x, e) + spec_light * env_brdf(pbr_f0(m), m.rough, max(dot(n, v), 0.001)) * (1.0 - m.rough) };
         let all = shown + m.glow;
