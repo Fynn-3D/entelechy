@@ -35,8 +35,13 @@ node marks: kernel {
     compute { let s = sample(surface); return vec4(0.0, 0.0, 0.0, if s.y > 0.99 && s.w < 50.0 { 1.0 } else { 0.0 }); }
 }
 
+// The G-buffer before the light: gloss widened where normals turn within a
+// pixel; the sun's (moon's) visibility under the clouds' shadows.
+node gloss: render.gloss_widen@1 { paint <- stand.paint; surface <- stand.surface; domain = size(paint); }
+node clouded: render.clouds_shadow@1 { extra <- stand.extra; surface <- stand.surface; lens <- stand.lens; sky <- night.result; deck <- aired.deck; domain = size(extra); }
+
 // The probes renderer takes the lamps in: shown, reflected and bounced.
-node lit: graph "../graphs/probes.esn" { lens <- stand.lens; sky <- night.result; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
+node lit: graph "../graphs/probes.esn" { lens <- stand.lens; sky <- night.result; surface <- stand.surface; paint <- gloss.result; extra <- clouded.result; layers <- stand.layers; more <- stand.more;
     behind_at <- stand.behind_at; behind_dir <- stand.behind_dir; behind_paint <- stand.behind_paint; behind_normal <- stand.behind_normal; through <- stand.through;
     proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; lamps <- lamps.result; nx = 21; ny = 6; nz = 12; spacing = 0.5; }
 
@@ -50,7 +55,7 @@ node mirror_lit: graph "../graphs/lamps.esn" { hdr <- mirror_day.result; lens <-
 node mirrored: render.mirror_mix@1 { hdr <- lit.hdr; mirror <- mirror_lit.hdr; surface <- stand.surface; paint <- stand.paint; more <- marks.result; lens <- stand.lens; domain = size(hdr); }
 
 node aired: graph "../graphs/air.esn" { hdr <- mirrored.result; lens <- stand.lens; sky <- night.result; surface <- stand.surface; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; lamps <- lamps.result;
-    density = 0.05; falloff = 2.0; glow = vec3(0.002, 0.002, 0.002); low = 40.0; high = 70.0; cover = 0.5; scale = 60.0; below = vec3(0.03, 0.02, 0.01); }
+    density = 0.05; falloff = 2.0; glow = vec3(0.002, 0.002, 0.002); low = 40.0; high = 70.0; cover = 0.75; scale = 60.0; below = vec3(0.03, 0.02, 0.01); }
 node exposed: graph "../graphs/exposure.esn" { hdr <- aired.hdr; }
 node glow: graph "../graphs/bloom.esn" { hdr <- exposed.hdr; threshold = 1.0; }
 node view: render.view@1 { hdr <- exposed.hdr; bloom <- glow.bloom; exposure = 1.0; domain = window(); }

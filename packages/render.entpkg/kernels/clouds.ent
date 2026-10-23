@@ -1,9 +1,11 @@
-// Clouds: a deck of them walked through for the sky's pixels at a quarter
-// of the picture's size (`render.clouds_march`), lit by the sun (or moon)
-// through the cloud above each point, with light scattered many times
+// Clouds: one deck of them (`render.clouds_deck`), walked through for the
+// sky's pixels at a small size (`render.clouds_march`), lit by the sun (or
+// moon) through the cloud above each point, with light scattered many times
 // within (Wrenninge's octaves) and the dark edges of a cloud's sunlit side
 // (Beer and powder), the sky light from above and a glow from below (a
-// city's at night). `render.fog_apply` lays them over the sky.
+// city's at night); `render.fog_apply` lays them over the sky. The same
+// deck shades the ground: `render.clouds_shadow` takes the sun it hides
+// out of the G-buffer's sun visibility.
 use "random.entpkg";
 use "camera.ent";
 use "fog.ent";
@@ -13,6 +15,54 @@ use "sky.ent";
 /// the sky (0 to 1), `density` thick, billows `scale` meters across, its
 /// look drawn from `seed`.
 struct CloudDeck { low: Float; high: Float; cover: Float; density: Float; scale: Float; seed: Int; }
+type CloudDecks = Rows<CloudDeck>;
+
+/// The deck, from its numbers: what both the clouds drawn and their shadows read.
+kernel render.clouds_deck@1 {
+    requires { field.write; }
+    param low: Float = 1500.0;
+    param high: Float = 2600.0;
+    param cover: Float = 0.5;
+    param density: Float = 0.02;
+    param scale: Float = 2400.0;
+    param seed: Int = 7;
+    output result: CloudDecks;
+    compute { return CloudDeck { low: low, high: high, cover: cover, density: density, scale: scale, seed: seed }; }
+}
+
+/// How much sunlight the deck lets through to `p` below it, toward `sun`:
+/// the cloud along that way walked in `steps` steps (1 clear).
+fn cloud_shadow(deck: CloudDeck, p: Vec3, sun: Vec3, steps: Int) -> Float {
+    if deck.cover <= 0.0 || sun.y <= 0.02 || p.y >= deck.high { return 1.0; }
+    let t_in = max((deck.low - p.y) / sun.y, 0.0);
+    let t_out = (deck.high - p.y) / sun.y;
+    let dt = min(t_out - t_in, (deck.high - deck.low) * 4.0) / float(max(steps, 1));
+    let depth = loop 16 with o = 0.0 until index() >= steps {
+        o + cloud_density(deck, p + sun * (t_in + (float(index()) + 0.5) * dt)) * dt
+    };
+    return exp(0.0 - depth);
+}
+
+/// The G-buffer's `extra` with the deck's shadow multiplied into the sun's
+/// visibility (x), as `render.contact` is: before a renderer takes it.
+kernel render.clouds_shadow@1 {
+    requires { field.read; field.write; }
+    input extra: Grid<Vec4>;
+    input surface: Grid<Vec4>;
+    input lens: Lenses;
+    input sky: SkyLooks;
+    input deck: CloudDecks;
+    param steps: Int = 6;
+    output result: Grid<Vec4>;
+    compute {
+        let e = sample(extra);
+        let s = sample(surface);
+        if e.x <= 0.0 || s.w > no_hit() * 0.5 { return e; }
+        let l = at(lens, 0);
+        let p = l.eye + ray(l, coord(), size(surface)) * s.w;
+        return vec4(e.x * cloud_shadow(at(deck, 0), p, normalize(at(sky, 0).sun), steps), e.y, e.z, e.w);
+    }
+}
 
 /// The clouds' density at `p`: billows of fbm worn at their edges by finer
 /// fbm, thinner toward the deck's bottom and top.
@@ -59,12 +109,7 @@ kernel render.clouds_march@1 {
     input surface: Grid<Vec4>;
     input lens: Lenses;
     input sky: SkyLooks;
-    param low: Float = 1500.0;
-    param high: Float = 2600.0;
-    param cover: Float = 0.5;
-    param density: Float = 0.02;
-    param scale: Float = 2400.0;
-    param seed: Int = 7;
+    input deck: CloudDecks;
     param below: Vec3 = vec3(0.0, 0.0, 0.0);
     param steps: Int = 32;
     param light_steps: Int = 5;
@@ -79,10 +124,13 @@ kernel render.clouds_march@1 {
         let ratio = size(surface) / ext;
         let su = at(surface, min(floor((q + 0.5) * ratio), size(surface) - vec2(1.0, 1.0)));
         if su.w < no_hit() * 0.5 || dir.y <= 0.01 { return clear; }
+        let cd = at(deck, 0);
+        let low = cd.low;
+        let high = cd.high;
+        if cd.cover <= 0.0 { return clear; }
         let t_in = max((low - l.eye.y) / dir.y, 0.0);
         let t_out = (high - l.eye.y) / dir.y;
         if t_out <= t_in { return clear; }
-        let deck = CloudDeck { low: low, high: high, cover: cover, density: density, scale: scale, seed: seed };
         // A long slant through the deck is walked no further than this.
         let span = min(t_out - t_in, (high - low) * 4.0);
         let n = max(steps, 1);
@@ -93,10 +141,10 @@ kernel render.clouds_march@1 {
         // pixel's own offset would show as blocks.
         let r = loop 64 with r = vec4(0.0, 0.0, 0.0, 1.0) until index() >= n || r.w < 0.02 {
             let p = l.eye + dir * (t_in + (float(index()) + 0.5) * dt);
-            let dens = cloud_density(deck, p);
+            let dens = cloud_density(cd, p);
             if dens <= 0.0 { r } else {
                 let h = saturate((p.y - low) / (high - low));
-                let light = s.sun_color * cloud_sunlight(cloud_depth_toward(deck, p, sun, light_steps), cos_angle)
+                let light = s.sun_color * cloud_sunlight(cloud_depth_toward(cd, p, sun, light_steps), cos_angle)
                     + s.ambient * (0.3 + 0.7 * h) + below * ((1.0 - h) * 0.6);
                 let absorbed = exp(0.0 - dens * dt);
                 let scattered = light * ((1.0 - absorbed) * r.w);

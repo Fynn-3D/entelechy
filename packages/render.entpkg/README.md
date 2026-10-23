@@ -17,12 +17,12 @@ use "render.entpkg";
 
 - `kernels/aerial.ent` — Aerial perspective after the real atmosphere.
   Kernels: `render.air@1`.
+- `kernels/antialias.ent` — Antialiasing within one frame (FXAA).
+  Kernels: `render.fxaa@1`.
 - `kernels/atmosphere.ent` — The sky as the Earth's air makes it
   (Rayleigh, haze, ozone; light scattered more than once). Kernels:
   `render.atmosphere_spread@1`, `render.atmosphere_look@1`,
   `render.atmosphere_view@1`, `render.atmosphere_sky@1`.
-- `kernels/antialias.ent` — Antialiasing within one frame (FXAA).
-  Kernels: `render.fxaa@1`.
 - `kernels/bloom.ent` — Glow round bright lights, of every size at once.
   Kernels: `render.bloom_down@1`, `render.bloom_up@1`.
 - `kernels/brdf.ent` — Standard PBR.
@@ -30,24 +30,27 @@ use "render.entpkg";
   renderer traces shadows and bounces through). Kernels:
   `render.cam_start@1`, `render.cam@1`, `render.settled@1`,
   `render.depths@1`, `render.settle@1`, `render.lens@1`.
+- `kernels/clouds.ent` — A deck of clouds over the sky, lit through
+  itself, and its shadows on the ground. Kernels: `render.clouds_deck@1`,
+  `render.clouds_shadow@1`, `render.clouds_march@1`.
 - `kernels/contact_shadow.ent` — Contact shadows. Kernels:
   `render.contact@1`.
 - `kernels/daylight.ent` — Daylight. Kernels: `render.daylight@1`.
-- `kernels/clouds.ent` — A deck of clouds over the sky, lit through
-  itself. Kernels: `render.clouds_march@1`.
+- `kernels/depth_of_field.ent` — Depth of field. Kernels:
+  `render.dof_start@1`, `render.dof_control@1`, `render.focus@1`,
+  `render.focused@1`.
 - `kernels/exposure.ent` — Metered exposure and local exposure. Kernels:
   `render.exposure_tiles@1`, `render.exposure_meter@1`,
   `render.exposure_start@1`, `render.exposure_apply@1`,
   `render.exposure_local_base@1`, `render.exposure_local_blur@1`,
   `render.exposure_local@1`.
-- `kernels/depth_of_field.ent` — Depth of field. Kernels:
-  `render.dof_start@1`, `render.dof_control@1`, `render.focus@1`,
-  `render.focused@1`.
 - `kernels/film.ent` — Film. Kernels: `render.film_start@1`,
   `render.film_keys@1`, `render.film@1`.
 - `kernels/fog.ent` — Height fog the sun and the lamps light, their beams
   cut into shafts. Kernels: `render.fog_march@1`, `render.fog_blur@1`,
   `render.fog_apply@1`.
+- `kernels/gloss.ent` — Gloss widened where normals turn within a
+  pixel (specular antialiasing). Kernels: `render.gloss_widen@1`.
 - `kernels/lamps.ent` — Point lights, spotlights and glowing panels,
   culled by tiles, shadowed through the proxies and on the screen. Kernels:
   `render.lamps_none@1`, `render.lamps_depth@1`, `render.lamps_tiles@1`,
@@ -163,6 +166,16 @@ one while the camera moves, and a full one, computed once, when it stops
 `hdr: Image`, linear HDR, sky included. `render.bright`, `render.spread` and
 `render.view` turn it into the picture (`graphs/bloom.esn`'s glow in place
 of `render.bright` and `render.spread` for round glows with long tails).
+
+### Before a renderer
+
+Passes over the G-buffer a scene hands over, each giving the same layout
+back: `render.contact` multiplies contact shadows into the sun's
+visibility (`extra` x), `render.clouds_shadow` the shadow of the clouds'
+deck (the deck `graphs/air.esn` gives back as `deck`), and
+`render.gloss_widen` widens each pixel's roughness by how much its normals
+turn within it (Kaplanyan and Hoffman's), so a far glossy surface does not
+flash from pixel to pixel.
 
 ### After a renderer
 
