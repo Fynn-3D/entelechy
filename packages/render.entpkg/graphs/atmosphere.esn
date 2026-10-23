@@ -13,9 +13,13 @@ param clouds: Float = 0.0;
 param air: Float = 0.0;
 param air_from: Float = 1000000.0;
 
-node spread: render.atmosphere_spread@1 { haze = haze; domain = vec2(32, 32); }
-node look: render.atmosphere_look@1 { spread <- spread.result; elevation = elevation; bearing = bearing; sun = sun; haze = haze; clouds = clouds; air = air; air_from = air_from; domain = 1; }
-node table: render.atmosphere_view@1 { sky <- look.result; spread <- spread.result; sun = sun; haze = haze; domain = vec2(96, 48); }
+/// The ground's albedo the air sees below, and how strongly the haze scatters forward (toward the sun's glow).
+param ground_albedo: Float = 0.3;
+param forward: Float = 0.8;
+
+node spread: render.atmosphere_spread@1 { haze = haze; ground_albedo = ground_albedo; forward = forward; domain = vec2(32, 32); }
+node look: render.atmosphere_look@1 { spread <- spread.result; elevation = elevation; bearing = bearing; sun = sun; haze = haze; clouds = clouds; air = air; air_from = air_from; ground_albedo = ground_albedo; forward = forward; domain = 1; }
+node table: render.atmosphere_view@1 { sky <- look.result; spread <- spread.result; sun = sun; haze = haze; ground_albedo = ground_albedo; forward = forward; domain = vec2(96, 48); }
 
 output sky <- look.result;
 output view <- table.result;

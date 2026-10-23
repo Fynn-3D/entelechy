@@ -16,10 +16,11 @@ use "phase.ent";
 use "sky.ent";
 
 /// The air: the ground's radius and the air's top (meters from the
-/// Earth's center), how thick haze is (1 a clear day), and the sun's light
-/// above the air (linear HDR, the irradiance it gives).
-struct AirShell { ground: Float; top: Float; haze: Float; sun: Float; }
-fn earth_air(haze: Float, sun: Float) -> AirShell { return AirShell { ground: 6360000.0, top: 6460000.0, haze: haze, sun: sun }; }
+/// Earth's center), how thick haze is (1 a clear day), the sun's light
+/// above the air (linear HDR, the irradiance it gives), the ground's albedo
+/// below it, and how strongly its haze scatters forward.
+struct AirShell { ground: Float; top: Float; haze: Float; sun: Float; albedo: Float; forward: Float; }
+fn earth_air(haze: Float, sun: Float, albedo: Float, forward: Float) -> AirShell { return AirShell { ground: 6360000.0, top: 6460000.0, haze: haze, sun: sun, albedo: albedo, forward: forward }; }
 
 /// What scatters and takes light at height `h` meters: Rayleigh's
 /// scattering (rgb, per meter), haze's scattering (x) and taking (y), and
@@ -86,7 +87,7 @@ fn air_radiance(a: AirShell, spread: Image, eye_h: Float, dir: Vec3, sun: Vec3) 
     let far = if ground_t > 0.0 { ground_t } else { air_leave(p, dir, a.top) };
     let c = dot(dir, sun);
     let pr = rayleigh_phase(c);
-    let pm = air_phase(c, 0.8);
+    let pm = air_phase(c, a.forward);
     let dt = far / 16.0;
     let walked = loop 16 with st = AirWalk { light: vec3(0.0, 0.0, 0.0), depth: vec3(0.0, 0.0, 0.0) } {
         let x = p + dir * ((float(index()) + 0.5) * dt);
@@ -106,12 +107,11 @@ fn air_radiance(a: AirShell, spread: Image, eye_h: Float, dir: Vec3, sun: Vec3) 
     let ground = if ground_t > 0.0 {
         let gp = p + dir * ground_t;
         let through = vec3(exp(0.0 - walked.depth.x), exp(0.0 - walked.depth.y), exp(0.0 - walked.depth.z));
-        air_transmittance(a, gp, sun) * through * (air_ground_albedo() * max(dot(normalize(gp), sun), 0.0) / 3.14159265)
+        air_transmittance(a, gp, sun) * through * (a.albedo * max(dot(normalize(gp), sun), 0.0) / 3.14159265)
     } else { vec3(0.0, 0.0, 0.0) };
     return (walked.light + ground) * a.sun;
 }
-/// How much sunlight the ground far off sends back.
-fn air_ground_albedo() -> Float { return 0.3; }
+
 /// A view walk through the air: the light gathered, and the optical depth so far.
 struct AirWalk { light: Vec3; depth: Vec3; }
 
@@ -126,9 +126,11 @@ kernel render.atmosphere_spread@1 {
     requires { field.write; }
     param haze: Float = 1.0;
     param ground_albedo: Float = 0.3;
+    /// How strongly the haze scatters forward (toward the sun's glow).
+    param forward: Float = 0.8;
     output result: Image;
     compute {
-        let a = earth_air(haze, 1.0);
+        let a = earth_air(haze, 1.0, ground_albedo, forward);
         let ext = domain();
         let mu = (coord().x + 0.5) / ext.x * 2.0 - 1.0;
         let h = (coord().y + 0.5) / ext.y * (a.top - a.ground);
@@ -206,9 +208,12 @@ kernel render.atmosphere_look@1 {
     param clouds: Float = 0.0;
     param air: Float = 0.0;
     param air_from: Float = 1000000.0;
+    /// The ground's albedo the air sees below, and how strongly the haze scatters forward.
+    param ground_albedo: Float = 0.3;
+    param forward: Float = 0.8;
     output result: SkyLooks;
     compute {
-        let a = earth_air(haze, sun);
+        let a = earth_air(haze, sun, ground_albedo, forward);
         let to_sun = air_dir(elevation, bearing);
         let p = vec3(0.0, a.ground + 2.0, 0.0);
         let sun_color = air_transmittance(a, p, to_sun) * sun;
@@ -235,6 +240,9 @@ kernel render.atmosphere_view@1 {
     param sun: Float = 4.0;
     param haze: Float = 1.0;
     param eye_height: Float = 2.0;
+    /// The ground's albedo the air sees below, and how strongly the haze scatters forward.
+    param ground_albedo: Float = 0.3;
+    param forward: Float = 0.8;
     output result: Image;
     compute {
         let s = at(sky, 0);
@@ -244,7 +252,7 @@ kernel render.atmosphere_view@1 {
         let flat = normalize(vec3(to_sun.x, 0.0, to_sun.z) + vec3(0.0, 0.0, 0.0001));
         let side = vec3(0.0 - flat.z, 0.0, flat.x);
         let dir = normalize(flat * (cos(d.x) * cos(d.y)) + side * (sin(d.x) * cos(d.y)) + vec3(0.0, sin(d.y), 0.0));
-        let light = air_radiance(earth_air(haze, sun), spread, eye_height, dir, to_sun);
+        let light = air_radiance(earth_air(haze, sun, ground_albedo, forward), spread, eye_height, dir, to_sun);
         return vec4(light.x, light.y, light.z, 1.0);
     }
 }
