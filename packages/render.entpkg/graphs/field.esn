@@ -1,8 +1,9 @@
-//! The scene's proxy baked from its things' own distances (`kernels/field.ent`): a block round the lens (`nx` by `ny` by `nz` cells of
-//! `cell` meters, moved in steps of `hold` of its width), its things binned across the ground (`bins` by `bins`, each widened
-//! by `band` meters), each cell the nearest thing's distance and albedo. `atlas` and `shapes` are the things' shapes
-//! (`render.field_atlas8`, `render.field_shapes8`), `insts` the things placed, `base` the scene's own frame (its ground).
-//! `proxy` and `frame` go to a renderer as the contract's.
+//! The scene's proxy baked from its things' own distances (`kernels/field.ent`), in three levels round the lens, each `ratio`
+//! times coarser and wider than the one before: `nx` by `ny` by `nz` cells, the finest `cell` meters, each moved in steps of
+//! `hold` of its width; its things binned across the ground (`bins` by `bins`, each widened by `band` of its cells), each cell
+//! the nearest thing's distance and albedo. `atlas` and `shapes` are the things' shapes (`render.field_atlas8`,
+//! `render.field_shapes8`), `insts` the things placed, `base` the scene's own frame (its ground). `proxy` (the levels up its
+//! depth) and `frame` (a row a level, finest first) go to a renderer as the contract's.
 use "../kernels/";
 
 input atlas: Volume<Vec4>;
@@ -14,18 +15,21 @@ param nx: Int = 160;
 param ny: Int = 48;
 param nz: Int = 160;
 param cell: Float = 0.5;
+param ratio: Float = 4.0;
 param hold: Float = 0.25;
 param bins: Int = 16;
-param band: Float = 4.0;
+param band: Float = 8.0;
 
-node frame: render.field_frame@1 { lens <- lens; base <- base; nx = nx; ny = ny; nz = nz; cell = cell; hold = hold; domain = 1; }
-node near: render.field_near@1 { insts <- insts; shapes <- shapes; frame <- frame.result; band = band; domain = count(insts); }
-node kept: graph "parallel.entpkg/graphs/compact.esn" { flags <- near.result; }
-node counts: render.field_bin_counts@1 { insts <- insts; kept <- kept.indices; kept_count <- kept.count; shapes <- shapes; frame <- frame.result; bins = bins; band = band; domain = bins * bins; }
-node runs: graph "parallel.entpkg/graphs/runs.esn" { counts <- counts.result; }
-node fill: render.field_bin_fill@1 { counts <- counts.result; ends <- runs.ends; insts <- insts; kept <- kept.indices; kept_count <- kept.count; shapes <- shapes; frame <- frame.result; slots <- runs.slots; bins = bins; band = band; domain = count(counts); }
-node bake: render.field_bake@1 { atlas <- atlas; shapes <- shapes; insts <- insts; frame <- frame.result; ends <- runs.ends; lists <- fill.result; bins = bins; band = band;
-    domain = vec3(nx, ny, nz); }
+node near: graph "field_level.esn" { atlas <- atlas; shapes <- shapes; insts <- insts; lens <- lens; base <- base; level = 0;
+    nx = nx; ny = ny; nz = nz; cell = cell; ratio = ratio; hold = hold; bins = bins; band = band; }
+node mid: graph "field_level.esn" { atlas <- atlas; shapes <- shapes; insts <- insts; lens <- lens; base <- base; level = 1;
+    nx = nx; ny = ny; nz = nz; cell = cell; ratio = ratio; hold = hold; bins = bins; band = band; }
+node far: graph "field_level.esn" { atlas <- atlas; shapes <- shapes; insts <- insts; lens <- lens; base <- base; level = 2;
+    nx = nx; ny = ny; nz = nz; cell = cell; ratio = ratio; hold = hold; bins = bins; band = band; }
+node near_mid: render.field_stack@1 { a <- near.proxy; b <- mid.proxy; domain = size(a) + size(b) * vec3(0.0, 0.0, 1.0); }
+node all: render.field_stack@1 { a <- near_mid.result; b <- far.proxy; domain = size(a) + size(b) * vec3(0.0, 0.0, 1.0); }
+node near_mid_frames: render.field_frames_join@1 { a <- near.frame; b <- mid.frame; domain = count(a) + count(b); }
+node frames: render.field_frames_join@1 { a <- near_mid_frames.result; b <- far.frame; domain = count(a) + count(b); }
 
-output proxy <- bake.result;
-output frame <- frame.result;
+output proxy <- all.result;
+output frame <- frames.result;

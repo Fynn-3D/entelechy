@@ -1,7 +1,7 @@
 // Instanced distance fields: the scene's proxy baked from its things' own distances. Each kind of thing brings its distance
 // volume (a shape: an asset's proxy, its `Proxy` frame in the asset's own meters); the shapes are packed into one atlas, side
-// by side up its depth (`render.field_atlas8`, `render.field_shapes8`; more than eight joined, `render.field_atlas_join`,
-// `render.field_shapes_join`). Each placed thing is a `FieldInst`: where it stands, how far it is turned about the vertical (as
+// by side up its depth (`render.field_atlas8`, `render.field_shapes8`; more than eight joined, `render.field_stack`,
+// `render.field_frames_join`). Each placed thing is a `FieldInst`: where it stands, how far it is turned about the vertical (as
 // `turned`: x toward z), how large, which shape. Round the lens a block of the scene (`render.field_frame`, held to steps so it
 // is baked again only a step on) is baked from the things standing in it: its things kept (`render.field_near`), its columns
 // cut into bins across the ground, each bin's things listed (`render.field_bin_counts`, `graphs/field.esn`'s runs,
@@ -97,8 +97,9 @@ kernel render.field_shapes8@1 {
     }
 }
 
-/// Two atlases as one, `b`'s shapes after `a`'s (the domain `size(a) + size(b) * vec3(0.0, 0.0, 1.0)`), for more than eight.
-kernel render.field_atlas_join@1 {
+/// Two volumes as one, `b`'s cells up the depth after `a`'s (the domain `size(a) + size(b) * vec3(0.0, 0.0, 1.0)`): two atlases
+/// for more than eight shapes, or a field's levels.
+kernel render.field_stack@1 {
     requires { field.read; field.write; }
     input a: Volume<Vec4>;
     input b: Volume<Vec4>;
@@ -109,8 +110,8 @@ kernel render.field_atlas_join@1 {
         return if q.z < za { at(a, q) } else { at(b, vec3(q.x, q.y, q.z - za)) };
     }
 }
-/// Two shape tables as one, `b`'s after `a`'s (`domain = count(a) + count(b)`).
-kernel render.field_shapes_join@1 {
+/// Two tables of frames as one, `b`'s after `a`'s (`domain = count(a) + count(b)`): two atlases' shapes, or a field's levels.
+kernel render.field_frames_join@1 {
     requires { field.read; field.write; }
     input a: Proxies;
     input b: Proxies;
@@ -118,9 +119,10 @@ kernel render.field_shapes_join@1 {
     compute { let e = element(); return if e < count(a) { at(a, e) } else { at(b, e - count(a)) }; }
 }
 
-/// The block of the scene baked round the lens: `nx` by `ny` by `nz` cells of `cell` meters, its foot at the scene's (`base`'s lo y), its
-/// middle across the ground where the lens looks, moved in steps of `hold` of its width (baked again only a step on); the
-/// ground (`base`'s land) as the scene has it.
+/// Level `level` of the block of the scene baked round the lens: `nx` by `ny` by `nz` cells of `cell` meters times `ratio` to
+/// the `level` (each level coarser and wider than the one before), its foot at the scene's (`base`'s lo y), its middle across
+/// the ground where the lens looks, moved in steps of `hold` of its width (baked again only a step on); the ground (`base`'s
+/// land) as the scene has it.
 kernel render.field_frame@1 {
     requires { field.read; field.write; }
     input lens: Lenses;
@@ -129,41 +131,45 @@ kernel render.field_frame@1 {
     param ny: Int = 48;
     param nz: Int = 160;
     param cell: Float = 0.5;
+    param level: Int = 0;
+    param ratio: Float = 4.0;
     param hold: Float = 0.25;
     output result: Proxies;
     compute {
         let l = at(lens, 0);
         let b = at(base, 0);
         let cells = vec3(float(nx), float(ny), float(nz));
-        let width = vec2(cells.x, cells.z) * cell;
+        let size = cell * pow(ratio, float(level));
+        let width = vec2(cells.x, cells.z) * size;
         // Toward where the lens looks: most of what it sees near lies ahead.
         let ahead = normalize(vec2(l.ahead.x, l.ahead.z) + vec2(0.0001, 0.0));
         let middle = vec2(l.eye.x, l.eye.z) + ahead * width.x * 0.25;
-        let step = max(width.x * hold, cell);
+        let step = max(width.x * hold, size);
         let lo = floor((middle - width * 0.5) / step) * step;
-        return Proxy { lo: vec3(lo.x, b.lo.y, lo.y), cell: cell, cells: cells, land_lo: b.land_lo, land_cell: b.land_cell, ground: b.ground };
+        return Proxy { lo: vec3(lo.x, b.lo.y, lo.y), cell: size, cells: cells, land_lo: b.land_lo, land_cell: b.land_cell, ground: b.ground };
     }
 }
 
-/// 1 for each thing standing in the block (widened by `band`), 0 for the rest: kept (`parallel`'s compact) before the bins look,
-/// so each bin walks the block's things alone, not the whole scene's.
+/// 1 for each thing standing in the block (widened by `band` of its cells), 0 for the rest: kept (`parallel`'s compact) before
+/// the bins look, so each bin walks the block's things alone, not the whole scene's.
 kernel render.field_near@1 {
     requires { field.read; field.write; }
     input insts: FieldInsts;
     input shapes: Proxies;
     input frame: Proxies;
-    param band: Float = 4.0;
+    param band: Float = 8.0;
     output result: Rows<Int>;
     compute {
         let it = sample(insts);
         let fr = at(frame, 0);
-        let box = vec4(fr.lo.x - band, fr.lo.z - band, fr.lo.x + fr.cells.x * fr.cell + band, fr.lo.z + fr.cells.z * fr.cell + band);
+        let w = band * fr.cell;
+        let box = vec4(fr.lo.x - w, fr.lo.z - w, fr.lo.x + fr.cells.x * fr.cell + w, fr.lo.z + fr.cells.z * fr.cell + w);
         return if it.shape >= 0 && field_in_bin(field_reach(shapes, it), box) { 1 } else { 0 };
     }
 }
 
 /// How many of the block's things (`kept`, `kept_count` of them) stand in each bin (`bins` by `bins` across the block, widened
-/// by `band`), for `graphs/field.esn`'s runs.
+/// by `band` of its cells), for `graphs/field.esn`'s runs.
 kernel render.field_bin_counts@1 {
     requires { field.read; field.write; }
     input insts: FieldInsts;
@@ -172,10 +178,11 @@ kernel render.field_bin_counts@1 {
     input shapes: Proxies;
     input frame: Proxies;
     param bins: Int = 16;
-    param band: Float = 4.0;
+    param band: Float = 8.0;
     output result: Rows<Int>;
     compute {
-        let box = field_bin_box(at(frame, 0), element(), bins, band);
+        let fr = at(frame, 0);
+        let box = field_bin_box(fr, element(), bins, band * fr.cell);
         return loop at(kept_count, 0) with n = 0 {
             let it = at(insts, at(kept, index()));
             if field_in_bin(field_reach(shapes, it), box) { n + 1 } else { n }
@@ -195,12 +202,13 @@ kernel render.field_bin_fill@1 {
     input frame: Proxies;
     input slots: Rows<Int>;
     param bins: Int = 16;
-    param band: Float = 4.0;
+    param band: Float = 8.0;
     output result: Rows<Int>;
     struct Placed { at: Int; value: Int; }
     scatter into slots with max {
         let b = element();
-        let box = field_bin_box(at(frame, 0), b, bins, band);
+        let fr = at(frame, 0);
+        let box = field_bin_box(fr, b, bins, band * fr.cell);
         let start = at(ends, b) - sample(counts);
         loop at(kept_count, 0) with k = 0 {
             let i = at(kept, index());
@@ -214,7 +222,7 @@ kernel render.field_bin_fill@1 {
 }
 
 /// The block's distances (`domain = frame's cells`): each cell the nearest of the things its bin lists, in meters, and that
-/// thing's albedo; `band` where none is nearer (what lies past it is at least that far).
+/// thing's albedo; `band` cells where none is nearer (what lies past it is at least that far).
 kernel render.field_bake@1 {
     requires { field.read; field.write; }
     input atlas: Volume<Vec4>;
@@ -224,7 +232,7 @@ kernel render.field_bake@1 {
     input ends: Rows<Int>;
     input lists: Rows<Int>;
     param bins: Int = 16;
-    param band: Float = 4.0;
+    param band: Float = 8.0;
     output result: Volume<Vec4>;
     compute {
         let fr = at(frame, 0);
@@ -233,7 +241,7 @@ kernel render.field_bake@1 {
         let b = int(g.x) + int(g.y) * bins;
         let start = if b == 0 { 0 } else { at(ends, b - 1) };
         let end = at(ends, b);
-        return loop end - start with best = vec4(band, 0.0, 0.0, 0.0) {
+        return loop end - start with best = vec4(band * fr.cell, 0.0, 0.0, 0.0) {
             let i = at(lists, start + index());
             if i < 0 { best } else {
                 let it = at(insts, i);

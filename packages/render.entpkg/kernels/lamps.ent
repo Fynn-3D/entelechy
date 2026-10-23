@@ -130,18 +130,19 @@ fn lamp_irradiance(m: Lamp, p: Vec3) -> Vec3 {
 /// The shadow toward lamp `m` from `p` (a surface facing `n`) through the
 /// proxies, walked from just off the surface to the bulb: 1 lit, 0 dark,
 /// the penumbra wider for a larger bulb.
-fn lamp_shadow(m: Lamp, proxy: Volume<Vec4>, land: Grid<Float>, fr: Proxy, p: Vec3, n: Vec3) -> Float {
+fn lamp_shadow(m: Lamp, proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, p: Vec3, n: Vec3) -> Float {
     let d = m.at - p;
     let dist = length(d);
     let dir = d / max(dist, 0.0001);
-    let o = p + n * (fr.cell * 0.6);
-    let start = rough_leave(proxy, fr, o, dir, fr.cell * 0.5, fr.cell * 3.0);
-    let far = dist - m.size - fr.cell;
+    let c = proxy_cell(frame, p);
+    let o = p + n * (c * 0.6);
+    let start = rough_leave(proxy, frame, o, dir, c * 0.5, c * 3.0);
+    let far = dist - m.size - c;
     if far <= start { return 1.0; }
     let sharp = clamp(dist / max(m.size * 4.0, 0.05), 4.0, 24.0);
     let r = loop 64 with r = vec2(start, 1.0) until r.x > far || r.y < 0.01 {
-        let h = rough_probe(proxy, land, fr, o + dir * r.x).x;
-        vec2(r.x + clamp(h, fr.cell * 0.3, 12.0), min(r.y, sharp * h / r.x))
+        let h = rough_probe(proxy, land, frame, o + dir * r.x).x;
+        vec2(r.x + clamp(h, c * 0.3, 12.0), min(r.y, sharp * h / r.x))
     };
     return smoothstep(0.0, 1.0, saturate(r.y));
 }
@@ -149,13 +150,14 @@ fn lamp_shadow(m: Lamp, proxy: Volume<Vec4>, land: Grid<Float>, fr: Proxy, p: Ve
 /// How much of lamp `m` reaches `x` through the proxies, by a short walk of
 /// `steps` steps toward it, soft (1 all, 0 none): for points the coarse
 /// scene stands for (light in the air, light bounced off the proxies).
-fn lamp_rough_shadow(m: Lamp, proxy: Volume<Vec4>, land: Grid<Float>, fr: Proxy, x: Vec3, steps: Int) -> Float {
+fn lamp_rough_shadow(m: Lamp, proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, x: Vec3, steps: Int) -> Float {
+    let c = proxy_cell(frame, x);
     let d = m.at - x;
     let dist = length(d);
     let dir = d / max(dist, 0.0001);
-    let far = dist - m.size - fr.cell;
-    let r = loop 32 with r = vec2(fr.cell, 1.0) until r.x > far || r.y < 0.02 || index() >= steps {
-        let h = rough_probe(proxy, land, fr, x + dir * r.x).x;
+    let far = dist - m.size - c;
+    let r = loop 32 with r = vec2(c, 1.0) until r.x > far || r.y < 0.02 || index() >= steps {
+        let h = rough_probe(proxy, land, frame, x + dir * r.x).x;
         vec2(r.x + max(h, far / float(max(steps, 1))), min(r.y, 6.0 * h / r.x))
     };
     return saturate(r.y);
@@ -165,14 +167,14 @@ fn lamp_rough_shadow(m: Lamp, proxy: Volume<Vec4>, land: Grid<Float>, fr: Proxy,
 /// `n`, of color `albedo`, diffusely reflected (what a bounce off the
 /// proxies brings back), each lamp that casts shadows walked toward in
 /// `steps` steps (0: unshadowed).
-fn lamps_on_rough(lamps: Lamps, albedo: Vec3, p: Vec3, n: Vec3, proxy: Volume<Vec4>, land: Grid<Float>, fr: Proxy, steps: Int) -> Vec3 {
+fn lamps_on_rough(lamps: Lamps, albedo: Vec3, p: Vec3, n: Vec3, proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, steps: Int) -> Vec3 {
     let k = min(count(lamps), lamps_most());
     let e = loop 128 with sum = vec3(0.0, 0.0, 0.0) until index() >= k {
         let m = at(lamps, index());
         let d = m.at - p;
         let facing = dot(n, d);
         if m.reach <= 0.0 || facing <= 0.0 || dot(d, d) > m.reach * m.reach { sum } else {
-            let cut = if m.shadow != 0 && steps > 0 { lamp_rough_shadow(m, proxy, land, fr, p + n * (fr.cell * 0.6), steps) } else { 1.0 };
+            let cut = if m.shadow != 0 && steps > 0 { lamp_rough_shadow(m, proxy, land, frame, p + n * (proxy_cell(frame, p) * 0.6), steps) } else { 1.0 };
             sum + lamp_irradiance(m, p) * (facing / length(d) * cut)
         }
     };
@@ -198,7 +200,7 @@ struct LampWalk { left: IVec4; light: Vec3; }
 /// highlight; a lamp that casts shadows shadowed through the proxies and,
 /// within `contact` meters, on the screen.
 fn lamps_at(lamps: Lamps, bits: IVec4, m: Pbr, p: Vec3, n: Vec3, v: Vec3, t: Float, q: Vec2,
-    surface: Grid<Vec4>, l: Lens, proxy: Volume<Vec4>, land: Grid<Float>, fr: Proxy, contact: Float) -> Vec3 {
+    surface: Grid<Vec4>, l: Lens, proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, contact: Float) -> Vec3 {
     let walked = loop 128 with w = LampWalk { left: bits, light: vec3(0.0, 0.0, 0.0) } until lamp_first(w.left) < 0 {
         let k = lamp_first(w.left);
         let left = lamp_cleared(w.left, k);
@@ -214,7 +216,7 @@ fn lamps_at(lamps: Lamps, bits: IVec4, m: Pbr, p: Vec3, n: Vec3, v: Vec3, t: Flo
                 // A sphere light: the highlight widened by the bulb as seen from here (Karis).
                 let widened = sqrt(saturate(pbr_alpha(m.rough) + lamp.size / (2.0 * max(dist, 0.01))));
                 let shade = if lamp.shadow == 0 { 1.0 } else {
-                    let far = lamp_shadow(lamp, proxy, land, fr, p, n);
+                    let far = lamp_shadow(lamp, proxy, land, frame, p, n);
                     let near = if dist < contact { 1.0 - contact_shadow(surface, l, size(surface), p, n, to, t, 8, 0.5) } else { 1.0 };
                     far * near
                 };
@@ -325,7 +327,7 @@ kernel render.lamps_light@1 {
         if lamp_first(bits) < 0 { return vec4(0.0, 0.0, 0.0, 1.0); }
         let m = pbr_of(sample(paint), sample(extra), sample(layers), sample(more));
         let light = lamps_at(lamps, bits, m, l.eye + dir * s.w, s.xyz, vec3(0.0, 0.0, 0.0) - dir, s.w, q,
-            surface, l, proxy, land, at(frame, 0), contact);
+            surface, l, proxy, land, frame, contact);
         return vec4(light.x, light.y, light.z, 1.0);
     }
 }

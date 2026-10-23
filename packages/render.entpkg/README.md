@@ -48,8 +48,8 @@ use "render.entpkg";
   `render.exposure_local@1`.
 - `kernels/field.ent` — Instanced distance fields: the scene's proxy
   baked from its things' own distances. Kernels: `render.field_atlas8@1`,
-  `render.field_shapes8@1`, `render.field_atlas_join@1`,
-  `render.field_shapes_join@1`, `render.field_frame@1`, `render.field_near@1`,
+  `render.field_shapes8@1`, `render.field_stack@1`,
+  `render.field_frames_join@1`, `render.field_frame@1`, `render.field_near@1`,
   `render.field_bin_counts@1`, `render.field_bin_fill@1`,
   `render.field_bake@1`.
 - `kernels/film.ent` — Film. Kernels: `render.film_start@1`,
@@ -116,7 +116,9 @@ use "render.entpkg";
 - `graphs/exposure.esn` — Metered exposure, then local exposure: `hdr`
   scaled, and the `exposure` followed.
 - `graphs/field.esn` — The scene's proxy baked round the lens from its
-  things' shapes and places (`kernels/field.ent`).
+  things' shapes and places (`kernels/field.ent`), in three levels, each
+  coarser and wider than the one before.
+- `graphs/field_level.esn` — One level of `field.esn`.
 - `graphs/lamps.esn` — The lamps added to a renderer's picture, for one
   that does not take them in itself.
 - `graphs/path_tracer.esn` — The path tracer (`kernels/path_tracer.ent`),

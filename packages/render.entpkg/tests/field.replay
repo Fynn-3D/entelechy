@@ -2,12 +2,17 @@ scene field.esn
 window 64 64
 
 # The block round the lens: its foot where the scene's is, its middle
-# ahead of the lens held to steps (the lens at 4, 0 looking down z).
+# ahead of the lens held to steps (the lens at 4, 0 looking down z); three
+# levels, each four times coarser, stacked up the volume's depth.
 frame 0.0
 expect field.frame[0].lo = 0 0 -2 0.001
+expect count field.frame = 3
+expect field.frame[1].cell = 1 0.001
+expect field.frame[2].cell = 4 0.001
+expect count field.proxy = 24576
 # The near bin lists the ball and the turned box; the thing in no shape
 # is in none.
-expect field.counts.result[0] = 2
+expect field.near.counts.result[0] = 2
 # A cell beside the ball: the ball's own distance at its box's edge and
 # the way to it; one past the ball's box, and one far from both, where
 # nothing is nearer than the band.

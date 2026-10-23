@@ -27,12 +27,12 @@ fn raytraced_shade(m: Pbr, n: Vec3, v: Vec3, s: SkyLook, visible: Float, reflect
 /// What a ray from `o` along `dir` sees through the coarse scene within `far` meters: what it meets, lit by the sun as it faces it and
 /// by the light all round (its own shadow not traced), through the air; the sky, or looking down the ground's light, where it meets
 /// nothing.
-fn raytraced_seen(proxy: Volume<Vec4>, land: Grid<Float>, fr: Proxy, o: Vec3, dir: Vec3, far: Float, s: SkyLook) -> Vec3 {
-    let hit = rough_trace(proxy, land, fr, o, dir, fr.cell * 0.5, far, 48);
+fn raytraced_seen(proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, o: Vec3, dir: Vec3, far: Float, s: SkyLook) -> Vec3 {
+    let hit = rough_trace(proxy, land, frame, o, dir, proxy_cell(frame, o) * 0.5, far, 48);
     if hit.y < 0.0 { return seen_along(dir, s); }
     let p = o + dir * hit.x;
-    let n = rough_normal(proxy, land, fr, p, hit.y);
-    let a = rough_albedo(proxy, fr, p, hit.y);
+    let n = rough_normal(proxy, land, frame, p, hit.y);
+    let a = rough_albedo(proxy, frame, p, hit.y);
     let light = s.sun_color * max(dot(n, s.sun), 0.0) / 3.14159265 + hemisphere(n, s);
     return aerial(a * light, dir, hit.x, s);
 }
@@ -70,7 +70,7 @@ kernel render.raytraced@1 {
         let open = baked_occlusion(ex) * (if m.subsurface > 0.0 { leaf_sky } else { 1.0 });
         let r = reflect(dir, n);
         let p = l.eye + dir * su.w + n * 0.05;
-        let mirrored = if m.rough < mirror_below { raytraced_seen(proxy, land, at(frame, 0), p, r, far, s) } else { seen_along(r, s) };
+        let mirrored = if m.rough < mirror_below { raytraced_seen(proxy, land, frame, p, r, far, s) } else { seen_along(r, s) };
         // A rough surface's reflection is the light all round it.
         let reflected = mix(mirrored, hemisphere(n, s) * open, sqrt(m.rough));
         return vec4(aerial(raytraced_shade(m, n, v, s, ex.x, reflected, open), dir, su.w, s), 1.0);

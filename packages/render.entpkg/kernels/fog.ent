@@ -76,7 +76,6 @@ kernel render.fog_march@1 {
         let ext = domain();
         let l = at(lens, 0);
         let s = at(sky, 0);
-        let fr = at(frame, 0);
         let dir = ray(l, q, ext);
         // The surface under this pixel of the smaller picture: its first
         // pixel, so fog does not leak past an edge.
@@ -99,7 +98,7 @@ kernel render.fog_march@1 {
             let dens = fog_density(p.y, density, base, falloff);
             if dens * dt < 0.000001 { r } else {
                 let mapped = sun_view_lit(atlas, views, p);
-                let blocked = if mapped >= 0.0 { mapped } else { rough_shadow(proxy, land, fr, p, sun, fr.cell, 300.0, sun_steps) };
+                let blocked = if mapped >= 0.0 { mapped } else { rough_shadow(proxy, land, frame, p, sun, proxy_cell(frame, p), 300.0, sun_steps) };
                 let sun_seen = blocked * cloud_shadow(cd, p, sun, cloud_steps);
                 let lamps_here = loop 128 with w = LampWalk { left: bits, light: vec3(0.0, 0.0, 0.0) } until lamp_first(w.left) < 0 {
                     let k = lamp_first(w.left);
@@ -110,7 +109,7 @@ kernel render.fog_march@1 {
                         // Light going from the lamp on toward the eye is thrown forward.
                         let given = lamp_airlight(m, l.eye, dir, t0, t1) * air_phase(0.0 - dot(dir, normalize(d)), forward);
                         let lit = max(given.x, max(given.y, given.z)) > 0.000001;
-                        let cut = if lit && m.shadow != 0 && shafts > 0 { lamp_rough_shadow(m, proxy, land, fr, p, shafts) } else { 1.0 };
+                        let cut = if lit && m.shadow != 0 && shafts > 0 { lamp_rough_shadow(m, proxy, land, frame, p, shafts) } else { 1.0 };
                         LampWalk { left: left, light: w.light + given * cut }
                     }
                 };

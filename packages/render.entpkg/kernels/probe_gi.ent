@@ -18,14 +18,14 @@ fn face_dir(face: Int) -> Vec3 {
     return if face < 2 { vec3(s, 0.0, 0.0) } else if face < 4 { vec3(0.0, s, 0.0) } else { vec3(0.0, 0.0, s) };
 }
 /// Where probe `cell` is.
-fn probe_pos(fr: Proxy, cell: Vec3, spacing: Float) -> Vec3 { return fr.lo + cell * spacing; }
+fn probe_pos(frame: Proxies, cell: Vec3, spacing: Float) -> Vec3 { return at(frame, 0).lo + cell * spacing; }
 
 /// The sky light and bounced light a surface at `p` facing `n` receives: the eight probes round it, weighted trilinearly, by whether
 /// they are used and whether they lie before the surface; each probe's three faces toward `n` mixed by `n`. Outside the lattice (or where none
 /// round it is usable), it turns gradually to the light of open ground (`open_light`).
-fn probe_light(probes: Volume<Vec4>, fr: Proxy, spacing: Float, p: Vec3, n: Vec3, s: SkyLook) -> Vec3 {
+fn probe_light(probes: Volume<Vec4>, frame: Proxies, spacing: Float, p: Vec3, n: Vec3, s: SkyLook) -> Vec3 {
     let dims = vec3(size(probes).x / 6.0, size(probes).y, size(probes).z);
-    let g = (p - fr.lo) / spacing;
+    let g = (p - at(frame, 0).lo) / spacing;
     let base = floor(g);
     let f = g - base;
     let nn = n * n;
@@ -36,7 +36,7 @@ fn probe_light(probes: Volume<Vec4>, fr: Proxy, spacing: Float, p: Vec3, n: Vec3
         let o = vec3(float(index() & 1), float((index() >> 1) & 1), float((index() >> 2) & 1));
         let cell = clamp(base + o, vec3(0.0, 0.0, 0.0), dims - vec3(1.0, 1.0, 1.0));
         let w3 = mix(vec3(1.0, 1.0, 1.0) - f, f, o);
-        let to = normalize(probe_pos(fr, cell, spacing) - p + n * 0.001);
+        let to = normalize(probe_pos(frame, cell, spacing) - p + n * 0.001);
         let facing = pow((dot(to, n) + 1.0) * 0.5, 2.0) + 0.05;
         let ax = at(probes, vec3(cell.x * 6.0 + fx, cell.y, cell.z));
         let ay = at(probes, vec3(cell.x * 6.0 + fy, cell.y, cell.z));
@@ -47,13 +47,13 @@ fn probe_light(probes: Volume<Vec4>, fr: Proxy, spacing: Float, p: Vec3, n: Vec3
     };
     let off = max(max(vec3(0.0, 0.0, 0.0) - g, g - (dims - vec3(1.0, 1.0, 1.0))), vec3(0.0, 0.0, 0.0));
     let away = max(smoothstep(0.0, 1.5, max(max(off.x, off.y), off.z)), 1.0 - smoothstep(0.0, 0.02, acc.w));
-    return mix(acc.xyz / max(acc.w, 0.0001), open_light(fr, n, s), away);
+    return mix(acc.xyz / max(acc.w, 0.0001), open_light(frame, n, s), away);
 }
 
 /// The light a surface facing `n` receives on open flat ground: up, the sky round about; down, what the ground lit by sun and sky
 /// (the proxies' ground color) throws back.
-fn open_light(fr: Proxy, n: Vec3, s: SkyLook) -> Vec3 {
-    let ground = fr.ground * (s.sun_color * max(s.sun.y, 0.0) / 3.14159 + s.ambient);
+fn open_light(frame: Proxies, n: Vec3, s: SkyLook) -> Vec3 {
+    let ground = at(frame, 0).ground * (s.sun_color * max(s.sun.y, 0.0) / 3.14159 + s.ambient);
     return mix(ground, s.ambient, 0.5 + 0.5 * n.y);
 }
 
@@ -70,8 +70,7 @@ kernel render.probes_sign@1 {
     param spacing: Float = 1.2;
     output result: Volume<Vec2>;
     compute {
-        let fr = at(frame, 0);
-        let pos = probe_pos(fr, coord(), spacing);
+        let pos = probe_pos(frame, coord(), spacing);
         // The lamps' light here, so a lamp turned or moved is gathered again.
         let lamped = loop 128 with e = 0.0 until index() >= min(count(lamps), lamps_most()) {
             let m = at(lamps, index());
@@ -79,11 +78,11 @@ kernel render.probes_sign@1 {
             e + lit.x * 0.3 + lit.y * 0.6 + lit.z * 0.1
         };
         let r = spacing;
-        let ground = land_at(land, fr, pos.x, pos.z) * 2.0 + land_at(land, fr, pos.x + r, pos.z) + land_at(land, fr, pos.x - r, pos.z)
-            + land_at(land, fr, pos.x, pos.z + r) + land_at(land, fr, pos.x, pos.z - r);
+        let ground = land_at(land, frame, pos.x, pos.z) * 2.0 + land_at(land, frame, pos.x + r, pos.z) + land_at(land, frame, pos.x - r, pos.z)
+            + land_at(land, frame, pos.x, pos.z + r) + land_at(land, frame, pos.x, pos.z - r);
         let rock = loop 7 with d = 0.0 {
             let o = if index() == 0 { vec3(0.0, 0.0, 0.0) } else { face_dir(index() - 1) * r };
-            d + min(proxy_at(proxy, fr, pos + o, 4.0).x, 4.0) * float(index() + 1)
+            d + min(proxy_at(proxy, frame, pos + o, 4.0).x, 4.0) * float(index() + 1)
         };
         let sun = at(sky, 0).sun;
         return vec2(ground, rock + (sun.x * 3.1 + sun.y * 5.3 + sun.z * 7.7) + lamped * 0.37);
@@ -130,24 +129,23 @@ kernel render.probes_gather@1 {
         let changed = abs(now.x - was.x) > 0.005 || abs(now.y - was.y) > 0.005;
         let old = if changed { vec4(held.x, held.y, held.z, if held.w < 0.0 { 0.0 } else { min(held.w, 4.0) }) } else { held };
         if old.w < -0.5 || old.w >= float(most) { return old; }
-        let fr = at(frame, 0);
         let s = at(sky, 0);
         let face = int(c.x) % 6;
-        let pos = probe_pos(fr, vec3(floor(c.x / 6.0), c.y, c.z), spacing);
-        if proxy_at(proxy, fr, pos, 4.0).x < 0.05 || pos.y < land_at(land, fr, pos.x, pos.z) + 0.05 { return vec4(0.0, 0.0, 0.0, -1.0); }
+        let pos = probe_pos(frame, vec3(floor(c.x / 6.0), c.y, c.z), spacing);
+        if proxy_at(proxy, frame, pos, 4.0).x < 0.05 || pos.y < land_at(land, frame, pos.x, pos.z) + 0.05 { return vec4(0.0, 0.0, 0.0, -1.0); }
         let axis = face_dir(face);
         let round_ = int(old.w);
         let sum = loop 8 with acc = vec3(0.0, 0.0, 0.0) until index() >= rays {
             let h = hash_int2(int(c.x) + int(c.y) * 4099 + int(c.z) * 524287, round_ * 8 + index(), 171);
             let dir = cosine_dir(axis, unit_of(h), unit_of(hash_int(h, 1)));
-            let hit = rough_trace(proxy, land, fr, pos, dir, 0.05, 60.0, 64);
+            let hit = rough_trace(proxy, land, frame, pos, dir, 0.05, 60.0, 64);
             let came = if hit.y < -0.5 { sky_radiance(dir, s, false) } else {
                 let hp = pos + dir * hit.x;
-                let hn = rough_normal(proxy, land, fr, hp, hit.y);
-                let ha = rough_albedo(proxy, fr, hp, hit.y);
+                let hn = rough_normal(proxy, land, frame, hp, hit.y);
+                let ha = rough_albedo(proxy, frame, hp, hit.y);
                 let sl = max(dot(hn, s.sun), 0.0);
-                let sun_in = if sl > 0.0 { s.sun_color * sl * rough_shadow(proxy, land, fr, hp + hn * 0.1, s.sun, 0.1, 40.0, 24) / 3.14159 } else { vec3(0.0, 0.0, 0.0) };
-                ha * (sun_in + probe_light(previous, fr, spacing, hp + hn * 0.3, hn, s)) + lamps_on_rough(lamps, ha, hp, hn, proxy, land, fr, 4)
+                let sun_in = if sl > 0.0 { s.sun_color * sl * rough_shadow(proxy, land, frame, hp + hn * 0.1, s.sun, 0.1, 40.0, 24) / 3.14159 } else { vec3(0.0, 0.0, 0.0) };
+                ha * (sun_in + probe_light(previous, frame, spacing, hp + hn * 0.3, hn, s)) + lamps_on_rough(lamps, ha, hp, hn, proxy, land, frame, 4)
             };
             acc + came
         };
@@ -213,12 +211,11 @@ kernel render.probes_screen_gather@1 {
         let su = at(surface, q);
         if su.w > no_hit() * 0.5 { return vec4(0.0, 0.0, 0.0, 0.0); }
         let s = at(sky, 0);
-        let fr = at(frame, 0);
         let dir = ray(l, q, extent);
         let p = l.eye + dir * su.w;
         let n = su.xyz;
         // No rays: the probes' light alone (steady, without grain).
-        if rays <= 0 { let pl = probe_light(probes, fr, spacing, p + n * 0.3, n, s); return vec4(pl.x, pl.y, pl.z, 1.0); }
+        if rays <= 0 { let pl = probe_light(probes, frame, spacing, p + n * 0.3, n, s); return vec4(pl.x, pl.y, pl.z, 1.0); }
         // A new draw every frame (the frames counted), and with the lens (a jittered lens draws apart too).
         let frame_seed = hash_int(at(count, 0).total, int(fract(dot(l.ahead, vec3(12.9898, 78.233, 37.719)) * 43758.547) * 65536.0));
         let reach = 1.2 + su.w * 0.08;
@@ -230,7 +227,7 @@ kernel render.probes_screen_gather@1 {
                 let hit = screen_march(surface, l, extent, p + n * 0.01, d, reach, 16, reach * 0.5, unit_of(hash_int(h, 2)));
                 // Off the screen: along the coarse field (clear of the
                 // ground's own margin and the coarse shape it lies in).
-                let came = if hit.z >= 0.0 { at(lit, vec2(hit.x, hit.y)).xyz } else { rough_seen(proxy, land, probes, lamps, fr, spacing, p + n * 0.08, p, n, d, far, s, 4) };
+                let came = if hit.z >= 0.0 { at(lit, vec2(hit.x, hit.y)).xyz } else { rough_seen(proxy, land, probes, lamps, frame, spacing, p + n * 0.08, p, n, d, far, s, 4) };
                 acc + came
             }
         };
@@ -336,18 +333,18 @@ kernel render.probes_gather_blur@1 {
 /// The light seen from `o` along `d` through the proxies (the coarse distance field): meeting something, it as the sun and the lamps light
 /// it (the lamps' shadows walked in `lamp_steps` steps, 0 unshadowed) plus the probe light there; meeting nothing, up the sky, down the
 /// probe light in that direction (gathered at `p`).
-fn rough_seen(proxy: Volume<Vec4>, land: Grid<Float>, probes: Volume<Vec4>, lamps: Lamps, fr: Proxy, spacing: Float, o: Vec3, p: Vec3, n: Vec3, d: Vec3, far: Float, s: SkyLook, lamp_steps: Int) -> Vec3 {
-    let start = rough_leave(proxy, fr, o, d, 0.02, fr.cell * 4.0);
-    let tr = rough_trace(proxy, land, fr, o, d, start, far, 24);
+fn rough_seen(proxy: Volume<Vec4>, land: Grid<Float>, probes: Volume<Vec4>, lamps: Lamps, frame: Proxies, spacing: Float, o: Vec3, p: Vec3, n: Vec3, d: Vec3, far: Float, s: SkyLook, lamp_steps: Int) -> Vec3 {
+    let start = rough_leave(proxy, frame, o, d, 0.02, proxy_cell(frame, o) * 4.0);
+    let tr = rough_trace(proxy, land, frame, o, d, start, far, 24);
     if tr.y >= 0.0 {
         let hp = o + d * tr.x;
-        let hn = rough_normal(proxy, land, fr, hp, tr.y);
+        let hn = rough_normal(proxy, land, frame, hp, tr.y);
         let sun = normalize(s.sun);
-        let shade = rough_shadow(proxy, land, fr, hp + hn * 0.05, sun, 0.05, 20.0, 24);
-        let a = rough_albedo(proxy, fr, hp, tr.y);
-        return a * (s.sun_color * max(dot(hn, sun), 0.0) * shade / 3.14159265 + probe_light(probes, fr, spacing, hp + hn * 0.3, hn, s)) + lamps_on_rough(lamps, a, hp, hn, proxy, land, fr, lamp_steps);
+        let shade = rough_shadow(proxy, land, frame, hp + hn * 0.05, sun, 0.05, 20.0, 24);
+        let a = rough_albedo(proxy, frame, hp, tr.y);
+        return a * (s.sun_color * max(dot(hn, sun), 0.0) * shade / 3.14159265 + probe_light(probes, frame, spacing, hp + hn * 0.3, hn, s)) + lamps_on_rough(lamps, a, hp, hn, proxy, land, frame, lamp_steps);
     }
-    return if d.y > 0.0 { sky_radiance(d, s, false) } else { probe_light(probes, fr, spacing, p + n * 0.3, d, s) };
+    return if d.y > 0.0 { sky_radiance(d, s, false) } else { probe_light(probes, frame, spacing, p + n * 0.3, d, s) };
 }
 
 /// The light at the point seen through (transmissive pixels only): its diffuse light is the probes' there.
@@ -369,7 +366,7 @@ kernel render.probes_behind@1 {
         let a = at(behind_at, q);
         let nm = at(behind_normal, q);
         let n = vec3(nm.x, nm.y, nm.z);
-        let e = if a.w > 0.5 { probe_light(probes, at(frame, 0), spacing, vec3(a.x, a.y, a.z) + n * 0.3, n, at(sky, 0)) } else { vec3(0.0, 0.0, 0.0) };
+        let e = if a.w > 0.5 { probe_light(probes, frame, spacing, vec3(a.x, a.y, a.z) + n * 0.3, n, at(sky, 0)) } else { vec3(0.0, 0.0, 0.0) };
         return vec4(behind_radiance(at(sky, 0), a, at(behind_dir, q), at(behind_paint, q), nm, e), 1.0);
     }
 }
@@ -405,7 +402,7 @@ kernel render.probes_lit@1 {
         let ex = at(extra, q);
         let m = pbr_of(at(paint, q), ex, at(layers, q), at(more, q));
         let v = vec3(0.0, 0.0, 0.0) - dir;
-        let e = probe_light(probes, at(frame, 0), spacing, p + n * 0.3, n, s) * screen_ao(surface, q, extent, l, p, n, su.w, reach) * baked_occlusion(ex);
+        let e = probe_light(probes, frame, spacing, p + n * 0.3, n, s) * screen_ao(surface, q, extent, l, p, n, su.w, reach) * baked_occlusion(ex);
         return vec4(lit_by(m, n, v, s.sun, s.sun_color * ex.x) + m.albedo * (1.0 - m.metal) * (1.0 - m.transmission) * e + m.glow + at(lamped, q).xyz, 1.0);
     }
 }
@@ -478,7 +475,6 @@ kernel render.probes_shade@1 {
         let ex = at(extra, q);
         let m = pbr_of(at(paint, q), ex, at(layers, q), at(more, q));
         let v = vec3(0.0, 0.0, 0.0) - dir;
-        let fr = at(frame, 0);
         let direct = lit_by(m, n, v, s.sun, s.sun_color * ex.x);
         // The diffuse light gathered for this pixel already knows what
         // stands close round it; the baked occlusion is finer still.
@@ -494,8 +490,8 @@ kernel render.probes_shade@1 {
         // the coarse field, for surfaces smooth enough to show it; where the
         // screen gave it whole, nothing more is traced.
         let fallback = if edge >= 1.0 { vec3(0.0, 0.0, 0.0) }
-            else if m.rough < 0.75 { rough_seen(proxy, land, probes, lamps, fr, spacing, p + n * 0.08, p, n, r, 30.0, s, 0) }
-            else if r.y > 0.0 { sky_radiance(r, s, false) } else { probe_light(probes, fr, spacing, p + n * 0.3, r, s) };
+            else if m.rough < 0.75 { rough_seen(proxy, land, probes, lamps, frame, spacing, p + n * 0.08, p, n, r, 30.0, s, 0) }
+            else if r.y > 0.0 { sky_radiance(r, s, false) } else { probe_light(probes, frame, spacing, p + n * 0.3, r, s) };
         let seen = if hit.z >= 0.0 { at(lit, vec2(hit.x, hit.y)).xyz } else { fallback };
         let mirrored = mix(fallback, seen, edge);
         let spec_light = mix(mirrored, e, sqrt(m.rough)) * ao;

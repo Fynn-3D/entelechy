@@ -129,8 +129,7 @@ kernel render.cam@1 {
         let dist0 = if picked { min(c.dist, 2.0) } else { c.dist };
         let zoom = wheel().y;
         let dist = clamp(dist0 * pow(0.88, zoom), 0.2, most);
-        let fr = at(frame, 0);
-        let low = asin(clamp((land_at(land, fr, target.x, target.z) + 0.15 - target.y) / dist, -1.0, 1.0));
+        let low = asin(clamp((land_at(land, frame, target.x, target.z) + 0.15 - target.y) / dist, -1.0, 1.0));
         let pitch = clamp(if turning { c.pitch + d.y * 0.004 } else { c.pitch }, max(low, -1.2), 1.5);
         let moved = turning || panning || length(walk) > 0.0 || gliding || picked || zoom != 0.0 || key(82);
         let next = Orbit { target: target, goal: if gliding { goal } else { target }, gliding: gliding, yaw: yaw, pitch: pitch, dist: dist,
@@ -193,34 +192,59 @@ kernel render.lens@1 {
 // ------------------------------------------------------------------ the proxies
 
 /// Where the proxies lie: the distance volume from `lo`, `cell` meters a cell, `cells` cells; the ground height map from
-/// (`land_lo`), `land_cell` meters a cell; the ground's color `ground` (linear).
+/// (`land_lo`), `land_cell` meters a cell; the ground's color `ground` (linear). A scene's `Proxies` hold one row a level,
+/// finest first (one row: one level); its volume holds the levels' cells one after another up its depth, and the first row's
+/// ground is every level's.
 struct Proxy { lo: Vec3; cell: Float; cells: Vec3; land_lo: Vec2; land_cell: Float; ground: Vec3; }
 type Proxies = Rows<Proxy>;
 
-/// How high the ground is at (`x`, `z`); past the map, its edge.
-fn land_at(land: Grid<Float>, fr: Proxy, x: Float, z: Float) -> Float {
+/// How high the ground is at (`x`, `z`); past the map, its edge (the ground map is every level's, the first's frame says where).
+fn land_at(land: Grid<Float>, frame: Proxies, x: Float, z: Float) -> Float {
+    let fr = at(frame, 0);
     let c = (vec2(x, z) - fr.land_lo) / fr.land_cell;
     return at_linear(land, clamp(c, vec2(0.0, 0.0), size(land) - vec2(1.0, 1.0)));
 }
-/// The proxy at `p` (trilinear): the distance to rock (x) and its color (yzw); outside the volume, very far
-/// (x is `far`).
-fn proxy_at(proxy: Volume<Vec4>, fr: Proxy, p: Vec3, far: Float) -> Vec4 {
+/// The finest level of the proxies holding `p` (x; -1 none) and how deep in the volume its cells start (y): the levels lie up
+/// the volume's depth one after another, finest first.
+fn proxy_level(frame: Proxies, p: Vec3) -> Vec2 {
+    let r = loop 8 with r = vec3(-1.0, 0.0, 0.0) until r.x >= 0.0 || index() >= count(frame) {
+        let fr = at(frame, index());
+        let c = (p - fr.lo) / fr.cell;
+        let n = fr.cells - vec3(1.0, 1.0, 1.0);
+        let inside = c.x >= 0.0 && c.y >= 0.0 && c.z >= 0.0 && c.x <= n.x && c.y <= n.y && c.z <= n.z;
+        if inside { vec3(float(index()), r.y, 0.0) } else { vec3(-1.0, r.y + fr.cells.z, 0.0) }
+    };
+    return vec2(r.x, r.y);
+}
+/// How deep in the volume level `k`'s cells start (the levels before it, one after another).
+fn proxy_depth(frame: Proxies, k: Int) -> Float {
+    return loop k with z = 0.0 { z + at(frame, index()).cells.z };
+}
+/// The size of the proxies' cells at `p`: the finest level's holding it, the coarsest's past them all.
+fn proxy_cell(frame: Proxies, p: Vec3) -> Float {
+    let k = proxy_level(frame, p).x;
+    return at(frame, if k >= 0.0 { int(k) } else { count(frame) - 1 }).cell;
+}
+/// The proxy at `p` (trilinear, in the finest level holding it): the distance to rock (x) and its color (yzw); outside every
+/// level, very far (x is `far`).
+fn proxy_at(proxy: Volume<Vec4>, frame: Proxies, p: Vec3, far: Float) -> Vec4 {
+    let k = proxy_level(frame, p);
+    if k.x < 0.0 { return vec4(far, 0.0, 0.0, 0.0); }
+    let fr = at(frame, int(k.x));
     let c = (p - fr.lo) / fr.cell;
-    let n = fr.cells - vec3(1.0, 1.0, 1.0);
-    let inside = c.x >= 0.0 && c.y >= 0.0 && c.z >= 0.0 && c.x <= n.x && c.y <= n.y && c.z <= n.z;
-    return if inside { at_linear(proxy, c) } else { vec4(far, 0.0, 0.0, 0.0) };
+    return at_linear(proxy, vec3(c.x, c.y, c.z + k.y));
 }
 /// How far `p` is from things in the coarse scene (x), and what is nearest (y: 0 ground, 1 rock).
-fn rough_probe(proxy: Volume<Vec4>, land: Grid<Float>, fr: Proxy, p: Vec3) -> Vec2 {
-    let g = (p.y - land_at(land, fr, p.x, p.z) - 0.03) * 0.85;
-    let c = proxy_at(proxy, fr, p, 4.0).x;
+fn rough_probe(proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, p: Vec3) -> Vec2 {
+    let g = (p.y - land_at(land, frame, p.x, p.z) - 0.03) * 0.85;
+    let c = proxy_at(proxy, frame, p, 4.0).x;
     return if g < c { vec2(g, 0.0) } else { vec2(c, 1.0) };
 }
 /// A coarse ray: the distance where it met something (x) and what (y; -1 nothing met). Close to a surface it errs, so a ray
 /// counts a hit only once `start` meters from the surface it left.
-fn rough_trace(proxy: Volume<Vec4>, land: Grid<Float>, fr: Proxy, o: Vec3, dir: Vec3, start: Float, far: Float, steps: Int) -> Vec2 {
+fn rough_trace(proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, o: Vec3, dir: Vec3, start: Float, far: Float, steps: Int) -> Vec2 {
     let m = loop 128 with m = vec3(start, -1.0, 0.0) until m.z > 0.5 || m.x > far || index() >= steps {
-        let w = rough_probe(proxy, land, fr, o + dir * m.x);
+        let w = rough_probe(proxy, land, frame, o + dir * m.x);
         if w.x < 0.04 { vec3(m.x, w.y, 1.0) } else { vec3(m.x + max(w.x, 0.05), -1.0, 0.0) }
     };
     return if m.z > 0.5 { vec2(m.x, m.y) } else { vec2(far, -1.0) };
@@ -228,36 +252,36 @@ fn rough_trace(proxy: Volume<Vec4>, land: Grid<Float>, fr: Proxy, o: Vec3, dir: 
 /// A coarse ray from a true surface (the G-buffer's), which often lies inside its own coarse shape: it first
 /// walks out of the coarse shape it starts in (at most `most` meters), counting hits from there; deeper than that it is truly enclosed,
 /// and counts from `start` as ever. Starting outside every coarse shape, it is `start`.
-fn rough_leave(proxy: Volume<Vec4>, fr: Proxy, o: Vec3, dir: Vec3, start: Float, most: Float) -> Float {
+fn rough_leave(proxy: Volume<Vec4>, frame: Proxies, o: Vec3, dir: Vec3, start: Float, most: Float) -> Float {
     let m = loop 24 with m = vec2(start, 0.0) until m.y > 0.5 || m.x > most {
-        let c = proxy_at(proxy, fr, o + dir * m.x, 4.0).x;
+        let c = proxy_at(proxy, frame, o + dir * m.x, 4.0).x;
         if c >= 0.04 { vec2(m.x, 1.0) } else { vec2(m.x + max(0.0 - c, 0.05), 0.0) }
     };
     return if m.y > 0.5 { m.x } else { start };
 }
-/// The coarse normal: the ground's from the height map's slope, rock's from the volume's gradient.
-fn rough_normal(proxy: Volume<Vec4>, land: Grid<Float>, fr: Proxy, p: Vec3, what: Float) -> Vec3 {
+/// The coarse normal: the ground's from the height map's slope, rock's from the volume's gradient (a cell of its level apart).
+fn rough_normal(proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, p: Vec3, what: Float) -> Vec3 {
     if what < 0.5 {
-        let e = fr.land_cell * 2.0;
-        return normalize(vec3(land_at(land, fr, p.x - e, p.z) - land_at(land, fr, p.x + e, p.z), 2.0 * e, land_at(land, fr, p.x, p.z - e) - land_at(land, fr, p.x, p.z + e)));
+        let e = at(frame, 0).land_cell * 2.0;
+        return normalize(vec3(land_at(land, frame, p.x - e, p.z) - land_at(land, frame, p.x + e, p.z), 2.0 * e, land_at(land, frame, p.x, p.z - e) - land_at(land, frame, p.x, p.z + e)));
     }
-    let e = fr.cell;
-    return normalize(vec3(proxy_at(proxy, fr, p + vec3(e, 0.0, 0.0), 4.0).x - proxy_at(proxy, fr, p - vec3(e, 0.0, 0.0), 4.0).x,
-        proxy_at(proxy, fr, p + vec3(0.0, e, 0.0), 4.0).x - proxy_at(proxy, fr, p - vec3(0.0, e, 0.0), 4.0).x,
-        proxy_at(proxy, fr, p + vec3(0.0, 0.0, e), 4.0).x - proxy_at(proxy, fr, p - vec3(0.0, 0.0, e), 4.0).x) + vec3(0.0, 0.0001, 0.0));
+    let e = proxy_cell(frame, p);
+    return normalize(vec3(proxy_at(proxy, frame, p + vec3(e, 0.0, 0.0), 4.0).x - proxy_at(proxy, frame, p - vec3(e, 0.0, 0.0), 4.0).x,
+        proxy_at(proxy, frame, p + vec3(0.0, e, 0.0), 4.0).x - proxy_at(proxy, frame, p - vec3(0.0, e, 0.0), 4.0).x,
+        proxy_at(proxy, frame, p + vec3(0.0, 0.0, e), 4.0).x - proxy_at(proxy, frame, p - vec3(0.0, 0.0, e), 4.0).x) + vec3(0.0, 0.0001, 0.0));
 }
 /// The coarse shadow: how much of the way from `p` along `dir` is blocked (1 lit, 0 blocked, soft at the edges).
-fn rough_shadow(proxy: Volume<Vec4>, land: Grid<Float>, fr: Proxy, p: Vec3, dir: Vec3, start: Float, far: Float, steps: Int) -> Float {
+fn rough_shadow(proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, p: Vec3, dir: Vec3, start: Float, far: Float, steps: Int) -> Float {
     let r = loop 96 with r = vec2(start, 1.0) until r.x > far || r.y < 0.01 || index() >= steps {
-        let d = rough_probe(proxy, land, fr, p + dir * r.x).x;
+        let d = rough_probe(proxy, land, frame, p + dir * r.x).x;
         vec2(r.x + clamp(d, 0.05, 3.0), min(r.y, 10.0 * d / r.x))
     };
     return saturate(r.y);
 }
 /// The color of what was met: `ground` for the ground, the volume's for rock.
-fn rough_albedo(proxy: Volume<Vec4>, fr: Proxy, p: Vec3, what: Float) -> Vec3 {
-    if what < 0.5 { return fr.ground; }
-    let a = proxy_at(proxy, fr, p, 4.0);
+fn rough_albedo(proxy: Volume<Vec4>, frame: Proxies, p: Vec3, what: Float) -> Vec3 {
+    if what < 0.5 { return at(frame, 0).ground; }
+    let a = proxy_at(proxy, frame, p, 4.0);
     return vec3(a.y, a.z, a.w);
 }
 
