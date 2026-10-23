@@ -2,10 +2,10 @@
 
 The rendering contract and its renderers: a scene hands over a G-buffer
 and proxies, and a renderer owns the light — light probes, a path
-tracer, daylight, a workbench — with physically based shading, the sky,
-lamps, a planar mirror, fog and clouds, a camera, metered exposure,
-temporal antialiasing and upscaling, depth of field, glow, film and a
-painted look.
+tracer, daylight, a workbench — with physically based shading, the sky
+the air makes, lamps, a planar mirror, fog and clouds, a camera, metered
+and local exposure, temporal antialiasing and upscaling, depth of field,
+glow, film and a painted look.
 
 **Layer:** Graphics. **Uses:** [`geometry`](../geometry.entpkg/README.md), [`image`](../image.entpkg/README.md), [`random`](../random.entpkg/README.md), [`raster`](../raster.entpkg/README.md).
 
@@ -17,6 +17,10 @@ use "render.entpkg";
 
 - `kernels/aerial.ent` — Aerial perspective after the real atmosphere.
   Kernels: `render.air@1`.
+- `kernels/atmosphere.ent` — The sky as the Earth's air makes it
+  (Rayleigh, haze, ozone; light scattered more than once). Kernels:
+  `render.atmosphere_spread@1`, `render.atmosphere_look@1`,
+  `render.atmosphere_view@1`, `render.atmosphere_sky@1`.
 - `kernels/antialias.ent` — Antialiasing within one frame (FXAA).
   Kernels: `render.fxaa@1`.
 - `kernels/bloom.ent` — Glow round bright lights, of every size at once.
@@ -31,9 +35,11 @@ use "render.entpkg";
 - `kernels/daylight.ent` — Daylight. Kernels: `render.daylight@1`.
 - `kernels/clouds.ent` — A deck of clouds over the sky, lit through
   itself. Kernels: `render.clouds_march@1`.
-- `kernels/exposure.ent` — Metered exposure. Kernels:
+- `kernels/exposure.ent` — Metered exposure and local exposure. Kernels:
   `render.exposure_tiles@1`, `render.exposure_meter@1`,
-  `render.exposure_start@1`, `render.exposure_apply@1`.
+  `render.exposure_start@1`, `render.exposure_apply@1`,
+  `render.exposure_local_base@1`, `render.exposure_local_blur@1`,
+  `render.exposure_local@1`.
 - `kernels/depth_of_field.ent` — Depth of field. Kernels:
   `render.dof_start@1`, `render.dof_control@1`, `render.focus@1`,
   `render.focused@1`.
@@ -84,11 +90,13 @@ use "render.entpkg";
 ## Graph presets
 
 - `graphs/air.esn` — Fog and clouds laid over a picture.
+- `graphs/atmosphere.esn` — The sky the air makes for a sun's height and
+  bearing: its `SkyLook` and the table `render.atmosphere_sky` paints from.
 - `graphs/blend.esn` — Temporal antialiasing and upscaling.
 - `graphs/bloom.esn` — Glow (`kernels/bloom.ent`): six levels down and
   back up; its `bloom` is what `render.view` takes.
-- `graphs/exposure.esn` — Metered exposure: `hdr` scaled, and the
-  `exposure` followed.
+- `graphs/exposure.esn` — Metered exposure, then local exposure: `hdr`
+  scaled, and the `exposure` followed.
 - `graphs/finish.esn` — The finish.
 - `graphs/finish_inner.esn` — The finish at the picture's own size
   (`finish.esn` works at the window's).
@@ -111,7 +119,7 @@ use "render.entpkg";
 
 `tests/` holds scenes and their replays, run on every backend:
 `lit.replay`, `night.replay`, `path_trace.replay`, `probes.replay`,
-`temporal.replay`.
+`sky.replay`, `temporal.replay`.
 Every Kernel of the package is reached by one of them.
 
 Used by the [material_balls](../../examples/material_balls/README.md) example.
@@ -187,12 +195,28 @@ What every renderer shares, in this order:
   sunlit edge, lit from below by `below`; `render.fog_apply` lays both
   over the picture, upsampled by depth. Each pixel's steps start at a
   fixed offset of its own, so nothing needs history to settle.
+- **The sky** (`graphs/atmosphere.esn`). Sunlight through a sphere of
+  air round the ground (Hillaire's model): Rayleigh's scattering, haze
+  and ozone; light scattered more than once a table by height and the
+  sun's angle (`render.atmosphere_spread`, made once). `render.atmosphere_look`
+  gives the `SkyLook` (the sun as the air leaves it, the sky overhead and
+  at the horizon, the mean sky light) for a sun's height and bearing;
+  `render.atmosphere_view` draws the sky round the eye into a table, made
+  again only when the sun moves; `render.atmosphere_sky` paints the sky's
+  pixels from it after a renderer, with the sun's disc. A scene in these
+  units gives lit windows and lamps a few hundred times dimmer than the
+  sun, and the exposure carries it from noon to night.
 - **Exposure** (`graphs/exposure.esn`). `render.exposure_tiles` and
   `render.exposure_meter` (a `<~` state from `render.exposure_start`)
   meter the picture's mean log luminance and follow it as an eye adapts,
   quicker toward a brighter scene, a dark scene shown darker
   (`night_key`); `render.exposure_apply` scales `hdr` by it before the
-  glow and tone.
+  glow and tone. Local exposure then takes each pixel apart into its
+  neighborhood's brightness (`render.exposure_local_base`, blurred by
+  `render.exposure_local_blur`, read by brightness so no halo bleeds
+  round a light) and its own detail: bright and dark neighborhoods are
+  brought toward the mean (`highlights`, `shadows`), the detail kept
+  (`detail`); 1 for all three leaves the picture as it is.
 - **Glow** (`graphs/bloom.esn`): the bright parts shrunk by halves six
   times and grown back, every level adding the larger glow below it.
 

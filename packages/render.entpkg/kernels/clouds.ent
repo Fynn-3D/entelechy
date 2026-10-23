@@ -89,9 +89,10 @@ kernel render.clouds_march@1 {
         let dt = span / float(n);
         let sun = normalize(s.sun);
         let cos_angle = dot(dir, sun);
-        let jitter = air_offset(q);
+        // Every pixel's steps start alike: at an eighth of the size, a
+        // pixel's own offset would show as blocks.
         let r = loop 64 with r = vec4(0.0, 0.0, 0.0, 1.0) until index() >= n || r.w < 0.02 {
-            let p = l.eye + dir * (t_in + (float(index()) + jitter) * dt);
+            let p = l.eye + dir * (t_in + (float(index()) + 0.5) * dt);
             let dens = cloud_density(deck, p);
             if dens <= 0.0 { r } else {
                 let h = saturate((p.y - low) / (high - low));

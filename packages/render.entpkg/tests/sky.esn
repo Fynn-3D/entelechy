@@ -1,0 +1,17 @@
+// The stand under the sky the air makes, the sun low in the afternoon: the
+// light scattered more than once, the look a renderer lights by, the sky
+// round the eye as a table, the daylight renderer lighting the stand by it
+// and the sky's pixels painted from the table, with the sun's disc;
+// metered and toned.
+use "../kernels/";
+
+node stand: graph "stand_scene.esn" { }
+node air: graph "../graphs/atmosphere.esn" { elevation = 0.25; bearing = 2.6; air = 0.004; air_from = 30.0; }
+node lit: render.daylight@1 { surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
+    sky <- air.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; domain = size(surface); }
+node skied: render.atmosphere_sky@1 { hdr <- lit.result; surface <- stand.surface; lens <- stand.lens; sky <- air.sky; view <- air.view; domain = size(hdr); }
+node exposed: graph "../graphs/exposure.esn" { hdr <- skied.result; highlights = 0.7; shadows = 0.9; }
+node glow: graph "../graphs/bloom.esn" { hdr <- exposed.hdr; }
+node view: render.view@1 { hdr <- exposed.hdr; bloom <- glow.bloom; exposure = 1.0; domain = window(); }
+
+output result <- view.result;

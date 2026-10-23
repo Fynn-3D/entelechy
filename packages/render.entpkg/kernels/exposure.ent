@@ -99,3 +99,82 @@ kernel render.exposure_apply@1 {
         return vec4(c.xyz * at(exposure, 0).factor, c.w);
     }
 }
+
+// ------------------------------------------------------------------ local exposure
+
+/// The neighborhood's brightness: each block of 16 by 16 pixels' mean log2
+/// luminance (16 samples).
+kernel render.exposure_local_base@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    output result: Grid<Float>;
+    compute {
+        let ext = size(hdr);
+        let lo = coord() * 16.0;
+        let sum = loop 16 with sum = 0.0 {
+            sum + exposure_log(at(hdr, min(lo + vec2(float(index() % 4), float(index() / 4)) * 4.0 + 2.0, ext - vec2(1.0, 1.0))).xyz)
+        };
+        return sum / 16.0;
+    }
+}
+
+/// The neighborhood's brightness blurred along `axis` (0 across, 1 down),
+/// nine blocks wide.
+kernel render.exposure_local_blur@1 {
+    requires { field.read; field.write; }
+    input base: Grid<Float>;
+    param axis: Int = 0;
+    output result: Grid<Float>;
+    compute {
+        let q = coord();
+        let ext = size(base);
+        let step = if axis == 0 { vec2(1.0, 0.0) } else { vec2(0.0, 1.0) };
+        let sum = loop 9 with acc = vec2(0.0, 0.0) {
+            let k = float(index()) - 4.0;
+            let w = exp(0.0 - k * k * 0.125);
+            vec2(acc.x + at(base, clamp(q + step * k, vec2(0.0, 0.0), ext - vec2(1.0, 1.0))) * w, acc.y + w)
+        };
+        return sum.x / sum.y;
+    }
+}
+
+/// Local exposure: each pixel's brightness taken apart into its
+/// neighborhood's (`base`, read at this pixel from the four nearest blocks,
+/// each weighted by how near and how alike in brightness, so no halo bleeds
+/// round a light) and its own detail on it; the neighborhood brought toward
+/// the picture's mean (`exposure`'s `seen`), by `highlights` above it and
+/// `shadows` below (1 as it is, less flatter), the detail kept by `detail`.
+/// In the exposure's own stops: after `render.exposure_apply`.
+kernel render.exposure_local@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    input base: Grid<Float>;
+    input exposure: Exposures;
+    param highlights: Float = 1.0;
+    param shadows: Float = 1.0;
+    param detail: Float = 1.0;
+    output result: Image;
+    compute {
+        let c = sample(hdr);
+        let own = exposure_log(c.xyz);
+        let e = at(exposure, 0);
+        // The picture's mean as exposed, in the same stops as `hdr`.
+        let mean = e.seen + log2(max(e.factor, 0.00001));
+        let bext = size(base);
+        let at_b = (coord() + 0.5) / 16.0 - 0.5;
+        let lo = floor(at_b);
+        let sum = loop 4 with acc = vec2(0.0, 0.0) {
+            let bq = clamp(lo + vec2(float(index() % 2), float(index() / 2)), vec2(0.0, 0.0), bext - vec2(1.0, 1.0));
+            let near = vec2(1.0, 1.0) - abs(at_b - bq);
+            let b = at(base, bq) + log2(max(e.factor, 0.00001));
+            let alike = exp(0.0 - (b - own) * (b - own) * 0.5);
+            let w = max(near.x * near.y, 0.0) * alike + 0.00001;
+            vec2(acc.x + b * w, acc.y + w)
+        };
+        let local = sum.x / sum.y;
+        let toward = if local > mean { highlights } else { shadows };
+        let shown = mean + (local - mean) * toward + (own - local) * detail;
+        let scale = exp2(clamp(shown - own, -6.0, 6.0));
+        return vec4(c.xyz * scale, c.w);
+    }
+}

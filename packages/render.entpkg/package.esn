@@ -1,9 +1,9 @@
 //! The rendering contract and its renderers: a scene hands over a
 //! G-buffer and proxies, and a renderer owns the light — light probes, a
 //! path tracer, daylight, a workbench — with physically based shading,
-//! the sky, lamps, a planar mirror, fog and clouds, a camera, metered
-//! exposure, temporal antialiasing and upscaling, depth of field, glow,
-//! film and a painted look.
+//! the sky the air makes, lamps, a planar mirror, fog and clouds, a
+//! camera, metered and local exposure, temporal antialiasing and
+//! upscaling, depth of field, glow, film and a painted look.
 package render@1 { language = 1; ir = 1; }
 
 use "kernels/";
