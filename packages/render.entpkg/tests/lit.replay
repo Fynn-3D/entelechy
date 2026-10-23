@@ -26,7 +26,7 @@ expect merged.surface[7280] = 0 1 0 9.5043 0.001
 expect stand.surface[7280] = 0 1 0 9.5043 0.001
 expect nothing.result[0] = 0 0 0 1
 expect no_sun.result[0].half = 0
-expect 80 45 = 0.215 0.188 0.229 0.01
+expect 80 45 = 0.176 0.142 0.175 0.01
 
 # Daylight deep inside the coarse shape (as a leaf in its crown): a shaded
 # floor pixel keeps `inside_sky` of the light all round times its baked

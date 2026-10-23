@@ -22,16 +22,26 @@ fn hemisphere(n: Vec3, s: SkyLook) -> Vec3 {
 }
 
 /// How much of the light from all round the coarse scene (the proxies' distances) hides from a surface at `p` facing `n` (1 none hidden):
-/// how far things are 0.4, 1.2 and 2.5 meters up along the normal, darker where nearer than the way walked. A point in a crown of leaves lies
-/// inside its coarse shape, its distance negative, much darker.
+/// how far things are 0.4, 1.2 and 2.5 meters up along the normal (no farther than a quarter of the proxy's width), darker where nearer
+/// than the way walked. A point in a crown of leaves lies inside its coarse shape, its distance negative, much darker.
 fn proxy_open(proxy: Volume<Vec4>, fr: Proxy, p: Vec3, n: Vec3) -> Float {
     let d = normalize(n + vec3(0.0, 0.6, 0.0));
+    // A proxy drawn close round one thing (an asset) is read no farther than a quarter of its width.
+    let reach = max(max(fr.cells.x, fr.cells.y), fr.cells.z) * fr.cell * 0.25;
     let shut = loop 3 with a = 0.0 {
-        let k = if index() == 0 { 0.4 } else if index() == 1 { 1.2 } else { 2.5 };
-        let near = proxy_at(proxy, fr, p + d * k, k).x;
+        let k = min(if index() == 0 { 0.4 } else if index() == 1 { 1.2 } else { 2.5 }, reach);
+        let near = proxy_near(proxy, fr, p + d * k);
         a + clamp((k - near) / k, 0.0, 1.0) * (if index() == 0 { 0.45 } else if index() == 1 { 0.35 } else { 0.2 })
     };
     return clamp(1.0 - shut * 1.6, 0.1, 1.0);
+}
+
+/// About how far `p` is from things in the coarse scene, past its edge too: there, the way to the edge and what the edge holds (what
+/// the proxy holds stands inside it), so a proxy drawn close round its thing does not end in a step.
+fn proxy_near(proxy: Volume<Vec4>, fr: Proxy, p: Vec3) -> Float {
+    let c = (p - fr.lo) / fr.cell;
+    let q = clamp(c, vec3(0.0, 0.0, 0.0), fr.cells - vec3(1.0, 1.0, 1.0));
+    return length(c - q) * fr.cell + at_linear(proxy, q).x;
 }
 
 /// What the reflected direction `r` sees: the sky, or looking down, the ground's light.
