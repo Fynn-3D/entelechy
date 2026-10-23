@@ -40,7 +40,8 @@ use "render.entpkg";
   `render.dof_start@1`, `render.dof_control@1`, `render.focus@1`,
   `render.focused@1`.
 - `kernels/exposure.ent` — Metered exposure and local exposure. Kernels:
-  `render.exposure_tiles@1`, `render.exposure_meter@1`,
+  `render.exposure_tiles@1`, `render.exposure_histogram@1`,
+  `render.exposure_meter@1`,
   `render.exposure_start@1`, `render.exposure_apply@1`,
   `render.exposure_local_base@1`, `render.exposure_local_blur@1`,
   `render.exposure_local@1`.
@@ -225,19 +226,20 @@ What every renderer shares, in this order:
   pixels from it after a renderer, with the sun's disc. A scene in these
   units gives lit windows and lamps a few hundred times dimmer than the
   sun, and the exposure carries it from noon to night.
-- **Exposure** (`graphs/exposure.esn`). `render.exposure_tiles` and
-  `render.exposure_meter` (a `<~` state from `render.exposure_start`)
-  meter the picture's mean log luminance, its darkest and brightest
-  shares left out (`ignore_dark`, `ignore_bright`: a few lamps or a black
-  sky do not move it), and follow it as an eye adapts,
-  quicker toward a brighter scene, a dark scene shown darker
+- **Exposure** (`graphs/exposure.esn`). `render.exposure_tiles`,
+  `render.exposure_histogram` (128 bins a quarter stop each, every bin
+  counted at once) and `render.exposure_meter` (a `<~` state from
+  `render.exposure_start`) meter the picture's mean log luminance, its
+  darkest and brightest shares left out (`ignore_dark`, `ignore_bright`: a
+  few lamps or a black sky do not move it), and follow it as an eye
+  adapts, quicker toward a brighter scene, a dark scene shown darker
   (`night_key`); `render.exposure_apply` scales `hdr` by it before the
   glow and tone. Local exposure then takes each pixel apart into its
   neighborhood's brightness (`render.exposure_local_base`, blurred by
-  `render.exposure_local_blur`, read by brightness so no halo bleeds
-  round a light) and its own detail: bright and dark neighborhoods are
-  brought toward the mean (`highlights`, `shadows`), the detail kept
-  (`detail`); 1 for all three leaves the picture as it is.
+  `render.exposure_local_blur`, read by brightness so no halo bleeds round
+  a light) and its own detail: bright and dark neighborhoods are brought
+  toward the mean (`highlights`, `shadows`), the detail kept (`detail`); 1
+  for all three leaves the picture as it is.
 - **Glow** (`graphs/bloom.esn`): the bright parts shrunk by halves six
   times and grown back, every level adding the larger glow below it.
 

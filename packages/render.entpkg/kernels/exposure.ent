@@ -1,7 +1,8 @@
 // Metered exposure, as an eye or a camera adapts: the picture's mean
 // brightness (the mean of log luminance, its darkest and brightest shares
 // left out, so a few lamps do not darken the rest) is measured over tiles
-// (`render.exposure_tiles`), an exposure follows it over time, quicker
+// (`render.exposure_tiles`) gathered into a histogram
+// (`render.exposure_histogram`), an exposure follows it over time, quicker
 // toward a brighter scene than a darker one (`render.exposure_meter`), and
 // the HDR picture is scaled by it (`render.exposure_apply`) before the glow
 // and tone; local exposure then evens bright and dark neighborhoods.
@@ -39,28 +40,46 @@ kernel render.exposure_tiles@1 {
 struct Exposure { factor: Float; set_at: Float; asked: Float; seen: Float; }
 type Exposures = Rows<Exposure>;
 
-/// The share of the tiles' weight darker than `x` (log2 luminance).
-fn exposure_below(tiles: Grid<Vec2>, x: Float) -> Float {
-    let n = count(tiles);
-    let w = int(size(tiles).x);
-    let sum = loop 16384 with s = vec2(0.0, 0.0) until index() >= n {
-        let t = at(tiles, vec2(float(index() % w), float(index() / w)));
-        vec2(s.x + if t.x < x { t.y } else { 0.0 }, s.y + t.y)
-    };
-    return sum.x / max(sum.y, 0.0001);
-}
-/// The brightness (log2) below which the share `share` of the tiles'
-/// weight lies, found by halving.
-fn exposure_percentile(tiles: Grid<Vec2>, share: Float) -> Float {
-    let r = loop 14 with r = vec2(-16.0, 16.0) {
-        let mid = (r.x + r.y) * 0.5;
-        if exposure_below(tiles, mid) < share { vec2(mid, r.y) } else { vec2(r.x, mid) }
-    };
-    return (r.x + r.y) * 0.5;
+/// The histogram's bins: from -16 to 16 stops of log2 luminance, a quarter
+/// stop each.
+fn exposure_bins() -> Int { return 128; }
+fn exposure_bin_low(i: Float) -> Float { return -16.0 + i * 0.25; }
+
+/// The picture's histogram: each bin the tiles' weight whose brightness falls
+/// in it (`exposure_bins` rows), every bin counted at once.
+kernel render.exposure_histogram@1 {
+    requires { field.read; field.write; }
+    input tiles: Grid<Vec2>;
+    output result: Rows<Float>;
+    compute {
+        let lo = exposure_bin_low(float(element()));
+        let n = count(tiles);
+        let w = int(size(tiles).x);
+        return loop 16384 with sum = 0.0 until index() >= n {
+            let t = at(tiles, vec2(float(index() % w), float(index() / w)));
+            sum + if t.x >= lo && t.x < lo + 0.25 { t.y } else { 0.0 }
+        };
+    }
 }
 
-/// The exposure following the picture: its tiles' weighted mean, leaving out
-/// the darkest share `ignore_dark` and the brightest `ignore_bright` (a few
+/// The histogram's mean brightness between the shares `dark` and `1 - bright`
+/// of its weight (log2): each bin counted for the part of it within them,
+/// at its middle.
+fn exposure_mean(histogram: Rows<Float>, dark: Float, bright: Float) -> Float {
+    let total = loop 128 with t = 0.0 { t + at(histogram, index()) };
+    let lo = dark * total;
+    let hi = (1.0 - bright) * total;
+    let r = loop 128 with r = vec3(0.0, 0.0, 0.0) {
+        // r: weight below this bin (x), the kept weight (y), the kept weight times brightness (z).
+        let w = at(histogram, index());
+        let kept = max(min(r.x + w, hi) - max(r.x, lo), 0.0);
+        vec3(r.x + w, r.y + kept, r.z + kept * (exposure_bin_low(float(index())) + 0.125))
+    };
+    return if r.y > 0.0 { r.z / r.y } else { 0.0 };
+}
+
+/// The exposure following the picture: its histogram's mean, leaving out the
+/// darkest share `ignore_dark` and the brightest `ignore_bright` (a few
 /// lamps or a black sky do not move it), shown as
 /// `key` (the gray the mean becomes) — a dark scene, as an eye and a camera
 /// see it at night, as `night_key`, eased between from a mean of
@@ -71,7 +90,7 @@ fn exposure_percentile(tiles: Grid<Vec2>, share: Float) -> Float {
 kernel render.exposure_meter@1 {
     requires { field.read; field.write; time.read; }
     input previous: Exposures;
-    input tiles: Grid<Vec2>;
+    input histogram: Rows<Float>;
     param key: Float = 0.18;
     param night_key: Float = 0.025;
     param day_from: Float = -2.0;
@@ -86,16 +105,7 @@ kernel render.exposure_meter@1 {
     output result: Exposures;
     compute {
         let was = sample(previous);
-        let n = count(tiles);
-        let w = int(size(tiles).x);
-        let lo = exposure_percentile(tiles, ignore_dark);
-        let hi = exposure_percentile(tiles, 1.0 - ignore_bright);
-        let mean = loop 16384 with m = vec2(0.0, 0.0) until index() >= n {
-            let t = at(tiles, vec2(float(index() % w), float(index() / w)));
-            let kept = t.x >= lo - 0.001 && t.x <= hi + 0.001;
-            if kept { vec2(m.x + t.x * t.y, m.y + t.y) } else { m }
-        };
-        let seen = mean.x / max(mean.y, 0.0001);
+        let seen = exposure_mean(histogram, ignore_dark, ignore_bright);
         let shown = mix(night_key, key, smoothstep(night_from, day_from, seen));
         let asked = clamp(log2(shown) - seen + bias, darkest, brightest);
         let t = time();
