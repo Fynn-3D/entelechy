@@ -1,0 +1,25 @@
+//! The lamps added to a renderer's picture (`kernels/lamps.ent`), for a
+//! renderer that does not take them in itself (the probes renderer does):
+//! each tile of the screen keeps the lamps that reach it, each pixel adds
+//! theirs, shadowed.
+use "../kernels/";
+
+input hdr: Image;
+input lens: Lenses;
+input surface: Grid<Vec4>;
+input paint: Grid<Vec4>;
+input extra: Grid<Vec4>;
+input layers: Grid<Vec4>;
+input more: Grid<Vec4>;
+input proxy: Volume<Vec4>;
+input land: Grid<Float>;
+input frame: Proxies;
+input lamps: Lamps;
+
+node depth: render.lamps_depth@1 { surface <- surface; domain = ceil(size(surface) / 16); }
+node tiles: render.lamps_tiles@1 { depth <- depth.result; lamps <- lamps; lens <- lens; surface <- surface; domain = size(depth); }
+node light: render.lamps_light@1 { surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; tiles <- tiles.result; lamps <- lamps; lens <- lens;
+    proxy <- proxy; land <- land; frame <- frame; domain = size(surface); }
+node shaded: render.lamps_shade@1 { hdr <- hdr; light <- light.result; }
+
+output hdr <- shaded.result;

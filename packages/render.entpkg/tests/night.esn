@@ -33,29 +33,19 @@ node marks: kernel {
 
 node lit: render.daylight@1 { surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
     sky <- night.result; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; domain = size(surface); }
-node depth: render.lamps_depth@1 { surface <- stand.surface; domain = ceil(size(surface) / 16); }
-node tiles: render.lamps_tiles@1 { depth <- depth.result; lamps <- lamps.result; lens <- stand.lens; surface <- stand.surface; domain = size(depth); }
-node lamped: render.lamps_shade@1 { hdr <- lit.result; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
-    tiles <- tiles.result; lamps <- lamps.result; lens <- stand.lens; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; domain = size(surface); }
+node lamped: graph "../graphs/lamps.esn" { hdr <- lit.result; lens <- stand.lens; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
+    proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; lamps <- lamps.result; }
 
 node mirror_lens: render.mirror_lens@1 { lens <- stand.lens; level = 0.0; domain = 1; }
 node mg: stand.gbuffer@1 { lens <- mirror_lens.result; sky <- night.result; mirror = 1; domain = ceil(window() / 2); }
 node mirror_lit: render.daylight@1 { surface <- mg.surface; paint <- mg.paint; extra <- mg.extra; layers <- mg.layers; more <- mg.more;
     sky <- night.result; lens <- mirror_lens.result; proxy <- stand.proxy; frame <- stand.frame; domain = size(surface); }
-node mirrored: render.mirror_mix@1 { hdr <- lamped.result; mirror <- mirror_lit.result; surface <- stand.surface; paint <- stand.paint; more <- marks.result; lens <- stand.lens; domain = size(hdr); }
+node mirrored: render.mirror_mix@1 { hdr <- lamped.hdr; mirror <- mirror_lit.result; surface <- stand.surface; paint <- stand.paint; more <- marks.result; lens <- stand.lens; domain = size(hdr); }
 
-node fog: render.fog@1 { surface <- stand.surface; lens <- stand.lens; sky <- night.result; lamps <- lamps.result; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame;
-    density = 0.05; falloff = 2.0; glow = vec3(0.002, 0.002, 0.002); steps = 16; domain = ceil(size(surface) / 4); }
-node fog_x: render.fog_blur@1 { fog <- fog.result; surface <- stand.surface; axis = 0; domain = size(fog); }
-node fog_y: render.fog_blur@1 { fog <- fog_x.result; surface <- stand.surface; axis = 1; domain = size(fog); }
-node clouds: render.clouds@1 { surface <- stand.surface; lens <- stand.lens; sky <- night.result; low = 40.0; high = 70.0; scale = 60.0; below = vec3(0.03, 0.02, 0.01); steps = 12; domain = ceil(size(surface) / 4); }
-node aired: render.air_apply@1 { hdr <- mirrored.result; surface <- stand.surface; fog <- fog_y.result; clouds <- clouds.result; domain = size(hdr); }
-
-node meter_tiles: render.meter_tiles@1 { hdr <- aired.result; domain = ceil(size(hdr) / 32); }
-node meter0: render.meter_start@1 { domain = 1; }
-node meter: render.meter@1 { previous <~ meter.result from meter0.result; tiles <- meter_tiles.result; domain = 1; }
-node exposed: render.expose@1 { hdr <- aired.result; meter <- meter.result; domain = size(hdr); }
-node glow: graph "../graphs/bloom.esn" { hdr <- exposed.result; threshold = 1.0; }
-node view: render.view@1 { hdr <- exposed.result; bloom <- glow.bloom; exposure = 1.0; domain = window(); }
+node aired: graph "../graphs/air.esn" { hdr <- mirrored.result; lens <- stand.lens; sky <- night.result; surface <- stand.surface; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; lamps <- lamps.result;
+    density = 0.05; falloff = 2.0; glow = vec3(0.002, 0.002, 0.002); low = 40.0; high = 70.0; cover = 0.5; scale = 60.0; below = vec3(0.03, 0.02, 0.01); }
+node exposed: graph "../graphs/exposure.esn" { hdr <- aired.hdr; }
+node glow: graph "../graphs/bloom.esn" { hdr <- exposed.hdr; threshold = 1.0; }
+node view: render.view@1 { hdr <- exposed.hdr; bloom <- glow.bloom; exposure = 1.0; domain = window(); }
 
 output result <- view.result;

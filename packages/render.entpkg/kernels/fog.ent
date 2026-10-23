@@ -1,0 +1,201 @@
+// Fog: height fog that the sun, the sky, a glow of the scene's own and the
+// lamps light as they pass through it, so a spotlight's beam shows, its
+// shafts cut by what stands in it. Each view ray is walked at a quarter of
+// the picture's size (`render.fog_march`), the grain smoothed by depth
+// (`render.fog_blur`), and the fog (with clouds over the sky,
+// `clouds.ent`) laid over the picture, upsampled by depth
+// (`render.fog_apply`). Each pixel's steps start at a fixed offset of their
+// own: nothing needs history to settle.
+use "camera.ent";
+use "lamps.ent";
+use "sky.ent";
+
+/// Henyey-Greenstein's phase: how much of light turned by an angle of
+/// cosine `cos_angle` scatters that way, `g` forward (0 even all round).
+fn air_phase(cos_angle: Float, g: Float) -> Float {
+    let g2 = g * g;
+    return (1.0 - g2) / (12.566371 * pow(max(1.0 + g2 - 2.0 * g * cos_angle, 0.0001), 1.5));
+}
+
+/// A pixel's own fixed offset from 0 to 1 (interleaved gradient noise).
+fn air_offset(q: Vec2) -> Float { return fract(52.982919 * fract(dot(q, vec2(0.06711056, 0.00583715)))); }
+
+/// The fog's density at height `y`: `density` at `base` and below, falling
+/// by e every `falloff` meters above.
+fn fog_density(y: Float, density: Float, base: Float, falloff: Float) -> Float {
+    return density * exp(0.0 - max(y - base, 0.0) / max(falloff, 0.01));
+}
+
+/// Lamp `m`'s light summed along the view ray from `t0` to `t1` meters
+/// (from `eye` along `dir`): the inverse square integrated exactly along
+/// the segment (finite beside the bulb, where samples would spike), the
+/// beam taken at the segment's point nearest the lamp.
+fn lamp_airlight(m: Lamp, eye: Vec3, dir: Vec3, t0: Float, t1: Float) -> Vec3 {
+    let o = m.at - eye;
+    let tc = dot(o, dir);
+    let h = sqrt(max(dot(o, o) - tc * tc, 0.0) + m.size * m.size);
+    let summed = (atan((t1 - tc) / h) - atan((t0 - tc) / h)) / h;
+    return m.color * (lamp_beam(m, eye + dir * clamp(tc, t0, t1) - m.at) * summed);
+}
+
+/// How much of lamp `m` reaches `x` in the air through the proxies: a
+/// short walk of `steps` steps toward it, soft (1 all, 0 none).
+fn lamp_air_shadow(m: Lamp, proxy: Volume<Vec4>, land: Grid<Float>, fr: Proxy, x: Vec3, steps: Int) -> Float {
+    let d = m.at - x;
+    let dist = length(d);
+    let dir = d / max(dist, 0.0001);
+    let far = dist - m.size - fr.cell;
+    let r = loop 32 with r = vec2(fr.cell, 1.0) until r.x > far || r.y < 0.02 || index() >= steps {
+        let h = rough_probe(proxy, land, fr, x + dir * r.x).x;
+        vec2(r.x + max(h, far / float(max(steps, 1))), min(r.y, 6.0 * h / r.x))
+    };
+    return saturate(r.y);
+}
+
+/// Height fog along each view ray: the light it scatters toward the eye
+/// (rgb) and how much of what lies behind still shows (w). The sun's share
+/// is shadowed through the proxies; each lamp's is summed exactly along each
+/// step and, for a lamp that casts shadows, cut by the proxies within
+/// `shafts` steps toward it (0: unshadowed). `steps` steps out to the
+/// surface or `far` meters, denser near the eye.
+kernel render.fog_march@1 {
+    requires { field.read; field.write; }
+    input surface: Grid<Vec4>;
+    input lens: Lenses;
+    input sky: SkyLooks;
+    input lamps: Lamps;
+    input proxy: Volume<Vec4>;
+    input land: Grid<Float>;
+    input frame: Proxies;
+    param density: Float = 0.002;
+    param base: Float = 0.0;
+    param falloff: Float = 80.0;
+    /// How much the fog throws light forward (0 even, toward 1 a haze round lights).
+    param forward: Float = 0.6;
+    param far: Float = 2000.0;
+    param steps: Int = 24;
+    param shafts: Int = 8;
+    /// The lamps' light in the fog, times this.
+    param lamp_share: Float = 1.0;
+    /// Light the fog takes from round about besides the sky's (a city's glow
+    /// at night), as radiance it scatters toward the eye.
+    param glow: Vec3 = vec3(0.0, 0.0, 0.0);
+    output result: Image;
+    compute {
+        let q = coord();
+        let ext = domain();
+        let l = at(lens, 0);
+        let s = at(sky, 0);
+        let fr = at(frame, 0);
+        let dir = ray(l, q, ext);
+        // The surface under this pixel of the smaller picture: its first
+        // pixel, so fog does not leak past an edge.
+        let ratio = size(surface) / ext;
+        let su = at(surface, min(floor((q + 0.5) * ratio), size(surface) - vec2(1.0, 1.0)));
+        let end = min(su.w, far);
+        let n = max(steps, 1);
+        let jitter = air_offset(q);
+        let sun = normalize(s.sun);
+        let sun_phase = air_phase(dot(dir, sun), forward);
+        let lamp_n = min(count(lamps), lamps_most());
+        return loop 64 with r = vec4(0.0, 0.0, 0.0, 1.0) until index() >= n || r.w < 0.01 {
+            let f0 = (float(index()) + jitter) / float(n);
+            let f1 = (float(index()) + 1.0 + jitter) / float(n);
+            let t0 = end * f0 * f0;
+            let t1 = end * f1 * f1;
+            let dt = t1 - t0;
+            let p = l.eye + dir * ((t0 + t1) * 0.5);
+            let dens = fog_density(p.y, density, base, falloff);
+            if dens * dt < 0.000001 { r } else {
+                let sun_seen = rough_shadow(proxy, land, fr, p, sun, fr.cell, 300.0, 12);
+                let lamps_here = loop 128 with sum = vec3(0.0, 0.0, 0.0) until index() >= lamp_n {
+                    let m = at(lamps, index());
+                    let d = p - m.at;
+                    if m.reach <= 0.0 || dot(d, d) > m.reach * m.reach * 1.5 { sum } else {
+                        // Light going from the lamp on toward the eye is thrown forward.
+                        let given = lamp_airlight(m, l.eye, dir, t0, t1) * air_phase(0.0 - dot(dir, normalize(d)), forward);
+                        let lit = max(given.x, max(given.y, given.z)) > 0.000001;
+                        let cut = if lit && m.shadow != 0 && shafts > 0 { lamp_air_shadow(m, proxy, land, fr, p, shafts) } else { 1.0 };
+                        sum + given * cut
+                    }
+                };
+                // The lamps' share is summed over the step: per meter, as the rest.
+                let light = s.sun_color * (sun_phase * sun_seen) + s.ambient * 0.0795775 + glow + lamps_here * (lamp_share / max(dt, 0.0001));
+                let absorbed = exp(0.0 - dens * dt);
+                let scattered = light * ((1.0 - absorbed) * r.w);
+                vec4(r.x + scattered.x, r.y + scattered.y, r.z + scattered.z, r.w * absorbed)
+            }
+        };
+    }
+}
+
+/// A blur's running sums: the fog weighted, and the weights.
+struct FogSum { fog: Vec4; weight: Float; }
+
+/// How alike in depth two pixels are (1 the same, toward 0 apart).
+fn fog_alike(w: Float, own: Float) -> Float {
+    return 1.0 / (1.0 + abs(min(w, 20000.0) - min(own, 20000.0)) / max(min(own, 20000.0) * 0.04, 0.5));
+}
+/// The depth under pixel `q` of a picture `ratio` times smaller than the
+/// G-buffer: its first pixel's.
+fn fog_depth(surface: Grid<Vec4>, q: Vec2, ratio: Vec2) -> Float {
+    return at(surface, min(floor((q + 0.5) * ratio), size(surface) - vec2(1.0, 1.0))).w;
+}
+
+/// The fog's grain smoothed: seven samples along `axis` (0 across, 1 down)
+/// at its own size, each weighted by how alike in depth its pixel is, so fog
+/// does not bleed across an edge. Two passes make the blur.
+kernel render.fog_blur@1 {
+    requires { field.read; field.write; }
+    input fog: Image;
+    input surface: Grid<Vec4>;
+    param axis: Int = 0;
+    output result: Image;
+    compute {
+        let q = coord();
+        let ext = size(fog);
+        let ratio = size(surface) / ext;
+        let own = fog_depth(surface, q, ratio);
+        let step = if axis == 0 { vec2(1.0, 0.0) } else { vec2(0.0, 1.0) };
+        let sum = loop 7 with acc = FogSum { fog: vec4(0.0, 0.0, 0.0, 0.0), weight: 0.0 } {
+            let k = float(index()) - 3.0;
+            let fq = clamp(q + step * k, vec2(0.0, 0.0), ext - vec2(1.0, 1.0));
+            let wt = exp(0.0 - k * k * 0.22) * fog_alike(fog_depth(surface, fq, ratio), own);
+            FogSum { fog: acc.fog + at(fog, fq) * wt, weight: acc.weight + wt }
+        };
+        return sum.fog / max(sum.weight, 0.0001);
+    }
+}
+
+/// The picture with the air laid over it: the fog from its smaller picture
+/// (its four nearest pixels, each by nearness and by how alike in depth),
+/// and over the sky the clouds (`render.clouds_march`; their w how much of
+/// the sky still shows).
+kernel render.fog_apply@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    input surface: Grid<Vec4>;
+    input fog: Image;
+    input clouds: Image;
+    output result: Image;
+    compute {
+        let q = coord();
+        let ext = size(hdr);
+        let c = sample(hdr);
+        let own = sample(surface).w;
+        let fext = size(fog);
+        let ratio = ext / fext;
+        let at_fog = (q + 0.5) / ratio;
+        let base = floor(at_fog - 0.5);
+        let sum = loop 4 with acc = FogSum { fog: vec4(0.0, 0.0, 0.0, 0.0), weight: 0.0 } {
+            let fq = clamp(base + vec2(float(index() % 2), float(index() / 2)), vec2(0.0, 0.0), fext - vec2(1.0, 1.0));
+            let near = vec2(1.0, 1.0) - abs(at_fog - 0.5 - fq);
+            let wt = max(near.x * near.y, 0.0) * fog_alike(fog_depth(surface, fq, ratio), own) + 0.0001;
+            FogSum { fog: acc.fog + at(fog, fq) * wt, weight: acc.weight + wt }
+        };
+        let air = sum.fog / sum.weight;
+        let cloud = if own > no_hit() * 0.5 { at_linear(clouds, (q + 0.5) * size(clouds) / ext) } else { vec4(0.0, 0.0, 0.0, 1.0) };
+        let behind = c.xyz * cloud.w + cloud.xyz;
+        return vec4(behind * air.w + air.xyz, c.w);
+    }
+}

@@ -29,17 +29,23 @@ use "render.entpkg";
 - `kernels/contact_shadow.ent` — Contact shadows. Kernels:
   `render.contact@1`.
 - `kernels/daylight.ent` — Daylight. Kernels: `render.daylight@1`.
+- `kernels/clouds.ent` — A deck of clouds over the sky, lit through
+  itself. Kernels: `render.clouds_march@1`.
 - `kernels/exposure.ent` — Metered exposure. Kernels:
-  `render.meter_tiles@1`, `render.meter_start@1`, `render.meter@1`,
-  `render.expose@1`.
+  `render.exposure_tiles@1`, `render.exposure_meter@1`,
+  `render.exposure_start@1`, `render.exposure_apply@1`.
 - `kernels/depth_of_field.ent` — Depth of field. Kernels:
   `render.dof_start@1`, `render.dof_control@1`, `render.focus@1`,
   `render.focused@1`.
 - `kernels/film.ent` — Film. Kernels: `render.film_start@1`,
   `render.film_keys@1`, `render.film@1`.
+- `kernels/fog.ent` — Height fog the sun and the lamps light, their beams
+  cut into shafts. Kernels: `render.fog_march@1`, `render.fog_blur@1`,
+  `render.fog_apply@1`.
 - `kernels/lamps.ent` — Point lights and spotlights, culled by tiles,
-  shadowed through the proxies. Kernels: `render.lamps_depth@1`,
-  `render.lamps_tiles@1`, `render.lamps_shade@1`.
+  shadowed through the proxies and on the screen. Kernels:
+  `render.lamps_none@1`, `render.lamps_depth@1`, `render.lamps_tiles@1`,
+  `render.lamps_light@1`, `render.lamps_shade@1`.
 - `kernels/merge.ent` — Two G-buffers of one view made one. Kernels:
   `render.nearer@1`.
 - `kernels/mirror.ent` — A planar mirror. Kernels: `render.mirror_lens@1`,
@@ -66,9 +72,6 @@ use "render.entpkg";
   `render.jitter@1`, `render.taa@1`, `render.same_lens@1`.
 - `kernels/transmission.ent` — Transmission (glass, water, ice).
   Kernels: `render.settle_behind@1`.
-- `kernels/volumetric.ent` — Light in the air: height fog the sun and the
-  lamps light, a deck of clouds. Kernels: `render.fog@1`,
-  `render.fog_blur@1`, `render.clouds@1`, `render.air_apply@1`.
 - `kernels/upscale.ent` — The picture is computed at an inner resolution
   with a ceiling and scaled to the window at last. Kernels:
   `render.dynamic_start@1`, `render.dynamic@1`, `render.extent@1`,
@@ -80,15 +83,21 @@ use "render.entpkg";
 
 ## Graph presets
 
+- `graphs/air.esn` — Fog and clouds laid over a picture.
 - `graphs/blend.esn` — Temporal antialiasing and upscaling.
 - `graphs/bloom.esn` — Glow (`kernels/bloom.ent`): six levels down and
   back up; its `bloom` is what `render.view` takes.
+- `graphs/exposure.esn` — Metered exposure: `hdr` scaled, and the
+  `exposure` followed.
 - `graphs/finish.esn` — The finish.
 - `graphs/finish_inner.esn` — The finish at the picture's own size
   (`finish.esn` works at the window's).
+- `graphs/lamps.esn` — The lamps added to a renderer's picture, for one
+  that does not take them in itself.
 - `graphs/path_trace.esn` — The path tracer (`kernels/path_trace.ent`).
 - `graphs/picture.esn` — The picture's raster.
-- `graphs/probes.esn` — The light-probe renderer (`kernels/probes.ent`).
+- `graphs/probes.esn` — The light-probe renderer (`kernels/probes.ent`),
+  the lamps shown, reflected and bounced.
 - `graphs/super_resolution.esn` — Temporal super-resolution
   (`render.tsr`).
 - `graphs/upscale.esn` — A finished picture (tone-mapped, sRGB) scaled
@@ -131,7 +140,7 @@ this contract takes any renderer package by changing a few graph lines.
 | `proxy` | `Volume<Vec4>` | Coarse scene for secondary rays: signed distance (x), albedo (yzw), on the `Proxy` frame's lattice. Ground excluded. |
 | `land` | `Grid<Float>` | Ground height on the `Proxy` frame's ground lattice. |
 | `frame` | `Proxies` | Where `proxy` and `land` lie in the world, and the ground's albedo. |
-| `lamps` | `Lamps` | The lamps beside the sun, at most 128: each where it is, its reach, intensity, bulb size, a spotlight's aim and beam, whether it casts shadows (`point_lamp`, `spot_lamp`). A scene with none hands over none. |
+| `lamps` | `Lamps` | The lamps beside the sun, at most 128: each where it is, its reach, intensity, bulb size, a spotlight's aim and beam, whether it casts shadows (`point_lamp`, `spot_lamp`). A scene with none hands over `render.lamps_none`. |
 
 The G-buffer is the scene's own full-precision view; `proxy` and `land` are
 what a renderer traces shadows and bounces through.
@@ -148,31 +157,40 @@ of `render.bright` and `render.spread` for round glows with long tails).
 
 ### After a renderer
 
-What every renderer shares, laid over its `hdr` in this order:
+What every renderer shares, in this order:
 
 - **Lamps.** `render.lamps_depth` and `render.lamps_tiles` keep, for each
   tile of 16 × 16 pixels, the lamps whose reach meets what it shows;
-  `render.lamps_shade` adds their light to `hdr` with `lit_by`, a larger
-  bulb widening the highlight, each shadowed through the proxies when it
-  asks. They do not yet light the probes' bounce.
+  `render.lamps_light` lights each pixel by those alone (walking the
+  tile's bits), with `lit_by`, a larger bulb widening the highlight, each
+  lamp that casts shadows shadowed through the proxies and, within
+  `contact` meters, on the screen. The probes renderer takes that light
+  in: what it shows, reflects on the screen and gathers as bounced light.
+  Another renderer has it added after (`graphs/lamps.esn`).
 - **The mirror.** `render.mirror_lens` reflects the lens in a level plane;
   the scene draws its G-buffer again through it from the plane up
   (`mirror_start` says where a ray reaches the plane), a renderer lights
   that, and `render.mirror_mix` lays it over the pixels `more` w marks, by
   Fresnel, moved by the surface's normal (waves) and drawn out downward.
-- **The air.** `render.fog` walks each view ray at a smaller size through
-  height fog the sun (shadowed through the proxies), the sky, a glow of
-  the scene's own and the lamps light (each lamp's light summed exactly
-  along each step, so a beam beside a bulb has no spikes);
-  `render.fog_blur` smooths it by depth; `render.clouds` walks a deck of
-  clouds for the sky, lit by the sun and from below; `render.air_apply`
-  lays both over the picture, upsampled by depth. Each pixel's steps start
-  at a fixed offset of its own, so nothing needs history to settle.
-- **Exposure.** `render.meter_tiles` and `render.meter` (a `<~` state from
-  `render.meter_start`) meter the picture's mean log luminance and follow
-  it as an eye adapts, quicker toward brighter scenes, a dark scene shown
-  darker (`night_key`); `render.expose` scales `hdr` by it before the glow
-  and tone.
+- **The air** (`graphs/air.esn`). `render.fog_march` walks each view ray
+  at a quarter of the size through height fog the sun (shadowed through
+  the proxies), the sky, a glow of the scene's own and the lamps light:
+  each lamp's light summed exactly along each step (a beam beside a bulb
+  has no spikes) and cut by the proxies toward it into shafts;
+  `render.fog_blur` smooths it by depth; `render.clouds_march` walks a
+  deck of clouds for the sky at an eighth of the size, lit through the
+  cloud toward the sun with light scattered again and again, dark at a
+  sunlit edge, lit from below by `below`; `render.fog_apply` lays both
+  over the picture, upsampled by depth. Each pixel's steps start at a
+  fixed offset of its own, so nothing needs history to settle.
+- **Exposure** (`graphs/exposure.esn`). `render.exposure_tiles` and
+  `render.exposure_meter` (a `<~` state from `render.exposure_start`)
+  meter the picture's mean log luminance and follow it as an eye adapts,
+  quicker toward a brighter scene, a dark scene shown darker
+  (`night_key`); `render.exposure_apply` scales `hdr` by it before the
+  glow and tone.
+- **Glow** (`graphs/bloom.esn`): the bright parts shrunk by halves six
+  times and grown back, every level adding the larger glow below it.
 
 ### Transmission
 

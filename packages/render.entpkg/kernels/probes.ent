@@ -353,8 +353,8 @@ kernel render.probes_behind@1 {
     }
 }
 
-/// The picture without reflections (which screen-space reflections read): the sky; things are the sun's light, the probes' diffuse light
-/// (times contact occlusion) and emission.
+/// The picture without reflections (which screen-space reflections and the gathered light read): the sky; things are the sun's light,
+/// the probes' diffuse light (times contact occlusion), emission and the lamps' light (so what the lamps light is bounced and reflected).
 kernel render.probes_lit@1 {
     requires { field.read; field.write; }
     input surface: Grid<Vec4>;
@@ -366,6 +366,8 @@ kernel render.probes_lit@1 {
     input frame: Proxies;
     input sky: SkyLooks;
     input lens: Lenses;
+    /// The lamps' light on each surface (`render.lamps_light`).
+    input lamped: Image;
     param spacing: Float = 1.2;
     param reach: Float = 0.7;
     output result: Image;
@@ -383,7 +385,7 @@ kernel render.probes_lit@1 {
         let m = pbr_of(at(paint, q), ex, at(layers, q), at(more, q));
         let v = vec3(0.0, 0.0, 0.0) - dir;
         let e = probe_light(probes, at(frame, 0), spacing, p + n * 0.3, n, s) * screen_ao(surface, q, extent, l, p, n, su.w, reach) * baked_occlusion(ex);
-        return vec4(lit_by(m, n, v, s.sun, s.sun_color * ex.x) + m.albedo * (1.0 - m.metal) * (1.0 - m.transmission) * e + m.glow, 1.0);
+        return vec4(lit_by(m, n, v, s.sun, s.sun_color * ex.x) + m.albedo * (1.0 - m.metal) * (1.0 - m.transmission) * e + m.glow + at(lamped, q).xyz, 1.0);
     }
 }
 
@@ -391,7 +393,8 @@ kernel render.probes_lit@1 {
 /// visibility), plus the environment: the diffuse light is what each pixel gathered (`gathered`); reflected light is looked for first on the screen along the reflected
 /// direction (screen-space reflections: where it meets something, that pixel of the picture without reflections, `lit`), and where not found or
 /// off the screen, through the proxies (the coarse distance field), falling back to the sky (down, the probes round it); a rough surface's is the diffuse light round it, a
-/// clearcoat's by its own roughness; all times contact occlusion; transmissive surfaces add the light let through (`transmission.ent`); plus emission; air laid over distance.
+/// clearcoat's by its own roughness; all times contact occlusion; transmissive surfaces add the light let through (`transmission.ent`); plus emission and
+/// the lamps' light (`lamped`); air laid over distance.
 /// Light as a painting has it (`render.probes_shade`'s `style` 1): the sunward side and the shade split on one
 /// soft step (`shadow` how much sun reaches it), the shade only the gathered diffuse light `e`, cooler;
 /// a rim of light on the edge against the light, and a small hard highlight on smooth surfaces.
@@ -427,6 +430,8 @@ kernel render.probes_shade@1 {
     input frame: Proxies;
     input sky: SkyLooks;
     input lens: Lenses;
+    /// The lamps' light on each surface (`render.lamps_light`).
+    input lamped: Image;
     param spacing: Float = 1.2;
     param reach: Float = 0.7;
     /// Only surfaces smoother than this look for reflections on the screen (on rough ones they would not show, and the time is wasted).
@@ -470,6 +475,6 @@ kernel render.probes_shade@1 {
         let coat_light = mix(mirrored, e, sqrt(m.coat_rough)) * ao;
         let clear = if m.transmission > 0.0 { transmitted(m, n, v, at(through, q), frosted(beyond, q, m.rough)) } else { vec3(0.0, 0.0, 0.0) };
         let shown = if style == 1 { toon(m, n, v, s, ex.x, e) + spec_light * env_brdf(pbr_f0(m), m.rough, max(dot(n, v), 0.001)) * (1.0 - m.rough) } else { direct + ambient_by(m, n, v, e, spec_light, coat_light) };
-        return vec4(aerial(shown + clear + m.glow, dir, su.w, s), 1.0);
+        return vec4(aerial(shown + clear + m.glow + sample(lamped).xyz, dir, su.w, s), 1.0);
     }
 }

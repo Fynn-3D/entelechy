@@ -1,8 +1,10 @@
-// The stand lit by light probes, finished by the camera's glow and tone.
+// The stand lit by light probes, no lamps beside the sun, finished by the
+// camera's glow and tone.
 node stand: graph "stand_scene.esn" { }
+node no_lamps: render.lamps_none@1 { domain = 1; }
 node light: graph "../graphs/probes.esn" { lens <- stand.lens; sky <- stand.sky; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
     behind_at <- stand.behind_at; behind_dir <- stand.behind_dir; behind_paint <- stand.behind_paint; behind_normal <- stand.behind_normal; through <- stand.through;
-    proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; nx = 21; ny = 6; nz = 12; spacing = 0.5; }
+    proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; lamps <- no_lamps.result; nx = 21; ny = 6; nz = 12; spacing = 0.5; }
 node seen: graph "../graphs/finish.esn" { hdr <- light.hdr; exposure = 0.8; }
 
 output result <- seen.result;

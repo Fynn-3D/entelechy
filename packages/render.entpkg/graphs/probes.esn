@@ -1,5 +1,5 @@
-//! The light-probe renderer (`kernels/probes.ent`): takes the scene's G-buffer and proxies
-//! (the contract) and gives the HDR picture `hdr`. `nx` by `ny` by `nz` probes,
+//! The light-probe renderer (`kernels/probes.ent`): takes the scene's G-buffer, proxies and lamps
+//! (the contract) and gives the HDR picture `hdr`; the lamps' light is shown, reflected and bounced. `nx` by `ny` by `nz` probes,
 //! one every `spacing` meters from the proxy's `lo`, covering the proxy; each face traces `rays` rays a frame,
 //! and stops after `most`.
 use "../kernels/";
@@ -19,6 +19,7 @@ input through: Grid<Vec4>;
 input proxy: Volume<Vec4>;
 input land: Grid<Float>;
 input frame: Proxies;
+input lamps: Lamps;
 param spacing: Float = 1.2;
 param nx: Int = 32;
 param ny: Int = 16;
@@ -43,8 +44,13 @@ node light: render.probes_gather@1 { previous <~ light.result from blank.result;
 node beyond: render.probes_behind@1 { more <- more; behind_at <- behind_at; behind_dir <- behind_dir; behind_paint <- behind_paint; behind_normal <- behind_normal;
     probes <- light.result; frame <- frame; sky <- sky; spacing = spacing; domain = size(more); }
 // The picture without reflections, which screen-space reflections read.
+// The lamps' light on each surface, from those each tile of the screen keeps.
+node lamp_depth: render.lamps_depth@1 { surface <- surface; domain = ceil(size(surface) / 16); }
+node lamp_tiles: render.lamps_tiles@1 { depth <- lamp_depth.result; lamps <- lamps; lens <- lens; surface <- surface; domain = size(depth); }
+node lamped: render.lamps_light@1 { surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; tiles <- lamp_tiles.result; lamps <- lamps; lens <- lens;
+    proxy <- proxy; land <- land; frame <- frame; domain = size(surface); }
 node lit: render.probes_lit@1 { surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; probes <- light.result; frame <- frame; sky <- sky; lens <- lens;
-    spacing = spacing; domain = size(surface); }
+    lamped <- lamped.result; spacing = spacing; domain = size(surface); }
 // Each pixel's diffuse light: traced on the screen, the probes where a ray finds nothing; denoised.
 node gather: render.probes_screen_gather@1 { surface <- surface; lit <- lit.result; probes <- light.result; proxy <- proxy; land <- land; frame <- frame; sky <- sky; lens <- lens; spacing = spacing; rays = screen_rays; domain = ceil(size(surface) / gather_every); }
 node gathered: render.probes_gather_blur@1 { gathered <- gather.result; surface <- surface; domain = size(surface); }
@@ -53,6 +59,6 @@ node now_lens: render.same_lens@1 { lens <- lens; domain = 1; }
 node blank_kept: Image { domain = vec2(1, 1); }
 node kept: render.probes_gather_keep@1 { gathered <- gathered.result; surface <- surface; previous <~ kept.result from blank_kept.result; lens <- lens; was_lens <~ now_lens.result from now_lens.result; domain = size(surface); }
 node shade: render.probes_shade@1 { surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; beyond <- beyond.result; through <- through; lit <- lit.result; gathered <- kept.result; proxy <- proxy; land <- land; probes <- light.result; frame <- frame; sky <- sky; lens <- lens;
-    spacing = spacing; mirror_below = mirror_below; style = style; domain = size(surface); }
+    lamped <- lamped.result; spacing = spacing; mirror_below = mirror_below; style = style; domain = size(surface); }
 
 output hdr <- shade.result;

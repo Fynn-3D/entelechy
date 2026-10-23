@@ -31,10 +31,11 @@ fn mirror_start(eye: Vec3, dir: Vec3, level: Float) -> Float {
 
 /// The picture `hdr` with the mirror pass `mirror` (any size, drawn
 /// through `render.mirror_lens`) laid over the pixels whose `more` w marks
-/// a mirror (its strength, 0 to 1): Fresnel from the surface's normal, the
-/// reflection moved by the normal's tilt (`ripple`, in parts of the
-/// picture's height) and drawn out downward by `streak` (in parts of the
-/// picture's height, more for a rougher surface).
+/// a mirror (its strength, 0 to 1): by Fresnel, from the surface's normal
+/// and its index of refraction (`more` z, 0 taken as 1.5); moved by the
+/// normal's tilt (`ripple`, in parts of the picture) and drawn out down the
+/// surface as a rough one draws a reflection, by `streak` (in parts of the
+/// picture's height, times its roughness and a little more).
 kernel render.mirror_mix@1 {
     requires { field.read; field.write; }
     input hdr: Image;
@@ -44,33 +45,32 @@ kernel render.mirror_mix@1 {
     input more: Grid<Vec4>;
     input lens: Lenses;
     param ripple: Float = 0.08;
-    param streak: Float = 0.03;
+    param streak: Float = 0.1;
     output result: Image;
     compute {
         let base = sample(hdr);
-        let strength = sample(more).w;
-        if strength <= 0.0 { return base; }
-        let su = sample(surface);
+        let mo = sample(more);
+        if mo.w <= 0.0 { return base; }
         let l = at(lens, 0);
         let ext = size(surface);
         let q = coord();
         let dir = ray(l, q, ext);
-        let n = su.xyz;
-        let f = schlick(vec3(0.02, 0.02, 0.02), max(dot(n, vec3(0.0, 0.0, 0.0) - dir), 0.0)).x;
+        let n = sample(surface).xyz;
+        let ior = if mo.z > 1.0 { mo.z } else { 1.5 };
+        let f0 = (ior - 1.0) / (ior + 1.0);
+        let f = schlick(vec3(f0 * f0, f0 * f0, f0 * f0), max(dot(n, vec3(0.0, 0.0, 0.0) - dir), 0.0)).x;
         // The normal's tilt across and along the view moves what is seen in it.
         let uv = (q + 0.5) / ext + vec2(dot(n, l.right), dot(vec3(n.x, 0.0, n.z), l.ahead)) * ripple;
-        let rough = sample(paint).w;
-        let reach = streak * (0.3 + rough);
+        // Seven samples from one step above to five below, fading with the step.
+        let step = streak * (0.1 + sample(paint).w) / 5.0;
         let msize = size(mirror);
         let seen = loop 7 with acc = vec4(0.0, 0.0, 0.0, 0.0) {
             let k = float(index()) - 1.0;
             let w = exp(0.0 - k * k * 0.18);
-            let at_uv = clamp(uv + vec2(0.0, k * reach / 5.0), vec2(0.0, 0.0), vec2(1.0, 1.0));
-            let c = at_linear(mirror, at_uv * msize);
+            let c = at_linear(mirror, clamp(uv + vec2(0.0, k * step), vec2(0.0, 0.0), vec2(1.0, 1.0)) * msize);
             vec4(acc.x + c.x * w, acc.y + c.y * w, acc.z + c.z * w, acc.w + w)
         };
-        let m = seen.xyz / max(seen.w, 0.0001);
-        let k = f * strength;
-        return vec4(base.xyz * (1.0 - k) + m * k, base.w);
+        let k = f * mo.w;
+        return vec4(base.xyz * (1.0 - k) + seen.xyz / max(seen.w, 0.0001) * k, base.w);
     }
 }
