@@ -75,6 +75,9 @@ use "render.entpkg";
 - `kernels/scattering.ent` — Light scattered in the air: the phase and
   each pixel's step offset, shared by fog, clouds and the sky.
 - `kernels/sky.ent` — The sky.
+- `kernels/sun.ent` — The sun's shadows for any scene: cascaded shadow
+  maps, soft as far as the sun's disc makes them. Kernels:
+  `render.sun_views@1`, `render.sun_shadow@1`.
 - `kernels/super_resolution.ent` — Temporal super-resolution (TSR).
   Kernels: `render.tsr@1`, `render.keep_surface@1`.
 - `kernels/switch.ent` — One way of drawing (a renderer) is chosen at a
@@ -175,7 +178,18 @@ of `render.bright` and `render.spread` for round glows with long tails).
 ### Before a renderer
 
 Passes over the G-buffer a scene hands over, each giving the same layout
-back: `render.contact` multiplies contact shadows into the sun's
+back. The sun's shadows: `render.sun_views` cuts the view into cascades,
+squares seen down the sunlight, larger with distance, each moving only in
+steps of a quarter of its width (whole texels: the shadows hold still, and
+are drawn again only a step on); the scene draws each cascade's depth
+toward the sun side by side in one atlas (a raster scene through
+`sun_clip`, a distance-field scene marching `sun_ray` to a fixed
+tolerance, `sun_depth_of` what it met); `render.sun_shadow` multiplies the
+shadow into the sun's visibility (`extra` x), each pixel by the finest
+cascade holding it, its blockers' distance making the penumbra as wide as
+the sun's disc (`sun_size`) makes it, compared nearer the sun by a texel
+times the surface's slant so a curved surface does not shadow itself in
+stripes, cascades blended at their edges. `render.contact` multiplies contact shadows into the sun's
 visibility (`extra` x), `render.clouds_shadow` the shadow of the clouds'
 deck (the deck `graphs/air.esn` gives back as `deck`), and
 `render.gloss_widen` widens each pixel's roughness by how much its normals

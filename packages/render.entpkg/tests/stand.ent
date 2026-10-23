@@ -220,3 +220,21 @@ kernel stand.gbuffer@1 {
             through: vec4(absorbed.x, absorbed.y, absorbed.z, 0.0) };
     }
 }
+
+/// The sun's depth for the cascades (`render.sun_views`, side by side, each
+/// `size` texels a side): each texel's ray down the sunlight walked through
+/// the stand, how far toward the sun what it met lies.
+kernel stand.sun_depth@1 {
+    requires { field.read; field.write; }
+    input views: SunViews;
+    param size: Float = 256.0;
+    output result: Grid<Float>;
+    compute {
+        let q = coord();
+        let i = int(q.x / size);
+        let v = at(views, min(i, count(views) - 1));
+        let r = sun_ray(v, (q.x - float(i) * size + 0.5) / size, (q.y + 0.5) / size);
+        let hit = trace(vec3(r.x, r.y, r.z), vec3(0.0, 0.0, 0.0) - v.toward, r.w, 160);
+        return sun_depth_of(v, if hit.what < 0 { r.w } else { hit.d });
+    }
+}
