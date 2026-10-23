@@ -296,14 +296,20 @@ kernel render.probes_gather_blur@1 {
         let g = ivec2(q.x / step_, q.y / step_);
         let ext = isize(gathered) - ivec2(1, 1);
         let sext = isize(surface) - ivec2(1, 1);
+        // Averaged with each sample's brightness squeezed (c / (1 + luma)) and
+        // the mean let out again after: a lone bright ray (one that met a
+        // lamp's glow) lifts its neighbors a little rather than standing out
+        // as a speck.
         let acc = loop 25 with a = vec4(0.0, 0.0, 0.0, 0.0) {
             let o = ivec2(index() % 5 - 2, index() / 5 - 2);
             let c = clamp(g + o, ivec2(0, 0), ext);
             let sv = at(surface, clamp(c * step_, ivec2(0, 0), sext));
             let w = pow(max(dot(sv.xyz, su.xyz), 0.0), 8.0) * (1.0 - smoothstep(0.0, 0.05 * su.w + 0.01, abs(sv.w - su.w))) * (if sv.w > no_hit() * 0.5 { 0.0 } else { 1.0 });
-            a + vec4(at(gathered, c).xyz * w, w)
+            let seen = at(gathered, c).xyz;
+            a + vec4(seen * (w / (1.0 + dot(seen, vec3(0.2126, 0.7152, 0.0722)))), w)
         };
-        let e = acc.xyz / max(acc.w, 0.0001);
+        let squeezed = acc.xyz / max(acc.w, 0.0001);
+        let e = squeezed / max(1.0 - dot(squeezed, vec3(0.2126, 0.7152, 0.0722)), 0.05);
         return vec4(e.x, e.y, e.z, 1.0);
     }
 }
