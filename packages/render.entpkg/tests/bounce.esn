@@ -8,7 +8,7 @@ node stand: graph "stand_scene.esn" { }
 node lit: render.lit@1 { surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
     sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; domain = window(); }
 node no_lamps: render.lamps_none@1 { domain = 1; }
-node bounced: graph "../graphs/bounce.esn" { lamps <- no_lamps.result; hdr <- lit.result; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
+node bounced: graph "../graphs/bounce.esn" { lamps <- no_lamps.result; reflection <- lit.reflection; hdr <- lit.result; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
     lens <- stand.lens; sky <- stand.sky; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; }
 // A green lamp over the balls: what it lights on them bounces too.
 node green: kernel {
@@ -17,7 +17,7 @@ node green: kernel {
     domain = 1;
     compute { return point_lamp(vec3(0.0, 1.6, 0.0), 8.0, vec3(0.0, 40.0, 0.0), 0.05, 1); }
 }
-node lamped: graph "../graphs/bounce.esn" { lamps <- green.result; hdr <- lit.result; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers;
+node lamped: graph "../graphs/bounce.esn" { lamps <- green.result; reflection <- lit.reflection; hdr <- lit.result; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers;
     more <- stand.more; lens <- stand.lens; sky <- stand.sky; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; }
 /// The green the lamp's bounce adds under the white ball, over eight by eight pixels.
 node greener: kernel {
@@ -27,6 +27,20 @@ node greener: kernel {
     output result: Rows<Vec4>;
     domain = 1;
     compute { return loop 64 with s = vec4(0.0, 0.0, 0.0, 0.0) { let q = vec2(320.0, 300.0) + vec2(float(index() % 8), float(index() / 8)); s + (at(b, q) - at(a, q)) / 64.0 }; }
+}
+
+/// What the mirror cone changes of the reflection over eight by eight pixels of a gold ball's lower half, facing the red
+/// balls before it, and of the sky.
+node remirrored: kernel {
+    requires { field.read; field.write; }
+    input a: Grid<Vec4 as f16> <- lit.reflection;
+    input b: Grid<Vec4 as f16> <- bounced.reflection;
+    output result: Rows<Vec4>;
+    domain = 2;
+    compute {
+        let o = if element() == 0 { vec2(326.0, 192.0) } else { vec2(320.0, 40.0) };
+        return loop 64 with s = vec4(0.0, 0.0, 0.0, 0.0) { let q = o + vec2(float(index() % 8), float(index() / 8)); s + (at(b, q) - at(a, q)) / 64.0 };
+    }
 }
 
 /// The light added over eight by eight pixels at each place (rgb), and its red over its green (w).

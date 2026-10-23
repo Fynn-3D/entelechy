@@ -1,8 +1,9 @@
 //! Light bounced between things (`kernels/radiance.ent`), laid over a renderer's picture `hdr`: the cache of the light the
-//! sun, the sky and the `lamps` leave on the proxies' surfaces, a level for each of the proxy's, `scale` times coarser, a `parts`th of it lit anew each frame and
-//! bounced again from itself (`bounce`); what it holds gathered through five cones every `every` pixels a side and laid over
-//! each pixel by distance (`strength`). For a renderer
-//! that takes no bounced light in itself (lit, ray traced); its look as lit's (`Surround`, `Openness`).
+//! sun, the sky and the `lamps` leave on the proxies' surfaces, a level for each of the proxy's, `scale` times coarser, a
+//! `parts`th of it lit anew each frame and bounced again from itself (`bounce`); what it holds gathered through five cones
+//! every `every` pixels a side and laid over each pixel by distance (`strength`); and a cone along each mirror direction,
+//! as wide as the surface is rough, the things it meets in place of the renderer's `reflection` from all round. For a
+//! renderer that takes no bounced light in itself (lit, ray traced); its look as lit's (`Surround`, `Openness`).
 use "../kernels/";
 
 input hdr: Image;
@@ -11,6 +12,8 @@ input paint: Grid<Vec4>;
 input extra: Grid<Vec4>;
 input layers: Grid<Vec4>;
 input more: Grid<Vec4>;
+/// The renderer's reflection from all round, as it shows (lit's and ray traced's `reflection`).
+input reflection: Grid<Vec4 as f16>;
 input lens: Lenses;
 input sky: SkyLooks;
 input proxy: Volume<Vec4>;
@@ -44,11 +47,14 @@ node cache: render.radiance@1 { previous <~ cache.result from none.result; previ
     sky <- sky; lamps <- lamps; turn <- turn.result; size <- cells.result; parts = parts; bounce = bounce; spread = spread; reach = reach;
     ground = ground; ground_light = ground_light; sky_light = sky_light; open_reach = open_reach; open_strength = open_strength; open_least = open_least;
     domain = vec3(value(size, 0), value(size, 1), value(size, 2)); }
-node gathered: render.bounce_gather@1 { surface <- surface; lens <- lens; radiance <- cache.result; rframe <- rframe.result; proxy <- proxy; frame <- frame;
+node gathered: render.bounce_gather@1 { surface <- surface; paint <- paint; lens <- lens; radiance <- cache.result; rframe <- rframe.result; proxy <- proxy; frame <- frame;
     every = every; spread = spread; reach = reach; steps = steps; domain = ceil(size(surface) / every); }
-node bounced: render.bounce@1 { hdr <- hdr; gathered <- gathered.result; surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; lens <- lens; sky <- sky;
+node bounced: render.bounce@1 { hdr <- hdr; gathered <- gathered.result; mirror <- gathered.mirror; reflection <- reflection; surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; lens <- lens; sky <- sky;
     every = every; strength = strength; domain = size(hdr); }
 
 output result <- bounced.result;
+/// The reflection from all round as it now shows (the cache's things in place of the renderer's where they shut it), for
+/// `render.reflections`.
+output reflection <- bounced.reflected;
 output cache <- cache.result;
 output cache_frame <- rframe.result;

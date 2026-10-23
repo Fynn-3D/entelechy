@@ -188,10 +188,12 @@ kernel render.radiance@1 {
 
 /// The light bounced off the things round each pixel, gathered at a coarser grid (`domain = ceil(size(surface) / every)`): five
 /// cones about the normal of the surface a cell's middle pixel shows (one along it, four leaning out) gather what the cache
-/// holds (`radiance_cone`), the cosine's share each (rgb); its distance (w; the sky's for none).
+/// holds (`radiance_cone`), the cosine's share each (rgb), and its distance (w; the sky's for none); and `mirror`, one cone
+/// along its mirror direction, as wide as its roughness makes it (rgb), and how much of it the cache's things shut (w).
 kernel render.bounce_gather@1 {
     requires { field.read; field.write; }
     input surface: Grid<Vec4>;
+    input paint: Grid<Vec4>;
     input lens: Lenses;
     input radiance: Volume<Vec4>;
     input rframe: Proxies;
@@ -202,10 +204,11 @@ kernel render.bounce_gather@1 {
     param reach: Float = 30.0;
     param steps: Int = 10;
     output result: Image;
+    output mirror: Image;
     compute {
         let q = min(floor(coord() * float(every)) + float(every / 2), size(surface) - 1.0);
         let su = at(surface, q);
-        if su.w > no_hit() * 0.5 { return vec4(0.0, 0.0, 0.0, no_hit()); }
+        if su.w > no_hit() * 0.5 { return { result: vec4(0.0, 0.0, 0.0, no_hit()), mirror: vec4(0.0, 0.0, 0.0, 0.0) }; }
         let l = at(lens, 0);
         let dir = ray(l, q, size(surface));
         let n = su.xyz;
@@ -221,17 +224,24 @@ kernel render.bounce_gather@1 {
             let way = normalize(n + (t * cos(a) + b * sin(a)));
             g + radiance_cone(radiance, rv, proxy, pv, p, way, spread, start, reach, steps).xyz * 0.18
         };
-        return vec4(gathered.x, gathered.y, gathered.z, su.w);
+        let rough = at(paint, q).w;
+        let r = reflect(dir, n);
+        let seen = radiance_cone(radiance, rv, proxy, pv, p, r, 0.05 + rough * 0.9, start, reach, steps);
+        return { result: vec4(gathered.x, gathered.y, gathered.z, su.w), mirror: seen };
     }
 }
 
 /// The gathered bounce (`render.bounce_gather`, `every` pixels a cell) laid over a renderer's picture `hdr`: each pixel takes
 /// the four cells round it, each by how near and how alike in distance it is, times the surface's diffuse color, its baked
-/// occlusion and `strength`, through the air as the rest.
+/// occlusion and `strength`, through the air as the rest; and the things its mirror cone met (`mirror`) in place of the
+/// renderer's reflection from all round (`reflection`), as much as they shut it, by the standard share the surface
+/// reflects (`env_reflectance`). `reflection` comes out as it now shows, for reflections on the screen to take the place of.
 kernel render.bounce@1 {
     requires { field.read; field.write; }
     input hdr: Image;
     input gathered: Image;
+    input mirror: Image;
+    input reflection: Grid<Vec4 as f16>;
     input surface: Grid<Vec4>;
     input paint: Grid<Vec4>;
     input extra: Grid<Vec4>;
@@ -242,24 +252,28 @@ kernel render.bounce@1 {
     param every: Int = 2;
     param strength: Float = 1.0;
     output result: Image;
+    output reflected: Grid<Vec4 as f16>;
     compute {
         let q = coord();
         let picture = sample(hdr);
+        let before = sample(reflection);
         let su = sample(surface);
-        if su.w > no_hit() * 0.5 || strength <= 0.0 { return picture; }
+        if su.w > no_hit() * 0.5 || strength <= 0.0 { return { result: picture, reflected: before }; }
         let g = (q + 0.5) / float(every) - 0.5;
         let base = floor(g);
         let f = g - base;
         let top = size(gathered) - 1.0;
-        let sum = loop 4 with acc = vec4(0.0, 0.0, 0.0, 0.0) {
+        let sum = loop 4 with acc = [vec4(0.0, 0.0, 0.0, 0.0), vec4(0.0, 0.0, 0.0, 0.0)] {
             let o = vec2(float(index() % 2), float(index() / 2));
-            let c = at(gathered, clamp(base + o, vec2(0.0, 0.0), top));
+            let cell = clamp(base + o, vec2(0.0, 0.0), top);
+            let c = at(gathered, cell);
             let near = (if o.x > 0.5 { f.x } else { 1.0 - f.x }) * (if o.y > 0.5 { f.y } else { 1.0 - f.y });
             let alike = exp(0.0 - abs(c.w - su.w) / (su.w * 0.03 + 0.05));
             let w = near * alike + 0.0001;
-            vec4(acc.xyz + c.xyz * w, acc.w + w)
+            [vec4(acc[0].xyz + c.xyz * w, acc[0].w + w), acc[1] + at(mirror, cell) * w]
         };
-        let light = sum.xyz / sum.w;
+        let light = sum[0].xyz / sum[0].w;
+        let met = sum[1] / sum[0].w;
         let ex = sample(extra);
         let m = pbr_of(sample(paint), ex, sample(layers), sample(more));
         let added = m.albedo * ((1.0 - m.metal) * (1.0 - m.transmission)) * light * baked_occlusion(ex) * strength;
@@ -267,6 +281,10 @@ kernel render.bounce@1 {
         let dir = ray(l, q, domain());
         let s = at(sky, 0);
         let shown = aerial(added, dir, su.w, s) - aerial(vec3(0.0, 0.0, 0.0), dir, su.w, s);
-        return vec4(picture.xyz + shown, picture.w);
+        let mine = env_reflectance(m, su.xyz, vec3(0.0, 0.0, 0.0) - dir);
+        let mirrored = aerial(met.xyz * mine, dir, su.w, s) - aerial(vec3(0.0, 0.0, 0.0), dir, su.w, s);
+        let swap = (mirrored - before.xyz) * (saturate(met.w) * strength);
+        let after = before.xyz + swap;
+        return { result: vec4(picture.xyz + shown + swap, picture.w), reflected: vec4(after.x, after.y, after.z, 0.0) };
     }
 }

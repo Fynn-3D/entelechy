@@ -407,7 +407,11 @@ What every renderer shares, in this order:
   in the first level as wide as the cone, shut by how near the proxy's
   things are against its width, what the cache holds laid behind what is
   nearer), and `render.bounce` lays it over each pixel by distance, times
-  its diffuse color and baked occlusion.
+  its diffuse color and baked occlusion. One more cone along each mirror
+  direction, as wide as the surface is rough, takes the things it meets in
+  place of the renderer's `reflection` from all round, as much as they
+  shut it (a metal in a room reflects the room, not the sky), and the
+  reflection as it now shows goes on to `render.reflections`.
 - **Reflections on the screen** (`render.reflections`). On a surface
   smoother than `below`, the mirror ray is walked across the picture
   against the G-buffer's depth (`screen_march`); where it meets a surface
