@@ -1,0 +1,21 @@
+scene shadow.esn
+
+# The first frame draws the pages its pixels read; the ground is dark in a
+# ball's shadow and lit beside it toward the sun.
+window 480 320
+frame 0.0
+expect seen.result[2] = 55
+expect seen.result[0] = 0 0.05
+expect seen.result[1] = 1 0.05
+
+# Nothing moved: no page is drawn again.
+frame 0.1
+expect seen.result[2] = 0
+
+# The lens three meters across: only the pages it now reads that were not
+# held are drawn, and the shadow is where it was.
+param shift -3.0
+frame 0.2
+expect seen.result[2] = 13
+expect seen.result[0] = 0 0.05
+expect seen.result[1] = 1 0.05

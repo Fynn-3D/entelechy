@@ -36,10 +36,28 @@ fn cluster_box_distance(eye: Vec3, b: Vec4) -> Float {
     return length(max(max(b.xyz - eye, eye - (b.xyz + b.w)), vec3(0.0, 0.0, 0.0)));
 }
 
-/// How many pixels a width `w` at box `b` spans at most, seen from `eye` (both in a thing's own meters, so its size cancels),
-/// `px` pixels a meter a meter away (the lens's focal length times the picture's height).
-fn cluster_error_px(w: Float, eye: Vec3, b: Vec4, px: Float) -> Float {
-    return w * px / max(cluster_box_distance(eye, b), 0.000001);
+/// How a thing is seen, in its own meters: through a lens from `eye`, `px` pixels a meter a meter away (the lens's focal
+/// length times the picture's height); or flat (a shadow map's view down the sunlight), `px` texels a meter anywhere,
+/// looking `away`.
+struct ClusterView { eye: Vec3; px: Float; flat: Bool; away: Vec3; }
+
+/// Thing `it` seen through lens `l` over a picture `extent` large.
+fn cluster_lens_view(it: FieldInst, l: Lens, extent: Vec2) -> ClusterView {
+    return ClusterView { eye: field_local(it, l.eye), px: l.focal * extent.y, flat: false, away: vec3(0.0, 0.0, 0.0) };
+}
+
+/// Thing `it` seen flat down `toward` reversed, `texel` meters a texel.
+fn cluster_flat_view(it: FieldInst, toward: Vec3, texel: Float) -> ClusterView {
+    let c = cos(it.turn);
+    let s = sin(it.turn);
+    let d = vec3(0.0, 0.0, 0.0) - toward;
+    return ClusterView { eye: vec3(0.0, 0.0, 0.0), px: it.size / max(texel, 0.000001), flat: true, away: vec3(c * d.x + s * d.z, d.y, c * d.z - s * d.x) };
+}
+
+/// How many pixels a width `w` at box `b` spans at most as `view` sees it (both in a thing's own meters, so through a lens
+/// its size cancels).
+fn cluster_error_px(w: Float, view: ClusterView, b: Vec4) -> Float {
+    return if view.flat { w * view.px } else { w * view.px / max(cluster_box_distance(view.eye, b), 0.000001) };
 }
 
 /// Brick `b` of level `level` of mesh `m`: its lower corner and side.
@@ -64,16 +82,23 @@ fn cluster_brick_error(m: ClusterMesh, errors: Rows<Float>, b: IVec3, level: Int
 
 /// Whether brick `b` of level `level` (none past the top) is drawn at that level or coarser: it holds something, and how far
 /// it lies from the mesh spans no more than `error` pixels.
-fn cluster_brick_coarse(m: ClusterMesh, errors: Rows<Float>, b: IVec3, level: Int, eye: Vec3, px: Float, error: Float) -> Bool {
+fn cluster_brick_coarse(m: ClusterMesh, errors: Rows<Float>, b: IVec3, level: Int, view: ClusterView, error: Float) -> Bool {
     if level >= mesh_cluster_levels() { return false; }
     let e = cluster_brick_error(m, errors, b, level);
-    return e >= 0.0 && cluster_error_px(e, eye, cluster_brick_box(m, b, level), px) <= error;
+    return e >= 0.0 && cluster_error_px(e, view, cluster_brick_box(m, b, level)) <= error;
 }
 
 /// Whether brick `b` of level `level` is drawn at that level: it is fine enough (level 0 always is), and its parent is not.
-fn cluster_brick_drawn(m: ClusterMesh, errors: Rows<Float>, b: IVec3, level: Int, eye: Vec3, px: Float, error: Float) -> Bool {
-    let own = level == 0 || cluster_brick_coarse(m, errors, b, level, eye, px, error);
-    return own && !cluster_brick_coarse(m, errors, b >> 1, level + 1, eye, px, error);
+fn cluster_brick_drawn(m: ClusterMesh, errors: Rows<Float>, b: IVec3, level: Int, view: ClusterView, error: Float) -> Bool {
+    let own = level == 0 || cluster_brick_coarse(m, errors, b, level, view, error);
+    return own && !cluster_brick_coarse(m, errors, b >> 1, level + 1, view, error);
+}
+
+/// Whether brick `b` of level `level` is surely drawn at that level: as `cluster_brick_drawn` judges it a thousandth of `error`
+/// either way, so another Kernel's judging the same brick a last bit apart cannot leave a face to a cluster not drawn.
+fn cluster_brick_surely_drawn(m: ClusterMesh, errors: Rows<Float>, b: IVec3, level: Int, view: ClusterView, error: Float) -> Bool {
+    let own = level == 0 || cluster_brick_coarse(m, errors, b, level, view, error * 0.999);
+    return own && !cluster_brick_coarse(m, errors, b >> 1, level + 1, view, error * 1.001);
 }
 
 /// The brick cluster `cl` was cut from.
@@ -83,18 +108,38 @@ fn cluster_brick_at(m: ClusterMesh, cl: Cluster) -> IVec3 {
 }
 
 /// The level a corner at `q` (mesh `m`'s own meters) is drawn at, from level `from` up: the coarsest drawn where it lies or
-/// within `reach` of that level's cells past it (away from `eye`), so that a coarser cluster's face reaching over the
+/// within `reach` of that level's cells past it (away from the view), so that a coarser cluster's face reaching over the
 /// corner's finer place meets the finer faces round it at its own points.
-fn cluster_level_at(m: ClusterMesh, errors: Rows<Float>, q: Vec3, eye: Vec3, px: Float, error: Float, from: Int, reach: Float) -> Int {
-    let away = normalize(q - eye + vec3(0.0, 0.000001, 0.0));
+fn cluster_level_at(m: ClusterMesh, errors: Rows<Float>, q: Vec3, view: ClusterView, error: Float, from: Int, reach: Float) -> Int {
+    let away = if view.flat { view.away } else { normalize(q - view.eye + vec3(0.0, 0.000001, 0.0)) };
     return loop mesh_cluster_levels() - 1 - from with k = from {
         let j = k + 1;
         let cell = m.cell * exp2(float(j));
-        let here = cluster_brick_coarse(m, errors, cluster_brick_of(m, q, j), j, eye, px, error);
-        let past = cluster_brick_coarse(m, errors, cluster_brick_of(m, q + away * cell * reach, j), j, eye, px, error);
+        let here = cluster_brick_coarse(m, errors, cluster_brick_of(m, q, j), j, view, error);
+        let past = cluster_brick_coarse(m, errors, cluster_brick_of(m, q + away * cell * reach, j), j, view, error);
         if !(here || past) { break k; }
         j
     };
+}
+
+/// Whether face `f` of drawn cluster `cl` is drawn from it (a face is in the cluster of each brick a corner of it lies in): no
+/// corner's brick before the cluster's own, in the face's order, is surely drawn at its level; where one is only nearly so,
+/// both draw it, rather than neither.
+fn cluster_face_owned(m: ClusterMesh, errors: Rows<Float>, points: Rows<MeshPoint>, f: Face, cl: Cluster, view: ClusterView, error: Float) -> Bool {
+    let mine = cluster_brick_at(m, cl);
+    let ba = cluster_brick_of(m, at(points, f.a).position, cl.level);
+    let bb = cluster_brick_of(m, at(points, f.b).position, cl.level);
+    if ba == mine { return true; }
+    if cluster_brick_surely_drawn(m, errors, ba, cl.level, view, error) { return false; }
+    if bb == mine { return true; }
+    return !cluster_brick_surely_drawn(m, errors, bb, cl.level, view, error);
+}
+
+/// The point corner `v` of a face of cluster `cl` is drawn at: taken up the levels (`up`) to the one drawn where it lies, when
+/// that is coarser than the cluster's.
+fn cluster_corner_point(m: ClusterMesh, errors: Rows<Float>, points: Rows<MeshPoint>, up: Rows<Int>, v: Int, cl: Cluster, view: ClusterView, error: Float, reach: Float) -> Int {
+    let level = cluster_level_at(m, errors, at(points, v).position, view, error, cl.level, reach);
+    return loop level - cl.level with u = v { at(up, u) };
 }
 
 /// Whether a sphere (in the world) is in the picture (`aspect` its width over its height).
@@ -220,7 +265,7 @@ kernel render.cluster_cull@1 {
         let m = at(meshes, it.shape);
         let l = at(lens, 0);
         let ext = size(canvas);
-        if !cluster_brick_drawn(m, errors, cluster_brick_at(m, cl), cl.level, field_local(it, l.eye), l.focal * ext.y, error) { return 0; }
+        if !cluster_brick_drawn(m, errors, cluster_brick_at(m, cl), cl.level, cluster_lens_view(it, l, ext), error) { return 0; }
         let c = cluster_placed(it, cl.sphere.xyz);
         let r = cl.sphere.w * it.size;
         return int(cluster_sphere_seen(l, c, r, ext.x / max(ext.y, 1.0)) && !cluster_sphere_hidden(hzb, l, c, r, ext));
@@ -269,13 +314,7 @@ kernel render.cluster_shown@1 {
         let l = at(lens, 0);
         let ext = size(canvas);
         let m = at(meshes, it.shape);
-        let eye = field_local(it, l.eye);
-        let px = l.focal * ext.y;
-        let ba = cluster_brick_of(m, at(points, f.a).position, cl.level);
-        let bb = cluster_brick_of(m, at(points, f.b).position, cl.level);
-        let owner = if cluster_brick_drawn(m, errors, ba, cl.level, eye, px, error) { ba }
-            else if cluster_brick_drawn(m, errors, bb, cl.level, eye, px, error) { bb } else { cluster_brick_of(m, at(points, f.c).position, cl.level) };
-        return int(owner == cluster_brick_at(m, cl));
+        return int(cluster_face_owned(m, errors, points, f, cl, cluster_lens_view(it, l, ext), error));
     }
 }
 
@@ -317,9 +356,7 @@ kernel render.cluster_corners@1 {
         let l = at(lens, 0);
         let ext = size(canvas);
         let m = at(meshes, it.shape);
-        let eye = field_local(it, l.eye);
-        let level = cluster_level_at(m, errors, at(points, v).position, eye, l.focal * ext.y, error, cl.level, reach);
-        let w = loop level - cl.level with u = v { at(up, u) };
+        let w = cluster_corner_point(m, errors, points, up, v, cl, cluster_lens_view(it, l, ext), error, reach);
         let p = at(points, w);
         return Corner { clip: lens_clip(l, ext, cluster_placed(it, p.position), near, far), normal: cluster_turned(it, p.normal), uv: p.uv };
     }

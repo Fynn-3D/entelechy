@@ -104,6 +104,14 @@ use "render.entpkg";
   meets. Kernels: `render.reflections@1`.
 - `kernels/raytraced.ent` — Ray traced: shadow and reflection traced in
   one pass. Kernels: `render.raytraced@1`.
+- `kernels/shadow.ent` — The sun's shadow as a virtual shadow map: a
+  clipmap of levels round the eye, kept where they lie on the world's
+  lattice, cut into pages drawn from clustered meshes only where the
+  pixels read them and not held yet. Kernels: `render.shadow_levels@1`,
+  `render.shadow_none@1`, `render.shadow_unheld@1`, `render.shadow_marks@1`,
+  `render.shadow_pages@1`, `render.shadow_clear@1`, `render.shadow_pick@1`,
+  `render.shadow_cull@1`, `render.shadow_kept@1`, `render.shadow_faces@1`,
+  `render.shadow_draw@1`, `render.shadow_sun@1`.
 - `kernels/sky.ent` — The sky.
 - `kernels/specular_aa.ent` — Gloss widened where normals turn within a
   pixel (specular antialiasing). Kernels: `render.specular_aa@1`.
@@ -162,6 +170,9 @@ use "render.entpkg";
   drawn anew each frame and averaged while the lens rests (up to
   `settle_frames`, then it rests too); its `scatter` for light under the
   skin.
+- `graphs/shadow.esn` — The sun's shadow from a virtual shadow map
+  (`kernels/shadow.ent`) multiplied into the G-buffer's sun visibility,
+  for a scene of clustered meshes.
 - `graphs/subsurface.esn` — Light under the skin: a renderer's `scatter`
   spread across then down and laid back over its `hdr`.
 - `graphs/super_resolution.esn` — Temporal super-resolution
@@ -176,7 +187,7 @@ use "render.entpkg";
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`bounce.replay`, `cluster.replay`, `field.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `reflection.replay`,
+`bounce.replay`, `cluster.replay`, `field.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `reflection.replay`, `shadow.replay`,
 `sky.replay`, `temporal.replay`.
 Every Kernel of the package is reached by one of them.
 
@@ -277,6 +288,22 @@ deck (the deck `graphs/volumetrics.esn` gives back as `deck`), and
 `render.specular_aa` widens each pixel's roughness by how much its normals
 turn within it (Kaplanyan and Hoffman's), so a far glossy surface does not
 flash from pixel to pixel.
+
+For a scene of clustered meshes, `graphs/shadow.esn` takes the
+cascades' place with a virtual shadow map: `levels` levels round the eye,
+each twice as wide as the one before (the first `nearest` meters), `size`
+texels a side, kept where they lie on the world's lattice (texel (u, v)
+at (u mod size, v mod size)), so a level moved on keeps all it still
+holds. Each frame `render.shadow_marks` marks, for every few pixels, the
+pages within `reach` texels of its point in the finest level whose texel
+is as large as the pixel (`sharpness` times); `render.shadow_pages` finds
+each marked page its slot does not hold, or holds under another sun, and
+only those are cleared and drawn: the things placed over them, each at
+the level of its clusters a texel asks for (`cluster_flat_view`), each
+face cut into tiles of 16 by 16 texels. At rest none is. A texel keeps the
+height toward the sun of the nearest thing over it, and
+`render.shadow_sun` multiplies the shadow into the sun's visibility, as
+soft as the sun's disc makes it from its caster's height.
 
 ### After a renderer
 
