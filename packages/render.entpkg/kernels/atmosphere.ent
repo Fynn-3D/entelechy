@@ -79,7 +79,7 @@ fn air_spread_at(spread: Image, a: Air, h: Float, mu: Float) -> Vec3 {
 /// toward `sun` (rgb, linear): sunlight scattered once along the view by
 /// the air and haze, each point's sunlight what the air above left of it,
 /// and scattered more than once (`spread`, the table). Under the horizon,
-/// the air between the eye and the ground.
+/// the air between the eye and the ground, and the sunlit ground beyond it.
 fn air_radiance(a: Air, spread: Image, eye_h: Float, dir: Vec3, sun: Vec3) -> Vec3 {
     let p = vec3(0.0, a.ground + max(eye_h, 1.0), 0.0);
     let ground_t = air_meet_ground(p, dir, a.ground);
@@ -102,8 +102,16 @@ fn air_radiance(a: Air, spread: Image, eye_h: Float, dir: Vec3, sun: Vec3) -> Ve
         let again = (ray + vec3(mie.x, mie.x, mie.x)) * air_spread_at(spread, a, h, dot(up, sun));
         AirWalk { light: st.light + (once + again) * seen * dt, depth: st.depth + ext * dt }
     };
-    return walked.light * a.sun;
+    // Under the horizon the ground ends the view: sunlit, seen through the air.
+    let ground = if ground_t > 0.0 {
+        let gp = p + dir * ground_t;
+        let through = vec3(exp(0.0 - walked.depth.x), exp(0.0 - walked.depth.y), exp(0.0 - walked.depth.z));
+        air_transmittance(a, gp, sun) * through * (air_ground_albedo() * max(dot(normalize(gp), sun), 0.0) / 3.14159265)
+    } else { vec3(0.0, 0.0, 0.0) };
+    return (walked.light + ground) * a.sun;
 }
+/// How much sunlight the ground far off sends back.
+fn air_ground_albedo() -> Float { return 0.3; }
 /// A view walk through the air: the light gathered, and the optical depth so far.
 struct AirWalk { light: Vec3; depth: Vec3; }
 
