@@ -98,7 +98,7 @@ kernel render.fog_march@1 {
             let dens = fog_density(p.y, density, base, falloff);
             if dens * dt < 0.000001 { r } else {
                 let mapped = sun_view_lit(atlas, views, p);
-                let blocked = if mapped >= 0.0 { mapped } else { rough_shadow(proxy, land, frame, p, sun, proxy_cell(frame, p), 300.0, sun_steps) };
+                let blocked = if mapped >= 0.0 { mapped } else { rough_shadow(proxy, land, frame, p, sun, proxy_cell_at(frame, p), 300.0, sun_steps) };
                 let sun_seen = blocked * cloud_shadow(cd, p, sun, cloud_steps);
                 let lamps_here = loop 128 with w = LampWalk { left: bits, light: vec3(0.0, 0.0, 0.0) } until lamp_first(w.left) < 0 {
                     let k = lamp_first(w.left);

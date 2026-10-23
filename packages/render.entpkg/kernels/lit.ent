@@ -96,7 +96,7 @@ kernel render.lit@1 {
         // cell in) the coarse scene says nothing of the sky seen through it:
         // the baked occlusion does.
         let at_p = l.eye + dir * su.w + n * 0.05;
-        let deep = saturate((0.0 - proxy_at(proxy, frame, at_p, 1.0).x) / proxy_cell(frame, at_p) - 0.5);
+        let deep = saturate((0.0 - proxy_at(proxy, frame, at_p, 1.0).x) / proxy_cell_at(frame, at_p) - 0.5);
         // A translucent thing (a leaf) lets the sky through itself: those round it
         // shut out no more than its subsurface share of `inside_sky` lets in.
         let open = max(mix(proxy_open(proxy, frame, at_p, n), inside_sky, deep), inside_sky * m.subsurface);

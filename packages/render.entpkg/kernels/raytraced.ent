@@ -28,7 +28,7 @@ fn raytraced_shade(m: Pbr, n: Vec3, v: Vec3, s: SkyLook, visible: Float, reflect
 /// by the light all round (its own shadow not traced), through the air; the sky, or looking down the ground's light, where it meets
 /// nothing.
 fn raytraced_seen(proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, o: Vec3, dir: Vec3, far: Float, s: SkyLook) -> Vec3 {
-    let hit = rough_trace(proxy, land, frame, o, dir, proxy_cell(frame, o) * 0.5, far, 48);
+    let hit = rough_trace(proxy, land, frame, o, dir, proxy_cell_at(frame, o) * 0.5, far, 48);
     if hit.y < 0.0 { return seen_along(dir, s); }
     let p = o + dir * hit.x;
     let n = rough_normal(proxy, land, frame, p, hit.y);

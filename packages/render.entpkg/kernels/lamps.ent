@@ -134,7 +134,7 @@ fn lamp_shadow(m: Lamp, proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, 
     let d = m.at - p;
     let dist = length(d);
     let dir = d / max(dist, 0.0001);
-    let c = proxy_cell(frame, p);
+    let c = proxy_cell_at(frame, p);
     let o = p + n * (c * 0.6);
     let start = rough_leave(proxy, frame, o, dir, c * 0.5, c * 3.0);
     let far = dist - m.size - c;
@@ -151,7 +151,7 @@ fn lamp_shadow(m: Lamp, proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, 
 /// `steps` steps toward it, soft (1 all, 0 none): for points the coarse
 /// scene stands for (light in the air, light bounced off the proxies).
 fn lamp_rough_shadow(m: Lamp, proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, x: Vec3, steps: Int) -> Float {
-    let c = proxy_cell(frame, x);
+    let c = proxy_cell_at(frame, x);
     let d = m.at - x;
     let dist = length(d);
     let dir = d / max(dist, 0.0001);
@@ -174,7 +174,7 @@ fn lamps_on_rough(lamps: Lamps, albedo: Vec3, p: Vec3, n: Vec3, proxy: Volume<Ve
         let d = m.at - p;
         let facing = dot(n, d);
         if m.reach <= 0.0 || facing <= 0.0 || dot(d, d) > m.reach * m.reach { sum } else {
-            let cut = if m.shadow != 0 && steps > 0 { lamp_rough_shadow(m, proxy, land, frame, p + n * (proxy_cell(frame, p) * 0.6), steps) } else { 1.0 };
+            let cut = if m.shadow != 0 && steps > 0 { lamp_rough_shadow(m, proxy, land, frame, p + n * (proxy_cell_at(frame, p) * 0.6), steps) } else { 1.0 };
             sum + lamp_irradiance(m, p) * (facing / length(d) * cut)
         }
     };

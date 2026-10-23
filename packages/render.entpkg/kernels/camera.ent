@@ -221,7 +221,7 @@ fn proxy_depth(frame: Proxies, k: Int) -> Float {
     return loop k with z = 0.0 { z + at(frame, index()).cells.z };
 }
 /// The size of the proxies' cells at `p`: the finest level's holding it, the coarsest's past them all.
-fn proxy_cell(frame: Proxies, p: Vec3) -> Float {
+fn proxy_cell_at(frame: Proxies, p: Vec3) -> Float {
     let k = proxy_level(frame, p).x;
     return at(frame, if k >= 0.0 { int(k) } else { count(frame) - 1 }).cell;
 }
@@ -265,7 +265,7 @@ fn rough_normal(proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, p: Vec3,
         let e = at(frame, 0).land_cell * 2.0;
         return normalize(vec3(land_at(land, frame, p.x - e, p.z) - land_at(land, frame, p.x + e, p.z), 2.0 * e, land_at(land, frame, p.x, p.z - e) - land_at(land, frame, p.x, p.z + e)));
     }
-    let e = proxy_cell(frame, p);
+    let e = proxy_cell_at(frame, p);
     return normalize(vec3(proxy_at(proxy, frame, p + vec3(e, 0.0, 0.0), 4.0).x - proxy_at(proxy, frame, p - vec3(e, 0.0, 0.0), 4.0).x,
         proxy_at(proxy, frame, p + vec3(0.0, e, 0.0), 4.0).x - proxy_at(proxy, frame, p - vec3(0.0, e, 0.0), 4.0).x,
         proxy_at(proxy, frame, p + vec3(0.0, 0.0, e), 4.0).x - proxy_at(proxy, frame, p - vec3(0.0, 0.0, e), 4.0).x) + vec3(0.0, 0.0001, 0.0));

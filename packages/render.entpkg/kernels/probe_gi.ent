@@ -334,7 +334,7 @@ kernel render.probes_gather_blur@1 {
 /// it (the lamps' shadows walked in `lamp_steps` steps, 0 unshadowed) plus the probe light there; meeting nothing, up the sky, down the
 /// probe light in that direction (gathered at `p`).
 fn rough_seen(proxy: Volume<Vec4>, land: Grid<Float>, probes: Volume<Vec4>, lamps: Lamps, frame: Proxies, spacing: Float, o: Vec3, p: Vec3, n: Vec3, d: Vec3, far: Float, s: SkyLook, lamp_steps: Int) -> Vec3 {
-    let start = rough_leave(proxy, frame, o, d, 0.02, proxy_cell(frame, o) * 4.0);
+    let start = rough_leave(proxy, frame, o, d, 0.02, proxy_cell_at(frame, o) * 4.0);
     let tr = rough_trace(proxy, land, frame, o, d, start, far, 24);
     if tr.y >= 0.0 {
         let hp = o + d * tr.x;
