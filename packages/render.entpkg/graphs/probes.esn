@@ -37,9 +37,9 @@ param style: Int = 0;
 
 node blank: Volume<Vec4> { domain = vec3(nx * 6, ny, nz); }
 // The probes' signatures, and those of their last gathering: where the scene changed, light is gathered again.
-node sign: render.probes_sign@1 { proxy <- proxy; land <- land; frame <- frame; sky <- sky; spacing = spacing; domain = vec3(nx, ny, nz); }
+node sign: render.probes_sign@1 { proxy <- proxy; land <- land; frame <- frame; sky <- sky; lamps <- lamps; spacing = spacing; domain = vec3(nx, ny, nz); }
 node seen: render.probes_seen@1 { previous <~ seen.result from sign.result; sign <- sign.result; surface <- surface; }
-node light: render.probes_gather@1 { previous <~ light.result from blank.result; surface <- surface; sign <- sign.result; seen <~ seen.result from sign.result; proxy <- proxy; land <- land; frame <- frame; sky <- sky;
+node light: render.probes_gather@1 { previous <~ light.result from blank.result; surface <- surface; sign <- sign.result; seen <~ seen.result from sign.result; proxy <- proxy; land <- land; frame <- frame; sky <- sky; lamps <- lamps;
     spacing = spacing; rays = rays; most = most; domain = vec3(nx * 6, ny, nz); }
 node beyond: render.probes_behind@1 { more <- more; behind_at <- behind_at; behind_dir <- behind_dir; behind_paint <- behind_paint; behind_normal <- behind_normal;
     probes <- light.result; frame <- frame; sky <- sky; spacing = spacing; domain = size(more); }
@@ -52,13 +52,13 @@ node lamped: render.lamps_light@1 { surface <- surface; paint <- paint; extra <-
 node lit: render.probes_lit@1 { surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; probes <- light.result; frame <- frame; sky <- sky; lens <- lens;
     lamped <- lamped.result; spacing = spacing; domain = size(surface); }
 // Each pixel's diffuse light: traced on the screen, the probes where a ray finds nothing; denoised.
-node gather: render.probes_screen_gather@1 { surface <- surface; lit <- lit.result; probes <- light.result; proxy <- proxy; land <- land; frame <- frame; sky <- sky; lens <- lens; spacing = spacing; rays = screen_rays; domain = ceil(size(surface) / gather_every); }
+node gather: render.probes_screen_gather@1 { surface <- surface; lit <- lit.result; probes <- light.result; proxy <- proxy; land <- land; frame <- frame; sky <- sky; lens <- lens; lamps <- lamps; spacing = spacing; rays = screen_rays; domain = ceil(size(surface) / gather_every); }
 node gathered: render.probes_gather_blur@1 { gathered <- gather.result; surface <- surface; domain = size(surface); }
 // ... gathered frame by frame (the last frame's moved to where it is now).
 node now_lens: render.same_lens@1 { lens <- lens; domain = 1; }
 node blank_kept: Image { domain = vec2(1, 1); }
 node kept: render.probes_gather_keep@1 { gathered <- gathered.result; surface <- surface; previous <~ kept.result from blank_kept.result; lens <- lens; was_lens <~ now_lens.result from now_lens.result; domain = size(surface); }
 node shade: render.probes_shade@1 { surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; beyond <- beyond.result; through <- through; lit <- lit.result; gathered <- kept.result; proxy <- proxy; land <- land; probes <- light.result; frame <- frame; sky <- sky; lens <- lens;
-    lamped <- lamped.result; spacing = spacing; mirror_below = mirror_below; style = style; domain = size(surface); }
+    lamps <- lamps; lamped <- lamped.result; spacing = spacing; mirror_below = mirror_below; style = style; domain = size(surface); }
 
 output hdr <- shade.result;

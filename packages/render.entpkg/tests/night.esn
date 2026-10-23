@@ -1,9 +1,10 @@
 // The stand at night through the render package's lamps, mirror, air,
 // metered exposure and glow: a spotlight aimed at the gray ball and a red
-// point light by the gold row, each shadowed, added to the daylight
-// renderer's picture; the floor a mirror, its reflection drawn through the
-// lens reflected in it; height fog the lamps light, and clouds over it;
-// the exposure metered from the picture; glow grown from six levels.
+// point light by the gold row, each shadowed, lit by the probes renderer
+// (shown, reflected, bounced); the floor a mirror, its reflection drawn
+// through the lens reflected in it, lit by daylight and the lamps after;
+// height fog the lamps light, and clouds over it; the exposure metered
+// from the picture; glow grown from six levels.
 use "../kernels/";
 
 node stand: graph "stand_scene.esn" { }
@@ -31,16 +32,19 @@ node marks: kernel {
     compute { let s = sample(surface); return vec4(0.0, 0.0, 0.0, if s.y > 0.99 && s.w < 50.0 { 1.0 } else { 0.0 }); }
 }
 
-node lit: render.daylight@1 { surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
-    sky <- night.result; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; domain = size(surface); }
-node lamped: graph "../graphs/lamps.esn" { hdr <- lit.result; lens <- stand.lens; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
-    proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; lamps <- lamps.result; }
+// The probes renderer takes the lamps in: shown, reflected and bounced.
+node lit: graph "../graphs/probes.esn" { lens <- stand.lens; sky <- night.result; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
+    behind_at <- stand.behind_at; behind_dir <- stand.behind_dir; behind_paint <- stand.behind_paint; behind_normal <- stand.behind_normal; through <- stand.through;
+    proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; lamps <- lamps.result; nx = 21; ny = 6; nz = 12; spacing = 0.5; }
 
 node mirror_lens: render.mirror_lens@1 { lens <- stand.lens; level = 0.0; domain = 1; }
 node mg: stand.gbuffer@1 { lens <- mirror_lens.result; sky <- night.result; mirror = 1; domain = ceil(window() / 2); }
-node mirror_lit: render.daylight@1 { surface <- mg.surface; paint <- mg.paint; extra <- mg.extra; layers <- mg.layers; more <- mg.more;
+// The mirror pass by daylight, the lamps added after.
+node mirror_day: render.daylight@1 { surface <- mg.surface; paint <- mg.paint; extra <- mg.extra; layers <- mg.layers; more <- mg.more;
     sky <- night.result; lens <- mirror_lens.result; proxy <- stand.proxy; frame <- stand.frame; domain = size(surface); }
-node mirrored: render.mirror_mix@1 { hdr <- lamped.hdr; mirror <- mirror_lit.result; surface <- stand.surface; paint <- stand.paint; more <- marks.result; lens <- stand.lens; domain = size(hdr); }
+node mirror_lit: graph "../graphs/lamps.esn" { hdr <- mirror_day.result; lens <- mirror_lens.result; surface <- mg.surface; paint <- mg.paint; extra <- mg.extra; layers <- mg.layers; more <- mg.more;
+    proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; lamps <- lamps.result; }
+node mirrored: render.mirror_mix@1 { hdr <- lit.hdr; mirror <- mirror_lit.hdr; surface <- stand.surface; paint <- stand.paint; more <- marks.result; lens <- stand.lens; domain = size(hdr); }
 
 node aired: graph "../graphs/air.esn" { hdr <- mirrored.result; lens <- stand.lens; sky <- night.result; surface <- stand.surface; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; lamps <- lamps.result;
     density = 0.05; falloff = 2.0; glow = vec3(0.002, 0.002, 0.002); low = 40.0; high = 70.0; cover = 0.5; scale = 60.0; below = vec3(0.03, 0.02, 0.01); }

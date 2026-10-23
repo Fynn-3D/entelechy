@@ -3,21 +3,22 @@ window 320 180
 
 # The gray ball under the spotlight, the floor in its pool of light, the
 # red lamp's glow between the rows, the glowing ball's glow, the floor
-# mirroring the balls under fog, the clouds overhead.
+# mirroring the balls (and the red lamp's light bounced) under fog, the
+# clouds overhead.
 frame 0.0
-expect 45 115 = 0.926 0.899 0.856 0.02
-expect 20 100 = 0.230 0.249 0.320 0.02
-expect 155 75 = 0.999 0.648 0.341 0.02
-expect 255 117 = 0.947 0.759 0.303 0.02
-expect 80 150 = 0.107 0.102 0.144 0.02
-expect 160 5 = 0.152 0.109 0.148 0.02
+expect 45 115 = 0.926 0.899 0.855 0.02
+expect 20 100 = 0.215 0.227 0.287 0.02
+expect 155 75 = 1.000 0.696 0.454 0.02
+expect 255 117 = 0.970 0.823 0.407 0.02
+expect 80 150 = 0.156 0.102 0.131 0.02
+expect 160 5 = 0.148 0.096 0.125 0.02
 
 # The lens reflected in the floor; a tile of sky no lamp reaches, a tile
 # the spotlight does; the exposure metered (a factor, the time it was
 # set, the stops asked, the mean measured), held where the picture holds.
 expect mirror_lens.result[0].eye = 0 -3.915964 5.8612556 0.001
-expect lamped.tiles.result[0] = 0 0 0 0
-expect lamped.tiles.result[100] = 1 0 0 0
-expect exposed.meter.result[0].factor = 2.6256 0.02
+expect lit.lamp_tiles.result[0] = 0 0 0 0
+expect lit.lamp_tiles.result[100] = 1 0 0 0
+expect exposed.meter.result[0].factor = 2.624 0.02
 frame 0.1
 expect exposed.meter.result[0].set_at = 0.1 0.001

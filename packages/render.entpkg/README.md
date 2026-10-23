@@ -94,7 +94,8 @@ use "render.entpkg";
   (`finish.esn` works at the window's).
 - `graphs/lamps.esn` — The lamps added to a renderer's picture, for one
   that does not take them in itself.
-- `graphs/path_trace.esn` — The path tracer (`kernels/path_trace.ent`).
+- `graphs/path_trace.esn` — The path tracer (`kernels/path_trace.ent`),
+  the lamps shown and bounced.
 - `graphs/picture.esn` — The picture's raster.
 - `graphs/probes.esn` — The light-probe renderer (`kernels/probes.ent`),
   the lamps shown, reflected and bounced.
@@ -164,9 +165,12 @@ What every renderer shares, in this order:
   `render.lamps_light` lights each pixel by those alone (walking the
   tile's bits), with `lit_by`, a larger bulb widening the highlight, each
   lamp that casts shadows shadowed through the proxies and, within
-  `contact` meters, on the screen. The probes renderer takes that light
-  in: what it shows, reflects on the screen and gathers as bounced light.
-  Another renderer has it added after (`graphs/lamps.esn`).
+  `contact` meters, on the screen. The probes renderer and the path tracer
+  take that light in: what they show, reflect and gather on the screen;
+  off the screen, what a ray meets in the proxies is lit by every lamp
+  (`lamps_on_rough`), so lamps are bounced there too, and the probes
+  gather again where a lamp changes. Another renderer has the lamps added
+  after (`graphs/lamps.esn`).
 - **The mirror.** `render.mirror_lens` reflects the lens in a level plane;
   the scene draws its G-buffer again through it from the plane up
   (`mirror_start` says where a ray reaches the plane), a renderer lights

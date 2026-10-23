@@ -8,6 +8,7 @@
 use "random.entpkg";
 use "brdf.ent";
 use "camera.ent";
+use "lamps.ent";
 use "sky.ent";
 use "transmission.ent";
 
@@ -41,10 +42,10 @@ kernel render.path_count@1 {
 struct Path { light: Vec3; weight: Vec3; at_: Vec3; dir: Vec3; alive: Bool; from: Float; }
 
 /// The light seen from `p` (normal `n`) toward `d0`: the first `near` meters walked on the screen, and where they meet something,
-/// that pixel as the sun lights it (its diffuse color times its sun visibility) plus a little sky light; where they meet nothing,
-/// the proxies walked (leaving this surface's own coarse shape first, `rough_leave`), then bouncing diffusely up to `bounces`
-/// stretches. `h0` is the path's random number.
-fn incoming(surface: Grid<Vec4>, paint: Grid<Vec4>, extra: Grid<Vec4>, proxy: Volume<Vec4>, land: Grid<Float>, fr: Proxy, s: SkyLook, l: Lens, extent: Vec2,
+/// that pixel as the sun and the lamps light it (its diffuse color times its sun visibility, `lamped` its lamps' light) plus a little
+/// sky light; where they meet nothing, the proxies walked (leaving this surface's own coarse shape first, `rough_leave`), then bouncing
+/// diffusely up to `bounces` stretches, each place met lit by the sun and the lamps. `h0` is the path's random number.
+fn incoming(surface: Grid<Vec4>, paint: Grid<Vec4>, extra: Grid<Vec4>, lamped: Image, lamps: Lamps, proxy: Volume<Vec4>, land: Grid<Float>, fr: Proxy, s: SkyLook, l: Lens, extent: Vec2,
     p: Vec3, n: Vec3, d0: Vec3, h0: Int, near: Float, bounces: Int) -> Vec3 {
     let ss = screen_march(surface, l, extent, p + n * 0.01, d0, near, 10, 0.4, unit_of(hash_int(h0, 2)));
     if ss.z >= 0.0 {
@@ -52,7 +53,7 @@ fn incoming(surface: Grid<Vec4>, paint: Grid<Vec4>, extra: Grid<Vec4>, proxy: Vo
         let ex = at(extra, vec2(ss.x, ss.y));
         let a = at(paint, vec2(ss.x, ss.y)).xyz * (1.0 - ex.y);
         let lit = s.sun_color * max(dot(o.xyz, s.sun), 0.0) * ex.x / 3.14159 + s.horizon * 0.25 * saturate(o.y * 0.5 + 0.5);
-        return a * lit + a * ex.z;
+        return a * lit + a * ex.z + at(lamped, vec2(ss.x, ss.y)).xyz;
     }
     let path = loop 4 with st = Path { light: vec3(0.0, 0.0, 0.0), weight: vec3(1.0, 1.0, 1.0), at_: p + n * 0.06, dir: d0, alive: true, from: rough_leave(proxy, fr, p + n * 0.06, d0, 0.35, 1.5) } until !st.alive || index() >= bounces {
         let hit = rough_trace(proxy, land, fr, st.at_, st.dir, st.from, 80.0, 72);
@@ -66,7 +67,8 @@ fn incoming(surface: Grid<Vec4>, paint: Grid<Vec4>, extra: Grid<Vec4>, proxy: Vo
             let sun_in = if sl > 0.0 { s.sun_color * sl * rough_shadow(proxy, land, fr, hp + hn * 0.1, s.sun, 0.1, 40.0, 24) / 3.14159 } else { vec3(0.0, 0.0, 0.0) };
             let w = st.weight * ha;
             let hk = hash_int(h0, 10 + index());
-            Path { light: st.light + w * sun_in, weight: w, at_: hp + hn * 0.06, dir: cosine_dir(hn, unit_of(hk), unit_of(hash_int(hk, 1))), alive: true, from: 0.1 }
+            let lamps_in = lamps_on_rough(lamps, vec3(1.0, 1.0, 1.0), hp, hn, proxy, land, fr, 4);
+            Path { light: st.light + w * (sun_in + lamps_in), weight: w, at_: hp + hn * 0.06, dir: cosine_dir(hn, unit_of(hk), unit_of(hash_int(hk, 1))), alive: true, from: 0.1 }
         }
     };
     return path.light;
@@ -90,6 +92,9 @@ kernel render.path_trace@1 {
     input sky: SkyLooks;
     input lens: Lenses;
     input count: Counts;
+    input lamps: Lamps;
+    /// The lamps' light on each surface (`render.lamps_light`).
+    input lamped: Image;
     param bounces: Int = 2;
     output diffuse: Image;
     output specular: Image;
@@ -111,24 +116,24 @@ kernel render.path_trace@1 {
         let m = pbr_of(at(paint, q), at(extra, q), at(layers, q), at(more, q));
         let h0 = hash_int2(int(q.x) + int(q.y) * 8191, k, 201);
         let d0 = cosine_dir(n, unit_of(h0), unit_of(hash_int(h0, 1)));
-        let diffuse = incoming(surface, paint, extra, proxy, land, fr, s, l, extent, p, n, d0, h0, 1.0, bounces);
+        let diffuse = incoming(surface, paint, extra, lamped, lamps, proxy, land, fr, s, l, extent, p, n, d0, h0, 1.0, bounces);
         let glossy = m.metal > 0.01 || m.rough < 0.6;
         let h1 = hash_int(h0, 77);
         let ls = ggx_sample(n, v, m.rough, unit_of(h1), unit_of(hash_int(h1, 1)));
         let w = ggx_weight(m, n, v, ls);
         let env = env_brdf(pbr_f0(m), m.rough, max(dot(n, v), 0.001));
-        let spec = if glossy && dot(n, ls) > 0.0 { incoming(surface, paint, extra, proxy, land, fr, s, l, extent, p, n, ls, h1, 3.0, max(bounces - 1, 1)) * w / max(env, vec3(0.001, 0.001, 0.001)) } else { vec3(0.0, 0.0, 0.0) };
+        let spec = if glossy && dot(n, ls) > 0.0 { incoming(surface, paint, extra, lamped, lamps, proxy, land, fr, s, l, extent, p, n, ls, h1, 3.0, max(bounces - 1, 1)) * w / max(env, vec3(0.001, 0.001, 0.001)) } else { vec3(0.0, 0.0, 0.0) };
         // Clearcoat: one ray in the mirror direction (it is smooth; one is accurate enough).
         let coated = m.clearcoat > 0.0;
         let h2 = hash_int(h0, 91);
         let mirror = reflect(dir, n);
-        let coat = if coated && dot(n, mirror) > 0.0 { incoming(surface, paint, extra, proxy, land, fr, s, l, extent, p, n, mirror, h2, 3.0, 1) } else { vec3(0.0, 0.0, 0.0) };
+        let coat = if coated && dot(n, mirror) > 0.0 { incoming(surface, paint, extra, lamped, lamps, proxy, land, fr, s, l, extent, p, n, mirror, h2, 3.0, 1) } else { vec3(0.0, 0.0, 0.0) };
         // The point seen through: its diffuse light traced along a path too.
         let ba = at(behind_at, q);
         let bn = at(behind_normal, q);
         let bnn = vec3(bn.x, bn.y, bn.z);
         let h3 = hash_int(h0, 133);
-        let beyond = if m.transmission > 0.0 && ba.w > 0.5 { incoming(surface, paint, extra, proxy, land, fr, s, l, extent, vec3(ba.x, ba.y, ba.z), bnn, cosine_dir(bnn, unit_of(h3), unit_of(hash_int(h3, 1))), h3, 0.0, bounces) } else { vec3(0.0, 0.0, 0.0) };
+        let beyond = if m.transmission > 0.0 && ba.w > 0.5 { incoming(surface, paint, extra, lamped, lamps, proxy, land, fr, s, l, extent, vec3(ba.x, ba.y, ba.z), bnn, cosine_dir(bnn, unit_of(h3), unit_of(hash_int(h3, 1))), h3, 0.0, bounces) } else { vec3(0.0, 0.0, 0.0) };
         return { diffuse: vec4(diffuse, 1.0), specular: vec4(spec, if glossy { 1.0 } else { 0.0 }), coat: vec4(coat, if coated { 1.0 } else { 0.0 }), beyond: vec4(beyond, 1.0) };
     }
 }
@@ -213,7 +218,8 @@ kernel render.path_behind@1 {
 }
 
 /// Shading (standard PBR): the sky drawn where it is; things: the sun's light (by the scene's visibility), plus the
-/// denoised diffuse, specular and clearcoat light multiplied back by the material (`ambient_by`), plus emission; air laid over distance.
+/// denoised diffuse, specular and clearcoat light multiplied back by the material (`ambient_by`), plus emission and the lamps' light
+/// (`lamped`); air laid over distance.
 kernel render.path_shade@1 {
     requires { field.read; field.write; }
     input diffuse: Image;
@@ -228,6 +234,7 @@ kernel render.path_shade@1 {
     input through: Grid<Vec4>;
     input sky: SkyLooks;
     input lens: Lenses;
+    input lamped: Image;
     output result: Image;
     compute {
         let q = coord();
@@ -249,7 +256,7 @@ kernel render.path_shade@1 {
         let spec_light = if glossy { at(specular, q).xyz * occ } else { e };
         let coat_light = if m.clearcoat > 0.0 { at(coat, q).xyz } else { spec_light };
         let clear = if m.transmission > 0.0 { transmitted(m, n, v, at(through, q), frosted(beyond, q, m.rough)) } else { vec3(0.0, 0.0, 0.0) };
-        let color = lit_by(m, n, v, s.sun, s.sun_color * ex.x) + ambient_by(m, n, v, e, spec_light, coat_light) + clear + m.glow;
+        let color = lit_by(m, n, v, s.sun, s.sun_color * ex.x) + ambient_by(m, n, v, e, spec_light, coat_light) + clear + m.glow + at(lamped, q).xyz;
         return vec4(aerial(color, dir, su.w, s), 1.0);
     }
 }

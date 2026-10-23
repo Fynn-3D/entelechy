@@ -7,6 +7,7 @@ use "random.entpkg";
 use "geometry.entpkg";
 use "brdf.ent";
 use "camera.ent";
+use "lamps.ent";
 use "sky.ent";
 use "transmission.ent";
 
@@ -64,11 +65,18 @@ kernel render.probes_sign@1 {
     input land: Grid<Float>;
     input frame: Proxies;
     input sky: SkyLooks;
+    input lamps: Lamps;
     param spacing: Float = 1.2;
     output result: Volume<Vec2>;
     compute {
         let fr = at(frame, 0);
         let pos = probe_pos(fr, coord(), spacing);
+        // The lamps' light here, so a lamp turned or moved is gathered again.
+        let lamped = loop 128 with e = 0.0 until index() >= min(count(lamps), lamps_most()) {
+            let m = at(lamps, index());
+            let lit = lamp_irradiance(m, pos);
+            e + lit.x * 0.3 + lit.y * 0.6 + lit.z * 0.1
+        };
         let r = spacing;
         let ground = land_at(land, fr, pos.x, pos.z) * 2.0 + land_at(land, fr, pos.x + r, pos.z) + land_at(land, fr, pos.x - r, pos.z)
             + land_at(land, fr, pos.x, pos.z + r) + land_at(land, fr, pos.x, pos.z - r);
@@ -77,7 +85,7 @@ kernel render.probes_sign@1 {
             d + min(proxy_at(proxy, fr, pos + o, 4.0).x, 4.0) * float(index() + 1)
         };
         let sun = at(sky, 0).sun;
-        return vec2(ground, rock + (sun.x * 3.1 + sun.y * 5.3 + sun.z * 7.7));
+        return vec2(ground, rock + (sun.x * 3.1 + sun.y * 5.3 + sun.z * 7.7) + lamped * 0.37);
     }
 }
 /// The probes' signature at their last gathering: kept up with the present one while gathering (while the lit picture shows), held
@@ -106,6 +114,7 @@ kernel render.probes_gather@1 {
     input land: Grid<Float>;
     input frame: Proxies;
     input sky: SkyLooks;
+    input lamps: Lamps;
     param spacing: Float = 1.2;
     param rays: Int = 2;
     param most: Int = 256;
@@ -137,7 +146,7 @@ kernel render.probes_gather@1 {
                 let ha = rough_albedo(proxy, fr, hp, hit.y);
                 let sl = max(dot(hn, s.sun), 0.0);
                 let sun_in = if sl > 0.0 { s.sun_color * sl * rough_shadow(proxy, land, fr, hp + hn * 0.1, s.sun, 0.1, 40.0, 24) / 3.14159 } else { vec3(0.0, 0.0, 0.0) };
-                ha * (sun_in + probe_light(previous, fr, spacing, hp + hn * 0.3, hn, s))
+                ha * (sun_in + probe_light(previous, fr, spacing, hp + hn * 0.3, hn, s)) + lamps_on_rough(lamps, ha, hp, hn, proxy, land, fr, 4)
             };
             acc + came
         };
@@ -186,6 +195,7 @@ kernel render.probes_screen_gather@1 {
     input frame: Proxies;
     input sky: SkyLooks;
     input lens: Lenses;
+    input lamps: Lamps;
     param spacing: Float = 1.2;
     param rays: Int = 4;
     /// The furthest walked along the proxies (meters).
@@ -216,7 +226,7 @@ kernel render.probes_screen_gather@1 {
                 let hit = screen_march(surface, l, extent, p + n * 0.01, d, reach, 16, reach * 0.5, unit_of(hash_int(h, 2)));
                 // Off the screen: along the coarse field (clear of the
                 // ground's own margin and the coarse shape it lies in).
-                let came = if hit.z >= 0.0 { at(lit, vec2(hit.x, hit.y)).xyz } else { rough_seen(proxy, land, probes, fr, spacing, p + n * 0.08, p, n, d, far, s) };
+                let came = if hit.z >= 0.0 { at(lit, vec2(hit.x, hit.y)).xyz } else { rough_seen(proxy, land, probes, lamps, fr, spacing, p + n * 0.08, p, n, d, far, s) };
                 acc + came
             }
         };
@@ -314,9 +324,9 @@ kernel render.probes_gather_blur@1 {
     }
 }
 
-/// The light seen from `o` along `d` through the proxies (the coarse distance field): meeting something, it as the sun lights it
-/// plus the probe light there; meeting nothing, up the sky, down the probe light in that direction (gathered at `p`).
-fn rough_seen(proxy: Volume<Vec4>, land: Grid<Float>, probes: Volume<Vec4>, fr: Proxy, spacing: Float, o: Vec3, p: Vec3, n: Vec3, d: Vec3, far: Float, s: SkyLook) -> Vec3 {
+/// The light seen from `o` along `d` through the proxies (the coarse distance field): meeting something, it as the sun and the lamps light
+/// it plus the probe light there; meeting nothing, up the sky, down the probe light in that direction (gathered at `p`).
+fn rough_seen(proxy: Volume<Vec4>, land: Grid<Float>, probes: Volume<Vec4>, lamps: Lamps, fr: Proxy, spacing: Float, o: Vec3, p: Vec3, n: Vec3, d: Vec3, far: Float, s: SkyLook) -> Vec3 {
     let start = rough_leave(proxy, fr, o, d, 0.02, fr.cell * 4.0);
     let tr = rough_trace(proxy, land, fr, o, d, start, far, 24);
     if tr.y >= 0.0 {
@@ -324,7 +334,8 @@ fn rough_seen(proxy: Volume<Vec4>, land: Grid<Float>, probes: Volume<Vec4>, fr: 
         let hn = rough_normal(proxy, land, fr, hp, tr.y);
         let sun = normalize(s.sun);
         let shade = rough_shadow(proxy, land, fr, hp + hn * 0.05, sun, 0.05, 20.0, 24);
-        return rough_albedo(proxy, fr, hp, tr.y) * (s.sun_color * max(dot(hn, sun), 0.0) * shade / 3.14159265 + probe_light(probes, fr, spacing, hp + hn * 0.3, hn, s));
+        let a = rough_albedo(proxy, fr, hp, tr.y);
+        return a * (s.sun_color * max(dot(hn, sun), 0.0) * shade / 3.14159265 + probe_light(probes, fr, spacing, hp + hn * 0.3, hn, s)) + lamps_on_rough(lamps, a, hp, hn, proxy, land, fr, 4);
     }
     return if d.y > 0.0 { sky_radiance(d, s, false) } else { probe_light(probes, fr, spacing, p + n * 0.3, d, s) };
 }
@@ -430,6 +441,7 @@ kernel render.probes_shade@1 {
     input frame: Proxies;
     input sky: SkyLooks;
     input lens: Lenses;
+    input lamps: Lamps;
     /// The lamps' light on each surface (`render.lamps_light`).
     input lamped: Image;
     param spacing: Float = 1.2;
@@ -462,7 +474,7 @@ kernel render.probes_shade@1 {
         let r = reflect(dir, n);
         // Off the screen the reflection follows the coarse field (only for
         // surfaces smooth enough to show it).
-        let fallback = if m.rough < 0.75 { rough_seen(proxy, land, probes, fr, spacing, p + n * 0.08, p, n, r, 30.0, s) }
+        let fallback = if m.rough < 0.75 { rough_seen(proxy, land, probes, lamps, fr, spacing, p + n * 0.08, p, n, r, 30.0, s) }
             else if r.y > 0.0 { sky_radiance(r, s, false) } else { probe_light(probes, fr, spacing, p + n * 0.3, r, s) };
         // Screen-space reflections: looked for on smooth surfaces alone (the roughest layer no rougher than `mirror_below`).
         let sharpest = min(m.rough, if m.clearcoat > 0.0 { m.coat_rough } else { 1.0 });

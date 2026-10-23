@@ -68,6 +68,39 @@ fn lamp_shadow(m: Lamp, proxy: Volume<Vec4>, land: Grid<Float>, fr: Proxy, p: Ve
     return smoothstep(0.0, 1.0, saturate(r.y));
 }
 
+/// How much of lamp `m` reaches `x` through the proxies, by a short walk of
+/// `steps` steps toward it, soft (1 all, 0 none): for points the coarse
+/// scene stands for (light in the air, light bounced off the proxies).
+fn lamp_rough_shadow(m: Lamp, proxy: Volume<Vec4>, land: Grid<Float>, fr: Proxy, x: Vec3, steps: Int) -> Float {
+    let d = m.at - x;
+    let dist = length(d);
+    let dir = d / max(dist, 0.0001);
+    let far = dist - m.size - fr.cell;
+    let r = loop 32 with r = vec2(fr.cell, 1.0) until r.x > far || r.y < 0.02 || index() >= steps {
+        let h = rough_probe(proxy, land, fr, x + dir * r.x).x;
+        vec2(r.x + max(h, far / float(max(steps, 1))), min(r.y, 6.0 * h / r.x))
+    };
+    return saturate(r.y);
+}
+
+/// The light every lamp gives a point of the coarse scene at `p` facing
+/// `n`, of color `albedo`, diffusely reflected (what a bounce off the
+/// proxies brings back), each lamp that casts shadows walked toward in
+/// `steps` steps (0: unshadowed).
+fn lamps_on_rough(lamps: Lamps, albedo: Vec3, p: Vec3, n: Vec3, proxy: Volume<Vec4>, land: Grid<Float>, fr: Proxy, steps: Int) -> Vec3 {
+    let k = min(count(lamps), lamps_most());
+    let e = loop 128 with sum = vec3(0.0, 0.0, 0.0) until index() >= k {
+        let m = at(lamps, index());
+        let d = m.at - p;
+        let facing = dot(n, d);
+        if m.reach <= 0.0 || facing <= 0.0 || dot(d, d) > m.reach * m.reach { sum } else {
+            let cut = if m.shadow != 0 && steps > 0 { lamp_rough_shadow(m, proxy, land, fr, p + n * (fr.cell * 0.6), steps) } else { 1.0 };
+            sum + lamp_irradiance(m, p) * (facing / length(d) * cut)
+        }
+    };
+    return albedo * e / 3.14159265;
+}
+
 /// The lowest lamp a tile's bits keep (-1 none).
 fn lamp_first(bits: IVec4) -> Int {
     return if bits.x != 0 { ctz(bits.x) } else if bits.y != 0 { 32 + ctz(bits.y) } else if bits.z != 0 { 64 + ctz(bits.z) } else if bits.w != 0 { 96 + ctz(bits.w) } else { -1 };
