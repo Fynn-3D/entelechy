@@ -202,7 +202,7 @@ type Proxies = Rows<Proxy>;
 fn land_at(land: Grid<Float>, frame: Proxies, x: Float, z: Float) -> Float {
     let fr = at(frame, 0);
     let c = (vec2(x, z) - fr.land_lo) / fr.land_cell;
-    return at_linear(land, clamp(c, vec2(0.0, 0.0), size(land) - vec2(1.0, 1.0)));
+    return at_linear(land, clamp(c, vec2(0.0, 0.0), size(land) - vec2(1.0, 1.0)) + 0.5);
 }
 /// The finest level of the proxies holding `p` (x; -1 none) and how deep in the volume its cells start (y): the levels lie up
 /// the volume's depth one after another, finest first.
@@ -232,7 +232,7 @@ fn proxy_at(proxy: Volume<Vec4>, frame: Proxies, p: Vec3, far: Float) -> Vec4 {
     if k.x < 0.0 { return vec4(far, 0.0, 0.0, 0.0); }
     let fr = at(frame, int(k.x));
     let c = (p - fr.lo) / fr.cell;
-    return at_linear(proxy, vec3(c.x, c.y, c.z + k.y));
+    return at_linear(proxy, vec3(c.x, c.y, c.z + k.y) + 0.5);
 }
 /// How far `p` is from things in the coarse scene (x), and what is nearest (y: 0 ground, 1 rock).
 fn rough_probe(proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, p: Vec3) -> Vec2 {

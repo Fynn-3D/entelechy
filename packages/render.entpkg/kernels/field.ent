@@ -28,7 +28,7 @@ fn field_shape_at(atlas: Volume<Vec4>, shapes: Proxies, k: Int, q: Vec3) -> Vec4
     let c = (q - fr.lo) / fr.cell;
     let n = fr.cells - vec3(1.0, 1.0, 1.0);
     let cq = clamp(c, vec3(0.0, 0.0, 0.0), n);
-    let v = at_linear(atlas, vec3(cq.x, cq.y, cq.z + float(k) * fr.cells.z));
+    let v = at_linear(atlas, vec3(cq.x, cq.y, cq.z + float(k) * fr.cells.z) + 0.5);
     return vec4(v.x + length(c - cq) * fr.cell, v.y, v.z, v.w);
 }
 

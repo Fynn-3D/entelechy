@@ -47,7 +47,7 @@ fn proxy_near(proxy: Volume<Vec4>, frame: Proxies, p: Vec3) -> Float {
     let depth = proxy_depth(frame, last);
     let c = (p - fr.lo) / fr.cell;
     let q = clamp(c, vec3(0.0, 0.0, 0.0), fr.cells - vec3(1.0, 1.0, 1.0));
-    return length(c - q) * fr.cell + at_linear(proxy, vec3(q.x, q.y, q.z + depth)).x;
+    return length(c - q) * fr.cell + at_linear(proxy, vec3(q.x, q.y, q.z + depth) + 0.5).x;
 }
 
 /// What the reflected direction `r` sees: the sky, or looking down, the ground's light.

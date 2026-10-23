@@ -17,7 +17,7 @@ expect field.near.counts.result[0] = 2
 # the way to it; one past the ball's box, and one far from both, where
 # nothing is nearer than the band.
 expect field.proxy[2312] = 1.2324 0.8 0.2 0.1 0.002
-expect field.proxy[5664] = 1.8206 0.8 0.2 0.1 0.002
+expect field.proxy[5664] = 1.8360 0.8 0.2 0.1 0.002
 expect field.proxy[31] = 2 0 0 0 0.001
 
 # Two atlases joined: sixteen shapes, the second's box where the first's
@@ -25,3 +25,7 @@ expect field.proxy[31] = 2 0 0 0 0.001
 expect count joined_shapes.result = 16
 expect joined.result[4096] = 0.9014 0.1 0.3 0.8 0.002
 expect joined.result[36864] = 0.9014 0.1 0.3 0.8 0.002
+# Looked up as a renderer does: the ball's middle in the finest level (its
+# point smoothed by two grids), and past that level, by the box, in the next.
+expect looked.result[0] = -0.6593 0 0.002
+expect looked.result[1] = 6.1621 1 0.002
