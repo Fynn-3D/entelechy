@@ -127,11 +127,10 @@ fn lamp_irradiance(m: Lamp, p: Vec3) -> Vec3 {
     return m.color * (lamp_beam(m, d) / (dot(d, d) + m.size * m.size));
 }
 
-/// The shadow toward lamp `m` from `p` (a surface facing `n`) through the
-/// proxies, walked from just off the surface to the bulb: 1 lit, 0 dark,
-/// the penumbra wider for a larger bulb.
-fn lamp_shadow(m: Lamp, proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, p: Vec3, n: Vec3) -> Float {
-    let d = m.at - p;
+/// The shadow toward point `at` of lamp `m` from `p` (a surface facing `n`) through the proxies, walked from just off the
+/// surface to the lamp: 1 lit, 0 dark, the penumbra wider for a larger bulb.
+fn lamp_shadow_to(m: Lamp, at: Vec3, proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, p: Vec3, n: Vec3) -> Float {
+    let d = at - p;
     let dist = length(d);
     let dir = d / max(dist, 0.0001);
     let c = proxy_cell_at(frame, p);
@@ -145,6 +144,16 @@ fn lamp_shadow(m: Lamp, proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, 
         vec2(r.x + clamp(h, c * 0.3, 12.0), min(r.y, sharp * h / r.x))
     };
     return smoothstep(0.0, 1.0, saturate(r.y));
+}
+
+/// The shadow toward lamp `m` from `p` (a surface facing `n`) through the proxies: toward its bulb; toward four points
+/// across a panel (half its width and height out from its middle), their mean, so a wide window's shadow is as soft as it is
+/// wide, not one ray's.
+fn lamp_shadow(m: Lamp, proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, p: Vec3, n: Vec3) -> Float {
+    if !lamp_is_panel(m) { return lamp_shadow_to(m, m.at, proxy, land, frame, p, n); }
+    let small = Lamp { ..m, size: m.size * 0.5 };
+    return (lamp_shadow_to(small, m.at + m.side * 0.5 + m.rise * 0.5, proxy, land, frame, p, n) + lamp_shadow_to(small, m.at - m.side * 0.5 + m.rise * 0.5, proxy, land, frame, p, n)
+        + lamp_shadow_to(small, m.at + m.side * 0.5 - m.rise * 0.5, proxy, land, frame, p, n) + lamp_shadow_to(small, m.at - m.side * 0.5 - m.rise * 0.5, proxy, land, frame, p, n)) * 0.25;
 }
 
 /// How much of lamp `m` reaches `x` through the proxies, by a short walk of

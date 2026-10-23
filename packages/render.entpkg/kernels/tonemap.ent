@@ -50,6 +50,8 @@ kernel render.tonemap@1 {
     /// The tint of the shadows and of the lights, as much as `warmth` lays them on.
     param shadow_tint: Vec3 = vec3(0.97, 1.0, 1.04);
     param light_tint: Vec3 = vec3(1.05, 1.0, 0.93);
+    /// The tone curve: 0 ACES's fit, 1 none (light past 1 clipped, as Blender's Standard view), 2 AgX (Blender's own).
+    param curve: Int = 0;
     output result: Image;
     compute {
         let q = coord();
@@ -64,7 +66,8 @@ kernel render.tonemap@1 {
             let k = sharpen / (1.0 + 6.0 * abs(lc - ln) / (ln + 0.05));
             max(c + (c - n4) * k, vec3(0.0, 0.0, 0.0))
         };
-        let graded = aces((seen + halo * glow) * exposure);
+        let lit = (seen + halo * glow) * exposure;
+        let graded = if curve == 1 { saturate(lit) } else if curve == 2 { agx(lit) } else { aces(lit) };
         let gray = dot(graded, vec3(0.2126, 0.7152, 0.0722));
         let rich = max(mix(vec3(gray, gray, gray), graded, vivid), vec3(0.0, 0.0, 0.0));
         let tint = mix(shadow_tint, light_tint, smoothstep(0.1, 0.6, gray));

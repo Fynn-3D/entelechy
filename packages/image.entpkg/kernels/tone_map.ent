@@ -8,6 +8,28 @@ fn aces(x: Vec3) -> Vec3 {
     return saturate(n / d);
 }
 
+/// AgX tone mapping (Troy Sobotka's, Blender's own view), in its minimal
+/// fitted form: light of any brightness to 0..1 (linear), taken into AgX's
+/// inset primaries, its log2 between -12.47 and 4.03 stops eased by the
+/// fitted sigmoid, and out again; bright colors desaturate toward white as
+/// film's do, rather than turning hue.
+fn agx(x: Vec3) -> Vec3 {
+    let inset = mat3(vec3(0.842479062253094, 0.0423282422610123, 0.0423756549057051),
+        vec3(0.0784335999999992, 0.878468636469772, 0.0784336),
+        vec3(0.0792237451477643, 0.0791661274605434, 0.879142973793104));
+    let outset = mat3(vec3(1.19687900512017, -0.0528968517574562, -0.0529716355144438),
+        vec3(-0.0980208811401368, 1.15190312990417, -0.0980434501171241),
+        vec3(-0.0990297440797205, -0.0989611768448433, 1.15107367264116));
+    let low = -12.47393;
+    let high = 4.026069;
+    let v = inset * max(x, vec3(0.0000000001, 0.0000000001, 0.0000000001));
+    let e = (clamp(log2(v), vec3(low, low, low), vec3(high, high, high)) - low) / (high - low);
+    let e2 = e * e;
+    let e4 = e2 * e2;
+    let s = e4 * e2 * 15.5 - e4 * e * 40.14 + e4 * 31.96 - e2 * e * 6.868 + e2 * 0.4298 + e * 0.1191 - 0.00232;
+    return pow(saturate(outset * s), vec3(2.2, 2.2, 2.2));
+}
+
 /// ACES-style tone mapping, encoded by sRGB's transfer for a window or
 /// a file; edit `exposure` while the Player runs.
 kernel image.tonemap@2 {

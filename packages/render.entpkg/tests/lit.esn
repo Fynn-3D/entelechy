@@ -59,6 +59,9 @@ node size: render.extent_size@1 { extent <- extent.result; domain = 1; }
 node canvas: render.canvas@1 { extent <- extent.result; domain = vec2(value(extent, 0), value(extent, 1)); }
 
 node seen: graph "../graphs/tonemap.esn" { hdr <- aired.result; exposure = 0.8; sharpen = 0.5; }
+// The same finish by the other tone curves: the light clipped past 1 (Blender's Standard view), and AgX.
+node clipped: graph "../graphs/tonemap.esn" { hdr <- aired.result; exposure = 0.8; glow = 0.0; vignette = 0.0; warmth = 0.0; curve = 1; }
+node filmic: graph "../graphs/tonemap.esn" { hdr <- aired.result; exposure = 0.8; glow = 0.0; vignette = 0.0; warmth = 0.0; curve = 2; }
 node film0: render.film_start@1 { preset = 1; domain = 1; }
 node film_choice: render.film_keys@1 { previous <~ film_choice.result from film0.result; domain = 1; }
 node filmed: render.film@1 { image <- seen.result; choice <- film_choice.result; grain = 0.0; }

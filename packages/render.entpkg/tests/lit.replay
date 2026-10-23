@@ -53,3 +53,13 @@ expect traced_floor.result[11200] = 0.2405 0.2471 0.2655 1 0.0005
 expect lit_tuned.result[7280] = 0.0098 0.0105 0.0124 1 0.0005
 expect traced_tuned.result[9539] = 0.0800 0.0804 0.0804 1 0.001
 expect painted_tuned.result[7280] = 0.0208 0.0217 0.0239 1 0.0005
+
+# The finish by the other tone curves, no glow, tint or vignette: clipped
+# past 1, the sky's gray is its light times the exposure, sRGB-encoded
+# (0.42 by 0.8, 0.615); AgX leaves a gray about as it is and turns the red
+# ball's bright red toward white.
+frame 0.0
+expect clipped.result[3220] = 0.615 0.620 0.638 1 0.002
+expect filmic.result[3220] = 0.615 0.618 0.629 1 0.002
+expect clipped.result[9640] = 0.800 0.321 0.325 1 0.002
+expect filmic.result[9640] = 0.746 0.388 0.392 1 0.002

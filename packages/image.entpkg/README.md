@@ -36,7 +36,8 @@ use "image.entpkg";
 - `kernels/tone.ent` — Tone and color grading. Kernels:
   `image.adjust@1`, `image.levels@1`, `image.curve@1`,
   `image.neutral@1`, `image.lut@1`.
-- `kernels/tone_map.ent` —  Kernels: `image.tonemap@2`.
+- `kernels/tone_map.ent` — Tone curves, ACES's fit and AgX, light of any brightness to
+  0..1. Kernels: `image.tonemap@2`.
 - `kernels/wrap.ent` — Wrap addressing for a linear read.
 
 ## Graph presets

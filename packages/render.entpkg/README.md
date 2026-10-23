@@ -448,7 +448,9 @@ exactly), `ambient_by` the
 environment (split-sum, Karis' analytic fit; base and clearcoat reflections
 given apart), `ggx_sample` and `ggx_weight` a path tracer's glossy bounce,
 `pbr_of` a G-buffer pixel's `Pbr`. Transmission is carried for renderers that
-refract. `render.tonemap` tone maps with `image.entpkg`'s `aces` and encodes sRGB.
+refract. `render.tonemap` tone maps by its `curve` (`image.entpkg`'s `aces`, none
+— the light clipped past 1, as Blender's Standard view — or `agx`, Blender's
+own) and encodes sRGB.
 
 ### Pieces
 

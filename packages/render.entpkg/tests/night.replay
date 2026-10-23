@@ -4,7 +4,8 @@ window 320 180
 # The gray ball under the spotlight, the floor in its pool of light, the
 # red lamp's glow between the rows, the glowing ball's glow, the floor
 # mirroring the balls (and the red lamp's light bounced) under fog, the
-# clouds overhead, a ball's side lit by the cyan panel.
+# clouds overhead, a ball's side lit by the cyan panel (its shadow taken
+# toward four points across it, the balls beside hiding some).
 frame 0.0
 expect 45 115 = 0.925 0.898 0.854 0.02
 expect 20 100 = 0.208 0.221 0.279 0.02
@@ -12,7 +13,7 @@ expect 155 75 = 1.000 0.690 0.417 0.02
 expect 255 117 = 0.966 0.812 0.390 0.02
 expect 80 150 = 0.151 0.097 0.123 0.02
 expect 160 5 = 0.146 0.100 0.131 0.02
-expect 215 85 = 0.686 0.763 0.786 0.02
+expect 215 85 = 0.639 0.640 0.670 0.02
 
 # The lens reflected in the floor; a tile of sky no lamp reaches, a tile
 # the spotlight and the panel reach; the exposure metered (a factor, the

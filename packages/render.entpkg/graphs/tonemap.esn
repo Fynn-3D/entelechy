@@ -17,11 +17,13 @@ param warmth: Float = 1.0;
 param shadow_tint: Vec3 = vec3(0.97, 1.0, 1.04);
 param light_tint: Vec3 = vec3(1.05, 1.0, 0.93);
 param vignette: Float = 0.35;
+/// The tone curve (`render.tonemap`'s: 0 ACES, 1 none, as Blender's Standard view, 2 AgX).
+param curve: Int = 0;
 
 node bright: render.bright@1 { hdr <- hdr; threshold = threshold; domain = ceil(size(hdr) / 8); }
 node bloom_x: render.spread@1 { image <- bright.result; axis = 0; }
 node bloom: render.spread@1 { image <- bloom_x.result; axis = 1; }
 node view: render.tonemap@1 { hdr <- hdr; bloom <- bloom.result; exposure = exposure; vivid = vivid; sharpen = sharpen; glow = glow; warmth = warmth;
-    shadow_tint = shadow_tint; light_tint = light_tint; vignette = vignette; domain = size(hdr); }
+    shadow_tint = shadow_tint; light_tint = light_tint; vignette = vignette; curve = curve; domain = size(hdr); }
 
 output result <- view.result;
