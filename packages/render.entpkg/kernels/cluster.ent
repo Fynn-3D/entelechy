@@ -6,8 +6,8 @@
 // (`render.cluster_pick`); each candidate is drawn where its own cells are no wider than `error` pixels on the screen and its
 // parent's are wider, which picks one level for every place of every thing, where it is in the picture, and where the last
 // frame did not show something nearer over all of it (`render.cluster_cull`, the last frame's `render.cluster_hzb`); the
-// drawn clusters are kept (`render.cluster_kept`) and their corners projected for the rasterizer, `mesh_cluster_faces()` faces
-// a cluster (`render.cluster_corners`, `render.cluster_faces`). A corner of a finer cluster lying where a coarser level is
+// drawn clusters are kept (`render.cluster_kept`), each face drawn from one of them (`render.cluster_shown`), and their corners
+// projected for the rasterizer, `mesh_cluster_faces()` faces a cluster (`render.cluster_corners`, `render.cluster_faces`). A corner of a finer cluster lying where a coarser level is
 // drawn is moved up to that level's point (the mesh's `up`), so where two levels meet, the finer one's edge is the coarser
 // one's. `graphs/cluster.esn` is the whole; a scene reads a pixel's thing and face with `cluster_face_of`.
 use "parallel.entpkg";
@@ -242,13 +242,51 @@ kernel render.cluster_kept@1 {
     }
 }
 
-/// The corners of the drawn clusters' faces, three a face and `mesh_cluster_faces()` faces a cluster (`domain = max(value(count),
+/// Which of the drawn clusters' face slots are drawn from them (`domain = max(value(count), 1) * mesh_cluster_faces()`): 1 for a
+/// face of the cluster whose first corner's brick drawn at the cluster's level is the cluster's own (a face is in the cluster
+/// of each brick a corner of it lies in), 0 past a cluster's faces or for a face another cluster draws.
+kernel render.cluster_shown@1 {
+    requires { field.read; field.write; }
+    input kept: Rows<IVec2>;
+    input insts: FieldInsts;
+    input points: Rows<MeshPoint>;
+    input faces: Rows<Face>;
+    input clusters: Rows<Cluster>;
+    input meshes: Rows<ClusterMesh>;
+    input errors: Rows<Float>;
+    input lens: Lenses;
+    input canvas: Grid<Long>;
+    param error: Float = 1.0;
+    output result: Rows<Int as u8>;
+    compute {
+        let e = element();
+        let kc = at(kept, e / mesh_cluster_faces());
+        if kc.x < 0 { return 0; }
+        let cl = at(clusters, kc.y);
+        if e % mesh_cluster_faces() >= cl.count { return 0; }
+        let it = at(insts, kc.x);
+        let f = at(faces, cl.first + e % mesh_cluster_faces());
+        let l = at(lens, 0);
+        let ext = size(canvas);
+        let m = at(meshes, it.shape);
+        let eye = field_local(it, l.eye);
+        let px = l.focal * ext.y;
+        let ba = cluster_brick_of(m, at(points, f.a).position, cl.level);
+        let bb = cluster_brick_of(m, at(points, f.b).position, cl.level);
+        let owner = if cluster_brick_drawn(m, errors, ba, cl.level, eye, px, error) { ba }
+            else if cluster_brick_drawn(m, errors, bb, cl.level, eye, px, error) { bb } else { cluster_brick_of(m, at(points, f.c).position, cl.level) };
+        return int(owner == cluster_brick_at(m, cl));
+    }
+}
+
+/// The corners of the drawn faces (`shown`), three a face and `mesh_cluster_faces()` faces a cluster (`domain = max(value(count),
 /// 1) * mesh_cluster_faces() * 3`), projected through the lens for the rasterizer between `near` and `far`; a corner moved up the
-/// levels to the one drawn where it lies, when that is coarser than its cluster's; past a cluster's faces, a corner no
-/// triangle is drawn from.
+/// levels to the one drawn where it lies, when that is coarser than its cluster's; a face not drawn, corners no triangle is
+/// drawn from.
 kernel render.cluster_corners@1 {
     requires { field.read; field.write; }
     input kept: Rows<IVec2>;
+    input shown: Rows<Int as u8>;
     input insts: FieldInsts;
     input points: Rows<MeshPoint>;
     input up: Rows<Int>;
@@ -266,13 +304,12 @@ kernel render.cluster_corners@1 {
     output result: Rows<Corner>;
     compute {
         let e = element();
+        let none = Corner { clip: vec4(0.0, 0.0, 0.0, -1.0), normal: vec3(0.0, 1.0, 0.0), uv: vec2(0.0, 0.0) };
+        if at(shown, e / 3) == 0 { return none; }
         let per = mesh_cluster_faces() * 3;
         let kc = at(kept, e / per);
         let local = e % per;
-        let none = Corner { clip: vec4(0.0, 0.0, 0.0, -1.0), normal: vec3(0.0, 1.0, 0.0), uv: vec2(0.0, 0.0) };
-        if kc.x < 0 { return none; }
         let cl = at(clusters, kc.y);
-        if local / 3 >= cl.count { return none; }
         let it = at(insts, kc.x);
         let f = at(faces, cl.first + local / 3);
         let k = local % 3;
@@ -281,14 +318,7 @@ kernel render.cluster_corners@1 {
         let ext = size(canvas);
         let m = at(meshes, it.shape);
         let eye = field_local(it, l.eye);
-        let px = l.focal * ext.y;
-        // A face is in the cluster of each brick a corner of it lies in: drawn from the first of them drawn at its level.
-        let ba = cluster_brick_of(m, at(points, f.a).position, cl.level);
-        let bb = cluster_brick_of(m, at(points, f.b).position, cl.level);
-        let owner = if cluster_brick_drawn(m, errors, ba, cl.level, eye, px, error) { ba }
-            else if cluster_brick_drawn(m, errors, bb, cl.level, eye, px, error) { bb } else { cluster_brick_of(m, at(points, f.c).position, cl.level) };
-        if owner != cluster_brick_at(m, cl) { return none; }
-        let level = cluster_level_at(m, errors, at(points, v).position, eye, px, error, cl.level, reach);
+        let level = cluster_level_at(m, errors, at(points, v).position, eye, l.focal * ext.y, error, cl.level, reach);
         let w = loop level - cl.level with u = v { at(up, u) };
         let p = at(points, w);
         return Corner { clip: lens_clip(l, ext, cluster_placed(it, p.position), near, far), normal: cluster_turned(it, p.normal), uv: p.uv };

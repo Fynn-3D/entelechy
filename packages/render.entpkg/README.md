@@ -37,7 +37,7 @@ use "render.entpkg";
   things left out, where two levels meet the finer one's corners taken up
   to the coarser one's points. Kernels: `render.cluster_pick@1`,
   `render.cluster_offsets@1`, `render.cluster_cull@1`,
-  `render.cluster_kept@1`, `render.cluster_corners@1`,
+  `render.cluster_kept@1`, `render.cluster_shown@1`, `render.cluster_corners@1`,
   `render.cluster_faces@1`, `render.cluster_hzb@1`.
 - `kernels/clouds.ent` — A deck of clouds over the sky, lit through
   itself, and its shadows on the ground. Kernels: `render.clouds_deck@1`,

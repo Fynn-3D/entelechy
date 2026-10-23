@@ -31,7 +31,9 @@ node drawn: render.cluster_cull@1 { picks <- picks.result; ends <- ends.result; 
     total <- total.result; error = error; domain = value(total); }
 node kept: graph "parallel.entpkg/graphs/compact.esn" { flags <- drawn.result; }
 node rows: render.cluster_kept@1 { kept <- kept.indices; picks <- picks.result; ends <- ends.result; count <- kept.count; domain = max(value(count), 1); }
-node corners: render.cluster_corners@1 { kept <- rows.result; insts <- insts; points <- points; up <- up; faces <- faces; clusters <- clusters; meshes <- meshes; errors <- errors;
+node shown: render.cluster_shown@1 { kept <- rows.result; insts <- insts; points <- points; faces <- faces; clusters <- clusters; meshes <- meshes; errors <- errors;
+    lens <- lens; canvas <- canvas; error = error; domain = count(kept) * 128; }
+node corners: render.cluster_corners@1 { kept <- rows.result; shown <- shown.result; insts <- insts; points <- points; up <- up; faces <- faces; clusters <- clusters; meshes <- meshes; errors <- errors;
     lens <- lens; canvas <- canvas; error = error; reach = reach; near = near; far = far; domain = count(kept) * 384; }
 node tris: render.cluster_faces@1 { count <- kept.count; domain = max(value(count), 1) * 128; }
 

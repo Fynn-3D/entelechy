@@ -34,6 +34,13 @@ fn lens_clip(l: Lens, extent: Vec2, p: Vec3, near: Float, far: Float) -> Vec4 {
     return vec4(dot(d, l.right) * l.focal * 2.0 / aspect, dot(d, l.up) * l.focal * 2.0, (ahead - near) * far / (far - near), ahead);
 }
 
+/// How far along view ray `dir` a depth the rasterizer drew lies, the depth of a point `lens_clip` placed between `near` and
+/// `far`.
+fn lens_distance(l: Lens, dir: Vec3, depth: Float, near: Float, far: Float) -> Float {
+    let ahead = near * far / max(far - depth * (far - near), 0.000001);
+    return ahead / max(dot(dir, l.ahead), 0.000001);
+}
+
 /// A ray on the screen (for screen-space reflections and reflections close to a surface): from `p` along `dir` for `far` meters, at most 48 steps
 /// (`steps` steps, dense near and sparse far, the start jittered by `jitter` steps), projected onto the screen against the G-buffer's depth; where it passes
 /// behind the thing in some pixel (no thicker than `thick` meters), it met it. The pixel met (xy) and how far it went
