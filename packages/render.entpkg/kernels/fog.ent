@@ -67,6 +67,8 @@ kernel render.fog_march@1 {
     param cloud_steps: Int = 2;
     /// The lamps' light in the fog, times this.
     param lamp_share: Float = 1.0;
+    /// The sky's light in the fog, times this (it is not shadowed: less in a room the sky reaches only through windows).
+    param sky_share: Float = 1.0;
     /// Light the fog takes from round about besides the sky's (a city's glow
     /// at night), as radiance it scatters toward the eye.
     param glow: Vec3 = vec3(0.0, 0.0, 0.0);
@@ -114,7 +116,7 @@ kernel render.fog_march@1 {
                     }
                 };
                 // The lamps' share is summed over the step: per meter, as the rest.
-                let light = s.sun_color * (sun_phase * sun_seen) + s.ambient * 0.0795775 + glow + lamps_here.light * (lamp_share / max(dt, 0.0001));
+                let light = s.sun_color * (sun_phase * sun_seen) + s.ambient * (0.0795775 * sky_share) + glow + lamps_here.light * (lamp_share / max(dt, 0.0001));
                 let absorbed = exp(0.0 - dens * dt);
                 let scattered = light * ((1.0 - absorbed) * r.w);
                 vec4(r.x + scattered.x, r.y + scattered.y, r.z + scattered.z, r.w * absorbed)

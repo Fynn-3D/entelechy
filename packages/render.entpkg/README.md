@@ -358,7 +358,10 @@ What every renderer shares, in this order:
   smooths it by depth; `render.clouds_march` walks a deck of clouds for
   the sky at an eighth of the size, lit through the cloud toward the sun
   with light scattered again and again, dark at a sunlit edge, lit from
-  below by `below`; `render.fog_apply` lays both over the picture,
+  below by `below`; the sky's share of the fog's light (`sky_share`, not
+  shadowed) and the steps toward the sun (`sun_steps`) are the scene's to
+  set, a room taking less sky and more steps past its thin walls;
+  `render.fog_apply` lays both over the picture,
   upsampled by depth. Each pixel's steps start at a fixed offset of its
   own, so nothing needs history to settle.
 - **The sky** (`graphs/atmosphere.esn`). Sunlight through a sphere of

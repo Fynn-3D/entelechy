@@ -25,6 +25,10 @@ param falloff: Float = 80.0;
 param glow: Vec3 = vec3(0.0, 0.0, 0.0);
 /// The lamps' light in the fog, times this.
 param lamp_share: Float = 1.0;
+/// The sky's light in the fog, times this (less in a room).
+param sky_share: Float = 1.0;
+/// The steps toward the sun through the proxies where no cascade holds a point (more where walls are thin and near).
+param sun_steps: Int = 8;
 /// The steps toward a lamp that cut its beam into shafts (0 none).
 param shafts: Int = 8;
 /// The clouds: their deck, how much of the sky, and the light from below.
@@ -48,7 +52,7 @@ param cloud_sky: Float = 1.0;
 node lamp_depth: render.lamps_depth@1 { surface <- surface; domain = ceil(size(surface) / 16); }
 node lamp_tiles: render.lamps_tiles@1 { depth <- lamp_depth.result; lamps <- lamps; lens <- lens; surface <- surface; through = 2000.0; domain = size(depth); }
 node fog: render.fog_march@1 { tiles <- lamp_tiles.result; views <- views; atlas <- atlas; surface <- surface; lens <- lens; sky <- sky; lamps <- lamps; proxy <- proxy; land <- land; frame <- frame; deck <- deck.result;
-    density = density; base = base; falloff = falloff; forward = forward; glow = glow; lamp_share = lamp_share; shafts = shafts; domain = ceil(size(surface) / 4); }
+    density = density; base = base; falloff = falloff; forward = forward; glow = glow; lamp_share = lamp_share; sky_share = sky_share; sun_steps = sun_steps; shafts = shafts; domain = ceil(size(surface) / 4); }
 node across: render.fog_blur@1 { fog <- fog.result; surface <- surface; axis = 0; domain = size(fog); }
 node down: render.fog_blur@1 { fog <- across.result; surface <- surface; axis = 1; domain = size(fog); }
 // Clouds are soft: an eighth of the size is enough.
