@@ -47,8 +47,8 @@ use "render.entpkg";
 - `kernels/film.ent` — Film. Kernels: `render.film_start@1`,
   `render.film_keys@1`, `render.film@1`.
 - `kernels/fog.ent` — Height fog the sun and the lamps light, their beams
-  cut into shafts. Kernels: `render.fog_march@1`, `render.fog_blur@1`,
-  `render.fog_apply@1`.
+  cut into shafts by what stands in them and by the clouds. Kernels:
+  `render.fog_march@1`, `render.fog_blur@1`, `render.fog_apply@1`.
 - `kernels/gloss.ent` — Gloss widened where normals turn within a
   pixel (specular antialiasing). Kernels: `render.gloss_widen@1`.
 - `kernels/lamps.ent` — Point lights, spotlights and glowing panels,
@@ -71,6 +71,8 @@ use "render.entpkg";
   `render.probes_screen_gather@1`, `render.probes_gather_keep@1`,
   `render.probes_gather_blur@1`, `render.probes_behind@1`,
   `render.probes_lit@1`, `render.probes_shade@1`.
+- `kernels/scattering.ent` — Light scattered in the air: the phase and
+  each pixel's step offset, shared by fog, clouds and the sky.
 - `kernels/sky.ent` — The sky.
 - `kernels/super_resolution.ent` — Temporal super-resolution (TSR).
   Kernels: `render.tsr@1`, `render.keep_surface@1`.
@@ -202,8 +204,9 @@ What every renderer shares, in this order:
   Fresnel, moved by the surface's normal (waves) and drawn out downward.
 - **The air** (`graphs/air.esn`). `render.fog_march` walks each view ray
   at a quarter of the size through height fog the sun (shadowed through
-  the proxies), the sky, a glow of the scene's own and the lamps light:
-  each lamp's light summed exactly along each step (a beam beside a bulb
+  the proxies and by the clouds' deck: shafts between the clouds), the
+  sky, a glow of the scene's own and the lamps light: each lamp's light
+  summed exactly along each step (a beam beside a bulb
   has no spikes) and cut by the proxies toward it into shafts;
   `render.fog_blur` smooths it by depth; `render.clouds_march` walks a
   deck of clouds for the sky at an eighth of the size, lit through the

@@ -1,0 +1,13 @@
+// Light scattered in the air, as fog, clouds and the sky share it: how
+// much a turn of the light's way scatters toward the eye, and each pixel's
+// own fixed offset for steps along a view ray.
+
+/// Henyey-Greenstein's phase: how much of light turned by an angle of
+/// cosine `cos_angle` scatters that way, `g` forward (0 even all round).
+fn air_phase(cos_angle: Float, g: Float) -> Float {
+    let g2 = g * g;
+    return (1.0 - g2) / (12.566371 * pow(max(1.0 + g2 - 2.0 * g * cos_angle, 0.0001), 1.5));
+}
+
+/// A pixel's own fixed offset from 0 to 1 (interleaved gradient noise).
+fn air_offset(q: Vec2) -> Float { return fract(52.982919 * fract(dot(q, vec2(0.06711056, 0.00583715)))); }

@@ -1,8 +1,8 @@
 //! Fog and clouds over a picture (`kernels/fog.ent`, `kernels/clouds.ent`):
-//! height fog the sun, the sky, `glow` and the lamps light, walked at a
-//! quarter of the size and smoothed by depth; a deck of clouds over the
-//! sky at an eighth; both laid over `hdr`. The deck is given back for the
-//! shadows it casts (`render.clouds_shadow`).
+//! height fog the sun (between the clouds), the sky, `glow` and the lamps
+//! light, walked at a quarter of the size and smoothed by depth; a deck of
+//! clouds over the sky at an eighth; both laid over `hdr`. The deck is
+//! given back for the shadows it casts (`render.clouds_shadow`).
 use "../kernels/";
 
 input hdr: Image;
@@ -31,7 +31,7 @@ param cover: Float = 0.0;
 param scale: Float = 2400.0;
 param below: Vec3 = vec3(0.0, 0.0, 0.0);
 
-node fog: render.fog_march@1 { surface <- surface; lens <- lens; sky <- sky; lamps <- lamps; proxy <- proxy; land <- land; frame <- frame;
+node fog: render.fog_march@1 { surface <- surface; lens <- lens; sky <- sky; lamps <- lamps; proxy <- proxy; land <- land; frame <- frame; deck <- deck.result;
     density = density; base = base; falloff = falloff; glow = glow; lamp_share = lamp_share; shafts = shafts; domain = ceil(size(surface) / 4); }
 node across: render.fog_blur@1 { fog <- fog.result; surface <- surface; axis = 0; domain = size(fog); }
 node down: render.fog_blur@1 { fog <- across.result; surface <- surface; axis = 1; domain = size(fog); }

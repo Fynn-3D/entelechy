@@ -1,24 +1,16 @@
 // Fog: height fog that the sun, the sky, a glow of the scene's own and the
 // lamps light as they pass through it, so a spotlight's beam shows, its
-// shafts cut by what stands in it. Each view ray is walked at a quarter of
+// shafts cut by what stands in it, and the sun's shafts cut by the clouds. Each view ray is walked at a quarter of
 // the picture's size (`render.fog_march`), the grain smoothed by depth
 // (`render.fog_blur`), and the fog (with clouds over the sky,
 // `clouds.ent`) laid over the picture, upsampled by depth
 // (`render.fog_apply`). Each pixel's steps start at a fixed offset of their
 // own: nothing needs history to settle.
 use "camera.ent";
+use "clouds.ent";
 use "lamps.ent";
+use "scattering.ent";
 use "sky.ent";
-
-/// Henyey-Greenstein's phase: how much of light turned by an angle of
-/// cosine `cos_angle` scatters that way, `g` forward (0 even all round).
-fn air_phase(cos_angle: Float, g: Float) -> Float {
-    let g2 = g * g;
-    return (1.0 - g2) / (12.566371 * pow(max(1.0 + g2 - 2.0 * g * cos_angle, 0.0001), 1.5));
-}
-
-/// A pixel's own fixed offset from 0 to 1 (interleaved gradient noise).
-fn air_offset(q: Vec2) -> Float { return fract(52.982919 * fract(dot(q, vec2(0.06711056, 0.00583715)))); }
 
 /// The fog's density at height `y`: `density` at `base` and below, falling
 /// by e every `falloff` meters above.
@@ -40,7 +32,8 @@ fn lamp_airlight(m: Lamp, eye: Vec3, dir: Vec3, t0: Float, t1: Float) -> Vec3 {
 
 /// Height fog along each view ray: the light it scatters toward the eye
 /// (rgb) and how much of what lies behind still shows (w). The sun's share
-/// is shadowed through the proxies; each lamp's is summed exactly along each
+/// is shadowed through the proxies and by the clouds' `deck` (in
+/// `cloud_steps` steps toward the sun: shafts between the clouds); each lamp's is summed exactly along each
 /// step and, for a lamp that casts shadows, cut by the proxies within
 /// `shafts` steps toward it (0: unshadowed). `steps` steps out to the
 /// surface or `far` meters, denser near the eye.
@@ -53,6 +46,7 @@ kernel render.fog_march@1 {
     input proxy: Volume<Vec4>;
     input land: Grid<Float>;
     input frame: Proxies;
+    input deck: CloudDecks;
     param density: Float = 0.002;
     param base: Float = 0.0;
     param falloff: Float = 80.0;
@@ -61,6 +55,7 @@ kernel render.fog_march@1 {
     param far: Float = 2000.0;
     param steps: Int = 24;
     param shafts: Int = 8;
+    param cloud_steps: Int = 2;
     /// The lamps' light in the fog, times this.
     param lamp_share: Float = 1.0;
     /// Light the fog takes from round about besides the sky's (a city's glow
@@ -84,6 +79,7 @@ kernel render.fog_march@1 {
         let sun = normalize(s.sun);
         let sun_phase = air_phase(dot(dir, sun), forward);
         let lamp_n = min(count(lamps), lamps_most());
+        let cd = at(deck, 0);
         return loop 64 with r = vec4(0.0, 0.0, 0.0, 1.0) until index() >= n || r.w < 0.01 {
             let f0 = (float(index()) + jitter) / float(n);
             let f1 = (float(index()) + 1.0 + jitter) / float(n);
@@ -93,7 +89,7 @@ kernel render.fog_march@1 {
             let p = l.eye + dir * ((t0 + t1) * 0.5);
             let dens = fog_density(p.y, density, base, falloff);
             if dens * dt < 0.000001 { r } else {
-                let sun_seen = rough_shadow(proxy, land, fr, p, sun, fr.cell, 300.0, 12);
+                let sun_seen = rough_shadow(proxy, land, fr, p, sun, fr.cell, 300.0, 12) * cloud_shadow(cd, p, sun, cloud_steps);
                 let lamps_here = loop 128 with sum = vec3(0.0, 0.0, 0.0) until index() >= lamp_n {
                     let m = at(lamps, index());
                     let d = p - m.at;
