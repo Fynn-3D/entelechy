@@ -49,7 +49,7 @@ use "render.entpkg";
 - `kernels/field.ent` — Instanced distance fields: the scene's proxy
   baked from its things' own distances. Kernels: `render.field_atlas8@1`,
   `render.field_shapes8@1`, `render.field_atlas_join@1`,
-  `render.field_shapes_join@1`, `render.field_frame@1`,
+  `render.field_shapes_join@1`, `render.field_frame@1`, `render.field_near@1`,
   `render.field_bin_counts@1`, `render.field_bin_fill@1`,
   `render.field_bake@1`.
 - `kernels/film.ent` — Film. Kernels: `render.film_start@1`,

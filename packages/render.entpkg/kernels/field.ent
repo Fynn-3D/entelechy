@@ -1,12 +1,12 @@
 // Instanced distance fields: the scene's proxy baked from its things' own distances. Each kind of thing brings its distance
-// volume (a shape: an asset's proxy, its `Proxy` frame in the asset's own meters); the shapes are packed into one atlas, side by
-// side up its depth (`render.field_atlas8`, `render.field_shapes8`; more than eight joined, `render.field_atlas_join`,
+// volume (a shape: an asset's proxy, its `Proxy` frame in the asset's own meters); the shapes are packed into one atlas, side
+// by side up its depth (`render.field_atlas8`, `render.field_shapes8`; more than eight joined, `render.field_atlas_join`,
 // `render.field_shapes_join`). Each placed thing is a `FieldInst`: where it stands, how far it is turned about the vertical (as
 // `turned`: x toward z), how large, which shape. Round the lens a block of the scene (`render.field_frame`, held to steps so it
-// is baked again only a step on) is baked from the things standing in it: its columns cut into bins across the ground, each
-// bin's things listed (`render.field_bin_counts`, `graphs/field.esn`'s runs, `render.field_bin_fill`), and each cell of the
-// block the nearest of its bin's things (`render.field_bake`). What it gives is a proxy as the contract has it
-// (`Volume<Vec4>`: distance and albedo, and its `Proxies` frame), so every renderer traces it.
+// is baked again only a step on) is baked from the things standing in it: its things kept (`render.field_near`), its columns
+// cut into bins across the ground, each bin's things listed (`render.field_bin_counts`, `graphs/field.esn`'s runs,
+// `render.field_bin_fill`), and each cell of the block the nearest of its bin's things (`render.field_bake`). What it gives is
+// a proxy as the contract has it (`Volume<Vec4>`: distance and albedo, and its `Proxies` frame), so every renderer traces it.
 use "camera.ent";
 
 /// A placed thing: where its origin stands, its turn about the vertical, its size, and the shape (atlas slot) it is; a shape
@@ -145,10 +145,30 @@ kernel render.field_frame@1 {
     }
 }
 
-/// How many things stand in each bin (`bins` by `bins` across the block, widened by `band`), for `graphs/field.esn`'s runs.
+/// 1 for each thing standing in the block (widened by `band`), 0 for the rest: kept (`parallel`'s compact) before the bins look,
+/// so each bin walks the block's things alone, not the whole scene's.
+kernel render.field_near@1 {
+    requires { field.read; field.write; }
+    input insts: FieldInsts;
+    input shapes: Proxies;
+    input frame: Proxies;
+    param band: Float = 4.0;
+    output result: Rows<Int>;
+    compute {
+        let it = sample(insts);
+        let fr = at(frame, 0);
+        let box = vec4(fr.lo.x - band, fr.lo.z - band, fr.lo.x + fr.cells.x * fr.cell + band, fr.lo.z + fr.cells.z * fr.cell + band);
+        return if it.shape >= 0 && field_in_bin(field_reach(shapes, it), box) { 1 } else { 0 };
+    }
+}
+
+/// How many of the block's things (`kept`, `kept_count` of them) stand in each bin (`bins` by `bins` across the block, widened
+/// by `band`), for `graphs/field.esn`'s runs.
 kernel render.field_bin_counts@1 {
     requires { field.read; field.write; }
     input insts: FieldInsts;
+    input kept: Rows<Int>;
+    input kept_count: Rows<Int>;
     input shapes: Proxies;
     input frame: Proxies;
     param bins: Int = 16;
@@ -156,9 +176,9 @@ kernel render.field_bin_counts@1 {
     output result: Rows<Int>;
     compute {
         let box = field_bin_box(at(frame, 0), element(), bins, band);
-        return loop count(insts) with n = 0 {
-            let it = at(insts, index());
-            if it.shape >= 0 && field_in_bin(field_reach(shapes, it), box) { n + 1 } else { n }
+        return loop at(kept_count, 0) with n = 0 {
+            let it = at(insts, at(kept, index()));
+            if field_in_bin(field_reach(shapes, it), box) { n + 1 } else { n }
         };
     }
 }
@@ -169,6 +189,8 @@ kernel render.field_bin_fill@1 {
     input counts: Rows<Int>;
     input ends: Rows<Int>;
     input insts: FieldInsts;
+    input kept: Rows<Int>;
+    input kept_count: Rows<Int>;
     input shapes: Proxies;
     input frame: Proxies;
     input slots: Rows<Int>;
@@ -180,10 +202,10 @@ kernel render.field_bin_fill@1 {
         let b = element();
         let box = field_bin_box(at(frame, 0), b, bins, band);
         let start = at(ends, b) - sample(counts);
-        loop count(insts) with k = 0 {
-            let it = at(insts, index());
-            if it.shape >= 0 && field_in_bin(field_reach(shapes, it), box) {
-                emit(Placed { at: start + k, value: index() });
+        loop at(kept_count, 0) with k = 0 {
+            let i = at(kept, index());
+            if field_in_bin(field_reach(shapes, at(insts, i)), box) {
+                emit(Placed { at: start + k, value: i });
                 k + 1
             } else { k }
         };
@@ -215,9 +237,13 @@ kernel render.field_bake@1 {
             let i = at(lists, start + index());
             if i < 0 { best } else {
                 let it = at(insts, i);
-                let v = field_shape_at(atlas, shapes, it.shape, field_local(it, p));
-                let d = v.x * it.size;
-                if d < best.x { vec4(d, v.y, v.z, v.w) } else { best }
+                // A thing whose circle across the ground lies farther than the nearest yet is not looked into.
+                let r = field_reach(shapes, it);
+                if length(vec2(p.x, p.z) - vec2(r.x, r.y)) - r.z >= best.x { best } else {
+                    let v = field_shape_at(atlas, shapes, it.shape, field_local(it, p));
+                    let d = v.x * it.size;
+                    if d < best.x { vec4(d, v.y, v.z, v.w) } else { best }
+                }
             }
         };
     }

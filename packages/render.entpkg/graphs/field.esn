@@ -19,9 +19,11 @@ param bins: Int = 16;
 param band: Float = 4.0;
 
 node frame: render.field_frame@1 { lens <- lens; base <- base; nx = nx; ny = ny; nz = nz; cell = cell; hold = hold; domain = 1; }
-node counts: render.field_bin_counts@1 { insts <- insts; shapes <- shapes; frame <- frame.result; bins = bins; band = band; domain = bins * bins; }
+node near: render.field_near@1 { insts <- insts; shapes <- shapes; frame <- frame.result; band = band; domain = count(insts); }
+node kept: graph "parallel.entpkg/graphs/compact.esn" { flags <- near.result; }
+node counts: render.field_bin_counts@1 { insts <- insts; kept <- kept.indices; kept_count <- kept.count; shapes <- shapes; frame <- frame.result; bins = bins; band = band; domain = bins * bins; }
 node runs: graph "parallel.entpkg/graphs/runs.esn" { counts <- counts.result; }
-node fill: render.field_bin_fill@1 { counts <- counts.result; ends <- runs.ends; insts <- insts; shapes <- shapes; frame <- frame.result; slots <- runs.slots; bins = bins; band = band; domain = count(counts); }
+node fill: render.field_bin_fill@1 { counts <- counts.result; ends <- runs.ends; insts <- insts; kept <- kept.indices; kept_count <- kept.count; shapes <- shapes; frame <- frame.result; slots <- runs.slots; bins = bins; band = band; domain = count(counts); }
 node bake: render.field_bake@1 { atlas <- atlas; shapes <- shapes; insts <- insts; frame <- frame.result; ends <- runs.ends; lists <- fill.result; bins = bins; band = band;
     domain = vec3(nx, ny, nz); }
 
