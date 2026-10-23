@@ -112,7 +112,9 @@ use "render.entpkg";
   the lamps shown and bounced.
 - `graphs/picture.esn` — The picture's raster.
 - `graphs/probes.esn` — The light-probe renderer (`kernels/probes.ent`),
-  the lamps shown, reflected and bounced.
+  the lamps shown, reflected and bounced; the light gathered on the screen
+  drawn anew each frame and averaged while the lens rests (up to
+  `settle_frames`, then it rests too).
 - `graphs/super_resolution.esn` — Temporal super-resolution
   (`render.tsr`).
 - `graphs/upscale.esn` — A finished picture (tone-mapped, sRGB) scaled

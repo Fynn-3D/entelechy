@@ -7,4 +7,11 @@ expect 23 59 = 0.554 0.552 0.560 0.01
 expect 40 57 = 0.849 0.485 0.488 0.01
 expect 118 59 = 1.000 0.935 0.727 0.01
 expect 10 85 = 0.538 0.542 0.558 0.01
-expect 80 10 = 0.762 0.745 0.726 0.01
+expect 80 10 = 0.732 0.722 0.714 0.01
+
+# The lens rests: each frame's gathered rays are new and their mean is
+# kept (the frames rested and counted in all).
+frame 0.0167
+frame 0.0333
+expect light.count.result[0].n = 2
+expect light.count.result[0].total = 3

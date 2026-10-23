@@ -8,6 +8,7 @@ use "geometry.entpkg";
 use "brdf.ent";
 use "camera.ent";
 use "lamps.ent";
+use "path_trace.ent";
 use "sky.ent";
 use "transmission.ent";
 
@@ -183,8 +184,8 @@ fn cosine_around(n: Vec3, u: Float, v: Float) -> Vec3 {
 /// walked on the screen first (a thing met gives its look without reflections, `lit`, which is itself lit by
 /// the probes: so light bounces again and again); a ray meeting nothing on the screen walks the proxies (the coarse distance field) a few
 /// meters further, and meeting something takes it as the sun lights it plus its probe light; meeting nothing still, up it takes the sky, down
-/// the probe light in that direction. This
-/// frame's random numbers change with the lens (as temporal antialiasing jitters the lens, each frame's rays differ, and blended they are even).
+/// the probe light in that direction. Each frame's random numbers are new (the frames counted, and the lens: a jittered lens
+/// draws apart too), so the frames kept are even.
 kernel render.probes_screen_gather@1 {
     requires { field.read; field.write; }
     input surface: Grid<Vec4>;
@@ -196,6 +197,8 @@ kernel render.probes_screen_gather@1 {
     input sky: SkyLooks;
     input lens: Lenses;
     input lamps: Lamps;
+    /// The frames the lens has rested and counted in all (`render.path_count`): each frame's rays are new.
+    input count: Counts;
     param spacing: Float = 1.2;
     param rays: Int = 4;
     /// The furthest walked along the proxies (meters).
@@ -216,7 +219,8 @@ kernel render.probes_screen_gather@1 {
         let n = su.xyz;
         // No rays: the probes' light alone (steady, without grain).
         if rays <= 0 { let pl = probe_light(probes, fr, spacing, p + n * 0.3, n, s); return vec4(pl.x, pl.y, pl.z, 1.0); }
-        let frame_seed = int(fract(dot(l.ahead, vec3(12.9898, 78.233, 37.719)) * 43758.547) * 65536.0);
+        // A new draw every frame (the frames counted), and with the lens (a jittered lens draws apart too).
+        let frame_seed = hash_int(at(count, 0).total, int(fract(dot(l.ahead, vec3(12.9898, 78.233, 37.719)) * 43758.547) * 65536.0));
         let reach = 1.2 + su.w * 0.08;
         let sum = loop 8 with acc = vec3(0.0, 0.0, 0.0) {
             let k = index();
@@ -247,7 +251,9 @@ kernel render.probes_gather_keep@1 {
     input previous: Image;
     input lens: Lenses;
     input was_lens: Lenses;
-    /// The share of each frame this frame takes.
+    /// The frames the lens has rested (`render.path_count`).
+    input count: Counts;
+    /// The share of each frame this frame takes while the lens moves.
     param fresh: Float = 0.08;
     output result: Image;
     compute {
@@ -276,8 +282,11 @@ kernel render.probes_gather_keep@1 {
             [min(b[0], v), max(b[1], v)]
         };
         let spread = (box[1] - box[0]) * 0.5;
-        let kept = clamp(was.xyz, box[0] - spread, box[1] + spread);
-        let mixed = mix(kept, now.xyz, fresh);
+        // While the lens rests, the mean of every frame since (each frame's
+        // rays new): it converges, the grain gone; while it moves, the last
+        // frames held within this frame's range round the pixel.
+        let rested = at(count, 0).n;
+        let mixed = if held && rested > 0 { mix(was.xyz, now.xyz, 1.0 / float(rested + 1)) } else { mix(clamp(was.xyz, box[0] - spread, box[1] + spread), now.xyz, fresh) };
         // Settled (a step under a thousandth): the last frame's to the bit, so
         // the picture rests and what reads it is not drawn again.
         let step = abs(mixed - was.xyz);
