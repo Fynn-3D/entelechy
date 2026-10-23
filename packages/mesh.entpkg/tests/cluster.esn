@@ -1,0 +1,28 @@
+// A plane with a pyramid on it built as levels and cut into clusters, and
+// a torus joined after it into one library. The plane's points and the
+// pyramid's heights are exact in binary, so every backend merges the same
+// points into the same cells.
+use "../kernels/";
+
+node plane: mesh.plane_points@1 { size = vec2(2.0, 2.0); columns = 65; rows = 65; domain = 4225; }
+node pyramid: kernel {
+    requires { field.read; field.write; }
+    input points: Rows<MeshPoint> <- plane.result;
+    output result: Rows<MeshPoint>;
+    compute {
+        let p = sample(points);
+        let h = max(0.5 - max(abs(p.position.x), abs(p.position.z)), 0.0);
+        return MeshPoint { ..p, position: vec3(p.position.x, h, p.position.z) };
+    }
+}
+node plane_faces: mesh.lattice_faces@1 { columns = 65; rows = 65; domain = 8192; }
+node built: graph "../graphs/cluster.esn" { points <- pyramid.result; faces <- plane_faces.result; }
+node torus: mesh.torus_points@1 { columns = 48; rows = 24; domain = 1152; }
+node torus_faces: mesh.lattice_faces@1 { columns = 48; rows = 24; wrap_columns = true; wrap_rows = true; domain = 2304; }
+node ring: graph "../graphs/cluster.esn" { points <- torus.result; faces <- torus_faces.result; }
+node library: graph "../graphs/library.esn" {
+    a_points <- built.points; a_up <- built.up; a_faces <- built.faces; a_clusters <- built.clusters; a_meshes <- built.meshes; a_errors <- built.errors;
+    b_points <- ring.points; b_up <- ring.up; b_faces <- ring.faces; b_clusters <- ring.clusters; b_meshes <- ring.meshes; b_errors <- ring.errors;
+}
+
+output result <- library.meshes;

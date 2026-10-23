@@ -1,0 +1,66 @@
+scene cluster.esn
+
+# The plane's 8192 faces merged up the levels, about a quarter kept each
+# time; each level's faces in the cluster of every brick their corners lie
+# in, so the levels' faces in clusters are more than the faces merged.
+frame 0.0
+expect built.frame.result[0].cell = 0.037445 0.00001
+expect built.frame.result[0].bits = 5 3 5
+expect count built.l1.points = 801
+expect count built.l1.faces = 1496
+expect count built.l2.faces = 368
+expect count built.l3.faces = 78
+expect count built.l4.faces = 18
+expect count built.l7.faces = 1
+expect count built.points = 5311
+expect count built.faces = 12128
+expect count built.clusters = 135
+
+# The first cluster: level 0's first brick, its 128 faces, its parent the
+# brick twice as wide a level up; its sphere round its faces.
+expect built.clusters[0].first = 0
+expect built.clusters[0].count = 128
+expect built.clusters[0].level = 0
+expect built.clusters[0].brick = -1 0 -1 0.299562 0.00001
+expect built.clusters[0].parent = -1 0 -1 0.599124 0.00001
+expect built.clusters[0].sphere = -0.84375 0 -0.890625 0.190727 0.00001
+
+# A point's merged point a level up, among all the levels' points: level
+# 0's first two corners into level 1's first point, which lies in their
+# cell; its own a level up past level 1's 801.
+expect built.up[0] = 4225
+expect built.up[1] = 4225
+expect built.up[4225] = 5026
+expect built.points[4225].position = -0.96875 0 -0.96875 0.0001
+expect built.faces[0].a = 0
+expect built.faces[0].b = 1
+expect built.faces[0].c = 66
+
+# Each level's clusters where they begin; how far each level lies from the
+# mesh at most, never less than the level below's; and its bricks' errors
+# where they begin, every index level 0's widths name (3, 1 and 3 bits),
+# a brick holding nothing -1.
+expect built.meshes[0].levels.1 = 100
+expect built.meshes[0].levels.8 = 135
+expect built.meshes[0].errors.0 = 0
+expect built.meshes[0].errors.1 = 0.0078 0.0002
+expect built.meshes[0].errors.2 = 0.0170 0.0002
+expect built.meshes[0].errors.3 = 0.0170 0.0002
+expect built.meshes[0].errors.7 = 0.1806 0.0002
+expect built.meshes[0].grids.1 = 128
+expect count built.errors = 153
+expect built.errors[0] = 0
+expect built.errors[127] = -1
+
+# The torus joined after the plane: its clusters, faces' corners, ups and
+# brick errors moved past the plane's (its first point's merged point the
+# 220th of its level 1, past its 1152 points).
+expect library.meshes[1].levels.0 = 135
+expect library.meshes[1].levels.8 = 173
+expect library.meshes[1].grids.0 = 153
+expect count library.points = 6765
+expect count library.faces = 15545
+expect count library.errors = 179
+expect library.up[5311] = 6683
+expect library.faces[12128].a > 5310
+expect library.clusters[135].first = 12128

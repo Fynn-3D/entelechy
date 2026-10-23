@@ -1,0 +1,28 @@
+//! A level's clusters (`kernels/cluster.ent`): each face in the cluster
+//! of every brick of level `level` a corner of it lies in, sorted by
+//! brick, each brick's run cut every `mesh_cluster_faces()`, and a row for
+//! each cluster.
+use "parallel.entpkg";
+use "../kernels/";
+
+input points: Rows<MeshPoint>;
+input faces: Rows<Face>;
+input frame: ClusterFrames;
+param level: Int = 0;
+
+node corners: mesh.cluster_corner_bricks@1 { faces <- faces; points <- points; frame <- frame; level = level; domain = count(faces) * 3; }
+node entries: graph "parallel.entpkg/graphs/compact.esn" { flags <- corners.flag; }
+node keys: mesh.cluster_entry_keys@1 { keys <- corners.key; entries <- entries.indices; count <- entries.count; domain = max(value(count), 1); }
+node order: graph "parallel.entpkg/graphs/sort.esn" { keys <- keys.result; bits = 25; }
+node runs: mesh.cluster_run_starts@1 { order <- order.result; keys <- keys.result; }
+node heads: mesh.cluster_chunk_heads@1 { runs <- runs.result; }
+node ranks: parallel.compact_offsets@1 { flags <- heads.result; }
+node clusters: parallel.runs_entries@1 { ends <- ranks.result; domain = 1; }
+node blank: parallel.runs_slots@1 { entries <- clusters.result; domain = value(entries); }
+node starts: mesh.cluster_starts@1 { heads <- heads.result; ranks <- ranks.result; slots <- blank.result; }
+node sorted: mesh.cluster_sorted_faces@1 { faces <- faces; entries <- entries.indices; order <- order.result; domain = count(order); }
+node rows: mesh.cluster_rows@1 { faces <- sorted.result; points <- points; starts <- starts.result; entries <- entries.indices; order <- order.result; source <- faces;
+    frame <- frame; level = level; domain = count(starts); }
+
+output faces <- sorted.result;
+output clusters <- rows.result;

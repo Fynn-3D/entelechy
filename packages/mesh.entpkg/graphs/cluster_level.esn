@@ -1,0 +1,38 @@
+//! One level up (`kernels/cluster.ent`): the level below `level`, its
+//! points merged cell by cell on level `level`'s lattice, its faces kept
+//! where their corners stay apart, each point's merged point (`up`), and
+//! how far the level lies from the mesh at most (`deviation`; each point's,
+//! `deviation_points`).
+//! `bits` is how many bits the keys take: `32 - level` holds any mesh's.
+use "parallel.entpkg";
+use "../kernels/";
+
+input points: Rows<MeshPoint>;
+input quadrics: Rows<ErrorQuadric>;
+input faces: Rows<Face>;
+input frame: ClusterFrames;
+param level: Int = 1;
+param bits: Int = 31;
+
+node keys: mesh.cluster_keys@1 { points <- points; frame <- frame; level = level; }
+node order: graph "parallel.entpkg/graphs/sort.esn" { keys <- keys.result; bits = bits; }
+node heads: mesh.cluster_heads@1 { order <- order.result; keys <- keys.result; }
+node ranks: parallel.compact_offsets@1 { flags <- heads.result; }
+node cells: parallel.runs_entries@1 { ends <- ranks.result; domain = 1; }
+node blank: parallel.runs_slots@1 { entries <- cells.result; domain = value(entries); }
+node starts: mesh.cluster_starts@1 { heads <- heads.result; ranks <- ranks.result; slots <- blank.result; }
+node merged: mesh.cluster_merge@1 { points <- points; quadrics <- quadrics; order <- order.result; starts <- starts.result; frame <- frame; level = level;
+    domain = count(starts); }
+node deviation: mesh.cluster_deviation@1 { deviation <- merged.deviation; }
+node no_up: parallel.compact_blank@1 { flags <- keys.result; }
+node up: mesh.cluster_up@1 { order <- order.result; ranks <- ranks.result; slots <- no_up.result; }
+node flags: mesh.cluster_face_flags@1 { faces <- faces; up <- up.result; }
+node kept: graph "parallel.entpkg/graphs/compact.esn" { flags <- flags.result; }
+node faces_up: mesh.cluster_faces_up@1 { faces <- faces; up <- up.result; kept <- kept.indices; domain = max(value(count), 1); count <- kept.count; }
+
+output points <- merged.point;
+output quadrics <- merged.quadric;
+output faces <- faces_up.result;
+output up <- up.result;
+output deviation <- deviation.result;
+output deviation_points <- merged.deviation;
