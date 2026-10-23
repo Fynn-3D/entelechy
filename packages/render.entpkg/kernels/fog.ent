@@ -33,10 +33,11 @@ fn lamp_airlight(m: Lamp, eye: Vec3, dir: Vec3, t0: Float, t1: Float) -> Vec3 {
 /// Height fog along each view ray: the light it scatters toward the eye
 /// (rgb) and how much of what lies behind still shows (w). The sun's share
 /// is shadowed through the proxies and by the clouds' `deck` (in
-/// `cloud_steps` steps toward the sun: shafts between the clouds); each lamp's is summed exactly along each
-/// step and, for a lamp that casts shadows, cut by the proxies within
-/// `shafts` steps toward it (0: unshadowed). `steps` steps out to the
-/// surface or `far` meters, denser near the eye.
+/// `cloud_steps` steps toward the sun: shafts between the clouds); each lamp
+/// of the pixel's tile (`tiles`, `render.lamps_tiles` with `through`) is
+/// summed exactly along each step and, for a lamp that casts shadows, cut
+/// by the proxies within `shafts` steps toward it (0: unshadowed). `steps`
+/// steps out to the surface or `far` meters, denser near the eye.
 kernel render.fog_march@1 {
     requires { field.read; field.write; }
     input surface: Grid<Vec4>;
@@ -47,6 +48,7 @@ kernel render.fog_march@1 {
     input land: Grid<Float>;
     input frame: Proxies;
     input deck: CloudDecks;
+    input tiles: Grid<IVec4>;
     param density: Float = 0.002;
     param base: Float = 0.0;
     param falloff: Float = 80.0;
@@ -55,6 +57,8 @@ kernel render.fog_march@1 {
     param far: Float = 2000.0;
     param steps: Int = 24;
     param shafts: Int = 8;
+    /// The steps toward the sun through the proxies from each sample.
+    param sun_steps: Int = 8;
     param cloud_steps: Int = 2;
     /// The lamps' light in the fog, times this.
     param lamp_share: Float = 1.0;
@@ -78,8 +82,8 @@ kernel render.fog_march@1 {
         let jitter = air_offset(q);
         let sun = normalize(s.sun);
         let sun_phase = air_phase(dot(dir, sun), forward);
-        let lamp_n = min(count(lamps), lamps_most());
         let cd = at(deck, 0);
+        let bits = at(tiles, min(floor((q + 0.5) * ratio / lamp_tile()), size(tiles) - vec2(1.0, 1.0)));
         return loop 64 with r = vec4(0.0, 0.0, 0.0, 1.0) until index() >= n || r.w < 0.01 {
             let f0 = (float(index()) + jitter) / float(n);
             let f1 = (float(index()) + 1.0 + jitter) / float(n);
@@ -89,20 +93,22 @@ kernel render.fog_march@1 {
             let p = l.eye + dir * ((t0 + t1) * 0.5);
             let dens = fog_density(p.y, density, base, falloff);
             if dens * dt < 0.000001 { r } else {
-                let sun_seen = rough_shadow(proxy, land, fr, p, sun, fr.cell, 300.0, 12) * cloud_shadow(cd, p, sun, cloud_steps);
-                let lamps_here = loop 128 with sum = vec3(0.0, 0.0, 0.0) until index() >= lamp_n {
-                    let m = at(lamps, index());
+                let sun_seen = rough_shadow(proxy, land, fr, p, sun, fr.cell, 300.0, sun_steps) * cloud_shadow(cd, p, sun, cloud_steps);
+                let lamps_here = loop 128 with w = LampWalk { left: bits, light: vec3(0.0, 0.0, 0.0) } until lamp_first(w.left) < 0 {
+                    let k = lamp_first(w.left);
+                    let left = lamp_cleared(w.left, k);
+                    let m = at(lamps, min(k, count(lamps) - 1));
                     let d = p - m.at;
-                    if m.reach <= 0.0 || dot(d, d) > m.reach * m.reach * 1.5 { sum } else {
+                    if k >= count(lamps) || dot(d, d) > m.reach * m.reach * 1.5 { LampWalk { left: left, light: w.light } } else {
                         // Light going from the lamp on toward the eye is thrown forward.
                         let given = lamp_airlight(m, l.eye, dir, t0, t1) * air_phase(0.0 - dot(dir, normalize(d)), forward);
                         let lit = max(given.x, max(given.y, given.z)) > 0.000001;
                         let cut = if lit && m.shadow != 0 && shafts > 0 { lamp_rough_shadow(m, proxy, land, fr, p, shafts) } else { 1.0 };
-                        sum + given * cut
+                        LampWalk { left: left, light: w.light + given * cut }
                     }
                 };
                 // The lamps' share is summed over the step: per meter, as the rest.
-                let light = s.sun_color * (sun_phase * sun_seen) + s.ambient * 0.0795775 + glow + lamps_here * (lamp_share / max(dt, 0.0001));
+                let light = s.sun_color * (sun_phase * sun_seen) + s.ambient * 0.0795775 + glow + lamps_here.light * (lamp_share / max(dt, 0.0001));
                 let absorbed = exp(0.0 - dens * dt);
                 let scattered = light * ((1.0 - absorbed) * r.w);
                 vec4(r.x + scattered.x, r.y + scattered.y, r.z + scattered.z, r.w * absorbed)

@@ -252,7 +252,9 @@ kernel render.lamps_depth@1 {
 
 /// Which lamps reach what each tile shows: 128 bits, lamp k's bit k % 32 of
 /// component k / 32. A lamp is kept where its sphere of reach falls on the
-/// tile on the screen and overlaps the distances the tile shows.
+/// tile on the screen and overlaps the distances the tile shows; with
+/// `through` meters given (above 0), every distance from the eye to that
+/// far, as the air along the view rays is lit (fog).
 kernel render.lamps_tiles@1 {
     requires { field.read; field.write; }
     input depth: Grid<Vec2>;
@@ -260,9 +262,11 @@ kernel render.lamps_tiles@1 {
     input lens: Lenses;
     /// The G-buffer the tiles cut (its size).
     input surface: Grid<Vec4>;
+    param through: Float = 0.0;
     output result: Grid<IVec4>;
     compute {
-        let span = sample(depth);
+        let seen = sample(depth);
+        let span = if through > 0.0 { vec2(0.0, through) } else { seen };
         if span.x > no_hit() * 0.5 { return ivec4(0, 0, 0, 0); }
         let l = at(lens, 0);
         let ext = size(surface);

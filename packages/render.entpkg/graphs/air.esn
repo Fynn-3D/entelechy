@@ -31,7 +31,10 @@ param cover: Float = 0.0;
 param scale: Float = 2400.0;
 param below: Vec3 = vec3(0.0, 0.0, 0.0);
 
-node fog: render.fog_march@1 { surface <- surface; lens <- lens; sky <- sky; lamps <- lamps; proxy <- proxy; land <- land; frame <- frame; deck <- deck.result;
+// The lamps each tile's view rays pass by, as far as the fog reaches.
+node lamp_depth: render.lamps_depth@1 { surface <- surface; domain = ceil(size(surface) / 16); }
+node lamp_tiles: render.lamps_tiles@1 { depth <- lamp_depth.result; lamps <- lamps; lens <- lens; surface <- surface; through = 2000.0; domain = size(depth); }
+node fog: render.fog_march@1 { tiles <- lamp_tiles.result; surface <- surface; lens <- lens; sky <- sky; lamps <- lamps; proxy <- proxy; land <- land; frame <- frame; deck <- deck.result;
     density = density; base = base; falloff = falloff; glow = glow; lamp_share = lamp_share; shafts = shafts; domain = ceil(size(surface) / 4); }
 node across: render.fog_blur@1 { fog <- fog.result; surface <- surface; axis = 0; domain = size(fog); }
 node down: render.fog_blur@1 { fog <- across.result; surface <- surface; axis = 1; domain = size(fog); }

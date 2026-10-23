@@ -473,15 +473,17 @@ kernel render.probes_shade@1 {
         let ao = baked_occlusion(ex);
         let e = at(gathered, q).xyz * ao;
         let r = reflect(dir, n);
-        // Off the screen the reflection follows the coarse field (only for
-        // surfaces smooth enough to show it).
-        let fallback = if m.rough < 0.75 { rough_seen(proxy, land, probes, lamps, fr, spacing, p + n * 0.08, p, n, r, 30.0, s, 0) }
-            else if r.y > 0.0 { sky_radiance(r, s, false) } else { probe_light(probes, fr, spacing, p + n * 0.3, r, s) };
         // Screen-space reflections: looked for on smooth surfaces alone (the roughest layer no rougher than `mirror_below`).
         let sharpest = min(m.rough, if m.clearcoat > 0.0 { m.coat_rough } else { 1.0 });
         let jitter = fract(sin(dot(q, vec2(12.9898, 78.233))) * 43758.5453);
         let hit = if sharpest < mirror_below { screen_march(surface, l, extent, p + n * 0.02, r, 4.0 + su.w * 0.5, 32, 0.6, jitter) } else { vec3(0.0, 0.0, -1.0) };
         let edge = if hit.z >= 0.0 { saturate(min(min(hit.x, hit.y), min(extent.x - hit.x, extent.y - hit.y)) / 40.0) } else { 0.0 };
+        // Off the screen (and fading in at its edge) the reflection follows
+        // the coarse field, for surfaces smooth enough to show it; where the
+        // screen gave it whole, nothing more is traced.
+        let fallback = if edge >= 1.0 { vec3(0.0, 0.0, 0.0) }
+            else if m.rough < 0.75 { rough_seen(proxy, land, probes, lamps, fr, spacing, p + n * 0.08, p, n, r, 30.0, s, 0) }
+            else if r.y > 0.0 { sky_radiance(r, s, false) } else { probe_light(probes, fr, spacing, p + n * 0.3, r, s) };
         let seen = if hit.z >= 0.0 { at(lit, vec2(hit.x, hit.y)).xyz } else { fallback };
         let mirrored = mix(fallback, seen, edge);
         let spec_light = mix(mirrored, e, sqrt(m.rough)) * ao;

@@ -206,15 +206,17 @@ What every renderer shares, in this order:
 - **The air** (`graphs/air.esn`). `render.fog_march` walks each view ray
   at a quarter of the size through height fog the sun (shadowed through
   the proxies and by the clouds' deck: shafts between the clouds), the
-  sky, a glow of the scene's own and the lamps light: each lamp's light
-  summed exactly along each step (a beam beside a bulb
-  has no spikes) and cut by the proxies toward it into shafts;
-  `render.fog_blur` smooths it by depth; `render.clouds_march` walks a
-  deck of clouds for the sky at an eighth of the size, lit through the
-  cloud toward the sun with light scattered again and again, dark at a
-  sunlit edge, lit from below by `below`; `render.fog_apply` lays both
-  over the picture, upsampled by depth. Each pixel's steps start at a
-  fixed offset of its own, so nothing needs history to settle.
+  sky, a glow of the scene's own and the lamps light: the lamps of each
+  pixel's tile (`render.lamps_tiles` with `through`, cut for the whole
+  view ray, not the surface), each one's light summed exactly along each
+  step (a beam beside a bulb has no spikes) and cut by the proxies toward
+  it into shafts; `render.fog_blur` smooths it by depth;
+  `render.clouds_march` walks a deck of clouds for the sky at an eighth of
+  the size, lit through the cloud toward the sun with light scattered
+  again and again, dark at a sunlit edge, lit from below by `below`;
+  `render.fog_apply` lays both over the picture, upsampled by depth. Each
+  pixel's steps start at a fixed offset of its own, so nothing needs
+  history to settle.
 - **The sky** (`graphs/atmosphere.esn`). Sunlight through a sphere of
   air round the ground (Hillaire's model): Rayleigh's scattering, haze
   and ozone; light scattered more than once a table by height and the
