@@ -46,6 +46,9 @@ use "render.entpkg";
   `render.nearer@1`.
 - `kernels/contact_shadow.ent` — Contact shadows. Kernels:
   `render.contact@1`.
+- `kernels/decal.ent` — Decals pressed onto a G-buffer. Kernels:
+  `render.decals_none@1`, `render.decal_looks_none@1`, `render.decal_paint@1`,
+  `render.decal_extra@1`, `render.decal_normals@1`.
 - `kernels/depth_of_field.ent` — Depth of field. Kernels:
   `render.dof_start@1`, `render.dof_control@1`, `render.focus@1`,
   `render.focused@1`.
@@ -206,6 +209,8 @@ use "render.entpkg";
   a library `mesh.entpkg`'s `graphs/cluster.esn` built, the things
   placed (`FieldInst`s, the field's own), the corners and faces for the
   rasterizer.
+- `graphs/decals.esn` — Decals laid onto a scene's G-buffer before a
+  renderer (`kernels/decal.ent`).
 - `graphs/exposure.esn` — Metered exposure, then local exposure: `hdr`
   scaled, and the `exposure` followed.
 - `graphs/field.esn` — The scene's proxy baked round the lens from its
@@ -250,7 +255,7 @@ use "render.entpkg";
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`bounce.replay`, `cluster.replay`, `field.replay`, `fog_volumes.replay`, `lamp_looks.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `proxy_stream.replay`, `reflection.replay`, `shadow.replay`,
+`bounce.replay`, `cluster.replay`, `decals.replay`, `field.replay`, `fog_volumes.replay`, `lamp_looks.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `proxy_stream.replay`, `reflection.replay`, `shadow.replay`,
 `sky.replay`, `stream.replay`, `temporal.replay`, `translucent.replay`.
 Every Kernel of the package is reached by one of them.
 
@@ -352,6 +357,19 @@ deck (the deck `graphs/volumetrics.esn` gives back as `deck`), and
 `render.specular_aa` widens each pixel's roughness by how much its normals
 turn within it (Kaplanyan and Hoffman's), so a far glossy surface does not
 flash from pixel to pixel.
+
+Decals (`graphs/decals.esn`) are pictures a scene presses onto what it
+shows: each a box in the world (`Decal`, `decal`), its picture laid across
+and up and pressed along its depth onto the surfaces inside that face out
+along it, thinning toward the box's depth and as a surface turns away
+(`fade`). Where it covers, its color (times `tint`, from the scene's decal
+looks, an atlas its kernels draw) goes over the albedo, its `rough`,
+`metal` and `glow` over the surface's (each negative: kept), its bumps (a
+normal map in the looks) tilt the normal along its width and height as
+they lie on the surface; the decals are laid in their rows' order, the
+last on top. The paint, the extra and the surface come back in the
+contract's layout, so every renderer lights a decal as it lights the
+surface it lies on.
 
 For a scene of clustered meshes, `graphs/shadow.esn` takes the
 cascades' place with a virtual shadow map: `levels` levels round the eye,
