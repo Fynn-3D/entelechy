@@ -104,7 +104,8 @@ use "render.entpkg";
   faces' boxes cut into tiles of cells) and spread past it by jump
   flooding. Kernels: `render.proxy_bake_tiles@1`,
   `render.proxy_bake_faces@1`, `render.proxy_seeds@1`,
-  `render.proxy_flood@1`, `render.proxy_baked@1`.
+  `render.proxy_flood@1`, `render.proxy_baked@1`, `render.proxy_stage@1`,
+  `render.proxy_flood_staged@1`, `render.proxy_published@1`.
 - `kernels/radiance.ent` — Light kept on the proxies (as Lumen keeps its
   surface cache): each cell near a surface the light leaving it, the sun
   and the lamps through the proxies (each lamp that casts shadows walked
@@ -225,6 +226,8 @@ use "render.entpkg";
 - `graphs/proxy_bake.esn` — A mesh baked into a proxy
   (`kernels/proxy_bake.ent`), for a scene drawn as one mesh rather than
   placed things.
+- `graphs/proxy_stream.esn` — A mesh baked into a proxy a pass a frame, the
+  last one made in use until the new one is: for geometry that streams.
 - `graphs/shadow.esn` — The sun's shadow from a virtual shadow map
   (`kernels/shadow.ent`) multiplied into the G-buffer's sun visibility,
   for a scene of clustered meshes.
@@ -244,7 +247,7 @@ use "render.entpkg";
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`bounce.replay`, `cluster.replay`, `field.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `reflection.replay`, `shadow.replay`,
+`bounce.replay`, `cluster.replay`, `field.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `proxy_stream.replay`, `reflection.replay`, `shadow.replay`,
 `sky.replay`, `stream.replay`, `temporal.replay`, `translucent.replay`.
 Every Kernel of the package is reached by one of them.
 
@@ -512,9 +515,10 @@ one library the cluster draw, the shadows and the lamps' maps take as any
 other; a chunk with an array on its way is not drawn
 (`render.stream_insts`). A `fields` node reads the paths a frame behind,
 so the instances pair with the last frame's chunks. The proxy the light
-is traced through is baked from the chunks too (`graphs/proxy_bake.esn` over
+is traced through is baked from the chunks too (`graphs/proxy_stream.esn` over
 `mesh.entpkg`'s `graphs/finest.esn`: each chunk's finest level), again
-whenever the chunks in change. A far chunk is the
+whenever the chunks in change, a pass a frame, the last proxy in use until
+the new one is made, so no frame bakes it whole. A far chunk is the
 smaller the farther it stands in: in a room seen from inside nearly every
 cluster is still needed four meters off.
 

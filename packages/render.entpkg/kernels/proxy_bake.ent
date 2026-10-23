@@ -140,6 +140,21 @@ kernel render.proxy_seeds@1 {
     }
 }
 
+/// A pass of jump flooding at cell `g`: the nearest to its middle of the points it and its 26 neighbors `step` cells off
+/// keep in `seeds`.
+fn proxy_flood_at(seeds: Volume<Vec4>, fr: Proxy, g: IVec3, step: Int) -> Vec4 {
+    let p = proxy_bake_middle(fr, g);
+    let top = isize(seeds) - 1;
+    return loop 27 with best = at(seeds, g) {
+        let o = ivec3(index() % 3, (index() / 3) % 3, index() / 9) - 1;
+        let c = g + o * step;
+        if c.x < 0 || c.y < 0 || c.z < 0 || c.x > top.x || c.y > top.y || c.z > top.z { best } else {
+            let s = at(seeds, c);
+            if s.w >= 0.0 && (best.w < 0.0 || length(s.xyz - p) < length(best.xyz - p)) { s } else { best }
+        }
+    };
+}
+
 /// A pass of jump flooding: each cell the nearest to its middle of the points it and its 26 neighbors `step` cells off keep.
 kernel render.proxy_flood@1 {
     requires { field.read; field.write; }
@@ -147,19 +162,63 @@ kernel render.proxy_flood@1 {
     input frame: Proxies;
     param step: Int = 1;
     output result: Volume<Vec4>;
+    compute { return proxy_flood_at(seeds, at(frame, 0), icoord(), step); }
+}
+
+// ------------------------------------------------------------------ a pass a frame
+
+/// The baking a frame (`domain = 2`): the stage (x of row 0: 1 to 8 a pass of flooding, 9 the proxy made, 10 done) and a
+/// hash of what it is baked from (row 1): when that changes the stage starts again at 1, then goes on a step a frame to 10,
+/// where it stays.
+kernel render.proxy_stage@1 {
+    requires { field.read; field.write; }
+    input previous: Rows<Int>;
+    input points: Rows<MeshPoint>;
+    input faces: Rows<Face>;
+    input colors: Rows<Vec4>;
+    input frame: Proxies;
+    output result: Rows<Int>;
     compute {
-        let g = icoord();
-        let p = proxy_bake_middle(at(frame, 0), g);
-        let top = isize(seeds) - 1;
-        return loop 27 with best = sample(seeds) {
-            let o = ivec3(index() % 3, (index() / 3) % 3, index() / 9) - 1;
-            let c = g + o * step;
-            if c.x < 0 || c.y < 0 || c.z < 0 || c.x > top.x || c.y > top.y || c.z > top.z { best } else {
-                let s = at(seeds, c);
-                if s.w >= 0.0 && (best.w < 0.0 || length(s.xyz - p) < length(best.xyz - p)) { s } else { best }
-            }
-        };
+        let fr = at(frame, 0);
+        let n = count(points);
+        let a = at(points, 0).position;
+        let b = at(points, n / 2).position;
+        let c = at(points, max(n - 1, 0)).position;
+        let f = at(faces, max(count(faces) - 1, 0));
+        let sign = mul_wrap(count(points), 73856093) ^ mul_wrap(count(faces), 19349663) ^ mul_wrap(count(colors), 83492791) ^ bits(a.x + a.y * 3.0 + a.z * 7.0)
+            ^ mul_wrap(bits(b.x + b.y * 3.0 + b.z * 7.0), 31) ^ mul_wrap(bits(c.x + c.y * 3.0 + c.z * 7.0), 37) ^ mul_wrap(f.a + f.b * 3 + f.c * 7, 41)
+            ^ bits(fr.lo.x + fr.lo.y * 3.0 + fr.lo.z * 7.0 + fr.cell);
+        let held = count(previous) == 2;
+        let stage = if !held || at(previous, 1) != sign { 1 } else { min(at(previous, 0) + 1, 10) };
+        return if element() == 0 { stage } else { sign };
     }
+}
+
+/// The flood a frame (`domain = size(seeds)`): at stage 1 its first pass over the seeds, at stages 2 to 8 the next over the
+/// last frame's (`previous`, steps halving from 128), after them as it was.
+kernel render.proxy_flood_staged@1 {
+    requires { field.read; field.write; }
+    input seeds: Volume<Vec4>;
+    input previous: Volume<Vec4>;
+    input stage: Rows<Int>;
+    input frame: Proxies;
+    output result: Volume<Vec4>;
+    compute {
+        let s = at(stage, 0);
+        let held = isize(previous) == idomain();
+        if s < 1 || s > 8 { return if held { sample(previous) } else { sample(seeds) }; }
+        let step = 256 >> s;
+        return if s == 1 || !held { proxy_flood_at(seeds, at(frame, 0), icoord(), step) } else { proxy_flood_at(previous, at(frame, 0), icoord(), step) };
+    }
+}
+
+/// The proxy's cell `g` from the flooded points `seeds`: its nearest point's distance less half a cell, and that point's
+/// face's color (`colors`); far and `gray` where no face is.
+fn proxy_baked_at(seeds: Volume<Vec4>, colors: Rows<Vec4>, fr: Proxy, g: IVec3, gray: Vec3) -> Vec4 {
+    let s = at(seeds, g);
+    if s.w < 0.0 { return vec4(1000.0, gray.x, gray.y, gray.z); }
+    let c = at(colors, int(s.w));
+    return vec4(length(s.xyz - proxy_bake_middle(fr, g)) - fr.cell * 0.5, c.x, c.y, c.z);
 }
 
 /// The proxy (`domain` its cells): each cell its nearest point's distance less half a cell, and that point's face's color
@@ -171,11 +230,23 @@ kernel render.proxy_baked@1 {
     input frame: Proxies;
     param gray: Vec3 = vec3(0.5, 0.5, 0.5);
     output result: Volume<Vec4>;
+    compute { return proxy_baked_at(seeds, colors, at(frame, 0), icoord(), gray); }
+}
+
+/// The proxy in use (`domain = size(work)`): made from the flood (`work`) at stage 9, the last one made (`previous`) the
+/// rest of the time, so what the light is traced through changes once, whole, when the new one is done; before any is
+/// made, the flood as far as it has come.
+kernel render.proxy_published@1 {
+    requires { field.read; field.write; }
+    input work: Volume<Vec4>;
+    input previous: Volume<Vec4>;
+    input stage: Rows<Int>;
+    input colors: Rows<Vec4>;
+    input frame: Proxies;
+    param gray: Vec3 = vec3(0.5, 0.5, 0.5);
+    output result: Volume<Vec4>;
     compute {
-        let s = sample(seeds);
-        let fr = at(frame, 0);
-        if s.w < 0.0 { return vec4(1000.0, gray.x, gray.y, gray.z); }
-        let c = at(colors, int(s.w));
-        return vec4(length(s.xyz - proxy_bake_middle(fr, icoord())) - fr.cell * 0.5, c.x, c.y, c.z);
+        let held = isize(previous) == idomain();
+        return if at(stage, 0) == 9 || !held { proxy_baked_at(work, colors, at(frame, 0), icoord(), gray) } else { sample(previous) };
     }
 }
