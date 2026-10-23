@@ -4,6 +4,7 @@
 // midtones, coarse or fine), a widescreen's bars. The fringe, darkened corners, grain and sRGB are
 // `image.entpkg`'s. A few looks are preset (`film_look`); 0 is the parameters' own.
 use "image.entpkg";
+use "grade.ent";
 
 /// One film's look.
 struct Film {
@@ -102,7 +103,7 @@ kernel render.film@1 {
         } else { vec3(0.0, 0.0, 0.0) };
         // Graded in light, not in the picture's encoding.
         let lin0 = srgb_to_linear(shown) + glow * vec3(1.0, 0.35, 0.15) * (f.halation * 2.0);
-        let lin1 = lin0 * exp2(f.exposure) * vec3(1.0 + 0.12 * f.temperature + 0.04 * f.tint, 1.0 - 0.06 * f.tint, 1.0 - 0.12 * f.temperature + 0.04 * f.tint);
+        let lin1 = lin0 * exp2(f.exposure) * grade_balance(f.temperature, f.tint);
         let l = film_light(lin1);
         let lin2 = mix(vec3(l, l, l), lin1, f.saturation);
         let tone = mix(vec3(0.88, 1.0, 1.1), vec3(1.1, 1.0, 0.86), smoothstep(0.02, 0.5, l));

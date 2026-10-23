@@ -73,6 +73,10 @@ use "render.entpkg";
   `render.fog_volumes_none@1`, `render.froxel_light@1`, `render.froxel_scan@1`,
   `render.froxel_furthest@1`, `render.froxel_view@1`, `render.fog_blur@1`,
   `render.fog_apply@1`.
+- `kernels/grade.ent` — A grade as data a scene changes as it goes:
+  exposure, white balance, saturation, contrast, gain, a drain toward one
+  color, blended from one look to another. Kernels: `render.grade_start@1`,
+  `render.grade@1`, `render.grade_masked@1`.
 - `kernels/haze.ent` — Haze: aerial perspective after the real atmosphere.
   Kernels: `render.haze@1`.
 - `kernels/lamp_map.ent` — Lamps' shadow maps: a cube of distances for
@@ -95,6 +99,8 @@ use "render.entpkg";
 - `kernels/motion_blur.ent` — Motion blur: each pixel spread along the
   way it moved on the screen, the lens's move and the thing's. Kernels:
   `render.motion_blur@1`.
+- `kernels/outline.ent` — Outlines from the G-buffer: an edge's near side
+  and a crease, drawn as far as a mask asks. Kernels: `render.outline@1`.
 - `kernels/path_tracer.ent` — Path tracing (standard PBR, `brdf.ent`).
   Kernels: `render.path_count_start@1`, `render.path_count@1`,
   `render.path_trace@1`, `render.path_blank@1`, `render.path_accum@1`,
@@ -164,7 +170,7 @@ use "render.entpkg";
 - `kernels/sky.ent` — The sky.
 - `kernels/specular_aa.ent` — Gloss widened where normals turn within a
   pixel (specular antialiasing). Kernels: `render.specular_aa@1`.
-- `kernels/stylized.ent` — A stylized look: outlines and a watercolor's tone. Kernels: `render.stylized@1`.
+- `kernels/stylized.ent` — A stylized look: outlines (`outline.ent`'s) and a watercolor's tone. Kernels: `render.stylized@1`.
 - `kernels/stream.ent` — A world streamed round the camera: the chunks of
   its lattice within reach of the eye, near ones as built and far ones
   coarser, their files spelled for a scene's `fields` nodes, each chunk
@@ -265,7 +271,7 @@ use "render.entpkg";
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`bounce.replay`, `clip_plane.replay`, `cluster.replay`, `decals.replay`, `field.replay`, `fog_volumes.replay`, `lamp_looks.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `proxy_detail.replay`, `proxy_stream.replay`, `reflection.replay`, `shadow.replay`,
+`bounce.replay`, `clip_plane.replay`, `cluster.replay`, `decals.replay`, `field.replay`, `finish.replay`, `fog_volumes.replay`, `lamp_looks.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `proxy_detail.replay`, `proxy_stream.replay`, `reflection.replay`, `shadow.replay`,
 `sky.replay`, `stream.replay`, `temporal.replay`, `translucent.replay`.
 Every Kernel of the package is reached by one of them.
 
@@ -643,5 +649,17 @@ own) and encodes sRGB.
   orange split, an S curve), halation, the lens's color fringe, vignette,
   grain in clumps heaviest in the middle tones, wide-screen bars; presets
   (`film_look`) or its own params, G in the window (`render.film_keys`).
+- `kernels/grade.ent`: a grade as data (`Grade`), laid on the light before
+  its tone curve: what a post process's settings are, made by a scene's
+  own kernel as its story or its place asks (`grade_mix` blends two, one
+  look into another), laid on all of a picture (`render.grade`) or on part
+  of it by a mask (`render.grade_masked`); `render.grade_start` makes one
+  from parameters. Its white balance is the film's (`grade_balance`).
+- `kernels/outline.ent`: `render.outline`, a picture's outlines from its
+  G-buffer: a pixel much nearer than a neighbor (`outline_near`, the near
+  side of an edge) and a surface turning sharply between neighbors
+  (`outline_crease`), fading by `reach`, drawn as far as a mask asks (one
+  pixel of 1 for all of it), so a scene inks part of its picture: a model
+  drawn among real things, a selection.
 - `kernels/composite.ent`: two G-buffers of one view made one, each pixel the
   nearer surface's (`render.nearer`), for a scene that draws its parts apart.

@@ -1,0 +1,29 @@
+scene finish.esn
+
+# A stop up doubles middle gray; a contrast of one pulls 0.36 (a stop over
+# gray) to 0.72 and leaves gray as it is; red without saturation is its
+# lightness. Drained into (0.5, 1, 2), half gray is those halved; half way
+# from none to two stops is one. Warmed all the way, gray is 12 per cent
+# redder and bluer less; no grade changes nothing.
+frame 0.0
+expect graded.result[0] = 0.36 0.72 0.18 0.2126 0.0001
+expect graded.result[1] = 0.25 0.5 1 1 0.0001
+expect graded.result[2] = 0.56 0.5 0.44 0.2 0.0001
+
+# Laid by a node, a stop up; by a mask, the left as it is and the right a
+# stop down.
+expect lit.result[0] = 0.36 0.36 0.36 1 0.0001
+expect lit.result[1] = 1 1 1 1 0.0001
+expect masked.result[0] = 0.18 0.18 0.18 1 0.0001
+expect masked.result[1] = 0.25 0.25 0.25 1 0.0001
+
+# The nearer block's edges inked (white times the ink's color, eight
+# tenths of the way); the wall beside them clean; the crease's two sides
+# inked; masked out, nothing.
+expect inked.result[1] = 1 1 1 1 0.0001
+expect inked.result[2] = 0.376 0.36 0.416 1 0.0001
+expect inked.result[3] = 0.376 0.36 0.416 1 0.0001
+expect inked.result[6] = 1 1 1 1 0.0001
+expect inked.result[8] = 0.376 0.36 0.416 1 0.0001
+expect inked.result[9] = 0.376 0.36 0.416 1 0.0001
+expect held.result[2] = 1 1 1 1 0.0001
