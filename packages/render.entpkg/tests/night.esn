@@ -51,7 +51,8 @@ node mg: stand.gbuffer@1 { lens <- mirror_lens.result; sky <- night.result; mirr
 node mirror_day: render.lit@1 { surface <- mg.surface; paint <- mg.paint; extra <- mg.extra; layers <- mg.layers; more <- mg.more;
     sky <- night.result; lens <- mirror_lens.result; proxy <- stand.proxy; frame <- stand.frame; domain = size(surface); }
 node mirror_lit: graph "../graphs/lamps.esn" { hdr <- mirror_day.result; lens <- mirror_lens.result; surface <- mg.surface; paint <- mg.paint; extra <- mg.extra; layers <- mg.layers; more <- mg.more;
-    proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; lamps <- lamps.result; }
+    proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; lamps <- lamps.result; maps <- no_maps.result; }
+node no_maps: render.lamp_maps_none@1 { domain = vec2(1, 1); }
 node mirrored: render.mirror_mix@1 { hdr <- lit.hdr; mirror <- mirror_lit.hdr; surface <- stand.surface; paint <- stand.paint; more <- marks.result; lens <- stand.lens; domain = size(hdr); }
 
 // The moon's cascades, for its shafts in the fog.

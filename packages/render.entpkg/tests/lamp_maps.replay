@@ -1,0 +1,13 @@
+scene lamp_maps.esn
+
+# Under the ball dark, to the edge of its shadow (0.8 m out, the points 0.3
+# m off the axis: 0.58, 0.76 and 0.95 m from it), lit past it; the lamp
+# that casts no shadow has no slot, the other the first.
+frame 0.0
+expect seen.result[0] = 0 0.02
+expect seen.result[1] = 0 0.02
+expect seen.result[2] = 0 0.2
+expect seen.result[3] = 1 0.02
+expect seen.result[4] = 1 0.02
+expect seen.result[5] = -1
+expect seen.result[6] = 0

@@ -127,6 +127,80 @@ fn lamp_irradiance(m: Lamp, p: Vec3) -> Vec3 {
     return m.color * (lamp_beam(m, d) / (dot(d, d) + m.size * m.size));
 }
 
+/// A lamp's cube of shadow maps (`kernels/lamp_map.ent`): a face's axes, the way it looks (`ahead`), its right and its up;
+/// faces 0 to 5 look along +x, -x, +y, -y, +z, -z.
+struct LampCubeAxes { ahead: Vec3; right: Vec3; up: Vec3; }
+fn lamp_cube_axes(f: Int) -> LampCubeAxes {
+    return if f == 0 { LampCubeAxes { ahead: vec3(1.0, 0.0, 0.0), right: vec3(0.0, 0.0, -1.0), up: vec3(0.0, 1.0, 0.0) } }
+        else if f == 1 { LampCubeAxes { ahead: vec3(-1.0, 0.0, 0.0), right: vec3(0.0, 0.0, 1.0), up: vec3(0.0, 1.0, 0.0) } }
+        else if f == 2 { LampCubeAxes { ahead: vec3(0.0, 1.0, 0.0), right: vec3(1.0, 0.0, 0.0), up: vec3(0.0, 0.0, -1.0) } }
+        else if f == 3 { LampCubeAxes { ahead: vec3(0.0, -1.0, 0.0), right: vec3(1.0, 0.0, 0.0), up: vec3(0.0, 0.0, 1.0) } }
+        else if f == 4 { LampCubeAxes { ahead: vec3(0.0, 0.0, 1.0), right: vec3(1.0, 0.0, 0.0), up: vec3(0.0, 1.0, 0.0) } }
+        else { LampCubeAxes { ahead: vec3(0.0, 0.0, -1.0), right: vec3(-1.0, 0.0, 0.0), up: vec3(0.0, 1.0, 0.0) } };
+}
+/// The cube face a direction `v` from the lamp falls on.
+fn lamp_cube_face(v: Vec3) -> Int {
+    let a = abs(v);
+    return if a.x >= a.y && a.x >= a.z { if v.x >= 0.0 { 0 } else { 1 } } else if a.y >= a.z { if v.y >= 0.0 { 2 } else { 3 } } else { if v.z >= 0.0 { 4 } else { 5 } };
+}
+/// Where on face `f` (-1 to 1 across it) a direction `v` in front of it falls.
+fn lamp_cube_uv(f: Int, v: Vec3) -> Vec2 {
+    let x = lamp_cube_axes(f);
+    return vec2(dot(v, x.right), dot(v, x.up)) / max(dot(v, x.ahead), 0.000001);
+}
+/// Texel `g` of map slot `slot`'s face `f` in the maps (faces one above another, slots one above another), `res` a side.
+fn lamp_map_cell(slot: Int, f: Int, g: IVec2, res: Int) -> IVec2 {
+    return ivec2(clamp(g.x, 0, res - 1), (slot * 6 + f) * res + clamp(g.y, 0, res - 1));
+}
+/// Lamp `k`'s slot in the maps: its place among the lamps that cast shadows, -1 for one that casts none, one past the
+/// slots the maps hold, or no maps at all (`render.lamp_maps_none`'s one texel).
+fn lamp_map_slot(lamps: Lamps, maps: Grid<Int>, k: Int) -> Int {
+    let res = int(size(maps).x);
+    let slots = if res < 8 { 0 } else { int(size(maps).y) / (res * 6) };
+    if slots <= 0 || k >= count(lamps) || at(lamps, k).shadow == 0 { return -1; }
+    let before = loop k with n = 0 { n + int(at(lamps, index()).shadow != 0) };
+    return if before < slots { before } else { -1 };
+}
+/// The distance map slot `slot` keeps from its lamp along `v`, `res` texels a side, the texel `o` texels across from where
+/// `v` falls.
+fn lamp_map_distance(maps: Grid<Int>, slot: Int, res: Int, f: Int, g: Vec2, o: Vec2) -> Float {
+    let t = g + o;
+    return from_bits(at(maps, lamp_map_cell(slot, f, ivec2(int(floor(t.x)), int(floor(t.y))), res)));
+}
+/// How much of lamp `m` reaches `p` (a surface facing `n`) by its shadow map in slot `slot` (1 lit, 0 dark): the point
+/// moved off the surface by a texel and a half, blockers looked for over as many texels as the bulb spans from there, their
+/// mean distance making the penumbra as wide as the bulb makes it at `p`, that much filtered (twelve points of a spiral
+/// turned by `turn`).
+fn lamp_map_seen(maps: Grid<Int>, slot: Int, m: Lamp, p: Vec3, n: Vec3, turn: Float) -> Float {
+    let res = int(size(maps).x);
+    let r = float(res);
+    let texel = length(p - m.at) * 2.0 / r;
+    let v = p + n * (texel * 1.5) - m.at;
+    let dist = length(v);
+    let f = lamp_cube_face(v);
+    let g = (lamp_cube_uv(f, v) * 0.5 + 0.5) * r;
+    let bias = texel * 1.5;
+    let search = clamp(m.size * r / (2.0 * max(dist, 0.01)), 1.0, 16.0);
+    let a = turn * 6.2831853;
+    let found = loop 8 with b = vec2(0.0, 0.0) {
+        let k = float(index());
+        let w = a + k * 2.3999632;
+        let o = vec2(cos(w), sin(w)) * (search * sqrt((k + 0.5) / 8.0));
+        let d = lamp_map_distance(maps, slot, res, f, g, o);
+        if d < dist - bias { vec2(b.x + d, b.y + 1.0) } else { b }
+    };
+    if found.y < 0.5 { return 1.0; }
+    let blocker = found.x / found.y;
+    let wide = clamp(m.size * (dist - blocker) / max(blocker, 0.01) / max(texel, 0.000001), 0.75, 16.0);
+    let lit = loop 12 with sum = 0.0 {
+        let k = float(index());
+        let w = a + k * 2.3999632;
+        let o = vec2(cos(w), sin(w)) * (wide * sqrt((k + 0.5) / 12.0));
+        sum + step(dist - bias, lamp_map_distance(maps, slot, res, f, g, o))
+    };
+    return lit / 12.0;
+}
+
 /// The shadow toward point `at` of lamp `m` from `p` (a surface facing `n`) through the proxies, walked from just off the
 /// surface to the lamp, its steps set on by `jitter` of a cell (0 to 1): 1 lit, 0 dark, the penumbra wider for a larger bulb.
 fn lamp_shadow_to(m: Lamp, at: Vec3, proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, p: Vec3, n: Vec3, jitter: Float) -> Float {
@@ -233,7 +307,7 @@ struct LampWalk { left: IVec4; light: Vec3; }
 /// highlight; a lamp that casts shadows shadowed through the proxies and,
 /// within `contact` meters, on the screen (as far as `reach` says).
 fn lamps_at(lamps: Lamps, bits: IVec4, m: Pbr, p: Vec3, n: Vec3, v: Vec3, t: Float, q: Vec2,
-    surface: Grid<Vec4>, l: Lens, proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, contact: Float, reach: ContactReach) -> Vec3 {
+    surface: Grid<Vec4>, l: Lens, proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, maps: Grid<Int>, contact: Float, reach: ContactReach) -> Vec3 {
     let walked = loop 128 with w = LampWalk { left: bits, light: vec3(0.0, 0.0, 0.0) } until lamp_first(w.left) < 0 {
         let k = lamp_first(w.left);
         let left = lamp_cleared(w.left, k);
@@ -249,7 +323,9 @@ fn lamps_at(lamps: Lamps, bits: IVec4, m: Pbr, p: Vec3, n: Vec3, v: Vec3, t: Flo
                 // A sphere light: the highlight widened by the bulb as seen from here (Karis).
                 let widened = sqrt(saturate(pbr_alpha(m.rough) + lamp.size / (2.0 * max(dist, 0.01))));
                 let shade = if lamp.shadow == 0 { 1.0 } else {
-                    let far = lamp_shadow(lamp, proxy, land, frame, p, n, fract(52.982919 * fract(dot(q, vec2(0.06711056, 0.00583715)))));
+                    let turn = fract(52.982919 * fract(dot(q, vec2(0.06711056, 0.00583715))));
+                    let slot = lamp_map_slot(lamps, maps, k);
+                    let far = if slot >= 0 { lamp_map_seen(maps, slot, lamp, p, n, turn) } else { lamp_shadow(lamp, proxy, land, frame, p, n, turn) };
                     let near = if dist < contact { 1.0 - contact_shadow(surface, l, size(surface), p, n, to, t, 8, 0.5, reach) } else { 1.0 };
                     far * near
                 };
@@ -348,6 +424,9 @@ kernel render.lamps_light@1 {
     input proxy: Volume<Vec4>;
     input land: Grid<Float>;
     input frame: Proxies;
+    /// The lamps' shadow maps (`graphs/lamp_maps.esn`; `render.lamp_maps_none` for none: each lamp's shadow through the
+    /// proxies).
+    input maps: Grid<Int>;
     param contact: Float = 30.0;
     /// How far a lamp's contact shadow reaches and how thick what casts it is (`ContactReach`, as `render.contact`'s).
     param contact_length: Float = 0.025;
@@ -365,7 +444,7 @@ kernel render.lamps_light@1 {
         if lamp_first(bits) < 0 { return vec4(0.0, 0.0, 0.0, 1.0); }
         let m = pbr_of(sample(paint), sample(extra), sample(layers), sample(more));
         let light = lamps_at(lamps, bits, m, l.eye + dir * s.w, s.xyz, vec3(0.0, 0.0, 0.0) - dir, s.w, q,
-            surface, l, proxy, land, frame, contact, ContactReach { length: contact_length, longest: contact_longest, thick: contact_thick, thickest: contact_thickest });
+            surface, l, proxy, land, frame, maps, contact, ContactReach { length: contact_length, longest: contact_longest, thick: contact_thick, thickest: contact_thickest });
         return vec4(light.x, light.y, light.z, 1.0);
     }
 }

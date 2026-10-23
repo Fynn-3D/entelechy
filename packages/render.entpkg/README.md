@@ -68,8 +68,16 @@ use "render.entpkg";
   `render.fog_march@1`, `render.fog_blur@1`, `render.fog_apply@1`.
 - `kernels/haze.ent` — Haze: aerial perspective after the real atmosphere.
   Kernels: `render.haze@1`.
+- `kernels/lamp_map.ent` — Lamps' shadow maps: a cube of distances for
+  each lamp that casts shadows, drawn from a clustered library by tiles,
+  each texel where the ray from the lamp meets the nearest face. Kernels:
+  `render.lamp_maps_none@1`, `render.lamp_map_lamps@1`,
+  `render.lamp_map_count@1`, `render.lamp_map_counts@1`,
+  `render.lamp_map_clusters@1`, `render.lamp_map_tiles@1`,
+  `render.lamp_map_blank@1`, `render.lamp_map_draw@1`.
 - `kernels/lamps.ent` — Point lights, spotlights and glowing panels,
-  culled by tiles, shadowed through the proxies and on the screen. Kernels:
+  culled by tiles, shadowed by their maps or through the proxies, and on
+  the screen. Kernels:
   `render.lamps_none@1`, `render.lamps_depth@1`, `render.lamps_tiles@1`,
   `render.lamps_light@1`, `render.lamps_shade@1`.
 - `kernels/lit.ent` — Lit: each pixel by itself in one pass, the sun
@@ -170,6 +178,8 @@ use "render.entpkg";
   things' shapes and places (`kernels/field.ent`), in three levels, each
   coarser and wider than the one before.
 - `graphs/field_level.esn` — One level of `field.esn`.
+- `graphs/lamp_maps.esn` — The lamps' shadow maps (`kernels/lamp_map.ent`),
+  drawn once while lamps and things keep still.
 - `graphs/lamps.esn` — The lamps added to a renderer's picture, for one
   that does not take them in itself.
 - `graphs/motion_blur.esn` — Motion blur over a picture, the lens's last
@@ -202,7 +212,7 @@ use "render.entpkg";
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`bounce.replay`, `cluster.replay`, `field.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `reflection.replay`, `shadow.replay`,
+`bounce.replay`, `cluster.replay`, `field.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `reflection.replay`, `shadow.replay`,
 `sky.replay`, `temporal.replay`.
 Every Kernel of the package is reached by one of them.
 
@@ -333,8 +343,11 @@ What every renderer shares, in this order:
   panel's diffuse light exactly (Lambert's formula for a polygon), its
   highlight from its representative point (Karis's) with `glossy_by`, the
   energy kept as the panel widens it; each
-  lamp that casts shadows shadowed through the proxies and, within
-  `contact` meters, on the screen. Probe GI and the path tracer
+  lamp that casts shadows shadowed by its shadow map where the scene draws
+  them (`graphs/lamp_maps.esn`: a cube of distances, read percentage
+  closer, the penumbra from the blockers' mean distance and the bulb's
+  size), through the proxies where it does not (`render.lamp_maps_none`),
+  and, within `contact` meters, on the screen. Probe GI and the path tracer
   take that light in: what they show, reflect and gather on the screen;
   off the screen, what a ray meets in the proxies is lit by every lamp
   (`lamps_on_rough`), so lamps are bounced there too, and the probes

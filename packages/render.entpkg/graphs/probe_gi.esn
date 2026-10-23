@@ -61,8 +61,9 @@ node beyond: render.probes_behind@1 { more <- more; behind_at <- behind_at; behi
 // The lamps' light on each surface, from those each tile of the screen keeps.
 node lamp_depth: render.lamps_depth@1 { surface <- surface; domain = ceil(size(surface) / 16); }
 node lamp_tiles: render.lamps_tiles@1 { depth <- lamp_depth.result; lamps <- lamps; lens <- lens; surface <- surface; domain = size(depth); }
+node no_maps: render.lamp_maps_none@1 { domain = vec2(1, 1); }
 node lamped: render.lamps_light@1 { surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; tiles <- lamp_tiles.result; lamps <- lamps; lens <- lens;
-    proxy <- proxy; land <- land; frame <- frame; domain = size(surface); }
+    proxy <- proxy; land <- land; frame <- frame; maps <- no_maps.result; domain = size(surface); }
 node lit: render.probes_lit@1 { surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; probes <- light.result; frame <- frame; sky <- sky; lens <- lens;
     lamped <- lamped.result; spacing = spacing; reach = ao_reach; strength = ao_strength; domain = size(surface); }
 // The frames the lens has rested: each frame's rays new, averaged while it rests.
