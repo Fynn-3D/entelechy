@@ -87,6 +87,15 @@ use "render.entpkg";
   `render.probes_screen_gather@1`, `render.probes_gather_keep@1`,
   `render.probes_gather_blur@1`, `render.probes_behind@1`,
   `render.probes_lit@1`, `render.probes_shade@1`.
+- `kernels/radiance.ent` — Light kept on the proxies (as Lumen keeps its
+  surface cache): each cell near a surface the light leaving it, the sun
+  through the proxies, the sky they leave open and the light the cache
+  gathers from itself, so it bounces again frame after frame, a share lit
+  anew each frame until it rests; each pixel's bounced light gathered
+  through cones read in the levels as wide as they are. Kernels:
+  `render.radiance_frame@1`, `render.radiance_size@1`,
+  `render.radiance_turn@1`, `render.radiance@1`,
+  `render.bounce_gather@1`, `render.bounce@1`.
 - `kernels/raytraced.ent` — Ray traced: shadow and reflection traced in
   one pass. Kernels: `render.raytraced@1`.
 - `kernels/sky.ent` — The sky.
@@ -120,6 +129,9 @@ use "render.entpkg";
   bearing: its `SkyLook` and the table `render.atmosphere_sky` paints from.
 - `graphs/bloom.esn` — Glow (`kernels/bloom.ent`): six levels down and
   back up; its `bloom` is what `render.tonemap` takes.
+- `graphs/bounce.esn` — Light bounced between things laid over a
+  renderer's picture (`kernels/radiance.ent`), for one that takes no
+  bounced light in itself (lit, ray traced).
 - `graphs/clay.esn` — The clay renderer (`render.clay`) on a scene's
   G-buffer (the contract, its first three maps).
 - `graphs/cluster.esn` — Clustered meshes drawn (`kernels/cluster.ent`):
@@ -156,7 +168,7 @@ use "render.entpkg";
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`cluster.replay`, `field.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`,
+`bounce.replay`, `cluster.replay`, `field.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`,
 `sky.replay`, `temporal.replay`.
 Every Kernel of the package is reached by one of them.
 
@@ -329,6 +341,22 @@ What every renderer shares, in this order:
   carries light (`reach` meters at full subsurface) and only over the same
   surface; `render.subsurface_apply` lays the spread share back in place
   of the share as it was.
+- **Bounced light** (`graphs/bounce.esn`). Lit and ray traced light each
+  pixel by the sun and the sky alone; `render.radiance` keeps, in a
+  volume laid as the proxy is (a level for each of its levels, `scale`
+  times coarser), the light leaving each surface the proxy holds: its
+  color times the sun through the proxies, the sky they leave open (lit's
+  own `hemisphere` and `proxy_open`) and what four cones gather from the
+  cache as the last frame left it, so light bounces once more each time a
+  cell is lit. A `parts`th of its cells is lit anew each frame, the rest
+  kept from the last frame's where they lie (a block moved on keeps what
+  it held), and `render.radiance_turn` stops it `settle` frames after the
+  block or the sun last moved. `render.bounce_gather` traces five cones
+  about each normal every `every` pixels (`radiance_cone`: each step read
+  in the first level as wide as the cone, shut by how near the proxy's
+  things are against its width, what the cache holds laid behind what is
+  nearer), and `render.bounce` lays it over each pixel by distance, times
+  its diffuse color and baked occlusion.
 - **Glow** (`graphs/bloom.esn`): the bright parts shrunk by halves six
   times and grown back, every level adding the larger glow below it.
 

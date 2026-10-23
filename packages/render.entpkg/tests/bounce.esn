@@ -1,0 +1,25 @@
+// Light bounced between things (`graphs/bounce.esn`) over the stand lit by
+// lit: what it adds to the floor under the red balls, under the glowing gold
+// ball, between them under the white ball, and to the sky.
+use "../kernels/";
+
+node stand: graph "stand_scene.esn" { }
+node lit: render.lit@1 { surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
+    sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; domain = window(); }
+node bounced: graph "../graphs/bounce.esn" { hdr <- lit.result; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
+    lens <- stand.lens; sky <- stand.sky; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; }
+/// The light added over eight by eight pixels at each place (rgb), and its red over its green (w).
+node added: kernel {
+    requires { field.read; field.write; }
+    input a: Image <- lit.result;
+    input b: Image <- bounced.result;
+    output result: Rows<Vec4>;
+    domain = 4;
+    compute {
+        let o = [vec2(120.0, 300.0), vec2(470.0, 300.0), vec2(320.0, 300.0), vec2(320.0, 60.0)][element()];
+        let s = loop 64 with s = vec4(0.0, 0.0, 0.0, 0.0) { let q = o + vec2(float(index() % 8), float(index() / 8)); s + (at(b, q) - at(a, q)) / 64.0 };
+        return vec4(s.x, s.y, s.z, s.x / max(s.y, 0.0001));
+    }
+}
+
+output result <- bounced.result;

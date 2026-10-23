@@ -1,0 +1,53 @@
+//! Light bounced between things (`kernels/radiance.ent`), laid over a renderer's picture `hdr`: the cache of the light leaving
+//! the proxies' surfaces, a level for each of the proxy's, `scale` times coarser, a `parts`th of it lit anew each frame and
+//! bounced again from itself (`bounce`); what it holds gathered through five cones every `every` pixels a side and laid over
+//! each pixel by distance (`strength`). For a renderer
+//! that takes no bounced light in itself (lit, ray traced); its look as lit's (`Surround`, `Openness`).
+use "../kernels/";
+
+input hdr: Image;
+input surface: Grid<Vec4>;
+input paint: Grid<Vec4>;
+input extra: Grid<Vec4>;
+input layers: Grid<Vec4>;
+input more: Grid<Vec4>;
+input lens: Lenses;
+input sky: SkyLooks;
+input proxy: Volume<Vec4>;
+input land: Grid<Float>;
+input frame: Proxies;
+param scale: Float = 2.0;
+param parts: Int = 4;
+/// The frames the cache goes on lighting after the proxy's block or the sun last moved; then it rests.
+param settle: Int = 48;
+param bounce: Float = 1.0;
+param strength: Float = 1.0;
+param spread: Float = 0.6;
+param reach: Float = 30.0;
+param steps: Int = 10;
+/// The bounce is gathered once every this many pixels a side, and spread back over them by distance.
+param every: Int = 2;
+param ground: Vec3 = vec3(0.34, 0.29, 0.22);
+param ground_light: Float = 1.6;
+param sky_light: Float = 1.15;
+param open_reach: Vec3 = vec3(0.4, 1.2, 2.5);
+param open_strength: Float = 1.6;
+param open_least: Float = 0.1;
+
+node rframe: render.radiance_frame@1 { frame <- frame; scale = scale; domain = count(frame); }
+node cells: render.radiance_size@1 { rframe <- rframe.result; domain = 3; }
+node turn0: Rows<Int> { domain = 3; }
+node turn: render.radiance_turn@1 { previous <~ turn.result from turn0.result; frame <- frame; sky <- sky; settle = settle; domain = 3; }
+node none: Volume<Vec4> { domain = vec3(1, 1, 1); }
+node cache: render.radiance@1 { previous <~ cache.result from none.result; previous_frame <~ rframe.result from rframe.result; proxy <- proxy; land <- land; frame <- frame; rframe <- rframe.result;
+    sky <- sky; turn <- turn.result; size <- cells.result; parts = parts; bounce = bounce; spread = spread; reach = reach;
+    ground = ground; ground_light = ground_light; sky_light = sky_light; open_reach = open_reach; open_strength = open_strength; open_least = open_least;
+    domain = vec3(value(size, 0), value(size, 1), value(size, 2)); }
+node gathered: render.bounce_gather@1 { surface <- surface; lens <- lens; radiance <- cache.result; rframe <- rframe.result; proxy <- proxy; frame <- frame;
+    every = every; spread = spread; reach = reach; steps = steps; domain = ceil(size(surface) / every); }
+node bounced: render.bounce@1 { hdr <- hdr; gathered <- gathered.result; surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; lens <- lens; sky <- sky;
+    every = every; strength = strength; domain = size(hdr); }
+
+output result <- bounced.result;
+output cache <- cache.result;
+output cache_frame <- rframe.result;

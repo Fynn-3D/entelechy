@@ -1,0 +1,259 @@
+// Light kept on the proxies, as Lumen keeps its surface cache: a volume laid as the proxy is, a level for each of its levels
+// at a coarser cell (`render.radiance_frame`), each cell near a surface holding the light leaving that surface: its color times
+// the sun through the proxies, the sky the proxies leave open (as lit has it, `hemisphere` and `proxy_open`), and the light
+// the cache itself gathers from the things round it, so it bounces again frame after frame (`render.radiance`). A share of
+// its cells is lit anew each frame, the rest kept from the last frame's, found by where they lie, so a block moved on keeps
+// what it held. A renderer's picture then takes the light bounced off the things round each pixel: cones traced through the
+// proxy, each step read in the level whose cells are as wide as the cone there, what the cache holds laid nearer first over
+// what lies past it (`radiance_cone`, `render.bounce`). `graphs/bounce.esn` is the whole.
+use "brdf.ent";
+use "camera.ent";
+use "lit.ent";
+use "sky.ent";
+
+/// A frame's levels held at hand (at most eight): each level's row, how deep in the volume its cells start, how many levels.
+struct ProxyLevels { rows: [Proxy; 8]; depth: [Float; 8]; n: Int; }
+
+fn proxy_levels(frame: Proxies) -> ProxyLevels {
+    let n = min(count(frame), 8);
+    let rows = [each 8 { at(frame, min(index(), n - 1)) }];
+    let depth = [each 8 { loop index() with z = 0.0 { z + rows[index()].cells.z } }];
+    return ProxyLevels { rows: rows, depth: depth, n: n };
+}
+
+/// The finest of levels `v` from level `first` up holding `p`; -1 none.
+fn proxy_levels_find(v: ProxyLevels, p: Vec3, first: Int) -> Int {
+    return loop v.n with k = -1 {
+        let fr = v.rows[index()];
+        let c = (p - fr.lo) / fr.cell;
+        let n = fr.cells - vec3(1.0, 1.0, 1.0);
+        let inside = c.x >= 0.0 && c.y >= 0.0 && c.z >= 0.0 && c.x <= n.x && c.y <= n.y && c.z <= n.z;
+        if k < 0 && index() >= first && inside { index() } else { k }
+    };
+}
+
+/// Volume `vol`, laid as levels `v` are, at `p` in level `k` (trilinear).
+fn proxy_levels_at(vol: Volume<Vec4>, v: ProxyLevels, p: Vec3, k: Int) -> Vec4 {
+    let fr = v.rows[k];
+    let c = (p - fr.lo) / fr.cell;
+    return at_linear(vol, vec3(c.x, c.y, c.z + v.depth[k]) + 0.5);
+}
+
+/// The light a cone from `o` along `dir` meets in the cache (`radiance`, laid as levels `rv` are; the proxy's levels `pv`),
+/// its radius growing `spread` meters a meter: each step read in the first level whose cells are as wide as the cone there,
+/// shut by how near the proxy's things are against the cone's width, what the cache holds there laid behind what is nearer
+/// (rgb), and how much the cone is shut in all (w), from `start` out to `far` in at most `steps`.
+fn radiance_cone(radiance: Volume<Vec4>, rv: ProxyLevels, proxy: Volume<Vec4>, pv: ProxyLevels, o: Vec3, dir: Vec3, spread: Float, start: Float, far: Float, steps: Int) -> Vec4 {
+    let fine = pv.rows[0].cell;
+    let r = loop steps with a = [vec4(0.0, 0.0, 0.0, 0.0), vec4(start, 0.0, 0.0, 0.0)] {
+        let t = a[1].x;
+        let p = o + dir * t;
+        let w = max(t * spread, fine * 0.5);
+        let wide = loop pv.n with k = -1 { if k < 0 && pv.rows[index()].cell >= w * 0.75 { index() } else { k } };
+        let k = proxy_levels_find(pv, p, if wide < 0 { pv.n - 1 } else { wide });
+        if k < 0 || a[0].w > 0.97 || t > far { break a; }
+        let d = proxy_levels_at(proxy, pv, p, k).x;
+        let shut = saturate(1.0 - d / w);
+        let held = if k < rv.n { proxy_levels_at(radiance, rv, p, k) } else { vec4(0.0, 0.0, 0.0, 0.0) };
+        let light = held.xyz / max(held.w, 0.05) * saturate(held.w * 4.0);
+        let left = 1.0 - a[0].w;
+        [vec4(a[0].xyz + light * (left * shut), a[0].w + left * shut), vec4(t + max(max(d * 0.8, w * 0.7), fine * 0.5), 0.0, 0.0, 0.0)]
+    };
+    return r[0];
+}
+
+/// The cache's frame: the proxy's levels, each `scale` times coarser over the same block.
+kernel render.radiance_frame@1 {
+    requires { field.read; field.write; }
+    input frame: Proxies;
+    param scale: Float = 2.0;
+    output result: Proxies;
+    compute { let fr = sample(frame); return Proxy { ..fr, cell: fr.cell * scale, cells: ceil(fr.cells / scale) }; }
+}
+
+/// How many cells the cache holds a side (`domain = 3`): its levels' widest across and up, and their depths summed.
+kernel render.radiance_size@1 {
+    requires { field.read; field.write; }
+    input rframe: Proxies;
+    output result: Rows<Int>;
+    compute {
+        let c = loop count(rframe) with c = vec3(0.0, 0.0, 0.0) { let n = at(rframe, index()).cells; vec3(max(c.x, n.x), max(c.y, n.y), c.z + n.z) };
+        let k = element();
+        return int(if k == 0 { c.x } else if k == 1 { c.y } else { c.z });
+    }
+}
+
+/// The cache's turn (`domain = 3`): how many frames it has been lit (x), how many of them since the proxy's block or the sun
+/// last moved (y), and what they were (z, a hash of the first level's corner and the sun); it stops turning `settle` frames
+/// after they last moved, so a cache at rest leaves what reads it at rest.
+kernel render.radiance_turn@1 {
+    requires { field.read; field.write; }
+    input previous: Rows<Int>;
+    input frame: Proxies;
+    input sky: SkyLooks;
+    param settle: Int = 32;
+    output result: Rows<Int>;
+    compute {
+        let fr = at(frame, 0);
+        let sun = at(sky, 0).sun;
+        let sign = mul_wrap(bits(fr.lo.x), 73856093) ^ mul_wrap(bits(fr.lo.y), 19349663) ^ mul_wrap(bits(fr.lo.z), 83492791)
+            ^ mul_wrap(bits(fr.cell), 0x9E3779B1) ^ mul_wrap(bits(sun.x), 40503) ^ mul_wrap(bits(sun.y), 9973) ^ mul_wrap(bits(sun.z), 31);
+        let moved = sign != at(previous, 2);
+        let quiet = if moved { 0 } else { at(previous, 1) + 1 };
+        let turn = if quiet <= settle { at(previous, 0) + 1 } else { at(previous, 0) };
+        let k = element();
+        return if k == 0 { turn } else if k == 1 { min(quiet, settle + 1) } else { sign };
+    }
+}
+
+/// The cache, cell by cell (`domain` the cache's frame's cells, its levels up its depth): a cell within `band` of its cells
+/// of a surface the light leaving it (rgb, w 1), the rest none; one in `parts` lit anew each frame (by `turn`), the others
+/// kept from `previous` (laid as `previous_frame` says) where they lie. The light: the surface's color times the sun through
+/// the proxies (`sun_steps` steps), the sky open over it (`Surround`, `Openness` as lit's), and `bounce` times what four
+/// cones gather from the last frame's cache, so light bounces once more each time a cell is lit.
+kernel render.radiance@1 {
+    requires { field.read; field.write; }
+    input previous: Volume<Vec4>;
+    input previous_frame: Proxies;
+    input proxy: Volume<Vec4>;
+    input land: Grid<Float>;
+    input frame: Proxies;
+    input rframe: Proxies;
+    input sky: SkyLooks;
+    input turn: Rows<Int>;
+    /// How many cells the cache holds a side (`render.radiance_size`; sizes the node).
+    input size: Rows<Int>;
+    param parts: Int = 4;
+    param band: Float = 1.5;
+    param sun_steps: Int = 32;
+    param bounce: Float = 1.0;
+    param spread: Float = 0.6;
+    param reach: Float = 24.0;
+    param cone_steps: Int = 8;
+    param ground: Vec3 = vec3(0.34, 0.29, 0.22);
+    param ground_light: Float = 1.6;
+    param sky_light: Float = 1.15;
+    param open_reach: Vec3 = vec3(0.4, 1.2, 2.5);
+    param open_strength: Float = 1.6;
+    param open_least: Float = 0.1;
+    output result: Volume<Vec4>;
+    compute {
+        let c = coord();
+        let lv = loop 8 with k = vec2(0.0, 0.0) until index() >= count(rframe) - 1 {
+            let depth = k.y + at(rframe, int(k.x)).cells.z;
+            if c.z < depth || int(k.x) >= count(rframe) - 1 { k } else { vec2(k.x + 1.0, depth) }
+        };
+        let fr = at(rframe, int(lv.x));
+        let p = fr.lo + (vec3(c.x, c.y, c.z - lv.y) + 0.5) * fr.cell;
+        let d = proxy_at(proxy, frame, p, 1000.0).x;
+        if abs(d) > band * fr.cell { return vec4(0.0, 0.0, 0.0, 0.0); }
+        let old = proxy_at(previous, previous_frame, p, 0.0);
+        let ci = ivec3(int(c.x), int(c.y), int(c.z));
+        let mine = (ci.x + ci.y * 2 + ci.z * 3 + at(turn, 0)) % max(parts, 1) == 0;
+        if !mine && old.w > 0.5 { return old; }
+        let s = at(sky, 0);
+        let n = rough_normal(proxy, land, frame, p, 1.0);
+        let on = p - n * d;
+        let albedo = proxy_at(proxy, frame, on, 4.0).yzw;
+        let ndl = max(dot(n, s.sun), 0.0);
+        let lit = if ndl > 0.0 { rough_shadow(proxy, land, frame, on + n * fr.cell * 0.5, s.sun, fr.cell * 0.5, 400.0, sun_steps) } else { 0.0 };
+        let look = Surround { ground: ground, ground_light: ground_light, sky_light: sky_light };
+        let open = proxy_open(proxy, frame, on + n * 0.1, n, Openness { reach: open_reach, strength: open_strength, least: open_least });
+        let t = normalize(if abs(n.y) < 0.9 { cross(n, vec3(0.0, 1.0, 0.0)) } else { cross(n, vec3(1.0, 0.0, 0.0)) });
+        let b = cross(n, t);
+        let pv = proxy_levels(frame);
+        let was = proxy_levels(previous_frame);
+        let gathered = loop 4 with g = vec3(0.0, 0.0, 0.0) {
+            let a = float(index()) * 1.5707963 + 0.7853982;
+            let dir = normalize(n + (t * cos(a) + b * sin(a)) * 0.9);
+            g + radiance_cone(previous, was, proxy, pv, on, dir, spread, fr.cell * 1.5, reach, cone_steps).xyz * 0.25
+        };
+        let light = albedo * (s.sun_color * (ndl * lit / 3.14159265) + hemisphere(n, s, look) * open + gathered * bounce);
+        return vec4(light.x, light.y, light.z, 1.0);
+    }
+}
+
+/// The light bounced off the things round each pixel, gathered at a coarser grid (`domain = ceil(size(surface) / every)`): five
+/// cones about the normal of the surface a cell's middle pixel shows (one along it, four leaning out) gather what the cache
+/// holds (`radiance_cone`), the cosine's share each (rgb); its distance (w; the sky's for none).
+kernel render.bounce_gather@1 {
+    requires { field.read; field.write; }
+    input surface: Grid<Vec4>;
+    input lens: Lenses;
+    input radiance: Volume<Vec4>;
+    input rframe: Proxies;
+    input proxy: Volume<Vec4>;
+    input frame: Proxies;
+    param every: Int = 2;
+    param spread: Float = 0.6;
+    param reach: Float = 30.0;
+    param steps: Int = 10;
+    output result: Image;
+    compute {
+        let q = min(floor(coord() * float(every)) + float(every / 2), size(surface) - 1.0);
+        let su = at(surface, q);
+        if su.w > no_hit() * 0.5 { return vec4(0.0, 0.0, 0.0, no_hit()); }
+        let l = at(lens, 0);
+        let dir = ray(l, q, size(surface));
+        let n = su.xyz;
+        let p = l.eye + dir * su.w + n * 0.05;
+        let pv = proxy_levels(frame);
+        let rv = proxy_levels(rframe);
+        let t = normalize(if abs(n.y) < 0.9 { cross(n, vec3(0.0, 1.0, 0.0)) } else { cross(n, vec3(1.0, 0.0, 0.0)) });
+        let b = cross(n, t);
+        let start = pv.rows[0].cell * 1.5;
+        let along = radiance_cone(radiance, rv, proxy, pv, p, n, spread, start, reach, steps).xyz * 0.28;
+        let gathered = loop 4 with g = along {
+            let a = float(index()) * 1.5707963;
+            let way = normalize(n + (t * cos(a) + b * sin(a)));
+            g + radiance_cone(radiance, rv, proxy, pv, p, way, spread, start, reach, steps).xyz * 0.18
+        };
+        return vec4(gathered.x, gathered.y, gathered.z, su.w);
+    }
+}
+
+/// The gathered bounce (`render.bounce_gather`, `every` pixels a cell) laid over a renderer's picture `hdr`: each pixel takes
+/// the four cells round it, each by how near and how alike in distance it is, times the surface's diffuse color, its baked
+/// occlusion and `strength`, through the air as the rest.
+kernel render.bounce@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    input gathered: Image;
+    input surface: Grid<Vec4>;
+    input paint: Grid<Vec4>;
+    input extra: Grid<Vec4>;
+    input layers: Grid<Vec4>;
+    input more: Grid<Vec4>;
+    input lens: Lenses;
+    input sky: SkyLooks;
+    param every: Int = 2;
+    param strength: Float = 1.0;
+    output result: Image;
+    compute {
+        let q = coord();
+        let picture = sample(hdr);
+        let su = sample(surface);
+        if su.w > no_hit() * 0.5 || strength <= 0.0 { return picture; }
+        let g = (q + 0.5) / float(every) - 0.5;
+        let base = floor(g);
+        let f = g - base;
+        let top = size(gathered) - 1.0;
+        let sum = loop 4 with acc = vec4(0.0, 0.0, 0.0, 0.0) {
+            let o = vec2(float(index() % 2), float(index() / 2));
+            let c = at(gathered, clamp(base + o, vec2(0.0, 0.0), top));
+            let near = (if o.x > 0.5 { f.x } else { 1.0 - f.x }) * (if o.y > 0.5 { f.y } else { 1.0 - f.y });
+            let alike = exp(0.0 - abs(c.w - su.w) / (su.w * 0.03 + 0.05));
+            let w = near * alike + 0.0001;
+            vec4(acc.xyz + c.xyz * w, acc.w + w)
+        };
+        let light = sum.xyz / sum.w;
+        let ex = sample(extra);
+        let m = pbr_of(sample(paint), ex, sample(layers), sample(more));
+        let added = m.albedo * ((1.0 - m.metal) * (1.0 - m.transmission)) * light * baked_occlusion(ex) * strength;
+        let l = at(lens, 0);
+        let dir = ray(l, q, domain());
+        let s = at(sky, 0);
+        let shown = aerial(added, dir, su.w, s) - aerial(vec3(0.0, 0.0, 0.0), dir, su.w, s);
+        return vec4(picture.xyz + shown, picture.w);
+    }
+}
