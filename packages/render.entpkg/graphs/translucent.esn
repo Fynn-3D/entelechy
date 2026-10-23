@@ -24,6 +24,8 @@ input proxy: Volume<Vec4>;
 input land: Grid<Float>;
 input frame: Proxies;
 input lamps: Lamps;
+/// What shapes the lamps' light, their cookies and profiles (`render.lamp_looks_none` for none).
+input lamp_looks: LampLooks;
 param near: Float = 0.05;
 param far: Float = 2000.0;
 param smudge: Float = 0.3;
@@ -36,7 +38,7 @@ node runs: graph "parallel.entpkg/graphs/runs.esn" { counts <- tiles.result; }
 node blank: render.translucent_blank@1 { canvas <- canvas; domain = size(canvas) * vec2(12, 1); }
 node sums: render.translucent_splat@1 { vertices <- cut.result; faces <- cut_faces.result; face_looks <- face_looks; looks <- looks; tiles <- tiles.result; ends <- runs.ends;
     blank <- blank.result; entries <- runs.entries; picture <- hdr; surface <- surface; lens <- lens; sky <- sky; cache <- cache; rframe <- cache_frame;
-    proxy <- proxy; land <- land; frame <- frame; lamps <- lamps; near = near; far = far; smudge = smudge; domain = max(value(entries), 1); }
+    proxy <- proxy; land <- land; frame <- frame; lamps <- lamps; lamp_looks <- lamp_looks; near = near; far = far; smudge = smudge; domain = max(value(entries), 1); }
 node laid: render.translucent_resolve@1 { hdr <- hdr; sums <- sums.result; domain = size(hdr); }
 
 output hdr <- laid.result;

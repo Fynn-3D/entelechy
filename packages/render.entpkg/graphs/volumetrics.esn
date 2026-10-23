@@ -15,6 +15,8 @@ input proxy: Volume<Vec4>;
 input land: Grid<Float>;
 input frame: Proxies;
 input lamps: Lamps;
+/// What shapes the lamps' light, their cookies and profiles (`render.lamp_looks_none` for none).
+input lamp_looks: LampLooks;
 /// The sun's cascades and their depths (`render.sun_views`; a scene without them gives `render.sun_none` and a 1 by 1 atlas).
 input views: SunViews;
 input atlas: Grid<Float>;
@@ -66,7 +68,7 @@ node lamp_tiles: render.lamps_tiles@1 { depth <- lamp_depth.result; lamps <- lam
 // The air in a grid over the view: lit cell by cell where its column shows, summed from the eye, read at each quarter
 // pixel's depth.
 node furthest: render.froxel_furthest@1 { surface <- surface; far = far; domain = vec2(columns, rows); }
-node air: render.froxel_light@1 { tiles <- lamp_tiles.result; views <- views; atlas <- atlas; surface <- surface; lens <- lens; sky <- sky; lamps <- lamps; proxy <- proxy; land <- land; frame <- frame;
+node air: render.froxel_light@1 { tiles <- lamp_tiles.result; views <- views; atlas <- atlas; surface <- surface; lens <- lens; sky <- sky; lamps <- lamps; lamp_looks <- lamp_looks; proxy <- proxy; land <- land; frame <- frame;
     deck <- deck.result; volumes <- volumes; furthest <- furthest.result; density = density; base = base; falloff = falloff; forward = forward; glow = glow; lamp_share = lamp_share;
     sky_share = sky_share; sun_steps = sun_steps; shafts = shafts; near = near; far = far; domain = vec3(columns, rows, slices); }
 node within: render.froxel_scan@1 { air <- air.result; step = 1; domain = size(air); }

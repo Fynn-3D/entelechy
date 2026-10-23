@@ -82,8 +82,8 @@ use "render.entpkg";
 - `kernels/lamps.ent` — Point lights, spotlights and glowing panels,
   culled by tiles, shadowed by their maps or through the proxies, and on
   the screen. Kernels:
-  `render.lamps_none@1`, `render.lamps_depth@1`, `render.lamps_tiles@1`,
-  `render.lamps_light@1`, `render.lamps_shade@1`.
+  `render.lamps_none@1`, `render.lamp_looks_none@1`, `render.lamps_depth@1`,
+  `render.lamps_tiles@1`, `render.lamps_light@1`, `render.lamps_shade@1`.
 - `kernels/lit.ent` — Lit: each pixel by itself in one pass, the sun
   and the light all round. Kernels: `render.lit@1`.
 - `kernels/mirror.ent` — A planar mirror. Kernels: `render.mirror_lens@1`,
@@ -250,7 +250,7 @@ use "render.entpkg";
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`bounce.replay`, `cluster.replay`, `field.replay`, `fog_volumes.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `proxy_stream.replay`, `reflection.replay`, `shadow.replay`,
+`bounce.replay`, `cluster.replay`, `field.replay`, `fog_volumes.replay`, `lamp_looks.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `proxy_stream.replay`, `reflection.replay`, `shadow.replay`,
 `sky.replay`, `stream.replay`, `temporal.replay`, `translucent.replay`.
 Every Kernel of the package is reached by one of them.
 
@@ -281,7 +281,8 @@ this contract takes any renderer package by changing a few graph lines.
 | `proxy` | `Volume<Vec4>` | Coarse scene for secondary rays: signed distance (x), albedo (yzw), on the `Proxy` frame's lattice. Ground excluded. |
 | `land` | `Grid<Float>` | Ground height on the `Proxy` frame's ground lattice. |
 | `frame` | `Proxies` | Where `proxy` and `land` lie in the world, and the ground's albedo. |
-| `lamps` | `Lamps` | The lamps beside the sun, at most 128: each where it is, its reach, intensity, bulb size, a spotlight's aim and beam, a panel's half width and height, whether it casts shadows (`point_lamp`, `spot_lamp`, `panel_lamp`). A scene with none hands over `render.lamps_none`. |
+| `lamps` | `Lamps` | The lamps beside the sun, at most 128: each where it is, its reach, intensity, bulb size, a spotlight's aim and beam, a panel's half width and height, whether it casts shadows (`point_lamp`, `spot_lamp`, `panel_lamp`), and where its cookie and profile lie in `lamp_looks` (`lamp_with_cookie`, `lamp_with_profile`). A scene with none hands over `render.lamps_none`. |
+| `lamp_looks` | `LampLooks` | The lamps' cookies and profiles, a picture of the scene's own (its kernels draw it, still or moving): a cookie, the light's filter laid across a spotlight's beam or round a point light; a profile, a row of the share of a lamp's light from its aim to straight behind it, as a `.ies` file read as an input gives it. A scene with none hands over `render.lamp_looks_none`. |
 
 The G-buffer is the scene's own full-precision view; `proxy` and `land` are
 what a renderer traces shadows and bounces through. A scene of placed things
@@ -390,7 +391,11 @@ What every renderer shares, in this order:
   off the screen, what a ray meets in the proxies is lit by every lamp
   (`lamps_on_rough`), so lamps are bounced there too, and the probes
   gather again where a lamp changes. Another renderer has the lamps added
-  after (`graphs/lamps.esn`).
+  after (`graphs/lamps.esn`). Every way a lamp's light is taken (on the
+  screen, off it, in the air) goes through `lamp_irradiance` or
+  `lamp_airlight`, through its cookie and profile (`lamp_look`), so a
+  light function or a fixture's photometry shapes the light, its bounce
+  and its beam in the fog alike.
 - **The mirror.** `render.mirror_lens` reflects the lens in a level plane;
   the scene draws its G-buffer again through it from the plane up
   (`mirror_start` says where a ray reaches the plane), a renderer lights

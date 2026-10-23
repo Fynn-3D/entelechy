@@ -432,7 +432,9 @@ changes:
   luminance for `Grid<Float>`; `.pgm` as `Grid<Float>`; `.wav` as rows of
   one or two floats (the rate is reported, not stored; resample with
   `at_linear`); `.mid` as rows of `{start, duration, pitch, velocity,
-  channel}`, ticks and tempo read as seconds; `.field`, any Field, the
+  channel}`, ticks and tempo read as seconds; `.ies` (a light's
+  photometry, type C) as 181 rows of candela, a degree from the light's aim
+  to straight behind it, the mean over its planes; `.field`, any Field, the
   Host's format. A path through a package's name
   (`"text.entpkg/assets/font.png"`) reads the file inside that package, as a
   `use` of it does; so does every path a scene reads, a file or a directory

@@ -8,7 +8,8 @@ node stand: graph "stand_scene.esn" { }
 node lit: render.lit@1 { surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
     sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; domain = window(); }
 node no_lamps: render.lamps_none@1 { domain = 1; }
-node bounced: graph "../graphs/bounce.esn" { lamps <- no_lamps.result; reflection <- lit.reflection; hdr <- lit.result; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
+node no_lamp_looks: render.lamp_looks_none@1 { domain = vec2(1, 1); }
+node bounced: graph "../graphs/bounce.esn" { lamps <- no_lamps.result; lamp_looks <- no_lamp_looks.result; reflection <- lit.reflection; hdr <- lit.result; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
     lens <- stand.lens; sky <- stand.sky; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; }
 // A green lamp over the balls: what it lights on them bounces too.
 node green: kernel {
@@ -17,7 +18,7 @@ node green: kernel {
     domain = 1;
     compute { return point_lamp(vec3(0.0, 1.6, 0.0), 8.0, vec3(0.0, 40.0, 0.0), 0.05, 1); }
 }
-node lamped: graph "../graphs/bounce.esn" { lamps <- green.result; reflection <- lit.reflection; hdr <- lit.result; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers;
+node lamped: graph "../graphs/bounce.esn" { lamps <- green.result; lamp_looks <- no_lamp_looks.result; reflection <- lit.reflection; hdr <- lit.result; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers;
     more <- stand.more; lens <- stand.lens; sky <- stand.sky; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; }
 /// The green the lamp's bounce adds under the white ball, over eight by eight pixels.
 node greener: kernel {

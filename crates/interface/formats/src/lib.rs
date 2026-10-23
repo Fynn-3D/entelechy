@@ -1,5 +1,6 @@
 //! The codecs importer, exporter and session share: PNG, PPM, WAV and
-//! MIDI to and from Host Fields, the inflate PNG needs, and base64.
+//! MIDI to and from Host Fields, a light's IES photometry to one, the
+//! inflate PNG needs, and base64.
 //! [`read`] and [`encode`] choose by a file's extension. Each is pure
 //! bytes in, bytes or a Field out, depending on the Host alone.
 //!
@@ -14,6 +15,7 @@ pub mod base64;
 pub mod deflate;
 pub mod directory;
 pub mod file;
+pub mod ies;
 pub mod inflate;
 pub mod midi;
 pub mod png;
@@ -30,7 +32,7 @@ use entelechy_host::{Domain, FieldData, Scalar, Schema, Shape};
 const KNOWN: &str = "use .field, .png, .ppm, .pgm, .wav, or .mid";
 
 /// The formats a scene's input reads besides those [`encode`] writes.
-const READ_TOO: &str = "or a data table, .csv or .json";
+const READ_TOO: &str = "or a light's photometry, .ies, or a data table, .csv or .json";
 
 /// The frames a second a WAV is written at by default.
 pub const DEFAULT_RATE: u32 = 48_000;
@@ -87,7 +89,7 @@ pub fn decode_bytes(bytes: &[u8]) -> Result<(FieldData, String), String> {
 /// Reads a file: `.field` as the Host writes it; `.png`, `.ppm`, `.pgm`
 /// as a pixel grid, or a `Grid<Float>` of luminance when `want` says so;
 /// `.wav` as rows of one or two floats; `.mid` as rows of
-/// [`midi::Note`]. Returns the Field and a line describing it.
+/// [`midi::Note`]; `.ies` as rows of candela a degree ([`ies`]). Returns the Field and a line describing it.
 pub fn read(path: &Path, want: Option<&str>) -> Result<(FieldData, String), String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     decode(&bytes, path, want, usize::MAX)
@@ -181,6 +183,17 @@ pub fn decode(
             let song = midi::read(bytes)?;
             let data = midi::field(&song)?;
             let detail = format!("{} ({} track(s))", describe(&data), song.tracks);
+            Ok((data, detail))
+        }
+        "ies" => {
+            let profile = ies::read(bytes)?;
+            let data = ies::field(&profile)?;
+            let detail = format!(
+                "{} (peak {} cd, {} plane(s))",
+                describe(&data),
+                profile.peak,
+                profile.planes
+            );
             Ok((data, detail))
         }
         "csv" | "json" => Err(format!(

@@ -103,8 +103,9 @@ node empty: Volume<Vec4> { domain = vec3(1, 1, 1); value = vec4(1000.0, 0.0, 0.0
 node no_light: Volume<Vec4> { domain = vec3(1, 1, 1); }
 node land: Grid<Float> { domain = vec2(2, 2); value = -50.0; }
 node no_lamps: render.lamps_none@1 { domain = 1; }
+node no_lamp_looks: render.lamp_looks_none@1 { domain = vec2(1, 1); }
 node laid: graph "../graphs/translucent.esn" { points <- quads.result; faces <- quad_faces.result; face_looks <- face_looks.result; looks <- looks.result; hdr <- picture.result;
     surface <- surface.result; lens <- lens.result; sky <- sky.result; canvas <- canvas.result; cache <- no_light.result; cache_frame <- frame.result; proxy <- empty.result;
-    land <- land.result; frame <- frame.result; lamps <- no_lamps.result; smudge = 0.0; }
+    land <- land.result; frame <- frame.result; lamps <- no_lamps.result; lamp_looks <- no_lamp_looks.result; smudge = 0.0; }
 
 output result <- laid.hdr;

@@ -22,6 +22,8 @@ input proxy: Volume<Vec4>;
 input land: Grid<Float>;
 input frame: Proxies;
 input lamps: Lamps;
+/// What shapes the lamps' light, their cookies and profiles (`render.lamp_looks_none` for none).
+input lamp_looks: LampLooks;
 param scale: Float = 2.0;
 param parts: Int = 4;
 /// The frames the cache goes on lighting after the proxy's block or the sun last moved; then it rests.
@@ -54,7 +56,7 @@ node turn0: Rows<Int> { domain = 4; }
 node turn: render.radiance_turn@1 { previous <~ turn.result from turn0.result; frame <- frame; sky <- sky; lamps <- lamps; settle = settle; domain = 4; }
 node none: Volume<Vec4> { domain = vec3(1, 1, 1); }
 node cache: render.radiance@1 { previous <~ cache.result from none.result; previous_frame <~ rframe.result from rframe.result; proxy <- proxy; land <- land; frame <- frame; rframe <- rframe.result;
-    sky <- sky; lamps <- lamps; turn <- turn.result; size <- cells.result; parts = parts; bounce = bounce; spread = spread; reach = reach;
+    sky <- sky; lamps <- lamps; lamp_looks <- lamp_looks; turn <- turn.result; size <- cells.result; parts = parts; bounce = bounce; spread = spread; reach = reach;
     ground = ground; ground_light = ground_light; sky_light = sky_light; open_reach = open_reach; open_strength = open_strength; open_least = open_least;
     domain = vec3(value(size, 0), value(size, 1), value(size, 2)); }
 node screen: render.bounce_screen@1 { hdr <- hdr; surface <- surface; domain = ceil(size(surface) / 4); }
@@ -62,7 +64,7 @@ node probes: render.bounce_probes@1 { screen <- screen.result; surface <- surfac
     probe = probe; rays = rays; spread = probe_spread; reach = reach; steps = steps; screen_reach = screen_reach; domain = ceil(size(surface) / probe); }
 node filtered: render.bounce_probe_filter@1 { red <- probes.red; green <- probes.green; blue <- probes.blue; place <- probes.place; domain = size(place); }
 node gathered: render.bounce_gather@1 { red <- filtered.r; green <- filtered.g; blue <- filtered.b; place <- probes.place; surface <- surface; paint <- paint; lens <- lens;
-    radiance <- cache.result; rframe <- rframe.result; proxy <- proxy; land <- land; frame <- frame; sky <- sky; lamps <- lamps; every = every; probe = probe; reach = reach;
+    radiance <- cache.result; rframe <- rframe.result; proxy <- proxy; land <- land; frame <- frame; sky <- sky; lamps <- lamps; lamp_looks <- lamp_looks; every = every; probe = probe; reach = reach;
     steps = steps; hit_below = hit_below; ground = ground; ground_light = ground_light; sky_light = sky_light; open_reach = open_reach; open_strength = open_strength;
     open_least = open_least; domain = ceil(size(surface) / every); }
 node bounced: render.bounce@1 { hdr <- hdr; gathered <- gathered.result; mirror <- gathered.mirror; reflection <- reflection; surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; lens <- lens; sky <- sky;

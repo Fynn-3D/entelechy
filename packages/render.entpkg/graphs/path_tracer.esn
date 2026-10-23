@@ -20,6 +20,8 @@ input proxy: Volume<Vec4>;
 input land: Grid<Float>;
 input frame: Proxies;
 input lamps: Lamps;
+/// What shapes the lamps' light, their cookies and profiles (`render.lamp_looks_none` for none).
+input lamp_looks: LampLooks;
 param bounces: Int = 2;
 param most: Int = 512;
 param clean: Int = 96;
@@ -30,9 +32,9 @@ node count: render.path_count@1 { previous <~ count.result from count0.result; l
 node lamp_depth: render.lamps_depth@1 { surface <- surface; domain = ceil(size(surface) / 16); }
 node lamp_tiles: render.lamps_tiles@1 { depth <- lamp_depth.result; lamps <- lamps; lens <- lens; surface <- surface; domain = size(depth); }
 node no_maps: render.lamp_maps_none@1 { domain = vec2(1, 1); }
-node lamped: render.lamps_light@1 { surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; tiles <- lamp_tiles.result; lamps <- lamps; lens <- lens;
+node lamped: render.lamps_light@1 { surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; tiles <- lamp_tiles.result; lamps <- lamps; lamp_looks <- lamp_looks; lens <- lens;
     proxy <- proxy; land <- land; frame <- frame; maps <- no_maps.result; domain = size(surface); }
-node noisy: render.path_trace@1 { lamps <- lamps; lamped <- lamped.result; surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; behind_at <- behind_at; behind_normal <- behind_normal; proxy <- proxy; land <- land; frame <- frame; sky <- sky; lens <- lens;
+node noisy: render.path_trace@1 { lamps <- lamps; lamp_looks <- lamp_looks; lamped <- lamped.result; surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; behind_at <- behind_at; behind_normal <- behind_normal; proxy <- proxy; land <- land; frame <- frame; sky <- sky; lens <- lens;
     count <- count.result; bounces = bounces; domain = size(surface); }
 node blank: render.path_blank@1 { domain = window(); }
 // Diffuse light: accumulated, denoised in three passes.

@@ -1,0 +1,9 @@
+IESNA:LM-63-2002
+[TEST] a narrow downlight, for the render package's tests
+[MANUFAC] none
+TILT=NONE
+1 -1 1.0 10 1 1 2 0.1 0.1 0.0
+1.0 1.0 12
+0 10 20 25 30 35 40 50 70 90
+0
+1000 980 900 750 500 250 100 20 0 0

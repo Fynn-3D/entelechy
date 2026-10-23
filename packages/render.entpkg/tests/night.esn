@@ -40,10 +40,11 @@ node marks: kernel {
 node gloss: render.specular_aa@1 { paint <- stand.paint; surface <- stand.surface; domain = size(paint); }
 node clouded: render.clouds_shadow@1 { extra <- stand.extra; surface <- stand.surface; lens <- stand.lens; sky <- night.result; deck <- aired.deck; domain = size(extra); }
 
+node no_lamp_looks: render.lamp_looks_none@1 { domain = vec2(1, 1); }
 // Probe GI takes the lamps in: shown, reflected and bounced.
 node lit: graph "../graphs/probe_gi.esn" { lens <- stand.lens; sky <- night.result; surface <- stand.surface; paint <- gloss.result; extra <- clouded.result; layers <- stand.layers; more <- stand.more;
     behind_at <- stand.behind_at; behind_dir <- stand.behind_dir; behind_paint <- stand.behind_paint; behind_normal <- stand.behind_normal; through <- stand.through;
-    proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; lamps <- lamps.result; nx = 21; ny = 6; nz = 12; spacing = 0.5; }
+    proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; lamps <- lamps.result; lamp_looks <- no_lamp_looks.result; nx = 21; ny = 6; nz = 12; spacing = 0.5; }
 
 node mirror_lens: render.mirror_lens@1 { lens <- stand.lens; level = 0.0; domain = 1; }
 node mg: stand.gbuffer@1 { lens <- mirror_lens.result; sky <- night.result; mirror = 1; domain = ceil(window() / 2); }
@@ -51,7 +52,7 @@ node mg: stand.gbuffer@1 { lens <- mirror_lens.result; sky <- night.result; mirr
 node mirror_day: render.lit@1 { surface <- mg.surface; paint <- mg.paint; extra <- mg.extra; layers <- mg.layers; more <- mg.more;
     sky <- night.result; lens <- mirror_lens.result; proxy <- stand.proxy; frame <- stand.frame; domain = size(surface); }
 node mirror_lit: graph "../graphs/lamps.esn" { hdr <- mirror_day.result; lens <- mirror_lens.result; surface <- mg.surface; paint <- mg.paint; extra <- mg.extra; layers <- mg.layers; more <- mg.more;
-    proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; lamps <- lamps.result; maps <- no_maps.result; }
+    proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; lamps <- lamps.result; lamp_looks <- no_lamp_looks.result; maps <- no_maps.result; }
 node no_maps: render.lamp_maps_none@1 { domain = vec2(1, 1); }
 node mirrored: render.mirror_mix@1 { hdr <- lit.hdr; mirror <- mirror_lit.hdr; surface <- stand.surface; paint <- stand.paint; more <- marks.result; lens <- stand.lens; domain = size(hdr); }
 
@@ -59,7 +60,7 @@ node mirrored: render.mirror_mix@1 { hdr <- lit.hdr; mirror <- mirror_lit.hdr; s
 node no_volumes: render.fog_volumes_none@1 { domain = 1; }
 node sun_views: render.sun_views@1 { lens <- stand.lens; sky <- night.result; nearest = 8.0; spread = 4.0; reach = 20.0; size = 256.0; domain = 2; }
 node sun_depth: stand.sun_depth@1 { views <- sun_views.result; size = 256.0; domain = vec2(512, 256); }
-node aired: graph "../graphs/volumetrics.esn" { views <- sun_views.result; atlas <- sun_depth.result; hdr <- mirrored.result; lens <- stand.lens; sky <- night.result; surface <- stand.surface; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; lamps <- lamps.result;
+node aired: graph "../graphs/volumetrics.esn" { views <- sun_views.result; atlas <- sun_depth.result; hdr <- mirrored.result; lens <- stand.lens; sky <- night.result; surface <- stand.surface; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; lamps <- lamps.result; lamp_looks <- no_lamp_looks.result;
     volumes <- no_volumes.result; density = 0.05; falloff = 2.0; glow = vec3(0.002, 0.002, 0.002); low = 40.0; high = 70.0; cover = 0.75; scale = 60.0; below = vec3(0.03, 0.02, 0.01); }
 node exposed: graph "../graphs/exposure.esn" { hdr <- aired.hdr; }
 node glow: graph "../graphs/bloom.esn" { hdr <- exposed.hdr; threshold = 1.0; }

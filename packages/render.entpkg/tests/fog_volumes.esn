@@ -53,8 +53,9 @@ node land: Grid<Float> { domain = vec2(2, 2); value = -50.0; }
 node no_lamps: render.lamps_none@1 { domain = 1; }
 node no_sun: render.sun_none@1 { domain = 1; }
 node no_atlas: Grid<Float> { domain = vec2(1, 1); value = 1.0; }
+node no_lamp_looks: render.lamp_looks_none@1 { domain = vec2(1, 1); }
 node aired: graph "../graphs/volumetrics.esn" { hdr <- picture.result; lens <- lens.result; sky <- sky.result; surface <- surface.result; proxy <- empty.result; land <- land.result;
-    frame <- frame.result; lamps <- no_lamps.result; views <- no_sun.result; atlas <- no_atlas.result; volumes <- volumes.result; density = 0.0; columns = 32; rows = 32;
+    frame <- frame.result; lamps <- no_lamps.result; lamp_looks <- no_lamp_looks.result; views <- no_sun.result; atlas <- no_atlas.result; volumes <- volumes.result; density = 0.0; columns = 32; rows = 32;
     near = 1.0; far = 20.0; cover = 0.0; }
 
 output result <- aired.hdr;

@@ -136,6 +136,7 @@ kernel render.translucent_splat@1 {
     input land: Grid<Float>;
     input frame: Proxies;
     input lamps: Lamps;
+    input lamp_looks: LampLooks;
     param near: Float = 0.05;
     param far: Float = 2000.0;
     param smudge: Float = 0.3;
@@ -196,13 +197,13 @@ kernel render.translucent_splat@1 {
                             subsurface: 0.0, anisotropy: 0.0, transmission: 0.0 };
                         let lit = loop 16 with h = glossy_by(m, n, v, normalize(s.sun), s.sun_color) until index() >= min(count(lamps), 16) {
                             let lamp = at(lamps, index());
-                            h + glossy_by(m, n, v, normalize(lamp.at - p), lamp_irradiance(lamp, p))
+                            h + glossy_by(m, n, v, normalize(lamp.at - p), lamp_irradiance(lamp, p, lamp_looks))
                         };
                         let through = look.color * (1.0 - f);
                         TranslucentShade { light: env * f + lit, through: through, cover: 1.0 - (through.x + through.y + through.z) / 3.0, glow: vec3(0.0, 0.0, 0.0) }
                     } else if look.kind == translucent_smoke() {
                         let sun_seen = rough_shadow(proxy, land, frame, p, normalize(s.sun), proxy_cell_at(frame, p), 300.0, 16);
-                        let lamped = lamps_on_rough(lamps, look.color, p, n, proxy, land, frame, 8);
+                        let lamped = lamps_on_rough(lamps, lamp_looks, look.color, p, n, proxy, land, frame, 8);
                         let lit = look.color * (s.sun_color * (sun_seen * air_phase(dot(dir, normalize(s.sun)), 0.4) * 4.0) + s.ambient) + lamped;
                         TranslucentShade { light: lit * look.cover, through: vec3(1.0, 1.0, 1.0) * (1.0 - look.cover), cover: look.cover, glow: vec3(0.0, 0.0, 0.0) }
                     } else {

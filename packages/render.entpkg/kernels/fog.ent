@@ -37,13 +37,15 @@ fn fog_density_between(y0: Float, y1: Float, density: Float, base: Float, fallof
 /// Lamp `m`'s light summed along the view ray from `t0` to `t1` meters
 /// (from `eye` along `dir`): the inverse square integrated exactly along
 /// the segment (finite beside the bulb, where samples would spike), the
-/// beam taken at the segment's point nearest the lamp.
-fn lamp_airlight(m: Lamp, eye: Vec3, dir: Vec3, t0: Float, t1: Float) -> Vec3 {
+/// beam, cookie and profile (`lamp_looks`) taken at the segment's point
+/// nearest the lamp.
+fn lamp_airlight(m: Lamp, lamp_looks: LampLooks, eye: Vec3, dir: Vec3, t0: Float, t1: Float) -> Vec3 {
     let o = m.at - eye;
     let tc = dot(o, dir);
     let h = sqrt(max(dot(o, o) - tc * tc, 0.0) + m.size * m.size);
     let summed = (atan((t1 - tc) / h) - atan((t0 - tc) / h)) / h;
-    return m.color * (lamp_beam(m, eye + dir * clamp(tc, t0, t1) - m.at) * summed);
+    let d = eye + dir * clamp(tc, t0, t1) - m.at;
+    return m.color * lamp_look(m, d, lamp_looks) * (lamp_beam(m, d) * summed);
 }
 
 // ------------------------------------------------------------------ the air as a grid of the view
@@ -92,6 +94,7 @@ kernel render.froxel_light@1 {
     input lens: Lenses;
     input sky: SkyLooks;
     input lamps: Lamps;
+    input lamp_looks: LampLooks;
     input proxy: Volume<Vec4>;
     input land: Grid<Float>;
     input frame: Proxies;
@@ -150,7 +153,7 @@ kernel render.froxel_light@1 {
                     let a = mix(t0, t1, float(index()) / float(pieces));
                     let b = mix(t0, t1, float(index() + 1) / float(pieces));
                     let toward = l.eye + dir * ((a + b) * 0.5) - m.at;
-                    g + lamp_airlight(m, l.eye, dir, a, b) * air_phase(0.0 - dot(dir, normalize(toward)), forward)
+                    g + lamp_airlight(m, lamp_looks, l.eye, dir, a, b) * air_phase(0.0 - dot(dir, normalize(toward)), forward)
                 };
                 let lit = max(given.x, max(given.y, given.z)) > 0.000001;
                 let cut = if lit && m.shadow != 0 && shafts > 0 { lamp_rough_shadow(m, proxy, land, frame, p, shafts) } else { 1.0 };

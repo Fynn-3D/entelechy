@@ -139,6 +139,7 @@ kernel render.radiance@1 {
     input rframe: Proxies;
     input sky: SkyLooks;
     input lamps: Lamps;
+    input lamp_looks: LampLooks;
     input turn: Rows<Int>;
     /// How many cells the cache holds a side (`render.radiance_size`; sizes the node).
     input size: Rows<Int>;
@@ -191,7 +192,7 @@ kernel render.radiance@1 {
             let dir = normalize(n + (t * cos(a) + b * sin(a)) * 0.9);
             g + radiance_cone(previous, was, proxy, pv, on, dir, spread, fr.cell * 1.5, reach, cone_steps).xyz * 0.25
         };
-        let lamped = lamps_on_surface(lamps, albedo, on, n, proxy, land, frame, fract(float(ci.x * 7 + ci.y * 13 + ci.z * 29) * 0.618034));
+        let lamped = lamps_on_surface(lamps, lamp_looks, albedo, on, n, proxy, land, frame, fract(float(ci.x * 7 + ci.y * 13 + ci.z * 29) * 0.618034));
         let light = albedo * (s.sun_color * (ndl * lit / 3.14159265) + hemisphere(n, s, look) * open + gathered * bounce) + lamped;
         let still = at(turn, 1) > 1 && old.w > 0.5;
         let kept = if still { mix(old.xyz, light, blend) } else { light };
@@ -306,7 +307,7 @@ kernel render.bounce_probe_filter@1 {
 /// the sky kept. Off the screen a smooth thing then mirrors the room as sharp as the proxies hold it and as lit as the
 /// light there is, not as the cache's wide cells average it.
 fn bounce_hit_light(radiance: Volume<Vec4>, rv: ProxyLevels, proxy: Volume<Vec4>, pv: ProxyLevels, land: Grid<Float>, frame: Proxies, s: SkyLook,
-    lamps: Lamps, p: Vec3, r: Vec3, start: Float, reach: Float, steps: Int, cone_steps: Int, look: Surround, open: Openness) -> Vec4 {
+    lamps: Lamps, lamp_looks: LampLooks, p: Vec3, r: Vec3, start: Float, reach: Float, steps: Int, cone_steps: Int, look: Surround, open: Openness) -> Vec4 {
     let hit = rough_trace(proxy, land, frame, p, r, start, reach, steps);
     if hit.y < 0.0 { return vec4(0.0, 0.0, 0.0, 0.0); }
     let h = p + r * hit.x;
@@ -318,7 +319,7 @@ fn bounce_hit_light(radiance: Volume<Vec4>, rv: ProxyLevels, proxy: Volume<Vec4>
     let sun = if ndl > 0.0 { rough_shadow(proxy, land, frame, off, s.sun, cell * 0.5, 300.0, 16) * ndl } else { 0.0 };
     let opened = proxy_open(proxy, frame, off, n, open);
     let bounced = radiance_cone(radiance, rv, proxy, pv, off, n, 0.6, cell * 1.5, reach, cone_steps).xyz;
-    let light = albedo * (s.sun_color * (sun / 3.14159265) + hemisphere(n, s, look) * opened + bounced) + lamps_on_rough(lamps, albedo, off, n, proxy, land, frame, 8);
+    let light = albedo * (s.sun_color * (sun / 3.14159265) + hemisphere(n, s, look) * opened + bounced) + lamps_on_rough(lamps, lamp_looks, albedo, off, n, proxy, land, frame, 8);
     return vec4(light.x, light.y, light.z, 1.0);
 }
 
@@ -344,6 +345,7 @@ kernel render.bounce_gather@1 {
     input frame: Proxies;
     input sky: SkyLooks;
     input lamps: Lamps;
+    input lamp_looks: LampLooks;
     param every: Int = 2;
     param probe: Int = 8;
     /// Surfaces smoother than this trace their mirror ray to what it meets and light it there (0: every one a cone).
@@ -395,7 +397,7 @@ kernel render.bounce_gather@1 {
         let rough = at(paint, q).w;
         let r = reflect(dir, n);
         let seen = if rough < hit_below {
-            bounce_hit_light(radiance, rv, proxy, pv, land, frame, at(sky, 0), lamps, p, r, start, reach, hit_steps, steps,
+            bounce_hit_light(radiance, rv, proxy, pv, land, frame, at(sky, 0), lamps, lamp_looks, p, r, start, reach, hit_steps, steps,
                 Surround { ground: ground, ground_light: ground_light, sky_light: sky_light }, Openness { reach: open_reach, strength: open_strength, least: open_least })
         } else { radiance_cone(radiance, rv, proxy, pv, p, r, 0.05 + rough * 0.9, start, reach, steps) };
         return { result: vec4(gathered.x, gathered.y, gathered.z, su.w), mirror: seen };
