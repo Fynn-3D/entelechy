@@ -19,7 +19,8 @@ use "mesh.entpkg";
   its level below's points merged cell by cell on a lattice twice as wide
   (vertex clustering, each cell's point where its error quadric is least),
   each level's faces in the clusters of the bricks their corners lie in,
-  how far each brick of each level lies from the mesh, and libraries of
+  how far each brick of each level lies from the mesh (the planes its
+  points stray from and the area it lost or gained), and libraries of
   such meshes joined. Kernels: `mesh.cluster_box@1`,
   `mesh.cluster_edges@1`, `mesh.cluster_frame@1`,
   `mesh.cluster_no_quadrics@1`, `mesh.cluster_face_quadrics@1`,
@@ -31,6 +32,8 @@ use "mesh.entpkg";
   `mesh.cluster_sorted_faces@1`, `mesh.cluster_rows@1`,
   `mesh.cluster_grid_size@1`, `mesh.cluster_no_errors@1`,
   `mesh.cluster_exact@1`, `mesh.cluster_point_errors@1`,
+  `mesh.cluster_no_areas@1`, `mesh.cluster_brick_areas@1`,
+  `mesh.cluster_area_errors@1`,
   `mesh.cluster_grid_up@1`, `mesh.cluster_points8@1`,
   `mesh.cluster_up8@1`, `mesh.cluster_faces8@1`, `mesh.cluster_rows8@1`,
   `mesh.cluster_errors8@1`, `mesh.cluster_mesh@1`,

@@ -310,8 +310,8 @@ kernel mesh.cluster_up@1 {
     }
 }
 
-/// How far a level lies from the mesh at most: its points' deviations'
-/// greatest.
+/// The greatest of a row of deviations: how far a level lies from the
+/// mesh at most, its points' or its bricks'.
 kernel mesh.cluster_deviation@1 {
     requires { field.read; field.write; }
     input deviation: Rows<Float>;
@@ -520,6 +520,57 @@ kernel mesh.cluster_point_errors@1 {
     }
 }
 
+/// A level's grid, every brick's area none yet (`domain = value(size)`).
+kernel mesh.cluster_no_areas@1 {
+    requires { field.read; field.write; }
+    input size: Rows<Int>;
+    output result: Rows<Float>;
+    compute { return 0.0; }
+}
+
+/// The faces' areas summed in the bricks of level `level` their middles fall in (`domain = count(faces)`; the faces of any
+/// level, laid over `points`).
+kernel mesh.cluster_brick_areas@1 {
+    requires { field.read; field.write; }
+    input faces: Rows<Face>;
+    input points: Rows<MeshPoint>;
+    input frame: ClusterFrames;
+    input blank: Rows<Float>;
+    param level: Int = 0;
+    output result: Rows<Float>;
+    struct Area { brick: Int; area: Float; }
+    scatter into blank with sum {
+        let f = at(frame, 0);
+        let g = sample(faces);
+        let a = at(points, g.a).position;
+        let b = at(points, g.b).position;
+        let c = at(points, g.c).position;
+        let middle = (a + b + c) / 3.0;
+        return Area { brick: mesh_cluster_pack(mesh_cluster_brick(f, middle, level), mesh_brick_widths(f.bits, level)), area: length(cross(b - a, c - a)) * 0.5 };
+    }
+}
+
+/// Level `level`'s brick errors with how much of the mesh's area each brick lost or gained (its faces' area `area` against
+/// the mesh's own there, `whole`): a share of it times the level's cells' width, so an edge drawn in or a thin part
+/// merged away counts, which the planes alone do not see.
+kernel mesh.cluster_area_errors@1 {
+    requires { field.read; field.write; }
+    input far: Rows<Float>;
+    input area: Rows<Float>;
+    input whole: Rows<Float>;
+    input frame: ClusterFrames;
+    param level: Int = 1;
+    output result: Rows<Float>;
+    compute {
+        let e = element();
+        let cell = mesh_cluster_cell(at(frame, 0), level);
+        let a0 = at(whole, e);
+        let ak = at(area, e);
+        let lost = if a0 > 0.0 { cell * saturate(abs(1.0 - ak / a0)) } else if ak > 0.0 { cell } else { -1.0 };
+        return max(sample(far), lost);
+    }
+}
+
 /// Level `level`'s brick errors, each never nearer than the eight bricks of the level below it holds (`below`).
 kernel mesh.cluster_grid_up@1 {
     requires { field.read; field.write; }
@@ -715,7 +766,7 @@ kernel mesh.cluster_errors8@1 {
 }
 
 /// The built mesh's row of a library (`domain = 1`), `e1` to `e7` each
-/// level's deviation, `g0` to `g7` its brick errors.
+/// level's farthest brick error, `g0` to `g7` its brick errors.
 kernel mesh.cluster_mesh@1 {
     requires { field.read; field.write; }
     input frame: ClusterFrames;
