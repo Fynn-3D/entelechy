@@ -91,6 +91,17 @@ kernel render.lit@1 {
     param open_reach: Vec3 = vec3(0.4, 1.2, 2.5);
     param open_strength: Float = 1.6;
     param open_least: Float = 0.1;
+    /// The painted look (`Toon`): where light turns to shade across the surface (`toon_terminator`, from and to) and across the
+    /// shadow (`toon_shadow`), the sun's share, how flat and how tinted the shade is, the rim's strength, the highlight's patch
+    /// (from and to) and its strength.
+    param toon_terminator: Vec2 = vec2(-0.03, 0.16);
+    param toon_shadow: Vec2 = vec2(0.2, 0.55);
+    param toon_sun: Float = 0.75;
+    param toon_flat: Float = 0.6;
+    param toon_shade: Vec3 = vec3(0.85, 0.95, 1.2);
+    param toon_rim: Float = 0.012;
+    param toon_highlight: Vec2 = vec2(0.965, 0.985);
+    param toon_glint: Float = 0.03;
     output result: Image;
     /// The share of `result` that scatters under subsurface surfaces (`graphs/subsurface.esn` spreads it); 0 elsewhere and when painted.
     output scatter: Image;
@@ -119,7 +130,7 @@ kernel render.lit@1 {
         let e = hemisphere(n, s, look) * ao;
         let spec_light = mix(seen_along(reflect(dir, n), s, look), e, sqrt(m.rough)) * ao * on;
         let shown = if painted == 0 { lit_by(m, n, v, s.sun, s.sun_color * ex.x) + ambient_by(m, n, v, e, spec_light, spec_light) }
-            else { toon(m, n, v, s, ex.x, e) + spec_light * env_brdf(pbr_f0(m), m.rough, max(dot(n, v), 0.001)) * (1.0 - m.rough) };
+            else { toon(m, n, v, s, ex.x, e, Toon { terminator: toon_terminator, shadow: toon_shadow, sun: toon_sun, flat: toon_flat, shade: toon_shade, rim: toon_rim, highlight: toon_highlight, glint: toon_glint }) + spec_light * env_brdf(pbr_f0(m), m.rough, max(dot(n, v), 0.001)) * (1.0 - m.rough) };
         let all = shown + m.glow;
         let shaded = aerial(all, dir, su.w, s);
         // The light under the skin, through the air as the rest (the air's mix is linear).

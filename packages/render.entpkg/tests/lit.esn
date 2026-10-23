@@ -40,10 +40,12 @@ node polished: kernel {
 }
 node traced_floor: render.raytraced@1 { surface <- stand.surface; paint <- polished.result; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
     sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; domain = window(); }
-// A scene's own look: lit with half the sky's light, ray traced with its
-// mirrors held lower.
+// A scene's own look: lit with half the sky's light, painted with its
+// shade untinted, ray traced with its mirrors held lower.
 node lit_tuned: render.lit@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
     sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; sky_light = 0.5; domain = window(); }
+node painted_tuned: render.lit@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
+    sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; painted = 1; toon_shade = vec3(1.0, 1.0, 1.0); domain = window(); }
 node traced_tuned: render.raytraced@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
     sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; mirror_most = 0.1; domain = window(); }
 node aired: render.haze@1 { hdr <- lit.result; surface <- stand.surface; lens <- stand.lens; sky <- stand.sky; on = 1; }

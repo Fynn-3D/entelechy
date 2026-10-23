@@ -155,7 +155,7 @@ kernel render.probes_gather@1 {
 
 /// Contact occlusion on the screen: how much of the hemisphere the things in the G-buffer hide within `reach` meters of `p` (normal `n`),
 /// by eight points; 1 all open.
-fn screen_ao(surface: Grid<Vec4>, q: Vec2, extent: Vec2, l: Lens, p: Vec3, n: Vec3, depth: Float, reach: Float) -> Float {
+fn screen_ao(surface: Grid<Vec4>, q: Vec2, extent: Vec2, l: Lens, p: Vec3, n: Vec3, depth: Float, reach: Float, strength: Float) -> Float {
     let r = clamp(reach * l.focal * extent.y / max(depth, 0.01), 2.0, 80.0);
     let occ = loop 8 with s = 0.0 {
         let a = float(index()) * 2.39996 + 0.5;
@@ -166,7 +166,7 @@ fn screen_ao(surface: Grid<Vec4>, q: Vec2, extent: Vec2, l: Lens, p: Vec3, n: Ve
         let dist = length(vv);
         if o.w > no_hit() * 0.5 || dist < 0.0001 { s } else { s + max(dot(n, vv / dist) - 0.15, 0.0) * (1.0 - smoothstep(0.3, 1.0, dist / reach)) }
     };
-    return saturate(1.0 - occ / 8.0 * 1.6);
+    return saturate(1.0 - occ / 8.0 * strength);
 }
 
 /// The `k`th direction about the normal `n`, distributed by cosine (`u` and `v` random numbers from 0 to 1).
@@ -387,7 +387,9 @@ kernel render.probes_lit@1 {
     /// The lamps' light on each surface (`render.lamps_light`).
     input lamped: Image;
     param spacing: Float = 1.2;
+    /// How far (meters) the screen's occlusion looks round a surface, and how strongly it darkens.
     param reach: Float = 0.7;
+    param strength: Float = 1.6;
     output result: Image;
     compute {
         let q = coord();
@@ -402,7 +404,7 @@ kernel render.probes_lit@1 {
         let ex = at(extra, q);
         let m = pbr_of(at(paint, q), ex, at(layers, q), at(more, q));
         let v = vec3(0.0, 0.0, 0.0) - dir;
-        let e = probe_light(probes, frame, spacing, p + n * 0.3, n, s) * screen_ao(surface, q, extent, l, p, n, su.w, reach) * baked_occlusion(ex);
+        let e = probe_light(probes, frame, spacing, p + n * 0.3, n, s) * screen_ao(surface, q, extent, l, p, n, su.w, reach, strength) * baked_occlusion(ex);
         return vec4(lit_by(m, n, v, s.sun, s.sun_color * ex.x) + m.albedo * (1.0 - m.metal) * (1.0 - m.transmission) * e + m.glow + at(lamped, q).xyz, 1.0);
     }
 }
@@ -416,19 +418,24 @@ kernel render.probes_lit@1 {
 /// Light as a painting has it (`render.probes_shade`'s `style` 1): the sunward side and the shade split on one
 /// soft step (`shadow` how much sun reaches it), the shade only the gathered diffuse light `e`, cooler;
 /// a rim of light on the edge against the light, and a small hard highlight on smooth surfaces.
-fn toon(m: Pbr, n: Vec3, v: Vec3, s: SkyLook, shadow: Float, e: Vec3) -> Vec3 {
+fn toon(m: Pbr, n: Vec3, v: Vec3, s: SkyLook, shadow: Float, e: Vec3, t: Toon) -> Vec3 {
     let kd = (1.0 - m.metal) * (1.0 - m.transmission);
-    let lightness = smoothstep(-0.03, 0.16, dot(n, s.sun)) * smoothstep(0.2, 0.55, shadow);
-    let sun = m.albedo * kd * s.sun_color * (0.75 / 3.14159265 * lightness);
+    let lightness = smoothstep(t.terminator.x, t.terminator.y, dot(n, s.sun)) * smoothstep(t.shadow.x, t.shadow.y, shadow);
+    let sun = m.albedo * kd * s.sun_color * (t.sun / 3.14159265 * lightness);
     let gray = dot(e, vec3(0.2126, 0.7152, 0.0722));
-    let flat_ = mix(vec3(gray, gray, gray), e, 0.6) * vec3(0.85, 0.95, 1.2);
+    let flat_ = mix(vec3(gray, gray, gray), e, t.flat) * t.shade;
     let ambient = m.albedo * kd * flat_;
     let edge = pow(1.0 - clamp(dot(n, v), 0.0, 1.0), 4.0);
-    let rim = s.sun_color * (edge * (0.25 + 0.75 * lightness) * 0.012);
+    let rim = s.sun_color * (edge * (0.25 + 0.75 * lightness) * t.rim);
     let h = normalize(s.sun + v);
-    let blob = smoothstep(0.965, 0.985, max(dot(n, h), 0.0)) * (1.0 - m.rough) * lightness;
-    return sun + ambient + rim + s.sun_color * (blob * 0.03);
+    let blob = smoothstep(t.highlight.x, t.highlight.y, max(dot(n, h), 0.0)) * (1.0 - m.rough) * lightness;
+    return sun + ambient + rim + s.sun_color * (blob * t.glint);
 }
+/// The painted look, a scene's to tune: where light turns to shade across the surface (`terminator`, from and to, the cosine to
+/// the sun) and across the shadow (`shadow`), the sun's share of its light, how much of the light all round's color the shade
+/// keeps (`flat`) and its tint (`shade`), the rim's strength, the highlight's patch (`highlight`, from and to) and its strength
+/// (`glint`).
+struct Toon { terminator: Vec2; shadow: Vec2; sun: Float; flat: Float; shade: Vec3; rim: Float; highlight: Vec2; glint: Float; }
 
 kernel render.probes_shade@1 {
     requires { field.read; field.write; }
@@ -452,7 +459,17 @@ kernel render.probes_shade@1 {
     /// The lamps' light on each surface (`render.lamps_light`).
     input lamped: Image;
     param spacing: Float = 1.2;
-    param reach: Float = 0.7;
+    /// The painted look (`Toon`): where light turns to shade across the surface (`toon_terminator`, from and to) and across the
+    /// shadow (`toon_shadow`), the sun's share, how flat and how tinted the shade is, the rim's strength, the highlight's patch
+    /// (from and to) and its strength.
+    param toon_terminator: Vec2 = vec2(-0.03, 0.16);
+    param toon_shadow: Vec2 = vec2(0.2, 0.55);
+    param toon_sun: Float = 0.75;
+    param toon_flat: Float = 0.6;
+    param toon_shade: Vec3 = vec3(0.85, 0.95, 1.2);
+    param toon_rim: Float = 0.012;
+    param toon_highlight: Vec2 = vec2(0.965, 0.985);
+    param toon_glint: Float = 0.03;
     /// Only surfaces smoother than this look for reflections on the screen (on rough ones they would not show, and the time is wasted).
     param mirror_below: Float = 0.6;
     /// 0 lights it as it is; 1 as a painting does (`toon`): light and shade one soft step, the shade cool and flat,
@@ -497,7 +514,7 @@ kernel render.probes_shade@1 {
         let spec_light = mix(mirrored, e, sqrt(m.rough)) * ao;
         let coat_light = mix(mirrored, e, sqrt(m.coat_rough)) * ao;
         let clear = if m.transmission > 0.0 { transmitted(m, n, v, at(through, q), frosted(beyond, q, m.rough)) } else { vec3(0.0, 0.0, 0.0) };
-        let shown = if style == 1 { toon(m, n, v, s, ex.x, e) + spec_light * env_brdf(pbr_f0(m), m.rough, max(dot(n, v), 0.001)) * (1.0 - m.rough) } else { direct + ambient_by(m, n, v, e, spec_light, coat_light) };
+        let shown = if style == 1 { toon(m, n, v, s, ex.x, e, Toon { terminator: toon_terminator, shadow: toon_shadow, sun: toon_sun, flat: toon_flat, shade: toon_shade, rim: toon_rim, highlight: toon_highlight, glint: toon_glint }) + spec_light * env_brdf(pbr_f0(m), m.rough, max(dot(n, v), 0.001)) * (1.0 - m.rough) } else { direct + ambient_by(m, n, v, e, spec_light, coat_light) };
         let all = shown + clear + m.glow + sample(lamped).xyz;
         let shaded = aerial(all, dir, su.w, s);
         // The light that goes under the skin: the matte light (the sun's and

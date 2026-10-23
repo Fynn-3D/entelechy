@@ -48,6 +48,8 @@ expect traced_floor.result[11200] = 0.2405 0.2471 0.2655 1 0.0005
 
 # A scene's own look, set in the scene: lit with half the sky's light (a
 # shaded floor pixel about half as bright), ray traced with its mirrors
-# held at 0.1 (the mirror ball dark).
+# held at 0.1 (the mirror ball dark), painted with its shade untinted
+# (the shaded floor no longer cool).
 expect lit_tuned.result[7280] = 0.0098 0.0105 0.0124 1 0.0005
 expect traced_tuned.result[9539] = 0.0800 0.0804 0.0804 1 0.001
+expect painted_tuned.result[7280] = 0.0208 0.0217 0.0239 1 0.0005
