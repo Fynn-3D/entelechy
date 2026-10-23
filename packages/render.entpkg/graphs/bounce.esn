@@ -36,8 +36,8 @@ param open_least: Float = 0.1;
 
 node rframe: render.radiance_frame@1 { frame <- frame; scale = scale; domain = count(frame); }
 node cells: render.radiance_size@1 { rframe <- rframe.result; domain = 3; }
-node turn0: Rows<Int> { domain = 3; }
-node turn: render.radiance_turn@1 { previous <~ turn.result from turn0.result; frame <- frame; sky <- sky; settle = settle; domain = 3; }
+node turn0: Rows<Int> { domain = 4; }
+node turn: render.radiance_turn@1 { previous <~ turn.result from turn0.result; frame <- frame; sky <- sky; settle = settle; domain = 4; }
 node none: Volume<Vec4> { domain = vec3(1, 1, 1); }
 node cache: render.radiance@1 { previous <~ cache.result from none.result; previous_frame <~ rframe.result from rframe.result; proxy <- proxy; land <- land; frame <- frame; rframe <- rframe.result;
     sky <- sky; turn <- turn.result; size <- cells.result; parts = parts; bounce = bounce; spread = spread; reach = reach;

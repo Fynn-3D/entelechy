@@ -88,7 +88,9 @@ fn exposure_mean(histogram: Rows<Float>, dark: Float, bright: Float) -> Float {
 /// `day_from` (log2) down to `night_from` — within `darkest` and
 /// `brightest` stops, `bias` stops more or less. It moves a stop in
 /// `adapt_up` seconds toward a brighter scene and in `adapt_down` toward a
-/// darker one; on the first frame it takes what is asked at once.
+/// darker one; on the first frame it takes what is asked at once. Arrived
+/// and asked the same, it gives its row unchanged, so the picture it
+/// scales rests.
 kernel render.exposure_meter@1 {
     requires { field.read; field.write; time.read; }
     input previous: Exposures;
@@ -113,7 +115,9 @@ kernel render.exposure_meter@1 {
         let t = time();
         if was.set_at < 0.0 { return Exposure { factor: exp2(asked), set_at: t, asked: asked, seen: seen }; }
         let now = log2(was.factor);
-        let dt = clamp(t - was.set_at, 0.0, 0.25);
+        // Arrived and still asked the same: the row as it was, so what it scales rests with it.
+        if abs(asked - now) < 0.001 && abs(asked - was.asked) < 0.001 { return was; }
+        let dt = clamp(t - was.set_at, 0.0, 0.1);
         // Toward a brighter scene (a lower exposure) quicker than a darker.
         let rate = if asked < now { 1.0 / max(adapt_up, 0.01) } else { 1.0 / max(adapt_down, 0.01) };
         let step = clamp(asked - now, 0.0 - rate * dt, rate * dt);

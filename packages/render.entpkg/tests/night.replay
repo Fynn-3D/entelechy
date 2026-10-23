@@ -29,5 +29,8 @@ expect gloss.result[36880] = 0.5 0.03 0.03 0.4620 0.001
 expect lit.lamp_tiles.result[0] = 0 0 0 0
 expect lit.lamp_tiles.result[100] = 5 0 0 0
 expect exposed.meter.result[0].factor = 2.6232 0.02
+# The scene unchanged a frame on: the meter took what was asked at once
+# and rests, its row as the first frame left it.
 frame 0.1
-expect exposed.meter.result[0].set_at = 0.1 0.001
+expect exposed.meter.result[0].set_at = 0 0.001
+expect exposed.meter.result[0].factor = 2.6232 0.02

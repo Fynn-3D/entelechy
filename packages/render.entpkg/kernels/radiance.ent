@@ -83,9 +83,9 @@ kernel render.radiance_size@1 {
     }
 }
 
-/// The cache's turn (`domain = 3`): how many frames it has been lit (x), how many of them since the proxy's block or the sun
-/// last moved (y), and what they were (z, a hash of the first level's corner and the sun); it stops turning `settle` frames
-/// after they last moved, so a cache at rest leaves what reads it at rest.
+/// The cache's turn (`domain = 4`): how many frames it has been lit (x), how many of them since the proxy's block or the sun
+/// last moved (y), what they were (z, a hash of the first level's corner and the sun), and 1 once it rests (w): `settle`
+/// frames after they last moved it stops turning, and the cache gives what it held, so what reads it rests too.
 kernel render.radiance_turn@1 {
     requires { field.read; field.write; }
     input previous: Rows<Int>;
@@ -102,13 +102,13 @@ kernel render.radiance_turn@1 {
         let quiet = if moved { 0 } else { at(previous, 1) + 1 };
         let turn = if quiet <= settle { at(previous, 0) + 1 } else { at(previous, 0) };
         let k = element();
-        return if k == 0 { turn } else if k == 1 { min(quiet, settle + 1) } else { sign };
+        return if k == 0 { turn } else if k == 1 { min(quiet, settle + 1) } else if k == 2 { sign } else { int(quiet > settle) };
     }
 }
 
 /// The cache, cell by cell (`domain` the cache's frame's cells, its levels up its depth): a cell within `band` of its cells
 /// of a surface the light leaving it (rgb, w 1), the rest none; one in `parts` lit anew each frame (by `turn`), the others
-/// kept from `previous` (laid as `previous_frame` says) where they lie. The light: the surface's color times the sun through
+/// kept from `previous` (laid as `previous_frame` says) where they lie; at rest (`turn`'s w), `previous` as it is. The light: the surface's color times the sun through
 /// the proxies (`sun_steps` steps), the sky open over it (`Surround`, `Openness` as lit's), and `bounce` times what four
 /// cones gather from the last frame's cache, so light bounces once more each time a cell is lit.
 kernel render.radiance@1 {
@@ -145,6 +145,8 @@ kernel render.radiance@1 {
         };
         let fr = at(rframe, int(lv.x));
         let p = fr.lo + (vec3(c.x, c.y, c.z - lv.y) + 0.5) * fr.cell;
+        let held = if isize(previous) == idomain() { at(previous, icoord()) } else { vec4(0.0, 0.0, 0.0, 0.0) };
+        if at(turn, 3) == 1 { return held; }
         let d = proxy_at(proxy, frame, p, 1000.0).x;
         if abs(d) > band * fr.cell { return vec4(0.0, 0.0, 0.0, 0.0); }
         let old = proxy_at(previous, previous_frame, p, 0.0);
