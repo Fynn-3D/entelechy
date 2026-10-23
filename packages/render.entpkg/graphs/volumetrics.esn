@@ -34,17 +34,26 @@ param cover: Float = 0.0;
 /// How wide a cloud's billows are (meters).
 param scale: Float = 2400.0;
 param below: Vec3 = vec3(0.0, 0.0, 0.0);
+/// How strongly the fog scatters forward, toward the sun's and the lamps' glow (0 evenly).
+param forward: Float = 0.6;
+/// The clouds' density and pattern (`seed`); how bright a sunlit cloud is, how dark its sunlit edge (`powder`), and the sky's
+/// light in it (`cloud_sky`).
+param cloud_density: Float = 0.02;
+param seed: Int = 7;
+param bright: Float = 4.0;
+param powder: Float = 0.5;
+param cloud_sky: Float = 1.0;
 
 // The lamps each tile's view rays pass by, as far as the fog reaches.
 node lamp_depth: render.lamps_depth@1 { surface <- surface; domain = ceil(size(surface) / 16); }
 node lamp_tiles: render.lamps_tiles@1 { depth <- lamp_depth.result; lamps <- lamps; lens <- lens; surface <- surface; through = 2000.0; domain = size(depth); }
 node fog: render.fog_march@1 { tiles <- lamp_tiles.result; views <- views; atlas <- atlas; surface <- surface; lens <- lens; sky <- sky; lamps <- lamps; proxy <- proxy; land <- land; frame <- frame; deck <- deck.result;
-    density = density; base = base; falloff = falloff; glow = glow; lamp_share = lamp_share; shafts = shafts; domain = ceil(size(surface) / 4); }
+    density = density; base = base; falloff = falloff; forward = forward; glow = glow; lamp_share = lamp_share; shafts = shafts; domain = ceil(size(surface) / 4); }
 node across: render.fog_blur@1 { fog <- fog.result; surface <- surface; axis = 0; domain = size(fog); }
 node down: render.fog_blur@1 { fog <- across.result; surface <- surface; axis = 1; domain = size(fog); }
 // Clouds are soft: an eighth of the size is enough.
-node deck: render.clouds_deck@1 { low = low; high = high; cover = cover; scale = scale; domain = 1; }
-node clouds: render.clouds_march@1 { surface <- surface; lens <- lens; sky <- sky; deck <- deck.result; below = below; domain = ceil(size(surface) / 8); }
+node deck: render.clouds_deck@1 { low = low; high = high; cover = cover; scale = scale; density = cloud_density; seed = seed; domain = 1; }
+node clouds: render.clouds_march@1 { surface <- surface; lens <- lens; sky <- sky; deck <- deck.result; below = below; bright = bright; powder = powder; sky_light = cloud_sky; domain = ceil(size(surface) / 8); }
 node aired: render.fog_apply@1 { hdr <- hdr; surface <- surface; fog <- down.result; clouds <- clouds.result; domain = size(hdr); }
 
 output hdr <- aired.result;

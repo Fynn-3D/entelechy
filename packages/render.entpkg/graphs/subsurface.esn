@@ -10,9 +10,11 @@ input surface: Grid<Vec4>;
 input layers: Grid<Vec4>;
 input lens: Lenses;
 param reach: Float = 0.012;
+/// How far each color carries, red, green and blue, as shares of `reach`.
+param colors: Vec3 = vec3(1.0, 0.45, 0.25);
 
-node across: render.subsurface_blur@1 { scatter <- scatter; surface <- surface; layers <- layers; lens <- lens; axis = 0; reach = reach; domain = size(scatter); }
-node down: render.subsurface_blur@1 { scatter <- across.result; surface <- surface; layers <- layers; lens <- lens; axis = 1; reach = reach; domain = size(scatter); }
+node across: render.subsurface_blur@1 { scatter <- scatter; surface <- surface; layers <- layers; lens <- lens; axis = 0; reach = reach; colors = colors; domain = size(scatter); }
+node down: render.subsurface_blur@1 { scatter <- across.result; surface <- surface; layers <- layers; lens <- lens; axis = 1; reach = reach; colors = colors; domain = size(scatter); }
 node spread: render.subsurface_apply@1 { hdr <- hdr; scatter <- scatter; spread <- down.result; domain = size(hdr); }
 
 output hdr <- spread.result;

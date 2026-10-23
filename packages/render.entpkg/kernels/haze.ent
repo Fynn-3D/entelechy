@@ -28,6 +28,14 @@ kernel render.haze@1 {
     param density: Float = 1.0;
     param haze: Float = 1.0;
     param ground: Float = 0.0;
+    /// How high the air (molecules) and the haze thin by e (meters).
+    param air_height: Float = 8000.0;
+    param haze_height: Float = 1200.0;
+    /// How strongly the haze scatters forward (0 evenly, toward 1 all toward the sun's glow).
+    param forward: Float = 0.76;
+    /// How bright the sun's light scattered in the air is, and the sky's.
+    param sun_glow: Float = 1.2;
+    param sky_glow: Float = 0.45;
     output result: Image;
     compute {
         let c = sample(hdr);
@@ -38,8 +46,8 @@ kernel render.haze@1 {
         let s = at(sky, 0);
         let dir = ray(l, coord(), domain());
         let h = l.eye.y - ground;
-        let rayleigh = haze_through(h, dir.y, su.w, 8000.0);
-        let mie = haze_through(h, dir.y, su.w, 1200.0);
+        let rayleigh = haze_through(h, dir.y, su.w, air_height);
+        let mie = haze_through(h, dir.y, su.w, haze_height);
         let beta_r = vec3(5.8, 13.5, 33.1) * (0.000006 * density);
         let beta_m = vec3(21.0, 21.0, 21.0) * (0.000006 * density * haze);
         let spent = beta_r * rayleigh + beta_m * (mie * 1.1);
@@ -47,11 +55,11 @@ kernel render.haze@1 {
         // Phase: Rayleigh's, and Mie's forward lobe (Henyey-Greenstein, g 0.76).
         let mu = dot(dir, normalize(s.sun));
         let phase_r = 0.0597 * (1.0 + mu * mu);
-        let g = 0.76;
+        let g = forward;
         let phase_m = 0.0796 * (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * mu, 0.0001), 1.5);
         let lit = beta_r * (rayleigh * phase_r) + beta_m * (mie * phase_m);
         let share = lit / max(spent, vec3(0.000001, 0.000001, 0.000001));
-        let scattered = s.sun_color * share * 1.2 + (s.horizon * 0.75 + s.zenith * 0.25) * 0.45;
+        let scattered = s.sun_color * share * sun_glow + (s.horizon * 0.75 + s.zenith * 0.25) * sky_glow;
         let shown = c.xyz * kept + scattered * (vec3(1.0, 1.0, 1.0) - kept);
         return vec4(shown.x, shown.y, shown.z, c.w);
     }

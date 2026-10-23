@@ -9,10 +9,19 @@ param exposure: Float = 1.0;
 param vivid: Float = 1.0;
 /// How much it is sharpened (0 not at all; `upscale.esn` sharpens again after scaling).
 param sharpen: Float = 0.0;
+/// What is bright enough to glow, and how much of the glow is laid in.
+param threshold: Float = 2.0;
+param glow: Float = 0.6;
+/// The tint of the shadows and of the lights, as much as `warmth` lays them on; the corners' darkening.
+param warmth: Float = 1.0;
+param shadow_tint: Vec3 = vec3(0.97, 1.0, 1.04);
+param light_tint: Vec3 = vec3(1.05, 1.0, 0.93);
+param vignette: Float = 0.35;
 
-node bright: render.bright@1 { hdr <- hdr; domain = ceil(size(hdr) / 8); }
+node bright: render.bright@1 { hdr <- hdr; threshold = threshold; domain = ceil(size(hdr) / 8); }
 node bloom_x: render.spread@1 { image <- bright.result; axis = 0; }
 node bloom: render.spread@1 { image <- bloom_x.result; axis = 1; }
-node view: render.tonemap@1 { hdr <- hdr; bloom <- bloom.result; exposure = exposure; vivid = vivid; sharpen = sharpen; domain = size(hdr); }
+node view: render.tonemap@1 { hdr <- hdr; bloom <- bloom.result; exposure = exposure; vivid = vivid; sharpen = sharpen; glow = glow; warmth = warmth;
+    shadow_tint = shadow_tint; light_tint = light_tint; vignette = vignette; domain = size(hdr); }
 
 output result <- view.result;

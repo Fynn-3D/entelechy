@@ -45,6 +45,11 @@ kernel render.tonemap@1 {
     /// How much it is sharpened (0 not at all): pulled apart from the mean of its four neighbors by this much; where the contrast is
     /// already high, pulled less (no white rims). The history temporal antialiasing blends in is always softer.
     param sharpen: Float = 0.0;
+    /// How much of the glow (`bloom`) is laid in.
+    param glow: Float = 0.6;
+    /// The tint of the shadows and of the lights, as much as `warmth` lays them on.
+    param shadow_tint: Vec3 = vec3(0.97, 1.0, 1.04);
+    param light_tint: Vec3 = vec3(1.05, 1.0, 0.93);
     output result: Image;
     compute {
         let q = coord();
@@ -59,10 +64,10 @@ kernel render.tonemap@1 {
             let k = sharpen / (1.0 + 6.0 * abs(lc - ln) / (ln + 0.05));
             max(c + (c - n4) * k, vec3(0.0, 0.0, 0.0))
         };
-        let graded = aces((seen + halo * 0.6) * exposure);
+        let graded = aces((seen + halo * glow) * exposure);
         let gray = dot(graded, vec3(0.2126, 0.7152, 0.0722));
         let rich = max(mix(vec3(gray, gray, gray), graded, vivid), vec3(0.0, 0.0, 0.0));
-        let tint = mix(vec3(0.97, 1.0, 1.04), vec3(1.05, 1.0, 0.93), smoothstep(0.1, 0.6, gray));
+        let tint = mix(shadow_tint, light_tint, smoothstep(0.1, 0.6, gray));
         let toned = rich * mix(vec3(1.0, 1.0, 1.0), tint, warmth);
         let uv = (q + 0.5) / extent - 0.5;
         return vec4(linear_to_srgb(saturate(toned * (1.0 - vignette * dot(uv, uv)))), 1.0);

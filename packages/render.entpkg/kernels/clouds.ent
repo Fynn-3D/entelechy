@@ -89,12 +89,12 @@ fn cloud_depth_toward(deck: CloudDeck, p: Vec3, sun: Vec3, steps: Int) -> Float 
 /// scattered once and again (three octaves, each dimmer, less absorbed and
 /// less forward), and Beer's law darkened at a cloud's thin sunlit edge
 /// (powder).
-fn cloud_sunlight(depth: Float, cos_angle: Float) -> Float {
+fn cloud_sunlight(depth: Float, cos_angle: Float, powder_share: Float, bright: Float) -> Float {
     let powder = 1.0 - exp(0.0 - depth * 2.0);
     let once = exp(0.0 - depth) * cloud_phase(cos_angle, 0.6);
     let twice = 0.5 * exp(0.0 - depth * 0.5) * cloud_phase(cos_angle, 0.3);
     let thrice = 0.25 * exp(0.0 - depth * 0.25) * cloud_phase(cos_angle, 0.15);
-    return (once + twice + thrice) * mix(1.0, powder, 0.5) * 4.0;
+    return (once + twice + thrice) * mix(1.0, powder, powder_share) * bright;
 }
 /// A cloud's phase: mostly forward by `g`, some back (a silver lining and a
 /// glow away from the sun).
@@ -113,6 +113,10 @@ kernel render.clouds_march@1 {
     param below: Vec3 = vec3(0.0, 0.0, 0.0);
     param steps: Int = 32;
     param light_steps: Int = 5;
+    /// How bright the sunlit cloud is, how dark its sunlit edge (its powder, 0 none), and the sky's light in it.
+    param bright: Float = 4.0;
+    param powder: Float = 0.5;
+    param sky_light: Float = 1.0;
     output result: Image;
     compute {
         let clear = vec4(0.0, 0.0, 0.0, 1.0);
@@ -144,8 +148,8 @@ kernel render.clouds_march@1 {
             let dens = cloud_density(cd, p);
             if dens <= 0.0 { r } else {
                 let h = saturate((p.y - low) / (high - low));
-                let light = s.sun_color * cloud_sunlight(cloud_depth_toward(cd, p, sun, light_steps), cos_angle)
-                    + s.ambient * (0.3 + 0.7 * h) + below * ((1.0 - h) * 0.6);
+                let light = s.sun_color * cloud_sunlight(cloud_depth_toward(cd, p, sun, light_steps), cos_angle, powder, bright)
+                    + s.ambient * (0.3 + 0.7 * h) * sky_light + below * ((1.0 - h) * 0.6);
                 let absorbed = exp(0.0 - dens * dt);
                 let scattered = light * ((1.0 - absorbed) * r.w);
                 vec4(r.x + scattered.x, r.y + scattered.y, r.z + scattered.z, r.w * absorbed)

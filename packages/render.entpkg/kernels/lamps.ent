@@ -198,9 +198,9 @@ struct LampWalk { left: IVec4; light: Vec3; }
 /// at `p` facing `n`, seen from `v` (`t` meters from the eye, pixel `q`):
 /// each as the sun would light it (`lit_by`), its bulb's size widening the
 /// highlight; a lamp that casts shadows shadowed through the proxies and,
-/// within `contact` meters, on the screen.
+/// within `contact` meters, on the screen (as far as `reach` says).
 fn lamps_at(lamps: Lamps, bits: IVec4, m: Pbr, p: Vec3, n: Vec3, v: Vec3, t: Float, q: Vec2,
-    surface: Grid<Vec4>, l: Lens, proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, contact: Float) -> Vec3 {
+    surface: Grid<Vec4>, l: Lens, proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, contact: Float, reach: ContactReach) -> Vec3 {
     let walked = loop 128 with w = LampWalk { left: bits, light: vec3(0.0, 0.0, 0.0) } until lamp_first(w.left) < 0 {
         let k = lamp_first(w.left);
         let left = lamp_cleared(w.left, k);
@@ -217,7 +217,7 @@ fn lamps_at(lamps: Lamps, bits: IVec4, m: Pbr, p: Vec3, n: Vec3, v: Vec3, t: Flo
                 let widened = sqrt(saturate(pbr_alpha(m.rough) + lamp.size / (2.0 * max(dist, 0.01))));
                 let shade = if lamp.shadow == 0 { 1.0 } else {
                     let far = lamp_shadow(lamp, proxy, land, frame, p, n);
-                    let near = if dist < contact { 1.0 - contact_shadow(surface, l, size(surface), p, n, to, t, 8, 0.5) } else { 1.0 };
+                    let near = if dist < contact { 1.0 - contact_shadow(surface, l, size(surface), p, n, to, t, 8, 0.5, reach) } else { 1.0 };
                     far * near
                 };
                 let given = if lamp_is_panel(lamp) { panel_light(lamp, m, p, n, v) } else { lit_by(Pbr { ..m, rough: max(m.rough, widened) }, n, v, to, light) };
@@ -316,6 +316,11 @@ kernel render.lamps_light@1 {
     input land: Grid<Float>;
     input frame: Proxies;
     param contact: Float = 30.0;
+    /// How far a lamp's contact shadow reaches and how thick what casts it is (`ContactReach`, as `render.contact`'s).
+    param contact_length: Float = 0.025;
+    param contact_longest: Float = 0.3;
+    param contact_thick: Float = 0.01;
+    param contact_thickest: Float = 0.15;
     output result: Image;
     compute {
         let s = sample(surface);
@@ -327,7 +332,7 @@ kernel render.lamps_light@1 {
         if lamp_first(bits) < 0 { return vec4(0.0, 0.0, 0.0, 1.0); }
         let m = pbr_of(sample(paint), sample(extra), sample(layers), sample(more));
         let light = lamps_at(lamps, bits, m, l.eye + dir * s.w, s.xyz, vec3(0.0, 0.0, 0.0) - dir, s.w, q,
-            surface, l, proxy, land, frame, contact);
+            surface, l, proxy, land, frame, contact, ContactReach { length: contact_length, longest: contact_longest, thick: contact_thick, thickest: contact_thickest });
         return vec4(light.x, light.y, light.z, 1.0);
     }
 }

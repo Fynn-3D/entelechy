@@ -8,9 +8,6 @@
 // place of the unspread share (`render.subsurface_apply`).
 use "camera.ent";
 
-/// How far the light under a surface carries, red, green and blue, as
-/// shares of the surface's reach: skin's (red farthest).
-fn subsurface_reach() -> Vec3 { return vec3(1.0, 0.45, 0.25); }
 
 /// The scattering share `scatter` spread along `axis` (0 across, 1 down):
 /// eleven samples, each color weighted by a bell as wide as its reach (the
@@ -26,6 +23,8 @@ kernel render.subsurface_blur@1 {
     param axis: Int = 0;
     /// How far light carries under a fully subsurface surface (meters).
     param reach: Float = 0.012;
+    /// How far each color carries, red, green and blue, as shares of `reach` (skin's: red farthest).
+    param colors: Vec3 = vec3(1.0, 0.45, 0.25);
     output result: Image;
     compute {
         let own = sample(scatter);
@@ -38,7 +37,7 @@ kernel render.subsurface_blur@1 {
         let meters = reach * sss;
         let pixels = meters * l.focal * ext.y / max(s.w, 0.001);
         if pixels < 0.5 { return own; }
-        let width = subsurface_reach() * pixels;
+        let width = colors * pixels;
         let step_dir = if axis == 0 { vec2(1.0, 0.0) } else { vec2(0.0, 1.0) };
         // Samples spread over three times the widest color's width.
         let spacing = width.x * 3.0 / 5.0;
