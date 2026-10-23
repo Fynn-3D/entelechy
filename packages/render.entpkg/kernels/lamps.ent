@@ -128,32 +128,39 @@ fn lamp_irradiance(m: Lamp, p: Vec3) -> Vec3 {
 }
 
 /// The shadow toward point `at` of lamp `m` from `p` (a surface facing `n`) through the proxies, walked from just off the
-/// surface to the lamp: 1 lit, 0 dark, the penumbra wider for a larger bulb.
-fn lamp_shadow_to(m: Lamp, at: Vec3, proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, p: Vec3, n: Vec3) -> Float {
+/// surface to the lamp, its steps set on by `jitter` of a cell (0 to 1): 1 lit, 0 dark, the penumbra wider for a larger bulb.
+fn lamp_shadow_to(m: Lamp, at: Vec3, proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, p: Vec3, n: Vec3, jitter: Float) -> Float {
     let d = at - p;
     let dist = length(d);
     let dir = d / max(dist, 0.0001);
     let c = proxy_cell_at(frame, p);
     let o = p + n * (c * 0.6);
-    let start = rough_leave(proxy, frame, o, dir, c * 0.5, c * 3.0);
+    let start = rough_leave(proxy, frame, o, dir, c * 0.5, c * 3.0) + jitter * c;
     let far = dist - m.size - c;
     if far <= start { return 1.0; }
     let sharp = clamp(dist / max(m.size * 4.0, 0.05), 4.0, 24.0);
-    let r = loop 64 with r = vec2(start, 1.0) until r.x > far || r.y < 0.01 {
+    // The penumbra by the nearest the ray passes to what it walks by, found from two steps' distances (Aaltonen's), not
+    // each step's alone: a step's own distance bands the shadow along the field's level sets.
+    let r = loop 96 with r = vec3(start, 1.0, 1000000.0) until r.x > far || r.y < 0.01 {
         let h = rough_probe(proxy, land, frame, o + dir * r.x).x;
-        vec2(r.x + clamp(h, c * 0.3, 12.0), min(r.y, sharp * h / r.x))
+        let y = if r.z > 999999.0 { 0.0 } else { h * h / (2.0 * r.z) };
+        let side = sqrt(max(h * h - y * y, 0.0));
+        vec3(r.x + clamp(h * 0.6, c * 0.3, 12.0), min(r.y, sharp * side / max(r.x - y, 0.0001)), h)
     };
     return smoothstep(0.0, 1.0, saturate(r.y));
 }
 
 /// The shadow toward lamp `m` from `p` (a surface facing `n`) through the proxies: toward its bulb; toward four points
 /// across a panel (half its width and height out from its middle), their mean, so a wide window's shadow is as soft as it is
-/// wide, not one ray's.
-fn lamp_shadow(m: Lamp, proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, p: Vec3, n: Vec3) -> Float {
-    if !lamp_is_panel(m) { return lamp_shadow_to(m, m.at, proxy, land, frame, p, n); }
+/// wide, not one ray's. Each ray's steps are set on by a share of a cell that `jitter` (0 to 1, the pixel's own) and the
+/// point turn, so what the steps meet does not line up from pixel to pixel into bands.
+fn lamp_shadow(m: Lamp, proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, p: Vec3, n: Vec3, jitter: Float) -> Float {
+    if !lamp_is_panel(m) { return lamp_shadow_to(m, m.at, proxy, land, frame, p, n, jitter); }
     let small = Lamp { ..m, size: m.size * 0.5 };
-    return (lamp_shadow_to(small, m.at + m.side * 0.5 + m.rise * 0.5, proxy, land, frame, p, n) + lamp_shadow_to(small, m.at - m.side * 0.5 + m.rise * 0.5, proxy, land, frame, p, n)
-        + lamp_shadow_to(small, m.at + m.side * 0.5 - m.rise * 0.5, proxy, land, frame, p, n) + lamp_shadow_to(small, m.at - m.side * 0.5 - m.rise * 0.5, proxy, land, frame, p, n)) * 0.25;
+    return (lamp_shadow_to(small, m.at + m.side * 0.5 + m.rise * 0.5, proxy, land, frame, p, n, jitter)
+        + lamp_shadow_to(small, m.at - m.side * 0.5 + m.rise * 0.5, proxy, land, frame, p, n, fract(jitter + 0.25))
+        + lamp_shadow_to(small, m.at + m.side * 0.5 - m.rise * 0.5, proxy, land, frame, p, n, fract(jitter + 0.5))
+        + lamp_shadow_to(small, m.at - m.side * 0.5 - m.rise * 0.5, proxy, land, frame, p, n, fract(jitter + 0.75))) * 0.25;
 }
 
 /// How much of lamp `m` reaches `x` through the proxies, by a short walk of
@@ -225,7 +232,7 @@ fn lamps_at(lamps: Lamps, bits: IVec4, m: Pbr, p: Vec3, n: Vec3, v: Vec3, t: Flo
                 // A sphere light: the highlight widened by the bulb as seen from here (Karis).
                 let widened = sqrt(saturate(pbr_alpha(m.rough) + lamp.size / (2.0 * max(dist, 0.01))));
                 let shade = if lamp.shadow == 0 { 1.0 } else {
-                    let far = lamp_shadow(lamp, proxy, land, frame, p, n);
+                    let far = lamp_shadow(lamp, proxy, land, frame, p, n, fract(52.982919 * fract(dot(q, vec2(0.06711056, 0.00583715)))));
                     let near = if dist < contact { 1.0 - contact_shadow(surface, l, size(surface), p, n, to, t, 8, 0.5, reach) } else { 1.0 };
                     far * near
                 };
