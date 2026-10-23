@@ -1,0 +1,34 @@
+scene warps.esn
+
+# (7, -3, 0.4) on a lattice of 4: one back from the middle of cell 2,
+# one up from that of cell -1, a meter from the cell's nearest walls; the
+# lattice's cells held to -2..2, 30 along x is 22 past the last's middle.
+frame 0.0
+expect repeats.result[0] = -1 1 0.4 1 0.0001
+expect repeats.result[1] = 2 -1 0 0
+expect repeats.result[2] = 22 0 0 0 0.0001
+
+# In the plane alike; (0, 2) turned into the first of four sectors lies
+# on x; 100 degrees below x, folded into sixths, is 20 above it.
+expect flats.result[0] = 1 -1 1 0 0.0001
+expect flats.result[1] = 2 0 1.8794 0.684 0.001
+
+# Mirrored across x = 1, -3 is 5; a twist of half a radian a meter
+# stretches 2 meters out by root 2; a quarter turn up, x is z; a bend's
+# quarter turn along x, x is up; scaled from (1, 1, 1).
+expect bends.result[0] = 5 1 2 1.4142 0.001
+expect bends.result[1] = 0 1.5708 1 1 0.001
+expect bends.result[2] = 0 1.5708 0.5 0 0.001
+expect bends.result[3] = 3 2 5 0 0.0001
+
+# Rolled round a cylinder of radius 10 from 10 along: before it as it is;
+# 10 up its wall is the ground a quarter round (5 pi on); half way to the
+# axis 5 above the ground, its length drawn in by 2.
+expect rolls.result[0] = 1 0 3 1 0.0001
+expect rolls.result[1] = 0 0 25.708 1 0.001
+expect rolls.result[2] = 0 5 25.708 2 0.001
+
+# Off a chamfered box's corner, its cut nearer than its corner; a cut
+# cone's foot edge; a cube half its cell wide, 0.4 off it, the next 0.6.
+expect shapes.result[0] = 2.1213 2.4554 0.4 0.6 0.001
+expect shapes.result[1] = 1 1 0.4 0.6 0.001

@@ -1,0 +1,102 @@
+// Space bent before a distance is measured: a point of the world taken to
+// the point of a shape's own space it shows. Repeated on a lattice,
+// mirrored across a plane, turned into sectors round an axis (mirrored,
+// a kaleidoscope), twisted, bent, rolled up round a cylinder, scaled from
+// a point. A warp that is not rigid stretches distances: its `_stretch`
+// says by how much at most there, and a march divides the distance it
+// measures by it (or a scene by the most it stretches anywhere).
+
+/// `p` in the cell of a lattice `cell` wide that holds it, about the
+/// cell's middle.
+fn warp_repeat(p: Vec3, cell: Vec3) -> Vec3 { return p - cell * floor(p / cell + 0.5); }
+
+/// Which cell of the lattice `cell` wide holds `p` (whole numbers, 0 the
+/// cell about the origin).
+fn warp_repeat_cell(p: Vec3, cell: Vec3) -> Vec3 { return floor(p / cell + 0.5); }
+
+/// `p` in the cell that holds it of the lattice's cells `low` to `high`
+/// (by `warp_repeat_cell`), or the nearest of them past their ends.
+fn warp_repeat_limited(p: Vec3, cell: Vec3, low: Vec3, high: Vec3) -> Vec3 {
+    return p - cell * clamp(floor(p / cell + 0.5), low, high);
+}
+
+/// How far `local` (a point about a cell's middle, `warp_repeat`'s) is
+/// from its cell's walls: what a shape repeated keeps its distance under,
+/// so a march never steps past the next cell's shape.
+fn warp_repeat_wall(local: Vec3, cell: Vec3) -> Float {
+    let w = cell * 0.5 - abs(local);
+    return min(w.x, min(w.y, w.z));
+}
+
+/// The flat ones: `p` in its cell of a lattice of the plane `cell` wide, and
+/// which cell.
+fn warp_repeat2(p: Vec2, cell: Vec2) -> Vec2 { return p - cell * floor(p / cell + 0.5); }
+fn warp_repeat_cell2(p: Vec2, cell: Vec2) -> Vec2 { return floor(p / cell + 0.5); }
+
+/// `p` mirrored across the plane of unit normal `n`, `offset` from the
+/// origin along it: what is behind the plane brought in front of it.
+fn warp_mirror(p: Vec3, n: Vec3, offset: Float) -> Vec3 {
+    return p - n * (2.0 * min(dot(p, n) - offset, 0.0));
+}
+
+/// `q` (a point of a plane about its origin) turned into the first of
+/// `count` sectors round the origin, each the first turned (the first
+/// along x, either side of it), the sectors turned `turn` first.
+fn warp_sectors(q: Vec2, count: Int, turn: Float) -> Vec2 {
+    let sector = 6.2831853 / float(count);
+    let a0 = atan2(q.y, q.x) + turn;
+    let a = a0 - sector * floor(a0 / sector + 0.5);
+    return vec2(cos(a), sin(a)) * length(q);
+}
+
+/// `q` folded into the first of `count` sectors round the origin, each the
+/// one before mirrored (a kaleidoscope's): the first lies from x to `turn`
+/// back of the sector's width, then on.
+fn warp_fold(q: Vec2, count: Int, turn: Float) -> Vec2 {
+    let sector = 6.2831853 / float(count);
+    let a0 = atan2(q.y, q.x) + turn;
+    let a = abs(a0 - sector * floor(a0 / sector + 0.5));
+    return vec2(cos(a), sin(a)) * length(q);
+}
+
+/// `p` twisted about up: each height turned `rate` radians a meter more.
+fn warp_twist(p: Vec3, rate: Float) -> Vec3 {
+    let a = rate * p.y;
+    return vec3(cos(a) * p.x - sin(a) * p.z, p.y, sin(a) * p.x + cos(a) * p.z);
+}
+
+/// How much a twist of `rate` stretches distances `r` meters from its axis.
+fn warp_twist_stretch(r: Float, rate: Float) -> Float { return sqrt(1.0 + r * r * rate * rate); }
+
+/// `p` bent in the plane of x and up: each step along x turned `rate`
+/// radians a meter more, so a bar along x curls round.
+fn warp_bend(p: Vec3, rate: Float) -> Vec3 {
+    let a = rate * p.x;
+    return vec3(cos(a) * p.x - sin(a) * p.y, sin(a) * p.x + cos(a) * p.y, p.z);
+}
+
+/// How much a bend of `rate` stretches distances `r` meters from its middle.
+fn warp_bend_stretch(r: Float, rate: Float) -> Float { return sqrt(1.0 + r * r * rate * rate); }
+
+/// The ground (y 0) rolled up past `start` along z round a cylinder across
+/// it (along x) of radius `radius`: up into a wall, over into a ceiling.
+/// `p` of the world taken to the flat ground's space; nearer than `start`
+/// as it is.
+fn warp_roll(p: Vec3, start: Float, radius: Float) -> Vec3 {
+    if p.z <= start { return p; }
+    let rel = vec2(p.z - start, radius - p.y);
+    return vec3(p.x, radius - length(rel), start + radius * atan2(rel.x, rel.y));
+}
+
+/// How much a roll stretches distances at `p`: within the cylinder, the
+/// ground's length drawn in round a smaller circle (at most `most`).
+fn warp_roll_stretch(p: Vec3, start: Float, radius: Float, most: Float) -> Float {
+    if p.z <= start { return 1.0; }
+    let rho = length(vec2(p.z - start, radius - p.y));
+    return clamp(radius / max(rho, 0.000001), 1.0, most);
+}
+
+/// `p` scaled from `center` by `by` (a shape grown `by` times there):
+/// distances measured at the result are `by`'s least times shorter than
+/// in the world.
+fn warp_scale(p: Vec3, center: Vec3, by: Vec3) -> Vec3 { return center + (p - center) / by; }

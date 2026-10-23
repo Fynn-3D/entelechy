@@ -1,7 +1,8 @@
 // Signed distance functions: how far a point is from a shape, negative
 // inside, each exact for its shape; and the ways shapes are joined, cut
 // and blended. A scene marches a ray by them, or bakes them into a
-// volume; `p` is the point in the shape's own space.
+// volume; `p` is the point in the shape's own space (`warp.ent` takes a
+// point of the world there, bending space on the way).
 
 /// A sphere of radius `r` about the origin.
 fn sd_sphere(p: Vec3, r: Float) -> Float { return length(p) - r; }
@@ -36,6 +37,25 @@ fn sd_cylinder(p: Vec3, r: Float, half: Float) -> Float {
     return min(max(d.x, d.y), 0.0) + length(max(d, vec2(0.0, 0.0)));
 }
 
+/// A box of half sizes `half` about up, its four upright edges cut flat
+/// `chamfer` back along each face (an octagon in plan).
+fn sd_chamfer_box(p: Vec3, half: Vec3, chamfer: Float) -> Float {
+    let cut = (abs(p.x) + abs(p.z) - (half.x + half.z - chamfer)) * 0.70710678;
+    return max(sd_box(p, half), cut);
+}
+
+/// A cone about up cut flat at both ends: radius `low` at its foot, `high`
+/// at its top, half height `half`.
+fn sd_cone(p: Vec3, low: Float, high: Float, half: Float) -> Float {
+    let q = vec2(length(p.xz), p.y);
+    let k1 = vec2(high, half);
+    let k2 = vec2(high - low, 2.0 * half);
+    let ca = vec2(q.x - min(q.x, if q.y < 0.0 { low } else { high }), abs(q.y) - half);
+    let cb = q - k1 + k2 * clamp(dot(k1 - q, k2) / dot(k2, k2), 0.0, 1.0);
+    let s = if cb.x < 0.0 && ca.y < 0.0 { -1.0 } else { 1.0 };
+    return s * sqrt(min(dot(ca, ca), dot(cb, cb)));
+}
+
 /// A plane of unit normal `n`, `offset` from the origin along it.
 fn sd_plane(p: Vec3, n: Vec3, offset: Float) -> Float { return dot(p, n) - offset; }
 
@@ -57,6 +77,18 @@ fn sd_segment(p: Vec2, a: Vec2, b: Vec2) -> Float {
     let ba = b - a;
     let h = clamp(dot(pa, ba) / max(dot(ba, ba), 0.0000001), 0.0, 1.0);
     return length(pa - ba * h);
+}
+
+/// A shape built of cubes on a lattice `size` wide (`warp_repeat`'s
+/// cells), at `local` in a cell about its middle: how far the cell's own
+/// cube is, `fill` of the cell wide (x), and how far any other cell's cube
+/// is at the least (y: past the cell's wall and the gap round its cube). A
+/// caller decides which cells hold a cube, and takes the cube's distance
+/// where its cell holds one and the bound where it does not.
+fn sd_lattice_cube(local: Vec3, size: Float, fill: Float) -> Vec2 {
+    let half = 0.5 * size * fill;
+    let wall = 0.5 * size - max(abs(local.x), max(abs(local.y), abs(local.z)));
+    return vec2(sd_box(local, vec3(half, half, half)), wall + 0.5 * size * (1.0 - fill));
 }
 
 /// Two shapes as one, blended over `k` where they meet (0 a sharp join).

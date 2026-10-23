@@ -1,6 +1,7 @@
 //! Rotations as quaternions and rigid transforms as matrices; a camera's
 //! matrices and the ways between the world, clip space and the picture;
-//! and signed distances to shapes, with the ways they are joined.
+//! signed distances to shapes, with the ways they are joined; and the ways
+//! space is bent before a distance is measured.
 package geometry@1 { language = 1; ir = 1; }
 
 use "kernels/";
