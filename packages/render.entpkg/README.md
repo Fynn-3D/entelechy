@@ -7,7 +7,7 @@ lamps, a planar mirror, fog and clouds, a camera, metered and local
 exposure, temporal antialiasing and upscaling, depth of field, glow, film
 and a stylized look.
 
-**Layer:** Graphics. **Uses:** [`geometry`](../geometry.entpkg/README.md), [`image`](../image.entpkg/README.md), [`random`](../random.entpkg/README.md), [`raster`](../raster.entpkg/README.md).
+**Layer:** Graphics. **Uses:** [`geometry`](../geometry.entpkg/README.md), [`image`](../image.entpkg/README.md), [`parallel`](../parallel.entpkg/README.md), [`random`](../random.entpkg/README.md), [`raster`](../raster.entpkg/README.md).
 
 ```text
 use "render.entpkg";
@@ -46,6 +46,12 @@ use "render.entpkg";
   `render.exposure_start@1`, `render.exposure_apply@1`,
   `render.exposure_local_base@1`, `render.exposure_local_blur@1`,
   `render.exposure_local@1`.
+- `kernels/field.ent` — Instanced distance fields: the scene's proxy
+  baked from its things' own distances. Kernels: `render.field_atlas8@1`,
+  `render.field_shapes8@1`, `render.field_atlas_join@1`,
+  `render.field_shapes_join@1`, `render.field_frame@1`,
+  `render.field_bin_counts@1`, `render.field_bin_fill@1`,
+  `render.field_bake@1`.
 - `kernels/film.ent` — Film. Kernels: `render.film_start@1`,
   `render.film_keys@1`, `render.film@1`.
 - `kernels/fog.ent` — Height fog the sun and the lamps light, their beams
@@ -109,6 +115,8 @@ use "render.entpkg";
   G-buffer (the contract, its first three maps).
 - `graphs/exposure.esn` — Metered exposure, then local exposure: `hdr`
   scaled, and the `exposure` followed.
+- `graphs/field.esn` — The scene's proxy baked round the lens from its
+  things' shapes and places (`kernels/field.ent`).
 - `graphs/lamps.esn` — The lamps added to a renderer's picture, for one
   that does not take them in itself.
 - `graphs/path_tracer.esn` — The path tracer (`kernels/path_tracer.ent`),
@@ -133,7 +141,7 @@ use "render.entpkg";
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`,
+`field.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`,
 `sky.replay`, `temporal.replay`.
 Every Kernel of the package is reached by one of them.
 
@@ -167,7 +175,11 @@ this contract takes any renderer package by changing a few graph lines.
 | `lamps` | `Lamps` | The lamps beside the sun, at most 128: each where it is, its reach, intensity, bulb size, a spotlight's aim and beam, a panel's half width and height, whether it casts shadows (`point_lamp`, `spot_lamp`, `panel_lamp`). A scene with none hands over `render.lamps_none`. |
 
 The G-buffer is the scene's own full-precision view; `proxy` and `land` are
-what a renderer traces shadows and bounces through.
+what a renderer traces shadows and bounces through. A scene of placed things
+bakes its proxy from their own distance volumes (`graphs/field.esn`: each
+kind's shape in an atlas, each thing placed, a block round the lens baked
+from the things standing in it), so what is traced is each thing's shape,
+not a rough stand-in for it.
 
 A scene may hand over its G-buffer twice, through `render.settle`: a reduced
 one while the camera moves, and a full one, computed once, when it stops

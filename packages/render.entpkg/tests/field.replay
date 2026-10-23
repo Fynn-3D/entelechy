@@ -1,0 +1,22 @@
+scene field.esn
+window 64 64
+
+# The block round the lens: its foot where the scene's is, its middle
+# ahead of the lens held to steps (the lens at 4, 0 looking down z).
+frame 0.0
+expect field.frame[0].lo = 0 0 -2 0.001
+# The near bin lists the ball and the turned box; the thing in no shape
+# is in none.
+expect field.counts.result[0] = 2
+# A cell beside the ball: the ball's own distance at its box's edge and
+# the way to it; one past the ball's box, and one far from both, where
+# nothing is nearer than the band.
+expect field.proxy[2312] = 1.2324 0.8 0.2 0.1 0.002
+expect field.proxy[5664] = 1.8206 0.8 0.2 0.1 0.002
+expect field.proxy[31] = 2 0 0 0 0.001
+
+# Two atlases joined: sixteen shapes, the second's box where the first's
+# box was.
+expect count joined_shapes.result = 16
+expect joined.result[4096] = 0.9014 0.1 0.3 0.8 0.002
+expect joined.result[36864] = 0.9014 0.1 0.3 0.8 0.002

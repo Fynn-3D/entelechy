@@ -68,7 +68,8 @@ kernel render.lit@1 {
     param bounce: Int = 1;
     /// The share of the light all round a surface deep inside the coarse
     /// shape (a leaf in its crown) keeps, times its baked occlusion, in place of
-    /// what the coarse scene hides.
+    /// what the coarse scene hides; a translucent surface keeps at least this
+    /// times its subsurface share wherever it is.
     param inside_sky: Float = 0.8;
     output result: Image;
     /// The share of `result` that scatters under subsurface surfaces (`graphs/subsurface.esn` spreads it); 0 elsewhere and when painted.
@@ -91,7 +92,9 @@ kernel render.lit@1 {
         let fr = at(frame, 0);
         let at_p = l.eye + dir * su.w + n * 0.05;
         let deep = saturate((0.0 - proxy_at(proxy, fr, at_p, 1.0).x) / fr.cell - 0.5);
-        let open = mix(proxy_open(proxy, fr, at_p, n), inside_sky, deep);
+        // A translucent thing (a leaf) lets the sky through itself: those round it
+        // shut out no more than its subsurface share of `inside_sky` lets in.
+        let open = max(mix(proxy_open(proxy, fr, at_p, n), inside_sky, deep), inside_sky * m.subsurface);
         let ao = if bounce != 0 { baked_occlusion(ex) * open } else { 0.0 };
         let e = hemisphere(n, s) * ao;
         let spec_light = mix(seen_along(reflect(dir, n), s), e, sqrt(m.rough)) * ao * on;
