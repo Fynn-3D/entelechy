@@ -66,11 +66,6 @@ use "render.entpkg";
 - `kernels/fog.ent` — Height fog the sun and the lamps light, their beams
   cut into shafts by what stands in them and by the clouds. Kernels:
   `render.fog_march@1`, `render.fog_blur@1`, `render.fog_apply@1`.
-- `kernels/glass.ent` — Glass laid over a renderer's picture: any mesh
-  drawn apart, the nearest pane where nearer than the G-buffer, what lies
-  behind bent and tinted, what it mirrors from the screen, the bounce's
-  cache and the sky, and its highlights. Kernels:
-  `render.glass_corners@1`, `render.glass@1`.
 - `kernels/haze.ent` — Haze: aerial perspective after the real atmosphere.
   Kernels: `render.haze@1`.
 - `kernels/lamp_map.ent` — Lamps' shadow maps: a cube of distances for
@@ -160,6 +155,14 @@ use "render.entpkg";
   `render.jitter@1`, `render.taa@1`, `render.same_lens@1`.
 - `kernels/tonemap.ent` — Glow and tone mapping. Kernels: `render.blank@1`,
   `render.bright@1`, `render.spread@1`, `render.tonemap@1`.
+- `kernels/translucent.ent` — Translucent layers over a renderer's
+  picture, every layer at once in no order (glass, smoke, glows): shaded
+  where each covers a pixel in front of the G-buffer and summed in 32-bit
+  fixed point (weighted, blended order-independent transparency with
+  colored transmission), then laid over the picture. Kernels:
+  `render.translucent_tiles@1`, `render.translucent_corners@1`,
+  `render.translucent_blank@1`, `render.translucent_splat@1`,
+  `render.translucent_resolve@1`.
 - `kernels/transmission.ent` — Transmission (glass, water, ice).
   Kernels: `render.settle_behind@1`.
 - `kernels/upscale.ent` — The picture is computed at an inner resolution
@@ -189,8 +192,6 @@ use "render.entpkg";
   things' shapes and places (`kernels/field.ent`), in three levels, each
   coarser and wider than the one before.
 - `graphs/field_level.esn` — One level of `field.esn`.
-- `graphs/glass.esn` — Glass over a renderer's picture
-  (`kernels/glass.ent`), its mesh cut at the near plane and drawn apart.
 - `graphs/lamp_maps.esn` — The lamps' shadow maps (`kernels/lamp_map.ent`),
   drawn once while lamps and things keep still.
 - `graphs/lamps.esn` — The lamps added to a renderer's picture, for one
@@ -218,6 +219,8 @@ use "render.entpkg";
 - `graphs/taa.esn` — Temporal antialiasing and upscaling.
 - `graphs/tonemap.esn` — The finish at the picture's own size: glow, tone
   and sRGB, sharpened if asked.
+- `graphs/translucent.esn` — Translucent layers over a renderer's picture
+  (`kernels/translucent.ent`), their mesh cut at the near plane.
 - `graphs/upscale.esn` — A finished picture (tone-mapped, sRGB) scaled
   to the window's size.
 - `graphs/volumetrics.esn` — Fog and clouds laid over a picture.
@@ -225,8 +228,8 @@ use "render.entpkg";
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`bounce.replay`, `cluster.replay`, `field.replay`, `glass.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `reflection.replay`, `shadow.replay`,
-`sky.replay`, `temporal.replay`.
+`bounce.replay`, `cluster.replay`, `field.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `reflection.replay`, `shadow.replay`,
+`sky.replay`, `temporal.replay`, `translucent.replay`.
 Every Kernel of the package is reached by one of them.
 
 Used by the [material_balls](../../examples/material_balls/README.md) example.
@@ -473,17 +476,23 @@ layer with the absorption along the way. A renderer lights that point
 renderer's own means), blurs it by the glass's roughness (`frosted`) and adds
 what Fresnel lets through (`transmitted`) under the surface's reflection.
 
-### Glass
+### Translucency
 
 A G-buffer holds one surface a pixel, so a renderer sees nothing through
-glass. Glass is drawn apart (`graphs/glass.esn`): its own mesh rasterized
-over the picture once the picture is lit, the nearest pane laid where it
-is nearer than the G-buffer's surface, Fresnel's share of what it mirrors
-(the screen where the mirror ray meets what it shows, the bounce's cache
-past the screen, the sky past that) over the rest of what lies behind it,
-moved along the glass's slope by `refraction` for a thick glass. Panes
-behind panes show the nearest only; light through a pane is the
-renderer's own (the sun and the lamps pass glass).
+glass or smoke. Translucent things are drawn apart (`graphs/translucent.esn`)
+once the picture is lit: their mesh cut at the near plane, laid into tiles
+of the screen, every pixel a face covers in front of the G-buffer's surface
+shaded by the face's look (`TranslucentLook`: glass mirrors the screen, the
+bounce's cache and the sky by Fresnel and lets its color through; smoke is
+lit by the sun through the proxies, the sky and the lamps and hides as much
+as it covers; a glow adds its light) and summed, each layer in no order
+(McGuire and Bavoil's weighted, blended transparency): the light each adds
+by a weight that favors the nearer, its coverage likewise, the log of what
+it lets through, each color apart, so colored panes behind panes tint as
+they should. Every sum is 32-bit fixed point: the layers in any order give
+the same bits, and a device sums them itself. Panes behind panes all show;
+what one layer's light does to the next (a pane mirrored in a pane) is
+the weighted mean's, not an exact order's.
 
 ### Shading
 

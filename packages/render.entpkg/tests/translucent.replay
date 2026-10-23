@@ -1,0 +1,30 @@
+scene translucent.esn
+
+# Through both panes the wall takes both tints (grey times red's and
+# blue's), a little sky mirrored in; the glow adds its orange to the
+# picture; the smoke hides half the wall and adds its own lit grey; past
+# them all, the picture as it was.
+frame 0.0
+expect 32 32 = 0.240 0.124 0.240 0.01
+expect 9 32 = 0.641 0.800 0.600 0.01
+expect 55 32 = 0.570 0.390 0.390 0.02
+expect 2 2 = 0.031 0.5 0.5 0.001
+
+# The panes listed the other way round: the same, to the last bit the
+# picture keeps.
+param swap 1
+frame 0.0
+expect 32 32 = 0.240 0.124 0.240 0.0005
+
+# The near pane thick: what lies behind comes from further right, its red
+# risen.
+param swap 0
+param bend 8.0
+frame 0.0
+expect 32 32 = 0.250 0.124 0.240 0.004
+
+# The wall a meter off, before every layer: nothing of them shows.
+param bend 0.0
+param wall 1.0
+frame 0.0
+expect 32 32 = 0.5 0.5 0.5 0.001

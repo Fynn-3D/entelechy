@@ -1,0 +1,265 @@
+// Translucent things over a renderer's picture, every layer at once and in no order: glass panes behind panes, a bottle,
+// smoke, a glow. A G-buffer holds one surface a pixel, so they are drawn apart: their mesh, cut at the near plane
+// (`raster.entpkg`'s `raster.clip_near`), laid into tiles of the screen (`render.translucent_tiles`), each tile's pixels
+// each face covers in front of what the G-buffer shows shaded by the face's look (`TranslucentLook`) and summed
+// (`render.translucent_splat`): the light each layer adds weighted by how near it is, its coverage likewise, the log of the
+// light it lets through, each color apart (Weighted, Blended Order-Independent Transparency, McGuire and Bavoil's, with
+// colored transmission), and the light glows add; every sum in 32-bit fixed point, so any order of the layers sums to the
+// same bits on every device, and a device sums them itself. `render.translucent_resolve` lays it over the picture: what lies behind times all the layers let
+// through, the layers' light as their weighted mean times their coverage, the glows. `graphs/translucent.esn` is the
+// whole.
+use "mesh.entpkg";
+use "raster.entpkg";
+use "random.entpkg";
+use "parallel.entpkg";
+use "brdf.ent";
+use "camera.ent";
+use "phase.ent";
+use "lamps.ent";
+use "radiance.ent";
+use "sky.ent";
+
+/// A translucent look: its kind (`translucent_glass()`, `translucent_smoke()`, `translucent_glow()`), its color (glass:
+/// what it lets through; smoke: what it scatters; glow: what it gives), how much it covers (smoke's opacity; glass is
+/// covered by its Fresnel), how rough (glass), how strongly it glows, and how far what lies behind is bent through it
+/// (pixels, a slope of one; glass).
+struct TranslucentLook { kind: Int; color: Vec3; cover: Float; rough: Float; glow: Float; bend: Float; }
+type TranslucentLooks = Rows<TranslucentLook>;
+
+fn translucent_glass() -> Int { return 0; }
+fn translucent_smoke() -> Int { return 1; }
+fn translucent_glow() -> Int { return 2; }
+
+/// A tile's side in pixels.
+fn translucent_tile() -> Int { return 2; }
+/// The sums each pixel keeps: the light added, by depth weight (rgb); coverage, by depth weight; the log of what is let
+/// through (rgb); the glow (rgb); and how far what lies behind is moved, by coverage and depth weight (xy); twelve slots.
+fn translucent_slots() -> Int { return 12; }
+/// Fixed point: light, coverage and bend times 2^16, logs times 2^18 (32-bit sums: a hundred layers of light up to 200 at
+/// the nearest weight, or of what lets a ten-thousandth through, before one overflows).
+fn translucent_scale() -> Float { return 65536.0; }
+fn translucent_log_scale() -> Float { return 262144.0; }
+
+/// How much a layer `dist` meters off weighs against the others: nearer more, twenty times at most over the farthest
+/// (McGuire and Bavoil's depth weight, narrowed to what 32-bit fixed point holds; what is let through is exact in any
+/// order whatever the weights, which only mix the layers' own light).
+fn translucent_weight(dist: Float) -> Float { return clamp(10.0 / (1.0 + dist), 0.5, 10.0); }
+
+/// The face's corners on the screen (pixels, x right and y down), their 1/w and the face's area, as raster's.
+struct TranslucentFace { a: Vec3; b: Vec3; c: Vec3; ia: Int; ib: Int; ic: Int; area: Float; box: Vec4; }
+
+fn translucent_pixel(v: Corner, ext: Vec2) -> Vec3 {
+    let inv = 1.0 / v.clip.w;
+    return vec3((v.clip.x * inv * 0.5 + 0.5) * ext.x, (0.5 - v.clip.y * inv * 0.5) * ext.y, inv);
+}
+
+/// Face `f` of the cut faces on a screen `ext` large: its corners, its area (twice it; 0 for one not drawn) and its box
+/// (pixels; x0, y0, x1, y1, the last past it).
+fn translucent_face(vertices: Rows<Corner>, f: Face, ext: Vec2) -> TranslucentFace {
+    let va = at(vertices, f.a);
+    let vb = at(vertices, f.b);
+    let vc = at(vertices, f.c);
+    let none = TranslucentFace { a: vec3(0.0, 0.0, 0.0), b: vec3(0.0, 0.0, 0.0), c: vec3(0.0, 0.0, 0.0), ia: 0, ib: 0, ic: 0, area: 0.0, box: vec4(0.0, 0.0, 0.0, 0.0) };
+    if va.clip.w <= 0.0 || vb.clip.w <= 0.0 || vc.clip.w <= 0.0 { return none; }
+    let a = translucent_pixel(va, ext);
+    let b = translucent_pixel(vb, ext);
+    let c = translucent_pixel(vc, ext);
+    let area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    if abs(area) < 0.000001 { return none; }
+    let lo = clamp(floor(min(min(a.xy, b.xy), c.xy)), vec2(0.0, 0.0), ext);
+    let hi = clamp(ceil(max(max(a.xy, b.xy), c.xy)), vec2(0.0, 0.0), ext);
+    return TranslucentFace { a: a, b: b, c: c, ia: f.a, ib: f.b, ic: f.c, area: area, box: vec4(lo.x, lo.y, hi.x, hi.y) };
+}
+
+/// How many tiles each cut face's box spans (`domain = count(faces)`).
+kernel render.translucent_tiles@1 {
+    requires { field.read; field.write; }
+    input vertices: Rows<Corner>;
+    input faces: Rows<Face>;
+    input canvas: Grid<Long>;
+    output result: Rows<Int>;
+    compute {
+        let t = translucent_face(vertices, sample(faces), size(canvas));
+        if t.area == 0.0 { return 0; }
+        let n = ceil((vec2(t.box.z, t.box.w) - vec2(t.box.x, t.box.y)) / float(translucent_tile()));
+        return int(max(n.x, 0.0)) * int(max(n.y, 0.0));
+    }
+}
+
+/// The glass's corners as the rasterizer takes them (`domain` its rows), between `near` and `far` meters.
+kernel render.translucent_corners@1 {
+    requires { field.read; field.write; }
+    input points: Rows<MeshPoint>;
+    input lens: Lenses;
+    input canvas: Grid<Long>;
+    param near: Float = 0.05;
+    param far: Float = 2000.0;
+    output result: Rows<Corner>;
+    compute {
+        let p = sample(points);
+        return Corner { clip: lens_clip(at(lens, 0), size(canvas), p.position, near, far), normal: p.normal, uv: p.uv };
+    }
+}
+
+/// No sums yet (`domain = size(canvas) * vec2(translucent_slots(), 1)`: each pixel's slots side by side).
+kernel render.translucent_blank@1 {
+    requires { field.read; field.write; }
+    input canvas: Grid<Long>;
+    output result: Grid<Int>;
+    compute { return 0; }
+}
+
+/// A layer's light, what it lets through (rgb) and coverage, and its glow, at `p` facing `n` seen from `v` along `dir`.
+struct TranslucentShade { light: Vec3; through: Vec3; cover: Float; glow: Vec3; }
+
+/// Each tile of each face (`domain = value(entries)`, the faces' tiles laid end to end by `ends`): every pixel of it whose
+/// middle the face covers, nearer than the G-buffer's surface, shaded by its look (`looks`, the face's in `face_looks`, a
+/// face of the mesh's `faces` before the cut) and summed into the pixel's slots.
+kernel render.translucent_splat@1 {
+    requires { field.read; field.write; }
+    input vertices: Rows<Corner>;
+    input faces: Rows<Face>;
+    input face_looks: Rows<Int>;
+    input looks: TranslucentLooks;
+    input tiles: Rows<Int>;
+    input ends: Rows<Int>;
+    input blank: Grid<Int>;
+    /// How many tiles (sizes the node).
+    input entries: Rows<Int>;
+    input picture: Image;
+    input surface: Grid<Vec4>;
+    input lens: Lenses;
+    input sky: SkyLooks;
+    input cache: Volume<Vec4>;
+    input rframe: Proxies;
+    input proxy: Volume<Vec4>;
+    input land: Grid<Float>;
+    input frame: Proxies;
+    input lamps: Lamps;
+    param near: Float = 0.05;
+    param far: Float = 2000.0;
+    param smudge: Float = 0.3;
+    output result: Grid<Int>;
+    struct Sum { slot: IVec2; add: Int; }
+    scatter into blank with sum {
+        let e = element();
+        let none = Sum { slot: ivec2(-1, -1), add: 0 };
+        if e >= at(ends, count(ends) - 1) { return none; }
+        let fi = owner(e, ends);
+        let ext = size(surface);
+        let t = translucent_face(vertices, at(faces, fi), ext);
+        if t.area == 0.0 { return none; }
+        let look = at(looks, clamp(at(face_looks, raster_clipped_row(fi)), 0, count(looks) - 1));
+        let tile = translucent_tile();
+        let w = max(int(ceil((t.box.z - t.box.x) / float(tile))), 1);
+        let k = e - (at(ends, fi) - at(tiles, fi));
+        let o = ivec2(int(t.box.x) + (k % w) * tile, int(t.box.y) + (k / w) * tile);
+        let span = ivec2(min(int(t.box.z) - o.x, tile), min(int(t.box.w) - o.y, tile));
+        let l = at(lens, 0);
+        let s = at(sky, 0);
+        let pv = proxy_levels(frame);
+        let rv = proxy_levels(rframe);
+        let va = at(vertices, t.ia);
+        let vb = at(vertices, t.ib);
+        let vc = at(vertices, t.ic);
+        let done = loop max(span.x * span.y, 0) with z = 0 {
+            let g = o + ivec2(index() % span.x, index() / span.x);
+            let q = vec2(float(g.x), float(g.y)) + 0.5;
+            let w0 = ((t.b.x - q.x) * (t.c.y - q.y) - (t.b.y - q.y) * (t.c.x - q.x)) / t.area;
+            let w1 = ((t.c.x - q.x) * (t.a.y - q.y) - (t.c.y - q.y) * (t.a.x - q.x)) / t.area;
+            let w2 = 1.0 - w0 - w1;
+            if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 { z } else {
+                // Perspective-correct: by 1/w.
+                let iw = w0 * t.a.z + w1 * t.b.z + w2 * t.c.z;
+                let ahead = 1.0 / max(iw, 0.000001);
+                let pc = vec3(w0 * t.a.z, w1 * t.b.z, w2 * t.c.z) * ahead;
+                let dir = ray(l, vec2(float(g.x), float(g.y)), ext);
+                let dist = ahead / max(dot(dir, l.ahead), 0.000001);
+                let opaque = at(surface, vec2(float(g.x), float(g.y))).w;
+                if ahead < near || dist >= opaque - 0.005 { z } else {
+                    let nn = normalize(va.normal * pc.x + vb.normal * pc.y + vc.normal * pc.z);
+                    let n = if dot(nn, dir) > 0.0 { nn * -1.0 } else { nn };
+                    let p = l.eye + dir * dist;
+                    let v = vec3(0.0, 0.0, 0.0) - dir;
+                    let shade = if look.kind == translucent_glass() {
+                        let r = reflect(dir, n);
+                        let ro = saturate(look.rough + smudge * 0.2 * saturate(fbm3(p * vec3(6.0, 9.0, 6.0), 4, 51) * 0.7 + 0.3));
+                        let jitter = fract(52.9829189 * fract(dot(q, vec2(0.06711056, 0.00583715))));
+                        let hit = screen_march(surface, l, size(surface), p + n * 0.01, r, 12.0, 24, 0.5, jitter);
+                        let edge = if hit.z >= 0.0 { saturate(min(min(hit.x, ext.x - 1.0 - hit.x), min(hit.y, ext.y - 1.0 - hit.y)) / (ext.y * 0.08)) } else { 0.0 };
+                        let met = radiance_cone(cache, rv, proxy, pv, p + n * 0.03, r, 0.02 + ro, pv.rows[0].cell, 14.0, 12);
+                        let far_seen = met.xyz + sky_radiance(r, s, false) * (1.0 - saturate(met.w));
+                        let screen_seen = if hit.z >= 0.0 { at(picture, hit.xy).xyz } else { vec3(0.0, 0.0, 0.0) };
+                        let env = mix(far_seen, screen_seen, edge * (1.0 - ro));
+                        let f = schlick(vec3(0.04, 0.04, 0.04), dot(n, v)).x;
+                        let m = Pbr { albedo: vec3(0.0, 0.0, 0.0), rough: ro, metal: 0.0, glow: vec3(0.0, 0.0, 0.0), ior: 1.5, clearcoat: 0.0, coat_rough: 0.05, sheen: 0.0,
+                            subsurface: 0.0, anisotropy: 0.0, transmission: 0.0 };
+                        let lit = loop 16 with h = glossy_by(m, n, v, normalize(s.sun), s.sun_color) until index() >= min(count(lamps), 16) {
+                            let lamp = at(lamps, index());
+                            h + glossy_by(m, n, v, normalize(lamp.at - p), lamp_irradiance(lamp, p))
+                        };
+                        let through = look.color * (1.0 - f);
+                        TranslucentShade { light: env * f + lit, through: through, cover: 1.0 - (through.x + through.y + through.z) / 3.0, glow: vec3(0.0, 0.0, 0.0) }
+                    } else if look.kind == translucent_smoke() {
+                        let sun_seen = rough_shadow(proxy, land, frame, p, normalize(s.sun), proxy_cell_at(frame, p), 300.0, 16);
+                        let lamped = lamps_on_rough(lamps, look.color, p, n, proxy, land, frame, 8);
+                        let lit = look.color * (s.sun_color * (sun_seen * air_phase(dot(dir, normalize(s.sun)), 0.4) * 4.0) + s.ambient) + lamped;
+                        TranslucentShade { light: lit * look.cover, through: vec3(1.0, 1.0, 1.0) * (1.0 - look.cover), cover: look.cover, glow: vec3(0.0, 0.0, 0.0) }
+                    } else {
+                        TranslucentShade { light: vec3(0.0, 0.0, 0.0), through: vec3(1.0, 1.0, 1.0), cover: 0.0, glow: look.color * (look.glow * look.cover) }
+                    };
+                    let wz = translucent_weight(dist);
+                    let weight = shade.cover * wz;
+                    let base = ivec2(g.x * translucent_slots(), g.y);
+                    let lw = shade.light * wz * translucent_scale();
+                    let logs = log(max(shade.through, vec3(0.0001, 0.0001, 0.0001))) * translucent_log_scale();
+                    let gw = shade.glow * translucent_scale();
+                    let bend = vec2(dot(n, l.right), 0.0 - dot(n, l.up)) * (look.bend * weight * translucent_scale());
+                    emit(Sum { slot: base, add: int(lw.x) });
+                    emit(Sum { slot: base + ivec2(1, 0), add: int(lw.y) });
+                    emit(Sum { slot: base + ivec2(2, 0), add: int(lw.z) });
+                    emit(Sum { slot: base + ivec2(3, 0), add: int(weight * translucent_scale()) });
+                    emit(Sum { slot: base + ivec2(4, 0), add: int(logs.x) });
+                    emit(Sum { slot: base + ivec2(5, 0), add: int(logs.y) });
+                    emit(Sum { slot: base + ivec2(6, 0), add: int(logs.z) });
+                    emit(Sum { slot: base + ivec2(7, 0), add: int(gw.x) });
+                    emit(Sum { slot: base + ivec2(8, 0), add: int(gw.y) });
+                    emit(Sum { slot: base + ivec2(9, 0), add: int(gw.z) });
+                    emit(Sum { slot: base + ivec2(10, 0), add: int(bend.x) });
+                    emit(Sum { slot: base + ivec2(11, 0), add: int(bend.y) });
+                    z + 1
+                }
+            }
+        };
+        return Sum { slot: ivec2(-1, -1), add: done * 0 };
+    }
+}
+
+/// The layers over picture `hdr` (`domain = size(hdr)`): what lies behind (moved by the layers' bend, their coverage's
+/// mean of it) times all they let through, their light as its weighted mean times how much they cover in all, and their
+/// glows.
+kernel render.translucent_resolve@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    input sums: Grid<Int>;
+    output result: Image;
+    compute {
+        let c = sample(hdr);
+        let ext = domain();
+        let g = icoord();
+        let base = ivec2(g.x * translucent_slots(), g.y);
+        let weight = float(at(sums, base + ivec2(3, 0))) / translucent_scale();
+        let logs = vec3(float(at(sums, base + ivec2(4, 0))), float(at(sums, base + ivec2(5, 0))), float(at(sums, base + ivec2(6, 0)))) / translucent_log_scale();
+        let glow = vec3(float(at(sums, base + ivec2(7, 0))), float(at(sums, base + ivec2(8, 0))), float(at(sums, base + ivec2(9, 0)))) / translucent_scale();
+        if weight <= 0.0 && glow.x + glow.y + glow.z <= 0.0 && logs.x + logs.y + logs.z >= 0.0 { return c; }
+        let through = exp(logs);
+        let covered = 1.0 - (through.x + through.y + through.z) / 3.0;
+        let light = vec3(float(at(sums, base)), float(at(sums, base + ivec2(1, 0))), float(at(sums, base + ivec2(2, 0)))) / translucent_scale();
+        let mean = if weight > 0.0 { light / weight } else { vec3(0.0, 0.0, 0.0) };
+        // The layers' bend, their weighted mean as their light's.
+        let bend = if weight > 0.0 { vec2(float(at(sums, base + ivec2(10, 0))), float(at(sums, base + ivec2(11, 0)))) / translucent_scale() / weight } else { vec2(0.0, 0.0) };
+        let behind = if abs(bend.x) + abs(bend.y) > 0.001 { at_linear(hdr, clamp(coord() + bend, vec2(0.0, 0.0), ext - 1.0) + 0.5).xyz } else { c.xyz };
+        let out = behind * through + mean * covered + glow;
+        return vec4(out.x, out.y, out.z, c.w);
+    }
+}
