@@ -160,10 +160,8 @@ mod tests {
 
     #[test]
     fn a_tilt_included_is_passed_over_and_one_elsewhere_refused() {
-        let included = DOWNLIGHT.replace(
-            "TILT=NONE\n",
-            "TILT=INCLUDE\n1\n3\n0 45 90\n1.0 0.9 0.8\n",
-        );
+        let included =
+            DOWNLIGHT.replace("TILT=NONE\n", "TILT=INCLUDE\n1\n3\n0 45 90\n1.0 0.9 0.8\n");
         assert_eq!(read(included.as_bytes()).unwrap().candela[0], 200.0);
         let named = DOWNLIGHT.replace("TILT=NONE", "TILT=lamp.tlt");
         assert!(read(named.as_bytes()).unwrap_err().contains("another file"));
