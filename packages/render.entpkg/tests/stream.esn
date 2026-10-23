@@ -1,6 +1,6 @@
 // A world streamed round the camera (`kernels/stream.ent`, `mesh.entpkg`'s
 // `graphs/streamed.esn`): the four chunks `mesh.entpkg`'s `tests/stream_build.esn`
-// built, each near and far, under its `tests/stream/`; the camera eight meters up over (`eye_x`,
+// built, each near and far, under its `tests/stream/`; the camera twelve meters up over (`eye_x`,
 // `eye_z`) looking down. The chunks wanted round it (the one under it near,
 // the rest far), their arrays streamed by `fields` nodes, joined into one
 // library and drawn; the balls red by their part, the ground grey.
@@ -18,7 +18,7 @@ node lens: kernel {
     output result: Lenses;
     domain = 1;
     compute {
-        return Lens { eye: vec3(eye_x, 8.0, eye_z), ahead: vec3(0.0, -1.0, 0.0), right: vec3(1.0, 0.0, 0.0), up: vec3(0.0, 0.0, -1.0), focal: 1.0 };
+        return Lens { eye: vec3(eye_x, 12.0, eye_z), ahead: vec3(0.0, -1.0, 0.0), right: vec3(1.0, 0.0, 0.0), up: vec3(0.0, 0.0, -1.0), focal: 1.0 };
     }
 }
 node wanted: render.stream_wanted@1 { lens <- lens.result; lo = vec2(0.0, 0.0); side = 4.0; cells_x = 2; cells_z = 2; near = 1.0; far = 8.0; domain = 8; }

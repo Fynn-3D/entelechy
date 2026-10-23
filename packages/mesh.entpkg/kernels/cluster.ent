@@ -62,6 +62,26 @@ struct Cluster { first: Int; count: Int; level: Int; brick: Vec4; parent: Vec4; 
 /// bricks below it), -1 where it holds nothing.
 struct ClusterMesh { lo: Vec3; cell: Float; bits: IVec3; sphere: Vec4; levels: [Int; 9]; errors: [Float; 8]; grids: [Int; 8]; }
 
+/// The finest level mesh `m` holds clusters of (0 as built; a trimmed one, `kernels/stream.ent`'s, coarser).
+fn mesh_cluster_first(m: ClusterMesh) -> Int {
+    let k = loop mesh_cluster_levels() with k = -1 { if k < 0 && m.levels[index() + 1] > m.levels[index()] { index() } else { k } };
+    return max(k, 0);
+}
+
+/// How far brick `b` of level `level` lies from the mesh at most (`errors`, the library's); -1 for one holding nothing.
+fn mesh_brick_error(m: ClusterMesh, errors: Rows<Float>, b: IVec3, level: Int) -> Float {
+    let w = mesh_brick_widths(m.bits, level);
+    let top = (ivec3(1, 1, 1) << w) - 1;
+    if b.x < 0 || b.y < 0 || b.z < 0 || b.x > top.x || b.y > top.y || b.z > top.z { return -1.0; }
+    return at(errors, m.grids[level] + mesh_cluster_pack(b, w));
+}
+
+/// The brick a cluster's `brick` (or its `parent`: lower corner, side) is, on its level's lattice.
+fn mesh_brick_at(m: ClusterMesh, brick: Vec4) -> IVec3 {
+    let c = floor((brick.xyz - m.lo) / brick.w + 0.5);
+    return ivec3(int(c.x), int(c.y), int(c.z));
+}
+
 /// Level `level`'s cell width.
 fn mesh_cluster_cell(f: ClusterFrame, level: Int) -> Float { return f.cell * exp2(float(level)); }
 
@@ -215,6 +235,98 @@ kernel mesh.cluster_face_quadrics@1 {
     }
 }
 
+// ------------------------------------------------------------------ level 0's edges
+
+/// A whole number mixed into a running hash, kept below 2^31.
+fn mesh_edge_mixed(h: Int, x: Int) -> Int { return mul_wrap(h ^ x, 16777619) & 2147483647; }
+
+/// Each face's edge's key (`domain = count(faces) * 3`, edge k from corner k to the next): a hash of its two ends where
+/// they lie, a hundredth of level 0's cell apart at least, the lesser end first, so an edge two faces share has one key
+/// however many points stand at its ends.
+kernel mesh.cluster_edge_keys@1 {
+    requires { field.read; field.write; }
+    input faces: Rows<Face>;
+    input points: Rows<MeshPoint>;
+    input frame: ClusterFrames;
+    output result: Rows<Int>;
+    compute {
+        let f = at(faces, element() / 3);
+        let k = element() % 3;
+        let fr = at(frame, 0);
+        let step = fr.cell * 0.01;
+        let u = if k == 0 { f.a } else if k == 1 { f.b } else { f.c };
+        let v = if k == 0 { f.b } else if k == 1 { f.c } else { f.a };
+        let a = floor((at(points, u).position - fr.lo) / step + 0.5);
+        let b = floor((at(points, v).position - fr.lo) / step + 0.5);
+        let first = a.x < b.x || (a.x == b.x && (a.y < b.y || (a.y == b.y && a.z <= b.z)));
+        let p = if first { a } else { b };
+        let q = if first { b } else { a };
+        return mesh_edge_mixed(mesh_edge_mixed(mesh_edge_mixed(mesh_edge_mixed(mesh_edge_mixed(mesh_edge_mixed(-2128831035, int(p.x)), int(p.y)), int(p.z)), int(q.x)), int(q.y)), int(q.z));
+    }
+}
+
+/// The planes along each open edge and each edge between two parts (`domain = count(order) * 2`, each edge in key order
+/// `order` once for each end), into its ends' quadrics (`blank`): the plane through the edge square to its face, weighed as
+/// a square face on the edge would be (`weight` times its length squared) but adding nothing to the area a distance is
+/// the mean over, so a point merged across an outline (letters'
+/// strokes, a flat decal's edge, a part's seam) is as far from the mesh as it moves the outline, which the faces' own
+/// planes do not see (Garland and Heckbert's boundary constraint). An edge is open where no other edge has its key; between
+/// parts where one that has is of another group (`groups`, its first point's).
+kernel mesh.cluster_edge_quadrics@1 {
+    requires { field.read; field.write; }
+    input faces: Rows<Face>;
+    input points: Rows<MeshPoint>;
+    input groups: Rows<Int>;
+    input keys: Rows<Int>;
+    input order: Rows<Int>;
+    input frame: ClusterFrames;
+    input blank: Rows<ErrorQuadric>;
+    param weight: Float = 1.0;
+    output result: Rows<ErrorQuadric>;
+    struct Planes { point: Int; quadric: ErrorQuadric; }
+    scatter into blank with sum {
+        let j = element() / 2;
+        let n = count(order);
+        let e = at(order, j);
+        let key = at(keys, e);
+        let me = mesh_group_part(at(groups, at(faces, e / 3).a));
+        let before = j > 0 && at(keys, at(order, j - 1)) == key;
+        let after = j + 1 < n && at(keys, at(order, j + 1)) == key;
+        let seam = (before && mesh_group_part(at(groups, at(faces, at(order, j - 1) / 3).a)) != me)
+            || (after && mesh_group_part(at(groups, at(faces, at(order, j + 1) / 3).a)) != me);
+        let none = Planes { point: -1, quadric: mesh_no_quadric() };
+        if (before || after) && !seam { return none; }
+        let f = at(faces, e / 3);
+        let k = e % 3;
+        let u = if k == 0 { f.a } else if k == 1 { f.b } else { f.c };
+        let v = if k == 0 { f.b } else if k == 1 { f.c } else { f.a };
+        let lo = at(frame, 0).lo;
+        let a = at(points, f.a).position - lo;
+        let b = at(points, f.b).position - lo;
+        let c = at(points, f.c).position - lo;
+        let pu = at(points, u).position - lo;
+        let pv = at(points, v).position - lo;
+        let along = pv - pu;
+        let len = length(along);
+        let fn = cross(b - a, c - a);
+        if len <= 0.0 || length(fn) <= 0.0 { return none; }
+        let side = cross(along / len, normalize(fn));
+        let q = mesh_plane_quadric(normalize(side), pu, weight * len * len);
+        // Error only: the faces' own areas stay what a distance is the mean over, so a held outline makes no brick read
+        // nearer the mesh than its faces say.
+        return Planes { point: if element() % 2 == 0 { u } else { v }, quadric: ErrorQuadric { ..q, c: vec3(q.c.x, q.c.y, 0.0) } };
+    }
+}
+
+/// Two rows of quadrics summed point by point.
+kernel mesh.cluster_quadrics_sum@1 {
+    requires { field.read; field.write; }
+    input a: Rows<ErrorQuadric>;
+    input b: Rows<ErrorQuadric>;
+    output result: Rows<ErrorQuadric>;
+    compute { return mesh_quadric_sum(sample(a), at(b, element())); }
+}
+
 // ------------------------------------------------------------------ a level up
 
 /// Each point's key: the cell of level `level` it falls in.
@@ -289,8 +401,9 @@ kernel mesh.cluster_starts@1 {
 
 /// Each cell's points of one group as one point (`domain = count(starts)`):
 /// where the planes round them meet nearest, inside the cell of level
-/// `level`; their normals and coordinates averaged, their quadrics summed;
-/// how far it lies from those planes; and their group.
+/// `level` (a locked point, `mesh_locked_group`, where it is); their
+/// normals and coordinates averaged, their quadrics summed; how far it lies
+/// from those planes; and their group.
 kernel mesh.cluster_merge@1 {
     requires { field.read; field.write; }
     input points: Rows<MeshPoint>;
@@ -320,7 +433,8 @@ kernel mesh.cluster_merge@1 {
         let cell = mesh_cluster_coords(f, first, level);
         let lo = float(cell) * side;
         let mean = sum[0].xyz / float(max(n, 1));
-        let x = mesh_quadric_point(q, mean, lo, side);
+        let locked = at(groups, at(order, from)) >= 1048576;
+        let x = if locked { first - f.lo } else { mesh_quadric_point(q, mean, lo, side) };
         let nl = length(sum[1].xyz);
         let normal = if nl > 0.0 { sum[1].xyz / nl } else { vec3(0.0, 1.0, 0.0) };
         let uv = vec2(sum[0].w, sum[1].w) / float(max(n, 1));
@@ -578,17 +692,24 @@ kernel mesh.cluster_no_areas@1 {
     compute { return 0.0; }
 }
 
-/// How many slots a brick keeps its parts' areas in: two tables of eight, each part in one slot of each by two hashes of
-/// its group, so two parts that share a slot in one (a lost part's loss diluted by a large one's area) seldom share in the
-/// other too, and the brick's error takes the larger.
-fn mesh_area_slots() -> Int { return 16; }
-/// The slot group `g` keeps its area in in table `t` (0 or 1; multiplicative hashing, the top three bits).
-fn mesh_area_slot(g: Int, t: Int) -> Int { return if t == 0 { mul_wrap(g, 0x9E3779B1) >>> 29 } else { 8 + (mul_wrap(g, 0x85EBCA6B) >>> 29) }; }
+/// How many slots a brick keeps its parts' areas in: three tables of eight, a part in the slot of each its number's base
+/// eight digit names (parts below 128), so any two parts are apart in one table at least, and a part lost in a brick shows
+/// in its own slot wherever no other part there shares all three; the brick's error takes the most any slot lost.
+fn mesh_area_tables() -> Int { return 3; }
+fn mesh_area_slots() -> Int { return 24; }
+/// A point's group that merges with no other point's, holding its part (`part`, below 128): 2^20, the point's `row` times
+/// 128 and the part (a build sorting groups by 31 bits holds rows up to 2^23 so). A point so locked keeps its place on every level (where chunks built apart meet), and its faces'
+/// areas are counted with its part's.
+fn mesh_locked_group(row: Int, part: Int) -> Int { return 1048576 + row * 128 + part; }
+/// The part a group counts its area with: its own, a locked point's its part.
+fn mesh_group_part(g: Int) -> Int { return if g >= 1048576 { g & 127 } else { g }; }
+/// The slot group `g` keeps its area in in table `t` (0 to 2): its part's base eight digit `t`.
+fn mesh_area_slot(g: Int, t: Int) -> Int { return t * 8 + ((mesh_group_part(g) >> (3 * t)) & 7); }
 
 /// The faces' areas summed in the bricks of level `level` their middles fall in, each brick's in the slot of the group of
 /// the mesh's own face each came from (`sources`, into `origin`, its first corner's group in `groups`), so a part lost
-/// in a brick is not made up for by another (`domain = count(faces) * 2`, each face once for each table of slots; the
-/// faces of any level, laid over `points`).
+/// in a brick is not made up for by another (`domain = count(faces) * mesh_area_tables()`, each face once for each table
+/// of slots; the faces of any level, laid over `points`).
 kernel mesh.cluster_brick_areas@1 {
     requires { field.read; field.write; }
     input faces: Rows<Face>;
@@ -603,7 +724,7 @@ kernel mesh.cluster_brick_areas@1 {
     struct Area { brick: Int; area: Float; }
     scatter into blank with sum {
         let f = at(frame, 0);
-        let e = element() / 2;
+        let e = element() / mesh_area_tables();
         let g = at(faces, e);
         let a = at(points, g.a).position;
         let b = at(points, g.b).position;
@@ -611,7 +732,7 @@ kernel mesh.cluster_brick_areas@1 {
         let middle = (a + b + c) / 3.0;
         let group = at(groups, at(origin, at(sources, e)).a);
         let brick = mesh_cluster_pack(mesh_cluster_brick(f, middle, level), mesh_brick_widths(f.bits, level)) * mesh_area_slots();
-        return Area { brick: brick + mesh_area_slot(group, element() % 2), area: length(cross(b - a, c - a)) * 0.5 };
+        return Area { brick: brick + mesh_area_slot(group, element() % mesh_area_tables()), area: length(cross(b - a, c - a)) * 0.5 };
     }
 }
 

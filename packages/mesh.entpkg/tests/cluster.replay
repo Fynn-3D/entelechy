@@ -27,11 +27,12 @@ expect built.clusters[0].sphere = -0.84375 0 -0.890625 0.190727 0.00001
 
 # A point's merged point a level up, among all the levels' points: level
 # 0's first two corners into level 1's first point, which lies in their
-# cell; its own a level up past level 1's 801.
+# cell, at the plane's corner, held there by the planes along its open
+# edges; its own a level up past level 1's 801.
 expect built.up[0] = 4225
 expect built.up[1] = 4225
 expect built.up[4225] = 5026
-expect built.points[4225].position = -0.96875 0 -0.96875 0.0001
+expect built.points[4225].position = -0.99982 0 -0.99982 0.0001
 expect built.faces[0].a = 0
 expect built.faces[0].b = 1
 expect built.faces[0].c = 66
@@ -45,17 +46,17 @@ expect count built.sources = 12128
 expect built.sources[10000] = 3623
 
 # Each level's clusters where they begin; how far each level lies from the
-# mesh at most (the planes its points stray from, and the area its bricks
-# lost: the plane's edge drawn in at the coarse levels), never less than
-# the level below's; and its bricks' errors
+# mesh at most (the planes its points stray from, the planes along its open
+# edges among them, and the area its bricks lost), never less than the
+# level below's; and its bricks' errors
 # where they begin, every index level 0's widths name (3, 1 and 3 bits),
 # a brick holding nothing -1.
 expect built.meshes[0].levels.1 = 100
 expect built.meshes[0].levels.8 = 135
 expect built.meshes[0].errors.0 = 0
-expect built.meshes[0].errors.1 = 0.0125 0.0002
+expect built.meshes[0].errors.1 = 0.00779 0.0002
 expect built.meshes[0].errors.2 = 0.0170 0.0002
-expect built.meshes[0].errors.3 = 0.0572 0.0005
+expect built.meshes[0].errors.3 = 0.01695 0.0005
 expect built.meshes[0].errors.7 = 4.793 0.005
 expect built.meshes[0].grids.1 = 128
 expect count built.errors = 153

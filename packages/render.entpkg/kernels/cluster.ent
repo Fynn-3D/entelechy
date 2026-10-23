@@ -72,40 +72,29 @@ fn cluster_brick_of(m: ClusterMesh, q: Vec3, level: Int) -> IVec3 {
     return ivec3(int(c.x), int(c.y), int(c.z)) >> 3;
 }
 
-/// How far brick `b` of level `level` lies from the mesh at most (`errors`, the library's); -1 for one holding nothing.
-fn cluster_brick_error(m: ClusterMesh, errors: Rows<Float>, b: IVec3, level: Int) -> Float {
-    let w = mesh_brick_widths(m.bits, level);
-    let top = (ivec3(1, 1, 1) << w) - 1;
-    if b.x < 0 || b.y < 0 || b.z < 0 || b.x > top.x || b.y > top.y || b.z > top.z { return -1.0; }
-    return at(errors, m.grids[level] + mesh_cluster_pack(b, w));
-}
 
 /// Whether brick `b` of level `level` (none past the top) is drawn at that level or coarser: it holds something, and how far
 /// it lies from the mesh spans no more than `error` pixels.
 fn cluster_brick_coarse(m: ClusterMesh, errors: Rows<Float>, b: IVec3, level: Int, view: ClusterView, error: Float) -> Bool {
     if level >= mesh_cluster_levels() { return false; }
-    let e = cluster_brick_error(m, errors, b, level);
+    let e = mesh_brick_error(m, errors, b, level);
     return e >= 0.0 && cluster_error_px(e, view, cluster_brick_box(m, b, level)) <= error;
 }
 
-/// Whether brick `b` of level `level` is drawn at that level: it is fine enough (level 0 always is), and its parent is not.
+/// Whether brick `b` of level `level` is drawn at that level: it is fine enough (the mesh's finest level always is, 0 as
+/// built), and its parent is not.
 fn cluster_brick_drawn(m: ClusterMesh, errors: Rows<Float>, b: IVec3, level: Int, view: ClusterView, error: Float) -> Bool {
-    let own = level == 0 || cluster_brick_coarse(m, errors, b, level, view, error);
+    let own = level <= mesh_cluster_first(m) || cluster_brick_coarse(m, errors, b, level, view, error);
     return own && !cluster_brick_coarse(m, errors, b >> 1, level + 1, view, error);
 }
 
 /// Whether brick `b` of level `level` is surely drawn at that level: as `cluster_brick_drawn` judges it a thousandth of `error`
 /// either way, so another Kernel's judging the same brick a last bit apart cannot leave a face to a cluster not drawn.
 fn cluster_brick_surely_drawn(m: ClusterMesh, errors: Rows<Float>, b: IVec3, level: Int, view: ClusterView, error: Float) -> Bool {
-    let own = level == 0 || cluster_brick_coarse(m, errors, b, level, view, error * 0.999);
+    let own = level <= mesh_cluster_first(m) || cluster_brick_coarse(m, errors, b, level, view, error * 0.999);
     return own && !cluster_brick_coarse(m, errors, b >> 1, level + 1, view, error * 1.001);
 }
 
-/// The brick cluster `cl` was cut from.
-fn cluster_brick_at(m: ClusterMesh, cl: Cluster) -> IVec3 {
-    let c = floor((cl.brick.xyz - m.lo) / cl.brick.w + 0.5);
-    return ivec3(int(c.x), int(c.y), int(c.z));
-}
 
 /// The level a corner at `q` (mesh `m`'s own meters) is drawn at, from level `from` up: the coarsest drawn where it lies or
 /// within `reach` of that level's cells past it (away from the view), so that a coarser cluster's face reaching over the
@@ -126,7 +115,7 @@ fn cluster_level_at(m: ClusterMesh, errors: Rows<Float>, q: Vec3, view: ClusterV
 /// corner's brick before the cluster's own, in the face's order, is surely drawn at its level; where one is only nearly so,
 /// both draw it, rather than neither.
 fn cluster_face_owned(m: ClusterMesh, errors: Rows<Float>, points: Rows<MeshPoint>, f: Face, cl: Cluster, view: ClusterView, error: Float) -> Bool {
-    let mine = cluster_brick_at(m, cl);
+    let mine = mesh_brick_at(m, cl.brick);
     let ba = cluster_brick_of(m, at(points, f.a).position, cl.level);
     let bb = cluster_brick_of(m, at(points, f.b).position, cl.level);
     if ba == mine { return true; }
@@ -267,7 +256,7 @@ kernel render.cluster_cull@1 {
         let m = at(meshes, it.shape);
         let l = at(lens, 0);
         let ext = size(canvas);
-        if !cluster_brick_drawn(m, errors, cluster_brick_at(m, cl), cl.level, cluster_lens_view(it, l, ext), error) { return 0; }
+        if !cluster_brick_drawn(m, errors, mesh_brick_at(m, cl.brick), cl.level, cluster_lens_view(it, l, ext), error) { return 0; }
         let c = cluster_placed(it, cl.sphere.xyz);
         let r = cl.sphere.w * it.size;
         return int(cluster_sphere_seen(l, c, r, ext.x / max(ext.y, 1.0)) && !cluster_sphere_hidden(hzb, l, c, r, ext));

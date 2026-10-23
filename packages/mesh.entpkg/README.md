@@ -18,14 +18,16 @@ use "mesh.entpkg";
 - `kernels/cluster.ent` — A mesh as levels cut into clusters: each level
   its level below's points merged cell by cell on a lattice twice as wide
   (vertex clustering, each cell's point where its error quadric is least),
-  a point only with those of its own group (a part, a material),
+  a point only with those of its own group (a part, a material), open
+  edges and seams between parts held by planes square to their faces,
   each level's faces in the clusters of the bricks their corners lie in,
   how far each brick of each level lies from the mesh (the planes its
   points stray from and the area each of its parts lost or gained), and libraries of
   such meshes joined. Kernels: `mesh.cluster_box@1`,
   `mesh.cluster_edges@1`, `mesh.cluster_frame@1`,
   `mesh.cluster_no_quadrics@1`, `mesh.cluster_face_quadrics@1`,
-  `mesh.cluster_keys@1`, `mesh.cluster_no_groups@1`,
+  `mesh.cluster_edge_keys@1`, `mesh.cluster_edge_quadrics@1`,
+  `mesh.cluster_quadrics_sum@1`, `mesh.cluster_keys@1`, `mesh.cluster_no_groups@1`,
   `mesh.cluster_group_keys@1`, `mesh.cluster_compose@1`,
   `mesh.cluster_heads@1`, `mesh.cluster_starts@1`,
   `mesh.cluster_merge@1`, `mesh.cluster_up@1`, `mesh.cluster_deviation@1`,
@@ -56,17 +58,20 @@ use "mesh.entpkg";
   Kernels: `mesh.stream_up@1`, `mesh.stream_faces@1`,
   `mesh.stream_clusters@1`, `mesh.stream_sources@1`,
   `mesh.stream_meshes@1`, `mesh.stream_ready@1`, `mesh.chunk_flags@1`,
-  `mesh.chunk_point_flags@1`, `mesh.chunk_points@1`, `mesh.chunk_faces@1`,
-  `mesh.chunk_parts@1`.
+  `mesh.chunk_clip@1`, `mesh.chunk_points@1`, `mesh.chunk_faces@1`,
+  `mesh.far_flags@1`, `mesh.far_cluster_faces@1`, `mesh.far_point_flags@1`,
+  `mesh.far_points@1`, `mesh.far_faces@1`, `mesh.far_clusters@1`,
+  `mesh.far_errors@1`, `mesh.far_meshes@1`.
 - `kernels/subdivision.ent` — Midpoint subdivision, the step that
   changes a mesh's topology. Kernels: `mesh.split_points@1`,
   `mesh.split_faces@1`.
 
 ## Graph presets
 
-- `graphs/chunk.esn` — One chunk of a world out of a mesh, built as a
-  clustered library with its parts, near as it is and far merged on a
-  wider lattice first, for a scene to save and stream.
+- `graphs/chunk.esn` — One chunk of a world out of a mesh, its faces
+  clipped to the chunk's cell, built as a clustered library with its
+  parts, near as it is and far with only the clusters it can draw from
+  where it stands in, for a scene to save and stream.
 - `graphs/cluster_brick.esn` — A level's clusters.
 - `graphs/cluster.esn` — A mesh built as levels and cut into clusters:
   the library a renderer draws from (`render.entpkg`'s

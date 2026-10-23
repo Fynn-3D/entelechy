@@ -1,9 +1,12 @@
-//! One chunk of a world out of a mesh, for streaming (`kernels/stream.ent`): the faces whose middles fall in the cell
-//! `cell_x`, `cell_z` of the world's lattice (`side` meters a side from `lo` on x and z), their points renumbered among
-//! them, built as levels and cut into clusters with each point's group (`graphs/cluster_grouped.esn`, its level 0's cell
-//! `cell` meters, 0 for the chunk's mean edge), and each face's part (`face_parts`); and the same chunk for afar
-//! (`far_*`): its points first merged once on a lattice twice `far_cell` meters wide, each with those of its own group alone (a
-//! level up's merge, `graphs/cluster_level.esn`), then built, so its finest level is already coarse. Its outputs are the
+//! One chunk of a world out of a mesh, for streaming (`kernels/stream.ent`): the mesh cut to the cell `cell_x`, `cell_z`
+//! of the world's lattice (`side` meters a side from `lo` on x and z), each face meeting it clipped to its four sides
+//! (three points a triangle, as `mesh.chunk_clip` leaves them), so the chunk lies within its cell and meets its
+//! neighbours on the planes between them, built as levels and cut into clusters with each point's group (its part,
+//! below 128; a point on the cell's edge in a group of its own, `mesh_locked_group`, so chunks built apart meet;
+//! `graphs/cluster_grouped.esn`), its level 0's cell `cell` meters (0 for the chunk's mean edge; a world's chunks share
+//! one, the whole mesh's, so their levels step alike), and each face's part (`face_parts`); and the same chunk for afar
+//! (`far_*`): the clusters it can still draw where it stands in, where `far_error` meters span a pixel, the rest left out
+//! (letters on a board keep their fine levels, the bare board its coarse ones; `mesh.far_flags`). Its outputs are the
 //! arrays a scene saves (`entelechy run --save`), near or far, and streams back by `fields` nodes, joined by
 //! `graphs/streamed.esn`.
 use "parallel.entpkg";
@@ -19,32 +22,39 @@ param side: Float = 16.0;
 param cell_x: Int = 0;
 param cell_z: Int = 0;
 param cell: Float = 0.0;
-param group_bits: Int = 8;
-param far_cell: Float = 0.125;
+param far_error: Float = 0.01;
 
 node flags: mesh.chunk_flags@1 { points <- points; faces <- faces; lo = lo; side = side; cell_x = cell_x; cell_z = cell_z; domain = count(faces); }
 node kept: graph "parallel.entpkg/graphs/compact.esn" { flags <- flags.result; }
-node unused: mesh.cluster_no_groups@1 { points <- points; }
-node used: mesh.chunk_point_flags@1 { faces <- faces; kept <- kept.indices; blank <- unused.result; domain = count(kept); }
-node ranks: parallel.compact_offsets@1 { flags <- used.result; }
-node kept_points: graph "parallel.entpkg/graphs/compact.esn" { flags <- used.result; }
-node chunk_points: mesh.chunk_points@1 { points <- points; groups <- groups; kept <- kept_points.indices; domain = max(value(count), 1); count <- kept_points.count; }
-node chunk_faces: mesh.chunk_faces@1 { faces <- faces; face_parts <- face_parts; kept <- kept.indices; renumbered <- ranks.result; domain = max(value(count), 1); count <- kept.count; }
-node built: graph "cluster_grouped.esn" { points <- chunk_points.result; faces <- chunk_faces.result; groups <- chunk_points.group; cell = cell; group_bits = group_bits; }
+node clipped: mesh.chunk_clip@1 { points <- points; faces <- faces; face_parts <- face_parts; groups <- groups; kept <- kept.indices; count <- kept.count;
+    lo = lo; side = side; cell_x = cell_x; cell_z = cell_z; domain = max(value(count), 1) * 5; }
+node triangles: graph "parallel.entpkg/graphs/compact.esn" { flags <- clipped.valid; }
+node chunk_points: mesh.chunk_points@1 { a <- clipped.a; b <- clipped.b; c <- clipped.c; groups <- clipped.group; kept <- triangles.indices; count <- triangles.count;
+    lo = lo; side = side; cell_x = cell_x; cell_z = cell_z; domain = max(value(count), 1) * 3; }
+node chunk_faces: mesh.chunk_faces@1 { parts <- clipped.part; kept <- triangles.indices; count <- triangles.count; domain = max(value(count), 1); }
+node built: graph "cluster_grouped.esn" { points <- chunk_points.result; faces <- chunk_faces.result; groups <- chunk_points.group; cell = cell; group_bits = 31; }
 
-// The chunk for afar: merged once on level 1 of a lattice whose cell is `far_cell` meters, twice that wide, its
-// faces' parts read through the faces they came from, then built.
-node far_box: mesh.cluster_box@1 { points <- chunk_points.result; }
-node far_edges: mesh.cluster_edges@1 { faces <- chunk_faces.result; points <- chunk_points.result; }
-node far_frame: mesh.cluster_frame@1 { box <- far_box.result; edges <- far_edges.result; cell = far_cell; domain = 1; }
-node far_no_quadrics: mesh.cluster_no_quadrics@1 { points <- chunk_points.result; }
-node far_own: mesh.cluster_own_faces@1 { faces <- chunk_faces.result; }
-node far_quadrics: mesh.cluster_face_quadrics@1 { faces <- chunk_faces.result; points <- chunk_points.result; frame <- far_frame.result; blank <- far_no_quadrics.result;
-    domain = count(faces) * 3; }
-node merged: graph "cluster_level.esn" { sources <- far_own.result; points <- chunk_points.result; quadrics <- far_quadrics.result; faces <- chunk_faces.result;
-    groups <- chunk_points.group; frame <- far_frame.result; level = 1; bits = 31; group_bits = group_bits; }
-node far_parts: mesh.chunk_parts@1 { parts <- chunk_faces.part; sources <- merged.sources; domain = count(sources); }
-node far_built: graph "cluster_grouped.esn" { points <- merged.points; faces <- merged.faces; groups <- merged.groups; cell = 0.0; group_bits = group_bits; }
+// The chunk for afar: the clusters it can still draw from where it stands in (their parent bricks further than
+// `far_error` from the mesh, or the top level's), their faces laid again, the points those reach up their chains, all
+// renumbered; the bricks no finer cluster is kept under made fine enough to draw at any distance.
+node far_flags: mesh.far_flags@1 { clusters <- built.clusters; meshes <- built.meshes; errors <- built.errors; far_error = far_error; domain = count(clusters); }
+node far_kept: graph "parallel.entpkg/graphs/compact.esn" { flags <- far_flags.result; }
+node far_cluster_ranks: parallel.compact_offsets@1 { flags <- far_flags.result; }
+node far_counts: mesh.far_cluster_faces@1 { kept <- far_kept.indices; clusters <- built.clusters; count <- far_kept.count; domain = max(value(count), 1); }
+node far_runs: graph "parallel.entpkg/graphs/runs.esn" { counts <- far_counts.result; }
+node far_unused: mesh.cluster_no_groups@1 { points <- built.points; }
+node far_used: mesh.far_point_flags@1 { kept <- far_kept.indices; clusters <- built.clusters; faces <- built.faces; up <- built.up; ends <- far_runs.ends; counts <- far_counts.result;
+    blank <- far_unused.result; entries <- far_runs.entries; domain = max(value(entries), 1); }
+node far_point_ranks: parallel.compact_offsets@1 { flags <- far_used.result; }
+node far_kept_points: graph "parallel.entpkg/graphs/compact.esn" { flags <- far_used.result; }
+node far_points: mesh.far_points@1 { points <- built.points; up <- built.up; kept <- far_kept_points.indices; ranks <- far_point_ranks.result; count <- far_kept_points.count;
+    domain = max(value(count), 1); }
+node far_faces: mesh.far_faces@1 { kept <- far_kept.indices; clusters <- built.clusters; faces <- built.faces; sources <- built.sources; ranks <- far_point_ranks.result;
+    ends <- far_runs.ends; counts <- far_counts.result; entries <- far_runs.entries; domain = max(value(entries), 1); }
+node far_clusters: mesh.far_clusters@1 { kept <- far_kept.indices; clusters <- built.clusters; ends <- far_runs.ends; counts <- far_counts.result; count <- far_kept.count;
+    domain = max(value(count), 1); }
+node far_errors: mesh.far_errors@1 { errors <- built.errors; meshes <- built.meshes; far_error = far_error; }
+node far_meshes: mesh.far_meshes@1 { meshes <- built.meshes; ranks <- far_cluster_ranks.result; domain = 1; }
 
 output points <- built.points;
 output up <- built.up;
@@ -54,13 +64,13 @@ output meshes <- built.meshes;
 output errors <- built.errors;
 output sources <- built.sources;
 output parts <- chunk_faces.part;
-/// How many faces the chunk holds (0: nothing to save).
-output count <- kept.count;
-output far_points <- far_built.points;
-output far_up <- far_built.up;
-output far_faces <- far_built.faces;
-output far_clusters <- far_built.clusters;
-output far_meshes <- far_built.meshes;
-output far_errors <- far_built.errors;
-output far_sources <- far_built.sources;
-output far_parts <- far_parts.result;
+/// How many triangles the chunk holds (0: nothing to save).
+output count <- triangles.count;
+output far_points <- far_points.result;
+output far_up <- far_points.lifted;
+output far_faces <- far_faces.result;
+output far_clusters <- far_clusters.result;
+output far_meshes <- far_meshes.result;
+output far_errors <- far_errors.result;
+output far_sources <- far_faces.source;
+output far_parts <- chunk_faces.part;

@@ -8,9 +8,13 @@ expect count chunk.chunk_faces.part = 768
 expect chunk.chunk_faces.part[0] = 0
 expect chunk.chunk_faces.part[767] = 1
 
-# Afar, merged on a lattice a meter wide first: 38 faces for the chunk's
-# 768.
-expect count chunk.far_parts.result = 38
+# Afar, only the clusters the chunk can still draw where `far_error` spans
+# a pixel: 8 of its 17, 634 of its 1564 faces, 1216 points (those the kept
+# faces reach, up their chains; a clipped triangle keeps three of its own);
+# the points on the cell's edge kept where they are on every level.
+expect chunk.far_kept.total.result[0] = 8
+expect count chunk.far_faces.result = 634
+expect count chunk.far_points.result = 1216
 
 # The last chunk holds as many.
 param cell_x 1

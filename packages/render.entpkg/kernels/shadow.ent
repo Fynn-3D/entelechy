@@ -302,7 +302,7 @@ kernel render.shadow_cull@1 {
         let cl = at(clusters, pc.y);
         let m = at(meshes, it.shape);
         let v = at(levels, i);
-        if !cluster_brick_drawn(m, errors, cluster_brick_at(m, cl), cl.level, cluster_flat_view(it, v.toward, v.texel), error) { return 0; }
+        if !cluster_brick_drawn(m, errors, mesh_brick_at(m, cl.brick), cl.level, cluster_flat_view(it, v.toward, v.texel), error) { return 0; }
         let c = shadow_lattice(v, cluster_placed(it, cl.sphere.xyz));
         let r = cl.sphere.w * it.size / v.texel + 1.0;
         return int(shadow_box_dirty(dirty, v, i, c - r, c + r));

@@ -10,8 +10,10 @@
 //! material, a part) and merges only with points of its own, so where two
 //! parts meet, or one lies a hair over another (letters on a board), every
 //! level keeps them apart rather than letting one swallow the other;
-//! `group_bits` is how many bits the groups take. `graphs/cluster.esn` is this
+//! `group_bits` is how many bits the groups take. A group from 2^20 up is one point's alone, locked in its place
+//! (`mesh_locked_group`), its area counted with the part its low seven bits hold. `graphs/cluster.esn` is this
 //! with every point in one group.
+use "parallel.entpkg";
 use "../kernels/";
 
 input points: Rows<MeshPoint>;
@@ -19,13 +21,21 @@ input faces: Rows<Face>;
 input groups: Rows<Int>;
 param cell: Float = 0.0;
 param group_bits: Int = 8;
+/// How much an open edge or a seam between parts holds the points along it (0: not at all; 1: as a face standing on it).
+param edge_weight: Float = 1.0;
 
 node box: mesh.cluster_box@1 { points <- points; }
 node edges: mesh.cluster_edges@1 { faces <- faces; points <- points; }
 node frame: mesh.cluster_frame@1 { box <- box.result; edges <- edges.result; cell = cell; domain = 1; }
 node no_quadrics: mesh.cluster_no_quadrics@1 { points <- points; }
 node own: mesh.cluster_own_faces@1 { faces <- faces; }
-node quadrics: mesh.cluster_face_quadrics@1 { faces <- faces; points <- points; frame <- frame.result; blank <- no_quadrics.result; domain = count(faces) * 3; }
+node face_quadrics: mesh.cluster_face_quadrics@1 { faces <- faces; points <- points; frame <- frame.result; blank <- no_quadrics.result; domain = count(faces) * 3; }
+// Open edges and seams between parts held by planes square to their faces.
+node edge_keys: mesh.cluster_edge_keys@1 { faces <- faces; points <- points; frame <- frame.result; domain = count(faces) * 3; }
+node edge_order: graph "parallel.entpkg/graphs/sort.esn" { keys <- edge_keys.result; bits = 31; }
+node edge_quadrics: mesh.cluster_edge_quadrics@1 { faces <- faces; points <- points; groups <- groups; keys <- edge_keys.result; order <- edge_order.result; frame <- frame.result;
+    blank <- no_quadrics.result; weight = edge_weight; domain = count(order) * 2; }
+node quadrics: mesh.cluster_quadrics_sum@1 { a <- face_quadrics.result; b <- edge_quadrics.result; }
 node l1: graph "cluster_level.esn" { sources <- own.result; points <- points; quadrics <- quadrics.result; faces <- faces; groups <- groups; frame <- frame.result; level = 1; bits = 31;
     group_bits = group_bits; }
 node l2: graph "cluster_level.esn" { sources <- l1.sources; points <- l1.points; quadrics <- l1.quadrics; faces <- l1.faces; groups <- l1.groups;
@@ -68,57 +78,57 @@ node far0: mesh.cluster_point_errors@1 { points <- points; deviation <- exact.re
 node size1: mesh.cluster_grid_size@1 { frame <- frame.result; level = 1; domain = 1; }
 node empty1: mesh.cluster_no_errors@1 { size <- size1.result; domain = value(size); }
 node far1: mesh.cluster_point_errors@1 { points <- l1.points; deviation <- l1.deviation_points; frame <- frame.result; blank <- empty1.result; level = 1; }
-node none_area1: mesh.cluster_no_areas@1 { size <- size1.result; domain = value(size) * 16; }
-node area1: mesh.cluster_brick_areas@1 { faces <- l1.faces; points <- l1.points; sources <- l1.sources; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area1.result; level = 1; domain = count(faces) * 2; }
-node whole1: mesh.cluster_brick_areas@1 { faces <- faces; points <- points; sources <- own.result; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area1.result; level = 1; domain = count(faces) * 2; }
+node none_area1: mesh.cluster_no_areas@1 { size <- size1.result; domain = value(size) * 24; }
+node area1: mesh.cluster_brick_areas@1 { faces <- l1.faces; points <- l1.points; sources <- l1.sources; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area1.result; level = 1; domain = count(faces) * 3; }
+node whole1: mesh.cluster_brick_areas@1 { faces <- faces; points <- points; sources <- own.result; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area1.result; level = 1; domain = count(faces) * 3; }
 node lost1: mesh.cluster_area_errors@1 { far <- far1.result; area <- area1.result; whole <- whole1.result; frame <- frame.result; level = 1; domain = count(far); }
 node grid1: mesh.cluster_grid_up@1 { own <- lost1.result; below <- far0.result; frame <- frame.result; level = 1; domain = count(own); }
 node size2: mesh.cluster_grid_size@1 { frame <- frame.result; level = 2; domain = 1; }
 node empty2: mesh.cluster_no_errors@1 { size <- size2.result; domain = value(size); }
 node far2: mesh.cluster_point_errors@1 { points <- l2.points; deviation <- l2.deviation_points; frame <- frame.result; blank <- empty2.result; level = 2; }
-node none_area2: mesh.cluster_no_areas@1 { size <- size2.result; domain = value(size) * 16; }
-node area2: mesh.cluster_brick_areas@1 { faces <- l2.faces; points <- l2.points; sources <- l2.sources; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area2.result; level = 2; domain = count(faces) * 2; }
-node whole2: mesh.cluster_brick_areas@1 { faces <- faces; points <- points; sources <- own.result; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area2.result; level = 2; domain = count(faces) * 2; }
+node none_area2: mesh.cluster_no_areas@1 { size <- size2.result; domain = value(size) * 24; }
+node area2: mesh.cluster_brick_areas@1 { faces <- l2.faces; points <- l2.points; sources <- l2.sources; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area2.result; level = 2; domain = count(faces) * 3; }
+node whole2: mesh.cluster_brick_areas@1 { faces <- faces; points <- points; sources <- own.result; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area2.result; level = 2; domain = count(faces) * 3; }
 node lost2: mesh.cluster_area_errors@1 { far <- far2.result; area <- area2.result; whole <- whole2.result; frame <- frame.result; level = 2; domain = count(far); }
 node grid2: mesh.cluster_grid_up@1 { own <- lost2.result; below <- grid1.result; frame <- frame.result; level = 2; domain = count(own); }
 node size3: mesh.cluster_grid_size@1 { frame <- frame.result; level = 3; domain = 1; }
 node empty3: mesh.cluster_no_errors@1 { size <- size3.result; domain = value(size); }
 node far3: mesh.cluster_point_errors@1 { points <- l3.points; deviation <- l3.deviation_points; frame <- frame.result; blank <- empty3.result; level = 3; }
-node none_area3: mesh.cluster_no_areas@1 { size <- size3.result; domain = value(size) * 16; }
-node area3: mesh.cluster_brick_areas@1 { faces <- l3.faces; points <- l3.points; sources <- l3.sources; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area3.result; level = 3; domain = count(faces) * 2; }
-node whole3: mesh.cluster_brick_areas@1 { faces <- faces; points <- points; sources <- own.result; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area3.result; level = 3; domain = count(faces) * 2; }
+node none_area3: mesh.cluster_no_areas@1 { size <- size3.result; domain = value(size) * 24; }
+node area3: mesh.cluster_brick_areas@1 { faces <- l3.faces; points <- l3.points; sources <- l3.sources; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area3.result; level = 3; domain = count(faces) * 3; }
+node whole3: mesh.cluster_brick_areas@1 { faces <- faces; points <- points; sources <- own.result; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area3.result; level = 3; domain = count(faces) * 3; }
 node lost3: mesh.cluster_area_errors@1 { far <- far3.result; area <- area3.result; whole <- whole3.result; frame <- frame.result; level = 3; domain = count(far); }
 node grid3: mesh.cluster_grid_up@1 { own <- lost3.result; below <- grid2.result; frame <- frame.result; level = 3; domain = count(own); }
 node size4: mesh.cluster_grid_size@1 { frame <- frame.result; level = 4; domain = 1; }
 node empty4: mesh.cluster_no_errors@1 { size <- size4.result; domain = value(size); }
 node far4: mesh.cluster_point_errors@1 { points <- l4.points; deviation <- l4.deviation_points; frame <- frame.result; blank <- empty4.result; level = 4; }
-node none_area4: mesh.cluster_no_areas@1 { size <- size4.result; domain = value(size) * 16; }
-node area4: mesh.cluster_brick_areas@1 { faces <- l4.faces; points <- l4.points; sources <- l4.sources; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area4.result; level = 4; domain = count(faces) * 2; }
-node whole4: mesh.cluster_brick_areas@1 { faces <- faces; points <- points; sources <- own.result; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area4.result; level = 4; domain = count(faces) * 2; }
+node none_area4: mesh.cluster_no_areas@1 { size <- size4.result; domain = value(size) * 24; }
+node area4: mesh.cluster_brick_areas@1 { faces <- l4.faces; points <- l4.points; sources <- l4.sources; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area4.result; level = 4; domain = count(faces) * 3; }
+node whole4: mesh.cluster_brick_areas@1 { faces <- faces; points <- points; sources <- own.result; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area4.result; level = 4; domain = count(faces) * 3; }
 node lost4: mesh.cluster_area_errors@1 { far <- far4.result; area <- area4.result; whole <- whole4.result; frame <- frame.result; level = 4; domain = count(far); }
 node grid4: mesh.cluster_grid_up@1 { own <- lost4.result; below <- grid3.result; frame <- frame.result; level = 4; domain = count(own); }
 node size5: mesh.cluster_grid_size@1 { frame <- frame.result; level = 5; domain = 1; }
 node empty5: mesh.cluster_no_errors@1 { size <- size5.result; domain = value(size); }
 node far5: mesh.cluster_point_errors@1 { points <- l5.points; deviation <- l5.deviation_points; frame <- frame.result; blank <- empty5.result; level = 5; }
-node none_area5: mesh.cluster_no_areas@1 { size <- size5.result; domain = value(size) * 16; }
-node area5: mesh.cluster_brick_areas@1 { faces <- l5.faces; points <- l5.points; sources <- l5.sources; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area5.result; level = 5; domain = count(faces) * 2; }
-node whole5: mesh.cluster_brick_areas@1 { faces <- faces; points <- points; sources <- own.result; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area5.result; level = 5; domain = count(faces) * 2; }
+node none_area5: mesh.cluster_no_areas@1 { size <- size5.result; domain = value(size) * 24; }
+node area5: mesh.cluster_brick_areas@1 { faces <- l5.faces; points <- l5.points; sources <- l5.sources; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area5.result; level = 5; domain = count(faces) * 3; }
+node whole5: mesh.cluster_brick_areas@1 { faces <- faces; points <- points; sources <- own.result; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area5.result; level = 5; domain = count(faces) * 3; }
 node lost5: mesh.cluster_area_errors@1 { far <- far5.result; area <- area5.result; whole <- whole5.result; frame <- frame.result; level = 5; domain = count(far); }
 node grid5: mesh.cluster_grid_up@1 { own <- lost5.result; below <- grid4.result; frame <- frame.result; level = 5; domain = count(own); }
 node size6: mesh.cluster_grid_size@1 { frame <- frame.result; level = 6; domain = 1; }
 node empty6: mesh.cluster_no_errors@1 { size <- size6.result; domain = value(size); }
 node far6: mesh.cluster_point_errors@1 { points <- l6.points; deviation <- l6.deviation_points; frame <- frame.result; blank <- empty6.result; level = 6; }
-node none_area6: mesh.cluster_no_areas@1 { size <- size6.result; domain = value(size) * 16; }
-node area6: mesh.cluster_brick_areas@1 { faces <- l6.faces; points <- l6.points; sources <- l6.sources; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area6.result; level = 6; domain = count(faces) * 2; }
-node whole6: mesh.cluster_brick_areas@1 { faces <- faces; points <- points; sources <- own.result; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area6.result; level = 6; domain = count(faces) * 2; }
+node none_area6: mesh.cluster_no_areas@1 { size <- size6.result; domain = value(size) * 24; }
+node area6: mesh.cluster_brick_areas@1 { faces <- l6.faces; points <- l6.points; sources <- l6.sources; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area6.result; level = 6; domain = count(faces) * 3; }
+node whole6: mesh.cluster_brick_areas@1 { faces <- faces; points <- points; sources <- own.result; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area6.result; level = 6; domain = count(faces) * 3; }
 node lost6: mesh.cluster_area_errors@1 { far <- far6.result; area <- area6.result; whole <- whole6.result; frame <- frame.result; level = 6; domain = count(far); }
 node grid6: mesh.cluster_grid_up@1 { own <- lost6.result; below <- grid5.result; frame <- frame.result; level = 6; domain = count(own); }
 node size7: mesh.cluster_grid_size@1 { frame <- frame.result; level = 7; domain = 1; }
 node empty7: mesh.cluster_no_errors@1 { size <- size7.result; domain = value(size); }
 node far7: mesh.cluster_point_errors@1 { points <- l7.points; deviation <- l7.deviation_points; frame <- frame.result; blank <- empty7.result; level = 7; }
-node none_area7: mesh.cluster_no_areas@1 { size <- size7.result; domain = value(size) * 16; }
-node area7: mesh.cluster_brick_areas@1 { faces <- l7.faces; points <- l7.points; sources <- l7.sources; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area7.result; level = 7; domain = count(faces) * 2; }
-node whole7: mesh.cluster_brick_areas@1 { faces <- faces; points <- points; sources <- own.result; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area7.result; level = 7; domain = count(faces) * 2; }
+node none_area7: mesh.cluster_no_areas@1 { size <- size7.result; domain = value(size) * 24; }
+node area7: mesh.cluster_brick_areas@1 { faces <- l7.faces; points <- l7.points; sources <- l7.sources; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area7.result; level = 7; domain = count(faces) * 3; }
+node whole7: mesh.cluster_brick_areas@1 { faces <- faces; points <- points; sources <- own.result; origin <- faces; groups <- groups; frame <- frame.result; blank <- none_area7.result; level = 7; domain = count(faces) * 3; }
 node lost7: mesh.cluster_area_errors@1 { far <- far7.result; area <- area7.result; whole <- whole7.result; frame <- frame.result; level = 7; domain = count(far); }
 node grid7: mesh.cluster_grid_up@1 { own <- lost7.result; below <- grid6.result; frame <- frame.result; level = 7; domain = count(own); }
 node most1: mesh.cluster_deviation@1 { deviation <- grid1.result; }

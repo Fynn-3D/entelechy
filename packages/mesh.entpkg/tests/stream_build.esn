@@ -2,7 +2,7 @@
 // and one chunk of it built (`graphs/chunk.esn`): a ground eight meters a side in four chunks of four
 // (33 by 33 points over it), a ball a meter across standing in each chunk's
 // middle, the balls a part of their own; `cell_x`, `cell_z` the chunk, its
-// far version merged at twice `far_cell`. The chunk files under `stream/`
+// far version from the coarsest level within `far_error` meters of it. The chunk files under `stream/`
 // are its arrays, saved by
 //   entelechy run stream_build.esn --param cell_x=X --param cell_z=Z \
 //     --save chunk.points=stream/points/n_00X_00Z.field ... (and chunk.far_points to f_00X_00Z.field, ...)
@@ -11,7 +11,7 @@ use "../kernels/";
 
 param cell_x: Int = 0;
 param cell_z: Int = 0;
-param far_cell: Float = 0.5;
+param far_error: Float = 0.1;
 
 node ground: mesh.plane_points@1 { size = vec2(8.0, 8.0); columns = 33; rows = 33; domain = 1089; }
 node ground_faces: mesh.lattice_faces@1 { columns = 33; rows = 33; domain = 2048; }
@@ -61,7 +61,7 @@ node face_parts: kernel {
     compute { return int(element() >= 2048); }
 }
 node chunk: graph "../graphs/chunk.esn" { points <- points.result; faces <- faces.result; groups <- groups.result; face_parts <- face_parts.result;
-    lo = vec2(0.0, 0.0); side = 4.0; cell_x = cell_x; cell_z = cell_z; far_cell = far_cell; }
+    lo = vec2(0.0, 0.0); side = 4.0; cell_x = cell_x; cell_z = cell_z; far_error = far_error; }
 
 output points <- chunk.points;
 output up <- chunk.up;

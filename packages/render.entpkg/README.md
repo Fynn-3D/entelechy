@@ -490,21 +490,25 @@ what Fresnel lets through (`transmitted`) under the surface's reflection.
 ### Streaming
 
 A world larger than memory is cut into chunks on a lattice of x and z
-(`mesh.entpkg`'s `graphs/chunk.esn`: the faces in a cell, built as a
-clustered library with each point's part as its group), each saved twice,
-near as built and far merged on a wider lattice before it is built (its
-finest level already coarse: a twentieth of the near one and less), every
-array in a directory of its own (`entelechy run --save chunk.points=...`,
-`chunk.far_points=...`). The far merge is a vertex clustering: what is
-thinner than its cells (a stroke of a letter) breaks, so a far chunk
-stands in where its cells are under a pixel or two. A scene
-streams them round the camera: `render.stream_wanted` names the chunks
-within reach, nearest first, `render.stream_paths` spells their files for
-one `fields` node an array, and `mesh.entpkg`'s `graphs/streamed.esn`
-joins what is in into one library the cluster draw, the shadows and the
-lamps' maps take as any other; a chunk with an array on its way is not
-drawn (`render.stream_insts`). A `fields` node reads the paths a frame
-behind, so the instances pair with the last frame's chunks.
+(`mesh.entpkg`'s `graphs/chunk.esn`: the faces meeting a cell clipped to
+it, built as a clustered library with each point's part as its group, the
+points on the cell's edge locked where they are, every chunk on the world's
+one level 0 cell), each saved twice, near as built and far with only the
+clusters it can still draw from where it stands in (those whose parent
+bricks lie further than `far_error` meters from the mesh, a pixel there:
+lossless from that distance on, and a brick with no finer cluster kept
+drawn at any distance, so nothing opens while the near chunk is on its
+way), every array in a directory of its own (`entelechy run --save
+chunk.points=...`, `chunk.far_points=...`). A scene streams them round
+the camera: `render.stream_wanted` names the chunks within reach, nearest
+first, `render.stream_paths` spells their files for one `fields` node an
+array, and `mesh.entpkg`'s `graphs/streamed.esn` joins what is in into
+one library the cluster draw, the shadows and the lamps' maps take as any
+other; a chunk with an array on its way is not drawn
+(`render.stream_insts`). A `fields` node reads the paths a frame behind,
+so the instances pair with the last frame's chunks. A far chunk is the
+smaller the farther it stands in: in a room seen from inside nearly every
+cluster is still needed four meters off.
 
 ### Translucency
 

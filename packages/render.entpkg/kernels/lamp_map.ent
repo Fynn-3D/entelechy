@@ -136,8 +136,8 @@ kernel render.lamp_map_count@1 {
     compute { return min(loop min(count(lamps), lamps_most()) with n = 0 { n + int(at(lamps, index()).shadow != 0) }, most); }
 }
 
-/// How many clusters each thing draws into the maps (`domain = count(insts)`): its mesh's clusters of level `level` (its
-/// coarsest where it has fewer).
+/// How many clusters each thing draws into the maps (`domain = count(insts)`): its mesh's clusters of level `level`, or of
+/// its finest where it holds none so fine (a trimmed mesh).
 kernel render.lamp_map_counts@1 {
     requires { field.read; field.write; }
     input insts: FieldInsts;
@@ -146,7 +146,7 @@ kernel render.lamp_map_counts@1 {
     output result: Rows<Int>;
     compute {
         let m = at(meshes, sample(insts).shape);
-        let k = clamp(level, 0, mesh_cluster_levels() - 1);
+        let k = clamp(max(level, mesh_cluster_first(m)), 0, mesh_cluster_levels() - 1);
         return m.levels[k + 1] - m.levels[k];
     }
 }
@@ -166,7 +166,7 @@ kernel render.lamp_map_clusters@1 {
         if e >= at(ends, count(ends) - 1) { return ivec2(-1, 0); }
         let i = owner(e, ends);
         let m = at(meshes, at(insts, i).shape);
-        let k = clamp(level, 0, mesh_cluster_levels() - 1);
+        let k = clamp(max(level, mesh_cluster_first(m)), 0, mesh_cluster_levels() - 1);
         return ivec2(i, m.levels[k] + e - (at(ends, i) - at(counts, i)));
     }
 }
