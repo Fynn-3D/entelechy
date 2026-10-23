@@ -197,6 +197,23 @@ fn lamps_on_rough(lamps: Lamps, albedo: Vec3, p: Vec3, n: Vec3, proxy: Volume<Ve
     return albedo * e / 3.14159265;
 }
 
+/// The light every lamp gives a surface of the coarse scene at `p` facing `n`, of color `albedo`, diffusely reflected, each
+/// lamp that casts shadows walked toward in full (`lamp_shadow`, its steps set on by `jitter`, 0 to 1), so a thin thing (a
+/// desk's board) shadows what lies under it as it does on the screen: what a cache of the light leaving surfaces keeps.
+fn lamps_on_surface(lamps: Lamps, albedo: Vec3, p: Vec3, n: Vec3, proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, jitter: Float) -> Vec3 {
+    let k = min(count(lamps), lamps_most());
+    let e = loop 128 with sum = vec3(0.0, 0.0, 0.0) until index() >= k {
+        let m = at(lamps, index());
+        let d = m.at - p;
+        let facing = dot(n, d);
+        if m.reach <= 0.0 || facing <= 0.0 || dot(d, d) > m.reach * m.reach { sum } else {
+            let cut = if m.shadow != 0 { lamp_shadow(m, proxy, land, frame, p, n, jitter) } else { 1.0 };
+            sum + lamp_irradiance(m, p) * (facing / length(d) * cut)
+        }
+    };
+    return albedo * e / 3.14159265;
+}
+
 /// The lowest lamp a tile's bits keep (-1 none).
 fn lamp_first(bits: IVec4) -> Int {
     return if bits.x != 0 { ctz(bits.x) } else if bits.y != 0 { 32 + ctz(bits.y) } else if bits.z != 0 { 64 + ctz(bits.z) } else if bits.w != 0 { 96 + ctz(bits.w) } else { -1 };

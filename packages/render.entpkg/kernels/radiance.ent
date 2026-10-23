@@ -1,6 +1,6 @@
 // Light kept on the proxies, as Lumen keeps its surface cache: a volume laid as the proxy is, a level for each of its levels
 // at a coarser cell (`render.radiance_frame`), each cell near a surface holding the light leaving that surface: its color times
-// the sun and the lamps through the proxies (`lamps_on_rough`), the sky the proxies leave open (as lit has it, `hemisphere` and `proxy_open`), and the light
+// the sun and the lamps through the proxies (`lamps_on_surface`), the sky the proxies leave open (as lit has it, `hemisphere` and `proxy_open`), and the light
 // the cache itself gathers from the things round it, so it bounces again frame after frame (`render.radiance`). A share of
 // its cells is lit anew each frame, the rest kept from the last frame's, found by where they lie, so a block moved on keeps
 // what it held. A renderer's picture then takes the light bounced off the things round each pixel: cones traced through the
@@ -116,7 +116,7 @@ kernel render.radiance_turn@1 {
 /// The cache, cell by cell (`domain` the cache's frame's cells, its levels up its depth): a cell within `band` of its cells
 /// of a surface the light leaving it (rgb, w 1), the rest none; one in `parts` lit anew each frame (by `turn`), the others
 /// kept from `previous` (laid as `previous_frame` says) where they lie; at rest (`turn`'s w), `previous` as it is. The light: the surface's color times the sun through
-/// the proxies (`sun_steps` steps), the lamps (`lamp_steps` toward each), the sky open over it (`Surround`, `Openness` as lit's), and `bounce` times what four
+/// the proxies (`sun_steps` steps), the lamps (each walked toward in full), the sky open over it (`Surround`, `Openness` as lit's), and `bounce` times what four
 /// cones gather from the last frame's cache, so light bounces once more each time a cell is lit.
 kernel render.radiance@1 {
     requires { field.read; field.write; }
@@ -134,8 +134,6 @@ kernel render.radiance@1 {
     param parts: Int = 4;
     param band: Float = 1.5;
     param sun_steps: Int = 32;
-    /// The steps toward each lamp that casts shadows.
-    param lamp_steps: Int = 12;
     param bounce: Float = 1.0;
     param spread: Float = 0.6;
     param reach: Float = 24.0;
@@ -180,7 +178,7 @@ kernel render.radiance@1 {
             let dir = normalize(n + (t * cos(a) + b * sin(a)) * 0.9);
             g + radiance_cone(previous, was, proxy, pv, on, dir, spread, fr.cell * 1.5, reach, cone_steps).xyz * 0.25
         };
-        let lamped = lamps_on_rough(lamps, albedo, on, n, proxy, land, frame, lamp_steps);
+        let lamped = lamps_on_surface(lamps, albedo, on, n, proxy, land, frame, fract(float(ci.x * 7 + ci.y * 13 + ci.z * 29) * 0.618034));
         let light = albedo * (s.sun_color * (ndl * lit / 3.14159265) + hemisphere(n, s, look) * open + gathered * bounce) + lamped;
         return vec4(light.x, light.y, light.z, 1.0);
     }

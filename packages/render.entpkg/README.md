@@ -98,7 +98,9 @@ use "render.entpkg";
   `render.proxy_flood@1`, `render.proxy_baked@1`.
 - `kernels/radiance.ent` — Light kept on the proxies (as Lumen keeps its
   surface cache): each cell near a surface the light leaving it, the sun
-  and the lamps through the proxies, the sky they leave open and the light the cache
+  and the lamps through the proxies (each lamp that casts shadows walked
+  toward in full, `lamps_on_surface`, so a chair darkens the floor its
+  bounce lights too), the sky they leave open and the light the cache
   gathers from itself, so it bounces again frame after frame, a share lit
   anew each frame until it rests; each pixel's bounced light gathered
   through cones read in the levels as wide as they are. Kernels:
