@@ -27,6 +27,8 @@ use "mesh.entpkg";
   `mesh.cluster_keys@1`, `mesh.cluster_heads@1`, `mesh.cluster_starts@1`,
   `mesh.cluster_merge@1`, `mesh.cluster_up@1`, `mesh.cluster_deviation@1`,
   `mesh.cluster_face_flags@1`, `mesh.cluster_faces_up@1`,
+  `mesh.cluster_own_faces@1`, `mesh.cluster_sources8@1`,
+  `mesh.cluster_join_sources@1`,
   `mesh.cluster_corner_bricks@1`, `mesh.cluster_entry_keys@1`,
   `mesh.cluster_run_starts@1`, `mesh.cluster_chunk_heads@1`,
   `mesh.cluster_sorted_faces@1`, `mesh.cluster_rows@1`,

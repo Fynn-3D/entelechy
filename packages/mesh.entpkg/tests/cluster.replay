@@ -36,6 +36,14 @@ expect built.faces[0].a = 0
 expect built.faces[0].b = 1
 expect built.faces[0].c = 66
 
+# Each face keeps the mesh's own face it came from: level 0's its own
+# (the second, face 1, as the lattice made it), a coarser level's the face
+# it was merged from.
+expect built.faces[1].c = 65
+expect built.sources[1] = 1
+expect count built.sources = 12128
+expect built.sources[10000] = 3623
+
 # Each level's clusters where they begin; how far each level lies from the
 # mesh at most (the planes its points stray from, and the area its bricks
 # lost: the plane's edge drawn in at the coarse levels), never less than
@@ -66,3 +74,5 @@ expect count library.errors = 179
 expect library.up[5311] = 6683
 expect library.faces[12128].a > 5310
 expect library.clusters[135].first = 12128
+expect count library.sources = 15545
+expect library.sources[12128] = 50

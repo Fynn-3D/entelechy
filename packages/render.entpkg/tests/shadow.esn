@@ -15,8 +15,8 @@ node plane_faces: mesh.lattice_faces@1 { columns = 65; rows = 65; domain = 8192;
 node balls: graph "mesh.entpkg/graphs/cluster.esn" { points <- ball.result; faces <- ball_faces.result; }
 node ground: graph "mesh.entpkg/graphs/cluster.esn" { points <- plane.result; faces <- plane_faces.result; }
 node library: graph "mesh.entpkg/graphs/library.esn" {
-    a_points <- balls.points; a_up <- balls.up; a_faces <- balls.faces; a_clusters <- balls.clusters; a_meshes <- balls.meshes; a_errors <- balls.errors;
-    b_points <- ground.points; b_up <- ground.up; b_faces <- ground.faces; b_clusters <- ground.clusters; b_meshes <- ground.meshes; b_errors <- ground.errors; }
+    a_points <- balls.points; a_up <- balls.up; a_faces <- balls.faces; a_clusters <- balls.clusters; a_meshes <- balls.meshes; a_errors <- balls.errors; a_sources <- balls.sources;
+    b_points <- ground.points; b_up <- ground.up; b_faces <- ground.faces; b_clusters <- ground.clusters; b_meshes <- ground.meshes; b_errors <- ground.errors; b_sources <- ground.sources; }
 node insts: kernel {
     requires { field.write; }
     output result: FieldInsts;

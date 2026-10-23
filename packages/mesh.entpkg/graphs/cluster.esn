@@ -4,8 +4,9 @@
 //! `cell` is level 0's cell in meters, 0 for the mesh's mean edge. The
 //! library a renderer draws from: `points`, `up` (each point's merged point
 //! a level up), `faces`, `clusters`, `meshes` (this mesh's one row) and
-//! `errors` (each level's bricks' errors); `graphs/library.esn` joins
-//! two.
+//! `errors` (each level's bricks' errors), and `sources` (each face's face
+//! of the mesh it came from, for what the mesh keeps of its own faces);
+//! `graphs/library.esn` joins two.
 use "../kernels/";
 
 input points: Rows<MeshPoint>;
@@ -16,23 +17,24 @@ node box: mesh.cluster_box@1 { points <- points; }
 node edges: mesh.cluster_edges@1 { faces <- faces; points <- points; }
 node frame: mesh.cluster_frame@1 { box <- box.result; edges <- edges.result; cell = cell; domain = 1; }
 node no_quadrics: mesh.cluster_no_quadrics@1 { points <- points; }
+node own: mesh.cluster_own_faces@1 { faces <- faces; }
 node quadrics: mesh.cluster_face_quadrics@1 { faces <- faces; points <- points; frame <- frame.result; blank <- no_quadrics.result; domain = count(faces) * 3; }
-node l1: graph "cluster_level.esn" { points <- points; quadrics <- quadrics.result; faces <- faces; frame <- frame.result; level = 1; bits = 31; }
-node l2: graph "cluster_level.esn" { points <- l1.points; quadrics <- l1.quadrics; faces <- l1.faces; frame <- frame.result; level = 2; bits = 30; }
-node l3: graph "cluster_level.esn" { points <- l2.points; quadrics <- l2.quadrics; faces <- l2.faces; frame <- frame.result; level = 3; bits = 29; }
-node l4: graph "cluster_level.esn" { points <- l3.points; quadrics <- l3.quadrics; faces <- l3.faces; frame <- frame.result; level = 4; bits = 28; }
-node l5: graph "cluster_level.esn" { points <- l4.points; quadrics <- l4.quadrics; faces <- l4.faces; frame <- frame.result; level = 5; bits = 27; }
-node l6: graph "cluster_level.esn" { points <- l5.points; quadrics <- l5.quadrics; faces <- l5.faces; frame <- frame.result; level = 6; bits = 26; }
-node l7: graph "cluster_level.esn" { points <- l6.points; quadrics <- l6.quadrics; faces <- l6.faces; frame <- frame.result; level = 7; bits = 25; }
+node l1: graph "cluster_level.esn" { sources <- own.result; points <- points; quadrics <- quadrics.result; faces <- faces; frame <- frame.result; level = 1; bits = 31; }
+node l2: graph "cluster_level.esn" { sources <- l1.sources; points <- l1.points; quadrics <- l1.quadrics; faces <- l1.faces; frame <- frame.result; level = 2; bits = 30; }
+node l3: graph "cluster_level.esn" { sources <- l2.sources; points <- l2.points; quadrics <- l2.quadrics; faces <- l2.faces; frame <- frame.result; level = 3; bits = 29; }
+node l4: graph "cluster_level.esn" { sources <- l3.sources; points <- l3.points; quadrics <- l3.quadrics; faces <- l3.faces; frame <- frame.result; level = 4; bits = 28; }
+node l5: graph "cluster_level.esn" { sources <- l4.sources; points <- l4.points; quadrics <- l4.quadrics; faces <- l4.faces; frame <- frame.result; level = 5; bits = 27; }
+node l6: graph "cluster_level.esn" { sources <- l5.sources; points <- l5.points; quadrics <- l5.quadrics; faces <- l5.faces; frame <- frame.result; level = 6; bits = 26; }
+node l7: graph "cluster_level.esn" { sources <- l6.sources; points <- l6.points; quadrics <- l6.quadrics; faces <- l6.faces; frame <- frame.result; level = 7; bits = 25; }
 
-node b0: graph "cluster_brick.esn" { points <- points; faces <- faces; frame <- frame.result; level = 0; }
-node b1: graph "cluster_brick.esn" { points <- l1.points; faces <- l1.faces; frame <- frame.result; level = 1; }
-node b2: graph "cluster_brick.esn" { points <- l2.points; faces <- l2.faces; frame <- frame.result; level = 2; }
-node b3: graph "cluster_brick.esn" { points <- l3.points; faces <- l3.faces; frame <- frame.result; level = 3; }
-node b4: graph "cluster_brick.esn" { points <- l4.points; faces <- l4.faces; frame <- frame.result; level = 4; }
-node b5: graph "cluster_brick.esn" { points <- l5.points; faces <- l5.faces; frame <- frame.result; level = 5; }
-node b6: graph "cluster_brick.esn" { points <- l6.points; faces <- l6.faces; frame <- frame.result; level = 6; }
-node b7: graph "cluster_brick.esn" { points <- l7.points; faces <- l7.faces; frame <- frame.result; level = 7; }
+node b0: graph "cluster_brick.esn" { sources <- own.result; points <- points; faces <- faces; frame <- frame.result; level = 0; }
+node b1: graph "cluster_brick.esn" { sources <- l1.sources; points <- l1.points; faces <- l1.faces; frame <- frame.result; level = 1; }
+node b2: graph "cluster_brick.esn" { sources <- l2.sources; points <- l2.points; faces <- l2.faces; frame <- frame.result; level = 2; }
+node b3: graph "cluster_brick.esn" { sources <- l3.sources; points <- l3.points; faces <- l3.faces; frame <- frame.result; level = 3; }
+node b4: graph "cluster_brick.esn" { sources <- l4.sources; points <- l4.points; faces <- l4.faces; frame <- frame.result; level = 4; }
+node b5: graph "cluster_brick.esn" { sources <- l5.sources; points <- l5.points; faces <- l5.faces; frame <- frame.result; level = 5; }
+node b6: graph "cluster_brick.esn" { sources <- l6.sources; points <- l6.points; faces <- l6.faces; frame <- frame.result; level = 6; }
+node b7: graph "cluster_brick.esn" { sources <- l7.sources; points <- l7.points; faces <- l7.faces; frame <- frame.result; level = 7; }
 
 node all_points: mesh.cluster_points8@1 { p0 <- points; p1 <- l1.points; p2 <- l2.points; p3 <- l3.points; p4 <- l4.points; p5 <- l5.points; p6 <- l6.points; p7 <- l7.points;
     domain = count(p0) + count(p1) + count(p2) + count(p3) + count(p4) + count(p5) + count(p6) + count(p7); }
@@ -112,6 +114,8 @@ node most4: mesh.cluster_deviation@1 { deviation <- grid4.result; }
 node most5: mesh.cluster_deviation@1 { deviation <- grid5.result; }
 node most6: mesh.cluster_deviation@1 { deviation <- grid6.result; }
 node most7: mesh.cluster_deviation@1 { deviation <- grid7.result; }
+node all_sources: mesh.cluster_sources8@1 { s0 <- b0.sources; s1 <- b1.sources; s2 <- b2.sources; s3 <- b3.sources; s4 <- b4.sources; s5 <- b5.sources; s6 <- b6.sources; s7 <- b7.sources;
+    domain = count(s0) + count(s1) + count(s2) + count(s3) + count(s4) + count(s5) + count(s6) + count(s7); }
 node all_errors: mesh.cluster_errors8@1 { g0 <- far0.result; g1 <- grid1.result; g2 <- grid2.result; g3 <- grid3.result; g4 <- grid4.result; g5 <- grid5.result; g6 <- grid6.result; g7 <- grid7.result;
     domain = count(g0) + count(g1) + count(g2) + count(g3) + count(g4) + count(g5) + count(g6) + count(g7); }
 node mesh: mesh.cluster_mesh@1 { frame <- frame.result; box <- box.result; c0 <- b0.clusters; c1 <- b1.clusters; c2 <- b2.clusters; c3 <- b3.clusters; c4 <- b4.clusters; c5 <- b5.clusters; c6 <- b6.clusters; c7 <- b7.clusters;
@@ -124,3 +128,4 @@ output faces <- all_faces.result;
 output clusters <- all_clusters.result;
 output meshes <- mesh.result;
 output errors <- all_errors.result;
+output sources <- all_sources.result;

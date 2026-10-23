@@ -7,6 +7,7 @@ use "../kernels/";
 
 input points: Rows<MeshPoint>;
 input faces: Rows<Face>;
+input sources: Rows<Int>;
 input frame: ClusterFrames;
 param level: Int = 0;
 
@@ -20,9 +21,10 @@ node ranks: parallel.compact_offsets@1 { flags <- heads.result; }
 node clusters: parallel.runs_entries@1 { ends <- ranks.result; domain = 1; }
 node blank: parallel.runs_slots@1 { entries <- clusters.result; domain = value(entries); }
 node starts: mesh.cluster_starts@1 { heads <- heads.result; ranks <- ranks.result; slots <- blank.result; }
-node sorted: mesh.cluster_sorted_faces@1 { faces <- faces; entries <- entries.indices; order <- order.result; domain = count(order); }
+node sorted: mesh.cluster_sorted_faces@1 { faces <- faces; sources <- sources; entries <- entries.indices; order <- order.result; domain = count(order); }
 node rows: mesh.cluster_rows@1 { faces <- sorted.result; points <- points; starts <- starts.result; entries <- entries.indices; order <- order.result; source <- faces;
     frame <- frame; level = level; domain = count(starts); }
 
 output faces <- sorted.result;
+output sources <- sorted.source;
 output clusters <- rows.result;

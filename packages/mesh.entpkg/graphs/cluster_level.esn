@@ -1,6 +1,7 @@
 //! One level up (`kernels/cluster.ent`): the level below `level`, its
 //! points merged cell by cell on level `level`'s lattice, its faces kept
-//! where their corners stay apart, each point's merged point (`up`), and
+//! where their corners stay apart (each with the mesh's own face it came
+//! from, `sources`), each point's merged point (`up`), and
 //! how far the level lies from the mesh at most (`deviation`; each point's,
 //! `deviation_points`).
 //! `bits` is how many bits the keys take: `32 - level` holds any mesh's.
@@ -10,6 +11,7 @@ use "../kernels/";
 input points: Rows<MeshPoint>;
 input quadrics: Rows<ErrorQuadric>;
 input faces: Rows<Face>;
+input sources: Rows<Int>;
 input frame: ClusterFrames;
 param level: Int = 1;
 param bits: Int = 31;
@@ -28,11 +30,12 @@ node no_up: parallel.compact_blank@1 { flags <- keys.result; }
 node up: mesh.cluster_up@1 { order <- order.result; ranks <- ranks.result; slots <- no_up.result; }
 node flags: mesh.cluster_face_flags@1 { faces <- faces; up <- up.result; }
 node kept: graph "parallel.entpkg/graphs/compact.esn" { flags <- flags.result; }
-node faces_up: mesh.cluster_faces_up@1 { faces <- faces; up <- up.result; kept <- kept.indices; domain = max(value(count), 1); count <- kept.count; }
+node faces_up: mesh.cluster_faces_up@1 { faces <- faces; sources <- sources; up <- up.result; kept <- kept.indices; domain = max(value(count), 1); count <- kept.count; }
 
 output points <- merged.point;
 output quadrics <- merged.quadric;
 output faces <- faces_up.result;
+output sources <- faces_up.source;
 output up <- up.result;
 output deviation <- deviation.result;
 output deviation_points <- merged.deviation;

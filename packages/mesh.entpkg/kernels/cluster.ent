@@ -337,20 +337,31 @@ kernel mesh.cluster_face_flags@1 {
     }
 }
 
-/// The faces kept a level up (`domain = max(value(count), 1)`); where none
-/// is kept, one with no area.
+/// The faces kept a level up (`domain = max(value(count), 1)`), and the
+/// mesh's own face each came from (`source`, as `sources` has it for the
+/// level below); where none is kept, one with no area, from face 0.
 kernel mesh.cluster_faces_up@1 {
     requires { field.read; field.write; }
     input faces: Rows<Face>;
+    input sources: Rows<Int>;
     input up: Rows<Int>;
     input kept: Rows<Int>;
     /// How many are kept (sizes the node).
     input count: Rows<Int>;
     output result: Rows<Face>;
+    output source: Rows<Int>;
     compute {
         let i = at(kept, element());
-        return if i < 0 { Face { a: 0, b: 0, c: 0 } } else { mesh_face_up(at(faces, i), up) };
+        return if i < 0 { { result: Face { a: 0, b: 0, c: 0 }, source: 0 } } else { { result: mesh_face_up(at(faces, i), up), source: at(sources, i) } };
     }
+}
+
+/// Each of the mesh's own faces its own number: level 0's sources.
+kernel mesh.cluster_own_faces@1 {
+    requires { field.read; field.write; }
+    input faces: Rows<Face>;
+    output result: Rows<Int>;
+    compute { return element(); }
 }
 
 // ------------------------------------------------------------------ a level's clusters
@@ -421,14 +432,20 @@ kernel mesh.cluster_chunk_heads@1 {
     compute { return int((element() - sample(runs)) % mesh_cluster_faces() == 0); }
 }
 
-/// The faces of the kept corners in sorted order.
+/// The faces of the kept corners in sorted order, and the mesh's own face
+/// each came from (`source`).
 kernel mesh.cluster_sorted_faces@1 {
     requires { field.read; field.write; }
     input faces: Rows<Face>;
+    input sources: Rows<Int>;
     input entries: Rows<Int>;
     input order: Rows<Int>;
     output result: Rows<Face>;
-    compute { return at(faces, max(at(entries, at(order, element())), 0) / 3); }
+    output source: Rows<Int>;
+    compute {
+        let f = max(at(entries, at(order, element())), 0) / 3;
+        return { result: at(faces, f), source: at(sources, f) };
+    }
 }
 
 /// Each cluster of level `level` (`domain = count(starts)`): its faces in
@@ -696,6 +713,33 @@ kernel mesh.cluster_faces8@1 {
     }
 }
 
+/// The eight levels' faces' sources one after another (each the mesh's
+/// own face it came from).
+kernel mesh.cluster_sources8@1 {
+    requires { field.read; field.write; }
+    input s0: Rows<Int>;
+    input s1: Rows<Int>;
+    input s2: Rows<Int>;
+    input s3: Rows<Int>;
+    input s4: Rows<Int>;
+    input s5: Rows<Int>;
+    input s6: Rows<Int>;
+    input s7: Rows<Int>;
+    output result: Rows<Int>;
+    compute {
+        let e = element();
+        let o1 = count(s0);
+        let o2 = o1 + count(s1);
+        let o3 = o2 + count(s2);
+        let o4 = o3 + count(s3);
+        let o5 = o4 + count(s4);
+        let o6 = o5 + count(s5);
+        let o7 = o6 + count(s6);
+        return if e < o1 { at(s0, e) } else if e < o2 { at(s1, e - o1) } else if e < o3 { at(s2, e - o2) } else if e < o4 { at(s3, e - o3) }
+            else if e < o5 { at(s4, e - o4) } else if e < o6 { at(s5, e - o5) } else if e < o7 { at(s6, e - o6) } else { at(s7, e - o7) };
+    }
+}
+
 /// The eight levels' clusters one after another, their faces among all
 /// the levels' faces.
 kernel mesh.cluster_rows8@1 {
@@ -879,6 +923,16 @@ kernel mesh.cluster_join_rows@1 {
         let g = at(b, e - count(a));
         return Cluster { ..g, first: g.first + count(a_faces) };
     }
+}
+
+/// Two libraries' faces' sources, `b`'s after `a`'s (each the face of its
+/// own mesh it came from).
+kernel mesh.cluster_join_sources@1 {
+    requires { field.read; field.write; }
+    input a: Rows<Int>;
+    input b: Rows<Int>;
+    output result: Rows<Int>;
+    compute { let e = element(); return if e < count(a) { at(a, e) } else { at(b, e - count(a)) }; }
 }
 
 /// Two libraries' brick errors, `b`'s after `a`'s.

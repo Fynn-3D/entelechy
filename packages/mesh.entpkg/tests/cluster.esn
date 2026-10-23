@@ -21,8 +21,8 @@ node torus: mesh.torus_points@1 { columns = 48; rows = 24; domain = 1152; }
 node torus_faces: mesh.lattice_faces@1 { columns = 48; rows = 24; wrap_columns = true; wrap_rows = true; domain = 2304; }
 node ring: graph "../graphs/cluster.esn" { points <- torus.result; faces <- torus_faces.result; }
 node library: graph "../graphs/library.esn" {
-    a_points <- built.points; a_up <- built.up; a_faces <- built.faces; a_clusters <- built.clusters; a_meshes <- built.meshes; a_errors <- built.errors;
-    b_points <- ring.points; b_up <- ring.up; b_faces <- ring.faces; b_clusters <- ring.clusters; b_meshes <- ring.meshes; b_errors <- ring.errors;
+    a_points <- built.points; a_up <- built.up; a_faces <- built.faces; a_clusters <- built.clusters; a_meshes <- built.meshes; a_errors <- built.errors; a_sources <- built.sources;
+    b_points <- ring.points; b_up <- ring.up; b_faces <- ring.faces; b_clusters <- ring.clusters; b_meshes <- ring.meshes; b_errors <- ring.errors; b_sources <- ring.sources;
 }
 
 output result <- library.meshes;
