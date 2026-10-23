@@ -20,13 +20,19 @@ struct Mirror { knee: Float; most: Float; closed: Float; }
 fn raytraced_shade(m: Pbr, n: Vec3, v: Vec3, s: SkyLook, visible: Float, reflected: Vec3, open: Float, look: Surround, mirror: Mirror) -> Vec3 {
     let lit = lit_by(m, n, v, s.sun, s.sun_color * visible);
     let direct = lit / (vec3(1.0, 1.0, 1.0) + lit / mirror.knee);
+    let ambient = m.albedo * ((1.0 - m.metal) * (1.0 - m.transmission)) * hemisphere(n, s, look) * open;
+    return direct + ambient + raytraced_reflection(m, n, v, reflected, open, mirror) + m.glow;
+}
+
+/// The reflection `raytraced_shade` lays on a surface from what its mirror ray met (`reflected`): Fresnel's share, kept to a
+/// `closed` share where the light all round is shut out.
+fn raytraced_reflection(m: Pbr, n: Vec3, v: Vec3, reflected: Vec3, open: Float, mirror: Mirror) -> Vec3 {
     let f0 = pbr_f0(m);
     let nv = max(dot(n, v), 0.0);
     let fres = f0 + (max(vec3(1.0 - m.rough, 1.0 - m.rough, 1.0 - m.rough), f0) - f0) * pow(1.0 - nv, 5.0);
-    let ambient = m.albedo * ((1.0 - m.metal) * (1.0 - m.transmission)) * hemisphere(n, s, look) * open;
     // The sun's disc a mirror ray finds is the glint above already: held under it, a few rays that hit the disc do not flare.
     let mirrored = min(reflected, vec3(mirror.most, mirror.most, mirror.most));
-    return direct + ambient + mirrored * fres * (mirror.closed + (1.0 - mirror.closed) * open) + m.glow;
+    return mirrored * fres * (mirror.closed + (1.0 - mirror.closed) * open);
 }
 
 /// What a ray from `o` along `dir` sees through the coarse scene within `far` meters, counting what it meets from `start` meters on:
@@ -73,12 +79,15 @@ kernel render.raytraced@1 {
     param ground_light: Float = 1.6;
     param sky_light: Float = 1.15;
     output result: Image;
+    /// The reflection `result` lays on each surface, as it shows: what a reflection on the screen takes the place of
+    /// (`render.reflections`).
+    output reflection: Grid<Vec4 as f16>;
     compute {
         let l = at(lens, 0);
         let s = at(sky, 0);
         let dir = ray(l, coord(), domain());
         let su = sample(surface);
-        if su.w > no_hit() * 0.5 { return vec4(sky_radiance(dir, s, true), 1.0); }
+        if su.w > no_hit() * 0.5 { return { result: vec4(sky_radiance(dir, s, true), 1.0), reflection: vec4(0.0, 0.0, 0.0, 0.0) }; }
         let n = su.xyz;
         let ex = sample(extra);
         let m = pbr_of(sample(paint), ex, sample(layers), sample(more));
@@ -94,6 +103,7 @@ kernel render.raytraced@1 {
         // A rough surface's reflection is the light all round it.
         let reflected = mix(mirrored, hemisphere(n, s, look) * open, sqrt(m.rough));
         let mirror = Mirror { knee: glint_knee, most: mirror_most, closed: mirror_closed };
-        return vec4(aerial(raytraced_shade(m, n, v, s, ex.x, reflected, open, look, mirror), dir, su.w, s), 1.0);
+        let seen = aerial(raytraced_reflection(m, n, v, reflected, open, mirror), dir, su.w, s) - aerial(vec3(0.0, 0.0, 0.0), dir, su.w, s);
+        return { result: vec4(aerial(raytraced_shade(m, n, v, s, ex.x, reflected, open, look, mirror), dir, su.w, s), 1.0), reflection: vec4(seen.x, seen.y, seen.z, 0.0) };
     }
 }

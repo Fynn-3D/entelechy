@@ -76,6 +76,9 @@ use "render.entpkg";
   and the light all round. Kernels: `render.lit@1`.
 - `kernels/mirror.ent` — A planar mirror. Kernels: `render.mirror_lens@1`,
   `render.mirror_mix@1`.
+- `kernels/motion_blur.ent` — Motion blur: each pixel spread along the
+  way it moved on the screen, the lens's move and the thing's. Kernels:
+  `render.motion_blur@1`.
 - `kernels/path_tracer.ent` — Path tracing (standard PBR, `brdf.ent`).
   Kernels: `render.path_count_start@1`, `render.path_count@1`,
   `render.path_trace@1`, `render.path_blank@1`, `render.path_accum@1`,
@@ -96,6 +99,9 @@ use "render.entpkg";
   `render.radiance_frame@1`, `render.radiance_size@1`,
   `render.radiance_turn@1`, `render.radiance@1`,
   `render.bounce_gather@1`, `render.bounce@1`.
+- `kernels/reflection.ent` — Reflections on the screen in place of a
+  renderer's own (`reflection`) where the screen shows what a mirror ray
+  meets. Kernels: `render.reflections@1`.
 - `kernels/raytraced.ent` — Ray traced: shadow and reflection traced in
   one pass. Kernels: `render.raytraced@1`.
 - `kernels/sky.ent` — The sky.
@@ -146,6 +152,8 @@ use "render.entpkg";
 - `graphs/field_level.esn` — One level of `field.esn`.
 - `graphs/lamps.esn` — The lamps added to a renderer's picture, for one
   that does not take them in itself.
+- `graphs/motion_blur.esn` — Motion blur over a picture, the lens's last
+  frame kept.
 - `graphs/path_tracer.esn` — The path tracer (`kernels/path_tracer.ent`),
   the lamps shown and bounced; its `scatter` for light under the skin.
 - `graphs/picture.esn` — The picture's raster.
@@ -168,7 +176,7 @@ use "render.entpkg";
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`bounce.replay`, `cluster.replay`, `field.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`,
+`bounce.replay`, `cluster.replay`, `field.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `reflection.replay`,
 `sky.replay`, `temporal.replay`.
 Every Kernel of the package is reached by one of them.
 
@@ -214,7 +222,10 @@ one while the camera moves, and a full one, computed once, when it stops
 
 ### What a renderer gives
 
-`hdr: Image`, linear HDR, sky included. `render.bright`, `render.spread` and
+`hdr: Image`, linear HDR, sky included. Lit and ray traced also give
+`reflection`, the reflection they laid on each surface from all round as
+it shows, which `render.reflections` takes the place of where the screen
+shows what the mirror ray meets. `render.bright`, `render.spread` and
 `render.tonemap` turn it into the picture (`graphs/bloom.esn`'s glow in place
 of `render.bright` and `render.spread` for round glows with long tails).
 
@@ -357,6 +368,20 @@ What every renderer shares, in this order:
   things are against its width, what the cache holds laid behind what is
   nearer), and `render.bounce` lays it over each pixel by distance, times
   its diffuse color and baked occlusion.
+- **Reflections on the screen** (`render.reflections`). On a surface
+  smoother than `below`, the mirror ray is walked across the picture
+  against the G-buffer's depth (`screen_march`); where it meets a surface
+  facing it, what the picture holds there, times the standard share the
+  surface reflects (`env_reflectance`, `ambient_by`'s own), takes the place
+  of the renderer's `reflection`, surely within the picture and short of
+  the ray's end, less so toward its edges, at its end and on rougher
+  surfaces.
+- **Motion blur** (`graphs/motion_blur.esn`). Each pixel's way on the
+  screen this frame: where the last frame's lens saw the point it shows,
+  before it moved its own `motion` (meters, as temporal antialiasing takes
+  it); the picture gathered along `shutter` of it, a point behind the
+  pixel's surface counted, a nearer one where its own way reaches the
+  pixel (McGuire's reconstruction, simplified).
 - **Glow** (`graphs/bloom.esn`): the bright parts shrunk by halves six
   times and grown back, every level adding the larger glow below it.
 

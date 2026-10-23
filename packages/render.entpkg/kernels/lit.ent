@@ -105,13 +105,16 @@ kernel render.lit@1 {
     output result: Image;
     /// The share of `result` that scatters under subsurface surfaces (`graphs/subsurface.esn` spreads it); 0 elsewhere and when painted.
     output scatter: Image;
+    /// The light `result` reflects from all round (the sky's, the ground's), as it shows: what a reflection on the screen takes
+    /// the place of (`render.reflections`).
+    output reflection: Grid<Vec4 as f16>;
     compute {
         let q = coord();
         let l = at(lens, 0);
         let s = at(sky, 0);
         let dir = ray(l, q, domain());
         let su = sample(surface);
-        if su.w > no_hit() * 0.5 { return { result: vec4(sky_radiance(dir, s, true), 1.0), scatter: vec4(0.0, 0.0, 0.0, 0.0) }; }
+        if su.w > no_hit() * 0.5 { return { result: vec4(sky_radiance(dir, s, true), 1.0), scatter: vec4(0.0, 0.0, 0.0, 0.0), reflection: vec4(0.0, 0.0, 0.0, 0.0) }; }
         let n = su.xyz;
         let ex = sample(extra);
         let m = pbr_of(sample(paint), ex, sample(layers), sample(more));
@@ -136,6 +139,8 @@ kernel render.lit@1 {
         // The light under the skin, through the air as the rest (the air's mix is linear).
         let under = if painted == 0 { scattered_share(m, n, v, s.sun, s.sun_color * ex.x, e) } else { vec3(0.0, 0.0, 0.0) };
         let kept = aerial(all - under, dir, su.w, s);
-        return { result: vec4(shaded, 1.0), scatter: vec4(shaded.x - kept.x, shaded.y - kept.y, shaded.z - kept.z, 0.0) };
+        let mirrored = if painted == 0 { spec_light * env_reflectance(m, n, v) } else { spec_light * env_brdf(pbr_f0(m), m.rough, max(dot(n, v), 0.001)) * (1.0 - m.rough) };
+        let seen = aerial(mirrored, dir, su.w, s) - aerial(vec3(0.0, 0.0, 0.0), dir, su.w, s);
+        return { result: vec4(shaded, 1.0), scatter: vec4(shaded.x - kept.x, shaded.y - kept.y, shaded.z - kept.z, 0.0), reflection: vec4(seen.x, seen.y, seen.z, 0.0) };
     }
 }

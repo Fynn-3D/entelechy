@@ -1,0 +1,19 @@
+scene reflection.esn
+
+# The polished floor shows the balls before it: before the red ball it
+# takes on red, before the white one about as much of every color; the
+# sky is as the renderer left it.
+window 640 400
+frame 0.0
+expect changed.result[0].x > 0.025
+expect changed.result[0].y < 0.012
+expect changed.result[1].x > 0.03
+expect changed.result[1].z > 0.012
+expect changed.result[2] = 0 0 0 0
+
+# The lens half a meter across in a frame: the balls and the floor blur,
+# the sky (as far as the lens can see) does not; a lens that held still
+# leaves the picture as it was.
+expect parted.result[0].x > 0.15
+expect parted.result[0].y = 0
+expect parted.result[1].x < 0.005
