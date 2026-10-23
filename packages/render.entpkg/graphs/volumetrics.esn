@@ -61,6 +61,8 @@ param seed: Int = 7;
 param bright: Float = 4.0;
 param powder: Float = 0.5;
 param cloud_sky: Float = 1.0;
+/// The clouds drawn at one in this many pixels across and down (soft: an eighth is enough; fewer, a crisper edge).
+param cloud_every: Float = 8.0;
 
 // The lamps each tile's view rays pass by, as far as the fog reaches.
 node lamp_depth: render.lamps_depth@1 { surface <- surface; domain = ceil(size(surface) / 16); }
@@ -76,9 +78,9 @@ node summed: render.froxel_scan@1 { air <- within.result; step = 8; domain = siz
 node fog: render.froxel_view@1 { summed <- summed.result; air <- air.result; surface <- surface; lens <- lens; near = near; far = far; domain = ceil(size(surface) / 4); }
 node across: render.fog_blur@1 { fog <- fog.result; surface <- surface; axis = 0; domain = size(fog); }
 node down: render.fog_blur@1 { fog <- across.result; surface <- surface; axis = 1; domain = size(fog); }
-// Clouds are soft: an eighth of the size is enough.
+// The clouds' deck, and the clouds marched at one in `cloud_every` pixels across and down.
 node deck: render.clouds_deck@1 { low = low; high = high; cover = cover; scale = scale; density = cloud_density; seed = seed; domain = 1; }
-node clouds: render.clouds_march@1 { surface <- surface; lens <- lens; sky <- sky; deck <- deck.result; below = below; bright = bright; powder = powder; sky_light = cloud_sky; domain = ceil(size(surface) / 8); }
+node clouds: render.clouds_march@1 { surface <- surface; lens <- lens; sky <- sky; deck <- deck.result; below = below; bright = bright; powder = powder; sky_light = cloud_sky; domain = ceil(size(surface) / cloud_every); }
 node aired: render.fog_apply@1 { hdr <- hdr; surface <- surface; fog <- down.result; clouds <- clouds.result; domain = size(hdr); }
 
 output hdr <- aired.result;
