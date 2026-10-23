@@ -90,9 +90,13 @@ use "render.entpkg";
   `render.probes_screen_gather@1`, `render.probes_gather_keep@1`,
   `render.probes_gather_blur@1`, `render.probes_behind@1`,
   `render.probes_lit@1`, `render.probes_shade@1`.
+- `kernels/proxy_bake.ent` — A mesh baked into a proxy: each cell the
+  nearest face's distance within a band and its color, the faces' boxes
+  cut into tiles of cells. Kernels: `render.proxy_bake_tiles@1`,
+  `render.proxy_bake_faces@1`, `render.proxy_baked@1`.
 - `kernels/radiance.ent` — Light kept on the proxies (as Lumen keeps its
   surface cache): each cell near a surface the light leaving it, the sun
-  through the proxies, the sky they leave open and the light the cache
+  and the lamps through the proxies, the sky they leave open and the light the cache
   gathers from itself, so it bounces again frame after frame, a share lit
   anew each frame until it rests; each pixel's bounced light gathered
   through cones read in the levels as wide as they are. Kernels:
@@ -171,6 +175,9 @@ use "render.entpkg";
   drawn anew each frame and averaged while the lens rests (up to
   `settle_frames`, then it rests too); its `scatter` for light under the
   skin.
+- `graphs/proxy_bake.esn` — A mesh baked into a proxy
+  (`kernels/proxy_bake.ent`), for a scene drawn as one mesh rather than
+  placed things.
 - `graphs/shadow.esn` — The sun's shadow from a virtual shadow map
   (`kernels/shadow.ent`) multiplied into the G-buffer's sun visibility,
   for a scene of clustered meshes.
@@ -188,7 +195,7 @@ use "render.entpkg";
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`bounce.replay`, `cluster.replay`, `field.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `reflection.replay`, `shadow.replay`,
+`bounce.replay`, `cluster.replay`, `field.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `reflection.replay`, `shadow.replay`,
 `sky.replay`, `temporal.replay`.
 Every Kernel of the package is reached by one of them.
 
@@ -386,7 +393,8 @@ What every renderer shares, in this order:
   pixel by the sun and the sky alone; `render.radiance` keeps, in a
   volume laid as the proxy is (a level for each of its levels, `scale`
   times coarser), the light leaving each surface the proxy holds: its
-  color times the sun through the proxies, the sky they leave open (lit's
+  color times the sun and the lamps through the proxies, the sky they
+  leave open (lit's
   own `hemisphere` and `proxy_open`) and what four cones gather from the
   cache as the last frame left it, so light bounces once more each time a
   cell is lit. A `parts`th of its cells is lit anew each frame, the rest

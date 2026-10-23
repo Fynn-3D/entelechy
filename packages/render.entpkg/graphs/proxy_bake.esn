@@ -1,0 +1,24 @@
+//! A mesh baked into a proxy (`kernels/proxy_bake.ent`): `points` and `faces`, each face's color (`colors`, one a face),
+//! over the proxy's `frame` (one level; its cells as the volume's size); each cell the nearest face's distance within
+//! `band` cells. `proxy` goes to a renderer with the frame, as the contract's.
+use "parallel.entpkg";
+use "mesh.entpkg";
+use "../kernels/";
+
+input points: Rows<MeshPoint>;
+input faces: Rows<Face>;
+input colors: Rows<Vec4>;
+input frame: Proxies;
+param nx: Int = 128;
+param ny: Int = 64;
+param nz: Int = 128;
+param band: Float = 3.0;
+
+node tiles: render.proxy_bake_tiles@1 { faces <- faces; points <- points; frame <- frame; band = band; }
+node runs: graph "parallel.entpkg/graphs/runs.esn" { counts <- tiles.result; }
+node blank: Volume<Long> { domain = vec3(nx, ny, nz); value = 9223372036854775807l; }
+node near: render.proxy_bake_faces@1 { faces <- faces; points <- points; tiles <- tiles.result; ends <- runs.ends; frame <- frame; blank <- blank.result;
+    entries <- runs.entries; band = band; domain = value(entries); }
+node baked: render.proxy_baked@1 { near <- near.result; colors <- colors; frame <- frame; band = band; domain = size(near); }
+
+output proxy <- baked.result;

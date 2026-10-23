@@ -1,6 +1,6 @@
 // Light kept on the proxies, as Lumen keeps its surface cache: a volume laid as the proxy is, a level for each of its levels
 // at a coarser cell (`render.radiance_frame`), each cell near a surface holding the light leaving that surface: its color times
-// the sun through the proxies, the sky the proxies leave open (as lit has it, `hemisphere` and `proxy_open`), and the light
+// the sun and the lamps through the proxies (`lamps_on_rough`), the sky the proxies leave open (as lit has it, `hemisphere` and `proxy_open`), and the light
 // the cache itself gathers from the things round it, so it bounces again frame after frame (`render.radiance`). A share of
 // its cells is lit anew each frame, the rest kept from the last frame's, found by where they lie, so a block moved on keeps
 // what it held. A renderer's picture then takes the light bounced off the things round each pixel: cones traced through the
@@ -8,6 +8,7 @@
 // what lies past it (`radiance_cone`, `render.bounce`). `graphs/bounce.esn` is the whole.
 use "brdf.ent";
 use "camera.ent";
+use "lamps.ent";
 use "lit.ent";
 use "sky.ent";
 
@@ -83,21 +84,27 @@ kernel render.radiance_size@1 {
     }
 }
 
-/// The cache's turn (`domain = 4`): how many frames it has been lit (x), how many of them since the proxy's block or the sun
-/// last moved (y), what they were (z, a hash of the first level's corner and the sun), and 1 once it rests (w): `settle`
-/// frames after they last moved it stops turning, and the cache gives what it held, so what reads it rests too.
+/// The cache's turn (`domain = 4`): how many frames it has been lit (x), how many of them since the proxy's block, the sun
+/// or the lamps last moved (y), what they were (z, a hash of the first level's corner, the sun and the lamps), and 1 once it
+/// rests (w): `settle` frames after they last moved it stops turning, and the cache gives what it held, so what reads it
+/// rests too.
 kernel render.radiance_turn@1 {
     requires { field.read; field.write; }
     input previous: Rows<Int>;
     input frame: Proxies;
     input sky: SkyLooks;
+    input lamps: Lamps;
     param settle: Int = 32;
     output result: Rows<Int>;
     compute {
         let fr = at(frame, 0);
         let sun = at(sky, 0).sun;
         let sign = mul_wrap(bits(fr.lo.x), 73856093) ^ mul_wrap(bits(fr.lo.y), 19349663) ^ mul_wrap(bits(fr.lo.z), 83492791)
-            ^ mul_wrap(bits(fr.cell), 0x9E3779B1) ^ mul_wrap(bits(sun.x), 40503) ^ mul_wrap(bits(sun.y), 9973) ^ mul_wrap(bits(sun.z), 31);
+            ^ mul_wrap(bits(fr.cell), 0x9E3779B1) ^ mul_wrap(bits(sun.x), 40503) ^ mul_wrap(bits(sun.y), 9973) ^ mul_wrap(bits(sun.z), 31)
+            ^ loop min(count(lamps), lamps_most()) with h = 17 {
+                let m = at(lamps, index());
+                mul_wrap(h, 31) ^ bits(m.at.x) ^ mul_wrap(bits(m.at.y), 7) ^ mul_wrap(bits(m.at.z), 13) ^ mul_wrap(bits(m.color.x + m.color.y + m.color.z), 101) ^ bits(m.reach)
+            };
         let moved = sign != at(previous, 2);
         let quiet = if moved { 0 } else { at(previous, 1) + 1 };
         let turn = if quiet <= settle { at(previous, 0) + 1 } else { at(previous, 0) };
@@ -109,7 +116,7 @@ kernel render.radiance_turn@1 {
 /// The cache, cell by cell (`domain` the cache's frame's cells, its levels up its depth): a cell within `band` of its cells
 /// of a surface the light leaving it (rgb, w 1), the rest none; one in `parts` lit anew each frame (by `turn`), the others
 /// kept from `previous` (laid as `previous_frame` says) where they lie; at rest (`turn`'s w), `previous` as it is. The light: the surface's color times the sun through
-/// the proxies (`sun_steps` steps), the sky open over it (`Surround`, `Openness` as lit's), and `bounce` times what four
+/// the proxies (`sun_steps` steps), the lamps (`lamp_steps` toward each), the sky open over it (`Surround`, `Openness` as lit's), and `bounce` times what four
 /// cones gather from the last frame's cache, so light bounces once more each time a cell is lit.
 kernel render.radiance@1 {
     requires { field.read; field.write; }
@@ -120,12 +127,15 @@ kernel render.radiance@1 {
     input frame: Proxies;
     input rframe: Proxies;
     input sky: SkyLooks;
+    input lamps: Lamps;
     input turn: Rows<Int>;
     /// How many cells the cache holds a side (`render.radiance_size`; sizes the node).
     input size: Rows<Int>;
     param parts: Int = 4;
     param band: Float = 1.5;
     param sun_steps: Int = 32;
+    /// The steps toward each lamp that casts shadows.
+    param lamp_steps: Int = 12;
     param bounce: Float = 1.0;
     param spread: Float = 0.6;
     param reach: Float = 24.0;
@@ -170,7 +180,8 @@ kernel render.radiance@1 {
             let dir = normalize(n + (t * cos(a) + b * sin(a)) * 0.9);
             g + radiance_cone(previous, was, proxy, pv, on, dir, spread, fr.cell * 1.5, reach, cone_steps).xyz * 0.25
         };
-        let light = albedo * (s.sun_color * (ndl * lit / 3.14159265) + hemisphere(n, s, look) * open + gathered * bounce);
+        let lamped = lamps_on_rough(lamps, albedo, on, n, proxy, land, frame, lamp_steps);
+        let light = albedo * (s.sun_color * (ndl * lit / 3.14159265) + hemisphere(n, s, look) * open + gathered * bounce) + lamped;
         return vec4(light.x, light.y, light.z, 1.0);
     }
 }

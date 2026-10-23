@@ -1,0 +1,131 @@
+// A mesh baked into a proxy: for a scene drawn as one mesh (a room, a model) rather than placed things, the distance volume a
+// renderer traces through, made from the mesh's own faces. Each face's box, widened by `band` cells, is cut into tiles of
+// `proxy_bake_tile()` cells a side (`render.proxy_bake_tiles`, `parallel.entpkg`'s runs), so a wall many cells wide is
+// baked by many; each cell of a tile within `band` cells of the face keeps the nearest face's distance and number, the
+// least of a 64-bit key, distance above and face below (`render.proxy_bake_faces`); each cell then is that distance, less
+// half a cell so a face is a shell with an inside, and that face's color, or `band` cells and gray where none came near
+// (`render.proxy_baked`). `graphs/proxy_bake.esn` is the whole.
+use "parallel.entpkg";
+use "mesh.entpkg";
+use "raster.entpkg";
+use "camera.ent";
+
+/// A tile's side, in cells.
+fn proxy_bake_tile() -> Int { return 8; }
+
+/// How far `p` is from the triangle `a`, `b`, `c` (its nearest point, Ericson's walk over its regions).
+fn proxy_triangle_distance(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Float {
+    let ab = b - a;
+    let ac = c - a;
+    let ap = p - a;
+    let d1 = dot(ab, ap);
+    let d2 = dot(ac, ap);
+    if d1 <= 0.0 && d2 <= 0.0 { return length(ap); }
+    let bp = p - b;
+    let d3 = dot(ab, bp);
+    let d4 = dot(ac, bp);
+    if d3 >= 0.0 && d4 <= d3 { return length(bp); }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 { return length(p - (a + ab * (d1 / (d1 - d3)))); }
+    let cp = p - c;
+    let d5 = dot(ab, cp);
+    let d6 = dot(ac, cp);
+    if d6 >= 0.0 && d5 <= d6 { return length(cp); }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 { return length(p - (a + ac * (d2 / (d2 - d6)))); }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && d4 - d3 >= 0.0 && d5 - d6 >= 0.0 { return length(p - (b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6))))); }
+    let denom = 1.0 / (va + vb + vc);
+    return length(p - (a + ab * (vb * denom) + ac * (vc * denom)));
+}
+
+/// The cells face `f`'s box spans, widened by `band` cells, within the proxy (lower corner xyz, inclusive; upper corner
+/// past it, `hi`).
+struct ProxyBakeBox { lo: IVec3; hi: IVec3; }
+fn proxy_bake_box(fr: Proxy, a: Vec3, b: Vec3, c: Vec3, band: Float) -> ProxyBakeBox {
+    let lo = floor((min(min(a, b), c) - fr.lo) / fr.cell - band);
+    let hi = ceil((max(max(a, b), c) - fr.lo) / fr.cell + band);
+    let top = fr.cells;
+    let l = clamp(lo, vec3(0.0, 0.0, 0.0), top);
+    let h = clamp(hi, vec3(0.0, 0.0, 0.0), top);
+    return ProxyBakeBox { lo: ivec3(int(l.x), int(l.y), int(l.z)), hi: ivec3(int(h.x), int(h.y), int(h.z)) };
+}
+
+/// How many tiles each face's widened box spans (0 for one outside the proxy).
+kernel render.proxy_bake_tiles@1 {
+    requires { field.read; field.write; }
+    input faces: Rows<Face>;
+    input points: Rows<MeshPoint>;
+    input frame: Proxies;
+    param band: Float = 3.0;
+    output result: Rows<Int>;
+    compute {
+        let f = sample(faces);
+        let fr = at(frame, 0);
+        let bx = proxy_bake_box(fr, at(points, f.a).position, at(points, f.b).position, at(points, f.c).position, band);
+        let t = proxy_bake_tile();
+        let n = max((bx.hi - bx.lo + t - 1) / t, 0);
+        return n.x * n.y * n.z;
+    }
+}
+
+/// Each tile of each face (`domain = value(entries)`, laid by `ends`): every cell of it within `band` cells of the face
+/// keeps the least key of the faces near it, the distance's bits above and the face below.
+kernel render.proxy_bake_faces@1 {
+    requires { field.read; field.write; }
+    input faces: Rows<Face>;
+    input points: Rows<MeshPoint>;
+    input tiles: Rows<Int>;
+    input ends: Rows<Int>;
+    input frame: Proxies;
+    input blank: Volume<Long>;
+    /// How many tiles (sizes the node).
+    input entries: Rows<Int>;
+    param band: Float = 3.0;
+    output result: Volume<Long>;
+    struct Near { cell: IVec3; key: Long; }
+    scatter into blank with min {
+        let e = element();
+        if e >= at(ends, count(ends) - 1) { return Near { cell: ivec3(-1, -1, -1), key: 0l }; }
+        let fi = owner(e, ends);
+        let f = at(faces, fi);
+        let fr = at(frame, 0);
+        let a = at(points, f.a).position;
+        let b = at(points, f.b).position;
+        let c = at(points, f.c).position;
+        let bx = proxy_bake_box(fr, a, b, c, band);
+        let t = proxy_bake_tile();
+        let n = max((bx.hi - bx.lo + t - 1) / t, 1);
+        let k = e - (at(ends, fi) - at(tiles, fi));
+        let o = bx.lo + ivec3(k % n.x, (k / n.x) % n.y, k / (n.x * n.y)) * t;
+        let span = min(bx.hi - o, ivec3(t, t, t));
+        let reach = band * fr.cell;
+        let done = loop span.x * span.y * span.z with z = 0 {
+            let g = o + ivec3(index() % span.x, (index() / span.x) % span.y, index() / (span.x * span.y));
+            let d = proxy_triangle_distance(fr.lo + (float(g) + 0.5) * fr.cell, a, b, c);
+            if d <= reach { emit(Near { cell: g, key: (long(bits(d)) << 32l) | long(fi) }); }
+            z + 1
+        };
+        return Near { cell: ivec3(-1, -1, -1), key: long(done) * 0l };
+    }
+}
+
+/// The proxy (`domain` its cells): each cell the nearest face's distance less half a cell, and its color (`colors`, one a
+/// face, rgb); `band` cells and `gray` where no face came near.
+kernel render.proxy_baked@1 {
+    requires { field.read; field.write; }
+    input near: Volume<Long>;
+    input colors: Rows<Vec4>;
+    input frame: Proxies;
+    param band: Float = 3.0;
+    param gray: Vec3 = vec3(0.5, 0.5, 0.5);
+    output result: Volume<Vec4>;
+    compute {
+        let key = sample(near);
+        let fr = at(frame, 0);
+        if key == 9223372036854775807l { return vec4(band * fr.cell, gray.x, gray.y, gray.z); }
+        let d = from_bits(int(key >> 32l));
+        let c = at(colors, int(key & 4294967295l));
+        return vec4(d - fr.cell * 0.5, c.x, c.y, c.z);
+    }
+}

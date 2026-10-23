@@ -1,0 +1,24 @@
+// A mesh baked into a proxy: a ball of radius 1 in a volume of 32 cells a
+// side over three meters, its upper half's faces red and its lower half's
+// blue; each cell the distance to the nearest face within three cells.
+use "mesh.entpkg";
+use "raster.entpkg";
+use "../kernels/";
+
+node ball: mesh.sphere_points@1 { columns = 33; rows = 17; domain = 561; }
+node ball_faces: mesh.lattice_faces@1 { columns = 33; rows = 17; domain = 1024; }
+node colors: kernel {
+    requires { field.read; field.write; }
+    input faces: Rows<Face> <- ball_faces.result;
+    output result: Rows<Vec4>;
+    compute { return if element() >= 512 { vec4(0.8, 0.1, 0.1, 0.0) } else { vec4(0.1, 0.1, 0.8, 0.0) }; }
+}
+node frame: kernel {
+    requires { field.write; }
+    output result: Proxies;
+    domain = 1;
+    compute { return Proxy { lo: vec3(-1.5, -1.5, -1.5), cell: 3.0 / 32.0, cells: vec3(32.0, 32.0, 32.0), land_lo: vec2(-100.0, -100.0), land_cell: 200.0, ground: vec3(0.3, 0.3, 0.3) }; }
+}
+node baked: graph "../graphs/proxy_bake.esn" { points <- ball.result; faces <- ball_faces.result; colors <- colors.result; frame <- frame.result; nx = 32; ny = 32; nz = 32; }
+
+output result <- baked.proxy;

@@ -1,0 +1,15 @@
+scene proxy_bake.esn
+
+# Cells are numbered x first, then y, then z, 32 a side, 3/32 of a meter
+# each from -1.5. The ball's middle and the volume's corner lie farther
+# than three cells from any face: three cells, gray. A cell at the ball's
+# side just above its middle lies on a red face, half a cell inside it; one
+# below it, on a blue face.
+frame 0.0
+expect baked.proxy[16912] = 0.28125 0.5 0.5 0.5 0.0001
+expect baked.proxy[0] = 0.28125 0.5 0.5 0.5 0.0001
+expect baked.proxy[27152] = -0.0405 0.8 0.1 0.1 0.002
+expect baked.proxy[5648] = -0.0405 0.8 0.1 0.1 0.002
+expect baked.proxy[16560].y = 0.1 0.0001
+expect baked.proxy[16560].w = 0.8 0.0001
+expect baked.proxy[16560].x < 0.0

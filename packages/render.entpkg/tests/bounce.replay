@@ -17,3 +17,8 @@ expect added.result[1].w > 2.0
 expect added.result[2].x > 0.05
 expect added.result[2].w < 1.6
 expect added.result[3] = 0 0 0 0
+
+# A green lamp over the balls: the light it leaves on them bounces onto
+# the floor, green alone.
+expect greener.result[0].y > 0.012
+expect greener.result[0].x = 0 0.0001
