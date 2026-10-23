@@ -1,10 +1,12 @@
 //! One level up (`kernels/cluster.ent`): the level below `level`, its
-//! points merged cell by cell on level `level`'s lattice, its faces kept
+//! points merged cell by cell on level `level`'s lattice, only points of
+//! one group (`groups`, a point's) with each other, its faces kept
 //! where their corners stay apart (each with the mesh's own face it came
 //! from, `sources`), each point's merged point (`up`), and
 //! how far the level lies from the mesh at most (`deviation`; each point's,
 //! `deviation_points`).
-//! `bits` is how many bits the keys take: `32 - level` holds any mesh's.
+//! `bits` is how many bits the keys take: `32 - level` holds any mesh's;
+//! `group_bits` how many the groups take.
 use "parallel.entpkg";
 use "../kernels/";
 
@@ -12,18 +14,24 @@ input points: Rows<MeshPoint>;
 input quadrics: Rows<ErrorQuadric>;
 input faces: Rows<Face>;
 input sources: Rows<Int>;
+input groups: Rows<Int>;
 input frame: ClusterFrames;
 param level: Int = 1;
 param bits: Int = 31;
+param group_bits: Int = 8;
 
 node keys: mesh.cluster_keys@1 { points <- points; frame <- frame; level = level; }
-node order: graph "parallel.entpkg/graphs/sort.esn" { keys <- keys.result; bits = bits; }
-node heads: mesh.cluster_heads@1 { order <- order.result; keys <- keys.result; }
+// By cell, then (the sort keeping that order within a group) by group.
+node by_cell: graph "parallel.entpkg/graphs/sort.esn" { keys <- keys.result; bits = bits; }
+node group_keys: mesh.cluster_group_keys@1 { groups <- groups; order <- by_cell.result; }
+node by_group: graph "parallel.entpkg/graphs/sort.esn" { keys <- group_keys.result; bits = group_bits; }
+node order: mesh.cluster_compose@1 { first <- by_cell.result; then <- by_group.result; }
+node heads: mesh.cluster_heads@1 { order <- order.result; keys <- keys.result; groups <- groups; }
 node ranks: parallel.compact_offsets@1 { flags <- heads.result; }
 node cells: parallel.runs_entries@1 { ends <- ranks.result; domain = 1; }
 node blank: parallel.runs_slots@1 { entries <- cells.result; domain = value(entries); }
 node starts: mesh.cluster_starts@1 { heads <- heads.result; ranks <- ranks.result; slots <- blank.result; }
-node merged: mesh.cluster_merge@1 { points <- points; quadrics <- quadrics; order <- order.result; starts <- starts.result; frame <- frame; level = level;
+node merged: mesh.cluster_merge@1 { points <- points; quadrics <- quadrics; order <- order.result; starts <- starts.result; groups <- groups; frame <- frame; level = level;
     domain = count(starts); }
 node deviation: mesh.cluster_deviation@1 { deviation <- merged.deviation; }
 node no_up: parallel.compact_blank@1 { flags <- keys.result; }
@@ -34,6 +42,7 @@ node faces_up: mesh.cluster_faces_up@1 { faces <- faces; sources <- sources; up 
 
 output points <- merged.point;
 output quadrics <- merged.quadric;
+output groups <- merged.group;
 output faces <- faces_up.result;
 output sources <- faces_up.source;
 output up <- up.result;

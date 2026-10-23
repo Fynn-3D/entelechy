@@ -18,13 +18,16 @@ use "mesh.entpkg";
 - `kernels/cluster.ent` — A mesh as levels cut into clusters: each level
   its level below's points merged cell by cell on a lattice twice as wide
   (vertex clustering, each cell's point where its error quadric is least),
+  a point only with those of its own group (a part, a material),
   each level's faces in the clusters of the bricks their corners lie in,
   how far each brick of each level lies from the mesh (the planes its
-  points stray from and the area it lost or gained), and libraries of
+  points stray from and the area each of its parts lost or gained), and libraries of
   such meshes joined. Kernels: `mesh.cluster_box@1`,
   `mesh.cluster_edges@1`, `mesh.cluster_frame@1`,
   `mesh.cluster_no_quadrics@1`, `mesh.cluster_face_quadrics@1`,
-  `mesh.cluster_keys@1`, `mesh.cluster_heads@1`, `mesh.cluster_starts@1`,
+  `mesh.cluster_keys@1`, `mesh.cluster_no_groups@1`,
+  `mesh.cluster_group_keys@1`, `mesh.cluster_compose@1`,
+  `mesh.cluster_heads@1`, `mesh.cluster_starts@1`,
   `mesh.cluster_merge@1`, `mesh.cluster_up@1`, `mesh.cluster_deviation@1`,
   `mesh.cluster_face_flags@1`, `mesh.cluster_faces_up@1`,
   `mesh.cluster_own_faces@1`, `mesh.cluster_sources8@1`,
@@ -55,7 +58,10 @@ use "mesh.entpkg";
 - `graphs/cluster_brick.esn` — A level's clusters.
 - `graphs/cluster.esn` — A mesh built as levels and cut into clusters:
   the library a renderer draws from (`render.entpkg`'s
-  `graphs/cluster.esn`).
+  `graphs/cluster.esn`), every point in one group.
+- `graphs/cluster_grouped.esn` — The same with each point in a group of
+  its own (`groups`): parts kept apart on every level, so letters on a
+  board or a frame on a wall do not merge into what they lie on.
 - `graphs/library.esn` — Two built meshes or libraries as one.
 - `graphs/cluster_level.esn` — One level up.
 - `graphs/subdivision.esn` — One level of midpoint subdivision.

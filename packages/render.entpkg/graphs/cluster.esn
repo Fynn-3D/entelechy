@@ -2,10 +2,12 @@
 //! `clusters`, `meshes`, `errors`), the things placed (`insts`, a thing's `shape` its mesh), each place of each thing at the level whose
 //! cells span no more than `error` pixels, what lies out of the picture or behind the last frame's nearer things (`hzb`,
 //! `render.cluster_hzb` of the last frame's surface; one cell for none) left out, and things smaller than `smallest` pixels
-//! across. `corners` and `faces` go to the rasterizer over `canvas`; `kept` (each drawn cluster's thing and cluster) and
-//! `cluster_face_of` find a pixel's thing and face.
+//! across. `corners` and `faces`, cut at the near plane (`raster.entpkg`'s `raster.clip_near`, so a face reaching behind
+//! the lens is drawn in front of it), go to the rasterizer over `canvas`; `kept` (each drawn cluster's thing and cluster)
+//! and `cluster_face_of` find a pixel's thing and face.
 use "parallel.entpkg";
 use "mesh.entpkg";
+use "raster.entpkg";
 use "../kernels/";
 
 input points: Rows<MeshPoint>;
@@ -36,8 +38,10 @@ node shown: render.cluster_shown@1 { kept <- rows.result; insts <- insts; points
 node corners: render.cluster_corners@1 { kept <- rows.result; shown <- shown.result; insts <- insts; points <- points; up <- up; faces <- faces; clusters <- clusters; meshes <- meshes; errors <- errors;
     lens <- lens; canvas <- canvas; error = error; reach = reach; near = near; far = far; domain = count(kept) * 384; }
 node tris: render.cluster_faces@1 { count <- kept.count; domain = max(value(count), 1) * 128; }
+node cut: raster.clip_near@1 { vertices <- corners.result; triangles <- tris.result; domain = count(triangles) * 4; }
+node cut_faces: raster.clip_faces@1 { triangles <- tris.result; domain = count(triangles) * 2; }
 
-output corners <- corners.result;
-output faces <- tris.result;
+output corners <- cut.result;
+output faces <- cut_faces.result;
 output kept <- rows.result;
 output count <- kept.count;

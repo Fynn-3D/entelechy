@@ -175,15 +175,17 @@ fn cluster_sphere_hidden(hzb: Grid<Float>, l: Lens, c: Vec3, r: Float, ext: Vec2
     return near > farthest * 1.02 + 0.3;
 }
 
-/// The thing and face (in the library's faces) of triangle `id` the rasterizer drew from `render.cluster_faces`: the thing's
+/// The thing and face (in the library's faces) of face row `drawn` the rasterizer drew from the graph's `faces`: the thing's
 /// row in the scene's things (x), the face (y); x is -1 for none.
-fn cluster_face_of(kept: Rows<IVec2>, clusters: Rows<Cluster>, id: Int) -> IVec2 {
+fn cluster_face_of(kept: Rows<IVec2>, clusters: Rows<Cluster>, drawn: Int) -> IVec2 {
+    let id = raster_clipped_row(drawn);
     let kc = at(kept, id / mesh_cluster_faces());
     return if id < 0 || kc.x < 0 { ivec2(-1, 0) } else { ivec2(kc.x, at(clusters, kc.y).first + id % mesh_cluster_faces()) };
 }
 
 /// The level of triangle `id`'s cluster (for a picture of the levels drawn).
-fn cluster_level_of(kept: Rows<IVec2>, clusters: Rows<Cluster>, id: Int) -> Int {
+fn cluster_level_of(kept: Rows<IVec2>, clusters: Rows<Cluster>, drawn: Int) -> Int {
+    let id = raster_clipped_row(drawn);
     let kc = at(kept, id / mesh_cluster_faces());
     return if id < 0 || kc.x < 0 { -1 } else { at(clusters, kc.y).level };
 }

@@ -230,15 +230,45 @@ kernel mesh.cluster_keys@1 {
     }
 }
 
-/// 1 where a run of equal keys begins, in sorted order (over `order`).
+/// No point in a group of its own: every one in group 0 (`domain` the points).
+kernel mesh.cluster_no_groups@1 {
+    requires { field.read; field.write; }
+    input points: Rows<MeshPoint>;
+    output result: Rows<Int>;
+    compute { return 0; }
+}
+
+/// Each point's group read through an order (`order`'s j-th point's), for sorting by group within it.
+kernel mesh.cluster_group_keys@1 {
+    requires { field.read; field.write; }
+    input groups: Rows<Int>;
+    input order: Rows<Int>;
+    output result: Rows<Int>;
+    compute { return at(groups, at(order, element())); }
+}
+
+/// An order read through another: `first`'s rows as `then` orders them.
+kernel mesh.cluster_compose@1 {
+    requires { field.read; field.write; }
+    input first: Rows<Int>;
+    input then: Rows<Int>;
+    output result: Rows<Int>;
+    compute { return at(first, at(then, element())); }
+}
+
+/// 1 where a run of equal keys and equal groups begins, in sorted order (over `order`).
 kernel mesh.cluster_heads@1 {
     requires { field.read; field.write; }
     input order: Rows<Int>;
     input keys: Rows<Int>;
+    input groups: Rows<Int>;
     output result: Rows<Int>;
     compute {
         let j = element();
-        return if j == 0 { 1 } else { int(at(keys, at(order, j)) != at(keys, at(order, j - 1))) };
+        if j == 0 { return 1; }
+        let a = at(order, j);
+        let b = at(order, j - 1);
+        return int(at(keys, a) != at(keys, b) || at(groups, a) != at(groups, b));
     }
 }
 
@@ -257,21 +287,23 @@ kernel mesh.cluster_starts@1 {
     }
 }
 
-/// Each cell's points as one point (`domain = count(starts)`): where the
-/// planes round them meet nearest, inside the cell of level `level`; their
-/// normals and coordinates averaged, their quadrics summed; and how far it
-/// lies from those planes.
+/// Each cell's points of one group as one point (`domain = count(starts)`):
+/// where the planes round them meet nearest, inside the cell of level
+/// `level`; their normals and coordinates averaged, their quadrics summed;
+/// how far it lies from those planes; and their group.
 kernel mesh.cluster_merge@1 {
     requires { field.read; field.write; }
     input points: Rows<MeshPoint>;
     input quadrics: Rows<ErrorQuadric>;
     input order: Rows<Int>;
     input starts: Rows<Int>;
+    input groups: Rows<Int>;
     input frame: ClusterFrames;
     param level: Int = 1;
     output point: Rows<MeshPoint>;
     output quadric: Rows<ErrorQuadric>;
     output deviation: Rows<Float>;
+    output group: Rows<Int>;
     compute {
         let c = element();
         let f = at(frame, 0);
@@ -292,7 +324,8 @@ kernel mesh.cluster_merge@1 {
         let nl = length(sum[1].xyz);
         let normal = if nl > 0.0 { sum[1].xyz / nl } else { vec3(0.0, 1.0, 0.0) };
         let uv = vec2(sum[0].w, sum[1].w) / float(max(n, 1));
-        return { point: MeshPoint { position: x + f.lo, normal: normal, uv: uv }, quadric: q, deviation: mesh_quadric_distance(q, x) };
+        return { point: MeshPoint { position: x + f.lo, normal: normal, uv: uv }, quadric: q, deviation: mesh_quadric_distance(q, x),
+            group: at(groups, at(order, from)) };
     }
 }
 
@@ -545,12 +578,24 @@ kernel mesh.cluster_no_areas@1 {
     compute { return 0.0; }
 }
 
-/// The faces' areas summed in the bricks of level `level` their middles fall in (`domain = count(faces)`; the faces of any
-/// level, laid over `points`).
+/// How many slots a brick keeps its parts' areas in: two tables of eight, each part in one slot of each by two hashes of
+/// its group, so two parts that share a slot in one (a lost part's loss diluted by a large one's area) seldom share in the
+/// other too, and the brick's error takes the larger.
+fn mesh_area_slots() -> Int { return 16; }
+/// The slot group `g` keeps its area in in table `t` (0 or 1; multiplicative hashing, the top three bits).
+fn mesh_area_slot(g: Int, t: Int) -> Int { return if t == 0 { mul_wrap(g, 0x9E3779B1) >>> 29 } else { 8 + (mul_wrap(g, 0x85EBCA6B) >>> 29) }; }
+
+/// The faces' areas summed in the bricks of level `level` their middles fall in, each brick's in the slot of the group of
+/// the mesh's own face each came from (`sources`, into `origin`, its first corner's group in `groups`), so a part lost
+/// in a brick is not made up for by another (`domain = count(faces) * 2`, each face once for each table of slots; the
+/// faces of any level, laid over `points`).
 kernel mesh.cluster_brick_areas@1 {
     requires { field.read; field.write; }
     input faces: Rows<Face>;
     input points: Rows<MeshPoint>;
+    input sources: Rows<Int>;
+    input origin: Rows<Face>;
+    input groups: Rows<Int>;
     input frame: ClusterFrames;
     input blank: Rows<Float>;
     param level: Int = 0;
@@ -558,18 +603,22 @@ kernel mesh.cluster_brick_areas@1 {
     struct Area { brick: Int; area: Float; }
     scatter into blank with sum {
         let f = at(frame, 0);
-        let g = sample(faces);
+        let e = element() / 2;
+        let g = at(faces, e);
         let a = at(points, g.a).position;
         let b = at(points, g.b).position;
         let c = at(points, g.c).position;
         let middle = (a + b + c) / 3.0;
-        return Area { brick: mesh_cluster_pack(mesh_cluster_brick(f, middle, level), mesh_brick_widths(f.bits, level)), area: length(cross(b - a, c - a)) * 0.5 };
+        let group = at(groups, at(origin, at(sources, e)).a);
+        let brick = mesh_cluster_pack(mesh_cluster_brick(f, middle, level), mesh_brick_widths(f.bits, level)) * mesh_area_slots();
+        return Area { brick: brick + mesh_area_slot(group, element() % 2), area: length(cross(b - a, c - a)) * 0.5 };
     }
 }
 
 /// Level `level`'s brick errors with how much of the mesh's area each brick lost or gained (its faces' area `area` against
-/// the mesh's own there, `whole`): a share of it times the level's cells' width, so an edge drawn in or a thin part
-/// merged away counts, which the planes alone do not see.
+/// the mesh's own there, `whole`, slot by slot): the most any slot's parts lost or gained, a share of their own area, times
+/// the level's cells' width, so an edge drawn in or a thin part merged away counts, which the planes alone do not see, and
+/// letters merged into their board count however wide the board.
 kernel mesh.cluster_area_errors@1 {
     requires { field.read; field.write; }
     input far: Rows<Float>;
@@ -581,9 +630,11 @@ kernel mesh.cluster_area_errors@1 {
     compute {
         let e = element();
         let cell = mesh_cluster_cell(at(frame, 0), level);
-        let a0 = at(whole, e);
-        let ak = at(area, e);
-        let lost = if a0 > 0.0 { cell * saturate(abs(1.0 - ak / a0)) } else if ak > 0.0 { cell } else { -1.0 };
+        let lost = loop mesh_area_slots() with most = -1.0 {
+            let a0 = at(whole, e * mesh_area_slots() + index());
+            let ak = at(area, e * mesh_area_slots() + index());
+            max(most, if a0 > 0.0 { cell * saturate(abs(1.0 - ak / a0)) } else if ak > 0.0 { cell } else { -1.0 })
+        };
         return max(sample(far), lost);
     }
 }

@@ -12,6 +12,9 @@ use "raster.entpkg";
 
 ## Kernels
 
+- `kernels/clip.ent` — Triangles cut at the near plane, before the
+  rasterizer, which skips whole a triangle reaching behind it. Kernels:
+  `raster.clip_near@1`, `raster.clip_faces@1`.
 - `kernels/cutout.ent` — Triangles drawn through a mask. Kernels:
   `raster.cover_cutout@3`, `raster.cover_cutout@4`,
   `raster.cover_cutout_tiles@2`.
@@ -38,7 +41,7 @@ use "raster.entpkg";
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`degenerate.replay`, `near.replay`. Every Kernel of the package is
+`clip.replay`, `degenerate.replay`, `near.replay`. Every Kernel of the package is
 reached by one of them.
 
 Used by the [animation](../../examples/animation/README.md), [culled](../../examples/culled/README.md), [mesh](../../examples/mesh/README.md), [mipmap](../../examples/mipmap/README.md), [surface](../../examples/surface/README.md), [voxel](../../examples/voxel/README.md) examples.

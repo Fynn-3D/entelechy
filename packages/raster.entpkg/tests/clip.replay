@@ -1,0 +1,28 @@
+scene clip.esn
+
+# One corner behind: the part in front is drawn, below the cut (at the
+# middle row), its v rising from 0 toward the half the cut edges reach;
+# nothing past the cut.
+frame 0.0
+expect 32 56 = 1.0 0.1 0.0 0.11
+expect 32 36 = 1.0 0.4 0.0 0.11
+expect 32 26 = 0.0 0.0 0.0 0.01
+expect 8 56 = 1.0 0.0 0.0 0.11
+
+# The same triangle uncut: the rasterizer skips it whole.
+param cut 0
+frame 0.0
+expect 32 56 = 0.0 0.0 0.0 0.01
+
+# Two corners behind: what is left is a triangle, the corner in front, its
+# v taken toward the corner behind it along the cut edge.
+param cut 1
+param behind 2
+frame 0.0
+expect 8 40 = 1.0 0.35 0.0 0.11
+expect 50 56 = 0.0 0.0 0.0 0.01
+
+# None behind: the triangle as it is, its apex's v near 1.
+param behind 0
+frame 0.0
+expect 32 12 = 1.0 0.9 0.0 0.11

@@ -76,3 +76,10 @@ expect library.faces[12128].a > 5310
 expect library.clusters[135].first = 12128
 expect count library.sources = 15545
 expect library.sources[12128] = 50
+
+# The board three levels up: the patch in a group of its own keeps faces
+# of its own lying over the board; in one group with the board its points
+# merge into the board's and none lies over it.
+frame 0.0
+expect patch_kept.result[0] >= 2
+expect patch_lost.result[0] = 0

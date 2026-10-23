@@ -1,0 +1,68 @@
+// Triangles cut at the near plane, before the rasterizer, which skips whole
+// a triangle with a corner at `w <= 0` (`kernels/triangle.ent`): each
+// triangle's part in front of the plane where depth is 0 (clip `z >= 0`),
+// cut where its edges cross it, the corners' attributes taken along the
+// edge in clip space, where they are linear. What is left is nothing, a
+// triangle or a quad: each triangle keeps four corner rows
+// (`raster.clip_near@1`) and two faces over them (`raster.clip_faces@1`), the
+// second one corner thrice where there is no quad, which the rasterizer
+// skips. A pixel's face row is then twice its triangle's, or once more:
+// `raster_clipped_row` gives back the triangle's.
+
+use "triangle.ent";
+
+/// The triangle row a face row drawn from `raster.clip_faces` came from.
+fn raster_clipped_row(id: Int) -> Int { return if id < 0 { id } else { id / 2 }; }
+
+/// Corner `a` taken `t` of the way to `b` in clip space.
+fn raster_clip_between(a: Corner, b: Corner, t: Float) -> Corner {
+    return Corner { clip: mix(a.clip, b.clip, t), normal: mix(a.normal, b.normal, t), uv: mix(a.uv, b.uv, t) };
+}
+
+/// Where the edge from `a` to `b` crosses the near plane.
+fn raster_clip_cut(a: Corner, b: Corner) -> Corner {
+    return raster_clip_between(a, b, a.clip.z / (a.clip.z - b.clip.z));
+}
+
+/// Each triangle's four corners after the cut (`domain = count(triangles) * 4`): the polygon in front of the near plane
+/// in the triangle's winding, its first corner again past its last (a triangle's fourth is its third); a triangle wholly
+/// behind keeps corners at `w` -1, which the rasterizer skips.
+kernel raster.clip_near@1 {
+    requires { field.read; field.write; }
+    input vertices: Rows<Corner>;
+    input triangles: Rows<Face>;
+    output result: Rows<Corner>;
+    compute {
+        let e = element();
+        let f = at(triangles, e / 4);
+        let k = e % 4;
+        let a = at(vertices, f.a);
+        let b = at(vertices, f.b);
+        let c = at(vertices, f.c);
+        let ina = a.clip.z >= 0.0;
+        let inb = b.clip.z >= 0.0;
+        let inc = c.clip.z >= 0.0;
+        let n = (if ina { 1 } else { 0 }) + (if inb { 1 } else { 0 }) + (if inc { 1 } else { 0 });
+        let none = Corner { clip: vec4(0.0, 0.0, 0.0, -1.0), normal: vec3(0.0, 0.0, 1.0), uv: vec2(0.0, 0.0) };
+        // Turned so the corner that differs (the one in front, or the one behind) comes first, winding kept.
+        let p = if n == 1 { if ina { a } else if inb { b } else { c } } else { if !ina { a } else if !inb { b } else { c } };
+        let q = if n == 1 { if ina { b } else if inb { c } else { a } } else { if !ina { b } else if !inb { c } else { a } };
+        let r = if n == 1 { if ina { c } else if inb { a } else { b } } else { if !ina { c } else if !inb { a } else { b } };
+        return if n == 3 { if k == 0 { a } else if k == 1 { b } else { c } }
+            else if n == 0 { none }
+            else if n == 1 { if k == 0 { p } else if k == 1 { raster_clip_cut(p, q) } else { raster_clip_cut(r, p) } }
+            else { if k == 0 { q } else if k == 1 { r } else if k == 2 { raster_clip_cut(r, p) } else { raster_clip_cut(p, q) } };
+    }
+}
+
+/// The two faces over each triangle's four corners (`domain = count(triangles) * 2`).
+kernel raster.clip_faces@1 {
+    requires { field.read; field.write; }
+    input triangles: Rows<Face>;
+    output result: Rows<Face>;
+    compute {
+        let e = element();
+        let b = (e / 2) * 4;
+        return if e % 2 == 0 { Face { a: b, b: b + 1, c: b + 2 } } else { Face { a: b, b: b + 2, c: b + 3 } };
+    }
+}

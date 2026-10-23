@@ -1,0 +1,62 @@
+// Triangles cut at the near plane (`kernels/clip.ent`): one with a corner
+// behind it, drawn whole by the rasterizer only as what lies in front, its
+// uv taken along the cut edges; the same triangle uncut is skipped whole.
+// `behind` 2 puts two corners behind, `behind` 0 none.
+use "../kernels/";
+
+param behind: Int = 1;
+param cut: Int = 1;
+
+node points: kernel {
+    requires { field.write; }
+    param behind: Int = behind;
+    output result: Rows<Corner>;
+    domain = 3;
+    compute {
+        let i = element();
+        let back = (i == 2 && behind >= 1) || (i == 1 && behind >= 2);
+        let p = if i == 0 { vec4(-0.8, -0.8, 0.5, 1.0) } else if i == 1 { if back { vec4(0.8, 0.8, -0.5, 0.0) } else { vec4(0.8, -0.8, 0.5, 1.0) } }
+            else { if back { vec4(0.0, 0.8, -0.5, 0.0) } else { vec4(0.0, 0.8, 0.5, 1.0) } };
+        return Corner { clip: p, normal: vec3(0.0, 0.0, 1.0), uv: vec2(0.0, if i == 2 { 1.0 } else { 0.0 }) };
+    }
+}
+node face: kernel {
+    requires { field.write; }
+    output result: Rows<Face>;
+    domain = 1;
+    compute { return Face { a: 0, b: 1, c: 2 }; }
+}
+node cut_points: raster.clip_near@1 { vertices <- points.result; triangles <- face.result; domain = count(triangles) * 4; }
+node cut_faces: raster.clip_faces@1 { triangles <- face.result; domain = count(triangles) * 2; }
+node chosen: kernel {
+    requires { field.read; field.write; }
+    input cut_points: Rows<Corner> <- cut_points.result;
+    input whole: Rows<Corner> <- points.result;
+    param cut: Int = cut;
+    output result: Rows<Corner>;
+    domain = count(cut_points) * cut + count(whole) * (1 - cut);
+    compute { return if cut == 1 { sample(cut_points) } else { sample(whole) }; }
+}
+node chosen_faces: kernel {
+    requires { field.read; field.write; }
+    input cut_faces: Rows<Face> <- cut_faces.result;
+    input whole: Rows<Face> <- face.result;
+    param cut: Int = cut;
+    output result: Rows<Face>;
+    domain = count(cut_faces) * cut + count(whole) * (1 - cut);
+    compute { return if cut == 1 { sample(cut_faces) } else { sample(whole) }; }
+}
+node raster: graph "../graphs/surface.esn" { vertices <- chosen.result; triangles <- chosen_faces.result; width = 64; height = 64; }
+
+// Covered pixels white, with the uv's v in green and the triangle it came from (`raster_clipped_row`) in blue.
+node view: kernel {
+    requires { field.read; field.write; }
+    input surface: Grid<Surface> <- raster.surface;
+    output result: Image;
+    compute {
+        let s = sample(surface);
+        return if s.id < 0 { vec4(0.0, 0.0, 0.0, 1.0) } else { vec4(1.0, s.uv.y, float(raster_clipped_row(s.id)), 1.0) };
+    }
+}
+
+output result <- view.result;
