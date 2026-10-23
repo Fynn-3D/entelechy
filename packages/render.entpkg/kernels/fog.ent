@@ -11,6 +11,7 @@ use "clouds.ent";
 use "lamps.ent";
 use "scattering.ent";
 use "sky.ent";
+use "sun.ent";
 
 /// The fog's density at height `y`: `density` at `base` and below, falling
 /// by e every `falloff` meters above.
@@ -32,8 +33,10 @@ fn lamp_airlight(m: Lamp, eye: Vec3, dir: Vec3, t0: Float, t1: Float) -> Vec3 {
 
 /// Height fog along each view ray: the light it scatters toward the eye
 /// (rgb) and how much of what lies behind still shows (w). The sun's share
-/// is shadowed through the proxies and by the clouds' `deck` (in
-/// `cloud_steps` steps toward the sun: shafts between the clouds); each lamp
+/// is shadowed by the sun's cascades (`views`, `atlas`: `render.sun_views`)
+/// where they hold the point, through the proxies (`sun_steps` steps)
+/// elsewhere, and by the clouds' `deck` (`cloud_steps` steps toward the
+/// sun: shafts between the clouds); each lamp
 /// of the pixel's tile (`tiles`, `render.lamps_tiles` with `through`) is
 /// summed exactly along each step and, for a lamp that casts shadows, cut
 /// by the proxies within `shafts` steps toward it (0: unshadowed). `steps`
@@ -49,6 +52,8 @@ kernel render.fog_march@1 {
     input frame: Proxies;
     input deck: CloudDecks;
     input tiles: Grid<IVec4>;
+    input views: SunViews;
+    input atlas: Grid<Float>;
     param density: Float = 0.002;
     param base: Float = 0.0;
     param falloff: Float = 80.0;
@@ -57,7 +62,7 @@ kernel render.fog_march@1 {
     param far: Float = 2000.0;
     param steps: Int = 24;
     param shafts: Int = 8;
-    /// The steps toward the sun through the proxies from each sample.
+    /// The steps toward the sun through the proxies from each sample no cascade holds.
     param sun_steps: Int = 8;
     param cloud_steps: Int = 2;
     /// The lamps' light in the fog, times this.
@@ -93,7 +98,9 @@ kernel render.fog_march@1 {
             let p = l.eye + dir * ((t0 + t1) * 0.5);
             let dens = fog_density(p.y, density, base, falloff);
             if dens * dt < 0.000001 { r } else {
-                let sun_seen = rough_shadow(proxy, land, fr, p, sun, fr.cell, 300.0, sun_steps) * cloud_shadow(cd, p, sun, cloud_steps);
+                let mapped = sun_view_lit(atlas, views, p);
+                let blocked = if mapped >= 0.0 { mapped } else { rough_shadow(proxy, land, fr, p, sun, fr.cell, 300.0, sun_steps) };
+                let sun_seen = blocked * cloud_shadow(cd, p, sun, cloud_steps);
                 let lamps_here = loop 128 with w = LampWalk { left: bits, light: vec3(0.0, 0.0, 0.0) } until lamp_first(w.left) < 0 {
                     let k = lamp_first(w.left);
                     let left = lamp_cleared(w.left, k);

@@ -42,5 +42,7 @@ node merged: render.nearer@1 { a_surface <- stand.surface; a_paint <- stand.pain
     a_behind_at <- stand.behind_at; a_behind_dir <- stand.behind_dir; a_behind_paint <- stand.behind_paint; a_behind_normal <- stand.behind_normal; a_through <- stand.through;
     b_surface <- stand.surface; b_paint <- stand.paint; b_extra <- stand.extra; b_layers <- stand.layers; b_more <- stand.more; fit <- fit.result; domain = size(a_surface); }
 node nothing: render.blank@1 { domain = vec2(4, 4); }
+// No cascades of the sun's shadow: one that holds nothing (the fog falls back to the proxies).
+node no_sun: render.sun_none@1 { domain = 1; }
 
 output result <- focused.result;

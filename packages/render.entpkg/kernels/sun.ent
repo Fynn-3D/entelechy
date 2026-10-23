@@ -6,7 +6,8 @@
 // a distance-field scene by marching `sun_ray`); `render.sun_shadow` then
 // shades the G-buffer's sun visibility: each pixel in the finest cascade
 // holding it, softened as far as the sun's disc makes a shadow soft from its
-// caster (percentage-closer soft shadows), cascades blended at their edges.
+// caster (percentage-closer soft shadows), cascades blended at their edges;
+// the fog reads the cascades for its shafts (`sun_view_lit`).
 use "camera.ent";
 use "sky.ent";
 
@@ -77,6 +78,38 @@ kernel render.sun_views@1 {
         let z = floor(dot(middle, toward) / (reach * 0.25)) * (reach * 0.25);
         return SunView { center: right * x + up * y + toward * z, right: right, up: up, toward: toward, half: half, depth: reach, texel: texel };
     }
+}
+
+/// No cascades: one that holds nothing, for a scene without sun depth (what
+/// reads the sun's shadow then falls back to its own means).
+kernel render.sun_none@1 {
+    requires { field.write; }
+    output result: SunViews;
+    compute {
+        return SunView { center: vec3(0.0, 0.0, 0.0), right: vec3(1.0, 0.0, 0.0), up: vec3(0.0, 0.0, 1.0), toward: vec3(0.0, 1.0, 0.0), half: 0.0, depth: 0.0, texel: 1.0 };
+    }
+}
+
+/// How much sun reaches `x`, a point in the air (no surface to lift it
+/// off): by the finest cascade holding it, its four nearest texels compared
+/// and blended (smooth shafts); -1 where no cascade holds it.
+fn sun_view_lit(atlas: Grid<Float>, views: SunViews, x: Vec3) -> Float {
+    let res = size(atlas).y;
+    return loop 4 with lit = -1.0 until lit >= 0.0 || index() >= count(views) {
+        let v = at(views, index());
+        let a = sun_at(v, x);
+        if v.half <= 0.0 || a.x < 0.0 || a.y < 0.0 || a.x > 1.0 || a.y > 1.0 { lit } else {
+            let t = vec2(a.x, a.y) * res - 0.5;
+            let f = fract(t);
+            let base = floor(t);
+            let near = a.z + v.texel;
+            let c00 = if sun_occluder(atlas, index(), base, res) > near { 0.0 } else { 1.0 };
+            let c10 = if sun_occluder(atlas, index(), base + vec2(1.0, 0.0), res) > near { 0.0 } else { 1.0 };
+            let c01 = if sun_occluder(atlas, index(), base + vec2(0.0, 1.0), res) > near { 0.0 } else { 1.0 };
+            let c11 = if sun_occluder(atlas, index(), base + vec2(1.0, 1.0), res) > near { 0.0 } else { 1.0 };
+            mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y)
+        }
+    };
 }
 
 /// The occluder depths the cascade `i`'s part of the atlas holds round

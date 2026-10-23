@@ -18,6 +18,10 @@ expect 215 85 = 0.686 0.763 0.786 0.02
 # the spotlight and the panel reach; the exposure metered (a factor, the
 # time it was set), held where the picture holds.
 expect mirror_lens.result[0].eye = 0 -3.915964 5.8612556 0.001
+# The moon's second cascade (32 m across, four times the first's 8), and the
+# floor's depth toward the moon in the first, for the fog's shafts.
+expect sun_views.result[1].half = 16 0.001
+expect sun_depth.result[65664] = -0.0072 0.002
 # A floor pixel's moonlight under the clouds' shadow; a red ball's edge
 # made rougher by its normals' spread across the pixel.
 expect clouded.result[49114] = 0.6721 0 0 0 0.01

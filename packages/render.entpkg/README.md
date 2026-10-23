@@ -81,7 +81,7 @@ use "render.entpkg";
   `render.subsurface_apply@1`.
 - `kernels/sun.ent` — The sun's shadows for any scene: cascaded shadow
   maps, soft as far as the sun's disc makes them. Kernels:
-  `render.sun_views@1`, `render.sun_shadow@1`.
+  `render.sun_none@1`, `render.sun_views@1`, `render.sun_shadow@1`.
 - `kernels/super_resolution.ent` — Temporal super-resolution (TSR).
   Kernels: `render.tsr@1`, `render.keep_surface@1`.
 - `kernels/switch.ent` — One way of drawing (a renderer) is chosen at a
@@ -227,19 +227,21 @@ What every renderer shares, in this order:
   that, and `render.mirror_mix` lays it over the pixels `more` w marks, by
   Fresnel, moved by the surface's normal (waves) and drawn out downward.
 - **The air** (`graphs/air.esn`). `render.fog_march` walks each view ray
-  at a quarter of the size through height fog the sun (shadowed through
-  the proxies and by the clouds' deck: shafts between the clouds), the
-  sky, a glow of the scene's own and the lamps light: the lamps of each
-  pixel's tile (`render.lamps_tiles` with `through`, cut for the whole
-  view ray, not the surface), each one's light summed exactly along each
-  step (a beam beside a bulb has no spikes) and cut by the proxies toward
-  it into shafts; `render.fog_blur` smooths it by depth;
-  `render.clouds_march` walks a deck of clouds for the sky at an eighth of
-  the size, lit through the cloud toward the sun with light scattered
-  again and again, dark at a sunlit edge, lit from below by `below`;
-  `render.fog_apply` lays both over the picture, upsampled by depth. Each
-  pixel's steps start at a fixed offset of its own, so nothing needs
-  history to settle.
+  at a quarter of the size through height fog the sun (shadowed by the
+  sun's cascades where they hold the point, `sun_view_lit`, through the
+  proxies elsewhere, and by the clouds' deck: shafts behind what stands in
+  the light and between the clouds; a scene without cascades gives
+  `render.sun_none`), the sky, a glow of the scene's own and the lamps
+  light: the lamps of each pixel's tile (`render.lamps_tiles` with
+  `through`, cut for the whole view ray, not the surface), each one's
+  light summed exactly along each step (a beam beside a bulb has no
+  spikes) and cut by the proxies toward it into shafts; `render.fog_blur`
+  smooths it by depth; `render.clouds_march` walks a deck of clouds for
+  the sky at an eighth of the size, lit through the cloud toward the sun
+  with light scattered again and again, dark at a sunlit edge, lit from
+  below by `below`; `render.fog_apply` lays both over the picture,
+  upsampled by depth. Each pixel's steps start at a fixed offset of its
+  own, so nothing needs history to settle.
 - **The sky** (`graphs/atmosphere.esn`). Sunlight through a sphere of
   air round the ground (Hillaire's model): Rayleigh's scattering, haze
   and ozone; light scattered more than once a table by height and the

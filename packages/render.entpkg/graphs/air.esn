@@ -1,8 +1,9 @@
 //! Fog and clouds over a picture (`kernels/fog.ent`, `kernels/clouds.ent`):
-//! height fog the sun (between the clouds), the sky, `glow` and the lamps
-//! light, walked at a quarter of the size and smoothed by depth; a deck of
-//! clouds over the sky at an eighth; both laid over `hdr`. The deck is
-//! given back for the shadows it casts (`render.clouds_shadow`).
+//! height fog the sun (its shafts cut by the sun's cascades, and between
+//! the clouds), the sky, `glow` and the lamps light, walked at a quarter of
+//! the size and smoothed by depth; a deck of clouds over the sky at an
+//! eighth; both laid over `hdr`. The deck is given back for the shadows it
+//! casts (`render.clouds_shadow`).
 use "../kernels/";
 
 input hdr: Image;
@@ -13,6 +14,9 @@ input proxy: Volume<Vec4>;
 input land: Grid<Float>;
 input frame: Proxies;
 input lamps: Lamps;
+/// The sun's cascades and their depths (`render.sun_views`; a scene without them gives `render.sun_none` and a 1 by 1 atlas).
+input views: SunViews;
+input atlas: Grid<Float>;
 /// The fog: how thick at `base` and below, thinning by e every `falloff` meters up.
 param density: Float = 0.002;
 param base: Float = 0.0;
@@ -34,7 +38,7 @@ param below: Vec3 = vec3(0.0, 0.0, 0.0);
 // The lamps each tile's view rays pass by, as far as the fog reaches.
 node lamp_depth: render.lamps_depth@1 { surface <- surface; domain = ceil(size(surface) / 16); }
 node lamp_tiles: render.lamps_tiles@1 { depth <- lamp_depth.result; lamps <- lamps; lens <- lens; surface <- surface; through = 2000.0; domain = size(depth); }
-node fog: render.fog_march@1 { tiles <- lamp_tiles.result; surface <- surface; lens <- lens; sky <- sky; lamps <- lamps; proxy <- proxy; land <- land; frame <- frame; deck <- deck.result;
+node fog: render.fog_march@1 { tiles <- lamp_tiles.result; views <- views; atlas <- atlas; surface <- surface; lens <- lens; sky <- sky; lamps <- lamps; proxy <- proxy; land <- land; frame <- frame; deck <- deck.result;
     density = density; base = base; falloff = falloff; glow = glow; lamp_share = lamp_share; shafts = shafts; domain = ceil(size(surface) / 4); }
 node across: render.fog_blur@1 { fog <- fog.result; surface <- surface; axis = 0; domain = size(fog); }
 node down: render.fog_blur@1 { fog <- across.result; surface <- surface; axis = 1; domain = size(fog); }
