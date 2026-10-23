@@ -37,6 +37,8 @@ param screen_reach: Float = 1.0;
 param probe: Int = 8;
 param rays: Int = 32;
 param probe_spread: Float = 0.6;
+/// Surfaces smoother than this trace their mirror ray to what it meets and light it there (0: every one a cone).
+param hit_below: Float = 0.35;
 /// The bounce is gathered once every this many pixels a side, and spread back over them by distance.
 param every: Int = 2;
 param ground: Vec3 = vec3(0.34, 0.29, 0.22);
@@ -60,7 +62,9 @@ node probes: render.bounce_probes@1 { screen <- screen.result; surface <- surfac
     probe = probe; rays = rays; spread = probe_spread; reach = reach; steps = steps; screen_reach = screen_reach; domain = ceil(size(surface) / probe); }
 node filtered: render.bounce_probe_filter@1 { red <- probes.red; green <- probes.green; blue <- probes.blue; place <- probes.place; domain = size(place); }
 node gathered: render.bounce_gather@1 { red <- filtered.r; green <- filtered.g; blue <- filtered.b; place <- probes.place; surface <- surface; paint <- paint; lens <- lens;
-    radiance <- cache.result; rframe <- rframe.result; proxy <- proxy; frame <- frame; every = every; probe = probe; reach = reach; steps = steps; domain = ceil(size(surface) / every); }
+    radiance <- cache.result; rframe <- rframe.result; proxy <- proxy; land <- land; frame <- frame; sky <- sky; lamps <- lamps; every = every; probe = probe; reach = reach;
+    steps = steps; hit_below = hit_below; ground = ground; ground_light = ground_light; sky_light = sky_light; open_reach = open_reach; open_strength = open_strength;
+    open_least = open_least; domain = ceil(size(surface) / every); }
 node bounced: render.bounce@1 { hdr <- hdr; gathered <- gathered.result; mirror <- gathered.mirror; reflection <- reflection; surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; lens <- lens; sky <- sky;
     every = every; strength = strength; domain = size(hdr); }
 

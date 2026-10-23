@@ -299,6 +299,29 @@ kernel render.bounce_probe_filter@1 {
     }
 }
 
+/// What a mirror ray from `p` along `r` meets, lit where it meets it (Lumen's hit lighting): marched through the proxies
+/// (`rough_trace`, `steps` steps out to `reach` meters), the thing there its proxy's color and slope, lit by the sun through
+/// the proxies, the lamps, the sky open over it (`look`, `open`) and what one cone gathers from the bounce's cache along its
+/// slope (rgb), wholly shutting the ray (w 1); a ray meeting nothing shuts none of it (w 0), the renderer's reflection of
+/// the sky kept. Off the screen a smooth thing then mirrors the room as sharp as the proxies hold it and as lit as the
+/// light there is, not as the cache's wide cells average it.
+fn bounce_hit_light(radiance: Volume<Vec4>, rv: ProxyLevels, proxy: Volume<Vec4>, pv: ProxyLevels, land: Grid<Float>, frame: Proxies, s: SkyLook,
+    lamps: Lamps, p: Vec3, r: Vec3, start: Float, reach: Float, steps: Int, cone_steps: Int, look: Surround, open: Openness) -> Vec4 {
+    let hit = rough_trace(proxy, land, frame, p, r, start, reach, steps);
+    if hit.y < 0.0 { return vec4(0.0, 0.0, 0.0, 0.0); }
+    let h = p + r * hit.x;
+    let n = rough_normal(proxy, land, frame, h, hit.y);
+    let albedo = rough_albedo(proxy, frame, h, hit.y);
+    let cell = proxy_cell_at(frame, h);
+    let off = h + n * cell;
+    let ndl = max(dot(n, s.sun), 0.0);
+    let sun = if ndl > 0.0 { rough_shadow(proxy, land, frame, off, s.sun, cell * 0.5, 300.0, 16) * ndl } else { 0.0 };
+    let opened = proxy_open(proxy, frame, off, n, open);
+    let bounced = radiance_cone(radiance, rv, proxy, pv, off, n, 0.6, cell * 1.5, reach, cone_steps).xyz;
+    let light = albedo * (s.sun_color * (sun / 3.14159265) + hemisphere(n, s, look) * opened + bounced) + lamps_on_rough(lamps, albedo, off, n, proxy, land, frame, 8);
+    return vec4(light.x, light.y, light.z, 1.0);
+}
+
 /// The light bounced off the things round each pixel, at a coarser grid (`domain = ceil(size(surface) / every)`): the
 /// probes round a cell's middle pixel (`render.bounce_probe_filter`'s, laid every `probe` pixels), each by how near and how
 /// alike it stands, their harmonics read for the cell's own normal (rgb; the nearest alike probe where none of the four is,
@@ -317,9 +340,21 @@ kernel render.bounce_gather@1 {
     input radiance: Volume<Vec4>;
     input rframe: Proxies;
     input proxy: Volume<Vec4>;
+    input land: Grid<Float>;
     input frame: Proxies;
+    input sky: SkyLooks;
+    input lamps: Lamps;
     param every: Int = 2;
     param probe: Int = 8;
+    /// Surfaces smoother than this trace their mirror ray to what it meets and light it there (0: every one a cone).
+    param hit_below: Float = 0.35;
+    param hit_steps: Int = 48;
+    param ground: Vec3 = vec3(0.34, 0.29, 0.22);
+    param ground_light: Float = 1.6;
+    param sky_light: Float = 1.15;
+    param open_reach: Vec3 = vec3(0.4, 1.2, 2.5);
+    param open_strength: Float = 1.6;
+    param open_least: Float = 0.1;
     param reach: Float = 30.0;
     param steps: Int = 10;
     output result: Image;
@@ -359,7 +394,10 @@ kernel render.bounce_gather@1 {
         let start = pv.rows[0].cell * (1.0 + jitter);
         let rough = at(paint, q).w;
         let r = reflect(dir, n);
-        let seen = radiance_cone(radiance, rv, proxy, pv, p, r, 0.05 + rough * 0.9, start, reach, steps);
+        let seen = if rough < hit_below {
+            bounce_hit_light(radiance, rv, proxy, pv, land, frame, at(sky, 0), lamps, p, r, start, reach, hit_steps, steps,
+                Surround { ground: ground, ground_light: ground_light, sky_light: sky_light }, Openness { reach: open_reach, strength: open_strength, least: open_least })
+        } else { radiance_cone(radiance, rv, proxy, pv, p, r, 0.05 + rough * 0.9, start, reach, steps) };
         return { result: vec4(gathered.x, gathered.y, gathered.z, su.w), mirror: seen };
     }
 }

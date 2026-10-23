@@ -125,7 +125,12 @@ use "render.entpkg";
   beside a chair's leg) come from the screen; each probe keeps what comes
   in as first-order spherical harmonics, smoothed among its alike
   neighbors (`render.bounce_probe_filter`), and each pixel reads the
-  probes round it for its own normal. Kernels:
+  probes round it for its own normal. A surface smoother than `hit_below`
+  traces its mirror ray through the proxies to what it meets and lights it
+  there (`bounce_hit_light`: the sun through its shadow, the lamps, the open
+  sky and a cone of the cache's light), so off the screen chrome mirrors the
+  room's light and shade, not the cache's average; a rougher one reads a
+  cone as wide as it is rough. Kernels:
   `render.radiance_frame@1`, `render.radiance_size@1`,
   `render.radiance_turn@1`, `render.radiance@1`,
   `render.bounce_screen@1`, `render.bounce_probes@1`, `render.bounce_probe_filter@1`,
