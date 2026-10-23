@@ -1,0 +1,75 @@
+// Glass over a picture (`graphs/glass.esn`): a pane a meter wide two meters before the
+// eye, a grey wall `wall` meters off behind it (a picture of 0.5 and its
+// G-buffer's distances), no bounce (one empty cell), a dim sky. Through the
+// pane the wall is tinted green, a little of the sky mirrored in; past the
+// pane's edges and where the wall stands before it, the picture as it was.
+// The picture's red rises to the right, so `refraction` shows: the pane's
+// slope leans right, so what lies behind it comes from further right.
+use "mesh.entpkg";
+use "raster.entpkg";
+use "../kernels/";
+
+param wall: Float = 10.0;
+param refraction: Float = 0.0;
+
+node pane: kernel {
+    requires { field.write; }
+    output result: Rows<MeshPoint>;
+    domain = 4;
+    compute {
+        let e = element();
+        let x = if e == 0 || e == 3 { -0.5 } else { 0.5 };
+        let y = if e < 2 { -0.5 } else { 0.5 };
+        return MeshPoint { position: vec3(x, y, -2.0), normal: normalize(vec3(0.3, 0.0, 1.0)), uv: vec2(x, y) + 0.5 };
+    }
+}
+node pane_faces: kernel {
+    requires { field.write; }
+    output result: Rows<Face>;
+    domain = 2;
+    compute { return if element() == 0 { Face { a: 0, b: 1, c: 2 } } else { Face { a: 0, b: 2, c: 3 } }; }
+}
+node lens: kernel {
+    requires { field.write; }
+    output result: Lenses;
+    domain = 1;
+    compute { return Lens { eye: vec3(0.0, 0.0, 0.0), ahead: vec3(0.0, 0.0, -1.0), right: vec3(1.0, 0.0, 0.0), up: vec3(0.0, 1.0, 0.0), focal: 1.0 }; }
+}
+node sky: kernel {
+    requires { field.write; }
+    output result: SkyLooks;
+    domain = 1;
+    compute {
+        return SkyLook { sun: normalize(vec3(0.0, 1.0, 0.2)), sun_color: vec3(1.0, 1.0, 1.0), ambient: vec3(0.2, 0.2, 0.2), horizon: vec3(0.3, 0.3, 0.3),
+            zenith: vec3(0.2, 0.2, 0.3), clouds: 0.0, far_land: 0.0, far_color: vec3(0.5, 0.5, 0.5), air: 0.0, air_from: 0.0 };
+    }
+}
+node canvas: Grid<Long> { domain = vec2(64, 64); value = 9223372036854775807l; }
+node picture: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = vec2(64, 64);
+    compute { return vec4(0.5 + (coord().x - 32.0) / 64.0, 0.5, 0.5, 1.0); }
+}
+node surface: kernel {
+    requires { field.read; field.write; }
+    input lens: Lenses <- lens.result;
+    param wall: Float = wall;
+    output result: Grid<Vec4>;
+    domain = vec2(64, 64);
+    compute { let l = at(lens, 0); return vec4(0.0, 0.0, 1.0, wall / max(dot(ray(l, coord(), domain()), l.ahead), 0.001)); }
+}
+node frame: kernel {
+    requires { field.write; }
+    output result: Proxies;
+    domain = 1;
+    compute { return Proxy { lo: vec3(-1.0, -1.0, -1.0), cell: 2.0, cells: vec3(1.0, 1.0, 1.0), land_lo: vec2(-100.0, -100.0), land_cell: 200.0, ground: vec3(0.3, 0.3, 0.3) }; }
+}
+node empty: Volume<Vec4> { domain = vec3(1, 1, 1); value = vec4(1000.0, 0.0, 0.0, 0.0); }
+node no_light: Volume<Vec4> { domain = vec3(1, 1, 1); }
+node no_lamps: render.lamps_none@1 { domain = 1; }
+node glazed: graph "../graphs/glass.esn" { points <- pane.result; faces <- pane_faces.result; hdr <- picture.result; surface <- surface.result; lens <- lens.result; sky <- sky.result;
+    canvas <- canvas.result; cache <- no_light.result; cache_frame <- frame.result; proxy <- empty.result; frame <- frame.result; lamps <- no_lamps.result; smudge = 0.0;
+    refraction = refraction; }
+
+output result <- glazed.hdr;

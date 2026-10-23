@@ -1,0 +1,20 @@
+scene glass.esn
+
+# Through the pane the wall tinted green, its red and blue under its green,
+# all a little under the picture's 0.5 and a little sky mirrored in; past
+# the pane's edges the picture as it was.
+frame 0.0
+expect 32 32 = 0.45 0.47 0.46 0.03
+expect 2 2 = 0.031 0.5 0.5 0.001
+
+# The wall a meter off, before the pane: nothing of the pane shows.
+param wall 1.0
+frame 0.0
+expect 32 32 = 0.5 0.5 0.5 0.001
+
+# A thick glass: what lies behind moved two pixels and more to the right,
+# its red risen by as much (past what the tint takes of it).
+param wall 10.0
+param refraction 8.0
+frame 0.0
+expect 32 32 = 0.468 0.461 0.452 0.01

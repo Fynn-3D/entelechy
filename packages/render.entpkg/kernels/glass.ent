@@ -1,0 +1,98 @@
+// Glass laid over a renderer's picture: panes, bottles, a lamp's globe, any mesh drawn apart from the G-buffer
+// (`render.glass_corners`, cut at the near plane and rasterized on their own), the nearest of them over each pixel where it
+// is nearer than what the G-buffer shows (`render.glass`). Through it, what lies behind (the picture), moved by
+// `refraction` along the glass's slope as a thick glass bends it and `tint`ed, as much as Fresnel lets through; on it, what
+// it mirrors: the picture where the mirror ray meets what the screen shows, the bounce's cache past the screen (a cone as
+// wide as the glass is rough), the sky past that; and the sun's and the lamps' highlights. `rough` is the glass's own,
+// more where it is `smudge`d. `graphs/glass.esn` is the whole.
+use "mesh.entpkg";
+use "raster.entpkg";
+use "random.entpkg";
+use "brdf.ent";
+use "camera.ent";
+use "lamps.ent";
+use "radiance.ent";
+use "sky.ent";
+
+/// The glass's corners as the rasterizer takes them (`domain` its rows), between `near` and `far` meters.
+kernel render.glass_corners@1 {
+    requires { field.read; field.write; }
+    input points: Rows<MeshPoint>;
+    input lens: Lenses;
+    input canvas: Grid<Long>;
+    param near: Float = 0.05;
+    param far: Float = 2000.0;
+    output result: Rows<Corner>;
+    compute {
+        let p = sample(points);
+        return Corner { clip: lens_clip(at(lens, 0), size(canvas), p.position, near, far), normal: p.normal, uv: p.uv };
+    }
+}
+
+/// The glass over picture `hdr` (`glass` its surface as the rasterizer drew it, `surface` the G-buffer's; `cache` the
+/// bounce's, laid as `rframe`, over the proxies `proxy` laid as `frame`).
+kernel render.glass@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    input glass: Grid<Surface>;
+    input surface: Grid<Vec4>;
+    input lens: Lenses;
+    input sky: SkyLooks;
+    input cache: Volume<Vec4>;
+    input rframe: Proxies;
+    input proxy: Volume<Vec4>;
+    input frame: Proxies;
+    input lamps: Lamps;
+    param near: Float = 0.05;
+    param far: Float = 2000.0;
+    param tint: Vec3 = vec3(0.90, 0.95, 0.93);
+    param rough: Float = 0.02;
+    param smudge: Float = 0.3;
+    /// How far (pixels, a slope of one) what lies behind is moved: 0 for a thin pane.
+    param refraction: Float = 0.0;
+    /// How far (meters) the mirror ray is followed on the screen, and in the cache past it.
+    param screen_reach: Float = 12.0;
+    param reach: Float = 14.0;
+    param steps: Int = 12;
+    output result: Image;
+    compute {
+        let c = sample(hdr);
+        let gs = sample(glass);
+        if gs.id < 0 || gs.depth >= 1.0 { return c; }
+        let l = at(lens, 0);
+        let q = coord();
+        let ext = domain();
+        let dir = ray(l, q, ext);
+        let dist = lens_distance(l, dir, gs.depth, near, far);
+        if dist >= sample(surface).w - 0.005 { return c; }
+        let nn = normalize(gs.normal);
+        let n = if dot(nn, dir) > 0.0 { nn * -1.0 } else { nn };
+        let p = l.eye + dir * dist;
+        let v = vec3(0.0, 0.0, 0.0) - dir;
+        let r = reflect(dir, n);
+        let ro = saturate(rough + smudge * 0.2 * saturate(fbm3(p * vec3(6.0, 9.0, 6.0), 4, 51) * 0.7 + 0.3));
+        // What lies behind, bent along the glass's slope across the view.
+        let bend = vec2(dot(n, l.right), 0.0 - dot(n, l.up)) * refraction;
+        let behind = if refraction > 0.0 { at_linear(hdr, clamp(q + bend, vec2(0.0, 0.0), ext - 1.0) + 0.5).xyz } else { c.xyz };
+        // What it mirrors: the screen first, the cache past it, the sky past that.
+        let jitter = fract(52.9829189 * fract(dot(q, vec2(0.06711056, 0.00583715))));
+        let hit = screen_march(surface, l, size(surface), p + n * 0.01, r, screen_reach, 24, 0.5, jitter);
+        let edge = if hit.z >= 0.0 { saturate(min(min(hit.x, ext.x - 1.0 - hit.x), min(hit.y, ext.y - 1.0 - hit.y)) / (ext.y * 0.08)) } else { 0.0 };
+        let pv = proxy_levels(frame);
+        let rv = proxy_levels(rframe);
+        let met = radiance_cone(cache, rv, proxy, pv, p + n * 0.03, r, 0.02 + ro, pv.rows[0].cell, reach, steps);
+        let s = at(sky, 0);
+        let far_seen = met.xyz + sky_radiance(r, s, false) * (1.0 - saturate(met.w));
+        let screen_seen = if hit.z >= 0.0 { at(hdr, hit.xy).xyz } else { vec3(0.0, 0.0, 0.0) };
+        let env = mix(far_seen, screen_seen, edge * (1.0 - ro));
+        let f = schlick(vec3(0.04, 0.04, 0.04), dot(n, v)).x;
+        let m = Pbr { albedo: vec3(0.0, 0.0, 0.0), rough: ro, metal: 0.0, glow: vec3(0.0, 0.0, 0.0), ior: 1.5, clearcoat: 0.0, coat_rough: 0.05, sheen: 0.0,
+            subsurface: 0.0, anisotropy: 0.0, transmission: 0.0 };
+        let lit = loop 16 with h = glossy_by(m, n, v, normalize(s.sun), s.sun_color) until index() >= min(count(lamps), 16) {
+            let lamp = at(lamps, index());
+            h + glossy_by(m, n, v, normalize(lamp.at - p), lamp_irradiance(lamp, p))
+        };
+        let out = behind * tint * (1.0 - f) + env * f + lit;
+        return vec4(out.x, out.y, out.z, c.w);
+    }
+}

@@ -66,6 +66,11 @@ use "render.entpkg";
 - `kernels/fog.ent` — Height fog the sun and the lamps light, their beams
   cut into shafts by what stands in them and by the clouds. Kernels:
   `render.fog_march@1`, `render.fog_blur@1`, `render.fog_apply@1`.
+- `kernels/glass.ent` — Glass laid over a renderer's picture: any mesh
+  drawn apart, the nearest pane where nearer than the G-buffer, what lies
+  behind bent and tinted, what it mirrors from the screen, the bounce's
+  cache and the sky, and its highlights. Kernels:
+  `render.glass_corners@1`, `render.glass@1`.
 - `kernels/haze.ent` — Haze: aerial perspective after the real atmosphere.
   Kernels: `render.haze@1`.
 - `kernels/lamp_map.ent` — Lamps' shadow maps: a cube of distances for
@@ -178,6 +183,8 @@ use "render.entpkg";
   things' shapes and places (`kernels/field.ent`), in three levels, each
   coarser and wider than the one before.
 - `graphs/field_level.esn` — One level of `field.esn`.
+- `graphs/glass.esn` — Glass over a renderer's picture
+  (`kernels/glass.ent`), its mesh cut at the near plane and drawn apart.
 - `graphs/lamp_maps.esn` — The lamps' shadow maps (`kernels/lamp_map.ent`),
   drawn once while lamps and things keep still.
 - `graphs/lamps.esn` — The lamps added to a renderer's picture, for one
@@ -212,7 +219,7 @@ use "render.entpkg";
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`bounce.replay`, `cluster.replay`, `field.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `reflection.replay`, `shadow.replay`,
+`bounce.replay`, `cluster.replay`, `field.replay`, `glass.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `reflection.replay`, `shadow.replay`,
 `sky.replay`, `temporal.replay`.
 Every Kernel of the package is reached by one of them.
 
@@ -459,6 +466,18 @@ layer with the absorption along the way. A renderer lights that point
 (`behind_radiance` in `kernels/transmission.ent`, its diffuse light from the
 renderer's own means), blurs it by the glass's roughness (`frosted`) and adds
 what Fresnel lets through (`transmitted`) under the surface's reflection.
+
+### Glass
+
+A G-buffer holds one surface a pixel, so a renderer sees nothing through
+glass. Glass is drawn apart (`graphs/glass.esn`): its own mesh rasterized
+over the picture once the picture is lit, the nearest pane laid where it
+is nearer than the G-buffer's surface, Fresnel's share of what it mirrors
+(the screen where the mirror ray meets what it shows, the bounce's cache
+past the screen, the sky past that) over the rest of what lies behind it,
+moved along the glass's slope by `refraction` for a thick glass. Panes
+behind panes show the nearest only; light through a pane is the
+renderer's own (the sun and the lamps pass glass).
 
 ### Shading
 
