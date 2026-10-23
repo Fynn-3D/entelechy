@@ -43,7 +43,9 @@ fn proxy_levels_at(vol: Volume<Vec4>, v: ProxyLevels, p: Vec3, k: Int) -> Vec4 {
 /// The light a cone from `o` along `dir` meets in the cache (`radiance`, laid as levels `rv` are; the proxy's levels `pv`),
 /// its radius growing `spread` meters a meter: each step read in the first level whose cells are as wide as the cone there,
 /// shut by how near the proxy's things are against the cone's width, what the cache holds there laid behind what is nearer
-/// (rgb), and how much the cone is shut in all (w), from `start` out to `far` in at most `steps`.
+/// (rgb), and how much the cone is shut in all (w), from `start` out to `far` in at most `steps`. Light is taken only from
+/// a surface that faces back along the cone (the proxy's slope there), so what a thin wall's far side holds, or the
+/// surface the cone leaves from, is not taken for light coming toward `o`.
 fn radiance_cone(radiance: Volume<Vec4>, rv: ProxyLevels, proxy: Volume<Vec4>, pv: ProxyLevels, o: Vec3, dir: Vec3, spread: Float, start: Float, far: Float, steps: Int) -> Vec4 {
     let fine = pv.rows[0].cell;
     let r = loop steps with a = [vec4(0.0, 0.0, 0.0, 0.0), vec4(start, 0.0, 0.0, 0.0)] {
@@ -56,7 +58,14 @@ fn radiance_cone(radiance: Volume<Vec4>, rv: ProxyLevels, proxy: Volume<Vec4>, p
         let d = proxy_levels_at(proxy, pv, p, k).x;
         let shut = saturate(1.0 - d / w);
         let held = if k < rv.n { proxy_levels_at(radiance, rv, p, k) } else { vec4(0.0, 0.0, 0.0, 0.0) };
-        let light = held.xyz / max(held.w, 0.05) * saturate(held.w * 4.0);
+        let lit = held.w > 0.001 && shut > 0.0;
+        let e = pv.rows[k].cell;
+        let facing = if lit {
+            let slope = vec3(proxy_levels_at(proxy, pv, p + vec3(e, 0.0, 0.0), k).x - d, proxy_levels_at(proxy, pv, p + vec3(0.0, e, 0.0), k).x - d,
+                proxy_levels_at(proxy, pv, p + vec3(0.0, 0.0, e), k).x - d);
+            saturate(0.5 - dot(slope, dir) / max(length(slope), 0.000001))
+        } else { 0.0 };
+        let light = held.xyz / max(held.w, 0.05) * (saturate(held.w * 4.0) * facing);
         let left = 1.0 - a[0].w;
         [vec4(a[0].xyz + light * (left * shut), a[0].w + left * shut), vec4(t + max(max(d * 0.8, w * 0.7), fine * 0.5), 0.0, 0.0, 0.0)]
     };
@@ -117,7 +126,9 @@ kernel render.radiance_turn@1 {
 /// of a surface the light leaving it (rgb, w 1), the rest none; one in `parts` lit anew each frame (by `turn`), the others
 /// kept from `previous` (laid as `previous_frame` says) where they lie; at rest (`turn`'s w), `previous` as it is. The light: the surface's color times the sun through
 /// the proxies (`sun_steps` steps), the lamps (each walked toward in full), the sky open over it (`Surround`, `Openness` as lit's), and `bounce` times what four
-/// cones gather from the last frame's cache, so light bounces once more each time a cell is lit.
+/// cones gather from the last frame's cache, so light bounces once more each time a cell is lit; the cones turned anew
+/// each time, and a cell lit again `blend` of the way from what it held to what it gathers now while the light it is lit by
+/// keeps still (`turn`'s y), so the few cones' guesses average out rather than lying in blotches.
 kernel render.radiance@1 {
     requires { field.read; field.write; }
     input previous: Volume<Vec4>;
@@ -144,6 +155,7 @@ kernel render.radiance@1 {
     param open_reach: Vec3 = vec3(0.4, 1.2, 2.5);
     param open_strength: Float = 1.6;
     param open_least: Float = 0.1;
+    param blend: Float = 0.25;
     output result: Volume<Vec4>;
     compute {
         let c = coord();
@@ -173,14 +185,17 @@ kernel render.radiance@1 {
         let b = cross(n, t);
         let pv = proxy_levels(frame);
         let was = proxy_levels(previous_frame);
+        let spin = fract(float(at(turn, 0) / max(parts, 1)) * 0.618034) * 6.2831853;
         let gathered = loop 4 with g = vec3(0.0, 0.0, 0.0) {
-            let a = float(index()) * 1.5707963 + 0.7853982;
+            let a = float(index()) * 1.5707963 + spin;
             let dir = normalize(n + (t * cos(a) + b * sin(a)) * 0.9);
             g + radiance_cone(previous, was, proxy, pv, on, dir, spread, fr.cell * 1.5, reach, cone_steps).xyz * 0.25
         };
         let lamped = lamps_on_surface(lamps, albedo, on, n, proxy, land, frame, fract(float(ci.x * 7 + ci.y * 13 + ci.z * 29) * 0.618034));
         let light = albedo * (s.sun_color * (ndl * lit / 3.14159265) + hemisphere(n, s, look) * open + gathered * bounce) + lamped;
-        return vec4(light.x, light.y, light.z, 1.0);
+        let still = at(turn, 1) > 1 && old.w > 0.5;
+        let kept = if still { mix(old.xyz, light, blend) } else { light };
+        return vec4(kept.x, kept.y, kept.z, 1.0);
     }
 }
 
@@ -188,6 +203,8 @@ kernel render.radiance@1 {
 /// cones about the normal of the surface a cell's middle pixel shows (one along it, four leaning out) gather what the cache
 /// holds (`radiance_cone`), the cosine's share each (rgb), and its distance (w; the sky's for none); and `mirror`, one cone
 /// along its mirror direction, as wide as its roughness makes it (rgb), and how much of it the cache's things shut (w).
+/// Each cell's cones set off a little nearer or farther (interleaved gradient noise), so neighbors' steps do not land on
+/// the same distances and draw the proxy's level sets as rings; `render.bounce` averages them out.
 kernel render.bounce_gather@1 {
     requires { field.read; field.write; }
     input surface: Grid<Vec4>;
@@ -215,7 +232,8 @@ kernel render.bounce_gather@1 {
         let rv = proxy_levels(rframe);
         let t = normalize(if abs(n.y) < 0.9 { cross(n, vec3(0.0, 1.0, 0.0)) } else { cross(n, vec3(1.0, 0.0, 0.0)) });
         let b = cross(n, t);
-        let start = pv.rows[0].cell * 1.5;
+        let jitter = fract(52.9829189 * fract(0.06711056 * coord().x + 0.00583715 * coord().y));
+        let start = pv.rows[0].cell * (1.0 + jitter);
         let along = radiance_cone(radiance, rv, proxy, pv, p, n, spread, start, reach, steps).xyz * 0.28;
         let gathered = loop 4 with g = along {
             let a = float(index()) * 1.5707963;
@@ -230,7 +248,7 @@ kernel render.bounce_gather@1 {
 }
 
 /// The gathered bounce (`render.bounce_gather`, `every` pixels a cell) laid over a renderer's picture `hdr`: each pixel takes
-/// the four cells round it, each by how near and how alike in distance it is, times the surface's diffuse color, its baked
+/// the sixteen cells round it, each by how near (a tent two cells wide) and how alike in distance it is, times the surface's diffuse color, its baked
 /// occlusion and `strength`, through the air as the rest; and the things its mirror cone met (`mirror`) in place of the
 /// renderer's reflection from all round (`reflection`), as much as they shut it, by the standard share the surface
 /// reflects (`env_reflectance`). `reflection` comes out as it now shows, for reflections on the screen to take the place of.
@@ -258,14 +276,14 @@ kernel render.bounce@1 {
         let su = sample(surface);
         if su.w > no_hit() * 0.5 || strength <= 0.0 { return { result: picture, reflected: before }; }
         let g = (q + 0.5) / float(every) - 0.5;
-        let base = floor(g);
-        let f = g - base;
+        let base = floor(g) - 1.0;
         let top = size(gathered) - 1.0;
-        let sum = loop 4 with acc = [vec4(0.0, 0.0, 0.0, 0.0), vec4(0.0, 0.0, 0.0, 0.0)] {
-            let o = vec2(float(index() % 2), float(index() / 2));
+        let sum = loop 16 with acc = [vec4(0.0, 0.0, 0.0, 0.0), vec4(0.0, 0.0, 0.0, 0.0)] {
+            let o = vec2(float(index() % 4), float(index() / 4));
             let cell = clamp(base + o, vec2(0.0, 0.0), top);
             let c = at(gathered, cell);
-            let near = (if o.x > 0.5 { f.x } else { 1.0 - f.x }) * (if o.y > 0.5 { f.y } else { 1.0 - f.y });
+            let off = abs(g - (base + o)) * 0.5;
+            let near = max(1.0 - off.x, 0.0) * max(1.0 - off.y, 0.0);
             let alike = exp(0.0 - abs(c.w - su.w) / (su.w * 0.03 + 0.05));
             let w = near * alike + 0.0001;
             [vec4(acc[0].xyz + c.xyz * w, acc[0].w + w), acc[1] + at(mirror, cell) * w]

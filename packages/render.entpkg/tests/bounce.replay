@@ -26,6 +26,6 @@ expect greener.result[0].x = 0 0.0001
 # A gold ball's lower half, its mirror cone meeting the red balls before
 # it: its reflection from all round takes their warm light in place of
 # the dark it had; the sky's is as it was.
-expect remirrored.result[0].x > 0.12
+expect remirrored.result[0].x > 0.05
 expect remirrored.result[0].z < 0.05
 expect remirrored.result[1] = 0 0 0 0

@@ -102,8 +102,11 @@ use "render.entpkg";
   toward in full, `lamps_on_surface`, so a chair darkens the floor its
   bounce lights too), the sky they leave open and the light the cache
   gathers from itself, so it bounces again frame after frame, a share lit
-  anew each frame until it rests; each pixel's bounced light gathered
-  through cones read in the levels as wide as they are. Kernels:
+  anew each frame until it rests, its cones turned each time and averaged
+  in; each pixel's bounced light gathered through cones read in the levels
+  as wide as they are, light taken only from surfaces facing back along a
+  cone (so a thin wall's far side does not leak through), the cones set
+  off at jittered distances and averaged over sixteen cells. Kernels:
   `render.radiance_frame@1`, `render.radiance_size@1`,
   `render.radiance_turn@1`, `render.radiance@1`,
   `render.bounce_gather@1`, `render.bounce@1`.
