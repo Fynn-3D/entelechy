@@ -2,9 +2,9 @@
 // no probes and tracing nothing on the screen, its interface as `graphs/probes.esn`'s and `graphs/path_trace.esn`'s. The sun lights it,
 // with shadows (`extra`'s x); the diffuse light in shade is a half of sky and a half of ground (up-facing takes zenith to
 // horizon, down-facing the warm light the sunlit ground throws back), times the baked occlusion, times the sky the coarse scene hides
-// (three distances taken up along the normal); a reflection takes the sky in its direction (the ground's light, looking down). Two ways of drawing:
-// standard real-time lighting (`lit_by`, `ambient_by`), or light and shade as a painting has them
-// (`toon`).
+// (three distances taken up along the normal; deep inside the coarse shape, a leaf in its crown, a share of its own instead); a
+// reflection takes the sky in its direction (the ground's light, looking down). Two ways of drawing: standard real-time
+// lighting (`lit_by`, `ambient_by`), or light and shade as a painting has them (`toon`).
 use "brdf.ent";
 use "camera.ent";
 use "probes.ent";
@@ -56,6 +56,10 @@ kernel render.daylight@1 {
     input frame: Proxies;
     param painted: Int = 0;
     param bounce: Int = 1;
+    /// The share of the light all round a surface deep inside the coarse
+    /// shape (a leaf in its crown) keeps, times its baked occlusion, in place of
+    /// what the coarse scene hides.
+    param inside_sky: Float = 0.8;
     output result: Image;
     /// The share of `result` that scatters under subsurface surfaces (`graphs/subsurface.esn` spreads it); 0 elsewhere and when painted.
     output scatter: Image;
@@ -71,7 +75,14 @@ kernel render.daylight@1 {
         let m = pbr_of(sample(paint), ex, sample(layers), sample(more));
         let v = vec3(0.0, 0.0, 0.0) - dir;
         let on = if bounce != 0 { 1.0 } else { 0.0 };
-        let ao = if bounce != 0 { baked_occlusion(ex) * proxy_open(proxy, at(frame, 0), l.eye + dir * su.w + n * 0.05, n) } else { 0.0 };
+        // Deep inside the coarse shape (a leaf in its crown, more than half a
+        // cell in) the coarse scene says nothing of the sky seen through it:
+        // the baked occlusion does.
+        let fr = at(frame, 0);
+        let at_p = l.eye + dir * su.w + n * 0.05;
+        let deep = saturate((0.0 - proxy_at(proxy, fr, at_p, 1.0).x) / fr.cell - 0.5);
+        let open = mix(proxy_open(proxy, fr, at_p, n), inside_sky, deep);
+        let ao = if bounce != 0 { baked_occlusion(ex) * open } else { 0.0 };
         let e = hemisphere(n, s) * ao;
         let spec_light = mix(seen_along(reflect(dir, n), s), e, sqrt(m.rough)) * ao * on;
         let shown = if painted == 0 { lit_by(m, n, v, s.sun, s.sun_color * ex.x) + ambient_by(m, n, v, e, spec_light, spec_light) }

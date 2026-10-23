@@ -1,7 +1,7 @@
 // The stand by the light renderer and through every step of a finish:
 // contact shadows laid into the sun's visibility; daylight lit as it is
 // and as a painting has it; the workbench's view; aerial perspective and
-// painted edges; one renderer chosen by number at its extent, the rest
+// painted edges; daylight deep inside the coarse shape; one renderer chosen by number at its extent, the rest
 // kept small; a film's look; depth of field focused on the middle; and
 // the stand's G-buffer merged with itself, nearer surface by surface.
 node stand: graph "stand_scene.esn" { }
@@ -11,6 +11,19 @@ node lit: render.daylight@1 { surface <- stand.surface; paint <- stand.paint; ex
 node painted: render.daylight@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
     sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; painted = 1; domain = window(); }
 node bench: graph "../graphs/workbench.esn" { lens <- stand.lens; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; }
+// Daylight with every point deep inside the coarse shape (as a leaf in its
+// crown): the light all round kept by `inside_sky` and the baked occlusion.
+node deep: kernel {
+    requires { field.read; field.write; }
+    input proxy: Volume<Vec4> <- stand.proxy;
+    output result: Volume<Vec4>;
+    domain = size(proxy);
+    compute { let p = sample(proxy); return vec4(p.x - 100.0, p.y, p.z, p.w); }
+}
+node lit_deep: render.daylight@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
+    sky <- stand.sky; lens <- stand.lens; proxy <- deep.result; frame <- stand.frame; domain = window(); }
+node lit_dark: render.daylight@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
+    sky <- stand.sky; lens <- stand.lens; proxy <- deep.result; frame <- stand.frame; inside_sky = 0.0; domain = window(); }
 node aired: render.air@1 { hdr <- lit.result; surface <- stand.surface; lens <- stand.lens; sky <- stand.sky; on = 1; }
 node inked: render.npr@1 { image <- painted.result; surface <- stand.surface; }
 

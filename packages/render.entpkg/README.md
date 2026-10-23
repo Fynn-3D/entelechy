@@ -182,6 +182,17 @@ one while the camera moves, and a full one, computed once, when it stops
 `render.view` turn it into the picture (`graphs/bloom.esn`'s glow in place
 of `render.bright` and `render.spread` for round glows with long tails).
 
+### Choosing a renderer
+
+Daylight lights each pixel in one pass by itself and the coarse scene: the
+lightest renderer, and the one for a scene in daylight whose look comes
+from its sun, sky and shadows. The light probes and the path tracer add
+light bounced between things, many passes a frame, worth their cost where
+bounced light shows (indoors, at night, under lamps). The switch
+(`kernels/switch.ent`) draws a renderer not chosen at a small piece, but
+still runs each of its passes every frame: a scene that ships one renderer
+places that one alone.
+
 ### Before a renderer
 
 Passes over the G-buffer a scene hands over, each giving the same layout
