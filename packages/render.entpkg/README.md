@@ -48,8 +48,8 @@ use "render.entpkg";
 - `kernels/fog.ent` — Height fog the sun and the lamps light, their beams
   cut into shafts. Kernels: `render.fog_march@1`, `render.fog_blur@1`,
   `render.fog_apply@1`.
-- `kernels/lamps.ent` — Point lights and spotlights, culled by tiles,
-  shadowed through the proxies and on the screen. Kernels:
+- `kernels/lamps.ent` — Point lights, spotlights and glowing panels,
+  culled by tiles, shadowed through the proxies and on the screen. Kernels:
   `render.lamps_none@1`, `render.lamps_depth@1`, `render.lamps_tiles@1`,
   `render.lamps_light@1`, `render.lamps_shade@1`.
 - `kernels/merge.ent` — Two G-buffers of one view made one. Kernels:
@@ -149,7 +149,7 @@ this contract takes any renderer package by changing a few graph lines.
 | `proxy` | `Volume<Vec4>` | Coarse scene for secondary rays: signed distance (x), albedo (yzw), on the `Proxy` frame's lattice. Ground excluded. |
 | `land` | `Grid<Float>` | Ground height on the `Proxy` frame's ground lattice. |
 | `frame` | `Proxies` | Where `proxy` and `land` lie in the world, and the ground's albedo. |
-| `lamps` | `Lamps` | The lamps beside the sun, at most 128: each where it is, its reach, intensity, bulb size, a spotlight's aim and beam, whether it casts shadows (`point_lamp`, `spot_lamp`). A scene with none hands over `render.lamps_none`. |
+| `lamps` | `Lamps` | The lamps beside the sun, at most 128: each where it is, its reach, intensity, bulb size, a spotlight's aim and beam, a panel's half width and height, whether it casts shadows (`point_lamp`, `spot_lamp`, `panel_lamp`). A scene with none hands over `render.lamps_none`. |
 
 The G-buffer is the scene's own full-precision view; `proxy` and `land` are
 what a renderer traces shadows and bounces through.
@@ -171,7 +171,10 @@ What every renderer shares, in this order:
 - **Lamps.** `render.lamps_depth` and `render.lamps_tiles` keep, for each
   tile of 16 × 16 pixels, the lamps whose reach meets what it shows;
   `render.lamps_light` lights each pixel by those alone (walking the
-  tile's bits), with `lit_by`, a larger bulb widening the highlight, each
+  tile's bits), with `lit_by`, a larger bulb widening the highlight; a
+  panel's diffuse light exactly (Lambert's formula for a polygon), its
+  highlight from its representative point (Karis's) with `glossy_by`, the
+  energy kept as the panel widens it; each
   lamp that casts shadows shadowed through the proxies and, within
   `contact` meters, on the screen. The probes renderer and the path tracer
   take that light in: what they show, reflect and gather on the screen;
@@ -208,7 +211,9 @@ What every renderer shares, in this order:
   sun, and the exposure carries it from noon to night.
 - **Exposure** (`graphs/exposure.esn`). `render.exposure_tiles` and
   `render.exposure_meter` (a `<~` state from `render.exposure_start`)
-  meter the picture's mean log luminance and follow it as an eye adapts,
+  meter the picture's mean log luminance, its darkest and brightest
+  shares left out (`ignore_dark`, `ignore_bright`: a few lamps or a black
+  sky do not move it), and follow it as an eye adapts,
   quicker toward a brighter scene, a dark scene shown darker
   (`night_key`); `render.exposure_apply` scales `hdr` by it before the
   glow and tone. Local exposure then takes each pixel apart into its
@@ -237,7 +242,9 @@ metallic-roughness model (the glTF, Unreal and Principled BSDF convention):
 a base of Lambert diffuse (with subsurface wrap and translucency) and GGX
 specular (optionally anisotropic; Smith geometry, Schlick Fresnel with F0 from
 the index of refraction), a Charlie sheen lobe, and a clearcoat on top.
-`pbr` makes a plain surface, `lit_by` is one light, `ambient_by` the
+`pbr` makes a plain surface, `lit_by` is one light (`glossy_by` its
+specular part alone, for an area light whose diffuse share is found
+exactly), `ambient_by` the
 environment (split-sum, Karis' analytic fit; base and clearcoat reflections
 given apart), `ggx_sample` and `ggx_weight` a path tracer's glossy bounce,
 `pbr_of` a G-buffer pixel's `Pbr`. Transmission is carried for renderers that

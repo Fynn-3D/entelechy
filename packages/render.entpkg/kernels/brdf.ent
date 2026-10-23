@@ -93,6 +93,26 @@ fn lit_by(m: Pbr, n: Vec3, v: Vec3, l: Vec3, light: Vec3) -> Vec3 {
     let coat = fc * ggx_d(nh, pbr_alpha(m.coat_rough)) * smith_g(nl, nv, m.coat_rough) / (4.0 * nl * nv) * nl;
     return (base * (1.0 - fc) + vec3(coat, coat, coat)) * light;
 }
+/// The specular part alone of `lit_by` (the base's GGX lobe and the
+/// clearcoat's), for a light whose diffuse share is found apart (an area
+/// light's, exactly): a surface of normal `n` seen from `v`, the light from
+/// `l`, its irradiance `light`.
+fn glossy_by(m: Pbr, n: Vec3, v: Vec3, l: Vec3, light: Vec3) -> Vec3 {
+    let nl = dot(n, l);
+    if nl <= 0.0 { return vec3(0.0, 0.0, 0.0); }
+    let nv = max(dot(n, v), 0.001);
+    let h = normalize(v + l);
+    let nh = max(dot(n, h), 0.0);
+    let vh = max(dot(v, h), 0.0);
+    let f = schlick(pbr_f0(m), vh);
+    let a = pbr_alpha(m.rough);
+    let t = pbr_tangent(n);
+    let d = if m.anisotropy > 0.0 { ggx_d_aniso(h, n, t, cross(n, t), max(a * (1.0 + m.anisotropy), 0.001), max(a * (1.0 - m.anisotropy * 0.9), 0.001)) } else { ggx_d(nh, a) };
+    let spec = f * (d * smith_g(nl, nv, m.rough) / (4.0 * nl * nv)) * nl;
+    let fc = schlick(vec3(0.04, 0.04, 0.04), vh).x * m.clearcoat;
+    let coat = fc * ggx_d(nh, pbr_alpha(m.coat_rough)) * smith_g(nl, nv, m.coat_rough) / (4.0 * nl * nv) * nl;
+    return (spec * (1.0 - fc) + vec3(coat, coat, coat)) * light;
+}
 /// How much the environment's specular reflects in all (the split-sum BRDF term, Karis's analytic approximation).
 fn env_brdf(f0: Vec3, rough: Float, nv: Float) -> Vec3 {
     let r = rough * vec4(-1.0, -0.0275, -0.572, 0.022) + vec4(1.0, 0.0425, 1.04, -0.04);

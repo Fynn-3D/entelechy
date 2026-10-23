@@ -1,5 +1,6 @@
-// Lamps: lights of a scene's own beside the sun, point lights and
-// spotlights, each with a reach past which it gives nothing. A scene hands
+// Lamps: lights of a scene's own beside the sun, point lights, spotlights
+// and glowing panels (a screen, a window, a soft box), each with a reach
+// past which it gives nothing. A scene hands
 // its lamps over as rows (at most 128). The screen is cut into tiles of 16
 // by 16 pixels, and each tile keeps the lamps that can reach what it shows
 // (`render.lamps_depth`, `render.lamps_tiles`); a pixel adds those alone
@@ -16,18 +17,35 @@ use "contact_shadow.ent";
 /// infinite peak beside it), where a spotlight aims (`aim`) with the
 /// cosines of its full beam (`inner`) and its edge (`outer`; -1 for a point
 /// light that shines all round), and whether it casts shadows (1) or not (0).
-struct Lamp { at: Vec3; reach: Float; color: Vec3; size: Float; aim: Vec3; inner: Float; outer: Float; shadow: Int; }
+/// A panel has half its width along `side` and half its height along `rise`
+/// (both zero for a point light or a spotlight), shines from the face `aim`
+/// points out of, and its `color` is its radiance: what the eye sees of it.
+struct Lamp { at: Vec3; reach: Float; color: Vec3; size: Float; aim: Vec3; inner: Float; outer: Float; shadow: Int; side: Vec3; rise: Vec3; }
 type Lamps = Rows<Lamp>;
 
 /// A point light at `at` reaching `reach` meters, of intensity `color`.
 fn point_lamp(at: Vec3, reach: Float, color: Vec3, size: Float, shadow: Int) -> Lamp {
-    return Lamp { at: at, reach: reach, color: color, size: size, aim: vec3(0.0, -1.0, 0.0), inner: -1.0, outer: -1.0, shadow: shadow };
+    return Lamp { at: at, reach: reach, color: color, size: size, aim: vec3(0.0, -1.0, 0.0), inner: -1.0, outer: -1.0, shadow: shadow,
+        side: vec3(0.0, 0.0, 0.0), rise: vec3(0.0, 0.0, 0.0) };
 }
 /// A spotlight at `at` aimed at `toward`, its beam `beam` radians across at
 /// full strength, fading to nothing over `soft` radians more.
 fn spot_lamp(at: Vec3, toward: Vec3, reach: Float, color: Vec3, size: Float, beam: Float, soft: Float, shadow: Int) -> Lamp {
-    return Lamp { at: at, reach: reach, color: color, size: size, aim: normalize(toward - at), inner: cos(beam * 0.5), outer: cos(beam * 0.5 + soft), shadow: shadow };
+    return Lamp { at: at, reach: reach, color: color, size: size, aim: normalize(toward - at), inner: cos(beam * 0.5), outer: cos(beam * 0.5 + soft), shadow: shadow,
+        side: vec3(0.0, 0.0, 0.0), rise: vec3(0.0, 0.0, 0.0) };
 }
+/// A glowing panel centered at `at`, `width` by `height` meters, facing
+/// `facing` with its width along `across` (made square to `facing`), of
+/// radiance `color`, reaching `reach` meters.
+fn panel_lamp(at: Vec3, facing: Vec3, across: Vec3, width: Float, height: Float, reach: Float, color: Vec3, shadow: Int) -> Lamp {
+    let aim = normalize(facing);
+    let side = normalize(across - aim * dot(across, aim));
+    let rise = cross(aim, side);
+    return Lamp { at: at, reach: reach, color: color, size: 0.5 * sqrt(width * width + height * height), aim: aim, inner: -1.0, outer: -1.0, shadow: shadow,
+        side: side * (width * 0.5), rise: rise * (height * 0.5) };
+}
+/// Whether lamp `m` is a panel.
+fn lamp_is_panel(m: Lamp) -> Bool { return dot(m.side, m.side) > 0.0; }
 /// How many lamps a scene may hand over: the bits a tile keeps.
 fn lamps_most() -> Int { return 128; }
 /// A tile's side in pixels.
@@ -35,12 +53,72 @@ fn lamp_tile() -> Float { return 16.0; }
 
 /// How much of lamp `m` reaches a point `d` from it (`d` from the lamp to
 /// the point) before distance: its reach's window, smooth to nothing at the
-/// reach, times a spotlight's beam.
+/// reach, times a spotlight's beam; for a panel, times its area as seen from
+/// the point (a panel seen from afar is a point light of that intensity).
 fn lamp_beam(m: Lamp, d: Vec3) -> Float {
     let x = dot(d, d) / max(m.reach * m.reach, 0.0001);
     let window = saturate(1.0 - x * x);
-    let spot = if m.outer > -1.0 { smoothstep(m.outer, m.inner, dot(normalize(d), m.aim)) } else { 1.0 };
+    let spot = if lamp_is_panel(m) { 4.0 * length(m.side) * length(m.rise) * max(dot(normalize(d), m.aim), 0.0) }
+        else if m.outer > -1.0 { smoothstep(m.outer, m.inner, dot(normalize(d), m.aim)) } else { 1.0 };
     return window * window * spot;
+}
+
+/// The irradiance a panel of radiance 1 gives a surface at `p` facing `n`,
+/// exactly (Lambert's formula for a polygon: the edges' angles as seen from
+/// `p`, each along its plane's normal), 0 behind the panel.
+fn panel_irradiance(m: Lamp, p: Vec3, n: Vec3) -> Float {
+    if dot(p - m.at, m.aim) <= 0.0 { return 0.0; }
+    let c0 = normalize(m.at - m.side - m.rise - p);
+    let c1 = normalize(m.at + m.side - m.rise - p);
+    let c2 = normalize(m.at + m.side + m.rise - p);
+    let c3 = normalize(m.at - m.side + m.rise - p);
+    let f = panel_edge(c0, c1) + panel_edge(c1, c2) + panel_edge(c2, c3) + panel_edge(c3, c0);
+    // The edges' turn decides the sign: the sum points toward the panel.
+    let toward = if dot(f, m.at - p) < 0.0 { vec3(0.0, 0.0, 0.0) - f } else { f };
+    return max(dot(n, toward), 0.0) * 0.5;
+}
+/// One edge's share of a polygon's form factor, from `a` to `b` (unit
+/// vectors from the point lit to the corners).
+fn panel_edge(a: Vec3, b: Vec3) -> Vec3 {
+    let c = cross(a, b);
+    let l = length(c);
+    return if l < 0.000001 { vec3(0.0, 0.0, 0.0) } else { c * (acos(clamp(dot(a, b), -1.0, 1.0)) / l) };
+}
+/// The point of the panel a mirror ray from `p` along `r` meets, held to
+/// the panel's edges (the representative point of its highlight, Karis's).
+fn panel_point(m: Lamp, p: Vec3, r: Vec3) -> Vec3 {
+    let across = dot(r, m.aim);
+    let t = if across < -0.0001 { dot(m.at - p, m.aim) / across } else { -1.0 };
+    let q = if t > 0.0 { p + r * t } else { m.at };
+    let w = length(m.side);
+    let h = length(m.rise);
+    let su = clamp(dot(q - m.at, m.side / w), 0.0 - w, w);
+    let sr = clamp(dot(q - m.at, m.rise / h), 0.0 - h, h);
+    return m.at + m.side * (su / w) + m.rise * (sr / h);
+}
+/// The light a panel gives a surface of material `m` at `p` facing `n`, seen
+/// from `v` (before shadows): diffuse exactly from its irradiance, specular
+/// from its representative point, the highlight's energy kept as the panel
+/// widens it.
+fn panel_light(lamp: Lamp, m: Pbr, p: Vec3, n: Vec3, v: Vec3) -> Vec3 {
+    let d = p - lamp.at;
+    let x = dot(d, d) / max(lamp.reach * lamp.reach, 0.0001);
+    let window = saturate(1.0 - x * x);
+    let window2 = window * window;
+    if window2 <= 0.0 { return vec3(0.0, 0.0, 0.0); }
+    let e = panel_irradiance(lamp, p, n);
+    let kd = (1.0 - m.metal) * (1.0 - m.transmission);
+    let diffuse = m.albedo * (kd / 3.14159265) * e;
+    let pc = panel_point(lamp, p, reflect(vec3(0.0, 0.0, 0.0) - v, n));
+    let to = pc - p;
+    let dist = max(length(to), 0.01);
+    let l = to / dist;
+    let area = 4.0 * length(lamp.side) * length(lamp.rise);
+    let seen = area * max(dot(vec3(0.0, 0.0, 0.0) - l, lamp.aim), 0.0) / (dist * dist);
+    let a = pbr_alpha(m.rough);
+    let wide = saturate(a + sqrt(area / 3.14159265) / (2.0 * dist));
+    let spec = glossy_by(m, n, v, l, vec3(1.0, 1.0, 1.0)) * (min(seen, 6.28) * (a / wide) * (a / wide));
+    return lamp.color * (diffuse + spec) * window2;
 }
 /// The irradiance lamp `m` gives a point `p` facing it (before shadows): the
 /// inverse square from the bulb, softened by its size.
@@ -140,7 +218,8 @@ fn lamps_at(lamps: Lamps, bits: IVec4, m: Pbr, p: Vec3, n: Vec3, v: Vec3, t: Flo
                     let near = if dist < contact { 1.0 - contact_shadow(surface, l, size(surface), p, n, to, t, 8, 0.5) } else { 1.0 };
                     far * near
                 };
-                LampWalk { left: left, light: w.light + lit_by(Pbr { ..m, rough: max(m.rough, widened) }, n, v, to, light * shade) }
+                let given = if lamp_is_panel(lamp) { panel_light(lamp, m, p, n, v) } else { lit_by(Pbr { ..m, rough: max(m.rough, widened) }, n, v, to, light) };
+                LampWalk { left: left, light: w.light + given * shade }
             }
         }
     };

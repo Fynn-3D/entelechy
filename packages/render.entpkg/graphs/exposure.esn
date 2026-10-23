@@ -9,6 +9,9 @@ input hdr: Image;
 param key: Float = 0.18;
 param night_key: Float = 0.025;
 param bias: Float = 0.0;
+/// The darkest and brightest shares of the picture the meter leaves out.
+param ignore_dark: Float = 0.1;
+param ignore_bright: Float = 0.1;
 param adapt_up: Float = 0.6;
 param adapt_down: Float = 2.0;
 param highlights: Float = 1.0;
@@ -18,7 +21,8 @@ param detail: Float = 1.0;
 node tiles: render.exposure_tiles@1 { hdr <- hdr; domain = ceil(size(hdr) / 32); }
 node start: render.exposure_start@1 { domain = 1; }
 node meter: render.exposure_meter@1 { previous <~ meter.result from start.result; tiles <- tiles.result;
-    key = key; night_key = night_key; bias = bias; adapt_up = adapt_up; adapt_down = adapt_down; domain = 1; }
+    key = key; night_key = night_key; bias = bias; ignore_dark = ignore_dark; ignore_bright = ignore_bright;
+    adapt_up = adapt_up; adapt_down = adapt_down; domain = 1; }
 node exposed: render.exposure_apply@1 { hdr <- hdr; exposure <- meter.result; domain = size(hdr); }
 
 node base: render.exposure_local_base@1 { hdr <- hdr; domain = ceil(size(hdr) / 16); }

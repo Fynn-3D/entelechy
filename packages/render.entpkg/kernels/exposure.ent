@@ -1,9 +1,10 @@
 // Metered exposure, as an eye or a camera adapts: the picture's mean
-// brightness (the mean of log luminance, so a few lamps do not darken the
-// rest) is measured over tiles (`render.exposure_tiles`), an exposure
-// follows it over time, quicker toward a brighter scene than a darker one
-// (`render.exposure_meter`), and the HDR picture is scaled by it
-// (`render.exposure_apply`) before the glow and tone.
+// brightness (the mean of log luminance, its darkest and brightest shares
+// left out, so a few lamps do not darken the rest) is measured over tiles
+// (`render.exposure_tiles`), an exposure follows it over time, quicker
+// toward a brighter scene than a darker one (`render.exposure_meter`), and
+// the HDR picture is scaled by it (`render.exposure_apply`) before the glow
+// and tone; local exposure then evens bright and dark neighborhoods.
 
 /// A tile's side in pixels for metering.
 fn exposure_tile() -> Float { return 32.0; }
@@ -38,7 +39,29 @@ kernel render.exposure_tiles@1 {
 struct Exposure { factor: Float; set_at: Float; asked: Float; seen: Float; }
 type Exposures = Rows<Exposure>;
 
-/// The exposure following the picture: its tiles' weighted mean shown as
+/// The share of the tiles' weight darker than `x` (log2 luminance).
+fn exposure_below(tiles: Grid<Vec2>, x: Float) -> Float {
+    let n = count(tiles);
+    let w = int(size(tiles).x);
+    let sum = loop 16384 with s = vec2(0.0, 0.0) until index() >= n {
+        let t = at(tiles, vec2(float(index() % w), float(index() / w)));
+        vec2(s.x + if t.x < x { t.y } else { 0.0 }, s.y + t.y)
+    };
+    return sum.x / max(sum.y, 0.0001);
+}
+/// The brightness (log2) below which the share `share` of the tiles'
+/// weight lies, found by halving.
+fn exposure_percentile(tiles: Grid<Vec2>, share: Float) -> Float {
+    let r = loop 14 with r = vec2(-16.0, 16.0) {
+        let mid = (r.x + r.y) * 0.5;
+        if exposure_below(tiles, mid) < share { vec2(mid, r.y) } else { vec2(r.x, mid) }
+    };
+    return (r.x + r.y) * 0.5;
+}
+
+/// The exposure following the picture: its tiles' weighted mean, leaving out
+/// the darkest share `ignore_dark` and the brightest `ignore_bright` (a few
+/// lamps or a black sky do not move it), shown as
 /// `key` (the gray the mean becomes) — a dark scene, as an eye and a camera
 /// see it at night, as `night_key`, eased between from a mean of
 /// `day_from` (log2) down to `night_from` — within `darkest` and
@@ -54,6 +77,8 @@ kernel render.exposure_meter@1 {
     param day_from: Float = -2.0;
     param night_from: Float = -7.0;
     param bias: Float = 0.0;
+    param ignore_dark: Float = 0.1;
+    param ignore_bright: Float = 0.1;
     param darkest: Float = -4.0;
     param brightest: Float = 8.0;
     param adapt_up: Float = 0.6;
@@ -63,9 +88,12 @@ kernel render.exposure_meter@1 {
         let was = sample(previous);
         let n = count(tiles);
         let w = int(size(tiles).x);
+        let lo = exposure_percentile(tiles, ignore_dark);
+        let hi = exposure_percentile(tiles, 1.0 - ignore_bright);
         let mean = loop 16384 with m = vec2(0.0, 0.0) until index() >= n {
             let t = at(tiles, vec2(float(index() % w), float(index() / w)));
-            vec2(m.x + t.x * t.y, m.y + t.y)
+            let kept = t.x >= lo - 0.001 && t.x <= hi + 0.001;
+            if kept { vec2(m.x + t.x * t.y, m.y + t.y) } else { m }
         };
         let seen = mean.x / max(mean.y, 0.0001);
         let shown = mix(night_key, key, smoothstep(night_from, day_from, seen));
