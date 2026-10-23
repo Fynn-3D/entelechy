@@ -1,0 +1,15 @@
+scene stream_build.esn
+
+# The first chunk: the ground's quarter under it (16 by 16 cells, two faces
+# each) and its ball's 256 faces; the ball's faces its part.
+frame 0.0
+expect chunk.kept.total.result[0] = 768
+expect count chunk.chunk_faces.part = 768
+expect chunk.chunk_faces.part[0] = 0
+expect chunk.chunk_faces.part[767] = 1
+
+# The last chunk holds as many.
+param cell_x 1
+param cell_z 1
+frame 0.0
+expect chunk.kept.total.result[0] = 768

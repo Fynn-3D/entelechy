@@ -1,0 +1,41 @@
+//! One chunk of a world out of a mesh, for streaming (`kernels/stream.ent`): the faces whose middles fall in the cell
+//! `cell_x`, `cell_z` of the world's lattice (`side` meters a side from `lo` on x and z), their points renumbered among
+//! them, built as levels and cut into clusters with each point's group (`graphs/cluster_grouped.esn`, its level 0's cell
+//! `cell` meters, 0 for the chunk's mean edge: a chunk seen from afar is the same built with a wider cell), and each face's
+//! part (`face_parts`). Its outputs are the arrays a scene saves (`entelechy run --save`) and streams back by `fields`
+//! nodes, joined by `graphs/streamed.esn`.
+use "parallel.entpkg";
+use "raster.entpkg";
+use "../kernels/";
+
+input points: Rows<MeshPoint>;
+input faces: Rows<Face>;
+input groups: Rows<Int>;
+input face_parts: Rows<Int>;
+param lo: Vec2 = vec2(0.0, 0.0);
+param side: Float = 16.0;
+param cell_x: Int = 0;
+param cell_z: Int = 0;
+param cell: Float = 0.0;
+param group_bits: Int = 8;
+
+node flags: mesh.chunk_flags@1 { points <- points; faces <- faces; lo = lo; side = side; cell_x = cell_x; cell_z = cell_z; domain = count(faces); }
+node kept: graph "parallel.entpkg/graphs/compact.esn" { flags <- flags.result; }
+node unused: mesh.cluster_no_groups@1 { points <- points; }
+node used: mesh.chunk_point_flags@1 { faces <- faces; kept <- kept.indices; blank <- unused.result; domain = count(kept); }
+node ranks: parallel.compact_offsets@1 { flags <- used.result; }
+node kept_points: graph "parallel.entpkg/graphs/compact.esn" { flags <- used.result; }
+node chunk_points: mesh.chunk_points@1 { points <- points; groups <- groups; kept <- kept_points.indices; domain = max(value(count), 1); count <- kept_points.count; }
+node chunk_faces: mesh.chunk_faces@1 { faces <- faces; face_parts <- face_parts; kept <- kept.indices; renumbered <- ranks.result; domain = max(value(count), 1); count <- kept.count; }
+node built: graph "cluster_grouped.esn" { points <- chunk_points.result; faces <- chunk_faces.result; groups <- chunk_points.group; cell = cell; group_bits = group_bits; }
+
+output points <- built.points;
+output up <- built.up;
+output faces <- built.faces;
+output clusters <- built.clusters;
+output meshes <- built.meshes;
+output errors <- built.errors;
+output sources <- built.sources;
+output parts <- chunk_faces.part;
+/// How many faces the chunk holds (0: nothing to save).
+output count <- kept.count;

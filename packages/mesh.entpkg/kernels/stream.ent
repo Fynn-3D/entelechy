@@ -1,0 +1,183 @@
+// A world streamed in chunks: each chunk a clustered library of its own (`graphs/chunk.esn` builds one from a part of a
+// mesh), its arrays saved apart, read back by `fields` nodes in the order a scene names them, each array's chunks one
+// after another with their ranges (where each chunk's elements start, how many). `graphs/streamed.esn` joins them into
+// one library, each chunk's indices moved past the chunks before it in the array they point into (points, faces,
+// clusters, brick errors, and each chunk's own faces for `sources`), and says which chunks are in whole: a chunk with any
+// of its arrays still on its way is not drawn.
+use "raster.entpkg";
+use "lattice.ent";
+use "cluster.ent";
+
+/// The chunk whose range in `ranges` holds element `e`, -1 for none.
+fn mesh_stream_chunk(ranges: Rows<IVec2>, e: Int) -> Int {
+    return loop count(ranges) with k = -1 {
+        let r = at(ranges, index());
+        if k < 0 && r.x >= 0 && e >= r.x && e < r.x + r.y { index() } else { k }
+    };
+}
+
+/// Where chunk `k`'s elements start in an array whose ranges are `ranges` (0 for a chunk not in).
+fn mesh_stream_start(ranges: Rows<IVec2>, k: Int) -> Int {
+    if k < 0 || k >= count(ranges) { return 0; }
+    return max(at(ranges, k).x, 0);
+}
+
+/// Each point's merged point a level up, moved past the chunks' points before its own.
+kernel mesh.stream_up@1 {
+    requires { field.read; field.write; }
+    input up: Rows<Int>;
+    input up_ranges: Rows<IVec2>;
+    input point_ranges: Rows<IVec2>;
+    output result: Rows<Int>;
+    compute {
+        let u = sample(up);
+        let k = mesh_stream_chunk(up_ranges, element());
+        return if u < 0 || k < 0 { u } else { u + mesh_stream_start(point_ranges, k) };
+    }
+}
+
+/// Each face, its corners moved past the chunks' points before its own.
+kernel mesh.stream_faces@1 {
+    requires { field.read; field.write; }
+    input faces: Rows<Face>;
+    input face_ranges: Rows<IVec2>;
+    input point_ranges: Rows<IVec2>;
+    output result: Rows<Face>;
+    compute {
+        let g = sample(faces);
+        let q = mesh_stream_start(point_ranges, mesh_stream_chunk(face_ranges, element()));
+        return Face { a: g.a + q, b: g.b + q, c: g.c + q };
+    }
+}
+
+/// Each cluster, its faces moved past the chunks' faces before its own.
+kernel mesh.stream_clusters@1 {
+    requires { field.read; field.write; }
+    input clusters: Rows<Cluster>;
+    input cluster_ranges: Rows<IVec2>;
+    input face_ranges: Rows<IVec2>;
+    output result: Rows<Cluster>;
+    compute {
+        let c = sample(clusters);
+        return Cluster { ..c, first: c.first + mesh_stream_start(face_ranges, mesh_stream_chunk(cluster_ranges, element())) };
+    }
+}
+
+/// Each face's own face, moved past the chunks' own faces before its own (`origin_ranges`: the ranges of an array a row a
+/// chunk's own face, as its parts).
+kernel mesh.stream_sources@1 {
+    requires { field.read; field.write; }
+    input sources: Rows<Int>;
+    input source_ranges: Rows<IVec2>;
+    input origin_ranges: Rows<IVec2>;
+    output result: Rows<Int>;
+    compute { return sample(sources) + mesh_stream_start(origin_ranges, mesh_stream_chunk(source_ranges, element())); }
+}
+
+/// Each chunk's mesh row, its clusters and brick errors moved past the chunks' before its own.
+kernel mesh.stream_meshes@1 {
+    requires { field.read; field.write; }
+    input meshes: Rows<ClusterMesh>;
+    input mesh_ranges: Rows<IVec2>;
+    input cluster_ranges: Rows<IVec2>;
+    input error_ranges: Rows<IVec2>;
+    output result: Rows<ClusterMesh>;
+    compute {
+        let m = sample(meshes);
+        let k = mesh_stream_chunk(mesh_ranges, element());
+        let q = mesh_stream_start(cluster_ranges, k);
+        let r = mesh_stream_start(error_ranges, k);
+        return ClusterMesh { ..m, levels: [each 9 { m.levels[index()] + q }], grids: [each 8 { m.grids[index()] + r }] };
+    }
+}
+
+/// Each chunk named (`domain = count(mesh_ranges)`): its mesh row in the joined meshes, -1 while any of its arrays is
+/// still on its way.
+kernel mesh.stream_ready@1 {
+    requires { field.read; field.write; }
+    input point_ranges: Rows<IVec2>;
+    input up_ranges: Rows<IVec2>;
+    input face_ranges: Rows<IVec2>;
+    input cluster_ranges: Rows<IVec2>;
+    input mesh_ranges: Rows<IVec2>;
+    input error_ranges: Rows<IVec2>;
+    input source_ranges: Rows<IVec2>;
+    input origin_ranges: Rows<IVec2>;
+    output result: Rows<Int>;
+    compute {
+        let k = element();
+        let all = at(point_ranges, k).x >= 0 && at(up_ranges, k).x >= 0 && at(face_ranges, k).x >= 0 && at(cluster_ranges, k).x >= 0
+            && at(mesh_ranges, k).x >= 0 && at(error_ranges, k).x >= 0 && at(source_ranges, k).x >= 0 && at(origin_ranges, k).x >= 0;
+        return if all && at(mesh_ranges, k).y > 0 { at(mesh_ranges, k).x } else { -1 };
+    }
+}
+
+// ------------------------------------------------------------------ one chunk out of a mesh
+
+/// 1 for each face of the mesh whose middle falls in the cell of the world's lattice at `cell_x`, `cell_z` (`side` meters
+/// a side from `lo`, the world's corner on x and z), 0 for the rest.
+kernel mesh.chunk_flags@1 {
+    requires { field.read; field.write; }
+    input points: Rows<MeshPoint>;
+    input faces: Rows<Face>;
+    param lo: Vec2 = vec2(0.0, 0.0);
+    param side: Float = 16.0;
+    param cell_x: Int = 0;
+    param cell_z: Int = 0;
+    output result: Rows<Int>;
+    compute {
+        let f = sample(faces);
+        let m = (at(points, f.a).position + at(points, f.b).position + at(points, f.c).position) / 3.0;
+        let c = floor((vec2(m.x, m.z) - lo) / side);
+        return int(int(c.x) == cell_x && int(c.y) == cell_z);
+    }
+}
+
+/// 1 for each point a kept face has a corner at (`kept`, the kept faces' rows in the mesh), 0 for the rest
+/// (`domain = count(points)`).
+kernel mesh.chunk_point_flags@1 {
+    requires { field.read; field.write; }
+    input faces: Rows<Face>;
+    input kept: Rows<Int>;
+    input blank: Rows<Int>;
+    struct Mark { point: Int; used: Int; }
+    output result: Rows<Int>;
+    scatter into blank with max {
+        let e = element();
+        if e >= count(kept) { return Mark { point: -1, used: 0 }; }
+        let f = at(faces, at(kept, e));
+        emit(Mark { point: f.a, used: 1 });
+        emit(Mark { point: f.b, used: 1 });
+        return Mark { point: f.c, used: 1 };
+    }
+}
+
+/// The chunk's points (`domain` the kept points), its faces with their corners renumbered among them (`faces`), each
+/// face's part (`parts`, from the mesh's `face_parts`), and each point's group (`groups`, the mesh's).
+kernel mesh.chunk_points@1 {
+    requires { field.read; field.write; }
+    input points: Rows<MeshPoint>;
+    input groups: Rows<Int>;
+    input kept: Rows<Int>;
+    /// How many points are kept (sizes the node).
+    input count: Rows<Int>;
+    output result: Rows<MeshPoint>;
+    output group: Rows<Int>;
+    compute { let p = at(kept, element()); return { result: at(points, p), group: at(groups, p) }; }
+}
+kernel mesh.chunk_faces@1 {
+    requires { field.read; field.write; }
+    input faces: Rows<Face>;
+    input face_parts: Rows<Int>;
+    input kept: Rows<Int>;
+    input renumbered: Rows<Int>;
+    /// How many faces are kept (sizes the node).
+    input count: Rows<Int>;
+    output result: Rows<Face>;
+    output part: Rows<Int>;
+    compute {
+        let i = at(kept, element());
+        let f = at(faces, i);
+        return { result: Face { a: at(renumbered, f.a) - 1, b: at(renumbered, f.b) - 1, c: at(renumbered, f.c) - 1 }, part: at(face_parts, i) };
+    }
+}

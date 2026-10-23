@@ -1,0 +1,38 @@
+//! A world's chunks as one clustered library (`kernels/stream.ent`): each array of the chunks as a scene's `fields`
+//! nodes read them (`*_ranges` their `ranges`), the chunks named in one order by all; each chunk's indices moved past the
+//! chunks before it in the array they point into. `ready` is each chunk's mesh row in `meshes`, -1 while any of its arrays
+//! is on its way. `parts` (each chunk's own faces' parts, `graphs/chunk.esn`'s) is what `sources` points into. The points and
+//! the brick errors need no moving: a renderer reads them as the `fields` nodes give them.
+use "raster.entpkg";
+use "../kernels/";
+
+input points: Rows<MeshPoint>;
+input point_ranges: Rows<IVec2>;
+input up: Rows<Int>;
+input up_ranges: Rows<IVec2>;
+input faces: Rows<Face>;
+input face_ranges: Rows<IVec2>;
+input clusters: Rows<Cluster>;
+input cluster_ranges: Rows<IVec2>;
+input meshes: Rows<ClusterMesh>;
+input mesh_ranges: Rows<IVec2>;
+input errors: Rows<Float>;
+input error_ranges: Rows<IVec2>;
+input sources: Rows<Int>;
+input source_ranges: Rows<IVec2>;
+input part_ranges: Rows<IVec2>;
+
+node joined_up: mesh.stream_up@1 { up <- up; up_ranges <- up_ranges; point_ranges <- point_ranges; domain = count(up); }
+node joined_faces: mesh.stream_faces@1 { faces <- faces; face_ranges <- face_ranges; point_ranges <- point_ranges; domain = count(faces); }
+node joined_clusters: mesh.stream_clusters@1 { clusters <- clusters; cluster_ranges <- cluster_ranges; face_ranges <- face_ranges; domain = count(clusters); }
+node joined_meshes: mesh.stream_meshes@1 { meshes <- meshes; mesh_ranges <- mesh_ranges; cluster_ranges <- cluster_ranges; error_ranges <- error_ranges; domain = count(meshes); }
+node joined_sources: mesh.stream_sources@1 { sources <- sources; source_ranges <- source_ranges; origin_ranges <- part_ranges; domain = count(sources); }
+node ready: mesh.stream_ready@1 { point_ranges <- point_ranges; up_ranges <- up_ranges; face_ranges <- face_ranges; cluster_ranges <- cluster_ranges; mesh_ranges <- mesh_ranges;
+    error_ranges <- error_ranges; source_ranges <- source_ranges; origin_ranges <- part_ranges; domain = count(mesh_ranges); }
+
+output up <- joined_up.result;
+output faces <- joined_faces.result;
+output clusters <- joined_clusters.result;
+output meshes <- joined_meshes.result;
+output sources <- joined_sources.result;
+output ready <- ready.result;

@@ -148,6 +148,11 @@ use "render.entpkg";
 - `kernels/specular_aa.ent` — Gloss widened where normals turn within a
   pixel (specular antialiasing). Kernels: `render.specular_aa@1`.
 - `kernels/stylized.ent` — A stylized look: outlines and a watercolor's tone. Kernels: `render.stylized@1`.
+- `kernels/stream.ent` — A world streamed round the camera: the chunks of
+  its lattice within reach of the eye, near ones as built and far ones
+  coarser, their files spelled for a scene's `fields` nodes, each chunk
+  whose arrays are in placed to draw. Kernels: `render.stream_wanted@1`,
+  `render.stream_paths@1`, `render.stream_insts@1`, `render.stream_none@1`.
 - `kernels/subsurface.ent` — Light under the skin: the share of a
   picture that scatters under subsurface surfaces spread, each color as
   far as it carries. Kernels: `render.subsurface_blur@1`,
@@ -235,7 +240,7 @@ use "render.entpkg";
 
 `tests/` holds scenes and their replays, run on every backend:
 `bounce.replay`, `cluster.replay`, `field.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `reflection.replay`, `shadow.replay`,
-`sky.replay`, `temporal.replay`, `translucent.replay`.
+`sky.replay`, `stream.replay`, `temporal.replay`, `translucent.replay`.
 Every Kernel of the package is reached by one of them.
 
 Used by the [material_balls](../../examples/material_balls/README.md) example.
@@ -481,6 +486,21 @@ layer with the absorption along the way. A renderer lights that point
 (`behind_radiance` in `kernels/transmission.ent`, its diffuse light from the
 renderer's own means), blurs it by the glass's roughness (`frosted`) and adds
 what Fresnel lets through (`transmitted`) under the surface's reflection.
+
+### Streaming
+
+A world larger than memory is cut into chunks on a lattice of x and z
+(`mesh.entpkg`'s `graphs/chunk.esn`: the faces in a cell, built as a
+clustered library with each point's part as its group), each saved twice,
+near as built and far with a wider level 0 cell, every array in a
+directory of its own (`entelechy run --save chunk.points=...`). A scene
+streams them round the camera: `render.stream_wanted` names the chunks
+within reach, nearest first, `render.stream_paths` spells their files for
+one `fields` node an array, and `mesh.entpkg`'s `graphs/streamed.esn`
+joins what is in into one library the cluster draw, the shadows and the
+lamps' maps take as any other; a chunk with an array on its way is not
+drawn (`render.stream_insts`). A `fields` node reads the paths a frame
+behind, so the instances pair with the last frame's chunks.
 
 ### Translucency
 

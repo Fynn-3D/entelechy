@@ -49,12 +49,22 @@ use "mesh.entpkg";
   `rows` of them, and two faces to each of its cells. Kernels:
   `mesh.lattice_faces@1`, `mesh.torus_points@1`, `mesh.sphere_points@1`,
   `mesh.plane_points@1`.
+- `kernels/stream.ent` — A world streamed in chunks: one chunk out of a
+  mesh (the faces in a cell of the world's lattice, their points
+  renumbered), and the chunks a scene's `fields` nodes read joined into
+  one library, each chunk's indices moved past the chunks before it.
+  Kernels: `mesh.stream_up@1`, `mesh.stream_faces@1`,
+  `mesh.stream_clusters@1`, `mesh.stream_sources@1`,
+  `mesh.stream_meshes@1`, `mesh.stream_ready@1`, `mesh.chunk_flags@1`,
+  `mesh.chunk_point_flags@1`, `mesh.chunk_points@1`, `mesh.chunk_faces@1`.
 - `kernels/subdivision.ent` — Midpoint subdivision, the step that
   changes a mesh's topology. Kernels: `mesh.split_points@1`,
   `mesh.split_faces@1`.
 
 ## Graph presets
 
+- `graphs/chunk.esn` — One chunk of a world out of a mesh, built as a
+  clustered library with its parts, for a scene to save and stream.
 - `graphs/cluster_brick.esn` — A level's clusters.
 - `graphs/cluster.esn` — A mesh built as levels and cut into clusters:
   the library a renderer draws from (`render.entpkg`'s
@@ -64,11 +74,14 @@ use "mesh.entpkg";
   board or a frame on a wall do not merge into what they lie on.
 - `graphs/library.esn` — Two built meshes or libraries as one.
 - `graphs/cluster_level.esn` — One level up.
+- `graphs/streamed.esn` — A world's streamed chunks as one clustered
+  library, and which chunks are in whole.
 - `graphs/subdivision.esn` — One level of midpoint subdivision.
 
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`cluster.replay`, `lattice.replay`. Every Kernel of the package is reached by one of them.
+`cluster.replay`, `lattice.replay`, `stream.replay`, `stream_build.replay` (`stream/` holds the
+chunks `stream_build.esn` built, which `stream.esn` and `render.entpkg`'s `tests/stream.esn` stream). Every Kernel of the package is reached by one of them.
 
 Used by the [animation](../../examples/animation/README.md), [culled](../../examples/culled/README.md), [mesh](../../examples/mesh/README.md), [surface](../../examples/surface/README.md) examples.
