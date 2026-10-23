@@ -1,7 +1,7 @@
 // Light under the skin: a subsurface surface (skin, wax, marble, a leaf)
 // takes light in at one point and gives it out round about, red farthest,
 // blue nearest. The renderer gives the share of its picture that scatters
-// (the probes renderer's `scatter`: the matte light of subsurface pixels);
+// (probe GI's `scatter`: the matte light of subsurface pixels);
 // it is spread across the screen as far as the material carries light
 // (`render.subsurface_blur`, across then down, Jimenez's separable way),
 // each color by its own reach, only over the same surface; and laid back in

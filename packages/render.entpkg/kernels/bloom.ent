@@ -3,7 +3,7 @@
 // time blurred by 13 samples (`render.bloom_down`), then grown back, each
 // level adding the one below spread by a tent (`render.bloom_up`): a glow of
 // every size at once, from a few pixels to a sixth of the picture. What
-// `render.view` takes as `bloom`.
+// `render.tonemap` takes as `bloom`.
 
 /// `hdr` at `p` (pixels of `img`, centers at halves), the edge held.
 fn bloom_at(img: Image, p: Vec2) -> Vec3 {

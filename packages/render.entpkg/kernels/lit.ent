@@ -1,5 +1,5 @@
-// Daylight: a light renderer, each pixel looking only at itself (G-buffer, sky) and the coarse scene (proxies), gathering
-// no probes and tracing nothing on the screen, its interface as `graphs/probes.esn`'s and `graphs/path_trace.esn`'s. The sun lights it,
+// Lit: a light renderer, each pixel looking only at itself (G-buffer, sky) and the coarse scene (proxies), gathering
+// no probes and tracing nothing on the screen, its interface as `graphs/probe_gi.esn`'s and `graphs/path_tracer.esn`'s. The sun lights it,
 // with shadows (`extra`'s x); the diffuse light in shade is a half of sky and a half of ground (up-facing takes zenith to
 // horizon, down-facing the warm light the sunlit ground throws back), times the baked occlusion, times the sky the coarse scene hides
 // (three distances taken up along the normal; deep inside the coarse shape, a leaf in its crown, a share of its own instead); a
@@ -7,7 +7,7 @@
 // lighting (`lit_by`, `ambient_by`), or light and shade as a painting has them (`toon`).
 use "brdf.ent";
 use "camera.ent";
-use "probes.ent";
+use "probe_gi.ent";
 use "sky.ent";
 
 /// The color of light the ground throws back (the ground's mean color, warmer).
@@ -49,10 +49,10 @@ fn seen_along(r: Vec3, s: SkyLook) -> Vec3 {
     return if r.y > 0.0 { sky_radiance(r, s, false) } else { hemisphere(vec3(0.0, -1.0, 0.0), s) };
 }
 
-/// Daylight (see the file's head) lighting an HDR picture: the sky drawn where it is; things lit by `painted` (1 as a painting
+/// Lit (see the file's head): an HDR picture: the sky drawn where it is; things lit by `painted` (1 as a painting
 /// does (`toon`), 0 standard real-time lighting), plus a smooth surface's reflection, plus emission, with air laid over distance. `bounce`
 /// 0 leaves out the light from all round, the sun's direct light and emission alone.
-kernel render.daylight@1 {
+kernel render.lit@1 {
     requires { field.read; field.write; }
     input surface: Grid<Vec4>;
     input paint: Grid<Vec4>;

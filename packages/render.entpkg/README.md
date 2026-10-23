@@ -1,11 +1,11 @@
 # render
 
 The rendering contract and its renderers: a scene hands over a G-buffer
-and proxies, and a renderer owns the light — light probes, a path
-tracer, daylight, a workbench — with physically based shading, the sky
-the air makes, lamps, a planar mirror, fog and clouds, a camera, metered
-and local exposure, temporal antialiasing and upscaling, depth of field,
-glow, film and a painted look.
+and proxies, and a renderer owns the light — lit, ray traced, probe GI, a
+path tracer, clay — with physically based shading, the sky the air makes,
+lamps, a planar mirror, fog and clouds, a camera, metered and local
+exposure, temporal antialiasing and upscaling, depth of field, glow, film
+and a stylized look.
 
 **Layer:** Graphics. **Uses:** [`geometry`](../geometry.entpkg/README.md), [`image`](../image.entpkg/README.md), [`random`](../random.entpkg/README.md), [`raster`](../raster.entpkg/README.md).
 
@@ -15,8 +15,6 @@ use "render.entpkg";
 
 ## Kernels
 
-- `kernels/aerial.ent` — Aerial perspective after the real atmosphere.
-  Kernels: `render.air@1`.
 - `kernels/antialias.ent` — Antialiasing within one frame (FXAA).
   Kernels: `render.fxaa@1`.
 - `kernels/atmosphere.ent` — The sky as the Earth's air makes it
@@ -30,12 +28,15 @@ use "render.entpkg";
   renderer traces shadows and bounces through). Kernels:
   `render.cam_start@1`, `render.cam@1`, `render.settled@1`,
   `render.depths@1`, `render.settle@1`, `render.lens@1`.
+- `kernels/clay.ent` — Clay: a modeler's preview, a studio light and
+  backdrop over the standard contract. Kernels: `render.clay@1`.
 - `kernels/clouds.ent` — A deck of clouds over the sky, lit through
   itself, and its shadows on the ground. Kernels: `render.clouds_deck@1`,
   `render.clouds_shadow@1`, `render.clouds_march@1`.
+- `kernels/composite.ent` — Two G-buffers of one view made one. Kernels:
+  `render.nearer@1`.
 - `kernels/contact_shadow.ent` — Contact shadows. Kernels:
   `render.contact@1`.
-- `kernels/daylight.ent` — Daylight. Kernels: `render.daylight@1`.
 - `kernels/depth_of_field.ent` — Depth of field. Kernels:
   `render.dof_start@1`, `render.dof_control@1`, `render.focus@1`,
   `render.focused@1`.
@@ -50,31 +51,33 @@ use "render.entpkg";
 - `kernels/fog.ent` — Height fog the sun and the lamps light, their beams
   cut into shafts by what stands in them and by the clouds. Kernels:
   `render.fog_march@1`, `render.fog_blur@1`, `render.fog_apply@1`.
-- `kernels/gloss.ent` — Gloss widened where normals turn within a
-  pixel (specular antialiasing). Kernels: `render.gloss_widen@1`.
+- `kernels/haze.ent` — Haze: aerial perspective after the real atmosphere.
+  Kernels: `render.haze@1`.
 - `kernels/lamps.ent` — Point lights, spotlights and glowing panels,
   culled by tiles, shadowed through the proxies and on the screen. Kernels:
   `render.lamps_none@1`, `render.lamps_depth@1`, `render.lamps_tiles@1`,
   `render.lamps_light@1`, `render.lamps_shade@1`.
-- `kernels/merge.ent` — Two G-buffers of one view made one. Kernels:
-  `render.nearer@1`.
+- `kernels/lit.ent` — Lit: each pixel by itself in one pass, the sun
+  and the light all round. Kernels: `render.lit@1`.
 - `kernels/mirror.ent` — A planar mirror. Kernels: `render.mirror_lens@1`,
   `render.mirror_mix@1`.
-- `kernels/painted.ent` — A painted look. Kernels: `render.npr@1`.
-- `kernels/path_trace.ent` — Path tracing (standard PBR, `brdf.ent`).
+- `kernels/path_tracer.ent` — Path tracing (standard PBR, `brdf.ent`).
   Kernels: `render.path_count_start@1`, `render.path_count@1`,
   `render.path_trace@1`, `render.path_blank@1`, `render.path_accum@1`,
   `render.path_atrous@1`, `render.path_behind@1`, `render.path_shade@1`.
-- `kernels/post.ent` — Post-processing. Kernels: `render.blank@1`,
-  `render.bright@1`, `render.spread@1`, `render.view@1`.
-- `kernels/probes.ent` — Light probes. Kernels: `render.probes_sign@1`,
+- `kernels/phase.ent` — Light scattered in the air: the phase and
+  each pixel's step offset, shared by fog, clouds and the sky.
+- `kernels/probe_gi.ent` — Global illumination by light probes. Kernels: `render.probes_sign@1`,
   `render.probes_seen@1`, `render.probes_gather@1`,
   `render.probes_screen_gather@1`, `render.probes_gather_keep@1`,
   `render.probes_gather_blur@1`, `render.probes_behind@1`,
   `render.probes_lit@1`, `render.probes_shade@1`.
-- `kernels/scattering.ent` — Light scattered in the air: the phase and
-  each pixel's step offset, shared by fog, clouds and the sky.
+- `kernels/raytraced.ent` — Ray traced: shadow and reflection traced in
+  one pass. Kernels: `render.raytraced@1`.
 - `kernels/sky.ent` — The sky.
+- `kernels/specular_aa.ent` — Gloss widened where normals turn within a
+  pixel (specular antialiasing). Kernels: `render.specular_aa@1`.
+- `kernels/stylized.ent` — A stylized look: outlines and a watercolor's tone. Kernels: `render.stylized@1`.
 - `kernels/subsurface.ent` — Light under the skin: the share of a
   picture that scatters under subsurface surfaces spread, each color as
   far as it carries. Kernels: `render.subsurface_blur@1`,
@@ -84,13 +87,10 @@ use "render.entpkg";
   `render.sun_none@1`, `render.sun_views@1`, `render.sun_shadow@1`.
 - `kernels/super_resolution.ent` — Temporal super-resolution (TSR).
   Kernels: `render.tsr@1`, `render.keep_surface@1`.
-- `kernels/switch.ent` — One way of drawing (a renderer) is chosen at a
-  time, numbered. Kernels: `render.way_start@1`, `render.way_keys@1`,
-  `render.way_extent@1`, `render.way_pass@1`, `render.way_pick@1`.
 - `kernels/temporal.ent` — Temporal antialiasing (TAA). Kernels:
   `render.jitter@1`, `render.taa@1`, `render.same_lens@1`.
-- `kernels/traced.ent` — Traced light: shadow and reflection traced in
-  one pass. Kernels: `render.traced@1`.
+- `kernels/tonemap.ent` — Glow and tone mapping. Kernels: `render.blank@1`,
+  `render.bright@1`, `render.spread@1`, `render.tonemap@1`.
 - `kernels/transmission.ent` — Transmission (glass, water, ice).
   Kernels: `render.settle_behind@1`.
 - `kernels/upscale.ent` — The picture is computed at an inner resolution
@@ -98,29 +98,23 @@ use "render.entpkg";
   `render.dynamic_start@1`, `render.dynamic@1`, `render.extent@1`,
   `render.extent_size@1`, `render.canvas@1`, `render.upscale@1`,
   `render.sharpen@1`.
-- `kernels/workbench.ent` — The workbench's light and backdrop, and its
-  renderer on the standard contract (this package's). Kernels:
-  `render.workbench_shade@1`.
 
 ## Graph presets
 
-- `graphs/air.esn` — Fog and clouds laid over a picture.
 - `graphs/atmosphere.esn` — The sky the air makes for a sun's height and
   bearing: its `SkyLook` and the table `render.atmosphere_sky` paints from.
-- `graphs/blend.esn` — Temporal antialiasing and upscaling.
 - `graphs/bloom.esn` — Glow (`kernels/bloom.ent`): six levels down and
-  back up; its `bloom` is what `render.view` takes.
+  back up; its `bloom` is what `render.tonemap` takes.
+- `graphs/clay.esn` — The clay renderer (`render.clay`) on a scene's
+  G-buffer (the contract, its first three maps).
 - `graphs/exposure.esn` — Metered exposure, then local exposure: `hdr`
   scaled, and the `exposure` followed.
-- `graphs/finish.esn` — The finish.
-- `graphs/finish_inner.esn` — The finish at the picture's own size
-  (`finish.esn` works at the window's).
 - `graphs/lamps.esn` — The lamps added to a renderer's picture, for one
   that does not take them in itself.
-- `graphs/path_trace.esn` — The path tracer (`kernels/path_trace.ent`),
+- `graphs/path_tracer.esn` — The path tracer (`kernels/path_tracer.ent`),
   the lamps shown and bounced; its `scatter` for light under the skin.
 - `graphs/picture.esn` — The picture's raster.
-- `graphs/probes.esn` — The light-probe renderer (`kernels/probes.ent`),
+- `graphs/probe_gi.esn` — The light-probe renderer (`kernels/probe_gi.ent`),
   the lamps shown, reflected and bounced; the light gathered on the screen
   drawn anew each frame and averaged while the lens rests (up to
   `settle_frames`, then it rests too); its `scatter` for light under the
@@ -129,16 +123,17 @@ use "render.entpkg";
   spread across then down and laid back over its `hdr`.
 - `graphs/super_resolution.esn` — Temporal super-resolution
   (`render.tsr`).
+- `graphs/taa.esn` — Temporal antialiasing and upscaling.
+- `graphs/tonemap.esn` — The finish at the picture's own size: glow, tone
+  and sRGB, sharpened if asked.
 - `graphs/upscale.esn` — A finished picture (tone-mapped, sRGB) scaled
   to the window's size.
-- `graphs/workbench.esn` — The workbench renderer
-  (`render.workbench_shade`) on a scene's G-buffer (the contract, its
-  first three maps).
+- `graphs/volumetrics.esn` — Fog and clouds laid over a picture.
 
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`lit.replay`, `night.replay`, `path_trace.replay`, `probes.replay`,
+`lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`,
 `sky.replay`, `temporal.replay`.
 Every Kernel of the package is reached by one of them.
 
@@ -181,19 +176,25 @@ one while the camera moves, and a full one, computed once, when it stops
 ### What a renderer gives
 
 `hdr: Image`, linear HDR, sky included. `render.bright`, `render.spread` and
-`render.view` turn it into the picture (`graphs/bloom.esn`'s glow in place
+`render.tonemap` turn it into the picture (`graphs/bloom.esn`'s glow in place
 of `render.bright` and `render.spread` for round glows with long tails).
 
 ### Choosing a renderer
 
-Daylight lights each pixel in one pass by itself and the coarse scene: the
-lightest renderer, and the one for a scene in daylight whose look comes
-from its sun, sky and shadows. The light probes and the path tracer add
-light bounced between things, many passes a frame, worth their cost where
-bounced light shows (indoors, at night, under lamps). The switch
-(`kernels/switch.ent`) draws a renderer not chosen at a small piece, but
-still runs each of its passes every frame: a scene that ships one renderer
-places that one alone.
+A scene places one renderer. Lit (`render.lit`) lights each pixel in one
+pass by itself and the coarse scene: the lightest, and the one for a scene
+in daylight whose look comes from its sun, sky and shadows. Ray traced
+(`render.raytraced`) is lit with each smooth surface's mirror ray traced
+through the proxies; a distance-field scene marches its own shadow and
+mirror rays and lights what they meet with `raytraced_shade`. Probe GI and
+the path tracer add light bounced between things, many passes a frame,
+worth their cost where bounced light shows (indoors, at night, under
+lamps). Clay shows the shapes alone, as a modeler does.
+
+A painted look is not another renderer: shading as a painting has it is a
+renderer's parameter (`painted` of lit, `style` of probe GI, `toon` in
+`kernels/probe_gi.ent`), and outlines and a watercolor's tone are a pass
+after it (`render.stylized`) that reads only its picture and the G-buffer.
 
 ### Before a renderer
 
@@ -211,8 +212,8 @@ the sun's disc (`sun_size`) makes it, compared nearer the sun by a texel
 times the surface's slant so a curved surface does not shadow itself in
 stripes, cascades blended at their edges. `render.contact` multiplies contact shadows into the sun's
 visibility (`extra` x), `render.clouds_shadow` the shadow of the clouds'
-deck (the deck `graphs/air.esn` gives back as `deck`), and
-`render.gloss_widen` widens each pixel's roughness by how much its normals
+deck (the deck `graphs/volumetrics.esn` gives back as `deck`), and
+`render.specular_aa` widens each pixel's roughness by how much its normals
 turn within it (Kaplanyan and Hoffman's), so a far glossy surface does not
 flash from pixel to pixel.
 
@@ -228,7 +229,7 @@ What every renderer shares, in this order:
   highlight from its representative point (Karis's) with `glossy_by`, the
   energy kept as the panel widens it; each
   lamp that casts shadows shadowed through the proxies and, within
-  `contact` meters, on the screen. The probes renderer and the path tracer
+  `contact` meters, on the screen. Probe GI and the path tracer
   take that light in: what they show, reflect and gather on the screen;
   off the screen, what a ray meets in the proxies is lit by every lamp
   (`lamps_on_rough`), so lamps are bounced there too, and the probes
@@ -239,7 +240,7 @@ What every renderer shares, in this order:
   (`mirror_start` says where a ray reaches the plane), a renderer lights
   that, and `render.mirror_mix` lays it over the pixels `more` w marks, by
   Fresnel, moved by the surface's normal (waves) and drawn out downward.
-- **The air** (`graphs/air.esn`). `render.fog_march` walks each view ray
+- **The air** (`graphs/volumetrics.esn`). `render.fog_march` walks each view ray
   at a quarter of the size through height fog the sun (shadowed by the
   sun's cascades where they hold the point, `sun_view_lit`, through the
   proxies elsewhere, and by the clouds' deck: shafts behind what stands in
@@ -280,11 +281,11 @@ What every renderer shares, in this order:
   a light) and its own detail: bright and dark neighborhoods are brought
   toward the mean (`highlights`, `shadows`), the detail kept (`detail`); 1
   for all three leaves the picture as it is.
-- **Light under the skin** (`graphs/subsurface.esn`). The probes renderer,
-  the path tracer and daylight each give, beside `hdr`, the share of it
+- **Light under the skin** (`graphs/subsurface.esn`). Probe GI, the path
+  tracer and lit each give, beside `hdr`, the share of it
   that scatters under subsurface surfaces (`scatter`: `scattered_share`,
   their matte light from the sun and from round about times the
-  subsurface, through the air as the rest; none when daylight paints);
+  subsurface, through the air as the rest; none when lit paints);
   `render.subsurface_blur` spreads it across then down (Jimenez's
   separable way), red farthest and blue nearest, as far as the material
   carries light (`reach` meters at full subsurface) and only over the same
@@ -316,7 +317,7 @@ exactly), `ambient_by` the
 environment (split-sum, Karis' analytic fit; base and clearcoat reflections
 given apart), `ggx_sample` and `ggx_weight` a path tracer's glossy bounce,
 `pbr_of` a G-buffer pixel's `Pbr`. Transmission is carried for renderers that
-refract. `render.view` tone maps with `image.entpkg`'s `aces` and encodes sRGB.
+refract. `render.tonemap` tone maps with `image.entpkg`'s `aces` and encodes sRGB.
 
 ### Pieces
 
@@ -325,7 +326,7 @@ refract. `render.view` tone maps with `image.entpkg`'s `aces` and encodes sRGB.
   `rough_normal`), `cosine_dir`.
 - `kernels/sky.ent`: `SkyLook`, `sky_radiance`, `aerial`.
 - `kernels/brdf.ent`: `Pbr` and the standard BRDF.
-- `kernels/post.ent`: bloom and tone mapping.
+- `kernels/tonemap.ent`: bloom and tone mapping.
 - `kernels/upscale.ent`: a resolution of the scene's own, brought to the
   window at the end, so the window's size costs little. `render.extent`
   is the window scaled down to at most `pixels` pixels, times the share
@@ -333,13 +334,13 @@ refract. `render.view` tone maps with `image.entpkg`'s `aces` and encodes sRGB.
   resolution); `render.canvas` is an empty raster canvas of that size.
   `upscaled` (and `render.upscale`) is an edge-aware upscale (FSR 1's EASU),
   `render.sharpen` a sharpening that cannot overshoot (RCAS), both in display
-  space and each frame on its own. `graphs/finish_inner.esn` finishes at the
+  space and each frame on its own. `graphs/tonemap.esn` finishes at the
   picture's size; `graphs/upscale.esn` upscales and sharpens to the window.
   A scene that draws its HUD at the window's size reads the picture through
   `upscaled` in that pass instead, so the window is written once.
   `render.extent`'s `samples` supersamples (2: four points a pixel), and
   `upscaled` then averages each pixel's block.
-- `kernels/aerial.ent`: `render.air`, aerial perspective as the air is: it
+- `kernels/haze.ent`: `render.haze`, aerial perspective as the air is: it
   thins with height (Rayleigh's by 8 km, Mie's haze by 1.2 km), integrated
   along the ray; Rayleigh scatters blue (far things bluer, flatter), Mie
   forward (bright toward the sun); lit once by the sun and the sky. A scene
@@ -356,10 +357,5 @@ refract. `render.view` tone maps with `image.entpkg`'s `aces` and encodes sRGB.
   orange split, an S curve), halation, the lens's color fringe, vignette,
   grain in clumps heaviest in the middle tones, wide-screen bars; presets
   (`film_look`) or its own params, G in the window (`render.film_keys`).
-- `kernels/switch.ent`: one renderer at a time on the standard contract,
-  numbered (0 lit, 1 painted, 2 probes, 3 path, 6
-  workbench), keys 1 to 5; a way not chosen gets a 16 × 16 square of the
-  G-buffer (`render.way_extent`, `render.way_pass`), `render.way_pick` the
-  chosen picture.
-- `kernels/merge.ent`: two G-buffers of one view made one, each pixel the
+- `kernels/composite.ent`: two G-buffers of one view made one, each pixel the
   nearer surface's (`render.nearer`), for a scene that draws its parts apart.

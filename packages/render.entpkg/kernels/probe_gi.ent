@@ -8,7 +8,7 @@ use "geometry.entpkg";
 use "brdf.ent";
 use "camera.ent";
 use "lamps.ent";
-use "path_trace.ent";
+use "path_tracer.ent";
 use "sky.ent";
 use "transmission.ent";
 

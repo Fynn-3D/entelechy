@@ -1,4 +1,4 @@
-scene traced.esn
+scene path_tracer.esn
 window 160 90
 
 # The same balls path-traced, the first frame's paths alone: brighter in

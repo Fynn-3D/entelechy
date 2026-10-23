@@ -1,15 +1,15 @@
-// A painted look: a pixel much nearer than its neighbor is the edge of the nearer thing,
-// drawn with a thin dark line fading with distance; then colors as watercolour: a little more vivid, shadows
+// A stylized look, after any renderer: a pixel much nearer than its neighbor is the edge of the nearer thing,
+// drawn with a thin dark line fading with distance; then colors as watercolor: a little more vivid, shadows
 // cool, highlights warm. Distance is read from the G-buffer's surface (`surface`'s w), never from the picture's alpha.
 
 /// How far `surface` lies along the view ray at pixel `p` (the sky very far).
-fn npr_depth(surface: Grid<Vec4>, p: Vec2) -> Float {
+fn stylized_depth(surface: Grid<Vec4>, p: Vec2) -> Float {
     let n = size(surface);
     return min(at(surface, clamp(p, vec2(0.0, 0.0), n - 1.0)).w, 100000.0);
 }
 
 /// The HDR picture `image` with edges drawn and colors graded (the same size); `surface` is its G-buffer surface.
-kernel render.npr@1 {
+kernel render.stylized@1 {
     requires { field.read; field.write; }
     input image: Image;
     input surface: Grid<Vec4>;
@@ -25,11 +25,11 @@ kernel render.npr@1 {
         let p = coord();
         let c = at(image, p);
         if style != 1 { return c; }
-        let d = npr_depth(surface, p);
+        let d = stylized_depth(surface, p);
         // Before a neighbor by a share of the distance: the near side of
         // an edge.
-        let behind = max(max(npr_depth(surface, p + vec2(1.0, 0.0)), npr_depth(surface, p - vec2(1.0, 0.0))),
-            max(npr_depth(surface, p + vec2(0.0, 1.0)), npr_depth(surface, p - vec2(0.0, 1.0))));
+        let behind = max(max(stylized_depth(surface, p + vec2(1.0, 0.0)), stylized_depth(surface, p - vec2(1.0, 0.0))),
+            max(stylized_depth(surface, p + vec2(0.0, 1.0)), stylized_depth(surface, p - vec2(0.0, 1.0))));
         let gap = (behind - d) / (d * 0.06 + 0.12);
         let line = smoothstep(1.0, 2.0, gap) * (1.0 - smoothstep(ink_reach * 0.5, ink_reach, d));
         let inked = mix(c.xyz, c.xyz * vec3(0.22, 0.2, 0.27), line * ink);

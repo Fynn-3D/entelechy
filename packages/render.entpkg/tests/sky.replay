@@ -18,6 +18,6 @@ expect air.spread.result[31] = 0.05318 0.05888 0.07153 1 0.001
 expect sunlit.result[37500] = 0 0 0 0 0.01
 expect sunlit.result[20560] = 0.477 0 0 0 0.1
 
-# The wax ball's light under its skin by daylight, and spread.
+# The wax ball's light under its skin, lit, and spread.
 expect lit.scatter[39200] = 0.7502 0.4932 0.2436 0 0.01
 expect skin.down.result[39200] = 0.7247 0.4883 0.2432 0 0.01

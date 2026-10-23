@@ -1,4 +1,4 @@
-// Aerial perspective after the real atmosphere: air thins with height (Rayleigh's molecules by e every eight kilometers, Mie's haze
+// Haze: aerial perspective after the real atmosphere: air thins with height (Rayleigh's molecules by e every eight kilometers, Mie's haze
 // every twelve hundred meters), and the air passed along a view ray is integrated; molecules scatter blue the most (far things
 // turn blue and lose contrast), haze scatters forward (a bright ring toward the sun). The sun and the sky round it light the air
 // passed, scattered once.
@@ -8,7 +8,7 @@ use "sky.ent";
 // How much air of the ground's density a ray from height `h` (meters above
 // the ground) going `dy` up a meter passes through in `d` meters, the air
 // thinning by e every `scale` meters up.
-fn air_through(h: Float, dy: Float, d: Float, scale: Float) -> Float {
+fn haze_through(h: Float, dy: Float, d: Float, scale: Float) -> Float {
     let at_eye = exp(0.0 - clamp(h / scale, -20.0, 20.0));
     if abs(dy) < 0.0001 { return d * at_eye; }
     let k = clamp(d * dy / scale, -20.0, 20.0);
@@ -18,7 +18,7 @@ fn air_through(h: Float, dy: Float, d: Float, scale: Float) -> Float {
 /// Aerial perspective (see the file's head) over a picture (`hdr`, HDR), the sky left as it is (it has its own look).
 /// `on` 0 leaves it as it is; `density` scales the air's density (1 is a clear day's atmosphere made visible across a scene of
 /// a few kilometers), `haze` scales the haze, `ground` is the ground's height (meters).
-kernel render.air@1 {
+kernel render.haze@1 {
     requires { field.read; field.write; }
     input hdr: Image;
     input surface: Grid<Vec4>;
@@ -38,8 +38,8 @@ kernel render.air@1 {
         let s = at(sky, 0);
         let dir = ray(l, coord(), domain());
         let h = l.eye.y - ground;
-        let rayleigh = air_through(h, dir.y, su.w, 8000.0);
-        let mie = air_through(h, dir.y, su.w, 1200.0);
+        let rayleigh = haze_through(h, dir.y, su.w, 8000.0);
+        let mie = haze_through(h, dir.y, su.w, 1200.0);
         let beta_r = vec3(5.8, 13.5, 33.1) * (0.000006 * density);
         let beta_m = vec3(21.0, 21.0, 21.0) * (0.000006 * density * haze);
         let spent = beta_r * rayleigh + beta_m * (mie * 1.1);

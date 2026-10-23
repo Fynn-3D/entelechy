@@ -1,5 +1,5 @@
 //! The lamps added to a renderer's picture (`kernels/lamps.ent`), for a
-//! renderer that does not take them in itself (the probes renderer does):
+//! renderer that does not take them in itself (probe GI does):
 //! each tile of the screen keeps the lamps that reach it, each pixel adds
 //! theirs, shadowed.
 use "../kernels/";

@@ -1,4 +1,4 @@
-//! The path tracer (`kernels/path_trace.ent`): takes the scene's G-buffer, proxies and lamps
+//! The path tracer (`kernels/path_tracer.ent`): takes the scene's G-buffer, proxies and lamps
 //! (the contract) and gives the HDR picture `hdr`, the lamps' light shown and bounced. Each pixel traces one diffuse and one
 //! specular path a frame, of `bounces` bounces; accumulated while the camera rests (at most `most` frames); indirect light denoised in three passes,
 //! unfiltered once `clean` frames are accumulated.

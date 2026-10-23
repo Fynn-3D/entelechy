@@ -1,7 +1,7 @@
-scene bench.esn
+scene clay.esn
 window 160 90
 
-# The workbench's view: studio light on the materials' colors, cavity
+# Clay: studio light on the materials' colors, cavity
 # and outlines; the glowing ball past white, the glass ball's color
 # taken as it is, and the floor of lines.
 frame 0.0

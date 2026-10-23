@@ -9,7 +9,7 @@ use "camera.ent";
 /// The G-buffer's `paint` with each pixel's roughness (w) widened by the
 /// spread of its normals across the pixel; `most` caps how much rougher the
 /// spread alone may make it (as a GGX alpha squared).
-kernel render.gloss_widen@1 {
+kernel render.specular_aa@1 {
     requires { field.read; field.write; }
     input paint: Grid<Vec4>;
     input surface: Grid<Vec4>;

@@ -1,6 +1,0 @@
-// The balls in the render package's view: studio light, the
-// materials' colors, cavity and outlines over a floor of lines.
-node scene: graph "../graphs/balls.esn" { }
-node bench: graph "../../../packages/render.entpkg/graphs/workbench.esn" { lens <- scene.lens; surface <- scene.surface; paint <- scene.paint; extra <- scene.extra; }
-
-output result <- bench.result;

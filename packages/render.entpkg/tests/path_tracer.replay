@@ -1,4 +1,4 @@
-scene path_trace.esn
+scene path_tracer.esn
 window 160 90
 
 # The gray ball, the car paint, the glowing ball, the floor and the sky.

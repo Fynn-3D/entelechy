@@ -5,7 +5,7 @@
 // by 16 pixels, and each tile keeps the lamps that can reach what it shows
 // (`render.lamps_depth`, `render.lamps_tiles`); a pixel adds those alone
 // (`render.lamps_light`), each shadowed through the proxies and, close by,
-// on the screen. The probes renderer takes that light into what it shows
+// on the screen. Probe GI takes that light into what it shows
 // and bounces; another renderer has it added after (`render.lamps_shade`).
 use "brdf.ent";
 use "camera.ent";

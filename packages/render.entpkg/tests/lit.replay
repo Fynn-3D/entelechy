@@ -1,7 +1,7 @@
 scene lit.esn
 window 160 90
 
-# The first way, daylight lit as it is, through the finish, the cinema
+# Lit as it is, through the finish, the cinema
 # film's look and depth of field: the gray ball, the car paint, the
 # glowing ball, and its widescreen bars black above and below.
 frame 0.0
@@ -11,15 +11,12 @@ expect 118 59 = 1.011 0.947 0.737 0.01
 expect 10 85 = 0.000 0.000 0.000 0.01
 expect 80 10 = 0.000 0.000 0.000 0.01
 
-# Dynamic resolution at its most, the window's extent; the painted way
-# not chosen keeps a 16 by 16 piece; a sunlit floor pixel keeps its
-# visibility through the contact shadow; the focus moves toward the
+# Dynamic resolution at its most, the window's extent; a sunlit floor
+# pixel keeps its visibility through the contact shadow; the focus moves toward the
 # middle's distance; two copies of one G-buffer merge into it.
 expect extent.result[0] = 160
 expect extent.result[1] = 88
 expect size.result[0] = 160 88
-expect painted_extent.result[0] = 16
-expect count painted_surface.result = 256
 expect shadowed.result[9140] = 1 0 0 0
 expect focus.result[0] = 8.0615 0.001
 expect merged.surface[7280] = 0 1 0 9.5043 0.001
@@ -28,14 +25,18 @@ expect nothing.result[0] = 0 0 0 1
 expect no_sun.result[0].half = 0
 expect 80 45 = 0.176 0.142 0.175 0.01
 
-# Daylight deep inside the coarse shape (as a leaf in its crown): a shaded
+# Lit deep inside the coarse shape (as a leaf in its crown): a shaded
 # floor pixel keeps `inside_sky` of the light all round times its baked
 # occlusion, brighter than the coarse scene leaves it; none at 0.
 expect lit_deep.result[7280] = 0.0926 0.1003 0.1180 1 0.001
 expect lit_dark.result[7280] = 0 0 0 1 0.001
 
-# Traced light: a smooth metal ball's mirror ray traced through the
-# proxies, brighter than daylight's sky alone; a matte floor pixel as
-# daylight has it.
+# Ray traced: a smooth metal ball's mirror ray traced through the
+# proxies, brighter than lit's sky alone; a matte floor pixel as lit
+# has it.
 expect traced.result[9539] = 0.3512 0.3745 0.4239 1 0.002
 expect traced.result[12880] = 0.2318 0.2365 0.2513 1 0.002
+
+# Lit as a painting has it with stylized edges, and clay: the gray ball.
+expect inked.result[9463] = 0.2285 0.2460 0.2998 1 0.002
+expect clay.result[9463] = 0.5058 0.5087 0.5150 1 0.002

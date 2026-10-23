@@ -12,7 +12,7 @@
 // sky's pixels from it, with the sun's disc (`graphs/atmosphere.esn`
 // places the first three).
 use "camera.ent";
-use "scattering.ent";
+use "phase.ent";
 use "sky.ent";
 
 /// The air: the ground's radius and the air's top (meters from the

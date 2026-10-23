@@ -1,4 +1,4 @@
-//! The light-probe renderer (`kernels/probes.ent`): takes the scene's G-buffer, proxies and lamps
+//! Probe GI, light bounced between things by light probes (`kernels/probe_gi.ent`): takes the scene's G-buffer, proxies and lamps
 //! (the contract) and gives the HDR picture `hdr`; the lamps' light is shown, reflected and bounced. `nx` by `ny` by `nz` probes,
 //! one every `spacing` meters from the proxy's `lo`, covering the proxy; each face traces `rays` rays a frame,
 //! and stops after `most`.

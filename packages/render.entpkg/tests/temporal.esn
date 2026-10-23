@@ -15,9 +15,9 @@ node size: kernel {
 }
 node jlens: render.jitter@1 { lens <- stand.lens; calm <- calm.result; size <- size.result; domain = 1; }
 node still: Grid<Vec4> { domain = vec2(1, 1); }
-node lit: render.daylight@1 { surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
+node lit: render.lit@1 { surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
     sky <- stand.sky; lens <- jlens.result; proxy <- stand.proxy; frame <- stand.frame; domain = window(); }
-node blended: graph "../graphs/blend.esn" { hdr <- lit.result; surface <- stand.surface; lens <- stand.lens; jlens <- jlens.result; motion <- still.result; }
+node blended: graph "../graphs/taa.esn" { hdr <- lit.result; surface <- stand.surface; lens <- stand.lens; jlens <- jlens.result; motion <- still.result; }
 node built: graph "../graphs/super_resolution.esn" { hdr <- lit.result; surface <- stand.surface; lens <- stand.lens; jlens <- jlens.result; motion <- still.result; }
 
 node corners: kernel {

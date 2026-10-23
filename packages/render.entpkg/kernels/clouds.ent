@@ -8,7 +8,7 @@
 // out of the G-buffer's sun visibility.
 use "random.entpkg";
 use "camera.ent";
-use "scattering.ent";
+use "phase.ent";
 use "sky.ent";
 
 /// A deck of clouds: between `low` and `high` meters, covering `cover` of

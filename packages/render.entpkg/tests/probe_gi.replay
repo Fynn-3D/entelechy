@@ -1,4 +1,4 @@
-scene probes.esn
+scene probe_gi.esn
 window 160 90
 
 # The gray ball, the car paint, the glowing ball, the floor and the sky.

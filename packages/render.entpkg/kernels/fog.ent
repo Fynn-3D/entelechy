@@ -9,7 +9,7 @@
 use "camera.ent";
 use "clouds.ent";
 use "lamps.ent";
-use "scattering.ent";
+use "phase.ent";
 use "sky.ent";
 use "sun.ent";
 

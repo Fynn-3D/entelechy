@@ -1,7 +1,7 @@
 //! Glow round bright lights (`kernels/bloom.ent`): the HDR picture's bright
 //! parts shrunk by halves six times and grown back, each level adding the
 //! larger glow below it. `bloom` is half the picture's size, what
-//! `render.view` takes as its `bloom`.
+//! `render.tonemap` takes as its `bloom`.
 use "../kernels/";
 
 input hdr: Image;

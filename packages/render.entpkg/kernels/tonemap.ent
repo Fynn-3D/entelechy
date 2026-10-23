@@ -1,4 +1,4 @@
-// Post-processing: from a renderer's HDR picture to the picture seen. Glow (bright parts shrunk and blurred), ACES tone,
+// Tone mapping: from a renderer's HDR picture to the picture seen. Glow (bright parts shrunk and blurred), ACES tone,
 // vividness, warm highlights, slightly dark corners, and sRGB at last (what a display wants). The HDR picture may be smaller than the window, read to scale.
 use "image.entpkg";
 
@@ -34,7 +34,7 @@ kernel render.spread@1 {
 }
 /// The picture seen: glow added, ACES tone (`exposure`), vividness (`vivid`, 1 unchanged), shadows toward
 /// cyan and highlights warm (`warmth`, 0 none), corners slightly darker (`vignette`, 0 none), encoded as sRGB.
-kernel render.view@1 {
+kernel render.tonemap@1 {
     requires { field.read; field.write; }
     input hdr: Image;
     input bloom: Image;

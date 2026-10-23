@@ -14,9 +14,9 @@ hands over the lens, the sky, a G-buffer and proxies as the
 contract asks, and the renderer placed after it owns the light. A
 different renderer is a different `light` node:
 
-- `scene.esn`: the [render package](../../packages/render.entpkg/package.esn)'s light probes;
-- `tests/traced.esn`: the [render package](../../packages/render.entpkg/package.esn)'s path tracer;
-- `tests/bench.esn`: the [render package](../../packages/render.entpkg/package.esn)'s view.
+- `scene.esn`: the [render package](../../packages/render.entpkg/package.esn)'s probe GI;
+- `tests/path_tracer.esn`: the [render package](../../packages/render.entpkg/package.esn)'s path tracer;
+- `tests/clay.esn`: the [render package](../../packages/render.entpkg/package.esn)'s clay.
 
 The left button drags to turn, the right or middle to pan, the wheel
 dollies, a double-click or F flies to the ball under the pointer, W A S
@@ -27,6 +27,6 @@ entelechy player examples/material_balls/scene.esn
 entelechy replay examples/material_balls/tests*.replay --backend gpu
 ```
 
-`tests/balls.replay`, `tests/traced.replay` and `tests/bench.replay`
+`tests/balls.replay`, `tests/path_tracer.replay` and `tests/clay.replay`
 hold each renderer's picture of the same balls to its pixels on every
 backend.
