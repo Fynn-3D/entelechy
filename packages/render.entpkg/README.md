@@ -79,7 +79,8 @@ use "render.entpkg";
   `render.lamp_maps_none@1`, `render.lamp_map_lamps@1`,
   `render.lamp_map_count@1`, `render.lamp_map_counts@1`,
   `render.lamp_map_clusters@1`, `render.lamp_map_tiles@1`,
-  `render.lamp_map_blank@1`, `render.lamp_map_draw@1`.
+  `render.lamp_map_held@1`, `render.lamp_map_dirty@1`, `render.lamp_map_clear@1`,
+  `render.lamp_map_draw@1`.
 - `kernels/lamps.ent` — Point lights, spotlights and glowing panels,
   culled by tiles, shadowed by their maps or through the proxies, and on
   the screen. Kernels:

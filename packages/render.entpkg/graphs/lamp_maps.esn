@@ -2,7 +2,8 @@
 //! `res` texels a side, drawn from a clustered library (`mesh.entpkg`'s `graphs/cluster.esn`: `points`, `faces`,
 //! `clusters`, `meshes`) at its level `level`, the things placed as `insts` say; nothing within `skip` times a lamp's bulb
 //! of it casts a shadow. `maps` goes to `graphs/lamps.esn` (and `render.lamps_light`), each lamp that has a slot shadowed
-//! by its map, the rest through the proxies. Lamps and things that keep still draw them once.
+//! by its map, the rest through the proxies. A slot is drawn again only when its lamp's place, bulb or reach, or a thing
+//! within its reach, changes; lamps and things that keep still draw them once.
 use "parallel.entpkg";
 use "mesh.entpkg";
 use "../kernels/";
@@ -24,11 +25,16 @@ node counts: render.lamp_map_counts@1 { insts <- insts; meshes <- meshes; level 
 node cluster_runs: graph "parallel.entpkg/graphs/runs.esn" { counts <- counts.result; }
 node chosen: render.lamp_map_clusters@1 { insts <- insts; meshes <- meshes; counts <- counts.result; ends <- cluster_runs.ends; entries <- cluster_runs.entries; level = level;
     domain = max(value(entries), 1); }
-node tiles: render.lamp_map_tiles@1 { chosen <- chosen.result; insts <- insts; points <- points; faces <- faces; clusters <- clusters; lamps <- lamps; slot_lamps <- slot_lamps.result;
+node held: render.lamp_map_held@1 { lamps <- lamps; slot_lamps <- slot_lamps.result; insts <- insts; meshes <- meshes; domain = count(slot_lamps); }
+node held0: Rows<Int> { domain = 1; }
+node dirty: render.lamp_map_dirty@1 { now <- held.result; previous <~ held.result from held0.result; domain = count(now); }
+node tiles: render.lamp_map_tiles@1 { dirty <- dirty.result; chosen <- chosen.result; insts <- insts; points <- points; faces <- faces; clusters <- clusters; lamps <- lamps; slot_lamps <- slot_lamps.result;
     res = res; skip = skip; domain = count(chosen) * 128 * 6 * count(slot_lamps); }
 node tile_runs: graph "parallel.entpkg/graphs/runs.esn" { counts <- tiles.result; }
-node blank: render.lamp_map_blank@1 { slots <- slots.result; domain = vec2(res, res * 6 * max(value(slots), 1)); }
+node map0: Grid<Int> { domain = vec2(1, 1); }
+node cleared: render.lamp_map_clear@1 { previous <~ drawn.result from map0.result; dirty <- dirty.result; slots <- slots.result; res = res;
+    domain = vec2(res, res * 6 * max(value(slots), 1)); }
 node drawn: render.lamp_map_draw@1 { chosen <- chosen.result; insts <- insts; points <- points; faces <- faces; clusters <- clusters; lamps <- lamps; slot_lamps <- slot_lamps.result;
-    tiles <- tiles.result; ends <- tile_runs.ends; blank <- blank.result; entries <- tile_runs.entries; res = res; skip = skip; domain = max(value(entries), 1); }
+    tiles <- tiles.result; ends <- tile_runs.ends; blank <- cleared.result; entries <- tile_runs.entries; res = res; skip = skip; domain = max(value(entries), 1); }
 
 output maps <- drawn.result;

@@ -167,6 +167,16 @@ fn lamp_map_distance(maps: Grid<Int>, slot: Int, res: Int, f: Int, g: Vec2, o: V
     let t = g + o;
     return from_bits(at(maps, lamp_map_cell(slot, f, ivec2(int(floor(t.x)), int(floor(t.y))), res)));
 }
+/// How lit a point `dist` from the lamp is by the four texels round `g + o` (`lamp_map_distance`'s), each compared and the
+/// four weighted by where the point falls between them, so an edge between texels is a ramp, not a step.
+fn lamp_map_compared(maps: Grid<Int>, slot: Int, res: Int, f: Int, g: Vec2, o: Vec2, dist: Float) -> Float {
+    let t = g + o - 0.5;
+    let b = floor(t);
+    let w = t - b;
+    let lit = lamp_map_texels_lit(maps, slot, res, f, b, dist);
+    return mix(mix(lit.x, lit.y, w.x), mix(lit.z, lit.w, w.x), w.y);
+}
+
 /// How much of lamp `m` reaches `p` (a surface facing `n`) by its shadow map in slot `slot` (1 lit, 0 dark): the point
 /// moved off the surface by a texel and a half, blockers looked for over as many texels as the bulb spans from there, their
 /// mean distance making the penumbra as wide as the bulb makes it at `p`, that much filtered (twelve points of a spiral
@@ -196,9 +206,18 @@ fn lamp_map_seen(maps: Grid<Int>, slot: Int, m: Lamp, p: Vec3, n: Vec3, turn: Fl
         let k = float(index());
         let w = a + k * 2.3999632;
         let o = vec2(cos(w), sin(w)) * (wide * sqrt((k + 0.5) / 12.0));
-        sum + step(dist - bias, lamp_map_distance(maps, slot, res, f, g, o))
+        sum + lamp_map_compared(maps, slot, res, f, g, o, dist - bias)
     };
     return lit / 12.0;
+}
+/// The four texels from `b` (its corner, texels) lit (1) or not for a point `dist` from the lamp: x, y the lower row, z, w
+/// the upper.
+fn lamp_map_texels_lit(maps: Grid<Int>, slot: Int, res: Int, f: Int, b: Vec2, dist: Float) -> Vec4 {
+    let at00 = from_bits(at(maps, lamp_map_cell(slot, f, ivec2(int(b.x), int(b.y)), res)));
+    let at10 = from_bits(at(maps, lamp_map_cell(slot, f, ivec2(int(b.x) + 1, int(b.y)), res)));
+    let at01 = from_bits(at(maps, lamp_map_cell(slot, f, ivec2(int(b.x), int(b.y) + 1), res)));
+    let at11 = from_bits(at(maps, lamp_map_cell(slot, f, ivec2(int(b.x) + 1, int(b.y) + 1), res)));
+    return vec4(step(dist, at00), step(dist, at10), step(dist, at01), step(dist, at11));
 }
 
 /// The shadow toward point `at` of lamp `m` from `p` (a surface facing `n`) through the proxies, walked from just off the

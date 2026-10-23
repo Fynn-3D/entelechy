@@ -6,8 +6,11 @@
 // texels (`render.lamp_map_tiles`); each tile walks its texels and keeps, through each texel's middle, where the ray from
 // the lamp meets the face (Möller and Trumbore's), the nearest of all as the least distance's bits
 // (`render.lamp_map_draw`). Nothing within `skip` times a lamp's bulb of it casts a shadow, so a shade round a bulb does
-// not hide it; nothing past its reach is drawn. Lamps and things that keep still draw them once. `graphs/lamp_maps.esn` is
-// the whole; `render.lamp_maps_none` stands for them in a scene without.
+// not hide it; nothing past its reach is drawn. Each slot keeps what it was drawn from (`render.lamp_map_held`: its
+// lamp's place, bulb and reach, and every thing within that reach where it stands), and only a slot whose own changed is
+// cleared and drawn again (`render.lamp_map_dirty`, `render.lamp_map_clear`): a lamp turned brighter draws nothing, a lamp
+// moved draws its own cube, a thing moved the cubes of the lamps that reach it. `graphs/lamp_maps.esn` is the whole;
+// `render.lamp_maps_none` stands for them in a scene without.
 use "parallel.entpkg";
 use "mesh.entpkg";
 use "raster.entpkg";
@@ -168,10 +171,11 @@ kernel render.lamp_map_clusters@1 {
     }
 }
 
-/// How many tiles each face spans on each slot's each cube face (`domain = count(chosen) * mesh_cluster_faces() * 6 *
-/// slots`, `lamp_map_face`'s pairs).
+/// How many tiles each face spans on each dirty slot's each cube face (`domain = count(chosen) * mesh_cluster_faces() * 6 *
+/// slots`, `lamp_map_face`'s pairs); none on a slot drawn already.
 kernel render.lamp_map_tiles@1 {
     requires { field.read; field.write; }
+    input dirty: Rows<Int>;
     input chosen: Rows<IVec2>;
     input insts: FieldInsts;
     input points: Rows<MeshPoint>;
@@ -183,19 +187,70 @@ kernel render.lamp_map_tiles@1 {
     param skip: Float = 1.5;
     output result: Rows<Int>;
     compute {
-        let d = lamp_map_face(element(), count(slot_lamps), chosen, insts, points, faces, clusters, lamps, slot_lamps, res, skip);
+        let e = element();
+        if at(dirty, min((e % (6 * count(slot_lamps))) / 6, count(dirty) - 1)) == 0 { return 0; }
+        let d = lamp_map_face(e, count(slot_lamps), chosen, insts, points, faces, clusters, lamps, slot_lamps, res, skip);
         let t = float(lamp_map_tile());
         let n = max(ceil((vec2(d.box.z, d.box.w) - vec2(d.box.x, d.box.y)) / t), vec2(0.0, 0.0));
         return int(n.x) * int(n.y);
     }
 }
 
-/// The maps, every texel the farthest at first (`domain = vec2(res, res * 6 * value(slots))`).
-kernel render.lamp_map_blank@1 {
+/// A number mixed into a running hash.
+fn lamp_map_mixed(h: Int, x: Float) -> Int { return mul_wrap(h ^ bits(x), 16777619); }
+
+/// What each slot is drawn from, as a hash (`domain = count(slot_lamps)`): its lamp's place, bulb, reach and panel, and
+/// each thing whose sphere its reach meets, where it stands, how it is turned and sized and what it is; 0 for no lamp.
+kernel render.lamp_map_held@1 {
     requires { field.read; field.write; }
+    input lamps: Lamps;
+    input slot_lamps: Rows<Int>;
+    input insts: FieldInsts;
+    input meshes: Rows<ClusterMesh>;
+    output result: Rows<Int>;
+    compute {
+        let k = sample(slot_lamps);
+        if k < 0 { return 0; }
+        let m = at(lamps, k);
+        let h0 = lamp_map_mixed(lamp_map_mixed(lamp_map_mixed(lamp_map_mixed(lamp_map_mixed(lamp_map_mixed(-2128831035, m.at.x), m.at.y), m.at.z), m.size), m.reach),
+            m.side.x + m.side.y * 3.0 + m.side.z * 7.0 + m.rise.x * 11.0 + m.rise.y * 13.0 + m.rise.z * 17.0);
+        let h = loop count(insts) with h = h0 {
+            let it = at(insts, index());
+            let sp = at(meshes, it.shape).sphere;
+            let middle = cluster_placed(it, sp.xyz);
+            if length(middle - m.at) - sp.w * it.size > m.reach { h } else {
+                lamp_map_mixed(lamp_map_mixed(lamp_map_mixed(lamp_map_mixed(lamp_map_mixed(lamp_map_mixed(h, it.at.x), it.at.y), it.at.z), it.turn), it.size), float(it.shape))
+            }
+        };
+        return h | 1;
+    }
+}
+
+/// 1 for each slot whose hash is not the last frame's (`previous`; every slot where their number differs), 0 for the rest.
+kernel render.lamp_map_dirty@1 {
+    requires { field.read; field.write; }
+    input now: Rows<Int>;
+    input previous: Rows<Int>;
+    output result: Rows<Int>;
+    compute { return if count(previous) != count(now) { 1 } else { int(sample(now) != at(previous, element())) }; }
+}
+
+/// The maps with the dirty slots cleared to the farthest (`domain = vec2(res, res * 6 * max(value(slots), 1))`), the rest
+/// as the last frame drew them (`previous`; all cleared where its size is not this one).
+kernel render.lamp_map_clear@1 {
+    requires { field.read; field.write; }
+    input previous: Grid<Int>;
+    input dirty: Rows<Int>;
+    /// How many slots (sizes the node).
     input slots: Rows<Int>;
+    param res: Int = 256;
     output result: Grid<Int>;
-    compute { return 2147483647; }
+    compute {
+        let c = icoord();
+        let slot = c.y / (res * 6);
+        let held = isize(previous) == idomain();
+        return if held && at(dirty, min(slot, count(dirty) - 1)) == 0 { at(previous, c) } else { 2147483647 };
+    }
 }
 
 /// Each tile of each face (`domain = value(entries)`, the pairs' tiles laid end to end by `ends`): every texel of it the
