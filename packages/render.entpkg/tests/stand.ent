@@ -163,6 +163,8 @@ kernel stand.gbuffer@1 {
     requires { field.read; field.write; }
     input lens: Lenses;
     input sky: SkyLooks;
+    /// 1: the mirror pass, drawn through `render.mirror_lens` from the floor up.
+    param mirror: Int = 0;
     output surface: Grid<Vec4>;
     output paint: Grid<Vec4>;
     output extra: Grid<Vec4>;
@@ -178,7 +180,9 @@ kernel stand.gbuffer@1 {
         let l = at(lens, 0);
         let s = at(sky, 0);
         let dir = ray(l, coord(), domain());
-        let hit = trace(l.eye, dir, 200.0, 160);
+        let t0 = if mirror == 1 { mirror_start(l.eye, dir, 0.001) } else { 0.0 };
+        let found = if t0 < 0.0 { Hit { d: 200.0, what: -1 } } else { trace(l.eye + dir * t0, dir, 200.0, 160) };
+        let hit = Hit { d: found.d + t0, what: found.what };
         if hit.what < 0 { return { surface: vec4(0.0, 1.0, 0.0, no_hit()), paint: vec4(0.0, 0.0, 0.0, 1.0), extra: vec4(1.0, 0.0, 0.0, 0.0), layers: none, more: none,
             behind_at: none, behind_dir: none, behind_paint: none, behind_normal: none, through: none }; }
         let p = l.eye + dir * hit.d;

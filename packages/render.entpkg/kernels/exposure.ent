@@ -1,0 +1,100 @@
+// Metered exposure, as an eye or a camera adapts: the picture's mean
+// brightness (the mean of log luminance, so a few lamps do not darken the
+// rest) is measured over tiles (`render.meter_tiles`), an exposure follows
+// it over time, quicker toward a brighter scene than a darker one
+// (`render.meter`), and the HDR picture is scaled by it (`render.expose`)
+// before the glow and tone.
+
+/// A tile's side in pixels for metering.
+fn meter_tile() -> Float { return 32.0; }
+
+/// Log2 luminance of linear color `c`, kept within the meter's range.
+fn meter_log(c: Vec3) -> Float {
+    return clamp(log2(max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 0.00001)), -16.0, 16.0);
+}
+
+/// Each tile's mean log2 luminance over 16 samples (every eighth pixel each
+/// way), and how much it counts (w: more toward the middle of the picture).
+kernel render.meter_tiles@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    output result: Grid<Vec2>;
+    compute {
+        let ext = size(hdr);
+        let lo = coord() * meter_tile();
+        let sum = loop 16 with sum = vec2(0.0, 0.0) {
+            let q = min(lo + vec2(float(index() % 4), float(index() / 4)) * 8.0 + 4.0, ext - vec2(1.0, 1.0));
+            vec2(sum.x + meter_log(at(hdr, q).xyz), sum.y + 1.0)
+        };
+        let mid = (lo + meter_tile() * 0.5) / ext - 0.5;
+        let weight = 1.0 - 0.6 * smoothstep(0.1, 0.7, length(mid * vec2(1.0, 1.4)));
+        return vec2(sum.x / max(sum.y, 1.0), weight);
+    }
+}
+
+/// The exposure (x, a factor the HDR picture is multiplied by), the time it
+/// was last set (y), the exposure the scene asks for now (z, in stops) and
+/// the mean it measured (w, log2). It follows the picture's weighted mean
+/// toward `key` (the gray the mean is shown as) — a dark scene, as an eye
+/// and a camera see it at night, toward `night_key`, from a mean of
+/// `day_from` (log2) down to `night_from`;
+/// within `darkest` and `brightest` (the exposure's log2 range), moving a
+/// stop in `adapt_up` seconds toward brighter scenes and `adapt_down`
+/// toward darker; `bias` stops more or less than the meter says. On the
+/// first frame it takes the asked exposure at once.
+kernel render.meter@1 {
+    requires { field.read; field.write; time.read; }
+    input previous: Rows<Vec4>;
+    input tiles: Grid<Vec2>;
+    param key: Float = 0.18;
+    param night_key: Float = 0.025;
+    param day_from: Float = -2.0;
+    param night_from: Float = -7.0;
+    param bias: Float = 0.0;
+    param darkest: Float = -4.0;
+    param brightest: Float = 8.0;
+    param adapt_up: Float = 0.6;
+    param adapt_down: Float = 2.0;
+    output result: Rows<Vec4>;
+    compute {
+        let was = sample(previous);
+        let n = count(tiles);
+        let w = size(tiles).x;
+        let mean = loop 4096 with m = vec2(0.0, 0.0) until index() >= n {
+            let t = at(tiles, vec2(float(index() % int(w)), float(index() / int(w))));
+            vec2(m.x + t.x * t.y, m.y + t.y)
+        };
+        let seen = mean.x / max(mean.y, 0.0001);
+        // The exposure that shows the mean as `key`, in stops.
+        let shown = mix(night_key, key, smoothstep(night_from, day_from, seen));
+        let asked = clamp(log2(shown) - seen + bias, darkest, brightest);
+        let t = time();
+        if was.y < 0.0 || was.x <= 0.0 { return vec4(exp2(asked), t, asked, seen); }
+        let now = log2(was.x);
+        let dt = clamp(t - was.y, 0.0, 0.25);
+        // Toward brighter scenes (a lower exposure) quicker than darker.
+        let rate = if asked < now { 1.0 / max(adapt_up, 0.01) } else { 1.0 / max(adapt_down, 0.01) };
+        let step = clamp(asked - now, 0.0 - rate * dt, rate * dt);
+        return vec4(exp2(now + step), t, asked, seen);
+    }
+}
+
+/// Before the first frame: no exposure yet.
+kernel render.meter_start@1 {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    compute { return vec4(0.0, -1.0, 0.0, 0.0); }
+}
+
+/// The HDR picture scaled by the metered exposure.
+kernel render.expose@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    input meter: Rows<Vec4>;
+    output result: Image;
+    compute {
+        let e = at(meter, 0).x;
+        let c = sample(hdr);
+        return vec4(c.xyz * e, c.w);
+    }
+}

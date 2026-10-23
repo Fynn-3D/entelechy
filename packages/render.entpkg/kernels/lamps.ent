@@ -1,0 +1,187 @@
+// Lamps: lights of their own beside the sun, point lights and spotlights,
+// each with a reach past which it gives nothing. A scene hands over its
+// lamps as rows (at most 128); the screen is cut into tiles of 16 by 16
+// pixels and each tile keeps the lamps that can reach what it shows
+// (`render.lamps_tiles`), so a pixel adds only those (`render.lamps_shade`),
+// each shadowed through the proxies when the lamp asks for it.
+use "brdf.ent";
+use "camera.ent";
+
+/// A lamp: where it is, how far it reaches (meters; nothing past it), its
+/// intensity (linear HDR: the irradiance a surface facing it gets one meter
+/// away), its size (the bulb's radius: softer shadows and highlights, no
+/// infinite peak near it), where a spotlight aims (`aim`) with the cosines of
+/// its full beam (`inner`) and its edge (`outer`; -1 for a point light that
+/// shines all round), and whether it casts shadows (1) or not (0).
+struct Lamp { at: Vec3; reach: Float; color: Vec3; size: Float; aim: Vec3; inner: Float; outer: Float; shadow: Int; }
+type Lamps = Rows<Lamp>;
+
+/// A point light at `at` reaching `reach` meters, of intensity `color`.
+fn point_lamp(at: Vec3, reach: Float, color: Vec3, size: Float, shadow: Int) -> Lamp {
+    return Lamp { at: at, reach: reach, color: color, size: size, aim: vec3(0.0, -1.0, 0.0), inner: -1.0, outer: -1.0, shadow: shadow };
+}
+/// A spotlight at `at` aimed toward `toward`, its beam `beam` radians wide
+/// across (full) and fading to nothing over `soft` radians more.
+fn spot_lamp(at: Vec3, toward: Vec3, reach: Float, color: Vec3, size: Float, beam: Float, soft: Float, shadow: Int) -> Lamp {
+    return Lamp { at: at, reach: reach, color: color, size: size, aim: normalize(toward - at), inner: cos(beam * 0.5), outer: cos(beam * 0.5 + soft), shadow: shadow };
+}
+/// How many lamps a scene may hand over.
+fn lamps_most() -> Int { return 128; }
+/// The tile's side in pixels.
+fn lamp_tile() -> Float { return 16.0; }
+
+/// The light lamp `m` gives a point at `p` (before shadows): the inverse
+/// square from the bulb's surface, windowed to nothing at its reach, and a
+/// spotlight's beam. The direction toward it is `normalize(m.at - p)`.
+fn lamp_light(m: Lamp, p: Vec3) -> Vec3 {
+    let d = m.at - p;
+    let d2 = dot(d, d);
+    let x = d2 / max(m.reach * m.reach, 0.0001);
+    let window = saturate(1.0 - x * x);
+    let spot = if m.outer > -1.0 { smoothstep(m.outer, m.inner, dot(normalize(vec3(0.0, 0.0, 0.0) - d), m.aim)) } else { 1.0 };
+    return m.color * (window * window * spot / (d2 + m.size * m.size));
+}
+
+/// The shadow toward lamp `m` from `p` (a surface facing `n`): the proxies
+/// walked from just off the surface to the bulb; 1 lit, 0 dark, softer for
+/// a larger bulb.
+fn lamp_shadow(m: Lamp, proxy: Volume<Vec4>, land: Grid<Float>, fr: Proxy, p: Vec3, n: Vec3) -> Float {
+    if m.shadow == 0 { return 1.0; }
+    let d = m.at - p;
+    let dist = length(d);
+    let dir = d / max(dist, 0.0001);
+    let o = p + n * (fr.cell * 0.6);
+    let start = rough_leave(proxy, fr, o, dir, fr.cell * 0.5, fr.cell * 3.0);
+    let far = dist - m.size - fr.cell;
+    if far <= start { return 1.0; }
+    // Penumbra widens with the bulb: k is how sharp.
+    let k = clamp(dist / max(m.size * 4.0, 0.05), 4.0, 24.0);
+    let r = loop 64 with r = vec2(start, 1.0) until r.x > far || r.y < 0.01 {
+        let h = rough_probe(proxy, land, fr, o + dir * r.x).x;
+        vec2(r.x + clamp(h, fr.cell * 0.3, 12.0), min(r.y, k * h / r.x))
+    };
+    return smoothstep(0.0, 1.0, saturate(r.y));
+}
+
+/// The nearest and furthest each tile of 16 by 16 pixels shows (meters along
+/// the view ray; x no_hit where it is all sky).
+kernel render.lamps_depth@1 {
+    requires { field.read; field.write; }
+    input surface: Grid<Vec4>;
+    output result: Grid<Vec2>;
+    compute {
+        let lo = coord() * lamp_tile();
+        let ext = size(surface);
+        return loop 256 with r = vec2(no_hit(), 0.0) {
+            let q = lo + vec2(float(index() % 16), float(index() / 16));
+            if q.x < ext.x && q.y < ext.y {
+                let w = at(surface, q).w;
+                if w < no_hit() * 0.5 { vec2(min(r.x, w), max(r.y, w)) } else { r }
+            } else { r }
+        };
+    }
+}
+
+/// Which lamps reach what each tile shows: 128 bits, lamp k bit k % 32 of
+/// component k / 32. A lamp is kept where its sphere of reach falls on the
+/// tile on the screen and overlaps the distances the tile shows.
+kernel render.lamps_tiles@1 {
+    requires { field.read; field.write; }
+    input depth: Grid<Vec2>;
+    input lamps: Lamps;
+    input lens: Lenses;
+    /// The G-buffer's size the tiles cut.
+    input surface: Grid<Vec4>;
+    output result: Grid<IVec4>;
+    compute {
+        let span = sample(depth);
+        if span.x > no_hit() * 0.5 { return ivec4(0, 0, 0, 0); }
+        let l = at(lens, 0);
+        let ext = size(surface);
+        let lo = coord() * lamp_tile();
+        let hi = min(lo + lamp_tile(), ext);
+        let n = min(count(lamps), lamps_most());
+        return loop 128 with bits = ivec4(0, 0, 0, 0) until index() >= n {
+            let m = at(lamps, index());
+            let toward = m.at - l.eye;
+            let far = length(toward);
+            let ahead = dot(toward, l.ahead);
+            // Distances along the view ray the lamp's sphere covers.
+            let near_enough = far - m.reach <= span.y && far + m.reach >= span.x;
+            // On the screen: the eye inside the sphere, or the projected
+            // circle (widened for the lens's slant) meeting the tile.
+            let inside = far <= m.reach * 1.05;
+            let px = project(l, m.at, ext);
+            let r = m.reach * l.focal * ext.y / max(ahead, 0.001) * 1.25;
+            let gap = max(max(lo - vec2(px.x, px.y), vec2(px.x, px.y) - hi), vec2(0.0, 0.0));
+            let seen = inside || (ahead > -m.reach && (ahead <= 0.0 || length(gap) <= r));
+            let k = index();
+            let bit = 1 << (k % 32);
+            if near_enough && seen {
+                if k < 32 { ivec4(bits.x | bit, bits.y, bits.z, bits.w) }
+                else if k < 64 { ivec4(bits.x, bits.y | bit, bits.z, bits.w) }
+                else if k < 96 { ivec4(bits.x, bits.y, bits.z | bit, bits.w) }
+                else { ivec4(bits.x, bits.y, bits.z, bits.w | bit) }
+            } else { bits }
+        };
+    }
+}
+
+/// The renderer's picture `hdr` with the lamps' light added: each lamp the
+/// pixel's tile keeps lights the surface as the sun would (`lit_by`), its
+/// bulb's size widening the highlight, shadowed through the proxies.
+kernel render.lamps_shade@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    input surface: Grid<Vec4>;
+    input paint: Grid<Vec4>;
+    input extra: Grid<Vec4>;
+    input layers: Grid<Vec4>;
+    input more: Grid<Vec4>;
+    input tiles: Grid<IVec4>;
+    input lamps: Lamps;
+    input lens: Lenses;
+    input proxy: Volume<Vec4>;
+    input land: Grid<Float>;
+    input frame: Proxies;
+    output result: Image;
+    compute {
+        let base = sample(hdr);
+        let s = sample(surface);
+        if s.w > no_hit() * 0.5 { return base; }
+        let q = coord();
+        let ext = size(surface);
+        let l = at(lens, 0);
+        let dir = ray(l, q, ext);
+        let p = l.eye + dir * s.w;
+        let n = s.xyz;
+        let v = vec3(0.0, 0.0, 0.0) - dir;
+        let m0 = pbr_of(sample(paint), sample(extra), sample(layers), sample(more));
+        let fr = at(frame, 0);
+        let bits = at(tiles, min(floor(q / lamp_tile()), size(tiles) - vec2(1.0, 1.0)));
+        let n_lamps = min(count(lamps), lamps_most());
+        let added = loop 128 with sum = vec3(0.0, 0.0, 0.0) until index() >= n_lamps {
+            let k = index();
+            let word = if k < 32 { bits.x } else if k < 64 { bits.y } else if k < 96 { bits.z } else { bits.w };
+            if ((word >>> (k % 32)) & 1) == 0 { sum } else {
+                let m = at(lamps, k);
+                let light = lamp_light(m, p);
+                if max(light.x, max(light.y, light.z)) < 0.0001 { sum } else {
+                    let d = m.at - p;
+                    let dist = length(d);
+                    let to = d / max(dist, 0.0001);
+                    // A sphere light: the highlight widened by the bulb's
+                    // size as seen from here (Karis).
+                    let a = pbr_alpha(m0.rough);
+                    let widened = sqrt(saturate(a + m.size / (2.0 * max(dist, 0.01))));
+                    let mat = Pbr { ..m0, rough: max(m0.rough, widened) };
+                    let facing = dot(n, to) > -0.2 || m0.subsurface > 0.0;
+                    if !facing { sum } else {
+                        sum + lit_by(mat, n, v, to, light * lamp_shadow(m, proxy, land, fr, p, n))
+                    }
+                }
+            }
+        };
+        return base + vec4(added.x, added.y, added.z, 0.0);
+    }
+}

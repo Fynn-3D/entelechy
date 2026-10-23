@@ -3,8 +3,9 @@
 The rendering contract and its renderers: a scene hands over a G-buffer
 and proxies, and a renderer owns the light — light probes, a path
 tracer, daylight, a workbench — with physically based shading, the sky,
-a camera, temporal antialiasing and upscaling, depth of field, film and
-a painted look.
+lamps, a planar mirror, fog and clouds, a camera, metered exposure,
+temporal antialiasing and upscaling, depth of field, glow, film and a
+painted look.
 
 **Layer:** Graphics. **Uses:** [`geometry`](../geometry.entpkg/README.md), [`image`](../image.entpkg/README.md), [`random`](../random.entpkg/README.md), [`raster`](../raster.entpkg/README.md).
 
@@ -18,6 +19,8 @@ use "render.entpkg";
   Kernels: `render.air@1`.
 - `kernels/antialias.ent` — Antialiasing within one frame (FXAA).
   Kernels: `render.fxaa@1`.
+- `kernels/bloom.ent` — Glow round bright lights, of every size at once.
+  Kernels: `render.bloom_down@1`, `render.bloom_up@1`.
 - `kernels/brdf.ent` — Standard PBR.
 - `kernels/camera.ent` — The lens, and the proxies (the coarse scene a
   renderer traces shadows and bounces through). Kernels:
@@ -26,13 +29,21 @@ use "render.entpkg";
 - `kernels/contact_shadow.ent` — Contact shadows. Kernels:
   `render.contact@1`.
 - `kernels/daylight.ent` — Daylight. Kernels: `render.daylight@1`.
+- `kernels/exposure.ent` — Metered exposure. Kernels:
+  `render.meter_tiles@1`, `render.meter_start@1`, `render.meter@1`,
+  `render.expose@1`.
 - `kernels/depth_of_field.ent` — Depth of field. Kernels:
   `render.dof_start@1`, `render.dof_control@1`, `render.focus@1`,
   `render.focused@1`.
 - `kernels/film.ent` — Film. Kernels: `render.film_start@1`,
   `render.film_keys@1`, `render.film@1`.
+- `kernels/lamps.ent` — Point lights and spotlights, culled by tiles,
+  shadowed through the proxies. Kernels: `render.lamps_depth@1`,
+  `render.lamps_tiles@1`, `render.lamps_shade@1`.
 - `kernels/merge.ent` — Two G-buffers of one view made one. Kernels:
   `render.nearer@1`.
+- `kernels/mirror.ent` — A planar mirror. Kernels: `render.mirror_lens@1`,
+  `render.mirror_mix@1`.
 - `kernels/painted.ent` — A painted look. Kernels: `render.npr@1`.
 - `kernels/path_trace.ent` — Path tracing (standard PBR, `brdf.ent`).
   Kernels: `render.path_count_start@1`, `render.path_count@1`,
@@ -55,6 +66,9 @@ use "render.entpkg";
   `render.jitter@1`, `render.taa@1`, `render.same_lens@1`.
 - `kernels/transmission.ent` — Transmission (glass, water, ice).
   Kernels: `render.settle_behind@1`.
+- `kernels/volumetric.ent` — Light in the air: height fog the sun and the
+  lamps light, a deck of clouds. Kernels: `render.fog@1`,
+  `render.fog_blur@1`, `render.clouds@1`, `render.air_apply@1`.
 - `kernels/upscale.ent` — The picture is computed at an inner resolution
   with a ceiling and scaled to the window at last. Kernels:
   `render.dynamic_start@1`, `render.dynamic@1`, `render.extent@1`,
@@ -67,6 +81,8 @@ use "render.entpkg";
 ## Graph presets
 
 - `graphs/blend.esn` — Temporal antialiasing and upscaling.
+- `graphs/bloom.esn` — Glow (`kernels/bloom.ent`): six levels down and
+  back up; its `bloom` is what `render.view` takes.
 - `graphs/finish.esn` — The finish.
 - `graphs/finish_inner.esn` — The finish at the picture's own size
   (`finish.esn` works at the window's).
@@ -84,7 +100,8 @@ use "render.entpkg";
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`lit.replay`, `path_trace.replay`, `probes.replay`, `temporal.replay`.
+`lit.replay`, `night.replay`, `path_trace.replay`, `probes.replay`,
+`temporal.replay`.
 Every Kernel of the package is reached by one of them.
 
 Used by the [material_balls](../../examples/material_balls/README.md) example.
@@ -105,7 +122,7 @@ this contract takes any renderer package by changing a few graph lines.
 | `paint` | `Grid<Vec4>` | Per pixel: albedo (rgb, linear), roughness (w). |
 | `extra` | `Grid<Vec4>` | Per pixel: sun visibility (x, 0 to 1, from the scene's exact geometry), metalness (y), emission strength (z; emission is albedo times it), baked ambient occlusion (w; the scene's own, finer than a renderer finds; 0 means none given, `baked_occlusion`). |
 | `layers` | `Grid<Vec4>` | Per pixel: clearcoat (x), clearcoat roughness (y; 0 means 0.05), sheen (z), subsurface (w). All zero for plain surfaces. |
-| `more` | `Grid<Vec4>` | Per pixel: anisotropy (x), transmission (y), index of refraction (z; 0 means 1.5); w spare. All zero for plain surfaces. |
+| `more` | `Grid<Vec4>` | Per pixel: anisotropy (x), transmission (y), index of refraction (z; 0 means 1.5), how much the planar mirror shows (w; 0 none, 1 all, by Fresnel). All zero for plain surfaces. |
 | `behind_at` | `Grid<Vec4>` | Where a transmissive pixel's refracted path lands: world position (xyz), 1 if it hit something (w; 0: it left for the sky). |
 | `behind_dir` | `Grid<Vec4>` | The path's last direction (xyz), the sun's visibility there (w). |
 | `behind_paint` | `Grid<Vec4>` | What it landed on: albedo (rgb), roughness (w). |
@@ -114,6 +131,7 @@ this contract takes any renderer package by changing a few graph lines.
 | `proxy` | `Volume<Vec4>` | Coarse scene for secondary rays: signed distance (x), albedo (yzw), on the `Proxy` frame's lattice. Ground excluded. |
 | `land` | `Grid<Float>` | Ground height on the `Proxy` frame's ground lattice. |
 | `frame` | `Proxies` | Where `proxy` and `land` lie in the world, and the ground's albedo. |
+| `lamps` | `Lamps` | The lamps beside the sun, at most 128: each where it is, its reach, intensity, bulb size, a spotlight's aim and beam, whether it casts shadows (`point_lamp`, `spot_lamp`). A scene with none hands over none. |
 
 The G-buffer is the scene's own full-precision view; `proxy` and `land` are
 what a renderer traces shadows and bounces through.
@@ -125,7 +143,36 @@ one while the camera moves, and a full one, computed once, when it stops
 ### What a renderer gives
 
 `hdr: Image`, linear HDR, sky included. `render.bright`, `render.spread` and
-`render.view` turn it into the picture.
+`render.view` turn it into the picture (`graphs/bloom.esn`'s glow in place
+of `render.bright` and `render.spread` for round glows with long tails).
+
+### After a renderer
+
+What every renderer shares, laid over its `hdr` in this order:
+
+- **Lamps.** `render.lamps_depth` and `render.lamps_tiles` keep, for each
+  tile of 16 × 16 pixels, the lamps whose reach meets what it shows;
+  `render.lamps_shade` adds their light to `hdr` with `lit_by`, a larger
+  bulb widening the highlight, each shadowed through the proxies when it
+  asks. They do not yet light the probes' bounce.
+- **The mirror.** `render.mirror_lens` reflects the lens in a level plane;
+  the scene draws its G-buffer again through it from the plane up
+  (`mirror_start` says where a ray reaches the plane), a renderer lights
+  that, and `render.mirror_mix` lays it over the pixels `more` w marks, by
+  Fresnel, moved by the surface's normal (waves) and drawn out downward.
+- **The air.** `render.fog` walks each view ray at a smaller size through
+  height fog the sun (shadowed through the proxies), the sky, a glow of
+  the scene's own and the lamps light (each lamp's light summed exactly
+  along each step, so a beam beside a bulb has no spikes);
+  `render.fog_blur` smooths it by depth; `render.clouds` walks a deck of
+  clouds for the sky, lit by the sun and from below; `render.air_apply`
+  lays both over the picture, upsampled by depth. Each pixel's steps start
+  at a fixed offset of its own, so nothing needs history to settle.
+- **Exposure.** `render.meter_tiles` and `render.meter` (a `<~` state from
+  `render.meter_start`) meter the picture's mean log luminance and follow
+  it as an eye adapts, quicker toward brighter scenes, a dark scene shown
+  darker (`night_key`); `render.expose` scales `hdr` by it before the glow
+  and tone.
 
 ### Transmission
 
