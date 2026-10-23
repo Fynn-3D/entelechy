@@ -210,6 +210,17 @@ renderer's parameter (`painted` of lit, `style` of probe GI, `toon` in
 `kernels/probe_gi.ent`), and outlines and a watercolor's tone are a pass
 after it (`render.stylized`) that reads only its picture and the G-buffer.
 
+### Tuning a look
+
+What decides a look is a scene's to set, never a number written into a
+kernel: each tint, strength, distance and threshold a pass draws by is a
+param of its kernel, its default the look the package ships, and a graph
+preset that places the kernel carries the same param up, so a scene sets
+it on the preset's node. Shared functions take such params as small
+structs (`Surround`, `Openness`, `Mirror`, `Toon`, `ContactReach`,
+`StudioLight`, `FloorLines`). The numbers left in a kernel are the
+method's own: filter weights, luminance weights, phase normalizers.
+
 ### Before a renderer
 
 Passes over the G-buffer a scene hands over, each giving the same layout
