@@ -2,12 +2,13 @@
 
 The rendering contract and its renderers: a scene hands over a G-buffer
 and proxies, and a renderer owns the light — lit, ray traced, probe GI, a
-path tracer, clay — with physically based shading, the sky the air makes,
+path tracer, clay — with clustered meshes drawn each place at the level
+the screen asks for, physically based shading, the sky the air makes,
 lamps, a planar mirror, fog and clouds, a camera, metered and local
 exposure, temporal antialiasing and upscaling, depth of field, glow, film
 and a stylized look.
 
-**Layer:** Graphics. **Uses:** [`geometry`](../geometry.entpkg/README.md), [`image`](../image.entpkg/README.md), [`parallel`](../parallel.entpkg/README.md), [`random`](../random.entpkg/README.md), [`raster`](../raster.entpkg/README.md).
+**Layer:** Graphics. **Uses:** [`geometry`](../geometry.entpkg/README.md), [`image`](../image.entpkg/README.md), [`mesh`](../mesh.entpkg/README.md), [`parallel`](../parallel.entpkg/README.md), [`random`](../random.entpkg/README.md), [`raster`](../raster.entpkg/README.md).
 
 ```text
 use "render.entpkg";
@@ -30,6 +31,14 @@ use "render.entpkg";
   `render.depths@1`, `render.settle@1`, `render.lens@1`.
 - `kernels/clay.ent` — Clay: a modeler's preview, a studio light and
   backdrop over the standard contract. Kernels: `render.clay@1`.
+- `kernels/cluster.ent` — Clustered meshes drawn (as Nanite draws): each
+  place of each thing at the level whose error spans at most `error`
+  pixels, clusters out of the picture or behind the last frame's nearer
+  things left out, where two levels meet the finer one's corners taken up
+  to the coarser one's points. Kernels: `render.cluster_pick@1`,
+  `render.cluster_offsets@1`, `render.cluster_cull@1`,
+  `render.cluster_kept@1`, `render.cluster_corners@1`,
+  `render.cluster_faces@1`, `render.cluster_hzb@1`.
 - `kernels/clouds.ent` — A deck of clouds over the sky, lit through
   itself, and its shadows on the ground. Kernels: `render.clouds_deck@1`,
   `render.clouds_shadow@1`, `render.clouds_march@1`.
@@ -113,6 +122,10 @@ use "render.entpkg";
   back up; its `bloom` is what `render.tonemap` takes.
 - `graphs/clay.esn` — The clay renderer (`render.clay`) on a scene's
   G-buffer (the contract, its first three maps).
+- `graphs/cluster.esn` — Clustered meshes drawn (`kernels/cluster.ent`):
+  a library `mesh.entpkg`'s `graphs/cluster.esn` built, the things
+  placed (`FieldInst`s, the field's own), the corners and faces for the
+  rasterizer.
 - `graphs/exposure.esn` — Metered exposure, then local exposure: `hdr`
   scaled, and the `exposure` followed.
 - `graphs/field.esn` — The scene's proxy baked round the lens from its
@@ -143,7 +156,7 @@ use "render.entpkg";
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`field.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`,
+`cluster.replay`, `field.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`,
 `sky.replay`, `temporal.replay`.
 Every Kernel of the package is reached by one of them.
 

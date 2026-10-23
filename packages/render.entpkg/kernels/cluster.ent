@@ -1,0 +1,322 @@
+// Clusters drawn, as Nanite draws: a library of meshes built as levels and cut into clusters (`mesh.entpkg`'s
+// `graphs/cluster.esn`, several joined by its `graphs/library.esn`), and many things placed, the `FieldInst`s the field
+// bakes its proxy from (a thing's `shape` its mesh in the library), so one row places a thing in the picture and in the proxy.
+//
+// Each frame: each thing seen keeps, as candidates, its clusters of the levels its sphere's distance can ask for
+// (`render.cluster_pick`); each candidate is drawn where its own cells are no wider than `error` pixels on the screen and its
+// parent's are wider, which picks one level for every place of every thing, where it is in the picture, and where the last
+// frame did not show something nearer over all of it (`render.cluster_cull`, the last frame's `render.cluster_hzb`); the
+// drawn clusters are kept (`render.cluster_kept`) and their corners projected for the rasterizer, `mesh_cluster_faces()` faces
+// a cluster (`render.cluster_corners`, `render.cluster_faces`). A corner of a finer cluster lying where a coarser level is
+// drawn is moved up to that level's point (the mesh's `up`), so where two levels meet, the finer one's edge is the coarser
+// one's. `graphs/cluster.esn` is the whole; a scene reads a pixel's thing and face with `cluster_face_of`.
+use "parallel.entpkg";
+use "mesh.entpkg";
+use "raster.entpkg";
+use "camera.ent";
+use "field.ent";
+
+/// Thing `it`'s point `q` (its own meters) in the world (as `field_local` takes it back).
+fn cluster_placed(it: FieldInst, q: Vec3) -> Vec3 {
+    let c = cos(it.turn);
+    let s = sin(it.turn);
+    let w = q * it.size;
+    return vec3(c * w.x - s * w.z, w.y, s * w.x + c * w.z) + it.at;
+}
+
+/// Thing `it`'s direction `v` in the world.
+fn cluster_turned(it: FieldInst, v: Vec3) -> Vec3 {
+    let c = cos(it.turn);
+    let s = sin(it.turn);
+    return vec3(c * v.x - s * v.z, v.y, s * v.x + c * v.z);
+}
+
+/// How far `eye` is from box `b` (its lower corner, its side).
+fn cluster_box_distance(eye: Vec3, b: Vec4) -> Float {
+    return length(max(max(b.xyz - eye, eye - (b.xyz + b.w)), vec3(0.0, 0.0, 0.0)));
+}
+
+/// How many pixels a width `w` at box `b` spans at most, seen from `eye` (both in a thing's own meters, so its size cancels),
+/// `px` pixels a meter a meter away (the lens's focal length times the picture's height).
+fn cluster_error_px(w: Float, eye: Vec3, b: Vec4, px: Float) -> Float {
+    return w * px / max(cluster_box_distance(eye, b), 0.000001);
+}
+
+/// Brick `b` of level `level` of mesh `m`: its lower corner and side.
+fn cluster_brick_box(m: ClusterMesh, b: IVec3, level: Int) -> Vec4 {
+    let side = m.cell * exp2(float(level)) * float(mesh_brick_cells());
+    return vec4(m.lo + float(b) * side, side);
+}
+
+/// The brick of level `level` of mesh `m` that `q` lies in.
+fn cluster_brick_of(m: ClusterMesh, q: Vec3, level: Int) -> IVec3 {
+    let c = floor(max(q - m.lo, vec3(0.0, 0.0, 0.0)) / (m.cell * exp2(float(level))));
+    return ivec3(int(c.x), int(c.y), int(c.z)) >> 3;
+}
+
+/// How far brick `b` of level `level` lies from the mesh at most (`errors`, the library's); -1 for one holding nothing.
+fn cluster_brick_error(m: ClusterMesh, errors: Rows<Float>, b: IVec3, level: Int) -> Float {
+    let w = mesh_brick_widths(m.bits, level);
+    let top = (ivec3(1, 1, 1) << w) - 1;
+    if b.x < 0 || b.y < 0 || b.z < 0 || b.x > top.x || b.y > top.y || b.z > top.z { return -1.0; }
+    return at(errors, m.grids[level] + mesh_cluster_pack(b, w));
+}
+
+/// Whether brick `b` of level `level` (none past the top) is drawn at that level or coarser: it holds something, and how far
+/// it lies from the mesh spans no more than `error` pixels.
+fn cluster_brick_coarse(m: ClusterMesh, errors: Rows<Float>, b: IVec3, level: Int, eye: Vec3, px: Float, error: Float) -> Bool {
+    if level >= mesh_cluster_levels() { return false; }
+    let e = cluster_brick_error(m, errors, b, level);
+    return e >= 0.0 && cluster_error_px(e, eye, cluster_brick_box(m, b, level), px) <= error;
+}
+
+/// Whether brick `b` of level `level` is drawn at that level: it is fine enough (level 0 always is), and its parent is not.
+fn cluster_brick_drawn(m: ClusterMesh, errors: Rows<Float>, b: IVec3, level: Int, eye: Vec3, px: Float, error: Float) -> Bool {
+    let own = level == 0 || cluster_brick_coarse(m, errors, b, level, eye, px, error);
+    return own && !cluster_brick_coarse(m, errors, b >> 1, level + 1, eye, px, error);
+}
+
+/// The brick cluster `cl` was cut from.
+fn cluster_brick_at(m: ClusterMesh, cl: Cluster) -> IVec3 {
+    let c = floor((cl.brick.xyz - m.lo) / cl.brick.w + 0.5);
+    return ivec3(int(c.x), int(c.y), int(c.z));
+}
+
+/// The level a corner at `q` (mesh `m`'s own meters) is drawn at, from level `from` up: the coarsest drawn where it lies or
+/// within `reach` of that level's cells past it (away from `eye`), so that a coarser cluster's face reaching over the
+/// corner's finer place meets the finer faces round it at its own points.
+fn cluster_level_at(m: ClusterMesh, errors: Rows<Float>, q: Vec3, eye: Vec3, px: Float, error: Float, from: Int, reach: Float) -> Int {
+    let away = normalize(q - eye + vec3(0.0, 0.000001, 0.0));
+    return loop mesh_cluster_levels() - 1 - from with k = from {
+        let j = k + 1;
+        let cell = m.cell * exp2(float(j));
+        let here = cluster_brick_coarse(m, errors, cluster_brick_of(m, q, j), j, eye, px, error);
+        let past = cluster_brick_coarse(m, errors, cluster_brick_of(m, q + away * cell * reach, j), j, eye, px, error);
+        if !(here || past) { break k; }
+        j
+    };
+}
+
+/// Whether a sphere (in the world) is in the picture (`aspect` its width over its height).
+fn cluster_sphere_seen(l: Lens, c: Vec3, r: Float, aspect: Float) -> Bool {
+    let d = c - l.eye;
+    let z = dot(d, l.ahead);
+    if z < 0.0 - r { return false; }
+    let hx = 0.5 * aspect / l.focal;
+    let hy = 0.5 / l.focal;
+    return abs(dot(d, l.right)) - hx * z < r * sqrt(1.0 + hx * hx) && abs(dot(d, l.up)) - hy * z < r * sqrt(1.0 + hy * hy);
+}
+
+/// The side of a tile of `render.cluster_hzb`.
+fn cluster_hzb_tile() -> Float { return 16.0; }
+
+/// Whether a sphere (in the world) is wholly behind what the last frame showed nearer: every tile it covers on the screen (at
+/// most 8 by 8; a larger one is never hidden) has all of it nearer than the sphere's nearest point.
+fn cluster_sphere_hidden(hzb: Grid<Float>, l: Lens, c: Vec3, r: Float, ext: Vec2) -> Bool {
+    let d = c - l.eye;
+    let z = dot(d, l.ahead);
+    if z < r + 0.5 || size(hzb).x < 2.0 { return false; }
+    let near = length(d) - r;
+    let px = vec2(dot(d, l.right), 0.0 - dot(d, l.up)) / z * l.focal * ext.y + ext * 0.5;
+    let rad = r * l.focal * ext.y / (z - r) + 2.0;
+    let lo = floor(max(px - rad, vec2(0.0, 0.0)) / cluster_hzb_tile());
+    let hi = floor(min(px + rad, ext - 1.0) / cluster_hzb_tile());
+    let span = hi - lo + 1.0;
+    if span.x > 8.0 || span.y > 8.0 || span.x < 1.0 || span.y < 1.0 { return false; }
+    let farthest = loop 64 with m = 0.0 {
+        let o = vec2(float(index() % 8), float(index() / 8));
+        if o.x >= span.x || o.y >= span.y { m } else { max(m, at(hzb, lo + o)) }
+    };
+    return near > farthest * 1.02 + 0.3;
+}
+
+/// The thing and face (in the library's faces) of triangle `id` the rasterizer drew from `render.cluster_faces`: the thing's
+/// row in the scene's things (x), the face (y); x is -1 for none.
+fn cluster_face_of(kept: Rows<IVec2>, clusters: Rows<Cluster>, id: Int) -> IVec2 {
+    let kc = at(kept, id / mesh_cluster_faces());
+    return if id < 0 || kc.x < 0 { ivec2(-1, 0) } else { ivec2(kc.x, at(clusters, kc.y).first + id % mesh_cluster_faces()) };
+}
+
+/// The level of triangle `id`'s cluster (for a picture of the levels drawn).
+fn cluster_level_of(kept: Rows<IVec2>, clusters: Rows<Cluster>, id: Int) -> Int {
+    let kc = at(kept, id / mesh_cluster_faces());
+    return if id < 0 || kc.x < 0 { -1 } else { at(clusters, kc.y).level };
+}
+
+/// Each thing's candidate clusters: the first in the library, and how many (0 for a thing out of the picture, or smaller in it
+/// than `smallest` pixels across). A cluster of level j is drawn only where level j + 1's deviation spans more than `error`
+/// pixels at its parent's brick, which lies at most its side past the mesh's sphere, so the finest level the nearest point
+/// of the sphere can ask for bounds the levels kept.
+kernel render.cluster_pick@1 {
+    requires { field.read; field.write; }
+    input insts: FieldInsts;
+    input meshes: Rows<ClusterMesh>;
+    input lens: Lenses;
+    input canvas: Grid<Long>;
+    param error: Float = 1.0;
+    param smallest: Float = 0.5;
+    output result: Rows<IVec2>;
+    compute {
+        let it = sample(insts);
+        if it.shape < 0 || it.shape >= count(meshes) { return ivec2(0, 0); }
+        let m = at(meshes, it.shape);
+        let l = at(lens, 0);
+        let ext = size(canvas);
+        let px = l.focal * ext.y;
+        let c = cluster_placed(it, m.sphere.xyz);
+        let r = m.sphere.w * it.size;
+        let dist = length(c - l.eye);
+        let shown = r * px / max(dist - r, 0.1);
+        let seen = l.focal > 0.0 && cluster_sphere_seen(l, c, r, ext.x / max(ext.y, 1.0)) && shown * 2.0 >= smallest;
+        let near = max(dist - r, 0.0) / max(it.size, 0.0001);
+        let finest = loop mesh_cluster_levels() - 1 with k = 0 {
+            let up = k + 1;
+            if m.errors[up] * px / error + 2.0 * sqrt(3.0) * m.cell * exp2(float(up)) * float(mesh_brick_cells()) >= near { break k; }
+            up
+        };
+        let first = m.levels[max(finest - 1, 0)];
+        return if seen { ivec2(first, m.levels[8] - first) } else { ivec2(0, 0) };
+    }
+}
+
+/// Where each thing's run of candidates ends (an inclusive prefix sum of their counts).
+kernel render.cluster_offsets@1 {
+    requires { field.read; field.write; }
+    input picks: Rows<IVec2>;
+    output result: Rows<Int>;
+    prefix with sum { return sample(picks).y; }
+}
+
+/// The candidate's thing and cluster: candidate `e` of `picks` (whose runs end at `ends`).
+fn cluster_candidate(picks: Rows<IVec2>, ends: Rows<Int>, e: Int) -> IVec2 {
+    let i = owner(e, ends);
+    let pk = at(picks, i);
+    return ivec2(i, pk.x + e - (at(ends, i) - pk.y));
+}
+
+/// 1 for each candidate drawn: the level drawn where it is, in the picture, and not behind what the last frame showed nearer
+/// (`hzb`, `render.cluster_hzb`; one cell for none).
+kernel render.cluster_cull@1 {
+    requires { field.read; field.write; }
+    input picks: Rows<IVec2>;
+    input ends: Rows<Int>;
+    input insts: FieldInsts;
+    input clusters: Rows<Cluster>;
+    input meshes: Rows<ClusterMesh>;
+    input errors: Rows<Float>;
+    input lens: Lenses;
+    input canvas: Grid<Long>;
+    input hzb: Grid<Float>;
+    /// How many candidates (sizes the node).
+    input total: Rows<Int>;
+    param error: Float = 1.0;
+    output result: Rows<Int>;
+    compute {
+        let e = element();
+        if e >= at(ends, count(ends) - 1) { return 0; }
+        let pc = cluster_candidate(picks, ends, e);
+        let it = at(insts, pc.x);
+        let cl = at(clusters, pc.y);
+        let m = at(meshes, it.shape);
+        let l = at(lens, 0);
+        let ext = size(canvas);
+        if !cluster_brick_drawn(m, errors, cluster_brick_at(m, cl), cl.level, field_local(it, l.eye), l.focal * ext.y, error) { return 0; }
+        let c = cluster_placed(it, cl.sphere.xyz);
+        let r = cl.sphere.w * it.size;
+        return int(cluster_sphere_seen(l, c, r, ext.x / max(ext.y, 1.0)) && !cluster_sphere_hidden(hzb, l, c, r, ext));
+    }
+}
+
+/// The drawn clusters (`domain = max(value(count), 1)`): each one's thing and cluster; x is -1 past them.
+kernel render.cluster_kept@1 {
+    requires { field.read; field.write; }
+    input kept: Rows<Int>;
+    input picks: Rows<IVec2>;
+    input ends: Rows<Int>;
+    /// How many are drawn (sizes the node).
+    input count: Rows<Int>;
+    output result: Rows<IVec2>;
+    compute {
+        let e = at(kept, element());
+        return if e < 0 { ivec2(-1, 0) } else { cluster_candidate(picks, ends, e) };
+    }
+}
+
+/// The corners of the drawn clusters' faces, three a face and `mesh_cluster_faces()` faces a cluster (`domain = max(value(count),
+/// 1) * mesh_cluster_faces() * 3`), projected through the lens for the rasterizer between `near` and `far`; a corner moved up the
+/// levels to the one drawn where it lies, when that is coarser than its cluster's; past a cluster's faces, a corner no
+/// triangle is drawn from.
+kernel render.cluster_corners@1 {
+    requires { field.read; field.write; }
+    input kept: Rows<IVec2>;
+    input insts: FieldInsts;
+    input points: Rows<MeshPoint>;
+    input up: Rows<Int>;
+    input faces: Rows<Face>;
+    input clusters: Rows<Cluster>;
+    input meshes: Rows<ClusterMesh>;
+    input errors: Rows<Float>;
+    input lens: Lenses;
+    input canvas: Grid<Long>;
+    param error: Float = 1.0;
+    /// How many of a level's cells past a corner a coarser level drawn there takes it up.
+    param reach: Float = 2.0;
+    param near: Float = 0.05;
+    param far: Float = 20000.0;
+    output result: Rows<Corner>;
+    compute {
+        let e = element();
+        let per = mesh_cluster_faces() * 3;
+        let kc = at(kept, e / per);
+        let local = e % per;
+        let none = Corner { clip: vec4(0.0, 0.0, 0.0, -1.0), normal: vec3(0.0, 1.0, 0.0), uv: vec2(0.0, 0.0) };
+        if kc.x < 0 { return none; }
+        let cl = at(clusters, kc.y);
+        if local / 3 >= cl.count { return none; }
+        let it = at(insts, kc.x);
+        let f = at(faces, cl.first + local / 3);
+        let k = local % 3;
+        let v = if k == 0 { f.a } else if k == 1 { f.b } else { f.c };
+        let l = at(lens, 0);
+        let ext = size(canvas);
+        let m = at(meshes, it.shape);
+        let eye = field_local(it, l.eye);
+        let px = l.focal * ext.y;
+        // A face is in the cluster of each brick a corner of it lies in: drawn from the first of them drawn at its level.
+        let ba = cluster_brick_of(m, at(points, f.a).position, cl.level);
+        let bb = cluster_brick_of(m, at(points, f.b).position, cl.level);
+        let owner = if cluster_brick_drawn(m, errors, ba, cl.level, eye, px, error) { ba }
+            else if cluster_brick_drawn(m, errors, bb, cl.level, eye, px, error) { bb } else { cluster_brick_of(m, at(points, f.c).position, cl.level) };
+        if owner != cluster_brick_at(m, cl) { return none; }
+        let level = cluster_level_at(m, errors, at(points, v).position, eye, px, error, cl.level, reach);
+        let w = loop level - cl.level with u = v { at(up, u) };
+        let p = at(points, w);
+        return Corner { clip: lens_clip(l, ext, cluster_placed(it, p.position), near, far), normal: cluster_turned(it, p.normal), uv: p.uv };
+    }
+}
+
+/// The drawn clusters' faces, each its three corners of `render.cluster_corners` (`domain = max(value(count), 1) *
+/// mesh_cluster_faces()`).
+kernel render.cluster_faces@1 {
+    requires { field.read; field.write; }
+    input count: Rows<Int>;
+    output result: Rows<Face>;
+    compute { let b = element() * 3; return Face { a: b, b: b + 1, c: b + 2 }; }
+}
+
+/// The occlusion pyramid's one level: each tile of `cluster_hzb_tile()` pixels its farthest distance along the view (the
+/// G-buffer's w; the sky far). The last frame's, so this frame leaves out the clusters wholly behind it
+/// (`domain = ceil(size(surface) / cluster_hzb_tile())`).
+kernel render.cluster_hzb@1 {
+    requires { field.read; field.write; }
+    input surface: Grid<Vec4>;
+    output result: Grid<Float>;
+    compute {
+        let o = coord() * cluster_hzb_tile();
+        let ext = size(surface) - 1.0;
+        return loop 256 with m = 0.0 {
+            let q = min(o + vec2(float(index() % 16), float(index() / 16)), ext);
+            max(m, at(surface, q).w)
+        };
+    }
+}
