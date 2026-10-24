@@ -1,6 +1,7 @@
 // Triangles larger than a tile cut across many: each triangle's box found
 // once (`raster.boxes@1`), counted into tiles, and each tile's share
 // covered by an invocation of its own.
+use "parallel.entpkg";
 use "triangle.ent";
 
 /// Each triangle's box on the canvas, found once: none for one that is
@@ -54,11 +55,7 @@ struct TilePlace { t: Int; x0: Int; y0: Int; w: Int; h: Int; }
 // tiles has a box to cut them from; one given none (a box of no width)
 // is placed nowhere.
 fn tile_place(e: Int, counts: Rows<Int>, offsets: Rows<Int>, boxes: Rows<Box>, tile: Int) -> TilePlace {
-    let span = loop 32 with r = ivec2(0, count(offsets)) until r.x >= r.y {
-        let mid = (r.x + r.y) / 2;
-        if at(offsets, mid) > e { ivec2(r.x, mid) } else { ivec2(mid + 1, r.y) }
-    };
-    let t = span.x;
+    let t = owner(e, offsets);
     let b = at(boxes, t);
     if b.w == 0 { return TilePlace { t: t, x0: 0, y0: 0, w: 0, h: 0 }; }
     let local = e - (at(offsets, t) - at(counts, t));

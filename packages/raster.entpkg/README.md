@@ -4,7 +4,7 @@ Triangles turned into the surface a camera sees, drawn alike on every
 backend: plain, tiled and through a cutout mask. `native.rasterize` is
 its fast path.
 
-**Layer:** Graphics. **Uses:** no other package.
+**Layer:** Graphics. **Uses:** [`parallel`](../parallel.entpkg/README.md).
 
 ```text
 use "raster.entpkg";
