@@ -19,7 +19,7 @@ mod packages;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        Some("verify") => verify(),
+        Some("verify") => verify(args.get(1).map(String::as_str) == Some("--all")),
         Some("packages") => {
             let faults = packages::faults(&root().join("packages"));
             for fault in &faults {
@@ -32,7 +32,7 @@ fn main() -> ExitCode {
             }
         }
         _ => {
-            eprintln!("usage: cargo xtask verify | packages");
+            eprintln!("usage: cargo xtask verify [--all] | packages");
             ExitCode::FAILURE
         }
     }
@@ -71,7 +71,7 @@ type Step<'a> = (
     Box<dyn Fn(&Out) -> Result<(), String> + Send + Sync + 'a>,
 );
 
-fn verify() -> ExitCode {
+fn verify(all: bool) -> ExitCode {
     let root = root();
     if let Err(error) = std::env::set_current_dir(&root) {
         eprintln!("{}: {error}", root.display());
@@ -91,6 +91,10 @@ fn verify() -> ExitCode {
     let head =
         output(Command::new("git").args(["rev-parse", "--short", "HEAD"])).unwrap_or_default();
     log.line(&format!("verifying {}", head.trim()));
+    let rust = all || rust_changed();
+    if !rust {
+        log.line("no Rust changed since main: its steps and wasi left out (--all runs them)");
+    }
     let groups: Vec<Vec<Step>> = vec![
         vec![cargo("fmt", &["fmt", "--all"])],
         vec![("packages", Box::new(named_packages))],
@@ -162,8 +166,22 @@ fn verify() -> ExitCode {
             ("against_main", Box::new(against_main)),
         ],
     ];
+    let rust_only = [
+        "fmt",
+        "clippy",
+        "clippy-wasm",
+        "clippy-page",
+        "test-build",
+        "tests",
+        "bridges",
+        "wasi",
+    ];
     for group in &groups {
-        if !together(&log, group) {
+        let group: Vec<&Step> = group
+            .iter()
+            .filter(|(name, _)| rust || !rust_only.contains(name))
+            .collect();
+        if !group.is_empty() && !together(&log, &group) {
             return ExitCode::FAILURE;
         }
     }
@@ -173,7 +191,7 @@ fn verify() -> ExitCode {
 
 /// Runs a group's steps at once; whether all passed. Each step's line says
 /// its time; a failed one's output ends the log's lines for it.
-fn together(log: &Log, group: &[Step]) -> bool {
+fn together(log: &Log, group: &[&Step]) -> bool {
     std::thread::scope(|scope| {
         let runs: Vec<_> = group
             .iter()
@@ -213,6 +231,38 @@ fn together(log: &Log, group: &[Step]) -> bool {
             .map(|run| run.join().unwrap_or(false))
             .collect();
         passed.into_iter().all(|ok| ok)
+    })
+}
+
+/// Whether the branch, its uncommitted and untracked files counted, changes
+/// anything the Rust build reads since it left `main`: the crates, the
+/// bridges their tests drive, the workspace's manifests and settings. On
+/// `main` itself, or when git cannot say, it does.
+fn rust_changed() -> bool {
+    let Some(base) = output(Command::new("git").args(["merge-base", "main", "HEAD"])) else {
+        return true;
+    };
+    let head = output(Command::new("git").args(["rev-parse", "HEAD"])).unwrap_or_default();
+    if base.trim() == head.trim() {
+        return true;
+    }
+    let (Some(changed), Some(untracked)) = (
+        output(Command::new("git").args(["diff", "--name-only", base.trim()])),
+        output(Command::new("git").args(["ls-files", "--others", "--exclude-standard"])),
+    ) else {
+        return true;
+    };
+    changed.lines().chain(untracked.lines()).any(|path| {
+        [
+            "crates/",
+            "bridges/",
+            ".cargo/",
+            "Cargo.toml",
+            "Cargo.lock",
+            "rust-toolchain",
+        ]
+        .iter()
+        .any(|rust| path.starts_with(rust))
     })
 }
 

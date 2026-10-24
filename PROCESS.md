@@ -152,6 +152,12 @@ cargo xtask verify
   device and no code made at run time, so the pictures are the other
   backends' to check. `against_main` is [below](#against-main).
 
+A branch that changes nothing the Rust build reads since it left `main`
+(`crates/`, `bridges/`, `.cargo/`, the workspace's manifests) leaves out
+`fmt`, the clippy steps, `test-build`, `tests`, `bridges` and `wasi`, and
+says so in the log: their answers are `main`'s. `cargo xtask verify
+--all` runs every step; on `main` every step runs.
+
 The log begins with the commit it verifies and ends `passed`.
 
 A step far slower than it was before is a fault to find, not a wait: stop
