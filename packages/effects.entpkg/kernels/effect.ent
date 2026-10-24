@@ -3,8 +3,8 @@
 // way (`move_*`), sized and brightened by four keys over its life. What a
 // layer is made of comes from its element: the element's colors and its
 // ways (rising, swirling, jagged, faceted, flickering, falling, dark), so
-// one effect drawn in another element is another spell, and its tier and
-// seed vary it again.
+// one effect drawn in another element is another effect, and its tier
+// and seed vary it again.
 
 /// What a layer is made of: its colors from the heart out (`core`,
 /// `body`, `edge`), how much light it gives (`glow`) and how much it hides
@@ -45,8 +45,8 @@ type Elements = Rows<Element>;
 
 /// One effect: how long it lasts, whether it loops (an aura, a state),
 /// the element and tier it has unless a cast says another, its cue, and
-/// when it strikes (seconds in), so a game begins it that much before
-/// its blow lands.
+/// when it strikes (seconds in), so a program begins it that much before
+/// what it strikes is struck.
 struct Effect { length: Float; looped: Int; element: Int; tier: Int; cue: Int; hit: Float; }
 type Effects = Rows<Effect>;
 
@@ -68,15 +68,11 @@ struct Layer {
 type Layers = Rows<Layer>;
 
 /// An effect cast: which, in which element and tier (-1 for the effect's
-/// own), its seed; from whom to where; when it began and the moment it is
+/// own), its seed; from where to where; when it began and the moment it is
 /// drawn at (a game's time, an editor's clock); `hide` a bit for each of
 /// its layers not drawn; `on` while it is.
 struct Cast { on: Int; effect: Int; element: Int; tier: Int; seed: Int; from: Vec3; to: Vec3; start: Float; now: Float; hide: Int; }
 type Casts = Rows<Cast>;
-
-/// A named spell or skill: an effect drawn in an element at a tier.
-struct Spell { effect: Int; element: Int; tier: Int; }
-type Spells = Rows<Spell>;
 
 /// A layer as it is now: its form, element, where it is (`p`) and where it
 /// reaches (`q`), the way it faces (`way`), its size, reach and light, how far
@@ -117,23 +113,25 @@ fn form_darts() -> Int { return 16; }    // `count` missiles from p to q, `sprea
 /// How many forms there are.
 fn forms_count() -> Int { return 17; }
 
-// Where a layer is.
-fn at_caster() -> Int { return 0; }
-fn at_target() -> Int { return 1; }
-fn at_target_ground() -> Int { return 2; }
-fn at_caster_ground() -> Int { return 3; }
+// Where a layer is, for a cast from `from` to `to`: a body's height
+// above either end, or the ground under it; between them; the sky over
+// `to`.
+fn at_from() -> Int { return 0; }
+fn at_to() -> Int { return 1; }
+fn at_to_ground() -> Int { return 2; }
+fn at_from_ground() -> Int { return 3; }
 fn at_between() -> Int { return 4; }
 fn at_sky() -> Int { return 5; }
 fn at_between_ground() -> Int { return 6; }
 
 // How it moves over its life.
 fn move_still() -> Int { return 0; }
-fn move_fly() -> Int { return 1; }       // from the caster to the target
+fn move_fly() -> Int { return 1; }       // from `from` to `to`
 fn move_arc() -> Int { return 2; }       // as fly, arcing `a` meters high
 fn move_fall() -> Int { return 3; }      // down from `reach` above to its anchor
 fn move_rise() -> Int { return 4; }      // up from its anchor `reach`
 fn move_orbit() -> Int { return 5; }     // round its anchor `spread` out, `a` turns a second
-fn move_drift() -> Int { return 6; }     // from the caster toward the target, stopping short by `a`
+fn move_drift() -> Int { return 6; }     // from `from` toward `to`, stopping short by `a`
 
 /// A tier's measure: how much bigger, how many more, how much brighter.
 fn tier_size(tier: Int) -> Float { return if tier <= 1 { 1.0 } else if tier == 2 { 1.45 } else { 2.1 }; }

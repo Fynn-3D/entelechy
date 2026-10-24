@@ -1,19 +1,21 @@
-//! Casts drawn over a picture. A project reads the package's tables and
-//! hands in its casts, its picture (alpha 1 + how far, 0 for the sky)
-//! and its eye:
+//! Casts drawn over a picture. A program hands in its own tables of
+//! elements, effects and layers, its casts, its picture (alpha 1 + how
+//! far, 0 for the sky) and the lens it is seen through (`geometry`'s
+//! `Lens`):
 //!
-//!   input vfx_elements: Elements = "effects.entpkg/data/elements.csv";
-//!   input vfx_effects: Effects = "effects.entpkg/data/effects.csv";
-//!   input vfx_layers: Layers = "effects.entpkg/data/layers.csv";
-//!   node fx: graph "effects.entpkg/graphs/draw.esn" { picture <- view.result; eye <- eye.result;
-//!       casts <- casts.result; elements <- vfx_elements; effects <- vfx_effects; layers <- vfx_layers; }
+//!   input elements: Elements = "data/elements.csv";
+//!   input effects: Effects = "data/effects.csv";
+//!   input layers: Layers = "data/layers.csv";
+//!   node fx: graph "effects.entpkg/graphs/draw.esn" { picture <- view.result; eye <- lens.result;
+//!       casts <- casts.result; elements <- elements; effects <- effects; layers <- layers; }
 //!
 //! `result` is the picture with the casts' light; `lives` the layers as
 //! they are now.
 use "../kernels/";
+use "geometry.entpkg";
 
 input picture: Image;
-input eye: Eyes;
+input eye: Lenses;
 input casts: Casts;
 input elements: Elements;
 input effects: Effects;
@@ -22,7 +24,7 @@ input layers: Layers;
 param shrink: Float = 2.0;
 
 node now: effects.now@1 { casts <- casts; effects <- effects; layers <- layers; domain = count(casts) * 8; }
-node light: effects.light@1 { picture <- picture; eye <- eye; lives <- now.result; elements <- elements; shrink = shrink; domain = ceil(size(picture) / shrink); }
+node light: effects.light@2 { picture <- picture; eye <- eye; lives <- now.result; elements <- elements; shrink = shrink; domain = ceil(size(picture) / shrink); }
 node draw: effects.draw@1 { picture <- picture; light <- light.result; depth <- light.depth; shrink = shrink; }
 
 output result <- draw.result;

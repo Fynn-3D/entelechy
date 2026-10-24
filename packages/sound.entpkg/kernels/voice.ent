@@ -30,7 +30,7 @@ fn sound_volley() -> Int { return 12; }  // darts, each whizzing and striking
 fn sound_of(l: Layer) -> Int {
     let f = l.form;
     let moving = l.move == move_fly() || l.move == move_arc() || l.move == move_fall();
-    if f == form_orb() { return if moving { sound_whoosh() } else if l.at == at_target() || l.at == at_target_ground() { sound_boom() } else { sound_roar() }; }
+    if f == form_orb() { return if moving { sound_whoosh() } else if l.at == at_to() || l.at == at_to_ground() { sound_boom() } else { sound_roar() }; }
     if f == form_beam() || f == form_cone() || f == form_pillar() || f == form_funnel() || f == form_aura() { return sound_roar(); }
     if f == form_shell() || f == form_sigil() || f == form_glyph() { return sound_chime(); }
     if f == form_motes() { return sound_sparkle(); }
@@ -81,8 +81,8 @@ kernel sound.voices@1 {
         if sound == sound_none() { return no_voice(); }
         let tier = if c.tier > 0 { c.tier } else { max(e.tier, 1) };
         let el = if l.element >= 0 { l.element } else if c.element >= 0 { c.element } else { e.element };
-        let on_caster = l.at == at_caster() || l.at == at_caster_ground();
-        let here = if on_caster { c.from } else if l.at == at_between() || l.at == at_between_ground() { mix(c.from, c.to, 0.5) } else { c.to };
+        let on_from = l.at == at_from() || l.at == at_from_ground();
+        let here = if on_from { c.from } else if l.at == at_between() || l.at == at_between_ground() { mix(c.from, c.to, 0.5) } else { c.to };
         let moving = l.move == move_fly() || l.move == move_arc() || l.form == form_darts();
         return Voice { sound: sound, element: el, tier: tier, seed: c.seed * 131 + l.seed + k * 17,
             begin: c.start, now: c.now, start: l.start, end: l.end, looped: if e.looped == 1 { e.length } else { 0.0 },

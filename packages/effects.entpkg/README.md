@@ -1,14 +1,25 @@
 # effects
 
 Effects as light gathered along each pixel's ray, over a picture with
-its depth: an effect is layers of forms in time (an orb, a beam, a
-pillar, a cone, a shell, a funnel, an aura, a wave, a sigil, motes,
-sparks, shards, bolts, a slash, a flash, a glyph, darts), each placed at
-an anchor, moved its own way and keyed over its life, made of a matter
-(its colors from edge to core, its heat, its noise moving its own way).
-Which effects a game has, their layers and their matters are the game's
-own rows, handed in as tables (the study's `spell_book` is one book of
-them).
+its depth. Its words:
+
+- **Functions.** Each form's light along a ray (`body` for an orb, a
+  beam, a pillar, a cone, a funnel and an aura; `shell`, `wave`,
+  `sigil`, `motes`, `sparks`, `shards`, `bolts`, `slash`, `glyph`,
+  `darts`), the light primitives under them (`sphere_span`, `stroke`,
+  `jag`, `shaft`, `on_floor`, `rising`), a matter's color, flicker and
+  grain, a layer placed and keyed at a moment (`layer_now`), and every
+  live layer's light along one ray (`lives_light`). A program's own
+  Kernel calls any of them.
+- **Kernels.** The layers of each cast now (`effects.now`), their light
+  over a picture seen through `geometry`'s `Lens` (`effects.light`), that
+  light laid over the picture (`effects.draw`), and a cel look
+  (`effects.cel`).
+- **Data.** An effect is rows: its layers of forms in time, each at an
+  anchor between where a cast goes from and to, moved its own way and
+  keyed over its life, made of an element's matter. Which effects a
+  program has and their matters are its own tables (the study's
+  `spell_book` is one book of them).
 
 **Layer:** Graphics. **Uses:** [`geometry`](../geometry.entpkg/README.md), [`random`](../random.entpkg/README.md).
 
@@ -20,7 +31,7 @@ use "effects.entpkg";
 
 - `kernels/draw.ent` — The live layers drawn over a picture whose alpha
   holds how far each pixel is (1 + the distance; 0 for the sky), as
-  `glow.ent` draws. Kernels: `effects.light@1`, `effects.draw@1`,
+  `glow.ent` draws. Kernels: `effects.light@2`, `effects.draw@1`,
   `effects.cel@1`.
 - `kernels/effect.ent` — The rows an effect is made of.
 - `kernels/form.ent` — The forms as light along a ray (a crystal's

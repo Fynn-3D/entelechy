@@ -3,6 +3,7 @@
 // drawn as light gathered along each pixel's ray, and again in a cel
 // look with inked edges.
 use "../kernels/";
+use "geometry.entpkg";
 
 input elements: Elements = "data/elements.csv";
 input effects: Effects = "data/effects.csv";
@@ -10,9 +11,9 @@ input layers: Layers = "data/layers.csv";
 
 node eye: kernel {
     requires { field.write; }
-    output result: Eyes;
+    output result: Lenses;
     domain = 1;
-    compute { return eye_looking(vec3(0.0, 2.0, -8.0), vec3(0.0, 1.0, 0.0), 1.3); }
+    compute { return lens_looking(vec3(0.0, 2.0, -8.0), vec3(0.0, 1.0, 0.0), 1.3); }
 }
 node casts: kernel {
     requires { field.write; time.read; }
@@ -31,7 +32,7 @@ node ground: kernel {
     compute { return vec4(0.03, 0.03, 0.04, 1.0 + 100.0); }
 }
 node drawn: graph "../graphs/draw.esn" { picture <- ground.result; eye <- eye.result; casts <- casts.result; elements <- elements; effects <- effects; layers <- layers; }
-node light: effects.light@1 { picture <- ground.result; eye <- eye.result; lives <- drawn.lives; elements <- elements; domain = ceil(size(picture) / 2.0); }
+node light: effects.light@2 { picture <- ground.result; eye <- eye.result; lives <- drawn.lives; elements <- elements; domain = ceil(size(picture) / 2.0); }
 node style: Rows<Int> { domain = 1; value = 1; }
 node inked: effects.cel@1 { picture <- ground.result; light <- light.result; depth <- light.depth; style <- style.result; }
 

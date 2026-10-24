@@ -2,6 +2,7 @@
 // in `data/`), each layer heard as its form sounds, placed where it is
 // from the eye.
 use "../kernels/";
+use "geometry.entpkg";
 use "audio.entpkg";
 use "effects.entpkg";
 
@@ -16,9 +17,9 @@ node block: audio.paced_size@1 { paced <- paced.result; domain = 1; }
 
 node eye: kernel {
     requires { field.write; }
-    output result: Eyes;
+    output result: Lenses;
     domain = 1;
-    compute { return eye_looking(vec3(0.0, 2.0, -8.0), vec3(0.0, 1.0, 0.0), 1.3); }
+    compute { return lens_looking(vec3(0.0, 2.0, -8.0), vec3(0.0, 1.0, 0.0), 1.3); }
 }
 node casts: kernel {
     requires { field.write; time.read; }

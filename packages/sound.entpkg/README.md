@@ -6,7 +6,7 @@ timbre row: pitch, brightness, crackle, ring, body), when it begins and
 ends, how big it is and where it is from the eye. Which voices a game's
 matters have is its own table (the study's `spell_book` keeps one).
 
-**Layer:** Media. **Uses:** [`audio`](../audio.entpkg/README.md), [`effects`](../effects.entpkg/README.md), [`random`](../random.entpkg/README.md).
+**Layer:** Media. **Uses:** [`audio`](../audio.entpkg/README.md), [`effects`](../effects.entpkg/README.md), [`geometry`](../geometry.entpkg/README.md), [`random`](../random.entpkg/README.md).
 
 ```text
 use "sound.entpkg";
@@ -17,7 +17,7 @@ use "sound.entpkg";
 - `kernels/cast.ent` — The sounds a voice makes, `s` seconds into it,
   `len` long, at sample `n`, in its element's voice.
 - `kernels/mix.ent` — The voices summed into a block of stereo samples.
-  Kernels: `sound.sound@1`.
+  Kernels: `sound.sound@2`.
 - `kernels/voice.ent` — What each cast's layers are as sound. Kernels:
   `sound.voices@1`.
 

@@ -1,18 +1,19 @@
 // The voices summed into a block of stereo samples: each heard from the
-// eye, quieter far off, to the side it is on; louder as its tier is
+// lens it is seen through, quieter far off, to the side it is on; louder as its tier is
 // higher; the whole softly held under full scale.
 use "audio.entpkg";
+use "geometry.entpkg";
 use "effects.entpkg";
 use "voice.ent";
 use "cast.ent";
 
-kernel sound.sound@1 {
+kernel sound.sound@2 {
     requires { field.read; field.write; time.read; }
     /// How loud all of it is.
     param volume: Float = 1.1;
     input voices: Voices;
     input timbres: Timbres;
-    input eye: Eyes;
+    input eye: Lenses;
     input clock: Clocks;
     /// The block's size (its domain).
     input block: Rows<Float>;
@@ -31,7 +32,7 @@ kernel sound.sound@1 {
                 if since < 0.0 || s < 0.0 || s > v.end - v.start + tail_of(v.sound) { acc } else {
                     let tb = at(timbres, v.element);
                     let p = mix(v.from, v.to, clamp(s / max(v.end - v.start, 0.01), 0.0, 1.0));
-                    let d = p - e.from;
+                    let d = p - e.eye;
                     let far = length(d);
                     let side = clamp(dot(d / max(far, 0.01), e.right), -1.0, 1.0) * 0.75;
                     let loud = tb.gain * tier_shine(v.tier) / (1.0 + far * 0.04);

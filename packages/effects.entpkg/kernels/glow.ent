@@ -1,4 +1,4 @@
-// Magick's light, gathered along a ray (`Glow`): a sphere's span on the
+// An effect's light, gathered along a ray (`Glow`): a sphere's span on the
 // ray, a segment's nearest pass, a stroke, a jagged line, a shaft; marks
 // lying on the floor and motes rising.
 use "random.entpkg";

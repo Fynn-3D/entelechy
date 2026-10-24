@@ -112,10 +112,14 @@ fn lens_distance(l: Lens, dir: Vec3, depth: Float, near: Float, far: Float) -> F
     return ahead / max(dot(dir, l.ahead), 0.000001);
 }
 
-/// A lens orbiting `target` (see `orbit_eye`), up kept up, `focal` long.
-fn lens_orbiting(target: Vec3, yaw: Float, pitch: Float, distance: Float, focal: Float) -> Lens {
-    let eye = orbit_eye(target, yaw, pitch, distance);
+/// A lens at `eye` looking at `target`, the world's up kept up.
+fn lens_looking(eye: Vec3, target: Vec3, focal: Float) -> Lens {
     let ahead = normalize(target - eye);
     let right = normalize(cross(ahead, vec3(0.0, 1.0, 0.0)));
     return Lens { eye: eye, ahead: ahead, right: right, up: cross(right, ahead), focal: focal };
+}
+
+/// A lens orbiting `target` (see `orbit_eye`), up kept up, `focal` long.
+fn lens_orbiting(target: Vec3, yaw: Float, pitch: Float, distance: Float, focal: Float) -> Lens {
+    return lens_looking(orbit_eye(target, yaw, pitch, distance), target, focal);
 }

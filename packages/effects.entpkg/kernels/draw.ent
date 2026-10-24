@@ -2,29 +2,11 @@
 // pixel is (1 + the distance; 0 for the sky), as `glow.ent` draws:
 // each pixel's ray looks only at the layers whose sphere it passes
 // before the picture, and gathers their light.
+use "geometry.entpkg";
 use "effect.ent";
 use "form.ent";
 use "glow.ent";
 use "matter.ent";
-
-/// Where the picture is seen from: the eye, the way it looks, its right
-/// and up, and its focal length (in picture heights).
-struct Eye { from: Vec3; fwd: Vec3; right: Vec3; up: Vec3; focal: Float; }
-type Eyes = Rows<Eye>;
-
-/// An eye at `from` looking at `target`.
-fn eye_looking(from: Vec3, target: Vec3, focal: Float) -> Eye {
-    let fwd = normalize(target - from);
-    let right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
-    return Eye { from: from, fwd: fwd, right: right, up: cross(right, fwd), focal: focal };
-}
-
-/// The eye's ray through the pixel at `pixel` of a picture `size` across.
-fn eye_ray(e: Eye, pixel: Vec2, size: Vec2) -> Vec3 {
-    let u = (pixel.x - size.x * 0.5) / size.y;
-    let v = (size.y * 0.5 - pixel.y) / size.y;
-    return normalize(e.fwd * e.focal + e.right * u + e.up * v);
-}
 
 /// One live layer's light along a ray.
 fn layer_light(from: Vec3, dir: Vec3, scene: Float, lv: Live, el: Element, jitter: Float) -> Glow {
@@ -41,14 +23,43 @@ fn layer_light(from: Vec3, dir: Vec3, scene: Float, lv: Live, el: Element, jitte
     return no_glow();
 }
 
+/// The light every live layer gives along the ray from `from` the way
+/// `dir`, up to `scene` (where the picture stands): its color added, and
+/// in w how much of what is behind it is hidden; `jitter` shifts the first
+/// step of a body's march.
+fn lives_light(lives: Lives, elements: Elements, from: Vec3, dir: Vec3, scene: Float, jitter: Float) -> Vec4 {
+    let n = count(lives);
+    return loop n with acc = vec4(0.0, 0.0, 0.0, 0.0) {
+        let lv = at(lives, index());
+        if lv.form < 0 { acc } else if lv.form == form_flash() {
+            // A flash lights the whole picture, or a dark one dims it.
+            // It lights what is near where it is: the ground and bodies
+            // within some meters, the sky beyond them a little.
+            let el = at(elements, lv.element);
+            let lit_at = from + dir * min(scene, length(lv.p - from));
+            let near = exp(0.0 - pow(length(lit_at - lv.p) / (3.5 + lv.size * 2.5), 2.0));
+            let f = lv.shine * (1.0 - lv.age) * (1.0 - lv.age) * near;
+            let lit = el.core * f * (1.0 - el.dark) * 0.35 * min(el.glow, 1.0);
+            vec4(acc.x + lit.x, acc.y + lit.y, acc.z + lit.z, acc.w + f * el.dark * 0.5)
+        } else {
+            let span = sphere_span(from, dir, lv.bound.xyz, lv.bound.w);
+            if span.y < span.x || span.x > scene { acc } else {
+                let g = layer_light(from, dir, scene, lv, at(elements, lv.element), jitter);
+                // Light adds; what a layer hides darkens what is behind it.
+                vec4(acc.x + g.light.x, acc.y + g.light.y, acc.z + g.light.z, acc.w + (1.0 - g.through))
+            }
+        }
+    };
+}
+
 /// The casts' light over the picture, `shrink` times coarser than it: a
 /// pixel's ray gathers what the layers it passes give (rgb) and how much
 /// they hide (w), up to the picture's depth at its middle.
-kernel effects.light@1 {
+kernel effects.light@2 {
     requires { field.read; field.write; }
     param shrink: Float = 2.0;
     input picture: Image;
-    input eye: Eyes;
+    input eye: Lenses;
     input lives: Lives;
     input elements: Elements;
     output result: Grid<Vec4>;
@@ -59,34 +70,10 @@ kernel effects.light@1 {
         let middle = (px + 0.5) * shrink;
         let seen = at(picture, min(middle, full - 1.0));
         let e = at(eye, 0);
-        let from = e.from;
-        let dir = eye_ray(e, middle, full);
         let scene = if seen.w > 0.0 { seen.w - 1.0 } else { 100000.0 };
-        let n = count(lives);
         // A pixel's own shift of the first step (interleaved gradient noise).
         let jitter = 0.5 + (fract(52.9829189 * fract(0.06711056 * px.x + 0.00583715 * px.y)) - 0.5) * 0.5;
-        let all = loop n with acc = vec4(0.0, 0.0, 0.0, 0.0) {
-            let lv = at(lives, index());
-            if lv.form < 0 { acc } else if lv.form == form_flash() {
-                // A flash lights the whole picture, or a dark one dims it.
-                // It lights what is near where it is: the ground and bodies
-                // within some meters, the sky beyond them a little.
-                let el = at(elements, lv.element);
-                let lit_at = from + dir * min(scene, length(lv.p - from));
-                let near = exp(0.0 - pow(length(lit_at - lv.p) / (3.5 + lv.size * 2.5), 2.0));
-                let f = lv.shine * (1.0 - lv.age) * (1.0 - lv.age) * near;
-                let lit = el.core * f * (1.0 - el.dark) * 0.35 * min(el.glow, 1.0);
-                vec4(acc.x + lit.x, acc.y + lit.y, acc.z + lit.z, acc.w + f * el.dark * 0.5)
-            } else {
-                let span = sphere_span(from, dir, lv.bound.xyz, lv.bound.w);
-                if span.y < span.x || span.x > scene { acc } else {
-                    let g = layer_light(from, dir, scene, lv, at(elements, lv.element), jitter);
-                    // Light adds; what a layer hides darkens what is behind it.
-                    vec4(acc.x + g.light.x, acc.y + g.light.y, acc.z + g.light.z, acc.w + (1.0 - g.through))
-                }
-            }
-        };
-        return { result: all, depth: scene };
+        return { result: lives_light(lives, elements, e.eye, ray(e, middle - 0.5, full), scene, jitter), depth: scene };
     }
 }
 
