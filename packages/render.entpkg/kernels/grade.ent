@@ -2,7 +2,8 @@
 // from one look to another by time, by place or by a mask), laid over the light before its tone curve: exposure in
 // stops, white balance, saturation, contrast about middle gray, a gain, and a drain toward one color's lightness (the
 // world gone cold and still, a memory, a night). `render.grade_start` makes one from parameters; a scene's own kernel
-// makes the rows it wants and `render.grade` or `render.grade_masked` lays them on.
+// makes the rows it wants and `render.grade` lays the first on (`image.masked` lays a graded picture over part of
+// another).
 use "image.entpkg";
 
 /// One grade: `exposure` (stops), `temperature` (warm positive, cool negative), `tint` (magenta positive, green
@@ -66,22 +67,6 @@ kernel render.grade@1 {
     compute {
         let c = sample(hdr);
         let g = grade_color(c.xyz, at(grade, 0));
-        return vec4(g.x, g.y, g.z, c.w);
-    }
-}
-
-/// The light `hdr` graded by `grade`'s first row where `mask` is 0 and its second where it is 1, between them blended
-/// (`domain = size(hdr)`; `mask` any size, read smoothly across the picture): a look laid on part of a picture.
-kernel render.grade_masked@1 {
-    requires { field.read; field.write; }
-    input hdr: Image;
-    input grade: Rows<Grade>;
-    input mask: Grid<Float>;
-    output result: Image;
-    compute {
-        let c = sample(hdr);
-        let m = saturate(at_linear(mask, (coord() + 0.5) * size(mask) / domain()));
-        let g = grade_color(c.xyz, grade_mix(at(grade, 0), at(grade, 1), m));
         return vec4(g.x, g.y, g.z, c.w);
     }
 }

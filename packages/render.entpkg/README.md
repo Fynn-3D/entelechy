@@ -5,8 +5,8 @@ and proxies, and a renderer owns the light — lit, ray traced, probe GI, a
 path tracer, clay — with clustered meshes drawn each place at the level
 the screen asks for, physically based shading, the sky the air makes,
 lamps, a planar mirror, fog and clouds, a camera, metered and local
-exposure, temporal antialiasing and upscaling, depth of field, glow, film
-and a stylized look.
+exposure, temporal antialiasing and upscaling, depth of field, glow, a
+grade, film, outlines and a watercolor's tone.
 
 **Layer:** Graphics. **Uses:** [`geometry`](../geometry.entpkg/README.md), [`image`](../image.entpkg/README.md), [`mesh`](../mesh.entpkg/README.md), [`parallel`](../parallel.entpkg/README.md), [`random`](../random.entpkg/README.md), [`raster`](../raster.entpkg/README.md).
 
@@ -50,9 +50,9 @@ use "render.entpkg";
 - `kernels/decal.ent` — Decals pressed onto a G-buffer. Kernels:
   `render.decals_none@1`, `render.decal_looks_none@1`, `render.decal_paint@1`,
   `render.decal_extra@1`, `render.decal_normals@1`.
-- `kernels/depth_of_field.ent` — Depth of field. Kernels:
-  `render.dof_start@1`, `render.dof_control@1`, `render.focus@1`,
-  `render.focused@1`.
+- `kernels/depth_of_field.ent` — Depth of field as data (`Dof`: an
+  aperture and where it focuses). Kernels: `render.dof_start@1`,
+  `render.focus@1`, `render.focused@1`.
 - `kernels/exposure.ent` — Metered exposure and local exposure. Kernels:
   `render.exposure_tiles@1`, `render.exposure_histogram@1`,
   `render.exposure_meter@1`,
@@ -65,8 +65,9 @@ use "render.entpkg";
   `render.field_frames_join@1`, `render.field_frame@1`, `render.field_near@1`,
   `render.field_bin_counts@1`, `render.field_bin_fill@1`,
   `render.field_bake@1`.
-- `kernels/film.ent` — Film. Kernels: `render.film_start@1`,
-  `render.film_keys@1`, `render.film@1`.
+- `kernels/film.ent` — Film as data (`Film`: a grade, a split, an S curve,
+  halation, fringe, vignette, grain, bars), each step a word. Kernels:
+  `render.film_start@1`, `render.film@1`.
 - `kernels/fog.ent` — Height fog and fog volumes the sun and the lamps
   light, their beams cut into shafts by what stands in them and by the
   clouds, in a grid of cells over the view. Kernels:
@@ -76,7 +77,7 @@ use "render.entpkg";
 - `kernels/grade.ent` — A grade as data a scene changes as it goes:
   exposure, white balance, saturation, contrast, gain, a drain toward one
   color, blended from one look to another. Kernels: `render.grade_start@1`,
-  `render.grade@1`, `render.grade_masked@1`.
+  `render.grade@1`.
 - `kernels/haze.ent` — Haze: aerial perspective after the real atmosphere.
   Kernels: `render.haze@1`.
 - `kernels/lamp_map.ent` — Lamps' shadow maps: a cube of distances for
@@ -100,7 +101,7 @@ use "render.entpkg";
   way it moved on the screen, the lens's move and the thing's. Kernels:
   `render.motion_blur@1`.
 - `kernels/outline.ent` — Outlines from the G-buffer: an edge's near side
-  and a crease, drawn as far as a mask asks. Kernels: `render.outline@1`.
+  and a crease. Kernels: `render.outline@1`.
 - `kernels/path_tracer.ent` — Path tracing (standard PBR, `brdf.ent`).
   Kernels: `render.path_count_start@1`, `render.path_count@1`,
   `render.path_trace@1`, `render.path_blank@1`, `render.path_accum@1`,
@@ -170,7 +171,6 @@ use "render.entpkg";
 - `kernels/sky.ent` — The sky.
 - `kernels/specular_aa.ent` — Gloss widened where normals turn within a
   pixel (specular antialiasing). Kernels: `render.specular_aa@1`.
-- `kernels/stylized.ent` — A stylized look: outlines (`outline.ent`'s) and a watercolor's tone. Kernels: `render.stylized@1`.
 - `kernels/stream.ent` — A world streamed round the camera: the chunks of
   its lattice within reach of the eye, near ones as built and far ones
   coarser, their files spelled for a scene's `fields` nodes, each chunk
@@ -204,6 +204,8 @@ use "render.entpkg";
   `render.dynamic_start@1`, `render.dynamic@1`, `render.extent@1`,
   `render.extent_size@1`, `render.canvas@1`, `render.upscale@1`,
   `render.sharpen@1`.
+- `kernels/watercolor.ent` — A watercolor's tone: vivid, shadows cool,
+  highlights warm. Kernels: `render.watercolor@1`.
 
 ## Graph presets
 
@@ -339,8 +341,9 @@ lamps). Clay shows the shapes alone, as a modeler does.
 
 A painted look is not another renderer: shading as a painting has it is a
 renderer's parameter (`painted` of lit, `style` of probe GI, `toon` in
-`kernels/probe_gi.ent`), and outlines and a watercolor's tone are a pass
-after it (`render.stylized`) that reads only its picture and the G-buffer.
+`kernels/probe_gi.ent`), and its ink (`render.outline`) and a watercolor's
+tone (`render.watercolor`) are passes after it that read only its picture
+and the G-buffer.
 
 ### Tuning a look
 
@@ -618,7 +621,8 @@ own) and encodes sRGB.
   `rough_normal`), `cosine_dir`.
 - `kernels/sky.ent`: `SkyLook`, `sky_radiance`, `aerial`.
 - `kernels/brdf.ent`: `Pbr` and the standard BRDF.
-- `kernels/tonemap.ent`: bloom and tone mapping.
+- `kernels/tonemap.ent`: bloom and tone mapping, each step a word:
+  `tone_sharpened`, `tone_curve` (ACES, none, AgX), `tone_warmth`.
 - `kernels/upscale.ent`: a resolution of the scene's own, brought to the
   window at the end, so the window's size costs little. `render.extent`
   is the window scaled down to at most `pixels` pixels, times the share
@@ -637,29 +641,37 @@ own) and encodes sRGB.
   along the ray; Rayleigh scatters blue (far things bluer, flatter), Mie
   forward (bright toward the sun); lit once by the sun and the sky. A scene
   that uses it sets its `SkyLook`'s `air` to 0.
-- `kernels/depth_of_field.ent`: depth of field. `render.focus` follows the distance
-  at the middle of the picture (a camera's focus); `render.focused` blurs
-  by each pixel's circle of confusion, gathering 24 points on a Vogel disc,
-  a point counted where its own circle reaches, a farther one only where
-  the pixel is blurred too, so a sharp foreground takes no background.
-  `render.dof_start` / `render.dof_control` (a `<~` state) let the window
-  turn it: V off, to the middle, to the pointer; `[` `]` the aperture.
-- `kernels/film.ent`: `render.film`, a cinematic finish on the finished
-  picture: a grade in light (exposure, white balance, saturation, teal and
-  orange split, an S curve), halation, the lens's color fringe, vignette,
-  grain in clumps heaviest in the middle tones, wide-screen bars; presets
-  (`film_look`) or its own params, G in the window (`render.film_keys`).
+- `kernels/depth_of_field.ent`: depth of field as data (`Dof`: the
+  aperture, 0 sharp, and where it focuses, a share of the picture), made by
+  `render.dof_start` or by a scene's own kernel (keys, the pointer, a
+  story's cut). `render.focus` follows the distance there (a camera's
+  focus); `render.focused` blurs by each pixel's circle of confusion,
+  gathering 24 points on a Vogel disc, a point counted where its own circle
+  reaches, a farther one only where the pixel is blurred too, so a sharp
+  foreground takes no background.
+- `kernels/film.ent`: a cinematic finish on the finished picture, as data
+  (`Film`) a scene changes as it goes: a grade in light (`Grade`), a teal
+  and orange split (`film_split`), an S curve (`film_curve`), halation
+  (`film_halation`), the lens's color fringe, vignette, grain in clumps
+  heaviest in the middle tones, wide-screen bars (`film_bars`). Looks kept
+  as recipes (`film_preset`); `render.film_start` makes one from a recipe
+  or from parameters, a scene's own kernel from anything (keys, a story's
+  time), and `render.film` lays it on.
 - `kernels/grade.ent`: a grade as data (`Grade`), laid on the light before
   its tone curve: what a post process's settings are, made by a scene's
   own kernel as its story or its place asks (`grade_mix` blends two, one
-  look into another), laid on all of a picture (`render.grade`) or on part
-  of it by a mask (`render.grade_masked`); `render.grade_start` makes one
-  from parameters. Its white balance is the film's (`grade_balance`).
+  look into another), laid on a picture by `render.grade`;
+  `render.grade_start` makes one from parameters. Its white balance is the
+  film's (`grade_balance`).
 - `kernels/outline.ent`: `render.outline`, a picture's outlines from its
   G-buffer: a pixel much nearer than a neighbor (`outline_near`, the near
   side of an edge) and a surface turning sharply between neighbors
-  (`outline_crease`), fading by `reach`, drawn as far as a mask asks (one
-  pixel of 1 for all of it), so a scene inks part of its picture: a model
-  drawn among real things, a selection.
+  (`outline_crease`), fading by `reach`.
+- `kernels/watercolor.ent`: `render.watercolor`, a watercolor's tone
+  (`watercolor`): a little more vivid, shadows cool, highlights warm.
+- Any pass is kept to part of a picture by `image.entpkg`'s
+  `image.masked`: the picture before it, the picture after it and a mask,
+  so a scene grades, inks or blurs only what a mask asks (a model drawn
+  among real things, a selection, a story's region).
 - `kernels/composite.ent`: two G-buffers of one view made one, each pixel the
   nearer surface's (`render.nearer`), for a scene that draws its parts apart.

@@ -1,8 +1,9 @@
 // The finish's words at points whose answers are known by hand: a grade
 // (exposure, contrast, saturation, a drain, white balance, a blend of two,
-// one laid by a mask) and outlines (an edge's near side, a crease, a mask
-// that holds them back).
+// one kept to part of the picture by `image.masked`) and outlines (an
+// edge's near side, a crease, a mask that holds them back).
 use "../kernels/";
+use "image.entpkg";
 
 node light: kernel {
     requires { field.write; }
@@ -30,19 +31,15 @@ node graded: kernel {
 }
 node looks: render.grade_start@1 { exposure = 1.0; domain = 1; }
 node lit: render.grade@1 { hdr <- light.result; grade <- looks.result; domain = size(hdr); }
-node two: kernel {
-    requires { field.write; }
-    output result: Rows<Grade>;
-    domain = 2;
-    compute { return if element() == 0 { grade_none() } else { Grade { exposure: -1.0, temperature: 0.0, tint: 0.0, saturation: 1.0, contrast: 0.0, gain: vec3(1.0, 1.0, 1.0), drain: 0.0, drain_color: vec3(1.0, 1.0, 1.0) } }; }
-}
+node down: render.grade_start@1 { exposure = -1.0; domain = 1; }
+node darker: render.grade@1 { hdr <- light.result; grade <- down.result; domain = size(hdr); }
 node right: kernel {
     requires { field.write; }
     output result: Grid<Float>;
     domain = vec2(2, 1);
     compute { return if coord().x < 0.5 { 0.0 } else { 1.0 }; }
 }
-node masked: render.grade_masked@1 { hdr <- light.result; grade <- two.result; mask <- right.result; domain = size(hdr); }
+node masked: image.masked@1 { base <- light.result; top <- darker.result; mask <- right.result; }
 
 // A row with a nearer block in its middle (5 meters before a wall at 10), and a row at one depth whose surface turns
 // a right angle at its middle.
@@ -57,9 +54,8 @@ node surface: kernel {
     }
 }
 node white: Grid<Vec4> { domain = vec2(6, 2); value = vec4(1.0, 1.0, 1.0, 1.0); }
-node all: Grid<Float> { domain = vec2(1, 1); value = 1.0; }
 node none: Grid<Float> { domain = vec2(1, 1); value = 0.0; }
-node inked: render.outline@1 { image <- white.result; surface <- surface.result; mask <- all.result; }
-node held: render.outline@1 { image <- white.result; surface <- surface.result; mask <- none.result; }
+node inked: render.outline@1 { image <- white.result; surface <- surface.result; }
+node held: image.masked@1 { base <- white.result; top <- inked.result; mask <- none.result; }
 
 output result <- inked.result;

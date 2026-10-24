@@ -1,36 +1,21 @@
 // Depth of field: the lens is focused at a distance, and the further from it (before or behind) the blurrier, as a wide aperture is.
-// It focuses on the picture's middle or the pointer, following there slowly (as a camera focuses); each pixel gathers a ring of points round it:
+// It focuses where a scene says (the picture's middle, the pointer), following there slowly (as a camera focuses); each pixel gathers a ring of points round it:
 // a point counts only where it is blurred enough to cover this pixel (its circle of confusion is large enough), and a point behind
 // only where this pixel is blurred too, so a sharp foreground takes nothing from the background.
 
-/// How depth of field is on: off (`on` 0), focused on the middle (1), on the pointer (2), how large the far blur is
-/// (`aperture`, a radius in pixels), the keys held the last frame.
-struct Dof { on: Int; aperture: Float; held: Int; }
+/// How a lens blurs what is out of focus, as data a scene changes as it goes: `aperture`, the blur's radius in pixels at
+/// infinity for a picture 720 high (0 sharp), and `at`, where it focuses (0 to 1 across the picture; the middle (0.5,
+/// 0.5), a pointer `pointer() / window()`).
+struct Dof { aperture: Float; at: Vec2; }
 type Dofs = Rows<Dof>;
 
-/// Depth of field as it begins: `on` (0 off, 1 the middle, 2 the pointer), `aperture`.
+/// One depth of field made from these parameters (`domain = 1`).
 kernel render.dof_start@1 {
     requires { field.write; }
-    param on: Int = 0;
     param aperture: Float = 4.0;
+    param at: Vec2 = vec2(0.5, 0.5);
     output result: Dofs;
-    compute { return Dof { on: on, aperture: aperture, held: 0 }; }
-}
-
-/// Depth of field changed over the picture: V turns it off, to the middle, to the pointer in turn; [ a stop smaller, ] a stop larger
-/// (1.25 times a stop, 0.5 to 32 pixels). Counted once, the frame a key goes down.
-kernel render.dof_control@1 {
-    requires { field.read; field.write; input.read; }
-    input previous: Dofs;
-    output result: Dofs;
-    compute {
-        let p = at(previous, 0);
-        let keys = (if key(86) { 1 } else { 0 }) | (if key(219) { 2 } else { 0 }) | (if key(221) { 4 } else { 0 });
-        let pressed = keys & (7 - p.held);
-        let on = if (pressed & 1) != 0 { (p.on + 1) % 3 } else { p.on };
-        let a = if (pressed & 2) != 0 { p.aperture / 1.25 } else if (pressed & 4) != 0 { p.aperture * 1.25 } else { p.aperture };
-        return Dof { on: on, aperture: clamp(a, 0.5, 32.0), held: keys };
-    }
+    compute { return Dof { aperture: aperture, at: at }; }
 }
 
 /// The circle a distance blurs to on the picture (a radius in pixels): 0 at the focus `focus`, larger the further from it,
@@ -39,10 +24,10 @@ fn blur_of(d: Float, focus: Float, aperture: Float, most: Float) -> Float {
     return min(aperture * abs(1.0 - focus / max(d, 0.001)), most);
 }
 
-/// The focus of depth of field (one element, meters): the mean distance from the lens of five points at the picture's middle
-/// (at the pointer while `control` follows it; the sky very far), approached by `speed` of the way each frame.
+/// The focus of depth of field (one element, meters): the mean distance from the lens of five points about where
+/// `control` focuses (the sky very far), approached by `speed` of the way each frame.
 kernel render.focus@1 {
-    requires { field.read; field.write; input.read; }
+    requires { field.read; field.write; }
     input previous: Rows<Float>;
     input surface: Grid<Vec4>;
     input control: Dofs;
@@ -50,8 +35,7 @@ kernel render.focus@1 {
     param far: Float = 2000.0;
     output result: Rows<Float>;
     compute {
-        let at_pointer = at(control, 0).on == 2 && window().x > 0.0;
-        let c = if at_pointer { floor(pointer() * size(surface) / window()) } else { floor(size(surface) * 0.5) };
+        let c = floor(clamp(at(control, 0).at, vec2(0.0, 0.0), vec2(1.0, 1.0)) * size(surface));
         let o = max(floor(size(surface) * 0.04), vec2(1.0, 1.0));
         let d = loop 5 with acc = 0.0 {
             let at_ = if index() == 0 { c } else if index() == 1 { c + vec2(o.x, 0.0) } else if index() == 2 { c - vec2(o.x, 0.0) } else if index() == 3 { c + vec2(0.0, o.y) } else { c - vec2(0.0, o.y) };
@@ -65,7 +49,7 @@ kernel render.focus@1 {
 
 /// Depth of field (see the file's head): `image` (a finished picture) blurred by `surface`'s distance and the focus `focus`.
 /// `control`'s aperture is the radius in pixels at infinity (for a picture 720 high, scaled with a larger
-/// one); off, it is left as it is. Each pixel takes 24 points (a Vogel disc).
+/// one); 0, it is left as it is. Each pixel takes 24 points (a Vogel disc).
 kernel render.focused@1 {
     requires { field.read; field.write; }
     input image: Image;
@@ -76,9 +60,8 @@ kernel render.focused@1 {
     compute {
         let q = coord();
         let c = at(image, q);
-        let dof = at(control, 0);
-        if dof.on == 0 { return c; }
-        let aperture = dof.aperture;
+        let aperture = at(control, 0).aperture;
+        if aperture <= 0.0 { return c; }
         let f = at(focus, 0);
         let k = domain().y / 720.0;
         let most = aperture * k * 1.5;

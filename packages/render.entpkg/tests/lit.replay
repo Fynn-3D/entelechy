@@ -37,7 +37,7 @@ expect lit_dark.result[7280] = 0 0 0 1 0.001
 expect traced.result[9539] = 0.3512 0.3745 0.4239 1 0.002
 expect traced.result[12880] = 0.2318 0.2365 0.2513 1 0.002
 
-# Lit as a painting has it with stylized edges, and clay: the gray ball.
+# Lit as a painting has it, inked and toned as a watercolor, and clay: the gray ball.
 expect inked.result[9463] = 0.2422 0.2618 0.3218 1 0.002
 expect clay.result[9463] = 0.5058 0.5087 0.5150 1 0.002
 

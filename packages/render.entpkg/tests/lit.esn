@@ -49,7 +49,9 @@ node painted_tuned: render.lit@1 { surface <- stand.surface; paint <- stand.pain
 node traced_tuned: render.raytraced@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
     sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; mirror_most = 0.1; domain = window(); }
 node aired: render.haze@1 { hdr <- lit.result; surface <- stand.surface; lens <- stand.lens; sky <- stand.sky; on = 1; }
-node inked: render.stylized@1 { image <- painted.result; surface <- stand.surface; }
+// A painted look composed: the painted shading, its ink (near sides of edges, no creases), a watercolor's tone.
+node lines: render.outline@1 { image <- painted.result; surface <- stand.surface; crease = 0.0; }
+node inked: render.watercolor@1 { image <- lines.result; }
 
 // The extent a renderer draws at, by dynamic resolution.
 node dynamic0: render.dynamic_start@1 { domain = 1; }
@@ -62,11 +64,9 @@ node seen: graph "../graphs/tonemap.esn" { hdr <- aired.result; exposure = 0.8; 
 // The same finish by the other tone curves: the light clipped past 1 (Blender's Standard view), and AgX.
 node clipped: graph "../graphs/tonemap.esn" { hdr <- aired.result; exposure = 0.8; glow = 0.0; vignette = 0.0; warmth = 0.0; curve = 1; }
 node filmic: graph "../graphs/tonemap.esn" { hdr <- aired.result; exposure = 0.8; glow = 0.0; vignette = 0.0; warmth = 0.0; curve = 2; }
-node film0: render.film_start@1 { preset = 1; domain = 1; }
-node film_choice: render.film_keys@1 { previous <~ film_choice.result from film0.result; domain = 1; }
-node filmed: render.film@1 { image <- seen.result; choice <- film_choice.result; grain = 0.0; }
-node dof0: render.dof_start@1 { on = 1; aperture = 6.0; domain = 1; }
-node dof: render.dof_control@1 { previous <~ dof.result from dof0.result; domain = 1; }
+node cinema: render.film_start@1 { preset = 1; domain = 1; }
+node filmed: render.film@1 { image <- seen.result; film <- cinema.result; }
+node dof: render.dof_start@1 { aperture = 6.0; domain = 1; }
 node focus0: Rows<Float> { domain = 1; value = 8.0; }
 node focus: render.focus@1 { previous <~ focus.result from focus0.result; surface <- stand.surface; control <- dof.result; domain = 1; }
 node focused: render.focused@1 { image <- filmed.result; surface <- stand.surface; focus <- focus.result; control <- dof.result; }

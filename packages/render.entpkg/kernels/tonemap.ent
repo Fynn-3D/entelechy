@@ -38,8 +38,34 @@ kernel render.spread@1 {
         return loop 9 with acc = vec4(0.0, 0.0, 0.0, 0.0) { acc + at(image, coord() + d * float(index() - 4)) * w[index()] };
     }
 }
-/// The picture seen: glow added, ACES tone (`exposure`), vividness (`vivid`, 1 unchanged), shadows toward
-/// cyan and highlights warm (`warmth`, 0 none), corners slightly darker (`vignette`, 0 none), encoded as sRGB.
+/// Light `c` at `p` of `hdr` sharpened `amount` (0 not at all): pulled apart from the mean of its four neighbors, less
+/// where the contrast is already high (no white rims).
+fn tone_sharpened(hdr: Image, p: Vec2, c: Vec3, amount: Float) -> Vec3 {
+    if amount <= 0.0 { return c; }
+    let n4 = (at_linear(hdr, p + vec2(1.0, 0.0)).xyz + at_linear(hdr, p - vec2(1.0, 0.0)).xyz + at_linear(hdr, p + vec2(0.0, 1.0)).xyz
+        + at_linear(hdr, p - vec2(0.0, 1.0)).xyz) * 0.25;
+    let lc = luminance(c);
+    let ln = luminance(n4);
+    let k = amount / (1.0 + 6.0 * abs(lc - ln) / (ln + 0.05));
+    return max(c + (c - n4) * k, vec3(0.0, 0.0, 0.0));
+}
+
+/// Light `c` through a tone curve: 0 ACES's fit, 1 none (light past 1 clipped, as Blender's Standard view), 2 AgX
+/// (Blender's own).
+fn tone_curve(c: Vec3, curve: Int) -> Vec3 {
+    return if curve == 1 { saturate(c) } else if curve == 2 { agx(c) } else { aces(c) };
+}
+
+/// A toned color `c` made `vivid` (1 as it is) and tinted `warmth` of the way from `shadow_tint` in its shadows to
+/// `light_tint` in its lights.
+fn tone_warmth(c: Vec3, vivid: Float, warmth: Float, shadow_tint: Vec3, light_tint: Vec3) -> Vec3 {
+    let gray = luminance(c);
+    let rich = max(mix(vec3(gray, gray, gray), c, vivid), vec3(0.0, 0.0, 0.0));
+    return rich * mix(vec3(1.0, 1.0, 1.0), mix(shadow_tint, light_tint, smoothstep(0.1, 0.6, gray)), warmth);
+}
+
+/// The picture seen: glow added, sharpened (`tone_sharpened`), toned (`tone_curve`, `exposure`), vivid and warm
+/// (`tone_warmth`), corners slightly darker (`vignette`, 0 none), encoded as sRGB.
 kernel render.tonemap@1 {
     requires { field.read; field.write; }
     input hdr: Image;
@@ -48,37 +74,23 @@ kernel render.tonemap@1 {
     param vivid: Float = 1.15;
     param warmth: Float = 1.0;
     param vignette: Float = 0.35;
-    /// How much it is sharpened (0 not at all): pulled apart from the mean of its four neighbors by this much; where the contrast is
-    /// already high, pulled less (no white rims). The history temporal antialiasing blends in is always softer.
+    /// How much it is sharpened (0 not at all); the history temporal antialiasing blends in is always softer.
     param sharpen: Float = 0.0;
     /// How much of the glow (`bloom`) is laid in.
     param glow: Float = 0.6;
     /// The tint of the shadows and of the lights, as much as `warmth` lays them on.
     param shadow_tint: Vec3 = vec3(0.97, 1.0, 1.04);
     param light_tint: Vec3 = vec3(1.05, 1.0, 0.93);
-    /// The tone curve: 0 ACES's fit, 1 none (light past 1 clipped, as Blender's Standard view), 2 AgX (Blender's own).
+    /// The tone curve (`tone_curve`'s).
     param curve: Int = 0;
     output result: Image;
     compute {
         let q = coord();
-        let extent = domain();
-        let halo = at_linear(bloom, (q + 0.5) / extent * size(bloom)).xyz;
-        let ph = (q + 0.5) / extent * size(hdr);
-        let c = at_linear(hdr, ph).xyz;
-        let seen = if sharpen <= 0.0 { c } else {
-            let n4 = (at_linear(hdr, ph + vec2(1.0, 0.0)).xyz + at_linear(hdr, ph - vec2(1.0, 0.0)).xyz + at_linear(hdr, ph + vec2(0.0, 1.0)).xyz + at_linear(hdr, ph - vec2(0.0, 1.0)).xyz) * 0.25;
-            let lc = dot(c, vec3(0.2126, 0.7152, 0.0722));
-            let ln = dot(n4, vec3(0.2126, 0.7152, 0.0722));
-            let k = sharpen / (1.0 + 6.0 * abs(lc - ln) / (ln + 0.05));
-            max(c + (c - n4) * k, vec3(0.0, 0.0, 0.0))
-        };
-        let lit = (seen + halo * glow) * exposure;
-        let graded = if curve == 1 { saturate(lit) } else if curve == 2 { agx(lit) } else { aces(lit) };
-        let gray = dot(graded, vec3(0.2126, 0.7152, 0.0722));
-        let rich = max(mix(vec3(gray, gray, gray), graded, vivid), vec3(0.0, 0.0, 0.0));
-        let tint = mix(shadow_tint, light_tint, smoothstep(0.1, 0.6, gray));
-        let toned = rich * mix(vec3(1.0, 1.0, 1.0), tint, warmth);
-        let uv = (q + 0.5) / extent - 0.5;
-        return vec4(linear_to_srgb(saturate(toned * (1.0 - vignette * dot(uv, uv)))), 1.0);
+        let uv = (q + 0.5) / domain();
+        let halo = at_linear(bloom, uv * size(bloom)).xyz;
+        let ph = uv * size(hdr);
+        let seen = tone_sharpened(hdr, ph, at_linear(hdr, ph).xyz, sharpen);
+        let toned = tone_warmth(tone_curve((seen + halo * glow) * exposure, curve), vivid, warmth, shadow_tint, light_tint);
+        return vec4(linear_to_srgb(saturate(toned * vignetted(uv, vignette))), 1.0);
     }
 }
