@@ -24,6 +24,14 @@ expect half.result[0] = 0.375 0.5 0.625 1.0 0.00001
 expect multiply_encoded.result[0] = 0.1293629 0.2537159 0.3771142 1.0 0.00001
 expect over_thin.result[0] = 0.4166667 0.5 0.5833333 0.75 0.00001
 
+# Gray kept to part of the base by a mask: none where the mask is none,
+# all where it is all (the mask stretched over the picture), a quarter
+# of the way where it is a quarter.
+expect kept.result[0] = 0.25 0.5 0.75 1.0 0.00001
+expect kept.result[1] = 0.5 0.5 0.5 1.0 0.00001
+expect kept.result[2] = 0.25 0.5 0.75 1.0 0.00001
+expect faint.result[0] = 0.3125 0.5 0.6875 1.0 0.00001
+
 # Filters: a blur leaves one color as it is and spreads a dot by
 # Gaussian weights (0.399 each way at the center); a shrink takes the
 # mean; a one at the center convolves to the source, a box to the mean

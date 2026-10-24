@@ -92,6 +92,16 @@ node overlay: image.blend@1 { base <- base.result; top <- gray.result; mode = Bl
 node half: image.blend@1 { base <- base.result; top <- gray.result; opacity = 0.5; space = Space.Linear; }
 node multiply_encoded: image.blend@1 { base <- base.result; top <- gray.result; mode = Blend.Multiply; }
 node over_thin: image.blend@1 { base <- thin.result; top <- gray.result; opacity = 0.5; space = Space.Linear; }
+// A mask: its left none, its right all; and a quarter everywhere.
+node sides: kernel {
+    requires { field.write; }
+    output result: Grid<Float>;
+    domain = vec2(2, 1);
+    compute { return float(coord().x); }
+}
+node quarter: Grid<Float> { domain = vec2(1, 1); value = 0.25; }
+node kept: image.masked@1 { base <- base.result; top <- gray.result; mask <- sides.result; }
+node faint: image.masked@1 { base <- base.result; top <- gray.result; mask <- quarter.result; }
 
 node flat_blur: graph "../graphs/blur.esn" { source <- flat.result; sigma = 1.0; }
 node dot_blur: graph "../graphs/blur.esn" { source <- dot.result; sigma = 1.0; }

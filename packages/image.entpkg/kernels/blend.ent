@@ -64,3 +64,20 @@ kernel image.blend@1 {
         return vec4(c, alpha);
     }
 }
+
+/// `top` over `base` as far as `mask` says: 0 `base`, 1 `top`, between
+/// them mixed (`domain = size(base)`; `top` and `mask` any size, read
+/// smoothly across the picture). Any pass kept to part of a picture: a
+/// grade, an outline, a blur, laid only where a mask asks.
+kernel image.masked@1 {
+    requires { field.read; field.write; }
+    input base: Image;
+    input top: Image;
+    input mask: Grid<Float>;
+    output result: Image;
+    compute {
+        let uv = (coord() + 0.5) / domain();
+        let m = saturate(at_linear(mask, uv * size(mask)));
+        return mix(sample(base), at_linear(top, uv * size(top)), m);
+    }
+}

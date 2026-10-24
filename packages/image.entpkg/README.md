@@ -12,7 +12,7 @@ use "image.entpkg";
 
 ## Kernels
 
-- `kernels/blend.ent` — Blending. Kernels: `image.blend@1`.
+- `kernels/blend.ent` — Blending, and any picture kept to part of another by a mask. Kernels: `image.blend@1`, `image.masked@1`.
 - `kernels/color.ent` — Color as numbers. Kernels: `image.encode@1`,
   `image.decode@1`.
 - `kernels/distance.ent` — Distance. Kernels: `image.seeds@1`,
