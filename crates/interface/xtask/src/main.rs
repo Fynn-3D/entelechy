@@ -513,7 +513,9 @@ fn wasi(out: &Out) -> Result<(), String> {
 /// Every example as `main`'s build and the branch's say it: its check, its
 /// graph and its picture, compared; every difference printed. `main` is
 /// checked out beside the branch and built into a target directory kept
-/// between runs.
+/// between runs. Both builds read the branch's documents; where the branch
+/// raised the language's version, which main's build cannot read, each
+/// reads its own, the same examples written for each language.
 fn against_main(out: &Out) -> Result<(), String> {
     let dir = Path::new("target/against-main");
     for side in ["main", "branch", "tree"] {
@@ -538,39 +540,59 @@ fn against_main(out: &Out) -> Result<(), String> {
             .env("CARGO_TARGET_DIR", dir.join("target")),
     );
     if built.is_ok() {
-        let main_entelechy = dir.join("target/release/entelechy");
+        let absolute = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let main_entelechy = absolute(&dir.join("target/release/entelechy"));
+        let here = absolute(Path::new("."));
+        let main_documents = if language_version(&tree) == language_version(Path::new(".")) {
+            here.clone()
+        } else {
+            absolute(&tree)
+        };
         for scene in listed("examples", None, "scene.esn") {
             let example = scene
                 .parent()
                 .and_then(Path::file_name)
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            for (side, entelechy) in [
-                ("main", main_entelechy.as_path()),
-                ("branch", Path::new(ENTELECHY)),
+            for (side, entelechy, documents) in [
+                ("main", main_entelechy.as_path(), main_documents.as_path()),
+                (
+                    "branch",
+                    absolute(Path::new(ENTELECHY)).as_path(),
+                    here.as_path(),
+                ),
             ] {
-                let at = dir.join(side).join(&example);
+                let at = absolute(&dir.join(side)).join(&example);
+                // What a build says, its documents' place written as the
+                // branch's so the two sides read alike.
                 let said = |args: &[&str]| {
                     let said = Command::new(entelechy)
                         .args(args)
                         .arg(&scene)
+                        .current_dir(documents)
                         .stdin(Stdio::null())
                         .output();
-                    said.map(|s| [s.stdout, s.stderr].concat())
-                        .unwrap_or_default()
+                    let text = said
+                        .map(|s| [s.stdout, s.stderr].concat())
+                        .unwrap_or_default();
+                    String::from_utf8_lossy(&text).replace(
+                        documents.to_string_lossy().as_ref(),
+                        here.to_string_lossy().as_ref(),
+                    )
                 };
                 let _ = fs::write(at.with_extension("check"), said(&["check"]));
                 let _ = fs::write(at.with_extension("graph"), said(&["graph"]));
                 let picture = at.with_extension("ppm");
-                let ran = Command::new(entelechy)
-                    .args(["run"])
-                    .arg(&scene)
-                    .args(["--backend", "cpu", "--window", "64x48", "--out"])
-                    .arg(&picture)
-                    .stdin(Stdio::null())
-                    .output()
-                    .map(|s| [s.stdout, s.stderr].concat())
-                    .unwrap_or_default();
+                let picture_arg = picture.to_string_lossy().into_owned();
+                let ran = said(&[
+                    "run",
+                    "--backend",
+                    "cpu",
+                    "--window",
+                    "64x48",
+                    "--out",
+                    &picture_arg,
+                ]);
                 let _ = fs::write(at.with_extension("run"), ran);
                 if let Ok(bytes) = fs::read(&picture) {
                     let _ = fs::write(
@@ -601,6 +623,18 @@ fn against_main(out: &Out) -> Result<(), String> {
     } else {
         Err(format!("{} file(s) differ from main's", differences.len()))
     }
+}
+
+/// The language version the tree at `root` declares, read from its source.
+fn language_version(root: &Path) -> Option<u32> {
+    let source = fs::read_to_string(root.join("crates/frontend/language/src/lib.rs")).ok()?;
+    let line = source
+        .lines()
+        .find(|line| line.starts_with("pub const LANGUAGE_VERSION: u32 = "))?;
+    line.trim_start_matches("pub const LANGUAGE_VERSION: u32 = ")
+        .trim_end_matches(';')
+        .parse()
+        .ok()
 }
 
 /// A picture's bytes reduced to a number that differs where they do
