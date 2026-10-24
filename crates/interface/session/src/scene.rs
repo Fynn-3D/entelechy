@@ -365,12 +365,15 @@ impl Scene {
         for (node, kernel, why) in
             crate::sources::unpublished(self.store.as_ref(), &self.root, graph, &self.uses, &own)
         {
-            let Some(why) = why else { continue };
+            let Some((why, fix)) = why else { continue };
             events.push(Event::Rejected {
                 path: self.root.clone(),
-                error: Diagnostic::new(format!(
-                    "node `{node}` binds `{kernel}`, which the scene does not publish; {why}"
-                )),
+                error: Diagnostic {
+                    fix: Some(Box::new(fix)),
+                    ..Diagnostic::new(format!(
+                        "node `{node}` binds `{kernel}`, which the scene does not publish; {why}"
+                    ))
+                },
             });
         }
     }
@@ -1381,6 +1384,7 @@ fn read_library(store: &dyn Store, path: PathBuf, current: Option<Stamp>) -> (Re
             error: Diagnostic {
                 message: "a used document must hold kernels only".into(),
                 at: Some((1, 1)),
+                fix: None,
             },
         });
         return (

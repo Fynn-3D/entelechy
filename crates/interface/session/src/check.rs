@@ -118,6 +118,9 @@ pub(crate) fn idle_said(path: &Path, ids: &[entelechy_ir::KernelId]) -> String {
 pub struct Checked {
     /// Each line, and whether it is a problem.
     pub lines: Vec<(bool, String)>,
+    /// The change that mends a problem, by the problem's line, where one
+    /// change does.
+    pub fixes: Vec<(String, crate::Fix)>,
 }
 
 impl Checked {
@@ -326,6 +329,16 @@ fn check_in(
         }};
         (note, $($arg:tt)*) => { checked.lines.push((false, format!($($arg)*))) };
     }
+    // A problem said with the change that mends it.
+    macro_rules! say_mended {
+        ($fix:expr, $($arg:tt)*) => {{
+            let line = format!($($arg)*);
+            if let Some(fix) = $fix {
+                checked.fixes.push((line.clone(), fix));
+            }
+            say!(problem, "{line}");
+        }};
+    }
     let text = match store.read_text(path) {
         Ok(text) => text,
         Err(error) => {
@@ -389,7 +402,7 @@ fn check_in(
             let held = held((&structs, &types, &functions));
             let at = written_in(path, held, &error);
             let said = located(store, said(held, &error), &at, path, &[]);
-            say!(problem, "{}:{said}", at.display());
+            say_mended!(said.fix.as_deref().cloned(), "{}:{said}", at.display());
         }
         document.resolve((&structs, &types, &functions));
     }
@@ -446,7 +459,7 @@ fn check_in(
                 let held = entelechy_language::Held::of(kernel);
                 let at = written_in(path, held, &error);
                 let said = located(store, said(held, &error), &at, path, &[]);
-                say!(problem, "{}:{said}", at.display());
+                say_mended!(said.fix.as_deref().cloned(), "{}:{said}", at.display());
             }
         }
     }
@@ -529,8 +542,9 @@ fn check_in(
                     found
                 })
             });
-            for (lines, modules) in found {
+            for (lines, modules, fixes) in found {
                 manifests.extend(modules);
+                checked.fixes.extend(fixes);
                 for (problem, line) in lines {
                     if problem {
                         say!(problem, "{line}");
@@ -743,8 +757,8 @@ fn check_in(
             .and_then(|n| n.at.clone())
             .unwrap_or_else(|| file.to_owned());
         match why {
-            Some(why) => say!(
-                problem,
+            Some((why, fix)) => say_mended!(
+                Some(fix),
                 "{at}: node `{node}` binds `{kernel}`, which the scene does not publish; {why}"
             ),
             None => say!(
@@ -814,7 +828,11 @@ fn check_in(
 pub(crate) type Compiled = (entelechy_ir::Manifest, Vec<entelechy_ir::StructDef>, bool);
 /// What checking a used document found ([`check_used`]): its lines, and its
 /// Kernels compiled.
-pub(crate) type UsedChecked = (Vec<(bool, String)>, Vec<Compiled>);
+pub(crate) type UsedChecked = (
+    Vec<(bool, String)>,
+    Vec<Compiled>,
+    Vec<(String, crate::Fix)>,
+);
 
 /// Whether `module` compares its element with its first input's count
 /// (`element() < count(first)`, as a join of two rows does): a test that,
@@ -945,16 +963,17 @@ fn check_used(
 ) -> UsedChecked {
     let mut lines = Vec::new();
     let mut compiled = Vec::new();
+    let mut fixes = Vec::new();
     let text = match store.read_text(path) {
         Ok(text) => text,
         Err(error) => {
             lines.push((true, format!("{}: {error}", path.display())));
-            return (lines, compiled);
+            return (lines, compiled, fixes);
         }
     };
     // Parsed once per stamp, however many documents use it.
     let Ok(parsed) = store.document(path) else {
-        return (lines, compiled); // reported by `used_documents`
+        return (lines, compiled, fixes); // reported by `used_documents`
     };
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let checked_key = |reach: &str| {
@@ -1013,7 +1032,11 @@ fn check_used(
                 let held = held((&structs, &types, &functions));
                 let at = written_in(path, held, &error);
                 let said = located(store, said(held, &error), &at, root, &[]);
-                lines.push((true, format!("{}:{said}", at.display())));
+                let line = format!("{}:{said}", at.display());
+                if let Some(fix) = said.fix.as_deref().cloned() {
+                    fixes.push((line.clone(), fix));
+                }
+                lines.push((true, line));
             }
             used_document.resolve((&structs, &types, &functions))
         }
@@ -1046,7 +1069,11 @@ fn check_used(
                 let held = entelechy_language::Held::of(kernel);
                 let at = written_in(path, held, &error);
                 let said = located(store, said(held, &error), &at, root, &[]);
-                lines.push((true, format!("{}:{said}", at.display())));
+                let line = format!("{}:{said}", at.display());
+                if let Some(fix) = said.fix.as_deref().cloned() {
+                    fixes.push((line.clone(), fix));
+                }
+                lines.push((true, line));
             }
         }
     }
@@ -1060,7 +1087,7 @@ fn check_used(
         if kept.len() >= 4096 {
             kept.clear();
         }
-        kept.insert(key, (lines.clone(), compiled.clone()));
+        kept.insert(key, (lines.clone(), compiled.clone(), fixes.clone()));
     }
-    (lines, compiled)
+    (lines, compiled, fixes)
 }

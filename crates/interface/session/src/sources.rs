@@ -1116,6 +1116,7 @@ pub(crate) fn named_id(kernel: &Kernel) -> Result<KernelId, crate::Diagnostic> {
         None => Err(crate::Diagnostic {
             message: "a kernel outside a node needs an id".into(),
             at: Some((1, 1)),
+            fix: None,
         }),
     }
 }
@@ -1285,6 +1286,11 @@ pub(crate) fn located(
                 relative_to(store, deeper, base)
             ),
             at: error.at,
+            fix: Some(Box::new(crate::Fix {
+                document: document.to_path_buf(),
+                using: spelling,
+                text: None,
+            })),
         };
     }
     let what = declaring
@@ -1321,6 +1327,7 @@ pub(crate) fn located(
                 names.join(" and ")
             ),
             at: error.at,
+            fix: None,
         };
     }
     let mut search: Vec<PathBuf> = Vec::new();
@@ -1352,24 +1359,41 @@ pub(crate) fn located(
     let Some((file, kind)) = declared_in(store, &name, &search) else {
         return error;
     };
-    let spelling = relative_to(
+    let shown = relative_to(
         store,
         &file,
         document.parent().unwrap_or_else(|| Path::new(".")),
     );
+    // A package's document is used through its package, by its name where
+    // the store finds it so.
+    let spelling = use_spelling(store, document, &file);
     crate::Diagnostic {
         message: format!(
-            "{}; {kind} `{name}` is declared in {spelling}, which this document does not use: `use \"{spelling}\";`",
+            "{}; {kind} `{name}` is declared in {shown}, which this document does not use: `use \"{spelling}\";`",
             error.message
         ),
         at: error.at,
+        fix: Some(Box::new(crate::Fix {
+            document: document.to_path_buf(),
+            using: spelling,
+            text: None,
+        })),
     }
 }
+
+/// A node binding a Kernel the scene does not publish, with why and the
+/// fix when a `use` mends it.
+pub(crate) type Unpublished = (
+    entelechy_graph::NodeId,
+    KernelId,
+    Option<(String, crate::Fix)>,
+);
 
 /// The nodes of `graph` binding a Kernel nothing the scene publishes: not
 /// its own (`own`, its document's and its inline ones), not a native
 /// operation, not one a document its `use`s name writes. Each comes with
-/// why, when a document the scene reaches through another writes it: a
+/// why and the scene's `use` that mends it, when a document the scene
+/// reaches through another writes it: a
 /// scene publishes the Kernels of the documents it uses itself, and
 /// reaches only the declarations of what those use.
 pub(crate) fn unpublished(
@@ -1378,7 +1402,7 @@ pub(crate) fn unpublished(
     graph: &entelechy_graph::Graph,
     uses: &[(PathBuf, bool)],
     own: &[KernelId],
-) -> Vec<(entelechy_graph::NodeId, KernelId, Option<String>)> {
+) -> Vec<Unpublished> {
     let files = Expanded::of(store, uses.to_vec()).files;
     // What the used documents write, gathered once for every node.
     let written: std::collections::HashSet<KernelId> = files
@@ -1419,12 +1443,19 @@ pub(crate) fn unpublished(
                     .map(|reached| (reached, file.clone()))
             });
             let why = through.map(|(reached, via)| {
-                format!(
-                    "`{}` is written in {}, which the scene reaches only through {}: a scene publishes the Kernels of the documents it uses itself, so it wants `use \"{}\";`",
-                    node.kernel,
-                    shown(&reached),
-                    shown(&via),
-                    use_spelling(store, root, &reached)
+                let using = use_spelling(store, root, &reached);
+                (
+                    format!(
+                        "`{}` is written in {}, which the scene reaches only through {}: a scene publishes the Kernels of the documents it uses itself, so it wants `use \"{using}\";`",
+                        node.kernel,
+                        shown(&reached),
+                        shown(&via),
+                    ),
+                    crate::Fix {
+                        document: root.to_path_buf(),
+                        using,
+                        text: None,
+                    },
                 )
             });
             (node.id.clone(), node.kernel.clone(), why)

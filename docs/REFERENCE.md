@@ -260,6 +260,7 @@ Kernels (`.ent`) compute; scenes (`.esn`) compose them into a running world. Who
 - **line**: `error: `line`: integer` Where the fault is, from 1: in the text the request carried, or in `path`.
 - **column**: `error: `column`: integer` Where on that line, from 1.
 - **similar**: `error: `similar`: [string]` The names nearest an unknown one.
+- **fix**: `error: `fix`: object` The change that mends the fault, when one does: an item of `compose`'s `documents` that takes its document's place, handed back as it is; `path` with `text`, the refused change's own document with a `use` item added, or with `edits` adding it to the document on disk. A `rejected` event carries it too.
 - **fields**: `error: `fields`: [string]` The fields the operation takes.
 - **field**: `error: `field`: string` The field at fault.
 - **expected**: `error: `expected`: string` The type that field is.

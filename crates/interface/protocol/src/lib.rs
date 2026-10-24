@@ -361,10 +361,26 @@ mod tests {
         let json = diagnostic_json(&entelechy_session::Diagnostic {
             message: "`oops` is not defined".into(),
             at: Some((4, 20)),
+            fix: None,
         });
         assert_eq!(json["line"], 4);
         assert_eq!(json["column"], 20);
         assert_eq!(json["message"], "`oops` is not defined");
+        assert!(json["fix"].is_null());
+        // One that a `use` mends carries it as an item of compose's `documents`.
+        let mended = diagnostic_json(&entelechy_session::Diagnostic {
+            message: "`deep` is declared in c.ent, which this document does not use".into(),
+            at: Some((2, 9)),
+            fix: Some(Box::new(entelechy_session::Fix {
+                document: std::path::PathBuf::from("scene/a.ent"),
+                using: "c.ent".into(),
+                text: None,
+            })),
+        });
+        assert_eq!(
+            mended["fix"],
+            json!({ "path": "scene/a.ent", "edits": [{ "use": "c.ent", "text": "use \"c.ent\";" }] })
+        );
         // A message starting with numbers carries no place.
         let plain = diagnostic_json(&entelechy_session::Diagnostic::new("3:4 is a ratio"));
         assert!(plain["line"].is_null());

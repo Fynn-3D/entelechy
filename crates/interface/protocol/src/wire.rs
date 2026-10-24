@@ -327,12 +327,23 @@ pub(crate) fn evaluation_error(error: &entelechy_graph::EvaluateError, frame: Op
     json
 }
 
-/// A diagnostic as data: its message, and line and column when placed.
+/// A diagnostic as data: its message, line and column when placed, and
+/// the change that mends it when one does, as an item of `compose`'s
+/// `documents`.
 pub(crate) fn diagnostic_json(diagnostic: &entelechy_session::Diagnostic) -> Json {
     let mut json = failure(diagnostic.message.clone());
     if let Some((line, column)) = diagnostic.at {
         json["line"] = json!(line);
         json["column"] = json!(column);
+    }
+    if let Some(fix) = &diagnostic.fix {
+        json["fix"] = match &fix.text {
+            Some(text) => json!({ "path": fix.document.display().to_string(), "text": text }),
+            None => json!({
+            "path": fix.document.display().to_string(),
+            "edits": [{ "use": fix.using, "text": fix.item() }],
+            }),
+        };
     }
     json
 }

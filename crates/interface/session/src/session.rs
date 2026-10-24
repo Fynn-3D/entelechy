@@ -998,6 +998,7 @@ impl Session {
                 diagnostic: crate::Diagnostic {
                     message: error.message.clone(),
                     at: Some((error.line, 1)),
+                    fix: None,
                 },
             })?;
             let scene_written = overlay.kind(&overlay.whole(&replay.scene))
@@ -1045,7 +1046,13 @@ impl Session {
         // The scene checked whole, as `entelechy check` checks it.
         let checked = crate::check::check_document(&overlay, &root, false);
         if let Some((_, line)) = checked.lines.iter().find(|(problem, _)| *problem) {
-            return Err(placed(&overlay, line, &root, &landed));
+            let mut refusal = placed(&overlay, line, &root, &landed);
+            refusal.diagnostic.fix = checked
+                .fixes
+                .iter()
+                .find(|(said, _)| said == line)
+                .map(|(_, fix)| Box::new(mended_in(&overlay, fix, &landed)));
+            return Err(refusal);
         }
         let readable = |path: &Path| self.allowed_read(path);
         let granted = |module: &entelechy_ir::Validated| {
@@ -2566,6 +2573,31 @@ fn reached_documents(
 /// by its name (`scene:39:6`, as a node says where it is written) is the
 /// graph document of that name among those written, else the scene; the
 /// scene too when the line names none.
+/// `fix` over the change refused: the change's own text of the
+/// document, the item added, when the change wrote it.
+fn mended_in(store: &dyn Store, fix: &crate::Fix, landed: &[(PathBuf, String)]) -> crate::Fix {
+    let at = store
+        .canonical(&fix.document)
+        .unwrap_or_else(|_| fix.document.clone());
+    let text = landed
+        .iter()
+        .find(|(path, _)| *path == at)
+        .and_then(|(_, text)| {
+            let edit = entelechy_scene::edit::Edit {
+                target: entelechy_scene::edit::Target::Statement {
+                    kind: entelechy_scene::edit::StatementKind::Use,
+                    name: fix.using.clone(),
+                },
+                text: Some(fix.item()),
+            };
+            entelechy_scene::edit::edit(text, &[edit]).ok()
+        });
+    crate::Fix {
+        text,
+        ..fix.clone()
+    }
+}
+
 fn placed(
     store: &dyn Store,
     line: &str,
@@ -2625,6 +2657,7 @@ fn placed(
             diagnostic: crate::Diagnostic {
                 message,
                 at: Some((line_no, column)),
+                fix: None,
             },
         },
         None => crate::Refusal {

@@ -3782,3 +3782,103 @@ fn an_evaluation_measures_its_nodes_when_asked_and_only_then() {
     );
     assert_eq!(responses[1]["ok"]["measured"], false, "{}", responses[1]);
 }
+
+/// A refusal a `use` mends carries the mending as `fix`, an item of
+/// `documents` handed back as it is: the change's own text with the item
+/// added when the change wrote the document, else `edits` of the document
+/// on disk; a scene refused as it syncs says it with the rejection.
+/// Composed in their items' place, they land.
+#[test]
+fn a_refusal_a_use_mends_hands_back_the_change_that_mends_it() {
+    let dir = std::env::temp_dir().join(format!("entelechy-protocol-fix-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let kernel = |name: &str, body: &str| {
+        format!(
+            "kernel t.{name}@1 {{ requires {{ field.write; }} output result: Rows<Float>; compute {{ return {body}; }} }}\n"
+        )
+    };
+    for (file, text) in [
+        (
+            "c.ent",
+            format!(
+                "fn deep() -> Float {{ return 3.0; }}\n{}",
+                kernel("deep", "deep()")
+            ),
+        ),
+        (
+            "b.ent",
+            "use \"c.ent\";\nfn mid() -> Float { return deep(); }\n".to_owned(),
+        ),
+        ("a.ent", format!("use \"b.ent\";\n{}", kernel("k", "mid()"))),
+        (
+            "scene.esn",
+            "use \"a.ent\";\nnode k: t.k@1 { domain = 1; }\noutput result <- k.result;\n"
+                .to_owned(),
+        ),
+    ] {
+        std::fs::write(dir.join(file), text).unwrap();
+    }
+    let scene = dir.join("scene.esn");
+    let wanted = format!("use \"b.ent\";\n{}", kernel("k", "deep()"));
+    let refused = talk_in(
+        &scene,
+        &[],
+        &[],
+        &[
+            // A's new text calls what only b's `use` reaches; the scene
+            // places what only a's `use` reaches.
+            json!({ "id": 1, "op": "compose", "documents": [{ "path": "a.ent", "text": wanted }] }),
+            json!({ "id": 2, "op": "compose", "edits": [
+                { "node": "d", "text": "node d: t.deep@1 { domain = 1; }" },
+            ] }),
+        ],
+    );
+    let fix = &refused[0]["error"]["fix"];
+    assert!(
+        fix["path"].as_str().unwrap().ends_with("a.ent"),
+        "{}",
+        refused[0]
+    );
+    assert_eq!(
+        fix["text"],
+        format!("use \"b.ent\";\nuse \"c.ent\";\n{}", kernel("k", "deep()"))
+    );
+    assert_eq!(fix.get("edits"), None, "{fix}");
+    // Written, the scene is refused as it syncs; the refusal says the
+    // edits of the scene on disk that mend it.
+    let rejected = refused[1]["ok"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["kind"] == "rejected")
+        .unwrap_or_else(|| panic!("{}", refused[1]));
+    let on_disk = &rejected["fix"];
+    assert!(
+        on_disk["path"].as_str().unwrap().ends_with("scene.esn"),
+        "{rejected}"
+    );
+    assert_eq!(
+        on_disk["edits"],
+        json!([{ "use": "c.ent", "text": "use \"c.ent\";" }])
+    );
+
+    let mended = talk_in(
+        &scene,
+        &[],
+        &[],
+        &[
+            json!({ "id": 1, "op": "compose", "documents": [fix, on_disk] }),
+            json!({ "id": 2, "op": "evaluate" }),
+            json!({ "id": 3, "op": "read", "format": "summary" }),
+        ],
+    );
+    assert_eq!(mended[0]["ok"]["written"], true, "{}", mended[0]);
+    assert_eq!(
+        mended[2]["ok"]["summary"][0]["max"].as_f64(),
+        Some(3.0),
+        "{}",
+        mended[2]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

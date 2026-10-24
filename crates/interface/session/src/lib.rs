@@ -354,6 +354,29 @@ pub struct Diagnostic {
     pub message: String,
     /// Line and column, from 1, when the problem has a place.
     pub at: Option<(u32, u32)>,
+    /// The change that mends it, when one change does: data an agent
+    /// hands back as a compose.
+    pub fix: Option<Box<Fix>>,
+}
+
+/// A change that mends a diagnostic: `using` written as a `use` item of
+/// `document` (`use "{using}";`), so the document sees what it names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Fix {
+    /// The document to change, by its one name.
+    pub document: std::path::PathBuf,
+    /// The path its new `use` item names, spelled as the document would.
+    pub using: String,
+    /// The document whole with the item added, when the refused change
+    /// wrote it: what is on disk is not what the change asked for.
+    pub text: Option<String>,
+}
+
+impl Fix {
+    /// The `use` item the fix adds.
+    pub fn item(&self) -> String {
+        format!("use \"{}\";", self.using)
+    }
 }
 
 impl Diagnostic {
@@ -362,6 +385,7 @@ impl Diagnostic {
         Self {
             message: message.into(),
             at: None,
+            fix: None,
         }
     }
 
@@ -371,6 +395,7 @@ impl Diagnostic {
         Self {
             message: message.into(),
             at: span.is_placed().then_some((span.line, span.column)),
+            fix: None,
         }
     }
 }

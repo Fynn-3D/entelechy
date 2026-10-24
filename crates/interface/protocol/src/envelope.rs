@@ -36,7 +36,7 @@ const fn part(
 
 /// Every part of the envelope: what a request carries beside its
 /// operation's fields, what an answer carries, and what an error may.
-pub const PARTS: [Part; 21] = [
+pub const PARTS: [Part; 22] = [
     part(
         "op",
         "request",
@@ -85,6 +85,12 @@ pub const PARTS: [Part; 21] = [
         "error",
         "[string]",
         "The names nearest an unknown one.",
+    ),
+    part(
+        "fix",
+        "error",
+        "object",
+        "The change that mends the fault, when one does: an item of `compose`'s `documents` that takes its document's place, handed back as it is; `path` with `text`, the refused change's own document with a `use` item added, or with `edits` adding it to the document on disk. A `rejected` event carries it too.",
     ),
     part(
         "fields",
