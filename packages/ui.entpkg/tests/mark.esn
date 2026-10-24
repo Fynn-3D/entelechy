@@ -3,7 +3,7 @@
 use "../kernels/";
 use "text.entpkg";
 
-input font: Grid<Float> = "text.entpkg/assets/font.png";
+input font: Grid<Float> = "data/font.png";
 input digits: Rows<Int> = text "0\n1\n2\n3\n4\n5\n6\n7\n8\n9";
 
 node glyphs: kernel {

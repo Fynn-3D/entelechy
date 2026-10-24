@@ -13,9 +13,9 @@ probe ─ digits ─ layout ─┘        (font.png feeds every draw)
 - **The layout is a row.** `Text = Rows<Glyph>`, a code, origin and
   scale per glyph, in
   [the widgets package](../../packages/text.entpkg/kernels/glyph.ent).
-- **The font is an atlas.** [`font.ent`](../../packages/text.entpkg/kernels/font.ent)
+- **The font is an atlas.** [`font.ent`](kernels/font.ent)
   holds a 5x7 ASCII face and draws it into 6x8 cells; `bake.esn` saves
-  it as [`font.png`](../../packages/text.entpkg/assets/font.png), which the
+  it as [`font.png`](assets/font.png), which the
   scene reads as an input and reloads when it changes.
 - **Drawing is a Kernel.** `text.draw@1` paints glyphs from the atlas
   through the shared function `ink`; `text.layout@1` spaces codes,
@@ -30,7 +30,7 @@ what a Kernel draws with its ink functions, its glyph rows, letters and
 atlases.
 
 ```sh
-entelechy run examples/text/bake.esn --save font=packages/text.entpkg/assets/font.png
+entelechy run examples/text/bake.esn --save font=examples/text/assets/font.png
 entelechy player examples/text/scene.esn --scale 4
 entelechy replay examples/text/tests/text.replay
 ```

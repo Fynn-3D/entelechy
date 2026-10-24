@@ -10,7 +10,7 @@ use "kernels/settings.ent";
 
 // The bitmap font the letters are drawn from, and the words, a row a
 // line.
-input font: Grid<Float> = "../../packages/text.entpkg/assets/font.png";
+input font: Grid<Float> = "assets/font.png";
 input text: Rows<Int> = bytes "assets/ui.txt";
 
 node none: text.no_codes@1 { domain = 1; }

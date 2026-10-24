@@ -4,7 +4,7 @@
 // lacks counted.
 use "../kernels/";
 
-input font: Grid<Float> = "../assets/font.png";
+input font: Grid<Float> = "data/font.png";
 input line: Rows<Int> = text "A中B文";
 
 node glyphs: kernel {

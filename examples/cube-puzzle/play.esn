@@ -7,7 +7,7 @@ use "kernels/";
 use "../../packages/text.entpkg";
 use "../../packages/ui.entpkg";
 
-input font: Grid<Float> = "../../packages/text.entpkg/assets/font.png";
+input font: Grid<Float> = "assets/font.png";
 input weights: Rows<Float> = "weights.field";
 input net: Rows<Int> = text "net thinks";
 input you: Rows<Int> = text "you made";

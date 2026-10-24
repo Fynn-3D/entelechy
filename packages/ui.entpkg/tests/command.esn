@@ -4,7 +4,7 @@
 use "../kernels/";
 use "text.entpkg";
 
-input font: Grid<Float> = "text.entpkg/assets/font.png";
+input font: Grid<Float> = "data/font.png";
 input names: Rows<Int> = text "open file\nsave file\nquit\nsave all";
 input ended: Rows<Int> = text "open file\nsave file\nquit\nsave all\n";
 

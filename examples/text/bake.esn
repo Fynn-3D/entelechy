@@ -1,9 +1,9 @@
-// Bakes the font atlas the text library reads: the glyphs are rows of
-// bits in font.ent, and this scene saves them as the file every scene
-// that draws text names.
-//   entelechy run examples/text/bake.esn --save font=packages/text.entpkg/assets/font.png
-use "../../packages/text.entpkg";
+// Bakes this example's font atlas: the glyphs are rows of bits in
+// kernels/font.ent, and this scene saves them as the file the example's
+// scene reads.
+//   entelechy run examples/text/bake.esn --save font=examples/text/assets/font.png
+use "kernels/";
 
-node font: text.font@1 { domain = vec2(96, 48); }
+node font: demo.font@1 { domain = vec2(96, 48); }
 
 output result <- font.result;

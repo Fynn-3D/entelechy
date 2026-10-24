@@ -141,10 +141,10 @@ fn font_pixel(code: Int, x: Int, y: Int) -> Bool {
 /// per row, six rows, the glyph in the top-left 5 by 7 of its cell and a
 /// blank column and row beside it, so cell (code - 32) % 16, (code - 32)
 /// / 16 holds a code. A node running it sets `domain = vec2(96, 48);`;
-/// the package's `font.png` is this atlas, baked, for a scene to read as
-/// an input. Each glyph is its seven rows, top first, each row five bits with the
+/// this example's `assets/font.png` is this atlas, baked, for a scene to
+/// read as an input. Each glyph is its seven rows, top first, each row five bits with the
 /// leftmost pixel highest: `font_bits(14, 17, 17, 31, 17, 17, 17)` is an A.
-kernel text.font@1 {
+kernel demo.font@1 {
     requires { field.write; }
     output result: Grid<Float>;
     compute {

@@ -3,7 +3,7 @@
 // a box ten pixels square, rimmed, 0.1 to 0.8 across.
 use "ui.entpkg";
 
-input font: Grid<Float> = "../assets/font.png";
+input font: Grid<Float> = "data/font.png";
 input line: Rows<Int> = text "A中B文";
 
 node codes: kernel {

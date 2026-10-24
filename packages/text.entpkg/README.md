@@ -1,7 +1,7 @@
 # text
 
-Text: a 5 by 7 bitmap font, glyph rows laid out and drawn, text decoded
-into rows of letters, the wide glyphs a project's words use drawn into an
+Text: glyph rows laid out and drawn from a program's font atlas, text
+decoded into rows of letters, the wide glyphs a project's words use drawn into an
 atlas, numbers written with their decimals, a template's holes filled
 with numbers, and text written to a file through an output `to files`.
 
@@ -19,7 +19,6 @@ use "text.entpkg";
   them), drawn into the atlas the ui package's letters read
   (`ui.letters`). Kernels: `text.glyph_atlas@1`, `text.glyph_codes@1`,
   `text.unlettered@1`.
-- `kernels/font.ent` —  Kernels: `text.font@1`.
 - `kernels/glyph.ent` — Text as rows, drawn by a Kernel, with no
   primitive. Kernels: `text.layout@1`, `text.digits@1`, `text.draw@1`,
   `text.label@1`.
@@ -42,10 +41,6 @@ use "text.entpkg";
 - `graphs/letters.esn` — The letters' grid (`ui.letters`).
 - `graphs/template.esn` — A template filled and written: a world writing
   its own law, a report, a save.
-
-## Assets
-
-`assets/font.png`
 
 ## Tests
 

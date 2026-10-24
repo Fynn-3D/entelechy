@@ -4,11 +4,11 @@
 use "../kernels/";
 
 input words: Rows<Int> = text "HP  ";
-node font: text.font@1 { domain = vec2(96, 48); }
+input atlas: Grid<Float> = "data/font.png";
 
 node drawn: kernel {
     requires { field.read; field.write; }
-    input font: Grid<Float> <- font.result;
+    input font: Grid<Float> <- atlas;
     input words: Rows<Int> <- words;
     output result: Grid<Float>;
     domain = vec2(48, 16);

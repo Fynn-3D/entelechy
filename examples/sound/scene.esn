@@ -4,7 +4,7 @@
 // output, and `side` shows the synth's scope beside the spectrum.
 use "kernels/";
 
-input font: Grid<Float> = "../../packages/text.entpkg/assets/font.png";
+input font: Grid<Float> = "assets/font.png";
 input caption: Rows<Int> = text "loudest";
 
 param pitch: Float = 330.0;

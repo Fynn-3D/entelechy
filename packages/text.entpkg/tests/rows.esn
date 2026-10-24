@@ -3,7 +3,7 @@
 // chosen by a number, letter by letter.
 use "../kernels/";
 
-input font: Grid<Float> = "../assets/font.png";
+input font: Grid<Float> = "data/font.png";
 input caption: Rows<Int> = text "HP ";
 input first: Rows<Int> = text "one";
 input second: Rows<Int> = text "two";

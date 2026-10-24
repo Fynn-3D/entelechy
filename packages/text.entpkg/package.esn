@@ -1,4 +1,4 @@
-//! Text: a 5 by 7 bitmap font, glyph rows laid out and drawn, text
+//! Text: glyph rows laid out and drawn from a program's font atlas, text
 //! decoded into rows of letters, wide glyphs drawn into an atlas,
 //! numbers written, templates filled and text written to files.
 package text@1 { language = 1; ir = 1; }

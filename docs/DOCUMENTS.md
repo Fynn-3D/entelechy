@@ -436,7 +436,7 @@ changes:
   photometry, type C) as 181 rows of candela, a degree from the light's aim
   to straight behind it, the mean over its planes; `.field`, any Field, the
   Host's format. A path through a package's name
-  (`"text.entpkg/assets/font.png"`) reads the file inside that package, as a
+  (`"world.entpkg/data/rules.csv"`) reads the file inside that package, as a
   `use` of it does; so does every path a scene reads, a file or a directory
   (frames, checks, outlines, a font, a `files` or `fields` node's
   directory: `fields "world.entpkg/chunks/points/"`). What a scene writes is
