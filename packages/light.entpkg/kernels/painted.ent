@@ -11,6 +11,11 @@ use "sky.ent";
 /// and to) and its strength (`glint`).
 struct Toon { terminator: Vec2; shadow: Vec2; sun: Float; flat: Float; shade: Vec3; rim: Float; highlight: Vec2; glint: Float; }
 
+/// How far a renderer's light is taken toward a painting's (`amount`, 0 none, 1 all) and the painting's look: what a
+/// node makes and a renderer reads, so a scene turns one look into another as it goes.
+struct Painting { amount: Float; toon: Toon; }
+type Paintings = Rows<Painting>;
+
 /// The painted look as the package ships it.
 fn toon_default() -> Toon {
     return Toon { terminator: vec2(-0.03, 0.16), shadow: vec2(0.2, 0.55), sun: 0.75, flat: 0.6, shade: vec3(0.85, 0.95, 1.2), rim: 0.012,
@@ -56,4 +61,26 @@ fn scattered_as(m: Pbr, n: Vec3, v: Vec3, s: SkyLook, shadow: Float, e: Vec3, pa
 /// What a surface reflects from all round of `spec_light`, `painted` of the way to the painted gloss.
 fn mirrored_as(m: Pbr, n: Vec3, v: Vec3, spec_light: Vec3, painted: Float) -> Vec3 {
     return mix(spec_light * env_reflectance(m, n, v), painted_gloss(m, n, v, spec_light), saturate(painted));
+}
+
+/// No painting: the renderer's light as it is.
+fn painting_none() -> Painting { return Painting { amount: 0.0, toon: toon_default() }; }
+
+/// One painting made from these parameters (`domain = 1`): how far, and the look (`Toon`'s).
+kernel light.painting_start@1 {
+    requires { field.write; }
+    param amount: Float = 0.0;
+    param toon_terminator: Vec2 = vec2(-0.03, 0.16);
+    param toon_shadow: Vec2 = vec2(0.2, 0.55);
+    param toon_sun: Float = 0.75;
+    param toon_flat: Float = 0.6;
+    param toon_shade: Vec3 = vec3(0.85, 0.95, 1.2);
+    param toon_rim: Float = 0.012;
+    param toon_highlight: Vec2 = vec2(0.965, 0.985);
+    param toon_glint: Float = 0.03;
+    output result: Paintings;
+    compute {
+        return Painting { amount: amount, toon: Toon { terminator: toon_terminator, shadow: toon_shadow, sun: toon_sun, flat: toon_flat,
+            shade: toon_shade, rim: toon_rim, highlight: toon_highlight, glint: toon_glint } };
+    }
 }

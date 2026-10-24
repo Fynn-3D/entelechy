@@ -9,12 +9,15 @@ use "camera.entpkg";
 // and the stand's G-buffer merged with itself, nearer surface by surface.
 node stand: graph "stand_scene.esn" { }
 node shadowed: light.contact@1 { surface <- stand.surface; extra <- stand.extra; layers <- stand.layers; lens <- stand.lens; sky <- stand.sky; domain = size(surface); }
-node lit: light.lit@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
+node lit_painting: light.painting_start@1 { domain = 1; }
+node lit: light.lit@1 { painting <- lit_painting.result; surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
     sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; domain = window(); }
-node painted: light.lit@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
-    sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; painted = 1.0; domain = window(); }
-node half: light.lit@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
-    sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; painted = 0.5; domain = window(); }
+node painted_painting: light.painting_start@1 { amount = 1.0; domain = 1; }
+node painted: light.lit@1 { painting <- painted_painting.result; surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
+    sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; domain = window(); }
+node half_painting: light.painting_start@1 { amount = 0.5; domain = 1; }
+node half: light.lit@1 { painting <- half_painting.result; surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
+    sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; domain = window(); }
 /// How far the half painted picture lies from the mean of the two, its most over every pixel (none: the look blends).
 node between: kernel {
     requires { field.read; field.write; }
@@ -42,9 +45,9 @@ node deep: kernel {
     domain = size(proxy);
     compute { let p = sample(proxy); return vec4(p.x - 100.0, p.y, p.z, p.w); }
 }
-node lit_deep: light.lit@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
+node lit_deep: light.lit@1 { painting <- lit_painting.result; surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
     sky <- stand.sky; lens <- stand.lens; proxy <- deep.result; frame <- stand.frame; domain = window(); }
-node lit_dark: light.lit@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
+node lit_dark: light.lit@1 { painting <- lit_painting.result; surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
     sky <- stand.sky; lens <- stand.lens; proxy <- deep.result; frame <- stand.frame; inside_sky = 0.0; domain = window(); }
 // Ray traced: the G-buffer's shadow, each thing's own occlusion, smooth
 // surfaces' mirror rays traced through the proxies.
@@ -64,16 +67,19 @@ node traced_floor: light.raytraced@1 { surface <- stand.surface; paint <- polish
     sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; domain = window(); }
 // A scene's own look: lit with half the sky's light, painted with its
 // shade untinted, ray traced with its mirrors held lower.
-node lit_tuned: light.lit@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
+node lit_tuned: light.lit@1 { painting <- lit_painting.result; surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
     sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; sky_light = 0.5; domain = window(); }
-node painted_tuned: light.lit@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
-    sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; painted = 1.0; toon_shade = vec3(1.0, 1.0, 1.0); domain = window(); }
+node painted_tuned_painting: light.painting_start@1 { amount = 1.0; toon_shade = vec3(1.0, 1.0, 1.0); domain = 1; }
+node painted_tuned: light.lit@1 { painting <- painted_tuned_painting.result; surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
+    sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; domain = window(); }
 node traced_tuned: light.raytraced@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
     sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; mirror_most = 0.1; domain = window(); }
-node aired: light.haze@1 { hdr <- lit.result; surface <- stand.surface; lens <- stand.lens; sky <- stand.sky; on = 1; }
+node aired_air: light.haze_start@1 { domain = 1; }
+node aired: light.haze@1 { air <- aired_air.result; hdr <- lit.result; surface <- stand.surface; lens <- stand.lens; sky <- stand.sky; on = 1; }
 // A painted look composed: the painted shading, its ink (near sides of edges, no creases), a watercolor's tone.
 node lines: surface.outline@1 { image <- painted.result; surface <- stand.surface; crease = 0.0; }
-node inked: image.watercolor@1 { image <- lines.result; }
+node inked_look: image.watercolor_start@1 { domain = 1; }
+node inked: image.watercolor@1 { look <- inked_look.result; image <- lines.result; }
 
 // The extent a renderer draws at, by dynamic resolution.
 node dynamic0: camera.dynamic_start@1 { domain = 1; }

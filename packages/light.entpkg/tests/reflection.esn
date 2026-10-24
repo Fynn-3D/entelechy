@@ -15,7 +15,8 @@ node polished: kernel {
     domain = size(paint);
     compute { let c = sample(paint); return if sample(surface).y > 0.9 { vec4(c.x, c.y, c.z, 0.05) } else { c }; }
 }
-node lit: light.lit@1 { surface <- stand.surface; paint <- polished.result; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
+node lit_painting: light.painting_start@1 { domain = 1; }
+node lit: light.lit@1 { painting <- lit_painting.result; surface <- stand.surface; paint <- polished.result; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
     sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; domain = window(); }
 node mirrored: light.reflections@1 { hdr <- lit.result; reflection <- lit.reflection; surface <- stand.surface; paint <- polished.result; extra <- stand.extra;
     layers <- stand.layers; more <- stand.more; lens <- stand.lens; sky <- stand.sky; domain = size(hdr); }

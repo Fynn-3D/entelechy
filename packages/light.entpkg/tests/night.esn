@@ -43,14 +43,15 @@ node clouded: light.clouds_shadow@1 { extra <- stand.extra; surface <- stand.sur
 
 node no_lamp_looks: light.lamp_looks_none@1 { domain = vec2(1, 1); }
 // Probe GI takes the lamps in: shown, reflected and bounced.
-node lit: graph "../graphs/probe_gi.esn" { lens <- stand.lens; sky <- night.result; surface <- stand.surface; paint <- gloss.result; extra <- clouded.result; layers <- stand.layers; more <- stand.more;
+node lit_painting: light.painting_start@1 { domain = 1; }
+node lit: graph "../graphs/probe_gi.esn" { painting <- lit_painting.result; lens <- stand.lens; sky <- night.result; surface <- stand.surface; paint <- gloss.result; extra <- clouded.result; layers <- stand.layers; more <- stand.more;
     behind_at <- stand.behind_at; behind_dir <- stand.behind_dir; behind_paint <- stand.behind_paint; behind_normal <- stand.behind_normal; through <- stand.through;
     proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; lamps <- lamps.result; lamp_looks <- no_lamp_looks.result; nx = 21; ny = 6; nz = 12; spacing = 0.5; }
 
 node mirror_lens: light.mirror_lens@1 { lens <- stand.lens; level = 0.0; domain = 1; }
 node mg: stand.gbuffer@1 { lens <- mirror_lens.result; sky <- night.result; mirror = 1; domain = ceil(window() / 2); }
 // The mirror pass lit, the lamps added after.
-node mirror_day: light.lit@1 { surface <- mg.surface; paint <- mg.paint; extra <- mg.extra; layers <- mg.layers; more <- mg.more;
+node mirror_day: light.lit@1 { painting <- lit_painting.result; surface <- mg.surface; paint <- mg.paint; extra <- mg.extra; layers <- mg.layers; more <- mg.more;
     sky <- night.result; lens <- mirror_lens.result; proxy <- stand.proxy; frame <- stand.frame; domain = size(surface); }
 node mirror_lit: graph "../graphs/lamps.esn" { hdr <- mirror_day.result; lens <- mirror_lens.result; surface <- mg.surface; paint <- mg.paint; extra <- mg.extra; layers <- mg.layers; more <- mg.more;
     proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; lamps <- lamps.result; lamp_looks <- no_lamp_looks.result; maps <- no_maps.result; }

@@ -49,15 +49,12 @@ fn hazed(c: Vec3, eye: Vec3, dir: Vec3, t: Float, s: SkyLook, h: Haze) -> Vec3 {
     return c * kept + scattered * (vec3(1.0, 1.0, 1.0) - kept);
 }
 
-/// Aerial perspective (see the file's head, `hazed`) over a picture (`hdr`, HDR), the sky left as it is (it has its own
-/// look); `on` 0 leaves it all as it is. The air's look is `Haze`'s.
-kernel light.haze@1 {
-    requires { field.read; field.write; }
-    input hdr: Image;
-    input surface: Grid<Vec4>;
-    input lens: Lenses;
-    input sky: SkyLooks;
-    param on: Int = 1;
+type Hazes = Rows<Haze>;
+
+/// One air made from these parameters (`domain = 1`), for a node to hand on or a scene's kernel to start from (a weather
+/// thickening it, a story clearing it).
+kernel light.haze_start@1 {
+    requires { field.write; }
     param density: Float = 1.0;
     param haze: Float = 1.0;
     param ground: Float = 0.0;
@@ -66,6 +63,23 @@ kernel light.haze@1 {
     param forward: Float = 0.76;
     param sun_glow: Float = 1.2;
     param sky_glow: Float = 0.45;
+    output result: Hazes;
+    compute {
+        return Haze { density: density, haze: haze, ground: ground, air_height: air_height, haze_height: haze_height, forward: forward,
+            sun_glow: sun_glow, sky_glow: sky_glow };
+    }
+}
+
+/// Aerial perspective (see the file's head, `hazed`) over a picture (`hdr`, HDR) through the air `air`'s first row, the
+/// sky left as it is (it has its own look); `on` 0 leaves it all as it is.
+kernel light.haze@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    input surface: Grid<Vec4>;
+    input lens: Lenses;
+    input sky: SkyLooks;
+    input air: Hazes;
+    param on: Int = 1;
     output result: Image;
     compute {
         let c = sample(hdr);
@@ -73,8 +87,7 @@ kernel light.haze@1 {
         let su = sample(surface);
         if su.w > no_hit() * 0.5 || su.w <= 0.0 { return c; }
         let l = at(lens, 0);
-        let shown = hazed(c.xyz, l.eye, ray(l, coord(), domain()), su.w, at(sky, 0), Haze { density: density, haze: haze, ground: ground,
-            air_height: air_height, haze_height: haze_height, forward: forward, sun_glow: sun_glow, sky_glow: sky_glow });
+        let shown = hazed(c.xyz, l.eye, ray(l, coord(), domain()), su.w, at(sky, 0), at(air, 0));
         return vec4(shown.x, shown.y, shown.z, c.w);
     }
 }

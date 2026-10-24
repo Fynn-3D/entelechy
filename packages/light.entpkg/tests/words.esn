@@ -26,11 +26,13 @@ fn told(turn: Float) -> Film {
 }
 
 node stand: graph "stand_scene.esn" { }
-node lit: light.lit@1 { surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
+node lit_painting: light.painting_start@1 { domain = 1; }
+node lit: light.lit@1 { painting <- lit_painting.result; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
     sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; domain = window(); }
 
 // The air thick enough to show across the stand: the pass, and a scene's kernel saying it.
-node aired: light.haze@1 { hdr <- lit.result; surface <- stand.surface; lens <- stand.lens; sky <- stand.sky; density = 40.0; }
+node aired_air: light.haze_start@1 { density = 40.0; domain = 1; }
+node aired: light.haze@1 { air <- aired_air.result; hdr <- lit.result; surface <- stand.surface; lens <- stand.lens; sky <- stand.sky; }
 node own_air: kernel {
     requires { field.read; field.write; }
     input hdr: Image <- lit.result;

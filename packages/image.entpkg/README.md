@@ -70,8 +70,9 @@ use "image.entpkg";
   (FSR 1's EASU, `upscaled`) or nearest-neighbor (`upscaled_near`), and a
   sharpening that cannot overshoot (RCAS). Kernels: `image.upscale@1`,
   `image.contrast_sharpen@1`.
-- `kernels/watercolor.ent` — A watercolor's tone (`watercolor`): vivid,
-  shadows cool, highlights warm. Kernels: `image.watercolor@1`.
+- `kernels/watercolor.ent` — A watercolor's tone as data (`Watercolor`,
+  `watercolor`): how far, vivid, shadows cool, highlights warm. Kernels:
+  `image.watercolor_start@1`, `image.watercolor@1`.
 - `kernels/wrap.ent` — Wrap addressing for a linear read.
 
 ## Graph presets

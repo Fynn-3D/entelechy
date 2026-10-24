@@ -444,23 +444,12 @@ kernel light.probes_shade@1 {
     input lamp_looks: LampLooks;
     /// The lamps' light on each surface (`light.lamps_light`).
     input lamped: Image;
+    /// How far toward a painting's its light is taken, and the painting's look (`Painting`, `light.painting_start`): light
+    /// and shade one soft step, the shade cool and flat, a rim of light on the edge against the light, the highlight a small patch.
+    input painting: Paintings;
     param spacing: Float = 1.2;
-    /// The painted look (`Toon`): where light turns to shade across the surface (`toon_terminator`, from and to) and across the
-    /// shadow (`toon_shadow`), the sun's share, how flat and how tinted the shade is, the rim's strength, the highlight's patch
-    /// (from and to) and its strength.
-    param toon_terminator: Vec2 = vec2(-0.03, 0.16);
-    param toon_shadow: Vec2 = vec2(0.2, 0.55);
-    param toon_sun: Float = 0.75;
-    param toon_flat: Float = 0.6;
-    param toon_shade: Vec3 = vec3(0.85, 0.95, 1.2);
-    param toon_rim: Float = 0.012;
-    param toon_highlight: Vec2 = vec2(0.965, 0.985);
-    param toon_glint: Float = 0.03;
     /// Only surfaces smoother than this look for reflections on the screen (on rough ones they would not show, and the time is wasted).
     param mirror_below: Float = 0.6;
-    /// How far toward a painting's its light is taken (`shaded_as`; 0 none, 1 all): light and shade one soft step, the
-    /// shade cool and flat, a rim of light on the edge against the light, the highlight a small patch.
-    param painted: Float = 0.0;
     output result: Image;
     /// The share of `result` that scatters under a subsurface surface (its
     /// matte light times its subsurface scattering), for `light.subsurface_blur`; 0 elsewhere.
@@ -499,15 +488,14 @@ kernel light.probes_shade@1 {
         let spec_light = mix(mirrored, e, sqrt(m.rough)) * ao;
         let coat_light = mix(mirrored, e, sqrt(m.coat_rough)) * ao;
         let clear = if m.transmission > 0.0 { transmitted(m, n, v, at(through, q), frosted(beyond, q, m.rough)) } else { vec3(0.0, 0.0, 0.0) };
-        let painting = Toon { terminator: toon_terminator, shadow: toon_shadow, sun: toon_sun, flat: toon_flat, shade: toon_shade, rim: toon_rim,
-            highlight: toon_highlight, glint: toon_glint };
-        let shown = shaded_as(m, n, v, s, ex.x, e, spec_light, coat_light, painted, painting);
+        let pt = at(painting, 0);
+        let shown = shaded_as(m, n, v, s, ex.x, e, spec_light, coat_light, pt.amount, pt.toon);
         let all = shown + clear + m.glow + sample(lamped).xyz;
         let shaded = aerial(all, dir, su.w, s);
         // The light that goes under the skin: the matte light (the sun's and
         // all round), as much as the surface scatters it; through the air as
         // the rest (the air's mix is linear, so its share is the difference).
-        let under = scattered_as(m, n, v, s, ex.x, e, painted);
+        let under = scattered_as(m, n, v, s, ex.x, e, pt.amount);
         let kept = aerial(all - under, dir, su.w, s);
         return { result: vec4(shaded, 1.0), scatter: vec4(shaded.x - kept.x, shaded.y - kept.y, shaded.z - kept.z, 0.0) };
     }

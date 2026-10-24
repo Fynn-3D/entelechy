@@ -23,8 +23,9 @@ The package gives words, and a scene composes the effect it wants. Each
 effect is first a function a scene's own kernel calls on a pixel (light,
 air, a look); a kernel is a thin pass over those words where the effect
 must read its neighbors, the last frame or another size; a look is data
-(`Grade`, `Film`, `Dof`, `Haze`, `Toon`, `Surround`) a scene's kernel
-makes, blends and changes as it goes; any pass is kept to part of a
+(`Grade`, `Film`, `Dof`, `Haze`, `Painting`, `Watercolor`) a node
+makes, blends and changes as it goes and the pass reads as an input of
+rows (`*_start` makes one from parameters); any pass is kept to part of a
 picture by `image.masked`; and a graph preset is a recipe built from the
 same words. [`tests/words.esn`](tests/words.esn) holds a scene's kernels
 saying a pass by its words to the pass's own picture.
@@ -33,10 +34,10 @@ saying a pass by its words to the pass's own picture.
 | --- | --- | --- | --- |
 | Surfaces and their light | `pbr_of`, `lit_by`, `glossy_by`, `ambient_by`, `env_reflectance`, `scattered_share`, `baked_occlusion` | a renderer: `light.lit`, `light.raytraced`, `graphs/probe_gi.esn`, `graphs/path_tracer.esn`, `graphs/clay.esn` | `Pbr` |
 | Light from all round | `hemisphere`, `proxy_open`, `seen_along`, `sky_radiance` | | `Surround`, `Openness` |
-| A painted look, as far as asked | `shaded_as`, `toon`, `painted_gloss`, `scattered_as`, `mirrored_as`, `toon_default` | `painted` of a renderer | `Toon` |
+| A painted look, as far as asked | `shaded_as`, `toon`, `painted_gloss`, `scattered_as`, `mirrored_as`, `toon_default`, `painting_none` | a renderer's `painting` input, `light.painting_start` | `Painting`, `Toon` |
 | The sun's shadows | `sun_pcss`, `contact_shadow`, `rough_shadow`, `cloud_shadow` | `light.sun_shadow`, `light.contact`, `light.clouds_shadow` | `ContactReach` |
 | Lamps | `point_lamp`, `spot_lamp`, `panel_lamp`, `lamps_on_surface`, `lamp_shadow` | `graphs/lamps.esn`, `graphs/lamp_maps.esn` | `Lamps`, `LampLooks` |
-| Air and sky | `hazed`, `aerial`, `sky_radiance`, `air_radiance`, `air_phase` | `light.haze`, `graphs/atmosphere.esn` | `Haze`, `SkyLook` |
+| Air and sky | `hazed`, `aerial`, `sky_radiance`, `air_radiance`, `air_phase` | `light.haze`, `light.haze_start`, `graphs/atmosphere.esn` | `Haze`, `SkyLook` |
 | Fog and clouds | `fog_density`, `clouds_seen`, `cloud_density` | `graphs/volumetrics.esn`, `light.clouds_march` | `CloudDeck` |
 | Reflections | `screen_march`, `reflection_edge`, `raytraced_reflection` | `light.reflections`, `light.mirror_mix` | |
 | Glass and translucency | `transmitted`, `frosted`, `behind_radiance` | `graphs/translucent.esn`, `graphs/subsurface.esn` | |
@@ -53,7 +54,7 @@ The picture after the light is `image.entpkg`'s, in the same words:
 | Glow, exposure, tone | `bloom_at`, `tone_sharpened`, `tone_curve`, `tone_warmth` | `graphs/bloom.esn`, `graphs/exposure.esn`, `graphs/tonemap.esn`, `graphs/upscale.esn` | |
 | A grade | `grade_color`, `grade_mix`, `grade_balance`, `grade_none` | `image.grade` | `Grade` |
 | Film | `film_split`, `film_curve`, `film_halation`, `film_bars`, `film_preset`, `fringed`, `vignetted`, `film_grain` | `image.film` | `Film` |
-| A watercolor's tone | `watercolor` | `image.watercolor` | `Watercolor` |
+| A watercolor's tone | `watercolor` | `image.watercolor`, `image.watercolor_start` | `Watercolor` |
 | Edges smoothed in a frame | `fxaa` | `image.fxaa` | |
 | Part of a picture | | `image.masked` | |
 
@@ -95,8 +96,9 @@ node filmed: image.film@1 { image <- shown.result; film <- story.result; }
   `light.fog_volumes_none@1`, `light.froxel_light@1`, `light.froxel_scan@1`,
   `light.froxel_furthest@1`, `light.froxel_view@1`, `light.fog_blur@1`,
   `light.fog_apply@1`.
-- `kernels/haze.ent` — Haze: aerial perspective after the real atmosphere.
-  Kernels: `light.haze@1`.
+- `kernels/haze.ent` — Haze: aerial perspective after the real atmosphere,
+  the air as data (`Haze`, `hazed`). Kernels: `light.haze_start@1`,
+  `light.haze@1`.
 - `kernels/lamp_map.ent` — Lamps' shadow maps: a cube of distances for
   each lamp that casts shadows, drawn from a clustered library by tiles,
   each texel where the ray from the lamp meets the nearest face. Kernels:
@@ -116,7 +118,9 @@ node filmed: image.film@1 { image <- shown.result; film <- story.result; }
   `light.mirror_mix@1`.
 - `kernels/painted.ent` — The painted look: light and shade as a painting
   has them (`toon`, `Toon`), and a renderer's shading taken toward it as far
-  as a scene asks (`shaded_as`, `scattered_as`, `mirrored_as`).
+  as a scene asks (`shaded_as`, `scattered_as`, `mirrored_as`), as data a
+  renderer reads (`Painting`: how far, and the look). Kernels:
+  `light.painting_start@1`.
 - `kernels/plain.ent` — Light as a game without a renderer draws it, on a
   face it found itself (a voxel's, a tile's): the sky and a sun
   (`plain_daylight`), lights fading to their reach (`plain_light`,
@@ -295,9 +299,9 @@ worth their cost where bounced light shows (indoors, at night, under
 lamps). Clay shows the shapes alone, as a modeler does.
 
 A painted look is not another renderer: a renderer's shading is taken
-toward a painting's as far as its `painted` asks (lit's and probe GI's; 0
-none, 1 all, between them blended, so one look turns into the other as a
-scene goes), by the words of `kernels/painted.ent` (`shaded_as`, `toon`,
+toward a painting's as far as the `painting` row it reads asks (lit's and
+probe GI's; its amount 0 none, 1 all, between them blended, so one look
+turns into the other as a scene goes, a node making the row each frame), by the words of `kernels/painted.ent` (`shaded_as`, `toon`,
 `Toon`) that a scene's own kernel calls too; its ink (`surface.outline`) and
 a watercolor's tone (`image.watercolor`) are passes after it that read
 only its picture and the G-buffer.
@@ -308,7 +312,11 @@ What decides a look is a scene's to set, never a number written into a
 kernel: each tint, strength, distance and threshold a pass draws by is a
 param of its kernel, its default the look the package ships, and a graph
 preset that places the kernel carries the same param up, so a scene sets
-it on the preset's node. Shared functions take such params as small
+it on the preset's node. A look a story drives (the air, a painting, a
+grade, a film, a focus) is also data: the pass reads it as rows a node
+makes, so a scene's own kernel changes it frame by frame. The tone map's
+exposure and color are tuned by its params and driven through a `Grade`
+laid on before it. Shared functions take such params as small
 structs (`Surround`, `Openness`, `Mirror`, `Toon`, `ContactReach`,
 `StudioLight`, `FloorLines`). The numbers left in a kernel are the
 method's own: filter weights, luminance weights, phase normalizers.

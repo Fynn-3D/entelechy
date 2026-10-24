@@ -4,7 +4,7 @@
 // horizon, down-facing the warm light the sunlit ground throws back), times the baked occlusion, times the sky the coarse scene hides
 // (three distances taken up along the normal; deep inside the coarse shape, a leaf in its crown, a share of its own instead); a
 // reflection takes the sky in its direction (the ground's light, looking down). Its shading is standard real-time
-// lighting (`lit_by`, `ambient_by`), taken as far toward a painting's as `painted` asks (`painted.ent`).
+// lighting (`lit_by`, `ambient_by`), taken as far toward a painting's as `painting` asks (`painted.ent`).
 use "geometry.entpkg";
 use "brdf.ent";
 use "surface.entpkg";
@@ -62,7 +62,7 @@ fn seen_along(r: Vec3, s: SkyLook, look: Surround) -> Vec3 {
 }
 
 /// Lit (see the file's head): an HDR picture: the sky drawn where it is; things lit by standard real-time lighting,
-/// `painted` of the way to a painting's (`shaded_as`; 0 none, 1 all), plus a smooth surface's reflection, plus emission,
+/// `painting`'s amount of the way to a painting's (`shaded_as`; 0 none, 1 all), plus a smooth surface's reflection, plus emission,
 /// with air laid over distance. `bounce` 0 leaves out the light from all round, the sun's direct light and emission alone.
 kernel light.lit@1 {
     requires { field.read; field.write; }
@@ -76,7 +76,8 @@ kernel light.lit@1 {
     /// The coarse scene: the distance to things, and where it covers.
     input proxy: Volume<Vec4>;
     input frame: Proxies;
-    param painted: Float = 0.0;
+    /// How far toward a painting's its light is taken, and the painting's look (`Painting`, `light.painting_start`).
+    input painting: Paintings;
     param bounce: Int = 1;
     /// The share of the light all round a surface deep inside the coarse
     /// shape (a leaf in its crown) keeps, times its baked occlusion, in place of
@@ -93,17 +94,6 @@ kernel light.lit@1 {
     param open_reach: Vec3 = vec3(0.4, 1.2, 2.5);
     param open_strength: Float = 1.6;
     param open_least: Float = 0.1;
-    /// The painted look (`Toon`): where light turns to shade across the surface (`toon_terminator`, from and to) and across the
-    /// shadow (`toon_shadow`), the sun's share, how flat and how tinted the shade is, the rim's strength, the highlight's patch
-    /// (from and to) and its strength.
-    param toon_terminator: Vec2 = vec2(-0.03, 0.16);
-    param toon_shadow: Vec2 = vec2(0.2, 0.55);
-    param toon_sun: Float = 0.75;
-    param toon_flat: Float = 0.6;
-    param toon_shade: Vec3 = vec3(0.85, 0.95, 1.2);
-    param toon_rim: Float = 0.012;
-    param toon_highlight: Vec2 = vec2(0.965, 0.985);
-    param toon_glint: Float = 0.03;
     output result: Image;
     /// The share of `result` that scatters under subsurface surfaces (`graphs/subsurface.esn` spreads it); 0 elsewhere and when painted.
     output scatter: Image;
@@ -134,15 +124,14 @@ kernel light.lit@1 {
         let ao = if bounce != 0 { baked_occlusion(ex) * open } else { 0.0 };
         let e = hemisphere(n, s, look) * ao;
         let spec_light = mix(seen_along(reflect(dir, n), s, look), e, sqrt(m.rough)) * ao * on;
-        let painting = Toon { terminator: toon_terminator, shadow: toon_shadow, sun: toon_sun, flat: toon_flat, shade: toon_shade, rim: toon_rim,
-            highlight: toon_highlight, glint: toon_glint };
-        let shown = shaded_as(m, n, v, s, ex.x, e, spec_light, spec_light, painted, painting);
+        let pt = at(painting, 0);
+        let shown = shaded_as(m, n, v, s, ex.x, e, spec_light, spec_light, pt.amount, pt.toon);
         let all = shown + m.glow;
         let shaded = aerial(all, dir, su.w, s);
         // The light under the skin, through the air as the rest (the air's mix is linear).
-        let under = scattered_as(m, n, v, s, ex.x, e, painted);
+        let under = scattered_as(m, n, v, s, ex.x, e, pt.amount);
         let kept = aerial(all - under, dir, su.w, s);
-        let mirrored = mirrored_as(m, n, v, spec_light, painted);
+        let mirrored = mirrored_as(m, n, v, spec_light, pt.amount);
         let seen = aerial(mirrored, dir, su.w, s) - aerial(vec3(0.0, 0.0, 0.0), dir, su.w, s);
         return { result: vec4(shaded, 1.0), scatter: vec4(shaded.x - kept.x, shaded.y - kept.y, shaded.z - kept.z, 0.0), reflection: vec4(seen.x, seen.y, seen.z, 0.0) };
     }

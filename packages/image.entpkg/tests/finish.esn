@@ -32,6 +32,7 @@ node barred: image.film_start@1 { letterbox = 2.39; fringe = 0.0; grain = 0.0; d
 node as_was: image.film@1 { image <- half.result; film <- nothing.result; }
 node s_curve: image.film@1 { image <- quarter.result; film <- curved.result; }
 node bars: image.film@1 { image <- half.result; film <- barred.result; }
-node toned: image.watercolor@1 { image <- half.result; }
+node toned_look: image.watercolor_start@1 { domain = 1; }
+node toned: image.watercolor@1 { look <- toned_look.result; image <- half.result; }
 
 output result <- bars.result;
