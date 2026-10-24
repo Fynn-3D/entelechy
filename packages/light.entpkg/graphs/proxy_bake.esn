@@ -1,0 +1,34 @@
+//! A mesh baked into a proxy (`kernels/proxy_bake.ent`): `points` and `faces`, each face's color (`colors`, one a face),
+//! over the proxy's `frame` (one level; its cells as the volume's size); each cell the distance to the nearest face, found
+//! exactly within `band` cells and spread past them by jump flooding (up to 256 cells a side). `proxy` goes to a renderer
+//! with the frame, as the contract's.
+use "parallel.entpkg";
+use "mesh.entpkg";
+use "../kernels/";
+
+input points: Rows<MeshPoint>;
+input faces: Rows<Face>;
+input colors: Rows<Vec4>;
+input frame: Proxies;
+param nx: Int = 128;
+param ny: Int = 64;
+param nz: Int = 128;
+param band: Float = 3.0;
+
+node tiles: light.proxy_bake_tiles@1 { faces <- faces; points <- points; frame <- frame; band = band; }
+node runs: graph "parallel.entpkg/graphs/runs.esn" { counts <- tiles.result; }
+node blank: Volume<Long> { domain = vec3(nx, ny, nz); value = 9223372036854775807l; }
+node near: light.proxy_bake_faces@1 { faces <- faces; points <- points; tiles <- tiles.result; ends <- runs.ends; frame <- frame; blank <- blank.result;
+    entries <- runs.entries; band = band; domain = value(entries); }
+node seeds: light.proxy_seeds@1 { near <- near.result; faces <- faces; points <- points; frame <- frame; domain = size(near); }
+node f128: light.proxy_flood@1 { seeds <- seeds.result; frame <- frame; step = 128; domain = size(seeds); }
+node f64: light.proxy_flood@1 { seeds <- f128.result; frame <- frame; step = 64; domain = size(seeds); }
+node f32: light.proxy_flood@1 { seeds <- f64.result; frame <- frame; step = 32; domain = size(seeds); }
+node f16: light.proxy_flood@1 { seeds <- f32.result; frame <- frame; step = 16; domain = size(seeds); }
+node f8: light.proxy_flood@1 { seeds <- f16.result; frame <- frame; step = 8; domain = size(seeds); }
+node f4: light.proxy_flood@1 { seeds <- f8.result; frame <- frame; step = 4; domain = size(seeds); }
+node f2: light.proxy_flood@1 { seeds <- f4.result; frame <- frame; step = 2; domain = size(seeds); }
+node f1: light.proxy_flood@1 { seeds <- f2.result; frame <- frame; step = 1; domain = size(seeds); }
+node baked: light.proxy_baked@1 { seeds <- f1.result; colors <- colors; frame <- frame; domain = size(seeds); }
+
+output proxy <- baked.result;

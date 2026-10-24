@@ -1,0 +1,72 @@
+// Lamps through their looks (`kernels/lamps.ent`, `graphs/lamps.esn`): a gray floor ten meters across seen from ten
+// meters straight above, lit by a spotlight on the left through a cookie of four warm panes in a dark frame, and by a
+// downlight on the right shaped by its photometry (`downlight.ies`, its light gone past 50 degrees). `looks` 0 takes
+// both lamps' looks away. No sky, no shadows.
+use "../kernels/";
+
+param looks: Int = 1;
+
+/// The downlight's candela a degree from its aim.
+input beam: Rows<Float> = "downlight.ies";
+
+// The looks: the cookie in texels 0 to 32 across and down, the profile on row 32 (181 texels, its peak 1).
+node atlas: kernel {
+    requires { field.read; field.write; }
+    input beam: Rows<Float> <- beam;
+    output result: LampLooks;
+    domain = vec2(181, 33);
+    compute {
+        let g = coord();
+        if g.y > 31.5 {
+            let peak = loop 181 with r = 0.0 { max(r, at(beam, index())) };
+            let v = at(beam, int(g.x)) / max(peak, 0.000001);
+            return vec4(v, v, v, 1.0);
+        }
+        if g.x > 31.5 { return vec4(0.0, 0.0, 0.0, 1.0); }
+        let frame = g.x < 2.0 || g.y < 2.0 || g.x > 29.0 || g.y > 29.0 || abs(g.x - 15.5) < 2.0 || abs(g.y - 15.5) < 2.0;
+        return if frame { vec4(0.05, 0.05, 0.05, 1.0) } else { vec4(1.0, 0.9, 0.7, 1.0) };
+    }
+}
+node lamps: kernel {
+    requires { field.write; }
+    param looks: Int = looks;
+    output result: Lamps;
+    domain = 2;
+    compute {
+        if element() == 0 {
+            let spot = spot_lamp(vec3(-2.5, 4.0, 0.0), vec3(-2.5, 0.0, 0.0), 10.0, vec3(40.0, 40.0, 40.0), 0.05, 0.8, 0.1, 0);
+            return if looks == 1 { lamp_with_cookie(spot, vec2(0.0, 0.0), vec2(32.0, 32.0), vec3(0.0, 0.0, -1.0)) } else { spot };
+        }
+        let down = Lamp { ..point_lamp(vec3(2.5, 3.0, 0.0), 10.0, vec3(20.0, 20.0, 20.0), 0.05, 0), aim: vec3(0.0, -1.0, 0.0) };
+        return if looks == 1 { lamp_with_profile(down, 0.0, 180.0, 32.0) } else { down };
+    }
+}
+node lens: kernel {
+    requires { field.write; }
+    output result: Lenses;
+    domain = 1;
+    compute { return Lens { eye: vec3(0.0, 10.0, 0.0), ahead: vec3(0.0, -1.0, 0.0), right: vec3(1.0, 0.0, 0.0), up: vec3(0.0, 0.0, -1.0), focal: 1.0 }; }
+}
+node picture: Image { domain = vec2(64, 64); value = vec4(0.0, 0.0, 0.0, 1.0); }
+node surface: kernel {
+    requires { field.read; field.write; }
+    input lens: Lenses <- lens.result;
+    output result: Grid<Vec4>;
+    domain = vec2(64, 64);
+    compute { let l = at(lens, 0); return vec4(0.0, 1.0, 0.0, 10.0 / max(0.0 - ray(l, coord(), domain()).y, 0.001)); }
+}
+node paint: Grid<Vec4> { domain = vec2(64, 64); value = vec4(0.5, 0.5, 0.5, 1.0); }
+node blank: Grid<Vec4> { domain = vec2(64, 64); }
+node frame: kernel {
+    requires { field.write; }
+    output result: Proxies;
+    domain = 1;
+    compute { return Proxy { lo: vec3(-1.0, -1.0, -1.0), cell: 2.0, cells: vec3(1.0, 1.0, 1.0), land_lo: vec2(-100.0, -100.0), land_cell: 200.0, ground: vec3(0.3, 0.3, 0.3) }; }
+}
+node empty: Volume<Vec4> { domain = vec3(1, 1, 1); value = vec4(1000.0, 0.0, 0.0, 0.0); }
+node land: Grid<Float> { domain = vec2(2, 2); value = -50.0; }
+node no_maps: light.lamp_maps_none@1 { domain = vec2(1, 1); }
+node lit: graph "../graphs/lamps.esn" { hdr <- picture.result; lens <- lens.result; surface <- surface.result; paint <- paint.result; extra <- blank.result; layers <- blank.result;
+    more <- blank.result; proxy <- empty.result; land <- land.result; frame <- frame.result; lamps <- lamps.result; lamp_looks <- atlas.result; maps <- no_maps.result; }
+
+output result <- lit.hdr;

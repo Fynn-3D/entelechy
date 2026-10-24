@@ -1,4 +1,4 @@
-// The world `stream.esn` (and `render.entpkg`'s `tests/stream.esn`) streams,
+// The world `stream.esn` (and `light.entpkg`'s `tests/stream.esn`) streams,
 // and one chunk of it built (`graphs/chunk.esn`): a ground eight meters a side in four chunks of four
 // (33 by 33 points over it), a ball a meter across standing in each chunk's
 // middle, the balls a part of their own; `cell_x`, `cell_z` the chunk, its

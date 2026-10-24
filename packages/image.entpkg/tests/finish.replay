@@ -1,0 +1,25 @@
+scene finish.esn
+
+# Bars to 2.39 over 4:3 cover the top 0.221 of the height: a tenth down is
+# in a bar, the middle is not; no aspect, no bars; the cinema's is 2.39.
+# Half gray split all the way: 1.1, 1, 0.86 of it. A quarter half way along
+# the S curve, 0.2031; all the way, 0.15625. No film grades nothing; the
+# black and white recipe takes all saturation; past the recipes, none.
+frame 0.0
+expect probe.result[0] = 0 1 1 2.39 0.0001
+expect probe.result[1] = 0.55 0.5 0.43 0.203125 0.0001
+expect probe.result[2] = 0.15625 0 0 0 0.0001
+
+# White under halation: a quarter over 0.75 all round, red glowing most.
+expect glow.result[0] = 0.5 0.175 0.075 0 0.0001
+
+# Film asking nothing gives the picture back; its full curve takes a
+# quarter to 0.15625; bars black above the picture.
+expect as_was.result[9680] = 0.5 0.5 0.5 1 0.0002
+expect s_curve.result[9680] = 0.15625 0.15625 0.15625 1 0.0002
+expect bars.result[0] = 0 0 0 1
+expect bars.result[9680] = 0.5 0.5 0.5 1 0.0002
+
+# Half gray toned as a watercolor: in shade by 0.5624, red down, blue up,
+# the cool lift laid in.
+expect toned.result[0] = 0.490256 0.498875 0.519988 1 0.0002

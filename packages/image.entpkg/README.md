@@ -1,8 +1,13 @@
 # image
 
-What Entelechy does to pictures: color spaces, blending, filters, tone
-and its curves, histograms, distance fields, mipmaps, pixel art, sprite
-sheets and a camera's finish.
+What Entelechy does to a picture, knowing nothing of the world it shows:
+color spaces, blending and masks, filters, a grade, tone and its curves,
+glow, metered and local exposure, a film's finish and a watercolor's
+tone, scaling and sharpening, antialiasing within a frame, histograms,
+distance fields, mipmaps, pixel art and sprite sheets. Each effect is a
+word a kernel calls on a pixel, its look data a scene makes (`Grade`,
+`Film`, `Watercolor`), its kernel a thin pass; what needs the world (a
+G-buffer, a lens, light) is [`light`](../light.entpkg/README.md)'s.
 
 **Layer:** Graphics. **Uses:** [`random`](../random.entpkg/README.md).
 
@@ -12,19 +17,41 @@ use "image.entpkg";
 
 ## Kernels
 
+- `kernels/antialias.ent` — Antialiasing within one frame (FXAA, `fxaa`).
+  Kernels: `image.fxaa@1`.
 - `kernels/blend.ent` — Blending, and any picture kept to part of another by a mask. Kernels: `image.blend@1`, `image.masked@1`.
+- `kernels/bloom.ent` — Glow round bright light, every size at once: the
+  bright parts shrunk by halves and grown back (`bloom_at`). Kernels:
+  `image.bloom_down@1`, `image.bloom_up@1`.
 - `kernels/color.ent` — Color as numbers. Kernels: `image.encode@1`,
   `image.decode@1`.
 - `kernels/distance.ent` — Distance. Kernels: `image.seeds@1`,
   `image.first_step@1`, `image.next_step@1`, `image.flood@1`,
   `image.distance@1`.
-- `kernels/film.ent` — A camera's finish, as Kernels over a picture of
-  light (rgb, which may be far brighter than white) that keeps in w how
-  far away what each pixel shows is. Kernels: `image.bright@1`,
-  `image.grade@2`.
+- `kernels/display.ent` — The picture seen: glow laid in, toned
+  (`tone_curve`), vivid and warm (`tone_warmth`), the corners darkened,
+  sRGB. Kernels: `image.blank@1`, `image.bright@2`, `image.spread@1`,
+  `image.tonemap@3`.
+- `kernels/exposure.ent` — Metered exposure as an eye adapts, and local
+  exposure evening bright and dark neighborhoods. Kernels:
+  `image.exposure_tiles@1`, `image.exposure_histogram@1`,
+  `image.exposure_meter@1`, `image.exposure_start@1`,
+  `image.exposure_apply@1`, `image.exposure_local_base@1`,
+  `image.exposure_local_blur@1`, `image.exposure_local@1`.
+- `kernels/film.ent` — A film's finish as data (`Film`: a grade, a split,
+  an S curve, halation, fringe, vignette, grain, bars), each step a word
+  (`film_split`, `film_curve`, `film_halation`, `film_bars`, `fringed`,
+  `vignetted`, `film_grain`, `defocus`), its looks recipes
+  (`film_preset`); and a camera's finish over a picture that keeps its
+  depth in w. Kernels: `image.film_start@1`, `image.film@1`,
+  `image.bright@1`, `image.finish@1`.
 - `kernels/filter.ent` — Filters. Kernels: `image.blur@1`,
   `image.shrink@1`, `image.convolve@1`, `image.sharpen@1`,
   `image.edges@1`, `image.morph@1`, `image.resize@1`.
+- `kernels/grade.ent` — A grade as data (`Grade`: exposure, white
+  balance, saturation, contrast, gain, a drain toward one color), blended
+  from one look to another (`grade_color`, `grade_mix`,
+  `grade_balance`). Kernels: `image.grade_start@1`, `image.grade@3`.
 - `kernels/histogram.ent` — Histograms. Kernels: `image.zeros@1`,
   `image.histogram@1`, `image.cumulate@1`, `image.equalize@1`.
 - `kernels/mipmap.ent` — A mip strip. Kernels: `image.mip_first@1`,
@@ -36,22 +63,31 @@ use "image.entpkg";
 - `kernels/tone.ent` — Tone and color grading. Kernels:
   `image.adjust@1`, `image.levels@1`, `image.curve@1`,
   `image.neutral@1`, `image.lut@1`.
-- `kernels/tone_map.ent` — Tone curves, ACES's fit and AgX, light of any brightness to
-  0..1. Kernels: `image.tonemap@2`.
+- `kernels/tone_map.ent` — Tone curves, ACES's fit and AgX, light of any
+  brightness to 0..1 (`tone_curve`), sharpened against its neighbors
+  (`tone_sharpened`), made vivid and warm (`tone_warmth`).
+- `kernels/upscale.ent` — A picture scaled to another size, edge-aware
+  (FSR 1's EASU, `upscaled`) or nearest-neighbor (`upscaled_near`), and a
+  sharpening that cannot overshoot (RCAS). Kernels: `image.upscale@1`,
+  `image.contrast_sharpen@1`.
+- `kernels/watercolor.ent` — A watercolor's tone (`watercolor`): vivid,
+  shadows cool, highlights warm. Kernels: `image.watercolor@1`.
 - `kernels/wrap.ent` — Wrap addressing for a linear read.
 
 ## Graph presets
 
-- `graphs/bloom.esn` — The glow round what is past white, as a sub-
-  graph.
+- `graphs/bloom.esn` — Glow round bright light, six levels down and back
+  up; what `image.tonemap` takes as its `bloom`.
 - `graphs/blur.esn` — A Gaussian blur, both ways, as a sub-graph.
-- `graphs/display.esn` — Tone mapping as a sub-graph.
 - `graphs/distance.esn` — The signed distance from every pixel to a
   shape, in pixels, negative inside.
 - `graphs/equalize.esn` — Histogram equalization as a sub-graph.
+- `graphs/exposure.esn` — Metered exposure and local exposure.
 - `graphs/finish.esn` — The whole finish, as a sub-graph, usually a
   scene's last node.
 - `graphs/flood.esn` — Jump flooding as a sub-graph.
+- `graphs/glow.esn` — The camera's finish's glow: a near and a far
+  copy of what is past white.
 - `graphs/flood_pass.esn` — One jump-flooding pass and the step after
   it.
 - `graphs/mipmap.esn` — The mip strip of a square texture, as a sub-
@@ -59,11 +95,16 @@ use "image.entpkg";
 - `graphs/mipmap_level.esn` — One halving of a mip strip.
 - `graphs/nes.esn` — Coarse pixels held to a few colors.
 - `graphs/sharpen.esn` — Unsharp masking as a sub-graph.
+- `graphs/tonemap.esn` — The picture seen at its own size: glow, tone
+  and sRGB, sharpened.
+- `graphs/upscale.esn` — Scaled to the window and sharpened.
 
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`looks.replay`, `operations.replay`. Every Kernel of the package is
+`antialias.replay`, `bloom.replay`, `display.replay`,
+`exposure.replay`, `finish.replay`, `grade.replay`, `looks.replay`,
+`operations.replay`, `upscale.replay`. Every Kernel of the package is
 reached by one of them.
 
 Used by the [darkroom](../../examples/darkroom/README.md), [image](../../examples/image/README.md), [mipmap](../../examples/mipmap/README.md), [nebula](../../examples/nebula/README.md) examples.

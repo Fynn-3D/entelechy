@@ -1,0 +1,46 @@
+// The stand drawn through a jittered lens frame after frame: blended with
+// the history carried over (temporal antialiasing), and built up to the
+// window's size from a smaller picture (super-resolution), both held once
+// the picture rests (`rest`); and a triangle through the picture's own
+// raster.
+use "../kernels/";
+use "raster.entpkg";
+
+node stand: graph "stand_scene.esn" { }
+/// How many frames the picture has rested (the scene's count; 16 and more: jittered no more).
+param rest: Int = 0;
+node calm: kernel {
+    requires { field.write; }
+    param rest: Int = rest;
+    output result: Rows<Int>;
+    domain = 1;
+    compute { return rest; }
+}
+node size: kernel {
+    requires { field.write; input.read; }
+    output result: Rows<Vec2>;
+    domain = 1;
+    compute { return window(); }
+}
+node jlens: light.jitter@1 { lens <- stand.lens; calm <- calm.result; size <- size.result; domain = 1; }
+node still: Grid<Vec4> { domain = vec2(1, 1); }
+node lit: light.lit@1 { surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
+    sky <- stand.sky; lens <- jlens.result; proxy <- stand.proxy; frame <- stand.frame; domain = window(); }
+node blended: graph "../graphs/taa.esn" { hdr <- lit.result; surface <- stand.surface; lens <- stand.lens; jlens <- jlens.result; motion <- still.result; }
+node built: graph "../graphs/super_resolution.esn" { hdr <- lit.result; surface <- stand.surface; lens <- stand.lens; jlens <- jlens.result; motion <- still.result; }
+
+node corners: kernel {
+    requires { field.write; }
+    output result: Rows<Corner>;
+    domain = 3;
+    compute { return Corner { clip: vec4([-0.5, 0.5, 0.0][element()], [-0.5, -0.5, 0.6][element()], 0.5, 1.0), normal: vec3(0.0, 0.0, 1.0), uv: vec2(0.0, 0.0) }; }
+}
+node face: kernel {
+    requires { field.write; }
+    output result: Rows<Face>;
+    domain = 1;
+    compute { return Face { a: 0, b: 1, c: 2 }; }
+}
+node drawn: graph "../graphs/picture.esn" { vertices <- corners.result; triangles <- face.result; }
+
+output result <- built.result;

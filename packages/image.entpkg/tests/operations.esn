@@ -128,7 +128,9 @@ node three: kernel {
     domain = 3;
     compute { return match element() { 0 => vec3(0.0, 0.0, 0.0), 1 => vec3(1.0, 0.0, 0.0), _ => vec3(1.0, 1.0, 1.0) }; }
 }
-node mapped: image.tonemap@2 { source <- flat.result; }
+// Tone alone: no glow, nothing vivid, warm or darkened at the corners.
+node no_glow: image.blank@1 { domain = vec2(1, 1); }
+node mapped: image.tonemap@3 { hdr <- flat.result; bloom <- no_glow.result; glow = 0.0; vivid = 1.0; warmth = 0.0; vignette = 0.0; }
 // Two colors, black and white; a gray of 0.064 (Oklab lightness 0.4).
 node two: kernel {
     requires { field.write; }

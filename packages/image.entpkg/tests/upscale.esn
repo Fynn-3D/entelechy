@@ -1,0 +1,25 @@
+// A picture scaled and sharpened, at points whose answers are known by hand: flat stays flat, edge-aware or
+// nearest; two pixels made blocks of four by nearest-neighbor; a step sharpened by RCAS, its dark side pulled down by
+// a lobe of 0.05 (no further than the step allows), a flat side left as it was.
+use "../kernels/";
+
+node flat: Grid<Vec4> { domain = vec2(8, 8); value = vec4(0.5, 0.5, 0.5, 1.0); }
+node two: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = vec2(2, 2);
+    compute { return if coord().x < 0.5 { vec4(0.1, 0.1, 0.1, 1.0) } else { vec4(0.9, 0.9, 0.9, 1.0) }; }
+}
+node step: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = vec2(8, 8);
+    compute { return if coord().x < 3.5 { vec4(0.2, 0.2, 0.2, 1.0) } else { vec4(0.8, 0.8, 0.8, 1.0) }; }
+}
+node wide: image.upscale@1 { image <- flat.result; domain = vec2(20, 20); }
+node blocks: image.upscale@1 { image <- two.result; near = 1; domain = vec2(8, 8); }
+node crisp: image.contrast_sharpen@1 { image <- step.result; }
+node kept: image.contrast_sharpen@1 { image <- flat.result; }
+node framed: graph "../graphs/upscale.esn" { picture <- flat.result; }
+
+output result <- crisp.result;

@@ -1,0 +1,32 @@
+//! A fine level of the proxy round the lens laid before a scene's own (`kernels/proxy_bake.ent`): the mesh (`points`,
+//! `faces`, each face's `colors`) baked again over a small block round the eye at a fine cell (`light.proxy_detail_frame`),
+//! a pass a frame when the block moves a step (`graphs/proxy_stream.esn`: the last block in use until the new one is made),
+//! joined with what lies past the block (`light.proxy_within`: the scene's level, never nearer than the block's edge, so a
+//! ray steps no farther than the edge over a thing beyond; the scene's alone until the first block is made), and stacked in front of the scene's `proxy` and `frame` (finest first), so every ray traced near the eye meets the thin
+//! things (a chair's legs, a table's edge) the scene's cells are too coarse for, and past the block the scene's proxy as it is.
+use "../kernels/";
+
+input points: Rows<MeshPoint>;
+input faces: Rows<Face>;
+input colors: Rows<Vec4>;
+input lens: Lenses;
+input proxy: Volume<Vec4>;
+input frame: Proxies;
+/// The block: `nx` by `ny` by `nz` cells of `cell` meters, its foot `below` of its height under the eye, moved in steps of
+/// `hold` of its width; faces baked exactly within `band` cells.
+param nx: Int = 112;
+param ny: Int = 80;
+param nz: Int = 112;
+param cell: Float = 0.025;
+param below: Float = 0.75;
+param hold: Float = 0.25;
+param band: Float = 2.0;
+
+node block: light.proxy_detail_frame@1 { lens <- lens; frame <- frame; nx = nx; ny = ny; nz = nz; cell = cell; below = below; hold = hold; domain = 1; }
+node fine: graph "proxy_stream.esn" { points <- points; faces <- faces; colors <- colors; frame <- block.result; nx = nx; ny = ny; nz = nz; band = band; }
+node held: light.proxy_within@1 { proxy <- fine.proxy; frame <- fine.frame; beyond <- proxy; beyond_frame <- frame; made <- fine.made; domain = size(proxy); }
+node stacked: light.proxy_stack@1 { a <- held.result; b <- proxy; domain = max(size(a), size(b)) * vec3(1.0, 1.0, 0.0) + (size(a) + size(b)) * vec3(0.0, 0.0, 1.0); }
+node frames: light.field_frames_join@1 { a <- fine.frame; b <- frame; domain = count(a) + count(b); }
+
+output proxy <- stacked.result;
+output frame <- frames.result;

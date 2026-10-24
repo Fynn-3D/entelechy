@@ -30,18 +30,28 @@ fn agx(x: Vec3) -> Vec3 {
     return pow(saturate(outset * s), vec3(2.2, 2.2, 2.2));
 }
 
-/// ACES-style tone mapping, encoded by sRGB's transfer for a window or
-/// a file; edit `exposure` while the Player runs.
-kernel image.tonemap@2 {
-    requires { field.read; field.write; }
-    input source: Image;
-    param exposure: Float = 1.0;
-    output result: Image;
+/// Light `c` at `p` of `hdr` sharpened `amount` (0 not at all): pulled apart from the mean of its four neighbors, less
+/// where the contrast is already high (no white rims).
+fn tone_sharpened(hdr: Image, p: Vec2, c: Vec3, amount: Float) -> Vec3 {
+    if amount <= 0.0 { return c; }
+    let n4 = (at_linear(hdr, p + vec2(1.0, 0.0)).xyz + at_linear(hdr, p - vec2(1.0, 0.0)).xyz + at_linear(hdr, p + vec2(0.0, 1.0)).xyz
+        + at_linear(hdr, p - vec2(0.0, 1.0)).xyz) * 0.25;
+    let lc = luminance(c);
+    let ln = luminance(n4);
+    let k = amount / (1.0 + 6.0 * abs(lc - ln) / (ln + 0.05));
+    return max(c + (c - n4) * k, vec3(0.0, 0.0, 0.0));
+}
 
-    compute {
-        let c = sample(source);
-        let mapped = aces(c.rgb * exposure);
-        let shown = linear_to_srgb(mapped);
-        return vec4(shown, c.a);
-    }
+/// Light `c` through a tone curve: 0 ACES's fit, 1 none (light past 1 clipped, as Blender's Standard view), 2 AgX
+/// (Blender's own).
+fn tone_curve(c: Vec3, curve: Int) -> Vec3 {
+    return if curve == 1 { saturate(c) } else if curve == 2 { agx(c) } else { aces(c) };
+}
+
+/// A toned color `c` made `vivid` (1 as it is) and tinted `warmth` of the way from `shadow_tint` in its shadows to
+/// `light_tint` in its lights.
+fn tone_warmth(c: Vec3, vivid: Float, warmth: Float, shadow_tint: Vec3, light_tint: Vec3) -> Vec3 {
+    let gray = luminance(c);
+    let rich = max(mix(vec3(gray, gray, gray), c, vivid), vec3(0.0, 0.0, 0.0));
+    return rich * mix(vec3(1.0, 1.0, 1.0), mix(shadow_tint, light_tint, smoothstep(0.1, 0.6, gray)), warmth);
 }

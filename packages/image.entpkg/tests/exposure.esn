@@ -1,0 +1,9 @@
+// Exposure metered over a flat picture of 0.045 (two stops under middle gray): its mean, read at the histogram's bin
+// of a quarter stop, is -4.375 stops; between night and day, the key asked is 0.1083, so the first frame exposes it
+// 1.1682 stops up at once. Even everywhere, local exposure changes nothing.
+use "../kernels/";
+
+node flat: Grid<Vec4> { domain = vec2(64, 64); value = vec4(0.045, 0.045, 0.045, 1.0); }
+node metered: graph "../graphs/exposure.esn" { hdr <- flat.result; }
+
+output result <- metered.hdr;

@@ -10,7 +10,7 @@
 // alone, as the render package's contract asks: a G-buffer and
 // proxies are handed over, and the light is the renderer's the graph
 // places.
-use "../../../packages/render.entpkg";
+use "../../../packages/light.entpkg";
 
 struct Hit { d: Float; what: Int; }
 fn nearer(a: Hit, b: Hit) -> Hit { return if b.d < a.d { b } else { a }; }

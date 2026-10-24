@@ -1,0 +1,11 @@
+// Glow at points whose answers are known by hand: a flat light of 2 over a threshold of 1 (its knee's half) keeps 1
+// at the first level and every level below it; grown back, each level adds 0.8 of the one below. A flat light under
+// the threshold glows not at all.
+use "../kernels/";
+
+node over: Grid<Vec4> { domain = vec2(64, 64); value = vec4(2.0, 2.0, 2.0, 1.0); }
+node under: Grid<Vec4> { domain = vec2(64, 64); value = vec4(0.4, 0.4, 0.4, 1.0); }
+node glow: graph "../graphs/bloom.esn" { hdr <- over.result; calm = 0.0; }
+node none: graph "../graphs/bloom.esn" { hdr <- under.result; calm = 0.0; }
+
+output result <- glow.bloom;

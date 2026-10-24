@@ -3,7 +3,7 @@
 Particles stepped on the device, binned into the screen's tiles and
 drawn over a picture with its depth.
 
-**Layer:** Graphics. **Uses:** [`geometry`](../geometry.entpkg/README.md), [`random`](../random.entpkg/README.md), [`render`](../render.entpkg/README.md).
+**Layer:** Graphics. **Uses:** [`geometry`](../geometry.entpkg/README.md), [`random`](../random.entpkg/README.md), [`render`](../light.entpkg/README.md).
 
 ```text
 use "particles.entpkg";

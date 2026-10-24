@@ -1,0 +1,16 @@
+//! A finished picture (tone-mapped, sRGB) scaled to the window's size: an edge-aware upscale
+//! (`image.upscale`), sharpened once more without overshoot (`image.contrast_sharpen`), each frame stable on its own,
+//! nothing carried between frames. A picture already the window's size passes through as it is. Placed:
+//!   node shown: graph "image.entpkg/graphs/upscale.esn" { picture <- view.result; amount = 0.8; }
+use "../kernels/";
+
+input picture: Image;
+/// How much it is sharpened: 0 not at all, 1 the most.
+param amount: Float = 0.8;
+/// 1: nearest-neighbor scaling (pixel art's look; blocks are equal where the inner resolution is a whole fraction of the window's).
+param near: Int = 0;
+
+node up: image.upscale@1 { image <- picture; near = near; domain = window(); }
+node sharp: image.contrast_sharpen@1 { image <- up.result; amount = amount; }
+
+output result <- sharp.result;

@@ -13,7 +13,7 @@ composes them as it would for a mesh.
 rest, and `voxel.posed@1` fills a box of 48 voxels a side every frame:
 each voxel is carried back to rest by each joint in turn and takes the
 look of the rest voxel it lands in when that voxel moves with that
-joint. A voxel is 5 cm, the skin's units meters. The `render` package's
+joint. A voxel is 5 cm, the skin's units meters. The `voxel` package's
 view draws it.
 
 ```sh

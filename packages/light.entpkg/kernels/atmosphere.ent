@@ -1,0 +1,286 @@
+// The sky as the Earth's air makes it: sunlight scattered by the air's
+// molecules (Rayleigh: blue overhead, reddened along a long path at sunset),
+// by haze (Mie: a bright halo round the sun, white near the horizon) and
+// taken by ozone (the blue-violet of the zenith at dusk), walked through a
+// sphere of air round the ground (Hillaire's model). Light scattered more
+// than once is a table by height and the sun's angle
+// (`light.atmosphere_spread`), made once for the air; `light.atmosphere_look`
+// gives the `SkyLook` a renderer lights by, from the sun's height and
+// bearing; `light.atmosphere_view` draws the sky round the eye into a
+// small table (by bearing from the sun and height above the horizon), made
+// again only when the sun moves; and `light.atmosphere_sky` paints the
+// sky's pixels from it, with the sun's disc (`graphs/atmosphere.esn`
+// places the first three).
+use "camera.ent";
+use "phase.ent";
+use "sky.ent";
+
+/// The air: the ground's radius and the air's top (meters from the
+/// Earth's center), how thick haze is (1 a clear day), the sun's light
+/// above the air (linear HDR, the irradiance it gives), the ground's albedo
+/// below it, and how strongly its haze scatters forward.
+struct AirShell { ground: Float; top: Float; haze: Float; sun: Float; albedo: Float; forward: Float; }
+fn earth_air(haze: Float, sun: Float, albedo: Float, forward: Float) -> AirShell { return AirShell { ground: 6360000.0, top: 6460000.0, haze: haze, sun: sun, albedo: albedo, forward: forward }; }
+
+/// What scatters and takes light at height `h` meters: Rayleigh's
+/// scattering (rgb, per meter), haze's scattering (x) and taking (y), and
+/// ozone's taking (rgb, per meter, in the stratosphere).
+fn air_rayleigh(h: Float) -> Vec3 { return vec3(5.802, 13.558, 33.1) * (0.000001 * exp(0.0 - max(h, 0.0) / 8000.0)); }
+fn air_mie(h: Float, haze: Float) -> Vec2 { return vec2(3.996, 4.44) * (0.000001 * haze * exp(0.0 - max(h, 0.0) / 1200.0)); }
+fn air_ozone(h: Float) -> Vec3 { return vec3(0.65, 1.881, 0.085) * (0.000001 * max(1.0 - abs(h - 25000.0) / 15000.0, 0.0)); }
+/// All the light taken per meter at height `h` (rgb).
+fn air_extinction(h: Float, haze: Float) -> Vec3 {
+    let m = air_mie(h, haze);
+    return air_rayleigh(h) + vec3(m.y, m.y, m.y) + air_ozone(h);
+}
+
+/// How far from `p` (from the Earth's center) along `dir` a ray leaves a
+/// sphere of radius `r` (-1 if it never meets it).
+fn air_leave(p: Vec3, dir: Vec3, r: Float) -> Float {
+    let b = dot(p, dir);
+    let c = dot(p, p) - r * r;
+    let disc = b * b - c;
+    return if disc < 0.0 { -1.0 } else { (0.0 - b) + sqrt(disc) };
+}
+/// How far until it meets the ground (-1 if it does not).
+fn air_meet_ground(p: Vec3, dir: Vec3, r: Float) -> Float {
+    let b = dot(p, dir);
+    let c = dot(p, p) - r * r;
+    let disc = b * b - c;
+    let t = (0.0 - b) - sqrt(max(disc, 0.0));
+    return if disc < 0.0 || t < 0.0 { -1.0 } else { t };
+}
+
+/// What is left of light coming from `dir` to `p` through the air (rgb):
+/// 0 where the ground is in the way.
+fn air_transmittance(a: AirShell, p: Vec3, dir: Vec3) -> Vec3 {
+    if air_meet_ground(p, dir, a.ground) > 0.0 { return vec3(0.0, 0.0, 0.0); }
+    let far = air_leave(p, dir, a.top);
+    let dt = far / 12.0;
+    let depth = loop 12 with d = vec3(0.0, 0.0, 0.0) {
+        let x = p + dir * ((float(index()) + 0.5) * dt);
+        d + air_extinction(length(x) - a.ground, a.haze) * dt
+    };
+    return vec3(exp(0.0 - depth.x), exp(0.0 - depth.y), exp(0.0 - depth.z));
+}
+
+/// Rayleigh's phase.
+fn rayleigh_phase(c: Float) -> Float { return 0.0596831 * (1.0 + c * c); }
+
+/// The light scattered more than once reaching a point `h` meters up, the
+/// sun at cosine `mu` from overhead, per unit of sunlight and of scattering
+/// there (`light.atmosphere_spread`'s table).
+fn air_spread_at(spread: Image, a: AirShell, h: Float, mu: Float) -> Vec3 {
+    let ext = size(spread);
+    let q = vec2((mu * 0.5 + 0.5) * ext.x, saturate(h / (a.top - a.ground)) * ext.y);
+    return at_linear(spread, clamp(q, vec2(0.5, 0.5), ext - vec2(0.5, 0.5))).xyz;
+}
+
+/// The sky's light seen from `eye_h` meters up looking along `dir`, the sun
+/// toward `sun` (rgb, linear): sunlight scattered once along the view by
+/// the air and haze, each point's sunlight what the air above left of it,
+/// and scattered more than once (`spread`, the table). Under the horizon,
+/// the air between the eye and the ground, and the sunlit ground beyond it.
+fn air_radiance(a: AirShell, spread: Image, eye_h: Float, dir: Vec3, sun: Vec3) -> Vec3 {
+    let p = vec3(0.0, a.ground + max(eye_h, 1.0), 0.0);
+    let ground_t = air_meet_ground(p, dir, a.ground);
+    let far = if ground_t > 0.0 { ground_t } else { air_leave(p, dir, a.top) };
+    let c = dot(dir, sun);
+    let pr = rayleigh_phase(c);
+    let pm = air_phase(c, a.forward);
+    let dt = far / 16.0;
+    let walked = loop 16 with st = AirWalk { light: vec3(0.0, 0.0, 0.0), depth: vec3(0.0, 0.0, 0.0) } {
+        let x = p + dir * ((float(index()) + 0.5) * dt);
+        let h = length(x) - a.ground;
+        let ray = air_rayleigh(h);
+        let mie = air_mie(h, a.haze);
+        let ext = air_extinction(h, a.haze);
+        let depth = st.depth + ext * (dt * 0.5);
+        let seen = vec3(exp(0.0 - depth.x), exp(0.0 - depth.y), exp(0.0 - depth.z));
+        let up = normalize(x);
+        let lit = air_transmittance(a, x, sun);
+        let once = (ray * pr + vec3(mie.x, mie.x, mie.x) * pm) * lit;
+        let again = (ray + vec3(mie.x, mie.x, mie.x)) * air_spread_at(spread, a, h, dot(up, sun));
+        AirWalk { light: st.light + (once + again) * seen * dt, depth: st.depth + ext * dt }
+    };
+    // Under the horizon the ground ends the view: sunlit, seen through the air.
+    let ground = if ground_t > 0.0 {
+        let gp = p + dir * ground_t;
+        let through = vec3(exp(0.0 - walked.depth.x), exp(0.0 - walked.depth.y), exp(0.0 - walked.depth.z));
+        air_transmittance(a, gp, sun) * through * (a.albedo * max(dot(normalize(gp), sun), 0.0) / 3.14159265)
+    } else { vec3(0.0, 0.0, 0.0) };
+    return (walked.light + ground) * a.sun;
+}
+
+/// A view walk through the air: the light gathered, and the optical depth so far.
+struct AirWalk { light: Vec3; depth: Vec3; }
+
+/// Light scattered more than once (Hillaire's): for a point at a height
+/// (down, from the ground to the air's top) and the sun at an angle (across,
+/// its cosine from overhead, -1 to 1), the light scattered twice reaching
+/// it from 64 directions round it (the air along each, and the ground's
+/// `ground_albedo` where it meets the ground), summed over every further
+/// scattering as a series, per unit of sunlight and of scattering there.
+/// It depends on the air alone: made once (32 by 32 is enough).
+kernel light.atmosphere_spread@1 {
+    requires { field.write; }
+    param haze: Float = 1.0;
+    param ground_albedo: Float = 0.3;
+    /// How strongly the haze scatters forward (toward the sun's glow).
+    param forward: Float = 0.8;
+    output result: Image;
+    compute {
+        let a = earth_air(haze, 1.0, ground_albedo, forward);
+        let ext = domain();
+        let mu = (coord().x + 0.5) / ext.x * 2.0 - 1.0;
+        let h = (coord().y + 0.5) / ext.y * (a.top - a.ground);
+        let p = vec3(0.0, a.ground + h, 0.0);
+        let sun = vec3(sqrt(max(1.0 - mu * mu, 0.0)), mu, 0.0);
+        let sum = loop 64 with acc = AirSpread { second: vec3(0.0, 0.0, 0.0), share: vec3(0.0, 0.0, 0.0), depth: vec3(0.0, 0.0, 0.0) } {
+            // Directions spread evenly over the sphere (Fibonacci's).
+            let z = 1.0 - (2.0 * float(index()) + 1.0) / 64.0;
+            let r = sqrt(max(1.0 - z * z, 0.0));
+            let phi = float(index()) * 2.3999632;
+            let dir = vec3(r * cos(phi), z, r * sin(phi));
+            let ground_t = air_meet_ground(p, dir, a.ground);
+            let far = if ground_t > 0.0 { ground_t } else { air_leave(p, dir, a.top) };
+            let dt = far / 20.0;
+            let walked = loop 20 with st = AirSpread { second: vec3(0.0, 0.0, 0.0), share: vec3(0.0, 0.0, 0.0), depth: vec3(0.0, 0.0, 0.0) } {
+                let x = p + dir * ((float(index()) + 0.5) * dt);
+                let hx = length(x) - a.ground;
+                let mie = air_mie(hx, a.haze);
+                let scatter = air_rayleigh(hx) + vec3(mie.x, mie.x, mie.x);
+                let ext = air_extinction(hx, a.haze);
+                // What the air from the point to here lets through, to the middle of this step.
+                let mid = st.depth + ext * (dt * 0.5);
+                let through = vec3(exp(0.0 - mid.x), exp(0.0 - mid.y), exp(0.0 - mid.z));
+                AirSpread { second: st.second + scatter * through * air_transmittance(a, x, sun) * (dt / 12.566371),
+                    share: st.share + scatter * through * dt, depth: st.depth + ext * dt }
+            };
+            let ground = if ground_t > 0.0 {
+                let gp = p + dir * ground_t;
+                let through = vec3(exp(0.0 - walked.depth.x), exp(0.0 - walked.depth.y), exp(0.0 - walked.depth.z));
+                air_transmittance(a, gp, sun) * through * (ground_albedo * max(dot(normalize(gp), sun), 0.0) / 3.14159265)
+            } else { vec3(0.0, 0.0, 0.0) };
+            AirSpread { second: acc.second + walked.second + ground, share: acc.share + walked.share, depth: acc.depth }
+        };
+        let second = sum.second / 64.0;
+        let share = sum.share / 64.0;
+        let spread = second / (vec3(1.0, 1.0, 1.0) - min(share, vec3(0.95, 0.95, 0.95)));
+        return vec4(spread.x, spread.y, spread.z, 1.0);
+    }
+}
+/// A spread's running sums: light scattered twice, the share of light
+/// scattered along the way, and the optical depth walked.
+struct AirSpread { second: Vec3; share: Vec3; depth: Vec3; }
+/// The direction a table pixel stands for: across, the bearing from the
+/// sun (0 toward it, π away; the sky is the same either side); down, the
+/// height above the horizon, finer near the horizon.
+fn air_table_dir(q: Vec2, ext: Vec2) -> Vec2 {
+    let u = (q.x + 0.5) / ext.x;
+    let v = (q.y + 0.5) / ext.y * 2.0 - 1.0;
+    let el = (0.0 - sign(v)) * v * v * 1.5707963;
+    return vec2(u * 3.14159265, el);
+}
+/// The table pixel (fractional) a direction falls on: `bearing` from the
+/// sun (0 to π) and elevation `el`.
+fn air_table_at(bearing: Float, el: Float, ext: Vec2) -> Vec2 {
+    let v = (0.0 - sign(el)) * sqrt(abs(el) / 1.5707963);
+    return vec2(bearing / 3.14159265 * ext.x, (v * 0.5 + 0.5) * ext.y);
+}
+/// A direction from the sun's elevation and bearing (radians; bearing 0
+/// toward -z, turning toward +x).
+fn air_dir(elevation: Float, bearing: Float) -> Vec3 {
+    return vec3(sin(bearing) * cos(elevation), sin(elevation), 0.0 - cos(bearing) * cos(elevation));
+}
+
+/// The `SkyLook` the air makes for a sun at `elevation` and `bearing`
+/// (radians), `sun` its light above the air, `haze` how hazy (1 clear):
+/// the sun's color as the air leaves it, the sky overhead and at the
+/// horizon, the mean sky light; `clouds`, `air` and `air_from` as given.
+kernel light.atmosphere_look@1 {
+    requires { field.read; field.write; }
+    input spread: Image;
+    param elevation: Float = 0.6;
+    param bearing: Float = 0.0;
+    param sun: Float = 4.0;
+    param haze: Float = 1.0;
+    param clouds: Float = 0.0;
+    param air: Float = 0.0;
+    param air_from: Float = 1000000.0;
+    /// The ground's albedo the air sees below, and how strongly the haze scatters forward.
+    param ground_albedo: Float = 0.3;
+    param forward: Float = 0.8;
+    output result: SkyLooks;
+    compute {
+        let a = earth_air(haze, sun, ground_albedo, forward);
+        let to_sun = air_dir(elevation, bearing);
+        let p = vec3(0.0, a.ground + 2.0, 0.0);
+        let sun_color = air_transmittance(a, p, to_sun) * sun;
+        let zenith = air_radiance(a, spread, 2.0, vec3(0.0, 1.0, 0.0), to_sun);
+        // The horizon a quarter turn from the sun, a little above it.
+        let horizon = air_radiance(a, spread, 2.0, normalize(air_dir(0.05, bearing + 1.5707963)), to_sun);
+        let toward = air_radiance(a, spread, 2.0, normalize(air_dir(0.05, bearing)), to_sun);
+        let away = air_radiance(a, spread, 2.0, normalize(air_dir(0.05, bearing + 3.14159265)), to_sun);
+        let mid = air_radiance(a, spread, 2.0, normalize(air_dir(0.6, bearing + 1.5707963)), to_sun);
+        let ambient = zenith * 0.3 + mid * 0.3 + (toward + away + horizon * 2.0) * 0.1;
+        return SkyLook { sun: to_sun, sun_color: sun_color, ambient: ambient, horizon: horizon, zenith: zenith, clouds: clouds,
+            far_land: 0.0, far_color: horizon * 0.7, air: air, air_from: air_from };
+    }
+}
+
+/// The sky round the eye as a table (`light.atmosphere_view`'s extent,
+/// 96 by 48 is enough): the air's light by bearing from the sun and
+/// height above the horizon, the eye `eye_height` meters up. Made again
+/// only when the sun (`sky`) moves.
+kernel light.atmosphere_view@1 {
+    requires { field.read; field.write; }
+    input sky: SkyLooks;
+    input spread: Image;
+    param sun: Float = 4.0;
+    param haze: Float = 1.0;
+    param eye_height: Float = 2.0;
+    /// The ground's albedo the air sees below, and how strongly the haze scatters forward.
+    param ground_albedo: Float = 0.3;
+    param forward: Float = 0.8;
+    output result: Image;
+    compute {
+        let s = at(sky, 0);
+        let to_sun = normalize(s.sun);
+        let d = air_table_dir(coord(), domain());
+        // The view from the sun's bearing turned by d.x, at height d.y.
+        let flat = normalize(vec3(to_sun.x, 0.0, to_sun.z) + vec3(0.0, 0.0, 0.0001));
+        let side = vec3(0.0 - flat.z, 0.0, flat.x);
+        let dir = normalize(flat * (cos(d.x) * cos(d.y)) + side * (sin(d.x) * cos(d.y)) + vec3(0.0, sin(d.y), 0.0));
+        let light = air_radiance(earth_air(haze, sun, ground_albedo, forward), spread, eye_height, dir, to_sun);
+        return vec4(light.x, light.y, light.z, 1.0);
+    }
+}
+
+/// The sky's pixels (where the G-buffer met nothing) painted from the
+/// table, with the sun's disc as the air leaves it; the rest as they are.
+kernel light.atmosphere_sky@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    input surface: Grid<Vec4>;
+    input lens: Lenses;
+    input sky: SkyLooks;
+    input view: Image;
+    output result: Image;
+    compute {
+        let c = sample(hdr);
+        if sample(surface).w < no_hit() * 0.5 { return c; }
+        let s = at(sky, 0);
+        let l = at(lens, 0);
+        let dir = ray(l, coord(), size(surface));
+        let to_sun = normalize(s.sun);
+        let flat = normalize(vec2(to_sun.x, to_sun.z) + vec2(0.0, 0.0001));
+        let look = normalize(vec2(dir.x, dir.z) + vec2(0.0, 0.0001));
+        let bearing = acos(clamp(dot(flat, look), -1.0, 1.0));
+        let el = asin(clamp(dir.y, -1.0, 1.0));
+        let air = at_linear(view, clamp(air_table_at(bearing, el, size(view)), vec2(0.5, 0.5), size(view) - vec2(0.5, 0.5))).xyz;
+        let disc = s.sun_color * (smoothstep(0.99985, 0.99995, dot(dir, to_sun)) * 20.0);
+        let shown = air + disc;
+        return vec4(shown.x, shown.y, shown.z, c.w);
+    }
+}

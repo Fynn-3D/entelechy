@@ -1,0 +1,16 @@
+scene upscale.esn
+window 24 24
+
+# Flat stays flat, scaled edge-aware or through the preset; nearest makes
+# each pixel a block of four.
+frame 0.0
+expect wide.result[210] = 0.5 0.5 0.5 1 0.0001
+expect framed.result[300] = 0.5 0.5 0.5 1 0.0001
+expect blocks.result[3] = 0.1 0.1 0.1 1 0.0001
+expect blocks.result[4] = 0.9 0.9 0.9 1 0.0001
+
+# The step's dark side, beside the light: (0.2 - 0.05 × 1.4) / 0.8; the
+# light side deep in its own flat, as it was; flat sharpened, flat.
+expect crisp.result[3] = 0.1625 0.1625 0.1625 1 0.0001
+expect crisp.result[6] = 0.8 0.8 0.8 1 0.0001
+expect kept.result[9] = 0.5 0.5 0.5 1 0.0001

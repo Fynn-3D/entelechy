@@ -1,0 +1,109 @@
+// Ray traced light: each pixel lit in one pass with its shadow and its reflection traced, not gathered. A scene whose things are
+// distances (a distance-field city) marches its own rays and lights what they meet with `raytraced_shade`: the sun's light as far as its
+// shadow ray let it through, the light all round as open as the place is, and what its mirror ray saw, as much as the surface
+// reflects it at that angle. A scene drawn into a G-buffer takes `render.traced`: the shadow the G-buffer holds, the light all round
+// by each thing's baked occlusion, and the mirror ray of a smooth surface traced through the proxies (`raytraced_seen`).
+use "brdf.ent";
+use "camera.ent";
+use "lit.ent";
+use "sky.ent";
+
+/// How a mirror and the sun's glint are drawn, a scene's to tune: the sun's light rolls off toward `knee` (a near mirror shows the
+/// sun as a hard glint with a falling edge, not a white patch), what a mirror ray saw is held under `most`, and a closed-in place
+/// keeps `closed` of its reflection.
+struct Mirror { knee: Float; most: Float; closed: Float; }
+
+/// What surface `m` facing `n` sends toward `v` under sky `s`: the sun's light times `visible` (0 to 1, what its shadow ray found) as
+/// a highlight that rolls off (`mirror`'s knee), the sky's and the ground's light all round (`look`) times `open` (0 to 1, how much
+/// of it the place lets in), and `reflected` (what the mirror ray saw) times the share the surface reflects at this angle, less
+/// where the place is closed in.
+fn raytraced_shade(m: Pbr, n: Vec3, v: Vec3, s: SkyLook, visible: Float, reflected: Vec3, open: Float, look: Surround, mirror: Mirror) -> Vec3 {
+    let lit = lit_by(m, n, v, s.sun, s.sun_color * visible);
+    let direct = lit / (vec3(1.0, 1.0, 1.0) + lit / mirror.knee);
+    let ambient = m.albedo * ((1.0 - m.metal) * (1.0 - m.transmission)) * hemisphere(n, s, look) * open;
+    return direct + ambient + raytraced_reflection(m, n, v, reflected, open, mirror) + m.glow;
+}
+
+/// The reflection `raytraced_shade` lays on a surface from what its mirror ray met (`reflected`): Fresnel's share, kept to a
+/// `closed` share where the light all round is shut out.
+fn raytraced_reflection(m: Pbr, n: Vec3, v: Vec3, reflected: Vec3, open: Float, mirror: Mirror) -> Vec3 {
+    let f0 = pbr_f0(m);
+    let nv = max(dot(n, v), 0.0);
+    let fres = f0 + (max(vec3(1.0 - m.rough, 1.0 - m.rough, 1.0 - m.rough), f0) - f0) * pow(1.0 - nv, 5.0);
+    // The sun's disc a mirror ray finds is the glint above already: held under it, a few rays that hit the disc do not flare.
+    let mirrored = min(reflected, vec3(mirror.most, mirror.most, mirror.most));
+    return mirrored * fres * (mirror.closed + (1.0 - mirror.closed) * open);
+}
+
+/// What a ray from `o` along `dir` sees through the coarse scene within `far` meters, counting what it meets from `start` meters on:
+/// what it meets, lit by the sun as it faces it and by the light all round (its own shadow not traced), through the air; the sky, or
+/// looking down the ground's light, where it meets nothing (`look`, the light all round).
+fn raytraced_seen(proxy: Volume<Vec4>, land: Grid<Float>, frame: Proxies, o: Vec3, dir: Vec3, start: Float, far: Float, s: SkyLook, look: Surround) -> Vec3 {
+    let hit = rough_trace(proxy, land, frame, o, dir, start, far, 48);
+    if hit.y < 0.0 { return seen_along(dir, s, look); }
+    let p = o + dir * hit.x;
+    let n = rough_normal(proxy, land, frame, p, hit.y);
+    let a = rough_albedo(proxy, frame, p, hit.y);
+    let light = s.sun_color * max(dot(n, s.sun), 0.0) / 3.14159265 + hemisphere(n, s, look);
+    return aerial(a * light, dir, hit.x, s);
+}
+
+/// Ray traced light (see the file's head) over a G-buffer: the sky where nothing was met; each thing lit by `raytraced_shade` with the
+/// G-buffer's sun visibility, the light all round times its baked occlusion (a leaf, subsurface, keeps `leaf_sky` of it inside its
+/// crown), and, on a surface smoother than `mirror_below`, its mirror ray traced through the proxies up to `far` meters (the sky
+/// in its direction on a rougher one); the air laid over distance.
+kernel light.raytraced@1 {
+    requires { field.read; field.write; }
+    input surface: Grid<Vec4>;
+    input paint: Grid<Vec4>;
+    input extra: Grid<Vec4>;
+    input layers: Grid<Vec4>;
+    input more: Grid<Vec4>;
+    input sky: SkyLooks;
+    input lens: Lenses;
+    input proxy: Volume<Vec4>;
+    input land: Grid<Float>;
+    input frame: Proxies;
+    param mirror_below: Float = 0.4;
+    param far: Float = 200.0;
+    param leaf_sky: Float = 0.8;
+    /// How far (meters) a mirror ray leaves its surface at the least before it counts what it meets (the proxies' cell if larger).
+    param mirror_clear: Float = 0.1;
+    /// The glint and the mirror (`Mirror`): where the sun's light rolls off, what a mirror ray's light is held under, the share of
+    /// a reflection a closed-in place keeps.
+    param glint_knee: Float = 1.6;
+    param mirror_most: Float = 2.0;
+    param mirror_closed: Float = 0.35;
+    /// The light all round (`Surround`, as `light.lit`'s).
+    param ground: Vec3 = vec3(0.34, 0.29, 0.22);
+    param ground_light: Float = 1.6;
+    param sky_light: Float = 1.15;
+    output result: Image;
+    /// The reflection `result` lays on each surface, as it shows: what a reflection on the screen takes the place of
+    /// (`light.reflections`).
+    output reflection: Grid<Vec4 as f16>;
+    compute {
+        let l = at(lens, 0);
+        let s = at(sky, 0);
+        let dir = ray(l, coord(), domain());
+        let su = sample(surface);
+        if su.w > no_hit() * 0.5 { return { result: vec4(sky_radiance(dir, s, true), 1.0), reflection: vec4(0.0, 0.0, 0.0, 0.0) }; }
+        let n = su.xyz;
+        let ex = sample(extra);
+        let m = pbr_of(sample(paint), ex, sample(layers), sample(more));
+        let v = vec3(0.0, 0.0, 0.0) - dir;
+        let look = Surround { ground: ground, ground_light: ground_light, sky_light: sky_light };
+        let open = baked_occlusion(ex) * (if m.subsurface > 0.0 { leaf_sky } else { 1.0 });
+        let r = reflect(dir, n);
+        let p = l.eye + dir * su.w + n * 0.05;
+        // The mirror ray counts what it meets once it is a coarse cell (and the ground's margin) clear of the surface it left: a
+        // surface lies inside its own coarse shape, and a floor within the ground's.
+        let clear = max(proxy_cell_at(frame, p), mirror_clear);
+        let mirrored = if m.rough < mirror_below { raytraced_seen(proxy, land, frame, p, r, min(clear / max(dot(r, n), 0.02), clear * 40.0), far, s, look) } else { seen_along(r, s, look) };
+        // A rough surface's reflection is the light all round it.
+        let reflected = mix(mirrored, hemisphere(n, s, look) * open, sqrt(m.rough));
+        let mirror = Mirror { knee: glint_knee, most: mirror_most, closed: mirror_closed };
+        let seen = aerial(raytraced_reflection(m, n, v, reflected, open, mirror), dir, su.w, s) - aerial(vec3(0.0, 0.0, 0.0), dir, su.w, s);
+        return { result: vec4(aerial(raytraced_shade(m, n, v, s, ex.x, reflected, open, look, mirror), dir, su.w, s), 1.0), reflection: vec4(seen.x, seen.y, seen.z, 0.0) };
+    }
+}

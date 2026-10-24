@@ -75,7 +75,7 @@ use "mesh.entpkg";
   where it stands in, for a scene to save and stream.
 - `graphs/cluster_brick.esn` — A level's clusters.
 - `graphs/cluster.esn` — A mesh built as levels and cut into clusters:
-  the library a renderer draws from (`render.entpkg`'s
+  the library a renderer draws from (`light.entpkg`'s
   `graphs/cluster.esn`), every point in one group.
 - `graphs/cluster_grouped.esn` — The same with each point in a group of
   its own (`groups`): parts kept apart on every level, so letters on a
@@ -92,6 +92,6 @@ use "mesh.entpkg";
 
 `tests/` holds scenes and their replays, run on every backend:
 `cluster.replay`, `lattice.replay`, `stream.replay`, `stream_build.replay` (`stream/` holds the
-chunks `stream_build.esn` built, which `stream.esn` and `render.entpkg`'s `tests/stream.esn` stream). Every Kernel of the package is reached by one of them.
+chunks `stream_build.esn` built, which `stream.esn` and `light.entpkg`'s `tests/stream.esn` stream). Every Kernel of the package is reached by one of them.
 
 Used by the [animation](../../examples/animation/README.md), [culled](../../examples/culled/README.md), [mesh](../../examples/mesh/README.md), [surface](../../examples/surface/README.md) examples.

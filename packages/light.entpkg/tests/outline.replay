@@ -1,0 +1,13 @@
+scene outline.esn
+
+frame 0.0
+# The nearer block's edges inked (white times the ink's color, eight
+# tenths of the way); the wall beside them clean; the crease's two sides
+# inked; kept out by a mask, nothing.
+expect inked.result[1] = 1 1 1 1 0.0001
+expect inked.result[2] = 0.376 0.36 0.416 1 0.0001
+expect inked.result[3] = 0.376 0.36 0.416 1 0.0001
+expect inked.result[6] = 1 1 1 1 0.0001
+expect inked.result[8] = 0.376 0.36 0.416 1 0.0001
+expect inked.result[9] = 0.376 0.36 0.416 1 0.0001
+expect held.result[2] = 1 1 1 1 0.0001

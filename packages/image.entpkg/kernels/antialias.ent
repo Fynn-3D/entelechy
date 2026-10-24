@@ -1,0 +1,96 @@
+// Antialiasing within one frame (FXAA): this frame alone, its steps of brightness (a jagged edge) found and walked to both ends,
+// and by where this pixel lies on the step, a little color taken from the edge's other side, turning the stair into a slope.
+// Nothing of the last frame is used, so nothing jitters or smears.
+
+/// How bright it looks (0 to 1): brightness pressed into 0 to 1 and square-rooted, so a step in the dark counts as one in the light.
+fn fxaa_luma(c: Vec3) -> Float {
+    let l = max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 0.0);
+    return sqrt(l / (1.0 + l));
+}
+fn fxaa_at(image: Image, q: Vec2) -> Float {
+    let e = size(image) - 1.0;
+    return fxaa_luma(at(image, clamp(q, vec2(0.0, 0.0), e)).xyz);
+}
+/// How far the `i`th step along an edge goes (pixels): a pixel at a time first, longer strides further on.
+fn fxaa_stride(i: Int) -> Float {
+    return if i < 5 { 1.0 } else if i == 5 { 1.5 } else if i < 10 { 2.0 } else { 4.0 };
+}
+/// From pixel `q` along `dir`, each step reading the mean brightness of this row and the row `across` (the
+/// brightness on the edge's middle), until it differs from `edge` by a quarter of `gradient`: how far it went
+/// (x), and the difference in brightness there (y).
+fn fxaa_walk(image: Image, q: Vec2, across: Vec2, dir: Vec2, edge: Float, gradient: Float) -> Vec2 {
+    let m = loop 12 with m = vec3(0.0, 0.0, 0.0) until m.z > 0.5 {
+        let d = m.x + fxaa_stride(index());
+        let p = q + 0.5 + dir * d;
+        let l = (fxaa_luma(at_linear(image, p).xyz) + fxaa_luma(at_linear(image, p + across).xyz)) * 0.5 - edge;
+        vec3(d, l, if abs(l) >= gradient * 0.25 { 1.0 } else { 0.0 })
+    };
+    return vec2(m.x, m.y);
+}
+
+/// Pixel `q` of the HDR picture `image` antialiased: where the contrast is under `threshold` (of the brightest, at
+/// least `least`) it is left; `subpixel` is how much of what is finer than a pixel is smoothed (0 none).
+fn fxaa(image: Image, q: Vec2, threshold: Float, least: Float, subpixel: Float) -> Vec4 {
+    let here = at(image, clamp(q, vec2(0.0, 0.0), size(image) - 1.0));
+    let lm = fxaa_luma(here.xyz);
+    let ln = fxaa_at(image, q + vec2(0.0, -1.0));
+    let ls = fxaa_at(image, q + vec2(0.0, 1.0));
+    let le = fxaa_at(image, q + vec2(1.0, 0.0));
+    let lw = fxaa_at(image, q + vec2(-1.0, 0.0));
+    let hi = max(lm, max(max(ln, ls), max(le, lw)));
+    let lo = min(lm, min(min(ln, ls), min(le, lw)));
+    let range = hi - lo;
+    if range < max(least, hi * threshold) { return here; }
+    let lnw = fxaa_at(image, q + vec2(-1.0, -1.0));
+    let lne = fxaa_at(image, q + vec2(1.0, -1.0));
+    let lsw = fxaa_at(image, q + vec2(-1.0, 1.0));
+    let lse = fxaa_at(image, q + vec2(1.0, 1.0));
+    // Thinner than a pixel: how far this one stands out of the eight
+    // about it.
+    let around = (2.0 * (ln + ls + le + lw) + lnw + lne + lsw + lse) / 12.0;
+    let stand = saturate(abs(around - lm) / range);
+    let sub = smoothstep(0.0, 1.0, stand);
+    let sub_blend = sub * sub * subpixel;
+    // The edge runs along x (the light changes up and down more than
+    // across) or along y.
+    let change_x = abs(lnw + lne - 2.0 * ln) + 2.0 * abs(lw + le - 2.0 * lm) + abs(lsw + lse - 2.0 * ls);
+    let change_y = abs(lnw + lsw - 2.0 * lw) + 2.0 * abs(ln + ls - 2.0 * lm) + abs(lne + lse - 2.0 * le);
+    let flat = change_y >= change_x;
+    // Which side of this pixel the step is on: the steeper one.
+    let l1 = if flat { ln } else { lw };
+    let l2 = if flat { ls } else { le };
+    let g1 = abs(l1 - lm);
+    let g2 = abs(l2 - lm);
+    let toward_1 = g1 >= g2;
+    let gradient = max(g1, g2);
+    let side = if flat { vec2(0.0, 1.0) } else { vec2(1.0, 0.0) };
+    let across = if toward_1 { side * -1.0 } else { side };
+    let along = if flat { vec2(1.0, 0.0) } else { vec2(0.0, 1.0) };
+    let edge = (lm + (if toward_1 { l1 } else { l2 })) * 0.5;
+    // Walk both ways along the step.
+    let a = fxaa_walk(image, q, across, along * -1.0, edge, gradient);
+    let b = fxaa_walk(image, q, across, along, edge, gradient);
+    // The nearer end decides: this pixel is blended only if that end
+    // turns the way this pixel lies (it is on the stair's riser).
+    let nearer_a = a.x < b.x;
+    let end = if nearer_a { a.y } else { b.y };
+    let dist = min(a.x, b.x);
+    let mine = lm - edge;
+    let right_way = (end < 0.0) != (mine < 0.0);
+    let edge_blend = if right_way { 0.5 - dist / (a.x + b.x) } else { 0.0 };
+    let blend = max(edge_blend, sub_blend);
+    let c = at_linear(image, q + 0.5 + across * blend);
+    return vec4(c.x, c.y, c.z, here.w);
+}
+
+/// The HDR picture `image` antialiased (the same size, `fxaa`); `on` 0 leaves it as it is.
+kernel image.fxaa@1 {
+    requires { field.read; field.write; }
+    input image: Image;
+    param threshold: Float = 0.125;
+    param least: Float = 0.04;
+    param subpixel: Float = 0.6;
+    param on: Int = 1;
+    output result: Image;
+    compute { return if on == 0 { sample(image) } else { fxaa(image, coord(), threshold, least, subpixel) }; }
+}

@@ -1,0 +1,100 @@
+// The picture is computed at an inner resolution with a ceiling and scaled to the window at last (`image.entpkg`'s
+// `image.upscale`): however large the window, the three-dimensional part costs no more. The inner resolution is the
+// window shrunk to a ceiling of pixels, times a fraction set by frame time (dynamic resolution).
+
+/// Dynamic resolution's state: the fraction now (of the ceiling, by side), the rate of slow frames
+/// (the fraction of the last dozen or so that were slow), how many frames the mean frame time has been near the one wanted, the fraction it may rise to,
+/// the frames to wait before it moves again, the last frame's moment, the mean frame time, and the mean frame time when the fraction
+/// last fell (0 if it never fell, or rose since).
+struct Dynamic { fraction: Float; missing: Float; good: Int; ceiling: Float; hold: Int; last: Float; mean: Float; before: Float; }
+type Dynamics = Rows<Dynamic>;
+
+/// Dynamic resolution as it begins: the fraction `most`.
+kernel light.dynamic_start@1 {
+    requires { field.write; }
+    param most: Float = 1.0;
+    output result: Dynamics;
+    compute { return Dynamic { fraction: most, missing: 0.0, good: 0, ceiling: most, hold: 0, last: -1.0, mean: 0.0, before: 0.0 }; }
+}
+
+/// Dynamic resolution: how long each frame took by the session's clock (in the Player, the true interval between frames), against
+/// what `fps` wants. Where the mean frame time is a tenth slow and frames were often slow lately, the fraction falls by how slow (pixels go
+/// with the square of the fraction), and that fraction is kept as one it cannot rise past; where the mean is near the one wanted, after a second and a half
+/// it rises a little, though the step just fallen from is tried again only after a while. Where falling a step did not mend the mean frame time, the time
+/// is not spent on pixels, and it falls no further. Pauses as long as loading are not counted. Each move rests a while, so it does not shake.
+/// `fps` 0 is always `most`. In a replay the clock walks a frame at a time, every frame on time, and the fraction stays at
+/// `most`.
+kernel light.dynamic@1 {
+    requires { field.read; field.write; time.read; }
+    input previous: Dynamics;
+    param fps: Float = 60.0;
+    param least: Float = 0.5;
+    param most: Float = 1.0;
+    output result: Dynamics;
+    compute {
+        let p = at(previous, 0);
+        let now = time();
+        if fps <= 0.0 { return Dynamic { fraction: most, missing: 0.0, good: 0, ceiling: most, hold: 0, last: now, mean: 0.0, before: 0.0 }; }
+        let target = 1.0 / fps;
+        let dt = now - p.last;
+        // A frame of loading or a pause tells nothing about the drawing.
+        let told = p.last >= 0.0 && dt > 0.0 && dt < 0.1;
+        let missed = told && dt > target * 1.3;
+        let missing = if told { mix(p.missing, if missed { 1.0 } else { 0.0 }, 1.0 / 12.0) } else { p.missing };
+        let mean = if !told { p.mean } else if p.mean <= 0.0 { dt } else { mix(p.mean, dt, 0.05) };
+        let hold = max(p.hold - 1, 0);
+        let ceiling = min(most, p.ceiling + 0.0004);
+        let good = if mean > 0.0 && mean < target * 1.04 { p.good + 1 } else { 0 };
+        let kept = Dynamic { fraction: clamp(p.fraction, least, most), missing: missing, good: good, ceiling: ceiling, hold: hold, last: now, mean: mean, before: p.before };
+        if hold == 0 && mean > target * 1.1 && missing > 0.15 {
+            // The last cut made it no faster: the time is not in the pixels.
+            if p.before > 0.0 && mean > p.before * 0.95 { return Dynamic { ..kept, hold: 240 }; }
+            let cut = clamp(sqrt(target / mean), 0.75, 0.95);
+            return Dynamic { ..kept, fraction: max(least, p.fraction * cut), missing: 0.0, good: 0, ceiling: max(least, p.fraction - 0.03), hold: 60, before: mean };
+        }
+        if hold == 0 && good >= 90 && p.fraction < ceiling {
+            return Dynamic { ..kept, fraction: min(ceiling, p.fraction + 0.05), good: 0, hold: 60, before: 0.0 };
+        }
+        return kept;
+    }
+}
+
+/// The inner resolution (two elements, width and height, pixels): the window shrunk to a ceiling of `pixels` pixels
+/// (its aspect kept), times dynamic resolution's fraction, a multiple of eight. `whole` 1 takes a whole fraction
+/// of the window (the nearest to that size), so nearest-neighbor scaling (`upscaled_near`) makes each pixel a block
+/// of one size. `samples` is supersampling: this many times a side (2 is four times, four points a pixel),
+/// averaged block by block into the window (`upscaled`), no jagged edges, and as much work a pixel
+/// times over. A node sets `domain = 2`.
+kernel light.extent@1 {
+    requires { field.read; field.write; input.read; }
+    input dynamic: Dynamics;
+    param pixels: Float = 921600.0;
+    param whole: Int = 0;
+    param samples: Int = 1;
+    output result: Rows<Int>;
+    compute {
+        let w = max(window(), vec2(1.0, 1.0));
+        let k = min(1.0, sqrt(pixels / (w.x * w.y))) * at(dynamic, 0).fraction;
+        let n = max(1.0, floor(1.0 / k + 0.5));
+        let s = if whole == 1 { max(floor(w / n), vec2(16.0, 16.0)) } else { max(floor(w * k * float(max(samples, 1)) / 8.0) * 8.0, vec2(64.0, 64.0)) };
+        return if element() == 0 { int(s.x) } else { int(s.y) };
+    }
+}
+
+/// The inner resolution as a `Vec2` (read by `light.jitter`, geometry's level of detail and others).
+kernel light.extent_size@1 {
+    requires { field.read; field.write; }
+    input extent: Rows<Int>;
+    output result: Rows<Vec2>;
+    compute { return vec2(float(at(extent, 0)), float(at(extent, 1))); }
+}
+
+/// An empty canvas of the inner resolution (each cell the key of no fragment), for the rasterizer:
+/// `domain = vec2(value(extent, 0), value(extent, 1))`.
+kernel light.canvas@1 {
+    requires { field.read; field.write; }
+    input extent: Rows<Int>;
+    output result: Grid<Long>;
+    compute { return 9223372036854775807l; }
+}
+

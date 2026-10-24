@@ -30,7 +30,7 @@ one holds.
   packages by name.
 - **Kernels.** An id begins with the package's name and says what it
   makes or does: `raster.cover@4`, `parallel.sort_place@1`,
-  `render.probes_gather@1`.
+  `light.probes_gather@1`.
 - **Names.** A function is a verb or a noun phrase in snake_case, a struct
   or type a noun in PascalCase. No name is declared twice among all the
   packages, and a general word is qualified by its topic (`text_ink`,
@@ -50,7 +50,7 @@ A scene reaches a package by path:
 
 ```text
 use "../../packages/image.entpkg";
-node display: graph "../../packages/image.entpkg/graphs/display.esn" { ... }
+node view: graph "../../packages/image.entpkg/graphs/tonemap.esn" { ... }
 ```
 
 or by name, when `ENTELECHY_PACKAGES` lists the directory it is in:
@@ -85,14 +85,14 @@ Pictures and what a camera sees.
 
 | Package | Holds |
 | --- | --- |
-| [`image`](image.entpkg/README.md) | Color, blending, filters, tone, histograms, distance fields, mipmaps, pixel art and a camera's finish |
+| [`image`](image.entpkg/README.md) | A picture alone: color, blending and masks, filters, a grade, tone, glow, exposure, film, scaling, antialiasing, histograms, distance fields, mipmaps, pixel art |
 | [`raster`](raster.entpkg/README.md) | Triangles rasterized alike on every backend, plain, tiled or cut out |
 | [`voxel`](voxel.entpkg/README.md) | Rays walked through voxels, shapes as data, bodies posed by joints |
 | [`vector`](vector.entpkg/README.md) | SVG drawings filled pixel by pixel, whole or tiled |
 | [`mesh`](mesh.entpkg/README.md) | Triangle meshes as points and faces: lattices, primitives and subdivision |
 | [`terrain`](terrain.entpkg/README.md) | Ground as heights: sampled, ray-marched, sculpted, eroded and meshed |
 | [`texture`](texture.entpkg/README.md) | Patterns, projections, layers, normals and the marks of age a material is drawn with |
-| [`render`](render.entpkg/README.md) | The G-buffer contract, physically based shading and its renderers |
+| [`light`](light.entpkg/README.md) | Light in a world a scene hands over: the G-buffer contract, shading, the sun, sky and lamps, shadows, bounced light, fog and air, and the renderers |
 | [`particles`](particles.entpkg/README.md) | Particles stepped, binned and drawn over a picture's depth |
 | [`scatter`](scatter.entpkg/README.md) | Things scattered over the ground by layers |
 | [`effects`](effects.entpkg/README.md) | Magic and skills as data, drawn as light along each ray |

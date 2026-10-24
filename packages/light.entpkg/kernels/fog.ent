@@ -1,0 +1,319 @@
+// Fog: height fog and the scene's own fog volumes that the sun, the sky, a
+// glow of the scene's own and the lamps light as they pass through it, so a
+// spotlight's beam shows, its shafts cut by what stands in it, and the sun's
+// shafts cut by the clouds. The air is a grid of cells over the view, lit
+// cell by cell (`light.froxel_light`), summed from the eye
+// (`light.froxel_scan`) and read at each pixel's depth at a quarter of the
+// picture's size (`light.froxel_view`), smoothed by depth
+// (`light.fog_blur`), and the fog (with clouds over the sky, `clouds.ent`)
+// laid over the picture, upsampled by depth (`light.fog_apply`). Nothing
+// needs history to settle.
+use "camera.ent";
+use "clouds.ent";
+use "lamps.ent";
+use "phase.ent";
+use "sky.ent";
+use "sun.ent";
+
+/// The fog's density at height `y`: `density` at `base` and below, falling
+/// by e every `falloff` meters above.
+fn fog_density(y: Float, density: Float, base: Float, falloff: Float) -> Float {
+    return density * exp(0.0 - max(y - base, 0.0) / max(falloff, 0.01));
+}
+
+/// The height fog's density on average between heights `y0` and `y1` (exactly: a cell of the air's grid spans more than
+/// the fog thins over near the ground).
+fn fog_density_between(y0: Float, y1: Float, density: Float, base: Float, falloff: Float) -> Float {
+    let f = max(falloff, 0.01);
+    let h0 = y0 - base;
+    let h1 = y1 - base;
+    if abs(h1 - h0) < f * 0.001 { return fog_density((y0 + y1) * 0.5, density, base, falloff); }
+    // The thinning's integral up from the base: h below it, f (1 - e^(-h/f)) above.
+    let g0 = if h0 < 0.0 { h0 } else { f * (1.0 - exp(0.0 - h0 / f)) };
+    let g1 = if h1 < 0.0 { h1 } else { f * (1.0 - exp(0.0 - h1 / f)) };
+    return density * (g1 - g0) / (h1 - h0);
+}
+
+/// Lamp `m`'s light summed along the view ray from `t0` to `t1` meters
+/// (from `eye` along `dir`): the inverse square integrated exactly along
+/// the segment (finite beside the bulb, where samples would spike), the
+/// beam, cookie and profile (`lamp_looks`) taken at the segment's point
+/// nearest the lamp.
+fn lamp_airlight(m: Lamp, lamp_looks: LampLooks, eye: Vec3, dir: Vec3, t0: Float, t1: Float) -> Vec3 {
+    let o = m.at - eye;
+    let tc = dot(o, dir);
+    let h = sqrt(max(dot(o, o) - tc * tc, 0.0) + m.size * m.size);
+    let summed = (atan((t1 - tc) / h) - atan((t0 - tc) / h)) / h;
+    let d = eye + dir * clamp(tc, t0, t1) - m.at;
+    return m.color * lamp_look(m, d, lamp_looks) * (lamp_beam(m, d) * summed);
+}
+
+// ------------------------------------------------------------------ the air as a grid of the view
+
+/// A fog volume of the scene's own (a room's dust, a valley's mist, smoke over a fire): a box (`shape` 0, `size` its half
+/// extents) or a ball (1, `size.x` its radius) at `at`, `density` per meter inside, thinning to none over `soft` meters
+/// at its edge, its light scattered tinted by `color`.
+struct FogVolume { at: Vec3; size: Vec3; shape: Int; density: Float; soft: Float; color: Vec3; }
+type FogVolumes = Rows<FogVolume>;
+
+/// No fog volume: one of no density (`domain = 1`).
+kernel light.fog_volumes_none@1 {
+    requires { field.write; }
+    output result: FogVolumes;
+    compute { return FogVolume { at: vec3(0.0, 0.0, 0.0), size: vec3(0.0, 0.0, 0.0), shape: 0, density: 0.0, soft: 1.0, color: vec3(1.0, 1.0, 1.0) }; }
+}
+
+/// The fog volumes' density at `p` (w) and their light's tint, by density (rgb).
+fn fog_volumes_at(volumes: FogVolumes, p: Vec3) -> Vec4 {
+    return loop min(count(volumes), 64) with acc = vec4(0.0, 0.0, 0.0, 0.0) {
+        let v = at(volumes, index());
+        let d = p - v.at;
+        let outside = if v.shape == 1 { length(d) - v.size.x } else { let q = abs(d) - v.size; length(max(q, vec3(0.0, 0.0, 0.0))) + min(max(q.x, max(q.y, q.z)), 0.0) };
+        let k = v.density * saturate(1.0 - outside / max(v.soft, 0.001));
+        vec4(acc.x + v.color.x * k, acc.y + v.color.y * k, acc.z + v.color.z * k, acc.w + k)
+    };
+}
+
+/// Where slice `z` of `slices` begins along a view ray: from `near` to `far` meters, each slice the same share wider than
+/// the last (exponential, finer near the eye).
+fn froxel_t(z: Float, slices: Float, near: Float, far: Float) -> Float { return near * pow(far / near, z / slices); }
+/// The slice a distance `t` along a view ray falls in, continuous.
+fn froxel_z(t: Float, slices: Float, near: Float, far: Float) -> Float { return log(max(t, near) / near) / log(far / near) * slices; }
+
+/// The air in each cell of a grid laid over the view (`domain`: its columns across and down the picture, its slices out
+/// from the eye; Wronski's froxels, as Unreal's volumetric fog): the light it scatters toward the eye across the cell
+/// (rgb) and how much of what lies behind the cell shows through it (w); a cell past what its column and theirs beside
+/// show (`furthest`, `light.froxel_furthest`'s) left clear. The height
+/// fog and the scene's fog volumes (`volumes`) make it thick; the sun (through the cascades where they hold the cell's
+/// middle, the proxies elsewhere, and the clouds' deck), the sky (`sky_share` of it: unshadowed), `glow` and the lamps of
+/// the cell's tile of the screen (`tiles`, each summed exactly through the cell, cut by the proxies within `shafts` steps
+/// toward one that casts shadows; each lamp's taken in `lamp_steps` pieces of the cell) light it.
+kernel light.froxel_light@1 {
+    requires { field.read; field.write; }
+    input surface: Grid<Vec4>;
+    input lens: Lenses;
+    input sky: SkyLooks;
+    input lamps: Lamps;
+    input lamp_looks: LampLooks;
+    input proxy: Volume<Vec4>;
+    input land: Grid<Float>;
+    input frame: Proxies;
+    input deck: CloudDecks;
+    input tiles: Grid<IVec4>;
+    input views: SunViews;
+    input atlas: Grid<Float>;
+    input volumes: FogVolumes;
+    input furthest: Grid<Float>;
+    param density: Float = 0.002;
+    param base: Float = 0.0;
+    param falloff: Float = 80.0;
+    param forward: Float = 0.6;
+    param near: Float = 0.2;
+    param far: Float = 2000.0;
+    param shafts: Int = 8;
+    param sun_steps: Int = 8;
+    param cloud_steps: Int = 2;
+    param lamp_share: Float = 1.0;
+    param sky_share: Float = 1.0;
+    param lamp_steps: Int = 4;
+    param glow: Vec3 = vec3(0.0, 0.0, 0.0);
+    output result: Volume<Vec4>;
+    compute {
+        let g = coord();
+        let ext = domain();
+        let screen = size(surface);
+        let q = (vec2(g.x, g.y) + 0.5) / vec2(ext.x, ext.y) * screen - 0.5;
+        let l = at(lens, 0);
+        let s = at(sky, 0);
+        let dir = ray(l, q, screen);
+        let t0 = froxel_t(g.z, ext.z, near, far);
+        let t1 = froxel_t(g.z + 1.0, ext.z, near, far);
+        if froxel_t(g.z - 1.0, ext.z, near, far) > at(furthest, vec2(g.x, g.y)) { return vec4(0.0, 0.0, 0.0, 1.0); }
+        let p = l.eye + dir * ((t0 + t1) * 0.5);
+        let local = fog_volumes_at(volumes, p);
+        let thick = fog_density_between(l.eye.y + dir.y * t0, l.eye.y + dir.y * t1, density, base, falloff) + local.w;
+        if thick <= 0.0 { return vec4(0.0, 0.0, 0.0, 1.0); }
+        let tint = (vec3(1.0, 1.0, 1.0) * (thick - local.w) + local.xyz) / thick;
+        let sun = normalize(s.sun);
+        let mapped = sun_view_lit(atlas, views, p);
+        let blocked = if mapped >= 0.0 { mapped } else { rough_shadow(proxy, land, frame, p, sun, proxy_cell_at(frame, p), 300.0, sun_steps) };
+        let sun_seen = blocked * cloud_shadow(at(deck, 0), p, sun, cloud_steps);
+        let bits = at(tiles, min(floor((q + 0.5) / lamp_tile()), size(tiles) - vec2(1.0, 1.0)));
+        let dt = max(t1 - t0, 0.0001);
+        let lamped = loop 128 with w = LampWalk { left: bits, light: vec3(0.0, 0.0, 0.0) } until lamp_first(w.left) < 0 {
+            let k = lamp_first(w.left);
+            let left = lamp_cleared(w.left, k);
+            let m = at(lamps, min(k, count(lamps) - 1));
+            let d = p - m.at;
+            if k >= count(lamps) || dot(d, d) > m.reach * m.reach * 1.5 { LampWalk { left: left, light: w.light } } else {
+                // Light going from the lamp on toward the eye is thrown forward: its share taken in `lamp_steps` pieces of
+                // the cell, as it peaks where the ray passes the lamp.
+                let pieces = max(lamp_steps, 1);
+                let given = loop 16 with g = vec3(0.0, 0.0, 0.0) until index() >= pieces {
+                    let a = mix(t0, t1, float(index()) / float(pieces));
+                    let b = mix(t0, t1, float(index() + 1) / float(pieces));
+                    let toward = l.eye + dir * ((a + b) * 0.5) - m.at;
+                    g + lamp_airlight(m, lamp_looks, l.eye, dir, a, b) * air_phase(0.0 - dot(dir, normalize(toward)), forward)
+                };
+                let lit = max(given.x, max(given.y, given.z)) > 0.000001;
+                let cut = if lit && m.shadow != 0 && shafts > 0 { lamp_rough_shadow(m, proxy, land, frame, p, shafts) } else { 1.0 };
+                LampWalk { left: left, light: w.light + given * cut }
+            }
+        };
+        let light = s.sun_color * (air_phase(dot(dir, sun), forward) * sun_seen) + s.ambient * (0.0795775 * sky_share) + glow + lamped.light * (lamp_share / dt);
+        let through = exp(0.0 - thick * dt);
+        let scattered = light * tint * (1.0 - through);
+        return vec4(scattered.x, scattered.y, scattered.z, through);
+    }
+}
+
+/// The air summed through blocks of slices eight times deeper (`domain` as `light.froxel_light`'s): with the air summed
+/// within blocks of `step` slices from their nearest (the cells as lit, `step` 1), each cell's sum from its block of
+/// `step * 8`'s nearest slice to its far side, the light scattered toward the eye on the way and still seen (rgb) and how
+/// much of what lies past it shows (w). Two of these, `step` 1 and 8, sum 64 slices from the eye.
+kernel light.froxel_scan@1 {
+    requires { field.read; field.write; }
+    input air: Volume<Vec4>;
+    param step: Int = 1;
+    output result: Volume<Vec4>;
+    compute {
+        let g = icoord();
+        let base = g.z - g.z % (step * 8);
+        let blocks = (g.z - base) / step;
+        let before = loop 7 with r = vec4(0.0, 0.0, 0.0, 1.0) until index() >= blocks {
+            let a = at(air, ivec3(g.x, g.y, base + step * (index() + 1) - 1));
+            vec4(r.x + a.x * r.w, r.y + a.y * r.w, r.z + a.z * r.w, r.w * a.w)
+        };
+        let own = at(air, g);
+        let seen = before.xyz + own.xyz * before.w;
+        return vec4(seen.x, seen.y, seen.z, before.w * own.w);
+    }
+}
+
+/// The furthest each column of the air's grid shows (`domain`: the columns across and down), and the columns beside it,
+/// half a column round (meters along the view ray; `far` where any of it is sky).
+kernel light.froxel_furthest@1 {
+    requires { field.read; field.write; }
+    input surface: Grid<Vec4>;
+    param far: Float = 2000.0;
+    output result: Grid<Float>;
+    compute {
+        let ext = size(surface);
+        let span = ext / domain();
+        let lo = max(floor((coord() - 0.5) * span), vec2(0.0, 0.0));
+        let hi = min(ceil((coord() + 1.5) * span), ext);
+        let wide = hi - lo;
+        let stride = max(ceil(wide / 32.0), vec2(1.0, 1.0));
+        let across = int(ceil(wide.x / stride.x));
+        let down = int(ceil(wide.y / stride.y));
+        return loop 1024 with r = 0.0 until index() >= across * down {
+            let q = min(lo + vec2(float(index() % across), float(index() / across)) * stride, ext - vec2(1.0, 1.0));
+            max(r, min(at(surface, q).w, far))
+        };
+    }
+}
+
+/// The fog toward each pixel of a picture a quarter of the size (`domain = ceil(size(surface) / 4)`), as `light.fog_apply`
+/// takes it: the summed air (`summed`, the last `light.froxel_scan`'s) to the near side of the slice the distance its
+/// first pixel shows falls in (out to `far`), and the part of that slice's cell (`air`) up to it, the cell taken as even
+/// through (the light scattered toward the eye, rgb; how much of what lies behind shows, w).
+kernel light.froxel_view@1 {
+    requires { field.read; field.write; }
+    input summed: Volume<Vec4>;
+    input air: Volume<Vec4>;
+    input surface: Grid<Vec4>;
+    input lens: Lenses;
+    param near: Float = 0.2;
+    param far: Float = 2000.0;
+    output result: Image;
+    compute {
+        let q = coord();
+        let ext = domain();
+        let ratio = size(surface) / ext;
+        let su = at(surface, min(floor((q + 0.5) * ratio), size(surface) - vec2(1.0, 1.0)));
+        let n = isize(summed);
+        let z = min(froxel_z(min(su.w, far), float(n.z), near, far), float(n.z) - 0.0001);
+        let k = floor(z);
+        let xy = (q + 0.5) / ext * vec2(float(n.x), float(n.y));
+        let before = if k < 0.5 { vec4(0.0, 0.0, 0.0, 1.0) } else { at_linear(summed, vec3(xy.x, xy.y, k - 0.5)) };
+        let cell = at_linear(air, vec3(xy.x, xy.y, k + 0.5));
+        // Of a cell letting `w` through and scattering `rgb`, a share `f` of its depth lets w^f through and scatters
+        // rgb (1 - w^f) / (1 - w).
+        let f = z - k;
+        let through = pow(max(cell.w, 0.000001), f);
+        let part = if cell.w < 0.9999 { (1.0 - through) / (1.0 - cell.w) } else { f };
+        let seen = before.xyz + cell.xyz * (part * before.w);
+        return vec4(seen.x, seen.y, seen.z, before.w * through);
+    }
+}
+
+/// A blur's running sums: the fog weighted, and the weights.
+struct FogSum { fog: Vec4; weight: Float; }
+
+/// How alike in depth two pixels are (1 the same, toward 0 apart).
+fn fog_alike(w: Float, own: Float) -> Float {
+    return 1.0 / (1.0 + abs(min(w, 20000.0) - min(own, 20000.0)) / max(min(own, 20000.0) * 0.04, 0.5));
+}
+/// The depth under pixel `q` of a picture `ratio` times smaller than the
+/// G-buffer: its first pixel's.
+fn fog_depth(surface: Grid<Vec4>, q: Vec2, ratio: Vec2) -> Float {
+    return at(surface, min(floor((q + 0.5) * ratio), size(surface) - vec2(1.0, 1.0))).w;
+}
+
+/// The fog's grain smoothed: seven samples along `axis` (0 across, 1 down)
+/// at its own size, each weighted by how alike in depth its pixel is, so fog
+/// does not bleed across an edge. Two passes make the blur.
+kernel light.fog_blur@1 {
+    requires { field.read; field.write; }
+    input fog: Image;
+    input surface: Grid<Vec4>;
+    param axis: Int = 0;
+    output result: Image;
+    compute {
+        let q = coord();
+        let ext = size(fog);
+        let ratio = size(surface) / ext;
+        let own = fog_depth(surface, q, ratio);
+        let step = if axis == 0 { vec2(1.0, 0.0) } else { vec2(0.0, 1.0) };
+        let sum = loop 7 with acc = FogSum { fog: vec4(0.0, 0.0, 0.0, 0.0), weight: 0.0 } {
+            let k = float(index()) - 3.0;
+            let fq = clamp(q + step * k, vec2(0.0, 0.0), ext - vec2(1.0, 1.0));
+            let wt = exp(0.0 - k * k * 0.22) * fog_alike(fog_depth(surface, fq, ratio), own);
+            FogSum { fog: acc.fog + at(fog, fq) * wt, weight: acc.weight + wt }
+        };
+        return sum.fog / max(sum.weight, 0.0001);
+    }
+}
+
+/// The picture with the air laid over it: the fog from its smaller picture
+/// (its four nearest pixels, each by nearness and by how alike in depth),
+/// and over the sky the clouds (`light.clouds_march`; their w how much of
+/// the sky still shows).
+kernel light.fog_apply@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    input surface: Grid<Vec4>;
+    input fog: Image;
+    input clouds: Image;
+    output result: Image;
+    compute {
+        let q = coord();
+        let ext = size(hdr);
+        let c = sample(hdr);
+        let own = sample(surface).w;
+        let fext = size(fog);
+        let ratio = ext / fext;
+        let at_fog = (q + 0.5) / ratio;
+        let base = floor(at_fog - 0.5);
+        let sum = loop 4 with acc = FogSum { fog: vec4(0.0, 0.0, 0.0, 0.0), weight: 0.0 } {
+            let fq = clamp(base + vec2(float(index() % 2), float(index() / 2)), vec2(0.0, 0.0), fext - vec2(1.0, 1.0));
+            let near = vec2(1.0, 1.0) - abs(at_fog - 0.5 - fq);
+            let wt = max(near.x * near.y, 0.0) * fog_alike(fog_depth(surface, fq, ratio), own) + 0.0001;
+            FogSum { fog: acc.fog + at(fog, fq) * wt, weight: acc.weight + wt }
+        };
+        let air = sum.fog / sum.weight;
+        let cloud = if own > no_hit() * 0.5 { at_linear(clouds, (q + 0.5) * size(clouds) / ext) } else { vec4(0.0, 0.0, 0.0, 1.0) };
+        let behind = c.xyz * cloud.w + cloud.xyz;
+        return vec4(behind * air.w + air.xyz, c.w);
+    }
+}

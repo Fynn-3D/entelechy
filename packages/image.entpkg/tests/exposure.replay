@@ -1,0 +1,10 @@
+scene exposure.esn
+
+# Seen at -4.375 stops, asked 1.16821 up: a factor of 2.24732, the
+# picture 0.10113 everywhere, by the meter and after local exposure.
+frame 0.0
+expect metered.meter.result[0].seen = -4.375 0.0001
+expect metered.meter.result[0].asked = 1.16821 0.0001
+expect metered.meter.result[0].factor = 2.24732 0.0005
+expect metered.exposed.result[0] = 0.10113 0.10113 0.10113 1 0.0001
+expect metered.hdr[2080] = 0.10113 0.10113 0.10113 1 0.0001

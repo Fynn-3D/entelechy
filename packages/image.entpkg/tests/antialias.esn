@@ -1,0 +1,16 @@
+// Antialiasing within one frame at points whose answers are known: flat stays flat; a lone white pixel on black, a
+// step finer than a pixel, is softened, and switched off it is left as it was.
+use "../kernels/";
+
+node flat: Grid<Vec4> { domain = vec2(9, 9); value = vec4(0.5, 0.5, 0.5, 1.0); }
+node lone: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = vec2(9, 9);
+    compute { let c = coord(); return if c.x > 3.5 && c.x < 4.5 && c.y > 3.5 && c.y < 4.5 { vec4(1.0, 1.0, 1.0, 1.0) } else { vec4(0.0, 0.0, 0.0, 1.0) }; }
+}
+node smooth: image.fxaa@1 { image <- flat.result; }
+node softened: image.fxaa@1 { image <- lone.result; }
+node off: image.fxaa@1 { image <- lone.result; on = 0; }
+
+output result <- softened.result;

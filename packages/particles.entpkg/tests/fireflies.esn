@@ -2,7 +2,7 @@
 // evening, binned into the picture's tiles and drawn glowing over the
 // dark, seen through a lens a few meters back.
 use "../kernels/";
-use "render.entpkg";
+use "light.entpkg";
 
 node emitters: kernel {
     requires { field.write; }
@@ -18,8 +18,8 @@ node flat: Grid<Float> { domain = vec2(2, 2); }
 node none: particles.none@1 { domain = 64; }
 node flies: particles.step@1 { previous <~ flies.result from none.result; emitters <- emitters.result; wind <- still.result; ground <- flat.result; domain = 64; }
 
-node home: render.cam_start@1 { x = 0.0; y = 0.45; z = -1.9; yaw = 0.0; pitch = 0.42; dist = 8.5; domain = 1; }
-node lens: render.lens@1 { cam <- home.result; domain = 1; }
+node home: light.cam_start@1 { x = 0.0; y = 0.45; z = -1.9; yaw = 0.0; pitch = 0.42; dist = 8.5; domain = 1; }
+node lens: light.lens@1 { cam <- home.result; domain = 1; }
 node sky: kernel {
     requires { field.write; }
     output result: SkyLooks;

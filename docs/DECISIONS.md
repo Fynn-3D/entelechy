@@ -196,7 +196,7 @@ dropping or tightening anything a source could write is refused until
 
 ## The rasterizer is a package; the native one is its fast path
 
-A scene places `packages/render.entpkg` to turn triangles into a
+A scene places `packages/raster.entpkg` to turn triangles into a
 surface (`raster.esn` or `window.esn`; `cutout.esn` or
 `cutout_window.esn` where a mask's alpha cuts fragments away;
 `canvas.esn` over an empty canvas another node sized) and binds the

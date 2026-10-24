@@ -1,0 +1,10 @@
+//! Light in a world a scene hands over: the contract (a G-buffer,
+//! proxies, a lens, a sky, lamps), surfaces lit physically or as a
+//! painting has them, the sun, the sky the air makes and lamps, shadows
+//! and occlusion, light bounced, reflected and through glass, fog, clouds
+//! and air, and the renderers that put it together; a camera, depth of
+//! field, motion blur, temporal antialiasing and outlines from the
+//! G-buffer.
+package light@1 { language = 1; ir = 1; }
+
+use "kernels/";

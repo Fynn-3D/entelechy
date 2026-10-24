@@ -1,7 +1,7 @@
 // Particles are rows of `Particle`, each frame made from the last (wired in a scene as `<~`).
 use "random.entpkg";
 use "geometry.entpkg";
-use "render.entpkg";
+use "light.entpkg";
 
 /// A particle: where it is, how fast, how long it has lived, how long it may live (0 not yet born), how large (meters),
 /// its look (`kind`), its own number, how far it has turned (radians).

@@ -1,0 +1,18 @@
+scene grade.esn
+
+# A stop up doubles middle gray; a contrast of one pulls 0.36 (a stop over
+# gray) to 0.72 and leaves gray as it is; red without saturation is its
+# lightness. Drained into (0.5, 1, 2), half gray is those halved; half way
+# from none to two stops is one. Warmed all the way, gray is 12 per cent
+# redder and bluer less; no grade changes nothing.
+frame 0.0
+expect graded.result[0] = 0.36 0.72 0.18 0.2126 0.0001
+expect graded.result[1] = 0.25 0.5 1 1 0.0001
+expect graded.result[2] = 0.56 0.5 0.44 0.2 0.0001
+
+# Laid by a node, a stop up; a stop down kept by a mask (`image.masked`)
+# to the right, the left as it is.
+expect lit.result[0] = 0.36 0.36 0.36 1 0.0001
+expect lit.result[1] = 1 1 1 1 0.0001
+expect masked.result[0] = 0.18 0.18 0.18 1 0.0001
+expect masked.result[1] = 0.25 0.25 0.25 1 0.0001

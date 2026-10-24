@@ -1,0 +1,157 @@
+// A picture scaled to another size and sharpened, in display space (after tone mapping and sRGB encoding), carrying
+// nothing between frames: edge-aware (FSR 1's EASU, `upscaled`), nearest-neighbor (`upscaled_near`, pixel art's
+// blocks), and a sharpening that cannot overshoot (RCAS, `image.contrast_sharpen`).
+
+/// What lies at pixel `q` when `image` is scaled to `dst`, nearest-neighbor: each pixel made a
+/// block, nothing interpolated (pixel art's look). With a whole multiple (`light.extent`'s `whole`) the blocks
+/// are one size; the window's edge of less than a block repeats the last column and row.
+fn upscaled_near(image: Image, q: Vec2, dst: Vec2) -> Vec4 {
+    let src = size(image);
+    let n = max(1.0, min(floor(dst.x / src.x), floor(dst.y / src.y)));
+    return at(image, clamp(floor(q / n), vec2(0.0, 0.0), src - 1.0));
+}
+
+// The lightness the edge is found by.
+fn upscale_light(c: Vec4) -> Float { return c.z * 0.5 + (c.x * 0.5 + c.y); }
+
+fn upscale_tap(image: Image, p: Vec2) -> Vec4 { return at(image, clamp(p, vec2(0.0, 0.0), size(image) - 1.0)); }
+
+// One of the four pixels about the point: how the light runs through it
+// (across, from its left and right neighbors `b`, `d`; down, from those
+// above and below `a`, `e`), and how plainly (an edge, not a slope),
+// weighed by how near the point it is.
+fn upscale_edge(w: Float, la: Float, lb: Float, lc: Float, ld: Float, le: Float) -> Vec3 {
+    let across = max(abs(ld - lc), abs(lc - lb));
+    let dx = ld - lb;
+    let lx = if across > 0.0 { clamp(abs(dx) / across, 0.0, 1.0) } else { 0.0 };
+    let down = max(abs(le - lc), abs(lc - la));
+    let dy = le - la;
+    let ly = if down > 0.0 { clamp(abs(dy) / down, 0.0, 1.0) } else { 0.0 };
+    return vec3(dx * w, dy * w, (lx * lx + ly * ly) * w);
+}
+
+// A tap's weight: a Lanczos-like lobe over its offset turned to the edge
+// and stretched along it.
+fn upscale_weight(off: Vec2, dir: Vec2, stretch: Vec2, lob: Float, clip: Float) -> Float {
+    let v = vec2(off.x * dir.x + off.y * dir.y, off.y * dir.x - off.x * dir.y) * stretch;
+    let d2 = min(v.x * v.x + v.y * v.y, clip);
+    let b = 0.4 * d2 - 1.0;
+    let a = lob * d2 - 1.0;
+    return (1.5625 * b * b - 0.5625) * (a * a);
+}
+
+/// What lies at pixel `q` when `image` is scaled to `dst`: twelve points of the source (the nearest four
+/// and their cross neighbors), the edge's direction and strength found by brightness, a Lanczos-shaped kernel stretched along the edge
+/// and narrowed across it; the result held between the darkest and brightest of the nearest four, so edges do not ring. At one size
+/// it is left as it is. A Kernel drawing at the window's size and reading a picture drawn smaller reads it this way
+/// (`image.upscale` does only this). Where the picture is larger than `dst` (supersampled), the block of it falling in this pixel
+/// (at most four points a side) is averaged.
+fn upscaled(image: Image, q: Vec2, dst: Vec2) -> Vec4 {
+    let src = size(image);
+    if src.x == dst.x && src.y == dst.y { return at(image, q); }
+    if src.x > dst.x * 1.25 && src.y > dst.y * 1.25 {
+        let n = clamp(floor(src / dst + 0.5), vec2(1.0, 1.0), vec2(4.0, 4.0));
+        let o = floor((q + 0.5) * src / dst - n * 0.5);
+        let sum = loop 16 with a = vec4(0.0, 0.0, 0.0, 0.0) {
+            let k = vec2(float(index() % 4), float(index() / 4));
+            if k.x < n.x && k.y < n.y { a + upscale_tap(image, o + k) } else { a }
+        };
+        return sum / (n.x * n.y);
+    }
+    let at_src = (q + 0.5) * src / dst - 0.5;
+    let fp = floor(at_src);
+    let pp = at_src - fp;
+    //    b c
+    //  e f g h
+    //  i j k l
+    //    n o
+    let b = upscale_tap(image, fp + vec2(0.0, -1.0));
+    let c = upscale_tap(image, fp + vec2(1.0, -1.0));
+    let e = upscale_tap(image, fp + vec2(-1.0, 0.0));
+    let f = upscale_tap(image, fp);
+    let g = upscale_tap(image, fp + vec2(1.0, 0.0));
+    let h = upscale_tap(image, fp + vec2(2.0, 0.0));
+    let i = upscale_tap(image, fp + vec2(-1.0, 1.0));
+    let j = upscale_tap(image, fp + vec2(0.0, 1.0));
+    let k = upscale_tap(image, fp + vec2(1.0, 1.0));
+    let l = upscale_tap(image, fp + vec2(2.0, 1.0));
+    let n = upscale_tap(image, fp + vec2(0.0, 2.0));
+    let o = upscale_tap(image, fp + vec2(1.0, 2.0));
+    let lb = upscale_light(b);
+    let lc = upscale_light(c);
+    let le = upscale_light(e);
+    let lf = upscale_light(f);
+    let lg = upscale_light(g);
+    let lh = upscale_light(h);
+    let li = upscale_light(i);
+    let lj = upscale_light(j);
+    let lk = upscale_light(k);
+    let ll = upscale_light(l);
+    let ln = upscale_light(n);
+    let lo = upscale_light(o);
+    let found = upscale_edge((1.0 - pp.x) * (1.0 - pp.y), lb, le, lf, lg, lj)
+        + upscale_edge(pp.x * (1.0 - pp.y), lc, lf, lg, lh, lk)
+        + upscale_edge((1.0 - pp.x) * pp.y, lf, li, lj, lk, ln)
+        + upscale_edge(pp.x * pp.y, lg, lj, lk, ll, lo);
+    let r2 = found.x * found.x + found.y * found.y;
+    let flat_ = r2 < 1.0 / 32768.0;
+    let dir = if flat_ { vec2(1.0, 0.0) } else { vec2(found.x, found.y) / sqrt(r2) };
+    let len = found.z * 0.5 * found.z * 0.5;
+    let along = (dir.x * dir.x + dir.y * dir.y) / max(abs(dir.x), abs(dir.y));
+    let stretch = vec2(1.0 + (along - 1.0) * len, 1.0 - 0.5 * len);
+    let lob = 0.5 + (0.21 - 0.5) * len;
+    let clip = 1.0 / lob;
+    let wb = upscale_weight(vec2(0.0, -1.0) - pp, dir, stretch, lob, clip);
+    let wc = upscale_weight(vec2(1.0, -1.0) - pp, dir, stretch, lob, clip);
+    let we = upscale_weight(vec2(-1.0, 0.0) - pp, dir, stretch, lob, clip);
+    let wf = upscale_weight(vec2(0.0, 0.0) - pp, dir, stretch, lob, clip);
+    let wg = upscale_weight(vec2(1.0, 0.0) - pp, dir, stretch, lob, clip);
+    let wh = upscale_weight(vec2(2.0, 0.0) - pp, dir, stretch, lob, clip);
+    let wi = upscale_weight(vec2(-1.0, 1.0) - pp, dir, stretch, lob, clip);
+    let wj = upscale_weight(vec2(0.0, 1.0) - pp, dir, stretch, lob, clip);
+    let wk = upscale_weight(vec2(1.0, 1.0) - pp, dir, stretch, lob, clip);
+    let wl = upscale_weight(vec2(2.0, 1.0) - pp, dir, stretch, lob, clip);
+    let wn = upscale_weight(vec2(0.0, 2.0) - pp, dir, stretch, lob, clip);
+    let wo = upscale_weight(vec2(1.0, 2.0) - pp, dir, stretch, lob, clip);
+    let sum = b * wb + c * wc + e * we + f * wf + g * wg + h * wh + i * wi + j * wj + k * wk + l * wl + n * wn + o * wo;
+    let weight = wb + wc + we + wf + wg + wh + wi + wj + wk + wl + wn + wo;
+    let low = min(min(f, g), min(j, k));
+    let high = max(max(f, g), max(j, k));
+    return clamp(sum / weight, low, high);
+}
+
+/// Scaled to `domain`: edge-aware (`upscaled`), nearest-neighbor when `near` is 1 (`upscaled_near`).
+kernel image.upscale@1 {
+    requires { field.read; field.write; }
+    input image: Image;
+    param near: Int = 0;
+    output result: Image;
+    compute { return if near == 1 { upscaled_near(image, coord(), domain()) } else { upscaled(image, coord(), domain()) }; }
+}
+
+/// Sharpened once (`amount` 0 not at all, 1 the most): pulled from its four neighbors by an amount held between the darkest
+/// and brightest of the five, never past 0 to 1, with no white rims.
+kernel image.contrast_sharpen@1 {
+    requires { field.read; field.write; }
+    input image: Image;
+    param amount: Float = 0.8;
+    output result: Image;
+    compute {
+        let q = coord();
+        let e = upscale_tap(image, q);
+        if amount <= 0.0 { return e; }
+        let b = upscale_tap(image, q + vec2(0.0, -1.0)).xyz;
+        let d = upscale_tap(image, q + vec2(-1.0, 0.0)).xyz;
+        let f = upscale_tap(image, q + vec2(1.0, 0.0)).xyz;
+        let h = upscale_tap(image, q + vec2(0.0, 1.0)).xyz;
+        let c = e.xyz;
+        let low = min(min(min(b, d), min(f, h)), c);
+        let high = max(max(max(b, d), max(f, h)), c);
+        let hit_low = low / max(high * 4.0, vec3(0.00001, 0.00001, 0.00001));
+        let hit_high = (vec3(1.0, 1.0, 1.0) - high) / min(low * 4.0 - 4.0, vec3(-0.00001, -0.00001, -0.00001));
+        let each = max(vec3(0.0, 0.0, 0.0) - hit_low, hit_high);
+        let lobe = max(-0.1875, min(max(each.x, max(each.y, each.z)), 0.0)) * amount;
+        let s = (lobe * (b + d + f + h) + c) / (4.0 * lobe + 1.0);
+        return vec4(s.x, s.y, s.z, e.w);
+    }
+}

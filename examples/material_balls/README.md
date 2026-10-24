@@ -10,13 +10,13 @@ water, ice, diamond), refracted in and out on each sphere's exact chord.
 
 The scene owns geometry and materials alone (`graphs/balls.esn`): it
 hands over the lens, the sky, a G-buffer and proxies as the
-[render package](../../packages/render.entpkg/README.md)'s
+[light package](../../packages/light.entpkg/README.md)'s
 contract asks, and the renderer placed after it owns the light. A
 different renderer is a different `light` node:
 
-- `scene.esn`: the [render package](../../packages/render.entpkg/package.esn)'s probe GI;
-- `tests/path_tracer.esn`: the [render package](../../packages/render.entpkg/package.esn)'s path tracer;
-- `tests/clay.esn`: the [render package](../../packages/render.entpkg/package.esn)'s clay.
+- `scene.esn`: the [light package](../../packages/light.entpkg/package.esn)'s probe GI;
+- `tests/path_tracer.esn`: the [light package](../../packages/light.entpkg/package.esn)'s path tracer;
+- `tests/clay.esn`: the [light package](../../packages/light.entpkg/package.esn)'s clay.
 
 The left button drags to turn, the right or middle to pan, the wheel
 dollies, a double-click or F flies to the ball under the pointer, W A S

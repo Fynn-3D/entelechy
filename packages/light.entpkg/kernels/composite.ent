@@ -1,0 +1,54 @@
+// Two G-buffers of one view made one: each pixel the nearer surface's.
+// A scene that draws its parts apart (a world marched, meshes
+// rasterized) hands a renderer the one G-buffer the contract asks for.
+use "camera.ent";
+
+/// Per pixel the nearer of `a_*` (the whole contract, its transmission
+/// layer too) and `b_*` (opaque surfaces: no `behind_*`, no `through`), by
+/// the distance along the view ray (`surface`'s w; `no_hit()` or below 0
+/// where nothing is). `b_*` may be drawn at another size: it is read at
+/// the pixel its share of the view falls on, and so may `a_*`. The domain
+/// is `fit` (width, height); the outputs are the contract's.
+kernel light.nearer@1 {
+    requires { field.read; field.write; }
+    input a_surface: Grid<Vec4>;
+    input a_paint: Grid<Vec4>;
+    input a_extra: Grid<Vec4>;
+    input a_layers: Grid<Vec4>;
+    input a_more: Grid<Vec4>;
+    input a_behind_at: Grid<Vec4>;
+    input a_behind_dir: Grid<Vec4>;
+    input a_behind_paint: Grid<Vec4>;
+    input a_behind_normal: Grid<Vec4>;
+    input a_through: Grid<Vec4>;
+    input b_surface: Grid<Vec4>;
+    input b_paint: Grid<Vec4>;
+    input b_extra: Grid<Vec4>;
+    input b_layers: Grid<Vec4>;
+    input b_more: Grid<Vec4>;
+    /// The size it gives (width, height), which its domain is.
+    input fit: Rows<Float>;
+    output surface: Grid<Vec4>;
+    output paint: Grid<Vec4>;
+    output extra: Grid<Vec4>;
+    output layers: Grid<Vec4>;
+    output more: Grid<Vec4>;
+    output behind_at: Grid<Vec4>;
+    output behind_dir: Grid<Vec4>;
+    output behind_paint: Grid<Vec4>;
+    output behind_normal: Grid<Vec4>;
+    output through: Grid<Vec4>;
+    compute {
+        let p = min(floor((coord() + 0.5) / domain() * size(a_surface)), size(a_surface) - vec2(1.0, 1.0));
+        let s = at(a_surface, p);
+        let q = min(floor((coord() + 0.5) / domain() * size(b_surface)), size(b_surface) - vec2(1.0, 1.0));
+        let bs = at(b_surface, q);
+        let none = vec4(0.0, 0.0, 0.0, 0.0);
+        if bs.w >= 0.0 && bs.w < no_hit() * 0.5 && bs.w < s.w {
+            return { surface: bs, paint: at(b_paint, q), extra: at(b_extra, q), layers: at(b_layers, q), more: at(b_more, q),
+                behind_at: none, behind_dir: none, behind_paint: none, behind_normal: none, through: none };
+        }
+        return { surface: s, paint: at(a_paint, p), extra: at(a_extra, p), layers: at(a_layers, p), more: at(a_more, p),
+            behind_at: at(a_behind_at, p), behind_dir: at(a_behind_dir, p), behind_paint: at(a_behind_paint, p), behind_normal: at(a_behind_normal, p), through: at(a_through, p) };
+    }
+}

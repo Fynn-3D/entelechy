@@ -6,18 +6,19 @@
 // goes home. Another renderer is another `light` node:
 // `tests/path_tracer.esn` path-traces the same balls, `tests/clay.esn`
 // shows them in clay.
-use "../../packages/render.entpkg";
+use "../../packages/light.entpkg";
+use "../../packages/image.entpkg";
 
 node scene: graph "graphs/balls.esn" { }
-node no_lamps: render.lamps_none@1 { domain = 1; }
-node no_lamp_looks: render.lamp_looks_none@1 { domain = vec2(1, 1); }
-node light: graph "../../packages/render.entpkg/graphs/probe_gi.esn" { lens <- scene.lens; sky <- scene.sky; surface <- scene.surface; paint <- scene.paint; extra <- scene.extra; layers <- scene.layers; more <- scene.more;
+node no_lamps: light.lamps_none@1 { domain = 1; }
+node no_lamp_looks: light.lamp_looks_none@1 { domain = vec2(1, 1); }
+node light: graph "../../packages/light.entpkg/graphs/probe_gi.esn" { lens <- scene.lens; sky <- scene.sky; surface <- scene.surface; paint <- scene.paint; extra <- scene.extra; layers <- scene.layers; more <- scene.more;
     behind_at <- scene.behind_at; behind_dir <- scene.behind_dir; behind_paint <- scene.behind_paint; behind_normal <- scene.behind_normal; through <- scene.through;
     proxy <- scene.proxy; land <- scene.land; frame <- scene.frame; lamps <- no_lamps.result; lamp_looks <- no_lamp_looks.result; nx = 21; ny = 6; nz = 14; spacing = 0.5; }
 
-node bright: render.bright@1 { hdr <- light.hdr; domain = ceil(window() / 8); }
-node bloom_x: render.spread@1 { image <- bright.result; axis = 0; }
-node bloom: render.spread@1 { image <- bloom_x.result; axis = 1; }
-node view: render.tonemap@1 { hdr <- light.hdr; bloom <- bloom.result; exposure = 0.8; vivid = 1.0; domain = window(); }
+node bright: image.bright@2 { hdr <- light.hdr; domain = ceil(window() / 8); }
+node bloom_x: image.spread@1 { image <- bright.result; axis = 0; }
+node bloom: image.spread@1 { image <- bloom_x.result; axis = 1; }
+node view: image.tonemap@3 { hdr <- light.hdr; bloom <- bloom.result; exposure = 0.8; vivid = 1.0; domain = window(); }
 
 output result <- view.result;

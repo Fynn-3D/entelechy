@@ -1,0 +1,224 @@
+// Metered exposure, as an eye or a camera adapts: the picture's mean
+// brightness (the mean of log luminance, its darkest and brightest shares
+// left out, so a few lamps do not darken the rest) is measured over tiles
+// (`image.exposure_tiles`) gathered into a histogram
+// (`image.exposure_histogram`), an exposure follows it over time, quicker
+// toward a brighter scene than a darker one (`image.exposure_meter`), and
+// the HDR picture is scaled by it (`image.exposure_apply`) before the glow
+// and tone; local exposure then evens bright and dark neighborhoods.
+
+/// A tile's side in pixels for metering.
+fn exposure_tile() -> Float { return 32.0; }
+
+/// Log2 luminance of linear color `c`, kept within the meter's range.
+fn exposure_log(c: Vec3) -> Float {
+    return clamp(log2(max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 0.00001)), -16.0, 16.0);
+}
+
+/// Each tile's mean log2 luminance over 16 samples (every eighth pixel each
+/// way), and how much it counts (y: more toward the middle of the picture).
+kernel image.exposure_tiles@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    /// How much less the picture's edges count than its middle (0 all alike).
+    param center: Float = 0.6;
+    output result: Grid<Vec2>;
+    compute {
+        let ext = size(hdr);
+        let lo = coord() * exposure_tile();
+        let sum = loop 16 with sum = vec2(0.0, 0.0) {
+            let q = min(lo + vec2(float(index() % 4), float(index() / 4)) * 8.0 + 4.0, ext - vec2(1.0, 1.0));
+            vec2(sum.x + exposure_log(at(hdr, q).xyz), sum.y + 1.0)
+        };
+        let mid = (lo + exposure_tile() * 0.5) / ext - 0.5;
+        let weight = 1.0 - center * smoothstep(0.1, 0.7, length(mid * vec2(1.0, 1.4)));
+        return vec2(sum.x / max(sum.y, 1.0), weight);
+    }
+}
+
+/// The metered exposure: the factor the HDR picture is multiplied by, when
+/// it was last set (seconds; below 0 before the first frame), the exposure
+/// the picture asks for (stops) and the mean it measured (log2 luminance).
+struct Exposure { factor: Float; set_at: Float; asked: Float; seen: Float; }
+type Exposures = Rows<Exposure>;
+
+/// The histogram's bins: from -16 to 16 stops of log2 luminance, a quarter
+/// stop each.
+fn exposure_bins() -> Int { return 128; }
+fn exposure_bin_low(i: Float) -> Float { return -16.0 + i * 0.25; }
+
+/// The picture's histogram: each bin the tiles' weight whose brightness falls
+/// in it (`exposure_bins` rows), every bin counted at once.
+kernel image.exposure_histogram@1 {
+    requires { field.read; field.write; }
+    input tiles: Grid<Vec2>;
+    output result: Rows<Float>;
+    compute {
+        let lo = exposure_bin_low(float(element()));
+        let n = count(tiles);
+        let w = int(size(tiles).x);
+        return loop 16384 with sum = 0.0 until index() >= n {
+            let t = at(tiles, vec2(float(index() % w), float(index() / w)));
+            sum + if t.x >= lo && t.x < lo + 0.25 { t.y } else { 0.0 }
+        };
+    }
+}
+
+/// The histogram's mean brightness between the shares `dark` and `1 - bright`
+/// of its weight (log2): each bin counted for the part of it within them,
+/// at its middle.
+fn exposure_mean(histogram: Rows<Float>, dark: Float, bright: Float) -> Float {
+    let total = loop 128 with t = 0.0 { t + at(histogram, index()) };
+    let lo = dark * total;
+    let hi = (1.0 - bright) * total;
+    let r = loop 128 with r = vec3(0.0, 0.0, 0.0) {
+        // r: weight below this bin (x), the kept weight (y), the kept weight times brightness (z).
+        let w = at(histogram, index());
+        let kept = max(min(r.x + w, hi) - max(r.x, lo), 0.0);
+        vec3(r.x + w, r.y + kept, r.z + kept * (exposure_bin_low(float(index())) + 0.125))
+    };
+    return if r.y > 0.0 { r.z / r.y } else { 0.0 };
+}
+
+/// The exposure following the picture: its histogram's mean, leaving out the
+/// darkest share `ignore_dark` and the brightest `ignore_bright` (a few
+/// lamps or a black sky do not move it), shown as
+/// `key` (the gray the mean becomes) — a dark scene, as an eye and a camera
+/// see it at night, as `night_key`, eased between from a mean of
+/// `day_from` (log2) down to `night_from` — within `darkest` and
+/// `brightest` stops, `bias` stops more or less. It moves a stop in
+/// `adapt_up` seconds toward a brighter scene and in `adapt_down` toward a
+/// darker one; on the first frame it takes what is asked at once. Arrived
+/// and asked the same, it gives its row unchanged, so the picture it
+/// scales rests.
+kernel image.exposure_meter@1 {
+    requires { field.read; field.write; time.read; }
+    input previous: Exposures;
+    input histogram: Rows<Float>;
+    param key: Float = 0.18;
+    param night_key: Float = 0.025;
+    param day_from: Float = -2.0;
+    param night_from: Float = -7.0;
+    param bias: Float = 0.0;
+    param ignore_dark: Float = 0.1;
+    param ignore_bright: Float = 0.1;
+    param darkest: Float = -4.0;
+    param brightest: Float = 8.0;
+    param adapt_up: Float = 0.6;
+    param adapt_down: Float = 2.0;
+    output result: Exposures;
+    compute {
+        let was = sample(previous);
+        let seen = exposure_mean(histogram, ignore_dark, ignore_bright);
+        let shown = mix(night_key, key, smoothstep(night_from, day_from, seen));
+        let asked = clamp(log2(shown) - seen + bias, darkest, brightest);
+        let t = time();
+        if was.set_at < 0.0 { return Exposure { factor: exp2(asked), set_at: t, asked: asked, seen: seen }; }
+        let now = log2(was.factor);
+        // Arrived and still asked the same: the row as it was, so what it scales rests with it.
+        if abs(asked - now) < 0.001 && abs(asked - was.asked) < 0.001 { return was; }
+        let dt = clamp(t - was.set_at, 0.0, 0.1);
+        // Toward a brighter scene (a lower exposure) quicker than a darker.
+        let rate = if asked < now { 1.0 / max(adapt_up, 0.01) } else { 1.0 / max(adapt_down, 0.01) };
+        let step = clamp(asked - now, 0.0 - rate * dt, rate * dt);
+        return Exposure { factor: exp2(now + step), set_at: t, asked: asked, seen: seen };
+    }
+}
+
+/// Before the first frame: no exposure yet.
+kernel image.exposure_start@1 {
+    requires { field.write; }
+    output result: Exposures;
+    compute { return Exposure { factor: 1.0, set_at: -1.0, asked: 0.0, seen: 0.0 }; }
+}
+
+/// The HDR picture scaled by the metered exposure.
+kernel image.exposure_apply@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    input exposure: Exposures;
+    output result: Image;
+    compute {
+        let c = sample(hdr);
+        return vec4(c.xyz * at(exposure, 0).factor, c.w);
+    }
+}
+
+// ------------------------------------------------------------------ local exposure
+
+/// The neighborhood's brightness: each block of 16 by 16 pixels' mean log2
+/// luminance (16 samples).
+kernel image.exposure_local_base@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    output result: Grid<Float>;
+    compute {
+        let ext = size(hdr);
+        let lo = coord() * 16.0;
+        let sum = loop 16 with sum = 0.0 {
+            sum + exposure_log(at(hdr, min(lo + vec2(float(index() % 4), float(index() / 4)) * 4.0 + 2.0, ext - vec2(1.0, 1.0))).xyz)
+        };
+        return sum / 16.0;
+    }
+}
+
+/// The neighborhood's brightness blurred along `axis` (0 across, 1 down),
+/// nine blocks wide.
+kernel image.exposure_local_blur@1 {
+    requires { field.read; field.write; }
+    input base: Grid<Float>;
+    param axis: Int = 0;
+    output result: Grid<Float>;
+    compute {
+        let q = coord();
+        let ext = size(base);
+        let step = if axis == 0 { vec2(1.0, 0.0) } else { vec2(0.0, 1.0) };
+        let sum = loop 9 with acc = vec2(0.0, 0.0) {
+            let k = float(index()) - 4.0;
+            let w = exp(0.0 - k * k * 0.125);
+            vec2(acc.x + at(base, clamp(q + step * k, vec2(0.0, 0.0), ext - vec2(1.0, 1.0))) * w, acc.y + w)
+        };
+        return sum.x / sum.y;
+    }
+}
+
+/// Local exposure: each pixel's brightness taken apart into its
+/// neighborhood's (`base`, read at this pixel from the four nearest blocks,
+/// each weighted by how near and how alike in brightness, so no halo bleeds
+/// round a light) and its own detail on it; the neighborhood brought toward
+/// the picture's mean (`exposure`'s `seen`), by `highlights` above it and
+/// `shadows` below (1 as it is, less flatter), the detail kept by `detail`.
+/// In the exposure's own stops: after `image.exposure_apply`.
+kernel image.exposure_local@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    input base: Grid<Float>;
+    input exposure: Exposures;
+    param highlights: Float = 1.0;
+    param shadows: Float = 1.0;
+    param detail: Float = 1.0;
+    output result: Image;
+    compute {
+        let c = sample(hdr);
+        let own = exposure_log(c.xyz);
+        let e = at(exposure, 0);
+        // The picture's mean as exposed, in the same stops as `hdr`.
+        let mean = e.seen + log2(max(e.factor, 0.00001));
+        let bext = size(base);
+        let at_b = (coord() + 0.5) / 16.0 - 0.5;
+        let lo = floor(at_b);
+        let sum = loop 4 with acc = vec2(0.0, 0.0) {
+            let bq = clamp(lo + vec2(float(index() % 2), float(index() / 2)), vec2(0.0, 0.0), bext - vec2(1.0, 1.0));
+            let near = vec2(1.0, 1.0) - abs(at_b - bq);
+            let b = at(base, bq) + log2(max(e.factor, 0.00001));
+            let alike = exp(0.0 - (b - own) * (b - own) * 0.5);
+            let w = max(near.x * near.y, 0.0) * alike + 0.00001;
+            vec2(acc.x + b * w, acc.y + w)
+        };
+        let local = sum.x / sum.y;
+        let toward = if local > mean { highlights } else { shadows };
+        let shown = mean + (local - mean) * toward + (own - local) * detail;
+        let scale = exp2(clamp(shown - own, -6.0, 6.0));
+        return vec4(c.xyz * scale, c.w);
+    }
+}

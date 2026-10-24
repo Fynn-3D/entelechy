@@ -1,0 +1,17 @@
+// The picture seen, at points whose answers are known by hand: a flat light past the glow's threshold, its glow's
+// source and spread, and the light toned with no curve (clipped), dark corners, warmth and glow laid in.
+use "../kernels/";
+
+node light: Grid<Vec4> { domain = vec2(16, 16); value = vec4(0.18, 0.18, 0.18, 1.0); }
+node hot: Grid<Vec4> { domain = vec2(16, 16); value = vec4(4.0, 4.0, 4.0, 1.0); }
+node dark: image.blank@1 { domain = vec2(16, 16); }
+node halo: Grid<Vec4> { domain = vec2(2, 2); value = vec4(0.5, 0.5, 0.5, 1.0); }
+node bright: image.bright@2 { hdr <- hot.result; threshold = 2.0; domain = ceil(size(hdr) / 8); }
+node spread: image.spread@1 { image <- bright.result; axis = 0; }
+node plain: image.tonemap@3 { hdr <- light.result; bloom <- dark.result; glow = 0.0; vivid = 1.0; warmth = 0.0; vignette = 0.0; curve = 1; domain = size(hdr); }
+node cornered: image.tonemap@3 { hdr <- light.result; bloom <- dark.result; glow = 0.0; vivid = 1.0; warmth = 0.0; curve = 1; domain = size(hdr); }
+node warm: image.tonemap@3 { hdr <- light.result; bloom <- dark.result; glow = 0.0; vivid = 1.0; vignette = 0.0; curve = 1; domain = size(hdr); }
+node glowing: image.tonemap@3 { hdr <- dark.result; bloom <- halo.result; glow = 0.6; vivid = 1.0; warmth = 0.0; vignette = 0.0; curve = 1; domain = size(hdr); }
+node filmic: image.tonemap@3 { hdr <- light.result; bloom <- dark.result; glow = 0.0; vivid = 1.0; warmth = 0.0; vignette = 0.0; domain = size(hdr); }
+
+output result <- plain.result;
