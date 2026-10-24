@@ -1,6 +1,6 @@
 //! Music's words: scales and chords (the modes, their degrees, a note's
 //! pitch, the chords on a degree), an instrument's note (its sound, its
-//! envelope, its vibrato) and the drums of a kit. What a program plays
+//! envelope, its vibrato). What a program plays
 //! with them, its songs and its tunes, is its own.
 package music@1 { language = 1; ir = 1; }
 

@@ -1,8 +1,8 @@
 # audio
 
-Sound made from tones and noise, a block of stereo samples a frame: the
-clock, the cues a program's events set going, the instruments they sound
-through, and the filters and delay lines that shape them.
+Sound's atoms, a block of stereo samples a frame: the clock, the cues a
+program's events set going, noise, a tone and an envelope, and the
+filters and delay lines that shape them.
 
 **Layer:** Media. **Uses:** [`random`](../random.entpkg/README.md).
 
@@ -20,8 +20,8 @@ use "audio.entpkg";
 - `kernels/delay.ent` — Delay lines in a memory carried from frame to
   frame.
 - `kernels/filter.ent` — Filters, sample by sample.
-- `kernels/instrument.ent` — The sounds a cue is made of, as functions
-  of time.
+- `kernels/instrument.ent` — What sounds are made of, as functions of
+  time: noise, a tone, an envelope.
 
 ## Tests
 

@@ -12,9 +12,10 @@ expect set.result[0].kind = 18
 expect set.result[0].param = 3
 expect set.result[0].gain = 1 0.0001
 
-# The instruments at a moment, the same on every backend.
-expect voices.result[0] = 0.2143 0.3732 -0.3646 0.3922 0.001
-expect voices.result[1] = 0.5908 0.3353 -0.0565 0.0569 0.001
+# A tone under its envelope, with noise, at a moment, the same on every
+# backend; the envelope itself.
+expect voices.result[0] = 0.2143 0.8752 0 0 0.001
+expect voices.result[1] = 0.5908 0.6271 0 0 0.001
 
 # Thirteen hours in, more samples than an Int holds: after the stall the
 # clock takes up the time again, a first block behind it.

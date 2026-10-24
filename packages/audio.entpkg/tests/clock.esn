@@ -23,7 +23,7 @@ node voices: kernel {
     compute {
         let t = 0.05 + float(element()) * 0.1;
         let noise = white(long(element()) + 77l, 3) * 0.1 + soft_noise(t * 100.0, 5) * 0.1;
-        return vec4(tone(441.0, t) * envelope(t, 0.01, 0.3) + noise, bell(660.0, t), pluck(220.0, t) + thud(t, 80.0), horn(330.0, t, 0.5) + clang(500.0, 1.4, t, 0.4) + drum(t, 1000l, 90.0));
+        return vec4(tone(441.0, t) * envelope(t, 0.01, 0.3) + noise, envelope(t, 0.01, 0.3), 0.0, 0.0);
     }
 }
 

@@ -111,8 +111,8 @@ Sound and music.
 
 | Package | Holds |
 | --- | --- |
-| [`audio`](audio.entpkg/README.md) | Clocks, cues, instruments, filters and delay lines for blocks of samples |
-| [`music`](music.entpkg/README.md) | Scales, chords, an instrument's note and a kit's drums |
+| [`audio`](audio.entpkg/README.md) | Clocks, cues, noise, tones, envelopes, filters and delay lines for blocks of samples |
+| [`music`](music.entpkg/README.md) | Scales, chords and an instrument's note |
 
 ### Simulation
 
