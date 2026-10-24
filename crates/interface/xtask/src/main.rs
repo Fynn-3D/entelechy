@@ -91,9 +91,32 @@ fn verify(all: bool) -> ExitCode {
     let head =
         output(Command::new("git").args(["rev-parse", "--short", "HEAD"])).unwrap_or_default();
     log.line(&format!("verifying {}", head.trim()));
-    let rust = all || rust_changed();
+    let rust = all
+        || changed_since_main(&[
+            "crates/",
+            "bridges/",
+            ".cargo/",
+            "Cargo.toml",
+            "Cargo.lock",
+            "rust-toolchain",
+        ]);
+    // The IR, its compiler and the backends: what decides whether one
+    // program comes out the same every way it runs.
+    let engine = all
+        || changed_since_main(&[
+            "crates/core/",
+            "crates/frontend/",
+            "crates/backends/",
+            ".cargo/",
+            "Cargo.toml",
+            "Cargo.lock",
+            "rust-toolchain",
+        ]);
     if !rust {
         log.line("no Rust changed since main: its steps and wasi left out (--all runs them)");
+    }
+    if !engine {
+        log.line("no IR, compiler or backend changed since main: replays on jit and gpu alone");
     }
     let groups: Vec<Vec<Step>> = vec![
         vec![cargo("fmt", &["fmt", "--all"])],
@@ -161,7 +184,7 @@ fn verify(all: bool) -> ExitCode {
         ],
         vec![cargo("release", &["build", "--release"])],
         vec![
-            ("replays", Box::new(replays)),
+            ("replays", Box::new(move |out: &Out| replays(out, engine))),
             ("wasi", Box::new(wasi)),
             ("against_main", Box::new(against_main)),
         ],
@@ -235,10 +258,9 @@ fn together(log: &Log, group: &[&Step]) -> bool {
 }
 
 /// Whether the branch, its uncommitted and untracked files counted, changes
-/// anything the Rust build reads since it left `main`: the crates, the
-/// bridges their tests drive, the workspace's manifests and settings. On
-/// `main` itself, or when git cannot say, it does.
-fn rust_changed() -> bool {
+/// a path under one of `places` since it left `main`. On `main` itself, or
+/// when git cannot say, it does.
+fn changed_since_main(places: &[&str]) -> bool {
     let Some(base) = output(Command::new("git").args(["merge-base", "main", "HEAD"])) else {
         return true;
     };
@@ -252,18 +274,10 @@ fn rust_changed() -> bool {
     ) else {
         return true;
     };
-    changed.lines().chain(untracked.lines()).any(|path| {
-        [
-            "crates/",
-            "bridges/",
-            ".cargo/",
-            "Cargo.toml",
-            "Cargo.lock",
-            "rust-toolchain",
-        ]
-        .iter()
-        .any(|rust| path.starts_with(rust))
-    })
+    changed
+        .lines()
+        .chain(untracked.lines())
+        .any(|path| places.iter().any(|place| path.starts_with(place)))
 }
 
 /// A step that runs cargo with `args`.
@@ -353,18 +367,21 @@ const ENTELECHY: &str = "./target/release/entelechy";
 /// rounding apart, as another device's might (a replay whose checks hold
 /// two forms alike says so and is left out). Then every package used in
 /// one scene beside every other: none declares a name another does.
-fn replays(out: &Out) -> Result<(), String> {
+fn replays(out: &Out, engine: bool) -> Result<(), String> {
     let mut all = listed("examples", Some("tests"), ".replay");
     all.extend(listed("packages", Some("tests"), ".replay"));
     let modes: [&[&str]; 6] = [
         &["--backend", "gpu"],
-        &["--backend", "cpu"],
         &["--backend", "jit"],
+        &["--backend", "cpu"],
         &["--backend", "gpu", "--small", "0"],
         &["--backend", "jit", "--no-fusion"],
         &["--backend", "jit", "--round-apart"],
     ];
-    for mode in modes {
+    // The two backends that do the work; the rest hold the IR to one
+    // answer every way it runs, and wait for a change that could part it.
+    let modes = if engine { &modes[..] } else { &modes[..2] };
+    for &mode in modes {
         let passed = pool(&all, 4, |replay| {
             run(
                 out,

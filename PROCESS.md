@@ -155,8 +155,12 @@ cargo xtask verify
 A branch that changes nothing the Rust build reads since it left `main`
 (`crates/`, `bridges/`, `.cargo/`, the workspace's manifests) leaves out
 `fmt`, the clippy steps, `test-build`, `tests`, `bridges` and `wasi`, and
-says so in the log: their answers are `main`'s. `cargo xtask verify
---all` runs every step; on `main` every step runs.
+says so in the log: their answers are `main`'s. A branch that changes
+neither the IR, its compiler nor a backend (`crates/core`,
+`crates/frontend`, `crates/backends`, the workspace's manifests) runs
+the replays on `gpu` and `jit` alone: the other ways hold one program to
+one answer, and only such a change can part them. `cargo xtask verify
+--all` runs every step and every way; on `main` they all run.
 
 The log begins with the commit it verifies and ends `passed`.
 
