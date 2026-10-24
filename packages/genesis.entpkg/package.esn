@@ -1,5 +1,0 @@
-//! Laws a world writes itself: a law's template filled with the numbers a
-//! world computed, written where the person running it allowed.
-package genesis@1 { language = 1; ir = 1; }
-
-use "kernels/";

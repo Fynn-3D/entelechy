@@ -1,0 +1,51 @@
+// A template filled with numbers: its holes `$0` to `$9` written as the values they name, every other character as it
+// is. A template and the text it fills are rows of character codes, as `= text` and `= bytes` inputs give them.
+use "parallel.entpkg";
+use "number.ent";
+
+/// The hole a template's character `i` opens, `$` followed by a digit:
+/// the digit, else -1.
+fn hole_at(template: Rows<Int>, i: Int) -> Int {
+    let next = if i + 1 < count(template) { at(template, i + 1) } else { 0 };
+    return if at(template, i) == 36 && next >= 48 && next <= 57 { next - 48 } else { -1 };
+}
+
+/// How many characters each of a template's characters is written as
+/// once filled: a hole's `$` the number it holds, the digit after it
+/// none, any other character itself. Laid end to end by `compact.ends`.
+kernel text.template_widths@1 {
+    requires { field.read; field.write; }
+    input template: Rows<Int>;
+    input values: Rows<Float>;
+    param places: Int = 3;
+    output result: Rows<Int>;
+    compute {
+        let i = element();
+        let hole = hole_at(template, i);
+        if hole >= 0 { return number_width(at(values, hole), places); }
+        if i > 0 && hole_at(template, i - 1) >= 0 { return 0; }
+        return 1;
+    }
+}
+
+/// The template filled: each hole `$d` written as `values[d]` to
+/// `places` decimals, every other character as it is. `ends` are the
+/// widths laid end to end, `total` their sum (`compact.entries`); a node
+/// sets `domain = value(total)`.
+kernel text.template_filled@1 {
+    requires { field.read; field.write; }
+    input template: Rows<Int>;
+    input values: Rows<Float>;
+    input ends: Rows<Int>;
+    input total: Rows<Int>;
+    param places: Int = 3;
+    output result: Rows<Int>;
+    compute {
+        let e = element();
+        let j = owner(e, ends);
+        let start = if j > 0 { at(ends, j - 1) } else { 0 };
+        let hole = hole_at(template, j);
+        if hole < 0 { return at(template, j); }
+        return number_code(at(values, hole), places, e - start);
+    }
+}

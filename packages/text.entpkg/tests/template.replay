@@ -1,4 +1,4 @@
-scene law.esn
+scene template.esn
 
 # The holes filled to three decimals, 0.125 and -2.500 in place of $0
 # and $1: the text seven bytes longer than its template, the first
@@ -11,3 +11,10 @@ expect law.text[33] = 59
 expect law.writing[0] = 1
 expect law.writing[2] = 8
 expect law.writing[3] = 74
+
+# -2.5 to three decimals is six characters, a minus first and the point
+# third; 1234.5 to none rounds to 1235, four.
+expect numbers.result[0] = 6
+expect numbers.result[1] = 45
+expect numbers.result[2] = 46
+expect numbers.result[3] = 4

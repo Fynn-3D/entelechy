@@ -1,0 +1,25 @@
+use "../kernels/";
+// A template filled with two numbers, and the operation that would write
+// it: `grow = $0; die = $1;`; and numbers written with decimals.
+input template: Rows<Int> = text "fn grow() -> Float { return $0; }\nfn die() -> Float { return $1; }\n";
+input path: Rows<Int> = text "rule.ent";
+
+node values: kernel {
+    requires { field.write; }
+    output result: Rows<Float>;
+    domain = 2;
+    compute { return [0.125, -2.5][element()]; }
+}
+node law: graph "../graphs/template.esn" { template <- template; values <- values.result; path <- path; places = 3; }
+
+node numbers: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    domain = 4;
+    compute {
+        let k = element();
+        return if k == 0 { number_width(-2.5, 3) } else if k == 1 { number_code(-2.5, 3, 0) } else if k == 2 { number_code(-2.5, 3, 2) } else { number_width(1234.5, 0) };
+    }
+}
+
+output result <- law.text;

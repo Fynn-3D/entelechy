@@ -1,0 +1,22 @@
+// Text written to a file: the operation an output `to files` takes (the Host writes it under the directory the person
+// running the scene allowed).
+
+/// The operation an output `to files` takes to write `text` at `path`
+/// under its directory, both rows of character codes; a node sets
+/// `domain = 4 + count(path) + count(text)`.
+kernel text.writing@1 {
+    requires { field.read; field.write; }
+    input path: Rows<Int>;
+    input text: Rows<Int>;
+    output result: Rows<Int>;
+    compute {
+        let e = element();
+        let p = count(path);
+        if e == 0 { return 1; }
+        if e == 1 { return 0; }
+        if e == 2 { return p; }
+        if e == 3 { return count(text); }
+        if e < 4 + p { return at(path, e - 4); }
+        return at(text, e - 4 - p);
+    }
+}

@@ -34,7 +34,7 @@ pub(crate) const LAYERS: &[(&str, &[&str])] = &[
         ],
     ),
     ("media", &["audio", "music", "sound"]),
-    ("simulation", &["physics", "animation", "genesis"]),
+    ("simulation", &["physics", "animation"]),
     ("interaction", &["text", "ui", "controls"]),
 ];
 

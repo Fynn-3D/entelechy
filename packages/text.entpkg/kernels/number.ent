@@ -1,0 +1,41 @@
+// A number written with decimals: how many characters it takes and each one's code, its sign and its point included
+// (a whole number's digits are `ink.ent`'s `digit_count`).
+use "ink.ent";
+
+/// `10` to the power `places`, `places` from 0 to 9.
+fn decimal_unit(places: Int) -> Int {
+    return loop clamp(places, 0, 9) with p = 1 { p * 10 };
+}
+
+/// `v` scaled to `places` decimals and rounded, its magnitude: what its
+/// digits are read from, held below 2^31.
+fn scaled_of(v: Float, places: Int) -> Int {
+    return int(round(min(abs(v) * float(decimal_unit(places)), 2000000000.0)));
+}
+
+/// How many characters `v` is written with to `places` decimals: a `-`
+/// when it is below zero and rounds to something, the whole part, and
+/// a `.` and the decimals when there are any.
+fn number_width(v: Float, places: Int) -> Int {
+    let scaled = scaled_of(v, places);
+    let unit = decimal_unit(places);
+    let sign = int(v < 0.0 && scaled > 0);
+    let point = if places > 0 { places + 1 } else { 0 };
+    return sign + digit_count(scaled / unit) + point;
+}
+
+/// The code of character `i` of `v` written to `places` decimals.
+fn number_code(v: Float, places: Int, i: Int) -> Int {
+    let scaled = scaled_of(v, places);
+    let unit = decimal_unit(places);
+    let sign = int(v < 0.0 && scaled > 0);
+    if sign == 1 && i == 0 { return 45; }
+    let whole = scaled / unit;
+    let digits = digit_count(whole);
+    let k = i - sign;
+    if k < digits {
+        return 48 + (whole / decimal_unit(digits - 1 - k)) % 10;
+    }
+    if k == digits { return 46; }
+    return 48 + (scaled % unit / decimal_unit(places - 1 - (k - digits - 1))) % 10;
+}

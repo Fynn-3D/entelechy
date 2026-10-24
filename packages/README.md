@@ -109,13 +109,12 @@ Sound and music.
 
 ### Simulation
 
-Bodies, skeletons and worlds that change.
+Bodies and skeletons.
 
 | Package | Holds |
 | --- | --- |
 | [`physics`](physics.entpkg/README.md) | Rigid bodies in the plane |
 | [`animation`](animation.entpkg/README.md) | Skeletons, clips, walking, aiming and skinning |
-| [`genesis`](genesis.entpkg/README.md) | Laws a world writes itself |
 
 ### Interaction
 
@@ -123,6 +122,6 @@ What a person reads and does.
 
 | Package | Holds |
 | --- | --- |
-| [`text`](text.entpkg/README.md) | A bitmap font, glyph rows, letters and wide-glyph atlases |
+| [`text`](text.entpkg/README.md) | A bitmap font, glyph rows, letters, wide-glyph atlases, numbers written, templates filled and text written to files |
 | [`ui`](ui.entpkg/README.md) | Layout, paint, widgets, navigation, command search and marks |
 | [`controls`](controls.entpkg/README.md) | Actions from the keyboard and a pad alike |

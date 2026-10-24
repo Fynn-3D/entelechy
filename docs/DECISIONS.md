@@ -1675,8 +1675,8 @@ the same world twice.
 `store_for` and `allow_on` ([replay](../crates/interface/session/src/replay.rs));
 `written_sources` and `written_after`
 ([session](../crates/interface/session/src/session.rs)); the
-[composer package](../packages/genesis.entpkg/package.esn), which fills a
-law's template with numbers. Held by [the genesis
+[text package](../packages/text.entpkg/README.md)'s templates, which fill a
+law's template with numbers and write it. Held by [the genesis
 tests](../crates/interface/session/tests/genesis.rs) and
 [the genesis example](../examples/genesis/README.md), whose replay
 watches a world rewrite its law of growth until its life is in balance.
