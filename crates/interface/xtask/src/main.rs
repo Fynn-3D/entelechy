@@ -493,7 +493,7 @@ fn wasi(out: &Out) -> Result<(), String> {
     // Field directories read a page at a time, inline where there is no
     // thread, and files found through a package's name.
     all.push(PathBuf::from("packages/mesh.entpkg/tests/stream.replay"));
-    all.push(PathBuf::from("packages/light.entpkg/tests/stream.replay"));
+    all.push(PathBuf::from("packages/surface.entpkg/tests/stream.replay"));
     let passed = pool(&all, 8, |replay| {
         run(
             out,
