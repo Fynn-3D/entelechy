@@ -3,6 +3,7 @@
 // pass's at its start and its own past it; an outline kept to the right half of the picture by a mask
 // (`image.masked`) is the picture on the left and the outline on the right.
 use "../kernels/";
+use "geometry.entpkg";
 use "image.entpkg";
 
 /// How far apart two pictures are over the pixels from `from` to `to` (exclusive): the most any channel differs.

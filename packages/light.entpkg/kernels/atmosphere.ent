@@ -11,6 +11,7 @@
 // again only when the sun moves; and `light.atmosphere_sky` paints the
 // sky's pixels from it, with the sun's disc (`graphs/atmosphere.esn`
 // places the first three).
+use "geometry.entpkg";
 use "camera.ent";
 use "phase.ent";
 use "sky.ent";

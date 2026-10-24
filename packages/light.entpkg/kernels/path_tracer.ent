@@ -5,6 +5,7 @@
 // (reflections and occlusion close to the surface, at full precision), the rest and the later bounces walk the proxies. Each records its light without the material
 // (the diffuse without its color, the specular without the environment BRDF), accumulated and denoised apart, multiplied back at shading, so denoising
 // blurs no texture.
+use "geometry.entpkg";
 use "random.entpkg";
 use "brdf.ent";
 use "camera.ent";

@@ -7,6 +7,7 @@
 // (`light.lamps_light`), each shadowed through the proxies and, close by,
 // on the screen. Probe GI takes that light into what it shows
 // and bounces; another renderer has it added after (`light.lamps_shade`).
+use "geometry.entpkg";
 use "brdf.ent";
 use "camera.ent";
 use "contact_shadow.ent";

@@ -4,6 +4,7 @@
 // traced through), by the standard share a surface reflects (`env_reflectance`), through the air as the rest. It fades where
 // the screen is unsure: toward the picture's edges, on a ray that met a surface from behind, on a rougher surface, and
 // farther along the ray, so the renderer's own reflection carries on past it.
+use "geometry.entpkg";
 use "brdf.ent";
 use "camera.ent";
 use "sky.ent";

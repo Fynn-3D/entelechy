@@ -2,6 +2,7 @@
 // each pixel walks a short way toward the sun on the screen, and is shadowed where it passes behind something else in the G-buffer.
 // A scene's G-buffer passes through it before a renderer takes it (`light.contact`), multiplied into the sun's
 // visibility (`extra`'s x).
+use "geometry.entpkg";
 use "camera.ent";
 use "sky.ent";
 

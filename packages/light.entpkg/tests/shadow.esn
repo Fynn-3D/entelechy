@@ -3,6 +3,7 @@
 // lens looking down that `shift` moves; what is drawn of the map each frame, and the
 // sun's visibility on the ground in a ball's shadow and beside it.
 use "mesh.entpkg";
+use "geometry.entpkg";
 use "raster.entpkg";
 use "../kernels/";
 

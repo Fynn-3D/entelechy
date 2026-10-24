@@ -14,7 +14,11 @@ use "geometry.entpkg";
 ## Kernels
 
 - `kernels/camera.ent` — A camera's matrices and the ways between the
-  world, the clip space a rasterizer takes and the picture.
+  world, the clip space a rasterizer takes and the picture; a pinhole
+  lens (`Lens`): the ray through a pixel (`ray`), where a point lands
+  (`project`), its clip coordinates and depth back to distance
+  (`lens_clip`, `lens_distance`), a lens orbiting a point
+  (`lens_orbiting`).
 - `kernels/quaternion.ent` — Rotations as unit quaternions, held in a
   `Vec4` as `x y z w`, the order glTF and Blender write.
 - `kernels/sdf.ent` — Signed distance functions.
@@ -26,7 +30,7 @@ use "geometry.entpkg";
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`camera.replay`, `distances.replay`, `turns.replay`, `warps.replay`. Every Kernel of the
+`camera.replay`, `distances.replay`, `lens.replay`, `turns.replay`, `warps.replay`. Every Kernel of the
 package is reached by one of them.
 
 Used by the [animation](../../examples/animation/README.md), [culled](../../examples/culled/README.md), [image](../../examples/image/README.md), [mesh](../../examples/mesh/README.md), [showcase](../../examples/showcase/README.md), [surface](../../examples/surface/README.md), [voxel](../../examples/voxel/README.md) examples.

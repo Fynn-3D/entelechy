@@ -3,6 +3,7 @@
 // color carried is held between the colors round this pixel this frame, so moving and newly uncovered things do not smear.
 // Once the picture rests (lens and scene unchanged, the scene giving how many frames it has rested, `calm`), after sixteen jittered frames it is
 // jittered no more, the picture settled and no longer computed anew each frame.
+use "geometry.entpkg";
 use "camera.ent";
 
 /// The `i`th Halton number (base `base`), 0 to 1.

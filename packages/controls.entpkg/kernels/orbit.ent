@@ -1,0 +1,109 @@
+// A camera a person turns: an orbit round the point it looks at, worked by the pointer, the wheel and keys, gliding to
+// what is double-clicked, walking, never under the ground; the lens it sees through (`geometry.entpkg`'s `Lens`), and
+// whether it rests (so what is drawn only once it rests is drawn once).
+use "geometry.entpkg";
+use "light.entpkg";
+
+/// The lens: turning round the point it looks at (`target`), `dist` from it; `goal` is the point double-clicked or chosen by F,
+/// toward which the lens glides; the last frame's pointer, the buttons held (bits: left, right or middle), the moment the left button
+/// last went down; and how many frames the lens has not moved (`still`, for accumulating).
+struct Orbit { target: Vec3; goal: Vec3; gliding: Bool; yaw: Float; pitch: Float; dist: Float; pointer_at: Vec2; held: Int; clicked_t: Float; still: Int; }
+type Orbits = Rows<Orbit>;
+/// The lens an orbit sees through, `focal` long.
+fn orbit_lens(c: Orbit, focal: Float) -> Lens { return lens_orbiting(c.target, c.yaw, c.pitch, c.dist, focal); }
+/// As it begins: looking at (`x`, `y`, `z`) from the direction of `yaw` and `pitch`, `dist` away.
+kernel controls.orbit_start@1 {
+    requires { field.write; }
+    param x: Float = 0.0;
+    param y: Float = 1.0;
+    param z: Float = 0.0;
+    param yaw: Float = 0.0;
+    param pitch: Float = 0.1;
+    param dist: Float = 8.0;
+    output result: Orbits;
+    compute {
+        let o = vec3(x, y, z);
+        return Orbit { target: o, goal: o, gliding: false, yaw: yaw, pitch: pitch, dist: dist, pointer_at: vec2(0.0, 0.0), held: 0, clicked_t: -1.0, still: 0 };
+    }
+}
+/// The lens worked: the left button drags to turn, the right or middle to pan, the wheel dollies, a double-click or F flies to the point under the pointer
+/// (read from the last frame's small depth map `depths`, `light.entpkg`'s `light.depths`), W A S D walk, Q E fall and rise, Shift held
+/// is fast, R returns to `home`. The lens never goes under the ground (`land`).
+kernel controls.orbit@1 {
+    requires { field.read; field.write; input.read; time.read; }
+    input previous: Orbits;
+    input home: Orbits;
+    input depths: Grid<Float>;
+    input land: Grid<Float>;
+    input frame: Proxies;
+    param focal: Float = 1.3;
+    /// The furthest the lens may be from the point it looks at (meters).
+    param most: Float = 200.0;
+    /// How the hand moves it: radians turned a pointer pixel (across, up), how fast walking is (meters a frame, and a share of
+    /// the distance), how much Shift quickens it, how far a wheel step zooms (the distance times this), how quickly a fly-to
+    /// glides, and how near a fly-to comes (meters).
+    param turn_speed: Vec2 = vec2(0.005, 0.004);
+    param walk_speed: Vec2 = vec2(0.03, 0.012);
+    param fast: Float = 4.0;
+    param zoom_step: Float = 0.88;
+    param glide: Float = 0.15;
+    param fly_to: Float = 2.0;
+    output result: Orbits;
+    compute {
+        let c = at(previous, 0);
+        let t = time();
+        let p = pointer();
+        let left = button(0) || pointer_down();
+        let right = button(1) || button(2);
+        let held = int(left) | (int(right) << 1);
+        let d = p - c.pointer_at;
+        let turning = left && (c.held & 1) != 0 && length(d) > 0.0;
+        let panning = right && (c.held & 2) != 0 && length(d) > 0.0;
+        let yaw = if turning { c.yaw - d.x * turn_speed.x } else { c.yaw };
+        let l = orbit_lens(c, focal);
+        let pan = if panning { (l.right * (0.0 - d.x) + l.up * d.y) * c.dist / max(window().y, 1.0) / focal * 2.0 } else { vec3(0.0, 0.0, 0.0) };
+        let quick = if key(16) { fast } else { 1.0 };
+        let flat = normalize(vec3(l.ahead.x, 0.0, l.ahead.z));
+        let side = normalize(vec3(l.right.x, 0.0, l.right.z));
+        let walk = (flat * ((if key(87) { 1.0 } else { 0.0 }) - (if key(83) { 1.0 } else { 0.0 }))
+            + side * ((if key(68) { 1.0 } else { 0.0 }) - (if key(65) { 1.0 } else { 0.0 }))
+            + vec3(0.0, 1.0, 0.0) * ((if key(69) { 1.0 } else { 0.0 }) - (if key(81) { 1.0 } else { 0.0 }))) * (walk_speed.x + c.dist * walk_speed.y) * quick;
+        let fresh = left && (c.held & 1) == 0;
+        let pick = (fresh && t - c.clicked_t < 0.3) || key(70);
+        // The depth under the pointer: the last frame's small depth map.
+        let sz = size(depths);
+        let at_p = clamp(floor(p * sz / max(window(), vec2(1.0, 1.0))), vec2(0.0, 0.0), sz - vec2(1.0, 1.0));
+        let depth = at(depths, at_p);
+        let dir = ray(l, p, window());
+        // A depth of 0, or the sky: nothing under the pointer (a scene with no depth map gives one of zeros).
+        let picked = pick && depth > 0.0 && depth < no_hit() * 0.5;
+        let goal = if picked { l.eye + dir * depth } else { c.goal + pan + walk };
+        let gliding = if picked { true } else if turning || panning || length(walk) > 0.0 { false } else { c.gliding && length(c.target - c.goal) > 0.002 };
+        let target = if gliding { mix(c.target, goal, glide) } else { c.target + pan + walk };
+        let dist0 = if picked { min(c.dist, fly_to) } else { c.dist };
+        let zoom = wheel().y;
+        let dist = clamp(dist0 * pow(zoom_step, zoom), 0.2, most);
+        let low = asin(clamp((land_at(land, frame, target.x, target.z) + 0.15 - target.y) / dist, -1.0, 1.0));
+        let pitch = clamp(if turning { c.pitch + d.y * turn_speed.y } else { c.pitch }, max(low, -1.2), 1.5);
+        let moved = turning || panning || length(walk) > 0.0 || gliding || picked || zoom != 0.0 || key(82);
+        let next = Orbit { target: target, goal: if gliding { goal } else { target }, gliding: gliding, yaw: yaw, pitch: pitch, dist: dist,
+            pointer_at: p, held: held, clicked_t: if fresh { t } else { c.clicked_t }, still: if moved { 0 } else { min(c.still + 1, 100000) } };
+        return if key(82) { Orbit { ..at(home, 0), pointer_at: p, held: held } } else { next };
+    }
+}
+/// Whether the lens has stopped: 1 stopped, 0 moving. While the lens rests it does not change, so a node computed only once it has
+/// stopped (the full-resolution G-buffer, `light.settle`) is computed once.
+kernel controls.orbit_rests@1 {
+    requires { field.read; field.write; }
+    input cam: Orbits;
+    output result: Rows<Int>;
+    compute { return if at(cam, 0).still > 0 { 1 } else { 0 }; }
+}
+/// The lens an orbit sees through (`domain = 1`).
+kernel controls.orbit_lens@1 {
+    requires { field.read; field.write; }
+    input cam: Orbits;
+    param focal: Float = 1.3;
+    output result: Lenses;
+    compute { return orbit_lens(at(cam, 0), focal); }
+}

@@ -5,6 +5,7 @@
 // (three distances taken up along the normal; deep inside the coarse shape, a leaf in its crown, a share of its own instead); a
 // reflection takes the sky in its direction (the ground's light, looking down). Its shading is standard real-time
 // lighting (`lit_by`, `ambient_by`), taken as far toward a painting's as `painted` asks (`painted.ent`).
+use "geometry.entpkg";
 use "brdf.ent";
 use "camera.ent";
 use "painted.ent";

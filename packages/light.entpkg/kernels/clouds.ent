@@ -6,6 +6,7 @@
 // city's at night); `light.fog_apply` lays them over the sky. The same
 // deck shades the ground: `light.clouds_shadow` takes the sun it hides
 // out of the G-buffer's sun visibility.
+use "geometry.entpkg";
 use "random.entpkg";
 use "camera.ent";
 use "phase.ent";

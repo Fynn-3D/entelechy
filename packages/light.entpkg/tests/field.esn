@@ -3,6 +3,7 @@
 // twice its size turned a half, and one in no shape), and the block round
 // a lens baked from them in three levels; two atlases joined into one.
 use "../kernels/";
+use "geometry.entpkg";
 
 node ball: kernel {
     requires { field.write; }

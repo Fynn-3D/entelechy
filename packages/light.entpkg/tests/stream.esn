@@ -5,6 +5,7 @@
 // the rest far), their arrays streamed by `fields` nodes, joined into one
 // library and drawn; the balls red by their part, the ground grey.
 use "mesh.entpkg";
+use "geometry.entpkg";
 use "raster.entpkg";
 use "../kernels/";
 

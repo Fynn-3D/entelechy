@@ -8,6 +8,7 @@
 // same bits on every device, and a device sums them itself. `light.translucent_resolve` lays it over the picture: what lies behind times all the layers let
 // through, the layers' light as their weighted mean times their coverage, the glows. `graphs/translucent.esn` is the
 // whole.
+use "geometry.entpkg";
 use "mesh.entpkg";
 use "raster.entpkg";
 use "random.entpkg";

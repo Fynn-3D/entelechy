@@ -1,0 +1,28 @@
+// A lens orbiting (0, 1, 0) from five meters along +z, 1.3 long, over a picture 200 by 100: it stands at (0, 1, 5)
+// facing -z, right +x, up +y; the middle pixel's ray is its facing; the target lands at the middle five meters off; a
+// point off to the side lands where the lens's focal length puts it, and the ray back through that pixel leads to it;
+// clipped between half a meter and fifty, its depth leads back to its distance.
+use "../kernels/";
+
+node probe: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 6;
+    compute {
+        let l = lens_orbiting(vec3(0.0, 1.0, 0.0), 0.0, 0.0, 5.0, 1.3);
+        let ext = vec2(200.0, 100.0);
+        let k = element();
+        let target = project(l, vec3(0.0, 1.0, 0.0), ext);
+        let side = project(l, vec3(1.0, 1.5, 0.0), ext);
+        let back = ray(l, side.xy - 0.5, ext);
+        let c = lens_clip(l, ext, vec3(1.0, 1.5, 0.0), 0.5, 50.0);
+        return if k == 0 { vec4(l.eye, l.focal) }
+            else if k == 1 { vec4(l.ahead.z, l.right.x, l.up.y, 0.0) }
+            else if k == 2 { vec4(ray(l, vec2(99.5, 49.5), ext), 0.0) }
+            else if k == 3 { vec4(target, 0.0) }
+            else if k == 4 { vec4(side, 0.0) }
+            else { vec4(back - normalize(vec3(1.0, 0.5, -5.0)), lens_distance(l, back, c.z / c.w, 0.5, 50.0)) };
+    }
+}
+
+output result <- probe.result;

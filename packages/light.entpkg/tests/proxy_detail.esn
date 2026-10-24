@@ -4,6 +4,7 @@
 // stacked proxy and the coarse one five centimeters off the ball on the x axis (a corner of the mesh, where it meets the
 // round ball), and half a meter past the fine block's far side (beyond it: the coarse level).
 use "mesh.entpkg";
+use "geometry.entpkg";
 use "raster.entpkg";
 use "../kernels/";
 

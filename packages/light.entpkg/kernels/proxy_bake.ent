@@ -8,6 +8,7 @@
 // Rong and Tan's), so a cell far from every face knows how far it is and a ray crosses an empty room in long steps. Each
 // cell is its point's distance, less half a cell so a face is a shell with an inside, and the point's face's color
 // (`light.proxy_baked`). `graphs/proxy_bake.esn` is the whole.
+use "geometry.entpkg";
 use "parallel.entpkg";
 use "mesh.entpkg";
 use "raster.entpkg";

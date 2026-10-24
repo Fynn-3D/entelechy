@@ -3,6 +3,7 @@
 // screen shows; and the picture blurred as the lens moved half a meter
 // across in a frame, the balls standing still.
 use "../kernels/";
+use "geometry.entpkg";
 
 node stand: graph "stand_scene.esn" { }
 node polished: kernel {

@@ -82,10 +82,11 @@ node filmed: image.film@1 { image <- shown.result; film <- story.result; }
   `light.atmosphere_spread@1`, `light.atmosphere_look@1`,
   `light.atmosphere_view@1`, `light.atmosphere_sky@1`.
 - `kernels/brdf.ent` — Standard PBR.
-- `kernels/camera.ent` — The lens, and the proxies (the coarse scene a
-  renderer traces shadows and bounces through). Kernels:
-  `light.cam_start@1`, `light.cam@1`, `light.settled@1`,
-  `light.depths@1`, `light.settle@1`, `light.lens@1`, `light.lens_clip_plane@1`
+- `kernels/camera.ent` — The G-buffer's lens and depth (the lens is
+  `geometry.entpkg`'s `Lens`, a person turns it with `controls.entpkg`'s
+  `controls.orbit`), and the proxies (the coarse scene a renderer traces
+  shadows and bounces through). Kernels: `light.depths@1`,
+  `light.settle@1`, `light.lens_clip_plane@1`
   (a world plane through the lens's clip space: a mirror's pass cut at its water).
 - `kernels/clay.ent` — Clay: a modeler's preview, a studio light and
   backdrop over the standard contract. Kernels: `light.clay@1`.
@@ -321,7 +322,7 @@ this contract takes any renderer package by changing a few graph lines.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `lens` | `Lenses` | The camera this frame (`light.cam` drives one); `focal` 0 sees nothing (a renderer not shown), and a renderer rests on it. |
+| `lens` | `Lenses` | The camera this frame (`controls.orbit` drives one); `focal` 0 sees nothing (a renderer not shown), and a renderer rests on it. |
 | `sky` | `SkyLooks` | The sun, the sky's colors, clouds, far silhouettes, air. |
 | `surface` | `Grid<Vec4>` | Per pixel: world normal (xyz), distance along the view ray (w; `no_hit()` for sky). |
 | `paint` | `Grid<Vec4>` | Per pixel: albedo (rgb, linear), roughness (w). |
@@ -348,7 +349,7 @@ not a rough stand-in for it.
 
 A scene may hand over its G-buffer twice, through `light.settle`: a reduced
 one while the camera moves, and a full one, computed once, when it stops
-(`light.settled` gates it).
+(`controls.orbit_rests` gates it).
 
 ### What a renderer gives
 
@@ -650,7 +651,7 @@ own) and encodes sRGB.
 
 ### Pieces
 
-- `kernels/camera.ent`: `Lens`, `ray`, the orbit camera (`light.cam`), the
+- `kernels/camera.ent`: `no_hit`, `screen_march`, the
   `Proxy` frame and its rough tracing (`rough_trace`, `rough_shadow`,
   `rough_normal`), `cosine_dir`.
 - `kernels/sky.ent`: `SkyLook`, `sky_radiance`, `aerial`.

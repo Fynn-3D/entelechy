@@ -1,21 +1,23 @@
-//! The test stand, as the contract asks (`stand.ent`): the lens a person
-//! drives, the sky, the G-buffer settled from a rough one while the lens
-//! moves and a fine one once it rests, and the proxies.
+//! The test stand, as the contract asks (`stand.ent`): the lens, the sky,
+//! the G-buffer settled from a rough one while the lens moves and a fine
+//! one once it rests, and the proxies.
 use "stand.ent";
 use "../kernels/";
+use "geometry.entpkg";
 
 node sky: stand.sky@1 { domain = 1; }
 node frame: stand.frame@1 { domain = 1; }
 node land: Grid<Float> { domain = vec2(2, 2); }
 node shape: stand.bake@1 { domain = vec3(100, 25, 60); }
 
-node home: light.cam_start@1 { x = 0.0; y = 0.45; z = -1.9; yaw = 0.0; pitch = 0.42; dist = 8.5; domain = 1; }
-node depths0: Grid<Float> { domain = ceil(window() / 8); }
-node cam: light.cam@1 { previous <~ cam.result from home.result; home <- home.result; depths <~ depths.result from depths0.result;
-    land <- land.result; frame <- frame.result; domain = 1; }
-node lens: light.lens@1 { cam <- cam.result; domain = 1; }
-
-node settled: light.settled@1 { cam <- cam.result; domain = 1; }
+// The lens standing where a person's orbit would begin (`controls.entpkg`'s `controls.orbit` turns one), resting.
+node lens: kernel {
+    requires { field.write; }
+    output result: Lenses;
+    domain = 1;
+    compute { return lens_orbiting(vec3(0.0, 0.45, -1.9), 0.0, 0.42, 8.5, 1.3); }
+}
+node settled: Rows<Int> { domain = 1; value = 1; }
 node g_fine: stand.gbuffer@1 { lens <- lens.result; sky <- sky.result; domain = window(); }
 node g_rough: stand.gbuffer@1 { lens <- lens.result; sky <- sky.result; domain = ceil(window() / 2); }
 node g: light.settle@1 { fine_surface <- g_fine.surface; fine_paint <- g_fine.paint; fine_extra <- g_fine.extra; fine_layers <- g_fine.layers; fine_more <- g_fine.more;

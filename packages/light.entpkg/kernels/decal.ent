@@ -3,6 +3,7 @@
 // (albedo, roughness), the normals (its bumps) and the extra (metalness, emission) changed where it covers, as the scene
 // would have drawn them, so every renderer lights them alike. A scene hands its decals over as rows, in the order they
 // are laid (the last on top), with an atlas of their pictures its own kernels draw (`DecalLooks`).
+use "geometry.entpkg";
 use "camera.ent";
 
 /// A decal: a box centered at `at`, its half width along `across`, its half height along `up` and its half depth along

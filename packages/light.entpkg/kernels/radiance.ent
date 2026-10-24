@@ -6,6 +6,7 @@
 // what it held. A renderer's picture then takes the light bounced off the things round each pixel: cones traced through the
 // proxy, each step read in the level whose cells are as wide as the cone there, what the cache holds laid nearer first over
 // what lies past it (`radiance_cone`, `light.bounce`). `graphs/bounce.esn` is the whole.
+use "geometry.entpkg";
 use "brdf.ent";
 use "camera.ent";
 use "lamps.ent";

@@ -1,6 +1,6 @@
-//! A game's actions read from the keyboard, the mouse and a pad alike,
-//! from a table of actions: held, pressed and released, the ways to move
-//! and look, and the stick's flicks.
+//! What a person's hands do, read for a program: a game's actions from
+//! the keyboard, the mouse and a pad alike, from a table of actions, and
+//! a camera they turn, an orbit worked by the pointer, the wheel and keys.
 package controls@1 { language = 1; ir = 1; }
 
 use "kernels/";

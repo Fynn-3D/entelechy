@@ -3,6 +3,7 @@
 // shadow ray let it through, the light all round as open as the place is, and what its mirror ray saw, as much as the surface
 // reflects it at that angle. A scene drawn into a G-buffer takes `render.traced`: the shadow the G-buffer holds, the light all round
 // by each thing's baked occlusion, and the mirror ray of a smooth surface traced through the proxies (`raytraced_seen`).
+use "geometry.entpkg";
 use "brdf.ent";
 use "camera.ent";
 use "lit.ent";

@@ -7,6 +7,7 @@
 // thing to draw, the rest far out of sight. Chunks are in world space: a chunk's thing stands at the origin. A `fields`
 // node reads the paths as last evaluated, so `light.stream_insts` takes the last frame's wanted chunks (`<~`), the ones
 // the files in were named for.
+use "geometry.entpkg";
 use "camera.ent";
 use "field.ent";
 

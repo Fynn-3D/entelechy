@@ -10,6 +10,7 @@
 // projected for the rasterizer, `mesh_cluster_faces()` faces a cluster (`light.cluster_corners`, `light.cluster_faces`). A corner of a finer cluster lying where a coarser level is
 // drawn is moved up to that level's point (the mesh's `up`), so where two levels meet, the finer one's edge is the coarser
 // one's. `graphs/cluster.esn` is the whole; a scene reads a pixel's thing and face with `cluster_face_of`.
+use "geometry.entpkg";
 use "parallel.entpkg";
 use "mesh.entpkg";
 use "raster.entpkg";

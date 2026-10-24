@@ -6,6 +6,7 @@
 // again behind a wall the last frame showed nearer. A picture
 // of the levels drawn, lit from above.
 use "mesh.entpkg";
+use "geometry.entpkg";
 use "raster.entpkg";
 use "../kernels/";
 

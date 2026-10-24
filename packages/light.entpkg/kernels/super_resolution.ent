@@ -13,6 +13,7 @@
 //   history is held (only kept among this frame's colors), so the picture settles as gathered and stops changing.
 // - Moving things are carried by `motion` (how far each pixel's thing moved this frame, in the world), taking the nearest
 //   pixel's at an edge (an object's edge goes with it).
+use "geometry.entpkg";
 use "camera.ent";
 use "temporal.ent";
 

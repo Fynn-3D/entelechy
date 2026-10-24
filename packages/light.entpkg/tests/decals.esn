@@ -4,6 +4,7 @@
 // standing on its side, which the floor, facing away from it, does not take. `laid` 0 lays none of them; `bare` is
 // the floor under no decal.
 use "../kernels/";
+use "geometry.entpkg";
 
 param laid: Int = 1;
 

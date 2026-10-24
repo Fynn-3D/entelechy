@@ -1,5 +1,6 @@
 // Clay: a modeler's preview of the shapes, under a studio's light before
 // its backdrop, as a renderer on the standard contract (this package's).
+use "geometry.entpkg";
 use "brdf.ent";
 use "camera.ent";
 

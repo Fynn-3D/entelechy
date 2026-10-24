@@ -4,6 +4,7 @@
 // G-buffer's `more` w marks a mirror, the picture takes the reflection
 // (`light.mirror_mix`): by Fresnel, moved by the surface's waves and drawn
 // out down the water as a rough surface does.
+use "geometry.entpkg";
 use "brdf.ent";
 use "camera.ent";
 

@@ -2,6 +2,7 @@
 // every twelve hundred meters), and the air passed along a view ray is integrated; molecules scatter blue the most (far things
 // turn blue and lose contrast), haze scatters forward (a bright ring toward the sun). The sun and the sky round it light the air
 // passed, scattered once.
+use "geometry.entpkg";
 use "camera.ent";
 use "sky.ent";
 

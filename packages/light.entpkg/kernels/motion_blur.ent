@@ -2,6 +2,7 @@
 // the last frame's lens saw the same point) and the thing's (`motion`, how far it moved in the world this frame, as temporal
 // antialiasing takes it). Gathered along the pixel's way: a point behind the pixel's surface, or one whose own way reaches the
 // pixel, counts (McGuire's reconstruction, simplified), so a sharp still thing keeps its edge before a moving background.
+use "geometry.entpkg";
 use "camera.ent";
 
 /// How far, in pixels of a picture `extent` large, the point the pixel `q` shows at distance `t` moved on the screen this

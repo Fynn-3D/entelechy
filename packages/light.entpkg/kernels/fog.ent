@@ -8,6 +8,7 @@
 // (`light.fog_blur`), and the fog (with clouds over the sky, `clouds.ent`)
 // laid over the picture, upsampled by depth (`light.fog_apply`). Nothing
 // needs history to settle.
+use "geometry.entpkg";
 use "camera.ent";
 use "clouds.ent";
 use "lamps.ent";

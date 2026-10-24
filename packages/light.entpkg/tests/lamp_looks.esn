@@ -3,6 +3,7 @@
 // downlight on the right shaped by its photometry (`downlight.ies`, its light gone past 50 degrees). `looks` 0 takes
 // both lamps' looks away. No sky, no shadows.
 use "../kernels/";
+use "geometry.entpkg";
 
 param looks: Int = 1;
 

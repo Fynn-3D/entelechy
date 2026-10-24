@@ -73,3 +73,49 @@ fn view_eye(view: Mat4) -> Vec3 {
     let at = inverse(view) * vec4(0.0, 0.0, 0.0, 1.0);
     return at.xyz;
 }
+
+// ------------------------------------------------------------------ a lens
+
+/// A pinhole lens as a picture is taken through it: where it stands, its facing, right and up, and its focal length (the
+/// picture's height is 1).
+struct Lens { eye: Vec3; ahead: Vec3; right: Vec3; up: Vec3; focal: Float; }
+type Lenses = Rows<Lens>;
+/// The view ray of pixel `q` (in a picture `extent` large).
+fn ray(l: Lens, q: Vec2, extent: Vec2) -> Vec3 {
+    let uv = ((q + 0.5) / extent - 0.5) * vec2(extent.x / extent.y, -1.0);
+    return normalize(l.ahead * l.focal + l.right * uv.x + l.up * uv.y);
+}
+
+/// The pixel of a screen `extent` large a world point `p` falls on (xy), and how far from the camera it is (z); behind
+/// the camera, z is negative.
+fn project(l: Lens, p: Vec3, extent: Vec2) -> Vec3 {
+    let d = p - l.eye;
+    let ahead = dot(d, l.ahead);
+    let uv = vec2(dot(d, l.right), dot(d, l.up)) / max(ahead, 0.0001) * l.focal;
+    let px = (uv / vec2(extent.x / extent.y, -1.0) + 0.5) * extent;
+    return vec3(px.x, px.y, if ahead > 0.0 { length(d) } else { -1.0 });
+}
+
+/// A world point `p`'s clip coordinates for the rasterizer (a picture `extent` large; near and far clipping planes `near` and
+/// `far` meters): x, y, depth times w, and w the distance along the lens's facing.
+fn lens_clip(l: Lens, extent: Vec2, p: Vec3, near: Float, far: Float) -> Vec4 {
+    let d = p - l.eye;
+    let ahead = dot(d, l.ahead);
+    let aspect = extent.x / max(extent.y, 1.0);
+    return vec4(dot(d, l.right) * l.focal * 2.0 / aspect, dot(d, l.up) * l.focal * 2.0, (ahead - near) * far / (far - near), ahead);
+}
+
+/// How far along view ray `dir` a depth the rasterizer drew lies, the depth of a point `lens_clip` placed between `near` and
+/// `far`.
+fn lens_distance(l: Lens, dir: Vec3, depth: Float, near: Float, far: Float) -> Float {
+    let ahead = near * far / max(far - depth * (far - near), 0.000001);
+    return ahead / max(dot(dir, l.ahead), 0.000001);
+}
+
+/// A lens orbiting `target` (see `orbit_eye`), up kept up, `focal` long.
+fn lens_orbiting(target: Vec3, yaw: Float, pitch: Float, distance: Float, focal: Float) -> Lens {
+    let eye = orbit_eye(target, yaw, pitch, distance);
+    let ahead = normalize(target - eye);
+    let right = normalize(cross(ahead, vec3(0.0, 1.0, 0.0)));
+    return Lens { eye: eye, ahead: ahead, right: right, up: cross(right, ahead), focal: focal };
+}

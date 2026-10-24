@@ -1,0 +1,34 @@
+// An orbit as it begins (looking at (0, 1, 0) from eight meters, a tenth of a radian up) and as the hand works it:
+// left alone it rests and the lens is its own; D held walks it to the right; R brings it home.
+use "../kernels/";
+use "geometry.entpkg";
+use "light.entpkg";
+
+node home: controls.orbit_start@1 { domain = 1; }
+node depths0: Grid<Float> { domain = vec2(1, 1); }
+node land: Grid<Float> { domain = vec2(2, 2); value = -100.0; }
+node frame: kernel {
+    requires { field.write; }
+    output result: Proxies;
+    domain = 1;
+    compute { return Proxy { lo: vec3(-1.0, -1.0, -1.0), cell: 1.0, cells: vec3(2.0, 2.0, 2.0), land_lo: vec2(-1.0, -1.0), land_cell: 1.0, ground: vec3(0.5, 0.5, 0.5) }; }
+}
+node cam: controls.orbit@1 { previous <~ cam.result from home.result; home <- home.result; depths <- depths0.result; land <- land.result; frame <- frame.result; domain = 1; }
+node rests: controls.orbit_rests@1 { cam <- cam.result; domain = 1; }
+node lens: controls.orbit_lens@1 { cam <- cam.result; domain = 1; }
+/// How far the orbit's lens is from the same pose said by `lens_orbiting`.
+node same: kernel {
+    requires { field.read; field.write; }
+    input cam: Orbits <- cam.result;
+    input lens: Lenses <- lens.result;
+    output result: Rows<Float>;
+    domain = 1;
+    compute {
+        let c = at(cam, 0);
+        let a = at(lens, 0);
+        let b = lens_orbiting(c.target, c.yaw, c.pitch, c.dist, 1.3);
+        return length(a.eye - b.eye) + length(a.ahead - b.ahead) + length(a.up - b.up);
+    }
+}
+
+output result <- lens.result;

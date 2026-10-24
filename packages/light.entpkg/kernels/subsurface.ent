@@ -6,6 +6,7 @@
 // (`light.subsurface_blur`, across then down, Jimenez's separable way),
 // each color by its own reach, only over the same surface; and laid back in
 // place of the unspread share (`light.subsurface_apply`).
+use "geometry.entpkg";
 use "camera.ent";
 
 

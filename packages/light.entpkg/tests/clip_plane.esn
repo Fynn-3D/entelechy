@@ -1,6 +1,7 @@
 // A world plane through a lens's clip space (`light.lens_clip_plane`): for points round a tilted lens, the plane's
 // distance read from each point's clip coordinates (`lens_clip`) and the world's own. `level` moves the plane.
 use "../kernels/";
+use "geometry.entpkg";
 
 param level: Float = 0.5;
 

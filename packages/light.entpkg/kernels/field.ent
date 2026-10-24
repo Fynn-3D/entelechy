@@ -7,6 +7,7 @@
 // cut into bins across the ground, each bin's things listed (`light.field_bin_counts`, `graphs/field.esn`'s runs,
 // `light.field_bin_fill`), and each cell of the block the nearest of its bin's things (`light.field_bake`). What it gives is
 // a proxy as the contract has it (`Volume<Vec4>`: distance and albedo, and its `Proxies` frame), so every renderer traces it.
+use "geometry.entpkg";
 use "camera.ent";
 
 /// A placed thing: where its origin stands, its turn about the vertical, its size, and the shape (atlas slot) it is; a shape

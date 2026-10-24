@@ -1,3 +1,4 @@
+use "geometry.entpkg";
 // The stand by the light renderers and through every step of a finish:
 // contact shadows laid into the sun's visibility; lit as it is and as a
 // painting has it, and half way between them; clay; haze, ink and a
