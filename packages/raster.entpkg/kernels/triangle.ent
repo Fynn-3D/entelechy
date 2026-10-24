@@ -47,6 +47,24 @@ fn edge(a: Vec2, b: Vec2, p: Vec2) -> Float {
     return (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
 }
 
+// Where `q` lies in the triangle `a`, `b`, `c` (in pixels), its area
+// (doubled, signed) `area`: the three corners' weights, each below 0
+// outside the edge across from its corner.
+fn face_weights(a: Vec2, b: Vec2, c: Vec2, q: Vec2, area: Float) -> Vec3 {
+    let wa = ((b.x - q.x) * (c.y - q.y) - (b.y - q.y) * (c.x - q.x)) / area;
+    let wb = ((c.x - q.x) * (a.y - q.y) - (c.y - q.y) * (a.x - q.x)) / area;
+    return vec3(wa, wb, 1.0 - wa - wb);
+}
+
+// Tile `k` of the pixels a box (`lo` x, y to `hi` z, w) covers, cut in
+// tiles `tile` pixels a side, row by row: its first pixel (x, y) and how
+// many pixels across and down it holds (z, w).
+fn box_tile(box: Vec4, tile: Int, k: Int) -> IVec4 {
+    let w = max(int(ceil((box.z - box.x) / float(tile))), 1);
+    let o = ivec2(int(box.x) + (k % w) * tile, int(box.y) + (k / w) * tile);
+    return ivec4(o.x, o.y, min(int(box.z) - o.x, tile), min(int(box.w) - o.y, tile));
+}
+
 // A corner in pixels: `x` and `y` from the top left, `z` after the
 // divide, and `1 / w`.
 fn screen(v: Corner, size: Vec2) -> Vec4 {

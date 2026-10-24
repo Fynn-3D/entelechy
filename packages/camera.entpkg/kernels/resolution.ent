@@ -17,6 +17,32 @@ kernel camera.dynamic_start@1 {
     compute { return Dynamic { fraction: most, missing: 0.0, good: 0, ceiling: most, hold: 0, last: -1.0, mean: 0.0, before: 0.0 }; }
 }
 
+/// Dynamic resolution a frame on from `p`, the clock at `now`, as `camera.dynamic` steps it.
+fn dynamic_step(p: Dynamic, now: Float, fps: Float, least: Float, most: Float) -> Dynamic {
+    if fps <= 0.0 { return Dynamic { fraction: most, missing: 0.0, good: 0, ceiling: most, hold: 0, last: now, mean: 0.0, before: 0.0 }; }
+    let target = 1.0 / fps;
+    let dt = now - p.last;
+    // A frame of loading or a pause tells nothing about the drawing.
+    let told = p.last >= 0.0 && dt > 0.0 && dt < 0.1;
+    let missed = told && dt > target * 1.3;
+    let missing = if told { mix(p.missing, if missed { 1.0 } else { 0.0 }, 1.0 / 12.0) } else { p.missing };
+    let mean = if !told { p.mean } else if p.mean <= 0.0 { dt } else { mix(p.mean, dt, 0.05) };
+    let hold = max(p.hold - 1, 0);
+    let ceiling = min(most, p.ceiling + 0.0004);
+    let good = if mean > 0.0 && mean < target * 1.04 { p.good + 1 } else { 0 };
+    let kept = Dynamic { fraction: clamp(p.fraction, least, most), missing: missing, good: good, ceiling: ceiling, hold: hold, last: now, mean: mean, before: p.before };
+    if hold == 0 && mean > target * 1.1 && missing > 0.15 {
+        // The last cut made it no faster: the time is not in the pixels.
+        if p.before > 0.0 && mean > p.before * 0.95 { return Dynamic { ..kept, hold: 240 }; }
+        let cut = clamp(sqrt(target / mean), 0.75, 0.95);
+        return Dynamic { ..kept, fraction: max(least, p.fraction * cut), missing: 0.0, good: 0, ceiling: max(least, p.fraction - 0.03), hold: 60, before: mean };
+    }
+    if hold == 0 && good >= 90 && p.fraction < ceiling {
+        return Dynamic { ..kept, fraction: min(ceiling, p.fraction + 0.05), good: 0, hold: 60, before: 0.0 };
+    }
+    return kept;
+}
+
 /// Dynamic resolution: how long each frame took by the session's clock (in the Player, the true interval between frames), against
 /// what `fps` wants. Where the mean frame time is a tenth slow and frames were often slow lately, the fraction falls by how slow (pixels go
 /// with the square of the fraction), and that fraction is kept as one it cannot rise past; where the mean is near the one wanted, after a second and a half
@@ -31,32 +57,7 @@ kernel camera.dynamic@1 {
     param least: Float = 0.5;
     param most: Float = 1.0;
     output result: Dynamics;
-    compute {
-        let p = at(previous, 0);
-        let now = time();
-        if fps <= 0.0 { return Dynamic { fraction: most, missing: 0.0, good: 0, ceiling: most, hold: 0, last: now, mean: 0.0, before: 0.0 }; }
-        let target = 1.0 / fps;
-        let dt = now - p.last;
-        // A frame of loading or a pause tells nothing about the drawing.
-        let told = p.last >= 0.0 && dt > 0.0 && dt < 0.1;
-        let missed = told && dt > target * 1.3;
-        let missing = if told { mix(p.missing, if missed { 1.0 } else { 0.0 }, 1.0 / 12.0) } else { p.missing };
-        let mean = if !told { p.mean } else if p.mean <= 0.0 { dt } else { mix(p.mean, dt, 0.05) };
-        let hold = max(p.hold - 1, 0);
-        let ceiling = min(most, p.ceiling + 0.0004);
-        let good = if mean > 0.0 && mean < target * 1.04 { p.good + 1 } else { 0 };
-        let kept = Dynamic { fraction: clamp(p.fraction, least, most), missing: missing, good: good, ceiling: ceiling, hold: hold, last: now, mean: mean, before: p.before };
-        if hold == 0 && mean > target * 1.1 && missing > 0.15 {
-            // The last cut made it no faster: the time is not in the pixels.
-            if p.before > 0.0 && mean > p.before * 0.95 { return Dynamic { ..kept, hold: 240 }; }
-            let cut = clamp(sqrt(target / mean), 0.75, 0.95);
-            return Dynamic { ..kept, fraction: max(least, p.fraction * cut), missing: 0.0, good: 0, ceiling: max(least, p.fraction - 0.03), hold: 60, before: mean };
-        }
-        if hold == 0 && good >= 90 && p.fraction < ceiling {
-            return Dynamic { ..kept, fraction: min(ceiling, p.fraction + 0.05), good: 0, hold: 60, before: 0.0 };
-        }
-        return kept;
-    }
+    compute { return dynamic_step(at(previous, 0), time(), fps, least, most); }
 }
 
 /// The inner resolution (two elements, width and height, pixels): the window shrunk to a ceiling of `pixels` pixels

@@ -21,3 +21,7 @@ expect sunlit.result[20560] = 0.477 0 0 0 0.1
 # The wax ball's light under its skin, lit, and spread.
 expect lit.scatter[39200] = 0.7502 0.4932 0.2436 0 0.01
 expect skin.down.result[39200] = 0.7247 0.4883 0.2432 0 0.01
+
+# The air keeps all the light before it begins, and 1/e one air length on.
+expect kept.result[0] = 1 0.00001
+expect kept.result[1] = 0.36788 0.0001

@@ -66,5 +66,9 @@ fn sky_radiance(dir: Vec3, s: SkyLook, seen: Bool) -> Vec3 {
 fn aerial(color: Vec3, dir: Vec3, d: Float, s: SkyLook) -> Vec3 {
     let c = max(dot(dir, s.sun), 0.0);
     let haze = s.horizon * 0.7 + s.sun_color * pow(c, 8.0) * 0.08;
-    return mix(color, haze, 1.0 - exp(-max(d - s.air_from, 0.0) * s.air));
+    return mix(color, haze, 1.0 - air_kept(d, s));
 }
+
+/// How much of the light `d` meters off reaches the eye through the air (`aerial` lays the rest of the way over in haze):
+/// light added there shows times this.
+fn air_kept(d: Float, s: SkyLook) -> Float { return exp(-max(d - s.air_from, 0.0) * s.air); }

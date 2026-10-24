@@ -13,3 +13,8 @@ expect probe.result[2] = 0 0 -1 0 0.00001
 expect probe.result[3] = 100 50 5 0 0.0001
 expect probe.result[4] = 126 37 5.123475 0 0.0001
 expect probe.result[5] = 0 0 0 5.123475 0.0001
+
+# Looking from (0, 1, 5) at the target is the orbiting lens; a tangent,
+# straight up or slanting, is square to its normal and one long.
+expect probe.result[6] = 0 0 1.3 0 0.00001
+expect probe.result[7] = 0 1 0 1 0.00001

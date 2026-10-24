@@ -42,3 +42,7 @@ fn hash1(x: Int, seed: Int) -> Float { return unit_of(hash_int(x, seed)); }
 fn hash2(c: Vec2, seed: Int) -> Float { let i = int(floor(c)); return unit_of(hash_int2(i.x, i.y, seed)); }
 
 fn hash3(c: Vec3, seed: Int) -> Float { let i = int(floor(c)); return unit_of(hash_int3(i.x, i.y, i.z, seed)); }
+
+/// A pixel's own number, 0 to 1, for pixel `q` (interleaved gradient noise): neighbors differ as much as they can, so a
+/// step or an angle shifted by it per pixel breaks banding into a fine grain a blur takes away.
+fn interleaved_noise(q: Vec2) -> Float { return fract(52.9829189 * fract(dot(q, vec2(0.06711056, 0.00583715)))); }

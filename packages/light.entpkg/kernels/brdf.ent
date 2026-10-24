@@ -1,3 +1,4 @@
+use "geometry.entpkg";
 // Standard PBR: metalness and roughness, as glTF's, Unreal's and Blender's Principled BSDF
 // agree. Scenes, materials and renderers all use this one: the light a lamp gives (`lit_by`), the light
 // round about gives (`ambient_by`), GGX sampling for path tracing (`ggx_sample`,
@@ -161,7 +162,7 @@ fn ggx_sample(n: Vec3, v: Vec3, rough: Float, u1: Float, u2: Float) -> Vec3 {
     let cos_t = sqrt((1.0 - u1) / (1.0 + (a * a - 1.0) * u1));
     let sin_t = sqrt(max(1.0 - cos_t * cos_t, 0.0));
     let phi = 6.2831853 * u2;
-    let t = normalize(if abs(n.y) < 0.9 { cross(n, vec3(0.0, 1.0, 0.0)) } else { cross(n, vec3(1.0, 0.0, 0.0)) });
+    let t = tangent_of(n);
     let b = cross(n, t);
     let h = normalize(t * (sin_t * cos(phi)) + b * (sin_t * sin(phi)) + n * cos_t);
     return reflect(vec3(0.0, 0.0, 0.0) - v, h);
@@ -194,7 +195,7 @@ fn pbr_of(paint: Vec4, extra: Vec4, layers: Vec4, more: Vec4) -> Pbr {
 fn cosine_dir(n: Vec3, u1: Float, u2: Float) -> Vec3 {
     let r = sqrt(u1);
     let a = 6.2831853 * u2;
-    let t = normalize(if abs(n.y) < 0.9 { cross(n, vec3(0.0, 1.0, 0.0)) } else { cross(n, vec3(1.0, 0.0, 0.0)) });
+    let t = tangent_of(n);
     let b = cross(n, t);
     return normalize(t * (r * cos(a)) + b * (r * sin(a)) + n * sqrt(max(1.0 - u1, 0.0)));
 }

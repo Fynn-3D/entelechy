@@ -8,6 +8,7 @@
 // holding it, softened as far as the sun's disc makes a shadow soft from its
 // caster (percentage-closer soft shadows), cascades blended at their edges;
 // the fog reads the cascades for its shafts (`sun_view_lit`).
+use "random.entpkg";
 use "geometry.entpkg";
 use "surface.entpkg";
 use "sky.ent";
@@ -180,7 +181,7 @@ kernel light.sun_shadow@1 {
         if e.x <= 0.0 || s.w > no_hit() * 0.5 { return e; }
         let l = at(lens, 0);
         let p = l.eye + ray(l, coord(), size(surface)) * s.w;
-        let turn = fract(52.982919 * fract(dot(coord(), vec2(0.06711056, 0.00583715)))) * 6.2831853;
+        let turn = interleaved_noise(coord()) * 6.2831853;
         let n_views = count(views);
         // The finest cascade holding the pixel, and how near its edge.
         let pick = loop 4 with r = vec2(-1.0, 0.0) until r.x >= 0.0 || index() >= n_views {

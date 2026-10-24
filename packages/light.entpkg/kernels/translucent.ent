@@ -113,6 +113,63 @@ kernel light.translucent_blank@1 {
 /// A layer's light, what it lets through (rgb) and coverage, and its glow, at `p` facing `n` seen from `v` along `dir`.
 struct TranslucentShade { light: Vec3; through: Vec3; cover: Float; glow: Vec3; }
 
+/// Glass at `p` facing `n`, seen along `dir` through pixel `q` (its center) of the lens `l`: the light it gives back (what
+/// it mirrors, from the picture `picture` where the march finds it on screen, else from the radiance cache and the sky) and
+/// that of the sun and the lamps on it, and the color it lets through. `smudge` dulls the mirror by a noise.
+fn translucent_glass_shade(look: TranslucentLook, p: Vec3, n: Vec3, dir: Vec3, q: Vec2, smudge: Float, l: Lens, picture: Image,
+        surface: Grid<Vec4>, s: SkyLook, cache: Volume<Vec4>, rv: ProxyLevels, proxy: Volume<Vec4>, pv: ProxyLevels, land: Grid<Float>,
+        lamps: Lamps, lamp_looks: LampLooks) -> TranslucentShade {
+    let ext = size(surface);
+    let v = vec3(0.0, 0.0, 0.0) - dir;
+    let r = reflect(dir, n);
+    let ro = saturate(look.rough + smudge * 0.2 * saturate(fbm3(p * vec3(6.0, 9.0, 6.0), 4, 51) * 0.7 + 0.3));
+    let jitter = interleaved_noise(q);
+    let hit = screen_march(surface, l, size(surface), p + n * 0.01, r, 12.0, 24, 0.5, jitter);
+    let edge = if hit.z >= 0.0 { saturate(min(min(hit.x, ext.x - 1.0 - hit.x), min(hit.y, ext.y - 1.0 - hit.y)) / (ext.y * 0.08)) } else { 0.0 };
+    let met = radiance_cone(cache, rv, proxy, pv, land, p + n * 0.03, r, 0.02 + ro, proxy_levels_cell(pv, p), 14.0, 12);
+    let far_seen = met.xyz + sky_radiance(r, s, false) * (1.0 - saturate(met.w));
+    let screen_seen = if hit.z >= 0.0 { at(picture, hit.xy).xyz } else { vec3(0.0, 0.0, 0.0) };
+    let env = mix(far_seen, screen_seen, edge * (1.0 - ro));
+    let f = schlick(vec3(0.04, 0.04, 0.04), dot(n, v)).x;
+    let m = Pbr { albedo: vec3(0.0, 0.0, 0.0), rough: ro, metal: 0.0, glow: vec3(0.0, 0.0, 0.0), ior: 1.5, clearcoat: 0.0, coat_rough: 0.05, sheen: 0.0,
+        subsurface: 0.0, anisotropy: 0.0, transmission: 0.0 };
+    let lit = loop 16 with h = glossy_by(m, n, v, normalize(s.sun), s.sun_color) until index() >= min(count(lamps), 16) {
+        let lamp = at(lamps, index());
+        h + glossy_by(m, n, v, normalize(lamp.at - p), lamp_irradiance(lamp, p, lamp_looks))
+    };
+    let through = look.color * (1.0 - f);
+    return TranslucentShade { light: env * f + lit, through: through, cover: 1.0 - (through.x + through.y + through.z) / 3.0, glow: vec3(0.0, 0.0, 0.0) };
+}
+
+/// Smoke at `p` facing `n`, seen along `dir`: its color lit by the sun it sees through the proxies, scattered toward the eye,
+/// and by the lamps, over the sky's ambient; it covers as much as its look says.
+fn translucent_smoke_shade(look: TranslucentLook, p: Vec3, n: Vec3, dir: Vec3, s: SkyLook, proxy: Volume<Vec4>, land: Grid<Float>,
+        frame: Proxies, lamps: Lamps, lamp_looks: LampLooks) -> TranslucentShade {
+    let sun_seen = rough_shadow(proxy, land, frame, p, normalize(s.sun), proxy_cell_at(frame, p), 300.0, 16);
+    let lamped = lamps_on_rough(lamps, lamp_looks, look.color, p, n, proxy, land, frame, 8);
+    let lit = look.color * (s.sun_color * (sun_seen * air_phase(dot(dir, normalize(s.sun)), 0.4) * 4.0) + s.ambient) + lamped;
+    return TranslucentShade { light: lit * look.cover, through: vec3(1.0, 1.0, 1.0) * (1.0 - look.cover), cover: look.cover, glow: vec3(0.0, 0.0, 0.0) };
+}
+
+/// A glow: light of its own, hiding nothing.
+fn translucent_glow_shade(look: TranslucentLook) -> TranslucentShade {
+    return TranslucentShade { light: vec3(0.0, 0.0, 0.0), through: vec3(1.0, 1.0, 1.0), cover: 0.0, glow: look.color * (look.glow * look.cover) };
+}
+
+/// What a layer adds to its pixel's twelve slots, `dist` from the eye through `l`, facing `n`: its light weighed by how
+/// near it is, the weight (its coverage, so weighed), the logarithm of what it lets through, its glow, and how it bends
+/// what lies behind, each in fixed point.
+fn translucent_sums(shade: TranslucentShade, look: TranslucentLook, n: Vec3, l: Lens, dist: Float) -> [Int; 12] {
+    let wz = translucent_weight(dist);
+    let weight = shade.cover * wz;
+    let lw = shade.light * wz * translucent_scale();
+    let logs = log(max(shade.through, vec3(0.0001, 0.0001, 0.0001))) * translucent_log_scale();
+    let gw = shade.glow * translucent_scale();
+    let bend = vec2(dot(n, l.right), 0.0 - dot(n, l.up)) * (look.bend * weight * translucent_scale());
+    return [int(lw.x), int(lw.y), int(lw.z), int(weight * translucent_scale()), int(logs.x), int(logs.y), int(logs.z),
+        int(gw.x), int(gw.y), int(gw.z), int(bend.x), int(bend.y)];
+}
+
 /// Each tile of each face (`domain = value(entries)`, the faces' tiles laid end to end by `ends`): every pixel of it whose
 /// middle the face covers, nearer than the G-buffer's surface, shaded by its look (`looks`, the face's in `face_looks`, a
 /// face of the mesh's `faces` before the cut) and summed into the pixel's slots.
@@ -152,11 +209,9 @@ kernel light.translucent_splat@1 {
         let t = translucent_face(vertices, at(faces, fi), ext);
         if t.area == 0.0 { return none; }
         let look = at(looks, clamp(at(face_looks, raster_clipped_row(fi)), 0, count(looks) - 1));
-        let tile = translucent_tile();
-        let w = max(int(ceil((t.box.z - t.box.x) / float(tile))), 1);
-        let k = e - (at(ends, fi) - at(tiles, fi));
-        let o = ivec2(int(t.box.x) + (k % w) * tile, int(t.box.y) + (k / w) * tile);
-        let span = ivec2(min(int(t.box.z) - o.x, tile), min(int(t.box.w) - o.y, tile));
+        let tb = box_tile(t.box, translucent_tile(), e - (at(ends, fi) - at(tiles, fi)));
+        let o = tb.xy;
+        let span = tb.zw;
         let l = at(lens, 0);
         let s = at(sky, 0);
         let pv = proxy_levels(frame);
@@ -167,14 +222,12 @@ kernel light.translucent_splat@1 {
         let done = loop max(span.x * span.y, 0) with z = 0 {
             let g = o + ivec2(index() % span.x, index() / span.x);
             let q = vec2(float(g.x), float(g.y)) + 0.5;
-            let w0 = ((t.b.x - q.x) * (t.c.y - q.y) - (t.b.y - q.y) * (t.c.x - q.x)) / t.area;
-            let w1 = ((t.c.x - q.x) * (t.a.y - q.y) - (t.c.y - q.y) * (t.a.x - q.x)) / t.area;
-            let w2 = 1.0 - w0 - w1;
-            if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 { z } else {
+            let wb = face_weights(t.a.xy, t.b.xy, t.c.xy, q, t.area);
+            if wb.x < 0.0 || wb.y < 0.0 || wb.z < 0.0 { z } else {
                 // Perspective-correct: by 1/w.
-                let iw = w0 * t.a.z + w1 * t.b.z + w2 * t.c.z;
+                let iw = wb.x * t.a.z + wb.y * t.b.z + wb.z * t.c.z;
                 let ahead = 1.0 / max(iw, 0.000001);
-                let pc = vec3(w0 * t.a.z, w1 * t.b.z, w2 * t.c.z) * ahead;
+                let pc = vec3(wb.x * t.a.z, wb.y * t.b.z, wb.z * t.c.z) * ahead;
                 let dir = ray(l, vec2(float(g.x), float(g.y)), ext);
                 let dist = ahead / max(dot(dir, l.ahead), 0.000001);
                 let opaque = at(surface, vec2(float(g.x), float(g.y))).w;
@@ -182,54 +235,15 @@ kernel light.translucent_splat@1 {
                     let nn = normalize(va.normal * pc.x + vb.normal * pc.y + vc.normal * pc.z);
                     let n = if dot(nn, dir) > 0.0 { nn * -1.0 } else { nn };
                     let p = l.eye + dir * dist;
-                    let v = vec3(0.0, 0.0, 0.0) - dir;
                     let shade = if look.kind == translucent_glass() {
-                        let r = reflect(dir, n);
-                        let ro = saturate(look.rough + smudge * 0.2 * saturate(fbm3(p * vec3(6.0, 9.0, 6.0), 4, 51) * 0.7 + 0.3));
-                        let jitter = fract(52.9829189 * fract(dot(q, vec2(0.06711056, 0.00583715))));
-                        let hit = screen_march(surface, l, size(surface), p + n * 0.01, r, 12.0, 24, 0.5, jitter);
-                        let edge = if hit.z >= 0.0 { saturate(min(min(hit.x, ext.x - 1.0 - hit.x), min(hit.y, ext.y - 1.0 - hit.y)) / (ext.y * 0.08)) } else { 0.0 };
-                        let met = radiance_cone(cache, rv, proxy, pv, land, p + n * 0.03, r, 0.02 + ro, proxy_levels_cell(pv, p), 14.0, 12);
-                        let far_seen = met.xyz + sky_radiance(r, s, false) * (1.0 - saturate(met.w));
-                        let screen_seen = if hit.z >= 0.0 { at(picture, hit.xy).xyz } else { vec3(0.0, 0.0, 0.0) };
-                        let env = mix(far_seen, screen_seen, edge * (1.0 - ro));
-                        let f = schlick(vec3(0.04, 0.04, 0.04), dot(n, v)).x;
-                        let m = Pbr { albedo: vec3(0.0, 0.0, 0.0), rough: ro, metal: 0.0, glow: vec3(0.0, 0.0, 0.0), ior: 1.5, clearcoat: 0.0, coat_rough: 0.05, sheen: 0.0,
-                            subsurface: 0.0, anisotropy: 0.0, transmission: 0.0 };
-                        let lit = loop 16 with h = glossy_by(m, n, v, normalize(s.sun), s.sun_color) until index() >= min(count(lamps), 16) {
-                            let lamp = at(lamps, index());
-                            h + glossy_by(m, n, v, normalize(lamp.at - p), lamp_irradiance(lamp, p, lamp_looks))
-                        };
-                        let through = look.color * (1.0 - f);
-                        TranslucentShade { light: env * f + lit, through: through, cover: 1.0 - (through.x + through.y + through.z) / 3.0, glow: vec3(0.0, 0.0, 0.0) }
+                        translucent_glass_shade(look, p, n, dir, q, smudge, l, picture, surface, s, cache, rv, proxy, pv, land, lamps, lamp_looks)
                     } else if look.kind == translucent_smoke() {
-                        let sun_seen = rough_shadow(proxy, land, frame, p, normalize(s.sun), proxy_cell_at(frame, p), 300.0, 16);
-                        let lamped = lamps_on_rough(lamps, lamp_looks, look.color, p, n, proxy, land, frame, 8);
-                        let lit = look.color * (s.sun_color * (sun_seen * air_phase(dot(dir, normalize(s.sun)), 0.4) * 4.0) + s.ambient) + lamped;
-                        TranslucentShade { light: lit * look.cover, through: vec3(1.0, 1.0, 1.0) * (1.0 - look.cover), cover: look.cover, glow: vec3(0.0, 0.0, 0.0) }
-                    } else {
-                        TranslucentShade { light: vec3(0.0, 0.0, 0.0), through: vec3(1.0, 1.0, 1.0), cover: 0.0, glow: look.color * (look.glow * look.cover) }
-                    };
-                    let wz = translucent_weight(dist);
-                    let weight = shade.cover * wz;
+                        translucent_smoke_shade(look, p, n, dir, s, proxy, land, frame, lamps, lamp_looks)
+                    } else { translucent_glow_shade(look) };
+                    let sums = translucent_sums(shade, look, n, l, dist);
                     let base = ivec2(g.x * translucent_slots(), g.y);
-                    let lw = shade.light * wz * translucent_scale();
-                    let logs = log(max(shade.through, vec3(0.0001, 0.0001, 0.0001))) * translucent_log_scale();
-                    let gw = shade.glow * translucent_scale();
-                    let bend = vec2(dot(n, l.right), 0.0 - dot(n, l.up)) * (look.bend * weight * translucent_scale());
-                    emit(Sum { slot: base, add: int(lw.x) });
-                    emit(Sum { slot: base + ivec2(1, 0), add: int(lw.y) });
-                    emit(Sum { slot: base + ivec2(2, 0), add: int(lw.z) });
-                    emit(Sum { slot: base + ivec2(3, 0), add: int(weight * translucent_scale()) });
-                    emit(Sum { slot: base + ivec2(4, 0), add: int(logs.x) });
-                    emit(Sum { slot: base + ivec2(5, 0), add: int(logs.y) });
-                    emit(Sum { slot: base + ivec2(6, 0), add: int(logs.z) });
-                    emit(Sum { slot: base + ivec2(7, 0), add: int(gw.x) });
-                    emit(Sum { slot: base + ivec2(8, 0), add: int(gw.y) });
-                    emit(Sum { slot: base + ivec2(9, 0), add: int(gw.z) });
-                    emit(Sum { slot: base + ivec2(10, 0), add: int(bend.x) });
-                    emit(Sum { slot: base + ivec2(11, 0), add: int(bend.y) });
-                    z + 1
+                    let put = loop 12 with u = 0 { emit(Sum { slot: base + ivec2(index(), 0), add: sums[index()] }); u };
+                    z + 1 + put
                 }
             }
         };

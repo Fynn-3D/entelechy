@@ -116,6 +116,30 @@ fn air_radiance(a: AirShell, spread: Image, eye_h: Float, dir: Vec3, sun: Vec3) 
 /// A view walk through the air: the light gathered, and the optical depth so far.
 struct AirWalk { light: Vec3; depth: Vec3; }
 
+/// The air along `dir` from `p`, `far` meters walked in twenty steps: the light of the sun (the way `sun`) it scatters once
+/// toward `p` (`second`), the share of all light it scatters (`share`), and its optical depth (`depth`).
+fn air_walk(a: AirShell, p: Vec3, dir: Vec3, far: Float, sun: Vec3) -> AirSpread {
+    let dt = far / 20.0;
+    return loop 20 with st = AirSpread { second: vec3(0.0, 0.0, 0.0), share: vec3(0.0, 0.0, 0.0), depth: vec3(0.0, 0.0, 0.0) } {
+        let x = p + dir * ((float(index()) + 0.5) * dt);
+        let hx = length(x) - a.ground;
+        let mie = air_mie(hx, a.haze);
+        let scatter = air_rayleigh(hx) + vec3(mie.x, mie.x, mie.x);
+        let ext = air_extinction(hx, a.haze);
+        // What the air from the point to here lets through, to the middle of this step.
+        let mid = st.depth + ext * (dt * 0.5);
+        let through = vec3(exp(0.0 - mid.x), exp(0.0 - mid.y), exp(0.0 - mid.z));
+        AirSpread { second: st.second + scatter * through * air_transmittance(a, x, sun) * (dt / 12.566371),
+            share: st.share + scatter * through * dt, depth: st.depth + ext * dt }
+    };
+}
+
+/// The sunlight the ground at `gp` gives back toward a point through air of optical depth `depth`, the ground `albedo` bright.
+fn air_ground_light(a: AirShell, gp: Vec3, depth: Vec3, sun: Vec3, albedo: Float) -> Vec3 {
+    let through = vec3(exp(0.0 - depth.x), exp(0.0 - depth.y), exp(0.0 - depth.z));
+    return air_transmittance(a, gp, sun) * through * (albedo * max(dot(normalize(gp), sun), 0.0) / 3.14159265);
+}
+
 /// Light scattered more than once (Hillaire's): for a point at a height
 /// (down, from the ground to the air's top) and the sun at an angle (across,
 /// its cosine from overhead, -1 to 1), the light scattered twice reaching
@@ -145,24 +169,8 @@ kernel light.atmosphere_spread@1 {
             let dir = vec3(r * cos(phi), z, r * sin(phi));
             let ground_t = air_meet_ground(p, dir, a.ground);
             let far = if ground_t > 0.0 { ground_t } else { air_leave(p, dir, a.top) };
-            let dt = far / 20.0;
-            let walked = loop 20 with st = AirSpread { second: vec3(0.0, 0.0, 0.0), share: vec3(0.0, 0.0, 0.0), depth: vec3(0.0, 0.0, 0.0) } {
-                let x = p + dir * ((float(index()) + 0.5) * dt);
-                let hx = length(x) - a.ground;
-                let mie = air_mie(hx, a.haze);
-                let scatter = air_rayleigh(hx) + vec3(mie.x, mie.x, mie.x);
-                let ext = air_extinction(hx, a.haze);
-                // What the air from the point to here lets through, to the middle of this step.
-                let mid = st.depth + ext * (dt * 0.5);
-                let through = vec3(exp(0.0 - mid.x), exp(0.0 - mid.y), exp(0.0 - mid.z));
-                AirSpread { second: st.second + scatter * through * air_transmittance(a, x, sun) * (dt / 12.566371),
-                    share: st.share + scatter * through * dt, depth: st.depth + ext * dt }
-            };
-            let ground = if ground_t > 0.0 {
-                let gp = p + dir * ground_t;
-                let through = vec3(exp(0.0 - walked.depth.x), exp(0.0 - walked.depth.y), exp(0.0 - walked.depth.z));
-                air_transmittance(a, gp, sun) * through * (ground_albedo * max(dot(normalize(gp), sun), 0.0) / 3.14159265)
-            } else { vec3(0.0, 0.0, 0.0) };
+            let walked = air_walk(a, p, dir, far, sun);
+            let ground = if ground_t > 0.0 { air_ground_light(a, p + dir * ground_t, walked.depth, sun, ground_albedo) } else { vec3(0.0, 0.0, 0.0) };
             AirSpread { second: acc.second + walked.second + ground, share: acc.share + walked.share, depth: acc.depth }
         };
         let second = sum.second / 64.0;

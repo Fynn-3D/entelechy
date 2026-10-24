@@ -44,5 +44,12 @@ node sums: kernel {
         return vec4(fbm2(p.xy, 4, 7), fbm3(p, 4, 7), ridged3(p, 4, 7), value2(p.xz, 3) + hash1(element(), 2) + hash2(p.xy * 3.0, 4) + hash3(p * 2.0, 5));
     }
 }
+// A pixel's own number (interleaved gradient noise) at three pixels.
+node own: kernel {
+    requires { field.write; }
+    output result: Rows<Float>;
+    domain = 3;
+    compute { return interleaved_noise([vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(3.0, 7.0)][element()]); }
+}
 
 output result <- probe.result;

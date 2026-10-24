@@ -276,11 +276,9 @@ kernel light.lamp_map_draw@1 {
         if e >= at(ends, count(ends) - 1) { return none; }
         let pair = owner(e, ends);
         let d = lamp_map_face(pair, count(slot_lamps), chosen, insts, points, faces, clusters, lamps, slot_lamps, res, skip);
-        let t = lamp_map_tile();
-        let w = max(int(ceil((d.box.z - d.box.x) / float(t))), 1);
-        let k = e - (at(ends, pair) - at(tiles, pair));
-        let o = ivec2(int(d.box.x) + (k % w) * t, int(d.box.y) + (k / w) * t);
-        let span = ivec2(min(int(d.box.z) - o.x, t), min(int(d.box.w) - o.y, t));
+        let tb = box_tile(d.box, lamp_map_tile(), e - (at(ends, pair) - at(tiles, pair)));
+        let o = tb.xy;
+        let span = tb.zw;
         let x = lamp_cube_axes(d.face);
         let r = float(res);
         let done = loop max(span.x * span.y, 0) with z = 0 {

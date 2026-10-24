@@ -104,7 +104,7 @@ kernel light.raytraced@1 {
         // A rough surface's reflection is the light all round it.
         let reflected = mix(mirrored, hemisphere(n, s, look) * open, sqrt(m.rough));
         let mirror = Mirror { knee: glint_knee, most: mirror_most, closed: mirror_closed };
-        let seen = aerial(raytraced_reflection(m, n, v, reflected, open, mirror), dir, su.w, s) - aerial(vec3(0.0, 0.0, 0.0), dir, su.w, s);
+        let seen = raytraced_reflection(m, n, v, reflected, open, mirror) * air_kept(su.w, s);
         return { result: vec4(aerial(raytraced_shade(m, n, v, s, ex.x, reflected, open, look, mirror), dir, su.w, s), 1.0), reflection: vec4(seen.x, seen.y, seen.z, 0.0) };
     }
 }

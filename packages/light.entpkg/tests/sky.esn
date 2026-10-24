@@ -23,5 +23,13 @@ node skied: light.atmosphere_sky@1 { hdr <- skin.hdr; surface <- stand.surface; 
 node exposed: graph "image.entpkg/graphs/exposure.esn" { hdr <- skied.result; highlights = 0.7; shadows = 0.9; }
 node glow: graph "image.entpkg/graphs/bloom.esn" { hdr <- exposed.hdr; }
 node view: image.tonemap@3 { hdr <- exposed.hdr; bloom <- glow.bloom; exposure = 1.0; domain = window(); }
+// How much of the light the air lets through: all before the air begins, and a whole e-fold one air length past it.
+node kept: kernel {
+    requires { field.read; field.write; }
+    input s: SkyLooks <- air.sky;
+    output result: Rows<Float>;
+    domain = 2;
+    compute { let k = at(s, 0); return air_kept(if element() == 0 { 10.0 } else { k.air_from + 1.0 / k.air }, k); }
+}
 
 output result <- view.result;

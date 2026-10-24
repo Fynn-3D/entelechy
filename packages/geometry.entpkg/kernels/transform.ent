@@ -35,3 +35,9 @@ fn rotate_y(a: Float) -> Mat3 {
 fn rotate_z(a: Float) -> Mat3 {
     return mat3(vec3(cos(a), sin(a), 0.0), vec3(-sin(a), cos(a), 0.0), vec3(0.0, 0.0, 1.0));
 }
+
+/// A direction square to `n` (a unit vector): across the world's up, or across x where `n` is nearly up or down. With
+/// `cross(n, tangent_of(n))` it makes a frame round `n`.
+fn tangent_of(n: Vec3) -> Vec3 {
+    return normalize(if abs(n.y) < 0.9 { cross(n, vec3(0.0, 1.0, 0.0)) } else { cross(n, vec3(1.0, 0.0, 0.0)) });
+}

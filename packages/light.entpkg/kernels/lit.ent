@@ -61,6 +61,15 @@ fn seen_along(r: Vec3, s: SkyLook, look: Surround) -> Vec3 {
     return if r.y > 0.0 { sky_radiance(r, s, false) } else { hemisphere(vec3(0.0, -1.0, 0.0), s, look) };
 }
 
+/// How open to the sky a surface at `p` (just off it) facing `n` is, as the proxies say. Deep inside the coarse shape (a
+/// leaf in its crown, more than half a cell in) the coarse scene says nothing of the sky seen through it, and it is
+/// `inside_sky`; a translucent thing (a leaf) lets the sky through itself, so those round it shut out no more than its
+/// `subsurface` share of `inside_sky` lets in.
+fn lit_open(proxy: Volume<Vec4>, frame: Proxies, p: Vec3, n: Vec3, open: Openness, inside_sky: Float, subsurface: Float) -> Float {
+    let deep = saturate((0.0 - proxy_at(proxy, frame, p, 1.0).x) / proxy_cell_at(frame, p) - 0.5);
+    return max(mix(proxy_open(proxy, frame, p, n, open), inside_sky, deep), inside_sky * subsurface);
+}
+
 /// Lit (see the file's head): an HDR picture: the sky drawn where it is; things lit by standard real-time lighting,
 /// `painting`'s amount of the way to a painting's (`shaded_as`; 0 none, 1 all), plus a smooth surface's reflection, plus emission,
 /// with air laid over distance. `bounce` 0 leaves out the light from all round, the sun's direct light and emission alone.
@@ -113,14 +122,8 @@ kernel light.lit@1 {
         let v = vec3(0.0, 0.0, 0.0) - dir;
         let on = if bounce != 0 { 1.0 } else { 0.0 };
         let look = Surround { ground: ground, ground_light: ground_light, sky_light: sky_light };
-        // Deep inside the coarse shape (a leaf in its crown, more than half a
-        // cell in) the coarse scene says nothing of the sky seen through it:
-        // the baked occlusion does.
-        let at_p = l.eye + dir * su.w + n * 0.05;
-        let deep = saturate((0.0 - proxy_at(proxy, frame, at_p, 1.0).x) / proxy_cell_at(frame, at_p) - 0.5);
-        // A translucent thing (a leaf) lets the sky through itself: those round it
-        // shut out no more than its subsurface share of `inside_sky` lets in.
-        let open = max(mix(proxy_open(proxy, frame, at_p, n, Openness { reach: open_reach, strength: open_strength, least: open_least }), inside_sky, deep), inside_sky * m.subsurface);
+        let open = lit_open(proxy, frame, l.eye + dir * su.w + n * 0.05, n, Openness { reach: open_reach, strength: open_strength, least: open_least },
+            inside_sky, m.subsurface);
         let ao = if bounce != 0 { baked_occlusion(ex) * open } else { 0.0 };
         let e = hemisphere(n, s, look) * ao;
         let spec_light = mix(seen_along(reflect(dir, n), s, look), e, sqrt(m.rough)) * ao * on;
@@ -132,7 +135,7 @@ kernel light.lit@1 {
         let under = scattered_as(m, n, v, s, ex.x, e, pt.amount);
         let kept = aerial(all - under, dir, su.w, s);
         let mirrored = mirrored_as(m, n, v, spec_light, pt.amount);
-        let seen = aerial(mirrored, dir, su.w, s) - aerial(vec3(0.0, 0.0, 0.0), dir, su.w, s);
+        let seen = mirrored * air_kept(su.w, s);
         return { result: vec4(shaded, 1.0), scatter: vec4(shaded.x - kept.x, shaded.y - kept.y, shaded.z - kept.z, 0.0), reflection: vec4(seen.x, seen.y, seen.z, 0.0) };
     }
 }

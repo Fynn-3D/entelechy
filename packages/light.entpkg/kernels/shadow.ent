@@ -9,6 +9,7 @@
 // the map is drawn where it is read and once. A texel holds the height toward the sun of the nearest thing over it, as a
 // positive float's bits so the greatest is the nearest. `light.shadow_sun` shades the G-buffer's sun visibility from it,
 // as soft as the sun's disc makes a shadow from its caster. `graphs/shadow.esn` is the whole.
+use "random.entpkg";
 use "geometry.entpkg";
 use "parallel.entpkg";
 use "mesh.entpkg";
@@ -327,6 +328,14 @@ kernel light.shadow_kept@1 {
     }
 }
 
+/// Corner `corner` of a cluster's face of instance `it` (mesh `m`, its points kept as `view` sees them), as level `v` holds
+/// it: its place on the level's lattice (x, y) and its height toward the sun (z).
+fn shadow_corner(v: ShadowLevel, it: FieldInst, m: ClusterMesh, errors: Rows<Float>, points: Rows<MeshPoint>, up: Rows<Int>, corner: Int, cl: Cluster,
+        view: ClusterView, error: Float, reach: Float) -> Vec3 {
+    let p = cluster_placed(it, at(points, cluster_corner_point(m, errors, points, up, corner, cl, view, error, reach)).position);
+    return vec3(shadow_lattice(v, p), dot(p, v.toward));
+}
+
 /// Each drawn cluster's face slots (`domain = max(value(count), 1) * mesh_cluster_faces()`): the face drawn from it on its
 /// level's lattice (`face`; level -1 for none), its corners taken up to the levels drawn where they lie, and how many tiles
 /// of `shadow_tile()` texels its box spans within the level's window (`tiles`).
@@ -358,12 +367,9 @@ kernel light.shadow_faces@1 {
         let view = cluster_flat_view(it, v.toward, v.texel);
         let f = at(faces, cl.first + e % mesh_cluster_faces());
         if !cluster_face_owned(m, errors, points, f, cl, view, error) { return { face: none, tiles: 0 }; }
-        let pa = cluster_placed(it, at(points, cluster_corner_point(m, errors, points, up, f.a, cl, view, error, reach)).position);
-        let pb = cluster_placed(it, at(points, cluster_corner_point(m, errors, points, up, f.b, cl, view, error, reach)).position);
-        let pc = cluster_placed(it, at(points, cluster_corner_point(m, errors, points, up, f.c, cl, view, error, reach)).position);
-        let a = vec3(shadow_lattice(v, pa), dot(pa, v.toward));
-        let b = vec3(shadow_lattice(v, pb), dot(pb, v.toward));
-        let c = vec3(shadow_lattice(v, pc), dot(pc, v.toward));
+        let a = shadow_corner(v, it, m, errors, points, up, f.a, cl, view, error, reach);
+        let b = shadow_corner(v, it, m, errors, points, up, f.b, cl, view, error, reach);
+        let c = shadow_corner(v, it, m, errors, points, up, f.c, cl, view, error, reach);
         let lo = max(floor(min(min(a.xy, b.xy), c.xy)), float(v.lo));
         let hi = min(ceil(max(max(a.xy, b.xy), c.xy)), float(v.lo) + float(v.size));
         if hi.x <= lo.x || hi.y <= lo.y { return { face: none, tiles: 0 }; }
@@ -406,18 +412,33 @@ kernel light.shadow_draw@1 {
         let last = loop span.x * span.y with z = 0 {
             let g = o + ivec2(index() % span.x, index() / span.x);
             let q = float(g) + 0.5;
-            let wa = ((f.b.x - q.x) * (f.c.y - q.y) - (f.b.y - q.y) * (f.c.x - q.x)) / w;
-            let wb = ((f.c.x - q.x) * (f.a.y - q.y) - (f.c.y - q.y) * (f.a.x - q.x)) / w;
-            let wc = 1.0 - wa - wb;
-            let inside = wa >= -0.0001 && wb >= -0.0001 && wc >= -0.0001;
+            let fw = face_weights(f.a.xy, f.b.xy, f.c.xy, q, w);
+            let inside = fw.x >= -0.0001 && fw.y >= -0.0001 && fw.z >= -0.0001;
             let page = ivec2(int(floor(float(g.x) / float(v.page))), int(floor(float(g.y) / float(v.page))));
             if inside && at(dirty, shadow_slot(v, f.level, page)) > 0 {
-                emit(Texel { place: shadow_kept_at(v, f.level, g), height: bits(wa * f.a.z + wb * f.b.z + wc * f.c.z + shadow_lift()) });
+                emit(Texel { place: shadow_kept_at(v, f.level, g), height: bits(fw.x * f.a.z + fw.y * f.b.z + fw.z * f.c.z + shadow_lift()) });
             }
             z + 1
         };
         return Texel { place: ivec2(-1, -1), height: last * 0 };
     }
+}
+
+/// The finest level holding point `p` whose texel is at least `footprint` (the last one holding it, whatever its texel),
+/// whose page is held under its sun (`held`), within `reach` texels and one of its edge; -1 none.
+fn shadow_level_held(levels: ShadowLevels, held: Rows<IVec4>, p: Vec3, footprint: Float, reach: Float) -> Int {
+    let last = count(levels) - 1;
+    return loop count(levels) with k = -1 {
+        let j = index();
+        let v = at(levels, j);
+        let g = shadow_lattice(v, p);
+        let wide = v.texel >= footprint || j == last;
+        let pw = ivec2(int(floor(g.x / float(v.page))), int(floor(g.y / float(v.page))));
+        let h = at(held, shadow_slot(v, j, pw));
+        let ok = wide && shadow_inside(v, g, reach + 1.0) && h.x == pw.x && h.y == pw.y && h.z == v.sun && h.w == 1;
+        if k >= 0 { break k; }
+        if ok { j } else { k }
+    };
 }
 
 /// The height toward the sun of the nearest thing over texel `g` of level `i` (`shadow_lift()` below nothing).
@@ -482,22 +503,9 @@ kernel light.shadow_sun@1 {
         let p = l.eye + ray(l, coord(), size(surface)) * s.w;
         let footprint = s.w / (l.focal * size(surface).y);
         if dot(s.xyz, at(levels, 0).toward) <= 0.0 && sample(layers).w <= 0.0 { return e; }
-        // The finest level holding the point whose texel is as large as the pixel (the last one holding it, whatever its
-        // texel), whose page is held under this sun.
-        let last = count(levels) - 1;
-        let i = loop count(levels) with k = -1 {
-            let j = index();
-            let v = at(levels, j);
-            let g = shadow_lattice(v, p);
-            let wide = v.texel >= footprint * sharpness || j == last;
-            let pw = ivec2(int(floor(g.x / float(v.page))), int(floor(g.y / float(v.page))));
-            let h = at(held, shadow_slot(v, j, pw));
-            let ok = wide && shadow_inside(v, g, reach + 1.0) && h.x == pw.x && h.y == pw.y && h.z == v.sun && h.w == 1;
-            if k >= 0 { break k; }
-            if ok { j } else { k }
-        };
+        let i = shadow_level_held(levels, held, p, footprint * sharpness, reach);
         if i < 0 { return e; }
-        let turn = fract(52.982919 * fract(dot(coord(), vec2(0.06711056, 0.00583715)))) * 6.2831853;
+        let turn = interleaved_noise(coord()) * 6.2831853;
         return vec4(e.x * shadow_soft(map, levels, i, p, s.xyz, sun_size, turn, reach), e.y, e.z, e.w);
     }
 }

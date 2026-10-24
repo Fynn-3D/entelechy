@@ -9,6 +9,25 @@
 use "geometry.entpkg";
 use "surface.entpkg";
 
+/// The light under the skin (`scatter`) at pixel `q`, `d` along the ray, carried along `axis` (0 across, 1 down): eleven
+/// samples over three times the widest color's `width` (pixels, by color), each color by its own bell, from pixels of a
+/// subsurface surface (`layers` w) about as far as it, within four times `meters`.
+fn subsurface_spread(scatter: Image, surface: Grid<Vec4>, layers: Grid<Vec4>, q: Vec2, d: Float, meters: Float, width: Vec3, axis: Int) -> Vec3 {
+    let ext = size(surface);
+    let step_dir = if axis == 0 { vec2(1.0, 0.0) } else { vec2(0.0, 1.0) };
+    // Samples spread over three times the widest color's width.
+    let spacing = width.x * 3.0 / 5.0;
+    let sum = loop 11 with acc = SubsurfaceSum { light: vec3(0.0, 0.0, 0.0), weight: vec3(0.0, 0.0, 0.0) } {
+        let k = float(index()) - 5.0;
+        let off = k * spacing;
+        let qq = clamp(q + step_dir * off, vec2(0.0, 0.0), ext - vec2(1.0, 1.0));
+        let other = at(surface, qq);
+        let same = at(layers, qq).w > 0.0 && abs(other.w - d) < meters * 4.0 + d * 0.002;
+        let w = if same || k == 0.0 { vec3(exp(0.0 - 0.5 * off * off / (width.x * width.x)), exp(0.0 - 0.5 * off * off / (width.y * width.y)), exp(0.0 - 0.5 * off * off / (width.z * width.z))) } else { vec3(0.0, 0.0, 0.0) };
+        SubsurfaceSum { light: acc.light + at(scatter, qq).xyz * w, weight: acc.weight + w }
+    };
+    return sum.light / max(sum.weight, vec3(0.0001, 0.0001, 0.0001));
+}
 
 /// The scattering share `scatter` spread along `axis` (0 across, 1 down):
 /// eleven samples, each color weighted by a bell as wide as its reach (the
@@ -39,19 +58,7 @@ kernel light.subsurface_blur@1 {
         let pixels = meters * l.focal * ext.y / max(s.w, 0.001);
         if pixels < 0.5 { return own; }
         let width = colors * pixels;
-        let step_dir = if axis == 0 { vec2(1.0, 0.0) } else { vec2(0.0, 1.0) };
-        // Samples spread over three times the widest color's width.
-        let spacing = width.x * 3.0 / 5.0;
-        let sum = loop 11 with acc = SubsurfaceSum { light: vec3(0.0, 0.0, 0.0), weight: vec3(0.0, 0.0, 0.0) } {
-            let k = float(index()) - 5.0;
-            let off = k * spacing;
-            let qq = clamp(q + step_dir * off, vec2(0.0, 0.0), ext - vec2(1.0, 1.0));
-            let other = at(surface, qq);
-            let same = at(layers, qq).w > 0.0 && abs(other.w - s.w) < meters * 4.0 + s.w * 0.002;
-            let w = if same || k == 0.0 { vec3(exp(0.0 - 0.5 * off * off / (width.x * width.x)), exp(0.0 - 0.5 * off * off / (width.y * width.y)), exp(0.0 - 0.5 * off * off / (width.z * width.z))) } else { vec3(0.0, 0.0, 0.0) };
-            SubsurfaceSum { light: acc.light + at(scatter, qq).xyz * w, weight: acc.weight + w }
-        };
-        let spread = sum.light / max(sum.weight, vec3(0.0001, 0.0001, 0.0001));
+        let spread = subsurface_spread(scatter, surface, layers, q, s.w, meters, width, axis);
         return vec4(spread.x, spread.y, spread.z, own.w);
     }
 }

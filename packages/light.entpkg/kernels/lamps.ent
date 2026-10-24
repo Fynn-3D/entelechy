@@ -7,6 +7,7 @@
 // (`light.lamps_light`), each shadowed through the proxies and, close by,
 // on the screen. Probe GI takes that light into what it shows
 // and bounces; another renderer has it added after (`light.lamps_shade`).
+use "random.entpkg";
 use "geometry.entpkg";
 use "brdf.ent";
 use "surface.entpkg";
@@ -395,7 +396,7 @@ fn lamps_at(lamps: Lamps, lamp_looks: LampLooks, bits: IVec4, m: Pbr, p: Vec3, n
                 // A sphere light: the highlight widened by the bulb as seen from here (Karis).
                 let widened = sqrt(saturate(pbr_alpha(m.rough) + lamp.size / (2.0 * max(dist, 0.01))));
                 let shade = if lamp.shadow == 0 { 1.0 } else {
-                    let turn = fract(52.982919 * fract(dot(q, vec2(0.06711056, 0.00583715))));
+                    let turn = interleaved_noise(q);
                     let slot = lamp_map_slot(lamps, maps, k);
                     let far = if slot >= 0 { lamp_map_seen(maps, slot, lamp, p, n, turn) } else { lamp_shadow(lamp, proxy, land, frame, p, n, turn) };
                     let near = if dist < contact { 1.0 - contact_shadow(surface, l, size(surface), p, n, to, t, 8, 0.5, reach) } else { 1.0 };

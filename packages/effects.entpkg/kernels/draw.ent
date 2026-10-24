@@ -2,6 +2,7 @@
 // pixel is (1 + the distance; 0 for the sky), as `glow.ent` draws:
 // each pixel's ray looks only at the layers whose sphere it passes
 // before the picture, and gathers their light.
+use "random.entpkg";
 use "geometry.entpkg";
 use "effect.ent";
 use "form.ent";
@@ -72,7 +73,7 @@ kernel effects.light@2 {
         let e = at(eye, 0);
         let scene = if seen.w > 0.0 { seen.w - 1.0 } else { 100000.0 };
         // A pixel's own shift of the first step (interleaved gradient noise).
-        let jitter = 0.5 + (fract(52.9829189 * fract(0.06711056 * px.x + 0.00583715 * px.y)) - 0.5) * 0.5;
+        let jitter = 0.5 + (interleaved_noise(px) - 0.5) * 0.5;
         return { result: lives_light(lives, elements, e.eye, ray(e, middle - 0.5, full), scene, jitter), depth: scene };
     }
 }

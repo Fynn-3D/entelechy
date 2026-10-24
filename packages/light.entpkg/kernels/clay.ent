@@ -61,6 +61,23 @@ fn clay_tone(c: Vec3) -> Vec3 {
     return pow(clamp(toned, 0.0, 1.0), vec3(0.4545, 0.4545, 0.4545));
 }
 
+/// How the surface bends at pixel `q` of a picture `size` large, seen through `l`: the normal across the view turning apart
+/// (a ridge, above 0) or together (a valley, below) between the neighbors either side.
+fn clay_bend(surface: Grid<Vec4>, q: Vec2, size: Vec2, l: Lens) -> Float {
+    let nr = at(surface, min(q + vec2(1.0, 0.0), size - vec2(1.0, 1.0))).xyz;
+    let nl = at(surface, max(q - vec2(1.0, 0.0), vec2(0.0, 0.0))).xyz;
+    let nd = at(surface, min(q + vec2(0.0, 1.0), size - vec2(1.0, 1.0))).xyz;
+    let nu = at(surface, max(q - vec2(0.0, 1.0), vec2(0.0, 0.0))).xyz;
+    return (dot(nr, l.right) - dot(nl, l.right)) + (dot(nu, l.up) - dot(nd, l.up));
+}
+
+/// How much pixel `q`, `d` along the ray, is an edge: a neighbor much farther (0 to 1); against the sky too with `sky_outline`.
+fn clay_edge(surface: Grid<Vec4>, q: Vec2, d: Float, sky_outline: Bool) -> Float {
+    let far0 = max(max(surface_depth_at(surface, q + vec2(1.0, 0.0)), surface_depth_at(surface, q - vec2(1.0, 0.0))), max(surface_depth_at(surface, q + vec2(0.0, 1.0)), surface_depth_at(surface, q - vec2(0.0, 1.0))));
+    let far = if !sky_outline && far0 >= no_hit() * 0.5 { d } else { far0 };
+    return smoothstep(0.04, 0.12, (min(far, d * 4.0) - d) / max(d, 0.001));
+}
+
 /// How far along the ray the G-buffer's pixel `q` is (`no_hit()` off it).
 fn surface_depth_at(surface: Grid<Vec4>, q: Vec2) -> Float {
     let n = size(surface);
@@ -128,19 +145,8 @@ kernel light.clay@1 {
         let studio = StudioLight { key: key, fill: fill, rim: rim, ground: studio_ground, sky: studio_sky };
         let base = if light == 1 { m.albedo } else { studio_light(m, n, v, l.right, l.up, l.ahead, studio) * mix(1.0, baked_occlusion(at(extra, q)), occlusion) };
         let lit = base + m.glow;
-        // Cavity: the normal across the view turning apart (a ridge) or
-        // together (a valley) between the neighbors either side.
-        let nr = at(surface, min(q + vec2(1.0, 0.0), size - vec2(1.0, 1.0))).xyz;
-        let nl = at(surface, max(q - vec2(1.0, 0.0), vec2(0.0, 0.0))).xyz;
-        let nd = at(surface, min(q + vec2(0.0, 1.0), size - vec2(1.0, 1.0))).xyz;
-        let nu = at(surface, max(q - vec2(0.0, 1.0), vec2(0.0, 0.0))).xyz;
-        let bend = (dot(nr, l.right) - dot(nl, l.right)) + (dot(nu, l.up) - dot(nd, l.up));
-        let curved = lit * clamp(1.0 + bend * 0.6 * cavity, 0.45, 1.6);
-        // Outline: a neighbor much farther or nearer.
-        let far0 = max(max(surface_depth_at(surface, q + vec2(1.0, 0.0)), surface_depth_at(surface, q - vec2(1.0, 0.0))), max(surface_depth_at(surface, q + vec2(0.0, 1.0)), surface_depth_at(surface, q - vec2(0.0, 1.0))));
-        let far = if !sky_outline && far0 >= no_hit() * 0.5 { s.w } else { far0 };
-        let jump = smoothstep(0.04, 0.12, (min(far, s.w * 4.0) - s.w) / max(s.w, 0.001));
-        let shown = mix(clay_tone(curved), outline_color, jump * outline * 0.85);
+        let curved = lit * clamp(1.0 + clay_bend(surface, q, size, l) * 0.6 * cavity, 0.45, 1.6);
+        let shown = mix(clay_tone(curved), outline_color, clay_edge(surface, q, s.w, sky_outline) * outline * 0.85);
         return vec4(shown.x, shown.y, shown.z, 1.0);
     }
 }

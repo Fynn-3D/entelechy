@@ -29,3 +29,8 @@ expect pick.result[7] = 4
 # The fractal sums, ridged noise, and the float hashes.
 expect sums.result[0] = -0.0057 -0.2633 0.4452 0.3387 0.001
 expect sums.result[1] = 0.1356 -0.2391 0.6071 0.8043 0.001
+
+# A pixel's own number: 0 at the corner, and spread far apart next to it.
+expect own.result[0] = 0
+expect own.result[1] = 0.55571 0.0001
+expect own.result[2] = 0.83202 0.0001

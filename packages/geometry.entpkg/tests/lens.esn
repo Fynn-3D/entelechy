@@ -1,13 +1,14 @@
 // A lens orbiting (0, 1, 0) from five meters along +z, 1.3 long, over a picture 200 by 100: it stands at (0, 1, 5)
 // facing -z, right +x, up +y; the middle pixel's ray is its facing; the target lands at the middle five meters off; a
 // point off to the side lands where the lens's focal length puts it, and the ray back through that pixel leads to it;
-// clipped between half a meter and fifty, its depth leads back to its distance.
+// clipped between half a meter and fifty, its depth leads back to its distance. A lens looking from where it stands at the
+// target is the same lens; a tangent stands square to its normal, one long.
 use "../kernels/";
 
 node probe: kernel {
     requires { field.write; }
     output result: Rows<Vec4>;
-    domain = 6;
+    domain = 8;
     compute {
         let l = lens_orbiting(vec3(0.0, 1.0, 0.0), 0.0, 0.0, 5.0, 1.3);
         let ext = vec2(200.0, 100.0);
@@ -21,7 +22,14 @@ node probe: kernel {
             else if k == 2 { vec4(ray(l, vec2(99.5, 49.5), ext), 0.0) }
             else if k == 3 { vec4(target, 0.0) }
             else if k == 4 { vec4(side, 0.0) }
-            else { vec4(back - normalize(vec3(1.0, 0.5, -5.0)), lens_distance(l, back, c.z / c.w, 0.5, 50.0)) };
+            else if k == 5 { vec4(back - normalize(vec3(1.0, 0.5, -5.0)), lens_distance(l, back, c.z / c.w, 0.5, 50.0)) }
+            else if k == 6 {
+                let lo = lens_looking(vec3(0.0, 1.0, 5.0), vec3(0.0, 1.0, 0.0), 1.3);
+                vec4(length(lo.ahead - l.ahead) + length(lo.right - l.right) + length(lo.up - l.up), length(lo.eye - l.eye), lo.focal, 0.0)
+            } else {
+                let n = normalize(vec3(1.0, 1.0, 1.0));
+                vec4(dot(tangent_of(vec3(0.0, 1.0, 0.0)), vec3(0.0, 1.0, 0.0)), length(tangent_of(vec3(0.0, 1.0, 0.0))), dot(tangent_of(n), n), length(tangent_of(n)))
+            };
     }
 }
 
