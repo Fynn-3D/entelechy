@@ -14,6 +14,56 @@ grade, film, outlines and a watercolor's tone.
 use "render.entpkg";
 ```
 
+## Effects as words
+
+The package gives words, and a scene composes the effect it wants. Each
+effect is first a function a scene's own kernel calls on a pixel (light,
+air, a look); a kernel is a thin pass over those words where the effect
+must read its neighbors, the last frame or another size; a look is data
+(`Grade`, `Film`, `Dof`, `Haze`, `Toon`, `Surround`) a scene's kernel
+makes, blends and changes as it goes; any pass is kept to part of a
+picture by `image.masked`; and a graph preset is a recipe built from the
+same words. [`tests/words.esn`](tests/words.esn) holds a scene's kernels
+saying a pass by its words to the pass's own picture.
+
+| Effect | Words a kernel calls | Passes | Data |
+| --- | --- | --- | --- |
+| Surfaces and their light | `pbr_of`, `lit_by`, `glossy_by`, `ambient_by`, `env_reflectance`, `scattered_share`, `baked_occlusion` | a renderer: `render.lit`, `render.raytraced`, `graphs/probe_gi.esn`, `graphs/path_tracer.esn`, `graphs/clay.esn` | `Pbr` |
+| Light from all round | `hemisphere`, `proxy_open`, `seen_along`, `sky_radiance` | | `Surround`, `Openness` |
+| A painted look, as far as asked | `shaded_as`, `toon`, `painted_gloss`, `scattered_as`, `mirrored_as`, `toon_default` | `painted` of a renderer | `Toon` |
+| The sun's shadows | `sun_pcss`, `contact_shadow`, `rough_shadow`, `cloud_shadow` | `render.sun_shadow`, `render.contact`, `render.clouds_shadow` | `ContactReach` |
+| Lamps | `point_lamp`, `spot_lamp`, `panel_lamp`, `lamps_on_surface`, `lamp_shadow` | `graphs/lamps.esn`, `graphs/lamp_maps.esn` | `Lamps`, `LampLooks` |
+| Air and sky | `hazed`, `aerial`, `sky_radiance`, `air_radiance`, `air_phase` | `render.haze`, `graphs/atmosphere.esn` | `Haze`, `SkyLook` |
+| Fog and clouds | `fog_density`, `clouds_seen`, `cloud_density` | `graphs/volumetrics.esn`, `render.clouds_march` | `CloudDeck` |
+| Reflections | `screen_march`, `reflection_edge`, `raytraced_reflection` | `render.reflections`, `render.mirror_mix` | |
+| Glass and translucency | `transmitted`, `frosted`, `behind_radiance` | `graphs/translucent.esn`, `graphs/subsurface.esn` | |
+| Gloss under a pixel | `widened_rough` | `render.specular_aa` | |
+| Motion and focus | `motion_blurred`, `motion_way`, `dof_blurred`, `blur_of` | `render.motion_blur`, `render.focus`, `render.focused` | `Dof` |
+| Glow, exposure, tone | `bloom_at`, `tone_sharpened`, `tone_curve`, `tone_warmth` | `graphs/bloom.esn`, `graphs/exposure.esn`, `graphs/tonemap.esn` | |
+| A grade | `grade_color`, `grade_mix`, `grade_balance`, `grade_none` | `render.grade` | `Grade` |
+| Film | `film_split`, `film_curve`, `film_halation`, `film_bars`, `film_preset`; `image.entpkg`'s `fringed`, `vignetted`, `film_grain` | `render.film` | `Film` |
+| Ink and a watercolor's tone | `outline_near`, `outline_crease`, `watercolor` | `render.outline`, `render.watercolor` | `Watercolor` |
+| Edges smoothed | `fxaa` | `render.fxaa`, `graphs/taa.esn`, `graphs/super_resolution.esn` | |
+| Part of a picture | | `image.entpkg`'s `image.masked` | |
+
+A story's look is the plainest example: a scene's kernel makes the film it
+wants each frame and the pass lays it on.
+
+```text
+node story: kernel {
+    requires { field.write; time.read; }
+    output result: Rows<Film>;
+    domain = 1;
+    compute {
+        let a = film_preset(1);
+        let b = film_preset(3);
+        let t = smoothstep(20.0, 26.0, time());
+        return Film { ..a, grade: grade_mix(a.grade, b.grade, t), curve: mix(a.curve, b.curve, t) };
+    }
+}
+node filmed: render.film@1 { image <- shown.result; film <- story.result; }
+```
+
 ## Kernels
 
 - `kernels/antialias.ent` — Antialiasing within one frame (FXAA).
@@ -277,7 +327,7 @@ use "render.entpkg";
 
 `tests/` holds scenes and their replays, run on every backend:
 `bounce.replay`, `clip_plane.replay`, `cluster.replay`, `decals.replay`, `field.replay`, `finish.replay`, `fog_volumes.replay`, `lamp_looks.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `proxy_detail.replay`, `proxy_stream.replay`, `reflection.replay`, `shadow.replay`,
-`sky.replay`, `stream.replay`, `temporal.replay`, `translucent.replay`.
+`sky.replay`, `stream.replay`, `temporal.replay`, `translucent.replay`, `words.replay`.
 Every Kernel of the package is reached by one of them.
 
 Used by the [material_balls](../../examples/material_balls/README.md) example.
