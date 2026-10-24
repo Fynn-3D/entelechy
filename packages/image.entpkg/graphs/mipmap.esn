@@ -14,7 +14,8 @@ param side: Int = 256;
 param levels: Int = 7;
 
 node first: image.mip_first@1 { source <- source; side = side; domain = vec2(side, 2 * side); }
-node one: image.mip_one@1 { domain = 1; }
+// The level being written, from one.
+node one: Rows<Int> { domain = 1; value = 1; }
 
 node halved: graph "mipmap_level.esn" {
     times = levels;

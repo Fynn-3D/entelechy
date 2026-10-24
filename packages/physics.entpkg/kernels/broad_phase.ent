@@ -74,15 +74,6 @@ kernel physics.cells@1 {
     }
 }
 
-/// A zero for each cell.
-kernel physics.no_cells@1 {
-    requires { field.read; field.write; }
-    param columns: Int = 64;
-    param rows: Int = 64;
-    output result: Rows<Int>;
-    compute { return 0; }
-}
-
 /// How many entries each cell holds.
 kernel physics.cell_counts@1 {
     requires { field.read; field.write; }

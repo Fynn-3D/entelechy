@@ -55,10 +55,10 @@ use "image.entpkg";
   balance, saturation, contrast, gain, a drain toward one color), blended
   from one look to another (`grade_color`, `grade_mix`,
   `grade_balance`). Kernels: `image.grade_start@1`, `image.grade@3`.
-- `kernels/histogram.ent` — Histograms. Kernels: `image.zeros@1`,
-  `image.histogram@1`, `image.cumulate@1`, `image.equalize@1`.
+- `kernels/histogram.ent` — Histograms. Kernels: `image.histogram@1`,
+  `image.cumulate@1`, `image.equalize@1`.
 - `kernels/mipmap.ent` — A mip strip. Kernels: `image.mip_first@1`,
-  `image.mip_one@1`, `image.mip_next@1`, `image.mip_halve@1`.
+  `image.mip_next@1`, `image.mip_halve@1`.
 - `kernels/pixel_art.ent` — Pixel effects. Kernels: `image.pixelate@1`,
   `image.palette@2`, `image.ramp@1`, `image.dither@1`,
   `image.outline@1`, `image.shadow@1`.

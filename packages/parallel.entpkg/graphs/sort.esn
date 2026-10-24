@@ -17,7 +17,8 @@ require some_bits: bits >= 1;
 require key_bits: bits <= 31;
 
 node start: parallel.sort_identity@1 { keys <- keys; }
-node zero: parallel.sort_first_bit@1 { domain = 1; }
+// The bit a pass works on, riding beside the permutation, from zero.
+node zero: Rows<Int> { domain = 1; }
 node slots: parallel.sort_blank@1 { keys <- keys; }
 
 node sorted: graph "sort_pass.esn" {

@@ -12,13 +12,6 @@ fn bin_of(c: Vec3, bins: Int) -> Int {
     return min(int(lightness(c) * float(bins)), bins - 1);
 }
 
-/// Empty bins (`domain` how many).
-kernel image.zeros@1 {
-    requires { field.write; }
-    output result: Rows<Int>;
-    compute { return 0; }
-}
-
 /// How many pixels of the source fall in each bin.
 kernel image.histogram@1 {
     requires { field.read; field.write; }

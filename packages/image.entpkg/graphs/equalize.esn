@@ -8,7 +8,7 @@ input source: Image;
 param bins: Int = 256;
 param amount: Float = 1.0;
 
-node empty: image.zeros@1 { domain = bins; }
+node empty: Rows<Int> { domain = bins; }
 node counts: image.histogram@1 { source <- source; bins <- empty.result; }
 node ranks: image.cumulate@1 { counts <- counts.result; }
 node even: image.equalize@1 { source <- source; cumulative <- ranks.result; amount = amount; }

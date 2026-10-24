@@ -57,7 +57,7 @@ node cells: physics.cells@1 {
     columns = columns;
 }
 node order: graph "parallel.entpkg/graphs/sort.esn" { keys <- cells.result; bits = bits; }
-node no_cells: physics.no_cells@1 { columns = columns; rows = rows; domain = columns * rows; }
+node no_cells: Rows<Int> { domain = columns * rows; }
 node cell_counts: physics.cell_counts@1 { keys <- cells.result; zeros <- no_cells.result; }
 node cell_ends: parallel.runs_ends@1 { counts <- cell_counts.result; }
 node no_entries: physics.no_entries@1 { order <- order.result; }

@@ -64,13 +64,6 @@ kernel image.mip_first@1 {
     }
 }
 
-/// The level being written, which starts at one.
-kernel image.mip_one@1 {
-    requires { field.write; }
-    output result: Rows<Int>;
-    compute { return 1; }
-}
-
 kernel image.mip_next@1 {
     requires { field.read; field.write; }
     input previous: Rows<Int>;

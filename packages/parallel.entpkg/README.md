@@ -25,8 +25,8 @@ use "parallel.entpkg";
   `parallel.runs_entries@1`, `parallel.runs_slots@1`.
 - `kernels/sort.ent` — A permutation that puts a row of integer keys in
   order. Kernels: `parallel.sort_identity@1`, `parallel.sort_blank@1`,
-  `parallel.sort_first_bit@1`, `parallel.sort_next_bit@1`,
-  `parallel.sort_zeros@1`, `parallel.sort_place@1`.
+  `parallel.sort_next_bit@1`, `parallel.sort_zeros@1`,
+  `parallel.sort_place@1`.
 
 ## Graph presets
 

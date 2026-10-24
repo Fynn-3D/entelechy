@@ -15,9 +15,9 @@ use "physics.entpkg";
 - `kernels/body.ent` — Rigid bodies in the plane.
 - `kernels/broad_phase.ent` — Finding pairs. Kernels:
   `physics.bounds@1`, `physics.spans@1`, `physics.owners@1`,
-  `physics.cells@1`, `physics.no_cells@1`, `physics.cell_counts@1`,
-  `physics.places@1`, `physics.no_entries@1`, `physics.pair_counts@1`,
-  `physics.no_pairs@1`, `physics.pairs@1`.
+  `physics.cells@1`, `physics.cell_counts@1`, `physics.places@1`,
+  `physics.no_entries@1`, `physics.pair_counts@1`, `physics.no_pairs@1`,
+  `physics.pairs@1`.
 - `kernels/contact.ent` — Colliding. Kernels: `physics.collide@1`,
   `physics.shared@1`, `physics.no_counts@1`, `physics.no_pushes@1`.
 - `kernels/query.ent` — Asking the world. Kernels: `physics.ray@1`,

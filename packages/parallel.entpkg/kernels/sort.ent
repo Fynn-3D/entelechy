@@ -29,13 +29,6 @@ kernel parallel.sort_blank@1 {
     compute { return 0; }
 }
 
-/// The bit a pass works on. A placement does not know which repetition
-/// it is, so the bit rides beside the permutation as a row of one Int.
-kernel parallel.sort_first_bit@1 {
-    requires { field.write; }
-    output result: Rows<Int>;
-    compute { return 0; }
-}
 
 kernel parallel.sort_next_bit@1 {
     requires { field.read; field.write; }
