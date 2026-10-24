@@ -1,15 +1,35 @@
 // The stand by the light renderers and through every step of a finish:
 // contact shadows laid into the sun's visibility; lit as it is and as a
-// painting has it; clay; haze and stylized edges; lit deep inside the
+// painting has it, and half way between them; clay; haze, ink and a
+// watercolor's tone; lit deep inside the
 // coarse shape; ray traced, and over a polished floor; the extent a
 // renderer draws at; a film's look; depth of field focused on the middle;
 // and the stand's G-buffer merged with itself, nearer surface by surface.
 node stand: graph "stand_scene.esn" { }
 node shadowed: render.contact@1 { surface <- stand.surface; extra <- stand.extra; layers <- stand.layers; lens <- stand.lens; sky <- stand.sky; domain = size(surface); }
 node lit: render.lit@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
-    sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; painted = 0; domain = window(); }
+    sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; domain = window(); }
 node painted: render.lit@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
-    sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; painted = 1; domain = window(); }
+    sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; painted = 1.0; domain = window(); }
+node half: render.lit@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
+    sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; painted = 0.5; domain = window(); }
+/// How far the half painted picture lies from the mean of the two, its most over every pixel (none: the look blends).
+node between: kernel {
+    requires { field.read; field.write; }
+    input a: Image <- lit.result;
+    input b: Image <- painted.result;
+    input h: Image <- half.result;
+    output result: Rows<Float>;
+    domain = 1;
+    compute {
+        let n = size(a);
+        return loop int(n.x * n.y) with most = 0.0 {
+            let q = vec2(float(index() % int(n.x)), float(index() / int(n.x)));
+            let d = at(h, q).xyz - (at(a, q).xyz + at(b, q).xyz) * 0.5;
+            max(most, max(abs(d.x), max(abs(d.y), abs(d.z))))
+        };
+    }
+}
 node clay: graph "../graphs/clay.esn" { lens <- stand.lens; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; }
 // Lit with every point deep inside the coarse shape (as a leaf in its
 // crown): the light all round kept by `inside_sky` and the baked occlusion.
@@ -45,7 +65,7 @@ node traced_floor: render.raytraced@1 { surface <- stand.surface; paint <- polis
 node lit_tuned: render.lit@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
     sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; sky_light = 0.5; domain = window(); }
 node painted_tuned: render.lit@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
-    sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; painted = 1; toon_shade = vec3(1.0, 1.0, 1.0); domain = window(); }
+    sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; painted = 1.0; toon_shade = vec3(1.0, 1.0, 1.0); domain = window(); }
 node traced_tuned: render.raytraced@1 { surface <- stand.surface; paint <- stand.paint; extra <- shadowed.result; layers <- stand.layers; more <- stand.more;
     sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; mirror_most = 0.1; domain = window(); }
 node aired: render.haze@1 { hdr <- lit.result; surface <- stand.surface; lens <- stand.lens; sky <- stand.sky; on = 1; }

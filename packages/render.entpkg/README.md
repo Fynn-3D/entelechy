@@ -102,6 +102,9 @@ use "render.entpkg";
   `render.motion_blur@1`.
 - `kernels/outline.ent` — Outlines from the G-buffer: an edge's near side
   and a crease. Kernels: `render.outline@1`.
+- `kernels/painted.ent` — The painted look: light and shade as a painting
+  has them (`toon`, `Toon`), and a renderer's shading taken toward it as far
+  as a scene asks (`shaded_as`, `scattered_as`, `mirrored_as`).
 - `kernels/path_tracer.ent` — Path tracing (standard PBR, `brdf.ent`).
   Kernels: `render.path_count_start@1`, `render.path_count@1`,
   `render.path_trace@1`, `render.path_blank@1`, `render.path_accum@1`,
@@ -339,11 +342,13 @@ the path tracer add light bounced between things, many passes a frame,
 worth their cost where bounced light shows (indoors, at night, under
 lamps). Clay shows the shapes alone, as a modeler does.
 
-A painted look is not another renderer: shading as a painting has it is a
-renderer's parameter (`painted` of lit, `style` of probe GI, `toon` in
-`kernels/probe_gi.ent`), and its ink (`render.outline`) and a watercolor's
-tone (`render.watercolor`) are passes after it that read only its picture
-and the G-buffer.
+A painted look is not another renderer: a renderer's shading is taken
+toward a painting's as far as its `painted` asks (lit's and probe GI's; 0
+none, 1 all, between them blended, so one look turns into the other as a
+scene goes), by the words of `kernels/painted.ent` (`shaded_as`, `toon`,
+`Toon`) that a scene's own kernel calls too; its ink (`render.outline`) and
+a watercolor's tone (`render.watercolor`) are passes after it that read
+only its picture and the G-buffer.
 
 ### Tuning a look
 
