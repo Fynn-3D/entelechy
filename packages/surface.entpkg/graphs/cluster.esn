@@ -1,0 +1,47 @@
+//! Clusters drawn (`kernels/cluster.ent`): a library built by `mesh.entpkg`'s `graphs/cluster.esn` (`points`, `up`, `faces`,
+//! `clusters`, `meshes`, `errors`), the things placed (`insts`, a thing's `shape` its mesh), each place of each thing at the level whose
+//! cells span no more than `error` pixels, what lies out of the picture or behind the last frame's nearer things (`hzb`,
+//! `surface.cluster_hzb` of the last frame's surface; one cell for none) left out, and things smaller than `smallest` pixels
+//! across. `corners` and `faces`, cut at the near plane (`raster.entpkg`'s `raster.clip_near`, so a face reaching behind
+//! the lens is drawn in front of it), go to the rasterizer over `canvas`; `kept` (each drawn cluster's thing and cluster)
+//! and `cluster_face_of` find a pixel's thing and face.
+use "parallel.entpkg";
+use "mesh.entpkg";
+use "raster.entpkg";
+use "../kernels/";
+
+input points: Rows<MeshPoint>;
+input up: Rows<Int>;
+input faces: Rows<Face>;
+input clusters: Rows<Cluster>;
+input meshes: Rows<ClusterMesh>;
+input errors: Rows<Float>;
+input insts: FieldInsts;
+input lens: Lenses;
+input canvas: Grid<Long>;
+input hzb: Grid<Float>;
+param error: Float = 1.0;
+param smallest: Float = 0.5;
+param reach: Float = 2.0;
+param near: Float = 0.05;
+param far: Float = 20000.0;
+
+node picks: surface.cluster_pick@1 { insts <- insts; meshes <- meshes; lens <- lens; canvas <- canvas; error = error; smallest = smallest; domain = count(insts); }
+node ends: surface.cluster_offsets@1 { picks <- picks.result; }
+node total: parallel.runs_entries@1 { ends <- ends.result; domain = 1; }
+node drawn: surface.cluster_cull@1 { picks <- picks.result; ends <- ends.result; insts <- insts; clusters <- clusters; meshes <- meshes; errors <- errors; lens <- lens; canvas <- canvas; hzb <- hzb;
+    total <- total.result; error = error; domain = value(total); }
+node kept: graph "parallel.entpkg/graphs/compact.esn" { flags <- drawn.result; }
+node rows: surface.cluster_kept@1 { kept <- kept.indices; picks <- picks.result; ends <- ends.result; count <- kept.count; domain = max(value(count), 1); }
+node shown: surface.cluster_shown@1 { kept <- rows.result; insts <- insts; points <- points; faces <- faces; clusters <- clusters; meshes <- meshes; errors <- errors;
+    lens <- lens; canvas <- canvas; error = error; domain = count(kept) * 128; }
+node corners: surface.cluster_corners@1 { kept <- rows.result; shown <- shown.result; insts <- insts; points <- points; up <- up; faces <- faces; clusters <- clusters; meshes <- meshes; errors <- errors;
+    lens <- lens; canvas <- canvas; error = error; reach = reach; near = near; far = far; domain = count(kept) * 384; }
+node tris: surface.cluster_faces@1 { count <- kept.count; domain = max(value(count), 1) * 128; }
+node cut: raster.clip_near@1 { vertices <- corners.result; triangles <- tris.result; domain = count(triangles) * 4; }
+node cut_faces: raster.clip_faces@1 { triangles <- tris.result; domain = count(triangles) * 2; }
+
+output corners <- cut.result;
+output faces <- cut_faces.result;
+output kept <- rows.result;
+output count <- kept.count;

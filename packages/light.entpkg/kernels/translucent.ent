@@ -14,7 +14,7 @@ use "raster.entpkg";
 use "random.entpkg";
 use "parallel.entpkg";
 use "brdf.ent";
-use "camera.ent";
+use "surface.entpkg";
 use "phase.ent";
 use "lamps.ent";
 use "radiance.ent";

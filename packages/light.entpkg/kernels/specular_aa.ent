@@ -4,7 +4,7 @@
 // its normals spread across it (Kaplanyan and Hoffman's), read from the
 // G-buffer's neighbors at its own depth: what a pixel shows is the mean of
 // what its spread of normals reflects. A G-buffer pass, before a renderer.
-use "camera.ent";
+use "surface.entpkg";
 
 /// The roughness `rough` of pixel `q` widened by the spread of the normals of `surface` across it (as a GGX alpha
 /// squared, the spread at most `most`); a neighbor counts only on the same surface (a near depth).

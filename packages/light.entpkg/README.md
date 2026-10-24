@@ -1,18 +1,17 @@
 # light
 
-Light in a world a scene hands over: the contract (a G-buffer, proxies,
-a lens, a sky, lamps), how surfaces take light (physically based, or as
-a painting has it), where light comes from (the sun, the sky the air
-makes, lamps), what shuts it out (shadows, occlusion), how it travels
-(bounced between things, reflected, through glass, fog, clouds and air),
-and the renderers that put it together — lit, ray traced, probe GI, a
-path tracer, clay — with clustered meshes drawn each place at the level
-the screen asks for, a camera, depth of field, motion blur, temporal
-antialiasing and outlines from the G-buffer. What is done to the picture
-after, knowing nothing of the world (a grade, glow, tone, exposure,
-film, scaling), is [`image`](../image.entpkg/README.md)'s.
+Light in a world a scene hands over: how surfaces take light (physically
+based, as a painting has it, or plainly as a game without a renderer
+does), where light comes from (the sun, the sky the air makes, lamps),
+what shuts it out (shadows, occlusion), how it travels (bounced between
+things, reflected, through glass and skin, fog, clouds and air), and the
+renderers that put it together — lit, ray traced, probe GI, a path
+tracer, clay. What is lit is [`surface`](../surface.entpkg/README.md)'s
+(the G-buffer and the proxies); what a camera does to the picture is
+[`camera`](../camera.entpkg/README.md)'s; what is done to the picture
+alone is [`image`](../image.entpkg/README.md)'s.
 
-**Layer:** Graphics. **Uses:** [`geometry`](../geometry.entpkg/README.md), [`image`](../image.entpkg/README.md), [`mesh`](../mesh.entpkg/README.md), [`parallel`](../parallel.entpkg/README.md), [`random`](../random.entpkg/README.md), [`raster`](../raster.entpkg/README.md).
+**Layer:** Graphics. **Uses:** [`camera`](../camera.entpkg/README.md), [`geometry`](../geometry.entpkg/README.md), [`image`](../image.entpkg/README.md), [`mesh`](../mesh.entpkg/README.md), [`parallel`](../parallel.entpkg/README.md), [`random`](../random.entpkg/README.md), [`raster`](../raster.entpkg/README.md), [`surface`](../surface.entpkg/README.md).
 
 ```text
 use "light.entpkg";
@@ -42,10 +41,10 @@ saying a pass by its words to the pass's own picture.
 | Reflections | `screen_march`, `reflection_edge`, `raytraced_reflection` | `light.reflections`, `light.mirror_mix` | |
 | Glass and translucency | `transmitted`, `frosted`, `behind_radiance` | `graphs/translucent.esn`, `graphs/subsurface.esn` | |
 | Gloss under a pixel | `widened_rough` | `light.specular_aa` | |
-| Motion and focus | `motion_blurred`, `motion_way`, `dof_blurred`, `blur_of` | `light.motion_blur`, `light.focus`, `light.focused` | `Dof` |
-| Ink from the G-buffer | `outline_near`, `outline_crease` | `light.outline` | |
+| Motion and focus (`camera`'s) | `motion_blurred`, `motion_way`, `dof_blurred`, `blur_of` | `camera.motion_blur`, `camera.focus`, `camera.focused` | `Dof` |
+| Ink from the G-buffer (`surface`'s) | `outline_near`, `outline_crease` | `surface.outline` | |
 | Plain light, with no renderer | `plain_daylight`, `plain_light`, `flame_flicker`, `light_stepped`, `plain_haze`, `plain_dark`, `thin_lit` | | `PlainLight` |
-| Edges smoothed over frames | | `graphs/taa.esn`, `graphs/super_resolution.esn` | |
+| Edges smoothed over frames (`camera`'s) | | `graphs/taa.esn`, `graphs/super_resolution.esn` | |
 
 The picture after the light is `image.entpkg`'s, in the same words:
 
@@ -83,41 +82,13 @@ node filmed: image.film@1 { image <- shown.result; film <- story.result; }
   `light.atmosphere_spread@1`, `light.atmosphere_look@1`,
   `light.atmosphere_view@1`, `light.atmosphere_sky@1`.
 - `kernels/brdf.ent` — Standard PBR.
-- `kernels/camera.ent` — The G-buffer's lens and depth (the lens is
-  `geometry.entpkg`'s `Lens`, a person turns it with `controls.entpkg`'s
-  `controls.orbit`), and the proxies (the coarse scene a renderer traces
-  shadows and bounces through). Kernels: `light.depths@1`,
-  `light.settle@1`, `light.lens_clip_plane@1`
-  (a world plane through the lens's clip space: a mirror's pass cut at its water).
 - `kernels/clay.ent` — Clay: a modeler's preview, a studio light and
   backdrop over the standard contract. Kernels: `light.clay@1`.
-- `kernels/cluster.ent` — Clustered meshes drawn (as Nanite draws): each
-  place of each thing at the level whose error spans at most `error`
-  pixels, clusters out of the picture or behind the last frame's nearer
-  things left out, where two levels meet the finer one's corners taken up
-  to the coarser one's points. Kernels: `light.cluster_pick@1`,
-  `light.cluster_offsets@1`, `light.cluster_cull@1`,
-  `light.cluster_kept@1`, `light.cluster_shown@1`, `light.cluster_corners@1`,
-  `light.cluster_faces@1`, `light.cluster_hzb@1`.
 - `kernels/clouds.ent` — A deck of clouds over the sky, lit through
   itself, and its shadows on the ground. Kernels: `light.clouds_deck@1`,
   `light.clouds_shadow@1`, `light.clouds_march@1`.
-- `kernels/composite.ent` — Two G-buffers of one view made one. Kernels:
-  `light.nearer@1`.
 - `kernels/contact_shadow.ent` — Contact shadows. Kernels:
   `light.contact@1`.
-- `kernels/decal.ent` — Decals pressed onto a G-buffer. Kernels:
-  `light.decals_none@1`, `light.decal_looks_none@1`, `light.decal_paint@1`,
-  `light.decal_extra@1`, `light.decal_normals@1`.
-- `kernels/depth_of_field.ent` — Depth of field as data (`Dof`: an
-  aperture and where it focuses). Kernels: `light.dof_start@1`,
-  `light.focus@1`, `light.focused@1`.
-- `kernels/field.ent` — Instanced distance fields: the scene's proxy
-  baked from its things' own distances. Kernels: `light.field_atlas8@1`,
-  `light.field_shapes8@1`, `light.field_stack@1`,
-  `light.field_frames_join@1`, `light.field_frame@1`, `light.field_near@1`,
-  `light.field_bin_counts@1`, `light.field_bin_fill@1`,
-  `light.field_bake@1`.
 - `kernels/fog.ent` — Height fog and fog volumes the sun and the lamps
   light, their beams cut into shafts by what stands in them and by the
   clouds, in a grid of cells over the view. Kernels:
@@ -143,11 +114,6 @@ node filmed: image.film@1 { image <- shown.result; film <- story.result; }
   and the light all round. Kernels: `light.lit@1`.
 - `kernels/mirror.ent` — A planar mirror. Kernels: `light.mirror_lens@1`,
   `light.mirror_mix@1`.
-- `kernels/motion_blur.ent` — Motion blur: each pixel spread along the
-  way it moved on the screen, the lens's move and the thing's. Kernels:
-  `light.motion_blur@1`.
-- `kernels/outline.ent` — Outlines from the G-buffer: an edge's near side
-  and a crease. Kernels: `light.outline@1`.
 - `kernels/painted.ent` — The painted look: light and shade as a painting
   has them (`toon`, `Toon`), and a renderer's shading taken toward it as far
   as a scene asks (`shaded_as`, `scattered_as`, `mirrored_as`).
@@ -168,17 +134,6 @@ node filmed: image.film@1 { image <- shown.result; film <- story.result; }
   `light.probes_screen_gather@1`, `light.probes_gather_keep@1`,
   `light.probes_gather_blur@1`, `light.probes_behind@1`,
   `light.probes_lit@1`, `light.probes_shade@1`.
-- `kernels/proxy_bake.ent` — A mesh baked into a proxy: each cell (a
-  point of the frame's lattice, as `proxy_at` reads it) the nearest face's
-  distance and its color, found exactly within a band (the faces' boxes
-  cut into tiles of cells) and spread past it by jump flooding; a pass a
-  frame for geometry that streams; a fine level of it round the lens.
-  Kernels: `light.proxy_bake_tiles@1`, `light.proxy_bake_faces@1`,
-  `light.proxy_seeds@1`, `light.proxy_flood@1`, `light.proxy_baked@1`,
-  `light.proxy_stage@1`, `light.proxy_flood_staged@1`,
-  `light.proxy_published@1`, `light.proxy_published_frame@1`,
-  `light.proxy_made@1`, `light.proxy_detail_frame@1`,
-  `light.proxy_within@1`, `light.proxy_stack@1`.
 - `kernels/radiance.ent` — Light kept on the proxies (as Lumen keeps its
   surface cache): each cell near a surface the light leaving it, the sun
   and the lamps through the proxies (each lamp that casts shadows walked
@@ -209,11 +164,6 @@ node filmed: image.film@1 { image <- shown.result; film <- story.result; }
   `light.radiance_turn@1`, `light.radiance@1`,
   `light.bounce_screen@1`, `light.bounce_probes@1`, `light.bounce_probe_filter@1`,
   `light.bounce_gather@1`, `light.bounce@1`.
-- `kernels/resolution.ent` — The picture computed at an inner resolution
-  with a ceiling, a share of it set by frame time (dynamic resolution),
-  `image.entpkg`'s `image.upscale` scaling it to the window. Kernels:
-  `light.dynamic_start@1`, `light.dynamic@1`, `light.extent@1`,
-  `light.extent_size@1`, `light.canvas@1`.
 - `kernels/reflection.ent` — Reflections on the screen in place of a
   renderer's own (`reflection`) where the screen shows what a mirror ray
   meets. Kernels: `light.reflections@1`.
@@ -231,11 +181,6 @@ node filmed: image.film@1 { image <- shown.result; film <- story.result; }
 - `kernels/sky.ent` — The sky.
 - `kernels/specular_aa.ent` — Gloss widened where normals turn within a
   pixel (specular antialiasing). Kernels: `light.specular_aa@1`.
-- `kernels/stream.ent` — A world streamed round the camera: the chunks of
-  its lattice within reach of the eye, near ones as built and far ones
-  coarser, their files spelled for a scene's `fields` nodes, each chunk
-  whose arrays are in placed to draw. Kernels: `light.stream_wanted@1`,
-  `light.stream_paths@1`, `light.stream_insts@1`, `light.stream_none@1`.
 - `kernels/subsurface.ent` — Light under the skin: the share of a
   picture that scatters under subsurface surfaces spread, each color as
   far as it carries. Kernels: `light.subsurface_blur@1`,
@@ -243,10 +188,6 @@ node filmed: image.film@1 { image <- shown.result; film <- story.result; }
 - `kernels/sun.ent` — The sun's shadows for any scene: cascaded shadow
   maps, soft as far as the sun's disc makes them. Kernels:
   `light.sun_none@1`, `light.sun_views@1`, `light.sun_shadow@1`.
-- `kernels/super_resolution.ent` — Temporal super-resolution (TSR).
-  Kernels: `light.tsr@1`, `light.keep_surface@1`.
-- `kernels/temporal.ent` — Temporal antialiasing (TAA). Kernels:
-  `light.jitter@1`, `light.taa@1`, `light.lens_rests@1`, `light.same_lens@1`.
 - `kernels/translucent.ent` — Translucent layers over a renderer's
   picture, every layer at once in no order (glass, smoke, glows): shaded
   where each covers a pixel in front of the G-buffer and summed in 32-bit
@@ -256,7 +197,7 @@ node filmed: image.film@1 { image <- shown.result; film <- story.result; }
   `light.translucent_blank@1`, `light.translucent_splat@1`,
   `light.translucent_resolve@1`.
 - `kernels/transmission.ent` — Transmission (glass, water, ice).
-  Kernels: `light.settle_behind@1`.
+  Kernels: `surface.settle_behind@1`.
 ## Graph presets
 
 - `graphs/atmosphere.esn` — The sky the air makes for a sun's height and
@@ -266,55 +207,29 @@ node filmed: image.film@1 { image <- shown.result; film <- story.result; }
   bounced light in itself (lit, ray traced).
 - `graphs/clay.esn` — The clay renderer (`light.clay`) on a scene's
   G-buffer (the contract, its first three maps).
-- `graphs/cluster.esn` — Clustered meshes drawn (`kernels/cluster.ent`):
-  a library `mesh.entpkg`'s `graphs/cluster.esn` built, the things
-  placed (`FieldInst`s, the field's own), the corners and faces for the
-  rasterizer.
-- `graphs/decals.esn` — Decals laid onto a scene's G-buffer before a
-  renderer (`kernels/decal.ent`).
-- `graphs/field.esn` — The scene's proxy baked round the lens from its
-  things' shapes and places (`kernels/field.ent`), in three levels, each
-  coarser and wider than the one before.
-- `graphs/field_level.esn` — One level of `field.esn`.
 - `graphs/lamp_maps.esn` — The lamps' shadow maps (`kernels/lamp_map.ent`),
   drawn once while lamps and things keep still.
 - `graphs/lamps.esn` — The lamps added to a renderer's picture, for one
   that does not take them in itself.
-- `graphs/motion_blur.esn` — Motion blur over a picture, the lens's last
-  frame kept.
 - `graphs/path_tracer.esn` — The path tracer (`kernels/path_tracer.ent`),
   the lamps shown and bounced; its `scatter` for light under the skin.
-- `graphs/picture.esn` — The picture's raster.
 - `graphs/probe_gi.esn` — The light-probe renderer (`kernels/probe_gi.ent`),
   the lamps shown, reflected and bounced; the light gathered on the screen
   drawn anew each frame and averaged while the lens rests (up to
   `settle_frames`, then it rests too); its `scatter` for light under the
   skin.
-- `graphs/proxy_bake.esn` — A mesh baked into a proxy
-  (`kernels/proxy_bake.ent`), for a scene drawn as one mesh rather than
-  placed things.
-- `graphs/proxy_detail.esn` — A fine level of the proxy round the lens,
-  baked from the mesh a pass a frame as the eye moves a step, joined with
-  what lies past it and stacked before the scene's proxy (finest first), so
-  rays near the eye meet thin things the scene's cells are too coarse for.
-- `graphs/proxy_stream.esn` — A mesh baked into a proxy a pass a frame, the
-  last one made in use until the new one is (with the frame it was made
-  over): for geometry that streams.
 - `graphs/shadow.esn` — The sun's shadow from a virtual shadow map
   (`kernels/shadow.ent`) multiplied into the G-buffer's sun visibility,
   for a scene of clustered meshes.
 - `graphs/subsurface.esn` — Light under the skin: a renderer's `scatter`
   spread across then down and laid back over its `hdr`.
-- `graphs/super_resolution.esn` — Temporal super-resolution
-  (`light.tsr`).
-- `graphs/taa.esn` — Temporal antialiasing and upscaling.
 - `graphs/translucent.esn` — Translucent layers over a renderer's picture
   (`kernels/translucent.ent`), their mesh cut at the near plane.
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`bounce.replay`, `clip_plane.replay`, `cluster.replay`, `decals.replay`, `field.replay`, `fog_volumes.replay`, `lamp_looks.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `outline.replay`, `path_tracer.replay`, `plain.replay`, `probe_gi.replay`, `proxy_bake.replay`, `proxy_detail.replay`, `proxy_stream.replay`, `reflection.replay`, `shadow.replay`,
-`sky.replay`, `stream.replay`, `temporal.replay`, `translucent.replay`, `words.replay`.
+`bounce.replay`, `fog_volumes.replay`, `lamp_looks.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `plain.replay`, `probe_gi.replay`, `reflection.replay`, `shadow.replay`,
+`sky.replay`, `temporal.replay`, `translucent.replay`, `words.replay`; they take the surface's and the camera's passes over the renderers' pictures too.
 Every Kernel of the package is reached by one of them.
 
 Used by the [material_balls](../../examples/material_balls/README.md) example.
@@ -354,7 +269,7 @@ kind's shape in an atlas, each thing placed, a block round the lens baked
 from the things standing in it), so what is traced is each thing's shape,
 not a rough stand-in for it.
 
-A scene may hand over its G-buffer twice, through `light.settle`: a reduced
+A scene may hand over its G-buffer twice, through `surface.settle`: a reduced
 one while the camera moves, and a full one, computed once, when it stops
 (`controls.orbit_rests` gates it).
 
@@ -383,7 +298,7 @@ A painted look is not another renderer: a renderer's shading is taken
 toward a painting's as far as its `painted` asks (lit's and probe GI's; 0
 none, 1 all, between them blended, so one look turns into the other as a
 scene goes), by the words of `kernels/painted.ent` (`shaded_as`, `toon`,
-`Toon`) that a scene's own kernel calls too; its ink (`light.outline`) and
+`Toon`) that a scene's own kernel calls too; its ink (`surface.outline`) and
 a watercolor's tone (`image.watercolor`) are passes after it that read
 only its picture and the G-buffer.
 
@@ -607,12 +522,12 @@ lossless from that distance on, and a brick with no finer cluster kept
 drawn at any distance, so nothing opens while the near chunk is on its
 way), every array in a directory of its own (`entelechy run --save
 chunk.points=...`, `chunk.far_points=...`). A scene streams them round
-the camera: `light.stream_wanted` names the chunks within reach, nearest
-first, `light.stream_paths` spells their files for one `fields` node an
+the camera: `surface.stream_wanted` names the chunks within reach, nearest
+first, `surface.stream_paths` spells their files for one `fields` node an
 array, and `mesh.entpkg`'s `graphs/streamed.esn` joins what is in into
 one library the cluster draw, the shadows and the lamps' maps take as any
 other; a chunk with an array on its way is not drawn
-(`light.stream_insts`). A `fields` node reads the paths a frame behind,
+(`surface.stream_insts`). A `fields` node reads the paths a frame behind,
 so the instances pair with the last frame's chunks. The proxy the light
 is traced through is baked from the chunks too (`graphs/proxy_stream.esn` over
 `mesh.entpkg`'s `graphs/finest.esn`: each chunk's finest level), again
@@ -664,10 +579,10 @@ own) and encodes sRGB.
 - `kernels/sky.ent`: `SkyLook`, `sky_radiance`, `aerial`.
 - `kernels/brdf.ent`: `Pbr` and the standard BRDF.
 - `kernels/resolution.ent`: a resolution of the scene's own, brought to the
-  window at the end, so the window's size costs little. `light.extent`
+  window at the end, so the window's size costs little. `camera.extent`
   is the window scaled down to at most `pixels` pixels, times the share
-  `light.dynamic` sets from the frame time to keep `fps` (dynamic
-  resolution); `light.canvas` is an empty raster canvas of that size.
+  `camera.dynamic` sets from the frame time to keep `fps` (dynamic
+  resolution); `camera.canvas` is an empty raster canvas of that size.
   `upscaled` (and `image.upscale`) is an edge-aware upscale (FSR 1's EASU),
   `image.contrast_sharpen` a sharpening that cannot overshoot (RCAS), both in display
   space and each frame on its own (`image.entpkg`'s). Its
@@ -675,7 +590,7 @@ own) and encodes sRGB.
   `graphs/upscale.esn` upscales and sharpens to the window.
   A scene that draws its HUD at the window's size reads the picture through
   `upscaled` in that pass instead, so the window is written once.
-  `light.extent`'s `samples` supersamples (2: four points a pixel), and
+  `camera.extent`'s `samples` supersamples (2: four points a pixel), and
   `upscaled` then averages each pixel's block.
 - `kernels/haze.ent`: `light.haze`, aerial perspective as the air is: it
   thins with height (Rayleigh's by 8 km, Mie's haze by 1.2 km), integrated
@@ -684,13 +599,13 @@ own) and encodes sRGB.
   that uses it sets its `SkyLook`'s `air` to 0.
 - `kernels/depth_of_field.ent`: depth of field as data (`Dof`: the
   aperture, 0 sharp, and where it focuses, a share of the picture), made by
-  `light.dof_start` or by a scene's own kernel (keys, the pointer, a
-  story's cut). `light.focus` follows the distance there (a camera's
-  focus); `light.focused` blurs by each pixel's circle of confusion,
+  `camera.dof_start` or by a scene's own kernel (keys, the pointer, a
+  story's cut). `camera.focus` follows the distance there (a camera's
+  focus); `camera.focused` blurs by each pixel's circle of confusion,
   gathering 24 points on a Vogel disc, a point counted where its own circle
   reaches, a farther one only where the pixel is blurred too, so a sharp
   foreground takes no background.
-- `kernels/outline.ent`: `light.outline`, a picture's outlines from its
+- `kernels/outline.ent`: `surface.outline`, a picture's outlines from its
   G-buffer: a pixel much nearer than a neighbor (`outline_near`, the near
   side of an edge) and a surface turning sharply between neighbors
   (`outline_crease`), fading by `reach`.
@@ -699,4 +614,4 @@ own) and encodes sRGB.
   so a scene grades, inks or blurs only what a mask asks (a model drawn
   among real things, a selection, a story's region).
 - `kernels/composite.ent`: two G-buffers of one view made one, each pixel the
-  nearer surface's (`light.nearer`), for a scene that draws its parts apart.
+  nearer surface's (`surface.nearer`), for a scene that draws its parts apart.

@@ -9,7 +9,7 @@
 // laid over the picture, upsampled by depth (`light.fog_apply`). Nothing
 // needs history to settle.
 use "geometry.entpkg";
-use "camera.ent";
+use "surface.entpkg";
 use "clouds.ent";
 use "lamps.ent";
 use "phase.ent";

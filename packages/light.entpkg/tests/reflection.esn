@@ -3,6 +3,7 @@
 // screen shows; and the picture blurred as the lens moved half a meter
 // across in a frame, the balls standing still.
 use "../kernels/";
+use "camera.entpkg";
 use "geometry.entpkg";
 
 node stand: graph "stand_scene.esn" { }
@@ -41,8 +42,8 @@ node before: kernel {
     compute { let l = at(lens, 0); return Lens { ..l, eye: l.eye - l.right * 0.5 }; }
 }
 node none: Grid<Vec4> { domain = vec2(1, 1); }
-node blurred: light.motion_blur@1 { image <- mirrored.result; surface <- stand.surface; lens <- stand.lens; was_lens <- before.result; motion <- none.result; domain = size(image); }
-node steady: light.motion_blur@1 { image <- mirrored.result; surface <- stand.surface; lens <- stand.lens; was_lens <- stand.lens; motion <- none.result; domain = size(image); }
+node blurred: camera.motion_blur@1 { image <- mirrored.result; surface <- stand.surface; lens <- stand.lens; was_lens <- before.result; motion <- none.result; domain = size(image); }
+node steady: camera.motion_blur@1 { image <- mirrored.result; surface <- stand.surface; lens <- stand.lens; was_lens <- stand.lens; motion <- none.result; domain = size(image); }
 /// How much the blurred and the steady pictures part over a row of pixels across the balls' first row, and over the floor
 /// far off in the haze.
 node parted: kernel {

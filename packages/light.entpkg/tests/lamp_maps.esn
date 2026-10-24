@@ -8,6 +8,7 @@
 // only when what it is drawn from changes; `ball_y` moves the ball, which
 // both lamps reach.
 use "mesh.entpkg";
+use "surface.entpkg";
 use "raster.entpkg";
 use "../kernels/";
 

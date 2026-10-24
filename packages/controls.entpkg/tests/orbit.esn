@@ -2,7 +2,7 @@
 // left alone it rests and the lens is its own; D held walks it to the right; R brings it home.
 use "../kernels/";
 use "geometry.entpkg";
-use "light.entpkg";
+use "surface.entpkg";
 
 node home: controls.orbit_start@1 { domain = 1; }
 node depths0: Grid<Float> { domain = vec2(1, 1); }

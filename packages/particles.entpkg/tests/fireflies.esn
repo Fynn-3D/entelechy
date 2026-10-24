@@ -2,6 +2,7 @@
 // evening, binned into the picture's tiles and drawn glowing over the
 // dark, seen through a lens a few meters back.
 use "../kernels/";
+use "surface.entpkg";
 use "light.entpkg";
 use "geometry.entpkg";
 

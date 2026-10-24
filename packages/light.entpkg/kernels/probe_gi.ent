@@ -6,7 +6,7 @@
 use "random.entpkg";
 use "geometry.entpkg";
 use "brdf.ent";
-use "camera.ent";
+use "surface.entpkg";
 use "lamps.ent";
 use "painted.ent";
 use "path_tracer.ent";

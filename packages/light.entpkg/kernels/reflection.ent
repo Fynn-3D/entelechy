@@ -6,7 +6,7 @@
 // farther along the ray, so the renderer's own reflection carries on past it.
 use "geometry.entpkg";
 use "brdf.ent";
-use "camera.ent";
+use "surface.entpkg";
 use "sky.ent";
 
 /// How sure a reflection met at pixel `q` (of a picture `extent` large) is: less within `edge` of the picture's width of its

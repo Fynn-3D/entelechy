@@ -2,7 +2,7 @@
 // what is double-clicked, walking, never under the ground; the lens it sees through (`geometry.entpkg`'s `Lens`), and
 // whether it rests (so what is drawn only once it rests is drawn once).
 use "geometry.entpkg";
-use "light.entpkg";
+use "surface.entpkg";
 
 /// The lens: turning round the point it looks at (`target`), `dist` from it; `goal` is the point double-clicked or chosen by F,
 /// toward which the lens glides; the last frame's pointer, the buttons held (bits: left, right or middle), the moment the left button
@@ -27,7 +27,7 @@ kernel controls.orbit_start@1 {
     }
 }
 /// The lens worked: the left button drags to turn, the right or middle to pan, the wheel dollies, a double-click or F flies to the point under the pointer
-/// (read from the last frame's small depth map `depths`, `light.entpkg`'s `light.depths`), W A S D walk, Q E fall and rise, Shift held
+/// (read from the last frame's small depth map `depths`, `light.entpkg`'s `surface.depths`), W A S D walk, Q E fall and rise, Shift held
 /// is fast, R returns to `home`. The lens never goes under the ground (`land`).
 kernel controls.orbit@1 {
     requires { field.read; field.write; input.read; time.read; }
@@ -92,7 +92,7 @@ kernel controls.orbit@1 {
     }
 }
 /// Whether the lens has stopped: 1 stopped, 0 moving. While the lens rests it does not change, so a node computed only once it has
-/// stopped (the full-resolution G-buffer, `light.settle`) is computed once.
+/// stopped (the full-resolution G-buffer, `surface.settle`) is computed once.
 kernel controls.orbit_rests@1 {
     requires { field.read; field.write; }
     input cam: Orbits;

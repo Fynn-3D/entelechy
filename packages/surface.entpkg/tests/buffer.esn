@@ -1,0 +1,45 @@
+// The G-buffer at points whose answers are known by hand: a fine one (2 by 2, each pixel its own) and a rough one (1 by
+// 1) settled while the lens moves and once it rests, the layer behind glass the same way; the small depth map's pixel
+// the middle of its 8 by 8; two G-buffers made one, the nearer surface each pixel.
+use "../kernels/";
+
+node fine: kernel {
+    requires { field.write; }
+    output result: Grid<Vec4>;
+    domain = vec2(2, 2);
+    compute { let c = coord(); return vec4(c.x, c.y, 1.0, 10.0 + c.x + 2.0 * c.y); }
+}
+node rough: Grid<Vec4> { domain = vec2(1, 1); value = vec4(0.0, 1.0, 0.0, 50.0); }
+node moving: Rows<Int> { domain = 1; value = 0; }
+node resting: Rows<Int> { domain = 1; value = 1; }
+node while_moving: surface.settle@1 { fine_surface <- fine.result; fine_paint <- fine.result; fine_extra <- fine.result; fine_layers <- fine.result;
+    fine_more <- fine.result; rough_surface <- rough.result; rough_paint <- rough.result; rough_extra <- rough.result; rough_layers <- rough.result;
+    rough_more <- rough.result; settled <- moving.result; domain = vec2(2, 2); }
+node at_rest: surface.settle@1 { fine_surface <- fine.result; fine_paint <- fine.result; fine_extra <- fine.result; fine_layers <- fine.result;
+    fine_more <- fine.result; rough_surface <- rough.result; rough_paint <- rough.result; rough_extra <- rough.result; rough_layers <- rough.result;
+    rough_more <- rough.result; settled <- resting.result; domain = vec2(2, 2); }
+node behind: surface.settle_behind@1 { fine_at <- fine.result; fine_dir <- fine.result; fine_paint <- fine.result; fine_normal <- fine.result;
+    fine_through <- fine.result; rough_at <- rough.result; rough_dir <- rough.result; rough_paint <- rough.result; rough_normal <- rough.result;
+    rough_through <- rough.result; settled <- moving.result; domain = vec2(2, 2); }
+
+// A surface 16 by 16 whose distance is its column.
+node wide: kernel {
+    requires { field.write; }
+    output result: Grid<Vec4>;
+    domain = vec2(16, 16);
+    compute { return vec4(0.0, 1.0, 0.0, coord().x); }
+}
+node depths: surface.depths@1 { surface <- wide.result; domain = vec2(2, 2); }
+
+// Two G-buffers of one view: the first's surface 10 to 13 meters off, the second's 12 meters, and the sky.
+node far: Grid<Vec4> { domain = vec2(2, 2); value = vec4(0.0, 1.0, 0.0, 12.0); }
+node sky: Grid<Vec4> { domain = vec2(2, 2); value = vec4(0.0, 0.0, 0.0, 1000000.0); }
+node fit: Rows<Float> { domain = 2; value = 2.0; }
+node one: surface.nearer@1 { a_surface <- fine.result; a_paint <- fine.result; a_extra <- fine.result; a_layers <- fine.result; a_more <- fine.result;
+    a_behind_at <- fine.result; a_behind_dir <- fine.result; a_behind_paint <- fine.result; a_behind_normal <- fine.result; a_through <- fine.result;
+    b_surface <- far.result; b_paint <- far.result; b_extra <- far.result; b_layers <- far.result; b_more <- far.result; fit <- fit.result; domain = vec2(2, 2); }
+node over_sky: surface.nearer@1 { a_surface <- fine.result; a_paint <- fine.result; a_extra <- fine.result; a_layers <- fine.result; a_more <- fine.result;
+    a_behind_at <- fine.result; a_behind_dir <- fine.result; a_behind_paint <- fine.result; a_behind_normal <- fine.result; a_through <- fine.result;
+    b_surface <- sky.result; b_paint <- sky.result; b_extra <- sky.result; b_layers <- sky.result; b_more <- sky.result; fit <- fit.result; domain = vec2(2, 2); }
+
+output result <- one.surface;

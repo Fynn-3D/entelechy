@@ -8,7 +8,7 @@
 // what lies past it (`radiance_cone`, `light.bounce`). `graphs/bounce.esn` is the whole.
 use "geometry.entpkg";
 use "brdf.ent";
-use "camera.ent";
+use "surface.entpkg";
 use "lamps.ent";
 use "lit.ent";
 use "sky.ent";

@@ -92,7 +92,9 @@ Pictures and what a camera sees.
 | [`mesh`](mesh.entpkg/README.md) | Triangle meshes as points and faces: lattices, primitives and subdivision |
 | [`terrain`](terrain.entpkg/README.md) | Ground as heights: sampled, ray-marched, sculpted, eroded and meshed |
 | [`texture`](texture.entpkg/README.md) | Patterns, projections, layers, normals and the marks of age a material is drawn with |
-| [`light`](light.entpkg/README.md) | Light in a world a scene hands over: the G-buffer contract, shading, the sun, sky and lamps, shadows, bounced light, fog and air, and the renderers |
+| [`surface`](surface.entpkg/README.md) | What is lit: the G-buffer, the coarse scene light is traced through, decals, outlines, meshes drawn as clusters and streamed |
+| [`light`](light.entpkg/README.md) | Light: shading, the sun, the sky and lamps, shadows, bounced light, fog and air, and the renderers |
+| [`camera`](camera.entpkg/README.md) | What a camera does to a picture: focus, shutter, frames gathered, its own resolution |
 | [`particles`](particles.entpkg/README.md) | Particles stepped, binned and drawn over a picture's depth |
 | [`scatter`](scatter.entpkg/README.md) | Things scattered over the ground by layers |
 | [`effects`](effects.entpkg/README.md) | Effects as layers of forms in time, made of a matter, drawn as light along each ray |

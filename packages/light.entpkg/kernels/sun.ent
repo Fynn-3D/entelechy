@@ -9,7 +9,7 @@
 // caster (percentage-closer soft shadows), cascades blended at their edges;
 // the fog reads the cascades for its shafts (`sun_view_lit`).
 use "geometry.entpkg";
-use "camera.ent";
+use "surface.entpkg";
 use "sky.ent";
 
 /// A cascade: its middle, the square's axes across the sunlight (`right`,

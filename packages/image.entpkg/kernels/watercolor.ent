@@ -1,5 +1,5 @@
 // A watercolor's tone over a picture, after any renderer: colors a little more vivid, shadows cool, highlights warm,
-// judged on the light as shown (HDR squeezed). A painted look composes it with ink (`light.outline`) and the
+// judged on the light as shown (HDR squeezed). A painted look composes it with ink (`surface.outline`) and the
 // renderer's painted shading (`toon`).
 
 /// How a watercolor tones: how vivid (1 as it is), the tint of the lights and of the shadows, and the cool lift laid

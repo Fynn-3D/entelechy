@@ -1,0 +1,63 @@
+// A world streamed round the camera (`kernels/stream.ent`, `mesh.entpkg`'s
+// `graphs/streamed.esn`): the four chunks `mesh.entpkg`'s `tests/stream_build.esn`
+// built, each near and far, under its `tests/stream/`; the camera twelve meters up over (`eye_x`,
+// `eye_z`) looking down. The chunks wanted round it (the one under it near,
+// the rest far), their arrays streamed by `fields` nodes, joined into one
+// library and drawn; the balls red by their part, the ground grey.
+use "mesh.entpkg";
+use "geometry.entpkg";
+use "raster.entpkg";
+use "../kernels/";
+
+param eye_x: Float = 2.0;
+param eye_z: Float = 2.0;
+
+node lens: kernel {
+    requires { field.write; }
+    param eye_x: Float = eye_x;
+    param eye_z: Float = eye_z;
+    output result: Lenses;
+    domain = 1;
+    compute {
+        return Lens { eye: vec3(eye_x, 12.0, eye_z), ahead: vec3(0.0, -1.0, 0.0), right: vec3(1.0, 0.0, 0.0), up: vec3(0.0, 0.0, -1.0), focal: 1.0 };
+    }
+}
+node wanted: surface.stream_wanted@1 { lens <- lens.result; lo = vec2(0.0, 0.0); side = 4.0; cells_x = 2; cells_z = 2; near = 1.0; far = 8.0; domain = 8; }
+node paths: surface.stream_paths@1 { chunks <- wanted.result; domain = count(chunks) * 16; }
+node points: Rows<MeshPoint> fields "mesh.entpkg/tests/stream/points/" { paths <- paths.result; }
+node up: Rows<Int> fields "mesh.entpkg/tests/stream/up/" { paths <- paths.result; }
+node faces: Rows<Face> fields "mesh.entpkg/tests/stream/faces/" { paths <- paths.result; }
+node clusters: Rows<Cluster> fields "mesh.entpkg/tests/stream/clusters/" { paths <- paths.result; }
+node meshes: Rows<ClusterMesh> fields "mesh.entpkg/tests/stream/meshes/" { paths <- paths.result; }
+node errors: Rows<Float> fields "mesh.entpkg/tests/stream/errors/" { paths <- paths.result; }
+node sources: Rows<Int> fields "mesh.entpkg/tests/stream/sources/" { paths <- paths.result; }
+node parts: Rows<Int> fields "mesh.entpkg/tests/stream/parts/" { paths <- paths.result; }
+node library: graph "mesh.entpkg/graphs/streamed.esn" { points <- points.result; point_ranges <- points.ranges; up <- up.result; up_ranges <- up.ranges;
+    faces <- faces.result; face_ranges <- faces.ranges; clusters <- clusters.result; cluster_ranges <- clusters.ranges; meshes <- meshes.result; mesh_ranges <- meshes.ranges;
+    errors <- errors.result; error_ranges <- errors.ranges; sources <- sources.result; source_ranges <- sources.ranges; part_ranges <- parts.ranges; }
+// A fields node reads the paths as last evaluated: the chunks the files came from are the last frame's wanted ones.
+node no_chunks: surface.stream_none@1 { domain = 8; }
+node insts: surface.stream_insts@1 { chunks <~ wanted.result from no_chunks.result; ready <- library.ready; domain = count(chunks); }
+node canvas: Grid<Long> { domain = vec2(64, 64); value = 9223372036854775807l; }
+node none: Grid<Float> { domain = vec2(1, 1); }
+node drawn: graph "../graphs/cluster.esn" { points <- points.result; up <- library.up; faces <- library.faces; clusters <- library.clusters; meshes <- library.meshes;
+    errors <- errors.result; insts <- insts.result; lens <- lens.result; canvas <- canvas.result; hzb <- none.result; near = 0.1; far = 100.0; }
+node raster: native.rasterize@3 { vertices <- drawn.corners; triangles <- drawn.faces; canvas <- canvas.result; domain = size(canvas); }
+/// Each pixel: the ball's red, the ground's grey, black for nothing.
+node view: kernel {
+    requires { field.read; field.write; }
+    input raster: Grid<Surface> <- raster.surface;
+    input kept: Rows<IVec2> <- drawn.kept;
+    input clusters: Rows<Cluster> <- library.clusters;
+    input sources: Rows<Int> <- library.sources;
+    input parts: Rows<Int> <- parts.result;
+    output result: Image;
+    compute {
+        let s = sample(raster);
+        if s.id < 0 || s.depth >= 1.0 { return vec4(0.0, 0.0, 0.0, 1.0); }
+        let part = at(parts, at(sources, cluster_face_of(kept, clusters, s.id).y));
+        return if part == 1 { vec4(1.0, 0.0, 0.0, 1.0) } else { vec4(0.5, 0.5, 0.5, 1.0) };
+    }
+}
+
+output result <- view.result;

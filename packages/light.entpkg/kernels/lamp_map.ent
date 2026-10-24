@@ -14,11 +14,8 @@
 use "parallel.entpkg";
 use "mesh.entpkg";
 use "raster.entpkg";
-use "camera.ent";
-use "field.ent";
-use "cluster.ent";
+use "surface.entpkg";
 use "lamps.ent";
-use "proxy_bake.ent";
 
 /// A tile's side in texels.
 fn lamp_map_tile() -> Int { return 16; }

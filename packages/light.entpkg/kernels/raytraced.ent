@@ -5,7 +5,7 @@
 // by each thing's baked occlusion, and the mirror ray of a smooth surface traced through the proxies (`raytraced_seen`).
 use "geometry.entpkg";
 use "brdf.ent";
-use "camera.ent";
+use "surface.entpkg";
 use "lit.ent";
 use "sky.ent";
 

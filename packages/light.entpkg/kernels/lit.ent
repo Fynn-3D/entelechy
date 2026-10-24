@@ -7,7 +7,7 @@
 // lighting (`lit_by`, `ambient_by`), taken as far toward a painting's as `painted` asks (`painted.ent`).
 use "geometry.entpkg";
 use "brdf.ent";
-use "camera.ent";
+use "surface.entpkg";
 use "painted.ent";
 use "probe_gi.ent";
 use "sky.ent";

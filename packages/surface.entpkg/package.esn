@@ -1,0 +1,10 @@
+//! What is lit, as a renderer takes it: the G-buffer (its depth, settled
+//! from a rough one while the lens moves, the layer seen through glass, a
+//! ray walked across it), two G-buffers made one, decals pressed into it
+//! and outlines drawn from it; the coarse scene light is traced through
+//! (proxies baked from things' own distances or from a mesh, walked
+//! roughly along a ray); and meshes drawn into it as clusters, streamed
+//! round the lens.
+package surface@1 { language = 1; ir = 1; }
+
+use "kernels/";

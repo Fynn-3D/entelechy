@@ -6,7 +6,7 @@
 // out down the water as a rough surface does.
 use "geometry.entpkg";
 use "brdf.ent";
-use "camera.ent";
+use "surface.entpkg";
 
 /// The lens reflected in the level plane at height `level`: the pixel a
 /// ray takes through it sees what the ray reflected off the plane sees.

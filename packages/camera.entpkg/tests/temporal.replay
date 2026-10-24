@@ -1,0 +1,23 @@
+scene temporal.esn
+window 160 100
+
+# A quarter pixel left and a sixth of one up over a picture 100 high at
+# focal 1: turned 0.0025 radians across and 0.00167 down; the eye where it
+# was. Flat stays flat, through either gathering; jittered, the lens does
+# not rest.
+frame 0.0
+expect jlens.result[0].ahead = -0.0024999939 -0.0016666659 -0.9999955 0.0000002
+expect jlens.result[0].eye = 0 0 0
+expect blended.result[8050] = 0.25 0.5 0.75 1 0.0001
+expect built.result[8050] = 0.25 0.5 0.75 1 0.0001
+expect blended.rests.result[0] = 0
+frame 0.0333
+expect built.result[8050] = 0.25 0.5 0.75 1 0.0001
+
+# Rested sixteen frames: jittered no more, and a frame on, the lens rests.
+param calm 16
+frame 0.0667
+expect jlens.result[0].ahead = 0 0 -1 0.0000001
+frame 0.1
+expect blended.rests.result[0] = 1
+expect blended.result[8050] = 0.25 0.5 0.75 1 0.0001

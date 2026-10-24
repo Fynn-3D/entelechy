@@ -3,7 +3,7 @@
 // turn blue and lose contrast), haze scatters forward (a bright ring toward the sun). The sun and the sky round it light the air
 // passed, scattered once.
 use "geometry.entpkg";
-use "camera.ent";
+use "surface.entpkg";
 use "sky.ent";
 
 // How much air of the ground's density a ray from height `h` (meters above

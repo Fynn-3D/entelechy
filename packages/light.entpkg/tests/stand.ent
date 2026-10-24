@@ -11,6 +11,7 @@
 // proxies are handed over, and the light is the renderer's the graph
 // places.
 use "../kernels/";
+use "surface.entpkg";
 use "geometry.entpkg";
 
 struct Hit { d: Float; what: Int; }

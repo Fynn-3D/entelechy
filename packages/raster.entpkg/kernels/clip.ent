@@ -65,7 +65,7 @@ kernel raster.clip_near@1 {
 
 /// Each triangle's four corners cut by a plane (`domain = count(triangles) * 4`), as `raster.clip_near` cuts at the near
 /// plane: what lies on the side of `plane` (its first row, in clip space: a corner is kept where `dot(plane, clip)` is not
-/// below 0) a world plane drawn through the lens has (`light.entpkg`'s `light.lens_clip_plane`); a mirror's pass keeps
+/// below 0) a world plane drawn through the lens has (`light.entpkg`'s `surface.lens_clip_plane`); a mirror's pass keeps
 /// what stands over the water, not the bed under it.
 kernel raster.clip_plane@1 {
     requires { field.read; field.write; }

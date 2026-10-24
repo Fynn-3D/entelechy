@@ -4,6 +4,7 @@
 // the sun and the sky (no proxies, no cascades, no lamps). `thick` is the
 // ball's density.
 use "../kernels/";
+use "surface.entpkg";
 use "geometry.entpkg";
 
 param wall: Float = 10.0;

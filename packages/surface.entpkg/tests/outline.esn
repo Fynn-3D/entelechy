@@ -1,0 +1,23 @@
+// Outlines at points whose answers are known by hand: an edge's near side, a crease, and a mask (`image.masked`)
+// that holds them back.
+use "../kernels/";
+use "image.entpkg";
+
+// A row with a nearer block in its middle (5 meters before a wall at 10), and a row at one depth whose surface turns
+// a right angle at its middle.
+node surface: kernel {
+    requires { field.write; }
+    output result: Grid<Vec4>;
+    domain = vec2(6, 2);
+    compute {
+        let c = coord();
+        return if c.y < 0.5 { vec4(0.0, 0.0, 1.0, if c.x > 1.5 && c.x < 3.5 { 5.0 } else { 10.0 }) }
+            else if c.x < 2.5 { vec4(0.0, 0.0, 1.0, 10.0) } else { vec4(1.0, 0.0, 0.0, 10.0) };
+    }
+}
+node white: Grid<Vec4> { domain = vec2(6, 2); value = vec4(1.0, 1.0, 1.0, 1.0); }
+node none: Grid<Float> { domain = vec2(1, 1); value = 0.0; }
+node inked: surface.outline@1 { image <- white.result; surface <- surface.result; }
+node held: image.masked@1 { base <- white.result; top <- inked.result; mask <- none.result; }
+
+output result <- inked.result;

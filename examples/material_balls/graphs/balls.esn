@@ -2,6 +2,7 @@
 //! (`../kernels/balls.ent`): the lens a person drives, the sky, the
 //! G-buffer and the proxies. The renderer the scene places lights them.
 use "../kernels/";
+use "../../../packages/surface.entpkg";
 use "../../../packages/controls.entpkg";
 use "../../../packages/light.entpkg";
 
@@ -17,7 +18,7 @@ node cam: controls.orbit@1 { previous <~ cam.result from home.result; home <- ho
 node lens: controls.orbit_lens@1 { cam <- cam.result; domain = 1; }
 
 node g: material_balls.gbuffer@1 { lens <- lens.result; sky <- sky.result; domain = window(); }
-node depths: light.depths@1 { surface <- g.surface; domain = ceil(window() / 8); }
+node depths: surface.depths@1 { surface <- g.surface; domain = ceil(window() / 8); }
 
 output lens <- lens.result;
 output sky <- sky.result;

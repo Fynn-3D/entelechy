@@ -2,7 +2,7 @@
 // its backdrop, as a renderer on the standard contract (this package's).
 use "geometry.entpkg";
 use "brdf.ent";
-use "camera.ent";
+use "surface.entpkg";
 
 /// A studio's light, a scene's to tune: how strong its key, fill and rim lights are, and its soft light from round about, the
 /// ground's color below and the sky's above.

@@ -41,34 +41,3 @@ fn frosted(image: Image, q: Vec2, rough: Float) -> Vec3 {
     };
     return sum.xyz / sum.w;
 }
-
-/// The layer seen through, settled and moving too (as `light.settle`).
-kernel light.settle_behind@1 {
-    requires { field.read; field.write; }
-    input fine_at: Grid<Vec4>;
-    input fine_dir: Grid<Vec4>;
-    input fine_paint: Grid<Vec4>;
-    input fine_normal: Grid<Vec4>;
-    input fine_through: Grid<Vec4>;
-    input rough_at: Grid<Vec4>;
-    input rough_dir: Grid<Vec4>;
-    input rough_paint: Grid<Vec4>;
-    input rough_normal: Grid<Vec4>;
-    input rough_through: Grid<Vec4>;
-    input settled: Rows<Int>;
-    param shrink: Int = 2;
-    output behind_at: Grid<Vec4>;
-    output behind_dir: Grid<Vec4>;
-    output behind_paint: Grid<Vec4>;
-    output behind_normal: Grid<Vec4>;
-    output through: Grid<Vec4>;
-    compute {
-        let q = coord();
-        if at(settled, 0) == 1 {
-            let f = min(q, size(fine_at) - vec2(1.0, 1.0));
-            return { behind_at: at(fine_at, f), behind_dir: at(fine_dir, f), behind_paint: at(fine_paint, f), behind_normal: at(fine_normal, f), through: at(fine_through, f) };
-        }
-        let r = min(floor(q / float(shrink)), size(rough_at) - vec2(1.0, 1.0));
-        return { behind_at: at(rough_at, r), behind_dir: at(rough_dir, r), behind_paint: at(rough_paint, r), behind_normal: at(rough_normal, r), through: at(rough_through, r) };
-    }
-}

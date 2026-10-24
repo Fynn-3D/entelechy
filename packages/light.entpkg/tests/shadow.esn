@@ -3,6 +3,7 @@
 // lens looking down that `shift` moves; what is drawn of the map each frame, and the
 // sun's visibility on the ground in a ball's shadow and beside it.
 use "mesh.entpkg";
+use "surface.entpkg";
 use "geometry.entpkg";
 use "raster.entpkg";
 use "../kernels/";
@@ -50,7 +51,7 @@ node lens: kernel {
 }
 node canvas: Grid<Long> { domain = window(); value = 9223372036854775807l; }
 node none: Grid<Float> { domain = vec2(1, 1); }
-node drawn: graph "../graphs/cluster.esn" { points <- library.points; up <- library.up; faces <- library.faces; clusters <- library.clusters; meshes <- library.meshes;
+node drawn: graph "surface.entpkg/graphs/cluster.esn" { points <- library.points; up <- library.up; faces <- library.faces; clusters <- library.clusters; meshes <- library.meshes;
     errors <- library.errors; insts <- insts.result; lens <- lens.result; canvas <- canvas.result; hzb <- none.result; near = 0.1; far = 500.0; }
 node raster: native.rasterize@3 { vertices <- drawn.corners; triangles <- drawn.faces; canvas <- canvas.result; domain = size(canvas); }
 /// The G-buffer's surface (normal, distance), a sun's visibility of 1 before the shadow, and no layers.

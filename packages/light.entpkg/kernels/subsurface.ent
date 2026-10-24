@@ -7,7 +7,7 @@
 // each color by its own reach, only over the same surface; and laid back in
 // place of the unspread share (`light.subsurface_apply`).
 use "geometry.entpkg";
-use "camera.ent";
+use "surface.entpkg";
 
 
 /// The scattering share `scatter` spread along `axis` (0 across, 1 down):

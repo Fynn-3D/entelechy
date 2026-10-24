@@ -1,0 +1,189 @@
+// Temporal super-resolution (TSR): as `camera.taa`, the lens jittered less than a pixel each frame, a small picture
+// built up frame by frame to the window's size; and further:
+//
+// - Each pixel keeps how many frames it gathered (`meta`'s x). One that gathered few takes more of this frame: a place
+//   just uncovered is sharp at once, a still one gathers many and is not noisy. The faster it moves, the fewer it may gather
+//   (each carrying softens it a little, so it cannot gather long).
+// - What is uncovered is not guessed by color: where all round it the last frame was much nearer than this point (`was_surface`),
+//   it was hidden before, its history is dropped, and it gathers anew.
+// - Where it flickers (brightness up one frame and down the next) is kept (`meta`'s y), and the history there is
+//   let wider, holding it steady.
+// - A pixel just dropped, not yet gathered, takes this frame antialiased on its own (`aa`), never jagged.
+// - Once the picture rests and its jitter has stopped (`camera.jitter`), a frame adds no sample the history lacks: the
+//   history is held (only kept among this frame's colors), so the picture settles as gathered and stops changing.
+// - Moving things are carried by `motion` (how far each pixel's thing moved this frame, in the world), taking the nearest
+//   pixel's at an edge (an object's edge goes with it).
+use "geometry.entpkg";
+use "surface.entpkg";
+use "temporal.ent";
+
+/// How much the last frame, at `pw` of its small picture (a pixel's center on a half), saw a point `t` from the eye: the
+/// share of the four pixels about it, by how near each lies (as a sample between them is weighed), that were no nearer
+/// (the sky infinitely far); the rest was something standing before it. 1 for the sky.
+fn tsr_seen(was_surface: Grid<Vec4>, pw: Vec2, t: Float, far: Bool) -> Float {
+    if far { return 1.0; }
+    let c = pw - 0.5;
+    let base = floor(c);
+    let f = c - base;
+    let e = size(was_surface) - 1.0;
+    let tol = max(0.1, t * 0.04);
+    return loop 4 with r = 0.0 {
+        let o = vec2(float(index() % 2), float(index() / 2));
+        let w = (if o.x > 0.5 { f.x } else { 1.0 - f.x }) * (if o.y > 0.5 { f.y } else { 1.0 - f.y });
+        r + if at(was_surface, clamp(base + o, vec2(0.0, 0.0), e)).w >= t - tol { w } else { 0.0 }
+    };
+}
+
+/// This frame (`hdr`, through the jittered lens `jlens`, possibly smaller than the picture; `aa` it antialiased on
+/// its own) blended with the history carried over (`history`, `meta`) into a picture of the window's size (`result`) and
+/// a new `meta`. `lens` and `was_lens` are this frame's and the last frame's lens unjittered; `surface` and
+/// `was_surface` this frame's and the last frame's G-buffer surface (w the distance along the view ray); `motion`
+/// how far each pixel's thing moved in the world this frame (1 × 1 when nothing moved).
+kernel camera.tsr@1 {
+    requires { field.read; field.write; }
+    input hdr: Image;
+    input aa: Image;
+    input surface: Grid<Vec4>;
+    input was_surface: Grid<Vec4>;
+    input lens: Lenses;
+    input jlens: Lenses;
+    input was_lens: Lenses;
+    input motion: Grid<Vec4>;
+    /// The last frame's `motion`.
+    input was_motion: Grid<Vec4>;
+    /// Whether the picture rests unjittered (`camera.lens_rests`).
+    input rests: Rows<Int>;
+    input history: Image;
+    input meta: Grid<Vec4>;
+    /// The most frames gathered when still, and when moving fast.
+    param most: Float = 32.0;
+    param least: Float = 10.0;
+    /// How narrow the bell this frame's samples are weighed by is (exp(-filter d²), d in the picture's pixels).
+    param filter: Float = 6.0;
+    output result: Image;
+    output meta_out: Grid<Vec4>;
+    compute {
+        let q = icoord();
+        let qf = vec2(float(q.x), float(q.y));
+        let ext = domain();
+        let small = size(hdr);
+        let l = at(lens, 0);
+        let sq = clamp(floor((qf + 0.5) * small / ext), vec2(0.0, 0.0), small - 1.0);
+        let s = at(surface, sq);
+        let far = s.w > no_hit() * 0.5;
+        let dir = ray(l, qf, ext);
+        // The distance blended between the small picture's pixels where they
+        // lie on one surface (a ground seen low changes fast from pixel to
+        // pixel: the nearest one alone would put the point off, and the
+        // history would sway as the eye moves); across an edge, the nearest.
+        let blended_t = at_linear(surface, clamp((qf + 0.5) * small / ext, vec2(0.5, 0.5), small - 0.5)).w;
+        let t = if !far && abs(blended_t - s.w) < s.w * 0.05 { blended_t } else { s.w };
+        let p = if far { l.eye + dir * 10000.0 } else { l.eye + dir * t };
+        // This frame's color where this point lay in the shifted frame.
+        let pj = project(at(jlens, 0), p, small);
+        let at_small = clamp(pj.xy, vec2(0.5, 0.5), small - 0.5);
+        let raw = at_linear(hdr, at_small);
+        let smooth_ = at_linear(aa, at_small).xyz;
+        let fresh_meta = vec4(0.0, 0.0, ycocg(squeeze(raw.xyz)).x, 0.0);
+        if isize(history) != ivec2(int(ext.x), int(ext.y)) || isize(meta) != ivec2(int(ext.x), int(ext.y)) {
+            return { result: vec4(smooth_.x, smooth_.y, smooth_.z, raw.w), meta_out: fresh_meta };
+        }
+        // The motion of the nearest thing round about (edges move with the
+        // thing in front).
+        let moved = if isize(motion) == ivec2(1, 1) { vec3(0.0, 0.0, 0.0) } else {
+            let e = size(surface) - 1.0;
+            let best = loop 9 with b = vec2(no_hit() * 2.0, 4.0) {
+                let o = vec2(float(index() % 3 - 1), float(index() / 3 - 1));
+                let w = at(surface, clamp(sq + o, vec2(0.0, 0.0), e)).w;
+                if w < b.x { vec2(w, float(index())) } else { b }
+            };
+            let k = int(best.y);
+            let o = vec2(float(k % 3 - 1), float(k / 3 - 1));
+            if best.x > no_hit() * 0.5 { vec3(0.0, 0.0, 0.0) } else { at(motion, clamp(sq + o, vec2(0.0, 0.0), size(motion) - 1.0)).xyz }
+        };
+        let wl = at(was_lens, 0);
+        let pw = project(wl, p - moved, ext);
+        let pc = project(l, p, ext);
+        let back = qf + (pw.xy - pc.xy);
+        let inside = pw.z > 0.0 && back.x >= -0.5 && back.y >= -0.5 && back.x <= ext.x - 0.5 && back.y <= ext.y - 0.5;
+        // Was it in sight a frame ago, or behind something?
+        let pws = project(wl, p - moved, small);
+        // What lay there a frame ago moved with this point? (Behind a
+        // walker who has passed, the history holds the walker: it moved,
+        // this ground did not.) Asked with this pixel's own motion.
+        let own = if isize(motion) == ivec2(1, 1) || far { vec3(0.0, 0.0, 0.0) } else { at(motion, clamp(sq, vec2(0.0, 0.0), size(motion) - 1.0)).xyz };
+        let pwo = project(wl, p - own, small);
+        let was_moved = if isize(was_motion) == ivec2(1, 1) { vec3(0.0, 0.0, 0.0) } else { at(was_motion, clamp(floor(pwo.xy), vec2(0.0, 0.0), size(was_motion) - 1.0)).xyz };
+        let same_motion = length(was_moved - own) < 0.01 + 0.25 * max(length(own), length(was_moved));
+        let visible = if inside && same_motion { tsr_seen(was_surface, pws.xy, pws.z, far) } else { 0.0 };
+        let seen = visible > 0.5;
+        let old = at(meta, clamp(floor(back + 0.5), vec2(0.0, 0.0), ext - 1.0));
+        let count = if seen { old.x } else { 0.0 };
+        let flicker = if seen { old.y } else { 0.0 };
+        // This frame's samples about the point, each weighed by how far it
+        // fell from this pixel's center (a bell about a pixel wide): sharp
+        // as the samples gather, and steady as the lens shifts.
+        let center = floor(at_small);
+        let scale_ = ext / small;
+        let e = small - 1.0;
+        let m = loop 9 with a = [vec4(0.0, 0.0, 0.0, 0.0), vec4(0.0, 0.0, 0.0, 0.0), vec4(0.0, 0.0, 0.0, 0.0)] {
+            let o = vec2(float(index() % 3 - 1), float(index() / 3 - 1));
+            let v = squeeze(at(hdr, clamp(center + o, vec2(0.0, 0.0), e)).xyz);
+            let y = ycocg(v);
+            let d = (center + o + 0.5 - at_small) * scale_;
+            let w = exp(0.0 - filter * dot(d, d));
+            [a[0] + vec4(v.x * w, v.y * w, v.z * w, w), a[1] + vec4(y.x, y.y, y.z, 0.0), a[2] + vec4(y.x * y.x, y.y * y.y, y.z * y.z, 0.0)]
+        };
+        let weight = m[0].w;
+        let filtered = vec3(m[0].x, m[0].y, m[0].z) / max(weight, 0.0001);
+        // A pixel with little history takes this frame anti-aliased alone.
+        let young = saturate(count / 3.0);
+        let cur = mix(squeeze(smooth_), filtered, young);
+        let now = unsqueeze(cur);
+        // The colors about it this frame (squeezed, as luma and chroma):
+        // mean and spread, never narrower than a shade the eye can tell (a
+        // flat wall or sky would otherwise turn the history away for its
+        // own faint grain).
+        let mean = vec3(m[1].x, m[1].y, m[1].z) / 9.0;
+        let sigma = sqrt(max(vec3(m[2].x, m[2].y, m[2].z) / 9.0 - mean * mean, vec3(0.0, 0.0, 0.0))) + 0.006;
+        let lum = mean.x;
+        // Flicker: this frame's light about here against the last frame's
+        // went the other way than the time before (bright, dark, bright).
+        let delta = lum - old.z;
+        let turned = seen && delta * old.w < 0.0 && abs(delta) > 0.004 && abs(old.w) > 0.004;
+        let flick = mix(flicker, if turned { 1.0 } else { 0.0 }, 0.15);
+        let travel = length(back - qf);
+        let moving = smoothstep(0.25, 3.0, travel);
+        if !seen {
+            return { result: vec4(now.x, now.y, now.z, raw.w), meta_out: vec4(weight, flick, lum, delta) };
+        }
+        let was = ycocg(squeeze(max(catmull_rom(history, back + 0.5), vec3(0.0, 0.0, 0.0))));
+        // At rest and no longer jittered: nothing new to gather; the history is held, only kept (widely) among this frame's
+        // colors.
+        let resting = at(rests, 0) == 1 && length(own) == 0.0 && length(moved) == 0.0 && count >= 1.0;
+        // History held among this frame's colors; wider where it flickers
+        // (there the history is the steadier truth), narrower when moving.
+        let reach = if resting { 3.0 } else { mix(mix(1.75, 1.3, moving), 3.0, flick) };
+        let kept = clip_toward(was, mean, sigma * reach);
+        // Clipped far: what it showed is not here any more; start again.
+        let off_by = length(kept - was) / length(sigma);
+        let cap = mix(most, least, moving);
+        let carried = min(count, cap) * (if off_by > 1.5 { 0.35 } else { 1.0 });
+        // The history weighs what it gathered (as much of it as was in
+        // sight), this frame what fell near.
+        let trusted = carried * saturate(visible * 2.0 - 1.0);
+        let share = weight / (weight + trusted);
+        // Held and within this frame's colors: the history as it is, bit for bit (the picture rests).
+        let mixed = if resting && off_by == 0.0 { at(history, qf).xyz } else { unsqueeze(mix(ycocg_rgb(kept), cur, if resting { 0.0 } else { clamp(share, 0.02, 1.0) })) };
+        let next = if resting { count } else { min(trusted + weight, cap) };
+        return { result: vec4(mixed.x, mixed.y, mixed.z, raw.w), meta_out: vec4(next, flick, lum, delta) };
+    }
+}
+
+/// The G-buffer's surface copied as it is (read the next frame as the last).
+kernel camera.keep_surface@1 {
+    requires { field.read; field.write; }
+    input surface: Grid<Vec4>;
+    output result: Grid<Vec4>;
+    compute { return sample(surface); }
+}

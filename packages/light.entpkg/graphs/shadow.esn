@@ -4,6 +4,7 @@
 //! (`insts`) where the pixels read it and it is not held yet, each thing at the level of its clusters whose error spans at
 //! most `error` texels.
 use "parallel.entpkg";
+use "surface.entpkg";
 use "mesh.entpkg";
 use "../kernels/";
 
@@ -46,7 +47,7 @@ node pages: light.shadow_pages@1 { previous <~ pages.held from table0.result; ma
 node map0: Grid<Int> { domain = vec2(1, 1); }
 node cleared: light.shadow_clear@1 { previous <~ drawn.result from map0.result; dirty <- pages.dirty; size = size; page = page; domain = vec2(size, size * levels); }
 node picks: light.shadow_pick@1 { insts <- insts; meshes <- meshes; levels <- rows.result; dirty <- pages.dirty; error = error; domain = count(levels) * count(insts); }
-node ends: light.cluster_offsets@1 { picks <- picks.result; }
+node ends: surface.cluster_offsets@1 { picks <- picks.result; }
 node total: parallel.runs_entries@1 { ends <- ends.result; domain = 1; }
 node culled: light.shadow_cull@1 { picks <- picks.result; ends <- ends.result; insts <- insts; clusters <- clusters; meshes <- meshes; errors <- errors; levels <- rows.result;
     dirty <- pages.dirty; total <- total.result; error = error; domain = value(total); }

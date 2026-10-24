@@ -13,9 +13,7 @@ use "geometry.entpkg";
 use "parallel.entpkg";
 use "mesh.entpkg";
 use "raster.entpkg";
-use "camera.ent";
-use "cluster.ent";
-use "field.ent";
+use "surface.entpkg";
 use "sky.ent";
 
 /// A level: the light's axes (`right`, `up` across the sunlight, `toward` the sun), its texels `texel` meters, its first

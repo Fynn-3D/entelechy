@@ -3,6 +3,7 @@
 //! one every `spacing` meters from the proxy's `lo`, covering the proxy; each face traces `rays` rays a frame,
 //! and stops after `most`.
 use "../kernels/";
+use "camera.entpkg";
 
 input lens: Lenses;
 input sky: SkyLooks;
@@ -75,7 +76,7 @@ node count: light.path_count@1 { previous <~ count.result from count0.result; le
 node gather: light.probes_screen_gather@1 { surface <- surface; lit <- lit.result; probes <- light.result; proxy <- proxy; land <- land; frame <- frame; sky <- sky; lens <- lens; lamps <- lamps; lamp_looks <- lamp_looks; count <- count.result; spacing = spacing; rays = screen_rays; domain = ceil(size(surface) / gather_every); }
 node gathered: light.probes_gather_blur@1 { gathered <- gather.result; surface <- surface; domain = size(surface); }
 // ... gathered frame by frame (the last frame's moved to where it is now).
-node now_lens: light.same_lens@1 { lens <- lens; domain = 1; }
+node now_lens: camera.same_lens@1 { lens <- lens; domain = 1; }
 node blank_kept: Image { domain = vec2(1, 1); }
 node kept: light.probes_gather_keep@1 { gathered <- gathered.result; surface <- surface; previous <~ kept.result from blank_kept.result; lens <- lens; was_lens <~ now_lens.result from now_lens.result; count <- count.result; domain = size(surface); }
 node shade: light.probes_shade@1 { surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; beyond <- beyond.result; through <- through; lit <- lit.result; gathered <- kept.result; proxy <- proxy; land <- land; probes <- light.result; frame <- frame; sky <- sky; lens <- lens;

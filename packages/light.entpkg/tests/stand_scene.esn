@@ -2,6 +2,7 @@
 //! the G-buffer settled from a rough one while the lens moves and a fine
 //! one once it rests, and the proxies.
 use "stand.ent";
+use "surface.entpkg";
 use "../kernels/";
 use "geometry.entpkg";
 
@@ -20,13 +21,13 @@ node lens: kernel {
 node settled: Rows<Int> { domain = 1; value = 1; }
 node g_fine: stand.gbuffer@1 { lens <- lens.result; sky <- sky.result; domain = window(); }
 node g_rough: stand.gbuffer@1 { lens <- lens.result; sky <- sky.result; domain = ceil(window() / 2); }
-node g: light.settle@1 { fine_surface <- g_fine.surface; fine_paint <- g_fine.paint; fine_extra <- g_fine.extra; fine_layers <- g_fine.layers; fine_more <- g_fine.more;
+node g: surface.settle@1 { fine_surface <- g_fine.surface; fine_paint <- g_fine.paint; fine_extra <- g_fine.extra; fine_layers <- g_fine.layers; fine_more <- g_fine.more;
     rough_surface <- g_rough.surface; rough_paint <- g_rough.paint; rough_extra <- g_rough.extra; rough_layers <- g_rough.layers; rough_more <- g_rough.more;
     settled <- settled.result; shrink = 2; domain = window(); }
-node behind: light.settle_behind@1 { fine_at <- g_fine.behind_at; fine_dir <- g_fine.behind_dir; fine_paint <- g_fine.behind_paint; fine_normal <- g_fine.behind_normal; fine_through <- g_fine.through;
+node behind: surface.settle_behind@1 { fine_at <- g_fine.behind_at; fine_dir <- g_fine.behind_dir; fine_paint <- g_fine.behind_paint; fine_normal <- g_fine.behind_normal; fine_through <- g_fine.through;
     rough_at <- g_rough.behind_at; rough_dir <- g_rough.behind_dir; rough_paint <- g_rough.behind_paint; rough_normal <- g_rough.behind_normal; rough_through <- g_rough.through;
     settled <- settled.result; shrink = 2; domain = window(); }
-node depths: light.depths@1 { surface <- g.surface; domain = ceil(window() / 8); }
+node depths: surface.depths@1 { surface <- g.surface; domain = ceil(window() / 8); }
 
 output lens <- lens.result;
 output sky <- sky.result;

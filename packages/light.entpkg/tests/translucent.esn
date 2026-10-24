@@ -7,6 +7,7 @@
 // summed in no order. `bend` makes the near pane thick. No bounce (one
 // empty cell), a dim sky.
 use "mesh.entpkg";
+use "surface.entpkg";
 use "geometry.entpkg";
 use "raster.entpkg";
 use "../kernels/";

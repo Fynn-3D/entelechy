@@ -1,0 +1,31 @@
+// The lens jittered frame after frame and the frames gathered, at points whose answers are known: a lens facing -z,
+// focal 1, over a picture 100 high, the picture resting `calm` frames. Jittered at rest's first frame by Halton's
+// (0.25, 0.667) less a half, a quarter pixel left; at sixteen and past, not at all. A flat picture gathered by temporal
+// antialiasing and by super-resolution stays flat, and the still lens rests.
+use "../kernels/";
+use "geometry.entpkg";
+use "image.entpkg";
+
+param calm: Int = 1;
+node lens: kernel {
+    requires { field.write; }
+    output result: Lenses;
+    domain = 1;
+    compute { return Lens { eye: vec3(0.0, 0.0, 0.0), ahead: vec3(0.0, 0.0, -1.0), right: vec3(1.0, 0.0, 0.0), up: vec3(0.0, 1.0, 0.0), focal: 1.0 }; }
+}
+node rest: kernel {
+    requires { field.write; }
+    param calm: Int = calm;
+    output result: Rows<Int>;
+    domain = 1;
+    compute { return calm; }
+}
+node size: Rows<Vec2> { domain = 1; value = vec2(160.0, 100.0); }
+node jlens: camera.jitter@1 { lens <- lens.result; calm <- rest.result; size <- size.result; domain = 1; }
+node flat: Grid<Vec4> { domain = vec2(160, 100); value = vec4(0.25, 0.5, 0.75, 1.0); }
+node wall: Grid<Vec4> { domain = vec2(160, 100); value = vec4(0.0, 0.0, 1.0, 10.0); }
+node none: Grid<Vec4> { domain = vec2(1, 1); }
+node blended: graph "../graphs/taa.esn" { hdr <- flat.result; surface <- wall.result; lens <- lens.result; jlens <- jlens.result; motion <- none.result; }
+node built: graph "../graphs/super_resolution.esn" { hdr <- flat.result; surface <- wall.result; lens <- lens.result; jlens <- jlens.result; motion <- none.result; }
+
+output result <- built.result;

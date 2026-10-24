@@ -189,3 +189,12 @@ fn pbr_of(paint: Vec4, extra: Vec4, layers: Vec4, more: Vec4) -> Pbr {
     return Pbr { albedo: paint.xyz, rough: paint.w, metal: extra.y, glow: paint.xyz * extra.z, ior: if more.z > 1.0 { more.z } else { 1.5 },
         clearcoat: layers.x, coat_rough: if layers.y > 0.0 { layers.y } else { 0.05 }, sheen: layers.z, subsurface: layers.w, anisotropy: more.x, transmission: more.y };
 }
+
+/// A direction drawn by cosine from the hemisphere about `n` (`u1` and `u2` random numbers from 0 to 1).
+fn cosine_dir(n: Vec3, u1: Float, u2: Float) -> Vec3 {
+    let r = sqrt(u1);
+    let a = 6.2831853 * u2;
+    let t = normalize(if abs(n.y) < 0.9 { cross(n, vec3(0.0, 1.0, 0.0)) } else { cross(n, vec3(1.0, 0.0, 0.0)) });
+    let b = cross(n, t);
+    return normalize(t * (r * cos(a)) + b * (r * sin(a)) + n * sqrt(max(1.0 - u1, 0.0)));
+}

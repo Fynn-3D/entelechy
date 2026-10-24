@@ -3,7 +3,7 @@
 // blocks), and a sharpening that cannot overshoot (RCAS, `image.contrast_sharpen`).
 
 /// What lies at pixel `q` when `image` is scaled to `dst`, nearest-neighbor: each pixel made a
-/// block, nothing interpolated (pixel art's look). With a whole multiple (`light.extent`'s `whole`) the blocks
+/// block, nothing interpolated (pixel art's look). With a whole multiple (`camera.extent`'s `whole`) the blocks
 /// are one size; the window's edge of less than a block repeats the last column and row.
 fn upscaled_near(image: Image, q: Vec2, dst: Vec2) -> Vec4 {
     let src = size(image);

@@ -11,6 +11,7 @@
 // proxies are handed over, and the light is the renderer's the graph
 // places.
 use "../../../packages/light.entpkg";
+use "../../../packages/surface.entpkg";
 use "../../../packages/geometry.entpkg";
 
 struct Hit { d: Float; what: Int; }

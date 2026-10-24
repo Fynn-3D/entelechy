@@ -1,0 +1,12 @@
+// The picture drawn at a resolution of its own: dynamic resolution as it begins (all of the ceiling), the inner extent
+// it gives for the window, that extent as a size, and an empty raster canvas that large.
+use "../kernels/";
+
+node dynamic0: camera.dynamic_start@1 { domain = 1; }
+node dynamic: camera.dynamic@1 { previous <~ dynamic.result from dynamic0.result; domain = 1; }
+node extent: camera.extent@1 { dynamic <- dynamic.result; domain = 2; }
+node quarter: camera.extent@1 { dynamic <- dynamic.result; pixels = 4000.0; domain = 2; }
+node size: camera.extent_size@1 { extent <- extent.result; domain = 1; }
+node canvas: camera.canvas@1 { extent <- extent.result; domain = vec2(value(extent, 0), value(extent, 1)); }
+
+output result <- size.result;

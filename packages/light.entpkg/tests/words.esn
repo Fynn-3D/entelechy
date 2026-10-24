@@ -3,6 +3,7 @@
 // pass's at its start and its own past it; an outline kept to the right half of the picture by a mask
 // (`image.masked`) is the picture on the left and the outline on the right.
 use "../kernels/";
+use "surface.entpkg";
 use "geometry.entpkg";
 use "image.entpkg";
 
@@ -68,7 +69,7 @@ node told_start: image.film@1 { image <- seen.result; film <- start.result; }
 node told_half: image.film@1 { image <- seen.result; film <- half.result; }
 
 // Ink kept to the right half.
-node inked: light.outline@1 { image <- seen.result; surface <- stand.surface; }
+node inked: surface.outline@1 { image <- seen.result; surface <- stand.surface; }
 node right: kernel {
     requires { field.write; }
     output result: Grid<Float>;

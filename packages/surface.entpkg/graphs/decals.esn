@@ -1,0 +1,22 @@
+//! Decals laid onto a G-buffer before a renderer (`kernels/decal.ent`): each
+//! decal's picture pressed onto the surfaces inside its box, the paint, the
+//! extra and the normals given back in the contract's layout, for any
+//! renderer to light.
+use "../kernels/";
+
+input surface: Grid<Vec4>;
+input paint: Grid<Vec4>;
+input extra: Grid<Vec4>;
+input lens: Lenses;
+/// The decals, in the order they are laid (`surface.decals_none` for none).
+input decals: Decals;
+/// Their pictures and bumps (`surface.decal_looks_none` for none).
+input decal_looks: DecalLooks;
+
+node painted: surface.decal_paint@1 { paint <- paint; surface <- surface; lens <- lens; decals <- decals; decal_looks <- decal_looks; domain = size(paint); }
+node extras: surface.decal_extra@1 { extra <- extra; surface <- surface; lens <- lens; decals <- decals; decal_looks <- decal_looks; domain = size(extra); }
+node bent: surface.decal_normals@1 { surface <- surface; lens <- lens; decals <- decals; decal_looks <- decal_looks; domain = size(surface); }
+
+output surface <- bent.result;
+output paint <- painted.result;
+output extra <- extras.result;
