@@ -19,8 +19,6 @@ fn nearer(a: Hit, b: Hit) -> Hit { return if b.d < a.d { b } else { a }; }
 
 /// A ball's radius.
 fn ball_r() -> Float { return 0.4; }
-/// How many balls there are.
-fn balls() -> Int { return 25; }
 /// Where ball `k` stands: 0 to 6 the first row, 7 to 12 the red, 13 to 18
 /// the gold, 19 to 24 the clear.
 fn ball_c(k: Int) -> Vec3 {
@@ -34,14 +32,23 @@ fn clear_tint(j: Int) -> Vec3 { return [vec3(0.96, 0.99, 0.97), vec3(0.96, 0.99,
 fn clear_rough(j: Int) -> Float { return [0.0, 0.35, 0.02, 0.02, 0.12, 0.0][clamp(j, 0, 5)]; }
 fn clear_ior(j: Int) -> Float { return [1.5, 1.5, 1.52, 1.33, 1.31, 2.42][clamp(j, 0, 5)]; }
 fn is_clear(k: Int) -> Bool { return k >= 19 && k < 25; }
+/// The ball nearest `p` (distance to its surface, its number): the first
+/// row's and the three rows behind's (two without `clear`), each found by
+/// rounding on its lattice, so as every ball were measured.
+fn ball_near(p: Vec3, clear: Bool) -> Vec2 {
+    let front = int(clamp(floor(p.x / 1.1 + 3.5), 0.0, 6.0));
+    let column = int(clamp(floor(p.x / 1.1 + 3.0), 0.0, 5.0));
+    let row = int(clamp(floor((-1.3 - p.z) / 1.3 + 0.5), 0.0, if clear { 2.0 } else { 1.0 }));
+    let k = 7 + row * 6 + column;
+    let a = length(p - ball_c(front)) - ball_r();
+    let b = length(p - ball_c(k)) - ball_r();
+    return if b < a { vec2(b, float(k)) } else { vec2(a, float(front)) };
+}
 
 /// The nearest thing to `p`: 0 the floor, 100 + k ball k. Without
 /// `clear` the clear balls are left out (a shadow counts them apart).
 fn world_of(p: Vec3, clear: Bool) -> Hit {
-    let b = loop balls() with b = vec2(1000.0, -1.0) {
-        let d = length(p - ball_c(index())) - ball_r();
-        if d < b.x && (clear || !is_clear(index())) { vec2(d, float(index())) } else { b }
-    };
+    let b = ball_near(p, clear);
     return nearer(Hit { d: p.y, what: 0 }, Hit { d: b.x, what: 100 + int(b.y) });
 }
 fn world(p: Vec3) -> Hit { return world_of(p, true); }
@@ -146,10 +153,7 @@ kernel stand.bake@1 {
     output result: Volume<Vec4>;
     compute {
         let p = vol_lo() + coord() * vox();
-        let b = loop balls() with b = vec2(1000.0, 0.0) {
-            let d = length(p - ball_c(index())) - ball_r();
-            if d < b.x { vec2(d, float(index())) } else { b }
-        };
+        let b = ball_near(p, true);
         let a = mean_albedo(int(b.y));
         return vec4(b.x, a.x, a.y, a.z);
     }
