@@ -32,7 +32,7 @@ directions: a test needing a higher crate lives in that crate's tests.
 | Kernel language | [language](crates/frontend/language/src/lib.rs), [parser](crates/frontend/language/src/parser.rs), [lexer](crates/frontend/language/src/lexer.rs), [scope](crates/frontend/language/src/scope.rs) | parser tests in place; [names a document sees, case by case](crates/interface/session/tests/scope.rs) |
 | Compiler | [compiler](crates/frontend/compiler/src/lib.rs), [lowering](crates/frontend/compiler/src/lower/), [help](crates/frontend/compiler/src/help.rs) | [compile tests](crates/frontend/compiler/tests/compile.rs), [surface at its version](crates/frontend/compiler/tests/surface.rs), [help written as the language takes it](crates/frontend/compiler/tests/help_examples.rs), [every signature and its capability compiled](crates/frontend/compiler/tests/help_signatures.rs) |
 | File writes | [writes](crates/interface/session/src/writes.rs); `else` fallback in the [evaluator](crates/core/graph/src/evaluate/mod.rs) | [session](crates/interface/session/tests/writes.rs), [lowering](crates/frontend/scene/src/lib.rs), [save replay](examples/data/tests/save.replay) |
-| Laws a world writes | output `to files` into its law's document; [history origin](crates/interface/session/src/history.rs), [kept store](crates/interface/session/src/store.rs), replay `allow`; [composer package](packages/genesis.entpkg/kernels/law.ent) | [genesis tests](crates/interface/session/tests/genesis.rs), [genesis replay](examples/genesis/tests/genesis.replay) |
+| Laws a world writes | output `to files` into its law's document; [history origin](crates/interface/session/src/history.rs), [kept store](crates/interface/session/src/store.rs), replay `allow`; [template](packages/text.entpkg/graphs/template.esn) | [genesis tests](crates/interface/session/tests/genesis.rs), [genesis replay](examples/genesis/tests/genesis.replay) |
 | Shared rules | [rules](crates/core/rules/src/lib.rs), [`Backend`](crates/core/rules/src/backend.rs), [reduce tree](crates/core/rules/src/reduce.rs), [rasterizer](crates/core/rules/src/raster.rs) | every backend's parity test |
 | Reference backend | [cpu](crates/backends/cpu/src/lib.rs), [word code](crates/backends/cpu/src/eval/) | [execution](crates/backends/cpu/tests/execute.rs), [optimizer](crates/backends/cpu/tests/optimizer.rs) |
 | JIT backend | [jit](crates/backends/jit/src/lib.rs), [Cranelift emission](crates/backends/jit/src/codegen.rs), [WebAssembly emission](crates/backends/jit/src/wasm) | [parity](crates/backends/jit/tests/parity.rs), [matrix](crates/backends/jit/tests/matrix.rs), [as WebAssembly in node](crates/interface/entelechy/tests/wasm.rs) |
@@ -62,7 +62,7 @@ Packages built from existing modes, with no engine feature of their own.
 | [Skinning](packages/animation.entpkg/kernels/skin.ent), [rig contract](docs/RIGS.md) | maps over rows, `<~` | [rig tests](crates/interface/entelechy/tests/rigs.rs); [skin](examples/animation/tests/blend.replay), [crowd](examples/animation/tests/crowd.replay), [reach](examples/animation/tests/aim.replay), [elbow](packages/animation.entpkg/tests/aim.replay), [stride](examples/animation/tests/stride.replay) replays |
 | [Rasterization](packages/raster.entpkg/kernels/triangle.ent) | scatter `min` of `Long` keys with `emit` | [edges](examples/mesh/tests/edges.replay) and [cutout](examples/mesh/tests/cutout.replay) replays on three backends, [session test](crates/interface/entelechy/tests/session.rs); [ten million triangles](examples/mesh/tests/ten_million.esn) for `bench` |
 | [Vector drawing](packages/vector.entpkg/kernels/fill.ent) | `prefix with sum`, scatter `max` with `emit`, `value(port)` | [vector replays](examples/vector/tests/) on three backends |
-| [Rigid bodies](packages/physics.entpkg/kernels/solve.ent), [decision](docs/DECISIONS.md#contacts-are-solved-all-at-once-each-against-its-own-share-of-a-body) | the math package, scatter `sum` of pushes, `times` with two `carry`s, `<~` | [physics replays](examples/physics/tests/) on three backends |
+| [Rigid bodies](packages/physics.entpkg/kernels/solve.ent) | the math package, scatter `sum` of pushes, `times` with two `carry`s, `<~` | [physics replays](examples/physics/tests/) on three backends |
 | [Widgets and letters](packages/ui.entpkg/README.md) | maps over grids, `<~` navigation state, `value(port)` and `count(port)` extents | [ui replay](examples/ui/tests/ui.replay) on three backends |
 | [Font import](crates/interface/import/src/font.rs) | glyph outlines as `Rows` of segments | [importer tests](crates/interface/import/src/font.rs), on a font the tests build from the format's tables |
 | [Image](packages/image.entpkg/package.esn) | maps, scatter `sum` and prefix `sum` (histograms), `times` with a carried step (jump flooding) | [image replay](packages/image.entpkg/tests/operations.replay) on three backends |
@@ -205,7 +205,7 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   arithmetic, so every backend computes one formula
   ([composite](crates/frontend/compiler/src/lower/composite.rs), [matrix](crates/frontend/compiler/src/lower/matrix.rs),
   [WGSL `select`](crates/backends/gpu/src/wgsl/emitter.rs)).
-- Work bounds ([decision](docs/DECISIONS.md)): `Manifest::budget`
+- Work bounds ([decision](docs/DECISIONS.md#the-host-bounds-work-and-memory)): `Manifest::budget`
   ([ir](crates/core/ir/src/lib.rs)), `Host::work` ([host](crates/core/host/src/lib.rs)),
   `Run` ([rules](crates/core/rules/src/lib.rs)), `Op::Spend` and `Op::Look`
   placed by [`account`](crates/core/ir/src/account.rs) in `prepare_on`
@@ -267,7 +267,7 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
 - The optimizer rewrites exactly and moves nothing that can fail
   ([optimize](crates/core/ir/src/optimize.rs), [test](crates/backends/cpu/tests/optimizer.rs)).
 - A platform without threads, links, native code or a clock does the same
-  work another way ([decision](docs/DECISIONS.md), [later](crates/core/kernel/src/later.rs),
+  work another way ([decision](docs/DECISIONS.md#a-platform-is-the-hosts-world-what-a-scene-computes-is-not), [later](crates/core/kernel/src/later.rs),
   [store](crates/interface/session/src/store.rs), [clock](crates/core/kernel/src/clock.rs),
   [bridges test](crates/interface/entelechy/tests/bridges.rs)).
 
@@ -304,13 +304,3 @@ only after running that test on the device.
   the GPU backend enables.
 - Uniforms are rewritten per node with `queue.write_buffer`, which orders
   against submissions: a frame is not one submission.
-
-## Declined
-
-Each stays out until a new measurement reopens it.
-
-- A node-level parallel scheduler: a map uses every core; `async` covers
-  work off the frame.
-- A `times` that stops on a residual: a step count is its author's budget.
-- `break` in hot loops: the showcase keeps `until`.
-- A sixteen-wide reduction fold on the CPU: a dependency chain.

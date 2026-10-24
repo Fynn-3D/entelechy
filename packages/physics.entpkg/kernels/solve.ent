@@ -1,5 +1,11 @@
 // Solving: every manifold at once over substeps, each against its own
-// share of its bodies, the pushes on a body summed; then bounces.
+// share of its bodies, the pushes on a body summed; then bounces. Solved
+// at once, the answer has no order to depend on and is the same on every
+// backend, where solving one manifold after another needs an order and
+// coloring them a pass a color. A contact is a spring of the bodies' own
+// masses, so a pile sinks alike however many manifolds share a body; a
+// deep pile converges over the substeps, and the impulses each pair held
+// the step before let a resting stack stand still.
 use "body.ent";
 use "contact.ent";
 

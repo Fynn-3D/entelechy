@@ -305,7 +305,7 @@ compare and division, the high half of a 64-bit product). `bits` and
 Ints of non-negative Floats order as the Floats do.
 
 Float `min`/`max` follow one rule on every backend
-([decision](DECISIONS.md)).
+([decision](DECISIONS.md#one-expression-has-one-answer-on-every-backend)).
 
 Fields and context:
 
@@ -325,7 +325,7 @@ Fields and context:
   zero without one: a sound made to the device keeps it that far ahead)
   need `time.read`. A Kernel
   meant to run for days times with `clock()`
-  ([why](DECISIONS.md#the-clock-crosses-whole)).
+  ([why](DECISIONS.md#one-expression-has-one-answer-on-every-backend)).
 - `pointer()`, `pointer_down()`, `button(n)` (0 left, 1 right, 2
   middle), `wheel()` (scroll since the last evaluation, `Vec2`),
   `key(code)`, `typed(k)` (the `k`th character typed since the last
@@ -357,9 +357,9 @@ NaN made by arithmetic on the GPU (`inf * 0`, `sqrt` of a negative) may
 come out a number under a driver's fast math.
 
 An integer `sum` a scatter or prefix folds is each element's whole
-total, independent of order ([decision](DECISIONS.md)).
+total, independent of order ([decision](DECISIONS.md#one-expression-has-one-answer-on-every-backend)).
 
-Work is bounded in loop iterations ([decision](DECISIONS.md)):
+Work is bounded in loop iterations ([decision](DECISIONS.md#the-host-bounds-work-and-memory)):
 
 - **Budget.** The iterations one element may run, all loops together (a
   scan step and a reduction merge are each an element): 16777216 unless
@@ -409,7 +409,7 @@ diagnostic names the declaring document and the `use` to add.
   `loop`; `fn scatter(...)` is a function.
 - Functions call one another in any order; no chain of calls comes back
   to a function, so none recurses, and a cycle is refused naming it
-  ([decision](DECISIONS.md)). Repetition is a `loop` carrying the work.
+  ([decision](DECISIONS.md#a-function-never-reaches-itself-its-place-in-the-document-is-free)). Repetition is a `loop` carrying the work.
 - A struct may name a struct declared after it; structs that contain one
   another are refused, naming them.
 - A short function is inlined at compile time; a trace still shows the
@@ -661,7 +661,7 @@ kernel particles.splat@1 {
   address outside the target. `emit` takes only `min`, `max`, or a `sum`
   of no floats. The interpreter and the JIT hold emitted pairs against
   the Host's budget; past it the run fails and commits nothing
-  ([decision](DECISIONS.md)).
+  ([decision](DECISIONS.md#the-host-bounds-work-and-memory)).
 
 **Prefix** (`prefix`): each output element is its value combined with
 every value before it.
@@ -725,7 +725,7 @@ On a device a group is a workgroup and an exchange a pass through its
 shared memory between barriers. The interpreter and the JIT run the
 group's own branches and loops round its exchanges once, and each
 stretch between exchanges once for each lane in turn
-([decision](DECISIONS.md)); what crosses an exchange is held as the
+([decision](DECISIONS.md#a-groups-lanes-meet-at-exchanges)); what crosses an exchange is held as the
 array of the lanes' values, so a value that crosses one holds at most
 what a value may, its words times the group's size, which is refused
 where the group is written. The GPU runs every group a map could run,
@@ -867,7 +867,7 @@ be keywords.
    `surface`, a grid of `depth: Float; normal: Vec3; uv: Vec2; id: Int`
    over the node's `domain`: bit for bit the raster package's surface on
    the interpreter and the JIT, the device's rasterizer, approximate at
-   edges, on a GPU ([decision](DECISIONS.md)). `native.rasterize@3`
+   edges, on a GPU ([decision](DECISIONS.md#the-rasterizer-is-a-package-the-native-one-is-its-fast-path)). `native.rasterize@3`
    takes a `canvas` (a `Grid<Long>`, the empty canvas the package's
    Kernels take their extent from) as well and draws over its extent,
    `domain = size(canvas);`, so a surface sized by another node's output
@@ -901,7 +901,7 @@ be keywords.
    changes and is not empty; one output writes it. The system's
    clipboard, in the Player, needs `--allow clipboard.write`.
    A placed graph's outputs are wired, never written
-   ([decision](DECISIONS.md)).
+   ([decision](DECISIONS.md#a-kernels-effects-are-data-the-host-carries-out-after-a-commit)).
    A font is placed as a node too: `node g: font "x.ttf" { codes <-
    wanted.result; }`. The Host reads the font file (TrueType or
    OpenType, read as `entelechy import` reads one) and gives the
@@ -951,7 +951,7 @@ be keywords.
    a run takes each in a frame later, as a files node does. Its type is a
    `Rows` of the element; a fields node takes no domain or params. It is
    how a world larger than memory keeps in it only what its frames are
-   near ([why](DECISIONS.md#a-world-larger-than-memory-is-read-by-what-it-asks-for)).
+   near ([why](DECISIONS.md#what-a-scene-reads-of-the-hosts-world-is-an-input-or-a-node)).
 10. `times = N;` on a Kernel node or placed graph stands for `name/1` to
     `name/N`, each wired as written; `carry port <- output;` feeds the
     port from the previous time's output from the second time on.
@@ -988,7 +988,7 @@ be keywords.
     placed graph's requirements come with it, named under the node that
     places it, reading what the parent passed. `require cells: columns *
     rows <= 1 << bits;` is how the physics package says its sort holds
-    every cell ([why](DECISIONS.md#a-graph-says-what-its-parameters-must-hold)).
+    every cell ([why](DECISIONS.md#the-graph-computes-structure-never-values)).
 
 ### Packages
 

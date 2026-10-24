@@ -3,1297 +3,129 @@
 **Answers:** why Entelechy is this way and not another, where the answer is
 not visible in the code.
 
-Each entry is a decision that holds until it is replaced by name. It
-states the choice, what it protects, and where the code enforces it.
-The architecture documents set the boundaries; these are the rulings
-made inside them.
+Each entry is a ruling made inside the architecture documents'
+boundaries, and holds until it is replaced by name: the choice, why, and
+where the code holds it. How a ruling is carried out is the code's to
+say, beside the code.
 
 ## The Graph computes structure, never values
 
-A scene document composes Kernels. Its only computation is structural:
-how large a node's output is (`domain`) and how many times a node is
-placed (`times`). A node's value is written, a literal or a graph
-parameter by name: `gain = n + 1;` and `times = n + 1;` are refused.
-
-A `domain` expression reads values (a parameter, the window, a number a
-Kernel wrote with `value(port)`) and yields only a count or a size. Its
-arithmetic is over counts and measures: whole numbers are exact and fail
-rather than wrap, a measure is made whole before it sizes anything, and
-a boolean, a color or a struct is not a size.
+A scene's only computation is structural: how large a node's output is
+(`domain`) and how many times a node is placed (`times`). A node's value
+is written, a literal or a graph parameter by name. A domain reads values
+(a parameter, the window, a number a Kernel wrote with `value(port)`) and
+yields only a count or a size, exact or failing, never wrapping. A graph
+says what its parameters must hold with `require name: a <= b;`, two
+counts compared, checked as the document loads and before every
+evaluation; a placed graph's requirements come with it.
 
 **Why.** A scene that computes values is a second language beside
-`.ent`: untyped, untraced, unchecked, run on the Host rather than a
-backend. Every computation belongs where it is typed, traced,
-hot-reloaded and held to one result on every backend; a Kernel computes
-any count and `value(port)` sizes by it.
+`.ent`: untyped, untraced, run on the Host rather than a backend. What
+breaks a preset is a relation between its parameters that no single
+Kernel sees whole; it belongs to the graph that states them, and a
+verdict over counts is still structure.
 
-**Where.** Node values and `times` go through the literal reader
-([`scene`](../crates/frontend/scene/src/lib.rs), test
-`a_scene_writes_values_and_never_computes_them`). A domain resolves
-through a private `Size` in
-[`graph/src/domain.rs`](../crates/core/graph/src/domain.rs), whose only way
-out is a `Domain`.
+**Where.** The literal reader in [`scene`](../crates/frontend/scene/src/lib.rs);
+`Size` and `Requirement` in [`domain.rs`](../crates/core/graph/src/domain.rs).
 
-## Work is bounded, in iterations, per element and per run
+## The Host bounds work and memory
 
-Each element of a Kernel runs at most its budget of loop iterations:
-2^24 unless it declares `budget N;`. One run of a Kernel, all elements
-together, runs at most the Host's bound: four thousand million unless a
-session is given `--work`. An element past its budget fails the
-evaluation, named, like an integer overflow; a run past the Host's bound
-fails as a run. Nothing commits; the running system keeps its last state.
+Each element of a Kernel runs at most its budget of loop iterations
+(2^24 unless it declares `budget N;`); one run, all elements together,
+at most the Host's bound (`--work`). What a run holds in Host memory (a
+scatter's pairs, its sorted copies) counts against the Host's budget as a
+Field does. Past any bound the run fails, named; nothing commits. Both
+work bounds count iterations, never time; where they are counted is
+written into the IR once, and a backend implements a count, never where
+it goes.
 
-Both bounds count iterations, never time. A run passes the Host's bound
-by its elements' exact sum, whatever the schedule; a run that passes it
-and has a failing element may be named for either. Both bounds are a
-node's own: a Kernel whose work is counted is never fused.
-
-Where work is counted is written into the IR once:
-[`entelechy_ir::account`](../crates/core/ir/src/account.rs) follows every loop
-with a `Spend` of the iterations whose body ran, ends every element with
-a `Look`, and puts a `Look` first in the `until` of every loop that can
-run more than 2^20 iterations itself. The runtime accounts a module as
-it hands it to a backend; a backend implements what a spend and a look
-are, never where they go. The run's shared count is touched in blocks of
-1024 iterations, partial blocks summed where they ran (a thread, a
-workgroup). A Kernel whose elements cannot run 1024 iterations, or pass
-their budget, is not counted.
-
-**Why.** A failed update leaves the running system alive, and a Kernel
-that never finishes is a failure no validation catches; a bound per
-element alone still lets a million elements hold a device until its
-driver resets. The Kernel owns its budget because it knows its loops;
-the Host owns the run's because it owns the machine. Counting iterations
-makes a failure the same on every backend and machine.
+**Why.** A Kernel that never finishes, or that takes the machine's
+memory by asking, is a failure no validation catches. The Kernel owns
+its budget because it knows its loops; the Host owns the run's because
+it owns the machine. Counting iterations makes a failure the same on
+every backend.
 
 **Where.** [`account`](../crates/core/ir/src/account.rs),
-[`Manifest::budget`](../crates/core/ir/src/lib.rs),
 [`Host::work`](../crates/core/host/src/lib.rs),
-[`Run`](../crates/core/rules/src/lib.rs) and
-[`Module::counts_work`](../crates/core/ir/src/lib.rs). Tests
+[`Scope::room`](../crates/core/abi/src/lib.rs); tests
 `an_element_past_its_budget_fails_alike_on_every_backend` and
 `a_run_past_the_hosts_work_fails_alike_on_every_backend`.
 
 ## A function never reaches itself; its place in the document is free
 
-A Kernel's functions may call one another whatever order they are
-written in, within a document and across the documents it uses. No
-chain of calls may come back to a function it has left: `fact` calling
-`fact`, or `a` calling `b` calling `a`, is refused where the chain
-closes, naming the chain whole (`a -> b -> a`). Repetition is a `loop`
-carrying the work.
-
-**Why.** A Kernel has no stack. WGSL forbids recursion; the WebAssembly
-JIT keeps what a stack would hold in slots its prepared Kernel owns; a
-short function is inlined; and an element's work is bounded by its loops
-alone. Refusing a cycle protects exactly that, where a rule of position
-(a function calls only those above it) refused orders with no cycle and
-made a document's order a thing to arrange: a caller written first, or a
-helper added at the end by an edit, was refused for being where it was.
-A function still reaches only its own document's declarations and those
-of the documents it uses, never a document that uses it.
-
-**Where.** `refuse_cycle` and `Shared::lowering` in the compiler's
-[`lower`](../crates/frontend/compiler/src/lower/mod.rs): a function is
-lowered where first called, with the functions being lowered on a stack,
-and a call to one on it is the cycle. The IR keeps its own order,
-callees before callers ([`Function`](../crates/core/ir/src/lib.rs)).
-Tests `no_chain_of_calls_reaches_back_to_a_function` and
-`functions_call_each_other_in_any_order_whatever_is_lowered_first`.
-
-## What a run holds in Host memory counts against the Host's budget
-
-A scatter's pairs (the one each element returns and every one it
-`emit`s) are held in Host memory by the interpreter and the JIT, against
-the room the Host's budget has left when the run begins
-([`Scope::room`](../crates/core/abi/src/lib.rs)), as a Field is: the
-returned pairs before the run starts, the emitted ones as they come, the
-JIT's sorted copies before it sorts them. Past the room the run fails as
-`OverRoom`, named for its room; nothing commits. A device that lands each
-pair where it is emitted holds no list, so which backend a run fits on
-is the machine's property, as for any allocation; what a run computes is
-not. A run past the room with a failing element may be named for either.
-
-A run the Host has no room for, for a Field or for its pairs, runs once
-more after the evaluation lets go of the cached outputs no later run of
-the frame reads: those read last before it, and those downstream of a
-node run this frame, which run again when reached. The scene's outputs,
-the state's sources and the pinned stay. A frame of many steps holds
-what its next steps read, not every step it took; an output let go keeps
-its key, and a later frame makes it again only for a reader that runs
-(*What is made once is let go once made*).
-
-**Why.** The Host owns memory as it owns work. An element that emits in
-a loop holds as much as its work bound lets it, and that bound is on
-iterations, not memory; a published Kernel must not take the machine's
-memory by asking.
-
-**Where.** [`Scope::room`](../crates/core/abi/src/lib.rs); `OverRoom` in
-[`entelechy_rules`](../crates/core/rules/src/lib.rs), held by the JIT's
-[parity tests](../crates/backends/jit/tests/parity.rs). Letting go is
-`Evaluator::make_room` in [the evaluator](../crates/core/graph/src/evaluate/ledger.rs),
-held by [a chain longer than the Host holds](../crates/interface/entelechy/tests/session.rs).
-
-## A few formats are read live; the rest are bytes or converted
-
-The Host has one format of its own, `.field`, and raw bytes. Every other
-format goes one of three ways:
-
-- **Read live** by [`entelechy-formats`](../crates/interface/formats/src/lib.rs): PNG,
-  PPM, PGM, WAV and MIDI. A scene's input names the file; the session
-  decodes it again whenever it changes.
-- **Bytes to a Kernel**: `input level: Rows<Int> = bytes "level.bin";`.
-  What the bytes mean (a level, a ROM, Markdown) is the Kernel's.
-- **Converted outside the runtime** by `entelechy-import` and `entelechy-export`, or
-  by a bridge: glTF, MP3 and other lossy sounds, SVG as the segments and
-  shapes a Kernel fills, TrueType and OpenType fonts as the glyphs'
-  outlines in the same segments, and documents such as a PDF or a slide deck, as
-  the pictures and text they hold.
-
-A format is read live when it decodes to a numerical Field, needs no
-dependency outside the workspace, and is worth editing while a scene runs.
-
-**Why.** A compression decoder is serial, carries no application meaning,
-and would run again in every scene, so it is not a Kernel's work; a
-format whose meaning is the application's belongs in a Kernel. A document
-is not a Field, and the typed-field architecture refuses a subsystem for
-it. A closed live set keeps `entelechy-formats` from collecting every format.
-
-**Where.** [`entelechy-formats`](../crates/interface/formats/src/lib.rs) takes the Host
-and nothing else; `entelechy-import` and `entelechy-export` depend on it and the
-Host, never on the session or a backend. `read`, `read_bytes` and
-`encode` are the only ways a session turns a file into a Field and back.
-
-## A public contract grows; it breaks only with its version
-
-Six things are written against by programs and sources Entelechy does not
-see: the protocol an agent speaks, the C ABI, the capabilities a Kernel
-declares, the `.field` file, what a Kernel may call and write, and what a
-scene document may say. Each may grow. What was valid against it stays
-valid, or its version changes.
-
-| Contract | Held by |
-| --- | --- |
-| Protocol operations | the table in [the protocol module](../crates/interface/protocol/src/lib.rs), held to `OPERATIONS` and to the server answering each |
-| C ABI | [`header.rs`](../crates/interface/ffi/tests/header.rs): the header's functions, version and struct layouts against the library's |
-| Capabilities | [`contract.rs`](../crates/core/abi/tests/contract.rs): the set, pinned to `ABI_VERSION` |
-| `.field` | [`field_file.rs`](../crates/interface/formats/tests/field_file.rs): every scalar and a spread of encodings pinned byte for byte, and every file in the repository still read |
-| Language surface | [`surface.txt`](../crates/frontend/compiler/tests/surface.txt) at `LANGUAGE_VERSION`, held by [`surface.rs`](../crates/frontend/compiler/tests/surface.rs) |
-| Scene documents | [`surface/`](../crates/frontend/scene/tests/surface/): documents writing every form a scene has, each beside the Graph it lowers to at `LANGUAGE_VERSION`, held by [`surface.rs`](../crates/frontend/scene/tests/surface.rs) |
-
-**Why.** A contract changed by accident breaks a reader who is not
-present: a saved scene, a generated Kernel, a program built against the
-header. A test that fails on any difference makes every change a
-decision, and the version says which kind.
-
-**Where.** The tests above. The language surface and the scene documents
-are recorded as data. A new scene document is recorded with
-`ENTELECHY_BLESS=1`; one that lowers differently is refused until
-`LANGUAGE_VERSION` is raised. A new builtin or signature, or a
-capability dropped from a requirement, is recorded with `ENTELECHY_BLESS=1`;
-dropping or tightening anything a source could write is refused until
-`LANGUAGE_VERSION` is raised.
-
-## The rasterizer is a package; the native one is its fast path
-
-A scene places `packages/raster.entpkg` to turn triangles into a
-surface (`raster.esn` or `window.esn`; `cutout.esn` or
-`cutout_window.esn` where a mask's alpha cuts fragments away;
-`canvas.esn` over an empty canvas another node sized) and binds the
-preset's fast path in its place, one node for another, where it wants
-speed: `native.rasterize@1` for `raster.esn` and `window.esn`, `@2` for
-the cutout presets, `@3` for `canvas.esn`. Both keep one rule: a pixel is covered where its center is inside the
-triangle's box and on or inside all three edges, holds the nearest
-fragment in `[0, 1)`, the earlier triangle on a tie, with
-attributes interpolated by `1 / w`; with a cutout, a fragment whose alpha
-in the mask at its own uv is below the cutout is not drawn. The `tiled`
-presets cut a box larger than a tile across a pool of invocations, for
-scenes of large triangles; the surface is the same to the bit where
-every Kernel rounds alike, as on the interpreter and the JIT. A
-triangle with two corners at one point is skipped by that test alone.
-A one-pass preset's triangle finds its own box as it covers it, and
-nothing else reads that box; a tiled preset finds each box once, and
-every step reads it.
-
-**Why.** As Kernels, rasterization is typed, traced, hot-reloaded, the
-same on every backend, and changeable by an author. A native operation
-is a package's Rust fast path, written where its Kernels are not fast
-enough: each one is a preset of the package, its ports the preset's, so
-every native has a Kernel definition it is held to. The native path is
-an acceleration of the package, not a second definition: on the
-interpreter and the JIT it is exact to the rule. On a GPU a compute pass
-drops what the rule draws nothing of, draws a triangle a few pixels
-across by the rule itself, a 64-bit atomic a pixel where the device has
-them, and hands the rest, in row order, to the device's rasterizer,
-approximate at edges; each pixel then takes the nearer of the two and is
-given the rule's depth and attributes at its center. A tile-binning
-rasterizer spends as much on a triangle of one pixel as on one of many,
-and most of a dense mesh is small triangles. The Graph does not know that
-a placed graph and a native operation are one computation, so the scene
-chooses. A device may compute one expression to different last bits in
-two Kernels, as its compiler fuses a multiply into an add where it
-chooses, so a decision two Kernels must share is made in one: were a
-box found twice, the tiles counted from one would be cut from another.
-`entelechy replay --round-apart` finds one made twice, by rounding some
-Kernels as another device might.
-
-**Where.** The package and its presets; every example places it.
-[`ten_million.esn`](../examples/mesh/tests/ten_million.esn) is the scale
-scene. On the interpreter and the JIT the fast path is
-`entelechy_rules::raster`, held bit for bit to the rule by a test that writes
-the rule plainly. On a GPU, [`parity.rs`](../crates/backends/gpu/tests/parity.rs)
-holds the surface to the rule inside drawn triangles, with small ones
-drawn by the rule or all by the device's rasterizer, and the indexed and
-pulled draws to each other to the bit. `examples/mesh/tests/edges.replay` pins the package's
-surface at edge pixels on all three backends and `native.replay` the fast
-path's inside them; `degenerate.replay` holds that a triangle with two
-corners at one point draws nothing and the tiled presets draw what the
-one-pass ones do, on all three; `cutout.replay` holds the package's cutout to
-`native.rasterize@2` on all three, and a session test holds them equal to
-the bit on the interpreter and the JIT; `canvas.replay` holds `canvas.esn`
-to `raster.esn` to the bit and to `native.rasterize@3` on all three.
-
-## Contacts are solved all at once, each against its own share of a body
-
-The physics package steps rigid bodies with every contact manifold
-solved in one pass: each solves against a copy of its two bodies whose
-mass is split among the manifolds that push them, and the pushes on a
-body are summed. A step runs substeps of gravity, the held impulses
-pushed again, a solve, a move and a solve without pushing apart; each
-manifold starts from the impulses the same pair held in the last step.
-A contact is a spring of the bodies' own masses, so how far a pile
-sinks into itself does not depend on how many manifolds share a body.
-
-**Why.** Solving contacts one after another, as a sequential solver
-does, needs an order that a pass over every manifold does not have;
-coloring them into independent sets costs a pass a color, each a
-dispatch. Solved at once with split masses, a pass converges where the
-one-by-one order would, its answer is independent of order (a float
-sum of pushes is folded in source order), and the same on every
-backend. Its cost is convergence: a pile many bodies deep that lands at
-once needs more passes, which is why a step takes eight substeps, and
-carrying the impulses from step to step is what lets a resting stack
-stand still.
-
-**Where.** [`physics.ent`](../packages/physics.entpkg/kernels/solve.ent)
-and its [step](../packages/physics.entpkg/graphs/step.esn);
-[`rest.replay`](../packages/physics.entpkg/tests/rest.replay) holds a column
-of boxes still for seconds, [`motion.replay`](../packages/physics.entpkg/tests/motion.replay)
-a bounce, friction on a slope and a kinematic platform to their
-closed forms, [`many.replay`](../packages/physics.entpkg/tests/many.replay)
-the grid's pairs to every pair asked, and [`pile.replay`](../packages/physics.entpkg/tests/pile.replay)
-a pile some twenty deep settled in four substeps, none pushed out, on
-all three backends. A pass that pushes every body reads bodies every
-manifold has pushed: a warm is taken back in a pass of its own, not in
-the bounce's, whose copies would each see their own share taken back and
-none of the others'.
-
-## A small run goes to the processor; a device is for many elements
-
-When the main backend is a device and the JIT runs beside it, each run of
-a Kernel goes to the one its size suits: to the JIT when its elements
-times its Kernel's typical work (`Validated::typical_work`, an estimate
-of operations per element from the IR) are at most `--small`, 400,000 by
-default; to the device otherwise. A run of so few elements that one of
-the device's groups holds them all (64, its 8 by 8) goes to the JIT
-however much each takes, since the device runs them a thread each, far
-slower than the processor. A scatter carries its target whole, so the
-target's elements count among its own: one of few elements written into
-a large target stays where the target is, rather than copying it to the
-processor and back for its readers. A Kernel the device declines always runs on
-the JIT. A small run that reads a Field the device made in this
-evaluation stays on the device, since bringing it back would wait for
-the device's work before it and break it in two; a run of so few
-elements leaves it still when it is long, past 100,000 operations (two
-thirds of a millisecond a thread at a time on the device, at 6.6 ns an
-operation, more than the wait), unless what it would bring back passes a
-mebibyte. A Field made before, state or an input, comes back once. A Field uploaded from memory keeps its words in memory
-beside the device's copy, as a Field is a value, so neither side sends
-it back again; an input of a mebibyte or more is put on the device as it
-is read (`Backend::upload`) and its copy in memory let go, since it does
-not change from frame to frame and a page's memory stays at its peak,
-and what reads it on the processor brings it back once and keeps it. The report says where each run went and why; `--small 0`
-keeps every run on the device.
-
-**Why.** A device's dispatch costs about the same whatever it does:
-80 microseconds on the machine it was measured on, where a chain of two
-hundred small runs takes 15.6 ms on the device and 0.73 ms on the JIT,
-and a step of sixty-seven rigid bodies 10.6 ms against 0.57 ms. Submitting
-them together, or in one pass, costs the same: the time is the dependent
-dispatches themselves. A device earns its cost over many elements, and
-nothing over few: a game's step of one element, a fight's whole frame,
-took 0.96 ms on the device and 0.033 ms on the JIT, its readers of a few
-elements kept on the device after it; the frame went from 11.7 to 10.0
-ms. A short run between two of the device's, a learner's guess and its
-error, costs more taken off it than left (3.32 against 3.93 ms a
-frame), so
-where a run goes follows its size, not whether it draws or computes. The
-choice reads the run's elements and the Kernel, never a clock, so a
-replay places every run the same way each time. A run may round its
-last bits differently on the two, so a decision two Kernels share is
-made in one (see *The rasterizer is a package*).
-
-**Where.** `Runtime::execute` in [`entelechy-kernel`](../crates/core/kernel/src/lib.rs),
-the estimate in [`entelechy-ir`](../crates/core/ir/src/lib.rs), the kept
-words in [`entelechy-host`](../crates/core/host/src/lib.rs), an input's
-copy let go in the session's [inputs](../crates/interface/session/src/inputs/mod.rs)
-and [memory](../crates/interface/session/src/memory.rs);
-[`routing.rs`](../crates/interface/session/tests/routing.rs) holds a
-scene of every kind of work to the JIT's alone with small runs placed
-off a main backend, and the verify recipe replays every example on the
-device with and without `--small 0`.
-
-## A Kernel's effects are data the Host carries out after a commit
-
-A Kernel never writes a file. A scene declares that an output is also
-written to a file, `output kept <- state.result to "saves/state.field";`,
-and the session writes it once an evaluation that changed it has
-committed: whole (written beside and renamed over), into a directory
-allowed with `--allow file.write=<dir>`, and nowhere else. An input
-reads a file and reads it again when it changes; one that may be absent
-falls back on a source (`input saved: … = "saves/state.field" else
-fresh.result;`). When and what to save is the Kernels'.
-
-The session decides every write: `save` and `export` check its allowance
-whoever calls them and write through its store, and a file named on a
-command line (`--save`, `--out`) is allowed alone, not its directory. A
-server takes its allowances from the command line that started it.
-
-**Why.** An effect inside a Kernel breaks what a Kernel is: the same on
-every backend (a device has no files), committing nothing when it fails,
-and replaying alike. As data, the effect is a typed, traced Field, and
-the Host carries it out after the commit, where nothing can undo it. The
-allowance is given by the person running the scene, never claimed by a
-Kernel or an agent.
-
-**Where.** [`writes.rs`](../crates/interface/session/src/writes.rs) in the
-session; `to` and `else` in the document
-([parser](../crates/frontend/language/src/parser.rs),
-[lowering](../crates/frontend/scene/src/lib.rs)); a fallback in use
-substitutes for its input when the evaluation starts
-([evaluator](../crates/core/graph/src/evaluate/mod.rs)). Held by
-[the session's write tests](../crates/interface/session/tests/writes.rs),
-[the lowering's](../crates/frontend/scene/src/lib.rs) and
-[`examples/data`](../examples/data/README.md).
-
-## What a served scene reaches is what the person running it gave
-
-A session an agent drives (`entelechy serve`, the Player's `--serve`, a
-program's `entelechy_request`) holds the scene to what the person who started
-it allowed; nothing over the wire widens it.
-
-- Whether reads are held is decided when the session opens, before its
-  scene is first read. Readable are the directories of the scene as it
-  first loads (the root, the graphs it places, what it uses, the files its
-  inputs read), the directories packages are found in, and `--allow
-  file.read`, judged where a path lands after its links. A program allows more with `entelechy_allow`.
-- An agent's `save` and a scene's `to` land only where `--allow
-  file.write` says.
-- A page opens the socket only from this machine or from an origin
-  `--allow-origin` names; a page from a file says `null`, as a sandboxed
-  frame on any site does, so it is named too; an HTTP request that is not a WebSocket
-  upgrade is answered and closed.
-- A package is a published capability, read by anyone as `use` reads
-  it.
-- A Kernel's `requires` must be among the runtime's grants (all, unless
-  `--grant` names fewer) for it to be prepared; it runs with what it
-  requires of those.
-- What an agent sends is bounded before it costs anything: a domain is
-  charged against the Host's budget before allocation, on the frame or
-  off it; an `[each]` and a `times` before they are written out or run; a socket
-  request before it is held; a rejected scene never reaches the disk.
-
-A scene a person runs themselves (`run`, `render`, `replay`) reads what
-they chose to run and writes only into the directories they allowed.
-
-**Why.** A file an agent can read it can send away, and any page the
-person visits can reach a socket on their machine. A scene the person
-runs has no channel back out but its allowed writes.
-
-**Where.** The session's
-[inputs](../crates/interface/session/src/inputs/mod.rs) and
-[writes](../crates/interface/session/src/writes.rs); the protocol's
-[transport](../crates/interface/protocol/src/transport.rs) and
-[WebSocket](../crates/interface/protocol/src/websocket.rs); the Host's
-[budget](../crates/core/host/src/lib.rs). Held by the protocol's tests
-([`protocol.rs`](../crates/interface/entelechy/tests/protocol.rs)): saves,
-reads, origins and compose; and by the C ABI's
-([`abi.rs`](../crates/interface/ffi/tests/abi.rs)) for reads through
-`entelechy_request`.
-
-## Float `min` and `max` have one rule, and it is not the machine's
-
-`max(a, b)` of floats is IEEE 754-2019 maximumNumber: a NaN gives way to
-the other operand, and of two equal values the one without a sign, so
-`max(-0.0, 0.0)` is `0.0` in either order; `min` is the same rule the
-other way, `min(-0.0, 0.0)` is `-0.0`; `clamp` is `max` then `min`, and
-`smoothstep` clamps so.
-
-**Why.** A machine's `max` leaves the zero's sign and NaN to the
-hardware, so one program gave `inf` and `-inf` on two backends. A
-semantics a backend may choose is not one.
-
-**Where.** The interpreter writes the rule out (`entelechy_rules::max_f32` and
-its siblings in [`entelechy_rules`](../crates/core/rules/src/lib.rs)), the JIT
-emits it, the GPU calls `max_ref` in the shader's
-[preamble](../crates/backends/gpu/src/wgsl/prelude.rs). Held by the JIT's
-random programs ([`fuzz.rs`](../crates/backends/jit/tests/fuzz.rs)).
-
-## An integer sum is its whole total
-
-A scatter's or a prefix's `sum` of integers is each element's whole
-total: what it held and every value added to it, as mathematics adds
-them. It fails only when that total does not fit the scalar, naming the
-first element whose total does not; a total that passes the end of the
-range and comes back is the total it comes back to. The interpreter and
-the JIT keep each total wide (`entelechy_rules::Sums`), counted against the
-run's room. The GPU adds a word atomically and carries into a high word
-beside it, checks once every value is in, and, where a float is summed
-beside the integer in element order, carries the high word as it folds.
-
-**Why.** A sum's inputs, not the order a machine adds them, decide it, so
-every backend answers alike, to the element that fails.
-
-**Where.** `Sums` in [`entelechy_rules`](../crates/core/rules/src/lib.rs); the
-GPU's [emitter](../crates/backends/gpu/src/wgsl/emitter.rs).
-
-## Reality changes atomically; history records why
-
-A session's position is `(revision, frame)`: the revision moves when the
-world changes other than by running (a Kernel published or retired, the
-scene read again, a param set, state written or reset); the frame counts
-the evaluations committed within it. Every change is recorded with its
-origin (its document, the protocol and its channel, or the program), and
-Kernel sources and the texts of the scene's documents, as loaded or
-composed, are kept once each by digest, so an old generation or
-document can be read and written again, however it was edited; refused attempts are recorded apart, with why,
-and move nothing. A snapshot takes the world whole, committed state only,
-with the sources of its laws, and is kept by whoever asked, or written to
-a file where writes are allowed.
-
-**Why.** An agent changing a live world needs to know how it came to be,
-and what was refused. The frame is its own coordinate so that
-discontinuous changes are not buried under per-frame state. Only
-committed state is taken because the cache may hold what a failed
-evaluation never committed. The session keeps changes, bounded, never
-worlds: the past is data its holder keeps.
-
-**Where.** [`history.rs`](../crates/interface/session/src/history.rs) in
-the session; `history`, `kernel` with `generation` and `snapshot` in the
-protocol. Held by the protocol's tests and the history's own.
-
-## A live world is changed through three doors, each at its own grain
-
-- **Structure**, a statement at a time: `compose` edits the scene's
-  documents (the scene, and the Kernel and graph documents under its
-  directory that it uses or places, and the replays that test it) where
-  a node, a node's member, an output or a declaration is written, and
-  only there, or writes one whole; several documents change as one, all written or none. The scene
-  is then read again as an edit on disk is; texts whose graph cannot run
-  a frame (a missing source, a cycle) or whose Kernels do not compile or
-  are not granted are refused before any is written.
-- **State**, a committed port at a time: `write` replaces one, `reset`
-  with a `node` and `port` restarts one from its initial source, `reset`
-  alone restarts all, `restore` installs a world. A run off the frame
-  that began from forgotten state, or from what was computed from it, is
-  let go; runs that read none of it go on.
-- **Parameters**, the ones the document declares (`param` in the scene).
-  A node's own value is structure and changes with the document.
-
-Nothing else reaches in.
-
-**Why.** Each door is where the thing it changes is kept whole. A node
-value set from outside is structure the document does not say, lost at
-the next read and invisible to `document` and history. The document is
-also a person's: an agent names what it changes and every other byte
-stays. An agent with no files of its own (a page, another machine)
-reaches the documents only through this door, so the door reaches all
-of the scene's: a work made over the wire is laid out as one made by
-hand, its Kernels in their own documents and its tests beside them,
-and is checked whole before it is written. Only under the scene's directory, and never in a
-package, which is kept as it was found. A port is the smallest part of state that restarts without
-inventing a state no evaluation committed.
-
-**Where.** [`edit`](../crates/frontend/scene/src/edit.rs) in the scene,
-over the language's `outline`; `compose` in the protocol, and
-`Session::composable` and `Session::write_documents`, checked through
-the store's `Overlay`;
-`Graph::order` where the session lowers a scene. `Evaluator::reset_port`
-and `reset_state` in the
-[graph's state](../crates/core/graph/src/evaluate/state.rs);
-`Session::reset_port`, recorded in history as a reset with its port;
-`reset` in the protocol and `reset node.port` in a replay. Held by the
-graph's tests (one port restarts, the others keep theirs; a reset lets
-go of exactly the runs that began from what it forgot), the scene's edit
-tests (every byte an edit does not name is kept), the protocol's (a
-node's own value refused by `param`, changed by an edit and kept by the
-document; a declared param reaching its node; the scene's documents
-composed together or none, only where a compose may write), and the
-voxel replay.
-
-## A world is restored only when the whole world can live again
-
-`restore` installs a snapshot's state in every state port at once, ports
-it does not name restarting from their initial sources. With `laws:
-"snapshot"` it first publishes the snapshot's Kernels back, all together;
-with `structure: "snapshot"` it first writes back the snapshot's scene
-document (old sources and documents are kept by digest). `laws` has no
-default. It then proves the world by one frame, migrating state as any
-frame does, and commits nothing: on success the world is the snapshot's
-and the next frame follows it; on failure state and laws are put back.
-
-**Why.** Every change is prepared, validated and proved before it is
-real; a restore is the largest. A snapshot is a moment, so restoring it
-commits no frame past it. Old state under current laws and the old world
-whole are different acts, so a restore names which.
-
-**Where.** `Evaluator::restore` in the
-[graph's state](../crates/core/graph/src/evaluate/state.rs);
-`Session::restore` for the laws; `restore` in the protocol. Held by the
-protocol's tests (a restored world counts on from the snapshot; one that
-cannot run is refused with its laws taken back; one restored with its
-laws runs as it ran) and by the session's random life.
-
-## A platform that lacks a primitive does the same work another way
-
-Under WASI (no threads, no resolved links, no code made at run time):
-where no thread can start, its work is done in turn (an `async` run lands
-before its start returns, Kernels are prepared inline, `serve` answers
-each request before reading the next). Where links cannot be resolved, a
-file's one name is its path made whole with `.` and `..` folded, and the
-sandbox keeps that name honest. Where nothing loads JIT code (WASI under
-a plain runtime) there is no JIT, as there is no GPU without a device,
-and asking for it says why; where the host loads it (a page), the JIT
-writes WebAssembly.
-
-**Why.** A platform is the Host's world: its primitives vary, what a
-scene computes does not. Each fallback is one a native run already
-allows, so no document, replay or agent sees a different world.
-
-**Where.** [`later.rs`](../crates/core/kernel/src/later.rs) and
-`set_background` in the runtime,
-[`store.rs`](../crates/interface/session/src/store.rs) in the session,
-`stdin_into` in the protocol's transport. Held by the example replays,
-run under `wasmtime` on the interpreter.
-
-## A session's documents are wherever its caller keeps them
-
-A session reads its scene, the documents it uses and the files its
-inputs name, and writes its outputs and requests, through one `Store`:
-the disk, or files its caller handed in and may hand in again. The C ABI
-opens a session on handed-in files; a page running Entelechy as WebAssembly
-does exactly that. A file handed in again is a changed file, read at the
-next sync. Where a machine has no clock, nothing is timed and history is
-not dated.
-
-**Why.** Source resolution belongs to the caller or the file loader
-(AGENTS.md). What `use` reaches, what a package holds, when a document
-changed and where a write lands are one question in memory and on disk,
-answered once; hot reload is the same act in a page.
-
-**Where.** [`store.rs`](../crates/interface/session/src/store.rs) in
-the session; `entelechy_files`, `entelechy_files_put` and `entelechy_open_files` in
-the [C ABI](../crates/interface/ffi/include/entelechy.h);
-[`clock.rs`](../crates/core/kernel/src/clock.rs) in the runtime;
-`EntelechyInPage` in the web bridge. Held by the ABI's test (a scene from
-paths no disk has, a Kernel put again) and the web bridge's, which runs
-the text example in a headless Chrome.
-
-## Where Entelechy is WebAssembly, its JIT writes WebAssembly
-
-Where Entelechy is WebAssembly, the JIT writes a Kernel's IR as a WebAssembly
-module, instruction for instruction what the Cranelift translation does,
-importing Entelechy's memory and function table. The host (a page's script;
-node, for the tests) compiles it and puts its functions into Entelechy's
-table; the index it returns is a function pointer, so the drivers of the
-five modes, the context, the helpers, integer failures and the work
-budget are the JIT's own, unchanged. What would be on a stack lives in
-slots the prepared Kernel owns: WebAssembly runs on one thread and a
-Kernel's functions do not recurse.
-
-**Why.** Kernels arrive and change while Entelechy runs, so only compiling
-them where they arrive makes them fast. A function pointer that is a
-table index shares the native JIT's host side; the module is written by
-hand, so no dependency is taken.
-
-**Where.** [`wasm/`](../crates/backends/jit/src/wasm) in the JIT, its
-`wasm-host` feature, which `entelechy-ffi` turns on for a page; `host` in
-the web bridge's [`entelechy.js`](../bridges/web/entelechy.js), which
-[`wasi.mjs`](../bridges/web/wasi.mjs) uses to run Entelechy's WebAssembly
-tests in node. Held by the JIT's own tests (parity cases, feature
-matrix, random programs) run as WebAssembly, alongside the core's, the
-front end's and the interpreter's
-(`crates/interface/entelechy/tests/wasm.rs`); and by the web bridge's test,
-which runs the text and voxel examples in a headless Chrome.
-
-## In a page, waiting for the device is giving the page a turn
-
-Browser WebGPU answers a readback, a pipeline's validation, even the
-device, only once the page's script has had a turn, and an evaluation
-waits for such answers mid-frame (a JIT scan reading GPU output, a
-`value(port)`, an async node's inputs, a `read`). In a page the GPU
-backend waits by parking: Entelechy calls `entelechy.wait`, a suspending import
-(JavaScript Promise Integration), and is suspended until the device's
-answer, or a future's waker, calls `entelechy.wake`. Nothing spins; input
-waits for the frame to end. The GPU backend is one everywhere; only how
-it waits differs (`entelechy_gpu::Wait`: block, or park), and `entelechy-ffi`
-supplies the turn. A parking wait submits an empty batch after it asks
-for a mapping, since a browser may look at the device only when
-something is submitted; a blocking wait polls the device. The browser is
-reached through wgpu's WebGPU backend, whose glue `wasm-bindgen` writes;
-its import of `entelechy` is the page's `entelechy-host.mjs`, through an import
-map.
-
-**Why.** Without suspension a frame would split at every place a backend
-reads what another made, and the evaluator, protocol and Backend
-contract would all learn to stop and go on. Suspending the machine is
-the host's to offer; nothing above the GPU backend learns it was
-suspended, and one GPU backend keeps one body of evidence.
-
-**Where.** [`wait.rs`](../crates/backends/gpu/src/wait.rs) in the GPU
-backend, `Session::runtime_waiting`, `waiting` in the
-[C ABI](../crates/interface/ffi/src/lib.rs), `host` and `EntelechyInPage` in
-the web bridge's [`entelechy.js`](../bridges/web/entelechy.js). Held by the web
-bridge's test, which runs the text example's checks and the voxel example
-on the page's WebGPU in a headless Chrome.
-
-## What playing a scene means is decided once
-
-Every interface that plays a scene shares one play
-(`entelechy_session::play`): the frame (changes read, a replay's frame taken
-at its time, the scene evaluated, picture and sound named), what F5,
-F6 and F10 mean (every other key, Tab and Escape among them, is the
-scene's), how a pad is a keyboard, how the pointer is
-found in the picture, the line of frame data, and what is said. An
-interface is its devices only: it hands the play its person's input and
-clock, shows the picture and plays the sound on its own devices, and
-tells the play where the picture landed.
-
-What every interface asks of a session the session answers: which output
-is the picture and which the sound (`Session::picture_of`, `sound_of`), a
-Field or a picture read back (`Session::field`, `picture`), the backend
-when none is named (`best`: the GPU, else the JIT, else the interpreter,
-the ones passed over said), every command's session flags
-(`SessionOptions`, `graph` too), and what checking a document finds
-(`check_document`, through the store). Each interface drives its own
-frames (a replay at its written times, a window at its clock, an agent
-at the times it sends, `render` at a fixed rate); what a frame is,
-`Session::evaluate`, is one.
-
-**Why.** ARCHITECTURE-PLAN §34: interfaces are many, and "all of them
-operate on the same underlying Runtime". A display, keys and a sound
-card are the Host's IO (§6); a page is another Host, not another
-product.
-
-**Where.** [`play`](../crates/interface/session/src/play/mod.rs), with
-its [pad](../crates/interface/session/src/play/pad.rs) and
-[line of frame data](../crates/interface/session/src/play/hud.rs); the
-window, sound card and pads of [the Player](../crates/interface/player/src/main.rs).
-A page's Player is its devices over the same play, through the C ABI
-(`entelechy_play_*`, [play.rs](../crates/interface/ffi/src/play.rs)):
-[player.js](../bridges/web/player.js) hands it the page's keys, pointer,
-wheel, pads and clock (`entelechy.now`). Held by
-[the play's tests](../crates/interface/session/tests/play.rs), headless
-(keys, preview, pointer, sound output, a failure said once, a replay
-played to its end); by the ABI's test through `entelechy_play_*`; and by the
-web bridge's test, a replay in `play.html` on the page's GPU and JIT, F5
-and F6 pressed there.
-
-## A replay is a test; a piece is made of laws, structure and state
-
-A replay is input played into a scene over time, and what it expects: a
-test. It lives under its example's `tests/`. Played headless (`entelechy
-replay`), it holds the scene, frames as fast as they compute; played by
-the shared play (`entelechy-player --replay`, `play.html?replay=`), it also
-holds the interface (keys and pads mapped, pointer found, picture shown,
-a page's device waited for) and can be watched. The window is handed
-over when it ends.
-
-A piece made with a scene is kept as what makes it: its laws as Kernels
-(`publish`), its structure as the scene document (`compose` and its
-`edits`), and its state as a port's Field (`read`, `write`, `save`) or
-the whole world (`snapshot`, `restore`).
-
-**Why.** A replay of clicks tests the editor clicked: change the editor
-and the piece is gone. Headless and played are one replay and one play;
-only played runs the interface, so a fault of the interface is found
-there.
-
-**Where.** [The replay module](../crates/interface/session/src/replay.rs)
-reads and runs a replay; [`play`](../crates/interface/session/src/play/mod.rs)
-plays one. Held by the example replays under the verification, the
-Player's test that a replay played in a window holds as it does
-headless, the ABI's through `entelechy_play_*`, and the web bridge's in
-`play.html` on the page's GPU and JIT.
-
-## A rule that had two owners is held to one
-
-A rule found with a second owner (a syntax parsed in two places, a
-second way to the disk, an interface asking the session's question) is
-left with one owner and held there: by the compiler where visibility can
-say it, by a source scan where it cannot. The session's store is its
-own, so a caller reads or writes on another's behalf through
-`Session::read_file`, `write_file` and `write_scene`, each checking what
-may be before it acts; a caller that reaches the store does not compile.
-A scan row names the act a copy would do (cut `node.port` at a dot,
-write a file past the store), its owner, and the commit that gave it
-one. A rule is scanned for only after it has had a second owner, and
-only by an act that finds that owner in the source before the fix; a row
-that fails on legitimate code is rewritten, never widened with
-exceptions.
-
-**Why.** A rule with two owners drifts until they disagree, and tests
-hold behavior, not ownership. A guard per broken rule is few and
-precise, each proven by the bug it catches; a guard per rule is fragile
-patterns readers learn to silence.
-
-**Where.** [`owners.rs`](../crates/interface/entelechy/tests/owners.rs): the
-rows, each shown to fail on the source its commit replaced. The
-session's store, `pub(crate)` in [the session](../crates/interface/session/src/session.rs).
-The layers are held beside it, in [`layers.rs`](../crates/interface/entelechy/tests/layers.rs).
-
-## Entelechy describes itself, from the tables it enforces
-
-Entelechy's syntax and API are one reference, layer by layer: the types, the
-builtins and the forms of the Kernel language; the scene's forms and
-what a `domain` may call; the capabilities and what each grants; a
-package's parts; the protocol's operations and its wire; the replay
-lines; the command line. Each part is rendered from the table the
-implementation executes, so it cannot say what the implementation does
-not do. `help` answers all of it, or one name in full;
-`docs/REFERENCE.md` is the same text. Whole programs are the examples.
-
-**Why.** A description the implementation cannot drift from is one
-rendered from what it executes. An agent learns a language fastest from
-one dense reference and whole programs; anything built beyond that to
-teach it costs more than it saves. A doc lives in the source it
-describes, so it travels with a Kernel through publish and snapshot; the
-IR stays computation alone.
-
-**Where.** [`help`](../crates/interface/protocol/src/help.rs),
-[`ops`](../crates/interface/protocol/src/ops.rs),
-[`envelope`](../crates/interface/protocol/src/envelope.rs),
-[`Capability::doc`](../crates/core/abi/src/lib.rs),
-[`replay::forms`](../crates/interface/session/src/replay.rs),
-[`commands`](../crates/interface/entelechy/src/commands.rs),
-[`doc`](../crates/frontend/language/src/doc.rs); held by
-[the signatures compiled](../crates/frontend/compiler/tests/help_signatures.rs)
-and [the forms parsed](../crates/frontend/compiler/tests/help_examples.rs).
-
-## A scene may read what the language finds wrong
-
-A scene input may hold what the language finds wrong in the documents
-of a file or a directory: `input problems: Rows<Int> = checks "src/";`.
-The session checks each document there as `entelechy check` does, and
-the input holds the problems as text, a line each, `file:line:column:
-message`; it checks them again when one changes. Nothing else of the
-language is given: no new type, no structured diagnostic, no checking
-of a text a Kernel holds.
-
-**Why.** The language's judgement of a document is its own
-self-description, and a scene that edits documents (an editor, an agent
-working in a scene) needs it where it draws. An input is how the Host
-hands a scene what it reads from outside; a check is one more thing
-read, on the same sync, so no lifecycle is added. Text is the form every
-interface already says a problem in, written by one function; a Kernel
-reads it as it reads any text. Checking a Kernel's own text would put
-the compiler under the runtime, which the layers forbid: a document is
-checked once it is written.
-
-**Where.** `checks` in the parser
-([parser](../crates/frontend/language/src/parser.rs)) and `Files::checks`
-([scene](../crates/frontend/scene/src/lib.rs)); `sync_checks`
-([inputs](../crates/interface/session/src/inputs/checks.rs)) and
-`problems_text` ([check](../crates/interface/session/src/check.rs)). Held
-by [the checks tests](../crates/interface/session/tests/checks.rs) and
-the scene surface's `checks.esn`.
-
-## A scene may read what its documents define
-
-A scene input may hold what the documents of a file or a directory
-define: `input defined: Rows<Int> = outline "src/";`, a line a
-definition, `file:line:column: kind name: signature`, read again when
-one changes. It is `checks`' twin: one says where the language finds a
-document wrong, the other what the language finds a document says.
-
-**Why.** An editor, or an agent at work in one, asks where a name is
-defined and what it takes and gives: to go to it, to show its signature
-where the cursor is, to find a symbol by name, to know what a Kernel's
-ports are before wiring it. The language already reads every document
-into its declarations; an input hands that reading to the scene on the
-sync that already watches documents, so no lifecycle is added and no
-second parser is written in a scene. Text, as `checks` gives, is what a
-Kernel reads as it reads any text, and what a person reads too. Only
-what a document declares is given, not types inferred in expressions:
-that would put the compiler under the runtime, which the layers forbid.
-
-**Where.** `outline` in the parser
-([parser](../crates/frontend/language/src/parser.rs)),
-`definitions` ([language](../crates/frontend/language/src/lib.rs)),
-`Files::outlines` ([scene](../crates/frontend/scene/src/lib.rs)),
-`sync_checks` ([inputs](../crates/interface/session/src/inputs/checks.rs)) and
-`outline_text` ([check](../crates/interface/session/src/check.rs)). Held
-by [the outline tests](../crates/interface/session/tests/outline.rs)
-and the scene surface's `outline.esn`.
-
-## A scene may read and change a directory's files
-
-A scene input may hold every file under a directory, its path and its
-bytes: `input disk: Rows<Int> = files "project/";`, read again when one
-changes. A scene output may change them: `output ops <- x.result to files
-"project/";` is a list of operations, each writing, removing or renaming
-a file, done once each time the list changes. Writes need `--allow
-file.write`; removals and renames need `--allow file.delete` as well.
-
-**Why.** Files are the Host's world; a scene that edits a project (an
-editor, an agent's workshop) needs the project's files as they are on
-disk, which ones there are included, and must make, rename and remove
-them, without the scene being rewritten for each new file. One input and
-one output keep the files on the existing sync and write paths, so no
-lifecycle is added. Operations, not the directory's whole state, are
-written: a list a scene gets wrong refuses or does too little, and never
-removes what it forgot to list, and changes made outside the scene stand
-until the scene asks otherwise. Removal is its own allowance, for it
-cannot be undone. Both are words, as bytes and text are, so a Kernel
-reads them as it reads any `Rows<Int>`.
-
-**Where.** `files` in the parser
-([parser](../crates/frontend/language/src/parser.rs)) and `Files::files`,
-`Write::files` ([scene](../crates/frontend/scene/src/lib.rs)); the
-words' layout in
-[directory](../crates/interface/formats/src/directory.rs); `sync_files`
-([inputs](../crates/interface/session/src/inputs/listed.rs)) and `operate`
-([writes](../crates/interface/session/src/writes.rs)). Held by [the files
-tests](../crates/interface/session/tests/files.rs) and the scene
-surface's `directory.esn`.
-
-## A directory is listed, and its files read as a graph asks
-
-A scene may place a directory as a node: `node d: files "dir/" { paths <-
-p.result; }`. `d.listing` is every file under it that git would track (its
-`.gitignore` files followed), each path and size without its bytes;
-`d.opened` is the files the graph named in `paths` when last evaluated,
-their bytes. The owner chose this form, and git's ignore rules with no
-syntax of their own (2026-10-16).
-
-**Why.** A `files` input reads every byte under its directory: an editor
-opening a project with its built assets (a thousand and more files, a
-hundred and seventy megabytes) is refused by the Host's room before it
-draws a frame, though it shows a few files at a time. Editors list a
-folder's names and sizes and read a file when it is opened, leaving out
-what the project's `.gitignore` leaves out; a scene does the same. Which
-files are opened is the scene's to say, as it runs, so the paths come
-from the graph, read a frame late as a font node's characters are: the
-one existing form for the Host filling Fields from what a graph computes,
-so no lifecycle or keyword is added and the node lowers to two externals
-as a font node does. Ignoring is git's rules from the project's own
-files: one rule set every tool already keeps, data rather than syntax,
-the same in every scene that lists the folder; hidden names were left out
-already. An ignored file named is read: the listing is what is shown, not
-what may be opened. The `files` input stays as it was for scenes that do
-want every byte.
-
-**Where.** `files` after `node x:` in the parser
-([parser](../crates/frontend/language/src/parser.rs)), `FilesNode`
-([scene](../crates/frontend/scene/src/lib.rs)); the rules in
-[ignore](../crates/interface/session/src/ignore.rs); the listing's
-layout in [directory](../crates/interface/formats/src/directory.rs);
-`sync_file_nodes`, `give_paths` ([inputs](../crates/interface/session/src/inputs/file_nodes.rs))
-and `feed_file_nodes` ([session](../crates/interface/session/src/session.rs)).
-Held by [the files node tests](../crates/interface/session/tests/files_node.rs),
-the ignore rules' own tests and the scene surface's `files_node.esn`.
-
-## A world larger than memory is read by what it asks for
-
-A scene may place a directory of Field files of one element as a node:
-`node near: Rows<Spot> fields "chunks/" { paths <- want.result; }`.
-`near.result` is the elements of the files `paths` named when last
-evaluated that are in, in the order named; `near.ranges` is where each
-path's are, or `-1` for one not in. Where the session prepares in the
-background a file is read off the frames and taken in by the sync after
-it is in. The owner chose this form (2026-10-20).
-
-**Why.** A world larger than memory, or than what a page can download
-before its first frame, keeps only what its frames are near, and only
-the scene knows what that is, as it runs: so the paths come from the
-graph, a frame late, as a files node's do. A files node gives bytes, one
-a word, for a Kernel to parse: four times the memory, and a parse in
-every scene. A Field file already carries its layout, so the node gives
-the elements as the reading Kernel lays them out, refusing a file of
-another element. Files of one element follow one another in one Field,
-which a Kernel walks by `ranges`, as a scene's meshes already share one
-Field; a Field per file would make the graph's shape depend on what is
-in. Reading a file never holds a frame where the session prepares in the
-background (a page's file comes over the network): the frames go on
-with what was in, as an `async` node's readers take its last output. A
-replay or a run reads at once, so what a frame sees does not depend on
-how fast a disk or a network is. Holding no file it no longer names, the
-Host keeps nothing beyond what the frames ask for. A file that comes in
-is a Field of its own, on the device where the session has one, until
-the result is joined; then its elements are found in the result, and
-the next result is joined from that one and the files come in since.
-A device copies each part's words after the one before's, so neither
-a file coming in nor one going puts a word in Host memory or keeps a
-file twice; elsewhere, or for an element narrower than whole words, the
-Host joins them.
-
-**Where.** `Rows<E> fields` after `node x:` in the parser
-([parser](../crates/frontend/language/src/parser.rs)), `FieldsNode`
-([scene](../crates/frontend/scene/src/lib.rs)); `Store::read_later`
-([store](../crates/interface/session/src/store.rs)), on a page through
-`entelechy.fetch_start` ([ffi](../crates/interface/ffi/src/lib.rs),
-[bridge](../bridges/web/entelechy.js)); `sync_field_nodes`,
-`give_field_paths` ([inputs](../crates/interface/session/src/inputs/field_nodes.rs))
-and `feed_field_nodes` ([session](../crates/interface/session/src/session.rs));
-`Runtime::join` ([kernel](../crates/core/kernel/src/lib.rs)) and
-`Backend::join` ([rules](../crates/core/rules/src/backend.rs),
-[gpu](../crates/backends/gpu/src/lib.rs)).
-Held by [the fields node tests](../crates/interface/session/tests/fields_node.rs)
-and the scene surface's `fields_node.esn`.
-
-## A graph says what its parameters must hold
-
-`require name: a <= b;` is a scene's statement of what its parameters
-must hold to run: two counts, written as a `domain` writes them, from
-the graph's params, numbers, `window()` and `scale()`, compared. It is
-checked as the document loads, with the parameters as given, and before
-every evaluation with the parameters as they stand; one that fails
-refuses the document or stops the evaluation before any node runs,
-naming the requirement, where it is written and what each side came to. A placed
-graph's requirements come with it, reading what the parent passed. The
-physics package requires its grid's cells to fit the bits its sort
-orders; the sort requires 1 to 31 bits.
-
-**Why.** A package's preset is a composition, and what breaks one is a
-relation between its parameters (`columns * rows` against `bits`) that
-no single Kernel sees whole and none can refuse: a Kernel has no way to
-fail but a fault, and a fault in the middle of a frame names the wrong
-thing. The relation belongs to the graph that states the parameters. It
-reads counts and yields a verdict, so the graph still computes
-structure, never values, and it is checked where the params are known,
-once per evaluation, on the Host and on no backend.
-
-**Where.** [`Requirement`](../crates/core/graph/src/domain.rs), checked
-at the start of an evaluation in
-[`evaluate`](../crates/core/graph/src/evaluate/mod.rs); lowered and
-flattened in [`scene`](../crates/frontend/scene/src/lib.rs) (test
-`requirements_flatten_named_with_their_place_reading_what_the_parent_passed`),
-and held end to end by `a_requirement_the_parameters_break_stops_the_evaluation`
-in [the session tests](../crates/interface/entelechy/tests/session.rs).
-
-## The framework is tested by its own scenes, a demo by its replays
-
-Rust tests hold the framework: the language, the IR, the runtime, the
-backends and the session, each with scenes written in the test. None
-reads, lists or names a file under `examples/` or `packages/`. A demo or
-a package holds itself: its replays, run by the release `entelechy replay` on
-every backend, with nothing left to the processor by its size, with
-nothing fused, and rounded apart. A replay whose checks hold two forms
-equal word for word says `alike`, and rounding apart leaves it out. A
-package's replays are its own, under its `tests/`, and reach every
-Kernel it declares; a demo's replays test the program it is, not the
-packages it uses.
-
-**Why.** A demo is written in `.ent` and `.esn`, and its author needs
-no Rust to validate it. Rust tests that walk the demos tie the framework
-to them: every demo added makes the framework's tests slower, and every
-exception a demo needs lands in Rust. Replays in the release build hold
-every demo in seconds, and a new one joins by being written. A package
-carried alone by `entelechy pack` takes its tests with it, and a demo is
-free to change or go without a package losing what proves it.
-
-**Where.** The recipe's `replays` step in [PROCESS](../PROCESS.md); the
-`alike` line in [`replay`](../crates/interface/session/src/replay.rs);
-`tested` in [the packages' check](../crates/interface/xtask/src/packages.rs).
-
-## A name is one package; its name qualifies the names it declares
-
-A package is found by its name, and the name is a fact the manifest
-declares and its directory carries: `voxel@1` is `voxel.entpkg`. A
-scene reaches one package of a name; two, as two editions of one, are
-refused, naming both. A package names the packages it uses by name and
-finds them beside itself. A document's functions, structs and types are
-scoped by their document, so two packages keep a helper of one name
-each, and a name a document writes plainly must answer once among what
-it uses. Where two packages it uses declare one name, it writes the
-package's name before it, `cast_fx::clear` and `ui_panel::clear`: a
-qualified name reaches the one declaration of that name in that
-package's documents the writer uses. A package uses the form too, for
-the packages it uses. A name declared or bound is a plain word. The
-owner chose this form (2026-10-22).
-
-The qualified name is the language's alone: scope finds the declaration
-it reaches and writes the name that declaration holds in its place, so
-the IR, the protocol's reads and every message past the language see
-the names they always did. A clash between packages is said with the
-qualified names that settle it.
-
-**Why.** A name that is checked is one a reader and a `use` agree on;
-two editions of one package in one reach meet as near-alike
-declarations, and refusing them by package says what an author can fix.
-Words are what a library is made of, and a short word (`clear`,
-`pressed`) is one two packages want alike; renaming one, or prefixing
-every public name, moved a clash the author did not make into a name
-the reader must carry. The package's name already says whose word it
-is, so the clash is settled where it is met, by the document meeting
-it, and resolving it to a declaration before lowering keeps it out of
-every later layer.
-
-**Where.** `package_manifest` and `one_package_of_its_name` in
-[`sources.rs`](../crates/interface/session/src/sources.rs), with
-`resolve_package` for the search beside a package; the scoping of names,
-`Qualified` and `unqualify`, in
-[`scope.rs`](../crates/frontend/language/src/scope.rs); the qualified
-word in the [lexer](../crates/frontend/language/src/lexer.rs);
-`a_name_qualified_by_its_package_reaches_that_packages` in
-[`sources` tests](../crates/interface/session/tests/sources.rs); the
-recipe's check of every package in one scene in [PROCESS](../PROCESS.md).
-
-## A document sees what it uses itself
-
-A document's names are its own declarations and those of the documents
-its `use` items name: each file of a directory, each file a package's
-manifest uses. What those documents use in turn is theirs: their
-functions call it, and a document that wants it names it in a `use` of
-its own. A name it reaches only through another's `use` is refused,
-said with the `use` that would bring it.
-
-**Why.** Seen through another document, a name is a dependency no line
-of the document states, and a coupling it did not choose: a game's
-widgets using a package brought every name of the package into each
-document that used the widgets, and ten of the game's own names clashed
-with the package's though none of those documents used it. Names are
-then what Kernels already were: a scene publishes the Kernels of the
-documents it uses itself. No form is added: a `use` is how a document
-says what it depends on, and now the only way.
-
-**Where.** `closure` and the views in
-[`scope.rs`](../crates/frontend/language/src/scope.rs); the hint in
-`located` in [`sources.rs`](../crates/interface/session/src/sources.rs);
-`a_document_sees_what_it_uses_itself` and
-`names_a_used_library_uses_are_not_the_documents` in
-[`sources` tests](../crates/interface/session/tests/sources.rs).
-
-## Sources belong to the loader; names belong to the language
-
-The loader finds documents: it resolves a `use` to files and packages,
-refuses cycles and two packages of one name, and hands the language the
-documents it reached and which uses which. The language decides every
-name: a Kernel sees its own declarations, then its document's, then what
-the documents its `use` items name declare, one declaration a name (alike ones
-are one), and the builtins, which a function of a builtin's name hides
-in its own document only. A declaration a Kernel inherits carries where
-it was written and the name it was written with, so a fault is placed
-and said by looking them up, never by taking a name apart.
-
-**Why.** The rules of names were split between the session, which
-renamed across documents, and the language, which renamed within a
-Kernel, each writing what the other needed into the names themselves.
-The seams between them were where alike declarations were merged twice,
-where a fault was placed in the wrong file, and where a library's
-function changed what a builtin meant in the documents that used it. One
-owner of names, and origins as data, leave nothing to take apart.
-
-**Where.** [`scope.rs`](../crates/frontend/language/src/scope.rs):
-`document_scope`, `scope` and `resolve`; `Origin` and `Held` in
-[the language](../crates/frontend/language/src/lib.rs); the walk of the
-`use` items, `declarations_within`, in
-[`sources.rs`](../crates/interface/session/src/sources.rs).
-
-## A replay played again computes only what changed
-
-A replay is played again as its documents change, and most of each of
-its frames reads nothing that changed. A run played under a name is
-remembered frame by frame: each node's cache entry, its key (the Kernel's
-generation, parameters, inputs by their producers' epochs, domain, clock
-and input) and its outputs. Played again, a node whose key is the one it
-had on that frame takes those outputs; a node that runs and computes
-outputs equal word for word to the remembered ones takes their epoch, so
-what reads it finds its key unchanged. Outputs too large to hold are
-remembered by key and epoch alone, and a node whose key matches runs
-again under that epoch when its backend repeats exactly; on any other
-backend it runs under a new one and its readers run. Runs are held to a
-budget, forgotten when the graph changes, and give way when the Host is
-short of room.
-
-**Why.** The key names everything a node's outputs depend on, so held
-outputs under an equal key are the outputs; taking them is not an
-approximation and a replay played so passes or fails as a fresh one
-does. Outputs not held are trusted to be made again word for word only
-where the backend says so, and its conformance tests hold it to that, so
-the rule rests on a stated contract, not on how a backend happens to be
-written. Remembering whole frames by trajectory, not by a hash of
-the world, keeps the rule the cache already keeps between one frame and
-the next.
-
-**Where.** [`recall.rs`](../crates/core/graph/src/evaluate/recall.rs)
-remembers and offers runs; [`Resident::play_as`](../crates/interface/session/src/replay.rs)
-names a replay's run; held by [the recall tests](../crates/interface/session/tests/recall.rs),
-which compare a run played again with a fresh session, and by each
-backend's run of the conformance matrix twice
-([`unrepeated`](../crates/backends/conformance/src/lib.rs)).
-
-## A Kernel a device cannot build runs where it can
-
-A device's own compiler can fail on a shader that is valid: a large one,
-for no fault in it that the backend can name (a crash in its register
-allocator, as one was found). That is not a fault of the document, so it
-does not refuse the document: the backend learns, in building it, that
-it cannot run that Kernel, declines it from then on as it declines what
-it cannot run beforehand, and the runtime prepares it on the ordered
-backend, said once as any Kernel off the main backend is. A shader the
-backend emitted that the device refuses as invalid is the backend's own
-fault and still refuses the document, so no fault of Entelechy's is hidden by
-running elsewhere. The device's errors are caught whatever their kind,
-never left to panic.
-
-**Why.** Placement is a backend's to decide and the document's to read
-about, never to fail on; the JIT computes what the reference does, so a
-Kernel moved there answers the same. A large game is made of large
-Kernels, and one compiler's limits must not stop it.
-
-**Where.** [`Scopes`](../crates/backends/gpu/src/failure.rs) catch the
-device's errors, sorted into the backend's own and the device's; the GPU's
-[`declines`](../crates/backends/gpu/src/lib.rs) answers for what its
-device could not build; the runtime's `prepare_on` routes it
-([kernel](../crates/core/kernel/src/lib.rs)); held by
-[the unbuilt test](../crates/interface/session/tests/unbuilt.rs).
-`entelechy check` says when a Kernel is large and what makes it so
-([size](../crates/core/ir/src/size.rs)); see *A Kernel is large by what
-it carries*.
-
-## A Kernel is large by what it carries
-
-`entelechy check` judges a Kernel's cost to a device's compiler by the words
-it carries through its branches: every struct value an `if`, a `match`
-or a `loop` yields, its words, each function counted as often as it is
-called, as such a compiler writes every call out. Past 5 000 it says the
-Kernel is large, naming the structs and the functions that carry most.
-Its instructions are not the measure. A scene that publishes Kernels no
-node uses is told which, as each is compiled and prepared all the same.
-A running session says both where its author works: a large Kernel with
-each version it publishes (so a change that narrows it shows the words
-falling), the unused ones as the scene loads.
-
-**Why.** Measured on Metal over every Kernel of the examples and a large
-game: the Kernels its compiler took seconds over carried 7 000 to
-31 000 words, and every other carried under 4 200; the instruction count
-put a dozen fast Kernels among them. A compiler keeps a merged value's
-words live together, and takes longer past in proportion to how wide
-they are: a 220-word struct through forty branches took twelve times as
-long as a 40-word one, and a struct kept apart, changed apart, half as
-long as the same words nested in one. What makes a Kernel slow to build
-is what a game is most tempted to write, one row of all its state
-updated everywhere; the note names that, so a narrower struct, or state
-in several rows, is the author's to choose.
-
-**Where.** [`carried`](../crates/core/ir/src/size.rs); `large` and the
-unused note in [check](../crates/interface/session/src/check.rs), and the
-session's `Large` and `Idle` events
-([session](../crates/interface/session/src/session.rs)); held by
-[the large test](../crates/interface/session/tests/large.rs).
-
-## A device builds a Kernel when it is needed
-
-Preparing a Kernel for a device validates it as the device takes it (its
-shaders, its bindings) and builds nothing: the device's own compiler, the
-long part and the part that fails, runs when the Kernel is needed there.
-A session builds the Kernels its graph's nodes use for the first time as
-it publishes them, on every core at once, so the first frame waits for
-none of them in turn, but for a Kernel whose every node will run on the
-ordered backend whatever happens, as far as the graph says before
-anything runs: over a few elements (64 or fewer), reading only the
-caller's Fields, state, and such nodes' outputs (`Evaluator::runs_few`); a replacement for a version that ran on the device
-is built before it is ready, and one for a version whose runs the size
-sent to the ordered backend is prepared there before it is ready too,
-and a fused group is built as it is prepared where the Kernel of the
-node it stands in for is built or ran on the device,
-so the running version keeps the frames
-until the new one can take them without a wait, replacements prepared on
-every core but one, which the frames keep; any other Kernel is built
-by the first run that needs it. A build that fails is a Kernel the device
-cannot build: it goes to the ordered backend from then on, a run that
-found it made again there.
-
-**Why.** A document publishes more Kernels than a scene uses, and a scene
-runs many of its Kernels where the device never does (a few elements, a
-small run); building them all made every edit wait for compiles nothing
-read, one compile after another. Validating first keeps the rule that
-nothing invalid publishes; building where it is needed keeps hot reload
-from stalling a frame.
-
-**Where.** The GPU's [`Lazy`](../crates/backends/gpu/src/prepare.rs) and
-`Backend::finish` ([backend](../crates/core/rules/src/backend.rs)); the
-runtime's `prepare_finished`, `Preparer::finish` and a version's `leaves`
-([kernel](../crates/core/kernel/src/lib.rs)); `Evaluator::runs_few`
-([evaluate](../crates/core/graph/src/evaluate/mod.rs)); the session's
-`finish_used` ([session](../crates/interface/session/src/session.rs));
-held by [the lazy test](../crates/interface/session/tests/lazy.rs) and
-[the few test](../crates/interface/session/tests/few.rs).
-
-## What only shows is shown while the device builds it
-
-A node whose outputs reach only what an interface presents (the first
-output, the picture, and the sound), through no state (a `<~` source or
-its initial value) and no other output, only shows (`Graph::shown_only`).
-Where a session shows while building (a served session, and the Player
-asked with `--show-while-building`, but for a replay it plays), a Kernel
-every node of which only shows is
-built on threads of its own; until the device has built it, its runs go
-to the ordered backend, and from the run after, to the device. Only what
-is handed to those threads is shown so: a Kernel whose runs are too few
-for the device to build it runs where its size sends it. What
-state or a kept output reads, the first frame waits for as before. Tests,
-renders and replays keep it off, and every frame waits for every Kernel
-it runs.
-
-**Why.** A device's compiler takes seconds on a Kernel that draws a whole
-screen (seconds more than the processor's compiler on the same IR), and
-its cache is evicted by other programs' shaders, so a first frame waited
-for the slowest one. The time goes to the device's register allocator
-over what a Kernel computes once its calls are written out: emitting
-fewer calls written out or loops it cannot unroll leaves it the same.
-Showing from the processor meanwhile is what engines do with a fallback
-shader; it is held to what only shows because a backend's rounding then
-depends on how long the compiler takes, which nothing kept may. The
-Player waits unless asked: shown from the processor, a whole-screen draw
-takes frames of a tenth of a second or more until the device has built
-it, and play is smooth no sooner than if the window had waited; a person
-playing takes a longer wait better than slow frames, while an agent or
-a person editing takes the sooner picture.
-
-**Where.** `Graph::shown_only` ([graph](../crates/core/graph/src/lib.rs));
-`Backend::finished` ([backend](../crates/core/rules/src/backend.rs)) and
-the GPU's `Lazy::is_built`; the runtime's `set_shown_while_building`
-([kernel](../crates/core/kernel/src/lib.rs)); the session's `finish_used`
-and `show_while_building` ([session](../crates/interface/session/src/session.rs));
-held by [the shown while building test](../crates/interface/session/tests/shown_while_building.rs)
-and [the fused built ahead test](../crates/interface/session/tests/fused_built_ahead.rs).
-
-## A changed document compiles off the frames
-
-Where replacements prepare off the frames (a Player, a served session),
-so are library documents read before and changed since read and their
-Kernels compiled (one read for the first time is read at once, as a
-Kernel nothing runs yet prepares at once): a sync
-hands them to another thread, reading them on every core, and returns;
-the running Kernels keep the frames; the first sync after it is done
-publishes them in order, or says why not, as a sync that read them itself
-would. The scene document is read once they land, so it never names a
-Kernel they are about to publish. Without a worker (a replay, a check)
-a sync reads them on every core and publishes them itself.
-
-**Why.** Reading a document and compiling its Kernels is the frontend's
-work, and a shared document reaches many: done on the frame it stopped
-the frames for most of a second. Moving it changes when a change
-publishes, never what publishes: nothing invalid publishes, and a change
-publishes whole or not at all.
-
-**Where.** `read_library`, `Compiling` and `Scene::sync_libraries`
-([scene](../crates/interface/session/src/scene.rs)); `Ledger::prime`
-([kernels](../crates/interface/session/src/kernels.rs));
-`Session::sync_settled` waits for it; held by
-[the compile-ahead test](../crates/interface/session/tests/compile_ahead.rs).
+Functions call one another in any written order, within a document and
+across what it uses; a chain of calls that comes back to a function is
+refused, named whole (`a -> b -> a`). Repetition is a `loop`.
+
+**Why.** A Kernel has no stack: WGSL forbids recursion and an element's
+work is bounded by its loops alone. Refusing the cycle protects that
+without making a document's order a thing to arrange.
+
+**Where.** `refuse_cycle` in the compiler's
+[`lower`](../crates/frontend/compiler/src/lower/mod.rs).
+
+## One expression has one answer on every backend
+
+Where a machine leaves a result to its hardware, the language decides it
+once:
+
+- Float `max` and `min` are IEEE 754-2019 maximumNumber and
+  minimumNumber: a NaN gives way, and `max(-0.0, 0.0)` is `0.0` either
+  way round.
+- An integer `sum` of a scatter or prefix is each element's whole total,
+  failing only when that total does not fit, at the first such element.
+- The clock crosses into a Kernel whole, a `Double` of seconds:
+  `clock()` reads it so, `time()` rounded once to a `Float` by the
+  context.
+
+**Why.** A semantics a backend may choose is not one: a machine's `max`
+gave `inf` on one backend and `-inf` on another, and a `Float` clock
+stepped in jumps a session a month old. A result decided by its inputs,
+not by the machine or the order it adds, is the same everywhere.
+
+**Where.** [`entelechy_rules`](../crates/core/rules/src/lib.rs) (`max_f32`,
+`Sums`), the GPU's [prelude](../crates/backends/gpu/src/wgsl/prelude.rs),
+`Context::float_time` in the [ABI](../crates/core/abi/src/lib.rs); held by
+the [conformance matrix](../crates/backends/conformance/src/lib.rs) and the
+JIT's [random programs](../crates/backends/jit/tests/fuzz.rs).
+
+## A group's lanes meet at exchanges
+
+A `group N` Kernel is a map run `N` elements at a time, and
+`exchange(v, k)` hands each lane the value lane `k` holds at the same
+point: no shared array, barrier or atomic is written. Every lane reaches
+each exchange alike, which the IR checks; a failure is the group's,
+named at the lowest lane that failed in the first stretch it failed in.
+The owner chose this form.
+
+**Why.** An FFT, a block sum or a sort network needs elements that see
+one another inside a pass. Shared memory with barriers lets a lane race
+or wait forever, which no reference can hold to one answer; an exchange
+is a value, so a race cannot be written and every backend computes the
+same words.
+
+**Where.** [`group`](../crates/core/ir/src/group.rs) and
+[`lanes`](../crates/core/ir/src/lanes.rs) in the IR; the group mode of
+the [conformance matrix](../crates/backends/conformance/src/lib.rs).
+
+## A frame runs what something reads; a check says what running would
+
+A frame runs the nodes an output, a state, or a pin reads, and what they
+read in turn; a node nothing reads does not run, and `entelechy check`
+notes it. A `compose` trial runs every node. `entelechy check` holds
+every node to what the types alone decide (each input's shape and
+layout, each domain's shape), in the words the evaluation would use;
+what the data decides is the evaluation's.
+
+**Why.** A Kernel is pure: a node nothing reads changes nothing anyone
+sees, so a frame costs what it shows. A fault the types decide is found
+before anything runs, on no particular backend, by one function the
+binding and the check share.
+
+**Where.** `Graph::read_through` ([graph](../crates/core/graph/src/lib.rs)),
+`type_fault` ([bind](../crates/core/graph/src/evaluate/bind.rs)); held by
+[the unread tests](../crates/interface/session/tests/unread.rs) and
+[the binding tests](../crates/interface/session/tests/binds.rs).
 
 ## The language grows only by the owner's word
 
@@ -1314,440 +146,384 @@ the way. A proposal to grow the language is put to the owner, answering:
 
 **Why.** Every form is one more thing each creator, an AI above all, must
 learn, and one more thing every later rule must hold for. Friction met
-by one demo at a time grows a language by the sum of its writers' local
-pains, which no one decided. Entelechy builds the conditions features come
-from, not the features; a function or a package is such a condition, a
-shorthand for one pattern is not.
+one demo at a time grows a language by the sum of local pains, which no
+one decided. A function or a package is a condition features come from;
+a shorthand for one pattern is not.
 
 **Where.** [`surface.txt`](../crates/frontend/compiler/tests/surface.txt)
-holds every builtin and form; [`surface.rs`](../crates/frontend/compiler/tests/surface.rs)
-fails when it grows and names this entry; the scene syntax is held by
+holds every builtin and form, and [`surface.rs`](../crates/frontend/compiler/tests/surface.rs)
+fails when it grows; the scene syntax is held by
 [the scene documents' surface](../crates/frontend/scene/tests/surface/).
-`AGENTS.md` and `PROCESS.md` state the rule where a contributor reads
-first.
 
-## A memory is carried page by page
+## A public contract grows; it breaks only with its version
 
-A Field keeps the extent it was declared with; that extent is its
-ceiling, and what a run costs is the pages it changes. The Host divides
-a Field's words into pages of `PAGE_WORDS`. A Field made from another
-records the other's words, as a `Version` (the Field and how often it
-was written in place), and which of its pages differ
-(`Host::adopt_derived`), and so for what those were made from, up to
-`ANCESTRY` back, the pages since added up: a frame's chain of scans
-reaches the frame before. A Field written in place has a new version, so
-nothing made from its earlier words takes them for its present ones. A
-released Field's buffer is kept on the Host's spare pile marked with the
-version it holds and what it was made from, so `Host::working` hands
-back a Field's words from the buffer of words it was made from, of a
-Field made from it, or of one made from the same words, copying the
-pages either changed alone: a scan's memory bound to the same empty
-Field run after run is made from the buffer its last run left. `Host::same`
-compares two Fields on those pages the same way. The JIT carries a scan's memory this
-way: it marks a page when a write changes a word on it, and a run it
-cannot follow word by word is adopted whole, as any Field is. The GPU
-brings such a Field up the same way: from the buffer an upload of
-words it was made from left behind, or of other words made from the
-same, writing the pages either changed, else from a device copy of a
-live base's buffer. The interpreter copies a memory whole, the
-reference the others are held to; a backend that does not record what it
-changed gives up nothing but the saving.
+Six things are written against by programs Entelechy does not see. Each
+may grow; what was valid against it stays valid, or its version changes.
 
-**Why.** A scan's memory is sized once, for the most it may hold, and
-the most is what a creator must declare. Copying, comparing and
-uploading it whole on every run made each edit cost the ceiling, not the
-edit. Allocating by need would change what a Field is and what a budget
-counts; pages keep the Field a value of the extent it says, the budget
-counting it whole, and make only the work proportional to the change.
+| Contract | Held by |
+| --- | --- |
+| Protocol operations | the table in [the protocol module](../crates/interface/protocol/src/lib.rs), held to `OPERATIONS` and the server answering each |
+| C ABI | [`header.rs`](../crates/interface/ffi/tests/header.rs) |
+| Capabilities | [`contract.rs`](../crates/core/abi/tests/contract.rs), pinned to `ABI_VERSION` |
+| `.field` | [`field_file.rs`](../crates/interface/formats/tests/field_file.rs) |
+| Language surface | [`surface.txt`](../crates/frontend/compiler/tests/surface.txt) at `LANGUAGE_VERSION` |
+| Scene documents | [`surface/`](../crates/frontend/scene/tests/surface/), each beside the Graph it lowers to |
 
-**Where.** `Pages`, `Version`, `Host::working`, `Host::adopt_derived`,
-`Host::made_from` and `Host::same` ([host](../crates/core/host/src/lib.rs)),
-through the `Scope` ([abi](../crates/core/abi/src/lib.rs)); the JIT's
-`Changed` ([jit](../crates/backends/jit/src/lib.rs)); the GPU's `Held`
-and `Spare::take_made` ([pool](../crates/backends/gpu/src/pool.rs)) and
-`bind_input` ([stage](../crates/backends/gpu/src/stage.rs)); the
-evaluation's `same_words` ([evaluate](../crates/core/graph/src/evaluate/mod.rs)).
-Held by the Host's page tests,
-[the carried memory parity test](../crates/backends/jit/tests/parity.rs)
-and [the GPU's page upload test](../crates/backends/gpu/tests/parity.rs).
+**Why.** A contract changed by accident breaks a reader who is not
+present. A test that fails on any difference makes every change a
+decision, and the version says which kind. A new form is recorded with
+`ENTELECHY_BLESS=1`; dropping or tightening one is refused until the
+version is raised.
 
-## A window's frames overlap the device's
+## Sources are the loader's; names are the language's
 
-The Player's evaluations overlap: a frame commits its state without
-waiting for the device, and is confirmed at the end of the next frame,
-once that frame's work has gone to the device behind it: its checks are
-waited on, and a mark of its submitted work (`Backend::submitted`). A
-frame found failed takes back its commit and the next frame's, which was
-made from it; the state is what the frame before them left, the failure
-is the answer of the call that found it, and the world's count of frames
-drops the one answered as committed. Anything other than the next frame
-confirms first: every other entry point of the evaluator, a request to
-the Player (whose `evaluate` answers a confirmed frame), a file write of
-a changed output, a save. What the processor takes home from a frame in
-flight is queued behind its work and taken once the frame is confirmed
-(`Runtime::fetch`): the Player hears each frame's sound a frame later. A
-small node compared on the device, found unchanged while every node that
-reads it ran all the same, rests as one found changed does: such a
-comparison waits for the device and spares nothing. `entelechy serve`,
-replays and the FFI do not overlap; the protocol's contracts are those
-of a frame confirmed.
+The loader finds documents: it resolves each `use` to files and
+packages, refuses cycles, and hands the language what it reached. The
+language decides every name, and a declaration carries where it was
+written, so a fault is placed by looking it up.
 
-**Why.** A frame that waited for its own device work left the processor
-idle while the device drew, and the device idle while the processor made
-the next frame. Committing ahead keeps one frame in each, and holding
-what the commit replaced keeps a failure as harmless as before: nothing
-is released until the frame is confirmed. Two frames in flight at most
-bound the device memory held as one frame in flight did. Any wait in
-the middle of a frame (a download, a comparison) waits for the frame
-before it as well, so what is read is read after confirmation, and a
-comparison is kept only where it spares work.
+- **A document sees what it uses itself.** Its names are its own and
+  those of the documents its `use` items name; a name it reaches only
+  through another's `use` is refused, with the `use` that brings it.
+- **A name is one package.** `voxel@1` is `voxel.entpkg`; a scene
+  reaches one package of a name. Where two packages a document uses
+  declare one name, it writes `package::name`; the language resolves it
+  before lowering, so no later layer sees a qualified name. The owner
+  chose this form.
 
-**Where.** `Evaluator::set_overlap`, `confirm` and `commit_in_flight`
-([frames](../crates/core/graph/src/evaluate/frames.rs)), `weigh_alike`
-([evaluate](../crates/core/graph/src/evaluate/mod.rs)),
-`Runtime::fetch` ([kernel](../crates/core/kernel/src/lib.rs)),
-`Backend::submitted` and `Backend::download_later`
-([rules](../crates/core/rules/src/backend.rs)), the GPU's waits bounded to
-a submission ([wait](../crates/backends/gpu/src/wait.rs),
-[later](../crates/backends/gpu/src/later.rs)), and the Player. Held by
-[the overlap tests](../crates/interface/session/tests/overlap.rs) and
-[the GPU's comparison tests](../crates/interface/session/tests/gpu.rs).
+**Why.** Names split between the session and the language were merged
+twice and placed in the wrong file at the seams; one owner leaves
+nothing to take apart. A name seen through another document is a
+dependency no line states. A short word is one two packages want alike;
+the package's name already says whose it is.
 
-## A frame's device time is the device's to tell
+**Where.** [`scope.rs`](../crates/frontend/language/src/scope.rs) and
+[`sources.rs`](../crates/interface/session/src/sources.rs); held by
+[the `sources` tests](../crates/interface/session/tests/sources.rs).
 
-The Player's frame-data line shows the frame's interval, the processor's
-work on it (`cpu`, every wait for the device left out: the waits for the
-frame before, and those in the middle of a frame, a download or a
-comparison, each counted by the backend where its caller blocks,
-`Backend::waited`), and how long the
-device was busy with it (`gpu`), and under it the nodes that kept the
-device busiest. The device's time is taken without waiting for it: while
-the line shows, every run the device is given, work or copy, is noted as
-it is submitted and the device tells when it has done the run
-(`Backend::set_clocked`, `clock_mark`, `end_frame`, `clocked_frame`); a
-run kept the device busy from its submission, or the end of the run
-before if later, to its own end. A node owns the runs given between the
-marks taken before and after it runs (`Report::clocked`); a frame, told
-some frames later by its number, gives each node its runs' sum, and the
-runs no node owns are counted between nodes. A waiter on its own thread
-hears the device as it finishes, so an end is told when it happens.
-Nothing about how frames run changes while they are clocked, and nothing
-is clocked while the line is hidden; over the protocol `evaluate` clocks
-with `clock` and answers `device`.
+## Entelechy describes itself, from the tables it enforces
 
-**Why.** A reading that waits for the device changes what it reads: a
-line that settles the device every frame to time it stops the frames
-overlapping, and a wait taken as the device's time measures only what
-overlapping did not hide. A wait is the device's time wherever it falls,
-so the one place that blocks is the one that counts it. A device's own timestamps would be
-better, but a driver may take them and resolve nothing; every device
-says when work is done. With `frame`, `cpu` and `gpu` side by side, the
-frame follows whichever of the two is the longer.
+The language's types, builtins and forms, the scene's forms, the
+capabilities, a package's parts, the protocol and its wire, the replay
+lines and the command line are one reference, rendered from the tables
+the implementation executes. `help` answers it; `docs/REFERENCE.md` is
+the same text. Whole programs are the examples.
 
-**Where.** `Frames` ([timing](../crates/backends/gpu/src/timing.rs)),
-`Backend::set_clocked` ([rules](../crates/core/rules/src/backend.rs)),
-`NodeClock` ([clocked](../crates/interface/session/src/clocked.rs)),
-`Backend::waited` and the GPU's `Spent` ([wait](../crates/backends/gpu/src/wait.rs)),
-`Stats` ([hud](../crates/interface/session/src/play/hud.rs)) and
-`Play::frame` ([play](../crates/interface/session/src/play/mod.rs)). Held
-by the clocked frame tests and the waits counted
-([gpu](../crates/interface/session/tests/gpu.rs)).
+**Why.** A description rendered from what runs cannot drift from it. An
+agent learns fastest from one dense reference and whole programs;
+anything built beyond that to teach it costs more than it saves.
 
-## A frame runs what something reads
+**Where.** [`help`](../crates/interface/protocol/src/help.rs); held by
+[the signatures compiled](../crates/frontend/compiler/tests/help_signatures.rs)
+and [the forms parsed](../crates/frontend/compiler/tests/help_examples.rs).
 
-A frame runs the nodes something reads: every output's (one written to a
-file too), every state's (what a `<~` carries and the source it starts
-from), every node pinned to be read (a replay's `expect` and `show`, the
-Player's preview, the protocol's `pin`, a `--save`), and what each of
-them reads through `<-`, in turn (`Graph::read_through`). A node nothing
-reads does not run: it keeps no value, `read` says so and how to give it
-one, and `entelechy check` notes it once, at the top of its chain. A trial
-(`compose` proving a scene before it lands) runs every node, so a node
-not yet read is proved all the same.
+## A rule that had two owners is held to one
 
-**Why.** A Kernel is pure: a node nothing reads changes nothing anyone
-sees, so running it is only its cost, every frame; a scene's dead
-branches made it slower without a sign. What a frame costs is now what
-it shows. Proving a scene is another matter: there, a node is run because
-it may be read once it lands.
+A rule found with a second owner (a syntax parsed twice, a second way to
+the disk, an interface asking the session's question) is left with one,
+and held there: by the compiler where visibility can say it, by a source
+scan where it cannot. A scan row names the act a copy would do, its
+owner, and the commit that gave it one; a row is added only after a rule
+had a second owner, and is rewritten, never widened, when it fails on
+legitimate code.
 
-**Where.** `Graph::read_through`
-([graph](../crates/core/graph/src/lib.rs)), `Demand::Frame` in the
-[evaluator](../crates/core/graph/src/evaluate/mod.rs), the check's note
-([check](../crates/interface/session/src/check.rs)) and `why_no_value`
-([observe](../crates/interface/session/src/observe.rs)). Held by
-[the unread tests](../crates/interface/session/tests/unread.rs).
+**Why.** A rule with two owners drifts until they disagree, and tests
+hold behavior, not ownership. A guard per broken rule is few and
+precise; a guard per rule is patterns readers learn to silence.
 
-## A check refuses what the types refuse
+**Where.** [`owners.rs`](../crates/interface/entelechy/tests/owners.rs)
+and [`layers.rs`](../crates/interface/entelechy/tests/layers.rs).
 
-`entelechy check` holds every node, a native operation's too, to the rules a
-binding and a run are held to wherever the types alone decide them: each
-input of its port's shape and element layout, and the domain of the shape
-its output (a scatter's first input) is. A source's type is its
-producer's output port, or the shape an input read from a file is
-declared, with its layout too where the element is one of the language's
-own; a domain's shape is found as resolving it finds it, from the shapes
-of the ports it reads and the parameters it names, or is its first
-input's. What the data decides (a `value(port)` past the end, a count
-that comes out zero) is the evaluation's. A check says a fault in the
-words the evaluation would.
+## A Kernel's effects are data the Host carries out after a commit
 
-**Why.** A fault the types decide is a fault before anything runs; found
-only by running, it is found late, on one backend, in another's words. A
-rule said twice drifts: the binding's input check and the run's were two,
-and said the same fault two ways, so they are one function each now,
-which both call.
+A Kernel never writes a file. A scene declares an output also written
+to a file (`to "saves/state.field"`, or `to files "dir/"` for a list of
+writes, removals and renames), and the session carries it out once the
+evaluation that changed it has committed, whole, and only where the
+person running the scene allowed (`--allow file.write`, `file.delete`).
 
-**Where.** `type_fault` ([bind](../crates/core/graph/src/evaluate/bind.rs)),
-`DomainSpec::shape` ([domain](../crates/core/graph/src/domain.rs)),
-`input_type_fault` and `check_domain_shape`
-([rules](../crates/core/rules/src/lib.rs)), the check's sources
-([check](../crates/interface/session/src/check.rs)). Held by
-[the binding tests](../crates/interface/session/tests/binds.rs).
+**Why.** An effect inside a Kernel breaks what a Kernel is: the same on
+every backend, committing nothing when it fails, replaying alike. As
+data, the effect is typed and traced, and is carried out where nothing
+can undo it. The allowance is the person's, never claimed by a Kernel or
+an agent.
 
-## A producer read at an offset fuses as a function of the row
-
-A producer fuses into its one reader when that reader reads it at its own
-element (pointwise), and also when it reads a row of it at an offset of
-its own element: `element()` plus or less a value every element shares,
-at one address, outside any loop (`offset_read`). The producer's entry
-then becomes a function of the row, called where the reader read, at the
-address clamped into the producer's extent as `at` clamps it; the
-producer's element is that row, its samples read there, and its
-`domain()` is its extent. A reader that only asks a producer its count or
-size does not hold the fusion back: it drops the Field and reads the
-extent from two params (`extent_params`), set by the planner from the
-extent the plan already knows. A domain that waits on a value (`value(port)`)
-still waits, its counts and sizes of the fused ports written as the
-extent known. A fused group and the readers counting what it absorbed are
-prepared together; until all have arrived, all run as they were, and
-`entelechy graph` says what each counts. Rows only: a grid read at an offset
-is a float address, floored and clamped by axis, and stays stored.
-
-**Why.** A scene's lists are joined and gathered by offset (`at(a, k)`,
-`at(b, k - count(a))`), and each join wrote a whole Field that one Kernel
-read once, then sat on the device. A count read elsewhere kept it stored
-too. One address per element keeps the work a stored Field would cost:
-each row is computed at most once, where it is read. An extent passed as a
-param keeps the fused module the same when only the counts change, so it
-is prepared once. Two reads per element, or reads in a loop, would compute
-the producer again for each, so they stay stored.
-
-**Where.** `offset_read`, `fuse_indexed`, `counted` and `extent_params`
-([fuse](../crates/core/ir/src/fuse.rs)), the planner's readers that
-count, its ties and `without_ports`
-([plan](../crates/core/graph/src/evaluate/plan.rs)),
-`DomainExpr::with_extents` ([domain](../crates/core/graph/src/domain.rs)).
-Held by [the fusion tests](../crates/backends/cpu/tests/fusion.rs) and,
-on the processor, the JIT and the device,
-[the offset tests](../crates/interface/session/tests/offset.rs).
-
-## What is made once is let go once made
-
-A node is settled when its key can change only by a change: it reads no
-clock, no input and no state, its domain reads no window, it runs in its
-turn, and what it reads through `<-` is settled. A settled node's
-outputs of a mebibyte or more, read only by settled nodes, are let go at
-the end of the frame once every reader holds what it made of them. What
-stays of them is what a reader binds by: their key and epoch, and each
-output's extent and layout. A later frame computes each node's key as it
-always does; a node let go whose key is unchanged is passed by unrun, and
-so are its readers, whose keys name its epoch. A reader that runs for any
-other reason (its Kernel, its parameters, another input) first has what
-it reads made again, and what that reads in turn; made under the key it
-was let go under, on a backend that repeats exactly, it keeps its epoch,
-so nothing else it feeds runs. A read of it (`read`, the Player's
-preview, the C interface) makes it again under the last frame's context,
-committing nothing. Outputs let go to make room in the Host are let go
-the same way, so a scene past its budget no longer makes everything again
-each frame. `status` names the nodes let go.
-
-**Why.** The cache held every output it ever made, so a scene paid in
-memory, all its life, for each step of each thing it made once: a rock's
-fields, a terrain's bakes, the joins of a library. Their readers did not
-need them again until something changed upstream, which runs the node
-anyway. Settled is a fact of the graph and the Kernels' declared
-capabilities, not a guess from how often a node ran, so what is let go
-does not depend on timing, and nothing a reader reads every frame is let
-go. The key already names everything an output depends on, and the epoch
-is what readers are keyed by, so keeping the key and epoch is enough to
-pass the chain by and to make it again faithfully.
-
-**Where.** `chill`, `Cold` and `make_room` ([ledger](../crates/core/graph/src/evaluate/ledger.rs)),
-`Bind` and `Held` ([bind](../crates/core/graph/src/evaluate/bind.rs)),
-`chill_made_once`, `warm`, `ready` and `warm_for_reading`
-([evaluator](../crates/core/graph/src/evaluate/mod.rs)), `Session::warm`
-([session](../crates/interface/session/src/session.rs)). Held by
-[the memory tests](../crates/interface/session/tests/memory.rs).
-
-## What comes out new frame after frame is let go once read
-
-A node whose outputs came out new eight frames in a row has them let go
-cold as soon as the last group that reads them has run, and their buffers
-serve what runs after; the scene's outputs, the state's sources, the
-pinned and what an `async` node reads are never let go. One frame in 32
-keeps them all the same, the node's own frame by its name, and the next
-frame compares its outputs with them: found the same, they are kept from
-then on and spare what reads them.
-
-**Why.** The next frame makes such outputs anew whatever it finds, so
-holding them keeps memory nothing reads again. But let go, the next
-frame has nothing to compare with and finds them new, and a node that
-settles (a simulation that has finished) would be made, and its readers
-with it, every frame for good. The frames that keep them bound how long
-settled outputs are taken for new; each node keeps them on a frame of its
-own, so nodes that began changing together never hold theirs at once.
-
-**Where.** `lets_go` and `chill_after`
-([evaluator](../crates/core/graph/src/evaluate/mod.rs)). Held by
-[the composition tests](../crates/interface/session/tests/composition.rs).
-
-## The clock crosses whole
-
-The session's time is a `Double` of seconds from the Host's clock to the
-Kernel: in the context every backend reads, in the protocol's and the
-replay's frame times, and in the C interface's input. `clock()` reads it
-whole. `time()` reads it rounded to the nearest `Float`, the one rounding,
-done by the context for every backend. A Kernel that reads `clock()` holds
-a `Double`, and runs where Doubles run. The cache keys a node that reads
-the clock by the time's whole bits.
-
-**Why.** A `Float` of seconds is finer than a millisecond for the first
-hours and a quarter of a second a month in: a session left running stepped
-its motion in jumps and saw no time pass between most frames. Precision
-lost before the Kernel cannot be found again inside it, so the clock
-crosses the boundary whole, and a Kernel chooses what it needs: `time()`
-for the many that animate over minutes, at no cost on any device,
-`clock()` for those that run for days. One rounding rule, in one place,
-keeps `time()` the same word on every backend.
-
-**Where.** `Context::float_time` in the
-[ABI](../crates/core/abi/src/lib.rs), `Op::Clock` in the
-[IR](../crates/core/ir/src/lib.rs), `EntelechyInput` at
-`ENTELECHY_ABI_VERSION` 2 in the
-[C header](../crates/interface/ffi/include/entelechy.h). Held by
-[the interpreter's test](../crates/backends/cpu/tests/execute.rs) of a
-month's clock, the [conformance matrix](../crates/backends/conformance/src/lib.rs)
-run a month in, and the [language surface](../crates/frontend/compiler/tests/surface.txt).
+**Where.** [`writes.rs`](../crates/interface/session/src/writes.rs);
+held by [the write tests](../crates/interface/session/tests/writes.rs).
 
 ## A world may write its own laws
 
-A scene may write the documents its Kernels are published from: an
-output `to files "laws/"` writes a law's text where the person running
-the scene allowed (`--allow file.write=laws/`), and the session reads
-it, compiles it, validates it and puts it in its law's place, as it
-does a law a person or an agent edited. Nothing new is added to the
-language or to the runtime's lifecycle. A law the world gets wrong is
-refused and the last one runs on; an input `= checks "laws/"` tells the
-world why. The history names a law the world wrote as the world's own,
-its origin the output that wrote it (`{"output": "laws"}`), while the
-document is as the output wrote it. The owner chose this form, the
-runner's allowance and replays that may allow (2026-10-20).
+A scene may write the documents its Kernels are published from, through
+an output `to files` into a directory the runner allowed; the session
+compiles, validates and swaps what it wrote as it does any edit, and a
+law the world gets wrong is refused while the last runs on. The history
+names such a law the world's own. A replay may allow its scene to write,
+into a store laid over the disk that never reaches it. The owner chose
+this form.
 
-A frame's effects are carried out after every committed frame, the
-whole scene's or the part a caller asked for: what a scene writes is
-read by the Host, so a frame evaluates it whatever else it asks. A
-replay may allow its scene to write, `allow file.write <dir>`: what the
-scene writes is kept for the run in a store laid over the disk
-([`Kept`](../crates/interface/session/src/store.rs)) and never reaches
-it, and before each frame the replay reads what the scene wrote after
-the last, so a law the world wrote is in its place a frame later, on
-every backend alike.
+**Why.** A world whose laws only an outside author changes is made, not
+alive. A law is a document, so writing one is writing a file: the safe
+path the Host already has, checked by its allowance and swapped by hot
+reload. A world writes text, not IR, held to the language as every
+author's law is.
 
-**Why.** A world whose laws only an outside author can change is made,
-not alive; the step from one to the other is a law written from inside.
-A law is a document, so writing one from inside is writing a file: the
-safe path the Host already has, checked by its allowance, carried out
-after a commit, compiled and swapped atomically by hot reload, which
-keeps a failed law from harming the running world. The person running
-a world, never the world, gives it the right to rewrite itself, and
-only where they say. A world writes text, not IR: what it writes is
-read, checked and held to the language as every author's law is, and
-a person can read what the world made of itself. Where a law came from
-is how a history is read, so a world's own law says so. A replay is a
-test, and a test that changed the files it tests would not start from
-the same world twice.
+**Where.** `Origin::Output` in the [history](../crates/interface/session/src/history.rs),
+`Kept` in the [store](../crates/interface/session/src/store.rs); held by
+[the genesis tests](../crates/interface/session/tests/genesis.rs) and
+[the genesis example](../examples/genesis/README.md).
 
-**Where.** `Origin::Output` in the
-[history](../crates/interface/session/src/history.rs), `Writes::author`
-([writes](../crates/interface/session/src/writes.rs)); `Kept`
-([store](../crates/interface/session/src/store.rs)); `allow`,
-`store_for` and `allow_on` ([replay](../crates/interface/session/src/replay.rs));
-`written_sources` and `written_after`
-([session](../crates/interface/session/src/session.rs)); the
-[text package](../packages/text.entpkg/README.md)'s templates, which fill a
-law's template with numbers and write it. Held by [the genesis
-tests](../crates/interface/session/tests/genesis.rs) and
-[the genesis example](../examples/genesis/README.md), whose replay
-watches a world rewrite its law of growth until its life is in balance.
+## What a served scene reaches is what the person running it gave
 
-## A group's lanes meet at exchanges
+A session an agent drives holds the scene to what the person who
+started it allowed; nothing over the wire widens it. Reads are held to
+the scene's directories as it first loads, the package directories and
+`--allow file.read`; writes to `--allow file.write`; a socket answers
+this machine or an origin `--allow-origin` names; a Kernel is prepared
+only with the grants it requires; and what an agent sends is charged
+against the Host's budget before it costs anything.
 
-A `group N` Kernel is a map run `N` elements at a time, and
-`exchange(v, k)` hands each lane the value lane `k` holds at the same
-point. That is the whole of what a group shares: no shared array, no
-barrier, no atomic is written. Every lane reaches each exchange alike,
-which the IR checks (`group_fault`): an exchange under control that
-turns on what a lane holds alone is refused where it is written, and an
-exchange is written in the body, never in a function. The owner chose
-this form (2026-10-20).
+**Why.** A file an agent can read it can send away, and any page the
+person visits can reach a socket on their machine.
 
-The interpreter and the JIT, which run one element at a time, run the
-group's entry rewritten (`lanes`): the branches, matches and loops that
-hold an exchange run once for the group, and each stretch between
-exchanges runs once for each lane in turn (`Op::Lanes`), as that lane:
-its element, its reads, its work and its failures are its own. A value
-that crosses a stretch is the array of the lanes' values, an exchange
-takes for each lane the element its lane names, and the group's own
-branch, count or test is lane 0's, which every lane holds alike. Each
-lane's work is counted once, as an element's. A device runs the group
-as a workgroup, an exchange as a write to shared memory, a barrier, a
-read and a barrier.
+**Where.** The session's [inputs](../crates/interface/session/src/inputs/mod.rs)
+and [writes](../crates/interface/session/src/writes.rs), the protocol's
+[transport](../crates/interface/protocol/src/transport.rs); held by
+[the protocol tests](../crates/interface/entelechy/tests/protocol.rs).
 
-A failure is the group's: it is named in the first stretch between
-exchanges in which a lane failed, at the lowest lane that failed there.
-The reference holds a lane that fails, runs it no more, and fails the
-run where the stretch ends (`Op::Meet`) with the lowest held; a device
-carries a flag through every exchange, so a lane that fails later
-records nothing. Where a group's work is counted, a loop holding an
-exchange stops for the whole group at its next look once the lanes have
-met after a failure: every lane runs the stretch it is in to its end,
-so the lowest lane to fail in it is the one named.
+## What a scene reads of the Host's world is an input or a node
 
-**Why.** Elements that see one another inside a pass are what an FFT,
-a block sum or a sort network need, and a map alone takes a pass per
-step for each. A shared array with barriers is the device's own form:
-it lets a lane read a slot no lane wrote yet, race on one, or wait at a
-barrier the others never reach, and no reference interpreter can hold
-those to one answer. An exchange is a value, as a call is, so the
-program stays one of values: the IR proves every lane reaches it, every
-backend computes the same words, and a race cannot be written. A lane
-that stopped alone where the others meet would leave them waiting at a
-barrier, so a group stops as one; naming its failure by the stretch it
-met in keeps the device's answer the reference's, however its lanes
-interleave.
-Because every lane reaches each exchange alike, the group's control
-round its exchanges is the group's own, and the entry can be cut into
-stretches run lane by lane with nothing kept but values: each lane's
-work is done once, so a group costs what its elements cost, however many
-exchanges it passes. A trace of one lane answers its exchanges from what
-the group's run gave there (`Op::Meet`'s operand).
+The Host hands a scene what it reads from outside through the forms it
+already has, on the sync that already watches files:
 
-**Where.** `Mode::Group`, `Op::Lane`, `Op::Exchange`, `Op::Lanes`, `Op::Meet` and
-`group_fault` ([group](../crates/core/ir/src/group.rs)) in the
-[IR](../crates/core/ir/src/lib.rs), `lanes`
-([lanes](../crates/core/ir/src/lanes.rs)); `compute_group` in the
-[interpreter](../crates/backends/cpu/src/lib.rs), `Group` and `Answers`
-in its [machine](../crates/backends/cpu/src/eval/run.rs);
-`compute_group_into` in the [JIT](../crates/backends/jit/src/lib.rs),
-`lanes` and `meet` in its [code](../crates/backends/jit/src/codegen.rs);
-`emit_group_main` ([map](../crates/backends/gpu/src/wgsl/map.rs)) on the
-GPU. Held by the [conformance matrix](../crates/backends/conformance/src/lib.rs)'s
-group mode on every backend, the parity tests of the
-[JIT](../crates/backends/jit/tests/parity.rs) and the
-[GPU](../crates/backends/gpu/tests/parity.rs), the
-[compiler's refusals](../crates/frontend/compiler/tests/compile.rs) and
-the [language surface](../crates/frontend/compiler/tests/surface.txt).
+- **Formats.** PNG, PPM, PGM, WAV and MIDI are read live; other bytes go
+  to a Kernel as `Rows<Int>` (`bytes`); glTF, fonts, SVG and lossy sound
+  are converted outside the runtime by `entelechy import`.
+- **The language's view of documents.** `checks "dir/"` gives the
+  problems, `outline "dir/"` the definitions, a line each, as text.
+- **A directory.** `files "dir/"` as an input gives every file's bytes;
+  as a node, the listing git would track, and the bytes of the files the
+  graph names in `paths`.
+- **A world larger than memory.** `node n: Rows<E> fields "dir/"` gives
+  the elements of the Field files the graph names, read off the frames
+  where the session prepares in the background, at once in a replay.
+
+Each was chosen by the owner, and each lowers to what a scene already
+has: an input, or externals filled a frame late as a font node's are.
+
+**Why.** A scene that edits, browses or streams needs the Host's files,
+but no new lifecycle: what the graph asks for comes from the graph, as
+it runs. A format is read live only when it decodes to a numerical
+Field without a dependency outside the workspace; a closed set keeps the
+formats crate from collecting every format. Text is what every
+interface already says a problem in, and what a Kernel reads as it
+reads any text. Only what a document declares is given, so the compiler
+stays out from under the runtime.
+
+**Where.** [`entelechy-formats`](../crates/interface/formats/src/lib.rs);
+the session's [inputs](../crates/interface/session/src/inputs/mod.rs); held
+by the session's checks, outline, files, files node and fields node
+tests, and the scene surface's documents of each form.
+
+## Reality changes atomically; history records why
+
+A session's position is `(revision, frame)`: the revision moves when the
+world changes other than by running, the frame counts the evaluations
+committed within it. Every change is recorded with its origin, sources
+and documents are kept once each by digest, and refused attempts are
+recorded apart, moving nothing. A snapshot takes committed state whole,
+with its laws; `restore` installs it, with `laws` and `structure` said,
+proves the world by one frame, and puts everything back if it cannot
+live.
+
+**Why.** An agent changing a live world needs to know how it came to be
+and what was refused. Only committed state is taken, because the cache
+may hold what a failed evaluation never committed. A restore is the
+largest change, so it is proved before it is real.
+
+**Where.** [`history.rs`](../crates/interface/session/src/history.rs),
+`Evaluator::restore` in the [graph's state](../crates/core/graph/src/evaluate/state.rs);
+held by the protocol's and the history's tests.
+
+## A live world is changed through three doors, each at its own grain
+
+- **Structure**, a statement at a time: `compose` edits the scene's
+  documents (the scene, and the Kernel, graph and replay documents under
+  its directory that it uses, places or tests), several as one, all
+  written or none, each checked whole before any is written.
+- **State**, a committed port at a time: `write`, `reset`, `restore`.
+- **Parameters** the document declares.
+
+Nothing else reaches in.
+
+**Why.** Each door is where the thing it changes is kept whole. A node
+value set from outside is structure the document does not say, lost at
+the next read. The document is also a person's: an agent names what it
+changes and every other byte stays. A port is the smallest part of state
+that restarts without inventing a state no evaluation committed.
+
+**Where.** [`edit`](../crates/frontend/scene/src/edit.rs) in the scene,
+`Session::write_documents`, and the [graph's state](../crates/core/graph/src/evaluate/state.rs);
+held by the edit, graph and protocol tests.
+
+## What playing a scene means is decided once
+
+Every interface that plays a scene shares one play: the frame, what F5,
+F6 and F10 mean (every other key is the scene's), how a pad is a
+keyboard, how the pointer is found in the picture, and what is said. An
+interface is its devices only. What every interface asks of a session
+(which output is the picture, the best backend, every command's flags,
+what a check finds) the session answers.
+
+**Why.** ARCHITECTURE-PLAN §34: interfaces are many, and all of them
+operate on the same underlying Runtime. A display, keys and a sound card
+are the Host's IO; a page is another Host, not another product.
+
+**Where.** [`play`](../crates/interface/session/src/play/mod.rs); held by
+[the play's tests](../crates/interface/session/tests/play.rs) and the web
+bridge's.
+
+## A replay is a test; the framework tests itself
+
+A replay is input played into a scene over time and what it expects,
+under its example's or package's `tests/`; played headless it holds the
+scene, played in a window the interface too. A piece made with a scene
+is kept as its laws, structure and state, never as a replay of clicks.
+Rust tests hold the framework with scenes written in the test, and never
+read `examples/` or `packages/`; a demo or a package holds itself by its
+replays, on every backend, nothing fused, rounded apart.
+
+**Why.** A replay of clicks tests the editor clicked. A demo's author
+needs no Rust to validate it, and a framework tied to its demos slows
+with each and collects their exceptions; a package carried alone takes
+its tests with it.
+
+**Where.** [The replay module](../crates/interface/session/src/replay.rs),
+the recipe's `replays` step in [PROCESS](../PROCESS.md), `tested` in
+[the packages' check](../crates/interface/xtask/src/packages.rs).
+
+## A platform is the Host's world; what a scene computes is not
+
+- Where no thread can start (WASI), work is done in turn; where links
+  cannot be resolved, a file's name is its path made whole.
+- A session's documents are wherever its caller keeps them, through one
+  `Store`: the disk, or files the caller handed in, as a page does.
+- Where Entelechy is WebAssembly, its JIT writes WebAssembly, and the
+  host compiles it into Entelechy's function table.
+- In a page, waiting for the device is giving the page a turn: the GPU
+  backend parks on a suspending import until the browser answers.
+
+**Why.** A platform's primitives vary; each fallback is one a native run
+already allows, so no document, replay or agent sees a different world.
+Source resolution belongs to the caller. Suspension is the host's to
+offer, so nothing above the GPU backend learns it was suspended.
+
+**Where.** [`later.rs`](../crates/core/kernel/src/later.rs),
+[`store.rs`](../crates/interface/session/src/store.rs), the JIT's
+[`wasm/`](../crates/backends/jit/src/wasm), the GPU's
+[`wait.rs`](../crates/backends/gpu/src/wait.rs); held by the WebAssembly
+tests and the web bridge's, in a headless Chrome.
+
+## The rasterizer is a package; the native one is its fast path
+
+A scene places `packages/raster.entpkg` to turn triangles into a
+surface, and binds a preset's native operation (`native.rasterize@1` to
+`@3`) in its place where it wants speed. Both keep one rule: a pixel is
+covered where its center is inside the triangle's box and on or inside
+all three edges, holding the nearest fragment, the earlier on a tie. On
+the interpreter and the JIT the native path is exact to the rule; on a
+GPU it is exact inside drawn triangles, and the device's rasterizer may
+differ at edges.
+
+**Why.** As Kernels, rasterization is typed, traced, hot-reloaded and
+changeable by an author; a native operation is a package's fast path
+held to a Kernel definition, never a second definition. A device may
+round one expression differently in two Kernels, so a decision two
+Kernels share is made in one; `entelechy replay --round-apart` finds one
+made twice.
+
+**Where.** The package and its presets; `entelechy_rules::raster`; the
+GPU's [parity tests](../crates/backends/gpu/tests/parity.rs); the mesh
+example's edge, native, cutout and canvas replays.
+
+## Where a run goes is the backend's; what it computes is not
+
+Beside a device, a run goes to the JIT when its elements times its
+Kernel's typical work are at most `--small` (or when one of the device's
+groups holds all its elements), and to the device otherwise; a run that
+reads what the device just made stays there. A Kernel the device's own
+compiler cannot build runs on the JIT from then on; a shader the backend
+emitted that the device refuses is the backend's fault and still refuses
+the document. `entelechy check` says when a Kernel is large for a
+device's compiler, by the words it carries through its branches.
+
+**Why.** A device's dispatch costs about the same whatever it does, so a
+device earns its cost over many elements and nothing over few. The
+choice reads the run and the Kernel, never a clock, so a replay places
+every run alike, and the JIT computes what the reference does.
+Placement is a backend's to decide and the document's to read about,
+never to fail on.
+
+**Where.** `Runtime::execute` in [`entelechy-kernel`](../crates/core/kernel/src/lib.rs),
+the GPU's [`declines`](../crates/backends/gpu/src/lib.rs),
+[`size.rs`](../crates/core/ir/src/size.rs); held by
+[`routing.rs`](../crates/interface/session/tests/routing.rs),
+[the unbuilt test](../crates/interface/session/tests/unbuilt.rs) and
+[the large test](../crates/interface/session/tests/large.rs).
+
+## A change prepares off the frames; nothing invalid publishes
+
+Preparing a Kernel validates it and builds nothing: a device builds it
+when it is first needed, or as it publishes where a node will surely run
+there. A changed document is read and compiled off the frames while the
+running Kernels keep them, and publishes whole on the sync after. Where
+a session shows while building (served, or asked), a Kernel that only
+reaches what is shown runs on the processor until the device has built
+it; tests, renders and replays wait for every Kernel.
+
+**Why.** Hot reload must not stall a frame, and a device's compiler
+takes seconds on a whole-screen Kernel. Moving work off the frames
+changes when a change publishes, never what publishes. Showing from the
+processor is held to what only shows, because rounding then depends on
+how long a compiler takes, which nothing kept may.
+
+**Where.** The GPU's [`Lazy`](../crates/backends/gpu/src/prepare.rs),
+`Scene::sync_libraries` ([scene](../crates/interface/session/src/scene.rs)),
+`Graph::shown_only`; held by the session's lazy, compile-ahead and
+shown-while-building tests.
+
+## Work is spared only where the answer is the same
+
+Every saving is keyed by what the work depends on, so it never changes
+what a frame computes:
+
+- A node whose cache key (generation, parameters, inputs' epochs,
+  domain, clock, input) is unchanged is not run; a replay played again
+  takes each frame's remembered outputs under the same key.
+- Outputs nothing reads again are let go: those made once, once made,
+  and those new frame after frame, once read; what stays is their key
+  and epoch, so a reader made again finds them made again alike.
+- A Field is carried page by page: what a run costs is the pages it
+  changes, while the Field keeps its declared extent and the budget
+  counts it whole.
+- A producer read at its reader's element, or at one shared offset,
+  fuses into the reader.
+- A window's frames overlap the device's: a frame commits ahead and is
+  confirmed by the next, and a failure takes both back.
+- A frame's device time is told by the device as it finishes, never by
+  waiting for it.
+
+**Why.** An optimization that changes the answer is a second semantics.
+The key already names everything an output depends on, so held outputs
+under an equal key are the outputs, and outputs made again are trusted
+to repeat only where a backend's conformance says so. A reading that
+waits for the device changes what it reads.
+
+**Where.** The evaluator's [recall](../crates/core/graph/src/evaluate/recall.rs),
+[ledger](../crates/core/graph/src/evaluate/ledger.rs) and
+[frames](../crates/core/graph/src/evaluate/frames.rs), the Host's
+[pages](../crates/core/host/src/lib.rs), the IR's
+[fusion](../crates/core/ir/src/fuse.rs); held by the session's recall,
+memory, composition, offset and overlap tests.
 
 ## A package speaks in functions, Kernels, graph presets and data
 
@@ -1755,40 +531,30 @@ A package's capability is words a creator composes, never a feature
 built for one use, and its words come in four layers, each composed
 where it belongs:
 
-1. **A function** composes inside a Kernel, on one element: the light on
-   a surface, the air over a distance, a grade on a color. Whatever can
+1. **A function** composes inside a Kernel, on one element. Whatever can
    be said of one element alone is said as a function first.
-2. **A Kernel** is a node of the Graph, and is one only where its work
-   cannot be one element's: it reads its neighbors, the last frame
-   (`<~`), another size, or is a pass a scene places on its own. Its
-   body calls the package's functions; it holds no logic a function of
-   the package could not hand a scene's own Kernel.
+2. **A Kernel** is a node of the Graph only where its work cannot be one
+   element's: it reads its neighbors, the last frame, another size, or
+   is a pass a scene places on its own. Its body calls the package's
+   functions.
 3. **A graph preset** (`graphs/*.esn`, placed as a subgraph) is a way
    the package recommends to compose its Kernels: a recipe, not an
-   interface. It places only Kernels and subgraphs a scene could place
-   itself, so a scene replaces any part of it with its own node.
+   interface. A scene replaces any part of it with its own node.
 4. **Data** is a look or a setting as rows (`Grade`, `Film`, `Dof`),
-   made by a node, carried by the Graph, read by another node: what a
-   story, a time or a mask changes. A Kernel's parameters are the
-   defaults a node starts from; a look a scene would drive is also an
-   input of rows.
+   made by a node and carried by the Graph: what a story, a time or a
+   mask changes. A Kernel's parameters are the defaults a node starts
+   from.
 
-What composes on one element composes in a function; what crosses
-elements, frames or sizes composes in the Graph. A package holds no
-input of a person's (the keys and the pointer are `controls`'), no
-switch between two looks (a look turned into another is data blended),
-and no content one program alone holds (its catalog of spells, its
-moods): those are a scene's or a project's own.
+A package holds no person's input (that is `controls`'), no switch
+between two looks (a look turned into another is data blended), and no
+content one program alone holds.
 
 **Why.** A Graph is a program because its nodes are words and its edges
-are the relations between them. A Kernel that holds a whole effect hides
-those relations inside its body, where no scene can take one part and
-leave another; a parameter no node can drive is a relation the Graph
-cannot hold. Words at every layer keep composition open: a scene builds
-the effect it wants, and the package grows by words, not by features.
+the relations between them. A Kernel that holds a whole effect hides
+those relations where no scene can take one part and leave another.
+Words at every layer keep composition open: a scene builds the effect
+it wants, and the package grows by words, not by features.
 
 **Where.** [packages](../packages/README.md) holds the packages to their
 names, layers and tests (`cargo xtask packages`); the light package's
-[words test](../packages/light.entpkg/tests/words.esn) holds a scene's
-Kernels, saying passes by the package's functions, to the passes' own
-pictures, and its README opens with its effects as these words.
+[words test](../packages/light.entpkg/tests/words.esn).

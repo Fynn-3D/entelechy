@@ -141,7 +141,7 @@ through:
   widen it; a file elsewhere is a `rejected` event naming it, and a `use`
   or `graph` naming one refuses the scene before any of it is read.
 - **Writes** take `--allow file.write=<dir>`. Neither is ever granted
-  over the wire ([decision](DECISIONS.md)). `compose` writes only the
+  over the wire ([decision](DECISIONS.md#what-a-served-scene-reaches-is-what-the-person-running-it-gave)). `compose` writes only the
   scene's own documents: `.ent`, `.esn` and `.replay` files under the
   scene's directory, where they land after their links, none in a package
   directory; the person who serves a scene gave its directory.
@@ -378,7 +378,7 @@ context given as `evaluate` takes it, which commits nothing: on success
 the world is the snapshot's and the next `evaluate` follows it; on
 failure state, laws (generations too), structure and revision are put
 back, and the attempt is in `history`. Runs off the frame are let go
-either way ([decision](DECISIONS.md)).
+either way ([decision](DECISIONS.md#reality-changes-atomically-history-records-why)).
 
 ## Status and history
 
