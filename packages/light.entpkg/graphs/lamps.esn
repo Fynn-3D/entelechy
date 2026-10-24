@@ -26,8 +26,7 @@ param contact_longest: Float = 0.3;
 param contact_thick: Float = 0.01;
 param contact_thickest: Float = 0.15;
 
-node depth: light.lamps_depth@1 { surface <- surface; domain = ceil(size(surface) / 16); }
-node tiles: light.lamps_tiles@1 { depth <- depth.result; lamps <- lamps; lens <- lens; surface <- surface; domain = size(depth); }
+node tiles: graph "lamp_tiles.esn" { lamps <- lamps; lens <- lens; surface <- surface; }
 node light: light.lamps_light@1 { surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; tiles <- tiles.result; lamps <- lamps; lamp_looks <- lamp_looks; lens <- lens;
     proxy <- proxy; land <- land; frame <- frame; maps <- maps; contact = contact; contact_length = contact_length; contact_longest = contact_longest;
     contact_thick = contact_thick; contact_thickest = contact_thickest; domain = size(surface); }

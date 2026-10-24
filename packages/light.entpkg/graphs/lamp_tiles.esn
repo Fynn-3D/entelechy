@@ -1,0 +1,14 @@
+//! The lamps each tile of the screen passes by (`kernels/lamps.ent`): the screen's depth a tile of 16 by 16 pixels, and
+//! the lamps whose reach meets it, `through` meters past the surface (0: at the surface alone; the fog's reach for the
+//! air). What `light.lamps_light` and the fog's air read as `tiles`.
+use "../kernels/";
+
+input lamps: Lamps;
+input lens: Lenses;
+input surface: Grid<Vec4>;
+param through: Float = 0.0;
+
+node depth: light.lamps_depth@1 { surface <- surface; domain = ceil(size(surface) / 16); }
+node tiles: light.lamps_tiles@1 { depth <- depth.result; lamps <- lamps; lens <- lens; surface <- surface; through = through; domain = size(depth); }
+
+output result <- tiles.result;

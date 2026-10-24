@@ -5,7 +5,8 @@
 //! among alike neighbors, read for each pixel's own normal every `every` pixels a side and laid over each pixel by
 //! distance (`strength`); and a cone along each mirror direction,
 //! as wide as the surface is rough, the things it meets in place of the renderer's `reflection` from all round. For a
-//! renderer that takes no bounced light in itself (lit, ray traced); its look as lit's (`Surround`, `Openness`).
+//! renderer that takes no bounced light in itself (lit, ray traced); its look as lit's (`Surround`, `Openness`). A recipe
+//! over `radiance_cache.esn`, which a scene places alone to read the cache its own way.
 use "../kernels/";
 
 input hdr: Image;
@@ -52,21 +53,15 @@ param open_reach: Vec3 = vec3(0.4, 1.2, 2.5);
 param open_strength: Float = 1.6;
 param open_least: Float = 0.1;
 
-node rframe: light.radiance_frame@1 { frame <- frame; scale = scale; least = cache_least; domain = count(frame); }
-node cells: light.radiance_size@1 { rframe <- rframe.result; domain = 3; }
-node turn0: Rows<Int> { domain = 20; }
-node turn: light.radiance_turn@1 { previous <~ turn.result from turn0.result; frame <- frame; sky <- sky; lamps <- lamps; settle = settle; domain = 20; }
-node none: Volume<Vec4> { domain = vec3(1, 1, 1); }
-node cache: light.radiance@1 { previous <~ cache.result from none.result; previous_frame <~ rframe.result from rframe.result; proxy <- proxy; land <- land; frame <- frame; rframe <- rframe.result;
-    sky <- sky; lamps <- lamps; lamp_looks <- lamp_looks; turn <- turn.result; size <- cells.result; settle = settle; parts = parts; bounce = bounce; spread = spread; reach = reach;
-    ground = ground; ground_light = ground_light; sky_light = sky_light; open_reach = open_reach; open_strength = open_strength; open_least = open_least;
-    domain = vec3(value(size, 0), value(size, 1), value(size, 2)); }
+node cache: graph "radiance_cache.esn" { sky <- sky; proxy <- proxy; land <- land; frame <- frame; lamps <- lamps; lamp_looks <- lamp_looks; scale = scale;
+    least = cache_least; parts = parts; settle = settle; bounce = bounce; spread = spread; reach = reach; ground = ground; ground_light = ground_light;
+    sky_light = sky_light; open_reach = open_reach; open_strength = open_strength; open_least = open_least; }
 node screen: light.bounce_screen@1 { hdr <- hdr; surface <- surface; domain = ceil(size(surface) / 4); }
-node probes: light.bounce_probes@1 { screen <- screen.result; surface <- surface; lens <- lens; radiance <- cache.result; rframe <- rframe.result; proxy <- proxy; frame <- frame; land <- land;
+node probes: light.bounce_probes@1 { screen <- screen.result; surface <- surface; lens <- lens; radiance <- cache.result; rframe <- cache.frame; proxy <- proxy; frame <- frame; land <- land;
     probe = probe; rays = rays; spread = probe_spread; reach = reach; steps = steps; screen_reach = screen_reach; domain = ceil(size(surface) / probe); }
 node filtered: light.bounce_probe_filter@1 { red <- probes.red; green <- probes.green; blue <- probes.blue; place <- probes.place; domain = size(place); }
 node gathered: light.bounce_gather@1 { red <- filtered.r; green <- filtered.g; blue <- filtered.b; place <- probes.place; surface <- surface; paint <- paint; lens <- lens;
-    radiance <- cache.result; rframe <- rframe.result; proxy <- proxy; land <- land; frame <- frame; sky <- sky; lamps <- lamps; lamp_looks <- lamp_looks; every = every; probe = probe; reach = reach;
+    radiance <- cache.result; rframe <- cache.frame; proxy <- proxy; land <- land; frame <- frame; sky <- sky; lamps <- lamps; lamp_looks <- lamp_looks; every = every; probe = probe; reach = reach;
     steps = steps; hit_below = hit_below; ground = ground; ground_light = ground_light; sky_light = sky_light; open_reach = open_reach; open_strength = open_strength;
     open_least = open_least; domain = ceil(size(surface) / every); }
 node bounced: light.bounce@1 { hdr <- hdr; gathered <- gathered.result; mirror <- gathered.mirror; reflection <- reflection; surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; lens <- lens; sky <- sky;
@@ -77,4 +72,4 @@ output result <- bounced.result;
 /// `light.reflections`.
 output reflection <- bounced.reflected;
 output cache <- cache.result;
-output cache_frame <- rframe.result;
+output cache_frame <- cache.frame;

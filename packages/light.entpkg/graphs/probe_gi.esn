@@ -53,8 +53,7 @@ node beyond: light.probes_behind@1 { more <- more; behind_at <- behind_at; behin
     probes <- light.result; frame <- frame; sky <- sky; spacing = spacing; domain = size(more); }
 // The picture without reflections, which screen-space reflections read.
 // The lamps' light on each surface, from those each tile of the screen keeps.
-node lamp_depth: light.lamps_depth@1 { surface <- surface; domain = ceil(size(surface) / 16); }
-node lamp_tiles: light.lamps_tiles@1 { depth <- lamp_depth.result; lamps <- lamps; lens <- lens; surface <- surface; domain = size(depth); }
+node lamp_tiles: graph "lamp_tiles.esn" { lamps <- lamps; lens <- lens; surface <- surface; }
 node no_maps: light.lamp_maps_none@1 { domain = vec2(1, 1); }
 node lamped: light.lamps_light@1 { surface <- surface; paint <- paint; extra <- extra; layers <- layers; more <- more; tiles <- lamp_tiles.result; lamps <- lamps; lamp_looks <- lamp_looks; lens <- lens;
     proxy <- proxy; land <- land; frame <- frame; maps <- no_maps.result; domain = size(surface); }

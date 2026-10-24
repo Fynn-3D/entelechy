@@ -4,8 +4,8 @@ scene bounce.esn
 # rests 12 frames after the block and the sun last moved.
 window 256 160
 frame 0.0 to 0.5 every 0.0333
-expect bounced.turn.result[0] = 13
-expect bounced.turn.result[1] = 13
+expect bounced.cache.turn.result[0] = 13
+expect bounced.cache.turn.result[1] = 13
 
 # The floor takes the color of the balls beside it: red under the red
 # balls (with the light the floor itself sends up and the balls send back),

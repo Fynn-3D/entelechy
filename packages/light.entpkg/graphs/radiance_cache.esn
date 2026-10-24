@@ -1,0 +1,40 @@
+//! The light the sun, the sky and the `lamps` leave on the proxies' surfaces, kept as Lumen keeps its surface cache
+//! (`kernels/radiance.ent`): a volume laid as the proxy is, a level for each of its levels, `scale` times coarser (no finer
+//! than `least` meters), a `parts`th of it lit anew each frame and bounced again from itself (`bounce`), resting `settle`
+//! frames after the proxy's block or the sun last moved. `result` is the cache, `frame` where its levels lie; what a
+//! renderer reads its bounced light from (`bounce.esn`), or a scene's own kernel.
+use "../kernels/";
+
+input sky: SkyLooks;
+input proxy: Volume<Vec4>;
+input land: Grid<Float>;
+input frame: Proxies;
+input lamps: Lamps;
+input lamp_looks: LampLooks;
+param scale: Float = 2.0;
+param least: Float = 0.0;
+param parts: Int = 4;
+param settle: Int = 48;
+param bounce: Float = 1.0;
+param spread: Float = 0.6;
+param reach: Float = 30.0;
+/// Its look as lit's (`Surround`, `Openness`).
+param ground: Vec3 = vec3(0.34, 0.29, 0.22);
+param ground_light: Float = 1.6;
+param sky_light: Float = 1.15;
+param open_reach: Vec3 = vec3(0.4, 1.2, 2.5);
+param open_strength: Float = 1.6;
+param open_least: Float = 0.1;
+
+node rframe: light.radiance_frame@1 { frame <- frame; scale = scale; least = least; domain = count(frame); }
+node cells: light.radiance_size@1 { rframe <- rframe.result; domain = 3; }
+node turn0: Rows<Int> { domain = 20; }
+node turn: light.radiance_turn@1 { previous <~ turn.result from turn0.result; frame <- frame; sky <- sky; lamps <- lamps; settle = settle; domain = 20; }
+node none: Volume<Vec4> { domain = vec3(1, 1, 1); }
+node cache: light.radiance@1 { previous <~ cache.result from none.result; previous_frame <~ rframe.result from rframe.result; proxy <- proxy; land <- land; frame <- frame; rframe <- rframe.result;
+    sky <- sky; lamps <- lamps; lamp_looks <- lamp_looks; turn <- turn.result; size <- cells.result; settle = settle; parts = parts; bounce = bounce; spread = spread; reach = reach;
+    ground = ground; ground_light = ground_light; sky_light = sky_light; open_reach = open_reach; open_strength = open_strength; open_least = open_least;
+    domain = vec3(value(size, 0), value(size, 1), value(size, 2)); }
+
+output result <- cache.result;
+output frame <- rframe.result;

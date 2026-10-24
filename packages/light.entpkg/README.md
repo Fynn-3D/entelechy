@@ -211,8 +211,15 @@ node filmed: image.film@1 { image <- shown.result; film <- story.result; }
   bounced light in itself (lit, ray traced).
 - `graphs/clay.esn` — The clay renderer (`light.clay`) on a scene's
   G-buffer (the contract, its first three maps).
+- `graphs/clouds.esn` — One deck of clouds over the view: the deck (for
+  the fog beneath it and its shadows) and the clouds marched over the sky.
+- `graphs/fog.esn` — Fog in a grid of cells over the view, lit by the sun
+  under the clouds' deck, the sky and the lamps, summed from the eye and
+  blurred among alike depths.
 - `graphs/lamp_maps.esn` — The lamps' shadow maps (`kernels/lamp_map.ent`),
   drawn once while lamps and things keep still.
+- `graphs/lamp_tiles.esn` — The lamps each tile of the screen passes by:
+  what the lamps' light and the fog's air read.
 - `graphs/lamps.esn` — The lamps added to a renderer's picture, for one
   that does not take them in itself.
 - `graphs/path_tracer.esn` — The path tracer (`kernels/path_tracer.ent`),
@@ -222,6 +229,8 @@ node filmed: image.film@1 { image <- shown.result; film <- story.result; }
   drawn anew each frame and averaged while the lens rests (up to
   `settle_frames`, then it rests too); its `scatter` for light under the
   skin.
+- `graphs/radiance_cache.esn` — The light left on the proxies' surfaces,
+  kept as a surface cache and bounced from itself: what bounced light reads.
 - `graphs/shadow.esn` — The sun's shadow from a virtual shadow map
   (`kernels/shadow.ent`) multiplied into the G-buffer's sun visibility,
   for a scene of clustered meshes.
@@ -229,6 +238,9 @@ node filmed: image.film@1 { image <- shown.result; film <- story.result; }
   spread across then down and laid back over its `hdr`.
 - `graphs/translucent.esn` — Translucent layers over a renderer's picture
   (`kernels/translucent.ent`), their mesh cut at the near plane.
+- `graphs/volumetrics.esn` — Fog and clouds laid over a picture, the deck
+  given back for its shadows: a recipe of `clouds.esn` and `fog.esn`.
+
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
