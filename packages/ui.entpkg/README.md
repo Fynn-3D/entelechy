@@ -1,9 +1,8 @@
 # ui
 
-A screen's widgets drawn per pixel: layout, paint, widgets over a theme,
-writing, navigation through a list, a command search, and marks over a
-3D picture. A person's hands are `controls`' to read: the navigation and
-the search take its rows.
+A screen drawn per pixel: rectangles laid out, shapes painted, text
+written, and navigation through a list by the hands `controls` reads.
+What a program's widgets look like is its own.
 
 **Layer:** Interaction. **Uses:** [`text`](../text.entpkg/README.md), [`controls`](../controls.entpkg/README.md).
 
@@ -13,31 +12,18 @@ use "ui.entpkg";
 
 ## Kernels
 
-- `kernels/command.ent` — Command search. Kernels: `ui.command_start@1`,
-  `ui.command_keys@1`, `ui.command_newlines@1`,
-  `ui.command_line_count@1`, `ui.command_no_lines@1`,
-  `ui.command_line_ends@1`, `ui.command_query@2`, `ui.command_matched@1`,
-  `ui.command_ranks@1`, `ui.command_ordered@1`, `ui.command_search@3`,
-  `ui.command_overlay@1`.
 - `kernels/layout.ent` — Rectangles a screen is laid out in, in its
   pixels, y down.
-- `kernels/mark.ent` — Marks over a 3D picture.
 - `kernels/navigation.ent` — Moving through a list of rows by a
   person's hands as `controls` reads them. Kernels:
   `ui.navigation_start@1`, `ui.navigation_keys@1`, `ui.navigate@2`.
 - `kernels/paint.ent` — What a pixel of a screen is painted.
-- `kernels/widget.ent` — The widgets.
 - `kernels/writing.ent` — Text drawn.
-
-## Graph presets
-
-- `graphs/command_search.esn` — The command search (`ui.command_search`)
-  over `names`, a command a line, the hands read inside it.
 
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`command.replay`, `mark.replay`, `navigation.replay`. Every Kernel of
+`navigation.replay`. Every Kernel of
 the package is reached by one of them.
 
 Used by the [collapse](../../examples/collapse/README.md), [cube-puzzle](../../examples/cube-puzzle/README.md), [level](../../examples/level/README.md), [sound](../../examples/sound/README.md), [spells](../../examples/spells/README.md), [ui](../../examples/ui/README.md), [voxel](../../examples/voxel/README.md) examples.

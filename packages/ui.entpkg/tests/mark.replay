@@ -1,9 +1,0 @@
-scene mark.esn
-
-# 42 rising a third of a second after the blow: its figures in the
-# color given, their shadow beside them, the dark round them.
-frame 0.0
-expect 34 23 = 1.000 0.300 0.200
-expect 46 23 = 1.000 0.300 0.200
-expect 42 26 = 0.040 0.040 0.048
-expect 30 14 = 0.100 0.100 0.120

@@ -2,6 +2,7 @@
 // options moved through by keys, a pad or the pointer.
 use "../../../packages/text.entpkg";
 use "../../../packages/ui.entpkg";
+use "widget.ent";
 
 /// The options: the difficulty (0 to 2), the volume (0 to 1), subtitles
 /// and hints shown, and when they were last applied (-9 never).

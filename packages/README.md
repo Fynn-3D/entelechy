@@ -130,5 +130,5 @@ What a person reads and does.
 | Package | Holds |
 | --- | --- |
 | [`text`](text.entpkg/README.md) | A bitmap font, glyph rows, letters, wide-glyph atlases, numbers written, templates filled and text written to files |
-| [`ui`](ui.entpkg/README.md) | Layout, paint, widgets, navigation, command search and marks |
+| [`ui`](ui.entpkg/README.md) | A screen's rectangles, shapes, text and list navigation |
 | [`controls`](controls.entpkg/README.md) | Actions from the keyboard and a pad alike |

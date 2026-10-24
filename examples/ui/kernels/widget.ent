@@ -2,10 +2,8 @@
 // the pixel asked for, nothing outside its rectangle but its shadow. A
 // widget's words are a row of a text's letters, `width` cells a row
 // (`writing.ent`). A screen lays them over one another (`over`).
-use "layout.ent";
-use "paint.ent";
-use "writing.ent";
-use "text.entpkg";
+use "../../../packages/ui.entpkg";
+use "../../../packages/text.entpkg";
 
 /// How a screen's widgets look: the panels' fill and rim, the words'
 /// ink and the dimmed, the accent of what is lit, a track's empty, the
