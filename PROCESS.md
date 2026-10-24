@@ -146,8 +146,11 @@ cargo xtask verify
   rounded apart (`--round-apart`; a replay whose checks hold two forms
   alike says so and is left out); then checks every package used in one
   scene beside every other, as a scene reaches them all in one namespace.
-  `wasi` builds for WASI and runs every replay there on the processor,
-  eight at once. `against_main` is [below](#against-main).
+  `wasi` builds for WASI and holds it to the system interface: a
+  session served on standard input, every answer `ok`, and the replays
+  that read and write files, on the processor. Under WASI there is no
+  device and no code made at run time, so the pictures are the other
+  backends' to check. `against_main` is [below](#against-main).
 
 The log begins with the commit it verifies and ends `passed`.
 

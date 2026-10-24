@@ -15,7 +15,7 @@ Verified surface, as of `main`:
 | Where | How |
 | --- | --- |
 | macOS, Apple M4, Metal | every round |
-| WebAssembly under WASI (`wasmtime`), the interpreter | the example replays, `serve` on standard input |
+| WebAssembly under WASI (`wasmtime`), the interpreter | its system interface: a session served on standard input, and the replays that read and write files (`data`, `mesh`, `sound`, `animation`, `genesis`) |
 | A page: Entelechy as WebAssembly in headless Chrome, on its JIT (WebAssembly) and on WebGPU, files handed in | the web bridge's test, from `cargo test --workspace` (needs `wasm-bindgen` at Cargo.lock's version) |
 | 32-bit WebAssembly under node: the core's, the front end's, the interpreter's and the JIT's tests, the JIT's code WebAssembly | `crates/interface/entelechy/tests/wasm.rs`, from `cargo test --workspace` |
 | Interpreter, JIT, GPU | `examples/*/tests/*.replay` on all three |

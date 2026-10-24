@@ -363,8 +363,10 @@ fn named_packages(out: &Out) -> Result<(), String> {
     }
 }
 
-/// Every replay by the WebAssembly build under WASI, on the processor;
-/// WASI has no threads, so eight run at once.
+/// The WebAssembly build under WASI, the system interface it is held to:
+/// a session served over standard input, every answer `ok`, and the
+/// replays that read and write through it (pictures, bytes, saves, Field
+/// files, models, sound, laws written to files), on the processor.
 fn wasi(out: &Out) -> Result<(), String> {
     run(
         out,
@@ -377,21 +379,54 @@ fn wasi(out: &Out) -> Result<(), String> {
             "wasm32-wasip1",
         ]),
     )?;
-    let mut all = listed("examples", Some("tests"), ".replay");
-    all.extend(listed("packages", Some("tests"), ".replay"));
+    let program = "target/wasm32-wasip1/release/entelechy.wasm";
+    let requests = [
+        r#"{"id":1,"op":"kernels"}"#,
+        r#"{"id":2,"op":"evaluate","time":0.0,"window":[64,48]}"#,
+        r#"{"id":3,"op":"read","output":"result","format":"summary"}"#,
+        r#"{"id":4,"op":"help","name":"mix"}"#,
+        r#"{"id":5,"op":"quit"}"#,
+    ];
+    let mut served = Command::new("wasmtime")
+        .args(["run", "--dir", ".", program, "serve"])
+        .args(["examples/data/scene.esn", "--backend", "cpu"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("wasmtime: {error}"))?;
+    if let Some(mut input) = served.stdin.take() {
+        input
+            .write_all((requests.join("\n") + "\n").as_bytes())
+            .map_err(|error| error.to_string())?;
+    }
+    let said = served
+        .wait_with_output()
+        .map_err(|error| error.to_string())?;
+    let answers = String::from_utf8_lossy(&said.stdout).into_owned();
+    out.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .write_all(answers.as_bytes())
+        .map_err(|error| error.to_string())?;
+    let lines: Vec<&str> = answers.lines().filter(|l| l.starts_with('{')).collect();
+    if lines.len() != requests.len() || lines.iter().any(|l| !l.contains(r#""ok":"#)) {
+        return Err("a request served under WASI was not answered ok".into());
+    }
+    let through = ["data", "mesh", "sound", "animation", "genesis"];
+    let all: Vec<PathBuf> = listed("examples", Some("tests"), ".replay")
+        .into_iter()
+        .filter(|replay| {
+            replay
+                .components()
+                .nth(1)
+                .is_some_and(|example| through.iter().any(|name| example.as_os_str() == *name))
+        })
+        .collect();
     let passed = pool(&all, 8, |replay| {
         run(
             out,
             Command::new("wasmtime")
-                .args([
-                    "run",
-                    "--dir",
-                    ".",
-                    "target/wasm32-wasip1/release/entelechy.wasm",
-                    "replay",
-                    "--backend",
-                    "cpu",
-                ])
+                .args(["run", "--dir", ".", program, "replay", "--backend", "cpu"])
                 .arg(replay),
         )
         .is_ok()
