@@ -1,0 +1,29 @@
+// Erosion that lets what is steeper than it can stand slide down: the
+// heights given back changed, so a scene carries them from frame to frame
+// with `<~`.
+
+/// One step of thermal erosion: between each cell and its four neighbors,
+/// what one stands over the other beyond `talus` meters slides down by
+/// `rate` (at most 1) of a quarter of it. What a cell gives its neighbor
+/// that neighbor takes, so the ground's sum is kept.
+kernel terrain.erode@1 {
+    requires { field.read; field.write; }
+    input previous: Grid<Float>;
+    param talus: Float = 0.6;
+    param rate: Float = 0.5;
+    output result: Grid<Float>;
+    fn slide(here: Float, there: Float, talus: Float) -> Float {
+        return max(there - here - talus, 0.0) - max(here - there - talus, 0.0);
+    }
+    compute {
+        let here = sample(previous);
+        let c = coord();
+        let last = size(previous) - 1.0;
+        let east = at(previous, min(c + vec2(1.0, 0.0), last));
+        let west = at(previous, max(c - vec2(1.0, 0.0), vec2(0.0, 0.0)));
+        let south = at(previous, min(c + vec2(0.0, 1.0), last));
+        let north = at(previous, max(c - vec2(0.0, 1.0), vec2(0.0, 0.0)));
+        let moved = slide(here, east, talus) + slide(here, west, talus) + slide(here, south, talus) + slide(here, north, talus);
+        return here + moved * 0.25 * clamp(rate, 0.0, 1.0);
+    }
+}

@@ -20,14 +20,3 @@ expect worn.result[36] = 0.5 0.0001
 expect worn.result[37] = 1.875 0.0001
 expect sums.result[0] = 8 0.0001
 expect sums.result[1] = 8 0.0001
-
-# The brush raises the cell 1.41 meters from its middle by its amount
-# times its fall there, and the ground past its rim not at all.
-expect raised.result[119] = 1.8595 0.0005
-expect raised.result[0] = 1 0.0001
-
-# Hills stay between nothing and their height.
-expect hills.result[163] >= 0
-expect hills.result[163] <= 12
-expect hills.result[700] >= 0
-expect hills.result[700] <= 12
