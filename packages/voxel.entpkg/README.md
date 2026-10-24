@@ -1,10 +1,13 @@
 # voxel
 
 Worlds of voxels drawn by walking rays through them: boxes of voxels
-placed in the world, light, shapes as data, a view by day and bodies
-posed by their joints.
+placed in the world, a place shaded from the sun, shapes as data, a view
+by day and bodies posed by their joints. A view is seen through
+`geometry`'s `Lens` and lit by `light`'s words for a game without a
+renderer (`plain_daylight`, `plain_light`, `flame_flicker`,
+`light_stepped`, `plain_haze`, `plain_dark`).
 
-**Layer:** Graphics. **Uses:** no other package.
+**Layer:** Graphics. **Uses:** [`geometry`](../geometry.entpkg/README.md), [`light`](../light.entpkg/README.md).
 
 ```text
 use "voxel.entpkg";
@@ -14,13 +17,15 @@ use "voxel.entpkg";
 
 - `kernels/body.ent` — Bodies. Kernels: `voxel.unposing@1`,
   `voxel.posed@1`.
-- `kernels/light.ent` — What a ray meets, lit.
 - `kernels/ray.ent` — Worlds of voxels.
+- `kernels/shade.ent` — A place shaded from the sun: a walk toward it
+  that meets a voxel (`voxel_shaded`).
 - `kernels/shape.ent` — Shapes as data, a sphere, a rounded cuboid or a
   capsule, each painting a number or carving, baked into a volume or
   painted over one. Kernels: `voxel.shapes@1`, `voxel.paint@1`.
-- `kernels/view.ent` — The camera rays leave from, and one look of a
-  volume by day. Kernels: `voxel.view@1`.
+- `kernels/view.ent` — One look of a volume by day: the lens going round
+  its middle (`voxel_view_camera`), the box it stands in. Kernels:
+  `voxel.view@1`.
 
 ## Graph presets
 

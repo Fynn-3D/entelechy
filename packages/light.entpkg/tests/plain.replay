@@ -1,0 +1,16 @@
+scene plain.esn
+
+# Up: the sky's half (all of it) and the sun's whole, 1.5; a side face in
+# shade, half the sky's half, 0.25; the light half way to its reach, a
+# quarter, a face turned to it all of it; 0.33 in three steps is a third.
+frame 0.0
+expect probe.result[0] = 1.5 0.25 0.25 0.333333 0.00001
+
+# No haze at no distance, all of it far off; at a depth, e to the minus
+# one left; the flame at its middle at the start.
+expect probe.result[1] = 1 0 0.367879 0.9 0.00001
+
+# Looking down, away from a sun overhead: a quarter of the sun and the
+# sky's 0.2; looking into it: the sun's 1.45 and the sky's.
+expect probe.result[2] = 0.45 0.45 0.45 0 0.00001
+expect probe.result[3] = 1.65 1.65 1.65 0 0.00001

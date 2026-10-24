@@ -1,0 +1,9 @@
+// A place in a box of voxels shaded from the sun: a walk toward it that meets a voxel.
+use "ray.ent";
+
+/// Whether a place, `from` in a box's voxels, is shaded from a sun along
+/// `sun` (a unit direction toward it, in the box's frame): a walk toward
+/// it meets a voxel, those numbered `pass.x` to `pass.y` seen through.
+fn voxel_shaded(vox: Voxels, from: Vec3, sun: Vec3, base: Vec3, n: Vec3, pass: IVec2) -> Bool {
+    return voxel_walk_past(vox, from + sun * 0.02, sun, base, n, pass).id > 0;
+}

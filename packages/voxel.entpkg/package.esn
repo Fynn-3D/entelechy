@@ -1,6 +1,6 @@
 //! Worlds of voxels drawn by walking rays through them: boxes of voxels
-//! placed in the world, light, shapes as data, a view by day and bodies
-//! posed by their joints.
+//! placed in the world, a place shaded from the sun, shapes as data, a
+//! view by day and bodies posed by their joints.
 package voxel@1 { language = 1; ir = 1; }
 
 use "kernels/";

@@ -1,40 +1,16 @@
-// The camera rays leave from, and one look of a volume by day.
-use "light.ent";
+// One look of a volume by day: the lens it is seen through (`geometry.entpkg`'s `Lens`), lit as a game without a
+// renderer lights it (`light.entpkg`'s `plain_daylight`, `plain_haze`).
+use "geometry.entpkg";
+use "light.entpkg";
 use "ray.ent";
-
-/// A camera: where it stands, which way it looks, its right and up, and
-/// its focal length in pixels.
-struct VoxelCamera { eye: Vec3; fwd: Vec3; right: Vec3; up: Vec3; focal: Float; }
-
-/// A camera looking at `look` from `distance` away, turned `yaw` about the
-/// up axis and tipped `pitch` down (radians; yaw 0 looks toward -z).
-fn voxel_orbit(look: Vec3, yaw: Float, pitch: Float, distance: Float, focal: Float) -> VoxelCamera {
-    let fwd = vec3(-sin(yaw) * cos(pitch), -sin(pitch), -cos(yaw) * cos(pitch));
-    let right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
-    let up = cross(right, fwd);
-    return VoxelCamera { eye: look - fwd * distance, fwd: fwd, right: right, up: up, focal: focal };
-}
-
-/// The ray through a pixel's middle `pixel` of a picture of `dims`.
-fn voxel_ray(cam: VoxelCamera, pixel: Vec2, dims: Vec2) -> Vec3 {
-    return normalize(cam.fwd * cam.focal + cam.right * (pixel.x - dims.x * 0.5) - cam.up * (pixel.y - dims.y * 0.5));
-}
-
-/// A place as a pixel of a picture of `dims`, and how far before the
-/// camera it is (negative behind).
-fn voxel_project(cam: VoxelCamera, m: Vec3, dims: Vec2) -> Vec3 {
-    let d = m - cam.eye;
-    let z = dot(d, cam.fwd);
-    let s = cam.focal / max(z, 0.01);
-    return vec3(dims.x * 0.5 + dot(d, cam.right) * s, dims.y * 0.5 - dot(d, cam.up) * s, z);
-}
+use "shade.ent";
 
 /// The camera `voxel.view@1` sees a volume of `n` voxels with, in a
-/// picture of `dims`: going round the volume's middle, `yaw` about the up
+/// picture: going round the volume's middle, `yaw` about the up
 /// axis and `pitch` down, `distance` times its diagonal away. A Kernel
 /// that picks what the picture shows asks the same camera.
-fn voxel_view_camera(n: Vec3, yaw: Float, pitch: Float, distance: Float, dims: Vec2) -> VoxelCamera {
-    return voxel_orbit(vec3(0.0, n.y * 0.3, 0.0), yaw, pitch, length(n) * distance, dims.y * 1.2);
+fn voxel_view_camera(n: Vec3, yaw: Float, pitch: Float, distance: Float) -> Lens {
+    return lens_orbiting(vec3(0.0, n.y * 0.3, 0.0), yaw, pitch, length(n) * distance, 1.2);
 }
 
 /// A volume of `n` voxels as the box `voxel.view@1` stands it in: a
@@ -67,8 +43,8 @@ kernel voxel.view@1 {
     compute {
         let n = size(volume);
         let dims = domain();
-        let cam = voxel_view_camera(n, yaw, pitch, distance, dims);
-        let dir = voxel_ray(cam, coord() + 0.5, dims);
+        let cam = voxel_view_camera(n, yaw, pitch, distance);
+        let dir = ray(cam, coord(), dims);
         let sky = mix(horizon, zenith, saturate(dir.y));
         let met = voxel_meet(volume, voxel_view_box(n), cam.eye, dir, 0.0);
         if met.id == 0 { return vec4(sky, 1.0); }
@@ -76,8 +52,8 @@ kernel voxel.view@1 {
         let toward = normalize(sun);
         let from = voxel_local(p + met.face * 0.01, vec3(0.0, 0.0, 0.0), 0.0, 1.0) + vec3(n.x * 0.5, 0.0, n.z * 0.5);
         let shaded = voxel_shaded(volume, from, toward, vec3(0.0, 0.0, 0.0), n, ivec2(1, 0));
-        let lit = at(colors, met.id) * voxel_daylight(met.face, toward, shaded, sky_light, sun_light);
-        let seen = voxel_haze(lit, met.t, haze, sky);
+        let lit = at(colors, met.id) * plain_daylight(met.face, toward, shaded, sky_light, sun_light);
+        let seen = plain_haze(lit, met.t, haze, sky);
         return vec4(seen, 1.0);
     }
 }

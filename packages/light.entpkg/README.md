@@ -44,6 +44,7 @@ saying a pass by its words to the pass's own picture.
 | Gloss under a pixel | `widened_rough` | `light.specular_aa` | |
 | Motion and focus | `motion_blurred`, `motion_way`, `dof_blurred`, `blur_of` | `light.motion_blur`, `light.focus`, `light.focused` | `Dof` |
 | Ink from the G-buffer | `outline_near`, `outline_crease` | `light.outline` | |
+| Plain light, with no renderer | `plain_daylight`, `plain_light`, `flame_flicker`, `light_stepped`, `plain_haze`, `plain_dark`, `thin_lit` | | `PlainLight` |
 | Edges smoothed over frames | | `graphs/taa.esn`, `graphs/super_resolution.esn` | |
 
 The picture after the light is `image.entpkg`'s, in the same words:
@@ -150,6 +151,12 @@ node filmed: image.film@1 { image <- shown.result; film <- story.result; }
 - `kernels/painted.ent` — The painted look: light and shade as a painting
   has them (`toon`, `Toon`), and a renderer's shading taken toward it as far
   as a scene asks (`shaded_as`, `scattered_as`, `mirrored_as`).
+- `kernels/plain.ent` — Light as a game without a renderer draws it, on a
+  face it found itself (a voxel's, a tile's): the sky and a sun
+  (`plain_daylight`), lights fading to their reach (`plain_light`,
+  `PlainLight`) and flickering (`flame_flicker`), light kept to a few
+  steps (`light_stepped`), haze and the dark (`plain_haze`,
+  `plain_dark`), a thin thing lit against the sun (`thin_lit`).
 - `kernels/path_tracer.ent` — Path tracing (standard PBR, `brdf.ent`).
   Kernels: `light.path_count_start@1`, `light.path_count@1`,
   `light.path_trace@1`, `light.path_blank@1`, `light.path_accum@1`,
@@ -306,7 +313,7 @@ node filmed: image.film@1 { image <- shown.result; film <- story.result; }
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`bounce.replay`, `clip_plane.replay`, `cluster.replay`, `decals.replay`, `field.replay`, `fog_volumes.replay`, `lamp_looks.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `outline.replay`, `path_tracer.replay`, `probe_gi.replay`, `proxy_bake.replay`, `proxy_detail.replay`, `proxy_stream.replay`, `reflection.replay`, `shadow.replay`,
+`bounce.replay`, `clip_plane.replay`, `cluster.replay`, `decals.replay`, `field.replay`, `fog_volumes.replay`, `lamp_looks.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `outline.replay`, `path_tracer.replay`, `plain.replay`, `probe_gi.replay`, `proxy_bake.replay`, `proxy_detail.replay`, `proxy_stream.replay`, `reflection.replay`, `shadow.replay`,
 `sky.replay`, `stream.replay`, `temporal.replay`, `translucent.replay`, `words.replay`.
 Every Kernel of the package is reached by one of them.
 

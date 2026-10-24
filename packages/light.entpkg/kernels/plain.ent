@@ -1,0 +1,52 @@
+// Light as a game without a renderer draws it, on a face it has found itself (a voxel's, a tile's): the sky and a sun
+// (`plain_daylight`), lights that fade to their reach (`plain_light`) and flicker (`flame_flicker`), light kept to a
+// few steps as pixel art keeps it (`light_stepped`), haze and the dark with distance (`plain_haze`, `plain_dark`), and
+// a thin thing (a mote, a petal, a wing) lit by the sun and the sky, glowing seen against the sun (`thin_lit`).
+use "sky.ent";
+
+/// The light of a sky and a sun on a face: the sky's light `sky` by the
+/// share of the sky the face sees, all of it facing up, half facing
+/// sideways, none facing down; the sun's light `sun` by how square the
+/// face turns to it (`toward` a unit direction toward it), unless
+/// `shaded`. A look keeps it to steps (`light_stepped`) as it chooses.
+fn plain_daylight(face: Vec3, toward: Vec3, shaded: Bool, sky: Vec3, sun: Vec3) -> Vec3 {
+    let direct = if shaded { 0.0 } else { max(dot(face, toward), 0.0) };
+    return sky * (0.5 + 0.5 * face.y) + sun * direct;
+}
+
+/// A light at `at`, of `color`, reaching `reach` world units, falling off
+/// with the square of the share of that it has come.
+struct PlainLight { at: Vec3; reach: Float; color: Vec3; }
+
+/// A light's color on a face at `p`: falling off with distance, brighter
+/// on faces turned to it.
+fn plain_light(p: Vec3, face: Vec3, l: PlainLight) -> Vec3 {
+    let to = l.at - p;
+    let d = length(to);
+    let fall = saturate(1.0 - d / l.reach);
+    let facing = 0.35 + 0.65 * max(dot(face, to / max(d, 0.001)), 0.0);
+    return l.color * fall * fall * facing;
+}
+
+/// A flame's flicker at a place and time, 0.8 to 1.
+fn flame_flicker(time: Float, p: Vec3) -> Float { return 0.9 + 0.1 * sin(time * 13.0 + p.x) * sin(time * 7.0 + p.z); }
+
+/// Light kept to `steps` steps a channel, as pixel art keeps it.
+fn light_stepped(light: Vec3, steps: Float) -> Vec3 { return floor(light * steps + 0.5) / steps; }
+
+/// A color seen through haze to `color_of_haze`, the more the farther
+/// (`thickness` a world unit).
+fn plain_haze(color: Vec3, distance: Float, thickness: Float, color_of_haze: Vec3) -> Vec3 {
+    return mix(color, color_of_haze, saturate(1.0 - exp(-distance * thickness)));
+}
+
+/// A color swallowed by the dark: kept by e to the minus `distance` over
+/// `depth`, so at `depth` world units a little over a third is left.
+fn plain_dark(color: Vec3, distance: Float, depth: Float) -> Vec3 { return color * exp(-distance / depth); }
+
+/// A thin thing's color `c` lit by the sky `s`, seen along `dir`: the sun's light, much brighter looking into the sun
+/// (light let through), and the sky's.
+fn thin_lit(c: Vec3, dir: Vec3, s: SkyLook) -> Vec3 {
+    let back = pow(max(dot(dir, normalize(s.sun)), 0.0), 6.0);
+    return c * (s.sun_color * (0.25 + 1.2 * back) + s.ambient);
+}

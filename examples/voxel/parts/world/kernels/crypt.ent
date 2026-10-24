@@ -7,6 +7,8 @@
 // (the vault open to the sky) the sun casts shadows, the water is seen
 // through to the pool's floor, and the far fades into haze.
 use "../../../../../packages/voxel.entpkg";
+use "../../../../../packages/geometry.entpkg";
+use "../../../../../packages/light.entpkg";
 
 type Stone = enum { Air, Flagstone, Brick, Rock, Water, Torch, Iron, Marble, Gold };
 
@@ -92,8 +94,8 @@ kernel crypt.draw@1 {
     compute {
         let t = time();
         let dims = domain();
-        let cam = voxel_orbit(vec3(0.0, 1.5, 0.0), t * 0.3 + 0.6, 0.35, 6.0, dims.y * 0.9);
-        let dir = voxel_ray(cam, coord() + 0.5, dims);
+        let cam = lens_orbiting(vec3(0.0, 1.5, 0.0), t * 0.3 + 0.6, 0.35, 6.0, 0.9);
+        let dir = ray(cam, coord(), dims);
         let room = VoxelBox { base: vec3(0.0, 0.0, 0.0), n: chamber(), size: grain(), foot: vec3(0.0, 0.0, 0.0), turn: 0.0 };
         let figure = VoxelBox { base: vec3(0.0, 0.0, 0.0), n: vec3(16.0, 24.0, 16.0), size: 0.1, foot: vec3(0.0, 0.5, 0.0), turn: t * 0.8 };
         // By day the water is seen through.
@@ -109,16 +111,16 @@ kernel crypt.draw@1 {
             let sun = normalize(vec3(0.4, 0.8, 0.3));
             let at = voxel_local(p + met.face * 0.01, vec3(0.0, 0.0, 0.0), 0.0, grain()) + vec3(24.0, 0.0, 24.0);
             let shaded = voxel_shaded(chamber, at, sun, vec3(0.0, 0.0, 0.0), chamber(), pass);
-            let day = voxel_daylight(met.face, sun, shaded, vec3(0.4, 0.46, 0.6), vec3(0.95, 0.85, 0.65));
-            let lit = crypt_color(met.id) * voxel_stepped(day, 7.0);
-            let far = voxel_haze(lit, met.t, 0.05, vec3(0.75, 0.8, 0.88));
+            let day = plain_daylight(met.face, sun, shaded, vec3(0.4, 0.46, 0.6), vec3(0.95, 0.85, 0.65));
+            let lit = crypt_color(met.id) * light_stepped(day, 7.0);
+            let far = plain_haze(lit, met.t, 0.05, vec3(0.75, 0.8, 0.88));
             return vec4(far, 1.0);
         }
-        let flicker = voxel_flicker(t, p);
-        let torches = loop 4 with sum = vec3(0.0, 0.0, 0.0) { sum + voxel_light(p, met.face, VoxelLight { at: torch_at(index()), reach: 7.0, color: vec3(1.0, 0.62, 0.3) }) * flicker };
-        let lantern = voxel_light(p, met.face, VoxelLight { at: vec3(cos(t) * 3.5, 1.2, sin(t) * 3.5), reach: 6.0, color: vec3(0.9, 0.85, 0.7) });
-        let light = voxel_stepped(vec3(0.04, 0.045, 0.07) + torches + lantern, 7.0);
-        let seen = voxel_dark(crypt_color(met.id) * light, met.t, 14.0);
+        let flicker = flame_flicker(t, p);
+        let torches = loop 4 with sum = vec3(0.0, 0.0, 0.0) { sum + plain_light(p, met.face, PlainLight { at: torch_at(index()), reach: 7.0, color: vec3(1.0, 0.62, 0.3) }) * flicker };
+        let lantern = plain_light(p, met.face, PlainLight { at: vec3(cos(t) * 3.5, 1.2, sin(t) * 3.5), reach: 6.0, color: vec3(0.9, 0.85, 0.7) });
+        let light = light_stepped(vec3(0.04, 0.045, 0.07) + torches + lantern, 7.0);
+        let seen = plain_dark(crypt_color(met.id) * light, met.t, 14.0);
         return vec4(seen, 1.0);
     }
 }
