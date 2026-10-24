@@ -1,5 +1,5 @@
 // A finish's words at points whose answers are known by hand: a widescreen's bars, a split, an S curve, halation, the
-// recipes; the film laid on with nothing asked of it (the picture as it was), with its curve, and in bars; a
+// named looks; the film laid on with nothing asked of it (the picture as it was), with its curve, and in bars; a
 // watercolor's tone over half gray.
 use "../kernels/";
 
@@ -11,9 +11,9 @@ node probe: kernel {
         let k = element();
         let ext = vec2(160.0, 120.0);
         return if k == 0 { vec4(film_bars(vec2(0.5, 0.1), ext, 2.39), film_bars(vec2(0.5, 0.5), ext, 2.39), film_bars(vec2(0.5, 0.1), ext, 0.0),
-                film_preset(1).letterbox) }
+                film_widescreen().letterbox) }
             else if k == 1 { vec4(film_split(vec3(0.5, 0.5, 0.5), 1.0), film_curve(vec3(0.25, 0.25, 0.25), 0.5).x) }
-            else { vec4(film_curve(vec3(0.25, 0.25, 0.25), 1.0).x, film_none().grade.exposure, film_preset(4).grade.saturation, film_preset(9).vignette) };
+            else { vec4(film_curve(vec3(0.25, 0.25, 0.25), 1.0).x, film_none().grade.exposure, film_monochrome().grade.saturation, film_drained().vignette) };
     }
 }
 node white: Grid<Vec4> { domain = vec2(8, 8); value = vec4(1.0, 1.0, 1.0, 1.0); }
@@ -26,9 +26,9 @@ node glow: kernel {
 }
 node half: Grid<Vec4> { domain = vec2(160, 120); value = vec4(0.5, 0.5, 0.5, 1.0); }
 node quarter: Grid<Vec4> { domain = vec2(160, 120); value = vec4(0.25, 0.25, 0.25, 1.0); }
-node nothing: image.film_start@1 { fringe = 0.0; grain = 0.0; domain = 1; }
-node curved: image.film_start@1 { curve = 1.0; fringe = 0.0; grain = 0.0; domain = 1; }
-node barred: image.film_start@1 { letterbox = 2.39; fringe = 0.0; grain = 0.0; domain = 1; }
+node nothing: image.film_start@2 { fringe = 0.0; grain = 0.0; domain = 1; }
+node curved: image.film_start@2 { curve = 1.0; fringe = 0.0; grain = 0.0; domain = 1; }
+node barred: image.film_start@2 { letterbox = 2.39; fringe = 0.0; grain = 0.0; domain = 1; }
 node as_was: image.film@1 { image <- half.result; film <- nothing.result; }
 node s_curve: image.film@1 { image <- quarter.result; film <- curved.result; }
 node bars: image.film@1 { image <- half.result; film <- barred.result; }

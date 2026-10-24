@@ -53,7 +53,7 @@ The picture after the light is `image.entpkg`'s, in the same words:
 | --- | --- | --- | --- |
 | Glow, exposure, tone | `bloom_at`, `tone_sharpened`, `tone_curve`, `tone_warmth` | `graphs/bloom.esn`, `graphs/exposure.esn`, `graphs/tonemap.esn`, `graphs/upscale.esn` | |
 | A grade | `grade_color`, `grade_mix`, `grade_balance`, `grade_none` | `image.grade` | `Grade` |
-| Film | `film_split`, `film_curve`, `film_halation`, `film_bars`, `film_preset`, `fringed`, `vignetted`, `film_grain` | `image.film` | `Film` |
+| Film | `film_split`, `film_curve`, `film_halation`, `film_bars`, `film_widescreen`, `film_warm`, `film_drained`, `film_monochrome`, `fringed`, `vignetted`, `film_grain` | `image.film` | `Film` |
 | A watercolor's tone | `watercolor` | `image.watercolor`, `image.watercolor_start` | `Watercolor` |
 | Edges smoothed in a frame | `fxaa` | `image.fxaa` | |
 | Part of a picture | | `image.masked` | |
@@ -67,8 +67,8 @@ node story: kernel {
     output result: Rows<Film>;
     domain = 1;
     compute {
-        let a = film_preset(1);
-        let b = film_preset(3);
+        let a = film_widescreen();
+        let b = film_drained();
         let t = smoothstep(20.0, 26.0, time());
         return Film { ..a, grade: grade_mix(a.grade, b.grade, t), curve: mix(a.curve, b.curve, t) };
     }

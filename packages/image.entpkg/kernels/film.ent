@@ -94,8 +94,8 @@ kernel image.finish@1 {
 // each of its steps a word a scene's own kernel composes as it chooses: a grade in light (`Grade`, `grade.ent`'s), a
 // split of cyan shadows and orange highlights (`film_split`), an S-shaped contrast (`film_curve`), a red glow round
 // highlights (`film_halation`, film's halation), the lens's fringe, darkened corners and grain (`image.entpkg`'s
-// `fringed`, `vignetted`, `film_grain`), and a widescreen's bars (`film_bars`). A few looks are kept as recipes
-// (`film_preset`).
+// `fringed`, `vignetted`, `film_grain`), and a widescreen's bars (`film_bars`). A few looks are named, each a
+// `Film` (`film_widescreen`, `film_warm`, `film_drained`, `film_monochrome`).
 /// One film look: a grade in light (`grade`), the split's strength (`split`, 0 none), the S curve's (`curve`, 0
 /// none), the halation's (`halation`), the fringe (`fringe`, a share of the width), darkened corners (`vignette`),
 /// grain (`grain`, its strength; `grain_size`, its clumps in pixels), and the bars' aspect (`letterbox`, 2.39 for
@@ -116,18 +116,28 @@ fn film_grade(exposure: Float, temperature: Float, tint: Float, saturation: Floa
     return Grade { ..grade_none(), exposure: exposure, temperature: temperature, tint: tint, saturation: saturation };
 }
 
-/// Looks kept as recipes: 1 a widescreen's, warm, teal and orange; 2 warm, bright and soft; 3 drained and hard, the
-/// bars of 1.85; 4 black and white, coarse grain; anything else none.
-fn film_preset(k: Int) -> Film {
-    return if k == 1 { Film { grade: film_grade(0.0, 0.1, 0.0, 0.95), split: 0.6, curve: 0.45, halation: 0.35, fringe: 0.0015,
-            vignette: 0.35, grain: 0.035, grain_size: 1.3, letterbox: 2.39 } }
-        else if k == 2 { Film { grade: film_grade(0.1, 0.35, 0.05, 1.1), split: 0.2, curve: 0.35, halation: 0.5, fringe: 0.001,
-            vignette: 0.3, grain: 0.045, grain_size: 1.6, letterbox: 0.0 } }
-        else if k == 3 { Film { grade: film_grade(0.0, -0.05, 0.0, 0.45), split: 0.15, curve: 0.8, halation: 0.1, fringe: 0.001,
-            vignette: 0.45, grain: 0.04, grain_size: 1.2, letterbox: 1.85 } }
-        else if k == 4 { Film { grade: film_grade(0.1, 0.0, 0.0, 0.0), split: 0.0, curve: 0.7, halation: 0.2, fringe: 0.0,
-            vignette: 0.5, grain: 0.07, grain_size: 2.0, letterbox: 0.0 } }
-        else { film_none() };
+/// A widescreen's look: warm, teal and orange, in the bars of 2.39.
+fn film_widescreen() -> Film {
+    return Film { grade: film_grade(0.0, 0.1, 0.0, 0.95), split: 0.6, curve: 0.45, halation: 0.35, fringe: 0.0015,
+        vignette: 0.35, grain: 0.035, grain_size: 1.3, letterbox: 2.39 };
+}
+
+/// A warm look, bright and soft.
+fn film_warm() -> Film {
+    return Film { grade: film_grade(0.1, 0.35, 0.05, 1.1), split: 0.2, curve: 0.35, halation: 0.5, fringe: 0.001,
+        vignette: 0.3, grain: 0.045, grain_size: 1.6, letterbox: 0.0 };
+}
+
+/// A drained look, hard, in the bars of 1.85.
+fn film_drained() -> Film {
+    return Film { grade: film_grade(0.0, -0.05, 0.0, 0.45), split: 0.15, curve: 0.8, halation: 0.1, fringe: 0.001,
+        vignette: 0.45, grain: 0.04, grain_size: 1.2, letterbox: 1.85 };
+}
+
+/// Black and white, the grain coarse.
+fn film_monochrome() -> Film {
+    return Film { grade: film_grade(0.1, 0.0, 0.0, 0.0), split: 0.0, curve: 0.7, halation: 0.2, fringe: 0.0,
+        vignette: 0.5, grain: 0.07, grain_size: 2.0, letterbox: 0.0 };
 }
 
 /// Whether `uv` (0 to 1 across a picture `extent` pixels) lies inside bars that frame it to `aspect` (1 inside, 0 in a
@@ -163,11 +173,10 @@ fn film_curve(d: Vec3, amount: Float) -> Vec3 {
     return mix(d, clamp(s, vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0)), amount);
 }
 
-/// One film look made from these parameters (`domain = 1`): `preset`'s recipe (`film_preset`), or with `preset` 0 the
-/// parameters' own.
-kernel image.film_start@1 {
+/// One film look made from these parameters (`domain = 1`). A look the package names (`film_widescreen`, `film_warm`,
+/// `film_drained`, `film_monochrome`) is a scene's Kernel returning it.
+kernel image.film_start@2 {
     requires { field.write; }
-    param preset: Int = 0;
     param exposure: Float = 0.0;
     param temperature: Float = 0.0;
     param tint: Float = 0.0;
@@ -182,8 +191,8 @@ kernel image.film_start@1 {
     param letterbox: Float = 0.0;
     output result: Rows<Film>;
     compute {
-        return if preset != 0 { film_preset(preset) } else { Film { grade: film_grade(exposure, temperature, tint, saturation), split: split,
-            curve: curve, halation: halation, fringe: fringe, vignette: vignette, grain: grain, grain_size: grain_size, letterbox: letterbox } };
+        return Film { grade: film_grade(exposure, temperature, tint, saturation), split: split,
+            curve: curve, halation: halation, fringe: fringe, vignette: vignette, grain: grain, grain_size: grain_size, letterbox: letterbox };
     }
 }
 

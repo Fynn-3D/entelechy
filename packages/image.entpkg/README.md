@@ -46,9 +46,9 @@ use "image.entpkg";
 - `kernels/film.ent` — A film's finish as data (`Film`: a grade, a split,
   an S curve, halation, fringe, vignette, grain, bars), each step a word
   (`film_split`, `film_curve`, `film_halation`, `film_bars`, `fringed`,
-  `vignetted`, `film_grain`, `defocus`), its looks recipes
-  (`film_preset`); and a camera's finish over a picture that keeps its
-  depth in w. Kernels: `image.film_start@1`, `image.film@1`,
+  `vignetted`, `film_grain`, `defocus`), its named looks
+  (`film_widescreen`, `film_warm`, `film_drained`, `film_monochrome`); and a camera's finish over a picture that keeps its
+  depth in w. Kernels: `image.film_start@2`, `image.film@1`,
   `image.bright@1`, `image.finish@1`.
 - `kernels/filter.ent` — Filters. Kernels: `image.blur@1`,
   `image.shrink@1`, `image.convolve@1`, `image.sharpen@1`,

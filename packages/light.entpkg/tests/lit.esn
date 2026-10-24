@@ -1,5 +1,6 @@
 use "geometry.entpkg";
 use "camera.entpkg";
+use "image.entpkg";
 // The stand by the light renderers and through every step of a finish:
 // contact shadows laid into the sun's visibility; lit as it is and as a
 // painting has it, and half way between them; clay; haze, ink and a
@@ -92,7 +93,12 @@ node seen: graph "image.entpkg/graphs/tonemap.esn" { hdr <- aired.result; exposu
 // The same finish by the other tone curves: the light clipped past 1 (Blender's Standard view), and AgX.
 node clipped: graph "image.entpkg/graphs/tonemap.esn" { hdr <- aired.result; exposure = 0.8; glow = 0.0; vignette = 0.0; warmth = 0.0; curve = 1; }
 node filmic: graph "image.entpkg/graphs/tonemap.esn" { hdr <- aired.result; exposure = 0.8; glow = 0.0; vignette = 0.0; warmth = 0.0; curve = 2; }
-node cinema: image.film_start@1 { preset = 1; domain = 1; }
+node cinema: kernel {
+    requires { field.write; }
+    output result: Rows<Film>;
+    domain = 1;
+    compute { return film_widescreen(); }
+}
 node filmed: image.film@1 { image <- seen.result; film <- cinema.result; }
 node dof: camera.dof_start@1 { aperture = 6.0; domain = 1; }
 node focus0: Rows<Float> { domain = 1; value = 8.0; }

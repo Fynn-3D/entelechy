@@ -1,5 +1,5 @@
 // The package's words said by a scene's own kernels, held to its passes: the air laid over by `hazed` is the haze
-// pass's picture; a film's look a story turns from one recipe toward another (`film_preset`, `grade_mix`) is the film
+// pass's picture; a film's look a story turns from one named look toward another (`film_widescreen`, `film_drained`, `grade_mix`) is the film
 // pass's at its start and its own past it; an outline kept to the right half of the picture by a mask
 // (`image.masked`) is the picture on the left and the outline on the right.
 use "../kernels/";
@@ -19,8 +19,8 @@ fn apart(a: Image, b: Image, from: Vec2, to: Vec2) -> Float {
 
 /// A story's film: the cinema's look turned `turn` of the way toward the drained one's.
 fn told(turn: Float) -> Film {
-    let a = film_preset(1);
-    let b = film_preset(3);
+    let a = film_widescreen();
+    let b = film_drained();
     return Film { ..a, grade: grade_mix(a.grade, b.grade, turn), split: mix(a.split, b.split, turn), curve: mix(a.curve, b.curve, turn),
         vignette: mix(a.vignette, b.vignette, turn) };
 }
@@ -53,7 +53,12 @@ node own_air: kernel {
 
 // The picture shown, then filmed: by the cinema's recipe, by a story at its start, and a story half way on.
 node seen: graph "image.entpkg/graphs/tonemap.esn" { hdr <- lit.result; }
-node cinema: image.film_start@1 { preset = 1; domain = 1; }
+node cinema: kernel {
+    requires { field.write; }
+    output result: Rows<Film>;
+    domain = 1;
+    compute { return film_widescreen(); }
+}
 node filmed: image.film@1 { image <- seen.result; film <- cinema.result; }
 node start: kernel {
     requires { field.write; }
