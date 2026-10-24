@@ -85,6 +85,15 @@ Preserve user changes; never stash or discard unrelated work to clean the tree.
 Work that depends on unmerged commits continues from that branch, not from an
 older `main`.
 
+A branch holds one side of the line between the Rust build and what runs on
+it. A change to the IR, its compiler or a backend (`crates/core`,
+`crates/frontend`, `crates/backends`) is one branch; a change to the rest of
+the Rust (the Host's interfaces, the session, `xtask`) another; a change to
+`.ent`, `.esn`, replays and documents alone a third. [Verification](#verification)
+runs what each side can have changed, so a round that needs both an engine
+change and the packages that use it merges the engine branch first and
+builds the packages on it.
+
 Inspect the diff and run the checks that fit it: [Verification](#verification)
 for a change to the code, links and references for a change to the documents.
 Stage only intended files. Write small logical commits in English (`feat: add kernel
