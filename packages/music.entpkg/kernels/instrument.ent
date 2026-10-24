@@ -24,8 +24,6 @@ fn osc_pluck() -> Int { return 4; }      // lutes, harps, kotos, pianos: harmoni
 fn osc_breath() -> Int { return 5; }     // flutes: a soft tone and its breath
 
 
-fn tau_() -> Float { return 6.2831853; }
-
 /// How loud a note is `t` seconds in, held `held`: its attack, its decay to
 /// its sustain, its release after it is let go.
 fn note_level(ins: Instrument, t: Float, held: Float) -> Float {
@@ -51,26 +49,26 @@ fn timbre(ins: Instrument, f: Float, t: Float, seed: Int) -> Float {
         return (4.0 * abs(p - 0.5) - 1.0) * 0.8;
     }
     if o == osc_bell() {
-        return sin(tau_() * fract(f * t) + 1.6 * exp(0.0 - t * 3.0) * sin(tau_() * fract(f * 2.756 * t))) * 0.7;
+        return sin(tau() * fract(f * t) + 1.6 * exp(0.0 - t * 3.0) * sin(tau() * fract(f * 2.756 * t))) * 0.7;
     }
     let h = clamp(ins.harmonics, 1, 10);
     if o == osc_pluck() {
         let sum = loop h with acc = vec2(0.0, 0.0) {
             let k = float(index() + 1);
             let w = exp(0.0 - t * (1.5 + k * k * 0.5 * ins.roll)) / k;
-            vec2(acc.x + sin(tau_() * fract(f * k * t)) * w, acc.y + 1.0 / k)
+            vec2(acc.x + sin(tau() * fract(f * k * t)) * w, acc.y + 1.0 / k)
         };
         return sum.x / max(sum.y, 0.5) * 1.6;
     }
     if o == osc_breath() {
-        let tone_ = sin(tau_() * fract(f * t)) + 0.25 * sin(tau_() * fract(f * 2.0 * t)) + 0.08 * sin(tau_() * fract(f * 3.0 * t));
+        let tone_ = sin(tau() * fract(f * t)) + 0.25 * sin(tau() * fract(f * 2.0 * t)) + 0.08 * sin(tau() * fract(f * 3.0 * t));
         return tone_ * 0.75 + soft_noise(t * 2600.0, seed) * 0.06;
     }
     // Harmonics, each a little quieter than the one below as `roll` says.
     let sum = loop h with acc = vec2(0.0, 0.0) {
         let k = float(index() + 1);
         let w = 1.0 / pow(k, ins.roll);
-        vec2(acc.x + sin(tau_() * fract(f * k * t)) * w, acc.y + w)
+        vec2(acc.x + sin(tau() * fract(f * k * t)) * w, acc.y + w)
     };
     return sum.x / max(sum.y, 0.5) * 1.2;
 }
@@ -81,7 +79,7 @@ fn timbre(ins: Instrument, f: Float, t: Float, seed: Int) -> Float {
 fn play_note(ins: Instrument, semis: Float, t: Float, held: Float, seed: Int) -> Float {
     if t < 0.0 || t > held + note_tail(ins) { return 0.0; }
     let f0 = pitch_of(semis);
-    let vib = 1.0 + ins.vibrato * smoothstep(0.12, 0.4, t) * sin(tau_() * ins.rate * t);
+    let vib = 1.0 + ins.vibrato * smoothstep(0.12, 0.4, t) * sin(tau() * ins.rate * t);
     let f = f0 * vib;
     let one = timbre(ins, f, t, seed);
     let two = if ins.detune > 0.0 { timbre(ins, f * (1.0 + ins.detune), t + 0.0013, seed + 1) } else { one };

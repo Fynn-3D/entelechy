@@ -1,10 +1,11 @@
 // Antialiasing within one frame (FXAA): this frame alone, its steps of brightness (a jagged edge) found and walked to both ends,
 // and by where this pixel lies on the step, a little color taken from the edge's other side, turning the stair into a slope.
 // Nothing of the last frame is used, so nothing jitters or smears.
+use "color.ent";
 
 /// How bright it looks (0 to 1): brightness pressed into 0 to 1 and square-rooted, so a step in the dark counts as one in the light.
 fn fxaa_luma(c: Vec3) -> Float {
-    let l = max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 0.0);
+    let l = max(luminance(c), 0.0);
     return sqrt(l / (1.0 + l));
 }
 fn fxaa_at(image: Image, q: Vec2) -> Float {

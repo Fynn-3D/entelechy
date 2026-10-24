@@ -6,13 +6,14 @@
 // toward a brighter scene than a darker one (`image.exposure_meter`), and
 // the HDR picture is scaled by it (`image.exposure_apply`) before the glow
 // and tone; local exposure then evens bright and dark neighborhoods.
+use "color.ent";
 
 /// A tile's side in pixels for metering.
 fn exposure_tile() -> Float { return 32.0; }
 
 /// Log2 luminance of linear color `c`, kept within the meter's range.
 fn exposure_log(c: Vec3) -> Float {
-    return clamp(log2(max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 0.00001)), -16.0, 16.0);
+    return clamp(log2(max(luminance(c), 0.00001)), -16.0, 16.0);
 }
 
 /// Each tile's mean log2 luminance over 16 samples (every eighth pixel each
