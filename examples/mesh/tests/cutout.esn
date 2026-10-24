@@ -85,7 +85,7 @@ node split: kernel {
     input all: GBuffer <- whole.surface;
     input all_tiled: GBuffer <- tiled_whole.surface;
     output result: Rows<Int>;
-    compute {
+    compute over cut {
         let a = sample(cut);
         let b = sample(cut_tiled);
         let c = sample(all);
@@ -107,7 +107,7 @@ node differ: kernel {
     input cut: GBuffer <- package.surface;
     input fast: GBuffer <- native.surface;
     output result: Rows<Int>;
-    compute { return int(sample(cut).id != sample(fast).id); }
+    compute over cut { return int(sample(cut).id != sample(fast).id); }
     merge(a, b) { return a + b; }
 }
 
@@ -119,7 +119,7 @@ node deeper: kernel {
     input cut: GBuffer <- package.surface;
     input fast: GBuffer <- native.surface;
     output result: Rows<Int>;
-    compute { return int(bits(sample(cut).depth) != bits(sample(fast).depth)); }
+    compute over cut { return int(bits(sample(cut).depth) != bits(sample(fast).depth)); }
     merge(a, b) { return a + b; }
 }
 
@@ -130,7 +130,7 @@ node taken: kernel {
     input cut: GBuffer <- package.surface;
     input all: GBuffer <- whole.surface;
     output result: Rows<Int>;
-    compute {
+    compute over cut {
         return int(sample(all).id >= 0 && sample(cut).id < 0);
     }
     merge(a, b) { return a + b; }

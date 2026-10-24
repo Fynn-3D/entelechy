@@ -178,7 +178,7 @@ kernel thumb.step@1 {
     // as the pipeline shows it; a write to r15 is a branch.
     fn reg(r: Words, i: Int, pc: Int) -> Int { return if i == 15 { pc + 4 } else { at(r, i) }; }
 
-    scan with n = 0 {
+    scan over ticks with n = 0 {
         let pc = at(regs, 15);
         let flags = at(regs, 16);
         let op = rd16(ram, pc);

@@ -13,6 +13,6 @@
 //! Runs are the same rank for lists: each of a row of owners counts its
 //! entries, and `graphs/runs.esn` lays every owner's entries in one row,
 //! owner after owner, for a scatter to fill.
-package compact@1 { language = 1; ir = 1; }
+package compact@1 { language = 2; ir = 1; }
 
 use "kernels/";

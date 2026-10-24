@@ -3,6 +3,6 @@
 //! lamps, shadows and occlusion, light bounced, reflected and through
 //! glass, skin, fog, clouds and air, and the renderers that put it
 //! together.
-package light@1 { language = 1; ir = 1; }
+package light@1 { language = 2; ir = 1; }
 
 use "kernels/";

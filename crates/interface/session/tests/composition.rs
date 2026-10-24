@@ -1197,7 +1197,7 @@ fn reductions_produce_one_element_and_stay_out_of_fusion() {
     let mut runtime = runtime();
     load(
         &mut runtime,
-        "kernel test.total@1 { requires { field.read; field.write; } input source: Image; output result: Rows<Vec4>; compute { return sample(source); } merge(a, b) { return a + b; } }",
+        "kernel test.total@1 { requires { field.read; field.write; } input source: Image; output result: Rows<Vec4>; compute over source { return sample(source); } merge(a, b) { return a + b; } }",
     );
     load(
         &mut runtime,
@@ -1275,7 +1275,7 @@ fn scans_follow_their_input_and_stay_out_of_fusion() {
     );
     load(
         &mut runtime,
-        "kernel test.prefix@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan with total = 0 { return total + sample(rows); } }",
+        "kernel test.prefix@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan over rows with total = 0 { return total + sample(rows); } }",
     );
     let graph = entelechy_scene::parse(
         "node ramp: test.ramp@1 { domain = 5; }
@@ -1573,7 +1573,7 @@ fn a_memory_fed_back_persists_across_evaluations() {
     );
     load(
         &mut runtime,
-        "kernel test.count@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { let v = at(ram, 0) + 1; put(ram, 0, v); return v; } }",
+        "kernel test.count@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; scan over ticks with acc = 0 { let v = at(ram, 0) + 1; put(ram, 0, v); return v; } }",
     );
     let graph = entelechy_scene::parse(
         "node ticks: test.ticks@1 { domain = 3; }
@@ -1957,7 +1957,7 @@ fn an_async_node_runs_off_the_frame_and_the_frame_carries_its_last_output() {
 }
 
 const ZEROS: &str = "kernel test.zeros@1 { requires { field.write; } output result: Rows<Int>; compute { return 0; } }";
-const SPREAD: &str = "kernel test.spread@1 { requires { field.read; field.write; } input target: Rows<Int>; output result: Rows<Int>; struct Put { at: Int; value: Int; } scatter into target with sum { return Put { at: element() % 4, value: 1 }; } }";
+const SPREAD: &str = "kernel test.spread@1 { requires { field.read; field.write; } input target: Rows<Int>; output result: Rows<Int>; struct Put { at: Int; value: Int; } scatter over target into target with sum { return Put { at: element() % 4, value: 1 }; } }";
 
 #[test]
 fn a_scatter_node_may_set_its_own_domain_and_still_writes_the_targets_extent() {

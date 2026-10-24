@@ -98,7 +98,7 @@ kernel surface.proxy_bake_faces@1 {
     param band: Float = 3.0;
     output result: Volume<Long>;
     struct Near { cell: IVec3; key: Long; }
-    scatter into blank with min {
+    scatter over faces into blank with min {
         let e = element();
         if e >= at(ends, count(ends) - 1) { return Near { cell: ivec3(-1, -1, -1), key: 0l }; }
         let fi = owner(e, ends);

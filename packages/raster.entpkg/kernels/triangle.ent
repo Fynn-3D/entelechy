@@ -186,7 +186,7 @@ kernel raster.cover@3 {
     param tile: Int = 0;
     output result: Grid<Long>;
     struct Hit { pixel: Vec2; key: Long; }
-    scatter into keys with min {
+    scatter over triangles into keys with min {
         let t = element();
         let k = corners(sample(triangles), vertices, size(keys));
         let b = at(boxes, t);
@@ -216,7 +216,7 @@ kernel raster.cover@4 {
     input keys: Grid<Long>;
     output result: Grid<Long>;
     struct Hit { pixel: Vec2; key: Long; }
-    scatter into keys with min {
+    scatter over triangles into keys with min {
         let t = element();
         let k = corners(sample(triangles), vertices, size(keys));
         let b = boxed(k, size(keys));

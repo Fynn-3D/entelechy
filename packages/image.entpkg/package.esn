@@ -1,6 +1,6 @@
 //! What Entelechy does to pictures: color spaces, blending, filters, tone
 //! and its curves, histograms, distance fields, mipmaps, pixel art,
 //! sprite sheets and a camera's finish.
-package image@1 { language = 1; ir = 1; }
+package image@1 { language = 2; ir = 1; }
 
 use "kernels/";

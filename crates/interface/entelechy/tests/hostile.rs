@@ -39,7 +39,7 @@ kernel t.stats@1 {
     input source: Image;
     output result: Rows<Light>;
     struct Light { sum: Float; max: Float; count: Int; }
-    compute { let l = luma(sample(source)); return Light { sum: l, max: l, count: 1 }; }
+    compute over source { let l = luma(sample(source)); return Light { sum: l, max: l, count: 1 }; }
     merge(a, b) { return Light { sum: a.sum + b.sum, max: max(a.max, b.max), count: a.count + b.count }; }
 }
 
@@ -48,7 +48,7 @@ kernel t.lowpass@1 {
     input samples: Rows<Float>;
     param k: Float = 0.1;
     output result: Rows<Float>;
-    scan with y = 0.0 { return y + (sample(samples) - y) * k; }
+    scan over samples with y = 0.0 { return y + (sample(samples) - y) * k; }
 }
 
 kernel t.machine@1 {
@@ -56,7 +56,7 @@ kernel t.machine@1 {
     input ticks: Rows<Int>;
     memory ram: Rows<Int>;
     output result: Rows<Int>;
-    scan with pc = 0 { let op = at(ram, pc); put(ram, pc + 100, op * 2); return pc + 1; }
+    scan over ticks with pc = 0 { let op = at(ram, pc); put(ram, pc + 100, op * 2); return pc + 1; }
 }
 
 kernel t.splat@1 {
@@ -65,7 +65,7 @@ kernel t.splat@1 {
     input canvas: Grid<Vec3>;
     output result: Grid<Vec3>;
     struct Splat { cell: Vec2; heat: Vec3; }
-    scatter into canvas with sum {
+    scatter over particles into canvas with sum {
         let p = sample(particles);
         return Splat { cell: floor(p.position * size(canvas)), heat: vec3(p.velocity.x, p.velocity.y, 1.0) };
     }
@@ -75,7 +75,7 @@ kernel t.offsets@1 {
     requires { field.read; field.write; }
     input flags: Rows<Int>;
     output result: Rows<Int>;
-    prefix with sum { return if sample(flags) != 0 { 1 } else { 0 }; }
+    prefix over flags with sum { return if sample(flags) != 0 { 1 } else { 0 }; }
 }
 
 kernel t.orbit@1 {
@@ -136,11 +136,11 @@ output result <- show.result;
     r#"param level: Int = 3;
 node ticks: kernel { requires { field.write; } param level: Int = level; output result: Rows<Int>; domain = 64; compute { return element() % level; } }
 node ranks: kernel { requires { field.read; field.write; } input flags: Rows<Int> <- ticks.result; output result: Rows<Int>;
-    prefix with sum { return if sample(flags) != 0 { 1 } else { 0 }; } }
+    prefix over flags with sum { return if sample(flags) != 0 { 1 } else { 0 }; } }
 node smooth: kernel { requires { field.read; field.write; } input ranks: Rows<Int> <- ranks.result; param k: Float = 0.25; output result: Rows<Float>;
-    scan with y = 0.0 { return y + (float(sample(ranks)) - y) * k; } }
+    scan over ranks with y = 0.0 { return y + (float(sample(ranks)) - y) * k; } }
 node show: kernel { requires { field.read; field.write; } input values: Rows<Float> <- smooth.result; output result: Rows<Float>;
-    compute { return sample(values); } merge(a, b) { return a + b; } }
+    compute over values { return sample(values); } merge(a, b) { return a + b; } }
 output result <- show.result;
 "#,
     // A machine stepping over a memory it carries.
@@ -149,7 +149,7 @@ output result <- show.result;
     input ticks: Rows<Int>;
     memory ram: Rows<Int>;
     output result: Rows<Int>;
-    scan with pc = 0 { let op = at(ram, pc); put(ram, pc + 100, op * 2); return pc + 1; }
+    scan over ticks with pc = 0 { let op = at(ram, pc); put(ram, pc + 100, op * 2); return pc + 1; }
 }
 node zeros: kernel { requires { field.write; } output result: Rows<Int>; domain = 256; compute { return element(); } }
 node ticks: kernel { requires { field.write; } output result: Rows<Int>; domain = 8; compute { return 0; } }

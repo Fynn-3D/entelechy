@@ -58,7 +58,7 @@ kernel t.long@1 { requires { field.read; field.write; } input x: Rows<Float>; ou
 } }
 kernel t.mark@1 { requires { field.read; field.write; } input at: Rows<Int>; input canvas: Rows<Int>; output result: Rows<Int>;
     struct Hit { place: Int; value: Int; }
-    scatter into canvas with min { return Hit { place: sample(at), value: element() }; } }
+    scatter over at into canvas with min { return Hit { place: sample(at), value: element() }; } }
 kernel t.ats@1 { requires { field.write; time.read; } output result: Rows<Int>; compute { return element() * 7 + int(time()); } }
 kernel t.blank@1 { requires { field.write; } output result: Rows<Int>; compute { return 1000; } }
 node one: t.heavy@1 { domain = 1; }

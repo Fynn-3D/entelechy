@@ -270,7 +270,7 @@ kernel light.lamp_map_draw@1 {
     param skip: Float = 1.5;
     output result: Grid<Int>;
     struct Near { cell: IVec2; key: Int; }
-    scatter into blank with min {
+    scatter over chosen into blank with min {
         let e = element();
         let none = Near { cell: ivec2(-1, -1), key: 0 };
         if e >= at(ends, count(ends) - 1) { return none; }

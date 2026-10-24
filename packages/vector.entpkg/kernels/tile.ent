@@ -109,7 +109,7 @@ kernel vector.tile_fill@1 {
     input tiles: Grid<Int>;
     input slots: Rows<Int>;
     output result: Rows<Int>;
-    scatter into slots with max {
+    scatter over reach into slots with max {
         let columns = int(size(tiles).x);
         let t = element();
         let tx = t % columns;
@@ -267,7 +267,7 @@ kernel vector.keep@1 {
     input chunks: Rows<Vec4>;
     input slots: Rows<Int>;
     output result: Rows<Int>;
-    scatter into slots with max {
+    scatter over total into slots with max {
         let u = element();
         let room = at(kept, u);
         let start = at(kept_ends, u) - room;
@@ -314,7 +314,7 @@ kernel vector.backdrop@1 {
     input canvas: Grid<Int>;
     input zeros: Rows<Int>;
     output result: Rows<Int>;
-    scatter into zeros with sum {
+    scatter over total into zeros with sum {
         let w = work_unit_of(element(), units, unit_ends, tile_ends, tile_shapes, tiles, shapes);
         let box = at(chunks, w.chunk);
         let rows = int(tile());

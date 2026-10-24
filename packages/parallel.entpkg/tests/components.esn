@@ -48,7 +48,7 @@ node roots: kernel {
     input labels: Rows<Int> <- maze.labels;
     input open: Rows<Int> <- open.result;
     output result: Rows<Int>;
-    compute { return int(sample(open) == 1 && sample(labels) == element()); }
+    compute over labels { return int(sample(open) == 1 && sample(labels) == element()); }
     merge(a, b) { return a + b; }
 }
 

@@ -107,7 +107,7 @@ fn a_scatter_pair_is_named_apart_from_wgsl() {
             input canvas: Grid<Float>;
             output result: Grid<Float>;
             struct Splat { cell: Vec2; heat: Float; }
-            scatter into canvas with sum {
+            scatter over points into canvas with sum {
                 return Splat { cell: sample(points), heat: 1.0 };
             }
         }",

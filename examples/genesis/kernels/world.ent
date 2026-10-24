@@ -27,7 +27,7 @@ kernel world.census@1 {
     requires { field.read; field.write; }
     input life: Grid<Float>;
     output result: Rows<Int>;
-    compute { return int(sample(life) > 0.5); }
+    compute over life { return int(sample(life) > 0.5); }
     merge(a, b) { return a + b; }
 }
 

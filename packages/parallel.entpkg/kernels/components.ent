@@ -28,7 +28,7 @@ kernel parallel.components_hook@1 {
     input parents: Rows<Int>;
     output result: Rows<Int>;
     struct Hook { at: Int; value: Int; }
-    scatter into parents with min {
+    scatter over edges into parents with min {
         let e = sample(edges);
         let n = count(parents);
         if e.x < 0 || e.y < 0 || e.x >= n || e.y >= n { return Hook { at: -1, value: 0 }; }
@@ -53,7 +53,7 @@ kernel parallel.components_apart@1 {
     input edges: Rows<IVec2>;
     input labels: Rows<Int>;
     output result: Rows<Int>;
-    compute {
+    compute over edges {
         let e = sample(edges);
         let n = count(labels);
         let joins = e.x >= 0 && e.y >= 0 && e.x < n && e.y < n;

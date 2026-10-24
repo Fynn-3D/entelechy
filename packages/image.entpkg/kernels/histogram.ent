@@ -19,7 +19,7 @@ kernel image.histogram@1 {
     input bins: Rows<Int>;
     output result: Rows<Int>;
     struct Tally { bin: Int; one: Int; }
-    scatter into bins with sum {
+    scatter over source into bins with sum {
         return Tally { bin: bin_of(sample(source).xyz, count(bins)), one: 1 };
     }
 }
@@ -29,7 +29,7 @@ kernel image.cumulate@1 {
     requires { field.read; field.write; }
     input counts: Rows<Int>;
     output result: Rows<Int>;
-    prefix with sum { return sample(counts); }
+    prefix over counts with sum { return sample(counts); }
 }
 
 /// The picture equalized: each pixel's lightness moved to the share

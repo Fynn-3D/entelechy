@@ -42,7 +42,7 @@ node ball_points: kernel {
     requires { field.read; field.write; }
     input points: Rows<MeshPoint> <- ball.points;
     output result: Rows<Vec2>;
-    compute {
+    compute over points {
         let p = sample(points);
         return vec2(abs(length(p.position) - 0.7), dot(p.normal, normalize(p.position)));
     }
@@ -54,7 +54,7 @@ node ball_volume: kernel {
     input faces: Rows<Face> <- ball.faces;
     input points: Rows<MeshPoint> <- ball.points;
     output result: Rows<Float>;
-    compute {
+    compute over faces {
         let f = sample(faces);
         return dot(at(points, f.a).position, cross(at(points, f.b).position, at(points, f.c).position)) / 6.0;
     }
@@ -65,7 +65,7 @@ node ring_volume: kernel {
     input faces: Rows<Face> <- ring.faces;
     input points: Rows<MeshPoint> <- ring.points;
     output result: Rows<Float>;
-    compute {
+    compute over faces {
         let f = sample(faces);
         return dot(at(points, f.a).position, cross(at(points, f.b).position, at(points, f.c).position)) / 6.0;
     }

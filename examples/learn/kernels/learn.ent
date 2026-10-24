@@ -57,7 +57,7 @@ kernel learn.grads@1 {
     input zeros: Rows<Float>;
     output result: Rows<Float>;
     struct Term { at: Int; value: Float; }
-    scatter into zeros with sum {
+    scatter over points into zeros with sum {
         let e = element();
         let k = e % 65;
         let point = at(points, e / 65);
@@ -94,7 +94,7 @@ kernel learn.loss@1 {
     input points: Rows<Point>;
     input weights: Rows<Float>;
     output result: Loss;           // a reduction's output, written as its element
-    compute {
+    compute over points {
         let point = sample(points);
         let o = clamp(sigmoid(logit(weights, point.position)), 0.0001, 0.9999);
         let l = -(point.label * log(o) + (1.0 - point.label) * log(1.0 - o));
@@ -127,7 +127,7 @@ kernel learn.dots@1 {
     input picture: Image;
     output result: Image;
     struct Dot { cell: Vec2; color: Vec4; }
-    scatter into picture with last {
+    scatter over points into picture with last {
         let point = sample(points);
         let uv = vec2(point.position.x + 1.0, 1.0 - point.position.y) * 0.5;
         let color = if point.label > 0.5 { vec4(1.0, 0.9, 0.7, 1.0) } else { vec4(0.6, 0.75, 1.0, 1.0) };

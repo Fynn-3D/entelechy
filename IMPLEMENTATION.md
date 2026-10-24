@@ -118,9 +118,9 @@ the [conformance matrix](crates/backends/conformance/src/lib.rs).
 | --- | --- | --- |
 | map | per element; the one mode with several outputs | [lowering](crates/frontend/compiler/src/lower/mod.rs), [WGSL](crates/backends/gpu/src/wgsl/map.rs) |
 | reduce (`merge`) | a fixed pairwise tree whatever the thread count | [reduce](crates/core/rules/src/reduce.rs), [JIT parity](crates/backends/jit/tests/parity.rs) |
-| scan (`scan with`) | element order; memory copied, committed only on success | [rules](crates/core/rules/src/lib.rs) |
-| scatter (`scatter into … with`) | as if applied in source order; outside addresses drop | [WGSL](crates/backends/gpu/src/wgsl/scatter.rs), [parity](crates/backends/gpu/tests/parity.rs) |
-| prefix (`prefix with`) | integer `sum`, `min`, `max` only | [block](crates/core/rules/src/lib.rs), [JIT](crates/backends/jit/src/lib.rs) |
+| scan (`scan over … with`) | element order; memory copied, committed only on success | [rules](crates/core/rules/src/lib.rs) |
+| scatter (`scatter over … into … with`) | as if applied in source order; outside addresses drop | [WGSL](crates/backends/gpu/src/wgsl/scatter.rs), [parity](crates/backends/gpu/tests/parity.rs) |
+| prefix (`prefix over … with`) | integer `sum`, `min`, `max` only | [block](crates/core/rules/src/lib.rs), [JIT](crates/backends/jit/src/lib.rs) |
 | group (`group N`) | lanes meet at `exchange`, reached alike; off the device, each stretch run lane by lane ([lanes](crates/core/ir/src/lanes.rs)) | [check](crates/core/ir/src/group.rs), [interpreter](crates/backends/cpu/src/lib.rs), [JIT parity](crates/backends/jit/tests/parity.rs), [GPU parity](crates/backends/gpu/tests/parity.rs) |
 
 A GPU session hands scans and every module the GPU does not take

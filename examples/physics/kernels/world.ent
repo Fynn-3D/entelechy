@@ -116,7 +116,7 @@ kernel world.felt@1 {
     input zeros: Rows<Int>;
     output result: Rows<Int>;
     struct Felt { at: Int; value: Int; }
-    scatter into zeros with sum {
+    scatter over contacts into zeros with sum {
         let m = at(contacts, element() / 2);
         let body = if element() % 2 == 0 { m.a } else { m.b };
         return Felt { at: if m.sensor != 0 && touching(m, 0.0) { body } else { -1 }, value: 1 };
@@ -215,7 +215,7 @@ kernel world.binned@1 {
     input slots: Rows<Int>;
     output result: Rows<Int>;
     struct Placed { at: Int; value: Int; }
-    scatter into slots with max {
+    scatter over counts into slots with max {
         let t = element();
         let box = tile_box(t, window());
         let start = at(ends, t) - sample(counts);

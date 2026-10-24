@@ -3,6 +3,6 @@
 //! it alike — the same pixel centres, the same edges, the same nearest
 //! fragment — so a surface is the same on the interpreter, the JIT and
 //! the GPU, and anything about it can be changed without Rust.
-package raster@1 { language = 1; ir = 1; }
+package raster@1 { language = 2; ir = 1; }
 
 use "kernels/";

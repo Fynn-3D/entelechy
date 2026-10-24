@@ -783,6 +783,82 @@ pub(super) fn manifest(
             .collect::<Result<Vec<_>, CompileError>>()
     };
     let mut inputs = ports(&kernel.inputs)?;
+    // A scan, a scatter, a prefix and a reduction run once per element of
+    // an input the Kernel names after its mode's word; the IR takes the
+    // walked input first, so it is moved there.
+    let walking = [
+        kernel.carry.as_ref().map(|c| ("scan", c.span)),
+        kernel.scatter.as_ref().map(|c| ("scatter", c.span)),
+        kernel.prefix.as_ref().map(|c| ("prefix", c.span)),
+        kernel.merge.as_ref().map(|c| ("compute", c.span)),
+    ]
+    .into_iter()
+    .flatten()
+    .next();
+    match (walking, &kernel.over) {
+        (Some((word, span)), None) => {
+            let what = match word {
+                "compute" => "a reduction",
+                "scan" => "a scan",
+                "scatter" => "a scatter",
+                _ => "a prefix",
+            };
+            let Some(first) = kernel.inputs.first() else {
+                return Err(semantic(
+                    span,
+                    format!(
+                        "{what} runs once per element of an input it names after `{word}`; declare one"
+                    ),
+                ));
+            };
+            let named = first.name.value.as_str();
+            let written = match word {
+                "scan" => format!("scan over {named} with y = init {{ ... }}"),
+                "scatter" => format!("scatter over {named} into target with sum {{ ... }}"),
+                "prefix" => format!("prefix over {named} with sum {{ ... }}"),
+                _ => format!("compute over {named} {{ ... }} merge(a, b) {{ ... }}"),
+            };
+            return Err(semantic(
+                span,
+                format!(
+                    "{what} runs once per element of an input it names after `{word}`: `{written}`"
+                ),
+            ));
+        }
+        (Some(_), Some(over)) => {
+            let Some(at) = inputs.iter().position(|input| input.name == over.value) else {
+                if kernel
+                    .memories
+                    .iter()
+                    .any(|memory| memory.name.value == over.value)
+                {
+                    return Err(semantic(
+                        over.span,
+                        format!(
+                            "`{}` is a memory, which the steps write and cannot be walked; walk an input",
+                            over.value
+                        ),
+                    ));
+                }
+                return Err(semantic(
+                    over.span,
+                    format!(
+                        "`{}` is not an input; `over` names the input whose elements the body runs once each",
+                        over.value
+                    ),
+                ));
+            };
+            let walked = inputs.remove(at);
+            inputs.insert(0, walked);
+        }
+        (None, Some(over)) => {
+            return Err(semantic(
+                over.span,
+                "`over` names what a scan, a scatter, a prefix or a reduction walks; a map runs over its node's domain",
+            ));
+        }
+        (None, None) => {}
+    }
     // A reduction's output may be written as its element type:
     // `output result: Loss;` is `Rows<Loss>`.
     let mut outputs = kernel
@@ -810,19 +886,13 @@ pub(super) fn manifest(
     // both lists, last.
     let memory_ports = ports(&kernel.memories)?;
     let memories: Vec<String> = memory_ports.iter().map(|p| p.name.clone()).collect();
-    if let Some(first) = kernel.memories.first() {
-        if kernel.carry.is_none() {
-            return Err(semantic(
-                first.name.span,
-                "a memory is written step by step, which needs ordered work: use `scan`",
-            ));
-        }
-        if inputs.is_empty() {
-            return Err(semantic(
-                first.name.span,
-                "a scan runs over its first input, which cannot be a memory; declare an input",
-            ));
-        }
+    if let Some(first) = kernel.memories.first()
+        && kernel.carry.is_none()
+    {
+        return Err(semantic(
+            first.name.span,
+            "a memory is written step by step, which needs ordered work: use `scan`",
+        ));
     }
     inputs.extend(memory_ports.iter().cloned());
     outputs.extend(memory_ports);
@@ -909,7 +979,7 @@ pub(super) fn manifest(
             _ => {
                 return Err(semantic(
                     prefix.span,
-                    "a prefix runs over a `Rows<T>` input, its first, and produces one `Rows` output of the same count",
+                    "a prefix runs over a `Rows<T>` input, the one it names, and produces one `Rows` output of the same count",
                 ));
             }
         }
@@ -945,18 +1015,12 @@ pub(super) fn manifest(
             _ => {
                 return Err(semantic(
                     carry.span,
-                    "a scan runs over a `Rows<T>` input, its first, and produces a `Rows` output of the same count",
+                    "a scan runs over a `Rows<T>` input, the one it names, and produces a `Rows` output of the same count",
                 ));
             }
         }
         Mode::Scan
     } else if let Some(merge) = &kernel.merge {
-        if inputs.is_empty() {
-            return Err(semantic(
-                merge.span,
-                "a reduction maps over its first input; declare one",
-            ));
-        }
         match outputs.first() {
             Some(port) if port.shape() == Shape::Rows => {}
             _ => {

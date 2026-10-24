@@ -3,6 +3,6 @@
 //! where a field sampled on a lattice crosses a level. The faces are the
 //! raster package's, so a mesh projected point by point is drawn as it
 //! is.
-package mesh@1 { language = 1; ir = 1; }
+package mesh@1 { language = 2; ir = 1; }
 
 use "kernels/";

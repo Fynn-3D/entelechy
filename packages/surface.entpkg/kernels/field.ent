@@ -207,7 +207,7 @@ kernel surface.field_bin_fill@1 {
     param band: Float = 8.0;
     output result: Rows<Int>;
     struct Placed { at: Int; value: Int; }
-    scatter into slots with max {
+    scatter over counts into slots with max {
         let b = element();
         let fr = at(frame, 0);
         let box = field_bin_box(fr, b, bins, band * fr.cell);

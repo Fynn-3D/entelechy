@@ -59,7 +59,7 @@ kernel spectrum.peak@1 {
     requires { field.read; field.write; }
     input bins: Bins;
     output result: Peak;
-    compute { return Peak { bin: element(), power: sample(bins) }; }
+    compute over bins { return Peak { bin: element(), power: sample(bins) }; }
     merge(a, b) { return if b.power > a.power { b } else { a }; }
 }
 

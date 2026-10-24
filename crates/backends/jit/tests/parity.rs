@@ -281,7 +281,7 @@ fn scans_and_their_memories_match_the_interpreter() {
     // outside both memories are dropped.
     let source = "kernel test.walk@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory screen: Grid<Int>; memory tally: Rows<Cell>; output result: Rows<Vec2>; struct Cell { hits: Int; last: Float; }
         fn flip(s: Grid<Int>, p: Vec2, seen: Int) -> Int { return put(s, p, (1 - seen) >>> 0); }
-        scan with at_ = vec2(3.0, 2.0) {
+        scan over ticks with at_ = vec2(3.0, 2.0) {
             let seen = at(screen, at_);
             flip(screen, at_, seen);
             let t = at(tally, seen);
@@ -323,7 +323,7 @@ fn scans_and_their_memories_match_the_interpreter() {
 
 #[test]
 fn a_scan_step_that_fails_names_its_element() {
-    let source = "kernel test.count@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan with acc = 1000 { return acc / sample(rows); } }";
+    let source = "kernel test.count@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan over rows with acc = 1000 { return acc / sample(rows); } }";
     let module = compile(source).unwrap();
     let jit = JitBackend::new().unwrap();
     let mut host = Host::new(1 << 16);
@@ -358,7 +358,7 @@ fn a_scan_step_that_fails_names_its_element() {
 fn reductions_fold_in_the_interpreters_tree() {
     // Ints exactly and floats bit for bit: both fold the same pairs in the
     // same order; an odd count runs the tail path.
-    let source = "kernel test.stats@1 { requires { field.read; field.write; } input source: Image; output result: Rows<Stats>; struct Stats { bright: Int; sum: Vec4; max: Float; } compute { let c = sample(source); let l = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722; return Stats { bright: if l > 0.5 { 1 } else { 0 }, sum: c, max: l }; } merge(a, b) { return Stats { bright: a.bright + b.bright, sum: a.sum + b.sum, max: max(a.max, b.max) }; } }";
+    let source = "kernel test.stats@1 { requires { field.read; field.write; } input source: Image; output result: Rows<Stats>; struct Stats { bright: Int; sum: Vec4; max: Float; } compute over source { let c = sample(source); let l = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722; return Stats { bright: if l > 0.5 { 1 } else { 0 }, sum: c, max: l }; } merge(a, b) { return Stats { bright: a.bright + b.bright, sum: a.sum + b.sum, max: max(a.max, b.max) }; } }";
     let (width, height) = (37u32, 23u32);
     let pixels: Vec<u32> = (0..width * height)
         .flat_map(|i| {
@@ -384,7 +384,7 @@ fn reductions_fold_in_the_interpreters_tree() {
 fn scatters_apply_in_element_order_with_the_same_rule() {
     // Several drops per cell of a small grid, so float order matters; an
     // address outside is dropped.
-    let source = "kernel test.splat@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input canvas: Grid<Cell>; output result: Grid<Cell>; struct Drop { at: Vec2; weight: Float; id: Int; } struct Cell { mass: Float; top: Int; } struct Splat { cell: Vec2; value: Cell; } scatter into canvas with sum { let d = sample(drops); return Splat { cell: d.at, value: Cell { mass: d.weight, top: d.id } }; } }";
+    let source = "kernel test.splat@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input canvas: Grid<Cell>; output result: Grid<Cell>; struct Drop { at: Vec2; weight: Float; id: Int; } struct Cell { mass: Float; top: Int; } struct Splat { cell: Vec2; value: Cell; } scatter over drops into canvas with sum { let d = sample(drops); return Splat { cell: d.at, value: Cell { mass: d.weight, top: d.id } }; } }";
     let count = 2000u32;
     let drops: Vec<u32> = (0..count)
         .flat_map(|i| {
@@ -422,7 +422,7 @@ fn scatters_apply_in_element_order_with_the_same_rule() {
     // The other rules and an integer target: min, max and last over rows.
     for rule in ["min", "max", "last"] {
         let source = format!(
-            "kernel test.rows@1 {{ requires {{ field.read; field.write; }} input keys: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>; struct Pair {{ at: Int; value: Int; }} scatter into slots with {rule} {{ let k = sample(keys); return Pair {{ at: k % 9 - 1, value: k * 7 % 13 - 6 }}; }} }}"
+            "kernel test.rows@1 {{ requires {{ field.read; field.write; }} input keys: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>; struct Pair {{ at: Int; value: Int; }} scatter over keys into slots with {rule} {{ let k = sample(keys); return Pair {{ at: k % 9 - 1, value: k * 7 % 13 - 6 }}; }} }}"
         );
         let ints = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
         let (cpu, jit) = both_all(
@@ -442,7 +442,7 @@ fn a_merge_or_a_combine_that_overflows_is_reported() {
     let jit = JitBackend::new().unwrap();
     let ints = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
     // The fold overflows at the second level.
-    let source = "kernel test.total@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; compute { return sample(rows); } merge(a, b) { return a + b; } }";
+    let source = "kernel test.total@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; compute over rows { return sample(rows); } merge(a, b) { return a + b; } }";
     let module = compile(source).unwrap();
     let mut host = Host::new(1 << 16);
     let rows = host
@@ -474,7 +474,7 @@ fn a_merge_or_a_combine_that_overflows_is_reported() {
     );
     // An integer sum into one slot whose whole total does not fit names
     // the slot.
-    let source = "kernel test.pile@1 { requires { field.read; field.write; } input rows: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>; struct Pair { at: Int; value: Int; } scatter into slots with sum { return Pair { at: 0, value: sample(rows) }; } }";
+    let source = "kernel test.pile@1 { requires { field.read; field.write; } input rows: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>; struct Pair { at: Int; value: Int; } scatter over rows into slots with sum { return Pair { at: 0, value: sample(rows) }; } }";
     let module = compile(source).unwrap();
     let mut host = Host::new(1 << 16);
     let rows = host
@@ -514,7 +514,7 @@ fn a_merge_or_a_combine_that_overflows_is_reported() {
 fn a_merge_may_read_inputs_params_and_the_context() {
     let source = "kernel test.fold@1 { requires { field.read; field.write; time.read; } input xs: Rows<Float>; input weights: Rows<Float>; param k: Float = 0.5; output result: Rows<Float>;
         fn first(w: Rows<Float>) -> Float { return at(w, 0); }
-        compute { return sample(xs) * at(weights, element()); }
+        compute over xs { return sample(xs) * at(weights, element()); }
         merge(a, b) { return a + b + at(weights, 1) * k + first(weights) + time(); } }";
     let floats = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float]);
     let count = 37u32;
@@ -597,7 +597,7 @@ fn emitted_pairs_land_as_the_interpreters_do() {
             "kernel test.fan@1 {{ requires {{ field.read; field.write; }}
             input keys: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>;
             struct Pair {{ at: Int; value: Int; }}
-            scatter into slots with {rule} {{
+            scatter over keys into slots with {rule} {{
                 let k = sample(keys);
                 let _fan = loop k % 5 with j = 0 {{
                     emit(Pair {{ at: (k * 31 + j * 7) % 97, value: k % 1000 - j * 3 }});
@@ -627,7 +627,7 @@ fn keys_emitted_from_nested_loops_land_as_the_interpreters_do() {
     let source = "kernel test.cover@1 { requires { field.read; field.write; }
         input keys: Rows<Int>; input canvas: Grid<Long>; output result: Grid<Long>;
         struct Hit { pixel: Vec2; key: Long; }
-        scatter into canvas with min {
+        scatter over keys into canvas with min {
             let t = element();
             let k = sample(keys);
             let none = Hit { pixel: vec2(-1.0, -1.0), key: 0l };
@@ -693,7 +693,7 @@ fn a_target_cut_into_parts_sees_its_pairs_in_order() {
             input keys: Rows<Int>; input cells: Rows<Cell>; output result: Rows<Cell>;
             struct Cell {{ mass: Float; id: Int; }}
             struct Pair {{ at: Int; value: Cell; }}
-            scatter into cells with {rule} {{
+            scatter over keys into cells with {rule} {{
                 let k = sample(keys);
                 return Pair {{ at: k % 5003 - 2, value: Cell {{ mass: float(k % 977) * 0.013 + 0.1, id: element() % 1000 }} }};
             }} }}"
@@ -714,7 +714,7 @@ fn a_target_cut_into_parts_sees_its_pairs_in_order() {
         "kernel test.over@1 { requires { field.read; field.write; }
          input keys: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>;
          struct Pair { at: Int; value: Int; }
-         scatter into slots with sum {
+         scatter over keys into slots with sum {
              let k = sample(keys);
              return Pair { at: k % 4999, value: 1000000000 };
          } }",
@@ -759,11 +759,11 @@ fn values_a_reduction_holds_past_the_hosts_room_fail_the_run_on_both() {
     let ints = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
     for (source, runs) in [
         (
-            "kernel test.total@1 { requires { field.read; field.write; } input keys: Rows<Int>; output result: Rows<Int>; compute { return sample(keys); } merge(a, b) { return a + b; } }",
+            "kernel test.total@1 { requires { field.read; field.write; } input keys: Rows<Int>; output result: Rows<Int>; compute over keys { return sample(keys); } merge(a, b) { return a + b; } }",
             1,
         ),
         (
-            "kernel test.ranks@1 { requires { field.read; field.write; } input keys: Rows<Int>; output result: Rows<Int>; prefix with sum { return sample(keys); } }",
+            "kernel test.ranks@1 { requires { field.read; field.write; } input keys: Rows<Int>; output result: Rows<Int>; prefix over keys with sum { return sample(keys); } }",
             1000,
         ),
     ] {
@@ -813,7 +813,7 @@ fn pairs_past_the_hosts_room_fail_the_run_on_both() {
         "kernel test.flood@1 { requires { field.read; field.write; }
          input keys: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>;
          struct Pair { at: Int; value: Int; }
-         scatter into slots with sum {
+         scatter over keys into slots with sum {
              let k = sample(keys);
              let _fan = loop 1000 with j = 0 {
                  emit(Pair { at: (k + j) % 64, value: 1 });
@@ -924,7 +924,7 @@ fn folds_split_across_workers_are_the_walks() {
         .collect::<Vec<_>>();
     for rule in ["sum", "min", "max"] {
         let source = format!(
-            "kernel test.running@1 {{ requires {{ field.read; field.write; }} input rows: Rows<Int>; output result: Rows<Int>; prefix with {rule} {{ return sample(rows); }} }}"
+            "kernel test.running@1 {{ requires {{ field.read; field.write; }} input rows: Rows<Int>; output result: Rows<Int>; prefix over rows with {rule} {{ return sample(rows); }} }}"
         );
         let [cpu, jit] = outcomes(&source, ints.clone(), mixed.clone(), Domain::Rows(n as u32));
         assert!(cpu.is_ok(), "{rule}: {cpu:?}");
@@ -942,14 +942,14 @@ fn folds_split_across_workers_are_the_walks() {
         })
         .collect::<Vec<_>>();
     let [cpu, jit] = outcomes(
-        "kernel test.pair@1 { requires { field.read; field.write; } input rows: Rows<P>; output result: Rows<P>; struct P { i: Int; l: Long; } prefix with sum { return sample(rows); } }",
+        "kernel test.pair@1 { requires { field.read; field.write; } input rows: Rows<P>; output result: Rows<P>; struct P { i: Int; l: Long; } prefix over rows with sum { return sample(rows); } }",
         record,
         words,
         Domain::Rows(n as u32),
     );
     assert!(cpu.is_ok(), "{cpu:?}");
     assert_eq!(cpu, jit, "a record's prefix");
-    let sum = "kernel test.running@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; prefix with sum { return sample(rows); } }";
+    let sum = "kernel test.running@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; prefix over rows with sum { return sample(rows); } }";
     // The first ten rows owe two billion, the last two repay three: a
     // worker's partial total overflows, the walk never does.
     let mut paid = vec![0u32; n];
@@ -979,7 +979,7 @@ fn folds_split_across_workers_are_the_walks() {
         "{cpu:?}"
     );
     assert_eq!(cpu, jit, "a late overflow");
-    let total = "kernel test.total@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; compute { return sample(rows); } merge(a, b) { return a + b; } }";
+    let total = "kernel test.total@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; compute over rows { return sample(rows); } merge(a, b) { return a + b; } }";
     let [cpu, jit] = outcomes(total, ints.clone(), mixed, Domain::Rows(1));
     assert!(cpu.is_ok(), "{cpu:?}");
     assert_eq!(cpu, jit, "a reduction");
@@ -1243,7 +1243,7 @@ fn a_memory_carried_from_run_to_run_matches_the_interpreter_and_compares_by_its_
     let module = compile(
         "kernel test.carry@1 { requires { field.read; field.write; }
          input frame: Rows<Int>; memory cells: Rows<Int>; output result: Rows<Int>;
-         scan with y = 0 {
+         scan over frame with y = 0 {
              let k = at(frame, 0);
              let n = count(cells);
              // Frames of three kinds: two cells changed, a cell written with

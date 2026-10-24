@@ -485,7 +485,7 @@ fn fields_carry_struct_elements_with_exact_integers() {
 fn reductions_fold_exactly_in_a_fixed_tree() {
     // Sum, maximum and count over 1000 rows: ints exact, floats follow the
     // pairwise tree.
-    let source = "kernel test.stats@1 { requires { field.read; field.write; } input rows: Rows<Item>; output result: Rows<Stats>; struct Item { value: Int; weight: Float; } struct Stats { sum: Int; max: Int; weight: Float; count: Int; } compute { let it = sample(rows); return Stats { sum: it.value, max: it.value, weight: it.weight, count: 1 }; } merge(a, b) { return Stats { sum: a.sum + b.sum, max: max(a.max, b.max), weight: a.weight + b.weight, count: a.count + b.count }; } }";
+    let source = "kernel test.stats@1 { requires { field.read; field.write; } input rows: Rows<Item>; output result: Rows<Stats>; struct Item { value: Int; weight: Float; } struct Stats { sum: Int; max: Int; weight: Float; count: Int; } compute over rows { let it = sample(rows); return Stats { sum: it.value, max: it.value, weight: it.weight, count: 1 }; } merge(a, b) { return Stats { sum: a.sum + b.sum, max: max(a.max, b.max), weight: a.weight + b.weight, count: a.count + b.count }; } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(module.manifest.mode, entelechy_ir::Mode::Reduce);
     assert!(module.merge.is_some());
@@ -571,7 +571,7 @@ fn reductions_fold_exactly_in_a_fixed_tree() {
 fn scans_thread_the_carried_value_in_order() {
     // A prefix sum of ints (exact) and a one-pole filter of floats in one
     // struct, with the element index.
-    let source = "kernel test.scan@1 { requires { field.read; field.write; } input rows: Rows<Item>; param k: Float = 0.5; output result: Rows<Run>; struct Item { value: Int; x: Float; } struct Run { total: Int; y: Float; last: Int; } scan with run = Run { total: 0, y: 0.0, last: -1 } { let it = sample(rows); return Run { total: run.total + it.value, y: run.y + (it.x - run.y) * k, last: index() }; } }";
+    let source = "kernel test.scan@1 { requires { field.read; field.write; } input rows: Rows<Item>; param k: Float = 0.5; output result: Rows<Run>; struct Item { value: Int; x: Float; } struct Run { total: Int; y: Float; last: Int; } scan over rows with run = Run { total: 0, y: 0.0, last: -1 } { let it = sample(rows); return Run { total: run.total + it.value, y: run.y + (it.x - run.y) * k, last: index() }; } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(module.manifest.mode, entelechy_ir::Mode::Scan);
     assert!(module.init.is_some());
@@ -807,7 +807,7 @@ fn remainder_truncates_like_division_and_vectors_compare_whole() {
 fn scatters_combine_into_the_target_in_element_order() {
     // Weights splat into a float grid by `sum`, ids by `last`, a struct
     // fieldwise by `max`; addresses outside the grid are dropped.
-    let source = "kernel test.splat@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input canvas: Grid<Float>; output result: Grid<Float>; struct Drop { at: Vec2; weight: Float; } struct Splat { cell: Vec2; mass: Float; } scatter into canvas with sum { let d = sample(drops); return Splat { cell: d.at, mass: d.weight }; } }";
+    let source = "kernel test.splat@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input canvas: Grid<Float>; output result: Grid<Float>; struct Drop { at: Vec2; weight: Float; } struct Splat { cell: Vec2; mass: Float; } scatter over drops into canvas with sum { let d = sample(drops); return Splat { cell: d.at, mass: d.weight }; } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     assert!(matches!(
         module.manifest.mode,
@@ -889,7 +889,7 @@ fn scatters_combine_into_the_target_in_element_order() {
 
     // `last` by element order, `max` fieldwise over a struct with ints,
     // into rows addressed by Int.
-    let source = "kernel test.mark@1 { requires { field.read; field.write; } input hits: Rows<Hit>; input slots: Rows<Slot>; output result: Rows<Slot>; struct Hit { slot: Int; id: Int; score: Float; } struct Slot { id: Int; score: Float; } struct Put { at: Int; value: Slot; } scatter into slots with max { let h = sample(hits); return Put { at: h.slot, value: Slot { id: h.id, score: h.score } }; } }";
+    let source = "kernel test.mark@1 { requires { field.read; field.write; } input hits: Rows<Hit>; input slots: Rows<Slot>; output result: Rows<Slot>; struct Hit { slot: Int; id: Int; score: Float; } struct Slot { id: Int; score: Float; } struct Put { at: Int; value: Slot; } scatter over hits into slots with max { let h = sample(hits); return Put { at: h.slot, value: Slot { id: h.id, score: h.score } }; } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let hits: Vec<(i32, i32, f32)> = vec![(1, 5, 0.5), (1, 3, 0.9), (0, 7, -1.0), (4, 1, 1.0)];
     let words: Vec<u32> = hits
@@ -1084,7 +1084,7 @@ fn memories_are_written_step_by_step_and_come_out_as_outputs() {
     // Each step counts a visit in its cell and reads it back; a write
     // outside the memory is dropped; the input is untouched and the memory
     // is the second output.
-    let source = "kernel test.tally@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { let cell = index() % 4; let v = at(ram, cell) + 1; put(ram, cell, v); put(ram, 99, 7); put(ram, -1, 7); return at(ram, cell); } }";
+    let source = "kernel test.tally@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; scan over ticks with acc = 0 { let cell = index() % 4; let v = at(ram, cell) + 1; put(ram, cell, v); put(ram, 99, 7); put(ram, -1, 7); return at(ram, cell); } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let mut host = Host::new(1 << 16);
     let ints = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
@@ -1224,7 +1224,7 @@ fn a_scatter_emits_as_many_pairs_as_it_likes() {
     let source = "kernel test.spread@1 { requires { field.read; field.write; }
         input values: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>;
         struct Put { at: Int; value: Int; }
-        scatter into slots with sum {
+        scatter over values into slots with sum {
             let v = sample(values);
             let _spread = loop 3 with k = 0 {
                 emit(Put { at: element() * 2 + k, value: v * 10 + k });
@@ -1275,7 +1275,7 @@ fn an_if_of_statements_emits_when_it_holds() {
     let source = "kernel test.pick@1 { requires { field.read; field.write; }
         input values: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>;
         struct Put { at: Int; value: Int; }
-        scatter into slots with sum {
+        scatter over values into slots with sum {
             let v = sample(values);
             if v % 3 == 0 { emit(Put { at: 0, value: 1 }); }
             else if v % 3 == 1 { emit(Put { at: 1, value: 1 }); emit(Put { at: 1, value: 10 }); }
@@ -1322,7 +1322,7 @@ fn a_scatter_over_rows_refuses_a_grid_domain() {
         "kernel test.pool@1 { requires { field.read; field.write; }
          input slots: Rows<Int>; output result: Rows<Int>;
          struct Put { at: Int; value: Int; }
-         scatter into slots with max { return Put { at: element() % 5, value: idomain() }; } }",
+         scatter over slots into slots with max { return Put { at: element() % 5, value: idomain() }; } }",
     )
     .unwrap();
     let mut host = Host::new(1 << 16);

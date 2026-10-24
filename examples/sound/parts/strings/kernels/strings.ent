@@ -46,7 +46,7 @@ kernel strings.play@1 {
     param gain: Float = 0.22;
     param decay: Float = 0.996;
     output result: Rows<Float>;
-    scan with out = 0.0 {
+    scan over block with out = 0.0 {
         let sample = index();
         // A key down that was not down before plucks: the line takes a
         // burst of noise, and the key is remembered so that holding it

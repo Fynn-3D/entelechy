@@ -1,6 +1,6 @@
 //! Sound made from tones and noise, a block of stereo samples a frame:
 //! the clock, the cues a program's events set going, the instruments
 //! they sound through, and the filters and delay lines that shape them.
-package audio@1 { language = 1; ir = 1; }
+package audio@1 { language = 2; ir = 1; }
 
 use "kernels/";

@@ -13,7 +13,7 @@ kernel parallel.runs_ends@1 {
     requires { field.read; field.write; }
     input counts: Rows<Int>;
     output result: Rows<Int>;
-    prefix with sum { return sample(counts); }
+    prefix over counts with sum { return sample(counts); }
 }
 
 /// How many entries the runs hold, as a row of one that a `domain` reads

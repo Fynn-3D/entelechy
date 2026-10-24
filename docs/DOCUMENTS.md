@@ -519,7 +519,10 @@ changes:
 ### Execution modes
 
 A Kernel runs in one of six modes. `emit`, `put` and several outputs
-belong to the modes named below.
+belong to the modes named below. A reduction, a scan, a scatter and a
+prefix each walk an input, one body run per element of it, and name it
+after their word with `over`; the order the inputs are declared in
+means nothing.
 
 **Map** (`compute`): once per element of the output domain. A map may
 write several outputs over one domain, sharing a shape:
@@ -556,7 +559,7 @@ kernel stats.luma@1 {
     input source: Image;
     output result: Rows<Light>;          // exactly one element comes out
     struct Light { sum: Float; max: Float; count: Int; }
-    compute {                            // once per element of `source`
+    compute over source {                // once per element of `source`
         let l = luma(sample(source));
         return Light { sum: l, max: l, count: 1 };
     }
@@ -566,8 +569,8 @@ kernel stats.luma@1 {
 }
 ```
 
-`compute` maps over the first input's domain (`coord()`, `sample`,
-`domain()` refer to it); `merge` folds results pairwise into the single
+`compute over source` maps over the input it names (`coord()`,
+`sample`, `domain()` refer to it); `merge` folds results pairwise into the single
 element of a `Rows` output. `merge` must be associative and commutative:
 the fold's tree is the backend's; integers and booleans are exact,
 floats agree to rounding. `merge` may read inputs, params and context.
@@ -581,17 +584,17 @@ kernel audio.lowpass@1 {
     input samples: Rows<Float>;
     param k: Float = 0.1;
     output result: Rows<Float>;        // one element per input element
-    scan with y = 0.0 {                // the carried value, and its start
+    scan over samples with y = 0.0 {   // the input it walks, the carried value and its start
         return y + (sample(samples) - y) * k;
     }
 }
 ```
 
-The body runs once per element of the first input, in order: `y` is the
-previous result (`init` first), the result is this output element and
-the next `y`, `index()` the element index. A scan writes as many
-elements as its input; a written `domain` must agree. It runs on one
-thread and is never fused.
+The body runs once per element of the input named after `over`, in
+order: `y` is the previous result (`init` first), the result is this
+output element and the next `y`, `index()` the element index. A scan
+writes as many elements as that input; a written `domain` must agree. It
+runs on one thread and is never fused.
 
 A scan may own memory, a Field its steps read and write:
 
@@ -601,7 +604,7 @@ kernel machine.step@1 {
     input ticks: Rows<Int>;            // one step per element
     memory ram: Rows<Int>;             // bound like an input, read like an output
     output result: Rows<Int>;
-    scan with pc = 0 {
+    scan over ticks with pc = 0 {
         let op = at(ram, pc);          // what an earlier step wrote is there
         put(ram, pc + 100, op * 2);    // a write, in step order
         return pc + 1;
@@ -631,15 +634,15 @@ kernel particles.splat@1 {
     input canvas: Grid<Vec3>;
     output result: Grid<Vec3>;         // starts as `canvas`
     struct Splat { cell: Vec2; heat: Vec3; }
-    scatter into canvas with sum {     // once per element of `particles`
+    scatter over particles into canvas with sum {     // once per element of `particles`
         let p = sample(particles);
         return Splat { cell: floor(p.position * size(canvas)), heat: tint(p) };
     }
 }
 ```
 
-- The body runs once per element of the first input, or of the node's
-  `domain` when set (in the first input's shape; `domain = points *
+- The body runs once per element of the input named after `over`, or of
+  the node's `domain` when set (in that input's shape; `domain = points *
   weights;` steps over every pair without a Field of that size).
 - It yields a struct of two fields: an address into the target after
   `into` (`Int` for rows, `Vec2` grid, `Vec3` volume, floored like `at`)
@@ -671,14 +674,14 @@ kernel compact.offsets@1 {
     requires { field.read; field.write; }
     input flags: Rows<Int>;
     output result: Rows<Int>;          // one element per input element
-    prefix with sum {                  // the rank of each kept element
+    prefix over flags with sum {       // the rank of each kept element
         return if sample(flags) != 0 { 1 } else { 0 };
     }
 }
 ```
 
-The body runs once per element of the first input, a `Rows`, reading as
-a map does; the output `Rows` of the same count holds at `i` the values
+The body runs once per element of the input named after `over`, a
+`Rows`, reading as a map does; the output `Rows` of the same count holds at `i` the values
 at `0..=i` combined by `sum` (fieldwise), `min` or `max` (fieldwise,
 floats in the scatter's total order). A prefix may fold in any grouping,
 so `sum` over an element holding a float is refused (use `scan`), and so
@@ -830,10 +833,11 @@ be keywords.
    ([why](DECISIONS.md#the-graph-computes-structure-never-values)).
 5. `domain = count;`, `domain = vec2(width, height);` or `domain =
    vec3(width, height, depth);` sets a node's output extent in its
-   output's shape; a node with an input defaults to its first declared
-   input's extent. A node with no `domain` that carries its own output
-   back through another input (`previous <~ node.result` not first)
-   holds state of its first input's size; a check notes it, and one
+   output's shape; a node with an input defaults to the extent of the
+   input its Kernel walks (`over`), or a map's first declared input. A
+   node with no `domain` that carries its own output back through
+   another input (`previous <~ node.result` not first) holds state of
+   its first input's size; a check notes it, and one
    whose Kernel compares `element()` with its first input's count, whose
    elements past it are never run. The extent may be an expression of: `size(port)` (the
    bound extent, as a count, pair or triple), `count(port)`,

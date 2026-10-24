@@ -38,14 +38,14 @@ node deepest: kernel {
     requires { field.read; field.write; }
     input contacts: Rows<Manifold> <- world.contacts;
     output result: Rows<Float>;
-    compute { let m = sample(contacts); return if m.count > 0 && m.sensor == 0 { -m.p1.base } else { 0.0 }; }
+    compute over contacts { let m = sample(contacts); return if m.count > 0 && m.sensor == 0 { -m.p1.base } else { 0.0 }; }
     merge(a, b) { return max(a, b); }
 }
 node out: kernel {
     requires { field.read; field.write; }
     input bodies: Rows<Body> <- world.result;
     output result: Rows<Int>;
-    compute {
+    compute over bodies {
         let b = sample(bodies);
         return int(b.shape == 0 && (b.position.y < 0.0 || abs(b.position.x) > 3.0));
     }

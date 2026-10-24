@@ -155,6 +155,26 @@ holds every builtin and form, and [`surface.rs`](../crates/frontend/compiler/tes
 fails when it grows; the scene syntax is held by
 [the scene documents' surface](../crates/frontend/scene/tests/surface/).
 
+## A Kernel that walks an input names it
+
+A reduction, a scan, a scatter and a prefix run their body once per
+element of one input, and write it after their word:
+`compute over source`, `scan over ticks with`, `scatter over particles
+into canvas with`, `prefix over flags with`. The order inputs are
+declared in carries no meaning; the compiler gives the IR the walked
+input first, the form the backends take.
+
+**Why.** When the first declared input was the one walked, a Kernel
+whose inputs were written in another order ran, over the wrong count,
+and said nothing: a scatter over its own target, a scan over a table it
+only looked things up in. A meaning held by the place of a line is one
+no reader sees. Named, it is read where the mode is, and a wrong name
+is refused.
+
+**Where.** [the lowering](../crates/frontend/compiler/src/lower/declare.rs)
+checks the name and orders the IR's inputs; the language's
+[surface](../crates/frontend/compiler/tests/surface.txt) at language 2.
+
 ## A public contract grows; it breaks only with its version
 
 Six things are written against by programs Entelechy does not see. Each

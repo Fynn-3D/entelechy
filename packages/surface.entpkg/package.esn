@@ -5,6 +5,6 @@
 //! (proxies baked from things' own distances or from a mesh, walked
 //! roughly along a ray); and meshes drawn into it as clusters, streamed
 //! round the lens.
-package surface@1 { language = 1; ir = 1; }
+package surface@1 { language = 2; ir = 1; }
 
 use "kernels/";

@@ -78,7 +78,7 @@ kernel million.splat@1 {
     input canvas: Grid<Int>;
     output result: Grid<Int>;
     struct Mark { cell: Vec2; value: Int; }
-    scatter into canvas with sum {
+    scatter over bodies into canvas with sum {
         let body = sample(bodies);
         // The unit square over the middle of the window, square
         // whatever the window is; a body outside it lands outside the

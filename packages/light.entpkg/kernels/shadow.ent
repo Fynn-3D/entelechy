@@ -132,7 +132,7 @@ kernel light.shadow_marks@1 {
     param reach: Float = 4.0;
     output result: Rows<Int>;
     struct Mark { slot: Int; on: Int; }
-    scatter into blank with max {
+    scatter over surface into blank with max {
         let q = min(coord() * float(every) + float(every / 2), size(surface) - 1.0);
         let su = at(surface, q);
         if su.w > no_hit() * 0.5 { return Mark { slot: -1, on: 0 }; }
@@ -395,7 +395,7 @@ kernel light.shadow_draw@1 {
     input entries: Rows<Int>;
     output result: Grid<Int>;
     struct Texel { place: IVec2; height: Int; }
-    scatter into map with max {
+    scatter over faces into map with max {
         let e = element();
         if e >= at(ends, count(ends) - 1) { return Texel { place: ivec2(-1, -1), height: 0 }; }
         let fi = owner(e, ends);

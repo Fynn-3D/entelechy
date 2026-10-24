@@ -400,7 +400,7 @@ fn reduce(lets: &str, out: &str) -> String {
         "kernel matrix.reduce@1 {{ {HEAD}
     input rows: Rows<Float>; input ints: Rows<Int>; input cells: Grid<Cell>; input parts: Rows<Patch>; input patches: Grid<Patch>;
     output result: Rows<Out>;
-    compute {{ let i = element(); {ENV} {lets} let out = {out}; return out; }}
+    compute over rows {{ let i = element(); {ENV} {lets} let out = {out}; return out; }}
     merge(a, b) {{ return Out {{ f: a.f + b.f, i: (a.i & 0xFFFF) + (b.i & 0xFFFF), b: a.b || b.b, v: a.v + b.v }}; }} }}"
     )
 }
@@ -412,7 +412,7 @@ fn scan(lets: &str, out: &str) -> String {
     memory mem: Rows<Int>;
     output result: Rows<Out>;
     fn store(m: Rows<Int>, a: Int, v: Int) -> Int {{ return put(m, a, v); }}
-    scan with acc = Out {{ f: 0.0, i: 0, b: false, v: vec3(0.0, 0.0, 0.0) }} {{
+    scan over ticks with acc = Out {{ f: 0.0, i: 0, b: false, v: vec3(0.0, 0.0, 0.0) }} {{
         let i = index(); {ENV}
         put(mem, i % 16, i);
         store(mem, (i + 1) % 16, at(mem, i % 16) + 1);
@@ -430,7 +430,7 @@ fn prefix(lets: &str, out: &str) -> String {
     input rows: Rows<Float>; input ints: Rows<Int>; input cells: Grid<Cell>; input parts: Rows<Patch>; input patches: Grid<Patch>;
     struct Run {{ f: Float; i: Int; v: Vec3; }}
     output result: Rows<Run>;
-    prefix with max {{ let i = element(); {ENV} {lets} let out = {out}; return Run {{ f: out.f, i: out.i, v: out.v }}; }} }}"
+    prefix over rows with max {{ let i = element(); {ENV} {lets} let out = {out}; return Run {{ f: out.f, i: out.i, v: out.v }}; }} }}"
     )
 }
 
@@ -440,7 +440,7 @@ fn scatter(lets: &str, out: &str) -> String {
     input rows: Rows<Float>; input ints: Rows<Int>; input cells: Grid<Cell>; input parts: Rows<Patch>; input patches: Grid<Patch>; input target: Rows<Out>;
     output result: Rows<Out>;
     struct Pair {{ at: Int; value: Out; }}
-    scatter into target with last {{ let i = element(); {ENV} {lets} let out = {out}; return Pair {{ at: (i * 7) % 16, value: out }}; }} }}"
+    scatter over rows into target with last {{ let i = element(); {ENV} {lets} let out = {out}; return Pair {{ at: (i * 7) % 16, value: out }}; }} }}"
     )
 }
 
@@ -454,7 +454,7 @@ fn scatter_emitting(lets: &str, out: &str) -> String {
     input target: Rows<Run>;
     output result: Rows<Run>;
     struct Pair {{ at: Int; value: Run; }}
-    scatter into target with max {{ let i = element(); {ENV} {lets} let out = {out};
+    scatter over rows into target with max {{ let i = element(); {ENV} {lets} let out = {out};
         let _fanned = loop i % 3 with fan = 0 {{
             emit(Pair {{ at: (i * 5 + fan * 3) % 16, value: Run {{ f: out.f, i: out.i ^ fan, v: out.v * float(fan) }} }});
             fan + 1
@@ -788,7 +788,7 @@ fn wide_modes() -> Vec<(&'static str, Wrapper)> {
         format!(
             "kernel wide.reduce@1 {{ {WIDE_HEAD} input rows: Rows<Double>; input ids: Rows<Long>;
     output result: Rows<Wide>;
-    compute {{ let i = element(); {WIDE_ENV} {lets} return {out}; }}
+    compute over rows {{ let i = element(); {WIDE_ENV} {lets} return {out}; }}
     merge(a, b) {{ return Wide {{ d: a.d + b.d, l: add_wrap(a.l, b.l), w: a.w + b.w, b: a.b || b.b, i: (a.i & 0xFFFF) + (b.i & 0xFFFF) }}; }} }}"
         )
     }
@@ -796,7 +796,7 @@ fn wide_modes() -> Vec<(&'static str, Wrapper)> {
         format!(
             "kernel wide.scan@1 {{ {WIDE_HEAD} input ticks: Rows<Int>; input rows: Rows<Double>; input ids: Rows<Long>;
     output result: Rows<Wide>;
-    scan with acc = Wide {{ d: 0.0, l: 0l, w: dvec3(0.0, 0.0, 0.0), b: false, i: 0 }} {{
+    scan over ticks with acc = Wide {{ d: 0.0, l: 0l, w: dvec3(0.0, 0.0, 0.0), b: false, i: 0 }} {{
         let i = index(); {WIDE_ENV} {lets} let out = {out};
         return Wide {{ d: out.d + acc.d * 0.5, l: add_wrap(out.l, acc.l), w: out.w + acc.w * 0.5, b: out.b != acc.b, i: add_wrap(out.i, acc.i) }};
     }} }}"
@@ -808,7 +808,7 @@ fn wide_modes() -> Vec<(&'static str, Wrapper)> {
     struct Acc {{ d: Double; l: Long; w: DVec3; }}
     struct Pair {{ at: Int; value: Acc; }}
     output result: Rows<Acc>;
-    scatter into target with sum {{ let i = element(); {WIDE_ENV} {lets} let out = {out}; return Pair {{ at: (i * 7) % 5, value: Acc {{ d: out.d, l: out.l % 1000000l, w: out.w }} }}; }} }}"
+    scatter over rows into target with sum {{ let i = element(); {WIDE_ENV} {lets} let out = {out}; return Pair {{ at: (i * 7) % 5, value: Acc {{ d: out.d, l: out.l % 1000000l, w: out.w }} }}; }} }}"
         )
     }
     fn prefix(lets: &str, out: &str) -> String {
@@ -816,7 +816,7 @@ fn wide_modes() -> Vec<(&'static str, Wrapper)> {
             "kernel wide.prefix@1 {{ {WIDE_HEAD} input rows: Rows<Double>; input ids: Rows<Long>;
     struct Run {{ d: Double; l: Long; w: DVec3; }}
     output result: Rows<Run>;
-    prefix with max {{ let i = element(); {WIDE_ENV} {lets} let out = {out}; return Run {{ d: out.d, l: out.l, w: out.w }}; }} }}"
+    prefix over rows with max {{ let i = element(); {WIDE_ENV} {lets} let out = {out}; return Run {{ d: out.d, l: out.l, w: out.w }}; }} }}"
         )
     }
     vec![
@@ -973,7 +973,7 @@ pub fn long_cases() -> Vec<Case> {
         format!(
             "kernel long.reduce@1 {{ {LONG_HEAD} input ids: Rows<Long>;
     output result: Rows<Lng>;
-    compute {{ let i = element(); let n = long(i); {lets} return {out}; }}
+    compute over ids {{ let i = element(); let n = long(i); {lets} return {out}; }}
     merge(a, b) {{ return Lng {{ l: add_wrap(a.l, b.l), v: lvec3(add_wrap(a.v.x, b.v.x), add_wrap(a.v.y, b.v.y), add_wrap(a.v.z, b.v.z)), f: a.f + b.f, i: (a.i & 0xFFFF) + (b.i & 0xFFFF), b: a.b || b.b }}; }} }}"
         )
     }
@@ -1078,7 +1078,7 @@ pub fn long_scalar_cases() -> Vec<Case> {
         format!(
             "kernel long.scalar_reduce@1 {{ {LONG_SCALAR_HEAD} input ids: Rows<Long>;
     output result: Rows<Ls>;
-    compute {{ let i = element(); let n = long(i); {lets} return {out}; }}
+    compute over ids {{ let i = element(); let n = long(i); {lets} return {out}; }}
     merge(a, b) {{ return Ls {{ l: add_wrap(a.l, b.l), f: a.f + b.f, i: (a.i & 0xFFFF) + (b.i & 0xFFFF), b: a.b || b.b }}; }} }}"
         )
     }
@@ -1307,7 +1307,7 @@ pub fn narrow_cases() -> Vec<Case> {
     input ticks: Rows<Int>;
     memory ram: Rows<Float as {e}>;
     output result: Rows<Float as {e}>;
-    scan with acc = 0.0 {{
+    scan over ticks with acc = 0.0 {{
         let i = index();
         put(ram, i % 8, at(ram, (i + 3) % 8) * 0.5);
         return at(ram, i % 8);
@@ -1383,7 +1383,7 @@ pub fn narrow_cases() -> Vec<Case> {
     input ticks: Rows<Int>;
     memory ram: Rows<Int as {e}>;
     output result: Rows<Int as {e}>;
-    scan with acc = 0 {{
+    scan over ticks with acc = 0 {{
         let i = index();
         put(ram, i % 8, add_wrap(at(ram, (i + 3) % 8), i * 37));
         return add_wrap(acc, at(ram, i % 8));
@@ -1528,7 +1528,7 @@ pub fn shape_cases() -> Vec<Case> {
     {decls}
     input keys: Rows<Int>; input target: {kind}<{ty}>; output result: {kind}<{ty}>;
     struct Pair {{ at: {address_ty}; value: {ty}; }}
-    scatter into target with {rule} {{
+    scatter over keys into target with {rule} {{
         let k = sample(keys);
         {fan}
         return Pair {{ at: {at}, value: {value} }};
@@ -1633,7 +1633,7 @@ pub fn sum_cases() -> Vec<(Case, Summed)> {
     input ats: Rows<Int>; input values: Rows<Int>; input target: Rows<Int>;
     output result: Rows<Int>;
     struct Pair {{ at: Int; value: Int; }}
-    scatter into target with sum {{ {body} }} }}"
+    scatter over ats into target with sum {{ {body} }} }}"
         );
         (
             Case {
@@ -1654,7 +1654,7 @@ pub fn sum_cases() -> Vec<(Case, Summed)> {
                 source: "kernel sums.prefix@1 { requires { field.read; field.write; }
     input values: Rows<Int>;
     output result: Rows<Int>;
-    prefix with sum { return at(values, element()); } }"
+    prefix over values with sum { return at(values, element()); } }"
                     .to_owned(),
                 inputs: vec![rows(values)],
                 params: Vec::new(),
@@ -1713,7 +1713,7 @@ pub fn sum_cases() -> Vec<(Case, Summed)> {
     input values: Rows<Int>; input target: Rows<Both>;
     output result: Rows<Both>;
     struct Pair { at: Int; value: Both; }
-    scatter into target with sum { let i = element(); return Pair { at: 0, value: Both { f: 0.25, i: at(values, i) } }; } }"
+    scatter over values into target with sum { let i = element(); return Pair { at: 0, value: Both { f: 0.25, i: at(values, i) } }; } }"
                     .to_owned(),
                 inputs: vec![rows(values), record(target)],
                 params: Vec::new(),
@@ -1853,14 +1853,14 @@ pub fn large_cases() -> Vec<Case> {
         case(
             "reduce",
             "kernel large.reduce@1 { requires { field.read; field.write; } input ones: Rows<Int>; output result: Rows<Int>;
-                compute { return element() + sample(ones) + count(ones); } merge(a, b) { return max(a, b); } }",
+                compute over ones { return element() + sample(ones) + count(ones); } merge(a, b) { return max(a, b); } }",
             vec![ones(Domain::Rows(rows))],
             Domain::Rows(1),
         ),
         case(
             "prefix",
             "kernel large.prefix@1 { requires { field.read; field.write; } input ones: Rows<Int>; output result: Rows<Int>;
-                prefix with sum { return sample(ones); } }",
+                prefix over ones with sum { return sample(ones); } }",
             vec![ones(Domain::Rows(rows))],
             Domain::Rows(rows),
         ),
@@ -1868,7 +1868,7 @@ pub fn large_cases() -> Vec<Case> {
             "scatter",
             "kernel large.scatter@1 { requires { field.read; field.write; } input ones: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>;
                 struct Put { slot: Int; value: Int; }
-                scatter into slots with max { return Put { slot: element() % 4, value: element() + sample(ones) }; } }",
+                scatter over ones into slots with max { return Put { slot: element() % 4, value: element() + sample(ones) }; } }",
             vec![ones(Domain::Rows(rows)), ones(Domain::Rows(4))],
             Domain::Rows(rows),
         ),

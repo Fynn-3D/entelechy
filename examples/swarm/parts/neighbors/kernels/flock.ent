@@ -76,7 +76,7 @@ kernel flock.counts@1 {
     input blank: Rows<Int>;
     output result: Rows<Int>;
     struct One { cell: Int; one: Int; }
-    scatter into blank with sum { return One { cell: sample(cells), one: 1 }; }
+    scatter over cells into blank with sum { return One { cell: sample(cells), one: 1 }; }
 }
 
 /// Where each cell's run ends in the sorted order: an inclusive sum of
@@ -86,7 +86,7 @@ kernel flock.ends@1 {
     requires { field.read; field.write; }
     input counts: Rows<Int>;
     output result: Rows<Int>;
-    prefix with sum { return sample(counts); }
+    prefix over counts with sum { return sample(counts); }
 }
 
 /// The step: every neighbor within `radius` pushes, the push is
@@ -195,7 +195,7 @@ kernel flock.crowded@1 {
     input counts: Rows<Int>;
     param cap: Int = 64;
     output result: Rows<Int>;
-    compute { return int(sample(counts) > cap); }
+    compute over counts { return int(sample(counts) > cap); }
     merge(a, b) { return a + b; }
 }
 
@@ -206,7 +206,7 @@ kernel flock.unsorted@1 {
     input cells: Rows<Int>;
     input order: Rows<Int>;
     output result: Rows<Int>;
-    compute {
+    compute over cells {
         let i = element();
         if i == 0 { return 0; }
         let a = at(order, i - 1);
@@ -225,7 +225,7 @@ kernel flock.splat@1 {
     input canvas: Grid<Int>;
     output result: Grid<Int>;
     struct Hit { cell: Vec2; one: Int; }
-    scatter into canvas with sum {
+    scatter over bodies into canvas with sum {
         return Hit { cell: floor(wrap01(sample(bodies).at) * size(canvas)), one: 1 };
     }
 }

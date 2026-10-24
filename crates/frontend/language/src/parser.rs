@@ -481,6 +481,7 @@ impl Parser {
         let mut scatter = None;
         let mut prefix = None;
         let mut group = None;
+        let mut over = None;
         while !self.is_punct("}") {
             let span = self.span();
             let Token::Ident(keyword) = self.peek().clone() else {
@@ -577,6 +578,7 @@ impl Parser {
                         ));
                     }
                     self.next();
+                    over = self.over()?;
                     compute = Some(self.block()?);
                 }
                 "scatter" => {
@@ -586,6 +588,7 @@ impl Parser {
                         ));
                     }
                     self.next();
+                    over = self.over()?;
                     self.keyword("into")?;
                     let into = self.ident("an input name")?;
                     self.keyword("with")?;
@@ -604,6 +607,7 @@ impl Parser {
                         ));
                     }
                     self.next();
+                    over = self.over()?;
                     self.keyword("with")?;
                     let combine = self.ident("`sum`, `min`, or `max`")?;
                     compute = Some(self.block()?);
@@ -627,6 +631,7 @@ impl Parser {
                         ));
                     }
                     self.next();
+                    over = self.over()?;
                     self.keyword("with")?;
                     let name = self.ident("a carried value name")?;
                     self.expect_punct("=")?;
@@ -701,6 +706,7 @@ impl Parser {
             structs,
             types,
             functions,
+            over,
             compute,
             merge,
             carry,
@@ -708,6 +714,16 @@ impl Parser {
             prefix,
             group,
         })
+    }
+
+    /// `over name` after a mode's word: the input it walks; `None` where
+    /// the word is not there.
+    fn over(&mut self) -> Result<Option<Spanned<String>>, ParseError> {
+        if !self.is_keyword("over") {
+            return Ok(None);
+        }
+        self.next();
+        Ok(Some(self.ident("the input it walks")?))
     }
 
     /// A group's lane count after `group`: a whole number from 1 to 256.

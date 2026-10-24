@@ -200,7 +200,7 @@ kernel light.translucent_splat@1 {
     param smudge: Float = 0.3;
     output result: Grid<Int>;
     struct Sum { slot: IVec2; add: Int; }
-    scatter into blank with sum {
+    scatter over vertices into blank with sum {
         let e = element();
         let none = Sum { slot: ivec2(-1, -1), add: 0 };
         if e >= at(ends, count(ends) - 1) { return none; }

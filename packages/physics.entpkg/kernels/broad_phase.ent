@@ -80,7 +80,7 @@ kernel physics.cell_counts@1 {
     input keys: Rows<Int>;
     input zeros: Rows<Int>;
     output result: Rows<Int>;
-    scatter into zeros with sum { return Counted { at: sample(keys), value: 1 }; }
+    scatter over keys into zeros with sum { return Counted { at: sample(keys), value: 1 }; }
 }
 
 // Whether two bodies meet: each one's layer in the other's mask, and one
@@ -106,7 +106,7 @@ kernel physics.places@1 {
     input order: Rows<Int>;
     input zeros: Rows<Int>;
     output result: Rows<Int>;
-    scatter into zeros with max { return Counted { at: sample(order), value: element() }; }
+    scatter over order into zeros with max { return Counted { at: sample(order), value: element() }; }
 }
 
 /// A zero for each entry.
@@ -188,7 +188,7 @@ kernel physics.pairs@1 {
     param columns: Int = 64;
     output result: Rows<Pair>;
     struct Placed { at: Int; value: Pair; }
-    scatter into slots with max {
+    scatter over bodies into slots with max {
         let j = element();
         let room = at(counts, j);
         let start = at(ends, j) - room;

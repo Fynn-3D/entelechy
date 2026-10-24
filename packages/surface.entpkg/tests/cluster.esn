@@ -105,7 +105,7 @@ node gaps: kernel {
     input kept: Rows<IVec2> <- land_drawn.kept;
     input clusters: Rows<Cluster> <- land.clusters;
     output result: Rows<IVec2>;
-    compute {
+    compute over surface {
         let s = sample(surface);
         let low = coord().y > size(surface).y * 0.55;
         return ivec2(int(low && s.depth >= 1.0), 1 << max(cluster_level_of(kept, clusters, s.id), 0));

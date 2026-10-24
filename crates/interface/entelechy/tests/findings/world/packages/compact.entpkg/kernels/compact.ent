@@ -28,7 +28,7 @@ kernel compact.offsets@1 {
     requires { field.read; field.write; }
     input flags: Rows<Int>;
     output result: Rows<Int>;
-    prefix with sum {
+    prefix over flags with sum {
         return if sample(flags) != 0 { 1 } else { 0 };
     }
 }
@@ -39,7 +39,7 @@ kernel compact.total@1 {
     requires { field.read; field.write; }
     input flags: Rows<Int>;
     output result: Rows<Int>;
-    compute { return if sample(flags) != 0 { 1 } else { 0 }; }
+    compute over flags { return if sample(flags) != 0 { 1 } else { 0 }; }
     merge(a, b) { return a + b; }
 }
 
@@ -64,7 +64,7 @@ kernel compact.gather@1 {
     input slots: Rows<Int>;
     output result: Rows<Int>;
     struct Kept { slot: Int; index: Int; }
-    scatter into slots with max {
+    scatter over flags into slots with max {
         let i = element();
         let keep = at(flags, i) != 0;
         return Kept { slot: if keep { at(offsets, i) - 1 } else { -1 }, index: i };

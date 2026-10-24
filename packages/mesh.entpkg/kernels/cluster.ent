@@ -156,7 +156,7 @@ kernel mesh.cluster_box@1 {
     requires { field.read; field.write; }
     input points: Rows<MeshPoint>;
     output result: Rows<MeshBox>;
-    compute { let p = sample(points).position; return MeshBox { lo: p, hi: p }; }
+    compute over points { let p = sample(points).position; return MeshBox { lo: p, hi: p }; }
     merge(a, b) { return MeshBox { lo: min(a.lo, b.lo), hi: max(a.hi, b.hi) }; }
 }
 
@@ -166,7 +166,7 @@ kernel mesh.cluster_edges@1 {
     input faces: Rows<Face>;
     input points: Rows<MeshPoint>;
     output result: Rows<Vec2>;
-    compute {
+    compute over faces {
         let f = sample(faces);
         let a = at(points, f.a).position;
         let b = at(points, f.b).position;
@@ -221,7 +221,7 @@ kernel mesh.cluster_face_quadrics@1 {
     input blank: Rows<ErrorQuadric>;
     output result: Rows<ErrorQuadric>;
     struct Planes { point: Int; quadric: ErrorQuadric; }
-    scatter into blank with sum {
+    scatter over faces into blank with sum {
         let f = at(faces, element() / 3);
         let lo = at(frame, 0).lo;
         let a = at(points, f.a).position - lo;
@@ -284,7 +284,7 @@ kernel mesh.cluster_edge_quadrics@1 {
     param weight: Float = 1.0;
     output result: Rows<ErrorQuadric>;
     struct Planes { point: Int; quadric: ErrorQuadric; }
-    scatter into blank with sum {
+    scatter over faces into blank with sum {
         let j = element() / 2;
         let n = count(order);
         let e = at(order, j);
@@ -393,7 +393,7 @@ kernel mesh.cluster_starts@1 {
     input slots: Rows<Int>;
     output result: Rows<Int>;
     struct Start { slot: Int; first: Int; }
-    scatter into slots with max {
+    scatter over heads into slots with max {
         let j = element();
         return Start { slot: if at(heads, j) != 0 { at(ranks, j) - 1 } else { -1 }, first: j };
     }
@@ -451,7 +451,7 @@ kernel mesh.cluster_up@1 {
     input slots: Rows<Int>;
     output result: Rows<Int>;
     struct Up { point: Int; up: Int; }
-    scatter into slots with max {
+    scatter over order into slots with max {
         let j = element();
         return Up { point: at(order, j), up: at(ranks, j) - 1 };
     }
@@ -463,7 +463,7 @@ kernel mesh.cluster_deviation@1 {
     requires { field.read; field.write; }
     input deviation: Rows<Float>;
     output result: Rows<Float>;
-    compute { return sample(deviation); }
+    compute over deviation { return sample(deviation); }
     merge(a, b) { return max(a, b); }
 }
 
@@ -564,7 +564,7 @@ kernel mesh.cluster_run_starts@1 {
     input order: Rows<Int>;
     input keys: Rows<Int>;
     output result: Rows<Int>;
-    prefix with max {
+    prefix over order with max {
         let j = element();
         return if j == 0 || at(keys, at(order, j)) != at(keys, at(order, j - 1)) { j } else { 0 };
     }
@@ -677,7 +677,7 @@ kernel mesh.cluster_point_errors@1 {
     param level: Int = 0;
     output result: Rows<Float>;
     struct Far { brick: Int; error: Float; }
-    scatter into blank with max {
+    scatter over points into blank with max {
         let f = at(frame, 0);
         let b = mesh_cluster_brick(f, sample(points).position, level);
         return Far { brick: mesh_cluster_pack(b, mesh_brick_widths(f.bits, level)), error: at(deviation, element()) };
@@ -722,7 +722,7 @@ kernel mesh.cluster_brick_areas@1 {
     param level: Int = 0;
     output result: Rows<Float>;
     struct Area { brick: Int; area: Float; }
-    scatter into blank with sum {
+    scatter over faces into blank with sum {
         let f = at(frame, 0);
         let e = element() / mesh_area_tables();
         let g = at(faces, e);

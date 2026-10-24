@@ -46,7 +46,7 @@ node every: kernel {
     input bounds: Rows<Bounds> <- bounds.result;
     input bodies: Rows<Body> <- start.result;
     output result: Rows<Int>;
-    compute {
+    compute over bounds {
         let j = element();
         let bj = sample(bounds);
         return loop j with n = 0 {
@@ -63,7 +63,7 @@ node out: kernel {
     requires { field.read; field.write; }
     input bodies: Rows<Body> <- world.result;
     output result: Rows<Int>;
-    compute {
+    compute over bodies {
         let b = sample(bodies);
         return int(b.shape == 0 && (b.position.y < 0.0 || abs(b.position.x) > 15.0));
     }

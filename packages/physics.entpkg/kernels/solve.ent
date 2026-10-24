@@ -209,7 +209,7 @@ kernel physics.pushes@1 {
     input manifolds: Rows<Manifold>;
     input zeros: Rows<Vec3>;
     output result: Rows<Vec3>;
-    scatter into zeros with sum {
+    scatter over manifolds into zeros with sum {
         let m = at(manifolds, element() / 2);
         let first = element() % 2 == 0;
         return Push { at: if solid(m) { if first { m.a } else { m.b } } else { -1 }, value: if first { m.push_a } else { m.push_b } };

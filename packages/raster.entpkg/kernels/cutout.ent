@@ -18,7 +18,7 @@ kernel raster.cover_cutout@3 {
     param tile: Int = 0;
     output result: Grid<Long>;
     struct Hit { pixel: Vec2; key: Long; }
-    scatter into keys with min {
+    scatter over triangles into keys with min {
         let t = element();
         let k = corners(sample(triangles), vertices, size(keys));
         let b = at(boxes, t);
@@ -55,7 +55,7 @@ kernel raster.cover_cutout@4 {
     param cutout: Float = 0.5;
     output result: Grid<Long>;
     struct Hit { pixel: Vec2; key: Long; }
-    scatter into keys with min {
+    scatter over triangles into keys with min {
         let t = element();
         let k = corners(sample(triangles), vertices, size(keys));
         let b = boxed(k, size(keys));
@@ -95,7 +95,7 @@ kernel raster.cover_cutout_tiles@2 {
     param tile: Int = 16;
     output result: Grid<Long>;
     struct Hit { pixel: Vec2; key: Long; }
-    scatter into keys with min {
+    scatter over triangles into keys with min {
         let none = Hit { pixel: vec2(-1.0, -1.0), key: 0l };
         let size = size(keys);
         let texels = size(mask);

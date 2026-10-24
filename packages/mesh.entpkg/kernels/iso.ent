@@ -57,7 +57,7 @@ kernel mesh.iso_slots@1 {
     input blank: Rows<Int>;
     output result: Rows<Int>;
     struct Slot { at: Int; value: Int; }
-    scatter into blank with max { return Slot { at: sample(kept), value: element() }; }
+    scatter over kept into blank with max { return Slot { at: sample(kept), value: element() }; }
 }
 
 /// The point of each crossed cell: where its edges' crossings average,

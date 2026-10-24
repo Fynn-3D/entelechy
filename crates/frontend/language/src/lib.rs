@@ -66,7 +66,7 @@ pub use rename::renamed_type;
 pub use scope::{Declarations, Qualified, Source, qualified, scope, written_name};
 
 /// The version of the Kernel language and the document format.
-pub const LANGUAGE_VERSION: u32 = 1;
+pub const LANGUAGE_VERSION: u32 = 2;
 
 /// `package name@version { language = N; ir = N; }`: a package manifest.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -539,17 +539,20 @@ pub struct Kernel {
     pub types: Vec<TypeAlias>,
     /// Helper functions in declaration order.
     pub functions: Vec<FnDecl>,
+    /// `over name`: the input a scan, scatter, prefix or reduction walks,
+    /// one body run per element of it, after its mode's word.
+    pub over: Option<Spanned<String>>,
     /// The per-element body.
     pub compute: Block,
     /// `merge(a, b) { ... }`: a reduction's fold of two results.
     pub merge: Option<MergeDecl>,
-    /// `scan with name = init { ... }`: a scan's value carried through
+    /// `scan over input with name = init { ... }`: a scan's value carried through
     /// the elements in order.
     pub carry: Option<CarryDecl>,
-    /// `scatter into base with combine { ... }`: a scatter, whose
-    /// `compute` yields an address and a value per first-input element.
+    /// `scatter over input into base with combine { ... }`: a scatter,
+    /// whose `compute` yields an address and a value per walked element.
     pub scatter: Option<ScatterDecl>,
-    /// `prefix with combine { ... }`: a prefix fold.
+    /// `prefix over input with combine { ... }`: a prefix fold.
     pub prefix: Option<PrefixDecl>,
     /// `group N { ... }`: elements in groups of `N` that hand each other
     /// values through `exchange`.
@@ -576,7 +579,7 @@ pub struct PrefixDecl {
     pub span: Span,
 }
 
-/// `scatter into base with combine { ... }`.
+/// `scatter over input into base with combine { ... }`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScatterDecl {
     /// The input port the output starts from.

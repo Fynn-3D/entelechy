@@ -370,7 +370,7 @@ fn a_struct_names_one_declared_after_it() {
 #[test]
 fn merge_makes_a_reduction_and_is_checked() {
     let module = compile(
-        "kernel test.mean@1 { requires { field.read; field.write; } input source: Image; output result: Rows<Vec2>; compute { let c = sample(source); return vec2(c.r, 1.0); } merge(a, b) { return a + b; } }",
+        "kernel test.mean@1 { requires { field.read; field.write; } input source: Image; output result: Rows<Vec2>; compute over source { let c = sample(source); return vec2(c.r, 1.0); } merge(a, b) { return a + b; } }",
     )
     .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(module.manifest.mode, entelechy_ir::Mode::Reduce);
@@ -379,19 +379,22 @@ fn merge_makes_a_reduction_and_is_checked() {
     assert!(text.contains("fn merge(arg0: Vec2, arg1: Vec2)"), "{text}");
 
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.read; field.write; } input source: Image; output result: Image; compute { return sample(source); } merge(a, b) { return a + b; } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input source: Image; output result: Image; compute over source { return sample(source); } merge(a, b) { return a + b; } }",
     );
     assert!(message.contains("must be `Rows<T>`"), "{message}");
     let (_, message) = semantic(
         "kernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return 1.0; } merge(a, b) { return a + b; } }",
     );
-    assert!(message.contains("maps over its first input"), "{message}");
+    assert!(
+        message.contains("an input it names after `compute`; declare one"),
+        "{message}"
+    );
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.read; field.write; } input source: Image; output result: Rows<Float>; compute { return 1.0; } merge(a, b) { return vec2(a, b); } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input source: Image; output result: Rows<Float>; compute over source { return 1.0; } merge(a, b) { return vec2(a, b); } }",
     );
     assert!(message.contains("`merge` must give a Float"), "{message}");
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.read; field.write; } input source: Rows<Float>; output result: Rows<Float>; compute { return coord().x; } merge(a, b) { return a + b; } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input source: Rows<Float>; output result: Rows<Float>; compute over source { return coord().x; } merge(a, b) { return a + b; } }",
     );
     assert!(message.contains("use `element()`"), "{message}");
 }
@@ -399,7 +402,7 @@ fn merge_makes_a_reduction_and_is_checked() {
 #[test]
 fn scan_carries_a_value_and_is_checked() {
     let module = compile(
-        "kernel test.prefix@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan with total = 0 { return total + sample(rows); } }",
+        "kernel test.prefix@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan over rows with total = 0 { return total + sample(rows); } }",
     )
     .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(module.manifest.mode, entelechy_ir::Mode::Scan);
@@ -409,19 +412,19 @@ fn scan_carries_a_value_and_is_checked() {
     assert!(text.contains("carried"), "{text}");
 
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Image; scan with total = 0 { return total; } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Image; scan over rows with total = 0 { return total; } }",
     );
     assert!(message.contains("produces a `Rows` output"), "{message}");
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan with total = 0.5 { return total; } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan over rows with total = 0.5 { return total; } }",
     );
     assert!(message.contains("initial value is Float"), "{message}");
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan with total = 0 { return total; } merge(a, b) { return a + b; } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan over rows with total = 0 { return total; } merge(a, b) { return a + b; } }",
     );
     assert!(message.contains("not both"), "{message}");
     let error = compile(
-        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; compute { return 1; } scan with total = 0 { return total; } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; compute { return 1; } scan over rows with total = 0 { return total; } }",
     )
     .unwrap_err();
     assert!(
@@ -604,7 +607,7 @@ fn remainder_widening_and_vector_equality_type_check() {
 #[test]
 fn a_prefix_names_a_rule_that_folds_in_any_order() {
     let module = compile(
-        "kernel test.rank@1 { requires { field.read; field.write; } input flags: Rows<Int>; output result: Rows<Int>; prefix with sum { return sample(flags); } }",
+        "kernel test.rank@1 { requires { field.read; field.write; } input flags: Rows<Int>; output result: Rows<Int>; prefix over flags with sum { return sample(flags); } }",
     )
     .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(
@@ -618,25 +621,25 @@ fn a_prefix_names_a_rule_that_folds_in_any_order() {
 
     // Each refusal says what to write instead.
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Float>; output result: Rows<Float>; prefix with sum { return sample(rows); } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Float>; output result: Rows<Float>; prefix over rows with sum { return sample(rows); } }",
     );
     assert!(message.contains("walk it with `scan`"), "{message}");
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; prefix with last { return sample(rows); } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; prefix over rows with last { return sample(rows); } }",
     );
     assert!(message.contains("write a `compute` block"), "{message}");
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; prefix with average { return sample(rows); } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; prefix over rows with average { return sample(rows); } }",
     );
     assert!(message.contains("`sum`, `min`, or `max`"), "{message}");
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.read; field.write; } input cells: Grid<Int>; output result: Grid<Int>; prefix with sum { return sample(cells); } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input cells: Grid<Int>; output result: Grid<Int>; prefix over cells with sum { return sample(cells); } }",
     );
     assert!(message.contains("`Rows<T>` input"), "{message}");
     // A float touched only by `min` or `max` is accepted: they order
     // floats the same everywhere.
     compile(
-        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Float>; output result: Rows<Float>; prefix with max { return sample(rows); } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Float>; output result: Rows<Float>; prefix over rows with max { return sample(rows); } }",
     )
     .unwrap_or_else(|error| panic!("{error}"));
 }
@@ -644,7 +647,7 @@ fn a_prefix_names_a_rule_that_folds_in_any_order() {
 #[test]
 fn scatter_names_its_target_and_rule_and_is_checked() {
     let module = compile(
-        "kernel test.splat@1 { requires { field.read; field.write; } input drops: Rows<Vec2>; input canvas: Grid<Float>; output result: Grid<Float>; struct Splat { cell: Vec2; mass: Float; } scatter into canvas with sum { return Splat { cell: sample(drops), mass: 1.0 }; } }",
+        "kernel test.splat@1 { requires { field.read; field.write; } input drops: Rows<Vec2>; input canvas: Grid<Float>; output result: Grid<Float>; struct Splat { cell: Vec2; mass: Float; } scatter over drops into canvas with sum { return Splat { cell: sample(drops), mass: 1.0 }; } }",
     )
     .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(
@@ -661,36 +664,36 @@ fn scatter_names_its_target_and_rule_and_is_checked() {
     );
 
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.read; field.write; } input drops: Rows<Vec2>; input canvas: Grid<Float>; output result: Grid<Float>; struct Splat { cell: Vec2; mass: Float; } scatter into nowhere with sum { return Splat { cell: sample(drops), mass: 1.0 }; } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input drops: Rows<Vec2>; input canvas: Grid<Float>; output result: Grid<Float>; struct Splat { cell: Vec2; mass: Float; } scatter over drops into nowhere with sum { return Splat { cell: sample(drops), mass: 1.0 }; } }",
     );
     assert!(message.contains("not an input"), "{message}");
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.read; field.write; } input drops: Rows<Vec2>; input canvas: Grid<Float>; output result: Grid<Float>; struct Splat { cell: Vec2; mass: Float; } scatter into canvas with average { return Splat { cell: sample(drops), mass: 1.0 }; } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input drops: Rows<Vec2>; input canvas: Grid<Float>; output result: Grid<Float>; struct Splat { cell: Vec2; mass: Float; } scatter over drops into canvas with average { return Splat { cell: sample(drops), mass: 1.0 }; } }",
     );
     assert!(
         message.contains("`sum`, `min`, `max`, or `last`"),
         "{message}"
     );
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.read; field.write; } input drops: Rows<Vec2>; input canvas: Grid<Float>; output result: Image; struct Splat { cell: Vec2; mass: Float; } scatter into canvas with sum { return Splat { cell: sample(drops), mass: 1.0 }; } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input drops: Rows<Vec2>; input canvas: Grid<Float>; output result: Image; struct Splat { cell: Vec2; mass: Float; } scatter over drops into canvas with sum { return Splat { cell: sample(drops), mass: 1.0 }; } }",
     );
     assert!(
         message.contains("shaped and laid out like `canvas`"),
         "{message}"
     );
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.read; field.write; } input drops: Rows<Vec2>; input canvas: Grid<Float>; output result: Grid<Float>; struct Splat { cell: Int; mass: Float; } scatter into canvas with sum { return Splat { cell: 1, mass: 1.0 }; } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input drops: Rows<Vec2>; input canvas: Grid<Float>; output result: Grid<Float>; struct Splat { cell: Int; mass: Float; } scatter over drops into canvas with sum { return Splat { cell: 1, mass: 1.0 }; } }",
     );
     assert!(
         message.contains("an address (Vec2) and a value (Float)"),
         "{message}"
     );
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.read; field.write; } input drops: Rows<Vec2>; input flags: Grid<Bool>; output result: Grid<Bool>; struct Splat { cell: Vec2; on: Bool; } scatter into flags with sum { return Splat { cell: sample(drops), on: true }; } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input drops: Rows<Vec2>; input flags: Grid<Bool>; output result: Grid<Bool>; struct Splat { cell: Vec2; on: Bool; } scatter over drops into flags with sum { return Splat { cell: sample(drops), on: true }; } }",
     );
     assert!(message.contains("scatter with `last`"), "{message}");
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.read; field.write; } input drops: Rows<Vec2>; input canvas: Grid<Float>; output result: Grid<Float>; struct Splat { cell: Vec2; mass: Float; } scatter into canvas with sum { return Splat { cell: sample(drops), mass: 1.0 }; } merge(a, b) { return a + b; } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input drops: Rows<Vec2>; input canvas: Grid<Float>; output result: Grid<Float>; struct Splat { cell: Vec2; mass: Float; } scatter over drops into canvas with sum { return Splat { cell: sample(drops), mass: 1.0 }; } merge(a, b) { return a + b; } }",
     );
     assert!(message.contains("not both"), "{message}");
 }
@@ -725,7 +728,7 @@ fn bit_operators_take_ints_only() {
 #[test]
 fn memories_are_ordered_work_written_with_put() {
     let module = compile(
-        "kernel test.tally@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { let cell = index() % 4; let v = at(ram, cell) + 1; put(ram, cell, v); return acc + v; } }",
+        "kernel test.tally@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; scan over ticks with acc = 0 { let cell = index() % 4; let v = at(ram, cell) + 1; put(ram, cell, v); return acc + v; } }",
     )
     .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(module.manifest.memories, ["ram"]);
@@ -743,32 +746,32 @@ fn memories_are_ordered_work_written_with_put() {
     );
     assert!(message.contains("needs ordered work"), "{message}");
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.read; field.write; } input ticks: Rows<Int>; input ram: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { put(ram, 0, 1); return acc; } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input ticks: Rows<Int>; input ram: Rows<Int>; output result: Rows<Int>; scan over ticks with acc = 0 { put(ram, 0, 1); return acc; } }",
     );
     assert!(message.contains("is not one"), "{message}");
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { put(ram, 0.5, 1); return acc; } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; scan over ticks with acc = 0 { put(ram, 0.5, 1); return acc; } }",
     );
     assert!(message.contains("it takes Int"), "{message}");
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { put(ram, 0, 1.5); return acc; } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; scan over ticks with acc = 0 { put(ram, 0, 1.5); return acc; } }",
     );
     assert!(message.contains("whose element is Int"), "{message}");
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.read; field.write; } memory ram: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { return acc; } }",
+        "kernel t.k@1 { requires { field.read; field.write; } memory ram: Rows<Int>; output result: Rows<Int>; scan over ram with acc = 0 { return acc; } }",
     );
-    assert!(message.contains("cannot be a memory"), "{message}");
+    assert!(message.contains("cannot be walked"), "{message}");
 }
 
 #[test]
 fn a_function_writes_a_memory_for_the_steps_but_init_does_not() {
     let prefix = "kernel t.k@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; fn store(m: Rows<Int>, a: Int, v: Int) -> Int { return put(m, a, v); }";
     compile(&format!(
-        "{prefix} scan with acc = 0 {{ store(ram, index(), acc); return acc + 1; }} }}"
+        "{prefix} scan over ticks with acc = 0 {{ store(ram, index(), acc); return acc + 1; }} }}"
     ))
     .unwrap_or_else(|error| panic!("{error}"));
     let message = compile(&format!(
-        "{prefix} scan with acc = store(ram, 0, 1) {{ return acc + 1; }} }}"
+        "{prefix} scan over ticks with acc = store(ram, 0, 1) {{ return acc + 1; }} }}"
     ))
     .unwrap_err()
     .to_string();
@@ -820,7 +823,7 @@ fn a_nested_loop_reads_the_enclosing_loops_carried_value() {
     // scan's step reads its own carried value inside a loop.
     compile("kernel t.k@1 { requires { field.write; } output r: Rows<Int>; compute { return loop 3 with outer = 1 { loop 2 with inner = outer { inner + outer } }; } }")
         .unwrap_or_else(|error| panic!("{error}"));
-    compile("kernel t.s@1 { requires { field.read; field.write; } input rows: Rows<Int>; output r: Rows<Int>; scan with acc = 0 { return loop 2 with k = acc { k + acc + sample(rows) }; } }")
+    compile("kernel t.s@1 { requires { field.read; field.write; } input rows: Rows<Int>; output r: Rows<Int>; scan over rows with acc = 0 { return loop 2 with k = acc { k + acc + sample(rows) }; } }")
         .unwrap_or_else(|error| panic!("{error}"));
 }
 
@@ -1135,7 +1138,7 @@ fn integer_vectors_address_fields_without_conversions_in_the_source() {
             input seeds: Rows<Int>; input canvas: Grid<Int>;
             output r: Grid<Int>;
             struct Drop { at: IVec2; value: Int; }
-            scatter into canvas with sum {
+            scatter over seeds into canvas with sum {
                 let i = element();
                 return Drop { at: ivec2(i % 8, i / 8), value: 1 };
             } }",
@@ -1278,7 +1281,7 @@ fn pads_is_a_builtin_a_function_may_stand_for() {
 #[test]
 fn a_manifest_says_what_its_ports_hold_by_name() {
     let module = compile(
-        "kernel t.k@1 { requires { field.read; field.write; } struct Note { at: Float; pitch: Int; } input song: Rows<Note>; memory desk: Rows<Note>; output result: Rows<Note>; scan with n = Note { at: 0.0, pitch: 0 } { let here = at(song, index()); put(desk, index(), here); return here; } }",
+        "kernel t.k@1 { requires { field.read; field.write; } struct Note { at: Float; pitch: Int; } input song: Rows<Note>; memory desk: Rows<Note>; output result: Rows<Note>; scan over song with n = Note { at: 0.0, pitch: 0 } { let here = at(song, index()); put(desk, index(), here); return here; } }",
     )
     .unwrap_or_else(|error| panic!("{error}"));
     let named = module.manifest.named(&module.structs).to_string();
@@ -1432,7 +1435,7 @@ fn several_outputs_are_a_maps_and_are_checked() {
     let reduce = semantic(
         "kernel s.r@1 { requires { field.read; field.write; } input a: Rows<Float>;
             output sum: Rows<Float>; output most: Rows<Float>;
-            compute { return sample(a); } merge(x, y) { return x + y; } }",
+            compute over a { return sample(a); } merge(x, y) { return x + y; } }",
     );
     assert!(
         reduce.1.contains("a reduction folds one element"),
@@ -1443,7 +1446,7 @@ fn several_outputs_are_a_maps_and_are_checked() {
     let scan = semantic(
         "kernel s.s@1 { requires { field.read; field.write; } input a: Rows<Float>;
             output y: Rows<Float>; output z: Rows<Float>;
-            scan with acc = 0.0 { return acc + sample(a); } }",
+            scan over a with acc = 0.0 { return acc + sample(a); } }",
     );
     assert!(scan.1.contains("a scan carries one value"), "{}", scan.1);
     let shapes = semantic(
@@ -1518,7 +1521,7 @@ fn a_port_keeps_its_scalars_as_the_type_says() {
     let folded = semantic(
         "kernel k.r@1 { requires { field.read; field.write; } input a: Rows<Float>;
             output r: Rows<Float as f16>;
-            compute { return sample(a); } merge(x, y) { return x + y; } }",
+            compute over a { return sample(a); } merge(x, y) { return x + y; } }",
     );
     assert!(
         folded.1.contains("folds into its output in place"),
@@ -1711,7 +1714,7 @@ fn emit_belongs_to_a_scatter_whose_rule_ignores_order() {
             "kernel test.keep@1 {{ requires {{ field.read; field.write; }}
             input values: Rows<Float>; input slots: Rows<Float>; output result: Rows<Float>;
             struct Put {{ at: Int; value: Float; }}
-            scatter into slots with {rule} {{
+            scatter over values into slots with {rule} {{
                 emit(Put {{ at: 0, value: sample(values) }});
                 return Put {{ at: -1, value: 0.0 }};
             }} }}"
@@ -1722,7 +1725,7 @@ fn emit_belongs_to_a_scatter_whose_rule_ignores_order() {
     let wrong = "kernel test.shape@1 { requires { field.read; field.write; }
         input values: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>;
         struct Put { at: Int; value: Int; }
-        scatter into slots with max {
+        scatter over values into slots with max {
             emit(sample(values));
             return Put { at: -1, value: 0 };
         } }";
@@ -1741,7 +1744,7 @@ fn a_helper_the_kernel_never_calls_is_not_in_its_module() {
          fn twice(x: Int) -> Int { return x + x; }
          fn quad(x: Int) -> Int { return twice(twice(x)); }
          input counts: Rows<Int>; output result: Rows<Int>;
-         prefix with sum { return quad(sample(counts)); } }",
+         prefix over counts with sum { return quad(sample(counts)); } }",
     )
     .unwrap();
     assert!(!module.holds(Type::Long));
@@ -1755,7 +1758,7 @@ fn a_helper_the_kernel_never_calls_is_not_in_its_module() {
         "kernel t.rank@1 { requires { field.read; field.write; }
          fn keyed(z: Float, t: Int) -> Long { return (long(bits(z)) << 32) | long(t); }
          input counts: Rows<Int>; output result: Rows<Int>;
-         prefix with sum { return sample(counts); } }",
+         prefix over counts with sum { return sample(counts); } }",
     )
     .unwrap();
     assert!(

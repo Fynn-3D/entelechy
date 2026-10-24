@@ -58,7 +58,7 @@ node flat: kernel {
     input c: Grid<Surface> <- cut.surface;
     input d: Grid<Surface> <- cut_tiled.surface;
     output result: Rows<Int>;
-    compute {
+    compute over a {
         let ids = [sample(a).id, sample(b).id, sample(c).id, sample(d).id];
         let wrong = [each 4 { int(ids[index()] >= 0 && ids[index()] % 3 != 0) }];
         return wrong[0] + wrong[1] + wrong[2] + wrong[3];
@@ -75,7 +75,7 @@ node split: kernel {
     input c: Grid<Surface> <- cut.surface;
     input d: Grid<Surface> <- cut_tiled.surface;
     output result: Rows<Int>;
-    compute {
+    compute over a {
         let p = sample(a);
         let q = sample(b);
         let r = sample(c);
@@ -91,7 +91,7 @@ node drawn: kernel {
     requires { field.read; field.write; }
     input a: Grid<Surface> <- whole.surface;
     output result: Rows<Int>;
-    compute { return int(sample(a).id >= 0); }
+    compute over a { return int(sample(a).id >= 0); }
     merge(a, b) { return a + b; }
 }
 

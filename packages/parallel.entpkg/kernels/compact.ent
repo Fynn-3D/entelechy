@@ -28,7 +28,7 @@ kernel parallel.compact_offsets@1 {
     requires { field.read; field.write; }
     input flags: Rows<Int>;
     output result: Rows<Int>;
-    prefix with sum {
+    prefix over flags with sum {
         return int(sample(flags) != 0);
     }
 }
@@ -39,7 +39,7 @@ kernel parallel.compact_total@1 {
     requires { field.read; field.write; }
     input flags: Rows<Int>;
     output result: Rows<Int>;
-    compute { return int(sample(flags) != 0); }
+    compute over flags { return int(sample(flags) != 0); }
     merge(a, b) { return a + b; }
 }
 
@@ -64,7 +64,7 @@ kernel parallel.compact_gather@1 {
     input slots: Rows<Int>;
     output result: Rows<Int>;
     struct Kept { slot: Int; index: Int; }
-    scatter into slots with max {
+    scatter over flags into slots with max {
         let i = element();
         let keep = at(flags, i) != 0;
         return Kept { slot: if keep { at(offsets, i) - 1 } else { -1 }, index: i };

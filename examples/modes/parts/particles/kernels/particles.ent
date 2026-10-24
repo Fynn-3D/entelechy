@@ -92,7 +92,7 @@ kernel particles.splat@1 {
     input canvas: Canvas;
     output result: Canvas;
     struct Splat { cell: Vec2; heat: Vec3; }
-    scatter into canvas with sum {
+    scatter over particles into canvas with sum {
         let p = sample(particles);
         let tint = mix(vec3(1.0, 0.85, 0.3), vec3(0.3, 0.5, 1.0), saturate(p.age / 6.0));
         return Splat { cell: floor(p.position * size(canvas)), heat: tint };

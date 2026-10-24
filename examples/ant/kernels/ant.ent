@@ -23,7 +23,7 @@ kernel ant.walk@1 {
     memory cells: Cells;
     memory ant: Rows<Int>;
     output result: Rows<Ant>;
-    scan with a = Ant { at: ivec2(at(ant, 0), at(ant, 1)), dir: at(ant, 2) } {
+    scan over ticks with a = Ant { at: ivec2(at(ant, 0), at(ant, 1)), dir: at(ant, 2) } {
         let moves = [ivec2(0, -1), ivec2(1, 0), ivec2(0, 1), ivec2(-1, 0)];
         let color = at(cells, a.at);
         put(cells, a.at, 1 - color);

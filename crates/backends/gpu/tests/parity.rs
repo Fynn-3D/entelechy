@@ -588,7 +588,7 @@ fn reductions_match_between_backends() {
     let Some(gpu) = gpu() else { return };
     // Ints exactly, floats within the tree's rounding, over an odd count
     // (the tail path) and an image (a grid map).
-    let source = "kernel test.stats@1 { requires { field.read; field.write; } input source: Image; output result: Rows<Stats>; struct Stats { bright: Int; sum: Vec4; max: Float; } compute { let c = sample(source); let l = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722; return Stats { bright: if l > 0.5 { 1 } else { 0 }, sum: c, max: l }; } merge(a, b) { return Stats { bright: a.bright + b.bright, sum: a.sum + b.sum, max: max(a.max, b.max) }; } }";
+    let source = "kernel test.stats@1 { requires { field.read; field.write; } input source: Image; output result: Rows<Stats>; struct Stats { bright: Int; sum: Vec4; max: Float; } compute over source { let c = sample(source); let l = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722; return Stats { bright: if l > 0.5 { 1 } else { 0 }, sum: c, max: l }; } merge(a, b) { return Stats { bright: a.bright + b.bright, sum: a.sum + b.sum, max: max(a.max, b.max) }; } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let (width, height) = (37, 23);
     let mut host = Host::new(1 << 20);
@@ -655,11 +655,11 @@ fn reductions_match_between_backends() {
 fn prefixes_match_between_backends() {
     let Some(gpu) = gpu() else { return };
     let sum = compile(
-        "kernel test.prefix_sum@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; prefix with sum { return sample(rows); } }",
+        "kernel test.prefix_sum@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; prefix over rows with sum { return sample(rows); } }",
     )
     .unwrap_or_else(|error| panic!("{error}"));
     let worst = compile(
-        "kernel test.prefix_max@1 { requires { field.read; field.write; } input rows: Rows<Run>; output result: Rows<Run>; struct Run { i: Int; f: Float; } prefix with max { return sample(rows); } }",
+        "kernel test.prefix_max@1 { requires { field.read; field.write; } input rows: Rows<Run>; output result: Rows<Run>; struct Run { i: Int; f: Float; } prefix over rows with max { return sample(rows); } }",
     )
     .unwrap_or_else(|error| panic!("{error}"));
     // 1 and 10 are one block; 5000 is seventy-one with a ragged last;
@@ -753,7 +753,7 @@ fn on_both(
 fn scans_match_between_backends() {
     let Some(gpu) = gpu() else { return };
     // A prefix sum of ints (exact) and a one-pole filter (rounding only).
-    let source = "kernel test.scan@1 { requires { field.read; field.write; } input rows: Rows<Item>; param k: Float = 0.1; output result: Rows<Run>; struct Item { value: Int; x: Float; } struct Run { total: Int; y: Float; } scan with run = Run { total: 0, y: 0.0 } { let it = sample(rows); return Run { total: run.total + it.value, y: run.y + (it.x - run.y) * k }; } }";
+    let source = "kernel test.scan@1 { requires { field.read; field.write; } input rows: Rows<Item>; param k: Float = 0.1; output result: Rows<Run>; struct Item { value: Int; x: Float; } struct Run { total: Int; y: Float; } scan over rows with run = Run { total: 0, y: 0.0 } { let it = sample(rows); return Run { total: run.total + it.value, y: run.y + (it.x - run.y) * k }; } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let count = 801u32;
     let words: Vec<u32> = (0..count)
@@ -916,7 +916,7 @@ fn scatters_match_between_backends() {
     // Several drops per cell of a small grid, so both backends follow one
     // float summation order; a struct target under `max` with ints; `last`
     // over rows.
-    let source = "kernel test.splat@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input canvas: Grid<Cell>; output result: Grid<Cell>; struct Drop { at: Vec2; weight: Float; id: Int; } struct Cell { mass: Float; top: Int; } struct Splat { cell: Vec2; value: Cell; } scatter into canvas with sum { let d = sample(drops); return Splat { cell: d.at, value: Cell { mass: d.weight, top: d.id } }; } }";
+    let source = "kernel test.splat@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input canvas: Grid<Cell>; output result: Grid<Cell>; struct Drop { at: Vec2; weight: Float; id: Int; } struct Cell { mass: Float; top: Int; } struct Splat { cell: Vec2; value: Cell; } scatter over drops into canvas with sum { let d = sample(drops); return Splat { cell: d.at, value: Cell { mass: d.weight, top: d.id } }; } }";
     let count = 2000u32;
     let drop_words: Vec<u32> = (0..count)
         .flat_map(|i| {
@@ -999,7 +999,7 @@ fn scatters_match_between_backends() {
     }
     // Ints sum with atomics in parallel; floats with NaN and both zeros
     // meet `min` and `max` in one total order, in any arrival order.
-    let counting = "kernel test.count@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input grid: Grid<Tally>; output result: Grid<Tally>; struct Drop { at: Vec2; weight: Float; id: Int; } struct Tally { hits: Int; ids: Int; } struct Splat { cell: Vec2; value: Tally; } scatter into grid with sum { let d = sample(drops); return Splat { cell: d.at, value: Tally { hits: 1, ids: d.id } }; } }";
+    let counting = "kernel test.count@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input grid: Grid<Tally>; output result: Grid<Tally>; struct Drop { at: Vec2; weight: Float; id: Int; } struct Tally { hits: Int; ids: Int; } struct Splat { cell: Vec2; value: Tally; } scatter over drops into grid with sum { let d = sample(drops); return Splat { cell: d.at, value: Tally { hits: 1, ids: d.id } }; } }";
     let module = compile(counting).unwrap_or_else(|error| panic!("{error}"));
     let tally_schema =
         entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int, entelechy_abi::Scalar::Int]);
@@ -1140,7 +1140,7 @@ fn scatters_match_between_backends() {
     assert!(landed > 100_000, "ids summed: {landed}");
 
     // Floats with NaN and both zeros under `min` and `max`, Float target.
-    let source = "kernel test.low@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input grid: Grid<Float>; output result: Grid<Float>; struct Drop { at: Vec2; weight: Float; id: Int; } struct Splat { cell: Vec2; value: Float; } scatter into grid with min { let d = sample(drops); return Splat { cell: d.at, value: d.weight }; } }";
+    let source = "kernel test.low@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input grid: Grid<Float>; output result: Grid<Float>; struct Drop { at: Vec2; weight: Float; id: Int; } struct Splat { cell: Vec2; value: Float; } scatter over drops into grid with min { let d = sample(drops); return Splat { cell: d.at, value: d.weight }; } }";
     for combine in ["min", "max"] {
         let module = compile(&source.replace("with min", &format!("with {combine}"))).unwrap();
         let mut host = Host::new(1 << 20);
@@ -1197,7 +1197,7 @@ fn memories_match_between_backends() {
     let Some(gpu) = gpu() else { return };
     // A machine toggles grid-memory cells and steps by what it reads, and
     // tallies ints in a rows memory; both memories match on both backends.
-    let source = "kernel test.walk@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory screen: Grid<Int>; memory tally: Rows<Cell>; output result: Rows<Vec2>; struct Cell { hits: Int; last: Float; } fn flip(s: Grid<Int>, p: Vec2, seen: Int) -> Int { return put(s, p, (1 - seen) >>> 0); } scan with at_ = vec2(3.0, 2.0) { let seen = at(screen, at_); flip(screen, at_, seen); let t = at(tally, seen); put(tally, seen, Cell { hits: t.hits + 1, last: float(index()) }); put(screen, vec2(-1.0, 0.0), 9); let next = vec2(float((int(at_.x) + 3 + seen * 5) % 16), float((int(at_.y) + 1 + seen) % 8)); return next; } }";
+    let source = "kernel test.walk@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory screen: Grid<Int>; memory tally: Rows<Cell>; output result: Rows<Vec2>; struct Cell { hits: Int; last: Float; } fn flip(s: Grid<Int>, p: Vec2, seen: Int) -> Int { return put(s, p, (1 - seen) >>> 0); } scan over ticks with at_ = vec2(3.0, 2.0) { let seen = at(screen, at_); flip(screen, at_, seen); let t = at(tally, seen); put(tally, seen, Cell { hits: t.hits + 1, last: float(index()) }); put(screen, vec2(-1.0, 0.0), 9); let next = vec2(float((int(at_.x) + 3 + seen * 5) % 16), float((int(at_.y) + 1 + seen) % 8)); return next; } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let steps = 300u32;
     let ints = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
@@ -1311,7 +1311,7 @@ fn a_step_reads_what_the_step_before_wrote_even_when_it_reads_first() {
     // Each step first reads the memory element the previous step wrote;
     // a barrier between steps keeps that load in the walk.
     let Some(gpu) = gpu() else { return };
-    let source = "kernel test.pc@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory regs: Rows<Int>; output result: Rows<Int>; scan with n = 0 { let pc = at(regs, 15); put(regs, 15, pc + 2); return pc; } }";
+    let source = "kernel test.pc@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory regs: Rows<Int>; output result: Rows<Int>; scan over ticks with n = 0 { let pc = at(regs, 15); put(regs, 15, pc + 2); return pc; } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let mut host = Host::new(1 << 16);
     let ints = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]);
@@ -1447,7 +1447,7 @@ fn a_merge_may_read_inputs_params_and_the_context() {
     let Some(gpu) = gpu() else { return };
     let source = "kernel test.fold@1 { requires { field.read; field.write; time.read; } input xs: Rows<Float>; input weights: Rows<Float>; param k: Float = 0.5; output result: Rows<Float>;
         fn first(w: Rows<Float>) -> Float { return at(w, 0); }
-        compute { return sample(xs) * at(weights, element()); }
+        compute over xs { return sample(xs) * at(weights, element()); }
         merge(a, b) { return a + b + at(weights, 1) * k + first(weights) + time(); } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let floats = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float]);
@@ -1718,7 +1718,7 @@ fn a_node_off_the_device_says_what_its_trip_carried() {
         "kernel t.map@1 { requires { field.write; } output result: Rows<Int>; compute { return element() * 2; } }",
     );
     let scan = publish(
-        "kernel t.scan@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { return acc + sample(rows); } }",
+        "kernel t.scan@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan over rows with acc = 0 { return acc + sample(rows); } }",
     );
     let back = publish(
         "kernel t.back@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; compute { return sample(rows) + 1; } }",
@@ -1825,7 +1825,7 @@ fn a_failure_on_the_device_is_the_reference_failure() {
         (map("let i = element(); return if i != 0 { 100 / i } else { 0 };", "Rows<Int>"), Domain::Rows(8)),
         (
             "kernel t.r@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>;
-                compute { return sample(rows); } merge(a, b) { return a + b; } }"
+                compute over rows { return sample(rows); } merge(a, b) { return a + b; } }"
                 .to_owned(),
             Domain::Rows(1),
         ),
@@ -2054,7 +2054,7 @@ fn passes_over_more_rows_than_one_dimension_holds_match() {
 
     let prefix = compile(
         "kernel test.rank@1 { requires { field.read; field.write; } input flags: Rows<Int>;
-         output result: Rows<Int>; prefix with sum { return sample(flags) % 3; } }",
+         output result: Rows<Int>; prefix over flags with sum { return sample(flags) % 3; } }",
     )
     .unwrap();
     let inputs = vec![source(&mut host)];
@@ -2063,7 +2063,7 @@ fn passes_over_more_rows_than_one_dimension_holds_match() {
 
     let reduce = compile(
         "kernel test.most@1 { requires { field.read; field.write; } input flags: Rows<Int>;
-         output result: Rows<Int>; compute { return sample(flags) * 3 + element() % 5; }
+         output result: Rows<Int>; compute over flags { return sample(flags) * 3 + element() % 5; }
          merge(a, b) { return max(a, b); } }",
     )
     .unwrap();
@@ -2076,7 +2076,7 @@ fn passes_over_more_rows_than_one_dimension_holds_match() {
             "kernel test.spread@1 {{ requires {{ field.read; field.write; }}
              input flags: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>;
              struct Put {{ slot: Int; value: Int; }}
-             scatter into slots with {rule} {{
+             scatter over flags into slots with {rule} {{
                  return Put {{ slot: element() % 1000, value: element() + sample(flags) }};
              }} }}"
         ))
@@ -2092,7 +2092,7 @@ fn passes_over_more_rows_than_one_dimension_holds_match() {
         "kernel test.pile@1 { requires { field.read; field.write; }
          input flags: Rows<Int>; input sums: Rows<Float>; output result: Rows<Float>;
          struct Add { slot: Int; value: Float; }
-         scatter into sums with sum {
+         scatter over flags into sums with sum {
              return Add { slot: element() % 1000, value: float(sample(flags)) * 0.5 };
          } }",
     )
@@ -2118,7 +2118,7 @@ fn long_extremes_land_as_the_references_do() {
              input keys: Rows<Int>; input slots: Rows<Deep>; output result: Rows<Deep>;
              struct Deep {{ near: Long; id: Long; }}
              struct Pair {{ at: Int; value: Deep; }}
-             scatter into slots with {rule} {{
+             scatter over keys into slots with {rule} {{
                  let k = sample(keys);
                  let wide = long(k % 4001 - 2000) * 3000000001l;
                  let _fan = loop k % 4 with j = 0 {{
@@ -2184,7 +2184,7 @@ fn emitted_pairs_land_as_the_references_do() {
             "kernel test.fan@1 {{ requires {{ field.read; field.write; }}
              input keys: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>;
              struct Pair {{ at: Int; value: Int; }}
-             scatter into slots with {rule} {{
+             scatter over keys into slots with {rule} {{
                  let k = sample(keys);
                  let _fan = loop k % 5 with j = 0 {{
                      emit(Pair {{ at: (k * 31 + j * 7) % 97, value: k % 1000 - j * 3 }});
@@ -2217,7 +2217,7 @@ fn emitted_pairs_land_as_the_references_do() {
             "kernel test.spray@1 {{ requires {{ field.read; field.write; }}
              input keys: Rows<Int>; input canvas: Grid<Float>; output result: Grid<Float>;
              struct Dot {{ at: Vec2; value: Float; }}
-             scatter into canvas with {rule} {{
+             scatter over keys into canvas with {rule} {{
                  let k = sample(keys);
                  let v = float(k % 2001 - 1000) * 0.25;
                  emit(Dot {{ at: vec2(float(k % 23), float(k % 11)), value: v }});
@@ -2265,7 +2265,7 @@ fn a_keyed_target_starts_from_every_word_of_its_base() {
              input keys: Rows<Int>; input cells: Rows<Cell>; output result: Rows<Cell>;
              struct Cell {{ f: Float; i: Int; }}
              struct Pair {{ at: Int; value: Cell; }}
-             scatter into cells with {rule} {{
+             scatter over keys into cells with {rule} {{
                  let k = sample(keys);
                  let v = float(k % 2001 - 1000) * 0.125;
                  emit(Pair {{ at: k % 89, value: Cell {{ f: v, i: k % 77 - 38 }} }});
@@ -2361,7 +2361,7 @@ fn inputs_past_the_devices_bindings_are_packed_and_read_where_they_are() {
             .collect();
         let body = format!("return {} / (element() % 7 + 1);", tree(&terms));
         let mode = if reduce {
-            format!("compute {{ {body} }} merge(a, b) {{ return a + b; }}")
+            format!("compute over f0 {{ {body} }} merge(a, b) {{ return a + b; }}")
         } else {
             format!("compute {{ {body} }}")
         };
@@ -2428,7 +2428,7 @@ fn inputs_past_the_devices_bindings_are_packed_and_read_where_they_are() {
     let module = compile(&format!(
         "kernel test.remember@1 {{ requires {{ field.read; field.write; }}
          input ticks: Rows<Int>; {ports} output result: Rows<Int>;
-         scan with acc = 0 {{ put(m0, 0, acc); put(m{last}, 0, acc); return acc + 1; }} }}",
+         scan over ticks with acc = 0 {{ put(m0, 0, acc); put(m{last}, 0, acc); return acc + 1; }} }}",
         last = memories - 1
     ))
     .unwrap_or_else(|error| panic!("{error}"));
@@ -2785,7 +2785,7 @@ fn a_scatter_gives_its_pairs_back_to_the_pile() {
     // they wait on the pile for the next run, not for a collector.
     let Some(gpu) = gpu() else { return };
     let module = compile(
-        "kernel t.splat@1 { requires { field.read; field.write; } input drops: Rows<Float>; input grid: Grid<Float>; output result: Grid<Float>; struct Splat { cell: Vec2; value: Float; } scatter into grid with sum { return Splat { cell: vec2(float(element() % 4), 0.0), value: sample(drops) }; } }",
+        "kernel t.splat@1 { requires { field.read; field.write; } input drops: Rows<Float>; input grid: Grid<Float>; output result: Grid<Float>; struct Splat { cell: Vec2; value: Float; } scatter over drops into grid with sum { return Splat { cell: vec2(float(element() % 4), 0.0), value: sample(drops) }; } }",
     )
     .unwrap();
     let prepared = gpu.prepare(&module).unwrap();

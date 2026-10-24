@@ -38,7 +38,7 @@ node differ: kernel {
     input plain: Image <- plain.result;
     input tiled: Image <- tiled.picture;
     output result: Rows<Int>;
-    compute { return if sample(plain) == sample(tiled) { 0 } else { 1 }; }
+    compute over plain { return if sample(plain) == sample(tiled) { 0 } else { 1 }; }
     merge(a, b) { return a + b; }
 }
 

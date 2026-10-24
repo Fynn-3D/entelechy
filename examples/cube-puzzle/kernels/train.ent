@@ -113,7 +113,7 @@ kernel train.grads@1 {
     input zeros: Batch;
     output result: Batch;
     struct Term { at: Int; value: Float; }
-    scatter into zeros with sum {
+    scatter over samples into zeros with sum {
         let e = element();
         let cube = e / weight_count();
         let k = e % weight_count();
@@ -149,7 +149,7 @@ kernel train.loss@1 {
     requires { field.read; field.write; }
     input delta: Batch;
     output result: Losses;
-    compute {
+    compute over delta {
         let d = sample(delta);
         return Loss { sum: 0.5 * d * d, count: 1 };
     }

@@ -223,6 +223,6 @@ kernel fluid.total@1 {
     requires { field.read; field.write; }
     input field: Amount;
     output result: Rows<Float>;
-    compute { return abs(sample(field)); }
+    compute over field { return abs(sample(field)); }
     merge(a, b) { return a + b; }
 }

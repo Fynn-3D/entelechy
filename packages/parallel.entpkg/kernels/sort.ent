@@ -46,7 +46,7 @@ kernel parallel.sort_zeros@1 {
     input keys: Rows<Int>;
     input bit: Rows<Int>;
     output result: Rows<Int>;
-    prefix with sum {
+    prefix over order with sum {
         let key = at(keys, sample(order));
         return int(((key >>> at(bit, 0)) & 1) == 0);
     }
@@ -66,7 +66,7 @@ kernel parallel.sort_place@1 {
     input slots: Rows<Int>;
     output result: Rows<Int>;
     struct Placed { slot: Int; index: Int; }
-    scatter into slots with max {
+    scatter over order into slots with max {
         let i = element();
         let index = at(order, i);
         let key = at(keys, index);

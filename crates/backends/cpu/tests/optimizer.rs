@@ -406,7 +406,7 @@ fn a_memory_the_steps_write_is_read_whole() {
         input rows: Rows<Int>;
         memory mem: Rows<Patch>;
         output result: Rows<Int>;
-        scan with acc = 0 {
+        scan over rows with acc = 0 {
             let seen = at(mem, index() % 4).label;
             put(mem, index() % 4, Patch { tally: acc, label: index() });
             return acc + seen + at(rows, index());

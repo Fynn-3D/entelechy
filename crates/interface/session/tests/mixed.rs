@@ -79,7 +79,7 @@ fn scans_go_to_the_ordered_backend_and_the_rest_stays() {
     let mut runtime = Runtime::with_backends(1 << 20, Box::new(main), Some(Box::new(ordered)));
     let map = prepare(&runtime, "kernel t.map@1 { requires { field.write; } output result: Rows<Int>; compute { return element() * 2; } }")
         .unwrap();
-    let scan = prepare(&runtime, "kernel t.scan@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { return acc + sample(rows); } }")
+    let scan = prepare(&runtime, "kernel t.scan@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan over rows with acc = 0 { return acc + sample(rows); } }")
         .unwrap();
     let map = runtime.publish(map, Expect::Absent).unwrap();
     let scan = runtime.publish(scan, Expect::Absent).unwrap();

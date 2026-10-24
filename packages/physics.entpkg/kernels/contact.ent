@@ -241,7 +241,7 @@ kernel physics.shared@1 {
     input manifolds: Rows<Manifold>;
     input zeros: Rows<Int>;
     output result: Rows<Int>;
-    scatter into zeros with sum {
+    scatter over manifolds into zeros with sum {
         let m = at(manifolds, element() / 2);
         let body = if element() % 2 == 0 { m.a } else { m.b };
         return Counted { at: if solid(m) { body } else { -1 }, value: 1 };

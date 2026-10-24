@@ -222,7 +222,7 @@ kernel surface.cluster_offsets@1 {
     requires { field.read; field.write; }
     input picks: Rows<IVec2>;
     output result: Rows<Int>;
-    prefix with sum { return sample(picks).y; }
+    prefix over picks with sum { return sample(picks).y; }
 }
 
 /// The candidate's thing and cluster: candidate `e` of `picks` (whose runs end at `ends`).

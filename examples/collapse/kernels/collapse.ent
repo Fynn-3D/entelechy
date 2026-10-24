@@ -56,7 +56,7 @@ kernel collapse.pick@1 {
     requires { field.read; field.write; }
     input cells: Grid<Int>;
     output result: Pick;
-    compute {
+    compute over cells {
         let { x, y } = icoord();
         let here = y * isize(cells).x + x;
         let left = popcount(sample(cells));
@@ -138,7 +138,7 @@ kernel collapse.tally@1 {
     requires { field.read; field.write; }
     input cells: Grid<Int>;
     output result: Rows<Float>;          // a float: the readout draws it
-    compute { return float(popcount(sample(cells)) == 1); }
+    compute over cells { return float(popcount(sample(cells)) == 1); }
     merge(a, b) { return a + b; }
 }
 

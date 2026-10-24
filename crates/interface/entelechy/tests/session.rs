@@ -1478,7 +1478,7 @@ fn the_binary_traces_one_step_of_a_scan_and_profiles_a_run() {
     memory ram: Rows<Int>;
     output result: Rows<Int>;
     fn bump(m: Rows<Int>, a: Int, v: Int) -> Int { let doubled = v * 2; put(m, a, v); return doubled; }
-    scan with acc = 0 {
+    scan over ticks with acc = 0 {
         let cell = index() % 4;
         let v = at(ram, cell) + 1;
         bump(ram, cell, v);
@@ -1822,14 +1822,14 @@ fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!output.status.success(), "{stdout}");
     assert!(
-        stdout.contains("package pixelfx@1 needs language 99, and this Entelechy has language 1"),
+        stdout.contains("package pixelfx@1 needs language 99, and this Entelechy has language 2"),
         "{stdout}"
     );
     let output = Command::new(entelechy).arg("version").output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.starts_with(&format!("entelechy = {}\n", env!("CARGO_PKG_VERSION")))
-            && stdout.contains("entelechy.language = 1")
+            && stdout.contains("entelechy.language = 2")
             && stdout.contains("entelechy.package = 1"),
         "{stdout}"
     );
@@ -2869,11 +2869,11 @@ output result <- w.result;",
 output result <- w.result;",
         "node s: Rows<Int> { domain = N; }
 node w: kernel { requires { field.read; field.write; } param steps: Int = S; input t: Rows<Int> <- s.result; output result: Rows<Int>;
-            scan with c = 0 { return c + loop steps with a = 0 { a + 1 }; } }
+            scan over t with c = 0 { return c + loop steps with a = 0 { a + 1 }; } }
 output result <- w.result;",
         "node s: Rows<Int> { domain = N; }
 node w: kernel { requires { field.read; field.write; } param steps: Int = S; input t: Rows<Int> <- s.result; output result: Rows<Int>;
-            compute { return loop steps with a = 0 { a + 1 }; } merge(a, b) { return a + b; } }
+            compute over t { return loop steps with a = 0 { a + 1 }; } merge(a, b) { return a + b; } }
 output result <- w.result;",
     ];
     let dir = scratch("run-work");
@@ -2983,11 +2983,11 @@ output result <- w.result;",
 output result <- w.result;",
         "node ticks: Rows<Int> { domain = 64; }
 node w: kernel { requires { field.read; field.write; } budget 1000; input t: Rows<Int> <- ticks.result; output result: Rows<Int>;
-            scan with s = 0 { let n = index(); return s + loop n with a = 0 { loop n with b = a { b + 1 } }; } }
+            scan over t with s = 0 { let n = index(); return s + loop n with a = 0 { loop n with b = a { b + 1 } }; } }
 output result <- w.result;",
         "node ticks: Rows<Int> { domain = 64; }
 node w: kernel { requires { field.read; field.write; } budget 50; input t: Rows<Int> <- ticks.result; output result: Rows<Int>;
-            compute { return 3; } merge(a, b) { return loop a with x = b { x + 1 }; } }
+            compute over t { return 3; } merge(a, b) { return loop a with x = b { x + 1 }; } }
 output result <- w.result;",
         // Element e's body runs e times before `until` stops the loop, so
         // 1001 is the first past a thousand.
@@ -3464,7 +3464,7 @@ node second: kernel {
     requires { field.read; field.write; }
     input first: Rows<Float> <- first.result;
     output result: Rows<Int>;
-    compute { let x = 0.1 + float(element()) * 0.013; return if x * 0.7 + 0.3 == sample(first) { 0 } else { 1 }; }
+    compute over first { let x = 0.1 + float(element()) * 0.013; return if x * 0.7 + 0.3 == sample(first) { 0 } else { 1 }; }
     merge(a, b) { return a + b; }
 }
 output differ <- second.result;

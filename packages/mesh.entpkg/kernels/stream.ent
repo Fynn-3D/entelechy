@@ -308,7 +308,7 @@ kernel mesh.far_point_flags@1 {
     input entries: Rows<Int>;
     output result: Rows<Int>;
     struct Mark { point: Int; used: Int; }
-    scatter into blank with max {
+    scatter over kept into blank with max {
         let e = element();
         if e >= at(ends, count(ends) - 1) { return Mark { point: -1, used: 0 }; }
         let k = owner(e, ends);

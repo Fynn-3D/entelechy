@@ -45,7 +45,7 @@ kernel synth.filter@1 {
     param cutoff: Float = 0.25;
     output result: Block;
 
-    scan with y = at(previous, count(previous) - 1) {
+    scan over voice with y = at(previous, count(previous) - 1) {
         let x = sample(voice);
         return Voice { sample: one_pole_low(y.sample, x.sample, cutoff), phase: x.phase };
     }

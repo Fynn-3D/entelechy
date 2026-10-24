@@ -1,4 +1,4 @@
-language 1
+language 2
 // domain
 param tile: Int = 8;
 param width: Float = 3.5;

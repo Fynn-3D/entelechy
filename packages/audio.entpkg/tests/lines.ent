@@ -11,7 +11,7 @@ kernel lines.run@1 {
     memory line: Rows<Float>;
     memory head: Rows<Int>;
     output result: Rows<Vec3>;
-    scan with out = vec3(0.0, 0.0, 0.0) {
+    scan over block with out = vec3(0.0, 0.0, 0.0) {
         let i = index();
         let h = at(head, 0);
         let next = delay_push(line, 0, 4, h % 4, float(i));

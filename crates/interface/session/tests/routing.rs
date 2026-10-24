@@ -140,9 +140,9 @@ impl Backend for Owned {
 /// The Kernels of [`SCENE`].
 const KERNELS: &str = r#"kernel k.seed@1 { requires { field.write; time.read; } output result: Rows<Float>; compute { return float(element()) * 0.25 + time(); } }
 kernel k.step@1 { requires { field.read; field.write; } input x: Rows<Float>; output result: Rows<Float>; compute { return sample(x) * 0.9 + 0.1; } }
-kernel k.total@1 { requires { field.read; field.write; } input x: Rows<Float>; output result: Rows<Float>; compute { return sample(x); } merge(a, b) { return a + b; } }
+kernel k.total@1 { requires { field.read; field.write; } input x: Rows<Float>; output result: Rows<Float>; compute over x { return sample(x); } merge(a, b) { return a + b; } }
 kernel k.counts@1 { requires { field.read; field.write; } input x: Rows<Float>; output result: Rows<Int>; compute { return int(sample(x)) % 4; } }
-kernel k.ends@1 { requires { field.read; field.write; } input counts: Rows<Int>; output result: Rows<Int>; prefix with sum { return sample(counts); } }
+kernel k.ends@1 { requires { field.read; field.write; } input counts: Rows<Int>; output result: Rows<Int>; prefix over counts with sum { return sample(counts); } }
 kernel k.zeros@1 { requires { field.write; } output result: Rows<Int>; compute { return 0; } }
 kernel k.spread@1 {
     requires { field.read; field.write; }
@@ -150,13 +150,13 @@ kernel k.spread@1 {
     input slots: Rows<Int>;
     output result: Rows<Int>;
     struct Hit { at: Int; value: Int; }
-    scatter into slots with sum {
+    scatter over counts into slots with sum {
         let n = sample(counts);
         loop n with k = 0 { emit(Hit { at: (element() + k) % 16, value: 1 }); k + 1 };
         return Hit { at: element() % 16, value: n };
     }
 }
-kernel k.walk@1 { requires { field.read; field.write; } input x: Rows<Float>; output result: Rows<Float>; scan with acc = 0.0 { return acc * 0.5 + sample(x); } }
+kernel k.walk@1 { requires { field.read; field.write; } input x: Rows<Float>; output result: Rows<Float>; scan over x with acc = 0.0 { return acc * 0.5 + sample(x); } }
 kernel k.rounds@1 {
     requires { field.read; field.write; }
     input ends: Rows<Int>;
