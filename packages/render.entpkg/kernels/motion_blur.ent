@@ -12,8 +12,39 @@ fn motion_way(l: Lens, was: Lens, extent: Vec2, q: Vec2, t: Float, moved: Vec3) 
     return if then.z > 0.0 { q - then.xy } else { vec2(0.0, 0.0) };
 }
 
-/// The picture blurred along each pixel's way (`motion_way`), `shutter` of a frame long, at most `most` pixels, in `samples`
-/// points; `motion` (1 × 1 for none) the things' own moves.
+/// Pixel `q` of `image` (a picture `extent` large) blurred along its way (`motion_way`), `shutter` of a frame long, at
+/// most `most` pixels, in `samples` points: the lens `l` now and `was` the last frame, `motion` (1 × 1 for none) the
+/// things' own moves, `surface` the G-buffer's.
+fn motion_blurred(image: Image, surface: Grid<Vec4>, motion: Grid<Vec4>, l: Lens, was: Lens, q: Vec2, extent: Vec2, shutter: Float, most: Float, samples: Int) -> Vec4 {
+    let still = isize(motion) == ivec2(1, 1);
+    let su = at(surface, clamp(q, vec2(0.0, 0.0), size(surface) - 1.0));
+    let far = su.w > no_hit() * 0.5;
+    let t = if far { 100000.0 } else { su.w };
+    let mine = if still || far { vec3(0.0, 0.0, 0.0) } else { at(motion, clamp(q, vec2(0.0, 0.0), size(motion) - 1.0)).xyz };
+    let w0 = motion_way(l, was, extent, q, t, mine) * shutter;
+    let len = length(w0);
+    let way = if len > most { w0 * (most / len) } else { w0 };
+    let center = at(image, clamp(q, vec2(0.0, 0.0), size(image) - 1.0));
+    if length(way) < 0.5 { return center; }
+    let n = max(samples, 2);
+    let sum = loop n with acc = vec4(0.0, 0.0, 0.0, 0.0) {
+        let f = (float(index()) + 0.5) / float(n) - 0.5;
+        let s = clamp(floor(q + way * f + 0.5), vec2(0.0, 0.0), extent - 1.0);
+        let ss = at(surface, s);
+        let st = if ss.w > no_hit() * 0.5 { 100000.0 } else { ss.w };
+        let sm = if still || ss.w > no_hit() * 0.5 { vec3(0.0, 0.0, 0.0) } else { at(motion, clamp(s, vec2(0.0, 0.0), size(motion) - 1.0)).xyz };
+        let reach = length(motion_way(l, was, extent, s, st, sm) * shutter);
+        let gap = length(s - q);
+        // A point behind the pixel's surface shows through its blur; a nearer one only where its own way reaches the pixel.
+        let behind = smoothstep(-0.05, 0.05, (st - t) / max(t, 0.001));
+        let covers = saturate(reach - gap + 1.0);
+        let w = max(behind * saturate(length(way) - gap + 1.0), (1.0 - behind) * covers);
+        vec4(acc.xyz + at(image, s).xyz * w, acc.w + w)
+    };
+    return if sum.w > 0.0001 { vec4(sum.xyz / sum.w, center.w) } else { center };
+}
+
+/// The picture blurred along each pixel's way (`motion_blurred`).
 kernel render.motion_blur@1 {
     requires { field.read; field.write; }
     input image: Image;
@@ -25,36 +56,5 @@ kernel render.motion_blur@1 {
     param most: Float = 32.0;
     param samples: Int = 12;
     output result: Image;
-    compute {
-        let q = coord();
-        let extent = domain();
-        let l = at(lens, 0);
-        let was = at(was_lens, 0);
-        let still = isize(motion) == ivec2(1, 1);
-        let su = sample(surface);
-        let far = su.w > no_hit() * 0.5;
-        let t = if far { 100000.0 } else { su.w };
-        let mine = if still || far { vec3(0.0, 0.0, 0.0) } else { at(motion, clamp(q, vec2(0.0, 0.0), size(motion) - 1.0)).xyz };
-        let w0 = motion_way(l, was, extent, q, t, mine) * shutter;
-        let len = length(w0);
-        let way = if len > most { w0 * (most / len) } else { w0 };
-        let center = sample(image);
-        if length(way) < 0.5 { return center; }
-        let n = max(samples, 2);
-        let sum = loop n with acc = vec4(0.0, 0.0, 0.0, 0.0) {
-            let f = (float(index()) + 0.5) / float(n) - 0.5;
-            let s = clamp(floor(q + way * f + 0.5), vec2(0.0, 0.0), extent - 1.0);
-            let ss = at(surface, s);
-            let st = if ss.w > no_hit() * 0.5 { 100000.0 } else { ss.w };
-            let sm = if still || ss.w > no_hit() * 0.5 { vec3(0.0, 0.0, 0.0) } else { at(motion, clamp(s, vec2(0.0, 0.0), size(motion) - 1.0)).xyz };
-            let reach = length(motion_way(l, was, extent, s, st, sm) * shutter);
-            let gap = length(s - q);
-            // A point behind the pixel's surface shows through its blur; a nearer one only where its own way reaches the pixel.
-            let behind = smoothstep(-0.05, 0.05, (st - t) / max(t, 0.001));
-            let covers = saturate(reach - gap + 1.0);
-            let w = max(behind * saturate(length(way) - gap + 1.0), (1.0 - behind) * covers);
-            vec4(acc.xyz + at(image, s).xyz * w, acc.w + w)
-        };
-        return if sum.w > 0.0001 { vec4(sum.xyz / sum.w, center.w) } else { center };
-    }
+    compute { return motion_blurred(image, surface, motion, at(lens, 0), at(was_lens, 0), coord(), domain(), shutter, most, samples); }
 }

@@ -100,6 +100,44 @@ fn cloud_sunlight(depth: Float, cos_angle: Float, powder_share: Float, bright: F
 /// glow away from the sun).
 fn cloud_phase(cos_angle: Float, g: Float) -> Float { return mix(air_phase(cos_angle, g), air_phase(cos_angle, -0.2), 0.3); }
 
+/// What the deck `cd` shows along `dir` from `eye` under the sky `s` (rgb the light it sends, w how much of what lies past
+/// it shows through): marched in `steps`, each lit by the sun through `light_steps` toward it, `bright` and `powder` its
+/// sunlit cloud and edge, `sky_light` the sky's light in it, `below` the light the ground throws up; thinning into the
+/// haze toward the horizon.
+fn clouds_seen(cd: CloudDeck, eye: Vec3, dir: Vec3, s: SkyLook, below: Vec3, steps: Int, light_steps: Int, bright: Float, powder: Float, sky_light: Float) -> Vec4 {
+    let clear = vec4(0.0, 0.0, 0.0, 1.0);
+    if dir.y <= 0.01 { return clear; }
+    let low = cd.low;
+    let high = cd.high;
+    if cd.cover <= 0.0 { return clear; }
+    let t_in = max((low - eye.y) / dir.y, 0.0);
+    let t_out = (high - eye.y) / dir.y;
+    if t_out <= t_in { return clear; }
+    // A long slant through the deck is walked no further than this.
+    let span = min(t_out - t_in, (high - low) * 4.0);
+    let n = max(steps, 1);
+    let dt = span / float(n);
+    let sun = normalize(s.sun);
+    let cos_angle = dot(dir, sun);
+    // Every pixel's steps start alike: at an eighth of the size, a
+    // pixel's own offset would show as blocks.
+    let r = loop 64 with r = vec4(0.0, 0.0, 0.0, 1.0) until index() >= n || r.w < 0.02 {
+        let p = eye + dir * (t_in + (float(index()) + 0.5) * dt);
+        let dens = cloud_density(cd, p);
+        if dens <= 0.0 { r } else {
+            let h = saturate((p.y - low) / (high - low));
+            let light = s.sun_color * cloud_sunlight(cloud_depth_toward(cd, p, sun, light_steps), cos_angle, powder, bright)
+                + s.ambient * (0.3 + 0.7 * h) * sky_light + below * ((1.0 - h) * 0.6);
+            let absorbed = exp(0.0 - dens * dt);
+            let scattered = light * ((1.0 - absorbed) * r.w);
+            vec4(r.x + scattered.x, r.y + scattered.y, r.z + scattered.z, r.w * absorbed)
+        }
+    };
+    // Toward the horizon the deck thins into the haze.
+    let fade = smoothstep(0.01, 0.12, dir.y);
+    return vec4(r.x * fade, r.y * fade, r.z * fade, mix(1.0, r.w, fade));
+}
+
 /// The clouds over each sky pixel: their light toward the eye (rgb) and how
 /// much of the sky behind still shows (w); other pixels (x 0, w 1). Lit by
 /// the sun through `light_steps` steps toward it, the sky light from above
@@ -119,44 +157,11 @@ kernel render.clouds_march@1 {
     param sky_light: Float = 1.0;
     output result: Image;
     compute {
-        let clear = vec4(0.0, 0.0, 0.0, 1.0);
         let q = coord();
         let ext = domain();
         let l = at(lens, 0);
-        let s = at(sky, 0);
-        let dir = ray(l, q, ext);
-        let ratio = size(surface) / ext;
-        let su = at(surface, min(floor((q + 0.5) * ratio), size(surface) - vec2(1.0, 1.0)));
-        if su.w < no_hit() * 0.5 || dir.y <= 0.01 { return clear; }
-        let cd = at(deck, 0);
-        let low = cd.low;
-        let high = cd.high;
-        if cd.cover <= 0.0 { return clear; }
-        let t_in = max((low - l.eye.y) / dir.y, 0.0);
-        let t_out = (high - l.eye.y) / dir.y;
-        if t_out <= t_in { return clear; }
-        // A long slant through the deck is walked no further than this.
-        let span = min(t_out - t_in, (high - low) * 4.0);
-        let n = max(steps, 1);
-        let dt = span / float(n);
-        let sun = normalize(s.sun);
-        let cos_angle = dot(dir, sun);
-        // Every pixel's steps start alike: at an eighth of the size, a
-        // pixel's own offset would show as blocks.
-        let r = loop 64 with r = vec4(0.0, 0.0, 0.0, 1.0) until index() >= n || r.w < 0.02 {
-            let p = l.eye + dir * (t_in + (float(index()) + 0.5) * dt);
-            let dens = cloud_density(cd, p);
-            if dens <= 0.0 { r } else {
-                let h = saturate((p.y - low) / (high - low));
-                let light = s.sun_color * cloud_sunlight(cloud_depth_toward(cd, p, sun, light_steps), cos_angle, powder, bright)
-                    + s.ambient * (0.3 + 0.7 * h) * sky_light + below * ((1.0 - h) * 0.6);
-                let absorbed = exp(0.0 - dens * dt);
-                let scattered = light * ((1.0 - absorbed) * r.w);
-                vec4(r.x + scattered.x, r.y + scattered.y, r.z + scattered.z, r.w * absorbed)
-            }
-        };
-        // Toward the horizon the deck thins into the haze.
-        let fade = smoothstep(0.01, 0.12, dir.y);
-        return vec4(r.x * fade, r.y * fade, r.z * fade, mix(1.0, r.w, fade));
+        let su = at(surface, min(floor((q + 0.5) * size(surface) / ext), size(surface) - vec2(1.0, 1.0)));
+        if su.w < no_hit() * 0.5 { return vec4(0.0, 0.0, 0.0, 1.0); }
+        return clouds_seen(at(deck, 0), l.eye, ray(l, q, ext), at(sky, 0), below, steps, light_steps, bright, powder, sky_light);
     }
 }
