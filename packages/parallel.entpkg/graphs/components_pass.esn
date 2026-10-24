@@ -1,0 +1,10 @@
+//! One pass of `components.esn`: the roots hooked, then flattened.
+use "../kernels/components.ent";
+
+input edges: Rows<IVec2>;
+input labels: Rows<Int>;
+
+node hooked: parallel.components_hook@1 { edges <- edges; parents <- labels; }
+node flat: parallel.components_flatten@1 { parents <- hooked.result; }
+
+output labels <- flat.result;

@@ -1,0 +1,24 @@
+scene components.esn
+
+# The chain from 9 down to 6 labeled 6, 1, 2 and 4 labeled 1, the rest
+# alone; no edge left joining two labels.
+frame 0.0
+expect parts.labels[9] = 6
+expect parts.labels[7] = 6
+expect parts.labels[6] = 6
+expect parts.labels[4] = 1
+expect parts.labels[2] = 1
+expect parts.labels[3] = 3
+expect parts.labels[5] = 5
+expect parts.labels[0] = 0
+expect parts.apart[0] = 0
+# The snake one component from its first cell to its last, in the
+# package's dozen passes.
+expect maze.labels[4095] = 0
+expect maze.labels[4032] = 0
+expect maze.apart[0] = 0
+expect roots.result[0] = 1
+# Every node of the scrambled path labeled 0.
+expect path.apart[0] = 0
+expect path.labels[16383] = 0
+expect path.labels[11285] = 0

@@ -1,0 +1,29 @@
+//! Connected components: the label of every node, the least index of
+//! the nodes `edges` join it to, given the nodes each their own label
+//! (`parallel.components_start@1`, its domain the number of nodes). Place
+//! it with
+//!   node start: parallel.components_start@1 { domain = 4096; }
+//!   node parts: graph "parallel.entpkg/graphs/components.esn" {
+//!       edges <- joined.result;
+//!       labels <- start.result;
+//!   }
+//! An edge with an end of -1 joins nothing, so a row of edges may hold
+//! one place for each edge there could be. `apart` counts the edges still
+//! joining two labels: zero when `passes` were enough. A path through
+//! 131072 nodes in scrambled order takes 8.
+use "../kernels/components.ent";
+
+input edges: Rows<IVec2>;
+input labels: Rows<Int>;
+param passes: Int = 12;
+
+node joined: graph "components_pass.esn" {
+    times = passes;
+    carry labels <- labels;
+    edges <- edges;
+    labels <- labels;
+}
+node apart: parallel.components_apart@1 { edges <- edges; labels <- joined.labels; }
+
+output labels <- joined.labels;
+output apart <- apart.result;

@@ -1,0 +1,67 @@
+// Components of a small graph and of a maze: ten nodes, chains written
+// from their larger ends, an edge to nowhere and two loops on themselves;
+// and a 64 by 64 grid whose open cells wind as one snake, column after
+// column joined at alternate ends, which a label spreading a cell a pass
+// would take two thousand passes to cross; and a path through 16384
+// nodes in scrambled order, its larger and smaller ends mixed.
+use "../kernels/components.ent";
+
+node edges: kernel {
+    requires { field.write; }
+    output result: Rows<IVec2>;
+    domain = 8;
+    compute {
+        return [ivec2(9, 8), ivec2(8, 7), ivec2(7, 6), ivec2(1, 4), ivec2(4, 2), ivec2(0, 0), ivec2(3, -1), ivec2(5, 5)][element()];
+    }
+}
+node nodes: parallel.components_start@1 { domain = 10; }
+node parts: graph "../graphs/components.esn" { edges <- edges.result; labels <- nodes.result; }
+
+// Even columns open; odd columns walls, open at the top row for columns
+// 1, 5, 9, ... and at the bottom row for 3, 7, 11, ...
+node open: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    domain = 4096;
+    compute {
+        let x = element() % 64;
+        let y = element() / 64;
+        return int(x % 2 == 0 || (x % 4 == 1 && y == 0) || (x % 4 == 3 && y == 63));
+    }
+}
+node maze_edges: kernel {
+    requires { field.read; field.write; }
+    input open: Rows<Int> <- open.result;
+    output result: Rows<IVec2>;
+    domain = 8192;
+    compute {
+        let i = element() / 2;
+        let x = i % 64;
+        let j = if element() % 2 == 0 { if x < 63 { i + 1 } else { -1 } } else { if i + 64 < 4096 { i + 64 } else { -1 } };
+        return if j >= 0 && at(open, i) == 1 && at(open, j) == 1 { ivec2(i, j) } else { ivec2(-1, -1) };
+    }
+}
+node cells: parallel.components_start@1 { domain = 4096; }
+node maze: graph "../graphs/components.esn" { edges <- maze_edges.result; labels <- cells.result; }
+node roots: kernel {
+    requires { field.read; field.write; }
+    input labels: Rows<Int> <- maze.labels;
+    input open: Rows<Int> <- open.result;
+    output result: Rows<Int>;
+    compute { return int(sample(open) == 1 && sample(labels) == element()); }
+    merge(a, b) { return a + b; }
+}
+
+node path_edges: kernel {
+    requires { field.write; }
+    output result: Rows<IVec2>;
+    domain = 16383;
+    compute {
+        let i = element();
+        return ivec2(mul_wrap(i, 92821) & 16383, mul_wrap(i + 1, 92821) & 16383);
+    }
+}
+node path_nodes: parallel.components_start@1 { domain = 16384; }
+node path: graph "../graphs/components.esn" { edges <- path_edges.result; labels <- path_nodes.result; }
+
+output result <- parts.labels;

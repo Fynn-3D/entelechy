@@ -1,0 +1,63 @@
+// Connected components: the nodes an edge joins share a label, the least
+// index of their component. Each node holds a parent, itself at first;
+// a pass hooks the larger root of every edge's ends under the smaller (a
+// scatter with `min` into the parents, Shiloach and Vishkin), then points
+// every node straight at its root, so the trees are stars again. A pass
+// at least joins each tree with a neighbor, so the passes a component
+// takes grow with the log of its size, not its length.
+
+/// The root of node `i`: its parents walked until one is its own. The
+/// walk may take as many steps as there are nodes, so a parent row of any
+/// shape gives a root, never a node part way up.
+fn components_root(parents: Rows<Int>, i: Int) -> Int {
+    return loop count(parents) with r = i until at(parents, r) == r { at(parents, r) };
+}
+
+/// Every node its own component; the node's domain is how many nodes.
+kernel parallel.components_start@1 {
+    requires { field.write; }
+    output result: Rows<Int>;
+    compute { return element(); }
+}
+
+/// The larger root of each edge's ends hooked under the smaller. An edge
+/// with an end outside the nodes (-1) joins nothing.
+kernel parallel.components_hook@1 {
+    requires { field.read; field.write; }
+    input edges: Rows<IVec2>;
+    input parents: Rows<Int>;
+    output result: Rows<Int>;
+    struct Hook { at: Int; value: Int; }
+    scatter into parents with min {
+        let e = sample(edges);
+        let n = count(parents);
+        if e.x < 0 || e.y < 0 || e.x >= n || e.y >= n { return Hook { at: -1, value: 0 }; }
+        let a = components_root(parents, e.x);
+        let b = components_root(parents, e.y);
+        return Hook { at: max(a, b), value: min(a, b) };
+    }
+}
+
+/// Every node pointed straight at its root.
+kernel parallel.components_flatten@1 {
+    requires { field.read; field.write; }
+    input parents: Rows<Int>;
+    output result: Rows<Int>;
+    compute { return components_root(parents, element()); }
+}
+
+/// How many edges still join two labels: none once the passes were
+/// enough.
+kernel parallel.components_apart@1 {
+    requires { field.read; field.write; }
+    input edges: Rows<IVec2>;
+    input labels: Rows<Int>;
+    output result: Rows<Int>;
+    compute {
+        let e = sample(edges);
+        let n = count(labels);
+        let joins = e.x >= 0 && e.y >= 0 && e.x < n && e.y < n;
+        return int(joins && at(labels, e.x) != at(labels, e.y));
+    }
+    merge(a, b) { return a + b; }
+}
