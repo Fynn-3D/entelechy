@@ -1,9 +1,10 @@
-// Surfaces from samples on a 24 by 24 by 24 lattice: a ball of radius 0.7
-// and a ring of radii 0.55 and 0.2. What is checked: how many points and
-// quads (a closed ball has two more points than quads, a ring as many),
-// how far the points stray from the true surface, how far their normals
-// from its own, and the volume the faces close, positive when they face
-// out.
+// Surfaces from samples on a 24 by 24 by 24 lattice: a ball of radius 0.7,
+// a ring of radii 0.55 and 0.2, and a box whose sides do not fall on the
+// lattice. What is checked: how many points and quads (a closed ball has
+// two more points than quads, a ring as many), how far the points stray
+// from the true surface, how far their normals from its own, the volume
+// the faces close, positive when they face out, and the box's corner
+// kept sharp.
 use "raster.entpkg";
 use "../kernels/";
 
@@ -25,6 +26,39 @@ node ring_field: kernel {
         let i = element();
         let p = vec3(float(i % 24), float((i / 24) % 24), float(i / 576)) * 0.08 - 0.92;
         return length(vec2(length(p.xz) - 0.55, p.y)) - 0.2;
+    }
+}
+node box_field: kernel {
+    requires { field.write; }
+    output result: Rows<Float>;
+    domain = 13824;
+    compute {
+        let i = element();
+        let p = vec3(float(i % 24), float((i / 24) % 24), float(i / 576)) * 0.08 - 0.92;
+        let q = abs(p) - vec3(0.53, 0.37, 0.61);
+        return length(max(q, vec3(0.0, 0.0, 0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
+    }
+}
+node box: graph "../graphs/iso.esn" {
+    samples <- box_field.result;
+    lattice = IsoLattice { points: ivec3(24, 24, 24), origin: vec3(-0.92, -0.92, -0.92), spacing: 0.08, level: 0.0 };
+}
+// The volume the box's faces close, and how near a point comes to its
+// corner (0.53, 0.37, 0.61).
+node box_measure: kernel {
+    requires { field.read; field.write; }
+    input faces: Rows<Face> <- box.faces;
+    input points: Rows<MeshPoint> <- box.points;
+    output result: Rows<Float>;
+    domain = 2;
+    compute {
+        if element() == 0 {
+            return loop count(faces) with v = 0.0 {
+                let f = at(faces, index());
+                v + dot(at(points, f.a).position, cross(at(points, f.b).position, at(points, f.c).position)) / 6.0
+            };
+        }
+        return loop count(points) with d = 10.0 { min(d, distance(at(points, index()).position, vec3(0.53, 0.37, 0.61))) };
     }
 }
 node ball: graph "../graphs/iso.esn" {

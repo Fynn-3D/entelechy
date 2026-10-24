@@ -1,15 +1,18 @@
 scene iso.esn
 
 # The ball closed (two more points than quads), the ring closed round its
-# hole (as many); points within a twentieth of the lattice's spacing of
-# the ball, normals along its own; the faces facing out, closing nearly
-# all the ball's volume (1.437) and the ring's (0.434), cut a little
-# where the lattice is coarse beside them.
+# hole (as many); points within a thirtieth of the lattice's spacing of
+# the ball, normals along its own; the faces facing out, closing the
+# ball's volume (1.4368) and the ring's (0.4343) to a part in a hundred,
+# and the box's (0.9570) to a part in a thousand, a point near its
+# corner.
 frame 0.0
 expect ball.point_count[0] = 1442
 expect ball.quad_count[0] = 1440
 expect ring.point_count[0] = 864
 expect ring.quad_count[0] = 864
-expect ball_points.result[0] = 0.0032 0.99999 0.0005
-expect ball_volume.result[0] = 1.4155 0.001
-expect ring_volume.result[0] = 0.4055 0.001
+expect ball_points.result[0] = 0.0027 0.99999 0.0005
+expect ball_volume.result[0] = 1.4385 0.001
+expect ring_volume.result[0] = 0.4363 0.001
+expect box_measure.result[0] = 0.9579 0.001
+expect box_measure.result[1] = 0.0108 0.001

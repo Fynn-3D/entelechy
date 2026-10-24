@@ -49,8 +49,10 @@ use "mesh.entpkg";
   `mesh.cluster_join_faces@1`, `mesh.cluster_join_rows@1`,
   `mesh.cluster_join_errors@1`, `mesh.cluster_join_meshes@1`.
 - `kernels/iso.ent` — The surface where a field sampled on a lattice
-  (`IsoLattice`) crosses a level (surface nets): a point in each cell it
-  crosses, a quad across each lattice edge it crosses. Kernels:
+  (`IsoLattice`) crosses a level (dual contouring): a point in each cell
+  it crosses, where the planes it crosses the cell's edges on meet, so
+  edges and corners stay sharp as far as the samples show them, and a
+  quad across each lattice edge it crosses. Kernels:
   `mesh.iso_crossed_cells@1`, `mesh.iso_slots@1`, `mesh.iso_points@1`,
   `mesh.iso_crossed_edges@1`, `mesh.iso_faces@1`.
 - `kernels/lattice.ent` — A lattice of points, `columns` a row and

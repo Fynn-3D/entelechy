@@ -1,6 +1,6 @@
 // A surface where a field crosses a level, from the field's samples on a
-// lattice (surface nets): one point in each cell the surface crosses,
-// where the crossings of its edges average, and a quad across each edge
+// lattice (dual contouring): one point in each cell the surface crosses,
+// where the planes it crosses the cell's edges on meet, and a quad across each edge
 // of the lattice it crosses, joining the four cells round that edge. The
 // field is `IsoLattice`'s points' samples laid x fastest, then y, then z;
 // below the level is inside, and the faces turn counterclockwise seen
@@ -60,8 +60,26 @@ kernel mesh.iso_slots@1 {
     scatter over kept into blank with max { return Slot { at: sample(kept), value: element() }; }
 }
 
-/// The point of each crossed cell: where its edges' crossings average,
-/// its normal the field's slope there, its uv zero.
+/// Where the planes the surface crosses a cell's edges on meet (its
+/// error quadric least, dual contouring): each crossing's plane through
+/// it, square to the field's slope there; the point the one nearest all
+/// of them, pulled a little toward the crossings' mean so a flat or
+/// smooth patch keeps that mean, and held inside the cell. A sharp edge
+/// or corner the field has is kept where the planes meet.
+struct IsoQuadric { ax: Vec3; ay: Vec3; az: Vec3; b: Vec3; mean: Vec4; }
+
+fn iso_quadric_point(q: IsoQuadric, cell: Vec3, spacing: Float) -> Vec3 {
+    let m = q.mean.xyz / q.mean.w;
+    let pull = 0.05;
+    let a = mat3(q.ax, q.ay, q.az) + mat3(pull);
+    // The quadric's planes taken from the mean: A y = sum n (n . (p - m)).
+    let y = inverse(a) * (q.b - mat3(q.ax, q.ay, q.az) * m);
+    return clamp(m + y, cell, cell + spacing);
+}
+
+/// The point of each crossed cell, where the planes of its edges'
+/// crossings meet (`iso_quadric_point`), its normal the field's slope
+/// there, its uv zero.
 kernel mesh.iso_points@1 {
     requires { field.read; field.write; }
     input kept: Rows<Int>;
@@ -72,7 +90,8 @@ kernel mesh.iso_points@1 {
     compute {
         let c = iso_point_cell(lattice, at(kept, element()));
         // Edge k: from corner `a` (bit `axis` clear) to `a` with it set.
-        let sum = loop 12 with s = vec4(0.0, 0.0, 0.0, 0.0) {
+        let none = IsoQuadric { ax: vec3(0.0, 0.0, 0.0), ay: vec3(0.0, 0.0, 0.0), az: vec3(0.0, 0.0, 0.0), b: vec3(0.0, 0.0, 0.0), mean: vec4(0.0, 0.0, 0.0, 0.0) };
+        let q = loop 12 with q = none {
             let axis = index() / 4;
             let r = index() % 4;
             let low = (1 << axis) - 1;
@@ -80,9 +99,15 @@ kernel mesh.iso_points@1 {
             let b = a | (1 << axis);
             let fa = at(samples, iso_point(lattice, c + iso_corner(a))) - lattice.level;
             let fb = at(samples, iso_point(lattice, c + iso_corner(b))) - lattice.level;
-            if (fa < 0.0) != (fb < 0.0) { s + vec4(mix(iso_place(lattice, c + iso_corner(a)), iso_place(lattice, c + iso_corner(b)), fa / (fa - fb)), 1.0) } else { s }
+            if (fa < 0.0) == (fb < 0.0) { q } else {
+                let t = fa / (fa - fb);
+                let p = mix(iso_place(lattice, c + iso_corner(a)), iso_place(lattice, c + iso_corner(b)), t);
+                let g = mix(iso_slope(samples, lattice, c + iso_corner(a)), iso_slope(samples, lattice, c + iso_corner(b)), t);
+                let n = if dot(g, g) > 0.0 { normalize(g) } else { vec3(0.0, 0.0, 0.0) };
+                IsoQuadric { ax: q.ax + n * n.x, ay: q.ay + n * n.y, az: q.az + n * n.z, b: q.b + n * dot(n, p), mean: q.mean + vec4(p, 1.0) }
+            }
         };
-        let p = sum.xyz / sum.w;
+        let p = iso_quadric_point(q, iso_place(lattice, c), lattice.spacing);
         // The corners' slopes mixed by where the point lies in the cell.
         let t = (p - iso_place(lattice, c)) / lattice.spacing;
         let g = loop 8 with g = vec3(0.0, 0.0, 0.0) {
