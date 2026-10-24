@@ -1,6 +1,6 @@
 //! Randomness a Kernel can repeat: hashes of whole numbers, the same bits
-//! on every backend, and the value, gradient, fractal, cellular and curl
-//! noise built on them.
-package random@1 { language = 1; ir = 1; }
+//! on every backend, the value, gradient, fractal, cellular and curl noise
+//! built on them, normal draws, and points spread evenly over a disc.
+package random@1 { language = 2; ir = 1; }
 
 use "kernels/";

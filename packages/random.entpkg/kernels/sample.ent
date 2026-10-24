@@ -1,0 +1,22 @@
+// Samples drawn: a draw from the normal distribution, and points spread
+// evenly over a disc.
+use "hash.ent";
+
+/// A draw from the normal distribution (mean 0, deviation 1) for whole
+/// number `x` (Box and Muller): two uniform draws, the first kept off
+/// zero, so its logarithm is never infinite.
+fn gaussian(x: Int, seed: Int) -> Float {
+    let u1 = (float(hash_int(x, seed) >>> 8) + 0.5) / 16777216.0;
+    let u2 = hash1(x, seed + 1);
+    return sqrt(-2.0 * log(u1)) * cos(6.2831853 * u2);
+}
+
+/// Point `k` of `n` spread evenly over a disc of `radius` (Vogel): each a
+/// golden angle round from the last, turned by `turn`, as far out as the
+/// root of its share, so equal areas hold equal numbers of points.
+fn vogel_point(k: Int, n: Int, turn: Float, radius: Float) -> Vec2 {
+    let f = float(k);
+    let r = sqrt((f + 0.5) / float(n)) * radius;
+    let a = f * 2.3999632 + turn;
+    return vec2(cos(a), sin(a)) * r;
+}

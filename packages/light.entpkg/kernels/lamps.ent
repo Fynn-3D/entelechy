@@ -247,9 +247,7 @@ fn lamp_map_seen(maps: Grid<Int>, slot: Int, m: Lamp, p: Vec3, n: Vec3, turn: Fl
     let search = clamp(m.size * r / (2.0 * max(dist, 0.01)), 1.0, 16.0);
     let a = turn * 6.2831853;
     let found = loop 8 with b = vec2(0.0, 0.0) {
-        let k = float(index());
-        let w = a + k * 2.3999632;
-        let o = vec2(cos(w), sin(w)) * (search * sqrt((k + 0.5) / 8.0));
+        let o = vogel_point(index(), 8, a, search);
         let d = lamp_map_distance(maps, slot, res, f, g, o);
         if d < dist - bias { vec2(b.x + d, b.y + 1.0) } else { b }
     };
@@ -257,9 +255,7 @@ fn lamp_map_seen(maps: Grid<Int>, slot: Int, m: Lamp, p: Vec3, n: Vec3, turn: Fl
     let blocker = found.x / found.y;
     let wide = clamp(m.size * (dist - blocker) / max(blocker, 0.01) / max(texel, 0.000001), 0.75, 16.0);
     let lit = loop 12 with sum = 0.0 {
-        let k = float(index());
-        let w = a + k * 2.3999632;
-        let o = vec2(cos(w), sin(w)) * (wide * sqrt((k + 0.5) / 12.0));
+        let o = vogel_point(index(), 12, a, wide);
         sum + lamp_map_compared(maps, slot, res, f, g, o, dist - bias)
     };
     return lit / 12.0;

@@ -457,20 +457,14 @@ fn shadow_soft(map: Grid<Int>, levels: ShadowLevels, i: Int, p: Vec3, n: Vec3, s
     let g = shadow_lattice(v, lifted) - 0.5;
     let h = dot(lifted, v.toward) + rise;
     let blockers = loop 8 with b = vec2(0.0, 0.0) {
-        let k = float(index());
-        let r = sqrt((k + 0.5) / 8.0) * search;
-        let ang = k * 2.3999632 + turn;
-        let q = g + vec2(cos(ang), sin(ang)) * r;
+        let q = g + vogel_point(index(), 8, turn, search);
         let d = shadow_height_at(map, v, i, ivec2(int(floor(q.x + 0.5)), int(floor(q.y + 0.5))));
         if d > h { vec2(b.x + (d - h), b.y + 1.0) } else { b }
     };
     if blockers.y < 0.5 { return 1.0; }
     let wide = clamp(blockers.x / blockers.y * 2.0 * sun_size / v.texel, 1.0, search);
     let lit = loop 12 with l = 0.0 {
-        let k = float(index());
-        let r = sqrt((k + 0.5) / 12.0) * wide;
-        let ang = k * 2.3999632 + turn;
-        let q = g + vec2(cos(ang), sin(ang)) * r;
+        let q = g + vogel_point(index(), 12, turn, wide);
         let d = shadow_height_at(map, v, i, ivec2(int(floor(q.x + 0.5)), int(floor(q.y + 0.5))));
         l + if d > h { 0.0 } else { 1.0 }
     };

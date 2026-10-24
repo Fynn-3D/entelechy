@@ -140,20 +140,14 @@ fn sun_pcss(atlas: Grid<Float>, views: SunViews, i: Int, p: Vec3, n: Vec3, sun_s
     let a = vec3(a0.x, a0.y, a0.z + rise);
     let at_t = vec2(a.x, a.y) * res;
     let blockers = loop 12 with b = vec2(0.0, 0.0) {
-        let k = float(index());
-        let r = sqrt((k + 0.5) / 12.0) * search;
-        let ang = k * 2.3999632 + turn;
-        let d = sun_occluder(atlas, i, at_t + vec2(cos(ang), sin(ang)) * r, res);
+        let d = sun_occluder(atlas, i, at_t + vogel_point(index(), 12, turn, search), res);
         if d > a.z { vec2(b.x + (d - a.z), b.y + 1.0) } else { b }
     };
     if blockers.y < 0.5 { return 1.0; }
     let gap = blockers.x / blockers.y;
     let wide = clamp(gap * 2.0 * sun_size / v.texel, 1.0, search * 2.0);
     let lit = loop 16 with l = 0.0 {
-        let k = float(index());
-        let r = sqrt((k + 0.5) / 16.0) * wide;
-        let ang = k * 2.3999632 + turn;
-        let d = sun_occluder(atlas, i, at_t + vec2(cos(ang), sin(ang)) * r, res);
+        let d = sun_occluder(atlas, i, at_t + vogel_point(index(), 16, turn, wide), res);
         l + if d > a.z { 0.0 } else { 1.0 }
     };
     return lit / 16.0;

@@ -1,0 +1,36 @@
+// Normal draws and a Vogel disc: 65536 draws' mean, spread, share within
+// one deviation and largest size; 64 points over a disc of radius 2, all
+// within it, half of them in the inner circle of half its area.
+use "../kernels/";
+
+node draws: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 65536;
+    compute {
+        let g = gaussian(element(), 7);
+        return vec4(g, g * g, if abs(g) < 1.0 { 1.0 } else { 0.0 }, abs(g));
+    }
+}
+node moments: kernel {
+    requires { field.read; field.write; }
+    input draws: Rows<Vec4> <- draws.result;
+    output result: Rows<Vec4>;
+    compute over draws { let d = sample(draws); return vec4(d.x / 65536.0, d.y / 65536.0, d.z / 65536.0, d.w); }
+    merge(a, b) { return vec4(a.x + b.x, a.y + b.y, a.z + b.z, max(a.w, b.w)); }
+}
+// The farthest point out, and how many lie within the circle of radius
+// 2 / sqrt(2).
+node disc: kernel {
+    requires { field.write; }
+    output result: Rows<Vec2>;
+    domain = 1;
+    compute {
+        return loop 64 with s = vec2(0.0, 0.0) {
+            let r = length(vogel_point(index(), 64, 0.3, 2.0));
+            vec2(max(s.x, r), s.y + (if r < 1.4142135 { 1.0 } else { 0.0 }))
+        };
+    }
+}
+
+output result <- moments.result;
