@@ -390,6 +390,35 @@ fn command_typed_cover(font: Grid<Float>, t: Search, origin: Vec2, size: Float, 
     return letter_cover(font, t.typed[i], local - vec2(float(i) * 6.0, 0.0));
 }
 
+/// The search `sr` drawn over the color `under` at point `q` of a window `win` large (both in points): its panel, the
+/// typed text, the rows found in the font `font` (`names`, their `lines`), the chosen one lit, and a scroll bar when more are
+/// found than shown.
+fn command_panel(font: Grid<Float>, names: Rows<Int>, lines: Rows<Int>, sr: Search, win: Vec2, q: Vec2, under: Vec3) -> Vec3 {
+    let ink = vec3(0.86, 0.87, 0.9);
+    let ts = command_text_size();
+    let rows = sr.found_n;
+    let lo = search_lo(win);
+    let hi = search_hi(win, max(rows, 1));
+    let box_ = Rect { lo: lo, hi: hi };
+    let back = fill(box_, 8.0, vec4(0.1, 0.105, 0.115, 0.94), q);
+    let edge = outline(box_, 8.0, 1.0, vec4(0.35, 0.36, 0.4, 1.0), q);
+    let field = fill(Rect { lo: lo + vec2(6.0, 6.0), hi: vec2(hi.x - 6.0, lo.y + 22.0) }, 4.0, vec4(0.05, 0.05, 0.06, 1.0), q);
+    let typed = command_typed_cover(font, sr, lo + vec2(12.0, 10.0), ts, q);
+    let top = command_rows_top(win);
+    let k = int(floor((q.y - top) / command_row_height()));
+    let row_lo = top + float(k) * command_row_height();
+    let lit = if k >= 0 && k < rows && sr.first + k == sr.choice { fill(Rect { lo: vec2(lo.x + 6.0, row_lo), hi: vec2(hi.x - 14.0, row_lo + command_row_height() - 1.0) }, 4.0, vec4(0.85, 0.45, 0.12, 0.85), q) } else { clear() };
+    let name = if k >= 0 && k < rows { command_name_cover(font, names, lines, sr.found[k], vec2(lo.x + 12.0, row_lo + 0.5 * (command_row_height() - 8.0 * ts)), ts, q) } else { 0.0 };
+    let list_h = float(max(rows, 1)) * command_row_height();
+    let bar = if sr.total > rows && rows > 0 {
+        let span = list_h * float(rows) / float(sr.total);
+        let from = top + list_h * float(sr.first) / float(sr.total);
+        fill(Rect { lo: vec2(hi.x - 10.0, from), hi: vec2(hi.x - 6.0, from + span) }, 2.0, vec4(0.6, 0.62, 0.68, 0.8), q)
+    } else { clear() };
+    let painted = onto(onto(onto(onto(onto(under, back), edge), field), lit), bar);
+    return mix(painted, ink, clamp(typed + name, 0.0, 1.0));
+}
+
 /// The picture filling the window, the command search drawn over it while open: a box at the top, what is typed, the lines found,
 /// the chosen line lit, a scroll bar when more are found than listed.
 kernel ui.command_overlay@1 {
@@ -406,31 +435,7 @@ kernel ui.command_overlay@1 {
         let sr = at(search, 0);
         if sr.open == 0 { return vec4(seen.x, seen.y, seen.z, 1.0); }
         let s = max(scale(), 1.0);
-        let win = domain() / s;
-        let q = (coord() + 0.5) / s;
-        let ink = vec3(0.86, 0.87, 0.9);
-        let ts = command_text_size();
-        let rows = sr.found_n;
-        let lo = search_lo(win);
-        let hi = search_hi(win, max(rows, 1));
-        let box_ = Rect { lo: lo, hi: hi };
-        let back = fill(box_, 8.0, vec4(0.1, 0.105, 0.115, 0.94), q);
-        let edge = outline(box_, 8.0, 1.0, vec4(0.35, 0.36, 0.4, 1.0), q);
-        let field = fill(Rect { lo: lo + vec2(6.0, 6.0), hi: vec2(hi.x - 6.0, lo.y + 22.0) }, 4.0, vec4(0.05, 0.05, 0.06, 1.0), q);
-        let typed = command_typed_cover(font, sr, lo + vec2(12.0, 10.0), ts, q);
-        let top = command_rows_top(win);
-        let k = int(floor((q.y - top) / command_row_height()));
-        let row_lo = top + float(k) * command_row_height();
-        let lit = if k >= 0 && k < rows && sr.first + k == sr.choice { fill(Rect { lo: vec2(lo.x + 6.0, row_lo), hi: vec2(hi.x - 14.0, row_lo + command_row_height() - 1.0) }, 4.0, vec4(0.85, 0.45, 0.12, 0.85), q) } else { clear() };
-        let name = if k >= 0 && k < rows { command_name_cover(font, names, lines, sr.found[k], vec2(lo.x + 12.0, row_lo + 0.5 * (command_row_height() - 8.0 * ts)), ts, q) } else { 0.0 };
-        let list_h = float(max(rows, 1)) * command_row_height();
-        let bar = if sr.total > rows && rows > 0 {
-            let span = list_h * float(rows) / float(sr.total);
-            let from = top + list_h * float(sr.first) / float(sr.total);
-            fill(Rect { lo: vec2(hi.x - 10.0, from), hi: vec2(hi.x - 6.0, from + span) }, 2.0, vec4(0.6, 0.62, 0.68, 0.8), q)
-        } else { clear() };
-        let painted = onto(onto(onto(onto(onto(vec3(seen.x, seen.y, seen.z), back), edge), field), lit), bar);
-        let text = mix(painted, ink, clamp(typed + name, 0.0, 1.0));
+        let text = command_panel(font, names, lines, sr, domain() / s, (coord() + 0.5) / s, seen.xyz);
         return vec4(text.x, text.y, text.z, 1.0);
     }
 }

@@ -36,6 +36,41 @@ fn wind_at(wind: Vec4, p: Vec3, t: Float) -> Vec3 {
     return vec3(wind.x, wind.y, wind.z) + tu * wind.w;
 }
 
+/// Which emitter particle `i` belongs to (each owns `count` from its `first`); -1 none.
+fn emitter_of(emitters: Rows<Emitter>, i: Int) -> Int {
+    return loop 16 with f = -1 until index() >= count(emitters) || f >= 0 {
+        let em = at(emitters, index());
+        if i >= em.first && i < em.first + em.count { index() } else { f }
+    };
+}
+
+/// Particle `i` born (again) at time `t` from emitter `em`: somewhere in its box, at its speed and jitter; the first time
+/// (`p` never lived) at any age of its life, so they do not all start together.
+fn particle_born(em: Emitter, p: Particle, i: Int, t: Float) -> Particle {
+    let h = hash_int2(i, int(t * 60.0) + 7, 601);
+    let r3 = vec3(unit_of(hash_int(h, 1)), unit_of(hash_int(h, 2)), unit_of(hash_int(h, 3))) * 2.0 - 1.0;
+    let life = mix(em.life.x, em.life.y, unit_of(hash_int(h, 4)));
+    let v3 = vec3(unit_of(hash_int(h, 5)), unit_of(hash_int(h, 6)), unit_of(hash_int(h, 7))) * 2.0 - 1.0;
+    return Particle { at: em.at + r3 * em.half, vel: em.speed + v3 * em.jitter, age: if p.life <= 0.0 { unit_of(hash_int(h, 8)) * life } else { 0.0 },
+        life: life, size: mix(em.size.x, em.size.y, unit_of(hash_int(h, 9))), kind: em.kind, seed: h & 0xffff, spin: unit_of(hash_int(h, 10)) * 6.2831853 };
+}
+
+/// Particle `p` of emitter `em` a `step` on at time `t`: the wind carries it (the lighter, the sooner), it rises or falls, and
+/// one that falls rests on the ground (`ground`, `side` meters square from `lo`), turning no more.
+fn particle_moved(p: Particle, em: Emitter, wind: Vec4, ground: Grid<Float>, lo: Vec2, side: Float, t: Float, step: Float) -> Particle {
+    let n = size(ground);
+    let gy = at_linear(ground, clamp((vec2(p.at.x, p.at.z) - lo) / side * n, vec2(0.5, 0.5), n - 0.5));
+    let landed = p.at.y <= gy + 0.012 && p.vel.y <= 0.0 && em.lift < 0.0;
+    let w = wind_at(wind, p.at, t);
+    let follow = 1.0 - exp(0.0 - em.drag * step);
+    let v1 = p.vel + (w - p.vel) * follow + vec3(0.0, em.lift * step, 0.0);
+    let v = if landed { vec3(0.0, 0.0, 0.0) } else { v1 };
+    let next = p.at + v * step;
+    let at_ = vec3(next.x, max(next.y, gy + 0.01), next.z);
+    let spin_rate = (unit_of(hash_int(p.seed, 11)) - 0.5) * 6.0;
+    return Particle { ..p, at: at_, vel: v, age: p.age + step, spin: p.spin + spin_rate * step * (if landed { 0.0 } else { 1.0 }) };
+}
+
 /// The particles a frame on (`step` seconds later). The ground's height map covers `ground_side` meters from (`ground_x`, `ground_z`).
 ///
 kernel particles.step@1 {
@@ -52,39 +87,12 @@ kernel particles.step@1 {
     output result: Rows<Particle>;
     compute {
         let i = element();
-        let t = time();
-        let found = loop 16 with f = -1 until index() >= count(emitters) || f >= 0 {
-            let em = at(emitters, index());
-            if i >= em.first && i < em.first + em.count { index() } else { f }
-        };
-        let dead = Particle { at: vec3(0.0, -100000.0, 0.0), vel: vec3(0.0, 0.0, 0.0), age: 0.0, life: 0.0, size: 0.0, kind: 0, seed: 0, spin: 0.0 };
-        if found < 0 { return dead; }
+        let found = emitter_of(emitters, i);
+        if found < 0 { return Particle { at: vec3(0.0, -100000.0, 0.0), vel: vec3(0.0, 0.0, 0.0), age: 0.0, life: 0.0, size: 0.0, kind: 0, seed: 0, spin: 0.0 }; }
         let em = at(emitters, found);
         let p = at(previous, i);
-        let age = p.age + step;
-        if p.life <= 0.0 || age >= p.life {
-            // Born (again): somewhere in the box; the first time at any age,
-            // so they do not all start together.
-            let h = hash_int2(i, int(t * 60.0) + 7, 601);
-            let r3 = vec3(unit_of(hash_int(h, 1)), unit_of(hash_int(h, 2)), unit_of(hash_int(h, 3))) * 2.0 - 1.0;
-            let life = mix(em.life.x, em.life.y, unit_of(hash_int(h, 4)));
-            let v3 = vec3(unit_of(hash_int(h, 5)), unit_of(hash_int(h, 6)), unit_of(hash_int(h, 7))) * 2.0 - 1.0;
-            return Particle { at: em.at + r3 * em.half, vel: em.speed + v3 * em.jitter, age: if p.life <= 0.0 { unit_of(hash_int(h, 8)) * life } else { 0.0 },
-                life: life, size: mix(em.size.x, em.size.y, unit_of(hash_int(h, 9))), kind: em.kind, seed: h & 0xffff, spin: unit_of(hash_int(h, 10)) * 6.2831853 };
-        }
-        // The wind carries it (the lighter, the sooner), it rises or falls.
-        let lo = vec2(ground_x, ground_z);
-        let n = size(ground);
-        let gy = at_linear(ground, clamp((vec2(p.at.x, p.at.z) - lo) / ground_side * n, vec2(0.5, 0.5), n - 0.5));
-        let landed = p.at.y <= gy + 0.012 && p.vel.y <= 0.0 && em.lift < 0.0;
-        let w = wind_at(at(wind, 0), p.at, t);
-        let follow = 1.0 - exp(0.0 - em.drag * step);
-        let v1 = p.vel + (w - p.vel) * follow + vec3(0.0, em.lift * step, 0.0);
-        let v = if landed { vec3(0.0, 0.0, 0.0) } else { v1 };
-        let next = p.at + v * step;
-        let at_ = vec3(next.x, max(next.y, gy + 0.01), next.z);
-        let spin_rate = (unit_of(hash_int(p.seed, 11)) - 0.5) * 6.0;
-        return Particle { ..p, at: at_, vel: v, age: age, spin: p.spin + spin_rate * step * (if landed { 0.0 } else { 1.0 }) };
+        if p.life <= 0.0 || p.age + step >= p.life { return particle_born(em, p, i, time()); }
+        return particle_moved(p, em, at(wind, 0), ground, vec2(ground_x, ground_z), ground_side, time(), step);
     }
 }
 
@@ -174,6 +182,18 @@ fn particle_glow(p: Particle, t: Float) -> Float {
     return if p.kind == kind_firefly() { 6.0 * max(sin(t * 2.3 + float(p.seed)), 0.0) } else { 0.0 };
 }
 
+/// Particle `p`, where it lies on the screen `sc` (`on_screen`), as pixel `q` sees it in front of what stands `depth` off,
+/// at time `t`: its color (rgb) and how much it covers (w; behind what is there hidden, just in front fading in).
+fn particle_seen(p: Particle, sc: Vec4, q: Vec2, depth: Float, t: Float) -> Vec4 {
+    let d = (q + 0.5 - sc.xy) / max(sc.w, 0.001);
+    let c = cos(p.spin);
+    let sn = sin(p.spin);
+    let local = vec2(c * d.x - sn * d.y, sn * d.x + c * d.y) * vec2(1.0, -1.0);
+    let look = particle_look(p, if p.kind == kind_seed() || p.kind == kind_butterfly() { d * vec2(1.0, -1.0) } else { local }, t);
+    let fade = saturate((depth - sc.z) / max(p.size * 2.0, 0.02));
+    return vec4(look.x, look.y, look.z, saturate(look.w * fade));
+}
+
 /// The particles blended into the picture `hdr` (`surface`'s w is how far each pixel lies along the view ray; it may be smaller than
 /// the picture, read to scale). Moving particles are drawn after temporal antialiasing (or they smear).
 /// Particles are lit by the sun (thin ones glow seen against it) and the sky light; blended in any order alike (weighted).
@@ -205,16 +225,10 @@ kernel particles.draw@1 {
             if id < 0 { a } else {
                 let p = at(particles, id);
                 let sc = on_screen(l, p, ext);
-                let d = (q + 0.5 - sc.xy) / max(sc.w, 0.001);
-                let c = cos(p.spin);
-                let sn = sin(p.spin);
-                let local = vec2(c * d.x - sn * d.y, sn * d.x + c * d.y) * vec2(1.0, -1.0);
-                let look = particle_look(p, if p.kind == kind_seed() || p.kind == kind_butterfly() { d * vec2(1.0, -1.0) } else { local }, t);
-                // Behind what is there: hidden; just in front: fading in.
-                let fade = saturate((depth - sc.z) / max(p.size * 2.0, 0.02));
-                let alpha = saturate(look.w * fade);
+                let seen = particle_seen(p, sc, q, depth, t);
+                let alpha = seen.w;
                 if alpha <= 0.002 { a } else {
-                    let lit = thin_lit(vec3(look.x, look.y, look.z), dir, s) + vec3(1.0, 0.9, 0.4) * particle_glow(p, t);
+                    let lit = thin_lit(seen.xyz, dir, s) + vec3(1.0, 0.9, 0.4) * particle_glow(p, t);
                     let w = alpha * clamp(10.0 / (1.0 + sc.z * 0.1), 0.05, 10.0);
                     [vec4(a[0].x + lit.x * w, a[0].y + lit.y * w, a[0].z + lit.z * w, a[0].w + w), vec4(a[1].x * (1.0 - alpha), 0.0, 0.0, 0.0)]
                 }

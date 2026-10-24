@@ -54,6 +54,29 @@ fn terrain_brush_flatten() -> Int { return 3; }
 fn terrain_brush_mountain() -> Int { return 4; }
 fn terrain_brush_cliff() -> Int { return 5; }
 
+/// The height at cell `c` of `heights`, at `p` (meters), after brush `b`, `d` meters from its middle, `amount` of it there:
+/// raised (no higher than `top`), lowered, smoothed toward its neighbors, leveled, a mountain grown (no steeper than
+/// `steepest` over its neighbors) or terraced, by its mode.
+fn sculpted(heights: Grid<Float>, c: Vec2, b: TerrainBrush, p: Vec2, d: Float, amount: Float, top: Float, steepest: Float) -> Float {
+    let here = at(heights, c);
+    let last = size(heights) - 1.0;
+    let east = at(heights, min(c + vec2(1.0, 0.0), last));
+    let west = at(heights, max(c - vec2(1.0, 0.0), vec2(0.0, 0.0)));
+    let south = at(heights, min(c + vec2(0.0, 1.0), last));
+    let north = at(heights, max(c - vec2(0.0, 1.0), vec2(0.0, 0.0)));
+    return match b.mode {
+        0 => min(here + amount, top),
+        1 => here - amount,
+        2 => mix(here, (east + west + south + north) * 0.25, clamp(amount, 0.0, 1.0)),
+        3 => mix(here, b.level, clamp(amount, 0.0, 1.0)),
+        4 => {
+            let raised = here + b.amount * terrain_mountain(p, d, b.radius) * b.radius;
+            min(max(min(raised, min(min(east, west), min(south, north)) + steepest), here), top)
+        },
+        _ => mix(here, terrain_terraced(here, p, 3.0 + b.radius * 0.12), clamp(amount, 0.0, 1.0)),
+    };
+}
+
 /// The heights under the brush's first row changed by it, more at its
 /// middle and nothing at its rim; a mountain is raised no steeper than
 /// `steepest` meters over the lowest neighbor; nothing goes over `top`.
@@ -75,22 +98,7 @@ kernel terrain.sculpt@1 {
         if d >= b.radius { return here; }
         let fall = 1.0 - smoothstep(0.0, 1.0, d / b.radius);
         let amount = b.amount * fall;
-        let last = size(previous) - 1.0;
-        let east = at(previous, min(c + vec2(1.0, 0.0), last));
-        let west = at(previous, max(c - vec2(1.0, 0.0), vec2(0.0, 0.0)));
-        let south = at(previous, min(c + vec2(0.0, 1.0), last));
-        let north = at(previous, max(c - vec2(0.0, 1.0), vec2(0.0, 0.0)));
-        return match b.mode {
-            0 => min(here + amount, top),
-            1 => here - amount,
-            2 => mix(here, (east + west + south + north) * 0.25, clamp(amount, 0.0, 1.0)),
-            3 => mix(here, b.level, clamp(amount, 0.0, 1.0)),
-            4 => {
-                let raised = here + b.amount * terrain_mountain(p, d, b.radius) * b.radius;
-                min(max(min(raised, min(min(east, west), min(south, north)) + steepest), here), top)
-            },
-            _ => mix(here, terrain_terraced(here, p, 3.0 + b.radius * 0.12), clamp(amount, 0.0, 1.0)),
-        };
+        return sculpted(previous, c, b, p, d, amount, top, steepest);
     }
 }
 
