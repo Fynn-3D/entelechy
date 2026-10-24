@@ -433,7 +433,8 @@ fn named_packages(out: &Out) -> Result<(), String> {
 /// The WebAssembly build under WASI, the system interface it is held to:
 /// a session served over standard input, every answer `ok`, and the
 /// replays that read and write through it (pictures, bytes, saves, Field
-/// files, models, sound, laws written to files), on the processor.
+/// files and directories streamed, models, sound, laws written to files,
+/// files found through a package's name), on the processor.
 fn wasi(out: &Out) -> Result<(), String> {
     run(
         out,
@@ -480,7 +481,7 @@ fn wasi(out: &Out) -> Result<(), String> {
         return Err("a request served under WASI was not answered ok".into());
     }
     let through = ["data", "mesh", "sound", "animation", "genesis"];
-    let all: Vec<PathBuf> = listed("examples", Some("tests"), ".replay")
+    let mut all: Vec<PathBuf> = listed("examples", Some("tests"), ".replay")
         .into_iter()
         .filter(|replay| {
             replay
@@ -489,6 +490,10 @@ fn wasi(out: &Out) -> Result<(), String> {
                 .is_some_and(|example| through.iter().any(|name| example.as_os_str() == *name))
         })
         .collect();
+    // Field directories read a page at a time, inline where there is no
+    // thread, and files found through a package's name.
+    all.push(PathBuf::from("packages/mesh.entpkg/tests/stream.replay"));
+    all.push(PathBuf::from("packages/render.entpkg/tests/stream.replay"));
     let passed = pool(&all, 8, |replay| {
         run(
             out,

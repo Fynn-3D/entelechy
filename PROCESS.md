@@ -148,7 +148,8 @@ cargo xtask verify
   scene beside every other, as a scene reaches them all in one namespace.
   `wasi` builds for WASI and holds it to the system interface: a
   session served on standard input, every answer `ok`, and the replays
-  that read and write files, on the processor. Under WASI there is no
+  that read and write files (Field directories streamed and files found
+  through a package's name among them), on the processor. Under WASI there is no
   device and no code made at run time, so the pictures are the other
   backends' to check. `against_main` is [below](#against-main).
 
