@@ -115,7 +115,6 @@ Sound and music.
 | --- | --- |
 | [`audio`](audio.entpkg/README.md) | Clocks, cues, instruments, filters and delay lines for blocks of samples |
 | [`music`](music.entpkg/README.md) | Scales, chords, an instrument's note and a kit's drums |
-| [`sound`](sound.entpkg/README.md) | The sound of effects: each layer heard as its form sounds, in its matter's voice |
 
 ### Simulation
 

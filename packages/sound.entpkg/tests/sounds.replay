@@ -1,8 +1,0 @@
-scene sounds.esn
-
-# The casts heard together a block in; half a second on, the bolt flying.
-frame 0.0
-expect count cast.sound = 1600
-expect cast.sound[400] = 0.039 0.0091 0.001
-frame 0.5
-expect cast.sound[400] = -0.128 -0.1528 0.001

@@ -1,5 +1,0 @@
-//! The sound of effects: each layer of an effects cast heard as its form
-//! sounds, in its matter's voice, placed where it is from the eye.
-package sound@1 { language = 1; ir = 1; }
-
-use "kernels/";
