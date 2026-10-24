@@ -2,7 +2,32 @@
 // `held` seconds; and the drums of each kit.
 use "random.entpkg";
 use "audio.entpkg";
-use "theory.ent";
+use "scale.ent";
+
+/// An instrument: how it sounds (`osc_*`), with how many harmonics falling
+/// off how fast; its envelope (attack, decay, sustain level, release, in
+/// seconds); its vibrato (depth, a share of the pitch, and rate); how far
+/// its two voices are detuned (a chorus); a square's duty; how loud.
+struct Instrument {
+    osc: Int; harmonics: Int; roll: Float;
+    attack: Float; decay: Float; sustain: Float; release: Float;
+    vibrato: Float; rate: Float; detune: Float; duty: Float; gain: Float;
+}
+type Instruments = Rows<Instrument>;
+
+fn osc_additive() -> Int { return 0; }   // strings, choirs, brass, organs: harmonics
+fn osc_square() -> Int { return 1; }     // an old console's pulse
+fn osc_triangle() -> Int { return 2; }   // an old console's bass
+fn osc_bell() -> Int { return 3; }       // bells, music boxes: a tone rung by another
+fn osc_pluck() -> Int { return 4; }      // lutes, harps, kotos, pianos: harmonics dying fast
+fn osc_breath() -> Int { return 5; }     // flutes: a soft tone and its breath
+
+// The kits of drums `kit_drum` strikes.
+fn kit_orchestra() -> Int { return 0; }  // timpani, snare, cymbal
+fn kit_chip() -> Int { return 1; }       // noise drums
+fn kit_folk() -> Int { return 2; }       // frame drum, tambourine
+fn kit_taiko() -> Int { return 3; }      // great drums, wood
+fn kit_none() -> Int { return 4; }
 
 fn tau_() -> Float { return 6.2831853; }
 

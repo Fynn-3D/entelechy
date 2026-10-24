@@ -1,0 +1,67 @@
+// Scales and chords: the modes (`mode_*`) and the semitones of their
+// degrees, a note's pitch, and the chords stacked on a scale's degrees.
+
+fn mode_major() -> Int { return 0; }
+fn mode_dorian() -> Int { return 1; }
+fn mode_phrygian() -> Int { return 2; }
+fn mode_lydian() -> Int { return 3; }
+fn mode_mixolydian() -> Int { return 4; }
+fn mode_minor() -> Int { return 5; }
+fn mode_harmonic() -> Int { return 6; }
+fn mode_pentatonic() -> Int { return 7; }
+fn mode_minor_pentatonic() -> Int { return 8; }
+fn mode_in() -> Int { return 9; }        // the Japanese in scale
+fn mode_hijaz() -> Int { return 10; }    // the phrygian dominant: a desert's
+
+/// Whether mode `m` has five degrees to an octave.
+fn pentatonic(m: Int) -> Bool { return m >= mode_pentatonic() && m <= mode_in(); }
+
+/// Degree `d` (any whole number; seven to an octave, five in the
+/// pentatonic ones) of mode `m`, in semitones above its root.
+fn scale_step(m: Int, d: Int) -> Int {
+    let five = pentatonic(m);
+    let per = if five { 5 } else { 7 };
+    let oct = if d >= 0 { d / per } else { (d - per + 1) / per };
+    let k = d - oct * per;
+    let major = [0, 2, 4, 5, 7, 9, 11];
+    let dorian = [0, 2, 3, 5, 7, 9, 10];
+    let phrygian = [0, 1, 3, 5, 7, 8, 10];
+    let lydian = [0, 2, 4, 6, 7, 9, 11];
+    let mixolydian = [0, 2, 4, 5, 7, 9, 10];
+    let minor = [0, 2, 3, 5, 7, 8, 10];
+    let harmonic = [0, 2, 3, 5, 7, 8, 11];
+    let penta = [0, 2, 4, 7, 9, 0, 0];
+    let mpenta = [0, 3, 5, 7, 10, 0, 0];
+    let in_ = [0, 1, 5, 7, 8, 0, 0];
+    let hijaz = [0, 1, 4, 5, 7, 8, 10];
+    let i = clamp(k, 0, 6);
+    let s = if m == mode_major() { major[i] } else if m == mode_dorian() { dorian[i] } else if m == mode_phrygian() { phrygian[i] }
+        else if m == mode_lydian() { lydian[i] } else if m == mode_mixolydian() { mixolydian[i] } else if m == mode_minor() { minor[i] }
+        else if m == mode_harmonic() { harmonic[i] } else if m == mode_pentatonic() { penta[i] } else if m == mode_minor_pentatonic() { mpenta[i] } else if m == mode_in() { in_[i] } else { hijaz[i] };
+    return s + oct * 12;
+}
+
+/// How many degrees an octave has in mode `m`.
+fn degrees_of(m: Int) -> Int { return if pentatonic(m) { 5 } else { 7 }; }
+
+/// The pitch (Hz) of a note `semis` semitones above the C below middle C.
+fn pitch_of(semis: Float) -> Float { return 130.8128 * pow(2.0, semis / 12.0); }
+
+/// Tone `k` (0 root, 1 third, 2 fifth, 3 seventh) of the chord on degree
+/// `root` of mode `m`, in degrees: thirds stacked on the scale (in a
+/// pentatonic one, every other degree).
+fn chord_degree(m: Int, root: Int, k: Int) -> Int {
+    let five = pentatonic(m);
+    return root + (if five { [0, 1, 3, 4][clamp(k, 0, 3)] } else { k * 2 });
+}
+
+/// The degree, of those of chord `root`, nearest degree `d`.
+fn nearest_chord_degree(m: Int, root: Int, d: Int) -> Int {
+    let per = degrees_of(m);
+    return loop 9 with best = d + 1000 {
+        let k = index() % 3;
+        let octave = index() / 3 - 1;
+        let c = chord_degree(m, root, k) + octave * per + ((d - root) / per) * per;
+        if abs(c - d) < abs(best - d) { c } else { best }
+    };
+}

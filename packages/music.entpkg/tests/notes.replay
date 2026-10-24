@@ -1,0 +1,14 @@
+scene notes.esn
+
+# A minor scale's third degree is three semitones up, a pentatonic's
+# fifth degree an octave; nine semitones over the C below middle C is the
+# A of 220 Hz; a major chord's fifth is its fourth degree, a pentatonic
+# chord's its third (4 and 3, written 43); the chord tone nearest degree
+# 1 of a major one is its root.
+frame 0.0
+expect probe.result[0] = 3 12 220 43 0.001
+
+# Half way through a tenth of a second's attack, half; long held, the
+# sustain; 0.3 s after it is let go, a release of 0.3 s has taken all
+# but 1/e of the sustain it had come down to.
+expect probe.result[1] = 0.5 0.5 0.1844 0 0.0001
