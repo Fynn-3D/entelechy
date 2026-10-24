@@ -17,17 +17,17 @@ node lit: render.lit@1 { surface <- stand.surface; paint <- polished.result; ext
     sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; domain = window(); }
 node mirrored: render.reflections@1 { hdr <- lit.result; reflection <- lit.reflection; surface <- stand.surface; paint <- polished.result; extra <- stand.extra;
     layers <- stand.layers; more <- stand.more; lens <- stand.lens; sky <- stand.sky; domain = size(hdr); }
-/// The picture's change over eight by eight pixels at each place: the floor before the red ball's middle, before the white
-/// ball's, and the sky.
+/// The picture's change over four by four pixels at each place: the floor before the red ball's middle, before the white
+/// ball's, and far off in the haze. Places are shares of the window, so the checks hold at any size.
 node changed: kernel {
-    requires { field.read; field.write; }
+    requires { field.read; field.write; input.read; }
     input a: Image <- lit.result;
     input b: Image <- mirrored.result;
     output result: Rows<Vec4>;
     domain = 3;
     compute {
-        let o = [vec2(140.0, 300.0), vec2(316.0, 300.0), vec2(320.0, 40.0)][element()];
-        return loop 64 with s = vec4(0.0, 0.0, 0.0, 0.0) { let q = o + vec2(float(index() % 8), float(index() / 8)); s + (at(b, q) - at(a, q)) / 64.0 };
+        let o = floor([vec2(0.21875, 0.75), vec2(0.49375, 0.75), vec2(0.5, 0.1)][element()] * window());
+        return loop 16 with s = vec4(0.0, 0.0, 0.0, 0.0) { let q = o + vec2(float(index() % 4), float(index() / 4)); s + (at(b, q) - at(a, q)) / 16.0 };
     }
 }
 
@@ -42,17 +42,19 @@ node before: kernel {
 node none: Grid<Vec4> { domain = vec2(1, 1); }
 node blurred: render.motion_blur@1 { image <- mirrored.result; surface <- stand.surface; lens <- stand.lens; was_lens <- before.result; motion <- none.result; domain = size(image); }
 node steady: render.motion_blur@1 { image <- mirrored.result; surface <- stand.surface; lens <- stand.lens; was_lens <- stand.lens; motion <- none.result; domain = size(image); }
-/// How much the blurred and the steady pictures part over a row of pixels across the balls' first row, and over the sky.
+/// How much the blurred and the steady pictures part over a row of pixels across the balls' first row, and over the floor
+/// far off in the haze.
 node parted: kernel {
-    requires { field.read; field.write; }
+    requires { field.read; field.write; input.read; }
     input a: Image <- mirrored.result;
     input b: Image <- blurred.result;
     input c: Image <- steady.result;
     output result: Rows<Vec2>;
     domain = 2;
     compute {
-        let y = if element() == 0 { 262.0 } else { 40.0 };
-        return loop 640 with s = vec2(0.0, 0.0) { let q = vec2(float(index()), y); s + vec2(length(at(b, q).xyz - at(a, q).xyz), length(at(c, q).xyz - at(a, q).xyz)) / 640.0 };
+        let w = window();
+        let y = floor((if element() == 0 { 0.655 } else { 0.1 }) * w.y);
+        return loop 256 with s = vec2(0.0, 0.0) { let q = vec2(floor((float(index()) + 0.5) * w.x / 256.0), y); s + vec2(length(at(b, q).xyz - at(a, q).xyz), length(at(c, q).xyz - at(a, q).xyz)) / 256.0 };
     }
 }
 

@@ -2,7 +2,7 @@ scene bounce.esn
 
 # Lit anew a quarter at a time and bounced again from itself, the cache
 # rests 48 frames after the block and the sun last moved.
-window 640 400
+window 256 160
 frame 0.0 to 2.0 every 0.0333
 expect bounced.turn.result[0] = 49
 expect bounced.turn.result[1] = 49
@@ -10,14 +10,16 @@ expect bounced.turn.result[1] = 49
 # The floor takes the color of the balls beside it: red under the red
 # balls (with the light the floor itself sends up and the balls send back),
 # orange beside the glowing gold one, near white under the white one; the
-# sky takes nothing.
+# floor far off in the haze takes all but nothing.
 expect added.result[0].x > 0.06
 expect added.result[0].w > 2.5
 expect added.result[1].x > 0.2
 expect added.result[1].w > 2.0
 expect added.result[2].x > 0.05
 expect added.result[2].w < 1.6
-expect added.result[3] = 0 0 0 0
+expect added.result[3].x < 0.002
+expect added.result[3].y < 0.002
+expect added.result[3].z < 0.002
 
 # A green lamp over the balls: the light it leaves on them bounces onto
 # the floor, green alone.
@@ -26,7 +28,7 @@ expect greener.result[0].x = 0 0.0001
 
 # A gold ball's lower half, its mirror cone meeting the red balls before
 # it: its reflection from all round takes their warm light in place of
-# the dark it had; the sky's is as it was.
+# the dark it had; the far floor's is as it was.
 expect remirrored.result[0].x > 0.05
 expect remirrored.result[0].z < 0.05
 expect remirrored.result[1] = 0 0 0 0

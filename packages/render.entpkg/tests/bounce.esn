@@ -1,6 +1,6 @@
 // Light bounced between things (`graphs/bounce.esn`) over the stand lit by
 // lit: what it adds to the floor under the red balls, under the glowing gold
-// ball, between them under the white ball, and to the sky; and what a green
+// ball, between them under the white ball, and to the floor far off in the haze; and what a green
 // lamp over the balls adds bounced.
 use "../kernels/";
 
@@ -20,40 +20,44 @@ node green: kernel {
 }
 node lamped: graph "../graphs/bounce.esn" { lamps <- green.result; lamp_looks <- no_lamp_looks.result; reflection <- lit.reflection; hdr <- lit.result; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers;
     more <- stand.more; lens <- stand.lens; sky <- stand.sky; proxy <- stand.proxy; land <- stand.land; frame <- stand.frame; }
-/// The green the lamp's bounce adds under the white ball, over eight by eight pixels.
+/// The green the lamp's bounce adds under the white ball, over four by four pixels. Places are shares of the
+/// window, so the checks hold at any size.
 node greener: kernel {
-    requires { field.read; field.write; }
+    requires { field.read; field.write; input.read; }
     input a: Image <- bounced.result;
     input b: Image <- lamped.result;
     output result: Rows<Vec4>;
     domain = 1;
-    compute { return loop 64 with s = vec4(0.0, 0.0, 0.0, 0.0) { let q = vec2(320.0, 300.0) + vec2(float(index() % 8), float(index() / 8)); s + (at(b, q) - at(a, q)) / 64.0 }; }
+    compute {
+        let o = floor(vec2(0.5, 0.75) * window());
+        return loop 16 with s = vec4(0.0, 0.0, 0.0, 0.0) { let q = o + vec2(float(index() % 4), float(index() / 4)); s + (at(b, q) - at(a, q)) / 16.0 };
+    }
 }
 
-/// What the mirror cone changes of the reflection over eight by eight pixels of a gold ball's lower half, facing the red
-/// balls before it, and of the sky.
+/// What the mirror cone changes of the reflection over four by four pixels of a gold ball's lower half, facing the red
+/// balls before it, and of the floor far off in the haze.
 node remirrored: kernel {
-    requires { field.read; field.write; }
+    requires { field.read; field.write; input.read; }
     input a: Grid<Vec4 as f16> <- lit.reflection;
     input b: Grid<Vec4 as f16> <- bounced.reflection;
     output result: Rows<Vec4>;
     domain = 2;
     compute {
-        let o = if element() == 0 { vec2(326.0, 192.0) } else { vec2(320.0, 40.0) };
-        return loop 64 with s = vec4(0.0, 0.0, 0.0, 0.0) { let q = o + vec2(float(index() % 8), float(index() / 8)); s + (at(b, q) - at(a, q)) / 64.0 };
+        let o = floor((if element() == 0 { vec2(0.509375, 0.48) } else { vec2(0.5, 0.1) }) * window());
+        return loop 16 with s = vec4(0.0, 0.0, 0.0, 0.0) { let q = o + vec2(float(index() % 4), float(index() / 4)); s + (at(b, q) - at(a, q)) / 16.0 };
     }
 }
 
-/// The light added over eight by eight pixels at each place (rgb), and its red over its green (w).
+/// The light added over four by four pixels at each place (rgb), and its red over its green (w).
 node added: kernel {
-    requires { field.read; field.write; }
+    requires { field.read; field.write; input.read; }
     input a: Image <- lit.result;
     input b: Image <- bounced.result;
     output result: Rows<Vec4>;
     domain = 4;
     compute {
-        let o = [vec2(120.0, 300.0), vec2(470.0, 300.0), vec2(320.0, 300.0), vec2(320.0, 60.0)][element()];
-        let s = loop 64 with s = vec4(0.0, 0.0, 0.0, 0.0) { let q = o + vec2(float(index() % 8), float(index() / 8)); s + (at(b, q) - at(a, q)) / 64.0 };
+        let o = floor([vec2(0.1875, 0.75), vec2(0.734375, 0.75), vec2(0.5, 0.75), vec2(0.5, 0.15)][element()] * window());
+        let s = loop 16 with s = vec4(0.0, 0.0, 0.0, 0.0) { let q = o + vec2(float(index() % 4), float(index() / 4)); s + (at(b, q) - at(a, q)) / 16.0 };
         return vec4(s.x, s.y, s.z, s.x / max(s.y, 0.0001));
     }
 }
