@@ -260,7 +260,7 @@ this contract takes any renderer package by changing a few graph lines.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `lens` | `Lenses` | The camera this frame (`controls.orbit` drives one); `focal` 0 sees nothing (a renderer not shown), and a renderer rests on it. |
+| `lens` | `Lenses` | The camera this frame (a program's own camera drives one); `focal` 0 sees nothing (a renderer not shown), and a renderer rests on it. |
 | `sky` | `SkyLooks` | The sun, the sky's colors, clouds, far silhouettes, air. |
 | `surface` | `Grid<Vec4>` | Per pixel: world normal (xyz), distance along the view ray (w; `no_hit()` for sky). |
 | `paint` | `Grid<Vec4>` | Per pixel: albedo (rgb, linear), roughness (w). |
@@ -287,7 +287,7 @@ not a rough stand-in for it.
 
 A scene may hand over its G-buffer twice, through `surface.settle`: a reduced
 one while the camera moves, and a full one, computed once, when it stops
-(`controls.orbit_rests` gates it).
+(a camera's own rest gates it).
 
 ### What a renderer gives
 

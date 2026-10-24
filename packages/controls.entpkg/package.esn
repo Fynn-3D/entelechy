@@ -1,6 +1,6 @@
 //! What a person's hands do, read for a program: a game's actions from
-//! the keyboard, the mouse and a pad alike, from a table of actions, and
-//! a camera they turn, an orbit worked by the pointer, the wheel and keys.
+//! the keyboard, the mouse and a pad alike, from a table of actions; the
+//! pointer; and what was typed.
 package controls@1 { language = 1; ir = 1; }
 
 use "kernels/";

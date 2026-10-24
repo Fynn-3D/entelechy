@@ -11,7 +11,7 @@ node frame: stand.frame@1 { domain = 1; }
 node land: Grid<Float> { domain = vec2(2, 2); }
 node shape: stand.bake@1 { domain = vec3(100, 25, 60); }
 
-// The lens standing where a person's orbit would begin (`controls.entpkg`'s `controls.orbit` turns one), resting.
+// The lens standing where a person's orbit would begin, resting.
 node lens: kernel {
     requires { field.write; }
     output result: Lenses;
