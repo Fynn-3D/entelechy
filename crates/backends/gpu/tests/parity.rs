@@ -172,6 +172,28 @@ fn math_builtins_match_between_backends() {
     assert_eq!(mismatch(&cpu, &gpu_pixels, 1e-4), 0.0);
 }
 
+/// `tanh` far from zero is ±1 on every backend, never NaN: a device's own
+/// may fail there.
+#[test]
+fn tanh_far_out_is_one_on_every_backend() {
+    let Some(gpu) = gpu() else { return };
+    let far: Vec<[f32; 4]> = (0..64)
+        .map(|i| [i as f32 * 4.0 - 128.0, i as f32 * -50.0, 0.25, 1.0])
+        .collect();
+    let source = "kernel test.tanh@1 { requires { field.read; field.write; } input source: Image; output result: Image;
+        compute {
+            let c = sample(source);
+            let v = tanh(vec2(c.r, c.g));
+            return vec4(tanh(c.r), v.x, v.y, tanh(c.b));
+        } }";
+    let (cpu, gpu_pixels) = both(&gpu, source, &[far], (64, 1), vec![], Domain::Grid(64, 1));
+    assert!(
+        gpu_pixels.iter().flatten().all(|v| v.is_finite()),
+        "{gpu_pixels:?}"
+    );
+    assert_eq!(mismatch(&cpu, &gpu_pixels, 1e-6), 0.0);
+}
+
 #[test]
 fn loops_and_branches_match() {
     let Some(gpu) = gpu() else { return };

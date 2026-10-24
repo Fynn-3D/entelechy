@@ -830,6 +830,13 @@ impl Emitter<'_> {
                 _ => format!("to_int({list})"),
             },
             Intrinsic::Pow => format!("pow({}, {})", v(&args[0]), splat(&args[1], ty)),
+            // A device's `tanh` may give NaN far out (Metal's from 45 on);
+            // a Float's tanh is exactly ±1 past ±9.01, so the argument is
+            // held to ±15 and every answer is the reference's.
+            Intrinsic::Tanh => {
+                let t = wgsl_type(ty);
+                format!("tanh(clamp({list}, {t}(-15.0), {t}(15.0)))")
+            }
             // `atan2_ref` defines the angle at the origin.
             Intrinsic::Atan2 => format!("atan2_ref({}, {})", v(&args[0]), v(&args[1])),
             // Float `min`, `max`, `clamp` follow the shared rule; see
