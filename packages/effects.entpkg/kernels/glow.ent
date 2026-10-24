@@ -94,3 +94,18 @@ fn rising(from: Vec3, dir: Vec3, scene: Float, c: Vec3, r: Float, tall: Float, t
 
 /// A point turned about up by `f`, as the models are placed.
 fn rotated_y(p: Vec3, f: Float) -> Vec3 { return vec3(p.x * cos(f) + p.z * sin(f), p.y, p.z * cos(f) - p.x * sin(f)); }
+
+/// Where a ray goes through a box standing upright at `c`: `ax` and `az`
+/// its axes across the ground, `h` its half sizes along them and up;
+/// (in, out), out below in where it misses.
+fn box_span(from: Vec3, dir: Vec3, c: Vec3, ax: Vec3, az: Vec3, h: Vec3) -> Vec2 {
+    let o = from - c;
+    let lo = vec3(dot(o, ax), o.y, dot(o, az));
+    let ld = vec3(dot(dir, ax), dir.y, dot(dir, az));
+    let inv = vec3(1.0 / (if abs(ld.x) < 0.00001 { 0.00001 } else { ld.x }), 1.0 / (if abs(ld.y) < 0.00001 { 0.00001 } else { ld.y }), 1.0 / (if abs(ld.z) < 0.00001 { 0.00001 } else { ld.z }));
+    let a = (vec3(0.0, 0.0, 0.0) - h - lo) * inv;
+    let b = (h - lo) * inv;
+    let near = max(max(min(a.x, b.x), min(a.y, b.y)), min(a.z, b.z));
+    let far = min(min(max(a.x, b.x), max(a.y, b.y)), max(a.z, b.z));
+    return vec2(max(near, 0.0), far);
+}

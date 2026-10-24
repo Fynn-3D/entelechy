@@ -3,9 +3,7 @@
 // the rest are drawn: rings and circles on the ground, motes, sparks,
 // shards, jagged bolts, a blade's arc, a sign over a head, a flash.
 use "random.entpkg";
-use "blast.ent";
 use "effect.ent";
-use "element.ent";
 use "glow.ent";
 use "matter.ent";
 
@@ -345,6 +343,23 @@ fn sparks(from: Vec3, dir: Vec3, scene: Float, lv: Live, el: Element) -> Glow {
     };
     let lit_things = kind == chips_rocks() || kind == chips_leaves();
     return Glow { light: vec3(all.x, all.y, all.z) * lv.shine * (if lit_things { 1.0 } else { el.glow * flicker_of(el, lv.t, lv.seed) }), through: all.w, near: 100000.0 };
+}
+
+/// A crystal of ice: six-sided, pointed at both ends, `len` long and `w`
+/// wide along `a`; how far `q` is from it.
+fn crystal(q: Vec3, a: Vec3, len: Float, w: Float) -> Float {
+    let x = dot(q, a);
+    let side = q - a * x;
+    let radial = length(side);
+    let up = if abs(a.y) < 0.9 { vec3(0.0, 1.0, 0.0) } else { vec3(1.0, 0.0, 0.0) };
+    let u = normalize(cross(a, up));
+    let v = cross(a, u);
+    let ang = atan2(dot(side, v), dot(side, u));
+    let facet = 1.0472;
+    let k = ang - facet * floor(ang / facet + 0.5);
+    let hex = radial * cos(k) / 0.866;
+    let taper = w * clamp(1.0 - abs(x) / (len * 0.5), 0.0, 1.0);
+    return max(hex - taper, abs(x) - len * 0.5) * 0.7;
 }
 
 /// Where shard `i` of a layer stands, the way it leans, and how long it

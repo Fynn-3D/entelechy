@@ -1,7 +1,10 @@
 # sound
 
-Sound effects: a game's events in a material or a style, and the casts
-of the effects package heard as they are drawn.
+The sound of effects: each layer of an effects cast heard as its form
+sounds (a burst, a hum, a crackle, a whoosh), in its matter's voice (a
+timbre row: pitch, brightness, crackle, ring, body), when it begins and
+ends, how big it is and where it is from the eye. Which voices a game's
+matters have is its own table (the study's `spell_book` keeps one).
 
 **Layer:** Media. **Uses:** [`audio`](../audio.entpkg/README.md), [`effects`](../effects.entpkg/README.md), [`random`](../random.entpkg/README.md).
 
@@ -13,8 +16,6 @@ use "sound.entpkg";
 
 - `kernels/cast.ent` — The sounds a voice makes, `s` seconds into it,
   `len` long, at sample `n`, in its element's voice.
-- `kernels/event.ent` — The sounds of a game's events, each a cue (the
-  audio package's) a project sets going. Kernels: `sound.events@1`.
 - `kernels/mix.ent` — The voices summed into a block of stereo samples.
   Kernels: `sound.sound@1`.
 - `kernels/voice.ent` — What each cast's layers are as sound. Kernels:
@@ -22,15 +23,10 @@ use "sound.entpkg";
 
 ## Graph presets
 
-- `graphs/cast.esn` — The vfx package's casts heard.
-
-## Tables
-
-`data/materials.csv`, `data/styles.csv`, `data/timbres.csv`
+- `graphs/cast.esn` — An effects cast heard, a block of stereo samples.
 
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`sounds.replay`. Every Kernel of the package is reached by one of them.
-
-Used by the [sound](../../examples/sound/README.md), [spells](../../examples/spells/README.md) examples.
+`sounds.replay`, over two effects and their matters' voices of its own
+(`tests/data/`). Every Kernel of the package is reached by one of them.

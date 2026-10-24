@@ -95,7 +95,7 @@ Pictures and what a camera sees.
 | [`light`](light.entpkg/README.md) | Light in a world a scene hands over: the G-buffer contract, shading, the sun, sky and lamps, shadows, bounced light, fog and air, and the renderers |
 | [`particles`](particles.entpkg/README.md) | Particles stepped, binned and drawn over a picture's depth |
 | [`scatter`](scatter.entpkg/README.md) | Things scattered over the ground by layers |
-| [`effects`](effects.entpkg/README.md) | Magic and skills as data, drawn as light along each ray |
+| [`effects`](effects.entpkg/README.md) | Effects as layers of forms in time, made of a matter, drawn as light along each ray |
 
 ### Media
 
@@ -105,7 +105,7 @@ Sound and music.
 | --- | --- |
 | [`audio`](audio.entpkg/README.md) | Clocks, cues, instruments, filters and delay lines for blocks of samples |
 | [`music`](music.entpkg/README.md) | Music made from a mood, a band and a seed |
-| [`sound`](sound.entpkg/README.md) | Event sounds and the sounds of effects |
+| [`sound`](sound.entpkg/README.md) | The sound of effects: each layer heard as its form sounds, in its matter's voice |
 
 ### Simulation
 

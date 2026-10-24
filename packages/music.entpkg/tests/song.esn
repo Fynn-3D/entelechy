@@ -4,8 +4,8 @@
 use "../kernels/";
 use "audio.entpkg";
 
-input moods: Moods = "../data/moods.csv";
-input bands: Bands = "../data/bands.csv";
+input moods: Moods = "data/moods.csv";
+input bands: Bands = "data/bands.csv";
 input instruments: Instruments = "../data/instruments.csv";
 
 node paced0: audio.paced_start@1 { domain = 1; }

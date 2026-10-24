@@ -36,7 +36,6 @@ entelechy run examples/<example>/scene.esn --out output.ppm --watch
 - [controls](controls/README.md): a dot walked by the keyboard or a pad alike, actions read from a table by the controls package.
 - [vector](vector/README.md): an SVG imported by `entelechy-import` and drawn sharp at any size by the vector package; drag and zoom.
 - [material_balls](material_balls/README.md): rows of material balls handed over as a G-buffer and lit by the light package's probe GI, path tracer or clay; fireflies and scattered pebbles over them.
-- [spells](spells/README.md): every spell of the effects package cast on a grid of its own, drawn as light along each pixel's ray and heard through the sound package.
 - [showcase](showcase/README.md): a signed-distance gamepad under physically based shading, with a toolbar in logical pixels.
 - [darkroom](darkroom/README.md): a raw photograph developed with the image package: equalized, graded, sharpened, and a neon outline drawn from a signed distance field.
 - [nebula](nebula/README.md): a drift through a nebula made by the random package, finished by the image package's camera look: glow, depth of field, tone and grain.

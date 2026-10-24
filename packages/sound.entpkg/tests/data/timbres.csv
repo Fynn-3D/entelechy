@@ -1,0 +1,3 @@
+#name,pitch,bright,crackle,ring,body,grit,swirl,wet,drone,gain
+fire,220,0.55,0.8,0.05,0.5,0.5,0.2,0,0.1,1
+ice,660,0.9,0.15,0.9,0.25,0.2,0.1,0.05,0,0.9

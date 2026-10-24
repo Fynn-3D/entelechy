@@ -4,9 +4,9 @@
 // look with inked edges.
 use "../kernels/";
 
-input elements: Elements = "../data/elements.csv";
-input effects: Effects = "../data/effects.csv";
-input layers: Layers = "../data/layers.csv";
+input elements: Elements = "data/elements.csv";
+input effects: Effects = "data/effects.csv";
+input layers: Layers = "data/layers.csv";
 
 node eye: kernel {
     requires { field.write; }

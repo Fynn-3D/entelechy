@@ -1,6 +1,6 @@
-//! Magic and skills as data: an effect is layers of forms in time, made
-//! of its element's matter, drawn as light gathered along each pixel's
-//! ray over a picture with its depth.
+//! Effects as light along each pixel's ray, over a picture with its
+//! depth: an effect is layers of forms in time, placed, moved and keyed,
+//! made of a matter; which effects a game has are its own tables.
 package effects@1 { language = 1; ir = 1; }
 
 use "kernels/";

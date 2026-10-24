@@ -1,8 +1,13 @@
 # music
 
-A game's music made, not recorded: a mood played by a band from a seed,
-the seed making the tune's motif, so one seed through every mood is one
-score.
+Music made, not recorded: a mood (a mode, a key, a tempo, its chords,
+how busy) played by a band (which instruments take the tune, the
+counter-tune, the chords, the arpeggio, the bass and the drums) from a
+seed, the seed making the tune's motif, so one seed through every mood
+is one score. A palette of instruments ships with it
+(`data/instruments.csv`: strings, brass, flutes, bells, plucked strings,
+an old console's voices); which moods and bands a game has are its own
+tables (the study's `game_music` keeps one).
 
 **Layer:** Media. **Uses:** [`audio`](../audio.entpkg/README.md), [`random`](../random.entpkg/README.md).
 
@@ -20,11 +25,10 @@ use "music.entpkg";
 
 ## Tables
 
-`data/bands.csv`, `data/instruments.csv`, `data/moods.csv`, `data/names.txt`
+`data/instruments.csv`: the instruments' palette.
 
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`song.replay`. Every Kernel of the package is reached by one of them.
-
-Used by the [sound](../../examples/sound/README.md) example.
+`song.replay`, over two moods and two bands of its own (`tests/data/`).
+Every Kernel of the package is reached by one of them.
