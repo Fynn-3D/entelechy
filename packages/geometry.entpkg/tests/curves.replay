@@ -1,0 +1,18 @@
+scene curves.esn
+
+frame 0.0
+# Catmull-Rom: p1 at 0, p2 at 1, slope (p2 - p0) / 2 at 0, and halfway
+# (p1 + p2) / 2 + ((p1 + p2) - (p0 + p3)) / 16.
+expect curves.result[0] = 1 2 0.00001
+expect curves.result[1] = 3 3 0.00001
+expect curves.result[2] = 1.5 1.5 0.00001
+expect curves.result[3] = 1.875 2.75 0.00001
+# Bezier: p0 at 0, p3 at 1, slopes 3 (p1 - p0) and 3 (p3 - p2).
+expect curves.result[4] = 0 0 0.00001
+expect curves.result[5] = 6 1 0.00001
+expect curves.result[6] = 3 6 0.00001
+expect curves.result[7] = 9 -6 0.00001
+expect sums.result[0] = 1 0.00001
+expect sums.result[1] = 1 0.00001
+expect sums.result[2] = 0 0.00001
+expect sums.result[3] = 0 0.00001

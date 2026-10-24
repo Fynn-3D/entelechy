@@ -1,0 +1,32 @@
+// Curves through control points, as the weights of four points: a point
+// of the curve is `p0 * w.x + p1 * w.y + p2 * w.z + p3 * w.w`, for points
+// of any type, and the slopes' weights give its direction the same way.
+
+/// A uniform Catmull-Rom curve's weights at `t` from 0 to 1 of the span
+/// from `p1` to `p2`, `p0` and `p3` the points either side: the curve
+/// passes through every point, its slope at each half the way from the
+/// point before to the point after.
+fn catmull_rom_weights(t: Float) -> Vec4 {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    return vec4(-t3 + 2.0 * t2 - t, 3.0 * t3 - 5.0 * t2 + 2.0, -3.0 * t3 + 4.0 * t2 + t, t3 - t2) * 0.5;
+}
+
+/// The slope of `catmull_rom_weights` at `t`, a change per span.
+fn catmull_rom_slopes(t: Float) -> Vec4 {
+    let t2 = t * t;
+    return vec4(-3.0 * t2 + 4.0 * t - 1.0, 9.0 * t2 - 10.0 * t, -9.0 * t2 + 8.0 * t + 1.0, 3.0 * t2 - 2.0 * t) * 0.5;
+}
+
+/// A cubic Bezier curve's weights at `t` from 0 to 1: it starts at `p0`
+/// toward `p1` and ends at `p3` from `p2`.
+fn bezier_weights(t: Float) -> Vec4 {
+    let s = 1.0 - t;
+    return vec4(s * s * s, 3.0 * s * s * t, 3.0 * s * t * t, t * t * t);
+}
+
+/// The slope of `bezier_weights` at `t`, a change per curve.
+fn bezier_slopes(t: Float) -> Vec4 {
+    let s = 1.0 - t;
+    return vec4(-3.0 * s * s, 3.0 * s * s - 6.0 * s * t, 6.0 * s * t - 3.0 * t * t, 3.0 * t * t);
+}

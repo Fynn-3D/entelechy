@@ -1,0 +1,35 @@
+// Curve weights at known places: the Catmull-Rom curve at the ends of its
+// span is its middle two points, its slope there half the way from the
+// point before to the point after, and halfway it is the mean of the
+// middle two less an eighth of the ends' bulge; the Bezier curve at its
+// ends is its end points, its slopes three times the first and last
+// legs; the weights sum to one and the slopes' to zero.
+use "../kernels/";
+
+// Points 0 to 3: (0, 0), (1, 2), (3, 3), (6, 1).
+node curves: kernel {
+    requires { field.write; }
+    output result: Rows<Vec2>;
+    domain = 8;
+    compute {
+        let p0 = vec2(0.0, 0.0);
+        let p1 = vec2(1.0, 2.0);
+        let p2 = vec2(3.0, 3.0);
+        let p3 = vec2(6.0, 1.0);
+        let w = [catmull_rom_weights(0.0), catmull_rom_weights(1.0), catmull_rom_slopes(0.0), catmull_rom_weights(0.5),
+            bezier_weights(0.0), bezier_weights(1.0), bezier_slopes(0.0), bezier_slopes(1.0)][element()];
+        return p0 * w.x + p1 * w.y + p2 * w.z + p3 * w.w;
+    }
+}
+// Each weight's sum at t = 0.3, then each slope's.
+node sums: kernel {
+    requires { field.write; }
+    output result: Rows<Float>;
+    domain = 4;
+    compute {
+        let w = [catmull_rom_weights(0.3), bezier_weights(0.3), catmull_rom_slopes(0.3), bezier_slopes(0.3)][element()];
+        return w.x + w.y + w.z + w.w;
+    }
+}
+
+output result <- curves.result;
