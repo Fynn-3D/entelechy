@@ -558,3 +558,31 @@ it wants, and the package grows by words, not by features.
 **Where.** [packages](../packages/README.md) holds the packages to their
 names, layers and tests (`cargo xtask packages`); the light package's
 [words test](../packages/light.entpkg/tests/words.esn).
+
+## A word enters by what a probe could not write
+
+The packages hold general words, never a list of what someone expected
+to need. A word enters when a probe finds it missing: a domain the
+packages do not yet cover is written from the words there are, outside
+the repository, and where the writing sticks is measured. What sticks
+enters only when it is
+
+1. general, met in more than one domain or already written again in
+   sources beside the repository;
+2. easy to write wrongly, by a bound, an order or a case a writer misses;
+3. held by a test, a count, a bound or the same bits on every backend.
+
+Before a word is called missing, the language's own forms are searched
+by what they do, not by the name a writer expects: a reduction is
+`merge`, a constant row a Field node. A word that enters takes the place
+of the copies of it the packages hold, and what it replaces renders the
+same to the bit. The commit that adds it carries the probe's evidence.
+
+**Why.** Words added from a list of expectations grow the packages by
+guesses: some never used, some written twice under two names. A probe
+shows which friction is the packages' and which is one program's, and
+measures it, so a word earns its place and its test at once.
+
+**Where.** [packages](../packages/README.md), *Entry*; the tests each
+package carries, which `cargo xtask packages` holds to reach every
+Kernel.

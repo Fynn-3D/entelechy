@@ -17,6 +17,12 @@ one holds.
 
 ## How a package is made
 
+- **Entry.** A word enters when a probe finds it missing: a domain
+  written from the packages there are, outside the repository, sticks
+  where a general word is lacking, one easy to write wrongly that a
+  test can hold. The commit adding it carries what the probe measured,
+  and the copies of it the packages held give way to it
+  ([DECISIONS](../docs/DECISIONS.md#a-word-enters-by-what-a-probe-could-not-write)).
 - **Name.** One English noun in lower case naming its domain: `image`,
   `raster`, `physics`. No verbs, no abbreviations, no `utils`.
 - **Layer.** A package sits in one layer and uses packages of its own
