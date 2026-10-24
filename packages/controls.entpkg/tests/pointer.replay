@@ -1,0 +1,35 @@
+scene pointer.esn
+window 100 80
+
+# Moved onto a point, the left button pressed there, held, then released.
+pointer 20 30
+frame 0.0
+expect pointer.result[0].at = 20 30
+expect pointer.result[0].moved = true
+expect pointer.result[0].held = 0
+pointer 20 30 down
+frame 0.1
+expect pointer.result[0].moved = false
+expect pointer.result[0].held = 1
+expect pointer.result[0].pressed = 1
+frame 0.2
+expect pointer.result[0].pressed = 0
+expect pointer.result[0].held = 1
+pointer 20 30 up
+button right down
+wheel 0 -1
+frame 0.3
+expect pointer.result[0].released = 1
+expect pointer.result[0].pressed = 2
+expect pointer.result[0].wheel = 0 -1
+frame 0.4
+expect pointer.result[0].wheel = 0 0
+
+# What is typed comes a frame at a time, Chinese as well as ASCII.
+type "a你"
+frame 0.5
+expect typing.result[0].n = 2
+expect typing.result[0].codes.0 = 97
+expect typing.result[0].codes.1 = 20320
+frame 0.6
+expect typing.result[0].n = 0

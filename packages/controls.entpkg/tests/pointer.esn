@@ -1,0 +1,11 @@
+// The pointer and the typing as a program reads them: where the pointer
+// is, its buttons pressed and released, the wheel, whether it moved; and
+// what was typed this frame.
+use "../kernels/";
+
+node start: controls.pointer_start@1 { domain = 1; }
+node pointer: controls.pointer@1 { previous <~ pointer.result from start.result; }
+node typing: controls.typing@1 { domain = 1; }
+
+output result <- pointer.result;
+output typed <- typing.result;

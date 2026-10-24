@@ -1,5 +1,5 @@
 // Command search: a tool has no buttons or panels, only commands (a text file, one a line) and hotkeys.
-// Space opens it; command_typing (letters, digits, spaces) filters, Backspace deletes; the commands whose names hold what is typed are listed,
+// Space opens it; what is typed filters (`controls.typing`, letters folded to lower case), Backspace deletes; the commands whose names hold what is typed are listed,
 // those whose whole name it is first; Up and Down choose, the wheel scrolls, the line under the pointer is chosen; Enter or
 // a click runs the chosen one (a number typed after it is its argument) and closes it; Esc or a click outside closes it.
 // A row of its own state (`Search`); what a command does when it runs is the tool's (`run`, `arg`).
@@ -7,14 +7,15 @@
 // (`command_typing`). Each step of the search is a node, which `graphs/command_search.esn` wires together:
 // the names read once by line, every line compared at once, ordered, then chosen.
 use "text.entpkg";
+use "controls.entpkg";
 use "layout.ent";
 use "paint.ent";
 use "widget.ent";
 
-/// The search: whether it is open, what is typed (letters' codes), the
-/// commands found and the one chosen; the letter keys, the typing keys
-/// (`typing_code`) and Space as held last frame; and the command run this
-/// frame (-1 none) with its number (-1 none).
+/// The search: whether it is open, what is typed (code points), the
+/// commands found and the one chosen, the wheel's scrolling kept between
+/// rows, and the command run this frame (-1 none) with its number (-1
+/// none).
 struct Search {
     open: Int;
     typed: [Int; 24];
@@ -26,16 +27,9 @@ struct Search {
     total: Int;
     first: Int;
     choice: Int;
-    letters: Int;
-    digits: Int;
-    space: Int;
     run: Int;
     arg: Int;
-    /// The wheel's scrolling kept between rows, the pointer as last seen,
-    /// and the left button as held last frame.
     scroll: Float;
-    pointer: Vec2;
-    held: Int;
 }
 
 /// The search's place and size, in the picture's points: the text's
@@ -60,15 +54,34 @@ kernel ui.command_start@1 {
     requires { field.write; }
     output result: Rows<Search>;
     compute {
-        return Search { open: 0, typed: [each 24 { 0 }], typed_n: 0, found: [each 12 { -1 }], found_n: 0, total: 0, first: 0, choice: 0, letters: 0, digits: 0, space: 0, run: -1, arg: -1,
-            scroll: 0.0, pointer: vec2(0.0, 0.0), held: 0 };
+        return Search { open: 0, typed: [each 24 { 0 }], typed_n: 0, found: [each 12 { -1 }], found_n: 0, total: 0, first: 0, choice: 0, run: -1, arg: -1,
+            scroll: 0.0 };
     }
 }
 
-/// The typing keys past the letters, a bit each: the digits 0 to 9,
-/// then Up, Down, Backspace, Enter and Escape.
-fn command_typing_code(bit: Int) -> Int {
-    return if bit < 10 { 48 + bit } else if bit == 10 { 38 } else if bit == 11 { 40 } else if bit == 12 { 8 } else if bit == 13 { 13 } else { 27 };
+/// The actions of `ui.command_keys`, by their place in its table.
+fn command_delete() -> Int { return 0; }
+fn command_enter() -> Int { return 1; }
+fn command_escape() -> Int { return 2; }
+
+/// The actions the search answers, for `controls.read` (`domain = 3`):
+/// Backspace deletes, Enter or a pad's south runs, Esc or its east
+/// closes. Up and Down are the arrows' and the left stick's steps.
+kernel ui.command_keys@1 {
+    requires { field.write; }
+    output result: Rows<ActionBinding>;
+    compute {
+        let e = element();
+        return if e == command_delete() { ActionBinding { key: 8, key2: -1, pad: -1 } }
+            else if e == command_enter() { ActionBinding { key: 13, key2: -1, pad: 8 } }
+            else { ActionBinding { key: 27, key2: -1, pad: 9 } };
+    }
+}
+
+/// A character as the search holds it: a letter in lower case; -1 for
+/// what is not written (a control character).
+fn command_char(c: Int) -> Int {
+    return if c >= 65 && c <= 90 { c + 32 } else if c < 32 || c == 127 { -1 } else { c };
 }
 
 /// The typed text's part before a number ending it, and that number (-1
@@ -86,8 +99,8 @@ fn command_typed_parts(t: Search) -> IVec2 {
 }
 
 /// What this frame's hands do to the search the last frame left: the row
-/// before anything is found (`now`: the keys as held, the typed text),
-/// whether it opens or the typing changed, and the keys and click pressed.
+/// before anything is found (`now`: the typed text), whether it opens or
+/// the typing changed, and the steps, keys and click pressed.
 struct SearchHands {
     now: Search;
     shut: Int;
@@ -98,43 +111,44 @@ struct SearchHands {
     enter: Int;
     escape: Int;
     clicked: Int;
+    moved: Int;
     pointer: Vec2;
     window: Vec2;
 }
-fn search_hands(w: Search) -> SearchHands {
-    let letters = loop 26 with b = 0 { if key(65 + index()) { b | (1 << index()) } else { b } };
-    let digits = loop 15 with b = 0 { if key(command_typing_code(index())) { b | (1 << index()) } else { b } };
-    let space_now = if key(32) { 1 } else { 0 };
-    let new_letters = letters & (-1 ^ w.letters);
-    let new_digits = digits & (-1 ^ w.digits);
-    let space_pressed = space_now == 1 && w.space == 0;
-    let sc = max(scale(), 1.0);
-    let win = window() / sc;
-    let q = pointer() / sc;
-    let held = if button(0) { 1 } else { 0 };
-    let clicked = held == 1 && w.held == 0;
-    let base = Search { ..w, letters: letters, digits: digits, space: space_now, run: -1, arg: -1, pointer: q, held: held };
-    let shut = w.open == 0 && !space_pressed;
+fn search_hands(w: Search, h: ActionControls, p: PointerControls, ty: Typing) -> SearchHands {
+    let base = Search { ..w, run: -1, arg: -1 };
     let opening = w.open == 0;
-    let letter = loop 26 with c = -1 { if c < 0 && (new_letters & (1 << index())) != 0 { 97 + index() } else { c } };
-    let digit = loop 10 with c = -1 { if c < 0 && (new_digits & (1 << index())) != 0 { 48 + index() } else { c } };
-    let typed_char = if opening { -1 } else if letter >= 0 { letter } else if digit >= 0 { digit } else if space_pressed { 32 } else { -1 };
-    let back = (new_digits & (1 << 12)) != 0;
+    let space_typed = loop ty.n with f = false { f || typed_at(ty, index()) == 32 };
+    let shut = opening && !space_typed;
+    let back = action_pressed(h, command_delete());
+    // Opening, the Space that opens it is not typed; open, every character typed this frame is.
     let n0 = if opening { 0 } else { w.typed_n };
-    let n1 = if back { max(n0 - 1, 0) } else if typed_char >= 0 && n0 < 24 { n0 + 1 } else { n0 };
-    let typed = [each 24 { if index() == n0 && typed_char >= 0 && !back { typed_char } else if index() < n1 { if opening { 0 } else { w.typed[index()] } } else { 0 } }];
+    let kept = if back { max(n0 - 1, 0) } else { n0 };
+    let added = if opening || back { 0 } else { loop ty.n with k = 0 { if command_char(typed_at(ty, index())) >= 0 { k + 1 } else { k } } };
+    let n1 = min(kept + added, 24);
+    let typed = [each 24 {
+        let i = index();
+        if i < kept { if opening { 0 } else { w.typed[i] } }
+        else if i < n1 {
+            // The (i - kept)th written character of this frame's.
+            let want = i - kept;
+            let found = loop ty.n with r = ivec2(0, 0) { let c = command_char(typed_at(ty, index())); if c >= 0 && r.x == want && r.y == 0 { ivec2(r.x, c) } else if c >= 0 && r.y == 0 { ivec2(r.x + 1, 0) } else { r } };
+            found.y
+        } else { 0 }
+    }];
     return SearchHands {
         now: if shut { base } else { Search { ..base, open: 1, typed: typed, typed_n: n1 } },
         shut: int(shut),
         opening: int(opening),
-        changed: int(typed_char >= 0 || back || opening),
-        up: int((new_digits & (1 << 10)) != 0),
-        down: int((new_digits & (1 << 11)) != 0),
-        enter: int((new_digits & (1 << 13)) != 0),
-        escape: int((new_digits & (1 << 14)) != 0),
-        clicked: int(clicked),
-        pointer: q,
-        window: win,
+        changed: int(added > 0 || back || opening),
+        up: int(action_stick_stepped(h, 1)),
+        down: int(action_stick_stepped(h, 2)),
+        enter: int(action_pressed(h, command_enter())),
+        escape: int(action_pressed(h, command_escape())),
+        clicked: int(pointer_pressed(p, 0)),
+        moved: int(p.moved),
+        pointer: pointer_points(p),
+        window: window() / max(scale(), 1.0),
     };
 }
 
@@ -219,11 +233,14 @@ fn command_span_matches(names: Rows<Int>, from: Int, to: Int, t: Search, q: Int)
 
 /// This frame's typed search: the row the hands leave, before anything
 /// is found.
-kernel ui.command_query@1 {
+kernel ui.command_query@2 {
     requires { field.read; field.write; input.read; }
     input previous: Rows<Search>;
+    input hands: Rows<ActionControls>;
+    input pointer: Rows<PointerControls>;
+    input typing: Rows<Typing>;
     output result: Rows<Search>;
-    compute { return search_hands(sample(previous)).now; }
+    compute { return search_hands(sample(previous), at(hands, 0), at(pointer, 0), at(typing, 0)).now; }
 }
 
 /// Whether each line holds the typed search: 1 its name is all of it,
@@ -282,15 +299,19 @@ fn command_found_line(ordered: Rows<Int>, total: Int, i: Int) -> Int {
 /// The search after this frame's hands, the lines found (`ranks`,
 /// `ordered`) in it: the rows shown, the choice, scrolling, and the
 /// command run.
-kernel ui.command_search@2 {
+kernel ui.command_search@3 {
     requires { field.read; field.write; input.read; }
     input previous: Rows<Search>;
+    input hands: Rows<ActionControls>;
+    input pointer: Rows<PointerControls>;
+    input typing: Rows<Typing>;
     input ranks: Rows<IVec2>;
     input ordered: Rows<Int>;
     output result: Rows<Search>;
     compute {
         let w = sample(previous);
-        let h = search_hands(w);
+        let pt = at(pointer, 0);
+        let h = search_hands(w, at(hands, 0), pt, at(typing, 0));
         if h.shut == 1 { return h.now; }
         let t = h.now;
         let changed = h.changed == 1;
@@ -302,7 +323,7 @@ kernel ui.command_search@2 {
         let win = h.window;
         let q = h.pointer;
         // The wheel scrolls; Up and Down move the choice, the list after it.
-        let scroll0 = if changed { 0.0 } else { clamp(w.scroll - wheel().y, 0.0, float(most_first)) };
+        let scroll0 = if changed { 0.0 } else { clamp(w.scroll - pt.wheel.y, 0.0, float(most_first)) };
         let up = h.up == 1;
         let down = h.down == 1;
         let keyed = clamp(if changed { 0 } else if up { w.choice - 1 } else if down { w.choice + 1 } else { w.choice }, 0, max(total - 1, 0));
@@ -311,7 +332,7 @@ kernel ui.command_search@2 {
         let scroll = if up || down { float(first) } else { scroll0 };
         // The pointer, moved over a row, chooses it.
         let under = command_row_under(win, rows, q);
-        let moved = length(q - w.pointer) > 0.5;
+        let moved = h.moved == 1;
         let clicked = h.clicked == 1;
         // Scrolled, the choice stays among the rows shown.
         let kept = if up || down { keyed } else { clamp(keyed, first, max(first + rows - 1, first)) };

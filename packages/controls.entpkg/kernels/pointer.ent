@@ -1,0 +1,38 @@
+// The pointer as a program reads it: where it is, its buttons held,
+// pressed and released this frame, the wheel, and whether it moved. A
+// node keeps it (`previous <~ result from start`).
+
+/// The pointer after a frame: where it is, in the window's pixels from its
+/// top left; the buttons held, a bit each (left 1, right 2, middle 4),
+/// those pressed and released this frame; the wheel turned this frame;
+/// whether it moved more than half a pixel since the last frame.
+struct PointerControls { at: Vec2; held: Int; pressed: Int; released: Int; wheel: Vec2; moved: Bool; }
+
+/// Whether button `b` (0 left, 1 right, 2 middle) is held, pressed this
+/// frame, released this frame.
+fn pointer_held(p: PointerControls, b: Int) -> Bool { return (p.held & (1 << b)) != 0; }
+fn pointer_pressed(p: PointerControls, b: Int) -> Bool { return (p.pressed & (1 << b)) != 0; }
+fn pointer_released(p: PointerControls, b: Int) -> Bool { return (p.released & (1 << b)) != 0; }
+
+/// The pointer at `at` in the window's pixels, in its points (`scale()` pixels a point).
+fn pointer_points(p: PointerControls) -> Vec2 { return p.at / max(scale(), 1.0); }
+
+kernel controls.pointer_start@1 {
+    requires { field.write; }
+    output result: Rows<PointerControls>;
+    compute { return PointerControls { at: vec2(-1.0, -1.0), held: 0, pressed: 0, released: 0, wheel: vec2(0.0, 0.0), moved: false }; }
+}
+
+/// The pointer this frame, from the one before.
+kernel controls.pointer@1 {
+    requires { field.read; field.write; input.read; }
+    input previous: Rows<PointerControls>;
+    output result: Rows<PointerControls>;
+    compute {
+        let o = sample(previous);
+        let held = (if button(0) { 1 } else { 0 }) | (if button(1) { 2 } else { 0 }) | (if button(2) { 4 } else { 0 });
+        let at = pointer();
+        return PointerControls { at: at, held: held, pressed: held & (o.held ^ -1), released: o.held & (held ^ -1), wheel: wheel(),
+            moved: length(at - o.at) > 0.5 };
+    }
+}

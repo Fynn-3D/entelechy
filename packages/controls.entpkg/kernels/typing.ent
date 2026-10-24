@@ -1,0 +1,19 @@
+// What a person typed this frame, as the keyboard or an input method
+// commits it: Chinese as well as ASCII.
+
+/// The characters typed this frame, as code points, and how many (32 at
+/// most; those past them come the frame after).
+struct Typing { codes: [Int; 32]; n: Int; }
+
+/// Character `k` typed this frame (0 past the last).
+fn typed_at(t: Typing, k: Int) -> Int { return if k >= 0 && k < t.n { t.codes[k] } else { 0 }; }
+
+/// This frame's typing.
+kernel controls.typing@1 {
+    requires { field.write; input.read; }
+    output result: Rows<Typing>;
+    compute {
+        let n = loop 32 with n = 0 until typed(n) == 0 { n + 1 };
+        return Typing { codes: [each 32 { typed(index()) }], n: n };
+    }
+}

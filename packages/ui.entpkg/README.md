@@ -1,10 +1,11 @@
 # ui
 
 A screen's widgets drawn per pixel: layout, paint, widgets over a theme,
-writing, navigation by keys, pad or pointer, a command search, and marks
-over a 3D picture.
+writing, navigation through a list, a command search, and marks over a
+3D picture. A person's hands are `controls`' to read: the navigation and
+the search take its rows.
 
-**Layer:** Interaction. **Uses:** [`text`](../text.entpkg/README.md).
+**Layer:** Interaction. **Uses:** [`text`](../text.entpkg/README.md), [`controls`](../controls.entpkg/README.md).
 
 ```text
 use "ui.entpkg";
@@ -13,15 +14,17 @@ use "ui.entpkg";
 ## Kernels
 
 - `kernels/command.ent` — Command search. Kernels: `ui.command_start@1`,
-  `ui.command_newlines@1`, `ui.command_line_count@1`,
-  `ui.command_no_lines@1`, `ui.command_line_ends@1`,
-  `ui.command_query@1`, `ui.command_matched@1`, `ui.command_ranks@1`,
-  `ui.command_ordered@1`, `ui.command_search@2`, `ui.command_overlay@1`.
+  `ui.command_keys@1`, `ui.command_newlines@1`,
+  `ui.command_line_count@1`, `ui.command_no_lines@1`,
+  `ui.command_line_ends@1`, `ui.command_query@2`, `ui.command_matched@1`,
+  `ui.command_ranks@1`, `ui.command_ordered@1`, `ui.command_search@3`,
+  `ui.command_overlay@1`.
 - `kernels/layout.ent` — Rectangles a screen is laid out in, in its
   pixels, y down.
 - `kernels/mark.ent` — Marks over a 3D picture.
-- `kernels/navigation.ent` — Moving through a list of rows by keys, a
-  pad or the pointer. Kernels: `ui.navigation_start@1`, `ui.navigate@1`.
+- `kernels/navigation.ent` — Moving through a list of rows by a
+  person's hands as `controls` reads them. Kernels:
+  `ui.navigation_start@1`, `ui.navigation_keys@1`, `ui.navigate@2`.
 - `kernels/paint.ent` — What a pixel of a screen is painted.
 - `kernels/widget.ent` — The widgets.
 - `kernels/writing.ent` — Text drawn.
@@ -29,7 +32,7 @@ use "ui.entpkg";
 ## Graph presets
 
 - `graphs/command_search.esn` — The command search (`ui.command_search`)
-  over `names`, a command a line.
+  over `names`, a command a line, the hands read inside it.
 
 ## Tests
 

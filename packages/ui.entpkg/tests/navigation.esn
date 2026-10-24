@@ -1,5 +1,7 @@
-// A list of four rows moved through by the keys, a pad and the pointer.
+// A list of four rows moved through by the hands `controls` reads: keys,
+// a pad and the pointer.
 use "../kernels/";
+use "controls.entpkg";
 
 // The list: its top left, its width and a row's height, rows 4 apart.
 node rows: kernel {
@@ -9,7 +11,12 @@ node rows: kernel {
     compute { return vec4(10.0, 10.0, 100.0, 16.0); }
 }
 node start: ui.navigation_start@1 { row = 0; domain = 1; }
-node nav: ui.navigate@1 { previous <~ nav.result from start.result; list <- rows.result; rows = 4; gap = 4.0; domain = 1; }
+node keys: ui.navigation_keys@1 { domain = 2; }
+node hands_start: controls.start@1 { domain = 1; }
+node hands: controls.read@1 { previous <~ hands.result from hands_start.result; actions <- keys.result; }
+node pointer_start: controls.pointer_start@1 { domain = 1; }
+node pointer: controls.pointer@1 { previous <~ pointer.result from pointer_start.result; }
+node nav: ui.navigate@2 { previous <~ nav.result from start.result; list <- rows.result; hands <- hands.result; pointer <- pointer.result; rows = 4; gap = 4.0; domain = 1; }
 
 node inside: kernel {
     requires { field.write; }

@@ -27,7 +27,7 @@ kernel controls.orbit_start@1 {
     }
 }
 /// The lens worked: the left button drags to turn, the right or middle to pan, the wheel dollies, a double-click or F flies to the point under the pointer
-/// (read from the last frame's small depth map `depths`, `light.entpkg`'s `surface.depths`), W A S D walk, Q E fall and rise, Shift held
+/// (read from the last frame's small depth map `depths`, `surface.depths`), W A S D walk, Q E fall and rise, Shift held
 /// is fast, R returns to `home`. The lens never goes under the ground (`land`).
 kernel controls.orbit@1 {
     requires { field.read; field.write; input.read; time.read; }
