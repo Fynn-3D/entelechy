@@ -6,6 +6,7 @@
 // the table, with the sun's disc;
 // metered and toned.
 use "../kernels/";
+use "base.ent";
 use "image.entpkg";
 
 node stand: graph "stand_scene.esn" { }
@@ -15,8 +16,8 @@ node air: graph "../graphs/atmosphere.esn" { elevation = 0.25; bearing = 2.6; ai
 node sun_views: light.sun_views@1 { lens <- stand.lens; sky <- air.sky; nearest = 8.0; spread = 4.0; reach = 20.0; size = 256.0; domain = 2; }
 node sun_depth: stand.sun_depth@1 { views <- sun_views.result; size = 256.0; domain = vec2(512, 256); }
 node sunlit: light.sun_shadow@1 { extra <- stand.extra; surface <- stand.surface; lens <- stand.lens; views <- sun_views.result; atlas <- sun_depth.result; domain = size(extra); }
-node lit_painting: light.painting_start@1 { domain = 1; }
-node lit: light.lit@1 { painting <- lit_painting.result; surface <- stand.surface; paint <- stand.paint; extra <- sunlit.result; layers <- stand.layers; more <- stand.more;
+node lit_painting: stand.painting_start@1 { domain = 1; }
+node lit: stand.lit@1 { painting <- lit_painting.result; surface <- stand.surface; paint <- stand.paint; extra <- sunlit.result; layers <- stand.layers; more <- stand.more;
     sky <- air.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; domain = size(surface); }
 node skin: graph "../graphs/subsurface.esn" { hdr <- lit.result; scatter <- lit.scatter; surface <- stand.surface; layers <- stand.layers; lens <- stand.lens; reach = 0.08; }
 node skied: light.atmosphere_sky@1 { hdr <- skin.hdr; surface <- stand.surface; lens <- stand.lens; sky <- air.sky; view <- air.view; domain = size(hdr); }

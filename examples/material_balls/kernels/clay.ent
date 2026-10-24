@@ -1,8 +1,8 @@
 // Clay: a modeler's preview of the shapes, under a studio's light before
 // its backdrop, as a renderer on the standard contract (this package's).
-use "geometry.entpkg";
-use "brdf.ent";
-use "surface.entpkg";
+use "../../../packages/geometry.entpkg";
+use "../../../packages/light.entpkg";
+use "../../../packages/surface.entpkg";
 
 /// A studio's light, a scene's to tune: how strong its key, fill and rim lights are, and its soft light from round about, the
 /// ground's color below and the sky's above.
@@ -93,7 +93,7 @@ fn surface_depth_at(surface: Grid<Vec4>, q: Vec2) -> Float {
 /// between neighbors), an outline where the distance jumps (`outline`);
 /// the backdrop and the floor's lines where nothing is (`grid`). The
 /// result is as shown (toned and encoded); the domain is the surface's.
-kernel light.clay@1 {
+kernel balls.clay@1 {
     requires { field.read; field.write; }
     input lens: Lenses;
     input surface: Grid<Vec4>;

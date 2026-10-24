@@ -1,0 +1,62 @@
+// The light from all round a surface: the sky's half and the ground's half by its facing, how much of it the
+// coarse scene (the proxies) shuts out, and what a reflected direction sees of it.
+use "surface.entpkg";
+use "sky.ent";
+
+/// How the light from all round is drawn, a scene's to tune: the color the sunlit ground throws back (`ground`, its mean color,
+/// warmer) and how strongly (`ground_light`, times the sun on it), and the sky's strength (`sky_light`).
+struct Surround { ground: Vec3; ground_light: Float; sky_light: Float; }
+/// How the coarse scene shuts out the light from all round, a scene's to tune: looked at the three distances of `reach` (meters) up
+/// along the normal, what is nearer than the way walked summed `strength` times, never darker than `least`.
+struct Openness { reach: Vec3; strength: Float; least: Float; }
+
+/// The diffuse light from all round a surface facing `n` receives: the sky's half and the ground's half mixed by its facing.
+fn hemisphere(n: Vec3, s: SkyLook, look: Surround) -> Vec3 {
+    let up = clamp(n.y, -1.0, 1.0);
+    let sky = (mix(s.horizon, s.zenith, smoothstep(0.0, 1.0, up)) * 0.55 + s.ambient * 0.45) * look.sky_light;
+    let ground = look.ground * s.sun_color * (max(s.sun.y, 0.0) / 3.14159265) * look.ground_light + s.ambient * 0.25;
+    return mix(ground, sky, smoothstep(-0.6, 0.6, up));
+}
+
+/// How much of the light from all round the coarse scene (the proxies' distances) hides from a surface at `p` facing `n` (1 none hidden):
+/// how far things are at `o`'s three distances up along the normal (no farther than a quarter of the proxy's width), darker where nearer
+/// than the way walked. A point in a crown of leaves lies inside its coarse shape, its distance negative, much darker.
+fn proxy_open(proxy: Volume<Vec4>, frame: Proxies, p: Vec3, n: Vec3, o: Openness) -> Float {
+    let d = normalize(n + vec3(0.0, 0.6, 0.0));
+    // A proxy drawn close round one thing (an asset) is read no farther than a quarter of its width (its coarsest level's).
+    let wide = at(frame, count(frame) - 1);
+    let reach = max(max(wide.cells.x, wide.cells.y), wide.cells.z) * wide.cell * 0.25;
+    let shut = loop 3 with a = 0.0 {
+        let k = min(if index() == 0 { o.reach.x } else if index() == 1 { o.reach.y } else { o.reach.z }, reach);
+        let near = proxy_near(proxy, frame, p + d * k);
+        a + clamp((k - near) / k, 0.0, 1.0) * (if index() == 0 { 0.45 } else if index() == 1 { 0.35 } else { 0.2 })
+    };
+    return clamp(1.0 - shut * o.strength, o.least, 1.0);
+}
+
+/// About how far `p` is from things in the coarse scene, past its edge too: there, the way to the coarsest level's edge and
+/// what the edge holds (what the proxy holds stands inside it), so a proxy drawn close round its thing does not end in a step.
+fn proxy_near(proxy: Volume<Vec4>, frame: Proxies, p: Vec3) -> Float {
+    let k = proxy_level(frame, p);
+    if k.x >= 0.0 { return proxy_at(proxy, frame, p, 0.0).x; }
+    let last = count(frame) - 1;
+    let fr = at(frame, last);
+    let depth = proxy_depth(frame, last);
+    let c = (p - fr.lo) / fr.cell;
+    let q = clamp(c, vec3(0.0, 0.0, 0.0), fr.cells - vec3(1.0, 1.0, 1.0));
+    return length(c - q) * fr.cell + at_linear(proxy, vec3(q.x, q.y, q.z + depth) + 0.5).x;
+}
+
+/// What the reflected direction `r` sees: the sky, or looking down, the ground's light.
+fn seen_along(r: Vec3, s: SkyLook, look: Surround) -> Vec3 {
+    return if r.y > 0.0 { sky_radiance(r, s, false) } else { hemisphere(vec3(0.0, -1.0, 0.0), s, look) };
+}
+
+/// How open to the sky a surface at `p` (just off it) facing `n` is, as the proxies say. Deep inside the coarse shape (a
+/// leaf in its crown, more than half a cell in) the coarse scene says nothing of the sky seen through it, and it is
+/// `inside_sky`; a translucent thing (a leaf) lets the sky through itself, so those round it shut out no more than its
+/// `subsurface` share of `inside_sky` lets in.
+fn lit_open(proxy: Volume<Vec4>, frame: Proxies, p: Vec3, n: Vec3, open: Openness, inside_sky: Float, subsurface: Float) -> Float {
+    let deep = saturate((0.0 - proxy_at(proxy, frame, p, 1.0).x) / proxy_cell_at(frame, p) - 0.5);
+    return max(mix(proxy_open(proxy, frame, p, n, open), inside_sky, deep), inside_sky * subsurface);
+}

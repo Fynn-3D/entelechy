@@ -1,0 +1,66 @@
+// Passes over the stand's G-buffer and over a picture a test's own renderer draws, held to what each must do: contact
+// shadows keep a sunlit floor pixel lit; a mirror's lens stands under the water's plane; the clouds' shadow only takes
+// sunlight away, and takes some; gloss is only widened, and somewhere; a mirror laid over the picture lies between it
+// and what the mirror shows, and changes it somewhere; no fog volumes are none.
+use "../kernels/";
+use "base.ent";
+use "surface.entpkg";
+use "geometry.entpkg";
+
+node stand: graph "stand_scene.esn" { }
+node shadowed: light.contact@1 { surface <- stand.surface; extra <- stand.extra; layers <- stand.layers; lens <- stand.lens; sky <- stand.sky; domain = size(surface); }
+node lit_painting: stand.painting_start@1 { domain = 1; }
+node lit: stand.lit@1 { painting <- lit_painting.result; surface <- stand.surface; paint <- stand.paint; extra <- stand.extra; layers <- stand.layers; more <- stand.more;
+    sky <- stand.sky; lens <- stand.lens; proxy <- stand.proxy; frame <- stand.frame; domain = window(); }
+node gloss: light.specular_aa@1 { paint <- stand.paint; surface <- stand.surface; domain = size(paint); }
+node deck: light.clouds_deck@1 { cover = 0.8; domain = 1; }
+node clouded: light.clouds_shadow@1 { extra <- stand.extra; surface <- stand.surface; lens <- stand.lens; sky <- stand.sky; deck <- deck.result; domain = size(extra); }
+node mirror_lens: light.mirror_lens@1 { lens <- stand.lens; level = 0.0; domain = 1; }
+node white: Grid<Vec4> { domain = vec2(16, 9); value = vec4(1.0, 1.0, 1.0, 1.0); }
+node marks: kernel {
+    requires { field.read; field.write; }
+    input more: Grid<Vec4> <- stand.more;
+    output result: Grid<Vec4>;
+    domain = size(more);
+    compute { let m = sample(more); return vec4(m.x, m.y, m.z, 1.0); }
+}
+node mirrored: light.mirror_mix@1 { hdr <- lit.result; mirror <- white.result; surface <- stand.surface; paint <- stand.paint; more <- marks.result; lens <- stand.lens; }
+node no_volumes: light.fog_volumes_none@1 { domain = 1; }
+
+/// Over every pixel, 1 where each holds: the clouds' shadow never above the sun's visibility before it (0), and below it
+/// somewhere (1); gloss never below the paint's roughness (2), and above it somewhere (3); the mirrored picture between
+/// the picture and the mirror's white (4), and off the picture somewhere (5).
+node held: kernel {
+    requires { field.read; field.write; }
+    input extra: Grid<Vec4> <- stand.extra;
+    input shaded: Grid<Vec4> <- clouded.result;
+    input paint: Grid<Vec4> <- stand.paint;
+    input widened: Grid<Vec4> <- gloss.result;
+    input picture: Image <- lit.result;
+    input mixed: Image <- mirrored.result;
+    output result: Rows<Int>;
+    domain = 6;
+    compute {
+        let k = element();
+        let n = size(extra);
+        let all = int(n.x * n.y);
+        let tally = loop all with c = ivec2(0, 0) {
+            let q = vec2(float(index() % int(n.x)), float(index() / int(n.x)));
+            let a = at(extra, q).x;
+            let b = at(shaded, q).x;
+            let r0 = at(paint, q).w;
+            let r1 = at(widened, q).w;
+            let p = at(picture, q).xyz;
+            let m = at(mixed, q).xyz;
+            let lo = min(p, vec3(1.0, 1.0, 1.0)) - 0.0001;
+            let hi = max(p, vec3(1.0, 1.0, 1.0)) + 0.0001;
+            let between = m.x >= lo.x && m.y >= lo.y && m.z >= lo.z && m.x <= hi.x && m.y <= hi.y && m.z <= hi.z;
+            let ok = if k == 0 { b <= a + 0.000001 } else if k == 2 { r1 >= r0 - 0.000001 } else if k == 4 { between } else { true };
+            let some = if k == 1 { b < a - 0.01 } else if k == 3 { r1 > r0 + 0.01 } else if k == 5 { length(m - p) > 0.01 } else { false };
+            ivec2(c.x + (if ok { 0 } else { 1 }), c.y + (if some { 1 } else { 0 }))
+        };
+        return if k % 2 == 0 { if tally.x == 0 { 1 } else { 0 } } else { if tally.y > 0 { 1 } else { 0 } };
+    }
+}
+
+output result <- mirrored.result;

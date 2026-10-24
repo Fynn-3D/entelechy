@@ -7,13 +7,8 @@ frame 0.0
 expect apart_all.result[0] < 0.000001
 expect apart_all.result[1] > 0.05
 
-# A story's film at its start is the cinema's recipe; half way on toward
-# the drained look, its own.
-expect apart_all.result[2] < 0.000001
-expect apart_all.result[3] > 0.05
-
 # Ink kept to the right half: the left as it was, the right the outline's,
 # which does ink the stand.
-expect apart_all.result[4] < 0.000001
-expect apart_all.result[5] < 0.00001
-expect apart_all.result[6] > 0.1
+expect apart_all.result[2] < 0.000001
+expect apart_all.result[3] < 0.00001
+expect apart_all.result[4] > 0.1

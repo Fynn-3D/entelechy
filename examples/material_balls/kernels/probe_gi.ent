@@ -3,15 +3,12 @@
 // the diffuse). Each frame each face traces a few coarse rays into its hemisphere (the contract's proxies): one reaching the sky
 // takes the sky's light, one meeting something takes it as the sun lights it, with the probes there (so light bounces between probes),
 // times its color; averaged in, stopping after `most`. Probes inside rock or under the ground are not used.
-use "random.entpkg";
-use "geometry.entpkg";
-use "brdf.ent";
-use "surface.entpkg";
-use "lamps.ent";
+use "../../../packages/random.entpkg";
+use "../../../packages/geometry.entpkg";
+use "../../../packages/light.entpkg";
+use "../../../packages/surface.entpkg";
 use "painted.ent";
 use "path_tracer.ent";
-use "sky.ent";
-use "transmission.ent";
 
 /// Which way face `face` looks: 0 +x, 1 -x, 2 +y, 3 -y, 4 +z, 5 -z.
 fn face_dir(face: Int) -> Vec3 {
@@ -64,7 +61,7 @@ fn open_light(frame: Proxies, n: Vec3, s: SkyLook) -> Vec3 {
 /// A probe's signature, what is round it: the ground's height at it and four places round it (weighted by distance),
 /// the distance to rock from it in six directions, and the sun's direction; it changes when the scene or the light does. Computed only when the ground,
 /// rock or sky changes.
-kernel light.probes_sign@1 {
+kernel balls.probes_sign@1 {
     requires { field.read; field.write; }
     input proxy: Volume<Vec4>;
     input land: Grid<Float>;
@@ -95,7 +92,7 @@ kernel light.probes_sign@1 {
 }
 /// The probes' signature at their last gathering: kept up with the present one while gathering (while the lit picture shows), held
 /// while not; shown again, the gathering sees whether the scene changed while it was away.
-kernel light.probes_seen@1 {
+kernel balls.probes_seen@1 {
     requires { field.read; field.write; }
     input previous: Volume<Vec2>;
     input sign: Volume<Vec2>;
@@ -124,7 +121,7 @@ fn probe_ray_light(probes: Volume<Vec4>, frame: Proxies, spacing: Float, proxy: 
 /// (under 256 by 256, as an output an editor has not chosen) nothing is gathered, and it is kept as it is, resting. Where a probe's
 /// signature (`sign`) differs from that of its last gathering (`seen`) (the ground, rock or light round it changed):
 /// it gathers again, the old light kept only as a little start (counted as 4), and whether it lies in rock is looked at again.
-kernel light.probes_gather@1 {
+kernel balls.probes_gather@1 {
     requires { field.read; field.write; }
     input previous: Volume<Vec4>;
     input surface: Grid<Vec4>;
@@ -205,7 +202,7 @@ fn screen_ray_light(surface: Grid<Vec4>, lit: Image, l: Lens, p: Vec3, n: Vec3, 
 /// meters further, and meeting something takes it as the sun lights it plus its probe light; meeting nothing still, up it takes the sky, down
 /// the probe light in that direction. Each frame's random numbers are new (the frames counted, and the lens: a jittered lens
 /// draws apart too), so the frames kept are even.
-kernel light.probes_screen_gather@1 {
+kernel balls.probes_screen_gather@1 {
     requires { field.read; field.write; }
     input surface: Grid<Vec4>;
     input lit: Image;
@@ -275,7 +272,7 @@ fn settled_step(now: Vec3, was: Vec3) -> Bool {
 /// already denoised) blended with the last frame's carried by the lens, the last frame's held within the range round it
 /// this frame (a change of light does not smear); where the place carried from lies at a different distance (hidden, newly uncovered) this
 /// frame's alone. w keeps how far it lies, for the next frame to compare.
-kernel light.probes_gather_keep@1 {
+kernel balls.probes_gather_keep@1 {
     requires { field.read; field.write; }
     input gathered: Image;
     input surface: Grid<Vec4>;
@@ -324,7 +321,7 @@ kernel light.probes_gather_keep@1 {
 /// multiple (the size was rounded up, so it need not divide evenly).
 fn gather_step(full: Vec2, small: Vec2) -> Float { return max(floor(full.x / max(small.x, 1.0) + 0.5), 1.0); }
 
-kernel light.probes_gather_blur@1 {
+kernel balls.probes_gather_blur@1 {
     requires { field.read; field.write; }
     input gathered: Image;
     input surface: Grid<Vec4>;
@@ -376,7 +373,7 @@ fn rough_seen(proxy: Volume<Vec4>, land: Grid<Float>, probes: Volume<Vec4>, lamp
 }
 
 /// The light at the point seen through (transmissive pixels only): its diffuse light is the probes' there.
-kernel light.probes_behind@1 {
+kernel balls.probes_behind@1 {
     requires { field.read; field.write; }
     input more: Grid<Vec4>;
     input behind_at: Grid<Vec4>;
@@ -401,7 +398,7 @@ kernel light.probes_behind@1 {
 
 /// The picture without reflections (which screen-space reflections and the gathered light read): the sky; things are the sun's light,
 /// the probes' diffuse light (times contact occlusion), emission and the lamps' light (so what the lamps light is bounced and reflected).
-kernel light.probes_lit@1 {
+kernel balls.probes_lit@1 {
     requires { field.read; field.write; }
     input surface: Grid<Vec4>;
     input paint: Grid<Vec4>;
@@ -465,7 +462,7 @@ fn probes_mirrored(m: Pbr, p: Vec3, n: Vec3, dir: Vec3, d: Float, q: Vec2, exten
 /// off the screen, through the proxies (the coarse distance field), falling back to the sky (down, the probes round it); a rough surface's is the diffuse light round it, a
 /// clearcoat's by its own roughness; all times contact occlusion; transmissive surfaces add the light let through (`transmission.ent`); plus emission and
 /// the lamps' light (`lamped`); air laid over distance.
-kernel light.probes_shade@1 {
+kernel balls.probes_shade@1 {
     requires { field.read; field.write; }
     input surface: Grid<Vec4>;
     input paint: Grid<Vec4>;

@@ -11,7 +11,7 @@ use "geometry.entpkg";
 use "brdf.ent";
 use "surface.entpkg";
 use "lamps.ent";
-use "lit.ent";
+use "ambient.ent";
 use "sky.ent";
 
 /// A frame's levels held at hand (at most eight): each level's row, how deep in the volume its cells start, how many levels.

@@ -1001,7 +1001,7 @@ use "kernels/";                                // its Kernels, as any document u
 ```
 
 It holds its Kernel files, its graph presets (`.esn` placed by path,
-`node nes: graph "image.entpkg/graphs/nes.esn" { ... }`), and assets
+`node glow: graph "image.entpkg/graphs/glow.esn" { ... }`), and assets
 a scene reads by path. `use "image.entpkg";` brings its Kernels and
 declarations in, as if the scene used what the manifest uses, when the
 manifest's versions are no newer than this Entelechy's (`entelechy version` prints

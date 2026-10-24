@@ -7,7 +7,7 @@ node scene: graph "../graphs/balls.esn" { }
 // No lamps beside the sun.
 node no_lamps: light.lamps_none@1 { domain = 1; }
 node no_lamp_looks: light.lamp_looks_none@1 { domain = vec2(1, 1); }
-node light: graph "../../../packages/light.entpkg/graphs/path_tracer.esn" { lamps <- no_lamps.result; lamp_looks <- no_lamp_looks.result; lens <- scene.lens; sky <- scene.sky; surface <- scene.surface; paint <- scene.paint; extra <- scene.extra; layers <- scene.layers; more <- scene.more;
+node light: graph "../graphs/path_tracer.esn" { lamps <- no_lamps.result; lamp_looks <- no_lamp_looks.result; lens <- scene.lens; sky <- scene.sky; surface <- scene.surface; paint <- scene.paint; extra <- scene.extra; layers <- scene.layers; more <- scene.more;
     behind_at <- scene.behind_at; behind_dir <- scene.behind_dir; behind_paint <- scene.behind_paint; behind_normal <- scene.behind_normal; through <- scene.through;
     proxy <- scene.proxy; land <- scene.land; frame <- scene.frame; bounces = 2; }
 node bright: image.bright@2 { hdr <- light.hdr; domain = ceil(window() / 8); }

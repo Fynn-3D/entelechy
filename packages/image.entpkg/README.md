@@ -3,11 +3,11 @@
 What Entelechy does to a picture, knowing nothing of the world it shows:
 color spaces, blending and masks, two pictures compared, filters, a
 grade, tone and its curves,
-glow, metered and local exposure, a film's finish and a watercolor's
-tone, scaling and sharpening, antialiasing within a frame, histograms,
+glow, metered and local exposure, a film's steps, scaling and
+sharpening, antialiasing within a frame, histograms,
 distance fields, mipmaps, pixel art and sprite sheets. Each effect is a
-word a kernel calls on a pixel, its look data a scene makes (`Grade`,
-`Film`, `Watercolor`), its kernel a thin pass; what needs the world (a
+word a kernel calls on a pixel, its look data a scene makes (`Grade`),
+its kernel a thin pass; what needs the world (a
 G-buffer, a lens, light) is [`light`](../light.entpkg/README.md)'s.
 
 **Layer:** Graphics. **Uses:** [`random`](../random.entpkg/README.md).
@@ -43,13 +43,11 @@ use "image.entpkg";
   `image.exposure_meter@1`, `image.exposure_start@1`,
   `image.exposure_apply@1`, `image.exposure_local_base@1`,
   `image.exposure_local_blur@1`, `image.exposure_local@1`.
-- `kernels/film.ent` — A film's finish as data (`Film`: a grade, a split,
-  an S curve, halation, fringe, vignette, grain, bars), each step a word
-  (`film_split`, `film_curve`, `film_halation`, `film_bars`, `fringed`,
-  `vignetted`, `film_grain`, `defocus`), its named looks
-  (`film_widescreen`, `film_warm`, `film_drained`, `film_monochrome`); and a camera's finish over a picture that keeps its
-  depth in w. Kernels: `image.film_start@2`, `image.film@1`,
-  `image.bright@1`, `image.finish@1`.
+- `kernels/film.ent` — A camera's and a film's steps over a picture: the
+  bright part taken smaller, the lens's fringe, defocus by distance,
+  darkened corners, grain, bars, halation, a split and an S curve
+  (`fringed`, `defocus`, `vignetted`, `film_grain`, `film_bars`,
+  `film_halation`, `film_split`, `film_curve`). Kernels: `image.bright@1`.
 - `kernels/filter.ent` — Filters. Kernels: `image.blur@1`,
   `image.shrink@1`, `image.convolve@1`, `image.sharpen@1`,
   `image.edges@1`, `image.morph@1`, `image.resize@1`.
@@ -75,9 +73,6 @@ use "image.entpkg";
   (FSR 1's EASU, `upscaled`) or nearest-neighbor (`upscaled_near`), and a
   sharpening that cannot overshoot (RCAS). Kernels: `image.upscale@1`,
   `image.contrast_sharpen@1`.
-- `kernels/watercolor.ent` — A watercolor's tone as data (`Watercolor`,
-  `watercolor`): how far, vivid, shadows cool, highlights warm. Kernels:
-  `image.watercolor_start@1`, `image.watercolor@1`.
 - `kernels/wrap.ent` — Wrap addressing for a linear read.
 
 ## Graph presets
@@ -93,17 +88,14 @@ use "image.entpkg";
   shape, in pixels, negative inside.
 - `graphs/equalize.esn` — Histogram equalization as a sub-graph.
 - `graphs/exposure.esn` — Metered exposure and local exposure.
-- `graphs/finish.esn` — The whole finish, as a sub-graph, usually a
-  scene's last node.
 - `graphs/flood.esn` — Jump flooding as a sub-graph.
-- `graphs/glow.esn` — The camera's finish's glow: a near and a far
+- `graphs/glow.esn` — A glow: a near and a far
   copy of what is past white.
 - `graphs/flood_pass.esn` — One jump-flooding pass and the step after
   it.
 - `graphs/mipmap.esn` — The mip strip of a square texture, as a sub-
   graph.
 - `graphs/mipmap_level.esn` — One halving of a mip strip.
-- `graphs/nes.esn` — Coarse pixels held to a few colors.
 - `graphs/sharpen.esn` — Unsharp masking as a sub-graph.
 - `graphs/tonemap.esn` — The picture seen at its own size: glow, tone
   and sRGB, sharpened.

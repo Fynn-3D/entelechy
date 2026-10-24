@@ -2,8 +2,7 @@
 // asks (`painted`, 0 as it is, 1 all painted, between them blended: a look turned into another as a story goes).
 // The sunward side and the shade split on one soft step, the shade only the light from all round, flat and cool; a
 // rim of light on the edge against the light; a small hard highlight on smooth surfaces.
-use "brdf.ent";
-use "sky.ent";
+use "../../../packages/light.entpkg";
 
 /// The painted look, a scene's to tune: where light turns to shade across the surface (`terminator`, from and to, the
 /// cosine to the sun) and across the shadow (`shadow`), the sun's share of its light, how much of the light all round's
@@ -67,7 +66,7 @@ fn mirrored_as(m: Pbr, n: Vec3, v: Vec3, spec_light: Vec3, painted: Float) -> Ve
 fn painting_none() -> Painting { return Painting { amount: 0.0, toon: toon_default() }; }
 
 /// One painting made from these parameters (`domain = 1`): how far, and the look (`Toon`'s).
-kernel light.painting_start@1 {
+kernel balls.painting_start@1 {
     requires { field.write; }
     param amount: Float = 0.0;
     param toon_terminator: Vec2 = vec2(-0.03, 0.16);

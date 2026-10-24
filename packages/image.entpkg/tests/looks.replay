@@ -3,16 +3,19 @@ window 64 64
 
 # sRGB's transfer stores a half as 0.735 and gives it back; the ramp
 # sharpened keeps the flat middle and darkens the ramp beside the spot;
-# the camera's finish glows round the spot; the mip strip begins with
-# the picture's corner; three colors in blocks of four.
+# the mip strip begins with the picture's corner.
 frame 0.0
 expect stored.result[528] = 0.7354 0.7354 0.7354 1 0.001
 expect light.result[528] = 0.5 0.5 0.5 1 0.001
 expect crisp.result[528] = 0.5 0.5 0.5 1 0.001
 expect crisp.result[330] = -0.0125 -0.0125 0.5 1 0.001
-expect film.result[264] = 0.3228 0.2176 0.5236 1 0.001
-expect film.result[900] = 0.2509 0.4528 0.577 1 0.001
 expect strip.result[0] = 0 0 0.5 1 0.001
 expect count strip.result = 512
-expect retro.result[0] = 0.4 0.5 0.3 1 0.001
-expect retro.result[1000] = 0.9 0.9 0.8 1 0.001
+
+# Cells of four pixels, each the color at its center: (2, 2) and (6, 2).
+# What is past white glows: about the spot, and more at the ramp's
+# brightest corner.
+expect coarse.result[0] = 0.0625 0.0625 0.5 1 0.0001
+expect coarse.result[5] = 0.1875 0.0625 0.5 1 0.0001
+expect glowed.near[18] = 0.03499 0.03499 0 1 0.0005
+expect glowed.near[63] = 0.07077 0.07077 0 1 0.0005

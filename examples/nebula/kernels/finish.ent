@@ -1,0 +1,38 @@
+// The camera's finish this example lays over its nebula, made of the image package's steps.
+use "../../../packages/image.entpkg";
+use "../../../packages/random.entpkg";
+
+/// The finished picture: depth of field between the sharp picture and
+/// its soft copy, by how far each pixel's depth is from `focus` (the
+/// first row); the glow added, `near` and `far` of each; then exposure,
+/// ACES, sRGB's transfer, color fringing toward the edges (`fringe`),
+/// darkened corners (`vignette`) and grain (`grain`), new every frame.
+/// Each step is a function a Kernel of another look composes as it
+/// chooses.
+kernel nebula.finish@1 {
+    requires { field.read; field.write; time.read; }
+    input source: Grid<Vec4>;
+    input soft: Grid<Vec4>;
+    input near_glow: Grid<Vec4>;
+    input far_glow: Grid<Vec4>;
+    input focus: Rows<Float>;
+    param exposure: Float = 1.0;
+    param depth: Float = 1.4;
+    param fringe: Float = 0.003;
+    param vignette: Float = 1.1;
+    param grain: Float = 0.03;
+    param near: Float = 0.55;
+    param far: Float = 0.45;
+    output result: Image;
+    compute {
+        let uv = (coord() + 0.5) / domain();
+        let here = at_linear(source, uv * size(source));
+        let blurred = at_linear(soft, uv * size(soft));
+        let seen = mix(fringed(source, uv, fringe), blurred.xyz, defocus(here.w, at(focus, 0), depth));
+        let bloom = at_linear(near_glow, uv * size(near_glow)) * near + at_linear(far_glow, uv * size(far_glow)) * far;
+        let toned = aces((seen + bloom.xyz) * exposure);
+        let shown = linear_to_srgb(toned) * vignetted(uv, vignette);
+        let g = film_grain(coord(), time(), grain);
+        return vec4(shown + g, 1.0);
+    }
+}

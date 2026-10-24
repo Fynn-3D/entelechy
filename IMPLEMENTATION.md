@@ -67,7 +67,7 @@ Packages built from existing modes, with no engine feature of their own.
 | [Font import](crates/interface/import/src/font.rs) | glyph outlines as `Rows` of segments | [importer tests](crates/interface/import/src/font.rs), on a font the tests build from the format's tables |
 | [Image](packages/image.entpkg/package.esn) | maps, scatter `sum` and prefix `sum` (histograms), `times` with a carried step (jump flooding) | [image replay](packages/image.entpkg/tests/operations.replay) on three backends |
 | [Noise](packages/random.entpkg/kernels/noise.ent) | functions over `Int` bits (`mul_wrap`, `>>>`) | [noise replay](packages/random.entpkg/tests/noise.replay) on three backends |
-| [Camera finish](packages/image.entpkg/graphs/finish.esn) | maps over grids, `size(port)` domains, the math package | [nebula replay](examples/nebula/tests/nebula.replay) on three backends |
+| [Camera finish](examples/nebula/graphs/finish.esn) | maps over grids, `size(port)` domains, the math package | [nebula replay](examples/nebula/tests/nebula.replay) on three backends |
 | [Ways over a grid](packages/navigation.entpkg/kernels/grid_path.ent) | `times` with a carried pass over a cost grid | [skirmish replay](examples/slg/tests/skirmish.replay) on three backends |
 | [Synthesis](packages/audio.entpkg/kernels/clock.ent) | a clock carried by `<~`, `rate()`, functions of time | [skirmish replay](examples/slg/tests/skirmish.replay) on three backends |
 

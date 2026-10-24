@@ -6,14 +6,15 @@
 // goes home. Another renderer is another `light` node:
 // `tests/path_tracer.esn` path-traces the same balls, `tests/clay.esn`
 // shows them in clay.
+use "kernels/";
 use "../../packages/light.entpkg";
 use "../../packages/image.entpkg";
 
 node scene: graph "graphs/balls.esn" { }
 node no_lamps: light.lamps_none@1 { domain = 1; }
 node no_lamp_looks: light.lamp_looks_none@1 { domain = vec2(1, 1); }
-node light_painting: light.painting_start@1 { domain = 1; }
-node light: graph "../../packages/light.entpkg/graphs/probe_gi.esn" { painting <- light_painting.result; lens <- scene.lens; sky <- scene.sky; surface <- scene.surface; paint <- scene.paint; extra <- scene.extra; layers <- scene.layers; more <- scene.more;
+node light_painting: balls.painting_start@1 { domain = 1; }
+node light: graph "graphs/probe_gi.esn" { painting <- light_painting.result; lens <- scene.lens; sky <- scene.sky; surface <- scene.surface; paint <- scene.paint; extra <- scene.extra; layers <- scene.layers; more <- scene.more;
     behind_at <- scene.behind_at; behind_dir <- scene.behind_dir; behind_paint <- scene.behind_paint; behind_normal <- scene.behind_normal; through <- scene.through;
     proxy <- scene.proxy; land <- scene.land; frame <- scene.frame; lamps <- no_lamps.result; lamp_looks <- no_lamp_looks.result; nx = 21; ny = 6; nz = 14; spacing = 0.5; }
 

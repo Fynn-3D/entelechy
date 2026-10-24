@@ -1,6 +1,6 @@
 // The balls in clay (the render package's): studio light, the
 // materials' colors, cavity and outlines over a floor of lines.
 node scene: graph "../graphs/balls.esn" { }
-node clay: graph "../../../packages/light.entpkg/graphs/clay.esn" { lens <- scene.lens; surface <- scene.surface; paint <- scene.paint; extra <- scene.extra; }
+node clay: graph "../graphs/clay.esn" { lens <- scene.lens; surface <- scene.surface; paint <- scene.paint; extra <- scene.extra; }
 
 output result <- clay.result;

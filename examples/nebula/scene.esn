@@ -1,7 +1,8 @@
 // A drift through a nebula made of noise, finished as film. The noise
 // package gives the cloud, its color and the stars; the image package
-// gives the colors of heat and the wheel, and the finish: glow, depth
-// of field, tone, fringing, corners and grain. `pixel` is how many
+// gives the colors of heat and the wheel, and the steps of the finish
+// (`graphs/finish.esn`): glow, depth of field, tone, fringing, corners
+// and grain. `pixel` is how many
 // window pixels a ray covers.
 use "kernels/";
 use "../../packages/image.entpkg";
@@ -11,7 +12,7 @@ param steps: Int = 64;
 
 node look: nebula.look@1 { steps = steps; domain = ceil(window() / pixel); }
 node lens: nebula.lens@1 { domain = 1; }
-node finish: graph "../../packages/image.entpkg/graphs/finish.esn" {
+node finish: graph "graphs/finish.esn" {
     source <- look.result; focus <- lens.result; exposure = 1.2;
 }
 

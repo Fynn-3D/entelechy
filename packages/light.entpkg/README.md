@@ -1,12 +1,12 @@
 # light
 
-Light in a world a scene hands over: how surfaces take light (physically
-based, as a painting has it, or plainly as a game without a renderer
-does), where light comes from (the sun, the sky the air makes, lamps),
-what shuts it out (shadows, occlusion), how it travels (bounced between
-things, reflected, through glass and skin, fog, clouds and air), and the
-renderers that put it together — lit, ray traced, probe GI, a path
-tracer, clay. What is lit is [`surface`](../surface.entpkg/README.md)'s
+Light's atoms in a world a scene hands over: how surfaces take light
+(physically based, or plainly as a game without a renderer does), where
+light comes from (the sun, the sky the air makes, lamps), what shuts it
+out (shadows, occlusion), and how it travels (bounced between things,
+reflected, through glass and skin, fog, clouds and air). A renderer that
+puts them together is a program's, on the contract below (the study's
+`light_renderers` keeps several). What is lit is [`surface`](../surface.entpkg/README.md)'s
 (the G-buffer and the proxies); what a camera does to the picture is
 [`camera`](../camera.entpkg/README.md)'s; what is done to the picture
 alone is [`image`](../image.entpkg/README.md)'s.
@@ -23,7 +23,7 @@ The package gives words, and a scene composes the effect it wants. Each
 effect is first a function a scene's own kernel calls on a pixel (light,
 air, a look); a kernel is a thin pass over those words where the effect
 must read its neighbors, the last frame or another size; a look is data
-(`Grade`, `Film`, `Dof`, `Haze`, `Painting`, `Watercolor`) a node
+(`Grade`, `Dof`, `Haze`) a node
 makes, blends and changes as it goes and the pass reads as an input of
 rows (`*_start` makes one from parameters); any pass is kept to part of a
 picture by `image.masked`; and a graph preset is a recipe built from the
@@ -32,9 +32,8 @@ saying a pass by its words to the pass's own picture.
 
 | Effect | Words a kernel calls | Passes | Data |
 | --- | --- | --- | --- |
-| Surfaces and their light | `pbr_of`, `lit_by`, `glossy_by`, `ambient_by`, `env_reflectance`, `scattered_share`, `baked_occlusion` | a renderer: `light.lit`, `light.raytraced`, `graphs/probe_gi.esn`, `graphs/path_tracer.esn`, `graphs/clay.esn` | `Pbr` |
-| Light from all round | `hemisphere`, `proxy_open`, `seen_along`, `sky_radiance` | | `Surround`, `Openness` |
-| A painted look, as far as asked | `shaded_as`, `toon`, `painted_gloss`, `scattered_as`, `mirrored_as`, `toon_default`, `painting_none` | a renderer's `painting` input, `light.painting_start` | `Painting`, `Toon` |
+| Surfaces and their light | `pbr_of`, `lit_by`, `glossy_by`, `ambient_by`, `env_reflectance`, `scattered_share`, `baked_occlusion` | a program's renderer | `Pbr` |
+| Light from all round | `hemisphere`, `proxy_open`, `lit_open`, `seen_along`, `sky_radiance` | | `Surround`, `Openness` |
 | The sun's shadows | `sun_pcss`, `contact_shadow`, `rough_shadow`, `cloud_shadow` | `light.sun_shadow`, `light.contact`, `light.clouds_shadow` | `ContactReach` |
 | Lamps | `point_lamp`, `spot_lamp`, `panel_lamp`, `lamps_on_surface`, `lamp_shadow` | `graphs/lamps.esn`, `graphs/lamp_maps.esn` | `Lamps`, `LampLooks` |
 | Air and sky | `hazed`, `aerial`, `sky_radiance`, `air_radiance`, `air_phase` | `light.haze`, `light.haze_start`, `graphs/atmosphere.esn` | `Haze`, `SkyLook` |
@@ -53,38 +52,36 @@ The picture after the light is `image.entpkg`'s, in the same words:
 | --- | --- | --- | --- |
 | Glow, exposure, tone | `bloom_at`, `tone_sharpened`, `tone_curve`, `tone_warmth` | `graphs/bloom.esn`, `graphs/exposure.esn`, `graphs/tonemap.esn`, `graphs/upscale.esn` | |
 | A grade | `grade_color`, `grade_mix`, `grade_balance`, `grade_none` | `image.grade` | `Grade` |
-| Film | `film_split`, `film_curve`, `film_halation`, `film_bars`, `film_widescreen`, `film_warm`, `film_drained`, `film_monochrome`, `fringed`, `vignetted`, `film_grain` | `image.film` | `Film` |
-| A watercolor's tone | `watercolor` | `image.watercolor`, `image.watercolor_start` | `Watercolor` |
+| A film's steps | `film_split`, `film_curve`, `film_halation`, `film_bars`, `fringed`, `vignetted`, `film_grain` | | |
 | Edges smoothed in a frame | `fxaa` | `image.fxaa` | |
 | Part of a picture | | `image.masked` | |
 
-A story's look is the plainest example: a scene's kernel makes the film it
-wants each frame and the pass lays it on.
+A story's look is the plainest example: a scene's kernel makes the grade
+it wants each frame and the pass lays it on.
 
 ```text
 node story: kernel {
     requires { field.write; time.read; }
-    output result: Rows<Film>;
+    output result: Rows<Grade>;
     domain = 1;
     compute {
-        let a = film_widescreen();
-        let b = film_drained();
-        let t = smoothstep(20.0, 26.0, time());
-        return Film { ..a, grade: grade_mix(a.grade, b.grade, t), curve: mix(a.curve, b.curve, t) };
+        let cold = Grade { ..grade_none(), saturation: 0.4, temperature: -0.3 };
+        return grade_mix(grade_none(), cold, smoothstep(20.0, 26.0, time()));
     }
 }
-node filmed: image.film@1 { image <- shown.result; film <- story.result; }
+node graded: image.grade@3 { hdr <- shown.result; grade <- story.result; }
 ```
 
 ## Kernels
 
+- `kernels/ambient.ent` — The light from all round a surface: the sky's
+  half and the ground's by its facing, how much of it the coarse scene
+  shuts out, and what a reflected direction sees of it.
 - `kernels/atmosphere.ent` — The sky as the Earth's air makes it
   (Rayleigh, haze, ozone; light scattered more than once). Kernels:
   `light.atmosphere_spread@1`, `light.atmosphere_look@1`,
   `light.atmosphere_view@1`, `light.atmosphere_sky@1`.
 - `kernels/brdf.ent` — Standard PBR.
-- `kernels/clay.ent` — Clay: a modeler's preview, a studio light and
-  backdrop over the standard contract. Kernels: `light.clay@1`.
 - `kernels/clouds.ent` — A deck of clouds over the sky, lit through
   itself, and its shadows on the ground. Kernels: `light.clouds_deck@1`,
   `light.clouds_shadow@1`, `light.clouds_march@1`.
@@ -112,32 +109,16 @@ node filmed: image.film@1 { image <- shown.result; film <- story.result; }
   the screen. Kernels:
   `light.lamps_none@1`, `light.lamp_looks_none@1`, `light.lamps_depth@1`,
   `light.lamps_tiles@1`, `light.lamps_light@1`, `light.lamps_shade@1`.
-- `kernels/lit.ent` — Lit: each pixel by itself in one pass, the sun
-  and the light all round. Kernels: `light.lit@1`.
 - `kernels/mirror.ent` — A planar mirror. Kernels: `light.mirror_lens@1`,
   `light.mirror_mix@1`.
-- `kernels/painted.ent` — The painted look: light and shade as a painting
-  has them (`toon`, `Toon`), and a renderer's shading taken toward it as far
-  as a scene asks (`shaded_as`, `scattered_as`, `mirrored_as`), as data a
-  renderer reads (`Painting`: how far, and the look). Kernels:
-  `light.painting_start@1`.
 - `kernels/plain.ent` — Light as a game without a renderer draws it, on a
   face it found itself (a voxel's, a tile's): the sky and a sun
   (`plain_daylight`), lights fading to their reach (`plain_light`,
   `PlainLight`) and flickering (`flame_flicker`), light kept to a few
   steps (`light_stepped`), haze and the dark (`plain_haze`,
   `plain_dark`), a thin thing lit against the sun (`thin_lit`).
-- `kernels/path_tracer.ent` — Path tracing (standard PBR, `brdf.ent`).
-  Kernels: `light.path_count_start@1`, `light.path_count@1`,
-  `light.path_trace@1`, `light.path_blank@1`, `light.path_accum@1`,
-  `light.path_atrous@1`, `light.path_behind@1`, `light.path_shade@1`.
 - `kernels/phase.ent` — Light scattered in the air: the phase, shared by
   fog, clouds and the sky.
-- `kernels/probe_gi.ent` — Global illumination by light probes. Kernels: `light.probes_sign@1`,
-  `light.probes_seen@1`, `light.probes_gather@1`,
-  `light.probes_screen_gather@1`, `light.probes_gather_keep@1`,
-  `light.probes_gather_blur@1`, `light.probes_behind@1`,
-  `light.probes_lit@1`, `light.probes_shade@1`.
 - `kernels/radiance.ent` — Light kept on the proxies (as Lumen keeps its
   surface cache): each cell near a surface the light leaving it, the sun
   and the lamps through the proxies (each lamp that casts shadows walked
@@ -171,8 +152,6 @@ node filmed: image.film@1 { image <- shown.result; film <- story.result; }
 - `kernels/reflection.ent` — Reflections on the screen in place of a
   renderer's own (`reflection`) where the screen shows what a mirror ray
   meets. Kernels: `light.reflections@1`.
-- `kernels/raytraced.ent` — Ray traced: shadow and reflection traced in
-  one pass. Kernels: `light.raytraced@1`.
 - `kernels/shadow.ent` — The sun's shadow as a virtual shadow map: a
   clipmap of levels round the eye, kept where they lie on the world's
   lattice, cut into pages drawn from clustered meshes only where the
@@ -209,8 +188,6 @@ node filmed: image.film@1 { image <- shown.result; film <- story.result; }
 - `graphs/bounce.esn` — Light bounced between things laid over a
   renderer's picture (`kernels/radiance.ent`), for one that takes no
   bounced light in itself (lit, ray traced).
-- `graphs/clay.esn` — The clay renderer (`light.clay`) on a scene's
-  G-buffer (the contract, its first three maps).
 - `graphs/clouds.esn` — One deck of clouds over the view: the deck (for
   the fog beneath it and its shadows) and the clouds marched over the sky.
 - `graphs/fog.esn` — Fog in a grid of cells over the view, lit by the sun
@@ -222,13 +199,6 @@ node filmed: image.film@1 { image <- shown.result; film <- story.result; }
   what the lamps' light and the fog's air read.
 - `graphs/lamps.esn` — The lamps added to a renderer's picture, for one
   that does not take them in itself.
-- `graphs/path_tracer.esn` — The path tracer (`kernels/path_tracer.ent`),
-  the lamps shown and bounced; its `scatter` for light under the skin.
-- `graphs/probe_gi.esn` — The light-probe renderer (`kernels/probe_gi.ent`),
-  the lamps shown, reflected and bounced; the light gathered on the screen
-  drawn anew each frame and averaged while the lens rests (up to
-  `settle_frames`, then it rests too); its `scatter` for light under the
-  skin.
 - `graphs/radiance_cache.esn` — The light left on the proxies' surfaces,
   kept as a surface cache and bounced from itself: what bounced light reads.
 - `graphs/shadow.esn` — The sun's shadow from a virtual shadow map
@@ -244,8 +214,8 @@ node filmed: image.film@1 { image <- shown.result; film <- story.result; }
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`bounce.replay`, `fog_volumes.replay`, `lamp_looks.replay`, `lamp_maps.replay`, `lit.replay`, `night.replay`, `path_tracer.replay`, `plain.replay`, `probe_gi.replay`, `reflection.replay`, `shadow.replay`,
-`sky.replay`, `temporal.replay`, `translucent.replay`, `words.replay`; they take the surface's and the camera's passes over the renderers' pictures too.
+`bounce.replay`, `fog_volumes.replay`, `lamp_looks.replay`, `lamp_maps.replay`, `passes.replay`, `plain.replay`, `reflection.replay`, `shadow.replay`,
+`sky.replay`, `temporal.replay`, `translucent.replay`, `words.replay`; they lay the passes over a picture a test's own renderer draws (`tests/base.ent`).
 Every Kernel of the package is reached by one of them.
 
 Used by the [material_balls](../../examples/material_balls/README.md) example.
@@ -291,32 +261,12 @@ one while the camera moves, and a full one, computed once, when it stops
 
 ### What a renderer gives
 
-`hdr: Image`, linear HDR, sky included. Lit and ray traced also give
+`hdr: Image`, linear HDR, sky included. A renderer may also give
 `reflection`, the reflection they laid on each surface from all round as
 it shows, which `light.reflections` takes the place of where the screen
 shows what the mirror ray meets. `image.bright`, `image.spread` and
 `image.tonemap` turn it into the picture (`image.entpkg`'s `graphs/bloom.esn` glow in place
 of `image.bright` and `image.spread` for round glows with long tails).
-
-### Choosing a renderer
-
-A scene places one renderer. Lit (`light.lit`) lights each pixel in one
-pass by itself and the coarse scene: the lightest, and the one for a scene
-in daylight whose look comes from its sun, sky and shadows. Ray traced
-(`light.raytraced`) is lit with each smooth surface's mirror ray traced
-through the proxies; a distance-field scene marches its own shadow and
-mirror rays and lights what they meet with `raytraced_shade`. Probe GI and
-the path tracer add light bounced between things, many passes a frame,
-worth their cost where bounced light shows (indoors, at night, under
-lamps). Clay shows the shapes alone, as a modeler does.
-
-A painted look is not another renderer: a renderer's shading is taken
-toward a painting's as far as the `painting` row it reads asks (lit's and
-probe GI's; its amount 0 none, 1 all, between them blended, so one look
-turns into the other as a scene goes, a node making the row each frame), by the words of `kernels/painted.ent` (`shaded_as`, `toon`,
-`Toon`) that a scene's own kernel calls too; its ink (`surface.outline`) and
-a watercolor's tone (`image.watercolor`) are passes after it that read
-only its picture and the G-buffer.
 
 ### Tuning a look
 
@@ -324,13 +274,12 @@ What decides a look is a scene's to set, never a number written into a
 kernel: each tint, strength, distance and threshold a pass draws by is a
 param of its kernel, its default the look the package ships, and a graph
 preset that places the kernel carries the same param up, so a scene sets
-it on the preset's node. A look a story drives (the air, a painting, a
-grade, a film, a focus) is also data: the pass reads it as rows a node
+it on the preset's node. A look a story drives (the air, a grade, a
+focus) is also data: the pass reads it as rows a node
 makes, so a scene's own kernel changes it frame by frame. The tone map's
 exposure and color are tuned by its params and driven through a `Grade`
 laid on before it. Shared functions take such params as small
-structs (`Surround`, `Openness`, `Mirror`, `Toon`, `ContactReach`,
-`StudioLight`, `FloorLines`). The numbers left in a kernel are the
+structs (`Surround`, `Openness`, `Mirror`, `ContactReach`). The numbers left in a kernel are the
 method's own: filter weights, luminance weights, phase normalizers.
 
 ### Before a renderer
