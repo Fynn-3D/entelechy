@@ -1,0 +1,42 @@
+// Where a ray meets the plainest shapes: a sphere, an upright box, and how near it passes a segment.
+
+/// Where a ray enters and leaves a sphere (y below x: it misses).
+fn sphere_span(from: Vec3, dir: Vec3, c: Vec3, r: Float) -> Vec2 {
+    let o = from - c;
+    let b = dot(o, dir);
+    let q = dot(o, o) - r * r;
+    let h = b * b - q;
+    if h < 0.0 { return vec2(1.0, -1.0); }
+    let s = sqrt(h);
+    return vec2(max(0.0 - b - s, 0.0), 0.0 - b + s);
+}
+
+/// How far a ray passes from a segment, and how far along the ray.
+fn ray_segment(from: Vec3, dir: Vec3, a: Vec3, b: Vec3) -> Vec2 {
+    let u = b - a;
+    let w = from - a;
+    let uu = dot(u, u);
+    let ud = dot(u, dir);
+    let uw = dot(u, w);
+    let dw = dot(dir, w);
+    let den = uu - ud * ud;
+    let s = clamp(if den > 0.0001 { (uw - ud * dw) / den } else { 0.0 }, 0.0, 1.0);
+    let p = a + u * s;
+    let t = max(dot(p - from, dir), 0.0);
+    return vec2(length(from + dir * t - p), t);
+}
+
+/// Where a ray goes through a box standing upright at `c`: `ax` and `az`
+/// its axes across the ground, `h` its half sizes along them and up;
+/// (in, out), out below in where it misses.
+fn box_span(from: Vec3, dir: Vec3, c: Vec3, ax: Vec3, az: Vec3, h: Vec3) -> Vec2 {
+    let o = from - c;
+    let lo = vec3(dot(o, ax), o.y, dot(o, az));
+    let ld = vec3(dot(dir, ax), dir.y, dot(dir, az));
+    let inv = vec3(1.0 / (if abs(ld.x) < 0.00001 { 0.00001 } else { ld.x }), 1.0 / (if abs(ld.y) < 0.00001 { 0.00001 } else { ld.y }), 1.0 / (if abs(ld.z) < 0.00001 { 0.00001 } else { ld.z }));
+    let a = (vec3(0.0, 0.0, 0.0) - h - lo) * inv;
+    let b = (h - lo) * inv;
+    let near = max(max(min(a.x, b.x), min(a.y, b.y)), min(a.z, b.z));
+    let far = min(min(max(a.x, b.x), max(a.y, b.y)), max(a.z, b.z));
+    return vec2(max(near, 0.0), far);
+}

@@ -1,0 +1,22 @@
+// A ray from the origin along +z meets the shapes in its way: a sphere of
+// radius 1 at 5 (in at 4, out at 6), one off to the side it misses, a box
+// of half size 1 at 5 (in at 4, out at 6), and a segment across x = 2 at
+// z = 3 (2 off, 3 along).
+use "../kernels/";
+
+node probe: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 1;
+    compute {
+        let o = vec3(0.0, 0.0, 0.0);
+        let d = vec3(0.0, 0.0, 1.0);
+        let hit = sphere_span(o, d, vec3(0.0, 0.0, 5.0), 1.0);
+        let miss = sphere_span(o, d, vec3(3.0, 0.0, 5.0), 1.0);
+        let b = box_span(o, d, vec3(0.0, 0.0, 5.0), vec3(1.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0), vec3(1.0, 1.0, 1.0));
+        let s = ray_segment(o, d, vec3(2.0, -1.0, 3.0), vec3(2.0, 1.0, 3.0));
+        return vec4(hit.x * 10.0 + hit.y, if miss.y < miss.x { 1.0 } else { 0.0 }, b.x * 10.0 + b.y, s.x * 10.0 + s.y);
+    }
+}
+
+output result <- probe.result;

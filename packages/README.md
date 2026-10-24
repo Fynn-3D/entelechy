@@ -105,7 +105,6 @@ Pictures and what a camera sees.
 | [`camera`](camera.entpkg/README.md) | What a camera does to a picture: focus, shutter, frames gathered, its own resolution |
 | [`particles`](particles.entpkg/README.md) | Particles stepped, binned and drawn over a picture's depth |
 | [`scatter`](scatter.entpkg/README.md) | Things scattered over the ground by layers |
-| [`effects`](effects.entpkg/README.md) | Effects as layers of forms in time, made of a matter, drawn as light along each ray |
 
 ### Media
 
