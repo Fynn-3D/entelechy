@@ -1,8 +1,9 @@
-//! Fast Fourier transforms of a cube of complex numbers, `1 << bits`
-//! along each side (at most 256), laid as rows, x fastest: one axis a
-//! pass, each a group of lanes running every round of butterflies in
-//! place. The inverse divides by the cube's count, so one undoes the
-//! other.
+//! Fast Fourier transforms of complex numbers in rows `1 << bits` long
+//! (at most 256), each row a group of lanes running every round of
+//! butterflies in place: rows laid end to end, each transformed alone
+//! (blocks of a sound, lines of a picture), or a cube `1 << bits` a
+//! side, x fastest, one axis a pass. The inverse divides by the row's
+//! length, so one undoes the other.
 package signal@1 { language = 1; ir = 1; }
 
 use "kernels/";

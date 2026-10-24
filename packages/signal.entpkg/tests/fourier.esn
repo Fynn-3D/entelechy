@@ -1,6 +1,8 @@
 // A wave once round a cube of 8 along x, made complex, through the
 // transform and back to real numbers: its energy in the first wave
-// number and its mirror, and the wave again.
+// number and its mirror, and the wave again. And three rows of 8 laid
+// end to end, row r a wave r + 1 times round, each transformed alone
+// and back.
 use "../kernels/";
 
 node wave: kernel {
@@ -14,4 +16,17 @@ node spectrum: graph "../graphs/fourier_forward.esn" { data <- complex.result; b
 node again: graph "../graphs/fourier_inverse.esn" { data <- spectrum.result; bits = 3; }
 node real: signal.fourier_real@1 { data <- again.result; }
 
+node waves: kernel {
+    requires { field.write; }
+    output result: Rows<Vec2>;
+    domain = 24;
+    compute {
+        let r = element() / 8;
+        return vec2(cos(6.2831853 * float((r + 1) * (element() % 8)) / 8.0), 0.0);
+    }
+}
+node spectra: graph "../graphs/fourier_rows_forward.esn" { data <- waves.result; bits = 3; }
+node rows_again: graph "../graphs/fourier_rows_inverse.esn" { data <- spectra.result; bits = 3; }
+
 output result <- real.result;
+output rows <- rows_again.result;

@@ -1,5 +1,7 @@
-//! Fast Fourier transforms of a cube of complex numbers (`Vec2`, real
-//! then imaginary), `n = 1 << bits` a side, element `x + n * (y + n * z)`.
+//! Fast Fourier transforms of complex numbers (`Vec2`, real then
+//! imaginary) in rows `n = 1 << bits` long: rows laid end to end, or the
+//! rows of a cube `n` a side, element `x + n * (y + n * z)`, along an
+//! axis.
 
 /// The product of two complex numbers.
 fn cmul(a: Vec2, b: Vec2) -> Vec2 {
@@ -56,21 +58,24 @@ kernel signal.fourier_real@1 {
     compute { return sample(data).x; }
 }
 
-/// A cube transformed along its slowest axis, `1 << bits` a side (at most
-/// 256): element `k + n * (u + n * v)` of the result is wave number `k`
-/// of the row at `(u, v)` of the input's two faster axes, so the axis
-/// transformed comes out fastest and the other two follow in order. Three
-/// passes transform a cube along every axis and leave it laid as it came.
-/// A group holds `256 / n` whole rows: each lane reads its row's element
-/// in bit-reversed order, then `bits` rounds of butterflies (radix 2,
-/// Cooley and Tukey), each lane swapping with the lane `1 << round` away
-/// and the odd one turned by `e^(sign 2 pi i r / width)`, `sign` -1
-/// forward; `scaled`, divided by `n`.
-kernel signal.fourier_rows@1 {
+/// Rows of `n = 1 << bits` (at most 256) transformed: element
+/// `k + n * r` of the result is wave number `k` of row `r`. The rows lie
+/// end to end, row `r`'s samples from `r * n` on; `interleaved`, they lie
+/// a row's count apart, row `r`'s sample `j` at `r + j * count / n`, which
+/// is a cube `n` a side along its slowest axis: the axis transformed comes
+/// out fastest and the other two follow in order, so three passes
+/// transform the cube along every axis and leave it laid as it came. A
+/// group holds `256 / n` whole rows: each lane reads its row's sample in
+/// bit-reversed order, then `bits` rounds of butterflies (radix 2, Cooley
+/// and Tukey), each lane swapping with the lane `1 << round` away and the
+/// odd one turned by `e^(sign 2 pi i r / width)`, `sign` -1 forward;
+/// `scaled`, divided by `n`. A lane past the input's end reads zero.
+kernel signal.fourier_rows@2 {
     requires { field.read; field.write; }
     input data: Rows<Vec2>;
     input turns: Rows<Vec2>;
     param bits: Int = 6;
+    param interleaved: Bool = false;
     param sign: Float = -1.0;
     param scaled: Bool = false;
     output result: Rows<Vec2>;
@@ -78,7 +83,9 @@ kernel signal.fourier_rows@1 {
         let n = 1 << bits;
         let e = element();
         let k = e % n;
-        let first = at(data, e / n + n * n * reversed_bits(k, bits));
+        let r = e / n;
+        let j = if interleaved { r + reversed_bits(k, bits) * (count(data) / n) } else { r * n + reversed_bits(k, bits) };
+        let first = if j < count(data) { at(data, j) } else { vec2(0.0, 0.0) };
         let done = loop bits with mine = first {
             let h = 1 << index();
             let other = exchange(mine, lane() ^ h);

@@ -1,0 +1,13 @@
+//! Rows of `1 << bits` complex numbers laid end to end (at most 256
+//! long), each transformed alone, laid as they came:
+//!
+//!   node spectra: graph "signal.entpkg/graphs/fourier_rows_forward.esn" { data <- blocks.result; bits = 8; }
+use "../kernels/";
+
+input data: Rows<Vec2>;
+param bits: Int = 6;
+
+node turns: signal.fourier_turns@1 { bits = bits; domain = 1 << bits; }
+node rows: signal.fourier_rows@2 { data <- data; turns <- turns.result; bits = bits; sign = -1.0; }
+
+output result <- rows.result;

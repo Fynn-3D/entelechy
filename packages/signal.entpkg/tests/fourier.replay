@@ -10,3 +10,18 @@ expect spectrum.result[2] = 0 0 0.01
 expect real.result[0] = 1 0.0001
 expect real.result[2] = 0 0.0001
 expect real.result[4] = -1 0.0001
+
+# Each row's energy in its own wave number and its mirror, half of its
+# 8 in each, none elsewhere; then every row again.
+expect spectra.result[1] = 4 0 0.01
+expect spectra.result[7] = 4 0 0.01
+expect spectra.result[2] = 0 0 0.01
+expect spectra.result[10] = 4 0 0.01
+expect spectra.result[14] = 4 0 0.01
+expect spectra.result[9] = 0 0 0.01
+expect spectra.result[19] = 4 0 0.01
+expect spectra.result[21] = 4 0 0.01
+expect spectra.result[20] = 0 0 0.01
+expect rows_again.result[8] = 1 0 0.0001
+expect rows_again.result[10] = -1 0 0.0001
+expect rows_again.result[17] = -0.7071 0 0.0001

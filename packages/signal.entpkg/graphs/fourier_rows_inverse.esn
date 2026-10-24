@@ -1,0 +1,13 @@
+//! Rows of spectra laid end to end again, each divided by its length,
+//! so it undoes `fourier_rows_forward.esn`:
+//!
+//!   node blocks: graph "signal.entpkg/graphs/fourier_rows_inverse.esn" { data <- spectra.result; bits = 8; }
+use "../kernels/";
+
+input data: Rows<Vec2>;
+param bits: Int = 6;
+
+node turns: signal.fourier_turns@1 { bits = bits; domain = 1 << bits; }
+node rows: signal.fourier_rows@2 { data <- data; turns <- turns.result; bits = bits; sign = 1.0; scaled = true; }
+
+output result <- rows.result;
