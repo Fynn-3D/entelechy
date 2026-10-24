@@ -24,6 +24,14 @@ one holds.
 - **Files.** `kernels/<topic>.ent` and `graphs/<product>.esn`, singular
   nouns in snake_case, never the package's own name: `color.ent`,
   `tone_map.ent`, `broad_phase.ent`.
+- **Words.** A package speaks in four layers
+  ([DECISIONS](../docs/DECISIONS.md#a-package-speaks-in-functions-kernels-graph-presets-and-data)):
+  functions composed inside a Kernel on one element; Kernels, the
+  Graph's nodes, where work crosses elements, frames or sizes, their
+  bodies calling the functions; graph presets placed as subgraphs, built
+  only of what a scene could place itself; and data, a look as rows a
+  node makes and another reads. No keys or pointer outside `controls`,
+  no switch between two looks, no content one program alone holds.
 - **Tests.** `tests/<topic>.esn` and its `<topic>.replay`, with whatever
   data they read under `tests/data/`; a test uses the package by
   `use "../kernels/";` and its presets by `graph "../graphs/…"`, and other

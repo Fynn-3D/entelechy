@@ -1748,3 +1748,47 @@ group mode on every backend, the parity tests of the
 [GPU](../crates/backends/gpu/tests/parity.rs), the
 [compiler's refusals](../crates/frontend/compiler/tests/compile.rs) and
 the [language surface](../crates/frontend/compiler/tests/surface.txt).
+
+## A package speaks in functions, Kernels, graph presets and data
+
+A package's capability is words a creator composes, never a feature
+built for one use, and its words come in four layers, each composed
+where it belongs:
+
+1. **A function** composes inside a Kernel, on one element: the light on
+   a surface, the air over a distance, a grade on a color. Whatever can
+   be said of one element alone is said as a function first.
+2. **A Kernel** is a node of the Graph, and is one only where its work
+   cannot be one element's: it reads its neighbors, the last frame
+   (`<~`), another size, or is a pass a scene places on its own. Its
+   body calls the package's functions; it holds no logic a function of
+   the package could not hand a scene's own Kernel.
+3. **A graph preset** (`graphs/*.esn`, placed as a subgraph) is a way
+   the package recommends to compose its Kernels: a recipe, not an
+   interface. It places only Kernels and subgraphs a scene could place
+   itself, so a scene replaces any part of it with its own node.
+4. **Data** is a look or a setting as rows (`Grade`, `Film`, `Dof`),
+   made by a node, carried by the Graph, read by another node: what a
+   story, a time or a mask changes. A Kernel's parameters are the
+   defaults a node starts from; a look a scene would drive is also an
+   input of rows.
+
+What composes on one element composes in a function; what crosses
+elements, frames or sizes composes in the Graph. A package holds no
+input of a person's (the keys and the pointer are `controls`'), no
+switch between two looks (a look turned into another is data blended),
+and no content one program alone holds (its catalog of spells, its
+moods): those are a scene's or a project's own.
+
+**Why.** A Graph is a program because its nodes are words and its edges
+are the relations between them. A Kernel that holds a whole effect hides
+those relations inside its body, where no scene can take one part and
+leave another; a parameter no node can drive is a relation the Graph
+cannot hold. Words at every layer keep composition open: a scene builds
+the effect it wants, and the package grows by words, not by features.
+
+**Where.** [packages](../packages/README.md) holds the packages to their
+names, layers and tests (`cargo xtask packages`); the light package's
+[words test](../packages/light.entpkg/tests/words.esn) holds a scene's
+Kernels, saying passes by the package's functions, to the passes' own
+pictures, and its README opens with its effects as these words.
