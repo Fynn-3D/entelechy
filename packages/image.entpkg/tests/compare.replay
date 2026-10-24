@@ -1,0 +1,12 @@
+scene compare.esn
+
+# A quarter in red at pixel 1, a tenth in blue at pixel 6, and 0.001 at
+# pixel 7, under the step of half of 1 in 64: the most a quarter, two
+# pixels apart; a picture with itself, nothing.
+frame 0.0
+expect parted.difference[1] = 0.25 0 0 0.25 0.00001
+expect parted.difference[6] = 0 0 0.1 0.1 0.00001
+expect parted.difference[0] = 0 0 0 0
+expect parted.rows.result[0] = 0.25 1 0.00001
+expect parted.apart[0] = 0.25 2 0.00001
+expect same.apart[0] = 0 0

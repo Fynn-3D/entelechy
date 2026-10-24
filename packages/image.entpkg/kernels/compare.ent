@@ -1,0 +1,56 @@
+// Two pictures compared: each pixel's difference, as a picture to look at, and how far apart they are as a whole, the
+// most any channel differs and how many pixels differ by more than a step: what a test holds a scene's picture to
+// another's by, or a person sees where two renders part.
+
+/// How far apart two colors are: the most any of red, green and blue differs.
+fn color_apart(a: Vec4, b: Vec4) -> Float {
+    let d = abs(a.xyz - b.xyz);
+    return max(d.x, max(d.y, d.z));
+}
+
+/// The difference of `a` and `b` (`domain = size(a)`; `b` read at the same place across the picture, whatever its size):
+/// each channel's, and in w the most of them.
+kernel image.difference@1 {
+    requires { field.read; field.write; }
+    input a: Image;
+    input b: Image;
+    output result: Image;
+    compute {
+        let q = coord();
+        let ca = sample(a);
+        let cb = at(b, min(floor((q + 0.5) * size(b) / size(a)), size(b) - vec2(1.0, 1.0)));
+        let d = abs(ca.xyz - cb.xyz);
+        return vec4(d.x, d.y, d.z, color_apart(ca, cb));
+    }
+}
+
+/// Each row of a difference (`image.difference`'s), one cell a row: the most a pixel differs (x) and how many differ
+/// by more than `over` (y). A node sets `domain = size(difference) * vec2(0, 1) + vec2(1, 0)`.
+kernel image.apart_rows@1 {
+    requires { field.read; field.write; }
+    input difference: Image;
+    param over: Float = 0.0078125;
+    output result: Grid<Vec2>;
+    compute {
+        let y = coord().y;
+        let w = int(size(difference).x);
+        return loop w with r = vec2(0.0, 0.0) {
+            let d = at(difference, vec2(float(index()), y)).w;
+            vec2(max(r.x, d), r.y + (if d > over { 1.0 } else { 0.0 }))
+        };
+    }
+}
+
+/// How far apart two pictures are as a whole (`domain = 1`): the most a pixel differs (x) and how many differ by more
+/// than the rows' step (y), from `image.apart_rows`.
+kernel image.apart@1 {
+    requires { field.read; field.write; }
+    input rows: Grid<Vec2>;
+    output result: Rows<Vec2>;
+    compute {
+        return loop count(rows) with r = vec2(0.0, 0.0) {
+            let row = at(rows, vec2(0.0, float(index())));
+            vec2(max(r.x, row.x), r.y + row.y)
+        };
+    }
+}

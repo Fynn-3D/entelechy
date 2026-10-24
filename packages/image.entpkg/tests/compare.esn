@@ -1,0 +1,19 @@
+// Two pictures 4 by 2 compared: alike but for three pixels, one by a quarter in red, one by a tenth in blue, one by a
+// step finer than the threshold; and a picture compared with itself.
+use "../kernels/";
+
+node a: Grid<Vec4> { domain = vec2(4, 2); value = vec4(0.5, 0.5, 0.5, 1.0); }
+node b: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = vec2(4, 2);
+    compute {
+        let i = int(coord().x) + 4 * int(coord().y);
+        return if i == 1 { vec4(0.75, 0.5, 0.5, 1.0) } else if i == 6 { vec4(0.5, 0.5, 0.4, 1.0) } else if i == 7 { vec4(0.501, 0.5, 0.5, 1.0) }
+            else { vec4(0.5, 0.5, 0.5, 1.0) };
+    }
+}
+node parted: graph "../graphs/compare.esn" { a <- a.result; b <- b.result; }
+node same: graph "../graphs/compare.esn" { a <- a.result; b <- a.result; }
+
+output result <- parted.difference;

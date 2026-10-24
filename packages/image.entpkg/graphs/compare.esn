@@ -1,0 +1,16 @@
+//! Two pictures compared: `difference`, each pixel's (w the most a channel differs), and `apart`, the most any pixel
+//! differs (x) and how many differ by more than `over` (y). Placed:
+//!   node apart: graph "image.entpkg/graphs/compare.esn" { a <- before; b <- after.result; }
+use "../kernels/";
+
+input a: Image;
+input b: Image;
+/// A step of difference not counted: half of 1 in 64 by default, finer than a stored picture shows.
+param over: Float = 0.0078125;
+
+node difference: image.difference@1 { a <- a; b <- b; domain = size(a); }
+node rows: image.apart_rows@1 { difference <- difference.result; over = over; domain = size(difference) * vec2(0, 1) + vec2(1, 0); }
+node apart: image.apart@1 { rows <- rows.result; domain = 1; }
+
+output difference <- difference.result;
+output apart <- apart.result;

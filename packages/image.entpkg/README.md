@@ -1,7 +1,8 @@
 # image
 
 What Entelechy does to a picture, knowing nothing of the world it shows:
-color spaces, blending and masks, filters, a grade, tone and its curves,
+color spaces, blending and masks, two pictures compared, filters, a
+grade, tone and its curves,
 glow, metered and local exposure, a film's finish and a watercolor's
 tone, scaling and sharpening, antialiasing within a frame, histograms,
 distance fields, mipmaps, pixel art and sprite sheets. Each effect is a
@@ -28,6 +29,10 @@ use "image.entpkg";
 - `kernels/distance.ent` — Distance. Kernels: `image.seeds@1`,
   `image.first_step@1`, `image.next_step@1`, `image.flood@1`,
   `image.distance@1`.
+- `kernels/compare.ent` — Two pictures compared: each pixel's difference
+  (`color_apart`), and how far apart they are as a whole, the most a pixel
+  differs and how many differ by more than a step. Kernels:
+  `image.difference@1`, `image.apart_rows@1`, `image.apart@1`.
 - `kernels/display.ent` — The picture seen: glow laid in, toned
   (`tone_curve`), vivid and warm (`tone_warmth`), the corners darkened,
   sRGB. Kernels: `image.blank@1`, `image.bright@2`, `image.spread@1`,
@@ -80,6 +85,10 @@ use "image.entpkg";
 - `graphs/bloom.esn` — Glow round bright light, six levels down and back
   up; what `image.tonemap` takes as its `bloom`.
 - `graphs/blur.esn` — A Gaussian blur, both ways, as a sub-graph.
+- `graphs/compare.esn` — Two pictures compared: the difference to look at
+  and how far apart, as a test holds a scene to another's picture or a
+  person sees where two renders part (two pictures read as inputs, then
+  `entelechy replay` with `show apart.apart[0]`).
 - `graphs/distance.esn` — The signed distance from every pixel to a
   shape, in pixels, negative inside.
 - `graphs/equalize.esn` — Histogram equalization as a sub-graph.
@@ -103,7 +112,7 @@ use "image.entpkg";
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`antialias.replay`, `bloom.replay`, `display.replay`,
+`antialias.replay`, `bloom.replay`, `compare.replay`, `display.replay`,
 `exposure.replay`, `finish.replay`, `grade.replay`, `looks.replay`,
 `operations.replay`, `upscale.replay`. Every Kernel of the package is
 reached by one of them.
