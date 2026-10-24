@@ -1,0 +1,149 @@
+// A surface where a field crosses a level, from the field's samples on a
+// lattice (surface nets): one point in each cell the surface crosses,
+// where the crossings of its edges average, and a quad across each edge
+// of the lattice it crosses, joining the four cells round that edge. The
+// field is `IsoLattice`'s points' samples laid x fastest, then y, then z;
+// below the level is inside, and the faces turn counterclockwise seen
+// from outside. A cell goes by the point at its low corner, so the rows
+// of cells and edges are as long as the samples, or three times.
+use "raster.entpkg";
+use "lattice.ent";
+
+/// A lattice of `points` samples along x, y and z, the first at `origin`,
+/// `spacing` apart; the surface where the samples cross `level`.
+struct IsoLattice { points: IVec3; origin: Vec3; spacing: Float; level: Float; }
+
+fn iso_cells(l: IsoLattice) -> IVec3 { return l.points - 1; }
+fn iso_point_cell(l: IsoLattice, i: Int) -> IVec3 { return ivec3(i % l.points.x, (i / l.points.x) % l.points.y, i / (l.points.x * l.points.y)); }
+fn iso_point(l: IsoLattice, c: IVec3) -> Int { return c.x + l.points.x * (c.y + l.points.y * c.z); }
+fn iso_corner(k: Int) -> IVec3 { return ivec3(k & 1, (k >> 1) & 1, (k >> 2) & 1); }
+fn iso_axis(a: Int) -> IVec3 { return ivec3(int(a == 0), int(a == 1), int(a == 2)); }
+fn iso_along(c: IVec3, a: Int) -> Int { return if a == 0 { c.x } else if a == 1 { c.y } else { c.z }; }
+fn iso_place(l: IsoLattice, c: IVec3) -> Vec3 { return l.origin + vec3(float(c.x), float(c.y), float(c.z)) * l.spacing; }
+fn iso_inside(samples: Rows<Float>, l: IsoLattice, c: IVec3) -> Bool { return at(samples, iso_point(l, c)) < l.level; }
+
+/// The field's slope at lattice point `c`: central differences, one-sided
+/// at the lattice's sides.
+fn iso_slope(samples: Rows<Float>, l: IsoLattice, c: IVec3) -> Vec3 {
+    return loop 3 with g = vec3(0.0, 0.0, 0.0) {
+        let a = iso_axis(index());
+        let lo = max(c - a, ivec3(0, 0, 0));
+        let hi = min(c + a, l.points - 1);
+        let d = (at(samples, iso_point(l, hi)) - at(samples, iso_point(l, lo))) / (float(iso_along(hi - lo, index())) * l.spacing);
+        g + vec3(a.x, a.y, a.z) * d
+    };
+}
+
+/// One flag a cell: whether the surface crosses it; none for a point on
+/// the lattice's far sides, which has no cell.
+kernel mesh.iso_crossed_cells@1 {
+    requires { field.read; field.write; }
+    input samples: Rows<Float>;
+    param lattice: IsoLattice = IsoLattice { points: ivec3(2, 2, 2), origin: vec3(0.0, 0.0, 0.0), spacing: 1.0, level: 0.0 };
+    output result: Rows<Int>;
+    compute {
+        let c = iso_point_cell(lattice, element());
+        if c.x >= iso_cells(lattice).x || c.y >= iso_cells(lattice).y || c.z >= iso_cells(lattice).z { return 0; }
+        let inside = loop 8 with n = 0 { n + int(iso_inside(samples, lattice, c + iso_corner(index()))) };
+        return int(inside > 0 && inside < 8);
+    }
+}
+
+/// Each crossed cell's point among the points, from the crossed cells
+/// gathered (`parallel.entpkg`'s compaction), into a row of -1 a cell.
+kernel mesh.iso_slots@1 {
+    requires { field.read; field.write; }
+    input kept: Rows<Int>;
+    input blank: Rows<Int>;
+    output result: Rows<Int>;
+    struct Slot { at: Int; value: Int; }
+    scatter into blank with max { return Slot { at: sample(kept), value: element() }; }
+}
+
+/// The point of each crossed cell: where its edges' crossings average,
+/// its normal the field's slope there, its uv zero.
+kernel mesh.iso_points@1 {
+    requires { field.read; field.write; }
+    input kept: Rows<Int>;
+    input samples: Rows<Float>;
+    input total: Rows<Int>;
+    param lattice: IsoLattice = IsoLattice { points: ivec3(2, 2, 2), origin: vec3(0.0, 0.0, 0.0), spacing: 1.0, level: 0.0 };
+    output result: Rows<MeshPoint>;
+    compute {
+        let c = iso_point_cell(lattice, at(kept, element()));
+        // Edge k: from corner `a` (bit `axis` clear) to `a` with it set.
+        let sum = loop 12 with s = vec4(0.0, 0.0, 0.0, 0.0) {
+            let axis = index() / 4;
+            let r = index() % 4;
+            let low = (1 << axis) - 1;
+            let a = (r & low) | ((r - (r & low)) << 1);
+            let b = a | (1 << axis);
+            let fa = at(samples, iso_point(lattice, c + iso_corner(a))) - lattice.level;
+            let fb = at(samples, iso_point(lattice, c + iso_corner(b))) - lattice.level;
+            if (fa < 0.0) != (fb < 0.0) { s + vec4(mix(iso_place(lattice, c + iso_corner(a)), iso_place(lattice, c + iso_corner(b)), fa / (fa - fb)), 1.0) } else { s }
+        };
+        let p = sum.xyz / sum.w;
+        // The corners' slopes mixed by where the point lies in the cell.
+        let t = (p - iso_place(lattice, c)) / lattice.spacing;
+        let g = loop 8 with g = vec3(0.0, 0.0, 0.0) {
+            let k = iso_corner(index());
+            let w = vec3(if k.x == 1 { t.x } else { 1.0 - t.x }, if k.y == 1 { t.y } else { 1.0 - t.y }, if k.z == 1 { t.z } else { 1.0 - t.z });
+            g + iso_slope(samples, lattice, c + k) * (w.x * w.y * w.z)
+        };
+        let n = if dot(g, g) > 0.0 { normalize(g) } else { vec3(0.0, 1.0, 0.0) };
+        return MeshPoint { position: p, normal: n, uv: vec2(0.0, 0.0) };
+    }
+}
+
+/// One flag an edge of the lattice, edge `3 * point + axis` from a point
+/// to the next along the axis: whether the surface crosses it with the
+/// four cells round it inside the lattice.
+kernel mesh.iso_crossed_edges@1 {
+    requires { field.read; field.write; }
+    input samples: Rows<Float>;
+    param lattice: IsoLattice = IsoLattice { points: ivec3(2, 2, 2), origin: vec3(0.0, 0.0, 0.0), spacing: 1.0, level: 0.0 };
+    output result: Rows<Int>;
+    compute {
+        let e = element();
+        let c = iso_point_cell(lattice, e / 3);
+        let a = e % 3;
+        let n = iso_cells(lattice);
+        let u = (a + 1) % 3;
+        let v = (a + 2) % 3;
+        let room = iso_along(c, a) < iso_along(n, a) && iso_along(c, u) >= 1 && iso_along(c, u) < iso_along(n, u)
+            && iso_along(c, v) >= 1 && iso_along(c, v) < iso_along(n, v);
+        return int(room && iso_inside(samples, lattice, c) != iso_inside(samples, lattice, c + iso_axis(a)));
+    }
+}
+
+/// Two faces a crossed edge, from the crossed edges gathered: the quad of
+/// the four cells round it, turned to face out of the inside.
+kernel mesh.iso_faces@1 {
+    requires { field.read; field.write; }
+    input edges: Rows<Int>;
+    input slots: Rows<Int>;
+    input samples: Rows<Float>;
+    input total: Rows<Int>;
+    param lattice: IsoLattice = IsoLattice { points: ivec3(2, 2, 2), origin: vec3(0.0, 0.0, 0.0), spacing: 1.0, level: 0.0 };
+    output result: Rows<Face>;
+    compute {
+        let q = at(edges, element() / 2);
+        let c = iso_point_cell(lattice, q / 3);
+        let a = q % 3;
+        let u = iso_axis((a + 1) % 3);
+        let v = iso_axis((a + 2) % 3);
+        let s0 = at(slots, iso_point(lattice, c - u - v));
+        let s1 = at(slots, iso_point(lattice, c - v));
+        let s2 = at(slots, iso_point(lattice, c));
+        let s3 = at(slots, iso_point(lattice, c - u));
+        // Round s0 s1 s2 s3 turns from u to v, counterclockwise about the
+        // axis; the surface faces along the axis when its start is inside.
+        let along = iso_inside(samples, lattice, c);
+        let first = element() % 2 == 0;
+        return if along {
+            if first { Face { a: s0, b: s1, c: s2 } } else { Face { a: s0, b: s2, c: s3 } }
+        } else {
+            if first { Face { a: s0, b: s2, c: s1 } } else { Face { a: s0, b: s3, c: s2 } }
+        };
+    }
+}

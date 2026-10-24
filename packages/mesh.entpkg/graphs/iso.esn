@@ -1,0 +1,33 @@
+//! The surface where a field crosses a level, as a mesh: `samples` on a
+//! lattice (`IsoLattice`: points along x, y and z, origin, spacing,
+//! level), x fastest; one point a cell the surface crosses and two faces
+//! an edge it crosses, closed where the surface stays inside the lattice.
+//! Place it with
+//!   node shape: graph "mesh.entpkg/graphs/iso.esn" {
+//!       samples <- field.result;
+//!       lattice = IsoLattice { points: ivec3(64, 64, 64), origin: vec3(-1.0, -1.0, -1.0), spacing: 0.03175, level: 0.0 };
+//!   }
+//! and draw `shape.points` with `shape.faces`; `shape.point_count` and
+//! `shape.quad_count` say how many of each (faces, two a quad).
+use "parallel.entpkg";
+use "../kernels/";
+
+input samples: Rows<Float>;
+param lattice: IsoLattice = IsoLattice { points: ivec3(2, 2, 2), origin: vec3(0.0, 0.0, 0.0), spacing: 1.0, level: 0.0 };
+
+node crossed_cells: mesh.iso_crossed_cells@1 {
+    samples <- samples;
+    lattice = lattice;
+}
+node cells: graph "parallel.entpkg/graphs/compact.esn" { flags <- crossed_cells.result; }
+node blank: parallel.compact_blank@1 { flags <- crossed_cells.result; }
+node slots: mesh.iso_slots@1 { kept <- cells.indices; blank <- blank.result; }
+node points: mesh.iso_points@1 { kept <- cells.indices; samples <- samples; total <- cells.count; lattice = lattice; domain = value(total); }
+node crossed_edges: mesh.iso_crossed_edges@1 { samples <- samples; lattice = lattice; domain = 3 * count(samples); }
+node edges: graph "parallel.entpkg/graphs/compact.esn" { flags <- crossed_edges.result; }
+node faces: mesh.iso_faces@1 { edges <- edges.indices; slots <- slots.result; samples <- samples; total <- edges.count; lattice = lattice; domain = 2 * value(total); }
+
+output points <- points.result;
+output faces <- faces.result;
+output point_count <- cells.count;
+output quad_count <- edges.count;

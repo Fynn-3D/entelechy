@@ -1,0 +1,75 @@
+// Surfaces from samples on a 24 by 24 by 24 lattice: a ball of radius 0.7
+// and a ring of radii 0.55 and 0.2. What is checked: how many points and
+// quads (a closed ball has two more points than quads, a ring as many),
+// how far the points stray from the true surface, how far their normals
+// from its own, and the volume the faces close, positive when they face
+// out.
+use "raster.entpkg";
+use "../kernels/";
+
+node ball_field: kernel {
+    requires { field.write; }
+    output result: Rows<Float>;
+    domain = 13824;
+    compute {
+        let i = element();
+        let p = vec3(float(i % 24), float((i / 24) % 24), float(i / 576)) * 0.08 - 0.92;
+        return length(p) - 0.7;
+    }
+}
+node ring_field: kernel {
+    requires { field.write; }
+    output result: Rows<Float>;
+    domain = 13824;
+    compute {
+        let i = element();
+        let p = vec3(float(i % 24), float((i / 24) % 24), float(i / 576)) * 0.08 - 0.92;
+        return length(vec2(length(p.xz) - 0.55, p.y)) - 0.2;
+    }
+}
+node ball: graph "../graphs/iso.esn" {
+    samples <- ball_field.result;
+    lattice = IsoLattice { points: ivec3(24, 24, 24), origin: vec3(-0.92, -0.92, -0.92), spacing: 0.08, level: 0.0 };
+}
+node ring: graph "../graphs/iso.esn" {
+    samples <- ring_field.result;
+    lattice = IsoLattice { points: ivec3(24, 24, 24), origin: vec3(-0.92, -0.92, -0.92), spacing: 0.08, level: 0.0 };
+}
+
+// The farthest a point lies from the ball, and the least its normal
+// agrees with the ball's.
+node ball_points: kernel {
+    requires { field.read; field.write; }
+    input points: Rows<MeshPoint> <- ball.points;
+    output result: Rows<Vec2>;
+    compute {
+        let p = sample(points);
+        return vec2(abs(length(p.position) - 0.7), dot(p.normal, normalize(p.position)));
+    }
+    merge(a, b) { return vec2(max(a.x, b.x), min(a.y, b.y)); }
+}
+// The volume the faces close: a tetrahedron from the middle to each face.
+node ball_volume: kernel {
+    requires { field.read; field.write; }
+    input faces: Rows<Face> <- ball.faces;
+    input points: Rows<MeshPoint> <- ball.points;
+    output result: Rows<Float>;
+    compute {
+        let f = sample(faces);
+        return dot(at(points, f.a).position, cross(at(points, f.b).position, at(points, f.c).position)) / 6.0;
+    }
+    merge(a, b) { return a + b; }
+}
+node ring_volume: kernel {
+    requires { field.read; field.write; }
+    input faces: Rows<Face> <- ring.faces;
+    input points: Rows<MeshPoint> <- ring.points;
+    output result: Rows<Float>;
+    compute {
+        let f = sample(faces);
+        return dot(at(points, f.a).position, cross(at(points, f.b).position, at(points, f.c).position)) / 6.0;
+    }
+    merge(a, b) { return a + b; }
+}
+
+output result <- ball.point_count;
