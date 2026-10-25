@@ -1,6 +1,6 @@
 //! The codecs importer, exporter and session share: PNG, PPM, WAV and
 //! MIDI to and from Host Fields, a light's IES photometry to one, the
-//! inflate PNG needs, and base64.
+//! inflate PNG needs, base64, and the layouts of a font's Fields.
 //! [`read`] and [`encode`] choose by a file's extension. Each is pure
 //! bytes in, bytes or a Field out, depending on the Host alone.
 //!
@@ -15,6 +15,7 @@ pub mod base64;
 pub mod deflate;
 pub mod directory;
 pub mod file;
+pub mod font;
 pub mod ies;
 pub mod inflate;
 pub mod midi;

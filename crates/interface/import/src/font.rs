@@ -14,28 +14,13 @@
 
 use std::path::{Path, PathBuf};
 
-use entelechy_host::{Domain, FieldData, Scalar, Schema};
+use entelechy_host::{Domain, FieldData, Schema};
 
 /// How finely curves are cut: the largest distance, in ems, a segment may
 /// stray from its curve.
 const TOLERANCE: f32 = 1.0 / 2048.0;
 
-/// A glyph's layout, as a Kernel declares it to read one: `code: Int;
-/// advance: Int; first: Int; count: Int; lo: Vec2; hi: Vec2`. The advance
-/// is in the font's units, so a line's advances sum exactly; the box is
-/// in ems.
-pub fn glyph_schema() -> Schema {
-    let f = Scalar::Float;
-    let i = Scalar::Int;
-    Schema::new(vec![i, i, i, i, f, f, f, f])
-}
-
-/// The font's measures: `units: Int; ascent: Float; descent: Float; gap:
-/// Float`, the font's units in an em and the rest in ems.
-pub fn metrics_schema() -> Schema {
-    let f = Scalar::Float;
-    Schema::new(vec![Scalar::Int, f, f, f])
-}
+pub use entelechy_formats::font::{glyph_schema, metrics_schema, segment_schema};
 
 /// What a font import produced.
 #[derive(Debug)]
@@ -181,7 +166,7 @@ pub fn placeholder() -> Fields {
     };
     Fields {
         glyphs: field(glyph_schema(), vec![-1i32 as u32, 0, 0, 0, 0, 0, 0, 0]),
-        segments: field(Schema::new(vec![Scalar::Float; 4]), vec![0; 4]),
+        segments: field(segment_schema(), vec![0; 4]),
         metrics: field(metrics_schema(), vec![0; 4]),
     }
 }
@@ -284,11 +269,7 @@ impl<'a> Drawer<'a> {
         };
         Ok(Fields {
             glyphs: field(glyph_schema(), rows, glyphs)?,
-            segments: field(
-                Schema::new(vec![Scalar::Float; 4]),
-                self.first.max(1),
-                segments,
-            )?,
+            segments: field(segment_schema(), self.first.max(1), segments)?,
             metrics: field(metrics_schema(), 1, metrics.to_vec())?,
         })
     }

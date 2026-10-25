@@ -1,11 +1,11 @@
 //! `entelechy-export`: the Host's files as other software's formats. Mesh
 //! rows (and a PNG) become a GLB, rows of one or two floats a WAV, a
-//! grid a PNG.
+//! grid a PNG, a font's Fields a TrueType or WOFF font.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use entelechy_export::gltf;
+use entelechy_export::{font, gltf};
 use entelechy_formats::rig::Part;
 use entelechy_host::{FieldData, Shape};
 
@@ -13,7 +13,7 @@ const USAGE: &str = "\
 usage:
   entelechy-export <file>... --out <target> [--rate <hz>] [--beats <n>]
               [--filter linear|nearest] [--joints <name>,<name>,...]
-              [--double-sided]
+              [--double-sided] [--name <family>]
       To .glb: a vertices .field (rows of position, normal, uv, and a
       tangent where a normal map is read along one), a triangles .field
       (rows of three ints), and PNGs: the base color, a normal map named
@@ -32,7 +32,10 @@ usage:
       WAV). To .png: a .field grid of pixels or floats, or a .ppm or .pgm.
       To .mid: a .field of notes as the importer reads them (start, duration,
       pitch, velocity, channel); --beats says the quarter notes a minute, 120
-      by default.";
+      by default.
+      To .ttf or .woff: a font's .fields as the importer writes them (glyph
+      rows, outline segments in ems, the measures); --name names the family,
+      the file's stem by default.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -64,6 +67,7 @@ fn export(args: &[String]) -> Result<String, String> {
     let mut rate: Option<u32> = None;
     let mut beats: Option<u32> = None;
     let mut options = gltf::Options::default();
+    let mut family: Option<String> = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -103,6 +107,7 @@ fn export(args: &[String]) -> Result<String, String> {
                     .collect();
             }
             "--double-sided" => options.double_sided = true,
+            "--name" => family = Some(iter.next().ok_or("--name needs a family name")?.clone()),
             other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
             other => inputs.push(PathBuf::from(other)),
         }
@@ -117,6 +122,9 @@ fn export(args: &[String]) -> Result<String, String> {
             .map(str::to_ascii_lowercase)
             .unwrap_or_default()
     };
+    if family.is_some() && !matches!(extension(&out).as_str(), "ttf" | "woff") {
+        return Err("--name is for a .ttf or .woff".into());
+    }
     match extension(&out).as_str() {
         "glb" => {
             let mut vertices = None;
@@ -185,6 +193,27 @@ fn export(args: &[String]) -> Result<String, String> {
             };
             Ok(format!("wrote {}{extra}", out.display()))
         }
+        format @ ("ttf" | "woff") => {
+            let fields = inputs
+                .iter()
+                .map(|input| read_field(input))
+                .collect::<Result<Vec<_>, _>>()?;
+            let stem = out.file_stem().and_then(|s| s.to_str()).unwrap_or("Font");
+            let face = font::face(&fields, family.as_deref().unwrap_or(stem))?;
+            let bytes = if format == "ttf" {
+                font::ttf(&face)
+            } else {
+                font::woff(&face)
+            };
+            std::fs::write(&out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
+            Ok(format!(
+                "wrote {}: {} character(s), {} glyph(s), {} bytes",
+                out.display(),
+                face.characters(),
+                face.glyphs(),
+                bytes.len()
+            ))
+        }
         format @ ("wav" | "mid" | "midi" | "png") => {
             if options.filter != gltf::Filter::Linear
                 || !options.joints.is_empty()
@@ -243,7 +272,7 @@ fn export(args: &[String]) -> Result<String, String> {
             })
         }
         other => Err(format!(
-            "`.{other}` is not a format export knows; write .glb, .wav, .mid, or .png"
+            "`.{other}` is not a format export knows; write .glb, .wav, .mid, .png, .ttf or .woff"
         )),
     }
 }

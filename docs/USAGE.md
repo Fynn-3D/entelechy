@@ -245,6 +245,7 @@ entelechy import font.ttf --out assets --chars "Hello, world."
 entelechy export crate.vertices.field crate.triangles.field crate.albedo.png --out crate.glb
 entelechy export kick.field --out kick.wav --rate 48000
 entelechy export song.notes.field --out song.mid --beats 100
+entelechy export x.glyphs.field x.segments.field x.metrics.field --out x.woff --name "X Sans"
 ```
 
 `entelechy-import` writes what a scene takes as inputs into `--out`:
@@ -264,8 +265,10 @@ entelechy export song.notes.field --out song.mid --beats 100
 vertices, triangles and PNGs as a GLB (`<stem>.normal.png`,
 `.occlusion.png` and `.orm.png` as those maps, a rig's rows as a skin;
 `--filter nearest`, `--joints`, `--double-sided`), rows of floats as a
-WAV, a grid as a PNG, notes as MIDI. What the importer read is written
-back bit for bit.
+WAV, a grid as a PNG, notes as MIDI, a font's glyphs, segments and
+metrics as TrueType or WOFF (`--name` its family). What the importer read
+is written back bit for bit, but a font: its curves come back as the
+importer cut them, within half a font unit.
 
 ## Creation protocol
 
