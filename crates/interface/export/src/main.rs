@@ -1,6 +1,6 @@
 //! `entelechy-export`: the Host's files as other software's formats. Mesh
 //! rows (and a PNG) become a GLB, rows of one or two floats a WAV, a
-//! grid a PNG, a font's Fields a TrueType or WOFF font.
+//! grid a PNG, a font's Fields a TrueType, OpenType (CFF) or WOFF font.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -14,6 +14,7 @@ usage:
   entelechy-export <file>... --out <target> [--rate <hz>] [--beats <n>]
               [--filter linear|nearest] [--joints <name>,<name>,...]
               [--double-sided] [--name <family>]
+              [--chars <text> | --chars-file <file>]
       To .glb: a vertices .field (rows of position, normal, uv, and a
       tangent where a normal map is read along one), a triangles .field
       (rows of three ints), and PNGs: the base color, a normal map named
@@ -33,9 +34,10 @@ usage:
       To .mid: a .field of notes as the importer reads them (start, duration,
       pitch, velocity, channel); --beats says the quarter notes a minute, 120
       by default.
-      To .ttf or .woff: a font's .fields as the importer writes them (glyph
-      rows, outline segments in ems, the measures); --name names the family,
-      the file's stem by default.";
+      To .ttf, .otf or .woff: a font's .fields as the importer writes them
+      (glyph rows, outline segments in ems, the measures); --name names the
+      family, the file's stem by default; --chars (or --chars-file, a UTF-8
+      file) keeps those characters alone.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -68,6 +70,7 @@ fn export(args: &[String]) -> Result<String, String> {
     let mut beats: Option<u32> = None;
     let mut options = gltf::Options::default();
     let mut family: Option<String> = None;
+    let mut chars: Option<String> = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -108,6 +111,11 @@ fn export(args: &[String]) -> Result<String, String> {
             }
             "--double-sided" => options.double_sided = true,
             "--name" => family = Some(iter.next().ok_or("--name needs a family name")?.clone()),
+            "--chars" => chars = Some(iter.next().ok_or("--chars needs the characters")?.clone()),
+            "--chars-file" => {
+                let path = iter.next().ok_or("--chars-file needs a file")?;
+                chars = Some(std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?);
+            }
             other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
             other => inputs.push(PathBuf::from(other)),
         }
@@ -122,8 +130,10 @@ fn export(args: &[String]) -> Result<String, String> {
             .map(str::to_ascii_lowercase)
             .unwrap_or_default()
     };
-    if family.is_some() && !matches!(extension(&out).as_str(), "ttf" | "woff") {
-        return Err("--name is for a .ttf or .woff".into());
+    if (family.is_some() || chars.is_some())
+        && !matches!(extension(&out).as_str(), "ttf" | "otf" | "woff")
+    {
+        return Err("--name, --chars and --chars-file are for a font".into());
     }
     match extension(&out).as_str() {
         "glb" => {
@@ -193,17 +203,17 @@ fn export(args: &[String]) -> Result<String, String> {
             };
             Ok(format!("wrote {}{extra}", out.display()))
         }
-        format @ ("ttf" | "woff") => {
+        format @ ("ttf" | "otf" | "woff") => {
             let fields = inputs
                 .iter()
                 .map(|input| read_field(input))
                 .collect::<Result<Vec<_>, _>>()?;
             let stem = out.file_stem().and_then(|s| s.to_str()).unwrap_or("Font");
-            let face = font::face(&fields, family.as_deref().unwrap_or(stem))?;
-            let bytes = if format == "ttf" {
-                font::ttf(&face)
-            } else {
-                font::woff(&face)
+            let face = font::face(&fields, family.as_deref().unwrap_or(stem), chars.as_deref())?;
+            let bytes = match format {
+                "ttf" => font::ttf(&face),
+                "otf" => font::otf(&face),
+                _ => font::woff(&face),
             };
             std::fs::write(&out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
             Ok(format!(
@@ -272,7 +282,7 @@ fn export(args: &[String]) -> Result<String, String> {
             })
         }
         other => Err(format!(
-            "`.{other}` is not a format export knows; write .glb, .wav, .mid, .png, .ttf or .woff"
+            "`.{other}` is not a format export knows; write .glb, .wav, .mid, .png, .ttf, .otf or .woff"
         )),
     }
 }

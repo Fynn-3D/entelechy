@@ -36,7 +36,7 @@ fn summary(fields: &Fields) -> (Vec<Row>, [f32; 3]) {
 fn a_font_comes_back_as_it_was_read() {
     let (fields, _) = read(&sample::latin(), None).unwrap();
     let (before, measures) = summary(&fields);
-    let face = font::face(&all(fields), "Sample").unwrap();
+    let face = font::face(&all(fields), "Sample", None).unwrap();
     let (again, _) = read(&font::ttf(&face), None).unwrap();
     let (after, measures_again) = summary(&again);
     assert_eq!(before.len(), after.len());
@@ -94,7 +94,7 @@ fn a_straight_outline_comes_back_point_for_point() {
         field(segment_schema(), 5, segments),
         field(metrics_schema(), 1, metrics.to_vec()),
     ];
-    let face = font::face(&inputs, "Box").unwrap();
+    let face = font::face(&inputs, "Box", None).unwrap();
     let (back, _) = read(&font::ttf(&face), Some("A")).unwrap();
     let rows = back.glyphs.values();
     let a = &rows[8..16];
@@ -141,7 +141,7 @@ fn tables(sfnt: &[u8]) -> Vec<([u8; 4], Vec<u8>)> {
 #[test]
 fn a_woff_holds_the_truetype_files_tables() {
     let (fields, _) = read(&sample::latin(), None).unwrap();
-    let face = font::face(&all(fields), "Sample").unwrap();
+    let face = font::face(&all(fields), "Sample", None).unwrap();
     let ttf = font::ttf(&face);
     let woff = font::woff(&face);
     assert_eq!(&woff[..4], b"wOFF");
@@ -179,7 +179,7 @@ fn characters_far_apart_map_to_their_glyphs() {
         field(glyph_schema(), n as usize, rows),
         field(segment_schema(), 1, vec![0; 4]),
     ];
-    let face = font::face(&inputs, "Far").unwrap();
+    let face = font::face(&inputs, "Far", None).unwrap();
     assert_eq!(
         (face.characters(), face.glyphs()),
         (n as usize, n as usize + 1)
@@ -201,4 +201,44 @@ fn characters_far_apart_map_to_their_glyphs() {
             "the advance of character {k}"
         );
     }
+}
+
+#[test]
+fn cff_outlines_come_back_as_truetype_ones_do() {
+    let (fields, _) = read(&sample::latin(), None).unwrap();
+    let face = font::face(&all(fields), "Sample", None).unwrap();
+    let (from_ttf, _) = read(&font::ttf(&face), None).unwrap();
+    let (from_otf, _) = read(&font::otf(&face), None).unwrap();
+    let (ttf, measures) = summary(&from_ttf);
+    let (otf, measures_otf) = summary(&from_otf);
+    assert_eq!(measures, measures_otf);
+    assert_eq!(ttf.len(), otf.len());
+    // A quadratic as a cubic, its controls in whole units: within a unit.
+    for (t, o) in ttf.iter().zip(&otf) {
+        assert_eq!((t.0, t.1), (o.0, o.1));
+        for k in 0..4 {
+            assert!(
+                (t.2[k] - o.2[k]).abs() <= 0.002,
+                "code {}: {:?} against {:?}",
+                t.0,
+                t.2,
+                o.2
+            );
+        }
+    }
+}
+
+#[test]
+fn a_font_of_some_characters_holds_those_alone() {
+    let (fields, _) = read(&sample::latin(), None).unwrap();
+    let face = font::face(&all(fields), "Sample", Some("lo")).unwrap();
+    assert_eq!((face.characters(), face.glyphs()), (2, 3));
+    let (back, _) = read(&font::ttf(&face), None).unwrap();
+    let codes: Vec<i32> = back
+        .glyphs
+        .values()
+        .chunks_exact(8)
+        .map(|r| r[0] as i32)
+        .collect();
+    assert_eq!(codes, vec![-1, 'l' as i32, 'o' as i32]);
 }

@@ -1,22 +1,24 @@
 //! A font file from a font's Fields (`entelechy_formats::font`), the
 //! Fields `entelechy import` reads a font into: TrueType outlines in a
-//! `.ttf`, or the same tables compressed in a `.woff`.
+//! `.ttf`, the same tables compressed in a `.woff`, or CFF outlines in an
+//! `.otf`.
 //!
 //! A glyph row's segments are its contours, each closed and its segments
-//! one after another; they are written as the contours' corners, points
-//! along a straight run left out and the rest within half a font unit of
-//! the segments (as close as an import cuts a curve). Rows that share an
-//! outline and an advance share a glyph; the row of code -1, if any, is
-//! the glyph for a character the font lacks. Kerning, ligatures and hints
-//! are not written.
+//! one after another, their ends the points the contour passes (taken in
+//! whole font units). They are written as curves through those points
+//! ([`curves`]): quadratics in TrueType, the same as cubics in CFF, within
+//! a font unit of the points, corners kept and straight runs as their
+//! ends. Rows that share an outline and an advance share a glyph; the row
+//! of code -1, if any, is the glyph for a character the font lacks.
+//! Kerning, ligatures and hints are not written.
 
-use std::collections::{BTreeMap, HashMap};
+mod cff;
+mod curves;
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use entelechy_formats::font::Part;
 use entelechy_host::FieldData;
-
-/// How far a written contour may stray from its segments, in font units.
-const TOLERANCE: f64 = 0.5;
 
 /// A font ready to write: its glyphs and which characters map to them.
 #[derive(Debug)]
@@ -32,17 +34,20 @@ pub struct Face {
     map: Vec<(u32, u16)>,
 }
 
+/// A point of a written contour: x, y, and whether it is on the curve.
+type Point = (i16, i16, bool);
+
 #[derive(Debug, Default)]
 struct Glyph {
     advance: u16,
-    contours: Vec<Vec<(i16, i16)>>,
+    contours: Vec<Vec<Point>>,
 }
 
 impl Glyph {
     fn bounds(&self) -> Option<[i16; 4]> {
         let mut points = self.contours.iter().flatten();
-        let &(x, y) = points.next()?;
-        Some(points.fold([x, y, x, y], |b, &(x, y)| {
+        let &(x, y, _) = points.next()?;
+        Some(points.fold([x, y, x, y], |b, &(x, y, _)| {
             [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)]
         }))
     }
@@ -65,8 +70,10 @@ impl Face {
 }
 
 /// The font the Fields `inputs` hold (glyph rows, segments and, if given,
-/// the measures; told apart by layout), named `family`.
-pub fn face(inputs: &[FieldData], family: &str) -> Result<Face, String> {
+/// the measures; told apart by layout), named `family`: of the characters
+/// of `chars`, or of every one the rows map.
+pub fn face(inputs: &[FieldData], family: &str, chars: Option<&str>) -> Result<Face, String> {
+    let wanted: Option<BTreeSet<u32>> = chars.map(|text| text.chars().map(u32::from).collect());
     let mut glyphs = None;
     let mut segments = None;
     let mut metrics = None;
@@ -150,6 +157,9 @@ pub fn face(inputs: &[FieldData], family: &str) -> Result<Face, String> {
         else {
             continue;
         };
+        if wanted.as_ref().is_some_and(|w| !w.contains(&code)) {
+            continue;
+        }
         let key = (row[1], row[2], row[3]);
         let id = match shared.get(&key) {
             Some(&id) => id,
@@ -166,7 +176,7 @@ pub fn face(inputs: &[FieldData], family: &str) -> Result<Face, String> {
     face.map.sort_unstable_by_key(|&(code, _)| code);
     face.map.dedup_by_key(|&mut (code, _)| code);
     if face.map.is_empty() {
-        return Err("no glyph row maps a character".into());
+        return Err("no glyph row maps a character asked for".into());
     }
     if !missing {
         face.glyphs[0].advance = units / 2;
@@ -177,7 +187,7 @@ pub fn face(inputs: &[FieldData], family: &str) -> Result<Face, String> {
 /// A run of segments as contours in font units: a contour ends where a
 /// segment comes back to its start, or where the next segment does not
 /// begin at the last one's end.
-fn contours(run: &[[f64; 4]], scale: f64) -> Vec<Vec<(i16, i16)>> {
+fn contours(run: &[[f64; 4]], scale: f64) -> Vec<Vec<Point>> {
     let mut out = Vec::new();
     let mut ring: Vec<(f64, f64)> = Vec::new();
     let mut finish = |ring: &mut Vec<(f64, f64)>| {
@@ -202,34 +212,12 @@ fn contours(run: &[[f64; 4]], scale: f64) -> Vec<Vec<(i16, i16)>> {
     out
 }
 
-/// A closed ring of points in ems as a contour's points in font units:
-/// within [`TOLERANCE`] of the ring, repeats left out; none with fewer
-/// than three.
-fn written(ring: &[(f64, f64)], scale: f64) -> Option<Vec<(i16, i16)>> {
-    if ring.len() < 3 {
-        return None;
-    }
-    let ring: Vec<(f64, f64)> = ring.iter().map(|&(x, y)| (x * scale, y * scale)).collect();
-    // Two far points split the ring into two runs, each kept to its corners.
-    let far = (1..ring.len())
-        .max_by(|&i, &j| {
-            let d = |k: usize| (ring[k].0 - ring[0].0).hypot(ring[k].1 - ring[0].1);
-            d(i).total_cmp(&d(j))
-        })
-        .unwrap_or(1);
-    let mut there: Vec<(f64, f64)> = ring[far..].to_vec();
-    there.push(ring[0]);
-    let mut kept = corners(&ring[..=far]);
-    kept.pop();
-    let mut back = corners(&there);
-    back.pop();
-    kept.extend(back);
-    let mut points: Vec<(i16, i16)> = Vec::with_capacity(kept.len());
-    for (x, y) in kept {
-        let p = (
-            x.round().clamp(-32768.0, 32767.0) as i16,
-            y.round().clamp(-32768.0, 32767.0) as i16,
-        );
+/// A closed ring of points in ems as a contour in font units, through its
+/// points taken in whole units: none when it encloses no area.
+fn written(ring: &[(f64, f64)], scale: f64) -> Option<Vec<Point>> {
+    let mut points: Vec<(i32, i32)> = Vec::with_capacity(ring.len());
+    for &(x, y) in ring {
+        let p = ((x * scale).round() as i32, (y * scale).round() as i32);
         if points.last() != Some(&p) {
             points.push(p);
         }
@@ -237,50 +225,23 @@ fn written(ring: &[(f64, f64)], scale: f64) -> Option<Vec<(i16, i16)>> {
     while points.len() > 1 && points.first() == points.last() {
         points.pop();
     }
-    (points.len() >= 3).then_some(points)
-}
-
-/// The points of an open run that keep it within [`TOLERANCE`]: its ends,
-/// and each point farther than that from the line its neighbours kept make
-/// (Douglas and Peucker).
-fn corners(run: &[(f64, f64)]) -> Vec<(f64, f64)> {
-    let n = run.len();
-    if n < 3 {
-        return run.to_vec();
+    let n = points.len();
+    let twice_area: i64 = (0..n)
+        .map(|k| {
+            let (a, b) = (points[k], points[(k + 1) % n]);
+            i64::from(a.0) * i64::from(b.1) - i64::from(b.0) * i64::from(a.1)
+        })
+        .sum();
+    if n < 3 || twice_area.abs() <= 2 {
+        return None;
     }
-    let mut keep = vec![false; n];
-    keep[0] = true;
-    keep[n - 1] = true;
-    let mut spans = vec![(0, n - 1)];
-    while let Some((a, b)) = spans.pop() {
-        let (p, q) = (run[a], run[b]);
-        let (dx, dy) = (q.0 - p.0, q.1 - p.1);
-        let length = dx.hypot(dy);
-        let distance = |r: (f64, f64)| {
-            if length == 0.0 {
-                (r.0 - p.0).hypot(r.1 - p.1)
-            } else {
-                ((r.0 - p.0) * dy - (r.1 - p.1) * dx).abs() / length
-            }
-        };
-        let mut worst = (0.0, a);
-        for (k, &r) in run.iter().enumerate().take(b).skip(a + 1) {
-            let d = distance(r);
-            if d > worst.0 {
-                worst = (d, k);
-            }
-        }
-        if worst.0 > TOLERANCE {
-            keep[worst.1] = true;
-            spans.push((a, worst.1));
-            spans.push((worst.1, b));
-        }
-    }
-    run.iter()
-        .zip(keep)
-        .filter(|(_, k)| *k)
-        .map(|(&p, _)| p)
-        .collect()
+    let clamp = |v: i32| v.clamp(-32768, 32767) as i16;
+    Some(
+        curves::curved(&points)
+            .into_iter()
+            .map(|(x, y, on)| (clamp(x), clamp(y), on))
+            .collect(),
+    )
 }
 
 // ---------------------------------------------------------------- tables
@@ -318,8 +279,8 @@ fn glyf_entry(glyph: &Glyph) -> Vec<u8> {
     let mut flags: Vec<u8> = Vec::new();
     let (mut xs, mut ys) = (Vec::new(), Vec::new());
     let (mut px, mut py) = (0i32, 0i32);
-    for &(x, y) in glyph.contours.iter().flatten() {
-        let mut flag = 0x01u8;
+    for &(x, y, on) in glyph.contours.iter().flatten() {
+        let mut flag = u8::from(on);
         for (d, short, same, data) in [
             (i32::from(x) - px, 0x02u8, 0x10u8, &mut xs),
             (i32::from(y) - py, 0x04, 0x20, &mut ys),
@@ -492,16 +453,22 @@ fn format4(map: &[(u32, u16)]) -> Option<Vec<u8>> {
 
 /// `name`: the family, its one style (Regular), the full and PostScript
 /// names, in UTF-16 for Windows' Unicode platform.
-fn name(family: &str) -> Vec<u8> {
-    let postscript: String = family
+/// A family's name as PostScript takes one: printable ASCII, no spaces
+/// nor delimiters.
+fn postscript_name(family: &str) -> String {
+    let name: String = family
         .chars()
         .filter(|c| c.is_ascii_graphic() && !"[](){}<>/%".contains(*c))
         .collect();
-    let postscript = if postscript.is_empty() {
+    if name.is_empty() {
         "Font".to_owned()
     } else {
-        postscript
-    };
+        name
+    }
+}
+
+fn name(family: &str) -> Vec<u8> {
+    let postscript = postscript_name(family);
     let full = family.to_owned();
     let records: [(u16, &str); 5] = [
         (1, family),
@@ -529,8 +496,8 @@ fn name(family: &str) -> Vec<u8> {
     out
 }
 
-/// The font's tables, by tag.
-fn tables(face: &Face) -> BTreeMap<[u8; 4], Vec<u8>> {
+/// The font's tables, by tag: TrueType outlines (`glyf`), or CFF ones.
+fn tables(face: &Face, cff: bool) -> BTreeMap<[u8; 4], Vec<u8>> {
     let glyphs = &face.glyphs;
     let bounds: Vec<Option<[i16; 4]>> = glyphs.iter().map(Glyph::bounds).collect();
     let all = bounds
@@ -603,16 +570,21 @@ fn tables(face: &Face) -> BTreeMap<[u8; 4], Vec<u8>> {
     out.insert(*b"hhea", hhea);
 
     let mut maxp = Vec::new();
-    maxp.extend(be32(0x0001_0000));
-    maxp.extend(be16(n));
-    maxp.extend(be16(
-        glyphs.iter().map(Glyph::points).max().unwrap_or(0) as u16
-    ));
-    maxp.extend(be16(
-        glyphs.iter().map(|g| g.contours.len()).max().unwrap_or(0) as u16,
-    ));
-    for v in [0u16, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0] {
-        maxp.extend(be16(v));
+    if cff {
+        maxp.extend(be32(0x0000_5000));
+        maxp.extend(be16(n));
+    } else {
+        maxp.extend(be32(0x0001_0000));
+        maxp.extend(be16(n));
+        maxp.extend(be16(
+            glyphs.iter().map(Glyph::points).max().unwrap_or(0) as u16
+        ));
+        maxp.extend(be16(
+            glyphs.iter().map(|g| g.contours.len()).max().unwrap_or(0) as u16,
+        ));
+        for v in [0u16, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0] {
+            maxp.extend(be16(v));
+        }
     }
     out.insert(*b"maxp", maxp);
 
@@ -681,8 +653,20 @@ fn tables(face: &Face) -> BTreeMap<[u8; 4], Vec<u8>> {
     out.insert(*b"OS/2", os2);
 
     out.insert(*b"cmap", cmap(&face.map));
-    out.insert(*b"loca", loca);
-    out.insert(*b"glyf", glyf);
+    if cff {
+        let charstrings: Vec<Vec<u8>> = glyphs
+            .iter()
+            .map(|g| cff::charstring(&g.contours, g.advance, face.units))
+            .collect();
+        let postscript = postscript_name(&face.family);
+        out.insert(
+            *b"CFF ",
+            cff::table(&charstrings, &face.family, &postscript, all, face.units),
+        );
+    } else {
+        out.insert(*b"loca", loca);
+        out.insert(*b"glyf", glyf);
+    }
     out.insert(*b"name", name(&face.family));
     let mut post = Vec::new();
     post.extend(be32(0x0003_0000));
@@ -714,7 +698,7 @@ fn sfnt(tables: &BTreeMap<[u8; 4], Vec<u8>>) -> (Vec<u8>, usize) {
     let n = tables.len() as u16;
     let search = 16 * (1u16 << n.ilog2());
     let mut out = Vec::new();
-    out.extend(be32(0x0001_0000));
+    out.extend(be32(flavor(tables)));
     for v in [n, search, n.ilog2() as u16, 16 * n - search] {
         out.extend(be16(v));
     }
@@ -738,16 +722,31 @@ fn sfnt(tables: &BTreeMap<[u8; 4], Vec<u8>>) -> (Vec<u8>, usize) {
     (out, head_at)
 }
 
+/// The version a font file with `tables` begins with: `OTTO` for CFF
+/// outlines.
+fn flavor(tables: &BTreeMap<[u8; 4], Vec<u8>>) -> u32 {
+    if tables.contains_key(b"CFF ") {
+        0x4F54_544F
+    } else {
+        0x0001_0000
+    }
+}
+
 /// The face as a TrueType file.
 pub fn ttf(face: &Face) -> Vec<u8> {
-    sfnt(&tables(face)).0
+    sfnt(&tables(face, false)).0
+}
+
+/// The face as an OpenType file of CFF outlines.
+pub fn otf(face: &Face) -> Vec<u8> {
+    sfnt(&tables(face, true)).0
 }
 
 /// The face as a WOFF file: the TrueType file's tables, each compressed
 /// (zlib) where that makes it smaller, `head` with the TrueType file's
 /// checksum adjustment.
 pub fn woff(face: &Face) -> Vec<u8> {
-    let tables = tables(face);
+    let tables = tables(face, false);
     let (whole, head_at) = sfnt(&tables);
     let n = tables.len();
     let mut directory = Vec::new();
