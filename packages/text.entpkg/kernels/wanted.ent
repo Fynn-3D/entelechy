@@ -1,0 +1,46 @@
+// The wide characters a text uses, each once, in order of code: what a
+// font node reads (`graphs/wanted.esn`). Each character's code where it
+// begins, put in order (the parallel package's sort), the first of each
+// run of one code kept (its compaction) and gathered.
+use "letters.ent";
+
+/// The code of the character beginning at each byte of a UTF-8 text when
+/// it is past ASCII; 0 at an ASCII byte and a character's following bytes.
+kernel text.char_codes@1 {
+    requires { field.read; field.write; }
+    input text: Rows<Int>;
+    output result: Rows<Int>;
+    compute {
+        let b = at(text, element());
+        return if b < 192 { 0 } else { char_at(text, element(), true).x };
+    }
+}
+
+/// Whether the code at `k` of the codes in `order` begins a run: a code
+/// past ASCII unlike the one before it.
+kernel text.first_codes@1 {
+    requires { field.read; field.write; }
+    input codes: Rows<Int>;
+    input order: Rows<Int>;
+    output result: Rows<Int>;
+    compute {
+        let k = element();
+        let c = at(codes, at(order, k));
+        return if c >= 128 && (k == 0 || at(codes, at(order, k - 1)) != c) { 1 } else { 0 };
+    }
+}
+
+/// The codes kept, in order: the `count` first runs' codes, 0 past them. A
+/// node sets `domain = max(value(count), 1)`.
+kernel text.code_list@1 {
+    requires { field.read; field.write; }
+    input codes: Rows<Int>;
+    input order: Rows<Int>;
+    input kept: Rows<Int>;
+    input count: Rows<Int>;
+    output result: Rows<Int>;
+    compute {
+        let k = element();
+        return if k < at(count, 0) { at(codes, at(order, at(kept, k))) } else { 0 };
+    }
+}

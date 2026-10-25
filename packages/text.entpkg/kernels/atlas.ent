@@ -1,41 +1,63 @@
-// The wide glyphs a project's words use (Chinese, Japanese), as `entelechy
-// import` reads them from a font of ten pixels (`--chars` the words; the
-// study's `tools/fonts.py` imports and checks them), drawn into the atlas
-// the ui package's letters read (`ui.letters`): square glyphs ten pixels
-// a side, nine a row, in order of code, and the codes they are.
+// The wide glyphs a project's words use (Chinese, Japanese) drawn into the
+// atlas the ui package's letters read (`ui.letters`): square glyphs `side`
+// pixels a side, as many a row as 96 pixels hold, in order of code, and the
+// codes they are. The glyphs come from a font node (`node f: font "x.ttf"
+// { codes <- wanted.codes; }`, drawn by `text.face_atlas` at any side), or
+// from `entelechy import` of a ten-pixel font (`text.glyph_atlas`).
 
-/// A glyph as `entelechy import` writes a font's glyphs: its code, its advance
-/// in the font's units, its outline's segments, its box in ems.
+/// A glyph as a font node and `entelechy import` give a font's glyphs: its
+/// code, its advance in the font's units, its outline's segments, its box
+/// in ems.
 struct Letterform { code: Int; advance: Int; first: Int; count: Int; lo: Vec2; hi: Vec2; }
+
+/// A font node's metrics (`f.metrics`, one row): its units an em, and its
+/// ascent, descent and line gap in ems.
+struct FontMetrics { units: Int; ascent: Float; descent: Float; gap: Float; }
 
 fn atlas_side() -> Int { return 10; }
 fn glyph_ascent() -> Float { return 9.0; }
 fn atlas_columns() -> Int { return 9; }
 
-/// The atlas: each glyph's pixels, ink where its outline winds round the
-/// pixel's middle. A node sets `domain = vec2(96.0, 10.0 *
-/// floor((count(glyphs) + 8) / 9))`.
+/// Texel `p` of an atlas of glyphs `n` pixels square, their baseline
+/// `ascent` pixels below a glyph's top: ink where the glyph's outline winds
+/// round the texel's middle.
+fn atlas_ink(glyphs: Rows<Letterform>, outlines: Rows<Vec4>, p: IVec2, n: Int, ascent: Float) -> Float {
+    let columns = 96 / n;
+    if p.x >= columns * n { return 0.0; }
+    let k = p.y / n * columns + p.x / n;
+    if k >= count(glyphs) { return 0.0; }
+    let g = at(glyphs, k);
+    let e = vec2((float(p.x % n) + 0.5) / float(n), (ascent - float(p.y % n) - 0.5) / float(n));
+    let winding = loop g.count with w = 0 {
+        let s = at(outlines, g.first + index());
+        let crosses = (s.y <= e.y) != (s.w <= e.y);
+        let x = s.x + (e.y - s.y) * (s.z - s.x) / (s.w - s.y);
+        if crosses && x > e.x { if s.w > s.y { w + 1 } else { w - 1 } } else { w }
+    };
+    return if winding != 0 { 1.0 } else { 0.0 };
+}
+
+/// The atlas of a ten-pixel font's imported glyphs, nine a row. A node sets
+/// `domain = vec2(96.0, 10.0 * floor((count(glyphs) + 8) / 9))`.
 kernel text.glyph_atlas@1 {
     requires { field.read; field.write; }
     input glyphs: Rows<Letterform>;
     input outlines: Rows<Vec4>;
     output result: Grid<Float>;
-    compute {
-        let p = icoord();
-        let n = atlas_side();
-        if p.x >= atlas_columns() * n { return 0.0; }
-        let k = p.y / n * atlas_columns() + p.x / n;
-        if k >= count(glyphs) { return 0.0; }
-        let g = at(glyphs, k);
-        let e = vec2((float(p.x % n) + 0.5) / float(n), (glyph_ascent() - float(p.y % n) - 0.5) / float(n));
-        let winding = loop g.count with w = 0 {
-            let s = at(outlines, g.first + index());
-            let crosses = (s.y <= e.y) != (s.w <= e.y);
-            let x = s.x + (e.y - s.y) * (s.z - s.x) / (s.w - s.y);
-            if crosses && x > e.x { if s.w > s.y { w + 1 } else { w - 1 } } else { w }
-        };
-        return if winding != 0 { 1.0 } else { 0.0 };
-    }
+    compute { return atlas_ink(glyphs, outlines, icoord(), atlas_side(), glyph_ascent()); }
+}
+
+/// The atlas of a font node's glyphs, `side` pixels square, the baseline as
+/// far below a glyph's top as the font's ascent. `graphs/face.esn` places
+/// it, sized.
+kernel text.face_atlas@1 {
+    requires { field.read; field.write; }
+    param side: Int = 10;
+    input glyphs: Rows<Letterform>;
+    input outlines: Rows<Vec4>;
+    input metrics: Rows<FontMetrics>;
+    output result: Grid<Float>;
+    compute { return atlas_ink(glyphs, outlines, icoord(), side, floor(at(metrics, 0).ascent * float(side) + 0.5)); }
 }
 
 /// The codes the atlas holds, a slot each, in its order.

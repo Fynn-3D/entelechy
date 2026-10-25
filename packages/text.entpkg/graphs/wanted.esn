@@ -1,0 +1,15 @@
+//! The wide characters a UTF-8 text uses (`bytes "words.txt"`), each once,
+//! in order of code: the codes a font node reads. Place it with
+//!   node wanted: graph "text.entpkg/graphs/wanted.esn" { text <- words; }
+//!   node type: font "fonts/x.ttf" { codes <- wanted.codes; }
+use "../kernels/wanted.ent";
+
+input text: Rows<Int>;
+
+node chars: text.char_codes@1 { text <- text; domain = count(text); }
+node order: graph "parallel.entpkg/graphs/sort.esn" { keys <- chars.result; bits = 21; }
+node firsts: text.first_codes@1 { codes <- chars.result; order <- order.result; domain = count(codes); }
+node kept: graph "parallel.entpkg/graphs/compact.esn" { flags <- firsts.result; }
+node list: text.code_list@1 { codes <- chars.result; order <- order.result; kept <- kept.indices; count <- kept.count; domain = max(value(count), 1); }
+
+output codes <- list.result;

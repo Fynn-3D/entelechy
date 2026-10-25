@@ -1,0 +1,26 @@
+//! A font's glyphs as the letters' grid (`ui.letters`): a font node's
+//! glyphs drawn `side` pixels square into the atlas (`text.face_atlas`)
+//! under the bitmap font, and the codes the atlas holds, for `decode.esn`.
+//! A text's font is its path and its side:
+//!   node wanted: graph "text.entpkg/graphs/wanted.esn" { text <- words; }
+//!   node type: font "fonts/x.ttf" { codes <- wanted.codes; }
+//!   node letters: graph "text.entpkg/graphs/face.esn" { font <- pixels; glyphs <- type.glyphs; outlines <- type.outlines; metrics <- type.metrics; side = 12; }
+//!   node cells: graph "text.entpkg/graphs/decode.esn" { text <- words; codes <- letters.codes; width = 32; }
+use "../kernels/atlas.ent";
+
+input font: Grid<Float>;
+input glyphs: Rows<Letterform>;
+input outlines: Rows<Vec4>;
+input metrics: Rows<FontMetrics>;
+param side: Int = 10;
+
+require a_glyph_a_row: side >= 1;
+require glyphs_fit: side <= 96;
+
+node atlas: text.face_atlas@1 { side = side; glyphs <- glyphs; outlines <- outlines; metrics <- metrics;
+    domain = vec2(96.0, side * floor((count(glyphs) + 96 / side - 1) / (96 / side))); }
+node codes: text.glyph_codes@1 { glyphs <- glyphs; domain = count(glyphs); }
+node grid: graph "letters.esn" { font <- font; atlas <- atlas.result; side = side; }
+
+output letters <- grid.letters;
+output codes <- codes.result;

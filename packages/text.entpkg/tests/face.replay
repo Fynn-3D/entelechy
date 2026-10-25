@@ -1,0 +1,16 @@
+scene face.esn
+
+# The words' wide characters: 中, 字, 文, once each, in order of code.
+frame 0.0
+expect wanted.codes[0] = 20013
+expect wanted.codes[1] = 23383
+expect wanted.codes[2] = 25991
+
+# 中 in the atlas's first twelve pixels, 文 in the next: ink inside each
+# square, none at its corner; the grid holds the side, 12.
+expect letters.atlas.result[486] = 1
+expect letters.atlas.result[498] = 1
+expect letters.atlas.result[0] = 0
+expect letters.atlas.result[12] = 0
+expect letters.codes.result[1] = 25991
+expect letters.grid.grid.result[4608] = 12.0

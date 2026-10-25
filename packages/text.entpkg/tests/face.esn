@@ -1,0 +1,41 @@
+// A text's wide characters, each once, in order of code (中 文 中 A 文 字:
+// 中, 字, 文), and a font's glyphs drawn twelve pixels square: 中 and 文
+// as squares from 0.2 to 0.8 of an em, the ascent 11/12 of an em, the
+// glyphs as a font node gives them for those codes.
+use "../kernels/";
+
+input font: Grid<Float> = "data/font.png";
+input words: Rows<Int> = bytes "data/words.txt";
+
+node wanted: graph "../graphs/wanted.esn" { text <- words; }
+
+node glyphs: kernel {
+    requires { field.write; }
+    output result: Rows<Letterform>;
+    domain = 2;
+    compute {
+        let code = if element() == 0 { 20013 } else { 25991 };
+        return Letterform { code: code, advance: 1024, first: element() * 4, count: 4, lo: vec2(0.2, 0.2), hi: vec2(0.8, 0.8) };
+    }
+}
+node outlines: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 8;
+    compute {
+        let c = [vec2(0.2, 0.2), vec2(0.8, 0.2), vec2(0.8, 0.8), vec2(0.2, 0.8)];
+        let k = element() % 4;
+        let a = c[k];
+        let b = c[(k + 1) % 4];
+        return vec4(a.x, a.y, b.x, b.y);
+    }
+}
+node metrics: kernel {
+    requires { field.write; }
+    output result: Rows<FontMetrics>;
+    domain = 1;
+    compute { return FontMetrics { units: 1024, ascent: 11.0 / 12.0, descent: -1.0 / 12.0, gap: 0.0 }; }
+}
+node letters: graph "../graphs/face.esn" { font <- font; glyphs <- glyphs.result; outlines <- outlines.result; metrics <- metrics.result; side = 12; }
+
+output result <- letters.letters;
