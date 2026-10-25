@@ -1,7 +1,8 @@
 // A text's wide characters, each once, in order of code (中 文 中 A 文 字:
 // 中, 字, 文), and a font's glyphs drawn twelve pixels square: 中 and 文
 // as squares from 0.2 to 0.8 of an em, the ascent 11/12 of an em, the
-// glyphs as a font node gives them for those codes.
+// glyphs as a font node gives them for those codes. The words as letters
+// over two cells a wide one at twelve pixels, three at sixteen.
 use "../kernels/";
 
 input font: Grid<Float> = "data/font.png";
@@ -37,5 +38,7 @@ node metrics: kernel {
     compute { return FontMetrics { units: 1024, ascent: 11.0 / 12.0, descent: -1.0 / 12.0, gap: 0.0 }; }
 }
 node letters: graph "../graphs/face.esn" { font <- font; glyphs <- glyphs.result; outlines <- outlines.result; metrics <- metrics.result; side = 12; }
+node twelve: graph "../graphs/decode.esn" { text <- words; codes <- letters.codes; width = 12; side = 12; }
+node sixteen: graph "../graphs/decode.esn" { text <- words; codes <- letters.codes; width = 12; side = 16; }
 
 output result <- letters.letters;

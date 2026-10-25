@@ -14,3 +14,13 @@ expect letters.atlas.result[0] = 0
 expect letters.atlas.result[12] = 0
 expect letters.codes.result[1] = 25991
 expect letters.grid.grid.result[4608] = 12.0
+
+# 中 文 as letters: at twelve pixels over two cells, the second -1; at
+# sixteen over three, the second and third -1; A after them a cell.
+expect twelve.letters[0] = 256
+expect twelve.letters[1] = -1
+expect twelve.letters[2] = 257
+expect sixteen.letters[1] = -1
+expect sixteen.letters[2] = -1
+expect sixteen.letters[3] = 257
+expect sixteen.letters[9] = 65

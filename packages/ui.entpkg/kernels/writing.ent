@@ -1,8 +1,8 @@
 // Text drawn: a row of a text's letters (`letters.ent`), `width` cells
 // a row, from a top left, `scale` pixels a texel; its length and width
 // to align it in a rectangle; a number. A cell is 6 texels across and a
-// line 8 down; a wide letter over two cells may stand out of the line by
-// a few texels, which a line's cover takes in.
+// line 8 down; a wide letter over two cells or three may stand out of
+// the line by a few texels, which a line's cover takes in.
 use "layout.ent";
 use "paint.ent";
 use "text.entpkg";
@@ -11,11 +11,13 @@ use "text.entpkg";
 fn line_reach() -> Float { return 4.0; }
 
 /// The cover at `local`, in texels from the cell's top left, of cell
-/// `col` of the row of letters from `first`: its letter, or the right
-/// half of the wide letter before it.
+/// `col` of the row of letters from `first`: its letter, or its part of
+/// the wide letter it follows (one cell back, or two).
 fn cell_cover(letters: Grid<Float>, cells: Rows<Int>, first: Int, col: Int, local: Vec2) -> Float {
     let code = at(cells, first + col);
-    return if code == -1 && col > 0 { letter_cover(letters, at(cells, first + col - 1), local + vec2(6.0, 0.0)) } else { letter_cover(letters, code, local) };
+    if code != -1 || col == 0 { return letter_cover(letters, code, local); }
+    let back = if col > 1 && at(cells, first + col - 1) == -1 { 2 } else { 1 };
+    return letter_cover(letters, at(cells, first + col - back), local + vec2(6.0 * float(back), 0.0));
 }
 
 /// How many cells of row `row` hold letters, its trailing spaces left off.
