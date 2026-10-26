@@ -173,9 +173,11 @@ Inside `compute`, a body is `let` bindings and a result.
   written before it does not move it.
 - **`loop`.** `loop n with x = init until done { next }` is an
   expression. A nested loop reads its enclosing loops' carried values,
-  and a scan's step its own, by name. The count is a literal (its bound)
-  or any `Int` expression, read once and clamped to `0..=65536`, so
-  `loop depth with ...` takes a parameter. A count of zero yields the
+  and a scan's step its own, by name. The count is a literal (its bound,
+  at most 65536) or any `Int` expression, read once and run whole (a
+  negative one as zero), so `loop depth with ...` takes a parameter and
+  `loop count(rows) with ...` walks every row: the element's budget is
+  what bounds it, and past that the run fails, named. A count of zero yields the
   carried value. `if done { break x; }` among a loop body's statements
   stops the innermost loop after that iteration with that value, of the
   carried type.

@@ -1146,7 +1146,9 @@ impl Op {
     }
 }
 
-/// Largest iteration bound a `loop` may declare.
+/// Largest iteration bound a `loop` may write: a literal count, and an
+/// `[each]`'s. A count read at run time is bounded by [`MAX_BUDGET`]
+/// instead, so the element's work budget is what stops it.
 pub const MAX_LOOP_COUNT: u32 = 65_536;
 
 /// The default work budget: loop iterations an element may run.
@@ -1210,10 +1212,13 @@ pub enum Op {
     /// its replacement. `until`, tested on the carried value before each
     /// iteration, stops the loop when it holds. Yields the final value.
     Loop {
-        /// Compile-time iteration bound, at most [`MAX_LOOP_COUNT`].
+        /// Compile-time iteration bound: at most [`MAX_LOOP_COUNT`] alone,
+        /// at most [`MAX_BUDGET`] beside a run-time `bound`.
         count: u32,
         /// An optional run-time `Int`, read once before the loop: the loop
-        /// runs its value clamped to `0..=count` times.
+        /// runs its value clamped to `0..=count` times. Its `count` is the
+        /// largest budget, so no element runs it that far: the budget fails
+        /// the element first, named, rather than the count stopping short.
         bound: Option<ValueId>,
         /// Initial carried value.
         init: ValueId,

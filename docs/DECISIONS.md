@@ -51,6 +51,24 @@ every backend.
 `an_element_past_its_budget_fails_alike_on_every_backend` and
 `a_run_past_the_hosts_work_fails_alike_on_every_backend`.
 
+## A loop counted at run time runs whole; the budget bounds it
+
+A `loop` whose count is written is bounded by it, at most 65536; one
+whose count is read at run time (`loop count(rows) with ...`) runs that
+many times, however many, and only the element's work budget stops it,
+failing the run, named.
+
+**Why.** Termination and a run's size are the budget's to keep, alike on
+every backend; a count that stopped short of what it was given would
+give a wrong answer and no failure. The written bound stays, so a
+Kernel's worst case is still known where it can be, and work too small
+to matter is not counted.
+
+**Where.** `Op::Loop` and [`MAX_BUDGET`](../crates/core/ir/src/lib.rs);
+the loop's lowering in the compiler's
+[`expr`](../crates/frontend/compiler/src/lower/expr.rs); test
+`a_run_time_count_runs_whole_and_only_the_budget_stops_it`.
+
 ## A function never reaches itself; its place in the document is free
 
 Functions call one another in any written order, within a document and

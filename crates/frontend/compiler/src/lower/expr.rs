@@ -1,7 +1,9 @@
 //! Expressions to instructions: every form of the language, typed and
 //! diagnosed as it lowers.
 
-use entelechy_ir::{BinaryOp, Block as IrBlock, MAX_LOOP_COUNT, Op, Type, UnaryOp, Value, ValueId};
+use entelechy_ir::{
+    BinaryOp, Block as IrBlock, MAX_BUDGET, MAX_LOOP_COUNT, Op, Type, UnaryOp, Value, ValueId,
+};
 use entelechy_language::{Block, Expr, ExprKind, Span};
 
 use crate::CompileError;
@@ -732,7 +734,7 @@ impl Builder<'_> {
                 body,
             } => {
                 // A literal count is the bound; any other `Int` is read
-                // once, capped at the largest bound.
+                // once and runs as given, the element's budget its bound.
                 let (bound, run_time) = match &count.kind {
                     ExprKind::Int(literal) => {
                         let literal = *literal as u32;
@@ -755,7 +757,7 @@ impl Builder<'_> {
                                 ),
                             ));
                         }
-                        (MAX_LOOP_COUNT, Some(id))
+                        (MAX_BUDGET, Some(id))
                     }
                 };
                 let init_id = self.value(init)?;

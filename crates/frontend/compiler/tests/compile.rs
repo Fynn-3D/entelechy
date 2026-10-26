@@ -1642,25 +1642,30 @@ fn work_is_accounted_in_the_ir() {
         .unwrap()
     };
 
-    // A runtime-bounded loop can fill a block: it is counted, and the
-    // element looks when it finishes.
-    let counted = account_ok(&kernel("return loop n with a = 0 { a + 1 };"));
+    // A loop bounded where written that can fill a block is counted, and
+    // the element looks when it finishes.
+    let counted = account_ok(&kernel("return loop 2000 with a = 0 { a + n };"));
     assert_eq!(shape(&counted), "loop end spend look");
     assert!(counted.accounted());
 
+    // A loop counted at run time has no bound but the budget: it looks
+    // each iteration, so an element stops within LOOK_WORK of its budget.
+    let run_time = account_ok(&kernel("return loop n with a = 0 { a + 1 };"));
+    assert_eq!(shape(&run_time), "loop until look end spend look");
+
     // A nest able to exceed LOOK_WORK looks each outer iteration, before
-    // its `until`; the inner loop only spends.
+    // its `until`; an inner loop counted at run time looks each of its own.
     let nested = account_ok(&kernel(
         "return loop 64 with a = 0 until a > n { loop n with b = a { b + 1 } };",
     ));
     assert_eq!(
         shape(&nested),
-        "loop until look loop end spend end spend look"
+        "loop until look loop until look end spend end spend look"
     );
 
     // A smaller nest looks when it finishes.
     let small = account_ok(&kernel(
-        "return loop 9 with a = 0 { loop n with b = a { b + 1 } };",
+        "return loop 9 with a = 0 { loop 2000 with b = a { b + n } };",
     ));
     assert_eq!(shape(&small), "loop loop end spend end spend look");
 

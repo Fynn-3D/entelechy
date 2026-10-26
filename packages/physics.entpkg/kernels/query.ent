@@ -41,21 +41,18 @@ kernel physics.ray@1 {
         let d = ray.direction * ray.length;
         let n = count(bodies);
         let none = Hit { body: -1, fraction: 1.0, point: ray.origin + d, normal: vec2(0.0, 0.0) };
-        return loop rounds(n) with best = none {
-            let r = index();
-            loop round_of(n, r) with near = best {
-                let i = r * 65536 + index();
-                let b = at(bodies, i);
-                if b.sensor != 0 || (b.layer & ray.mask) == 0 { near } else {
-                    let o = unturn(ray.origin - b.position, b.angle);
-                    let dl = unturn(d, b.angle);
-                    let found = if b.shape == BodyShape.Circle {
-                        let t = ray_circle(o, dl, vec2(0.0, 0.0), b.size.x);
-                        vec3(t, normalize(o + dl * t))
-                    } else { ray_box(o, dl, b.size) };
-                    if found.x > 1.0 || found.x >= near.fraction { near } else {
-                        Hit { body: i, fraction: found.x, point: ray.origin + d * found.x, normal: turn(found.yz, b.angle) }
-                    }
+        return loop n with near = none {
+            let i = index();
+            let b = at(bodies, i);
+            if b.sensor != 0 || (b.layer & ray.mask) == 0 { near } else {
+                let o = unturn(ray.origin - b.position, b.angle);
+                let dl = unturn(d, b.angle);
+                let found = if b.shape == BodyShape.Circle {
+                    let t = ray_circle(o, dl, vec2(0.0, 0.0), b.size.x);
+                    vec3(t, normalize(o + dl * t))
+                } else { ray_box(o, dl, b.size) };
+                if found.x > 1.0 || found.x >= near.fraction { near } else {
+                    Hit { body: i, fraction: found.x, point: ray.origin + d * found.x, normal: turn(found.yz, b.angle) }
                 }
             }
         };

@@ -45,9 +45,3 @@ fn owner(e: Int, ends: Rows<Int>) -> Int {
     };
     return found.x;
 }
-
-// A walk over `n` things, more than one loop counts, in two loops: the
-// outer runs `rounds(n)` times, and its round `r` runs `round_of(n, r)`
-// of 65536, thing `r * 65536 + index()`.
-fn rounds(n: Int) -> Int { return (n + 65535) / 65536; }
-fn round_of(n: Int, r: Int) -> Int { return clamp(n - r * 65536, 0, 65536); }

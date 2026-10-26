@@ -3047,6 +3047,63 @@ output result <- w.result;",
     }
 }
 
+/// A loop counted at run time runs its whole count, past the largest
+/// written bound (65536), on every backend; past the element's budget it
+/// fails alike, named, rather than stopping short.
+#[test]
+fn a_run_time_count_runs_whole_and_only_the_budget_stops_it() {
+    let dir = scratch("run-time-count");
+    let scene = |budget: &str| {
+        format!(
+            "node w: kernel {{ requires {{ field.write; }} {budget} output result: Rows<Int>; domain = 3;
+            compute {{ let n = 100000 + element(); return loop n with a = 0 {{ a + 1 }}; }} }}
+output result <- w.result;"
+        )
+    };
+    for (budget, fails) in [("", false), ("budget 100001;", true)] {
+        std::fs::write(dir.join("scene.esn"), scene(budget)).unwrap();
+        let mut answers = Vec::new();
+        for backend in ["cpu", "jit", "gpu"] {
+            let Ok(runtime) = Session::runtime_for(
+                backend,
+                entelechy_session::Limits {
+                    words: 1 << 22,
+                    ..Default::default()
+                },
+            ) else {
+                continue;
+            };
+            let mut session = Session::open_with(&dir.join("scene.esn"), None, runtime);
+            let events = session.sync();
+            assert!(rejected(&events).is_empty(), "{:?}", rejected(&events));
+            let answer = session
+                .evaluate(&Context::default())
+                .map(|report| {
+                    (0..3)
+                        .map(|i| session.runtime().host().element(report.output, i).unwrap()[0])
+                        .collect::<Vec<u32>>()
+                })
+                .map_err(|error| error.to_string());
+            answers.push((backend, answer));
+        }
+        let (_, reference) = &answers[0];
+        for (backend, answer) in &answers {
+            assert_eq!(answer, reference, "{budget:?} on {backend}");
+        }
+        if fails {
+            assert!(
+                reference
+                    .as_ref()
+                    .is_err_and(|error| error
+                        .contains("at element (2, 0): more than 100001 loop iterations")),
+                "{reference:?}"
+            );
+        } else {
+            assert_eq!(reference.as_ref().unwrap(), &[100000, 100001, 100002]);
+        }
+    }
+}
+
 /// A domain is charged before any allocation: past the budget or `Int`
 /// indices, the node fails with why and the session goes on.
 #[test]

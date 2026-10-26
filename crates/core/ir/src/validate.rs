@@ -11,8 +11,8 @@ use std::sync::Arc;
 use crate::Scalar;
 
 use crate::{
-    Block, Capability, Combine, Function, Instruction, MAX_LOOP_COUNT, Manifest, Mode, Module, Op,
-    Port, PortType, Shape, ShapeIndex, StructDef, Type, UnaryOp, ValueId, schema_of,
+    Block, Capability, Combine, Function, Instruction, MAX_BUDGET, MAX_LOOP_COUNT, Manifest, Mode,
+    Module, Op, Port, PortType, Shape, ShapeIndex, StructDef, Type, UnaryOp, ValueId, schema_of,
 };
 
 /// A module that passed [`validate`]. It is never changed, so its copies
@@ -1040,9 +1040,14 @@ impl<'a> Checker<'a> {
                 until,
                 body,
             } => {
-                if *count == 0 || *count > MAX_LOOP_COUNT {
+                let most = if bound.is_some() {
+                    MAX_BUDGET
+                } else {
+                    MAX_LOOP_COUNT
+                };
+                if *count == 0 || *count > most {
                     return Err(self.fail(format!(
-                        "{position} loops {count} times; the bound must be 1..={MAX_LOOP_COUNT}"
+                        "{position} loops {count} times; the bound must be 1..={most}"
                     )));
                 }
                 if let Some(bound) = bound

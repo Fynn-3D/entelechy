@@ -399,7 +399,7 @@ pub fn forms() -> Vec<Form> {
             "loop",
             "expression",
             "loop n with x = init until done { next }",
-            "A bounded fold: `n` is a literal, which is its bound, or any Int expression read once and clamped to 0..=65536; `index()` is the iteration, and `until` stops it early, as `break` does from inside.",
+            "A bounded fold: `n` is a literal, which is its bound (at most 65536), or any Int expression read once and run whole, the element's budget its bound; `index()` is the iteration, and `until` stops it early, as `break` does from inside.",
         ),
         form(
             "break",
