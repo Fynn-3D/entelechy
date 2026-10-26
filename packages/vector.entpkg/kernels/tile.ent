@@ -84,14 +84,11 @@ kernel vector.tile_counts@1 {
         let tx = element() % columns;
         let ty = element() / columns;
         let n = count(chunks);
-        return loop rounds(n) with total = 0 {
-            let r = index();
-            loop round_of(n, r) with k = total {
-                let c = r * 65536 + index();
-                if !reach_holds(at(chunks, c), tx, ty) { k } else {
-                    loop chunk() with k2 = k {
-                        if keeps(reach, c * chunk() + index(), tx, ty) { k2 + 1 } else { k2 }
-                    }
+        return loop n with k = 0 {
+            let c = index();
+            if !reach_holds(at(chunks, c), tx, ty) { k } else {
+                loop chunk() with k2 = k {
+                    if keeps(reach, c * chunk() + index(), tx, ty) { k2 + 1 } else { k2 }
                 }
             }
         };
@@ -117,18 +114,15 @@ kernel vector.tile_fill@1 {
         let room = at(counts, t);
         let start = at(ends, t) - room;
         let n = count(chunks);
-        loop rounds(n) with k = 0 {
-            let r = index();
-            loop round_of(n, r) with k1 = k {
-                let c = r * 65536 + index();
-                if !reach_holds(at(chunks, c), tx, ty) { k1 } else {
-                    loop chunk() with k2 = k1 {
-                        let s = c * chunk() + index();
-                        if k2 < room && keeps(reach, s, tx, ty) {
-                            emit(Slot { at: start + k2, value: s });
-                            k2 + 1
-                        } else { k2 }
-                    }
+        loop n with k1 = 0 {
+            let c = index();
+            if !reach_holds(at(chunks, c), tx, ty) { k1 } else {
+                loop chunk() with k2 = k1 {
+                    let s = c * chunk() + index();
+                    if k2 < room && keeps(reach, s, tx, ty) {
+                        emit(Slot { at: start + k2, value: s });
+                        k2 + 1
+                    } else { k2 }
                 }
             }
         };
@@ -377,27 +371,21 @@ kernel vector.draw_tiled@1 {
         let t = ty * tile_columns(res) + tx;
         let n = at(tile_counts, t);
         let first = at(tile_ends, t) - n;
-        return loop rounds(n) with over = background {
-            let r = index();
-            loop round_of(n, r) with below = over {
-                let e = first + r * 65536 + index();
-                let si = at(tile_shapes, e);
-                let s = at(shapes, max(si, 0));
-                if si < 0 || !near(s, p, pixel) { below } else {
-                    // The cell's segments: from its first unit's to its last's.
-                    let last = at(unit_ends, e) - 1;
-                    let u0 = last + 1 - at(units, e);
-                    let begin = at(kept_ends, u0) - at(kept, u0);
-                    let m = if last >= u0 { at(kept_ends, last) - begin } else { 0 };
-                    let hit = loop rounds(m) with w = vec2(float(at(backdrop, e * rows + row)), 1000000000.0) {
-                        let q = index();
-                        loop round_of(m, q) with w2 = w {
-                            let g = at(cell_segments, begin + q * 65536 + index());
-                            if g < 0 { w2 } else { crossed(w2, at(segments, g), p) }
-                        }
-                    };
-                    laid(below, s, stops, p, pixel, hit)
-                }
+        return loop n with below = background {
+            let e = first + index();
+            let si = at(tile_shapes, e);
+            let s = at(shapes, max(si, 0));
+            if si < 0 || !near(s, p, pixel) { below } else {
+                // The cell's segments: from its first unit's to its last's.
+                let last = at(unit_ends, e) - 1;
+                let u0 = last + 1 - at(units, e);
+                let begin = at(kept_ends, u0) - at(kept, u0);
+                let m = if last >= u0 { at(kept_ends, last) - begin } else { 0 };
+                let hit = loop m with w = vec2(float(at(backdrop, e * rows + row)), 1000000000.0) {
+                    let g = at(cell_segments, begin + index());
+                    if g < 0 { w } else { crossed(w, at(segments, g), p) }
+                };
+                laid(below, s, stops, p, pixel, hit)
             }
         };
     }

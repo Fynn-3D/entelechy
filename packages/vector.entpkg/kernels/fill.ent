@@ -168,19 +168,13 @@ kernel vector.draw@1 {
         let p = v.xy;
         let pixel = v.z;
         let n = count(shapes);
-        return loop rounds(n) with over = background {
-            let r = index();
-            loop round_of(n, r) with below = over {
-                let s = at(shapes, r * 65536 + index());
-                if !near(s, p, pixel) { below } else {
-                    let hit = loop rounds(s.count) with w = vec2(0.0, 1000000000.0) {
-                        let q = index();
-                        loop round_of(s.count, q) with w2 = w {
-                            crossed(w2, at(segments, s.first + q * 65536 + index()), p)
-                        }
-                    };
-                    laid(below, s, stops, p, pixel, hit)
-                }
+        return loop n with below = background {
+            let s = at(shapes, index());
+            if !near(s, p, pixel) { below } else {
+                let hit = loop s.count with w = vec2(0.0, 1000000000.0) {
+                    crossed(w, at(segments, s.first + index()), p)
+                };
+                laid(below, s, stops, p, pixel, hit)
             }
         };
     }
