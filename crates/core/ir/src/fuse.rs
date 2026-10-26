@@ -528,10 +528,29 @@ fn fuse_links(
 
     // The producer's structs join the consumer's table once each, so a
     // spliced element carries the consumer's own struct and types match.
-    // Structs refer only to earlier ones, so one ordered pass maps them.
+    // A linked output's struct is the struct its consumer reads (and so
+    // are the structs within them, field by field), whatever each names
+    // it; any other is the consumer's struct of its name and fields, as a
+    // struct declared alike in two documents is one; a struct of another
+    // name stays apart, though its fields are the same. Structs refer
+    // only to earlier ones, so one ordered pass maps them.
+    let mut linked: BTreeMap<u32, u32> = BTreeMap::new();
+    for (input, output) in links {
+        link_structs(
+            &producer.structs,
+            &consumer.structs,
+            producer_manifest.outputs[*output as usize].element(),
+            consumer_manifest.inputs[*input as usize].ty.element,
+            &mut linked,
+        );
+    }
     let mut structs = consumer.structs.clone();
     let mut moved: Vec<u32> = Vec::with_capacity(producer.structs.len());
-    for def in &producer.structs {
+    for (at, def) in producer.structs.iter().enumerate() {
+        if let Some(&index) = linked.get(&(at as u32)) {
+            moved.push(index);
+            continue;
+        }
         let mapped = |ty: Type| match ty {
             Type::Struct(index) => Type::Struct(moved[index as usize]),
             other => other,
@@ -545,10 +564,9 @@ fn fuse_links(
             })
             .collect();
         let element = def.element.map(mapped);
-        match structs
-            .iter()
-            .position(|other| other.fields == fields && other.element == element)
-        {
+        match structs.iter().position(|other| {
+            other.name == def.name && other.fields == fields && other.element == element
+        }) {
             Some(index) => moved.push(index as u32),
             None => {
                 moved.push(structs.len() as u32);
@@ -790,6 +808,33 @@ fn fuse_links(
 /// Rewrites a function body with fresh pre-order ids, applying `ops` to
 /// every operation and `types` to every type, and replacing samples of
 /// linked inputs by values in hand and their reads by calls.
+/// Pairs the producer's struct `written` with the consumer's `read` (a
+/// linked port's two ends, laid out alike), and so the structs within
+/// them, field by field.
+fn link_structs(
+    producer: &[StructDef],
+    consumer: &[StructDef],
+    written: Type,
+    read: Type,
+    linked: &mut BTreeMap<u32, u32>,
+) {
+    let (Type::Struct(p), Type::Struct(c)) = (written, read) else {
+        return;
+    };
+    if linked.insert(p, c).is_some() {
+        return;
+    }
+    let (Some(pd), Some(cd)) = (producer.get(p as usize), consumer.get(c as usize)) else {
+        return;
+    };
+    for (pf, cf) in pd.fields.iter().zip(&cd.fields) {
+        link_structs(producer, consumer, pf.ty, cf.ty, linked);
+    }
+    if let (Some(pe), Some(ce)) = (pd.element, cd.element) {
+        link_structs(producer, consumer, pe, ce, linked);
+    }
+}
+
 struct Renumber<'a> {
     next: u32,
     ids: BTreeMap<u32, u32>,

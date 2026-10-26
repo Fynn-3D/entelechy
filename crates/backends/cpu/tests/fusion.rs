@@ -167,6 +167,47 @@ fn a_whole_element_the_consumer_passes_on_keeps_its_own_struct() {
     assert_eq!(rows, [[0, 0, 0], [1, 2, 3], [0, 0, 0], [3, 4, 5]]);
 }
 
+#[test]
+fn a_struct_of_another_name_with_the_same_fields_stays_apart() {
+    // The consumer declares a `Face` laid out as `Tri` is, before it: the
+    // producer's `Tri` is the consumer's `Tri`, not the first struct of
+    // its fields, so the whole element and the one built match.
+    let producer = compile(
+        "kernel test.faces@1 { requires { field.write; } output result: Rows<Tri>; struct Tri { a: Int; b: Int; c: Int; } compute { let i = element(); return Tri { a: i, b: i + 1, c: i + 2 }; } }",
+    )
+    .unwrap();
+    let consumer = compile(
+        "kernel test.shift@1 { requires { field.read; field.write; } input faces: Rows<Tri>; output result: Rows<Tri>; struct Face { a: Int; b: Int; c: Int; } struct Tri { a: Int; b: Int; c: Int; } fn first(f: Face) -> Int { return f.a; } compute { let o = first(Face { a: 3, b: 0, c: 0 }); if element() < 2 { return sample(faces); } let t = sample(faces); return Tri { a: t.a + o, b: t.b + o, c: t.c + o }; } }",
+    )
+    .unwrap();
+    let fused = fuse(&consumer, 0, &producer, "faces").unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(fused.structs.len(), 2, "Face and one Tri");
+
+    let mut host = Host::new(1 << 16);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(4),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(
+        &mut host,
+        [Capability::FieldRead, Capability::FieldWrite]
+            .into_iter()
+            .collect(),
+    );
+    let output = entelechy_cpu::CpuBackend
+        .execute(&fused, &invocation, &mut scope)
+        .unwrap()[0];
+    let rows: Vec<[u32; 3]> = (0..4)
+        .map(|i| {
+            let words = host.element(output, i).unwrap();
+            [words[0], words[1], words[2]]
+        })
+        .collect();
+    assert_eq!(rows, [[0, 1, 2], [1, 2, 3], [5, 6, 7], [6, 7, 8]]);
+}
+
 const SPLIT: &str = "kernel shade.split@1 { requires { field.write; } param bias: Float = 0.25; output color: Image; output hit: Grid<Hit>; output glow: Grid<Float>; struct Hit { t: Float; id: Int; } compute { let uv = coord() / domain(); let hit = Hit { t: uv.x * 3.0 + bias, id: int(coord().y) }; if uv.x < 0.5 { return { color: vec4(uv.x, uv.y, bias, 1.0), hit: hit, glow: 1.0 }; } { glow: 0.0, hit: Hit { t: hit.t, id: -hit.id }, color: vec4(0.0, uv.y, 1.0, 1.0) } } }";
 const SHOW: &str = "kernel shade.show@1 { requires { field.read; field.write; } input other: Image; input h: Grid<Hit>; input c: Image; output result: Image; struct Hit { t: Float; id: Int; } compute { let t = sample(h).t; let id = float(sample(h).id); return sample(c) * t + sample(other) + vec4(id, 0.0, 0.0, 0.0); } }";
 
