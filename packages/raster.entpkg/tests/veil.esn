@@ -4,7 +4,7 @@
 // shows, and a soft sheet (depth 0.45, light 1 0 0) that fades near the
 // surface. Probes read the light and what is left of the surface at a
 // left and a right pixel; the sheets drawn in the opposite order give the
-// same sums.
+// same sums, and sums half the surface's size the same light.
 use "../kernels/";
 
 // Four quads, four corners each: the opaque half, the front, back and
@@ -58,22 +58,30 @@ node soft_sheet: kernel {
 node raster: graph "../graphs/surface.esn" { vertices <- corners.result; triangles <- opaque.result; width = 64; height = 32; }
 node glow: graph "../graphs/veil.esn" { vertices <- corners.result; triangles <- sheets.result; tints <- tints.result; surface <- raster.surface; }
 node glow_back: graph "../graphs/veil.esn" { vertices <- corners.result; triangles <- reversed.result; tints <- tints.result; surface <- raster.surface; }
+// The same sheets summed at half the surface's size.
+node half_unveiled: raster.unveiled@1 { surface <- raster.surface; domain = vec2(32, 16); }
+node half_sums: raster.veil@1 { triangles <- sheets.result; vertices <- corners.result; tints <- tints.result; surface <- raster.surface; light <- half_unveiled.result; }
+node half: raster.veiled@1 { sums <- half_sums.result; }
 node faded: graph "../graphs/veil.esn" { vertices <- corners.result; triangles <- soft_sheet.result; tints <- tints.result; surface <- raster.surface; soft = 0.1; }
 
 // The probes, in thousandths: at a left pixel (16, 16) and a right one
 // (48, 16), the light's red, green, blue and the share left of the
-// surface; then the soft sheet's red at both.
+// surface; then the soft sheet's red at both; then the half-size sums'
+// blue and share left at the same two places.
 node probe: kernel {
     requires { field.read; field.write; }
     input glow: Grid<Vec4> <- glow.light;
     input faded: Grid<Vec4> <- faded.light;
+    input half: Grid<Vec4> <- half.result;
     output result: Rows<Int>;
-    domain = 10;
+    domain = 14;
     compute {
         let i = element();
         let p = if i < 4 || i == 8 { ivec2(16, 16) } else { ivec2(48, 16) };
         let g = at(glow, p);
-        let v = if i < 8 { [g.x, g.y, g.z, g.w][i % 4] } else { at(faded, p).x };
+        let hp = if i == 10 || i == 11 { ivec2(8, 8) } else { ivec2(24, 8) };
+        let hv = at(half, hp);
+        let v = if i < 8 { [g.x, g.y, g.z, g.w][i % 4] } else if i < 10 { at(faded, p).x } else if i % 2 == 0 { hv.z } else { hv.w };
         return int(round(v * 1000.0));
     }
 }

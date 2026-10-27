@@ -5,7 +5,8 @@ window 64 32
 # Light adds and absorption multiplies, in front of the opaque surface
 # only: the left pixel holds the front sheet, the right one both sheets;
 # the opposite order sums the same; the soft sheet is half faded 0.05 in
-# front of the surface and whole where no surface is behind it.
+# front of the surface and whole where no surface is behind it; sums at
+# half the size test depth at the surface pixel under them.
 frame 0.0
 expect probe.result[0] = 500
 expect probe.result[1] = 250
@@ -17,4 +18,8 @@ expect probe.result[6] = 1000
 expect probe.result[7] = 250
 expect probe.result[8] = 500
 expect probe.result[9] = 1000
+expect probe.result[10] = 0
+expect probe.result[11] = 500
+expect probe.result[12] = 1000
+expect probe.result[13] = 250
 expect order.result[0] = 0

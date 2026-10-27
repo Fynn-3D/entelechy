@@ -16,6 +16,9 @@
 //   in an `IVec4`, so the result is the same in every order and on every
 //   backend. The light of one fragment is not dimmed by another in front
 //   of it.
+// - The sums may be smaller than the surface (half its size, say, for
+//   soft glow at a quarter of the work): a pixel of the sums tests depth
+//   at the surface pixel under its center.
 // - Each triangle walks its own box in one invocation: the form for
 //   particles, sparks, flames and other small triangles.
 
@@ -23,7 +26,8 @@ use "triangle.ent";
 
 fn veil_scale() -> Float { return 1024.0; }
 
-/// The sums to start from: nothing drawn, one for each pixel of `surface`.
+/// The sums to start from: nothing drawn, one for each pixel of `surface`
+/// (or of the node's `domain`, for sums of another size).
 kernel raster.unveiled@1 {
     requires { field.read; field.write; }
     input surface: Grid<Surface>;
@@ -76,7 +80,7 @@ kernel raster.veil@1 {
                 let px = b.x0 + dx;
                 let py = b.y0 + dy;
                 let z = depth_at(k, px, py);
-                let s = at(surface, ivec2(px, py));
+                let s = at(surface, int(floor((vec2(px, py) + 0.5) * vec2(size(surface)) / vec2(size(light)))));
                 let behind = if s.id >= 0 { s.depth } else { 1.0 };
                 if z >= 0.0 && z < behind {
                     let fade = if soft > 0.0 { saturate((behind - z) / soft) } else { 1.0 };
