@@ -1,0 +1,95 @@
+// Translucent sheets over an opaque surface that covers the left half at
+// depth 0.5: a front sheet (depth 0.3, tint 0.5 0.25 0 0.5) over all of
+// it, a back sheet (depth 0.7, tint 0 0 1 0.5) that only the right half
+// shows, and a soft sheet (depth 0.45, light 1 0 0) that fades near the
+// surface. Probes read the light and what is left of the surface at a
+// left and a right pixel; the sheets drawn in the opposite order give the
+// same sums.
+use "../kernels/";
+
+// Four quads, four corners each: the opaque half, the front, back and
+// soft sheets.
+node corners: kernel {
+    requires { field.write; }
+    output result: Rows<Corner>;
+    domain = 16;
+    compute {
+        let v = element();
+        let q = v / 4;
+        let s = [vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 1.0)][v % 4];
+        let x0 = if q == 0 { -1.0 } else { -1.0 };
+        let x1 = if q == 0 { 0.0 } else { 1.0 };
+        let depth = [0.5, 0.3, 0.7, 0.45][q];
+        return Corner { clip: vec4(mix(x0, x1, s.x), s.y * 2.0 - 1.0, depth, 1.0), normal: vec3(0.0, 0.0, 1.0), uv: vec2(0.0, 0.0) };
+    }
+}
+node tints: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 16;
+    compute { return [vec4(0.0, 0.0, 0.0, 0.0), vec4(0.5, 0.25, 0.0, 0.5), vec4(0.0, 0.0, 1.0, 0.5), vec4(1.0, 0.0, 0.0, 0.0)][element() / 4]; }
+}
+// Faces of quads `first` to `first + count - 1`, in order or reversed.
+node opaque: kernel {
+    requires { field.write; }
+    output result: Rows<Face>;
+    domain = 2;
+    compute { let t = element(); return if t == 0 { Face { a: 0, b: 1, c: 2 } } else { Face { a: 0, b: 2, c: 3 } }; }
+}
+node sheets: kernel {
+    requires { field.write; }
+    output result: Rows<Face>;
+    domain = 4;
+    compute { let t = element(); let b = 4 + (t / 2) * 4; return if t % 2 == 0 { Face { a: b, b: b + 1, c: b + 2 } } else { Face { a: b, b: b + 2, c: b + 3 } }; }
+}
+node reversed: kernel {
+    requires { field.write; }
+    output result: Rows<Face>;
+    domain = 4;
+    compute { let t = 3 - element(); let b = 4 + (t / 2) * 4; return if t % 2 == 0 { Face { a: b, b: b + 1, c: b + 2 } } else { Face { a: b, b: b + 2, c: b + 3 } }; }
+}
+node soft_sheet: kernel {
+    requires { field.write; }
+    output result: Rows<Face>;
+    domain = 2;
+    compute { let t = element(); return if t == 0 { Face { a: 12, b: 13, c: 14 } } else { Face { a: 12, b: 14, c: 15 } }; }
+}
+
+node raster: graph "../graphs/surface.esn" { vertices <- corners.result; triangles <- opaque.result; width = 64; height = 32; }
+node glow: graph "../graphs/veil.esn" { vertices <- corners.result; triangles <- sheets.result; tints <- tints.result; surface <- raster.surface; }
+node glow_back: graph "../graphs/veil.esn" { vertices <- corners.result; triangles <- reversed.result; tints <- tints.result; surface <- raster.surface; }
+node faded: graph "../graphs/veil.esn" { vertices <- corners.result; triangles <- soft_sheet.result; tints <- tints.result; surface <- raster.surface; soft = 0.1; }
+
+// The probes, in thousandths: at a left pixel (16, 16) and a right one
+// (48, 16), the light's red, green, blue and the share left of the
+// surface; then the soft sheet's red at both.
+node probe: kernel {
+    requires { field.read; field.write; }
+    input glow: Grid<Vec4> <- glow.light;
+    input faded: Grid<Vec4> <- faded.light;
+    output result: Rows<Int>;
+    domain = 10;
+    compute {
+        let i = element();
+        let p = if i < 4 || i == 8 { ivec2(16, 16) } else { ivec2(48, 16) };
+        let g = at(glow, p);
+        let v = if i < 8 { [g.x, g.y, g.z, g.w][i % 4] } else { at(faded, p).x };
+        return int(round(v * 1000.0));
+    }
+}
+
+// How many pixels the two orders sum differently, any word to the bit.
+node order: kernel {
+    requires { field.read; field.write; }
+    input a: Grid<Vec4> <- glow.light;
+    input b: Grid<Vec4> <- glow_back.light;
+    output result: Rows<Int>;
+    compute over a {
+        let p = sample(a);
+        let q = sample(b);
+        return if bits(p.x) == bits(q.x) && bits(p.y) == bits(q.y) && bits(p.z) == bits(q.z) && bits(p.w) == bits(q.w) { 0 } else { 1 };
+    }
+    merge(a, b) { return a + b; }
+}
+
+output probe <- probe.result;

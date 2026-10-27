@@ -1,0 +1,31 @@
+//! Translucent triangles over an opaque surface (`kernels/veil.ent`):
+//! the light they add and the share of the surface left showing, in any
+//! order. Place it with
+//!   node glow: graph "../../packages/raster.entpkg/graphs/veil.esn" {
+//!       vertices <- sparks.result;
+//!       triangles <- spark_faces.result;
+//!       tints <- spark_tints.result;
+//!       surface <- raster.surface;
+//!   }
+//! and read `glow.light`: a picture is the surface's color times its `a`,
+//! plus its `rgb`.
+use "../kernels/";
+
+input vertices: Rows<Corner>;
+input triangles: Rows<Face>;
+input tints: Rows<Vec4>;
+input surface: Grid<Surface>;
+param soft: Float = 0.0;
+
+node unveiled: raster.unveiled@1 { surface <- surface; }
+node sums: raster.veil@1 {
+    triangles <- triangles;
+    vertices <- vertices;
+    tints <- tints;
+    surface <- surface;
+    light <- unveiled.result;
+    soft = soft;
+}
+node veiled: raster.veiled@1 { sums <- sums.result; }
+
+output light <- veiled.result;

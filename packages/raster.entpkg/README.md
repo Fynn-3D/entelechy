@@ -1,7 +1,8 @@
 # raster
 
 Triangles turned into the surface a camera sees, drawn alike on every
-backend: plain, tiled and through a cutout mask. `native.rasterize` is
+backend: plain, tiled and through a cutout mask; and translucent
+triangles over it, in any order. `native.rasterize` is
 its fast path.
 
 **Layer:** Graphics. **Uses:** [`parallel`](../parallel.entpkg/README.md).
@@ -23,6 +24,10 @@ use "raster.entpkg";
   `raster.total@1`, `raster.cover_tiles@2`.
 - `kernels/triangle.ent` — Rasterization as Kernels. Kernels:
   `raster.cover@3`, `raster.cover@4`, `raster.resolve@2`.
+- `kernels/veil.ent` — Translucent triangles over an opaque surface: the
+  light they add and the share of the surface left showing, summed so
+  any order of triangles gives the same pixel. Kernels:
+  `raster.unveiled@1`, `raster.veil@1`, `raster.veiled@1`.
 
 ## Graph presets
 
@@ -36,13 +41,15 @@ use "raster.entpkg";
 - `graphs/surface.esn` — Vertex and triangle rows in, the surface out.
 - `graphs/tiled.esn` — The tiled form of `surface.esn`.
 - `graphs/tiled_window.esn` — The tiled form of `window.esn`.
+- `graphs/veil.esn` — Translucent triangles, their tints and the opaque
+  surface in; the light and what shows through out.
 - `graphs/window.esn` — The raster preset at the window's size.
 
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
 `clip.replay`, `degenerate.replay`, `near.replay`,
-`tiles.replay`. Every Kernel of the package is
+`tiles.replay`, `veil.replay`. Every Kernel of the package is
 reached by one of them.
 
 Used by the [animation](../../examples/animation/README.md), [culled](../../examples/culled/README.md), [mesh](../../examples/mesh/README.md), [mipmap](../../examples/mipmap/README.md), [surface](../../examples/surface/README.md), [voxel](../../examples/voxel/README.md) examples.

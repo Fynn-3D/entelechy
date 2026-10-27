@@ -1,6 +1,6 @@
 //! Triangles turned into the surface a camera sees, drawn alike on every
-//! backend: plain, tiled and through a cutout mask. `native.rasterize` is
-//! its fast path.
+//! backend: plain, tiled and through a cutout mask; and translucent
+//! triangles over it, in any order. `native.rasterize` is its fast path.
 package raster@1 { language = 2; ir = 1; }
 
 use "kernels/";

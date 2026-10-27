@@ -1,0 +1,104 @@
+// Translucent triangles over an opaque surface, drawn in any order.
+//
+// - A triangle's corners carry a tint `(r, g, b, a)`, one row of `tints`
+//   for each row of `vertices`, interpolated perspective-correct as uv is.
+//   `rgb` is the light a fragment adds (premultiplied: a dark veil adds
+//   none); `a` is the share of what lies behind it that it absorbs (0 a
+//   sheet of pure light, toward 1 thick smoke).
+// - A fragment is kept where its pixel's center is inside the triangle,
+//   its depth in `[0, 1)` and nearer than the opaque surface there (any
+//   depth where the surface holds nothing). With `soft` above 0 it fades
+//   out over that much depth as it nears the surface, so a flat sheet
+//   meets the ground without a seam.
+// - A pixel sums the light of its fragments and the absorption
+//   `-ln(1 - a)` of each; what is left of the opaque surface behind is
+//   `exp` of minus that sum. Sums are fixed point, `veil_scale()` to one,
+//   in an `IVec4`, so the result is the same in every order and on every
+//   backend. The light of one fragment is not dimmed by another in front
+//   of it.
+// - Each triangle walks its own box in one invocation: the form for
+//   particles, sparks, flames and other small triangles.
+
+use "triangle.ent";
+
+fn veil_scale() -> Float { return 1024.0; }
+
+/// The sums to start from: nothing drawn, one for each pixel of `surface`.
+kernel raster.unveiled@1 {
+    requires { field.read; field.write; }
+    input surface: Grid<Surface>;
+    output result: Grid<IVec4>;
+    compute { return ivec4(0, 0, 0, 0); }
+}
+
+// The tint a triangle's fragment at a pixel's center has, perspective-
+// correct by `1 / w`.
+fn tint_at(k: Corners, ta: Vec4, tb: Vec4, tc: Vec4, px: Int, py: Int) -> Vec4 {
+    let p = vec2(px, py) + 0.5;
+    let l0 = edge(k.b.xy, k.c.xy, p) / k.area;
+    let l1 = edge(k.c.xy, k.a.xy, p) / k.area;
+    let l2 = edge(k.a.xy, k.b.xy, p) / k.area;
+    let inv_w = l0 * k.a.w + l1 * k.b.w + l2 * k.c.w;
+    return (l0 * ta * k.a.w + l1 * tb * k.b.w + l2 * tc * k.c.w) / inv_w;
+}
+
+// A fragment's share of the sums: its light and its absorption, fixed
+// point, faded by `fade`.
+fn veil_of(t: Vec4, fade: Float) -> IVec4 {
+    let light = max(t.xyz, vec3(0.0, 0.0, 0.0)) * fade * veil_scale();
+    let absorb = -log(1.0 - clamp(t.w * fade, 0.0, 0.999)) * veil_scale();
+    return ivec4(int(round(light.x)), int(round(light.y)), int(round(light.z)), int(round(absorb)));
+}
+
+/// Every pixel's sums of light and absorption over the translucent
+/// triangles in front of `surface`, added to `light`.
+kernel raster.veil@1 {
+    requires { field.read; field.write; }
+    input triangles: Rows<Face>;
+    input vertices: Rows<Corner>;
+    input tints: Rows<Vec4>;
+    input surface: Grid<Surface>;
+    input light: Grid<IVec4>;
+    /// The depth over which a fragment fades out as it nears the surface (0 not at all).
+    param soft: Float = 0.0;
+    output result: Grid<IVec4>;
+    struct Drop { pixel: Vec2; sums: IVec4; }
+    scatter over triangles into light with sum {
+        let k = corners(sample(triangles), vertices, size(light));
+        let b = boxed(k, size(light));
+        let none = Drop { pixel: vec2(-1.0, -1.0), sums: ivec4(0, 0, 0, 0) };
+        if b.w == 0 { return none; }
+        let ta = at(tints, k.ia);
+        let tb = at(tints, k.ib);
+        let tc = at(tints, k.ic);
+        loop b.h with dy = 0 {
+            loop b.w with dx = 0 {
+                let px = b.x0 + dx;
+                let py = b.y0 + dy;
+                let z = depth_at(k, px, py);
+                let s = at(surface, ivec2(px, py));
+                let behind = if s.id >= 0 { s.depth } else { 1.0 };
+                if z >= 0.0 && z < behind {
+                    let fade = if soft > 0.0 { saturate((behind - z) / soft) } else { 1.0 };
+                    emit(Drop { pixel: vec2(px, py), sums: veil_of(tint_at(k, ta, tb, tc, px, py), fade) });
+                }
+                dx + 1
+            };
+            dy + 1
+        };
+        return none;
+    }
+}
+
+/// The sums read back: the light the translucent triangles add (`rgb`)
+/// and the share of the opaque surface left showing through them (`a`).
+/// A picture is the surface's color times `a`, plus `rgb`.
+kernel raster.veiled@1 {
+    requires { field.read; field.write; }
+    input sums: Grid<IVec4>;
+    output result: Grid<Vec4>;
+    compute {
+        let s = sample(sums);
+        return vec4(float(s.x) / veil_scale(), float(s.y) / veil_scale(), float(s.z) / veil_scale(), exp(-float(s.w) / veil_scale()));
+    }
+}
