@@ -1,15 +1,16 @@
 //! glTF 2.0 as Fields: vertices as rows of `{position, normal, uv}`,
 //! triangles as rows of three indices, the base color texture as a PNG,
 //! and a skin's weights, skeleton and clips. Node transforms are baked
-//! in; every mesh of the scene lands in one pair of rows. What is left
-//! out is named in the notes.
+//! in; every mesh of the scene lands in one pair of rows, each triangle's
+//! part (a node's primitive) in a row of its own and the parts named by
+//! their node, mesh and material. What is left out is named in the notes.
 
 use std::path::{Path, PathBuf};
 
 use serde_json::Value as Json;
 
 use entelechy_formats::file;
-use entelechy_host::Domain;
+use entelechy_host::{Domain, Scalar, Schema};
 
 use entelechy_formats::base64::unbase64;
 
@@ -19,6 +20,9 @@ pub struct Imported {
     pub vertices: usize,
     /// Rows of triangles written.
     pub triangles: usize,
+    /// Parts the triangles came from: each node's primitives, in the
+    /// order their triangles are.
+    pub parts: usize,
     /// The texture file, when the model has a base color texture in PNG.
     pub texture: Option<PathBuf>,
     /// Notes about what was left out.
@@ -666,6 +670,9 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
     let mut notes = Vec::new();
     let mut points: Vec<Point> = Vec::new();
     let mut triangles: Vec<[u32; 3]> = Vec::new();
+    // Each triangle's part, and each part's node, mesh and material names.
+    let mut triangle_parts: Vec<u32> = Vec::new();
+    let mut parts: Vec<Json> = Vec::new();
     let mut bounds: Vec<Bound> = Vec::new();
     let skins = model
         .json
@@ -816,11 +823,22 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
                 None => (0..count as u32).collect(),
             };
             let first_triangle = triangles.len();
+            let part = parts.len() as u32;
+            let name = |value: &Json| value["name"].as_str().unwrap_or("").to_owned();
+            let material = primitive["material"]
+                .as_u64()
+                .and_then(|m| model.json["materials"].get(m as usize))
+                .map(name)
+                .unwrap_or_default();
+            parts.push(
+                serde_json::json!({"node": name(node), "mesh": name(mesh), "material": material}),
+            );
             for face in indices.chunks_exact(3) {
                 if face.iter().any(|i| *i as usize >= count) {
                     return Err("an index points past its primitive's vertices".into());
                 }
                 triangles.push([base + face[0], base + face[1], base + face[2]]);
+                triangle_parts.push(part);
             }
             if normals.is_none() {
                 // Area-weighted vertex normals from the faces.
@@ -900,6 +918,23 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
     )
     .map_err(|e| format!("{}: {e}", triangles_path.display()))?;
     files.push(triangles_path);
+    let parts_path = out_dir.join(format!("{stem}.parts.field"));
+    std::fs::write(
+        &parts_path,
+        file::encode(
+            &Schema::new(vec![Scalar::Int]),
+            Domain::Rows(triangle_parts.len() as u32),
+            &triangle_parts,
+        ),
+    )
+    .map_err(|e| format!("{}: {e}", parts_path.display()))?;
+    files.push(parts_path);
+    let names_path = out_dir.join(format!("{stem}.parts.json"));
+    let part_count = parts.len();
+    let names = serde_json::to_string_pretty(&Json::Array(parts))
+        .map_err(|e| format!("the parts' names: {e}"))?;
+    std::fs::write(&names_path, names).map_err(|e| format!("{}: {e}", names_path.display()))?;
+    files.push(names_path);
     // The base color texture of the first material that has one.
     let mut texture = None;
     let image_index = model.json["materials"]
@@ -1017,6 +1052,7 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
     Ok(Imported {
         vertices: points.len(),
         triangles: triangles.len(),
+        parts: part_count,
         texture,
         notes,
         bounds: (lo, hi),
@@ -1199,6 +1235,57 @@ mod tests {
             "{:?}",
             imported.notes
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Each triangle says which part of the model it came from (a node's
+    /// primitive), and the parts are named by their node, mesh and material.
+    #[test]
+    fn each_triangle_names_its_part() {
+        let dir = std::env::temp_dir().join(format!("entelechy-gltf-parts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let text = quad_gltf()
+            .replace(
+                r#""scenes":[{"nodes":[0]}]"#,
+                r#""scenes":[{"nodes":[0,1]}]"#,
+            )
+            .replace(
+                r#""nodes":[{"mesh":0,"scale":[2,2,2],"translation":[0,1,0]}]"#,
+                r#""materials":[{"name":"skin"}],
+                "nodes":[{"name":"left","mesh":0},{"name":"right","mesh":0,"translation":[3,0,0]}]"#,
+            )
+            .replace(
+                r#""meshes":[{"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":1},"indices":2}]}]"#,
+                r#""meshes":[{"name":"quad","primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":1},"indices":2,"material":0}]}]"#,
+            );
+        std::fs::write(dir.join("pair.gltf"), text).unwrap();
+        let out = dir.join("out");
+        let imported = import(&dir.join("pair.gltf"), &out, 30.0).unwrap();
+        assert_eq!(imported.triangles, 4);
+        assert_eq!(imported.parts, 2);
+
+        let bytes = std::fs::read(out.join("pair.parts.field")).unwrap();
+        let data = file::decode(&bytes).unwrap();
+        assert_eq!(data.domain(), Domain::Rows(4));
+        let parts: Vec<u32> = data.values().to_vec();
+        // A primitive's triangles are one run, in the order the vertices and triangles are.
+        assert_eq!(parts, vec![0, 0, 1, 1]);
+        let vertices =
+            file::decode(&std::fs::read(out.join("pair.vertices.field")).unwrap()).unwrap();
+        let x = |vertex: usize| f32::from_bits(vertices.values()[vertex * 8]);
+
+        let names: Json =
+            serde_json::from_slice(&std::fs::read(out.join("pair.parts.json")).unwrap()).unwrap();
+        let names = names.as_array().unwrap();
+        assert_eq!(names.len(), 2);
+        for (part, name) in names.iter().enumerate() {
+            assert_eq!(name["mesh"], "quad");
+            assert_eq!(name["material"], "skin");
+            // The node named is the one the part's vertices were placed by.
+            let node = if x(part * 4) > 2.0 { "right" } else { "left" };
+            assert_eq!(name["node"], node, "part {part}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

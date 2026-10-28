@@ -252,7 +252,10 @@ entelechy export x.glyphs.field x.segments.field x.metrics.field --out x.woff --
 
 - glTF or GLB: vertices `{position, normal, uv}`, triangles, the base
   color as PNG; a skin adds weights, skeleton and clips at `--rate` (30),
-  per [the rig contract](RIGS.md).
+  per [the rig contract](RIGS.md). Each triangle's part, the node's
+  primitive it came from, is a row of `<stem>.parts.field` (one `Int`),
+  and `<stem>.parts.json` names each part by its node, mesh and material,
+  so a scene can tell a model's skin from its hair.
 - MP3, OGG Vorbis, FLAC, AAC, Matroska audio: a WAV.
 - MIDI: a row a note (start, length, key, velocity, channel).
 - SVG: the segments, shapes, stops and view the

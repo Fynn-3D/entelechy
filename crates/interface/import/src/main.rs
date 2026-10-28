@@ -88,9 +88,10 @@ fn import(args: &[String]) -> Result<(), String> {
             }
             let (lo, hi) = imported.bounds;
             println!(
-                "{} vertices, {} triangles, bounds ({:.3}, {:.3}, {:.3}) to ({:.3}, {:.3}, {:.3}){}",
+                "{} vertices, {} triangles in {} parts, bounds ({:.3}, {:.3}, {:.3}) to ({:.3}, {:.3}, {:.3}){}",
                 imported.vertices,
                 imported.triangles,
+                imported.parts,
                 lo[0],
                 lo[1],
                 lo[2],
