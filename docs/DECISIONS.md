@@ -530,6 +530,16 @@ round one expression differently in two Kernels, so a decision two
 Kernels share is made in one; `entelechy replay --round-apart` finds one
 made twice.
 
+A native operation earns its place by what the package's Kernels cannot
+reach, the device's own rasterizer, and by what composing them costs: a
+preset's Kernels hand each other their keys through memory, which one
+operation keeps inside itself (`native.cover@1` and `raster.resolve@2`
+come to a quarter of a millisecond more at 1280 by 720 than
+`native.rasterize@3`, on Apple's M4). So there is at most one for each of
+the package's presets and Kernels a scene puts in its place, each held to
+it by a replay; a need the presets do not meet is met by composing, in
+the package or the scene, not by another native operation.
+
 **Where.** The package and its presets; `entelechy_rules::raster`; the
 GPU's [parity tests](../crates/backends/gpu/tests/parity.rs); the mesh
 example's edge, native, cutout and canvas replays.
