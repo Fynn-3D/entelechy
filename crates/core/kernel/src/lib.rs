@@ -59,14 +59,20 @@ pub const FEW_LONG_WORK: u64 = 100_000;
 const MAX_SPARED: usize = 1 << 14;
 
 /// A run as placement knows it from one evaluation to the next: its
-/// Kernel, version and extent.
-type RunKey = (KernelId, Generation, Domain);
+/// Kernel, version, extent and its parameters' words, so two nodes of
+/// one Kernel that differ by a parameter are two runs.
+type RunKey = (KernelId, Generation, Domain, Vec<u32>);
 
 fn run_key(version: &KernelVersion, invocation: &Invocation) -> RunKey {
+    let mut params = Vec::new();
+    for param in &invocation.params {
+        param.push_words(&mut params);
+    }
     (
         version.id().clone(),
         version.generation(),
         invocation.domain,
+        params,
     )
 }
 
