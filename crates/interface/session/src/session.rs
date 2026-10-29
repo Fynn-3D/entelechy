@@ -1712,6 +1712,7 @@ impl Session {
     pub fn confirm(&mut self) -> Result<(), EvaluateError> {
         let confirmed = self.evaluator.confirm(&mut self.runtime);
         self.tally();
+        self.write_confirmed();
         confirmed
     }
 
@@ -1722,8 +1723,8 @@ impl Session {
 
     /// Evaluates the current graph under `context`. Unchanged nodes are
     /// reused; state commits only when the whole evaluation succeeds.
-    /// Overlapping, the frame before is confirmed here, and this one when
-    /// it changed an output written to a file.
+    /// Overlapping, the frame before is confirmed here, and the outputs
+    /// written to files are written as it left them.
     pub fn evaluate(&mut self, context: &Context) -> Result<Report, EvaluateError> {
         // Overlapping bounds the frames in flight itself.
         if !self.evaluator.overlaps() {
@@ -1737,6 +1738,7 @@ impl Session {
         self.hold_progress();
         self.repin();
         self.last_context = *context;
+        self.await_written();
         let graph = self.scene.shared_graph().ok_or_else(no_scene)?;
         let evaluated = self.evaluator.evaluate(
             graph,
@@ -1765,25 +1767,39 @@ impl Session {
         if let Some(frame) = self.runtime.end_frame() {
             self.node_clock.ended(frame, report.clocked.clone());
         }
-        self.written_after(&report)?;
+        self.written_after(&report);
         Ok(report)
     }
 
-    /// Writes what the committed frame behind `report` changed of the
-    /// outputs written to files and to the clipboard, once confirmed.
-    fn written_after(&mut self, report: &Report) -> Result<(), EvaluateError> {
-        if self.writes.due(&self.scene.files().writes, report) {
-            self.confirm()?;
-        }
+    /// Writes what the frame last confirmed changed of the outputs
+    /// written to files, and what the frame behind `report` changed of
+    /// the clipboard's.
+    fn written_after(&mut self, report: &Report) {
+        self.writes
+            .ask(&self.scene.files().writes, &report.outputs, &self.runtime);
+        self.write_confirmed();
+        self.board
+            .after(&self.scene.files().presented, report, &mut self.runtime);
+    }
+
+    /// Has the evaluator hand over the outputs written to files once
+    /// their frame is confirmed.
+    fn await_written(&mut self) {
+        let writes = &self.scene.files().writes;
+        self.evaluator
+            .await_outputs(writes.iter().map(|write| write.output.as_str()));
+    }
+
+    /// Writes what the frame last confirmed changed of the outputs written
+    /// to files. Overlapping, that is the frame before: a write never waits
+    /// for the frame in flight.
+    fn write_confirmed(&mut self) {
         self.writes.after(
             self.scene.store().as_ref(),
             &self.scene.files().writes,
-            report,
+            self.evaluator.confirmed(),
             &mut self.runtime,
         );
-        self.board
-            .after(&self.scene.files().presented, report, &mut self.runtime);
-        Ok(())
     }
 
     /// A failed evaluation as it is said: a node that ran others fused
@@ -1848,6 +1864,7 @@ impl Session {
         demand.extend(self.written_sources());
         let demand = &demand;
         self.last_context = *context;
+        self.await_written();
         let graph = self.scene.graph().ok_or_else(no_scene)?;
         let report = self
             .evaluator
@@ -1866,7 +1883,7 @@ impl Session {
         self.feed_fonts();
         self.feed_file_nodes();
         self.feed_field_nodes();
-        self.written_after(&report)?;
+        self.written_after(&report);
         Ok(report)
     }
 

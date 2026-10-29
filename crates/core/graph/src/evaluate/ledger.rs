@@ -55,13 +55,14 @@ impl Evaluator {
     }
 
     /// Whether `handle` is state: committed, or replaced by an evaluation
-    /// that may put it back, or held by a remembered run. None of these is
-    /// released.
+    /// that may put it back, or held by a remembered run; or an output a
+    /// caller awaits. None of these is released.
     pub(super) fn is_kept(&self, handle: Handle) -> bool {
         self.ledger.is_committed(handle)
             || self.replaced.iter().any(|r| r.previous == Some(handle))
             || self.recalled.holds(handle)
             || self.held_back(handle)
+            || self.awaits(handle)
     }
 
     /// Lets go of a node's cached outputs, keeping what a reader binds by:

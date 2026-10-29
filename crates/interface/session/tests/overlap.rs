@@ -1,7 +1,9 @@
 //! Overlapping frames: a session that overlaps commits each frame without
 //! waiting for its device, and waits for it once the next frame's work has
 //! gone to the device. A frame found failed then takes back its commit and
-//! the next one's: the state is what the frame before them left.
+//! the next one's: the state is what the frame before them left. What a
+//! frame writes to a file is written once it is confirmed, never waiting
+//! for it.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -93,8 +95,8 @@ impl Backend for Device {
 }
 
 /// A count that adds the time to itself each frame, from the elements'
-/// numbers, on `device`.
-fn opened(name: &str, device: Device) -> (Session, std::path::PathBuf) {
+/// numbers, on `device`, with `more` of the scene after it.
+fn opened(name: &str, device: Device, more: &str) -> (Session, std::path::PathBuf) {
     let mut runtime = Runtime::with_backends(1 << 24, Box::new(device), None);
     // Every run on the device, however small.
     runtime.set_small(0);
@@ -103,20 +105,22 @@ fn opened(name: &str, device: Device) -> (Session, std::path::PathBuf) {
     let scene = dir.join("scene.esn");
     std::fs::write(
         &scene,
-        "node seed: kernel {
-    requires { field.write; }
+        format!(
+            "node seed: kernel {{
+    requires {{ field.write; }}
     output result: Rows<Float>;
-    compute { return float(element()); }
+    compute {{ return float(element()); }}
     domain = 64;
-}
-node count: kernel {
-    requires { field.read; field.write; time.read; }
+}}
+node count: kernel {{
+    requires {{ field.read; field.write; time.read; }}
     input previous: Rows<Float> <~ count.result from seed.result;
     output result: Rows<Float>;
-    compute { return sample(previous) + time(); }
-}
+    compute {{ return sample(previous) + time(); }}
+}}
 output result <- count.result;
-",
+{more}"
+        ),
     )
     .unwrap();
     let mut session = Session::open_in(
@@ -156,6 +160,7 @@ fn an_overlapping_frame_is_waited_for_once_the_next_has_gone_to_the_device() {
             failing: Arc::default(),
             cpu: entelechy_cpu::CpuBackend,
         },
+        "",
     );
     session.evaluate(&at(1.0)).unwrap();
     {
@@ -191,6 +196,7 @@ fn a_frame_found_failed_takes_back_its_commit_and_the_next_ones() {
             failing: Arc::clone(&failing),
             cpu: entelechy_cpu::CpuBackend,
         },
+        "",
     );
     session.evaluate(&at(1.0)).unwrap();
     failing.store(true, Ordering::SeqCst);
@@ -206,5 +212,75 @@ fn a_frame_found_failed_takes_back_its_commit_and_the_next_ones() {
     // What the first frame left, and this frame's time: 0 + 1 + 4.
     session.evaluate(&at(4.0)).unwrap();
     assert_eq!(first(&mut session), 5.0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The count as written to the file.
+fn written(file: &std::path::Path) -> f32 {
+    f32::from_bits(entelechy_formats::read(file, None).unwrap().0.values()[0])
+}
+
+const WRITTEN: &str = "output kept <- count.result to \"count.field\";\n";
+
+#[test]
+fn a_frame_is_written_once_confirmed_and_never_waited_for_to_be() {
+    let log = Log::default();
+    let (mut session, dir) = opened(
+        "written",
+        Device {
+            log: Arc::clone(&log),
+            failing: Arc::default(),
+            cpu: entelechy_cpu::CpuBackend,
+        },
+        WRITTEN,
+    );
+    session.allow_writes(&dir).unwrap();
+    let file = dir.join("count.field");
+    session.evaluate(&at(1.0)).unwrap();
+    // The frame changed what is written and is not waited for.
+    {
+        let log = log.lock().unwrap();
+        assert!(
+            !log.contains(&"check") && !log.contains(&"settle"),
+            "{log:?}"
+        );
+    }
+    assert!(!file.exists());
+    // Confirmed once the next has gone to the device, it is written as it
+    // left the count: 0 + 1.
+    session.evaluate(&at(2.0)).unwrap();
+    assert_eq!(written(&file), 1.0);
+    session.confirm().unwrap();
+    assert_eq!(written(&file), 3.0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_frame_taken_back_is_never_written() {
+    let failing = Arc::new(AtomicBool::new(false));
+    let (mut session, dir) = opened(
+        "unwritten",
+        Device {
+            log: Log::default(),
+            failing: Arc::clone(&failing),
+            cpu: entelechy_cpu::CpuBackend,
+        },
+        WRITTEN,
+    );
+    session.allow_writes(&dir).unwrap();
+    let file = dir.join("count.field");
+    session.evaluate(&at(1.0)).unwrap();
+    failing.store(true, Ordering::SeqCst);
+    session.evaluate(&at(2.0)).unwrap();
+    assert_eq!(written(&file), 1.0);
+    failing.store(false, Ordering::SeqCst);
+    // The second frame is found failed: what it made, 1 + 2, is not
+    // written, and the third's commit is taken back with it.
+    session.evaluate(&at(3.0)).unwrap_err();
+    assert_eq!(written(&file), 1.0);
+    session.evaluate(&at(4.0)).unwrap();
+    assert_eq!(written(&file), 1.0);
+    session.confirm().unwrap();
+    assert_eq!(written(&file), 5.0);
     let _ = std::fs::remove_dir_all(&dir);
 }

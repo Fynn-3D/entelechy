@@ -145,6 +145,12 @@ pub fn measure(
     let mut runs: Vec<f64> = Vec::new();
     let mut frame = 1;
     let mut ran = false;
+    // The frames overlap the device's as a window's do: the next is made
+    // while the device runs this one.
+    let overlapped = session.overlaps();
+    session
+        .set_overlap(true)
+        .map_err(|e| format!("{backend}: {e}"))?;
     for _ in 0..options.repeat.max(1) {
         let started = Instant::now();
         for _ in 0..options.frames.max(1) {
@@ -154,13 +160,16 @@ pub fn measure(
             ran |= !report.executed.is_empty();
             refused.extend(report.refused.iter().map(ToString::to_string));
             frame += 1;
-            // Settle the device inside the measurement, as a Player's
-            // present does, so a GPU frame counts its work.
-            session.runtime().settle_device();
         }
+        // The last frame's work is the run's too.
+        session.confirm().map_err(|e| format!("{backend}: {e}"))?;
+        session.runtime().settle_device();
         let took = started.elapsed().as_secs_f64() * 1000.0;
         runs.push(took / f64::from(options.frames.max(1)));
     }
+    session
+        .set_overlap(overlapped)
+        .map_err(|e| format!("{backend}: {e}"))?;
     runs.sort_by(f64::total_cmp);
     let run = if options.nodes {
         node_times(session, options, &context, &mut frame, backend)?

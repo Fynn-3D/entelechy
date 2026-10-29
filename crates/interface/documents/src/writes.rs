@@ -1,16 +1,16 @@
 //! A scene's file outputs (`output name <- source to "file";`). The
-//! session writes each after a committed evaluation that changed it,
+//! session writes each once the evaluation that changed it is confirmed,
 //! whole, into an allowed directory; an output `to files "dir/"` is a
 //! list of operations on the files under the directory, each done once
 //! when the list changes: a write where writes are allowed, a removal or
 //! a rename where removals are too.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use entelechy_graph::Report;
-use entelechy_kernel::{Handle, Runtime};
+use entelechy_kernel::{Fetch, FieldData, Handle, Runtime};
 
 use crate::Event;
 use crate::store::Store;
@@ -28,6 +28,9 @@ pub struct Writes {
     deletes: Vec<PathBuf>,
     /// Per file: the Field last written, and a digest of its bytes.
     written: BTreeMap<PathBuf, (Handle, u64)>,
+    /// Per file: the words of the Fields asked for and not yet written,
+    /// oldest first ([`Writes::ask`]).
+    asked: BTreeMap<PathBuf, VecDeque<(Handle, Fetch)>>,
     /// Each file an output wrote, where it landed: the output, and the
     /// file's stamp once written.
     authored: BTreeMap<PathBuf, (String, Option<crate::store::Stamp>)>,
@@ -84,34 +87,58 @@ impl Writes {
         Ok(())
     }
 
-    /// Whether the evaluation behind `report` changed an output written to
-    /// a file.
-    pub fn due(&self, writes: &[entelechy_scene::Write], report: &Report) -> bool {
-        writes.iter().any(|write| {
-            report
-                .outputs
+    /// Asks for the words of each output written to a file that the
+    /// evaluation just made changed, `outputs` as it left them by name: the
+    /// copy waits behind that evaluation's work alone, so once it is
+    /// confirmed ([`Writes::after`]) the words are in hand and writing
+    /// them waits for no frame made since.
+    pub fn ask(
+        &mut self,
+        writes: &[entelechy_scene::Write],
+        outputs: &[(String, Handle)],
+        runtime: &Runtime,
+    ) {
+        for write in writes {
+            let Some(handle) = outputs
                 .iter()
                 .find(|(name, _)| name == &write.output)
-                .is_some_and(|(_, handle)| {
-                    self.written
-                        .get(&write.path)
-                        .is_none_or(|(last, _)| last != handle)
-                })
-        })
+                .map(|(_, handle)| *handle)
+            else {
+                continue;
+            };
+            if self
+                .written
+                .get(&write.path)
+                .is_some_and(|(last, _)| *last == handle)
+            {
+                continue;
+            }
+            let asked = self.asked.entry(write.path.clone()).or_default();
+            if asked.iter().any(|(already, _)| *already == handle) {
+                continue;
+            }
+            // Asked for and never confirmed (a frame taken back), the
+            // oldest go: at most two frames are in flight.
+            if asked.len() >= ASKED {
+                asked.pop_front();
+            }
+            if let Ok(fetch) = runtime.fetch(handle) {
+                asked.push_back((handle, fetch));
+            }
+        }
     }
 
-    /// Writes every output the committed evaluation behind `report`
-    /// changed.
+    /// Writes every output a confirmed evaluation changed, `outputs` as it
+    /// left them by name.
     pub fn after(
         &mut self,
         store: &dyn Store,
         writes: &[entelechy_scene::Write],
-        report: &Report,
+        outputs: &[(String, Handle)],
         runtime: &mut Runtime,
     ) {
         for write in writes {
-            let Some(handle) = report
-                .outputs
+            let Some(handle) = outputs
                 .iter()
                 .find(|(name, _)| name == &write.output)
                 .map(|(_, handle)| *handle)
@@ -131,7 +158,8 @@ impl Writes {
                 continue;
             }
             let outcome = self.place_in(store, &write.path, false).and_then(|target| {
-                encode(runtime, handle, &write.path, write.bytes).map(|b| (target, b))
+                let data = words(&mut self.asked, &write.path, handle, runtime)?;
+                encode(&data, &write.path, write.bytes).map(|b| (target, b))
             });
             let (target, bytes) = match outcome {
                 Ok(ready) => ready,
@@ -180,14 +208,10 @@ impl Writes {
         handle: Handle,
         runtime: &mut Runtime,
     ) {
-        let ops = runtime
-            .materialize(handle)
-            .map_err(|e| e.to_string())
-            .and_then(|()| runtime.host().data(handle).map_err(|e| e.to_string()))
-            .and_then(|data| {
-                let words: Vec<u8> = data.values().iter().flat_map(|w| w.to_le_bytes()).collect();
-                Ok((digest(&words), entelechy_formats::directory::ops(data)?))
-            });
+        let ops = words(&mut self.asked, &write.path, handle, runtime).and_then(|data| {
+            let words: Vec<u8> = data.values().iter().flat_map(|w| w.to_le_bytes()).collect();
+            Ok((digest(&words), entelechy_formats::directory::ops(&data)?))
+        });
         let (digest, ops) = match ops {
             Ok(read) => read,
             Err(why) => {
@@ -375,14 +399,34 @@ impl Writes {
 
 /// The Field encoded for its file: raw bytes (one per `Rows<Int>`
 /// element) when `bytes`, else the format the extension names.
-fn encode(
-    runtime: &mut Runtime,
-    handle: Handle,
+/// The Fields asked for a file at most: the frames in flight and the one
+/// confirmed.
+const ASKED: usize = 3;
+
+/// The words of `handle`, written to `path`: those asked for when it was
+/// made, the older asked before them let go; else brought home now.
+fn words<'r>(
+    asked: &mut BTreeMap<PathBuf, VecDeque<(Handle, Fetch)>>,
     path: &Path,
-    bytes: bool,
-) -> Result<Vec<u8>, String> {
+    handle: Handle,
+    runtime: &'r mut Runtime,
+) -> Result<Cow<'r, FieldData>, String> {
+    if let Some(queue) = asked.get_mut(path)
+        && let Some(at) = queue.iter().position(|(made, _)| *made == handle)
+    {
+        queue.drain(..at);
+        let (_, fetch) = queue.pop_front().expect("the match is first");
+        return fetch.take().map(Cow::Owned).map_err(|e| e.to_string());
+    }
     runtime.materialize(handle).map_err(|e| e.to_string())?;
-    let data = runtime.host().data(handle).map_err(|e| e.to_string())?;
+    runtime
+        .host()
+        .data(handle)
+        .map(Cow::Borrowed)
+        .map_err(|e| e.to_string())
+}
+
+fn encode(data: &FieldData, path: &Path, bytes: bool) -> Result<Vec<u8>, String> {
     if bytes {
         return entelechy_formats::encode_bytes(data);
     }

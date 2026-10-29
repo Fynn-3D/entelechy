@@ -855,6 +855,12 @@ impl ApplicationHandler for Player {
         }
     }
 
+    /// The frame in flight is confirmed before the window goes, so what it
+    /// writes to files is written.
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.confirm();
+    }
+
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.serve_pending(event_loop);
         self.wear(event_loop);

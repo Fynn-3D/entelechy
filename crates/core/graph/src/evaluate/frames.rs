@@ -7,7 +7,9 @@
 //! in flight. A frame found failed takes its commit back, and the commit of
 //! the frame made from it: the state is what the frame before them left,
 //! as though neither had run, and the failure is the answer of the call
-//! that found it.
+//! that found it. The outputs a caller awaits ([`Evaluator::await_outputs`])
+//! are held with their frame and handed over once it is confirmed, so what
+//! is written out of a frame is never waited for before the next is made.
 
 use super::*;
 
@@ -21,6 +23,8 @@ pub(super) struct Unconfirmed {
     replaced: Vec<((NodeId, String), Option<Handle>)>,
     /// The nodes it ran, whose outputs leave the cache if it failed.
     ran: Vec<NodeId>,
+    /// Its outputs a caller awaits, held until it is confirmed.
+    outputs: Vec<(String, Handle)>,
 }
 
 impl Evaluator {
@@ -51,6 +55,75 @@ impl Evaluator {
     /// Whether evaluations overlap ([`Evaluator::set_overlap`]).
     pub fn overlaps(&self) -> bool {
         self.overlap
+    }
+
+    /// Names the graph outputs a caller reads only once their frame is
+    /// confirmed, as what it writes out: each frame's are held with it and
+    /// handed over by [`Evaluator::confirmed`] once it is, or let go with
+    /// it if it is taken back. Overlapping, they come a frame late, and
+    /// the frame is not waited for to give them.
+    pub fn await_outputs<'a>(&mut self, names: impl Iterator<Item = &'a str> + Clone) {
+        if !self.awaited.iter().map(String::as_str).eq(names.clone()) {
+            self.awaited = names.map(str::to_owned).collect();
+        }
+    }
+
+    /// The awaited outputs as the frame last confirmed left them, by name
+    /// ([`Evaluator::await_outputs`]).
+    pub fn confirmed(&self) -> &[(String, Handle)] {
+        &self.confirmed
+    }
+
+    /// The awaited ones of a frame's `outputs`, in the graph's order,
+    /// those a node made: what a caller gave is the caller's.
+    pub(super) fn awaited_of(
+        &self,
+        graph: &Graph,
+        outputs: &[(String, Handle)],
+    ) -> Vec<(String, Handle)> {
+        if self.awaited.is_empty() {
+            return Vec::new();
+        }
+        graph
+            .outputs
+            .iter()
+            .zip(outputs)
+            .filter(|((name, source), _)| {
+                matches!(source, Source::Node { .. }) && self.awaited.contains(name)
+            })
+            .map(|(_, output)| output.clone())
+            .collect()
+    }
+
+    /// Hands over a confirmed frame's awaited outputs, letting go of the
+    /// ones handed over before that nothing else holds.
+    pub(super) fn confirm_outputs(
+        &mut self,
+        outputs: Vec<(String, Handle)>,
+        runtime: &mut Runtime,
+    ) {
+        let before = std::mem::replace(&mut self.confirmed, outputs);
+        self.let_go_outputs(before, runtime);
+    }
+
+    /// Lets go of awaited outputs that nothing else holds.
+    fn let_go_outputs(&mut self, outputs: Vec<(String, Handle)>, runtime: &mut Runtime) {
+        let mut seen = BTreeSet::new();
+        for (_, handle) in outputs {
+            if seen.insert(handle) && !self.ledger.is_cached(handle) && !self.is_kept(handle) {
+                release(runtime, handle);
+            }
+        }
+    }
+
+    /// Whether `handle` is an awaited output, held with the frame in flight
+    /// or handed over.
+    pub(super) fn awaits(&self, handle: Handle) -> bool {
+        self.confirmed.iter().any(|(_, held)| *held == handle)
+            || self
+                .unconfirmed
+                .as_ref()
+                .is_some_and(|frame| frame.outputs.iter().any(|(_, held)| *held == handle))
     }
 
     /// Waits for the frame committed and not yet confirmed, if any. A
@@ -88,6 +161,7 @@ impl Evaluator {
         runtime: &mut Runtime,
         checks: Vec<(NodeId, Vec<Box<dyn entelechy_kernel::Check>>)>,
         ran: Vec<NodeId>,
+        outputs: Vec<(String, Handle)>,
     ) -> Result<Vec<(NodeId, String)>, EvaluateError> {
         let (advanced, replaced) = self.commit_holding(graph)?;
         let frame = Unconfirmed {
@@ -95,6 +169,7 @@ impl Evaluator {
             mark: runtime.submitted(),
             replaced,
             ran,
+            outputs,
         };
         match self.unconfirmed.replace(frame) {
             Some(before) => self.settle_frame(before, runtime).map(|()| advanced),
@@ -116,6 +191,7 @@ impl Evaluator {
             mark,
             replaced,
             ran,
+            outputs,
         } = frame;
         let mut failed: Option<(NodeId, entelechy_kernel::ExecutionError)> = None;
         for (node, node_checks) in checks {
@@ -142,19 +218,24 @@ impl Evaluator {
                     release(runtime, held);
                 }
             }
+            self.confirm_outputs(outputs, runtime);
             return Ok(());
         };
         // The frame made from it goes first, then it: the state is put
         // back as each commit found it, newest first.
         let mut gone = ran;
+        let mut lost = outputs;
         if let Some(after) = self.unconfirmed.take() {
             self.put_back(after.replaced, runtime);
             gone.extend(after.ran);
+            lost.extend(after.outputs);
         }
         self.put_back(replaced, runtime);
         for id in gone {
             self.drop_cache(&id, runtime);
         }
+        // What they made for the caller is not handed over.
+        self.let_go_outputs(lost, runtime);
         // Remembered runs may hold what the taken-back frames made.
         self.forget_runs(runtime);
         self.taken_back += 1;
@@ -184,19 +265,25 @@ impl Evaluator {
     }
 
     /// Lets go of the frame in flight without waiting for it, its held
-    /// state with it: for [`Evaluator::clear`], which releases everything.
+    /// state and awaited outputs with it, and of those handed over: for
+    /// [`Evaluator::clear`], which releases everything.
     pub(super) fn drop_in_flight(
         &mut self,
         released: &mut BTreeSet<Handle>,
         runtime: &mut Runtime,
     ) {
-        if let Some(frame) = self.unconfirmed.take() {
-            for (_, held) in frame.replaced {
-                if let Some(held) = held
-                    && released.insert(held)
-                {
-                    release(runtime, held);
-                }
+        let in_flight = self.unconfirmed.take();
+        let confirmed = std::mem::take(&mut self.confirmed);
+        let held = in_flight
+            .into_iter()
+            .flat_map(|frame| {
+                let replaced = frame.replaced.into_iter().filter_map(|(_, held)| held);
+                replaced.chain(frame.outputs.into_iter().map(|(_, output)| output))
+            })
+            .chain(confirmed.into_iter().map(|(_, output)| output));
+        for held in held {
+            if released.insert(held) {
+                release(runtime, held);
             }
         }
     }

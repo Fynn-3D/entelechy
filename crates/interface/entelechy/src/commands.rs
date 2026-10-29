@@ -441,8 +441,10 @@ drawing of it, `game` a grid of state the arrow keys move.",
             summary: "Measure a scene's frames on one backend or several.",
             doc: "\
 Step the scene for --frames frames --repeat times on each backend and
-print the least of the runs, a millisecond a frame. The first frame
-of all is thrown away: it compiles and allocates. --nodes measures
+print the least of the runs, a millisecond a frame. The frames overlap
+the device as a window's do: the next is made while the device runs
+this one. The first frame of all is thrown away: it compiles and
+allocates. --nodes measures
 every node as well, waiting for the device after each one, native
 operations included; what measuring a node costs before it does
 anything is taken off every line, and the sum says how the parts

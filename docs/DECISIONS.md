@@ -601,7 +601,9 @@ what a frame computes:
 - A producer read at its reader's element, or at one shared offset,
   fuses into the reader.
 - A window's frames overlap the device's: a frame commits ahead and is
-  confirmed by the next, and a failure takes both back.
+  confirmed by the next, and a failure takes both back. What a frame
+  writes to a file is asked of the device behind that frame's work and
+  written once the frame is confirmed: a write never makes a frame wait.
 - A frame's device time is told by the device as it finishes, never by
   waiting for it.
 

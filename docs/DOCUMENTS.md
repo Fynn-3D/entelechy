@@ -898,9 +898,11 @@ be keywords.
    a graph's params at evaluation; a graph cannot place itself. A scene's
    own output may also be written to a file, `output kept <- state.result
    to "saves/state.field";` in the extension's format, or `to bytes
-   "f.bin"` for a `Rows<Int>` of bytes: the session writes it whole after
-   an evaluation that changed it commits, only into a directory allowed
-   with `--allow file.write=<dir>`; a failed evaluation writes nothing.
+   "f.bin"` for a `Rows<Int>` of bytes: the session writes it whole once
+   an evaluation that changed it is confirmed, only into a directory
+   allowed with `--allow file.write=<dir>`; a failed evaluation writes
+   nothing. A window's frames overlap the device, so there it lands a
+   frame late, and no frame waits for the device to write it.
    `to files "project/"` takes a `Rows<Int>` of operations on the files
    under the directory, `[n, (kind, path_len, size, path.., data..)*]`
    (words after the `n`th unread): kind 0 writes `data` as the file,

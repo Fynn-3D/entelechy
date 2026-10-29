@@ -867,6 +867,11 @@ pub struct Evaluator {
     /// Frames answered as committed and taken back since last asked; see
     /// [`Evaluator::take_taken_back`].
     taken_back: u64,
+    /// The outputs a caller reads once their frame is confirmed; see
+    /// [`Evaluator::await_outputs`].
+    awaited: Vec<String>,
+    /// Those outputs as the frame last confirmed left them.
+    confirmed: Vec<(String, Handle)>,
     /// Small nodes this evaluation found unchanged; see
     /// [`Evaluator::weigh_alike`].
     alike: Vec<NodeId>,
@@ -1757,13 +1762,17 @@ impl Evaluator {
                 self.wait_for_checks(checks, runtime)?;
                 Vec::new()
             } else if self.overlap && matches!(demand, Demand::Every | Demand::Frame) {
-                let committed = self.commit_in_flight(graph, runtime, checks, executed.clone())?;
+                let awaited = self.awaited_of(graph, &outputs);
+                let committed =
+                    self.commit_in_flight(graph, runtime, checks, executed.clone(), awaited)?;
                 self.remember_frame(executed.iter().chain(reused.iter()), runtime);
                 self.chill_made_once(&groups, &held, runtime);
                 committed
             } else {
                 self.wait_for_checks(checks, runtime)?;
                 let committed = self.commit(graph, runtime)?;
+                let awaited = self.awaited_of(graph, &outputs);
+                self.confirm_outputs(awaited, runtime);
                 self.remember_frame(executed.iter().chain(reused.iter()), runtime);
                 self.chill_made_once(&groups, &held, runtime);
                 committed

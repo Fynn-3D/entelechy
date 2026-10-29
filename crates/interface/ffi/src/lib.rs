@@ -803,7 +803,8 @@ pub extern "C" fn entelechy_open_error() -> *const c_char {
     OPEN_ERROR.with(|slot| slot.borrow().as_ptr())
 }
 
-/// Ends a session.
+/// Ends a session, the frame in flight confirmed first, so what it
+/// writes to files is written.
 ///
 /// # Safety
 /// `session` is NULL or a pointer `entelechy_open` returned, not closed yet.
@@ -811,7 +812,8 @@ pub extern "C" fn entelechy_open_error() -> *const c_char {
 pub unsafe extern "C" fn entelechy_close(session: *mut EntelechySession) {
     // A session another call is inside is not freed under it.
     if unsafe { session.as_ref() }.is_some_and(|held| !held.inside.get()) {
-        drop(unsafe { Box::from_raw(session) });
+        let mut closed = unsafe { Box::from_raw(session) };
+        let _ = closed.held.get_mut().session.confirm();
     }
 }
 
