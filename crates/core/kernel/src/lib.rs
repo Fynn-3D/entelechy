@@ -54,6 +54,22 @@ pub const FEW_FRESH_BYTES: u64 = 1 << 20;
 /// device costs; fewer stay, the device's work kept whole.
 pub const FEW_LONG_WORK: u64 = 100_000;
 
+/// The runs placement remembers what their readers spared, past which
+/// it forgets them all ([`Runtime::begin_evaluation`]).
+const MAX_SPARED: usize = 1 << 14;
+
+/// A run as placement knows it from one evaluation to the next: its
+/// Kernel, version and extent.
+type RunKey = (KernelId, Generation, Domain);
+
+fn run_key(version: &KernelVersion, invocation: &Invocation) -> RunKey {
+    (
+        version.id().clone(),
+        version.generation(),
+        invocation.domain,
+    )
+}
+
 /// The operations one element of a Kernel's run takes as a rule, for
 /// sizing it: [`Validated::typical_work`], or, where a loop counts a
 /// parameter, [`Validated::typical_work_given`] the run's own.
@@ -713,6 +729,15 @@ pub struct Runtime {
     /// for the device's work before it. A Field made before, state or an
     /// input, comes back once while the device has little else to do.
     fresh: std::collections::HashSet<Handle>,
+    /// The run that made each Field of this evaluation, wherever it ran.
+    made: std::collections::HashMap<Handle, RunKey>,
+    /// What the readers of each run in this evaluation would spare it,
+    /// summed ([`Runtime::sized_off`]).
+    sparing: std::collections::HashMap<RunKey, u64>,
+    /// What its readers spared each run the last evaluation that made it:
+    /// beside `small`, the operations it may take and go to the ordered
+    /// backend.
+    spared: std::collections::HashMap<RunKey, u64>,
     /// Where the last execution ran, and why when off the main backend.
     last_placement: Option<Placement>,
     /// The Kernels whose runs go to the ordered backend while the main one
@@ -747,6 +772,9 @@ impl Runtime {
             grants: Capability::ALL.into_iter().collect(),
             small: DEFAULT_SMALL,
             fresh: std::collections::HashSet::new(),
+            made: std::collections::HashMap::new(),
+            sparing: std::collections::HashMap::new(),
+            spared: std::collections::HashMap::new(),
             last_placement: None,
             shown_while_building: BTreeSet::new(),
         };
@@ -1330,6 +1358,20 @@ impl Runtime {
     /// Starts an evaluation: no Field is yet the main backend's own of it.
     pub fn begin_evaluation(&mut self) {
         self.fresh.clear();
+        // What the last evaluation's readers spared each run it made.
+        let made: std::collections::HashSet<RunKey> =
+            self.made.drain().map(|(_, key)| key).collect();
+        for key in made {
+            match self.sparing.remove(&key) {
+                Some(spare) => self.spared.insert(key, spare),
+                None => self.spared.remove(&key),
+            };
+        }
+        self.sparing.clear();
+        // Runs of versions since replaced are not kept for ever.
+        if self.spared.len() > MAX_SPARED {
+            self.spared.clear();
+        }
         self.backend.evaluation_begun();
         if let Some(ordered) = &self.ordered {
             ordered.evaluation_begun();
@@ -1356,16 +1398,27 @@ impl Runtime {
 
     /// Why a run of a Kernel the main backend takes goes to the ordered one
     /// by its size, or `None`: its elements times its typical work are at
-    /// most `small`, and it reads no Field the main backend made in this
-    /// evaluation. The choice reads the run and nothing of time.
+    /// most `small` and what its readers spared it, and it reads no Field
+    /// the main backend made in this evaluation.
+    ///
+    /// A run small enough on its own spares each run that made what it
+    /// reads `small` less its own work: were they on the main backend, it
+    /// would stay there beside them, a dispatch of its own; were they not,
+    /// it goes to the ordered backend too. A run its readers spare more
+    /// than it takes goes there with them, whichever backend it ran on, so
+    /// the choice holds from one evaluation to the next. It reads the runs
+    /// and nothing of time.
+    /// The second answer is what the run spares those runs, when it is
+    /// small enough on its own; [`Runtime::spare`] counts it once it runs.
     fn sized_off(
         &self,
+        version: &KernelVersion,
         run: &Validated,
         typical: &Typical,
         invocation: &Invocation,
-    ) -> Option<Why> {
+    ) -> (Option<Why>, Option<u64>) {
         if self.small == 0 || self.ordered.is_none() || !self.backend.has_device() {
-            return None;
+            return (None, None);
         }
         let typical = typical.of(run, &invocation.params);
         let elements = match run.manifest.mode {
@@ -1407,15 +1460,44 @@ impl Runtime {
         // the device and bring it down, breaking the device's work in
         // two, which pays only when the run itself is long
         // ([`FEW_LONG_WORK`]) and what comes down is not large.
+        let alone = elements.max(carried) <= FEW_ELEMENTS || work <= self.small;
+        let spare = alone.then(|| self.small.saturating_sub(work));
         let few = elements.max(carried) <= FEW_ELEMENTS
             && (fresh == 0 || (work > FEW_LONG_WORK && fresh <= FEW_FRESH_BYTES));
         if few {
-            return Some(Why::Few { elements });
+            return (Some(Why::Few { elements }), spare);
         }
         if fresh > 0 {
-            return None;
+            return (None, spare);
         }
-        (work <= self.small).then_some(Why::Small { elements, work })
+        let spared = self
+            .spared
+            .get(&run_key(version, invocation))
+            .copied()
+            .unwrap_or(0);
+        let small = work <= self.small.saturating_add(spared);
+        (small.then_some(Why::Small { elements, work }), spare)
+    }
+
+    /// Counts what a run that executes spares each other run that made what
+    /// it reads ([`Runtime::sized_off`]).
+    fn spare(&mut self, version: &KernelVersion, invocation: &Invocation, spare: Option<u64>) {
+        let Some(spare) = spare else { return };
+        let own = run_key(version, invocation);
+        for input in &invocation.inputs {
+            if let Some(key) = self.made.get(input).filter(|key| **key != own) {
+                let sum = self.sparing.entry(key.clone()).or_default();
+                *sum = sum.saturating_add(spare);
+            }
+        }
+    }
+
+    /// Remembers which run made `outputs`, for its readers to spare it.
+    fn made_by(&mut self, version: &KernelVersion, invocation: &Invocation, outputs: &[Handle]) {
+        let key = run_key(version, invocation);
+        for output in outputs {
+            self.made.insert(*output, key.clone());
+        }
     }
 
     /// The checks executions answered since the last call, in run order.
@@ -1587,8 +1669,9 @@ impl Runtime {
         } = &version.body
             && version.routed().is_none()
             && self.building(version, prepared.as_ref()).is_none()
-            && self.sized_off(run, typical, invocation).is_none()
+            && let (None, spare) = self.sized_off(version, run, typical, invocation)
         {
+            self.spare(version, invocation, spare);
             let granted = self.scope_grants(version);
             let backend = Arc::clone(&self.backend);
             let before = backend.uploaded();
@@ -1620,6 +1703,7 @@ impl Runtime {
                 });
                 let outputs = held_to(version.manifest(), &mut self.host, outputs)?;
                 self.fresh.extend(outputs.iter().copied());
+                self.made_by(version, invocation, &outputs);
                 return Ok(outputs);
             }
         }
@@ -1670,9 +1754,14 @@ impl Runtime {
                 // it or the run is small enough; the main one otherwise.
                 let sized = match version.routed() {
                     Some(_) => None,
-                    None => self
-                        .building(version, prepared.as_ref())
-                        .or_else(|| self.sized_off(run, typical, invocation)),
+                    None => match self.building(version, prepared.as_ref()) {
+                        Some(why) => Some(why),
+                        None => {
+                            let (why, spare) = self.sized_off(version, run, typical, invocation);
+                            self.spare(version, invocation, spare);
+                            why
+                        }
+                    },
                 };
                 let off: Option<(Arc<dyn Backend>, &dyn Prepared, Why)> =
                     match (&self.ordered, version.routed(), sized) {
@@ -1752,6 +1841,7 @@ impl Runtime {
                 if main {
                     self.fresh.extend(outputs.iter().copied());
                 }
+                self.made_by(version, invocation, &outputs);
                 Ok(outputs)
             }
             Body::Native(op) => {

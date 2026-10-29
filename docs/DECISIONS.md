@@ -488,22 +488,27 @@ example's edge, native, cutout and canvas replays.
 Beside a device, a run goes to the JIT when its elements times its
 Kernel's typical work are at most `--small` (or when one of the device's
 groups holds all its elements), and to the device otherwise; a run that
-reads what the device just made stays there. A Kernel the device's own
+reads what the device just made stays there. A run small enough on its
+own spares each run that made what it reads `--small` less its own
+work, and a run whose readers spared it that much more in the last
+evaluation that made it goes to the JIT with them. A Kernel the device's own
 compiler cannot build runs on the JIT from then on; a shader the backend
 emitted that the device refuses is the backend's fault and still refuses
 the document. `entelechy check` says when a Kernel is large for a
 device's compiler, by the words it carries through its branches.
 
 **Why.** A device's dispatch costs about the same whatever it does, so a
-device earns its cost over many elements and nothing over few. The
-choice reads the run and the Kernel, never a clock, so a replay places
-every run alike, and the JIT computes what the reference does.
+device earns its cost over many elements and nothing over few. A run
+on the device holds every small run that reads it there, a dispatch
+each, so what it costs there is theirs too. The choice reads the runs
+and the Kernels, never a clock, so a replay places every run alike, and the JIT computes what the reference does.
 Placement is a backend's to decide and the document's to read about,
 never to fail on.
 
 **Where.** `Runtime::execute` in [`entelechy-kernel`](../crates/core/kernel/src/lib.rs),
 the GPU's [`declines`](../crates/backends/gpu/src/lib.rs),
 [`size.rs`](../crates/core/ir/src/size.rs); held by
+[`placement.rs`](../crates/core/kernel/tests/placement.rs),
 [`routing.rs`](../crates/interface/session/tests/routing.rs),
 [the unbuilt test](../crates/interface/session/tests/unbuilt.rs) and
 [the large test](../crates/interface/session/tests/large.rs).
