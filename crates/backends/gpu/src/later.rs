@@ -42,7 +42,7 @@ impl entelechy_rules::Downloading for Coming {
                 .map_err(|error| error.to_string())?[..self.byte_len],
         );
         self.staging.unmap();
-        self.staging.destroy();
+        crate::wait::discard(self.staging);
         Ok(words)
     }
 }

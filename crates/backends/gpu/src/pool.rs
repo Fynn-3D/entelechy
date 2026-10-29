@@ -36,11 +36,11 @@ pub(crate) struct Spare {
     pub(crate) held: Arc<Mutex<Vec<Kept>>>,
     /// The evaluations begun, by which what the pile keeps is aged.
     evaluations: Arc<std::sync::atomic::AtomicU64>,
-    /// Buffers let go, destroyed once the next run is given to the device
+    /// Buffers let go, let go of once the next run is given to the device
     /// ([`Spare::bury`]): a command of a run being made may still bind
-    /// one. Destroyed, not dropped: a page's device frees a buffer dropped
-    /// only once the page's collector finds its object, which it may not
-    /// look for in a long while.
+    /// one. A page's are destroyed, not dropped: its device frees a buffer
+    /// dropped only once the page's collector finds its object, which it
+    /// may not look for in a long while ([`crate::wait::discard`]).
     gone: Arc<Mutex<Vec<wgpu::Buffer>>>,
 }
 
@@ -56,7 +56,7 @@ pub(crate) const SPARE_BYTES: u64 = 1024 * 1024 * 1024;
 #[derive(Clone, Default)]
 pub(crate) struct SpareTextures {
     pub(crate) held: Arc<Mutex<Vec<wgpu::Texture>>>,
-    /// Targets let go, destroyed as [`Spare`]'s buffers are.
+    /// Targets let go, let go of as [`Spare`]'s buffers are.
     gone: Arc<Mutex<Vec<wgpu::Texture>>>,
 }
 
@@ -129,11 +129,12 @@ impl SpareTextures {
             .sum()
     }
 
-    /// Destroys the targets let go: called once a run is given to the
-    /// device, which frees them when the work before has run.
+    /// Lets go of the targets let go: called once a run is given to the
+    /// device, which frees them when the work before has run
+    /// ([`crate::wait::discard_texture`]).
     pub(crate) fn bury(&self) {
         for texture in lock_gone(&self.gone).drain(..) {
-            texture.destroy();
+            crate::wait::discard_texture(texture);
         }
     }
 }
@@ -228,17 +229,18 @@ impl Spare {
         });
     }
 
-    /// A buffer nothing reads after the run being made: destroyed once that
+    /// A buffer nothing reads after the run being made: let go once that
     /// run is given to the device ([`Spare::bury`]).
     pub(crate) fn let_go(&self, buffer: wgpu::Buffer) {
         lock_gone(&self.gone).push(buffer);
     }
 
-    /// Destroys the buffers let go: called once a run is given to the
-    /// device, which frees them when the work before has run.
+    /// Lets go of the buffers let go: called once a run is given to the
+    /// device, which frees them when the work before has run
+    /// ([`crate::wait::discard`]).
     pub(crate) fn bury(&self) {
         for buffer in lock_gone(&self.gone).drain(..) {
-            buffer.destroy();
+            crate::wait::discard(buffer);
         }
     }
 

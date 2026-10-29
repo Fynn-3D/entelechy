@@ -606,6 +606,11 @@ what a frame computes:
   written once the frame is confirmed: a write never makes a frame wait.
 - A frame's device time is told by the device as it finishes, never by
   waiting for it.
+- On a machine one thread waits on the device's work while any is in
+  flight, and buffers are let go by dropping them: a device that lowers
+  its clock while nothing waits on it (Apple's GPUs) keeps pace with the
+  frames, and the frame's own thread never waits on the device through
+  a lock the waiter holds.
 
 **Why.** An optimization that changes the answer is a second semantics.
 The key already names everything an output depends on, so held outputs

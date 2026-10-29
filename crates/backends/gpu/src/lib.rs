@@ -24,8 +24,8 @@ mod timing;
 mod wait;
 pub mod wgsl;
 
-use wait::Spent;
 pub use wait::Wait;
+use wait::{Spent, Waiter};
 
 /// Whether Entelechy runs in a page: its device is the browser's WebGPU,
 /// answered only when the page gets a turn, and its frames are timed by
@@ -67,6 +67,8 @@ pub struct GpuBackend {
     wait: Wait,
     /// The time callers have spent blocked on the device's work.
     spent: Spent,
+    /// Waits on the device's work while any is in flight ([`Waiter`]).
+    _waiter: Option<Waiter>,
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
     device: wgpu::Device,
@@ -278,6 +280,7 @@ impl GpuBackend {
         Ok(Self {
             wait,
             spent: Spent::default(),
+            _waiter: Waiter::start(&device),
             instance,
             adapter,
             device,
@@ -385,7 +388,7 @@ impl Backend for GpuBackend {
     }
 
     fn set_clocked(&self, on: bool) {
-        self.frames.set_clocked(on, &self.device, self.timestamps);
+        self.frames.set_clocked(on, self.timestamps);
     }
 
     fn clock_mark(&self) -> usize {
@@ -836,7 +839,7 @@ impl Backend for GpuBackend {
             words_of(&view[..byte_len])
         };
         staging.unmap();
-        staging.destroy();
+        crate::wait::discard(staging);
         Ok(words)
     }
 

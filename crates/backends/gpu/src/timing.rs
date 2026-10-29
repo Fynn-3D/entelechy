@@ -209,10 +209,6 @@ impl GpuBackend {
 /// frame there.
 pub(crate) struct Frames {
     on: Arc<std::sync::atomic::AtomicBool>,
-    /// Runs told submitted and not yet done, which the waiter waits on.
-    pending: Arc<std::sync::atomic::AtomicUsize>,
-    /// Whether a waiter runs.
-    waiting: Arc<std::sync::atomic::AtomicBool>,
     /// The runs since the last frame ended: each its submission and end.
     open: Mutex<Vec<Run>>,
     /// Ended frames whose runs are not all done, oldest first, by number.
@@ -237,8 +233,6 @@ impl Default for Frames {
     fn default() -> Self {
         Self {
             on: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            pending: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            waiting: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             open: Mutex::new(Vec::new()),
             ended: Mutex::new(std::collections::VecDeque::new()),
             frames: std::sync::atomic::AtomicU64::new(0),
@@ -258,9 +252,10 @@ impl Frames {
         self.on.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// Clocks frames from now, or no longer; on, a waiter hears the device.
-    /// A page clocks them only where the device has `timestamps`.
-    pub(crate) fn set_clocked(&self, on: bool, device: &wgpu::Device, timestamps: bool) {
+    /// Clocks frames from now, or no longer; the backend's waiter hears
+    /// the device tell each run done ([`crate::wait::Waiter`]). A page
+    /// clocks them only where the device has `timestamps`.
+    pub(crate) fn set_clocked(&self, on: bool, timestamps: bool) {
         let on = on && (!crate::PAGE || timestamps);
         self.on.store(on, std::sync::atomic::Ordering::Relaxed);
         if !on {
@@ -269,36 +264,7 @@ impl Frames {
             *lock(&self.last_end) = None;
             *lock(&self.last) = None;
             *lock(&self.stamped) = Stamped::default();
-            return;
         }
-        // WebAssembly starts no thread to wait for the device; a page
-        // reads its stamps as it gets its turns.
-        if cfg!(target_arch = "wasm32")
-            || self
-                .waiting
-                .swap(true, std::sync::atomic::Ordering::Relaxed)
-        {
-            return;
-        }
-        let device = device.clone();
-        let on = Arc::clone(&self.on);
-        let pending = Arc::clone(&self.pending);
-        let waiting = Arc::clone(&self.waiting);
-        let _ = std::thread::Builder::new()
-            .name("entelechy device clock".into())
-            .spawn(move || {
-                while on.load(std::sync::atomic::Ordering::Relaxed) {
-                    if pending.load(std::sync::atomic::Ordering::Relaxed) > 0 {
-                        let _ = device.poll(wgpu::PollType::Wait {
-                            submission_index: None,
-                            timeout: Some(std::time::Duration::from_millis(5)),
-                        });
-                    } else {
-                        std::thread::sleep(std::time::Duration::from_micros(500));
-                    }
-                }
-                waiting.store(false, std::sync::atomic::Ordering::Relaxed);
-            });
     }
 
     /// Gives the device a run, work or copy, counted for the open frame.
@@ -316,11 +282,8 @@ impl Frames {
         let submission = queue.submit(Some(commands));
         let run: Run = Arc::new(Mutex::new((std::time::Instant::now(), None)));
         lock(&self.open).push(Arc::clone(&run));
-        let pending = Arc::clone(&self.pending);
-        pending.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         queue.on_submitted_work_done(move || {
             lock(&run).1 = Some(std::time::Instant::now());
-            pending.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         });
         submission
     }

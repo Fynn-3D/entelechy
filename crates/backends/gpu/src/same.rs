@@ -176,7 +176,7 @@ impl GpuBackend {
             u32::from_le_bytes([view[0], view[1], view[2], view[3]])
         };
         back.unmap();
-        back.destroy();
+        crate::wait::discard(back);
         Ok(word == 0)
     }
 }

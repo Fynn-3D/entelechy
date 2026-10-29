@@ -324,8 +324,8 @@ impl Display {
         }
         queue.submit(Some(encoder.finish()));
         // Read by this frame's blit alone.
-        uniform.destroy();
-        overlay_buffer.destroy();
+        crate::wait::discard(uniform);
+        crate::wait::discard(overlay_buffer);
         queue.present(texture);
         Ok(Some(placement))
     }

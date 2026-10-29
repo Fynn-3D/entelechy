@@ -35,6 +35,70 @@ impl Spent {
     }
 }
 
+/// A thread waiting on the device's work while any is in flight, for as
+/// long as the backend lives: what the device finishes is heard as it
+/// finishes (a map, a frame's clocked end), and a device that drops its
+/// clock while its work is not waited for (Apple's GPUs) keeps pace with
+/// the frames. A page has no thread: it hears the device as it gets its
+/// turns.
+pub(crate) struct Waiter(Arc<std::sync::atomic::AtomicBool>);
+
+impl Waiter {
+    /// Starts waiting on `device`'s work; nothing where there is no
+    /// thread to wait on.
+    pub(crate) fn start(device: &wgpu::Device) -> Option<Self> {
+        if cfg!(target_arch = "wasm32") {
+            return None;
+        }
+        let on = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let waiting = Arc::clone(&on);
+        let device = device.clone();
+        std::thread::Builder::new()
+            .name("entelechy device waiter".into())
+            .spawn(move || {
+                while waiting.load(std::sync::atomic::Ordering::Relaxed) {
+                    let polled = device.poll(wgpu::PollType::Wait {
+                        submission_index: None,
+                        timeout: Some(std::time::Duration::from_millis(5)),
+                    });
+                    // Nothing was in flight: look again soon.
+                    if !matches!(
+                        polled,
+                        Ok(wgpu::PollStatus::WaitSucceeded) | Err(wgpu::PollError::Timeout)
+                    ) {
+                        std::thread::sleep(std::time::Duration::from_micros(100));
+                    }
+                }
+            })
+            .ok()?;
+        Some(Self(on))
+    }
+}
+
+impl Drop for Waiter {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Lets go of a buffer the device is done with once the work submitted
+/// has run. On a machine dropping it is all: the waiter frees it then,
+/// and destroying it would wait for the waiter, which holds the device
+/// while the device works. A page has no waiter and frees what is
+/// destroyed.
+pub(crate) fn discard(buffer: wgpu::Buffer) {
+    if crate::PAGE {
+        buffer.destroy();
+    }
+}
+
+/// Lets go of a texture as [`discard`] does a buffer.
+pub(crate) fn discard_texture(texture: wgpu::Texture) {
+    if crate::PAGE {
+        texture.destroy();
+    }
+}
+
 /// How to wait: block, or park with the host until it is woken.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Wait(Option<Parking>);
