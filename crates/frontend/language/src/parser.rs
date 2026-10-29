@@ -4,9 +4,9 @@ use crate::lexer::{Lexeme, Token, tokenize};
 use crate::{
     BinaryOp, BindingDecl, Block, CarryDecl, Document, Expr, ExprKind, FnDecl, FramesDecl,
     GroupDecl, Kernel, MatchArm, MergeDecl, NodeBlock, NodeDecl, NodeKind, NodeMember,
-    NodeMemberAt, Outline, PackageDecl, ParamDecl, ParseError, PortDecl, PrefixDecl, RequireDecl,
-    ScatterDecl, SourceRef, Span, Spanned, Statement, StatementKind, StructDecl, TypeAlias, Use,
-    WriteDecl,
+    NodeMemberAt, Outline, PackageDecl, ParamDecl, ParseError, PortDecl, PrefixDecl, PresentDecl,
+    RequireDecl, ScatterDecl, SourceRef, Span, Spanned, Statement, StatementKind, StructDecl,
+    TypeAlias, Use, WriteDecl,
 };
 
 /// Parses a document: `use`, `kernel`, `input`, `output`, and `node` items.
@@ -43,6 +43,7 @@ fn read_document(source: &str) -> Result<(Document, Outline), ParseError> {
         requires: Vec::new(),
         outputs: Vec::new(),
         writes: Vec::new(),
+        presents: Vec::new(),
         nodes: Vec::new(),
     };
     loop {
@@ -120,34 +121,7 @@ fn read_document(source: &str) -> Result<(Document, Outline), ParseError> {
                 let source = parser.source_ref()?;
                 if parser.is_keyword("to") {
                     parser.next();
-                    let (path, span, bytes, files, clipboard) = if parser.is_keyword("clipboard") {
-                        let (_, span) = parser.next();
-                        (String::new(), span, false, false, true)
-                    } else {
-                        let bytes = parser.is_keyword("bytes");
-                        let files = parser.is_keyword("files");
-                        if bytes || files {
-                            parser.next();
-                        }
-                        let (token, span) = parser.next();
-                        let Token::Str(path) = token else {
-                            return Err(ParseError {
-                                span,
-                                message: format!(
-                                    "an output is written `to` a quoted path, `to bytes` and a quoted path, `to files` and a quoted directory, or `to clipboard`, found {}",
-                                    token.describe()
-                                ),
-                            });
-                        };
-                        (path, span, bytes, files, false)
-                    };
-                    document.writes.push(WriteDecl {
-                        output: name.value.clone(),
-                        path: Spanned { value: path, span },
-                        bytes,
-                        files,
-                        clipboard,
-                    });
+                    parser.destination(&name.value, &mut document)?;
                 }
                 parser.expect_punct(";")?;
                 document.outputs.push((name, source));
@@ -334,6 +308,50 @@ impl Parser {
 
     fn is_punct(&self, punct: &str) -> bool {
         matches!(self.peek(), Token::Punct(p) if *p == punct)
+    }
+
+    /// Where output `output` goes after its `to`: a bare name is a Host
+    /// device (the language knows none; the Host's table does); a quoted
+    /// path is a file, `bytes` or `files` before it how the Field is
+    /// written there.
+    fn destination(&mut self, output: &str, document: &mut Document) -> Result<(), ParseError> {
+        let device = match self.peek() {
+            Token::Ident(word) if word != "bytes" && word != "files" => Some(word.clone()),
+            _ => None,
+        };
+        if let Some(device) = device {
+            let (_, span) = self.next();
+            document.presents.push(PresentDecl {
+                output: output.to_owned(),
+                device: Spanned {
+                    value: device,
+                    span,
+                },
+            });
+            return Ok(());
+        }
+        let bytes = self.is_keyword("bytes");
+        let files = self.is_keyword("files");
+        if bytes || files {
+            self.next();
+        }
+        let (token, span) = self.next();
+        let Token::Str(path) = token else {
+            return Err(ParseError {
+                span,
+                message: format!(
+                    "an output goes `to` a quoted path, `to bytes` and a quoted path, `to files` and a quoted directory, or a Host device by its name (`to clipboard`, `to sound`), found {}",
+                    token.describe()
+                ),
+            });
+        };
+        document.writes.push(WriteDecl {
+            output: output.to_owned(),
+            path: Spanned { value: path, span },
+            bytes,
+            files,
+        });
+        Ok(())
     }
 
     fn is_keyword(&self, keyword: &str) -> bool {

@@ -190,18 +190,6 @@ pub fn parse_window(text: &str) -> Result<([f32; 2], f32), String> {
     Ok(([side(w)?, side(h)?], scale))
 }
 
-/// The output a scene names its pointer by: a picture every interface
-/// shows as the system's pointer, its pixels the system's own units; a
-/// picture clear throughout hides the pointer. A scene without one keeps
-/// the system's pointer.
-pub const POINTER_OUTPUT: &str = "cursor";
-
-/// The output a scene names the point its pointer points with by: rows
-/// whose first is two numbers, the pixel across and down from the
-/// picture's top left, held inside it. A scene without one points with
-/// the picture's middle.
-pub const HOTSPOT_OUTPUT: &str = "cursor_hotspot";
-
 /// The most pixels a side of the pointer's picture may have: what a
 /// browser takes for a page's pointer.
 pub const POINTER_MOST: u32 = 128;

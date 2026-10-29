@@ -1,9 +1,10 @@
-//! The pointer a scene draws (`entelechy_session::play::PointerLook`): the
-//! picture output named `cursor` is the system's pointer in every
-//! interface, pointing with the pixel `cursor_hotspot` names, else its
-//! middle; an interface is told when it changes and only then, one too
-//! large is said once and leaves the system's pointer, and a scene
-//! without one keeps the system's.
+//! The Host's devices a scene gives its outputs to, the pointer above all
+//! (`entelechy_session::play::PointerLook`): the picture a scene gives `to
+//! pointer` is the system's pointer in every interface, pointing with the
+//! pixel it gives `to pointer_tip`, else its middle; an interface is told
+//! when it changes and only then, one too large is said once and leaves
+//! the system's pointer, and a scene without one keeps the system's. A
+//! device takes only what is given it, and one the Host has not is refused.
 
 use std::path::{Path, PathBuf};
 
@@ -20,7 +21,7 @@ fn scene(cursor: Option<&str>) -> String {
     let mut scene = "use \"k.ent\";\nnode view: t.view@1 { domain = vec2(4, 4); }\n".to_owned();
     if let Some(domain) = cursor {
         scene.push_str(&format!(
-            "node mark: t.mark@1 {{ domain = {domain}; }}\noutput view <- view.result;\noutput cursor <- mark.result;\n"
+            "node mark: t.mark@1 {{ domain = {domain}; }}\noutput view <- view.result;\noutput cursor <- mark.result to pointer;\n"
         ));
     } else {
         scene.push_str("output view <- view.result;\n");
@@ -160,12 +161,12 @@ fn a_cursor_too_large_is_said_once_and_leaves_the_systems_pointer() {
 /// The scene says the pixel its pointer points with; one past the
 /// picture is held at its edge.
 #[test]
-fn the_cursor_hotspot_output_is_the_point_the_pointer_points_with() {
+fn what_the_scene_gives_pointer_tip_is_the_point_the_pointer_points_with() {
     let hotspot = |at: &str| {
         scene(Some("vec2(3, 2)")).replace(
-            "output cursor <- mark.result;\n",
+            "output cursor <- mark.result to pointer;\n",
             &format!(
-                "output cursor <- mark.result;\nnode point: t.point@1 {{ at = {at}; domain = 1; }}\noutput cursor_hotspot <- point.result;\n"
+                "output cursor <- mark.result to pointer;\nnode point: t.point@1 {{ at = {at}; domain = 1; }}\noutput cursor_hotspot <- point.result to pointer_tip;\n"
             ),
         )
     };
@@ -188,23 +189,38 @@ fn the_cursor_hotspot_output_is_the_point_the_pointer_points_with() {
     assert_eq!(told, vec![pointing(255, (2, 0))]);
 }
 
-/// The hotspot is two numbers as a stereo sample is; declared before the
-/// sound, the sound card still plays the sound.
+/// A device takes what the scene gives it and nothing else: rows of two
+/// floats given no device are not played, and the window shows the first
+/// picture given no device, though the pointer's is declared first.
 #[test]
-fn the_hotspot_is_never_played_as_the_sound() {
-    let dir = scratch("sound", None);
-    let scene = scene(Some("vec2(3, 2)")).replace(
-        "output cursor <- mark.result;\n",
-        "output cursor <- mark.result;\nnode point: t.point@1 { at = vec2(1.0, 1.0); domain = 1; }\noutput cursor_hotspot <- point.result;\nnode tone: t.tone@1 { domain = 16; }\noutput sound <- tone.result;\n",
-    );
-    std::fs::write(dir.join("scene.esn"), scene).unwrap();
+fn a_device_takes_only_what_the_scene_gives_it() {
+    let dir = scratch("given", None);
     std::fs::write(
         dir.join("k.ent"),
         format!("{KERNELS}kernel t.tone@1 {{ requires {{ field.write; }} output result: Rows<Vec2>; compute {{ return vec2(0.25, -0.25); }} }}\n"),
     )
     .unwrap();
+    let scene = |sound: &str| {
+        format!(
+            "use \"k.ent\";\nnode mark: t.mark@1 {{ domain = vec2(3, 2); }}\nnode view: t.view@1 {{ domain = vec2(4, 4); }}\nnode point: t.point@1 {{ at = vec2(1.0, 1.0); domain = 1; }}\nnode tone: t.tone@1 {{ domain = 16; }}\noutput cursor <- mark.result to pointer;\noutput tip <- point.result to pointer_tip;\noutput view <- view.result;\noutput tone <- tone.result{sound};\n"
+        )
+    };
+    std::fs::write(dir.join("scene.esn"), scene("")).unwrap();
     let mut session = open(&dir);
     let mut play = Play::new(still);
+    let Frame::Shown(shown) = play.frame(&mut session, VIEW) else {
+        panic!("a frame was not shown: {}", play.status());
+    };
+    assert_eq!(shown.sound, None, "rows given no device are not played");
+    let picture = session.runtime().host().domain(shown.picture).unwrap();
+    assert_eq!(
+        picture.count(),
+        16,
+        "the window shows the view, not the pointer"
+    );
+
+    std::fs::write(dir.join("scene.esn"), scene(" to sound")).unwrap();
+    session.sync();
     let Frame::Shown(shown) = play.frame(&mut session, VIEW) else {
         panic!("a frame was not shown: {}", play.status());
     };
@@ -212,4 +228,64 @@ fn the_hotspot_is_never_played_as_the_sound() {
     assert_eq!(channels, 2);
     assert_eq!(session.runtime().host().domain(sound).unwrap().count(), 16);
     assert_eq!(Some(sound), shown.sound);
+}
+
+/// A device the Host does not have is refused as the scene loads, naming
+/// the nearest it has.
+#[test]
+fn a_device_the_host_does_not_have_is_refused() {
+    let dir = scratch("unknown", None);
+    std::fs::write(
+        dir.join("scene.esn"),
+        "use \"k.ent\";\nnode view: t.view@1 { domain = vec2(4, 4); }\noutput view <- view.result to pionter;\n",
+    )
+    .unwrap();
+    let mut session = Session::open(&dir.join("scene.esn"), None, 1 << 20);
+    let said: Vec<String> = session.sync().iter().map(ToString::to_string).collect();
+    assert!(session.graph().is_none(), "{said:?}");
+    assert!(
+        said.iter()
+            .any(|line| line.contains("no device `pionter`") && line.contains("pointer")),
+        "{said:?}"
+    );
+}
+
+/// A check, before anything runs, holds each output to the structure its
+/// device takes, and refuses a device the Host has not.
+#[test]
+fn a_check_holds_each_output_to_its_devices_structure() {
+    let dir = scratch("checked", None);
+    std::fs::write(
+        dir.join("scene.esn"),
+        "use \"k.ent\";\nnode view: t.view@1 { domain = vec2(4, 4); }\noutput view <- view.result;\noutput noise <- view.result to sound;\noutput copied <- view.result to clipboard;\n",
+    )
+    .unwrap();
+    let checked = entelechy_session::check_document(
+        &entelechy_session::Disk::default(),
+        &dir.join("scene.esn"),
+        false,
+    );
+    let problems: Vec<&String> = checked
+        .lines
+        .iter()
+        .filter(|(p, _)| *p)
+        .map(|(_, l)| l)
+        .collect();
+    assert_eq!(problems.len(), 2, "{problems:?}");
+    assert!(
+        problems
+            .iter()
+            .any(|l| l.contains("output `noise`: `to sound` takes a frame's samples")),
+        "{problems:?}"
+    );
+    assert!(
+        problems
+            .iter()
+            .any(|l| l.contains("output `copied`: `to clipboard` takes text")),
+        "{problems:?}"
+    );
+    assert!(
+        problems.iter().all(|l| l.contains("scene.esn:")),
+        "each said where it is written: {problems:?}"
+    );
 }

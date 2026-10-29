@@ -28,7 +28,7 @@ node paint: t.paint@1 { x <- count.result; domain = vec2(2.0, 2.0); }
 node tally: t.tally@1 { x <- count.result; domain = 1; }
 node tone: t.tone@1 { domain = 64; }
 output result <- paint.result;
-output sound <- tone.result;
+output sound <- tone.result to sound;
 output kept <- tally.result;
 ";
 

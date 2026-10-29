@@ -1,0 +1,32 @@
+language 2
+// devices
+
+node view: image.show@1 {
+    domain = vec2(4, 4);
+}
+
+node tone: sound.tone@1 {
+    domain = 800;
+}
+
+node arrow: pointer.look@1 {
+    domain = vec2(32, 32);
+}
+
+node tip: pointer.tip@1 {
+    domain = 1;
+}
+
+node copied: text.copy@1 {
+    domain = 16;
+}
+
+output result <- view.result;
+output music <- tone.result;
+output cursor <- arrow.result;
+output aim <- tip.result;
+output text <- copied.result;
+// gives music to sound
+// gives cursor to pointer
+// gives aim to pointer_tip
+// gives text to clipboard

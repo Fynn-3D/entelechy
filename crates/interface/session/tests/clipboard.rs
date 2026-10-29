@@ -139,7 +139,7 @@ fn the_clipboard_is_text_and_written_by_one_output() {
         ),
         (
             "kernel t.w@1 { requires { field.write; } output result: Rows<Int>; compute { return 0; } }\nnode a: t.w@1 { domain = 1; }\nnode b: t.w@1 { domain = 1; }\noutput x <- a.result to clipboard;\noutput y <- b.result to clipboard;\n",
-            "written by two outputs",
+            "two outputs go `to clipboard`",
         ),
     ] {
         std::fs::write(dir.join("scene.esn"), scene).unwrap();

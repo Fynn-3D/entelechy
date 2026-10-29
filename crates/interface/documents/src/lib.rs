@@ -15,6 +15,7 @@
 #![warn(missing_docs)]
 
 pub mod check;
+pub mod devices;
 pub mod history;
 pub mod ignore;
 pub mod inputs;

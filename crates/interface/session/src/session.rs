@@ -357,6 +357,12 @@ impl Session {
         &self.scene.files().fonts
     }
 
+    /// The outputs the scene gives Host devices (`to sound`, `to pointer`,
+    /// ...), one a device.
+    pub fn devices(&self) -> &[entelechy_scene::Present] {
+        &self.scene.files().presented
+    }
+
     /// The scene's files nodes, at every level.
     pub fn file_nodes(&self) -> &[entelechy_scene::FilesNode] {
         &self.scene.files().file_nodes
@@ -1189,7 +1195,7 @@ impl Session {
         // What only shows is finished on threads of its own, and runs on
         // the ordered backend until it is; the rest the frame waits for.
         let shown = if self.shown_while_building && !self.runtime.prepares_in_turns() {
-            shown_kernels(graph, &self.runtime)
+            shown_kernels(graph, &self.scene.files().presented)
         } else {
             BTreeSet::new()
         };
@@ -1770,7 +1776,7 @@ impl Session {
             &mut self.runtime,
         );
         self.board
-            .after(&self.scene.files().writes, report, &mut self.runtime);
+            .after(&self.scene.files().presented, report, &mut self.runtime);
         Ok(())
     }
 
@@ -2445,11 +2451,14 @@ impl Session {
     }
 
     /// The output of `report` every interface shows: the first picture
-    /// ([`entelechy_kernel::Schema::is_picture`]).
+    /// ([`entelechy_kernel::Schema::is_picture`]) the scene gives no
+    /// device.
     pub fn picture_of(&self, report: &entelechy_graph::Report) -> Option<Handle> {
+        let presented = &self.scene.files().presented;
         report
             .outputs
             .iter()
+            .filter(|(name, _)| !presented.iter().any(|present| present.output == *name))
             .map(|(_, handle)| *handle)
             .find(|handle| self.is_picture(*handle))
     }
@@ -2513,66 +2522,53 @@ impl Session {
         Some((device, width, height))
     }
 
-    /// The output of `report` every interface shows as its pointer: the
-    /// picture named [`crate::POINTER_OUTPUT`], when there is one.
-    pub fn pointer_of(&self, report: &entelechy_graph::Report) -> Option<Handle> {
-        report
+    /// The Field of `report` the scene gives device `device`
+    /// ([`entelechy_documents::devices`]), when it gives one and the
+    /// Field is of the structure the device takes.
+    pub fn presented(&self, report: &entelechy_graph::Report, device: &str) -> Option<Handle> {
+        let output = self
+            .scene
+            .files()
+            .presented
+            .iter()
+            .find(|present| present.device == device)?;
+        let handle = report
             .outputs
             .iter()
-            .find(|(name, _)| name == crate::POINTER_OUTPUT)
-            .map(|(_, handle)| *handle)
-            .filter(|handle| self.is_picture(*handle))
+            .find(|(name, _)| *name == output.output)
+            .map(|(_, handle)| *handle)?;
+        let host = self.runtime.host();
+        let (schema, domain) = (host.schema(handle).ok()?, host.domain(handle).ok()?);
+        entelechy_documents::devices::named(device)
+            .ok()?
+            .fits(domain.shape(), schema)
+            .then_some(handle)
+    }
+
+    /// The output of `report` every interface shows as its pointer: the
+    /// picture the scene gives `to pointer`.
+    pub fn pointer_of(&self, report: &entelechy_graph::Report) -> Option<Handle> {
+        self.presented(report, entelechy_documents::devices::POINTER)
     }
 
     /// The output of `report` that says where the pointer points within its
-    /// picture: the rows named [`crate::HOTSPOT_OUTPUT`] whose first is two
-    /// numbers, when there are such.
+    /// picture: the rows the scene gives `to pointer_tip`.
     pub fn hotspot_of(&self, report: &entelechy_graph::Report) -> Option<Handle> {
-        let host = self.runtime.host();
-        report
-            .outputs
-            .iter()
-            .find(|(name, _)| name == crate::HOTSPOT_OUTPUT)
-            .map(|(_, handle)| *handle)
+        self.presented(report, entelechy_documents::devices::POINTER_TIP)
             .filter(|handle| {
-                let rows = host
+                self.runtime
+                    .host()
                     .domain(*handle)
-                    .is_ok_and(|d| d.shape() == entelechy_kernel::Shape::Rows && d.count() > 0);
-                let two = host.schema(*handle).is_ok_and(|schema| {
-                    let scalars = schema.scalars();
-                    scalars.len() == 2
-                        && scalars.iter().all(|c| {
-                            matches!(
-                                c,
-                                entelechy_kernel::Scalar::Float | entelechy_kernel::Scalar::Int
-                            )
-                        })
-                });
-                rows && two
+                    .is_ok_and(|d| d.count() > 0)
             })
     }
 
-    /// The output of `report` every interface plays, and its channels:
-    /// the first rows of one float (mono) or two (stereo) but the
-    /// pointer's hotspot ([`crate::HOTSPOT_OUTPUT`]).
+    /// The output of `report` every interface plays, and its channels: the
+    /// rows the scene gives `to sound`.
     pub fn sound_of(&self, report: &entelechy_graph::Report) -> Option<(Handle, usize)> {
-        let host = self.runtime.host();
-        report.outputs.iter().find_map(|(name, handle)| {
-            // The pointer's hotspot is two numbers as a stereo sample is.
-            if name == crate::HOTSPOT_OUTPUT {
-                return None;
-            }
-            let rows = host
-                .domain(*handle)
-                .is_ok_and(|d| d.shape() == entelechy_kernel::Shape::Rows);
-            let schema = host.schema(*handle).ok()?;
-            let floats = schema
-                .scalars()
-                .iter()
-                .all(|c| *c == entelechy_kernel::Scalar::Float);
-            let channels = schema.value_words();
-            (rows && floats && (1..=2).contains(&channels)).then_some((*handle, channels))
-        })
+        let handle = self.presented(report, entelechy_documents::devices::SOUND)?;
+        let channels = self.runtime.host().schema(handle).ok()?.value_words();
+        Some((handle, channels))
     }
 
     /// A Field of pixels as an image, brought back from the device first.
@@ -2729,51 +2725,27 @@ fn placed(
 
 /// The Kernels every node of which only shows ([`Graph::shown_only`]):
 /// what reaches only the outputs interfaces present, the picture (the
-/// first output), the pointer ([`Session::pointer_of`],
-/// [`Session::hotspot_of`]) and the sound
-/// ([`Session::sound_of`]).
+/// first output) and what the scene gives a device that shows every frame
+/// ([`entelechy_documents::devices::Device::every_frame`]): the sound, the
+/// pointer.
 fn shown_kernels(
     graph: &entelechy_graph::Graph,
-    runtime: &Runtime,
+    devices: &[entelechy_scene::Present],
 ) -> BTreeSet<entelechy_kernel::KernelId> {
     let mut presented: BTreeSet<String> = graph
         .outputs
         .iter()
         .take(1)
-        .chain(
-            graph
-                .outputs
-                .iter()
-                .filter(|(name, _)| name == crate::POINTER_OUTPUT || name == crate::HOTSPOT_OUTPUT),
-        )
         .map(|(name, _)| name.clone())
         .collect();
-    let sound = graph.outputs.iter().find(|(name, source)| {
-        if name == crate::HOTSPOT_OUTPUT {
-            return false;
-        }
-        let entelechy_graph::Source::Node { node, port } = source else {
-            return false;
-        };
-        let Some(version) = graph
-            .node(node)
-            .and_then(|node| runtime.kernel(&node.kernel))
-        else {
-            return false;
-        };
-        version.manifest().outputs.iter().any(|out| {
-            out.name == *port
-                && out.ty.shape == entelechy_kernel::Shape::Rows
-                && out
-                    .ty
-                    .schema
-                    .scalars()
-                    .iter()
-                    .all(|c| *c == entelechy_kernel::Scalar::Float)
-                && (1..=2).contains(&out.ty.schema.value_words())
-        })
-    });
-    presented.extend(sound.map(|(name, _)| name.clone()));
+    presented.extend(
+        devices
+            .iter()
+            .filter(|present| {
+                entelechy_documents::devices::named(&present.device).is_ok_and(|d| d.every_frame)
+            })
+            .map(|present| present.output.clone()),
+    );
     let shown = graph.shown_only(&presented);
     let mut kernels: BTreeMap<&entelechy_kernel::KernelId, bool> = BTreeMap::new();
     for node in &graph.nodes {

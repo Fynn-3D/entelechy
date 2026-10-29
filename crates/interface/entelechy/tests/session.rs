@@ -1851,7 +1851,7 @@ fn render_writes_a_png_per_frame_and_one_wav_of_every_block() {
 node scope: kernel { requires { field.read; field.write; time.read; } input block: Rows<Vec2> <- tone.result; output result: Image; domain = vec2(320, 240);
     compute { let s = at(block, int(coord().x * 2.5)); let on = abs(coord().y - 120.0 - s.x * 90.0) < 1.5; return vec4(if on { 1.0 } else { 0.0 }, fract(time()), 0.0, 1.0); } }
 output view <- scope.result;
-output sound <- tone.result;
+output sound <- tone.result to sound;
 ",
     )
     .unwrap();
@@ -3776,7 +3776,7 @@ fn a_render_and_a_replay_record_where_out_says() {
 node scope: kernel { requires { field.read; field.write; time.read; } input block: Rows<Vec2> <- tone.result; output result: Image; domain = vec2(32, 24);
     compute { return vec4(fract(time()), 0.0, 0.0, 1.0); } }
 output view <- scope.result;
-output sound <- tone.result;
+output sound <- tone.result to sound;
 ",
     )
     .unwrap();

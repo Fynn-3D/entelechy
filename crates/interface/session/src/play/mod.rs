@@ -203,9 +203,9 @@ pub struct Shown {
 pub enum PointerLook {
     /// The system's own pointer.
     System,
-    /// The scene's picture ([`crate::POINTER_OUTPUT`]): its size, its
-    /// pixels as 8-bit RGBA from the top row down, and the point it points
-    /// with ([`crate::HOTSPOT_OUTPUT`], else its middle).
+    /// The picture the scene gives `to pointer`: its size, its pixels as
+    /// 8-bit RGBA from the top row down, and the point it points with
+    /// (what it gives `to pointer_tip`, else its middle).
     Picture {
         /// Pixels across.
         width: u32,
@@ -226,8 +226,7 @@ impl PointerLook {
         let (width, height) = (image.width(), image.height());
         if width > crate::POINTER_MOST || height > crate::POINTER_MOST {
             return Err(format!(
-                "the `{}` output is {width}x{height} pixels; a pointer is at most {most}x{most}",
-                crate::POINTER_OUTPUT,
+                "the picture `to pointer` is {width}x{height} pixels; a pointer is at most {most}x{most}",
                 most = crate::POINTER_MOST
             ));
         }

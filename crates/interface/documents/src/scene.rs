@@ -752,6 +752,17 @@ impl Scene {
                 return;
             }
         };
+        // An output goes to a device the Host's table knows; its structure
+        // is checked when its Field is there (`entelechy check` before).
+        for present in &lowered.files.presented {
+            if let Err(why) = crate::devices::named(&present.device) {
+                events.push(Event::SceneRejected(Diagnostic::at(
+                    present.at,
+                    format!("output `{}`: {why}", present.output),
+                )));
+                return;
+            }
+        }
         // Events from here on judge this update's own documents.
         let said_from = events.len();
         let declared = (

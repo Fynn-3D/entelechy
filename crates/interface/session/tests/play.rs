@@ -23,7 +23,7 @@ node count: t.count@1 { last <~ count.result from zero.result; domain = 1; }
 node picture: t.picture@1 { count <- count.result; domain = vec2(4, 2); }
 node tone: t.tone@1 { domain = 16; }
 output view <- picture.result;
-output sound <- tone.result;
+output sound <- tone.result to sound;
 ";
 
 fn scratch(name: &str) -> PathBuf {

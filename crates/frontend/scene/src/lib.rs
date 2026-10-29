@@ -159,9 +159,19 @@ pub struct Write {
     /// Whether the Field is a list of operations on the files under the
     /// directory `path` (`to files "dir/"`).
     pub files: bool,
-    /// Whether the Field is text put on the system clipboard (`to
-    /// clipboard`), a character a row to the first 0; `path` is empty.
-    pub clipboard: bool,
+}
+
+/// An output a Host device takes: `output name <- source to device;`. The
+/// device is a name the Host's table knows (`entelechy_documents::devices`);
+/// the scene knows none.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Present {
+    /// The output's name.
+    pub output: String,
+    /// The device, as written.
+    pub device: String,
+    /// Where the device's name is written: a fault in it is said there.
+    pub at: Span,
 }
 
 /// A scene's file contract: inputs read from files, directories read as
@@ -196,6 +206,8 @@ pub struct Files {
     /// The root document's file outputs, written after a committed
     /// evaluation that changed them.
     pub writes: Vec<Write>,
+    /// The root document's outputs a Host device takes, one an output.
+    pub presented: Vec<Present>,
     /// Font nodes, at every level: the session reads their fonts and
     /// gives each the glyphs of the characters its `codes` held when last
     /// evaluated.
@@ -565,6 +577,7 @@ fn lower(
     lowering.out.graph.outputs = level.outputs;
     lowering.out.graph.fallbacks = level.fallbacks;
     lowering.out.files.writes = level.writes;
+    lowering.out.files.presented = level.presented;
     // A requirement the parameters as given break is refused as the
     // document loads; one that reads the window waits for an evaluation,
     // which checks every one again.
@@ -604,6 +617,8 @@ struct Level {
     fallbacks: Vec<(String, Source)>,
     /// The outputs written to files (the root's only).
     writes: Vec<Write>,
+    /// The outputs Host devices take (the root's only).
+    presented: Vec<Present>,
 }
 
 /// Whether a placed graph and its placer agree: every input wired, and
@@ -2173,16 +2188,9 @@ impl Lowering<'_, '_> {
                     "only the scene itself writes files; a placed graph's outputs are wired by the placing graph",
                 ));
             }
-            if write.clipboard && writes.iter().any(|w: &Write| w.clipboard) {
-                return Err(error(
-                    write.path.span,
-                    "the clipboard is written by two outputs",
-                ));
-            }
-            if !write.clipboard
-                && writes
-                    .iter()
-                    .any(|w: &Write| !w.clipboard && w.path == base.join(&write.path.value))
+            if writes
+                .iter()
+                .any(|w: &Write| w.path == base.join(&write.path.value))
             {
                 return Err(error(
                     write.path.span,
@@ -2191,14 +2199,29 @@ impl Lowering<'_, '_> {
             }
             writes.push(Write {
                 output: write.output.clone(),
-                path: if write.clipboard {
-                    PathBuf::new()
-                } else {
-                    base.join(&write.path.value)
-                },
+                path: base.join(&write.path.value),
                 bytes: write.bytes,
                 files: write.files,
-                clipboard: write.clipboard,
+            });
+        }
+        // A document's devices are its own when it is the scene; placed,
+        // its outputs are wired by the placing graph, as its first output is
+        // the window's only when it is the scene.
+        let mut presented: Vec<Present> = Vec::new();
+        for present in document.presents.iter().filter(|_| placement.is_none()) {
+            if presented.iter().any(|p| p.device == present.device.value) {
+                return Err(error(
+                    present.device.span,
+                    format!(
+                        "two outputs go `to {}`; a device takes one",
+                        present.device.value
+                    ),
+                ));
+            }
+            presented.push(Present {
+                output: present.output.clone(),
+                device: present.device.value.clone(),
+                at: present.device.span,
             });
         }
         Ok(Level {
@@ -2215,6 +2238,7 @@ impl Lowering<'_, '_> {
             outputs,
             fallbacks,
             writes,
+            presented,
         })
     }
 }
@@ -3058,14 +3082,12 @@ output raw <- first.result to bytes \"raw.bin\";";
                     path: PathBuf::from("./saves/kept.field"),
                     bytes: false,
                     files: false,
-                    clipboard: false,
                 },
                 Write {
                     output: "raw".into(),
                     path: PathBuf::from("./raw.bin"),
                     bytes: true,
                     files: false,
-                    clipboard: false,
                 },
             ]
         );
@@ -3098,9 +3120,44 @@ output raw <- first.result to bytes \"raw.bin\";";
         // `to` and `else` are words of the document, not of any Kernel.
         let error =
             parse("node a: test.zero@1 { domain = 1; }\noutput x <- a.result to 3;").unwrap_err();
+        assert!(error.message.contains("goes `to` a quoted path"), "{error}");
+        // A bare name is a device, the root's only, one output a device.
+        let lowered = from_document(
+            &entelechy_language::parse_document(
+                "node a: test.zero@1 { domain = 1; }\noutput tone <- a.result to sound;\noutput copied <- a.result to clipboard;",
+            )
+            .unwrap(),
+            "graph",
+        )
+        .unwrap();
+        let devices: Vec<(&str, &str)> = lowered
+            .files
+            .presented
+            .iter()
+            .map(|p| (p.output.as_str(), p.device.as_str()))
+            .collect();
+        assert_eq!(devices, [("tone", "sound"), ("copied", "clipboard")]);
+        assert!(lowered.files.writes.is_empty());
+        let twice = parse(
+            "node a: test.zero@1 { domain = 1; }\noutput x <- a.result to sound;\noutput y <- a.result to sound;",
+        );
         assert!(
-            error.message.contains("written `to` a quoted path"),
-            "{error}"
+            twice
+                .unwrap_err()
+                .message
+                .contains("two outputs go `to sound`"),
+            "a device takes one output"
+        );
+        let mut placing = |path: &Path| -> Result<(PathBuf, String), String> {
+            Ok((
+                path.to_path_buf(),
+                "node a: test.zero@1 { domain = 1; }\noutput result <- a.result to sound;".into(),
+            ))
+        };
+        let placing_lowered = load(&placed, "", "main", Path::new("."), &mut placing).unwrap();
+        assert!(
+            placing_lowered.files.presented.is_empty(),
+            "a placed graph's devices are its own only when it is the scene"
         );
     }
 

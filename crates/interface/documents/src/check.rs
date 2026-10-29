@@ -710,6 +710,26 @@ fn check_in(
             );
         }
     }
+    // Each output given to a device is one the Host's table knows, of the
+    // structure that device takes ([`crate::devices`]).
+    for present in &lowered.files.presented {
+        let at = format!("{file}:{}:{}", present.at.line, present.at.column);
+        let source = lowered
+            .graph
+            .outputs
+            .iter()
+            .find(|(name, _)| *name == present.output)
+            .map(|(_, source)| source);
+        let why = match crate::devices::named(&present.device) {
+            Err(why) => Some(why),
+            Ok(_) => source.and_then(&bound).and_then(|(shape, schema)| {
+                crate::devices::fault(&present.device, shape, schema.as_ref()?)
+            }),
+        };
+        if let Some(why) = why {
+            say!(problem, "{at}: output `{}`: {why}", present.output);
+        }
+    }
     // A frame runs what something reads: a node nothing reads (no output,
     // state, input's fallback while its file is absent, font node's codes
     // or files node's paths) never runs.

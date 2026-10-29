@@ -641,7 +641,7 @@ fn a_host_is_handed_the_pointer_the_scene_draws() {
     domain = vec2(4, 2);
     compute {{ return vec4(1.0, 0.5, 0.0, 1.0); }}
 }}
-output cursor <- mark.result;
+output cursor <- mark.result to pointer;
 "
     );
     let (_dir, path) = scene_in("pointer", &scene);

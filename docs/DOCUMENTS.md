@@ -820,13 +820,11 @@ be keywords.
    state it reads.
 2. A source is a graph input by name or `node.port`. Inputs and nodes
    share one namespace. A graph may declare several outputs; which
-   device takes which is decided by structure (a grid of pixels for the
-   window, rows of one or two floats for the sound card, the pointer's
-   hotspot apart), and the pointer by name: the picture `cursor` (at most 128 by 128) is the
-   system's pointer, pointing with the pixel the first row of
-   `cursor_hotspot` names (two numbers across and down from its top
-   left; its middle without one)
-   ([why](DECISIONS.md#the-pointer-is-a-picture-the-scene-names)).
+   device takes which the scene says: the window shows the first
+   picture given no device, and an output goes to a Host device by its
+   name, `output name <- source to device;`. Nothing is taken by its
+   structure or its name
+   ([why](DECISIONS.md#an-output-goes-to-a-host-device-the-scene-names)).
 3. Every declared input port must be wired, and a port the Kernel does
    not declare is an error; both are reported before anything runs.
 4. Values use `=`: numbers, `true`/`false`, negation,
@@ -907,11 +905,20 @@ be keywords.
    spells them; a malformed list is refused whole. Each list is done once,
    in order, when it differs from the last one done; a write needs
    `--allow file.write`, a removal or a rename `--allow file.delete` too.
-   `to clipboard` takes a `Rows<Int>` of characters and puts them, to
-   the first 0, on the clipboard an input `= clipboard` reads, when it
-   changes and is not empty; one output writes it. The system's
-   clipboard, in the Player, needs `--allow clipboard.write`.
-   A placed graph's outputs are wired, never written
+   A bare name after `to` is a Host device, which takes one output of
+   the structure it names, checked before anything runs (`entelechy
+   check`) and a name the Host has not refused with the nearest it has:
+   `to sound` takes rows of one float (mono) or two (stereo), a block of
+   samples each frame; `to pointer` a picture of at most 128 by 128, the
+   system's pointer in every interface, in the system's own units, one
+   clear throughout hiding it; `to pointer_tip` rows whose first is two
+   numbers, the pixel of that picture it points with, across and down
+   from its top left (its middle without one); `to clipboard` a
+   `Rows<Int>` of characters, put, to the first 0, on the clipboard an
+   input `= clipboard` reads, when it changes and is not empty. The
+   system's clipboard, in the Player, needs `--allow clipboard.write`.
+   A placed graph's devices are its own only when it is the scene;
+   placed, its outputs are wired. A placed graph's outputs are wired, never written
    ([decision](DECISIONS.md#a-kernels-effects-are-data-the-host-carries-out-after-a-commit)).
    A font is placed as a node too: `node g: font "x.ttf" { codes <-
    wanted.result; }`. The Host reads the font file (TrueType or

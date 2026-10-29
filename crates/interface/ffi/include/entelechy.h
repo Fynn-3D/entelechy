@@ -67,9 +67,9 @@ typedef struct EntelechyField {
     const char *schema;
 } EntelechyField;
 
-/* The pointer a scene draws (its picture output named `cursor`): 8-bit
+/* The pointer a scene draws (the picture it gives `to pointer`): 8-bit
  * RGBA, `width` by `height`, from the top row down, and the pixel it
- * points with (`cursor_hotspot`'s, else its middle). */
+ * points with (what it gives `to pointer_tip`, else its middle). */
 typedef struct EntelechyPointer {
     const uint8_t *rgba;
     uint32_t width;

@@ -195,7 +195,7 @@ kernel {name}.draw@1 {{
     );
     let scene = format!(
         r#"// The voice writes a block of samples a frame; the scene plays it
-// and draws it. `output sound` is what the Player sends to the device.
+// and draws it. `to sound` gives the block to the sound card.
 use "kernels/";
 
 param pitch: Float = 220.0;
@@ -204,7 +204,7 @@ node voice: {name}.voice@1 {{ pitch = pitch; domain = 800; }}
 node picture: {name}.draw@1 {{ block <- voice.result; domain = window(); }}
 
 output result <- picture.result;
-output sound <- voice.result;
+output sound <- voice.result to sound;
 "#
     );
     let replay = r#"scene ../scene.esn
@@ -222,7 +222,7 @@ expect voice.result[200] = -0.199282 0.0005
         r#"# {name}
 
 A voice and a picture of it. The voice writes a block of 800 samples
-every frame, which the scene plays through `output sound`, and the
+every frame, which the scene gives the sound card (`to sound`), and the
 picture draws the block it just wrote.
 
 ```sh

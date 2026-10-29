@@ -1,7 +1,7 @@
 //! A scene document's surface is a contract with every written scene.
 //! `tests/surface/` holds documents covering every scene form (wiring,
 //! values, state, inline Kernels, extents, Field nodes, native operations,
-//! placed graphs, repetition, Host inputs and nodes), each beside the Graph it
+//! placed graphs, repetition, Host inputs and nodes, Host devices), each beside the Graph it
 //! lowers to at `LANGUAGE_VERSION`.
 //!
 //! A changed lowering waits for a new `LANGUAGE_VERSION`. Every Kernel a
@@ -121,6 +121,12 @@ fn lowered(path: &Path) -> Result<String, String> {
             "// writes {} {}{kind}\n",
             write.output,
             relative(&write.path, &base)
+        ));
+    }
+    for present in &lowered.files.presented {
+        out.push_str(&format!(
+            "// gives {} to {}\n",
+            present.output, present.device
         ));
     }
     for param in &graph.times_params {

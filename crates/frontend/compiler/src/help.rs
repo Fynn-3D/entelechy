@@ -351,7 +351,7 @@ pub fn forms() -> Vec<Form> {
             "output",
             "kernel",
             "output result: Grid<Vec4>;   output shown <- node.port;   output kept <- node.port to \"saves/n.field\";",
-            "In a Kernel, a Field it writes, an element per element of its domain (a map may write several); in a scene, a named result: the first picture is what it shows, the first row of one or two Floats (mono, stereo) what it plays, a block each frame joined to the last (`rate()` over the frame rate samples keeps it in time), and one written `to` a file is saved after each evaluation that changed it, where allowed; one written `to files` a directory is a list of operations on its files (write, remove, rename), done once each time it changes.",
+            "In a Kernel, a Field it writes, an element per element of its domain (a map may write several); in a scene, a named result: the first picture given no device is what it shows; one given `to` a Host device by its name goes there (`to sound`, a block of samples each frame joined to the last, `rate()` over the frame rate keeping it in time; `to pointer`, `to pointer_tip`, `to clipboard`; a name the Host has not, or a Field of another structure, is refused with what the device takes); one written `to` a file is saved after each evaluation that changed it, where allowed; one written `to files` a directory is a list of operations on its files (write, remove, rename), done once each time it changes.",
         ),
         form(
             "type",

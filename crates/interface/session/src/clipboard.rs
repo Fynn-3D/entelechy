@@ -166,11 +166,14 @@ impl Board {
     /// and none after puts the same text again when copied again.
     pub(crate) fn after(
         &mut self,
-        writes: &[entelechy_scene::Write],
+        presented: &[entelechy_scene::Present],
         report: &Report,
         runtime: &mut Runtime,
     ) {
-        for write in writes.iter().filter(|write| write.clipboard) {
+        let to_clipboard = presented
+            .iter()
+            .filter(|present| present.device == entelechy_documents::devices::CLIPBOARD);
+        for write in to_clipboard {
             let Some(handle) = report
                 .outputs
                 .iter()

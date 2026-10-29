@@ -374,6 +374,7 @@ pub(crate) fn graph_json(
     fonts: &[entelechy_scene::FontNode],
     file_nodes: &[entelechy_scene::FilesNode],
     field_nodes: &[entelechy_scene::FieldsNode],
+    devices: &[entelechy_scene::Present],
 ) -> Json {
     let source = |source: &Source| source.to_string();
     let placed = |node: &str| placements.iter().find(|(id, _)| id == node).map(|(_, p)| p);
@@ -407,7 +408,10 @@ pub(crate) fn graph_json(
             }),
             "async": node.is_async,
         })).collect::<Vec<_>>(),
-        "outputs": graph.outputs.iter().map(|(name, s)| json!({ "name": name, "source": source(s) })).collect::<Vec<_>>(),
+        "outputs": graph.outputs.iter().map(|(name, s)| {
+            let device = devices.iter().find(|d| d.output == *name).map(|d| d.device.as_str());
+            json!({ "name": name, "source": source(s), "to": device })
+        }).collect::<Vec<_>>(),
         "fonts": fonts.iter().map(|font| json!({
             "id": font.node,
             "kind": "font",

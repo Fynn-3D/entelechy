@@ -107,6 +107,8 @@ pub struct Document {
     pub outputs: Vec<(Spanned<String>, SourceRef)>,
     /// Outputs also written to a file: `output name <- source to "file";`.
     pub writes: Vec<WriteDecl>,
+    /// Outputs a Host device takes: `output name <- source to sound;`.
+    pub presents: Vec<PresentDecl>,
     /// Nodes in document order.
     pub nodes: Vec<NodeDecl>,
 }
@@ -199,10 +201,20 @@ pub struct NodeMemberAt {
     pub range: Range<usize>,
 }
 
-/// `to "file"`, `to bytes "file"`, `to files "dir/"` or `to clipboard`
-/// after an output: the file, relative to the document, the output's
-/// Field is written to, the directory its operations act in, or the
-/// system clipboard its text is put on.
+/// `to name` after an output, a bare name: the Host device its Field goes
+/// to. The language knows no device; the Host's table of them does
+/// (`entelechy_documents::devices`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PresentDecl {
+    /// The output presented.
+    pub output: String,
+    /// The device, as written.
+    pub device: Spanned<String>,
+}
+
+/// `to "file"`, `to bytes "file"` or `to files "dir/"` after an output:
+/// the file, relative to the document, the output's Field is written to,
+/// or the directory its operations act in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WriteDecl {
     /// The output written.
@@ -215,9 +227,6 @@ pub struct WriteDecl {
     /// The Field is a list of operations on the files under the directory
     /// `path`: each written, removed or renamed.
     pub files: bool,
-    /// The Field is text put on the system clipboard, a character a row
-    /// to the first 0; `path` is empty, its span the word's.
-    pub clipboard: bool,
 }
 
 impl Document {

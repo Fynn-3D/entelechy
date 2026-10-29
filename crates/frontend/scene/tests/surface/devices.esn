@@ -1,0 +1,14 @@
+// Outputs a Host device takes, each named after `to`: the window shows
+// the first picture given no device; the sound card, the system's
+// pointer and the point it points with, and the clipboard each take one.
+node view: image.show@1 { domain = vec2(4, 4); }
+node tone: sound.tone@1 { domain = 800; }
+node arrow: pointer.look@1 { domain = vec2(32, 32); }
+node tip: pointer.tip@1 { domain = 1; }
+node copied: text.copy@1 { domain = 16; }
+
+output result <- view.result;
+output music <- tone.result to sound;
+output cursor <- arrow.result to pointer;
+output aim <- tip.result to pointer_tip;
+output text <- copied.result to clipboard;
