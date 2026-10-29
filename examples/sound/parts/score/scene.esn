@@ -12,4 +12,4 @@ node voice: score.voice@1 { song <- song; loops = loops; gain = gain; domain = 8
 node roll: score.roll@1 { song <- song; loops = loops; domain = window(); }
 
 output result <- roll.result;
-output sound <- voice.result;
+output sound <- voice.result to sound;

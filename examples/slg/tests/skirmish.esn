@@ -50,4 +50,4 @@ node music: bgm.play@1 { previous <~ music.result from quiet.result; clock <- cl
 node sound: bgm.stereo@1 { music <- music.result; }
 
 output result <- view.result;
-output sound <- sound.result;
+output sound <- sound.result to sound;

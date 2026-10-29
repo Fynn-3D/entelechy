@@ -25,4 +25,4 @@ node glyphs: text.layout@1 { codes <- label.result; origin = vec2(12.0, 12.0); s
 node shown: text.draw@1 { under <- view.result; glyphs <- glyphs.result; font <- font; }
 
 output result <- shown.result;
-output sound <- voice.result;
+output sound <- voice.result to sound;

@@ -13,4 +13,4 @@ node spectrum: graph "spectrum.esn" {
 }
 
 output result <- spectrum.result;
-output sound <- spectrum.sound;
+output sound <- spectrum.sound to sound;

@@ -9,4 +9,4 @@ node block: sampler.block@1 { state <- state.result; clip <- kick; domain = 800;
 node scope: sampler.scope@1 { block <- block.result; domain = vec2(320, 120); }
 
 output view <- scope.result;
-output sound <- block.result;
+output sound <- block.result to sound;

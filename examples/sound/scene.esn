@@ -21,4 +21,4 @@ node mix: sound.mix@1 { stereo <- synth.sound; mono <- spectrum.sound; }
 node side: sound.side@1 { left <- synth.view; right <- spectrum.result; domain = window(); }
 
 output view <- side.result;
-output sound <- mix.result;
+output sound <- mix.result to sound;

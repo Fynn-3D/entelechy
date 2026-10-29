@@ -22,4 +22,4 @@ node scope: synth.scope@1 {
 }
 
 output view <- scope.result;
-output sound <- mix.result;
+output sound <- mix.result to sound;

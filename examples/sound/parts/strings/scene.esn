@@ -19,4 +19,4 @@ node play: strings.play@1 {
 node view: strings.draw@1 { line <- play.line; domain = window(); }
 
 output result <- view.result;
-output sound <- play.result;
+output sound <- play.result to sound;
