@@ -84,7 +84,9 @@ const char *entelechy_version(void);
 /* Opens `scene` (a `.esn` path) on `backend` ("cpu", "gpu", "jit", or
  * "best": the GPU where there is a device, else the JIT, else the
  * interpreter; NULL for "best"), with `library` an extra file or
- * directory of Kernels or NULL, reads its documents and inputs, and
+ * directory of Kernels or NULL, reads its documents and inputs (a
+ * package used by name found where every front finds it, in
+ * ENTELECHY_PACKAGES, then a release's own `packages`), and
  * returns the session; NULL
  * when the backend cannot be opened or the scene does not load, with
  * the reason in entelechy_open_error(). A scene whose Kernels are partly

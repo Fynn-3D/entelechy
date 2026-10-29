@@ -477,8 +477,10 @@ fn opened(
         std::ptr::null_mut()
     };
     let made = catch_unwind(AssertUnwindSafe(|| {
+        // The disk, finding packages where every front finds them
+        // (`ENTELECHY_PACKAGES`, then a release's own); a page hands its files in.
         let store =
-            store.unwrap_or_else(|| std::sync::Arc::new(entelechy_session::Disk::default()));
+            store.unwrap_or_else(|| entelechy_session::SessionOptions::from_environment().store());
         let (scene, library, replay) = match opening {
             Opening::Scene(scene, library) => {
                 (scene.to_path_buf(), library.map(Path::to_path_buf), None)
