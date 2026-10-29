@@ -594,7 +594,10 @@ impl Session {
             self.inputs
                 .sync(&store, &declared, &readable, &mut self.runtime, &mut events);
         self.copies_let_go.extend(on_device);
-        let clipboards = self.scene.files().clipboards.clone();
+        let clipboards = self
+            .scene
+            .files()
+            .fed_by(entelechy_documents::devices::CLIPBOARD);
         self.board.sync(
             &clipboards,
             &mut self.inputs,
@@ -746,7 +749,10 @@ impl Session {
     /// and has the scene's `= clipboard` inputs hold it at once.
     pub fn place_clipboard(&mut self, text: &str) -> Result<(), String> {
         self.board.place(text)?;
-        let clipboards = self.scene.files().clipboards.clone();
+        let clipboards = self
+            .scene
+            .files()
+            .fed_by(entelechy_documents::devices::CLIPBOARD);
         let mut events = Vec::new();
         self.board.sync(
             &clipboards,
@@ -1867,7 +1873,10 @@ impl Session {
     /// Holds the Kernels watched preparing in the scene's `= progress`
     /// inputs: read each evaluation, as the clock is.
     fn hold_progress(&mut self) {
-        let progresses = self.scene.files().progresses.clone();
+        let progresses = self
+            .scene
+            .files()
+            .fed_by(entelechy_documents::devices::PROGRESS);
         let mut events = Vec::new();
         self.watched.sync(
             &progresses,
@@ -2541,6 +2550,8 @@ impl Session {
         let (schema, domain) = (host.schema(handle).ok()?, host.domain(handle).ok()?);
         entelechy_documents::devices::named(device)
             .ok()?
+            .takes
+            .as_ref()?
             .fits(domain.shape(), schema)
             .then_some(handle)
     }

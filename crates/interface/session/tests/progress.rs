@@ -57,5 +57,9 @@ fn progress_is_read_as_words() {
     );
     assert!(session.graph().is_none());
     let said = format!("{events:?}");
-    assert!(said.contains("`Rows<Int>`, not `Rows<Float>`"), "{said}");
+    assert!(
+        said.contains("`= progress` gives words, a `Rows<Int>`"),
+        "{said}"
+    );
+    assert!(said.contains("not `Rows<Float>`"), "{said}");
 }

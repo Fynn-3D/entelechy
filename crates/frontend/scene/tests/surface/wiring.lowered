@@ -1,4 +1,4 @@
-language 2
+language 3
 // wiring
 input photo: Image;
 param amount: Float = 1.0;

@@ -66,7 +66,7 @@ pub use rename::renamed_type;
 pub use scope::{Declarations, Qualified, Source, qualified, scope, written_name};
 
 /// The version of the Kernel language and the document format.
-pub const LANGUAGE_VERSION: u32 = 2;
+pub const LANGUAGE_VERSION: u32 = 3;
 
 /// `package name@version { language = N; ir = N; }`: a package manifest.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -705,11 +705,10 @@ pub struct PortDecl {
     /// Document inputs only: what the documents of a file or a directory
     /// define, as text, `= outline "src/"`.
     pub outline: Option<Spanned<String>>,
-    /// Document inputs only: the system clipboard's text, `= clipboard`.
-    pub clipboard: Option<Span>,
-    /// Document inputs only: Kernels preparing and the scene they are
-    /// for, as words, `= progress`.
-    pub progress: Option<Span>,
+    /// Document inputs only: a Host device it reads, a bare name after `=`
+    /// (`= clipboard`, `= progress`). The language knows no device; the
+    /// Host's table does (`entelechy_documents::devices`).
+    pub device: Option<Spanned<String>>,
     /// What a file input reads while its file is unreadable:
     /// `... else fresh.result`.
     pub otherwise: Option<SourceRef>,

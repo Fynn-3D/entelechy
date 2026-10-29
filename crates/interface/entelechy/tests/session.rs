@@ -1822,14 +1822,20 @@ fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!output.status.success(), "{stdout}");
     assert!(
-        stdout.contains("package pixelfx@1 needs language 99, and this Entelechy has language 2"),
+        stdout.contains(&format!(
+            "package pixelfx@1 needs language 99, and this Entelechy has language {}",
+            entelechy_language::LANGUAGE_VERSION
+        )),
         "{stdout}"
     );
     let output = Command::new(entelechy).arg("version").output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.starts_with(&format!("entelechy = {}\n", env!("CARGO_PKG_VERSION")))
-            && stdout.contains("entelechy.language = 2")
+            && stdout.contains(&format!(
+                "entelechy.language = {}",
+                entelechy_language::LANGUAGE_VERSION
+            ))
             && stdout.contains("entelechy.package = 1"),
         "{stdout}"
     );

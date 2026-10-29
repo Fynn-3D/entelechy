@@ -161,6 +161,21 @@ pub struct Write {
     pub files: bool,
 }
 
+/// An input a Host device feeds: `input name: Type = device;`. The device
+/// is a name the Host's table knows (`entelechy_documents::devices`); the
+/// scene knows none.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Feed {
+    /// The input's name.
+    pub input: String,
+    /// The device, as written.
+    pub device: String,
+    /// The input's type, aliases resolved: the device gives one structure.
+    pub ty: String,
+    /// Where the device's name is written: a fault in it is said there.
+    pub at: Span,
+}
+
 /// An output a Host device takes: `output name <- source to device;`. The
 /// device is a name the Host's table knows (`entelechy_documents::devices`);
 /// the scene knows none.
@@ -195,14 +210,9 @@ pub struct Files {
     /// define, as text: name, resolved path. The session reads them again
     /// when one changes.
     pub outlines: Vec<(String, PathBuf)>,
-    /// Externals holding the system clipboard's text, a character a row
-    /// and a 0 after the last (`= clipboard`): the session reads it again
-    /// when it changes.
-    pub clipboards: Vec<String>,
-    /// Externals holding the Kernels the session watches preparing and
-    /// the scene they are for, as words (`= progress`): the session holds
-    /// them again when they change.
-    pub progresses: Vec<String>,
+    /// Externals a Host device feeds, the root's only: `= clipboard`,
+    /// `= progress`. The session reads each again when its device changes.
+    pub feeds: Vec<Feed>,
     /// The root document's file outputs, written after a committed
     /// evaluation that changed them.
     pub writes: Vec<Write>,
@@ -218,6 +228,17 @@ pub struct Files {
     /// Fields nodes, at every level: the session reads, off the frames,
     /// the Field files each node's `paths` named when last evaluated.
     pub field_nodes: Vec<FieldsNode>,
+}
+
+impl Files {
+    /// The inputs device `device` feeds, by name.
+    pub fn fed_by(&self, device: &str) -> Vec<String> {
+        self.feeds
+            .iter()
+            .filter(|feed| feed.device == device)
+            .map(|feed| feed.input.clone())
+            .collect()
+    }
 }
 
 /// A `font` node: `node g: font "x.ttf" { codes <- c.result; }`. It is
@@ -571,8 +592,7 @@ fn lower(
     lowering.out.files.checks = level.checks;
     lowering.out.files.files = level.files;
     lowering.out.files.outlines = level.outlines;
-    lowering.out.files.clipboards = level.clipboards;
-    lowering.out.files.progresses = level.progresses;
+    lowering.out.files.feeds = level.feeds;
     lowering.out.graph.params = level.params;
     lowering.out.graph.outputs = level.outputs;
     lowering.out.graph.fallbacks = level.fallbacks;
@@ -608,8 +628,7 @@ struct Level {
     checks: Vec<(String, PathBuf)>,
     files: Vec<(String, PathBuf)>,
     outlines: Vec<(String, PathBuf)>,
-    clipboards: Vec<String>,
-    progresses: Vec<String>,
+    feeds: Vec<Feed>,
     params: Vec<GraphParam>,
     /// Outputs in declaration order; the first is the primary.
     outputs: Vec<(String, Source)>,
@@ -690,8 +709,7 @@ struct Inputs {
     checks: Vec<(String, PathBuf)>,
     files: Vec<(String, PathBuf)>,
     outlines: Vec<(String, PathBuf)>,
-    clipboards: Vec<String>,
-    progresses: Vec<String>,
+    feeds: Vec<Feed>,
 }
 
 /// Where a document is lowered: its node prefix, what its placing graph
@@ -1223,8 +1241,7 @@ impl Lowering<'_, '_> {
         let mut checks = Vec::new();
         let mut files = Vec::new();
         let mut outlines = Vec::new();
-        let mut clipboards = Vec::new();
-        let mut progresses = Vec::new();
+        let mut feeds = Vec::new();
         for input in &document.inputs {
             // What arrives is checked by shape and layout where it binds.
             if input.binding.is_some() {
@@ -1344,39 +1361,15 @@ impl Lowering<'_, '_> {
                 }
                 outlines.push((input.name.value.clone(), base.join(&outlined.value)));
             }
-            if let Some(span) = input.clipboard {
-                if placement.is_some() {
-                    return Err(error(
-                        span,
-                        "a placed graph's input is wired by the placing graph; it cannot read the clipboard",
-                    ));
-                }
-                let ty = resolved(&input.ty.value, &self.aliases);
-                if ty != "Rows<Int>" {
-                    return Err(error(
-                        input.ty.span,
-                        format!(
-                            "the clipboard is text, a character a row: `Rows<Int>`, not `{ty}`"
-                        ),
-                    ));
-                }
-                clipboards.push(input.name.value.clone());
-            }
-            if let Some(span) = input.progress {
-                if placement.is_some() {
-                    return Err(error(
-                        span,
-                        "a placed graph's input is wired by the placing graph; it cannot read Kernels preparing",
-                    ));
-                }
-                let ty = resolved(&input.ty.value, &self.aliases);
-                if ty != "Rows<Int>" {
-                    return Err(error(
-                        input.ty.span,
-                        format!("Kernels preparing are read as words: `Rows<Int>`, not `{ty}`"),
-                    ));
-                }
-                progresses.push(input.name.value.clone());
+            // A device fills the scene's own inputs; placed, an input is
+            // wired by the placing graph, as a placed graph's outputs are.
+            if let Some(device) = input.device.as_ref().filter(|_| placement.is_none()) {
+                feeds.push(Feed {
+                    input: input.name.value.clone(),
+                    device: device.value.clone(),
+                    ty: resolved(&input.ty.value, &self.aliases),
+                    at: device.span,
+                });
             }
             externals.push(input.name.value.clone());
         }
@@ -1388,8 +1381,7 @@ impl Lowering<'_, '_> {
             checks,
             files,
             outlines,
-            clipboards,
-            progresses,
+            feeds,
         })
     }
 
@@ -1603,8 +1595,7 @@ impl Lowering<'_, '_> {
             checks,
             files,
             outlines,
-            clipboards,
-            progresses,
+            feeds,
         } = self.inputs(document, base, placement)?;
         let params = self.params(document)?;
         // The root's params, read before any sub-graph: a sub-graph's
@@ -2232,8 +2223,7 @@ impl Lowering<'_, '_> {
             checks,
             files,
             outlines,
-            clipboards,
-            progresses,
+            feeds,
             params,
             outputs,
             fallbacks,

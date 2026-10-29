@@ -498,9 +498,14 @@ changes:
   (path_len, size, path.., bytes..)*]`, the path relative to the
   directory, parted by `/`. Read again on sync when one of them changes,
   or which there are.
+A bare name after `=` is a Host device that feeds the input, from the
+one table that names the devices outputs go `to`: a name the Host has
+not, a device that feeds nothing, or a type other than the one it gives
+is refused as the scene loads. A placed graph's are its own only when it
+is the scene; placed, its inputs are wired.
+
 - `input pasted: Rows<Int> = clipboard;`: the clipboard's text, a
-  character (a code point) a row and a 0 after the last; a scene's own
-  inputs only. In the Player the clipboard is the system's, read only
+  character (a code point) a row and a 0 after the last. In the Player the clipboard is the system's, read only
   with `--allow clipboard.read` (empty without), looked at again at most
   four times a second; elsewhere it is the session's own, which a
   replay's `clipboard "text"` fills.
@@ -513,7 +518,7 @@ changes:
   compiled is done once nothing waits or runs); then each link's two
   nodes, by place, each pair once, the lower first; then the name of the
   Kernel running longest, a character a word, and a 0. Read again each
-  evaluation; a scene's own inputs only. A scene watches its own Kernels,
+  evaluation. A scene watches its own Kernels,
   unless the caller gives it another's (`Session::watch`).
 - `input saved: Rows<Tally> = "saves/tally.field" else fresh.result;`
   reads `fresh.result` until the file exists (`examples/data/parts/save`).
@@ -824,7 +829,7 @@ be keywords.
    picture given no device, and an output goes to a Host device by its
    name, `output name <- source to device;`. Nothing is taken by its
    structure or its name
-   ([why](DECISIONS.md#an-output-goes-to-a-host-device-the-scene-names)).
+   ([why](DECISIONS.md#the-scene-names-the-host-device-an-output-or-input-meets)).
 3. Every declared input port must be wired, and a port the Kernel does
    not declare is an error; both are reported before anything runs.
 4. Values use `=`: numbers, `true`/`false`, negation,

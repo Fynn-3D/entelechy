@@ -1,4 +1,4 @@
-language 2
+language 3
 // devices
 
 node view: image.show@1 {

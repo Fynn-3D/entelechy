@@ -1,4 +1,4 @@
-language 2
+language 3
 // state
 
 node seed: life.seed@1 {

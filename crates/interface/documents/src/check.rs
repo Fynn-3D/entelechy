@@ -640,37 +640,7 @@ fn check_in(
                     return Some((entelechy_ir::Shape::Rows, schema));
                 }
                 let asset = lowered.files.assets.iter().find(|a| a.name == *name)?;
-                let ty = asset.ty.trim();
-                let shape = if asset.bytes || ty.starts_with("Rows<") {
-                    entelechy_ir::Shape::Rows
-                } else if ty.starts_with("Grid<") || ty == "Image" {
-                    entelechy_ir::Shape::Grid
-                } else if ty.starts_with("Volume<") {
-                    entelechy_ir::Shape::Volume
-                } else {
-                    return None;
-                };
-                // A layout too where the element is one of the language's
-                // own, kept as its words: a struct's is its document's.
-                // Bytes are Ints unless the input says how they are kept
-                // (`Rows<Int as u8>`), which the declared element carries.
-                let declared = ty
-                    .split_once('<')
-                    .and_then(|(_, rest)| rest.strip_suffix('>'))
-                    .map(str::trim);
-                let element = if ty == "Image" {
-                    "Vec4"
-                } else if asset.bytes {
-                    declared.unwrap_or("Int")
-                } else {
-                    declared.unwrap_or("")
-                };
-                let schema = element
-                    .parse::<entelechy_ir::Type>()
-                    .ok()
-                    .filter(|_| !element.contains(" as "))
-                    .and_then(|element| entelechy_ir::schema_of(element, &[]));
-                Some((shape, schema))
+                crate::devices::declared(&asset.ty, asset.bytes)
             }
         }
     };

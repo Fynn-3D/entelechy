@@ -752,16 +752,32 @@ impl Scene {
                 return;
             }
         };
-        // An output goes to a device the Host's table knows; its structure
-        // is checked when its Field is there (`entelechy check` before).
-        for present in &lowered.files.presented {
-            if let Err(why) = crate::devices::named(&present.device) {
-                events.push(Event::SceneRejected(Diagnostic::at(
-                    present.at,
-                    format!("output `{}`: {why}", present.output),
-                )));
-                return;
-            }
+        // An output goes to a device the Host's table knows that takes one
+        // (its structure checked when its Field is there, `entelechy check`
+        // before); an input is fed by one that gives the type it declares.
+        let refused = lowered
+            .files
+            .presented
+            .iter()
+            .find_map(|present| {
+                let why = match crate::devices::named(&present.device) {
+                    Err(why) => why,
+                    Ok(device) if device.takes.is_none() => {
+                        format!("`{}` feeds an input and takes no output", present.device)
+                    }
+                    Ok(_) => return None,
+                };
+                Some((present.at, format!("output `{}`: {why}", present.output)))
+            })
+            .or_else(|| {
+                lowered.files.feeds.iter().find_map(|feed| {
+                    crate::devices::feed_fault(&feed.device, &feed.ty)
+                        .map(|why| (feed.at, format!("input `{}`: {why}", feed.input)))
+                })
+            });
+        if let Some((at, why)) = refused {
+            events.push(Event::SceneRejected(Diagnostic::at(at, why)));
+            return;
         }
         // Events from here on judge this update's own documents.
         let said_from = events.len();

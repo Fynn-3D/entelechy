@@ -289,3 +289,34 @@ fn a_check_holds_each_output_to_its_devices_structure() {
         "each said where it is written: {problems:?}"
     );
 }
+
+/// One table holds both sides: a device feeds an input only when it gives
+/// something and takes an output only when it takes something, and a name
+/// it has not is refused with the nearest.
+#[test]
+fn a_device_is_read_or_given_only_as_the_host_has_it() {
+    let dir = scratch("sides", None);
+    for (scene, said) in [
+        (
+            "input heard: Rows<Float> = sound;\nnode view: t.view@1 { domain = vec2(4, 4); }\noutput view <- view.result;\n",
+            "`sound` takes an output and feeds no input",
+        ),
+        (
+            "input pasted: Rows<Int> = clipbord;\nnode view: t.view@1 { domain = vec2(4, 4); }\noutput view <- view.result;\n",
+            "no device `clipbord`",
+        ),
+        (
+            "node view: t.view@1 { domain = vec2(4, 4); }\noutput view <- view.result;\noutput shown <- view.result to progress;\n",
+            "`progress` feeds an input and takes no output",
+        ),
+    ] {
+        std::fs::write(dir.join("scene.esn"), format!("use \"k.ent\";\n{scene}")).unwrap();
+        let mut session = Session::open(&dir.join("scene.esn"), None, 1 << 20);
+        let events: Vec<String> = session.sync().iter().map(ToString::to_string).collect();
+        assert!(session.graph().is_none(), "{events:?}");
+        assert!(
+            events.iter().any(|e| e.contains(said)),
+            "{said}: {events:?}"
+        );
+    }
+}

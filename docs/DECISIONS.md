@@ -420,19 +420,21 @@ are the Host's IO; a page is another Host, not another product.
 [the play's tests](../crates/interface/session/tests/play.rs) and the web
 bridge's.
 
-## An output goes to a Host device the scene names
+## The scene names the Host device an output or input meets
 
 A Field says nothing of what it is: a `Rows<Vec2>` is a stereo block, a
-path or a pixel alike. So the scene says where an output goes, at the
-edge of its graph, as it says a file is written there: `output name <-
-source to device;`, the device a bare name. The language knows no
-device; the Host keeps one table of them, each with the structure it
-takes, which `entelechy check` holds every output to before anything
-runs and loading refuses a name the Host has not with the nearest it
-has. The window shows the first picture given no device, as it shows
+path or a pixel alike. So the scene says where an output goes and what
+feeds an input, at the edge of its graph, as it says a file is written
+or read there: `output name <- source to device;`, `input name: Type =
+device;`, the device a bare name. The language knows no device; the
+Host keeps one table of them, each with the structure it takes from an
+output and gives an input, either or both. `entelechy check` holds every
+output to its device before anything runs, and loading refuses a name
+the Host has not with the nearest it has, a device on the side it has
+not, and an input of a type its device does not give. The window shows the first picture given no device, as it shows
 the first output. A placed graph's devices are its own only when it is
-the scene; placed, its outputs are wired. Nothing is given to a device
-by its structure or by its name.
+the scene; placed, its outputs and inputs are wired. Nothing is given to
+or read from a device by its structure or by its name.
 
 **Why.** Taken by structure, two outputs of one structure were taken for
 one another (a pointer's hotspot played as sound); taken by name, a name
