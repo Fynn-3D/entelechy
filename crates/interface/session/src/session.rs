@@ -2513,6 +2513,45 @@ impl Session {
         Some((device, width, height))
     }
 
+    /// The output of `report` every interface shows as its pointer: the
+    /// picture named [`crate::POINTER_OUTPUT`], when there is one.
+    pub fn pointer_of(&self, report: &entelechy_graph::Report) -> Option<Handle> {
+        report
+            .outputs
+            .iter()
+            .find(|(name, _)| name == crate::POINTER_OUTPUT)
+            .map(|(_, handle)| *handle)
+            .filter(|handle| self.is_picture(*handle))
+    }
+
+    /// The output of `report` that says where the pointer points within its
+    /// picture: the rows named [`crate::HOTSPOT_OUTPUT`] whose first is two
+    /// numbers, when there are such.
+    pub fn hotspot_of(&self, report: &entelechy_graph::Report) -> Option<Handle> {
+        let host = self.runtime.host();
+        report
+            .outputs
+            .iter()
+            .find(|(name, _)| name == crate::HOTSPOT_OUTPUT)
+            .map(|(_, handle)| *handle)
+            .filter(|handle| {
+                let rows = host
+                    .domain(*handle)
+                    .is_ok_and(|d| d.shape() == entelechy_kernel::Shape::Rows && d.count() > 0);
+                let two = host.schema(*handle).is_ok_and(|schema| {
+                    let scalars = schema.scalars();
+                    scalars.len() == 2
+                        && scalars.iter().all(|c| {
+                            matches!(
+                                c,
+                                entelechy_kernel::Scalar::Float | entelechy_kernel::Scalar::Int
+                            )
+                        })
+                });
+                rows && two
+            })
+    }
+
     /// The output of `report` every interface plays, and its channels:
     /// the first rows of one float (mono) or two (stereo).
     pub fn sound_of(&self, report: &entelechy_graph::Report) -> Option<(Handle, usize)> {
@@ -2685,7 +2724,9 @@ fn placed(
 
 /// The Kernels every node of which only shows ([`Graph::shown_only`]):
 /// what reaches only the outputs interfaces present, the picture (the
-/// first output) and the sound ([`Session::sound_of`]).
+/// first output), the pointer ([`Session::pointer_of`],
+/// [`Session::hotspot_of`]) and the sound
+/// ([`Session::sound_of`]).
 fn shown_kernels(
     graph: &entelechy_graph::Graph,
     runtime: &Runtime,
@@ -2694,6 +2735,12 @@ fn shown_kernels(
         .outputs
         .iter()
         .take(1)
+        .chain(
+            graph
+                .outputs
+                .iter()
+                .filter(|(name, _)| name == crate::POINTER_OUTPUT || name == crate::HOTSPOT_OUTPUT),
+        )
         .map(|(name, _)| name.clone())
         .collect();
     let sound = graph.outputs.iter().find(|(_, source)| {

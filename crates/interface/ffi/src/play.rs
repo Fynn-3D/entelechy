@@ -7,7 +7,7 @@
 use std::ffi::{CString, c_char, c_int};
 use std::path::Path;
 
-use entelechy_session::play::{Frame, PadAxis, PadButton, View, hud};
+use entelechy_session::play::{Frame, PadAxis, PadButton, PointerLook, View, hud};
 
 use crate::{
     EntelechyField, EntelechyFiles, EntelechySession, OPEN_ERROR, Opening, c_string, clock, enter,
@@ -215,6 +215,9 @@ pub unsafe extern "C" fn entelechy_play_frame(
                     &entelechy_protocol::report_json(&s.session, &shown.report).to_string(),
                 );
                 s.shown = Some((shown.picture, shown.sound));
+                if let Some(look) = s.play.pointer_look(&mut s.session, &shown.report) {
+                    s.pointer_look = Some(look);
+                }
                 0
             }
             Frame::Failed => {
@@ -369,6 +372,47 @@ pub unsafe extern "C" fn entelechy_play_sound(
             schema: s.schema.as_ptr(),
         };
         0
+    })
+}
+
+/// The pointer's look when it changed since the last call: 0 and `look`
+/// filled with the scene's picture (8-bit RGBA from the top row down,
+/// valid until the next call, its hotspot the pixel it points with), 2
+/// when the system's own pointer is back, 1 when it has not changed, -1
+/// with `entelechy_error()` set on failure.
+///
+/// # Safety
+/// `session` is a live session; `look` points to an `EntelechyPointer` to fill.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn entelechy_play_pointer_look(
+    session: *mut EntelechySession,
+    look: *mut crate::EntelechyPointer,
+) -> c_int {
+    let (Some(mut s), Some(look)) = (unsafe { enter(session) }, unsafe { look.as_mut() }) else {
+        return -1;
+    };
+    guarded(&mut s, |s| {
+        s.clear();
+        match s.pointer_look.take() {
+            None => 1,
+            Some(PointerLook::System) => 2,
+            Some(PointerLook::Picture {
+                width,
+                height,
+                rgba,
+                hotspot,
+            }) => {
+                s.pointer_rgba = rgba;
+                *look = crate::EntelechyPointer {
+                    rgba: s.pointer_rgba.as_ptr(),
+                    width,
+                    height,
+                    hotspot_x: hotspot.0,
+                    hotspot_y: hotspot.1,
+                };
+                0
+            }
+        }
     })
 }
 

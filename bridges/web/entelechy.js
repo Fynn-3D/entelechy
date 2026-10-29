@@ -444,6 +444,26 @@ class EntelechyInPage {
     return done === 0;
   }
 
+  /// The pointer's look when the last frame changed it
+  /// (`entelechy_play_pointer_look`): `null` when it did not, `"system"`
+  /// for the system's own pointer, else the scene's picture as
+  /// `{ rgba, width, height, hotspot }`, its bytes copied out.
+  pointerLook() {
+    // `EntelechyPointer`: a pointer and four counts, four bytes each.
+    const look = this.x.entelechy_alloc(20);
+    if (!look) return null;
+    try {
+      const said = this.x.entelechy_play_pointer_look(this.session, look);
+      if (said === 2) return "system";
+      if (said !== 0) return null;
+      const [rgba, width, height, x, y] = new Uint32Array(this.x.memory.buffer, look, 5);
+      const bytes = new Uint8ClampedArray(this.x.memory.buffer, rgba, width * height * 4).slice();
+      return { rgba: bytes, width, height, hotspot: [x, y] };
+    } finally {
+      this.x.entelechy_free(look, 20);
+    }
+  }
+
   close() {
     if (this.session) this.x.entelechy_close(this.session);
     this.session = 0;

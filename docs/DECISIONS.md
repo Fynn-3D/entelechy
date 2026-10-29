@@ -420,6 +420,31 @@ are the Host's IO; a page is another Host, not another product.
 [the play's tests](../crates/interface/session/tests/play.rs) and the web
 bridge's.
 
+## The pointer is a picture the scene names
+
+A scene's pointer is a picture output named `cursor`, a Kernel's Field
+like any other, which every interface hands the system as its pointer;
+`cursor_hotspot`, rows whose first is two numbers, names the pixel it
+points with, its middle without one. It is read back only when its
+Field is a new one, behind the frame's own work, and handed to the
+interface only when it changes. A picture past 128 by 128 is said once
+and leaves the system's pointer; one clear throughout hides it.
+
+**Why.** The system draws its pointer as the display refreshes, never
+behind the scene's frame, so a pointer drawn into the picture trails the
+hand. Every other output is told apart by its structure; the pointer is
+a picture as the window's is, so it alone is told apart by its name. A
+browser takes no larger pointer than 128 by 128, and the pointer is the
+same in every interface.
+
+**Where.** [`play`](../crates/interface/session/src/play/mod.rs),
+`Session::pointer_of` and `Session::hotspot_of` in
+[the session](../crates/interface/session/src/session.rs), the Player's
+`wear`, `entelechy_play_pointer_look` in [the C ABI](../crates/interface/ffi/src/play.rs),
+the web bridge's `pointerLook`; held by
+[the pointer tests](../crates/interface/session/tests/pointer.rs) and the
+ABI's.
+
 ## A replay is a test; the framework tests itself
 
 A replay is input played into a scene over time and what it expects,

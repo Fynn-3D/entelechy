@@ -22,7 +22,7 @@ use winit::event::{
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState};
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
-use winit::window::{CursorGrabMode, Window, WindowId};
+use winit::window::{CursorGrabMode, CursorIcon, CustomCursor, Window, WindowId};
 
 const USAGE: &str = "\
 usage:
@@ -264,9 +264,9 @@ struct Player {
     gamepad: Option<Gamepad>,
     audio_allowed: bool,
     audio_failed: bool,
-    /// The sound of the frame in flight, fetched to be heard next frame
-    /// ([`Session::overlaps`]).
-
+    /// The pointer's look a frame asked for, worn once the event loop is
+    /// at hand ([`Player::wear`]).
+    pointer_look: Option<play::PointerLook>,
     /// Whether the pointer is held once the window is clicked, where the
     /// system's cursor last was, and the held pointer while it is held
     /// ([`entelechy_player::pointer`]).
@@ -412,6 +412,9 @@ impl Player {
                     clock() - presenting,
                 );
                 self.sound(shown.sound);
+                if let Some(look) = self.play.pointer_look(&mut self.session, &shown.report) {
+                    self.pointer_look = Some(look);
+                }
                 Some(shown.report)
             }
         }
@@ -614,6 +617,36 @@ impl Player {
 }
 
 impl Player {
+    /// The system's pointer over the window made the look the scene last
+    /// asked for ([`play::PointerLook`]): its picture, or the system's own.
+    fn wear(&mut self, event_loop: &ActiveEventLoop) {
+        let (Some(window), Some(look)) = (&self.window, self.pointer_look.take()) else {
+            return;
+        };
+        match look {
+            play::PointerLook::System => window.set_cursor(CursorIcon::Default),
+            play::PointerLook::Picture {
+                width,
+                height,
+                rgba,
+                hotspot,
+            } => {
+                // `PointerLook` holds a side to `POINTER_MOST`, within a u16.
+                let side = |n: u32| n as u16;
+                match CustomCursor::from_rgba(
+                    rgba,
+                    side(width),
+                    side(height),
+                    side(hotspot.0),
+                    side(hotspot.1),
+                ) {
+                    Ok(source) => window.set_cursor(event_loop.create_custom_cursor(source)),
+                    Err(error) => eprintln!("pointer refused by the system: {error}"),
+                }
+            }
+        }
+    }
+
     /// The pointer held: the system's cursor locked (or, where it cannot
     /// be, confined) and hidden, the held pointer where it was.
     fn hold(&mut self) {
@@ -824,6 +857,7 @@ impl ApplicationHandler for Player {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.serve_pending(event_loop);
+        self.wear(event_loop);
         if let Some(window) = &self.window {
             window.request_redraw();
         }
@@ -932,6 +966,7 @@ fn main() -> ExitCode {
         gamepad,
         audio_allowed: !options.no_audio,
         audio_failed: false,
+        pointer_look: None,
         hold_pointer: options.hold_pointer,
         cursor: (0.0, 0.0),
         held: None,

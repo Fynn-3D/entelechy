@@ -67,6 +67,17 @@ typedef struct EntelechyField {
     const char *schema;
 } EntelechyField;
 
+/* The pointer a scene draws (its picture output named `cursor`): 8-bit
+ * RGBA, `width` by `height`, from the top row down, and the pixel it
+ * points with (`cursor_hotspot`'s, else its middle). */
+typedef struct EntelechyPointer {
+    const uint8_t *rgba;
+    uint32_t width;
+    uint32_t height;
+    uint32_t hotspot_x;
+    uint32_t hotspot_y;
+} EntelechyPointer;
+
 /* The library's version, e.g. "0.0.1". */
 const char *entelechy_version(void);
 
@@ -155,6 +166,10 @@ const uint32_t *entelechy_play_pixels(EntelechySession *session, uint32_t width,
  * call: the frame before's while frames overlap the device's. 0 and
  * `field` filled, 1 when there is none, -1 on failure. */
 int entelechy_play_sound(EntelechySession *session, EntelechyField *field);
+/* The pointer's look when it changed since the last call: 0 and `look`
+ * filled with the scene's picture, valid until the next call; 2 when the
+ * system's own pointer is back; 1 when it has not changed; -1 on failure. */
+int entelechy_play_pointer_look(EntelechySession *session, EntelechyPointer *look);
 /* The samples (per channel) the host's sound device holds and has not
  * yet played, which the next frame's queued() reads. */
 void entelechy_play_sound_queued(EntelechySession *session, uint32_t samples);

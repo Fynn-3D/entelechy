@@ -108,7 +108,7 @@ pub fn present(
         for tx in 0..placed.width {
             let sx = (tx as u64 * width as u64 / placed.width as u64) as usize;
             let [r, g, b, _] = row[sx];
-            let channel = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
+            let channel = |v: f32| u32::from(entelechy_formats::byte(v));
             frame[target_row + (placed.x + tx) as usize] =
                 (channel(r) << 16) | (channel(g) << 8) | channel(b);
         }
@@ -198,6 +198,78 @@ pub struct Shown {
     pub sound: Option<Handle>,
 }
 
+/// What the pointer looks like over the window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PointerLook {
+    /// The system's own pointer.
+    System,
+    /// The scene's picture ([`crate::POINTER_OUTPUT`]): its size, its
+    /// pixels as 8-bit RGBA from the top row down, and the point it points
+    /// with ([`crate::HOTSPOT_OUTPUT`], else its middle).
+    Picture {
+        /// Pixels across.
+        width: u32,
+        /// Pixels down.
+        height: u32,
+        /// Four bytes a pixel, not premultiplied.
+        rgba: Vec<u8>,
+        /// The pixel it points with.
+        hotspot: (u32, u32),
+    },
+}
+
+impl PointerLook {
+    /// The pointer `image` is, pointing with `hotspot` (pixels across and
+    /// down from its top left, held inside it; its middle when `None`), or
+    /// why it cannot be one.
+    pub fn of(image: &entelechy_kernel::Image, hotspot: Option<[f32; 2]>) -> Result<Self, String> {
+        let (width, height) = (image.width(), image.height());
+        if width > crate::POINTER_MOST || height > crate::POINTER_MOST {
+            return Err(format!(
+                "the `{}` output is {width}x{height} pixels; a pointer is at most {most}x{most}",
+                crate::POINTER_OUTPUT,
+                most = crate::POINTER_MOST
+            ));
+        }
+        let rgba = image
+            .pixels()
+            .iter()
+            .flat_map(|pixel| pixel.map(entelechy_formats::byte))
+            .collect();
+        let within = |at: f32, side: u32| {
+            let most = side.saturating_sub(1) as f32;
+            if at.is_finite() {
+                at.floor().clamp(0.0, most) as u32
+            } else {
+                side / 2
+            }
+        };
+        let hotspot = match hotspot {
+            Some([x, y]) => (within(x, width), within(y, height)),
+            None => (width / 2, height / 2),
+        };
+        Ok(Self::Picture {
+            width,
+            height,
+            rgba,
+            hotspot,
+        })
+    }
+}
+
+/// The pixel the first row of a hotspot output names, as two numbers
+/// ([`Session::hotspot_of`]).
+fn hotspot_in(data: &entelechy_kernel::FieldData) -> Option<[f32; 2]> {
+    let words = data.storage();
+    let scalars = data.schema().scalars();
+    let number = |at: usize| match scalars.get(at)? {
+        entelechy_kernel::Scalar::Float => Some(f32::from_bits(*words.get(at)?)),
+        entelechy_kernel::Scalar::Int => Some(*words.get(at)? as i32 as f32),
+        _ => None,
+    };
+    Some([number(0)?, number(1)?])
+}
+
 /// A frame's result.
 pub enum Frame {
     /// A replay's next frame is not due; nothing was evaluated.
@@ -257,6 +329,14 @@ pub struct Play {
     /// The sound fetched behind the frame in flight, heard the frame after
     /// ([`Play::heard`]); a frame found failed lets it go unheard.
     sound_behind: Option<entelechy_kernel::Fetch>,
+    /// The pointer's picture and hotspot last asked for, and the ones
+    /// fetched behind the frame in flight ([`Play::pointer_look`]).
+    pointer_wanted: Option<(Handle, Option<Handle>)>,
+    pointer_behind: Option<(entelechy_kernel::Fetch, Option<entelechy_kernel::Fetch>)>,
+    /// The look an interface was last told, and why the picture asked for
+    /// cannot be one, said once.
+    pointer_shown: PointerLook,
+    pointer_refused: Option<String>,
 }
 
 /// How long a pad button's release waits, in seconds: a press within it
@@ -301,6 +381,10 @@ impl Play {
             synced: None,
             shown: false,
             sound_behind: None,
+            pointer_wanted: None,
+            pointer_behind: None,
+            pointer_shown: PointerLook::System,
+            pointer_refused: None,
         }
     }
 
@@ -706,11 +790,83 @@ impl Play {
         session.field(sound).ok().map(|data| data.values().to_vec())
     }
 
+    /// The pointer's look when it differs from the one an interface was
+    /// last told, `report` being the frame's ([`Shown::report`]); `None`
+    /// when it is the same. The scene's picture and hotspot are read only
+    /// when one of their Fields is a new one: overlapping, they are fetched
+    /// behind the frame's own work and looked at the frame after, as the
+    /// sound is heard.
+    pub fn pointer_look(&mut self, session: &mut Session, report: &Report) -> Option<PointerLook> {
+        let wanted = session
+            .pointer_of(report)
+            .map(|picture| (picture, session.hotspot_of(report)));
+        let fetched = self.pointer_behind.take().and_then(|(picture, hotspot)| {
+            let picture = picture.take().ok()?;
+            let hotspot = hotspot.and_then(|fetch| fetch.take().ok());
+            Some((picture, hotspot))
+        });
+        let mut seen = match (wanted, fetched) {
+            (None, _) => Some(PointerLook::System),
+            (Some(_), Some((picture, hotspot))) => self.looked(
+                picture.to_image().ok(),
+                hotspot.as_ref().and_then(hotspot_in),
+            ),
+            (Some(_), None) => None,
+        };
+        if let Some((picture, hotspot)) = wanted
+            && wanted != self.pointer_wanted
+        {
+            if session.overlaps() {
+                self.pointer_behind = session
+                    .fetch(picture)
+                    .ok()
+                    .map(|fetch| (fetch, hotspot.and_then(|handle| session.fetch(handle).ok())));
+            } else {
+                let point = hotspot
+                    .and_then(|handle| session.field(handle).ok())
+                    .and_then(hotspot_in);
+                seen = self.looked(session.picture(picture).ok(), point);
+            }
+        }
+        self.pointer_wanted = wanted;
+        let seen = seen?;
+        if seen == self.pointer_shown {
+            return None;
+        }
+        self.pointer_shown = seen.clone();
+        Some(seen)
+    }
+
+    /// The look a fetched picture gives the pointer, pointing with
+    /// `hotspot`; one that cannot be one is said once and leaves the
+    /// system's.
+    fn looked(
+        &mut self,
+        image: Option<entelechy_kernel::Image>,
+        hotspot: Option<[f32; 2]>,
+    ) -> Option<PointerLook> {
+        match PointerLook::of(&image?, hotspot) {
+            Ok(look) => {
+                self.pointer_refused = None;
+                Some(look)
+            }
+            Err(why) => {
+                if self.pointer_refused.as_ref() != Some(&why) {
+                    self.said.push(why.clone());
+                    self.pointer_refused = Some(why);
+                }
+                Some(PointerLook::System)
+            }
+        }
+    }
+
     /// Says a failed evaluation once, and keeps it as the status. The
-    /// sound fetched behind the frame before is not heard: that frame is
-    /// taken back with it.
+    /// sound and the pointer fetched behind the frame before are not
+    /// taken: that frame is taken back with them.
     fn failed(&mut self, told: &str, place: impl FnOnce() -> Option<crate::SourcePlace>) {
         self.sound_behind = None;
+        self.pointer_behind = None;
+        self.pointer_wanted = None;
         let message = format!("evaluation failed: {told}");
         if self.reported.failed(&message) {
             self.said.push(format!("{message}; last frame is kept"));

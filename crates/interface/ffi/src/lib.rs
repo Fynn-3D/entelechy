@@ -50,6 +50,18 @@ impl Default for EntelechyInput {
     }
 }
 
+/// The scene's pointer as it lies in memory; the layout of
+/// `EntelechyPointer` in the header.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct EntelechyPointer {
+    pub rgba: *const u8,
+    pub width: u32,
+    pub height: u32,
+    pub hotspot_x: u32,
+    pub hotspot_y: u32,
+}
+
 /// A Field as it lies in memory; the layout of `EntelechyField` in the header.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -147,6 +159,11 @@ struct Held {
     /// The sound heard now ([`entelechy_session::play::Play::heard`]), for
     /// `entelechy_play_sound`.
     sound: Vec<u32>,
+    /// The pointer's look a frame asked for and no call has taken
+    /// ([`entelechy_session::play::Play::pointer_look`]), and the picture
+    /// last handed out, for `entelechy_play_pointer_look`.
+    pointer_look: Option<entelechy_session::play::PointerLook>,
+    pointer_rgba: Vec<u8>,
     /// The samples the host's sound device holds, as it last said
     /// (`entelechy_play_sound_queued`), for the next frame's `queued()`.
     queued: u32,
@@ -530,6 +547,8 @@ fn opened(
                 pixels: Vec::new(),
                 picture: (Vec::new(), (0, 0)),
                 sound: Vec::new(),
+                pointer_look: None,
+                pointer_rgba: Vec::new(),
                 queued: 0,
             }),
         })),

@@ -100,6 +100,8 @@ async function step() {
   if (framed === 0) {
     await show();
     await play();
+    const look = entelechy.pointerLook();
+    if (look !== null) post({ pointer: look }, look === "system" ? [] : [look.rgba.buffer]);
   } else if (framed === 1) {
     post({ preparing: x.entelechy_play_preparing(session) });
   } else if (framed < 0) {

@@ -630,6 +630,56 @@ expect 1 1 = 0.5 0.5 0.25 0.02
     unsafe { entelechy_ffi::entelechy_close(session) };
 }
 
+/// The scene's `cursor` picture reaches a host as 8-bit RGBA with its
+/// middle the hotspot, once, until it changes.
+#[test]
+fn a_host_is_handed_the_pointer_the_scene_draws() {
+    let scene = format!(
+        "{PICTURE}node mark: kernel {{
+    requires {{ field.write; }}
+    output result: Image;
+    domain = vec2(4, 2);
+    compute {{ return vec4(1.0, 0.5, 0.0, 1.0); }}
+}}
+output cursor <- mark.result;
+"
+    );
+    let (_dir, path) = scene_in("pointer", &scene);
+    let session = unsafe {
+        entelechy_ffi::entelechy_open(path.as_ptr(), c("cpu").as_ptr(), std::ptr::null())
+    };
+    assert!(!session.is_null(), "{}", unsafe {
+        str_of(entelechy_ffi::entelechy_open_error())
+    });
+    let mut look = entelechy_ffi::EntelechyPointer {
+        rgba: std::ptr::null(),
+        width: 0,
+        height: 0,
+        hotspot_x: 0,
+        hotspot_y: 0,
+    };
+    let mut told = Vec::new();
+    for _ in 0..4 {
+        let framed =
+            unsafe { entelechy_ffi::entelechy_play_frame(session, 400.0, 300.0, 1.0, 0.0) };
+        assert_eq!(framed, 0, "{}", unsafe {
+            str_of(entelechy_ffi::entelechy_error(session))
+        });
+        told.push(unsafe { entelechy_ffi::entelechy_play_pointer_look(session, &mut look) });
+    }
+    assert_eq!(
+        told.iter().filter(|said| **said == 0).count(),
+        1,
+        "{told:?}"
+    );
+    assert!(told.iter().all(|said| *said == 0 || *said == 1), "{told:?}");
+    assert_eq!((look.width, look.height), (4, 2));
+    assert_eq!((look.hotspot_x, look.hotspot_y), (2, 1));
+    let rgba = unsafe { std::slice::from_raw_parts(look.rgba, 4 * 2 * 4) };
+    assert_eq!(rgba, [255, 128, 0, 255].repeat(8).as_slice());
+    unsafe { entelechy_ffi::entelechy_close(session) };
+}
+
 /// A change through `entelechy_request` is recorded as the protocol's.
 #[test]
 fn a_request_through_the_abi_is_recorded_as_the_protocols() {

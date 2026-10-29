@@ -23,6 +23,22 @@ const BUTTON = { 0: 0, 1: 2, 2: 1 };
 /// Keys the page would act on itself, which the scene has instead.
 /// The blocks the card holds at most, as the Player's ring.
 const BLOCKS_AHEAD = 4;
+
+/// `canvas` made to show the pointer `look` (`EntelechyInPage.pointerLook`):
+/// the scene's picture as the page's pointer, its hotspot where it
+/// points, or the page's own again.
+function wear(canvas, look) {
+  if (look === null) return;
+  if (look === "system") {
+    canvas.style.cursor = "";
+    return;
+  }
+  const drawn = document.createElement("canvas");
+  drawn.width = look.width;
+  drawn.height = look.height;
+  drawn.getContext("2d").putImageData(new ImageData(look.rgba, look.width, look.height), 0, 0);
+  canvas.style.cursor = `url(${drawn.toDataURL()}) ${look.hotspot[0]} ${look.hotspot[1]}, auto`;
+}
 /// What a step answers when the card is still ahead: no frame was made.
 const AHEAD = "ahead";
 
@@ -272,6 +288,7 @@ class EntelechyPlayer {
     if (framed === 0) {
       await this.show();
       await this.play();
+      wear(this.canvas, this.entelechy.pointerLook());
     } else if (framed < 0) {
       // The title holds what the page has room for; the console the whole.
       const error = this.entelechy.text(this.x.entelechy_error(this.session));
@@ -449,6 +466,8 @@ class EntelechyWorkerPlayer {
       opened(this);
     } else if (data.presented !== undefined) {
       this.shown.style.display = data.presented ? "block" : "none";
+    } else if (data.pointer !== undefined) {
+      wear(this.canvas, data.pointer);
     } else if (data.pixels) {
       const image = this.context.createImageData(data.width, data.height);
       for (let i = 0; i < data.pixels.length; i++) {

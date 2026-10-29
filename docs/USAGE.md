@@ -180,7 +180,9 @@ off the frames and swaps in when ready. It takes `run`'s `--library`,
   protocol from the window.
 
 The window shows the first output that is a grid of pixels; the sound
-card plays the first that is rows of one or two floats. A gamepad is
+card plays the first that is rows of one or two floats; the picture named
+`cursor` is the system's pointer over the window, pointing with the pixel
+`cursor_hotspot` names. A gamepad is
 keys too: the D-pad and left stick are the arrows, South Z, East X,
 Start Enter, Select Escape. F5 resets state, F6 cycles the preview
 through the nodes, F8 holds the scene's time and F9 or F7 steps it, F10

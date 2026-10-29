@@ -330,10 +330,7 @@ fn palette(bytes: &[[u8; 4]]) -> Option<(Vec<[u8; 4]>, Vec<u8>)> {
 /// filters leaves it the smallest bytes (their sum as signed values).
 /// Either decodes to the same pixels.
 pub fn encode(width: u32, height: u32, pixels: &[[f32; 4]]) -> Vec<u8> {
-    let bytes: Vec<[u8; 4]> = pixels
-        .iter()
-        .map(|pixel| pixel.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
-        .collect();
+    let bytes: Vec<[u8; 4]> = pixels.iter().map(|pixel| pixel.map(crate::byte)).collect();
     let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
     let mut chunk = |kind: &[u8], body: &[u8]| {
         out.extend_from_slice(&(body.len() as u32).to_be_bytes());

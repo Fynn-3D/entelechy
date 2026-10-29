@@ -35,6 +35,13 @@ const KNOWN: &str = "use .field, .png, .ppm, .pgm, .wav, or .mid";
 /// The formats a scene's input reads besides those [`encode`] writes.
 const READ_TOO: &str = "or a light's photometry, .ies, or a data table, .csv or .json";
 
+/// A picture's sample (`0..=1`, clamped) as the byte every 8-bit form of
+/// it holds: what a PNG or PPM writes and the pointer a scene draws
+/// shows.
+pub fn byte(sample: f32) -> u8 {
+    (sample.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
 /// The frames a second a WAV is written at by default.
 pub const DEFAULT_RATE: u32 = 48_000;
 

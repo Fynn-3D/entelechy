@@ -143,11 +143,7 @@ pub fn decode_field(bytes: &[u8]) -> Result<FieldData, PpmError> {
 /// Encodes a `Grid<Float>` as P5 bytes, clamping samples to `0..=1`.
 pub fn encode_gray(width: u32, height: u32, samples: &[f32]) -> Vec<u8> {
     let mut bytes = format!("P5\n{width} {height}\n255\n").into_bytes();
-    bytes.extend(
-        samples
-            .iter()
-            .map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8),
-    );
+    bytes.extend(samples.iter().copied().map(crate::byte));
     bytes
 }
 
@@ -156,7 +152,7 @@ pub fn encode(image: &Image) -> Vec<u8> {
     let mut bytes = format!("P6\n{} {}\n255\n", image.width(), image.height()).into_bytes();
     for pixel in image.pixels() {
         for component in &pixel[..3] {
-            bytes.push((component.clamp(0.0, 1.0) * 255.0).round() as u8);
+            bytes.push(crate::byte(*component));
         }
     }
     bytes
