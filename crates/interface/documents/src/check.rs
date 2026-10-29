@@ -3,7 +3,8 @@
 use std::path::Path;
 
 use crate::sources::{held, located, said, written_in};
-use crate::{Store, locate_document, read_document, used_documents};
+use crate::sources::{locate_document, read_document, used_documents};
+use crate::store::Store;
 
 /// The words a Kernel may carry through its branches before it is said
 /// to be large ([`entelechy_ir::carried`]): a device's compiler takes long over
@@ -85,7 +86,7 @@ pub fn large_past(module: &entelechy_ir::Validated, limit: u64) -> Option<String
 /// graph uses, by document: each is compiled and prepared with the scene
 /// all the same. A package's are left out: they are its verbs, used or
 /// not.
-pub(crate) fn idle(
+pub fn idle(
     store: &dyn Store,
     graph: &entelechy_graph::Graph,
     published: impl IntoIterator<Item = (std::path::PathBuf, Vec<entelechy_ir::KernelId>)>,
@@ -838,7 +839,7 @@ pub(crate) type UsedChecked = (
 /// (`element() < count(first)`, as a join of two rows does): a test that,
 /// run over that input (a node with no `domain`), is always decided the
 /// same way.
-pub(crate) fn first_counted_against(module: &entelechy_ir::Module) -> bool {
+pub fn first_counted_against(module: &entelechy_ir::Module) -> bool {
     use entelechy_ir::{BinaryOp, Op};
     fn walk(
         body: &[entelechy_ir::Instruction],
@@ -882,7 +883,7 @@ pub(crate) fn first_counted_against(module: &entelechy_ir::Module) -> bool {
 /// when its Kernel compares its element with that input's count
 /// (`counted`): the elements past it, which such a test is for, are never
 /// run, as a join's second input would not be.
-pub(crate) fn defaulted_domain(
+pub fn defaulted_domain(
     node: &entelechy_graph::Node,
     manifest: &entelechy_ir::Manifest,
     counted: bool,

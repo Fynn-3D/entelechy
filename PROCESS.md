@@ -143,7 +143,7 @@ cargo xtask verify
   Kernel it declares reached by its own tests), then `clippy` over the
   workspace with every target, then
   `clippy-wasm` (the JIT writing WebAssembly and the FFI) and
-  `clippy-page` (the device and the session in a page), warnings denied;
+  `clippy-page` (the device, the documents and the session in a page), warnings denied;
 - `test-build`, the workspace's tests built;
 - `tests` and `bridges` at once: the workspace's tests, and the bridges,
   which wait on the programs they drive;

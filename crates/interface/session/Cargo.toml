@@ -22,11 +22,10 @@ entelechy-cpu = { path = "../../backends/cpu" }
 entelechy-gpu = { path = "../../backends/gpu" }
 entelechy-jit = { path = "../../backends/jit" }
 entelechy-formats = { path = "../../interface/formats" }
-# A font node's font, read as the importer reads one; its other readers
-# (audio, models, pictures) left out.
-entelechy-import = { path = "../../interface/import", default-features = false }
+entelechy-documents = { path = "../../interface/documents" }
 
 [dev-dependencies]
+entelechy-import = { path = "../../interface/import", default-features = false }
 entelechy-abi = { path = "../../core/abi" }
 entelechy-conformance = { path = "../../backends/conformance" }
 

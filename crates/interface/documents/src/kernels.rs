@@ -84,7 +84,7 @@ pub(crate) struct Change {
 
 /// The ledger of published Kernels by the document that owns each.
 #[derive(Default)]
-pub(crate) struct Kernels {
+pub struct Kernels {
     /// Each publishing document's state, the root's included.
     documents: BTreeMap<PathBuf, DocumentState>,
     owners: BTreeMap<KernelId, PathBuf>,
@@ -114,12 +114,12 @@ struct Primed {
 
 impl Kernels {
     /// Why `id`'s document could not publish it, when it was refused.
-    pub(crate) fn refused(&self, id: &KernelId) -> Option<&str> {
+    pub fn refused(&self, id: &KernelId) -> Option<&str> {
         self.refused.get(id).map(String::as_str)
     }
 
     /// The document that publishes `id`, if a document does.
-    pub(crate) fn owner(&self, id: &KernelId) -> Option<&Path> {
+    pub fn owner(&self, id: &KernelId) -> Option<&Path> {
         self.owners.get(id).map(PathBuf::as_path)
     }
 }
@@ -209,7 +209,7 @@ impl Ledger {
 }
 
 /// A copy of the ledger to restore whole ([`Kernels::put_back`]).
-pub(crate) struct Kept {
+pub struct Kept {
     documents: BTreeMap<PathBuf, DocumentState>,
     owners: BTreeMap<KernelId, PathBuf>,
 }
@@ -270,7 +270,7 @@ impl Kernels {
 
     /// A copy to restore, beside the runtime's registry, when a
     /// published change is refused.
-    pub(crate) fn keep(&self) -> Kept {
+    pub fn keep(&self) -> Kept {
         Kept {
             documents: self.documents.clone(),
             owners: self.owners.clone(),
@@ -278,7 +278,7 @@ impl Kernels {
     }
 
     /// Restores what [`Kernels::keep`] kept, discarding pending changes.
-    pub(crate) fn put_back(&mut self, kept: Kept, runtime: &mut Runtime) {
+    pub fn put_back(&mut self, kept: Kept, runtime: &mut Runtime) {
         for change in std::mem::take(&mut self.pending) {
             for (_, batch) in change.documents {
                 batch.discard(runtime);
@@ -289,7 +289,7 @@ impl Kernels {
     }
 
     /// The Kernels document `path` has published.
-    pub(crate) fn ids_of(&self, path: &Path) -> Vec<KernelId> {
+    pub fn ids_of(&self, path: &Path) -> Vec<KernelId> {
         self.documents
             .get(path)
             .map(|state| state.kernels.keys().cloned().collect())
@@ -297,12 +297,12 @@ impl Kernels {
     }
 
     /// Every document that has published, or tried to.
-    pub(crate) fn documents(&self) -> Vec<PathBuf> {
+    pub fn documents(&self) -> Vec<PathBuf> {
         self.documents.keys().cloned().collect()
     }
 
     /// Every document with the stamp it was last read at.
-    pub(crate) fn stamps(&self) -> impl Iterator<Item = (&Path, Option<Stamp>)> {
+    pub fn stamps(&self) -> impl Iterator<Item = (&Path, Option<Stamp>)> {
         self.documents
             .iter()
             .map(|(path, state)| (path.as_path(), state.stamp))
@@ -407,7 +407,7 @@ impl Kernels {
     }
 
     /// Whether a change is still being prepared, to publish at a later sync.
-    pub(crate) fn preparing(&self) -> bool {
+    pub fn preparing(&self) -> bool {
         !self.pending.is_empty()
     }
 
@@ -861,7 +861,7 @@ impl Kernels {
     }
 
     /// Retires a Kernel of any owner; returns whether it was registered.
-    pub(crate) fn retire_kernel(&mut self, id: &KernelId, runtime: &mut Runtime) -> bool {
+    pub fn retire_kernel(&mut self, id: &KernelId, runtime: &mut Runtime) -> bool {
         self.owners.remove(id);
         self.forget_pending(id, runtime);
         for state in self.documents.values_mut() {
@@ -894,7 +894,7 @@ impl Kernels {
     /// version running is the one the document wrote (`source`, the
     /// version's); `None` when no document owns it, a source published
     /// apart replaced it, or it fails to compile alone.
-    pub(crate) fn unoptimized(&self, id: &KernelId, source: &str) -> Option<Written> {
+    pub fn unoptimized(&self, id: &KernelId, source: &str) -> Option<Written> {
         let (path, kernel) = self.documents.iter().find_map(|(path, state)| {
             (state.kernels.get(id).map(String::as_str) == Some(source))
                 .then(|| state.asts.get(id).map(|kernel| (path, kernel)))
@@ -906,7 +906,7 @@ impl Kernels {
 
 /// A Kernel as its document writes it: unoptimized, with where each value
 /// is written.
-pub(crate) struct Written {
+pub struct Written {
     pub(crate) module: entelechy_kernel::Validated,
     pub(crate) places: entelechy_compiler::SourcePlaces,
     /// The document it is written in; `None` for a source published apart,
@@ -917,11 +917,9 @@ pub(crate) struct Written {
 }
 
 impl Written {
-    /// Where the failure a trace found is written: its value in the
-    /// function it failed in (`None` the entry).
     /// `kernel`, published as `id`, compiled unoptimized, written in
     /// `path`.
-    pub(crate) fn compiled(
+    pub fn compiled(
         kernel: &entelechy_language::Kernel,
         id: &KernelId,
         path: Option<PathBuf>,
@@ -936,12 +934,22 @@ impl Written {
         })
     }
 
-    pub(crate) fn place_of(&self, fault: &crate::TraceFault) -> Option<crate::SourcePlace> {
-        let value = fault.value?;
-        let (places, path) = match &fault.function {
+    /// The module it compiled to.
+    pub fn module(&self) -> &entelechy_kernel::Validated {
+        &self.module
+    }
+
+    /// Where the failure a trace found is written: its value `value` in
+    /// the function it failed in, `function` (`None` the entry).
+    pub fn place_of(
+        &self,
+        function: Option<&str>,
+        value: entelechy_ir::ValueId,
+    ) -> Option<crate::SourcePlace> {
+        let (places, path) = match function {
             None => (&self.places.entry, self.path.clone()?),
             Some(name) => {
-                let index = self.module.functions.iter().position(|f| &f.name == name)?;
+                let index = self.module.functions.iter().position(|f| f.name == name)?;
                 (
                     self.places.functions.get(index)?,
                     entelechy_language::Held::of(&self.kernel)
@@ -958,7 +966,7 @@ impl Written {
             path,
             line: span.line,
             column: span.column,
-            function: fault.function.as_deref().map(|name| {
+            function: function.map(|name| {
                 entelechy_language::Held::of(&self.kernel)
                     .origin_of(name)
                     .map_or_else(|| name.to_owned(), |origin| origin.name.clone())

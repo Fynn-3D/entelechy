@@ -5,6 +5,8 @@
 use entelechy_graph::Held;
 use entelechy_kernel::{Census, FieldBytes, Handle};
 
+use entelechy_documents::inputs::COPY_LEAST;
+
 use crate::Session;
 
 /// A session's memory, at one moment ([`Session::memory_map`]).
@@ -41,10 +43,6 @@ impl HeldBytes {
         self.bytes.host + self.bytes.device
     }
 }
-
-/// The fewest bytes of an input's Host copy that are let go once the
-/// input is on a device ([`Session::let_go_of_input_copies`]).
-pub const COPY_LEAST: u64 = 1 << 20;
 
 impl Session {
     /// Lets go of the Host copies of the inputs on a device, each once and

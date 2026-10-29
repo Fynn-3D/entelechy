@@ -45,7 +45,7 @@ const YARDSTICKS: [&str; 3] = [
 ];
 
 /// Interface crates that take no external dependency.
-const PLAIN_INTERFACES: [&str; 1] = ["entelechy-formats"];
+const PLAIN_INTERFACES: [&str; 2] = ["entelechy-formats", "entelechy-documents"];
 
 /// The crates allowed `unsafe`: the JIT runs its code, the FFI reads a C
 /// caller's pointers. The workspace's lints forbid it elsewhere.
@@ -351,39 +351,30 @@ fn only_the_interface_and_two_machines_take_outside_dependencies() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-/// The session runs on the runtime it is given: only its opening
-/// (`session.rs`), its trace (`observe.rs`) and its re-exports (`lib.rs`)
-/// name a backend; every other part, one added later included, does not.
+/// The documents a session runs are read, published and lowered on the
+/// runtime the session gives them: `entelechy-documents` reaches no
+/// backend, through any crate it takes.
 #[test]
-fn the_session_runs_on_the_runtime_it_is_given() {
-    const OPENING: [&str; 3] = ["lib.rs", "session.rs", "observe.rs"];
-    fn walk(src: &Path, dir: &Path, wrong: &mut Vec<String>) {
-        for entry in std::fs::read_dir(dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                walk(src, &path, wrong);
-                continue;
-            }
-            let file = path
-                .strip_prefix(src)
-                .unwrap()
-                .to_string_lossy()
-                .into_owned();
-            if path.extension().is_none_or(|ext| ext != "rs") || OPENING.contains(&file.as_str()) {
-                continue;
-            }
-            let text = std::fs::read_to_string(&path).unwrap();
-            for backend in ["entelechy_cpu", "entelechy_gpu", "entelechy_jit"] {
-                if text.contains(backend) {
-                    wrong.push(format!("session/src/{file} names {backend}"));
-                }
+fn the_documents_run_on_the_runtime_they_are_given() {
+    let crates = crates();
+    let mut reached = vec!["entelechy-documents".to_string()];
+    let mut next = 0;
+    while next < reached.len() {
+        for dependency in &crates[&reached[next]].inside {
+            if !reached.contains(dependency) {
+                reached.push(dependency.clone());
             }
         }
+        next += 1;
     }
-    let src = root().join("crates/interface/session/src");
-    let mut wrong = Vec::new();
-    walk(&src, &src, &mut wrong);
-    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    let backends: Vec<&String> = reached
+        .iter()
+        .filter(|name| crates[*name].layer == "backends")
+        .collect();
+    assert!(
+        backends.is_empty(),
+        "entelechy-documents reaches {backends:?}"
+    );
 }
 
 /// Only the two named crates set their own lints, and the workspace's

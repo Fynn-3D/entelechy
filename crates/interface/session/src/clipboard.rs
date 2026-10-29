@@ -114,7 +114,7 @@ impl Board {
     pub(crate) fn sync(
         &mut self,
         names: &[String],
-        inputs: &mut crate::inputs::Inputs,
+        inputs: &mut entelechy_documents::inputs::Inputs,
         host: &mut Host,
         events: &mut Vec<Event>,
     ) {

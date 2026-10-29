@@ -10,11 +10,10 @@ use entelechy_formats::ppm;
 use entelechy_graph::{EvaluateError, Evaluator, Graph, Report};
 use entelechy_kernel::{Backend, Context, Expect, Handle, KernelId, Runtime, Value};
 
-use crate::store::Store;
-use crate::{
-    Event, Limits, Publishing, SessionError, SourcePlace, Traced, inputs, kernels, observe, scene,
-    writes,
-};
+use entelechy_documents::store::Store;
+use entelechy_documents::{Event, SourcePlace, inputs, kernels, scene, writes};
+
+use crate::{Limits, Publishing, SessionError, Traced, observe};
 
 mod time;
 
@@ -27,7 +26,7 @@ pub struct Session {
     /// ([`Session::let_go_of_input_copies`]).
     pub(crate) copies_let_go: std::collections::BTreeSet<Handle>,
     /// What the session may read; its store reads only there.
-    reads: Arc<std::sync::Mutex<crate::reads::Reads>>,
+    reads: Arc<std::sync::Mutex<entelechy_documents::reads::Reads>>,
     writes: writes::Writes,
     runtime: Runtime,
     evaluator: Evaluator,
@@ -45,7 +44,7 @@ pub struct Session {
     /// The headless window: size in pixels and scale factor.
     window: Option<([f32; 2], f32)>,
     /// What changed the world, and what was refused.
-    history: crate::history::History,
+    history: entelechy_documents::history::History,
     /// Where the current request comes from.
     origin: crate::Origin,
     /// The request whose change the scene being read is
@@ -151,8 +150,13 @@ impl Session {
         library: Option<&Path>,
         runtime: Runtime,
     ) -> Self {
-        let reads = Arc::new(std::sync::Mutex::new(crate::reads::Reads::default()));
-        let store: Arc<dyn Store> = Arc::new(crate::reads::Held::new(store, Arc::clone(&reads)));
+        let reads = Arc::new(std::sync::Mutex::new(
+            entelechy_documents::reads::Reads::default(),
+        ));
+        let store: Arc<dyn Store> = Arc::new(entelechy_documents::reads::Held::new(
+            store,
+            Arc::clone(&reads),
+        ));
         Self {
             scene: scene::Scene::new(store, scene, library),
             kernels: kernels::Kernels::default(),
@@ -167,7 +171,7 @@ impl Session {
             unrun: BTreeMap::new(),
             used: BTreeMap::new(),
             window: None,
-            history: crate::history::History::default(),
+            history: entelechy_documents::history::History::default(),
             origin: crate::Origin::Local,
             claim: Claim::None,
             later: Vec::new(),
@@ -509,7 +513,8 @@ impl Session {
         // once a sync.
         store.sync_begins();
         let reads = Arc::clone(&self.reads);
-        let readable = |path: &Path| crate::reads::lock(&reads).check(store.as_ref(), path);
+        let readable =
+            |path: &Path| entelechy_documents::reads::lock(&reads).check(store.as_ref(), path);
         self.scene.sync(
             &mut self.kernels,
             &mut self.runtime,
@@ -543,7 +548,7 @@ impl Session {
         // freely until it lands, and is fixed then.
         let landing = self.scene.graph().is_none() && self.scene_waiting();
         let read_from: Vec<std::path::PathBuf> =
-            if crate::reads::lock(&reads).wants_directories() && !landing {
+            if entelechy_documents::reads::lock(&reads).wants_directories() && !landing {
                 let files = self.scene.files();
                 self.scene
                     .read_from()
@@ -571,10 +576,10 @@ impl Session {
                 Vec::new()
             };
         if !landing {
-            crate::reads::lock(&reads).settle(store.as_ref(), &read_from);
+            entelechy_documents::reads::lock(&reads).settle(store.as_ref(), &read_from);
         }
-        let tables = crate::inputs::table_elements(self.scene.graph(), &self.runtime);
-        let declared = crate::inputs::Declared {
+        let tables = entelechy_documents::inputs::table_elements(self.scene.graph(), &self.runtime);
+        let declared = entelechy_documents::inputs::Declared {
             graph: self.scene.graph(),
             files: self.scene.files(),
             tables: &tables,
@@ -619,13 +624,13 @@ impl Session {
     /// (`serve`, `--serve`, `entelechy_request`). Refused after the first
     /// sync; the directories are fixed as the scene first loads.
     pub fn restrict_reads(&mut self) -> Result<(), String> {
-        crate::reads::lock(&self.reads).restrict()
+        entelechy_documents::reads::lock(&self.reads).restrict()
     }
 
     /// Allows the scene's inputs to be read from files in `dir` and under
     /// it, where reads are restricted ([`Session::restrict_reads`]).
     pub fn allow_reads(&mut self, dir: &Path) -> Result<(), String> {
-        crate::reads::lock(&self.reads).allow(self.store(), dir)
+        entelechy_documents::reads::lock(&self.reads).allow(self.store(), dir)
     }
 
     /// Allows a write to the one file `path`, named by the person running
@@ -638,12 +643,15 @@ impl Session {
     /// running scene's at once (read again at the next sync), every scene
     /// read after. A name the scene does not read or write from a file is
     /// refused, and nothing changes.
-    pub fn place(&mut self, overrides: crate::overrides::Overrides) -> Result<(), String> {
+    pub fn place(
+        &mut self,
+        overrides: entelechy_documents::overrides::Overrides,
+    ) -> Result<(), String> {
         self.scene.place(overrides)
     }
 
     /// Where the caller places the scene's inputs and outputs.
-    pub fn overrides(&self) -> &crate::overrides::Overrides {
+    pub fn overrides(&self) -> &entelechy_documents::overrides::Overrides {
         self.scene.overrides()
     }
 
@@ -667,9 +675,9 @@ impl Session {
         }
         let mut overrides = self.scene.overrides().clone();
         for name in names {
-            match crate::overrides::kind_of(self.scene.written(), name) {
-                Some(crate::overrides::Kind::Directory) => {}
-                Some(crate::overrides::Kind::File) => {
+            match entelechy_documents::overrides::kind_of(self.scene.written(), name) {
+                Some(entelechy_documents::overrides::Kind::Directory) => {}
+                Some(entelechy_documents::overrides::Kind::File) => {
                     return Err(format!(
                         "`{name}` reads or writes a file, not a directory: a folder cannot be chosen for it"
                     ));
@@ -699,7 +707,8 @@ impl Session {
         self.scene.place(overrides)?;
         if let Some((before, _)) = self.chosen.take() {
             self.writes.revoke(self.scene.store().as_ref(), &before);
-            crate::reads::lock(&self.reads).revoke(self.scene.store().as_ref(), &before);
+            entelechy_documents::reads::lock(&self.reads)
+                .revoke(self.scene.store().as_ref(), &before);
         }
         for allowance in &allowances {
             self.allow(allowance)?;
@@ -779,7 +788,7 @@ impl Session {
     /// where the scene's documents are or use, in a package directory, or
     /// where allowed.
     pub fn allowed_read(&self, path: &Path) -> Result<(), String> {
-        crate::reads::lock(&self.reads).check(self.store(), path)
+        entelechy_documents::reads::lock(&self.reads).check(self.store(), path)
     }
 
     /// Where a write to `path` lands, if inside an allowed directory
@@ -981,7 +990,7 @@ impl Session {
         let root = store
             .canonical(self.scene.root())
             .unwrap_or_else(|_| self.scene.root().to_path_buf());
-        let overlay = crate::store::Overlay::new(store, &landed);
+        let overlay = entelechy_documents::store::Overlay::new(store, &landed);
         let root_text = match landed.iter().find(|(path, _)| *path == root) {
             Some((_, text)) => text.clone(),
             None => (&overlay as &dyn Store)
@@ -1002,7 +1011,7 @@ impl Session {
                 },
             })?;
             let scene_written = overlay.kind(&overlay.whole(&replay.scene))
-                == Some(crate::store::Kind::File)
+                == Some(entelechy_documents::store::Kind::File)
                 && replay.scene.extension().is_some_and(|e| e == "esn");
             if !scene_written {
                 return Err(refused(
@@ -1044,7 +1053,7 @@ impl Session {
             }
         }
         // The scene checked whole, as `entelechy check` checks it.
-        let checked = crate::check::check_document(&overlay, &root, false);
+        let checked = entelechy_documents::check::check_document(&overlay, &root, false);
         if let Some((_, line)) = checked.lines.iter().find(|(problem, _)| *problem) {
             let mut refusal = placed(&overlay, line, &root, &landed);
             refusal.diagnostic.fix = checked
@@ -1081,7 +1090,7 @@ impl Session {
                 types,
                 functions,
                 qualified,
-            } = crate::sources::declarations_for(
+            } = entelechy_documents::sources::declarations_for(
                 &overlay,
                 dir,
                 &document.uses,
@@ -1091,9 +1100,11 @@ impl Session {
             document.unqualify(&qualified);
             document.resolve((&structs, &types, &functions));
             for kernel in &document.kernels {
-                let id = crate::sources::named_id(kernel).map_err(|diagnostic| crate::Refusal {
-                    path: path.clone(),
-                    diagnostic,
+                let id = entelechy_documents::sources::named_id(kernel).map_err(|diagnostic| {
+                    crate::Refusal {
+                        path: path.clone(),
+                        diagnostic,
+                    }
                 })?;
                 let module =
                     entelechy_compiler::compile_kernel(kernel, Some(&id)).map_err(|error| {
@@ -1188,7 +1199,7 @@ impl Session {
         let preparer = self.runtime.preparer();
         if !now_first.is_empty() {
             preparer.expect(now_first.iter().map(|version| version.id()));
-            crate::spread::map(&now_first, |version| preparer.finish(version));
+            entelechy_documents::spread::map(&now_first, |version| preparer.finish(version));
         }
         // Only what is handed to the threads is shown meanwhile: a Kernel
         // nothing builds would otherwise stay off the device for good.
@@ -1198,7 +1209,7 @@ impl Session {
             let started = std::thread::Builder::new()
                 .name("entelechy-finish".into())
                 .spawn(move || {
-                    crate::spread::map(&later, |version| preparer.finish(version));
+                    entelechy_documents::spread::map(&later, |version| preparer.finish(version));
                 });
             if started.is_ok() {
                 self.handed.extend(handed_now);
@@ -1250,7 +1261,7 @@ impl Session {
             (path, ids)
         });
         let idle: BTreeMap<PathBuf, Vec<KernelId>> =
-            crate::check::idle(self.scene.store().as_ref(), graph, published)
+            entelechy_documents::check::idle(self.scene.store().as_ref(), graph, published)
                 .into_iter()
                 .collect();
         for (path, ids) in &idle {
@@ -1268,10 +1279,10 @@ impl Session {
             .filter_map(|node| {
                 let version = self.runtime.kernel(&node.kernel)?;
                 let module = version.module()?;
-                let why = crate::check::defaulted_domain(
+                let why = entelechy_documents::check::defaulted_domain(
                     node,
                     &module.manifest,
-                    crate::check::first_counted_against(module),
+                    entelechy_documents::check::first_counted_against(module),
                 )?;
                 Some((node.id.to_string(), why))
             })
@@ -1533,7 +1544,7 @@ impl Session {
     }
 
     /// The Fields fields nodes hold of the files in, by node and path
-    /// ([`crate::inputs::Inputs::chunk_handles`]).
+    /// ([`entelechy_documents::inputs::Inputs::chunk_handles`]).
     pub(crate) fn chunk_handles(&self) -> Vec<(String, Handle)> {
         self.inputs.chunk_handles().collect()
     }
@@ -2081,7 +2092,8 @@ impl Session {
         }
         let store = Arc::clone(self.scene.store());
         let reads = Arc::clone(&self.reads);
-        let readable = |path: &Path| crate::reads::lock(&reads).check(store.as_ref(), path);
+        let readable =
+            |path: &Path| entelechy_documents::reads::lock(&reads).check(store.as_ref(), path);
         for node in &nodes {
             let handle = match &node.paths {
                 entelechy_graph::Source::Node { node, port } => self.cached(node, port),
@@ -2100,7 +2112,7 @@ impl Session {
                 .and_then(|()| self.runtime.host().data(handle).map_err(|e| e.to_string()))
                 .and_then(|data| {
                     if data.schema().scalars() == [entelechy_kernel::Scalar::Int] {
-                        crate::inputs::paths_spelled(data.storage())
+                        entelechy_documents::inputs::paths_spelled(data.storage())
                     } else {
                         Err(
                             "its `paths` are a `Rows<Int>` of each path's bytes, ended by a 0"
@@ -2129,7 +2141,8 @@ impl Session {
         }
         let store = Arc::clone(self.scene.store());
         let reads = Arc::clone(&self.reads);
-        let readable = |path: &Path| crate::reads::lock(&reads).check(store.as_ref(), path);
+        let readable =
+            |path: &Path| entelechy_documents::reads::lock(&reads).check(store.as_ref(), path);
         for node in &nodes {
             let handle = match &node.paths {
                 entelechy_graph::Source::Node { node, port } => self.cached(node, port),
@@ -2148,7 +2161,7 @@ impl Session {
                 .and_then(|()| self.runtime.host().data(handle).map_err(|e| e.to_string()))
                 .and_then(|data| {
                     if data.schema().scalars() == [entelechy_kernel::Scalar::Int] {
-                        crate::inputs::paths_spelled(data.storage())
+                        entelechy_documents::inputs::paths_spelled(data.storage())
                     } else {
                         Err(
                             "its `paths` are a `Rows<Int>` of each path's bytes, ended by a 0"
@@ -2290,7 +2303,7 @@ impl Session {
             .unoptimized(&target.kernel, version.source())
             .or_else(|| {
                 let kernel = self.scene.resolve_source(version.source()).ok()?;
-                crate::kernels::Written::compiled(&kernel, &target.kernel, None)
+                entelechy_documents::kernels::Written::compiled(&kernel, &target.kernel, None)
             });
         let traced = tried.map_err(|error| error.to_string()).and_then(|_| {
             let graph = self.scene.graph().ok_or("no scene is loaded")?;
@@ -2300,7 +2313,7 @@ impl Session {
                 &mut self.runtime,
                 self.inputs.handles(),
                 self.scene.params(),
-                written.as_ref().map(|written| &written.module),
+                written.as_ref().map(|written| written.module()),
                 (&target, &version),
                 context,
                 at,
@@ -2314,7 +2327,9 @@ impl Session {
                 .fault
                 .as_ref()
                 .zip(written.as_ref())
-                .and_then(|(fault, written)| written.place_of(fault)),
+                .and_then(|(fault, written)| {
+                    written.place_of(fault.function.as_deref(), fault.value?)
+                }),
             trace,
             module,
             kernel: target.kernel.clone(),
@@ -2554,11 +2569,12 @@ fn reached_documents(
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
-        let used = crate::sources::used_documents(store, &base, &document.uses).ok()?;
+        let used =
+            entelechy_documents::sources::used_documents(store, &base, &document.uses).ok()?;
         reached.extend(used.iter().map(|used| one(used)));
         for node in &document.nodes {
             if let entelechy_language::NodeKind::SubGraph(placed) = &node.kind {
-                let at = crate::sources::file_at(store, &base.join(&placed.value));
+                let at = entelechy_documents::sources::file_at(store, &base.join(&placed.value));
                 if let Ok(text) = store.read_text(&at) {
                     graphs.push((at, text));
                 }
@@ -2606,7 +2622,7 @@ fn placed(
 ) -> crate::Refusal {
     let document = |named: &str| {
         let path = store.whole(Path::new(named));
-        if store.kind(&path) == Some(crate::store::Kind::File) {
+        if store.kind(&path) == Some(entelechy_documents::store::Kind::File) {
             return store.canonical(&path).unwrap_or(path);
         }
         written

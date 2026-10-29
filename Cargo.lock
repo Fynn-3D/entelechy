@@ -994,6 +994,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "entelechy-documents"
+version = "0.0.2-rc.3"
+dependencies = [
+ "entelechy-compiler",
+ "entelechy-formats",
+ "entelechy-graph",
+ "entelechy-import",
+ "entelechy-ir",
+ "entelechy-kernel",
+ "entelechy-language",
+ "entelechy-rules",
+ "entelechy-scene",
+]
+
+[[package]]
 name = "entelechy-export"
 version = "0.0.2-rc.3"
 dependencies = [
@@ -1171,6 +1186,7 @@ dependencies = [
  "entelechy-compiler",
  "entelechy-conformance",
  "entelechy-cpu",
+ "entelechy-documents",
  "entelechy-formats",
  "entelechy-gpu",
  "entelechy-graph",

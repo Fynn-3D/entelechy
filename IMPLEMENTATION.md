@@ -31,8 +31,8 @@ directions: a test needing a higher crate lives in that crate's tests.
 | Entelechy IR | [ir](crates/core/ir/src/lib.rs), [validation](crates/core/ir/src/validate.rs), [display](crates/core/ir/src/display.rs), [fusion](crates/core/ir/src/fuse.rs), [optimizer](crates/core/ir/src/optimize.rs) | [fusion bit-identity](crates/backends/cpu/tests/fusion.rs) |
 | Kernel language | [language](crates/frontend/language/src/lib.rs), [parser](crates/frontend/language/src/parser.rs), [lexer](crates/frontend/language/src/lexer.rs), [scope](crates/frontend/language/src/scope.rs) | parser tests in place; [names a document sees, case by case](crates/interface/session/tests/scope.rs) |
 | Compiler | [compiler](crates/frontend/compiler/src/lib.rs), [lowering](crates/frontend/compiler/src/lower/), [help](crates/frontend/compiler/src/help.rs) | [compile tests](crates/frontend/compiler/tests/compile.rs), [surface at its version](crates/frontend/compiler/tests/surface.rs), [help written as the language takes it](crates/frontend/compiler/tests/help_examples.rs), [every signature and its capability compiled](crates/frontend/compiler/tests/help_signatures.rs) |
-| File writes | [writes](crates/interface/session/src/writes.rs); `else` fallback in the [evaluator](crates/core/graph/src/evaluate/mod.rs) | [session](crates/interface/session/tests/writes.rs), [lowering](crates/frontend/scene/src/lib.rs), [save replay](examples/data/tests/save.replay) |
-| Laws a world writes | output `to files` into its law's document; [history origin](crates/interface/session/src/history.rs), [kept store](crates/interface/session/src/store.rs), replay `allow`; [template](packages/text.entpkg/graphs/template.esn) | [genesis tests](crates/interface/session/tests/genesis.rs), [genesis replay](examples/genesis/tests/genesis.replay) |
+| File writes | [writes](crates/interface/documents/src/writes.rs); `else` fallback in the [evaluator](crates/core/graph/src/evaluate/mod.rs) | [session](crates/interface/session/tests/writes.rs), [lowering](crates/frontend/scene/src/lib.rs), [save replay](examples/data/tests/save.replay) |
+| Laws a world writes | output `to files` into its law's document; [history origin](crates/interface/documents/src/history.rs), [kept store](crates/interface/documents/src/store.rs), replay `allow`; [template](packages/text.entpkg/graphs/template.esn) | [genesis tests](crates/interface/session/tests/genesis.rs), [genesis replay](examples/genesis/tests/genesis.replay) |
 | Shared rules | [rules](crates/core/rules/src/lib.rs), [`Backend`](crates/core/rules/src/backend.rs), [reduce tree](crates/core/rules/src/reduce.rs), [rasterizer](crates/core/rules/src/raster.rs) | every backend's parity test |
 | Reference backend | [cpu](crates/backends/cpu/src/lib.rs), [word code](crates/backends/cpu/src/eval/) | [execution](crates/backends/cpu/tests/execute.rs), [optimizer](crates/backends/cpu/tests/optimizer.rs) |
 | JIT backend | [jit](crates/backends/jit/src/lib.rs), [Cranelift emission](crates/backends/jit/src/codegen.rs), [WebAssembly emission](crates/backends/jit/src/wasm) | [parity](crates/backends/jit/tests/parity.rs), [matrix](crates/backends/jit/tests/matrix.rs), [as WebAssembly in node](crates/interface/entelechy/tests/wasm.rs) |
@@ -41,7 +41,8 @@ directions: a test needing a higher crate lives in that crate's tests.
 | Kernel Runtime | [runtime](crates/core/kernel/src/lib.rs), [off-frame runs](crates/core/kernel/src/later.rs), [clock](crates/core/kernel/src/clock.rs) | [hot swap](crates/interface/session/tests/hot_swap.rs), [async](crates/interface/session/tests/later.rs), [mixed backends](crates/interface/session/tests/mixed.rs) |
 | Scene documents | [scene](crates/frontend/scene/src/lib.rs), [domain](crates/frontend/scene/src/domain.rs) | lowering tests in place, [every form lowered](crates/frontend/scene/tests/surface.rs) |
 | Graph Runtime | [graph](crates/core/graph/src/lib.rs), [evaluator](crates/core/graph/src/evaluate/mod.rs), [domain](crates/core/graph/src/domain.rs) | [composition tests](crates/interface/session/tests/composition.rs) |
-| Session | [session](crates/interface/session/src/session.rs): [scene](crates/interface/session/src/scene.rs), [kernels](crates/interface/session/src/kernels.rs), [inputs](crates/interface/session/src/inputs/mod.rs), [sources](crates/interface/session/src/sources.rs), [observe](crates/interface/session/src/observe.rs), [store](crates/interface/session/src/store.rs), [bench](crates/interface/session/src/bench.rs); [formats](crates/interface/formats/src/lib.rs) | [session tests](crates/interface/entelechy/tests/session.rs) |
+| Documents | [documents](crates/interface/documents/src/lib.rs): [scene](crates/interface/documents/src/scene.rs), [kernels](crates/interface/documents/src/kernels.rs), [inputs](crates/interface/documents/src/inputs/mod.rs), [sources](crates/interface/documents/src/sources.rs), [store](crates/interface/documents/src/store.rs); [formats](crates/interface/formats/src/lib.rs) | [layers](crates/interface/entelechy/tests/layers.rs) |
+| Session | [session](crates/interface/session/src/session.rs), [observe](crates/interface/session/src/observe.rs), [bench](crates/interface/session/src/bench.rs) | [session tests](crates/interface/entelechy/tests/session.rs) |
 | Creation protocol | [protocol](crates/interface/protocol/src/lib.rs): [inspect](crates/interface/protocol/src/inspect.rs), [create](crates/interface/protocol/src/create.rs), [run](crates/interface/protocol/src/run.rs), [fields](crates/interface/protocol/src/fields.rs), [wire](crates/interface/protocol/src/wire.rs), [transport](crates/interface/protocol/src/transport.rs), [WebSocket](crates/interface/protocol/src/websocket.rs) | [client](crates/interface/entelechy/tests/protocol.rs), [live agents](crates/interface/entelechy/tests/agent.rs), [what agents found wanting](crates/interface/entelechy/tests/findings/) |
 | Command line | [entelechy](crates/interface/entelechy/src/main.rs), [replay](crates/interface/session/src/replay.rs), [render](crates/interface/entelechy/src/render.rs), [packages](crates/interface/entelechy/src/package.rs), [scaffold](crates/interface/entelechy/src/scaffold.rs) | every example replay on three backends |
 | C ABI | [ffi](crates/interface/ffi/src/lib.rs), [header](crates/interface/ffi/include/entelechy.h) | [ABI](crates/interface/ffi/tests/abi.rs), [header held to the exports](crates/interface/ffi/tests/header.rs), [C example](bridges/c/hello.c) |
@@ -178,13 +179,13 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
 - A named run takes, frame by frame, what the same frame of its last run
   computed under an equal key ([recall](crates/core/graph/src/evaluate/recall.rs),
   [recall test](crates/interface/session/tests/recall.rs)).
-- `use` across files and cycles ([sources](crates/interface/session/src/sources.rs));
+- `use` across files and cycles ([sources](crates/interface/documents/src/sources.rs));
   the names each document sees, shadowing and duplicate names
   ([scope](crates/frontend/language/src/scope.rs), [session test](crates/interface/entelechy/tests/session.rs),
   [the contract case by case](crates/interface/session/tests/scope.rs)).
 - Parameters of any value type, checked by layout
   ([`Param`, `value_as`](crates/core/ir/src/lib.rs), [`Value`](crates/core/abi/src/lib.rs),
-  [`set_param`](crates/interface/session/src/scene.rs),
+  [`set_param`](crates/interface/documents/src/scene.rs),
   [bind](crates/core/graph/src/evaluate/bind.rs),
   [GPU slots](crates/backends/gpu/src/wgsl/storage.rs); [cube](examples/image/README.md)).
 
@@ -254,7 +255,7 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   publishes in order as if alone ([prime](crates/interface/session/tests/prime.rs)).
   `entelechy check` checks the documents a scene uses the same way, each on
   its own, and says what they found in their order
-  ([spread](crates/interface/session/src/spread.rs)).
+  ([spread](crates/interface/documents/src/spread.rs)).
 - The interpreter is the reference; the first failing element in
   row-major order is reported ([compile](crates/backends/cpu/src/eval/compile.rs),
   [execute](crates/backends/cpu/tests/execute.rs)).
@@ -268,7 +269,7 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   ([optimize](crates/core/ir/src/optimize.rs), [test](crates/backends/cpu/tests/optimizer.rs)).
 - A platform without threads, links, native code or a clock does the same
   work another way ([decision](docs/DECISIONS.md#a-platform-is-the-hosts-world-what-a-scene-computes-is-not), [later](crates/core/kernel/src/later.rs),
-  [store](crates/interface/session/src/store.rs), [clock](crates/core/kernel/src/clock.rs),
+  [store](crates/interface/documents/src/store.rs), [clock](crates/core/kernel/src/clock.rs),
   [bridges test](crates/interface/entelechy/tests/bridges.rs)).
 
 ### Measuring

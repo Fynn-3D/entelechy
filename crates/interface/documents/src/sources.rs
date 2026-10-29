@@ -310,7 +310,7 @@ pub fn locate_document(store: &dyn Store, path: &Path) -> Result<(PathBuf, Strin
 /// Where a file or directory named by `path` is: there, else, for a path
 /// through a package's name (`text.entpkg/font.png`), inside that package;
 /// a document's and every read's alike (`placed_reads`).
-pub(crate) fn file_at(store: &dyn Store, path: &Path) -> PathBuf {
+pub fn file_at(store: &dyn Store, path: &Path) -> PathBuf {
     if store.exists(path) {
         return path.to_path_buf();
     }
@@ -1107,7 +1107,8 @@ impl std::fmt::Write for Twice {
     }
 }
 
-pub(crate) fn named_id(kernel: &Kernel) -> Result<KernelId, crate::Diagnostic> {
+/// The id a Kernel outside a node names for itself.
+pub fn named_id(kernel: &Kernel) -> Result<KernelId, crate::Diagnostic> {
     match &kernel.id {
         Some(id) => id
             .value

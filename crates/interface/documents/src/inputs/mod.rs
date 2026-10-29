@@ -30,7 +30,7 @@ use assets::Asset;
 use checks::Checks;
 use field_nodes::FieldNode;
 use file_nodes::FileNode;
-pub(crate) use file_nodes::paths_spelled;
+pub use file_nodes::paths_spelled;
 use fonts::Font;
 use listed::Listed;
 use sequences::Sequence;
@@ -39,7 +39,7 @@ use sequences::Sequence;
 /// holds and the layout, as the Kernel reading the input lays them out;
 /// and how its port keeps them, narrow where it says so (`Int as u8`).
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct TableElement {
+pub struct TableElement {
     names: Vec<String>,
     schema: Schema,
     kept: Schema,
@@ -48,19 +48,19 @@ pub(crate) struct TableElement {
 /// What a scene declares of its inputs: its graph, the files and
 /// directories they are read from, and the element each data table is
 /// read as ([`table_elements`]).
-pub(crate) struct Declared<'a> {
-    pub(crate) graph: Option<&'a Graph>,
-    pub(crate) files: &'a entelechy_scene::Files,
-    pub(crate) tables: &'a BTreeMap<String, TableElement>,
+pub struct Declared<'a> {
+    /// The scene's graph, when one is built.
+    pub graph: Option<&'a Graph>,
+    /// The files and directories its inputs are read from.
+    pub files: &'a entelechy_scene::Files,
+    /// The element each data table is read as.
+    pub tables: &'a BTreeMap<String, TableElement>,
 }
 
 /// For each scene input a node reads, the element the first node reading
 /// it (in the graph's order) lays it out as; an input no published Kernel
 /// reads has none.
-pub(crate) fn table_elements(
-    graph: Option<&Graph>,
-    runtime: &Runtime,
-) -> BTreeMap<String, TableElement> {
+pub fn table_elements(graph: Option<&Graph>, runtime: &Runtime) -> BTreeMap<String, TableElement> {
     let mut found = BTreeMap::new();
     let Some(graph) = graph else {
         return found;
@@ -126,13 +126,17 @@ pub(crate) fn table_elements(
     found
 }
 
+/// The fewest bytes of an input's Host copy that are let go once the
+/// input is on a device.
+pub const COPY_LEAST: u64 = 1 << 20;
+
 /// The words the Host has room for, which a decoded file may take.
 fn room(host: &Host) -> usize {
     host.budget_words().saturating_sub(host.used_words())
 }
 
 /// Puts an input just read on the device, when there is one and its words
-/// take [`COPY_LEAST`](crate::memory::COPY_LEAST) bytes or more, and lets
+/// take [`COPY_LEAST`] bytes or more, and lets
 /// go of its Host copy: a load then holds one big input's words at a time
 /// beside its documents, not all of them. What reads it on the processor
 /// brings the words back once. Answers whether its copy went.
@@ -141,7 +145,7 @@ fn put_on_device(runtime: &mut Runtime, handle: Handle) -> bool {
         && runtime
             .host()
             .field_bytes(handle)
-            .is_ok_and(|bytes| bytes.host >= crate::memory::COPY_LEAST)
+            .is_ok_and(|bytes| bytes.host >= COPY_LEAST)
         && runtime.upload(handle).unwrap_or(false)
         && runtime.host_mut().let_go_of_copy(handle).is_ok()
 }
@@ -172,7 +176,7 @@ fn head_within(store: &dyn Store, path: &Path, room: usize) -> Result<Vec<u8>, S
 
 /// The inputs of a scene and the Fields they hold.
 #[derive(Default)]
-pub(crate) struct Inputs {
+pub struct Inputs {
     /// The Field each input holds, by name.
     handles: BTreeMap<String, Handle>,
     /// File inputs with their last-read stamps.
@@ -221,17 +225,17 @@ impl Inputs {
     /// in by the first sync after it is done, the text held until then. As
     /// the session's replacements, never in a replay or a run, which take
     /// every check in at once.
-    pub(crate) fn set_background(&mut self, enabled: bool) {
+    pub fn set_background(&mut self, enabled: bool) {
         self.background = enabled;
     }
 
     /// The Field each input holds, by name.
-    pub(crate) fn handles(&self) -> &BTreeMap<String, Handle> {
+    pub fn handles(&self) -> &BTreeMap<String, Handle> {
         &self.handles
     }
 
     /// The files and directories the inputs are read from.
-    pub(crate) fn watched(&self) -> impl Iterator<Item = PathBuf> + '_ {
+    pub fn watched(&self) -> impl Iterator<Item = PathBuf> + '_ {
         self.assets
             .values()
             .map(|asset| asset.path.clone())
@@ -244,14 +248,14 @@ impl Inputs {
     }
 
     /// Makes `handle` what input `name` holds, releasing what it held.
-    pub(crate) fn hold(&mut self, host: &mut Host, name: &str, handle: Handle) {
+    pub fn hold(&mut self, host: &mut Host, name: &str, handle: Handle) {
         if let Some(previous) = self.handles.insert(name.to_owned(), handle) {
             let _ = host.release(previous);
         }
     }
 
     /// Whether `name` holds a Field.
-    pub(crate) fn holds(&self, name: &str) -> bool {
+    pub fn holds(&self, name: &str) -> bool {
         self.handles.contains_key(name)
     }
 
@@ -265,7 +269,7 @@ impl Inputs {
     /// files, lists directories, writes texts, forgets undeclared inputs.
     /// Answers the inputs read now that went on the device as they were
     /// read, their Host copies let go ([`put_on_device`]).
-    pub(crate) fn sync(
+    pub fn sync(
         &mut self,
         store: &std::sync::Arc<dyn Store>,
         declared: &Declared,
@@ -297,14 +301,14 @@ impl Inputs {
     /// just opened holds them: each font node the glyphs of no codes; each
     /// files node no paths, its directory listed again and its `opened`
     /// empty at the next sync; each fields node no paths.
-    pub(crate) fn start_fed_over(&mut self, files: &entelechy_scene::Files, host: &mut Host) {
+    pub fn start_fed_over(&mut self, files: &entelechy_scene::Files, host: &mut Host) {
         self.file_nodes.clear();
         self.field_nodes_fed_over(host);
         self.fonts_fed_over(files, host);
     }
 
     /// Frame failures since the last call.
-    pub(crate) fn take_frame_events(&mut self) -> Vec<Event> {
+    pub fn take_frame_events(&mut self) -> Vec<Event> {
         std::mem::take(&mut self.frame_events)
     }
 

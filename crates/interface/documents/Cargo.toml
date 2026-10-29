@@ -1,0 +1,27 @@
+[package]
+name = "entelechy-documents"
+description = "Entelechy documents: the scene and libraries a session runs, the Kernels they publish, the Graph they lower to, and the files they read and write"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+# The crate has no doc tests, so `cargo test` skips the rustdoc pass.
+doctest = false
+
+[dependencies]
+entelechy-compiler = { path = "../../frontend/compiler" }
+entelechy-language = { path = "../../frontend/language" }
+entelechy-ir = { path = "../../core/ir" }
+entelechy-graph = { path = "../../core/graph" }
+entelechy-scene = { path = "../../frontend/scene" }
+entelechy-kernel = { path = "../../core/kernel" }
+entelechy-rules = { path = "../../core/rules" }
+entelechy-formats = { path = "../../interface/formats" }
+# A font node's font, read as the importer reads one; its other readers
+# (audio, models, pictures) left out.
+entelechy-import = { path = "../../interface/import", default-features = false }
+
+[lints]
+workspace = true

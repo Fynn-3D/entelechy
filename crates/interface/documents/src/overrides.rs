@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 pub struct Overrides {
     /// Inputs: a file-backed input reads the path given; an external the
     /// scene leaves to its caller is bound to the file
-    /// ([`crate::Session::bind_external`]).
+    /// (`Session::bind_external`).
     pub inputs: BTreeMap<String, PathBuf>,
     /// Outputs written to files write to the path given.
     pub outputs: BTreeMap<String, PathBuf>,

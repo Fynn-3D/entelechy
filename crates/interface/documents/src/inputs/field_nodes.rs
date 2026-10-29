@@ -235,7 +235,7 @@ fn kept_in(runtime: &mut Runtime, data: FieldData) -> Result<Handle, String> {
 impl Inputs {
     /// The Field of each file in that a fields node holds to join, by the
     /// node and the file's path: `near: b.field`.
-    pub(crate) fn chunk_handles(&self) -> impl Iterator<Item = (String, Handle)> + '_ {
+    pub fn chunk_handles(&self) -> impl Iterator<Item = (String, Handle)> + '_ {
         self.field_nodes.iter().flat_map(|(node, known)| {
             known
                 .files
@@ -392,11 +392,7 @@ impl Inputs {
     }
 
     /// Whether fields node `node` last read its paths from `handle`.
-    pub(crate) fn field_node_saw(
-        &self,
-        node: &entelechy_scene::FieldsNode,
-        handle: Handle,
-    ) -> bool {
+    pub fn field_node_saw(&self, node: &entelechy_scene::FieldsNode, handle: Handle) -> bool {
         self.field_nodes
             .get(&node.node)
             .is_none_or(|known| known.seen == Some(handle))
@@ -407,7 +403,7 @@ impl Inputs {
     /// asked for, taken in by a sync once it is in. Refused whole, the
     /// paths before staying, where a path is not one under the directory or
     /// is not readable; reported by the next sync.
-    pub(crate) fn give_field_paths(
+    pub fn give_field_paths(
         &mut self,
         store: &dyn Store,
         readable: &dyn Fn(&Path) -> Result<(), String>,

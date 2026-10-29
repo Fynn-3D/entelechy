@@ -318,7 +318,7 @@ generate native code. The interface layer (`entelechy-session`, `entelechy-proto
 the `entelechy` CLI, the Player, `entelechy-import`, `entelechy-export`, `entelechy-ffi`) is the
 only other place that may take them, for devices, for formats that are not
 worth decoding twice, and for the protocol's JSON; `entelechy-formats`, the codecs
-they share, takes none. `entelechy-jit` and `entelechy-ffi` are the
+they share, and `entelechy-documents`, the documents a session runs, take none. `entelechy-jit` and `entelechy-ffi` are the
 two crates allowed `unsafe`: the JIT calls the code it produces, the FFI
 reads the pointers and strings a C caller hands it, and nothing else.
 Bridges to other programs live in `bridges/<program>/`, written in that

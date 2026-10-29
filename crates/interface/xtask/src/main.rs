@@ -156,6 +156,8 @@ fn verify(all: bool) -> ExitCode {
                 "-p",
                 "entelechy-gpu",
                 "-p",
+                "entelechy-documents",
+                "-p",
                 "entelechy-session",
                 "--target",
                 "wasm32-unknown-unknown",

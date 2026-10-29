@@ -19,7 +19,7 @@ pub struct SessionOptions {
     /// (`--input`, `--output`): a file-backed input or output placed at
     /// the path given, an external the scene leaves to its caller bound
     /// to the file.
-    pub overrides: crate::overrides::Overrides,
+    pub overrides: entelechy_documents::overrides::Overrides,
     /// Graph parameters set, by name.
     pub params: Vec<(String, Value)>,
     /// The backend asked for; the command's own default otherwise.
@@ -42,7 +42,7 @@ impl Default for SessionOptions {
         Self {
             scene: None,
             library: None,
-            overrides: crate::overrides::Overrides::default(),
+            overrides: entelechy_documents::overrides::Overrides::default(),
             params: Vec::new(),
             backend: None,
             fusion: true,
@@ -128,11 +128,13 @@ impl SessionOptions {
                 self.params.push((name.to_owned(), literal));
             }
             "--input" => {
-                let (name, path) = crate::overrides::parse_binding(arg, &value(arg)?)?;
+                let (name, path) =
+                    entelechy_documents::overrides::parse_binding(arg, &value(arg)?)?;
                 self.overrides.inputs.insert(name, path);
             }
             "--output" => {
-                let (name, path) = crate::overrides::parse_binding(arg, &value(arg)?)?;
+                let (name, path) =
+                    entelechy_documents::overrides::parse_binding(arg, &value(arg)?)?;
                 self.overrides.outputs.insert(name, path);
             }
             flag if flag.starts_with("--") => return Ok(false),

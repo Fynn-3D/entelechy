@@ -116,7 +116,7 @@ impl Inputs {
     }
 
     /// Whether font node `font` was last given `handle`'s characters.
-    pub(crate) fn font_saw(&self, font: &entelechy_scene::FontNode, handle: Handle) -> bool {
+    pub fn font_saw(&self, font: &entelechy_scene::FontNode, handle: Handle) -> bool {
         self.fonts
             .get(&font.node)
             .is_none_or(|known| known.seen == Some(handle))
@@ -125,7 +125,7 @@ impl Inputs {
     /// Gives font node `font` the characters `codes` (read from the Field
     /// `handle`): its glyphs again when they differ from the last; what
     /// fails is reported by the next sync.
-    pub(crate) fn give_codes(
+    pub fn give_codes(
         &mut self,
         font: &entelechy_scene::FontNode,
         handle: Handle,

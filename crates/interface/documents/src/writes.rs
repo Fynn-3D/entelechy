@@ -17,7 +17,7 @@ use crate::store::Store;
 
 /// The directories writes may land in, and what was last written.
 #[derive(Default)]
-pub(crate) struct Writes {
+pub struct Writes {
     /// Allowed directories, resolved.
     allowed: Vec<PathBuf>,
     /// Allowed single files, resolved (`--save`, `--out`), for the
@@ -38,7 +38,7 @@ pub(crate) struct Writes {
 
 impl Writes {
     /// Allows writes into the existing directory `dir` and under it.
-    pub(crate) fn allow(&mut self, store: &dyn Store, dir: &Path) -> Result<(), String> {
+    pub fn allow(&mut self, store: &dyn Store, dir: &Path) -> Result<(), String> {
         let resolved = store
             .canonical(dir)
             .map_err(|e| format!("cannot allow writes into {}: {e}", dir.display()))?;
@@ -54,7 +54,7 @@ impl Writes {
 
     /// Allows files in the existing directory `dir` and under it to be
     /// removed and renamed.
-    pub(crate) fn allow_deletes(&mut self, store: &dyn Store, dir: &Path) -> Result<(), String> {
+    pub fn allow_deletes(&mut self, store: &dyn Store, dir: &Path) -> Result<(), String> {
         let resolved = store
             .canonical(dir)
             .map_err(|e| format!("cannot allow removals in {}: {e}", dir.display()))?;
@@ -70,7 +70,7 @@ impl Writes {
 
     /// Takes back writes, removals and renames in `dir` that
     /// [`Writes::allow`] and [`Writes::allow_deletes`] gave.
-    pub(crate) fn revoke(&mut self, store: &dyn Store, dir: &Path) {
+    pub fn revoke(&mut self, store: &dyn Store, dir: &Path) {
         if let Ok(resolved) = store.canonical(dir) {
             self.allowed.retain(|allowed| *allowed != resolved);
             self.deletes.retain(|allowed| *allowed != resolved);
@@ -78,7 +78,7 @@ impl Writes {
     }
 
     /// Allows a write to the one file `path`, wherever it is.
-    pub(crate) fn allow_file(&mut self, store: &dyn Store, path: &Path) -> Result<(), String> {
+    pub fn allow_file(&mut self, store: &dyn Store, path: &Path) -> Result<(), String> {
         let resolved = resolve(store, path)?;
         self.files.push(resolved);
         Ok(())
@@ -86,7 +86,7 @@ impl Writes {
 
     /// Whether the evaluation behind `report` changed an output written to
     /// a file.
-    pub(crate) fn due(&self, writes: &[entelechy_scene::Write], report: &Report) -> bool {
+    pub fn due(&self, writes: &[entelechy_scene::Write], report: &Report) -> bool {
         writes.iter().filter(|write| !write.clipboard).any(|write| {
             report
                 .outputs
@@ -102,7 +102,7 @@ impl Writes {
 
     /// Writes every output the committed evaluation behind `report`
     /// changed.
-    pub(crate) fn after(
+    pub fn after(
         &mut self,
         store: &dyn Store,
         writes: &[entelechy_scene::Write],
@@ -309,7 +309,6 @@ impl Writes {
         }
     }
 
-    /// What was written or refused since the last call.
     /// Notes that output `output` wrote the file at `target`, as it now
     /// stands.
     fn authored(&mut self, store: &dyn Store, target: &Path, output: &str) {
@@ -321,7 +320,7 @@ impl Writes {
 
     /// The output that wrote the file at `path`, while the file is as it
     /// wrote it.
-    pub(crate) fn author(&self, store: &dyn Store, path: &Path) -> Option<&str> {
+    pub fn author(&self, store: &dyn Store, path: &Path) -> Option<&str> {
         let at = store.canonical(path).ok()?;
         self.authored
             .get(&at)
@@ -329,14 +328,15 @@ impl Writes {
             .map(|(output, _)| output.as_str())
     }
 
-    pub(crate) fn take_events(&mut self) -> Vec<Event> {
+    /// What was written or refused since the last call.
+    pub fn take_events(&mut self) -> Vec<Event> {
         std::mem::take(&mut self.events)
     }
 
     /// Where a caller's write to `path` (`save`, export) lands, if it is
     /// an allowed file or inside an allowed directory. `..` and links are
     /// resolved before the test.
-    pub(crate) fn place(&self, store: &dyn Store, path: &Path) -> Result<PathBuf, String> {
+    pub fn place(&self, store: &dyn Store, path: &Path) -> Result<PathBuf, String> {
         self.place_in(store, path, true)
     }
 

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// `f` of each item, in the items' order, on as many threads as there
 /// are cores.
-pub(crate) fn map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+pub fn map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
     let workers = entelechy_rules::cores().min(items.len());
     let made: Mutex<Vec<Option<R>>> = Mutex::new(items.iter().map(|_| None).collect());
     let next = AtomicUsize::new(0);

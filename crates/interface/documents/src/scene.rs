@@ -20,7 +20,7 @@ use crate::store::{Stamp, Store};
 use crate::{Diagnostic, Event};
 
 /// A scene document and what was built from it.
-pub(crate) struct Scene {
+pub struct Scene {
     store: Arc<dyn Store>,
     root: PathBuf,
     /// Libraries the caller adds to the document's uses.
@@ -78,7 +78,7 @@ pub(crate) struct Scene {
 }
 
 /// The running scene, kept to be put back whole ([`Scene::put_back`]).
-pub(crate) struct Kept {
+pub struct Kept {
     stamp: Option<Stamp>,
     uses: Vec<(PathBuf, bool)>,
     sub_graphs: BTreeMap<PathBuf, Option<Stamp>>,
@@ -126,7 +126,9 @@ struct Read {
 }
 
 impl Scene {
-    pub(crate) fn new(store: Arc<dyn Store>, root: &Path, library: Option<&Path>) -> Self {
+    /// A scene read through `store`, its documents under `root`, with
+    /// `library`, when given, added to the document's uses.
+    pub fn new(store: Arc<dyn Store>, root: &Path, library: Option<&Path>) -> Self {
         Self {
             store,
             root: root.to_path_buf(),
@@ -158,7 +160,7 @@ impl Scene {
     /// The directories the scene reads: the root's, its placed graphs',
     /// each used directory, each used file's parent, and the parent of
     /// every document those use in turn, with the package it lies in.
-    pub(crate) fn read_from(&self) -> Vec<PathBuf> {
+    pub fn read_from(&self) -> Vec<PathBuf> {
         let beside = |path: &Path| {
             path.parent()
                 .filter(|dir| !dir.as_os_str().is_empty())
@@ -188,50 +190,53 @@ impl Scene {
             .collect()
     }
 
-    pub(crate) fn store(&self) -> &Arc<dyn Store> {
+    /// Where its documents are read from.
+    pub fn store(&self) -> &Arc<dyn Store> {
         &self.store
     }
 
-    pub(crate) fn root(&self) -> &Path {
+    /// The directory its documents are under.
+    pub fn root(&self) -> &Path {
         &self.root
     }
 
     /// The root's text the running graph was lowered from.
-    pub(crate) fn text(&self) -> Option<&str> {
+    pub fn text(&self) -> Option<&str> {
         self.text.as_deref()
     }
 
     /// The graph documents the running scene places, with the stamp each
     /// was read at.
-    pub(crate) fn placed(&self) -> impl Iterator<Item = (&Path, Option<Stamp>)> {
+    pub fn placed(&self) -> impl Iterator<Item = (&Path, Option<Stamp>)> {
         self.sub_graphs
             .iter()
             .map(|(path, stamp)| (path.as_path(), *stamp))
     }
 
     /// The scene's file inputs and outputs, where the caller places them.
-    pub(crate) fn files(&self) -> &entelechy_scene::Files {
+    pub fn files(&self) -> &entelechy_scene::Files {
         &self.files
     }
 
     /// The scene's file inputs and outputs as its documents write them.
-    pub(crate) fn written(&self) -> &entelechy_scene::Files {
+    pub fn written(&self) -> &entelechy_scene::Files {
         &self.written
     }
 
     /// Externals the caller binds to files ([`crate::overrides::Overrides`]).
-    pub(crate) fn bound(&self) -> &[(String, PathBuf)] {
+    pub fn bound(&self) -> &[(String, PathBuf)] {
         &self.bound
     }
 
-    pub(crate) fn overrides(&self) -> &crate::overrides::Overrides {
+    /// The parameters and bindings set from outside the document.
+    pub fn overrides(&self) -> &crate::overrides::Overrides {
         &self.overrides
     }
 
     /// Places the scene's inputs and outputs as `overrides` say, the
     /// running scene's at once and every scene read after; refused,
     /// nothing changes. Before a scene is read, kept for its first read.
-    pub(crate) fn place(&mut self, overrides: crate::overrides::Overrides) -> Result<(), String> {
+    pub fn place(&mut self, overrides: crate::overrides::Overrides) -> Result<(), String> {
         if let Some(graph) = &self.graph {
             let mut files = self.written.clone();
             self.bound = overrides.apply(&mut files, &graph.externals)?;
@@ -241,17 +246,19 @@ impl Scene {
         Ok(())
     }
 
-    pub(crate) fn graph(&self) -> Option<&Graph> {
+    /// The running graph, once a scene has loaded.
+    pub fn graph(&self) -> Option<&Graph> {
         self.graph.as_deref()
     }
 
     /// The running graph, shared: the evaluator knows it unchanged while it
     /// holds it.
-    pub(crate) fn shared_graph(&self) -> Option<&Arc<Graph>> {
+    pub fn shared_graph(&self) -> Option<&Arc<Graph>> {
         self.graph.as_ref()
     }
 
-    pub(crate) fn params(&self) -> &BTreeMap<String, Value> {
+    /// The graph's parameters as they now stand.
+    pub fn params(&self) -> &BTreeMap<String, Value> {
         &self.params
     }
 
@@ -266,7 +273,7 @@ impl Scene {
 
     /// The param `name` a loaded scene declares; one it does not is
     /// refused, saying why. `None` before a scene loads, which holds any.
-    pub(crate) fn declared_param(&self, name: &str) -> Result<Option<&GraphParam>, String> {
+    pub fn declared_param(&self, name: &str) -> Result<Option<&GraphParam>, String> {
         let Some(graph) = self.newest() else {
             return Ok(None);
         };
@@ -276,8 +283,8 @@ impl Scene {
         }
     }
 
-    /// Overrides a graph parameter; see [`crate::Session::set_param`].
-    pub(crate) fn set_param(&mut self, name: &str, value: Value) -> Result<(), String> {
+    /// Overrides a graph parameter; see `Session::set_param`.
+    pub fn set_param(&mut self, name: &str, value: Value) -> Result<(), String> {
         let value = match self.declared_param(name)? {
             Some(param) => value.shaped_like(&param.default).ok_or_else(|| {
                 format!(
@@ -301,7 +308,7 @@ impl Scene {
 
     /// Drops every parameter override, each back at the scene's default; a
     /// param that sizes the graph relowers the document on the next sync.
-    pub(crate) fn clear_params(&mut self) {
+    pub fn clear_params(&mut self) {
         let sizes = self.newest().is_some_and(|graph| {
             graph
                 .times_params
@@ -319,7 +326,7 @@ impl Scene {
     /// Kernels inherit its declarations. `apart` lets a changed root be
     /// lowered on another thread, said by a later sync; otherwise it is
     /// lowered here, and one lowered apart is waited for.
-    pub(crate) fn sync(
+    pub fn sync(
         &mut self,
         kernels: &mut Kernels,
         runtime: &mut Runtime,
@@ -518,8 +525,8 @@ impl ToLower {
 impl Scene {
     /// Whether `text` as the root lowers to a complete graph and all its
     /// own Kernels compile and are granted. Writes, publishes and runs
-    /// nothing; see [`crate::Session::check_scene`].
-    pub(crate) fn check(
+    /// nothing; see `Session::check_scene`.
+    pub fn check(
         &self,
         text: &str,
         readable: &dyn Fn(&Path) -> Result<(), String>,
@@ -529,7 +536,7 @@ impl Scene {
     }
 
     /// [`Scene::check`], its documents read from `store`.
-    pub(crate) fn check_in(
+    pub fn check_in(
         &self,
         store: &dyn Store,
         text: &str,
@@ -929,7 +936,7 @@ impl Scene {
 
     /// A copy of the running scene, for a refused change to restore
     /// from memory.
-    pub(crate) fn keep(&self) -> Kept {
+    pub fn keep(&self) -> Kept {
         Kept {
             stamp: self.stamp,
             uses: self.uses.clone(),
@@ -950,7 +957,7 @@ impl Scene {
 
     /// Restores the scene [`Scene::keep`] kept, the root read at
     /// `stamp`, regardless of the text on disk; drops any staged scene.
-    pub(crate) fn put_back(&mut self, kept: Kept, stamp: Option<Stamp>) {
+    pub fn put_back(&mut self, kept: Kept, stamp: Option<Stamp>) {
         self.staged = None;
         self.stamp = stamp.or(kept.stamp);
         self.uses = kept.uses;
@@ -965,13 +972,13 @@ impl Scene {
     }
 
     /// Whether a staged scene was superseded since the last call.
-    pub(crate) fn take_superseded(&mut self) -> bool {
+    pub fn take_superseded(&mut self) -> bool {
         std::mem::take(&mut self.superseded)
     }
 
     /// Whether a staged scene waits for its Kernels, or documents it uses
     /// compile off the frames before it is read again.
-    pub(crate) fn waiting(&self) -> bool {
+    pub fn waiting(&self) -> bool {
         self.staged.is_some() || self.compiling.is_some() || self.lowering.is_some()
     }
 
@@ -986,26 +993,21 @@ impl Scene {
 
     /// Waits until every prepared change, the scene's included, has
     /// published or been refused.
-    pub(crate) fn wait(
-        &mut self,
-        kernels: &mut Kernels,
-        runtime: &mut Runtime,
-        events: &mut Vec<Event>,
-    ) {
+    pub fn wait(&mut self, kernels: &mut Kernels, runtime: &mut Runtime, events: &mut Vec<Event>) {
         let outcome = kernels.wait(runtime, events);
         self.land(outcome, kernels, runtime, events);
     }
 
     /// Whether library documents are being read and compiled on another
     /// thread, to publish at a later sync.
-    pub(crate) fn compiling(&self) -> bool {
+    pub fn compiling(&self) -> bool {
         self.compiling.is_some() || self.lowering.is_some()
     }
 
     /// Waits for a root being lowered on another thread and reads it on,
     /// so what is judged by the newest scene read does not hang on the
     /// thread's timing.
-    pub(crate) fn land_lowering(
+    pub fn land_lowering(
         &mut self,
         kernels: &mut Kernels,
         runtime: &mut Runtime,
@@ -1020,7 +1022,7 @@ impl Scene {
 
     /// Waits until the library documents being compiled, and the root
     /// being lowered, are done, for the next sync to publish.
-    pub(crate) fn wait_compiled(&mut self) {
+    pub fn wait_compiled(&mut self) {
         if let Some(compiling) = &mut self.compiling {
             compiling.wait();
         }
@@ -1175,8 +1177,8 @@ impl Scene {
     }
 
     /// Prepares a one-Kernel document unpublished; see
-    /// [`crate::Session::prepare_source`].
-    pub(crate) fn prepare_source(
+    /// `Session::prepare_source`.
+    pub fn prepare_source(
         &self,
         source: &str,
         kernels: &Kernels,
@@ -1189,7 +1191,7 @@ impl Scene {
     }
 
     /// Compiles a one-Kernel document as [`Scene::prepare_source`] does.
-    pub(crate) fn compile_source(
+    pub fn compile_source(
         &self,
         source: &str,
         kernels: &Kernels,
@@ -1207,10 +1209,7 @@ impl Scene {
 
     /// `source`, one Kernel, as [`Scene::compile_source`] reads it: its own
     /// and `use`d declarations, then the scene's shared ones.
-    pub(crate) fn resolve_source(
-        &self,
-        source: &str,
-    ) -> Result<entelechy_language::Kernel, Diagnostic> {
+    pub fn resolve_source(&self, source: &str) -> Result<entelechy_language::Kernel, Diagnostic> {
         let mut document =
             entelechy_language::parse_document(source).map_err(|e| Diagnostic::from(&e))?;
         if document.kernels.len() != 1 {

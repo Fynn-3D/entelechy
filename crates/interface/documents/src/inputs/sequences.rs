@@ -111,7 +111,7 @@ impl Inputs {
     /// Loads frame `floor(time * rate)`, wrapping, for each `frames`
     /// input. An unreadable frame is reported by the next sync and the
     /// input keeps its frame.
-    pub(crate) fn select_frames(&mut self, store: &dyn Store, host: &mut Host, time: f64) {
+    pub fn select_frames(&mut self, store: &dyn Store, host: &mut Host, time: f64) {
         let names: Vec<String> = self.sequences.keys().cloned().collect();
         for name in names {
             let Some(sequence) = self.sequences.get(&name) else {

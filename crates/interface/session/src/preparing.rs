@@ -73,7 +73,7 @@ impl Watched {
         &mut self,
         names: &[String],
         own: &Progress,
-        inputs: &mut crate::inputs::Inputs,
+        inputs: &mut entelechy_documents::inputs::Inputs,
         host: &mut Host,
         events: &mut Vec<Event>,
     ) {

@@ -13,7 +13,7 @@ use crate::store::{Kind, Parsed, Stamp, Store};
 
 /// The directories a session may read under.
 #[derive(Debug, Default)]
-pub(crate) struct Reads {
+pub struct Reads {
     /// Whether reads are held (an agent composes the scene).
     restricted: bool,
     /// Resolved directories the person allowed reads from.
@@ -34,7 +34,7 @@ impl Reads {
     /// Holds reads to the documents' directories, the package directories
     /// and those [`Reads::allow`] allowed. Callable only before the first
     /// sync, so the readable set is the first-loaded scene's directories.
-    pub(crate) fn restrict(&mut self) -> Result<(), String> {
+    pub fn restrict(&mut self) -> Result<(), String> {
         if self.synced && !self.restricted {
             return Err("reads are held from before the scene is first read, or not at all".into());
         }
@@ -43,7 +43,7 @@ impl Reads {
     }
 
     /// Allows files in `dir` and under it to be read.
-    pub(crate) fn allow(&mut self, store: &dyn Store, dir: &Path) -> Result<(), String> {
+    pub fn allow(&mut self, store: &dyn Store, dir: &Path) -> Result<(), String> {
         let resolved = store
             .canonical(dir)
             .map_err(|e| format!("cannot allow reads from {}: {e}", dir.display()))?;
@@ -58,7 +58,7 @@ impl Reads {
     }
 
     /// Takes back reads from `dir` that [`Reads::allow`] gave.
-    pub(crate) fn revoke(&mut self, store: &dyn Store, dir: &Path) {
+    pub fn revoke(&mut self, store: &dyn Store, dir: &Path) {
         if let Ok(resolved) = store.canonical(dir) {
             self.allowed.retain(|allowed| *allowed != resolved);
         }
@@ -68,7 +68,7 @@ impl Reads {
     /// directories: where reads are held, until they are fixed. Where they
     /// are not, no read is checked against them, so they are not worked
     /// out at all.
-    pub(crate) fn wants_directories(&self) -> bool {
+    pub fn wants_directories(&self) -> bool {
         self.restricted && !self.settled
     }
 
@@ -76,7 +76,7 @@ impl Reads {
     /// inputs read from, once a sync has read it; where reads are held,
     /// only the first time, and where they are not, never, as nothing is
     /// checked against them.
-    pub(crate) fn settle(&mut self, store: &dyn Store, read_from: &[PathBuf]) {
+    pub fn settle(&mut self, store: &dyn Store, read_from: &[PathBuf]) {
         if !self.wants_directories() {
             self.synced = true;
             return;
@@ -95,7 +95,7 @@ impl Reads {
     /// Whether `path` may be read: where it resolves to is inside a
     /// directory the first-loaded scene's documents are in or use or its
     /// inputs read from, a package directory, or an allowed directory.
-    pub(crate) fn check(&self, store: &dyn Store, path: &Path) -> Result<(), String> {
+    pub fn check(&self, store: &dyn Store, path: &Path) -> Result<(), String> {
         // The opened scene's first load reads freely; later reads are held.
         if !self.restricted || !self.settled {
             return Ok(());
@@ -146,14 +146,14 @@ fn outermost(mut dirs: Vec<PathBuf>) -> Vec<PathBuf> {
 }
 
 /// A store whose reads are held to [`Reads`].
-pub(crate) struct Held {
+pub struct Held {
     inner: Arc<dyn Store>,
     reads: Arc<Mutex<Reads>>,
 }
 
 impl Held {
     /// `inner`, read where `reads` allows.
-    pub(crate) fn new(inner: Arc<dyn Store>, reads: Arc<Mutex<Reads>>) -> Self {
+    pub fn new(inner: Arc<dyn Store>, reads: Arc<Mutex<Reads>>) -> Self {
         Self { inner, reads }
     }
 
@@ -165,7 +165,7 @@ impl Held {
 }
 
 /// The reads, whatever a panicking holder left.
-pub(crate) fn lock(reads: &Mutex<Reads>) -> MutexGuard<'_, Reads> {
+pub fn lock(reads: &Mutex<Reads>) -> MutexGuard<'_, Reads> {
     reads.lock().unwrap_or_else(PoisonError::into_inner)
 }
 

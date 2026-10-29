@@ -236,7 +236,7 @@ dependency no line states. A short word is one two packages want alike;
 the package's name already says whose it is.
 
 **Where.** [`scope.rs`](../crates/frontend/language/src/scope.rs) and
-[`sources.rs`](../crates/interface/session/src/sources.rs); held by
+[`sources.rs`](../crates/interface/documents/src/sources.rs); held by
 [the `sources` tests](../crates/interface/session/tests/sources.rs).
 
 ## Entelechy describes itself, from the tables it enforces
@@ -286,7 +286,7 @@ data, the effect is typed and traced, and is carried out where nothing
 can undo it. The allowance is the person's, never claimed by a Kernel or
 an agent.
 
-**Where.** [`writes.rs`](../crates/interface/session/src/writes.rs);
+**Where.** [`writes.rs`](../crates/interface/documents/src/writes.rs);
 held by [the write tests](../crates/interface/session/tests/writes.rs).
 
 ## A world may write its own laws
@@ -305,8 +305,8 @@ path the Host already has, checked by its allowance and swapped by hot
 reload. A world writes text, not IR, held to the language as every
 author's law is.
 
-**Where.** `Origin::Output` in the [history](../crates/interface/session/src/history.rs),
-`Kept` in the [store](../crates/interface/session/src/store.rs); held by
+**Where.** `Origin::Output` in the [history](../crates/interface/documents/src/history.rs),
+`Kept` in the [store](../crates/interface/documents/src/store.rs); held by
 [the genesis tests](../crates/interface/session/tests/genesis.rs) and
 [the genesis example](../examples/genesis/README.md).
 
@@ -323,8 +323,8 @@ against the Host's budget before it costs anything.
 **Why.** A file an agent can read it can send away, and any page the
 person visits can reach a socket on their machine.
 
-**Where.** The session's [inputs](../crates/interface/session/src/inputs/mod.rs)
-and [writes](../crates/interface/session/src/writes.rs), the protocol's
+**Where.** The session's [inputs](../crates/interface/documents/src/inputs/mod.rs)
+and [writes](../crates/interface/documents/src/writes.rs), the protocol's
 [transport](../crates/interface/protocol/src/transport.rs); held by
 [the protocol tests](../crates/interface/entelechy/tests/protocol.rs).
 
@@ -358,7 +358,7 @@ reads any text. Only what a document declares is given, so the compiler
 stays out from under the runtime.
 
 **Where.** [`entelechy-formats`](../crates/interface/formats/src/lib.rs);
-the session's [inputs](../crates/interface/session/src/inputs/mod.rs); held
+the session's [inputs](../crates/interface/documents/src/inputs/mod.rs); held
 by the session's checks, outline, files, files node and fields node
 tests, and the scene surface's documents of each form.
 
@@ -378,7 +378,7 @@ and what was refused. Only committed state is taken, because the cache
 may hold what a failed evaluation never committed. A restore is the
 largest change, so it is proved before it is real.
 
-**Where.** [`history.rs`](../crates/interface/session/src/history.rs),
+**Where.** [`history.rs`](../crates/interface/documents/src/history.rs),
 `Evaluator::restore` in the [graph's state](../crates/core/graph/src/evaluate/state.rs);
 held by the protocol's and the history's tests.
 
@@ -456,7 +456,7 @@ Source resolution belongs to the caller. Suspension is the host's to
 offer, so nothing above the GPU backend learns it was suspended.
 
 **Where.** [`later.rs`](../crates/core/kernel/src/later.rs),
-[`store.rs`](../crates/interface/session/src/store.rs), the JIT's
+[`store.rs`](../crates/interface/documents/src/store.rs), the JIT's
 [`wasm/`](../crates/backends/jit/src/wasm), the GPU's
 [`wait.rs`](../crates/backends/gpu/src/wait.rs); held by the WebAssembly
 tests and the web bridge's, in a headless Chrome.
@@ -525,7 +525,7 @@ processor is held to what only shows, because rounding then depends on
 how long a compiler takes, which nothing kept may.
 
 **Where.** The GPU's [`Lazy`](../crates/backends/gpu/src/prepare.rs),
-`Scene::sync_libraries` ([scene](../crates/interface/session/src/scene.rs)),
+`Scene::sync_libraries` ([scene](../crates/interface/documents/src/scene.rs)),
 `Graph::shown_only`; held by the session's lazy, compile-ahead and
 shown-while-building tests.
 

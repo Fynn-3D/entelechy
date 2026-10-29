@@ -53,12 +53,13 @@ const RULES: &[Rule] = &[
         since: "b229ebd",
         within: &[
             "crates/interface/session/src",
+            "crates/interface/documents/src",
             "crates/interface/protocol/src",
             "crates/interface/ffi/src",
             "crates/interface/player/src",
             "crates/interface/formats/src",
         ],
-        owners: &["crates/interface/session/src/store.rs"],
+        owners: &["crates/interface/documents/src/store.rs"],
         acts: &[
             "fs::write",
             "fs::rename",

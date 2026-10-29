@@ -8,7 +8,7 @@
 | --- | --- |
 | The interpreter is the reference; the JIT matches it bit for bit, the GPU to rounding. | Where three answers differ, `--backend cpu` is the right one. |
 | A new Kernel's cost on the GPU is its pipeline's compile: 40 to 120 ms for the voxel example's Kernels on Metal, nearly all of preparing it; one compiled before comes from the driver's cache in under a millisecond. | Natively it is paid off the frame (the preparation worker). A page asks its browser for each pipeline as the Kernel prepares (`createComputePipelineAsync`, through `js-sys` and `wasm-bindgen` in `entelechy-gpu`), compiled off the thread that answers the device; a frame that needs one not yet compiled waits for it. Data, params and structure (`write`, `param`, a `compose` that changes no Kernel) never compile. Scenes are built in the native Player; a page shows them. |
-| The session holds the world (scene, ledger, sources, history, inputs, writes) and also opens backends; only its `lib.rs`, `session.rs` and `observe.rs` may name one (`crates/interface/entelechy/tests/layers.rs`). | A world part that needs a backend is the sign to move the world into its own crate below the session, which Cargo then holds, not to lengthen that list. |
+| A session's documents (scene, ledger, sources, store, history, inputs, writes) are `entelechy-documents`, which reaches no backend (`crates/interface/entelechy/tests/layers.rs`); the session opens the backends and orders the documents' sync. | A part that needs a backend belongs to the session; a part that reads, publishes or lowers documents belongs to the documents. |
 
 Verified surface, as of `main`:
 

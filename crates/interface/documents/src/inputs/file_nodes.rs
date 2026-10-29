@@ -73,7 +73,7 @@ fn listed_under(store: &dyn Store, dir: &Path) -> Vec<(String, Option<Stamp>)> {
 
 /// The paths a files node's `paths` spell: each path's UTF-8 bytes, ended
 /// by a 0 or the Field's end; an empty one is no path.
-pub(crate) fn paths_spelled(words: &[u32]) -> Result<Vec<String>, String> {
+pub fn paths_spelled(words: &[u32]) -> Result<Vec<String>, String> {
     let mut paths = Vec::new();
     for part in words.split(|word| *word == 0) {
         if part.is_empty() {
@@ -201,7 +201,7 @@ impl Inputs {
     }
 
     /// Whether files node `node` last read its paths from `handle`.
-    pub(crate) fn file_node_saw(&self, node: &entelechy_scene::FilesNode, handle: Handle) -> bool {
+    pub fn file_node_saw(&self, node: &entelechy_scene::FilesNode, handle: Handle) -> bool {
         self.file_nodes
             .get(&node.node)
             .is_none_or(|known| known.seen == Some(handle))
@@ -210,7 +210,7 @@ impl Inputs {
     /// Gives files node `node` the paths `paths` spell (read from the Field
     /// `handle`): the files they name read again when they differ from the
     /// last; what fails is reported by the next sync.
-    pub(crate) fn give_paths(
+    pub fn give_paths(
         &mut self,
         store: &dyn Store,
         readable: &dyn Fn(&Path) -> Result<(), String>,

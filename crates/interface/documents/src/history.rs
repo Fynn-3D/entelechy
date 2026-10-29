@@ -143,7 +143,7 @@ pub struct Attempt {
 
 /// The session's memory of change.
 #[derive(Clone, Default)]
-pub(crate) struct History {
+pub struct History {
     revision: u64,
     frame: u64,
     changes: VecDeque<Record>,
@@ -164,28 +164,22 @@ fn wall() -> u64 {
 
 impl History {
     /// The world's position: its revision and the frames run in it.
-    pub(crate) fn position(&self) -> (u64, u64) {
+    pub fn position(&self) -> (u64, u64) {
         (self.revision, self.frame)
     }
 
     /// An evaluation committed.
-    pub(crate) fn ran(&mut self) {
+    pub fn ran(&mut self) {
         self.frame += 1;
     }
 
     /// Evaluations answered as committed were taken back.
-    pub(crate) fn taken_back(&mut self, frames: u64) {
+    pub fn taken_back(&mut self, frames: u64) {
         self.frame = self.frame.saturating_sub(frames);
     }
 
     /// A Kernel was published with `source`.
-    pub(crate) fn published(
-        &mut self,
-        id: &KernelId,
-        to: Generation,
-        source: &str,
-        origin: Origin,
-    ) {
+    pub fn published(&mut self, id: &KernelId, to: Generation, source: &str, origin: Origin) {
         let hash = self.keep(source);
         let from = self.current.insert(id.clone(), to);
         self.record(
@@ -200,7 +194,7 @@ impl History {
     }
 
     /// A Kernel left.
-    pub(crate) fn retired(&mut self, id: &KernelId, origin: Origin) {
+    pub fn retired(&mut self, id: &KernelId, origin: Origin) {
         let from = self.current.remove(id);
         self.record(
             origin,
@@ -213,7 +207,7 @@ impl History {
 
     /// The scene rebuilt from `text`, with its other documents `loaded`;
     /// the texts are kept, the others' only when new to their path.
-    pub(crate) fn scene(&mut self, text: &str, loaded: &[(PathBuf, String)], origin: Origin) {
+    pub fn scene(&mut self, text: &str, loaded: &[(PathBuf, String)], origin: Origin) {
         let document = self.keep(text);
         let documents = self.versions(loaded, true);
         self.record(
@@ -226,7 +220,7 @@ impl History {
     }
 
     /// Documents a compose wrote, whose texts are kept.
-    pub(crate) fn documents(&mut self, written: &[(PathBuf, String)], origin: Origin) {
+    pub fn documents(&mut self, written: &[(PathBuf, String)], origin: Origin) {
         let written = self.versions(written, false);
         self.record(origin, Change::Documents { written });
     }
@@ -247,18 +241,12 @@ impl History {
     }
 
     /// Anything else that changed the world.
-    pub(crate) fn changed(&mut self, change: Change, origin: Origin) {
+    pub fn changed(&mut self, change: Change, origin: Origin) {
         self.record(origin, change);
     }
 
     /// An attempt refused.
-    pub(crate) fn refused(
-        &mut self,
-        subject: String,
-        why: String,
-        source: Option<&str>,
-        origin: Origin,
-    ) {
+    pub fn refused(&mut self, subject: String, why: String, source: Option<&str>, origin: Origin) {
         let source = source.map(|text| self.keep(text));
         self.attempts.push_back(Attempt {
             revision: self.revision,
@@ -278,12 +266,12 @@ impl History {
     }
 
     /// The changes after `since`, oldest first.
-    pub(crate) fn changes(&self, since: u64) -> impl Iterator<Item = &Record> {
+    pub fn changes(&self, since: u64) -> impl Iterator<Item = &Record> {
         self.changes.iter().filter(move |r| r.revision > since)
     }
 
     /// The attempts refused at or after revision `since`, oldest first.
-    pub(crate) fn attempts(&self, since: u64) -> impl Iterator<Item = &Attempt> {
+    pub fn attempts(&self, since: u64) -> impl Iterator<Item = &Attempt> {
         self.attempts.iter().filter(move |a| a.revision >= since)
     }
 
@@ -294,7 +282,7 @@ impl History {
 
     /// A scene document a remembered change loaded, by digest; Kernel
     /// sources are excluded.
-    pub(crate) fn scene_text(&self, digest: u64) -> Option<&str> {
+    pub fn scene_text(&self, digest: u64) -> Option<&str> {
         self.changes
             .iter()
             .any(|record| matches!(record.change, Change::Scene { document, .. } if document == digest))
@@ -304,12 +292,7 @@ impl History {
 
     /// A text the document at `path` had, by digest, when a remembered
     /// compose wrote it or a remembered scene change loaded it.
-    pub(crate) fn document_text(
-        &self,
-        path: &std::path::Path,
-        digest: u64,
-        scene: bool,
-    ) -> Option<&str> {
+    pub fn document_text(&self, path: &std::path::Path, digest: u64, scene: bool) -> Option<&str> {
         let written = self.changes.iter().any(|record| match &record.change {
             Change::Documents { written } => written
                 .iter()
@@ -330,7 +313,7 @@ impl History {
 
     /// The source a Kernel had at `generation`, when a remembered change
     /// published it.
-    pub(crate) fn source_of(&self, id: &KernelId, generation: Generation) -> Option<&str> {
+    pub fn source_of(&self, id: &KernelId, generation: Generation) -> Option<&str> {
         self.changes
             .iter()
             .rev()

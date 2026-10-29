@@ -968,14 +968,15 @@ impl Store for Kept {
 /// make included), everything else as `base` has it. What a compose of
 /// several documents is checked against before any reaches `base`;
 /// nothing is written through it.
-pub(crate) struct Overlay<'a> {
+pub struct Overlay<'a> {
     base: &'a dyn Store,
     /// Each text by where its path lands ([`Overlay::landed`]).
     texts: BTreeMap<PathBuf, (Vec<u8>, u64)>,
 }
 
 impl<'a> Overlay<'a> {
-    pub(crate) fn new(base: &'a dyn Store, texts: &[(PathBuf, String)]) -> Self {
+    /// `base` seen through `texts`.
+    pub fn new(base: &'a dyn Store, texts: &[(PathBuf, String)]) -> Self {
         let mut overlay = Self {
             base,
             texts: BTreeMap::new(),
