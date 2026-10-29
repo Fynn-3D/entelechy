@@ -2,8 +2,8 @@
 
 Triangles turned into the surface a camera sees, drawn alike on every
 backend: plain, tiled and through a cutout mask; and translucent
-triangles over it, in any order. `native.rasterize` is
-its fast path.
+triangles over it, in any order. `native.rasterize`, and `native.cover`
+for the keys alone, are its fast paths.
 
 **Layer:** Graphics. **Uses:** [`parallel`](../parallel.entpkg/README.md).
 

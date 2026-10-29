@@ -23,14 +23,19 @@ pub enum NativeOp {
     /// The same onto a `canvas`, whose extent the surface takes, as the
     /// raster package's Kernels take theirs.
     RasterizeCanvas,
+    /// Each pixel's least key of `keys` and the triangles' fragments: the
+    /// raster package's `raster.cover@4`, fast, for what needs only the
+    /// nearest depth (a shadow map).
+    Cover,
 }
 
 impl NativeOp {
     /// Every native operation.
-    pub const ALL: [NativeOp; 3] = [
+    pub const ALL: [NativeOp; 4] = [
         NativeOp::Rasterize,
         NativeOp::RasterizeCutout,
         NativeOp::RasterizeCanvas,
+        NativeOp::Cover,
     ];
 
     /// The id a graph binds to.
@@ -39,6 +44,7 @@ impl NativeOp {
             Self::Rasterize => KernelId::new("native.rasterize", 1).expect("valid id"),
             Self::RasterizeCutout => KernelId::new("native.rasterize", 2).expect("valid id"),
             Self::RasterizeCanvas => KernelId::new("native.rasterize", 3).expect("valid id"),
+            Self::Cover => KernelId::new("native.cover", 1).expect("valid id"),
         }
     }
 
@@ -111,6 +117,24 @@ impl NativeOp {
             });
             return manifest;
         }
+        if self == Self::Cover {
+            let keys = PortType {
+                element: Type::Long,
+                shape: Shape::Grid,
+                schema: crate::raster::canvas_schema(),
+            };
+            let mut manifest = Self::Rasterize.manifest();
+            manifest.id = self.id();
+            manifest.inputs.push(Port {
+                name: "keys".into(),
+                ty: keys.clone(),
+            });
+            manifest.outputs = vec![Port {
+                name: "result".into(),
+                ty: keys,
+            }];
+            return manifest;
+        }
         if self == Self::RasterizeCanvas {
             let mut manifest = Self::Rasterize.manifest();
             manifest.id = self.id();
@@ -125,7 +149,9 @@ impl NativeOp {
             return manifest;
         }
         match self {
-            Self::RasterizeCutout | Self::RasterizeCanvas => unreachable!("answered above"),
+            Self::RasterizeCutout | Self::RasterizeCanvas | Self::Cover => {
+                unreachable!("answered above")
+            }
             Self::Rasterize => Manifest {
                 id: self.id(),
                 mode: entelechy_ir::Mode::Map,
@@ -168,6 +194,20 @@ impl NativeOp {
     /// The contract as text, shown where a Kernel shows its source.
     pub fn source(self) -> &'static str {
         match self {
+            Self::Cover => {
+                "\
+// native.cover@1: the backend's rasterizer, for the nearest depth alone.
+//   input vertices: Rows<{ clip: Vec4; normal: Vec3; uv: Vec2; }>
+//   input triangles: Rows<{ a: Int; b: Int; c: Int; }>
+//   input keys: Grid<Long>
+//   output result: Grid<Long>
+// The raster package's `raster.cover@4`, fast: at each pixel of `keys`
+// (the node's domain is `size(keys)`), the least of its key and every
+// fragment's, a fragment's key the bits of its depth above and its
+// triangle's row below, so the least is the nearest and the earliest
+// row at it; the triangles drawn as `native.rasterize@1` draws them.
+"
+            }
             Self::RasterizeCanvas => {
                 "\
 // native.rasterize@3: the backend's rasterizer, onto a canvas.

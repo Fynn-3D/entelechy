@@ -885,7 +885,14 @@ be keywords.
    takes a `canvas` (a `Grid<Long>`, the empty canvas the package's
    Kernels take their extent from) as well and draws over its extent,
    `domain = size(canvas);`, so a surface sized by another node's output
-   is drawn as the package draws it.
+   is drawn as the package draws it. `native.cover@1` is the package's
+   `raster.cover@4`, fast, for what needs only the nearest depth (a
+   shadow map): `vertices`, `triangles` and `keys` (a `Grid<Long>`) in,
+   `result` out, at each pixel the least of its key and every fragment's
+   (the depth's bits above, the triangle's row below), `domain =
+   size(keys);`; bit for bit on the interpreter and the JIT, on a GPU
+   the device's rasterizer, approximate at edges and in a depth's last
+   bits.
 9. A graph exposes `input`, `param` and `output` like a Kernel, so it is
    placed with `node name: graph "path.esn" { ... }`. Placement
    flattens it: its nodes join the parent under `name.`, its inputs take

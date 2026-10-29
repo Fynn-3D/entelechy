@@ -1063,6 +1063,7 @@ impl Backend for CpuBackend {
             NativeOp::RasterizeCutout => {
                 entelechy_rules::raster::rasterize_cutout(invocation, scope)
             }
+            NativeOp::Cover => entelechy_rules::raster::cover(invocation, scope),
             NativeOp::RasterizeCanvas => {
                 entelechy_rules::raster::rasterize_canvas(invocation, scope)
             }

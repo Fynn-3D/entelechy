@@ -581,10 +581,10 @@ fn the_protocol_serves_sockets_and_a_quit_ends_only_its_connection() {
         json!({ "id": 4, "op": "status" }),
         json!({ "id": 5, "op": "quit" }),
     ]);
-    // The scene's three; the rasterizer, its cutout and its canvas form
-    // are natives.
+    // The scene's three; the rasterizer, its cutout and its canvas form,
+    // and the cover, are natives.
     assert_eq!(second[0]["ok"]["kernels"], 3, "{}", second[0]);
-    assert_eq!(second[0]["ok"]["natives"], 3, "{}", second[0]);
+    assert_eq!(second[0]["ok"]["natives"], 4, "{}", second[0]);
     let mut stdin = child.0.stdin.take().unwrap();
     writeln!(stdin, "{}", json!({ "id": 6, "op": "quit" })).unwrap();
     drop(stdin);

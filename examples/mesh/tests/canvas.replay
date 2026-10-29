@@ -12,3 +12,10 @@ expect apart.result[0] = 0
 # pixel the other way now and then, fifteen of some thirty thousand here.
 expect differ.result[0] <= 64
 expect drawn.result[0] = 30322
+# The keys alone, by the package's cover and by its fast path, pick the
+# same triangle as the surfaces do (a GPU's depth words differ in their
+# last bits besides); over a wall of keys the least is kept, the torus
+# hidden where it is behind.
+expect rows_apart.result[0] <= 64
+expect walled_rows_apart.result[0] <= 64
+expect behind_wall.result[0] = 23964

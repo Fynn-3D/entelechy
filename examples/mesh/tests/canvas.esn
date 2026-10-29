@@ -4,8 +4,12 @@
 // canvas's size, the pixels they draw differently counted. The two
 // presets are the same Kernels and draw the same surface to the bit on
 // every backend; on the interpreter and the JIT the fast path is the
-// package's rule written in Rust, on a GPU the device's rasterizer.
+// package's rule written in Rust, on a GPU the device's rasterizer. The
+// keys alone likewise: `raster.cover@4` and its fast path `native.cover@1`,
+// onto the empty canvas and onto a wall of keys the torus is half in
+// front of.
 use "../kernels/";
+use "../../../packages/raster.entpkg";
 
 param level: Int = 1;
 
@@ -32,6 +36,12 @@ node native: native.rasterize@3 {
     canvas <- canvas.result;
     domain = size(canvas);
 }
+// A wall at depth 0.9605, triangle row 7, across the canvas.
+node wall: Grid<Long> { domain = vec2(320, 240); value = 4572810946581364743l; }
+node cover: raster.cover@4 { triangles <- subdivided.faces; vertices <- project.result; keys <- canvas.result; }
+node fast_cover: native.cover@1 { triangles <- subdivided.faces; vertices <- project.result; keys <- canvas.result; domain = size(keys); }
+node walled: raster.cover@4 { triangles <- subdivided.faces; vertices <- project.result; keys <- wall.result; }
+node fast_walled: native.cover@1 { triangles <- subdivided.faces; vertices <- project.result; keys <- wall.result; domain = size(keys); }
 node plain: graph "../../../packages/raster.entpkg/graphs/surface.esn" {
     vertices <- project.result;
     triangles <- subdivided.faces;
@@ -74,6 +84,37 @@ node drawn: kernel {
     output result: Rows<Int>;
     compute over over { return int(sample(over).id >= 0); }
     merge(a, b) { return a + b; }
+}
+
+// How many pixels two covers give a different triangle (the key's low
+// word), or one where the other gives none: onto the empty canvas, and
+// onto the wall.
+node rows_apart: kernel {
+    requires { field.read; field.write; }
+    input a: Grid<Long> <- cover.result;
+    input b: Grid<Long> <- fast_cover.result;
+    output result: Rows<Int>;
+    compute over a { return int((sample(a) & 4294967295l) != (sample(b) & 4294967295l)); }
+    merge(x, y) { return x + y; }
+}
+node walled_rows_apart: kernel {
+    requires { field.read; field.write; }
+    input a: Grid<Long> <- walled.result;
+    input b: Grid<Long> <- fast_walled.result;
+    output result: Rows<Int>;
+    compute over a { return int((sample(a) & 4294967295l) != (sample(b) & 4294967295l)); }
+    merge(x, y) { return x + y; }
+}
+
+// How many pixels the torus is drawn behind the wall at: the wall's key
+// kept where the torus covers the empty canvas.
+node behind_wall: kernel {
+    requires { field.read; field.write; }
+    input a: Grid<Long> <- walled.result;
+    input drawn: Grid<Long> <- cover.result;
+    output result: Rows<Int>;
+    compute over a { return int(sample(a) == 4572810946581364743l && sample(drawn) != 9223372036854775807l); }
+    merge(x, y) { return x + y; }
 }
 
 node view: torus.shade@1 { surface <- package.surface; }

@@ -515,7 +515,8 @@ tests and the web bridge's, in a headless Chrome.
 
 A scene places `packages/raster.entpkg` to turn triangles into a
 surface, and binds a preset's native operation (`native.rasterize@1` to
-`@3`) in its place where it wants speed. Both keep one rule: a pixel is
+`@3`, or `native.cover@1` for `raster.cover@4`'s keys alone) in its place
+where it wants speed. Both keep one rule: a pixel is
 covered where its center is inside the triangle's box and on or inside
 all three edges, holding the nearest fragment, the earlier on a tie. On
 the interpreter and the JIT the native path is exact to the rule; on a

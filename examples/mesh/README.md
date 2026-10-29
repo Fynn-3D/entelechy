@@ -17,7 +17,9 @@ package.
 `tests/native.esn` puts `native.rasterize@1` in the package's place: bit
 for bit on the interpreter and the JIT; on the GPU the device's
 rasterizer draws the larger triangles, and their edge pixels may differ. `tests/canvas.replay` holds the
-package's canvas preset to its plain one and to `native.rasterize@3`. The
+package's canvas preset to its plain one and to `native.rasterize@3`,
+and `raster.cover@4` to `native.cover@1`, onto an empty canvas and onto
+a wall of keys. The
 rasterizer's own contract at its edges, near planes and degenerate
 triangles is held by the raster package's tests
 ([`packages/raster.entpkg/tests`](../../packages/raster.entpkg/tests/)).

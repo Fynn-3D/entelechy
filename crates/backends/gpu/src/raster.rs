@@ -421,6 +421,7 @@ const RESOLVE_WGSL: &str = "
 @group(0) @binding(4) var places: texture_2d<u32>;
 @group(0) @binding(5) var<storage, read_write> out: array<u32>;
 @group(0) @binding(6) var<storage, read> keys: array<vec2<u32>>;
+@group(0) @binding(7) var<storage, read> before: array<vec2<u32>>;
 
 struct Fragment {
     z: f32,
@@ -512,6 +513,65 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     out[dst + 5u] = bitcast<u32>(f.uv.y);
     out[dst + 6u] = row;
 }
+
+// Triangle `t`'s depth at the pixel center `p`, as `fragment` gives it.
+fn depth_of(t: u32, p: vec2<f32>) -> f32 {
+    let a = screen(corner(t, 0u));
+    var b = screen(corner(t, 1u));
+    var c = screen(corner(t, 2u));
+    if edge(a.xy, b.xy, c.xy) < 0.0 {
+        let swap = b;
+        b = c;
+        c = swap;
+    }
+    let area = edge(a.xy, b.xy, c.xy);
+    return edge(b.xy, c.xy, p) / area * a.z + edge(c.xy, a.xy, p) / area * b.z
+        + edge(a.xy, b.xy, p) / area * c.z;
+}
+
+// The cover: at each pixel the least, as a signed 64-bit key, of the key
+// before it and the nearest fragment's, its depth's bits above and its
+// row below, a key two words, the low first.
+@compute @workgroup_size(8, 8, 1)
+fn cover(@builtin(global_invocation_id) id: vec3<u32>) {
+    let width = u32(setup.size.x);
+    let height = u32(setup.size.y);
+    if id.x >= width || id.y >= height {
+        return;
+    }
+    let pixel = id.y * width + id.x;
+    let p = vec2<f32>(f32(id.x) + 0.5, f32(id.y) + 0.5);
+    let place = textureLoad(places, vec2<i32>(i32(id.x), i32(id.y)), 0).r;
+    var row = 0u;
+    var z = 0.0;
+    var found = false;
+    if place != 0u {
+        row = rows[place - 1u];
+        z = depth_of(row, p);
+        found = true;
+    }
+    if setup.small != 0u {
+        let key = keys[pixel];
+        if (key.x | key.y) != 0u {
+            let here = ~key.x;
+            let near = bitcast<f32>(~key.y);
+            if !found || near < z || (near == z && here < row) {
+                row = here;
+                z = near;
+                found = true;
+            }
+        }
+    }
+    var least = before[pixel];
+    if found {
+        let high = bitcast<u32>(z);
+        if bitcast<i32>(high) < bitcast<i32>(least.y) || (high == least.y && row < least.x) {
+            least = vec2<u32>(row, high);
+        }
+    }
+    out[pixel * 2u] = least.x;
+    out[pixel * 2u + 1u] = least.y;
+}
 ";
 
 /// The widest box, in pixel centers, of a triangle the sorting pass draws
@@ -533,6 +593,8 @@ pub(crate) struct RasterPipelines {
     draw_cut: wgpu::RenderPipeline,
     resolve_layout: wgpu::BindGroupLayout,
     resolve: wgpu::ComputePipeline,
+    /// The resolving pass of `native.cover`: keys, not a surface.
+    cover: wgpu::ComputePipeline,
     /// Whether the draw is indexed: see [`GpuBackend::primitive_index`].
     indexed: bool,
     /// Whether the sorting pass draws small triangles itself: where the
@@ -736,6 +798,7 @@ fn build(
             },
             storage(5, c, false),
             storage(6, c, true),
+            storage(7, c, true),
         ],
     );
     let resolve = compute(
@@ -743,6 +806,12 @@ fn build(
         &resolve_pipeline_layout,
         &resolve_module,
         "main",
+    );
+    let cover = compute(
+        "entelechy cover resolve",
+        &resolve_pipeline_layout,
+        &resolve_module,
+        "cover",
     );
     if let Some(error) = wait.block_on(guard.pop()) {
         return Err(format!(
@@ -760,6 +829,7 @@ fn build(
         draw_cut,
         resolve_layout,
         resolve,
+        cover,
         indexed,
         here,
     })
@@ -792,7 +862,15 @@ pub(crate) fn rasterize(
     scope: &mut Scope<'_>,
     op: NativeOp,
 ) -> Result<Vec<Handle>, ExecutionError> {
+    // The cover's keys before it, which it reads and leaves its least over.
+    let mut before = None;
     let (vertices, triangles, mask, alpha) = match op {
+        NativeOp::Cover => {
+            let (vertices, triangles, keys) =
+                entelechy_rules::raster::check_cover(invocation, scope)?;
+            before = Some(keys);
+            (vertices, triangles, None, 0.0)
+        }
         NativeOp::RasterizeCutout => {
             let (vertices, triangles, mask, alpha) =
                 entelechy_rules::raster::check_rasterize_cutout(invocation, scope)?;
@@ -928,7 +1006,18 @@ pub(crate) fn rasterize(
     let places_view = places.create_view(&Default::default());
     let depth_view = depth.create_view(&Default::default());
 
-    let output_size = width as u64 * height as u64 * SURFACE_WORDS as u64 * 4;
+    // A surface, or two words a key.
+    let (schema, words) = match before {
+        Some(_) => (entelechy_rules::raster::canvas_schema(), 2),
+        None => (surface_schema(), SURFACE_WORDS as u64),
+    };
+    let output_size = width as u64 * height as u64 * words * 4;
+    // The keys before the cover; the surface's pass binds the small
+    // triangles' keys there, unread.
+    let before_buffer = match before {
+        Some(keys) => Some(gpu.bind_input(scope, keys)?),
+        None => None,
+    };
     let output_buffer = spare.take(
         &gpu.device,
         output_size,
@@ -948,6 +1037,7 @@ pub(crate) fn rasterize(
             },
             entry(5, &output_buffer),
             entry(6, &keys),
+            entry(7, before_buffer.as_ref().unwrap_or(&keys)),
         ],
     });
 
@@ -1027,7 +1117,11 @@ pub(crate) fn rasterize(
                 .as_ref()
                 .map(|timing| timing.compute(None, Some(1))),
         });
-        pass.set_pipeline(&pipelines.resolve);
+        pass.set_pipeline(if before.is_some() {
+            &pipelines.cover
+        } else {
+            &pipelines.resolve
+        });
         pass.set_bind_group(0, &resolve_group, &[]);
         pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
     }
@@ -1044,7 +1138,7 @@ pub(crate) fn rasterize(
         )));
     }
     let output = scope.adopt_resident(
-        surface_schema(),
+        schema,
         domain,
         Box::new(DeviceImage {
             buffer: output_buffer,

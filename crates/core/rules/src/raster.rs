@@ -121,6 +121,16 @@ pub fn check_rasterize_canvas(
     Ok((vertices, triangles))
 }
 
+/// The same for the cover: the keys are the `keys` grid's extent, which
+/// is returned too.
+pub fn check_cover(
+    invocation: &Invocation,
+    scope: &Scope<'_>,
+) -> Result<(Handle, Handle, Handle), ExecutionError> {
+    let (vertices, triangles, _) = check_rasterize_with(invocation, scope, Extra::Keys)?;
+    Ok((vertices, triangles, invocation.inputs[2]))
+}
+
 /// The same for the cutout form, also returning the mask and the alpha
 /// a fragment must reach.
 pub fn check_rasterize_cutout(
@@ -142,6 +152,9 @@ enum Extra {
     None,
     Mask,
     Canvas,
+    /// The cover's `keys`: a canvas whose keys are read, and the output's
+    /// layout.
+    Keys,
 }
 
 fn check_rasterize_with(
@@ -158,7 +171,12 @@ fn check_rasterize_with(
     }
     let (vertices, triangles) = (invocation.inputs[0], invocation.inputs[1]);
     let mask = (extra == Extra::Mask).then(|| invocation.inputs[2]);
-    let contract = |message: String| ExecutionError::Device(format!("rasterize: {message}"));
+    let op = if extra == Extra::Keys {
+        "cover"
+    } else {
+        "rasterize"
+    };
+    let contract = |message: String| ExecutionError::Device(format!("{op}: {message}"));
     if scope.schema(vertices)? != vertex_schema() {
         return Err(contract(
             "`vertices` must be rows of `clip: Vec4, normal: Vec3, uv: Vec2`".into(),
@@ -184,18 +202,23 @@ fn check_rasterize_with(
     if invocation.domain.is_empty() {
         return Err(ExecutionError::EmptyDomain);
     }
-    if extra == Extra::Canvas {
+    if matches!(extra, Extra::Canvas | Extra::Keys) {
+        let (port, drawn) = if extra == Extra::Keys {
+            ("keys", "the keys are")
+        } else {
+            ("canvas", "the surface is")
+        };
         let canvas = invocation.inputs[2];
         if scope.schema(canvas)? != canvas_schema() {
-            return Err(contract("`canvas` must be a grid of `Long`".into()));
+            return Err(contract(format!("`{port}` must be a grid of `Long`")));
         }
         let extent = scope.size(canvas)?;
         if extent.shape() != Shape::Grid {
-            return Err(contract("`canvas` must be a grid".into()));
+            return Err(contract(format!("`{port}` must be a grid")));
         }
         if extent != invocation.domain {
             return Err(contract(format!(
-                "the surface is the canvas's extent, {} by {}, not {} by {}: its domain is `size(canvas)`",
+                "{drawn} the {port}'s extent, {} by {}, not {} by {}: its domain is `size({port})`",
                 extent.width(),
                 extent.height(),
                 invocation.domain.width(),
@@ -211,9 +234,14 @@ fn check_rasterize_with(
             return Err(contract("`mask` must be a grid".into()));
         }
     }
-    // The surface is charged before any backend draws it, so an
+    // What is drawn is charged before any backend draws it, so an
     // oversized domain is refused by its cost.
-    scope.can_hold(&[(&surface_schema(), invocation.domain)])?;
+    let drawn = if extra == Extra::Keys {
+        canvas_schema()
+    } else {
+        surface_schema()
+    };
+    scope.can_hold(&[(&drawn, invocation.domain)])?;
     Ok((vertices, triangles, mask))
 }
 
@@ -260,6 +288,54 @@ pub fn rasterize_canvas(
     let mut drawn = invocation.clone();
     drawn.inputs.truncate(2);
     rasterize(&drawn, scope)
+}
+
+/// Covers `keys`: each pixel's least of its key and the key of the
+/// fragment [`rasterize`] would leave there, the bits of its depth above
+/// and its triangle's row below; `raster.cover@4`'s keys, bit for bit,
+/// as the surface is the package's.
+pub fn cover(
+    invocation: &Invocation,
+    scope: &mut Scope<'_>,
+) -> Result<Vec<Handle>, ExecutionError> {
+    let (vertices, triangles, keys) = check_cover(invocation, scope)?;
+    let domain = invocation.domain;
+    let surface = rasterize_words(
+        &scope.values(vertices)?,
+        &scope.values(triangles)?,
+        domain.width(),
+        domain.height(),
+    );
+    let words = cover_words(&surface, &scope.values(keys)?);
+    let output = scope.create(canvas_schema(), domain)?;
+    if let Err(error) = scope.write_values(output, &words) {
+        let _ = scope.release(output);
+        return Err(error.into());
+    }
+    Ok(vec![output])
+}
+
+/// The keys a surface leaves over the keys before it, two words each,
+/// low word first: where a fragment landed, the least of its key and the
+/// one before.
+pub fn cover_words(surface: &[u32], before: &[u32]) -> Vec<u32> {
+    let mut out = Vec::with_capacity(before.len());
+    for (texel, was) in surface
+        .chunks_exact(SURFACE_WORDS)
+        .zip(before.chunks_exact(2))
+    {
+        let was = (u64::from(was[0]) | (u64::from(was[1]) << 32)) as i64;
+        let id = texel[SURFACE_WORDS - 1];
+        let key = if id as i32 >= 0 {
+            ((u64::from(texel[0]) << 32) | u64::from(id)) as i64
+        } else {
+            i64::MAX
+        };
+        let least = was.min(key) as u64;
+        out.push(least as u32);
+        out.push((least >> 32) as u32);
+    }
+    out
 }
 
 /// Rasterizes with a cutout: a fragment whose mask alpha is below the
