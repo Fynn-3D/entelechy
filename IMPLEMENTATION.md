@@ -13,8 +13,8 @@ in [DECISIONS](docs/DECISIONS.md).
 | --- | --- |
 | `.ent` compiles | [compiler tests](crates/frontend/compiler/tests/compile.rs) |
 | Kernel calls Host only through ABI | [scope tests](crates/core/abi/src/lib.rs), [denied execution](crates/backends/cpu/tests/execute.rs), [validator capability checks](crates/core/ir/src/validate.rs) |
-| Kernel hot-swaps without restart | [hot swap tests](crates/interface/session/tests/hot_swap.rs), [a scene's change swapped whole](crates/interface/session/tests/scene_change.rs), [session tests](crates/interface/entelechy/tests/session.rs) |
-| Graph references KernelID | [composition tests](crates/interface/session/tests/composition.rs), [example scene](examples/grayscale/scene.esn) |
+| Kernel hot-swaps without restart | [hot swap tests](crates/core/kernel/tests/swap.rs), [a scene's change swapped whole](crates/interface/session/tests/scene_change.rs), [session tests](crates/interface/entelechy/tests/session.rs) |
+| Graph references KernelID | [composition tests](crates/core/graph/tests/composition.rs), [example scene](examples/grayscale/scene.esn) |
 
 ## Layers
 
@@ -38,9 +38,9 @@ directions: a test needing a higher crate lives in that crate's tests.
 | JIT backend | [jit](crates/backends/jit/src/lib.rs), [Cranelift emission](crates/backends/jit/src/codegen.rs), [WebAssembly emission](crates/backends/jit/src/wasm) | [parity](crates/backends/jit/tests/parity.rs), [matrix](crates/backends/jit/tests/matrix.rs), [as WebAssembly in node](crates/interface/entelechy/tests/wasm.rs) |
 | GPU backend | [gpu](crates/backends/gpu/src/lib.rs), [WGSL](crates/backends/gpu/src/wgsl/mod.rs), [rasterizer](crates/backends/gpu/src/raster.rs), [presenter](crates/backends/gpu/src/present.rs), [wait](crates/backends/gpu/src/wait.rs) | [parity](crates/backends/gpu/tests/parity.rs), [matrix](crates/backends/gpu/tests/matrix.rs) (skip without an adapter), [shader names](crates/backends/gpu/tests/names.rs) |
 | Conformance matrix | [matrix](crates/backends/conformance/src/lib.rs) | bit for bit [on the JIT](crates/backends/jit/tests/matrix.rs), ints exact and floats to rounding [on the GPU](crates/backends/gpu/tests/matrix.rs) |
-| Kernel Runtime | [runtime](crates/core/kernel/src/lib.rs), [off-frame runs](crates/core/kernel/src/later.rs), [clock](crates/core/kernel/src/clock.rs) | [hot swap](crates/interface/session/tests/hot_swap.rs), [async](crates/interface/session/tests/later.rs), [mixed backends](crates/interface/session/tests/mixed.rs) |
+| Kernel Runtime | [runtime](crates/core/kernel/src/lib.rs), [off-frame runs](crates/core/kernel/src/later.rs), [clock](crates/core/kernel/src/clock.rs) | [hot swap](crates/core/kernel/tests/swap.rs), [async](crates/interface/session/tests/later.rs), [mixed backends](crates/interface/session/tests/mixed.rs) |
 | Scene documents | [scene](crates/frontend/scene/src/lib.rs), [domain](crates/frontend/scene/src/domain.rs) | lowering tests in place, [every form lowered](crates/frontend/scene/tests/surface.rs) |
-| Graph Runtime | [graph](crates/core/graph/src/lib.rs), [evaluator](crates/core/graph/src/evaluate/mod.rs), [domain](crates/core/graph/src/domain.rs) | [composition tests](crates/interface/session/tests/composition.rs) |
+| Graph Runtime | [graph](crates/core/graph/src/lib.rs), [evaluator](crates/core/graph/src/evaluate/mod.rs), [domain](crates/core/graph/src/domain.rs) | [composition tests](crates/core/graph/tests/composition.rs), [with the compiler](crates/interface/session/tests/composition.rs) |
 | Documents | [documents](crates/interface/documents/src/lib.rs): [scene](crates/interface/documents/src/scene.rs), [kernels](crates/interface/documents/src/kernels.rs), [inputs](crates/interface/documents/src/inputs/mod.rs), [sources](crates/interface/documents/src/sources.rs), [store](crates/interface/documents/src/store.rs); [formats](crates/interface/formats/src/lib.rs) | [layers](crates/interface/entelechy/tests/layers.rs) |
 | Session | [session](crates/interface/session/src/session.rs), [observe](crates/interface/session/src/observe.rs), [bench](crates/interface/session/src/bench.rs) | [session tests](crates/interface/entelechy/tests/session.rs) |
 | Creation protocol | [protocol](crates/interface/protocol/src/lib.rs): [inspect](crates/interface/protocol/src/inspect.rs), [create](crates/interface/protocol/src/create.rs), [run](crates/interface/protocol/src/run.rs), [fields](crates/interface/protocol/src/fields.rs), [wire](crates/interface/protocol/src/wire.rs), [transport](crates/interface/protocol/src/transport.rs), [WebSocket](crates/interface/protocol/src/websocket.rs) | [client](crates/interface/entelechy/tests/protocol.rs), [live agents](crates/interface/entelechy/tests/agent.rs), [what agents found wanting](crates/interface/entelechy/tests/findings/) |
@@ -157,7 +157,7 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   backend [offset](crates/interface/session/tests/offset.rs)). A reduce,
   scan, scatter, prefix, group, async or native node is never fused.
 - One Field per declared output or the execution fails
-  ([`held_to`](crates/core/kernel/src/lib.rs), [test](crates/interface/session/tests/hot_swap.rs)).
+  ([`held_to`](crates/core/kernel/src/lib.rs), [test](crates/core/kernel/tests/swap.rs)).
 - Repetition: one Kernel over its own output is one group, one GPU
   encoder ([`Backend::execute_repeated`](crates/core/rules/src/backend.rs)).
 - Native operations are versions at generation zero
@@ -218,7 +218,7 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   [`Check`](crates/core/rules/src/backend.rs)
   ([device test](crates/backends/gpu/tests/parity.rs)).
 - Only nodes declaring `time.read` or `input.read` re-execute on a clock
-  or input change ([composition](crates/interface/session/tests/composition.rs)).
+  or input change ([composition](crates/core/graph/tests/composition.rs)).
 - `entelechy help` is generated from the typing rule and the lowering
   ([help](crates/frontend/compiler/src/help.rs)); unknown names answer with
   the near miss ([names](crates/core/abi/src/names.rs)).
@@ -248,7 +248,7 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   the runtime takes validated IR and the backend the session picks
   ([`runtime_for`](crates/interface/session/src/session.rs)).
 - `prepare` does the work, `publish` swaps a pointer; `prepare_later`
-  moves it to a worker ([hot swap](crates/interface/session/tests/hot_swap.rs)).
+  moves it to a worker ([hot swap](crates/core/kernel/tests/swap.rs)).
 - A sync compiles every new or changed Kernel of the documents it read,
   and prepares the new ones, on every core at once through a
   [`Preparer`](crates/core/kernel/src/lib.rs); each document then
