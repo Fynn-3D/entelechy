@@ -180,7 +180,8 @@ off the frames and swaps in when ready. It takes `run`'s `--library`,
   protocol from the window.
 
 The window shows the first output that is a grid of pixels; the sound
-card plays the first that is rows of one or two floats; the picture named
+card plays the first that is rows of one or two floats, `cursor_hotspot`
+apart; the picture named
 `cursor` is the system's pointer over the window, pointing with the pixel
 `cursor_hotspot` names. A gamepad is
 keys too: the D-pad and left stick are the arrows, South Z, East X,

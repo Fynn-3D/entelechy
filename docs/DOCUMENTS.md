@@ -821,8 +821,8 @@ be keywords.
 2. A source is a graph input by name or `node.port`. Inputs and nodes
    share one namespace. A graph may declare several outputs; which
    device takes which is decided by structure (a grid of pixels for the
-   window, rows of one or two floats for the sound card), and the
-   pointer by name: the picture `cursor` (at most 128 by 128) is the
+   window, rows of one or two floats for the sound card, the pointer's
+   hotspot apart), and the pointer by name: the picture `cursor` (at most 128 by 128) is the
    system's pointer, pointing with the pixel the first row of
    `cursor_hotspot` names (two numbers across and down from its top
    left; its middle without one)

@@ -2553,10 +2553,15 @@ impl Session {
     }
 
     /// The output of `report` every interface plays, and its channels:
-    /// the first rows of one float (mono) or two (stereo).
+    /// the first rows of one float (mono) or two (stereo) but the
+    /// pointer's hotspot ([`crate::HOTSPOT_OUTPUT`]).
     pub fn sound_of(&self, report: &entelechy_graph::Report) -> Option<(Handle, usize)> {
         let host = self.runtime.host();
-        report.outputs.iter().find_map(|(_, handle)| {
+        report.outputs.iter().find_map(|(name, handle)| {
+            // The pointer's hotspot is two numbers as a stereo sample is.
+            if name == crate::HOTSPOT_OUTPUT {
+                return None;
+            }
             let rows = host
                 .domain(*handle)
                 .is_ok_and(|d| d.shape() == entelechy_kernel::Shape::Rows);
@@ -2743,7 +2748,10 @@ fn shown_kernels(
         )
         .map(|(name, _)| name.clone())
         .collect();
-    let sound = graph.outputs.iter().find(|(_, source)| {
+    let sound = graph.outputs.iter().find(|(name, source)| {
+        if name == crate::HOTSPOT_OUTPUT {
+            return false;
+        }
         let entelechy_graph::Source::Node { node, port } = source else {
             return false;
         };

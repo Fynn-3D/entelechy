@@ -187,3 +187,29 @@ fn the_cursor_hotspot_output_is_the_point_the_pointer_points_with() {
         .collect();
     assert_eq!(told, vec![pointing(255, (2, 0))]);
 }
+
+/// The hotspot is two numbers as a stereo sample is; declared before the
+/// sound, the sound card still plays the sound.
+#[test]
+fn the_hotspot_is_never_played_as_the_sound() {
+    let dir = scratch("sound", None);
+    let scene = scene(Some("vec2(3, 2)")).replace(
+        "output cursor <- mark.result;\n",
+        "output cursor <- mark.result;\nnode point: t.point@1 { at = vec2(1.0, 1.0); domain = 1; }\noutput cursor_hotspot <- point.result;\nnode tone: t.tone@1 { domain = 16; }\noutput sound <- tone.result;\n",
+    );
+    std::fs::write(dir.join("scene.esn"), scene).unwrap();
+    std::fs::write(
+        dir.join("k.ent"),
+        format!("{KERNELS}kernel t.tone@1 {{ requires {{ field.write; }} output result: Rows<Vec2>; compute {{ return vec2(0.25, -0.25); }} }}\n"),
+    )
+    .unwrap();
+    let mut session = open(&dir);
+    let mut play = Play::new(still);
+    let Frame::Shown(shown) = play.frame(&mut session, VIEW) else {
+        panic!("a frame was not shown: {}", play.status());
+    };
+    let (sound, channels) = session.sound_of(&shown.report).expect("a sound");
+    assert_eq!(channels, 2);
+    assert_eq!(session.runtime().host().domain(sound).unwrap().count(), 16);
+    assert_eq!(Some(sound), shown.sound);
+}

@@ -433,7 +433,8 @@ and leaves the system's pointer; one clear throughout hides it.
 **Why.** The system draws its pointer as the display refreshes, never
 behind the scene's frame, so a pointer drawn into the picture trails the
 hand. Every other output is told apart by its structure; the pointer is
-a picture as the window's is, so it alone is told apart by its name. A
+a picture as the window's is, so it alone is told apart by its name, and
+its hotspot, two numbers as a stereo sample is, by its name too. A
 browser takes no larger pointer than 128 by 128, and the pointer is the
 same in every interface.
 
