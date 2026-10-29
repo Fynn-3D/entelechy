@@ -351,15 +351,6 @@ fn a_malformed_graph_is_refused_before_anything_runs() {
         assert_eq!(runtime.host().live(), 0, "nothing ran before {error}");
         error
     };
-    let failed = |graph: Graph| {
-        frame(
-            &mut evaluator(),
-            &graph,
-            &mut runtime(),
-            &Context::default(),
-        )
-        .unwrap_err()
-    };
 
     let cycle = graph(
         vec![
@@ -395,8 +386,7 @@ fn a_malformed_graph_is_refused_before_anything_runs() {
     let mut typo_port = chain();
     let binding = typo_port.nodes[1].inputs.remove("source").unwrap();
     typo_port.nodes[1].inputs.insert("sorce".into(), binding);
-    // A port is checked as its node is bound, after the nodes before it.
-    let message = failed(typo_port).to_string();
+    let message = refused(typo_port).to_string();
     assert!(message.ends_with("did you mean `source`?"), "{message}");
 
     let mut unknown_param = chain();
@@ -405,7 +395,7 @@ fn a_malformed_graph_is_refused_before_anything_runs() {
         entelechy_graph::ParamValue::Literal(Value::Int(2)),
     );
     assert!(matches!(
-        failed(unknown_param),
+        refused(unknown_param),
         EvaluateError::UnknownPort { .. }
     ));
 

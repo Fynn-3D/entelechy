@@ -79,7 +79,8 @@ fn made_from_itself(graph: &Graph, node: &Node, port: &str) -> bool {
 /// every parameter it sets is one the graph has or a value of the
 /// parameter's type, a reduction takes no domain, and each `value(port)`
 /// its domain reads names an input of numbers. [`Evaluator`] holds every
-/// node to it as it binds; a check holds a scene to it unrun.
+/// node to it as it plans, before any node runs; a check holds a scene
+/// to it unrun.
 pub fn binding_fault(
     graph: &Graph,
     node: &Node,

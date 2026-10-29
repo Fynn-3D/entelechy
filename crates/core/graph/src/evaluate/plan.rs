@@ -143,6 +143,11 @@ impl Evaluator {
             })?;
             versions.push(version);
         }
+        // Every node's binding its manifest decides, before any runs.
+        for (index, version) in order.iter().zip(&versions) {
+            let structs = version.module().map_or(&[][..], |module| &module.structs);
+            binding_fault(graph, &graph.nodes[*index], version.manifest(), structs)?;
+        }
         let nodes = graph.index();
         // What each node runs over and the extent it gives, in order: a
         // producer's extent is known before its readers are planned.
