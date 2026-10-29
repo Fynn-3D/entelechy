@@ -73,7 +73,7 @@ impl GpuBackend {
     /// the encoder so the opening timestamp is its first command.
     /// A page's clocked frame times each run by such a set too ([`Frames`]).
     pub(crate) fn timing_set(&self, count: u32) -> Option<Timing> {
-        if !self.measured() && crate::PAGE && self.frames.clocked() {
+        if !self.measured() && self.frames.clocked() && self.frames.stamps() {
             return self.frames.run_timing(&self.device);
         }
         let worth_asking = self.clock.load(std::sync::atomic::Ordering::Relaxed) != clock::SILENT;
@@ -95,7 +95,7 @@ impl GpuBackend {
         timing: Option<&Timing>,
         count: u32,
     ) -> Option<wgpu::Buffer> {
-        if !self.measured() && crate::PAGE && self.frames.clocked() {
+        if !self.measured() && self.frames.clocked() && self.frames.stamps() {
             if timing.is_some() {
                 self.frames.stamped_run(count);
             }
@@ -194,21 +194,24 @@ impl GpuBackend {
 /// Frames clocked as they run: each run's busy time, kept by frame; nothing
 /// waits for them.
 ///
-/// The Host's clock times a run from its submission, or the run before's
-/// end if later, to the moment the device tells it done: the device runs
-/// its queue in order, so that is how long it kept the device busy. A
-/// waiter on its own thread hears the device as soon as it is done, so the
-/// ends are told when they happen, not when next asked.
+/// Where the device has timestamps its own clock times each run, by the
+/// stamps a measured run writes at its passes' edges
+/// ([`GpuBackend::timing_set`]), resolved in the run and read back once the
+/// device has done the frame: a run's work, apart from the device starting
+/// again after a pause, which the Host's clock would count as the first
+/// run's after it. A run with no pass (a copy) counts as none.
 ///
-/// A page has no thread to hear the device on: it is told a run is done
-/// only when its own work pauses, which may be long after. There the
-/// device's own clock times each run instead, by the stamps a measured run
-/// writes at its passes' edges ([`GpuBackend::timing_set`]), resolved in
-/// the run and read back once the device has done the frame. A run with no
-/// pass (a copy) counts as none; a device without timestamps clocks no
-/// frame there.
+/// Elsewhere the Host's clock times a run from its submission, or the run
+/// before's end if later, to the moment the device tells it done: the
+/// device runs its queue in order, so that is how long it kept the device
+/// busy. The backend's waiter hears each run done as it is, so the ends
+/// are told when they happen, not when next asked. A page has no thread to
+/// hear the device on, so a device of a page's without timestamps clocks
+/// no frame.
 pub(crate) struct Frames {
     on: Arc<std::sync::atomic::AtomicBool>,
+    /// Whether the device's own stamps time the runs ([`Frames::stamps`]).
+    stamps: std::sync::atomic::AtomicBool,
     /// The runs since the last frame ended: each its submission and end.
     open: Mutex<Vec<Run>>,
     /// Ended frames whose runs are not all done, oldest first, by number.
@@ -233,6 +236,7 @@ impl Default for Frames {
     fn default() -> Self {
         Self {
             on: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            stamps: std::sync::atomic::AtomicBool::new(false),
             open: Mutex::new(Vec::new()),
             ended: Mutex::new(std::collections::VecDeque::new()),
             frames: std::sync::atomic::AtomicU64::new(0),
@@ -252,12 +256,22 @@ impl Frames {
         self.on.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// Clocks frames from now, or no longer; the backend's waiter hears
-    /// the device tell each run done ([`crate::wait::Waiter`]). A page
-    /// clocks them only where the device has `timestamps`.
+    /// Whether the runs are timed by the stamps the device writes at their
+    /// passes' edges: the device's own clock, which tells a run's work
+    /// apart from the device starting again after a pause. The Host's
+    /// clock hears only when a run is done.
+    pub(crate) fn stamps(&self) -> bool {
+        self.stamps.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Clocks frames from now, or no longer: by the device's stamps where
+    /// it has `timestamps`, else by when the backend's waiter hears it tell
+    /// each run done ([`crate::wait::Waiter`]), which a page cannot.
     pub(crate) fn set_clocked(&self, on: bool, timestamps: bool) {
         let on = on && (!crate::PAGE || timestamps);
         self.on.store(on, std::sync::atomic::Ordering::Relaxed);
+        self.stamps
+            .store(timestamps, std::sync::atomic::Ordering::Relaxed);
         if !on {
             lock(&self.open).clear();
             lock(&self.ended).clear();
@@ -276,7 +290,7 @@ impl Frames {
         if !self.clocked() {
             return queue.submit(Some(commands));
         }
-        if crate::PAGE {
+        if self.stamps() {
             return lock(&self.stamped).submit(queue, commands);
         }
         let submission = queue.submit(Some(commands));
@@ -290,7 +304,7 @@ impl Frames {
 
     /// How many runs the open frame has been given.
     pub(crate) fn mark(&self) -> usize {
-        if crate::PAGE {
+        if self.stamps() {
             return lock(&self.stamped).runs();
         }
         lock(&self.open).len()
@@ -304,7 +318,7 @@ impl Frames {
         let number = self
             .frames
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if crate::PAGE {
+        if self.stamps() {
             lock(&self.stamped).end_frame(number, device, queue);
             return Some(number);
         }
@@ -319,7 +333,7 @@ impl Frames {
 
     /// The latest frame whose runs are all done, each run's busy time.
     pub(crate) fn done(&self) -> Option<entelechy_rules::ClockedFrame> {
-        if crate::PAGE {
+        if self.stamps() {
             if let Some(frame) = lock(&self.stamped).done() {
                 *lock(&self.last) = Some(frame);
             }
@@ -354,8 +368,9 @@ impl Frames {
     }
 }
 
-/// A page's frames, each run timed by the stamps at its passes' edges, all
-/// in one query set (a device keeps few).
+/// Frames each run of which is timed by the stamps at its passes' edges,
+/// all in one query set (a device keeps few): a page's, and a machine's
+/// whose device writes them.
 #[derive(Default)]
 struct Stamped {
     /// The set every run of a frame writes its stamps into, from its base.
@@ -505,6 +520,10 @@ impl Stamped {
                 continue;
             }
             let mut busy = vec![std::time::Duration::ZERO; counts.len()];
+            // Whether every stamp its runs wrote reads back: a device may
+            // leave a frame's unwritten (the first it clocks, say), and a
+            // frame some of whose runs say nothing is not told.
+            let mut whole = true;
             if let Some(stamps) = stamps {
                 let stamped = counts.len().min(STAMPED_RUNS as usize);
                 let bytes = (stamped * RUN_STAMPS as usize * 8) as u64;
@@ -520,21 +539,25 @@ impl Stamped {
                         }
                         let base = run * RUN_STAMPS as usize;
                         let (first, last) = (tick(base), tick(base + count as usize - 1));
-                        // A stamp left unwritten reads zero: then the run says nothing.
-                        if first > 0 && last > first {
-                            *took = std::time::Duration::from_nanos(
-                                ((last - first) as f64 * self.period) as u64,
-                            );
+                        // A stamp left unwritten reads zero.
+                        if first == 0 || last < first {
+                            whole = false;
+                            continue;
                         }
+                        *took = std::time::Duration::from_nanos(
+                            ((last - first) as f64 * self.period) as u64,
+                        );
                     }
                 }
                 stamps.read.unmap();
                 self.spare.push(stamps);
             }
-            latest = Some(entelechy_rules::ClockedFrame {
-                frame: number,
-                runs: busy,
-            });
+            if whole {
+                latest = Some(entelechy_rules::ClockedFrame {
+                    frame: number,
+                    runs: busy,
+                });
+            }
         }
         latest
     }
