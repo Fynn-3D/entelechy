@@ -610,7 +610,13 @@ what a frame computes:
   flight, and buffers are let go by dropping them: a device that lowers
   its clock while nothing waits on it (Apple's GPUs) keeps pace with the
   frames, and the frame's own thread never waits on the device through
-  a lock the waiter holds.
+  a lock the waiter holds. While frames are clocked it waits for each
+  run in turn, so each is timed as it ends, which costs a clocked frame
+  a wake a run.
+- Every wait of the frame's thread for the device is counted, and the
+  node bound or run as it waited is named: a `value` read, an input
+  brought from the device. `bench` and the frame-data line say a frame
+  as its own work, its waits and who waited.
 
 **Why.** An optimization that changes the answer is a second semantics.
 The key already names everything an output depends on, so held outputs

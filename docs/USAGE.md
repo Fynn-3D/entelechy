@@ -127,9 +127,14 @@ entelechy bench examples/collapse/scene.esn \
 ```
 
 Prints the least run in milliseconds a frame, the median, and the ratio
-to the first backend; the first frame is said apart. `--nodes` measures
-each node, waiting after each; `--json` and `--compare` keep a
-measurement and compare against it.
+to the first backend; the first frame is said apart. The frames overlap
+the device as a window's do; a device's frame is split into its own work
+and its waits for the device, and the nodes that waited are named.
+`--nodes` times each node as a window's frame-data line does: on a
+device by its own clock beside the call on the frame's thread, nothing
+waiting for either (waiting after each node only where the device keeps
+no clock); `--json` and `--compare` keep a measurement and compare
+against it.
 
 ## Backends
 
@@ -186,8 +191,8 @@ pointer_tip`. A gamepad is
 keys too: the D-pad and left stick are the arrows, South Z, East X,
 Start Enter, Select Escape. F5 resets state, F6 cycles the preview
 through the nodes, F8 holds the scene's time and F9 or F7 steps it, F10
-shows the frame's data (`frame`, `cpu`, `gpu`, nodes, memory, and the
-busiest nodes). Every other key is the scene's.
+shows the frame's data (`frame`, `cpu`, `wait`, `gpu`, nodes, memory,
+the nodes that waited for the device, and the busiest nodes on it). Every other key is the scene's.
 
 ## Replay tests
 

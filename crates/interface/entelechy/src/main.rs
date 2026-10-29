@@ -1349,6 +1349,7 @@ fn evaluate_and_export(
                     let time = entelechy_session::bench::NodeTime {
                         node: name.clone(),
                         ms,
+                        call: ms,
                         backend: placed.backend.to_owned(),
                         routed: placed.routed.as_deref().map(str::to_owned),
                         uploaded: placed.uploaded,

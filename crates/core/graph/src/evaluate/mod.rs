@@ -182,6 +182,11 @@ pub struct Report {
     /// call (a GPU submission), or the device clock under a measured
     /// profile.
     pub timings: Vec<(NodeId, std::time::Duration)>,
+    /// Each node that kept the frame's thread waiting for the device, and
+    /// for how long, in evaluation order: binding it (a `value` it reads)
+    /// or running it (an input brought from the device, a producer made
+    /// again). What waits besides, at the frame's end, is no node's.
+    pub waits: Vec<(NodeId, std::time::Duration)>,
     /// Each executed node's runs in the clocked frame, in evaluation order:
     /// those the device was given between its marks
     /// ([`entelechy_kernel::Runtime::clock_mark`]), which the frame's clock
@@ -430,6 +435,11 @@ const COLD_LEAST: usize = 1 << 20;
 struct Frame {
     executed: Vec<NodeId>,
     timings: Vec<(NodeId, std::time::Duration)>,
+    /// The nodes that waited for the device ([`Report::waits`]).
+    waits: Vec<(NodeId, std::time::Duration)>,
+    /// The node being bound and run, and the device's wait count as it
+    /// began ([`Frame::waiting_for`]).
+    waiting: Option<(NodeId, std::time::Duration)>,
     clocked: Vec<(NodeId, std::ops::Range<usize>)>,
     /// Every node run on the frame, in order, with its device status,
     /// checked before anything commits.
@@ -448,6 +458,8 @@ impl Frame {
         Self {
             executed: Vec::new(),
             timings: Vec::new(),
+            waits: Vec::new(),
+            waiting: None,
             clocked: Vec::new(),
             checks: Vec::new(),
             placements: Vec::new(),
@@ -455,6 +467,19 @@ impl Frame {
             layout,
             asked,
         }
+    }
+
+    /// Counts what the device was waited for since the node before began
+    /// as that node's, `waited` being the device's wait count now, and
+    /// begins counting `node`'s.
+    fn waiting_for(&mut self, node: Option<&NodeId>, waited: std::time::Duration) {
+        if let Some((id, since)) = self.waiting.take() {
+            let spent = waited.saturating_sub(since);
+            if !spent.is_zero() {
+                self.waits.push((id, spent));
+            }
+        }
+        self.waiting = node.map(|node| (node.clone(), waited));
     }
 
     /// Whether `id`'s outputs are never let go on this frame.
@@ -1568,6 +1593,7 @@ impl Evaluator {
                 if lean && !dirty[at] {
                     continue;
                 }
+                frame.waiting_for(Some(&node.id), runtime.device_waited());
                 let before = self.output_epoch(&node.id);
                 let mut bound = self.bind(
                     graph,
@@ -1697,9 +1723,11 @@ impl Evaluator {
                     }
                 }
             }
+            frame.waiting_for(None, runtime.device_waited());
             let Frame {
                 executed,
                 timings,
+                waits,
                 clocked,
                 checks,
                 placements,
@@ -1790,6 +1818,7 @@ impl Evaluator {
                 output,
                 executed,
                 timings,
+                waits,
                 clocked,
                 placements,
                 reused,

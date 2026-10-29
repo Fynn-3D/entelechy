@@ -39,9 +39,16 @@ impl Spent {
 /// long as the backend lives: what the device finishes is heard as it
 /// finishes (a map, a frame's clocked end), and a device that drops its
 /// clock while its work is not waited for (Apple's GPUs) keeps pace with
-/// the frames. A page has no thread: it hears the device as it gets its
-/// turns.
-pub(crate) struct Waiter(Arc<std::sync::atomic::AtomicBool>);
+/// the frames. It waits for all the work in flight at once; for the runs
+/// it is told to follow ([`Waiter::follow`]), each in turn, so each is
+/// heard done as it is done, not with the last: what clocking a frame
+/// needs, at the cost of a wake for each run. A page has no thread: it
+/// hears the device as it gets its turns.
+pub(crate) struct Waiter {
+    on: Arc<std::sync::atomic::AtomicBool>,
+    /// The runs given and not yet heard done, oldest first.
+    runs: Arc<std::sync::Mutex<std::collections::VecDeque<wgpu::SubmissionIndex>>>,
+}
 
 impl Waiter {
     /// Starts waiting on `device`'s work; nothing where there is no
@@ -51,33 +58,61 @@ impl Waiter {
             return None;
         }
         let on = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let runs = Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
         let waiting = Arc::clone(&on);
+        let given = Arc::clone(&runs);
         let device = device.clone();
+        let oldest = move || {
+            given
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .front()
+                .cloned()
+        };
+        let heard = Arc::clone(&runs);
         std::thread::Builder::new()
             .name("entelechy device waiter".into())
             .spawn(move || {
                 while waiting.load(std::sync::atomic::Ordering::Relaxed) {
+                    let next = oldest();
                     let polled = device.poll(wgpu::PollType::Wait {
-                        submission_index: None,
+                        submission_index: next.clone(),
                         timeout: Some(std::time::Duration::from_millis(5)),
                     });
-                    // Nothing was in flight: look again soon.
-                    if !matches!(
-                        polled,
-                        Ok(wgpu::PollStatus::WaitSucceeded) | Err(wgpu::PollError::Timeout)
-                    ) {
-                        std::thread::sleep(std::time::Duration::from_micros(100));
+                    match (next, polled) {
+                        // Not done yet: wait on.
+                        (_, Err(wgpu::PollError::Timeout)) => {}
+                        // Done, or an index the device no longer knows.
+                        (Some(_), _) => {
+                            heard
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .pop_front();
+                        }
+                        // Work not given through the backend's runs, done.
+                        (None, Ok(wgpu::PollStatus::WaitSucceeded)) => {}
+                        // Nothing in flight: look again soon.
+                        (None, _) => std::thread::sleep(std::time::Duration::from_micros(100)),
                     }
                 }
             })
             .ok()?;
-        Some(Self(on))
+        Some(Self { on, runs })
+    }
+
+    /// Waits for `run`, given to the device after every run followed
+    /// before it.
+    pub(crate) fn follow(&self, run: &wgpu::SubmissionIndex) {
+        self.runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push_back(run.clone());
     }
 }
 
 impl Drop for Waiter {
     fn drop(&mut self) {
-        self.0.store(false, std::sync::atomic::Ordering::Relaxed);
+        self.on.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

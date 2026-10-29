@@ -718,6 +718,10 @@ impl Play {
                     .saturating_sub(waited_before)
                     .as_secs_f64();
                 let working = (self.clock)() - begun - waited;
+                self.stats.waited(
+                    std::time::Duration::from_secs_f64(waited.max(0.0)),
+                    &report.waits,
+                );
                 self.stats.record(
                     std::time::Duration::from_secs_f64(working.max(0.0)),
                     if self.hud {
@@ -1115,6 +1119,7 @@ impl Play {
             let mut first = vec![stats.times()];
             first.extend(groups);
             let mut said = hud::flow(&first, columns);
+            said.extend(hud::flow(&stats.waiting(8), columns));
             said.extend(hud::flow(&stats.busiest(12), columns));
             said
         });

@@ -5,7 +5,7 @@
 //! does the same work. A warm-up frame (compiling, allocating) precedes
 //! the runs. `--json` output reads back with `--compare`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -64,6 +64,18 @@ pub struct Measured {
     /// Milliseconds the first frame took, which the runs leave out: the
     /// work done once, compiling, building, filling what is kept.
     pub first: f64,
+    /// Milliseconds a frame of the best run's the frame's thread waited
+    /// for the device; the rest of the frame is its own work.
+    pub wait: f64,
+    /// Each node that kept the frame's thread waiting for the device,
+    /// milliseconds a frame over every run, longest first.
+    pub waits: Vec<(String, f64)>,
+    /// Milliseconds a frame waited for the device that no node did: at
+    /// the frame's end, confirming the frame before, writing.
+    pub wait_after: f64,
+    /// With nodes, the device's busy time a frame by its own clock, where
+    /// it keeps one.
+    pub gpu: Option<f64>,
     /// Each node's milliseconds a frame, when asked for, averaged over
     /// all frames.
     pub nodes: Vec<NodeTime>,
@@ -142,7 +154,10 @@ pub fn measure(
     session.runtime().settle_device();
     let first = warm_started.elapsed().as_secs_f64() * 1000.0;
     let mut refused: Vec<String> = warm.refused.iter().map(ToString::to_string).collect();
-    let mut runs: Vec<f64> = Vec::new();
+    // Each run's milliseconds a frame, and of those its waits.
+    let mut runs: Vec<(f64, f64)> = Vec::new();
+    let mut waits: BTreeMap<String, f64> = BTreeMap::new();
+    let mut waited_in_all = 0.0;
     let mut frame = 1;
     let mut ran = false;
     // The frames overlap the device's as a window's do: the next is made
@@ -151,26 +166,43 @@ pub fn measure(
     session
         .set_overlap(true)
         .map_err(|e| format!("{backend}: {e}"))?;
+    let ms = |duration: std::time::Duration| duration.as_secs_f64() * 1000.0;
     for _ in 0..options.repeat.max(1) {
         let started = Instant::now();
+        let waited_before = session.device_waited();
         for _ in 0..options.frames.max(1) {
             let report = session
                 .evaluate(&context(frame))
                 .map_err(|e| format!("{backend}: {e}"))?;
             ran |= !report.executed.is_empty();
             refused.extend(report.refused.iter().map(ToString::to_string));
+            for (node, spent) in &report.waits {
+                *waits.entry(pattern(&node.0)).or_default() += ms(*spent);
+            }
             frame += 1;
         }
         // The last frame's work is the run's too.
         session.confirm().map_err(|e| format!("{backend}: {e}"))?;
         session.runtime().settle_device();
         let took = started.elapsed().as_secs_f64() * 1000.0;
-        runs.push(took / f64::from(options.frames.max(1)));
+        let waited = ms(session.device_waited().saturating_sub(waited_before));
+        waited_in_all += waited;
+        let frames = f64::from(options.frames.max(1));
+        runs.push((took / frames, waited / frames));
     }
     session
         .set_overlap(overlapped)
         .map_err(|e| format!("{backend}: {e}"))?;
-    runs.sort_by(f64::total_cmp);
+    runs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let frames_in_all = f64::from(options.frames.max(1) * options.repeat.max(1));
+    let mut waits: Vec<(String, f64)> = waits
+        .into_iter()
+        .map(|(node, sum)| (node, sum / frames_in_all))
+        .filter(|(_, ms)| *ms >= 0.005)
+        .collect();
+    waits.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let by_nodes: f64 = waits.iter().map(|(_, ms)| ms).sum();
+    let wait_after = (waited_in_all / frames_in_all - by_nodes).max(0.0);
     let run = if options.nodes {
         node_times(session, options, &context, &mut frame, backend)?
     } else {
@@ -178,13 +210,18 @@ pub fn measure(
             nodes: Vec::new(),
             device_clock: false,
             floor: 0.0,
+            gpu: None,
         }
     };
     Ok(Measured {
         backend: backend.to_owned(),
-        best: runs[0],
-        median: runs[runs.len() / 2],
+        best: runs[0].0,
+        median: runs[runs.len() / 2].0,
         first,
+        wait: runs[0].1,
+        waits,
+        wait_after,
+        gpu: run.gpu,
         nodes: run.nodes,
         ran,
         device_clock: run.device_clock,
@@ -198,11 +235,88 @@ struct NodeRun {
     nodes: Vec<NodeTime>,
     device_clock: bool,
     floor: f64,
+    gpu: Option<f64>,
 }
 
-/// A separate run that waits for the device after every node, so GPU
-/// node times are the work.
+/// A separate run timing every node. Where the device keeps a clock the
+/// frames run as a window's do, overlapped and clocked: each node's
+/// device time is what the clock says its runs took, and its call is its
+/// time on the frame's thread, nothing waiting for either. Elsewhere it
+/// waits for the device after every node ([`measured_node_times`]).
 fn node_times(
+    session: &mut Session,
+    options: &Options,
+    context: &impl Fn(u32) -> Context,
+    frame: &mut u32,
+    backend: &str,
+) -> Result<NodeRun, String> {
+    if !session.runtime().has_device() {
+        return measured_node_times(session, options, context, frame, backend);
+    }
+    let overlapped = session.overlaps();
+    session
+        .set_overlap(true)
+        .map_err(|e| format!("{backend}: {e}"))?;
+    session.set_clocked(true);
+    let mut calls = Profile::default();
+    let mut device: BTreeMap<String, f64> = BTreeMap::new();
+    let mut busy = 0.0;
+    let mut told: BTreeSet<u64> = BTreeSet::new();
+    let mut hear = |session: &Session| {
+        if let Some(times) = session.device_times()
+            && told.insert(times.frame)
+        {
+            busy += times.busy.as_secs_f64() * 1000.0;
+            for (node, spent) in &times.nodes {
+                *device.entry(pattern(&node.0)).or_default() += spent.as_secs_f64() * 1000.0;
+            }
+        }
+    };
+    let frames = options.frames.max(1);
+    let evaluated = (|| {
+        for _ in 0..frames {
+            let report = session
+                .evaluate(&context(*frame))
+                .map_err(|e| format!("{backend}: {e}"))?;
+            *frame += 1;
+            calls.add(&report);
+            hear(session);
+        }
+        session.confirm().map_err(|e| format!("{backend}: {e}"))?;
+        session.runtime().settle_device();
+        hear(session);
+        Ok::<(), String>(())
+    })();
+    session.set_clocked(false);
+    session
+        .set_overlap(overlapped)
+        .map_err(|e| format!("{backend}: {e}"))?;
+    evaluated?;
+    // A device that tells no frame done keeps no clock to read.
+    if told.is_empty() {
+        return measured_node_times(session, options, context, frame, backend);
+    }
+    let heard = told.len() as f64;
+    let mut nodes = calls.nodes(0.0);
+    for time in &mut nodes {
+        time.call = time.ms;
+        let name = time.node.split(" (").next().unwrap_or(&time.node);
+        if let Some(spent) = device.get(name) {
+            time.ms = spent / heard;
+        }
+    }
+    nodes.sort_by(|a, b| b.ms.total_cmp(&a.ms));
+    Ok(NodeRun {
+        nodes,
+        device_clock: true,
+        floor: 0.0,
+        gpu: Some(busy / heard),
+    })
+}
+
+/// A run that waits for the device after every node, so a node's time
+/// is its call and the wait after it: where the device keeps no clock.
+fn measured_node_times(
     session: &mut Session,
     options: &Options,
     context: &impl Fn(u32) -> Context,
@@ -228,6 +342,7 @@ fn node_times(
         nodes,
         device_clock: session.measures_the_device(),
         floor,
+        gpu: None,
     })
 }
 
@@ -284,6 +399,7 @@ impl Profile {
                     NodeTime {
                         node: String::new(),
                         ms: 0.0,
+                        call: 0.0,
                         backend: total.backend.clone(),
                         routed: total.routed.as_deref().map(str::to_owned),
                         uploaded: 0,
@@ -293,6 +409,7 @@ impl Profile {
                 )
             });
             entry.ms += (total.ms / f64::from(frames) - floor).max(0.0);
+            entry.call = entry.ms;
             entry.uploaded += total.uploaded / per_frame;
             entry.downloaded += total.downloaded / per_frame;
             *count += 1;
@@ -429,6 +546,29 @@ pub fn table(options: &Options, measured: &[Measured], before: Option<&[Measured
         ));
     }
     for entry in measured {
+        if entry.wait <= 0.0 && entry.waits.is_empty() {
+            continue;
+        }
+        out.push_str(&format!(
+            "{}: a frame of {:.2} ms is {:.2} ms of the frame's own work and {:.2} ms waiting for the device\n",
+            entry.backend,
+            entry.best,
+            (entry.best - entry.wait).max(0.0),
+            entry.wait
+        ));
+        let mut said: Vec<String> = entry
+            .waits
+            .iter()
+            .map(|(node, ms)| format!("{node} {ms:.2}"))
+            .collect();
+        said.push(format!("the frame's end {:.2}", entry.wait_after));
+        out.push_str(&format!(
+            "{}: waited for the device, ms a frame: {}\n",
+            entry.backend,
+            said.join(" | ")
+        ));
+    }
+    for entry in measured {
         for refused in &entry.refused {
             out.push_str(&format!("\n{}: {refused}\n", entry.backend));
         }
@@ -442,7 +582,10 @@ pub fn table(options: &Options, measured: &[Measured], before: Option<&[Measured
         if entry.nodes.is_empty() {
             continue;
         }
-        let how = if entry.device_clock {
+        let clocked = entry.device_clock && entry.gpu.is_some();
+        let how = if clocked {
+            "on the device by its own clock, beside the call on the frame's thread, the frames run as a window's with nothing waiting for either".to_owned()
+        } else if entry.device_clock {
             "what the device's own clock said each one took".to_owned()
         } else if entry.floor > 0.0 {
             format!(
@@ -457,20 +600,43 @@ pub fn table(options: &Options, measured: &[Measured], before: Option<&[Measured
             entry.backend
         ));
         for time in &entry.nodes {
+            let call = if clocked && (time.call - time.ms).abs() > 0.0005 {
+                format!("  call {:6.3}", time.call)
+            } else {
+                String::new()
+            };
             out.push_str(&format!(
-                "  {:<28} {:8.3}  {}\n",
+                "  {:<28} {:8.3}{call}  {}\n",
                 time.node,
                 time.ms,
                 time.placement_text()
             ));
         }
-        // The node sum against the frame; the gap is what a frame
-        // overlaps and isolated node timing does not.
         let sum: f64 = entry.nodes.iter().map(|time| time.ms).sum();
-        out.push_str(&format!(
-            "  {:<28} {sum:8.3} against a frame of {:.3}; a node runs alone here, and what a frame overlaps it does not\n",
-            "(sum)", entry.best
-        ));
+        // What ran on the device: the nodes routed off it ran elsewhere.
+        let on_device: f64 = entry
+            .nodes
+            .iter()
+            .filter(|time| time.routed.is_none())
+            .map(|time| time.ms)
+            .sum();
+        match entry.gpu {
+            // The device's busy time a frame against the nodes': the rest
+            // ran between nodes (a frame's sound, its presenting copy).
+            Some(gpu) if clocked => {
+                let calls: f64 = entry.nodes.iter().map(|time| time.call).sum();
+                out.push_str(&format!(
+                    "  {:<28} {on_device:8.3}  on the device, of its {gpu:.3} a frame, the rest between nodes; the calls {calls:.3} on the frame's thread\n",
+                    "(device)"
+                ));
+            }
+            // The node sum against the frame; the gap is what a frame
+            // overlaps and isolated node timing does not.
+            _ => out.push_str(&format!(
+                "  {:<28} {sum:8.3} against a frame of {:.3}; a node runs alone here, and what a frame overlaps it does not\n",
+                "(sum)", entry.best
+            )),
+        }
     }
     out
 }
@@ -480,8 +646,12 @@ pub fn table(options: &Options, measured: &[Measured], before: Option<&[Measured
 pub struct NodeTime {
     /// The node, or its pattern and count.
     pub node: String,
-    /// Milliseconds a frame.
+    /// Milliseconds a frame: on its device by the device's clock, or on
+    /// the processor.
     pub ms: f64,
+    /// Milliseconds a frame on the frame's thread, giving its runs to the
+    /// device or running them; the same as `ms` for a processor's node.
+    pub call: f64,
     /// The backend that ran it.
     pub backend: String,
     /// Why it was routed off the main backend, if it was.
@@ -537,11 +707,12 @@ pub fn json(options: &Options, measured: &[Measured]) -> String {
                 })
                 .collect();
             format!(
-                "    {{\"backend\": {:?}, \"best_ms\": {:.4}, \"median_ms\": {:.4}, \"first_ms\": {:.4}, \"nodes\": [\n{}\n    ]}}",
+                "    {{\"backend\": {:?}, \"best_ms\": {:.4}, \"median_ms\": {:.4}, \"first_ms\": {:.4}, \"wait_ms\": {:.4}, \"nodes\": [\n{}\n    ]}}",
                 entry.backend,
                 entry.best,
                 entry.median,
                 entry.first,
+                entry.wait,
                 nodes.join(",\n")
             )
         })
@@ -583,6 +754,10 @@ pub fn read(path: &Path) -> Result<Vec<Measured>, String> {
             best: number("best_ms")?,
             median: number("median_ms")?,
             first: number("first_ms").unwrap_or(0.0),
+            wait: number("wait_ms").unwrap_or(0.0),
+            waits: Vec::new(),
+            wait_after: 0.0,
+            gpu: None,
             nodes: Vec::new(),
             ran: true,
             device_clock: false,

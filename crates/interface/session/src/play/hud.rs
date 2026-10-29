@@ -146,10 +146,12 @@ pub fn stamp(panel: &Panel, frame: &mut [u32], frame_width: u32, frame_height: u
 pub struct Stats {
     last_start: Option<f64>,
     /// Smoothed milliseconds: frame interval; the processor's work on a
-    /// frame, its waits left out; the device's busy time on one by its own
-    /// clock (`None` without one); presenting (including vsync).
+    /// frame, its waits left out; its waits for the device; the device's
+    /// busy time on one by its own clock (`None` without one); presenting
+    /// (including vsync).
     interval: f64,
     cpu: f64,
+    wait: f64,
     gpu: Option<f64>,
     present: f64,
     /// Each node's device milliseconds, and those between nodes, as
@@ -162,6 +164,14 @@ pub struct Stats {
     summed: Vec<(String, f64)>,
     summed_between: f64,
     summed_frames: u32,
+    /// Each node's waits for the device a frame, as shown: averaged over
+    /// the last [`SHOWN_EVERY`] frames ([`Stats::waited`]), and the waits
+    /// at the frame's end besides; then what those frames add up to.
+    waits: Vec<(String, f64)>,
+    wait_after: f64,
+    summed_waits: Vec<(String, f64)>,
+    summed_wait_after: f64,
+    summed_wait_frames: u32,
     /// The latest clocked frame told.
     told: Option<u64>,
     /// The latest frame's start, and the lines shown since `held_at`:
@@ -204,6 +214,7 @@ impl Default for Stats {
             last_start: None,
             interval: 0.0,
             cpu: 0.0,
+            wait: 0.0,
             gpu: None,
             present: 0.0,
             nodes: Vec::new(),
@@ -211,6 +222,11 @@ impl Default for Stats {
             summed: Vec::new(),
             summed_between: 0.0,
             summed_frames: 0,
+            waits: Vec::new(),
+            wait_after: 0.0,
+            summed_waits: Vec::new(),
+            summed_wait_after: 0.0,
+            summed_wait_frames: 0,
             told: None,
             now: 0.0,
             held: Vec::new(),
@@ -250,6 +266,55 @@ impl Stats {
             Some(gpu) => smooth(self.gpu.get_or_insert(0.0), gpu),
             None => self.gpu = None,
         }
+    }
+
+    /// Records how long a frame's thread waited for the device in all, and
+    /// which nodes waited ([`entelechy_graph::Report::waits`]); what no
+    /// node waited is the frame's end. Shown as [`Stats::told`] shows.
+    pub fn waited(&mut self, total: Duration, by: &[(entelechy_graph::NodeId, Duration)]) {
+        smooth(&mut self.wait, total);
+        let mut nodes = 0.0;
+        for (node, spent) in by {
+            let name = node.to_string();
+            let millis = spent.as_secs_f64() * 1000.0;
+            nodes += millis;
+            match self.summed_waits.iter_mut().find(|(n, _)| *n == name) {
+                Some((_, sum)) => *sum += millis,
+                None => self.summed_waits.push((name, millis)),
+            }
+        }
+        self.summed_wait_after += (total.as_secs_f64() * 1000.0 - nodes).max(0.0);
+        self.summed_wait_frames += 1;
+        if self.summed_wait_frames >= SHOWN_EVERY {
+            let frames = f64::from(self.summed_wait_frames);
+            self.waits = std::mem::take(&mut self.summed_waits)
+                .into_iter()
+                .map(|(name, sum)| (name, sum / frames))
+                .filter(|(_, average)| *average >= 0.005)
+                .collect();
+            self.wait_after = self.summed_wait_after / frames;
+            self.summed_wait_after = 0.0;
+            self.summed_wait_frames = 0;
+        }
+    }
+
+    /// The nodes that kept the frame's thread waiting longest for the
+    /// device, `most` of them, then the waits at the frame's end; the
+    /// first headed `waited for the device:`. None while nothing waits.
+    pub fn waiting(&self, most: usize) -> Vec<String> {
+        if self.waits.is_empty() && self.wait_after < 0.005 {
+            return Vec::new();
+        }
+        let mut nodes = self.waits.clone();
+        nodes.sort_by(|a, b| b.1.total_cmp(&a.1));
+        nodes.truncate(most);
+        let mut said: Vec<String> = nodes
+            .iter()
+            .map(|(name, ms)| format!("{name} {ms:>6.2}"))
+            .collect();
+        said.push(format!("frame's end {:>6.2}", self.wait_after));
+        said[0] = format!("waited for the device: {}", said[0]);
+        said
     }
 
     /// Records a clocked frame's device time node by node, once a frame:
@@ -344,8 +409,14 @@ impl Stats {
             Some(gpu) => format!("gpu {gpu:>6.2} ms | "),
             None => String::new(),
         };
+        // A backend with a device of its own may be waited for.
+        let wait = if self.gpu.is_some() || self.wait > 0.0 {
+            format!("wait {:>6.2} ms | ", self.wait)
+        } else {
+            String::new()
+        };
         format!(
-            "frame {:>6.1} ms ({fps:>3.0} fps) | cpu {:>6.2} ms | {gpu}present {:>6.2} ms",
+            "frame {:>6.1} ms ({fps:>3.0} fps) | cpu {:>6.2} ms | {wait}{gpu}present {:>6.2} ms",
             self.interval, self.cpu, self.present
         )
     }
@@ -390,7 +461,7 @@ mod tests {
         stats.presented(Duration::from_micros(500));
         assert_eq!(
             stats.times(),
-            "frame    0.0 ms (  0 fps) | cpu   2.00 ms | gpu   1.45 ms | present   0.50 ms"
+            "frame    0.0 ms (  0 fps) | cpu   2.00 ms | wait   0.00 ms | gpu   1.45 ms | present   0.50 ms"
         );
         // Groups flow left to right, as many to a line as fit, none broken.
         let groups = ["aaaa", "bbbb", "cc", "", "dddddd"].map(String::from);
@@ -408,6 +479,32 @@ mod tests {
             assert_eq!(made, want, "at {now}");
         }
         assert_eq!(stats.widest(), 1);
+    }
+
+    #[test]
+    fn the_waits_name_their_nodes_and_the_frames_end_averaged() {
+        let mut stats = Stats::default();
+        assert!(stats.waiting(8).is_empty(), "nothing said before a wait");
+        let faces = entelechy_graph::NodeId("faces".into());
+        for _ in 0..SHOWN_EVERY {
+            stats.waited(
+                Duration::from_millis(4),
+                &[(faces.clone(), Duration::from_millis(3))],
+            );
+        }
+        assert_eq!(
+            stats.waiting(8),
+            vec![
+                "waited for the device: faces   3.00".to_owned(),
+                "frame's end   1.00".to_owned()
+            ],
+            "what no node waited is the frame's end"
+        );
+        stats.record(Duration::from_millis(2), None);
+        assert_eq!(
+            stats.times(),
+            "frame    0.0 ms (  0 fps) | cpu   2.00 ms | wait   4.00 ms | present   0.00 ms"
+        );
     }
 
     #[test]
