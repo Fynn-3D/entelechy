@@ -39,6 +39,16 @@ node metrics: kernel {
     domain = 1;
     compute { return FontMetrics { units: 1024, ascent: 11.0 / 12.0, descent: -1.0 / 12.0, gap: 0.0 }; }
 }
+// A font whose ascent and descent are farther than an em apart (1.06 and
+// -0.34, as a regular hand keeps room over and under its line): its em
+// square centered between them, so the glyph stays inside its square.
+node tall_metrics: kernel {
+    requires { field.write; }
+    output result: Rows<FontMetrics>;
+    domain = 1;
+    compute { return FontMetrics { units: 1024, ascent: 1.06, descent: -0.34, gap: 0.0 }; }
+}
+node tall: graph "../graphs/face.esn" { font <- font; glyphs <- glyphs.result; outlines <- outlines.result; metrics <- tall_metrics.result; side = 12; }
 node letters: graph "../graphs/face.esn" { font <- font; glyphs <- glyphs.result; outlines <- outlines.result; metrics <- metrics.result; side = 12; }
 node dense: graph "../graphs/face.esn" { font <- font; glyphs <- glyphs.result; outlines <- outlines.result; metrics <- metrics.result; side = 12; density = 4; }
 // 中's ink at its middle, at its left edge (its square begins 2.4 texels

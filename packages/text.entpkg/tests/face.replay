@@ -35,3 +35,10 @@ expect covers.result[3] = 1 0.0001
 expect covers.result[4] = 0.5 0.01
 expect covers.result[5] = 0 0.0001
 expect dense.grid.grid.result[4609] = 4.0
+
+# A font an em and four tenths from ascent to descent: 中's square, 0.2
+# to 0.8 of an em, inks rows 0 to 7 of its twelve, the em centered
+# between the two; at the ascent's depth it would ink rows 3 to 10.
+expect tall.atlas.result[6] = 1
+expect tall.atlas.result[678] = 1
+expect tall.atlas.result[774] = 0

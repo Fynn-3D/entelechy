@@ -48,8 +48,10 @@ kernel text.glyph_atlas@1 {
 }
 
 /// The atlas of a font node's glyphs, `side` texels square at `density`
-/// pixels a texel, the baseline as far below a glyph's top as the font's
-/// ascent. `graphs/face.esn` places it, sized.
+/// pixels a texel, each glyph's em square centered between the font's
+/// ascent and descent: the baseline as far below a glyph's top as the
+/// ascent where the two are an em apart, and the whole line kept in the
+/// square where they are farther. `graphs/face.esn` places it, sized.
 kernel text.face_atlas@1 {
     requires { field.read; field.write; }
     param side: Int = 10;
@@ -60,7 +62,8 @@ kernel text.face_atlas@1 {
     output result: Grid<Float>;
     compute {
         let n = side * max(density, 1);
-        return atlas_ink(glyphs, outlines, icoord(), n, floor(at(metrics, 0).ascent * float(n) + 0.5));
+        let m = at(metrics, 0);
+        return atlas_ink(glyphs, outlines, icoord(), n, floor((0.5 + (m.ascent + m.descent) * 0.5) * float(n) + 0.5));
     }
 }
 
