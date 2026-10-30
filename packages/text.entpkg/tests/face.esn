@@ -5,7 +5,8 @@
 // over two cells a wide one at twelve pixels, three at sixteen.
 use "../kernels/";
 
-input font: Grid<Float> = "data/font.png";
+// The bitmap font read through the package's name, as a scene anywhere reads it.
+input font: Grid<Float> = "text.entpkg/tests/data/font.png";
 input words: Rows<Int> = bytes "data/words.txt";
 
 node wanted: graph "../graphs/wanted.esn" { text <- words; }
