@@ -1,9 +1,0 @@
-// Light scattered in the air, as fog, clouds and the sky share it: how
-// much a turn of the light's way scatters toward the eye.
-
-/// Henyey-Greenstein's phase: how much of light turned by an angle of
-/// cosine `cos_angle` scatters that way, `g` forward (0 even all round).
-fn air_phase(cos_angle: Float, g: Float) -> Float {
-    let g2 = g * g;
-    return (1.0 - g2) / (12.566371 * pow(max(1.0 + g2 - 2.0 * g * cos_angle, 0.0001), 1.5));
-}

@@ -1,0 +1,54 @@
+// The golem seen by day: a camera going round the volume's middle, each
+// voxel lit by the sky from above and the sun unless a voxel stands
+// between, fading into haze before the sky.
+use "../../../../../packages/voxel.entpkg";
+use "../../../../../packages/geometry.entpkg";
+
+/// The light on a face by day: the sky's from above (half of it on a face
+/// turned sideways, none facing down), and the sun's by how square the face
+/// turns to `toward`, unless `shaded`.
+fn golem_daylight(face: Vec3, toward: Vec3, shaded: Bool, sky: Vec3, sun: Vec3) -> Vec3 {
+    let direct = if shaded { 0.0 } else { max(dot(face, toward), 0.0) };
+    return sky * (0.5 + 0.5 * face.y) + sun * direct;
+}
+
+/// A color seen through haze to `color_of_haze`, the more the farther
+/// (`thickness` a world unit).
+fn golem_haze(color: Vec3, distance: Float, thickness: Float, color_of_haze: Vec3) -> Vec3 {
+    return mix(color, color_of_haze, saturate(1.0 - exp(-distance * thickness)));
+}
+
+/// The volume of `n` voxels seen going round its middle, `yaw` about the up
+/// axis and `pitch` down, `distance` times its diagonal away; voxel `id` the
+/// color `colors` holds at `id`, lit by the sky's light `sky_light` and the
+/// sun's `sun_light` from toward `sun`, with the shadows it casts, fading
+/// into haze (`haze` a voxel) before a sky going from `horizon` to `zenith`.
+kernel golem.view@1 {
+    requires { field.read; field.write; }
+    input volume: Voxels;
+    input colors: Rows<Vec3>;
+    param yaw: Float = 0.6;
+    param pitch: Float = 0.45;
+    param distance: Float = 1.1;
+    param sun: Vec3 = vec3(0.4, 0.8, 0.3);
+    param sky_light: Vec3 = vec3(0.6, 0.68, 0.82);
+    param sun_light: Vec3 = vec3(0.75, 0.65, 0.5);
+    param horizon: Vec3 = vec3(0.78, 0.84, 0.92);
+    param zenith: Vec3 = vec3(0.36, 0.52, 0.82);
+    param haze: Float = 0.004;
+    output result: Image;
+    compute {
+        let n = size(volume);
+        let cam = lens_orbiting(vec3(0.0, n.y * 0.3, 0.0), yaw, pitch, length(n) * distance, 1.2);
+        let dir = ray(cam, coord(), domain());
+        let sky = mix(horizon, zenith, saturate(dir.y));
+        let met = voxel_meet(volume, VoxelBox { base: vec3(0.0, 0.0, 0.0), n: n, size: 1.0, foot: vec3(0.0, 0.0, 0.0), turn: 0.0 }, cam.eye, dir, 0.0);
+        if met.id == 0 { return vec4(sky, 1.0); }
+        let p = cam.eye + dir * met.t;
+        let toward = normalize(sun);
+        let from = voxel_local(p + met.face * 0.01, vec3(0.0, 0.0, 0.0), 0.0, 1.0) + vec3(n.x * 0.5, 0.0, n.z * 0.5);
+        let shaded = voxel_shaded(volume, from, toward, vec3(0.0, 0.0, 0.0), n, ivec2(1, 0));
+        let lit = at(colors, met.id) * golem_daylight(met.face, toward, shaded, sky_light, sun_light);
+        return vec4(golem_haze(lit, met.t, haze, sky), 1.0);
+    }
+}

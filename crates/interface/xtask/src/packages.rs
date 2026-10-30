@@ -20,8 +20,7 @@ pub(crate) const LAYERS: &[(&str, &[&str])] = &[
     (
         "graphics",
         &[
-            "image", "raster", "voxel", "vector", "mesh", "terrain", "texture", "surface", "light",
-            "camera", "scatter",
+            "image", "raster", "voxel", "vector", "mesh", "terrain", "texture",
         ],
     ),
     ("media", &["audio", "music"]),

@@ -1,15 +1,17 @@
 scene world.esn
-window 96 64
 
 # Stone where the block was baked, grass in the sphere above it, and the
-# stroke's sphere carved out of the block's corner; the view of it.
+# stroke's sphere carved out of the block's corner.
 frame 0.0
 expect baked.result[8272] = 1
 expect baked.result[8528] = 2
 expect dug.result[4328] = 0
 expect baked.result[4328] = 1
-expect 48 32 = 0.645 0.652 0.723 0.01
-expect 2 2 = 0.780 0.840 0.920 0.01
+
+# Beside the block on the ground: shaded from a sun across it, lit by one
+# overhead.
+expect shade.result[0] = 1
+expect shade.result[1] = 0
 
 # The body's lower half where it stood, its upper half carried two
 # voxels along x by its joint.

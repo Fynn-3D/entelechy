@@ -2,6 +2,35 @@
 use "../../../packages/image.entpkg";
 use "../../../packages/random.entpkg";
 
+/// The source read at `uv` with its red and blue drawn `fringe` apart
+/// toward and away from the middle, as a lens's color fringes.
+fn fringed(source: Grid<Vec4>, uv: Vec2, fringe: Float) -> Vec3 {
+    let fs = size(source);
+    let off = (uv - 0.5) * fringe * fs.x;
+    return vec3(at_linear(source, uv * fs + off).x, at_linear(source, uv * fs).y, at_linear(source, uv * fs - off).z);
+}
+
+/// How far out of focus a pixel `distance` away is, for a lens focused
+/// at `focus`: its share of the soft copy, from none within an eighth of
+/// the focus to 0.6, `strength` how fast it grows.
+fn defocus(distance: Float, focus: Float, strength: Float) -> Float {
+    let focused = max(focus, 0.0001);
+    return clamp(abs(distance - focused) / focused * strength - 0.12, 0.0, 0.6);
+}
+
+/// The share of light a lens keeps at `uv`, darker toward the corners by
+/// `amount`.
+fn vignetted(uv: Vec2, amount: Float) -> Float {
+    let d = uv - 0.5;
+    return 1.0 - amount * dot(d, d);
+}
+
+/// Film grain at pixel `px`: a number from -`amount` / 2 to `amount` / 2,
+/// new each sixtieth of a second of `time`.
+fn film_grain(px: Vec2, time: Float, amount: Float) -> Float {
+    return (unit_of(hash_int3(int(px.x), int(px.y), int(time * 60.0), 71)) - 0.5) * amount;
+}
+
 /// The finished picture: depth of field between the sharp picture and
 /// its soft copy, by how far each pixel's depth is from `focus` (the
 /// first row); the glow added, `near` and `far` of each; then exposure,

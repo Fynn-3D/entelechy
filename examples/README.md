@@ -35,7 +35,6 @@ entelechy run examples/<example>/scene.esn --out output.ppm --watch
 - [ui](ui/README.md): a settings screen and a hero's panel drawn with the ui package, moved through by keys, a pad or the pointer.
 - [controls](controls/README.md): a dot walked by the keyboard or a pad alike, actions read from a table by the controls package.
 - [vector](vector/README.md): an SVG imported by `entelechy-import` and drawn sharp at any size by the vector package; drag and zoom.
-- [material_balls](material_balls/README.md): rows of material balls handed over as a G-buffer and lit by renderers of its own (probe GI, a path tracer, clay) over the light package's atoms; fireflies and scattered pebbles over them.
 - [showcase](showcase/README.md): a signed-distance gamepad under physically based shading, with a toolbar in logical pixels.
 - [darkroom](darkroom/README.md): a raw photograph developed with the image package: equalized, graded, sharpened, and a neon outline drawn from a signed distance field.
 - [nebula](nebula/README.md): a drift through a nebula made by the random package, finished by a camera look of its own over the image package's steps: glow, depth of field, tone and grain.

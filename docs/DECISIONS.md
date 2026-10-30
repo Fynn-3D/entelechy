@@ -673,8 +673,7 @@ Words at every layer keep composition open: a scene builds the effect
 it wants, and the package grows by words, not by features.
 
 **Where.** [packages](../packages/README.md) holds the packages to their
-names, layers and tests (`cargo xtask packages`); the light package's
-[words test](../packages/light.entpkg/tests/words.esn).
+names, layers and tests (`cargo xtask packages`).
 
 ## A word enters by what a probe could not write
 

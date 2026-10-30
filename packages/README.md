@@ -44,7 +44,7 @@ one holds.
   packages by name.
 - **Kernels.** An id begins with the package's name and says what it
   makes or does: `raster.cover@4`, `parallel.sort_place@1`,
-  `light.probes_gather@1`.
+  `image.blur@1`.
 - **Names.** A function is a verb or a noun phrase in snake_case, a struct
   or type a noun in PascalCase. No name is declared twice among all the
   packages, and a general word is qualified by its topic (`text_ink`,
@@ -64,7 +64,7 @@ A scene reaches a package by path:
 
 ```text
 use "../../packages/image.entpkg";
-node view: graph "../../packages/image.entpkg/graphs/tonemap.esn" { ... }
+node soft: graph "../../packages/image.entpkg/graphs/blur.esn" { ... }
 ```
 
 or by name, when `ENTELECHY_PACKAGES` lists the directory it is in:
@@ -95,21 +95,17 @@ Arithmetic and the algorithms everything else builds on.
 
 ### Graphics
 
-Pictures and what a camera sees.
+Pictures, and the shapes they are drawn from.
 
 | Package | Holds |
 | --- | --- |
-| [`image`](image.entpkg/README.md) | A picture alone: color, blending and masks, filters, a grade, tone, glow, exposure, a film's steps, scaling, antialiasing, histograms, distance fields, mipmaps, pixel art |
+| [`image`](image.entpkg/README.md) | A picture alone: color, blending and masks, filters, tone, scaling, antialiasing, histograms, distance fields, mipmaps, pixel art |
 | [`raster`](raster.entpkg/README.md) | Triangles rasterized alike on every backend, plain, tiled or cut out |
 | [`voxel`](voxel.entpkg/README.md) | Rays walked through voxels, shapes as data, bodies posed by joints |
 | [`vector`](vector.entpkg/README.md) | SVG drawings filled pixel by pixel, whole or tiled |
 | [`mesh`](mesh.entpkg/README.md) | Triangle meshes as points and faces: lattices, primitives, subdivision and surfaces from fields |
 | [`terrain`](terrain.entpkg/README.md) | Ground as heights: sampled, ray-marched, eroded and meshed |
-| [`texture`](texture.entpkg/README.md) | Patterns, projections, layers, normals and the marks of age a material is drawn with |
-| [`surface`](surface.entpkg/README.md) | What is lit: the G-buffer, the coarse scene light is traced through, decals, outlines, meshes drawn as clusters and streamed |
-| [`light`](light.entpkg/README.md) | Light: shading, the sun, the sky and lamps, shadows, bounced light, fog and air |
-| [`camera`](camera.entpkg/README.md) | What a camera does to a picture: focus, shutter, frames gathered, its own resolution |
-| [`scatter`](scatter.entpkg/README.md) | Things scattered over the ground by layers |
+| [`texture`](texture.entpkg/README.md) | Patterns, projections, layers and normals a material is drawn with |
 
 ### Media
 

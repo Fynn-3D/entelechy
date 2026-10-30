@@ -1,9 +1,0 @@
-scene clip_plane.esn
-
-# Each point's distance from the plane, as its clip coordinates give it and as
-# the world does: the same, in front of the plane, behind it, near and far.
-frame 0.0
-expect read.result[0] = -0.5976 -0.5976 0.0005
-expect read.result[1] = 1.1590 1.1590 0.0005
-expect read.result[2] = -3.6229 -3.6229 0.002
-expect read.result[3] = -0.0120 -0.0120 0.0005

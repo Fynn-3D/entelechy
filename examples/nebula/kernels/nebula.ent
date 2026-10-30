@@ -73,3 +73,20 @@ kernel nebula.lens@1 {
     output result: Rows<Float>;
     compute { return distance; }
 }
+
+/// The picture smaller, each pixel the mean of four samples: only the
+/// light past `over`. w, the depth, is kept.
+kernel nebula.bright@1 {
+    requires { field.read; field.write; }
+    input source: Grid<Vec4>;
+    param over: Float = 0.8;
+    output result: Grid<Vec4>;
+    compute {
+        let scale = size(source) / domain();
+        let p = (coord() + 0.5) * scale;
+        let q = scale * 0.25;
+        let c = (at_linear(source, p + q) + at_linear(source, p - q)
+               + at_linear(source, p + vec2(q.x, -q.y)) + at_linear(source, p - vec2(q.x, -q.y))) * 0.25;
+        return vec4(max(c.xyz - over, 0.0), c.w);
+    }
+}

@@ -89,11 +89,6 @@ expect ramped.result[0] = 1.0 0.0 0.0 1.0 0.00001
 expect nearest.result[7] = 1.0 0.0 0.0 1.0 0.00001
 expect ramped.result[7] = 1.0 1.0 1.0 1.0 0.00001
 
-# Tone mapping: (0.3, 0.6, 0.9) through ACES's curve to (0.4385, 0.6733,
-# 0.7805), then sRGB's transfer, as `image.encode` encodes: a gamma of
-# 2.2 would give 0.687 0.835 0.894.
-expect mapped.result[0] = 0.69329 0.83968 0.89652 1.0 0.0001
-
 # Dithering a gray of Oklab lightness 0.4 between black and white: it
 # lies 0.4 of the way to white, so the Bayer cells under 0.4 (0 to 5 of
 # 16) are white: (0, 0) 0, (2, 0) 2, (1, 1) 4; (1, 0) 8 and (3, 0) 10

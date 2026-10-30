@@ -483,7 +483,7 @@ fn wasi(out: &Out) -> Result<(), String> {
         return Err("a request served under WASI was not answered ok".into());
     }
     let through = ["data", "mesh", "sound", "animation", "genesis"];
-    let mut all: Vec<PathBuf> = listed("examples", Some("tests"), ".replay")
+    let all: Vec<PathBuf> = listed("examples", Some("tests"), ".replay")
         .into_iter()
         .filter(|replay| {
             replay
@@ -492,10 +492,6 @@ fn wasi(out: &Out) -> Result<(), String> {
                 .is_some_and(|example| through.iter().any(|name| example.as_os_str() == *name))
         })
         .collect();
-    // Field directories read a page at a time, inline where there is no
-    // thread, and files found through a package's name.
-    all.push(PathBuf::from("packages/mesh.entpkg/tests/stream.replay"));
-    all.push(PathBuf::from("packages/surface.entpkg/tests/stream.replay"));
     let passed = pool(&all, 8, |replay| {
         run(
             out,

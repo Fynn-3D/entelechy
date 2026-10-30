@@ -26,7 +26,6 @@ and changes both while the world keeps running.
     <td width="33%"><a href="examples/nebula/README.md"><img src="docs/media/gallery-nebula.jpg" alt="A nebula"></a><br><sub><b>A nebula from noise,</b> finished as film: glow, depth of field, grain.</sub></td>
   </tr>
   <tr>
-    <td width="33%"><a href="examples/material_balls/README.md"><img src="docs/media/gallery-materials.jpg" alt="Material balls"></a><br><sub><b>Materials under one light,</b> handed over as a G-buffer and lit by probe GI, a path tracer or clay.</sub></td>
     <td width="33%"><a href="examples/physics/README.md"><img src="docs/media/gallery-physics.jpg" alt="Boxes and balls"></a><br><sub><b>Boxes and balls</b> that fall, stack, slide and bounce, stepped by the physics package.</sub></td>
     <td width="33%"><a href="examples/cube-puzzle/README.md"><img src="docs/media/gallery-cube-puzzle.jpg" alt="A cube puzzle"></a><br><sub><b>A network learns</b> how far a cube puzzle is scrambled, trained by gradient descent.</sub></td>
   </tr>

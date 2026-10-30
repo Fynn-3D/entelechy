@@ -1,6 +1,6 @@
 // The looks a scene places last, on a small ramp with a bright spot:
-// encoded to sRGB and decoded back, sharpened, mipmapped, in coarse
-// pixels, and glowing round the spot.
+// encoded to sRGB and decoded back, sharpened, mipmapped, and in coarse
+// pixels.
 use "../kernels/";
 
 node ramp: kernel {
@@ -19,6 +19,5 @@ node crisp: graph "../graphs/sharpen.esn" { source <- ramp.result; sigma = 1.0; 
 node strip: graph "../graphs/mipmap.esn" { source <- ramp.result; side = 16; levels = 4; }
 
 node coarse: image.pixelate@1 { source <- ramp.result; cell = 4.0; }
-node glowed: graph "../graphs/glow.esn" { source <- ramp.result; }
 
 output result <- crisp.result;

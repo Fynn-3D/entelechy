@@ -1,8 +1,7 @@
 # texture
 
 What a surface is drawn with, point by point as a shader asks: patterns,
-the ways a pattern is laid on a surface, layers and normals, and the marks
-of age. Each is a function a scene's own material calls where it shades a
+the ways a pattern is laid on a surface, layers and normals. Each is a function a scene's own material calls where it shades a
 point (a G-buffer kernel, a distance field's march, a mesh's pixels), so
 a material is these words composed, not a feature of the renderer.
 
@@ -29,11 +28,8 @@ is let go (`texture_fade`).
 - `kernels/projection.ent` — A pattern laid on a surface: three planes
   blended by how it faces, the one face it is on, parallax, and the room
   seen through a window.
-- `kernels/wear.ent` — The marks of age: rain's streaks, grime from the
-  ground, drips under a sill, what faces up, worn edges, dirt in hollows,
-  puddles and wetness.
 
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`patterns.replay`, `surfaces.replay`, `wear.replay`.
+`patterns.replay`, `surfaces.replay`.

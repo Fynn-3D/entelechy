@@ -1,0 +1,39 @@
+// Pages of a Field read from a directory as a `fields` node names them,
+// a page a file, joined in the order of the names: `stream/a.field`, three
+// numbers, then `stream/b.field`, two. And a file found through a
+// package's name: the bitmap font the text package tests with.
+
+use "text.entpkg";
+
+/// The two pages' names, sixteen bytes each: `a.field` and `b.field`.
+node paths: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    domain = 32;
+    compute {
+        let c = element() % 16;
+        let word = [0, 46, 102, 105, 101, 108, 100];
+        return if c == 0 { 97 + element() / 16 } else if c < 7 { word[c] } else { 0 };
+    }
+}
+node pages: Rows<Float> fields "stream/" { paths <- paths.result; }
+node read: kernel {
+    requires { field.read; field.write; }
+    input pages: Rows<Float> <- pages.result;
+    output result: Rows<Float>;
+    domain = 2;
+    compute { return if element() == 0 { float(count(pages)) } else { loop count(pages) with sum = 0.0 { sum + at(pages, index()) } }; }
+}
+input font: Grid<Float> = "text.entpkg/tests/data/font.png";
+node inked: kernel {
+    requires { field.read; field.write; }
+    input font: Grid<Float> <- font;
+    output result: Rows<Float>;
+    domain = 1;
+    compute {
+        let n = int(size(font).x * size(font).y);
+        return loop n with sum = 0.0 { sum + step(0.5, at(font, vec2(float(index() % int(size(font).x)), float(index() / int(size(font).x))))) };
+    }
+}
+
+output result <- read.result;

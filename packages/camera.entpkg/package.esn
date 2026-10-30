@@ -1,7 +1,0 @@
-//! What a camera does to a picture: focus (depth of field), its shutter
-//! (motion blur), its lens jittered frame after frame and the frames
-//! gathered (temporal antialiasing and super-resolution), and the picture
-//! drawn at a resolution of its own, held to a frame time.
-package camera@1 { language = 1; ir = 1; }
-
-use "kernels/";

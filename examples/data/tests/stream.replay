@@ -1,0 +1,13 @@
+scene stream.esn
+
+# The two pages, read a page at a time, joined in the order of their
+# names once both are in: five numbers, 1.5 + 2.5 + 3.5 + 10 + 20.
+frame 0.0
+frame 0.1
+frame 0.2
+frame 0.3
+expect read.result[0] = 5 0
+expect read.result[1] = 37.5 0.0001
+
+# The text package's font, found through its name: its inked texels.
+expect inked.result[0] = 1118 0

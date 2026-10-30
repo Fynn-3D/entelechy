@@ -1,5 +1,6 @@
 // A small world of voxel shapes: a stone block with a sphere of grass on
-// it, a pit carved by a later stroke, seen by the view preset; and a body
+// it, a pit carved by a later stroke, a place beside it shaded from a sun
+// across the block and lit by one overhead; and a body
 // of two joints posed by turning its upper joint a quarter about up.
 use "../kernels/";
 
@@ -18,15 +19,18 @@ node stroke: kernel {
     domain = 1;
     compute { return voxel_sphere(vec3(8.0, 8.0, 8.0), 3.0, 0); }
 }
-node colors: kernel {
-    requires { field.write; }
-    output result: Rows<Vec3>;
-    domain = 3;
-    compute { return [vec3(0.0, 0.0, 0.0), vec3(0.5, 0.5, 0.55), vec3(0.3, 0.6, 0.25)][element()]; }
-}
 node baked: voxel.shapes@1 { shapes <- shapes.result; domain = vec3(32, 16, 32); }
 node dug: voxel.paint@1 { volume <- baked.result; shapes <- stroke.result; }
-node look: graph "../graphs/view.esn" { volume <- dug.result; colors <- colors.result; }
+node shade: kernel {
+    requires { field.read; field.write; }
+    input volume: Voxels <- dug.result;
+    output result: Rows<Int>;
+    domain = 2;
+    compute {
+        let sun = if element() == 0 { vec3(1.0, 0.0, 0.0) } else { vec3(0.0, 1.0, 0.0) };
+        return if voxel_shaded(volume, vec3(2.0, 0.5, 16.0), sun, vec3(0.0, 0.0, 0.0), size(volume), ivec2(1, 0)) { 1 } else { 0 };
+    }
+}
 
 // A body of two joints: a column of 1s at rest, its top half on joint 1.
 node rest: kernel {
@@ -48,4 +52,4 @@ node palette: kernel {
 node unposing: voxel.unposing@1 { palette <- palette.result; }
 node posed: voxel.posed@1 { rest <- rest.result; unposing <- unposing.result; domain = vec3(12, 8, 8); }
 
-output result <- look.result;
+output result <- dug.result;
