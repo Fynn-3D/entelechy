@@ -1,0 +1,22 @@
+// The turns a moving pitch has run, known by hand: a straight glide from
+// 100 Hz to 300 Hz over a second has run 200 turns at its end and 500 a
+// second later, held at 300; one closing in on 300 from 100 over a second
+// has run 300·2 − 200·(1 − e⁻²) turns two seconds in; a vibrato comes back
+// to the steady pitch's turns at the end of each of its swings, and at the
+// top of a swing a sine there is the same as one of its turns.
+use "../kernels/";
+
+node glide: kernel {
+    requires { field.write; }
+    output result: Rows<Vec4>;
+    domain = 1;
+    compute {
+        let straight = glide_cycles(100.0, 300.0, 1.0, false, 1.0);
+        let held = glide_cycles(100.0, 300.0, 1.0, false, 2.0);
+        let closing = glide_cycles(100.0, 300.0, 1.0, true, 2.0);
+        let swing = vibrato_cycles(220.0, 0.05, 5.0, 0.4) - 220.0 * 0.4;
+        return vec4(straight, held, closing, swing + cycle(0.25));
+    }
+}
+
+output result <- glide.result;

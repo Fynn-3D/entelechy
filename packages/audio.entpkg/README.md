@@ -21,12 +21,13 @@ use "audio.entpkg";
   frame.
 - `kernels/filter.ent` — Filters, sample by sample.
 - `kernels/instrument.ent` — What sounds are made of, as functions of
-  time: noise, a tone, an envelope.
+  time: noise, a tone, an envelope, and the turns a moving pitch has run
+  (`glide_cycles`, `vibrato_cycles`, sounded by `cycle`).
 
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`clock.replay`, `delay.replay`, `filters.replay`. Every Kernel of the
+`clock.replay`, `delay.replay`, `filters.replay`, `glide.replay`. Every Kernel of the
 package is reached by one of them.
 
 Used by the [slg](../../examples/slg/README.md), [sound](../../examples/sound/README.md), [spells](../../examples/spells/README.md) examples.

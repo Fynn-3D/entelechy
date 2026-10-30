@@ -1,5 +1,5 @@
 // What sounds are made of, as functions of time: noise white and
-// smoothed, an envelope, a tone.
+// smoothed, an envelope, a tone, and the phase a pitch that moves has run.
 use "random.entpkg";
 use "clock.ent";
 
@@ -7,7 +7,8 @@ use "clock.ent";
 fn white(n: Long, s: Int) -> Float { return hash1(low_bits(n), s) * 2.0 - 1.0; }
 
 /// Noise smoothed between random values `x` apart: its pitch rises with
-/// how fast x runs.
+/// how fast x runs. For a pitch that moves, `x` is the phase it has run
+/// (`glide_cycles`), not the pitch times the time.
 fn soft_noise(x: Float, s: Int) -> Float {
     let i = floor(x);
     let f = x - i;
@@ -16,4 +17,28 @@ fn soft_noise(x: Float, s: Int) -> Float {
 
 fn envelope(t: Float, a: Float, d: Float) -> Float { return if t < 0.0 { 0.0 } else if t < a { t / a } else { exp(-(t - a) / d) }; }
 
+/// A tone at a steady pitch `f`, `t` seconds in. Only for a steady pitch:
+/// the pitch times the time of a pitch that moves is heard as the pitch
+/// plus the time times how fast it moves (a falling glide turns and rises);
+/// for one that moves, `cycle` of the phase it has run.
 fn tone(f: Float, t: Float) -> Float { return sin(tau() * fract(f * t)); }
+
+/// A sine `p` turns round (its phase counted in turns).
+fn cycle(p: Float) -> Float { return sin(tau() * fract(p)); }
+
+/// The turns a pitch gliding from `from` to `to` has run `t` seconds in:
+/// straight over `time` seconds and then held at `to`, or (`closing`)
+/// closing in on `to` as exp(-t / time).
+fn glide_cycles(from: Float, to: Float, time: Float, closing: Bool, t: Float) -> Float {
+    if time <= 0.0 { return to * t; }
+    if closing { return to * t + (from - to) * time * (1.0 - exp(0.0 - t / time)); }
+    let k = clamp(t, 0.0, time);
+    return from * k + (to - from) * k * k / (2.0 * time) + to * max(t - time, 0.0);
+}
+
+/// The turns a pitch `f` wavering by `depth` (a share of it) `rate` times a
+/// second has run `t` seconds in.
+fn vibrato_cycles(f: Float, depth: Float, rate: Float, t: Float) -> Float {
+    if rate <= 0.0 { return f * t; }
+    return f * t + f * depth * (1.0 - cos(tau() * rate * t)) / (tau() * rate);
+}
