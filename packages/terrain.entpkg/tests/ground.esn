@@ -1,6 +1,7 @@
 // Ground whose answers are known: a slope rising half a meter a meter
 // eastward over 16 by 16 cells 2 meters apart, read between its cells,
-// hit by a ray straight down and laid out as a mesh; and a spike worn down
+// hit by a ray straight down, its highest over blocks of four cells, hit
+// again over those blocks as without them, and laid out as a mesh; and a spike worn down
 // by erosion, its sum kept.
 use "mesh.entpkg";
 use "../kernels/";
@@ -31,6 +32,24 @@ node read: kernel {
             n.y,
             terrain_hit(heights, 2.0, vec3(10.0, 20.0, 10.0), vec3(0.0, -1.0, 0.0), -5.0, 40.0),
             terrain_hit(heights, 2.0, vec3(-10.0, 20.0, 10.0), vec3(0.0, -1.0, 0.0), -5.0, 40.0),
+        ][element()];
+    }
+}
+node highest: terrain.highest@1 { heights <- slope.result; block = 4; domain = vec2(4, 4); }
+node over: kernel {
+    requires { field.read; field.write; }
+    input heights: Grid<Float> <- slope.result;
+    input highest: Grid<Float> <- highest.result;
+    output result: Rows<Float>;
+    domain = 4;
+    compute {
+        let slant = normalize(vec3(1.0, -0.6, 0.3));
+        let low = normalize(vec3(-1.0, -0.15, 0.2));
+        return [
+            terrain_hit_over(heights, 2.0, highest, 4, vec3(10.0, 20.0, 10.0), vec3(0.0, -1.0, 0.0), -5.0, 40.0),
+            terrain_hit_over(heights, 2.0, highest, 4, vec3(1.0, 20.0, 3.0), slant, -5.0, 40.0) - terrain_hit(heights, 2.0, vec3(1.0, 20.0, 3.0), slant, -5.0, 40.0),
+            terrain_hit_over(heights, 2.0, highest, 4, vec3(31.0, 18.0, 5.0), low, -5.0, 40.0) - terrain_hit(heights, 2.0, vec3(31.0, 18.0, 5.0), low, -5.0, 40.0),
+            terrain_hit_over(heights, 2.0, highest, 4, vec3(-10.0, 20.0, 10.0), vec3(0.0, -1.0, 0.0), -5.0, 40.0),
         ][element()];
     }
 }

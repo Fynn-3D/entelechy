@@ -19,10 +19,10 @@ struct TerrainMarch { t: Float; last: Float; met: Bool; }
 
 fn terrain_nonzero(x: Float) -> Float { return if abs(x) < 0.000001 { if x < 0.0 { -0.000001 } else { 0.000001 } } else { x }; }
 
-/// How far along `dir` (of unit length) from `from` the ray first meets
-/// the ground, or -1 when it does not within the ground's box: across
-/// the grid, and from `low` to `high` meters up.
-fn terrain_hit(h: Grid<Float>, cell: Float, from: Vec3, dir: Vec3, low: Float, high: Float) -> Float {
+/// Where along `dir` from `from` the ray is within the ground's box
+/// (across the grid, and from `low` to `high` meters up): from x to y,
+/// x no less than 0; y below x when it misses the box.
+fn terrain_span(h: Grid<Float>, cell: Float, from: Vec3, dir: Vec3, low: Float, high: Float) -> Vec2 {
     let extent = size(h) * cell;
     let lo = vec3(0.0, low, 0.0);
     let hi = vec3(extent.x, high, extent.y);
@@ -33,8 +33,17 @@ fn terrain_hit(h: Grid<Float>, cell: Float, from: Vec3, dir: Vec3, low: Float, h
     let b = (hi - from) * inv;
     let near = max(max(min(a.x, b.x), min(a.y, b.y)), min(a.z, b.z));
     let far = min(min(max(a.x, b.x), max(a.y, b.y)), max(a.z, b.z));
-    if far < max(near, 0.0) { return -1.0; }
-    let start = max(near, 0.0);
+    return vec2(max(near, 0.0), far);
+}
+
+/// How far along `dir` (of unit length) from `from` the ray first meets
+/// the ground, or -1 when it does not within the ground's box: across
+/// the grid, and from `low` to `high` meters up.
+fn terrain_hit(h: Grid<Float>, cell: Float, from: Vec3, dir: Vec3, low: Float, high: Float) -> Float {
+    let span = terrain_span(h, cell, from, dir, low, high);
+    if span.y < span.x { return -1.0; }
+    let start = span.x;
+    let far = span.y;
     // Steps as long as the height above allows, and never under a tenth
     // of a cell; then halved between the last step above and the first
     // under.
@@ -43,6 +52,59 @@ fn terrain_hit(h: Grid<Float>, cell: Float, from: Vec3, dir: Vec3, low: Float, h
         let above = p.y - terrain_height(h, cell, vec2(p.x, p.z));
         if above < 0.0 { TerrainMarch { ..s, met: true } }
         else { TerrainMarch { t: s.t + max(above * 0.4, cell * 0.1), last: s.t, met: false } }
+    };
+    if !w.met { return -1.0; }
+    let r = loop 8 with lr = vec2(w.last, w.t) {
+        let mid = (lr.x + lr.y) * 0.5;
+        let q = from + dir * mid;
+        if q.y > terrain_height(h, cell, vec2(q.x, q.z)) { vec2(mid, lr.y) } else { vec2(lr.x, mid) }
+    };
+    return (r.x + r.y) * 0.5;
+}
+
+/// The highest the ground stands over each block of `block` by `block`
+/// cells, the cells either side taken in as the heights blended between
+/// cells reach them: a roof no place of the block rises past. A node sets
+/// `domain = ceil(size(heights) / block)`; `terrain_hit_over` reads it.
+kernel terrain.highest@1 {
+    requires { field.read; field.write; }
+    param block: Int = 16;
+    input heights: Grid<Float>;
+    output result: Grid<Float>;
+    compute {
+        let n = block + 2;
+        let lo = coord() * float(block) - 1.0;
+        let last = vec2(size(heights)) - 1.0;
+        return loop n * n with top = -1.0e30 {
+            max(top, at(heights, clamp(lo + vec2(float(index() % n), float(index() / n)), vec2(0.0, 0.0), last)))
+        };
+    }
+}
+
+/// Where the ray first meets the ground, as `terrain_hit`, crossing at a
+/// step each block of `block` cells whose `highest` (`terrain.highest@1`)
+/// it passes over, or coming down to that roof where it meets it first;
+/// under a block's roof it steps as `terrain_hit` does.
+fn terrain_hit_over(h: Grid<Float>, cell: Float, highest: Grid<Float>, block: Int, from: Vec3, dir: Vec3, low: Float, high: Float) -> Float {
+    let span = terrain_span(h, cell, from, dir, low, high);
+    if span.y < span.x { return -1.0; }
+    let side = cell * float(block);
+    let inv = vec2(1.0 / terrain_nonzero(dir.x), 1.0 / terrain_nonzero(dir.z));
+    let ahead = step(vec2(0.0, 0.0), vec2(dir.x, dir.z));
+    let last_block = vec2(size(highest)) - 1.0;
+    let w = loop 400 with s = TerrainMarch { t: span.x, last: span.x, met: false } until s.met || s.t > span.y {
+        let p = from + dir * s.t;
+        let b = floor(vec2(p.x, p.z) / side);
+        let roof = at(highest, clamp(b, vec2(0.0, 0.0), last_block));
+        if p.y > roof {
+            let out = ((b + ahead) * side - vec2(p.x, p.z)) * inv;
+            let down = if dir.y < 0.0 { (p.y - roof) / (0.0 - dir.y) } else { 1.0e30 };
+            TerrainMarch { t: s.t + max(min(min(out.x, out.y), down), 0.0) + cell * 0.01, last: s.t, met: false }
+        } else {
+            let above = p.y - terrain_height(h, cell, vec2(p.x, p.z));
+            if above < 0.0 { TerrainMarch { ..s, met: true } }
+            else { TerrainMarch { t: s.t + max(above * 0.4, cell * 0.1), last: s.t, met: false } }
+        }
     };
     if !w.met { return -1.0; }
     let r = loop 8 with lr = vec2(w.last, w.t) {

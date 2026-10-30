@@ -10,6 +10,18 @@ expect read.result[2] = 0.8944 0.0001
 expect read.result[3] = 15 0.01
 expect read.result[4] = -1 0
 
+# The highest over blocks of four cells: the first block reaches the
+# fifth cell east, 4.5; the last column the far edge, 15.5. Over them a
+# ray meets the slope where it does walking every step: straight down 15,
+# slanted and low alike to the halving's width; one outside nothing.
+expect highest.result[0] = 4.5 0.0001
+expect highest.result[3] = 15.5 0.0001
+expect highest.result[15] = 15.5 0.0001
+expect over.result[0] = 15 0.01
+expect over.result[1] = 0 0.01
+expect over.result[2] = 0 0.01
+expect over.result[3] = -1 0
+
 # Laid out as a mesh: the last point at the far corner, at its height.
 expect points.result[255].position = 31 15.5 31 0.0001
 expect points.result[255].uv = 1 1 0.0001
