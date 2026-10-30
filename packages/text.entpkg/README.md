@@ -15,8 +15,8 @@ use "text.entpkg";
 
 - `kernels/atlas.ent` — The wide glyphs a project's words use (Chinese,
   Japanese) drawn into the atlas the ui package's letters read
-  (`ui.letters`): a font node's glyphs at any side (`text.face_atlas`,
-  its ascent from the font's metrics), or a ten-pixel font's as
+  (`ui.letters`): a font node's glyphs at any side and density
+  (`text.face_atlas`, its ascent from the font's metrics), or a ten-pixel font's as
   `entelechy import` reads them (`text.glyph_atlas`). Kernels:
   `text.glyph_atlas@1`, `text.face_atlas@1`, `text.glyph_codes@1`,
   `text.unlettered@1`.
@@ -42,9 +42,10 @@ use "text.entpkg";
 ## Graph presets
 
 - `graphs/decode.esn` — A text's rows as letters, `width` cells a row.
-- `graphs/face.esn` — A font's glyphs as the letters' grid, `side` pixels
-  square, and the codes the atlas holds: a text's font is a font node's
-  path and a side.
+- `graphs/face.esn` — A font's glyphs as the letters' grid, `side` texels
+  square at `density` pixels a texel (a denser glyph stands as large,
+  drawn finer and read blended), and the codes the atlas holds: a text's
+  font is a font node's path, a side and a density.
 - `graphs/letters.esn` — The letters' grid (`ui.letters`).
 - `graphs/wanted.esn` — The wide characters a text uses, for a font node.
 - `graphs/template.esn` — A template filled and written: a world writing

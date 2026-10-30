@@ -9,9 +9,12 @@
 //
 // The letters' grid (`ui.letters`) is the bitmap font in its top 48
 // rows, then a row whose first texel is the side of the atlas's glyphs
-// in pixels, then the atlas: square glyphs that side, as many a row as
-// fit in 96 texels, slot 0 at the top left, one slot a character of a
-// row of codes in order of code. How the atlas is drawn, from which
+// in texels and whose second is their density, the atlas's pixels a
+// texel, then the atlas: square glyphs the side times the density in
+// pixels, as many a row as fit in 96, slot 0 at the top left, one slot a
+// character of a row of codes in order of code. A glyph of density 1 is
+// read a pixel a texel; a denser one is read blended, so it stands as
+// large as one of density 1 and its edges are smooth. How the atlas is drawn, from which
 // font, is the scene's: the package draws no font. A wide glyph stands
 // in the middle of its cells, as tall as its side, so glyphs of 10
 // pixels stand a pixel over and under a line of the bitmap font, of 16
@@ -21,6 +24,9 @@ fn letters_atlas_top() -> Int { return 49; }
 
 /// The side of the atlas's glyphs, as the grid holds it.
 fn glyph_side(letters: Grid<Float>) -> Float { return at(letters, vec2(0.0, 48.0)); }
+
+/// The atlas's pixels a texel of a glyph, as the grid holds it: 1 or more.
+fn glyph_density(letters: Grid<Float>) -> Float { return max(at(letters, vec2(1.0, 48.0)), 1.0); }
 
 /// How many cells a wide letter takes, its glyphs `side` pixels: two, or
 /// as many more as hold the side.
@@ -43,20 +49,21 @@ kernel text.no_codes@1 {
     compute { return -1; }
 }
 
-/// The letters' grid: the bitmap font, the side of the atlas's glyphs,
-/// and the atlas, a grid 96 texels across the scene draws. A node sets
+/// The letters' grid: the bitmap font, the side and density of the
+/// atlas's glyphs, and the atlas, a grid 96 texels across the scene draws. A node sets
 /// `domain = vec2(96.0, 49.0) + size(atlas) * vec2(0.0, 1.0)`
 /// (`graphs/letters.esn`).
 kernel text.letters@1 {
     requires { field.read; field.write; }
     param side: Int = 10;
+    param density: Int = 1;
     input font: Grid<Float>;
     input atlas: Grid<Float>;
     output result: Grid<Float>;
     compute {
         let p = icoord();
         if p.y < 48 { return if p.x < 96 { at(font, p) } else { 0.0 }; }
-        if p.y == 48 { return if p.x == 0 { float(side) } else { 0.0 }; }
+        if p.y == 48 { return if p.x == 0 { float(side) } else if p.x == 1 { float(max(density, 1)) } else { 0.0 }; }
         return at(atlas, p - ivec2(0, letters_atlas_top()));
     }
 }
@@ -68,12 +75,24 @@ fn letter_cover(letters: Grid<Float>, code: Int, local: Vec2) -> Float {
     if code >= 256 {
         let side = glyph_side(letters);
         let n = int(side);
+        let d = glyph_density(letters);
+        let px = n * int(d);
         let across = float(wide_cells(n) * 6);
-        let g = floor(local - vec2((across - side) * 0.5, (8.0 - side) * 0.5));
+        let place = local - vec2((across - side) * 0.5, (8.0 - side) * 0.5);
+        let g = floor(place);
         if g.x < 0.0 || g.y < 0.0 || g.x >= side || g.y >= side { return 0.0; }
         let k = code - 256;
-        let columns = 96 / max(n, 1);
-        return at(letters, vec2(float(k % columns * n) + g.x, float(letters_atlas_top() + k / columns * n) + g.y));
+        let columns = 96 / max(px, 1);
+        let corner = vec2(float(k % columns * px), float(letters_atlas_top() + k / columns * px));
+        if d <= 1.0 { return at(letters, corner + g); }
+        // Denser: four blended reads a quarter texel round the place, each
+        // kept to the glyph's own square.
+        let c = corner + place * d;
+        let q = d * 0.25;
+        let lo = corner + 0.5;
+        let hi = corner + float(px) - 0.5;
+        return (at_linear(letters, clamp(c + vec2(q, q), lo, hi)) + at_linear(letters, clamp(c - vec2(q, q), lo, hi))
+            + at_linear(letters, clamp(c + vec2(q, 0.0 - q), lo, hi)) + at_linear(letters, clamp(c + vec2(0.0 - q, q), lo, hi))) * 0.25;
     }
     if code <= 32 || local.x < 0.0 || local.y < 0.0 || local.x >= 6.0 || local.y >= 8.0 { return 0.0; }
     let c = if code > 126 { 63 } else { code };

@@ -24,3 +24,14 @@ expect sixteen.letters[1] = -1
 expect sixteen.letters[2] = -1
 expect sixteen.letters[3] = 257
 expect sixteen.letters[9] = 65
+
+# 中's ink at its middle, at its edge and outside it: a pixel a texel,
+# whole, whole and none; four pixels a texel read blended, whole, half and
+# none. The dense grid holds its density, 4.
+expect covers.result[0] = 1 0.0001
+expect covers.result[1] = 1 0.0001
+expect covers.result[2] = 0 0.0001
+expect covers.result[3] = 1 0.0001
+expect covers.result[4] = 0.5 0.01
+expect covers.result[5] = 0 0.0001
+expect dense.grid.grid.result[4609] = 4.0

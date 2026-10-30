@@ -1,7 +1,8 @@
 // A text's wide characters, each once, in order of code (中 文 中 A 文 字:
 // 中, 字, 文), and a font's glyphs drawn twelve pixels square: 中 and 文
 // as squares from 0.2 to 0.8 of an em, the ascent 11/12 of an em, the
-// glyphs as a font node gives them for those codes. The words as letters
+// glyphs as a font node gives them for those codes, and drawn again four
+// pixels a texel, read blended. The words as letters
 // over two cells a wide one at twelve pixels, three at sixteen.
 use "../kernels/";
 
@@ -39,6 +40,21 @@ node metrics: kernel {
     compute { return FontMetrics { units: 1024, ascent: 11.0 / 12.0, descent: -1.0 / 12.0, gap: 0.0 }; }
 }
 node letters: graph "../graphs/face.esn" { font <- font; glyphs <- glyphs.result; outlines <- outlines.result; metrics <- metrics.result; side = 12; }
+node dense: graph "../graphs/face.esn" { font <- font; glyphs <- glyphs.result; outlines <- outlines.result; metrics <- metrics.result; side = 12; density = 4; }
+// 中's ink at its middle, at its left edge (its square begins 2.4 texels
+// in) and outside it, at the two densities.
+node covers: kernel {
+    requires { field.read; field.write; }
+    input plain: Grid<Float> <- letters.letters;
+    input fine: Grid<Float> <- dense.letters;
+    output result: Rows<Float>;
+    domain = 6;
+    compute {
+        let places = [vec2(6.0, 4.0), vec2(2.4, 4.0), vec2(1.5, 4.0)];
+        let at_ = places[element() % 3];
+        return if element() < 3 { letter_cover(plain, 256, at_) } else { letter_cover(fine, 256, at_) };
+    }
+}
 node twelve: graph "../graphs/decode.esn" { text <- words; codes <- letters.codes; width = 12; side = 12; }
 node sixteen: graph "../graphs/decode.esn" { text <- words; codes <- letters.codes; width = 12; side = 16; }
 

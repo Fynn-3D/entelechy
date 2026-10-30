@@ -47,17 +47,21 @@ kernel text.glyph_atlas@1 {
     compute { return atlas_ink(glyphs, outlines, icoord(), atlas_side(), glyph_ascent()); }
 }
 
-/// The atlas of a font node's glyphs, `side` pixels square, the baseline as
-/// far below a glyph's top as the font's ascent. `graphs/face.esn` places
-/// it, sized.
+/// The atlas of a font node's glyphs, `side` texels square at `density`
+/// pixels a texel, the baseline as far below a glyph's top as the font's
+/// ascent. `graphs/face.esn` places it, sized.
 kernel text.face_atlas@1 {
     requires { field.read; field.write; }
     param side: Int = 10;
+    param density: Int = 1;
     input glyphs: Rows<Letterform>;
     input outlines: Rows<Vec4>;
     input metrics: Rows<FontMetrics>;
     output result: Grid<Float>;
-    compute { return atlas_ink(glyphs, outlines, icoord(), side, floor(at(metrics, 0).ascent * float(side) + 0.5)); }
+    compute {
+        let n = side * max(density, 1);
+        return atlas_ink(glyphs, outlines, icoord(), n, floor(at(metrics, 0).ascent * float(n) + 0.5));
+    }
 }
 
 /// The codes the atlas holds, a slot each, in its order.

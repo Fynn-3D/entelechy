@@ -1,7 +1,9 @@
 //! A font's glyphs as the letters' grid (`ui.letters`): a font node's
-//! glyphs drawn `side` pixels square into the atlas (`text.face_atlas`)
-//! under the bitmap font, and the codes the atlas holds, for `decode.esn`.
-//! A text's font is its path and its side:
+//! glyphs drawn `side` texels square into the atlas (`text.face_atlas`),
+//! `density` pixels a texel, under the bitmap font, and the codes the
+//! atlas holds, for `decode.esn`. A glyph stands as large at any density;
+//! a denser one is drawn finer and read blended, its edges smooth. A
+//! text's font is its path and its side:
 //!   node wanted: graph "text.entpkg/graphs/wanted.esn" { text <- words; }
 //!   node type: font "fonts/x.ttf" { codes <- wanted.codes; }
 //!   node letters: graph "text.entpkg/graphs/face.esn" { font <- pixels; glyphs <- type.glyphs; outlines <- type.outlines; metrics <- type.metrics; side = 12; }
@@ -13,14 +15,15 @@ input glyphs: Rows<Letterform>;
 input outlines: Rows<Vec4>;
 input metrics: Rows<FontMetrics>;
 param side: Int = 10;
+param density: Int = 1;
 
 require a_glyph_a_row: side >= 1;
-require glyphs_fit: side <= 96;
+require glyphs_fit: side * density <= 96;
 
-node atlas: text.face_atlas@1 { side = side; glyphs <- glyphs; outlines <- outlines; metrics <- metrics;
-    domain = vec2(96.0, side * floor((count(glyphs) + 96 / side - 1) / (96 / side))); }
+node atlas: text.face_atlas@1 { side = side; density = density; glyphs <- glyphs; outlines <- outlines; metrics <- metrics;
+    domain = vec2(96.0, side * density * floor((count(glyphs) + 96 / (side * density) - 1) / (96 / (side * density)))); }
 node codes: text.glyph_codes@1 { glyphs <- glyphs; domain = count(glyphs); }
-node grid: graph "letters.esn" { font <- font; atlas <- atlas.result; side = side; }
+node grid: graph "letters.esn" { font <- font; atlas <- atlas.result; side = side; density = density; }
 
 output letters <- grid.letters;
 output codes <- codes.result;
