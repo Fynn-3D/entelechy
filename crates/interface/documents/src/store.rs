@@ -25,7 +25,7 @@ impl Stamp {
     /// disk's does).
     pub(crate) fn length(&self) -> Option<u64> {
         match self.0 {
-            Seen::Disk(_, length) => Some(length),
+            Seen::Disk(_, length, _) => Some(length),
             Seen::Memory(_) => None,
         }
     }
@@ -33,11 +33,30 @@ impl Stamp {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Seen {
-    /// A file on disk: its modification time and length.
-    Disk(Option<std::time::SystemTime>, u64),
+    /// A file on disk: its modification time, its length, and its
+    /// content's digest where the time alone may not tell a change.
+    Disk(Option<std::time::SystemTime>, u64, Digest),
     /// A file handed in: the number of the write that made it.
     Memory(u64),
 }
+
+/// What a disk stamp holds of a file's content: a directory's content is
+/// the names of its entries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Digest {
+    /// None: every stamp of this time and length was taken once the time
+    /// was settled, so a change gives the file another time.
+    Untaken,
+    /// What the content hashes to.
+    Of(u64),
+    /// The content could not be read.
+    Unread,
+}
+
+/// How long after a file's modification a further change may still get
+/// the same modification time: the coarsest clock a file system stamps
+/// with (FAT's two seconds; others a second, or a scheduler tick).
+const SETTLES: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// The bytes a file read as words is read in at a time
 /// ([`Store::read_words`]).
@@ -304,6 +323,20 @@ pub struct Disk {
     found: std::sync::Arc<Mutex<Option<Found>>>,
     /// The runs open ([`Store::sync_begins`]).
     runs: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Each path stamped before its modification time settled, at the
+    /// time and length it was stamped at: every stamp of it carries its
+    /// content's digest while they last.
+    unsettled: std::sync::Arc<Mutex<std::collections::HashMap<PathBuf, Unsettled>>>,
+}
+
+/// A path stamped before its modification time settled ([`SETTLES`]).
+#[derive(Debug)]
+struct Unsettled {
+    modified: Option<std::time::SystemTime>,
+    length: u64,
+    /// The digest taken once the time settled: no change after it keeps
+    /// the time, so it holds while the time and length do.
+    settled: Option<Digest>,
 }
 
 /// What a sync found of the file system, by path.
@@ -358,6 +391,7 @@ impl Disk {
             parsed: Parsed::default(),
             found: Default::default(),
             runs: Default::default(),
+            unsettled: Default::default(),
         }
     }
 }
@@ -545,14 +579,7 @@ impl Store for Disk {
     }
 
     fn stamp(&self, path: &Path) -> Option<Stamp> {
-        self.found(
-            path,
-            |found| &mut found.stamps,
-            || {
-                let metadata = std::fs::metadata(path).ok()?;
-                Some(Stamp(Seen::Disk(metadata.modified().ok(), metadata.len())))
-            },
-        )
+        self.found(path, |found| &mut found.stamps, || self.stamp_now(path))
     }
 
     /// The platform's resolved path; under WASI, whose sandbox keeps links
@@ -588,6 +615,66 @@ impl Store for Disk {
 }
 
 impl Disk {
+    /// The stamp of what is at `path` now. A modification time read before
+    /// it settled ([`SETTLES`]) may be the time of a change still to come,
+    /// so from then on, while the time and length last, the stamp carries
+    /// the content's digest; the time and length alone are the stamp of a
+    /// path first stamped once its time settled.
+    fn stamp_now(&self, path: &Path) -> Option<Stamp> {
+        let unsettled = || {
+            self.unsettled
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        };
+        let Ok(metadata) = std::fs::metadata(path) else {
+            unsettled().remove(path);
+            return None;
+        };
+        let modified = metadata.modified().ok();
+        let length = metadata.len();
+        let settled = modified.is_some_and(|modified| {
+            std::time::SystemTime::now()
+                .duration_since(modified)
+                .is_ok_and(|age| age >= SETTLES)
+        });
+        let kept = unsettled()
+            .get(path)
+            .filter(|kept| kept.modified == modified && kept.length == length)
+            .map(|kept| kept.settled);
+        let digest = match kept {
+            // Settled once digested: the digest holds.
+            Some(Some(digest)) => digest,
+            // Stamped unsettled before, or unsettled now: digested, and the
+            // digest kept once the time settled.
+            Some(None) => self.digested(path, &metadata, settled),
+            None if !settled => self.digested(path, &metadata, settled),
+            // First stamped settled: the time and length tell every change.
+            None => {
+                unsettled().remove(path);
+                Digest::Untaken
+            }
+        };
+        Some(Stamp(Seen::Disk(modified, length, digest)))
+    }
+
+    /// The digest of what `metadata` describes at `path`, noted as taken
+    /// at its time and length, and kept when the time had `settled`.
+    fn digested(&self, path: &Path, metadata: &std::fs::Metadata, settled: bool) -> Digest {
+        let digest = digest(path, metadata.is_dir());
+        self.unsettled
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(
+                path.to_path_buf(),
+                Unsettled {
+                    modified: metadata.modified().ok(),
+                    length: metadata.len(),
+                    settled: settled.then_some(digest),
+                },
+            );
+        digest
+    }
+
     fn resolved(&self, path: &Path) -> io::Result<PathBuf> {
         match path.canonicalize() {
             Err(error) if error.kind() == io::ErrorKind::Unsupported => {
@@ -598,6 +685,38 @@ impl Disk {
             }
             resolved => resolved,
         }
+    }
+}
+
+/// The digest of what is at `path`: a file's bytes, read a piece at a
+/// time, or a directory's entries' names in order.
+fn digest(path: &Path, dir: bool) -> Digest {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let hashed = if dir {
+        std::fs::read_dir(path).and_then(|entries| {
+            let mut names = entries
+                .map(|entry| entry.map(|entry| entry.file_name()))
+                .collect::<io::Result<Vec<_>>>()?;
+            names.sort();
+            names.hash(&mut hasher);
+            Ok(())
+        })
+    } else {
+        std::fs::File::open(path).and_then(|mut file| {
+            use std::io::Read;
+            let mut piece = vec![0u8; 1 << 16];
+            loop {
+                match file.read(&mut piece)? {
+                    0 => return Ok(()),
+                    read => hasher.write(&piece[..read]),
+                }
+            }
+        })
+    };
+    match hashed {
+        Ok(()) => Digest::Of(hasher.finish()),
+        Err(_) => Digest::Unread,
     }
 }
 
@@ -1371,6 +1490,96 @@ mod tests {
             std::fs::read_to_string(dir.join("out.txt")).unwrap(),
             "written"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A disk file's stamp changes with its content though its time and
+    /// length stay, as a change within one tick of a file system's clock
+    /// leaves them; it holds while the content does, across the time
+    /// settling.
+    #[test]
+    fn a_change_within_one_tick_of_the_clock_is_a_change() {
+        let dir = std::env::temp_dir().join(format!("entelechy-store-tick-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("n.txt");
+        let disk = Disk::default();
+        // A time just short of settling: stamped unsettled, then settled.
+        let tick = std::time::SystemTime::now() - (SETTLES - std::time::Duration::from_millis(300));
+        let at_tick = |text: &str| {
+            std::fs::write(&file, text).unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&file)
+                .unwrap()
+                .set_modified(tick)
+                .unwrap();
+        };
+        at_tick("6");
+        let six = disk.stamp(&file);
+        assert_eq!(disk.stamp(&file), six);
+        at_tick("7");
+        let seven = disk.stamp(&file);
+        assert_ne!(seven, six, "the same time and length, another content");
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        assert_eq!(disk.stamp(&file), seven, "settled, the content the same");
+        // A change once the time settled is given a later time.
+        std::fs::write(&file, "8").unwrap();
+        assert_ne!(disk.stamp(&file), seven, "changed once settled");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file first stamped long after its change is stamped by its time
+    /// and length alone.
+    #[test]
+    fn a_settled_file_is_stamped_by_its_time_and_length() {
+        let dir =
+            std::env::temp_dir().join(format!("entelechy-store-settled-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("n.txt");
+        std::fs::write(&file, "6").unwrap();
+        let old = std::time::SystemTime::now() - 2 * SETTLES;
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        assert_eq!(
+            Disk::default().stamp(&file),
+            Some(Stamp(Seen::Disk(Some(old), 1, Digest::Untaken)))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A directory's stamp changes with its entries though its time stays.
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_come_and_gone_within_one_tick_is_a_change() {
+        let dir =
+            std::env::temp_dir().join(format!("entelechy-store-entries-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.ent"), "a").unwrap();
+        let disk = Disk::default();
+        let tick = std::time::SystemTime::now();
+        let at_tick = || {
+            std::fs::File::open(&dir)
+                .unwrap()
+                .set_modified(tick)
+                .unwrap()
+        };
+        at_tick();
+        let one = disk.stamp(&dir);
+        std::fs::write(dir.join("b.ent"), "b").unwrap();
+        at_tick();
+        let two = disk.stamp(&dir);
+        assert_ne!(two, one, "an entry added");
+        std::fs::remove_file(dir.join("b.ent")).unwrap();
+        std::fs::write(dir.join("c.ent"), "c").unwrap();
+        at_tick();
+        assert_ne!(disk.stamp(&dir), two, "an entry replaced by another");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
