@@ -420,6 +420,10 @@ impl Store for Disk {
     }
 
     fn sync_ends(&self) {
+        // `try_update` is the rename of `fetch_update`, but still unstable on our
+        // MSRV (1.93). Keep `fetch_update` until rust-version can move past
+        // stabilization; silence the deprecation that appears on newer rustc.
+        #[allow(deprecated)]
         let ended = self.runs.fetch_update(
             std::sync::atomic::Ordering::AcqRel,
             std::sync::atomic::Ordering::Acquire,
