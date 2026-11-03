@@ -136,6 +136,12 @@ impl Display {
             .get_default_config(adapter, width.max(1), height.max(1))
             .ok_or_else(|| "the adapter cannot present to this surface".to_string())?;
         config.format = format;
+        // `get_default_config` takes the first present mode the adapter
+        // lists. DX12 puts Mailbox first (uncapped-ish, up to ~2× refresh);
+        // Metal puts Fifo first (vsync). Force Fifo so Windows matches
+        // Mac's stable pacing instead of 100+ FPS with uneven intervals.
+        config.present_mode = wgpu::PresentMode::Fifo;
+        eprintln!("present mode: {:?}", config.present_mode);
         surface.configure(device, &config);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("entelechy blit"),
