@@ -445,9 +445,11 @@ print the least of the runs, a millisecond a frame. The frames overlap
 the device as a window's do: the next is made while the device runs
 this one. The first frame of all is thrown away: it compiles and
 allocates. --nodes measures
-every node as well, waiting for the device after each one, native
-operations included; what measuring a node costs before it does
-anything is taken off every line, and the sum says how the parts
+every node as well, native operations included, as a window's
+frame-data line does: on a device by its own clock beside the call on
+the frame's thread, nothing waiting for either. Where the device keeps
+no clock it waits after each node, what measuring a node costs before
+it does anything taken off every line, and the sum says how the parts
 come to more than the whole, since a node runs alone there and a
 frame overlaps them. --json
 writes the measurement, and --compare reads one back and prints what
