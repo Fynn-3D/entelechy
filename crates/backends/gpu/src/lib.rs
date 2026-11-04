@@ -67,8 +67,8 @@ pub struct GpuBackend {
     wait: Wait,
     /// The time callers have spent blocked on the device's work.
     spent: Spent,
-    /// Waits on the device's work while any is in flight ([`Waiter`]).
-    waiter: Option<Waiter>,
+    /// Looks at the device for as long as this lives ([`Waiter`]).
+    _waiter: Option<Waiter>,
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
     device: wgpu::Device,
@@ -166,15 +166,6 @@ impl GpuBackend {
     /// What was let go before it is destroyed after it ([`Spare::bury`]).
     pub(crate) fn submit(&self, commands: wgpu::CommandBuffer) -> wgpu::SubmissionIndex {
         let submission = self.frames.submit(&self.queue, commands);
-        // A clocked frame's runs the Host's clock times are heard done one
-        // by one; else the waiter waits for them all at once, which costs
-        // the frame less.
-        if self.frames.clocked()
-            && !self.frames.stamps()
-            && let Some(waiter) = &self.waiter
-        {
-            waiter.follow(&submission);
-        }
         self.spare.bury();
         self.targets.bury();
         submission
@@ -289,7 +280,7 @@ impl GpuBackend {
         Ok(Self {
             wait,
             spent: Spent::default(),
-            waiter: Waiter::start(&device),
+            _waiter: Waiter::start(&device),
             instance,
             adapter,
             device,

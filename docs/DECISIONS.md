@@ -617,13 +617,15 @@ what a frame computes:
   written once the frame is confirmed: a write never makes a frame wait.
 - A frame's device time is told by the device as it finishes, never by
   waiting for it.
-- On a machine one thread waits on the device's work while any is in
-  flight, and buffers are let go by dropping them: a device that lowers
-  its clock while nothing waits on it (Apple's GPUs) keeps pace with the
-  frames, and the frame's own thread never waits on the device through
-  a lock the waiter holds. While frames are clocked it waits for each
-  run in turn, so each is timed as it ends, which costs a clocked frame
-  a wake a run.
+- On a machine one thread looks at the device every tenth of a
+  millisecond for as long as the backend lives, and buffers are let go by
+  dropping them: a device that lowers its clock while nothing keeps up
+  with its work (Apple's GPUs) keeps pace with the frames, and each run
+  is heard done within a look. It looks and does not wait: a wait holds
+  the lock presenting a frame takes, and a wait given a timeout can find
+  the queue emptied by another thread's poll or submission after it read
+  how far the device had got, which wgpu takes for a broken promise and
+  panics.
 - Every wait of the frame's thread for the device is counted, and the
   node bound or run as it waited is named: a `value` read, an input
   brought from the device. `bench` and the frame-data line say a frame

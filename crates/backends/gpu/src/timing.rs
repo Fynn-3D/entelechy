@@ -204,8 +204,9 @@ impl GpuBackend {
 /// Elsewhere the Host's clock times a run from its submission, or the run
 /// before's end if later, to the moment the device tells it done: the
 /// device runs its queue in order, so that is how long it kept the device
-/// busy. The backend's waiter hears each run done as it is, so the ends
-/// are told when they happen, not when next asked. A page has no thread to
+/// busy. The backend's waiter hears each run done as it is, within a look
+/// ([`crate::wait::Waiter`]), so the ends are told when they happen, not
+/// when next asked. A page has no thread to
 /// hear the device on, so a device of a page's without timestamps clocks
 /// no frame.
 pub(crate) struct Frames {
