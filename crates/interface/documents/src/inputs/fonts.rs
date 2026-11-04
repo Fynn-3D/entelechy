@@ -2,6 +2,7 @@
 //! node is given.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use entelechy_kernel::{Handle, Host};
 
@@ -9,12 +10,13 @@ use super::Inputs;
 use crate::store::{Stamp, Store};
 use crate::{Diagnostic, Event};
 
-/// A font node's font as last read, and the characters it was last given
-/// (their Field's handle, so the same Field is not read twice).
+/// A font node's font as last read, one file's bytes shared by the nodes
+/// of that file, and the characters it was last given (their Field's
+/// handle, so the same Field is not read twice).
 pub(super) struct Font {
     pub(super) path: PathBuf,
     stamp: Option<Stamp>,
-    bytes: Vec<u8>,
+    bytes: Arc<Vec<u8>>,
     codes: Vec<i32>,
     seen: Option<Handle>,
 }
@@ -54,7 +56,16 @@ impl Inputs {
             {
                 continue;
             }
-            let bytes = readable(&path).and_then(|()| store.read(&path).map_err(|e| e.to_string()));
+            // Another node of the file, as it stands, has it already.
+            let held = self
+                .fonts
+                .values()
+                .find(|known| known.path == path && known.stamp == stamp && stamp.is_some())
+                .map(|known| Arc::clone(&known.bytes));
+            let bytes = readable(&path).and_then(|()| match held {
+                Some(held) => Ok(held),
+                None => store.read(&path).map(Arc::new).map_err(|e| e.to_string()),
+            });
             let bytes = match bytes {
                 Ok(bytes) => bytes,
                 Err(why) => {

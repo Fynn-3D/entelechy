@@ -253,3 +253,105 @@ fn a_font_through_a_package_name_is_read_from_the_package() {
     assert_eq!(codes(&mut session), vec![111, -1, 73]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A store that counts the times `sample.ttf` is read.
+#[derive(Default)]
+struct Counted {
+    files: entelechy_documents::store::Memory,
+    fonts_read: std::sync::atomic::AtomicUsize,
+}
+
+impl entelechy_documents::store::Store for Counted {
+    fn read(&self, path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+        if path.ends_with("sample.ttf") {
+            self.fonts_read
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.files.read(path)
+    }
+    fn write(&self, path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+        self.files.write(path, bytes)
+    }
+    fn remove(&self, path: &std::path::Path) -> std::io::Result<()> {
+        self.files.remove(path)
+    }
+    fn rename(&self, from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+        self.files.rename(from, to)
+    }
+    fn remove_empty(&self, dir: &std::path::Path) -> std::io::Result<()> {
+        self.files.remove_empty(dir)
+    }
+    fn kind(&self, path: &std::path::Path) -> Option<entelechy_documents::store::Kind> {
+        self.files.kind(path)
+    }
+    fn list(&self, dir: &std::path::Path) -> std::io::Result<Vec<PathBuf>> {
+        self.files.list(dir)
+    }
+    fn stamp(&self, path: &std::path::Path) -> Option<entelechy_documents::store::Stamp> {
+        self.files.stamp(path)
+    }
+    fn canonical(&self, path: &std::path::Path) -> std::io::Result<PathBuf> {
+        self.files.canonical(path)
+    }
+    fn whole(&self, path: &std::path::Path) -> PathBuf {
+        self.files.whole(path)
+    }
+}
+
+/// Two font nodes of one file hold it once, each giving the glyphs of its
+/// own codes; when the file changes, both read the new one, once.
+#[test]
+fn font_nodes_of_one_file_read_it_once() {
+    let scene = "
+struct Letterform { code: Int; advance: Int; first: Int; count: Int; lo: Vec2; hi: Vec2; }
+kernel t.codes@1 { requires { field.write; } param code: Int = 0; output result: Rows<Int>;
+    compute { return code; } }
+kernel t.copy@1 { requires { field.read; field.write; } input glyphs: Rows<Letterform>; output result: Rows<Letterform>;
+    compute { return sample(glyphs); } }
+node i: t.codes@1 { code = 73; domain = 1; }
+node o: t.codes@1 { code = 111; domain = 1; }
+node a: font \"/s/sample.ttf\" { codes <- i.result; }
+node b: font \"/s/sample.ttf\" { codes <- o.result; }
+node first: t.copy@1 { glyphs <- a.glyphs; }
+node second: t.copy@1 { glyphs <- b.glyphs; }
+output result <- first.result;
+output other <- second.result;
+";
+    let store = std::sync::Arc::new(Counted::default());
+    store
+        .files
+        .put(std::path::Path::new("/s/scene.esn"), scene.into());
+    let font = std::path::Path::new("/s/sample.ttf");
+    store
+        .files
+        .put(font, entelechy_import::font::sample::latin());
+    let mut session = Session::open_in(
+        store.clone(),
+        std::path::Path::new("/s/scene.esn"),
+        None,
+        entelechy_kernel::Runtime::with_backend(1 << 22, Box::new(entelechy_cpu::CpuBackend)),
+    );
+    let events = session.sync();
+    assert!(session.graph().is_some(), "{events:?}");
+    let reads = || store.fonts_read.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(reads(), 1);
+    let code = |session: &mut Session, output: &str| {
+        let handle = session.output(Some(output)).unwrap();
+        session.field(handle).unwrap().values()[0] as i32
+    };
+    session.evaluate(&Context::default()).unwrap();
+    session.sync();
+    session.evaluate(&Context::default()).unwrap();
+    assert_eq!(code(&mut session, "result"), 73);
+    assert_eq!(code(&mut session, "other"), 111);
+    assert_eq!(reads(), 1, "glyphs of other codes read no file");
+
+    store
+        .files
+        .put(font, entelechy_import::font::sample::latin());
+    session.sync();
+    assert_eq!(reads(), 2);
+    session.evaluate(&Context::default()).unwrap();
+    assert_eq!(code(&mut session, "result"), 73);
+    assert_eq!(code(&mut session, "other"), 111);
+}
