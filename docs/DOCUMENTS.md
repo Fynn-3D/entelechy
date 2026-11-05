@@ -521,7 +521,9 @@ is the scene; placed, its inputs are wired.
   evaluation. A scene watches its own Kernels,
   unless the caller gives it another's (`Session::watch`).
 - `input saved: Rows<Tally> = "saves/tally.field" else fresh.result;`
-  reads `fresh.result` until the file exists (`examples/data/parts/save`).
+  reads `fresh.result` until the file exists (`examples/data/parts/save`),
+  or while the file is of another layout than the Kernel reading it takes:
+  that is reported by the file's name, and the next write replaces it.
 
 ### Execution modes
 

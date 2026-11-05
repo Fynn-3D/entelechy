@@ -102,6 +102,7 @@ impl Inputs {
             graph,
             files,
             tables,
+            unread,
         } = *declared;
         let wanted: Vec<entelechy_scene::Asset> = files.assets.clone();
         let stale: Vec<String> = self
@@ -154,6 +155,12 @@ impl Inputs {
                 });
                 continue;
             }
+            // A save a replay does not start from reads as if never made.
+            if unread.contains(&path) && graph.is_some_and(|g| g.fallback(&name).is_some()) {
+                self.forget(runtime.host_mut(), &name);
+                events.push(Event::Absent { name, path });
+                continue;
+            }
             let extension = entelechy_formats::extension(&path);
             let noted = std::cell::RefCell::new(Vec::new());
             let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
@@ -185,6 +192,18 @@ impl Inputs {
             }
             let read = read.and_then(|(data, detail)| {
                 let data = kept_as(data, &ty)?;
+                // A file that stands in for its fallback must be what the
+                // fallback gives: one of another layout is refused here,
+                // by its name, as a state of another layout restarts.
+                if let Some(element) = declared.tables.get(&name)
+                    && graph.is_some_and(|g| g.fallback(&name).is_some())
+                    && !element.takes(data.schema())
+                {
+                    return Err(format!(
+                        "holds a Field of {}, which is not what `{name}` is read as; reading its fallback, and the next write replaces the file",
+                        data.schema().describe()
+                    ));
+                }
                 let detail = match data.schema().uniform_encoding() {
                     Some(encoding) if !data.schema().is_wide() => {
                         format!("{detail}, kept as {encoding}")

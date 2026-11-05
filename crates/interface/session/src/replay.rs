@@ -48,7 +48,7 @@ pub fn forms() -> Vec<Form> {
         form(
             "allow",
             "allow file.write <dir> | allow file.delete <dir>",
-            "lets the scene's outputs write (or remove and rename) files under the directory, relative to the replay file, as `--allow` does; what they write is kept for the run and never reaches the disk, so every run starts from the same files",
+            "lets the scene's outputs write (or remove and rename) files under the directory, relative to the replay file, as `--allow` does; what they write is kept for the run and never reaches the disk, so every run starts from the same files; with or without it, what the scene saved for itself before the run (an output's file an input reads, with a fallback) is not read until the run writes it",
             &["allow file.write ../laws/"],
         ),
         form(
@@ -748,6 +748,7 @@ pub fn run_each(
     let store = store_for(replay, store);
     let mut session = Session::open_in(store, &replay.scene, replay.kernels.as_deref(), runtime);
     session.set_fusion(fusion);
+    session.start_from_nothing_saved();
     let events = session.sync();
     allow_on(replay, &mut session)?;
     played_on(replay, &mut session, events, each)
@@ -942,6 +943,7 @@ impl Resident {
                 runtime(&self.warm),
             );
             session.set_fusion(self.fusion);
+            session.start_from_nothing_saved();
             let events = session.sync();
             allow_on(replay, &mut session)?;
             return played_on(replay, &mut session, events, None);
@@ -957,6 +959,7 @@ impl Resident {
                     runtime(&self.warm),
                 );
                 session.set_fusion(self.fusion);
+                session.start_from_nothing_saved();
                 let events = session.sync();
                 self.sessions.insert(key.clone(), session);
                 events

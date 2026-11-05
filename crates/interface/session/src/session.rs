@@ -28,6 +28,9 @@ pub struct Session {
     /// What the session may read; its store reads only there.
     reads: Arc<std::sync::Mutex<entelechy_documents::reads::Reads>>,
     writes: writes::Writes,
+    /// Whether what the scene saved for itself on disk is read as absent
+    /// until this run writes it ([`Session::start_from_nothing_saved`]).
+    nothing_saved: bool,
     runtime: Runtime,
     evaluator: Evaluator,
     /// Where each node was last said to run, so a change is said once.
@@ -164,6 +167,7 @@ impl Session {
             copies_let_go: std::collections::BTreeSet::new(),
             reads,
             writes: writes::Writes::default(),
+            nothing_saved: false,
             runtime,
             evaluator: Evaluator::new(),
             placed: BTreeMap::new(),
@@ -585,10 +589,22 @@ impl Session {
             entelechy_documents::reads::lock(&reads).settle(store.as_ref(), &read_from);
         }
         let tables = entelechy_documents::inputs::table_elements(self.scene.graph(), &self.runtime);
+        let unread: Vec<PathBuf> = if self.nothing_saved {
+            self.scene
+                .files()
+                .writes
+                .iter()
+                .filter(|write| self.writes.author(store.as_ref(), &write.path).is_none())
+                .map(|write| write.path.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
         let declared = entelechy_documents::inputs::Declared {
             graph: self.scene.graph(),
             files: self.scene.files(),
             tables: &tables,
+            unread: &unread,
         };
         let on_device =
             self.inputs
@@ -612,6 +628,13 @@ impl Session {
         self.remember(&events);
         store.sync_ends();
         events
+    }
+
+    /// Reads what the scene saved for itself on disk as if it were not
+    /// there, until this run writes it: a replay starts from the same
+    /// files whoever has played the scene before it.
+    pub fn start_from_nothing_saved(&mut self) {
+        self.nothing_saved = true;
     }
 
     /// Allows the scene's outputs to be written to files in `dir` and

@@ -45,6 +45,14 @@ pub struct TableElement {
     kept: Schema,
 }
 
+impl TableElement {
+    /// Whether a Field of `schema` is what the Kernel reading the input
+    /// takes.
+    pub fn takes(&self, schema: &Schema) -> bool {
+        &self.kept == schema
+    }
+}
+
 /// What a scene declares of its inputs: its graph, the files and
 /// directories they are read from, and the element each data table is
 /// read as ([`table_elements`]).
@@ -55,6 +63,9 @@ pub struct Declared<'a> {
     pub files: &'a entelechy_scene::Files,
     /// The element each data table is read as.
     pub tables: &'a BTreeMap<String, TableElement>,
+    /// Files read as absent, whatever the disk holds: what a replay's
+    /// scene saved for itself and has not written in this run.
+    pub unread: &'a [std::path::PathBuf],
 }
 
 /// For each scene input a node reads, the element the first node reading

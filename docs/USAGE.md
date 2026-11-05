@@ -209,7 +209,7 @@ line, `#` a comment, paths relative to the replay file:
 | --- | --- | --- |
 | `scene <path>` | the scene to test, relative to the replay file; required | `scene ../scene.esn` |
 | `library <path>` | Kernels beyond the scene's `use` | `library ../kernels/` |
-| `allow file.write <dir> \| allow file.delete <dir>` | lets the scene's outputs write (or remove and rename) files under the directory, relative to the replay file, as `--allow` does; what they write is kept for the run and never reaches the disk, so every run starts from the same files | `allow file.write ../laws/` |
+| `allow file.write <dir> \| allow file.delete <dir>` | lets the scene's outputs write (or remove and rename) files under the directory, relative to the replay file, as `--allow` does; what they write is kept for the run and never reaches the disk, so every run starts from the same files; with or without it, what the scene saved for itself before the run (an output's file an input reads, with a fallback) is not read until the run writes it | `allow file.write ../laws/` |
 | `alike` | its checks hold two forms of one computation equal word for word, which they are only where every Kernel rounds alike, so `--round-apart` leaves the replay out | `alike` |
 | `frame <seconds> [to <seconds> every <seconds>]` | evaluates one frame at this session time; with `to` and `every`, a frame at each step from the first time to the last, both included | `frame 0.0`, `frame 0.1 to 2.0 every 0.1` |
 | `settle` | waits for every `async` run to land | `settle` |
