@@ -161,3 +161,41 @@ fn an_output_let_go_cold_is_made_again_to_be_read() {
     assert!(next.executed.is_empty(), "{:?}", next.executed);
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
+
+#[test]
+fn a_node_that_may_sleep_keeps_what_it_gave_and_sleeps_on_it() {
+    // `c` reads the clock, so its outputs are new frame after frame: such
+    // outputs are let go once read, but not one that may sleep. Asleep on
+    // a row of 0, it is not run again, nor what only it reads.
+    let text = "
+kernel t.tick@1 { requires { field.write; time.read; } output result: Rows<Float>; compute { return time(); } }
+kernel t.next@1 { requires { field.read; field.write; } input a: Rows<Float>; output result: Rows<Float>; compute { return sample(a) + 1.0; } }
+kernel t.gate@1 { requires { field.write; } param on: Int = 1; output result: Rows<Int>; compute { return on; } }
+param on: Int = 1;
+node gate: t.gate@1 { on = on; domain = 1; }
+node tick: t.tick@1 { domain = 4; }
+node c: t.next@1 { a <- tick.result; awake = value(gate.result); }
+node d: t.next@1 { a <- c.result; }
+output result <- d.result;
+";
+    let (mut session, path) = opened(1 << 24, "asleep", text);
+    let mut context = entelechy_kernel::Context::default();
+    for time in 0..12 {
+        context.time = f64::from(time);
+        session.evaluate(&context).unwrap();
+    }
+    assert!(!names(&session.cold_nodes()).contains(&"c"));
+    session
+        .set_param("on", entelechy_abi::Value::Int(0))
+        .unwrap();
+    // The row the last frame left turns 0 on the frame after this one.
+    context.time = 12.0;
+    session.evaluate(&context).unwrap();
+    for time in 13..16 {
+        context.time = f64::from(time);
+        let next = session.evaluate(&context).unwrap();
+        assert!(next.executed.is_empty(), "{:?}", names(&next.executed));
+        assert_eq!(first_word(&session), 12.0 + 2.0);
+    }
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}

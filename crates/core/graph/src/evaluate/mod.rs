@@ -380,8 +380,8 @@ type MadeOnce = (NodeId, Vec<NodeId>);
 
 /// The nodes of a plan whose outputs are made once, each with its readers:
 /// a settled node's (one that reads no clock, input, window or state,
-/// runs in its turn, and reads only settled nodes), read only by settled
-/// nodes.
+/// runs in its turn, is never asleep, and reads only settled nodes), read
+/// only by settled nodes.
 fn made_once(groups: &[Group]) -> Vec<MadeOnce> {
     let at: BTreeMap<&NodeId, usize> = groups
         .iter()
@@ -393,7 +393,10 @@ fn made_once(groups: &[Group]) -> Vec<MadeOnce> {
     let mut readers: BTreeMap<&NodeId, Vec<usize>> = BTreeMap::new();
     for (index, group) in groups.iter().enumerate() {
         let requires = &group.manifest().requires;
+        // (a node that may sleep keeps what it gave for its readers: never
+        // let go as made once)
         let mut moves = group.node.is_async
+            || !group.node.awake.is_empty()
             || requires.contains(Capability::TimeRead)
             || requires.contains(Capability::InputRead)
             || matches!(&group.node.domain, Some(DomainSpec::Expr(expr)) if expr.reads_context());
@@ -2401,9 +2404,16 @@ fn substitute_fallbacks(graph: &Graph, externals: &BTreeMap<String, Handle>) -> 
 }
 
 /// The nodes whose outputs are never let go to make room: the scene's
-/// outputs, the sources and first values of its state, and the pinned.
+/// outputs, the sources and first values of its state, the nodes that may
+/// sleep, and the pinned.
 fn held_nodes(graph: &Graph, pinned: &BTreeSet<NodeId>) -> BTreeSet<NodeId> {
     let mut held = pinned.clone();
+    // What sleeps is what its readers take while it does.
+    for node in &graph.nodes {
+        if !node.awake.is_empty() {
+            held.insert(node.id.clone());
+        }
+    }
     for (_, source) in &graph.outputs {
         if let Source::Node { node, .. } = source {
             held.insert(node.clone());
