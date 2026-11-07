@@ -870,6 +870,12 @@ impl Evaluator {
                     }
                     Err(error) => return Err(fusion(error.to_string())),
                 };
+                // The group is prepared, built and timed under the id it
+                // runs under, not its consumer's.
+                let mut module = module.into_module();
+                module.manifest.id = fused_id(consumer);
+                let module =
+                    entelechy_ir::validate(module).map_err(|error| fusion(error.to_string()))?;
                 let source = format!(
                     "// fused: {}\n",
                     members

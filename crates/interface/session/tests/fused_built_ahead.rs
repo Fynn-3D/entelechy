@@ -110,11 +110,21 @@ output result <- twice.result;
         session.sync();
     }
     assert!(fused, "the two nodes fuse");
-    // The group keeps its consumer's id: `t.twice@1` is built twice, the
-    // node's version and the group, both by finishing, none by a run.
+    // The node's version and the group, each built once by finishing,
+    // none by a run.
     let builds = device.builds.lock().unwrap().clone();
-    let twice = builds.iter().filter(|(id, _)| id == "t.twice@1").count();
-    assert_eq!(twice, 2, "{builds:?}");
+    let count = |name: &str| builds.iter().filter(|(id, _)| id == name).count();
+    assert_eq!(count("t.twice@1"), 1, "{builds:?}");
+    assert_eq!(count("fused.twice@1"), 1, "{builds:?}");
     assert!(builds.iter().all(|(_, by)| *by == "finish"), "{builds:?}");
+    // What preparing shows names the group, not the node it stands in for.
+    let shown: Vec<String> = session
+        .progress()
+        .now()
+        .seeds
+        .iter()
+        .map(|seed| seed.id.to_string())
+        .collect();
+    assert!(shown.iter().any(|id| id == "fused.twice@1"), "{shown:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
