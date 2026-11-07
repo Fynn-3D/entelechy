@@ -552,7 +552,8 @@ groups holds all its elements), and to the device otherwise; a run that
 reads what the device just made stays there. A run small enough on its
 own spares each run that made what it reads `--small` less its own
 work, and a run whose readers spared it that much more in the last
-evaluation that made it goes to the JIT with them. A Kernel the device's own
+evaluation that made it goes to the JIT with them and spares the runs
+it reads what is left, so a chain of small runs goes together. A Kernel the device's own
 compiler cannot build runs on the JIT from then on; a shader the backend
 emitted that the device refuses is the backend's fault and still refuses
 the document. `entelechy check` says when a Kernel is large for a

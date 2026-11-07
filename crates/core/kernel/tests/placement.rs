@@ -221,3 +221,36 @@ fn two_runs_of_one_kernel_apart_by_a_parameter_are_spared_apart() {
     assert_eq!(placed[0], ("device", "device"));
     assert_eq!(placed[1..], [("processor", "device"); 2]);
 }
+
+#[test]
+fn a_chain_of_small_runs_goes_to_the_processor_whole() {
+    // Six readers of 80 elements spare the middle run of 90 what it needs
+    // and more; what is left it spares the head of 200, which its own
+    // readers alone (the middle, 10) would leave on the device for the
+    // middle to wait on. The chain settles on the processor whole.
+    let mut runtime = runtime();
+    let head = runtime.load(constant("test.producer@1", 0), "").unwrap();
+    let middle = runtime.load(constant("test.middle@1", 1), "").unwrap();
+    let reader = runtime.load(constant("test.reader@1", 1), "").unwrap();
+    let mut placed = Vec::new();
+    for _ in 0..6 {
+        runtime.begin_evaluation();
+        let made = runtime.execute(&head, &invocation(vec![], 200, 0)).unwrap()[0];
+        let head_on = runtime.last_placement().unwrap().backend;
+        let passed = runtime
+            .execute(&middle, &invocation(vec![made], 90, 0))
+            .unwrap()[0];
+        let middle_on = runtime.last_placement().unwrap().backend;
+        for _ in 0..6 {
+            let read = runtime
+                .execute(&reader, &invocation(vec![passed], 80, 0))
+                .unwrap()[0];
+            runtime.host_mut().release(read).unwrap();
+        }
+        runtime.host_mut().release(passed).unwrap();
+        runtime.host_mut().release(made).unwrap();
+        placed.push((head_on, middle_on));
+    }
+    assert_eq!(placed[0], ("device", "device"));
+    assert_eq!(placed[4..], [("processor", "processor"); 2]);
+}

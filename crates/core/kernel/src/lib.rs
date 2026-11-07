@@ -1412,8 +1412,9 @@ impl Runtime {
     /// would stay there beside them, a dispatch of its own; were they not,
     /// it goes to the ordered backend too. A run its readers spare more
     /// than it takes goes there with them, whichever backend it ran on, so
-    /// the choice holds from one evaluation to the next. It reads the runs
-    /// and nothing of time.
+    /// the choice holds from one evaluation to the next, and spares the
+    /// runs it reads what is left, so a chain of small runs goes whole. It
+    /// reads the runs and nothing of time.
     /// The second answer is what the run spares those runs, when it is
     /// small enough on its own; [`Runtime::spare`] counts it once it runs.
     fn sized_off(
@@ -1466,8 +1467,18 @@ impl Runtime {
         // the device and bring it down, breaking the device's work in
         // two, which pays only when the run itself is long
         // ([`FEW_LONG_WORK`]) and what comes down is not large.
-        let alone = elements.max(carried) <= FEW_ELEMENTS || work <= self.small;
-        let spare = alone.then(|| self.small.saturating_sub(work));
+        // What its readers spared it counts as its own budget, and what is
+        // left of that it spares the runs it reads in turn: a chain of
+        // small runs goes to the ordered backend whole, not its tail alone
+        // with the head left on the device for the tail to wait on.
+        let spared = self
+            .spared
+            .get(&run_key(version, invocation))
+            .copied()
+            .unwrap_or(0);
+        let budget = self.small.saturating_add(spared);
+        let alone = elements.max(carried) <= FEW_ELEMENTS || work <= budget;
+        let spare = alone.then(|| budget.saturating_sub(work));
         let few = elements.max(carried) <= FEW_ELEMENTS
             && (fresh == 0 || (work > FEW_LONG_WORK && fresh <= FEW_FRESH_BYTES));
         if few {
@@ -1476,12 +1487,7 @@ impl Runtime {
         if fresh > 0 {
             return (None, spare);
         }
-        let spared = self
-            .spared
-            .get(&run_key(version, invocation))
-            .copied()
-            .unwrap_or(0);
-        let small = work <= self.small.saturating_add(spared);
+        let small = work <= budget;
         (small.then_some(Why::Small { elements, work }), spare)
     }
 
