@@ -1009,7 +1009,20 @@ be keywords.
     frame; one run goes at a time; inputs are copied when it starts. It
     is never fused. A replay's `settle`, and `evaluate` with `settle:
     true` over the protocol, wait for every run to land.
-13. `require name: a <= b;` is what a graph's parameters must hold for
+13. `awake = value(source, row);` puts a node to sleep while that row of
+    `source` (a graph input or `node.port`, a row of counts as `value()`
+    reads one in a `domain`; `value(source)` is row 0) is 0. A frame
+    reads the row as the last frame left it, so a node sleeps and wakes
+    one frame after its row turns. Asleep, it is not run: its readers take
+    its last outputs, the state it feeds through `<~` stays, and what only
+    it reads, in turn, does not run either. A node that has never run
+    runs once, as nothing of it is there to take. On a placed graph's
+    node it holds for every node placed, beside their own; a node sleeps
+    while any of its rows is 0. A node with one is never fused. A trial
+    (`compose`'s) runs every node. A game whose title, character maker
+    and world are one scene puts the two not shown to sleep
+    ([why](DECISIONS.md#a-node-may-sleep-by-what-a-row-says)).
+14. `require name: a <= b;` is what a graph's parameters must hold for
     it to run: two counts, as a `domain` writes them from the graph's
     parameters, numbers, `window()` and `scale()`, compared with `<`,
     `<=`, `>`, `>=`, `==` or `!=`. It is checked as the document loads

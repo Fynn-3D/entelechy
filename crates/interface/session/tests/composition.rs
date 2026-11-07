@@ -2794,3 +2794,79 @@ output r <- final.result;",
         "settled outputs are found so within the frames between checks: {last_run}"
     );
 }
+
+const FLAG: &str = "kernel test.flag@1 { requires { field.write; } param on: Int = 1; output result: Rows<Int>; compute { return on; } }";
+const CLOCK: &str = "kernel test.clock@1 { requires { field.write; time.read; } output result: Image; compute { return vec4(time(), 0.0, 0.0, 1.0); } }";
+const ASLEEP: &str = "
+param on: Int = 1;
+node gate: test.flag@1 { on = on; domain = 1; }
+node clock: test.clock@1 { domain = vec2(2, 2); }
+node shade: image.invert@1 { source <- clock.result; awake = value(gate.result); }
+node seed: image.gradient@1 { domain = vec2(2, 2); }
+node count: test.count@1 { previous <~ count.result from seed.result; awake = value(gate.result, 0); }
+output result <- shade.result;
+output count <- count.result;
+";
+
+#[test]
+fn a_node_asleep_is_not_run_nor_what_only_it_reads_and_its_readers_take_its_last() {
+    let graph = entelechy_scene::parse(ASLEEP).unwrap();
+    // Written as it was read.
+    let printed = entelechy_scene::print(&graph);
+    assert!(
+        printed.contains("awake = value(gate.result, 0);"),
+        "{printed}"
+    );
+    assert_eq!(entelechy_scene::parse(&printed).unwrap().nodes, graph.nodes);
+    let mut runtime = runtime();
+    for source in [FLAG, CLOCK, COUNT] {
+        load(&mut runtime, source);
+    }
+    let mut evaluator = Evaluator::new();
+    let none = BTreeMap::new();
+    let on = |on: i32| BTreeMap::from([("on".to_owned(), entelechy_abi::Value::Int(on))]);
+    let red = |runtime: &Runtime, handle| runtime.host().read_pixel(handle, 0, 0).unwrap()[0];
+    let count_of = |runtime: &Runtime, report: &entelechy_graph::Report| {
+        let (_, handle) = report
+            .outputs
+            .iter()
+            .find(|(name, _)| name == "count")
+            .unwrap();
+        runtime.host().read_pixel(*handle, 0, 0).unwrap()[0]
+    };
+    // Never run, a node runs though its row is 0: nothing of it is there
+    // to take.
+    let first = evaluator
+        .evaluate(&graph, &mut runtime, &none, &at(0.0), &on(0))
+        .unwrap();
+    assert_eq!(
+        first.executed,
+        ids(&["gate", "clock", "shade", "seed", "count"])
+    );
+    assert_eq!(red(&runtime, first.output), 1.0);
+    // The row the last frame left is 0: `shade` sleeps, and `clock`, read
+    // by nothing else, is not run though its clock moved; the state
+    // `count` keeps does not advance.
+    let second = evaluator
+        .evaluate(&graph, &mut runtime, &none, &at(1.0), &on(0))
+        .unwrap();
+    assert!(second.executed.is_empty(), "{:?}", second.executed);
+    assert!(second.committed.is_empty());
+    assert_eq!(red(&runtime, second.output), 1.0);
+    let held = count_of(&runtime, &second);
+    // The row turns 1: read as the last frame left it, the nodes wake on
+    // the frame after.
+    let third = evaluator
+        .evaluate(&graph, &mut runtime, &none, &at(2.0), &on(1))
+        .unwrap();
+    assert_eq!(third.executed, ids(&["gate"]));
+    assert_eq!(red(&runtime, third.output), 1.0);
+    let fourth = evaluator
+        .evaluate(&graph, &mut runtime, &none, &at(3.0), &on(1))
+        .unwrap();
+    assert_eq!(fourth.executed, ids(&["clock", "shade", "count"]));
+    assert_eq!(red(&runtime, fourth.output), 1.0 - 3.0);
+    assert_eq!(count_of(&runtime, &fourth), held + 1.0);
+    evaluator.clear(&mut runtime);
+    assert_eq!(runtime.host().live(), 0);
+}

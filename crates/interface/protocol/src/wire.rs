@@ -407,6 +407,7 @@ pub(crate) fn graph_json(
                 entelechy_graph::DomainSpec::Expr(expr) => json!(expr.to_string()),
             }),
             "async": node.is_async,
+            "awake": node.awake.iter().map(|a| json!({ "source": source(&a.source), "row": a.row })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
         "outputs": graph.outputs.iter().map(|(name, s)| {
             let device = devices.iter().find(|d| d.output == *name).map(|d| d.device.as_str());

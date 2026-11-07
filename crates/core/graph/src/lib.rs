@@ -287,6 +287,9 @@ pub struct Node {
     /// run lands, readers take its last output and the state it feeds
     /// stays. Its first run is on the frame.
     pub is_async: bool,
+    /// `awake = value(source, row);`, its own and its placements': while
+    /// any reads 0 the node sleeps. See [`Awake`].
+    pub awake: Vec<Awake>,
     /// Where the node was written, `file:line:column`, for diagnostics.
     pub at: Option<String>,
 }
@@ -301,7 +304,22 @@ impl PartialEq for Node {
             && self.params == other.params
             && self.domain == other.domain
             && self.is_async == other.is_async
+            && self.awake == other.awake
     }
+}
+
+/// When a node is awake: while row `row` of `source` (a count, as
+/// `value()` reads one in a `domain`) is not 0. A frame reads the row as
+/// the last frame left it; a node asleep is not run, its readers take its
+/// last outputs, the state it feeds stays, and what only it reads does not
+/// run either. A node that has never run runs once, as nothing of it is
+/// there to take.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Awake {
+    /// What holds the row.
+    pub source: Source,
+    /// The row.
+    pub row: u32,
 }
 
 /// What a node reads across evaluations: see [`Graph::reads`].
@@ -483,11 +501,31 @@ impl Graph {
 
     /// The nodes a frame runs: what something reads. Every output's node
     /// (a file's too), every state's (what a `<~` carries and the source it
-    /// starts from), the nodes in `also` (those pinned to be read), and
-    /// every node they read through `<-`, in turn. A node none of them
-    /// reads computes nothing anyone sees, so it does not run.
+    /// starts from), every node an `awake` reads, the nodes in `also`
+    /// (those pinned to be read), and every node they read through `<-`,
+    /// in turn. A node none of them reads computes nothing anyone sees, so
+    /// it does not run. Every node is taken as awake: see
+    /// [`Graph::read_awake`].
     pub fn read_through(&self, also: impl IntoIterator<Item = NodeId>) -> BTreeSet<NodeId> {
+        self.read_awake(also, &BTreeSet::new())
+    }
+
+    /// [`Graph::read_through`] with the nodes in `asleep` asleep: each is
+    /// still reached, as its readers take what it last gave, but what it
+    /// reads is reached only through another reader.
+    pub fn read_awake(
+        &self,
+        also: impl IntoIterator<Item = NodeId>,
+        asleep: &BTreeSet<NodeId>,
+    ) -> BTreeSet<NodeId> {
         let mut seeds: BTreeSet<NodeId> = also.into_iter().collect();
+        for node in &self.nodes {
+            for awake in &node.awake {
+                if let Source::Node { node, .. } = &awake.source {
+                    seeds.insert(node.clone());
+                }
+            }
+        }
         for (_, source) in &self.outputs {
             if let Source::Node { node, .. } = source {
                 seeds.insert(node.clone());
@@ -507,15 +545,27 @@ impl Graph {
                 }
             }
         }
-        self.read_by(seeds)
+        self.read_by_awake(seeds, asleep)
     }
 
     /// `seeds` and every node they read through `<-`, in turn.
     pub fn read_by(&self, seeds: BTreeSet<NodeId>) -> BTreeSet<NodeId> {
+        self.read_by_awake(seeds, &BTreeSet::new())
+    }
+
+    /// [`Graph::read_by`], reading nothing through the nodes in `asleep`.
+    fn read_by_awake(
+        &self,
+        seeds: BTreeSet<NodeId>,
+        asleep: &BTreeSet<NodeId>,
+    ) -> BTreeSet<NodeId> {
         let at = self.index();
         let mut read = seeds;
         let mut frontier: Vec<NodeId> = read.iter().cloned().collect();
         while let Some(id) = frontier.pop() {
+            if asleep.contains(&id) {
+                continue;
+            }
             let Some(node) = at.get(&id).map(|at| &self.nodes[*at]) else {
                 continue;
             };

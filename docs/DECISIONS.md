@@ -145,6 +145,33 @@ binding and the check share.
 [the unread tests](../crates/interface/session/tests/unread.rs) and
 [the binding tests](../crates/interface/session/tests/binds.rs).
 
+## A node may sleep by what a row says
+
+`awake = value(source, row);` puts a node to sleep while the row is 0:
+not run, its readers take its last outputs, its state stays, and what
+only it reads does not run. The row is read as the last frame left it.
+On a placed graph's node it holds for every node placed. A scene does
+not switch to another scene: it composes what it may show and lets what
+it does not show sleep.
+
+**Why.** Which nodes a frame reaches is decided by what reads them, and
+that alone cannot see that a picture is covered: a game's title, its
+character maker and its world in one scene ran the hidden world every
+frame, the title costing more than play. Switching a running scene for
+another would be a game's flow built into the runtime, and would hand
+state from one program to the next; one scene keeps one truth (the
+character made is the one played) and lets data say what is idle, as a
+`domain` lets data say how much runs. The row is the last frame's so
+the frame's reach is known before anything runs, which spares what only
+a sleeper reads; the frame a row turns pays one frame's lag.
+
+**Where.** `Graph::read_awake` ([graph](../crates/core/graph/src/lib.rs)),
+`Evaluator::asleep` ([evaluate](../crates/core/graph/src/evaluate/mod.rs));
+held by `a_node_asleep_is_not_run_nor_what_only_it_reads_and_its_readers_take_its_last`
+([composition](../crates/interface/session/tests/composition.rs)) and
+`a_placements_awake_holds_for_every_node_it_places_beside_their_own`
+([placed](../crates/interface/session/tests/placed.rs)).
+
 ## The language grows only by the owner's word
 
 A form, a keyword, a builtin or a shorthand is added to `.ent` or `.esn`

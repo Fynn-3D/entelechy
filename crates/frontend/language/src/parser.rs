@@ -562,7 +562,7 @@ impl Parser {
                     let param = self.param()?;
                     // A node sets these itself; a parameter so named could
                     // not be set.
-                    if matches!(param.name.value.as_str(), "domain" | "async") {
+                    if matches!(param.name.value.as_str(), "domain" | "async" | "awake") {
                         return Err(ParseError {
                             span: param.name.span,
                             message: format!(
@@ -686,7 +686,8 @@ impl Parser {
                         );
                     // A node's own member, which a node placing a named
                     // Kernel takes and one written in place cannot.
-                    let placing = inline && matches!(keyword.as_str(), "times" | "carry" | "async");
+                    let placing =
+                        inline && matches!(keyword.as_str(), "times" | "carry" | "async" | "awake");
                     let hint = if wired {
                         format!(
                             "; a Kernel written in place wires an input where it declares it: `input {keyword}: T <- node.port;` or `input {keyword}: T <~ node.port from initial;`"
@@ -2924,7 +2925,7 @@ mod document_tests {
 
     #[test]
     fn no_kernel_parameter_is_named_what_a_node_sets_itself() {
-        for name in ["domain", "async"] {
+        for name in ["domain", "async", "awake"] {
             let error = parse(&format!(
                 "kernel t.k@1 {{ param {name}: Int = 1; compute {{ return 0; }} }}"
             ))

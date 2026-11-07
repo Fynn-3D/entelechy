@@ -248,3 +248,56 @@ expect count grow.result = 3
     assert!(dir.join("grow.field").exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+const AWAKE_KERNELS: &str =
+    "kernel t.flag@1 { requires { field.write; } output result: Rows<Int>; compute { return 1; } }
+";
+
+const AWAKE_PRESET: &str = "use \"k.ent\";
+use \"flag.ent\";
+input counts: Rows<Int>;
+node gate: t.flag@1 { domain = 1; }
+node once: t.twice@1 { counts <- counts; awake = value(gate.result); }
+node again: t.twice@1 { counts <- once.result; }
+output quad <- again.result;
+";
+
+const AWAKE_SCENE: &str = "use \"k.ent\";
+use \"flag.ent\";
+node start: t.start@1 { domain = 3; }
+node shown: t.flag@1 { domain = 2; }
+node q: graph \"quad.esn\" { counts <- start.result; awake = value(shown.result, 1); }
+output shown <- q.quad;
+";
+
+#[test]
+fn a_placements_awake_holds_for_every_node_it_places_beside_their_own() {
+    let dir = std::env::temp_dir().join(format!("entelechy-placed-awake-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("k.ent"), KERNELS).unwrap();
+    std::fs::write(dir.join("flag.ent"), AWAKE_KERNELS).unwrap();
+    std::fs::write(dir.join("quad.esn"), AWAKE_PRESET).unwrap();
+    std::fs::write(dir.join("scene.esn"), AWAKE_SCENE).unwrap();
+    let mut session = Session::open(&dir.join("scene.esn"), None, 1 << 20);
+    session.sync();
+    let graph = session.graph().expect("the scene loads");
+    let awake = |id: &str| -> Vec<String> {
+        let node = graph
+            .nodes
+            .iter()
+            .find(|node| node.id.to_string() == id)
+            .unwrap();
+        node.awake
+            .iter()
+            .map(|awake| format!("{}[{}]", awake.source, awake.row))
+            .collect()
+    };
+    // The placement's, in the placing graph's names, then the node's own,
+    // in the placed graph's.
+    assert_eq!(awake("q.once"), ["shown.result[1]", "q.gate.result[0]"]);
+    assert_eq!(awake("q.again"), ["shown.result[1]"]);
+    assert_eq!(awake("q.gate"), ["shown.result[1]"]);
+    assert!(awake("start").is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}

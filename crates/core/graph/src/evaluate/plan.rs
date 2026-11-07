@@ -244,6 +244,7 @@ impl Evaluator {
                 continue;
             };
             if group.node.is_async
+                || !group.node.awake.is_empty()
                 || module.manifest.mode != entelechy_ir::Mode::Map
                 || !module.manifest.memories.is_empty()
             {
@@ -291,9 +292,10 @@ impl Evaluator {
                 if self.pinned.contains(&producer_id)
                     || absorbed_into.contains_key(&producer_id)
                     || groups[position].node.is_async
-                    || nodes
-                        .get(&producer_id)
-                        .is_some_and(|at| graph.nodes[*at].is_async)
+                    || !groups[position].node.awake.is_empty()
+                    || nodes.get(&producer_id).is_some_and(|at| {
+                        graph.nodes[*at].is_async || !graph.nodes[*at].awake.is_empty()
+                    })
                 {
                     continue;
                 }
@@ -779,6 +781,7 @@ impl Evaluator {
             || next.chain.is_some()
             || previous.node.is_async
             || next.node.is_async
+            || previous.node.awake != next.node.awake
             || previous.node.params != next.node.params
             || previous.node.domain != next.node.domain
             || self.pinned.contains(&previous.node.id)

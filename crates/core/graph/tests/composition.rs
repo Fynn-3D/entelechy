@@ -171,6 +171,7 @@ fn node(name: &str, kernel: &str, from: Option<&str>) -> Node {
             .is_none()
             .then_some(DomainSpec::Literal(Domain::Grid(2, 1))),
         is_async: false,
+        awake: Vec::new(),
         at: None,
     }
 }

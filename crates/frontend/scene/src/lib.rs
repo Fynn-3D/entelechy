@@ -26,8 +26,8 @@ use entelechy_language::{
 };
 
 use entelechy_graph::{
-    Binding, DomainExpr, DomainSpec, Graph, GraphParam, Node, NodeId, ParamValue, Requirement,
-    Source,
+    Awake, Binding, DomainExpr, DomainSpec, Graph, GraphParam, Node, NodeId, ParamValue,
+    Requirement, Source,
 };
 
 /// The port type an alias stands for, following aliases to the end.
@@ -480,6 +480,9 @@ struct Placement {
     inputs: BTreeMap<String, Binding>,
     /// Parent values for the sub-graph's params, already resolved.
     params: BTreeMap<String, ParamValue>,
+    /// What every node of the sub-graph is awake by (its placement's and
+    /// theirs), in the parent's flattened names.
+    awake: Vec<Awake>,
 }
 
 /// State shared across one lowering.
@@ -838,6 +841,48 @@ impl Place<'_> {
 
     /// A source in the flattened graph: a node's name prefixed, a
     /// document input replaced by the parent's binding.
+    /// `awake = value(source)` or `awake = value(source, row)`: what the
+    /// node is awake by, a source as a `<-` names one.
+    fn awake(&self, expr: &Expr) -> Result<Awake, DocumentError> {
+        let usage = "`awake` is `value(source)` or `value(source, row)`: the node sleeps while that row is 0";
+        let ExprKind::Call(name, args) = &expr.kind else {
+            return Err(error(expr.span, usage));
+        };
+        if name != "value" || args.is_empty() || args.len() > 2 {
+            return Err(error(expr.span, usage));
+        }
+        let reference = match &args[0].kind {
+            ExprKind::Name(name) => SourceRef {
+                node: None,
+                name: name.clone(),
+                span: args[0].span,
+            },
+            ExprKind::Member(node, port) => match &node.kind {
+                ExprKind::Name(node) => SourceRef {
+                    node: Some(node.clone()),
+                    name: port.clone(),
+                    span: args[0].span,
+                },
+                _ => return Err(error(args[0].span, usage)),
+            },
+            _ => return Err(error(args[0].span, usage)),
+        };
+        let row = match args.get(1).map(|arg| &arg.kind) {
+            None => 0,
+            Some(ExprKind::Int(row)) if (0..=i64::from(u32::MAX)).contains(row) => *row as u32,
+            Some(_) => {
+                return Err(error(
+                    args[1].span,
+                    "`awake`'s row is a whole number, 0 or more",
+                ));
+            }
+        };
+        let Binding::Now(source) = self.now(&reference)? else {
+            return Err(error(args[0].span, usage));
+        };
+        Ok(Awake { source, row })
+    }
+
     fn now(&self, reference: &SourceRef) -> Result<Binding, DocumentError> {
         let prefix = self.prefix;
         if reference.node.is_none() && self.nodes.contains(&reference.name) {
@@ -1472,6 +1517,7 @@ impl Lowering<'_, '_> {
         id: &NodeId,
         inputs: BTreeMap<String, Binding>,
         node_params: BTreeMap<String, ParamValue>,
+        awake: Vec<Awake>,
     ) -> Result<Vec<(String, Source)>, DocumentError> {
         // A document is the file it is in: placed from two levels, or
         // written two ways, it is one document, its Kernels one set.
@@ -1548,6 +1594,7 @@ impl Lowering<'_, '_> {
             prefix: format!("{}.", id.0),
             inputs,
             params: node_params,
+            awake,
         };
         let level = self
             .level(
@@ -1661,6 +1708,9 @@ impl Lowering<'_, '_> {
             let mut node_params = BTreeMap::new();
             let mut domain = None;
             let mut is_async = false;
+            // What the node is awake by: its placement's, then its own.
+            let mut awake: Vec<Awake> = placement.map(|p| p.awake.clone()).unwrap_or_default();
+            let mut own_awake: Vec<Awake> = Vec::new();
             let mut bind = |port: &entelechy_language::Spanned<String>, binding: Binding| {
                 if inputs.insert(port.value.clone(), binding).is_some() {
                     return Err(error(
@@ -1682,6 +1732,9 @@ impl Lowering<'_, '_> {
                             return Err(error(expr.span, "`async` is `true` or `false`"));
                         };
                         is_async = *value;
+                    }
+                    NodeMember::Set(name, expr) if name.value == "awake" => {
+                        own_awake.push(place.awake(expr)?);
                     }
                     NodeMember::Set(name, expr) => {
                         if node_params
@@ -1706,6 +1759,7 @@ impl Lowering<'_, '_> {
                     }
                 }
             }
+            awake.extend(own_awake.iter().cloned());
             match &decl.kind {
                 NodeKind::Reference(kernel) => {
                     let kernel_id = kernel
@@ -1721,6 +1775,7 @@ impl Lowering<'_, '_> {
                         params: node_params,
                         domain,
                         is_async,
+                        awake: awake.clone(),
                     });
                 }
                 NodeKind::Inline(kernel) => {
@@ -1794,6 +1849,7 @@ impl Lowering<'_, '_> {
                         params: node_params,
                         domain,
                         is_async,
+                        awake: awake.clone(),
                     });
                 }
                 NodeKind::Fill(ty) => {
@@ -1865,13 +1921,18 @@ impl Lowering<'_, '_> {
                         params: node_params,
                         domain,
                         is_async,
+                        awake: awake.clone(),
                     });
                 }
                 NodeKind::Font(font_path) => {
-                    if domain.is_some() || is_async || !node_params.is_empty() {
+                    if domain.is_some()
+                        || is_async
+                        || !own_awake.is_empty()
+                        || !node_params.is_empty()
+                    {
                         return Err(error(
                             font_path.span,
-                            "a font node takes no `domain`, `async` or parameters: it is a row a code of `codes`",
+                            "a font node takes no `domain`, `async`, `awake` or parameters: it is a row a code of `codes`",
                         ));
                     }
                     if let Some(other) = inputs.keys().find(|port| port.as_str() != "codes") {
@@ -1919,10 +1980,14 @@ impl Lowering<'_, '_> {
                     });
                 }
                 NodeKind::Files(dir_path) => {
-                    if domain.is_some() || is_async || !node_params.is_empty() {
+                    if domain.is_some()
+                        || is_async
+                        || !own_awake.is_empty()
+                        || !node_params.is_empty()
+                    {
                         return Err(error(
                             dir_path.span,
-                            "a files node takes no `domain`, `async` or parameters: its outputs are as long as what it lists and reads",
+                            "a files node takes no `domain`, `async`, `awake` or parameters: its outputs are as long as what it lists and reads",
                         ));
                     }
                     if let Some(other) = inputs.keys().find(|port| port.as_str() != "paths") {
@@ -1970,10 +2035,14 @@ impl Lowering<'_, '_> {
                     });
                 }
                 NodeKind::Fields { ty, dir } => {
-                    if domain.is_some() || is_async || !node_params.is_empty() {
+                    if domain.is_some()
+                        || is_async
+                        || !own_awake.is_empty()
+                        || !node_params.is_empty()
+                    {
                         return Err(error(
                             dir.span,
-                            "a fields node takes no `domain`, `async` or parameters: its result is as long as the files it holds",
+                            "a fields node takes no `domain`, `async`, `awake` or parameters: its result is as long as the files it holds",
                         ));
                     }
                     let resolved_ty = resolved(&ty.value, &self.aliases);
@@ -2043,7 +2112,8 @@ impl Lowering<'_, '_> {
                             "a sub-graph takes no `async`; its nodes say which of them run off the frame",
                         ));
                     }
-                    let outputs = self.place(sub_path, base, &id, inputs, node_params)?;
+                    let outputs =
+                        self.place(sub_path, base, &id, inputs, node_params, awake.clone())?;
                     self.out
                         .graph
                         .placed
@@ -2105,6 +2175,9 @@ impl Lowering<'_, '_> {
         }
         self.out.files.field_nodes.extend(field_nodes);
         for node in &mut self.out.graph.nodes[first_node..] {
+            for awake in &mut node.awake {
+                resolve(&mut awake.source)?;
+            }
             for binding in node.inputs.values_mut() {
                 match binding {
                     Binding::Now(source) => resolve(source)?,
@@ -3289,6 +3362,9 @@ impl std::fmt::Display for Printed<'_> {
             }
             if node.is_async {
                 writeln!(f, "    async = true;")?;
+            }
+            for awake in &node.awake {
+                writeln!(f, "    awake = value({}, {});", awake.source, awake.row)?;
             }
             writeln!(f, "}}")?;
         }

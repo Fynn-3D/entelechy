@@ -37,7 +37,8 @@ use entelechy_kernel::{
 
 use crate::domain::VALUE_MAX_ELEMENTS;
 use crate::{
-    AsGraph, Binding, DomainExpr, DomainSpec, Graph, GraphError, Node, NodeId, ParamValue, Source,
+    AsGraph, Awake, Binding, DomainExpr, DomainSpec, Graph, GraphError, Node, NodeId, ParamValue,
+    Source,
 };
 
 mod bind;
@@ -698,6 +699,14 @@ struct Quiet {
     steady: Vec<bool>,
 }
 
+/// What a frame reads, with the pins and the nodes asleep it was found
+/// under.
+struct FrameReach {
+    pins: BTreeSet<NodeId>,
+    asleep: BTreeSet<NodeId>,
+    read: Arc<BTreeSet<NodeId>>,
+}
+
 /// A plan's layout, with the plan and the reach it was found for.
 struct LayoutFor {
     groups: Arc<Vec<Group>>,
@@ -860,9 +869,9 @@ pub struct Evaluator {
     state_keys: Option<Vec<(NodeId, String)>>,
     /// The state reads of the last plan reconciled.
     state_reads: Option<(Arc<Vec<Group>>, Arc<state::StateReads>)>,
-    /// What a frame of the graph in `shape` reads, and the pins it was
-    /// found under.
-    frame_needed: Option<(BTreeSet<NodeId>, Arc<BTreeSet<NodeId>>)>,
+    /// What a frame of the graph in `shape` reads, and the pins and the
+    /// nodes asleep it was found under.
+    frame_needed: Option<FrameReach>,
     /// The layout of the last plan run, with the plan and the reach it
     /// was found for.
     layout: Option<LayoutFor>,
@@ -1389,19 +1398,30 @@ impl Evaluator {
     /// The nodes an evaluation under `demand` must run: see
     /// [`Evaluator::evaluate_for`] and [`Evaluator::evaluate_trial_reading`];
     /// `None` every node.
-    fn needed(&mut self, graph: &Graph, demand: Demand<'_>) -> Option<Arc<BTreeSet<NodeId>>> {
+    fn needed(
+        &mut self,
+        graph: &Graph,
+        demand: Demand<'_>,
+        asleep: &BTreeSet<NodeId>,
+    ) -> Option<Arc<BTreeSet<NodeId>>> {
         let demand = match demand {
             Demand::Every => return None,
-            // A frame reads what the graph's outputs, state and pins reach:
-            // found once for the graph in `shape` and its pins.
+            // A frame reads what the graph's outputs, state and pins reach
+            // through what is awake: found once for the graph in `shape`,
+            // its pins and the nodes asleep.
             Demand::Frame => {
-                if let Some((pins, read)) = &self.frame_needed
-                    && *pins == self.pinned
+                if let Some(known) = &self.frame_needed
+                    && known.pins == self.pinned
+                    && known.asleep == *asleep
                 {
-                    return Some(Arc::clone(read));
+                    return Some(Arc::clone(&known.read));
                 }
-                let read = Arc::new(graph.read_through(self.pinned.iter().cloned()));
-                self.frame_needed = Some((self.pinned.clone(), Arc::clone(&read)));
+                let read = Arc::new(graph.read_awake(self.pinned.iter().cloned(), asleep));
+                self.frame_needed = Some(FrameReach {
+                    pins: self.pinned.clone(),
+                    asleep: asleep.clone(),
+                    read: Arc::clone(&read),
+                });
                 return Some(read);
             }
             Demand::For(demand) => demand,
@@ -1469,6 +1489,79 @@ impl Evaluator {
         Some(Arc::new(needed))
     }
 
+    /// The nodes asleep on this frame: those with an `awake` whose row the
+    /// last frame left at 0, and with outputs of their own to give (one
+    /// never run runs). A row is read where it is; one on a device is
+    /// brought to the Host, a wait.
+    fn asleep(
+        &self,
+        graph: &Graph,
+        runtime: &mut Runtime,
+        externals: &BTreeMap<String, Handle>,
+    ) -> Result<BTreeSet<NodeId>, EvaluateError> {
+        let mut asleep = BTreeSet::new();
+        // A row read once a frame, however many nodes read it.
+        let mut rows: Vec<(&Awake, bool)> = Vec::new();
+        for node in &graph.nodes {
+            if node.awake.is_empty() || self.ledger.entry(&node.id).is_none() {
+                continue;
+            }
+            for awake in &node.awake {
+                let zero = match rows.iter().find(|(read, _)| *read == awake) {
+                    Some((_, zero)) => *zero,
+                    None => {
+                        let zero = self.row_is_zero(node, awake, runtime, externals)?;
+                        rows.push((awake, zero));
+                        zero
+                    }
+                };
+                if zero {
+                    asleep.insert(node.id.clone());
+                    break;
+                }
+            }
+        }
+        Ok(asleep)
+    }
+
+    /// Whether `awake`'s row, as the last frame left it, is 0; nothing yet
+    /// made is not 0.
+    fn row_is_zero(
+        &self,
+        node: &Node,
+        awake: &Awake,
+        runtime: &mut Runtime,
+        externals: &BTreeMap<String, Handle>,
+    ) -> Result<bool, EvaluateError> {
+        let handle = match &awake.source {
+            Source::External(name) => externals.get(name).copied(),
+            Source::Node { node, port } => self.cached(node, port),
+        };
+        let Some(handle) = handle else {
+            return Ok(false);
+        };
+        let fail = |message: String| EvaluateError::Domain {
+            node: node.id.clone(),
+            message: format!(
+                "`awake = value({}, {})`: {message}",
+                awake.source, awake.row
+            ),
+        };
+        let count = runtime.host().domain(handle)?.count();
+        if count > VALUE_MAX_ELEMENTS {
+            return Err(fail(format!(
+                "a row is brought to the Host to be read, so it holds counts, not data; this one has {count} elements and the most is {VALUE_MAX_ELEMENTS}"
+            )));
+        }
+        if awake.row as usize >= count {
+            return Err(fail(format!("it has {count} element(s)")));
+        }
+        runtime
+            .materialize(handle)
+            .map_err(|e| fail(e.to_string()))?;
+        Ok(runtime.host().element(handle, awake.row)?[0] == 0)
+    }
+
     /// Evaluates what `demand` asks; the report is `None` only for a
     /// [`Demand::Read`].
     fn evaluate_with(
@@ -1506,7 +1599,13 @@ impl Evaluator {
             self.pruned = true;
         }
         let landed = self.land(runtime)?;
-        let needed = self.needed(graph, demand);
+        // Who sleeps on a frame, by what the last left: none on a trial.
+        let asleep = if matches!(demand, Demand::Frame) && !self.trial {
+            self.asleep(graph, runtime, externals)?
+        } else {
+            BTreeSet::new()
+        };
+        let needed = self.needed(graph, demand, &asleep);
         let groups = self.plan(graph, &order, runtime, externals, params, context)?;
         let (migrated, reset) = self.reconcile_state(&groups, runtime, context)?;
         // From here to the commit, a failure leaves state as it was: a
@@ -1588,6 +1687,10 @@ impl Evaluator {
                     0
                 };
                 if !frame.layout.runs(at) {
+                    continue;
+                }
+                // Asleep: its readers take what it last gave.
+                if asleep.contains(&node.id) {
                     continue;
                 }
                 if lean && !dirty[at] {
