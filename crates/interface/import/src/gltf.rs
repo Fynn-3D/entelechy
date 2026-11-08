@@ -55,8 +55,10 @@ fn transform_point(m: &Matrix, p: [f32; 3]) -> [f32; 3] {
     ]
 }
 
-/// Normals transform by the cofactors of the upper 3×3 (the inverse
-/// transpose up to scale).
+/// Normals transform by the cofactor matrix of the upper 3×3 (the
+/// inverse transpose up to scale), laid out by rows: `cofactors[3 * r + c]`
+/// is the cofactor of row `r`, column `c`. Its transpose, the adjugate,
+/// would be the inverse and turn a rotated normal the other way.
 fn transform_normal(m: &Matrix, n: [f32; 3]) -> [f32; 3] {
     let (a, b, c) = (m[0], m[4], m[8]);
     let (d, e, f) = (m[1], m[5], m[9]);
@@ -73,9 +75,9 @@ fn transform_normal(m: &Matrix, n: [f32; 3]) -> [f32; 3] {
         a * e - b * d,
     ];
     let out = [
-        cofactors[0] * n[0] + cofactors[3] * n[1] + cofactors[6] * n[2],
-        cofactors[1] * n[0] + cofactors[4] * n[1] + cofactors[7] * n[2],
-        cofactors[2] * n[0] + cofactors[5] * n[1] + cofactors[8] * n[2],
+        cofactors[0] * n[0] + cofactors[1] * n[1] + cofactors[2] * n[2],
+        cofactors[3] * n[0] + cofactors[4] * n[1] + cofactors[5] * n[2],
+        cofactors[6] * n[0] + cofactors[7] * n[1] + cofactors[8] * n[2],
     ];
     normalize(out)
 }
@@ -1404,5 +1406,27 @@ mod tests {
         let triangles = file::decode(&std::fs::read(&imported.files[1]).unwrap()).unwrap();
         assert_eq!(&*triangles.values(), &[0, 1, 2, 0, 2, 3]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A normal turns with the surface: by the rotation itself, and
+    /// against a scale, the inverse transpose.
+    #[test]
+    fn a_normal_turns_and_scales_with_its_node() {
+        // A quarter turn about x the way that brings +z up to +y, by columns.
+        let turn: Matrix = [
+            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ];
+        let close = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6);
+        let up = transform_normal(&turn, [0.0, 0.0, 1.0]);
+        assert!(close(up, [0.0, 1.0, 0.0]), "{up:?}");
+        let back = transform_normal(&turn, [0.0, 1.0, 0.0]);
+        assert!(close(back, [0.0, 0.0, -1.0]), "{back:?}");
+        // Stretched twice as wide along x, a slope's normal leans toward y.
+        let wide: Matrix = [
+            2.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ];
+        let slope = transform_normal(&wide, [1.0, 1.0, 0.0]);
+        let k = 1.0 / 1.25f32.sqrt();
+        assert!(close(slope, [0.5 * k, k, 0.0]), "{slope:?}");
     }
 }
