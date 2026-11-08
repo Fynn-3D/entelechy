@@ -276,6 +276,9 @@ fn render(args: &[String]) -> Result<(), String> {
         for line in profile.lines(floor, session.measures_the_device()) {
             eprintln!("{line}");
         }
+        for line in entelechy_session::watch::preparing_lines(&session.progress().now()) {
+            eprintln!("{line}");
+        }
     }
     recorded(
         "rendered",
@@ -921,7 +924,9 @@ fn replay(args: &[String]) -> Result<(), String> {
             let mut timed = entelechy_session::bench::Profile::default();
             let mut clock = (0.0, false);
             let mut first = true;
+            let mut progress = None;
             let mut each = |session: &mut Session, report: &entelechy_graph::Report| {
+                progress.get_or_insert_with(|| session.progress());
                 if first {
                     first = false;
                     session.set_measured(true);
@@ -937,6 +942,11 @@ fn replay(args: &[String]) -> Result<(), String> {
             let ran = entelechy::replay::run_each(&replay, store, runtime, fusion, Some(&mut each));
             for line in timed.lines(clock.0, clock.1) {
                 println!("{line}");
+            }
+            if let Some(progress) = progress {
+                for line in entelechy_session::watch::preparing_lines(&progress.now()) {
+                    println!("{line}");
+                }
             }
             ran
         } else if let Some(out) = &out {
@@ -1371,6 +1381,9 @@ fn evaluate_and_export(
                     "  {:<28} {sum:>9.3} ms  ({kind}; the first frame, which compiles and allocates, and a node runs alone under a profile — `bench --nodes` measures a scene already running)",
                     "(sum)"
                 );
+                for line in entelechy_session::watch::preparing_lines(&session.progress().now()) {
+                    eprintln!("{line}");
+                }
             }
             for (node, port, path) in saves {
                 match session.save(&entelechy_graph::NodeId(node.clone().into()), port, path) {

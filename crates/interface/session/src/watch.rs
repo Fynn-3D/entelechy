@@ -158,6 +158,43 @@ fn line(now: &Preparing, elapsed: Duration) -> String {
     out
 }
 
+/// Each Kernel's last preparing, the longest first: under a heading, its
+/// compiling and its building in milliseconds, then its id; then their
+/// sums. Nothing where no Kernel was prepared.
+pub fn preparing_lines(now: &Preparing) -> Vec<String> {
+    let mut seeds: Vec<_> = now
+        .seeds
+        .iter()
+        .filter(|seed| !(seed.compiling + seed.building).is_zero())
+        .collect();
+    if seeds.is_empty() {
+        return Vec::new();
+    }
+    seeds.sort_by_key(|seed| std::cmp::Reverse(seed.compiling + seed.building));
+    let ms = |took: Duration| took.as_secs_f64() * 1000.0;
+    let mut lines =
+        vec!["preparing, ms a Kernel on the thread that prepared it — compiling, then building on its device (a device compiling several at once may queue them):".to_owned()];
+    lines.extend(seeds.iter().map(|seed| {
+        format!(
+            "  {:>9.1} {:>9.1}  {}",
+            ms(seed.compiling),
+            ms(seed.building),
+            seed.id
+        )
+    }));
+    let (compiling, building) = seeds
+        .iter()
+        .fold((Duration::ZERO, Duration::ZERO), |(c, b), seed| {
+            (c + seed.compiling, b + seed.building)
+        });
+    lines.push(format!(
+        "  {:>9.1} {:>9.1}  (sum; Kernels prepare on several threads at once, so it is more than the wait)",
+        ms(compiling),
+        ms(building)
+    ));
+    lines
+}
+
 /// What preparing took, and the Kernel that took longest of those `seen`.
 fn done(seen: &BTreeMap<KernelId, Duration>, took: Duration) -> String {
     let mut said = format!(

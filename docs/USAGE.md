@@ -71,7 +71,8 @@ output (a node of a placed graph by its path, the port after the last
 dot), which is how an asset is made. `--input` and `--output` place a
 scene's inputs and outputs elsewhere, its text unchanged. Writes land
 only where `--allow` says; `--profile` prints each node's time, backend
-and transfers, waiting for the device after each.
+and transfers, waiting for the device after each, and each Kernel's
+preparing: how long its compiling and its building on the device took.
 
 ## Render frames
 

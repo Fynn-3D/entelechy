@@ -563,8 +563,21 @@ fn a_replay_says_ok_or_what_failed() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Whether `text` lists `id`'s preparing: under the heading, a line naming
+/// the Kernel after its compiling and its building in milliseconds.
+fn lists_preparing(text: &str, id: &str) -> bool {
+    text.contains("preparing, ms a Kernel")
+        && text.lines().any(|line| {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            words.len() == 3
+                && words[2] == id
+                && words[..2].iter().all(|w| w.parse::<f64>().is_ok())
+        })
+}
+
 /// `--profile` on `render` and on `replay` times each node over the frames
-/// after the first, each a line in milliseconds a frame, and their sum.
+/// after the first, each a line in milliseconds a frame, and their sum; and
+/// each Kernel's preparing, its compiling and its building.
 #[test]
 fn render_and_replay_profile_their_nodes() {
     let entelechy = env!("CARGO_BIN_EXE_entelechy");
@@ -593,6 +606,7 @@ fn render_and_replay_profile_their_nodes() {
         "{stderr}"
     );
     assert!(stderr.contains("(sum)"), "{stderr}");
+    assert!(lists_preparing(&stderr, "clocked.ticks@1"), "{stderr}");
     std::fs::write(
         dir.join("timed.replay"),
         "scene clocked.esn\nframe 0.0\nframe 0.1\nframe 0.2\n",
@@ -619,6 +633,7 @@ fn render_and_replay_profile_their_nodes() {
         stdout.contains("timed.replay: ok (3 frames, 0 checks)"),
         "{stdout}"
     );
+    assert!(lists_preparing(&stdout, "clocked.ticks@1"), "{stdout}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1554,6 +1569,7 @@ output result <- tally.result;
         stderr.contains("  tally ") && stderr.contains(" ms"),
         "{stderr}"
     );
+    assert!(stderr.contains("preparing, ms a Kernel"), "{stderr}");
 }
 
 /// `entelechy help` prints the whole reference and the commands; a name shows

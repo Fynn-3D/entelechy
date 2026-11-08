@@ -189,7 +189,8 @@ device after each one, so a GPU's numbers are the work, not the
 submission, and the frame is slower than it would be. What
 measuring a node costs before it does anything is taken off every
 line; a node runs alone under a profile, so the lines add up to
-more than a frame, and the sum says by how much.
+more than a frame, and the sum says by how much. It also lists each
+Kernel's preparing: its compiling and its building on the device.
 --allow file.write=<dir> lets the scene's outputs written `to` a file
 land in that directory and under it, once an evaluation that changed
 them commits; nothing is written without it. --allow
@@ -243,7 +244,8 @@ waited for after every frame. ffmpeg makes a video of the directory.
 how a state trained or settled over many frames is kept.
 --profile times every node alone, waiting for the device after each,
 over the frames after the first (which compiles and allocates), and
-prints each node's milliseconds a frame, the busiest first.",
+prints each node's milliseconds a frame, the busiest first; and each
+Kernel's preparing, its compiling and its building, as run's does.",
             flags: with(
                 vec![
                     valued("--frames", "<n>", "How many frames to step."),
@@ -399,7 +401,7 @@ and the package format, each its own.",
                 ),
                 switch(
                     "--profile",
-                    "Times each replay's nodes, its outputs evaluated every frame: each node's time a frame over the frames after the first.",
+                    "Times each replay's nodes, its outputs evaluated every frame: each node's time a frame over the frames after the first; and each Kernel's preparing, its compiling and its building.",
                 ),
                 switch(
                     "--watch",
