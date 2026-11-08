@@ -1,8 +1,9 @@
 //! What preparing Kernels is doing, readable from any thread while it
 //! runs: each Kernel of the work at hand, from expected to compiled
 //! (`prepare`) to built on its device (`finish`), and how long its
-//! current step has taken; and the scene's nodes, each with its Kernel,
-//! and which feed which. An interface draws it while a scene loads.
+//! current step has taken and each step it ended took; and the scene's
+//! nodes, each with its Kernel, and which feed which. An interface draws
+//! it while a scene loads.
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -36,6 +37,10 @@ pub struct Seed {
     /// How long its current step has run, while it runs; how long its last
     /// step took, after.
     pub took: Duration,
+    /// How long its last compiling took, once one has ended.
+    pub compiling: Duration,
+    /// How long its last building took, once one has ended.
+    pub building: Duration,
 }
 
 /// The work at hand, the Kernels in the order they were first expected.
@@ -86,6 +91,21 @@ struct Entry {
     stage: Stage,
     since: Option<Moment>,
     took: Duration,
+    compiling: Duration,
+    building: Duration,
+}
+
+impl Entry {
+    fn waiting(id: &KernelId) -> Self {
+        Self {
+            id: id.clone(),
+            stage: Stage::Waiting,
+            since: None,
+            took: Duration::ZERO,
+            compiling: Duration::ZERO,
+            building: Duration::ZERO,
+        }
+    }
 }
 
 /// The shared record; cloned handles see the same work.
@@ -114,6 +134,8 @@ impl Progress {
                         Stage::Compiling | Stage::Building => clock::since(entry.since),
                         _ => entry.took,
                     },
+                    compiling: entry.compiling,
+                    building: entry.building,
                 })
                 .collect(),
             nodes: state.nodes.clone(),
@@ -151,12 +173,7 @@ impl Progress {
             match entries.iter_mut().find(|entry| entry.id == *id) {
                 Some(entry) if entry.stage == Stage::Built => entry.stage = Stage::Waiting,
                 Some(_) => {}
-                None => entries.push(Entry {
-                    id: id.clone(),
-                    stage: Stage::Waiting,
-                    since: None,
-                    took: Duration::ZERO,
-                }),
+                None => entries.push(Entry::waiting(id)),
             }
         }
     }
@@ -178,18 +195,22 @@ impl Progress {
     fn set(&self, id: &KernelId, stage: Stage, since: Option<Moment>, took: Duration) {
         let mut state = self.lock();
         let entries = &mut state.entries;
-        match entries.iter_mut().find(|entry| entry.id == *id) {
-            Some(entry) => {
-                entry.stage = stage;
-                entry.since = since;
-                entry.took = took;
+        let at = match entries.iter().position(|entry| entry.id == *id) {
+            Some(at) => at,
+            None => {
+                entries.push(Entry::waiting(id));
+                entries.len() - 1
             }
-            None => entries.push(Entry {
-                id: id.clone(),
-                stage,
-                since,
-                took,
-            }),
+        };
+        let entry = &mut entries[at];
+        entry.stage = stage;
+        entry.since = since;
+        entry.took = took;
+        // A step that ended is kept as that step's.
+        match stage {
+            Stage::Compiled => entry.compiling = took,
+            Stage::Built => entry.building = took,
+            _ => {}
         }
     }
 
@@ -231,5 +252,27 @@ mod tests {
         progress.shape(vec![a.clone(), b, a], [(1, 0), (0, 1), (2, 7), (2, 2)]);
         assert_eq!(progress.now().nodes.len(), 3);
         assert_eq!(progress.now().links, vec![(0, 1)]);
+    }
+
+    #[test]
+    fn each_step_keeps_how_long_it_took_after_the_next_begins() {
+        let progress = Progress::default();
+        let a = id("t.a");
+        progress.expect([&a]);
+        let pause = Duration::from_millis(20);
+        progress.step(&a, false, || std::thread::sleep(pause));
+        let building = progress.step(&a, true, || progress.now());
+        let seed = &building.seeds[0];
+        assert!(
+            seed.compiling >= pause,
+            "compiling is kept while building runs"
+        );
+        assert_eq!(seed.building, Duration::ZERO, "building has not ended");
+        progress.step(&a, true, || std::thread::sleep(pause));
+        let seed = &progress.now().seeds[0];
+        assert!(seed.compiling >= pause && seed.building >= pause);
+        // Built again from waiting, the steps of the last preparing stay until replaced.
+        progress.expect([&a]);
+        assert!(progress.now().seeds[0].building >= pause);
     }
 }
