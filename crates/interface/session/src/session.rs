@@ -2065,6 +2065,7 @@ impl Session {
             &mut self.runtime,
             self.inputs.handles(),
             self.scene.params(),
+            &Context::default(),
         )
     }
 

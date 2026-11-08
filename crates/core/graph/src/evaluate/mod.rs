@@ -1230,25 +1230,20 @@ impl Evaluator {
         few
     }
 
-    /// What would execute for `graph` now, in evaluation order. Prepares
-    /// fused versions; executes nothing.
+    /// What would execute for `graph` now under `context` (its window and
+    /// scale size what reads them), in evaluation order. Prepares fused
+    /// versions; executes nothing.
     pub fn plan_summary(
         &mut self,
         graph: &impl AsGraph,
         runtime: &mut Runtime,
         externals: &BTreeMap<String, Handle>,
         overrides: &BTreeMap<String, Value>,
+        context: &Context,
     ) -> Result<Vec<PlanEntry>, EvaluateError> {
         let (graph, shared) = (graph.graph(), graph.shared());
         let order = self.order_of(graph, shared)?;
-        let groups = self.plan(
-            graph,
-            &order,
-            runtime,
-            externals,
-            overrides,
-            &Context::default(),
-        )?;
+        let groups = self.plan(graph, &order, runtime, externals, overrides, context)?;
         Ok(groups
             .iter()
             .map(|group| PlanEntry {

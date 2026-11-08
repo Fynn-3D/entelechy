@@ -433,7 +433,13 @@ fn the_plan_says_why_a_sole_reader_does_not_absorb_its_producer() {
         "last",
     );
     let plan = evaluator
-        .plan_summary(&chain, &mut runtime, &BTreeMap::new(), &BTreeMap::new())
+        .plan_summary(
+            &chain,
+            &mut runtime,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &Context::default(),
+        )
         .unwrap();
     let apart = |name: &str| {
         plan.iter()
@@ -450,4 +456,31 @@ fn the_plan_says_why_a_sole_reader_does_not_absorb_its_producer() {
     assert_eq!(last[0].0, id("middle"));
     assert!(last[0].1.contains("sample"), "{}", last[0].1);
     assert!(apart("source").is_empty());
+}
+
+/// A plan is made under the context it is asked with: a node sized by
+/// `window()` runs over the window given.
+#[test]
+fn a_plan_is_made_for_the_window_asked() {
+    let mut runtime = runtime();
+    let mut evaluator = Evaluator::new();
+    let mut source = node("source", "test.source@1", None);
+    source.domain = Some(DomainSpec::Expr(entelechy_graph::DomainExpr::Context(
+        "window".into(),
+    )));
+    let windowed = graph(vec![source], "source");
+    let context = Context {
+        window: [6.0, 4.0],
+        ..Context::default()
+    };
+    let plan = evaluator
+        .plan_summary(
+            &windowed,
+            &mut runtime,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &context,
+        )
+        .unwrap();
+    assert_eq!(plan[0].domain, Some(Domain::Grid(6, 4)));
 }

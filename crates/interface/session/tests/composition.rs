@@ -2476,7 +2476,13 @@ fn a_plan_follows_fusion_turned_off_and_on() {
     let mut evaluator = Evaluator::new();
     let summary = |evaluator: &mut Evaluator, runtime: &mut Runtime| {
         evaluator
-            .plan_summary(&graph, runtime, &BTreeMap::new(), &BTreeMap::new())
+            .plan_summary(
+                &graph,
+                runtime,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &Context::default(),
+            )
             .unwrap()
             .into_iter()
             .map(|entry| entry.node)
@@ -2504,7 +2510,13 @@ fn a_changed_graph_is_planned_anew_and_the_first_again() {
     let mut evaluator = Evaluator::new();
     let mut summary = |graph: &entelechy_graph::Graph| {
         evaluator
-            .plan_summary(graph, &mut runtime, &BTreeMap::new(), &BTreeMap::new())
+            .plan_summary(
+                graph,
+                &mut runtime,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &Context::default(),
+            )
             .unwrap()
             .into_iter()
             .map(|entry| entry.node)

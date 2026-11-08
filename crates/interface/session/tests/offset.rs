@@ -130,7 +130,13 @@ fn a_reader_that_only_counts_a_fused_producer_is_given_its_extent() {
     let mut runtime = runtime(Box::new(entelechy_cpu::CpuBackend));
     let graph = entelechy_scene::parse(&document).unwrap();
     let plan = Evaluator::new()
-        .plan_summary(&graph, &mut runtime, &BTreeMap::new(), &BTreeMap::new())
+        .plan_summary(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &Context::default(),
+        )
         .unwrap();
     let tally = plan.iter().find(|entry| entry.node.0 == "tally").unwrap();
     assert_eq!(tally.counted, ids(&["lift"]));
